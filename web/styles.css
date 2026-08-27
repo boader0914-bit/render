@@ -35482,6 +35482,17 @@ body.role-admin .admin-db-company-action a + a {
   gap: 5px;
 }
 
+.dictionary-province-master {
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.dictionary-province-master .dictionary-region-item {
+  border-color: var(--border-subtle);
+  background: var(--surface-control);
+}
+
 .dictionary-region-item {
   width: 100%;
   min-height: 38px;
@@ -35842,6 +35853,12 @@ body.role-admin .admin-db-company-action a + a {
   .location-profile-action-note,
   .location-profile-endpoint-state {
     text-align: left;
+  }
+}
+
+@media (max-width: 430px) {
+  .dictionary-region-list {
+    grid-template-columns: 1fr;
   }
 }
 

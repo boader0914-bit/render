@@ -5,7 +5,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "node scripts/glamping_app_server.cjs",
-    "check": "node --check scripts/glamping_app_server.cjs && node --check scripts/gyeongnam_glamping_crawl.cjs && node --check scripts/naver_place_ota_observation.cjs && node --check scripts/tourism_collector.cjs && node --check web/app.js && node --check scripts/yeogi_import_parser.cjs && node --check scripts/test_yeogi_import_parser.cjs && node --check scripts/test_search_mode_classification.cjs && node --check scripts/test_naver_place_ota_observation.cjs && node --check scripts/test_naver_ota_company_master.cjs && node --check scripts/test_surface_contrast.cjs && node --check scripts/test_tourism_location_history_api.cjs && node scripts/test_surface_contrast.cjs",
+    "check": "node --check scripts/glamping_app_server.cjs && node --check scripts/gyeongnam_glamping_crawl.cjs && node --check scripts/naver_place_ota_observation.cjs && node --check scripts/tourism_collector.cjs && node --check scripts/sync_region_master.cjs && node --check web/app.js && node --check scripts/yeogi_import_parser.cjs && node --check scripts/test_yeogi_import_parser.cjs && node --check scripts/test_search_mode_classification.cjs && node --check scripts/test_naver_place_ota_observation.cjs && node --check scripts/test_naver_ota_company_master.cjs && node --check scripts/test_administrative_region_master.cjs && node --check scripts/test_surface_contrast.cjs && node --check scripts/test_tourism_location_history_api.cjs && node scripts/test_administrative_region_master.cjs && node scripts/test_surface_contrast.cjs",
     "test:yeogi": "node scripts/test_yeogi_import_parser.cjs",
     "test:surface": "node scripts/test_surface_contrast.cjs",
     "test:search-mode": "node scripts/test_search_mode_classification.cjs",
@@ -13,6 +13,8 @@
     "test:naver-ota-master": "node scripts/test_naver_ota_company_master.cjs",
     "test:tourism": "node scripts/test_tourism_collector.cjs",
     "test:tourism-location": "node scripts/test_tourism_location_history_api.cjs",
+    "test:region-master": "node scripts/test_administrative_region_master.cjs",
+    "sync:region-master": "node scripts/sync_region_master.cjs",
     "test": "npm run check && npm run test:yeogi && npm run test:search-mode && npm run test:naver-ota && npm run test:naver-ota-master && npm run test:tourism && npm run test:tourism-location"
   },
   "engines": {

@@ -1,0 +1,104 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const ROOT = path.resolve(__dirname, "..");
+const master = JSON.parse(fs.readFileSync(path.join(ROOT, "web", "data", "region_master.json"), "utf8"));
+const tourism = JSON.parse(fs.readFileSync(path.join(ROOT, "web", "data", "tourism_region_map.json"), "utf8"));
+const dictionary = JSON.parse(fs.readFileSync(path.join(ROOT, "web", "data", "location_dictionary.json"), "utf8"));
+
+const units = Array.isArray(master.units) ? master.units : [];
+const active = units.filter((unit) => unit.active);
+const activeBroad = active.filter((unit) => unit.level === "broad");
+const activeLocal = active.filter((unit) => unit.level === "local");
+const activeGeneralDistricts = active.filter((unit) => unit.unitType === "general_district");
+const byId = new Map(units.map((unit) => [unit.regionId, unit]));
+
+assert.equal(master.version, "administrative-region-master-v1");
+assert.match(master.asOf, /^\d{4}-\d{2}-\d{2}$/);
+assert.ok(master.source.sourceRowCount >= 50_000, "공식 전체자료가 충분히 포함되어야 합니다.");
+assert.equal(master.source.sourceRowCount, master.source.activeSourceRowCount + master.source.retiredSourceRowCount);
+assert.equal(master.policy.missingObservationDisplay, "관측 없음");
+assert.equal(master.policy.providerCodesAreSeparate, true);
+
+assert.equal(new Set(units.map((unit) => unit.regionId)).size, units.length, "regionId는 이력 전체에서 고유해야 합니다.");
+assert.equal(new Set(active.map((unit) => unit.regionKey)).size, active.length, "활성 regionKey는 고유해야 합니다.");
+assert.equal(new Set(active.map((unit) => unit.officialCode)).size, active.length, "활성 법정동코드는 고유해야 합니다.");
+assert.ok(units.every((unit) => /^\d{10}$/.test(unit.officialCode)), "법정동코드는 10자리여야 합니다.");
+assert.ok(units.every((unit) => ["active", "retired"].includes(unit.status)), "상태는 active 또는 retired여야 합니다.");
+assert.ok(units.every((unit) => unit.active === (unit.status === "active")), "active와 status가 일치해야 합니다.");
+assert.ok(units.every((unit) => unit.unitType !== "special_autonomous_district"), "특별자치구는 공식 단위가 아닙니다.");
+
+units.filter((unit) => unit.level !== "broad").forEach((unit) => {
+  assert.ok(unit.parentRegionId, `${unit.fullName}의 상위지역이 필요합니다.`);
+  assert.ok(byId.has(unit.parentRegionId), `${unit.fullName}의 상위지역이 원장에 없습니다.`);
+  assert.ok(byId.has(unit.provinceRegionId), `${unit.fullName}의 광역지역이 원장에 없습니다.`);
+  assert.notEqual(unit.parentRegionId, unit.regionId, `${unit.fullName}이 자기 자신을 부모로 참조합니다.`);
+  if (unit.active) {
+    assert.equal(byId.get(unit.parentRegionId).active, true, `${unit.fullName}의 활성 부모가 폐지 상태입니다.`);
+  }
+});
+activeGeneralDistricts.forEach((unit) => {
+  assert.equal(unit.selectable, false, `${unit.fullName} 일반구는 기본 분석단위로 선택하면 안 됩니다.`);
+  assert.equal(byId.get(unit.parentRegionId)?.unitType, "city", `${unit.fullName} 일반구는 상위 시에 연결해야 합니다.`);
+});
+
+assert.equal(master.summary.storedUnitCount, units.length);
+assert.equal(master.summary.activeUnitCount, active.length);
+assert.equal(master.summary.activeBroadCount, activeBroad.length);
+assert.equal(master.summary.activeAnalysisRegionCount, activeLocal.length);
+assert.equal(master.summary.activeGeneralDistrictCount, activeGeneralDistricts.length);
+if (master.asOf === "2026-08-27") {
+  assert.equal(activeBroad.length, 16, "2026-08-27 광역단위는 16개입니다.");
+  assert.equal(activeLocal.length, 229, "2026-08-27 시·군·자치구·행정시는 229개입니다.");
+  assert.equal(activeGeneralDistricts.length, 39, "2026-08-27 일반구는 공식 전체자료 기준 39개입니다.");
+}
+
+const linkedTourism = active.filter((unit) => unit.providerMappings?.kto);
+assert.equal(linkedTourism.length, tourism.regions.length, "기존 관광 지역표가 모두 원장에 연결되어야 합니다.");
+tourism.regions.forEach((region) => {
+  const unit = linkedTourism.find((entry) => entry.providerMappings.kto.regionKey === region.regionKey);
+  assert.ok(unit, `${region.regionKey} 관광 지역 연결이 없습니다.`);
+  assert.equal(unit.providerMappings.kto.ktoSggCd, region.ktoSggCd);
+  assert.equal(unit.providerMappings.kto.status, region.codeStatus || "ready");
+});
+assert.equal(master.links.tourismMappedCount, tourism.regions.length);
+assert.deepEqual(master.links.tourismPending, []);
+
+const linkedCards = active.filter((unit) => unit.locationCardKey);
+assert.equal(linkedCards.length, dictionary.cards.length, "기존 입지카드가 모두 원장에 연결되어야 합니다.");
+dictionary.cards.forEach((card) => {
+  assert.ok(linkedCards.some((unit) => unit.locationCardKey === card.regionKey), `${card.regionKey} 입지카드 연결이 없습니다.`);
+});
+assert.equal(master.links.locationCardMappedCount, dictionary.cards.length);
+assert.deepEqual(master.links.locationCardPending, []);
+
+const incheonActive = activeLocal.filter((unit) => unit.sidoFull === "인천광역시");
+const incheonNames = new Set(incheonActive.map((unit) => unit.name));
+["제물포구", "영종구", "서해구", "검단구", "강화군", "옹진군"].forEach((name) => assert.ok(incheonNames.has(name), `인천 ${name}이 활성이어야 합니다.`));
+["중구", "동구", "서구"].forEach((name) => assert.ok(!incheonNames.has(name), `과거 인천 ${name}은 활성 목록에서 제외해야 합니다.`));
+
+const integratedProvince = activeBroad.find((unit) => unit.fullName === "전남광주통합특별시");
+assert.ok(integratedProvince, "전남광주통합특별시가 활성 광역단위여야 합니다.");
+assert.equal(activeLocal.filter((unit) => unit.sidoFull === "전남광주통합특별시").length, 27);
+assert.ok(units.some((unit) => unit.fullName === "광주광역시" && !unit.active), "과거 광주광역시를 폐지 이력으로 보존해야 합니다.");
+assert.ok(units.some((unit) => unit.fullName === "전라남도" && !unit.active), "과거 전라남도를 폐지 이력으로 보존해야 합니다.");
+
+const sejong = activeBroad.find((unit) => unit.fullName === "세종특별자치시");
+assert.ok(sejong?.selectable, "세종특별자치시는 광역 분석단위로 선택할 수 있어야 합니다.");
+assert.equal(activeLocal.filter((unit) => unit.sidoFull === "세종특별자치시").length, 0, "세종 하위 시군구를 가상 생성하면 안 됩니다.");
+assert.equal(activeLocal.filter((unit) => unit.unitType === "administrative_city").length, 2, "제주·서귀포 행정시 2곳이 필요합니다.");
+
+const forbiddenMetricKeys = /visitor|sales|revenue|reservation|forecast|score|rate|count$/i;
+active.forEach((unit) => {
+  Object.keys(unit).forEach((key) => {
+    assert.ok(!forbiddenMetricKeys.test(key), `${unit.fullName} 원장에 관측 지표 ${key}를 저장하면 안 됩니다.`);
+  });
+});
+
+const duplicateGoseong = activeLocal.filter((unit) => unit.name === "고성군");
+assert.equal(duplicateGoseong.length, 2, "강원·경남 고성군을 각각 보존해야 합니다.");
+assert.equal(new Set(duplicateGoseong.map((unit) => unit.sidoFull)).size, 2);
+assert.equal(new Set(duplicateGoseong.map((unit) => unit.regionKey)).size, 2);
+
+console.log(`administrative region master ok: 광역 ${activeBroad.length}, 분석지역 ${activeLocal.length}, 일반구 ${activeGeneralDistricts.length}, 이력 ${units.length}`);

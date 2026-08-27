@@ -27,6 +27,7 @@ const state = {
   mapData: null,
   mapPromise: null,
   dictionary: null,
+  regionMaster: null,
   tourismRegionMap: null,
   locationCardRequests: null,
   locationScoreOverrides: null,
@@ -148,6 +149,7 @@ const CORE_COLORS = {
 };
 const LOCAL_MAP_URL = "/assets/korea_municipalities.geojson";
 const LOCATION_DICTIONARY_URL = "/data/location_dictionary.json";
+const REGION_MASTER_URL = "/data/region_master.json";
 const TOURISM_REGION_MAP_URL = "/data/tourism_region_map.json";
 const DEFAULT_BOOKING_DAYS = 7;
 const B2B_HIGH_RESERVATION_RATE = 0.4;
@@ -3646,7 +3648,25 @@ function locationCardForQuery(query) {
     ? cards.find((item) => item.regionKey === matchedAlias.regionKey)
     : cards.find((item) => compactSearchText(item.searchKeyword) === compact || compact.includes(compactSearchText(item.searchKeyword)));
 
-  return { card: card || null, alias: matchedAlias || null, reason: card ? "matched" : "missing" };
+  if (card) return { card, alias: matchedAlias || null, reason: "matched" };
+  const administrativeMatch = administrativeRegionForQuery(query);
+  if (administrativeMatch.region) {
+    return {
+      card: dictionaryStoredCardForRegion(administrativeMatch.region),
+      alias: null,
+      administrativeRegion: administrativeMatch.region,
+      reason: "region-master"
+    };
+  }
+  if (administrativeMatch.ambiguousRegions?.length) {
+    return {
+      card: null,
+      alias: null,
+      ambiguousRegions: administrativeMatch.ambiguousRegions,
+      reason: "administrative-region-ambiguous"
+    };
+  }
+  return { card: null, alias: matchedAlias || null, reason: "missing" };
 }
 
 function locationCardRequestStatusMeta(status) {
@@ -29928,10 +29948,105 @@ function renderDownloads() {
 }
 
 function dictionaryStoredCardForRegion(region = {}) {
-  return (state.dictionary?.cards || []).find((card) => card.regionKey === region.regionKey) || null;
+  const keys = [
+    region.locationCardKey,
+    region.providerMappings?.kto?.regionKey,
+    region.regionKey
+  ].filter(Boolean);
+  return (state.dictionary?.cards || []).find((card) => keys.includes(card.regionKey)) || null;
+}
+
+function regionMasterUnits() {
+  return Array.isArray(state.regionMaster?.units) ? state.regionMaster.units : [];
+}
+
+function administrativeRegionEntries() {
+  return regionMasterUnits().filter((region) => region.active && region.selectable && region.level === "local");
+}
+
+function administrativeProvinceEntries() {
+  return regionMasterUnits()
+    .filter((region) => region.active && region.selectable && region.level === "broad")
+    .sort((a, b) => String(a.officialCode || "").localeCompare(String(b.officialCode || "")));
+}
+
+function administrativeRegionForKey(regionKey = "") {
+  const key = String(regionKey || "").trim();
+  if (!key) return null;
+  return regionMasterUnits().find((region) => [region.regionKey, region.regionId, region.officialCode].includes(key)) || null;
+}
+
+function administrativeProvinceForValue(value = state.dictionaryProvince) {
+  const key = String(value || "").trim();
+  if (!key) return null;
+  return administrativeProvinceEntries().find((province) => [
+    province.regionKey,
+    province.regionId,
+    province.officialCode,
+    province.sido,
+    province.sidoFull,
+    ...(province.aliases || [])
+  ].includes(key)) || null;
+}
+
+function administrativeProvinceForRegion(region = {}) {
+  if (region.level === "broad") return region;
+  return administrativeRegionForKey(region.provinceRegionKey || region.provinceRegionId)
+    || administrativeProvinceEntries().find((province) => province.sidoFull === region.sidoFull)
+    || null;
+}
+
+function administrativeRegionsForProvince(province = state.dictionaryProvince) {
+  const provinceUnit = administrativeProvinceForValue(province);
+  if (!provinceUnit) return [];
+  return administrativeRegionEntries().filter((region) => (
+    region.provinceRegionId === provinceUnit.regionId
+    || region.provinceRegionKey === provinceUnit.regionKey
+    || region.sidoFull === provinceUnit.sidoFull
+  ));
+}
+
+function administrativeRegionForQuery(query = "") {
+  const compact = compactSearchText(query).replace(/글램핑|카라반|캠핑장|캠핑|펜션|풀빌라|숙소|숙박/g, "");
+  if (!compact) return { region: null, ambiguousRegions: [] };
+  const candidates = [...administrativeProvinceEntries(), ...administrativeRegionEntries()]
+    .map((region) => {
+      const values = [region.fullName, region.name, region.shortName, region.sido, region.sidoFull, ...(region.aliases || [])]
+        .map(compactSearchText)
+        .filter(Boolean);
+      const score = values.reduce((best, value) => {
+        if (value === compact) return Math.max(best, 100);
+        if (value.endsWith(compact) || compact.endsWith(value)) return Math.max(best, 90);
+        if (value.includes(compact) || compact.includes(value)) return Math.max(best, 78);
+        return best;
+      }, 0);
+      return { region, score };
+    })
+    .filter((entry) => entry.score >= 78)
+    .sort((a, b) => b.score - a.score || String(a.region.officialCode || "").localeCompare(String(b.region.officialCode || "")));
+  if (!candidates.length) return { region: null, ambiguousRegions: [] };
+  const topScore = candidates[0].score;
+  const top = candidates.filter((entry) => entry.score === topScore).map((entry) => entry.region);
+  if (top.length === 1) return { region: top[0], ambiguousRegions: [] };
+  const currentProvince = administrativeProvinceForValue();
+  const preferred = currentProvince
+    ? top.filter((region) => region.level === "broad"
+      ? region.regionId === currentProvince.regionId
+      : region.provinceRegionId === currentProvince.regionId)
+    : [];
+  if (preferred.length === 1) return { region: preferred[0], ambiguousRegions: [] };
+  return { region: null, ambiguousRegions: top };
 }
 
 function dictionaryProvinceEntries() {
+  const masterProvinces = administrativeProvinceEntries();
+  if (masterProvinces.length) {
+    return masterProvinces.map((province) => ({
+      value: province.regionKey,
+      label: province.sidoFull,
+      region: province
+    }));
+  }
   const regions = tourismRegionEntries();
   const source = regions.length
     ? regions
@@ -29955,11 +30070,19 @@ function dictionaryProvinceEntries() {
 
 function dictionaryProvinceForCard(card = null) {
   if (!card) return "";
+  const masterRegion = administrativeRegionEntries().find((entry) => (
+    entry.locationCardKey === card.regionKey
+    || entry.providerMappings?.kto?.regionKey === card.regionKey
+    || entry.regionKey === card.regionKey
+  ));
+  if (masterRegion) return masterRegion.provinceRegionKey || masterRegion.sido;
   const region = tourismRegionEntries().find((entry) => entry.regionKey === card.regionKey);
   return String(region?.sido || dictionaryAliasForCard(card)?.sido || "").trim();
 }
 
 function dictionaryRegionsForProvince(province = state.dictionaryProvince) {
+  const masterRegions = administrativeRegionsForProvince(province);
+  if (masterRegions.length || administrativeProvinceForValue(province)) return masterRegions;
   const regions = tourismRegionEntries().filter((region) => String(region.sido || "").trim() === province);
   if (regions.length) return regions;
   return (state.dictionary?.aliases || [])
@@ -29976,7 +30099,15 @@ function renderDictionaryProvinceSelect() {
   if (!els.dictionaryProvinceSelect) return;
   const provinces = dictionaryProvinceEntries();
   if (!provinces.some((province) => province.value === state.dictionaryProvince)) {
-    state.dictionaryProvince = provinces.find((province) => province.value === "경남")?.value || provinces[0]?.value || "";
+    const requestedProvince = String(state.dictionaryProvince || "").trim();
+    state.dictionaryProvince = provinces.find((province) => (
+      province.region?.sido === requestedProvince
+      || province.region?.sidoFull === requestedProvince
+      || province.label === requestedProvince
+    ))?.value
+      || provinces.find((province) => province.region?.sido === "경남" || province.value === "경남")?.value
+      || provinces[0]?.value
+      || "";
   }
   els.dictionaryProvinceSelect.innerHTML = provinces
     .map((province) => `<option value="${escapeHtml(province.value)}">${escapeHtml(province.label)}</option>`)
@@ -29987,13 +30118,17 @@ function renderDictionaryProvinceSelect() {
 function dictionaryRegionButton(region = {}) {
   const card = dictionaryStoredCardForRegion(region);
   const selectedKey = state.selectedLocationCard?.regionKey || state.dictionaryPendingRegion?.regionKey || "";
-  const selected = selectedKey === region.regionKey;
+  const selected = [region.regionKey, region.locationCardKey, region.providerMappings?.kto?.regionKey].filter(Boolean).includes(selectedKey)
+    || state.dictionaryPendingRegion?.regionId === region.regionId;
+  const broad = region.level === "broad";
+  const label = broad ? "광역 전체" : (region.sigungu || region.name || "지역 확인");
+  const status = broad ? "광역" : card ? "상세" : "기본";
   return `
     <button class="dictionary-region-item${selected ? " active" : ""}" type="button"
       data-location-region-item data-location-region-key="${escapeHtml(region.regionKey || "")}"
       aria-pressed="${selected ? "true" : "false"}">
-      <strong>${escapeHtml(region.sigungu || "지역 확인")}</strong>
-      <span>${card ? "보기" : "준비"}</span>
+      <strong>${escapeHtml(label)}</strong>
+      <span>${escapeHtml(status)}</span>
     </button>
   `;
 }
@@ -30002,6 +30137,7 @@ function renderDictionaryQuickButtons() {
   if (!els.dictionaryQuickButtons) return;
   renderDictionaryProvinceSelect();
   const selectedKey = state.selectedLocationCard?.regionKey || state.dictionaryPendingRegion?.regionKey || "";
+  const province = administrativeProvinceForValue();
   const regions = dictionaryRegionsForProvince().slice().sort((a, b) => {
     if (a.regionKey === selectedKey) return -1;
     if (b.regionKey === selectedKey) return 1;
@@ -30012,9 +30148,16 @@ function renderDictionaryQuickButtons() {
   });
   const visible = regions.slice(0, 5);
   const folded = regions.slice(5);
-  if (els.dictionaryProvinceLabel) els.dictionaryProvinceLabel.textContent = state.dictionaryProvince || "지역";
-  if (els.dictionaryProvinceRegionCount) els.dictionaryProvinceRegionCount.textContent = `${fmtNumber(regions.length)}곳`;
+  if (els.dictionaryProvinceLabel) els.dictionaryProvinceLabel.textContent = province?.sido || state.dictionaryProvince || "지역";
+  if (els.dictionaryProvinceRegionCount) {
+    els.dictionaryProvinceRegionCount.textContent = regions.length
+      ? `${fmtNumber(regions.length)}개 시·군·구`
+      : province?.unitType === "special_autonomous_city"
+        ? "단일 광역단위"
+        : "하위 지역 없음";
+  }
   els.dictionaryQuickButtons.innerHTML = `
+    ${province ? `<div class="dictionary-region-list dictionary-province-master" data-location-province-master>${dictionaryRegionButton(province)}</div>` : ""}
     <div class="dictionary-region-list">${visible.map(dictionaryRegionButton).join("")}</div>
     ${folded.length ? `
       <details class="dictionary-region-more">
@@ -32048,12 +32191,132 @@ function renderSancheongLocationProfile(card, alias, tourismMatch, clusters, ind
   `;
 }
 
+function administrativeProfileDefinitionRows(rows = []) {
+  const rowHtml = (row) => `<div><span>${escapeHtml(row.label)}</span><strong>${escapeHtml(row.value)}</strong><small>${escapeHtml(row.note || "")}</small></div>`;
+  const visible = rows.slice(0, 5);
+  const folded = rows.slice(5);
+  return `
+    <div class="location-profile-definition-list">${visible.map(rowHtml).join("")}</div>
+    ${folded.length ? `<details class="location-profile-place-more"><summary>${fmtNumber(folded.length)}개 항목 더보기</summary><div class="location-profile-definition-list">${folded.map(rowHtml).join("")}</div></details>` : ""}
+  `;
+}
+
+function renderAdministrativeObservationPanel(title, sourceLabel, statusLabel = "관측 없음", detail = "해당 기간 관측 없음") {
+  return `
+    <article class="location-profile-panel" data-ui-surface="card">
+      <div class="location-profile-panel-head">
+        <div><p class="eyebrow">${escapeHtml(sourceLabel)}</p><h4>${escapeHtml(title)}</h4></div>
+        <span class="location-profile-status is-missing">${escapeHtml(statusLabel)}</span>
+      </div>
+      <div class="location-profile-empty">${escapeHtml(detail)} · 미수집을 0으로 표시하지 않습니다.</div>
+    </article>
+  `;
+}
+
+function renderAdministrativeProfile(region = {}, options = {}) {
+  const province = administrativeProvinceForRegion(region) || region;
+  const isProvince = Boolean(options.province || region.level === "broad");
+  const localCount = isProvince ? administrativeRegionsForProvince(region.regionKey).length : 0;
+  const kto = region.providerMappings?.kto || null;
+  const sourceDate = state.regionMaster?.asOf || region.lastObservedAt || "기준일 확인";
+  const unitLabel = region.officialUnitLabel || (isProvince ? "광역" : "시·군·구");
+  const fullName = region.fullName || [region.sidoFull, region.sigungu || region.name].filter(Boolean).join(" ");
+  const summaryScope = isProvince
+    ? localCount ? `${fmtNumber(localCount)}개 시·군·구` : "단일 광역단위"
+    : "기초 행정구역";
+  const mappingLabel = kto ? "관광 API 코드 연결" : "관광 API 연결 대기";
+  const basicRows = [
+    { label: "행정구역", value: fullName, note: "공식 명칭" },
+    { label: "공식 행정구역 코드", value: region.officialCode || "확인 필요", note: "법정동코드" },
+    { label: "행정단위", value: unitLabel, note: region.active ? "현존" : "폐지" },
+    { label: "상위 광역지역", value: province?.sidoFull || fullName, note: isProvince ? "광역 기준" : "공식 상위지역" },
+    { label: "분석 단위", value: isProvince ? "광역 전체" : "시·군·구 기준", note: "공통 기준" },
+    { label: "관광자료 연결", value: mappingLabel, note: kto?.ktoSggCd || "코드 대기" },
+    { label: "원장 기준일", value: sourceDate, note: "행정표준코드 현존목록" }
+  ];
+  const tourismPanel = `
+    <div class="location-profile-grid">
+      ${renderAdministrativeObservationPanel("지역 방문자 추이", kto ? `관광 API ${kto.ktoSggCd}` : "한국관광공사", "관측 없음", kto ? "행정구역 코드는 연결됐지만 저장된 방문자 관측이 없습니다" : "관광 API 지역코드 연결 후 실제 관측을 표시합니다")}
+      ${renderAdministrativeObservationPanel("관광 클러스터", "공공데이터", "관측 없음", "관광자원 분류 자료가 아직 연결되지 않았습니다")}
+    </div>
+  `;
+  const supplyPanel = `
+    <div class="location-profile-grid">
+      ${renderAdministrativeObservationPanel("숙박업체 관측", "Naver Place", "관측 없음", "해당 행정구역의 실제 숙박 수집 이력이 없습니다")}
+      ${renderAdministrativeObservationPanel("업체 DB 연결", "사분 데이터랩", "연결 대기", "업체 주소와 공식 행정구역 코드가 연결되면 표본을 표시합니다")}
+    </div>
+  `;
+  const historyPanel = `
+    <section class="location-profile-sources" data-ui-surface="card">
+      <div class="location-profile-panel-head"><div><p class="eyebrow">Source</p><h4>기본자료와 관측 이력</h4></div><span class="location-profile-status is-observed">원장 저장</span></div>
+      <div class="location-profile-source-list">
+        <div><span>행정원장</span><strong>행정안전부 행정표준코드</strong><small>${escapeHtml(`${sourceDate} · ${region.active ? "현존" : "폐지"}`)}</small></div>
+        <div><span>관광 연결</span><strong>${escapeHtml(mappingLabel)}</strong><small>${escapeHtml(kto?.ktoSggCd || "연결 대기")}</small></div>
+        <div><span>실제 관측</span><strong>관측 없음</strong><small>방문자·숙박·수요 자료는 원장과 분리 저장</small></div>
+      </div>
+      <p>행정구역 기본값만 미리 저장했습니다. 관측되지 않은 방문자·예약율·매출은 0으로 만들지 않습니다.</p>
+    </section>
+  `;
+  return `
+    <article class="location-card location-profile-card" data-location-profile-region="${escapeHtml(region.regionKey || "")}"${isProvince ? " data-location-profile-province" : ""}>
+      <header class="location-profile-overview">
+        <div>
+          <p class="eyebrow">${isProvince ? "광역 기본카드" : "행정구역 기본카드"}</p>
+          <h3>${escapeHtml(fullName)}</h3>
+          <p>공식 행정구역을 기준으로 만들었으며 실제 관광·숙박 관측은 확보된 자료만 별도로 연결합니다.</p>
+        </div>
+        <span class="location-profile-api-state is-ready" role="status">행정구역 확정</span>
+      </header>
+      <div class="location-profile-summary-grid">
+        <article><span>행정단위</span><strong>${escapeHtml(unitLabel)}</strong><small>공식 분류</small></article>
+        <article><span>분석범위</span><strong>${escapeHtml(summaryScope)}</strong><small>${isProvince ? "광역과 지역 분리" : "지역 기준"}</small></article>
+        <article><span>관광자료</span><strong>${escapeHtml(mappingLabel)}</strong><small>관측값은 별도</small></article>
+      </div>
+      <p class="location-profile-endpoint-state">행정표준코드 ${escapeHtml(sourceDate)} 현존목록 기준</p>
+      <nav class="location-profile-tabs" role="tablist" aria-label="${escapeHtml(fullName)} 지역 상세">
+        ${locationProfileTabButton("basic", "기본 입지")}
+        ${locationProfileTabButton("tourism", "관광 기반")}
+        ${locationProfileTabButton("supply", "숙박 공급")}
+        ${locationProfileTabButton("history", "과거 자료")}
+      </nav>
+      ${locationProfileTabPanel("basic", `${administrativeProfileDefinitionRows(basicRows)}<div class="location-profile-actions"><button class="secondary-button" type="button" data-dictionary-navigate="analysis" disabled>업종 분석 연결 준비</button><button class="primary-button" type="button" data-dictionary-navigate="demand" disabled>수요전망 자료 대기</button></div><p class="location-profile-action-note">실제 관측이 확보되면 이 행정구역에 연결합니다.</p>`)}
+      ${locationProfileTabPanel("tourism", tourismPanel)}
+      ${locationProfileTabPanel("supply", supplyPanel)}
+      ${locationProfileTabPanel("history", historyPanel)}
+    </article>
+  `;
+}
+
+function renderAdministrativeProvinceProfile(province = {}) {
+  return renderAdministrativeProfile(province, { province: true });
+}
+
+function renderAdministrativeRegionProfile(region = {}) {
+  return renderAdministrativeProfile(region, { province: false });
+}
+
+function renderAdministrativeRegionChoices(regions = [], query = "") {
+  return `
+    <article class="location-card location-profile-card">
+      <header class="location-profile-overview">
+        <div><p class="eyebrow">동일 지역명 확인</p><h3>${escapeHtml(query || "지역 선택")}</h3><p>같은 이름의 행정구역이 여러 곳입니다. 시·도를 확인해 선택하세요.</p></div>
+        <span class="location-profile-api-state">선택 필요</span>
+      </header>
+      <div class="dictionary-region-list">
+        ${regions.map((region) => `<button class="dictionary-region-item" type="button" data-location-region-key="${escapeHtml(region.regionKey || "")}"><strong>${escapeHtml(region.fullName || region.name)}</strong><span>기본</span></button>`).join("")}
+      </div>
+    </article>
+  `;
+}
+
 function renderLocationDictionary(match = null) {
   renderAdminRegionAnalysisDashboard();
   if (!els.dictionaryResult) return;
   const cards = state.dictionary?.cards || [];
   const groups = state.dictionary?.regionGroups || [];
-  if (els.dictionaryCount) els.dictionaryCount.textContent = `${fmtNumber(dictionaryProvinceEntries().length)} 시·도 · ${fmtNumber(cards.length)} 저장지역`;
+  const provinceCount = administrativeProvinceEntries().length || dictionaryProvinceEntries().length;
+  const regionCount = administrativeRegionEntries().length || cards.length;
+  if (els.dictionaryCount) els.dictionaryCount.textContent = `${fmtNumber(provinceCount)} 시·도 · ${fmtNumber(regionCount)} 행정구역`;
   if (!state.dictionary) {
     els.dictionaryResult.innerHTML = `<div class="empty">입지판단 사전을 불러오는 중입니다.</div>`;
     return;
@@ -32067,7 +32330,11 @@ function renderLocationDictionary(match = null) {
   const defaultCard = cards.find((card) => isSancheongLocationCard(card)) || cards[0] || null;
   const result = match
     || (query ? locationCardForQuery(query) : null)
-    || (state.dictionaryPendingRegion ? { card: null, missingRegion: state.dictionaryPendingRegion } : null)
+    || (state.dictionaryPendingRegion ? {
+        card: dictionaryStoredCardForRegion(state.dictionaryPendingRegion),
+        administrativeRegion: state.dictionaryPendingRegion,
+        province: state.dictionaryPendingRegion.level === "broad" ? state.dictionaryPendingRegion : null
+      } : null)
     || (state.selectedLocationCard ? { card: state.selectedLocationCard, alias: dictionaryAliasForCard(state.selectedLocationCard) } : null)
     || (defaultCard ? { card: defaultCard, alias: dictionaryAliasForCard(defaultCard) } : {});
   if (result.group) {
@@ -32077,8 +32344,34 @@ function renderLocationDictionary(match = null) {
     renderLocationGroupDictionary(result.group);
     return;
   }
-  const card = result.missingRegion ? null : (result.card || state.selectedLocationCard);
+  if (result.ambiguousRegions?.length) {
+    state.selectedLocationCard = null;
+    state.dictionaryPendingRegion = null;
+    renderDictionaryQuickButtons();
+    if (els.dictionarySearchStatus) els.dictionarySearchStatus.textContent = `"${query}"과 같은 이름의 지역이 여러 곳입니다. 시·도를 확인해 선택하세요.`;
+    els.dictionaryResult.innerHTML = renderAdministrativeRegionChoices(result.ambiguousRegions, query);
+    return;
+  }
+  const administrativeRegion = result.province
+    || result.administrativeRegion
+    || administrativeRegionForKey(result.missingRegion?.regionKey)
+    || null;
+  const card = result.card || dictionaryStoredCardForRegion(administrativeRegion);
   if (!card) {
+    if (administrativeRegion) {
+      const province = administrativeProvinceForRegion(administrativeRegion) || administrativeRegion;
+      state.selectedLocationCard = null;
+      state.dictionaryPendingRegion = administrativeRegion;
+      state.dictionaryProvince = province.regionKey || state.dictionaryProvince;
+      renderDictionaryQuickButtons();
+      if (els.dictionarySearchStatus) {
+        els.dictionarySearchStatus.textContent = `${administrativeRegion.fullName || administrativeRegion.name} 기본 행정정보 선택 · 실제 관측자료는 연결된 경우에만 표시합니다.`;
+      }
+      els.dictionaryResult.innerHTML = administrativeRegion.level === "broad"
+        ? renderAdministrativeProvinceProfile(administrativeRegion)
+        : renderAdministrativeRegionProfile(administrativeRegion);
+      return;
+    }
     const missingRegion = result.missingRegion || state.dictionaryPendingRegion || null;
     state.selectedLocationCard = null;
     state.dictionaryPendingRegion = missingRegion;
@@ -32087,8 +32380,8 @@ function renderLocationDictionary(match = null) {
     const missingQuery = query || (missingRegion?.sigungu ? `${missingRegion.sigungu.replace(/시$|군$|구$/g, "")} 글램핑` : "");
     if (els.dictionarySearchStatus) {
       els.dictionarySearchStatus.textContent = missingQuery
-        ? `"${missingRegion?.sigungu || missingQuery}"은 행정구역에 연결됐지만 저장 지역 카드는 준비 중입니다.`
-        : "지역명과 업종을 입력하면 저장된 지역 카드를 호출합니다.";
+        ? `"${missingRegion?.sigungu || missingQuery}"의 공식 행정구역 연결을 확인해야 합니다.`
+        : "지역명과 업종을 입력하면 공식 행정구역과 저장된 지역 카드를 확인합니다.";
     }
     els.dictionaryResult.innerHTML = renderMissingLocationCandidate(missingQuery, cards);
     return;
@@ -32266,33 +32559,45 @@ function runDictionarySearch(query) {
     return;
   }
   const result = locationCardForQuery(searchValue);
-  state.selectedLocationCard = result.card;
-  state.dictionaryPendingRegion = null;
+  state.selectedLocationCard = result.card || null;
+  state.dictionaryPendingRegion = result.card ? null : (result.administrativeRegion || null);
   state.dictionaryDetailTab = "basic";
   renderLocationDictionary(result);
 }
 
 function selectDictionaryRegion(regionKey = "") {
-  const region = tourismRegionEntries().find((entry) => entry.regionKey === regionKey)
+  const region = administrativeRegionForKey(regionKey)
+    || tourismRegionEntries().find((entry) => entry.regionKey === regionKey)
     || dictionaryRegionsForProvince().find((entry) => entry.regionKey === regionKey)
     || null;
   if (!region) return;
   const card = dictionaryStoredCardForRegion(region);
-  state.dictionaryProvince = region.sido || state.dictionaryProvince;
+  const province = administrativeProvinceForRegion(region);
+  state.dictionaryProvince = province?.regionKey || region.sido || state.dictionaryProvince;
   state.dictionaryDetailTab = "basic";
   state.dictionaryPendingRegion = card ? null : region;
   state.selectedLocationCard = card;
   if (els.dictionarySearchInput) els.dictionarySearchInput.value = "";
   renderLocationDictionary(card
-    ? { card, alias: dictionaryAliasForCard(card) }
-    : { card: null, missingRegion: region });
+    ? { card, alias: dictionaryAliasForCard(card), administrativeRegion: region }
+    : region.level === "broad"
+      ? { card: null, province: region, administrativeRegion: region }
+      : { card: null, administrativeRegion: region });
 }
 
 function selectDictionaryProvince(province = "") {
-  state.dictionaryProvince = String(province || "").trim() || state.dictionaryProvince;
+  const nextValue = String(province || "").trim() || state.dictionaryProvince;
+  const administrativeProvince = administrativeProvinceForValue(nextValue);
+  state.dictionaryProvince = administrativeProvince?.regionKey || nextValue;
   state.dictionaryDetailTab = "basic";
-  state.dictionaryPendingRegion = null;
   if (els.dictionarySearchInput) els.dictionarySearchInput.value = "";
+  if (administrativeProvince) {
+    state.selectedLocationCard = null;
+    state.dictionaryPendingRegion = administrativeProvince;
+    renderLocationDictionary({ province: administrativeProvince, administrativeRegion: administrativeProvince });
+    return;
+  }
+  state.dictionaryPendingRegion = null;
   const regions = dictionaryRegionsForProvince(state.dictionaryProvince);
   const nextRegion = regions.find((region) => dictionaryStoredCardForRegion(region)) || regions[0] || null;
   if (!nextRegion) {
@@ -32305,11 +32610,13 @@ function selectDictionaryProvince(province = "") {
 
 async function loadLocationDictionary() {
   try {
-    const [dictionary, tourismRegionMap] = await Promise.all([
+    const [dictionary, regionMaster, tourismRegionMap] = await Promise.all([
       fetchJson(LOCATION_DICTIONARY_URL),
+      fetchJson(REGION_MASTER_URL).catch((error) => ({ error: error.message, units: [] })),
       fetchJson(TOURISM_REGION_MAP_URL).catch((error) => ({ error: error.message, regions: [] }))
     ]);
     state.dictionary = dictionary;
+    state.regionMaster = regionMaster;
     state.tourismRegionMap = tourismRegionMap;
     const initialQuery = els.dictionarySearchInput?.value?.trim() || "";
     if (initialQuery) {
@@ -38097,6 +38404,11 @@ function bindEvents() {
     runDictionarySearch(button.dataset.locationQuery);
   });
   els.dictionaryResult?.addEventListener("click", (event) => {
+    const administrativeRegionButton = event.target.closest("[data-location-region-key]");
+    if (administrativeRegionButton) {
+      selectDictionaryRegion(administrativeRegionButton.dataset.locationRegionKey || "");
+      return;
+    }
     const profileTab = event.target.closest("[data-location-profile-tab]");
     if (profileTab) {
       const tab = profileTab.dataset.locationProfileTab || "basic";

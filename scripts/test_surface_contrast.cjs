@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260827-demand-strength-v81";
-const expectedAssetVersion = "datalab-20260827-demand-strength-v63";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260827-region-master-v82";
+const expectedAssetVersion = "datalab-20260827-region-master-v64";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -497,6 +497,107 @@ assert(
     && app.includes('state.dictionaryPendingRegion = card ? null : region')
     && app.includes('Boolean(state.selectedLocationCard || state.dictionaryPendingRegion)'),
   "location dictionary must preserve exact province and region selection and expose four state-backed detail tabs",
+  failures
+);
+
+const loadLocationDictionaryBlock = app.slice(
+  app.indexOf("async function loadLocationDictionary()"),
+  app.indexOf("async function loadLocationCardRequests()")
+);
+const dictionaryProvinceEntriesBlock = app.slice(
+  app.indexOf("function dictionaryProvinceEntries()"),
+  app.indexOf("function dictionaryProvinceForCard(")
+);
+const dictionaryRegionsForProvinceBlock = app.slice(
+  app.indexOf("function dictionaryRegionsForProvince("),
+  app.indexOf("function renderDictionaryProvinceSelect(")
+);
+const dictionaryStoredCardBlock = app.slice(
+  app.indexOf("function dictionaryStoredCardForRegion("),
+  app.indexOf("function dictionaryProvinceEntries()")
+);
+const locationQueryBlock = app.slice(
+  app.indexOf("function locationCardForQuery("),
+  app.indexOf("function locationCardRequestStatusMeta(")
+);
+const administrativeProfileBlock = app.slice(
+  app.indexOf("function renderAdministrativeObservationPanel("),
+  app.indexOf("function renderLocationDictionary(")
+);
+const selectDictionaryProvinceBlock = app.slice(
+  app.indexOf("function selectDictionaryProvince("),
+  app.indexOf("async function loadLocationDictionary()")
+);
+const renderLocationDictionaryBlock = app.slice(
+  app.indexOf("function renderLocationDictionary("),
+  app.indexOf("function syncDictionaryInputToActiveRun(")
+);
+
+assert(
+  app.includes("regionMaster: null")
+    && app.includes('const REGION_MASTER_URL = "/data/region_master.json";')
+    && loadLocationDictionaryBlock.includes("fetchJson(REGION_MASTER_URL).catch(")
+    && loadLocationDictionaryBlock.includes("state.regionMaster = regionMaster")
+    && loadLocationDictionaryBlock.includes("state.tourismRegionMap = tourismRegionMap"),
+  "location dictionary must load the administrative master independently and retain the tourism-provider map",
+  failures
+);
+
+assert(
+  app.includes("function administrativeRegionEntries()")
+    && app.includes("function administrativeProvinceEntries()")
+    && dictionaryProvinceEntriesBlock.includes("administrativeProvinceEntries()")
+    && dictionaryRegionsForProvinceBlock.includes("administrativeRegionsForProvince(province)")
+    && app.includes("function tourismRegionEntries()"),
+  "province and local navigation must be master-first while KTO regions remain a separate provider crosswalk",
+  failures
+);
+
+assert(
+  dictionaryStoredCardBlock.includes("locationCardKey")
+    && dictionaryStoredCardBlock.includes("providerMappings?.kto?.regionKey")
+    && dictionaryStoredCardBlock.includes("region.regionKey"),
+  "stored location cards must resolve through explicit master links before legacy region-key fallback",
+  failures
+);
+
+assert(
+  app.includes("function administrativeRegionForQuery(")
+    && locationQueryBlock.includes("administrativeRegionForQuery(query)")
+    && locationQueryBlock.includes('reason: "region-master"'),
+  "location search must resolve an official master region before treating it as an unsaved candidate",
+  failures
+);
+
+assert(
+  administrativeProfileBlock.includes("function renderAdministrativeProvinceProfile(")
+    && administrativeProfileBlock.includes("function renderAdministrativeRegionProfile(")
+    && administrativeProfileBlock.includes("공식 행정구역 코드")
+    && administrativeProfileBlock.includes("관측 없음")
+    && administrativeProfileBlock.includes("미수집을 0으로 표시하지")
+    && !administrativeProfileBlock.includes(">0명<")
+    && !administrativeProfileBlock.includes(">0원<")
+    && !administrativeProfileBlock.includes(">0%<"),
+  "master-only province and region profiles must show official base facts and never synthesize missing observations as zero",
+  failures
+);
+
+assert(
+  selectDictionaryProvinceBlock.includes("administrativeProvinceForValue(nextValue)")
+    && selectDictionaryProvinceBlock.includes("renderLocationDictionary({ province: administrativeProvince")
+    && renderLocationDictionaryBlock.includes("result.province")
+    && app.includes("data-location-province-master")
+    && app.includes('const label = broad ? "광역 전체"'),
+  "selecting a province must open its province master instead of silently opening the first saved local card",
+  failures
+);
+
+assert(
+  renderLocationDictionaryBlock.includes("administrativeProvinceEntries().length")
+    && renderLocationDictionaryBlock.includes("administrativeRegionEntries().length")
+    && renderLocationDictionaryBlock.includes("renderAdministrativeRegionProfile(administrativeRegion)")
+    && renderLocationDictionaryBlock.indexOf("renderAdministrativeRegionProfile(administrativeRegion)") < renderLocationDictionaryBlock.indexOf("renderMissingLocationCandidate(missingQuery, cards)"),
+  "official master-only regions must render a generic profile while truly unknown queries retain the candidate workflow",
   failures
 );
 
