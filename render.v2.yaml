@@ -20,6 +20,8 @@ services:
         value: /tmp/glamping-data/config
       - key: DATA_GO_KR_SERVICE_KEY
         sync: false
+      - key: DATA_GO_KR_VISITOR_SERVICE_KEY
+        sync: false
       - key: NAVER_CLIENT_ID
         sync: false
       - key: NAVER_CLIENT_SECRET

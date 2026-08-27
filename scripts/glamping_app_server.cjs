@@ -8638,7 +8638,154 @@ function demandPriceDefenseScore(monthInfo, availability) {
   return clampScore(base * 0.72 + saleSignal + priceSignal);
 }
 
-function buildDemandStructure({ manifest, conditions, regions, availability, datalabTrend }) {
+const DEMAND_VISITOR_OUTLOOK_MAX_WEIGHT = 0.15;
+const DEMAND_BASE_METRIC_WEIGHTS = Object.freeze({
+  monthlyDemand: 0.2125,
+  targetFit: 0.17,
+  weekday: 0.1275,
+  price: 0.1275,
+  content: 0.085,
+  risk: 0.085,
+  aiSignal: 0.0425
+});
+
+function demandRegionToken(value = "") {
+  return adminRegionToken(value).replace(/(?:권역|권)$/u, "");
+}
+
+function demandVisitorHistoryMetric(tourismVisitorHistory, regions = []) {
+  const historyRegions = Array.isArray(tourismVisitorHistory?.regions)
+    ? tourismVisitorHistory.regions
+    : [];
+  const primaryRegionName = String(
+    regions[0]?.region || regions[0]?.name || regions[0]?.sigungu || ""
+  ).trim();
+  const primaryToken = demandRegionToken(primaryRegionName);
+  const historyRegion = historyRegions.find((item) => {
+    const values = [item.regionKey, item.sigungu, item.name, item.region].filter(Boolean);
+    return primaryToken && values.some((value) => demandRegionToken(value) === primaryToken);
+  }) || historyRegions[0] || null;
+  const outlook = historyRegion?.visitorOutlookScore || null;
+  const coverage = historyRegion?.coverage || {};
+  const minimums = tourismVisitorHistory?.quality?.scoreMinimums || {};
+  const score = outlook?.score === null || outlook?.score === undefined || outlook?.score === ""
+    ? Number.NaN
+    : Number(outlook.score);
+  const coverageRate = Number(coverage.coverageRate);
+  const completeMonths = Number(coverage.completeMonths);
+  const minimumCompleteMonths = Number(minimums.minimumCompleteMonths);
+  const recentCompleteMonths = Number(coverage.recent12?.completeMonths);
+  const minimumRecentCompleteMonths = Number(minimums.minimumRecentCompleteMonths);
+  const previousCompleteMonths = Number(coverage.previous12?.completeMonths);
+  const minimumPreviousCompleteMonths = Number(minimums.minimumPreviousCompleteMonths);
+  const comparableMonthPairs = Number(historyRegion?.recent12VsPrevious12?.comparableMonthPairs);
+  const minimumComparableMonthPairs = Number(minimums.minimumComparableMonthPairs);
+  const qualityChecks = {
+    historyOk: tourismVisitorHistory?.ok === true,
+    outlookReady: outlook?.eligible === true && outlook?.status === "ready",
+    scoreFinite: Number.isFinite(score),
+    completeMonths: !Number.isFinite(minimumCompleteMonths)
+      || (Number.isFinite(completeMonths) && completeMonths >= minimumCompleteMonths),
+    recentWindow: !Number.isFinite(minimumRecentCompleteMonths)
+      || (Number.isFinite(recentCompleteMonths) && recentCompleteMonths >= minimumRecentCompleteMonths),
+    previousWindow: !Number.isFinite(minimumPreviousCompleteMonths)
+      || (Number.isFinite(previousCompleteMonths) && previousCompleteMonths >= minimumPreviousCompleteMonths),
+    comparableMonthPairs: !Number.isFinite(minimumComparableMonthPairs)
+      || (Number.isFinite(comparableMonthPairs) && comparableMonthPairs >= minimumComparableMonthPairs)
+  };
+  const eligible = Object.values(qualityChecks).every(Boolean);
+  const period = tourismVisitorHistory?.period || null;
+  const reason = eligible
+    ? ""
+    : String(
+        outlook?.reason
+        || tourismVisitorHistory?.reason
+        || (historyRegions.length ? "quality_gate_failed" : "visitor_history_not_collected")
+      );
+  const periodLabel = period?.startYearMonth && period?.endYearMonth
+    ? `${period.startYearMonth}~${period.endYearMonth}`
+    : "최근 3개년";
+  const completeLabel = Number.isFinite(completeMonths) && Number.isFinite(Number(coverage.expectedMonths))
+    ? `${completeMonths}/${Number(coverage.expectedMonths)}개월 완전관측`
+    : "반복수집 자료 없음";
+
+  return {
+    key: "visitorOutlook",
+    label: "방문자 수요전망 보조점수",
+    score: eligible ? clampScore(score) : null,
+    rawScore: eligible ? score : null,
+    value: eligible ? (outlook.label || `${clampScore(score)}점`) : "자료 부족",
+    note: eligible
+      ? `${periodLabel} · ${completeLabel} · 관측기반(예측값 아님) · 반영 15%`
+      : Number.isFinite(completeMonths) && completeMonths > 0
+        ? `${periodLabel} · 반복수집 자료 부족 · ${completeLabel} · 관측기반(예측값 아님) · 반영 0%`
+        : `${periodLabel} · 해당 기간 관측 없음 · 관측기반(예측값 아님) · 반영 0%`,
+    eligible,
+    status: eligible ? "ready" : "insufficient_data",
+    isForecast: false,
+    reason,
+    reasons: Array.isArray(outlook?.reasons) ? outlook.reasons : [],
+    region: historyRegion
+      ? {
+          regionKey: historyRegion.regionKey || "",
+          sido: historyRegion.sido || "",
+          sigungu: historyRegion.sigungu || historyRegion.name || historyRegion.region || ""
+        }
+      : null,
+    period,
+    coverage: Number.isFinite(coverageRate) ? coverageRate : null,
+    coverageDetail: {
+      expectedMonths: Number.isFinite(Number(coverage.expectedMonths)) ? Number(coverage.expectedMonths) : null,
+      completeMonths: Number.isFinite(completeMonths) ? completeMonths : null,
+      partialMonths: Number.isFinite(Number(coverage.partialMonths)) ? Number(coverage.partialMonths) : null,
+      missingMonths: Number.isFinite(Number(coverage.missingMonths)) ? Number(coverage.missingMonths) : null,
+      recent12: coverage.recent12 || null,
+      previous12: coverage.previous12 || null,
+      comparableMonthPairs: Number.isFinite(comparableMonthPairs) ? comparableMonthPairs : null
+    },
+    qualityGate: {
+      passed: eligible,
+      checks: qualityChecks,
+      minimums,
+      missingIsNotZero: true
+    },
+    modelVersion: outlook?.modelVersion || "",
+    components: Array.isArray(outlook?.components) ? outlook.components : [],
+    source: {
+      key: "visitors",
+      label: "한국관광공사 지역별 방문자수",
+      referenceUrl: "https://www.data.go.kr/data/15101972/openapi.do",
+      metric: "완전월 일평균 순방문자"
+    },
+    requestedWeight: DEMAND_VISITOR_OUTLOOK_MAX_WEIGHT
+  };
+}
+
+function demandWeightedMetrics(metrics = []) {
+  const available = metrics.filter((metric) => Number.isFinite(Number(metric.score)) && metric.eligible !== false);
+  const availableWeight = available.reduce((sum, metric) => sum + Number(metric.requestedWeight || 0), 0);
+  const weighted = metrics.map((metric) => {
+    const appliedRatio = availableWeight > 0 && available.includes(metric)
+      ? Number(metric.requestedWeight || 0) / availableWeight
+      : 0;
+    return {
+      ...metric,
+      requestedWeight: Number((Number(metric.requestedWeight || 0) * 100).toFixed(2)),
+      weightRatio: Number(appliedRatio.toFixed(4)),
+      weightApplied: Number((appliedRatio * 100).toFixed(2))
+    };
+  });
+  const score = availableWeight > 0
+    ? weighted.reduce((sum, metric) => sum + (Number.isFinite(Number(metric.score)) ? Number(metric.score) * metric.weightRatio : 0), 0)
+    : null;
+  return {
+    metrics: weighted,
+    score: Number.isFinite(score) ? clampScore(score) : null,
+    availableWeight: Number(availableWeight.toFixed(4))
+  };
+}
+
+function buildDemandStructure({ manifest, conditions, regions, availability, datalabTrend, tourismVisitorHistory }) {
   const month = demandMonthFromConditions(conditions);
   const monthInfo = MONTHLY_DEMAND_MAP.find((entry) => entry.month === month) || MONTHLY_DEMAND_MAP[0];
   const topSegments = demandTopSegments(monthInfo, 3);
@@ -8653,15 +8800,18 @@ function buildDemandStructure({ manifest, conditions, regions, availability, dat
   const contentScore = demandContentScore(monthInfo, topSegments, datalabTrend);
   const riskScore = demandRiskScore(monthInfo, regions);
   const aiSignalScore = clampScore(50 + Math.min(30, DEMAND_AI_SIGNALS.reduce((sum, signal) => sum + signal.frequency, 0)));
-  const overallScore = clampScore(
-    demandScore * 0.25 +
-    targetFitScore * 0.20 +
-    weekdayScore * 0.15 +
-    priceScore * 0.15 +
-    contentScore * 0.10 +
-    riskScore * 0.10 +
-    aiSignalScore * 0.05
-  );
+  const visitorOutlookMetric = demandVisitorHistoryMetric(tourismVisitorHistory, regions);
+  const weightedDemand = demandWeightedMetrics([
+    { key: "monthlyDemand", label: "월 수요강도", score: demandScore, value: monthInfo.level, note: `${monthInfo.season} · ${monthInfo.operation}`, requestedWeight: DEMAND_BASE_METRIC_WEIGHTS.monthlyDemand },
+    { key: "targetFit", label: "핵심타겟 적합도", score: targetFitScore, value: topSegments.map((item) => item.group).join("·"), note: topSegments.map((item) => item.name).join(" · "), requestedWeight: DEMAND_BASE_METRIC_WEIGHTS.targetFit },
+    { key: "weekday", label: "평일 확장성", score: weekdayScore, value: weekdayScore >= 70 ? "높음" : weekdayScore >= 50 ? "보통" : "낮음", note: monthInfo.weekdaySignal, requestedWeight: DEMAND_BASE_METRIC_WEIGHTS.weekday },
+    { key: "price", label: "가격 방어력", score: priceScore, value: priceScore >= 80 ? "높음" : priceScore >= 60 ? "보통" : "낮음", note: monthInfo.price, requestedWeight: DEMAND_BASE_METRIC_WEIGHTS.price },
+    { key: "content", label: "콘텐츠 반응", score: contentScore, value: contentScore >= 75 ? "강함" : contentScore >= 55 ? "보통" : "약함", note: monthInfo.content, requestedWeight: DEMAND_BASE_METRIC_WEIGHTS.content },
+    { key: "risk", label: "운영 리스크 보정", score: riskScore, value: riskScore >= 75 ? "안정" : riskScore >= 55 ? "주의" : "위험", note: (monthInfo.risks || []).join(" · ") || "특이 리스크 없음", requestedWeight: DEMAND_BASE_METRIC_WEIGHTS.risk },
+    { key: "aiSignal", label: "AI 신호 반영", score: aiSignalScore, value: `${DEMAND_AI_SIGNALS.length}개 신호`, note: DEMAND_AI_SIGNALS.map((signal) => signal.keyword).join(" · "), requestedWeight: DEMAND_BASE_METRIC_WEIGHTS.aiSignal },
+    visitorOutlookMetric
+  ]);
+  const overallScore = weightedDemand.score ?? 0;
   const overallLabel = overallScore >= 82
     ? "강한 수요"
     : overallScore >= 68
@@ -8675,24 +8825,31 @@ function buildDemandStructure({ manifest, conditions, regions, availability, dat
   ])).slice(0, 8);
 
   return {
-    source: "숙박업 메인터넌스",
-    sourceVersion: "2026-03-08 사전 기준",
+    source: "숙박업 메인터넌스 + 한국관광공사 지역별 방문자수",
+    sourceVersion: visitorOutlookMetric.modelVersion
+      ? `2026-03-08 사전 기준 + ${visitorOutlookMetric.modelVersion}`
+      : "2026-03-08 사전 기준",
     keyword: manifest?.keyword || conditions?.keyword || "",
     month,
     monthLabel: `${month}월`,
     season: monthInfo.season,
     overallScore,
     overallLabel,
-    summary: `${monthInfo.month || month}월은 ${monthInfo.level} 수요 구간이며 ${topSegments.map((item) => item.name).join(", ")} 중심으로 판단합니다.`,
-    metrics: [
-      { key: "monthlyDemand", label: "월 수요강도", score: demandScore, value: monthInfo.level, note: `${monthInfo.season} · ${monthInfo.operation}` },
-      { key: "targetFit", label: "핵심타겟 적합도", score: targetFitScore, value: topSegments.map((item) => item.group).join("·"), note: topSegments.map((item) => item.name).join(" · ") },
-      { key: "weekday", label: "평일 확장성", score: weekdayScore, value: weekdayScore >= 70 ? "높음" : weekdayScore >= 50 ? "보통" : "낮음", note: monthInfo.weekdaySignal },
-      { key: "price", label: "가격 방어력", score: priceScore, value: priceScore >= 80 ? "높음" : priceScore >= 60 ? "보통" : "낮음", note: monthInfo.price },
-      { key: "content", label: "콘텐츠 반응", score: contentScore, value: contentScore >= 75 ? "강함" : contentScore >= 55 ? "보통" : "약함", note: monthInfo.content },
-      { key: "risk", label: "운영 리스크 보정", score: riskScore, value: riskScore >= 75 ? "안정" : riskScore >= 55 ? "주의" : "위험", note: (monthInfo.risks || []).join(" · ") || "특이 리스크 없음" },
-      { key: "aiSignal", label: "AI 신호 반영", score: aiSignalScore, value: `${DEMAND_AI_SIGNALS.length}개 신호`, note: DEMAND_AI_SIGNALS.map((signal) => signal.keyword).join(" · ") }
-    ],
+    summary: `${monthInfo.month || month}월은 ${monthInfo.level} 수요 구간이며 ${topSegments.map((item) => item.name).join(", ")} 중심으로 판단합니다.${visitorOutlookMetric.eligible ? ` 최근 3개년 방문수요 보조점수 ${visitorOutlookMetric.score}점을 15% 반영했습니다.` : " 방문자 이력은 품질기준 충족 전까지 점수에 반영하지 않습니다."}`,
+    metrics: weightedDemand.metrics,
+    visitorOutlook: weightedDemand.metrics.find((metric) => metric.key === "visitorOutlook") || visitorOutlookMetric,
+    weighting: {
+      method: "available-metric-renormalization-v1",
+      visitorOutlookMaximumWeight: DEMAND_VISITOR_OUTLOOK_MAX_WEIGHT * 100,
+      visitorOutlookApplied: visitorOutlookMetric.eligible,
+      missingValuesTreatedAsZero: false,
+      metrics: weightedDemand.metrics.map((metric) => ({
+        key: metric.key,
+        eligible: metric.eligible !== false,
+        requestedWeight: metric.requestedWeight,
+        weightApplied: metric.weightApplied
+      }))
+    },
     radar: [
       { label: "월수요", score: demandScore },
       { label: "타겟", score: targetFitScore },
@@ -15253,6 +15410,33 @@ function resolveRunDir(runId) {
   return dirPath;
 }
 
+function unavailableTourismVisitorHistory(reason, status = "unavailable") {
+  return {
+    ok: false,
+    status,
+    reason,
+    period: null,
+    collection: {
+      mode: "cache_only",
+      requestedMonths: 36,
+      cacheHitMonths: 0,
+      missingCacheMonths: 36,
+      networkAttemptedMonths: 0,
+      networkSucceededMonths: 0,
+      networkFailedMonths: 0
+    },
+    coverage: {
+      expectedRegionMonths: 0,
+      completeRegionMonths: 0,
+      partialRegionMonths: 0,
+      missingRegionMonths: 0,
+      coverageRate: null
+    },
+    regions: [],
+    quality: { missingIsNotZero: true }
+  };
+}
+
 async function loadRun(runId, options = {}) {
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return null;
@@ -15294,6 +15478,9 @@ async function loadRun(runId, options = {}) {
       ]
     : platformRows;
   const regions = summarizeRegionalRows(regionalRows, provinceKey, manifest?.keyword || conditions.keyword || "");
+  const tourismRegionNames = regions
+    .map((region) => region.region || region.name || region.sigungu || "")
+    .filter(Boolean);
   const [datalabTrend, tourismVisitors] = await Promise.all([
     options.skipTraffic
       ? null
@@ -15301,7 +15488,7 @@ async function loadRun(runId, options = {}) {
     options.skipTourismVisitors
       ? null
       : tourismCollector.collectVisitorCounts({
-          regionNames: regions.map((region) => region.region || region.name || "").filter(Boolean)
+          regionNames: tourismRegionNames
         }).catch(() => ({
           ok: false,
           status: "error",
@@ -15321,6 +15508,27 @@ async function loadRun(runId, options = {}) {
           }
         }))
   ]);
+  // The latest-month collector can create a cache entry. Read history only after it
+  // completes so the response never omits a month that was saved by this same load.
+  let tourismVisitorHistory = null;
+  if (!options.skipTourismVisitors && !options.skipTourismVisitorHistory) {
+    if (!tourismRegionNames.length) {
+      tourismVisitorHistory = unavailableTourismVisitorHistory(
+        "visitor_history_region_unavailable",
+        "region_not_matched"
+      );
+    } else if (typeof tourismCollector.collectVisitorHistory !== "function") {
+      tourismVisitorHistory = unavailableTourismVisitorHistory("visitor_history_adapter_unavailable");
+    } else {
+      tourismVisitorHistory = await tourismCollector.collectVisitorHistory({
+        regionNames: tourismRegionNames,
+        months: 36,
+        collectMissing: false,
+        refresh: false,
+        force: false
+      }).catch(() => unavailableTourismVisitorHistory("visitor_history_cache_read_failed", "error"));
+    }
+  }
   const stats = summarizeStats(regions);
   if (datalabTrend) stats.datalabTrend = datalabTrend;
   const availability = summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows], dirPath);
@@ -15330,7 +15538,8 @@ async function loadRun(runId, options = {}) {
     conditions,
     regions,
     availability,
-    datalabTrend
+    datalabTrend,
+    tourismVisitorHistory
   });
 
   const result = {
@@ -15391,6 +15600,7 @@ async function loadRun(runId, options = {}) {
     stats,
     datalabTrend,
     tourismVisitors,
+    tourismVisitorHistory,
     demandStructure,
     regions,
     ranking,
@@ -15937,9 +16147,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260827-tourism-visitors-v59"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260827-tourism-visitors-v59"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260827-tourism-visitors-v59"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=datalab-20260827-visitor-history-v62"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=datalab-20260827-visitor-history-v62"')
+      .replace('src="/app.js"', 'src="/app.js?v=datalab-20260827-visitor-history-v62"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -16316,6 +16526,39 @@ async function route(req, res) {
     if (req.method === "GET" && reqUrl.pathname === "/api/tourism-data/status") {
       if (!requireAdminSession(session, req, res)) return;
       return send(res, 200, await tourismCollector.status());
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/tourism-data/visitors/history") {
+      if (!requireAdminSession(session, req, res)) return;
+      assertRequestRateLimit(req, "adminTourism", RATE_LIMIT_POLICIES.adminTourism, session.username || "");
+      if (typeof tourismCollector.collectVisitorHistory !== "function") {
+        return send(res, 503, { error: "지역별 방문자수 이력 수집기가 준비되지 않았습니다." });
+      }
+      const payload = await parseJsonBody(req);
+      const cleanList = (value) => Array.from(new Set(
+        (Array.isArray(value) ? value : value ? [value] : [])
+          .map((item) => String(item || "").trim().slice(0, 120))
+          .filter(Boolean)
+      )).slice(0, 80);
+      const regionNames = cleanList(payload.regionNames || payload.regions);
+      const regionKeys = cleanList(payload.regionKeys);
+      if (!regionNames.length && !regionKeys.length) {
+        return send(res, 400, { error: "갱신할 지역명 또는 지역키가 필요합니다." });
+      }
+      const months = Math.max(1, Math.min(36, Math.round(Number(payload.months) || 36)));
+      const concurrency = Math.max(1, Math.min(3, Math.round(Number(payload.concurrency) || 2)));
+      const endYearMonth = String(payload.endYearMonth || "").replace(/\D/g, "").slice(0, 6);
+      return send(res, 200, await tourismCollector.collectVisitorHistory({
+        regionNames,
+        regionKeys,
+        months,
+        ...(endYearMonth.length === 6 ? { endYearMonth } : {}),
+        collectMissing: true,
+        refresh: true,
+        retryIncomplete: true,
+        force: payload.force === true,
+        concurrency
+      }));
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/tourism-data/collect") {

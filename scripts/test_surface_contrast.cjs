@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260827-tourism-visitors-v77";
-const expectedAssetVersion = "v2-20260827-tourism-visitors-v59";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260827-visitor-history-v80";
+const expectedAssetVersion = "datalab-20260827-visitor-history-v62";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -385,19 +385,30 @@ assert(
 assert(
   app.includes("function tourismVisitorOutlookCard()")
     && app.includes("function tourismVisitorTableValue(regionName = \"\")")
+    && app.includes("function tourismVisitorHistoryChart(series = [], region = null)")
+    && app.includes("function tourismVisitorHistoryEvidenceForLocation(card = {}, tourismMatch = {})")
     && app.includes("완전월 일평균 방문자")
-    && app.includes("전망 점수에는 아직 반영하지 않습니다")
+    && app.includes("방문자 수요전망 보조점수")
+    && app.includes("누락·부분수집 월은 0명으로 표시하지 않습니다")
+    && app.includes('model?.eligible === true && status === "ready"')
+    && app.includes('Number.isFinite(score) ? fmtNumber(score) : "자료 부족"')
+    && app.includes("data-tourism-visitor-history-refresh")
     && server.includes("tourismCollector.collectVisitorCounts({")
-    && server.includes("tourismVisitors,"),
-  "regional visitor observations must be source-labelled, non-synthetic demand evidence",
+    && server.includes("tourismCollector.collectVisitorHistory({")
+    && server.includes('reqUrl.pathname === "/api/tourism-data/visitors/history"')
+    && server.includes("tourismVisitorHistory,"),
+  "regional visitor observations and 36-month history must remain source-labelled, non-synthetic demand evidence",
   failures
 );
 
 assert(
   styles.includes(".demand-source-note")
     && styles.includes(".b2b-demand-outlook-grid article.visitor")
+    && styles.includes(".tourism-visitor-history-card")
+    && styles.includes(".tourism-visitor-history-chart")
+    && styles.includes(".tourism-visitor-history-point")
     && /grid-template-columns:\s*minmax\(130px, 1\.15fr\) \.72fr \.9fr \.7fr \.9fr \.62fr;/.test(styles),
-  "regional visitor demand evidence must remain readable in cards and the comparison table",
+  "regional visitor demand evidence and history chart must remain readable in cards and the comparison table",
   failures
 );
 

@@ -7,6 +7,7 @@ const DEFAULT_SOURCE_DEFS = [
     key: "visitors",
     label: "regional visitors",
     envPrefix: "KTO_TOURISM_VISITOR",
+    serviceKeyEnv: "DATA_GO_KR_VISITOR_SERVICE_KEY",
     referenceUrl: "https://www.data.go.kr/data/15101972/openapi.do",
     defaultEndpoint: "https://apis.data.go.kr/B551011/DataLabService/locgoRegnVisitrDDList",
     adapter: "locgo-regn-visitors-v1",
@@ -39,6 +40,21 @@ const VISITOR_SUCCESS_CODES = new Set(["0000", "00"]);
 const VISITOR_CATEGORY_CODES = new Set(["1", "2", "3"]);
 const VISITOR_PAGE_SIZE = 10000;
 const VISITOR_MAX_PAGES = 50;
+const VISITOR_HISTORY_DEFAULT_MONTHS = 36;
+const VISITOR_HISTORY_MAX_MONTHS = 36;
+const VISITOR_HISTORY_DEFAULT_CONCURRENCY = 2;
+const VISITOR_HISTORY_MAX_CONCURRENCY = 4;
+const VISITOR_OUTLOOK_MODEL_VERSION = "visitor-outlook-v1";
+const VISITOR_OUTLOOK_SCORE_MINIMUMS = Object.freeze({
+  minimumCompleteMonths: 24,
+  recentWindowMonths: 12,
+  minimumRecentCompleteMonths: 10,
+  previousWindowMonths: 12,
+  minimumPreviousCompleteMonths: 10,
+  minimumComparableMonthPairs: 10,
+  requireLatestComplete: true,
+  requirePreviousYearSameMonthComplete: true
+});
 
 function compactText(value = "") {
   return String(value || "")
@@ -109,6 +125,41 @@ function monthDateRange(value = "") {
   };
 }
 
+function shiftYearMonth(value = "", offset = 0) {
+  const yearMonth = normalizeYearMonth(value);
+  const date = new Date(Date.UTC(Number(yearMonth.slice(0, 4)), Number(yearMonth.slice(4, 6)) - 1 + Number(offset || 0), 1));
+  return `${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function visitorHistoryMonths(endYearMonth = "", count = VISITOR_HISTORY_DEFAULT_MONTHS) {
+  const safeCount = Math.max(1, Math.min(VISITOR_HISTORY_MAX_MONTHS, Math.round(Number(count) || VISITOR_HISTORY_DEFAULT_MONTHS)));
+  const normalizedEnd = normalizeYearMonth(endYearMonth);
+  return Array.from({ length: safeCount }, (_, index) => shiftYearMonth(normalizedEnd, index - safeCount + 1));
+}
+
+function roundNumber(value, digits = 4) {
+  if (!Number.isFinite(Number(value))) return null;
+  const scale = 10 ** digits;
+  return Math.round(Number(value) * scale) / scale;
+}
+
+function normalizedGrowthScore(changeRate, cap = 0.25) {
+  if (!Number.isFinite(changeRate) || !Number.isFinite(cap) || cap <= 0) return null;
+  const bounded = Math.max(-cap, Math.min(cap, changeRate));
+  return roundNumber(((bounded + cap) / (cap * 2)) * 100, 1);
+}
+
+function percentileScore(value, peerValues = []) {
+  if (!Number.isFinite(value)) return null;
+  const finitePeers = peerValues.map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!finitePeers.length) return null;
+  if (finitePeers.length === 1) return 50;
+  const lowerCount = finitePeers.filter((entry) => entry < value).length;
+  const equalCount = finitePeers.filter((entry) => entry === value).length;
+  if (!equalCount) return null;
+  return roundNumber(((lowerCount + ((equalCount - 1) / 2)) / (finitePeers.length - 1)) * 100, 1);
+}
+
 function selectedSources(value) {
   const all = DEFAULT_SOURCE_DEFS.map((source) => source.key);
   if (!value) return all;
@@ -128,6 +179,13 @@ function dataGoKrServiceKey(env = process.env) {
     env.KTO_TOURISM_SERVICE_KEY ||
     ""
   ).trim();
+}
+
+function sourceServiceKey(source = {}, env = process.env) {
+  const dedicated = source.serviceKeyEnv
+    ? String(env[source.serviceKeyEnv] || "").trim()
+    : "";
+  return dedicated || dataGoKrServiceKey(env);
 }
 
 function sourceConfig(def, env = process.env) {
@@ -370,6 +428,36 @@ function createCollector(options = {}) {
     } catch {
       return { hit: false, filePath, data: null };
     }
+  }
+
+  function visitorCacheCompatible(cached = {}, regionMap = {}) {
+    return Boolean(
+      cached.hit
+      && cached.data?.status === "ok"
+      && cached.data?.adapter === VISITOR_ADAPTER_VERSION
+      && cached.data?.regionMapVersion === regionMap.version
+    );
+  }
+
+  function visitorSnapshotImproves(current = {}, candidate = {}) {
+    if (current?.status !== "ok") return candidate?.status === "ok";
+    if (candidate?.status !== "ok") return false;
+    const candidateByRegion = new Map((candidate.allRegions || []).map((region) => [region.regionKey, region]));
+    let improved = false;
+    for (const currentRegion of current.allRegions || []) {
+      const candidateRegion = candidateByRegion.get(currentRegion.regionKey);
+      const currentComplete = currentRegion?.quality?.status === "complete";
+      const candidateComplete = candidateRegion?.quality?.status === "complete";
+      if (currentComplete && !candidateComplete) return false;
+      if (!currentComplete && candidateComplete) improved = true;
+      if (!currentComplete && !candidateComplete) {
+        const currentObservedDays = Number(currentRegion?.observedDays || 0);
+        const candidateObservedDays = Number(candidateRegion?.observedDays || 0);
+        if (candidateObservedDays < currentObservedDays) return false;
+        if (candidateObservedDays > currentObservedDays) improved = true;
+      }
+    }
+    return improved;
   }
 
   async function writeVisitorSnapshot(snapshot = {}) {
@@ -619,8 +707,9 @@ function createCollector(options = {}) {
   }
 
   function requestedVisitorRegions(regionMap = {}, input = {}) {
-    const directKeys = new Set((input.regionKeys || []).map((value) => String(value || "").trim()).filter(Boolean));
-    const requestedNames = (input.regionNames || input.regions || [])
+    const listValue = (value) => Array.isArray(value) ? value : (value === undefined || value === null || value === "" ? [] : [value]);
+    const directKeys = new Set(listValue(input.regionKeys).map((value) => String(value || "").trim()).filter(Boolean));
+    const requestedNames = listValue(input.regionNames || input.regions)
       .map((value) => String(typeof value === "object" ? (value.region || value.name || value.sigungu || "") : value || "").trim())
       .filter(Boolean);
     const normalizedNames = requestedNames.map((value) => stripBusinessWords(value).replace(/권역|권$/g, ""));
@@ -656,9 +745,9 @@ function createCollector(options = {}) {
     const requested = requestedVisitorRegions(regionMap, input);
     const selectedKeys = new Set(requested.selected.map((region) => region.regionKey));
     const hasSelector = Boolean(
-      (input.regionKeys || []).length
-      || (input.regionNames || []).length
-      || (input.regions || []).length
+      (Array.isArray(input.regionKeys) ? input.regionKeys.length : input.regionKeys)
+      || (Array.isArray(input.regionNames) ? input.regionNames.length : input.regionNames)
+      || (Array.isArray(input.regions) ? input.regions.length : input.regions)
       || input.regionKey
     );
     const regions = (snapshot.allRegions || []).filter((region) => !hasSelector || selectedKeys.has(region.regionKey));
@@ -701,7 +790,7 @@ function createCollector(options = {}) {
     const force = Boolean(input.force);
     const regionMap = await readRegionMap();
     const config = sourceConfig(DEFAULT_SOURCE_DEFS[0], env);
-    const serviceKey = dataGoKrServiceKey(env);
+    const serviceKey = sourceServiceKey(config, env);
     const configStatus = visitorEndpointStatus(config, serviceKey);
     if (configStatus !== "ready") {
       return publicVisitorSnapshot({
@@ -715,12 +804,10 @@ function createCollector(options = {}) {
     }
 
     const cached = await readVisitorCache(range.yearMonth);
+    const immutableClosedMonth = range.yearMonth <= latestClosedYearMonth(currentDate());
     if (!force
-      && cached.hit
-      && cached.data?.status === "ok"
-      && cached.data?.adapter === VISITOR_ADAPTER_VERSION
-      && cached.data?.regionMapVersion === regionMap.version
-      && cacheFresh(cached.data, ttlHours)) {
+      && visitorCacheCompatible(cached, regionMap)
+      && (immutableClosedMonth || cacheFresh(cached.data, ttlHours))) {
       return publicVisitorSnapshot(cached.data, regionMap, input, { hit: true, ttlHours });
     }
 
@@ -825,8 +912,484 @@ function createCollector(options = {}) {
         operation: "locgoRegnVisitrDDList"
       }
     };
+    if (visitorCacheCompatible(cached, regionMap) && !visitorSnapshotImproves(cached.data, snapshot)) {
+      return publicVisitorSnapshot(cached.data, regionMap, input, { hit: true, ttlHours });
+    }
     const filePath = await writeVisitorSnapshot(snapshot);
     return publicVisitorSnapshot(snapshot, regionMap, input, { hit: false, ttlHours, filePath });
+  }
+
+  function missingVisitorMonth(yearMonth, reason = "monthly_cache_missing") {
+    return {
+      ok: false,
+      status: "unavailable",
+      reason,
+      schemaVersion: 1,
+      adapter: VISITOR_ADAPTER_VERSION,
+      yearMonth,
+      period: monthDateRange(yearMonth),
+      collectedAt: "",
+      quality: {},
+      regions: [],
+      unmatchedRegions: [],
+      cache: { hit: false, ttlHours: DEFAULT_TTL_HOURS },
+      policy: {
+        scoreApplied: false,
+        noSidoSigunguAggregation: true,
+        missingIsNotZero: true,
+        dailyUniqueVisitorCaveat: true
+      }
+    };
+  }
+
+  async function visitorMonthForHistory(yearMonth, regionMap, input = {}) {
+    const cached = await readVisitorCache(yearMonth);
+    const compatible = visitorCacheCompatible(cached, regionMap);
+    const cachedRegions = new Map((cached.data?.allRegions || []).map((region) => [region.regionKey, region]));
+    const retryCachedIncomplete = Boolean(
+      compatible
+      && input.collectMissing
+      && input.retryIncomplete
+      && (input.regionKeys || []).length
+      && input.regionKeys.some((regionKey) => cachedRegions.get(regionKey)?.quality?.status !== "complete")
+    );
+    if (compatible && !input.force && !retryCachedIncomplete) {
+      return {
+        yearMonth,
+        access: "cache",
+        snapshot: publicVisitorSnapshot(cached.data, regionMap, {}, { hit: true, ttlHours: input.ttlHours })
+      };
+    }
+    if (!input.force && !input.collectMissing) {
+      return {
+        yearMonth,
+        access: "missing",
+        snapshot: missingVisitorMonth(yearMonth, compatible ? "cache_refresh_required" : "monthly_cache_missing")
+      };
+    }
+    try {
+      const fetchedSnapshot = await collectVisitorCounts({
+        yearMonth,
+        force: Boolean(input.force || retryCachedIncomplete),
+        ttlHours: input.ttlHours
+      });
+      if (fetchedSnapshot.status !== "ok" && compatible) {
+        return {
+          yearMonth,
+          access: "network",
+          networkSucceeded: false,
+          retriedIncomplete: retryCachedIncomplete,
+          refreshError: fetchedSnapshot.reason || fetchedSnapshot.status,
+          snapshot: publicVisitorSnapshot(cached.data, regionMap, {}, { hit: true, ttlHours: input.ttlHours })
+        };
+      }
+      return {
+        yearMonth,
+        access: "network",
+        networkSucceeded: fetchedSnapshot.status === "ok",
+        retriedIncomplete: retryCachedIncomplete,
+        snapshot: fetchedSnapshot
+      };
+    } catch (error) {
+      return {
+        yearMonth,
+        access: "network",
+        snapshot: missingVisitorMonth(yearMonth, error?.message || "history_collection_failed")
+      };
+    }
+  }
+
+  function visitorHistoryPoint(monthResult = {}, region = {}) {
+    const snapshot = monthResult.snapshot || {};
+    const row = (snapshot.regions || []).find((entry) => entry.regionKey === region.regionKey);
+    const rowQualityStatus = String(row?.quality?.status || "");
+    const complete = rowQualityStatus === "complete" && Number.isFinite(row?.averageDailyVisitors);
+    const partial = rowQualityStatus === "partial";
+    let reason = "";
+    if (!complete) {
+      reason = String(
+        row?.quality?.reason
+        || snapshot.reason
+        || (row ? rowQualityStatus : "region_observation_missing")
+        || "region_observation_missing"
+      );
+    }
+    return {
+      yearMonth: monthResult.yearMonth,
+      status: complete ? "complete" : partial ? "partial" : "missing",
+      reason,
+      qualityStatus: rowQualityStatus || (snapshot.status === "ok" ? "no_observation" : snapshot.status || "unavailable"),
+      averageDailyVisitors: complete ? Number(row.averageDailyVisitors) : null,
+      visitorDays: complete && Number.isFinite(row.visitorDays) ? Number(row.visitorDays) : null,
+      observedDays: Number.isFinite(row?.observedDays) ? Number(row.observedDays) : 0,
+      expectedDays: Number.isFinite(row?.expectedDays) ? Number(row.expectedDays) : monthDateRange(monthResult.yearMonth).expectedDays,
+      coverageRate: Number.isFinite(row?.coverageRate) ? Number(row.coverageRate) : 0,
+      collectedAt: String(snapshot.collectedAt || ""),
+      cacheHit: monthResult.access === "cache"
+    };
+  }
+
+  function coverageWindow(series = []) {
+    const expectedMonths = series.length;
+    const completeMonths = series.filter((point) => point.status === "complete").length;
+    const partialMonths = series.filter((point) => point.status === "partial").length;
+    const missingMonths = expectedMonths - completeMonths - partialMonths;
+    return {
+      expectedMonths,
+      completeMonths,
+      partialMonths,
+      missingMonths,
+      coverageRate: expectedMonths ? roundNumber(completeMonths / expectedMonths, 4) : 0
+    };
+  }
+
+  function visitorGrowthComparison(currentSeries = [], previousSeries = [], currentLabel = "recent_12", previousLabel = "previous_12") {
+    const pairCount = Math.min(currentSeries.length, previousSeries.length);
+    const comparablePairs = [];
+    for (let index = 0; index < pairCount; index += 1) {
+      const current = currentSeries[index];
+      const previous = previousSeries[index];
+      if (current?.status === "complete" && previous?.status === "complete") {
+        comparablePairs.push({ current, previous });
+      }
+    }
+    const currentAverage = comparablePairs.length
+      ? roundNumber(comparablePairs.reduce((sum, pair) => sum + pair.current.averageDailyVisitors, 0) / comparablePairs.length, 2)
+      : null;
+    const previousAverage = comparablePairs.length
+      ? roundNumber(comparablePairs.reduce((sum, pair) => sum + pair.previous.averageDailyVisitors, 0) / comparablePairs.length, 2)
+      : null;
+    if (!Number.isFinite(currentAverage) || !Number.isFinite(previousAverage) || previousAverage <= 0) {
+      return {
+        status: "insufficient_data",
+        reason: "comparable_average_unavailable",
+        comparableMonthPairs: comparablePairs.length,
+        comparedMonths: comparablePairs.map((pair) => ({
+          currentYearMonth: pair.current.yearMonth,
+          previousYearMonth: pair.previous.yearMonth
+        })),
+        currentAverage,
+        previousAverage,
+        changeRate: null,
+        changePercent: null
+      };
+    }
+    const changeRate = (currentAverage - previousAverage) / previousAverage;
+    return {
+      status: "ready",
+      reason: "",
+      currentLabel,
+      previousLabel,
+      comparableMonthPairs: comparablePairs.length,
+      comparedMonths: comparablePairs.map((pair) => ({
+        currentYearMonth: pair.current.yearMonth,
+        previousYearMonth: pair.previous.yearMonth
+      })),
+      currentAverage,
+      previousAverage,
+      changeRate: roundNumber(changeRate, 6),
+      changePercent: roundNumber(changeRate * 100, 2)
+    };
+  }
+
+  function visitorSameMonthComparison(series = [], endYearMonth = "") {
+    const byMonth = new Map(series.map((point) => [point.yearMonth, point]));
+    const current = byMonth.get(endYearMonth);
+    const previousYearMonth = shiftYearMonth(endYearMonth, -12);
+    const previous = byMonth.get(previousYearMonth);
+    if (current?.status !== "complete" || previous?.status !== "complete" || Number(previous.averageDailyVisitors) <= 0) {
+      return {
+        status: "insufficient_data",
+        reason: current?.status !== "complete" ? "latest_month_incomplete" : "previous_year_same_month_incomplete",
+        currentYearMonth: endYearMonth,
+        previousYearMonth,
+        currentValue: current?.status === "complete" ? current.averageDailyVisitors : null,
+        previousValue: previous?.status === "complete" ? previous.averageDailyVisitors : null,
+        changeRate: null,
+        changePercent: null
+      };
+    }
+    const changeRate = (current.averageDailyVisitors - previous.averageDailyVisitors) / previous.averageDailyVisitors;
+    return {
+      status: "ready",
+      reason: "",
+      currentYearMonth: endYearMonth,
+      previousYearMonth,
+      currentValue: current.averageDailyVisitors,
+      previousValue: previous.averageDailyVisitors,
+      changeRate: roundNumber(changeRate, 6),
+      changePercent: roundNumber(changeRate * 100, 2)
+    };
+  }
+
+  function visitorOutlookLabel(score) {
+    if (!Number.isFinite(score)) return "자료 부족";
+    if (score >= 60) return "상승 흐름";
+    if (score < 40) return "감소 흐름";
+    return "보합 흐름";
+  }
+
+  function visitorOutlook(series = [], coverage = {}, latestMonthSnapshot = {}, endYearMonth = "") {
+    const recentSeries = series.slice(-VISITOR_OUTLOOK_SCORE_MINIMUMS.recentWindowMonths);
+    const previousSeries = series.slice(
+      -(VISITOR_OUTLOOK_SCORE_MINIMUMS.recentWindowMonths + VISITOR_OUTLOOK_SCORE_MINIMUMS.previousWindowMonths),
+      -VISITOR_OUTLOOK_SCORE_MINIMUMS.recentWindowMonths
+    );
+    const latest = series.find((point) => point.yearMonth === endYearMonth);
+    const previousSameMonth = series.find((point) => point.yearMonth === shiftYearMonth(endYearMonth, -12));
+    const momentum = visitorGrowthComparison(recentSeries, previousSeries);
+    const yoy = visitorSameMonthComparison(series, endYearMonth);
+    const peerValues = (latestMonthSnapshot.regions || [])
+      .filter((entry) => entry?.quality?.status === "complete")
+      .map((entry) => Number(entry.averageDailyVisitors))
+      .filter(Number.isFinite);
+    const peerPercentile = latest?.status === "complete"
+      ? percentileScore(Number(latest.averageDailyVisitors), peerValues)
+      : null;
+    const momentumScore = normalizedGrowthScore(momentum.changeRate, 0.25);
+    const yoyScore = normalizedGrowthScore(yoy.changeRate, 0.25);
+    const reasons = [];
+    if (coverage.completeMonths < VISITOR_OUTLOOK_SCORE_MINIMUMS.minimumCompleteMonths) reasons.push("complete_months_below_24");
+    if (coverage.recent12.completeMonths < VISITOR_OUTLOOK_SCORE_MINIMUMS.minimumRecentCompleteMonths) reasons.push("recent_12_complete_months_below_10");
+    if (coverage.previous12.completeMonths < VISITOR_OUTLOOK_SCORE_MINIMUMS.minimumPreviousCompleteMonths) reasons.push("previous_12_complete_months_below_10");
+    if (momentum.comparableMonthPairs < VISITOR_OUTLOOK_SCORE_MINIMUMS.minimumComparableMonthPairs) reasons.push("comparable_month_pairs_below_10");
+    if (latest?.status !== "complete") reasons.push("latest_month_incomplete");
+    if (previousSameMonth?.status !== "complete") reasons.push("previous_year_same_month_incomplete");
+    if (!Number.isFinite(peerPercentile)) reasons.push("latest_peer_percentile_unavailable");
+    if (!Number.isFinite(momentumScore)) reasons.push("recent_momentum_unavailable");
+    if (!Number.isFinite(yoyScore)) reasons.push("same_month_yoy_unavailable");
+
+    const components = [
+      {
+        key: "latest_peer_percentile",
+        label: "최신 완전월 전체 매핑지역 내 위치",
+        weight: 0.4,
+        rawValue: Number.isFinite(peerPercentile) ? peerPercentile : null,
+        score: Number.isFinite(peerPercentile) ? peerPercentile : null,
+        source: {
+          yearMonth: endYearMonth,
+          metric: "averageDailyVisitors",
+          peerCount: peerValues.length,
+          method: "midrank_percentile"
+        }
+      },
+      {
+        key: "recent12_vs_previous12",
+        label: "최근 12개월과 직전 12개월 변화",
+        weight: 0.35,
+        rawValue: momentum.changeRate,
+        score: momentumScore,
+        source: {
+          recentStartYearMonth: recentSeries[0]?.yearMonth || "",
+          recentEndYearMonth: recentSeries.at(-1)?.yearMonth || "",
+          previousStartYearMonth: previousSeries[0]?.yearMonth || "",
+          previousEndYearMonth: previousSeries.at(-1)?.yearMonth || "",
+          recentCompleteMonths: coverage.recent12.completeMonths,
+          previousCompleteMonths: coverage.previous12.completeMonths,
+          comparableMonthPairs: momentum.comparableMonthPairs,
+          comparisonMethod: "same_calendar_month_pairs_only",
+          normalization: "-25%..+25%=0..100"
+        }
+      },
+      {
+        key: "latest_same_month_yoy",
+        label: "최신월 전년동월 변화",
+        weight: 0.25,
+        rawValue: yoy.changeRate,
+        score: yoyScore,
+        source: {
+          currentYearMonth: endYearMonth,
+          previousYearMonth: shiftYearMonth(endYearMonth, -12),
+          normalization: "-25%..+25%=0..100"
+        }
+      }
+    ];
+    const ready = reasons.length === 0;
+    const score = ready
+      ? roundNumber(components.reduce((sum, component) => sum + (component.score * component.weight), 0), 1)
+      : null;
+    return {
+      status: ready ? "ready" : "insufficient_data",
+      eligible: ready,
+      score,
+      reason: ready ? "minimum_coverage_met" : reasons[0],
+      reasons,
+      label: visitorOutlookLabel(score),
+      modelVersion: VISITOR_OUTLOOK_MODEL_VERSION,
+      basis: "관측기반 수요전망 보조점수",
+      isForecast: false,
+      components
+    };
+  }
+
+  async function collectVisitorHistory(input = {}) {
+    const regionMap = await readRegionMap();
+    const closedYearMonth = latestClosedYearMonth(currentDate());
+    const requestedEndYearMonth = normalizeYearMonth(input.endYearMonth || input.yearMonth || closedYearMonth);
+    const endYearMonth = requestedEndYearMonth > closedYearMonth ? closedYearMonth : requestedEndYearMonth;
+    const monthCount = Math.max(1, Math.min(
+      VISITOR_HISTORY_MAX_MONTHS,
+      Math.round(Number(input.months) || VISITOR_HISTORY_DEFAULT_MONTHS)
+    ));
+    const months = visitorHistoryMonths(endYearMonth, monthCount);
+    const collectMissing = Boolean(input.collectMissing || input.refresh);
+    const retryIncomplete = collectMissing && input.retryIncomplete !== false;
+    const force = Boolean(input.force);
+    const ttlHours = Number.isFinite(Number(input.ttlHours)) ? Number(input.ttlHours) : DEFAULT_TTL_HOURS;
+    const concurrency = Math.max(1, Math.min(
+      VISITOR_HISTORY_MAX_CONCURRENCY,
+      Math.round(Number(input.concurrency) || numberEnv(
+        "KTO_TOURISM_VISITOR_HISTORY_CONCURRENCY",
+        VISITOR_HISTORY_DEFAULT_CONCURRENCY,
+        env
+      ))
+    ));
+    const requested = requestedVisitorRegions(regionMap, input);
+    const hasSelector = Boolean(
+      (Array.isArray(input.regionKeys) ? input.regionKeys.length : input.regionKeys)
+      || (Array.isArray(input.regionNames) ? input.regionNames.length : input.regionNames)
+      || (Array.isArray(input.regions) ? input.regions.length : input.regions)
+      || input.regionKey
+    );
+    const selectedRegions = hasSelector ? requested.selected : (regionMap.regions || []);
+    if (hasSelector && !selectedRegions.length) {
+      return {
+        ok: false,
+        status: "region_not_matched",
+        reason: "requested_region_not_matched",
+        period: { startYearMonth: months[0], endYearMonth, months: monthCount },
+        coverage: {
+          expectedRegionMonths: 0,
+          completeRegionMonths: 0,
+          partialRegionMonths: 0,
+          missingRegionMonths: 0,
+          coverageRate: 0
+        },
+        regions: [],
+        unmatchedRegions: requested.unmatchedNames,
+        quality: {
+          missingIsNotZero: true,
+          partialMonthsExcludedFromMetrics: true,
+          coverageRateUnit: "ratio_0_to_1",
+          scoreMinimums: { ...VISITOR_OUTLOOK_SCORE_MINIMUMS }
+        }
+      };
+    }
+
+    const monthResults = new Array(months.length);
+    let cursor = 0;
+    async function worker() {
+      while (cursor < months.length) {
+        const index = cursor;
+        cursor += 1;
+        monthResults[index] = await visitorMonthForHistory(months[index], regionMap, {
+          collectMissing,
+          retryIncomplete,
+          regionKeys: hasSelector ? selectedRegions.map((region) => region.regionKey) : [],
+          force,
+          ttlHours
+        });
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, months.length) }, () => worker()));
+
+    const latestMonthSnapshot = monthResults.at(-1)?.snapshot || {};
+    const regions = selectedRegions.map((region) => {
+      const series = monthResults.map((monthResult) => visitorHistoryPoint(monthResult, region));
+      const recentSeries = series.slice(-VISITOR_OUTLOOK_SCORE_MINIMUMS.recentWindowMonths);
+      const previousSeries = series.slice(
+        -(VISITOR_OUTLOOK_SCORE_MINIMUMS.recentWindowMonths + VISITOR_OUTLOOK_SCORE_MINIMUMS.previousWindowMonths),
+        -VISITOR_OUTLOOK_SCORE_MINIMUMS.recentWindowMonths
+      );
+      const coverage = {
+        ...coverageWindow(series),
+        recent12: coverageWindow(recentSeries),
+        previous12: coverageWindow(previousSeries)
+      };
+      const latest = series.at(-1) || null;
+      const latestAvailable = [...series].reverse().find((point) => point.status === "complete") || null;
+      const yoy = visitorSameMonthComparison(series, endYearMonth);
+      const recent12VsPrevious12 = visitorGrowthComparison(recentSeries, previousSeries);
+      return {
+        regionKey: region.regionKey,
+        sido: region.sido,
+        sigungu: region.sigungu,
+        series,
+        coverage,
+        latest,
+        latestAvailable,
+        yoy,
+        recent12VsPrevious12,
+        visitorOutlookScore: visitorOutlook(series, coverage, latestMonthSnapshot, endYearMonth)
+      };
+    });
+
+    const allPoints = regions.flatMap((region) => region.series);
+    const completeRegionMonths = allPoints.filter((point) => point.status === "complete").length;
+    const partialRegionMonths = allPoints.filter((point) => point.status === "partial").length;
+    const expectedRegionMonths = allPoints.length;
+    const missingRegionMonths = expectedRegionMonths - completeRegionMonths - partialRegionMonths;
+    const cacheHitMonths = monthResults.filter((result) => result.access === "cache").length;
+    const networkResults = monthResults.filter((result) => result.access === "network");
+    const networkSucceededMonths = networkResults.filter((result) => result.networkSucceeded).length;
+    const available = completeRegionMonths > 0;
+    const fullyComplete = expectedRegionMonths > 0 && completeRegionMonths === expectedRegionMonths;
+    return {
+      ok: available,
+      status: fullyComplete ? "ok" : available ? "partial" : "unavailable",
+      reason: fullyComplete ? "" : available ? "incomplete_history_coverage" : "no_complete_history_observation",
+      schemaVersion: 1,
+      adapter: VISITOR_ADAPTER_VERSION,
+      collectedAt: currentDate().toISOString(),
+      period: {
+        startYearMonth: months[0],
+        endYearMonth,
+        months: monthCount,
+        latestClosedYearMonth: closedYearMonth
+      },
+      collection: {
+        mode: force ? "force_refresh" : collectMissing ? "backfill_missing" : "cache_only",
+        concurrency,
+        requestedMonths: months.length,
+        cacheHitMonths,
+        missingCacheMonths: monthResults.filter((result) => result.access === "missing").length,
+        networkAttemptedMonths: networkResults.length,
+        networkSucceededMonths,
+        networkFailedMonths: networkResults.length - networkSucceededMonths,
+        retriedIncompleteMonths: networkResults.filter((result) => result.retriedIncomplete).length,
+        refreshErrors: networkResults
+          .filter((result) => !result.networkSucceeded)
+          .map((result) => ({ yearMonth: result.yearMonth, reason: result.refreshError || result.snapshot?.reason || "collection_failed" }))
+      },
+      coverage: {
+        expectedRegionMonths,
+        completeRegionMonths,
+        partialRegionMonths,
+        missingRegionMonths,
+        coverageRate: expectedRegionMonths ? roundNumber(completeRegionMonths / expectedRegionMonths, 4) : 0
+      },
+      regions,
+      unmatchedRegions: requested.unmatchedNames,
+      source: {
+        key: "visitors",
+        label: "한국관광공사 지역별 방문자수",
+        referenceUrl: DEFAULT_SOURCE_DEFS[0].referenceUrl,
+        metric: "완전월 일평균 순방문자"
+      },
+      quality: {
+        missingIsNotZero: true,
+        partialMonthsExcludedFromMetrics: true,
+        failedRefreshDoesNotOverwriteCompleteCache: true,
+        retryIncompleteOnBackfill: retryIncomplete,
+        coverageRateUnit: "ratio_0_to_1",
+        scoreMinimums: { ...VISITOR_OUTLOOK_SCORE_MINIMUMS },
+        scoreComponents: [
+          { key: "latest_peer_percentile", weight: 0.4 },
+          { key: "recent12_vs_previous12", weight: 0.35, normalization: "-25%..+25%=0..100" },
+          { key: "latest_same_month_yoy", weight: 0.25, normalization: "-25%..+25%=0..100" }
+        ]
+      }
+    };
   }
 
   async function collect(input = {}) {
@@ -854,7 +1417,8 @@ function createCollector(options = {}) {
       return { ...cached.data, ok: true, cache: { hit: true, filePath: cached.filePath } };
     }
 
-    const serviceKey = dataGoKrServiceKey(env);
+    const commonServiceKey = dataGoKrServiceKey(env);
+    const visitorServiceKey = sourceServiceKey(DEFAULT_SOURCE_DEFS[0], env);
     const sourceConfigs = DEFAULT_SOURCE_DEFS
       .map((def) => sourceConfig(def, env))
       .filter((config) => sources.includes(config.key));
@@ -874,7 +1438,9 @@ function createCollector(options = {}) {
         ttlHours
       },
       sourcePolicy: {
-        serviceKeyConfigured: Boolean(serviceKey),
+        serviceKeyConfigured: Boolean(visitorServiceKey || commonServiceKey),
+        visitorServiceKeyConfigured: Boolean(visitorServiceKey),
+        commonServiceKeyConfigured: Boolean(commonServiceKey),
         allowUnverifiedCodes,
         noSidoSigunguAggregation: true
       },
@@ -906,7 +1472,7 @@ function createCollector(options = {}) {
         snapshot.sources[config.key] = {
           label: config.label,
           referenceUrl: config.referenceUrl,
-          configStatus: visitorEndpointStatus(config, serviceKey),
+          configStatus: visitorEndpointStatus(config, sourceServiceKey(config, env)),
           status: visitorSnapshot.status === "ok" ? "ok" : visitorSnapshot.status === "unavailable" ? "skipped" : visitorSnapshot.status,
           reason: visitorSnapshot.reason || "",
           rows: visitorSnapshot.regions || [],
@@ -917,7 +1483,7 @@ function createCollector(options = {}) {
       snapshot.sources[config.key] = {
         label: config.label,
         referenceUrl: config.referenceUrl,
-        configStatus: sourceStatus(config, serviceKey),
+        configStatus: sourceStatus(config, sourceServiceKey(config, env)),
         regionParam: config.regionParam,
         periodParam: config.periodParam,
         ...(await requestSource(config, match.region, yearMonth))
@@ -946,7 +1512,14 @@ function createCollector(options = {}) {
       cacheFiles = [];
     }
 
-    const serviceKey = dataGoKrServiceKey(env);
+    const commonServiceKey = dataGoKrServiceKey(env);
+    const configuredSourceKeys = DEFAULT_SOURCE_DEFS
+      .map((def) => sourceServiceKey(def, env))
+      .filter(Boolean);
+    const visitorHistoryMonthsAvailable = cacheFiles
+      .map((fileName) => fileName.match(new RegExp(`^visitors__${VISITOR_ADAPTER_VERSION}__.+__(\\d{6})\\.json$`))?.[1] || "")
+      .filter(Boolean)
+      .sort();
     return {
       ok: true,
       enabled: true,
@@ -957,14 +1530,23 @@ function createCollector(options = {}) {
         regionCount: regionMap.regions?.length || 0,
         error: regionMap.error || ""
       },
-      serviceKeyConfigured: Boolean(serviceKey),
+      serviceKeyConfigured: Boolean(configuredSourceKeys.length),
+      commonServiceKeyConfigured: Boolean(commonServiceKey),
+      visitorHistory: {
+        availableMonthCount: visitorHistoryMonthsAvailable.length,
+        earliestYearMonth: visitorHistoryMonthsAvailable[0] || "",
+        latestYearMonth: visitorHistoryMonthsAvailable.at(-1) || ""
+      },
       sources: DEFAULT_SOURCE_DEFS.map((def) => {
         const config = sourceConfig(def, env);
+        const serviceKey = sourceServiceKey(config, env);
         return {
           key: config.key,
           label: config.label,
           referenceUrl: config.referenceUrl,
           status: def.key === "visitors" ? visitorEndpointStatus(config, serviceKey) : sourceStatus(config, serviceKey),
+          serviceKeyConfigured: Boolean(serviceKey),
+          serviceKeyEnvironment: config.serviceKeyEnv || "DATA_GO_KR_SERVICE_KEY",
           endpointConfigured: Boolean(config.endpoint),
           regionParam: config.regionParam,
           periodParam: config.periodParam
@@ -976,6 +1558,7 @@ function createCollector(options = {}) {
   return {
     collect,
     collectVisitorCounts,
+    collectVisitorHistory,
     resolveRegion,
     status,
     readRegionMap
@@ -986,8 +1569,13 @@ module.exports = {
   createCollector,
   DEFAULT_SOURCE_DEFS,
   dataGoKrServiceKey,
+  sourceServiceKey,
   normalizeYearMonth,
   latestClosedYearMonth,
   monthDateRange,
-  VISITOR_ADAPTER_VERSION
+  shiftYearMonth,
+  visitorHistoryMonths,
+  VISITOR_ADAPTER_VERSION,
+  VISITOR_OUTLOOK_MODEL_VERSION,
+  VISITOR_OUTLOOK_SCORE_MINIMUMS
 };
