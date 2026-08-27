@@ -14623,6 +14623,108 @@ function b2bPeakDistanceText(stats = {}) {
   return "비수기 대비";
 }
 
+function tourismVisitorSource() {
+  return state.data?.tourismVisitors || null;
+}
+
+function tourismVisitorMonthLabel(yearMonth = "") {
+  const digits = String(yearMonth || "").replace(/\D/g, "").slice(0, 6);
+  if (!/^\d{6}$/.test(digits)) return "기준월 확인";
+  return `${digits.slice(0, 4)}년 ${Number(digits.slice(4, 6))}월`;
+}
+
+function tourismVisitorRegionForName(name = "") {
+  const source = tourismVisitorSource();
+  const rows = Array.isArray(source?.regions) ? source.regions : [];
+  if (!rows.length) return null;
+  const canonical = tourismRegionForLocation({ query: name });
+  if (canonical.region?.regionKey) {
+    const direct = rows.find((row) => row.regionKey === canonical.region.regionKey);
+    if (direct) return direct;
+  }
+  const target = compactSearchText(name).replace(/시$|군$|구$|권역$|권$/g, "");
+  return rows.find((row) => {
+    const candidates = [row.sigungu, row.sido, row.regionKey]
+      .map((value) => compactSearchText(value).replace(/시$|군$|구$|권역$|권$/g, ""))
+      .filter(Boolean);
+    return candidates.some((value) => value === target || (Math.min(value.length, target.length) >= 3 && (value.includes(target) || target.includes(value))));
+  }) || null;
+}
+
+function tourismVisitorPrimaryRegion() {
+  const demandRows = demandRegionRows();
+  for (const { region } of demandRows) {
+    const visitor = tourismVisitorRegionForName(region.region || region.name || "");
+    if (visitor?.quality?.status === "complete" && Number.isFinite(Number(visitor.averageDailyVisitors))) return visitor;
+  }
+  for (const { region } of demandRows) {
+    const visitor = tourismVisitorRegionForName(region.region || region.name || "");
+    if (visitor) return visitor;
+  }
+  return (tourismVisitorSource()?.regions || [])[0] || null;
+}
+
+function tourismVisitorReasonLabel(source = tourismVisitorSource(), region = null) {
+  const reason = String(region?.quality?.reason || source?.reason || "");
+  if (reason === "missing_service_key") return "공공데이터 연동 대기";
+  if (["empty_verified", "no_observation", "no_rows_for_region"].includes(reason)) return "해당 기간 관측 없음";
+  if (reason === "region_code_verify_required") return "지역코드 검증 대기";
+  if (["incomplete_date_coverage", "partial"].includes(reason) || region?.quality?.status === "partial") return "관측 불완전";
+  if (["duplicate_value_conflict", "code_name_mismatch"].includes(reason)) return "자료 검증 대기";
+  if (source?.status === "error") return "수집 확인 필요";
+  return "아직 미관측";
+}
+
+function tourismVisitorOutlookCard() {
+  const source = tourismVisitorSource();
+  const region = tourismVisitorPrimaryRegion();
+  const complete = region?.quality?.status === "complete" && Number.isFinite(Number(region.averageDailyVisitors));
+  const period = tourismVisitorMonthLabel(source?.yearMonth || region?.yearMonth);
+  if (complete) {
+    return {
+      kind: "visitor",
+      tone: "neutral",
+      label: `${region.sigungu || "지역"} 일평균 방문자`,
+      value: `${fmtNumber(Math.round(Number(region.averageDailyVisitors)))}명`,
+      note: `${period} · ${fmtNumber(region.observedDays)}/${fmtNumber(region.expectedDays)}일 · 시군구 순방문자`
+    };
+  }
+  const coverage = Number(region?.observedDays) > 0
+    ? `${fmtNumber(region.observedDays)}/${fmtNumber(region.expectedDays)}일 확인`
+    : period;
+  return {
+    kind: "visitor",
+    tone: source?.status === "error" ? "warning" : "neutral",
+    label: `${region?.sigungu || "지역"} 방문자`,
+    value: tourismVisitorReasonLabel(source, region),
+    note: coverage || "한국관광공사 관측 대기"
+  };
+}
+
+function tourismVisitorTableValue(regionName = "") {
+  const row = tourismVisitorRegionForName(regionName);
+  if (row?.quality?.status === "complete" && Number.isFinite(Number(row.averageDailyVisitors))) {
+    return `${fmtNumber(Math.round(Number(row.averageDailyVisitors)))}명/일`;
+  }
+  return tourismVisitorReasonLabel(tourismVisitorSource(), row);
+}
+
+function tourismVisitorSourceNote() {
+  const source = tourismVisitorSource();
+  const period = tourismVisitorMonthLabel(source?.yearMonth);
+  const completeCount = (source?.regions || []).filter((row) => row?.quality?.status === "complete").length;
+  const status = completeCount
+    ? `${period} 완전월 · ${fmtNumber(completeCount)}개 시군구 관측`
+    : tourismVisitorReasonLabel(source);
+  return `
+    <p class="demand-source-note" data-ui-surface="soft">
+      <strong>지역 방문자수</strong>
+      <span>${escapeHtml(status)} · 이동통신 기반 현지인·외지인·외국인 일자별 순방문자 평균이며 전망 점수에는 아직 반영하지 않습니다.</span>
+      <a href="${escapeHtml(source?.source?.referenceUrl || "https://www.data.go.kr/data/15101972/openapi.do")}" target="_blank" rel="noopener noreferrer">공식 출처</a>
+    </p>
+  `;
+}
+
 function b2bDemandOutlookModel(traffic = demandTrafficAggregate(), playbook = b2bDemandPlaybookModel(traffic)) {
   const trend = playbook.trend;
   const stats = playbook.stats;
@@ -14664,6 +14766,7 @@ function b2bDemandOutlookModel(traffic = demandTrafficAggregate(), playbook = b2
       value: nextDemand.value,
       note: nextDemand.note
     },
+    tourismVisitorOutlookCard(),
     {
       tone: peakNow ? "positive" : "neutral",
       label: "피크 접근",
@@ -15069,14 +15172,14 @@ function renderB2BDemandOutlook(traffic = demandTrafficAggregate(), playbook = b
     <div class="b2b-demand-outlook">
       <div class="b2b-demand-outlook-head">
         <div>
-          <strong>월별 검색량 보드</strong>
-          <span>기준월 검색량에 계절 트렌드 비율을 반영해 이번달·다음달을 예측합니다.</span>
+          <strong>월별 검색량·지역 방문자 보드</strong>
+          <span>검색량 예측과 한국관광공사 완전월 일평균 방문자 실측을 분리해 함께 봅니다.</span>
         </div>
         <em class="${escapeHtml(model.forecastTone)}">${escapeHtml(model.forecastLabel)}</em>
       </div>
       <div class="b2b-demand-outlook-grid">
         ${model.cards.map((card) => `
-          <article class="${escapeHtml(card.tone)}">
+          <article class="${escapeHtml([card.tone, card.kind].filter(Boolean).join(" "))}" data-ui-surface="metric">
             <span>${escapeHtml(card.label)}</span>
             <strong>${escapeHtml(card.value)}</strong>
             <small>${escapeHtml(card.note)}</small>
@@ -15137,7 +15240,7 @@ function renderB2BDemandPlaybook(traffic = demandTrafficAggregate()) {
         <div>
           <p class="eyebrow">검색 수요 전망</p>
           <h3>월별 검색량과 경쟁 흐름</h3>
-          <p>기준월 검색량, 12개월 트렌드, 네이버 예약 판매 표본을 묶어 이번달·다음달 권역 수요를 추정합니다.</p>
+          <p>기준월 검색량, 12개월 트렌드, 지역 방문자 실측, 네이버 예약 판매 표본을 구분해 권역 수요를 판단합니다.</p>
         </div>
         <strong>${escapeHtml(model.decision)}</strong>
       </div>
@@ -27631,7 +27734,10 @@ function renderDemand() {
   const ctr = Number(traffic.combinedCtr);
   const trend = demandTrendSource();
   const regions = demandRegionRows();
-  const demandStateText = trend.hasSeries
+  const visitorSource = tourismVisitorSource();
+  const visitorPrimary = tourismVisitorPrimaryRegion();
+  const visitorComplete = visitorPrimary?.quality?.status === "complete" && Number.isFinite(Number(visitorPrimary.averageDailyVisitors));
+  const demandStateText = trend.hasSeries || visitorComplete
     ? "수요 데이터"
     : trend.reason
       ? (Number(trend.status) === 401 ? "확인 필요" : "확인 필요")
@@ -27645,7 +27751,7 @@ function renderDemand() {
       <div>
         <p class="eyebrow">수요구조 분석</p>
         <h3>${escapeHtml(activeKeyword())}</h3>
-        <p>${escapeHtml(dateRangeLabel(run))} · 시즌 수요 기준 · 네이버 검색수요</p>
+        <p>${escapeHtml(dateRangeLabel(run))} · 네이버 검색수요 · 한국관광공사 지역 방문자</p>
       </div>
       <span>${escapeHtml(productModeLabel(run.productMode || "all"))}</span>
     </section>
@@ -27659,10 +27765,11 @@ function renderDemand() {
     <details class="demand-metric-grid b2b-internal-detail">
       <summary>
         <strong>검색수요 근거 보기</strong>
-        <span>월검색량, 모바일 비중, 클릭 반응, 12개월 추세</span>
+        <span>월검색량, 지역 방문자, 모바일 비중, 클릭 반응, 12개월 추세</span>
       </summary>
       <div class="demand-metric-grid-inner">
         <article><span>월검색량</span><strong>${total ? fmtNumber(total) : "확인필요"}</strong><small>PC+모바일</small></article>
+        <article><span>${escapeHtml(visitorPrimary?.sigungu ? `${visitorPrimary.sigungu} 일평균 방문자` : "지역 방문자")}</span><strong>${visitorComplete ? `${fmtNumber(Math.round(Number(visitorPrimary.averageDailyVisitors)))}명` : escapeHtml(tourismVisitorReasonLabel(visitorSource, visitorPrimary))}</strong><small>${escapeHtml(visitorComplete ? `${tourismVisitorMonthLabel(visitorSource?.yearMonth)} · ${visitorPrimary.observedDays}/${visitorPrimary.expectedDays}일` : tourismVisitorMonthLabel(visitorSource?.yearMonth))}</small></article>
         <article><span>모바일 비중</span><strong>${Number.isFinite(mobileShare) ? fmtRate(mobileShare) : "확인필요"}</strong><small>모바일 검색 비중</small></article>
         <article><span>클릭 반응</span><strong>${Number.isFinite(ctr) ? fmtSearchRate(ctr) : "확인필요"}</strong><small>검색 노출 대비 반응</small></article>
         <article><span>12개월 추세</span><strong>${escapeHtml(demandTrendLabel())}</strong><small>네이버 검색 추이</small></article>
@@ -27693,24 +27800,26 @@ function renderDemand() {
       <div class="demand-card-head">
         <div>
           <h3>지역 비교</h3>
-          <p>지역 키워드별 월검색량과 영업 우선순위</p>
+          <p>지역 키워드별 월검색량·완전월 일평균 방문자·영업 우선순위</p>
         </div>
         <span>${fmtNumber(regions.length)} 지역</span>
       </div>
       <div class="demand-region-table">
         <div class="demand-region-head">
-          <span>지역</span><span>월검색량</span><span>트렌드</span><span>클러스터</span><span>판단</span>
+          <span>지역</span><span>월검색량</span><span>최근 방문자</span><span>트렌드</span><span>클러스터</span><span>판단</span>
         </div>
         ${regions.length ? regions.map(({ region, traffic: rowTraffic, primary }) => `
           <div class="demand-region-row">
             <strong>${escapeHtml(region.region || region.name || "지역")}</strong>
             <span>${rowTraffic.totalSearchVolume ? fmtNumber(rowTraffic.totalSearchVolume) : "확인필요"}</span>
+            <span>${escapeHtml(tourismVisitorTableValue(region.region || region.name || ""))}</span>
             <span>${escapeHtml(rowTraffic.trendLabel || "확인중")}</span>
             <span>${escapeHtml(primary)}</span>
             <em>${escapeHtml(demandPriorityLabel(rowTraffic))}</em>
           </div>
         `).join("") : `<div class="empty">지역별 검색수요 데이터가 없습니다.</div>`}
       </div>
+      ${tourismVisitorSourceNote()}
     </section>
 
     ${demandCompanySample()}

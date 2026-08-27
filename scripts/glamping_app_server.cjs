@@ -177,7 +177,10 @@ const COLLECTION_PURPOSES = {
 };
 
 function kstDate(offsetDays = 0) {
-  const now = new Date();
+  const testNow = process.env.NODE_ENV === "test"
+    ? Date.parse(String(process.env.GLAMPING_TEST_NOW || ""))
+    : Number.NaN;
+  const now = Number.isFinite(testNow) ? new Date(testNow) : new Date();
   const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
   kst.setUTCDate(kst.getUTCDate() + offsetDays);
   return kst.toISOString().slice(0, 10);
@@ -5381,6 +5384,7 @@ async function placeRankComparisonForRun(data = {}) {
     const previousData = await loadRun(previousRun.id, {
       skipCompanyMaster: true,
       skipHistory: true,
+      skipTourismVisitors: true,
       applyCompanyMaster: false,
       includeRankComparison: false
     });
@@ -13765,7 +13769,8 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
     const data = await loadRun(runId, {
       skipCompanyMaster: true,
       skipHistory: true,
-      skipTraffic: true
+      skipTraffic: true,
+      skipTourismVisitors: true
     }).catch(() => null);
     if (!data) continue;
     const item = (data.availability?.items || []).find((candidate) => companyProductAvailabilityMatch(company, candidate));
@@ -13916,7 +13921,7 @@ async function backfillCompanyMasterFromRuns(payload = {}) {
 
   for (const run of runs) {
     try {
-      const data = await loadRun(run.id, { skipHistory: true });
+      const data = await loadRun(run.id, { skipHistory: true, skipTourismVisitors: true });
       const currentRunCompanies = Number(data?.companyMaster?.currentRunCompanies || 0);
       touchedCompanies += currentRunCompanies;
       processed.push({
@@ -14050,7 +14055,7 @@ async function readHistoryObservations() {
 async function appendHistoryForRun(runId) {
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return { appended: 0, reason: "run_not_found" };
-  const data = await loadRun(runId, { skipHistory: true });
+  const data = await loadRun(runId, { skipHistory: true, skipTourismVisitors: true });
   if (!data) return { appended: 0, reason: "run_not_found" };
   const collectedAt = data.run?.collectedAt || "";
   const dbRoute = runCollectionDbRoute(data?.run || {});
@@ -15289,9 +15294,33 @@ async function loadRun(runId, options = {}) {
       ]
     : platformRows;
   const regions = summarizeRegionalRows(regionalRows, provinceKey, manifest?.keyword || conditions.keyword || "");
-  const datalabTrend = options.skipTraffic
-    ? null
-    : await enrichRegionsWithTraffic(regions, dirPath, demandKeywordForRun(manifest, conditions, regions));
+  const [datalabTrend, tourismVisitors] = await Promise.all([
+    options.skipTraffic
+      ? null
+      : enrichRegionsWithTraffic(regions, dirPath, demandKeywordForRun(manifest, conditions, regions)),
+    options.skipTourismVisitors
+      ? null
+      : tourismCollector.collectVisitorCounts({
+          regionNames: regions.map((region) => region.region || region.name || "").filter(Boolean)
+        }).catch(() => ({
+          ok: false,
+          status: "error",
+          reason: "visitor_collection_failed",
+          regions: [],
+          source: {
+            key: "visitors",
+            label: "한국관광공사 지역별 방문자수",
+            referenceUrl: "https://www.data.go.kr/data/15101972/openapi.do",
+            unit: "기초지자체",
+            metric: "완전월 일평균 순방문자"
+          },
+          policy: {
+            scoreApplied: false,
+            noSidoSigunguAggregation: true,
+            missingIsNotZero: true
+          }
+        }))
+  ]);
   const stats = summarizeStats(regions);
   if (datalabTrend) stats.datalabTrend = datalabTrend;
   const availability = summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows], dirPath);
@@ -15361,6 +15390,7 @@ async function loadRun(runId, options = {}) {
     },
     stats,
     datalabTrend,
+    tourismVisitors,
     demandStructure,
     regions,
     ranking,
@@ -15907,9 +15937,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260825-blank-collection-keyword-v58"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260825-blank-collection-keyword-v58"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260825-blank-collection-keyword-v58"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260827-tourism-visitors-v59"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260827-tourism-visitors-v59"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260827-tourism-visitors-v59"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

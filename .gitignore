@@ -1,8 +1,12 @@
 config/*.local.json
+.env
+.env.*
+!.env.example
 node_modules/
 logs/
 tools/
 outputs/
+tourism_data/
 history/
 company_master/
 .codex-remote-attachments/

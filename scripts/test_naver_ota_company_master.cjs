@@ -683,6 +683,8 @@ async function main() {
       OUTPUTS_DIR: outputsDir,
       CONFIG_DIR: path.join(dataDir, "config"),
       SEED_OUTPUTS_FROM_REPO: "0",
+      NODE_ENV: "test",
+      GLAMPING_TEST_NOW: "2026-08-23T00:00:00+09:00",
       GLAMPING_ADMIN_USER: "admin",
       GLAMPING_ADMIN_PASSWORD: "0914"
     },

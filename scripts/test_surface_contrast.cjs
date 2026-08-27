@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260825-blank-collection-keyword-v76";
-const expectedAssetVersion = "v2-20260825-blank-collection-keyword-v58";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260827-tourism-visitors-v77";
+const expectedAssetVersion = "v2-20260827-tourism-visitors-v59";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -379,6 +379,25 @@ assert(
     && assetVersionAssignments.map((entry) => entry.asset).join("|") === "styles.css|admin-theme.css|app.js"
     && assetVersionAssignments.every((entry) => entry.version === expectedAssetVersion),
   "server asset query assignments must version styles, theme, and app exactly and together",
+  failures
+);
+
+assert(
+  app.includes("function tourismVisitorOutlookCard()")
+    && app.includes("function tourismVisitorTableValue(regionName = \"\")")
+    && app.includes("완전월 일평균 방문자")
+    && app.includes("전망 점수에는 아직 반영하지 않습니다")
+    && server.includes("tourismCollector.collectVisitorCounts({")
+    && server.includes("tourismVisitors,"),
+  "regional visitor observations must be source-labelled, non-synthetic demand evidence",
+  failures
+);
+
+assert(
+  styles.includes(".demand-source-note")
+    && styles.includes(".b2b-demand-outlook-grid article.visitor")
+    && /grid-template-columns:\s*minmax\(130px, 1\.15fr\) \.72fr \.9fr \.7fr \.9fr \.62fr;/.test(styles),
+  "regional visitor demand evidence must remain readable in cards and the comparison table",
   failures
 );
 

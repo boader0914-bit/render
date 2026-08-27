@@ -42,6 +42,14 @@ Render는 보통 GitHub 저장소를 연결해서 배포한다.
 - `NAVER_SEARCHAD_SECRET_KEY`
 - `NAVER_SEARCHAD_CUSTOMER_ID`
 
+공공데이터 API를 쓰려면 Secret으로 입력:
+- `DATA_GO_KR_SERVICE_KEY`
+
+기존 Web Service는 Blueprint 동기화만으로 새 비밀값 입력창이 열리지 않는다.
+Render Dashboard에서 해당 서비스의 `Environment`를 열고
+`DATA_GO_KR_SERVICE_KEY`를 직접 추가한 뒤 Save/Deploy 한다. 실제 키는
+`render.yaml`, `.env`, Endpoint URL, 앱 설정 파일에 기록하지 않는다.
+
 저장공간 설정:
 - `HOST`: `0.0.0.0`
 - `DATA_DIR`: `/tmp/glamping-data`

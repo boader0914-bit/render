@@ -11,7 +11,8 @@
     "test:search-mode": "node scripts/test_search_mode_classification.cjs",
     "test:naver-ota": "node scripts/test_naver_place_ota_observation.cjs",
     "test:naver-ota-master": "node scripts/test_naver_ota_company_master.cjs",
-    "test": "npm run check && npm run test:yeogi && npm run test:search-mode && npm run test:naver-ota && npm run test:naver-ota-master"
+    "test:tourism": "node scripts/test_tourism_collector.cjs",
+    "test": "npm run check && npm run test:yeogi && npm run test:search-mode && npm run test:naver-ota && npm run test:naver-ota-master && npm run test:tourism"
   },
   "engines": {
     "node": ">=20"

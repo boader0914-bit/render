@@ -24,6 +24,8 @@ services:
         value: /var/data/config
       - key: APP_PIN
         sync: false
+      - key: DATA_GO_KR_SERVICE_KEY
+        sync: false
       - key: NAVER_CLIENT_ID
         sync: false
       - key: NAVER_CLIENT_SECRET

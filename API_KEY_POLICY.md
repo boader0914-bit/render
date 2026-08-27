@@ -12,11 +12,18 @@ This app must keep API key integration stable across releases.
 
 ## Supported Keys
 
+- `DATA_GO_KR_SERVICE_KEY`
 - `NAVER_CLIENT_ID`
 - `NAVER_CLIENT_SECRET`
 - `NAVER_SEARCHAD_API_KEY`
 - `NAVER_SEARCHAD_SECRET_KEY`
 - `NAVER_SEARCHAD_CUSTOMER_ID`
+
+`DATA_GO_KR_SERVICE_KEY` is an environment-only secret. Store it in Render's
+service Environment page and never in the admin key form, a local JSON file,
+an endpoint URL, logs, reports, or Git. The legacy aliases
+`KTO_DATA_GO_KR_SERVICE_KEY` and `KTO_TOURISM_SERVICE_KEY` remain read-only
+compatibility fallbacks; new deployments must use `DATA_GO_KR_SERVICE_KEY`.
 
 ## Release Rule
 

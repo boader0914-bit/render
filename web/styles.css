@@ -23399,7 +23399,7 @@ a.platform-row:hover {
 
 .demand-metric-grid-inner {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
   padding: 0 16px 16px;
 }
@@ -23770,8 +23770,12 @@ html[data-theme-resolved="dark"] body.role-admin [data-admin-section-panel="file
 
 .b2b-demand-outlook-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
+}
+
+.b2b-demand-outlook-grid article.visitor {
+  grid-column: span 2;
 }
 
 .b2b-demand-outlook-grid article {
@@ -25678,7 +25682,7 @@ html[data-theme-resolved="dark"] body.role-admin [data-admin-section-panel="file
 .demand-region-head,
 .demand-region-row {
   display: grid;
-  grid-template-columns: minmax(130px, 1.2fr) .8fr .75fr 1fr .65fr;
+  grid-template-columns: minmax(130px, 1.15fr) .72fr .9fr .7fr .9fr .62fr;
   gap: 10px;
   align-items: center;
 }
@@ -25705,6 +25709,39 @@ html[data-theme-resolved="dark"] body.role-admin [data-admin-section-panel="file
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.demand-source-note {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  align-items: center;
+  margin: 12px 0 0;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-soft, var(--panel));
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.demand-source-note strong {
+  color: var(--ink);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.demand-source-note span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.demand-source-note a {
+  color: var(--blue-dark);
+  font-weight: 900;
   white-space: nowrap;
 }
 
@@ -30677,6 +30714,15 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
     white-space: normal;
   }
 
+  .demand-source-note {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .demand-source-note a {
+    justify-self: start;
+  }
+
   .demand-company-card dl {
     grid-template-columns: 1fr;
   }
@@ -30985,6 +31031,10 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
   .b2b-keyword-list,
   .region-card-metrics {
     grid-template-columns: 1fr;
+  }
+
+  .b2b-demand-outlook-grid article.visitor {
+    grid-column: auto;
   }
 
   .b2b-map-cluster-detail-head,
