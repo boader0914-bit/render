@@ -15,6 +15,7 @@ This app must keep API key integration stable across releases.
 ## Supported Keys
 
 - `DATA_GO_KR_VISITOR_SERVICE_KEY` (current regional visitor API)
+- `DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY` (regional tourism demand-strength API)
 - `DATA_GO_KR_SERVICE_KEY`
 - `NAVER_CLIENT_ID`
 - `NAVER_CLIENT_SECRET`
@@ -23,9 +24,11 @@ This app must keep API key integration stable across releases.
 - `NAVER_SEARCHAD_CUSTOMER_ID`
 
 `DATA_GO_KR_VISITOR_SERVICE_KEY` is the preferred key for the currently connected
-regional visitor API. `DATA_GO_KR_SERVICE_KEY` remains an optional common fallback.
-Store both only in Render's service Environment page and never in the admin key
-form, a local JSON file, an endpoint URL, logs, reports, or Git. The legacy aliases
+regional visitor API. `DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY` is the preferred key
+for the connected regional tourism demand-strength API. `DATA_GO_KR_SERVICE_KEY`
+remains an optional common fallback. Store these only in Render's service
+Environment page and never in the admin key form, a local JSON file, an endpoint
+URL, logs, reports, or Git. The legacy aliases
 `KTO_DATA_GO_KR_SERVICE_KEY` and `KTO_TOURISM_SERVICE_KEY` remain read-only
 compatibility fallbacks; new deployments must use `DATA_GO_KR_SERVICE_KEY`.
 
@@ -47,5 +50,7 @@ Blank key fields in the admin UI must preserve the existing saved key instead of
 - That endpoint verifies Naver traffic keys, not public-data keys.
 - After entering a visitor key, an administrator checks
   `GET /api/tourism-data/status` and performs one regional visitor collection.
+- After entering a demand-strength key, an administrator checks the same status endpoint
+  and explicitly refreshes one region's demand-strength history before wider backfill.
 - "Configured" only means a key is saved.
 - "Verified" means the saved key successfully authenticated against the upstream API.

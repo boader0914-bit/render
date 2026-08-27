@@ -15,6 +15,7 @@ const {
 
 const SERVICE_KEY_ENV_NAMES = [
   "DATA_GO_KR_VISITOR_SERVICE_KEY",
+  "DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY",
   "DATA_GO_KR_SERVICE_KEY",
   "KTO_DATA_GO_KR_SERVICE_KEY",
   "KTO_TOURISM_SERVICE_KEY"
@@ -66,6 +67,64 @@ function visitorHistoryRows(yearMonth) {
   ]);
 }
 
+function demandStrengthRows(yearMonth, operation, options = {}) {
+  const base = {
+    baseYm: yearMonth,
+    areaCd: options.areaCd || "48",
+    areaNm: options.areaNm || "경상남도",
+    signguCd: options.signguCd || "48860",
+    signguNm: options.signguNm || "산청군"
+  };
+  const yearOffset = Number(yearMonth.slice(0, 4)) - 2023;
+  const monthOffset = Number(yearMonth.slice(4, 6)) / 100;
+  if (operation === "areaTarSjrnDsList") {
+    const values = {
+      "21": 60 + (yearOffset * 4) + monthOffset,
+      "2101": 61 + yearOffset,
+      "2102": 62 + yearOffset,
+      "2103": 63 + yearOffset,
+      "2104": 64 + yearOffset,
+      "2105": 65 + yearOffset
+    };
+    const labels = {
+      "21": "관광 체류 강도 전체",
+      "2101": "타권역 방문자 비중",
+      "2102": "숙박 비중",
+      "2103": "1박 방문자수",
+      "2104": "2박 방문자수",
+      "2105": "3박 방문자수"
+    };
+    return Object.entries(values)
+      .filter(([code]) => !(options.omitCodes || []).includes(code))
+      .map(([tarSjrnDsIxCd, tarSjrnDsIxVal]) => ({
+        ...base,
+        tarSjrnDsIxCd,
+        tarSjrnDsIxNm: labels[tarSjrnDsIxCd],
+        tarSjrnDsIxVal: String(tarSjrnDsIxVal)
+      }));
+  }
+  const values = {
+    "22": 55 + (yearOffset * 3) + monthOffset,
+    "2201": 56 + yearOffset,
+    "2202": 57 + yearOffset,
+    "2203": 58 + yearOffset
+  };
+  const labels = {
+    "22": "관광 소비 강도 전체",
+    "2201": "외지인 소비액",
+    "2202": "전체 대비 외지인 소비액 비중",
+    "2203": "방문량 대비 방문 소비액"
+  };
+  return Object.entries(values)
+    .filter(([code]) => !(options.omitCodes || []).includes(code))
+    .map(([tarExpDsIxCd, tarExpDsIxVal]) => ({
+      ...base,
+      tarExpDsIxCd,
+      tarExpDsIxNm: labels[tarExpDsIxCd],
+      tarExpDsIxVal: String(tarExpDsIxVal)
+    }));
+}
+
 async function main() {
   const restoreServiceKeyEnv = withoutServiceKeyEnv();
   const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "tourism-collector-"));
@@ -98,7 +157,7 @@ async function main() {
     assert.equal(snapshot.ok, true);
     assert.equal(snapshot.region.regionKey, "kr_gyeongnam_hadong");
     assert.equal(snapshot.yearMonth, "202606");
-    assert.equal(Object.keys(snapshot.sources).length, 3);
+    assert.equal(Object.keys(snapshot.sources).length, 4);
     assert.equal(snapshot.sources.visitors.status, "skipped");
     assert.equal(snapshot.sources.visitors.reason, "missing_service_key");
 
@@ -420,6 +479,233 @@ async function main() {
     assert.equal(unmatchedHistory.status, "region_not_matched");
     assert.equal(unmatchedHistory.regions.length, 0);
 
+    const demandDataDir = path.join(dataDir, "tourism_demand_strength_data");
+    const demandRequests = [];
+    let failDemandMonth = "";
+    const demandCollector = createCollector({
+      rootDir: tmp,
+      webDir,
+      dataDir,
+      tourismDataDir: demandDataDir,
+      env: {
+        DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY: "fixture-demand-strength-key",
+        KTO_TOURISM_DEMAND_STRENGTH_PAGE_SIZE: "100"
+      },
+      now: () => new Date("2026-07-15T00:00:00.000Z"),
+      fetchImpl: async (requestUrl) => {
+        const url = new URL(requestUrl);
+        const operation = url.pathname.split("/").at(-1);
+        const yearMonth = url.searchParams.get("baseYm");
+        demandRequests.push({ url, operation, yearMonth });
+        if (yearMonth === failDemandMonth || (yearMonth === "202605" && operation === "areaTarExpDsList")) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({
+              response: {
+                header: { resultCode: "05", resultMsg: "SERVICETIMEOUT_ERROR" },
+                body: {}
+              }
+            })
+          };
+        }
+        const options = {};
+        if (yearMonth === "202603" && operation === "areaTarSjrnDsList") options.omitCodes = ["2105"];
+        if (yearMonth === "202602" && operation === "areaTarSjrnDsList") options.omitCodes = ["21"];
+        if (yearMonth === "202601") options.areaCd = "47";
+        const rows = demandStrengthRows(yearMonth, operation, options);
+        const pageNo = Number(url.searchParams.get("pageNo"));
+        const pageSize = Number(url.searchParams.get("numOfRows"));
+        const offset = (pageNo - 1) * pageSize;
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            response: {
+              header: { resultCode: "00", resultMsg: "NORMAL_CODE" },
+              body: {
+                pageNo,
+                numOfRows: pageSize,
+                totalCount: rows.length,
+                items: { item: rows.slice(offset, offset + pageSize) }
+              }
+            }
+          })
+        };
+      }
+    });
+
+    const demandStatusBefore = await demandCollector.status();
+    const demandSourceStatus = demandStatusBefore.sources.find((source) => source.key === "demandStrength");
+    assert.equal(demandSourceStatus.status, "ready");
+    assert.equal(demandSourceStatus.serviceKeyEnvironment, "DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY");
+    assert.equal(demandSourceStatus.adapter, "area-tar-dem-ds-v1");
+    assert.deepEqual(demandSourceStatus.operations, ["areaTarSjrnDsList", "areaTarExpDsList"]);
+    assert.doesNotMatch(JSON.stringify(demandStatusBefore), /fixture-demand-strength-key/);
+
+    const demandCacheMiss = await demandCollector.readDemandStrength({ regionName: "산청", yearMonth: "202606" });
+    assert.equal(demandCacheMiss.status, "unavailable");
+    assert.equal(demandCacheMiss.reason, "monthly_cache_missing");
+    assert.equal(demandCacheMiss.collection.mode, "cache_only");
+    assert.equal(demandCacheMiss.collection.operationCallsAttempted, 0);
+    assert.equal(demandRequests.length, 0);
+
+    const demandSnapshot = await demandCollector.collectDemandStrength({ regionName: "산청", yearMonth: "202606" });
+    assert.equal(demandSnapshot.ok, true);
+    assert.equal(demandSnapshot.status, "ok");
+    assert.equal(demandSnapshot.region.regionKey, "kr_gyeongnam_sancheong");
+    assert.equal(demandSnapshot.region.areaCd, "48");
+    assert.equal(demandSnapshot.region.signguCd, "48860");
+    assert.equal(demandSnapshot.stay.status, "ok");
+    assert.equal(demandSnapshot.spend.status, "ok");
+    assert.ok(Number.isFinite(demandSnapshot.stay.overallValue));
+    assert.ok(Number.isFinite(demandSnapshot.spend.overallValue));
+    assert.equal(demandSnapshot.stay.metrics.find((metric) => metric.code === "21").value, demandSnapshot.stay.overallValue);
+    assert.equal(demandSnapshot.spend.metrics.find((metric) => metric.code === "22").value, demandSnapshot.spend.overallValue);
+    assert.equal(demandSnapshot.quality.completeOperationCount, 2);
+    assert.equal(demandSnapshot.collection.operationCallsAttempted, 2);
+    assert.equal(demandSnapshot.policy.missingIsNotZero, true);
+    assert.equal(demandRequests.length, 2);
+    demandRequests.forEach(({ url, operation }) => {
+      assert.equal(url.origin, "https://apis.data.go.kr");
+      assert.equal(url.pathname, `/B551011/AreaTarDemDsService/${operation}`);
+      assert.equal(url.searchParams.get("serviceKey"), "fixture-demand-strength-key");
+      assert.equal(url.searchParams.get("_type"), "json");
+      assert.equal(url.searchParams.get("MobileOS"), "ETC");
+      assert.equal(url.searchParams.get("MobileApp"), "lodging-datalab");
+      assert.equal(url.searchParams.get("baseYm"), "202606");
+      assert.equal(url.searchParams.get("areaCd"), "48");
+      assert.equal(url.searchParams.get("signguCd"), "48860");
+      assert.equal(url.searchParams.has("tarSjrnDsIxCd"), false);
+      assert.equal(url.searchParams.has("tarExpDsIxCd"), false);
+    });
+    assert.doesNotMatch(JSON.stringify(demandSnapshot), /fixture-demand-strength-key/);
+
+    const demandRequestCountAfterFirst = demandRequests.length;
+    const cachedDemandSnapshot = await demandCollector.readDemandStrength({ regionKey: "kr_gyeongnam_sancheong", yearMonth: "202606" });
+    assert.equal(cachedDemandSnapshot.status, "ok");
+    assert.equal(cachedDemandSnapshot.cache.hit, true);
+    assert.equal(cachedDemandSnapshot.collection.operationCallsAttempted, 0);
+    assert.equal(demandRequests.length, demandRequestCountAfterFirst);
+
+    const genericDemand = await demandCollector.collect({
+      keyword: "산청글램핑",
+      yearMonth: "202606",
+      sources: ["demandStrength"],
+      force: true
+    });
+    assert.equal(genericDemand.sources.demandStrength.status, "ok");
+    assert.equal(genericDemand.sources.demandStrength.data.cache.hit, true);
+    assert.equal(demandRequests.length, demandRequestCountAfterFirst);
+
+    const demandHistoryCacheOnly = await demandCollector.collectDemandStrengthHistory({
+      regionNames: ["산청"],
+      endYearMonth: "202606",
+      months: 3
+    });
+    assert.equal(demandHistoryCacheOnly.status, "partial");
+    assert.equal(demandHistoryCacheOnly.collection.mode, "cache_only");
+    assert.equal(demandHistoryCacheOnly.collection.networkAttemptedMonths, 0);
+    assert.equal(demandHistoryCacheOnly.coverage.completeMonths, 1);
+    assert.equal(demandHistoryCacheOnly.coverage.missingMonths, 2);
+    assert.equal(demandRequests.length, demandRequestCountAfterFirst);
+
+    const demandHistoryFirstMatchedName = await demandCollector.collectDemandStrengthHistory({
+      regionNames: ["매핑되지않은지역", "산청"],
+      endYearMonth: "202606",
+      months: 1
+    });
+    assert.equal(demandHistoryFirstMatchedName.region.regionKey, "kr_gyeongnam_sancheong");
+    assert.equal(demandHistoryFirstMatchedName.collection.networkAttemptedMonths, 0);
+
+    const demandHistoryRegionKeyList = await demandCollector.collectDemandStrengthHistory({
+      regionKeys: ["kr_gyeongnam_sancheong"],
+      endYearMonth: "202606",
+      months: 1
+    });
+    assert.equal(demandHistoryRegionKeyList.region.regionKey, "kr_gyeongnam_sancheong");
+    assert.equal(demandHistoryRegionKeyList.collection.networkAttemptedMonths, 0);
+
+    const demandHistory = await demandCollector.collectDemandStrengthHistory({
+      regionNames: ["산청"],
+      endYearMonth: "202606",
+      months: 3,
+      refresh: true
+    });
+    assert.equal(demandHistory.status, "partial");
+    assert.equal(demandHistory.collection.mode, "backfill_missing");
+    assert.equal(demandHistory.collection.requestGrain, "sigungu");
+    assert.equal(demandHistory.collection.operationsPerMonth, 2);
+    assert.equal(demandHistory.collection.maximumOperationCalls, 6);
+    assert.equal(demandHistory.collection.operationCallsAttempted, 4);
+    assert.equal(demandHistory.collection.networkAttemptedMonths, 2);
+    assert.equal(demandHistory.collection.networkSucceededMonths, 1);
+    assert.equal(demandHistory.coverage.completeMonths, 2);
+    assert.equal(demandHistory.coverage.partialMonths, 1);
+    const mayDemandPoint = demandHistory.series.find((point) => point.yearMonth === "202605");
+    assert.equal(mayDemandPoint.status, "partial");
+    assert.equal(mayDemandPoint.stayStatus, "ok");
+    assert.equal(mayDemandPoint.spendStatus, "error");
+    assert.ok(Number.isFinite(mayDemandPoint.stayOverall));
+    assert.equal(mayDemandPoint.spendOverall, null);
+    assert.equal(demandHistory.quality.completeRequiresOverallCodes.join(","), "21,22");
+    assert.equal(demandHistory.collection.provinceBulkReuse, false);
+
+    const demandHistoryCachedAgain = await demandCollector.collectDemandStrengthHistory({
+      regionName: "산청",
+      endYearMonth: "202606",
+      months: 3
+    });
+    assert.equal(demandHistoryCachedAgain.collection.networkAttemptedMonths, 0);
+    assert.equal(demandHistoryCachedAgain.coverage.completeMonths, 2);
+    assert.equal(demandHistoryCachedAgain.coverage.partialMonths, 0);
+    assert.equal(demandHistoryCachedAgain.coverage.missingMonths, 1);
+
+    const detailPartialDemand = await demandCollector.collectDemandStrength({ regionName: "산청", yearMonth: "202603" });
+    assert.equal(detailPartialDemand.status, "ok");
+    assert.equal(detailPartialDemand.stay.status, "ok");
+    assert.equal(detailPartialDemand.stay.quality.status, "detail_partial");
+    assert.equal(detailPartialDemand.stay.quality.overallComplete, true);
+    assert.equal(detailPartialDemand.stay.quality.detailComplete, false);
+    assert.equal(detailPartialDemand.stay.metrics.find((metric) => metric.code === "2105").value, null);
+
+    const missingOverallDemand = await demandCollector.collectDemandStrength({ regionName: "산청", yearMonth: "202602" });
+    assert.equal(missingOverallDemand.status, "partial");
+    assert.equal(missingOverallDemand.stay.status, "partial");
+    assert.equal(missingOverallDemand.stay.overallValue, null);
+    assert.equal(missingOverallDemand.spend.status, "ok");
+
+    const wrongRegionDemand = await demandCollector.collectDemandStrength({ regionName: "산청", yearMonth: "202601" });
+    assert.equal(wrongRegionDemand.status, "error");
+    assert.equal(wrongRegionDemand.stay.quality.status, "region_or_period_mismatch");
+    assert.equal(wrongRegionDemand.spend.quality.status, "region_or_period_mismatch");
+
+    failDemandMonth = "202606";
+    const preservedDemand = await demandCollector.collectDemandStrength({
+      regionName: "산청",
+      yearMonth: "202606",
+      force: true
+    });
+    assert.equal(preservedDemand.status, "ok");
+    assert.equal(preservedDemand.cache.hit, true);
+    assert.equal(preservedDemand.cache.refreshFailed, true);
+    assert.equal(preservedDemand.stay.overallValue, demandSnapshot.stay.overallValue);
+    assert.equal(preservedDemand.spend.overallValue, demandSnapshot.spend.overallValue);
+    failDemandMonth = "";
+
+    const defaultDemandHistoryRequestCount = demandRequests.length;
+    const defaultDemandHistory = await demandCollector.collectDemandStrengthHistory({ regionName: "산청" });
+    assert.equal(defaultDemandHistory.period.months, 36);
+    assert.equal(defaultDemandHistory.collection.mode, "cache_only");
+    assert.equal(defaultDemandHistory.collection.operationCallsAttempted, 0);
+    assert.equal(demandRequests.length, defaultDemandHistoryRequestCount);
+
+    const demandStatusAfter = await demandCollector.status();
+    assert.equal(demandStatusAfter.demandStrength.snapshotCount, 3);
+    assert.equal(demandStatusAfter.demandStrength.earliestYearMonth, "202603");
+    assert.equal(demandStatusAfter.demandStrength.latestYearMonth, "202606");
+    assert.doesNotMatch(JSON.stringify(demandStatusAfter), /fixture-demand-strength-key/);
+
     assert.equal(dataGoKrServiceKey({
       DATA_GO_KR_SERVICE_KEY: " canonical-key ",
       KTO_DATA_GO_KR_SERVICE_KEY: "compatibility-key",
@@ -447,6 +733,8 @@ async function main() {
       assert.doesNotMatch(contents, /- key: DATA_GO_KR_SERVICE_KEY\r?\n\s+value:/);
       assert.match(contents, /- key: DATA_GO_KR_VISITOR_SERVICE_KEY\r?\n\s+sync: false/);
       assert.doesNotMatch(contents, /- key: DATA_GO_KR_VISITOR_SERVICE_KEY\r?\n\s+value:/);
+      assert.match(contents, /- key: DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY\r?\n\s+sync: false/);
+      assert.doesNotMatch(contents, /- key: DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY\r?\n\s+value:/);
     }
 
     assert.equal(normalizeYearMonth("2026.06"), "202606");

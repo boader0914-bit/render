@@ -124,6 +124,11 @@ const state = {
     loading: false,
     tone: "neutral",
     message: ""
+  },
+  tourismDemandStrengthRefresh: {
+    loading: false,
+    tone: "neutral",
+    message: ""
   }
 };
 
@@ -14420,7 +14425,7 @@ function renderDemandStructure() {
     return `
       <section class="structure-empty-card">
         <strong>수요구조 사전 대기</strong>
-        <p>시즌 수요 기준이 연결되면 월별 수요강도, 핵심타겟, 평일 확장성, 가격 방어력을 표시합니다.</p>
+        <p>시즌 수요 기준이 연결되면 지역 관광 기초지수, 핵심타겟, 평일 확장성, 가격 방어력을 표시합니다.</p>
       </section>
     `;
   }
@@ -14447,11 +14452,12 @@ function renderDemandStructure() {
     <section class="structure-metric-grid" aria-label="수요구조 핵심 지표">
       ${primaryMetrics.map((metric) => {
         const score = optionalNumber(metric.score);
+        const metricLabel = metric.key === "monthlyDemand" ? "지역 관광 기초지수" : metric.label;
         return `
           <article>
-            <span>${escapeHtml(metric.label)}</span>
+            <span>${escapeHtml(metricLabel)}</span>
             <strong>${escapeHtml(demandMetricValue(metric))}</strong>
-            <small>${Number.isFinite(score) ? `${fmtNumber(score)}점` : "점수 산정 대기"} · ${escapeHtml(metric.note || "")}</small>
+            <small>${Number.isFinite(score) ? `${fmtNumber(score)}점` : "점수 산정 대기"} · ${escapeHtml(metric.key === "monthlyDemand" ? `메인터넌스 기준 · ${metric.note || ""}` : (metric.note || ""))}</small>
           </article>
         `;
       }).join("")}
@@ -14556,12 +14562,12 @@ function b2bDemandPlaybookModel(traffic = demandTrafficAggregate()) {
   const salesRate = sales.supply ? sales.sold / sales.supply : NaN;
   const peakText = trend.hasSeries && stats.peak ? `${stats.peak.label} ${trendIndexLabel(stats.peak.value)}` : "확인필요";
   const recentText = trend.hasSeries && stats.last ? `${stats.last.label} ${trendIndexLabel(stats.last.value)}` : "대기";
-  const demandStrength = total >= 30000
-    ? "광역 수요 강함"
+  const searchDemandBand = total >= 30000
+    ? "광역 검색수요 강함"
     : total >= 10000
-      ? "지역 수요 유효"
+      ? "지역 검색수요 유효"
       : total > 0
-        ? "소형 키워드"
+        ? "소형 검색 키워드"
         : "검색량 확인필요";
   const decision = total >= 30000 || (Number.isFinite(salesRate) && salesRate >= 0.55)
     ? "수요 우위"
@@ -14580,7 +14586,7 @@ function b2bDemandPlaybookModel(traffic = demandTrafficAggregate()) {
     nextDemand,
     peakText,
     recentText,
-    demandStrength,
+    searchDemandBand,
     decision,
     action,
     metrics: [
@@ -14606,7 +14612,7 @@ function b2bDemandPlaybookModel(traffic = demandTrafficAggregate()) {
       }
     ],
     checks: [
-      total ? `검색량은 ${demandStrength} 구간입니다.` : "검색량 표본이 없어 수요 강도는 보류합니다.",
+      total ? `검색량은 ${searchDemandBand} 구간입니다.` : "검색량 표본이 없어 검색 수요 구간은 보류합니다.",
       nextDemand.projectedVolume ? `${nextDemand.label || "예상 검색량"}은 ${fmtNumber(nextDemand.projectedVolume)}회이며 ${nextDemand.note} 기준입니다.` : "예상 검색량은 기준월 검색량과 12개월 추이 확보 후 표시합니다.",
       Number.isFinite(mobileShare) ? `모바일 비중 ${fmtRate(mobileShare)}로 예약 화면/상품명 영향이 큽니다.` : "모바일 비중은 추가 수집 후 판단합니다.",
       Number.isFinite(ctr) ? `클릭 반응 ${fmtSearchRate(ctr)}로 노출 대비 반응을 봅니다.` : "클릭 반응은 키워드별 데이터 확보 후 비교합니다.",
@@ -15163,6 +15169,546 @@ function renderTourismVisitorHistory() {
             const componentScore = optionalNumber(component?.score ?? component?.value);
             return `<span><b>${escapeHtml(component?.label || component?.key || "산출 요소")}</b>${Number.isFinite(componentScore) ? `${escapeHtml(fmtNumber(componentScore))}점` : "관측 기준"}</span>`;
           }).join("")}</div>` : ""}
+        </div>
+      </details>
+    </section>
+  `;
+}
+
+function tourismDemandStrengthHistorySource() {
+  const direct = state.data?.tourismDemandStrengthHistory;
+  const legacy = state.data?.tourismDemandStrength;
+  const source = direct || legacy?.history || legacy;
+  return source && typeof source === "object" ? source : null;
+}
+
+function tourismDemandStrengthHistoryRegions(source = tourismDemandStrengthHistorySource()) {
+  if (Array.isArray(source?.regions)) return source.regions.filter(Boolean);
+  const rawRegion = source?.region && typeof source.region === "object" ? source.region : {};
+  const hasSeries = Array.isArray(source?.series)
+    || Array.isArray(source?.staySeries)
+    || Array.isArray(source?.spendSeries);
+  if (!hasSeries && !rawRegion.regionKey && !rawRegion.sigungu && !source?.regionKey && !source?.sigungu) return [];
+  return [{
+    ...rawRegion,
+    regionKey: rawRegion.regionKey || source?.regionKey || "",
+    sido: rawRegion.sido || source?.sido || "",
+    sigungu: rawRegion.sigungu || source?.sigungu || "",
+    series: source?.series,
+    staySeries: source?.staySeries,
+    spendSeries: source?.spendSeries,
+    period: source?.period,
+    coverage: source?.coverage,
+    latest: source?.latest,
+    latestAvailable: source?.latestAvailable,
+    yoy: source?.yoy,
+    recent12VsPrevious12: source?.recent12VsPrevious12,
+    momentum: source?.momentum,
+    collectedAt: source?.collectedAt,
+    status: source?.status,
+    reason: source?.reason,
+    collection: source?.collection,
+    source: source?.source,
+    quality: source?.quality
+  }];
+}
+
+function tourismDemandStrengthRegionForName(name = "") {
+  const source = tourismDemandStrengthHistorySource();
+  const rows = tourismDemandStrengthHistoryRegions(source);
+  if (!rows.length) return null;
+  const canonical = tourismRegionForLocation({ query: name });
+  if (canonical.region?.regionKey) {
+    const direct = rows.find((row) => row.regionKey === canonical.region.regionKey);
+    if (direct) return direct;
+  }
+  const target = compactSearchText(name).replace(/시$|군$|구$|권역$|권$/g, "");
+  if (!target) return null;
+  return rows.find((row) => {
+    const candidates = [row.sigungu, row.sido, row.regionKey, row.name]
+      .map((value) => compactSearchText(value).replace(/시$|군$|구$|권역$|권$/g, ""))
+      .filter(Boolean);
+    return candidates.some((value) => value === target || (Math.min(value.length, target.length) >= 3 && (value.includes(target) || target.includes(value))));
+  }) || null;
+}
+
+function tourismDemandStrengthPrimaryRegion() {
+  const rows = tourismDemandStrengthHistoryRegions();
+  if (!rows.length) return null;
+  const names = [
+    ...demandRegionRows().map(({ region }) => region.region || region.name || ""),
+    tourismVisitorHistoryPrimaryRegion()?.sigungu || "",
+    tourismVisitorPrimaryRegion()?.sigungu || "",
+    activeKeyword()
+  ].filter(Boolean);
+  for (const name of names) {
+    const region = tourismDemandStrengthRegionForName(name);
+    if (region) return region;
+  }
+  return rows[0] || null;
+}
+
+function tourismDemandStrengthSourceMeta(source = tourismDemandStrengthHistorySource(), region = tourismDemandStrengthPrimaryRegion()) {
+  const sourceMeta = source?.source && typeof source.source === "object" ? source.source : {};
+  const regionMeta = region?.source && typeof region.source === "object" ? region.source : {};
+  return {
+    ...sourceMeta,
+    ...regionMeta,
+    label: regionMeta.label || sourceMeta.label || "한국관광공사 지역별 관광 수요 강도",
+    referenceUrl: regionMeta.referenceUrl || sourceMeta.referenceUrl || "https://www.data.go.kr/data/15151868/openapi.do",
+    timeGrain: regionMeta.timeGrain || sourceMeta.timeGrain || "month",
+    regionGrain: regionMeta.regionGrain || sourceMeta.regionGrain || "sigungu"
+  };
+}
+
+function tourismDemandStrengthUnitLabel(kind = "stay", source = tourismDemandStrengthHistorySource(), region = tourismDemandStrengthPrimaryRegion()) {
+  const meta = tourismDemandStrengthSourceMeta(source, region);
+  const kindMeta = meta?.[kind] && typeof meta[kind] === "object" ? meta[kind] : {};
+  return String(
+    kindMeta.unitLabel
+      || meta?.units?.[kind]
+      || meta?.unitLabels?.[kind]
+      || meta.unitLabel
+      || meta.scaleLabel
+      || "지수"
+  );
+}
+
+function tourismDemandStrengthFirstNumber(values = []) {
+  for (const value of values) {
+    const number = optionalNumber(value);
+    if (Number.isFinite(number)) return number;
+  }
+  return NaN;
+}
+
+function tourismDemandStrengthPointStatus(entry = {}, kind = "stay", separateSeries = false) {
+  const nested = entry?.[kind] && typeof entry[kind] === "object" ? entry[kind] : {};
+  const rawStatus = separateSeries
+    ? (entry.status ?? nested.status ?? entry[`${kind}Status`])
+    : (entry[`${kind}Status`] ?? nested.status ?? entry.status);
+  const status = String(rawStatus || "").trim().toLowerCase();
+  if (["complete", "ok", "ready", "success"].includes(status)) return "complete";
+  if (["partial", "incomplete", "incomplete_data"].includes(status)) return "partial";
+  return "missing";
+}
+
+function tourismDemandStrengthPointValue(entry = {}, kind = "stay", separateSeries = false) {
+  const nested = entry?.[kind] && typeof entry[kind] === "object" ? entry[kind] : {};
+  return tourismDemandStrengthFirstNumber(separateSeries
+    ? [entry.value, entry.overall, entry.overallValue, entry[`${kind}Overall`], nested.value, nested.overall, nested.overallValue]
+    : [entry[`${kind}Overall`], nested.value, nested.overall, nested.overallValue]);
+}
+
+function tourismDemandStrengthSeries(region = tourismDemandStrengthPrimaryRegion(), kind = "stay", source = tourismDemandStrengthHistorySource()) {
+  const separateKey = `${kind}Series`;
+  const separateSeries = Array.isArray(region?.[separateKey]);
+  const rawSeries = separateSeries
+    ? region[separateKey]
+    : Array.isArray(region?.series)
+      ? region.series
+      : [];
+  const byMonth = new Map();
+  rawSeries.forEach((entry) => {
+    const yearMonth = tourismVisitorYearMonth(entry?.yearMonth || entry?.month || entry?.period || entry?.date);
+    if (!yearMonth) return;
+    const status = tourismDemandStrengthPointStatus(entry, kind, separateSeries);
+    const value = tourismDemandStrengthPointValue(entry, kind, separateSeries);
+    const complete = status === "complete" && Number.isFinite(value);
+    const normalized = {
+      ...entry,
+      yearMonth,
+      status: complete ? "complete" : status,
+      reason: entry?.[`${kind}Reason`] || entry?.[kind]?.reason || entry?.reason || (complete ? "" : "no_observation"),
+      value: complete ? value : null,
+      hasValue: complete
+    };
+    const previous = byMonth.get(yearMonth);
+    if (!previous || (!previous.hasValue && normalized.hasValue)) byMonth.set(yearMonth, normalized);
+  });
+
+  const period = region?.period || source?.period || {};
+  const periodStart = tourismVisitorYearMonth(period.startYearMonth);
+  const periodEnd = tourismVisitorYearMonth(period.endYearMonth || period.latestClosedYearMonth);
+  const rawIndexes = [...byMonth.keys()].map(tourismVisitorMonthIndex).filter(Number.isFinite);
+  let startIndex = tourismVisitorMonthIndex(periodStart);
+  let endIndex = tourismVisitorMonthIndex(periodEnd);
+  if (!Number.isFinite(startIndex) && rawIndexes.length) startIndex = Math.min(...rawIndexes);
+  if (!Number.isFinite(endIndex) && rawIndexes.length) endIndex = Math.max(...rawIndexes);
+  const requestedMonths = Math.max(1, Math.min(36, finiteNumber(
+    period.months ?? source?.monthsRequested ?? region?.coverage?.expectedMonths,
+    36
+  )));
+  if (Number.isFinite(endIndex) && !Number.isFinite(startIndex)) startIndex = endIndex - requestedMonths + 1;
+  if (Number.isFinite(startIndex) && !Number.isFinite(endIndex)) endIndex = startIndex + requestedMonths - 1;
+  if (!Number.isFinite(startIndex) || !Number.isFinite(endIndex)) return [];
+  startIndex = Math.max(startIndex, endIndex - 35);
+  const rows = [];
+  for (let index = startIndex; index <= endIndex; index += 1) {
+    const yearMonth = tourismVisitorMonthFromIndex(index);
+    rows.push(byMonth.get(yearMonth) || {
+      yearMonth,
+      status: "missing",
+      reason: "no_observation",
+      value: null,
+      hasValue: false
+    });
+  }
+  return rows.slice(-36);
+}
+
+function tourismDemandStrengthCoverage(region = tourismDemandStrengthPrimaryRegion(), kind = "stay", source = tourismDemandStrengthHistorySource()) {
+  const series = tourismDemandStrengthSeries(region, kind, source);
+  const rawCoverage = region?.coverage?.[kind]
+    || region?.[`${kind}Coverage`]
+    || source?.coverage?.[kind]
+    || {};
+  const expectedMonths = Math.max(0, finiteNumber(
+    rawCoverage.expectedMonths
+      ?? region?.coverage?.expectedMonths
+      ?? source?.coverage?.expectedMonths
+      ?? source?.period?.months
+      ?? series.length,
+    series.length
+  ));
+  const completeMonths = series.filter((entry) => entry.hasValue).length;
+  const partialMonths = series.filter((entry) => entry.status === "partial").length;
+  const missingMonths = Math.max(0, expectedMonths - completeMonths - partialMonths);
+  const rate = expectedMonths ? completeMonths / expectedMonths : NaN;
+  return { expectedMonths, completeMonths, partialMonths, missingMonths, rate };
+}
+
+function tourismDemandStrengthServerChange(region = {}, kind = "stay", type = "yoy") {
+  const container = type === "yoy"
+    ? region?.yoy
+    : (region?.recent12VsPrevious12 || region?.momentum);
+  const metric = container?.[kind] && typeof container[kind] === "object" ? container[kind] : {};
+  const status = String(metric.status || container?.status || "").toLowerCase();
+  const changeRate = tourismDemandStrengthFirstNumber([
+    metric.changeRate,
+    metric.rate,
+    metric.change?.changeRate,
+    metric.change?.rate,
+    Number.isFinite(optionalNumber(metric.changePercent)) ? optionalNumber(metric.changePercent) / 100 : NaN
+  ]);
+  return {
+    ready: ["ready", "complete", "ok"].includes(status) && Number.isFinite(changeRate),
+    changeRate,
+    comparableMonthPairs: Math.max(0, finiteNumber(metric.comparableMonthPairs, 0)),
+    currentYearMonth: tourismVisitorYearMonth(container?.currentYearMonth || metric.currentYearMonth),
+    previousYearMonth: tourismVisitorYearMonth(container?.previousYearMonth || metric.previousYearMonth)
+  };
+}
+
+function tourismDemandStrengthComparison(region = tourismDemandStrengthPrimaryRegion(), kind = "stay", source = tourismDemandStrengthHistorySource()) {
+  const series = tourismDemandStrengthSeries(region, kind, source);
+  const complete = series.filter((entry) => entry.hasValue);
+  const latest = complete[complete.length - 1] || null;
+  const byMonth = new Map(complete.map((entry) => [entry.yearMonth, entry]));
+  const latestIndex = tourismVisitorMonthIndex(latest?.yearMonth);
+  const yearAgo = Number.isFinite(latestIndex)
+    ? byMonth.get(tourismVisitorMonthFromIndex(latestIndex - 12)) || null
+    : null;
+  const calculatedYoy = latest && yearAgo && Number(yearAgo.value) !== 0
+    ? (Number(latest.value) - Number(yearAgo.value)) / Math.abs(Number(yearAgo.value))
+    : NaN;
+  const serverYoy = tourismDemandStrengthServerChange(region, kind, "yoy");
+  const serverYoyMatchesLatest = !serverYoy.currentYearMonth || serverYoy.currentYearMonth === latest?.yearMonth;
+  const yoyChangeRate = serverYoy.ready && serverYoyMatchesLatest ? serverYoy.changeRate : calculatedYoy;
+
+  const recentSeries = series.slice(-12);
+  const previousSeries = series.slice(-24, -12);
+  const comparablePairs = [];
+  for (let index = 0; index < Math.min(recentSeries.length, previousSeries.length); index += 1) {
+    if (recentSeries[index]?.hasValue && previousSeries[index]?.hasValue) {
+      comparablePairs.push({ current: recentSeries[index], previous: previousSeries[index] });
+    }
+  }
+  const recentAverage = comparablePairs.length
+    ? comparablePairs.reduce((sum, pair) => sum + Number(pair.current.value), 0) / comparablePairs.length
+    : NaN;
+  const previousAverage = comparablePairs.length
+    ? comparablePairs.reduce((sum, pair) => sum + Number(pair.previous.value), 0) / comparablePairs.length
+    : NaN;
+  const calculatedRecent12ChangeRate = Number.isFinite(recentAverage) && Number.isFinite(previousAverage) && previousAverage !== 0
+    ? (recentAverage - previousAverage) / Math.abs(previousAverage)
+    : NaN;
+  const serverMomentum = tourismDemandStrengthServerChange(region, kind, "momentum");
+  const recent12ChangeRate = serverMomentum.ready ? serverMomentum.changeRate : calculatedRecent12ChangeRate;
+  return {
+    series,
+    latest,
+    yearAgo,
+    yoyChangeRate,
+    recent12ChangeRate,
+    recentCompleteMonths: recentSeries.filter((entry) => entry.hasValue).length,
+    previousCompleteMonths: previousSeries.filter((entry) => entry.hasValue).length,
+    comparableMonthPairs: serverMomentum.ready ? serverMomentum.comparableMonthPairs : comparablePairs.length
+  };
+}
+
+function tourismDemandStrengthNumberLabel(value = NaN) {
+  const number = Number(value);
+  return Number.isFinite(number)
+    ? number.toLocaleString("ko-KR", { maximumFractionDigits: 2 })
+    : "관측 없음";
+}
+
+function tourismDemandStrengthCoverageLabel(coverage = {}) {
+  if (!coverage.expectedMonths) return "자료 충족률 산정 대기";
+  return `완전월 ${fmtNumber(coverage.completeMonths)}/${fmtNumber(coverage.expectedMonths)}개월 · ${Number.isFinite(coverage.rate) ? fmtRate(coverage.rate) : "산정 대기"}`;
+}
+
+function tourismDemandStrengthPeriodLabel(staySeries = [], spendSeries = [], source = tourismDemandStrengthHistorySource(), region = tourismDemandStrengthPrimaryRegion()) {
+  const period = region?.period || source?.period || {};
+  const combined = [...staySeries, ...spendSeries].map((entry) => tourismVisitorYearMonth(entry.yearMonth)).filter(Boolean).sort();
+  const start = tourismVisitorYearMonth(period.startYearMonth) || combined[0] || "";
+  const end = tourismVisitorYearMonth(period.endYearMonth) || combined[combined.length - 1] || "";
+  return start && end ? `${tourismVisitorMonthLabel(start)} ~ ${tourismVisitorMonthLabel(end)}` : "기간 확인 중";
+}
+
+function tourismDemandStrengthChart(series = [], kind = "stay", region = null, source = tourismDemandStrengthHistorySource()) {
+  const labels = kind === "stay"
+    ? { name: "관광 체류 강도", short: "체류" }
+    : { name: "관광 소비 강도", short: "소비" };
+  const unit = tourismDemandStrengthUnitLabel(kind, source, region);
+  const width = 920;
+  const height = 250;
+  const padLeft = 64;
+  const padRight = 24;
+  const padTop = 22;
+  const padBottom = 44;
+  const baseline = height - padBottom;
+  const plotHeight = baseline - padTop;
+  const numericValues = series.filter((entry) => entry.hasValue).map((entry) => Number(entry.value));
+  if (!numericValues.length) {
+    return `<div class="tourism-demand-strength-empty">해당 기간 ${escapeHtml(labels.name)} 관측 없음<br><small>부분수집·미관측 월은 0으로 표시하지 않습니다.</small></div>`;
+  }
+  const rawMin = Math.min(...numericValues);
+  const rawMax = Math.max(...numericValues);
+  const rawRange = rawMax - rawMin;
+  const padding = rawRange > 0 ? rawRange * .14 : Math.max(Math.abs(rawMax) * .08, 1);
+  const axisMin = rawMin >= 0 ? Math.max(0, rawMin - padding) : rawMin - padding;
+  const axisMax = rawMax + padding;
+  const axisRange = Math.max(1e-9, axisMax - axisMin);
+  const count = Math.max(1, series.length - 1);
+  const points = series.map((entry, index) => {
+    const x = padLeft + ((width - padLeft - padRight) * index) / count;
+    const y = entry.hasValue
+      ? baseline - ((Number(entry.value) - axisMin) / axisRange) * plotHeight
+      : null;
+    return { ...entry, index, x, y };
+  });
+  const segments = [];
+  let segment = [];
+  points.forEach((point) => {
+    if (point.hasValue) {
+      segment.push(point);
+      return;
+    }
+    if (segment.length) segments.push(segment);
+    segment = [];
+  });
+  if (segment.length) segments.push(segment);
+  const grid = [0, .25, .5, .75, 1].map((ratio) => {
+    const y = baseline - ratio * plotHeight;
+    const value = axisMin + axisRange * ratio;
+    return `
+      <g class="tourism-demand-strength-gridline">
+        <line x1="${padLeft}" y1="${y.toFixed(1)}" x2="${width - padRight}" y2="${y.toFixed(1)}"></line>
+        <text x="${padLeft - 10}" y="${(y + 4).toFixed(1)}">${escapeHtml(tourismDemandStrengthNumberLabel(value))}</text>
+      </g>
+    `;
+  }).join("");
+  const axisLabels = points.map((point, index) => {
+    const month = Number(String(point.yearMonth || "").slice(4, 6));
+    const show = index === 0 || index === points.length - 1 || month === 1 || month === 4 || month === 7 || month === 10;
+    if (!show) return "";
+    const label = month === 1 || index === 0
+      ? `${String(point.yearMonth || "").slice(2, 4)}.${String(month).padStart(2, "0")}`
+      : `${month}월`;
+    return `<text class="tourism-demand-strength-axis-label" x="${point.x.toFixed(1)}" y="${height - 13}" text-anchor="middle">${escapeHtml(label)}</text>`;
+  }).join("");
+  const titleId = `tourismDemandStrength${kind === "stay" ? "Stay" : "Spend"}Title`;
+  const descId = `tourismDemandStrength${kind === "stay" ? "Stay" : "Spend"}Description`;
+  const missingCount = points.filter((point) => !point.hasValue).length;
+  return `
+    <div class="tourism-demand-strength-chart-scroll">
+      <svg class="tourism-demand-strength-chart is-${kind}" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="${titleId} ${descId}">
+        <title id="${titleId}">${escapeHtml(`${region?.sigungu || "지역"} 월별 ${labels.name} 추이`)}</title>
+        <desc id="${descId}">실제 정상 관측점만 연결하며 부분수집 또는 미관측 ${fmtNumber(missingCount)}개월은 선이 끊어집니다. 단위는 ${escapeHtml(unit)}입니다.</desc>
+        <g>${grid}</g>
+        ${segments.map((rows) => {
+          const commands = rows.map((point, index) => `${index ? "L" : "M"}${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(" ");
+          return rows.length > 1 ? `<path class="tourism-demand-strength-line" d="${commands}"></path>` : "";
+        }).join("")}
+        <g>
+          ${points.filter((point) => point.hasValue).map((point) => `
+            <circle class="tourism-demand-strength-point" cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="4.2">
+              <title>${escapeHtml(`${tourismVisitorMonthLabel(point.yearMonth)} · ${labels.name} ${tourismDemandStrengthNumberLabel(point.value)} ${unit} · 실제 관측`)}</title>
+            </circle>
+          `).join("")}
+        </g>
+        <text class="tourism-demand-strength-unit" x="${padLeft}" y="13">${escapeHtml(unit)}</text>
+        ${axisLabels}
+      </svg>
+    </div>
+  `;
+}
+
+function tourismDemandStrengthKpiPair(stayText = "", spendText = "") {
+  return `<strong class="tourism-demand-strength-kpi-pair"><b><i class="is-stay"></i>체류 ${escapeHtml(stayText)}</b><b><i class="is-spend"></i>소비 ${escapeHtml(spendText)}</b></strong>`;
+}
+
+function tourismDemandStrengthSourceStatusLabel(source = tourismDemandStrengthHistorySource(), region = tourismDemandStrengthPrimaryRegion(), stay = {}, spend = {}) {
+  const observedCount = [stay, spend]
+    .flatMap((comparison) => Array.isArray(comparison?.series) ? comparison.series : [])
+    .filter((entry) => entry.hasValue).length;
+  if (observedCount) return (region?.status === "ok" || source?.status === "ok") ? "실제 지수 관측" : "자료 일부 확인";
+  const reason = String(region?.reason || region?.quality?.reason || source?.reason || source?.quality?.reason || "").trim().toLowerCase();
+  if ((reason.includes("service_key") || reason.includes("adapter") || reason.includes("endpoint")) && !reason.includes("ready")) return "연동 대기";
+  if (reason.includes("cache") && reason.includes("missing")) return "해당 기간 관측 없음";
+  if ([
+    "missing_service_key",
+    "missing_endpoint",
+    "adapter_unavailable",
+    "adapter_not_ready",
+    "disabled"
+  ].includes(reason)) return "연동 대기";
+  if ([
+    "no_complete_history_observation",
+    "monthly_cache_missing",
+    "cache_missing",
+    "no_observation",
+    "empty_verified"
+  ].includes(reason)) return "해당 기간 관측 없음";
+  if (["requested_region_not_matched", "region_code_verify_required"].includes(reason)) return "지역 확인 필요";
+  if (["gateway_error", "api_error", "request_failed", "timeout", "history_collection_failed"].includes(reason)) return "수집 확인 필요";
+  return source ? "자료 확인 대기" : "연동 대기";
+}
+
+function tourismDemandStrengthCollectionLabel(collection = {}) {
+  const labels = {
+    cache_only: "캐시 전용 조회 · 외부 호출 없음",
+    backfill_missing: "미수집 월 보강",
+    force_refresh: "강제 재수집",
+    collect: "신규 수집"
+  };
+  return labels[collection?.mode] || "조회 방식 확인 중";
+}
+
+function tourismDemandStrengthCollectionCount(value) {
+  const number = optionalNumber(value);
+  return Number.isFinite(number) ? `${fmtNumber(number)}개월` : "기록 없음";
+}
+
+function renderTourismDemandStrengthHistory() {
+  const source = tourismDemandStrengthHistorySource();
+  const region = tourismDemandStrengthPrimaryRegion();
+  const meta = tourismDemandStrengthSourceMeta(source, region);
+  const stay = tourismDemandStrengthComparison(region, "stay", source);
+  const spend = tourismDemandStrengthComparison(region, "spend", source);
+  const stayCoverage = tourismDemandStrengthCoverage(region, "stay", source);
+  const spendCoverage = tourismDemandStrengthCoverage(region, "spend", source);
+  const stayCoverageText = tourismDemandStrengthCoverageLabel(stayCoverage);
+  const spendCoverageText = tourismDemandStrengthCoverageLabel(spendCoverage);
+  const stayUnit = tourismDemandStrengthUnitLabel("stay", source, region);
+  const spendUnit = tourismDemandStrengthUnitLabel("spend", source, region);
+  const period = tourismDemandStrengthPeriodLabel(stay.series, spend.series, source, region);
+  const refresh = state.tourismDemandStrengthRefresh || {};
+  const title = `${region?.sigungu || "선택 지역"} 최근 3개년 관광 수요 강도`;
+  const refreshButton = isAdminRole()
+    ? `<button class="tourism-demand-strength-refresh" type="button" data-tourism-demand-strength-refresh ${refresh.loading ? "disabled" : ""}>${refresh.loading ? "최근 3개년 갱신 중" : "최근 3개년 갱신"}</button>`
+    : "";
+  const stayLatestText = stay.latest ? tourismDemandStrengthNumberLabel(stay.latest.value) : "관측 없음";
+  const spendLatestText = spend.latest ? tourismDemandStrengthNumberLabel(spend.latest.value) : "관측 없음";
+  const stayYoyText = tourismVisitorHistoryRateLabel(stay.yoyChangeRate);
+  const spendYoyText = tourismVisitorHistoryRateLabel(spend.yoyChangeRate);
+  const stayMomentumText = tourismVisitorHistoryRateLabel(stay.recent12ChangeRate);
+  const spendMomentumText = tourismVisitorHistoryRateLabel(spend.recent12ChangeRate);
+  const collectedAt = region?.collectedAt || source?.collectedAt || "";
+  const sourceStatus = tourismDemandStrengthSourceStatusLabel(source, region, stay, spend);
+  const collection = region?.collection
+    || region?.source?.collection
+    || source?.collection
+    || source?.source?.collection
+    || {};
+  return `
+    <section class="tourism-demand-strength-card" data-ui-surface="card">
+      <div class="tourism-demand-strength-head">
+        <div>
+          <p class="eyebrow">한국관광공사 실제 지수</p>
+          <h3>${escapeHtml(title)}</h3>
+          <p>${escapeHtml(`${period} · 월별 체류·소비 강도 지수 · 체류 ${stayCoverageText} · 소비 ${spendCoverageText}`)}</p>
+        </div>
+        <div class="tourism-demand-strength-actions">
+          <span>${escapeHtml(sourceStatus)} · 방문자수와 별도</span>
+          ${refreshButton}
+        </div>
+      </div>
+      ${refresh.message ? `<p class="tourism-demand-strength-refresh-status ${escapeHtml(refresh.tone || "neutral")}" role="status" aria-live="polite">${escapeHtml(refresh.message)}</p>` : ""}
+      <div class="tourism-demand-strength-kpis" aria-label="관광 수요 강도 핵심 지표">
+        <article data-ui-surface="metric">
+          <span>관광 체류 강도 최신값</span>
+          <strong>${escapeHtml(stayLatestText)}</strong>
+          <small>${escapeHtml(stay.latest ? `${tourismVisitorMonthLabel(stay.latest.yearMonth)} · ${stayUnit}` : "해당 기간 관측 없음")}</small>
+        </article>
+        <article data-ui-surface="metric">
+          <span>관광 소비 강도 최신값</span>
+          <strong>${escapeHtml(spendLatestText)}</strong>
+          <small>${escapeHtml(spend.latest ? `${tourismVisitorMonthLabel(spend.latest.yearMonth)} · ${spendUnit}` : "해당 기간 관측 없음")}</small>
+        </article>
+        <article data-ui-surface="metric">
+          <span>전년동월 변화</span>
+          ${tourismDemandStrengthKpiPair(stayYoyText, spendYoyText)}
+          <small>${escapeHtml(stay.yearAgo || spend.yearAgo ? "같은 기준월 실제 관측값 비교" : "동일 월 관측이 모두 있어야 계산")}</small>
+        </article>
+        <article data-ui-surface="metric">
+          <span>최근 12개월 흐름</span>
+          ${tourismDemandStrengthKpiPair(stayMomentumText, spendMomentumText)}
+          <small>${escapeHtml(`전년 같은 월 비교 · 체류 ${stay.comparableMonthPairs}쌍 · 소비 ${spend.comparableMonthPairs}쌍`)}</small>
+        </article>
+        <article data-ui-surface="metric">
+          <span>자료 충족률</span>
+          ${tourismDemandStrengthKpiPair(
+            stayCoverage.expectedMonths ? `${stayCoverage.completeMonths}/${stayCoverage.expectedMonths}` : "산정 대기",
+            spendCoverage.expectedMonths ? `${spendCoverage.completeMonths}/${spendCoverage.expectedMonths}` : "산정 대기"
+          )}
+          <small>부분·미수집 월은 0으로 계산하지 않음</small>
+        </article>
+      </div>
+      <div class="tourism-demand-strength-chart-grid">
+        <article class="tourism-demand-strength-chart-panel is-stay" data-ui-surface="soft">
+          <div class="tourism-demand-strength-chart-head"><div><span>체류 강도</span><strong>머무름의 강도</strong></div><small>${escapeHtml(stayCoverageText)}</small></div>
+          ${tourismDemandStrengthChart(stay.series, "stay", region, source)}
+        </article>
+        <article class="tourism-demand-strength-chart-panel is-spend" data-ui-surface="soft">
+          <div class="tourism-demand-strength-chart-head"><div><span>소비 강도</span><strong>관광 소비의 강도</strong></div><small>${escapeHtml(spendCoverageText)}</small></div>
+          ${tourismDemandStrengthChart(spend.series, "spend", region, source)}
+        </article>
+      </div>
+      <div class="tourism-demand-strength-legend" aria-label="관광 수요 강도 그래프 범례">
+        <span><i class="is-stay"></i> 체류 실제 관측</span>
+        <span><i class="is-spend"></i> 소비 실제 관측</span>
+        <span><i class="is-gap"></i> 부분수집·미관측은 해당 계열 선 단절</span>
+      </div>
+      <details class="tourism-demand-strength-basis">
+        <summary><strong>자료 기준·출처 보기</strong><span>${escapeHtml(`${period} · ${sourceStatus}`)}</span></summary>
+        <div>
+          <p>방문자수는 명/일 규모를 보여주지만, 관광 수요 강도는 이동통신·신용카드·내비게이션 기반 체류와 소비의 활성화 지수입니다. 두 자료는 단위가 다르며 합산하지 않습니다.</p>
+          <dl>
+            <div><dt>관측 기간</dt><dd>${escapeHtml(period)}</dd></div>
+            <div><dt>수집 시각</dt><dd>${escapeHtml(collectedAt ? compactDateTime(collectedAt) : "수집 이력 없음")}</dd></div>
+            <div><dt>체류 충족률</dt><dd>${escapeHtml(`${stayCoverageText}${stayCoverage.partialMonths ? ` · 부분 ${stayCoverage.partialMonths}개월` : ""}${stayCoverage.missingMonths ? ` · 미수집 ${stayCoverage.missingMonths}개월` : ""}`)}</dd></div>
+            <div><dt>소비 충족률</dt><dd>${escapeHtml(`${spendCoverageText}${spendCoverage.partialMonths ? ` · 부분 ${spendCoverage.partialMonths}개월` : ""}${spendCoverage.missingMonths ? ` · 미수집 ${spendCoverage.missingMonths}개월` : ""}`)}</dd></div>
+            <div><dt>체류 API</dt><dd>지역별 관광 체류 강도 · areaTarSjrnDsList</dd></div>
+            <div><dt>소비 API</dt><dd>지역별 관광 소비 강도 · areaTarExpDsList</dd></div>
+            <div><dt>조회 방식</dt><dd>${escapeHtml(tourismDemandStrengthCollectionLabel(collection))}</dd></div>
+            <div><dt>캐시·외부 호출</dt><dd>${escapeHtml(`캐시 ${tourismDemandStrengthCollectionCount(collection.cacheHitMonths)} · 외부 요청 ${tourismDemandStrengthCollectionCount(collection.networkAttemptedMonths)}`)}</dd></div>
+            <div><dt>결측 처리</dt><dd>계열별 정상 관측만 표시하고 부분·미관측은 null과 선 단절로 유지</dd></div>
+            <div><dt>자료 성격</dt><dd>실제 월별 지수 · 예측점수 및 방문자 인원 아님</dd></div>
+          </dl>
+          <a class="tourism-demand-strength-source-link" href="${escapeHtml(meta.referenceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(meta.label)} 공식 출처 열기</a>
         </div>
       </details>
     </section>
@@ -28222,6 +28768,8 @@ function renderDemand() {
 
     ${renderTourismVisitorHistory()}
 
+    ${renderTourismDemandStrengthHistory()}
+
     <section class="demand-layout">
       ${demandTrendChart()}
       <article class="demand-insight-card" data-surface="dark">
@@ -34661,6 +35209,87 @@ async function refreshTourismVisitorHistory() {
   }
 }
 
+function tourismDemandStrengthRefreshSelector() {
+  const primary = tourismDemandStrengthPrimaryRegion();
+  if (primary?.regionKey) return { regionKey: primary.regionKey, label: primary.sigungu || primary.regionKey };
+  if (primary?.sigungu) return { regionName: primary.sigungu, label: primary.sigungu };
+  const candidates = [
+    ...demandRegionRows().map(({ region }) => region.region || region.name || ""),
+    tourismVisitorHistoryPrimaryRegion()?.sigungu || "",
+    tourismVisitorPrimaryRegion()?.sigungu || ""
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+  let fallbackName = "";
+  for (const name of candidates) {
+    const match = tourismRegionForLocation({ query: name });
+    if (match?.region?.regionKey) {
+      return { regionKey: match.region.regionKey, label: match.region.sigungu || name };
+    }
+    if (!fallbackName) fallbackName = name;
+  }
+  return fallbackName ? { regionName: fallbackName, label: fallbackName } : null;
+}
+
+async function refreshTourismDemandStrengthHistory() {
+  if (!isAdminRole() || state.tourismDemandStrengthRefresh?.loading) return;
+  const selector = tourismDemandStrengthRefreshSelector();
+  if (!selector) {
+    state.tourismDemandStrengthRefresh = {
+      loading: false,
+      tone: "error",
+      message: "갱신할 시군구를 먼저 확인해 주세요."
+    };
+    renderDemand();
+    return;
+  }
+  state.tourismDemandStrengthRefresh = {
+    loading: true,
+    tone: "neutral",
+    message: `${selector.label} 체류·소비 강도 최근 3개년을 확인하고 있습니다.`
+  };
+  renderDemand();
+  setStatus("관광 수요 강도 최근 3개년 갱신 중");
+  try {
+    const result = await fetchJson("/api/tourism-data/demand-strength/history", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...(selector.regionKey ? { regionKey: selector.regionKey } : { regionName: selector.regionName }),
+        months: 36,
+        force: false,
+        concurrency: 1
+      })
+    });
+    const returnedHistory = result?.tourismDemandStrengthHistory
+      || result?.history
+      || result?.snapshot?.tourismDemandStrengthHistory
+      || (Array.isArray(result?.series) || Array.isArray(result?.regions) ? result : null);
+    if (!returnedHistory) throw new Error("갱신된 관광 수요 강도 이력을 확인하지 못했습니다.");
+    const activeRunId = state.activeRunId;
+    if (activeRunId) await loadRun(activeRunId);
+    state.data = { ...(state.data || {}), tourismDemandStrengthHistory: returnedHistory };
+    const region = tourismDemandStrengthPrimaryRegion();
+    const stayCoverage = tourismDemandStrengthCoverage(region, "stay");
+    const spendCoverage = tourismDemandStrengthCoverage(region, "spend");
+    state.tourismDemandStrengthRefresh = {
+      loading: false,
+      tone: "success",
+      message: stayCoverage.expectedMonths || spendCoverage.expectedMonths
+        ? `최근 3개년 갱신 완료 · 체류 ${fmtNumber(stayCoverage.completeMonths)}/${fmtNumber(stayCoverage.expectedMonths)}개월 · 소비 ${fmtNumber(spendCoverage.completeMonths)}/${fmtNumber(spendCoverage.expectedMonths)}개월`
+        : "최근 3개년 갱신 요청을 완료했습니다."
+    };
+    renderDemand();
+    setStatus("관광 수요 강도 최근 3개년 갱신 완료");
+  } catch (error) {
+    state.tourismDemandStrengthRefresh = {
+      loading: false,
+      tone: "error",
+      message: `최근 3개년 갱신 실패 · ${error.message}`
+    };
+    renderDemand();
+    setStatus("관광 수요 강도 최근 3개년 갱신 실패");
+  }
+}
+
 async function loadRun(runId) {
   if (!runId) return;
   const requestSequence = ++loadRunRequestSequence;
@@ -35314,6 +35943,11 @@ function bindEvents() {
     });
   }, true);
   document.addEventListener("click", (event) => {
+    const demandStrengthRefresh = event.target.closest("[data-tourism-demand-strength-refresh]");
+    if (demandStrengthRefresh) {
+      refreshTourismDemandStrengthHistory();
+      return;
+    }
     const visitorHistoryRefresh = event.target.closest("[data-tourism-visitor-history-refresh]");
     if (visitorHistoryRefresh) {
       refreshTourismVisitorHistory();

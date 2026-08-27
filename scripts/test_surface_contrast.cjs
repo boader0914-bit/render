@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260827-visitor-history-v80";
-const expectedAssetVersion = "datalab-20260827-visitor-history-v62";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260827-demand-strength-v81";
+const expectedAssetVersion = "datalab-20260827-demand-strength-v63";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -370,7 +370,7 @@ const assetVersionAssignments = [...server.matchAll(
 assert(
   cacheVersionAssignment?.[1] === expectedCacheVersion
     && /const APP_SHELL = \[[\s\S]*?"\/styles\.css"[\s\S]*?"\/admin-theme\.css"[\s\S]*?"\/app\.js"[\s\S]*?\];/.test(serviceWorker),
-  "service worker CACHE_VERSION assignment and app shell must match the broad-lodging release exactly",
+  "service worker CACHE_VERSION assignment and app shell must match the demand-strength release exactly",
   failures
 );
 
@@ -409,6 +409,30 @@ assert(
     && styles.includes(".tourism-visitor-history-point")
     && /grid-template-columns:\s*minmax\(130px, 1\.15fr\) \.72fr \.9fr \.7fr \.9fr \.62fr;/.test(styles),
   "regional visitor demand evidence and history chart must remain readable in cards and the comparison table",
+  failures
+);
+
+assert(
+  app.includes("function renderTourismDemandStrengthHistory()")
+    && app.includes("function tourismDemandStrengthChart(series = [], kind = \"stay\"")
+    && app.includes("data-tourism-demand-strength-refresh")
+    && app.includes("부분수집·미관측 월은 0으로 표시하지 않습니다")
+    && app.includes("지역 관광 기초지수")
+    && server.includes("tourismCollector.collectDemandStrengthHistory({")
+    && server.includes('reqUrl.pathname === "/api/tourism-data/demand-strength/history"')
+    && server.includes("tourismDemandStrengthHistory,"),
+  "tourism demand strength must remain a separate cache-backed stay and spend history contract",
+  failures
+);
+
+assert(
+  styles.includes(".tourism-demand-strength-card")
+    && styles.includes(".tourism-demand-strength-chart-grid")
+    && styles.includes(".tourism-demand-strength-line")
+    && styles.includes(".tourism-demand-strength-point")
+    && styles.includes('html[data-theme-resolved="dark"] .tourism-demand-strength-card')
+    && styles.includes("@media (max-width: 600px)"),
+  "tourism demand strength cards and charts must remain readable across themes and mobile layouts",
   failures
 );
 

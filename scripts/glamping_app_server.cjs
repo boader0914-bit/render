@@ -98,7 +98,8 @@ const RATE_LIMIT_POLICIES = {
   b2bMyLodgeCollect: { limit: 10, windowMs: 10 * 60 * 1000 },
   b2bInterestLodgeSave: { limit: 60, windowMs: 10 * 60 * 1000 },
   adminCrawl: { limit: 20, windowMs: 10 * 60 * 1000 },
-  adminTourism: { limit: 30, windowMs: 10 * 60 * 1000 }
+  adminTourism: { limit: 30, windowMs: 10 * 60 * 1000 },
+  adminTourismDemandStrength: { limit: 3, windowMs: 60 * 60 * 1000 }
 };
 const tourismCollector = createTourismCollector({
   rootDir: ROOT,
@@ -106,6 +107,7 @@ const tourismCollector = createTourismCollector({
   dataDir: DATA_DIR,
   tourismDataDir: TOURISM_DATA_DIR
 });
+let activeTourismDemandStrengthHistoryPromise = null;
 let activeCrawlPromise = null;
 let activeCrawlStartedAt = null;
 let activeCrawlEstimate = null;
@@ -5385,6 +5387,7 @@ async function placeRankComparisonForRun(data = {}) {
       skipCompanyMaster: true,
       skipHistory: true,
       skipTourismVisitors: true,
+      skipTourismDemandStrengthHistory: true,
       applyCompanyMaster: false,
       includeRankComparison: false
     });
@@ -13927,7 +13930,8 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
       skipCompanyMaster: true,
       skipHistory: true,
       skipTraffic: true,
-      skipTourismVisitors: true
+      skipTourismVisitors: true,
+      skipTourismDemandStrengthHistory: true
     }).catch(() => null);
     if (!data) continue;
     const item = (data.availability?.items || []).find((candidate) => companyProductAvailabilityMatch(company, candidate));
@@ -14078,7 +14082,11 @@ async function backfillCompanyMasterFromRuns(payload = {}) {
 
   for (const run of runs) {
     try {
-      const data = await loadRun(run.id, { skipHistory: true, skipTourismVisitors: true });
+      const data = await loadRun(run.id, {
+        skipHistory: true,
+        skipTourismVisitors: true,
+        skipTourismDemandStrengthHistory: true
+      });
       const currentRunCompanies = Number(data?.companyMaster?.currentRunCompanies || 0);
       touchedCompanies += currentRunCompanies;
       processed.push({
@@ -14212,7 +14220,11 @@ async function readHistoryObservations() {
 async function appendHistoryForRun(runId) {
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return { appended: 0, reason: "run_not_found" };
-  const data = await loadRun(runId, { skipHistory: true, skipTourismVisitors: true });
+  const data = await loadRun(runId, {
+    skipHistory: true,
+    skipTourismVisitors: true,
+    skipTourismDemandStrengthHistory: true
+  });
   if (!data) return { appended: 0, reason: "run_not_found" };
   const collectedAt = data.run?.collectedAt || "";
   const dbRoute = runCollectionDbRoute(data?.run || {});
@@ -15437,6 +15449,56 @@ function unavailableTourismVisitorHistory(reason, status = "unavailable") {
   };
 }
 
+function unavailableTourismDemandStrengthHistory(reason, status = "unavailable") {
+  return {
+    ok: false,
+    status,
+    reason,
+    schemaVersion: 1,
+    adapter: "area-tar-dem-ds-v1",
+    collectedAt: "",
+    period: null,
+    region: null,
+    series: [],
+    latest: null,
+    latestAvailable: null,
+    coverage: {
+      expectedMonths: 36,
+      completeMonths: 0,
+      partialMonths: 0,
+      missingMonths: 36,
+      coverageRate: 0
+    },
+    collection: {
+      mode: "cache_only",
+      concurrency: 1,
+      requestGrain: "sigungu",
+      operationsPerMonth: 2,
+      requestedMonths: 36,
+      cacheHitMonths: 0,
+      missingCacheMonths: 36,
+      networkAttemptedMonths: 0,
+      networkSucceededMonths: 0,
+      networkFailedMonths: 0,
+      operationCallsAttempted: 0,
+      maximumOperationCalls: 72
+    },
+    source: {
+      key: "demandStrength",
+      label: "한국관광공사 지역별 관광 수요 강도",
+      referenceUrl: "https://www.data.go.kr/data/15151868/openapi.do",
+      timeGrain: "month",
+      regionGrain: "sigungu"
+    },
+    quality: {
+      missingIsNotZero: true,
+      scoreApplied: false,
+      isForecast: false,
+      coverageRateUnit: "ratio_0_to_1"
+    }
+  };
+}
+
 async function loadRun(runId, options = {}) {
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return null;
@@ -15529,6 +15591,30 @@ async function loadRun(runId, options = {}) {
       }).catch(() => unavailableTourismVisitorHistory("visitor_history_cache_read_failed", "error"));
     }
   }
+  let tourismDemandStrengthHistory = null;
+  if (!options.skipTourismDemandStrengthHistory) {
+    if (!tourismRegionNames.length) {
+      tourismDemandStrengthHistory = unavailableTourismDemandStrengthHistory(
+        "demand_strength_history_region_unavailable",
+        "region_not_matched"
+      );
+    } else if (typeof tourismCollector.collectDemandStrengthHistory !== "function") {
+      tourismDemandStrengthHistory = unavailableTourismDemandStrengthHistory(
+        "demand_strength_history_adapter_unavailable"
+      );
+    } else {
+      tourismDemandStrengthHistory = await tourismCollector.collectDemandStrengthHistory({
+        regionNames: tourismRegionNames,
+        months: 36,
+        collectMissing: false,
+        refresh: false,
+        force: false
+      }).catch(() => unavailableTourismDemandStrengthHistory(
+        "demand_strength_history_cache_read_failed",
+        "error"
+      ));
+    }
+  }
   const stats = summarizeStats(regions);
   if (datalabTrend) stats.datalabTrend = datalabTrend;
   const availability = summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows], dirPath);
@@ -15601,6 +15687,7 @@ async function loadRun(runId, options = {}) {
     datalabTrend,
     tourismVisitors,
     tourismVisitorHistory,
+    tourismDemandStrengthHistory,
     demandStructure,
     regions,
     ranking,
@@ -16147,9 +16234,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=datalab-20260827-visitor-history-v62"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=datalab-20260827-visitor-history-v62"')
-      .replace('src="/app.js"', 'src="/app.js?v=datalab-20260827-visitor-history-v62"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=datalab-20260827-demand-strength-v63"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=datalab-20260827-demand-strength-v63"')
+      .replace('src="/app.js"', 'src="/app.js?v=datalab-20260827-demand-strength-v63"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -16559,6 +16646,88 @@ async function route(req, res) {
         force: payload.force === true,
         concurrency
       }));
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/tourism-data/demand-strength/history") {
+      if (!requireAdminSession(session, req, res)) return;
+      assertRequestRateLimit(
+        req,
+        "adminTourismDemandStrength",
+        RATE_LIMIT_POLICIES.adminTourismDemandStrength,
+        session.username || ""
+      );
+      if (typeof tourismCollector.collectDemandStrengthHistory !== "function") {
+        return send(res, 503, { error: "지역별 관광 수요 강도 이력 수집기가 준비되지 않았습니다." });
+      }
+      if (activeTourismDemandStrengthHistoryPromise) {
+        return send(res, 409, {
+          error: "지역별 관광 수요 강도 이력을 이미 갱신하고 있습니다.",
+          status: "busy"
+        });
+      }
+      const payload = await parseJsonBody(req);
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        return send(res, 400, { error: "요청 본문은 JSON 객체여야 합니다." });
+      }
+      const forbiddenFields = ["serviceKey", "apiKey", "endpoint", "url", "params", "extraParams"];
+      if (forbiddenFields.some((key) => Object.prototype.hasOwnProperty.call(payload, key))) {
+        return send(res, 400, { error: "API 주소나 인증키는 요청 본문에서 지정할 수 없습니다." });
+      }
+      const cleanSelectorList = (...values) => Array.from(new Set(
+        values
+          .flatMap((value) => (Array.isArray(value) ? value : value ? [value] : []))
+          .map((value) => String(value || "").trim().slice(0, 120))
+          .filter(Boolean)
+      ));
+      const regionNames = cleanSelectorList(payload.regionName, payload.regionNames, payload.regions);
+      const regionKeys = cleanSelectorList(payload.regionKey, payload.regionKeys);
+      if (regionNames.length + regionKeys.length !== 1) {
+        return send(res, 400, { error: "한 번에 한 개의 지역명 또는 지역키만 지정할 수 있습니다." });
+      }
+      const months = payload.months === undefined || payload.months === null || payload.months === ""
+        ? 36
+        : Number(payload.months);
+      if (!Number.isInteger(months) || months < 1 || months > 36) {
+        return send(res, 400, { error: "수집 기간은 1개월부터 36개월까지 지정할 수 있습니다." });
+      }
+      const concurrency = payload.concurrency === undefined || payload.concurrency === null || payload.concurrency === ""
+        ? 1
+        : Number(payload.concurrency);
+      if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 2) {
+        return send(res, 400, { error: "동시 수집 수는 1 또는 2만 지정할 수 있습니다." });
+      }
+      const endYearMonth = String(payload.endYearMonth || "").trim();
+      if (endYearMonth && !/^\d{4}(?:0[1-9]|1[0-2])$/.test(endYearMonth)) {
+        return send(res, 400, { error: "마지막 기준월은 YYYYMM 형식으로 입력해야 합니다." });
+      }
+      if (activeTourismDemandStrengthHistoryPromise) {
+        return send(res, 409, {
+          error: "지역별 관광 수요 강도 이력을 이미 갱신하고 있습니다.",
+          status: "busy"
+        });
+      }
+      const collectionPromise = Promise.resolve(tourismCollector.collectDemandStrengthHistory({
+        ...(regionNames.length ? { regionNames } : { regionKeys }),
+        months,
+        ...(endYearMonth ? { endYearMonth } : {}),
+        collectMissing: true,
+        refresh: true,
+        force: payload.force === true,
+        concurrency
+      }));
+      activeTourismDemandStrengthHistoryPromise = collectionPromise;
+      try {
+        return send(res, 200, await collectionPromise);
+      } catch {
+        return send(res, 502, {
+          error: "지역별 관광 수요 강도 이력 갱신에 실패했습니다.",
+          status: "error"
+        });
+      } finally {
+        if (activeTourismDemandStrengthHistoryPromise === collectionPromise) {
+          activeTourismDemandStrengthHistoryPromise = null;
+        }
+      }
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/tourism-data/collect") {

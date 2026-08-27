@@ -16,6 +16,18 @@ const DEFAULT_SOURCE_DEFS = [
     defaultPeriodParam: ""
   },
   {
+    key: "demandStrength",
+    label: "tourism demand strength",
+    envPrefix: "KTO_TOURISM_DEMAND_STRENGTH",
+    serviceKeyEnv: "DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY",
+    referenceUrl: "https://www.data.go.kr/data/15151868/openapi.do",
+    defaultEndpoint: "https://apis.data.go.kr/B551011/AreaTarDemDsService",
+    adapter: "area-tar-dem-ds-v1",
+    unit: "sigungu",
+    defaultRegionParam: "signguCd",
+    defaultPeriodParam: "baseYm"
+  },
+  {
     key: "resourceDemand",
     label: "tourism resource demand",
     envPrefix: "KTO_TOURISM_RESOURCE_DEMAND",
@@ -54,6 +66,48 @@ const VISITOR_OUTLOOK_SCORE_MINIMUMS = Object.freeze({
   minimumComparableMonthPairs: 10,
   requireLatestComplete: true,
   requirePreviousYearSameMonthComplete: true
+});
+const DEMAND_STRENGTH_ADAPTER_VERSION = "area-tar-dem-ds-v1";
+const DEMAND_STRENGTH_SUCCESS_CODES = new Set(["0000", "00"]);
+const DEMAND_STRENGTH_PAGE_SIZE = 100;
+const DEMAND_STRENGTH_MAX_PAGES = 10;
+const DEMAND_STRENGTH_HISTORY_DEFAULT_MONTHS = 36;
+const DEMAND_STRENGTH_HISTORY_MAX_MONTHS = 36;
+const DEMAND_STRENGTH_HISTORY_DEFAULT_CONCURRENCY = 1;
+const DEMAND_STRENGTH_HISTORY_MAX_CONCURRENCY = 2;
+const DEMAND_STRENGTH_OPERATIONS = Object.freeze({
+  stay: Object.freeze({
+    key: "stay",
+    operation: "areaTarSjrnDsList",
+    label: "관광 체류 강도",
+    codeField: "tarSjrnDsIxCd",
+    nameField: "tarSjrnDsIxNm",
+    valueField: "tarSjrnDsIxVal",
+    overallCode: "21",
+    expectedMetrics: Object.freeze({
+      "21": "관광 체류 강도 전체",
+      "2101": "타권역 방문자 비중",
+      "2102": "숙박 비중",
+      "2103": "1박 방문자수",
+      "2104": "2박 방문자수",
+      "2105": "3박 방문자수"
+    })
+  }),
+  spend: Object.freeze({
+    key: "spend",
+    operation: "areaTarExpDsList",
+    label: "관광 소비 강도",
+    codeField: "tarExpDsIxCd",
+    nameField: "tarExpDsIxNm",
+    valueField: "tarExpDsIxVal",
+    overallCode: "22",
+    expectedMetrics: Object.freeze({
+      "22": "관광 소비 강도 전체",
+      "2201": "외지인 소비액",
+      "2202": "전체 대비 외지인 소비액 비중",
+      "2203": "방문량 대비 방문 소비액"
+    })
+  })
 });
 
 function compactText(value = "") {
@@ -1392,6 +1446,922 @@ function createCollector(options = {}) {
     };
   }
 
+  function demandStrengthSourceDef() {
+    return DEFAULT_SOURCE_DEFS.find((source) => source.key === "demandStrength");
+  }
+
+  function demandStrengthRegion(region = {}, regionMap = {}) {
+    const province = regionMap.provinceAliases?.[region.sidoKey] || {};
+    return {
+      ...region,
+      ktoSidoCd: String(province.ktoSidoCd || ""),
+      sidoAliases: Array.isArray(province.aliases) ? province.aliases : []
+    };
+  }
+
+  function demandStrengthEndpointStatus(config = {}, serviceKey = "") {
+    if (!config.enabled) return "disabled";
+    if (!serviceKey) return "missing_service_key";
+    if (!config.endpoint) return "missing_endpoint";
+    try {
+      const endpoint = new URL(config.endpoint);
+      const normalizedPath = endpoint.pathname.replace(/\/+$/, "");
+      if (endpoint.protocol !== "https:" || endpoint.hostname !== "apis.data.go.kr") return "untrusted_endpoint";
+      if (normalizedPath !== "/B551011/AreaTarDemDsService") return "invalid_endpoint";
+      if (endpoint.search || endpoint.hash) return "invalid_endpoint";
+    } catch {
+      return "invalid_endpoint";
+    }
+    if (typeof fetchImpl !== "function") return "fetch_unavailable";
+    return "ready";
+  }
+
+  function demandStrengthCachePath(regionKey = "", yearMonth = "") {
+    const regionMapVersion = safeName(options.regionMapVersion || "region-map");
+    return path.join(
+      cacheDir,
+      `demand-strength__${DEMAND_STRENGTH_ADAPTER_VERSION}__${regionMapVersion}__${safeName(regionKey)}__${normalizeYearMonth(yearMonth)}.json`
+    );
+  }
+
+  async function readDemandStrengthCache(regionKey = "", yearMonth = "") {
+    const filePath = demandStrengthCachePath(regionKey, yearMonth);
+    try {
+      const parsed = JSON.parse((await fsp.readFile(filePath, "utf8")).replace(/^\uFEFF/, ""));
+      return { hit: true, filePath, data: parsed };
+    } catch {
+      return { hit: false, filePath, data: null };
+    }
+  }
+
+  function demandStrengthCacheCompatible(cached = {}, regionMap = {}, region = {}, yearMonth = "") {
+    return Boolean(
+      cached.hit
+      && cached.data?.status === "ok"
+      && cached.data?.adapter === DEMAND_STRENGTH_ADAPTER_VERSION
+      && cached.data?.regionMapVersion === regionMap.version
+      && cached.data?.region?.regionKey === region.regionKey
+      && cached.data?.yearMonth === yearMonth
+    );
+  }
+
+  async function writeDemandStrengthSnapshot(snapshot = {}) {
+    await fsp.mkdir(cacheDir, { recursive: true });
+    await fsp.mkdir(tourismDataDir, { recursive: true });
+    const filePath = demandStrengthCachePath(snapshot.region?.regionKey, snapshot.yearMonth);
+    const tempPath = `${filePath}.${process.pid}.tmp`;
+    await fsp.writeFile(tempPath, JSON.stringify(snapshot, null, 2), "utf8");
+    await fsp.rename(tempPath, filePath);
+    await fsp.appendFile(logFile, `${JSON.stringify({
+      collectedAt: snapshot.collectedAt,
+      source: "demandStrength",
+      adapter: DEMAND_STRENGTH_ADAPTER_VERSION,
+      yearMonth: snapshot.yearMonth,
+      regionKey: snapshot.region?.regionKey || "",
+      status: snapshot.status,
+      completeOperationCount: snapshot.quality?.completeOperationCount || 0
+    })}\n`, "utf8");
+    return filePath;
+  }
+
+  function emptyDemandOperation(operationDef = {}, status = "unavailable", reason = "") {
+    return {
+      key: operationDef.key || "",
+      operation: operationDef.operation || "",
+      label: operationDef.label || "",
+      status,
+      reason,
+      overallCode: operationDef.overallCode || "",
+      overallValue: null,
+      metrics: Object.entries(operationDef.expectedMetrics || {}).map(([code, label]) => ({
+        code,
+        label,
+        sourceName: "",
+        value: null
+      })),
+      quality: {
+        status: status === "ok" ? "complete" : status,
+        expectedMetricCount: Object.keys(operationDef.expectedMetrics || {}).length,
+        observedMetricCount: 0,
+        overallComplete: false,
+        detailComplete: false,
+        missingCodes: Object.keys(operationDef.expectedMetrics || {}),
+        unexpectedCodes: [],
+        invalidRowCount: 0,
+        mismatchedRowCount: 0,
+        duplicateRowCount: 0,
+        conflictCount: 0
+      }
+    };
+  }
+
+  function demandStrengthPageUrl(config = {}, operationDef = {}, region = {}, yearMonth = "", pageNo = 1, pageSize = DEMAND_STRENGTH_PAGE_SIZE, serviceKey = "") {
+    const endpoint = new URL(config.endpoint);
+    endpoint.pathname = `${endpoint.pathname.replace(/\/+$/, "")}/${operationDef.operation}`;
+    const params = {
+      _type: "json",
+      MobileOS: "ETC",
+      MobileApp: String(env.KTO_TOURISM_MOBILE_APP || DEFAULT_MOBILE_APP).trim(),
+      baseYm: yearMonth,
+      areaCd: String(region.ktoSidoCd || ""),
+      signguCd: String(region.ktoSggCd || ""),
+      pageNo: String(pageNo),
+      numOfRows: String(pageSize)
+    };
+    Object.entries(params).forEach(([key, value]) => endpoint.searchParams.set(key, String(value)));
+    const connector = endpoint.toString().includes("?") ? "&" : "?";
+    const keyValue = serviceKey.includes("%") ? serviceKey : encodeURIComponent(serviceKey);
+    return `${endpoint.toString()}${connector}${encodeURIComponent(config.serviceKeyParam)}=${keyValue}`;
+  }
+
+  function demandStrengthEnvelope(parsed = null) {
+    const gatewayError = visitorGatewayError(parsed);
+    if (gatewayError) return { ok: false, reason: "gateway_error", ...gatewayError };
+    const envelope = parsed?.response || parsed;
+    const header = envelope?.header;
+    const body = envelope?.body;
+    if (!header || !body || typeof body !== "object") return { ok: false, reason: "schema_error" };
+    const resultCode = String(header.resultCode ?? "");
+    if (!DEMAND_STRENGTH_SUCCESS_CODES.has(resultCode)) {
+      return {
+        ok: false,
+        reason: resultCode === "03" ? "no_observation" : "api_error",
+        code: resultCode,
+        message: String(header.resultMsg || "api_error")
+      };
+    }
+    const item = body?.items?.item;
+    const rows = Array.isArray(item) ? item : (item && typeof item === "object" ? [item] : []);
+    const totalCount = Number(body.totalCount);
+    const pageNo = Number(body.pageNo);
+    const numOfRows = Number(body.numOfRows);
+    if (!Number.isFinite(totalCount) || totalCount < 0) return { ok: false, reason: "schema_error" };
+    return {
+      ok: true,
+      rows,
+      totalCount,
+      pageNo: Number.isFinite(pageNo) ? pageNo : null,
+      numOfRows: Number.isFinite(numOfRows) ? numOfRows : null,
+      resultCode,
+      resultMsg: String(header.resultMsg || "")
+    };
+  }
+
+  async function requestDemandStrengthPage(config = {}, operationDef = {}, region = {}, yearMonth = "", pageNo = 1, pageSize = DEMAND_STRENGTH_PAGE_SIZE, serviceKey = "") {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+    try {
+      const response = await fetchImpl(
+        demandStrengthPageUrl(config, operationDef, region, yearMonth, pageNo, pageSize, serviceKey),
+        { signal: controller.signal, headers: { accept: "application/json" } }
+      );
+      const responseText = await response.text();
+      let parsed = null;
+      try {
+        parsed = responseText ? JSON.parse(responseText) : null;
+      } catch {
+        return { ok: false, reason: "invalid_response", httpStatus: response.status };
+      }
+      const envelope = demandStrengthEnvelope(parsed);
+      if (!response.ok) {
+        return {
+          ok: false,
+          reason: envelope.reason || "http_error",
+          code: envelope.code || "",
+          message: envelope.message || "",
+          httpStatus: response.status
+        };
+      }
+      return { ...envelope, httpStatus: response.status };
+    } catch (error) {
+      return {
+        ok: false,
+        reason: error.name === "AbortError" ? "timeout" : "request_failed",
+        message: error.message || String(error)
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  function demandRegionNameMatches(value = "", region = {}, level = "sigungu") {
+    const normalized = compactText(value);
+    if (!normalized) return false;
+    const candidates = level === "area"
+      ? [region.sido, region.sidoFull, ...(region.sidoAliases || [])]
+      : [region.sigungu, ...(region.aliases || [])];
+    return candidates.some((candidate) => compactText(candidate) === normalized);
+  }
+
+  function normalizeDemandStrengthRows(rows = [], operationDef = {}, region = {}, yearMonth = "") {
+    const expectedCodes = new Set(Object.keys(operationDef.expectedMetrics || {}));
+    const byCode = new Map();
+    const unexpectedCodes = new Set();
+    let invalidRowCount = 0;
+    let mismatchedRowCount = 0;
+    let duplicateRowCount = 0;
+    let conflictCount = 0;
+    for (const raw of rows) {
+      const rowYearMonth = String(raw?.baseYm || "").replace(/\D/g, "").slice(0, 6);
+      const areaCd = String(raw?.areaCd || "").trim();
+      const areaNm = String(raw?.areaNm || "").trim();
+      const signguCd = String(raw?.signguCd || "").trim();
+      const signguNm = String(raw?.signguNm || "").trim();
+      const code = String(raw?.[operationDef.codeField] || "").trim();
+      const sourceName = String(raw?.[operationDef.nameField] || "").trim();
+      const valueText = String(raw?.[operationDef.valueField] ?? "").replace(/,/g, "").trim();
+      const value = valueText === "" ? NaN : Number(valueText);
+      if (!/^\d{6}$/.test(rowYearMonth) || !/^\d{2}$/.test(areaCd) || !/^\d{5}$/.test(signguCd) || !code || !sourceName || !Number.isFinite(value)) {
+        invalidRowCount += 1;
+        continue;
+      }
+      if (
+        rowYearMonth !== yearMonth
+        || areaCd !== String(region.ktoSidoCd || "")
+        || signguCd !== String(region.ktoSggCd || "")
+        || !demandRegionNameMatches(areaNm, region, "area")
+        || !demandRegionNameMatches(signguNm, region, "sigungu")
+      ) {
+        mismatchedRowCount += 1;
+        continue;
+      }
+      if (!expectedCodes.has(code)) unexpectedCodes.add(code);
+      const normalized = { code, sourceName, value };
+      const current = byCode.get(code);
+      if (!current) {
+        byCode.set(code, normalized);
+      } else if (current.value === value && current.sourceName === sourceName) {
+        duplicateRowCount += 1;
+      } else {
+        conflictCount += 1;
+      }
+    }
+    const metrics = Object.entries(operationDef.expectedMetrics || {}).map(([code, label]) => ({
+      code,
+      label,
+      sourceName: byCode.get(code)?.sourceName || "",
+      value: Number.isFinite(byCode.get(code)?.value) ? byCode.get(code).value : null
+    }));
+    const missingCodes = metrics.filter((metric) => metric.value === null).map((metric) => metric.code);
+    const overallValue = metrics.find((metric) => metric.code === operationDef.overallCode)?.value ?? null;
+    let qualityStatus = "complete";
+    let reason = "";
+    if (conflictCount) {
+      qualityStatus = "conflicting_rows";
+      reason = "duplicate_value_conflict";
+    } else if (mismatchedRowCount) {
+      qualityStatus = "region_or_period_mismatch";
+      reason = "response_grain_mismatch";
+    } else if (invalidRowCount) {
+      qualityStatus = "invalid_rows";
+      reason = "invalid_response_fields";
+    } else if (overallValue === null) {
+      qualityStatus = "partial";
+      reason = "required_overall_metric_missing";
+    } else if (missingCodes.length) {
+      qualityStatus = "detail_partial";
+      reason = "detail_metric_missing";
+    }
+    return {
+      key: operationDef.key,
+      operation: operationDef.operation,
+      label: operationDef.label,
+      status: ["complete", "detail_partial"].includes(qualityStatus) ? "ok" : qualityStatus === "partial" ? "partial" : "error",
+      reason,
+      overallCode: operationDef.overallCode,
+      overallValue,
+      metrics,
+      quality: {
+        status: qualityStatus,
+        expectedMetricCount: expectedCodes.size,
+        observedMetricCount: metrics.filter((metric) => metric.value !== null).length,
+        overallComplete: overallValue !== null,
+        detailComplete: missingCodes.length === 0,
+        missingCodes,
+        unexpectedCodes: [...unexpectedCodes].sort(),
+        sourceRowCount: rows.length,
+        invalidRowCount,
+        mismatchedRowCount,
+        duplicateRowCount,
+        conflictCount
+      }
+    };
+  }
+
+  async function requestDemandStrengthOperation(config = {}, operationDef = {}, region = {}, yearMonth = "", serviceKey = "") {
+    const requestedAt = currentDate().toISOString();
+    const pageSize = Math.max(10, Math.min(1000, Math.round(numberEnv(
+      "KTO_TOURISM_DEMAND_STRENGTH_PAGE_SIZE",
+      DEMAND_STRENGTH_PAGE_SIZE,
+      env
+    ))));
+    const maxPages = Math.max(1, Math.min(50, Math.round(numberEnv(
+      "KTO_TOURISM_DEMAND_STRENGTH_MAX_PAGES",
+      DEMAND_STRENGTH_MAX_PAGES,
+      env
+    ))));
+    const rows = [];
+    let totalCount = null;
+    let pageCount = 0;
+    for (let pageNo = 1; pageNo <= maxPages; pageNo += 1) {
+      const page = await requestDemandStrengthPage(config, operationDef, region, yearMonth, pageNo, pageSize, serviceKey);
+      if (!page.ok) {
+        return {
+          ...emptyDemandOperation(operationDef, page.reason === "no_observation" ? "no_observation" : "error", page.reason),
+          requestedAt,
+          quality: {
+            ...emptyDemandOperation(operationDef).quality,
+            status: page.reason === "no_observation" ? "no_observation" : "error",
+            pageCount,
+            httpStatus: page.httpStatus || null,
+            apiCode: page.code || ""
+          }
+        };
+      }
+      if (page.pageNo !== null && page.pageNo !== pageNo) {
+        return { ...emptyDemandOperation(operationDef, "error", "page_number_mismatch"), requestedAt };
+      }
+      if (totalCount === null) totalCount = page.totalCount;
+      if (page.totalCount !== totalCount) {
+        return { ...emptyDemandOperation(operationDef, "error", "total_count_changed"), requestedAt };
+      }
+      pageCount += 1;
+      rows.push(...page.rows);
+      if (rows.length >= totalCount) break;
+      if (!page.rows.length) {
+        return { ...emptyDemandOperation(operationDef, "error", "incomplete_pagination"), requestedAt };
+      }
+    }
+    if (totalCount === null || rows.length < totalCount) {
+      return { ...emptyDemandOperation(operationDef, "error", "page_limit_exceeded"), requestedAt };
+    }
+    if (!totalCount) {
+      return { ...emptyDemandOperation(operationDef, "no_observation", "empty_verified"), requestedAt };
+    }
+    const normalized = normalizeDemandStrengthRows(rows.slice(0, totalCount), operationDef, region, yearMonth);
+    return {
+      ...normalized,
+      requestedAt,
+      quality: {
+        ...normalized.quality,
+        pageCount,
+        totalCount,
+        receivedRows: rows.length
+      }
+    };
+  }
+
+  function publicDemandStrengthSnapshot(snapshot = {}, input = {}, cache = {}) {
+    const stay = snapshot.operations?.stay || emptyDemandOperation(DEMAND_STRENGTH_OPERATIONS.stay, "unavailable", snapshot.reason || "unavailable");
+    const spend = snapshot.operations?.spend || emptyDemandOperation(DEMAND_STRENGTH_OPERATIONS.spend, "unavailable", snapshot.reason || "unavailable");
+    return {
+      ok: snapshot.status === "ok",
+      status: snapshot.status || "unavailable",
+      reason: snapshot.reason || "",
+      schemaVersion: snapshot.schemaVersion || 1,
+      adapter: DEMAND_STRENGTH_ADAPTER_VERSION,
+      collectedAt: snapshot.collectedAt || "",
+      yearMonth: snapshot.yearMonth || normalizeYearMonth(input.yearMonth || input.baseYm),
+      region: snapshot.region || null,
+      source: {
+        key: "demandStrength",
+        label: "한국관광공사 지역별 관광 수요 강도",
+        referenceUrl: demandStrengthSourceDef().referenceUrl,
+        timeGrain: "month",
+        regionGrain: "sigungu",
+        valueType: "official_index_value"
+      },
+      stay,
+      spend,
+      quality: snapshot.quality || {
+        completeOperationCount: 0,
+        requiredOperationCount: Object.keys(DEMAND_STRENGTH_OPERATIONS).length
+      },
+      collection: {
+        mode: cache.mode || snapshot.collection?.mode || (cache.hit ? "cache" : "none"),
+        requestGrain: "sigungu",
+        operationCallsAttempted: Number(cache.operationCallsAttempted ?? snapshot.collection?.operationCallsAttempted ?? 0),
+        operationsPerMonth: 2,
+        provinceBulkReuse: false
+      },
+      cache: {
+        hit: Boolean(cache.hit),
+        ttlHours: Number(cache.ttlHours || DEFAULT_TTL_HOURS),
+        refreshFailed: Boolean(cache.refreshFailed),
+        refreshReason: cache.refreshReason || ""
+      },
+      policy: {
+        missingIsNotZero: true,
+        scoreApplied: false,
+        noCrossMetricAveraging: true,
+        requiresClosedMonth: true,
+        singleSigunguPerCollection: true,
+        operationCallCount: 2
+      }
+    };
+  }
+
+  async function collectDemandStrength(input = {}) {
+    const yearMonth = normalizeYearMonth(input.yearMonth || input.period || input.baseYm);
+    const ttlHours = Number.isFinite(Number(input.ttlHours)) ? Number(input.ttlHours) : DEFAULT_TTL_HOURS;
+    const force = Boolean(input.force);
+    const selectorCandidates = [
+      input.regionKey ? { regionKey: input.regionKey } : null,
+      ...(Array.isArray(input.regionKeys) ? input.regionKeys : input.regionKeys ? [input.regionKeys] : [])
+        .map((regionKey) => ({ regionKey })),
+      input.keyword || input.query || input.regionName
+        ? { keyword: input.keyword || input.query || input.regionName }
+        : null,
+      ...(Array.isArray(input.regionNames) ? input.regionNames : input.regionNames ? [input.regionNames] : [])
+        .map((keyword) => ({ keyword })),
+      ...(Array.isArray(input.regions) ? input.regions : input.regions ? [input.regions] : [])
+        .map((keyword) => ({ keyword }))
+    ].filter(Boolean);
+    let match = await resolveRegion(selectorCandidates[0] || {});
+    for (const selector of selectorCandidates.slice(1)) {
+      if (match.region) break;
+      match = await resolveRegion(selector);
+    }
+    if (!match.region) {
+      return publicDemandStrengthSnapshot({
+        status: "region_not_matched",
+        reason: "requested_region_not_matched",
+        yearMonth,
+        region: null,
+        operations: {}
+      }, input, { hit: false, ttlHours });
+    }
+    const region = demandStrengthRegion(match.region, match.regionMap);
+    const regionMap = match.regionMap;
+    const publicRegion = {
+      regionKey: region.regionKey,
+      sido: region.sido,
+      sidoFull: region.sidoFull,
+      sigungu: region.sigungu,
+      areaCd: String(region.ktoSidoCd || ""),
+      signguCd: String(region.ktoSggCd || "")
+    };
+    const cached = await readDemandStrengthCache(region.regionKey, yearMonth);
+    const compatibleCache = demandStrengthCacheCompatible(cached, regionMap, region, yearMonth);
+    const closedYearMonth = latestClosedYearMonth(currentDate());
+    if (!force && compatibleCache && (yearMonth <= closedYearMonth || cacheFresh(cached.data, ttlHours))) {
+      return publicDemandStrengthSnapshot(cached.data, input, { hit: true, ttlHours, mode: "cache", operationCallsAttempted: 0 });
+    }
+    if (input.cacheOnly) {
+      return publicDemandStrengthSnapshot({
+        status: "unavailable",
+        reason: "monthly_cache_missing",
+        yearMonth,
+        region: publicRegion,
+        operations: {},
+        collection: { mode: "cache_only", operationCallsAttempted: 0 }
+      }, input, { hit: false, ttlHours, mode: "cache_only" });
+    }
+    if (yearMonth > closedYearMonth) {
+      return publicDemandStrengthSnapshot({
+        status: "unavailable",
+        reason: "period_not_closed",
+        yearMonth,
+        region: publicRegion,
+        operations: {}
+      }, input, { hit: false, ttlHours });
+    }
+    if (!/^\d{2}$/.test(publicRegion.areaCd) || !/^\d{5}$/.test(publicRegion.signguCd) || region.codeStatus) {
+      return publicDemandStrengthSnapshot({
+        status: "unavailable",
+        reason: region.codeStatus || "region_code_verify_required",
+        yearMonth,
+        region: publicRegion,
+        operations: {}
+      }, input, { hit: false, ttlHours });
+    }
+    const config = sourceConfig(demandStrengthSourceDef(), env);
+    const serviceKey = sourceServiceKey(config, env);
+    const configStatus = demandStrengthEndpointStatus(config, serviceKey);
+    if (configStatus !== "ready") {
+      if (compatibleCache) {
+        return publicDemandStrengthSnapshot(cached.data, input, {
+          hit: true,
+          ttlHours,
+          refreshFailed: force,
+          refreshReason: force ? configStatus : ""
+        });
+      }
+      return publicDemandStrengthSnapshot({
+        status: "unavailable",
+        reason: configStatus,
+        yearMonth,
+        region: publicRegion,
+        operations: {}
+      }, input, { hit: false, ttlHours });
+    }
+    const operationEntries = Object.entries(DEMAND_STRENGTH_OPERATIONS);
+    const operationResults = await Promise.all(operationEntries.map(([, operationDef]) => (
+      requestDemandStrengthOperation(config, operationDef, region, yearMonth, serviceKey)
+    )));
+    const operations = Object.fromEntries(operationEntries.map(([key], index) => [key, operationResults[index]]));
+    const completeOperationCount = operationResults.filter((operation) => operation.status === "ok").length;
+    const partialOperationCount = operationResults.filter((operation) => operation.status === "partial").length;
+    const detailCompleteOperationCount = operationResults.filter((operation) => operation.quality?.detailComplete).length;
+    const noObservationCount = operationResults.filter((operation) => operation.status === "no_observation").length;
+    const requiredOperationCount = operationResults.length;
+    let status = "error";
+    let reason = operationResults.map((operation) => operation.reason).filter(Boolean).join(",") || "operation_failed";
+    if (completeOperationCount === requiredOperationCount) {
+      status = "ok";
+      reason = "";
+    } else if (completeOperationCount || partialOperationCount) {
+      status = "partial";
+      reason = "incomplete_operation_coverage";
+    } else if (noObservationCount === requiredOperationCount) {
+      status = "no_observation";
+      reason = "no_observation";
+    }
+    const snapshot = {
+      schemaVersion: 1,
+      adapter: DEMAND_STRENGTH_ADAPTER_VERSION,
+      regionMapVersion: regionMap.version || "",
+      status,
+      reason,
+      collectedAt: currentDate().toISOString(),
+      yearMonth,
+      region: publicRegion,
+      operations,
+      quality: {
+        status: status === "ok" ? "complete" : status,
+        requiredOperationCount,
+        completeOperationCount,
+        detailCompleteOperationCount,
+        partialOperationCount,
+        noObservationCount,
+        failedOperationCount: operationResults.filter((operation) => operation.status === "error").length,
+        regionGrain: "sigungu",
+        timeGrain: "month"
+      },
+      collection: {
+        mode: force ? "force_refresh" : "collect",
+        operationCallsAttempted: 2
+      },
+      source: {
+        referenceUrl: demandStrengthSourceDef().referenceUrl,
+        operations: operationEntries.map(([, operationDef]) => operationDef.operation)
+      }
+    };
+    if (status === "ok") {
+      const filePath = await writeDemandStrengthSnapshot(snapshot);
+      return publicDemandStrengthSnapshot(snapshot, input, { hit: false, ttlHours, filePath });
+    }
+    if (compatibleCache) {
+      return publicDemandStrengthSnapshot(cached.data, input, {
+        hit: true,
+        ttlHours,
+        refreshFailed: true,
+        refreshReason: reason
+      });
+    }
+    return publicDemandStrengthSnapshot(snapshot, input, { hit: false, ttlHours });
+  }
+
+  async function readDemandStrength(input = {}) {
+    return collectDemandStrength({
+      ...input,
+      force: false,
+      cacheOnly: true
+    });
+  }
+
+  function demandStrengthHistoryPoint(snapshot = {}, yearMonth = "", access = "missing") {
+    const stayOverall = Number.isFinite(snapshot?.stay?.overallValue) ? Number(snapshot.stay.overallValue) : null;
+    const spendOverall = Number.isFinite(snapshot?.spend?.overallValue) ? Number(snapshot.spend.overallValue) : null;
+    const complete = snapshot.status === "ok" && stayOverall !== null && spendOverall !== null;
+    const partial = !complete && (stayOverall !== null || spendOverall !== null);
+    return {
+      yearMonth,
+      status: complete ? "complete" : partial ? "partial" : "missing",
+      reason: complete ? "" : snapshot.reason || "monthly_cache_missing",
+      stayStatus: snapshot?.stay?.status || "unavailable",
+      stayReason: snapshot?.stay?.reason || "",
+      spendStatus: snapshot?.spend?.status || "unavailable",
+      spendReason: snapshot?.spend?.reason || "",
+      stayOverall,
+      spendOverall,
+      collectedAt: snapshot.collectedAt || "",
+      cacheHit: access === "cache",
+      refreshFailed: Boolean(snapshot.cache?.refreshFailed)
+    };
+  }
+
+  function demandStrengthValueComparison(currentPoint = null, previousPoint = null, valueField = "", statusField = "") {
+    const currentValue = currentPoint?.[statusField] === "ok" && Number.isFinite(currentPoint?.[valueField])
+      ? Number(currentPoint[valueField])
+      : null;
+    const previousValue = previousPoint?.[statusField] === "ok" && Number.isFinite(previousPoint?.[valueField])
+      ? Number(previousPoint[valueField])
+      : null;
+    if (currentValue === null || previousValue === null || previousValue === 0) {
+      return {
+        status: "insufficient_data",
+        currentValue,
+        previousValue,
+        changeRate: null,
+        changePercent: null
+      };
+    }
+    const changeRate = (currentValue - previousValue) / Math.abs(previousValue);
+    return {
+      status: "ready",
+      currentValue,
+      previousValue,
+      changeRate: roundNumber(changeRate, 6),
+      changePercent: roundNumber(changeRate * 100, 2)
+    };
+  }
+
+  function demandStrengthSameMonthComparison(series = [], endYearMonth = "") {
+    const current = series.find((point) => point.yearMonth === endYearMonth) || null;
+    const previousYearMonth = shiftYearMonth(endYearMonth, -12);
+    const previous = series.find((point) => point.yearMonth === previousYearMonth) || null;
+    const stay = demandStrengthValueComparison(current, previous, "stayOverall", "stayStatus");
+    const spend = demandStrengthValueComparison(current, previous, "spendOverall", "spendStatus");
+    const readyCount = [stay, spend].filter((metric) => metric.status === "ready").length;
+    return {
+      status: readyCount === 2 ? "ready" : readyCount ? "partial" : "insufficient_data",
+      currentYearMonth: endYearMonth,
+      previousYearMonth,
+      stay,
+      spend
+    };
+  }
+
+  function demandStrengthWindowComparison(currentSeries = [], previousSeries = [], valueField = "", statusField = "") {
+    const pairCount = Math.min(currentSeries.length, previousSeries.length);
+    const pairs = [];
+    for (let index = 0; index < pairCount; index += 1) {
+      const current = currentSeries[index];
+      const previous = previousSeries[index];
+      if (
+        current?.[statusField] === "ok"
+        && previous?.[statusField] === "ok"
+        && Number.isFinite(current?.[valueField])
+        && Number.isFinite(previous?.[valueField])
+      ) {
+        pairs.push({ current, previous });
+      }
+    }
+    if (!pairs.length) {
+      return {
+        status: "insufficient_data",
+        comparableMonthPairs: 0,
+        currentAverage: null,
+        previousAverage: null,
+        changeRate: null,
+        changePercent: null
+      };
+    }
+    const currentAverage = pairs.reduce((sum, pair) => sum + pair.current[valueField], 0) / pairs.length;
+    const previousAverage = pairs.reduce((sum, pair) => sum + pair.previous[valueField], 0) / pairs.length;
+    if (previousAverage === 0) {
+      return {
+        status: "insufficient_data",
+        comparableMonthPairs: pairs.length,
+        currentAverage: roundNumber(currentAverage, 4),
+        previousAverage: 0,
+        changeRate: null,
+        changePercent: null
+      };
+    }
+    const changeRate = (currentAverage - previousAverage) / Math.abs(previousAverage);
+    return {
+      status: "ready",
+      comparableMonthPairs: pairs.length,
+      currentAverage: roundNumber(currentAverage, 4),
+      previousAverage: roundNumber(previousAverage, 4),
+      changeRate: roundNumber(changeRate, 6),
+      changePercent: roundNumber(changeRate * 100, 2),
+      comparedMonths: pairs.map((pair) => ({
+        currentYearMonth: pair.current.yearMonth,
+        previousYearMonth: pair.previous.yearMonth
+      }))
+    };
+  }
+
+  function demandStrengthMomentum(series = []) {
+    const recent = series.slice(-12);
+    const previous = series.slice(-24, -12);
+    const stay = demandStrengthWindowComparison(recent, previous, "stayOverall", "stayStatus");
+    const spend = demandStrengthWindowComparison(recent, previous, "spendOverall", "spendStatus");
+    const readyCount = [stay, spend].filter((metric) => metric.status === "ready").length;
+    return {
+      status: readyCount === 2 ? "ready" : readyCount ? "partial" : "insufficient_data",
+      method: "same_calendar_month_pairs_only",
+      recentPeriod: { startYearMonth: recent[0]?.yearMonth || "", endYearMonth: recent.at(-1)?.yearMonth || "" },
+      previousPeriod: { startYearMonth: previous[0]?.yearMonth || "", endYearMonth: previous.at(-1)?.yearMonth || "" },
+      stay,
+      spend
+    };
+  }
+
+  async function collectDemandStrengthHistory(input = {}) {
+    const closedYearMonth = latestClosedYearMonth(currentDate());
+    const requestedEndYearMonth = normalizeYearMonth(input.endYearMonth || input.yearMonth || closedYearMonth);
+    const endYearMonth = requestedEndYearMonth > closedYearMonth ? closedYearMonth : requestedEndYearMonth;
+    const monthCount = Math.max(1, Math.min(
+      DEMAND_STRENGTH_HISTORY_MAX_MONTHS,
+      Math.round(Number(input.months) || DEMAND_STRENGTH_HISTORY_DEFAULT_MONTHS)
+    ));
+    const months = visitorHistoryMonths(endYearMonth, monthCount);
+    const collectMissing = Boolean(input.collectMissing || input.refresh);
+    const force = Boolean(input.force);
+    const ttlHours = Number.isFinite(Number(input.ttlHours)) ? Number(input.ttlHours) : DEFAULT_TTL_HOURS;
+    const concurrency = Math.max(1, Math.min(
+      DEMAND_STRENGTH_HISTORY_MAX_CONCURRENCY,
+      Math.round(Number(input.concurrency) || numberEnv(
+        "KTO_TOURISM_DEMAND_STRENGTH_HISTORY_CONCURRENCY",
+        DEMAND_STRENGTH_HISTORY_DEFAULT_CONCURRENCY,
+        env
+      ))
+    ));
+    const selectorCandidates = [
+      input.regionKey ? { regionKey: input.regionKey } : null,
+      ...(Array.isArray(input.regionKeys) ? input.regionKeys : input.regionKeys ? [input.regionKeys] : [])
+        .map((regionKey) => ({ regionKey })),
+      input.keyword || input.query || input.regionName
+        ? { keyword: input.keyword || input.query || input.regionName }
+        : null,
+      ...(Array.isArray(input.regionNames) ? input.regionNames : input.regionNames ? [input.regionNames] : [])
+        .map((keyword) => ({ keyword })),
+      ...(Array.isArray(input.regions) ? input.regions : input.regions ? [input.regions] : [])
+        .map((keyword) => ({ keyword }))
+    ].filter(Boolean);
+    let match = await resolveRegion(selectorCandidates[0] || {});
+    for (const selector of selectorCandidates.slice(1)) {
+      if (match.region) break;
+      match = await resolveRegion(selector);
+    }
+    if (!match.region) {
+      return {
+        ok: false,
+        status: "region_not_matched",
+        reason: "requested_region_not_matched",
+        period: { startYearMonth: months[0], endYearMonth, months: monthCount },
+        region: null,
+        series: [],
+        coverage: { expectedMonths: monthCount, completeMonths: 0, partialMonths: 0, missingMonths: monthCount, coverageRate: 0 },
+        collection: {
+          mode: "cache_only",
+          requestGrain: "sigungu",
+          operationsPerMonth: 2,
+          operationCallsAttempted: 0,
+          maximumOperationCalls: monthCount * 2,
+          provinceBulkReuse: false
+        },
+        quality: { missingIsNotZero: true, completeRequiresOverallCodes: ["21", "22"] }
+      };
+    }
+    const region = demandStrengthRegion(match.region, match.regionMap);
+    const publicRegion = {
+      regionKey: region.regionKey,
+      sido: region.sido,
+      sidoFull: region.sidoFull,
+      sigungu: region.sigungu,
+      areaCd: String(region.ktoSidoCd || ""),
+      signguCd: String(region.ktoSggCd || "")
+    };
+    const monthResults = new Array(months.length);
+    let cursor = 0;
+    async function worker() {
+      while (cursor < months.length) {
+        const index = cursor;
+        cursor += 1;
+        const yearMonth = months[index];
+        const cached = await readDemandStrengthCache(region.regionKey, yearMonth);
+        const compatible = demandStrengthCacheCompatible(cached, match.regionMap, region, yearMonth);
+        if (compatible && !force) {
+          monthResults[index] = {
+            access: "cache",
+            networkSucceeded: false,
+            snapshot: publicDemandStrengthSnapshot(cached.data, { yearMonth }, {
+              hit: true,
+              ttlHours,
+              mode: "cache",
+              operationCallsAttempted: 0
+            })
+          };
+          continue;
+        }
+        if (!force && !collectMissing) {
+          monthResults[index] = {
+            access: "missing",
+            networkSucceeded: false,
+            snapshot: publicDemandStrengthSnapshot({
+              status: "unavailable",
+              reason: "monthly_cache_missing",
+              yearMonth,
+              region: publicRegion,
+              operations: {},
+              collection: { mode: "cache_only", operationCallsAttempted: 0 }
+            }, { yearMonth }, { hit: false, ttlHours, mode: "cache_only", operationCallsAttempted: 0 })
+          };
+          continue;
+        }
+        try {
+          const snapshot = await collectDemandStrength({ regionKey: region.regionKey, yearMonth, force, ttlHours });
+          monthResults[index] = {
+            access: "network",
+            networkSucceeded: snapshot.status === "ok" && !snapshot.cache?.refreshFailed,
+            snapshot
+          };
+        } catch (error) {
+          monthResults[index] = {
+            access: "network",
+            networkSucceeded: false,
+            snapshot: publicDemandStrengthSnapshot({
+              status: "error",
+              reason: error?.message || "history_collection_failed",
+              yearMonth,
+              region: publicRegion,
+              operations: {},
+              collection: { mode: "collect", operationCallsAttempted: 0 }
+            }, { yearMonth }, { hit: false, ttlHours })
+          };
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, months.length) }, () => worker()));
+    const series = monthResults.map((result, index) => demandStrengthHistoryPoint(result.snapshot, months[index], result.access));
+    const completeMonths = series.filter((point) => point.status === "complete").length;
+    const partialMonths = series.filter((point) => point.status === "partial").length;
+    const missingMonths = monthCount - completeMonths - partialMonths;
+    const latest = series.at(-1) || null;
+    const latestAvailable = [...series].reverse().find((point) => point.status === "complete") || null;
+    const yoy = demandStrengthSameMonthComparison(series, endYearMonth);
+    const momentum = demandStrengthMomentum(series);
+    const networkResults = monthResults.filter((result) => result.access === "network");
+    const operationCallsAttempted = networkResults.reduce(
+      (sum, result) => sum + Number(result.snapshot?.collection?.operationCallsAttempted || 0),
+      0
+    );
+    const available = completeMonths > 0;
+    const fullyComplete = completeMonths === monthCount;
+    return {
+      ok: available,
+      status: fullyComplete ? "ok" : available ? "partial" : "unavailable",
+      reason: fullyComplete ? "" : available ? "incomplete_history_coverage" : "no_complete_history_observation",
+      schemaVersion: 1,
+      adapter: DEMAND_STRENGTH_ADAPTER_VERSION,
+      collectedAt: currentDate().toISOString(),
+      period: {
+        startYearMonth: months[0],
+        endYearMonth,
+        months: monthCount,
+        latestClosedYearMonth: closedYearMonth
+      },
+      region: publicRegion,
+      series,
+      latest,
+      latestAvailable,
+      yoy,
+      momentum,
+      coverage: {
+        expectedMonths: monthCount,
+        completeMonths,
+        partialMonths,
+        missingMonths,
+        coverageRate: roundNumber(completeMonths / monthCount, 4)
+      },
+      collection: {
+        mode: force ? "force_refresh" : collectMissing ? "backfill_missing" : "cache_only",
+        concurrency,
+        requestGrain: "sigungu",
+        operationsPerMonth: 2,
+        requestedMonths: monthCount,
+        cacheHitMonths: monthResults.filter((result) => result.access === "cache").length,
+        missingCacheMonths: monthResults.filter((result) => result.access === "missing").length,
+        networkAttemptedMonths: networkResults.length,
+        networkSucceededMonths: networkResults.filter((result) => result.networkSucceeded).length,
+        networkFailedMonths: networkResults.filter((result) => !result.networkSucceeded).length,
+        operationCallsAttempted,
+        maximumOperationCalls: monthCount * 2,
+        provinceBulkReuse: false,
+        provinceBulkReuseReason: "official_contract_does_not_guarantee_all_sigungu_rows_when_signguCd_is_omitted"
+      },
+      source: {
+        key: "demandStrength",
+        label: "한국관광공사 지역별 관광 수요 강도",
+        referenceUrl: demandStrengthSourceDef().referenceUrl,
+        timeGrain: "month",
+        regionGrain: "sigungu"
+      },
+      quality: {
+        missingIsNotZero: true,
+        partialMonthsExcludedFromCompleteCoverage: true,
+        failedRefreshDoesNotOverwriteCompleteCache: true,
+        completeRequiresOverallCodes: ["21", "22"],
+        coverageRateUnit: "ratio_0_to_1"
+      }
+    };
+  }
+
   async function collect(input = {}) {
     const yearMonth = normalizeYearMonth(input.yearMonth || input.period || input.baseYm);
     const sources = selectedSources(input.sources);
@@ -1419,6 +2389,7 @@ function createCollector(options = {}) {
 
     const commonServiceKey = dataGoKrServiceKey(env);
     const visitorServiceKey = sourceServiceKey(DEFAULT_SOURCE_DEFS[0], env);
+    const demandStrengthServiceKey = sourceServiceKey(demandStrengthSourceDef(), env);
     const sourceConfigs = DEFAULT_SOURCE_DEFS
       .map((def) => sourceConfig(def, env))
       .filter((config) => sources.includes(config.key));
@@ -1438,8 +2409,9 @@ function createCollector(options = {}) {
         ttlHours
       },
       sourcePolicy: {
-        serviceKeyConfigured: Boolean(visitorServiceKey || commonServiceKey),
+        serviceKeyConfigured: Boolean(visitorServiceKey || demandStrengthServiceKey || commonServiceKey),
         visitorServiceKeyConfigured: Boolean(visitorServiceKey),
+        demandStrengthServiceKeyConfigured: Boolean(demandStrengthServiceKey),
         commonServiceKeyConfigured: Boolean(commonServiceKey),
         allowUnverifiedCodes,
         noSidoSigunguAggregation: true
@@ -1477,6 +2449,24 @@ function createCollector(options = {}) {
           reason: visitorSnapshot.reason || "",
           rows: visitorSnapshot.regions || [],
           requestedAt: visitorSnapshot.collectedAt || new Date().toISOString()
+        };
+        continue;
+      }
+      if (config.key === "demandStrength") {
+        const demandStrengthSnapshot = await readDemandStrength({
+          yearMonth,
+          regionKey: match.region.regionKey,
+          ttlHours
+        });
+        snapshot.sources[config.key] = {
+          label: config.label,
+          referenceUrl: config.referenceUrl,
+          configStatus: demandStrengthEndpointStatus(config, sourceServiceKey(config, env)),
+          status: demandStrengthSnapshot.status === "ok" ? "ok" : "skipped",
+          reason: demandStrengthSnapshot.reason || "",
+          data: demandStrengthSnapshot,
+          rows: [],
+          requestedAt: demandStrengthSnapshot.collectedAt || new Date().toISOString()
         };
         continue;
       }
@@ -1520,6 +2510,19 @@ function createCollector(options = {}) {
       .map((fileName) => fileName.match(new RegExp(`^visitors__${VISITOR_ADAPTER_VERSION}__.+__(\\d{6})\\.json$`))?.[1] || "")
       .filter(Boolean)
       .sort();
+    const demandStrengthCacheFiles = cacheFiles.filter((fileName) => (
+      fileName.startsWith(`demand-strength__${DEMAND_STRENGTH_ADAPTER_VERSION}__`)
+    ));
+    const demandStrengthMonthsAvailable = demandStrengthCacheFiles
+      .map((fileName) => fileName.match(/__(\d{6})\.json$/)?.[1] || "")
+      .filter(Boolean)
+      .sort();
+    const demandStrengthCacheSummary = {
+      snapshotCount: demandStrengthCacheFiles.length,
+      availableMonthCount: new Set(demandStrengthMonthsAvailable).size,
+      earliestYearMonth: demandStrengthMonthsAvailable[0] || "",
+      latestYearMonth: demandStrengthMonthsAvailable.at(-1) || ""
+    };
     return {
       ok: true,
       enabled: true,
@@ -1537,6 +2540,7 @@ function createCollector(options = {}) {
         earliestYearMonth: visitorHistoryMonthsAvailable[0] || "",
         latestYearMonth: visitorHistoryMonthsAvailable.at(-1) || ""
       },
+      demandStrength: demandStrengthCacheSummary,
       sources: DEFAULT_SOURCE_DEFS.map((def) => {
         const config = sourceConfig(def, env);
         const serviceKey = sourceServiceKey(config, env);
@@ -1544,12 +2548,21 @@ function createCollector(options = {}) {
           key: config.key,
           label: config.label,
           referenceUrl: config.referenceUrl,
-          status: def.key === "visitors" ? visitorEndpointStatus(config, serviceKey) : sourceStatus(config, serviceKey),
+          status: def.key === "visitors"
+            ? visitorEndpointStatus(config, serviceKey)
+            : def.key === "demandStrength"
+              ? demandStrengthEndpointStatus(config, serviceKey)
+              : sourceStatus(config, serviceKey),
           serviceKeyConfigured: Boolean(serviceKey),
           serviceKeyEnvironment: config.serviceKeyEnv || "DATA_GO_KR_SERVICE_KEY",
           endpointConfigured: Boolean(config.endpoint),
           regionParam: config.regionParam,
-          periodParam: config.periodParam
+          periodParam: config.periodParam,
+          ...(def.key === "demandStrength" ? {
+            adapter: DEMAND_STRENGTH_ADAPTER_VERSION,
+            operations: Object.values(DEMAND_STRENGTH_OPERATIONS).map((operation) => operation.operation),
+            cache: demandStrengthCacheSummary
+          } : {})
         };
       })
     };
@@ -1559,6 +2572,9 @@ function createCollector(options = {}) {
     collect,
     collectVisitorCounts,
     collectVisitorHistory,
+    readDemandStrength,
+    collectDemandStrength,
+    collectDemandStrengthHistory,
     resolveRegion,
     status,
     readRegionMap
@@ -1577,5 +2593,7 @@ module.exports = {
   visitorHistoryMonths,
   VISITOR_ADAPTER_VERSION,
   VISITOR_OUTLOOK_MODEL_VERSION,
-  VISITOR_OUTLOOK_SCORE_MINIMUMS
+  VISITOR_OUTLOOK_SCORE_MINIMUMS,
+  DEMAND_STRENGTH_ADAPTER_VERSION,
+  DEMAND_STRENGTH_OPERATIONS
 };

@@ -45,6 +45,9 @@ Render는 보통 GitHub 저장소를 연결해서 배포한다.
 현재 연결된 지역별 방문자수 API를 쓰려면 Secret으로 입력:
 - `DATA_GO_KR_VISITOR_SERVICE_KEY`
 
+지역별 관광 수요 강도 API를 쓰려면 Secret으로 입력:
+- `DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY`
+
 기존 호환용 공통 Secret:
 - `DATA_GO_KR_SERVICE_KEY`
 
@@ -52,12 +55,14 @@ Render는 보통 GitHub 저장소를 연결해서 배포한다.
 Render Dashboard에서 해당 서비스의 `Environment`를 열고
 `DATA_GO_KR_VISITOR_SERVICE_KEY`를 직접 추가한 뒤 `Save and deploy` 한다.
 Key 칸에는 위 변수명을, Value 칸에는 지역별 방문자수 승인키 문자열만 넣는다.
+관광 수요 강도도 같은 방식으로 `DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY`에
+해당 API 승인키 문자열만 넣는다.
 따옴표·변수명·Endpoint URL은 Value에 넣지 않는다. 기존에
 `DATA_GO_KR_SERVICE_KEY`로 정상 연결되어 있다면 그대로 유지해도 된다. 실제 키는
 `render.yaml`, `.env`, Endpoint URL, 앱 설정 파일에 기록하지 않는다.
 
-현재는 지역별 방문자수만 연결되어 있다. 다른 공공데이터 승인키는 해당 API
-수집기를 구현·검증할 때 전용 Secret을 하나씩 추가한다.
+현재는 지역별 방문자수와 지역별 관광 수요 강도가 연결되어 있다. 다른 공공데이터
+승인키는 해당 API 수집기를 구현·검증할 때 전용 Secret을 하나씩 추가한다.
 
 기본 `render.yaml` 저장공간 설정:
 - `HOST`: `0.0.0.0`
