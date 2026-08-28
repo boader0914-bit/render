@@ -15872,6 +15872,10 @@ function renderTourismDemandStrengthBackfillStatus() {
     : "진행률 확인 대기";
   const todayUsedCalls = optionalNumber(backfill?.todayUsedCalls);
   const dailyCallBudget = optionalNumber(backfill?.dailyCallBudget);
+  const recoveryCallsUsed = optionalNumber(backfill?.recoveryCallsUsed);
+  const recoveryCallText = Number.isFinite(recoveryCallsUsed) && recoveryCallsUsed > 0
+    ? ` · 산청 복구 ${fmtNumber(Math.max(0, recoveryCallsUsed))}회`
+    : "";
   const callProgress = Number.isFinite(todayUsedCalls) && Number.isFinite(dailyCallBudget)
     ? `${fmtNumber(Math.max(0, todayUsedCalls))}/${fmtNumber(Math.max(0, dailyCallBudget))}회`
     : "호출량 확인 대기";
@@ -15915,7 +15919,7 @@ function renderTourismDemandStrengthBackfillStatus() {
         <div><dt>대상 지역</dt><dd>${escapeHtml(eligibleRegionCount)}</dd></div>
         <div><dt>처리 진행</dt><dd>${escapeHtml(pairProgress)}</dd></div>
         <div><dt>관측 없음·검토</dt><dd>${escapeHtml(terminalMissingText)}</dd></div>
-        <div><dt>오늘 API 사용</dt><dd>${escapeHtml(callProgress)}</dd></div>
+        <div><dt>오늘 API 사용</dt><dd>${escapeHtml(`${callProgress}${recoveryCallText}`)}</dd></div>
         <div><dt>다음 확인</dt><dd>${escapeHtml(tourismDemandStrengthBackfillDateLabel(backfill?.nextCheckAt))}</dd></div>
       </dl>
       <div class="tourism-demand-strength-backfill-footer">

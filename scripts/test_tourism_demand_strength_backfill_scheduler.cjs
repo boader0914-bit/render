@@ -9,6 +9,8 @@ const {
   MAX_DISTINCT_DAY_ATTEMPTS,
   DEFAULT_CHECK_INTERVAL_MS,
   DEFAULT_STARTUP_DELAY_MS,
+  SANCHEONG_LATEST_RECOVERY_ID,
+  SANCHEONG_LATEST_RECOVERY_NORMALIZER_VERSION,
   kstDateKey,
   latestClosedYearMonth,
   eligibleRegions,
@@ -188,6 +190,191 @@ async function main() {
     assert.equal(JSON.parse(await fsp.readFile(`${budgetStateFile}.bak`, "utf8")).version, STATE_VERSION);
     assert.equal((await firstScheduler.runOnce({ trigger: "same-day" })).status, "budget_exhausted");
     assert.equal(budgetCollector.network.length, 4, "같은 날 예산을 초과해 외부 호출하면 안 됩니다.");
+
+    const recoveryState = (overrides = {}) => ({
+      version: STATE_VERSION,
+      phase: "initial_backfill",
+      initialTargetYearMonth: "202607",
+      initialCompletedAt: "",
+      monthlyCompletedThrough: "",
+      eligibleRegionCount: 1,
+      planFingerprint: {
+        regionMapVersion: "fixture-region-map-v1",
+        demandStrengthAdapter: "fixture-demand-strength-v1",
+        demandStrengthNormalizer: SANCHEONG_LATEST_RECOVERY_NORMALIZER_VERSION
+      },
+      plan: null,
+      failures: {},
+      terminalMissing: {},
+      dailyBudget: {
+        kstDate: "2026-08-29",
+        limitCalls: 800,
+        usedCalls: 800,
+        reservedCalls: 0,
+        reservedWorkItems: 0
+      },
+      ...overrides
+    });
+    const recoveryMissingKeys = new Set([
+      `${SANCHEONG.regionKey}__202607`,
+      `${SANCHEONG.regionKey}__202606`
+    ]);
+    const recoveryCachedKeys = cachedInitialKeys([SANCHEONG])
+      .filter((key) => !recoveryMissingKeys.has(key));
+    const recoveryStateFile = path.join(temporaryRoot, "recovery", "state.json");
+    await fsp.mkdir(path.dirname(recoveryStateFile), { recursive: true });
+    await fsp.writeFile(recoveryStateFile, JSON.stringify(recoveryState()), "utf8");
+    const recoveryCollector = fakeCollector({
+      regions: [SANCHEONG],
+      cachedKeys: recoveryCachedKeys,
+      normalizerVersion: SANCHEONG_LATEST_RECOVERY_NORMALIZER_VERSION
+    });
+    const recoveryScheduler = createDemandStrengthBackfillScheduler({
+      collector: recoveryCollector,
+      stateFile: recoveryStateFile,
+      now: () => fixedNow,
+      dailyCallBudget: 800
+    });
+    const recoveryRun = await recoveryScheduler.runOnce({ trigger: "authorized-latest-recovery" });
+    assert.equal(recoveryRun.status, "budget_exhausted");
+    assert.deepEqual(recoveryCollector.network.map((entry) => entry.key), [
+      `${SANCHEONG.regionKey}__202607`
+    ]);
+    assert.ok(recoveryCollector.network.every((entry) => entry.input.force === false));
+    assert.deepEqual(recoveryCollector.inspections.slice(0, 2).map((entry) => entry.key), [
+      `${SANCHEONG.regionKey}__202607`,
+      `${SANCHEONG.regionKey}__202606`
+    ]);
+    assert.equal(recoveryRun.progress.networkAttemptedItems, 1);
+    assert.equal(recoveryRun.progress.networkCompletedItems, 1);
+    assert.equal(recoveryRun.todayUsedCalls, 800);
+    assert.equal(recoveryRun.recoveryStatus, "succeeded");
+    assert.equal(recoveryRun.recoveryCallsUsed, 2);
+    assert.equal(recoveryRun.recoveryCallAllowance, 2);
+    assert.equal(recoveryRun.recoveryRegionKey, SANCHEONG.regionKey);
+    assert.equal(recoveryRun.recoveryYearMonth, "202607");
+    const persistedRecovery = JSON.parse(await fsp.readFile(recoveryStateFile, "utf8"));
+    assert.equal(persistedRecovery.dailyBudget.usedCalls, 800);
+    assert.equal(persistedRecovery.dailyBudget.reservedCalls, 0);
+    assert.equal(persistedRecovery.dailyBudget.reservedWorkItems, 0);
+    assert.equal(persistedRecovery.plan.cursor, 1);
+    assert.equal(persistedRecovery.recoveryPermit.id, SANCHEONG_LATEST_RECOVERY_ID);
+    assert.equal(persistedRecovery.recoveryPermit.status, "succeeded");
+    assert.equal(persistedRecovery.recoveryPermit.usedCalls, 2);
+    assert.equal((await recoveryScheduler.runOnce({ trigger: "same-day-recovery-reuse" })).status, "budget_exhausted");
+    assert.equal(recoveryCollector.network.length, 1, "복구 허가는 같은 날 다시 사용할 수 없습니다.");
+    const restartedRecoveryScheduler = createDemandStrengthBackfillScheduler({
+      collector: recoveryCollector,
+      stateFile: recoveryStateFile,
+      now: () => fixedNow,
+      dailyCallBudget: 800
+    });
+    assert.equal((await restartedRecoveryScheduler.runOnce({ trigger: "restart-recovery-reuse" })).status, "budget_exhausted");
+    assert.equal(recoveryCollector.network.length, 1, "재시작 후에도 복구 허가를 다시 사용할 수 없습니다.");
+    const recoveryClaimFile = `${recoveryStateFile}.${SANCHEONG_LATEST_RECOVERY_ID}.claimed`;
+    assert.ok((await fsp.stat(recoveryClaimFile)).isFile());
+    recoveryCollector.cache.delete(`${SANCHEONG.regionKey}__202607`);
+    await fsp.writeFile(recoveryStateFile, JSON.stringify(recoveryState()), "utf8");
+    const rollbackRecoveryScheduler = createDemandStrengthBackfillScheduler({
+      collector: recoveryCollector,
+      stateFile: recoveryStateFile,
+      now: () => fixedNow,
+      dailyCallBudget: 800
+    });
+    assert.equal((await rollbackRecoveryScheduler.runOnce({ trigger: "rollback-recovery-reuse" })).status, "budget_exhausted");
+    assert.equal(recoveryCollector.network.length, 1, "이전 상태 복원 뒤에도 claim이 복구 호출 재사용을 막아야 합니다.");
+    assert.equal((await rollbackRecoveryScheduler.status()).recoveryStatus, "consumed");
+
+    const recoveryCacheSatisfiedStateFile = path.join(temporaryRoot, "recovery-cache", "state.json");
+    await fsp.mkdir(path.dirname(recoveryCacheSatisfiedStateFile), { recursive: true });
+    await fsp.writeFile(
+      recoveryCacheSatisfiedStateFile,
+      JSON.stringify(recoveryState()),
+      "utf8"
+    );
+    const recoveryCacheCollector = fakeCollector({
+      regions: [SANCHEONG],
+      cachedKeys: cachedInitialKeys([SANCHEONG]).filter((key) => !key.endsWith("__202606")),
+      normalizerVersion: SANCHEONG_LATEST_RECOVERY_NORMALIZER_VERSION
+    });
+    const recoveryCacheScheduler = createDemandStrengthBackfillScheduler({
+      collector: recoveryCacheCollector,
+      stateFile: recoveryCacheSatisfiedStateFile,
+      now: () => fixedNow,
+      dailyCallBudget: 800
+    });
+    const recoveryCacheRun = await recoveryCacheScheduler.runOnce({ trigger: "recovery-cache-satisfied" });
+    assert.equal(recoveryCacheRun.status, "budget_exhausted");
+    assert.equal(recoveryCacheCollector.network.length, 0, "정상 최신 캐시는 복구 호출로 다시 수집하면 안 됩니다.");
+    assert.equal(recoveryCacheRun.recoveryStatus, "satisfied_from_cache");
+    assert.equal(recoveryCacheRun.recoveryCallsUsed, 0);
+
+    for (const budgetCase of [
+      { name: "recovery-799", limitCalls: 800, usedCalls: 799 },
+      { name: "recovery-custom-limit", limitCalls: 400, usedCalls: 400 }
+    ]) {
+      const guardedStateFile = path.join(temporaryRoot, budgetCase.name, "state.json");
+      await fsp.mkdir(path.dirname(guardedStateFile), { recursive: true });
+      await fsp.writeFile(guardedStateFile, JSON.stringify(recoveryState({
+        dailyBudget: {
+          kstDate: "2026-08-29",
+          limitCalls: budgetCase.limitCalls,
+          usedCalls: budgetCase.usedCalls,
+          reservedCalls: 0,
+          reservedWorkItems: 0
+        }
+      })), "utf8");
+      const guardedCollector = fakeCollector({
+        regions: [SANCHEONG],
+        cachedKeys: recoveryCachedKeys,
+        normalizerVersion: SANCHEONG_LATEST_RECOVERY_NORMALIZER_VERSION
+      });
+      const guardedScheduler = createDemandStrengthBackfillScheduler({
+        collector: guardedCollector,
+        stateFile: guardedStateFile,
+        now: () => fixedNow,
+        dailyCallBudget: budgetCase.limitCalls
+      });
+      const guardedRun = await guardedScheduler.runOnce({ trigger: budgetCase.name });
+      assert.equal(guardedRun.status, "budget_exhausted");
+      assert.equal(guardedCollector.network.length, 0, `${budgetCase.name}에서는 복구 예외를 사용하면 안 됩니다.`);
+      assert.equal(guardedRun.recoveryStatus, "available");
+      await assert.rejects(fsp.stat(`${guardedStateFile}.${SANCHEONG_LATEST_RECOVERY_ID}.claimed`), { code: "ENOENT" });
+    }
+
+    const recoveryFailureStateFile = path.join(temporaryRoot, "recovery-failure", "state.json");
+    await fsp.mkdir(path.dirname(recoveryFailureStateFile), { recursive: true });
+    await fsp.writeFile(
+      recoveryFailureStateFile,
+      JSON.stringify(recoveryState()),
+      "utf8"
+    );
+    const recoveryFailureCollector = fakeCollector({
+      regions: [SANCHEONG],
+      cachedKeys: recoveryCachedKeys,
+      normalizerVersion: SANCHEONG_LATEST_RECOVERY_NORMALIZER_VERSION,
+      networkResult: () => ({ complete: false, reason: "fixture_partial", operationCallsAttempted: 2 })
+    });
+    const recoveryFailureScheduler = createDemandStrengthBackfillScheduler({
+      collector: recoveryFailureCollector,
+      stateFile: recoveryFailureStateFile,
+      now: () => fixedNow,
+      dailyCallBudget: 800
+    });
+    const recoveryFailureRun = await recoveryFailureScheduler.runOnce({ trigger: "recovery-failure" });
+    assert.equal(recoveryFailureRun.status, "budget_exhausted");
+    assert.equal(recoveryFailureRun.recoveryStatus, "consumed");
+    assert.equal(recoveryFailureCollector.network.length, 1);
+    assert.equal(recoveryFailureCollector.cache.has(`${SANCHEONG.regionKey}__202607`), false);
+    const missingAfterFailure = await recoveryFailureCollector.collectDemandStrength({
+      regionKey: SANCHEONG.regionKey,
+      yearMonth: "202607",
+      cacheOnly: true
+    });
+    assert.equal(missingAfterFailure.stay.overallValue, null);
+    assert.equal(missingAfterFailure.spend.overallValue, null);
+    assert.equal((await recoveryFailureScheduler.runOnce({ trigger: "recovery-failure-reuse" })).status, "budget_exhausted");
+    assert.equal(recoveryFailureCollector.network.length, 1, "실패한 복구 허가도 다시 사용할 수 없습니다.");
 
     budgetNow = new Date("2026-08-30T01:00:00.000Z");
     const resumedScheduler = createDemandStrengthBackfillScheduler({
@@ -692,7 +879,8 @@ async function main() {
     assert.deepEqual(fingerprintState.planFingerprint, {
       regionMapVersion: "fixture-region-map-v2",
       demandStrengthAdapter: "fixture-demand-strength-v2",
-      demandStrengthNormalizer: "fixture-normalizer-v1"
+      demandStrengthNormalizer: "fixture-normalizer-v1",
+      authorizedRecoveryId: SANCHEONG_LATEST_RECOVERY_ID
     });
     const adapterOnlyCollector = fakeCollector({
       regions: [SANCHEONG],
