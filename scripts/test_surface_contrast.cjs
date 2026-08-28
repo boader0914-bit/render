@@ -360,7 +360,7 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260827-region-master-v82";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260828-region-master-v83";
 const expectedAssetVersion = "datalab-20260827-region-master-v64";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
