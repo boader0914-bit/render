@@ -524,6 +524,16 @@ function publicSchedulerProjection(state = {}, runtime = {}) {
   const recoveryPermit = state.recoveryPermit && typeof state.recoveryPermit === "object"
     ? state.recoveryPermit
     : null;
+  const latestFailureEntry = Object.entries(state.failures || {})
+    .map(([key, value]) => ({ key, ...(value && typeof value === "object" ? value : {}) }))
+    .sort((left, right) => String(right.lastAttemptAt || "").localeCompare(String(left.lastAttemptAt || "")))[0] || null;
+  const latestFailureSeparator = latestFailureEntry?.key?.lastIndexOf("__") ?? -1;
+  const latestFailureRegionKey = latestFailureSeparator > 0
+    ? latestFailureEntry.key.slice(0, latestFailureSeparator)
+    : "";
+  const latestFailureYearMonth = latestFailureSeparator > 0
+    ? normalizeYearMonth(latestFailureEntry.key.slice(latestFailureSeparator + 2))
+    : "";
   return {
     stateIntegrity: "ok",
     phase: projectedPublicPhase(state, eligibleRegionCount),
@@ -537,6 +547,18 @@ function publicSchedulerProjection(state = {}, runtime = {}) {
     recoveryCallAllowance: recoveryPermit ? Math.max(0, Number(recoveryPermit.maxCalls || 0)) : 0,
     recoveryRegionKey: String(recoveryPermit?.regionKey || ""),
     recoveryYearMonth: String(recoveryPermit?.yearMonth || ""),
+    recoveryOutcome: String(recoveryPermit?.outcome || ""),
+    recoveryReason: String(recoveryPermit?.reason || ""),
+    recoveryReportedActualCalls: recoveryPermit?.reportedActualCalls !== null
+      && recoveryPermit?.reportedActualCalls !== undefined
+      && Number.isInteger(Number(recoveryPermit.reportedActualCalls))
+      ? Math.max(0, Number(recoveryPermit.reportedActualCalls))
+      : null,
+    recoveryCompletedAt: String(recoveryPermit?.completedAt || ""),
+    activeFailureCount: failureCount,
+    latestFailureRegionKey,
+    latestFailureYearMonth,
+    latestFailureReason: String(latestFailureEntry?.reason || ""),
     nextCheckAt: String(runtime.nextCheckAt || ""),
     lastResultStatus: String(state.lastRun?.status || ""),
     lastReason: String(state.lastRun?.reason || ""),

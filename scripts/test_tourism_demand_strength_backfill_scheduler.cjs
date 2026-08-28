@@ -364,6 +364,13 @@ async function main() {
     const recoveryFailureRun = await recoveryFailureScheduler.runOnce({ trigger: "recovery-failure" });
     assert.equal(recoveryFailureRun.status, "budget_exhausted");
     assert.equal(recoveryFailureRun.recoveryStatus, "consumed");
+    assert.equal(recoveryFailureRun.recoveryOutcome, "incomplete");
+    assert.equal(recoveryFailureRun.recoveryReason, "fixture_partial");
+    assert.equal(recoveryFailureRun.recoveryReportedActualCalls, 2);
+    assert.equal(recoveryFailureRun.activeFailureCount, 1);
+    assert.equal(recoveryFailureRun.latestFailureRegionKey, SANCHEONG.regionKey);
+    assert.equal(recoveryFailureRun.latestFailureYearMonth, "202607");
+    assert.equal(recoveryFailureRun.latestFailureReason, "fixture_partial");
     assert.equal(recoveryFailureCollector.network.length, 1);
     assert.equal(recoveryFailureCollector.cache.has(`${SANCHEONG.regionKey}__202607`), false);
     const missingAfterFailure = await recoveryFailureCollector.collectDemandStrength({

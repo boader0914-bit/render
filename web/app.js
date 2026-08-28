@@ -15822,6 +15822,18 @@ function tourismDemandStrengthBackfillReasonLabel(reason = "") {
     missing_endpoint: "공공데이터 연결 주소 확인 필요",
     request_failed: "공공데이터 요청 실패",
     api_error: "공공데이터 응답 확인 필요",
+    no_observation: "해당 월 공공데이터 미제공",
+    empty_verified: "해당 월 공공데이터 미제공",
+    schema_error: "공공데이터 응답 형식 확인 필요",
+    invalid_response: "공공데이터 응답 형식 확인 필요",
+    invalid_response_fields: "공공데이터 응답 항목 확인 필요",
+    response_grain_mismatch: "행정구역·기준월 응답 불일치",
+    required_overall_metric_missing: "전체 지표값 미제공",
+    incomplete_operation_coverage: "체류·소비 중 일부만 확인",
+    duplicate_value_conflict: "공공데이터 중복값 검토 필요",
+    page_limit_exceeded: "공공데이터 응답 범위 초과",
+    incomplete_pagination: "공공데이터 페이지 응답 불완전",
+    gateway_error: "공공데이터 인증·호출 한도 확인 필요",
     plan_complete: "현재 선수집 계획 완료",
     collection_failed: "일부 수집 실패 · 다음 실행에서 재시도",
     failed_or_partial_items_remain: "일부 수집 실패 · 다음 실행에서 재시도",
@@ -15876,6 +15888,15 @@ function renderTourismDemandStrengthBackfillStatus() {
   const recoveryCallText = Number.isFinite(recoveryCallsUsed) && recoveryCallsUsed > 0
     ? ` · 산청 복구 ${fmtNumber(Math.max(0, recoveryCallsUsed))}회`
     : "";
+  const recoveryStatus = String(backfill?.recoveryStatus || "").trim().toLowerCase();
+  const recoveryReportedActualCalls = optionalNumber(backfill?.recoveryReportedActualCalls);
+  const recoveryReason = String(backfill?.recoveryReason || "").trim();
+  const recoveryDiagnostic = Number.isFinite(recoveryCallsUsed)
+    && recoveryCallsUsed > 0
+    && recoveryStatus
+    && !["succeeded", "satisfied_from_cache", "satisfied_from_daily_budget"].includes(recoveryStatus)
+    ? `산청 ${tourismDemandStrengthMonthLabel(backfill?.recoveryYearMonth)} 복구 미저장 · ${tourismDemandStrengthBackfillReasonLabel(recoveryReason)}${Number.isFinite(recoveryReportedActualCalls) ? ` · 실제 요청 ${fmtNumber(Math.max(0, recoveryReportedActualCalls))}회` : ""}`
+    : "";
   const callProgress = Number.isFinite(todayUsedCalls) && Number.isFinite(dailyCallBudget)
     ? `${fmtNumber(Math.max(0, todayUsedCalls))}/${fmtNumber(Math.max(0, dailyCallBudget))}회`
     : "호출량 확인 대기";
@@ -15926,6 +15947,7 @@ function renderTourismDemandStrengthBackfillStatus() {
         <p role="status" aria-live="polite"><strong>최근 실행 ${escapeHtml(lastResult)}</strong><span>${escapeHtml(lastReason)}</span></p>
         <button class="tourism-demand-strength-backfill-run" type="button" data-tourism-demand-strength-backfill-run ${running || actionUnavailable ? "disabled" : ""}>${escapeHtml(actionLabel)}</button>
       </div>
+      ${recoveryDiagnostic ? `<p class="tourism-demand-strength-backfill-message warning" role="status">${escapeHtml(recoveryDiagnostic)}</p>` : ""}
       ${run.message ? `<p class="tourism-demand-strength-backfill-message ${escapeHtml(run.tone || "neutral")}" role="status" aria-live="polite">${escapeHtml(run.message)}</p>` : ""}
     </section>
   `;
