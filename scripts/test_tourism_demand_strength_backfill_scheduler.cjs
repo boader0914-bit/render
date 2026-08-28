@@ -202,7 +202,7 @@ async function main() {
       planFingerprint: {
         regionMapVersion: "fixture-region-map-v1",
         demandStrengthAdapter: "fixture-demand-strength-v1",
-        demandStrengthNormalizer: SANCHEONG_LATEST_RECOVERY_NORMALIZER_VERSION
+        demandStrengthNormalizer: "demand-strength-row-normalizer-v2"
       },
       plan: null,
       failures: {},

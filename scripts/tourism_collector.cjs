@@ -75,7 +75,9 @@ const VISITOR_OUTLOOK_SCORE_MINIMUMS = Object.freeze({
   requirePreviousYearSameMonthComplete: true
 });
 const DEMAND_STRENGTH_ADAPTER_VERSION = "area-tar-dem-ds-v1";
-const DEMAND_STRENGTH_NORMALIZER_VERSION = "demand-strength-row-normalizer-v2";
+const DEMAND_STRENGTH_NORMALIZER_VERSION = "demand-strength-row-normalizer-v3";
+const DEMAND_STRENGTH_REQUEST_PROFILE_VERSION = "overall-index-filter-v1";
+const DEMAND_STRENGTH_LEGACY_REQUEST_PROFILE_VERSION = "legacy-unfiltered-v1";
 const DEMAND_STRENGTH_SUCCESS_CODES = new Set(["0000", "00"]);
 const DEMAND_STRENGTH_PAGE_SIZE = 100;
 const DEMAND_STRENGTH_MAX_PAGES = 10;
@@ -88,6 +90,7 @@ const DEMAND_STRENGTH_OPERATIONS = Object.freeze({
     key: "stay",
     operation: "areaTarSjrnDsList",
     label: "관광 체류 강도",
+    codeParam: "tarSjrnDsIxCd",
     codeField: "tarSjrnDsIxCd",
     nameField: "tarSjrnDsIxNm",
     valueField: "tarSjrnDsIxVal",
@@ -105,6 +108,7 @@ const DEMAND_STRENGTH_OPERATIONS = Object.freeze({
     key: "spend",
     operation: "areaTarExpDsList",
     label: "관광 소비 강도",
+    codeParam: "tarExpDsIxCd",
     codeField: "tarExpDsIxCd",
     nameField: "tarExpDsIxNm",
     valueField: "tarExpDsIxVal",
@@ -1856,6 +1860,9 @@ function createCollector(options = {}) {
       pageNo: String(pageNo),
       numOfRows: String(pageSize)
     };
+    if (operationDef.codeParam && operationDef.overallCode) {
+      params[operationDef.codeParam] = operationDef.overallCode;
+    }
     Object.entries(params).forEach(([key, value]) => endpoint.searchParams.set(key, String(value)));
     const connector = endpoint.toString().includes("?") ? "&" : "?";
     const keyValue = serviceKey.includes("%") ? serviceKey : encodeURIComponent(serviceKey);
@@ -2141,6 +2148,11 @@ function createCollector(options = {}) {
   function publicDemandStrengthSnapshot(snapshot = {}, input = {}, cache = {}) {
     const stay = snapshot.operations?.stay || emptyDemandOperation(DEMAND_STRENGTH_OPERATIONS.stay, "unavailable", snapshot.reason || "unavailable");
     const spend = snapshot.operations?.spend || emptyDemandOperation(DEMAND_STRENGTH_OPERATIONS.spend, "unavailable", snapshot.reason || "unavailable");
+    const storedRequestProfile = String(snapshot.source?.requestProfile || "").trim();
+    const requestProfile = storedRequestProfile
+      || (cache.hit && snapshot.status === "ok"
+        ? DEMAND_STRENGTH_LEGACY_REQUEST_PROFILE_VERSION
+        : DEMAND_STRENGTH_REQUEST_PROFILE_VERSION);
     return {
       ok: snapshot.status === "ok",
       status: snapshot.status || "unavailable",
@@ -2156,7 +2168,8 @@ function createCollector(options = {}) {
         referenceUrl: demandStrengthSourceDef().referenceUrl,
         timeGrain: "month",
         regionGrain: "sigungu",
-        valueType: "official_index_value"
+        valueType: "official_index_value",
+        requestProfile
       },
       stay,
       spend,
@@ -2345,6 +2358,7 @@ function createCollector(options = {}) {
       },
       source: {
         referenceUrl: demandStrengthSourceDef().referenceUrl,
+        requestProfile: DEMAND_STRENGTH_REQUEST_PROFILE_VERSION,
         operations: operationEntries.map(([, operationDef]) => operationDef.operation)
       }
     };
@@ -2929,6 +2943,7 @@ function createCollector(options = {}) {
           ...(def.key === "demandStrength" ? {
             adapter: DEMAND_STRENGTH_ADAPTER_VERSION,
             normalizerVersion: DEMAND_STRENGTH_NORMALIZER_VERSION,
+            requestProfile: DEMAND_STRENGTH_REQUEST_PROFILE_VERSION,
             operations: Object.values(DEMAND_STRENGTH_OPERATIONS).map((operation) => operation.operation),
             cache: demandStrengthCacheSummary
           } : {})
@@ -2967,5 +2982,7 @@ module.exports = {
   VISITOR_OUTLOOK_SCORE_MINIMUMS,
   DEMAND_STRENGTH_ADAPTER_VERSION,
   DEMAND_STRENGTH_NORMALIZER_VERSION,
+  DEMAND_STRENGTH_REQUEST_PROFILE_VERSION,
+  DEMAND_STRENGTH_LEGACY_REQUEST_PROFILE_VERSION,
   DEMAND_STRENGTH_OPERATIONS
 };

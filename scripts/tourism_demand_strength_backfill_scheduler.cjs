@@ -10,9 +10,10 @@ const MAX_DISTINCT_DAY_ATTEMPTS = 3;
 const DEFAULT_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_STARTUP_DELAY_MS = 120 * 1000;
 const SANCHEONG_REGION_KEY = "kr_gyeongnam_sancheong";
-const SANCHEONG_LATEST_RECOVERY_ID = "sancheong-normalizer-v2-latest-recovery-20260829";
-const SANCHEONG_PUBLICATION_LAG_RECOVERY_ID = "sancheong-publication-lag-202606-recovery-20260829";
-const SANCHEONG_LATEST_RECOVERY_NORMALIZER_VERSION = "demand-strength-row-normalizer-v2";
+const SANCHEONG_LATEST_RECOVERY_ID = "sancheong-overall-code-v3-latest-recovery-20260829";
+const SANCHEONG_PUBLICATION_LAG_RECOVERY_ID = "sancheong-overall-code-v3-prior-recovery-20260829";
+const SANCHEONG_PREVIOUS_NORMALIZER_VERSION = "demand-strength-row-normalizer-v2";
+const SANCHEONG_LATEST_RECOVERY_NORMALIZER_VERSION = "demand-strength-row-normalizer-v3";
 const RECOVERY_HISTORY_LIMIT = 4;
 const AUTHORIZED_RECOVERY_IDS = new Set([
   SANCHEONG_LATEST_RECOVERY_ID,
@@ -170,7 +171,7 @@ function shouldGrantSancheongLatestRecovery(previous = null, current = null) {
   return Boolean(previous && current)
     && String(previous.regionMapVersion || "") === String(current.regionMapVersion || "")
     && String(previous.demandStrengthAdapter || "") === String(current.demandStrengthAdapter || "")
-    && String(previous.demandStrengthNormalizer || "") === SANCHEONG_LATEST_RECOVERY_NORMALIZER_VERSION
+    && String(previous.demandStrengthNormalizer || "") === SANCHEONG_PREVIOUS_NORMALIZER_VERSION
     && String(current.demandStrengthNormalizer || "") === SANCHEONG_LATEST_RECOVERY_NORMALIZER_VERSION
     && String(previous.authorizedRecoveryId || "") !== SANCHEONG_LATEST_RECOVERY_ID
     && String(current.authorizedRecoveryId || "") === SANCHEONG_LATEST_RECOVERY_ID;

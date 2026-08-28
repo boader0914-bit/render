@@ -615,6 +615,20 @@ async function main() {
         const operation = url.pathname.split("/").at(-1);
         const yearMonth = url.searchParams.get("baseYm");
         demandRequests.push({ url, operation, yearMonth });
+        const expectedOverallCode = operation === "areaTarSjrnDsList" ? "21" : "22";
+        const codeParam = operation === "areaTarSjrnDsList" ? "tarSjrnDsIxCd" : "tarExpDsIxCd";
+        if (yearMonth === "202606" && url.searchParams.get(codeParam) !== expectedOverallCode) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({
+              response: {
+                header: { resultCode: "03", resultMsg: "NODATA_ERROR" },
+                body: {}
+              }
+            })
+          };
+        }
         if (yearMonth === failDemandMonth || (yearMonth === "202605" && operation === "areaTarExpDsList")) {
           return {
             ok: true,
@@ -631,7 +645,11 @@ async function main() {
         if (yearMonth === "202603" && operation === "areaTarSjrnDsList") options.omitCodes = ["2105"];
         if (yearMonth === "202602" && operation === "areaTarSjrnDsList") options.omitCodes = ["21"];
         if (yearMonth === "202601") options.areaCd = "47";
-        const rows = demandStrengthRows(yearMonth, operation, options);
+        let rows = demandStrengthRows(yearMonth, operation, options);
+        if (yearMonth === "202606") {
+          const codeField = operation === "areaTarSjrnDsList" ? "tarSjrnDsIxCd" : "tarExpDsIxCd";
+          rows = rows.filter((row) => row[codeField] === expectedOverallCode);
+        }
         if (yearMonth === "202604") {
           const nameField = operation === "areaTarSjrnDsList" ? "tarSjrnDsIxNm" : "tarExpDsIxNm";
           rows.forEach((row) => {
@@ -672,7 +690,8 @@ async function main() {
     assert.equal(demandSourceStatus.status, "ready");
     assert.equal(demandSourceStatus.serviceKeyEnvironment, "DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY");
     assert.equal(demandSourceStatus.adapter, "area-tar-dem-ds-v1");
-    assert.equal(demandSourceStatus.normalizerVersion, "demand-strength-row-normalizer-v2");
+    assert.equal(demandSourceStatus.normalizerVersion, "demand-strength-row-normalizer-v3");
+    assert.equal(demandSourceStatus.requestProfile, "overall-index-filter-v1");
     assert.deepEqual(demandSourceStatus.operations, ["areaTarSjrnDsList", "areaTarExpDsList"]);
     assert.doesNotMatch(JSON.stringify(demandStatusBefore), /fixture-demand-strength-key/);
 
@@ -696,6 +715,7 @@ async function main() {
     assert.equal(demandSnapshot.stay.metrics.find((metric) => metric.code === "21").value, demandSnapshot.stay.overallValue);
     assert.equal(demandSnapshot.spend.metrics.find((metric) => metric.code === "22").value, demandSnapshot.spend.overallValue);
     assert.equal(demandSnapshot.quality.completeOperationCount, 2);
+    assert.equal(demandSnapshot.quality.detailCompleteOperationCount, 0);
     assert.equal(demandSnapshot.collection.operationCallsAttempted, 2);
     assert.equal(demandSnapshot.collection.maxPagesPerOperation, 10);
     assert.equal(demandSnapshot.policy.missingIsNotZero, true);
@@ -710,8 +730,13 @@ async function main() {
       assert.equal(url.searchParams.get("baseYm"), "202606");
       assert.equal(url.searchParams.get("areaCd"), "48");
       assert.equal(url.searchParams.get("signguCd"), "48860");
-      assert.equal(url.searchParams.has("tarSjrnDsIxCd"), false);
-      assert.equal(url.searchParams.has("tarExpDsIxCd"), false);
+      if (operation === "areaTarSjrnDsList") {
+        assert.equal(url.searchParams.get("tarSjrnDsIxCd"), "21");
+        assert.equal(url.searchParams.has("tarExpDsIxCd"), false);
+      } else {
+        assert.equal(url.searchParams.get("tarExpDsIxCd"), "22");
+        assert.equal(url.searchParams.has("tarSjrnDsIxCd"), false);
+      }
     });
     assert.doesNotMatch(JSON.stringify(demandSnapshot), /fixture-demand-strength-key/);
 
@@ -719,8 +744,24 @@ async function main() {
     const cachedDemandSnapshot = await demandCollector.readDemandStrength({ regionKey: "kr_gyeongnam_sancheong", yearMonth: "202606" });
     assert.equal(cachedDemandSnapshot.status, "ok");
     assert.equal(cachedDemandSnapshot.cache.hit, true);
+    assert.equal(cachedDemandSnapshot.source.requestProfile, "overall-index-filter-v1");
     assert.equal(cachedDemandSnapshot.collection.operationCallsAttempted, 0);
     assert.equal(demandRequests.length, demandRequestCountAfterFirst);
+
+    const demandCacheDirectory = path.join(demandDataDir, "cache");
+    const demandCacheFileName = (await fsp.readdir(demandCacheDirectory))
+      .find((fileName) => fileName.startsWith("demand-strength__") && fileName.endsWith("__202606.json"));
+    assert.ok(demandCacheFileName);
+    const demandCacheFilePath = path.join(demandCacheDirectory, demandCacheFileName);
+    const currentDemandCache = JSON.parse(await fsp.readFile(demandCacheFilePath, "utf8"));
+    const legacyDemandCache = JSON.parse(JSON.stringify(currentDemandCache));
+    delete legacyDemandCache.source.requestProfile;
+    await fsp.writeFile(demandCacheFilePath, `${JSON.stringify(legacyDemandCache, null, 2)}\n`, "utf8");
+    const legacyDemandSnapshot = await demandCollector.readDemandStrength({ regionKey: "kr_gyeongnam_sancheong", yearMonth: "202606" });
+    assert.equal(legacyDemandSnapshot.status, "ok");
+    assert.equal(legacyDemandSnapshot.cache.hit, true);
+    assert.equal(legacyDemandSnapshot.source.requestProfile, "legacy-unfiltered-v1");
+    await fsp.writeFile(demandCacheFilePath, `${JSON.stringify(currentDemandCache, null, 2)}\n`, "utf8");
 
     const genericDemand = await demandCollector.collect({
       keyword: "산청글램핑",

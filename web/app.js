@@ -15485,11 +15485,18 @@ function tourismDemandStrengthSeriesState(series = [], kind = "stay") {
   }
   const status = entryStatus(latest);
   const reason = entryReason(latest);
-  if (["no_observation", "empty_verified"].includes(reason)) {
+  if (reason === "no_observation") {
     return {
-      valueLabel: "공식 자료 없음",
-      detail: `${label} 공식 응답 0건`,
-      chartText: `해당 기간 ${label} 공식 응답이 0건입니다. 0점으로 표시하지 않습니다.`
+      valueLabel: "공공 API 제공 대기",
+      detail: `${label} 공공 API 미제공`,
+      chartText: `공공 API가 해당 기준월 ${label}를 반환하지 않아 재확인합니다. 값은 0점으로 표시하지 않습니다.`
+    };
+  }
+  if (reason === "empty_verified") {
+    return {
+      valueLabel: "공공 API 응답 0건",
+      detail: `${label} 정상 응답 · 결과 0건`,
+      chartText: `공공 API 정상 응답의 결과가 0건입니다. 자료 부재를 확정하지 않고 재확인하며, 값은 0점으로 표시하지 않습니다.`
     };
   }
   if (
@@ -15720,10 +15727,22 @@ function tourismDemandStrengthSourceStatusLabel(source = tourismDemandStrengthHi
   const observedCount = [stay, spend]
     .flatMap((comparison) => Array.isArray(comparison?.series) ? comparison.series : [])
     .filter((entry) => entry.hasValue).length;
-  if (observedCount) return (region?.status === "ok" || source?.status === "ok") ? "실제 지수 관측" : "자료 일부 확인";
+  const latestEntries = [stay, spend]
+    .map((comparison) => Array.isArray(comparison?.series) ? comparison.series.at(-1) : null)
+    .filter(Boolean);
+  const latestReasons = latestEntries.map((entry) => String(entry?.reason || "").trim().toLowerCase());
+  const latestProviderPending = latestReasons.includes("no_observation");
+  const latestVerifiedEmpty = latestReasons.includes("empty_verified");
+  if (latestProviderPending && !observedCount) return "공공 API 제공 대기";
+  if (latestVerifiedEmpty && !observedCount) return "공공 API 응답 0건";
+  if (observedCount) {
+    if (latestProviderPending) return "기존 관측 유지 · 최신월 공공 API 제공 대기";
+    if (latestVerifiedEmpty) return "기존 관측 유지 · 최신월 공공 API 응답 0건";
+    return (region?.status === "ok" || source?.status === "ok") ? "실제 지수 관측" : "자료 일부 확인";
+  }
   const reason = String(region?.reason || region?.quality?.reason || source?.reason || source?.quality?.reason || "").trim().toLowerCase();
   if ((reason.includes("service_key") || reason.includes("adapter") || reason.includes("endpoint")) && !reason.includes("ready")) return "연동 대기";
-  if (reason.includes("cache") && reason.includes("missing")) return "해당 기간 관측 없음";
+  if (reason.includes("cache") && reason.includes("missing")) return "수집 대기";
   if ([
     "missing_service_key",
     "missing_endpoint",
@@ -15731,13 +15750,9 @@ function tourismDemandStrengthSourceStatusLabel(source = tourismDemandStrengthHi
     "adapter_not_ready",
     "disabled"
   ].includes(reason)) return "연동 대기";
-  if ([
-    "no_complete_history_observation",
-    "monthly_cache_missing",
-    "cache_missing",
-    "no_observation",
-    "empty_verified"
-  ].includes(reason)) return "해당 기간 관측 없음";
+  if (reason === "no_observation") return "공공 API 제공 대기";
+  if (reason === "empty_verified") return "공공 API 응답 0건";
+  if (["no_complete_history_observation", "monthly_cache_missing", "cache_missing"].includes(reason)) return "수집 대기";
   if (["requested_region_not_matched", "region_code_verify_required"].includes(reason)) return "지역 확인 필요";
   if (["gateway_error", "api_error", "request_failed", "timeout", "history_collection_failed"].includes(reason)) return "수집 확인 필요";
   return source ? "자료 확인 대기" : "연동 대기";
@@ -15822,8 +15837,8 @@ function tourismDemandStrengthBackfillReasonLabel(reason = "") {
     missing_endpoint: "공공데이터 연결 주소 확인 필요",
     request_failed: "공공데이터 요청 실패",
     api_error: "공공데이터 응답 확인 필요",
-    no_observation: "해당 월 공공데이터 미제공",
-    empty_verified: "해당 월 공공데이터 미제공",
+    no_observation: "해당 기준월 공공 API 미제공 · 재확인 예정",
+    empty_verified: "해당 기준월 공공 API 응답 0건 · 재확인 예정",
     schema_error: "공공데이터 응답 형식 확인 필요",
     invalid_response: "공공데이터 응답 형식 확인 필요",
     invalid_response_fields: "공공데이터 응답 항목 확인 필요",
@@ -15939,7 +15954,7 @@ function renderTourismDemandStrengthBackfillStatus() {
       <dl class="tourism-demand-strength-backfill-metrics">
         <div><dt>대상 지역</dt><dd>${escapeHtml(eligibleRegionCount)}</dd></div>
         <div><dt>처리 진행</dt><dd>${escapeHtml(pairProgress)}</dd></div>
-        <div><dt>관측 없음·검토</dt><dd>${escapeHtml(terminalMissingText)}</dd></div>
+        <div><dt>미저장·검토</dt><dd>${escapeHtml(terminalMissingText)}</dd></div>
         <div><dt>오늘 API 사용</dt><dd>${escapeHtml(`${callProgress}${recoveryCallText}`)}</dd></div>
         <div><dt>다음 확인</dt><dd>${escapeHtml(tourismDemandStrengthBackfillDateLabel(backfill?.nextCheckAt))}</dd></div>
       </dl>
@@ -15971,8 +15986,10 @@ function renderTourismDemandStrengthHistory() {
   const refreshButton = isAdminRole()
     ? `<button class="tourism-demand-strength-refresh" type="button" data-tourism-demand-strength-refresh ${refresh.loading ? "disabled" : ""}>${refresh.loading ? "최근 3개년 갱신 중" : "최근 3개년 갱신"}</button>`
     : "";
-  const stayLatestText = stay.latest ? tourismDemandStrengthNumberLabel(stay.latest.value) : "관측 없음";
-  const spendLatestText = spend.latest ? tourismDemandStrengthNumberLabel(spend.latest.value) : "관측 없음";
+  const stayState = tourismDemandStrengthSeriesState(stay.series, "stay");
+  const spendState = tourismDemandStrengthSeriesState(spend.series, "spend");
+  const stayLatestText = stay.latest ? tourismDemandStrengthNumberLabel(stay.latest.value) : stayState.valueLabel;
+  const spendLatestText = spend.latest ? tourismDemandStrengthNumberLabel(spend.latest.value) : spendState.valueLabel;
   const stayYoyText = tourismVisitorHistoryRateLabel(stay.yoyChangeRate);
   const spendYoyText = tourismVisitorHistoryRateLabel(spend.yoyChangeRate);
   const stayMomentumText = tourismVisitorHistoryRateLabel(stay.recent12ChangeRate);
@@ -16003,12 +16020,12 @@ function renderTourismDemandStrengthHistory() {
         <article data-ui-surface="metric">
           <span>관광 체류 강도 최신값</span>
           <strong>${escapeHtml(stayLatestText)}</strong>
-          <small>${escapeHtml(stay.latest ? `${tourismVisitorMonthLabel(stay.latest.yearMonth)} · ${stayUnit}` : "해당 기간 관측 없음")}</small>
+          <small>${escapeHtml(stay.latest ? `${tourismVisitorMonthLabel(stay.latest.yearMonth)} · ${stayUnit}` : stayState.detail)}</small>
         </article>
         <article data-ui-surface="metric">
           <span>관광 소비 강도 최신값</span>
           <strong>${escapeHtml(spendLatestText)}</strong>
-          <small>${escapeHtml(spend.latest ? `${tourismVisitorMonthLabel(spend.latest.yearMonth)} · ${spendUnit}` : "해당 기간 관측 없음")}</small>
+          <small>${escapeHtml(spend.latest ? `${tourismVisitorMonthLabel(spend.latest.yearMonth)} · ${spendUnit}` : spendState.detail)}</small>
         </article>
         <article data-ui-surface="metric">
           <span>전년동월 변화</span>
@@ -32442,6 +32459,8 @@ function locationProfileStrengthEvidence(profile, card = {}, alias = null) {
   const stayCoverage = region ? tourismDemandStrengthCoverage(region, "stay", source) : { expectedMonths: 0, completeMonths: 0, rate: NaN };
   const spendCoverage = region ? tourismDemandStrengthCoverage(region, "spend", source) : { expectedMonths: 0, completeMonths: 0, rate: NaN };
   const observed = staySeries.some((entry) => entry.hasValue) || spendSeries.some((entry) => entry.hasValue);
+  const stayState = tourismDemandStrengthSeriesState(staySeries, "stay");
+  const spendState = tourismDemandStrengthSeriesState(spendSeries, "spend");
   const period = observed ? tourismDemandStrengthPeriodLabel(staySeries, spendSeries, source, region) : "기간 관측 없음";
   return {
     source,
@@ -32451,6 +32470,8 @@ function locationProfileStrengthEvidence(profile, card = {}, alias = null) {
     spendSeries,
     stayCoverage,
     spendCoverage,
+    stayState,
+    spendState,
     observed,
     period,
     collectedAt: observed ? locationProfileObservedAt(region?.collectedAt, source?.collectedAt, profile?.collectedAt) : "",
@@ -32805,6 +32826,18 @@ function renderLocationProfileSourcePanel(entry, profile, evidence = {}, regionK
         : entry?.status === "error"
           ? "지역 프로필 API 연결 실패 · 현재 수집 결과 사용"
           : "지역 프로필 연결 대기 · 현재 수집 결과 사용";
+  const strengthStateLabels = [evidence.strength.stayState?.valueLabel, evidence.strength.spendState?.valueLabel];
+  const strengthProviderPending = strengthStateLabels.includes("공공 API 제공 대기");
+  const strengthVerifiedEmpty = strengthStateLabels.includes("공공 API 응답 0건");
+  const strengthStatus = providerCodePending
+    ? "공급기관 코드 확인 대기"
+    : strengthProviderPending
+      ? (evidence.strength.observed ? "기존 관측 유지 · 최신월 공공 API 제공 대기" : "공공 API 제공 대기")
+      : strengthVerifiedEmpty
+        ? (evidence.strength.observed ? "기존 관측 유지 · 최신월 공공 API 응답 0건" : "공공 API 응답 0건")
+        : evidence.strength.observed
+          ? "실제 지수 관측"
+          : "수집 대기";
   const rows = [
     {
       label: "Naver Place 표본",
@@ -32849,9 +32882,7 @@ function renderLocationProfileSourcePanel(entry, profile, evidence = {}, regionK
     {
       label: "체류·소비 강도",
       observed: !providerCodePending && evidence.strength.observed,
-      status: providerCodePending
-        ? "공급기관 코드 확인 대기"
-        : evidence.strength.observed ? "실제 지수 관측" : "해당 기간 관측 없음",
+      status: strengthStatus,
       source: evidence.strength.sourceLabel,
       period: providerCodePending ? "잘못된 지역값 저장 안 함" : evidence.strength.period
     }

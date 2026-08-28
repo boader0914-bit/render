@@ -459,8 +459,42 @@ assert(
     ], "spend").valueLabel === "실제 관측"
     && classifyDemandStrengthSeries([
       { yearMonth: "202606", status: "missing", reason: "empty_verified", hasValue: false }
-    ], "spend").valueLabel === "공식 자료 없음",
+    ], "spend").valueLabel === "공공 API 응답 0건"
+    && classifyDemandStrengthSeries([
+      { yearMonth: "202606", status: "missing", reason: "no_observation", hasValue: false }
+    ], "spend").valueLabel === "공공 API 제공 대기",
   "demand-strength cards must distinguish API failures, validation failures, pending cache, observations, and verified empty responses",
+  failures
+);
+
+const demandStrengthSourceStatusBlock = app.slice(
+  app.indexOf("function tourismDemandStrengthSourceStatusLabel("),
+  app.indexOf("function tourismDemandStrengthCollectionLabel(")
+);
+const demandStrengthSourceStatusContext = {};
+vm.runInNewContext(
+  `${demandStrengthSourceStatusBlock}\nthis.classifyDemandStrengthSource = tourismDemandStrengthSourceStatusLabel;`,
+  demandStrengthSourceStatusContext
+);
+const classifyDemandStrengthSource = demandStrengthSourceStatusContext.classifyDemandStrengthSource;
+const observedComparison = {
+  series: [
+    { yearMonth: "202605", status: "complete", reason: "", hasValue: true, value: 53 },
+    { yearMonth: "202606", status: "missing", reason: "no_observation", hasValue: false }
+  ]
+};
+assert(
+  classifyDemandStrengthSource({}, {}, { series: [{ reason: "no_observation", hasValue: false }] }, { series: [] }) === "공공 API 제공 대기"
+    && classifyDemandStrengthSource({}, {}, { series: [{ reason: "empty_verified", hasValue: false }] }, { series: [] }) === "공공 API 응답 0건"
+    && classifyDemandStrengthSource({}, {}, observedComparison, { series: [] }) === "기존 관측 유지 · 최신월 공공 API 제공 대기"
+    && classifyDemandStrengthSource({}, {}, {
+      series: [
+        { yearMonth: "202605", status: "complete", reason: "", hasValue: true, value: 53 },
+        { yearMonth: "202606", status: "missing", reason: "empty_verified", hasValue: false }
+      ]
+    }, { series: [] }) === "기존 관측 유지 · 최신월 공공 API 응답 0건"
+    && classifyDemandStrengthSource({ reason: "monthly_cache_missing" }, {}, { series: [] }, { series: [] }) === "수집 대기",
+  "demand-strength source status must separate provider pending, verified empty, retained history, and uncollected cache",
   failures
 );
 
