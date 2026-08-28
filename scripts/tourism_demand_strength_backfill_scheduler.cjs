@@ -136,14 +136,16 @@ function planIdentifier(kind, items = [], metadata = {}) {
 function collectionFingerprint(regionMap = {}, demandStrengthSource = {}) {
   return {
     regionMapVersion: String(regionMap.version || ""),
-    demandStrengthAdapter: String(demandStrengthSource.adapter || demandStrengthSource.version || "")
+    demandStrengthAdapter: String(demandStrengthSource.adapter || demandStrengthSource.version || ""),
+    demandStrengthNormalizer: String(demandStrengthSource.normalizerVersion || "")
   };
 }
 
 function fingerprintMatches(left = null, right = null) {
   return Boolean(left && right)
     && String(left.regionMapVersion || "") === String(right.regionMapVersion || "")
-    && String(left.demandStrengthAdapter || "") === String(right.demandStrengthAdapter || "");
+    && String(left.demandStrengthAdapter || "") === String(right.demandStrengthAdapter || "")
+    && String(left.demandStrengthNormalizer || "") === String(right.demandStrengthNormalizer || "");
 }
 
 function historyPointForItem(history = {}, item = {}) {
@@ -695,7 +697,8 @@ function createDemandStrengthBackfillScheduler(options = {}) {
       endYearMonth: proposed.endYearMonth,
       regionKeys: regions.map((region) => region.regionKey),
       regionMapVersion: fingerprint.regionMapVersion,
-      demandStrengthAdapter: fingerprint.demandStrengthAdapter
+      demandStrengthAdapter: fingerprint.demandStrengthAdapter,
+      demandStrengthNormalizer: fingerprint.demandStrengthNormalizer
     });
     if (!state.plan || state.plan.id !== id) {
       state.plan = {
@@ -1280,7 +1283,8 @@ function createDemandStrengthBackfillScheduler(options = {}) {
         status: String(demandStrengthSource.status || "unavailable"),
         serviceKeyConfigured: Boolean(demandStrengthSource.serviceKeyConfigured),
         endpointConfigured: Boolean(demandStrengthSource.endpointConfigured),
-        adapter: String(demandStrengthSource.adapter || demandStrengthSource.version || "")
+        adapter: String(demandStrengthSource.adapter || demandStrengthSource.version || ""),
+        normalizerVersion: String(demandStrengthSource.normalizerVersion || "")
       } : null,
       policy: {
         persistentState: true,

@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260829-demand-backfill-v84";
-const expectedAssetVersion = "datalab-20260829-demand-backfill-v65";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260829-demand-spend-fix-v85";
+const expectedAssetVersion = "datalab-20260829-demand-spend-fix-v66";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -415,13 +415,52 @@ assert(
 assert(
   app.includes("function renderTourismDemandStrengthHistory()")
     && app.includes("function tourismDemandStrengthChart(series = [], kind = \"stay\"")
+    && app.includes("function tourismDemandStrengthSeriesState(series = [], kind = \"stay\"")
+    && app.includes("API 수집에 실패했습니다. 공식 무관측으로 처리하지 않습니다.")
+    && app.includes("응답을 검증하지 못했습니다. 공식 무관측과 구분하여 재수집합니다.")
     && app.includes("data-tourism-demand-strength-refresh")
-    && app.includes("부분수집·미관측 월은 0으로 표시하지 않습니다")
+    && app.includes("결측값을 0으로 표시하지 않습니다")
+    && app.includes("0점으로 표시하지 않습니다")
     && app.includes("지역 관광 기초지수")
     && server.includes("tourismCollector.collectDemandStrengthHistory({")
     && server.includes('reqUrl.pathname === "/api/tourism-data/demand-strength/history"')
     && server.includes("tourismDemandStrengthHistory,"),
   "tourism demand strength must remain a separate cache-backed stay and spend history contract",
+  failures
+);
+
+const demandStrengthSeriesStateBlock = app.slice(
+  app.indexOf("function tourismDemandStrengthSeriesState("),
+  app.indexOf("function tourismDemandStrengthCoverage(")
+);
+const demandStrengthSeriesStateContext = {};
+vm.runInNewContext(
+  `${demandStrengthSeriesStateBlock}\nthis.classifyDemandStrengthSeries = tourismDemandStrengthSeriesState;`,
+  demandStrengthSeriesStateContext
+);
+const classifyDemandStrengthSeries = demandStrengthSeriesStateContext.classifyDemandStrengthSeries;
+assert(
+  classifyDemandStrengthSeries([
+    { yearMonth: "202605", status: "error", reason: "timeout", hasValue: false },
+    { yearMonth: "202606", status: "unavailable", reason: "monthly_cache_missing", hasValue: false }
+  ], "spend").valueLabel === "수집 실패"
+    && classifyDemandStrengthSeries([
+      { yearMonth: "202604", status: "complete", reason: "", hasValue: true, value: 51 },
+      { yearMonth: "202605", status: "error", reason: "response_grain_mismatch", hasValue: false },
+      { yearMonth: "202606", status: "unavailable", reason: "monthly_cache_missing", hasValue: false }
+    ], "spend").valueLabel === "응답 확인 필요"
+    && classifyDemandStrengthSeries([
+      { yearMonth: "202604", status: "error", reason: "timeout", hasValue: false },
+      { yearMonth: "202605", status: "complete", reason: "", hasValue: true, value: 52 },
+      { yearMonth: "202606", status: "unavailable", reason: "monthly_cache_missing", hasValue: false }
+    ], "spend").valueLabel === "수집 대기"
+    && classifyDemandStrengthSeries([
+      { yearMonth: "202606", status: "complete", reason: "", hasValue: true, value: 53 }
+    ], "spend").valueLabel === "실제 관측"
+    && classifyDemandStrengthSeries([
+      { yearMonth: "202606", status: "missing", reason: "empty_verified", hasValue: false }
+    ], "spend").valueLabel === "공식 자료 없음",
+  "demand-strength cards must distinguish API failures, validation failures, pending cache, observations, and verified empty responses",
   failures
 );
 

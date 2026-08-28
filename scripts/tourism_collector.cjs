@@ -75,6 +75,7 @@ const VISITOR_OUTLOOK_SCORE_MINIMUMS = Object.freeze({
   requirePreviousYearSameMonthComplete: true
 });
 const DEMAND_STRENGTH_ADAPTER_VERSION = "area-tar-dem-ds-v1";
+const DEMAND_STRENGTH_NORMALIZER_VERSION = "demand-strength-row-normalizer-v2";
 const DEMAND_STRENGTH_SUCCESS_CODES = new Set(["0000", "00"]);
 const DEMAND_STRENGTH_PAGE_SIZE = 100;
 const DEMAND_STRENGTH_MAX_PAGES = 10;
@@ -1958,16 +1959,23 @@ function createCollector(options = {}) {
       const sourceName = String(raw?.[operationDef.nameField] || "").trim();
       const valueText = String(raw?.[operationDef.valueField] ?? "").replace(/,/g, "").trim();
       const value = valueText === "" ? NaN : Number(valueText);
-      if (!/^\d{6}$/.test(rowYearMonth) || !/^\d{2}$/.test(areaCd) || !/^\d{5}$/.test(signguCd) || !code || !sourceName || !Number.isFinite(value)) {
+      if (
+        !/^\d{6}$/.test(rowYearMonth)
+        || !/^\d{2}$/.test(areaCd)
+        || (signguCd && !/^\d{5}$/.test(signguCd))
+        || (!signguCd && !signguNm)
+        || !code
+        || !Number.isFinite(value)
+      ) {
         invalidRowCount += 1;
         continue;
       }
       if (
         rowYearMonth !== yearMonth
         || areaCd !== String(region.ktoSidoCd || "")
-        || signguCd !== String(region.ktoSggCd || "")
-        || !demandRegionNameMatches(areaNm, region, "area")
-        || !demandRegionNameMatches(signguNm, region, "sigungu")
+        || (signguCd && signguCd !== String(region.ktoSggCd || ""))
+        || (areaNm && !demandRegionNameMatches(areaNm, region, "area"))
+        || (signguNm && !demandRegionNameMatches(signguNm, region, "sigungu"))
       ) {
         mismatchedRowCount += 1;
         continue;
@@ -2920,6 +2928,7 @@ function createCollector(options = {}) {
           periodParam: config.periodParam,
           ...(def.key === "demandStrength" ? {
             adapter: DEMAND_STRENGTH_ADAPTER_VERSION,
+            normalizerVersion: DEMAND_STRENGTH_NORMALIZER_VERSION,
             operations: Object.values(DEMAND_STRENGTH_OPERATIONS).map((operation) => operation.operation),
             cache: demandStrengthCacheSummary
           } : {})
@@ -2957,5 +2966,6 @@ module.exports = {
   VISITOR_OUTLOOK_MODEL_VERSION,
   VISITOR_OUTLOOK_SCORE_MINIMUMS,
   DEMAND_STRENGTH_ADAPTER_VERSION,
+  DEMAND_STRENGTH_NORMALIZER_VERSION,
   DEMAND_STRENGTH_OPERATIONS
 };

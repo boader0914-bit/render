@@ -632,6 +632,20 @@ async function main() {
         if (yearMonth === "202602" && operation === "areaTarSjrnDsList") options.omitCodes = ["21"];
         if (yearMonth === "202601") options.areaCd = "47";
         const rows = demandStrengthRows(yearMonth, operation, options);
+        if (yearMonth === "202604") {
+          const nameField = operation === "areaTarSjrnDsList" ? "tarSjrnDsIxNm" : "tarExpDsIxNm";
+          rows.forEach((row) => {
+            delete row.areaNm;
+            delete row.signguCd;
+            delete row[nameField];
+          });
+        }
+        if (yearMonth === "202512") {
+          rows.forEach((row) => {
+            delete row.signguCd;
+            delete row.signguNm;
+          });
+        }
         const pageNo = Number(url.searchParams.get("pageNo"));
         const pageSize = Number(url.searchParams.get("numOfRows"));
         const offset = (pageNo - 1) * pageSize;
@@ -658,6 +672,7 @@ async function main() {
     assert.equal(demandSourceStatus.status, "ready");
     assert.equal(demandSourceStatus.serviceKeyEnvironment, "DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY");
     assert.equal(demandSourceStatus.adapter, "area-tar-dem-ds-v1");
+    assert.equal(demandSourceStatus.normalizerVersion, "demand-strength-row-normalizer-v2");
     assert.deepEqual(demandSourceStatus.operations, ["areaTarSjrnDsList", "areaTarExpDsList"]);
     assert.doesNotMatch(JSON.stringify(demandStatusBefore), /fixture-demand-strength-key/);
 
@@ -768,6 +783,15 @@ async function main() {
     assert.equal(mayDemandPoint.spendStatus, "error");
     assert.ok(Number.isFinite(mayDemandPoint.stayOverall));
     assert.equal(mayDemandPoint.spendOverall, null);
+    const aprilDemandPoint = demandHistory.series.find((point) => point.yearMonth === "202604");
+    assert.equal(aprilDemandPoint.status, "complete");
+    const optionalNameDemand = await demandCollector.readDemandStrength({ regionName: "산청", yearMonth: "202604" });
+    assert.equal(optionalNameDemand.status, "ok");
+    assert.equal(optionalNameDemand.stay.quality.invalidRowCount, 0);
+    assert.equal(optionalNameDemand.stay.quality.mismatchedRowCount, 0);
+    assert.equal(optionalNameDemand.spend.quality.invalidRowCount, 0);
+    assert.equal(optionalNameDemand.spend.quality.mismatchedRowCount, 0);
+    assert.equal(optionalNameDemand.spend.metrics.find((metric) => metric.code === "22").sourceName, "");
     assert.equal(demandHistory.quality.completeRequiresOverallCodes.join(","), "21,22");
     assert.equal(demandHistory.collection.provinceBulkReuse, false);
 
@@ -799,6 +823,11 @@ async function main() {
     assert.equal(wrongRegionDemand.status, "error");
     assert.equal(wrongRegionDemand.stay.quality.status, "region_or_period_mismatch");
     assert.equal(wrongRegionDemand.spend.quality.status, "region_or_period_mismatch");
+
+    const missingSigunguIdentityDemand = await demandCollector.collectDemandStrength({ regionName: "산청", yearMonth: "202512" });
+    assert.equal(missingSigunguIdentityDemand.status, "error");
+    assert.equal(missingSigunguIdentityDemand.stay.quality.status, "invalid_rows");
+    assert.equal(missingSigunguIdentityDemand.spend.quality.status, "invalid_rows");
 
     failDemandMonth = "202606";
     const preservedDemand = await demandCollector.collectDemandStrength({

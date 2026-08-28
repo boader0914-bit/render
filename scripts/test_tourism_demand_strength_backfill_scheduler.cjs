@@ -48,7 +48,8 @@ function fakeCollector({
   cachedKeys = [],
   networkResult,
   regionMapVersion = "fixture-region-map-v1",
-  adapter = "fixture-demand-strength-v1"
+  adapter = "fixture-demand-strength-v1",
+  normalizerVersion = "fixture-normalizer-v1"
 } = {}) {
   const cache = new Set(cachedKeys);
   const inspections = [];
@@ -66,6 +67,7 @@ function fakeCollector({
           key: "demandStrength",
           status: "ready",
           adapter,
+          normalizerVersion,
           serviceKeyConfigured: true,
           endpointConfigured: true
         }]
@@ -689,7 +691,8 @@ async function main() {
     const fingerprintState = JSON.parse(await fsp.readFile(fingerprintStateFile, "utf8"));
     assert.deepEqual(fingerprintState.planFingerprint, {
       regionMapVersion: "fixture-region-map-v2",
-      demandStrengthAdapter: "fixture-demand-strength-v2"
+      demandStrengthAdapter: "fixture-demand-strength-v2",
+      demandStrengthNormalizer: "fixture-normalizer-v1"
     });
     const adapterOnlyCollector = fakeCollector({
       regions: [SANCHEONG],
@@ -704,11 +707,26 @@ async function main() {
     });
     assert.equal((await adapterOnlyScheduler.runOnce({ trigger: "adapter-only-change" })).status, "initial_complete");
     assert.equal(adapterOnlyCollector.inspections.length, 36);
+    const normalizerOnlyCollector = fakeCollector({
+      regions: [SANCHEONG],
+      cachedKeys: cachedInitialKeys([SANCHEONG]),
+      regionMapVersion: "fixture-region-map-v2",
+      adapter: "fixture-demand-strength-v3",
+      normalizerVersion: "fixture-normalizer-v2"
+    });
+    const normalizerOnlyScheduler = createDemandStrengthBackfillScheduler({
+      collector: normalizerOnlyCollector,
+      stateFile: fingerprintStateFile,
+      now: () => fixedNow
+    });
+    assert.equal((await normalizerOnlyScheduler.runOnce({ trigger: "normalizer-only-change" })).status, "initial_complete");
+    assert.equal(normalizerOnlyCollector.inspections.length, 36);
     const regionMapOnlyCollector = fakeCollector({
       regions: [SANCHEONG],
       cachedKeys: cachedInitialKeys([SANCHEONG]),
       regionMapVersion: "fixture-region-map-v3",
-      adapter: "fixture-demand-strength-v3"
+      adapter: "fixture-demand-strength-v3",
+      normalizerVersion: "fixture-normalizer-v2"
     });
     const regionMapOnlyScheduler = createDemandStrengthBackfillScheduler({
       collector: regionMapOnlyCollector,

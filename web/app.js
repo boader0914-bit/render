@@ -15349,7 +15349,9 @@ function tourismDemandStrengthPointStatus(entry = {}, kind = "stay", separateSer
   const status = String(rawStatus || "").trim().toLowerCase();
   if (["complete", "ok", "ready", "success"].includes(status)) return "complete";
   if (["partial", "incomplete", "incomplete_data"].includes(status)) return "partial";
-  return "missing";
+  if (["missing", "no_observation", "empty_verified"].includes(status)) return "missing";
+  if (["unavailable", "skipped", "cache_missing"].includes(status)) return "unavailable";
+  return status ? "error" : "missing";
 }
 
 function tourismDemandStrengthPointValue(entry = {}, kind = "stay", separateSeries = false) {
@@ -15378,7 +15380,7 @@ function tourismDemandStrengthSeries(region = tourismDemandStrengthPrimaryRegion
       ...entry,
       yearMonth,
       status: complete ? "complete" : status,
-      reason: entry?.[`${kind}Reason`] || entry?.[kind]?.reason || entry?.reason || (complete ? "" : "no_observation"),
+      reason: entry?.[`${kind}Reason`] || entry?.[kind]?.reason || entry?.reason || (complete ? "" : status === "error" ? "collection_failed" : "no_observation"),
       value: complete ? value : null,
       hasValue: complete
     };
@@ -15407,13 +15409,107 @@ function tourismDemandStrengthSeries(region = tourismDemandStrengthPrimaryRegion
     const yearMonth = tourismVisitorMonthFromIndex(index);
     rows.push(byMonth.get(yearMonth) || {
       yearMonth,
-      status: "missing",
-      reason: "no_observation",
+      status: "unavailable",
+      reason: "monthly_cache_missing",
       value: null,
       hasValue: false
     });
   }
   return rows.slice(-36);
+}
+
+function tourismDemandStrengthSeriesState(series = [], kind = "stay") {
+  const label = kind === "spend" ? "소비 강도" : "체류 강도";
+  const responseValidationReasons = [
+    "required_overall_metric_missing",
+    "invalid_response_fields",
+    "response_grain_mismatch",
+    "duplicate_value_conflict",
+    "schema_error",
+    "invalid_response",
+    "page_number_mismatch",
+    "total_count_changed",
+    "incomplete_pagination",
+    "page_limit_exceeded"
+  ];
+  const apiFailureReasons = [
+    "gateway_error",
+    "api_error",
+    "http_error",
+    "request_failed",
+    "timeout",
+    "history_collection_failed",
+    "collection_failed"
+  ];
+  const entryStatus = (entry = {}) => String(entry?.status || "").trim().toLowerCase();
+  const entryReason = (entry = {}) => String(entry?.reason || "").trim().toLowerCase();
+  const isIssue = (entry = {}) => {
+    const status = entryStatus(entry);
+    const reason = entryReason(entry);
+    return status === "error"
+      || status === "partial"
+      || responseValidationReasons.includes(reason)
+      || apiFailureReasons.includes(reason)
+      || ["detail_metric_missing", "incomplete_operation_coverage"].includes(reason);
+  };
+  const issueState = (entry = {}) => {
+    const status = entryStatus(entry);
+    const reason = entryReason(entry);
+    if (responseValidationReasons.includes(reason)) {
+      return {
+        valueLabel: "응답 확인 필요",
+        detail: `${label} 응답 검증 실패`,
+        chartText: `${label} 응답을 검증하지 못했습니다. 공식 무관측과 구분하여 재수집합니다.`
+      };
+    }
+    if (status === "error" || apiFailureReasons.includes(reason)) {
+      return {
+        valueLabel: "수집 실패",
+        detail: `${label} API 재수집 필요`,
+        chartText: `${label} API 수집에 실패했습니다. 공식 무관측으로 처리하지 않습니다.`
+      };
+    }
+    return {
+      valueLabel: "부분수집",
+      detail: `${label} 전체지표 확인 필요`,
+      chartText: `${label}가 부분수집되어 전체지표 확인 후 표시합니다.`
+    };
+  };
+  const latestValueIndex = series.findLastIndex((entry) => entry?.hasValue);
+  const latestIssueIndex = series.findLastIndex(isIssue);
+  if (latestIssueIndex > latestValueIndex) return issueState(series[latestIssueIndex]);
+
+  const latest = series.at(-1) || null;
+  if (latest?.hasValue) {
+    return { valueLabel: "실제 관측", detail: `${label} 실제 완전월 관측`, chartText: "" };
+  }
+  const status = entryStatus(latest);
+  const reason = entryReason(latest);
+  if (["no_observation", "empty_verified"].includes(reason)) {
+    return {
+      valueLabel: "공식 자료 없음",
+      detail: `${label} 공식 응답 0건`,
+      chartText: `해당 기간 ${label} 공식 응답이 0건입니다. 0점으로 표시하지 않습니다.`
+    };
+  }
+  if (
+    status === "unavailable"
+    || reason.includes("cache_missing")
+    || reason.includes("service_key")
+    || reason.includes("endpoint")
+    || reason.includes("adapter")
+  ) {
+    return {
+      valueLabel: "수집 대기",
+      detail: latestValueIndex >= 0 ? `${label} 최근월 저장 대기` : `${label} 저장자료 없음`,
+      chartText: `${label} 저장자료가 아직 없습니다. 수집 완료 후 실제 관측점만 표시합니다.`
+    };
+  }
+  return {
+    valueLabel: "관측 확인 중",
+    detail: `${label} 상태 확인 필요`,
+    chartText: `${label} 상태를 확인하고 있습니다. 결측값을 0으로 표시하지 않습니다.`
+  };
 }
 
 function tourismDemandStrengthCoverage(region = tourismDemandStrengthPrimaryRegion(), kind = "stay", source = tourismDemandStrengthHistorySource()) {
@@ -15541,7 +15637,8 @@ function tourismDemandStrengthChart(series = [], kind = "stay", region = null, s
   const plotHeight = baseline - padTop;
   const numericValues = series.filter((entry) => entry.hasValue).map((entry) => Number(entry.value));
   if (!numericValues.length) {
-    return `<div class="tourism-demand-strength-empty">해당 기간 ${escapeHtml(labels.name)} 관측 없음<br><small>부분수집·미관측 월은 0으로 표시하지 않습니다.</small></div>`;
+    const emptyState = tourismDemandStrengthSeriesState(series, kind);
+    return `<div class="tourism-demand-strength-empty">${escapeHtml(emptyState.valueLabel)}<br><small>${escapeHtml(emptyState.chartText)}</small></div>`;
   }
   const rawMin = Math.min(...numericValues);
   const rawMax = Math.max(...numericValues);
@@ -32624,34 +32721,43 @@ function renderLocationProfileVisitorPanel(visitor = {}) {
 function renderLocationProfileStrengthPanel(strength = {}, regionLabel = "선택 지역") {
   const stayLatest = locationProfileLatestPoint(strength.staySeries);
   const spendLatest = locationProfileLatestPoint(strength.spendSeries);
+  const stayState = tourismDemandStrengthSeriesState(strength.staySeries, "stay");
+  const spendState = tourismDemandStrengthSeriesState(strength.spendSeries, "spend");
+  const statusText = `체류 ${stayState.valueLabel} · 소비 ${spendState.valueLabel}`;
+  const stayDateText = stayLatest
+    ? `${tourismVisitorMonthLabel(stayLatest.yearMonth)}${stayState.valueLabel === "실제 관측" ? "" : ` · ${stayState.valueLabel}`}`
+    : stayState.detail;
+  const spendDateText = spendLatest
+    ? `${tourismVisitorMonthLabel(spendLatest.yearMonth)}${spendState.valueLabel === "실제 관측" ? "" : ` · ${spendState.valueLabel}`}`
+    : spendState.detail;
   return `
     <article class="location-profile-panel location-profile-wide location-profile-strength" data-ui-surface="card">
       <div class="location-profile-panel-head">
         <div><p class="eyebrow">한국관광공사 실제 지수</p><h4>${escapeHtml(regionLabel)} 체류·소비 강도</h4><small>${escapeHtml(`${strength.period} · 방문자수와 단위가 다른 월별 지수`)}</small></div>
-        ${locationProfileStatusBadge(strength.observed, "실제 지수 관측", "해당 기간 관측 없음")}
+        ${locationProfileStatusBadge(strength.observed, statusText, statusText)}
       </div>
       <div class="location-profile-strength-grid">
         <section class="location-profile-series-card is-stay" data-ui-surface="soft">
-          <div><span>체류 강도</span><strong>${stayLatest ? tourismDemandStrengthNumberLabel(stayLatest.value) : "관측 없음"}</strong><small>${escapeHtml(stayLatest ? tourismVisitorMonthLabel(stayLatest.yearMonth) : "완전월 관측 대기")}</small></div>
+          <div><span>체류 강도</span><strong>${stayLatest ? tourismDemandStrengthNumberLabel(stayLatest.value) : escapeHtml(stayState.valueLabel)}</strong><small>${escapeHtml(stayDateText)}</small></div>
           ${renderLocationProfileLineChart(strength.staySeries, {
             id: "administrative-location-stay-strength",
             title: `${regionLabel} 월별 관광 체류 강도`,
             unit: tourismDemandStrengthUnitLabel("stay", strength.source, strength.region),
             tone: "is-stay",
-            emptyText: "체류 강도 실제 관측이 없습니다. 미관측 월은 0으로 표시하지 않습니다."
+            emptyText: stayState.chartText
           })}
-          <small>${escapeHtml(locationProfileCoverageText(strength.stayCoverage))}</small>
+          <small>${escapeHtml(`${locationProfileCoverageText(strength.stayCoverage)}${stayState.valueLabel === "실제 관측" ? "" : ` · ${stayState.detail}`}`)}</small>
         </section>
         <section class="location-profile-series-card is-spend" data-ui-surface="soft">
-          <div><span>소비 강도</span><strong>${spendLatest ? tourismDemandStrengthNumberLabel(spendLatest.value) : "관측 없음"}</strong><small>${escapeHtml(spendLatest ? tourismVisitorMonthLabel(spendLatest.yearMonth) : "완전월 관측 대기")}</small></div>
+          <div><span>소비 강도</span><strong>${spendLatest ? tourismDemandStrengthNumberLabel(spendLatest.value) : escapeHtml(spendState.valueLabel)}</strong><small>${escapeHtml(spendDateText)}</small></div>
           ${renderLocationProfileLineChart(strength.spendSeries, {
             id: "administrative-location-spend-strength",
             title: `${regionLabel} 월별 관광 소비 강도`,
             unit: tourismDemandStrengthUnitLabel("spend", strength.source, strength.region),
             tone: "is-spend",
-            emptyText: "소비 강도 실제 관측이 없습니다. 미관측 월은 0으로 표시하지 않습니다."
+            emptyText: spendState.chartText
           })}
-          <small>${escapeHtml(locationProfileCoverageText(strength.spendCoverage))}</small>
+          <small>${escapeHtml(`${locationProfileCoverageText(strength.spendCoverage)}${spendState.valueLabel === "실제 관측" ? "" : ` · ${spendState.detail}`}`)}</small>
         </section>
       </div>
       <p class="location-profile-basis">${escapeHtml(`${strength.sourceLabel} · 체류와 소비는 별도 계열 · 부분수집·미관측은 선 단절`)}</p>
