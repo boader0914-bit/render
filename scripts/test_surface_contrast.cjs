@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260828-region-master-v83";
-const expectedAssetVersion = "datalab-20260827-region-master-v64";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260829-demand-backfill-v84";
+const expectedAssetVersion = "datalab-20260829-demand-backfill-v65";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -433,6 +433,47 @@ assert(
     && styles.includes('html[data-theme-resolved="dark"] .tourism-demand-strength-card')
     && styles.includes("@media (max-width: 600px)"),
   "tourism demand strength cards and charts must remain readable across themes and mobile layouts",
+  failures
+);
+
+assert(
+  app.includes("state.tourismDataStatus?.demandStrengthBackfill")
+    && app.includes("function renderTourismDemandStrengthBackfillStatus()")
+    && app.includes("산청군을 먼저 확인하고 전국 시군구의 최근 12개월을 우선 저장")
+    && app.includes("data-tourism-demand-strength-backfill-run")
+    && app.includes('fetchJson("/api/tourism-data/status")')
+    && app.includes('fetchJson("/api/tourism-data/demand-strength/backfill/run"')
+    && app.includes('body: JSON.stringify({ force: false })')
+    && app.includes('priority_sancheong: "산청 우선 선수집"')
+    && app.includes('recent_12: "전국 최근 12개월"')
+    && app.includes('history_24: "과거 24개월 보강"')
+    && app.includes("completedPairCount")
+    && app.includes("todayUsedCalls")
+    && app.includes("nextCheckAt")
+    && app.includes("lastResultStatus")
+    && app.includes("lastReason"),
+  "admin demand-strength UI must show source-backed nationwide backfill progress and run only the bounded force-false continuation",
+  failures
+);
+
+assert(
+  app.includes("TOURISM_DEMAND_STRENGTH_BACKFILL_POLL_INTERVAL_MS = 10_000")
+    && app.includes("TOURISM_DEMAND_STRENGTH_BACKFILL_POLL_MAX_MS = 10 * 60_000")
+    && app.includes("function startTourismDemandStrengthBackfillPolling()")
+    && app.includes("function stopTourismDemandStrengthBackfillPolling(")
+    && app.includes('document.visibilityState !== "visible"')
+    && app.includes("stopTourismDemandStrengthBackfillPolling({ render: false });")
+    && app.includes("if (tourismDemandStrengthBackfillIsRunning()) startTourismDemandStrengthBackfillPolling();"),
+  "demand-strength backfill status polling must be bounded, deduplicated, and stopped outside the active authenticated tab",
+  failures
+);
+
+assert(
+  styles.includes(".tourism-demand-strength-backfill")
+    && styles.includes(".tourism-demand-strength-backfill-metrics")
+    && styles.includes(".tourism-demand-strength-backfill-run:focus-visible")
+    && /@media \(max-width: 600px\)[\s\S]*?\.tourism-demand-strength-backfill-metrics,[\s\S]*?grid-template-columns:\s*1fr/.test(styles),
+  "demand-strength backfill status must remain legible and operable across themes and 390px layouts",
   failures
 );
 

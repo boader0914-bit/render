@@ -70,12 +70,27 @@ Key 칸에는 위 변수명을, Value 칸에는 지역별 방문자수 승인키
 - `OUTPUTS_DIR`: `/var/data/outputs`
 - `CONFIG_DIR`: `/var/data/config`
 
+관광 수요 강도 선수집 설정:
+- `TOURISM_DEMAND_STRENGTH_BACKFILL_ENABLED`: `1`
+- `TOURISM_DEMAND_STRENGTH_DAILY_CALL_BUDGET`: `800`
+
+선수집은 산청군 36개월을 먼저 저장한 뒤 전국 시군구의 최근 12개월,
+과거 24개월 순으로 진행한다. 한 지역·한 달은 체류강도와 소비강도를 각각
+한 번씩만 호출한다. 자동 선수집과 관리자 선택 지역 갱신은 같은 일일 800회 예산을
+예약·정산하므로 서로 겹쳐 한도를 초과하지 않는다. 실패·부분수집·미관측 결과는 기존
+정상 Snapshot을 덮지 않는다. 서로 다른 한국시간 날짜에 3회 확보되지 않은 지역·월은
+0값이 아니라 `관측 없음·검토`로 기록하고 다음 항목을 진행한다.
+진행 기록은 `/var/data/tourism_data/maintenance/demand_strength_backfill.json`에
+저장되므로 재배포 후에도 이어진다. 초기 적재가 끝난 뒤에는 최신 완료월만 보충한다.
+
 ## 4. 배포 후 확인
 
 1. Render가 제공하는 `https://...onrender.com` 주소를 연다.
 2. PIN을 입력한다.
 3. 새 수집 섹션에서 키워드를 넣고 실행한다.
 4. 기본 배포에서는 결과가 `/var/data/outputs`에 저장된다.
+5. 관리자 지역 분석의 관광 수요 강도 카드에서 전국 선수집 단계, 완료 건수,
+   당일 API 사용량을 확인한다.
 
 ## 5. 중요 판단
 

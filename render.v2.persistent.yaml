@@ -24,6 +24,10 @@ services:
         value: /var/data/config
       - key: TOURISM_VISITOR_MONTHLY_SYNC_ENABLED
         value: 1
+      - key: TOURISM_DEMAND_STRENGTH_BACKFILL_ENABLED
+        value: 1
+      - key: TOURISM_DEMAND_STRENGTH_DAILY_CALL_BUDGET
+        value: 800
       - key: DATA_GO_KR_SERVICE_KEY
         sync: false
       - key: DATA_GO_KR_VISITOR_SERVICE_KEY

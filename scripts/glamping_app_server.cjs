@@ -10,6 +10,7 @@ const yeogiImportParser = require("./yeogi_import_parser.cjs");
 const { otaProviderFromUrl } = require("./naver_place_ota_observation.cjs");
 const { createCollector: createTourismCollector } = require("./tourism_collector.cjs");
 const { createMonthlyVisitorScheduler } = require("./tourism_visitor_monthly_scheduler.cjs");
+const { createDemandStrengthBackfillScheduler } = require("./tourism_demand_strength_backfill_scheduler.cjs");
 
 function loadOptionalTourismPeriodSummaryModule() {
   const filePath = path.join(__dirname, "tourism_datalab_period_summary.cjs");
@@ -114,7 +115,8 @@ const RATE_LIMIT_POLICIES = {
   b2bInterestLodgeSave: { limit: 60, windowMs: 10 * 60 * 1000 },
   adminCrawl: { limit: 20, windowMs: 10 * 60 * 1000 },
   adminTourism: { limit: 30, windowMs: 10 * 60 * 1000 },
-  adminTourismDemandStrength: { limit: 3, windowMs: 60 * 60 * 1000 }
+  adminTourismDemandStrength: { limit: 3, windowMs: 60 * 60 * 1000 },
+  adminTourismDemandStrengthBackfill: { limit: 6, windowMs: 60 * 60 * 1000 }
 };
 const tourismCollector = createTourismCollector({
   rootDir: ROOT,
@@ -175,6 +177,24 @@ const tourismVisitorMonthlyScheduler = createMonthlyVisitorScheduler({
   enabled: TOURISM_VISITOR_MONTHLY_SYNC_ENABLED,
   months: 36,
   concurrency: 2
+});
+const TOURISM_DEMAND_STRENGTH_BACKFILL_ENABLED = process.env.TOURISM_DEMAND_STRENGTH_BACKFILL_ENABLED === undefined
+  ? HAS_RENDER_DISK
+  : !/^(0|false|off)$/i.test(String(process.env.TOURISM_DEMAND_STRENGTH_BACKFILL_ENABLED).trim());
+const TOURISM_DEMAND_STRENGTH_DAILY_CALL_BUDGET = Math.max(
+  2,
+  Math.min(900, Math.floor(Number(process.env.TOURISM_DEMAND_STRENGTH_DAILY_CALL_BUDGET) || 800))
+);
+const tourismDemandStrengthBackfillScheduler = createDemandStrengthBackfillScheduler({
+  collector: {
+    readRegionMap: (...args) => tourismCollector.readRegionMap(...args),
+    status: (...args) => tourismCollector.status(...args),
+    collectDemandStrength: (...args) => tourismCollector.collectDemandStrength(...args),
+    collectDemandStrengthHistory: (...args) => tourismCollector.collectDemandStrengthHistory(...args)
+  },
+  stateFile: path.join(TOURISM_DATA_DIR, "maintenance", "demand_strength_backfill.json"),
+  enabled: TOURISM_DEMAND_STRENGTH_BACKFILL_ENABLED,
+  dailyCallBudget: TOURISM_DEMAND_STRENGTH_DAILY_CALL_BUDGET
 });
 let activeCrawlPromise = null;
 let activeCrawlStartedAt = null;
@@ -15542,6 +15562,7 @@ function unavailableTourismDemandStrengthHistory(reason, status = "unavailable")
       concurrency: 1,
       requestGrain: "sigungu",
       operationsPerMonth: 2,
+      maxPagesPerOperation: 10,
       requestedMonths: 36,
       cacheHitMonths: 0,
       missingCacheMonths: 36,
@@ -15549,7 +15570,7 @@ function unavailableTourismDemandStrengthHistory(reason, status = "unavailable")
       networkSucceededMonths: 0,
       networkFailedMonths: 0,
       operationCallsAttempted: 0,
-      maximumOperationCalls: 72
+      maximumOperationCalls: 720
     },
     source: {
       key: "demandStrength",
@@ -15793,15 +15814,17 @@ async function readTourismVisitorPeriodSummaryStatus() {
 }
 
 async function readTourismDataStatus() {
-  const [collectorStatus, visitorPeriodSummary, visitorMonthlySync] = await Promise.all([
+  const [collectorStatus, visitorPeriodSummary, visitorMonthlySync, demandStrengthBackfill] = await Promise.all([
     tourismCollector.status(),
     readTourismVisitorPeriodSummaryStatus(),
-    tourismVisitorMonthlyScheduler.status()
+    tourismVisitorMonthlyScheduler.status(),
+    tourismDemandStrengthBackfillScheduler.status()
   ]);
   return {
     ...collectorStatus,
     visitorPeriodSummary,
-    visitorMonthlySync
+    visitorMonthlySync,
+    demandStrengthBackfill
   };
 }
 
@@ -16992,9 +17015,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=datalab-20260827-region-master-v64"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=datalab-20260827-region-master-v64"')
-      .replace('src="/app.js"', 'src="/app.js?v=datalab-20260827-region-master-v64"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=datalab-20260829-demand-backfill-v65"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=datalab-20260829-demand-backfill-v65"')
+      .replace('src="/app.js"', 'src="/app.js?v=datalab-20260829-demand-backfill-v65"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -17442,6 +17465,50 @@ async function route(req, res) {
       return send(res, statusCode, result);
     }
 
+    if (req.method === "POST" && reqUrl.pathname === "/api/tourism-data/demand-strength/backfill/run") {
+      if (!requireAdminSession(session, req, res)) return;
+      assertRequestRateLimit(
+        req,
+        "adminTourismDemandStrengthBackfill",
+        RATE_LIMIT_POLICIES.adminTourismDemandStrengthBackfill,
+        session.username || ""
+      );
+      const payload = await parseJsonBody(req).catch(() => ({}));
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        return send(res, 400, { error: "요청 본문은 JSON 객체여야 합니다." });
+      }
+      if (tourismRequestHasForbiddenConnectionFields(payload)) {
+        return send(res, 400, { error: "API 주소나 인증키는 요청 본문에서 지정할 수 없습니다." });
+      }
+      if (payload.force === true) {
+        return send(res, 400, { error: "전국 선수집은 정상 저장자료를 재호출하지 않습니다." });
+      }
+      const before = await tourismDemandStrengthBackfillScheduler.status();
+      if (!before.enabled) {
+        return send(res, 409, {
+          error: "관광 수요 강도 전국 선수집이 비활성화되어 있습니다.",
+          demandStrengthBackfill: before
+        });
+      }
+      if (before.manualActive) {
+        return send(res, 409, {
+          error: "선택 지역 관광 수요 강도 갱신이 진행 중입니다.",
+          status: "manual_active",
+          demandStrengthBackfill: before
+        });
+      }
+      if (!before.running) {
+        void tourismDemandStrengthBackfillScheduler.runOnce({ trigger: "admin" }).catch((error) => {
+          console.warn(`Tourism demand strength backfill admin run failed: ${error?.message || error}`);
+        });
+      }
+      return send(res, 202, {
+        ok: true,
+        status: before.running ? "already_running" : "started",
+        demandStrengthBackfill: await tourismDemandStrengthBackfillScheduler.status()
+      });
+    }
+
     if (req.method === "POST" && reqUrl.pathname === "/api/tourism-data/demand-strength/history") {
       if (!requireAdminSession(session, req, res)) return;
       assertRequestRateLimit(
@@ -17499,22 +17566,66 @@ async function route(req, res) {
           status: "busy"
         });
       }
-      const collectionPromise = Promise.resolve(tourismCollector.collectDemandStrengthHistory({
-        ...(regionNames.length ? { regionNames } : { regionKeys }),
-        months,
-        ...(endYearMonth ? { endYearMonth } : {}),
-        collectMissing: true,
-        refresh: true,
-        force: payload.force === true,
-        concurrency
-      }));
+      const collectionPromise = (async () => {
+        const reservation = await tourismDemandStrengthBackfillScheduler.beginManualReservation({
+          months,
+          maxPagesPerOperation: 1
+        });
+        try {
+          const history = await tourismCollector.collectDemandStrengthHistory({
+            ...(regionNames.length ? { regionNames } : { regionKeys }),
+            months,
+            ...(endYearMonth ? { endYearMonth } : {}),
+            collectMissing: true,
+            refresh: true,
+            force: payload.force === true,
+            concurrency,
+            maxPagesPerOperation: 1
+          });
+          const actualCalls = Math.max(0, Number(history?.collection?.operationCallsAttempted || 0));
+          const completedPairs = history?.region?.regionKey
+            ? (Array.isArray(history.series) ? history.series : [])
+              .filter((point) => point?.status === "complete" && /^\d{6}$/.test(String(point.yearMonth || "")))
+              .map((point) => ({
+                regionKey: history.region.regionKey,
+                yearMonth: String(point.yearMonth)
+              }))
+            : [];
+          const maintenance = await tourismDemandStrengthBackfillScheduler.finishManualReservation({
+            reservationId: reservation.reservationId,
+            actualCalls,
+            completedPairs
+          });
+          return {
+            ok: Boolean(history?.ok),
+            status: String(history?.status || "unavailable"),
+            reason: String(history?.reason || ""),
+            tourismDemandStrengthHistory: history,
+            maintenance
+          };
+        } catch (error) {
+          try {
+            await tourismDemandStrengthBackfillScheduler.finishManualReservation({
+              reservationId: reservation.reservationId,
+              failed: true
+            });
+          } catch (settlementError) {
+            console.warn(`Tourism demand strength manual reservation settlement failed: ${settlementError?.message || settlementError}`);
+          }
+          throw error;
+        }
+      })();
       activeTourismDemandStrengthHistoryPromise = collectionPromise;
       try {
         return send(res, 200, await collectionPromise);
-      } catch {
-        return send(res, 502, {
-          error: "지역별 관광 수요 강도 이력 갱신에 실패했습니다.",
-          status: "error"
+      } catch (error) {
+        const statusCode = [400, 409, 429, 503].includes(Number(error?.statusCode))
+          ? Number(error.statusCode)
+          : 502;
+        return send(res, statusCode, {
+          error: error?.message || "지역별 관광 수요 강도 이력 갱신에 실패했습니다.",
+          status: "error",
+          code: String(error?.code || "tourism_demand_strength_history_failed")
         });
       } finally {
         if (activeTourismDemandStrengthHistoryPromise === collectionPromise) {
@@ -17677,6 +17788,10 @@ seedOutputsFromRepo()
       const monthlySync = tourismVisitorMonthlyScheduler.start();
       if (monthlySync.enabled) {
         console.log(`Tourism visitor monthly sync check scheduled at ${monthlySync.nextCheckAt}`);
+      }
+      const demandStrengthBackfill = tourismDemandStrengthBackfillScheduler.start();
+      if (demandStrengthBackfill.enabled) {
+        console.log(`Tourism demand strength backfill check scheduled at ${demandStrengthBackfill.nextCheckAt}`);
       }
     });
   });

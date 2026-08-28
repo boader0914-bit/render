@@ -52,5 +52,11 @@ Blank key fields in the admin UI must preserve the existing saved key instead of
   `GET /api/tourism-data/status` and performs one regional visitor collection.
 - After entering a demand-strength key, an administrator checks the same status endpoint
   and explicitly refreshes one region's demand-strength history before wider backfill.
+- The automatic demand-strength backfill reuses that same environment key; it does not
+  require or store a second secret. Its default daily budget is 800 upstream requests,
+  shared with administrator-triggered selected-region refreshes. Each operation is limited
+  to one page under this shared budget, and failed or partial responses never replace a
+  complete cached Snapshot. Three failed observations on distinct KST dates remain an
+  auditable missing/review state rather than becoming a zero value.
 - "Configured" only means a key is saved.
 - "Verified" means the saved key successfully authenticated against the upstream API.

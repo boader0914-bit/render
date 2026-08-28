@@ -295,6 +295,7 @@ function createCollector(options = {}) {
   const visitorEvidenceDir = path.join(tourismDataDir, "evidence", "visitors");
   const logFile = path.join(tourismDataDir, "collections.jsonl");
   const regionMapFile = options.regionMapFile || path.join(webDir, "data", "tourism_region_map.json");
+  const demandStrengthSnapshotWrites = new Map();
 
   function currentDate() {
     const value = now();
@@ -1775,19 +1776,39 @@ function createCollector(options = {}) {
     await fsp.mkdir(cacheDir, { recursive: true });
     await fsp.mkdir(tourismDataDir, { recursive: true });
     const filePath = demandStrengthCachePath(snapshot.region?.regionKey, snapshot.yearMonth);
-    const tempPath = `${filePath}.${process.pid}.tmp`;
-    await fsp.writeFile(tempPath, JSON.stringify(snapshot, null, 2), "utf8");
-    await fsp.rename(tempPath, filePath);
-    await fsp.appendFile(logFile, `${JSON.stringify({
-      collectedAt: snapshot.collectedAt,
-      source: "demandStrength",
-      adapter: DEMAND_STRENGTH_ADAPTER_VERSION,
-      yearMonth: snapshot.yearMonth,
-      regionKey: snapshot.region?.regionKey || "",
-      status: snapshot.status,
-      completeOperationCount: snapshot.quality?.completeOperationCount || 0
-    })}\n`, "utf8");
-    return filePath;
+    const previousWrite = demandStrengthSnapshotWrites.get(filePath) || Promise.resolve();
+    const writePromise = previousWrite.catch(() => {}).then(async () => {
+      const tempPath = `${filePath}.${process.pid}.${Date.now()}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+      try {
+        await fsp.writeFile(tempPath, JSON.stringify(snapshot, null, 2), "utf8");
+        try {
+          await fsp.rename(tempPath, filePath);
+        } catch (error) {
+          if (process.platform !== "win32" || !["EPERM", "EACCES", "EEXIST"].includes(error?.code)) throw error;
+          await fsp.copyFile(tempPath, filePath);
+        }
+      } finally {
+        await fsp.rm(tempPath, { force: true }).catch(() => {});
+      }
+      await fsp.appendFile(logFile, `${JSON.stringify({
+        collectedAt: snapshot.collectedAt,
+        source: "demandStrength",
+        adapter: DEMAND_STRENGTH_ADAPTER_VERSION,
+        yearMonth: snapshot.yearMonth,
+        regionKey: snapshot.region?.regionKey || "",
+        status: snapshot.status,
+        completeOperationCount: snapshot.quality?.completeOperationCount || 0
+      })}\n`, "utf8");
+      return filePath;
+    });
+    demandStrengthSnapshotWrites.set(filePath, writePromise);
+    try {
+      return await writePromise;
+    } finally {
+      if (demandStrengthSnapshotWrites.get(filePath) === writePromise) {
+        demandStrengthSnapshotWrites.delete(filePath);
+      }
+    }
   }
 
   function emptyDemandOperation(operationDef = {}, status = "unavailable", reason = "") {
@@ -2014,63 +2035,95 @@ function createCollector(options = {}) {
     };
   }
 
-  async function requestDemandStrengthOperation(config = {}, operationDef = {}, region = {}, yearMonth = "", serviceKey = "") {
+  function demandStrengthMaxPages(input = {}) {
+    const rawInputValue = input.maxPagesPerOperation;
+    const inputValue = rawInputValue === undefined || rawInputValue === null || rawInputValue === ""
+      ? Number.NaN
+      : Number(rawInputValue);
+    const configuredValue = Number.isFinite(inputValue)
+      ? inputValue
+      : numberEnv(
+        "KTO_TOURISM_DEMAND_STRENGTH_MAX_PAGES",
+        DEMAND_STRENGTH_MAX_PAGES,
+        env
+      );
+    return Math.max(1, Math.min(50, Math.round(configuredValue)));
+  }
+
+  async function requestDemandStrengthOperation(config = {}, operationDef = {}, region = {}, yearMonth = "", serviceKey = "", input = {}) {
     const requestedAt = currentDate().toISOString();
     const pageSize = Math.max(10, Math.min(1000, Math.round(numberEnv(
       "KTO_TOURISM_DEMAND_STRENGTH_PAGE_SIZE",
       DEMAND_STRENGTH_PAGE_SIZE,
       env
     ))));
-    const maxPages = Math.max(1, Math.min(50, Math.round(numberEnv(
-      "KTO_TOURISM_DEMAND_STRENGTH_MAX_PAGES",
-      DEMAND_STRENGTH_MAX_PAGES,
-      env
-    ))));
+    const maxPages = demandStrengthMaxPages(input);
     const rows = [];
     let totalCount = null;
     let pageCount = 0;
+    let requestCount = 0;
+    const failedOperation = (status, reason, quality = {}) => {
+      const empty = emptyDemandOperation(operationDef, status, reason);
+      return {
+        ...empty,
+        requestedAt,
+        requestCount,
+        quality: {
+          ...empty.quality,
+          status,
+          pageCount,
+          requestCount,
+          maxPages,
+          ...quality
+        }
+      };
+    };
     for (let pageNo = 1; pageNo <= maxPages; pageNo += 1) {
+      requestCount += 1;
       const page = await requestDemandStrengthPage(config, operationDef, region, yearMonth, pageNo, pageSize, serviceKey);
       if (!page.ok) {
-        return {
-          ...emptyDemandOperation(operationDef, page.reason === "no_observation" ? "no_observation" : "error", page.reason),
-          requestedAt,
-          quality: {
-            ...emptyDemandOperation(operationDef).quality,
-            status: page.reason === "no_observation" ? "no_observation" : "error",
-            pageCount,
-            httpStatus: page.httpStatus || null,
-            apiCode: page.code || ""
-          }
-        };
+        const status = page.reason === "no_observation" ? "no_observation" : "error";
+        return failedOperation(status, page.reason, {
+          httpStatus: page.httpStatus || null,
+          apiCode: page.code || ""
+        });
       }
       if (page.pageNo !== null && page.pageNo !== pageNo) {
-        return { ...emptyDemandOperation(operationDef, "error", "page_number_mismatch"), requestedAt };
+        return failedOperation("error", "page_number_mismatch");
       }
       if (totalCount === null) totalCount = page.totalCount;
       if (page.totalCount !== totalCount) {
-        return { ...emptyDemandOperation(operationDef, "error", "total_count_changed"), requestedAt };
+        return failedOperation("error", "total_count_changed");
       }
       pageCount += 1;
       rows.push(...page.rows);
       if (rows.length >= totalCount) break;
       if (!page.rows.length) {
-        return { ...emptyDemandOperation(operationDef, "error", "incomplete_pagination"), requestedAt };
+        return failedOperation("error", "incomplete_pagination");
       }
     }
     if (totalCount === null || rows.length < totalCount) {
-      return { ...emptyDemandOperation(operationDef, "error", "page_limit_exceeded"), requestedAt };
+      return failedOperation("error", "page_limit_exceeded", {
+        totalCount,
+        receivedRows: rows.length
+      });
     }
     if (!totalCount) {
-      return { ...emptyDemandOperation(operationDef, "no_observation", "empty_verified"), requestedAt };
+      return failedOperation("no_observation", "empty_verified", {
+        totalCount,
+        receivedRows: rows.length
+      });
     }
     const normalized = normalizeDemandStrengthRows(rows.slice(0, totalCount), operationDef, region, yearMonth);
     return {
       ...normalized,
       requestedAt,
+      requestCount,
       quality: {
         ...normalized.quality,
         pageCount,
+        requestCount,
+        maxPages,
         totalCount,
         receivedRows: rows.length
       }
@@ -2107,6 +2160,13 @@ function createCollector(options = {}) {
         mode: cache.mode || snapshot.collection?.mode || (cache.hit ? "cache" : "none"),
         requestGrain: "sigungu",
         operationCallsAttempted: Number(cache.operationCallsAttempted ?? snapshot.collection?.operationCallsAttempted ?? 0),
+        operationCallsUncertain: Boolean(
+          cache.operationCallsUncertain ?? snapshot.collection?.operationCallsUncertain
+        ),
+        operationCallsAccounting: String(
+          cache.operationCallsAccounting ?? snapshot.collection?.operationCallsAccounting ?? "observed"
+        ),
+        maxPagesPerOperation: Number(cache.maxPagesPerOperation ?? snapshot.collection?.maxPagesPerOperation ?? 0) || null,
         operationsPerMonth: 2,
         provinceBulkReuse: false
       },
@@ -2209,6 +2269,7 @@ function createCollector(options = {}) {
         return publicDemandStrengthSnapshot(cached.data, input, {
           hit: true,
           ttlHours,
+          operationCallsAttempted: 0,
           refreshFailed: force,
           refreshReason: force ? configStatus : ""
         });
@@ -2223,9 +2284,14 @@ function createCollector(options = {}) {
     }
     const operationEntries = Object.entries(DEMAND_STRENGTH_OPERATIONS);
     const operationResults = await Promise.all(operationEntries.map(([, operationDef]) => (
-      requestDemandStrengthOperation(config, operationDef, region, yearMonth, serviceKey)
+      requestDemandStrengthOperation(config, operationDef, region, yearMonth, serviceKey, input)
     )));
     const operations = Object.fromEntries(operationEntries.map(([key], index) => [key, operationResults[index]]));
+    const operationCallsAttempted = operationResults.reduce(
+      (sum, operation) => sum + Number(operation.requestCount || 0),
+      0
+    );
+    const maxPagesPerOperation = demandStrengthMaxPages(input);
     const completeOperationCount = operationResults.filter((operation) => operation.status === "ok").length;
     const partialOperationCount = operationResults.filter((operation) => operation.status === "partial").length;
     const detailCompleteOperationCount = operationResults.filter((operation) => operation.quality?.detailComplete).length;
@@ -2266,7 +2332,8 @@ function createCollector(options = {}) {
       },
       collection: {
         mode: force ? "force_refresh" : "collect",
-        operationCallsAttempted: 2
+        operationCallsAttempted,
+        maxPagesPerOperation
       },
       source: {
         referenceUrl: demandStrengthSourceDef().referenceUrl,
@@ -2281,6 +2348,8 @@ function createCollector(options = {}) {
       return publicDemandStrengthSnapshot(cached.data, input, {
         hit: true,
         ttlHours,
+        operationCallsAttempted,
+        maxPagesPerOperation,
         refreshFailed: true,
         refreshReason: reason
       });
@@ -2447,6 +2516,7 @@ function createCollector(options = {}) {
         env
       ))
     ));
+    const maxPagesPerOperation = demandStrengthMaxPages(input);
     const selectorCandidates = [
       input.regionKey ? { regionKey: input.regionKey } : null,
       ...(Array.isArray(input.regionKeys) ? input.regionKeys : input.regionKeys ? [input.regionKeys] : [])
@@ -2478,7 +2548,8 @@ function createCollector(options = {}) {
           requestGrain: "sigungu",
           operationsPerMonth: 2,
           operationCallsAttempted: 0,
-          maximumOperationCalls: monthCount * 2,
+          maxPagesPerOperation,
+          maximumOperationCalls: monthCount * 2 * maxPagesPerOperation,
           provinceBulkReuse: false
         },
         quality: { missingIsNotZero: true, completeRequiresOverallCodes: ["21", "22"] }
@@ -2531,13 +2602,21 @@ function createCollector(options = {}) {
           continue;
         }
         try {
-          const snapshot = await collectDemandStrength({ regionKey: region.regionKey, yearMonth, force, ttlHours });
+          const snapshot = await collectDemandStrength({
+            regionKey: region.regionKey,
+            yearMonth,
+            force,
+            ttlHours,
+            maxPagesPerOperation
+          });
           monthResults[index] = {
             access: "network",
             networkSucceeded: snapshot.status === "ok" && !snapshot.cache?.refreshFailed,
             snapshot
           };
         } catch (error) {
+          const conservativeOperationCalls = Object.keys(DEMAND_STRENGTH_OPERATIONS).length
+            * maxPagesPerOperation;
           monthResults[index] = {
             access: "network",
             networkSucceeded: false,
@@ -2547,8 +2626,19 @@ function createCollector(options = {}) {
               yearMonth,
               region: publicRegion,
               operations: {},
-              collection: { mode: "collect", operationCallsAttempted: 0 }
-            }, { yearMonth }, { hit: false, ttlHours })
+              collection: {
+                mode: "collect",
+                operationCallsAttempted: conservativeOperationCalls,
+                operationCallsUncertain: true,
+                operationCallsAccounting: "conservative_max_after_unhandled_error"
+              }
+            }, { yearMonth }, {
+              hit: false,
+              ttlHours,
+              operationCallsAttempted: conservativeOperationCalls,
+              operationCallsUncertain: true,
+              operationCallsAccounting: "conservative_max_after_unhandled_error"
+            })
           };
         }
       }
@@ -2600,14 +2690,18 @@ function createCollector(options = {}) {
         concurrency,
         requestGrain: "sigungu",
         operationsPerMonth: 2,
+        maxPagesPerOperation,
         requestedMonths: monthCount,
         cacheHitMonths: monthResults.filter((result) => result.access === "cache").length,
         missingCacheMonths: monthResults.filter((result) => result.access === "missing").length,
         networkAttemptedMonths: networkResults.length,
         networkSucceededMonths: networkResults.filter((result) => result.networkSucceeded).length,
         networkFailedMonths: networkResults.filter((result) => !result.networkSucceeded).length,
+        operationCallsUncertainMonths: networkResults.filter(
+          (result) => result.snapshot?.collection?.operationCallsUncertain
+        ).length,
         operationCallsAttempted,
-        maximumOperationCalls: monthCount * 2,
+        maximumOperationCalls: monthCount * 2 * maxPagesPerOperation,
         provinceBulkReuse: false,
         provinceBulkReuseReason: "official_contract_does_not_guarantee_all_sigungu_rows_when_signguCd_is_omitted"
       },

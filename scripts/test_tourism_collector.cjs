@@ -682,6 +682,7 @@ async function main() {
     assert.equal(demandSnapshot.spend.metrics.find((metric) => metric.code === "22").value, demandSnapshot.spend.overallValue);
     assert.equal(demandSnapshot.quality.completeOperationCount, 2);
     assert.equal(demandSnapshot.collection.operationCallsAttempted, 2);
+    assert.equal(demandSnapshot.collection.maxPagesPerOperation, 10);
     assert.equal(demandSnapshot.policy.missingIsNotZero, true);
     assert.equal(demandRequests.length, 2);
     demandRequests.forEach(({ url, operation }) => {
@@ -754,7 +755,8 @@ async function main() {
     assert.equal(demandHistory.collection.mode, "backfill_missing");
     assert.equal(demandHistory.collection.requestGrain, "sigungu");
     assert.equal(demandHistory.collection.operationsPerMonth, 2);
-    assert.equal(demandHistory.collection.maximumOperationCalls, 6);
+    assert.equal(demandHistory.collection.maxPagesPerOperation, 10);
+    assert.equal(demandHistory.collection.maximumOperationCalls, 60);
     assert.equal(demandHistory.collection.operationCallsAttempted, 4);
     assert.equal(demandHistory.collection.networkAttemptedMonths, 2);
     assert.equal(demandHistory.collection.networkSucceededMonths, 1);
@@ -807,9 +809,22 @@ async function main() {
     assert.equal(preservedDemand.status, "ok");
     assert.equal(preservedDemand.cache.hit, true);
     assert.equal(preservedDemand.cache.refreshFailed, true);
+    assert.equal(preservedDemand.collection.operationCallsAttempted, 2);
     assert.equal(preservedDemand.stay.overallValue, demandSnapshot.stay.overallValue);
     assert.equal(preservedDemand.spend.overallValue, demandSnapshot.spend.overallValue);
     failDemandMonth = "";
+
+    const concurrentDemandRefreshes = await Promise.all([
+      demandCollector.collectDemandStrength({ regionName: "산청", yearMonth: "202606", force: true }),
+      demandCollector.collectDemandStrength({ regionName: "산청", yearMonth: "202606", force: true })
+    ]);
+    assert.ok(concurrentDemandRefreshes.every((snapshot) => snapshot.status === "ok"));
+    const demandCacheFilesAfterConcurrentRefresh = await fsp.readdir(path.join(demandDataDir, "cache"));
+    assert.equal(
+      demandCacheFilesAfterConcurrentRefresh.some((fileName) => fileName.endsWith(".tmp")),
+      false,
+      "동시 Snapshot 저장 후 임시파일이 남으면 안 됩니다."
+    );
 
     const defaultDemandHistoryRequestCount = demandRequests.length;
     const defaultDemandHistory = await demandCollector.collectDemandStrengthHistory({ regionName: "산청" });
@@ -818,11 +833,197 @@ async function main() {
     assert.equal(defaultDemandHistory.collection.operationCallsAttempted, 0);
     assert.equal(demandRequests.length, defaultDemandHistoryRequestCount);
 
+    const blockedDemandWritePath = path.join(dataDir, "tourism_demand_strength_write_blocker");
+    await fsp.writeFile(blockedDemandWritePath, "not-a-directory", "utf8");
+    let failedWriteRequestCount = 0;
+    const failedWriteCollector = createCollector({
+      rootDir: tmp,
+      webDir,
+      dataDir,
+      tourismDataDir: blockedDemandWritePath,
+      env: {
+        DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY: "fixture-demand-strength-key",
+        KTO_TOURISM_DEMAND_STRENGTH_PAGE_SIZE: "100"
+      },
+      now: () => new Date("2026-07-15T00:00:00.000Z"),
+      fetchImpl: async (requestUrl) => {
+        failedWriteRequestCount += 1;
+        const url = new URL(requestUrl);
+        const operation = url.pathname.split("/").at(-1);
+        const yearMonth = url.searchParams.get("baseYm");
+        const rows = demandStrengthRows(yearMonth, operation);
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            response: {
+              header: { resultCode: "00", resultMsg: "NORMAL_CODE" },
+              body: {
+                pageNo: 1,
+                numOfRows: 100,
+                totalCount: rows.length,
+                items: { item: rows }
+              }
+            }
+          })
+        };
+      }
+    });
+    const failedWriteHistory = await failedWriteCollector.collectDemandStrengthHistory({
+      regionName: "산청",
+      endYearMonth: "202604",
+      months: 1,
+      refresh: true,
+      maxPagesPerOperation: 1
+    });
+    assert.equal(failedWriteRequestCount, 2);
+    assert.equal(failedWriteHistory.status, "unavailable");
+    assert.equal(failedWriteHistory.collection.networkFailedMonths, 1);
+    assert.equal(failedWriteHistory.collection.operationCallsAttempted, 2);
+    assert.equal(failedWriteHistory.collection.operationCallsUncertainMonths, 1);
+    assert.equal(failedWriteHistory.collection.maximumOperationCalls, 2);
+
     const demandStatusAfter = await demandCollector.status();
     assert.equal(demandStatusAfter.demandStrength.snapshotCount, 3);
     assert.equal(demandStatusAfter.demandStrength.earliestYearMonth, "202603");
     assert.equal(demandStatusAfter.demandStrength.latestYearMonth, "202606");
     assert.doesNotMatch(JSON.stringify(demandStatusAfter), /fixture-demand-strength-key/);
+
+    const paginationDataDir = path.join(dataDir, "tourism_demand_strength_pagination_data");
+    const paginationRequests = [];
+    const paginatedDemandRows = (yearMonth, operation) => {
+      const rows = demandStrengthRows(yearMonth, operation);
+      const stayOperation = operation === "areaTarSjrnDsList";
+      const codeField = stayOperation ? "tarSjrnDsIxCd" : "tarExpDsIxCd";
+      const nameField = stayOperation ? "tarSjrnDsIxNm" : "tarExpDsIxNm";
+      const valueField = stayOperation ? "tarSjrnDsIxVal" : "tarExpDsIxVal";
+      const targetCount = stayOperation ? 25 : 15;
+      while (rows.length < targetCount) {
+        const sequence = rows.length + 1;
+        rows.push({
+          ...rows[0],
+          [codeField]: `9${String(sequence).padStart(3, "0")}`,
+          [nameField]: `추가 지표 ${sequence}`,
+          [valueField]: String(100 + sequence)
+        });
+      }
+      return rows;
+    };
+    const paginationCollector = createCollector({
+      rootDir: tmp,
+      webDir,
+      dataDir,
+      tourismDataDir: paginationDataDir,
+      env: {
+        DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY: "fixture-demand-pagination-key",
+        KTO_TOURISM_DEMAND_STRENGTH_PAGE_SIZE: "10",
+        KTO_TOURISM_DEMAND_STRENGTH_MAX_PAGES: "10"
+      },
+      now: () => new Date("2026-07-15T00:00:00.000Z"),
+      fetchImpl: async (requestUrl) => {
+        const url = new URL(requestUrl);
+        const operation = url.pathname.split("/").at(-1);
+        const yearMonth = url.searchParams.get("baseYm");
+        const pageNo = Number(url.searchParams.get("pageNo"));
+        const pageSize = Number(url.searchParams.get("numOfRows"));
+        paginationRequests.push({ operation, yearMonth, pageNo });
+        if (yearMonth === "202602") await new Promise((resolve) => setTimeout(resolve, 2));
+        const rows = paginatedDemandRows(yearMonth, operation);
+        const offset = (pageNo - 1) * pageSize;
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            response: {
+              header: { resultCode: "00", resultMsg: "NORMAL_CODE" },
+              body: {
+                pageNo,
+                numOfRows: pageSize,
+                totalCount: rows.length,
+                items: { item: rows.slice(offset, offset + pageSize) }
+              }
+            }
+          })
+        };
+      }
+    });
+
+    const paginatedDemand = await paginationCollector.collectDemandStrength({
+      regionName: "산청",
+      yearMonth: "202604"
+    });
+    assert.equal(paginatedDemand.status, "ok");
+    assert.equal(paginatedDemand.stay.quality.pageCount, 3);
+    assert.equal(paginatedDemand.stay.requestCount, 3);
+    assert.equal(paginatedDemand.spend.quality.pageCount, 2);
+    assert.equal(paginatedDemand.spend.requestCount, 2);
+    assert.equal(paginatedDemand.collection.operationCallsAttempted, 5);
+    assert.equal(paginatedDemand.collection.maxPagesPerOperation, 10);
+    assert.equal(paginationRequests.length, 5);
+
+    const paginationCacheDir = path.join(paginationDataDir, "cache");
+    const aprilCacheName = (await fsp.readdir(paginationCacheDir)).find((fileName) => fileName.endsWith("__202604.json"));
+    assert.ok(aprilCacheName);
+    const aprilCachePath = path.join(paginationCacheDir, aprilCacheName);
+    const aprilCacheBefore = await fsp.readFile(aprilCachePath);
+    const requestCountBeforeLimitedRefresh = paginationRequests.length;
+    const limitedRefresh = await paginationCollector.collectDemandStrength({
+      regionName: "산청",
+      yearMonth: "202604",
+      force: true,
+      maxPagesPerOperation: 1
+    });
+    assert.equal(limitedRefresh.status, "ok");
+    assert.equal(limitedRefresh.cache.hit, true);
+    assert.equal(limitedRefresh.cache.refreshFailed, true);
+    assert.equal(limitedRefresh.collection.operationCallsAttempted, 2);
+    assert.equal(limitedRefresh.collection.maxPagesPerOperation, 1);
+    assert.equal(paginationRequests.length - requestCountBeforeLimitedRefresh, 2);
+    assert.deepEqual(await fsp.readFile(aprilCachePath), aprilCacheBefore, "페이지 제한 실패가 정상 캐시를 덮어쓰면 안 됩니다.");
+
+    const requestCountBeforeLimitedMiss = paginationRequests.length;
+    const limitedWithoutCache = await paginationCollector.collectDemandStrength({
+      regionName: "산청",
+      yearMonth: "202605",
+      maxPagesPerOperation: 1
+    });
+    assert.equal(limitedWithoutCache.status, "error");
+    assert.equal(limitedWithoutCache.stay.reason, "page_limit_exceeded");
+    assert.equal(limitedWithoutCache.spend.reason, "page_limit_exceeded");
+    assert.equal(limitedWithoutCache.collection.operationCallsAttempted, 2);
+    assert.equal(limitedWithoutCache.collection.maxPagesPerOperation, 1);
+    assert.equal(paginationRequests.length - requestCountBeforeLimitedMiss, 2);
+    const limitedCacheRead = await paginationCollector.readDemandStrength({ regionName: "산청", yearMonth: "202605" });
+    assert.equal(limitedCacheRead.status, "unavailable");
+    assert.equal((await fsp.readdir(paginationCacheDir)).some((fileName) => fileName.endsWith("__202605.json")), false);
+
+    const orderedHistory = await paginationCollector.collectDemandStrengthHistory({
+      regionName: "산청",
+      endYearMonth: "202604",
+      months: 3,
+      refresh: true,
+      concurrency: 2
+    });
+    assert.deepEqual(orderedHistory.series.map((point) => point.yearMonth), ["202602", "202603", "202604"]);
+    assert.equal(orderedHistory.latest.yearMonth, "202604");
+    assert.equal(orderedHistory.collection.operationCallsAttempted, 10);
+    assert.equal(orderedHistory.collection.maxPagesPerOperation, 10);
+    assert.equal(orderedHistory.collection.maximumOperationCalls, 60);
+
+    const limitedHistoryRequestCount = paginationRequests.length;
+    const limitedHistory = await paginationCollector.collectDemandStrengthHistory({
+      regionName: "산청",
+      endYearMonth: "202601",
+      months: 1,
+      refresh: true,
+      maxPagesPerOperation: 1
+    });
+    assert.equal(limitedHistory.status, "unavailable");
+    assert.deepEqual(limitedHistory.series.map((point) => point.yearMonth), ["202601"]);
+    assert.equal(limitedHistory.collection.operationCallsAttempted, 2);
+    assert.equal(limitedHistory.collection.maxPagesPerOperation, 1);
+    assert.equal(limitedHistory.collection.maximumOperationCalls, 2);
+    assert.equal(paginationRequests.length - limitedHistoryRequestCount, 2);
 
     assert.equal(dataGoKrServiceKey({
       DATA_GO_KR_SERVICE_KEY: " canonical-key ",

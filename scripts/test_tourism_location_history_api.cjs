@@ -417,6 +417,7 @@ async function main() {
       GLAMPING_B2B_PASSWORD: TEST_B2B_PASSWORD,
       GLAMPING_B2B_ENABLED: "1",
       TOURISM_VISITOR_MONTHLY_SYNC_ENABLED: "0",
+      TOURISM_DEMAND_STRENGTH_BACKFILL_ENABLED: "0",
       DATA_GO_KR_VISITOR_SERVICE_KEY: "test-visitor-key",
       DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY: "test-demand-strength-key",
       KTO_TOURISM_VISITOR_ENDPOINT: `http://127.0.0.1:${trapPort}/visitor`,
@@ -443,6 +444,13 @@ async function main() {
       b2bCookie
     );
     assert.equal(forbidden.response.status, 403);
+    const forbiddenDemandBackfill = await postJson(
+      baseUrl,
+      "/api/tourism-data/demand-strength/backfill/run",
+      {},
+      b2bCookie
+    );
+    assert.equal(forbiddenDemandBackfill.response.status, 403);
 
     const adminCookie = await login(baseUrl, TEST_ADMIN_USER, TEST_ADMIN_PASSWORD);
     const runDetail = await getJson(
@@ -519,6 +527,51 @@ async function main() {
     );
     assert.equal(injectedDemandStrengthRefresh.response.status, 400);
     assert.match(injectedDemandStrengthRefresh.body.error, /API 주소/);
+
+    const selectedRegionDemandRefresh = await postJson(
+      baseUrl,
+      "/api/tourism-data/demand-strength/history",
+      { regionKey: SANCHEONG_REGION_KEY, months: 1, concurrency: 1 },
+      adminCookie
+    );
+    assert.equal(selectedRegionDemandRefresh.response.status, 200, JSON.stringify(selectedRegionDemandRefresh.body));
+    assert.equal(selectedRegionDemandRefresh.body.tourismDemandStrengthHistory.region.regionKey, SANCHEONG_REGION_KEY);
+    assert.equal(selectedRegionDemandRefresh.body.tourismDemandStrengthHistory.collection.maxPagesPerOperation, 1);
+    assert.equal(selectedRegionDemandRefresh.body.tourismDemandStrengthHistory.collection.maximumOperationCalls, 2);
+    assert.equal(selectedRegionDemandRefresh.body.tourismDemandStrengthHistory.collection.operationCallsAttempted, 0);
+    assert.equal(selectedRegionDemandRefresh.body.maintenance.status, "manual_settled");
+    assert.equal(selectedRegionDemandRefresh.body.maintenance.actualCalls, 0);
+    assert.equal(selectedRegionDemandRefresh.body.maintenance.manualActive, false);
+    assert.equal(Object.hasOwn(selectedRegionDemandRefresh.body.maintenance, "reservationId"), false);
+
+    const injectedDemandBackfill = await postJson(
+      baseUrl,
+      "/api/tourism-data/demand-strength/backfill/run",
+      { serviceKey: "forbidden" },
+      adminCookie
+    );
+    assert.equal(injectedDemandBackfill.response.status, 400);
+    assert.match(injectedDemandBackfill.body.error, /인증키/);
+
+    const forceDemandBackfill = await postJson(
+      baseUrl,
+      "/api/tourism-data/demand-strength/backfill/run",
+      { force: true },
+      adminCookie
+    );
+    assert.equal(forceDemandBackfill.response.status, 400);
+    assert.match(forceDemandBackfill.body.error, /재호출하지 않습니다/);
+
+    const disabledDemandBackfill = await postJson(
+      baseUrl,
+      "/api/tourism-data/demand-strength/backfill/run",
+      { force: false },
+      adminCookie
+    );
+    assert.equal(disabledDemandBackfill.response.status, 409);
+    assert.equal(disabledDemandBackfill.body.demandStrengthBackfill.enabled, false);
+    assert.equal(Object.hasOwn(disabledDemandBackfill.body.demandStrengthBackfill, "stateFile"), false);
+    assert.equal(Object.hasOwn(disabledDemandBackfill.body.demandStrengthBackfill, "state"), false);
 
     const provinceOnly = await getJson(
       baseUrl,
@@ -613,6 +666,15 @@ async function main() {
     assert.equal(tourismStatus.body.visitorMonthlySync.enabled, false);
     assert.equal(tourismStatus.body.visitorMonthlySync.running, false);
     assert.equal(tourismStatus.body.visitorMonthlySync.policy.pageOrCompanyRequestTriggersNetwork, false);
+    assert.equal(tourismStatus.body.demandStrengthBackfill.enabled, false);
+    assert.equal(tourismStatus.body.demandStrengthBackfill.phase, "priority_sancheong");
+    assert.equal(tourismStatus.body.demandStrengthBackfill.eligibleRegionCount, 198);
+    assert.equal(tourismStatus.body.demandStrengthBackfill.totalPairCount, 7_128);
+    assert.equal(tourismStatus.body.demandStrengthBackfill.completedPairCount, 0);
+    assert.equal(tourismStatus.body.demandStrengthBackfill.todayUsedCalls, 0);
+    assert.equal(tourismStatus.body.demandStrengthBackfill.dailyCallBudget, 800);
+    assert.equal(Object.hasOwn(tourismStatus.body.demandStrengthBackfill, "stateFile"), false);
+    assert.equal(Object.hasOwn(tourismStatus.body.demandStrengthBackfill, "state"), false);
 
     const byRegionName = await getJson(
       baseUrl,

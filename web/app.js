@@ -135,6 +135,13 @@ const state = {
     loading: false,
     tone: "neutral",
     message: ""
+  },
+  tourismDataStatus: null,
+  tourismDataStatusError: "",
+  tourismDemandStrengthBackfillRun: {
+    loading: false,
+    tone: "neutral",
+    message: ""
   }
 };
 
@@ -15654,6 +15661,175 @@ function tourismDemandStrengthCollectionCount(value) {
   return Number.isFinite(number) ? `${fmtNumber(number)}개월` : "기록 없음";
 }
 
+function tourismDemandStrengthBackfillPhaseLabel(phase = "") {
+  const labels = {
+    priority_recent: "산청 우선 · 최근 12개월",
+    priority_sancheong: "산청 우선 선수집",
+    recent_12: "전국 최근 12개월",
+    backfill_history: "과거 24개월 보강",
+    history_24: "과거 24개월 보강",
+    initial_backfill: "전국 3개년 선수집",
+    monthly: "월간 최신월 보충",
+    monthly_maintenance: "월간 최신월 보충",
+    complete: "전국 선수집 완료"
+  };
+  return labels[String(phase || "").trim().toLowerCase()] || "선수집 상태 확인 대기";
+}
+
+function tourismDemandStrengthBackfillResultLabel(status = "") {
+  const labels = {
+    ok: "정상 완료",
+    success: "정상 완료",
+    complete: "정상 완료",
+    completed: "정상 완료",
+    initial_complete: "3개년 선수집 완료",
+    monthly_complete: "최신월 보충 완료",
+    up_to_date: "저장자료 최신 상태",
+    started: "진행 중",
+    accepted: "실행 접수",
+    already_running: "진행 중",
+    running: "진행 중",
+    in_progress: "진행 중",
+    partial: "일부 완료",
+    cooldown: "다음 실행 대기",
+    budget_exhausted: "다음 실행 대기",
+    skipped: "이번 실행 건너뜀",
+    waiting: "다음 실행 대기",
+    error: "실행 실패",
+    failed: "실행 실패"
+  };
+  const normalized = String(status || "").trim().toLowerCase();
+  return labels[normalized] || (normalized ? normalized.replaceAll("_", " ") : "실행 기록 없음");
+}
+
+function tourismDemandStrengthBackfillReasonLabel(reason = "") {
+  const labels = {
+    no_work: "새로 보강할 관측월 없음",
+    up_to_date: "저장자료 최신 상태",
+    source_not_ready: "공공데이터 원본 연결 준비 필요",
+    demand_strength_source_not_ready: "공공데이터 원본 연결 준비 필요",
+    demand_strength_source_missing_service_key: "공공데이터 인증키 확인 필요",
+    demand_strength_source_missing_endpoint: "공공데이터 연결 주소 확인 필요",
+    demand_strength_source_invalid_endpoint: "공공데이터 연결 주소 확인 필요",
+    demand_strength_source_unavailable: "공공데이터 원본 연결 상태 확인 필요",
+    demand_strength_backfill_disabled: "전국 선수집 기능 비활성",
+    no_eligible_regions: "공공데이터 행정구역 코드 검수 필요",
+    latest_closed_month_available: "저장자료 최신 상태",
+    kst_daily_budget_date_changed: "날짜가 바뀌어 다음 실행에서 새 일일 한도를 적용",
+    daily_budget_exhausted: "오늘 API 호출 한도 도달",
+    daily_network_budget_exhausted: "오늘 API 호출 한도 도달",
+    budget_exhausted: "오늘 API 호출 한도 도달",
+    already_running: "이미 선수집 작업 진행 중",
+    lock_held: "이미 선수집 작업 진행 중",
+    missing_service_key: "공공데이터 인증키 확인 필요",
+    missing_endpoint: "공공데이터 연결 주소 확인 필요",
+    request_failed: "공공데이터 요청 실패",
+    api_error: "공공데이터 응답 확인 필요",
+    plan_complete: "현재 선수집 계획 완료",
+    collection_failed: "일부 수집 실패 · 다음 실행에서 재시도",
+    failed_or_partial_items_remain: "일부 수집 실패 · 다음 실행에서 재시도",
+    failed_items_already_attempted_today: "실패 항목은 다음 날 재시도",
+    initial_36_month_backfill_complete: "전국 최근 3개년 저장 완료",
+    latest_closed_month_supplement_complete: "최신 완료월 보충 완료",
+    timeout: "공공데이터 응답 시간 초과"
+  };
+  const normalized = String(reason || "").trim().toLowerCase();
+  return labels[normalized] || (normalized ? normalized.replaceAll("_", " ") : "사유 기록 없음");
+}
+
+function tourismDemandStrengthBackfillCountLabel(value, suffix = "") {
+  const number = optionalNumber(value);
+  return Number.isFinite(number) ? `${fmtNumber(Math.max(0, number))}${suffix}` : "확인 대기";
+}
+
+function tourismDemandStrengthBackfillDateLabel(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return "일정 확인 대기";
+  return compactDateTime(raw) || raw;
+}
+
+function tourismDemandStrengthBackfillIsRunning(backfill = state.tourismDataStatus?.demandStrengthBackfill) {
+  const status = String(backfill?.status || backfill?.lastResultStatus || "").trim().toLowerCase();
+  if (backfill?.manualActive === true) return true;
+  if (typeof backfill?.running === "boolean") return backfill.running;
+  return ["accepted", "started", "already_running", "running", "in_progress"].includes(status);
+}
+
+function renderTourismDemandStrengthBackfillStatus() {
+  if (!isAdminRole()) return "";
+  const backfill = state.tourismDataStatus?.demandStrengthBackfill;
+  const run = state.tourismDemandStrengthBackfillRun || {};
+  const phase = String(backfill?.phase || "").trim().toLowerCase();
+  const serverStatus = String(backfill?.status || backfill?.lastResultStatus || "").trim().toLowerCase();
+  const serverRunning = tourismDemandStrengthBackfillIsRunning(backfill);
+  const running = Boolean(run.loading || serverRunning);
+  const sourceStatus = String(backfill?.source?.status || "").trim().toLowerCase();
+  const actionUnavailable = !backfill
+    || backfill.enabled === false
+    || (sourceStatus && sourceStatus !== "ready");
+  const eligibleRegionCount = tourismDemandStrengthBackfillCountLabel(backfill?.eligibleRegionCount, "곳");
+  const completedPairCount = optionalNumber(backfill?.completedPairCount);
+  const totalPairCount = optionalNumber(backfill?.totalPairCount);
+  const pairProgress = Number.isFinite(completedPairCount) && Number.isFinite(totalPairCount)
+    ? `${fmtNumber(Math.max(0, completedPairCount))}/${fmtNumber(Math.max(0, totalPairCount))}쌍`
+    : "진행률 확인 대기";
+  const todayUsedCalls = optionalNumber(backfill?.todayUsedCalls);
+  const dailyCallBudget = optionalNumber(backfill?.dailyCallBudget);
+  const callProgress = Number.isFinite(todayUsedCalls) && Number.isFinite(dailyCallBudget)
+    ? `${fmtNumber(Math.max(0, todayUsedCalls))}/${fmtNumber(Math.max(0, dailyCallBudget))}회`
+    : "호출량 확인 대기";
+  const terminalMissingPairCount = optionalNumber(backfill?.terminalMissingPairCount);
+  const terminalMissingText = Number.isFinite(terminalMissingPairCount)
+    ? `${fmtNumber(Math.max(0, terminalMissingPairCount))}쌍`
+    : "확인 대기";
+  const actionLabel = !backfill
+    ? "상태 확인 중"
+    : backfill.enabled === false
+      ? "선수집 비활성"
+      : sourceStatus && sourceStatus !== "ready"
+        ? "공공데이터 연결 확인"
+        : backfill.manualActive === true
+          ? "선택지역 갱신 중"
+          : running
+            ? "전국 선수집 진행 중"
+            : "전국 선수집 계속";
+  const lastResult = tourismDemandStrengthBackfillResultLabel(backfill?.lastResultStatus);
+  const lastReason = tourismDemandStrengthBackfillReasonLabel(
+    backfill?.lastReason || state.tourismDataStatusError
+  );
+  const tone = running
+    ? "is-running"
+    : ["ok", "success", "complete", "completed"].includes(serverStatus) || phase === "complete"
+      ? "is-success"
+    : actionUnavailable || state.tourismDataStatusError || ["error", "failed"].includes(serverStatus)
+        ? "is-warning"
+        : "is-waiting";
+  return `
+    <section class="tourism-demand-strength-backfill" aria-labelledby="tourismDemandStrengthBackfillTitle" aria-busy="${running ? "true" : "false"}">
+      <div class="tourism-demand-strength-backfill-head">
+        <div>
+          <p class="eyebrow">관리자 선수집</p>
+          <h4 id="tourismDemandStrengthBackfillTitle">전국 체류·소비 강도 저장</h4>
+          <p>산청군을 먼저 확인하고 전국 시군구의 최근 12개월을 우선 저장한 뒤 과거 24개월을 보강합니다.</p>
+        </div>
+        <span class="tourism-demand-strength-backfill-phase ${tone}">${escapeHtml(tourismDemandStrengthBackfillPhaseLabel(phase))}</span>
+      </div>
+      <dl class="tourism-demand-strength-backfill-metrics">
+        <div><dt>대상 지역</dt><dd>${escapeHtml(eligibleRegionCount)}</dd></div>
+        <div><dt>처리 진행</dt><dd>${escapeHtml(pairProgress)}</dd></div>
+        <div><dt>관측 없음·검토</dt><dd>${escapeHtml(terminalMissingText)}</dd></div>
+        <div><dt>오늘 API 사용</dt><dd>${escapeHtml(callProgress)}</dd></div>
+        <div><dt>다음 확인</dt><dd>${escapeHtml(tourismDemandStrengthBackfillDateLabel(backfill?.nextCheckAt))}</dd></div>
+      </dl>
+      <div class="tourism-demand-strength-backfill-footer">
+        <p role="status" aria-live="polite"><strong>최근 실행 ${escapeHtml(lastResult)}</strong><span>${escapeHtml(lastReason)}</span></p>
+        <button class="tourism-demand-strength-backfill-run" type="button" data-tourism-demand-strength-backfill-run ${running || actionUnavailable ? "disabled" : ""}>${escapeHtml(actionLabel)}</button>
+      </div>
+      ${run.message ? `<p class="tourism-demand-strength-backfill-message ${escapeHtml(run.tone || "neutral")}" role="status" aria-live="polite">${escapeHtml(run.message)}</p>` : ""}
+    </section>
+  `;
+}
+
 function renderTourismDemandStrengthHistory() {
   const source = tourismDemandStrengthHistorySource();
   const region = tourismDemandStrengthPrimaryRegion();
@@ -15699,6 +15875,7 @@ function renderTourismDemandStrengthHistory() {
         </div>
       </div>
       ${refresh.message ? `<p class="tourism-demand-strength-refresh-status ${escapeHtml(refresh.tone || "neutral")}" role="status" aria-live="polite">${escapeHtml(refresh.message)}</p>` : ""}
+      ${renderTourismDemandStrengthBackfillStatus()}
       <div class="tourism-demand-strength-kpis" aria-label="관광 수요 강도 핵심 지표">
         <article data-ui-surface="metric">
           <span>관광 체류 강도 최신값</span>
@@ -35456,12 +35633,20 @@ async function resumeB2BSearchAfterReturn(reason = "") {
 
 function bindPwaLifecycleEvents() {
   window.addEventListener("beforeunload", persistB2BActiveSearchBeforeLeave);
+  window.addEventListener("beforeunload", () => stopTourismDemandStrengthBackfillPolling({ render: false }));
   window.addEventListener("pagehide", persistB2BActiveSearchBeforeLeave);
+  window.addEventListener("pagehide", () => stopTourismDemandStrengthBackfillPolling({ render: false }));
   window.addEventListener("pageshow", (event) => {
     if (event.persisted) resumeB2BSearchAfterReturn("pageshow").catch(() => {});
+    if (event.persisted) resumeTourismDemandStrengthBackfillPolling().catch(() => {});
   });
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") resumeB2BSearchAfterReturn("visible").catch(() => {});
+    if (document.visibilityState !== "visible") {
+      stopTourismDemandStrengthBackfillPolling({ render: false });
+      return;
+    }
+    resumeB2BSearchAfterReturn("visible").catch(() => {});
+    resumeTourismDemandStrengthBackfillPolling().catch(() => {});
   });
   window.addEventListener("online", () => resumeB2BSearchAfterReturn("online").catch(() => {}));
   window.addEventListener("popstate", (event) => {
@@ -37027,6 +37212,164 @@ function tourismDemandStrengthRefreshSelector() {
   return fallbackName ? { regionName: fallbackName, label: fallbackName } : null;
 }
 
+const TOURISM_DEMAND_STRENGTH_BACKFILL_POLL_INTERVAL_MS = 10_000;
+const TOURISM_DEMAND_STRENGTH_BACKFILL_POLL_MAX_MS = 10 * 60_000;
+let tourismDemandStrengthBackfillPollTimer = null;
+let tourismDemandStrengthBackfillPollStartedAt = 0;
+let tourismDemandStrengthBackfillPollLoading = false;
+
+function stopTourismDemandStrengthBackfillPolling(options = {}) {
+  if (tourismDemandStrengthBackfillPollTimer) {
+    window.clearTimeout(tourismDemandStrengthBackfillPollTimer);
+    tourismDemandStrengthBackfillPollTimer = null;
+  }
+  tourismDemandStrengthBackfillPollStartedAt = 0;
+  if (options.message) {
+    state.tourismDemandStrengthBackfillRun = {
+      loading: false,
+      tone: options.tone || "neutral",
+      message: options.message
+    };
+    if (options.render !== false) renderDemand();
+  }
+}
+
+function scheduleTourismDemandStrengthBackfillPoll() {
+  if (tourismDemandStrengthBackfillPollTimer || tourismDemandStrengthBackfillPollLoading) return;
+  if (!state.session?.authenticated || !isAdminRole() || document.visibilityState !== "visible") {
+    stopTourismDemandStrengthBackfillPolling({ render: false });
+    return;
+  }
+  if (!tourismDemandStrengthBackfillPollStartedAt) tourismDemandStrengthBackfillPollStartedAt = Date.now();
+  const elapsed = Date.now() - tourismDemandStrengthBackfillPollStartedAt;
+  if (elapsed >= TOURISM_DEMAND_STRENGTH_BACKFILL_POLL_MAX_MS) {
+    stopTourismDemandStrengthBackfillPolling({
+      message: "자동 상태 확인은 10분 후 종료했습니다. 선수집 작업은 서버에서 계속될 수 있습니다."
+    });
+    return;
+  }
+  tourismDemandStrengthBackfillPollTimer = window.setTimeout(() => {
+    tourismDemandStrengthBackfillPollTimer = null;
+    void pollTourismDemandStrengthBackfillStatus();
+  }, TOURISM_DEMAND_STRENGTH_BACKFILL_POLL_INTERVAL_MS);
+}
+
+async function pollTourismDemandStrengthBackfillStatus() {
+  if (tourismDemandStrengthBackfillPollLoading) return;
+  if (!state.session?.authenticated || !isAdminRole() || document.visibilityState !== "visible") {
+    stopTourismDemandStrengthBackfillPolling({ render: false });
+    return;
+  }
+  tourismDemandStrengthBackfillPollLoading = true;
+  try {
+    await loadTourismDataStatus({ render: true });
+  } finally {
+    tourismDemandStrengthBackfillPollLoading = false;
+  }
+  if (tourismDemandStrengthBackfillIsRunning()) {
+    scheduleTourismDemandStrengthBackfillPoll();
+    return;
+  }
+  stopTourismDemandStrengthBackfillPolling({
+    tone: state.tourismDataStatusError ? "error" : "success",
+    message: state.tourismDataStatusError
+      ? `선수집 상태 확인 실패 · ${state.tourismDataStatusError}`
+      : "전국 선수집 상태를 최신 기록으로 갱신했습니다."
+  });
+}
+
+function startTourismDemandStrengthBackfillPolling() {
+  if (!tourismDemandStrengthBackfillIsRunning()) return;
+  if (!tourismDemandStrengthBackfillPollStartedAt) tourismDemandStrengthBackfillPollStartedAt = Date.now();
+  scheduleTourismDemandStrengthBackfillPoll();
+}
+
+async function resumeTourismDemandStrengthBackfillPolling() {
+  if (!state.session?.authenticated || !isAdminRole() || document.visibilityState !== "visible") return;
+  await loadTourismDataStatus({ render: true });
+  if (tourismDemandStrengthBackfillIsRunning()) startTourismDemandStrengthBackfillPolling();
+}
+
+async function loadTourismDataStatus(options = {}) {
+  const render = options.render !== false;
+  if (!isAdminRole()) {
+    state.tourismDataStatus = null;
+    state.tourismDataStatusError = "";
+    return null;
+  }
+  try {
+    const result = await fetchJson("/api/tourism-data/status");
+    const status = result?.tourismDataStatus && typeof result.tourismDataStatus === "object"
+      ? result.tourismDataStatus
+      : result;
+    state.tourismDataStatus = status && typeof status === "object" ? status : null;
+    state.tourismDataStatusError = "";
+    if (render) renderDemand();
+    return state.tourismDataStatus;
+  } catch (error) {
+    state.tourismDataStatusError = error.message || "선수집 상태를 확인하지 못했습니다.";
+    if (render) renderDemand();
+    if (options.throwOnError) throw error;
+    return null;
+  }
+}
+
+async function runTourismDemandStrengthBackfill() {
+  if (!isAdminRole() || state.tourismDemandStrengthBackfillRun?.loading) return;
+  state.tourismDemandStrengthBackfillRun = {
+    loading: true,
+    tone: "neutral",
+    message: "전국 선수집 작업을 요청하고 있습니다."
+  };
+  renderDemand();
+  setStatus("관광 수요 강도 전국 선수집 요청 중");
+  try {
+    const result = await fetchJson("/api/tourism-data/demand-strength/backfill/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force: false })
+    });
+    const returnedStatus = result?.tourismDataStatus && typeof result.tourismDataStatus === "object"
+      ? result.tourismDataStatus
+      : null;
+    const returnedBackfill = result?.demandStrengthBackfill && typeof result.demandStrengthBackfill === "object"
+      ? result.demandStrengthBackfill
+      : null;
+    if (returnedStatus) {
+      state.tourismDataStatus = returnedStatus;
+    } else if (returnedBackfill) {
+      state.tourismDataStatus = {
+        ...(state.tourismDataStatus || {}),
+        demandStrengthBackfill: returnedBackfill
+      };
+    }
+    await loadTourismDataStatus({ render: false });
+    const phaseLabel = tourismDemandStrengthBackfillPhaseLabel(
+      state.tourismDataStatus?.demandStrengthBackfill?.phase
+    );
+    const polling = tourismDemandStrengthBackfillIsRunning();
+    state.tourismDemandStrengthBackfillRun = {
+      loading: false,
+      tone: polling ? "neutral" : "success",
+      message: polling
+        ? `백그라운드 선수집 진행 중 · ${phaseLabel} · 10초마다 상태 확인`
+        : `전국 선수집 요청 완료 · ${phaseLabel}`
+    };
+    renderDemand();
+    if (polling) startTourismDemandStrengthBackfillPolling();
+    setStatus(polling ? "관광 수요 강도 전국 선수집 진행 중" : "관광 수요 강도 전국 선수집 요청 완료");
+  } catch (error) {
+    state.tourismDemandStrengthBackfillRun = {
+      loading: false,
+      tone: "error",
+      message: `전국 선수집 요청 실패 · ${error.message}`
+    };
+    await loadTourismDataStatus({ render: false });
+    renderDemand();
+    setStatus("관광 수요 강도 전국 선수집 요청 실패");
+  }
+}
+
 async function refreshTourismDemandStrengthHistory() {
   if (!isAdminRole() || state.tourismDemandStrengthRefresh?.loading) return;
   const selector = tourismDemandStrengthRefreshSelector();
@@ -37075,6 +37418,7 @@ async function refreshTourismDemandStrengthHistory() {
         ? `최근 3개년 갱신 완료 · 체류 ${fmtNumber(stayCoverage.completeMonths)}/${fmtNumber(stayCoverage.expectedMonths)}개월 · 소비 ${fmtNumber(spendCoverage.completeMonths)}/${fmtNumber(spendCoverage.expectedMonths)}개월`
         : "최근 3개년 갱신 요청을 완료했습니다."
     };
+    await loadTourismDataStatus({ render: false });
     renderDemand();
     setStatus("관광 수요 강도 최근 3개년 갱신 완료");
   } catch (error) {
@@ -37083,6 +37427,7 @@ async function refreshTourismDemandStrengthHistory() {
       tone: "error",
       message: `최근 3개년 갱신 실패 · ${error.message}`
     };
+    await loadTourismDataStatus({ render: false });
     renderDemand();
     setStatus("관광 수요 강도 최근 3개년 갱신 실패");
   }
@@ -37383,6 +37728,7 @@ async function loadTrafficState() {
 }
 
 async function logout() {
+  stopTourismDemandStrengthBackfillPolling({ render: false });
   try {
     await fetchJson("/api/logout", { method: "POST" });
   } catch {
@@ -37741,6 +38087,11 @@ function bindEvents() {
     });
   }, true);
   document.addEventListener("click", (event) => {
+    const demandStrengthBackfillRun = event.target.closest("[data-tourism-demand-strength-backfill-run]");
+    if (demandStrengthBackfillRun) {
+      runTourismDemandStrengthBackfill();
+      return;
+    }
     const demandStrengthRefresh = event.target.closest("[data-tourism-demand-strength-refresh]");
     if (demandStrengthRefresh) {
       refreshTourismDemandStrengthHistory();
@@ -38972,11 +39323,13 @@ async function init() {
     setDefaultDates();
     syncAppHistoryState(false);
     if (isAdminRole()) {
-      await Promise.all([loadRuns(true), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadLocationScoreOverrides(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview()]);
+      await Promise.all([loadRuns(true), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadLocationScoreOverrides(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview(), loadTourismDataStatus({ render: false })]);
       if (!state.companyMaster || !((state.companyMaster.companies || []).length || state.companyMaster.totalCompanies || state.companyMaster.error)) {
         await loadCompanyMasterSummary();
       }
       renderAdminConsoleDashboard();
+      if (state.activeTab === "demand") renderDemand();
+      if (tourismDemandStrengthBackfillIsRunning()) startTourismDemandStrengthBackfillPolling();
       if (adminDbCompanyIdFromRoute()) handleAdminDbCompanyHash();
     } else {
       state.runs = [];
