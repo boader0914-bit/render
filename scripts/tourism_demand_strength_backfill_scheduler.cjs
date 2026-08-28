@@ -11,7 +11,13 @@ const DEFAULT_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_STARTUP_DELAY_MS = 120 * 1000;
 const SANCHEONG_REGION_KEY = "kr_gyeongnam_sancheong";
 const SANCHEONG_LATEST_RECOVERY_ID = "sancheong-normalizer-v2-latest-recovery-20260829";
+const SANCHEONG_PUBLICATION_LAG_RECOVERY_ID = "sancheong-publication-lag-202606-recovery-20260829";
 const SANCHEONG_LATEST_RECOVERY_NORMALIZER_VERSION = "demand-strength-row-normalizer-v2";
+const RECOVERY_HISTORY_LIMIT = 4;
+const AUTHORIZED_RECOVERY_IDS = new Set([
+  SANCHEONG_LATEST_RECOVERY_ID,
+  SANCHEONG_PUBLICATION_LAG_RECOVERY_ID
+]);
 const RECOVERY_PERMIT_STATUSES = new Set([
   "available",
   "claimed",
@@ -191,6 +197,79 @@ function sancheongLatestRecoveryPermit(targetYearMonth = "", grantedAt = "") {
   };
 }
 
+function shouldGrantSancheongPublicationLagRecovery(
+  state = {},
+  previous = null,
+  current = null,
+  targetYearMonth = "",
+  checkedAt = new Date(),
+  configuredDailyCallBudget = 0
+) {
+  const permit = state.recoveryPermit;
+  const budget = state.dailyBudget || {};
+  const yearMonth = normalizeYearMonth(targetYearMonth);
+  const pairKey = `${SANCHEONG_REGION_KEY}__${yearMonth}`;
+  const failure = state.failures?.[pairKey];
+  const plan = state.plan || {};
+  const today = kstDateKey(checkedAt);
+  return Boolean(previous && current && permit && yearMonth)
+    && fingerprintMatches(previous, current)
+    && state.phase === "initial_backfill"
+    && state.initialTargetYearMonth === yearMonth
+    && plan.kind === "initial_backfill"
+    && plan.retryOnly === false
+    && Number(plan.cursor) === 1
+    && plan.endYearMonth === yearMonth
+    && state.inFlight === null
+    && String(previous.authorizedRecoveryId || "") === SANCHEONG_LATEST_RECOVERY_ID
+    && String(current.authorizedRecoveryId || "") === SANCHEONG_LATEST_RECOVERY_ID
+    && permit.id === SANCHEONG_LATEST_RECOVERY_ID
+    && permit.regionKey === SANCHEONG_REGION_KEY
+    && permit.yearMonth === yearMonth
+    && permit.pairKey === pairKey
+    && permit.normalizerVersion === SANCHEONG_LATEST_RECOVERY_NORMALIZER_VERSION
+    && permit.status === "consumed"
+    && permit.outcome === "incomplete"
+    && permit.reason === "no_observation"
+    && Number(permit.maxCalls || 0) === CALLS_PER_WORK_ITEM
+    && Number(permit.usedCalls || 0) === CALLS_PER_WORK_ITEM
+    && Number(permit.reservedCalls || 0) === 0
+    && Number(permit.reportedActualCalls) === CALLS_PER_WORK_ITEM
+    && failure?.reason === "no_observation"
+    && Number(failure?.attempts || 0) === 1
+    && failure?.lastAttemptKstDate === today
+    && budget.kstDate === today
+    && Number(configuredDailyCallBudget) === DEFAULT_DAILY_CALL_BUDGET
+    && Number(budget.limitCalls || 0) === DEFAULT_DAILY_CALL_BUDGET
+    && Number(budget.usedCalls || 0) === DEFAULT_DAILY_CALL_BUDGET
+    && Number(budget.reservedCalls || 0) === 0
+    && Number(budget.reservedWorkItems || 0) === 0
+    && !normalizeRecoveryHistory(state.recoveryHistory).some(
+      (historyPermit) => historyPermit.id === SANCHEONG_PUBLICATION_LAG_RECOVERY_ID
+    );
+}
+
+function sancheongPublicationLagRecoveryPermit(targetYearMonth = "", grantedAt = "") {
+  const yearMonth = yearMonthOffset(targetYearMonth, -1);
+  return {
+    id: SANCHEONG_PUBLICATION_LAG_RECOVERY_ID,
+    regionKey: SANCHEONG_REGION_KEY,
+    yearMonth,
+    pairKey: `${SANCHEONG_REGION_KEY}__${yearMonth}`,
+    normalizerVersion: SANCHEONG_LATEST_RECOVERY_NORMALIZER_VERSION,
+    maxCalls: CALLS_PER_WORK_ITEM,
+    reservedCalls: 0,
+    usedCalls: 0,
+    reportedActualCalls: null,
+    status: "available",
+    grantedAt: String(grantedAt || ""),
+    claimedAt: "",
+    completedAt: "",
+    outcome: "",
+    reason: ""
+  };
+}
+
 function recoveryPermitShapeValid(value = null) {
   if (value === null || value === undefined) return true;
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -208,6 +287,22 @@ function recoveryPermitShapeValid(value = null) {
   return Number(value.maxCalls) === CALLS_PER_WORK_ITEM
     && Number(value.reservedCalls) <= CALLS_PER_WORK_ITEM
     && Number(value.usedCalls) <= CALLS_PER_WORK_ITEM;
+}
+
+function normalizeRecoveryHistory(value = []) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((permit) => permit && recoveryPermitShapeValid(permit))
+    .slice(-RECOVERY_HISTORY_LIMIT);
+}
+
+function appendRecoveryHistory(history = [], permit = null) {
+  const normalized = normalizeRecoveryHistory(history);
+  if (!permit || !recoveryPermitShapeValid(permit)) return normalized;
+  return [
+    ...normalized.filter((entry) => String(entry.id || "") !== String(permit.id || "")),
+    { ...permit }
+  ].slice(-RECOVERY_HISTORY_LIMIT);
 }
 
 function historyPointForItem(history = {}, item = {}) {
@@ -272,6 +367,11 @@ function schedulerStateShapeValid(value = null) {
     return false;
   }
   if (!recoveryPermitShapeValid(value.recoveryPermit)) return false;
+  if (value.recoveryHistory !== undefined && (
+    !Array.isArray(value.recoveryHistory)
+    || value.recoveryHistory.length > RECOVERY_HISTORY_LIMIT
+    || value.recoveryHistory.some((permit) => !permit || !recoveryPermitShapeValid(permit))
+  )) return false;
   if (value.plan !== null && value.plan !== undefined) {
     if (typeof value.plan !== "object" || Array.isArray(value.plan)) return false;
     if (!String(value.plan.id || "") || !["initial_backfill", "monthly_maintenance"].includes(value.plan.kind)) return false;
@@ -360,6 +460,7 @@ function freshState(now, dailyCallBudget) {
     manualReservation: null,
     staleManualReservations: {},
     recoveryPermit: null,
+    recoveryHistory: [],
     dailyBudget: {
       kstDate: kstDateKey(now),
       limitCalls: dailyCallBudget,
@@ -394,6 +495,7 @@ function normalizeState(raw = {}, now, dailyCallBudget) {
   state.recoveryPermit = recoveryPermitShapeValid(state.recoveryPermit)
     ? (state.recoveryPermit || null)
     : null;
+  state.recoveryHistory = normalizeRecoveryHistory(state.recoveryHistory);
   state.eligibleRegionCount = Math.max(0, Number(state.eligibleRegionCount || 0));
   state.totals = { ...freshState(now, dailyCallBudget).totals, ...(state.totals || {}) };
   const today = kstDateKey(now);
@@ -524,6 +626,15 @@ function publicSchedulerProjection(state = {}, runtime = {}) {
   const recoveryPermit = state.recoveryPermit && typeof state.recoveryPermit === "object"
     ? state.recoveryPermit
     : null;
+  const recoveryHistory = normalizeRecoveryHistory(state.recoveryHistory);
+  const historicalRecoveryCalls = recoveryHistory.reduce(
+    (total, permit) => total + Math.max(0, Number(permit.usedCalls || 0) + Number(permit.reservedCalls || 0)),
+    0
+  );
+  const historicalRecoveryAllowance = recoveryHistory.reduce(
+    (total, permit) => total + Math.max(0, Number(permit.maxCalls || 0)),
+    0
+  );
   const latestFailureEntry = Object.entries(state.failures || {})
     .map(([key, value]) => ({ key, ...(value && typeof value === "object" ? value : {}) }))
     .sort((left, right) => String(right.lastAttemptAt || "").localeCompare(String(left.lastAttemptAt || "")))[0] || null;
@@ -543,8 +654,8 @@ function publicSchedulerProjection(state = {}, runtime = {}) {
     todayUsedCalls: budget.usedCalls + budget.reservedCalls,
     dailyCallBudget: budget.limitCalls,
     recoveryStatus: String(recoveryPermit?.status || ""),
-    recoveryCallsUsed: Math.max(0, Number(recoveryPermit?.usedCalls || 0) + Number(recoveryPermit?.reservedCalls || 0)),
-    recoveryCallAllowance: recoveryPermit ? Math.max(0, Number(recoveryPermit.maxCalls || 0)) : 0,
+    recoveryCallsUsed: historicalRecoveryCalls + Math.max(0, Number(recoveryPermit?.usedCalls || 0) + Number(recoveryPermit?.reservedCalls || 0)),
+    recoveryCallAllowance: historicalRecoveryAllowance + (recoveryPermit ? Math.max(0, Number(recoveryPermit.maxCalls || 0)) : 0),
     recoveryRegionKey: String(recoveryPermit?.regionKey || ""),
     recoveryYearMonth: String(recoveryPermit?.yearMonth || ""),
     recoveryOutcome: String(recoveryPermit?.outcome || ""),
@@ -678,7 +789,6 @@ function createDemandStrengthBackfillScheduler(options = {}) {
     options.stateFile
       || path.join(process.cwd(), "tourism_data", "maintenance", "demand_strength_backfill.json")
   ));
-  const recoveryClaimFile = `${stateFile}.${SANCHEONG_LATEST_RECOVERY_ID}.claimed`;
   let timer = null;
   let activePromise = null;
   let nextCheckAt = "";
@@ -687,7 +797,12 @@ function createDemandStrengthBackfillScheduler(options = {}) {
   let manualActiveReservationId = "";
   let runtimeOwnsManualReservation = false;
 
-  async function claimSancheongLatestRecovery(item = {}, mode = "network") {
+  async function claimSancheongRecovery(permit = {}, item = {}, mode = "network") {
+    const recoveryId = String(permit.id || "");
+    if (!AUTHORIZED_RECOVERY_IDS.has(recoveryId) || permit.pairKey !== item.key) {
+      throw stateUnavailableError();
+    }
+    const recoveryClaimFile = `${stateFile}.${recoveryId}.claimed`;
     let handle = null;
     try {
       await fsp.mkdir(path.dirname(recoveryClaimFile), { recursive: true });
@@ -707,7 +822,7 @@ function createDemandStrengthBackfillScheduler(options = {}) {
     }
     try {
       await handle.writeFile(`${JSON.stringify({
-        recoveryId: SANCHEONG_LATEST_RECOVERY_ID,
+        recoveryId,
         regionKey: item.regionKey || SANCHEONG_REGION_KEY,
         yearMonth: item.yearMonth || "",
         mode,
@@ -988,7 +1103,9 @@ function createDemandStrengthBackfillScheduler(options = {}) {
       || Object.keys(state.failures || {}).length
       || Object.keys(state.terminalMissing || {}).length
     );
-    if (fingerprintMissingOnExistingWork || (state.planFingerprint && !fingerprintMatches(state.planFingerprint, fingerprint))) {
+    const fingerprintChanged = fingerprintMissingOnExistingWork
+      || Boolean(state.planFingerprint && !fingerprintMatches(state.planFingerprint, fingerprint));
+    if (fingerprintChanged) {
       const grantSancheongLatestRecovery = shouldGrantSancheongLatestRecovery(previousFingerprint, fingerprint);
       state.phase = "initial_backfill";
       state.initialTargetYearMonth = targetYearMonth;
@@ -1001,6 +1118,16 @@ function createDemandStrengthBackfillScheduler(options = {}) {
       state.recoveryPermit = grantSancheongLatestRecovery
         ? sancheongLatestRecoveryPermit(targetYearMonth, now().toISOString())
         : null;
+    } else if (shouldGrantSancheongPublicationLagRecovery(
+      state,
+      previousFingerprint,
+      fingerprint,
+      targetYearMonth,
+      checkedAt,
+      dailyCallBudget
+    )) {
+      state.recoveryHistory = appendRecoveryHistory(state.recoveryHistory, state.recoveryPermit);
+      state.recoveryPermit = sancheongPublicationLagRecoveryPermit(targetYearMonth, now().toISOString());
     }
     state.planFingerprint = fingerprint;
 
@@ -1042,7 +1169,7 @@ function createDemandStrengthBackfillScheduler(options = {}) {
       }
       if (inspection && historyHasCompleteItem(inspection, item)) {
         if (state.recoveryPermit?.status === "available" && state.recoveryPermit.pairKey === item.key) {
-          const recoveryClosure = await claimSancheongLatestRecovery(item, "satisfied_from_cache");
+          const recoveryClosure = await claimSancheongRecovery(state.recoveryPermit, item, "satisfied_from_cache");
           const priorNetworkClaim = !recoveryClosure.claimed && recoveryClosure.existingMode === "network";
           state.recoveryPermit = {
             ...state.recoveryPermit,
@@ -1121,11 +1248,22 @@ function createDemandStrengthBackfillScheduler(options = {}) {
       }
 
       const budget = publicBudget(state.dailyBudget);
+      const expectedRecoveryMonth = state.recoveryPermit?.id === SANCHEONG_LATEST_RECOVERY_ID
+        ? targetYearMonth
+        : state.recoveryPermit?.id === SANCHEONG_PUBLICATION_LAG_RECOVERY_ID
+          ? yearMonthOffset(targetYearMonth, -1)
+          : "";
+      const fingerprintAuthorizesRecovery = state.recoveryPermit?.id === SANCHEONG_LATEST_RECOVERY_ID
+        ? fingerprint.authorizedRecoveryId === SANCHEONG_LATEST_RECOVERY_ID
+        : state.recoveryPermit?.id === SANCHEONG_PUBLICATION_LAG_RECOVERY_ID
+          ? fingerprint.authorizedRecoveryId === SANCHEONG_LATEST_RECOVERY_ID
+          : false;
       const recoveryPermitAvailable = state.recoveryPermit?.status === "available"
-        && state.recoveryPermit.id === SANCHEONG_LATEST_RECOVERY_ID
+        && AUTHORIZED_RECOVERY_IDS.has(state.recoveryPermit.id)
+        && fingerprintAuthorizesRecovery
         && state.recoveryPermit.normalizerVersion === fingerprint.demandStrengthNormalizer
         && state.recoveryPermit.regionKey === SANCHEONG_REGION_KEY
-        && state.recoveryPermit.yearMonth === targetYearMonth
+        && state.recoveryPermit.yearMonth === expectedRecoveryMonth
         && state.recoveryPermit.pairKey === item.key
         && Number(state.recoveryPermit.maxCalls || 0) === CALLS_PER_WORK_ITEM;
       const authorizedBudgetExhausted = budget.limitCalls === DEFAULT_DAILY_CALL_BUDGET
@@ -1133,7 +1271,7 @@ function createDemandStrengthBackfillScheduler(options = {}) {
         && budget.remainingCalls === 0;
       let usingRecoveryPermit = false;
       if (authorizedBudgetExhausted && recoveryPermitAvailable) {
-        const recoveryClaim = await claimSancheongLatestRecovery(item, "network");
+        const recoveryClaim = await claimSancheongRecovery(state.recoveryPermit, item, "network");
         if (recoveryClaim.claimed) {
           usingRecoveryPermit = true;
           state.recoveryPermit = {
@@ -1175,7 +1313,7 @@ function createDemandStrengthBackfillScheduler(options = {}) {
       }
 
       if (!usingRecoveryPermit && recoveryPermitAvailable) {
-        const recoveryClosure = await claimSancheongLatestRecovery(item, "satisfied_from_daily_budget");
+        const recoveryClosure = await claimSancheongRecovery(state.recoveryPermit, item, "satisfied_from_daily_budget");
         const priorNetworkClaim = !recoveryClosure.claimed && recoveryClosure.existingMode === "network";
         state.recoveryPermit = {
           ...state.recoveryPermit,
@@ -1200,7 +1338,7 @@ function createDemandStrengthBackfillScheduler(options = {}) {
         callsReserved: usingRecoveryPermit ? 0 : CALLS_PER_WORK_ITEM,
         kstDate: today,
         reservedAt: now().toISOString(),
-        funding: usingRecoveryPermit ? "sancheong_latest_recovery" : "daily_budget"
+        funding: usingRecoveryPermit ? "sancheong_recovery" : "daily_budget"
       };
       state.totals.networkAttemptedItems += 1;
       progress.networkAttemptedItems += 1;
@@ -1594,6 +1732,7 @@ module.exports = {
   DEFAULT_STARTUP_DELAY_MS,
   SANCHEONG_REGION_KEY,
   SANCHEONG_LATEST_RECOVERY_ID,
+  SANCHEONG_PUBLICATION_LAG_RECOVERY_ID,
   SANCHEONG_LATEST_RECOVERY_NORMALIZER_VERSION,
   kstDateKey,
   latestClosedYearMonth,

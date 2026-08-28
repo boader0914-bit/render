@@ -10,6 +10,7 @@ const {
   DEFAULT_CHECK_INTERVAL_MS,
   DEFAULT_STARTUP_DELAY_MS,
   SANCHEONG_LATEST_RECOVERY_ID,
+  SANCHEONG_PUBLICATION_LAG_RECOVERY_ID,
   SANCHEONG_LATEST_RECOVERY_NORMALIZER_VERSION,
   kstDateKey,
   latestClosedYearMonth,
@@ -382,6 +383,176 @@ async function main() {
     assert.equal(missingAfterFailure.spend.overallValue, null);
     assert.equal((await recoveryFailureScheduler.runOnce({ trigger: "recovery-failure-reuse" })).status, "budget_exhausted");
     assert.equal(recoveryFailureCollector.network.length, 1, "실패한 복구 허가도 다시 사용할 수 없습니다.");
+
+    const publicationLagStateFile = path.join(temporaryRoot, "publication-lag-recovery", "state.json");
+    await fsp.mkdir(path.dirname(publicationLagStateFile), { recursive: true });
+    await fsp.writeFile(publicationLagStateFile, JSON.stringify(recoveryState()), "utf8");
+    const publicationLagCollector = fakeCollector({
+      regions: [SANCHEONG],
+      normalizerVersion: SANCHEONG_LATEST_RECOVERY_NORMALIZER_VERSION,
+      networkResult: ({ key }) => key.endsWith("__202607")
+        ? { complete: false, reason: "no_observation", operationCallsAttempted: 2 }
+        : { complete: true, operationCallsAttempted: 2 }
+    });
+    const publicationLagScheduler = createDemandStrengthBackfillScheduler({
+      collector: publicationLagCollector,
+      stateFile: publicationLagStateFile,
+      now: () => fixedNow,
+      dailyCallBudget: 800
+    });
+    const publicationLagReady = await publicationLagScheduler.runOnce({ trigger: "latest-no-observation" });
+    assert.equal(publicationLagReady.status, "budget_exhausted");
+    assert.deepEqual(publicationLagCollector.network.map((entry) => entry.key), [
+      `${SANCHEONG.regionKey}__202607`
+    ]);
+    const publicationLagReadyState = JSON.parse(await fsp.readFile(publicationLagStateFile, "utf8"));
+    assert.equal(publicationLagReadyState.plan.cursor, 1);
+    assert.equal(publicationLagReadyState.recoveryPermit.status, "consumed");
+    assert.equal(publicationLagReadyState.recoveryPermit.reason, "no_observation");
+    const publicationLagRun = await publicationLagScheduler.runOnce({ trigger: "publication-lag-recovery" });
+    assert.equal(publicationLagRun.status, "budget_exhausted");
+    assert.deepEqual(publicationLagCollector.network.map((entry) => entry.key), [
+      `${SANCHEONG.regionKey}__202607`,
+      `${SANCHEONG.regionKey}__202606`
+    ]);
+    assert.ok(publicationLagCollector.network.every((entry) => entry.input.force === false));
+    assert.ok(publicationLagCollector.network.every((entry) => entry.input.maxPagesPerOperation === 1));
+    assert.equal(publicationLagCollector.cache.has(`${SANCHEONG.regionKey}__202607`), false);
+    assert.equal(publicationLagCollector.cache.has(`${SANCHEONG.regionKey}__202606`), true);
+    assert.equal(publicationLagRun.todayUsedCalls, 800);
+    assert.equal(publicationLagRun.recoveryStatus, "succeeded");
+    assert.equal(publicationLagRun.recoveryCallsUsed, 4);
+    assert.equal(publicationLagRun.recoveryCallAllowance, 4);
+    assert.equal(publicationLagRun.recoveryYearMonth, "202606");
+    assert.equal(publicationLagRun.activeFailureCount, 1);
+    assert.equal(publicationLagRun.latestFailureYearMonth, "202607");
+    assert.equal(publicationLagRun.latestFailureReason, "no_observation");
+    const persistedPublicationLag = JSON.parse(await fsp.readFile(publicationLagStateFile, "utf8"));
+    assert.equal(persistedPublicationLag.plan.cursor, 2);
+    assert.equal(persistedPublicationLag.failures[`${SANCHEONG.regionKey}__202607`].reason, "no_observation");
+    assert.equal(persistedPublicationLag.recoveryPermit.id, SANCHEONG_PUBLICATION_LAG_RECOVERY_ID);
+    assert.equal(persistedPublicationLag.recoveryPermit.status, "succeeded");
+    assert.equal(persistedPublicationLag.recoveryHistory.length, 1);
+    assert.equal(persistedPublicationLag.recoveryHistory[0].id, SANCHEONG_LATEST_RECOVERY_ID);
+    assert.equal(persistedPublicationLag.dailyBudget.usedCalls, 800);
+    const publicationLagClaimFile = `${publicationLagStateFile}.${SANCHEONG_PUBLICATION_LAG_RECOVERY_ID}.claimed`;
+    assert.ok((await fsp.stat(publicationLagClaimFile)).isFile());
+    assert.equal((await publicationLagScheduler.runOnce({ trigger: "publication-lag-reuse" })).status, "budget_exhausted");
+    assert.equal(publicationLagCollector.network.length, 2, "발행 지연 복구는 같은 상태에서 재사용하면 안 됩니다.");
+    await fsp.writeFile(publicationLagStateFile, JSON.stringify(publicationLagReadyState), "utf8");
+    const rollbackPublicationLagScheduler = createDemandStrengthBackfillScheduler({
+      collector: publicationLagCollector,
+      stateFile: publicationLagStateFile,
+      now: () => fixedNow,
+      dailyCallBudget: 800
+    });
+    assert.equal((await rollbackPublicationLagScheduler.runOnce({ trigger: "publication-lag-rollback" })).status, "budget_exhausted");
+    assert.equal(publicationLagCollector.network.length, 2, "상태 롤백 뒤에도 발행 지연 복구를 재호출하면 안 됩니다.");
+
+    const publicationLagMissingFile = path.join(temporaryRoot, "publication-lag-missing", "state.json");
+    await fsp.mkdir(path.dirname(publicationLagMissingFile), { recursive: true });
+    await fsp.writeFile(publicationLagMissingFile, JSON.stringify(publicationLagReadyState), "utf8");
+    const publicationLagMissingCollector = fakeCollector({
+      regions: [SANCHEONG],
+      normalizerVersion: SANCHEONG_LATEST_RECOVERY_NORMALIZER_VERSION,
+      networkResult: () => ({ complete: false, reason: "no_observation", operationCallsAttempted: 2 })
+    });
+    const publicationLagMissingScheduler = createDemandStrengthBackfillScheduler({
+      collector: publicationLagMissingCollector,
+      stateFile: publicationLagMissingFile,
+      now: () => fixedNow,
+      dailyCallBudget: 800
+    });
+    const publicationLagMissingRun = await publicationLagMissingScheduler.runOnce({ trigger: "publication-lag-missing" });
+    assert.equal(publicationLagMissingRun.status, "budget_exhausted");
+    assert.deepEqual(publicationLagMissingCollector.network.map((entry) => entry.key), [
+      `${SANCHEONG.regionKey}__202606`
+    ]);
+    assert.equal(publicationLagMissingRun.recoveryStatus, "consumed");
+    assert.equal(publicationLagMissingRun.recoveryReason, "no_observation");
+    assert.equal(publicationLagMissingRun.activeFailureCount, 2);
+    const missingJuneSnapshot = await publicationLagMissingCollector.collectDemandStrength({
+      regionKey: SANCHEONG.regionKey,
+      yearMonth: "202606",
+      cacheOnly: true
+    });
+    assert.equal(missingJuneSnapshot.stay.overallValue, null);
+    assert.equal(missingJuneSnapshot.spend.overallValue, null);
+    await publicationLagMissingScheduler.runOnce({ trigger: "no-third-recovery" });
+    assert.equal(publicationLagMissingCollector.network.length, 1, "6월도 미제공이면 세 번째 예외 호출을 만들면 안 됩니다.");
+
+    const publicationLagCacheFile = path.join(temporaryRoot, "publication-lag-cache", "state.json");
+    await fsp.mkdir(path.dirname(publicationLagCacheFile), { recursive: true });
+    await fsp.writeFile(publicationLagCacheFile, JSON.stringify(publicationLagReadyState), "utf8");
+    const publicationLagCacheCollector = fakeCollector({
+      regions: [SANCHEONG],
+      cachedKeys: [`${SANCHEONG.regionKey}__202606`],
+      normalizerVersion: SANCHEONG_LATEST_RECOVERY_NORMALIZER_VERSION
+    });
+    const publicationLagCacheScheduler = createDemandStrengthBackfillScheduler({
+      collector: publicationLagCacheCollector,
+      stateFile: publicationLagCacheFile,
+      now: () => fixedNow,
+      dailyCallBudget: 800
+    });
+    const publicationLagCacheRun = await publicationLagCacheScheduler.runOnce({ trigger: "publication-lag-cache" });
+    assert.equal(publicationLagCacheRun.status, "budget_exhausted");
+    assert.equal(publicationLagCacheCollector.network.length, 0);
+    assert.equal(publicationLagCacheRun.recoveryStatus, "satisfied_from_cache");
+    assert.equal(publicationLagCacheRun.recoveryCallsUsed, 2);
+
+    for (const guard of [
+      { name: "wrong-reason", recoveryPermit: { ...publicationLagReadyState.recoveryPermit, reason: "fixture_partial" } },
+      { name: "wrong-actual-calls", recoveryPermit: { ...publicationLagReadyState.recoveryPermit, reportedActualCalls: 1 } },
+      { name: "wrong-status", recoveryPermit: { ...publicationLagReadyState.recoveryPermit, status: "succeeded", outcome: "complete", reason: "" } },
+      { name: "wrong-cursor", plan: { ...publicationLagReadyState.plan, cursor: 0 } },
+      {
+        name: "wrong-failure-date",
+        failures: {
+          [`${SANCHEONG.regionKey}__202607`]: {
+            ...publicationLagReadyState.failures[`${SANCHEONG.regionKey}__202607`],
+            lastAttemptKstDate: "2026-08-28"
+          }
+        }
+      },
+      {
+        name: "fingerprint-mismatch",
+        planFingerprint: { ...publicationLagReadyState.planFingerprint, demandStrengthAdapter: "different-adapter" }
+      },
+      {
+        name: "budget-not-exhausted",
+        dailyBudget: { kstDate: "2026-08-29", limitCalls: 800, usedCalls: 799, reservedCalls: 0, reservedWorkItems: 0 }
+      },
+      {
+        name: "custom-budget",
+        dailyBudget: { kstDate: "2026-08-29", limitCalls: 400, usedCalls: 400, reservedCalls: 0, reservedWorkItems: 0 }
+      }
+    ]) {
+      const guardedPublicationLagFile = path.join(temporaryRoot, `publication-lag-${guard.name}`, "state.json");
+      await fsp.mkdir(path.dirname(guardedPublicationLagFile), { recursive: true });
+      await fsp.writeFile(
+        guardedPublicationLagFile,
+        JSON.stringify({ ...structuredClone(publicationLagReadyState), ...guard }),
+        "utf8"
+      );
+      const guardedPublicationLagCollector = fakeCollector({
+        regions: [SANCHEONG],
+        normalizerVersion: SANCHEONG_LATEST_RECOVERY_NORMALIZER_VERSION
+      });
+      const guardedPublicationLagScheduler = createDemandStrengthBackfillScheduler({
+        collector: guardedPublicationLagCollector,
+        stateFile: guardedPublicationLagFile,
+        now: () => fixedNow,
+        dailyCallBudget: guard.name === "custom-budget" ? 400 : 800
+      });
+      const guardedPublicationLagRun = await guardedPublicationLagScheduler.runOnce({ trigger: guard.name });
+      assert.equal(guardedPublicationLagRun.status, "budget_exhausted");
+      assert.equal(guardedPublicationLagCollector.network.length, 0, `${guard.name}에서는 발행 지연 복구를 허용하면 안 됩니다.`);
+      await assert.rejects(
+        fsp.stat(`${guardedPublicationLagFile}.${SANCHEONG_PUBLICATION_LAG_RECOVERY_ID}.claimed`),
+        { code: "ENOENT" }
+      );
+    }
 
     budgetNow = new Date("2026-08-30T01:00:00.000Z");
     const resumedScheduler = createDemandStrengthBackfillScheduler({
