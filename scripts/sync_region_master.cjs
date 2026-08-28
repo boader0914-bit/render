@@ -74,6 +74,10 @@ function cliValue(name) {
   return process.argv.find((value) => value.startsWith(prefix))?.slice(prefix.length) || "";
 }
 
+function cliFlag(name) {
+  return process.argv.includes(`--${name}`);
+}
+
 function findEndOfCentralDirectory(buffer) {
   const minimum = Math.max(0, buffer.length - 65_557);
   for (let offset = buffer.length - 22; offset >= minimum; offset -= 1) {
@@ -192,7 +196,9 @@ function attachExistingMappings(units, tourismMap, dictionary) {
 
   tourismRegions.forEach((region) => {
     const officialProvinceName = officialProvinceNameForProvider(region);
-    const candidates = activeLocals.filter((unit) => unit.sidoFull === officialProvinceName && unit.name === region.sigungu);
+    const candidates = /^\d{10}$/.test(String(region.officialCode || ""))
+      ? activeLocals.filter((unit) => unit.officialCode === region.officialCode)
+      : activeLocals.filter((unit) => unit.sidoFull === officialProvinceName && unit.name === region.sigungu);
     if (candidates.length !== 1) {
       ambiguousTourismKeys.push({ regionKey: region.regionKey, candidates: candidates.map((unit) => unit.officialCode) });
       return;
@@ -206,7 +212,10 @@ function attachExistingMappings(units, tourismMap, dictionary) {
         sido: region.sido,
         sidoFull: region.sidoFull,
         ktoSggCd: region.ktoSggCd,
-        status: region.codeStatus || "ready"
+        officialCode: region.officialCode || unit.officialCode,
+        codeBasis: region.codeBasis || "legacy-provider-map",
+        status: region.codeStatus || "ready",
+        statusReason: region.codeStatusReason || ""
       }
     };
     mappedTourismKeys.add(region.regionKey);
@@ -229,12 +238,32 @@ function attachExistingMappings(units, tourismMap, dictionary) {
   return {
     tourismRegionCount: tourismRegions.length,
     tourismMappedCount: mappedTourismKeys.size,
+    tourismReadyCount: tourismRegions.filter((region) => !region.codeStatus).length,
+    tourismCodePendingCount: tourismRegions.filter((region) => region.codeStatus).length,
     tourismPending: tourismRegions.filter((region) => !mappedTourismKeys.has(region.regionKey)).map((region) => region.regionKey),
     tourismAmbiguous: ambiguousTourismKeys,
     locationCardCount: cards.length,
     locationCardMappedCount: mappedCardKeys.size,
     locationCardPending: cards.filter((card) => !mappedCardKeys.has(card.regionKey)).map((card) => card.regionKey)
   };
+}
+
+function refreshExistingMasterLinks(master, tourismMap, dictionary) {
+  const units = (master.units || []).map((unit) => {
+    if (!unit.providerMappings?.kto) return { ...unit };
+    const providerMappings = { ...unit.providerMappings };
+    delete providerMappings.kto;
+    return {
+      ...unit,
+      providerMappings: Object.keys(providerMappings).length ? providerMappings : undefined
+    };
+  });
+  const linkSummary = attachExistingMappings(units, tourismMap, dictionary);
+  master.generatedAt = new Date().toISOString();
+  master.links = linkSummary;
+  master.units = units;
+  validateMaster(master);
+  return master;
 }
 
 function buildUnits(rows, asOf, previousMaster, tourismMap, dictionary) {
@@ -358,6 +387,17 @@ function validateMaster(master) {
 }
 
 async function main() {
+  if (cliFlag("links-only")) {
+    const master = readJson(OUTPUT_PATH, { units: [] });
+    const tourismMap = readJson(TOURISM_MAP_PATH, { regions: [] });
+    const dictionary = readJson(LOCATION_DICTIONARY_PATH, { cards: [], aliases: [] });
+    refreshExistingMasterLinks(master, tourismMap, dictionary);
+    fs.writeFileSync(OUTPUT_PATH, `${JSON.stringify(master, null, 2)}\n`, "utf8");
+    console.log(`region master links refreshed: ${path.relative(ROOT, OUTPUT_PATH)}`);
+    console.log(JSON.stringify(master.summary, null, 2));
+    console.log(JSON.stringify(master.links, null, 2));
+    return;
+  }
   const asOf = cliValue("as-of") || kstDate();
   const rows = await downloadOfficialRows();
   const previousMaster = readJson(OUTPUT_PATH, { units: [] });

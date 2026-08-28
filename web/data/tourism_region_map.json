@@ -1,24 +1,45 @@
 {
-  "version": "tourism-region-map-v0.1",
-  "generatedAt": "2026-07-09T00:00:00.000+09:00",
+  "version": "tourism-region-map-v0.2",
+  "generatedAt": "2026-08-28T10:29:09.792Z",
   "codeSystem": {
-    "primary": "KTO/DataLab SGG_CD",
-    "description": "한국관광공사 데이터랩/공공데이터포털 지역 API 연결을 위한 시도-시군구 매칭 기준표입니다.",
-    "unitPriority": ["sigungu", "sido"],
+    "primary": "MOIS legal-dong code prefix 5 / KTO DataLab signguCode",
+    "description": "행정구역 원장의 현행 시·군·자치구·행정시와 관광공사 지역 방문자 API를 연결하는 기준표입니다.",
+    "unitPriority": [
+      "sigungu",
+      "sido"
+    ],
     "notes": [
-      "기초지자체와 광역지자체 방문자 데이터는 집계 기준이 달라 임의 합산하지 않습니다.",
-      "검색어에 시군구가 확인되면 시군구 매칭을 우선합니다.",
-      "광역 검색어는 하위 시군구 후보를 유지하고, 관광공사 API 호출은 집계 가능한 단위만 사용합니다.",
-      "강원특별자치도와 전북특별자치도는 실제 API 호출 전 코드 체계 검증이 필요합니다."
+      "ktoSggCd는 현행 법정동코드 10자리의 앞 5자리로 생성합니다.",
+      "codeStatus가 없는 지역만 자동수집 대상으로 사용합니다.",
+      "일반구는 주소 매칭용이므로 관광 분석지역에서 제외하고 상위 시를 사용합니다.",
+      "폐지 지역과 최근 행정구역 개편 지역은 확인 없이 자동 활성화하지 않습니다.",
+      "기초지자체와 광역지자체 방문자 데이터는 집계 기준이 달라 임의 합산하지 않습니다."
     ]
   },
   "businessKeywordRules": {
-    "glamping": ["글램핑"],
-    "campground": ["캠핑장"],
-    "caravan": ["카라반"],
-    "pension": ["펜션", "숙소"],
-    "poolVilla": ["풀빌라", "펜션", "숙소"],
-    "lodging": ["숙소", "펜션", "풀빌라"]
+    "glamping": [
+      "글램핑"
+    ],
+    "campground": [
+      "캠핑장"
+    ],
+    "caravan": [
+      "카라반"
+    ],
+    "pension": [
+      "펜션",
+      "숙소"
+    ],
+    "poolVilla": [
+      "풀빌라",
+      "펜션",
+      "숙소"
+    ],
+    "lodging": [
+      "숙소",
+      "펜션",
+      "풀빌라"
+    ]
   },
   "matchRules": [
     "검색어에서 숙박 업종어를 제거한 지역명을 우선 비교합니다.",
@@ -28,585 +49,7002 @@
     "외부 플랫폼 순위 데이터와 관광공사 방문자 데이터는 서로 다른 기준이므로 동일 지표처럼 합산하지 않습니다."
   ],
   "provinceAliases": {
-    "seoul": { "sido": "서울", "sidoFull": "서울특별시", "ktoSidoCd": "11", "aliases": ["서울", "서울시", "서울특별시"] },
-    "busan": { "sido": "부산", "sidoFull": "부산광역시", "ktoSidoCd": "26", "aliases": ["부산", "부산시", "부산광역시"] },
-    "daegu": { "sido": "대구", "sidoFull": "대구광역시", "ktoSidoCd": "27", "aliases": ["대구", "대구시", "대구광역시"] },
-    "incheon": { "sido": "인천", "sidoFull": "인천광역시", "ktoSidoCd": "28", "aliases": ["인천", "인천시", "인천광역시"] },
-    "gwangju": { "sido": "광주", "sidoFull": "광주광역시", "ktoSidoCd": "29", "aliases": ["광주", "광주시", "광주광역시"] },
-    "daejeon": { "sido": "대전", "sidoFull": "대전광역시", "ktoSidoCd": "30", "aliases": ["대전", "대전시", "대전광역시"] },
-    "ulsan": { "sido": "울산", "sidoFull": "울산광역시", "ktoSidoCd": "31", "aliases": ["울산", "울산시", "울산광역시"] },
-    "sejong": { "sido": "세종", "sidoFull": "세종특별자치시", "ktoSidoCd": "36", "aliases": ["세종", "세종시", "세종특별자치시"] },
-    "gyeonggi": { "sido": "경기", "sidoFull": "경기도", "ktoSidoCd": "41", "aliases": ["경기", "경기도", "수도권"] },
-    "gangwon": { "sido": "강원", "sidoFull": "강원특별자치도", "ktoSidoCd": "42", "codeStatus": "verify-before-api-call", "aliases": ["강원", "강원도", "강원특별자치도"] },
-    "chungbuk": { "sido": "충북", "sidoFull": "충청북도", "ktoSidoCd": "43", "aliases": ["충북", "충청북도"] },
-    "chungnam": { "sido": "충남", "sidoFull": "충청남도", "ktoSidoCd": "44", "aliases": ["충남", "충청남도"] },
-    "jeonbuk": { "sido": "전북", "sidoFull": "전북특별자치도", "ktoSidoCd": "45", "codeStatus": "verify-before-api-call", "aliases": ["전북", "전라북도", "전북특별자치도"] },
-    "jeonnam": { "sido": "전남", "sidoFull": "전라남도", "ktoSidoCd": "46", "aliases": ["전남", "전라남도"] },
-    "gyeongbuk": { "sido": "경북", "sidoFull": "경상북도", "ktoSidoCd": "47", "aliases": ["경북", "경상북도"] },
-    "gyeongnam": { "sido": "경남", "sidoFull": "경상남도", "ktoSidoCd": "48", "aliases": ["경남", "경상남도"] },
-    "jeju": { "sido": "제주", "sidoFull": "제주특별자치도", "ktoSidoCd": "50", "aliases": ["제주", "제주도", "제주특별자치도"] }
+    "seoul": {
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "ktoSidoCd": "11",
+      "aliases": [
+        "서울",
+        "서울시",
+        "서울특별시"
+      ]
+    },
+    "busan": {
+      "sido": "부산",
+      "sidoFull": "부산광역시",
+      "ktoSidoCd": "26",
+      "aliases": [
+        "부산",
+        "부산시",
+        "부산광역시"
+      ]
+    },
+    "daegu": {
+      "sido": "대구",
+      "sidoFull": "대구광역시",
+      "ktoSidoCd": "27",
+      "aliases": [
+        "대구",
+        "대구시",
+        "대구광역시"
+      ]
+    },
+    "incheon": {
+      "sido": "인천",
+      "sidoFull": "인천광역시",
+      "ktoSidoCd": "28",
+      "aliases": [
+        "인천",
+        "인천시",
+        "인천광역시"
+      ]
+    },
+    "gwangju": {
+      "sido": "광주",
+      "sidoFull": "광주광역시",
+      "ktoSidoCd": "29",
+      "aliases": [
+        "광주",
+        "광주시",
+        "광주광역시"
+      ]
+    },
+    "daejeon": {
+      "sido": "대전",
+      "sidoFull": "대전광역시",
+      "ktoSidoCd": "30",
+      "aliases": [
+        "대전",
+        "대전시",
+        "대전광역시"
+      ]
+    },
+    "ulsan": {
+      "sido": "울산",
+      "sidoFull": "울산광역시",
+      "ktoSidoCd": "31",
+      "aliases": [
+        "울산",
+        "울산시",
+        "울산광역시"
+      ]
+    },
+    "sejong": {
+      "sido": "세종",
+      "sidoFull": "세종특별자치시",
+      "ktoSidoCd": "36",
+      "aliases": [
+        "세종",
+        "세종시",
+        "세종특별자치시"
+      ]
+    },
+    "gyeonggi": {
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "ktoSidoCd": "41",
+      "aliases": [
+        "경기",
+        "경기도",
+        "수도권"
+      ]
+    },
+    "gangwon": {
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "ktoSidoCd": "42",
+      "codeStatus": "verify-before-api-call",
+      "aliases": [
+        "강원",
+        "강원도",
+        "강원특별자치도"
+      ]
+    },
+    "chungbuk": {
+      "sido": "충북",
+      "sidoFull": "충청북도",
+      "ktoSidoCd": "43",
+      "aliases": [
+        "충북",
+        "충청북도"
+      ]
+    },
+    "chungnam": {
+      "sido": "충남",
+      "sidoFull": "충청남도",
+      "ktoSidoCd": "44",
+      "aliases": [
+        "충남",
+        "충청남도"
+      ]
+    },
+    "jeonbuk": {
+      "sido": "전북",
+      "sidoFull": "전북특별자치도",
+      "ktoSidoCd": "45",
+      "codeStatus": "verify-before-api-call",
+      "aliases": [
+        "전북",
+        "전라북도",
+        "전북특별자치도"
+      ]
+    },
+    "jeonnam": {
+      "sido": "전남",
+      "sidoFull": "전라남도",
+      "ktoSidoCd": "46",
+      "aliases": [
+        "전남",
+        "전라남도"
+      ]
+    },
+    "gyeongbuk": {
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "ktoSidoCd": "47",
+      "aliases": [
+        "경북",
+        "경상북도"
+      ]
+    },
+    "gyeongnam": {
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "ktoSidoCd": "48",
+      "aliases": [
+        "경남",
+        "경상남도"
+      ]
+    },
+    "jeju": {
+      "sido": "제주",
+      "sidoFull": "제주특별자치도",
+      "ktoSidoCd": "50",
+      "aliases": [
+        "제주",
+        "제주도",
+        "제주특별자치도"
+      ]
+    },
+    "jeonnam_gwangju": {
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "ktoSidoCd": "12",
+      "codeStatus": "administrative-reform-pending",
+      "aliases": [
+        "전남광주",
+        "전남광주통합특별시",
+        "광주광역시",
+        "전라남도",
+        "광주",
+        "전남"
+      ]
+    }
   },
   "regions": [
     {
-      "regionKey": "kr_gyeonggi_pocheon",
-      "sidoKey": "gyeonggi",
-      "sido": "경기",
-      "sidoFull": "경기도",
-      "sigungu": "포천시",
-      "ktoSggCd": "41650",
+      "regionKey": "kr_admin_1111000000",
+      "officialRegionId": "kr_admin_1111000000",
+      "officialCode": "1111000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "종로구",
+      "ktoSggCd": "11110",
       "unit": "sigungu",
-      "aliases": ["포천", "포천시", "포천글램핑", "포천 캠핑장", "포천 카라반", "포천 펜션", "포천 풀빌라"],
-      "businessKeywordHints": ["글램핑", "캠핑장", "카라반", "펜션", "풀빌라", "숙소"],
-      "matchPriority": 100
+      "unitType": "autonomous_district",
+      "aliases": [
+        "종로구",
+        "종로",
+        "서울특별시 종로구",
+        "서울 종로",
+        "서울 종로구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
     },
     {
-      "regionKey": "kr_gyeonggi_gapyeong",
-      "sidoKey": "gyeonggi",
-      "sido": "경기",
-      "sidoFull": "경기도",
-      "sigungu": "가평군",
-      "ktoSggCd": "41820",
+      "regionKey": "kr_admin_1114000000",
+      "officialRegionId": "kr_admin_1114000000",
+      "officialCode": "1114000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "중구",
+      "ktoSggCd": "11140",
       "unit": "sigungu",
-      "aliases": ["가평", "가평군", "가평글램핑", "가평 펜션", "가평 풀빌라", "가평 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "캠핑장", "카라반", "숙소"],
-      "matchPriority": 96
+      "unitType": "autonomous_district",
+      "aliases": [
+        "중구",
+        "중",
+        "서울특별시 중구",
+        "서울 중",
+        "서울 중구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
     },
     {
-      "regionKey": "kr_gyeonggi_yangpyeong",
-      "sidoKey": "gyeonggi",
-      "sido": "경기",
-      "sidoFull": "경기도",
-      "sigungu": "양평군",
-      "ktoSggCd": "41830",
+      "regionKey": "kr_admin_1117000000",
+      "officialRegionId": "kr_admin_1117000000",
+      "officialCode": "1117000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "용산구",
+      "ktoSggCd": "11170",
       "unit": "sigungu",
-      "aliases": ["양평", "양평군", "양평글램핑", "양평 펜션", "양평 풀빌라", "양평 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "캠핑장", "숙소"],
-      "matchPriority": 94
+      "unitType": "autonomous_district",
+      "aliases": [
+        "용산구",
+        "용산",
+        "서울특별시 용산구",
+        "서울 용산",
+        "서울 용산구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
     },
     {
-      "regionKey": "kr_gyeonggi_anseong",
-      "sidoKey": "gyeonggi",
-      "sido": "경기",
-      "sidoFull": "경기도",
-      "sigungu": "안성시",
-      "ktoSggCd": "41550",
+      "regionKey": "kr_admin_1120000000",
+      "officialRegionId": "kr_admin_1120000000",
+      "officialCode": "1120000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "성동구",
+      "ktoSggCd": "11200",
       "unit": "sigungu",
-      "aliases": ["안성", "안성시", "안성글램핑", "안성 캠핑장", "안성 펜션"],
-      "businessKeywordHints": ["글램핑", "캠핑장", "펜션", "숙소"],
-      "matchPriority": 90
+      "unitType": "autonomous_district",
+      "aliases": [
+        "성동구",
+        "성동",
+        "서울특별시 성동구",
+        "서울 성동",
+        "서울 성동구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
     },
     {
-      "regionKey": "kr_gyeonggi_icheon",
+      "regionKey": "kr_admin_1121500000",
+      "officialRegionId": "kr_admin_1121500000",
+      "officialCode": "1121500000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "광진구",
+      "ktoSggCd": "11215",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "광진구",
+        "광진",
+        "서울특별시 광진구",
+        "서울 광진",
+        "서울 광진구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1123000000",
+      "officialRegionId": "kr_admin_1123000000",
+      "officialCode": "1123000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "동대문구",
+      "ktoSggCd": "11230",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "동대문구",
+        "동대문",
+        "서울특별시 동대문구",
+        "서울 동대문",
+        "서울 동대문구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1126000000",
+      "officialRegionId": "kr_admin_1126000000",
+      "officialCode": "1126000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "중랑구",
+      "ktoSggCd": "11260",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "중랑구",
+        "중랑",
+        "서울특별시 중랑구",
+        "서울 중랑",
+        "서울 중랑구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1129000000",
+      "officialRegionId": "kr_admin_1129000000",
+      "officialCode": "1129000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "성북구",
+      "ktoSggCd": "11290",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "성북구",
+        "성북",
+        "서울특별시 성북구",
+        "서울 성북",
+        "서울 성북구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1130500000",
+      "officialRegionId": "kr_admin_1130500000",
+      "officialCode": "1130500000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "강북구",
+      "ktoSggCd": "11305",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "강북구",
+        "강북",
+        "서울특별시 강북구",
+        "서울 강북",
+        "서울 강북구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1132000000",
+      "officialRegionId": "kr_admin_1132000000",
+      "officialCode": "1132000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "도봉구",
+      "ktoSggCd": "11320",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "도봉구",
+        "도봉",
+        "서울특별시 도봉구",
+        "서울 도봉",
+        "서울 도봉구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1135000000",
+      "officialRegionId": "kr_admin_1135000000",
+      "officialCode": "1135000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "노원구",
+      "ktoSggCd": "11350",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "노원구",
+        "노원",
+        "서울특별시 노원구",
+        "서울 노원",
+        "서울 노원구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1138000000",
+      "officialRegionId": "kr_admin_1138000000",
+      "officialCode": "1138000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "은평구",
+      "ktoSggCd": "11380",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "은평구",
+        "은평",
+        "서울특별시 은평구",
+        "서울 은평",
+        "서울 은평구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1141000000",
+      "officialRegionId": "kr_admin_1141000000",
+      "officialCode": "1141000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "서대문구",
+      "ktoSggCd": "11410",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "서대문구",
+        "서대문",
+        "서울특별시 서대문구",
+        "서울 서대문",
+        "서울 서대문구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1144000000",
+      "officialRegionId": "kr_admin_1144000000",
+      "officialCode": "1144000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "마포구",
+      "ktoSggCd": "11440",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "마포구",
+        "마포",
+        "서울특별시 마포구",
+        "서울 마포",
+        "서울 마포구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1147000000",
+      "officialRegionId": "kr_admin_1147000000",
+      "officialCode": "1147000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "양천구",
+      "ktoSggCd": "11470",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "양천구",
+        "양천",
+        "서울특별시 양천구",
+        "서울 양천",
+        "서울 양천구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1150000000",
+      "officialRegionId": "kr_admin_1150000000",
+      "officialCode": "1150000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "강서구",
+      "ktoSggCd": "11500",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "강서구",
+        "강서",
+        "서울특별시 강서구",
+        "서울 강서",
+        "서울 강서구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1153000000",
+      "officialRegionId": "kr_admin_1153000000",
+      "officialCode": "1153000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "구로구",
+      "ktoSggCd": "11530",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "구로구",
+        "구로",
+        "서울특별시 구로구",
+        "서울 구로",
+        "서울 구로구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1154500000",
+      "officialRegionId": "kr_admin_1154500000",
+      "officialCode": "1154500000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "금천구",
+      "ktoSggCd": "11545",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "금천구",
+        "금천",
+        "서울특별시 금천구",
+        "서울 금천",
+        "서울 금천구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1156000000",
+      "officialRegionId": "kr_admin_1156000000",
+      "officialCode": "1156000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "영등포구",
+      "ktoSggCd": "11560",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "영등포구",
+        "영등포",
+        "서울특별시 영등포구",
+        "서울 영등포",
+        "서울 영등포구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1159000000",
+      "officialRegionId": "kr_admin_1159000000",
+      "officialCode": "1159000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "동작구",
+      "ktoSggCd": "11590",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "동작구",
+        "동작",
+        "서울특별시 동작구",
+        "서울 동작",
+        "서울 동작구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1162000000",
+      "officialRegionId": "kr_admin_1162000000",
+      "officialCode": "1162000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "관악구",
+      "ktoSggCd": "11620",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "관악구",
+        "관악",
+        "서울특별시 관악구",
+        "서울 관악",
+        "서울 관악구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1165000000",
+      "officialRegionId": "kr_admin_1165000000",
+      "officialCode": "1165000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "서초구",
+      "ktoSggCd": "11650",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "서초구",
+        "서초",
+        "서울특별시 서초구",
+        "서울 서초",
+        "서울 서초구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1168000000",
+      "officialRegionId": "kr_admin_1168000000",
+      "officialCode": "1168000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "강남구",
+      "ktoSggCd": "11680",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "강남구",
+        "강남",
+        "서울특별시 강남구",
+        "서울 강남",
+        "서울 강남구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1171000000",
+      "officialRegionId": "kr_admin_1171000000",
+      "officialCode": "1171000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "송파구",
+      "ktoSggCd": "11710",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "송파구",
+        "송파",
+        "서울특별시 송파구",
+        "서울 송파",
+        "서울 송파구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1174000000",
+      "officialRegionId": "kr_admin_1174000000",
+      "officialCode": "1174000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "seoul",
+      "sido": "서울",
+      "sidoFull": "서울특별시",
+      "sigungu": "강동구",
+      "ktoSggCd": "11740",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "강동구",
+        "강동",
+        "서울특별시 강동구",
+        "서울 강동",
+        "서울 강동구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_1211000000",
+      "officialRegionId": "kr_admin_1211000000",
+      "officialCode": "1211000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "목포시",
+      "ktoSggCd": "12110",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "목포시",
+        "목포",
+        "전남광주통합특별시 목포시",
+        "전남광주 목포",
+        "전남광주 목포시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_jeonnam_yeosu",
+      "officialRegionId": "kr_admin_1213000000",
+      "officialCode": "1213000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "여수시",
+      "ktoSggCd": "12130",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "여수",
+        "여수시",
+        "여수글램핑",
+        "여수 펜션",
+        "여수 풀빌라",
+        "여수 숙소",
+        "전남광주통합특별시 여수시",
+        "전남광주 여수",
+        "전남광주 여수시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "숙소"
+      ],
+      "matchPriority": 92,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_jeonnam_suncheon",
+      "officialRegionId": "kr_admin_1215000000",
+      "officialCode": "1215000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "순천시",
+      "ktoSggCd": "12150",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "순천",
+        "순천시",
+        "순천글램핑",
+        "순천 펜션",
+        "순천 풀빌라",
+        "순천 숙소",
+        "전남광주통합특별시 순천시",
+        "전남광주 순천",
+        "전남광주 순천시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "숙소"
+      ],
+      "matchPriority": 88,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1217000000",
+      "officialRegionId": "kr_admin_1217000000",
+      "officialCode": "1217000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "나주시",
+      "ktoSggCd": "12170",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "나주시",
+        "나주",
+        "전남광주통합특별시 나주시",
+        "전남광주 나주",
+        "전남광주 나주시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1219000000",
+      "officialRegionId": "kr_admin_1219000000",
+      "officialCode": "1219000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "광양시",
+      "ktoSggCd": "12190",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "광양시",
+        "광양",
+        "전남광주통합특별시 광양시",
+        "전남광주 광양",
+        "전남광주 광양시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1221000000",
+      "officialRegionId": "kr_admin_1221000000",
+      "officialCode": "1221000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "동구",
+      "ktoSggCd": "12210",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "동구",
+        "동",
+        "전남광주통합특별시 동구",
+        "전남광주 동",
+        "전남광주 동구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1224000000",
+      "officialRegionId": "kr_admin_1224000000",
+      "officialCode": "1224000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "서구",
+      "ktoSggCd": "12240",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "서구",
+        "서",
+        "전남광주통합특별시 서구",
+        "전남광주 서",
+        "전남광주 서구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1227000000",
+      "officialRegionId": "kr_admin_1227000000",
+      "officialCode": "1227000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "남구",
+      "ktoSggCd": "12270",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "남구",
+        "남",
+        "전남광주통합특별시 남구",
+        "전남광주 남",
+        "전남광주 남구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1230000000",
+      "officialRegionId": "kr_admin_1230000000",
+      "officialCode": "1230000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "북구",
+      "ktoSggCd": "12300",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "북구",
+        "북",
+        "전남광주통합특별시 북구",
+        "전남광주 북",
+        "전남광주 북구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1233000000",
+      "officialRegionId": "kr_admin_1233000000",
+      "officialCode": "1233000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "광산구",
+      "ktoSggCd": "12330",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "광산구",
+        "광산",
+        "전남광주통합특별시 광산구",
+        "전남광주 광산",
+        "전남광주 광산구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_jeonnam_damyang",
+      "officialRegionId": "kr_admin_1271000000",
+      "officialCode": "1271000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "담양군",
+      "ktoSggCd": "12710",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "담양",
+        "담양군",
+        "담양글램핑",
+        "담양 펜션",
+        "담양 풀빌라",
+        "담양 캠핑장",
+        "전남광주통합특별시 담양군",
+        "전남광주 담양",
+        "전남광주 담양군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "캠핑장",
+        "숙소"
+      ],
+      "matchPriority": 90,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1272000000",
+      "officialRegionId": "kr_admin_1272000000",
+      "officialCode": "1272000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "곡성군",
+      "ktoSggCd": "12720",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "곡성군",
+        "곡성",
+        "전남광주통합특별시 곡성군",
+        "전남광주 곡성",
+        "전남광주 곡성군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_jeonnam_gurye",
+      "officialRegionId": "kr_admin_1273000000",
+      "officialCode": "1273000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "구례군",
+      "ktoSggCd": "12730",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "구례",
+        "구례군",
+        "구례글램핑",
+        "구례 펜션",
+        "구례 캠핑장",
+        "전남광주통합특별시 구례군",
+        "전남광주 구례",
+        "전남광주 구례군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "캠핑장",
+        "숙소"
+      ],
+      "matchPriority": 86,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1274000000",
+      "officialRegionId": "kr_admin_1274000000",
+      "officialCode": "1274000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "고흥군",
+      "ktoSggCd": "12740",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "고흥군",
+        "고흥",
+        "전남광주통합특별시 고흥군",
+        "전남광주 고흥",
+        "전남광주 고흥군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1275000000",
+      "officialRegionId": "kr_admin_1275000000",
+      "officialCode": "1275000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "보성군",
+      "ktoSggCd": "12750",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "보성군",
+        "보성",
+        "전남광주통합특별시 보성군",
+        "전남광주 보성",
+        "전남광주 보성군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1276000000",
+      "officialRegionId": "kr_admin_1276000000",
+      "officialCode": "1276000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "화순군",
+      "ktoSggCd": "12760",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "화순군",
+        "화순",
+        "전남광주통합특별시 화순군",
+        "전남광주 화순",
+        "전남광주 화순군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1277000000",
+      "officialRegionId": "kr_admin_1277000000",
+      "officialCode": "1277000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "장흥군",
+      "ktoSggCd": "12770",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "장흥군",
+        "장흥",
+        "전남광주통합특별시 장흥군",
+        "전남광주 장흥",
+        "전남광주 장흥군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1278000000",
+      "officialRegionId": "kr_admin_1278000000",
+      "officialCode": "1278000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "강진군",
+      "ktoSggCd": "12780",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "강진군",
+        "강진",
+        "전남광주통합특별시 강진군",
+        "전남광주 강진",
+        "전남광주 강진군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1279000000",
+      "officialRegionId": "kr_admin_1279000000",
+      "officialCode": "1279000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "해남군",
+      "ktoSggCd": "12790",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "해남군",
+        "해남",
+        "전남광주통합특별시 해남군",
+        "전남광주 해남",
+        "전남광주 해남군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1280000000",
+      "officialRegionId": "kr_admin_1280000000",
+      "officialCode": "1280000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "영암군",
+      "ktoSggCd": "12800",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "영암군",
+        "영암",
+        "전남광주통합특별시 영암군",
+        "전남광주 영암",
+        "전남광주 영암군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1281000000",
+      "officialRegionId": "kr_admin_1281000000",
+      "officialCode": "1281000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "무안군",
+      "ktoSggCd": "12810",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "무안군",
+        "무안",
+        "전남광주통합특별시 무안군",
+        "전남광주 무안",
+        "전남광주 무안군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1282000000",
+      "officialRegionId": "kr_admin_1282000000",
+      "officialCode": "1282000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "함평군",
+      "ktoSggCd": "12820",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "함평군",
+        "함평",
+        "전남광주통합특별시 함평군",
+        "전남광주 함평",
+        "전남광주 함평군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1283000000",
+      "officialRegionId": "kr_admin_1283000000",
+      "officialCode": "1283000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "영광군",
+      "ktoSggCd": "12830",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "영광군",
+        "영광",
+        "전남광주통합특별시 영광군",
+        "전남광주 영광",
+        "전남광주 영광군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1284000000",
+      "officialRegionId": "kr_admin_1284000000",
+      "officialCode": "1284000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "장성군",
+      "ktoSggCd": "12840",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "장성군",
+        "장성",
+        "전남광주통합특별시 장성군",
+        "전남광주 장성",
+        "전남광주 장성군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1285000000",
+      "officialRegionId": "kr_admin_1285000000",
+      "officialCode": "1285000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "완도군",
+      "ktoSggCd": "12850",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "완도군",
+        "완도",
+        "전남광주통합특별시 완도군",
+        "전남광주 완도",
+        "전남광주 완도군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1286000000",
+      "officialRegionId": "kr_admin_1286000000",
+      "officialCode": "1286000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "진도군",
+      "ktoSggCd": "12860",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "진도군",
+        "진도",
+        "전남광주통합특별시 진도군",
+        "전남광주 진도",
+        "전남광주 진도군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_1287000000",
+      "officialRegionId": "kr_admin_1287000000",
+      "officialCode": "1287000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonnam_gwangju",
+      "sido": "전남광주",
+      "sidoFull": "전남광주통합특별시",
+      "sigungu": "신안군",
+      "ktoSggCd": "12870",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "신안군",
+        "신안",
+        "전남광주통합특별시 신안군",
+        "전남광주 신안",
+        "전남광주 신안군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_2611000000",
+      "officialRegionId": "kr_admin_2611000000",
+      "officialCode": "2611000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "busan",
+      "sido": "부산",
+      "sidoFull": "부산광역시",
+      "sigungu": "중구",
+      "ktoSggCd": "26110",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "중구",
+        "중",
+        "부산광역시 중구",
+        "부산 중",
+        "부산 중구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2614000000",
+      "officialRegionId": "kr_admin_2614000000",
+      "officialCode": "2614000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "busan",
+      "sido": "부산",
+      "sidoFull": "부산광역시",
+      "sigungu": "서구",
+      "ktoSggCd": "26140",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "서구",
+        "서",
+        "부산광역시 서구",
+        "부산 서",
+        "부산 서구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2617000000",
+      "officialRegionId": "kr_admin_2617000000",
+      "officialCode": "2617000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "busan",
+      "sido": "부산",
+      "sidoFull": "부산광역시",
+      "sigungu": "동구",
+      "ktoSggCd": "26170",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "동구",
+        "동",
+        "부산광역시 동구",
+        "부산 동",
+        "부산 동구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2620000000",
+      "officialRegionId": "kr_admin_2620000000",
+      "officialCode": "2620000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "busan",
+      "sido": "부산",
+      "sidoFull": "부산광역시",
+      "sigungu": "영도구",
+      "ktoSggCd": "26200",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "영도구",
+        "영도",
+        "부산광역시 영도구",
+        "부산 영도",
+        "부산 영도구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2623000000",
+      "officialRegionId": "kr_admin_2623000000",
+      "officialCode": "2623000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "busan",
+      "sido": "부산",
+      "sidoFull": "부산광역시",
+      "sigungu": "부산진구",
+      "ktoSggCd": "26230",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "부산진구",
+        "부산진",
+        "부산광역시 부산진구",
+        "부산 부산진",
+        "부산 부산진구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2626000000",
+      "officialRegionId": "kr_admin_2626000000",
+      "officialCode": "2626000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "busan",
+      "sido": "부산",
+      "sidoFull": "부산광역시",
+      "sigungu": "동래구",
+      "ktoSggCd": "26260",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "동래구",
+        "동래",
+        "부산광역시 동래구",
+        "부산 동래",
+        "부산 동래구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2629000000",
+      "officialRegionId": "kr_admin_2629000000",
+      "officialCode": "2629000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "busan",
+      "sido": "부산",
+      "sidoFull": "부산광역시",
+      "sigungu": "남구",
+      "ktoSggCd": "26290",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "남구",
+        "남",
+        "부산광역시 남구",
+        "부산 남",
+        "부산 남구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2632000000",
+      "officialRegionId": "kr_admin_2632000000",
+      "officialCode": "2632000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "busan",
+      "sido": "부산",
+      "sidoFull": "부산광역시",
+      "sigungu": "북구",
+      "ktoSggCd": "26320",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "북구",
+        "북",
+        "부산광역시 북구",
+        "부산 북",
+        "부산 북구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2635000000",
+      "officialRegionId": "kr_admin_2635000000",
+      "officialCode": "2635000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "busan",
+      "sido": "부산",
+      "sidoFull": "부산광역시",
+      "sigungu": "해운대구",
+      "ktoSggCd": "26350",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "해운대구",
+        "해운대",
+        "부산광역시 해운대구",
+        "부산 해운대",
+        "부산 해운대구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2638000000",
+      "officialRegionId": "kr_admin_2638000000",
+      "officialCode": "2638000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "busan",
+      "sido": "부산",
+      "sidoFull": "부산광역시",
+      "sigungu": "사하구",
+      "ktoSggCd": "26380",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "사하구",
+        "사하",
+        "부산광역시 사하구",
+        "부산 사하",
+        "부산 사하구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2641000000",
+      "officialRegionId": "kr_admin_2641000000",
+      "officialCode": "2641000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "busan",
+      "sido": "부산",
+      "sidoFull": "부산광역시",
+      "sigungu": "금정구",
+      "ktoSggCd": "26410",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "금정구",
+        "금정",
+        "부산광역시 금정구",
+        "부산 금정",
+        "부산 금정구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2644000000",
+      "officialRegionId": "kr_admin_2644000000",
+      "officialCode": "2644000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "busan",
+      "sido": "부산",
+      "sidoFull": "부산광역시",
+      "sigungu": "강서구",
+      "ktoSggCd": "26440",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "강서구",
+        "강서",
+        "부산광역시 강서구",
+        "부산 강서",
+        "부산 강서구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2647000000",
+      "officialRegionId": "kr_admin_2647000000",
+      "officialCode": "2647000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "busan",
+      "sido": "부산",
+      "sidoFull": "부산광역시",
+      "sigungu": "연제구",
+      "ktoSggCd": "26470",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "연제구",
+        "연제",
+        "부산광역시 연제구",
+        "부산 연제",
+        "부산 연제구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2650000000",
+      "officialRegionId": "kr_admin_2650000000",
+      "officialCode": "2650000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "busan",
+      "sido": "부산",
+      "sidoFull": "부산광역시",
+      "sigungu": "수영구",
+      "ktoSggCd": "26500",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "수영구",
+        "수영",
+        "부산광역시 수영구",
+        "부산 수영",
+        "부산 수영구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2653000000",
+      "officialRegionId": "kr_admin_2653000000",
+      "officialCode": "2653000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "busan",
+      "sido": "부산",
+      "sidoFull": "부산광역시",
+      "sigungu": "사상구",
+      "ktoSggCd": "26530",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "사상구",
+        "사상",
+        "부산광역시 사상구",
+        "부산 사상",
+        "부산 사상구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2671000000",
+      "officialRegionId": "kr_admin_2671000000",
+      "officialCode": "2671000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "busan",
+      "sido": "부산",
+      "sidoFull": "부산광역시",
+      "sigungu": "기장군",
+      "ktoSggCd": "26710",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "기장군",
+        "기장",
+        "부산광역시 기장군",
+        "부산 기장",
+        "부산 기장군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2711000000",
+      "officialRegionId": "kr_admin_2711000000",
+      "officialCode": "2711000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "daegu",
+      "sido": "대구",
+      "sidoFull": "대구광역시",
+      "sigungu": "중구",
+      "ktoSggCd": "27110",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "중구",
+        "중",
+        "대구광역시 중구",
+        "대구 중",
+        "대구 중구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2714000000",
+      "officialRegionId": "kr_admin_2714000000",
+      "officialCode": "2714000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "daegu",
+      "sido": "대구",
+      "sidoFull": "대구광역시",
+      "sigungu": "동구",
+      "ktoSggCd": "27140",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "동구",
+        "동",
+        "대구광역시 동구",
+        "대구 동",
+        "대구 동구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2717000000",
+      "officialRegionId": "kr_admin_2717000000",
+      "officialCode": "2717000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "daegu",
+      "sido": "대구",
+      "sidoFull": "대구광역시",
+      "sigungu": "서구",
+      "ktoSggCd": "27170",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "서구",
+        "서",
+        "대구광역시 서구",
+        "대구 서",
+        "대구 서구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2720000000",
+      "officialRegionId": "kr_admin_2720000000",
+      "officialCode": "2720000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "daegu",
+      "sido": "대구",
+      "sidoFull": "대구광역시",
+      "sigungu": "남구",
+      "ktoSggCd": "27200",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "남구",
+        "남",
+        "대구광역시 남구",
+        "대구 남",
+        "대구 남구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2723000000",
+      "officialRegionId": "kr_admin_2723000000",
+      "officialCode": "2723000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "daegu",
+      "sido": "대구",
+      "sidoFull": "대구광역시",
+      "sigungu": "북구",
+      "ktoSggCd": "27230",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "북구",
+        "북",
+        "대구광역시 북구",
+        "대구 북",
+        "대구 북구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2726000000",
+      "officialRegionId": "kr_admin_2726000000",
+      "officialCode": "2726000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "daegu",
+      "sido": "대구",
+      "sidoFull": "대구광역시",
+      "sigungu": "수성구",
+      "ktoSggCd": "27260",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "수성구",
+        "수성",
+        "대구광역시 수성구",
+        "대구 수성",
+        "대구 수성구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2729000000",
+      "officialRegionId": "kr_admin_2729000000",
+      "officialCode": "2729000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "daegu",
+      "sido": "대구",
+      "sidoFull": "대구광역시",
+      "sigungu": "달서구",
+      "ktoSggCd": "27290",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "달서구",
+        "달서",
+        "대구광역시 달서구",
+        "대구 달서",
+        "대구 달서구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2771000000",
+      "officialRegionId": "kr_admin_2771000000",
+      "officialCode": "2771000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "daegu",
+      "sido": "대구",
+      "sidoFull": "대구광역시",
+      "sigungu": "달성군",
+      "ktoSggCd": "27710",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "달성군",
+        "달성",
+        "대구광역시 달성군",
+        "대구 달성",
+        "대구 달성군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2772000000",
+      "officialRegionId": "kr_admin_2772000000",
+      "officialCode": "2772000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "daegu",
+      "sido": "대구",
+      "sidoFull": "대구광역시",
+      "sigungu": "군위군",
+      "ktoSggCd": "27720",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "군위군",
+        "군위",
+        "대구광역시 군위군",
+        "대구 군위",
+        "대구 군위군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2812500000",
+      "officialRegionId": "kr_admin_2812500000",
+      "officialCode": "2812500000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "incheon",
+      "sido": "인천",
+      "sidoFull": "인천광역시",
+      "sigungu": "제물포구",
+      "ktoSggCd": "28125",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "제물포구",
+        "제물포",
+        "인천광역시 제물포구",
+        "인천 제물포",
+        "인천 제물포구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "2026년 인천 자치구 개편 뒤 관광 API의 새 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_2815500000",
+      "officialRegionId": "kr_admin_2815500000",
+      "officialCode": "2815500000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "incheon",
+      "sido": "인천",
+      "sidoFull": "인천광역시",
+      "sigungu": "영종구",
+      "ktoSggCd": "28155",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "영종구",
+        "영종",
+        "인천광역시 영종구",
+        "인천 영종",
+        "인천 영종구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "2026년 인천 자치구 개편 뒤 관광 API의 새 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_2817700000",
+      "officialRegionId": "kr_admin_2817700000",
+      "officialCode": "2817700000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "incheon",
+      "sido": "인천",
+      "sidoFull": "인천광역시",
+      "sigungu": "미추홀구",
+      "ktoSggCd": "28177",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "미추홀구",
+        "미추홀",
+        "인천광역시 미추홀구",
+        "인천 미추홀",
+        "인천 미추홀구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2818500000",
+      "officialRegionId": "kr_admin_2818500000",
+      "officialCode": "2818500000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "incheon",
+      "sido": "인천",
+      "sidoFull": "인천광역시",
+      "sigungu": "연수구",
+      "ktoSggCd": "28185",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "연수구",
+        "연수",
+        "인천광역시 연수구",
+        "인천 연수",
+        "인천 연수구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2820000000",
+      "officialRegionId": "kr_admin_2820000000",
+      "officialCode": "2820000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "incheon",
+      "sido": "인천",
+      "sidoFull": "인천광역시",
+      "sigungu": "남동구",
+      "ktoSggCd": "28200",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "남동구",
+        "남동",
+        "인천광역시 남동구",
+        "인천 남동",
+        "인천 남동구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2823700000",
+      "officialRegionId": "kr_admin_2823700000",
+      "officialCode": "2823700000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "incheon",
+      "sido": "인천",
+      "sidoFull": "인천광역시",
+      "sigungu": "부평구",
+      "ktoSggCd": "28237",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "부평구",
+        "부평",
+        "인천광역시 부평구",
+        "인천 부평",
+        "인천 부평구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2824500000",
+      "officialRegionId": "kr_admin_2824500000",
+      "officialCode": "2824500000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "incheon",
+      "sido": "인천",
+      "sidoFull": "인천광역시",
+      "sigungu": "계양구",
+      "ktoSggCd": "28245",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "계양구",
+        "계양",
+        "인천광역시 계양구",
+        "인천 계양",
+        "인천 계양구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2827500000",
+      "officialRegionId": "kr_admin_2827500000",
+      "officialCode": "2827500000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "incheon",
+      "sido": "인천",
+      "sidoFull": "인천광역시",
+      "sigungu": "서해구",
+      "ktoSggCd": "28275",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "서해구",
+        "서해",
+        "인천광역시 서해구",
+        "인천 서해",
+        "인천 서해구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "2026년 인천 자치구 개편 뒤 관광 API의 새 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_2829000000",
+      "officialRegionId": "kr_admin_2829000000",
+      "officialCode": "2829000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "incheon",
+      "sido": "인천",
+      "sidoFull": "인천광역시",
+      "sigungu": "검단구",
+      "ktoSggCd": "28290",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "검단구",
+        "검단",
+        "인천광역시 검단구",
+        "인천 검단",
+        "인천 검단구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60,
+      "codeStatus": "administrative-reform-pending",
+      "codeStatusReason": "2026년 인천 자치구 개편 뒤 관광 API의 새 시군구 코드 반영 여부를 확인해야 합니다."
+    },
+    {
+      "regionKey": "kr_admin_2871000000",
+      "officialRegionId": "kr_admin_2871000000",
+      "officialCode": "2871000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "incheon",
+      "sido": "인천",
+      "sidoFull": "인천광역시",
+      "sigungu": "강화군",
+      "ktoSggCd": "28710",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "강화군",
+        "강화",
+        "인천광역시 강화군",
+        "인천 강화",
+        "인천 강화군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_2872000000",
+      "officialRegionId": "kr_admin_2872000000",
+      "officialCode": "2872000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "incheon",
+      "sido": "인천",
+      "sidoFull": "인천광역시",
+      "sigungu": "옹진군",
+      "ktoSggCd": "28720",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "옹진군",
+        "옹진",
+        "인천광역시 옹진군",
+        "인천 옹진",
+        "인천 옹진군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_3011000000",
+      "officialRegionId": "kr_admin_3011000000",
+      "officialCode": "3011000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "daejeon",
+      "sido": "대전",
+      "sidoFull": "대전광역시",
+      "sigungu": "동구",
+      "ktoSggCd": "30110",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "동구",
+        "동",
+        "대전광역시 동구",
+        "대전 동",
+        "대전 동구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_3014000000",
+      "officialRegionId": "kr_admin_3014000000",
+      "officialCode": "3014000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "daejeon",
+      "sido": "대전",
+      "sidoFull": "대전광역시",
+      "sigungu": "중구",
+      "ktoSggCd": "30140",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "중구",
+        "중",
+        "대전광역시 중구",
+        "대전 중",
+        "대전 중구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_3017000000",
+      "officialRegionId": "kr_admin_3017000000",
+      "officialCode": "3017000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "daejeon",
+      "sido": "대전",
+      "sidoFull": "대전광역시",
+      "sigungu": "서구",
+      "ktoSggCd": "30170",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "서구",
+        "서",
+        "대전광역시 서구",
+        "대전 서",
+        "대전 서구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_3020000000",
+      "officialRegionId": "kr_admin_3020000000",
+      "officialCode": "3020000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "daejeon",
+      "sido": "대전",
+      "sidoFull": "대전광역시",
+      "sigungu": "유성구",
+      "ktoSggCd": "30200",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "유성구",
+        "유성",
+        "대전광역시 유성구",
+        "대전 유성",
+        "대전 유성구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_3023000000",
+      "officialRegionId": "kr_admin_3023000000",
+      "officialCode": "3023000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "daejeon",
+      "sido": "대전",
+      "sidoFull": "대전광역시",
+      "sigungu": "대덕구",
+      "ktoSggCd": "30230",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "대덕구",
+        "대덕",
+        "대전광역시 대덕구",
+        "대전 대덕",
+        "대전 대덕구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_3111000000",
+      "officialRegionId": "kr_admin_3111000000",
+      "officialCode": "3111000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "ulsan",
+      "sido": "울산",
+      "sidoFull": "울산광역시",
+      "sigungu": "중구",
+      "ktoSggCd": "31110",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "중구",
+        "중",
+        "울산광역시 중구",
+        "울산 중",
+        "울산 중구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_3114000000",
+      "officialRegionId": "kr_admin_3114000000",
+      "officialCode": "3114000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "ulsan",
+      "sido": "울산",
+      "sidoFull": "울산광역시",
+      "sigungu": "남구",
+      "ktoSggCd": "31140",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "남구",
+        "남",
+        "울산광역시 남구",
+        "울산 남",
+        "울산 남구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_3117000000",
+      "officialRegionId": "kr_admin_3117000000",
+      "officialCode": "3117000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "ulsan",
+      "sido": "울산",
+      "sidoFull": "울산광역시",
+      "sigungu": "동구",
+      "ktoSggCd": "31170",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "동구",
+        "동",
+        "울산광역시 동구",
+        "울산 동",
+        "울산 동구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_3120000000",
+      "officialRegionId": "kr_admin_3120000000",
+      "officialCode": "3120000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "ulsan",
+      "sido": "울산",
+      "sidoFull": "울산광역시",
+      "sigungu": "북구",
+      "ktoSggCd": "31200",
+      "unit": "sigungu",
+      "unitType": "autonomous_district",
+      "aliases": [
+        "북구",
+        "북",
+        "울산광역시 북구",
+        "울산 북",
+        "울산 북구"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_3171000000",
+      "officialRegionId": "kr_admin_3171000000",
+      "officialCode": "3171000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "ulsan",
+      "sido": "울산",
+      "sidoFull": "울산광역시",
+      "sigungu": "울주군",
+      "ktoSggCd": "31710",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "울주군",
+        "울주",
+        "울산광역시 울주군",
+        "울산 울주",
+        "울산 울주군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4111000000",
+      "officialRegionId": "kr_admin_4111000000",
+      "officialCode": "4111000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
       "sidoKey": "gyeonggi",
       "sido": "경기",
       "sidoFull": "경기도",
-      "sigungu": "이천시",
-      "ktoSggCd": "41500",
+      "sigungu": "수원시",
+      "ktoSggCd": "41110",
       "unit": "sigungu",
-      "aliases": ["이천", "이천시", "이천글램핑", "이천 캠핑장", "이천 펜션"],
-      "businessKeywordHints": ["글램핑", "캠핑장", "펜션", "숙소"],
-      "matchPriority": 88
+      "unitType": "city",
+      "aliases": [
+        "수원시",
+        "수원",
+        "경기도 수원시",
+        "경기 수원",
+        "경기 수원시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4113000000",
+      "officialRegionId": "kr_admin_4113000000",
+      "officialCode": "4113000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "성남시",
+      "ktoSggCd": "41130",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "성남시",
+        "성남",
+        "경기도 성남시",
+        "경기 성남",
+        "경기 성남시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4115000000",
+      "officialRegionId": "kr_admin_4115000000",
+      "officialCode": "4115000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "의정부시",
+      "ktoSggCd": "41150",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "의정부시",
+        "의정부",
+        "경기도 의정부시",
+        "경기 의정부",
+        "경기 의정부시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4117000000",
+      "officialRegionId": "kr_admin_4117000000",
+      "officialCode": "4117000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "안양시",
+      "ktoSggCd": "41170",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "안양시",
+        "안양",
+        "경기도 안양시",
+        "경기 안양",
+        "경기 안양시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4119000000",
+      "officialRegionId": "kr_admin_4119000000",
+      "officialCode": "4119000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "부천시",
+      "ktoSggCd": "41190",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "부천시",
+        "부천",
+        "경기도 부천시",
+        "경기 부천",
+        "경기 부천시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4121000000",
+      "officialRegionId": "kr_admin_4121000000",
+      "officialCode": "4121000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "광명시",
+      "ktoSggCd": "41210",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "광명시",
+        "광명",
+        "경기도 광명시",
+        "경기 광명",
+        "경기 광명시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4122000000",
+      "officialRegionId": "kr_admin_4122000000",
+      "officialCode": "4122000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "평택시",
+      "ktoSggCd": "41220",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "평택시",
+        "평택",
+        "경기도 평택시",
+        "경기 평택",
+        "경기 평택시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4125000000",
+      "officialRegionId": "kr_admin_4125000000",
+      "officialCode": "4125000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "동두천시",
+      "ktoSggCd": "41250",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "동두천시",
+        "동두천",
+        "경기도 동두천시",
+        "경기 동두천",
+        "경기 동두천시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4127000000",
+      "officialRegionId": "kr_admin_4127000000",
+      "officialCode": "4127000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "안산시",
+      "ktoSggCd": "41270",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "안산시",
+        "안산",
+        "경기도 안산시",
+        "경기 안산",
+        "경기 안산시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4128000000",
+      "officialRegionId": "kr_admin_4128000000",
+      "officialCode": "4128000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "고양시",
+      "ktoSggCd": "41280",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "고양시",
+        "고양",
+        "경기도 고양시",
+        "경기 고양",
+        "경기 고양시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4129000000",
+      "officialRegionId": "kr_admin_4129000000",
+      "officialCode": "4129000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "과천시",
+      "ktoSggCd": "41290",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "과천시",
+        "과천",
+        "경기도 과천시",
+        "경기 과천",
+        "경기 과천시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4131000000",
+      "officialRegionId": "kr_admin_4131000000",
+      "officialCode": "4131000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "구리시",
+      "ktoSggCd": "41310",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "구리시",
+        "구리",
+        "경기도 구리시",
+        "경기 구리",
+        "경기 구리시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4136000000",
+      "officialRegionId": "kr_admin_4136000000",
+      "officialCode": "4136000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "남양주시",
+      "ktoSggCd": "41360",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "남양주시",
+        "남양주",
+        "경기도 남양주시",
+        "경기 남양주",
+        "경기 남양주시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4137000000",
+      "officialRegionId": "kr_admin_4137000000",
+      "officialCode": "4137000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "오산시",
+      "ktoSggCd": "41370",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "오산시",
+        "오산",
+        "경기도 오산시",
+        "경기 오산",
+        "경기 오산시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4139000000",
+      "officialRegionId": "kr_admin_4139000000",
+      "officialCode": "4139000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "시흥시",
+      "ktoSggCd": "41390",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "시흥시",
+        "시흥",
+        "경기도 시흥시",
+        "경기 시흥",
+        "경기 시흥시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4141000000",
+      "officialRegionId": "kr_admin_4141000000",
+      "officialCode": "4141000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "군포시",
+      "ktoSggCd": "41410",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "군포시",
+        "군포",
+        "경기도 군포시",
+        "경기 군포",
+        "경기 군포시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4143000000",
+      "officialRegionId": "kr_admin_4143000000",
+      "officialCode": "4143000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "의왕시",
+      "ktoSggCd": "41430",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "의왕시",
+        "의왕",
+        "경기도 의왕시",
+        "경기 의왕",
+        "경기 의왕시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4145000000",
+      "officialRegionId": "kr_admin_4145000000",
+      "officialCode": "4145000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "하남시",
+      "ktoSggCd": "41450",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "하남시",
+        "하남",
+        "경기도 하남시",
+        "경기 하남",
+        "경기 하남시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4146000000",
+      "officialRegionId": "kr_admin_4146000000",
+      "officialCode": "4146000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "용인시",
+      "ktoSggCd": "41460",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "용인시",
+        "용인",
+        "경기도 용인시",
+        "경기 용인",
+        "경기 용인시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
     },
     {
       "regionKey": "kr_gyeonggi_paju",
+      "officialRegionId": "kr_admin_4148000000",
+      "officialCode": "4148000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
       "sidoKey": "gyeonggi",
       "sido": "경기",
       "sidoFull": "경기도",
       "sigungu": "파주시",
       "ktoSggCd": "41480",
       "unit": "sigungu",
-      "aliases": ["파주", "파주시", "파주글램핑", "파주 캠핑장", "파주 펜션"],
-      "businessKeywordHints": ["글램핑", "캠핑장", "펜션", "숙소"],
+      "unitType": "city",
+      "aliases": [
+        "파주",
+        "파주시",
+        "파주글램핑",
+        "파주 캠핑장",
+        "파주 펜션",
+        "경기도 파주시",
+        "경기 파주",
+        "경기 파주시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "펜션",
+        "숙소"
+      ],
       "matchPriority": 86
     },
     {
-      "regionKey": "kr_gyeonggi_yeoju",
+      "regionKey": "kr_gyeonggi_icheon",
+      "officialRegionId": "kr_admin_4150000000",
+      "officialCode": "4150000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
       "sidoKey": "gyeonggi",
       "sido": "경기",
       "sidoFull": "경기도",
-      "sigungu": "여주시",
-      "ktoSggCd": "41670",
+      "sigungu": "이천시",
+      "ktoSggCd": "41500",
       "unit": "sigungu",
-      "aliases": ["여주", "여주시", "여주글램핑", "여주 캠핑장", "여주 펜션"],
-      "businessKeywordHints": ["글램핑", "캠핑장", "펜션", "숙소"],
-      "matchPriority": 84
+      "unitType": "city",
+      "aliases": [
+        "이천",
+        "이천시",
+        "이천글램핑",
+        "이천 캠핑장",
+        "이천 펜션",
+        "경기도 이천시",
+        "경기 이천",
+        "경기 이천시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "펜션",
+        "숙소"
+      ],
+      "matchPriority": 88
+    },
+    {
+      "regionKey": "kr_gyeonggi_anseong",
+      "officialRegionId": "kr_admin_4155000000",
+      "officialCode": "4155000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "안성시",
+      "ktoSggCd": "41550",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "안성",
+        "안성시",
+        "안성글램핑",
+        "안성 캠핑장",
+        "안성 펜션",
+        "경기도 안성시",
+        "경기 안성",
+        "경기 안성시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "펜션",
+        "숙소"
+      ],
+      "matchPriority": 90
+    },
+    {
+      "regionKey": "kr_admin_4157000000",
+      "officialRegionId": "kr_admin_4157000000",
+      "officialCode": "4157000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "김포시",
+      "ktoSggCd": "41570",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "김포시",
+        "김포",
+        "경기도 김포시",
+        "경기 김포",
+        "경기 김포시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
     },
     {
       "regionKey": "kr_gyeonggi_hwaseong",
+      "officialRegionId": "kr_admin_4159000000",
+      "officialCode": "4159000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
       "sidoKey": "gyeonggi",
       "sido": "경기",
       "sidoFull": "경기도",
       "sigungu": "화성시",
       "ktoSggCd": "41590",
       "unit": "sigungu",
-      "aliases": ["화성", "화성시", "화성글램핑", "화성 캠핑장", "화성 펜션"],
-      "businessKeywordHints": ["글램핑", "캠핑장", "펜션", "숙소"],
+      "unitType": "city",
+      "aliases": [
+        "화성",
+        "화성시",
+        "화성글램핑",
+        "화성 캠핑장",
+        "화성 펜션",
+        "경기도 화성시",
+        "경기 화성",
+        "경기 화성시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "펜션",
+        "숙소"
+      ],
       "matchPriority": 82
     },
     {
-      "regionKey": "kr_gangwon_chuncheon",
-      "sidoKey": "gangwon",
-      "sido": "강원",
-      "sidoFull": "강원특별자치도",
-      "sigungu": "춘천시",
-      "ktoSggCd": "42110",
-      "codeStatus": "verify-before-api-call",
+      "regionKey": "kr_admin_4161000000",
+      "officialRegionId": "kr_admin_4161000000",
+      "officialCode": "4161000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "광주시",
+      "ktoSggCd": "41610",
       "unit": "sigungu",
-      "aliases": ["춘천", "춘천시", "춘천글램핑", "춘천 펜션", "춘천 풀빌라", "춘천 숙소"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "숙소"],
-      "matchPriority": 92
+      "unitType": "city",
+      "aliases": [
+        "광주시",
+        "광주",
+        "경기도 광주시",
+        "경기 광주",
+        "경기 광주시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
     },
     {
-      "regionKey": "kr_gangwon_hongcheon",
-      "sidoKey": "gangwon",
-      "sido": "강원",
-      "sidoFull": "강원특별자치도",
-      "sigungu": "홍천군",
-      "ktoSggCd": "42720",
-      "codeStatus": "verify-before-api-call",
+      "regionKey": "kr_admin_4163000000",
+      "officialRegionId": "kr_admin_4163000000",
+      "officialCode": "4163000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "양주시",
+      "ktoSggCd": "41630",
       "unit": "sigungu",
-      "aliases": ["홍천", "홍천군", "홍천글램핑", "홍천 펜션", "홍천 풀빌라", "홍천 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "캠핑장", "숙소"],
-      "matchPriority": 90
+      "unitType": "city",
+      "aliases": [
+        "양주시",
+        "양주",
+        "경기도 양주시",
+        "경기 양주",
+        "경기 양주시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
     },
     {
-      "regionKey": "kr_gangwon_pyeongchang",
-      "sidoKey": "gangwon",
-      "sido": "강원",
-      "sidoFull": "강원특별자치도",
-      "sigungu": "평창군",
-      "ktoSggCd": "42760",
-      "codeStatus": "verify-before-api-call",
+      "regionKey": "kr_gyeonggi_pocheon",
+      "officialRegionId": "kr_admin_4165000000",
+      "officialCode": "4165000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "포천시",
+      "ktoSggCd": "41650",
       "unit": "sigungu",
-      "aliases": ["평창", "평창군", "평창글램핑", "평창 펜션", "평창 풀빌라", "평창 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "캠핑장", "숙소"],
-      "matchPriority": 88
+      "unitType": "city",
+      "aliases": [
+        "포천",
+        "포천시",
+        "포천글램핑",
+        "포천 캠핑장",
+        "포천 카라반",
+        "포천 펜션",
+        "포천 풀빌라",
+        "경기도 포천시",
+        "경기 포천",
+        "경기 포천시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "풀빌라",
+        "숙소"
+      ],
+      "matchPriority": 100
     },
     {
-      "regionKey": "kr_gangwon_gangneung",
-      "sidoKey": "gangwon",
-      "sido": "강원",
-      "sidoFull": "강원특별자치도",
-      "sigungu": "강릉시",
-      "ktoSggCd": "42150",
-      "codeStatus": "verify-before-api-call",
+      "regionKey": "kr_gyeonggi_yeoju",
+      "officialRegionId": "kr_admin_4167000000",
+      "officialCode": "4167000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "여주시",
+      "ktoSggCd": "41670",
       "unit": "sigungu",
-      "aliases": ["강릉", "강릉시", "강릉글램핑", "강릉 펜션", "강릉 풀빌라", "강릉 숙소"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "숙소"],
-      "matchPriority": 86
-    },
-    {
-      "regionKey": "kr_gangwon_sokcho",
-      "sidoKey": "gangwon",
-      "sido": "강원",
-      "sidoFull": "강원특별자치도",
-      "sigungu": "속초시",
-      "ktoSggCd": "42210",
-      "codeStatus": "verify-before-api-call",
-      "unit": "sigungu",
-      "aliases": ["속초", "속초시", "속초글램핑", "속초 펜션", "속초 풀빌라", "속초 숙소"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "숙소"],
+      "unitType": "city",
+      "aliases": [
+        "여주",
+        "여주시",
+        "여주글램핑",
+        "여주 캠핑장",
+        "여주 펜션",
+        "경기도 여주시",
+        "경기 여주",
+        "경기 여주시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "펜션",
+        "숙소"
+      ],
       "matchPriority": 84
     },
     {
-      "regionKey": "kr_chungbuk_danyang",
-      "sidoKey": "chungbuk",
-      "sido": "충북",
-      "sidoFull": "충청북도",
-      "sigungu": "단양군",
-      "ktoSggCd": "43800",
+      "regionKey": "kr_admin_4180000000",
+      "officialRegionId": "kr_admin_4180000000",
+      "officialCode": "4180000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "연천군",
+      "ktoSggCd": "41800",
       "unit": "sigungu",
-      "aliases": ["단양", "단양군", "단양글램핑", "단양 펜션", "단양 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "캠핑장", "숙소"],
-      "matchPriority": 90
+      "unitType": "county",
+      "aliases": [
+        "연천군",
+        "연천",
+        "경기도 연천군",
+        "경기 연천",
+        "경기 연천군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
     },
     {
-      "regionKey": "kr_chungbuk_jecheon",
+      "regionKey": "kr_gyeonggi_gapyeong",
+      "officialRegionId": "kr_admin_4182000000",
+      "officialCode": "4182000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "가평군",
+      "ktoSggCd": "41820",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "가평",
+        "가평군",
+        "가평글램핑",
+        "가평 펜션",
+        "가평 풀빌라",
+        "가평 캠핑장",
+        "경기도 가평군",
+        "경기 가평",
+        "경기 가평군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "캠핑장",
+        "카라반",
+        "숙소"
+      ],
+      "matchPriority": 96
+    },
+    {
+      "regionKey": "kr_gyeonggi_yangpyeong",
+      "officialRegionId": "kr_admin_4183000000",
+      "officialCode": "4183000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeonggi",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "양평군",
+      "ktoSggCd": "41830",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "양평",
+        "양평군",
+        "양평글램핑",
+        "양평 펜션",
+        "양평 풀빌라",
+        "양평 캠핑장",
+        "경기도 양평군",
+        "경기 양평",
+        "경기 양평군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "캠핑장",
+        "숙소"
+      ],
+      "matchPriority": 94
+    },
+    {
+      "regionKey": "kr_admin_4311000000",
+      "officialRegionId": "kr_admin_4311000000",
+      "officialCode": "4311000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
       "sidoKey": "chungbuk",
       "sido": "충북",
       "sidoFull": "충청북도",
-      "sigungu": "제천시",
-      "ktoSggCd": "43150",
+      "sigungu": "청주시",
+      "ktoSggCd": "43110",
       "unit": "sigungu",
-      "aliases": ["제천", "제천시", "제천글램핑", "제천 펜션", "제천 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "캠핑장", "숙소"],
-      "matchPriority": 88
+      "unitType": "city",
+      "aliases": [
+        "청주시",
+        "청주",
+        "충청북도 청주시",
+        "충북 청주",
+        "충북 청주시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
     },
     {
       "regionKey": "kr_chungbuk_chungju",
+      "officialRegionId": "kr_admin_4313000000",
+      "officialCode": "4313000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
       "sidoKey": "chungbuk",
       "sido": "충북",
       "sidoFull": "충청북도",
       "sigungu": "충주시",
       "ktoSggCd": "43130",
       "unit": "sigungu",
-      "aliases": ["충주", "충주시", "충주글램핑", "충주 펜션", "충주 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "캠핑장", "숙소"],
+      "unitType": "city",
+      "aliases": [
+        "충주",
+        "충주시",
+        "충주글램핑",
+        "충주 펜션",
+        "충주 캠핑장",
+        "충청북도 충주시",
+        "충북 충주",
+        "충북 충주시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "캠핑장",
+        "숙소"
+      ],
       "matchPriority": 86
     },
     {
+      "regionKey": "kr_chungbuk_jecheon",
+      "officialRegionId": "kr_admin_4315000000",
+      "officialCode": "4315000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "chungbuk",
+      "sido": "충북",
+      "sidoFull": "충청북도",
+      "sigungu": "제천시",
+      "ktoSggCd": "43150",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "제천",
+        "제천시",
+        "제천글램핑",
+        "제천 펜션",
+        "제천 캠핑장",
+        "충청북도 제천시",
+        "충북 제천",
+        "충북 제천시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "캠핑장",
+        "숙소"
+      ],
+      "matchPriority": 88
+    },
+    {
+      "regionKey": "kr_admin_4372000000",
+      "officialRegionId": "kr_admin_4372000000",
+      "officialCode": "4372000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "chungbuk",
+      "sido": "충북",
+      "sidoFull": "충청북도",
+      "sigungu": "보은군",
+      "ktoSggCd": "43720",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "보은군",
+        "보은",
+        "충청북도 보은군",
+        "충북 보은",
+        "충북 보은군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4373000000",
+      "officialRegionId": "kr_admin_4373000000",
+      "officialCode": "4373000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "chungbuk",
+      "sido": "충북",
+      "sidoFull": "충청북도",
+      "sigungu": "옥천군",
+      "ktoSggCd": "43730",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "옥천군",
+        "옥천",
+        "충청북도 옥천군",
+        "충북 옥천",
+        "충북 옥천군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4374000000",
+      "officialRegionId": "kr_admin_4374000000",
+      "officialCode": "4374000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "chungbuk",
+      "sido": "충북",
+      "sidoFull": "충청북도",
+      "sigungu": "영동군",
+      "ktoSggCd": "43740",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "영동군",
+        "영동",
+        "충청북도 영동군",
+        "충북 영동",
+        "충북 영동군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4374500000",
+      "officialRegionId": "kr_admin_4374500000",
+      "officialCode": "4374500000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "chungbuk",
+      "sido": "충북",
+      "sidoFull": "충청북도",
+      "sigungu": "증평군",
+      "ktoSggCd": "43745",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "증평군",
+        "증평",
+        "충청북도 증평군",
+        "충북 증평",
+        "충북 증평군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4375000000",
+      "officialRegionId": "kr_admin_4375000000",
+      "officialCode": "4375000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "chungbuk",
+      "sido": "충북",
+      "sidoFull": "충청북도",
+      "sigungu": "진천군",
+      "ktoSggCd": "43750",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "진천군",
+        "진천",
+        "충청북도 진천군",
+        "충북 진천",
+        "충북 진천군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
       "regionKey": "kr_chungbuk_goesan",
+      "officialRegionId": "kr_admin_4376000000",
+      "officialCode": "4376000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
       "sidoKey": "chungbuk",
       "sido": "충북",
       "sidoFull": "충청북도",
       "sigungu": "괴산군",
       "ktoSggCd": "43760",
       "unit": "sigungu",
-      "aliases": ["괴산", "괴산군", "괴산글램핑", "괴산 펜션", "괴산 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "캠핑장", "숙소"],
+      "unitType": "county",
+      "aliases": [
+        "괴산",
+        "괴산군",
+        "괴산글램핑",
+        "괴산 펜션",
+        "괴산 캠핑장",
+        "충청북도 괴산군",
+        "충북 괴산",
+        "충북 괴산군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "캠핑장",
+        "숙소"
+      ],
       "matchPriority": 84
     },
     {
-      "regionKey": "kr_chungnam_taean",
+      "regionKey": "kr_admin_4377000000",
+      "officialRegionId": "kr_admin_4377000000",
+      "officialCode": "4377000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "chungbuk",
+      "sido": "충북",
+      "sidoFull": "충청북도",
+      "sigungu": "음성군",
+      "ktoSggCd": "43770",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "음성군",
+        "음성",
+        "충청북도 음성군",
+        "충북 음성",
+        "충북 음성군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_chungbuk_danyang",
+      "officialRegionId": "kr_admin_4380000000",
+      "officialCode": "4380000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "chungbuk",
+      "sido": "충북",
+      "sidoFull": "충청북도",
+      "sigungu": "단양군",
+      "ktoSggCd": "43800",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "단양",
+        "단양군",
+        "단양글램핑",
+        "단양 펜션",
+        "단양 캠핑장",
+        "충청북도 단양군",
+        "충북 단양",
+        "충북 단양군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "캠핑장",
+        "숙소"
+      ],
+      "matchPriority": 90
+    },
+    {
+      "regionKey": "kr_admin_4413000000",
+      "officialRegionId": "kr_admin_4413000000",
+      "officialCode": "4413000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
       "sidoKey": "chungnam",
       "sido": "충남",
       "sidoFull": "충청남도",
-      "sigungu": "태안군",
-      "ktoSggCd": "44825",
+      "sigungu": "천안시",
+      "ktoSggCd": "44130",
       "unit": "sigungu",
-      "aliases": ["태안", "태안군", "태안글램핑", "태안 펜션", "태안 풀빌라", "태안 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "캠핑장", "숙소"],
-      "matchPriority": 96
+      "unitType": "city",
+      "aliases": [
+        "천안시",
+        "천안",
+        "충청남도 천안시",
+        "충남 천안",
+        "충남 천안시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
     },
     {
       "regionKey": "kr_chungnam_gongju",
+      "officialRegionId": "kr_admin_4415000000",
+      "officialCode": "4415000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
       "sidoKey": "chungnam",
       "sido": "충남",
       "sidoFull": "충청남도",
       "sigungu": "공주시",
       "ktoSggCd": "44150",
       "unit": "sigungu",
-      "aliases": ["공주", "공주시", "공주글램핑", "공주 펜션", "공주 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "캠핑장", "숙소"],
+      "unitType": "city",
+      "aliases": [
+        "공주",
+        "공주시",
+        "공주글램핑",
+        "공주 펜션",
+        "공주 캠핑장",
+        "충청남도 공주시",
+        "충남 공주",
+        "충남 공주시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "캠핑장",
+        "숙소"
+      ],
       "matchPriority": 90
     },
     {
-      "regionKey": "kr_chungnam_asan",
-      "sidoKey": "chungnam",
-      "sido": "충남",
-      "sidoFull": "충청남도",
-      "sigungu": "아산시",
-      "ktoSggCd": "44200",
-      "unit": "sigungu",
-      "aliases": ["아산", "아산시", "아산글램핑", "아산 펜션", "아산 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "캠핑장", "숙소"],
-      "matchPriority": 88
-    },
-    {
       "regionKey": "kr_chungnam_boryeong",
+      "officialRegionId": "kr_admin_4418000000",
+      "officialCode": "4418000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
       "sidoKey": "chungnam",
       "sido": "충남",
       "sidoFull": "충청남도",
       "sigungu": "보령시",
       "ktoSggCd": "44180",
       "unit": "sigungu",
-      "aliases": ["보령", "보령시", "보령글램핑", "보령 펜션", "보령 캠핑장", "대천"],
-      "businessKeywordHints": ["글램핑", "펜션", "캠핑장", "숙소"],
+      "unitType": "city",
+      "aliases": [
+        "보령",
+        "보령시",
+        "보령글램핑",
+        "보령 펜션",
+        "보령 캠핑장",
+        "대천",
+        "충청남도 보령시",
+        "충남 보령",
+        "충남 보령시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "캠핑장",
+        "숙소"
+      ],
       "matchPriority": 86
     },
     {
+      "regionKey": "kr_chungnam_asan",
+      "officialRegionId": "kr_admin_4420000000",
+      "officialCode": "4420000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "chungnam",
+      "sido": "충남",
+      "sidoFull": "충청남도",
+      "sigungu": "아산시",
+      "ktoSggCd": "44200",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "아산",
+        "아산시",
+        "아산글램핑",
+        "아산 펜션",
+        "아산 캠핑장",
+        "충청남도 아산시",
+        "충남 아산",
+        "충남 아산시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "캠핑장",
+        "숙소"
+      ],
+      "matchPriority": 88
+    },
+    {
+      "regionKey": "kr_admin_4421000000",
+      "officialRegionId": "kr_admin_4421000000",
+      "officialCode": "4421000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "chungnam",
+      "sido": "충남",
+      "sidoFull": "충청남도",
+      "sigungu": "서산시",
+      "ktoSggCd": "44210",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "서산시",
+        "서산",
+        "충청남도 서산시",
+        "충남 서산",
+        "충남 서산시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4423000000",
+      "officialRegionId": "kr_admin_4423000000",
+      "officialCode": "4423000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "chungnam",
+      "sido": "충남",
+      "sidoFull": "충청남도",
+      "sigungu": "논산시",
+      "ktoSggCd": "44230",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "논산시",
+        "논산",
+        "충청남도 논산시",
+        "충남 논산",
+        "충남 논산시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4425000000",
+      "officialRegionId": "kr_admin_4425000000",
+      "officialCode": "4425000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "chungnam",
+      "sido": "충남",
+      "sidoFull": "충청남도",
+      "sigungu": "계룡시",
+      "ktoSggCd": "44250",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "계룡시",
+        "계룡",
+        "충청남도 계룡시",
+        "충남 계룡",
+        "충남 계룡시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4427000000",
+      "officialRegionId": "kr_admin_4427000000",
+      "officialCode": "4427000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "chungnam",
+      "sido": "충남",
+      "sidoFull": "충청남도",
+      "sigungu": "당진시",
+      "ktoSggCd": "44270",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "당진시",
+        "당진",
+        "충청남도 당진시",
+        "충남 당진",
+        "충남 당진시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
       "regionKey": "kr_chungnam_geumsan",
+      "officialRegionId": "kr_admin_4471000000",
+      "officialCode": "4471000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
       "sidoKey": "chungnam",
       "sido": "충남",
       "sidoFull": "충청남도",
       "sigungu": "금산군",
       "ktoSggCd": "44710",
       "unit": "sigungu",
-      "aliases": ["금산", "금산군", "금산글램핑", "금산 펜션", "금산 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "캠핑장", "숙소"],
+      "unitType": "county",
+      "aliases": [
+        "금산",
+        "금산군",
+        "금산글램핑",
+        "금산 펜션",
+        "금산 캠핑장",
+        "충청남도 금산군",
+        "충남 금산",
+        "충남 금산군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "캠핑장",
+        "숙소"
+      ],
       "matchPriority": 84
     },
     {
-      "regionKey": "kr_jeonbuk_muju",
-      "sidoKey": "jeonbuk",
-      "sido": "전북",
-      "sidoFull": "전북특별자치도",
-      "sigungu": "무주군",
-      "ktoSggCd": "45730",
-      "codeStatus": "verify-before-api-call",
+      "regionKey": "kr_admin_4476000000",
+      "officialRegionId": "kr_admin_4476000000",
+      "officialCode": "4476000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "chungnam",
+      "sido": "충남",
+      "sidoFull": "충청남도",
+      "sigungu": "부여군",
+      "ktoSggCd": "44760",
       "unit": "sigungu",
-      "aliases": ["무주", "무주군", "무주글램핑", "무주 펜션", "무주 풀빌라", "무주 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "캠핑장", "숙소"],
-      "matchPriority": 90
+      "unitType": "county",
+      "aliases": [
+        "부여군",
+        "부여",
+        "충청남도 부여군",
+        "충남 부여",
+        "충남 부여군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
     },
     {
-      "regionKey": "kr_jeonbuk_wanju",
-      "sidoKey": "jeonbuk",
-      "sido": "전북",
-      "sidoFull": "전북특별자치도",
-      "sigungu": "완주군",
-      "ktoSggCd": "45710",
-      "codeStatus": "verify-before-api-call",
+      "regionKey": "kr_admin_4477000000",
+      "officialRegionId": "kr_admin_4477000000",
+      "officialCode": "4477000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "chungnam",
+      "sido": "충남",
+      "sidoFull": "충청남도",
+      "sigungu": "서천군",
+      "ktoSggCd": "44770",
       "unit": "sigungu",
-      "aliases": ["완주", "완주군", "완주글램핑", "완주 펜션", "완주 풀빌라", "완주 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "캠핑장", "숙소"],
-      "matchPriority": 88
+      "unitType": "county",
+      "aliases": [
+        "서천군",
+        "서천",
+        "충청남도 서천군",
+        "충남 서천",
+        "충남 서천군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
     },
     {
-      "regionKey": "kr_jeonbuk_namwon",
-      "sidoKey": "jeonbuk",
-      "sido": "전북",
-      "sidoFull": "전북특별자치도",
-      "sigungu": "남원시",
-      "ktoSggCd": "45190",
-      "codeStatus": "verify-before-api-call",
+      "regionKey": "kr_admin_4479000000",
+      "officialRegionId": "kr_admin_4479000000",
+      "officialCode": "4479000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "chungnam",
+      "sido": "충남",
+      "sidoFull": "충청남도",
+      "sigungu": "청양군",
+      "ktoSggCd": "44790",
       "unit": "sigungu",
-      "aliases": ["남원", "남원시", "남원글램핑", "남원 펜션", "남원 풀빌라", "남원 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "캠핑장", "숙소"],
-      "matchPriority": 86
+      "unitType": "county",
+      "aliases": [
+        "청양군",
+        "청양",
+        "충청남도 청양군",
+        "충남 청양",
+        "충남 청양군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
     },
     {
-      "regionKey": "kr_jeonbuk_buan",
-      "sidoKey": "jeonbuk",
-      "sido": "전북",
-      "sidoFull": "전북특별자치도",
-      "sigungu": "부안군",
-      "ktoSggCd": "45800",
-      "codeStatus": "verify-before-api-call",
+      "regionKey": "kr_admin_4480000000",
+      "officialRegionId": "kr_admin_4480000000",
+      "officialCode": "4480000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "chungnam",
+      "sido": "충남",
+      "sidoFull": "충청남도",
+      "sigungu": "홍성군",
+      "ktoSggCd": "44800",
       "unit": "sigungu",
-      "aliases": ["부안", "부안군", "부안글램핑", "부안 펜션", "부안 풀빌라", "부안 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "캠핑장", "숙소"],
-      "matchPriority": 84
+      "unitType": "county",
+      "aliases": [
+        "홍성군",
+        "홍성",
+        "충청남도 홍성군",
+        "충남 홍성",
+        "충남 홍성군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
     },
     {
-      "regionKey": "kr_jeonnam_yeosu",
-      "sidoKey": "jeonnam",
-      "sido": "전남",
-      "sidoFull": "전라남도",
-      "sigungu": "여수시",
-      "ktoSggCd": "46130",
+      "regionKey": "kr_admin_4481000000",
+      "officialRegionId": "kr_admin_4481000000",
+      "officialCode": "4481000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "chungnam",
+      "sido": "충남",
+      "sidoFull": "충청남도",
+      "sigungu": "예산군",
+      "ktoSggCd": "44810",
       "unit": "sigungu",
-      "aliases": ["여수", "여수시", "여수글램핑", "여수 펜션", "여수 풀빌라", "여수 숙소"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "숙소"],
-      "matchPriority": 92
+      "unitType": "county",
+      "aliases": [
+        "예산군",
+        "예산",
+        "충청남도 예산군",
+        "충남 예산",
+        "충남 예산군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
     },
     {
-      "regionKey": "kr_jeonnam_damyang",
-      "sidoKey": "jeonnam",
-      "sido": "전남",
-      "sidoFull": "전라남도",
-      "sigungu": "담양군",
-      "ktoSggCd": "46710",
+      "regionKey": "kr_chungnam_taean",
+      "officialRegionId": "kr_admin_4482500000",
+      "officialCode": "4482500000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "chungnam",
+      "sido": "충남",
+      "sidoFull": "충청남도",
+      "sigungu": "태안군",
+      "ktoSggCd": "44825",
       "unit": "sigungu",
-      "aliases": ["담양", "담양군", "담양글램핑", "담양 펜션", "담양 풀빌라", "담양 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "캠핑장", "숙소"],
-      "matchPriority": 90
-    },
-    {
-      "regionKey": "kr_jeonnam_suncheon",
-      "sidoKey": "jeonnam",
-      "sido": "전남",
-      "sidoFull": "전라남도",
-      "sigungu": "순천시",
-      "ktoSggCd": "46150",
-      "unit": "sigungu",
-      "aliases": ["순천", "순천시", "순천글램핑", "순천 펜션", "순천 풀빌라", "순천 숙소"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "숙소"],
-      "matchPriority": 88
-    },
-    {
-      "regionKey": "kr_jeonnam_gurye",
-      "sidoKey": "jeonnam",
-      "sido": "전남",
-      "sidoFull": "전라남도",
-      "sigungu": "구례군",
-      "ktoSggCd": "46730",
-      "unit": "sigungu",
-      "aliases": ["구례", "구례군", "구례글램핑", "구례 펜션", "구례 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "캠핑장", "숙소"],
-      "matchPriority": 86
-    },
-    {
-      "regionKey": "kr_gyeongbuk_gyeongju",
-      "sidoKey": "gyeongbuk",
-      "sido": "경북",
-      "sidoFull": "경상북도",
-      "sigungu": "경주시",
-      "ktoSggCd": "47130",
-      "unit": "sigungu",
-      "aliases": ["경주", "경주시", "경주글램핑", "경주 펜션", "경주 풀빌라", "경주 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "캠핑장", "숙소"],
+      "unitType": "county",
+      "aliases": [
+        "태안",
+        "태안군",
+        "태안글램핑",
+        "태안 펜션",
+        "태안 풀빌라",
+        "태안 캠핑장",
+        "충청남도 태안군",
+        "충남 태안",
+        "충남 태안군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "캠핑장",
+        "숙소"
+      ],
       "matchPriority": 96
     },
     {
-      "regionKey": "kr_gyeongbuk_cheongdo",
-      "sidoKey": "gyeongbuk",
-      "sido": "경북",
-      "sidoFull": "경상북도",
-      "sigungu": "청도군",
-      "ktoSggCd": "47820",
-      "unit": "sigungu",
-      "aliases": ["청도", "청도군", "청도글램핑", "청도 펜션", "청도 풀빌라", "청도 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "캠핑장", "숙소"],
-      "matchPriority": 90
-    },
-    {
       "regionKey": "kr_gyeongbuk_pohang",
+      "officialRegionId": "kr_admin_4711000000",
+      "officialCode": "4711000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
       "sidoKey": "gyeongbuk",
       "sido": "경북",
       "sidoFull": "경상북도",
       "sigungu": "포항시",
       "ktoSggCd": "47110",
       "unit": "sigungu",
-      "aliases": ["포항", "포항시", "포항글램핑", "포항 펜션", "포항 풀빌라", "포항 숙소"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "숙소"],
+      "unitType": "city",
+      "aliases": [
+        "포항",
+        "포항시",
+        "포항글램핑",
+        "포항 펜션",
+        "포항 풀빌라",
+        "포항 숙소",
+        "경상북도 포항시",
+        "경북 포항",
+        "경북 포항시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "숙소"
+      ],
       "matchPriority": 88
     },
     {
+      "regionKey": "kr_gyeongbuk_gyeongju",
+      "officialRegionId": "kr_admin_4713000000",
+      "officialCode": "4713000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongbuk",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "경주시",
+      "ktoSggCd": "47130",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "경주",
+        "경주시",
+        "경주글램핑",
+        "경주 펜션",
+        "경주 풀빌라",
+        "경주 캠핑장",
+        "경상북도 경주시",
+        "경북 경주",
+        "경북 경주시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "캠핑장",
+        "숙소"
+      ],
+      "matchPriority": 96
+    },
+    {
+      "regionKey": "kr_admin_4715000000",
+      "officialRegionId": "kr_admin_4715000000",
+      "officialCode": "4715000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongbuk",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "김천시",
+      "ktoSggCd": "47150",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "김천시",
+        "김천",
+        "경상북도 김천시",
+        "경북 김천",
+        "경북 김천시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
       "regionKey": "kr_gyeongbuk_andong",
+      "officialRegionId": "kr_admin_4717000000",
+      "officialCode": "4717000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
       "sidoKey": "gyeongbuk",
       "sido": "경북",
       "sidoFull": "경상북도",
       "sigungu": "안동시",
       "ktoSggCd": "47170",
       "unit": "sigungu",
-      "aliases": ["안동", "안동시", "안동글램핑", "안동 펜션", "안동 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "캠핑장", "숙소"],
+      "unitType": "city",
+      "aliases": [
+        "안동",
+        "안동시",
+        "안동글램핑",
+        "안동 펜션",
+        "안동 캠핑장",
+        "경상북도 안동시",
+        "경북 안동",
+        "경북 안동시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "캠핑장",
+        "숙소"
+      ],
       "matchPriority": 86
     },
     {
+      "regionKey": "kr_admin_4719000000",
+      "officialRegionId": "kr_admin_4719000000",
+      "officialCode": "4719000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongbuk",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "구미시",
+      "ktoSggCd": "47190",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "구미시",
+        "구미",
+        "경상북도 구미시",
+        "경북 구미",
+        "경북 구미시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4721000000",
+      "officialRegionId": "kr_admin_4721000000",
+      "officialCode": "4721000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongbuk",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "영주시",
+      "ktoSggCd": "47210",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "영주시",
+        "영주",
+        "경상북도 영주시",
+        "경북 영주",
+        "경북 영주시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4723000000",
+      "officialRegionId": "kr_admin_4723000000",
+      "officialCode": "4723000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongbuk",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "영천시",
+      "ktoSggCd": "47230",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "영천시",
+        "영천",
+        "경상북도 영천시",
+        "경북 영천",
+        "경북 영천시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4725000000",
+      "officialRegionId": "kr_admin_4725000000",
+      "officialCode": "4725000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongbuk",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "상주시",
+      "ktoSggCd": "47250",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "상주시",
+        "상주",
+        "경상북도 상주시",
+        "경북 상주",
+        "경북 상주시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
       "regionKey": "kr_gyeongbuk_mungyeong",
+      "officialRegionId": "kr_admin_4728000000",
+      "officialCode": "4728000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
       "sidoKey": "gyeongbuk",
       "sido": "경북",
       "sidoFull": "경상북도",
       "sigungu": "문경시",
       "ktoSggCd": "47280",
       "unit": "sigungu",
-      "aliases": ["문경", "문경시", "문경글램핑", "문경 펜션", "문경 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "캠핑장", "숙소"],
+      "unitType": "city",
+      "aliases": [
+        "문경",
+        "문경시",
+        "문경글램핑",
+        "문경 펜션",
+        "문경 캠핑장",
+        "경상북도 문경시",
+        "경북 문경",
+        "경북 문경시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "캠핑장",
+        "숙소"
+      ],
       "matchPriority": 84
     },
     {
+      "regionKey": "kr_admin_4729000000",
+      "officialRegionId": "kr_admin_4729000000",
+      "officialCode": "4729000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongbuk",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "경산시",
+      "ktoSggCd": "47290",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "경산시",
+        "경산",
+        "경상북도 경산시",
+        "경북 경산",
+        "경북 경산시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4773000000",
+      "officialRegionId": "kr_admin_4773000000",
+      "officialCode": "4773000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongbuk",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "의성군",
+      "ktoSggCd": "47730",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "의성군",
+        "의성",
+        "경상북도 의성군",
+        "경북 의성",
+        "경북 의성군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4775000000",
+      "officialRegionId": "kr_admin_4775000000",
+      "officialCode": "4775000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongbuk",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "청송군",
+      "ktoSggCd": "47750",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "청송군",
+        "청송",
+        "경상북도 청송군",
+        "경북 청송",
+        "경북 청송군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4776000000",
+      "officialRegionId": "kr_admin_4776000000",
+      "officialCode": "4776000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongbuk",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "영양군",
+      "ktoSggCd": "47760",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "영양군",
+        "영양",
+        "경상북도 영양군",
+        "경북 영양",
+        "경북 영양군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
       "regionKey": "kr_gyeongbuk_yeongdeok",
+      "officialRegionId": "kr_admin_4777000000",
+      "officialCode": "4777000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
       "sidoKey": "gyeongbuk",
       "sido": "경북",
       "sidoFull": "경상북도",
       "sigungu": "영덕군",
       "ktoSggCd": "47770",
       "unit": "sigungu",
-      "aliases": ["영덕", "영덕군", "영덕글램핑", "영덕 펜션", "영덕 캠핑장", "영덕 숙소"],
-      "businessKeywordHints": ["글램핑", "펜션", "캠핑장", "숙소"],
+      "unitType": "county",
+      "aliases": [
+        "영덕",
+        "영덕군",
+        "영덕글램핑",
+        "영덕 펜션",
+        "영덕 캠핑장",
+        "영덕 숙소",
+        "경상북도 영덕군",
+        "경북 영덕",
+        "경북 영덕군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "캠핑장",
+        "숙소"
+      ],
       "matchPriority": 82
     },
     {
-      "regionKey": "kr_gyeongnam_hadong",
-      "sidoKey": "gyeongnam",
-      "sido": "경남",
-      "sidoFull": "경상남도",
-      "sigungu": "하동군",
-      "ktoSggCd": "48850",
+      "regionKey": "kr_gyeongbuk_cheongdo",
+      "officialRegionId": "kr_admin_4782000000",
+      "officialCode": "4782000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongbuk",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "청도군",
+      "ktoSggCd": "47820",
       "unit": "sigungu",
-      "aliases": ["하동", "하동군", "하동글램핑", "하동 풀빌라", "하동 펜션", "하동 숙소", "하동 캠핑장"],
-      "businessKeywordHints": ["글램핑", "풀빌라", "펜션", "캠핑장", "숙소"],
-      "matchPriority": 96
-    },
-    {
-      "regionKey": "kr_gyeongnam_sancheong",
-      "sidoKey": "gyeongnam",
-      "sido": "경남",
-      "sidoFull": "경상남도",
-      "sigungu": "산청군",
-      "ktoSggCd": "48860",
-      "unit": "sigungu",
-      "aliases": ["산청", "산청군", "산청글램핑", "산청 펜션", "산청 풀빌라", "산청 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "캠핑장", "숙소"],
-      "matchPriority": 94
-    },
-    {
-      "regionKey": "kr_gyeongnam_hapcheon",
-      "sidoKey": "gyeongnam",
-      "sido": "경남",
-      "sidoFull": "경상남도",
-      "sigungu": "합천군",
-      "ktoSggCd": "48890",
-      "unit": "sigungu",
-      "aliases": ["합천", "합천군", "합천글램핑", "합천 펜션", "합천 풀빌라", "합천 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "캠핑장", "숙소"],
-      "matchPriority": 92
-    },
-    {
-      "regionKey": "kr_gyeongnam_sacheon",
-      "sidoKey": "gyeongnam",
-      "sido": "경남",
-      "sidoFull": "경상남도",
-      "sigungu": "사천시",
-      "ktoSggCd": "48240",
-      "unit": "sigungu",
-      "aliases": ["사천", "사천시", "사천글램핑", "사천 펜션", "사천 풀빌라", "사천 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "캠핑장", "숙소"],
+      "unitType": "county",
+      "aliases": [
+        "청도",
+        "청도군",
+        "청도글램핑",
+        "청도 펜션",
+        "청도 풀빌라",
+        "청도 캠핑장",
+        "경상북도 청도군",
+        "경북 청도",
+        "경북 청도군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "캠핑장",
+        "숙소"
+      ],
       "matchPriority": 90
     },
     {
-      "regionKey": "kr_gyeongnam_miryang",
-      "sidoKey": "gyeongnam",
-      "sido": "경남",
-      "sidoFull": "경상남도",
-      "sigungu": "밀양시",
-      "ktoSggCd": "48270",
+      "regionKey": "kr_admin_4783000000",
+      "officialRegionId": "kr_admin_4783000000",
+      "officialCode": "4783000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongbuk",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "고령군",
+      "ktoSggCd": "47830",
       "unit": "sigungu",
-      "aliases": ["밀양", "밀양시", "밀양글램핑", "밀양 펜션", "밀양 풀빌라", "밀양 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "캠핑장", "숙소"],
-      "matchPriority": 88
+      "unitType": "county",
+      "aliases": [
+        "고령군",
+        "고령",
+        "경상북도 고령군",
+        "경북 고령",
+        "경북 고령군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
     },
     {
-      "regionKey": "kr_gyeongnam_namhae",
-      "sidoKey": "gyeongnam",
-      "sido": "경남",
-      "sidoFull": "경상남도",
-      "sigungu": "남해군",
-      "ktoSggCd": "48840",
+      "regionKey": "kr_admin_4784000000",
+      "officialRegionId": "kr_admin_4784000000",
+      "officialCode": "4784000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongbuk",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "성주군",
+      "ktoSggCd": "47840",
       "unit": "sigungu",
-      "aliases": ["남해", "남해군", "남해글램핑", "남해 펜션", "남해 풀빌라", "남해 숙소"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "숙소"],
-      "matchPriority": 86
+      "unitType": "county",
+      "aliases": [
+        "성주군",
+        "성주",
+        "경상북도 성주군",
+        "경북 성주",
+        "경북 성주군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
     },
     {
-      "regionKey": "kr_gyeongnam_geoje",
+      "regionKey": "kr_admin_4785000000",
+      "officialRegionId": "kr_admin_4785000000",
+      "officialCode": "4785000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongbuk",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "칠곡군",
+      "ktoSggCd": "47850",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "칠곡군",
+        "칠곡",
+        "경상북도 칠곡군",
+        "경북 칠곡",
+        "경북 칠곡군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4790000000",
+      "officialRegionId": "kr_admin_4790000000",
+      "officialCode": "4790000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongbuk",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "예천군",
+      "ktoSggCd": "47900",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "예천군",
+        "예천",
+        "경상북도 예천군",
+        "경북 예천",
+        "경북 예천군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4792000000",
+      "officialRegionId": "kr_admin_4792000000",
+      "officialCode": "4792000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongbuk",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "봉화군",
+      "ktoSggCd": "47920",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "봉화군",
+        "봉화",
+        "경상북도 봉화군",
+        "경북 봉화",
+        "경북 봉화군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4793000000",
+      "officialRegionId": "kr_admin_4793000000",
+      "officialCode": "4793000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongbuk",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "울진군",
+      "ktoSggCd": "47930",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "울진군",
+        "울진",
+        "경상북도 울진군",
+        "경북 울진",
+        "경북 울진군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4794000000",
+      "officialRegionId": "kr_admin_4794000000",
+      "officialCode": "4794000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongbuk",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "울릉군",
+      "ktoSggCd": "47940",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "울릉군",
+        "울릉",
+        "경상북도 울릉군",
+        "경북 울릉",
+        "경북 울릉군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4812000000",
+      "officialRegionId": "kr_admin_4812000000",
+      "officialCode": "4812000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
       "sidoKey": "gyeongnam",
       "sido": "경남",
       "sidoFull": "경상남도",
-      "sigungu": "거제시",
-      "ktoSggCd": "48310",
+      "sigungu": "창원시",
+      "ktoSggCd": "48120",
       "unit": "sigungu",
-      "aliases": ["거제", "거제시", "거제글램핑", "거제 펜션", "거제 풀빌라", "거제 숙소"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "숙소"],
-      "matchPriority": 84
+      "unitType": "city",
+      "aliases": [
+        "창원시",
+        "창원",
+        "경상남도 창원시",
+        "경남 창원",
+        "경남 창원시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
     },
     {
       "regionKey": "kr_gyeongnam_jinju",
+      "officialRegionId": "kr_admin_4817000000",
+      "officialCode": "4817000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
       "sidoKey": "gyeongnam",
       "sido": "경남",
       "sidoFull": "경상남도",
       "sigungu": "진주시",
       "ktoSggCd": "48170",
       "unit": "sigungu",
-      "aliases": ["진주", "진주시", "진주글램핑", "진주 펜션", "진주 풀빌라", "진주 숙소"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "숙소"],
+      "unitType": "city",
+      "aliases": [
+        "진주",
+        "진주시",
+        "진주글램핑",
+        "진주 펜션",
+        "진주 풀빌라",
+        "진주 숙소",
+        "경상남도 진주시",
+        "경남 진주",
+        "경남 진주시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "숙소"
+      ],
       "matchPriority": 82
     },
     {
+      "regionKey": "kr_admin_4822000000",
+      "officialRegionId": "kr_admin_4822000000",
+      "officialCode": "4822000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongnam",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "통영시",
+      "ktoSggCd": "48220",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "통영시",
+        "통영",
+        "경상남도 통영시",
+        "경남 통영",
+        "경남 통영시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_gyeongnam_sacheon",
+      "officialRegionId": "kr_admin_4824000000",
+      "officialCode": "4824000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongnam",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "사천시",
+      "ktoSggCd": "48240",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "사천",
+        "사천시",
+        "사천글램핑",
+        "사천 펜션",
+        "사천 풀빌라",
+        "사천 캠핑장",
+        "경상남도 사천시",
+        "경남 사천",
+        "경남 사천시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "캠핑장",
+        "숙소"
+      ],
+      "matchPriority": 90
+    },
+    {
+      "regionKey": "kr_admin_4825000000",
+      "officialRegionId": "kr_admin_4825000000",
+      "officialCode": "4825000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongnam",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "김해시",
+      "ktoSggCd": "48250",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "김해시",
+        "김해",
+        "경상남도 김해시",
+        "경남 김해",
+        "경남 김해시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_gyeongnam_miryang",
+      "officialRegionId": "kr_admin_4827000000",
+      "officialCode": "4827000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongnam",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "밀양시",
+      "ktoSggCd": "48270",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "밀양",
+        "밀양시",
+        "밀양글램핑",
+        "밀양 펜션",
+        "밀양 풀빌라",
+        "밀양 캠핑장",
+        "경상남도 밀양시",
+        "경남 밀양",
+        "경남 밀양시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "캠핑장",
+        "숙소"
+      ],
+      "matchPriority": 88
+    },
+    {
+      "regionKey": "kr_gyeongnam_geoje",
+      "officialRegionId": "kr_admin_4831000000",
+      "officialCode": "4831000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongnam",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "거제시",
+      "ktoSggCd": "48310",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "거제",
+        "거제시",
+        "거제글램핑",
+        "거제 펜션",
+        "거제 풀빌라",
+        "거제 숙소",
+        "경상남도 거제시",
+        "경남 거제",
+        "경남 거제시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "숙소"
+      ],
+      "matchPriority": 84
+    },
+    {
+      "regionKey": "kr_admin_4833000000",
+      "officialRegionId": "kr_admin_4833000000",
+      "officialCode": "4833000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongnam",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "양산시",
+      "ktoSggCd": "48330",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "양산시",
+        "양산",
+        "경상남도 양산시",
+        "경남 양산",
+        "경남 양산시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4872000000",
+      "officialRegionId": "kr_admin_4872000000",
+      "officialCode": "4872000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongnam",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "의령군",
+      "ktoSggCd": "48720",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "의령군",
+        "의령",
+        "경상남도 의령군",
+        "경남 의령",
+        "경남 의령군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4873000000",
+      "officialRegionId": "kr_admin_4873000000",
+      "officialCode": "4873000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongnam",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "함안군",
+      "ktoSggCd": "48730",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "함안군",
+        "함안",
+        "경상남도 함안군",
+        "경남 함안",
+        "경남 함안군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4874000000",
+      "officialRegionId": "kr_admin_4874000000",
+      "officialCode": "4874000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongnam",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "창녕군",
+      "ktoSggCd": "48740",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "창녕군",
+        "창녕",
+        "경상남도 창녕군",
+        "경남 창녕",
+        "경남 창녕군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4882000000",
+      "officialRegionId": "kr_admin_4882000000",
+      "officialCode": "4882000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongnam",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "고성군",
+      "ktoSggCd": "48820",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "고성군",
+        "고성",
+        "경상남도 고성군",
+        "경남 고성",
+        "경남 고성군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_gyeongnam_namhae",
+      "officialRegionId": "kr_admin_4884000000",
+      "officialCode": "4884000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongnam",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "남해군",
+      "ktoSggCd": "48840",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "남해",
+        "남해군",
+        "남해글램핑",
+        "남해 펜션",
+        "남해 풀빌라",
+        "남해 숙소",
+        "경상남도 남해군",
+        "경남 남해",
+        "경남 남해군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "숙소"
+      ],
+      "matchPriority": 86
+    },
+    {
+      "regionKey": "kr_gyeongnam_hadong",
+      "officialRegionId": "kr_admin_4885000000",
+      "officialCode": "4885000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongnam",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "하동군",
+      "ktoSggCd": "48850",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "하동",
+        "하동군",
+        "하동글램핑",
+        "하동 풀빌라",
+        "하동 펜션",
+        "하동 숙소",
+        "하동 캠핑장",
+        "경상남도 하동군",
+        "경남 하동",
+        "경남 하동군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "풀빌라",
+        "펜션",
+        "캠핑장",
+        "숙소"
+      ],
+      "matchPriority": 96
+    },
+    {
+      "regionKey": "kr_gyeongnam_sancheong",
+      "officialRegionId": "kr_admin_4886000000",
+      "officialCode": "4886000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongnam",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "산청군",
+      "ktoSggCd": "48860",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "산청",
+        "산청군",
+        "산청글램핑",
+        "산청 펜션",
+        "산청 풀빌라",
+        "산청 캠핑장",
+        "경상남도 산청군",
+        "경남 산청",
+        "경남 산청군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "캠핑장",
+        "숙소"
+      ],
+      "matchPriority": 94
+    },
+    {
+      "regionKey": "kr_admin_4887000000",
+      "officialRegionId": "kr_admin_4887000000",
+      "officialCode": "4887000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongnam",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "함양군",
+      "ktoSggCd": "48870",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "함양군",
+        "함양",
+        "경상남도 함양군",
+        "경남 함양",
+        "경남 함양군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_4888000000",
+      "officialRegionId": "kr_admin_4888000000",
+      "officialCode": "4888000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongnam",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "거창군",
+      "ktoSggCd": "48880",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "거창군",
+        "거창",
+        "경상남도 거창군",
+        "경남 거창",
+        "경남 거창군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_gyeongnam_hapcheon",
+      "officialRegionId": "kr_admin_4889000000",
+      "officialCode": "4889000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gyeongnam",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "합천군",
+      "ktoSggCd": "48890",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "합천",
+        "합천군",
+        "합천글램핑",
+        "합천 펜션",
+        "합천 풀빌라",
+        "합천 캠핑장",
+        "경상남도 합천군",
+        "경남 합천",
+        "경남 합천군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "캠핑장",
+        "숙소"
+      ],
+      "matchPriority": 92
+    },
+    {
       "regionKey": "kr_jeju_jeju",
+      "officialRegionId": "kr_admin_5011000000",
+      "officialCode": "5011000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
       "sidoKey": "jeju",
       "sido": "제주",
       "sidoFull": "제주특별자치도",
       "sigungu": "제주시",
       "ktoSggCd": "50110",
       "unit": "sigungu",
-      "aliases": ["제주", "제주시", "제주글램핑", "제주 펜션", "제주 풀빌라", "제주 숙소", "제주 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "숙소", "캠핑장"],
+      "unitType": "administrative_city",
+      "aliases": [
+        "제주",
+        "제주시",
+        "제주글램핑",
+        "제주 펜션",
+        "제주 풀빌라",
+        "제주 숙소",
+        "제주 캠핑장",
+        "제주특별자치도 제주시",
+        "제주 제주",
+        "제주 제주시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "숙소",
+        "캠핑장"
+      ],
       "matchPriority": 90
     },
     {
       "regionKey": "kr_jeju_seogwipo",
+      "officialRegionId": "kr_admin_5013000000",
+      "officialCode": "5013000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
       "sidoKey": "jeju",
       "sido": "제주",
       "sidoFull": "제주특별자치도",
       "sigungu": "서귀포시",
       "ktoSggCd": "50130",
       "unit": "sigungu",
-      "aliases": ["서귀포", "서귀포시", "서귀포글램핑", "서귀포 펜션", "서귀포 풀빌라", "서귀포 숙소", "서귀포 캠핑장"],
-      "businessKeywordHints": ["글램핑", "펜션", "풀빌라", "숙소", "캠핑장"],
+      "unitType": "administrative_city",
+      "aliases": [
+        "서귀포",
+        "서귀포시",
+        "서귀포글램핑",
+        "서귀포 펜션",
+        "서귀포 풀빌라",
+        "서귀포 숙소",
+        "서귀포 캠핑장",
+        "제주특별자치도 서귀포시",
+        "제주 서귀포",
+        "제주 서귀포시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "숙소",
+        "캠핑장"
+      ],
       "matchPriority": 88
+    },
+    {
+      "regionKey": "kr_gangwon_chuncheon",
+      "officialRegionId": "kr_admin_5111000000",
+      "officialCode": "5111000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gangwon",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "춘천시",
+      "ktoSggCd": "51110",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "춘천",
+        "춘천시",
+        "춘천글램핑",
+        "춘천 펜션",
+        "춘천 풀빌라",
+        "춘천 숙소",
+        "강원특별자치도 춘천시",
+        "강원 춘천",
+        "강원 춘천시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "숙소"
+      ],
+      "matchPriority": 92
+    },
+    {
+      "regionKey": "kr_admin_5113000000",
+      "officialRegionId": "kr_admin_5113000000",
+      "officialCode": "5113000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gangwon",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "원주시",
+      "ktoSggCd": "51130",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "원주시",
+        "원주",
+        "강원특별자치도 원주시",
+        "강원 원주",
+        "강원 원주시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_gangwon_gangneung",
+      "officialRegionId": "kr_admin_5115000000",
+      "officialCode": "5115000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gangwon",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "강릉시",
+      "ktoSggCd": "51150",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "강릉",
+        "강릉시",
+        "강릉글램핑",
+        "강릉 펜션",
+        "강릉 풀빌라",
+        "강릉 숙소",
+        "강원특별자치도 강릉시",
+        "강원 강릉",
+        "강원 강릉시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "숙소"
+      ],
+      "matchPriority": 86
+    },
+    {
+      "regionKey": "kr_admin_5117000000",
+      "officialRegionId": "kr_admin_5117000000",
+      "officialCode": "5117000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gangwon",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "동해시",
+      "ktoSggCd": "51170",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "동해시",
+        "동해",
+        "강원특별자치도 동해시",
+        "강원 동해",
+        "강원 동해시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_5119000000",
+      "officialRegionId": "kr_admin_5119000000",
+      "officialCode": "5119000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gangwon",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "태백시",
+      "ktoSggCd": "51190",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "태백시",
+        "태백",
+        "강원특별자치도 태백시",
+        "강원 태백",
+        "강원 태백시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_gangwon_sokcho",
+      "officialRegionId": "kr_admin_5121000000",
+      "officialCode": "5121000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gangwon",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "속초시",
+      "ktoSggCd": "51210",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "속초",
+        "속초시",
+        "속초글램핑",
+        "속초 펜션",
+        "속초 풀빌라",
+        "속초 숙소",
+        "강원특별자치도 속초시",
+        "강원 속초",
+        "강원 속초시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "숙소"
+      ],
+      "matchPriority": 84
+    },
+    {
+      "regionKey": "kr_admin_5123000000",
+      "officialRegionId": "kr_admin_5123000000",
+      "officialCode": "5123000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gangwon",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "삼척시",
+      "ktoSggCd": "51230",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "삼척시",
+        "삼척",
+        "강원특별자치도 삼척시",
+        "강원 삼척",
+        "강원 삼척시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_gangwon_hongcheon",
+      "officialRegionId": "kr_admin_5172000000",
+      "officialCode": "5172000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gangwon",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "홍천군",
+      "ktoSggCd": "51720",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "홍천",
+        "홍천군",
+        "홍천글램핑",
+        "홍천 펜션",
+        "홍천 풀빌라",
+        "홍천 캠핑장",
+        "강원특별자치도 홍천군",
+        "강원 홍천",
+        "강원 홍천군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "캠핑장",
+        "숙소"
+      ],
+      "matchPriority": 90
+    },
+    {
+      "regionKey": "kr_admin_5173000000",
+      "officialRegionId": "kr_admin_5173000000",
+      "officialCode": "5173000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gangwon",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "횡성군",
+      "ktoSggCd": "51730",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "횡성군",
+        "횡성",
+        "강원특별자치도 횡성군",
+        "강원 횡성",
+        "강원 횡성군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_5175000000",
+      "officialRegionId": "kr_admin_5175000000",
+      "officialCode": "5175000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gangwon",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "영월군",
+      "ktoSggCd": "51750",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "영월군",
+        "영월",
+        "강원특별자치도 영월군",
+        "강원 영월",
+        "강원 영월군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_gangwon_pyeongchang",
+      "officialRegionId": "kr_admin_5176000000",
+      "officialCode": "5176000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gangwon",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "평창군",
+      "ktoSggCd": "51760",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "평창",
+        "평창군",
+        "평창글램핑",
+        "평창 펜션",
+        "평창 풀빌라",
+        "평창 캠핑장",
+        "강원특별자치도 평창군",
+        "강원 평창",
+        "강원 평창군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "캠핑장",
+        "숙소"
+      ],
+      "matchPriority": 88
+    },
+    {
+      "regionKey": "kr_admin_5177000000",
+      "officialRegionId": "kr_admin_5177000000",
+      "officialCode": "5177000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gangwon",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "정선군",
+      "ktoSggCd": "51770",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "정선군",
+        "정선",
+        "강원특별자치도 정선군",
+        "강원 정선",
+        "강원 정선군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_5178000000",
+      "officialRegionId": "kr_admin_5178000000",
+      "officialCode": "5178000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gangwon",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "철원군",
+      "ktoSggCd": "51780",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "철원군",
+        "철원",
+        "강원특별자치도 철원군",
+        "강원 철원",
+        "강원 철원군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_5179000000",
+      "officialRegionId": "kr_admin_5179000000",
+      "officialCode": "5179000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gangwon",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "화천군",
+      "ktoSggCd": "51790",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "화천군",
+        "화천",
+        "강원특별자치도 화천군",
+        "강원 화천",
+        "강원 화천군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_5180000000",
+      "officialRegionId": "kr_admin_5180000000",
+      "officialCode": "5180000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gangwon",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "양구군",
+      "ktoSggCd": "51800",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "양구군",
+        "양구",
+        "강원특별자치도 양구군",
+        "강원 양구",
+        "강원 양구군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_5181000000",
+      "officialRegionId": "kr_admin_5181000000",
+      "officialCode": "5181000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gangwon",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "인제군",
+      "ktoSggCd": "51810",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "인제군",
+        "인제",
+        "강원특별자치도 인제군",
+        "강원 인제",
+        "강원 인제군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_5182000000",
+      "officialRegionId": "kr_admin_5182000000",
+      "officialCode": "5182000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gangwon",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "고성군",
+      "ktoSggCd": "51820",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "고성군",
+        "고성",
+        "강원특별자치도 고성군",
+        "강원 고성",
+        "강원 고성군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_5183000000",
+      "officialRegionId": "kr_admin_5183000000",
+      "officialCode": "5183000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "gangwon",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "양양군",
+      "ktoSggCd": "51830",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "양양군",
+        "양양",
+        "강원특별자치도 양양군",
+        "강원 양양",
+        "강원 양양군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_5211000000",
+      "officialRegionId": "kr_admin_5211000000",
+      "officialCode": "5211000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonbuk",
+      "sido": "전북",
+      "sidoFull": "전북특별자치도",
+      "sigungu": "전주시",
+      "ktoSggCd": "52110",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "전주시",
+        "전주",
+        "전북특별자치도 전주시",
+        "전북 전주",
+        "전북 전주시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_5213000000",
+      "officialRegionId": "kr_admin_5213000000",
+      "officialCode": "5213000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonbuk",
+      "sido": "전북",
+      "sidoFull": "전북특별자치도",
+      "sigungu": "군산시",
+      "ktoSggCd": "52130",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "군산시",
+        "군산",
+        "전북특별자치도 군산시",
+        "전북 군산",
+        "전북 군산시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_5214000000",
+      "officialRegionId": "kr_admin_5214000000",
+      "officialCode": "5214000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonbuk",
+      "sido": "전북",
+      "sidoFull": "전북특별자치도",
+      "sigungu": "익산시",
+      "ktoSggCd": "52140",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "익산시",
+        "익산",
+        "전북특별자치도 익산시",
+        "전북 익산",
+        "전북 익산시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_5218000000",
+      "officialRegionId": "kr_admin_5218000000",
+      "officialCode": "5218000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonbuk",
+      "sido": "전북",
+      "sidoFull": "전북특별자치도",
+      "sigungu": "정읍시",
+      "ktoSggCd": "52180",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "정읍시",
+        "정읍",
+        "전북특별자치도 정읍시",
+        "전북 정읍",
+        "전북 정읍시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_jeonbuk_namwon",
+      "officialRegionId": "kr_admin_5219000000",
+      "officialCode": "5219000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonbuk",
+      "sido": "전북",
+      "sidoFull": "전북특별자치도",
+      "sigungu": "남원시",
+      "ktoSggCd": "52190",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "남원",
+        "남원시",
+        "남원글램핑",
+        "남원 펜션",
+        "남원 풀빌라",
+        "남원 캠핑장",
+        "전북특별자치도 남원시",
+        "전북 남원",
+        "전북 남원시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "캠핑장",
+        "숙소"
+      ],
+      "matchPriority": 86
+    },
+    {
+      "regionKey": "kr_admin_5221000000",
+      "officialRegionId": "kr_admin_5221000000",
+      "officialCode": "5221000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonbuk",
+      "sido": "전북",
+      "sidoFull": "전북특별자치도",
+      "sigungu": "김제시",
+      "ktoSggCd": "52210",
+      "unit": "sigungu",
+      "unitType": "city",
+      "aliases": [
+        "김제시",
+        "김제",
+        "전북특별자치도 김제시",
+        "전북 김제",
+        "전북 김제시"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_jeonbuk_wanju",
+      "officialRegionId": "kr_admin_5271000000",
+      "officialCode": "5271000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonbuk",
+      "sido": "전북",
+      "sidoFull": "전북특별자치도",
+      "sigungu": "완주군",
+      "ktoSggCd": "52710",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "완주",
+        "완주군",
+        "완주글램핑",
+        "완주 펜션",
+        "완주 풀빌라",
+        "완주 캠핑장",
+        "전북특별자치도 완주군",
+        "전북 완주",
+        "전북 완주군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "캠핑장",
+        "숙소"
+      ],
+      "matchPriority": 88
+    },
+    {
+      "regionKey": "kr_admin_5272000000",
+      "officialRegionId": "kr_admin_5272000000",
+      "officialCode": "5272000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonbuk",
+      "sido": "전북",
+      "sidoFull": "전북특별자치도",
+      "sigungu": "진안군",
+      "ktoSggCd": "52720",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "진안군",
+        "진안",
+        "전북특별자치도 진안군",
+        "전북 진안",
+        "전북 진안군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_jeonbuk_muju",
+      "officialRegionId": "kr_admin_5273000000",
+      "officialCode": "5273000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonbuk",
+      "sido": "전북",
+      "sidoFull": "전북특별자치도",
+      "sigungu": "무주군",
+      "ktoSggCd": "52730",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "무주",
+        "무주군",
+        "무주글램핑",
+        "무주 펜션",
+        "무주 풀빌라",
+        "무주 캠핑장",
+        "전북특별자치도 무주군",
+        "전북 무주",
+        "전북 무주군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "캠핑장",
+        "숙소"
+      ],
+      "matchPriority": 90
+    },
+    {
+      "regionKey": "kr_admin_5274000000",
+      "officialRegionId": "kr_admin_5274000000",
+      "officialCode": "5274000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonbuk",
+      "sido": "전북",
+      "sidoFull": "전북특별자치도",
+      "sigungu": "장수군",
+      "ktoSggCd": "52740",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "장수군",
+        "장수",
+        "전북특별자치도 장수군",
+        "전북 장수",
+        "전북 장수군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_5275000000",
+      "officialRegionId": "kr_admin_5275000000",
+      "officialCode": "5275000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonbuk",
+      "sido": "전북",
+      "sidoFull": "전북특별자치도",
+      "sigungu": "임실군",
+      "ktoSggCd": "52750",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "임실군",
+        "임실",
+        "전북특별자치도 임실군",
+        "전북 임실",
+        "전북 임실군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_5277000000",
+      "officialRegionId": "kr_admin_5277000000",
+      "officialCode": "5277000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonbuk",
+      "sido": "전북",
+      "sidoFull": "전북특별자치도",
+      "sigungu": "순창군",
+      "ktoSggCd": "52770",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "순창군",
+        "순창",
+        "전북특별자치도 순창군",
+        "전북 순창",
+        "전북 순창군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_admin_5279000000",
+      "officialRegionId": "kr_admin_5279000000",
+      "officialCode": "5279000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonbuk",
+      "sido": "전북",
+      "sidoFull": "전북특별자치도",
+      "sigungu": "고창군",
+      "ktoSggCd": "52790",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "고창군",
+        "고창",
+        "전북특별자치도 고창군",
+        "전북 고창",
+        "전북 고창군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "캠핑장",
+        "카라반",
+        "펜션",
+        "숙소",
+        "풀빌라"
+      ],
+      "matchPriority": 60
+    },
+    {
+      "regionKey": "kr_jeonbuk_buan",
+      "officialRegionId": "kr_admin_5280000000",
+      "officialCode": "5280000000",
+      "codeBasis": "official-legal-dong-code-prefix-5",
+      "sidoKey": "jeonbuk",
+      "sido": "전북",
+      "sidoFull": "전북특별자치도",
+      "sigungu": "부안군",
+      "ktoSggCd": "52800",
+      "unit": "sigungu",
+      "unitType": "county",
+      "aliases": [
+        "부안",
+        "부안군",
+        "부안글램핑",
+        "부안 펜션",
+        "부안 풀빌라",
+        "부안 캠핑장",
+        "전북특별자치도 부안군",
+        "전북 부안",
+        "전북 부안군"
+      ],
+      "businessKeywordHints": [
+        "글램핑",
+        "펜션",
+        "풀빌라",
+        "캠핑장",
+        "숙소"
+      ],
+      "matchPriority": 84
     }
-  ]
+  ],
+  "summary": {
+    "analysisRegionCount": 229,
+    "regionCount": 229,
+    "readyCount": 198,
+    "pendingCount": 31,
+    "excludedGeneralDistrictCount": 39,
+    "codeBasis": "official-legal-dong-code-prefix-5"
+  }
 }

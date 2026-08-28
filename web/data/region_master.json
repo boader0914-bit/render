@@ -1,6 +1,6 @@
 {
   "version": "administrative-region-master-v1",
-  "generatedAt": "2026-08-27T09:09:40.176Z",
+  "generatedAt": "2026-08-28T10:29:09.842Z",
   "asOf": "2026-08-27",
   "source": {
     "name": "행정안전부 행정표준코드관리시스템 법정동코드 전체자료",
@@ -30,8 +30,10 @@
     ]
   },
   "links": {
-    "tourismRegionCount": 46,
-    "tourismMappedCount": 46,
+    "tourismRegionCount": 229,
+    "tourismMappedCount": 229,
+    "tourismReadyCount": 198,
+    "tourismCodePendingCount": 31,
     "tourismPending": [],
     "tourismAmbiguous": [],
     "locationCardCount": 19,
@@ -109,7 +111,19 @@
         "종로",
         "서울특별시 종로구",
         "서울 종로"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1111000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11110",
+          "officialCode": "1111000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1114000000",
@@ -141,7 +155,19 @@
         "중",
         "서울특별시 중구",
         "서울 중"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1114000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11140",
+          "officialCode": "1114000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1117000000",
@@ -173,7 +199,19 @@
         "용산",
         "서울특별시 용산구",
         "서울 용산"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1117000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11170",
+          "officialCode": "1117000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1120000000",
@@ -205,7 +243,19 @@
         "성동",
         "서울특별시 성동구",
         "서울 성동"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1120000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11200",
+          "officialCode": "1120000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1121500000",
@@ -237,7 +287,19 @@
         "광진",
         "서울특별시 광진구",
         "서울 광진"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1121500000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11215",
+          "officialCode": "1121500000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1123000000",
@@ -269,7 +331,19 @@
         "동대문",
         "서울특별시 동대문구",
         "서울 동대문"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1123000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11230",
+          "officialCode": "1123000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1126000000",
@@ -301,7 +375,19 @@
         "중랑",
         "서울특별시 중랑구",
         "서울 중랑"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1126000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11260",
+          "officialCode": "1126000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1129000000",
@@ -333,7 +419,19 @@
         "성북",
         "서울특별시 성북구",
         "서울 성북"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1129000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11290",
+          "officialCode": "1129000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1130500000",
@@ -365,7 +463,19 @@
         "강북",
         "서울특별시 강북구",
         "서울 강북"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1130500000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11305",
+          "officialCode": "1130500000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1132000000",
@@ -397,7 +507,19 @@
         "도봉",
         "서울특별시 도봉구",
         "서울 도봉"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1132000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11320",
+          "officialCode": "1132000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1135000000",
@@ -429,7 +551,19 @@
         "노원",
         "서울특별시 노원구",
         "서울 노원"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1135000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11350",
+          "officialCode": "1135000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1138000000",
@@ -461,7 +595,19 @@
         "은평",
         "서울특별시 은평구",
         "서울 은평"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1138000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11380",
+          "officialCode": "1138000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1141000000",
@@ -493,7 +639,19 @@
         "서대문",
         "서울특별시 서대문구",
         "서울 서대문"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1141000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11410",
+          "officialCode": "1141000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1144000000",
@@ -525,7 +683,19 @@
         "마포",
         "서울특별시 마포구",
         "서울 마포"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1144000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11440",
+          "officialCode": "1144000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1147000000",
@@ -557,7 +727,19 @@
         "양천",
         "서울특별시 양천구",
         "서울 양천"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1147000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11470",
+          "officialCode": "1147000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1150000000",
@@ -589,7 +771,19 @@
         "강서",
         "서울특별시 강서구",
         "서울 강서"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1150000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11500",
+          "officialCode": "1150000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1153000000",
@@ -621,7 +815,19 @@
         "구로",
         "서울특별시 구로구",
         "서울 구로"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1153000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11530",
+          "officialCode": "1153000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1154500000",
@@ -653,7 +859,19 @@
         "금천",
         "서울특별시 금천구",
         "서울 금천"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1154500000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11545",
+          "officialCode": "1154500000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1156000000",
@@ -685,7 +903,19 @@
         "영등포",
         "서울특별시 영등포구",
         "서울 영등포"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1156000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11560",
+          "officialCode": "1156000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1159000000",
@@ -717,7 +947,19 @@
         "동작",
         "서울특별시 동작구",
         "서울 동작"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1159000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11590",
+          "officialCode": "1159000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1162000000",
@@ -749,7 +991,19 @@
         "관악",
         "서울특별시 관악구",
         "서울 관악"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1162000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11620",
+          "officialCode": "1162000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1165000000",
@@ -781,7 +1035,19 @@
         "서초",
         "서울특별시 서초구",
         "서울 서초"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1165000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11650",
+          "officialCode": "1165000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1168000000",
@@ -813,7 +1079,19 @@
         "강남",
         "서울특별시 강남구",
         "서울 강남"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1168000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11680",
+          "officialCode": "1168000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1171000000",
@@ -845,7 +1123,19 @@
         "송파",
         "서울특별시 송파구",
         "서울 송파"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1171000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11710",
+          "officialCode": "1171000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1174000000",
@@ -877,7 +1167,19 @@
         "강동",
         "서울특별시 강동구",
         "서울 강동"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1174000000",
+          "sido": "서울",
+          "sidoFull": "서울특별시",
+          "ktoSggCd": "11740",
+          "officialCode": "1174000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_1200000000",
@@ -940,7 +1242,19 @@
         "목포",
         "전남광주통합특별시 목포시",
         "전남광주 목포"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1211000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12110",
+          "officialCode": "1211000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1213000000",
@@ -976,10 +1290,13 @@
       "providerMappings": {
         "kto": {
           "regionKey": "kr_jeonnam_yeosu",
-          "sido": "전남",
-          "sidoFull": "전라남도",
-          "ktoSggCd": "46130",
-          "status": "ready"
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12130",
+          "officialCode": "1213000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
         }
       },
       "locationCardKey": "kr_jeonnam_yeosu"
@@ -1018,10 +1335,13 @@
       "providerMappings": {
         "kto": {
           "regionKey": "kr_jeonnam_suncheon",
-          "sido": "전남",
-          "sidoFull": "전라남도",
-          "ktoSggCd": "46150",
-          "status": "ready"
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12150",
+          "officialCode": "1215000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
         }
       }
     },
@@ -1055,7 +1375,19 @@
         "나주",
         "전남광주통합특별시 나주시",
         "전남광주 나주"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1217000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12170",
+          "officialCode": "1217000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1219000000",
@@ -1087,7 +1419,19 @@
         "광양",
         "전남광주통합특별시 광양시",
         "전남광주 광양"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1219000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12190",
+          "officialCode": "1219000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1221000000",
@@ -1119,7 +1463,19 @@
         "동",
         "전남광주통합특별시 동구",
         "전남광주 동"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1221000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12210",
+          "officialCode": "1221000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1224000000",
@@ -1151,7 +1507,19 @@
         "서",
         "전남광주통합특별시 서구",
         "전남광주 서"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1224000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12240",
+          "officialCode": "1224000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1227000000",
@@ -1183,7 +1551,19 @@
         "남",
         "전남광주통합특별시 남구",
         "전남광주 남"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1227000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12270",
+          "officialCode": "1227000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1230000000",
@@ -1215,7 +1595,19 @@
         "북",
         "전남광주통합특별시 북구",
         "전남광주 북"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1230000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12300",
+          "officialCode": "1230000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1233000000",
@@ -1247,7 +1639,19 @@
         "광산",
         "전남광주통합특별시 광산구",
         "전남광주 광산"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1233000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12330",
+          "officialCode": "1233000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1271000000",
@@ -1283,10 +1687,13 @@
       "providerMappings": {
         "kto": {
           "regionKey": "kr_jeonnam_damyang",
-          "sido": "전남",
-          "sidoFull": "전라남도",
-          "ktoSggCd": "46710",
-          "status": "ready"
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12710",
+          "officialCode": "1271000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
         }
       },
       "locationCardKey": "kr_jeonnam_damyang"
@@ -1321,7 +1728,19 @@
         "곡성",
         "전남광주통합특별시 곡성군",
         "전남광주 곡성"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1272000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12720",
+          "officialCode": "1272000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1273000000",
@@ -1357,10 +1776,13 @@
       "providerMappings": {
         "kto": {
           "regionKey": "kr_jeonnam_gurye",
-          "sido": "전남",
-          "sidoFull": "전라남도",
-          "ktoSggCd": "46730",
-          "status": "ready"
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12730",
+          "officialCode": "1273000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
         }
       }
     },
@@ -1394,7 +1816,19 @@
         "고흥",
         "전남광주통합특별시 고흥군",
         "전남광주 고흥"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1274000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12740",
+          "officialCode": "1274000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1275000000",
@@ -1426,7 +1860,19 @@
         "보성",
         "전남광주통합특별시 보성군",
         "전남광주 보성"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1275000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12750",
+          "officialCode": "1275000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1276000000",
@@ -1458,7 +1904,19 @@
         "화순",
         "전남광주통합특별시 화순군",
         "전남광주 화순"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1276000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12760",
+          "officialCode": "1276000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1277000000",
@@ -1490,7 +1948,19 @@
         "장흥",
         "전남광주통합특별시 장흥군",
         "전남광주 장흥"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1277000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12770",
+          "officialCode": "1277000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1278000000",
@@ -1522,7 +1992,19 @@
         "강진",
         "전남광주통합특별시 강진군",
         "전남광주 강진"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1278000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12780",
+          "officialCode": "1278000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1279000000",
@@ -1554,7 +2036,19 @@
         "해남",
         "전남광주통합특별시 해남군",
         "전남광주 해남"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1279000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12790",
+          "officialCode": "1279000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1280000000",
@@ -1586,7 +2080,19 @@
         "영암",
         "전남광주통합특별시 영암군",
         "전남광주 영암"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1280000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12800",
+          "officialCode": "1280000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1281000000",
@@ -1618,7 +2124,19 @@
         "무안",
         "전남광주통합특별시 무안군",
         "전남광주 무안"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1281000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12810",
+          "officialCode": "1281000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1282000000",
@@ -1650,7 +2168,19 @@
         "함평",
         "전남광주통합특별시 함평군",
         "전남광주 함평"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1282000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12820",
+          "officialCode": "1282000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1283000000",
@@ -1682,7 +2212,19 @@
         "영광",
         "전남광주통합특별시 영광군",
         "전남광주 영광"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1283000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12830",
+          "officialCode": "1283000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1284000000",
@@ -1714,7 +2256,19 @@
         "장성",
         "전남광주통합특별시 장성군",
         "전남광주 장성"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1284000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12840",
+          "officialCode": "1284000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1285000000",
@@ -1746,7 +2300,19 @@
         "완도",
         "전남광주통합특별시 완도군",
         "전남광주 완도"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1285000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12850",
+          "officialCode": "1285000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1286000000",
@@ -1778,7 +2344,19 @@
         "진도",
         "전남광주통합특별시 진도군",
         "전남광주 진도"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1286000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12860",
+          "officialCode": "1286000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_1287000000",
@@ -1810,7 +2388,19 @@
         "신안",
         "전남광주통합특별시 신안군",
         "전남광주 신안"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_1287000000",
+          "sido": "전남광주",
+          "sidoFull": "전남광주통합특별시",
+          "ktoSggCd": "12870",
+          "officialCode": "1287000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "통합 광역단체 출범 뒤 관광 API의 12번대 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_2100000000",
@@ -3116,7 +3706,19 @@
         "중",
         "부산광역시 중구",
         "부산 중"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2611000000",
+          "sido": "부산",
+          "sidoFull": "부산광역시",
+          "ktoSggCd": "26110",
+          "officialCode": "2611000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2614000000",
@@ -3148,7 +3750,19 @@
         "서",
         "부산광역시 서구",
         "부산 서"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2614000000",
+          "sido": "부산",
+          "sidoFull": "부산광역시",
+          "ktoSggCd": "26140",
+          "officialCode": "2614000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2617000000",
@@ -3180,7 +3794,19 @@
         "동",
         "부산광역시 동구",
         "부산 동"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2617000000",
+          "sido": "부산",
+          "sidoFull": "부산광역시",
+          "ktoSggCd": "26170",
+          "officialCode": "2617000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2620000000",
@@ -3212,7 +3838,19 @@
         "영도",
         "부산광역시 영도구",
         "부산 영도"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2620000000",
+          "sido": "부산",
+          "sidoFull": "부산광역시",
+          "ktoSggCd": "26200",
+          "officialCode": "2620000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2623000000",
@@ -3244,7 +3882,19 @@
         "부산진",
         "부산광역시 부산진구",
         "부산 부산진"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2623000000",
+          "sido": "부산",
+          "sidoFull": "부산광역시",
+          "ktoSggCd": "26230",
+          "officialCode": "2623000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2626000000",
@@ -3276,7 +3926,19 @@
         "동래",
         "부산광역시 동래구",
         "부산 동래"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2626000000",
+          "sido": "부산",
+          "sidoFull": "부산광역시",
+          "ktoSggCd": "26260",
+          "officialCode": "2626000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2629000000",
@@ -3308,7 +3970,19 @@
         "남",
         "부산광역시 남구",
         "부산 남"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2629000000",
+          "sido": "부산",
+          "sidoFull": "부산광역시",
+          "ktoSggCd": "26290",
+          "officialCode": "2629000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2632000000",
@@ -3340,7 +4014,19 @@
         "북",
         "부산광역시 북구",
         "부산 북"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2632000000",
+          "sido": "부산",
+          "sidoFull": "부산광역시",
+          "ktoSggCd": "26320",
+          "officialCode": "2632000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2635000000",
@@ -3372,7 +4058,19 @@
         "해운대",
         "부산광역시 해운대구",
         "부산 해운대"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2635000000",
+          "sido": "부산",
+          "sidoFull": "부산광역시",
+          "ktoSggCd": "26350",
+          "officialCode": "2635000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2638000000",
@@ -3404,7 +4102,19 @@
         "사하",
         "부산광역시 사하구",
         "부산 사하"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2638000000",
+          "sido": "부산",
+          "sidoFull": "부산광역시",
+          "ktoSggCd": "26380",
+          "officialCode": "2638000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2641000000",
@@ -3436,7 +4146,19 @@
         "금정",
         "부산광역시 금정구",
         "부산 금정"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2641000000",
+          "sido": "부산",
+          "sidoFull": "부산광역시",
+          "ktoSggCd": "26410",
+          "officialCode": "2641000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2644000000",
@@ -3468,7 +4190,19 @@
         "강서",
         "부산광역시 강서구",
         "부산 강서"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2644000000",
+          "sido": "부산",
+          "sidoFull": "부산광역시",
+          "ktoSggCd": "26440",
+          "officialCode": "2644000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2647000000",
@@ -3500,7 +4234,19 @@
         "연제",
         "부산광역시 연제구",
         "부산 연제"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2647000000",
+          "sido": "부산",
+          "sidoFull": "부산광역시",
+          "ktoSggCd": "26470",
+          "officialCode": "2647000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2650000000",
@@ -3532,7 +4278,19 @@
         "수영",
         "부산광역시 수영구",
         "부산 수영"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2650000000",
+          "sido": "부산",
+          "sidoFull": "부산광역시",
+          "ktoSggCd": "26500",
+          "officialCode": "2650000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2653000000",
@@ -3564,7 +4322,19 @@
         "사상",
         "부산광역시 사상구",
         "부산 사상"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2653000000",
+          "sido": "부산",
+          "sidoFull": "부산광역시",
+          "ktoSggCd": "26530",
+          "officialCode": "2653000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2671000000",
@@ -3596,7 +4366,19 @@
         "기장",
         "부산광역시 기장군",
         "부산 기장"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2671000000",
+          "sido": "부산",
+          "sidoFull": "부산광역시",
+          "ktoSggCd": "26710",
+          "officialCode": "2671000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2700000000",
@@ -3659,7 +4441,19 @@
         "중",
         "대구광역시 중구",
         "대구 중"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2711000000",
+          "sido": "대구",
+          "sidoFull": "대구광역시",
+          "ktoSggCd": "27110",
+          "officialCode": "2711000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2714000000",
@@ -3691,7 +4485,19 @@
         "동",
         "대구광역시 동구",
         "대구 동"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2714000000",
+          "sido": "대구",
+          "sidoFull": "대구광역시",
+          "ktoSggCd": "27140",
+          "officialCode": "2714000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2717000000",
@@ -3723,7 +4529,19 @@
         "서",
         "대구광역시 서구",
         "대구 서"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2717000000",
+          "sido": "대구",
+          "sidoFull": "대구광역시",
+          "ktoSggCd": "27170",
+          "officialCode": "2717000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2720000000",
@@ -3755,7 +4573,19 @@
         "남",
         "대구광역시 남구",
         "대구 남"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2720000000",
+          "sido": "대구",
+          "sidoFull": "대구광역시",
+          "ktoSggCd": "27200",
+          "officialCode": "2720000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2723000000",
@@ -3787,7 +4617,19 @@
         "북",
         "대구광역시 북구",
         "대구 북"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2723000000",
+          "sido": "대구",
+          "sidoFull": "대구광역시",
+          "ktoSggCd": "27230",
+          "officialCode": "2723000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2726000000",
@@ -3819,7 +4661,19 @@
         "수성",
         "대구광역시 수성구",
         "대구 수성"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2726000000",
+          "sido": "대구",
+          "sidoFull": "대구광역시",
+          "ktoSggCd": "27260",
+          "officialCode": "2726000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2729000000",
@@ -3851,7 +4705,19 @@
         "달서",
         "대구광역시 달서구",
         "대구 달서"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2729000000",
+          "sido": "대구",
+          "sidoFull": "대구광역시",
+          "ktoSggCd": "27290",
+          "officialCode": "2729000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2771000000",
@@ -3883,7 +4749,19 @@
         "달성",
         "대구광역시 달성군",
         "대구 달성"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2771000000",
+          "sido": "대구",
+          "sidoFull": "대구광역시",
+          "ktoSggCd": "27710",
+          "officialCode": "2771000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2772000000",
@@ -3915,7 +4793,19 @@
         "군위",
         "대구광역시 군위군",
         "대구 군위"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2772000000",
+          "sido": "대구",
+          "sidoFull": "대구광역시",
+          "ktoSggCd": "27720",
+          "officialCode": "2772000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2800000000",
@@ -4010,7 +4900,19 @@
         "제물포",
         "인천광역시 제물포구",
         "인천 제물포"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2812500000",
+          "sido": "인천",
+          "sidoFull": "인천광역시",
+          "ktoSggCd": "28125",
+          "officialCode": "2812500000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "2026년 인천 자치구 개편 뒤 관광 API의 새 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_2814000000",
@@ -4074,7 +4976,19 @@
         "영종",
         "인천광역시 영종구",
         "인천 영종"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2815500000",
+          "sido": "인천",
+          "sidoFull": "인천광역시",
+          "ktoSggCd": "28155",
+          "officialCode": "2815500000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "2026년 인천 자치구 개편 뒤 관광 API의 새 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_2817000000",
@@ -4138,7 +5052,19 @@
         "미추홀",
         "인천광역시 미추홀구",
         "인천 미추홀"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2817700000",
+          "sido": "인천",
+          "sidoFull": "인천광역시",
+          "ktoSggCd": "28177",
+          "officialCode": "2817700000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2818500000",
@@ -4170,7 +5096,19 @@
         "연수",
         "인천광역시 연수구",
         "인천 연수"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2818500000",
+          "sido": "인천",
+          "sidoFull": "인천광역시",
+          "ktoSggCd": "28185",
+          "officialCode": "2818500000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2820000000",
@@ -4202,7 +5140,19 @@
         "남동",
         "인천광역시 남동구",
         "인천 남동"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2820000000",
+          "sido": "인천",
+          "sidoFull": "인천광역시",
+          "ktoSggCd": "28200",
+          "officialCode": "2820000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2823000000",
@@ -4266,7 +5216,19 @@
         "부평",
         "인천광역시 부평구",
         "인천 부평"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2823700000",
+          "sido": "인천",
+          "sidoFull": "인천광역시",
+          "ktoSggCd": "28237",
+          "officialCode": "2823700000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2824500000",
@@ -4298,7 +5260,19 @@
         "계양",
         "인천광역시 계양구",
         "인천 계양"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2824500000",
+          "sido": "인천",
+          "sidoFull": "인천광역시",
+          "ktoSggCd": "28245",
+          "officialCode": "2824500000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2826000000",
@@ -4362,7 +5336,19 @@
         "서해",
         "인천광역시 서해구",
         "인천 서해"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2827500000",
+          "sido": "인천",
+          "sidoFull": "인천광역시",
+          "ktoSggCd": "28275",
+          "officialCode": "2827500000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "2026년 인천 자치구 개편 뒤 관광 API의 새 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_2829000000",
@@ -4394,7 +5380,19 @@
         "검단",
         "인천광역시 검단구",
         "인천 검단"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2829000000",
+          "sido": "인천",
+          "sidoFull": "인천광역시",
+          "ktoSggCd": "28290",
+          "officialCode": "2829000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "administrative-reform-pending",
+          "statusReason": "2026년 인천 자치구 개편 뒤 관광 API의 새 시군구 코드 반영 여부를 확인해야 합니다."
+        }
+      }
     },
     {
       "regionId": "kr_admin_2871000000",
@@ -4426,7 +5424,19 @@
         "강화",
         "인천광역시 강화군",
         "인천 강화"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2871000000",
+          "sido": "인천",
+          "sidoFull": "인천광역시",
+          "ktoSggCd": "28710",
+          "officialCode": "2871000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2872000000",
@@ -4458,7 +5468,19 @@
         "옹진",
         "인천광역시 옹진군",
         "인천 옹진"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_2872000000",
+          "sido": "인천",
+          "sidoFull": "인천광역시",
+          "ktoSggCd": "28720",
+          "officialCode": "2872000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_2900000000",
@@ -4712,7 +5734,19 @@
         "동",
         "대전광역시 동구",
         "대전 동"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_3011000000",
+          "sido": "대전",
+          "sidoFull": "대전광역시",
+          "ktoSggCd": "30110",
+          "officialCode": "3011000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_3014000000",
@@ -4744,7 +5778,19 @@
         "중",
         "대전광역시 중구",
         "대전 중"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_3014000000",
+          "sido": "대전",
+          "sidoFull": "대전광역시",
+          "ktoSggCd": "30140",
+          "officialCode": "3014000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_3017000000",
@@ -4776,7 +5822,19 @@
         "서",
         "대전광역시 서구",
         "대전 서"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_3017000000",
+          "sido": "대전",
+          "sidoFull": "대전광역시",
+          "ktoSggCd": "30170",
+          "officialCode": "3017000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_3020000000",
@@ -4808,7 +5866,19 @@
         "유성",
         "대전광역시 유성구",
         "대전 유성"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_3020000000",
+          "sido": "대전",
+          "sidoFull": "대전광역시",
+          "ktoSggCd": "30200",
+          "officialCode": "3020000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_3023000000",
@@ -4840,7 +5910,19 @@
         "대덕",
         "대전광역시 대덕구",
         "대전 대덕"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_3023000000",
+          "sido": "대전",
+          "sidoFull": "대전광역시",
+          "ktoSggCd": "30230",
+          "officialCode": "3023000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_3100000000",
@@ -4903,7 +5985,19 @@
         "중",
         "울산광역시 중구",
         "울산 중"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_3111000000",
+          "sido": "울산",
+          "sidoFull": "울산광역시",
+          "ktoSggCd": "31110",
+          "officialCode": "3111000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_3114000000",
@@ -4935,7 +6029,19 @@
         "남",
         "울산광역시 남구",
         "울산 남"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_3114000000",
+          "sido": "울산",
+          "sidoFull": "울산광역시",
+          "ktoSggCd": "31140",
+          "officialCode": "3114000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_3117000000",
@@ -4967,7 +6073,19 @@
         "동",
         "울산광역시 동구",
         "울산 동"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_3117000000",
+          "sido": "울산",
+          "sidoFull": "울산광역시",
+          "ktoSggCd": "31170",
+          "officialCode": "3117000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_3120000000",
@@ -4999,7 +6117,19 @@
         "북",
         "울산광역시 북구",
         "울산 북"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_3120000000",
+          "sido": "울산",
+          "sidoFull": "울산광역시",
+          "ktoSggCd": "31200",
+          "officialCode": "3120000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_3171000000",
@@ -5031,7 +6161,19 @@
         "울주",
         "울산광역시 울주군",
         "울산 울주"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_3171000000",
+          "sido": "울산",
+          "sidoFull": "울산광역시",
+          "ktoSggCd": "31710",
+          "officialCode": "3171000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_3611000000",
@@ -5317,7 +6459,19 @@
         "수원",
         "경기도 수원시",
         "경기 수원"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4111000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41110",
+          "officialCode": "4111000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4111100000",
@@ -5477,7 +6631,19 @@
         "성남",
         "경기도 성남시",
         "경기 성남"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4113000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41130",
+          "officialCode": "4113000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4113100000",
@@ -5605,7 +6771,19 @@
         "의정부",
         "경기도 의정부시",
         "경기 의정부"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4115000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41150",
+          "officialCode": "4115000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4117000000",
@@ -5637,7 +6815,19 @@
         "안양",
         "경기도 안양시",
         "경기 안양"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4117000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41170",
+          "officialCode": "4117000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4117100000",
@@ -5733,7 +6923,19 @@
         "부천",
         "경기도 부천시",
         "경기 부천"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4119000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41190",
+          "officialCode": "4119000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4119100000",
@@ -6021,7 +7223,19 @@
         "광명",
         "경기도 광명시",
         "경기 광명"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4121000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41210",
+          "officialCode": "4121000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4122000000",
@@ -6053,7 +7267,19 @@
         "평택",
         "경기도 평택시",
         "경기 평택"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4122000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41220",
+          "officialCode": "4122000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4123000000",
@@ -6117,7 +7343,19 @@
         "동두천",
         "경기도 동두천시",
         "경기 동두천"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4125000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41250",
+          "officialCode": "4125000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4127000000",
@@ -6149,7 +7387,19 @@
         "안산",
         "경기도 안산시",
         "경기 안산"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4127000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41270",
+          "officialCode": "4127000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4127100000",
@@ -6245,7 +7495,19 @@
         "고양",
         "경기도 고양시",
         "경기 고양"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4128000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41280",
+          "officialCode": "4128000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4128100000",
@@ -6405,7 +7667,19 @@
         "과천",
         "경기도 과천시",
         "경기 과천"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4129000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41290",
+          "officialCode": "4129000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4131000000",
@@ -6437,7 +7711,19 @@
         "구리",
         "경기도 구리시",
         "경기 구리"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4131000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41310",
+          "officialCode": "4131000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4133000000",
@@ -6533,7 +7819,19 @@
         "남양주",
         "경기도 남양주시",
         "경기 남양주"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4136000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41360",
+          "officialCode": "4136000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4137000000",
@@ -6565,7 +7863,19 @@
         "오산",
         "경기도 오산시",
         "경기 오산"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4137000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41370",
+          "officialCode": "4137000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4139000000",
@@ -6597,7 +7907,19 @@
         "시흥",
         "경기도 시흥시",
         "경기 시흥"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4139000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41390",
+          "officialCode": "4139000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4141000000",
@@ -6629,7 +7951,19 @@
         "군포",
         "경기도 군포시",
         "경기 군포"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4141000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41410",
+          "officialCode": "4141000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4143000000",
@@ -6661,7 +7995,19 @@
         "의왕",
         "경기도 의왕시",
         "경기 의왕"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4143000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41430",
+          "officialCode": "4143000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4145000000",
@@ -6693,7 +8039,19 @@
         "하남",
         "경기도 하남시",
         "경기 하남"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4145000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41450",
+          "officialCode": "4145000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4146000000",
@@ -6725,7 +8083,19 @@
         "용인",
         "경기도 용인시",
         "경기 용인"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4146000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41460",
+          "officialCode": "4146000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4146100000",
@@ -6860,7 +8230,10 @@
           "sido": "경기",
           "sidoFull": "경기도",
           "ktoSggCd": "41480",
-          "status": "ready"
+          "officialCode": "4148000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -6901,7 +8274,10 @@
           "sido": "경기",
           "sidoFull": "경기도",
           "ktoSggCd": "41500",
-          "status": "ready"
+          "officialCode": "4150000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -6942,7 +8318,10 @@
           "sido": "경기",
           "sidoFull": "경기도",
           "ktoSggCd": "41550",
-          "status": "ready"
+          "officialCode": "4155000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       },
       "locationCardKey": "kr_gyeonggi_anseong"
@@ -6977,7 +8356,19 @@
         "김포",
         "경기도 김포시",
         "경기 김포"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4157000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41570",
+          "officialCode": "4157000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4159000000",
@@ -7016,7 +8407,10 @@
           "sido": "경기",
           "sidoFull": "경기도",
           "ktoSggCd": "41590",
-          "status": "ready"
+          "officialCode": "4159000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -7178,7 +8572,19 @@
         "광주",
         "경기도 광주시",
         "경기 광주"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4161000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41610",
+          "officialCode": "4161000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4163000000",
@@ -7210,7 +8616,19 @@
         "양주",
         "경기도 양주시",
         "경기 양주"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4163000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41630",
+          "officialCode": "4163000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4165000000",
@@ -7249,7 +8667,10 @@
           "sido": "경기",
           "sidoFull": "경기도",
           "ktoSggCd": "41650",
-          "status": "ready"
+          "officialCode": "4165000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       },
       "locationCardKey": "kr_gyeonggi_pocheon"
@@ -7291,7 +8712,10 @@
           "sido": "경기",
           "sidoFull": "경기도",
           "ktoSggCd": "41670",
-          "status": "ready"
+          "officialCode": "4167000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -7613,7 +9037,19 @@
         "연천",
         "경기도 연천군",
         "경기 연천"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4180000000",
+          "sido": "경기",
+          "sidoFull": "경기도",
+          "ktoSggCd": "41800",
+          "officialCode": "4180000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4181000000",
@@ -7684,7 +9120,10 @@
           "sido": "경기",
           "sidoFull": "경기도",
           "ktoSggCd": "41820",
-          "status": "ready"
+          "officialCode": "4182000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       },
       "locationCardKey": "kr_gyeonggi_gapyeong"
@@ -7726,7 +9165,10 @@
           "sido": "경기",
           "sidoFull": "경기도",
           "ktoSggCd": "41830",
-          "status": "ready"
+          "officialCode": "4183000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       },
       "locationCardKey": "kr_gyeonggi_yangpyeong"
@@ -8847,7 +10289,19 @@
         "청주",
         "충청북도 청주시",
         "충북 청주"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4311000000",
+          "sido": "충북",
+          "sidoFull": "충청북도",
+          "ktoSggCd": "43110",
+          "officialCode": "4311000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4311100000",
@@ -9014,7 +10468,10 @@
           "sido": "충북",
           "sidoFull": "충청북도",
           "ktoSggCd": "43130",
-          "status": "ready"
+          "officialCode": "4313000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -9055,7 +10512,10 @@
           "sido": "충북",
           "sidoFull": "충청북도",
           "ktoSggCd": "43150",
-          "status": "ready"
+          "officialCode": "4315000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -9121,7 +10581,19 @@
         "보은",
         "충청북도 보은군",
         "충북 보은"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4372000000",
+          "sido": "충북",
+          "sidoFull": "충청북도",
+          "ktoSggCd": "43720",
+          "officialCode": "4372000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4373000000",
@@ -9153,7 +10625,19 @@
         "옥천",
         "충청북도 옥천군",
         "충북 옥천"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4373000000",
+          "sido": "충북",
+          "sidoFull": "충청북도",
+          "ktoSggCd": "43730",
+          "officialCode": "4373000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4374000000",
@@ -9185,7 +10669,19 @@
         "영동",
         "충청북도 영동군",
         "충북 영동"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4374000000",
+          "sido": "충북",
+          "sidoFull": "충청북도",
+          "ktoSggCd": "43740",
+          "officialCode": "4374000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4374500000",
@@ -9217,7 +10713,19 @@
         "증평",
         "충청북도 증평군",
         "충북 증평"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4374500000",
+          "sido": "충북",
+          "sidoFull": "충청북도",
+          "ktoSggCd": "43745",
+          "officialCode": "4374500000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4375000000",
@@ -9249,7 +10757,19 @@
         "진천",
         "충청북도 진천군",
         "충북 진천"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4375000000",
+          "sido": "충북",
+          "sidoFull": "충청북도",
+          "ktoSggCd": "43750",
+          "officialCode": "4375000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4376000000",
@@ -9288,7 +10808,10 @@
           "sido": "충북",
           "sidoFull": "충청북도",
           "ktoSggCd": "43760",
-          "status": "ready"
+          "officialCode": "4376000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -9322,7 +10845,19 @@
         "음성",
         "충청북도 음성군",
         "충북 음성"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4377000000",
+          "sido": "충북",
+          "sidoFull": "충청북도",
+          "ktoSggCd": "43770",
+          "officialCode": "4377000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4378000000",
@@ -9457,7 +10992,10 @@
           "sido": "충북",
           "sidoFull": "충청북도",
           "ktoSggCd": "43800",
-          "status": "ready"
+          "officialCode": "4380000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       },
       "locationCardKey": "kr_chungbuk_danyang"
@@ -9683,7 +11221,19 @@
         "천안",
         "충청남도 천안시",
         "충남 천안"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4413000000",
+          "sido": "충남",
+          "sidoFull": "충청남도",
+          "ktoSggCd": "44130",
+          "officialCode": "4413000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4413100000",
@@ -9786,7 +11336,10 @@
           "sido": "충남",
           "sidoFull": "충청남도",
           "ktoSggCd": "44150",
-          "status": "ready"
+          "officialCode": "4415000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       },
       "locationCardKey": "kr_chungnam_gongju"
@@ -9860,7 +11413,10 @@
           "sido": "충남",
           "sidoFull": "충청남도",
           "ktoSggCd": "44180",
-          "status": "ready"
+          "officialCode": "4418000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -9933,7 +11489,10 @@
           "sido": "충남",
           "sidoFull": "충청남도",
           "ktoSggCd": "44200",
-          "status": "ready"
+          "officialCode": "4420000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -9967,7 +11526,19 @@
         "서산",
         "충청남도 서산시",
         "충남 서산"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4421000000",
+          "sido": "충남",
+          "sidoFull": "충청남도",
+          "ktoSggCd": "44210",
+          "officialCode": "4421000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4423000000",
@@ -9999,7 +11570,19 @@
         "논산",
         "충청남도 논산시",
         "충남 논산"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4423000000",
+          "sido": "충남",
+          "sidoFull": "충청남도",
+          "ktoSggCd": "44230",
+          "officialCode": "4423000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4425000000",
@@ -10031,7 +11614,19 @@
         "계룡",
         "충청남도 계룡시",
         "충남 계룡"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4425000000",
+          "sido": "충남",
+          "sidoFull": "충청남도",
+          "ktoSggCd": "44250",
+          "officialCode": "4425000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4427000000",
@@ -10063,7 +11658,19 @@
         "당진",
         "충청남도 당진시",
         "충남 당진"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4427000000",
+          "sido": "충남",
+          "sidoFull": "충청남도",
+          "ktoSggCd": "44270",
+          "officialCode": "4427000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4471000000",
@@ -10102,7 +11709,10 @@
           "sido": "충남",
           "sidoFull": "충청남도",
           "ktoSggCd": "44710",
-          "status": "ready"
+          "officialCode": "4471000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -10264,7 +11874,19 @@
         "부여",
         "충청남도 부여군",
         "충남 부여"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4476000000",
+          "sido": "충남",
+          "sidoFull": "충청남도",
+          "ktoSggCd": "44760",
+          "officialCode": "4476000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4477000000",
@@ -10296,7 +11918,19 @@
         "서천",
         "충청남도 서천군",
         "충남 서천"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4477000000",
+          "sido": "충남",
+          "sidoFull": "충청남도",
+          "ktoSggCd": "44770",
+          "officialCode": "4477000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4478000000",
@@ -10360,7 +11994,19 @@
         "청양",
         "충청남도 청양군",
         "충남 청양"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4479000000",
+          "sido": "충남",
+          "sidoFull": "충청남도",
+          "ktoSggCd": "44790",
+          "officialCode": "4479000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4480000000",
@@ -10392,7 +12038,19 @@
         "홍성",
         "충청남도 홍성군",
         "충남 홍성"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4480000000",
+          "sido": "충남",
+          "sidoFull": "충청남도",
+          "ktoSggCd": "44800",
+          "officialCode": "4480000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4481000000",
@@ -10424,7 +12082,19 @@
         "예산",
         "충청남도 예산군",
         "충남 예산"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4481000000",
+          "sido": "충남",
+          "sidoFull": "충청남도",
+          "ktoSggCd": "44810",
+          "officialCode": "4481000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4482000000",
@@ -10495,7 +12165,10 @@
           "sido": "충남",
           "sidoFull": "충청남도",
           "ktoSggCd": "44825",
-          "status": "ready"
+          "officialCode": "4482500000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       },
       "locationCardKey": "kr_chungnam_taean"
@@ -12934,7 +14607,10 @@
           "sido": "경북",
           "sidoFull": "경상북도",
           "ktoSggCd": "47110",
-          "status": "ready"
+          "officialCode": "4711000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -13039,7 +14715,10 @@
           "sido": "경북",
           "sidoFull": "경상북도",
           "ktoSggCd": "47130",
-          "status": "ready"
+          "officialCode": "4713000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       },
       "locationCardKey": "kr_gyeongbuk_gyeongju"
@@ -13074,7 +14753,19 @@
         "김천",
         "경상북도 김천시",
         "경북 김천"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4715000000",
+          "sido": "경북",
+          "sidoFull": "경상북도",
+          "ktoSggCd": "47150",
+          "officialCode": "4715000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4717000000",
@@ -13113,7 +14804,10 @@
           "sido": "경북",
           "sidoFull": "경상북도",
           "ktoSggCd": "47170",
-          "status": "ready"
+          "officialCode": "4717000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -13147,7 +14841,19 @@
         "구미",
         "경상북도 구미시",
         "경북 구미"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4719000000",
+          "sido": "경북",
+          "sidoFull": "경상북도",
+          "ktoSggCd": "47190",
+          "officialCode": "4719000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4721000000",
@@ -13179,7 +14885,19 @@
         "영주",
         "경상북도 영주시",
         "경북 영주"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4721000000",
+          "sido": "경북",
+          "sidoFull": "경상북도",
+          "ktoSggCd": "47210",
+          "officialCode": "4721000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4723000000",
@@ -13211,7 +14929,19 @@
         "영천",
         "경상북도 영천시",
         "경북 영천"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4723000000",
+          "sido": "경북",
+          "sidoFull": "경상북도",
+          "ktoSggCd": "47230",
+          "officialCode": "4723000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4725000000",
@@ -13243,7 +14973,19 @@
         "상주",
         "경상북도 상주시",
         "경북 상주"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4725000000",
+          "sido": "경북",
+          "sidoFull": "경상북도",
+          "ktoSggCd": "47250",
+          "officialCode": "4725000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4727000000",
@@ -13314,7 +15056,10 @@
           "sido": "경북",
           "sidoFull": "경상북도",
           "ktoSggCd": "47280",
-          "status": "ready"
+          "officialCode": "4728000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -13348,7 +15093,19 @@
         "경산",
         "경상북도 경산시",
         "경북 경산"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4729000000",
+          "sido": "경북",
+          "sidoFull": "경상북도",
+          "ktoSggCd": "47290",
+          "officialCode": "4729000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4771000000",
@@ -13444,7 +15201,19 @@
         "의성",
         "경상북도 의성군",
         "경북 의성"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4773000000",
+          "sido": "경북",
+          "sidoFull": "경상북도",
+          "ktoSggCd": "47730",
+          "officialCode": "4773000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4774000000",
@@ -13508,7 +15277,19 @@
         "청송",
         "경상북도 청송군",
         "경북 청송"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4775000000",
+          "sido": "경북",
+          "sidoFull": "경상북도",
+          "ktoSggCd": "47750",
+          "officialCode": "4775000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4776000000",
@@ -13540,7 +15321,19 @@
         "영양",
         "경상북도 영양군",
         "경북 영양"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4776000000",
+          "sido": "경북",
+          "sidoFull": "경상북도",
+          "ktoSggCd": "47760",
+          "officialCode": "4776000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4777000000",
@@ -13579,7 +15372,10 @@
           "sido": "경북",
           "sidoFull": "경상북도",
           "ktoSggCd": "47770",
-          "status": "ready"
+          "officialCode": "4777000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -13780,7 +15576,10 @@
           "sido": "경북",
           "sidoFull": "경상북도",
           "ktoSggCd": "47820",
-          "status": "ready"
+          "officialCode": "4782000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       },
       "locationCardKey": "kr_gyeongbuk_cheongdo"
@@ -13815,7 +15614,19 @@
         "고령",
         "경상북도 고령군",
         "경북 고령"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4783000000",
+          "sido": "경북",
+          "sidoFull": "경상북도",
+          "ktoSggCd": "47830",
+          "officialCode": "4783000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4784000000",
@@ -13847,7 +15658,19 @@
         "성주",
         "경상북도 성주군",
         "경북 성주"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4784000000",
+          "sido": "경북",
+          "sidoFull": "경상북도",
+          "ktoSggCd": "47840",
+          "officialCode": "4784000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4785000000",
@@ -13879,7 +15702,19 @@
         "칠곡",
         "경상북도 칠곡군",
         "경북 칠곡"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4785000000",
+          "sido": "경북",
+          "sidoFull": "경상북도",
+          "ktoSggCd": "47850",
+          "officialCode": "4785000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4786000000",
@@ -14039,7 +15874,19 @@
         "예천",
         "경상북도 예천군",
         "경북 예천"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4790000000",
+          "sido": "경북",
+          "sidoFull": "경상북도",
+          "ktoSggCd": "47900",
+          "officialCode": "4790000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4791000000",
@@ -14103,7 +15950,19 @@
         "봉화",
         "경상북도 봉화군",
         "경북 봉화"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4792000000",
+          "sido": "경북",
+          "sidoFull": "경상북도",
+          "ktoSggCd": "47920",
+          "officialCode": "4792000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4793000000",
@@ -14135,7 +15994,19 @@
         "울진",
         "경상북도 울진군",
         "경북 울진"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4793000000",
+          "sido": "경북",
+          "sidoFull": "경상북도",
+          "ktoSggCd": "47930",
+          "officialCode": "4793000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4794000000",
@@ -14167,7 +16038,19 @@
         "울릉",
         "경상북도 울릉군",
         "경북 울릉"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4794000000",
+          "sido": "경북",
+          "sidoFull": "경상북도",
+          "ktoSggCd": "47940",
+          "officialCode": "4794000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4800000000",
@@ -14581,7 +16464,19 @@
         "창원",
         "경상남도 창원시",
         "경남 창원"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4812000000",
+          "sido": "경남",
+          "sidoFull": "경상남도",
+          "ktoSggCd": "48120",
+          "officialCode": "4812000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4812100000",
@@ -15068,7 +16963,10 @@
           "sido": "경남",
           "sidoFull": "경상남도",
           "ktoSggCd": "48170",
-          "status": "ready"
+          "officialCode": "4817000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -15166,7 +17064,19 @@
         "통영",
         "경상남도 통영시",
         "경남 통영"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4822000000",
+          "sido": "경남",
+          "sidoFull": "경상남도",
+          "ktoSggCd": "48220",
+          "officialCode": "4822000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4823000000",
@@ -15237,7 +17147,10 @@
           "sido": "경남",
           "sidoFull": "경상남도",
           "ktoSggCd": "48240",
-          "status": "ready"
+          "officialCode": "4824000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       },
       "locationCardKey": "kr_gyeongnam_sacheon"
@@ -15272,7 +17185,19 @@
         "김해",
         "경상남도 김해시",
         "경남 김해"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4825000000",
+          "sido": "경남",
+          "sidoFull": "경상남도",
+          "ktoSggCd": "48250",
+          "officialCode": "4825000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4827000000",
@@ -15311,7 +17236,10 @@
           "sido": "경남",
           "sidoFull": "경상남도",
           "ktoSggCd": "48270",
-          "status": "ready"
+          "officialCode": "4827000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       },
       "locationCardKey": "kr_gyeongnam_miryang"
@@ -15385,7 +17313,10 @@
           "sido": "경남",
           "sidoFull": "경상남도",
           "ktoSggCd": "48310",
-          "status": "ready"
+          "officialCode": "4831000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -15419,7 +17350,19 @@
         "양산",
         "경상남도 양산시",
         "경남 양산"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4833000000",
+          "sido": "경남",
+          "sidoFull": "경상남도",
+          "ktoSggCd": "48330",
+          "officialCode": "4833000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4871000000",
@@ -15483,7 +17426,19 @@
         "의령",
         "경상남도 의령군",
         "경남 의령"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4872000000",
+          "sido": "경남",
+          "sidoFull": "경상남도",
+          "ktoSggCd": "48720",
+          "officialCode": "4872000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4873000000",
@@ -15515,7 +17470,19 @@
         "함안",
         "경상남도 함안군",
         "경남 함안"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4873000000",
+          "sido": "경남",
+          "sidoFull": "경상남도",
+          "ktoSggCd": "48730",
+          "officialCode": "4873000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4874000000",
@@ -15547,7 +17514,19 @@
         "창녕",
         "경상남도 창녕군",
         "경남 창녕"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4874000000",
+          "sido": "경남",
+          "sidoFull": "경상남도",
+          "ktoSggCd": "48740",
+          "officialCode": "4874000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4875000000",
@@ -15867,7 +17846,19 @@
         "고성",
         "경상남도 고성군",
         "경남 고성"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4882000000",
+          "sido": "경남",
+          "sidoFull": "경상남도",
+          "ktoSggCd": "48820",
+          "officialCode": "4882000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4883000000",
@@ -15938,7 +17929,10 @@
           "sido": "경남",
           "sidoFull": "경상남도",
           "ktoSggCd": "48840",
-          "status": "ready"
+          "officialCode": "4884000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       },
       "locationCardKey": "kr_gyeongnam_namhae"
@@ -15980,7 +17974,10 @@
           "sido": "경남",
           "sidoFull": "경상남도",
           "ktoSggCd": "48850",
-          "status": "ready"
+          "officialCode": "4885000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -16021,7 +18018,10 @@
           "sido": "경남",
           "sidoFull": "경상남도",
           "ktoSggCd": "48860",
-          "status": "ready"
+          "officialCode": "4886000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       },
       "locationCardKey": "kr_gyeongnam_sancheong"
@@ -16056,7 +18056,19 @@
         "함양",
         "경상남도 함양군",
         "경남 함양"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4887000000",
+          "sido": "경남",
+          "sidoFull": "경상남도",
+          "ktoSggCd": "48870",
+          "officialCode": "4887000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4888000000",
@@ -16088,7 +18100,19 @@
         "거창",
         "경상남도 거창군",
         "경남 거창"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_4888000000",
+          "sido": "경남",
+          "sidoFull": "경상남도",
+          "ktoSggCd": "48880",
+          "officialCode": "4888000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_4889000000",
@@ -16127,7 +18151,10 @@
           "sido": "경남",
           "sidoFull": "경상남도",
           "ktoSggCd": "48890",
-          "status": "ready"
+          "officialCode": "4889000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -16358,7 +18385,10 @@
           "sido": "제주",
           "sidoFull": "제주특별자치도",
           "ktoSggCd": "50110",
-          "status": "ready"
+          "officialCode": "5011000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -16399,7 +18429,10 @@
           "sido": "제주",
           "sidoFull": "제주특별자치도",
           "ktoSggCd": "50130",
-          "status": "ready"
+          "officialCode": "5013000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -16470,8 +18503,11 @@
           "regionKey": "kr_gangwon_chuncheon",
           "sido": "강원",
           "sidoFull": "강원특별자치도",
-          "ktoSggCd": "42110",
-          "status": "verify-before-api-call"
+          "ktoSggCd": "51110",
+          "officialCode": "5111000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       },
       "locationCardKey": "kr_gangwon_chuncheon"
@@ -16506,7 +18542,19 @@
         "원주",
         "강원특별자치도 원주시",
         "강원 원주"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5113000000",
+          "sido": "강원",
+          "sidoFull": "강원특별자치도",
+          "ktoSggCd": "51130",
+          "officialCode": "5113000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5115000000",
@@ -16544,8 +18592,11 @@
           "regionKey": "kr_gangwon_gangneung",
           "sido": "강원",
           "sidoFull": "강원특별자치도",
-          "ktoSggCd": "42150",
-          "status": "verify-before-api-call"
+          "ktoSggCd": "51150",
+          "officialCode": "5115000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -16579,7 +18630,19 @@
         "동해",
         "강원특별자치도 동해시",
         "강원 동해"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5117000000",
+          "sido": "강원",
+          "sidoFull": "강원특별자치도",
+          "ktoSggCd": "51170",
+          "officialCode": "5117000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5119000000",
@@ -16611,7 +18674,19 @@
         "태백",
         "강원특별자치도 태백시",
         "강원 태백"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5119000000",
+          "sido": "강원",
+          "sidoFull": "강원특별자치도",
+          "ktoSggCd": "51190",
+          "officialCode": "5119000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5121000000",
@@ -16649,8 +18724,11 @@
           "regionKey": "kr_gangwon_sokcho",
           "sido": "강원",
           "sidoFull": "강원특별자치도",
-          "ktoSggCd": "42210",
-          "status": "verify-before-api-call"
+          "ktoSggCd": "51210",
+          "officialCode": "5121000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -16684,7 +18762,19 @@
         "삼척",
         "강원특별자치도 삼척시",
         "강원 삼척"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5123000000",
+          "sido": "강원",
+          "sidoFull": "강원특별자치도",
+          "ktoSggCd": "51230",
+          "officialCode": "5123000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5172000000",
@@ -16722,8 +18812,11 @@
           "regionKey": "kr_gangwon_hongcheon",
           "sido": "강원",
           "sidoFull": "강원특별자치도",
-          "ktoSggCd": "42720",
-          "status": "verify-before-api-call"
+          "ktoSggCd": "51720",
+          "officialCode": "5172000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       },
       "locationCardKey": "kr_gangwon_hongcheon"
@@ -16758,7 +18851,19 @@
         "횡성",
         "강원특별자치도 횡성군",
         "강원 횡성"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5173000000",
+          "sido": "강원",
+          "sidoFull": "강원특별자치도",
+          "ktoSggCd": "51730",
+          "officialCode": "5173000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5175000000",
@@ -16790,7 +18895,19 @@
         "영월",
         "강원특별자치도 영월군",
         "강원 영월"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5175000000",
+          "sido": "강원",
+          "sidoFull": "강원특별자치도",
+          "ktoSggCd": "51750",
+          "officialCode": "5175000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5176000000",
@@ -16828,8 +18945,11 @@
           "regionKey": "kr_gangwon_pyeongchang",
           "sido": "강원",
           "sidoFull": "강원특별자치도",
-          "ktoSggCd": "42760",
-          "status": "verify-before-api-call"
+          "ktoSggCd": "51760",
+          "officialCode": "5176000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -16863,7 +18983,19 @@
         "정선",
         "강원특별자치도 정선군",
         "강원 정선"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5177000000",
+          "sido": "강원",
+          "sidoFull": "강원특별자치도",
+          "ktoSggCd": "51770",
+          "officialCode": "5177000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5178000000",
@@ -16895,7 +19027,19 @@
         "철원",
         "강원특별자치도 철원군",
         "강원 철원"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5178000000",
+          "sido": "강원",
+          "sidoFull": "강원특별자치도",
+          "ktoSggCd": "51780",
+          "officialCode": "5178000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5179000000",
@@ -16927,7 +19071,19 @@
         "화천",
         "강원특별자치도 화천군",
         "강원 화천"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5179000000",
+          "sido": "강원",
+          "sidoFull": "강원특별자치도",
+          "ktoSggCd": "51790",
+          "officialCode": "5179000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5180000000",
@@ -16959,7 +19115,19 @@
         "양구",
         "강원특별자치도 양구군",
         "강원 양구"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5180000000",
+          "sido": "강원",
+          "sidoFull": "강원특별자치도",
+          "ktoSggCd": "51800",
+          "officialCode": "5180000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5181000000",
@@ -16991,7 +19159,19 @@
         "인제",
         "강원특별자치도 인제군",
         "강원 인제"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5181000000",
+          "sido": "강원",
+          "sidoFull": "강원특별자치도",
+          "ktoSggCd": "51810",
+          "officialCode": "5181000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5182000000",
@@ -17023,7 +19203,19 @@
         "고성",
         "강원특별자치도 고성군",
         "강원 고성"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5182000000",
+          "sido": "강원",
+          "sidoFull": "강원특별자치도",
+          "ktoSggCd": "51820",
+          "officialCode": "5182000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5183000000",
@@ -17055,7 +19247,19 @@
         "양양",
         "강원특별자치도 양양군",
         "강원 양양"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5183000000",
+          "sido": "강원",
+          "sidoFull": "강원특별자치도",
+          "ktoSggCd": "51830",
+          "officialCode": "5183000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5200000000",
@@ -17118,7 +19322,19 @@
         "전주",
         "전북특별자치도 전주시",
         "전북 전주"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5211000000",
+          "sido": "전북",
+          "sidoFull": "전북특별자치도",
+          "ktoSggCd": "52110",
+          "officialCode": "5211000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5211100000",
@@ -17214,7 +19430,19 @@
         "군산",
         "전북특별자치도 군산시",
         "전북 군산"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5213000000",
+          "sido": "전북",
+          "sidoFull": "전북특별자치도",
+          "ktoSggCd": "52130",
+          "officialCode": "5213000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5214000000",
@@ -17246,7 +19474,19 @@
         "익산",
         "전북특별자치도 익산시",
         "전북 익산"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5214000000",
+          "sido": "전북",
+          "sidoFull": "전북특별자치도",
+          "ktoSggCd": "52140",
+          "officialCode": "5214000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5218000000",
@@ -17278,7 +19518,19 @@
         "정읍",
         "전북특별자치도 정읍시",
         "전북 정읍"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5218000000",
+          "sido": "전북",
+          "sidoFull": "전북특별자치도",
+          "ktoSggCd": "52180",
+          "officialCode": "5218000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5219000000",
@@ -17316,8 +19568,11 @@
           "regionKey": "kr_jeonbuk_namwon",
           "sido": "전북",
           "sidoFull": "전북특별자치도",
-          "ktoSggCd": "45190",
-          "status": "verify-before-api-call"
+          "ktoSggCd": "52190",
+          "officialCode": "5219000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     },
@@ -17351,7 +19606,19 @@
         "김제",
         "전북특별자치도 김제시",
         "전북 김제"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5221000000",
+          "sido": "전북",
+          "sidoFull": "전북특별자치도",
+          "ktoSggCd": "52210",
+          "officialCode": "5221000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5271000000",
@@ -17389,8 +19656,11 @@
           "regionKey": "kr_jeonbuk_wanju",
           "sido": "전북",
           "sidoFull": "전북특별자치도",
-          "ktoSggCd": "45710",
-          "status": "verify-before-api-call"
+          "ktoSggCd": "52710",
+          "officialCode": "5271000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       },
       "locationCardKey": "kr_jeonbuk_wanju"
@@ -17425,7 +19695,19 @@
         "진안",
         "전북특별자치도 진안군",
         "전북 진안"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5272000000",
+          "sido": "전북",
+          "sidoFull": "전북특별자치도",
+          "ktoSggCd": "52720",
+          "officialCode": "5272000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5273000000",
@@ -17463,8 +19745,11 @@
           "regionKey": "kr_jeonbuk_muju",
           "sido": "전북",
           "sidoFull": "전북특별자치도",
-          "ktoSggCd": "45730",
-          "status": "verify-before-api-call"
+          "ktoSggCd": "52730",
+          "officialCode": "5273000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       },
       "locationCardKey": "kr_jeonbuk_muju"
@@ -17499,7 +19784,19 @@
         "장수",
         "전북특별자치도 장수군",
         "전북 장수"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5274000000",
+          "sido": "전북",
+          "sidoFull": "전북특별자치도",
+          "ktoSggCd": "52740",
+          "officialCode": "5274000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5275000000",
@@ -17531,7 +19828,19 @@
         "임실",
         "전북특별자치도 임실군",
         "전북 임실"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5275000000",
+          "sido": "전북",
+          "sidoFull": "전북특별자치도",
+          "ktoSggCd": "52750",
+          "officialCode": "5275000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5277000000",
@@ -17563,7 +19872,19 @@
         "순창",
         "전북특별자치도 순창군",
         "전북 순창"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5277000000",
+          "sido": "전북",
+          "sidoFull": "전북특별자치도",
+          "ktoSggCd": "52770",
+          "officialCode": "5277000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5279000000",
@@ -17595,7 +19916,19 @@
         "고창",
         "전북특별자치도 고창군",
         "전북 고창"
-      ]
+      ],
+      "providerMappings": {
+        "kto": {
+          "regionKey": "kr_admin_5279000000",
+          "sido": "전북",
+          "sidoFull": "전북특별자치도",
+          "ktoSggCd": "52790",
+          "officialCode": "5279000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
+        }
+      }
     },
     {
       "regionId": "kr_admin_5280000000",
@@ -17633,8 +19966,11 @@
           "regionKey": "kr_jeonbuk_buan",
           "sido": "전북",
           "sidoFull": "전북특별자치도",
-          "ktoSggCd": "45800",
-          "status": "verify-before-api-call"
+          "ktoSggCd": "52800",
+          "officialCode": "5280000000",
+          "codeBasis": "official-legal-dong-code-prefix-5",
+          "status": "ready",
+          "statusReason": ""
         }
       }
     }

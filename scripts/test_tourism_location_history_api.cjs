@@ -218,6 +218,89 @@ async function writeSnapshotFixtures(tempRoot) {
   );
 }
 
+function shiftYearMonth(yearMonth, offset) {
+  const date = new Date(Date.UTC(
+    Number(yearMonth.slice(0, 4)),
+    Number(yearMonth.slice(4, 6)) - 1 + offset,
+    1
+  ));
+  return `${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function periodSummaryFixture(startYearMonth, endYearMonth, visitorCount, digestCharacter) {
+  const broadRegions = Array.from({ length: 16 }, (_, index) => ({
+    sourceProvinceName: `테스트광역${index + 1}`,
+    sourceLocalName: null,
+    visitorCount: 10_000_000 + index,
+    provinceVisitorCount: 10_000_000 + index,
+    provinceNationalSharePct: 5,
+    nationalSharePct: 5,
+    localWithinProvinceSharePct: null,
+    mappingStatus: "exact",
+    currentRegionKey: `kr_fixture_broad_${index + 1}`,
+    historicalRegionKey: null
+  }));
+  const localRegions = Array.from({ length: 220 }, (_, index) => ({
+    sourceProvinceName: index === 0 ? "경상남도" : `테스트광역${(index % 16) + 1}`,
+    sourceLocalName: index === 0 ? "산청군" : `테스트기초${index + 1}`,
+    visitorCount: index === 0 ? visitorCount : 100_000 + index,
+    provinceVisitorCount: index === 0 ? 166_000_000 : 10_000_000 + (index % 16),
+    provinceNationalSharePct: 5,
+    localWithinProvinceSharePct: 1,
+    mappingStatus: "exact",
+    currentRegionKey: index === 0 ? SANCHEONG_REGION_KEY : `kr_fixture_local_${index + 1}`,
+    historicalRegionKey: null
+  }));
+  const nationalMonthlyTrend = Array.from({ length: 12 }, (_, index) => ({
+    yearMonth: shiftYearMonth(startYearMonth, index),
+    sourceProvinceName: "전국",
+    residentVisitors: 100_000_000 + index,
+    nonResidentVisitors: 200_000_000 + index,
+    totalVisitors: 300_000_000 + index * 2
+  }));
+  return {
+    schemaVersion: 1,
+    adapter: "kto-datalab-download-v1",
+    status: "ok",
+    collectedAt: "2026-08-28T01:50:15.000Z",
+    period: { startYearMonth, endYearMonth, monthCount: 12 },
+    source: {
+      label: "한국관광 데이터랩 공식 다운로드",
+      archiveSha256: digestCharacter.repeat(64)
+    },
+    broadRegions,
+    localRegions,
+    nationalMonthlyTrend,
+    quality: {
+      status: "complete",
+      broadRegionCount: broadRegions.length,
+      localRegionCount: localRegions.length,
+      trendMonthCount: nationalMonthlyTrend.length
+    },
+    policy: {
+      scoreApplied: false,
+      monthlySigunguHistoryAvailable: false,
+      compatibleWithVisitorMonthlyCache: false,
+      missingIsNotZero: true
+    }
+  };
+}
+
+async function writePeriodSummaryFixtures(tempRoot) {
+  const directory = path.join(tempRoot, "tourism_data", "period_summaries");
+  await fsp.mkdir(directory, { recursive: true });
+  const fixtures = [
+    ["202307", "202406", 7_486_290, "a"],
+    ["202407", "202506", 7_332_132, "b"],
+    ["202507", "202606", 7_594_654, "c"]
+  ];
+  await Promise.all(fixtures.map(async ([startYearMonth, endYearMonth, visitorCount, digestCharacter]) => {
+    const fileName = `kto-datalab-download-v1__${startYearMonth}__${endYearMonth}.json`;
+    const snapshot = periodSummaryFixture(startYearMonth, endYearMonth, visitorCount, digestCharacter);
+    await fsp.writeFile(path.join(directory, fileName), `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+  }));
+}
+
 async function freePort() {
   const server = net.createServer();
   server.listen(0, "127.0.0.1");
@@ -305,6 +388,7 @@ async function main() {
 
   const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "glamping-tourism-location-api-"));
   await writeSnapshotFixtures(tempRoot);
+  await writePeriodSummaryFixtures(tempRoot);
   const output = [];
   let externalRequestCount = 0;
   const trapServer = http.createServer((req, res) => {
@@ -332,6 +416,7 @@ async function main() {
       GLAMPING_B2B_USER: TEST_B2B_USER,
       GLAMPING_B2B_PASSWORD: TEST_B2B_PASSWORD,
       GLAMPING_B2B_ENABLED: "1",
+      TOURISM_VISITOR_MONTHLY_SYNC_ENABLED: "0",
       DATA_GO_KR_VISITOR_SERVICE_KEY: "test-visitor-key",
       DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY: "test-demand-strength-key",
       KTO_TOURISM_VISITOR_ENDPOINT: `http://127.0.0.1:${trapPort}/visitor`,
@@ -360,6 +445,15 @@ async function main() {
     assert.equal(forbidden.response.status, 403);
 
     const adminCookie = await login(baseUrl, TEST_ADMIN_USER, TEST_ADMIN_PASSWORD);
+    const runDetail = await getJson(
+      baseUrl,
+      `/api/runs/${encodeURIComponent(SANCHEONG_RUN_ID)}`,
+      adminCookie
+    );
+    assert.equal(runDetail.response.status, 200, JSON.stringify(runDetail.body));
+    assert.equal(runDetail.body.tourismVisitors.status, "unavailable");
+    assert.equal(runDetail.body.tourismVisitors.reason, "monthly_cache_missing");
+
     const missingSelector = await getJson(baseUrl, "/api/tourism-data/location-history", adminCookie);
     assert.equal(missingSelector.response.status, 400);
 
@@ -386,6 +480,36 @@ async function main() {
     );
     assert.equal(injectedVisitorRefresh.response.status, 400);
     assert.match(injectedVisitorRefresh.body.error, /인증키/);
+
+    const injectedMonthlySync = await postJson(
+      baseUrl,
+      "/api/tourism-data/visitors/monthly-sync",
+      { serviceKey: "forbidden" },
+      adminCookie
+    );
+    assert.equal(injectedMonthlySync.response.status, 400);
+    assert.match(injectedMonthlySync.body.error, /인증키/);
+
+    const disabledMonthlySync = await postJson(
+      baseUrl,
+      "/api/tourism-data/visitors/monthly-sync",
+      {},
+      adminCookie
+    );
+    assert.equal(disabledMonthlySync.response.status, 200);
+    assert.equal(disabledMonthlySync.body.status, "disabled");
+    assert.equal(disabledMonthlySync.body.reason, "monthly_sync_disabled");
+
+    const cacheOnlyVisitorRefresh = await postJson(
+      baseUrl,
+      "/api/tourism-data/visitors/history",
+      { regionKeys: [SANCHEONG_REGION_KEY], months: 36 },
+      adminCookie
+    );
+    assert.equal(cacheOnlyVisitorRefresh.response.status, 200, JSON.stringify(cacheOnlyVisitorRefresh.body));
+    assert.equal(cacheOnlyVisitorRefresh.body.maintenance.status, "disabled");
+    assert.equal(cacheOnlyVisitorRefresh.body.tourismVisitorHistory.collection.mode, "cache_only");
+    assert.equal(cacheOnlyVisitorRefresh.body.tourismVisitorHistory.collection.networkAttemptedMonths, 0);
 
     const injectedDemandStrengthRefresh = await postJson(
       baseUrl,
@@ -425,6 +549,27 @@ async function main() {
     assert.equal(byRegionKey.body.cache.mode, "cache_only");
     assert.equal(byRegionKey.body.cache.requestedMonths, 36);
     assert.equal(byRegionKey.body.cache.externalRequestsAttempted, 0);
+    assert.equal(byRegionKey.body.tourismVisitorPeriodSummary.ok, true);
+    assert.equal(byRegionKey.body.tourismVisitorPeriodSummary.status, "ok");
+    assert.equal(byRegionKey.body.tourismVisitorPeriodSummary.snapshots.length, 3);
+    assert.deepEqual(
+      byRegionKey.body.tourismVisitorPeriodSummary.snapshots.map((snapshot) => snapshot.visitorCount),
+      [7_486_290, 7_332_132, 7_594_654]
+    );
+    assert.deepEqual(byRegionKey.body.tourismVisitorPeriodSummary.latest.period, {
+      startYearMonth: "202507",
+      endYearMonth: "202606",
+      monthCount: 12
+    });
+    assert.equal(byRegionKey.body.tourismVisitorPeriodSummary.comparison.status, "ready");
+    assert.equal(byRegionKey.body.tourismVisitorPeriodSummary.comparison.changePercent, 3.58);
+    assert.equal(
+      byRegionKey.body.tourismVisitorPeriodSummary.source.label,
+      "한국관광 데이터랩 공식 다운로드"
+    );
+    assert.equal(byRegionKey.body.tourismVisitorPeriodSummary.policy.missingIsNotZero, true);
+    assert.equal(byRegionKey.body.cache.visitorPeriodSummary.snapshotCount, 3);
+    assert.equal(byRegionKey.body.cache.visitorPeriodSummary.externalRequestsAttempted, 0);
     assert.equal(byRegionKey.body.tourismVisitorHistory.collection.mode, "cache_only");
     assert.equal(byRegionKey.body.tourismVisitorHistory.collection.networkAttemptedMonths, 0);
     assert.deepEqual(
@@ -459,6 +604,15 @@ async function main() {
     assert.equal(byRegionKey.body.naverKeyword.competition, "높음");
     assert.equal(byRegionKey.body.naverKeyword.updatedAt, "2026-06-27T02:17:37.940Z");
     assert.equal(byRegionKey.body.naverKeyword.metric.totalSearchVolume, 2440);
+
+    const tourismStatus = await getJson(baseUrl, "/api/tourism-data/status", adminCookie);
+    assert.equal(tourismStatus.response.status, 200, JSON.stringify(tourismStatus.body));
+    assert.equal(tourismStatus.body.visitorPeriodSummary.status, "ready");
+    assert.equal(tourismStatus.body.visitorPeriodSummary.snapshotCount, 3);
+    assert.equal(tourismStatus.body.visitorPeriodSummary.latest.period.endYearMonth, "202606");
+    assert.equal(tourismStatus.body.visitorMonthlySync.enabled, false);
+    assert.equal(tourismStatus.body.visitorMonthlySync.running, false);
+    assert.equal(tourismStatus.body.visitorMonthlySync.policy.pageOrCompanyRequestTriggersNetwork, false);
 
     const byRegionName = await getJson(
       baseUrl,

@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const path = require("node:path");
+const crypto = require("node:crypto");
 
 const DEFAULT_SOURCE_DEFS = [
   {
@@ -56,6 +57,12 @@ const VISITOR_HISTORY_DEFAULT_MONTHS = 36;
 const VISITOR_HISTORY_MAX_MONTHS = 36;
 const VISITOR_HISTORY_DEFAULT_CONCURRENCY = 2;
 const VISITOR_HISTORY_MAX_CONCURRENCY = 4;
+const VISITOR_ROLLING_MONTHS = 12;
+const VISITOR_CATEGORY_LABELS = Object.freeze({
+  "1": "현지인",
+  "2": "외지인",
+  "3": "외국인"
+});
 const VISITOR_OUTLOOK_MODEL_VERSION = "visitor-outlook-v1";
 const VISITOR_OUTLOOK_SCORE_MINIMUMS = Object.freeze({
   minimumCompleteMonths: 24,
@@ -153,6 +160,11 @@ function latestClosedYearMonth(now = new Date()) {
   const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
   kst.setUTCDate(1);
   kst.setUTCMonth(kst.getUTCMonth() - 1);
+  return `${kst.getUTCFullYear()}${String(kst.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function currentKstYearMonth(now = new Date()) {
+  const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
   return `${kst.getUTCFullYear()}${String(kst.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
@@ -280,6 +292,7 @@ function createCollector(options = {}) {
   const dataDir = options.dataDir || rootDir;
   const tourismDataDir = options.tourismDataDir || path.join(dataDir, "tourism_data");
   const cacheDir = path.join(tourismDataDir, "cache");
+  const visitorEvidenceDir = path.join(tourismDataDir, "evidence", "visitors");
   const logFile = path.join(tourismDataDir, "collections.jsonl");
   const regionMapFile = options.regionMapFile || path.join(webDir, "data", "tourism_region_map.json");
 
@@ -497,12 +510,19 @@ function createCollector(options = {}) {
     if (current?.status !== "ok") return candidate?.status === "ok";
     if (candidate?.status !== "ok") return false;
     const candidateByRegion = new Map((candidate.allRegions || []).map((region) => [region.regionKey, region]));
-    let improved = false;
+    let improved = !current?.evidence?.evidenceId;
     for (const currentRegion of current.allRegions || []) {
       const candidateRegion = candidateByRegion.get(currentRegion.regionKey);
       const currentComplete = currentRegion?.quality?.status === "complete";
       const candidateComplete = candidateRegion?.quality?.status === "complete";
       if (currentComplete && !candidateComplete) return false;
+      if (currentComplete && candidateComplete) {
+        const currentCategoriesStored = currentRegion?.categoryVisitorDays
+          && [...VISITOR_CATEGORY_CODES].every((category) => Number.isFinite(Number(currentRegion.categoryVisitorDays[category])));
+        const candidateCategoriesStored = candidateRegion?.categoryVisitorDays
+          && [...VISITOR_CATEGORY_CODES].every((category) => Number.isFinite(Number(candidateRegion.categoryVisitorDays[category])));
+        if (!currentCategoriesStored && candidateCategoriesStored) improved = true;
+      }
       if (!currentComplete && candidateComplete) improved = true;
       if (!currentComplete && !candidateComplete) {
         const currentObservedDays = Number(currentRegion?.observedDays || 0);
@@ -512,6 +532,53 @@ function createCollector(options = {}) {
       }
     }
     return improved;
+  }
+
+  async function writeVisitorEvidence({ range = {}, rows = [], pageCount = 0, totalCount = 0, collectedAt = "" } = {}) {
+    const payload = {
+      schemaVersion: 1,
+      source: "visitors",
+      adapter: VISITOR_ADAPTER_VERSION,
+      collectedAt,
+      yearMonth: range.yearMonth,
+      request: {
+        operation: "locgoRegnVisitrDDList",
+        startYmd: range.startYmd,
+        endYmd: range.endYmd,
+        requestGrain: "month_all_regions",
+        pageCount
+      },
+      response: {
+        totalCount,
+        receivedRowCount: rows.length,
+        rows
+      },
+      security: {
+        serviceKeyStored: false,
+        requestUrlStored: false
+      }
+    };
+    const serialized = JSON.stringify(payload);
+    const sha256 = crypto.createHash("sha256").update(serialized).digest("hex");
+    const evidenceId = `visitor-${range.yearMonth}-${sha256.slice(0, 16)}`;
+    const fileName = `${evidenceId}.json`;
+    const filePath = path.join(visitorEvidenceDir, fileName);
+    const tempPath = `${filePath}.${process.pid}.tmp`;
+    await fsp.mkdir(visitorEvidenceDir, { recursive: true });
+    try {
+      await fsp.access(filePath, fs.constants.F_OK);
+    } catch {
+      await fsp.writeFile(tempPath, JSON.stringify(payload, null, 2), "utf8");
+      await fsp.rename(tempPath, filePath);
+    }
+    return {
+      status: "stored",
+      evidenceId,
+      sha256,
+      relativePath: path.relative(tourismDataDir, filePath).replace(/\\/g, "/"),
+      rowCount: rows.length,
+      serviceKeyStored: false
+    };
   }
 
   async function writeVisitorSnapshot(snapshot = {}) {
@@ -528,7 +595,8 @@ function createCollector(options = {}) {
       yearMonth: snapshot.yearMonth,
       status: snapshot.status,
       rowCount: snapshot.quality?.validRowCount || 0,
-      regionCount: snapshot.allRegions?.length || 0
+      regionCount: snapshot.allRegions?.length || 0,
+      evidenceId: snapshot.evidence?.evidenceId || ""
     })}\n`, "utf8");
     return filePath;
   }
@@ -740,6 +808,9 @@ function createCollector(options = {}) {
         coverageRate: range.expectedDays ? Number((observedDays / range.expectedDays).toFixed(4)) : null,
         averageDailyVisitors: qualityStatus === "complete" ? Math.round(visitorDays / observedDays) : null,
         visitorDays: qualityStatus === "complete" ? Math.round(visitorDays) : null,
+        categoryVisitorDays: qualityStatus === "complete"
+          ? Object.fromEntries(Object.entries(categoryTotals).map(([category, total]) => [category, Math.round(total)]))
+          : null,
         categoryDailyAverages: qualityStatus === "complete"
           ? Object.fromEntries(Object.entries(categoryTotals).map(([category, total]) => [category, Math.round(total / observedDays)]))
           : {},
@@ -823,6 +894,14 @@ function createCollector(options = {}) {
         categories: ["현지인", "외지인", "외국인"]
       },
       quality: snapshot.quality || {},
+      evidence: snapshot.evidence || {
+        status: cache.hit ? "legacy_cache_without_evidence_reference" : "not_stored",
+        evidenceId: "",
+        sha256: "",
+        relativePath: "",
+        rowCount: 0,
+        serviceKeyStored: false
+      },
       regions,
       unmatchedRegions: requested.unmatchedNames,
       cache: {
@@ -833,7 +912,9 @@ function createCollector(options = {}) {
         scoreApplied: false,
         noSidoSigunguAggregation: true,
         missingIsNotZero: true,
-        dailyUniqueVisitorCaveat: true
+        dailyUniqueVisitorCaveat: true,
+        monthlyCacheSharedAcrossRegions: true,
+        requestGrain: "month_all_regions"
       }
     };
   }
@@ -842,10 +923,30 @@ function createCollector(options = {}) {
     const range = monthDateRange(input.yearMonth || input.period || input.baseYm);
     const ttlHours = Number.isFinite(Number(input.ttlHours)) ? Number(input.ttlHours) : DEFAULT_TTL_HOURS;
     const force = Boolean(input.force);
+    const cacheOnly = Boolean(input.cacheOnly);
     const regionMap = await readRegionMap();
+    const cached = await readVisitorCache(range.yearMonth);
+    const compatibleCache = visitorCacheCompatible(cached, regionMap);
+    if (cacheOnly) {
+      if (compatibleCache) {
+        return publicVisitorSnapshot(cached.data, regionMap, input, { hit: true, ttlHours });
+      }
+      return publicVisitorSnapshot({
+        status: "unavailable",
+        reason: "monthly_cache_missing",
+        yearMonth: range.yearMonth,
+        period: range,
+        collectedAt: "",
+        allRegions: []
+      }, regionMap, input, { hit: false, ttlHours });
+    }
     const config = sourceConfig(DEFAULT_SOURCE_DEFS[0], env);
     const serviceKey = sourceServiceKey(config, env);
     const configStatus = visitorEndpointStatus(config, serviceKey);
+    const immutableClosedMonth = range.yearMonth <= latestClosedYearMonth(currentDate());
+    if (!force && compatibleCache && (immutableClosedMonth || cacheFresh(cached.data, ttlHours))) {
+      return publicVisitorSnapshot(cached.data, regionMap, input, { hit: true, ttlHours });
+    }
     if (configStatus !== "ready") {
       return publicVisitorSnapshot({
         status: "unavailable",
@@ -855,14 +956,6 @@ function createCollector(options = {}) {
         collectedAt: "",
         allRegions: []
       }, regionMap, input, { hit: false, ttlHours });
-    }
-
-    const cached = await readVisitorCache(range.yearMonth);
-    const immutableClosedMonth = range.yearMonth <= latestClosedYearMonth(currentDate());
-    if (!force
-      && visitorCacheCompatible(cached, regionMap)
-      && (immutableClosedMonth || cacheFresh(cached.data, ttlHours))) {
-      return publicVisitorSnapshot(cached.data, regionMap, input, { hit: true, ttlHours });
     }
 
     const pageSize = Math.max(100, Math.min(10000, Math.round(numberEnv("KTO_TOURISM_VISITOR_PAGE_SIZE", VISITOR_PAGE_SIZE, env))));
@@ -944,14 +1037,16 @@ function createCollector(options = {}) {
       }, regionMap, input, { hit: false, ttlHours });
     }
 
-    const normalized = normalizeVisitorRows(rows.slice(0, totalCount), range, regionMap);
+    const rawRows = rows.slice(0, totalCount);
+    const normalized = normalizeVisitorRows(rawRows, range, regionMap);
+    const collectedAt = currentDate().toISOString();
     const snapshot = {
       schemaVersion: 1,
       adapter: VISITOR_ADAPTER_VERSION,
       regionMapVersion: regionMap.version || "",
       status: "ok",
       reason: "",
-      collectedAt: currentDate().toISOString(),
+      collectedAt,
       yearMonth: range.yearMonth,
       period: range,
       quality: {
@@ -968,6 +1063,28 @@ function createCollector(options = {}) {
     };
     if (visitorCacheCompatible(cached, regionMap) && !visitorSnapshotImproves(cached.data, snapshot)) {
       return publicVisitorSnapshot(cached.data, regionMap, input, { hit: true, ttlHours });
+    }
+    try {
+      snapshot.evidence = await writeVisitorEvidence({
+        range,
+        rows: rawRows,
+        pageCount,
+        totalCount,
+        collectedAt
+      });
+    } catch {
+      if (visitorCacheCompatible(cached, regionMap)) {
+        return publicVisitorSnapshot(cached.data, regionMap, input, { hit: true, ttlHours });
+      }
+      return publicVisitorSnapshot({
+        status: "error",
+        reason: "evidence_write_failed",
+        yearMonth: range.yearMonth,
+        period: range,
+        collectedAt: "",
+        quality: { pageCount, totalCount, receivedRows: rows.length },
+        allRegions: []
+      }, regionMap, input, { hit: false, ttlHours });
     }
     const filePath = await writeVisitorSnapshot(snapshot);
     return publicVisitorSnapshot(snapshot, regionMap, input, { hit: false, ttlHours, filePath });
@@ -1075,6 +1192,14 @@ function createCollector(options = {}) {
       qualityStatus: rowQualityStatus || (snapshot.status === "ok" ? "no_observation" : snapshot.status || "unavailable"),
       averageDailyVisitors: complete ? Number(row.averageDailyVisitors) : null,
       visitorDays: complete && Number.isFinite(row.visitorDays) ? Number(row.visitorDays) : null,
+      categoryVisitorDays: complete
+        && row?.categoryVisitorDays
+        && [...VISITOR_CATEGORY_CODES].every((category) => Number.isFinite(Number(row.categoryVisitorDays[category])))
+        ? Object.fromEntries([...VISITOR_CATEGORY_CODES].map((category) => [
+          category,
+          Number.isFinite(Number(row.categoryVisitorDays[category])) ? Number(row.categoryVisitorDays[category]) : null
+        ]))
+        : null,
       observedDays: Number.isFinite(row?.observedDays) ? Number(row.observedDays) : 0,
       expectedDays: Number.isFinite(row?.expectedDays) ? Number(row.expectedDays) : monthDateRange(monthResult.yearMonth).expectedDays,
       coverageRate: Number.isFinite(row?.coverageRate) ? Number(row.coverageRate) : 0,
@@ -1094,6 +1219,141 @@ function createCollector(options = {}) {
       partialMonths,
       missingMonths,
       coverageRate: expectedMonths ? roundNumber(completeMonths / expectedMonths, 4) : 0
+    };
+  }
+
+  function rollingVisitorMonth(point = null, yearMonth = "", missingReason = "monthly_observation_missing") {
+    const complete = point?.status === "complete" && Number.isFinite(Number(point.visitorDays));
+    const partial = point?.status === "partial";
+    const categoryVisitorDays = complete
+      && point?.categoryVisitorDays
+      && [...VISITOR_CATEGORY_CODES].every((category) => Number.isFinite(Number(point.categoryVisitorDays[category])))
+      ? Object.fromEntries([...VISITOR_CATEGORY_CODES].map((category) => [category, Number(point.categoryVisitorDays[category])]))
+      : null;
+    return {
+      yearMonth,
+      status: complete ? "complete" : partial ? "partial" : "missing",
+      reason: complete ? "" : String(point?.reason || missingReason),
+      visitorCount: complete ? Number(point.visitorDays) : null,
+      categoryVisitorCounts: categoryVisitorDays,
+      observedDays: Number.isFinite(Number(point?.observedDays)) ? Number(point.observedDays) : 0,
+      expectedDays: Number.isFinite(Number(point?.expectedDays))
+        ? Number(point.expectedDays)
+        : monthDateRange(yearMonth).expectedDays,
+      collectedAt: String(point?.collectedAt || "")
+    };
+  }
+
+  function rollingVisitorWindow(series = [], endYearMonth = "", key = "recent12", missingReason = "monthly_observation_missing") {
+    const months = visitorHistoryMonths(endYearMonth, VISITOR_ROLLING_MONTHS);
+    const byMonth = new Map(series.map((point) => [point.yearMonth, point]));
+    const monthly = months.map((yearMonth) => rollingVisitorMonth(byMonth.get(yearMonth), yearMonth, missingReason));
+    const completeMonths = monthly.filter((point) => point.status === "complete").length;
+    const partialMonths = monthly.filter((point) => point.status === "partial").length;
+    const missingMonths = VISITOR_ROLLING_MONTHS - completeMonths - partialMonths;
+    const ready = completeMonths === VISITOR_ROLLING_MONTHS;
+    const categoryReady = ready && monthly.every((point) => point.categoryVisitorCounts);
+    const totalVisitors = ready
+      ? Math.round(monthly.reduce((sum, point) => sum + point.visitorCount, 0))
+      : null;
+    const categoryTotals = categoryReady
+      ? Object.fromEntries([...VISITOR_CATEGORY_CODES].map((category) => [
+        category,
+        Math.round(monthly.reduce((sum, point) => sum + point.categoryVisitorCounts[category], 0))
+      ]))
+      : null;
+    return {
+      key,
+      status: ready ? "ready" : "incomplete",
+      reason: ready ? "" : partialMonths ? "partial_months_present" : "monthly_observations_missing",
+      period: {
+        startYearMonth: months[0],
+        endYearMonth: months.at(-1),
+        months: VISITOR_ROLLING_MONTHS
+      },
+      coverage: {
+        expectedMonths: VISITOR_ROLLING_MONTHS,
+        completeMonths,
+        partialMonths,
+        missingMonths,
+        coverageRate: roundNumber(completeMonths / VISITOR_ROLLING_MONTHS, 4),
+        completeYearMonths: monthly.filter((point) => point.status === "complete").map((point) => point.yearMonth),
+        partialYearMonths: monthly.filter((point) => point.status === "partial").map((point) => point.yearMonth),
+        missingYearMonths: monthly.filter((point) => point.status === "missing").map((point) => point.yearMonth)
+      },
+      totalVisitors,
+      categoryTotals: {
+        status: categoryReady ? "ready" : ready ? "unavailable" : "pending_window_completion",
+        reason: categoryReady ? "" : ready ? "category_totals_not_stored_for_all_months" : "window_incomplete",
+        categories: Object.fromEntries([...VISITOR_CATEGORY_CODES].map((category) => [category, {
+          label: VISITOR_CATEGORY_LABELS[category],
+          visitorCount: categoryTotals ? categoryTotals[category] : null
+        }]))
+      },
+      monthly
+    };
+  }
+
+  function visitorRolling12(series = [], now = currentDate()) {
+    const targetEndYearMonth = currentKstYearMonth(now);
+    const latestComplete = [...series]
+      .filter((point) => point.status === "complete" && Number.isFinite(Number(point.visitorDays)))
+      .sort((left, right) => left.yearMonth.localeCompare(right.yearMonth))
+      .at(-1) || null;
+    const confirmedEndYearMonth = latestComplete?.yearMonth || latestClosedYearMonth(now);
+    const previousEndYearMonth = shiftYearMonth(confirmedEndYearMonth, -VISITOR_ROLLING_MONTHS);
+    const target = rollingVisitorWindow(
+      series,
+      targetEndYearMonth,
+      "target",
+      "current_month_or_api_observation_pending"
+    );
+    const confirmed = rollingVisitorWindow(series, confirmedEndYearMonth, "confirmed");
+    const previous = rollingVisitorWindow(series, previousEndYearMonth, "previous");
+    let comparison = {
+      status: "insufficient_data",
+      reason: confirmed.status !== "ready" ? "confirmed_recent12_incomplete" : "previous12_incomplete",
+      currentTotalVisitors: confirmed.totalVisitors,
+      previousTotalVisitors: previous.totalVisitors,
+      changeVisitors: null,
+      changeRate: null,
+      changePercent: null
+    };
+    if (confirmed.status === "ready" && previous.status === "ready") {
+      if (Number(previous.totalVisitors) > 0) {
+        const changeVisitors = confirmed.totalVisitors - previous.totalVisitors;
+        const changeRate = changeVisitors / previous.totalVisitors;
+        comparison = {
+          status: "ready",
+          reason: "",
+          currentTotalVisitors: confirmed.totalVisitors,
+          previousTotalVisitors: previous.totalVisitors,
+          changeVisitors,
+          changeRate: roundNumber(changeRate, 6),
+          changePercent: roundNumber(changeRate * 100, 2)
+        };
+      } else {
+        comparison.reason = "previous12_total_not_positive";
+      }
+    }
+    return {
+      schemaVersion: 1,
+      basis: "calendar_month_rolling_12",
+      targetYearMonth: targetEndYearMonth,
+      latestCompleteYearMonth: latestComplete?.yearMonth || "",
+      target,
+      confirmed,
+      previous,
+      comparison,
+      policy: {
+        currentMonthIncludedInTarget: true,
+        confirmedEndsAtLatestCompleteMonth: true,
+        previousWindowNonOverlapping: true,
+        completeMonthsRequired: VISITOR_ROLLING_MONTHS,
+        incompleteWindowTotalIsNull: true,
+        missingIsNotZero: true,
+        categoryTotalsPreservedSeparately: true
+      }
     };
   }
 
@@ -1374,6 +1634,7 @@ function createCollector(options = {}) {
         latestAvailable,
         yoy,
         recent12VsPrevious12,
+        rolling12: visitorRolling12(series, currentDate()),
         visitorOutlookScore: visitorOutlook(series, coverage, latestMonthSnapshot, endYearMonth)
       };
     });
@@ -1399,10 +1660,13 @@ function createCollector(options = {}) {
         startYearMonth: months[0],
         endYearMonth,
         months: monthCount,
-        latestClosedYearMonth: closedYearMonth
+        latestClosedYearMonth: closedYearMonth,
+        rollingTargetYearMonth: currentKstYearMonth(currentDate())
       },
       collection: {
         mode: force ? "force_refresh" : collectMissing ? "backfill_missing" : "cache_only",
+        requestGrain: "month_all_regions",
+        regionRequestsPerMonth: 0,
         concurrency,
         requestedMonths: months.length,
         cacheHitMonths,
@@ -1435,6 +1699,8 @@ function createCollector(options = {}) {
         partialMonthsExcludedFromMetrics: true,
         failedRefreshDoesNotOverwriteCompleteCache: true,
         retryIncompleteOnBackfill: retryIncomplete,
+        monthlyCacheSharedAcrossRegions: true,
+        rolling12RequiresCompleteMonths: VISITOR_ROLLING_MONTHS,
         coverageRateUnit: "ratio_0_to_1",
         scoreMinimums: { ...VISITOR_OUTLOOK_SCORE_MINIMUMS },
         scoreComponents: [
@@ -2588,10 +2854,12 @@ module.exports = {
   sourceServiceKey,
   normalizeYearMonth,
   latestClosedYearMonth,
+  currentKstYearMonth,
   monthDateRange,
   shiftYearMonth,
   visitorHistoryMonths,
   VISITOR_ADAPTER_VERSION,
+  VISITOR_ROLLING_MONTHS,
   VISITOR_OUTLOOK_MODEL_VERSION,
   VISITOR_OUTLOOK_SCORE_MINIMUMS,
   DEMAND_STRENGTH_ADAPTER_VERSION,

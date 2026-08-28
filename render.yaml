@@ -22,6 +22,8 @@ services:
         value: /var/data/outputs
       - key: CONFIG_DIR
         value: /var/data/config
+      - key: TOURISM_VISITOR_MONTHLY_SYNC_ENABLED
+        value: 1
       - key: APP_PIN
         sync: false
       - key: DATA_GO_KR_SERVICE_KEY

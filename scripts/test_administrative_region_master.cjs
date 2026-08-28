@@ -65,6 +65,41 @@ tourism.regions.forEach((region) => {
 assert.equal(master.links.tourismMappedCount, tourism.regions.length);
 assert.deepEqual(master.links.tourismPending, []);
 
+assert.equal(tourism.version, "tourism-region-map-v0.2");
+assert.equal(tourism.summary.analysisRegionCount, activeLocal.length);
+assert.equal(tourism.summary.regionCount, tourism.regions.length);
+assert.equal(tourism.regions.length, 229, "현행 분석지역 229곳을 관광 지역표에 보존해야 합니다.");
+assert.equal(new Set(tourism.regions.map((region) => region.regionKey)).size, tourism.regions.length, "관광 regionKey는 고유해야 합니다.");
+assert.equal(new Set(tourism.regions.map((region) => region.officialCode)).size, tourism.regions.length, "관광 공식코드는 고유해야 합니다.");
+tourism.regions.forEach((region) => {
+  assert.match(region.officialCode, /^\d{10}$/);
+  assert.match(region.ktoSggCd, /^\d{5}$/);
+  assert.equal(region.ktoSggCd, region.officialCode.slice(0, 5), `${region.regionKey}는 법정동코드 앞 5자리와 일치해야 합니다.`);
+  const unit = activeLocal.find((entry) => entry.officialCode === region.officialCode);
+  assert.ok(unit, `${region.regionKey}가 현행 분석지역과 연결되지 않았습니다.`);
+  assert.notEqual(unit.unitType, "general_district", `${region.regionKey} 일반구를 관광 분석단위로 자동 활성화하면 안 됩니다.`);
+});
+
+const readyTourism = tourism.regions.filter((region) => !region.codeStatus);
+const pendingTourism = tourism.regions.filter((region) => region.codeStatus);
+assert.equal(readyTourism.length, tourism.summary.readyCount);
+assert.equal(pendingTourism.length, tourism.summary.pendingCount);
+assert.equal(readyTourism.length, 198, "즉시 수집 가능한 지역 수가 달라졌습니다.");
+assert.equal(pendingTourism.length, 31, "행정구역 개편 후 코드 확인이 필요한 지역 수가 달라졌습니다.");
+assert.equal(master.links.tourismReadyCount, readyTourism.length);
+assert.equal(master.links.tourismCodePendingCount, pendingTourism.length);
+assert.ok(pendingTourism.every((region) => region.codeStatus === "administrative-reform-pending"));
+assert.ok(pendingTourism.every((region) => region.codeStatusReason), "보류 지역에는 사유가 필요합니다.");
+assert.equal(pendingTourism.filter((region) => region.sidoFull === "전남광주통합특별시").length, 27);
+assert.deepEqual(
+  pendingTourism.filter((region) => region.sidoFull === "인천광역시").map((region) => region.sigungu).sort((a, b) => a.localeCompare(b, "ko")),
+  ["검단구", "서해구", "영종구", "제물포구"].sort((a, b) => a.localeCompare(b, "ko"))
+);
+assert.equal(tourism.regions.find((region) => region.regionKey === "kr_gangwon_chuncheon")?.ktoSggCd, "51110", "강원특별자치도 현행 코드를 사용해야 합니다.");
+assert.equal(tourism.regions.find((region) => region.regionKey === "kr_jeonbuk_muju")?.ktoSggCd, "52730", "전북특별자치도 현행 코드를 사용해야 합니다.");
+assert.equal(tourism.regions.find((region) => region.regionKey === "kr_gangwon_chuncheon")?.codeStatus, undefined);
+assert.equal(tourism.regions.find((region) => region.regionKey === "kr_jeonbuk_muju")?.codeStatus, undefined);
+
 const linkedCards = active.filter((unit) => unit.locationCardKey);
 assert.equal(linkedCards.length, dictionary.cards.length, "기존 입지카드가 모두 원장에 연결되어야 합니다.");
 dictionary.cards.forEach((card) => {

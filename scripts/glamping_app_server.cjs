@@ -9,6 +9,21 @@ const { URL } = require("node:url");
 const yeogiImportParser = require("./yeogi_import_parser.cjs");
 const { otaProviderFromUrl } = require("./naver_place_ota_observation.cjs");
 const { createCollector: createTourismCollector } = require("./tourism_collector.cjs");
+const { createMonthlyVisitorScheduler } = require("./tourism_visitor_monthly_scheduler.cjs");
+
+function loadOptionalTourismPeriodSummaryModule() {
+  const filePath = path.join(__dirname, "tourism_datalab_period_summary.cjs");
+  try {
+    return { module: require(filePath), reason: "" };
+  } catch (error) {
+    if (error?.code === "MODULE_NOT_FOUND" && !fs.existsSync(filePath)) {
+      return { module: null, reason: "period_summary_module_unavailable" };
+    }
+    return { module: null, reason: "period_summary_module_load_failed" };
+  }
+}
+
+const tourismPeriodSummaryModuleState = loadOptionalTourismPeriodSummaryModule();
 
 const ROOT = path.resolve(__dirname, "..");
 const WEB_DIR = path.join(ROOT, "web");
@@ -107,7 +122,60 @@ const tourismCollector = createTourismCollector({
   dataDir: DATA_DIR,
   tourismDataDir: TOURISM_DATA_DIR
 });
+const TOURISM_VISITOR_MONTHLY_SYNC_ENABLED = process.env.TOURISM_VISITOR_MONTHLY_SYNC_ENABLED === undefined
+  ? HAS_RENDER_DISK
+  : !/^(0|false|off)$/i.test(String(process.env.TOURISM_VISITOR_MONTHLY_SYNC_ENABLED).trim());
+const tourismPeriodSummaryImporterState = (() => {
+  const createImporter = tourismPeriodSummaryModuleState.module?.createPeriodSummaryImporter;
+  if (typeof createImporter !== "function") {
+    return {
+      importer: null,
+      reason: tourismPeriodSummaryModuleState.reason || "period_summary_module_contract_unavailable"
+    };
+  }
+  try {
+    return {
+      importer: createImporter({
+        tourismDataDir: TOURISM_DATA_DIR,
+        regionMasterFile: path.join(WEB_DIR, "data", "region_master.json")
+      }),
+      reason: ""
+    };
+  } catch {
+    return { importer: null, reason: "period_summary_importer_initialization_failed" };
+  }
+})();
+let activeTourismVisitorHistoryPromise = null;
 let activeTourismDemandStrengthHistoryPromise = null;
+
+async function runTourismVisitorHistoryCollection(input = {}) {
+  if (activeTourismVisitorHistoryPromise) {
+    const error = new Error("지역별 방문자수 월별 자료를 이미 갱신하고 있습니다.");
+    error.statusCode = 409;
+    error.code = "tourism_visitor_history_busy";
+    throw error;
+  }
+  const collectionPromise = tourismCollector.collectVisitorHistory(input);
+  activeTourismVisitorHistoryPromise = collectionPromise;
+  try {
+    return await collectionPromise;
+  } finally {
+    if (activeTourismVisitorHistoryPromise === collectionPromise) {
+      activeTourismVisitorHistoryPromise = null;
+    }
+  }
+}
+
+const tourismVisitorMonthlyScheduler = createMonthlyVisitorScheduler({
+  collector: {
+    readRegionMap: (...args) => tourismCollector.readRegionMap(...args),
+    collectVisitorHistory: (input) => runTourismVisitorHistoryCollection(input)
+  },
+  stateFile: path.join(TOURISM_DATA_DIR, "maintenance", "visitor_monthly_sync.json"),
+  enabled: TOURISM_VISITOR_MONTHLY_SYNC_ENABLED,
+  months: 36,
+  concurrency: 2
+});
 let activeCrawlPromise = null;
 let activeCrawlStartedAt = null;
 let activeCrawlEstimate = null;
@@ -15499,6 +15567,244 @@ function unavailableTourismDemandStrengthHistory(reason, status = "unavailable")
   };
 }
 
+const TOURISM_PERIOD_SUMMARY_SOURCE = Object.freeze({
+  label: "한국관광 데이터랩 공식 다운로드"
+});
+const TOURISM_PERIOD_SUMMARY_POLICY = Object.freeze({
+  cacheOnly: true,
+  externalRequestsAllowed: false,
+  externalRequestsAttempted: 0,
+  missingIsNotZero: true,
+  syntheticValuesAllowed: false
+});
+
+function tourismPeriodSummaryNumber(value) {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const number = Number(String(value).replace(/,/g, "").trim());
+  return Number.isFinite(number) ? number : null;
+}
+
+function tourismPeriodSummaryYearMonth(value = "") {
+  const digits = String(value || "").replace(/\D/g, "").slice(0, 6);
+  const month = Number(digits.slice(4, 6));
+  return /^\d{6}$/.test(digits) && month >= 1 && month <= 12 ? digits : "";
+}
+
+function tourismPeriodSummaryMonthCount(startYearMonth = "", endYearMonth = "") {
+  const start = tourismPeriodSummaryYearMonth(startYearMonth);
+  const end = tourismPeriodSummaryYearMonth(endYearMonth);
+  if (!start || !end || start > end) return null;
+  const startIndex = (Number(start.slice(0, 4)) * 12) + Number(start.slice(4, 6));
+  const endIndex = (Number(end.slice(0, 4)) * 12) + Number(end.slice(4, 6));
+  return endIndex - startIndex + 1;
+}
+
+function publicTourismPeriodSummaryRegion(value = {}, fallback = {}) {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    regionKey: String(source.regionKey || fallback.regionKey || ""),
+    name: String(source.name || source.sigungu || fallback.sigungu || ""),
+    fullName: String(source.fullName || source.name || fallback.sigungu || ""),
+    level: String(source.level || (source.unit === "sigungu" ? "local" : "") || ""),
+    sidoKey: String(source.sidoKey || fallback.sidoKey || ""),
+    sido: String(source.sido || fallback.sido || ""),
+    sidoFull: String(source.sidoFull || fallback.sidoFull || ""),
+    sigungu: String(source.sigungu || source.name || fallback.sigungu || ""),
+    areaCd: String(source.areaCd || source.ktoSidoCd || fallback.areaCd || ""),
+    signguCd: String(source.signguCd || source.ktoSggCd || fallback.signguCd || ""),
+    unit: String(source.unit || fallback.unit || "sigungu"),
+    codeStatus: String(source.codeStatus || fallback.codeStatus || "")
+  };
+}
+
+function normalizeTourismPeriodSummarySnapshot(value = {}) {
+  const source = value && typeof value === "object" ? value : {};
+  const periodSource = source.period && typeof source.period === "object" ? source.period : {};
+  const startYearMonth = tourismPeriodSummaryYearMonth(
+    periodSource.startYearMonth || source.startYearMonth || source.periodStartYearMonth
+  );
+  const endYearMonth = tourismPeriodSummaryYearMonth(
+    periodSource.endYearMonth || source.endYearMonth || source.periodEndYearMonth
+  );
+  const suppliedMonthCount = tourismPeriodSummaryNumber(periodSource.monthCount ?? source.monthCount);
+  const calculatedMonthCount = tourismPeriodSummaryMonthCount(startYearMonth, endYearMonth);
+  return {
+    period: {
+      startYearMonth,
+      endYearMonth,
+      monthCount: suppliedMonthCount === null
+        ? calculatedMonthCount
+        : Math.max(1, Math.round(suppliedMonthCount))
+    },
+    visitorCount: tourismPeriodSummaryNumber(source.visitorCount),
+    provinceVisitorCount: tourismPeriodSummaryNumber(source.provinceVisitorCount),
+    provinceNationalSharePct: tourismPeriodSummaryNumber(source.provinceNationalSharePct),
+    localWithinProvinceSharePct: tourismPeriodSummaryNumber(source.localWithinProvinceSharePct),
+    sourceProvinceName: String(source.sourceProvinceName || ""),
+    sourceLocalName: String(source.sourceLocalName || ""),
+    mappingStatus: String(source.mappingStatus || ""),
+    collectedAt: String(source.collectedAt || "")
+  };
+}
+
+function compareTourismPeriodSummarySnapshots(value = {}, latest = null, previous = null) {
+  const source = value && typeof value === "object" ? value : {};
+  const sourceStatus = String(source.status || "");
+  const comparisonAllowed = !sourceStatus || ["ready", "ok", "complete"].includes(sourceStatus);
+  let changeRate = comparisonAllowed ? tourismPeriodSummaryNumber(source.changeRate) : null;
+  let changePercent = comparisonAllowed ? tourismPeriodSummaryNumber(source.changePercent) : null;
+  if (changeRate === null && changePercent !== null) changeRate = changePercent / 100;
+  if (changePercent === null && changeRate !== null) changePercent = changeRate * 100;
+  if (comparisonAllowed
+    && changeRate === null
+    && Number.isFinite(latest?.visitorCount)
+    && Number.isFinite(previous?.visitorCount)
+    && previous.visitorCount !== 0) {
+    changeRate = (latest.visitorCount - previous.visitorCount) / previous.visitorCount;
+    changePercent = changeRate * 100;
+  }
+  const comparable = changeRate !== null && changePercent !== null;
+  return {
+    status: sourceStatus || (comparable ? "ready" : "insufficient_data"),
+    changeRate,
+    changePercent
+  };
+}
+
+function unavailableTourismVisitorPeriodSummary(reason, status = "unavailable", region = {}) {
+  return {
+    ok: false,
+    status,
+    reason,
+    region: publicTourismPeriodSummaryRegion(region),
+    snapshots: [],
+    latest: null,
+    previous: null,
+    comparison: {
+      status: "insufficient_data",
+      changeRate: null,
+      changePercent: null
+    },
+    source: { ...TOURISM_PERIOD_SUMMARY_SOURCE },
+    policy: { ...TOURISM_PERIOD_SUMMARY_POLICY }
+  };
+}
+
+function normalizeTourismVisitorPeriodSummary(value = {}, fallbackRegion = {}) {
+  if (!value || typeof value !== "object") {
+    return unavailableTourismVisitorPeriodSummary("period_summary_cache_missing", "unavailable", fallbackRegion);
+  }
+  const nested = value.summary && typeof value.summary === "object" ? value.summary : {};
+  const rawSnapshots = Array.isArray(value.snapshots)
+    ? value.snapshots
+    : Array.isArray(nested.snapshots)
+      ? nested.snapshots
+      : (Object.keys(nested).length && nested.period ? [nested] : []);
+  const snapshots = rawSnapshots
+    .map(normalizeTourismPeriodSummarySnapshot)
+    .filter((snapshot) => snapshot.period.startYearMonth && snapshot.period.endYearMonth)
+    .sort((left, right) => (
+      left.period.endYearMonth.localeCompare(right.period.endYearMonth)
+      || left.period.startYearMonth.localeCompare(right.period.startYearMonth)
+    ));
+  const latest = value.latest
+    ? normalizeTourismPeriodSummarySnapshot(value.latest)
+    : snapshots.at(-1) || null;
+  const previous = value.previous
+    ? normalizeTourismPeriodSummarySnapshot(value.previous)
+    : snapshots.at(-2) || null;
+  const hasSnapshot = snapshots.length > 0 || Boolean(latest?.period?.endYearMonth);
+  const ok = value.ok === undefined ? hasSnapshot : Boolean(value.ok && hasSnapshot);
+  return {
+    ok,
+    status: String(value.status || (ok ? "ok" : "unavailable")),
+    reason: ok ? "" : String(value.reason || "period_summary_cache_missing"),
+    region: publicTourismPeriodSummaryRegion(value.region || nested.region, fallbackRegion),
+    snapshots,
+    latest,
+    previous,
+    comparison: compareTourismPeriodSummarySnapshots(value.comparison || nested.comparison, latest, previous),
+    source: { ...TOURISM_PERIOD_SUMMARY_SOURCE },
+    policy: {
+      ...(nested.policy && typeof nested.policy === "object" ? nested.policy : {}),
+      ...(value.policy && typeof value.policy === "object" ? value.policy : {}),
+      ...TOURISM_PERIOD_SUMMARY_POLICY
+    }
+  };
+}
+
+async function readTourismVisitorPeriodSummaryCache(region = {}) {
+  const importer = tourismPeriodSummaryImporterState.importer;
+  const readForRegion = importer?.periodSummaryForRegion || importer?.summaryForRegion;
+  if (typeof readForRegion !== "function") {
+    return unavailableTourismVisitorPeriodSummary(
+      tourismPeriodSummaryImporterState.reason || "period_summary_module_contract_unavailable",
+      "unavailable",
+      region
+    );
+  }
+  try {
+    const result = await readForRegion.call(importer, { regionKey: region.regionKey });
+    return normalizeTourismVisitorPeriodSummary(result, region);
+  } catch {
+    return unavailableTourismVisitorPeriodSummary("period_summary_cache_read_failed", "error", region);
+  }
+}
+
+function unavailableTourismVisitorPeriodSummaryStatus(reason, status = "unavailable") {
+  return {
+    ok: false,
+    status,
+    reason,
+    snapshotCount: 0,
+    periods: [],
+    latest: null,
+    policy: { ...TOURISM_PERIOD_SUMMARY_POLICY }
+  };
+}
+
+async function readTourismVisitorPeriodSummaryStatus() {
+  const importer = tourismPeriodSummaryImporterState.importer;
+  if (typeof importer?.status !== "function") {
+    return unavailableTourismVisitorPeriodSummaryStatus(
+      tourismPeriodSummaryImporterState.reason || "period_summary_module_contract_unavailable"
+    );
+  }
+  try {
+    const status = await importer.status();
+    const periods = Array.isArray(status?.periods) ? status.periods : [];
+    const snapshotCount = tourismPeriodSummaryNumber(status?.snapshotCount ?? status?.summaryCount);
+    return {
+      ...status,
+      ok: Boolean(status?.ok),
+      status: String(status?.status || (status?.ok ? "ok" : "unavailable")),
+      reason: String(status?.reason || ""),
+      snapshotCount: Math.max(0, Math.round(snapshotCount || 0)),
+      periods,
+      latest: status?.latest || periods.at(-1) || null,
+      policy: {
+        ...(status?.policy && typeof status.policy === "object" ? status.policy : {}),
+        ...TOURISM_PERIOD_SUMMARY_POLICY
+      }
+    };
+  } catch {
+    return unavailableTourismVisitorPeriodSummaryStatus("period_summary_status_read_failed", "error");
+  }
+}
+
+async function readTourismDataStatus() {
+  const [collectorStatus, visitorPeriodSummary, visitorMonthlySync] = await Promise.all([
+    tourismCollector.status(),
+    readTourismVisitorPeriodSummaryStatus(),
+    tourismVisitorMonthlyScheduler.status()
+  ]);
+  return {
+    ...collectorStatus,
+    visitorPeriodSummary,
+    visitorMonthlySync
+  };
+}
+
 const TOURISM_LOCATION_HISTORY_MONTHS = 36;
 const TOURISM_LOCATION_HISTORY_QUERY_FIELDS = new Set(["regionKey", "regionName"]);
 const TOURISM_LOCATION_HISTORY_FORBIDDEN_QUERY_FIELDS = new Set([
@@ -15892,9 +16198,10 @@ async function readTourismLocationHistoryCache(selector = {}) {
     refresh: false,
     force: false
   };
-  const [tourismVisitorHistory, tourismDemandStrengthHistory] = await Promise.all([
+  const [tourismVisitorHistory, tourismDemandStrengthHistory, tourismVisitorPeriodSummary] = await Promise.all([
     tourismCollector.collectVisitorHistory(cacheInput),
-    tourismCollector.collectDemandStrengthHistory(cacheInput)
+    tourismCollector.collectDemandStrengthHistory(cacheInput),
+    readTourismVisitorPeriodSummaryCache(region)
   ]);
   const { naverPlace, naverKeyword } = await readTourismLocationNaverSnapshots(match.region);
   const visitorNetworkAttempts = Number(tourismVisitorHistory?.collection?.networkAttemptedMonths || 0);
@@ -15915,6 +16222,7 @@ async function readTourismLocationHistoryCache(selector = {}) {
       matchReason: match.reason || ""
     },
     region,
+    tourismVisitorPeriodSummary,
     tourismVisitorHistory,
     tourismDemandStrengthHistory,
     naverPlace,
@@ -15930,6 +16238,12 @@ async function readTourismLocationHistoryCache(selector = {}) {
       demandStrength: {
         cacheHitMonths: Number(tourismDemandStrengthHistory?.collection?.cacheHitMonths || 0),
         missingCacheMonths: Number(tourismDemandStrengthHistory?.collection?.missingCacheMonths || 0)
+      },
+      visitorPeriodSummary: {
+        status: tourismVisitorPeriodSummary.status,
+        snapshotCount: tourismVisitorPeriodSummary.snapshots.length,
+        latestPeriod: tourismVisitorPeriodSummary.latest?.period || null,
+        externalRequestsAttempted: 0
       }
     },
     policy: {
@@ -15993,7 +16307,8 @@ async function loadRun(runId, options = {}) {
     options.skipTourismVisitors
       ? null
       : tourismCollector.collectVisitorCounts({
-          regionNames: tourismRegionNames
+          regionNames: tourismRegionNames,
+          cacheOnly: true
         }).catch(() => ({
           ok: false,
           status: "error",
@@ -16013,8 +16328,8 @@ async function loadRun(runId, options = {}) {
           }
         }))
   ]);
-  // The latest-month collector can create a cache entry. Read history only after it
-  // completes so the response never omits a month that was saved by this same load.
+  // Ordinary result and company pages read stored tourism observations only.
+  // Scheduled or explicit admin collection is the only path allowed to call the provider.
   let tourismVisitorHistory = null;
   if (!options.skipTourismVisitors && !options.skipTourismVisitorHistory) {
     if (!tourismRegionNames.length) {
@@ -17055,7 +17370,7 @@ async function route(req, res) {
 
     if (req.method === "GET" && reqUrl.pathname === "/api/tourism-data/status") {
       if (!requireAdminSession(session, req, res)) return;
-      return send(res, 200, await tourismCollector.status());
+      return send(res, 200, await readTourismDataStatus());
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/tourism-data/location-history") {
@@ -17081,23 +17396,50 @@ async function route(req, res) {
       )).slice(0, 80);
       const regionNames = cleanList(payload.regionNames || payload.regions);
       const regionKeys = cleanList(payload.regionKeys);
-      if (!regionNames.length && !regionKeys.length) {
+      const allRegions = payload.allRegions === true;
+      if (!regionNames.length && !regionKeys.length && !allRegions) {
         return send(res, 400, { error: "갱신할 지역명 또는 지역키가 필요합니다." });
       }
       const months = Math.max(1, Math.min(36, Math.round(Number(payload.months) || 36)));
       const concurrency = Math.max(1, Math.min(3, Math.round(Number(payload.concurrency) || 2)));
       const endYearMonth = String(payload.endYearMonth || "").replace(/\D/g, "").slice(0, 6);
-      return send(res, 200, await tourismCollector.collectVisitorHistory({
-        regionNames,
-        regionKeys,
+      const maintenance = await tourismVisitorMonthlyScheduler.runOnce({
+        force: payload.force === true,
+        trigger: "admin_history",
+        rejectIfRunning: true
+      });
+      const tourismVisitorHistory = await runTourismVisitorHistoryCollection({
+        ...(allRegions ? {} : { regionNames, regionKeys }),
         months,
         ...(endYearMonth.length === 6 ? { endYearMonth } : {}),
-        collectMissing: true,
-        refresh: true,
-        retryIncomplete: true,
-        force: payload.force === true,
+        collectMissing: false,
+        refresh: false,
+        force: false,
         concurrency
-      }));
+      });
+      return send(res, 200, {
+        ok: tourismVisitorHistory.ok,
+        status: tourismVisitorHistory.status,
+        reason: tourismVisitorHistory.reason,
+        tourismVisitorHistory,
+        maintenance
+      });
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/tourism-data/visitors/monthly-sync") {
+      if (!requireAdminSession(session, req, res)) return;
+      assertRequestRateLimit(req, "adminTourism", RATE_LIMIT_POLICIES.adminTourism, session.username || "");
+      const payload = await parseJsonBody(req).catch(() => ({}));
+      if (tourismRequestHasForbiddenConnectionFields(payload)) {
+        return send(res, 400, { error: "API 주소나 인증키는 요청 본문에서 지정할 수 없습니다." });
+      }
+      const result = await tourismVisitorMonthlyScheduler.runOnce({
+        force: payload.force === true,
+        trigger: "admin",
+        rejectIfRunning: true
+      });
+      const statusCode = result.status === "cooldown" ? 429 : result.status === "blocked" ? 409 : 200;
+      return send(res, statusCode, result);
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/tourism-data/demand-strength/history") {
@@ -17331,6 +17673,10 @@ seedOutputsFromRepo()
       console.log(`Lodging datalab beta app running at ${primaryUrl}`);
       if (HOST === "0.0.0.0") {
         for (const url of localNetworkUrls()) console.log(`Mobile/LAN URL: ${url}`);
+      }
+      const monthlySync = tourismVisitorMonthlyScheduler.start();
+      if (monthlySync.enabled) {
+        console.log(`Tourism visitor monthly sync check scheduled at ${monthlySync.nextCheckAt}`);
       }
     });
   });
