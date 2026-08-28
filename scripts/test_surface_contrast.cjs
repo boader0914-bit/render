@@ -436,35 +436,76 @@ assert(
   failures
 );
 
-const sancheongLocationProfileBlock = app.slice(
-  app.indexOf('const SANCHEONG_LOCATION_REGION_KEY = "kr_gyeongnam_sancheong";'),
-  app.indexOf("function renderLocationDictionary(", app.indexOf('const SANCHEONG_LOCATION_REGION_KEY = "kr_gyeongnam_sancheong";'))
+const locationProfileBlock = app.slice(
+  app.indexOf("function administrativeRegionForLocationCard("),
+  app.indexOf("function renderLocationDictionary(", app.indexOf("function administrativeRegionForLocationCard("))
+);
+const ensureLocationProfileBlock = app.slice(
+  app.indexOf("async function ensureLocationProfile("),
+  app.indexOf("function locationProfileFirstObject(")
+);
+const renderObservedLocationProfileBlock = app.slice(
+  app.indexOf("function renderObservedLocationProfile("),
+  app.indexOf("function administrativeProfileDefinitionRows(")
+);
+const locationHistoryServerBlock = server.slice(
+  server.indexOf("async function readTourismLocationHistoryCache("),
+  server.indexOf("async function loadRun(", server.indexOf("async function readTourismLocationHistoryCache("))
 );
 
 assert(
-  sancheongLocationProfileBlock.includes('/api/tourism-data/location-history?regionKey=')
-    && sancheongLocationProfileBlock.includes("function locationProfileTrafficEvidence(")
-    && sancheongLocationProfileBlock.includes("function locationProfilePlaceEvidence(")
-    && sancheongLocationProfileBlock.includes("function locationProfileVisitorEvidence(")
-    && sancheongLocationProfileBlock.includes("function locationProfileStrengthEvidence(")
-    && sancheongLocationProfileBlock.includes("정확히 일치하는 DataLab 관측이 없습니다")
-    && sancheongLocationProfileBlock.includes("상세/재고 미관측")
-    && sancheongLocationProfileBlock.includes("부분수집·미관측은 선 단절")
-    && sancheongLocationProfileBlock.includes("기존 내부 입지판단 기준")
+  locationProfileBlock.includes('/api/tourism-data/location-history?regionKey=')
+    && locationProfileBlock.includes("function locationProfileTrafficEvidence(")
+    && locationProfileBlock.includes("function locationProfilePlaceEvidence(")
+    && locationProfileBlock.includes("function locationProfileVisitorEvidence(")
+    && locationProfileBlock.includes("function locationProfileStrengthEvidence(")
+    && locationProfileBlock.includes("정확히 일치하는 DataLab 관측이 없습니다")
+    && locationProfileBlock.includes("상세/재고 미관측")
+    && locationProfileBlock.includes("부분수집·미관측은 선 단절")
+    && locationProfileBlock.includes("기존 내부 입지판단 기준")
     && app.includes('const preserveOpenLocationCard = state.activeTab === "dictionary"')
     && server.includes('reqUrl.pathname === "/api/tourism-data/location-history"'),
-  "Sancheong location profile must lead with exact source-backed evidence and keep missing observations non-zero",
+  "the common location profile must lead with exact source-backed evidence and keep missing observations non-zero",
   failures
 );
 
 assert(
-  styles.includes("Sancheong location profile v1")
+  styles.includes("Shared administrative location profile")
     && styles.includes(".location-profile-grid")
     && styles.includes(".location-profile-chart-line")
     && styles.includes(".location-profile-source-list")
     && styles.includes(".location-profile-internal")
     && /@media \(max-width: 600px\)[\s\S]*?\.location-profile-source-list > div\s*\{[\s\S]*?grid-template-columns:\s*1fr/.test(styles),
-  "Sancheong location profile must keep token-based cards, charts, sources, and mobile stacking",
+  "the common location profile must keep token-based cards, charts, sources, and mobile stacking",
+  failures
+);
+
+assert(
+  !app.includes("SANCHEONG_LOCATION_REGION_KEY")
+    && !app.includes("function isSancheongLocationCard(")
+    && !app.includes("function renderSancheongLocationProfile(")
+    && !ensureLocationProfileBlock.includes("isDefaultLocationCard(")
+    && !ensureLocationProfileBlock.includes("kr_gyeongnam_sancheong")
+    && ensureLocationProfileBlock.includes("if (!regionKey) return false;")
+    && renderObservedLocationProfileBlock.includes("options.administrativeRegion || administrativeRegionForLocationCard(card)"),
+  "location profile loading and rendering must not be gated to Sancheong",
+  failures
+);
+
+assert(
+  ensureLocationProfileBlock.includes("fetchJson(`/api/tourism-data/location-history?regionKey=${encodeURIComponent(regionKey)}`)")
+    && ensureLocationProfileBlock.includes("forceRefreshCoolingDown")
+    && ensureLocationProfileBlock.includes("existingAge < LOCATION_PROFILE_RETRY_INTERVAL_MS")
+    && !ensureLocationProfileBlock.includes("/api/tourism-data/visitors/history")
+    && !ensureLocationProfileBlock.includes("/api/tourism-data/demand-strength/history")
+    && !ensureLocationProfileBlock.includes('method: "POST"')
+    && locationHistoryServerBlock.includes("collectMissing: false")
+    && locationHistoryServerBlock.includes("refresh: false")
+    && locationHistoryServerBlock.includes("force: false")
+    && locationHistoryServerBlock.includes('mode: "cache_only"')
+    && locationHistoryServerBlock.includes("externalRequestsAttempted")
+    && locationHistoryServerBlock.includes("외부 요청이 감지되었습니다"),
+  "opening any location profile must remain a cache-only GET and must not call a tourism provider",
   failures
 );
 
@@ -532,6 +573,10 @@ const renderLocationDictionaryBlock = app.slice(
   app.indexOf("function renderLocationDictionary("),
   app.indexOf("function syncDictionaryInputToActiveRun(")
 );
+const dictionaryRegionButtonBlock = app.slice(
+  app.indexOf("function dictionaryRegionButton("),
+  app.indexOf("function renderDictionaryQuickButtons(")
+);
 
 assert(
   app.includes("regionMaster: null")
@@ -571,7 +616,6 @@ assert(
 
 assert(
   administrativeProfileBlock.includes("function renderAdministrativeProvinceProfile(")
-    && administrativeProfileBlock.includes("function renderAdministrativeRegionProfile(")
     && administrativeProfileBlock.includes("공식 행정구역 코드")
     && administrativeProfileBlock.includes("관측 없음")
     && administrativeProfileBlock.includes("미수집을 0으로 표시하지")
@@ -595,9 +639,47 @@ assert(
 assert(
   renderLocationDictionaryBlock.includes("administrativeProvinceEntries().length")
     && renderLocationDictionaryBlock.includes("administrativeRegionEntries().length")
-    && renderLocationDictionaryBlock.includes("renderAdministrativeRegionProfile(administrativeRegion)")
-    && renderLocationDictionaryBlock.indexOf("renderAdministrativeRegionProfile(administrativeRegion)") < renderLocationDictionaryBlock.indexOf("renderMissingLocationCandidate(missingQuery, cards)"),
-  "official master-only regions must render a generic profile while truly unknown queries retain the candidate workflow",
+    && renderLocationDictionaryBlock.includes("const storedCard = result.card || dictionaryStoredCardForRegion(administrativeRegion)")
+    && renderLocationDictionaryBlock.includes("const card = storedCard || locationProfileSubjectForRegion(administrativeRegion)")
+    && renderLocationDictionaryBlock.includes("const hasStoredCard = Boolean(storedCard)")
+    && renderLocationDictionaryBlock.includes("renderObservedLocationProfile(")
+    && renderLocationDictionaryBlock.includes("{ administrativeRegion, hasStoredCard }")
+    && renderLocationDictionaryBlock.includes("renderMissingLocationCandidate(missingQuery, cards)")
+    && !renderLocationDictionaryBlock.includes("저장형 입지판단 카드")
+    && !renderLocationDictionaryBlock.includes("<h3>${escapeHtml(card.searchKeyword)}</h3>"),
+  "stored and master-only local regions must share one observed profile while unknown queries retain the candidate workflow",
+  failures
+);
+
+assert(
+  renderObservedLocationProfileBlock.includes("administrativeRegion?.sido")
+    && renderObservedLocationProfileBlock.includes("administrativeRegion?.sigungu")
+    && renderObservedLocationProfileBlock.includes('<h3>${escapeHtml(`${shortSido} ${sigungu}`)}</h3>')
+    && renderObservedLocationProfileBlock.includes("업종 분석 키워드")
+    && renderObservedLocationProfileBlock.includes('industryKeyword || "업종 분석에서 별도 선택"')
+    && renderObservedLocationProfileBlock.includes("지역명과 분리")
+    && renderObservedLocationProfileBlock.includes("hasStoredCard ? renderLocationProfileInternalDictionary")
+    && !renderObservedLocationProfileBlock.includes("<h3>${escapeHtml(card.searchKeyword)}</h3>"),
+  "official administrative names must remain the profile title while lodging keywords stay in a separate field",
+  failures
+);
+
+assert(
+  dictionaryRegionButtonBlock.includes("tourismRegion?.codeStatus")
+    && dictionaryRegionButtonBlock.includes("region.providerMappings?.kto?.status")
+    && dictionaryRegionButtonBlock.includes("masterProviderStatus !== \"ready\"")
+    && dictionaryRegionButtonBlock.includes('"코드대기"')
+    && renderLocationDictionaryBlock.includes("administrativeRegion?.providerMappings?.kto?.status")
+    && renderObservedLocationProfileBlock.includes("providerCodePending")
+    && renderObservedLocationProfileBlock.includes("행정개편 코드 확인 대기")
+    && renderObservedLocationProfileBlock.includes("관광코드 확인 대기")
+    && renderObservedLocationProfileBlock.includes("공급기관 코드 확인 후 저장")
+    && renderObservedLocationProfileBlock.includes("잘못된 값 저장 안 함")
+    && renderObservedLocationProfileBlock.includes("providerMappingStatus !== \"ready\"")
+    && renderObservedLocationProfileBlock.includes("const exactRegion = Boolean(providerCode && !providerCodePending)")
+    && renderObservedLocationProfileBlock.includes("if (exactRegion) void ensureLocationProfile(card)")
+    && renderObservedLocationProfileBlock.includes("const forecastReady = exactRegion && evidence.visitor.observed && evidence.strength.observed"),
+  "provider-code-pending regions must be labelled and blocked from being treated as callable observations",
   failures
 );
 

@@ -103,10 +103,22 @@ assert.equal(tourism.regions.find((region) => region.regionKey === "kr_jeonbuk_m
 const linkedCards = active.filter((unit) => unit.locationCardKey);
 assert.equal(linkedCards.length, dictionary.cards.length, "기존 입지카드가 모두 원장에 연결되어야 합니다.");
 dictionary.cards.forEach((card) => {
-  assert.ok(linkedCards.some((unit) => unit.locationCardKey === card.regionKey), `${card.regionKey} 입지카드 연결이 없습니다.`);
+  const unit = linkedCards.find((entry) => entry.locationCardKey === card.regionKey);
+  assert.ok(unit, `${card.regionKey} 입지카드 연결이 없습니다.`);
+  assert.ok(unit.fullName && unit.sigungu, `${card.regionKey} 입지카드는 공식 행정구역명을 가져야 합니다.`);
 });
 assert.equal(master.links.locationCardMappedCount, dictionary.cards.length);
 assert.deepEqual(master.links.locationCardPending, []);
+
+const namhaeUnit = activeLocal.find((unit) => unit.regionKey === "kr_gyeongnam_namhae");
+const namhaeCard = dictionary.cards.find((card) => card.regionKey === "kr_gyeongnam_namhae");
+assert.ok(namhaeUnit, "남해군 공식 행정구역 원장이 필요합니다.");
+assert.ok(namhaeCard, "남해군 저장형 입지카드가 필요합니다.");
+assert.equal(namhaeUnit.fullName, "경상남도 남해군");
+assert.equal(namhaeUnit.sigungu, "남해군");
+assert.equal(namhaeUnit.locationCardKey, namhaeCard.regionKey);
+assert.equal(namhaeCard.searchKeyword, "남해 글램핑");
+assert.notEqual(namhaeCard.searchKeyword, namhaeUnit.fullName, "업종 키워드를 공식 행정구역명으로 사용하면 안 됩니다.");
 
 const incheonActive = activeLocal.filter((unit) => unit.sidoFull === "인천광역시");
 const incheonNames = new Set(incheonActive.map((unit) => unit.name));
