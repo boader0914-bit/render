@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260829-sancheong-diagnostic-v87";
-const expectedAssetVersion = "datalab-20260829-sancheong-diagnostic-v68";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260829-sancheong-diagnostic-v88";
+const expectedAssetVersion = "datalab-20260829-sancheong-diagnostic-v69";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -490,7 +490,9 @@ assert(
     && app.includes("todayUsedCalls")
     && app.includes("nextCheckAt")
     && app.includes("lastResultStatus")
-    && app.includes("lastReason"),
+    && app.includes("lastReason")
+    && app.includes("tourismVisitorMonthLabel(backfill?.recoveryYearMonth)")
+    && !app.includes("tourismDemandStrengthMonthLabel("),
   "admin demand-strength UI must show source-backed nationwide backfill progress and run only the bounded force-false continuation",
   failures
 );

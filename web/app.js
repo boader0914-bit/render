@@ -15895,7 +15895,7 @@ function renderTourismDemandStrengthBackfillStatus() {
     && recoveryCallsUsed > 0
     && recoveryStatus
     && !["succeeded", "satisfied_from_cache", "satisfied_from_daily_budget"].includes(recoveryStatus)
-    ? `산청 ${tourismDemandStrengthMonthLabel(backfill?.recoveryYearMonth)} 복구 미저장 · ${tourismDemandStrengthBackfillReasonLabel(recoveryReason)}${Number.isFinite(recoveryReportedActualCalls) ? ` · 실제 요청 ${fmtNumber(Math.max(0, recoveryReportedActualCalls))}회` : ""}`
+    ? `산청 ${tourismVisitorMonthLabel(backfill?.recoveryYearMonth)} 복구 미저장 · ${tourismDemandStrengthBackfillReasonLabel(recoveryReason)}${Number.isFinite(recoveryReportedActualCalls) ? ` · 실제 요청 ${fmtNumber(Math.max(0, recoveryReportedActualCalls))}회` : ""}`
     : "";
   const callProgress = Number.isFinite(todayUsedCalls) && Number.isFinite(dailyCallBudget)
     ? `${fmtNumber(Math.max(0, todayUsedCalls))}/${fmtNumber(Math.max(0, dailyCallBudget))}회`
