@@ -422,8 +422,8 @@ const ADMIN_INTEGRATIONS = [
   { key: "concentration-forecast", group: "문화관광", provider: "한국관광공사", name: "관광지 집중률 방문 추이 예측" },
   { key: "tourism-diversity", group: "문화관광", provider: "한국관광공사", name: "지역별 관광 다양성" },
   { key: "tourism-resource-demand", group: "문화관광", provider: "한국관광공사", name: "지역별 관광 자원 수요" },
-  { key: "tourism-demand-strength", group: "문화관광", provider: "한국관광공사", name: "지역별 관광 수요 강도" },
-  { key: "regional-visitors", group: "문화관광", provider: "한국관광공사", name: "지역별 방문자수" },
+  { key: "tourism-demand-strength", group: "문화관광", provider: "한국관광공사", name: "지역별 관광 수요 강도", tourismSourceKey: "demandStrength" },
+  { key: "regional-visitors", group: "문화관광", provider: "한국관광공사", name: "지역별 방문자수", tourismSourceKey: "visitors" },
   { key: "tourism-pension", group: "문화관광", provider: "행정안전부", name: "관광펜션업 조회" }
 ];
 const B2B_NAV_META = {
@@ -28677,9 +28677,74 @@ function adminConsoleSecurityPanel() {
   `;
 }
 
+function adminTourismIntegrationEvidence(sourceKey = "", tourism = {}) {
+  if (sourceKey === "visitors") {
+    return Number(tourism.visitorHistory?.availableMonthCount || 0) > 0;
+  }
+  if (sourceKey === "demandStrength") {
+    return Number(tourism.demandStrength?.snapshotCount || 0) > 0
+      || Number(tourism.demandStrength?.availableMonthCount || 0) > 0;
+  }
+  return false;
+}
+
+function adminTourismIntegrationRow(integration = {}, tourism = {}) {
+  const sourceKey = String(integration.tourismSourceKey || "").trim();
+  const source = (Array.isArray(tourism.sources) ? tourism.sources : [])
+    .find((entry) => String(entry?.key || "") === sourceKey);
+  if (!source) {
+    return {
+      ...integration,
+      status: "checking",
+      statusLabel: "상태 확인 대기",
+      statusNote: "서버 연결 상태를 확인하고 있습니다."
+    };
+  }
+
+  const sourceStatus = String(source.status || "").trim().toLowerCase();
+  const serviceKeyConfigured = Boolean(source.serviceKeyConfigured);
+  const endpointConfigured = Boolean(source.endpointConfigured);
+  if (sourceStatus === "ready" && serviceKeyConfigured && endpointConfigured) {
+    if (adminTourismIntegrationEvidence(sourceKey, tourism)) {
+      return {
+        ...integration,
+        status: "connected",
+        statusLabel: "연동 정상",
+        statusNote: sourceKey === "visitors"
+          ? "실제 월별 저장 자료 확인"
+          : "실제 지수 저장 자료 확인"
+      };
+    }
+    return {
+      ...integration,
+      status: "configured",
+      statusLabel: "설정 완료",
+      statusNote: "키·주소 설정 완료 · 첫 수집 대기"
+    };
+  }
+
+  if (sourceStatus === "disabled") {
+    return { ...integration, status: "missing", statusLabel: "사용 중지", statusNote: "환경 설정에서 비활성화됨" };
+  }
+  const statusNote = !serviceKeyConfigured || sourceStatus === "missing_service_key"
+    ? "인증키 설정 필요"
+    : !endpointConfigured || sourceStatus === "missing_endpoint"
+      ? "API 주소 설정 필요"
+      : ["invalid_endpoint", "untrusted_endpoint"].includes(sourceStatus)
+        ? "API 주소 확인 필요"
+        : sourceStatus === "fetch_unavailable"
+          ? "서버 요청 기능 확인 필요"
+          : "연결 상태 확인 필요";
+  return { ...integration, status: "missing", statusLabel: "설정 필요", statusNote };
+}
+
 function adminIntegrationRows() {
   const traffic = state.trafficKeyState || {};
+  const tourism = state.tourismDataStatus || {};
   return ADMIN_INTEGRATIONS.map((integration) => {
+    if (integration.tourismSourceKey) {
+      return adminTourismIntegrationRow(integration, tourism);
+    }
     if (!integration.liveKey) {
       return { ...integration, status: "planned", statusLabel: "연결 예정", statusNote: "인증키 노출 없이 순차 연결" };
     }
@@ -28693,6 +28758,26 @@ function adminIntegrationRows() {
     }
     return { ...integration, status: "missing", statusLabel: "미설정", statusNote: "관리자 설정 필요" };
   });
+}
+
+function adminIntegrationSummary(rows = adminIntegrationRows()) {
+  return rows.reduce((summary, row) => {
+    const status = ["connected", "configured", "missing", "checking", "planned"].includes(row.status)
+      ? row.status
+      : "checking";
+    summary[status] += 1;
+    return summary;
+  }, { connected: 0, configured: 0, missing: 0, checking: 0, planned: 0 });
+}
+
+function adminIntegrationSummaryLabel(summary = {}) {
+  return [
+    `${fmtNumber(summary.connected || 0)} 정상`,
+    summary.configured ? `${fmtNumber(summary.configured)} 설정` : "",
+    summary.missing ? `${fmtNumber(summary.missing)} 확인` : "",
+    summary.checking ? `${fmtNumber(summary.checking)} 확인 중` : "",
+    summary.planned ? `${fmtNumber(summary.planned)} 예정` : ""
+  ].filter(Boolean).join(" · ");
 }
 
 function adminHomeSourceTimestamp(value = "") {
@@ -28738,10 +28823,10 @@ function adminHomeTasks(master = {}, entries = []) {
   if (memberRequests) {
     tasks.push({ route: "members", label: "회원 요청 처리", value: `${fmtNumber(memberRequests)}건`, note: "계정·데이터 요청 확인", tone: "danger" });
   }
-  const integrations = adminIntegrationRows().filter((row) => row.liveKey);
-  const integrationIssues = integrations.filter((row) => !["connected", "configured"].includes(row.status)).length;
-  if (state.trafficKeyState && integrationIssues) {
-    tasks.push({ route: "settings", label: "네이버 연동 점검", value: `${fmtNumber(integrationIssues)}건`, note: "검색·트렌드 설정 상태 확인", tone: "warning" });
+  const integrations = adminIntegrationRows().filter((row) => row.liveKey || row.tourismSourceKey);
+  const integrationIssues = integrations.filter((row) => row.status === "missing").length;
+  if ((state.trafficKeyState || state.tourismDataStatus) && integrationIssues) {
+    tasks.push({ route: "settings", label: "API 연동 점검", value: `${fmtNumber(integrationIssues)}건`, note: "인증키·API 주소·수집 상태 확인", tone: "warning" });
   }
   return tasks;
 }
@@ -28772,13 +28857,15 @@ function adminHomeMetricCards(master = {}, entries = []) {
   const memberCount = Number(memberSummary.memberCount || 0);
   const memberRequests = Number(state.accountDeleteAdmin?.openCount || state.accountDeleteAdmin?.summary?.openCount || 0);
   const integrationRows = adminIntegrationRows();
-  const connected = integrationRows.filter((row) => row.status === "connected").length;
-  const configured = integrationRows.filter((row) => row.status === "configured").length;
+  const integrationSummary = adminIntegrationSummary(integrationRows);
+  const connected = integrationSummary.connected;
+  const configured = integrationSummary.configured;
+  const integrationReady = connected + configured;
   const cards = [
     { route: "database", eyebrow: "업체 데이터", value: `${fmtNumber(totalCompanies)}개`, note: "네이버 플레이스 기반 업체 마스터", warning: openEntries ? `확인 ${fmtNumber(openEntries)}건` : "정상", tone: openEntries ? "warning" : "positive" },
     { route: "region", eyebrow: "지역 데이터", value: `${fmtNumber(regionCount)}개`, note: "지역 공통 Core·운영 기준", warning: regionWork ? `보강 ${fmtNumber(regionWork)}건` : "정상", tone: regionWork ? "warning" : "positive" },
     { route: "members", eyebrow: "회원 데이터", value: `${fmtNumber(memberCount)}명`, note: "가입·이용·계정 요청", warning: memberRequests ? `요청 ${fmtNumber(memberRequests)}건` : "정상", tone: memberRequests ? "danger" : "positive" },
-    { route: "settings", eyebrow: "API·연동", value: `${fmtNumber(connected)}/${fmtNumber(ADMIN_INTEGRATIONS.length)}`, note: configured ? `정상 ${fmtNumber(connected)} · 키 저장 ${fmtNumber(configured)} · 예정 ${fmtNumber(ADMIN_INTEGRATIONS.length - connected - configured)}` : `정상 ${fmtNumber(connected)} · 연결 예정 ${fmtNumber(ADMIN_INTEGRATIONS.length - connected)}`, warning: connected + configured >= 2 ? "운영 준비" : "설정 확인", tone: connected + configured >= 2 ? "positive" : "warning" }
+    { route: "settings", eyebrow: "API·연동", value: `${fmtNumber(connected)}/${fmtNumber(ADMIN_INTEGRATIONS.length)}`, note: adminIntegrationSummaryLabel(integrationSummary), warning: integrationSummary.missing ? "설정 확인" : integrationSummary.checking ? "상태 확인" : integrationReady >= 2 ? "운영 준비" : "설정 확인", tone: integrationSummary.missing || integrationSummary.checking || integrationReady < 2 ? "warning" : "positive" }
   ];
   return cards.map((card) => `
     <button type="button" class="admin-home-metric" data-admin-home-route="${escapeHtml(card.route)}" data-ui-surface="card" data-ui-interactive="true">
@@ -28835,13 +28922,12 @@ function renderAdminRegionAnalysisDashboard(master = adminConsoleMasterSource())
 function renderAdminIntegrationRegistry() {
   if (!els.adminIntegrationRegistry || !isAdminRole()) return;
   const rows = adminIntegrationRows();
-  const connected = rows.filter((row) => row.status === "connected").length;
-  const configured = rows.filter((row) => row.status === "configured").length;
+  const summary = adminIntegrationSummary(rows);
   els.adminIntegrationRegistry.innerHTML = `
     <section class="admin-console-panel" data-ui-surface="card">
       <div class="admin-console-head">
         <div><strong>API·연동 레지스트리</strong><small>신청한 15개 연동의 실제 연결 여부를 구분합니다. 인증키 값은 화면에 표시하지 않습니다.</small></div>
-        <span>${fmtNumber(connected)} 정상 · ${fmtNumber(configured)} 키 저장 · ${fmtNumber(rows.length - connected - configured)} 예정</span>
+        <span>${escapeHtml(adminIntegrationSummaryLabel(summary))}</span>
       </div>
       <div class="admin-integration-list">
         ${rows.map((row) => `
@@ -37551,11 +37637,19 @@ async function loadTourismDataStatus(options = {}) {
       : result;
     state.tourismDataStatus = status && typeof status === "object" ? status : null;
     state.tourismDataStatusError = "";
-    if (render) renderDemand();
+    if (render) {
+      renderDemand();
+      if (isAdminRole()) {
+        renderAdminIntegrationRegistry();
+      }
+    }
     return state.tourismDataStatus;
   } catch (error) {
     state.tourismDataStatusError = error.message || "선수집 상태를 확인하지 못했습니다.";
-    if (render) renderDemand();
+    if (render) {
+      renderDemand();
+      if (isAdminRole()) renderAdminIntegrationRegistry();
+    }
     if (options.throwOnError) throw error;
     return null;
   }

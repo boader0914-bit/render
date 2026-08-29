@@ -360,8 +360,90 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260829-tourism-12m-v90";
-const expectedAssetVersion = "datalab-20260829-tourism-12m-v71";
+const adminIntegrationDefinitionsBlock = app.slice(
+  app.indexOf("const ADMIN_INTEGRATIONS ="),
+  app.indexOf("const B2B_NAV_META =")
+);
+const adminIntegrationRowsBlock = app.slice(
+  app.indexOf("function adminTourismIntegrationEvidence("),
+  app.indexOf("function adminHomeSourceTimestamp(")
+);
+const adminIntegrationContext = {
+  fmtNumber: (value) => String(value),
+  state: {
+    trafficKeyState: {
+      datalabConfigured: true,
+      searchadConfigured: true,
+      verification: {}
+    },
+    tourismDataStatus: {
+      sources: [
+        { key: "visitors", status: "ready", serviceKeyConfigured: true, endpointConfigured: true },
+        { key: "demandStrength", status: "ready", serviceKeyConfigured: true, endpointConfigured: true }
+      ],
+      visitorHistory: { availableMonthCount: 12 },
+      demandStrength: { snapshotCount: 4, availableMonthCount: 4 },
+      demandStrengthBackfill: { completedPairCount: 4 }
+    }
+  }
+};
+vm.runInNewContext(
+  `${adminIntegrationDefinitionsBlock}\n${adminIntegrationRowsBlock}\nthis.getAdminIntegrationRows = adminIntegrationRows; this.getAdminIntegrationSummary = adminIntegrationSummary; this.getAdminIntegrationSummaryLabel = adminIntegrationSummaryLabel;`,
+  adminIntegrationContext
+);
+const connectedAdminIntegrations = adminIntegrationContext.getAdminIntegrationRows();
+const connectedAdminIntegrationSummary = adminIntegrationContext.getAdminIntegrationSummary(connectedAdminIntegrations);
+
+assert(
+  connectedAdminIntegrations.find((row) => row.key === "regional-visitors")?.status === "connected"
+    && connectedAdminIntegrations.find((row) => row.key === "tourism-demand-strength")?.status === "connected"
+    && connectedAdminIntegrationSummary.connected === 2
+    && connectedAdminIntegrationSummary.configured === 2
+    && connectedAdminIntegrationSummary.planned === 11
+    && adminIntegrationContext.getAdminIntegrationSummaryLabel(connectedAdminIntegrationSummary) === "2 정상 · 2 설정 · 11 예정",
+  "admin API registry must map visitor and demand-strength stored evidence to 2/15 connected without merging planned APIs",
+  failures
+);
+
+adminIntegrationContext.state.tourismDataStatus = {
+  sources: [
+    { key: "visitors", status: "ready", serviceKeyConfigured: true, endpointConfigured: true },
+    { key: "demandStrength", status: "ready", serviceKeyConfigured: true, endpointConfigured: true }
+  ],
+  visitorHistory: { availableMonthCount: 0 },
+  demandStrength: { snapshotCount: 0, availableMonthCount: 0 },
+  demandStrengthBackfill: { completedPairCount: 0 }
+};
+const configuredTourismRows = adminIntegrationContext.getAdminIntegrationRows();
+assert(
+  configuredTourismRows.find((row) => row.key === "regional-visitors")?.status === "configured"
+    && configuredTourismRows.find((row) => row.key === "regional-visitors")?.statusLabel === "설정 완료"
+    && configuredTourismRows.find((row) => row.key === "holiday")?.status === "planned",
+  "admin API registry must separate configured-first-collection-waiting sources from undeveloped planned sources",
+  failures
+);
+
+adminIntegrationContext.state.tourismDataStatus.sources[0] = {
+  key: "visitors",
+  status: "missing_service_key",
+  serviceKeyConfigured: false,
+  endpointConfigured: true
+};
+const missingTourismRows = adminIntegrationContext.getAdminIntegrationRows();
+const missingTourismSummary = adminIntegrationContext.getAdminIntegrationSummary(missingTourismRows);
+assert(
+  missingTourismRows.find((row) => row.key === "regional-visitors")?.status === "missing"
+    && missingTourismRows.find((row) => row.key === "regional-visitors")?.statusLabel === "설정 필요"
+    && missingTourismSummary.missing === 1
+    && missingTourismSummary.planned === 11
+    && adminIntegrationContext.getAdminIntegrationSummaryLabel(missingTourismSummary).includes("1 확인")
+    && adminIntegrationContext.getAdminIntegrationSummaryLabel(missingTourismSummary).includes("11 예정"),
+  "admin API registry must keep missing configuration separate from planned integrations",
+  failures
+);
+
+const expectedCacheVersion = "lodging-datalab-pwa-v20260829-api-registry-v91";
+const expectedAssetVersion = "datalab-20260829-api-registry-v72";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -370,7 +452,7 @@ const assetVersionAssignments = [...server.matchAll(
 assert(
   cacheVersionAssignment?.[1] === expectedCacheVersion
     && /const APP_SHELL = \[[\s\S]*?"\/styles\.css"[\s\S]*?"\/admin-theme\.css"[\s\S]*?"\/app\.js"[\s\S]*?\];/.test(serviceWorker),
-  "service worker CACHE_VERSION assignment and app shell must match the tourism 12-month release exactly",
+  "service worker CACHE_VERSION assignment and app shell must match the API registry release exactly",
   failures
 );
 
