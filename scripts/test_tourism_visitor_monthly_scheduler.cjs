@@ -15,21 +15,21 @@ function history({ complete = false, network = false } = {}) {
     status: complete ? "ok" : "partial",
     reason: complete ? "" : "incomplete_history_coverage",
     period: {
-      startYearMonth: "202308",
+      startYearMonth: "202508",
       endYearMonth: "202607",
-      months: 36,
+      months: 12,
       latestClosedYearMonth: "202607"
     },
     coverage: {
-      expectedRegionMonths: 36,
-      completeRegionMonths: complete ? 36 : 34,
+      expectedRegionMonths: 12,
+      completeRegionMonths: complete ? 12 : 10,
       partialRegionMonths: complete ? 0 : 1,
       missingRegionMonths: complete ? 0 : 1,
-      coverageRate: complete ? 1 : 0.9444
+      coverageRate: complete ? 1 : 0.8333
     },
     collection: {
-      requestedMonths: 36,
-      cacheHitMonths: complete ? 36 : 34,
+      requestedMonths: 12,
+      cacheHitMonths: complete ? 12 : 10,
       missingCacheMonths: complete ? 0 : 2,
       networkAttemptedMonths: network ? 2 : 0,
       networkSucceededMonths: network ? 2 : 0,
@@ -77,6 +77,7 @@ async function main() {
       stateFile,
       now: () => fixedNow,
       enabled: true,
+      // A legacy caller cannot expand the current 12-month policy.
       months: 36,
       concurrency: 2
     });
@@ -89,11 +90,12 @@ async function main() {
     assert.equal(calls[0].collectMissing, false);
     assert.equal(calls[1].collectMissing, true);
     assert.deepEqual(calls[1].regionKeys, ["kr_gyeongnam_sancheong"]);
-    assert.equal(calls[1].months, 36);
+    assert.equal(calls[1].months, 12);
     assert.equal(calls[1].endYearMonth, "202607");
 
     const state = JSON.parse(await fsp.readFile(stateFile, "utf8"));
     assert.equal(state.version, "tourism-visitor-monthly-sync-v1");
+    assert.equal(state.policyMonths, 12);
     assert.equal(state.lastResultStatus, "complete");
     assert.equal(state.eligibleRegionCount, 1);
     assert.equal(state.result.coverage.coverageRate, 1);
@@ -107,6 +109,8 @@ async function main() {
     const schedulerStatus = await scheduler.status();
     assert.equal(schedulerStatus.enabled, true);
     assert.equal(schedulerStatus.running, false);
+    assert.equal(schedulerStatus.months, 12);
+    assert.equal(schedulerStatus.state.policyMonths, 12);
     assert.equal(schedulerStatus.policy.pageOrCompanyRequestTriggersNetwork, false);
 
     let releaseInspection;
@@ -157,6 +161,35 @@ async function main() {
     assert.equal(cooldownAttempt.status, "cooldown");
     assert.equal(cooldownAttempt.reason, "network_attempt_already_made_today");
     assert.equal(failedCollectionCalls, 3, "cooldown 확인은 캐시 검사만 하고 네트워크 수집을 반복하면 안 됩니다.");
+
+    const policyTransitionFile = path.join(temporaryRoot, "policy-transition.json");
+    await fsp.writeFile(policyTransitionFile, JSON.stringify({
+      version: "tourism-visitor-monthly-sync-v1",
+      lastAttemptKstDate: "2026-08-28",
+      targetYearMonth: "202607",
+      policyMonths: 36
+    }), "utf8");
+    let policyTransitionCalls = 0;
+    const policyTransitionScheduler = createMonthlyVisitorScheduler({
+      collector: {
+        readRegionMap: async () => ({
+          regions: [{ regionKey: "kr_gyeongnam_sancheong", ktoSggCd: "48860" }]
+        }),
+        collectVisitorHistory: async (input) => {
+          policyTransitionCalls += 1;
+          return history({ complete: false, network: Boolean(input.collectMissing) });
+        }
+      },
+      stateFile: policyTransitionFile,
+      now: () => fixedNow,
+      enabled: true,
+      months: 12
+    });
+    const policyTransitionAttempt = await policyTransitionScheduler.runOnce({ trigger: "policy_transition" });
+    assert.equal(policyTransitionAttempt.status, "partial");
+    assert.equal(policyTransitionCalls, 2, "36개월 정책의 당일 기록은 새 12개월 수집을 막지 않아야 합니다.");
+    const transitionedState = JSON.parse(await fsp.readFile(policyTransitionFile, "utf8"));
+    assert.equal(transitionedState.policyMonths, 12);
 
     let disabledCalls = 0;
     const disabled = createMonthlyVisitorScheduler({

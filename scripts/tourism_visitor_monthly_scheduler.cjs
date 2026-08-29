@@ -2,7 +2,7 @@ const fsp = require("node:fs/promises");
 const path = require("node:path");
 
 const STATE_VERSION = "tourism-visitor-monthly-sync-v1";
-const DEFAULT_MONTHS = 36;
+const DEFAULT_MONTHS = 12;
 const DEFAULT_CONCURRENCY = 2;
 const DEFAULT_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_STARTUP_DELAY_MS = 90 * 1000;
@@ -110,7 +110,7 @@ function createMonthlyVisitorScheduler(options = {}) {
   const clearTimeoutFn = typeof options.clearTimeoutFn === "function" ? options.clearTimeoutFn : clearTimeout;
   const logger = options.logger || console;
   const enabled = options.enabled !== false;
-  const months = Math.max(24, Math.min(36, Math.round(Number(options.months) || DEFAULT_MONTHS)));
+  const months = Math.max(1, Math.min(12, Math.round(Number(options.months) || DEFAULT_MONTHS)));
   const concurrency = Math.max(1, Math.min(3, Math.round(Number(options.concurrency) || DEFAULT_CONCURRENCY)));
   const checkIntervalMs = Math.max(60_000, Number(options.checkIntervalMs) || DEFAULT_CHECK_INTERVAL_MS);
   const startupDelayMs = Math.max(0, Number(options.startupDelayMs) || DEFAULT_STARTUP_DELAY_MS);
@@ -124,6 +124,7 @@ function createMonthlyVisitorScheduler(options = {}) {
     const state = {
       version: STATE_VERSION,
       ...previous,
+      policyMonths: months,
       ...patch,
       updatedAt: now().toISOString()
     };
@@ -196,7 +197,12 @@ function createMonthlyVisitorScheduler(options = {}) {
     }
 
     const previousState = await readJson(stateFile);
-    if (!force && previousState.lastAttemptKstDate === attemptDate && previousState.targetYearMonth === targetYearMonth) {
+    if (
+      !force
+      && previousState.lastAttemptKstDate === attemptDate
+      && previousState.targetYearMonth === targetYearMonth
+      && Number(previousState.policyMonths) === months
+    ) {
       return {
         ok: false,
         status: "cooldown",

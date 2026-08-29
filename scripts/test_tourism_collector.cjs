@@ -898,7 +898,7 @@ async function main() {
 
     const defaultDemandHistoryRequestCount = demandRequests.length;
     const defaultDemandHistory = await demandCollector.collectDemandStrengthHistory({ regionName: "산청" });
-    assert.equal(defaultDemandHistory.period.months, 36);
+    assert.equal(defaultDemandHistory.period.months, 12);
     assert.equal(defaultDemandHistory.collection.mode, "cache_only");
     assert.equal(defaultDemandHistory.collection.operationCallsAttempted, 0);
     assert.equal(demandRequests.length, defaultDemandHistoryRequestCount);

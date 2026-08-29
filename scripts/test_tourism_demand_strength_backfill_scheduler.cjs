@@ -6,6 +6,7 @@ const {
   STATE_VERSION,
   DEFAULT_DAILY_CALL_BUDGET,
   CALLS_PER_WORK_ITEM,
+  INITIAL_BACKFILL_MONTHS,
   MAX_DISTINCT_DAY_ATTEMPTS,
   DEFAULT_CHECK_INTERVAL_MS,
   DEFAULT_STARTUP_DELAY_MS,
@@ -112,6 +113,7 @@ async function main() {
   assert.equal(latestClosedYearMonth(fixedNow), "202607");
   assert.equal(DEFAULT_DAILY_CALL_BUDGET, 800);
   assert.equal(CALLS_PER_WORK_ITEM, 2);
+  assert.equal(INITIAL_BACKFILL_MONTHS, 12);
   assert.equal(MAX_DISTINCT_DAY_ATTEMPTS, 3);
   assert.equal(DEFAULT_STARTUP_DELAY_MS, 120_000);
   assert.equal(DEFAULT_CHECK_INTERVAL_MS, 6 * 60 * 60 * 1000);
@@ -121,7 +123,7 @@ async function main() {
     [SANCHEONG.regionKey, NAMHAE.regionKey]
   );
   const ordered = initialWorkItems([SANCHEONG, NAMHAE], "202607");
-  assert.equal(ordered.length, 72);
+  assert.equal(ordered.length, 24);
   assert.equal(new Set(ordered.map((item) => item.key)).size, ordered.length);
   assert.deepEqual(
     ordered.slice(0, 4).map((item) => item.key),
@@ -132,9 +134,9 @@ async function main() {
       "kr_gyeongnam_sancheong__202604"
     ]
   );
-  assert.equal(ordered[35].key, "kr_gyeongnam_sancheong__202308");
-  assert.equal(ordered[36].key, "kr_gyeongnam_namhae__202607");
-  assert.equal(ordered[37].key, "kr_gyeongnam_namhae__202606");
+  assert.equal(ordered[11].key, "kr_gyeongnam_sancheong__202508");
+  assert.equal(ordered[12].key, "kr_gyeongnam_namhae__202607");
+  assert.equal(ordered[13].key, "kr_gyeongnam_namhae__202606");
 
   const fixture198 = [SANCHEONG, ...Array.from({ length: 197 }, (_, index) => ({
     regionKey: `kr_fixture_${String(index + 1).padStart(3, "0")}`,
@@ -143,8 +145,8 @@ async function main() {
     ktoSggCd: String(10000 + index)
   }))];
   const fixture198Items = initialWorkItems(eligibleRegions({ regions: fixture198, provinceAliases: PROVINCE_ALIASES }), "202607");
-  assert.equal(fixture198Items.length, 198 * 36);
-  assert.equal(fixture198Items.length, 7_128);
+  assert.equal(fixture198Items.length, 198 * 12);
+  assert.equal(fixture198Items.length, 2_376);
   assert.equal(new Set(fixture198Items.map((item) => item.key)).size, fixture198Items.length);
 
   const productionRegionMap = JSON.parse(await fsp.readFile(
@@ -154,7 +156,7 @@ async function main() {
   const productionEligibleRegions = eligibleRegions(productionRegionMap);
   const productionInitialItems = initialWorkItems(productionEligibleRegions, "202607");
   assert.equal(productionEligibleRegions.length, 198);
-  assert.equal(productionInitialItems.length, 7_128);
+  assert.equal(productionInitialItems.length, 2_376);
   assert.equal(new Set(productionInitialItems.map((item) => item.key)).size, productionInitialItems.length);
 
   const temporaryRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "tourism-demand-backfill-"));
@@ -187,7 +189,7 @@ async function main() {
     assert.equal(budgetState.dailyBudget.reservedCalls, 0);
     assert.equal(budgetState.dailyBudget.reservedWorkItems, 0);
     assert.equal(budgetState.plan.cursor, 4);
-    assert.equal(budgetState.plan.totalItems, 72);
+    assert.equal(budgetState.plan.totalItems, 24);
     assert.equal(JSON.parse(await fsp.readFile(`${budgetStateFile}.bak`, "utf8")).version, STATE_VERSION);
     assert.equal((await firstScheduler.runOnce({ trigger: "same-day" })).status, "budget_exhausted");
     assert.equal(budgetCollector.network.length, 4, "같은 날 예산을 초과해 외부 호출하면 안 됩니다.");
@@ -566,6 +568,91 @@ async function main() {
     assert.equal(budgetCollector.network.at(-1).key, "kr_gyeongnam_sancheong__202603");
     assert.equal(JSON.parse(await fsp.readFile(budgetStateFile, "utf8")).plan.cursor, 5);
 
+    const policyMigrationStateFile = path.join(temporaryRoot, "policy-migration", "state.json");
+    await fsp.mkdir(path.dirname(policyMigrationStateFile), { recursive: true });
+    await fsp.writeFile(policyMigrationStateFile, JSON.stringify({
+      version: STATE_VERSION,
+      phase: "initial_backfill",
+      initialTargetYearMonth: "202607",
+      initialCompletedAt: "",
+      monthlyCompletedThrough: "",
+      eligibleRegionCount: 2,
+      planFingerprint: {
+        regionMapVersion: "fixture-region-map-v1",
+        demandStrengthAdapter: "fixture-demand-strength-v1",
+        demandStrengthNormalizer: "fixture-normalizer-v1",
+        authorizedRecoveryId: SANCHEONG_LATEST_RECOVERY_ID
+      },
+      plan: {
+        id: "legacy-36-month-plan",
+        kind: "initial_backfill",
+        startYearMonth: "202308",
+        endYearMonth: "202607",
+        cursor: 5,
+        totalItems: 72,
+        retryOnly: false,
+        pass: 1
+      },
+      failures: {},
+      terminalMissing: {
+        [`${SANCHEONG.regionKey}__202308`]: {
+          reason: "legacy_out_of_scope",
+          attempts: 3,
+          lastAt: fixedNow.toISOString()
+        },
+        [`${NAMHAE.regionKey}__202606`]: {
+          reason: "recent_in_scope",
+          attempts: 3,
+          lastAt: fixedNow.toISOString()
+        }
+      },
+      inFlight: null,
+      dailyBudget: {
+        kstDate: "2026-08-29",
+        limitCalls: 8,
+        usedCalls: 8,
+        reservedCalls: 0,
+        reservedWorkItems: 0
+      }
+    }), "utf8");
+    const policyMigrationCollector = fakeCollector({
+      regions: [NAMHAE, SANCHEONG],
+      cachedKeys: [`${SANCHEONG.regionKey}__202607`]
+    });
+    const policyMigrationScheduler = createDemandStrengthBackfillScheduler({
+      collector: policyMigrationCollector,
+      stateFile: policyMigrationStateFile,
+      now: () => fixedNow,
+      dailyCallBudget: 8
+    });
+    const policyMigration = await policyMigrationScheduler.runOnce({ trigger: "policy-36-to-12" });
+    assert.equal(policyMigration.status, "budget_exhausted");
+    assert.deepEqual(policyMigration.plan, {
+      id: policyMigration.plan.id,
+      kind: "initial_backfill",
+      startYearMonth: "202508",
+      endYearMonth: "202607",
+      cursor: 1,
+      totalItems: 24,
+      retryOnly: false,
+      pass: 1
+    });
+    assert.notEqual(policyMigration.plan.id, "legacy-36-month-plan");
+    assert.equal(policyMigration.progress.cacheReusedItems, 1);
+    assert.equal(policyMigrationCollector.network.length, 0);
+    assert.deepEqual(
+      policyMigrationCollector.inspections.slice(0, 2).map((entry) => entry.key),
+      [`${SANCHEONG.regionKey}__202607`, `${SANCHEONG.regionKey}__202606`]
+    );
+    assert.equal(policyMigration.todayUsedCalls, 8);
+    assert.equal(policyMigration.budget.usedCalls, 8);
+    assert.equal(policyMigration.budget.reservedCalls, 0);
+    assert.equal(policyMigration.terminalMissingPairCount, 1);
+    const migratedPolicyState = JSON.parse(await fsp.readFile(policyMigrationStateFile, "utf8"));
+    assert.equal(Object.hasOwn(migratedPolicyState.terminalMissing, `${SANCHEONG.regionKey}__202308`), false);
+    assert.equal(Object.hasOwn(migratedPolicyState.terminalMissing, `${NAMHAE.regionKey}__202606`), true);
+    assert.equal(migratedPolicyState.dailyBudget.usedCalls, 8);
+
     const monthlyStateFile = path.join(temporaryRoot, "monthly", "state.json");
     let monthlyNow = new Date(fixedNow);
     const monthlyCollector = fakeCollector({
@@ -580,7 +667,7 @@ async function main() {
     const initialComplete = await monthlyScheduler.runOnce({ trigger: "cache-reuse" });
     assert.equal(initialComplete.status, "initial_complete");
     assert.equal(monthlyCollector.network.length, 0);
-    assert.equal(initialComplete.progress.cacheReusedItems, 36);
+    assert.equal(initialComplete.progress.cacheReusedItems, 12);
     assert.equal(initialComplete.phase, "complete");
     assert.equal(initialComplete.completedThrough, "202607");
 
@@ -695,7 +782,7 @@ async function main() {
     assert.equal(schedulerStatus.phase, "priority_sancheong");
     assert.equal(schedulerStatus.eligibleRegionCount, 1);
     assert.equal(schedulerStatus.completedPairCount, 0);
-    assert.equal(schedulerStatus.totalPairCount, 36);
+    assert.equal(schedulerStatus.totalPairCount, 12);
     assert.equal(schedulerStatus.todayUsedCalls, 0);
     assert.equal(schedulerStatus.dailyCallBudget, 800);
     assert.equal(schedulerStatus.nextCheckAt, "");
@@ -720,10 +807,10 @@ async function main() {
       plan: {
         id: "projection-fixture",
         kind: "initial_backfill",
-        startYearMonth: "202308",
+        startYearMonth: "202508",
         endYearMonth: "202607",
         cursor,
-        totalItems: 7_128,
+        totalItems: 2_376,
         retryOnly: false,
         pass: 1
       },
@@ -738,20 +825,20 @@ async function main() {
       ...patch
     });
     await fsp.mkdir(path.dirname(projectionStateFile), { recursive: true });
-    await fsp.writeFile(projectionStateFile, JSON.stringify(projectionState(35)), "utf8");
+    await fsp.writeFile(projectionStateFile, JSON.stringify(projectionState(11)), "utf8");
     let projected = await projectionScheduler.status();
     assert.equal(projected.phase, "priority_sancheong");
     assert.equal(projected.todayUsedCalls, 7);
-    assert.equal(projected.completedPairCount, 35);
-    await fsp.writeFile(projectionStateFile, JSON.stringify(projectionState(36)), "utf8");
+    assert.equal(projected.completedPairCount, 11);
+    await fsp.writeFile(projectionStateFile, JSON.stringify(projectionState(12)), "utf8");
     projected = await projectionScheduler.status();
     assert.equal(projected.phase, "recent_12");
-    const historyBoundary = 36 + (197 * 12);
-    await fsp.writeFile(projectionStateFile, JSON.stringify(projectionState(historyBoundary - 1)), "utf8");
+    const recentBoundary = 12 + (197 * 12);
+    await fsp.writeFile(projectionStateFile, JSON.stringify(projectionState(recentBoundary - 1)), "utf8");
     assert.equal((await projectionScheduler.status()).phase, "recent_12");
-    await fsp.writeFile(projectionStateFile, JSON.stringify(projectionState(historyBoundary)), "utf8");
-    assert.equal((await projectionScheduler.status()).phase, "history_24");
-    await fsp.writeFile(projectionStateFile, JSON.stringify(projectionState(7_128, {
+    await fsp.writeFile(projectionStateFile, JSON.stringify(projectionState(recentBoundary)), "utf8");
+    assert.equal((await projectionScheduler.status()).phase, "recent_12");
+    await fsp.writeFile(projectionStateFile, JSON.stringify(projectionState(2_376, {
       phase: "monthly_maintenance",
       initialCompletedAt: fixedNow.toISOString(),
       plan: {
@@ -766,7 +853,7 @@ async function main() {
       }
     })), "utf8");
     assert.equal((await projectionScheduler.status()).phase, "monthly");
-    await fsp.writeFile(projectionStateFile, JSON.stringify(projectionState(7_128, {
+    await fsp.writeFile(projectionStateFile, JSON.stringify(projectionState(2_376, {
       phase: "monthly_maintenance",
       initialCompletedAt: fixedNow.toISOString(),
       monthlyCompletedThrough: "202607",
@@ -774,8 +861,8 @@ async function main() {
     })), "utf8");
     projected = await projectionScheduler.status();
     assert.equal(projected.phase, "complete");
-    assert.equal(projected.completedPairCount, 7_128);
-    assert.equal(projected.totalPairCount, 7_128);
+    assert.equal(projected.completedPairCount, 2_376);
+    assert.equal(projected.totalPairCount, 2_376);
 
     const manualStateFile = path.join(temporaryRoot, "manual", "state.json");
     let manualNow = new Date(fixedNow);
@@ -783,21 +870,30 @@ async function main() {
     const manualScheduler = createDemandStrengthBackfillScheduler({
       collector: manualCollector,
       stateFile: manualStateFile,
-      now: () => manualNow
+      now: () => manualNow,
+      dailyCallBudget: 24
     });
-    const manualReservation = await manualScheduler.beginManualReservation({ months: 36, maxPagesPerOperation: 1 });
+    await assert.rejects(
+      () => manualScheduler.beginManualReservation({ months: 13, maxPagesPerOperation: 1 }),
+      (error) => error?.statusCode === 400 && error?.code === "tourism_demand_strength_manual_months_invalid"
+    );
+    await assert.rejects(
+      () => manualScheduler.beginManualReservation({ requestedCalls: 26, maxPagesPerOperation: 1 }),
+      (error) => error?.statusCode === 400 && error?.code === "tourism_demand_strength_manual_months_invalid"
+    );
+    const manualReservation = await manualScheduler.beginManualReservation({ months: 12, maxPagesPerOperation: 1 });
     assert.equal(manualReservation.status, "manual_reserved");
-    assert.equal(manualReservation.requestedCalls, 72);
-    assert.equal(manualReservation.todayUsedCalls, 72);
+    assert.equal(manualReservation.requestedCalls, 24);
+    assert.equal(manualReservation.todayUsedCalls, 24);
     assert.equal(manualReservation.budget.usedCalls, 0);
-    assert.equal(manualReservation.budget.reservedCalls, 72);
+    assert.equal(manualReservation.budget.reservedCalls, 24);
     assert.equal(
       JSON.parse(await fsp.readFile(`${manualStateFile}.bak`, "utf8")).manualReservation.id,
       manualReservation.reservationId
     );
     const manualStatus = await manualScheduler.status();
     assert.equal(manualStatus.manualActive, true);
-    assert.equal(manualStatus.todayUsedCalls, 72);
+    assert.equal(manualStatus.todayUsedCalls, 24);
     assert.equal(JSON.stringify(manualStatus).includes(manualReservation.reservationId), false);
     assert.equal(Object.hasOwn(manualStatus, "stateFile"), false);
     assert.throws(
@@ -815,7 +911,8 @@ async function main() {
     const restartedManualScheduler = createDemandStrengthBackfillScheduler({
       collector: manualCollector,
       stateFile: manualStateFile,
-      now: () => manualNow
+      now: () => manualNow,
+      dailyCallBudget: 24
     });
     await assert.rejects(
       restartedManualScheduler.runOnce({ trigger: "manual-persisted-conflict" }),
@@ -827,13 +924,13 @@ async function main() {
     );
     const manualSettled = await manualScheduler.finishManualReservation({
       reservationId: manualReservation.reservationId,
-      actualCalls: 70
+      actualCalls: 22
     });
     assert.equal(manualSettled.status, "manual_settled");
-    assert.equal(manualSettled.todayUsedCalls, 70);
+    assert.equal(manualSettled.todayUsedCalls, 22);
     assert.equal(manualSettled.budget.reservedCalls, 0);
     await assert.rejects(
-      () => manualScheduler.beginManualReservation({ requestedCalls: 732 }),
+      () => manualScheduler.beginManualReservation({ requestedCalls: 4 }),
       (error) => error?.statusCode === 429 && error?.code === "tourism_demand_strength_daily_quota_exceeded"
     );
     await assert.rejects(
@@ -847,7 +944,7 @@ async function main() {
     });
     assert.equal(failedManualSettled.status, "manual_failed_settled");
     assert.equal(failedManualSettled.actualCalls, 2);
-    assert.equal(failedManualSettled.todayUsedCalls, 72);
+    assert.equal(failedManualSettled.todayUsedCalls, 24);
 
     const crossDayStateFile = path.join(temporaryRoot, "manual-cross-day", "state.json");
     let crossDayNow = new Date("2026-08-29T14:59:00.000Z");
@@ -1051,7 +1148,7 @@ async function main() {
     const fingerprintRefresh = await fingerprintScheduler.runOnce({ trigger: "fingerprint-change" });
     assert.equal(fingerprintRefresh.status, "initial_complete");
     assert.equal(fingerprintRefresh.terminalMissingPairCount, 0);
-    assert.equal(fingerprintCollector.inspections.length, 36);
+    assert.equal(fingerprintCollector.inspections.length, 12);
     assert.equal(fingerprintCollector.inspections[0].key, `${SANCHEONG.regionKey}__202607`);
     const fingerprintState = JSON.parse(await fsp.readFile(fingerprintStateFile, "utf8"));
     assert.deepEqual(fingerprintState.planFingerprint, {
@@ -1072,7 +1169,7 @@ async function main() {
       now: () => fixedNow
     });
     assert.equal((await adapterOnlyScheduler.runOnce({ trigger: "adapter-only-change" })).status, "initial_complete");
-    assert.equal(adapterOnlyCollector.inspections.length, 36);
+    assert.equal(adapterOnlyCollector.inspections.length, 12);
     const normalizerOnlyCollector = fakeCollector({
       regions: [SANCHEONG],
       cachedKeys: cachedInitialKeys([SANCHEONG]),
@@ -1086,7 +1183,7 @@ async function main() {
       now: () => fixedNow
     });
     assert.equal((await normalizerOnlyScheduler.runOnce({ trigger: "normalizer-only-change" })).status, "initial_complete");
-    assert.equal(normalizerOnlyCollector.inspections.length, 36);
+    assert.equal(normalizerOnlyCollector.inspections.length, 12);
     const regionMapOnlyCollector = fakeCollector({
       regions: [SANCHEONG],
       cachedKeys: cachedInitialKeys([SANCHEONG]),
@@ -1100,7 +1197,7 @@ async function main() {
       now: () => fixedNow
     });
     assert.equal((await regionMapOnlyScheduler.runOnce({ trigger: "region-map-only-change" })).status, "initial_complete");
-    assert.equal(regionMapOnlyCollector.inspections.length, 36);
+    assert.equal(regionMapOnlyCollector.inspections.length, 12);
 
     await fsp.writeFile(budgetStateFile, "{broken-primary", "utf8");
     const recoveredScheduler = createDemandStrengthBackfillScheduler({

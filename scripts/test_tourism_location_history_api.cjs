@@ -511,12 +511,13 @@ async function main() {
     const cacheOnlyVisitorRefresh = await postJson(
       baseUrl,
       "/api/tourism-data/visitors/history",
-      { regionKeys: [SANCHEONG_REGION_KEY], months: 36 },
+      { regionKeys: [SANCHEONG_REGION_KEY], months: 12 },
       adminCookie
     );
     assert.equal(cacheOnlyVisitorRefresh.response.status, 200, JSON.stringify(cacheOnlyVisitorRefresh.body));
     assert.equal(cacheOnlyVisitorRefresh.body.maintenance.status, "disabled");
     assert.equal(cacheOnlyVisitorRefresh.body.tourismVisitorHistory.collection.mode, "cache_only");
+    assert.equal(cacheOnlyVisitorRefresh.body.tourismVisitorHistory.collection.requestedMonths, 12);
     assert.equal(cacheOnlyVisitorRefresh.body.tourismVisitorHistory.collection.networkAttemptedMonths, 0);
 
     const injectedDemandStrengthRefresh = await postJson(
@@ -527,6 +528,15 @@ async function main() {
     );
     assert.equal(injectedDemandStrengthRefresh.response.status, 400);
     assert.match(injectedDemandStrengthRefresh.body.error, /API 주소/);
+
+    const overRangeDemandStrengthRefresh = await postJson(
+      baseUrl,
+      "/api/tourism-data/demand-strength/history",
+      { regionKey: SANCHEONG_REGION_KEY, months: 13 },
+      adminCookie
+    );
+    assert.equal(overRangeDemandStrengthRefresh.response.status, 400);
+    assert.match(overRangeDemandStrengthRefresh.body.error, /1개월부터 12개월/);
 
     const selectedRegionDemandRefresh = await postJson(
       baseUrl,
@@ -600,7 +610,7 @@ async function main() {
     assert.equal(byRegionKey.body.policy.cacheOnly, true);
     assert.equal(byRegionKey.body.policy.externalRequestsAllowed, false);
     assert.equal(byRegionKey.body.cache.mode, "cache_only");
-    assert.equal(byRegionKey.body.cache.requestedMonths, 36);
+    assert.equal(byRegionKey.body.cache.requestedMonths, 12);
     assert.equal(byRegionKey.body.cache.externalRequestsAttempted, 0);
     assert.equal(byRegionKey.body.tourismVisitorPeriodSummary.ok, true);
     assert.equal(byRegionKey.body.tourismVisitorPeriodSummary.status, "ok");
@@ -669,7 +679,7 @@ async function main() {
     assert.equal(tourismStatus.body.demandStrengthBackfill.enabled, false);
     assert.equal(tourismStatus.body.demandStrengthBackfill.phase, "priority_sancheong");
     assert.equal(tourismStatus.body.demandStrengthBackfill.eligibleRegionCount, 198);
-    assert.equal(tourismStatus.body.demandStrengthBackfill.totalPairCount, 7_128);
+    assert.equal(tourismStatus.body.demandStrengthBackfill.totalPairCount, 2_376);
     assert.equal(tourismStatus.body.demandStrengthBackfill.completedPairCount, 0);
     assert.equal(tourismStatus.body.demandStrengthBackfill.todayUsedCalls, 0);
     assert.equal(tourismStatus.body.demandStrengthBackfill.dailyCallBudget, 800);

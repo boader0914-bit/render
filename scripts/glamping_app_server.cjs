@@ -175,7 +175,7 @@ const tourismVisitorMonthlyScheduler = createMonthlyVisitorScheduler({
   },
   stateFile: path.join(TOURISM_DATA_DIR, "maintenance", "visitor_monthly_sync.json"),
   enabled: TOURISM_VISITOR_MONTHLY_SYNC_ENABLED,
-  months: 36,
+  months: 12,
   concurrency: 2
 });
 const TOURISM_DEMAND_STRENGTH_BACKFILL_ENABLED = process.env.TOURISM_DEMAND_STRENGTH_BACKFILL_ENABLED === undefined
@@ -8795,7 +8795,7 @@ function demandVisitorHistoryMetric(tourismVisitorHistory, regions = []) {
       );
   const periodLabel = period?.startYearMonth && period?.endYearMonth
     ? `${period.startYearMonth}~${period.endYearMonth}`
-    : "최근 3개년";
+    : "최근 12개월";
   const completeLabel = Number.isFinite(completeMonths) && Number.isFinite(Number(coverage.expectedMonths))
     ? `${completeMonths}/${Number(coverage.expectedMonths)}개월 완전관측`
     : "반복수집 자료 없음";
@@ -8926,7 +8926,7 @@ function buildDemandStructure({ manifest, conditions, regions, availability, dat
     season: monthInfo.season,
     overallScore,
     overallLabel,
-    summary: `${monthInfo.month || month}월은 ${monthInfo.level} 수요 구간이며 ${topSegments.map((item) => item.name).join(", ")} 중심으로 판단합니다.${visitorOutlookMetric.eligible ? ` 최근 3개년 방문수요 보조점수 ${visitorOutlookMetric.score}점을 15% 반영했습니다.` : " 방문자 이력은 품질기준 충족 전까지 점수에 반영하지 않습니다."}`,
+    summary: `${monthInfo.month || month}월은 ${monthInfo.level} 수요 구간이며 ${topSegments.map((item) => item.name).join(", ")} 중심으로 판단합니다.${visitorOutlookMetric.eligible ? ` 최근 12개월 방문수요 보조점수 ${visitorOutlookMetric.score}점을 15% 반영했습니다.` : " 방문자 이력은 품질기준 충족 전까지 점수에 반영하지 않습니다."}`,
     metrics: weightedDemand.metrics,
     visitorOutlook: weightedDemand.metrics.find((metric) => metric.key === "visitorOutlook") || visitorOutlookMetric,
     weighting: {
@@ -15518,9 +15518,9 @@ function unavailableTourismVisitorHistory(reason, status = "unavailable") {
     period: null,
     collection: {
       mode: "cache_only",
-      requestedMonths: 36,
+      requestedMonths: 12,
       cacheHitMonths: 0,
-      missingCacheMonths: 36,
+      missingCacheMonths: 12,
       networkAttemptedMonths: 0,
       networkSucceededMonths: 0,
       networkFailedMonths: 0
@@ -15551,10 +15551,10 @@ function unavailableTourismDemandStrengthHistory(reason, status = "unavailable")
     latest: null,
     latestAvailable: null,
     coverage: {
-      expectedMonths: 36,
+      expectedMonths: 12,
       completeMonths: 0,
       partialMonths: 0,
-      missingMonths: 36,
+      missingMonths: 12,
       coverageRate: 0
     },
     collection: {
@@ -15563,14 +15563,14 @@ function unavailableTourismDemandStrengthHistory(reason, status = "unavailable")
       requestGrain: "sigungu",
       operationsPerMonth: 2,
       maxPagesPerOperation: 10,
-      requestedMonths: 36,
+      requestedMonths: 12,
       cacheHitMonths: 0,
-      missingCacheMonths: 36,
+      missingCacheMonths: 12,
       networkAttemptedMonths: 0,
       networkSucceededMonths: 0,
       networkFailedMonths: 0,
       operationCallsAttempted: 0,
-      maximumOperationCalls: 720
+      maximumOperationCalls: 240
     },
     source: {
       key: "demandStrength",
@@ -15828,7 +15828,7 @@ async function readTourismDataStatus() {
   };
 }
 
-const TOURISM_LOCATION_HISTORY_MONTHS = 36;
+const TOURISM_LOCATION_HISTORY_MONTHS = 12;
 const TOURISM_LOCATION_HISTORY_QUERY_FIELDS = new Set(["regionKey", "regionName"]);
 const TOURISM_LOCATION_HISTORY_FORBIDDEN_QUERY_FIELDS = new Set([
   "servicekey",
@@ -16365,7 +16365,7 @@ async function loadRun(runId, options = {}) {
     } else {
       tourismVisitorHistory = await tourismCollector.collectVisitorHistory({
         regionNames: tourismRegionNames,
-        months: 36,
+        months: 12,
         collectMissing: false,
         refresh: false,
         force: false
@@ -16386,7 +16386,7 @@ async function loadRun(runId, options = {}) {
     } else {
       tourismDemandStrengthHistory = await tourismCollector.collectDemandStrengthHistory({
         regionNames: tourismRegionNames,
-        months: 36,
+        months: 12,
         collectMissing: false,
         refresh: false,
         force: false
@@ -17423,7 +17423,7 @@ async function route(req, res) {
       if (!regionNames.length && !regionKeys.length && !allRegions) {
         return send(res, 400, { error: "갱신할 지역명 또는 지역키가 필요합니다." });
       }
-      const months = Math.max(1, Math.min(36, Math.round(Number(payload.months) || 36)));
+      const months = Math.max(1, Math.min(12, Math.round(Number(payload.months) || 12)));
       const concurrency = Math.max(1, Math.min(3, Math.round(Number(payload.concurrency) || 2)));
       const endYearMonth = String(payload.endYearMonth || "").replace(/\D/g, "").slice(0, 6);
       const maintenance = await tourismVisitorMonthlyScheduler.runOnce({
@@ -17545,10 +17545,10 @@ async function route(req, res) {
         return send(res, 400, { error: "한 번에 한 개의 지역명 또는 지역키만 지정할 수 있습니다." });
       }
       const months = payload.months === undefined || payload.months === null || payload.months === ""
-        ? 36
+        ? 12
         : Number(payload.months);
-      if (!Number.isInteger(months) || months < 1 || months > 36) {
-        return send(res, 400, { error: "수집 기간은 1개월부터 36개월까지 지정할 수 있습니다." });
+      if (!Number.isInteger(months) || months < 1 || months > 12) {
+        return send(res, 400, { error: "수집 기간은 1개월부터 12개월까지 지정할 수 있습니다." });
       }
       const concurrency = payload.concurrency === undefined || payload.concurrency === null || payload.concurrency === ""
         ? 1

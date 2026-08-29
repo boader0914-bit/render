@@ -5,7 +5,7 @@ const path = require("node:path");
 const STATE_VERSION = "tourism-demand-strength-backfill-v1";
 const DEFAULT_DAILY_CALL_BUDGET = 800;
 const CALLS_PER_WORK_ITEM = 2;
-const INITIAL_BACKFILL_MONTHS = 36;
+const INITIAL_BACKFILL_MONTHS = 12;
 const MAX_DISTINCT_DAY_ATTEMPTS = 3;
 const DEFAULT_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_STARTUP_DELAY_MS = 120 * 1000;
@@ -592,17 +592,12 @@ function projectedPublicPhase(state = {}, eligibleRegionCount = 0) {
     if (recentFloor && failureKeys.some((key) => normalizeYearMonth(key.split("__").at(-1)) >= recentFloor)) {
       return "recent_12";
     }
-    if (failureKeys.length) return "history_24";
+    if (failureKeys.length) return "recent_12";
   }
 
   const sancheongPairCount = Math.min(INITIAL_BACKFILL_MONTHS, plan.totalItems);
   if (plan.cursor < sancheongPairCount) return "priority_sancheong";
-  const remainingRegionCount = Math.max(0, eligibleRegionCount - 1);
-  const recentEndCursor = Math.min(
-    plan.totalItems,
-    sancheongPairCount + (remainingRegionCount * 12)
-  );
-  return plan.cursor < recentEndCursor ? "recent_12" : "history_24";
+  return "recent_12";
 }
 
 function publicSchedulerProjection(state = {}, runtime = {}) {
@@ -700,8 +695,8 @@ function reservationInput(input = {}) {
     throw error;
   }
   const months = input.months === undefined ? null : Number(input.months);
-  if (months !== null && (!Number.isInteger(months) || months <= 0)) {
-    const error = new Error("수동 수집 개월 수는 1 이상의 정수여야 합니다.");
+  if (months !== null && (!Number.isInteger(months) || months <= 0 || months > INITIAL_BACKFILL_MONTHS)) {
+    const error = new Error(`수동 수집 개월 수는 1부터 ${INITIAL_BACKFILL_MONTHS}까지의 정수여야 합니다.`);
     error.statusCode = 400;
     error.code = "tourism_demand_strength_manual_months_invalid";
     throw error;
@@ -713,6 +708,12 @@ function reservationInput(input = {}) {
     const error = new Error("수동 수집 예약 호출 수는 지역·월 작업당 2회의 배수여야 합니다.");
     error.statusCode = 400;
     error.code = "tourism_demand_strength_manual_requested_calls_invalid";
+    throw error;
+  }
+  if (requestedCalls > INITIAL_BACKFILL_MONTHS * CALLS_PER_WORK_ITEM) {
+    const error = new Error(`수동 수집 예약은 최근 ${INITIAL_BACKFILL_MONTHS}개월 범위를 초과할 수 없습니다.`);
+    error.statusCode = 400;
+    error.code = "tourism_demand_strength_manual_months_invalid";
     throw error;
   }
   if (months !== null && requestedCalls !== months * CALLS_PER_WORK_ITEM) {
@@ -973,6 +974,9 @@ function createDemandStrengthBackfillScheduler(options = {}) {
     for (const key of Object.keys(state.failures)) {
       if (!planKeys.has(key)) delete state.failures[key];
     }
+    for (const key of Object.keys(state.terminalMissing || {})) {
+      if (!planKeys.has(key)) delete state.terminalMissing[key];
+    }
     const items = state.plan.retryOnly
       ? proposed.items.filter((item) => state.failures[item.key])
       : proposed.items;
@@ -1032,7 +1036,7 @@ function createDemandStrengthBackfillScheduler(options = {}) {
         progress
       };
       state = await persist(state);
-      return resultEnvelope(state, "initial_complete", "initial_36_month_backfill_complete", targetYearMonth, progress);
+      return resultEnvelope(state, "initial_complete", "initial_12_month_backfill_complete", targetYearMonth, progress);
     }
     state.monthlyCompletedThrough = completedPlan.endYearMonth;
     state.plan = null;

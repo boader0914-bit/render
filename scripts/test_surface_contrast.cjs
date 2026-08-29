@@ -512,14 +512,14 @@ assert(
 assert(
   app.includes("state.tourismDataStatus?.demandStrengthBackfill")
     && app.includes("function renderTourismDemandStrengthBackfillStatus()")
-    && app.includes("산청군을 먼저 확인하고 전국 시군구의 최근 12개월을 우선 저장")
+    && app.includes("산청군을 먼저 확인한 뒤 전국 시군구의 최근 완료월 기준 12개월만 저장")
     && app.includes("data-tourism-demand-strength-backfill-run")
     && app.includes('fetchJson("/api/tourism-data/status")')
     && app.includes('fetchJson("/api/tourism-data/demand-strength/backfill/run"')
     && app.includes('body: JSON.stringify({ force: false })')
     && app.includes('priority_sancheong: "산청 우선 선수집"')
     && app.includes('recent_12: "전국 최근 12개월"')
-    && app.includes('history_24: "과거 24개월 보강"')
+    && app.includes('history_24: "최근 12개월 보강"')
     && app.includes("completedPairCount")
     && app.includes("todayUsedCalls")
     && app.includes("nextCheckAt")
@@ -592,14 +592,22 @@ assert(
     && locationProfileBlock.includes("각 점은 표시된 12개월 전체 누적값")
     && locationProfileBlock.includes("<h4>현재월 포함 최근 12개월</h4>")
     && locationProfileBlock.includes("현재월은 완전월 확정 전 자료 대기")
-    && locationProfileBlock.includes("최근 확정월 기준 36개월 방문자")
+    && locationProfileBlock.includes("최근 확정월 기준 12개월 방문자")
     && locationProfileBlock.includes("조회 대상 ${visitor.period}")
     && locationProfileBlock.includes("function locationProfileRecentSeriesWindow(")
     && locationProfileBlock.includes("방문자 그래프 동일 기간 ${referencePeriodLabel}")
-    && locationProfileBlock.includes("최근 12개월 기본표시 · 36개월 저장 이력 유지")
+    && locationProfileBlock.includes("최근 완료월 기준 12개월")
     && locationProfileBlock.includes("referencePeriod: strengthReferencePeriod")
     && locationProfileBlock.includes('const textAnchor = points.length === 1 ? "middle" : index === 0 ? "start" : index === points.length - 1 ? "end" : "middle";'),
   "location graphs must distinguish rolling monthly periods, 12-month snapshot ranges, and requested strength windows",
+  failures
+);
+
+assert(
+  !app.includes("최근 3개년")
+    && !app.includes("36개월 저장 이력 유지")
+    && !/\bmonths\s*:\s*36\b/.test(app),
+  "tourism UI and refresh requests must remain bounded to the latest 12 months",
   failures
 );
 
