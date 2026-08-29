@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260829-location-period-label-v89";
-const expectedAssetVersion = "datalab-20260829-location-period-label-v70";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260829-tourism-12m-v90";
+const expectedAssetVersion = "datalab-20260829-tourism-12m-v71";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -370,7 +370,7 @@ const assetVersionAssignments = [...server.matchAll(
 assert(
   cacheVersionAssignment?.[1] === expectedCacheVersion
     && /const APP_SHELL = \[[\s\S]*?"\/styles\.css"[\s\S]*?"\/admin-theme\.css"[\s\S]*?"\/app\.js"[\s\S]*?\];/.test(serviceWorker),
-  "service worker CACHE_VERSION assignment and app shell must match the demand-strength release exactly",
+  "service worker CACHE_VERSION assignment and app shell must match the tourism 12-month release exactly",
   failures
 );
 
