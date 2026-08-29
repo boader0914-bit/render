@@ -35,7 +35,7 @@ const DEFAULT_SOURCE_DEFS = [
     serviceKeyEnv: "DATA_GO_KR_RESOURCE_DEMAND_SERVICE_KEY",
     referenceUrl: "https://www.data.go.kr/data/15152138/openapi.do",
     defaultEndpoint: "https://apis.data.go.kr/B551011/AreaTarResDemService",
-    adapter: "area-tar-res-dem-v2",
+    adapter: "area-tar-res-dem-v3",
     unit: "sigungu",
     defaultRegionParam: "signguCd",
     defaultPeriodParam: "baseYm"
@@ -47,7 +47,7 @@ const DEFAULT_SOURCE_DEFS = [
     serviceKeyEnv: "DATA_GO_KR_DIVERSITY_SERVICE_KEY",
     referenceUrl: "https://www.data.go.kr/data/15151365/openapi.do",
     defaultEndpoint: "https://apis.data.go.kr/B551011/AreaTarDivService",
-    adapter: "area-tar-div-v2",
+    adapter: "area-tar-div-v3",
     unit: "sigungu",
     defaultRegionParam: "signguCd",
     defaultPeriodParam: "baseYm"
@@ -131,10 +131,10 @@ const DEMAND_STRENGTH_OPERATIONS = Object.freeze({
     })
   })
 });
-const RESOURCE_DEMAND_ADAPTER_VERSION = "area-tar-res-dem-v2";
-const DIVERSITY_ADAPTER_VERSION = "area-tar-div-v2";
-const REGIONAL_INDEX_NORMALIZER_VERSION = "regional-index-row-normalizer-v2";
-const REGIONAL_INDEX_REQUEST_PROFILE_VERSION = "all-metrics-unfiltered-v2";
+const RESOURCE_DEMAND_ADAPTER_VERSION = "area-tar-res-dem-v3";
+const DIVERSITY_ADAPTER_VERSION = "area-tar-div-v3";
+const REGIONAL_INDEX_NORMALIZER_VERSION = "regional-index-row-normalizer-v3";
+const REGIONAL_INDEX_REQUEST_PROFILE_VERSION = "metric-code-filter-v3";
 const REGIONAL_INDEX_SUCCESS_CODES = new Set(["0000", "00"]);
 const REGIONAL_INDEX_PAGE_SIZE = 100;
 const REGIONAL_INDEX_MAX_PAGES = 10;
@@ -2891,6 +2891,12 @@ function createCollector(options = {}) {
     return REGIONAL_INDEX_SOURCE_SPECS[String(sourceKey || "").trim()] || null;
   }
 
+  function regionalIndexMetricCount(spec = {}) {
+    return Object.values(spec?.operations || {}).reduce((sum, operation) => (
+      sum + Object.keys(operation.expectedMetrics || {}).length
+    ), 0);
+  }
+
   function regionalIndexSourceDef(sourceKey = "") {
     return DEFAULT_SOURCE_DEFS.find((source) => source.key === sourceKey) || null;
   }
@@ -3016,7 +3022,7 @@ function createCollector(options = {}) {
     }
   }
 
-  function regionalIndexPageUrl(config = {}, operationDef = {}, region = {}, yearMonth = "", pageNo = 1, pageSize = REGIONAL_INDEX_PAGE_SIZE, serviceKey = "") {
+  function regionalIndexPageUrl(config = {}, operationDef = {}, region = {}, yearMonth = "", pageNo = 1, pageSize = REGIONAL_INDEX_PAGE_SIZE, serviceKey = "", metricCode = "") {
     const endpoint = new URL(config.endpoint);
     endpoint.pathname = `${endpoint.pathname.replace(/\/+$/, "")}/${operationDef.operation}`;
     const params = {
@@ -3029,6 +3035,7 @@ function createCollector(options = {}) {
       pageNo: String(pageNo),
       numOfRows: String(pageSize)
     };
+    if (operationDef.codeParam && metricCode) params[operationDef.codeParam] = metricCode;
     Object.entries(params).forEach(([key, value]) => endpoint.searchParams.set(key, String(value)));
     const connector = endpoint.toString().includes("?") ? "&" : "?";
     const keyValue = serviceKey.includes("%") ? serviceKey : encodeURIComponent(serviceKey);
@@ -3068,12 +3075,12 @@ function createCollector(options = {}) {
     };
   }
 
-  async function requestRegionalIndexPage(config = {}, operationDef = {}, region = {}, yearMonth = "", pageNo = 1, pageSize = REGIONAL_INDEX_PAGE_SIZE, serviceKey = "") {
+  async function requestRegionalIndexPage(config = {}, operationDef = {}, region = {}, yearMonth = "", pageNo = 1, pageSize = REGIONAL_INDEX_PAGE_SIZE, serviceKey = "", metricCode = "") {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
     try {
       const response = await fetchImpl(
-        regionalIndexPageUrl(config, operationDef, region, yearMonth, pageNo, pageSize, serviceKey),
+        regionalIndexPageUrl(config, operationDef, region, yearMonth, pageNo, pageSize, serviceKey, metricCode),
         { signal: controller.signal, headers: { accept: "application/json" } }
       );
       const responseText = await response.text();
@@ -3209,7 +3216,7 @@ function createCollector(options = {}) {
 
   function regionalIndexMaxPages(sourceKey = "", input = {}) {
     const spec = regionalIndexSpec(sourceKey);
-    const rawInputValue = input.maxPagesPerOperation;
+    const rawInputValue = input.maxPagesPerMetric ?? input.maxPagesPerOperation;
     const inputValue = rawInputValue === undefined || rawInputValue === null || rawInputValue === ""
       ? Number.NaN
       : Number(rawInputValue);
@@ -3223,6 +3230,79 @@ function createCollector(options = {}) {
     return spec ? Math.max(1, Math.min(50, Math.round(configuredValue))) : 1;
   }
 
+  async function requestRegionalIndexMetric(config = {}, operationDef = {}, region = {}, yearMonth = "", serviceKey = "", metricCode = "", pageSize = REGIONAL_INDEX_PAGE_SIZE, maxPages = REGIONAL_INDEX_MAX_PAGES) {
+    const requestedAt = currentDate().toISOString();
+    const rows = [];
+    let totalCount = null;
+    let pageCount = 0;
+    let requestCount = 0;
+    const metricLabel = String(operationDef.expectedMetrics?.[metricCode] || "");
+    const failedMetric = (status, reason, quality = {}) => ({
+      code: metricCode,
+      label: metricLabel,
+      status,
+      reason,
+      requestedAt,
+      rows: [],
+      pageCount,
+      requestCount,
+      maxPages,
+      totalCount,
+      receivedRows: rows.length,
+      ...quality
+    });
+    for (let pageNo = 1; pageNo <= maxPages; pageNo += 1) {
+      requestCount += 1;
+      const page = await requestRegionalIndexPage(
+        config,
+        operationDef,
+        region,
+        yearMonth,
+        pageNo,
+        pageSize,
+        serviceKey,
+        metricCode
+      );
+      if (!page.ok) {
+        return failedMetric(page.reason === "no_observation" ? "no_observation" : "error", page.reason, {
+          httpStatus: page.httpStatus || null,
+          apiCode: page.code || ""
+        });
+      }
+      if (page.pageNo !== null && page.pageNo !== pageNo) return failedMetric("error", "page_number_mismatch");
+      if (totalCount === null) totalCount = page.totalCount;
+      if (page.totalCount !== totalCount) return failedMetric("error", "total_count_changed");
+      pageCount += 1;
+      rows.push(...page.rows);
+      if (rows.length >= totalCount) break;
+      if (!page.rows.length) return failedMetric("error", "incomplete_pagination");
+    }
+    if (totalCount === null || rows.length < totalCount) {
+      return failedMetric("error", "page_limit_exceeded");
+    }
+    if (!totalCount) return failedMetric("no_observation", "empty_verified");
+    const observedRows = rows.slice(0, totalCount);
+    const responseCodeMismatchCount = observedRows.filter((row) => (
+      String(row?.[operationDef.codeField] || "").trim() !== metricCode
+    )).length;
+    if (responseCodeMismatchCount) {
+      return failedMetric("error", "metric_code_mismatch", { responseCodeMismatchCount });
+    }
+    return {
+      code: metricCode,
+      label: metricLabel,
+      status: "ok",
+      reason: "",
+      requestedAt,
+      rows: observedRows,
+      pageCount,
+      requestCount,
+      maxPages,
+      totalCount,
+      receivedRows: rows.length
+    };
+  }
+
   async function requestRegionalIndexOperation(sourceKey = "", config = {}, operationDef = {}, region = {}, yearMonth = "", serviceKey = "", input = {}) {
     const requestedAt = currentDate().toISOString();
     const envSuffix = sourceKey === "resourceDemand" ? "RESOURCE_DEMAND" : "DIVERSITY";
@@ -3232,69 +3312,101 @@ function createCollector(options = {}) {
       env
     ))));
     const maxPages = regionalIndexMaxPages(sourceKey, input);
-    const rows = [];
-    let totalCount = null;
-    let pageCount = 0;
-    let requestCount = 0;
-    const failedOperation = (status, reason, quality = {}) => {
+    const expectedMetricEntries = Object.entries(operationDef.expectedMetrics || {});
+    const metricResults = [];
+    for (const [metricCode] of expectedMetricEntries) {
+      metricResults.push(await requestRegionalIndexMetric(
+        config,
+        operationDef,
+        region,
+        yearMonth,
+        serviceKey,
+        metricCode,
+        pageSize,
+        maxPages
+      ));
+    }
+    const requestCount = metricResults.reduce((sum, result) => sum + Number(result.requestCount || 0), 0);
+    const pageCount = metricResults.reduce((sum, result) => sum + Number(result.pageCount || 0), 0);
+    const successfulResults = metricResults.filter((result) => result.status === "ok");
+    const noObservationResults = metricResults.filter((result) => result.status === "no_observation");
+    const failedResults = metricResults.filter((result) => result.status === "error");
+    const metricRequests = metricResults.map((result) => ({
+      code: result.code,
+      label: result.label,
+      status: result.status,
+      reason: result.reason,
+      pageCount: result.pageCount,
+      requestCount: result.requestCount,
+      totalCount: result.totalCount,
+      receivedRows: result.receivedRows,
+      httpStatus: result.httpStatus || null,
+      apiCode: result.apiCode || ""
+    }));
+    const aggregateQuality = {
+      metricQueryCount: expectedMetricEntries.length,
+      metricQuerySucceededCount: successfulResults.length,
+      metricQueryNoObservationCount: noObservationResults.length,
+      metricQueryFailedCount: failedResults.length,
+      noObservationMetricCodes: noObservationResults.map((result) => result.code),
+      failedMetricCodes: failedResults.map((result) => result.code),
+      pageCount,
+      requestCount,
+      maxPages,
+      maximumRequestCount: expectedMetricEntries.length * maxPages,
+      totalCount: successfulResults.reduce((sum, result) => sum + Number(result.totalCount || 0), 0),
+      receivedRows: successfulResults.reduce((sum, result) => sum + Number(result.receivedRows || 0), 0)
+    };
+    if (!successfulResults.length) {
+      const allNoObservation = noObservationResults.length === expectedMetricEntries.length;
+      const status = allNoObservation ? "no_observation" : "error";
+      const reason = allNoObservation ? "no_observation" : "metric_queries_failed";
       const empty = emptyDemandOperation(operationDef, status, reason);
       return {
         ...empty,
         requestedAt,
         requestCount,
+        metricRequests,
         quality: {
           ...empty.quality,
-          status,
-          pageCount,
-          requestCount,
-          maxPages,
-          ...quality
+          ...aggregateQuality,
+          status
         }
       };
-    };
-    for (let pageNo = 1; pageNo <= maxPages; pageNo += 1) {
-      requestCount += 1;
-      const page = await requestRegionalIndexPage(config, operationDef, region, yearMonth, pageNo, pageSize, serviceKey);
-      if (!page.ok) {
-        const status = page.reason === "no_observation" ? "no_observation" : "error";
-        return failedOperation(status, page.reason, {
-          httpStatus: page.httpStatus || null,
-          apiCode: page.code || ""
-        });
-      }
-      if (page.pageNo !== null && page.pageNo !== pageNo) return failedOperation("error", "page_number_mismatch");
-      if (totalCount === null) totalCount = page.totalCount;
-      if (page.totalCount !== totalCount) return failedOperation("error", "total_count_changed");
-      pageCount += 1;
-      rows.push(...page.rows);
-      if (rows.length >= totalCount) break;
-      if (!page.rows.length) return failedOperation("error", "incomplete_pagination");
     }
-    if (totalCount === null || rows.length < totalCount) {
-      return failedOperation("error", "page_limit_exceeded", { totalCount, receivedRows: rows.length });
-    }
-    if (!totalCount) {
-      return failedOperation("no_observation", "empty_verified", { totalCount, receivedRows: rows.length });
-    }
-    const normalized = normalizeRegionalIndexRows(rows.slice(0, totalCount), operationDef, region, yearMonth);
-    return {
+    const rows = successfulResults.flatMap((result) => result.rows);
+    const normalized = normalizeRegionalIndexRows(rows, operationDef, region, yearMonth);
+    const allMetricQueriesSucceeded = successfulResults.length === expectedMetricEntries.length;
+    const operation = {
       ...normalized,
       requestedAt,
       requestCount,
+      metricRequests,
       quality: {
         ...normalized.quality,
-        pageCount,
-        requestCount,
-        maxPages,
-        totalCount,
-        receivedRows: rows.length
+        ...aggregateQuality,
+        detailComplete: normalized.quality.detailComplete && allMetricQueriesSucceeded
       }
     };
+    if (operation.status === "ok" && !allMetricQueriesSucceeded) {
+      operation.status = "partial";
+      operation.reason = "metric_query_incomplete";
+      operation.quality.status = "partial";
+    }
+    return operation;
   }
 
   function publicRegionalIndexSnapshot(sourceKey = "", snapshot = {}, input = {}, cache = {}) {
     const spec = regionalIndexSpec(sourceKey);
     const sourceDef = regionalIndexSourceDef(sourceKey);
+    const metricQueriesPerMonth = regionalIndexMetricCount(spec);
+    const maxPagesPerMetric = Number(
+      cache.maxPagesPerMetric
+      ?? cache.maxPagesPerOperation
+      ?? snapshot.collection?.maxPagesPerMetric
+      ?? snapshot.collection?.maxPagesPerOperation
+      ?? regionalIndexMaxPages(sourceKey, input)
+    ) || 1;
     const operations = Object.fromEntries(Object.entries(spec?.operations || {}).map(([key, operationDef]) => [
       key,
       snapshot.operations?.[key] || emptyDemandOperation(operationDef, "unavailable", snapshot.reason || "unavailable")
@@ -3331,8 +3443,16 @@ function createCollector(options = {}) {
         mode: cache.mode || snapshot.collection?.mode || (cache.hit ? "cache" : "none"),
         requestGrain: "sigungu",
         operationCallsAttempted: Number(cache.operationCallsAttempted ?? snapshot.collection?.operationCallsAttempted ?? 0),
-        maxPagesPerOperation: Number(cache.maxPagesPerOperation ?? snapshot.collection?.maxPagesPerOperation ?? 0) || null,
-        operationsPerMonth: Object.keys(spec?.operations || {}).length
+        maxPagesPerMetric,
+        maxPagesPerOperation: maxPagesPerMetric,
+        endpointOperationsPerMonth: Object.keys(spec?.operations || {}).length,
+        operationsPerMonth: metricQueriesPerMonth,
+        metricQueriesPerMonth,
+        maximumOperationCalls: Number(
+          cache.maximumOperationCalls
+          ?? snapshot.collection?.maximumOperationCalls
+          ?? (metricQueriesPerMonth * maxPagesPerMetric)
+        )
       },
       cache: {
         hit: Boolean(cache.hit),
@@ -3347,6 +3467,7 @@ function createCollector(options = {}) {
         noCrossMetricAveraging: true,
         requiresClosedMonth: true,
         singleSigunguPerCollection: true,
+        oneRequestPerMetricCode: true,
         completeCacheOnly: true,
         failedRefreshDoesNotOverwriteCompleteCache: true,
         completeRequiresAllExpectedMetricCodes: true,
@@ -3477,6 +3598,8 @@ function createCollector(options = {}) {
     const operations = Object.fromEntries(operationEntries.map(([key], index) => [key, operationResults[index]]));
     const operationCallsAttempted = operationResults.reduce((sum, operation) => sum + Number(operation.requestCount || 0), 0);
     const maxPagesPerOperation = regionalIndexMaxPages(sourceKey, input);
+    const metricQueriesPerMonth = regionalIndexMetricCount(spec);
+    const maximumOperationCalls = metricQueriesPerMonth * maxPagesPerOperation;
     const completeOperationCount = operationEntries.filter(([key, operationDef]) => (
       regionalIndexOperationComplete(operationDef, operations[key])
     )).length;
@@ -3519,13 +3642,30 @@ function createCollector(options = {}) {
         observedMetricCount: operationResults.reduce((sum, operation) => (
           sum + Number(operation.quality?.observedMetricCount || 0)
         ), 0),
+        metricQueryCount: operationResults.reduce((sum, operation) => (
+          sum + Number(operation.quality?.metricQueryCount || 0)
+        ), 0),
+        metricQuerySucceededCount: operationResults.reduce((sum, operation) => (
+          sum + Number(operation.quality?.metricQuerySucceededCount || 0)
+        ), 0),
+        metricQueryNoObservationCount: operationResults.reduce((sum, operation) => (
+          sum + Number(operation.quality?.metricQueryNoObservationCount || 0)
+        ), 0),
+        metricQueryFailedCount: operationResults.reduce((sum, operation) => (
+          sum + Number(operation.quality?.metricQueryFailedCount || 0)
+        ), 0),
         regionGrain: "sigungu",
         timeGrain: "month"
       },
       collection: {
         mode: force ? "force_refresh" : "collect",
         operationCallsAttempted,
-        maxPagesPerOperation
+        maxPagesPerMetric: maxPagesPerOperation,
+        maxPagesPerOperation,
+        endpointOperationsPerMonth: operationEntries.length,
+        operationsPerMonth: metricQueriesPerMonth,
+        metricQueriesPerMonth,
+        maximumOperationCalls
       },
       source: {
         referenceUrl: sourceDef.referenceUrl,
@@ -3545,7 +3685,9 @@ function createCollector(options = {}) {
         mode: "cache",
         filePath: cached.filePath,
         operationCallsAttempted,
+        maxPagesPerMetric: maxPagesPerOperation,
         maxPagesPerOperation,
+        maximumOperationCalls,
         refreshFailed: true,
         refreshReason: reason
       });
@@ -3579,7 +3721,11 @@ function createCollector(options = {}) {
         overallValue: values[key],
         metrics: Array.isArray(snapshot?.operations?.[key]?.metrics)
           ? snapshot.operations[key].metrics
-          : []
+          : [],
+        metricRequests: Array.isArray(snapshot?.operations?.[key]?.metricRequests)
+          ? snapshot.operations[key].metricRequests
+          : [],
+        quality: snapshot?.operations?.[key]?.quality || {}
       }])),
       access,
       collectedAt: snapshot.collectedAt || ""
@@ -3601,6 +3747,8 @@ function createCollector(options = {}) {
       Math.round(Number(input.concurrency) || 1)
     ));
     const maxPagesPerOperation = regionalIndexMaxPages(sourceKey, input);
+    const metricQueriesPerMonth = regionalIndexMetricCount(spec);
+    const maximumOperationCalls = monthCount * metricQueriesPerMonth * maxPagesPerOperation;
     const match = await resolveRegionalIndexMatch(input);
     if (!spec || !match.region) {
       return {
@@ -3614,9 +3762,13 @@ function createCollector(options = {}) {
         collection: {
           mode: "cache_only",
           requestGrain: "sigungu",
-          operationsPerMonth: Object.keys(spec?.operations || {}).length,
+          endpointOperationsPerMonth: Object.keys(spec?.operations || {}).length,
+          operationsPerMonth: metricQueriesPerMonth,
+          metricQueriesPerMonth,
           operationCallsAttempted: 0,
-          maxPagesPerOperation
+          maxPagesPerMetric: maxPagesPerOperation,
+          maxPagesPerOperation,
+          maximumOperationCalls
         },
         quality: { missingIsNotZero: true, completeCacheOnly: true }
       };
@@ -3690,8 +3842,14 @@ function createCollector(options = {}) {
               yearMonth,
               region: publicRegion,
               operations: {},
-              collection: { mode: "collect", operationCallsAttempted: Object.keys(spec.operations).length }
-            }, { yearMonth }, { hit: false, ttlHours, operationCallsAttempted: Object.keys(spec.operations).length })
+              collection: { mode: "collect", operationCallsAttempted: metricQueriesPerMonth * maxPagesPerOperation }
+            }, { yearMonth }, {
+              hit: false,
+              ttlHours,
+              operationCallsAttempted: metricQueriesPerMonth * maxPagesPerOperation,
+              maxPagesPerMetric: maxPagesPerOperation,
+              maximumOperationCalls: metricQueriesPerMonth * maxPagesPerOperation
+            })
           };
         }
       }
@@ -3736,7 +3894,10 @@ function createCollector(options = {}) {
         mode: force ? "force_refresh" : collectMissing ? "backfill_missing" : "cache_only",
         concurrency,
         requestGrain: "sigungu",
-        operationsPerMonth: Object.keys(spec.operations).length,
+        endpointOperationsPerMonth: Object.keys(spec.operations).length,
+        operationsPerMonth: metricQueriesPerMonth,
+        metricQueriesPerMonth,
+        maxPagesPerMetric: maxPagesPerOperation,
         maxPagesPerOperation,
         requestedMonths: monthCount,
         cacheHitMonths: monthResults.filter((result) => result.access === "cache").length,
@@ -3745,7 +3906,7 @@ function createCollector(options = {}) {
         networkSucceededMonths: networkResults.filter((result) => result.networkSucceeded).length,
         networkFailedMonths: networkResults.filter((result) => !result.networkSucceeded).length,
         operationCallsAttempted,
-        maximumOperationCalls: monthCount * Object.keys(spec.operations).length * maxPagesPerOperation
+        maximumOperationCalls
       },
       source: {
         key: sourceKey,
@@ -3760,6 +3921,7 @@ function createCollector(options = {}) {
         missingIsNotZero: true,
         partialMonthsExcludedFromCompleteCoverage: true,
         failedRefreshDoesNotOverwriteCompleteCache: true,
+        oneRequestPerMetricCode: true,
         completeCacheOnly: true,
         completeRequiresAllExpectedMetricCodes: true,
         completeRequiresOverallCodes: Object.values(spec.operations).map((operation) => operation.overallCode),
@@ -4073,6 +4235,11 @@ function createCollector(options = {}) {
             normalizerVersion: regionalSpec.normalizerVersion,
             requestProfile: regionalSpec.requestProfile,
             operations: Object.values(regionalSpec.operations).map((operation) => operation.operation),
+            endpointOperationsPerMonth: Object.keys(regionalSpec.operations).length,
+            operationsPerMonth: regionalIndexMetricCount(regionalSpec),
+            metricQueriesPerMonth: regionalIndexMetricCount(regionalSpec),
+            maxPagesPerMetric: regionalIndexMaxPages(def.key, {}),
+            maximumOperationCallsPerMonth: regionalIndexMetricCount(regionalSpec) * regionalIndexMaxPages(def.key, {}),
             requiredOverallCodes: Object.values(regionalSpec.operations).map((operation) => operation.overallCode),
             requiredMetricCodes: Object.fromEntries(Object.entries(regionalSpec.operations).map(([key, operation]) => [
               key,
@@ -4084,6 +4251,7 @@ function createCollector(options = {}) {
             cache: def.key === "resourceDemand" ? resourceDemandCacheSummary : diversityCacheSummary,
             qualityPolicy: {
               missingIsNotZero: true,
+              oneRequestPerMetricCode: true,
               completeCacheOnly: true,
               completeRequiresAllExpectedMetricCodes: true,
               failedRefreshDoesNotOverwriteCompleteCache: true

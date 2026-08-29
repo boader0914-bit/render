@@ -683,9 +683,17 @@ async function main() {
     assert.equal(byRegionKey.body.tourismResourceDemandHistory.collection.mode, "cache_only");
     assert.equal(byRegionKey.body.tourismResourceDemandHistory.collection.requestedMonths, 12);
     assert.equal(byRegionKey.body.tourismResourceDemandHistory.collection.networkAttemptedMonths, 0);
+    assert.equal(byRegionKey.body.tourismResourceDemandHistory.collection.operationsPerMonth, 19);
+    assert.equal(byRegionKey.body.tourismResourceDemandHistory.collection.metricQueriesPerMonth, 19);
+    assert.equal(byRegionKey.body.tourismResourceDemandHistory.collection.endpointOperationsPerMonth, 2);
+    assert.equal(byRegionKey.body.tourismResourceDemandHistory.collection.maximumOperationCalls, 228);
     assert.equal(byRegionKey.body.tourismDiversityHistory.collection.mode, "cache_only");
     assert.equal(byRegionKey.body.tourismDiversityHistory.collection.requestedMonths, 12);
     assert.equal(byRegionKey.body.tourismDiversityHistory.collection.networkAttemptedMonths, 0);
+    assert.equal(byRegionKey.body.tourismDiversityHistory.collection.operationsPerMonth, 20);
+    assert.equal(byRegionKey.body.tourismDiversityHistory.collection.metricQueriesPerMonth, 20);
+    assert.equal(byRegionKey.body.tourismDiversityHistory.collection.endpointOperationsPerMonth, 3);
+    assert.equal(byRegionKey.body.tourismDiversityHistory.collection.maximumOperationCalls, 240);
     assert.equal(byRegionKey.body.cache.resourceDemand.cacheHitMonths, 0);
     assert.equal(byRegionKey.body.cache.resourceDemand.missingCacheMonths, 12);
     assert.equal(byRegionKey.body.cache.diversity.cacheHitMonths, 0);

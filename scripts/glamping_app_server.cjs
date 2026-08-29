@@ -15596,7 +15596,8 @@ function unavailableTourismIndexHistory({
   sourceKey,
   sourceLabel,
   referenceUrl,
-  operationsPerMonth
+  operationsPerMonth,
+  endpointOperationsPerMonth
 } = {}) {
   return {
     ok: false,
@@ -15620,6 +15621,8 @@ function unavailableTourismIndexHistory({
       concurrency: 1,
       requestGrain: "sigungu",
       operationsPerMonth: Number(operationsPerMonth || 0),
+      metricQueriesPerMonth: Number(operationsPerMonth || 0),
+      endpointOperationsPerMonth: Number(endpointOperationsPerMonth || 0),
       requestedMonths: 12,
       cacheHitMonths: 0,
       missingCacheMonths: 12,
@@ -15652,7 +15655,8 @@ function unavailableTourismResourceDemandHistory(reason, status = "unavailable")
     sourceKey: "resourceDemand",
     sourceLabel: "한국관광공사 지역별 관광 자원 수요",
     referenceUrl: "https://www.data.go.kr/data/15152138/openapi.do",
-    operationsPerMonth: 2
+    operationsPerMonth: 19,
+    endpointOperationsPerMonth: 2
   });
 }
 
@@ -15663,7 +15667,8 @@ function unavailableTourismDiversityHistory(reason, status = "unavailable") {
     sourceKey: "diversity",
     sourceLabel: "한국관광공사 지역별 관광 다양성",
     referenceUrl: "https://www.data.go.kr/data/15151365/openapi.do",
-    operationsPerMonth: 3
+    operationsPerMonth: 20,
+    endpointOperationsPerMonth: 3
   });
 }
 
@@ -16347,7 +16352,8 @@ async function readTourismLocationHistoryCache(selector = {}) {
     months: TOURISM_LOCATION_HISTORY_MONTHS,
     collectMissing: false,
     refresh: false,
-    force: false
+    force: false,
+    maxPagesPerOperation: 1
   };
   const [
     tourismVisitorHistory,

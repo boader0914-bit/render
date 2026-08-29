@@ -1207,6 +1207,8 @@ async function main() {
     const regionalIndexRequests = [];
     let conflictResourceDemand = false;
     let omitResourceMetricCode = "";
+    let errorResourceMetricCode = "";
+    let paginatedResourceMetricCode = "";
     let mismatchDiversityMonth = false;
     let mismatchDiversityRegion = false;
     const regionalIndexCollector = createCollector({
@@ -1217,8 +1219,8 @@ async function main() {
       env: {
         DATA_GO_KR_RESOURCE_DEMAND_SERVICE_KEY: "fixture-resource-demand-key",
         DATA_GO_KR_DIVERSITY_SERVICE_KEY: "fixture-diversity-key",
-        KTO_TOURISM_RESOURCE_DEMAND_PAGE_SIZE: "100",
-        KTO_TOURISM_DIVERSITY_PAGE_SIZE: "100"
+        KTO_TOURISM_RESOURCE_DEMAND_PAGE_SIZE: "10",
+        KTO_TOURISM_DIVERSITY_PAGE_SIZE: "10"
       },
       now: () => new Date("2026-07-15T00:00:00.000Z"),
       fetchImpl: async (requestUrl) => {
@@ -1228,8 +1230,29 @@ async function main() {
         const yearMonth = url.searchParams.get("baseYm");
         const pageNo = Number(url.searchParams.get("pageNo"));
         const pageSize = Number(url.searchParams.get("numOfRows"));
-        regionalIndexRequests.push({ url, operation, sourceKey, yearMonth });
-        const rows = regionalIndexRows(sourceKey, yearMonth, operation, {
+        const metricDefinition = {
+          areaTarSvcDemList: { codeParam: "tarSvcDemIxCd", codeField: "tarSvcDemIxCd" },
+          areaCulResDemList: { codeParam: "culResDemIxCd", codeField: "culResDemIxCd" },
+          areaTouDivList: { codeParam: "touDivIxCd", codeField: "touDivIxCd" },
+          areaExpDivList: { codeParam: "expDivIxCd", codeField: "expDivIxCd" },
+          areaIntlDivList: { codeParam: "intlDivIxCd", codeField: "intlDivIxCd" }
+        }[operation];
+        assert.ok(metricDefinition, `Unknown metric operation: ${operation}`);
+        const metricCode = url.searchParams.get(metricDefinition.codeParam);
+        regionalIndexRequests.push({ url, operation, sourceKey, yearMonth, metricCode });
+        if (errorResourceMetricCode && sourceKey === "resourceDemand" && metricCode === errorResourceMetricCode) {
+          return {
+            ok: false,
+            status: 503,
+            text: async () => JSON.stringify({
+              response: {
+                header: { resultCode: "05", resultMsg: "SERVICETIMEOUT_ERROR" },
+                body: { pageNo, numOfRows: pageSize, totalCount: 0, items: { item: [] } }
+              }
+            })
+          };
+        }
+        let rows = regionalIndexRows(sourceKey, yearMonth, operation, {
           conflict: conflictResourceDemand && sourceKey === "resourceDemand" && operation === "areaTarSvcDemList",
           omitCodes: omitResourceMetricCode && sourceKey === "resourceDemand" && operation === "areaTarSvcDemList"
             ? [omitResourceMetricCode]
@@ -1237,7 +1260,10 @@ async function main() {
           baseYm: mismatchDiversityMonth && sourceKey === "diversity" ? "202604" : yearMonth,
           signguCd: mismatchDiversityRegion && sourceKey === "diversity" ? "48850" : undefined,
           signguNm: mismatchDiversityRegion && sourceKey === "diversity" ? "하동군" : undefined
-        });
+        }).filter((row) => String(row[metricDefinition.codeField]) === metricCode);
+        if (paginatedResourceMetricCode && sourceKey === "resourceDemand" && metricCode === paginatedResourceMetricCode && rows[0]) {
+          rows = Array.from({ length: 11 }, () => ({ ...rows[0] }));
+        }
         const offset = (pageNo - 1) * pageSize;
         return {
           ok: true,
@@ -1260,22 +1286,25 @@ async function main() {
     const resourceCacheDirectory = path.join(regionalIndexDataDir, "cache");
     await fsp.mkdir(resourceCacheDirectory, { recursive: true });
     await fsp.writeFile(
-      path.join(resourceCacheDirectory, "resourcedemand__areatarresdemv1__regionmap__krgyeongnamsancheong__202606.json"),
+      path.join(resourceCacheDirectory, "resourcedemand__areatarresdemv2__regionmap__krgyeongnamsancheong__202606.json"),
       JSON.stringify({
         schemaVersion: 1,
-        adapter: "area-tar-res-dem-v1",
+        adapter: "area-tar-res-dem-v2",
         status: "ok",
         yearMonth: "202606",
         regionMapVersion: "tourism-region-map-v1",
         region: { regionKey: "kr_gyeongnam_sancheong" },
-        source: { requestProfile: "overall-index-filter-v1" }
+        source: {
+          normalizerVersion: "regional-index-row-normalizer-v2",
+          requestProfile: "all-metrics-unfiltered-v2"
+        }
       }),
       "utf8"
     );
     const resourceCacheMiss = await regionalIndexCollector.readResourceDemand({ regionName: "산청", yearMonth: "202606" });
     assert.equal(resourceCacheMiss.status, "unavailable");
     assert.equal(resourceCacheMiss.reason, "monthly_cache_missing");
-    assert.equal(resourceCacheMiss.adapter, "area-tar-res-dem-v2");
+    assert.equal(resourceCacheMiss.adapter, "area-tar-res-dem-v3");
     assert.deepEqual(resourceCacheMiss.overall, { service: null, culture: null });
     assert.equal(regionalIndexRequests.length, 0);
 
@@ -1286,6 +1315,10 @@ async function main() {
     assert.equal(resourceSnapshot.quality.detailCompleteOperationCount, 2);
     assert.equal(resourceSnapshot.quality.requiredMetricCount, 19);
     assert.equal(resourceSnapshot.quality.observedMetricCount, 19);
+    assert.equal(resourceSnapshot.quality.metricQueryCount, 19);
+    assert.equal(resourceSnapshot.quality.metricQuerySucceededCount, 19);
+    assert.equal(resourceSnapshot.quality.metricQueryNoObservationCount, 0);
+    assert.equal(resourceSnapshot.quality.metricQueryFailedCount, 0);
     assert.equal(Object.values(resourceSnapshot.operations).flatMap((operation) => operation.metrics).length, 19);
     assert.ok(Object.values(resourceSnapshot.operations).every((operation) => (
       operation.quality.detailComplete && operation.metrics.every((metric) => Number.isFinite(metric.value))
@@ -1294,9 +1327,14 @@ async function main() {
     assert.equal(resourceSnapshot.policy.completeRequiresAllExpectedMetricCodes, true);
     assert.equal(resourceSnapshot.policy.requiredMetricCount, 19);
     assert.equal(resourceSnapshot.policy.requiredOverallCodes.join(","), "11,12");
-    assert.equal(resourceSnapshot.source.requestProfile, "all-metrics-unfiltered-v2");
-    assert.equal(resourceSnapshot.source.normalizerVersion, "regional-index-row-normalizer-v2");
-    assert.equal(regionalIndexRequests.length, 2);
+    assert.equal(resourceSnapshot.source.requestProfile, "metric-code-filter-v3");
+    assert.equal(resourceSnapshot.source.normalizerVersion, "regional-index-row-normalizer-v3");
+    assert.equal(resourceSnapshot.collection.endpointOperationsPerMonth, 2);
+    assert.equal(resourceSnapshot.collection.operationsPerMonth, 19);
+    assert.equal(resourceSnapshot.collection.metricQueriesPerMonth, 19);
+    assert.equal(resourceSnapshot.collection.operationCallsAttempted, 19);
+    assert.equal(resourceSnapshot.collection.maximumOperationCalls, 190);
+    assert.equal(regionalIndexRequests.length, 19);
 
     const diversitySnapshot = await regionalIndexCollector.collectDiversity({ regionName: "산청", yearMonth: "202606" });
     assert.equal(diversitySnapshot.status, "ok");
@@ -1305,15 +1343,24 @@ async function main() {
     assert.equal(diversitySnapshot.quality.detailCompleteOperationCount, 3);
     assert.equal(diversitySnapshot.quality.requiredMetricCount, 20);
     assert.equal(diversitySnapshot.quality.observedMetricCount, 20);
+    assert.equal(diversitySnapshot.quality.metricQueryCount, 20);
+    assert.equal(diversitySnapshot.quality.metricQuerySucceededCount, 20);
+    assert.equal(diversitySnapshot.quality.metricQueryNoObservationCount, 0);
+    assert.equal(diversitySnapshot.quality.metricQueryFailedCount, 0);
     assert.equal(Object.values(diversitySnapshot.operations).flatMap((operation) => operation.metrics).length, 20);
     assert.ok(Object.values(diversitySnapshot.operations).every((operation) => (
       operation.quality.detailComplete && operation.metrics.every((metric) => Number.isFinite(metric.value))
     )));
     assert.equal(diversitySnapshot.policy.requiredOverallCodes.join(","), "31,32,33");
     assert.equal(diversitySnapshot.policy.requiredMetricCount, 20);
-    assert.equal(diversitySnapshot.source.requestProfile, "all-metrics-unfiltered-v2");
-    assert.equal(diversitySnapshot.source.normalizerVersion, "regional-index-row-normalizer-v2");
-    assert.equal(regionalIndexRequests.length, 5, "전체 39개 지표는 월 5회 operation 호출로 수집해야 합니다.");
+    assert.equal(diversitySnapshot.source.requestProfile, "metric-code-filter-v3");
+    assert.equal(diversitySnapshot.source.normalizerVersion, "regional-index-row-normalizer-v3");
+    assert.equal(diversitySnapshot.collection.endpointOperationsPerMonth, 3);
+    assert.equal(diversitySnapshot.collection.operationsPerMonth, 20);
+    assert.equal(diversitySnapshot.collection.metricQueriesPerMonth, 20);
+    assert.equal(diversitySnapshot.collection.operationCallsAttempted, 20);
+    assert.equal(diversitySnapshot.collection.maximumOperationCalls, 200);
+    assert.equal(regionalIndexRequests.length, 39, "전체 39개 지표는 지표 코드별 39회 호출로 수집해야 합니다.");
 
     regionalIndexRequests.forEach(({ url, sourceKey, operation }) => {
       assert.equal(url.origin, "https://apis.data.go.kr");
@@ -1335,9 +1382,20 @@ async function main() {
       "expDivIxCd",
       "intlDivIxCd"
     ];
-    regionalIndexRequests.forEach(({ url }) => {
-      regionalMetricCodeParams.forEach((param) => assert.equal(url.searchParams.has(param), false));
+    const metricParamByOperation = {
+      areaTarSvcDemList: "tarSvcDemIxCd",
+      areaCulResDemList: "culResDemIxCd",
+      areaTouDivList: "touDivIxCd",
+      areaExpDivList: "expDivIxCd",
+      areaIntlDivList: "intlDivIxCd"
+    };
+    regionalIndexRequests.forEach(({ url, operation, metricCode }) => {
+      const expectedParam = metricParamByOperation[operation];
+      assert.equal(url.searchParams.get(expectedParam), metricCode);
+      assert.equal(regionalMetricCodeParams.filter((param) => url.searchParams.has(param)).length, 1);
     });
+    assert.equal(new Set(regionalIndexRequests.filter((request) => request.sourceKey === "resourceDemand").map((request) => request.metricCode)).size, 19);
+    assert.equal(new Set(regionalIndexRequests.filter((request) => request.sourceKey === "diversity").map((request) => request.metricCode)).size, 20);
 
     const cacheOnlyResourceHistory = await regionalIndexCollector.readResourceDemandHistory({
       regionName: "산청",
@@ -1359,7 +1417,7 @@ async function main() {
     assert.ok(Array.isArray(availableResourceMonth.operations.service.metrics));
 
     const resourceCacheName = (await fsp.readdir(resourceCacheDirectory))
-      .find((fileName) => fileName.startsWith("resourcedemand__areatarresdemv2__") && fileName.endsWith("__202606.json"));
+      .find((fileName) => fileName.startsWith("resourcedemand__areatarresdemv3__") && fileName.endsWith("__202606.json"));
     assert.ok(resourceCacheName);
     const resourceCacheFile = path.join(resourceCacheDirectory, resourceCacheName);
     const completeResourceCache = await fsp.readFile(resourceCacheFile);
@@ -1374,11 +1432,18 @@ async function main() {
     assert.equal(incompleteResourceSnapshot.operations.service.status, "partial");
     assert.equal(incompleteResourceSnapshot.operations.service.reason, "required_detail_metric_missing");
     assert.deepEqual(incompleteResourceSnapshot.operations.service.quality.missingCodes, ["1107"]);
+    assert.equal(incompleteResourceSnapshot.operations.service.quality.metricQueryNoObservationCount, 1);
+    assert.deepEqual(incompleteResourceSnapshot.operations.service.quality.noObservationMetricCodes, ["1107"]);
+    assert.equal(
+      incompleteResourceSnapshot.operations.service.metricRequests.find((request) => request.code === "1107").status,
+      "no_observation"
+    );
     assert.equal(
       incompleteResourceSnapshot.operations.service.metrics.find((metric) => metric.code === "1107").value,
       null
     );
     assert.equal(incompleteResourceSnapshot.operations.culture.status, "ok");
+    assert.equal(incompleteResourceSnapshot.collection.operationCallsAttempted, 19);
     assert.equal(
       (await fsp.readdir(resourceCacheDirectory)).some((fileName) => (
         fileName.startsWith("resourcedemand__") && fileName.endsWith("__202604.json")
@@ -1395,12 +1460,55 @@ async function main() {
     assert.equal(preservedAfterMissing.status, "ok");
     assert.equal(preservedAfterMissing.cache.hit, true);
     assert.equal(preservedAfterMissing.cache.refreshFailed, true);
+    assert.equal(preservedAfterMissing.collection.operationCallsAttempted, 19);
+    assert.equal(preservedAfterMissing.collection.maximumOperationCalls, 190);
     assert.deepEqual(
       await fsp.readFile(resourceCacheFile),
       completeResourceCache,
       "세부 지표가 누락된 새 응답이 기존 완전 캐시를 덮어쓰면 안 됩니다."
     );
     omitResourceMetricCode = "";
+
+    errorResourceMetricCode = "1108";
+    const erroredMetricResourceSnapshot = await regionalIndexCollector.collectResourceDemand({
+      regionName: "산청",
+      yearMonth: "202601"
+    });
+    assert.equal(erroredMetricResourceSnapshot.status, "partial");
+    assert.equal(erroredMetricResourceSnapshot.operations.service.status, "partial");
+    assert.equal(erroredMetricResourceSnapshot.operations.service.quality.metricQueryFailedCount, 1);
+    assert.deepEqual(erroredMetricResourceSnapshot.operations.service.quality.failedMetricCodes, ["1108"]);
+    assert.equal(
+      erroredMetricResourceSnapshot.operations.service.metrics.find((metric) => metric.code === "1108").value,
+      null
+    );
+    assert.equal(
+      erroredMetricResourceSnapshot.operations.service.metricRequests.find((request) => request.code === "1108").status,
+      "error"
+    );
+    assert.equal(erroredMetricResourceSnapshot.collection.operationCallsAttempted, 19);
+    assert.equal(
+      (await fsp.readdir(resourceCacheDirectory)).some((fileName) => (
+        fileName.startsWith("resourcedemand__areatarresdemv3__") && fileName.endsWith("__202601.json")
+      )),
+      false,
+      "한 지표 호출 오류가 있는 월은 완전 캐시로 저장하면 안 됩니다."
+    );
+    const preservedAfterMetricError = await regionalIndexCollector.collectResourceDemand({
+      regionName: "산청",
+      yearMonth: "202606",
+      force: true
+    });
+    assert.equal(preservedAfterMetricError.status, "ok");
+    assert.equal(preservedAfterMetricError.cache.hit, true);
+    assert.equal(preservedAfterMetricError.cache.refreshFailed, true);
+    assert.equal(preservedAfterMetricError.collection.operationCallsAttempted, 19);
+    assert.deepEqual(
+      await fsp.readFile(resourceCacheFile),
+      completeResourceCache,
+      "한 지표 호출 오류가 기존 v3 완전 캐시를 덮어쓰면 안 됩니다."
+    );
+    errorResourceMetricCode = "";
 
     const resourceCacheBeforeConflict = await fsp.readFile(resourceCacheFile);
     conflictResourceDemand = true;
@@ -1471,18 +1579,28 @@ async function main() {
     const resourceStatus = regionalIndexStatus.sources.find((source) => source.key === "resourceDemand");
     const diversityStatus = regionalIndexStatus.sources.find((source) => source.key === "diversity");
     assert.equal(resourceStatus.status, "ready");
-    assert.equal(resourceStatus.adapter, "area-tar-res-dem-v2");
-    assert.equal(resourceStatus.normalizerVersion, "regional-index-row-normalizer-v2");
-    assert.equal(resourceStatus.requestProfile, "all-metrics-unfiltered-v2");
+    assert.equal(resourceStatus.adapter, "area-tar-res-dem-v3");
+    assert.equal(resourceStatus.normalizerVersion, "regional-index-row-normalizer-v3");
+    assert.equal(resourceStatus.requestProfile, "metric-code-filter-v3");
+    assert.equal(resourceStatus.endpointOperationsPerMonth, 2);
+    assert.equal(resourceStatus.operationsPerMonth, 19);
+    assert.equal(resourceStatus.metricQueriesPerMonth, 19);
+    assert.equal(resourceStatus.maxPagesPerMetric, 10);
+    assert.equal(resourceStatus.maximumOperationCallsPerMonth, 190);
     assert.deepEqual(resourceStatus.requiredOverallCodes, ["11", "12"]);
     assert.equal(resourceStatus.requiredMetricCount, 19);
     assert.deepEqual(Object.values(resourceStatus.requiredMetricCodes).map((codes) => codes.length), [13, 6]);
     assert.equal(resourceStatus.qualityPolicy.completeRequiresAllExpectedMetricCodes, true);
     assert.equal(resourceStatus.cache.snapshotCount, 1);
     assert.equal(diversityStatus.status, "ready");
-    assert.equal(diversityStatus.adapter, "area-tar-div-v2");
-    assert.equal(diversityStatus.normalizerVersion, "regional-index-row-normalizer-v2");
-    assert.equal(diversityStatus.requestProfile, "all-metrics-unfiltered-v2");
+    assert.equal(diversityStatus.adapter, "area-tar-div-v3");
+    assert.equal(diversityStatus.normalizerVersion, "regional-index-row-normalizer-v3");
+    assert.equal(diversityStatus.requestProfile, "metric-code-filter-v3");
+    assert.equal(diversityStatus.endpointOperationsPerMonth, 3);
+    assert.equal(diversityStatus.operationsPerMonth, 20);
+    assert.equal(diversityStatus.metricQueriesPerMonth, 20);
+    assert.equal(diversityStatus.maxPagesPerMetric, 10);
+    assert.equal(diversityStatus.maximumOperationCallsPerMonth, 200);
     assert.deepEqual(diversityStatus.requiredOverallCodes, ["31", "32", "33"]);
     assert.equal(diversityStatus.requiredMetricCount, 20);
     assert.deepEqual(Object.values(diversityStatus.requiredMetricCodes).map((codes) => codes.length), [8, 8, 4]);
@@ -1492,43 +1610,74 @@ async function main() {
     assert.equal(regionalIndexStatus.diversity.snapshotCount, 1);
     assert.doesNotMatch(JSON.stringify(regionalIndexStatus), /fixture-(resource-demand|diversity)-key/);
 
+    paginatedResourceMetricCode = "1101";
+    const requestsBeforeMetricPagination = regionalIndexRequests.length;
+    const paginatedResourceSnapshot = await regionalIndexCollector.collectResourceDemand({
+      regionName: "산청",
+      yearMonth: "202602",
+      maxPagesPerOperation: 2
+    });
+    assert.equal(paginatedResourceSnapshot.status, "ok");
+    assert.equal(paginatedResourceSnapshot.collection.operationsPerMonth, 19);
+    assert.equal(paginatedResourceSnapshot.collection.operationCallsAttempted, 20);
+    assert.equal(paginatedResourceSnapshot.collection.maximumOperationCalls, 38);
+    assert.equal(regionalIndexRequests.length - requestsBeforeMetricPagination, 20);
+    const paginatedMetricRequest = paginatedResourceSnapshot.operations.service.metricRequests
+      .find((request) => request.code === "1101");
+    assert.equal(paginatedMetricRequest.pageCount, 2);
+    assert.equal(paginatedMetricRequest.requestCount, 2);
+    assert.equal(paginatedResourceSnapshot.operations.service.quality.duplicateRowCount, 10);
+    paginatedResourceMetricCode = "";
+
     const requestsBeforeTwelveMonthHistory = regionalIndexRequests.length;
     const resourceTwelveMonthHistory = await regionalIndexCollector.collectResourceDemandHistory({
       regionName: "산청",
       endYearMonth: "202505",
       months: 12,
       collectMissing: true,
-      concurrency: 2
+      concurrency: 2,
+      maxPagesPerOperation: 1
     });
     assert.equal(resourceTwelveMonthHistory.status, "ok");
     assert.equal(resourceTwelveMonthHistory.coverage.completeMonths, 12);
-    assert.equal(resourceTwelveMonthHistory.collection.operationCallsAttempted, 24);
+    assert.equal(resourceTwelveMonthHistory.collection.endpointOperationsPerMonth, 2);
+    assert.equal(resourceTwelveMonthHistory.collection.operationsPerMonth, 19);
+    assert.equal(resourceTwelveMonthHistory.collection.metricQueriesPerMonth, 19);
+    assert.equal(resourceTwelveMonthHistory.collection.operationCallsAttempted, 228);
+    assert.equal(resourceTwelveMonthHistory.collection.maximumOperationCalls, 228);
     assert.ok(resourceTwelveMonthHistory.series.every((point) => (
       Object.values(point.operations).flatMap((operation) => operation.metrics).length === 19
+      && Object.values(point.operations).flatMap((operation) => operation.metricRequests).length === 19
       && Object.values(point.operations).every((operation) => operation.metrics.every((metric) => Number.isFinite(metric.value)))
     )));
     const requestsAfterResourceHistory = regionalIndexRequests.length;
-    assert.equal(requestsAfterResourceHistory - requestsBeforeTwelveMonthHistory, 24);
+    assert.equal(requestsAfterResourceHistory - requestsBeforeTwelveMonthHistory, 228);
 
     const diversityTwelveMonthHistory = await regionalIndexCollector.collectDiversityHistory({
       regionName: "산청",
       endYearMonth: "202505",
       months: 12,
       collectMissing: true,
-      concurrency: 2
+      concurrency: 2,
+      maxPagesPerOperation: 1
     });
     assert.equal(diversityTwelveMonthHistory.status, "ok");
     assert.equal(diversityTwelveMonthHistory.coverage.completeMonths, 12);
-    assert.equal(diversityTwelveMonthHistory.collection.operationCallsAttempted, 36);
+    assert.equal(diversityTwelveMonthHistory.collection.endpointOperationsPerMonth, 3);
+    assert.equal(diversityTwelveMonthHistory.collection.operationsPerMonth, 20);
+    assert.equal(diversityTwelveMonthHistory.collection.metricQueriesPerMonth, 20);
+    assert.equal(diversityTwelveMonthHistory.collection.operationCallsAttempted, 240);
+    assert.equal(diversityTwelveMonthHistory.collection.maximumOperationCalls, 240);
     assert.ok(diversityTwelveMonthHistory.series.every((point) => (
       Object.values(point.operations).flatMap((operation) => operation.metrics).length === 20
+      && Object.values(point.operations).flatMap((operation) => operation.metricRequests).length === 20
       && Object.values(point.operations).every((operation) => operation.metrics.every((metric) => Number.isFinite(metric.value)))
     )));
-    assert.equal(regionalIndexRequests.length - requestsAfterResourceHistory, 36);
+    assert.equal(regionalIndexRequests.length - requestsAfterResourceHistory, 240);
     assert.equal(
       regionalIndexRequests.length - requestsBeforeTwelveMonthHistory,
-      60,
-      "산청군 12개월 전체 39개 지표는 5 operation x 12개월인 60회 호출이어야 합니다."
+      468,
+      "산청군 12개월 전체 39개 지표는 지표 코드별 468회 호출이어야 합니다."
     );
 
     assert.equal(dataGoKrServiceKey({
