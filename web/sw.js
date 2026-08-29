@@ -1,4 +1,4 @@
-const CACHE_VERSION = "lodging-datalab-pwa-v20260829-sancheong-diagnostic-v88";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260829-location-period-label-v89";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",

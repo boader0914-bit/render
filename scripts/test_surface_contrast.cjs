@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260829-sancheong-diagnostic-v88";
-const expectedAssetVersion = "datalab-20260829-sancheong-diagnostic-v69";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260829-location-period-label-v89";
+const expectedAssetVersion = "datalab-20260829-location-period-label-v70";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -582,6 +582,75 @@ assert(
     && app.includes('const preserveOpenLocationCard = state.activeTab === "dictionary"')
     && server.includes('reqUrl.pathname === "/api/tourism-data/location-history"'),
   "the common location profile must lead with exact source-backed evidence and keep missing observations non-zero",
+  failures
+);
+
+assert(
+  locationProfileBlock.includes("snapshot.axisLabel = snapshot.periodLabel;")
+    && !locationProfileBlock.includes("snapshot.axisLabel = roles[index]")
+    && locationProfileBlock.includes("12개월 누적 방문자 구간 비교")
+    && locationProfileBlock.includes("각 점은 표시된 12개월 전체 누적값")
+    && locationProfileBlock.includes("<h4>현재월 포함 최근 12개월</h4>")
+    && locationProfileBlock.includes("현재월은 완전월 확정 전 자료 대기")
+    && locationProfileBlock.includes("최근 확정월 기준 36개월 방문자")
+    && locationProfileBlock.includes("조회 대상 ${visitor.period}")
+    && locationProfileBlock.includes("function locationProfileRecentSeriesWindow(")
+    && locationProfileBlock.includes("방문자 그래프 동일 기간 ${referencePeriodLabel}")
+    && locationProfileBlock.includes("최근 12개월 기본표시 · 36개월 저장 이력 유지")
+    && locationProfileBlock.includes("referencePeriod: strengthReferencePeriod")
+    && locationProfileBlock.includes('const textAnchor = points.length === 1 ? "middle" : index === 0 ? "start" : index === points.length - 1 ? "end" : "middle";'),
+  "location graphs must distinguish rolling monthly periods, 12-month snapshot ranges, and requested strength windows",
+  failures
+);
+
+const visitorMonthHelperBlock = app.slice(
+  app.indexOf("function tourismVisitorYearMonth("),
+  app.indexOf("function tourismVisitorHistoryRegionForName(")
+);
+const recentStrengthWindowBlock = app.slice(
+  app.indexOf("function locationProfileRecentSeriesWindow("),
+  app.indexOf("function renderLocationProfileStrengthPanel(")
+);
+const recentStrengthWindowSandbox = {};
+vm.runInNewContext(
+  `${visitorMonthHelperBlock}\n${recentStrengthWindowBlock}\nthis.locationProfileRecentSeriesWindow = locationProfileRecentSeriesWindow; this.locationProfileSeriesCoverage = locationProfileSeriesCoverage;`,
+  recentStrengthWindowSandbox
+);
+const alignedStrengthSeries = recentStrengthWindowSandbox.locationProfileRecentSeriesWindow([
+  { yearMonth: "202507", status: "complete", value: 51, hasValue: true },
+  { yearMonth: "202606", status: "complete", value: 62, hasValue: true },
+  { yearMonth: "202607", status: "complete", value: 63, hasValue: true }
+], { startYearMonth: "202507", endYearMonth: "202606" }, 12);
+const alignedStrengthCoverage = recentStrengthWindowSandbox.locationProfileSeriesCoverage(alignedStrengthSeries);
+const fallbackStrengthSeries = recentStrengthWindowSandbox.locationProfileRecentSeriesWindow([
+  { yearMonth: "202605", status: "complete", value: 61, hasValue: true },
+  { yearMonth: "202606", status: "complete", value: 62, hasValue: true }
+], null, 12);
+const fallbackStrengthCoverage = recentStrengthWindowSandbox.locationProfileSeriesCoverage(fallbackStrengthSeries);
+assert(
+  alignedStrengthSeries.length === 12
+    && alignedStrengthSeries[0].yearMonth === "202507"
+    && alignedStrengthSeries.at(-1).yearMonth === "202606"
+    && alignedStrengthSeries.every((entry) => entry.yearMonth !== "202607")
+    && alignedStrengthCoverage.expectedMonths === 12
+    && alignedStrengthCoverage.completeMonths === 2
+    && alignedStrengthCoverage.missingMonths === 10
+    && fallbackStrengthSeries.length === 12
+    && fallbackStrengthSeries[0].yearMonth === "202507"
+    && fallbackStrengthSeries.at(-1).yearMonth === "202606"
+    && fallbackStrengthCoverage.expectedMonths === 12
+    && fallbackStrengthCoverage.completeMonths === 2
+    && fallbackStrengthCoverage.missingMonths === 10,
+  "stay and spend graphs must use the visitor graph's exact 12-month period without filling missing observations as zero",
+  failures
+);
+
+assert(
+  locationProfileBlock.includes("실제 관측 · 체류 ${stayCoverage.completeMonths}/${expectedMonths}")
+    && locationProfileBlock.includes('최근월 미수집')
+    && styles.includes(".location-profile-strength .location-profile-chart")
+    && styles.includes("min-width: 820px;"),
+  "strength cards must distinguish partial 12-month coverage and keep monthly labels readable in a scrollable chart",
   failures
 );
 

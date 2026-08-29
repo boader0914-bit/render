@@ -35115,6 +35115,10 @@ body.role-admin .admin-db-company-action a + a {
   height: auto;
 }
 
+.location-profile-strength .location-profile-chart {
+  min-width: 820px;
+}
+
 .location-profile-chart.is-stay {
   --profile-series-accent: var(--theme-accent-strong);
 }
@@ -35392,6 +35396,10 @@ body.role-admin .admin-db-company-action a + a {
 
   .location-profile-chart {
     min-width: 560px;
+  }
+
+  .location-profile-strength .location-profile-chart {
+    min-width: 820px;
   }
 
   .location-profile-source-list > div {
