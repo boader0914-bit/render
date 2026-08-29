@@ -9,6 +9,7 @@ outputs/
 tourism_data/
 history/
 company_master/
+master_db/
 .codex-remote-attachments/
 glamping_render_deploy_*.zip
 *.log
