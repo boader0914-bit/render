@@ -32,17 +32,25 @@ const DEFAULT_SOURCE_DEFS = [
     key: "resourceDemand",
     label: "tourism resource demand",
     envPrefix: "KTO_TOURISM_RESOURCE_DEMAND",
+    serviceKeyEnv: "DATA_GO_KR_RESOURCE_DEMAND_SERVICE_KEY",
     referenceUrl: "https://www.data.go.kr/data/15152138/openapi.do",
-    defaultRegionParam: "SGG_CD",
-    defaultPeriodParam: "BASE_YM"
+    defaultEndpoint: "https://apis.data.go.kr/B551011/AreaTarResDemService",
+    adapter: "area-tar-res-dem-v1",
+    unit: "sigungu",
+    defaultRegionParam: "signguCd",
+    defaultPeriodParam: "baseYm"
   },
   {
     key: "diversity",
     label: "tourism diversity",
     envPrefix: "KTO_TOURISM_DIVERSITY",
+    serviceKeyEnv: "DATA_GO_KR_DIVERSITY_SERVICE_KEY",
     referenceUrl: "https://www.data.go.kr/data/15151365/openapi.do",
-    defaultRegionParam: "SGG_CD",
-    defaultPeriodParam: "BASE_YM"
+    defaultEndpoint: "https://apis.data.go.kr/B551011/AreaTarDivService",
+    adapter: "area-tar-div-v1",
+    unit: "sigungu",
+    defaultRegionParam: "signguCd",
+    defaultPeriodParam: "baseYm"
   }
 ];
 
@@ -121,6 +129,132 @@ const DEMAND_STRENGTH_OPERATIONS = Object.freeze({
       "2202": "전체 대비 외지인 소비액 비중",
       "2203": "방문량 대비 방문 소비액"
     })
+  })
+});
+const RESOURCE_DEMAND_ADAPTER_VERSION = "area-tar-res-dem-v1";
+const DIVERSITY_ADAPTER_VERSION = "area-tar-div-v1";
+const REGIONAL_INDEX_SUCCESS_CODES = new Set(["0000", "00"]);
+const REGIONAL_INDEX_PAGE_SIZE = 100;
+const REGIONAL_INDEX_MAX_PAGES = 10;
+const REGIONAL_INDEX_HISTORY_MONTHS = 12;
+const REGIONAL_INDEX_HISTORY_MAX_CONCURRENCY = 2;
+const RESOURCE_DEMAND_OPERATIONS = Object.freeze({
+  service: Object.freeze({
+    key: "service",
+    operation: "areaTarSvcDemList",
+    label: "관광 서비스 수요",
+    codeParam: "tarSvcDemIxCd",
+    codeField: "tarSvcDemIxCd",
+    nameField: "tarSvcDemIxNm",
+    valueField: "tarSvcDemIxVal",
+    overallCode: "11",
+    expectedMetrics: Object.freeze({
+      "11": "관광 서비스 수요 전체",
+      "1101": "레포츠 SNS 언급량",
+      "1102": "휴식 힐링 SNS 언급량",
+      "1103": "미식 SNS 언급량",
+      "1104": "체험 SNS 언급량",
+      "1105": "쇼핑업 소비액",
+      "1106": "식음료 소비액",
+      "1107": "숙박업 소비액",
+      "1108": "여가 서비스업 소비액",
+      "1109": "운송업 소비액",
+      "1110": "내비게이션 숙박 검색량",
+      "1111": "내비게이션 음식 검색량",
+      "1112": "내비게이션 쇼핑 검색량"
+    })
+  }),
+  culture: Object.freeze({
+    key: "culture",
+    operation: "areaCulResDemList",
+    label: "문화 자원 수요",
+    codeParam: "culResDemIxCd",
+    codeField: "culResDemIxCd",
+    nameField: "culResDemIxNm",
+    valueField: "culResDemIxVal",
+    overallCode: "12",
+    expectedMetrics: Object.freeze({
+      "12": "문화 자원 수요 전체",
+      "1201": "내비게이션 문화 관광 검색량",
+      "1202": "내비게이션 레저 스포츠 검색량",
+      "1203": "내비게이션 역사 관광 검색량",
+      "1204": "내비게이션 체험 관광 검색량",
+      "1205": "내비게이션 자연 관광 검색량"
+    })
+  })
+});
+const DIVERSITY_OPERATIONS = Object.freeze({
+  visitor: Object.freeze({
+    key: "visitor",
+    operation: "areaTouDivList",
+    label: "관광객 다양성",
+    codeParam: "touDivIxCd",
+    codeField: "touDivIxCd",
+    nameField: "touDivIxNm",
+    valueField: "touDivIxVal",
+    overallCode: "31",
+    expectedMetrics: Object.freeze({
+      "31": "관광객 다양성 전체",
+      "3101": "10대 방문객수",
+      "3102": "20대 방문객수",
+      "3103": "30대 방문객수",
+      "3104": "40대 방문객수",
+      "3105": "50대 방문객수",
+      "3106": "60대 방문객수",
+      "3107": "70대 방문객수"
+    })
+  }),
+  spend: Object.freeze({
+    key: "spend",
+    operation: "areaExpDivList",
+    label: "관광 소비 다양성",
+    codeParam: "expDivIxCd",
+    codeField: "expDivIxCd",
+    nameField: "expDivIxNm",
+    valueField: "expDivIxVal",
+    overallCode: "32",
+    expectedMetrics: Object.freeze({
+      "32": "관광 소비 다양성 전체",
+      "3201": "10대 소비액",
+      "3202": "20대 소비액",
+      "3203": "30대 소비액",
+      "3204": "40대 소비액",
+      "3205": "50대 소비액",
+      "3206": "60대 소비액",
+      "3207": "70대 소비액"
+    })
+  }),
+  international: Object.freeze({
+    key: "international",
+    operation: "areaIntlDivList",
+    label: "국제적 다양성",
+    codeParam: "intlDivIxCd",
+    codeField: "intlDivIxCd",
+    nameField: "intlDivIxNm",
+    valueField: "intlDivIxVal",
+    overallCode: "33",
+    expectedMetrics: Object.freeze({
+      "33": "국제적 다양성 전체",
+      "3301": "외국인 소비액",
+      "3302": "외국인 방문자수",
+      "3303": "외국인 방문객 국적 다양성"
+    })
+  })
+});
+const REGIONAL_INDEX_SOURCE_SPECS = Object.freeze({
+  resourceDemand: Object.freeze({
+    key: "resourceDemand",
+    label: "한국관광공사 지역별 관광 자원 수요",
+    adapter: RESOURCE_DEMAND_ADAPTER_VERSION,
+    endpointPath: "/B551011/AreaTarResDemService",
+    operations: RESOURCE_DEMAND_OPERATIONS
+  }),
+  diversity: Object.freeze({
+    key: "diversity",
+    label: "한국관광공사 지역별 관광 다양성",
+    adapter: DIVERSITY_ADAPTER_VERSION,
+    endpointPath: "/B551011/AreaTarDivService",
+    operations: DIVERSITY_OPERATIONS
   })
 });
 
@@ -303,6 +437,7 @@ function createCollector(options = {}) {
   const logFile = path.join(tourismDataDir, "collections.jsonl");
   const regionMapFile = options.regionMapFile || path.join(webDir, "data", "tourism_region_map.json");
   const demandStrengthSnapshotWrites = new Map();
+  const regionalIndexSnapshotWrites = new Map();
 
   function currentDate() {
     const value = now();
@@ -2746,6 +2881,872 @@ function createCollector(options = {}) {
     };
   }
 
+  function regionalIndexSpec(sourceKey = "") {
+    return REGIONAL_INDEX_SOURCE_SPECS[String(sourceKey || "").trim()] || null;
+  }
+
+  function regionalIndexSourceDef(sourceKey = "") {
+    return DEFAULT_SOURCE_DEFS.find((source) => source.key === sourceKey) || null;
+  }
+
+  function regionalIndexEndpointStatus(spec = {}, config = {}, serviceKey = "") {
+    if (!config.enabled) return "disabled";
+    if (!serviceKey) return "missing_service_key";
+    if (!config.endpoint) return "missing_endpoint";
+    try {
+      const endpoint = new URL(config.endpoint);
+      const normalizedPath = endpoint.pathname.replace(/\/+$/, "");
+      if (endpoint.protocol !== "https:" || endpoint.hostname !== "apis.data.go.kr") return "untrusted_endpoint";
+      if (normalizedPath !== spec.endpointPath) return "invalid_endpoint";
+      if (endpoint.search || endpoint.hash) return "invalid_endpoint";
+    } catch {
+      return "invalid_endpoint";
+    }
+    if (typeof fetchImpl !== "function") return "fetch_unavailable";
+    return "ready";
+  }
+
+  function regionalIndexCachePath(sourceKey = "", regionKey = "", yearMonth = "") {
+    const spec = regionalIndexSpec(sourceKey);
+    const regionMapVersion = safeName(options.regionMapVersion || "region-map");
+    return path.join(
+      cacheDir,
+      `${safeName(sourceKey)}__${safeName(spec?.adapter || "adapter")}__${regionMapVersion}__${safeName(regionKey)}__${normalizeYearMonth(yearMonth)}.json`
+    );
+  }
+
+  async function readRegionalIndexCache(sourceKey = "", regionKey = "", yearMonth = "") {
+    const filePath = regionalIndexCachePath(sourceKey, regionKey, yearMonth);
+    try {
+      const parsed = JSON.parse((await fsp.readFile(filePath, "utf8")).replace(/^\uFEFF/, ""));
+      return { hit: true, filePath, data: parsed };
+    } catch {
+      return { hit: false, filePath, data: null };
+    }
+  }
+
+  function regionalIndexCacheCompatible(sourceKey = "", cached = {}, regionMap = {}, region = {}, yearMonth = "") {
+    const spec = regionalIndexSpec(sourceKey);
+    return Boolean(
+      spec
+      && cached.hit
+      && cached.data?.status === "ok"
+      && cached.data?.adapter === spec.adapter
+      && cached.data?.regionMapVersion === regionMap.version
+      && cached.data?.region?.regionKey === region.regionKey
+      && cached.data?.yearMonth === yearMonth
+    );
+  }
+
+  async function writeRegionalIndexSnapshot(sourceKey = "", snapshot = {}) {
+    const spec = regionalIndexSpec(sourceKey);
+    if (!spec || snapshot.status !== "ok") {
+      const error = new Error("Only complete regional index snapshots can be stored.");
+      error.code = "regional_index_snapshot_incomplete";
+      throw error;
+    }
+    await fsp.mkdir(cacheDir, { recursive: true });
+    await fsp.mkdir(tourismDataDir, { recursive: true });
+    const filePath = regionalIndexCachePath(sourceKey, snapshot.region?.regionKey, snapshot.yearMonth);
+    const previousWrite = regionalIndexSnapshotWrites.get(filePath) || Promise.resolve();
+    const writePromise = previousWrite.catch(() => {}).then(async () => {
+      const tempPath = `${filePath}.${process.pid}.${Date.now()}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+      try {
+        await fsp.writeFile(tempPath, JSON.stringify(snapshot, null, 2), "utf8");
+        try {
+          await fsp.rename(tempPath, filePath);
+        } catch (error) {
+          if (process.platform !== "win32" || !["EPERM", "EACCES", "EEXIST"].includes(error?.code)) throw error;
+          await fsp.copyFile(tempPath, filePath);
+        }
+      } finally {
+        await fsp.rm(tempPath, { force: true }).catch(() => {});
+      }
+      await fsp.appendFile(logFile, `${JSON.stringify({
+        collectedAt: snapshot.collectedAt,
+        source: sourceKey,
+        adapter: spec.adapter,
+        yearMonth: snapshot.yearMonth,
+        regionKey: snapshot.region?.regionKey || "",
+        status: snapshot.status,
+        completeOperationCount: snapshot.quality?.completeOperationCount || 0
+      })}\n`, "utf8");
+      return filePath;
+    });
+    regionalIndexSnapshotWrites.set(filePath, writePromise);
+    try {
+      return await writePromise;
+    } finally {
+      if (regionalIndexSnapshotWrites.get(filePath) === writePromise) {
+        regionalIndexSnapshotWrites.delete(filePath);
+      }
+    }
+  }
+
+  function regionalIndexPageUrl(config = {}, operationDef = {}, region = {}, yearMonth = "", pageNo = 1, pageSize = REGIONAL_INDEX_PAGE_SIZE, serviceKey = "") {
+    const endpoint = new URL(config.endpoint);
+    endpoint.pathname = `${endpoint.pathname.replace(/\/+$/, "")}/${operationDef.operation}`;
+    const params = {
+      _type: "json",
+      MobileOS: "ETC",
+      MobileApp: String(env.KTO_TOURISM_MOBILE_APP || DEFAULT_MOBILE_APP).trim(),
+      baseYm: yearMonth,
+      areaCd: String(region.ktoSidoCd || ""),
+      signguCd: String(region.ktoSggCd || ""),
+      pageNo: String(pageNo),
+      numOfRows: String(pageSize),
+      [operationDef.codeParam]: operationDef.overallCode
+    };
+    Object.entries(params).forEach(([key, value]) => endpoint.searchParams.set(key, String(value)));
+    const connector = endpoint.toString().includes("?") ? "&" : "?";
+    const keyValue = serviceKey.includes("%") ? serviceKey : encodeURIComponent(serviceKey);
+    return `${endpoint.toString()}${connector}${encodeURIComponent(config.serviceKeyParam)}=${keyValue}`;
+  }
+
+  function regionalIndexEnvelope(parsed = null) {
+    const gatewayError = visitorGatewayError(parsed);
+    if (gatewayError) return { ok: false, reason: "gateway_error", ...gatewayError };
+    const envelope = parsed?.response || parsed;
+    const header = envelope?.header;
+    const body = envelope?.body;
+    if (!header || !body || typeof body !== "object") return { ok: false, reason: "schema_error" };
+    const resultCode = String(header.resultCode ?? "");
+    if (!REGIONAL_INDEX_SUCCESS_CODES.has(resultCode)) {
+      return {
+        ok: false,
+        reason: resultCode === "03" ? "no_observation" : "api_error",
+        code: resultCode,
+        message: String(header.resultMsg || "api_error")
+      };
+    }
+    const item = body?.items?.item;
+    const rows = Array.isArray(item) ? item : (item && typeof item === "object" ? [item] : []);
+    const totalCount = Number(body.totalCount);
+    const pageNo = Number(body.pageNo);
+    const numOfRows = Number(body.numOfRows);
+    if (!Number.isFinite(totalCount) || totalCount < 0) return { ok: false, reason: "schema_error" };
+    return {
+      ok: true,
+      rows,
+      totalCount,
+      pageNo: Number.isFinite(pageNo) ? pageNo : null,
+      numOfRows: Number.isFinite(numOfRows) ? numOfRows : null,
+      resultCode,
+      resultMsg: String(header.resultMsg || "")
+    };
+  }
+
+  async function requestRegionalIndexPage(config = {}, operationDef = {}, region = {}, yearMonth = "", pageNo = 1, pageSize = REGIONAL_INDEX_PAGE_SIZE, serviceKey = "") {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+    try {
+      const response = await fetchImpl(
+        regionalIndexPageUrl(config, operationDef, region, yearMonth, pageNo, pageSize, serviceKey),
+        { signal: controller.signal, headers: { accept: "application/json" } }
+      );
+      const responseText = await response.text();
+      let parsed = null;
+      try {
+        parsed = responseText ? JSON.parse(responseText) : null;
+      } catch {
+        return { ok: false, reason: "invalid_response", httpStatus: response.status };
+      }
+      if (!response.ok) {
+        const envelope = regionalIndexEnvelope(parsed);
+        return {
+          ok: false,
+          reason: envelope.reason || "http_error",
+          code: envelope.code || "",
+          message: envelope.message || "",
+          httpStatus: response.status
+        };
+      }
+      const envelope = regionalIndexEnvelope(parsed);
+      return { ...envelope, httpStatus: response.status };
+    } catch (error) {
+      return {
+        ok: false,
+        reason: error.name === "AbortError" ? "timeout" : "request_failed",
+        message: error.message || String(error)
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  function normalizeRegionalIndexRows(rows = [], operationDef = {}, region = {}, yearMonth = "") {
+    const expectedCodes = new Set(Object.keys(operationDef.expectedMetrics || {}));
+    const byCode = new Map();
+    const unexpectedCodes = new Set();
+    let invalidRowCount = 0;
+    let mismatchedRowCount = 0;
+    let duplicateRowCount = 0;
+    let conflictCount = 0;
+    for (const raw of rows) {
+      const rowYearMonth = String(raw?.baseYm || "").trim();
+      const areaCd = String(raw?.areaCd || "").trim();
+      const areaNm = String(raw?.areaNm || "").trim();
+      const signguCd = String(raw?.signguCd || "").trim();
+      const signguNm = String(raw?.signguNm || "").trim();
+      const code = String(raw?.[operationDef.codeField] || "").trim();
+      const sourceName = String(raw?.[operationDef.nameField] || "").trim();
+      const valueText = String(raw?.[operationDef.valueField] ?? "").replace(/,/g, "").trim();
+      const value = valueText === "" ? NaN : Number(valueText);
+      if (
+        !/^\d{6}$/.test(rowYearMonth)
+        || !/^\d{2}$/.test(areaCd)
+        || !/^\d{5}$/.test(signguCd)
+        || !code
+        || !Number.isFinite(value)
+      ) {
+        invalidRowCount += 1;
+        continue;
+      }
+      if (
+        rowYearMonth !== yearMonth
+        || areaCd !== String(region.ktoSidoCd || "")
+        || signguCd !== String(region.ktoSggCd || "")
+        || (areaNm && !demandRegionNameMatches(areaNm, region, "area"))
+        || (signguNm && !demandRegionNameMatches(signguNm, region, "sigungu"))
+      ) {
+        mismatchedRowCount += 1;
+        continue;
+      }
+      if (!expectedCodes.has(code)) unexpectedCodes.add(code);
+      const normalized = { code, sourceName, value };
+      const current = byCode.get(code);
+      if (!current) {
+        byCode.set(code, normalized);
+      } else if (current.value === value && current.sourceName === sourceName) {
+        duplicateRowCount += 1;
+      } else {
+        conflictCount += 1;
+      }
+    }
+    const metrics = Object.entries(operationDef.expectedMetrics || {}).map(([code, label]) => ({
+      code,
+      label,
+      sourceName: byCode.get(code)?.sourceName || "",
+      value: Number.isFinite(byCode.get(code)?.value) ? byCode.get(code).value : null
+    }));
+    const missingCodes = metrics.filter((metric) => metric.value === null).map((metric) => metric.code);
+    const overallValue = metrics.find((metric) => metric.code === operationDef.overallCode)?.value ?? null;
+    let qualityStatus = "complete";
+    let reason = "";
+    if (conflictCount) {
+      qualityStatus = "conflicting_rows";
+      reason = "duplicate_value_conflict";
+    } else if (mismatchedRowCount) {
+      qualityStatus = "region_or_period_mismatch";
+      reason = "response_grain_mismatch";
+    } else if (invalidRowCount) {
+      qualityStatus = "invalid_rows";
+      reason = "invalid_response_fields";
+    } else if (overallValue === null) {
+      qualityStatus = "partial";
+      reason = "required_overall_metric_missing";
+    } else if (missingCodes.length) {
+      qualityStatus = "detail_partial";
+      reason = "detail_metric_not_requested";
+    }
+    return {
+      key: operationDef.key,
+      operation: operationDef.operation,
+      label: operationDef.label,
+      status: ["complete", "detail_partial"].includes(qualityStatus) ? "ok" : qualityStatus === "partial" ? "partial" : "error",
+      reason,
+      overallCode: operationDef.overallCode,
+      overallValue,
+      metrics,
+      quality: {
+        status: qualityStatus,
+        expectedMetricCount: expectedCodes.size,
+        observedMetricCount: metrics.filter((metric) => metric.value !== null).length,
+        overallComplete: overallValue !== null,
+        detailComplete: missingCodes.length === 0,
+        missingCodes,
+        unexpectedCodes: [...unexpectedCodes].sort(),
+        sourceRowCount: rows.length,
+        invalidRowCount,
+        mismatchedRowCount,
+        duplicateRowCount,
+        conflictCount
+      }
+    };
+  }
+
+  function regionalIndexMaxPages(sourceKey = "", input = {}) {
+    const spec = regionalIndexSpec(sourceKey);
+    const rawInputValue = input.maxPagesPerOperation;
+    const inputValue = rawInputValue === undefined || rawInputValue === null || rawInputValue === ""
+      ? Number.NaN
+      : Number(rawInputValue);
+    const configuredValue = Number.isFinite(inputValue)
+      ? inputValue
+      : numberEnv(
+        `KTO_TOURISM_${sourceKey === "resourceDemand" ? "RESOURCE_DEMAND" : "DIVERSITY"}_MAX_PAGES`,
+        REGIONAL_INDEX_MAX_PAGES,
+        env
+      );
+    return spec ? Math.max(1, Math.min(50, Math.round(configuredValue))) : 1;
+  }
+
+  async function requestRegionalIndexOperation(sourceKey = "", config = {}, operationDef = {}, region = {}, yearMonth = "", serviceKey = "", input = {}) {
+    const requestedAt = currentDate().toISOString();
+    const envSuffix = sourceKey === "resourceDemand" ? "RESOURCE_DEMAND" : "DIVERSITY";
+    const pageSize = Math.max(10, Math.min(1000, Math.round(numberEnv(
+      `KTO_TOURISM_${envSuffix}_PAGE_SIZE`,
+      REGIONAL_INDEX_PAGE_SIZE,
+      env
+    ))));
+    const maxPages = regionalIndexMaxPages(sourceKey, input);
+    const rows = [];
+    let totalCount = null;
+    let pageCount = 0;
+    let requestCount = 0;
+    const failedOperation = (status, reason, quality = {}) => {
+      const empty = emptyDemandOperation(operationDef, status, reason);
+      return {
+        ...empty,
+        requestedAt,
+        requestCount,
+        quality: {
+          ...empty.quality,
+          status,
+          pageCount,
+          requestCount,
+          maxPages,
+          ...quality
+        }
+      };
+    };
+    for (let pageNo = 1; pageNo <= maxPages; pageNo += 1) {
+      requestCount += 1;
+      const page = await requestRegionalIndexPage(config, operationDef, region, yearMonth, pageNo, pageSize, serviceKey);
+      if (!page.ok) {
+        const status = page.reason === "no_observation" ? "no_observation" : "error";
+        return failedOperation(status, page.reason, {
+          httpStatus: page.httpStatus || null,
+          apiCode: page.code || ""
+        });
+      }
+      if (page.pageNo !== null && page.pageNo !== pageNo) return failedOperation("error", "page_number_mismatch");
+      if (totalCount === null) totalCount = page.totalCount;
+      if (page.totalCount !== totalCount) return failedOperation("error", "total_count_changed");
+      pageCount += 1;
+      rows.push(...page.rows);
+      if (rows.length >= totalCount) break;
+      if (!page.rows.length) return failedOperation("error", "incomplete_pagination");
+    }
+    if (totalCount === null || rows.length < totalCount) {
+      return failedOperation("error", "page_limit_exceeded", { totalCount, receivedRows: rows.length });
+    }
+    if (!totalCount) {
+      return failedOperation("no_observation", "empty_verified", { totalCount, receivedRows: rows.length });
+    }
+    const normalized = normalizeRegionalIndexRows(rows.slice(0, totalCount), operationDef, region, yearMonth);
+    return {
+      ...normalized,
+      requestedAt,
+      requestCount,
+      quality: {
+        ...normalized.quality,
+        pageCount,
+        requestCount,
+        maxPages,
+        totalCount,
+        receivedRows: rows.length
+      }
+    };
+  }
+
+  function publicRegionalIndexSnapshot(sourceKey = "", snapshot = {}, input = {}, cache = {}) {
+    const spec = regionalIndexSpec(sourceKey);
+    const sourceDef = regionalIndexSourceDef(sourceKey);
+    const operations = Object.fromEntries(Object.entries(spec?.operations || {}).map(([key, operationDef]) => [
+      key,
+      snapshot.operations?.[key] || emptyDemandOperation(operationDef, "unavailable", snapshot.reason || "unavailable")
+    ]));
+    return {
+      ok: snapshot.status === "ok",
+      status: snapshot.status || "unavailable",
+      reason: snapshot.reason || "",
+      schemaVersion: snapshot.schemaVersion || 1,
+      adapter: spec?.adapter || "",
+      collectedAt: snapshot.collectedAt || "",
+      yearMonth: snapshot.yearMonth || normalizeYearMonth(input.yearMonth || input.baseYm),
+      region: snapshot.region || null,
+      source: {
+        key: sourceKey,
+        label: spec?.label || sourceDef?.label || sourceKey,
+        referenceUrl: sourceDef?.referenceUrl || "",
+        timeGrain: "month",
+        regionGrain: "sigungu",
+        valueType: "official_index_value",
+        requestProfile: "overall-index-filter-v1"
+      },
+      operations,
+      overall: Object.fromEntries(Object.entries(operations).map(([key, operation]) => [
+        key,
+        Number.isFinite(operation?.overallValue) ? Number(operation.overallValue) : null
+      ])),
+      quality: snapshot.quality || {
+        completeOperationCount: 0,
+        requiredOperationCount: Object.keys(spec?.operations || {}).length
+      },
+      collection: {
+        mode: cache.mode || snapshot.collection?.mode || (cache.hit ? "cache" : "none"),
+        requestGrain: "sigungu",
+        operationCallsAttempted: Number(cache.operationCallsAttempted ?? snapshot.collection?.operationCallsAttempted ?? 0),
+        maxPagesPerOperation: Number(cache.maxPagesPerOperation ?? snapshot.collection?.maxPagesPerOperation ?? 0) || null,
+        operationsPerMonth: Object.keys(spec?.operations || {}).length
+      },
+      cache: {
+        hit: Boolean(cache.hit),
+        ttlHours: Number(cache.ttlHours || DEFAULT_TTL_HOURS),
+        refreshFailed: Boolean(cache.refreshFailed),
+        refreshReason: cache.refreshReason || "",
+        filePath: cache.filePath || ""
+      },
+      policy: {
+        missingIsNotZero: true,
+        scoreApplied: false,
+        noCrossMetricAveraging: true,
+        requiresClosedMonth: true,
+        singleSigunguPerCollection: true,
+        completeCacheOnly: true,
+        failedRefreshDoesNotOverwriteCompleteCache: true,
+        requiredOverallCodes: Object.values(spec?.operations || {}).map((operation) => operation.overallCode)
+      }
+    };
+  }
+
+  async function resolveRegionalIndexMatch(input = {}) {
+    const selectorCandidates = [
+      input.regionKey ? { regionKey: input.regionKey } : null,
+      ...(Array.isArray(input.regionKeys) ? input.regionKeys : input.regionKeys ? [input.regionKeys] : [])
+        .map((regionKey) => ({ regionKey })),
+      input.keyword || input.query || input.regionName
+        ? { keyword: input.keyword || input.query || input.regionName }
+        : null,
+      ...(Array.isArray(input.regionNames) ? input.regionNames : input.regionNames ? [input.regionNames] : [])
+        .map((keyword) => ({ keyword })),
+      ...(Array.isArray(input.regions) ? input.regions : input.regions ? [input.regions] : [])
+        .map((keyword) => ({ keyword }))
+    ].filter(Boolean);
+    let match = await resolveRegion(selectorCandidates[0] || {});
+    for (const selector of selectorCandidates.slice(1)) {
+      if (match.region) break;
+      match = await resolveRegion(selector);
+    }
+    return match;
+  }
+
+  async function collectRegionalIndex(sourceKey = "", input = {}) {
+    const spec = regionalIndexSpec(sourceKey);
+    if (!spec) return publicRegionalIndexSnapshot(sourceKey, { status: "unavailable", reason: "unknown_source" }, input);
+    const yearMonth = normalizeYearMonth(input.yearMonth || input.period || input.baseYm);
+    const ttlHours = Number.isFinite(Number(input.ttlHours)) ? Number(input.ttlHours) : DEFAULT_TTL_HOURS;
+    const force = Boolean(input.force);
+    const match = await resolveRegionalIndexMatch(input);
+    if (!match.region) {
+      return publicRegionalIndexSnapshot(sourceKey, {
+        status: "region_not_matched",
+        reason: "requested_region_not_matched",
+        yearMonth,
+        region: null,
+        operations: {}
+      }, input, { hit: false, ttlHours });
+    }
+    const region = demandStrengthRegion(match.region, match.regionMap);
+    const publicRegion = {
+      regionKey: region.regionKey,
+      sido: region.sido,
+      sidoFull: region.sidoFull,
+      sigungu: region.sigungu,
+      areaCd: String(region.ktoSidoCd || ""),
+      signguCd: String(region.ktoSggCd || "")
+    };
+    const cached = await readRegionalIndexCache(sourceKey, region.regionKey, yearMonth);
+    const compatibleCache = regionalIndexCacheCompatible(sourceKey, cached, match.regionMap, region, yearMonth);
+    const closedYearMonth = latestClosedYearMonth(currentDate());
+    if (!force && compatibleCache && (yearMonth <= closedYearMonth || cacheFresh(cached.data, ttlHours))) {
+      return publicRegionalIndexSnapshot(sourceKey, cached.data, input, {
+        hit: true,
+        ttlHours,
+        mode: "cache",
+        filePath: cached.filePath,
+        operationCallsAttempted: 0
+      });
+    }
+    if (input.cacheOnly) {
+      return publicRegionalIndexSnapshot(sourceKey, {
+        status: "unavailable",
+        reason: "monthly_cache_missing",
+        yearMonth,
+        region: publicRegion,
+        operations: {}
+      }, input, { hit: false, ttlHours, mode: "cache_only", operationCallsAttempted: 0 });
+    }
+    if (yearMonth > closedYearMonth) {
+      return publicRegionalIndexSnapshot(sourceKey, {
+        status: "unavailable",
+        reason: "period_not_closed",
+        yearMonth,
+        region: publicRegion,
+        operations: {}
+      }, input, { hit: false, ttlHours });
+    }
+    if (!/^\d{2}$/.test(publicRegion.areaCd) || !/^\d{5}$/.test(publicRegion.signguCd) || region.codeStatus) {
+      return publicRegionalIndexSnapshot(sourceKey, {
+        status: "unavailable",
+        reason: region.codeStatus || "region_code_verify_required",
+        yearMonth,
+        region: publicRegion,
+        operations: {}
+      }, input, { hit: false, ttlHours });
+    }
+    const sourceDef = regionalIndexSourceDef(sourceKey);
+    const config = sourceConfig(sourceDef, env);
+    const serviceKey = sourceServiceKey(config, env);
+    const configStatus = regionalIndexEndpointStatus(spec, config, serviceKey);
+    if (configStatus !== "ready") {
+      if (compatibleCache) {
+        return publicRegionalIndexSnapshot(sourceKey, cached.data, input, {
+          hit: true,
+          ttlHours,
+          mode: "cache",
+          filePath: cached.filePath,
+          refreshFailed: force,
+          refreshReason: force ? configStatus : ""
+        });
+      }
+      return publicRegionalIndexSnapshot(sourceKey, {
+        status: "unavailable",
+        reason: configStatus,
+        yearMonth,
+        region: publicRegion,
+        operations: {}
+      }, input, { hit: false, ttlHours });
+    }
+    const operationEntries = Object.entries(spec.operations);
+    const operationResults = await Promise.all(operationEntries.map(([, operationDef]) => (
+      requestRegionalIndexOperation(sourceKey, config, operationDef, region, yearMonth, serviceKey, input)
+    )));
+    const operations = Object.fromEntries(operationEntries.map(([key], index) => [key, operationResults[index]]));
+    const operationCallsAttempted = operationResults.reduce((sum, operation) => sum + Number(operation.requestCount || 0), 0);
+    const maxPagesPerOperation = regionalIndexMaxPages(sourceKey, input);
+    const completeOperationCount = operationResults.filter((operation) => operation.status === "ok" && operation.quality?.overallComplete).length;
+    const partialOperationCount = operationResults.filter((operation) => operation.status === "partial").length;
+    const noObservationCount = operationResults.filter((operation) => operation.status === "no_observation").length;
+    const requiredOperationCount = operationResults.length;
+    let status = "error";
+    let reason = operationResults.map((operation) => operation.reason).filter(Boolean).join(",") || "operation_failed";
+    if (completeOperationCount === requiredOperationCount) {
+      status = "ok";
+      reason = "";
+    } else if (completeOperationCount || partialOperationCount) {
+      status = "partial";
+      reason = "incomplete_operation_coverage";
+    } else if (noObservationCount === requiredOperationCount) {
+      status = "no_observation";
+      reason = "no_observation";
+    }
+    const snapshot = {
+      schemaVersion: 1,
+      adapter: spec.adapter,
+      regionMapVersion: match.regionMap.version || "",
+      status,
+      reason,
+      collectedAt: currentDate().toISOString(),
+      yearMonth,
+      region: publicRegion,
+      operations,
+      quality: {
+        status: status === "ok" ? "complete" : status,
+        requiredOperationCount,
+        completeOperationCount,
+        detailCompleteOperationCount: operationResults.filter((operation) => operation.quality?.detailComplete).length,
+        partialOperationCount,
+        noObservationCount,
+        failedOperationCount: operationResults.filter((operation) => operation.status === "error").length,
+        regionGrain: "sigungu",
+        timeGrain: "month"
+      },
+      collection: {
+        mode: force ? "force_refresh" : "collect",
+        operationCallsAttempted,
+        maxPagesPerOperation
+      },
+      source: {
+        referenceUrl: sourceDef.referenceUrl,
+        requestProfile: "overall-index-filter-v1",
+        operations: operationEntries.map(([, operationDef]) => operationDef.operation)
+      }
+    };
+    if (status === "ok") {
+      const filePath = await writeRegionalIndexSnapshot(sourceKey, snapshot);
+      return publicRegionalIndexSnapshot(sourceKey, snapshot, input, { hit: false, ttlHours, filePath });
+    }
+    if (compatibleCache) {
+      return publicRegionalIndexSnapshot(sourceKey, cached.data, input, {
+        hit: true,
+        ttlHours,
+        mode: "cache",
+        filePath: cached.filePath,
+        operationCallsAttempted,
+        maxPagesPerOperation,
+        refreshFailed: true,
+        refreshReason: reason
+      });
+    }
+    return publicRegionalIndexSnapshot(sourceKey, snapshot, input, { hit: false, ttlHours });
+  }
+
+  function regionalIndexHistoryPoint(sourceKey = "", snapshot = {}, yearMonth = "", access = "missing") {
+    const spec = regionalIndexSpec(sourceKey);
+    const values = Object.fromEntries(Object.keys(spec?.operations || {}).map((key) => [
+      key,
+      Number.isFinite(snapshot?.operations?.[key]?.overallValue)
+        ? Number(snapshot.operations[key].overallValue)
+        : Number.isFinite(snapshot?.overall?.[key])
+          ? Number(snapshot.overall[key])
+          : null
+    ]));
+    const valueList = Object.values(values);
+    const complete = snapshot.status === "ok" && valueList.length > 0 && valueList.every((value) => value !== null);
+    const partial = !complete && valueList.some((value) => value !== null);
+    return {
+      yearMonth,
+      status: complete ? "complete" : partial ? "partial" : "missing",
+      reason: complete ? "" : snapshot.reason || "monthly_cache_missing",
+      values,
+      operations: Object.fromEntries(Object.keys(spec?.operations || {}).map((key) => [key, {
+        label: spec.operations[key].label,
+        status: snapshot?.operations?.[key]?.status || "unavailable",
+        reason: snapshot?.operations?.[key]?.reason || "",
+        overallCode: spec.operations[key].overallCode,
+        overallValue: values[key],
+        metrics: Array.isArray(snapshot?.operations?.[key]?.metrics)
+          ? snapshot.operations[key].metrics
+          : []
+      }])),
+      access,
+      collectedAt: snapshot.collectedAt || ""
+    };
+  }
+
+  async function collectRegionalIndexHistory(sourceKey = "", input = {}) {
+    const spec = regionalIndexSpec(sourceKey);
+    const closedYearMonth = latestClosedYearMonth(currentDate());
+    const requestedEndYearMonth = normalizeYearMonth(input.endYearMonth || input.yearMonth || closedYearMonth);
+    const endYearMonth = requestedEndYearMonth > closedYearMonth ? closedYearMonth : requestedEndYearMonth;
+    const monthCount = Math.max(1, Math.min(REGIONAL_INDEX_HISTORY_MONTHS, Math.round(Number(input.months) || REGIONAL_INDEX_HISTORY_MONTHS)));
+    const months = visitorHistoryMonths(endYearMonth, monthCount);
+    const collectMissing = Boolean(input.collectMissing || input.refresh);
+    const force = Boolean(input.force);
+    const ttlHours = Number.isFinite(Number(input.ttlHours)) ? Number(input.ttlHours) : DEFAULT_TTL_HOURS;
+    const concurrency = Math.max(1, Math.min(
+      REGIONAL_INDEX_HISTORY_MAX_CONCURRENCY,
+      Math.round(Number(input.concurrency) || 1)
+    ));
+    const maxPagesPerOperation = regionalIndexMaxPages(sourceKey, input);
+    const match = await resolveRegionalIndexMatch(input);
+    if (!spec || !match.region) {
+      return {
+        ok: false,
+        status: "region_not_matched",
+        reason: "requested_region_not_matched",
+        period: { startYearMonth: months[0], endYearMonth, months: monthCount },
+        region: null,
+        series: [],
+        coverage: { expectedMonths: monthCount, completeMonths: 0, partialMonths: 0, missingMonths: monthCount, coverageRate: 0 },
+        collection: {
+          mode: "cache_only",
+          requestGrain: "sigungu",
+          operationsPerMonth: Object.keys(spec?.operations || {}).length,
+          operationCallsAttempted: 0,
+          maxPagesPerOperation
+        },
+        quality: { missingIsNotZero: true, completeCacheOnly: true }
+      };
+    }
+    const region = demandStrengthRegion(match.region, match.regionMap);
+    const publicRegion = {
+      regionKey: region.regionKey,
+      sido: region.sido,
+      sidoFull: region.sidoFull,
+      sigungu: region.sigungu,
+      areaCd: String(region.ktoSidoCd || ""),
+      signguCd: String(region.ktoSggCd || "")
+    };
+    const monthResults = new Array(months.length);
+    let cursor = 0;
+    async function worker() {
+      while (cursor < months.length) {
+        const index = cursor;
+        cursor += 1;
+        const yearMonth = months[index];
+        const cached = await readRegionalIndexCache(sourceKey, region.regionKey, yearMonth);
+        const compatible = regionalIndexCacheCompatible(sourceKey, cached, match.regionMap, region, yearMonth);
+        if (compatible && !force) {
+          monthResults[index] = {
+            access: "cache",
+            networkSucceeded: false,
+            snapshot: publicRegionalIndexSnapshot(sourceKey, cached.data, { yearMonth }, {
+              hit: true,
+              ttlHours,
+              mode: "cache",
+              filePath: cached.filePath,
+              operationCallsAttempted: 0
+            })
+          };
+          continue;
+        }
+        if (!force && !collectMissing) {
+          monthResults[index] = {
+            access: "missing",
+            networkSucceeded: false,
+            snapshot: publicRegionalIndexSnapshot(sourceKey, {
+              status: "unavailable",
+              reason: "monthly_cache_missing",
+              yearMonth,
+              region: publicRegion,
+              operations: {}
+            }, { yearMonth }, { hit: false, ttlHours, mode: "cache_only", operationCallsAttempted: 0 })
+          };
+          continue;
+        }
+        try {
+          const snapshot = await collectRegionalIndex(sourceKey, {
+            regionKey: region.regionKey,
+            yearMonth,
+            force,
+            ttlHours,
+            maxPagesPerOperation
+          });
+          monthResults[index] = {
+            access: "network",
+            networkSucceeded: snapshot.status === "ok" && !snapshot.cache?.refreshFailed,
+            snapshot
+          };
+        } catch (error) {
+          monthResults[index] = {
+            access: "network",
+            networkSucceeded: false,
+            snapshot: publicRegionalIndexSnapshot(sourceKey, {
+              status: "error",
+              reason: error?.message || "history_collection_failed",
+              yearMonth,
+              region: publicRegion,
+              operations: {},
+              collection: { mode: "collect", operationCallsAttempted: Object.keys(spec.operations).length }
+            }, { yearMonth }, { hit: false, ttlHours, operationCallsAttempted: Object.keys(spec.operations).length })
+          };
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, months.length) }, () => worker()));
+    const series = monthResults.map((result, index) => regionalIndexHistoryPoint(sourceKey, result.snapshot, months[index], result.access));
+    const completeMonths = series.filter((point) => point.status === "complete").length;
+    const partialMonths = series.filter((point) => point.status === "partial").length;
+    const missingMonths = monthCount - completeMonths - partialMonths;
+    const networkResults = monthResults.filter((result) => result.access === "network");
+    const operationCallsAttempted = networkResults.reduce(
+      (sum, result) => sum + Number(result.snapshot?.collection?.operationCallsAttempted || 0),
+      0
+    );
+    const available = completeMonths > 0;
+    const fullyComplete = completeMonths === monthCount;
+    return {
+      ok: available,
+      status: fullyComplete ? "ok" : available ? "partial" : "unavailable",
+      reason: fullyComplete ? "" : available ? "incomplete_history_coverage" : "no_complete_history_observation",
+      schemaVersion: 1,
+      adapter: spec.adapter,
+      collectedAt: currentDate().toISOString(),
+      period: {
+        startYearMonth: months[0],
+        endYearMonth,
+        months: monthCount,
+        latestClosedYearMonth: closedYearMonth
+      },
+      region: publicRegion,
+      series,
+      latest: series.at(-1) || null,
+      latestAvailable: [...series].reverse().find((point) => point.status === "complete") || null,
+      coverage: {
+        expectedMonths: monthCount,
+        completeMonths,
+        partialMonths,
+        missingMonths,
+        coverageRate: roundNumber(completeMonths / monthCount, 4)
+      },
+      collection: {
+        mode: force ? "force_refresh" : collectMissing ? "backfill_missing" : "cache_only",
+        concurrency,
+        requestGrain: "sigungu",
+        operationsPerMonth: Object.keys(spec.operations).length,
+        maxPagesPerOperation,
+        requestedMonths: monthCount,
+        cacheHitMonths: monthResults.filter((result) => result.access === "cache").length,
+        missingCacheMonths: monthResults.filter((result) => result.access === "missing").length,
+        networkAttemptedMonths: networkResults.length,
+        networkSucceededMonths: networkResults.filter((result) => result.networkSucceeded).length,
+        networkFailedMonths: networkResults.filter((result) => !result.networkSucceeded).length,
+        operationCallsAttempted,
+        maximumOperationCalls: monthCount * Object.keys(spec.operations).length * maxPagesPerOperation
+      },
+      source: {
+        key: sourceKey,
+        label: spec.label,
+        referenceUrl: regionalIndexSourceDef(sourceKey)?.referenceUrl || "",
+        timeGrain: "month",
+        regionGrain: "sigungu"
+      },
+      quality: {
+        missingIsNotZero: true,
+        partialMonthsExcludedFromCompleteCoverage: true,
+        failedRefreshDoesNotOverwriteCompleteCache: true,
+        completeCacheOnly: true,
+        completeRequiresOverallCodes: Object.values(spec.operations).map((operation) => operation.overallCode),
+        coverageRateUnit: "ratio_0_to_1"
+      }
+    };
+  }
+
+  async function collectResourceDemand(input = {}) {
+    return collectRegionalIndex("resourceDemand", input);
+  }
+
+  async function readResourceDemand(input = {}) {
+    return collectRegionalIndex("resourceDemand", { ...input, force: false, cacheOnly: true });
+  }
+
+  async function collectResourceDemandHistory(input = {}) {
+    return collectRegionalIndexHistory("resourceDemand", input);
+  }
+
+  async function readResourceDemandHistory(input = {}) {
+    return collectRegionalIndexHistory("resourceDemand", { ...input, collectMissing: false, refresh: false, force: false });
+  }
+
+  async function collectDiversity(input = {}) {
+    return collectRegionalIndex("diversity", input);
+  }
+
+  async function readDiversity(input = {}) {
+    return collectRegionalIndex("diversity", { ...input, force: false, cacheOnly: true });
+  }
+
+  async function collectDiversityHistory(input = {}) {
+    return collectRegionalIndexHistory("diversity", input);
+  }
+
+  async function readDiversityHistory(input = {}) {
+    return collectRegionalIndexHistory("diversity", { ...input, collectMissing: false, refresh: false, force: false });
+  }
+
   async function collect(input = {}) {
     const yearMonth = normalizeYearMonth(input.yearMonth || input.period || input.baseYm);
     const sources = selectedSources(input.sources);
@@ -2774,6 +3775,8 @@ function createCollector(options = {}) {
     const commonServiceKey = dataGoKrServiceKey(env);
     const visitorServiceKey = sourceServiceKey(DEFAULT_SOURCE_DEFS[0], env);
     const demandStrengthServiceKey = sourceServiceKey(demandStrengthSourceDef(), env);
+    const resourceDemandServiceKey = sourceServiceKey(regionalIndexSourceDef("resourceDemand"), env);
+    const diversityServiceKey = sourceServiceKey(regionalIndexSourceDef("diversity"), env);
     const sourceConfigs = DEFAULT_SOURCE_DEFS
       .map((def) => sourceConfig(def, env))
       .filter((config) => sources.includes(config.key));
@@ -2793,9 +3796,17 @@ function createCollector(options = {}) {
         ttlHours
       },
       sourcePolicy: {
-        serviceKeyConfigured: Boolean(visitorServiceKey || demandStrengthServiceKey || commonServiceKey),
+        serviceKeyConfigured: Boolean(
+          visitorServiceKey
+          || demandStrengthServiceKey
+          || resourceDemandServiceKey
+          || diversityServiceKey
+          || commonServiceKey
+        ),
         visitorServiceKeyConfigured: Boolean(visitorServiceKey),
         demandStrengthServiceKeyConfigured: Boolean(demandStrengthServiceKey),
+        resourceDemandServiceKeyConfigured: Boolean(resourceDemandServiceKey),
+        diversityServiceKeyConfigured: Boolean(diversityServiceKey),
         commonServiceKeyConfigured: Boolean(commonServiceKey),
         allowUnverifiedCodes,
         noSidoSigunguAggregation: true
@@ -2854,6 +3865,35 @@ function createCollector(options = {}) {
         };
         continue;
       }
+      if (config.key === "resourceDemand" || config.key === "diversity") {
+        const spec = regionalIndexSpec(config.key);
+        const regionalSnapshot = config.key === "resourceDemand"
+          ? await readResourceDemand({
+            yearMonth,
+            regionKey: match.region.regionKey,
+            ttlHours
+          })
+          : await readDiversity({
+            yearMonth,
+            regionKey: match.region.regionKey,
+            ttlHours
+          });
+        snapshot.sources[config.key] = {
+          label: config.label,
+          referenceUrl: config.referenceUrl,
+          configStatus: regionalIndexEndpointStatus(spec, config, sourceServiceKey(config, env)),
+          status: regionalSnapshot.status === "ok"
+            ? "ok"
+            : regionalSnapshot.status === "unavailable"
+              ? "skipped"
+              : regionalSnapshot.status,
+          reason: regionalSnapshot.reason || "",
+          data: regionalSnapshot,
+          rows: [],
+          requestedAt: regionalSnapshot.collectedAt || new Date().toISOString()
+        };
+        continue;
+      }
       snapshot.sources[config.key] = {
         label: config.label,
         referenceUrl: config.referenceUrl,
@@ -2907,6 +3947,23 @@ function createCollector(options = {}) {
       earliestYearMonth: demandStrengthMonthsAvailable[0] || "",
       latestYearMonth: demandStrengthMonthsAvailable.at(-1) || ""
     };
+    function regionalIndexCacheSummary(sourceKey = "") {
+      const spec = regionalIndexSpec(sourceKey);
+      const prefix = `${safeName(sourceKey)}__${safeName(spec?.adapter || "adapter")}__`;
+      const files = cacheFiles.filter((fileName) => fileName.startsWith(prefix));
+      const months = files
+        .map((fileName) => fileName.match(/__(\d{6})\.json$/)?.[1] || "")
+        .filter(Boolean)
+        .sort();
+      return {
+        snapshotCount: files.length,
+        availableMonthCount: new Set(months).size,
+        earliestYearMonth: months[0] || "",
+        latestYearMonth: months.at(-1) || ""
+      };
+    }
+    const resourceDemandCacheSummary = regionalIndexCacheSummary("resourceDemand");
+    const diversityCacheSummary = regionalIndexCacheSummary("diversity");
     return {
       ok: true,
       enabled: true,
@@ -2925,9 +3982,12 @@ function createCollector(options = {}) {
         latestYearMonth: visitorHistoryMonthsAvailable.at(-1) || ""
       },
       demandStrength: demandStrengthCacheSummary,
+      resourceDemand: resourceDemandCacheSummary,
+      diversity: diversityCacheSummary,
       sources: DEFAULT_SOURCE_DEFS.map((def) => {
         const config = sourceConfig(def, env);
         const serviceKey = sourceServiceKey(config, env);
+        const regionalSpec = regionalIndexSpec(def.key);
         return {
           key: config.key,
           label: config.label,
@@ -2936,7 +3996,9 @@ function createCollector(options = {}) {
             ? visitorEndpointStatus(config, serviceKey)
             : def.key === "demandStrength"
               ? demandStrengthEndpointStatus(config, serviceKey)
-              : sourceStatus(config, serviceKey),
+              : regionalSpec
+                ? regionalIndexEndpointStatus(regionalSpec, config, serviceKey)
+                : sourceStatus(config, serviceKey),
           serviceKeyConfigured: Boolean(serviceKey),
           serviceKeyEnvironment: config.serviceKeyEnv || "DATA_GO_KR_SERVICE_KEY",
           endpointConfigured: Boolean(config.endpoint),
@@ -2948,6 +4010,18 @@ function createCollector(options = {}) {
             requestProfile: DEMAND_STRENGTH_REQUEST_PROFILE_VERSION,
             operations: Object.values(DEMAND_STRENGTH_OPERATIONS).map((operation) => operation.operation),
             cache: demandStrengthCacheSummary
+          } : {}),
+          ...(regionalSpec ? {
+            adapter: regionalSpec.adapter,
+            requestProfile: "overall-index-filter-v1",
+            operations: Object.values(regionalSpec.operations).map((operation) => operation.operation),
+            requiredOverallCodes: Object.values(regionalSpec.operations).map((operation) => operation.overallCode),
+            cache: def.key === "resourceDemand" ? resourceDemandCacheSummary : diversityCacheSummary,
+            qualityPolicy: {
+              missingIsNotZero: true,
+              completeCacheOnly: true,
+              failedRefreshDoesNotOverwriteCompleteCache: true
+            }
           } : {})
         };
       })
@@ -2961,6 +4035,14 @@ function createCollector(options = {}) {
     readDemandStrength,
     collectDemandStrength,
     collectDemandStrengthHistory,
+    collectResourceDemand,
+    readResourceDemand,
+    collectResourceDemandHistory,
+    readResourceDemandHistory,
+    collectDiversity,
+    readDiversity,
+    collectDiversityHistory,
+    readDiversityHistory,
     resolveRegion,
     status,
     readRegionMap
@@ -2986,5 +4068,10 @@ module.exports = {
   DEMAND_STRENGTH_NORMALIZER_VERSION,
   DEMAND_STRENGTH_REQUEST_PROFILE_VERSION,
   DEMAND_STRENGTH_LEGACY_REQUEST_PROFILE_VERSION,
-  DEMAND_STRENGTH_OPERATIONS
+  DEMAND_STRENGTH_OPERATIONS,
+  RESOURCE_DEMAND_ADAPTER_VERSION,
+  DIVERSITY_ADAPTER_VERSION,
+  RESOURCE_DEMAND_OPERATIONS,
+  DIVERSITY_OPERATIONS,
+  REGIONAL_INDEX_HISTORY_MONTHS
 };

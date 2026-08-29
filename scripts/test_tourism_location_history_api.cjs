@@ -420,6 +420,8 @@ async function main() {
       TOURISM_DEMAND_STRENGTH_BACKFILL_ENABLED: "0",
       DATA_GO_KR_VISITOR_SERVICE_KEY: "test-visitor-key",
       DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY: "test-demand-strength-key",
+      DATA_GO_KR_RESOURCE_DEMAND_SERVICE_KEY: "test-resource-demand-key",
+      DATA_GO_KR_DIVERSITY_SERVICE_KEY: "test-diversity-key",
       KTO_TOURISM_VISITOR_ENDPOINT: `http://127.0.0.1:${trapPort}/visitor`,
       KTO_TOURISM_DEMAND_STRENGTH_ENDPOINT: `http://127.0.0.1:${trapPort}/demand-strength`
     },
@@ -528,6 +530,42 @@ async function main() {
     );
     assert.equal(injectedDemandStrengthRefresh.response.status, 400);
     assert.match(injectedDemandStrengthRefresh.body.error, /API 주소/);
+
+    const injectedResourceDemandRefresh = await postJson(
+      baseUrl,
+      "/api/tourism-data/resource-demand/history",
+      { regionKey: SANCHEONG_REGION_KEY, serviceKey: "forbidden" },
+      adminCookie
+    );
+    assert.equal(injectedResourceDemandRefresh.response.status, 400);
+    assert.match(injectedResourceDemandRefresh.body.error, /인증키/);
+
+    const shortResourceDemandRefresh = await postJson(
+      baseUrl,
+      "/api/tourism-data/resource-demand/history",
+      { regionKey: SANCHEONG_REGION_KEY, months: 6 },
+      adminCookie
+    );
+    assert.equal(shortResourceDemandRefresh.response.status, 400);
+    assert.match(shortResourceDemandRefresh.body.error, /최근 12개월/);
+
+    const injectedDiversityRefresh = await postJson(
+      baseUrl,
+      "/api/tourism-data/diversity/history",
+      { regionKey: SANCHEONG_REGION_KEY, Endpoint: "http://forbidden.invalid" },
+      adminCookie
+    );
+    assert.equal(injectedDiversityRefresh.response.status, 400);
+    assert.match(injectedDiversityRefresh.body.error, /API 주소/);
+
+    const shortDiversityRefresh = await postJson(
+      baseUrl,
+      "/api/tourism-data/diversity/history",
+      { regionKey: SANCHEONG_REGION_KEY, months: 1 },
+      adminCookie
+    );
+    assert.equal(shortDiversityRefresh.response.status, 400);
+    assert.match(shortDiversityRefresh.body.error, /최근 12개월/);
 
     const overRangeDemandStrengthRefresh = await postJson(
       baseUrl,
@@ -642,6 +680,16 @@ async function main() {
     assert.equal(byRegionKey.body.tourismDemandStrengthHistory.collection.mode, "cache_only");
     assert.equal(byRegionKey.body.tourismDemandStrengthHistory.collection.networkAttemptedMonths, 0);
     assert.equal(byRegionKey.body.tourismDemandStrengthHistory.region.regionKey, SANCHEONG_REGION_KEY);
+    assert.equal(byRegionKey.body.tourismResourceDemandHistory.collection.mode, "cache_only");
+    assert.equal(byRegionKey.body.tourismResourceDemandHistory.collection.requestedMonths, 12);
+    assert.equal(byRegionKey.body.tourismResourceDemandHistory.collection.networkAttemptedMonths, 0);
+    assert.equal(byRegionKey.body.tourismDiversityHistory.collection.mode, "cache_only");
+    assert.equal(byRegionKey.body.tourismDiversityHistory.collection.requestedMonths, 12);
+    assert.equal(byRegionKey.body.tourismDiversityHistory.collection.networkAttemptedMonths, 0);
+    assert.equal(byRegionKey.body.cache.resourceDemand.cacheHitMonths, 0);
+    assert.equal(byRegionKey.body.cache.resourceDemand.missingCacheMonths, 12);
+    assert.equal(byRegionKey.body.cache.diversity.cacheHitMonths, 0);
+    assert.equal(byRegionKey.body.cache.diversity.missingCacheMonths, 12);
     assert.equal(byRegionKey.body.naverPlace.status, "observed");
     assert.equal(byRegionKey.body.naverPlace.runId, SANCHEONG_RUN_ID);
     assert.notEqual(byRegionKey.body.naverPlace.runId, NEWER_UNRELATED_RUN_ID);
@@ -670,6 +718,14 @@ async function main() {
 
     const tourismStatus = await getJson(baseUrl, "/api/tourism-data/status", adminCookie);
     assert.equal(tourismStatus.response.status, 200, JSON.stringify(tourismStatus.body));
+    const resourceDemandStatus = tourismStatus.body.sources.find((source) => source.key === "resourceDemand");
+    const diversityStatus = tourismStatus.body.sources.find((source) => source.key === "diversity");
+    assert.equal(resourceDemandStatus.status, "ready");
+    assert.equal(resourceDemandStatus.serviceKeyConfigured, true);
+    assert.equal(resourceDemandStatus.serviceKeyEnvironment, "DATA_GO_KR_RESOURCE_DEMAND_SERVICE_KEY");
+    assert.equal(diversityStatus.status, "ready");
+    assert.equal(diversityStatus.serviceKeyConfigured, true);
+    assert.equal(diversityStatus.serviceKeyEnvironment, "DATA_GO_KR_DIVERSITY_SERVICE_KEY");
     assert.equal(tourismStatus.body.visitorPeriodSummary.status, "ready");
     assert.equal(tourismStatus.body.visitorPeriodSummary.snapshotCount, 3);
     assert.equal(tourismStatus.body.visitorPeriodSummary.latest.period.endYearMonth, "202606");
@@ -699,6 +755,8 @@ async function main() {
       [SANCHEONG_REGION_KEY]
     );
     assert.equal(byRegionName.body.tourismDemandStrengthHistory.region.regionKey, SANCHEONG_REGION_KEY);
+    assert.equal(byRegionName.body.tourismResourceDemandHistory.collection.requestedMonths, 12);
+    assert.equal(byRegionName.body.tourismDiversityHistory.collection.requestedMonths, 12);
     assert.equal(byRegionName.body.naverPlace.items.length, 10);
     assert.equal(byRegionName.body.naverKeyword.totalSearchVolume, 2440);
 

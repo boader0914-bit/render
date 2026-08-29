@@ -6,14 +6,18 @@
 
 이 저장소는 Render Blueprint 배포용 `render.yaml`을 포함합니다.
 
-현재 연결된 공공데이터는 **한국관광공사 지역별 방문자수**와
-**지역별 관광 수요 강도**입니다. 승인키가 API마다 다른 경우를 대비해
+현재 연결된 공공데이터는 **한국관광공사 지역별 방문자수**, **지역별 관광 수요 강도**,
+**지역별 관광 자원 수요**, **지역별 관광 다양성**입니다. 승인키가 API마다 다른 경우를 대비해
 각 API 키를 아래 전용 Secret으로 직접 입력할 수 있습니다.
 
 - Key: `DATA_GO_KR_VISITOR_SERVICE_KEY`
 - Value: 공공데이터포털에서 승인받은 **지역별 방문자수 인증키 문자열만** 입력
 - Key: `DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY`
 - Value: 공공데이터포털에서 승인받은 **지역별 관광 수요 강도 인증키 문자열만** 입력
+- Key: `DATA_GO_KR_RESOURCE_DEMAND_SERVICE_KEY`
+- Value: 공공데이터포털에서 승인받은 **지역별 관광 자원 수요 인증키 문자열만** 입력
+- Key: `DATA_GO_KR_DIVERSITY_SERVICE_KEY`
+- Value: 공공데이터포털에서 승인받은 **지역별 관광 다양성 인증키 문자열만** 입력
 
 기존에 `DATA_GO_KR_SERVICE_KEY`로 연결해 둔 서비스는 그대로 작동합니다.
 전용키가 있으면 전용키를 먼저 사용하고, 없을 때만 기존 공통키를 사용합니다.
@@ -25,6 +29,8 @@
 5. 검색량/클릭률 수집이 필요하면 네이버 API 키도 입력합니다.
 6. 지역별 방문자수는 `DATA_GO_KR_VISITOR_SERVICE_KEY`를 Secret으로 입력합니다.
 7. 관광 수요 강도는 `DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY`를 Secret으로 입력합니다.
+8. 관광 자원 수요는 `DATA_GO_KR_RESOURCE_DEMAND_SERVICE_KEY`를 Secret으로 입력합니다.
+9. 관광 다양성은 `DATA_GO_KR_DIVERSITY_SERVICE_KEY`를 Secret으로 입력합니다.
 
 필수 환경변수:
 - `APP_PIN`
@@ -32,6 +38,8 @@
 선택 환경변수:
 - `DATA_GO_KR_VISITOR_SERVICE_KEY` (현재 연결된 지역별 방문자수 전용)
 - `DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY` (지역별 관광 수요 강도 전용)
+- `DATA_GO_KR_RESOURCE_DEMAND_SERVICE_KEY` (지역별 관광 자원 수요 전용)
+- `DATA_GO_KR_DIVERSITY_SERVICE_KEY` (지역별 관광 다양성 전용)
 - `DATA_GO_KR_SERVICE_KEY`
 - `NAVER_CLIENT_ID`
 - `NAVER_CLIENT_SECRET`
@@ -41,13 +49,16 @@
 
 공공데이터 서비스키는 저장소나 앱 설정 화면에 입력하지 않습니다. 기존
 Render 서비스에서는 Dashboard의 해당 Web Service를 열고 `Environment`에서
-`DATA_GO_KR_VISITOR_SERVICE_KEY`와 `DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY`를
+`DATA_GO_KR_VISITOR_SERVICE_KEY`, `DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY`,
+`DATA_GO_KR_RESOURCE_DEMAND_SERVICE_KEY`, `DATA_GO_KR_DIVERSITY_SERVICE_KEY`를
 직접 추가한 뒤 `Save and deploy`를 누릅니다.
 값에는 따옴표, 변수명, Endpoint URL을 붙이지 않습니다. Blueprint의 `sync: false`는
 비밀값 자체를 저장하지 않으며, 새 Blueprint 생성 시 입력란만 제공합니다.
 
-자원수요·다양성 등 나머지 승인 API는 아직 이 수집기에 연결하지 않았습니다.
-키 입력칸과 수집기는 API별로 하나씩 검증한 뒤 순차 추가합니다.
+관광 자원 수요와 관광 다양성은 서로 다른 API와 Snapshot으로 저장합니다. 일반 지역 화면은
+최근 완료월 기준 12개월 저장자료만 읽고, 관리자 갱신 경로에서만 외부 API를 호출합니다.
+관광 자원 수요의 관광 서비스·문화 자원 계열과 관광 다양성의 관광객·관광소비·국제 계열을
+각각 보존하며, 누락·부분수집 값은 0으로 합성하지 않습니다.
 
 지역 분석의 수요전망은 한국관광공사 `DataLabService/locgoRegnVisitrDDList`를
 사용합니다. 최신 완전월을 끝으로 하는 최근 12개월을 한 번 갱신한 뒤 월별

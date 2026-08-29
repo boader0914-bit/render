@@ -149,6 +149,8 @@ const tourismPeriodSummaryImporterState = (() => {
 })();
 let activeTourismVisitorHistoryPromise = null;
 let activeTourismDemandStrengthHistoryPromise = null;
+let activeTourismResourceDemandHistoryPromise = null;
+let activeTourismDiversityHistoryPromise = null;
 
 async function runTourismVisitorHistoryCollection(input = {}) {
   if (activeTourismVisitorHistoryPromise) {
@@ -15588,6 +15590,83 @@ function unavailableTourismDemandStrengthHistory(reason, status = "unavailable")
   };
 }
 
+function unavailableTourismIndexHistory({
+  reason,
+  status = "unavailable",
+  sourceKey,
+  sourceLabel,
+  referenceUrl,
+  operationsPerMonth
+} = {}) {
+  return {
+    ok: false,
+    status,
+    reason: reason || "tourism_index_history_unavailable",
+    schemaVersion: 1,
+    collectedAt: "",
+    period: null,
+    region: null,
+    series: [],
+    latest: null,
+    coverage: {
+      expectedMonths: 12,
+      completeMonths: 0,
+      partialMonths: 0,
+      missingMonths: 12,
+      coverageRate: 0
+    },
+    collection: {
+      mode: "cache_only",
+      concurrency: 1,
+      requestGrain: "sigungu",
+      operationsPerMonth: Number(operationsPerMonth || 0),
+      requestedMonths: 12,
+      cacheHitMonths: 0,
+      missingCacheMonths: 12,
+      networkAttemptedMonths: 0,
+      networkSucceededMonths: 0,
+      networkFailedMonths: 0,
+      operationCallsAttempted: 0,
+      maximumOperationCalls: Number(operationsPerMonth || 0) * 12
+    },
+    source: {
+      key: sourceKey || "",
+      label: sourceLabel || "한국관광공사 관광 지수",
+      referenceUrl: referenceUrl || "",
+      timeGrain: "month",
+      regionGrain: "sigungu"
+    },
+    quality: {
+      missingIsNotZero: true,
+      syntheticValuesAllowed: false,
+      scoreApplied: false,
+      coverageRateUnit: "ratio_0_to_1"
+    }
+  };
+}
+
+function unavailableTourismResourceDemandHistory(reason, status = "unavailable") {
+  return unavailableTourismIndexHistory({
+    reason,
+    status,
+    sourceKey: "resourceDemand",
+    sourceLabel: "한국관광공사 지역별 관광 자원 수요",
+    referenceUrl: "https://www.data.go.kr/data/15152138/openapi.do",
+    operationsPerMonth: 2
+  });
+}
+
+function unavailableTourismDiversityHistory(reason, status = "unavailable") {
+  return unavailableTourismIndexHistory({
+    reason,
+    status,
+    sourceKey: "diversity",
+    sourceLabel: "한국관광공사 지역별 관광 다양성",
+    referenceUrl: "https://www.data.go.kr/data/15151365/openapi.do",
+    operationsPerMonth: 3
+  });
+}
+
 const TOURISM_PERIOD_SUMMARY_SOURCE = Object.freeze({
   label: "한국관광 데이터랩 공식 다운로드"
 });
@@ -15843,6 +15922,53 @@ function tourismRequestHasForbiddenConnectionFields(value = {}) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).some((field) => (
     TOURISM_LOCATION_HISTORY_FORBIDDEN_QUERY_FIELDS.has(String(field || "").trim().toLowerCase())
   )));
+}
+
+function tourismIndexHistoryAdminInput(payload = {}) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    const error = new Error("요청 본문은 JSON 객체여야 합니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (tourismRequestHasForbiddenConnectionFields(payload)) {
+    const error = new Error("API 주소나 인증키는 요청 본문에서 지정할 수 없습니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const cleanList = (...values) => Array.from(new Set(
+    values
+      .flatMap((value) => (Array.isArray(value) ? value : value ? [value] : []))
+      .map((value) => String(value || "").trim().slice(0, 120))
+      .filter(Boolean)
+  ));
+  const regionNames = cleanList(payload.regionName, payload.regionNames, payload.regions);
+  const regionKeys = cleanList(payload.regionKey, payload.regionKeys);
+  if (regionNames.length + regionKeys.length !== 1) {
+    const error = new Error("한 번에 한 개의 지역명 또는 지역키만 지정할 수 있습니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (payload.months !== undefined && payload.months !== null && payload.months !== "" && Number(payload.months) !== 12) {
+    const error = new Error("관광 지수는 최근 12개월만 수집합니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const endYearMonth = String(payload.endYearMonth || "").trim();
+  if (endYearMonth && !/^\d{4}(?:0[1-9]|1[0-2])$/.test(endYearMonth)) {
+    const error = new Error("마지막 기준월은 YYYYMM 형식으로 입력해야 합니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return {
+    ...(regionNames.length ? { regionNames } : { regionKeys }),
+    months: 12,
+    ...(endYearMonth ? { endYearMonth } : {}),
+    collectMissing: true,
+    refresh: true,
+    force: payload.force === true,
+    concurrency: 1,
+    maxPagesPerOperation: 1
+  };
 }
 
 function tourismLocationHistorySelector(reqUrl) {
@@ -16192,7 +16318,9 @@ async function readTourismLocationNaverSnapshots(region = {}) {
 async function readTourismLocationHistoryCache(selector = {}) {
   if (typeof tourismCollector.resolveRegion !== "function"
     || typeof tourismCollector.collectVisitorHistory !== "function"
-    || typeof tourismCollector.collectDemandStrengthHistory !== "function") {
+    || typeof tourismCollector.collectDemandStrengthHistory !== "function"
+    || typeof tourismCollector.collectResourceDemandHistory !== "function"
+    || typeof tourismCollector.collectDiversityHistory !== "function") {
     const error = new Error("지역 관광 이력 캐시 조회기가 준비되지 않았습니다.");
     error.statusCode = 503;
     throw error;
@@ -16221,15 +16349,28 @@ async function readTourismLocationHistoryCache(selector = {}) {
     refresh: false,
     force: false
   };
-  const [tourismVisitorHistory, tourismDemandStrengthHistory, tourismVisitorPeriodSummary] = await Promise.all([
+  const [
+    tourismVisitorHistory,
+    tourismDemandStrengthHistory,
+    tourismResourceDemandHistory,
+    tourismDiversityHistory,
+    tourismVisitorPeriodSummary
+  ] = await Promise.all([
     tourismCollector.collectVisitorHistory(cacheInput),
     tourismCollector.collectDemandStrengthHistory(cacheInput),
+    tourismCollector.collectResourceDemandHistory(cacheInput),
+    tourismCollector.collectDiversityHistory(cacheInput),
     readTourismVisitorPeriodSummaryCache(region)
   ]);
   const { naverPlace, naverKeyword } = await readTourismLocationNaverSnapshots(match.region);
   const visitorNetworkAttempts = Number(tourismVisitorHistory?.collection?.networkAttemptedMonths || 0);
   const demandStrengthNetworkAttempts = Number(tourismDemandStrengthHistory?.collection?.networkAttemptedMonths || 0);
-  const externalRequestsAttempted = visitorNetworkAttempts + demandStrengthNetworkAttempts;
+  const resourceDemandNetworkAttempts = Number(tourismResourceDemandHistory?.collection?.networkAttemptedMonths || 0);
+  const diversityNetworkAttempts = Number(tourismDiversityHistory?.collection?.networkAttemptedMonths || 0);
+  const externalRequestsAttempted = visitorNetworkAttempts
+    + demandStrengthNetworkAttempts
+    + resourceDemandNetworkAttempts
+    + diversityNetworkAttempts;
   if (externalRequestsAttempted !== 0) {
     const error = new Error("캐시 전용 지역 이력 조회 중 외부 요청이 감지되었습니다.");
     error.statusCode = 500;
@@ -16248,6 +16389,8 @@ async function readTourismLocationHistoryCache(selector = {}) {
     tourismVisitorPeriodSummary,
     tourismVisitorHistory,
     tourismDemandStrengthHistory,
+    tourismResourceDemandHistory,
+    tourismDiversityHistory,
     naverPlace,
     naverKeyword,
     cache: {
@@ -16261,6 +16404,14 @@ async function readTourismLocationHistoryCache(selector = {}) {
       demandStrength: {
         cacheHitMonths: Number(tourismDemandStrengthHistory?.collection?.cacheHitMonths || 0),
         missingCacheMonths: Number(tourismDemandStrengthHistory?.collection?.missingCacheMonths || 0)
+      },
+      resourceDemand: {
+        cacheHitMonths: Number(tourismResourceDemandHistory?.collection?.cacheHitMonths || 0),
+        missingCacheMonths: Number(tourismResourceDemandHistory?.collection?.missingCacheMonths || 0)
+      },
+      diversity: {
+        cacheHitMonths: Number(tourismDiversityHistory?.collection?.cacheHitMonths || 0),
+        missingCacheMonths: Number(tourismDiversityHistory?.collection?.missingCacheMonths || 0)
       },
       visitorPeriodSummary: {
         status: tourismVisitorPeriodSummary.status,
@@ -16396,6 +16547,54 @@ async function loadRun(runId, options = {}) {
       ));
     }
   }
+  let tourismResourceDemandHistory = null;
+  if (!options.skipTourismResourceDemandHistory) {
+    if (!tourismRegionNames.length) {
+      tourismResourceDemandHistory = unavailableTourismResourceDemandHistory(
+        "resource_demand_history_region_unavailable",
+        "region_not_matched"
+      );
+    } else if (typeof tourismCollector.collectResourceDemandHistory !== "function") {
+      tourismResourceDemandHistory = unavailableTourismResourceDemandHistory(
+        "resource_demand_history_adapter_unavailable"
+      );
+    } else {
+      tourismResourceDemandHistory = await tourismCollector.collectResourceDemandHistory({
+        regionNames: tourismRegionNames,
+        months: 12,
+        collectMissing: false,
+        refresh: false,
+        force: false
+      }).catch(() => unavailableTourismResourceDemandHistory(
+        "resource_demand_history_cache_read_failed",
+        "error"
+      ));
+    }
+  }
+  let tourismDiversityHistory = null;
+  if (!options.skipTourismDiversityHistory) {
+    if (!tourismRegionNames.length) {
+      tourismDiversityHistory = unavailableTourismDiversityHistory(
+        "diversity_history_region_unavailable",
+        "region_not_matched"
+      );
+    } else if (typeof tourismCollector.collectDiversityHistory !== "function") {
+      tourismDiversityHistory = unavailableTourismDiversityHistory(
+        "diversity_history_adapter_unavailable"
+      );
+    } else {
+      tourismDiversityHistory = await tourismCollector.collectDiversityHistory({
+        regionNames: tourismRegionNames,
+        months: 12,
+        collectMissing: false,
+        refresh: false,
+        force: false
+      }).catch(() => unavailableTourismDiversityHistory(
+        "diversity_history_cache_read_failed",
+        "error"
+      ));
+    }
+  }
   const stats = summarizeStats(regions);
   if (datalabTrend) stats.datalabTrend = datalabTrend;
   const availability = summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows], dirPath);
@@ -16469,6 +16668,8 @@ async function loadRun(runId, options = {}) {
     tourismVisitors,
     tourismVisitorHistory,
     tourismDemandStrengthHistory,
+    tourismResourceDemandHistory,
+    tourismDiversityHistory,
     demandStructure,
     regions,
     ranking,
@@ -17630,6 +17831,90 @@ async function route(req, res) {
       } finally {
         if (activeTourismDemandStrengthHistoryPromise === collectionPromise) {
           activeTourismDemandStrengthHistoryPromise = null;
+        }
+      }
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/tourism-data/resource-demand/history") {
+      if (!requireAdminSession(session, req, res)) return;
+      assertRequestRateLimit(req, "adminTourism", RATE_LIMIT_POLICIES.adminTourism, session.username || "");
+      if (typeof tourismCollector.collectResourceDemandHistory !== "function") {
+        return send(res, 503, { error: "지역별 관광 자원 수요 이력 수집기가 준비되지 않았습니다." });
+      }
+      if (activeTourismResourceDemandHistoryPromise) {
+        return send(res, 409, {
+          error: "지역별 관광 자원 수요 이력을 이미 갱신하고 있습니다.",
+          status: "busy"
+        });
+      }
+      const payload = await parseJsonBody(req);
+      let input;
+      try {
+        input = tourismIndexHistoryAdminInput(payload);
+      } catch (error) {
+        return send(res, Number(error?.statusCode || 400), { error: error?.message || "요청값을 확인해 주세요." });
+      }
+      const collectionPromise = tourismCollector.collectResourceDemandHistory(input);
+      activeTourismResourceDemandHistoryPromise = collectionPromise;
+      try {
+        const history = await collectionPromise;
+        return send(res, 200, {
+          ok: Boolean(history?.ok),
+          status: String(history?.status || "unavailable"),
+          reason: String(history?.reason || ""),
+          tourismResourceDemandHistory: history
+        });
+      } catch (error) {
+        return send(res, [400, 409, 429, 503].includes(Number(error?.statusCode)) ? Number(error.statusCode) : 502, {
+          error: error?.message || "지역별 관광 자원 수요 이력 갱신에 실패했습니다.",
+          status: "error",
+          code: String(error?.code || "tourism_resource_demand_history_failed")
+        });
+      } finally {
+        if (activeTourismResourceDemandHistoryPromise === collectionPromise) {
+          activeTourismResourceDemandHistoryPromise = null;
+        }
+      }
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/tourism-data/diversity/history") {
+      if (!requireAdminSession(session, req, res)) return;
+      assertRequestRateLimit(req, "adminTourism", RATE_LIMIT_POLICIES.adminTourism, session.username || "");
+      if (typeof tourismCollector.collectDiversityHistory !== "function") {
+        return send(res, 503, { error: "지역별 관광 다양성 이력 수집기가 준비되지 않았습니다." });
+      }
+      if (activeTourismDiversityHistoryPromise) {
+        return send(res, 409, {
+          error: "지역별 관광 다양성 이력을 이미 갱신하고 있습니다.",
+          status: "busy"
+        });
+      }
+      const payload = await parseJsonBody(req);
+      let input;
+      try {
+        input = tourismIndexHistoryAdminInput(payload);
+      } catch (error) {
+        return send(res, Number(error?.statusCode || 400), { error: error?.message || "요청값을 확인해 주세요." });
+      }
+      const collectionPromise = tourismCollector.collectDiversityHistory(input);
+      activeTourismDiversityHistoryPromise = collectionPromise;
+      try {
+        const history = await collectionPromise;
+        return send(res, 200, {
+          ok: Boolean(history?.ok),
+          status: String(history?.status || "unavailable"),
+          reason: String(history?.reason || ""),
+          tourismDiversityHistory: history
+        });
+      } catch (error) {
+        return send(res, [400, 409, 429, 503].includes(Number(error?.statusCode)) ? Number(error.statusCode) : 502, {
+          error: error?.message || "지역별 관광 다양성 이력 갱신에 실패했습니다.",
+          status: "error",
+          code: String(error?.code || "tourism_diversity_history_failed")
+        });
+      } finally {
+        if (activeTourismDiversityHistoryPromise === collectionPromise) {
+          activeTourismDiversityHistoryPromise = null;
         }
       }
     }

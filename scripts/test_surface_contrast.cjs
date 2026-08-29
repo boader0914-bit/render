@@ -379,10 +379,14 @@ const adminIntegrationContext = {
     tourismDataStatus: {
       sources: [
         { key: "visitors", status: "ready", serviceKeyConfigured: true, endpointConfigured: true },
-        { key: "demandStrength", status: "ready", serviceKeyConfigured: true, endpointConfigured: true }
+        { key: "demandStrength", status: "ready", serviceKeyConfigured: true, endpointConfigured: true },
+        { key: "resourceDemand", status: "ready", serviceKeyConfigured: true, endpointConfigured: true },
+        { key: "diversity", status: "ready", serviceKeyConfigured: true, endpointConfigured: true }
       ],
       visitorHistory: { availableMonthCount: 12 },
       demandStrength: { snapshotCount: 4, availableMonthCount: 4 },
+      resourceDemand: { snapshotCount: 12, availableMonthCount: 12 },
+      diversity: { snapshotCount: 12, availableMonthCount: 12 },
       demandStrengthBackfill: { completedPairCount: 4 }
     }
   }
@@ -397,21 +401,27 @@ const connectedAdminIntegrationSummary = adminIntegrationContext.getAdminIntegra
 assert(
   connectedAdminIntegrations.find((row) => row.key === "regional-visitors")?.status === "connected"
     && connectedAdminIntegrations.find((row) => row.key === "tourism-demand-strength")?.status === "connected"
-    && connectedAdminIntegrationSummary.connected === 2
+    && connectedAdminIntegrations.find((row) => row.key === "tourism-resource-demand")?.status === "connected"
+    && connectedAdminIntegrations.find((row) => row.key === "tourism-diversity")?.status === "connected"
+    && connectedAdminIntegrationSummary.connected === 4
     && connectedAdminIntegrationSummary.configured === 2
-    && connectedAdminIntegrationSummary.planned === 11
-    && adminIntegrationContext.getAdminIntegrationSummaryLabel(connectedAdminIntegrationSummary) === "2 정상 · 2 설정 · 11 예정",
-  "admin API registry must map visitor and demand-strength stored evidence to 2/15 connected without merging planned APIs",
+    && connectedAdminIntegrationSummary.planned === 9
+    && adminIntegrationContext.getAdminIntegrationSummaryLabel(connectedAdminIntegrationSummary) === "4 정상 · 2 설정 · 9 예정",
+  "admin API registry must map four stored tourism sources to 4/15 connected without merging planned APIs",
   failures
 );
 
 adminIntegrationContext.state.tourismDataStatus = {
   sources: [
     { key: "visitors", status: "ready", serviceKeyConfigured: true, endpointConfigured: true },
-    { key: "demandStrength", status: "ready", serviceKeyConfigured: true, endpointConfigured: true }
+    { key: "demandStrength", status: "ready", serviceKeyConfigured: true, endpointConfigured: true },
+    { key: "resourceDemand", status: "ready", serviceKeyConfigured: true, endpointConfigured: true },
+    { key: "diversity", status: "ready", serviceKeyConfigured: true, endpointConfigured: true }
   ],
   visitorHistory: { availableMonthCount: 0 },
   demandStrength: { snapshotCount: 0, availableMonthCount: 0 },
+  resourceDemand: { snapshotCount: 0, availableMonthCount: 0 },
+  diversity: { snapshotCount: 0, availableMonthCount: 0 },
   demandStrengthBackfill: { completedPairCount: 0 }
 };
 const configuredTourismRows = adminIntegrationContext.getAdminIntegrationRows();
@@ -435,9 +445,9 @@ assert(
   missingTourismRows.find((row) => row.key === "regional-visitors")?.status === "missing"
     && missingTourismRows.find((row) => row.key === "regional-visitors")?.statusLabel === "설정 필요"
     && missingTourismSummary.missing === 1
-    && missingTourismSummary.planned === 11
+    && missingTourismSummary.planned === 9
     && adminIntegrationContext.getAdminIntegrationSummaryLabel(missingTourismSummary).includes("1 확인")
-    && adminIntegrationContext.getAdminIntegrationSummaryLabel(missingTourismSummary).includes("11 예정"),
+    && adminIntegrationContext.getAdminIntegrationSummaryLabel(missingTourismSummary).includes("9 예정"),
   "admin API registry must keep missing configuration separate from planned integrations",
   failures
 );
@@ -646,6 +656,14 @@ const renderObservedLocationProfileBlock = app.slice(
   app.indexOf("function renderObservedLocationProfile("),
   app.indexOf("function administrativeProfileDefinitionRows(")
 );
+const tourismIndexUiBlock = app.slice(
+  app.indexOf("const LOCATION_PROFILE_RESOURCE_DEMAND_SERIES"),
+  app.indexOf("function renderLocationProfileSourcePanel(")
+);
+const tourismIndexRefreshBlock = app.slice(
+  app.indexOf("async function refreshLocationTourismIndexHistory("),
+  app.indexOf("function locationProfileObservedAt(")
+);
 const locationHistoryServerBlock = server.slice(
   server.indexOf("async function readTourismLocationHistoryCache("),
   server.indexOf("async function loadRun(", server.indexOf("async function readTourismLocationHistoryCache("))
@@ -752,6 +770,33 @@ assert(
     && styles.includes(".location-profile-internal")
     && /@media \(max-width: 600px\)[\s\S]*?\.location-profile-source-list > div\s*\{[\s\S]*?grid-template-columns:\s*1fr/.test(styles),
   "the common location profile must keep token-based cards, charts, sources, and mobile stacking",
+  failures
+);
+
+assert(
+  tourismIndexUiBlock.includes('{ key: "service", label: "서비스"')
+    && tourismIndexUiBlock.includes('{ key: "culture", label: "문화"')
+    && tourismIndexUiBlock.includes('{ key: "visitor", label: "관광객"')
+    && tourismIndexUiBlock.includes('{ key: "spend", label: "소비"')
+    && tourismIndexUiBlock.includes('{ key: "international", label: "국제"')
+    && tourismIndexUiBlock.includes("entry?.values?.[spec.key] ?? operation?.overallValue")
+    && tourismIndexUiBlock.includes("graphReady: observedPoints.length >= 8")
+    && tourismIndexUiBlock.includes("legacySeries")
+    && tourismIndexUiBlock.includes("item.details.filter((metric) => metric.hasValue)")
+    && styles.includes(".location-profile-index-series-grid")
+    && styles.includes(".location-profile-index-detail-empty"),
+  "resource-demand and diversity cards must keep independent named series, per-series graph gates, legacy fallback, and compact observed-only details",
+  failures
+);
+
+assert(
+  tourismIndexRefreshBlock.includes('resourceDemand: "/api/tourism-data/resource-demand/history"')
+    && tourismIndexRefreshBlock.includes('diversity: "/api/tourism-data/diversity/history"')
+    && tourismIndexRefreshBlock.includes("JSON.stringify({ regionKey, months: 12 })")
+    && tourismIndexRefreshBlock.includes("if (!isAdminRole()")
+    && tourismIndexRefreshBlock.includes("await ensureLocationProfile(activeCard, { force: true })")
+    && tourismIndexRefreshBlock.includes("공급기관 제공자료 없음"),
+  "admin-only tourism index refresh must collect exactly 12 months and reload the cache-only location profile without treating provider gaps as request failures",
   failures
 );
 

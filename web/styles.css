@@ -35127,6 +35127,25 @@ body.role-admin .admin-db-company-action a + a {
   --profile-series-accent: var(--text-secondary);
 }
 
+.location-profile-chart.is-resource-demand,
+.location-profile-chart.is-resource-service {
+  --profile-series-accent: var(--theme-accent-strong);
+}
+
+.location-profile-chart.is-resource-culture,
+.location-profile-chart.is-diversity-visitor {
+  --profile-series-accent: var(--positive);
+}
+
+.location-profile-chart.is-diversity-spend {
+  --profile-series-accent: var(--theme-accent);
+}
+
+.location-profile-chart.is-diversity,
+.location-profile-chart.is-diversity-international {
+  --profile-series-accent: var(--text-secondary);
+}
+
 .location-profile-chart-gridline line {
   stroke: var(--border-subtle);
   stroke-width: 1;
@@ -35200,6 +35219,185 @@ body.role-admin .admin-db-company-action a + a {
 .location-profile-series-card strong {
   color: var(--text-primary);
   font-size: 20px;
+}
+
+.location-profile-index-head-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.location-profile-index-refresh {
+  min-height: 32px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-control);
+  color: var(--theme-accent-strong);
+  padding: 6px 11px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.location-profile-index-refresh:hover:not(:disabled) {
+  border-color: var(--theme-accent-strong);
+  background: var(--surface-card);
+}
+
+.location-profile-index-refresh:disabled {
+  cursor: wait;
+  opacity: .64;
+}
+
+.location-profile-index-refresh-message {
+  margin: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  background: var(--surface-control);
+  color: var(--positive);
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.location-profile-index-refresh-message.is-error {
+  color: var(--danger);
+}
+
+.location-profile-index-series-grid {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.location-profile-index-series {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--card-radius);
+  background: var(--surface-control);
+  padding: 12px;
+}
+
+.location-profile-index-series-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.location-profile-index-series-head > div:first-child,
+.location-profile-index-legacy > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.location-profile-index-series-head span:first-child,
+.location-profile-index-series-head small,
+.location-profile-index-legacy span,
+.location-profile-index-legacy small {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.location-profile-index-series-head strong,
+.location-profile-index-legacy strong {
+  color: var(--text-primary);
+  font-size: 20px;
+  overflow-wrap: anywhere;
+}
+
+.location-profile-index-legacy {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(180px, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--card-radius);
+  background: var(--surface-control);
+  padding: 12px;
+}
+
+.location-profile-index-legacy p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.55;
+}
+
+.location-profile-index-layout {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(300px, .75fr);
+  gap: 10px;
+}
+
+.location-profile-index-chart,
+.location-profile-index-detail {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--card-radius);
+  background: var(--surface-control);
+  padding: 12px;
+}
+
+.location-profile-index-latest,
+.location-profile-index-detail-head {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.location-profile-index-latest span,
+.location-profile-index-latest small,
+.location-profile-index-detail-head span,
+.location-profile-index-detail-head small,
+.location-profile-index-chart > small {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.location-profile-index-latest strong,
+.location-profile-index-detail-head strong {
+  color: var(--text-primary);
+  font-size: 20px;
+  overflow-wrap: anywhere;
+}
+
+.location-profile-index-detail .location-profile-definition-list > div {
+  grid-template-columns: minmax(90px, 1fr) minmax(90px, auto) auto;
+}
+
+.location-profile-index-detail-empty {
+  margin: 0;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 9px;
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  padding: 10px;
+  font-size: 11px;
+  font-weight: 750;
+  text-align: center;
+}
+
+.location-profile-index-missing-detail {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .location-profile-sources {
@@ -35332,7 +35530,8 @@ body.role-admin .admin-db-company-action a + a {
   }
 
   .location-profile-grid,
-  .location-profile-strength-grid {
+  .location-profile-strength-grid,
+  .location-profile-index-layout {
     grid-template-columns: 1fr;
   }
 
@@ -35372,6 +35571,20 @@ body.role-admin .admin-db-company-action a + a {
   .location-profile-section-head,
   .location-profile-panel-head {
     display: grid;
+  }
+
+  .location-profile-index-head-actions,
+  .location-profile-index-series-head {
+    align-items: flex-start;
+    justify-content: flex-start;
+  }
+
+  .location-profile-index-series-head {
+    display: grid;
+  }
+
+  .location-profile-index-legacy {
+    grid-template-columns: 1fr;
   }
 
   .location-profile-panel,
@@ -35645,7 +35858,7 @@ body.role-admin .admin-db-company-action a + a {
 
 .location-profile-summary-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -35827,9 +36040,12 @@ body.role-admin .admin-db-company-action a + a {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .location-profile-tab-panel .location-profile-grid,
-  .location-profile-summary-grid {
+  .location-profile-tab-panel .location-profile-grid {
     grid-template-columns: 1fr;
+  }
+
+  .location-profile-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .location-profile-tab-panel .location-profile-wide {
@@ -35846,8 +36062,13 @@ body.role-admin .admin-db-company-action a + a {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .location-profile-tab-panel .location-profile-grid,
-  .location-profile-summary-grid {
+  .location-profile-tab-panel .location-profile-grid {
+    grid-template-columns: 1fr;
+  }
+
+
+  .location-profile-summary-grid,
+  .location-profile-index-layout {
     grid-template-columns: 1fr;
   }
 
@@ -35898,6 +36119,11 @@ body.role-admin .admin-db-company-action a + a {
   .location-profile-definition-list > div {
     grid-template-columns: 1fr;
     gap: 4px;
+  }
+
+  .location-profile-index-detail .location-profile-definition-list > div,
+  .location-profile-summary-grid {
+    grid-template-columns: 1fr;
   }
 
   .location-profile-definition-list small {

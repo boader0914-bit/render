@@ -17,6 +17,8 @@ const {
 const SERVICE_KEY_ENV_NAMES = [
   "DATA_GO_KR_VISITOR_SERVICE_KEY",
   "DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY",
+  "DATA_GO_KR_RESOURCE_DEMAND_SERVICE_KEY",
+  "DATA_GO_KR_DIVERSITY_SERVICE_KEY",
   "DATA_GO_KR_SERVICE_KEY",
   "KTO_DATA_GO_KR_SERVICE_KEY",
   "KTO_TOURISM_SERVICE_KEY"
@@ -124,6 +126,72 @@ function demandStrengthRows(yearMonth, operation, options = {}) {
       tarExpDsIxNm: labels[tarExpDsIxCd],
       tarExpDsIxVal: String(tarExpDsIxVal)
     }));
+}
+
+function regionalIndexRows(sourceKey, yearMonth, operation, options = {}) {
+  const definitions = {
+    resourceDemand: {
+      areaTarSvcDemList: {
+        codeField: "tarSvcDemIxCd",
+        nameField: "tarSvcDemIxNm",
+        valueField: "tarSvcDemIxVal",
+        code: "11",
+        label: "관광 서비스 수요 전체",
+        value: 71.5
+      },
+      areaCulResDemList: {
+        codeField: "culResDemIxCd",
+        nameField: "culResDemIxNm",
+        valueField: "culResDemIxVal",
+        code: "12",
+        label: "문화 자원 수요 전체",
+        value: 64.25
+      }
+    },
+    diversity: {
+      areaTouDivList: {
+        codeField: "touDivIxCd",
+        nameField: "touDivIxNm",
+        valueField: "touDivIxVal",
+        code: "31",
+        label: "관광객 다양성 전체",
+        value: 78.1
+      },
+      areaExpDivList: {
+        codeField: "expDivIxCd",
+        nameField: "expDivIxNm",
+        valueField: "expDivIxVal",
+        code: "32",
+        label: "관광 소비 다양성 전체",
+        value: 66.4
+      },
+      areaIntlDivList: {
+        codeField: "intlDivIxCd",
+        nameField: "intlDivIxNm",
+        valueField: "intlDivIxVal",
+        code: "33",
+        label: "국제적 다양성 전체",
+        value: 52.75
+      }
+    }
+  };
+  const definition = definitions[sourceKey]?.[operation];
+  assert.ok(definition, `Unknown regional index fixture: ${sourceKey}/${operation}`);
+  const base = {
+    baseYm: options.baseYm || yearMonth,
+    areaCd: options.areaCd || "48",
+    areaNm: options.areaNm || "경상남도",
+    signguCd: options.signguCd || "48860",
+    signguNm: options.signguNm || "산청군",
+    [definition.codeField]: definition.code,
+    [definition.nameField]: definition.label,
+    [definition.valueField]: String(definition.value)
+  };
+  if (!options.conflict) return [base];
+  return [
+    base,
+    { ...base, [definition.valueField]: String(definition.value + 1) }
+  ];
 }
 
 async function main() {
@@ -1094,6 +1162,185 @@ async function main() {
     assert.equal(limitedHistory.collection.maxPagesPerOperation, 1);
     assert.equal(limitedHistory.collection.maximumOperationCalls, 2);
     assert.equal(paginationRequests.length - limitedHistoryRequestCount, 2);
+
+    const regionalIndexDataDir = path.join(dataDir, "tourism_regional_index_data");
+    const regionalIndexRequests = [];
+    let conflictResourceDemand = false;
+    let mismatchDiversityMonth = false;
+    const regionalIndexCollector = createCollector({
+      rootDir: tmp,
+      webDir,
+      dataDir,
+      tourismDataDir: regionalIndexDataDir,
+      env: {
+        DATA_GO_KR_RESOURCE_DEMAND_SERVICE_KEY: "fixture-resource-demand-key",
+        DATA_GO_KR_DIVERSITY_SERVICE_KEY: "fixture-diversity-key",
+        KTO_TOURISM_RESOURCE_DEMAND_PAGE_SIZE: "100",
+        KTO_TOURISM_DIVERSITY_PAGE_SIZE: "100"
+      },
+      now: () => new Date("2026-07-15T00:00:00.000Z"),
+      fetchImpl: async (requestUrl) => {
+        const url = new URL(requestUrl);
+        const operation = url.pathname.split("/").at(-1);
+        const sourceKey = url.pathname.includes("AreaTarResDemService") ? "resourceDemand" : "diversity";
+        const yearMonth = url.searchParams.get("baseYm");
+        const pageNo = Number(url.searchParams.get("pageNo"));
+        const pageSize = Number(url.searchParams.get("numOfRows"));
+        regionalIndexRequests.push({ url, operation, sourceKey, yearMonth });
+        const rows = regionalIndexRows(sourceKey, yearMonth, operation, {
+          conflict: conflictResourceDemand && sourceKey === "resourceDemand" && operation === "areaTarSvcDemList",
+          baseYm: mismatchDiversityMonth && sourceKey === "diversity" ? "202604" : yearMonth
+        });
+        const offset = (pageNo - 1) * pageSize;
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            response: {
+              header: { resultCode: "00", resultMsg: "NORMAL_CODE" },
+              body: {
+                pageNo,
+                numOfRows: pageSize,
+                totalCount: rows.length,
+                items: { item: rows.slice(offset, offset + pageSize) }
+              }
+            }
+          })
+        };
+      }
+    });
+
+    const resourceCacheMiss = await regionalIndexCollector.readResourceDemand({ regionName: "산청", yearMonth: "202606" });
+    assert.equal(resourceCacheMiss.status, "unavailable");
+    assert.equal(resourceCacheMiss.reason, "monthly_cache_missing");
+    assert.deepEqual(resourceCacheMiss.overall, { service: null, culture: null });
+    assert.equal(regionalIndexRequests.length, 0);
+
+    const resourceSnapshot = await regionalIndexCollector.collectResourceDemand({ regionName: "산청", yearMonth: "202606" });
+    assert.equal(resourceSnapshot.status, "ok");
+    assert.deepEqual(resourceSnapshot.overall, { service: 71.5, culture: 64.25 });
+    assert.equal(resourceSnapshot.quality.completeOperationCount, 2);
+    assert.equal(resourceSnapshot.policy.completeCacheOnly, true);
+    assert.equal(resourceSnapshot.policy.requiredOverallCodes.join(","), "11,12");
+
+    const diversitySnapshot = await regionalIndexCollector.collectDiversity({ regionName: "산청", yearMonth: "202606" });
+    assert.equal(diversitySnapshot.status, "ok");
+    assert.deepEqual(diversitySnapshot.overall, { visitor: 78.1, spend: 66.4, international: 52.75 });
+    assert.equal(diversitySnapshot.quality.completeOperationCount, 3);
+    assert.equal(diversitySnapshot.policy.requiredOverallCodes.join(","), "31,32,33");
+
+    regionalIndexRequests.forEach(({ url, sourceKey, operation }) => {
+      assert.equal(url.origin, "https://apis.data.go.kr");
+      assert.equal(url.searchParams.get("areaCd"), "48");
+      assert.equal(url.searchParams.get("signguCd"), "48860");
+      assert.equal(url.searchParams.get("baseYm"), "202606");
+      if (sourceKey === "resourceDemand") {
+        assert.equal(url.pathname, `/B551011/AreaTarResDemService/${operation}`);
+        assert.equal(url.searchParams.get("serviceKey"), "fixture-resource-demand-key");
+      } else {
+        assert.equal(url.pathname, `/B551011/AreaTarDivService/${operation}`);
+        assert.equal(url.searchParams.get("serviceKey"), "fixture-diversity-key");
+      }
+    });
+    assert.equal(
+      regionalIndexRequests.find((request) => request.operation === "areaTarSvcDemList").url.searchParams.get("tarSvcDemIxCd"),
+      "11"
+    );
+    assert.equal(
+      regionalIndexRequests.find((request) => request.operation === "areaCulResDemList").url.searchParams.get("culResDemIxCd"),
+      "12"
+    );
+    assert.equal(
+      regionalIndexRequests.find((request) => request.operation === "areaTouDivList").url.searchParams.get("touDivIxCd"),
+      "31"
+    );
+    assert.equal(
+      regionalIndexRequests.find((request) => request.operation === "areaExpDivList").url.searchParams.get("expDivIxCd"),
+      "32"
+    );
+    assert.equal(
+      regionalIndexRequests.find((request) => request.operation === "areaIntlDivList").url.searchParams.get("intlDivIxCd"),
+      "33"
+    );
+
+    const cacheOnlyResourceHistory = await regionalIndexCollector.readResourceDemandHistory({
+      regionName: "산청",
+      endYearMonth: "202606",
+      months: 2
+    });
+    assert.equal(cacheOnlyResourceHistory.status, "partial");
+    assert.equal(cacheOnlyResourceHistory.collection.mode, "cache_only");
+    assert.equal(cacheOnlyResourceHistory.collection.networkAttemptedMonths, 0);
+    assert.equal(cacheOnlyResourceHistory.coverage.completeMonths, 1);
+    assert.equal(cacheOnlyResourceHistory.coverage.missingMonths, 1);
+    const missingResourceMonth = cacheOnlyResourceHistory.series.find((point) => point.yearMonth === "202605");
+    assert.deepEqual(missingResourceMonth.values, { service: null, culture: null });
+    assert.equal(missingResourceMonth.operations.service.label, "관광 서비스 수요");
+    assert.equal(missingResourceMonth.operations.service.metrics.length, 13);
+    assert.ok(missingResourceMonth.operations.service.metrics.every((metric) => metric.value === null));
+    const availableResourceMonth = cacheOnlyResourceHistory.series.find((point) => point.yearMonth === "202606");
+    assert.equal(availableResourceMonth.operations.service.overallValue, 71.5);
+    assert.ok(Array.isArray(availableResourceMonth.operations.service.metrics));
+
+    const resourceCacheDirectory = path.join(regionalIndexDataDir, "cache");
+    const resourceCacheName = (await fsp.readdir(resourceCacheDirectory))
+      .find((fileName) => fileName.startsWith("resourcedemand__") && fileName.endsWith("__202606.json"));
+    assert.ok(resourceCacheName);
+    const resourceCacheFile = path.join(resourceCacheDirectory, resourceCacheName);
+    const resourceCacheBeforeConflict = await fsp.readFile(resourceCacheFile);
+    conflictResourceDemand = true;
+    const preservedResourceSnapshot = await regionalIndexCollector.collectResourceDemand({
+      regionName: "산청",
+      yearMonth: "202606",
+      force: true
+    });
+    assert.equal(preservedResourceSnapshot.status, "ok");
+    assert.equal(preservedResourceSnapshot.cache.hit, true);
+    assert.equal(preservedResourceSnapshot.cache.refreshFailed, true);
+    assert.equal(preservedResourceSnapshot.overall.service, 71.5);
+    assert.deepEqual(
+      await fsp.readFile(resourceCacheFile),
+      resourceCacheBeforeConflict,
+      "충돌한 중복값이 정상 자원수요 캐시를 덮어쓰면 안 됩니다."
+    );
+    conflictResourceDemand = false;
+
+    mismatchDiversityMonth = true;
+    const strictMonthDiversity = await regionalIndexCollector.collectDiversity({ regionName: "산청", yearMonth: "202605" });
+    assert.equal(strictMonthDiversity.status, "error");
+    assert.ok(Object.values(strictMonthDiversity.operations).every((operation) => operation.quality.status === "region_or_period_mismatch"));
+    assert.deepEqual(strictMonthDiversity.overall, { visitor: null, spend: null, international: null });
+    assert.equal(
+      (await fsp.readdir(resourceCacheDirectory)).some((fileName) => fileName.startsWith("diversity__") && fileName.endsWith("__202605.json")),
+      false
+    );
+    mismatchDiversityMonth = false;
+
+    const requestCountBeforeGenericRegionalRead = regionalIndexRequests.length;
+    const genericRegional = await regionalIndexCollector.collect({
+      keyword: "산청글램핑",
+      yearMonth: "202606",
+      sources: ["resourceDemand", "diversity"],
+      force: true
+    });
+    assert.equal(genericRegional.sources.resourceDemand.status, "ok");
+    assert.equal(genericRegional.sources.diversity.status, "ok");
+    assert.equal(regionalIndexRequests.length, requestCountBeforeGenericRegionalRead);
+
+    const regionalIndexStatus = await regionalIndexCollector.status();
+    const resourceStatus = regionalIndexStatus.sources.find((source) => source.key === "resourceDemand");
+    const diversityStatus = regionalIndexStatus.sources.find((source) => source.key === "diversity");
+    assert.equal(resourceStatus.status, "ready");
+    assert.equal(resourceStatus.adapter, "area-tar-res-dem-v1");
+    assert.deepEqual(resourceStatus.requiredOverallCodes, ["11", "12"]);
+    assert.equal(resourceStatus.cache.snapshotCount, 1);
+    assert.equal(diversityStatus.status, "ready");
+    assert.equal(diversityStatus.adapter, "area-tar-div-v1");
+    assert.deepEqual(diversityStatus.requiredOverallCodes, ["31", "32", "33"]);
+    assert.equal(diversityStatus.cache.snapshotCount, 1);
+    assert.equal(regionalIndexStatus.resourceDemand.snapshotCount, 1);
+    assert.equal(regionalIndexStatus.diversity.snapshotCount, 1);
+    assert.doesNotMatch(JSON.stringify(regionalIndexStatus), /fixture-(resource-demand|diversity)-key/);
 
     assert.equal(dataGoKrServiceKey({
       DATA_GO_KR_SERVICE_KEY: " canonical-key ",

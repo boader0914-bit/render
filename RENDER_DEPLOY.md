@@ -48,6 +48,12 @@ Render는 보통 GitHub 저장소를 연결해서 배포한다.
 지역별 관광 수요 강도 API를 쓰려면 Secret으로 입력:
 - `DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY`
 
+지역별 관광 자원 수요 API를 쓰려면 Secret으로 입력:
+- `DATA_GO_KR_RESOURCE_DEMAND_SERVICE_KEY`
+
+지역별 관광 다양성 API를 쓰려면 Secret으로 입력:
+- `DATA_GO_KR_DIVERSITY_SERVICE_KEY`
+
 기존 호환용 공통 Secret:
 - `DATA_GO_KR_SERVICE_KEY`
 
@@ -57,12 +63,16 @@ Render Dashboard에서 해당 서비스의 `Environment`를 열고
 Key 칸에는 위 변수명을, Value 칸에는 지역별 방문자수 승인키 문자열만 넣는다.
 관광 수요 강도도 같은 방식으로 `DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY`에
 해당 API 승인키 문자열만 넣는다.
+관광 자원 수요와 관광 다양성도 각각 `DATA_GO_KR_RESOURCE_DEMAND_SERVICE_KEY`,
+`DATA_GO_KR_DIVERSITY_SERVICE_KEY`에 해당 승인키 문자열만 넣는다.
 따옴표·변수명·Endpoint URL은 Value에 넣지 않는다. 기존에
 `DATA_GO_KR_SERVICE_KEY`로 정상 연결되어 있다면 그대로 유지해도 된다. 실제 키는
 `render.yaml`, `.env`, Endpoint URL, 앱 설정 파일에 기록하지 않는다.
 
-현재는 지역별 방문자수와 지역별 관광 수요 강도가 연결되어 있다. 다른 공공데이터
-승인키는 해당 API 수집기를 구현·검증할 때 전용 Secret을 하나씩 추가한다.
+현재는 지역별 방문자수, 지역별 관광 수요 강도, 지역별 관광 자원 수요,
+지역별 관광 다양성이 연결되어 있다. 각 자료는 최근 완료월 기준 12개월 Snapshot을
+별도로 저장하며, 일반 지역 조회는 저장자료만 읽고 외부 API를 호출하지 않는다.
+누락·부분수집 값은 0으로 대체하지 않는다.
 
 기본 `render.yaml` 저장공간 설정:
 - `HOST`: `0.0.0.0`
@@ -74,8 +84,7 @@ Key 칸에는 위 변수명을, Value 칸에는 지역별 방문자수 승인키
 - `TOURISM_DEMAND_STRENGTH_BACKFILL_ENABLED`: `1`
 - `TOURISM_DEMAND_STRENGTH_DAILY_CALL_BUDGET`: `800`
 
-선수집은 산청군 36개월을 먼저 저장한 뒤 전국 시군구의 최근 12개월,
-과거 24개월 순으로 진행한다. 한 지역·한 달은 체류강도와 소비강도를 각각
+선수집은 산청군을 포함한 전국 시군구의 최근 12개월만 저장한다. 한 지역·한 달은 체류강도와 소비강도를 각각
 한 번씩만 호출하며, 요청에는 전체 지표코드인 체류 `21`과 소비 `22`를 명시한다.
 자동 선수집과 관리자 선택 지역 갱신은 같은 일일 800회 예산을
 예약·정산하므로 일반 수집끼리는 서로 겹쳐 예산을 초과하지 않는다. 이번 호출계약 전환일에는
