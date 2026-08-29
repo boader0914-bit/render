@@ -438,6 +438,9 @@ async function main() {
     assert.equal(health.response.status, 200);
     assert.equal(health.body.ok, true);
     assert.equal(health.body.buildCommit, "1234567890ab");
+    assert.equal(Object.hasOwn(health.body, "masterDb"), false);
+    assert.equal(Object.hasOwn(health.body, "masterDbPath"), false);
+    assert.equal(Object.hasOwn(health.body, "masterDbWriteMode"), false);
 
     const unauthenticated = await getJson(
       baseUrl,

@@ -6,7 +6,11 @@ const path = require("node:path");
 const { ROOT, openMasterDatabase, applySchema, sha256File } = require("./master_db.cjs");
 const { applyImport, manifestCompletedAt } = require("./master_db_import.cjs");
 const { createMasterDbIncrementalProcessor } = require("./master_db_incremental.cjs");
-const { createMasterDbDualWriteQueue } = require("./master_db_dual_write.cjs");
+const {
+  mountInfoHasPath,
+  renderShadowStorageValidation,
+  createMasterDbDualWriteQueue
+} = require("./master_db_dual_write.cjs");
 const {
   VISITOR_ADAPTER_VERSION,
   DEMAND_STRENGTH_ADAPTER_VERSION,
@@ -188,9 +192,73 @@ async function run() {
     );
 
     const offDatabasePath = path.join(dataDir, "master_db", "off.sqlite");
-    const offQueue = createMasterDbDualWriteQueue({ rootDir: ROOT, dataDir, outputsDir, databasePath: offDatabasePath, mode: "off" });
+    const offQueue = createMasterDbDualWriteQueue({
+      rootDir: ROOT,
+      dataDir,
+      outputsDir,
+      databasePath: offDatabasePath,
+      mode: "off",
+      isRenderRuntime: true,
+      renderDiskDir: path.join(temporaryDirectory, "missing-render-disk")
+    });
     assert.equal(offQueue.enqueue({ type: "reconcile" }).status, "off");
     assert.equal(fs.existsSync(offDatabasePath), false, "off 모드는 DB 파일을 만들면 안 됩니다.");
+    assert.equal(offQueue.status().configurationError, null, "off 모드는 Render disk 검사나 오류 상태를 만들면 안 됩니다.");
+
+    const serverSource = fs.readFileSync(path.join(ROOT, "scripts", "glamping_app_server.cjs"), "utf8");
+    assert.match(
+      serverSource,
+      /if \(masterDbDualWriteQueue\.mode === "shadow"\) \{\s+const runManifestPath[\s\S]*?result\.masterDbSync = masterDbDualWriteQueue\.enqueue/,
+      "manifest hash와 응답 필드는 shadow 모드 안에서만 만들어야 합니다."
+    );
+    assert.match(
+      serverSource,
+      /const result = \{ appended: observations\.length, file: "history\/observations\.jsonl" \};\s+if \(masterDbDualWriteQueue\.mode === "shadow"\) result\.evidence = evidence;/,
+      "off 모드 history 응답에는 evidence 필드를 추가하면 안 됩니다."
+    );
+
+    const missingDiskQueue = createMasterDbDualWriteQueue({
+      rootDir: ROOT,
+      dataDir,
+      outputsDir,
+      databasePath,
+      mode: "shadow",
+      isRenderRuntime: true,
+      platform: "linux",
+      renderDiskDir: path.join(temporaryDirectory, "missing-render-disk"),
+      mountInfoText: "",
+      logger: { error() {}, warn() {} }
+    });
+    const missingDiskResult = missingDiskQueue.enqueue({ type: "reconcile" });
+    assert.equal(missingDiskResult.status, "error");
+    assert.equal(missingDiskResult.code, "render_persistent_disk_unavailable");
+    assert.equal(fs.existsSync(databasePath), false, "영구디스크 검증 실패 시 worker가 DB를 만들면 안 됩니다.");
+
+    const fakeRenderDisk = path.join(temporaryDirectory, "render disk");
+    const fakeRenderData = path.join(fakeRenderDisk, "app-data");
+    const fakeRenderDatabase = path.join(fakeRenderData, "master_db", "sabun_master.sqlite");
+    fs.mkdirSync(fakeRenderData, { recursive: true });
+    const escapedMountPath = fakeRenderDisk.replace(/\\/g, "/").replace(/ /g, "\\040");
+    const fakeMountInfo = `36 25 0:42 / ${escapedMountPath} rw,relatime - ext4 /dev/test rw`;
+    assert.equal(mountInfoHasPath(fakeMountInfo, fakeRenderDisk), true);
+    assert.equal(renderShadowStorageValidation({
+      isRenderRuntime: true,
+      platform: "linux",
+      renderDiskDir: fakeRenderDisk,
+      dataDir: fakeRenderData,
+      databasePath: fakeRenderDatabase,
+      mountInfoText: fakeMountInfo
+    }).ok, true, "mount된 동일 disk 하위 경로는 허용해야 합니다.");
+    const outsideDatabaseValidation = renderShadowStorageValidation({
+      isRenderRuntime: true,
+      platform: "linux",
+      renderDiskDir: fakeRenderDisk,
+      dataDir: fakeRenderData,
+      databasePath: path.join(temporaryDirectory, "outside", "sabun_master.sqlite"),
+      mountInfoText: fakeMountInfo
+    });
+    assert.equal(outsideDatabaseValidation.ok, false);
+    assert.equal(outsideDatabaseValidation.code, "master_db_path_outside_data_root");
 
     const processor = createMasterDbIncrementalProcessor({ rootDir: ROOT, dataDir, outputsDir, databasePath });
     const complete = fixtureRun(dataDir, outputsDir, "fixture_complete_20260830", { detailJsonObject: true });
@@ -231,6 +299,32 @@ async function run() {
       receipts: count(database, "collection_receipts")
     }, countsAfterFirst, "같은 회차를 다시 반영해도 행 수가 늘면 안 됩니다.");
     assert.equal(database.prepare("SELECT updated_at FROM companies WHERE company_id = 'cmp_place_1234567890'").get().updated_at, firstUpdatedAt);
+    database.close();
+
+    const rollbackRun = fixtureRun(dataDir, outputsDir, "fixture_transaction_rollback", {
+      collectedAt: "2026-08-30T02:00:00.000Z",
+      observation: {
+        observationId: complete.observations[0].observationId,
+        price: "159,000원"
+      }
+    });
+    assert.throws(
+      () => processor.ingestNaverRun(rollbackRun.event),
+      (error) => error.code === "immutable_company_observation_conflict"
+    );
+    database = openMasterDatabase(databasePath);
+    applySchema(database);
+    assert.equal(database.prepare("SELECT 1 AS present FROM collection_runs WHERE run_id = ?").get(rollbackRun.runId), undefined,
+      "관측 반입 중 실패하면 collection run까지 rollback되어야 합니다.");
+    assert.equal(database.prepare("SELECT 1 AS present FROM collection_receipts WHERE run_id = ?").get(rollbackRun.runId), undefined,
+      "관측 반입 중 실패하면 receipt가 남으면 안 됩니다.");
+    assert.deepEqual({
+      runs: count(database, "collection_runs"),
+      artifacts: count(database, "source_artifacts"),
+      observations: count(database, "company_observations"),
+      current: count(database, "company_observation_current"),
+      receipts: count(database, "collection_receipts")
+    }, countsAfterFirst, "실패한 shadow 반입은 기존 good snapshot과 DB 행을 변경하면 안 됩니다.");
     database.close();
 
     fs.writeFileSync(path.join(complete.runDir, complete.resultName), "tampered", "utf8");
@@ -472,8 +566,28 @@ async function run() {
     assert.equal(count(database, "collection_receipts"), 1);
     database.close();
 
+    const interruptedDataDir = path.join(temporaryDirectory, "interrupted-after-evidence");
+    const interruptedOutputsDir = path.join(interruptedDataDir, "outputs");
+    const interruptedDatabasePath = path.join(interruptedDataDir, "master_db", "sabun_master.sqlite");
+    const interruptedRun = fixtureRun(interruptedDataDir, interruptedOutputsDir, "fixture_evidence_before_history_append");
+    fs.rmSync(path.join(interruptedDataDir, "history", "observations.jsonl"));
+    const interruptedProcessor = createMasterDbIncrementalProcessor({
+      rootDir: ROOT,
+      dataDir: interruptedDataDir,
+      outputsDir: interruptedOutputsDir,
+      databasePath: interruptedDatabasePath
+    });
+    const recoveredAfterInterruption = interruptedProcessor.reconcile({ limit: 10 });
+    assert.equal(recoveredAfterInterruption.status, "complete");
+    database = openMasterDatabase(interruptedDatabasePath);
+    applySchema(database);
+    assert.equal(count(database, "company_observations"), 1, "append 전 중단돼도 불변 Evidence로 관측을 복구해야 합니다.");
+    assert.equal(count(database, "company_observation_current"), 1, "복구된 완전 관측은 current로 승격되어야 합니다.");
+    assert.equal(database.prepare("SELECT status FROM collection_receipts WHERE run_id = ?").get(interruptedRun.runId).status, "complete");
+    database.close();
+
     const queueDatabasePath = path.join(dataDir, "master_db", "queue.sqlite");
-    const queue = createMasterDbDualWriteQueue({ rootDir: ROOT, dataDir, outputsDir, databasePath: queueDatabasePath, mode: "shadow", logger: { warn() {} } });
+    const queue = createMasterDbDualWriteQueue({ rootDir: ROOT, dataDir, outputsDir, databasePath: queueDatabasePath, mode: "shadow", isRenderRuntime: false, logger: { warn() {} } });
     assert.equal(queue.enqueue(complete.event).status, "queued");
     assert.equal(queue.enqueue(complete.event).status, "duplicate");
     const queueStatus = await queue.flush();
@@ -506,6 +620,7 @@ async function run() {
       outputsDir: drainOutputsDir,
       databasePath: drainDatabasePath,
       mode: "shadow",
+      isRenderRuntime: false,
       logger: { warn() {} }
     });
     assert.equal(drainQueue.reconcile(1).status, "queued");
@@ -548,6 +663,7 @@ async function run() {
       outputsDir: path.join(failedReconcileDataDir, "outputs"),
       databasePath: path.join(failedReconcileDataDir, "master_db", "sabun_master.sqlite"),
       mode: "shadow",
+      isRenderRuntime: false,
       logger: { warn() {} }
     });
     assert.equal(failedReconcileQueue.reconcile(1).status, "queued");
@@ -599,6 +715,7 @@ async function run() {
       outputsDir: failedTourismOutputsDir,
       databasePath: path.join(failedTourismDataDir, "master_db", "sabun_master.sqlite"),
       mode: "shadow",
+      isRenderRuntime: false,
       logger: { warn() {} }
     });
     assert.equal(failedTourismQueue.reconcile(1).status, "queued");

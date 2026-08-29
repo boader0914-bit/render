@@ -1382,33 +1382,35 @@ function startCrawlJob(job) {
       console.warn(`Could not record crawl timing: ${error.message || error}`);
     });
     if (!failure && result?.runId) {
+      cleanupRecentCrawlResults();
+      recentCrawlResults.set(job.signature, { createdAt: Date.now(), result });
       await ensureB2BSearchHistoryForJob(job, result).catch((error) => {
         console.warn(`Could not ensure B2B history for ${result.runId}: ${error.message || error}`);
       });
-      const runManifestPath = result.output?.outputDir
-        ? path.join(result.output.outputDir, "manifest.json")
-        : "";
-      const manifestSha256 = runManifestPath
-        ? await fsp.readFile(runManifestPath)
-          .then((buffer) => crypto.createHash("sha256").update(buffer).digest("hex"))
-          .catch(() => "")
-        : "";
-      result.masterDbSync = masterDbDualWriteQueue.enqueue({
-        type: "naver_run",
-        runId: result.runId,
-        runDir: result.output?.outputDir || "",
-        manifestSha256,
-        startedAt: job.startedAt?.toISOString?.() || "",
-        endedAt: endedAt.toISOString(),
-        collectionSource: job.collectionSource,
-        sourceRole: job.sourceRole,
-        plan: job.plan,
-        history: result.history || null,
-        crawlTiming: result.crawlTiming || null,
-        stageTimings
-      });
-      cleanupRecentCrawlResults();
-      recentCrawlResults.set(job.signature, { createdAt: Date.now(), result });
+      if (masterDbDualWriteQueue.mode === "shadow") {
+        const runManifestPath = result.output?.outputDir
+          ? path.join(result.output.outputDir, "manifest.json")
+          : "";
+        const manifestSha256 = runManifestPath
+          ? await fsp.readFile(runManifestPath)
+            .then((buffer) => crypto.createHash("sha256").update(buffer).digest("hex"))
+            .catch(() => "")
+          : "";
+        result.masterDbSync = masterDbDualWriteQueue.enqueue({
+          type: "naver_run",
+          runId: result.runId,
+          runDir: result.output?.outputDir || "",
+          manifestSha256,
+          startedAt: job.startedAt?.toISOString?.() || "",
+          endedAt: endedAt.toISOString(),
+          collectionSource: job.collectionSource,
+          sourceRole: job.sourceRole,
+          plan: job.plan,
+          history: result.history || null,
+          crawlTiming: result.crawlTiming || null,
+          stageTimings
+        });
+      }
     }
     activeCrawlPromise = null;
     activeCrawlStartedAt = null;
@@ -14424,19 +14426,21 @@ async function appendHistoryForRun(runId) {
   }
   const observations = buildHistoryObservations(data, collectedAt);
   if (!observations.length) return { appended: 0, reason: "no_observations" };
-  await fsp.mkdir(HISTORY_DIR, { recursive: true });
-  await fsp.appendFile(
-    HISTORY_OBSERVATIONS_FILE,
-    `${observations.map((row) => JSON.stringify(row)).join("\n")}\n`,
-    "utf8"
-  );
   const evidence = masterDbDualWriteQueue.mode === "shadow"
     ? await storeRunHistoryEvidence(runId, observations).catch((error) => ({
       error: error.message || String(error),
       code: error.code || "history_evidence_write_failed"
     }))
     : null;
-  return { appended: observations.length, file: "history/observations.jsonl", evidence };
+  await fsp.mkdir(HISTORY_DIR, { recursive: true });
+  await fsp.appendFile(
+    HISTORY_OBSERVATIONS_FILE,
+    `${observations.map((row) => JSON.stringify(row)).join("\n")}\n`,
+    "utf8"
+  );
+  const result = { appended: observations.length, file: "history/observations.jsonl" };
+  if (masterDbDualWriteQueue.mode === "shadow") result.evidence = evidence;
+  return result;
 }
 
 function historyDayIndex(dateText) {

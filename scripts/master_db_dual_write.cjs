@@ -1,3 +1,4 @@
+const fs = require("node:fs");
 const path = require("node:path");
 const { fork } = require("node:child_process");
 
@@ -14,6 +15,93 @@ function safeLog(logger, level, message) {
   }
 }
 
+function isPathInside(basePath, candidatePath) {
+  const relative = path.relative(basePath, candidatePath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function nearestExistingPath(candidatePath) {
+  let current = path.resolve(candidatePath);
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) return "";
+    current = parent;
+  }
+  return current;
+}
+
+function resolvedCandidatePath(candidatePath) {
+  const absolute = path.resolve(candidatePath);
+  const existing = nearestExistingPath(absolute);
+  if (!existing) return absolute;
+  const relative = path.relative(existing, absolute);
+  return path.resolve(fs.realpathSync(existing), relative);
+}
+
+function decodeMountInfoPath(value = "") {
+  return String(value)
+    .replace(/\\040/g, " ")
+    .replace(/\\011/g, "\t")
+    .replace(/\\012/g, "\n")
+    .replace(/\\134/g, "\\");
+}
+
+function mountInfoHasPath(mountInfo = "", mountPath = "") {
+  const expected = path.resolve(mountPath);
+  return String(mountInfo || "").split(/\r?\n/).some((line) => {
+    const fields = line.trim().split(/\s+/);
+    return fields.length >= 6 && path.resolve(decodeMountInfoPath(fields[4])) === expected;
+  });
+}
+
+function renderShadowStorageValidation(options = {}) {
+  const isRenderRuntime = options.isRenderRuntime
+    ?? Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL);
+  if (!isRenderRuntime) return { ok: true, code: "not_render" };
+
+  const platform = options.platform || process.platform;
+  const renderDiskDir = path.resolve(options.renderDiskDir || "/var/data");
+  const dataDir = path.resolve(options.dataDir || renderDiskDir);
+  const databasePath = path.resolve(options.databasePath || path.join(dataDir, "master_db", "sabun_master.sqlite"));
+  if (!fs.existsSync(renderDiskDir) || !fs.statSync(renderDiskDir).isDirectory()) {
+    return { ok: false, code: "render_persistent_disk_unavailable", message: `${renderDiskDir} 영구디스크 폴더를 확인할 수 없습니다.` };
+  }
+  if (platform === "linux") {
+    let mountInfo = options.mountInfoText;
+    if (mountInfo === undefined) {
+      try {
+        mountInfo = fs.readFileSync("/proc/self/mountinfo", "utf8");
+      } catch (error) {
+        return {
+          ok: false,
+          code: "render_mountinfo_unavailable",
+          message: `Render 영구디스크 mount 정보를 확인할 수 없습니다: ${error.message || error}`
+        };
+      }
+    }
+    if (!mountInfoHasPath(mountInfo, renderDiskDir)) {
+      return { ok: false, code: "render_persistent_disk_not_mounted", message: `${renderDiskDir}가 실제 mount 지점이 아닙니다.` };
+    }
+  }
+
+  const diskRealPath = fs.realpathSync(renderDiskDir);
+  const dataRealPath = resolvedCandidatePath(dataDir);
+  const databaseRealPath = resolvedCandidatePath(databasePath);
+  if (!isPathInside(diskRealPath, dataRealPath)) {
+    return { ok: false, code: "master_db_data_outside_render_disk", message: "Master DB 데이터 경로가 Render 영구디스크 하위가 아닙니다." };
+  }
+  if (!isPathInside(dataRealPath, databaseRealPath)) {
+    return { ok: false, code: "master_db_path_outside_data_root", message: "Master DB 파일 경로가 데이터 경로 하위가 아닙니다." };
+  }
+  const diskDevice = fs.statSync(diskRealPath).dev;
+  const dataDevice = fs.statSync(nearestExistingPath(dataDir)).dev;
+  const databaseDevice = fs.statSync(nearestExistingPath(databasePath)).dev;
+  if (diskDevice !== dataDevice || diskDevice !== databaseDevice) {
+    return { ok: false, code: "master_db_storage_device_mismatch", message: "Master DB 데이터와 DB 파일 경로가 같은 영구디스크에 있지 않습니다." };
+  }
+  return { ok: true, code: "render_persistent_disk_verified", renderDiskDir: diskRealPath };
+}
+
 function createMasterDbDualWriteQueue(options = {}) {
   const rootDir = path.resolve(options.rootDir || process.cwd());
   const dataDir = path.resolve(options.dataDir || rootDir);
@@ -23,6 +111,13 @@ function createMasterDbDualWriteQueue(options = {}) {
   const workerTimeoutMs = Math.max(10_000, Number(options.workerTimeoutMs) || 5 * 60 * 1000);
   const logger = options.logger || console;
   const mode = normalizeWriteMode(options.mode ?? process.env.MASTER_DB_WRITE_MODE);
+  const storageValidation = mode === "shadow"
+    ? renderShadowStorageValidation({ ...options, dataDir, databasePath })
+    : { ok: true, code: "write_mode_off" };
+  const configurationError = storageValidation.ok ? null : {
+    code: storageValidation.code,
+    message: storageValidation.message || "Shadow Master DB 저장소 검증에 실패했습니다."
+  };
   const queue = [];
   const pendingKeys = new Set();
   const waiters = [];
@@ -32,6 +127,9 @@ function createMasterDbDualWriteQueue(options = {}) {
   let lastResult = null;
   let lastError = null;
   let lastFailure = null;
+  if (configurationError) {
+    safeLog(logger, "error", `[master-db-shadow] ${configurationError.code}: ${configurationError.message}`);
+  }
 
   function eventKey(event = {}) {
     if (event.type === "naver_run") return `naver:${event.runId || ""}:${event.manifestSha256 || ""}:${event.history?.evidence?.sha256 || ""}`;
@@ -47,6 +145,7 @@ function createMasterDbDualWriteQueue(options = {}) {
       queued: queue.length,
       active: Boolean(active),
       databasePath: mode === "shadow" ? databasePath : "",
+      configurationError,
       lastResult,
       lastError,
       lastFailure
@@ -59,7 +158,7 @@ function createMasterDbDualWriteQueue(options = {}) {
   }
 
   function startNext() {
-    if (stopped || active || !queue.length || mode !== "shadow") {
+    if (stopped || active || !queue.length || mode !== "shadow" || configurationError) {
       settleWaiters();
       return;
     }
@@ -73,7 +172,8 @@ function createMasterDbDualWriteQueue(options = {}) {
         MASTER_DB_ROOT_DIR: rootDir,
         MASTER_DB_DATA_DIR: dataDir,
         MASTER_DB_OUTPUTS_DIR: outputsDir,
-        MASTER_DB_PATH: databasePath
+        MASTER_DB_PATH: databasePath,
+        MASTER_DB_WRITE_MODE: mode
       }
     });
     active = { item, child, messageReceived: false };
@@ -179,6 +279,7 @@ function createMasterDbDualWriteQueue(options = {}) {
 
   function enqueue(event = {}) {
     if (mode !== "shadow" || stopped) return { status: "off", mode };
+    if (configurationError) return { status: "error", mode, ...configurationError };
     const key = eventKey(event);
     if (key && pendingKeys.has(key)) return { status: "duplicate", mode, key, queued: queue.length };
     const id = `mdb_${Date.now().toString(36)}_${(++sequence).toString(36)}`;
@@ -210,4 +311,13 @@ function createMasterDbDualWriteQueue(options = {}) {
   return { mode, enqueue, reconcile, flush, stop, status: publicStatus };
 }
 
-module.exports = { normalizeWriteMode, createMasterDbDualWriteQueue };
+module.exports = {
+  normalizeWriteMode,
+  isPathInside,
+  nearestExistingPath,
+  resolvedCandidatePath,
+  decodeMountInfoPath,
+  mountInfoHasPath,
+  renderShadowStorageValidation,
+  createMasterDbDualWriteQueue
+};

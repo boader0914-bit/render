@@ -46,6 +46,13 @@ const LEDGER_TARGET_PRIMARY_KEYS = Object.freeze({
   keyword_metric_observations: "observation_id",
   region_metric_observations: "observation_id"
 });
+const LEDGER_ALLOWED_COMBINATIONS = Object.freeze([
+  { status: "imported", reason: "", targetTables: Object.keys(LEDGER_TARGET_PRIMARY_KEYS), targetRequired: true },
+  { status: "imported", reason: "unchanged_file_reused", targetTables: ["source_artifacts"], targetRequired: true },
+  { status: "skipped", reason: "null_metric_value", targetTables: ["region_metric_observations"], targetRequired: false },
+  { status: "review_required", reason: "low_confidence", targetTables: ["company_snapshots"], targetRequired: true },
+  { status: "review_required", reason: "missing_content_receipt", targetTables: ["company_snapshots"], targetRequired: true }
+]);
 
 function parseArguments(argv = process.argv.slice(2)) {
   const options = {
@@ -267,6 +274,23 @@ function expectedTrailingMonths(latestMonth, count = 12) {
   return months;
 }
 
+function commonTrailingMonthWindow(monthsBySource, sourceIds = REQUIRED_REGION_SOURCE_IDS, count = 12) {
+  const sourceMonthSets = sourceIds.map((sourceId) => new Set(monthsBySource[sourceId] || []));
+  const commonMonths = sourceMonthSets.length
+    ? sourceMonthSets.reduce((intersection, months) => new Set([...intersection].filter((month) => months.has(month))))
+    : new Set();
+  const latestCommonMonth = [...commonMonths].sort((left, right) => right.localeCompare(left))[0] || "";
+  const months = expectedTrailingMonths(latestCommonMonth, count).sort();
+  return {
+    latestCommonMonth,
+    months,
+    missingBySource: Object.fromEntries(sourceIds.map((sourceId) => [
+      sourceId,
+      months.filter((month) => !sourceMonthSets[sourceIds.indexOf(sourceId)].has(month))
+    ]))
+  };
+}
+
 function latestClosedYearMonth(now = new Date()) {
   const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
   kst.setUTCDate(1);
@@ -323,6 +347,17 @@ function freeBytes(directoryPath) {
   try {
     const stats = fs.statfsSync(directoryPath);
     return Number(stats.bavail) * Number(stats.bsize);
+  } catch {
+    return null;
+  }
+}
+
+function measuredFreeBytes(directoryPath, provider = freeBytes) {
+  try {
+    const measured = provider(directoryPath);
+    return typeof measured === "number" && Number.isFinite(measured) && measured >= 0
+      ? measured
+      : null;
   } catch {
     return null;
   }
@@ -432,7 +467,8 @@ function expectedRegionalMetrics(snapshot, regionKey) {
 
 function regionalCoverageDefinition() {
   const document = readJson(path.join(ROOT, "web", "data", "tourism_region_map.json"));
-  const allRegionKeys = (document.regions || []).map((region) => cleanText(region.regionKey)).filter(Boolean);
+  const rawRegionKeys = (document.regions || []).map((region) => cleanText(region.regionKey)).filter(Boolean);
+  const allRegionKeys = [...new Set(rawRegionKeys)];
   const eligibleRegionKeys = (document.regions || []).filter((region) => {
     const provinceCode = cleanText(document.provinceAliases?.[region.sidoKey]?.ktoSidoCd);
     return /^\d{2}$/.test(provinceCode)
@@ -440,7 +476,9 @@ function regionalCoverageDefinition() {
       && !cleanText(region.codeStatus);
   }).map((region) => cleanText(region.regionKey));
   return {
-    allRegionKeys: [...new Set(allRegionKeys)],
+    rawRegionCount: rawRegionKeys.length,
+    allRegionKeys,
+    duplicateRegionKeys: setDifferences(allRegionKeys, rawRegionKeys).duplicates,
     eligibleRegionKeys: [...new Set(eligibleRegionKeys)]
   };
 }
@@ -498,11 +536,8 @@ function compareRegionReference(database, dataDir, options = {}) {
     [...new Set(snapshots.filter((item) => item.sourceId === sourceId)
       .map((item) => cleanText(item.snapshot.yearMonth)))].sort((left, right) => right.localeCompare(left))
   ]));
-  const commonMonths = REQUIRED_REGION_SOURCE_IDS
-    .map((sourceId) => new Set(monthsBySource[sourceId]))
-    .reduce((intersection, months) => new Set([...intersection].filter((month) => months.has(month))));
-  const latestCommonMonth = [...commonMonths].sort((left, right) => right.localeCompare(left))[0] || "";
-  const months = expectedTrailingMonths(latestCommonMonth, 12).sort();
+  const commonWindow = commonTrailingMonthWindow(monthsBySource);
+  const { latestCommonMonth, months } = commonWindow;
   const latestAllowedMonth = latestClosedYearMonth(options.now || new Date());
   const oldestAllowedMonth = oldestAllowedRegionMonth(options.now || new Date(), options.maximumLagMonths ?? 1);
   const coverageBySource = {};
@@ -510,7 +545,7 @@ function compareRegionReference(database, dataDir, options = {}) {
   for (const sourceId of REQUIRED_REGION_SOURCE_IDS) {
     const sourceSnapshots = snapshots.filter((item) => item.sourceId === sourceId);
     const availableMonths = monthsBySource[sourceId];
-    const missingMonths = months.filter((month) => !availableMonths.includes(month));
+    const missingMonths = commonWindow.missingBySource[sourceId];
     coverageBySource[sourceId] = {
       latestMonth: availableMonths[0] || "",
       expectedMonths: months,
@@ -518,7 +553,10 @@ function compareRegionReference(database, dataDir, options = {}) {
       missingMonths,
       sourceFiles: sourceSnapshots.filter((item) => months.includes(cleanText(item.snapshot.yearMonth))).length
     };
-    selected.push(...sourceSnapshots.filter((item) => months.includes(cleanText(item.snapshot.yearMonth))));
+    selected.push(...allSnapshots.filter((item) => (
+      item.sourceId === sourceId
+      && months.includes(cleanText(item.snapshot.yearMonth))
+    )));
   }
   const mismatches = [];
   if (months.length !== 12) mismatches.push({ reason: "common_trailing_12_month_window_missing" });
@@ -538,6 +576,17 @@ function compareRegionReference(database, dataDir, options = {}) {
     }
   }
   const coverageDefinition = regionalCoverageDefinition();
+  if (coverageDefinition.rawRegionCount !== 229
+    || coverageDefinition.allRegionKeys.length !== 229
+    || coverageDefinition.duplicateRegionKeys.length) {
+    mismatches.push({
+      reason: "tourism_region_map_region_set_invalid",
+      expectedRegions: 229,
+      rawRegions: coverageDefinition.rawRegionCount,
+      uniqueRegions: coverageDefinition.allRegionKeys.length,
+      duplicates: coverageDefinition.duplicateRegionKeys
+    });
+  }
   const nationalCoverage = {};
   for (const sourceId of REQUIRED_REGION_SOURCE_IDS) {
     nationalCoverage[sourceId] = {};
@@ -569,7 +618,13 @@ function compareRegionReference(database, dataDir, options = {}) {
       }
     }
   }
+  const regionIdByKey = new Map(database.prepare(`
+    SELECT region_key, region_id
+    FROM administrative_regions
+  `).all().map((row) => [cleanText(row.region_key), cleanText(row.region_id)]));
   let comparedMetrics = 0;
+  let expectedMetrics = 0;
+  let databaseMetrics = 0;
   for (const item of selected) {
     const range = monthRange(item.snapshot.yearMonth);
     const relativePath = relativeArtifactPath(item.filePath, dataDir);
@@ -588,26 +643,60 @@ function compareRegionReference(database, dataDir, options = {}) {
       mismatches.push({ file: relativePath, reason: "source_artifact_source_mismatch", expected: item.sourceId, actual: artifact.source_id });
       continue;
     }
-    const expectedMetricCodes = item.metrics.map((metric) => metric.metricCode).sort();
-    const actualMetricCodes = database.prepare(`
-      SELECT metric_code
-      FROM region_metric_observations
-      WHERE region_id = ? AND source_id = ? AND period_start = ? AND period_end = ? AND source_artifact_id = ?
-      ORDER BY metric_code
-    `).all(regionId, item.sourceId, range.start, range.end, artifact.artifact_id).map((row) => row.metric_code);
-    if (JSON.stringify(actualMetricCodes) !== JSON.stringify(expectedMetricCodes)) {
-      mismatches.push({ file: relativePath, reason: "db_metric_set_mismatch", expected: expectedMetricCodes, actual: actualMetricCodes });
+    const sourceRegions = Array.isArray(item.snapshot.allRegions)
+      ? item.snapshot.allRegions.map((row) => ({
+        regionKey: cleanText(row.regionKey),
+        metrics: expectedRegionalMetrics({ ...item.snapshot, allRegions: [row] }, cleanText(row.regionKey))
+      }))
+      : [{
+        regionKey: cleanText(item.snapshot.region?.regionKey),
+        metrics: expectedRegionalMetrics(item.snapshot, cleanText(item.snapshot.region?.regionKey))
+      }];
+    const expectedRows = [];
+    for (const sourceRegion of sourceRegions) {
+      const expectedRegionId = regionIdByKey.get(sourceRegion.regionKey);
+      if (!expectedRegionId) {
+        mismatches.push({ file: relativePath, regionKey: sourceRegion.regionKey, reason: "source_region_not_in_master_db" });
+        continue;
+      }
+      for (const metric of sourceRegion.metrics) {
+        expectedRows.push({ ...metric, regionId: expectedRegionId, regionKey: sourceRegion.regionKey });
+      }
     }
-    for (const expected of item.metrics) {
-      const rows = database.prepare(`
-        SELECT observation_id, value_num, value_text, status
-        FROM region_metric_observations
-        WHERE region_id = ? AND source_id = ? AND metric_code = ?
-          AND period_start = ? AND period_end = ? AND source_artifact_id = ?
-      `).all(regionId, item.sourceId, expected.metricCode, range.start, range.end, artifact.artifact_id);
+    const actualRows = database.prepare(`
+      SELECT observation_id, region_id, metric_code, value_num, value_text, status
+      FROM region_metric_observations
+      WHERE source_id = ? AND period_start = ? AND period_end = ? AND source_artifact_id = ?
+      ORDER BY region_id, metric_code, observation_id
+    `).all(item.sourceId, range.start, range.end, artifact.artifact_id);
+    expectedMetrics += expectedRows.length;
+    databaseMetrics += actualRows.length;
+    const expectedKeys = expectedRows.map((row) => `${row.regionId}\u001f${row.metricCode}`);
+    const actualKeys = actualRows.map((row) => `${row.region_id}\u001f${row.metric_code}`);
+    const metricSetDifference = setDifferences(expectedKeys, actualKeys);
+    if (metricSetDifference.missing.length
+      || metricSetDifference.unexpected.length
+      || metricSetDifference.duplicates.length) {
+      mismatches.push({
+        file: relativePath,
+        reason: "db_metric_set_mismatch",
+        expectedCount: expectedRows.length,
+        databaseCount: actualRows.length,
+        ...metricSetDifference
+      });
+    }
+    const actualByKey = new Map();
+    for (const actual of actualRows) {
+      const key = `${actual.region_id}\u001f${actual.metric_code}`;
+      if (!actualByKey.has(key)) actualByKey.set(key, []);
+      actualByKey.get(key).push(actual);
+    }
+    for (const expected of expectedRows) {
+      const rows = actualByKey.get(`${expected.regionId}\u001f${expected.metricCode}`) || [];
       if (rows.length !== 1) {
         mismatches.push({
           file: relativePath,
+          regionKey: expected.regionKey,
           metricCode: expected.metricCode,
           reason: rows.length ? "db_metric_duplicate" : "db_metric_missing",
           rowCount: rows.length
@@ -626,12 +715,12 @@ function compareRegionReference(database, dataDir, options = {}) {
       } else {
         comparedMetrics += 1;
       }
-      if (expected.status === "complete") {
+      if (expected.status === "complete" && months.includes(cleanText(item.snapshot.yearMonth))) {
         const pointer = database.prepare(`
           SELECT observation_id
           FROM region_metric_current
           WHERE region_id = ? AND source_id = ? AND metric_code = ? AND period_start = ? AND period_end = ?
-        `).get(regionId, item.sourceId, expected.metricCode, range.start, range.end);
+        `).get(expected.regionId, item.sourceId, expected.metricCode, range.start, range.end);
         if (pointer?.observation_id !== actual.observation_id) {
           mismatches.push({ file: relativePath, metricCode: expected.metricCode, reason: "current_pointer_mismatch" });
         }
@@ -648,6 +737,8 @@ function compareRegionReference(database, dataDir, options = {}) {
     coverageBySource,
     nationalCoverage,
     comparedMetrics,
+    expectedMetrics,
+    databaseMetrics,
     mismatches
   };
 }
@@ -829,7 +920,36 @@ function databaseAudit(database, sourceBefore, dataDir) {
            AND newer.sale_rate BETWEEN 0 AND 1
            AND ABS(newer.sale_rate - newer.sold * 1.0 / newer.supply) <= 0.011
            AND newer.price_num > 0
-           AND newer.collected_at > observation.collected_at
+           AND (
+             newer.status_rank > observation.status_rank
+             OR (
+               newer.status_rank = observation.status_rank
+               AND CASE WHEN newer.rank_value IS NOT NULL
+                          OR newer.supply IS NOT NULL OR newer.available IS NOT NULL OR newer.sold IS NOT NULL
+                          OR newer.sale_rate IS NOT NULL OR newer.price_num IS NOT NULL
+                          OR NULLIF(TRIM(COALESCE(newer.price_text, '')), '') IS NOT NULL
+                        THEN 1 ELSE 0 END
+                   > CASE WHEN observation.rank_value IS NOT NULL
+                            OR observation.supply IS NOT NULL OR observation.available IS NOT NULL OR observation.sold IS NOT NULL
+                            OR observation.sale_rate IS NOT NULL OR observation.price_num IS NOT NULL
+                            OR NULLIF(TRIM(COALESCE(observation.price_text, '')), '') IS NOT NULL
+                          THEN 1 ELSE 0 END
+             )
+             OR (
+               newer.status_rank = observation.status_rank
+               AND CASE WHEN newer.rank_value IS NOT NULL
+                          OR newer.supply IS NOT NULL OR newer.available IS NOT NULL OR newer.sold IS NOT NULL
+                          OR newer.sale_rate IS NOT NULL OR newer.price_num IS NOT NULL
+                          OR NULLIF(TRIM(COALESCE(newer.price_text, '')), '') IS NOT NULL
+                        THEN 1 ELSE 0 END
+                   = CASE WHEN observation.rank_value IS NOT NULL
+                            OR observation.supply IS NOT NULL OR observation.available IS NOT NULL OR observation.sold IS NOT NULL
+                            OR observation.sale_rate IS NOT NULL OR observation.price_num IS NOT NULL
+                            OR NULLIF(TRIM(COALESCE(observation.price_text, '')), '') IS NOT NULL
+                          THEN 1 ELSE 0 END
+               AND newer.collected_at > observation.collected_at
+             )
+           )
        )
   `).get().count);
   const regionCurrentPointerInvalid = Number(database.prepare(`
@@ -858,7 +978,20 @@ function databaseAudit(database, sourceBefore, dataDir) {
            AND newer.period_end = observation.period_end
            AND newer.status = 'complete'
            AND (newer.value_num IS NOT NULL OR NULLIF(TRIM(COALESCE(newer.value_text, '')), '') IS NOT NULL)
-           AND newer.collected_at > observation.collected_at
+           AND (
+             newer.status_rank > observation.status_rank
+             OR (
+               newer.status_rank = observation.status_rank
+               AND CASE WHEN newer.value_num IS NOT NULL OR NULLIF(TRIM(COALESCE(newer.value_text, '')), '') IS NOT NULL THEN 1 ELSE 0 END
+                   > CASE WHEN observation.value_num IS NOT NULL OR NULLIF(TRIM(COALESCE(observation.value_text, '')), '') IS NOT NULL THEN 1 ELSE 0 END
+             )
+             OR (
+               newer.status_rank = observation.status_rank
+               AND CASE WHEN newer.value_num IS NOT NULL OR NULLIF(TRIM(COALESCE(newer.value_text, '')), '') IS NOT NULL THEN 1 ELSE 0 END
+                   = CASE WHEN observation.value_num IS NOT NULL OR NULLIF(TRIM(COALESCE(observation.value_text, '')), '') IS NOT NULL THEN 1 ELSE 0 END
+               AND newer.collected_at > observation.collected_at
+             )
+           )
        )
   `).get().count);
   const keywordCurrentPointerInvalid = Number(database.prepare(`
@@ -887,7 +1020,20 @@ function databaseAudit(database, sourceBefore, dataDir) {
            AND newer.period_end = observation.period_end
            AND newer.status = 'complete'
            AND (newer.value_num IS NOT NULL OR NULLIF(TRIM(COALESCE(newer.value_text, '')), '') IS NOT NULL)
-           AND newer.collected_at > observation.collected_at
+           AND (
+             newer.status_rank > observation.status_rank
+             OR (
+               newer.status_rank = observation.status_rank
+               AND CASE WHEN newer.value_num IS NOT NULL OR NULLIF(TRIM(COALESCE(newer.value_text, '')), '') IS NOT NULL THEN 1 ELSE 0 END
+                   > CASE WHEN observation.value_num IS NOT NULL OR NULLIF(TRIM(COALESCE(observation.value_text, '')), '') IS NOT NULL THEN 1 ELSE 0 END
+             )
+             OR (
+               newer.status_rank = observation.status_rank
+               AND CASE WHEN newer.value_num IS NOT NULL OR NULLIF(TRIM(COALESCE(newer.value_text, '')), '') IS NOT NULL THEN 1 ELSE 0 END
+                   = CASE WHEN observation.value_num IS NOT NULL OR NULLIF(TRIM(COALESCE(observation.value_text, '')), '') IS NOT NULL THEN 1 ELSE 0 END
+               AND newer.collected_at > observation.collected_at
+             )
+           )
        )
   `).get().count);
   const artifactRows = database.prepare("SELECT relative_path, sha256 FROM source_artifacts").all();
@@ -903,15 +1049,31 @@ function databaseAudit(database, sourceBefore, dataDir) {
   `).all().map((row) => ({ ...row, count: Number(row.count) }));
   const ledgerDisposition = (row) => {
     if (!Object.hasOwn(LEDGER_TARGET_PRIMARY_KEYS, row.target_table)) return "fail";
-    if (row.status === "imported" && ["", "unchanged_file_reused"].includes(row.reason)) return "pass";
-    if (row.status === "skipped" && row.reason === "null_metric_value" && row.target_table === "region_metric_observations") return "review_null";
-    if (row.status === "review_required" && ["low_confidence", "missing_content_receipt"].includes(row.reason)) return "review_deferred";
-    return "fail";
+    const allowed = LEDGER_ALLOWED_COMBINATIONS.find((combination) => (
+      combination.status === row.status
+      && combination.reason === row.reason
+      && combination.targetTables.includes(row.target_table)
+    ));
+    if (!allowed) return "fail";
+    if (row.status === "skipped") return "review_null";
+    if (row.status === "review_required") return "review_deferred";
+    return "pass";
   };
-  const importedWithoutTarget = Number(database.prepare(`
+  const requiredTargetMissing = Number(database.prepare(`
+    SELECT COUNT(*) AS count
+    FROM legacy_import_ledger ledger
+    WHERE NULLIF(TRIM(COALESCE(target_record_id, '')), '') IS NULL
+      AND NOT (
+        ledger.import_status = 'skipped'
+        AND COALESCE(ledger.reason, '') = 'null_metric_value'
+        AND ledger.target_table = 'region_metric_observations'
+      )
+  `).get().count);
+  const blockedLedgerStatusRows = Number(database.prepare(`
     SELECT COUNT(*) AS count
     FROM legacy_import_ledger
-    WHERE import_status = 'imported' AND NULLIF(TRIM(COALESCE(target_record_id, '')), '') IS NULL
+    WHERE LOWER(TRIM(COALESCE(import_status, ''))) IN ('unknown', 'failed', 'error', 'rejected')
+       OR LOWER(TRIM(COALESCE(import_status, ''))) NOT IN ('imported', 'skipped', 'review_required')
   `).get().count);
   const missingLedgerTargets = [];
   for (const [targetTable, primaryKey] of Object.entries(LEDGER_TARGET_PRIMARY_KEYS)) {
@@ -959,7 +1121,9 @@ function databaseAudit(database, sourceBefore, dataDir) {
     unsafeLedgerRows: ledger
       .filter((row) => ledgerDisposition(row) === "fail")
       .reduce((sum, row) => sum + row.count, 0),
-    importedWithoutTarget,
+    importedWithoutTarget: requiredTargetMissing,
+    requiredTargetMissing,
+    blockedLedgerStatusRows,
     missingLedgerTargets,
     missingLedgerTargetRows: missingLedgerTargets.reduce((sum, item) => sum + item.count, 0),
     knownNullOmissionRows: ledger
@@ -982,6 +1146,7 @@ function addCheck(checks, name, passed, details, severity = "fail") {
 function runAudit(input = {}) {
   const dataDir = path.resolve(input.dataDir || process.env.DATA_DIR || ROOT);
   const runtimeEnv = input.env || process.env;
+  const freeBytesProvider = typeof input.freeBytesProvider === "function" ? input.freeBytesProvider : freeBytes;
   const masterDbWriteMode = String(runtimeEnv.MASTER_DB_WRITE_MODE || "off").trim().toLowerCase() || "off";
   if (!fs.existsSync(dataDir) || !fs.statSync(dataDir).isDirectory()) {
     const error = new Error(`감사할 자료 폴더가 없습니다: ${dataDir}`);
@@ -1032,7 +1197,7 @@ function runAudit(input = {}) {
   }
   try {
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-  const freeBefore = freeBytes(path.dirname(databasePath));
+  const freeBefore = measuredFreeBytes(path.dirname(databasePath), freeBytesProvider);
   const sourceBefore = sourceManifest(dataDir);
   const requiredFreeBefore = Math.max(16 * 1024 * 1024, sourceBefore.bytes * 2);
   if (freeBefore === null || freeBefore < requiredFreeBefore) {
@@ -1063,7 +1228,7 @@ function runAudit(input = {}) {
     database.close();
   }
   const databaseBytes = databaseFileBytes(databasePath);
-  const freeAfter = freeBytes(path.dirname(databasePath));
+  const freeAfter = measuredFreeBytes(path.dirname(databasePath), freeBytesProvider);
   const checks = [];
   addCheck(checks, "source_parse", dryRun.parseErrors.length === 0, { parseErrors: dryRun.parseErrors });
   addCheck(checks, "source_stable", manifestsMatch(sourceBefore, sourceAfter), {
@@ -1087,6 +1252,23 @@ function runAudit(input = {}) {
   addCheck(checks, "history_count", firstApply.counts.company_observations === dryRun.historyObservations, {
     source: dryRun.historyObservations,
     database: firstApply.counts.company_observations
+  });
+  const expectedRegionMetricRows = firstApply.processed.tourismPeriodMetrics
+    + firstApply.processed.tourismCacheMetrics;
+  addCheck(checks, "region_metric_count", firstApply.counts.region_metric_observations === expectedRegionMetricRows, {
+    sourceExpected: expectedRegionMetricRows,
+    periodSummaryMetrics: firstApply.processed.tourismPeriodMetrics,
+    cacheMetrics: firstApply.processed.tourismCacheMetrics,
+    database: firstApply.counts.region_metric_observations
+  });
+  const expectedKeywordMetricRows = firstApply.processed.keywordMetricRows * 10
+    + firstApply.processed.datalabTrendPoints;
+  addCheck(checks, "keyword_metric_count", firstApply.counts.keyword_metric_observations === expectedKeywordMetricRows, {
+    sourceExpected: expectedKeywordMetricRows,
+    searchAdKeywordRows: firstApply.processed.keywordMetricRows,
+    metricsPerSearchAdKeyword: 10,
+    datalabTrendPoints: firstApply.processed.datalabTrendPoints,
+    database: firstApply.counts.keyword_metric_observations
   });
   addCheck(checks, "region_reference_count", firstApply.counts.administrative_regions === dryRun.regions + 1
     && firstApply.counts.tourism_region_codes === dryRun.tourismRegionMappings, {
@@ -1119,11 +1301,13 @@ function runAudit(input = {}) {
   addCheck(checks, "ledger_safety",
     databaseChecks.rejectedLedgerRows === 0
       && databaseChecks.unsafeLedgerRows === 0
-      && databaseChecks.importedWithoutTarget === 0
+      && databaseChecks.requiredTargetMissing === 0
+      && databaseChecks.blockedLedgerStatusRows === 0
       && databaseChecks.missingLedgerTargetRows === 0, {
       rejectedRows: databaseChecks.rejectedLedgerRows,
       unsafeRows: databaseChecks.unsafeLedgerRows,
-      importedWithoutTarget: databaseChecks.importedWithoutTarget,
+      requiredTargetMissing: databaseChecks.requiredTargetMissing,
+      blockedStatusRows: databaseChecks.blockedLedgerStatusRows,
       missingTargetRows: databaseChecks.missingLedgerTargetRows,
       missingTargets: databaseChecks.missingLedgerTargets
     });
@@ -1281,6 +1465,7 @@ module.exports = {
   databaseLogicalDigest,
   previousMonth,
   expectedTrailingMonths,
+  commonTrailingMonthWindow,
   latestClosedYearMonth,
   oldestAllowedRegionMonth,
   compareCompanyReference,
