@@ -35029,12 +35029,14 @@ body.role-admin .admin-db-company-action a + a {
   font-style: normal;
 }
 
-.location-profile-place-more {
+.location-profile-place-more,
+.location-profile-index-detail-more {
   display: grid;
   gap: 8px;
 }
 
-.location-profile-place-more summary {
+.location-profile-place-more summary,
+.location-profile-index-detail-more summary {
   width: 100%;
   border: 1px solid var(--border-subtle);
   border-radius: 9px;
@@ -35048,11 +35050,13 @@ body.role-admin .admin-db-company-action a + a {
   list-style: none;
 }
 
-.location-profile-place-more summary::-webkit-details-marker {
+.location-profile-place-more summary::-webkit-details-marker,
+.location-profile-index-detail-more summary::-webkit-details-marker {
   display: none;
 }
 
-.location-profile-place-more[open] summary {
+.location-profile-place-more[open] summary,
+.location-profile-index-detail-more[open] summary {
   margin-bottom: 8px;
 }
 
@@ -35380,6 +35384,16 @@ body.role-admin .admin-db-company-action a + a {
 
 .location-profile-index-detail .location-profile-definition-list > div {
   grid-template-columns: minmax(90px, 1fr) minmax(90px, auto) auto;
+}
+
+.location-profile-index-detail-list {
+  min-width: 0;
+}
+
+.location-profile-index-detail-more {
+  min-width: 0;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 10px;
 }
 
 .location-profile-index-detail-empty {

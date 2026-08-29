@@ -1,4 +1,4 @@
-const CACHE_VERSION = "lodging-datalab-pwa-v20260829-tourism-indices-v92";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260829-tourism-full-metrics-v93";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",

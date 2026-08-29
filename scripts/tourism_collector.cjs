@@ -35,7 +35,7 @@ const DEFAULT_SOURCE_DEFS = [
     serviceKeyEnv: "DATA_GO_KR_RESOURCE_DEMAND_SERVICE_KEY",
     referenceUrl: "https://www.data.go.kr/data/15152138/openapi.do",
     defaultEndpoint: "https://apis.data.go.kr/B551011/AreaTarResDemService",
-    adapter: "area-tar-res-dem-v1",
+    adapter: "area-tar-res-dem-v2",
     unit: "sigungu",
     defaultRegionParam: "signguCd",
     defaultPeriodParam: "baseYm"
@@ -47,7 +47,7 @@ const DEFAULT_SOURCE_DEFS = [
     serviceKeyEnv: "DATA_GO_KR_DIVERSITY_SERVICE_KEY",
     referenceUrl: "https://www.data.go.kr/data/15151365/openapi.do",
     defaultEndpoint: "https://apis.data.go.kr/B551011/AreaTarDivService",
-    adapter: "area-tar-div-v1",
+    adapter: "area-tar-div-v2",
     unit: "sigungu",
     defaultRegionParam: "signguCd",
     defaultPeriodParam: "baseYm"
@@ -131,8 +131,10 @@ const DEMAND_STRENGTH_OPERATIONS = Object.freeze({
     })
   })
 });
-const RESOURCE_DEMAND_ADAPTER_VERSION = "area-tar-res-dem-v1";
-const DIVERSITY_ADAPTER_VERSION = "area-tar-div-v1";
+const RESOURCE_DEMAND_ADAPTER_VERSION = "area-tar-res-dem-v2";
+const DIVERSITY_ADAPTER_VERSION = "area-tar-div-v2";
+const REGIONAL_INDEX_NORMALIZER_VERSION = "regional-index-row-normalizer-v2";
+const REGIONAL_INDEX_REQUEST_PROFILE_VERSION = "all-metrics-unfiltered-v2";
 const REGIONAL_INDEX_SUCCESS_CODES = new Set(["0000", "00"]);
 const REGIONAL_INDEX_PAGE_SIZE = 100;
 const REGIONAL_INDEX_MAX_PAGES = 10;
@@ -246,6 +248,8 @@ const REGIONAL_INDEX_SOURCE_SPECS = Object.freeze({
     key: "resourceDemand",
     label: "한국관광공사 지역별 관광 자원 수요",
     adapter: RESOURCE_DEMAND_ADAPTER_VERSION,
+    normalizerVersion: REGIONAL_INDEX_NORMALIZER_VERSION,
+    requestProfile: REGIONAL_INDEX_REQUEST_PROFILE_VERSION,
     endpointPath: "/B551011/AreaTarResDemService",
     operations: RESOURCE_DEMAND_OPERATIONS
   }),
@@ -253,6 +257,8 @@ const REGIONAL_INDEX_SOURCE_SPECS = Object.freeze({
     key: "diversity",
     label: "한국관광공사 지역별 관광 다양성",
     adapter: DIVERSITY_ADAPTER_VERSION,
+    normalizerVersion: REGIONAL_INDEX_NORMALIZER_VERSION,
+    requestProfile: REGIONAL_INDEX_REQUEST_PROFILE_VERSION,
     endpointPath: "/B551011/AreaTarDivService",
     operations: DIVERSITY_OPERATIONS
   })
@@ -2925,13 +2931,40 @@ function createCollector(options = {}) {
     }
   }
 
+  function regionalIndexOperationComplete(operationDef = {}, operation = {}) {
+    const expectedCodes = Object.keys(operationDef.expectedMetrics || {});
+    if (!expectedCodes.length || operation?.status !== "ok" || operation?.quality?.detailComplete !== true) return false;
+    const valuesByCode = new Map();
+    for (const metric of Array.isArray(operation.metrics) ? operation.metrics : []) {
+      const code = String(metric?.code || "").trim();
+      if (!expectedCodes.includes(code) || valuesByCode.has(code) || !Number.isFinite(metric?.value)) continue;
+      valuesByCode.set(code, metric.value);
+    }
+    return expectedCodes.every((code) => valuesByCode.has(code))
+      && Number.isFinite(operation.overallValue)
+      && valuesByCode.get(operationDef.overallCode) === operation.overallValue;
+  }
+
+  function regionalIndexSnapshotComplete(sourceKey = "", snapshot = {}) {
+    const spec = regionalIndexSpec(sourceKey);
+    return Boolean(
+      spec
+      && snapshot?.status === "ok"
+      && Object.entries(spec.operations).every(([key, operationDef]) => (
+        regionalIndexOperationComplete(operationDef, snapshot.operations?.[key])
+      ))
+    );
+  }
+
   function regionalIndexCacheCompatible(sourceKey = "", cached = {}, regionMap = {}, region = {}, yearMonth = "") {
     const spec = regionalIndexSpec(sourceKey);
     return Boolean(
       spec
       && cached.hit
-      && cached.data?.status === "ok"
+      && regionalIndexSnapshotComplete(sourceKey, cached.data)
       && cached.data?.adapter === spec.adapter
+      && cached.data?.source?.normalizerVersion === spec.normalizerVersion
+      && cached.data?.source?.requestProfile === spec.requestProfile
       && cached.data?.regionMapVersion === regionMap.version
       && cached.data?.region?.regionKey === region.regionKey
       && cached.data?.yearMonth === yearMonth
@@ -2940,7 +2973,7 @@ function createCollector(options = {}) {
 
   async function writeRegionalIndexSnapshot(sourceKey = "", snapshot = {}) {
     const spec = regionalIndexSpec(sourceKey);
-    if (!spec || snapshot.status !== "ok") {
+    if (!spec || !regionalIndexSnapshotComplete(sourceKey, snapshot)) {
       const error = new Error("Only complete regional index snapshots can be stored.");
       error.code = "regional_index_snapshot_incomplete";
       throw error;
@@ -2994,8 +3027,7 @@ function createCollector(options = {}) {
       areaCd: String(region.ktoSidoCd || ""),
       signguCd: String(region.ktoSggCd || ""),
       pageNo: String(pageNo),
-      numOfRows: String(pageSize),
-      [operationDef.codeParam]: operationDef.overallCode
+      numOfRows: String(pageSize)
     };
     Object.entries(params).forEach(([key, value]) => endpoint.searchParams.set(key, String(value)));
     const connector = endpoint.toString().includes("?") ? "&" : "?";
@@ -3146,14 +3178,14 @@ function createCollector(options = {}) {
       qualityStatus = "partial";
       reason = "required_overall_metric_missing";
     } else if (missingCodes.length) {
-      qualityStatus = "detail_partial";
-      reason = "detail_metric_not_requested";
+      qualityStatus = "partial";
+      reason = "required_detail_metric_missing";
     }
     return {
       key: operationDef.key,
       operation: operationDef.operation,
       label: operationDef.label,
-      status: ["complete", "detail_partial"].includes(qualityStatus) ? "ok" : qualityStatus === "partial" ? "partial" : "error",
+      status: qualityStatus === "complete" ? "ok" : qualityStatus === "partial" ? "partial" : "error",
       reason,
       overallCode: operationDef.overallCode,
       overallValue,
@@ -3283,7 +3315,8 @@ function createCollector(options = {}) {
         timeGrain: "month",
         regionGrain: "sigungu",
         valueType: "official_index_value",
-        requestProfile: "overall-index-filter-v1"
+        normalizerVersion: spec?.normalizerVersion || "",
+        requestProfile: spec?.requestProfile || ""
       },
       operations,
       overall: Object.fromEntries(Object.entries(operations).map(([key, operation]) => [
@@ -3316,7 +3349,15 @@ function createCollector(options = {}) {
         singleSigunguPerCollection: true,
         completeCacheOnly: true,
         failedRefreshDoesNotOverwriteCompleteCache: true,
-        requiredOverallCodes: Object.values(spec?.operations || {}).map((operation) => operation.overallCode)
+        completeRequiresAllExpectedMetricCodes: true,
+        requiredOverallCodes: Object.values(spec?.operations || {}).map((operation) => operation.overallCode),
+        requiredMetricCodes: Object.fromEntries(Object.entries(spec?.operations || {}).map(([key, operation]) => [
+          key,
+          Object.keys(operation.expectedMetrics || {})
+        ])),
+        requiredMetricCount: Object.values(spec?.operations || {}).reduce((sum, operation) => (
+          sum + Object.keys(operation.expectedMetrics || {}).length
+        ), 0)
       }
     };
   }
@@ -3436,7 +3477,9 @@ function createCollector(options = {}) {
     const operations = Object.fromEntries(operationEntries.map(([key], index) => [key, operationResults[index]]));
     const operationCallsAttempted = operationResults.reduce((sum, operation) => sum + Number(operation.requestCount || 0), 0);
     const maxPagesPerOperation = regionalIndexMaxPages(sourceKey, input);
-    const completeOperationCount = operationResults.filter((operation) => operation.status === "ok" && operation.quality?.overallComplete).length;
+    const completeOperationCount = operationEntries.filter(([key, operationDef]) => (
+      regionalIndexOperationComplete(operationDef, operations[key])
+    )).length;
     const partialOperationCount = operationResults.filter((operation) => operation.status === "partial").length;
     const noObservationCount = operationResults.filter((operation) => operation.status === "no_observation").length;
     const requiredOperationCount = operationResults.length;
@@ -3470,6 +3513,12 @@ function createCollector(options = {}) {
         partialOperationCount,
         noObservationCount,
         failedOperationCount: operationResults.filter((operation) => operation.status === "error").length,
+        requiredMetricCount: operationEntries.reduce((sum, [, operationDef]) => (
+          sum + Object.keys(operationDef.expectedMetrics || {}).length
+        ), 0),
+        observedMetricCount: operationResults.reduce((sum, operation) => (
+          sum + Number(operation.quality?.observedMetricCount || 0)
+        ), 0),
         regionGrain: "sigungu",
         timeGrain: "month"
       },
@@ -3480,7 +3529,8 @@ function createCollector(options = {}) {
       },
       source: {
         referenceUrl: sourceDef.referenceUrl,
-        requestProfile: "overall-index-filter-v1",
+        normalizerVersion: spec.normalizerVersion,
+        requestProfile: spec.requestProfile,
         operations: operationEntries.map(([, operationDef]) => operationDef.operation)
       }
     };
@@ -3701,6 +3751,8 @@ function createCollector(options = {}) {
         key: sourceKey,
         label: spec.label,
         referenceUrl: regionalIndexSourceDef(sourceKey)?.referenceUrl || "",
+        normalizerVersion: spec.normalizerVersion,
+        requestProfile: spec.requestProfile,
         timeGrain: "month",
         regionGrain: "sigungu"
       },
@@ -3709,7 +3761,12 @@ function createCollector(options = {}) {
         partialMonthsExcludedFromCompleteCoverage: true,
         failedRefreshDoesNotOverwriteCompleteCache: true,
         completeCacheOnly: true,
+        completeRequiresAllExpectedMetricCodes: true,
         completeRequiresOverallCodes: Object.values(spec.operations).map((operation) => operation.overallCode),
+        completeRequiresMetricCodes: Object.fromEntries(Object.entries(spec.operations).map(([key, operation]) => [
+          key,
+          Object.keys(operation.expectedMetrics || {})
+        ])),
         coverageRateUnit: "ratio_0_to_1"
       }
     };
@@ -4013,13 +4070,22 @@ function createCollector(options = {}) {
           } : {}),
           ...(regionalSpec ? {
             adapter: regionalSpec.adapter,
-            requestProfile: "overall-index-filter-v1",
+            normalizerVersion: regionalSpec.normalizerVersion,
+            requestProfile: regionalSpec.requestProfile,
             operations: Object.values(regionalSpec.operations).map((operation) => operation.operation),
             requiredOverallCodes: Object.values(regionalSpec.operations).map((operation) => operation.overallCode),
+            requiredMetricCodes: Object.fromEntries(Object.entries(regionalSpec.operations).map(([key, operation]) => [
+              key,
+              Object.keys(operation.expectedMetrics || {})
+            ])),
+            requiredMetricCount: Object.values(regionalSpec.operations).reduce((sum, operation) => (
+              sum + Object.keys(operation.expectedMetrics || {}).length
+            ), 0),
             cache: def.key === "resourceDemand" ? resourceDemandCacheSummary : diversityCacheSummary,
             qualityPolicy: {
               missingIsNotZero: true,
               completeCacheOnly: true,
+              completeRequiresAllExpectedMetricCodes: true,
               failedRefreshDoesNotOverwriteCompleteCache: true
             }
           } : {})
@@ -4071,6 +4137,8 @@ module.exports = {
   DEMAND_STRENGTH_OPERATIONS,
   RESOURCE_DEMAND_ADAPTER_VERSION,
   DIVERSITY_ADAPTER_VERSION,
+  REGIONAL_INDEX_NORMALIZER_VERSION,
+  REGIONAL_INDEX_REQUEST_PROFILE_VERSION,
   RESOURCE_DEMAND_OPERATIONS,
   DIVERSITY_OPERATIONS,
   REGIONAL_INDEX_HISTORY_MONTHS

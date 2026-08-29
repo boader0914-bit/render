@@ -452,8 +452,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260829-api-registry-v91";
-const expectedAssetVersion = "datalab-20260829-api-registry-v72";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260829-tourism-full-metrics-v93";
+const expectedAssetVersion = "datalab-20260829-tourism-full-metrics-v74";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -719,6 +719,10 @@ const recentStrengthWindowBlock = app.slice(
   app.indexOf("function locationProfileRecentSeriesWindow("),
   app.indexOf("function renderLocationProfileStrengthPanel(")
 );
+const tourismIndexPeriodHelperBlock = app.slice(
+  app.indexOf("function locationProfileTourismIndexPeriod("),
+  app.indexOf("function locationProfileTourismIndexEvidence(")
+);
 const recentStrengthWindowSandbox = {};
 vm.runInNewContext(
   `${visitorMonthHelperBlock}\n${recentStrengthWindowBlock}\nthis.locationProfileRecentSeriesWindow = locationProfileRecentSeriesWindow; this.locationProfileSeriesCoverage = locationProfileSeriesCoverage;`,
@@ -735,6 +739,29 @@ const fallbackStrengthSeries = recentStrengthWindowSandbox.locationProfileRecent
   { yearMonth: "202606", status: "complete", value: 62, hasValue: true }
 ], null, 12);
 const fallbackStrengthCoverage = recentStrengthWindowSandbox.locationProfileSeriesCoverage(fallbackStrengthSeries);
+const apiPeriodSeries = recentStrengthWindowSandbox.locationProfileRecentSeriesWindow([
+  { yearMonth: "202507", status: "complete", value: 50, hasValue: true },
+  { yearMonth: "202508", status: "complete", value: 51, hasValue: true },
+  { yearMonth: "202607", status: "complete", value: 63, hasValue: true },
+  { yearMonth: "202608", status: "complete", value: 64, hasValue: true }
+], { startYearMonth: "202508", endYearMonth: "202607" }, 12);
+const apiPeriodCoverage = recentStrengthWindowSandbox.locationProfileSeriesCoverage(apiPeriodSeries);
+const tourismIndexPeriodSandbox = {};
+vm.runInNewContext(
+  `${visitorMonthHelperBlock}\nfunction locationProfileFirstObject(...values) { return values.find((value) => value && typeof value === "object" && !Array.isArray(value)) || null; }\n${tourismIndexPeriodHelperBlock}\nthis.locationProfileTourismIndexPeriod = locationProfileTourismIndexPeriod;`,
+  tourismIndexPeriodSandbox
+);
+const tourismIndexPeriod = tourismIndexPeriodSandbox.locationProfileTourismIndexPeriod({
+  period: {
+    startYearMonth: "202508",
+    endYearMonth: "202607",
+    latestClosedYearMonth: "202607",
+    months: 12
+  }
+}, null, [
+  { yearMonth: "202507" },
+  { yearMonth: "202608" }
+]);
 assert(
   alignedStrengthSeries.length === 12
     && alignedStrengthSeries[0].yearMonth === "202507"
@@ -748,8 +775,18 @@ assert(
     && fallbackStrengthSeries.at(-1).yearMonth === "202606"
     && fallbackStrengthCoverage.expectedMonths === 12
     && fallbackStrengthCoverage.completeMonths === 2
-    && fallbackStrengthCoverage.missingMonths === 10,
-  "stay and spend graphs must use the visitor graph's exact 12-month period without filling missing observations as zero",
+    && fallbackStrengthCoverage.missingMonths === 10
+    && apiPeriodSeries.length === 12
+    && apiPeriodSeries[0].yearMonth === "202508"
+    && apiPeriodSeries.at(-1).yearMonth === "202607"
+    && apiPeriodSeries.every((entry) => entry.yearMonth !== "202507" && entry.yearMonth !== "202608")
+    && apiPeriodCoverage.completeMonths === 2
+    && apiPeriodCoverage.missingMonths === 10
+    && tourismIndexPeriod.startYearMonth === "202508"
+    && tourismIndexPeriod.endYearMonth === "202607"
+    && tourismIndexPeriod.latestClosedYearMonth === "202607"
+    && tourismIndexPeriod.months === 12,
+  "strength graphs must use the visitor period while tourism index graphs use each API period without filling missing observations as zero",
   failures
 );
 
@@ -782,10 +819,19 @@ assert(
     && tourismIndexUiBlock.includes("entry?.values?.[spec.key] ?? operation?.overallValue")
     && tourismIndexUiBlock.includes("graphReady: observedPoints.length >= 8")
     && tourismIndexUiBlock.includes("legacySeries")
-    && tourismIndexUiBlock.includes("item.details.filter((metric) => metric.hasValue)")
+    && tourismIndexUiBlock.includes("const referencePeriod = evidence.periodRange")
+    && tourismIndexUiBlock.includes("latestClosedYearMonth")
+    && tourismIndexUiBlock.includes("최신 확정월")
+    && tourismIndexUiBlock.includes("metric.hasValue && !metric.isOverall")
+    && tourismIndexUiBlock.includes("function renderLocationProfileTourismIndexDetailRows(")
+    && tourismIndexUiBlock.includes("const visible = rows.slice(0, 5)")
+    && tourismIndexUiBlock.includes("const folded = rows.slice(5)")
+    && tourismIndexUiBlock.includes('class="location-profile-index-detail-more"')
+    && !renderObservedLocationProfileBlock.includes("tourismReferencePeriod")
     && styles.includes(".location-profile-index-series-grid")
-    && styles.includes(".location-profile-index-detail-empty"),
-  "resource-demand and diversity cards must keep independent named series, per-series graph gates, legacy fallback, and compact observed-only details",
+    && styles.includes(".location-profile-index-detail-empty")
+    && styles.includes(".location-profile-index-detail-more"),
+  "resource-demand and diversity cards must use their own confirmed 12-month periods and fold observed detail metrics after five rows",
   failures
 );
 
