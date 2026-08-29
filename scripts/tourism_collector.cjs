@@ -440,10 +440,99 @@ function createCollector(options = {}) {
   const tourismDataDir = options.tourismDataDir || path.join(dataDir, "tourism_data");
   const cacheDir = path.join(tourismDataDir, "cache");
   const visitorEvidenceDir = path.join(tourismDataDir, "evidence", "visitors");
+  const cacheSnapshotEvidenceDir = path.join(tourismDataDir, "evidence", "cache_snapshots");
   const logFile = path.join(tourismDataDir, "collections.jsonl");
   const regionMapFile = options.regionMapFile || path.join(webDir, "data", "tourism_region_map.json");
   const demandStrengthSnapshotWrites = new Map();
   const regionalIndexSnapshotWrites = new Map();
+  const onSnapshotStored = typeof options.onSnapshotStored === "function" ? options.onSnapshotStored : null;
+
+  function notifySnapshotStored(payload = {}) {
+    if (!onSnapshotStored) return;
+    try {
+      Promise.resolve(onSnapshotStored(payload)).catch(() => {});
+    } catch {
+      // Shadow persistence must never turn a successful official-cache write into a failed collection.
+    }
+  }
+
+  async function sha256File(filePath = "") {
+    const hash = crypto.createHash("sha256");
+    const stream = fs.createReadStream(filePath);
+    for await (const chunk of stream) hash.update(chunk);
+    return hash.digest("hex");
+  }
+
+  async function createImmutableCacheSnapshotEvidence(sourceKey = "", filePath = "") {
+    const allowedSourceKeys = new Set(["visitors", "demandStrength", "resourceDemand", "diversity"]);
+    if (!allowedSourceKeys.has(sourceKey)) {
+      const error = new Error(`Unsupported tourism cache snapshot source: ${sourceKey}`);
+      error.code = "tourism_cache_evidence_source_unsupported";
+      throw error;
+    }
+
+    const sourceDir = path.join(cacheSnapshotEvidenceDir, sourceKey);
+    const stagingPath = path.join(
+      sourceDir,
+      `.${process.pid}.${Date.now()}.${crypto.randomBytes(8).toString("hex")}.tmp`
+    );
+    await fsp.mkdir(sourceDir, { recursive: true });
+    try {
+      if (process.platform !== "win32") {
+        try {
+          await fsp.link(filePath, stagingPath);
+        } catch {
+          await fsp.copyFile(filePath, stagingPath, fs.constants.COPYFILE_EXCL);
+        }
+      } else {
+        // The Windows cache fallback can overwrite an existing inode, so keep Evidence on an independent copy.
+        await fsp.copyFile(filePath, stagingPath, fs.constants.COPYFILE_EXCL);
+      }
+
+      const sha256 = await sha256File(stagingPath);
+      const evidencePath = path.join(sourceDir, `${sha256}.json`);
+      try {
+        await fsp.link(stagingPath, evidencePath);
+      } catch (linkError) {
+        if (linkError?.code !== "EEXIST") {
+          try {
+            await fsp.copyFile(stagingPath, evidencePath, fs.constants.COPYFILE_EXCL);
+          } catch (copyError) {
+            if (copyError?.code !== "EEXIST") throw copyError;
+          }
+        }
+      }
+
+      const storedSha256 = await sha256File(evidencePath);
+      if (storedSha256 !== sha256) {
+        const error = new Error("Stored tourism cache Evidence does not match its content hash.");
+        error.code = "tourism_cache_evidence_hash_mismatch";
+        throw error;
+      }
+      return { evidencePath, sha256 };
+    } finally {
+      await fsp.rm(stagingPath, { force: true }).catch(() => {});
+    }
+  }
+
+  async function publishCommittedSnapshot({ sourceKey = "", filePath = "", snapshot = {}, adapter = "" } = {}) {
+    if (!onSnapshotStored) return;
+    try {
+      const evidence = await createImmutableCacheSnapshotEvidence(sourceKey, filePath);
+      notifySnapshotStored({
+        sourceKey,
+        filePath,
+        evidencePath: evidence.evidencePath,
+        sha256: evidence.sha256,
+        adapter: String(snapshot.adapter || adapter || ""),
+        yearMonth: String(snapshot.yearMonth || ""),
+        regionKey: String(snapshot.region?.regionKey || "all"),
+        snapshot
+      });
+    } catch {
+      // Cache collection remains successful when immutable Evidence or its shadow event cannot be produced.
+    }
+  }
 
   function currentDate() {
     const value = now();
@@ -737,6 +826,12 @@ function createCollector(options = {}) {
     const tempPath = `${filePath}.${process.pid}.tmp`;
     await fsp.writeFile(tempPath, JSON.stringify(snapshot, null, 2), "utf8");
     await fsp.rename(tempPath, filePath);
+    await publishCommittedSnapshot({
+      sourceKey: "visitors",
+      filePath,
+      snapshot,
+      adapter: VISITOR_ADAPTER_VERSION
+    });
     await fsp.appendFile(logFile, `${JSON.stringify({
       collectedAt: snapshot.collectedAt,
       source: "visitors",
@@ -1938,6 +2033,12 @@ function createCollector(options = {}) {
       } finally {
         await fsp.rm(tempPath, { force: true }).catch(() => {});
       }
+      await publishCommittedSnapshot({
+        sourceKey: "demandStrength",
+        filePath,
+        snapshot,
+        adapter: DEMAND_STRENGTH_ADAPTER_VERSION
+      });
       await fsp.appendFile(logFile, `${JSON.stringify({
         collectedAt: snapshot.collectedAt,
         source: "demandStrength",
@@ -3001,6 +3102,12 @@ function createCollector(options = {}) {
       } finally {
         await fsp.rm(tempPath, { force: true }).catch(() => {});
       }
+      await publishCommittedSnapshot({
+        sourceKey,
+        filePath,
+        snapshot,
+        adapter: spec.adapter
+      });
       await fsp.appendFile(logFile, `${JSON.stringify({
         collectedAt: snapshot.collectedAt,
         source: sourceKey,

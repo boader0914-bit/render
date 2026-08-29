@@ -17,7 +17,9 @@ const {
   databaseCounts,
   redactSensitiveText,
   redactSensitive,
-  storeCompanyExternalIdentity
+  storeCompanyExternalIdentity,
+  importTourismCacheFile,
+  regionLookup
 } = require("./master_db_import.cjs");
 
 function fileHashes(files) {
@@ -71,7 +73,7 @@ function run() {
     assert.equal(first.counts.company_external_ids, 44);
     assert.equal(first.counts.company_match_candidates, 44);
     assert.equal(first.counts.company_observations, 105);
-    assert.equal(first.counts.company_observation_current, 105);
+    assert.equal(first.counts.company_observation_current, 91);
     assert.equal(first.counts.company_snapshots, 22);
     assert.equal(first.counts.company_snapshot_pointers, 0);
     assert.equal(first.counts.company_channel_settings, 0);
@@ -100,6 +102,88 @@ function run() {
       applySchema(database);
       const foreignKeyFailures = database.prepare("PRAGMA foreign_key_check").all();
       assert.deepEqual(foreignKeyFailures, []);
+      const companyObservationStatuses = Object.fromEntries(database.prepare(`
+        SELECT status, COUNT(*) AS count
+        FROM company_observations
+        GROUP BY status
+      `).all().map((row) => [row.status, Number(row.count)]));
+      assert.deepEqual(companyObservationStatuses, { complete: 91, partial: 14 });
+      const noObservationCacheFile = path.join(temporaryDirectory, "tourism_data", "cache", "visitors__no-observation__202601.json");
+      fs.mkdirSync(path.dirname(noObservationCacheFile), { recursive: true });
+      fs.writeFileSync(noObservationCacheFile, JSON.stringify({
+        schemaVersion: 1,
+        adapter: "locgo-regn-visitors-v1",
+        status: "ok",
+        collectedAt: "2026-02-01T00:00:00.000Z",
+        yearMonth: "202601",
+        allRegions: [{
+          regionKey: "kr_gyeongnam_hapcheon",
+          yearMonth: "202601",
+          visitorDays: null,
+          averageDailyVisitors: null,
+          coverageRate: 0,
+          observedDays: 0,
+          categoryVisitorDays: null,
+          quality: { status: "no_observation", reason: "no_rows_for_region" }
+        }]
+      }, null, 2), "utf8");
+      const currentBeforeNoObservation = databaseCounts(database).region_metric_current;
+      importTourismCacheFile(database, noObservationCacheFile, temporaryDirectory, regionLookup(database));
+      const noObservationMetrics = database.prepare(`
+        SELECT status, COUNT(*) AS count
+        FROM region_metric_observations
+        WHERE source_artifact_id = (
+          SELECT artifact_id FROM source_artifacts WHERE relative_path LIKE '%visitors__no-observation__202601.json' LIMIT 1
+        )
+        GROUP BY status
+      `).all();
+      assert.deepEqual(noObservationMetrics.map((row) => ({ status: row.status, count: Number(row.count) })), [{ status: "no_data", count: 4 }]);
+      assert.equal(databaseCounts(database).region_metric_current, currentBeforeNoObservation, "미관측 숫자 0을 complete/current로 승격하면 안 됩니다.");
+
+      const snapshotErrorVisitorFile = path.join(temporaryDirectory, "tourism_data", "cache", "visitors__snapshot-error__202602.json");
+      fs.writeFileSync(snapshotErrorVisitorFile, JSON.stringify({
+        schemaVersion: 1,
+        adapter: "locgo-regn-visitors-v1",
+        status: "error",
+        collectedAt: "2026-03-01T00:00:00.000Z",
+        yearMonth: "202602",
+        allRegions: [{
+          regionKey: "kr_gyeongnam_hapcheon",
+          yearMonth: "202602",
+          visitorDays: 280000,
+          averageDailyVisitors: 10000,
+          coverageRate: 1,
+          observedDays: 28,
+          expectedDays: 28,
+          categoryVisitorDays: { "1": 180000, "2": 90000, "3": 10000 },
+          quality: { status: "complete" }
+        }]
+      }, null, 2), "utf8");
+      importTourismCacheFile(database, snapshotErrorVisitorFile, temporaryDirectory, regionLookup(database));
+
+      const snapshotErrorRegionalFile = path.join(temporaryDirectory, "tourism_data", "cache", "demand_strength__snapshot-error__202602.json");
+      fs.writeFileSync(snapshotErrorRegionalFile, JSON.stringify({
+        schemaVersion: 1,
+        adapter: "area-tar-dem-ds-v1",
+        status: "error",
+        collectedAt: "2026-03-01T00:00:00.000Z",
+        yearMonth: "202602",
+        region: { regionKey: "kr_gyeongnam_sancheong" },
+        operations: {
+          stay: {
+            status: "complete",
+            metrics: [{ code: "snapshot_error_guard", value: 99 }]
+          }
+        }
+      }, null, 2), "utf8");
+      importTourismCacheFile(database, snapshotErrorRegionalFile, temporaryDirectory, regionLookup(database));
+      const promotedSnapshotErrors = Number(database.prepare(`
+        SELECT COUNT(*) AS count
+        FROM region_metric_current
+        WHERE period_start = '2026-02-01'
+          AND source_id IN ('kto_visitor_api', 'kto_demand_strength_api')
+      `).get().count);
+      assert.equal(promotedSnapshotErrors, 0, "상위 Snapshot이 오류이면 하위 숫자가 정상이어도 현재값으로 승격하면 안 됩니다.");
       const fakeBroadLocalShares = database.prepare(`
         SELECT COUNT(*) AS count
         FROM region_metric_observations
@@ -199,7 +283,7 @@ function run() {
       }
 
       const countsWithFixture = databaseCounts(database);
-      assert.equal(countsWithFixture.region_metric_observations, firstCounts.region_metric_observations + 2);
+      assert.equal(countsWithFixture.region_metric_observations, firstCounts.region_metric_observations + 14);
       assert.equal(countsWithFixture.region_metric_current, firstCounts.region_metric_current + 1);
 
       const emptyComplete = upsertRegionMetric(database, {

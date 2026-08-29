@@ -91,7 +91,45 @@ npm run master-db:dry-run
 npm run master-db:apply
 ```
 
-`--apply`는 초기 이관을 위한 오프라인 일회성 작업입니다. 웹 서버 시작 명령에 넣거나 운영 서버가 수집자료를 쓰는 동안 실행하지 않습니다. 운영 갱신은 다음 단계에서 수집 회차 하나만 짧게 기록하는 증분 저장으로 연결합니다.
+`--apply`는 초기 이관을 위한 오프라인 일회성 작업입니다. 웹 서버 시작 명령에 넣거나 운영 서버가 수집자료를 쓰는 동안 실행하지 않습니다.
+
+## 증분 Shadow 기록
+
+수집 완료 후 새 자료만 기록하는 증분 저장 경로가 준비되어 있습니다. 이 단계의 구조화 범위는 **네이버 판매관측 history와 4종 지역 관광 월 Snapshot**입니다.
+
+- 네이버: manifest와 결과파일이 확정되고 회차별 관측 Evidence가 생성된 상세수집 회차를 큐에 넣습니다.
+- 지역 관광자료: 방문자수·체류/소비강도·관광자원수요·관광다양성의 완전한 월 캐시가 파일로 확정된 뒤 큐에 넣습니다.
+- 네이버 회차 관측은 `history/evidence/<runId>__<sha>.json`, 관광 월 자료는 `tourism_data/evidence/cache_snapshots/<source>/<sha>.json` 불변 Evidence를 직접 가리킵니다.
+- 외부 API를 다시 호출하지 않고 이미 저장된 파일만 읽습니다.
+- 한 번에 증분 작업 하나만 별도 Node 프로세스에서 처리하므로 웹 요청을 막지 않습니다.
+- DB 잠금, 스키마 불일치, 파일 검증 실패가 발생해도 기존 수집 성공과 기존 파일은 유지됩니다.
+- 동일 회차·동일 SHA는 다시 처리해도 중복되지 않습니다.
+- 재고 산술·날짜·가격 검사를 통과하고 신뢰도 A/B·70점 이상인 업체 관측만 `current`로 승격합니다. 나머지는 `partial` 감사행과 영수증으로 보존합니다.
+- 방문자 월 Snapshot은 관광 지역코드 229개 전체의 중복·누락과 지역별 완전성을 검사합니다. 부분 지역은 기록하되 현재값으로 승격하지 않습니다.
+- 누락 파일이나 관측 없음 회차는 영수증만 `partial`/`no_data`로 남기고 현재 정상값을 만들지 않습니다.
+- 서버가 다시 시작된 뒤와 이후 기본 6시간마다 미반영 manifest·불변 관광 Evidence를 외부 호출 없이 오래된 순서로 최대 200건씩 확인합니다. 남은 정상 자료가 있으면 다음 worker로 자동 이어서 처리합니다. 한 재조정 회차에서 실패한 자료는 뒤의 정상 자료를 막지 않도록 건너뛰고 마지막 실패를 상태에 보존하며, 다음 정기 재조정 때 다시 확인합니다.
+- `basic_db`, `demand_location`, `fast_rank` 회차는 현재 실행·증거 영수증까지만 남습니다. 업체 기본정보·상품·지역신호·키워드별 순위의 구조화 adapter는 다음 단계입니다.
+
+최초 배포 기본값은 반드시 꺼짐입니다.
+
+```text
+MASTER_DB_WRITE_MODE=off
+MASTER_DB_PATH=/var/data/master_db/sabun_master.sqlite
+MASTER_DB_RECONCILE_LIMIT=200
+MASTER_DB_RECONCILE_INTERVAL_HOURS=6
+```
+
+`off`에서는 Master DB worker와 추가 불변 Evidence 복사를 실행하지 않습니다. 기존 `outputs/`, 전역 history, 관광 cache 저장만 종전대로 동작합니다.
+
+운영에서는 다음 순서로만 켭니다.
+
+1. 코드만 배포하고 기존 health·로그인·수집을 확인합니다.
+2. `/var/data`를 백업합니다.
+3. 서비스 쓰기가 없는 점검 시간에 초기 Shadow 반입을 실행합니다.
+4. 기존 파일과 DB의 대표 업체·지역 지표를 대조합니다.
+5. Render 환경변수 `MASTER_DB_WRITE_MODE=shadow`로 바꾸고 재배포합니다.
+
+증분 기록을 켜더라도 화면 읽기는 계속 기존 파일을 사용합니다. `company_observation_current`의 순위 기준키에는 아직 수집 키워드가 포함되지 않으므로, 키워드별 순위 조회는 다음 스키마에서 분리하기 전까지 Master DB 현재값으로 전환하지 않습니다.
 
 운영 반입 전에는 `/var/data` 복제본으로 DB와 최대 WAL 용량을 측정하고 그 합계의 2배 이상 여유공간을 확인합니다. 백업은 WAL checkpoint 뒤 DB를 복사하거나 `.sqlite`, `-wal`, `-shm`을 함께 보존합니다. Shadow-read 동일성 검증과 복귀 스위치가 끝나기 전에는 Master DB를 단독 원본으로 사용하지 않습니다.
 
@@ -117,7 +155,7 @@ node scripts/master_db_import.cjs --apply --data-dir C:\data --db C:\data\master
 
 - 행정구역 538개(대한민국 기준행 포함)
 - 관광 API 지역코드 229개
-- 업체 22개와 업체 관측 105건
+- 업체 22개와 업체 관측 105건(정상 current 91건, 저신뢰 C/D/E 검토행 14건)
 - 지역 지표 현재값 2,271건
 - 키워드 지표 현재값 180건
 - 증거파일 40개

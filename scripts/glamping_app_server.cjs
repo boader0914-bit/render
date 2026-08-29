@@ -11,6 +11,7 @@ const { otaProviderFromUrl } = require("./naver_place_ota_observation.cjs");
 const { createCollector: createTourismCollector } = require("./tourism_collector.cjs");
 const { createMonthlyVisitorScheduler } = require("./tourism_visitor_monthly_scheduler.cjs");
 const { createDemandStrengthBackfillScheduler } = require("./tourism_demand_strength_backfill_scheduler.cjs");
+const { createMasterDbDualWriteQueue } = require("./master_db_dual_write.cjs");
 
 function loadOptionalTourismPeriodSummaryModule() {
   const filePath = path.join(__dirname, "tourism_datalab_period_summary.cjs");
@@ -57,6 +58,7 @@ const LEGACY_B2B_MEMBERS_FILE = path.join(CONFIG_DIR, "b2b_members.json");
 const B2B_MEMBERS_FILE = path.join(CUSTOMER_DB_DIR, "b2b_members.json");
 const HISTORY_DIR = path.join(DATA_DIR, "history");
 const HISTORY_OBSERVATIONS_FILE = path.join(HISTORY_DIR, "observations.jsonl");
+const HISTORY_EVIDENCE_DIR = path.join(HISTORY_DIR, "evidence");
 const HISTORY_DATALAB_TRENDS_FILE = path.join(HISTORY_DIR, "datalab_trends.json");
 const HISTORY_CRAWL_TIMINGS_FILE = path.join(HISTORY_DIR, "crawl_timings.json");
 const LEGACY_B2B_SEARCH_HISTORY_FILE = path.join(HISTORY_DIR, "b2b_search_history.json");
@@ -118,11 +120,31 @@ const RATE_LIMIT_POLICIES = {
   adminTourismDemandStrength: { limit: 3, windowMs: 60 * 60 * 1000 },
   adminTourismDemandStrengthBackfill: { limit: 6, windowMs: 60 * 60 * 1000 }
 };
+const masterDbDualWriteQueue = createMasterDbDualWriteQueue({
+  rootDir: ROOT,
+  dataDir: DATA_DIR,
+  outputsDir: OUTPUTS_DIR,
+  databasePath: process.env.MASTER_DB_PATH || path.join(DATA_DIR, "master_db", "sabun_master.sqlite"),
+  mode: process.env.MASTER_DB_WRITE_MODE,
+  logger: console
+});
 const tourismCollector = createTourismCollector({
   rootDir: ROOT,
   webDir: WEB_DIR,
   dataDir: DATA_DIR,
-  tourismDataDir: TOURISM_DATA_DIR
+  tourismDataDir: TOURISM_DATA_DIR,
+  onSnapshotStored: masterDbDualWriteQueue.mode === "shadow"
+    ? ({ sourceKey, filePath, evidencePath, sha256, adapter, yearMonth, regionKey }) => masterDbDualWriteQueue.enqueue({
+      type: "tourism_snapshot",
+      sourceKey,
+      filePath,
+      evidencePath,
+      sha256,
+      adapter,
+      yearMonth,
+      regionKey
+    })
+    : null
 });
 const TOURISM_VISITOR_MONTHLY_SYNC_ENABLED = process.env.TOURISM_VISITOR_MONTHLY_SYNC_ENABLED === undefined
   ? HAS_RENDER_DISK
@@ -1357,11 +1379,33 @@ function startCrawlJob(job) {
       console.warn(`Could not record crawl timing: ${error.message || error}`);
     });
     if (!failure && result?.runId) {
-      cleanupRecentCrawlResults();
-      recentCrawlResults.set(job.signature, { createdAt: Date.now(), result });
       await ensureB2BSearchHistoryForJob(job, result).catch((error) => {
         console.warn(`Could not ensure B2B history for ${result.runId}: ${error.message || error}`);
       });
+      const runManifestPath = result.output?.outputDir
+        ? path.join(result.output.outputDir, "manifest.json")
+        : "";
+      const manifestSha256 = runManifestPath
+        ? await fsp.readFile(runManifestPath)
+          .then((buffer) => crypto.createHash("sha256").update(buffer).digest("hex"))
+          .catch(() => "")
+        : "";
+      result.masterDbSync = masterDbDualWriteQueue.enqueue({
+        type: "naver_run",
+        runId: result.runId,
+        runDir: result.output?.outputDir || "",
+        manifestSha256,
+        startedAt: job.startedAt?.toISOString?.() || "",
+        endedAt: endedAt.toISOString(),
+        collectionSource: job.collectionSource,
+        sourceRole: job.sourceRole,
+        plan: job.plan,
+        history: result.history || null,
+        crawlTiming: result.crawlTiming || null,
+        stageTimings
+      });
+      cleanupRecentCrawlResults();
+      recentCrawlResults.set(job.signature, { createdAt: Date.now(), result });
     }
     activeCrawlPromise = null;
     activeCrawlStartedAt = null;
@@ -14307,6 +14351,56 @@ async function readHistoryObservations() {
   }
 }
 
+async function storeRunHistoryEvidence(runId, observations = []) {
+  const safeRunId = String(runId || "").trim();
+  if (!safeRunId || path.basename(safeRunId) !== safeRunId) {
+    const error = new Error("유효하지 않은 회차 ID로 관측 증거를 저장할 수 없습니다.");
+    error.code = "invalid_history_evidence_run_id";
+    throw error;
+  }
+  const payload = {
+    schemaVersion: 1,
+    evidenceType: "naver_company_observations",
+    runId: safeRunId,
+    observationCount: observations.length,
+    observations
+  };
+  const serialized = JSON.stringify(payload, null, 2);
+  const sha256 = crypto.createHash("sha256").update(serialized).digest("hex");
+  const filePath = path.join(HISTORY_EVIDENCE_DIR, `${safeRunId}__${sha256.slice(0, 16)}.json`);
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await fsp.mkdir(HISTORY_EVIDENCE_DIR, { recursive: true });
+  try {
+    await fsp.writeFile(tempPath, serialized, { encoding: "utf8", flag: "wx" });
+    try {
+      await fsp.link(tempPath, filePath);
+    } catch (error) {
+      if (error?.code !== "EEXIST") {
+        try {
+          await fsp.copyFile(tempPath, filePath, fs.constants.COPYFILE_EXCL);
+        } catch (copyError) {
+          if (copyError?.code !== "EEXIST") throw copyError;
+        }
+      }
+      const existing = await fsp.readFile(filePath, "utf8");
+      const existingHash = crypto.createHash("sha256").update(existing).digest("hex");
+      if (existingHash !== sha256) {
+        const conflict = new Error(`같은 회차의 관측 증거가 서로 다릅니다: ${safeRunId}`);
+        conflict.code = "history_evidence_conflict";
+        throw conflict;
+      }
+    }
+  } finally {
+    await fsp.rm(tempPath, { force: true }).catch(() => {});
+  }
+  return {
+    file: path.relative(DATA_DIR, filePath).replace(/\\/g, "/"),
+    filePath,
+    sha256,
+    observationCount: observations.length
+  };
+}
+
 async function appendHistoryForRun(runId) {
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return { appended: 0, reason: "run_not_found" };
@@ -14333,7 +14427,13 @@ async function appendHistoryForRun(runId) {
     `${observations.map((row) => JSON.stringify(row)).join("\n")}\n`,
     "utf8"
   );
-  return { appended: observations.length, file: "history/observations.jsonl" };
+  const evidence = masterDbDualWriteQueue.mode === "shadow"
+    ? await storeRunHistoryEvidence(runId, observations).catch((error) => ({
+      error: error.message || String(error),
+      code: error.code || "history_evidence_write_failed"
+    }))
+    : null;
+  return { appended: observations.length, file: "history/observations.jsonl", evidence };
 }
 
 function historyDayIndex(dateText) {
@@ -18083,6 +18183,19 @@ seedOutputsFromRepo()
       const demandStrengthBackfill = tourismDemandStrengthBackfillScheduler.start();
       if (demandStrengthBackfill.enabled) {
         console.log(`Tourism demand strength backfill check scheduled at ${demandStrengthBackfill.nextCheckAt}`);
+      }
+      if (masterDbDualWriteQueue.mode === "shadow") {
+        const reconcileLimit = Math.max(1, Math.min(200, Number(process.env.MASTER_DB_RECONCILE_LIMIT) || 200));
+        const reconcileIntervalHours = Math.max(1, Number(process.env.MASTER_DB_RECONCILE_INTERVAL_HOURS) || 6);
+        const timer = setTimeout(() => {
+          masterDbDualWriteQueue.reconcile(reconcileLimit);
+        }, 20_000);
+        timer.unref?.();
+        const interval = setInterval(() => {
+          masterDbDualWriteQueue.reconcile(reconcileLimit);
+        }, reconcileIntervalHours * 60 * 60 * 1000);
+        interval.unref?.();
+        console.log(`Shadow Master DB reconciliation scheduled in batches of ${reconcileLimit} unprocessed immutable source files every ${reconcileIntervalHours}h.`);
       }
     });
   });

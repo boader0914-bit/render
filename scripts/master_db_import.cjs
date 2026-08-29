@@ -20,6 +20,7 @@ const {
   upsertKeywordMetric,
   upsertCompanyObservation
 } = require("./master_db.cjs");
+const { validateCompanyObservation } = require("./master_db_quality.cjs");
 
 const SOURCE_DEFINITIONS = Object.freeze([
   ["region_catalog", "region", "행정구역·입지 사전", "reference", "on_release", "official"],
@@ -146,7 +147,7 @@ function sourceIdForFile(filePath) {
   if (name === "datalab_trends.json") return "naver_datalab";
   if (["location_card_requests.json", "location_score_overrides.json"].includes(name)) return "admin_manual";
   if (normalized.includes("period_summaries/")) return "kto_datalab_download";
-  if (normalized.includes("tourism_data/cache/")) {
+  if (normalized.includes("tourism_data/cache/") || normalized.includes("tourism_data/evidence/cache_snapshots/")) {
     if (normalized.includes("resource")) return "kto_resource_demand_api";
     if (normalized.includes("diversity")) return "kto_tourism_diversity_api";
     if (normalized.includes("demand") || normalized.includes("strength")) return "kto_demand_strength_api";
@@ -167,6 +168,28 @@ function relativeArtifactPath(filePath, dataDir) {
     return `app/${repoRelative.replace(/\\/g, "/")}`;
   }
   return `external/${path.basename(filePath)}`;
+}
+
+function manifestFileName(value) {
+  if (typeof value === "string") return cleanText(value);
+  if (value && typeof value === "object") return cleanText(value.file || value.path || value.relativePath);
+  return "";
+}
+
+function manifestListedFileNames(manifest = {}) {
+  return [...new Set([
+    ...(Array.isArray(manifest.files) ? manifest.files : []),
+    ...(Array.isArray(manifest.detailJsonFiles) ? manifest.detailJsonFiles : [])
+  ].map(manifestFileName).filter(Boolean))];
+}
+
+function manifestCompletedAt(manifest = {}, manifestPath = "", fallback = "") {
+  return manifest.completedAt
+    || manifest.finishedAt
+    || manifest.collectedAt
+    || fallback
+    || manifest.startedAt
+    || (manifestPath && fs.existsSync(manifestPath) ? fs.statSync(manifestPath).mtime.toISOString() : null);
 }
 
 function artifactType(filePath) {
@@ -1200,10 +1223,17 @@ function importRunManifests(database, dataDir, lookup) {
       categoryCode: inferCategory(manifest.keyword, manifest.searchKeyword),
       raw: manifest
     });
-    const listed = Array.isArray(manifest.files) ? manifest.files : [];
-    const filesComplete = listed.length > 0 && listed.every((name) => fs.existsSync(path.join(path.dirname(manifestPath), name)));
+    const listed = manifestListedFileNames(manifest);
+    const filesComplete = listed.length > 0 && listed.every((name) => {
+      const filePath = path.resolve(path.dirname(manifestPath), name);
+      const relative = path.relative(path.dirname(manifestPath), filePath);
+      return relative && !relative.startsWith("..") && !path.isAbsolute(relative)
+        && fs.existsSync(filePath)
+        && fs.statSync(filePath).isFile()
+        && fs.statSync(filePath).size > 0;
+    });
     const status = filesComplete ? "complete" : "partial";
-    const completedAt = manifest.collectedAt || fs.statSync(manifestPath).mtime.toISOString();
+    const completedAt = manifestCompletedAt(manifest, manifestPath);
     statement.run(
       runId,
       cleanText(manifest.keyword) || runId,
@@ -1225,24 +1255,75 @@ function importRunManifests(database, dataDir, lookup) {
   return manifests.length;
 }
 
-function ensureCompany(database, observation) {
-  const companyId = cleanText(observation.companyKey) || stableId("cmp", observation.companyName, observation.region);
+function observationCompanyId(observation = {}) {
+  const companyKey = cleanText(observation.companyKey);
+  if (/^cmp_place_\d+$/i.test(companyKey)) return companyKey.toLowerCase();
+  const placeIdFromUrl = cleanText(observation.sourceUrl).match(/(?:place|accommodation)\/(\d{5,})/i)?.[1] || "";
+  if (placeIdFromUrl) return `cmp_place_${placeIdFromUrl}`;
+  return stableId("cmp_provisional", "naver_place", observation.companyName, observation.region);
+}
+
+function ensureCompany(database, observation, options = {}) {
+  const companyId = observationCompanyId(observation);
+  const provisional = companyId.startsWith("cmp_provisional_");
+  const promotedCollectedAt = options.promoteCurrent === false ? null : (observation.collectedAt || null);
+  const promotedRunId = options.promoteCurrent === false ? null : (observation.runId || null);
   const existing = database.prepare("SELECT company_id FROM companies WHERE company_id = ?").get(companyId);
-  if (existing) return companyId;
+  if (existing) {
+    database.prepare(`
+      UPDATE companies
+      SET primary_name = CASE
+            WHEN primary_name = '업체명 미확정' AND ? <> '' THEN ?
+            ELSE primary_name
+          END,
+          name_key = CASE
+            WHEN (name_key IS NULL OR name_key = '') AND ? <> '' THEN ?
+            ELSE name_key
+          END,
+          last_seen_at = CASE
+            WHEN ? IS NOT NULL AND (last_seen_at IS NULL OR ? >= last_seen_at) THEN ?
+            ELSE last_seen_at
+          END,
+          latest_run_id = CASE
+            WHEN ? IS NOT NULL AND (last_seen_at IS NULL OR ? >= last_seen_at) THEN COALESCE(?, latest_run_id)
+            ELSE latest_run_id
+          END,
+          updated_at = ?
+      WHERE company_id = ?
+    `).run(
+      cleanText(observation.companyName),
+      cleanText(observation.companyName),
+      normalizeKey(observation.companyName),
+      normalizeKey(observation.companyName),
+      promotedCollectedAt,
+      promotedCollectedAt,
+      promotedCollectedAt,
+      promotedCollectedAt,
+      promotedCollectedAt,
+      promotedRunId,
+      nowIso(),
+      companyId
+    );
+    return companyId;
+  }
   database.prepare(`
     INSERT INTO companies (
       company_id, primary_name, name_key, loose_name_key, business_category_code,
       status, first_seen_at, last_seen_at, latest_run_id, raw_json, updated_at
-    ) VALUES (?, ?, ?, NULL, ?, 'active', ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     companyId,
     cleanText(observation.companyName) || "업체명 미확정",
     normalizeKey(observation.companyName),
     inferCategory(observation.companyName, observation.keyword),
+    provisional ? "review_required" : "active",
     observation.collectedAt || null,
-    observation.collectedAt || null,
-    observation.runId || null,
-    safeJson(redactSensitive({ createdFromObservation: observation.observationId || null })),
+    promotedCollectedAt,
+    promotedRunId,
+    safeJson(redactSensitive({
+      createdFromObservation: observation.observationId || null,
+      identityBasis: provisional ? "name_region_provisional" : "naver_place_id"
+    })),
     nowIso()
   );
   return companyId;
@@ -1276,21 +1357,51 @@ function ensureRunForObservation(database, observation, keywordId, artifactId) {
   return runId;
 }
 
-function importHistoryObservations(database, filePath, artifactId) {
-  if (!filePath) return 0;
-  const observations = readJsonLines(filePath);
+function importHistoryObservationRows(database, observations = [], artifactId, options = {}) {
+  const importedRows = [];
   for (const [observationIndex, observation] of observations.entries()) {
+    if (options.runId && cleanText(observation.runId) !== cleanText(options.runId)) continue;
+    const supply = numberOrNull(observation.supply);
+    const available = numberOrNull(observation.available);
+    const sold = numberOrNull(observation.sold);
+    const defaultDecision = {
+      status: supply === null && available === null && sold === null ? "partial" : "complete",
+      promoteCurrent: true,
+      qualityScore: null,
+      reasons: []
+    };
+    const observationValidator = options.validateObservation === false
+      ? null
+      : (typeof options.validateObservation === "function" ? options.validateObservation : validateCompanyObservation);
+    const validatedDecision = observationValidator
+      ? observationValidator(observation)
+      : null;
+    const decision = validatedDecision && typeof validatedDecision === "object"
+      ? {
+        ...defaultDecision,
+        ...validatedDecision,
+        reasons: Array.isArray(validatedDecision.reasons) ? validatedDecision.reasons : []
+      }
+      : defaultDecision;
+    const status = normalizeStatus(decision.status);
     const keywordId = ensureKeyword(database, observation.keyword || observation.keywordKey, {
       keywordKey: observation.keywordKey,
       categoryCode: inferCategory(observation.keyword),
       raw: { keyword: observation.keyword, keywordKey: observation.keywordKey }
     });
-    const companyId = ensureCompany(database, observation);
+    const companyId = ensureCompany(database, observation, { promoteCurrent: decision.promoteCurrent !== false });
+    const placeId = companyId.match(/^cmp_place_(\d+)$/)?.[1] || "";
+    if (placeId) {
+      storeCompanyExternalIdentity(database, {
+        companyId,
+        providerCode: "naver_place",
+        externalId: placeId,
+        verifiedAt: observation.collectedAt || null,
+        updatedAt: observation.collectedAt || nowIso(),
+        raw: { derivedFromCompanyKey: true, observationId: observation.observationId || null }
+      });
+    }
     const runId = ensureRunForObservation(database, observation, keywordId, artifactId);
-    const supply = numberOrNull(observation.supply);
-    const available = numberOrNull(observation.available);
-    const sold = numberOrNull(observation.sold);
-    const status = supply === null && available === null && sold === null ? "partial" : "complete";
     const imported = upsertCompanyObservation(database, {
       observationId: observation.observationId || stableId("co", runId, companyId, observation.productType, observation.stayDate),
       runId,
@@ -1315,6 +1426,7 @@ function importHistoryObservations(database, filePath, artifactId) {
       confidenceScore: numberOrNull(observation.inventoryConfidenceScore),
       sourceUrl: redactSensitiveText(observation.sourceUrl) || null,
       sourceArtifactId: artifactId,
+      promoteCurrent: decision.promoteCurrent !== false,
       raw: redactSensitive(observation)
     });
     recordImportLedger(database, {
@@ -1323,8 +1435,24 @@ function importHistoryObservations(database, filePath, artifactId) {
       targetTable: "company_observations",
       targetRecordId: imported.observationId
     });
+    importedRows.push({
+      observationId: imported.observationId,
+      inserted: imported.inserted,
+      companyId,
+      keywordId,
+      runId,
+      status,
+      stayDate: observation.stayDate || null,
+      qualityScore: numberOrNull(decision.qualityScore),
+      qualityReasons: decision.reasons
+    });
   }
-  return observations.length;
+  return { count: importedRows.length, rows: importedRows };
+}
+
+function importHistoryObservations(database, filePath, artifactId) {
+  if (!filePath) return 0;
+  return importHistoryObservationRows(database, readJsonLines(filePath), artifactId).count;
 }
 
 function importTrafficMetrics(database, dataDir) {
@@ -1593,7 +1721,7 @@ function insertCollectionRun(database, record) {
       run_id, source_id, run_label, keyword_id, query_text, search_mode, product_mode,
       period_start, period_end, started_at, completed_at, status, status_rank,
       source_artifact_id, raw_json, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(run_id) DO UPDATE SET
       keyword_id = COALESCE(excluded.keyword_id, collection_runs.keyword_id),
       query_text = COALESCE(excluded.query_text, collection_runs.query_text),
@@ -1601,6 +1729,7 @@ function insertCollectionRun(database, record) {
       product_mode = COALESCE(excluded.product_mode, collection_runs.product_mode),
       period_start = COALESCE(excluded.period_start, collection_runs.period_start),
       period_end = COALESCE(excluded.period_end, collection_runs.period_end),
+      started_at = COALESCE(collection_runs.started_at, excluded.started_at),
       completed_at = excluded.completed_at,
       status = CASE WHEN excluded.status_rank >= collection_runs.status_rank THEN excluded.status ELSE collection_runs.status END,
       status_rank = MAX(collection_runs.status_rank, excluded.status_rank),
@@ -1617,6 +1746,7 @@ function insertCollectionRun(database, record) {
     record.productMode || null,
     record.periodStart,
     record.periodEnd,
+    record.startedAt || null,
     record.completedAt,
     status,
     statusRank(status),
@@ -1774,190 +1904,124 @@ function importTourismPeriodSummaries(database, dataDir, lookup) {
 function tourismSourceFromSnapshot(snapshot, filePath) {
   const adapter = cleanText(snapshot.adapter).toLowerCase();
   const normalized = filePath.replace(/\\/g, "/").toLowerCase();
-  if (adapter.includes("demand-strength") || normalized.includes("demand_strength")) return "kto_demand_strength_api";
-  if (adapter.includes("resource") || adapter.includes("res-dem") || normalized.includes("resource_demand")) return "kto_resource_demand_api";
+  if (adapter === "locgo-regn-visitors-v1") return "kto_visitor_api";
+  if (adapter === "area-tar-dem-ds-v1") return "kto_demand_strength_api";
+  if (adapter === "area-tar-res-dem-v3") return "kto_resource_demand_api";
+  if (adapter === "area-tar-div-v3") return "kto_tourism_diversity_api";
+  // Historical snapshots used descriptive adapter names before versions were fixed.
+  if (adapter.includes("demand-strength") || normalized.includes("demand_strength") || normalized.includes("demand-strength")) return "kto_demand_strength_api";
+  if (adapter.includes("resource") || adapter.includes("res-dem") || normalized.includes("resource_demand") || normalized.includes("resource-demand")) return "kto_resource_demand_api";
   if (adapter.includes("diversity") || normalized.includes("diversity")) return "kto_tourism_diversity_api";
   if (adapter.includes("visitor") || adapter.includes("locgo-regn") || normalized.includes("visitor")) return "kto_visitor_api";
   return null;
 }
 
-function metricStatus(snapshotStatus, value) {
-  if (numberOrNull(value) !== null) return "complete";
-  const normalized = normalizeStatus(snapshotStatus);
-  return normalized === "complete" ? "partial" : normalized;
+function metricStatus(snapshotStatus, value, childStatus = "") {
+  const normalizedStatuses = [snapshotStatus, childStatus]
+    .filter((status) => cleanText(status))
+    .map(normalizeStatus);
+  const normalized = normalizedStatuses.length
+    ? normalizedStatuses.reduce((lowest, status) => statusRank(status) < statusRank(lowest) ? status : lowest, "complete")
+    : "pending";
+  if (normalized !== "complete") return normalized;
+  return numberOrNull(value) !== null ? "complete" : "partial";
 }
 
-function importTourismCache(database, dataDir, lookup) {
-  const directory = path.join(dataDir, "tourism_data", "cache");
-  const files = listFilesRecursive(directory, (filePath) => filePath.toLowerCase().endsWith(".json"));
+function importTourismCacheFile(database, filePath, dataDir, lookup, options = {}) {
   let metricCount = 0;
-  for (const filePath of files) {
-    const fallbackSourceId = sourceIdForFile(filePath);
-    let snapshot;
-    try {
-      snapshot = readJson(filePath);
-    } catch (error) {
-      const artifactId = registerArtifact(database, filePath, dataDir, null, fallbackSourceId);
-      recordImportLedger(database, {
-        sourceArtifactId: artifactId,
-        legacyRecordKey: "file:parse",
-        targetTable: "region_metric_observations",
-        importStatus: "rejected",
-        reason: `invalid_json:${cleanText(error.message)}`
-      });
-      continue;
-    }
-    const sourceId = tourismSourceFromSnapshot(snapshot, filePath);
-    if (!sourceId) {
-      const artifactId = registerArtifact(database, filePath, dataDir, null, fallbackSourceId);
-      recordImportLedger(database, {
-        sourceArtifactId: artifactId,
-        legacyRecordKey: "file:source",
-        targetTable: "region_metric_observations",
-        importStatus: "rejected",
-        reason: "unknown_tourism_source"
-      });
-      continue;
-    }
-    const artifactId = registerArtifact(database, filePath, dataDir, null, sourceId);
-    const range = monthRange(snapshot.yearMonth);
-    if (!range.start || !range.end) {
-      recordImportLedger(database, {
-        sourceArtifactId: artifactId,
-        legacyRecordKey: "file:period",
-        targetTable: "region_metric_observations",
-        importStatus: "rejected",
-        reason: "invalid_year_month"
-      });
-      continue;
-    }
-    const collectedAt = deterministicFileTime(filePath, snapshot.collectedAt);
-    const runId = stableId("run", sourceId, snapshot.yearMonth, snapshot.region?.regionKey || "all", artifactId);
-    insertCollectionRun(database, {
-      runId,
-      sourceId,
-      runLabel: `${sourceId} ${snapshot.yearMonth}`,
-      periodStart: range.start,
-      periodEnd: range.end,
-      completedAt: collectedAt,
-      status: snapshot.status,
-      artifactId,
-      raw: {
-        schemaVersion: snapshot.schemaVersion,
-        adapter: snapshot.adapter,
-        regionMapVersion: snapshot.regionMapVersion,
-        status: snapshot.status,
-        reason: snapshot.reason,
-        yearMonth: snapshot.yearMonth,
-        region: snapshot.region || null,
-        quality: snapshot.quality || null,
-        collection: snapshot.collection || null,
-        source: snapshot.source || null,
-        sourceArtifactId: artifactId
-      }
+  const fallbackSourceId = sourceIdForFile(filePath);
+  let snapshot;
+  try {
+    snapshot = readJson(filePath);
+  } catch (error) {
+    const artifactId = registerArtifact(database, filePath, dataDir, null, fallbackSourceId);
+    recordImportLedger(database, {
+      sourceArtifactId: artifactId,
+      legacyRecordKey: "file:parse",
+      targetTable: "region_metric_observations",
+      importStatus: "rejected",
+      reason: `invalid_json:${cleanText(error.message)}`
     });
-    database.prepare("UPDATE source_artifacts SET run_id = ? WHERE artifact_id = ?").run(runId, artifactId);
-    if (Array.isArray(snapshot.allRegions)) {
-      for (const row of snapshot.allRegions) {
-        const regionId = resolveRegionId(row.regionKey, lookup);
-        if (!regionId) {
-          recordImportLedger(database, {
-            sourceArtifactId: artifactId,
-            legacyRecordKey: `${cleanText(row.regionKey) || "unknown"}:${snapshot.yearMonth}:region`,
-            targetTable: "region_metric_observations",
-            importStatus: "skipped",
-            reason: "unmatched_region"
-          });
-          continue;
-        }
-        const values = [
-          ["visitor_days", row.visitorDays, "visitors"],
-          ["visitor_average_daily", row.averageDailyVisitors, "visitors/day"],
-          ["visitor_coverage_rate", row.coverageRate, "ratio"],
-          ["visitor_observed_days", row.observedDays, "days"]
-        ];
-        for (const [metricCode, value, unit] of values) {
-          const numericValue = numberOrNull(value);
-          const status = metricStatus(row.quality?.status || snapshot.status, value);
-          const imported = upsertRegionMetric(database, {
-            runId,
-            regionId,
-            sourceId,
-            metricCode,
-            periodStart: range.start,
-            periodEnd: range.end,
-            valueNum: numericValue,
-            unit,
-            status,
-            collectedAt,
-            sourceArtifactId: artifactId,
-            raw: redactSensitive(row)
-          });
-          recordImportLedger(database, {
-            sourceArtifactId: artifactId,
-            legacyRecordKey: `${row.regionKey}:${snapshot.yearMonth}:${metricCode}`,
-            targetTable: "region_metric_observations",
-            targetRecordId: imported.observationId
-          });
-          metricCount += 1;
-        }
-        for (const [category, value] of Object.entries(row.categoryVisitorDays || {})) {
-          const numericValue = numberOrNull(value);
-          const imported = upsertRegionMetric(database, {
-            runId,
-            regionId,
-            sourceId,
-            metricCode: `visitor_category_${category}`,
-            periodStart: range.start,
-            periodEnd: range.end,
-            valueNum: numericValue,
-            unit: "visitors",
-            status: metricStatus(row.quality?.status || snapshot.status, value),
-            collectedAt,
-            sourceArtifactId: artifactId,
-            raw: redactSensitive(row)
-          });
-          recordImportLedger(database, {
-            sourceArtifactId: artifactId,
-            legacyRecordKey: `${row.regionKey}:${snapshot.yearMonth}:visitor_category_${category}`,
-            targetTable: "region_metric_observations",
-            targetRecordId: imported.observationId
-          });
-          metricCount += 1;
-        }
+    return { filePath, sourceId: fallbackSourceId, artifactId, runId: null, regionId: null, status: "rejected", reason: "invalid_json", metrics: 0 };
+  }
+  const sourceId = tourismSourceFromSnapshot(snapshot, filePath);
+  if (!sourceId) {
+    const artifactId = registerArtifact(database, filePath, dataDir, null, fallbackSourceId);
+    recordImportLedger(database, {
+      sourceArtifactId: artifactId,
+      legacyRecordKey: "file:source",
+      targetTable: "region_metric_observations",
+      importStatus: "rejected",
+      reason: "unknown_tourism_source"
+    });
+    return { filePath, sourceId: fallbackSourceId, artifactId, runId: null, regionId: null, status: "rejected", reason: "unknown_tourism_source", metrics: 0 };
+  }
+  const artifactId = registerArtifact(database, filePath, dataDir, null, sourceId);
+  const range = monthRange(snapshot.yearMonth);
+  if (!range.start || !range.end) {
+    recordImportLedger(database, {
+      sourceArtifactId: artifactId,
+      legacyRecordKey: "file:period",
+      targetTable: "region_metric_observations",
+      importStatus: "rejected",
+      reason: "invalid_year_month"
+    });
+    return { filePath, sourceId, artifactId, runId: null, regionId: null, status: "rejected", reason: "invalid_year_month", metrics: 0 };
+  }
+  const collectedAt = deterministicFileTime(filePath, snapshot.collectedAt);
+  const evidenceHash = database.prepare("SELECT sha256 FROM source_artifacts WHERE artifact_id = ?").get(artifactId)?.sha256 || "";
+  const runId = stableId("run", sourceId, snapshot.yearMonth, snapshot.region?.regionKey || "all", evidenceHash || artifactId);
+  insertCollectionRun(database, {
+    runId,
+    sourceId,
+    runLabel: `${sourceId} ${snapshot.yearMonth}`,
+    periodStart: range.start,
+    periodEnd: range.end,
+    completedAt: collectedAt,
+    status: snapshot.status,
+    artifactId,
+    raw: {
+      schemaVersion: snapshot.schemaVersion,
+      adapter: snapshot.adapter,
+      regionMapVersion: snapshot.regionMapVersion,
+      status: snapshot.status,
+      reason: snapshot.reason,
+      yearMonth: snapshot.yearMonth,
+      region: snapshot.region || null,
+      quality: snapshot.quality || null,
+      collection: snapshot.collection || null,
+      source: snapshot.source || null,
+      sourceArtifactId: artifactId
+    }
+  });
+  database.prepare("UPDATE source_artifacts SET run_id = ? WHERE artifact_id = ?").run(runId, artifactId);
+  if (Array.isArray(snapshot.allRegions)) {
+    for (const row of snapshot.allRegions) {
+      const rowDecision = typeof options.validateRegionRow === "function"
+        ? options.validateRegionRow(row, snapshot)
+        : null;
+      const regionId = resolveRegionId(row.regionKey, lookup);
+      if (!regionId) {
+        recordImportLedger(database, {
+          sourceArtifactId: artifactId,
+          legacyRecordKey: `${cleanText(row.regionKey) || "unknown"}:${snapshot.yearMonth}:region`,
+          targetTable: "region_metric_observations",
+          importStatus: "skipped",
+          reason: "unmatched_region"
+        });
+        continue;
       }
-      continue;
-    }
-    const regionId = resolveRegionId(snapshot.region?.regionKey, lookup);
-    if (!regionId) {
-      recordImportLedger(database, {
-        sourceArtifactId: artifactId,
-        legacyRecordKey: `${cleanText(snapshot.region?.regionKey) || "unknown"}:${snapshot.yearMonth}:region`,
-        targetTable: "region_metric_observations",
-        importStatus: "skipped",
-        reason: "unmatched_region"
-      });
-      continue;
-    }
-    if (!snapshot.operations || typeof snapshot.operations !== "object") {
-      recordImportLedger(database, {
-        sourceArtifactId: artifactId,
-        legacyRecordKey: `${regionId}:${snapshot.yearMonth}:operations`,
-        targetTable: "region_metric_observations",
-        importStatus: "skipped",
-        reason: "missing_operations"
-      });
-      continue;
-    }
-    for (const [operationKey, operation] of Object.entries(snapshot.operations)) {
-      const metrics = Array.isArray(operation?.metrics) ? operation.metrics : [];
-      if (!metrics.length && operation && Object.hasOwn(operation, "overallValue")) {
-        metrics.push({ code: operation.overallCode || "overall", value: operation.overallValue, label: operation.label || operationKey });
-      }
-      for (const metric of metrics) {
-        const value = metric?.value;
+      const values = [
+        ["visitor_days", row.visitorDays, "visitors"],
+        ["visitor_average_daily", row.averageDailyVisitors, "visitors/day"],
+        ["visitor_coverage_rate", row.coverageRate, "ratio"],
+        ["visitor_observed_days", row.observedDays, "days"]
+      ];
+      for (const [metricCode, value, unit] of values) {
         const numericValue = numberOrNull(value);
-        const metricCode = `${operationKey}.${cleanText(metric?.code || metric?.label || "unknown")}`;
+        const status = rowDecision?.status
+          ? normalizeStatus(rowDecision.status)
+          : metricStatus(snapshot.status, value, row.quality?.status);
         const imported = upsertRegionMetric(database, {
           runId,
           regionId,
@@ -1966,28 +2030,125 @@ function importTourismCache(database, dataDir, lookup) {
           periodStart: range.start,
           periodEnd: range.end,
           valueNum: numericValue,
-          valueText: numericValue === null && value !== null && value !== undefined && cleanText(value) ? cleanText(value) : null,
-          unit: "index",
-          status: metricStatus(operation?.status || snapshot.status, value),
+          unit,
+          status,
           collectedAt,
           sourceArtifactId: artifactId,
-          raw: redactSensitive({
-            operationKey,
-            operationStatus: operation?.status || null,
-            operationReason: operation?.reason || null,
-            metric,
-            sourceArtifactId: artifactId
-          })
+          qualityScore: numberOrNull(rowDecision?.qualityScore),
+          promoteCurrent: rowDecision ? rowDecision.promoteCurrent !== false : status === "complete",
+          raw: redactSensitive({ ...row, masterDbValidationReasons: rowDecision?.reasons || [] })
         });
         recordImportLedger(database, {
           sourceArtifactId: artifactId,
-          legacyRecordKey: `${snapshot.region?.regionKey}:${snapshot.yearMonth}:${metricCode}`,
+          legacyRecordKey: `${row.regionKey}:${snapshot.yearMonth}:${metricCode}`,
+          targetTable: "region_metric_observations",
+          targetRecordId: imported.observationId
+        });
+        metricCount += 1;
+      }
+      for (const [category, value] of Object.entries(row.categoryVisitorDays || {})) {
+        const numericValue = numberOrNull(value);
+        const status = rowDecision?.status
+          ? normalizeStatus(rowDecision.status)
+          : metricStatus(snapshot.status, value, row.quality?.status);
+        const imported = upsertRegionMetric(database, {
+          runId,
+          regionId,
+          sourceId,
+          metricCode: `visitor_category_${category}`,
+          periodStart: range.start,
+          periodEnd: range.end,
+          valueNum: numericValue,
+          unit: "visitors",
+          status,
+          collectedAt,
+          sourceArtifactId: artifactId,
+          qualityScore: numberOrNull(rowDecision?.qualityScore),
+          promoteCurrent: rowDecision ? rowDecision.promoteCurrent !== false : status === "complete",
+          raw: redactSensitive({ ...row, masterDbValidationReasons: rowDecision?.reasons || [] })
+        });
+        recordImportLedger(database, {
+          sourceArtifactId: artifactId,
+          legacyRecordKey: `${row.regionKey}:${snapshot.yearMonth}:visitor_category_${category}`,
           targetTable: "region_metric_observations",
           targetRecordId: imported.observationId
         });
         metricCount += 1;
       }
     }
+    return { filePath, sourceId, artifactId, runId, regionId: null, status: normalizeStatus(snapshot.status), reason: snapshot.reason || "", range, collectedAt, metrics: metricCount };
+  }
+  const regionId = resolveRegionId(snapshot.region?.regionKey, lookup);
+  if (!regionId) {
+    recordImportLedger(database, {
+      sourceArtifactId: artifactId,
+      legacyRecordKey: `${cleanText(snapshot.region?.regionKey) || "unknown"}:${snapshot.yearMonth}:region`,
+      targetTable: "region_metric_observations",
+      importStatus: "skipped",
+      reason: "unmatched_region"
+    });
+    return { filePath, sourceId, artifactId, runId, regionId: null, status: "partial", reason: "unmatched_region", range, collectedAt, metrics: 0 };
+  }
+  if (!snapshot.operations || typeof snapshot.operations !== "object") {
+    recordImportLedger(database, {
+      sourceArtifactId: artifactId,
+      legacyRecordKey: `${regionId}:${snapshot.yearMonth}:operations`,
+      targetTable: "region_metric_observations",
+      importStatus: "skipped",
+      reason: "missing_operations"
+    });
+    return { filePath, sourceId, artifactId, runId, regionId, status: "partial", reason: "missing_operations", range, collectedAt, metrics: 0 };
+  }
+  for (const [operationKey, operation] of Object.entries(snapshot.operations)) {
+    const metrics = Array.isArray(operation?.metrics) ? [...operation.metrics] : [];
+    if (!metrics.length && operation && Object.hasOwn(operation, "overallValue")) {
+      metrics.push({ code: operation.overallCode || "overall", value: operation.overallValue, label: operation.label || operationKey });
+    }
+    for (const metric of metrics) {
+      const value = metric?.value;
+      const numericValue = numberOrNull(value);
+      const metricCode = `${operationKey}.${cleanText(metric?.code || metric?.label || "unknown")}`;
+      const status = metricStatus(snapshot.status, value, operation?.status);
+      const imported = upsertRegionMetric(database, {
+        runId,
+        regionId,
+        sourceId,
+        metricCode,
+        periodStart: range.start,
+        periodEnd: range.end,
+        valueNum: numericValue,
+        valueText: numericValue === null && value !== null && value !== undefined && cleanText(value) ? cleanText(value) : null,
+        unit: "index",
+        status,
+        collectedAt,
+        sourceArtifactId: artifactId,
+        promoteCurrent: status === "complete",
+        raw: redactSensitive({
+          operationKey,
+          operationStatus: operation?.status || null,
+          operationReason: operation?.reason || null,
+          metric,
+          sourceArtifactId: artifactId
+        })
+      });
+      recordImportLedger(database, {
+        sourceArtifactId: artifactId,
+        legacyRecordKey: `${snapshot.region?.regionKey}:${snapshot.yearMonth}:${metricCode}`,
+        targetTable: "region_metric_observations",
+        targetRecordId: imported.observationId
+      });
+      metricCount += 1;
+    }
+  }
+  return { filePath, sourceId, artifactId, runId, regionId, status: normalizeStatus(snapshot.status), reason: snapshot.reason || "", range, collectedAt, metrics: metricCount };
+}
+
+function importTourismCache(database, dataDir, lookup) {
+  const directory = path.join(dataDir, "tourism_data", "cache");
+  const files = listFilesRecursive(directory, (filePath) => filePath.toLowerCase().endsWith(".json"));
+  let metricCount = 0;
+  for (const filePath of files) {
+    metricCount += importTourismCacheFile(database, filePath, dataDir, lookup).metrics;
   }
   return { files: files.length, metrics: metricCount };
 }
@@ -2205,6 +2366,9 @@ module.exports = {
   readJsonLines,
   listFilesRecursive,
   collectSourceFiles,
+  manifestFileName,
+  manifestListedFileNames,
+  manifestCompletedAt,
   inspectInputs,
   seedReferenceTables,
   registerArtifact,
@@ -2214,16 +2378,26 @@ module.exports = {
   resolveRegionId,
   importTourismRegionMap,
   importReferenceRecords,
+  inferCategory,
   ensureKeyword,
+  observationCompanyId,
+  ensureCompany,
+  ensureRunForObservation,
   storeCompanyExternalIdentity,
   importCompanies,
   importRunManifests,
+  importHistoryObservationRows,
   importHistoryObservations,
   importTrafficMetrics,
   importDatalabTrends,
   importCrawlTimings,
   importSafeAdminConfig,
+  monthRange,
+  insertCollectionRun,
+  tourismSourceFromSnapshot,
+  metricStatus,
   importTourismPeriodSummaries,
+  importTourismCacheFile,
   importTourismCache,
   databaseCounts,
   applyImport,

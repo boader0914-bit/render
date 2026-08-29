@@ -45,6 +45,14 @@ function safeJson(value) {
   return JSON.stringify(value ?? null);
 }
 
+function observationContentRaw(value) {
+  if (Array.isArray(value)) return value.map(observationContentRaw);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !/^(source_?artifact_?id|artifact_?id)$/i.test(key))
+    .map(([key, item]) => [key, observationContentRaw(item)]));
+}
+
 function stableId(prefix, ...parts) {
   const input = parts.map((part) => cleanText(part)).join("\u001f");
   return `${prefix}_${crypto.createHash("sha256").update(input).digest("hex").slice(0, 24)}`;
@@ -140,6 +148,7 @@ function applySchema(database, options = {}) {
     ON CONFLICT(meta_key) DO UPDATE SET
       meta_value = excluded.meta_value,
       updated_at = excluded.updated_at
+    WHERE master_meta.meta_value <> excluded.meta_value
   `).run(SCHEMA_VERSION, nowIso());
   return { version: SCHEMA_VERSION, checksum };
 }
@@ -177,9 +186,8 @@ function upsertRegionMetric(database, record) {
     unit: record.unit ?? null,
     status,
     collectedAt,
-    sourceArtifactId: record.sourceArtifactId ?? null,
     qualityScore: record.qualityScore ?? null,
-    raw: record.raw ?? null
+    raw: observationContentRaw(record.raw ?? null)
   })));
   const observationId = cleanText(record.observationId) || stableId(
     "rmo",
@@ -224,38 +232,40 @@ function upsertRegionMetric(database, record) {
     rawJson,
     nowIso()
   );
-  database.prepare(`
-    INSERT INTO region_metric_current (
-      region_id, source_id, metric_code, period_start, period_end,
-      observation_id, status_rank, has_value, collected_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(region_id, source_id, metric_code, period_start, period_end) DO UPDATE SET
-      observation_id = excluded.observation_id,
-      status_rank = excluded.status_rank,
-      has_value = excluded.has_value,
-      collected_at = excluded.collected_at,
-      updated_at = excluded.updated_at
-    WHERE excluded.status_rank > region_metric_current.status_rank
-       OR (excluded.status_rank = region_metric_current.status_rank
-           AND (
-             excluded.has_value > region_metric_current.has_value
-             OR (
-               excluded.has_value = region_metric_current.has_value
-               AND excluded.collected_at >= region_metric_current.collected_at
-             )
-           ))
-  `).run(
-    record.regionId,
-    record.sourceId,
-    record.metricCode,
-    record.periodStart,
-    record.periodEnd,
-    observationId,
-    statusRank(status),
-    hasValue,
-    collectedAt,
-    nowIso()
-  );
+  if (record.promoteCurrent !== false) {
+    database.prepare(`
+      INSERT INTO region_metric_current (
+        region_id, source_id, metric_code, period_start, period_end,
+        observation_id, status_rank, has_value, collected_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(region_id, source_id, metric_code, period_start, period_end) DO UPDATE SET
+        observation_id = excluded.observation_id,
+        status_rank = excluded.status_rank,
+        has_value = excluded.has_value,
+        collected_at = excluded.collected_at,
+        updated_at = excluded.updated_at
+      WHERE excluded.status_rank > region_metric_current.status_rank
+         OR (excluded.status_rank = region_metric_current.status_rank
+             AND (
+               excluded.has_value > region_metric_current.has_value
+               OR (
+                 excluded.has_value = region_metric_current.has_value
+                 AND excluded.collected_at >= region_metric_current.collected_at
+               )
+             ))
+    `).run(
+      record.regionId,
+      record.sourceId,
+      record.metricCode,
+      record.periodStart,
+      record.periodEnd,
+      observationId,
+      statusRank(status),
+      hasValue,
+      collectedAt,
+      nowIso()
+    );
+  }
   return { observationId, inserted: Number(result.changes || 0) > 0, contentHash };
 }
 
@@ -280,8 +290,7 @@ function upsertKeywordMetric(database, record) {
     unit: record.unit ?? null,
     status,
     collectedAt,
-    sourceArtifactId: record.sourceArtifactId ?? null,
-    raw: record.raw ?? null
+    raw: observationContentRaw(record.raw ?? null)
   })));
   const observationId = cleanText(record.observationId) || stableId(
     "kmo",
@@ -397,8 +406,7 @@ function upsertCompanyObservation(database, record) {
     confidenceGrade: record.confidenceGrade ?? null,
     confidenceScore: record.confidenceScore ?? null,
     sourceUrl: record.sourceUrl ?? null,
-    sourceArtifactId: record.sourceArtifactId ?? null,
-    raw: record.raw ?? null
+    raw: observationContentRaw(record.raw ?? null)
   })));
   const observationId = cleanText(record.observationId) || stableId(
     "co",
@@ -457,39 +465,41 @@ function upsertCompanyObservation(database, record) {
     rawJson,
     nowIso()
   );
-  database.prepare(`
-    INSERT INTO company_observation_current (
-      company_id, stay_date, product_key, channel_code, inventory_group,
-      source_id, observation_id, status_rank, has_value, collected_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(company_id, stay_date, product_key, channel_code, inventory_group, source_id) DO UPDATE SET
-      observation_id = excluded.observation_id,
-      status_rank = excluded.status_rank,
-      has_value = excluded.has_value,
-      collected_at = excluded.collected_at,
-      updated_at = excluded.updated_at
-    WHERE excluded.status_rank > company_observation_current.status_rank
-       OR (excluded.status_rank = company_observation_current.status_rank
-           AND (
-             excluded.has_value > company_observation_current.has_value
-             OR (
-               excluded.has_value = company_observation_current.has_value
-               AND excluded.collected_at >= company_observation_current.collected_at
-             )
-           ))
-  `).run(
-    record.companyId,
-    stayDate,
-    productKey,
-    channelCode,
-    inventoryGroup,
-    record.sourceId,
-    observationId,
-    statusRank(status),
-    hasValue,
-    collectedAt,
-    nowIso()
-  );
+  if (record.promoteCurrent !== false) {
+    database.prepare(`
+      INSERT INTO company_observation_current (
+        company_id, stay_date, product_key, channel_code, inventory_group,
+        source_id, observation_id, status_rank, has_value, collected_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(company_id, stay_date, product_key, channel_code, inventory_group, source_id) DO UPDATE SET
+        observation_id = excluded.observation_id,
+        status_rank = excluded.status_rank,
+        has_value = excluded.has_value,
+        collected_at = excluded.collected_at,
+        updated_at = excluded.updated_at
+      WHERE excluded.status_rank > company_observation_current.status_rank
+         OR (excluded.status_rank = company_observation_current.status_rank
+             AND (
+               excluded.has_value > company_observation_current.has_value
+               OR (
+                 excluded.has_value = company_observation_current.has_value
+                 AND excluded.collected_at >= company_observation_current.collected_at
+               )
+             ))
+    `).run(
+      record.companyId,
+      stayDate,
+      productKey,
+      channelCode,
+      inventoryGroup,
+      record.sourceId,
+      observationId,
+      statusRank(status),
+      hasValue,
+      collectedAt,
+      nowIso()
+    );
+  }
   return { observationId, inserted: Number(result.changes || 0) > 0, contentHash };
 }
 
@@ -504,6 +514,7 @@ module.exports = {
   normalizeStatus,
   statusRank,
   safeJson,
+  observationContentRaw,
   stableId,
   sha256Buffer,
   sha256File,

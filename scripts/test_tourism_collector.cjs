@@ -274,6 +274,11 @@ async function main() {
 
     const cached = await collector.collect({ keyword: "하동풀빌라", yearMonth: "202606" });
     assert.equal(cached.cache.hit, true);
+    assert.equal(
+      fs.existsSync(path.join(dataDir, "tourism_data", "evidence", "cache_snapshots")),
+      false,
+      "Shadow callback이 없을 때는 immutable cache Evidence I/O가 생기면 안 됩니다."
+    );
 
     const visitorRequests = [];
     const visitorRows = visitorRowsForMonth("202606", [
@@ -283,6 +288,7 @@ async function main() {
     const partialVisitorRows = visitorRowsForMonth("202605", [
       { code: "48860", name: "산청군", values: { "1": 900, "2": 180, "3": 9 } }
     ]).filter((row) => row.baseYmd !== "20260531");
+    const storedVisitorSnapshots = [];
     const visitorCollector = createCollector({
       rootDir: tmp,
       webDir,
@@ -293,6 +299,10 @@ async function main() {
         KTO_TOURISM_VISITOR_PAGE_SIZE: "100"
       },
       now: () => new Date("2026-07-15T00:00:00.000Z"),
+      onSnapshotStored: (payload) => {
+        storedVisitorSnapshots.push(payload);
+        throw new Error("fixture shadow writer failure");
+      },
       fetchImpl: async (requestUrl) => {
         const url = new URL(requestUrl);
         visitorRequests.push(url);
@@ -348,6 +358,12 @@ async function main() {
     });
     assert.equal(visitorSnapshot.ok, true);
     assert.equal(visitorSnapshot.status, "ok");
+    assert.equal(storedVisitorSnapshots.length, 1, "완전한 방문자 월 캐시는 저장 직후 Shadow hook을 한 번 호출해야 합니다.");
+    assert.equal(storedVisitorSnapshots[0].sourceKey, "visitors");
+    assert.equal(fs.existsSync(storedVisitorSnapshots[0].filePath), true);
+    assert.equal(fs.existsSync(storedVisitorSnapshots[0].evidencePath), true);
+    assert.match(storedVisitorSnapshots[0].sha256, /^[a-f0-9]{64}$/);
+    assert.equal(path.basename(storedVisitorSnapshots[0].evidencePath), `${storedVisitorSnapshots[0].sha256}.json`);
     assert.equal(visitorSnapshot.regions.length, 1);
     assert.equal(visitorSnapshot.regions[0].regionKey, "kr_gyeongnam_sancheong");
     assert.equal(visitorSnapshot.regions[0].quality.status, "complete");
