@@ -82,6 +82,9 @@ const CRAWL_TIMING_MAX_ENTRIES = 240;
 const PORT = Number(process.env.PORT || 3210);
 const HOST = process.env.HOST || (IS_RENDER_RUNTIME ? "0.0.0.0" : "127.0.0.1");
 const IS_PRODUCTION_RUNTIME = process.env.NODE_ENV === "production" || IS_RENDER_RUNTIME;
+const RENDER_GIT_COMMIT = /^[0-9a-f]{7,40}$/i.test(String(process.env.RENDER_GIT_COMMIT || "").trim())
+  ? String(process.env.RENDER_GIT_COMMIT).trim().toLowerCase().slice(0, 12)
+  : "local";
 const ADMIN_USERNAME = String(process.env.GLAMPING_ADMIN_USER || process.env.ADMIN_USER || "admin").trim();
 const ADMIN_PASSWORD = String(process.env.GLAMPING_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || "0914").trim();
 const B2B_USERNAME = String(process.env.GLAMPING_B2B_USER || process.env.B2B_USER || "b2b").trim();
@@ -17365,7 +17368,12 @@ async function route(req, res) {
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/api/health") {
       const session = getSession(req);
       if (req.method === "HEAD") return sendHead(res, 200);
-      return send(res, 200, { ok: true, loginRequired: true, ...publicSession(session) });
+      return send(res, 200, {
+        ok: true,
+        loginRequired: true,
+        buildCommit: RENDER_GIT_COMMIT,
+        ...publicSession(session)
+      });
     }
 
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/terms") {

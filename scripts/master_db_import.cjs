@@ -2366,6 +2366,7 @@ module.exports = {
   readJsonLines,
   listFilesRecursive,
   collectSourceFiles,
+  relativeArtifactPath,
   manifestFileName,
   manifestListedFileNames,
   manifestCompletedAt,

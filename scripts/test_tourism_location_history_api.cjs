@@ -418,6 +418,7 @@ async function main() {
       GLAMPING_B2B_ENABLED: "1",
       TOURISM_VISITOR_MONTHLY_SYNC_ENABLED: "0",
       TOURISM_DEMAND_STRENGTH_BACKFILL_ENABLED: "0",
+      RENDER_GIT_COMMIT: "1234567890abcdef1234567890abcdef12345678",
       DATA_GO_KR_VISITOR_SERVICE_KEY: "test-visitor-key",
       DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY: "test-demand-strength-key",
       DATA_GO_KR_RESOURCE_DEMAND_SERVICE_KEY: "test-resource-demand-key",
@@ -432,6 +433,11 @@ async function main() {
 
   try {
     await waitForServer(baseUrl, child, output);
+
+    const health = await getJson(baseUrl, "/api/health");
+    assert.equal(health.response.status, 200);
+    assert.equal(health.body.ok, true);
+    assert.equal(health.body.buildCommit, "1234567890ab");
 
     const unauthenticated = await getJson(
       baseUrl,
