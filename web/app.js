@@ -2189,6 +2189,12 @@ function syncAdminDesktopSecondaryNav() {
   });
 }
 
+function syncB2BSearchPanelVisibility() {
+  // The home search sits outside .tab-panel, so tab classes cannot hide it.
+  if (!els.b2bSearchPanel) return;
+  els.b2bSearchPanel.hidden = isAdminRole() || state.activeTab !== "report";
+}
+
 function syncB2BRegionSecondaryNav() {
   if (!els.b2bRegionSecondaryNav) return;
   const visible = !isAdminRole() && ["map", "demand"].includes(state.activeTab);
@@ -2426,6 +2432,7 @@ function applyRoleUi() {
   });
   syncPrimaryNavButtons();
   syncB2BRegionSecondaryNav();
+  syncB2BSearchPanelVisibility();
   document.querySelectorAll("[data-drawer-tab]").forEach((button) => {
     button.hidden = !allowedTabs.has(button.dataset.drawerTab);
   });
@@ -34715,7 +34722,7 @@ function renderB2BOnboardingPanel() {
 function renderB2BSearchPanel() {
   if (!els.b2bSearchPanel) return;
   const publicMode = !isAdminRole();
-  els.b2bSearchPanel.hidden = !publicMode || state.activeTab !== "report";
+  syncB2BSearchPanelVisibility();
   if (!publicMode) {
     if (els.b2bOnboarding) {
       els.b2bOnboarding.hidden = true;
