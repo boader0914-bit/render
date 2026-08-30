@@ -1,4 +1,4 @@
-const CACHE_VERSION = "lodging-datalab-pwa-v20260830-flat-app-icon-v94";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260830-sa-white-icon-v95";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",
@@ -9,10 +9,10 @@ const APP_SHELL = [
   "/icons/icon-192.png",
   "/icons/icon-512.png",
   "/icons/maskable-512.png",
-  "/favicon.svg?v=20260830",
-  "/icons/icon-192.png?v=20260830",
-  "/icons/icon-512.png?v=20260830",
-  "/icons/maskable-512.png?v=20260830",
+  "/favicon.svg?v=20260830-sa",
+  "/icons/icon-192.png?v=20260830-sa",
+  "/icons/icon-512.png?v=20260830-sa",
+  "/icons/maskable-512.png?v=20260830-sa",
   "/assets/channels/naver.webp",
   "/assets/channels/nol.png",
   "/assets/channels/yeogi.webp",

@@ -1,0 +1,15 @@
+Created with the built-in image generation tool on 2026-08-30.
+User request: a white-background application icon with uppercase SA.
+Generated artwork: app-icon-sa-white-master-20260830.png.
+Deployment PNGs are resized exports; the favicon embeds the matching 64px export.
+App name, application ID, start URL, routes, authentication, collection and data remain unchanged.
+
+Use case: logo-brand, app icon revision.
+Input image 1 is the existing application icon to replace.
+Change the icon to the user's exact request: a WHITE background with uppercase "SA".
+Produce ONE clean square production app icon: pure flat white (#FFFFFF) edge to edge across the entire canvas, and only the two large uppercase Latin letters "SA" in the center, on a single horizontal line. The text must read exactly S then A, with clear separation and excellent legibility at 32px. Use a bold refined geometric sans-serif monogram, with subtly softened corners, in a single solid very dark forest green close to #234F40, consistent with the application's existing green interface. No joined or tangled letters. Center the lettering optically and geometrically.
+The SA lettering should occupy about 60% of the canvas width and 37% of its height. Keep all dark strokes within the central circular safe area of radius 37% of the square width, so circular device masks do not clip the letters. Large clean white breathing room.
+Replace the previous Korean character completely. Keep the simple flat icon purpose, not the previous colors.
+Exact text: "SA". No other text.
+Output: a crisp 1024x1024 square image, front-facing vector-like sharp flat artwork. White background covers every edge and corner. The phone will apply its own rounded icon mask.
+Avoid: Korean characters, BETA, DATA, captions, logos other than SA, roofs, extra symbols, colored background, any gradient or texture, grey or cream background, transparency, border, inset rounded-square panel, shadows, glow, 3D, mockup devices, watermarks, multiple options.
