@@ -452,7 +452,7 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260830-sa-white-icon-v95";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260830-collection-card-fit-v96";
 const expectedAssetVersion = "datalab-20260829-tourism-full-metrics-v74";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(

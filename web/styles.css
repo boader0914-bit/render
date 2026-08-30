@@ -12157,6 +12157,8 @@ a {
 }
 
 .company-card {
+  min-width: 0;
+  max-width: 100%;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
@@ -12707,23 +12709,27 @@ a {
 }
 
 .mini-bars {
+  min-width: 0;
   display: grid;
   gap: 6px;
-  width: max-content;
-  max-width: none;
+  width: 100%;
+  max-width: max(80px, calc(var(--bar-count, 7) * 20px - 6px));
 }
 
 .bar-row {
+  min-width: 0;
   height: 32px;
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(var(--bar-count, 7), minmax(0, 1fr));
   align-items: end;
-  gap: 6px;
-  width: max-content;
+  gap: min(6px, calc(100% / var(--bar-count, 7) / 3));
+  width: 100%;
 }
 
 .bar-stack {
-  width: 14px;
-  min-width: 10px;
+  width: 100%;
+  max-width: 14px;
+  min-width: 0;
   height: 32px;
   display: flex;
   align-items: end;
@@ -12754,7 +12760,8 @@ a {
 
 .bar-stack.missing .bar-track {
   background: rgba(152, 162, 179, 0.18);
-  border: 1px dashed rgba(152, 162, 179, 0.55);
+  outline: 1px dashed rgba(152, 162, 179, 0.55);
+  outline-offset: -1px;
 }
 
 .bar-stack.missing .bar-fill {
@@ -12762,11 +12769,12 @@ a {
 }
 
 .bar-labels {
-  display: grid;
-  grid-template-columns: repeat(var(--bar-count, 7), 14px);
+  min-width: 0;
+  display: flex;
+  justify-content: space-between;
   gap: 6px;
-  width: max-content;
-  max-width: none;
+  width: 100%;
+  max-width: 100%;
   color: var(--muted);
   font-size: 10px;
   line-height: 1;
@@ -12780,11 +12788,11 @@ a {
 }
 
 .bar-labels small:first-child {
-  grid-column: 1;
+  text-align: left;
 }
 
 .bar-labels small:last-child {
-  grid-column: var(--bar-count, 7);
+  text-align: right;
 }
 
 .empty-chart {
@@ -45066,5 +45074,110 @@ body.role-admin .admin-db-company-explorer-list .admin-db-company.admin-db-compa
   body.role-admin .admin-db-company-explorer-list .admin-db-company.admin-db-company-simple {
     min-height: 0;
     padding: 11px;
+  }
+}
+
+/* Collection results retain long-period values and labels inside each card. */
+.company-list {
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.company-card > *,
+.company-card .sales-lines,
+.company-card .b2b-company-chips {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.company-card .company-rank-stack {
+  max-width: 72px;
+}
+
+.company-card :is(
+  .company-title strong,
+  .company-title small,
+  .company-metric strong,
+  .company-metric span,
+  .company-metric small,
+  .company-insight-grid strong,
+  .company-insight-grid span,
+  .company-insight-grid small,
+  .b2b-company-card-summary strong,
+  .b2b-company-card-summary span,
+  .b2b-company-card-summary small,
+  .confidence-badge,
+  .structure-badge,
+  .company-rank-change,
+  .flow-chip-row > span,
+  .reason-chip-row > span,
+  .b2b-company-chips > em,
+  .platform-chip,
+  .sales-line,
+  .price,
+  .price-block span
+),
+.summary-grid .summary-card :is(strong, small) {
+  min-width: 0;
+  max-width: 100%;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.company-card .company-title strong {
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+@media (max-width: 720px) {
+  .company-card:not(.b2b-public-company) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "main"
+      "metric"
+      "chart"
+      "action";
+  }
+
+  .company-card .company-metric {
+    justify-items: start;
+    text-align: left;
+  }
+
+  .company-card:not(.b2b-public-company) .company-action {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .company-card .company-price-platform,
+  .company-card .price-block {
+    justify-items: start;
+  }
+
+  .company-card .platform-chips {
+    justify-content: flex-start;
+  }
+
+  .audit-queue-list {
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .audit-queue-list button,
+  .audit-queue-list button > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .audit-queue-list button :is(strong, em, small) {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 }

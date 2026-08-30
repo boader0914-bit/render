@@ -581,6 +581,7 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   .admin-member-row,
   .admin-delete-row,
   .validation-card,
+  .validation-metric,
   .report-hero,
   .report-card,
   .report-score-card,
@@ -606,6 +607,7 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   .structure-metric-grid > article,
   .structure-submetric-row > article,
   .sheet-panel,
+  .sheet-booking-bars,
   .drawer-panel,
   .collection-archive-hero,
   .collection-archive-empty,
@@ -806,6 +808,99 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
 ) :is(p, small, span, em, li) {
   color: var(--text-secondary) !important;
   text-shadow: none !important;
+}
+
+/* Collection results pair every foreground with the active theme surface. */
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.company-card, .validation-card, .sheet-booking-bars) :is(h3, h4, strong, b):where(:not(.platform-dot)) {
+  color: var(--text-primary) !important;
+  text-shadow: none !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.company-card, .validation-card, .sheet-booking-bars) :is(p, small, span, em) {
+  color: var(--text-secondary) !important;
+  text-shadow: none !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
+  .company-card .rank-badge,
+  .validation-card .audit-rank,
+  .validation-card .structure-summary-strip,
+  .sheet-booking-bars .sheet-booking-bars-head > span
+) {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-selected) !important;
+  background-image: none !important;
+  color: var(--accent-strong) !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .validation-card :is(.audit-status-strip > span, .audit-queue-list em) {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-control) !important;
+  color: var(--text-primary) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .validation-card .audit-queue-list em.good {
+  background: color-mix(in srgb, var(--positive) 10%, var(--surface-card)) !important;
+  color: var(--positive) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .validation-card .audit-queue-list em.watch {
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface-card)) !important;
+  color: var(--warning-strong) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .validation-card .audit-queue-list em.bad {
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface-card)) !important;
+  color: var(--danger-strong) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .company-card .platform-dot {
+  color: #fff !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .run-result-receipt-status[data-ui-status="warning"] {
+  color: var(--warning-strong) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .run-result-receipt-status[data-ui-status="danger"] {
+  color: var(--danger-strong) !important;
+}
+
+/* Sales use one green fill at every rate; missing observations stay unfilled. */
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sheet-booking-bars .sheet-date-bar > em {
+  color: var(--text-secondary) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
+  .mini-bars .bar-track,
+  .weekday-pressure i,
+  .sheet-date-bar > span,
+  .sheet-weekday-bars b
+) {
+  border-color: var(--border-subtle) !important;
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface-card)) !important;
+  background-image: none !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
+  .mini-bars .bar-fill,
+  .weekday-pressure em,
+  .sheet-date-bar > span i,
+  .sheet-weekday-bars i
+) {
+  background: var(--accent) !important;
+  background-image: none !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
+  .mini-bars .bar-stack.missing .bar-track,
+  .sheet-date-bar.missing > span
+) {
+  border-color: var(--text-tertiary) !important;
+  outline-color: var(--text-tertiary) !important;
+  background: var(--surface-control) !important;
 }
 
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .structure-radar-labels text {
