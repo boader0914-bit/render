@@ -34,7 +34,7 @@ html[data-theme-resolved="light"] {
   --warning-strong: #805009;
   --danger: #c54848;
   --danger-strong: #a83c3c;
-  --theme-card-shadow: none;
+  --theme-card-shadow: 0 2px 10px rgba(23, 34, 53, .045);
   --theme-floating-subtle-shadow: 0 8px 18px rgba(23, 34, 53, .075);
   --header-rule: #dce4df;
 }
@@ -184,7 +184,7 @@ html[data-theme-resolved] .theme-mode-button {
 html[data-theme-resolved] .theme-mode-button.active {
   background: var(--surface-selected) !important;
   color: var(--accent-strong) !important;
-  box-shadow: none !important;
+  box-shadow: inset 0 -2px 0 var(--accent) !important;
 }
 
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
@@ -211,20 +211,6 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   transition: var(--ui-transition);
 }
 
-/* Explicit surface attributes must not hide a selected DB card's soft background. */
-html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
-  .admin-db-view-switch,
-  .admin-db-flow-rail,
-  .admin-db-province-card-grid,
-  .admin-db-region-card-grid
-) [data-ui-surface].active,
-html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-interactive="true"].active:hover {
-  border-color: var(--border-subtle) !important;
-  background: var(--surface-selected) !important;
-  color: var(--accent-strong) !important;
-  box-shadow: none !important;
-}
-
 html[data-theme-resolved] body.role-admin .admin-files-collapsible summary::after {
   border-color: var(--border-subtle) !important;
   background: var(--surface-control) !important;
@@ -243,10 +229,10 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   .admin-db-province-card-grid button.active,
   .admin-db-region-card-grid button.active
 ) {
-  border-color: var(--border-subtle) !important;
+  border-color: var(--accent) !important;
   background: var(--surface-selected) !important;
   color: var(--accent-strong) !important;
-  box-shadow: none !important;
+  box-shadow: inset 3px 0 0 var(--accent) !important;
 }
 
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.primary-button, .more-button) {
@@ -808,7 +794,7 @@ html[data-theme-resolved] body.role-admin #adminMemberRequestDashboard :is(butto
  * Admin legacy-component migration.
  * These components predate the surface roles and were painted by ID-scoped
  * navy declarations. Keep the geometry, but map every large surface to the
- * canonical card/control tokens before status colors are applied below.
+ * canonical card/control tokens before status rails are added below.
  */
 html[data-theme-resolved] body.role-admin #adminConsoleDashboard :is(
   .admin-location-score-queue,
@@ -913,10 +899,9 @@ html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] :
   .crawl-purpose-options > button.active,
   .crawl-speed-options > button.active
 ) {
-  border-color: var(--border-subtle) !important;
+  border-color: var(--accent) !important;
   background: var(--surface-selected) !important;
-  box-shadow: none !important;
-  transform: none;
+  box-shadow: inset 3px 0 0 var(--accent) !important;
 }
 
 html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] :is(
@@ -990,9 +975,9 @@ html[data-theme-resolved] body.role-admin #adminRegionAnalysisDashboard :is(
   .admin-region-review-filter-summary button.active,
   .admin-region-audit-filters > button.active
 ) {
-  border-color: var(--border-subtle) !important;
+  border-color: var(--accent) !important;
   background: var(--surface-selected) !important;
-  box-shadow: none !important;
+  box-shadow: inset 3px 0 0 var(--accent) !important;
 }
 
 html[data-theme-resolved] body.role-admin #adminRegionAnalysisDashboard :is(
@@ -1020,10 +1005,10 @@ html[data-theme-resolved] body.role-admin #adminRegionAnalysisDashboard button {
 }
 
 html[data-theme-resolved] body.role-admin #adminRegionAnalysisDashboard button.active {
-  border-color: var(--border-subtle) !important;
+  border-color: var(--accent) !important;
   background: var(--surface-selected) !important;
   color: var(--accent-strong) !important;
-  box-shadow: none !important;
+  box-shadow: inset 3px 0 0 var(--accent) !important;
 }
 
 html[data-theme-resolved] body.role-admin #adminRegionAnalysisDashboard :is(
@@ -1097,44 +1082,26 @@ html[data-theme-resolved] body.role-admin :is(
   box-shadow: none !important;
 }
 
-/* State changes are small signals: keep status labels and colors without side rails. */
+/* State changes are small signals: an inset rail and matching text, never a full-card fill. */
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   [data-ui-surface][data-ui-status="positive"], [data-ui-surface][data-ui-status="good"], [data-ui-surface][data-ui-status="strong"],
   .good, .positive, .success
 ) {
-  box-shadow: none !important;
+  box-shadow: inset 3px 0 0 var(--positive), var(--card-shadow) !important;
 }
 
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   [data-ui-surface][data-ui-status="warning"], [data-ui-surface][data-ui-status="watch"], [data-ui-surface][data-ui-status="caution"], [data-ui-surface][data-ui-status="weak"], [data-ui-surface][data-ui-status="mid"],
   .watch, .warning, .caution
 ) {
-  box-shadow: none !important;
+  box-shadow: inset 3px 0 0 var(--warning), var(--card-shadow) !important;
 }
 
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   [data-ui-surface][data-ui-status="danger"], [data-ui-surface][data-ui-status="risk"], [data-ui-surface][data-ui-status="bad"], [data-ui-surface][data-ui-status="hot"],
   .hot, .bad, .danger, .error
 ) {
-  box-shadow: none !important;
-}
-
-/* Legacy metric and notice cards use one even border instead of a thick side rail. */
-html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
-  .summary-card,
-  .report-metric-grid article,
-  .b2b-brief-metrics article,
-  .b2b-simple-card,
-  .admin-db-metrics article,
-  .admin-kpi-grid article,
-  .company-master-metrics article,
-  .b2b-search-conflict,
-  .location-request-row,
-  .company-queue-log-list article,
-  .demand-signal-card,
-  .run-result-receipt-exception
-) {
-  border-inline-start-width: 1px;
+  box-shadow: inset 3px 0 0 var(--danger), var(--card-shadow) !important;
 }
 
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.good, .positive, .success) > :is(.status, mark, em) { color: var(--positive) !important; }
@@ -1354,9 +1321,9 @@ html[data-theme-resolved] body.role-admin .admin-region-analysis-dashboard {
     place-items: center;
     width: 32px;
     height: 32px;
-    border: 1px solid transparent;
+    border: 1px solid var(--border-subtle);
     border-radius: 10px;
-    background: transparent;
+    background: var(--surface-control);
     color: var(--text-secondary);
     transition: var(--ui-transition);
   }
@@ -1396,11 +1363,14 @@ html[data-theme-resolved] body.role-admin .admin-region-analysis-dashboard {
   }
 
   html[data-theme-resolved] body.role-admin .bottom-nav button:is(:hover, :focus-visible) .admin-nav-icon-shell {
+    border-color: var(--border-strong);
     color: var(--accent-strong);
   }
 
   html[data-theme-resolved] body.role-admin .bottom-nav button.active .admin-nav-icon-shell {
-    color: var(--accent-strong);
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--accent-contrast);
   }
 
   html[data-theme-resolved] body.role-admin .admin-desktop-secondary {
@@ -1463,7 +1433,7 @@ html[data-theme-resolved] body.role-admin .admin-region-analysis-dashboard {
   }
 
   html[data-theme-resolved] body.role-b2b .bottom-nav button.active {
-    box-shadow: none !important;
+    box-shadow: inset 0 -3px 0 var(--accent) !important;
   }
 
   html[data-theme-resolved] body.role-admin .admin-mobile-nav {
@@ -1532,9 +1502,9 @@ html[data-theme-resolved] body.role-admin .admin-region-analysis-dashboard {
   }
 
   html[data-theme-resolved] body.role-admin .admin-mobile-primary button.active {
-    border-color: var(--border-subtle) !important;
+    border-color: var(--border-strong) !important;
     background: var(--surface-selected) !important;
-    box-shadow: none !important;
+    box-shadow: inset 0 -2px 0 var(--accent) !important;
   }
 
   html[data-theme-resolved] body.role-admin .admin-mobile-primary button.active > :is(span, strong) {
@@ -1542,7 +1512,9 @@ html[data-theme-resolved] body.role-admin .admin-region-analysis-dashboard {
   }
 
   html[data-theme-resolved] body.role-admin .admin-mobile-primary button.active .admin-nav-icon-shell {
-    color: var(--accent-strong);
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--accent-contrast);
   }
 
   html[data-theme-resolved] body.role-admin .admin-mobile-secondary {
