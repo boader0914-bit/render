@@ -19865,25 +19865,93 @@ function adminDbFirstFinite(values = [], fallback = 0) {
   return fallback;
 }
 
+function adminDbProvinceIdentity(value = "") {
+  const key = companyKey(value);
+  const entry = ADMIN_DB_PROVINCE_ORDER.find(([label, aliases]) =>
+    [label, ...aliases].some((alias) => companyKey(alias) === key)
+  );
+  return entry ? {
+    provinceLabel: entry[0],
+    provinceKey: entry[1].find((alias) => /^[a-z]+$/.test(alias)) || companyKey(entry[0])
+  } : null;
+}
+
+function adminDbLocalityKey(value = "") {
+  const key = companyKey(value);
+  // The last syllable of 양구 is part of the county name, not a district suffix.
+  return key === "양구" ? key : key.replace(/(?:자치구|시|군|구)$/u, "");
+}
+
+function adminDbCompanyAddressRegion(company = {}) {
+  // Search keywords describe exposure, not the company's physical address.
+  const sources = [
+    ...(company.addresses || []), company.address,
+    ...(company.regions || []), company.region
+  ].filter(Boolean);
+  let provinceOnly = null;
+  for (const source of sources) {
+    const text = String(source).normalize("NFKC").trim();
+    const parts = text.split(/\s+/);
+    let province = adminDbProvinceIdentity(parts[0]);
+    let remainder = parts.slice(1).join(" ");
+    if (!province) {
+      const prefix = ADMIN_DB_PROVINCE_ORDER.flatMap(([, aliases]) => aliases)
+        .filter((alias) => /^[가-힣]+$/u.test(alias))
+        .sort((a, b) => b.length - a.length)
+        .find((alias) => text.startsWith(alias)
+          && /^[가-힣]+?(?:시|군|구)(?:\s|[가-힣]|$)/u.test(text.slice(alias.length)));
+      if (prefix) {
+        province = adminDbProvinceIdentity(prefix);
+        remainder = text.slice(prefix.length).trim();
+      }
+    }
+    if (!province) continue;
+    if (parts.length === 1 && companyKey(parts[0]) === "광주") continue;
+    if (provinceOnly && provinceOnly.provinceKey !== province.provinceKey) continue;
+    const localityLabel = remainder.match(/^([가-힣]+?(?:시|군|구))(?:\s|[가-힣]|$)/u)?.[1]
+      || remainder.split(/\s+/)[0] || "";
+    const parsed = { ...province, localityLabel, localityKey: adminDbLocalityKey(localityLabel) };
+    if (parsed.localityKey) return parsed;
+    provinceOnly ||= parsed;
+  }
+  return provinceOnly;
+}
+
 function adminDbFallbackRegionLabels(company = {}) {
+  const addressRegion = adminDbCompanyAddressRegion(company);
+  if (addressRegion) {
+    return {
+      ...addressRegion,
+      localityLabel: addressRegion.localityLabel || "지역 미확인",
+      regionLabel: addressRegion.localityLabel || addressRegion.provinceLabel,
+      regionKey: `${addressRegion.provinceKey}:${addressRegion.localityKey || "unknown"}`
+    };
+  }
   const raw = [
     ...(company.regions || []),
     ...(company.addresses || [])
   ].find(Boolean) || "";
-  const parts = String(raw).trim().split(/\s+/).filter(Boolean);
-  const provinceLabel = parts[0] || "미분류";
-  const localityLabel = parts[1] || parts[0] || "지역 미확인";
+  const localityLabel = String(raw).trim() || "지역 미확인";
   return {
-    provinceLabel,
+    provinceLabel: "미분류",
     localityLabel,
     regionLabel: localityLabel,
-    provinceKey: companyKey(provinceLabel) || "unknown",
-    regionKey: `${companyKey(provinceLabel) || "unknown"}:${companyKey(localityLabel) || "unknown"}`
+    provinceKey: "unknown",
+    regionKey: `unknown:${adminDbLocalityKey(raw) || "unknown"}`
   };
 }
 
 function adminDbClassifyCompany(company = {}, regions = []) {
-  const matched = regions.find((region) => adminRegionCompanyMatches(region, company));
+  const addressRegion = adminDbCompanyAddressRegion(company);
+  const matches = regions.filter((region) => adminRegionCompanyMatches(region, company, addressRegion));
+  const provinceKeys = new Set(matches.map((region) =>
+    adminDbProvinceIdentity(region.provinceKey || region.provinceLabel)?.provinceKey || "unknown"
+  ));
+  const matched = provinceKeys.size > 1 ? null
+    : (matches.find((region) => region.localityLabel || region.level === "local") || matches[0]);
+  if (addressRegion?.localityKey && matched && !matched.localityLabel && matched.level !== "local") {
+    return { ...adminDbFallbackRegionLabels(company), region: null };
+  }
   if (matched) {
     const provinceLabel = matched.provinceLabel || matched.regionLabel || "미분류";
     const localityLabel = matched.localityLabel || matched.regionLabel || provinceLabel;
@@ -20236,14 +20304,14 @@ function adminDbRows(master = {}) {
 }
 
 const ADMIN_DB_PROVINCE_ORDER = [
-  ["서울", ["서울", "서울특별시", "seoul"]],
-  ["부산", ["부산", "부산광역시", "busan"]],
-  ["대구", ["대구", "대구광역시", "daegu"]],
-  ["인천", ["인천", "인천광역시", "incheon"]],
+  ["서울", ["서울", "서울시", "서울특별시", "seoul"]],
+  ["부산", ["부산", "부산시", "부산광역시", "busan"]],
+  ["대구", ["대구", "대구시", "대구광역시", "daegu"]],
+  ["인천", ["인천", "인천시", "인천광역시", "incheon"]],
   ["광주", ["광주", "광주광역시", "gwangju"]],
-  ["대전", ["대전", "대전광역시", "daejeon"]],
-  ["울산", ["울산", "울산광역시", "ulsan"]],
-  ["세종", ["세종", "세종특별자치시", "sejong"]],
+  ["대전", ["대전", "대전시", "대전광역시", "daejeon"]],
+  ["울산", ["울산", "울산시", "울산광역시", "ulsan"]],
+  ["세종", ["세종", "세종시", "세종특별자치시", "sejong"]],
   ["경기", ["경기", "경기도", "gyeonggi"]],
   ["강원", ["강원", "강원도", "강원특별자치도", "gangwon"]],
   ["충북", ["충북", "충청북도", "chungbuk"]],
@@ -26289,7 +26357,16 @@ function adminRegionMaintenanceTone(profile = {}) {
   return profile.preflightStatus?.tone || (Number(profile.maintenancePriority || 0) >= 80 ? "hot" : "watch");
 }
 
-function adminRegionCompanyMatches(region = {}, company = {}) {
+function adminRegionCompanyMatches(region = {}, company = {}, addressRegion = adminDbCompanyAddressRegion(company)) {
+  if (addressRegion) {
+    const province = adminDbProvinceIdentity(region.provinceKey || region.provinceLabel);
+    if (!province || province.provinceKey !== addressRegion.provinceKey) return false;
+    const locality = region.localityLabel || (region.level === "province" ? "" : region.regionLabel);
+    if (addressRegion.localityKey && locality) {
+      return adminDbLocalityKey(locality) === addressRegion.localityKey;
+    }
+    if (!locality) return true;
+  }
   const regionLabels = [
     region.regionLabel,
     region.localityLabel,

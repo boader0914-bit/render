@@ -17,6 +17,7 @@
     "test:tourism-demand-backfill": "node scripts/test_tourism_demand_strength_backfill_scheduler.cjs",
     "test:tourism-location": "node scripts/test_tourism_location_history_api.cjs",
     "test:region-master": "node scripts/test_administrative_region_master.cjs",
+    "test:company-region": "node scripts/test_regional_operations_classification.cjs && node scripts/test_company_db_region_labels.cjs",
     "test:master-db": "node scripts/test_master_db.cjs",
     "test:master-db-audit": "node scripts/test_master_db_baseline_audit.cjs",
     "test:master-db-incremental": "node scripts/test_master_db_incremental.cjs",
@@ -25,7 +26,7 @@
     "master-db:audit": "node scripts/master_db_baseline_audit.cjs",
     "sync:region-master": "node scripts/sync_region_master.cjs",
     "sync:tourism-region-map": "node scripts/sync_tourism_region_map.cjs",
-    "test": "npm run check && npm run test:master-db && npm run test:master-db-audit && npm run test:master-db-incremental && npm run test:yeogi && npm run test:search-mode && npm run test:naver-ota && npm run test:naver-ota-master && npm run test:tourism && npm run test:tourism-period && npm run test:tourism-monthly-scheduler && npm run test:tourism-demand-backfill && npm run test:tourism-location"
+    "test": "npm run check && npm run test:company-region && npm run test:master-db && npm run test:master-db-audit && npm run test:master-db-incremental && npm run test:yeogi && npm run test:search-mode && npm run test:naver-ota && npm run test:naver-ota-master && npm run test:tourism && npm run test:tourism-period && npm run test:tourism-monthly-scheduler && npm run test:tourism-demand-backfill && npm run test:tourism-location"
   },
   "engines": {
     "node": ">=22.13 <25"

@@ -6870,39 +6870,40 @@ function topicParticle(value = "") {
   return ((code - 0xac00) % 28) ? "은" : "는";
 }
 
-function regionBoundaryInfo(searchRegion = "", addressRegion = "") {
+function regionBoundaryInfo(searchRegion = "", addressRegion = "", address = "") {
   const searchLabel = String(searchRegion || "").trim();
   const addressLabel = String(addressRegion || "").trim();
-  const searchKey = normalizeAdminRegionName(searchLabel);
-  const addressKey = normalizeAdminRegionName(addressLabel);
-  if (!searchKey || !addressKey) {
+  const search = adminRegionClassification(searchLabel);
+  const actual = adminRegionClassification(addressLabel, address);
+  if (search.level === "unknown" || actual.level === "unknown") {
     return { status: "unknown", label: "", detail: "", outside: false };
   }
-  if (searchKey === addressKey) {
-    return { status: "same", label: "동일지역", detail: `${addressLabel || searchLabel} 소재`, outside: false };
+  const actualLabel = actual.level === "local"
+    ? `${actual.provinceLabel} ${actual.localityLabel}`
+    : actual.provinceLabel;
+  if (search.regionKey === actual.regionKey) {
+    return { status: "same", label: "동일지역", detail: `${actualLabel} 소재`, outside: false };
   }
-  if (adminRegionContains(searchKey, addressKey)) {
-    const parentLabel = ADMIN_REGION_GROUPS[searchKey]?.label || searchLabel;
+  if (search.provinceKey === actual.provinceKey && search.level === "province") {
     return {
       status: "within",
       label: "권역 내 노출",
-      detail: `${addressLabel}${topicParticle(addressLabel)} ${parentLabel} 권역에 포함됩니다.`,
+      detail: `${actualLabel}${topicParticle(actualLabel)} ${search.provinceLabel} 권역에 포함됩니다.`,
       outside: false
     };
   }
-  if (adminRegionContains(addressKey, searchKey)) {
-    const parentLabel = ADMIN_REGION_GROUPS[addressKey]?.label || addressLabel;
+  if (search.provinceKey === actual.provinceKey && actual.level === "province") {
     return {
       status: "parent",
       label: "상위권역 확인",
-      detail: `${searchLabel} 검색 결과가 ${parentLabel} 상위권역으로만 확인됩니다.`,
+      detail: `${searchLabel} 검색 결과가 ${actual.provinceLabel} 상위권역으로만 확인됩니다.`,
       outside: false
     };
   }
   return {
     status: "outside",
     label: "권역 밖 노출",
-    detail: `${searchLabel} 검색권 결과이나 실제 소재지는 ${addressLabel}입니다.`,
+    detail: `${searchLabel} 검색권 결과이나 실제 소재지는 ${actualLabel}입니다.`,
     outside: true
   };
 }
@@ -11147,40 +11148,73 @@ function summarizeCompanyCrossKeyword(master) {
   };
 }
 
-function adminRegionClassification(value = "") {
+function adminRegionClassification(value = "", address = "") {
   const rawLabel = String(value || "").trim();
   const normalizedKey = normalizeAdminRegionName(rawLabel);
-  const directGroup = ADMIN_REGION_GROUPS[normalizedKey];
-  if (directGroup) {
+  const canonicalLocality = (provinceKey, text) => {
+    const token = compactKeyword(text).normalize("NFKC");
+    const children = ADMIN_REGION_GROUPS[provinceKey]?.children || [];
+    if (children.includes(token)) return token;
+    const withoutSuffix = token.replace(/[시군구]$/u, "");
+    return children.includes(withoutSuffix) ? withoutSuffix : "";
+  };
+  const classified = (provinceKey, localityLabel = "") => {
+    const group = ADMIN_REGION_GROUPS[provinceKey];
+    const localityKey = canonicalLocality(provinceKey, localityLabel);
     return {
-      regionKey: normalizedKey,
-      regionLabel: directGroup.label,
-      provinceKey: normalizedKey,
-      provinceLabel: directGroup.label,
-      localityKey: "",
-      localityLabel: "",
-      level: "province"
+      regionKey: localityKey ? `${provinceKey}:${localityKey}` : provinceKey,
+      regionLabel: localityLabel || group.label,
+      provinceKey,
+      provinceLabel: group.label,
+      localityKey,
+      localityLabel,
+      level: localityKey ? "local" : "province"
     };
-  }
-
-  for (const [provinceKey, group] of Object.entries(ADMIN_REGION_GROUPS)) {
-    if (adminRegionContains(provinceKey, rawLabel)) {
-      const localityKey = adminRegionToken(rawLabel) || normalizedKey || "unknown";
-      return {
-        regionKey: `${provinceKey}:${localityKey}`,
-        regionLabel: rawLabel || group.label,
-        provinceKey,
-        provinceLabel: group.label,
-        localityKey,
-        localityLabel: rawLabel,
-        level: "local"
-      };
+  };
+  const fromQualifiedText = (text) => {
+    const tokens = String(text || "").normalize("NFKC").trim().split(/\s+/).filter(Boolean);
+    let first = tokens[0] || "";
+    let provinceKey = normalizeAdminRegionName(first);
+    let group = ADMIN_REGION_GROUPS[provinceKey];
+    let localityText = tokens[1] || "";
+    if (!group || (first !== provinceKey && !(group.aliases || []).includes(first))) {
+      const joined = Object.entries(ADMIN_REGION_GROUPS)
+        .flatMap(([key, candidate]) => (candidate.aliases || []).map((alias) => ({ key, alias })))
+        .find(({ key, alias }) => first.startsWith(alias)
+          && first.length > alias.length
+          && canonicalLocality(key, first.slice(alias.length)));
+      if (!joined) return null;
+      localityText = first.slice(joined.alias.length);
+      first = joined.alias;
+      provinceKey = joined.key;
+      group = ADMIN_REGION_GROUPS[provinceKey];
     }
+    const localityKey = canonicalLocality(provinceKey, localityText);
+    const hasLocality = Boolean(localityKey);
+    const ambiguousProvinceAlias = Object.keys(ADMIN_REGION_GROUPS)
+      .some((key) => key !== provinceKey && canonicalLocality(key, first));
+    const explicitProvinceSuffix = /(특별자치도|특별자치시|특별시|광역시|도)$/u.test(first);
+    if (ambiguousProvinceAlias && !explicitProvinceSuffix && !hasLocality) return null;
+    return classified(provinceKey, hasLocality ? localityKey : "");
+  };
+
+  // Keep the address's province: locality names such as 고성 and 중구 are not unique.
+  const qualified = fromQualifiedText(address) || fromQualifiedText(rawLabel);
+  if (qualified) return qualified;
+  const candidates = Object.keys(ADMIN_REGION_GROUPS)
+    .filter((provinceKey) => canonicalLocality(provinceKey, rawLabel));
+  const directGroup = ADMIN_REGION_GROUPS[normalizedKey];
+  if (candidates.length === 1 && (!directGroup || candidates[0] === normalizedKey)) {
+    return classified(candidates[0], rawLabel);
+  }
+  if (directGroup && candidates.length === 0) {
+    return classified(normalizedKey);
   }
 
   const fallbackKey = normalizedKey || adminRegionToken(rawLabel) || "unknown";
+  const ambiguous = candidates.length > 1 || Boolean(directGroup && candidates.length);
   return {
-    regionKey: fallbackKey,
+    regionKey: ambiguous ? `unknown:${adminRegionToken(rawLabel)}` : fallbackKey,
     regionLabel: rawLabel || "지역 미확인",
     provinceKey: "unknown",
     provinceLabel: "기타",
@@ -11268,10 +11302,28 @@ function regionOpsConfidenceGrade(item = {}) {
   ).toUpperCase();
 }
 
+function regionOpsAddress(item = {}) {
+  const addresses = boundedUnique([
+    item.address,
+    ...(Array.isArray(item.companyProfile?.addresses) ? item.companyProfile.addresses : [])
+  ], 20);
+  const first = addresses[0] || "";
+  const firstRegion = adminRegionClassification("", first);
+  if (firstRegion.level !== "province") return first;
+  // A broad address can be refined only by another address in that same province.
+  return addresses.slice(1).find((address) => {
+    const region = adminRegionClassification("", address);
+    return region.level === "local" && region.provinceKey === firstRegion.provinceKey;
+  }) || first;
+}
+
 function regionOpsActualRegionText(item = {}) {
+  const address = regionOpsAddress(item);
+  const region = adminRegionClassification("", address);
   return String(
-    item.addressRegion
-    || addressRegionFromAddress(item.address || "")
+    (region.level === "local" ? region.localityLabel : "")
+    || addressRegionFromAddress(address)
+    || item.addressRegion
     || item.region
     || item.companyProfile?.regions?.[0]
     || item.searchRegion
@@ -11680,15 +11732,9 @@ function buildRegionalOperationsFromItems({ basis = "run", items = [], run = {},
   for (const item of entities.values()) {
     const actualRegion = regionOpsActualRegionText(item);
     const searchRegion = regionOpsSearchRegionText(item, run);
-    const classification = adminRegionClassification(actualRegion || searchRegion || run.provinceLabel);
-    const boundary = item.regionBoundaryStatus
-      ? {
-          status: item.regionBoundaryStatus,
-          label: item.regionBoundaryLabel || "",
-          detail: item.regionBoundaryDetail || "",
-          outside: Boolean(item.outsideSearchRegion)
-        }
-      : regionBoundaryInfo(searchRegion, actualRegion);
+    const address = regionOpsAddress(item);
+    const classification = adminRegionClassification(actualRegion || searchRegion || run.provinceLabel, address);
+    const boundary = regionBoundaryInfo(searchRegion, actualRegion, address);
     const bucket = buckets.get(classification.regionKey) || createRegionalOpsBucket(classification);
     const companyKey = regionOpsEntityKey(item);
     const companyName = regionOpsItemName(item);
@@ -14884,7 +14930,7 @@ function rankingRowBase(row = {}, fallbackRank = 0, source = "overall") {
   const placeId = extractNaverPlaceId(row);
   const searchRegion = rowSearchRegion(row);
   const addressRegion = rowAddressRegion(row);
-  const boundary = regionBoundaryInfo(searchRegion, addressRegion);
+  const boundary = regionBoundaryInfo(searchRegion, addressRegion, row["주소"] || row.address || row.location || "");
   const naverOtaExposures = jsonArrayField(row, ["네이버OTA노출JSON", "naverOtaExposures"]);
   const naverChannelObservation = naverChannelObservationFromItem({ ...row, naverOtaExposures });
   return {
@@ -15108,7 +15154,7 @@ function summarizeAvailabilityRows(rows, baseDir = "") {
     const bookingBusinessId = availabilityBookingBusinessId(row);
     const searchRegion = rowSearchRegion(row);
     const addressRegion = rowAddressRegion(row);
-    const boundary = regionBoundaryInfo(searchRegion, addressRegion);
+    const boundary = regionBoundaryInfo(searchRegion, addressRegion, row["주소"] || row.address || row.location || "");
 
     byPlace.set(key, {
       sourceKey: key,
