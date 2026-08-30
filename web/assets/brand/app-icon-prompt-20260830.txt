@@ -1,0 +1,15 @@
+Created with the built-in image generation tool on 2026-08-30.
+The user supplied a photograph of the previous home-screen icon as a reference.
+The original generated artwork is app-icon-master-20260830.png.
+Deployment PNGs are resized exports; the favicon embeds the matching 64px export.
+App name, application ID, start URL, routes, authentication and collection behavior are unchanged.
+
+Use case: logo-brand.
+Asset type: a production-ready smartphone home-screen icon for an existing Korean lodging data application.
+Input image 1 is a reference of the old installed icon, not a photograph to preserve. Redesign that icon cleanly.
+Primary request: make a polished, simple flat icon that remains clearly legible at 32–64 px. Preserve the Korean identity character "숙" and remove the tiny "BETA DATA" text.
+Design: one large centered Korean Hangul syllable "숙", in warm white, drawn as a bold, refined, slightly rounded geometric monogram. The top consonant can gently suggest a lodging roof, but the complete syllable must remain correctly and immediately readable as "숙". Strong calm proportions, precise spacing, substantial strokes, no hairline details. No extra symbol.
+Palette: a single flat deep forest/sage green background close to #275747 and a warm white mark close to #F7FAF7, consistent with the application's approved clean sage-green interface.
+Composition: one square icon only, edge-to-edge solid green across the ENTIRE image canvas. The centered mark occupies around 55–60 percent of the canvas height; keep all essential strokes inside the central circular safe area of radius 36 percent of the canvas width. No baked-in rounded rectangle, no transparent margins, no outer surrounding page or frame. The device will apply its own icon mask.
+Output: crisp 1024 by 1024 square raster, vector-like sharp flat edges. The ONLY text is exactly "숙".
+Avoid: BETA, DATA, any English text, small labels, captions, multiple alternatives, mockup phones, old blue/cyan gradient, any gradient, shadows, glow, bevel, glass, noise, texture, perspective, photographic artifacts, watermark.
