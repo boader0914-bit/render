@@ -36288,29 +36288,144 @@ function renderSheet() {
       : renderSheetBooking(item);
 }
 
+// Both fixed overlays share one background lock; the last opened dialog owns focus.
+const appOverlayState = { stack: [], inertRoots: new Map(), overflow: "", overflowPriority: "" };
+
+function appOverlayFocusableElements(dialog) {
+  return Array.from(dialog.querySelectorAll("a[href], button, input, select, textarea, summary, [tabindex], [contenteditable]"))
+    .filter((element) => element.tabIndex >= 0 && appOverlayCanFocus(element));
+}
+
+function appOverlayCanFocus(element) {
+  return Boolean(element?.isConnected && typeof element.focus === "function"
+    && !element.matches(":disabled") && !element.closest("[hidden], [inert]")
+    && element.getClientRects().length && !["hidden", "collapse"].includes(window.getComputedStyle(element).visibility));
+}
+
+function focusAppOverlay(entry, preferred = null) {
+  const target = preferred && entry.dialog.contains(preferred) && appOverlayCanFocus(preferred)
+    ? preferred
+    : appOverlayFocusableElements(entry.dialog)[0] || entry.dialog;
+  target.focus({ preventScroll: true });
+}
+
+function syncAppOverlayState() {
+  const active = appOverlayState.stack.at(-1);
+  if (active) {
+    for (const element of document.body.children) {
+      if (!appOverlayState.inertRoots.has(element)) appOverlayState.inertRoots.set(element, element.inert);
+      element.inert = !element.contains(active.root);
+    }
+    document.body.style.setProperty("overflow", "hidden");
+  } else {
+    for (const [element, inert] of appOverlayState.inertRoots) element.inert = inert;
+    appOverlayState.inertRoots.clear();
+    if (appOverlayState.overflow) {
+      document.body.style.setProperty("overflow", appOverlayState.overflow, appOverlayState.overflowPriority);
+    } else {
+      document.body.style.removeProperty("overflow");
+    }
+  }
+  for (const entry of appOverlayState.stack) {
+    entry.dialog.setAttribute("aria-modal", String(entry === active));
+    if (entry === active) entry.root.setAttribute("data-overlay-active", "true");
+    else entry.root.removeAttribute("data-overlay-active");
+  }
+}
+
+function activateAppOverlay(root) {
+  const dialog = root?.querySelector('[role="dialog"]');
+  if (!dialog) return;
+  let entry = appOverlayState.stack.find((current) => current.root === root);
+  if (!entry) {
+    if (!appOverlayState.stack.length) {
+      appOverlayState.overflow = document.body.style.getPropertyValue("overflow");
+      appOverlayState.overflowPriority = document.body.style.getPropertyPriority("overflow");
+    }
+    entry = { root, dialog, returnFocus: document.activeElement };
+  } else {
+    appOverlayState.stack.splice(appOverlayState.stack.indexOf(entry), 1);
+  }
+  appOverlayState.stack.push(entry);
+  root.hidden = false;
+  if (!dialog.hasAttribute("tabindex")) dialog.setAttribute("tabindex", "-1");
+  syncAppOverlayState();
+  focusAppOverlay(entry);
+}
+
+function deactivateAppOverlay(root) {
+  if (!root) return;
+  const index = appOverlayState.stack.findIndex((entry) => entry.root === root);
+  root.hidden = true;
+  root.removeAttribute("data-overlay-active");
+  if (index < 0) return;
+  const wasActive = index === appOverlayState.stack.length - 1;
+  const [entry] = appOverlayState.stack.splice(index, 1);
+  entry.dialog.setAttribute("aria-modal", "false");
+  // If a lower dialog closes first, do not later return focus into that hidden dialog.
+  for (const remaining of appOverlayState.stack) {
+    if (root.contains(remaining.returnFocus)) remaining.returnFocus = entry.returnFocus;
+  }
+  syncAppOverlayState();
+  if (!wasActive) return;
+  const active = appOverlayState.stack.at(-1);
+  if (active) focusAppOverlay(active, entry.returnFocus);
+  else {
+    const target = appOverlayCanFocus(entry.returnFocus) ? entry.returnFocus : document.getElementById("appMain");
+    if (appOverlayCanFocus(target)) target.focus({ preventScroll: true });
+  }
+}
+
+function handleAppOverlayKeydown(event) {
+  const active = appOverlayState.stack.at(-1);
+  // A native showModal() dialog (for example the paste dialog) owns its own trap.
+  if (!active || event.defaultPrevented || document.querySelector("dialog[open]")) return false;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    deactivateAppOverlay(active.root);
+    return true;
+  }
+  if (event.key !== "Tab") return false;
+  const controls = appOverlayFocusableElements(active.dialog);
+  const index = controls.indexOf(document.activeElement);
+  if (!controls.length || index < 0 || (event.shiftKey ? index === 0 : index === controls.length - 1)) {
+    event.preventDefault();
+    const target = event.shiftKey ? controls.at(-1) : controls[0];
+    (target || active.dialog).focus({ preventScroll: true });
+    return true;
+  }
+  return false;
+}
+
+function keepAppOverlayFocus(event) {
+  const active = appOverlayState.stack.at(-1);
+  if (active && !document.querySelector("dialog[open]") && !active.dialog.contains(event.target)) {
+    event.stopPropagation();
+    focusAppOverlay(active);
+  }
+}
+
 function openSheet(index) {
   const item = (state.data?.availability?.items || [])[Number(index)];
   if (!item) return;
   state.selectedItem = item;
   state.selectedSheetTab = "booking";
   renderSheet();
-  els.detailSheet.hidden = false;
-  document.body.style.overflow = "hidden";
+  els.sheetBody.scrollTop = 0;
+  activateAppOverlay(els.detailSheet);
 }
 
 function closeSheet() {
-  els.detailSheet.hidden = true;
-  document.body.style.overflow = "";
+  deactivateAppOverlay(els.detailSheet);
 }
 
 function openDrawer() {
-  els.controlDrawer.hidden = false;
-  document.body.style.overflow = "hidden";
+  activateAppOverlay(els.controlDrawer);
 }
 
 function closeDrawer() {
-  els.controlDrawer.hidden = true;
-  if (els.detailSheet.hidden) document.body.style.overflow = "";
+  deactivateAppOverlay(els.controlDrawer);
 }
 
 function openAdminUserView(event) {
@@ -40040,7 +40155,9 @@ function bindEvents() {
       renderSheet();
     });
   });
+  document.addEventListener("focusin", keepAppOverlayFocus, true);
   document.addEventListener("keydown", (event) => {
+    if (handleAppOverlayKeydown(event)) return;
     const adminDbQuery = event.target.closest?.("[data-admin-db-query]");
     const autocompleteOption = event.target.closest?.("[data-admin-db-autocomplete-option]");
     if (adminDbQuery && event.key === "Enter") {
@@ -40084,9 +40201,6 @@ function bindEvents() {
       openSheet(mapCompany.dataset.openCompany);
       return;
     }
-    if (event.key !== "Escape") return;
-    closeSheet();
-    closeDrawer();
   });
   els.runSelect?.addEventListener("change", (event) => loadRun(event.target.value).catch((error) => {
     setStatus("오류");

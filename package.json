@@ -9,6 +9,7 @@
     "test:yeogi": "node scripts/test_yeogi_import_parser.cjs",
     "test:surface": "node scripts/test_surface_contrast.cjs",
     "test:navigation": "node scripts/test_b2b_navigation.cjs",
+    "test:overlay": "node scripts/test_overlay_lifecycle.cjs",
     "test:search-mode": "node scripts/test_search_mode_classification.cjs",
     "test:naver-ota": "node scripts/test_naver_place_ota_observation.cjs",
     "test:naver-ota-master": "node scripts/test_naver_ota_company_master.cjs",
@@ -27,7 +28,7 @@
     "master-db:audit": "node scripts/master_db_baseline_audit.cjs",
     "sync:region-master": "node scripts/sync_region_master.cjs",
     "sync:tourism-region-map": "node scripts/sync_tourism_region_map.cjs",
-    "test": "npm run check && npm run test:navigation && npm run test:company-region && npm run test:master-db && npm run test:master-db-audit && npm run test:master-db-incremental && npm run test:yeogi && npm run test:search-mode && npm run test:naver-ota && npm run test:naver-ota-master && npm run test:tourism && npm run test:tourism-period && npm run test:tourism-monthly-scheduler && npm run test:tourism-demand-backfill && npm run test:tourism-location"
+    "test": "npm run check && npm run test:navigation && npm run test:overlay && npm run test:company-region && npm run test:master-db && npm run test:master-db-audit && npm run test:master-db-incremental && npm run test:yeogi && npm run test:search-mode && npm run test:naver-ota && npm run test:naver-ota-master && npm run test:tourism && npm run test:tourism-period && npm run test:tourism-monthly-scheduler && npm run test:tourism-demand-backfill && npm run test:tourism-location"
   },
   "engines": {
     "node": ">=22.13 <25"

@@ -11,6 +11,7 @@
   --ui-radius-control: 10px;
   --card-radius: var(--ui-radius-card);
   --control-radius: var(--ui-radius-control);
+  --ui-layer-overlay: 200;
   --ui-transition: background-color 160ms ease-out, border-color 160ms ease-out, color 160ms ease-out, box-shadow 160ms ease-out;
 }
 
@@ -64,9 +65,9 @@ html[data-theme-resolved="dark"] {
   --header-rule: #2a2a2a;
 }
 
-/* Keep legacy report/demand aliases local so role-level dark tokens cannot leak in. */
+/* Resolve legacy aliases at each independently rendered workspace or overlay. */
 html[data-theme-resolved],
-html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.report-body, .demand-dashboard) {
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.report-body, .demand-dashboard, .history-lab, .sheet-panel, .drawer-panel) {
   --bg: var(--app-bg);
   --panel: var(--surface-card);
   --surface: var(--surface-card);
@@ -608,6 +609,48 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   .structure-submetric-row > article,
   .sheet-panel,
   .sheet-booking-bars,
+  .sheet-decision-section,
+  .sheet-flow-grid > div,
+  .sheet-history-grid > div,
+  .sheet-audit-summary > div,
+  .sheet-audit-grid > div,
+  .sheet-audit-criteria > article,
+  .sheet-collection-grid > div,
+  .sheet-b2b-insight,
+  .sheet-b2b-detail,
+  .sheet-b2b-platform,
+  .sheet-b2b-search,
+  .sheet-b2b-booking,
+  .sheet-b2b-boundary,
+  .sheet-b2b-head > strong,
+  .sheet-b2b-platform-grid > div,
+  .sheet-b2b-detail-grid > div,
+  .sheet-b2b-flow-strip > div,
+  .sheet-b2b-evidence-grid > div,
+  .sheet-b2b-note-grid > div,
+  .sheet-b2b-coupon-line,
+  .sheet-b2b-action-list,
+  .sheet-panel .revenue-day-panel,
+  .sheet-panel .revenue-product-panel,
+  .sheet-panel .revenue-day-grid > div,
+  .sheet-panel .revenue-product-list > div,
+  .sheet-panel .manual-correction-evidence > div,
+  .sheet-panel .company-review-history,
+  .sheet-panel .company-resolution-panel,
+  .sheet-panel .company-resolution-grid > div,
+  .sheet-panel .company-recheck-card,
+  .sheet-panel .company-recheck-grid > div,
+  .sheet-panel .b2b-detail-pack,
+  .sheet-panel .b2b-detail-pack-body,
+  .sheet-panel .empty,
+  .sheet-panel .sheet-structure-list > div,
+  .sheet-panel .date-row,
+  .sheet-panel .platform-row,
+  .sheet-panel .search-row,
+  .history-lab,
+  .history-card,
+  .history-metric-grid > article,
+  .history-company-table > button,
   .drawer-panel,
   .collection-archive-hero,
   .collection-archive-empty,
@@ -821,6 +864,191 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.company-card,
   text-shadow: none !important;
 }
 
+/* Detail tabs and cumulative history also render outside the main card tree. */
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.sheet-panel, .drawer-panel, .history-lab) :is(h2, h3, h4, strong, b, label, summary):where(:not(.platform-dot)) {
+  color: var(--text-primary) !important;
+  text-shadow: none !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.sheet-panel, .drawer-panel, .history-lab) :is(p, small, span, em, li):where(:not(.platform-dot)) {
+  color: var(--text-secondary) !important;
+  text-shadow: none !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.sheet-flow-grid, .sheet-history-grid, .history-metric-grid) strong {
+  color: var(--accent-strong) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sheet-panel :is(
+  .sheet-flow-grid > div,
+  .sheet-history-grid > div,
+  .sheet-audit-summary > div,
+  .sheet-audit-grid > div,
+  .sheet-audit-criteria > article,
+  .sheet-collection-grid > div,
+  .sheet-b2b-platform-grid > div,
+  .sheet-b2b-detail-grid > div,
+  .sheet-b2b-flow-strip > div,
+  .sheet-b2b-evidence-grid > div,
+  .sheet-b2b-note-grid > div
+) {
+  background: var(--surface-control) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sheet-panel :is(
+  .sheet-b2b-boundary-chips > *,
+  .sheet-b2b-action-list span,
+  .structure-flag-row > span,
+  .sheet-audit-reasons > span,
+  .company-resolution-head > span,
+  .company-resolution-states > span,
+  .company-profile-keywords > span,
+  .company-recheck-badge,
+  .company-recheck-recommend > button,
+  .company-review-history > div:first-child > span
+) {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-control) !important;
+  color: var(--text-secondary) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sheet-panel .company-resolution-states > span.active {
+  border-color: var(--border-strong) !important;
+  background: var(--surface-selected) !important;
+  color: var(--accent-strong) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sheet-panel .platform-dot {
+  color: #fff !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sheet-panel .platform-row.good > em {
+  color: var(--accent-strong) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sheet-panel .platform-row:is(.watch, .warn) > em {
+  color: var(--warning-strong) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sheet-panel .platform-row.bad > em {
+  color: var(--danger-strong) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.sheet-panel, .drawer-panel) .close-button,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sheet-panel .b2b-detail-pack > summary {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-control) !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sheet-panel .sheet-audit-criteria mark {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-selected) !important;
+  color: var(--accent-strong) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sheet-tabs {
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-control) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sheet-tabs button {
+  background: transparent !important;
+  color: var(--text-secondary) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sheet-tabs button.active {
+  background: var(--surface-selected) !important;
+  color: var(--accent-strong) !important;
+  box-shadow: inset 0 0 0 1px var(--border-strong) !important;
+}
+
+/* Keep explicit review outcomes distinct without relying on pale legacy paint. */
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sheet-panel :is(.structure-badge, .confidence-badge, .company-recheck-badge):is(.good, .strong, .manual-correction) {
+  color: var(--accent-strong) !important;
+  background: color-mix(in srgb, var(--positive) 10%, var(--surface-card)) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sheet-panel :is(.structure-badge, .confidence-badge, .company-recheck-badge):is(.watch, .ota-check) {
+  color: var(--warning-strong) !important;
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface-card)) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sheet-panel :is(.structure-badge, .confidence-badge, .company-recheck-badge):is(.bad, .hot) {
+  color: var(--danger-strong) !important;
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface-card)) !important;
+}
+
+/* Both bottom navigation rows belong behind an open dialog, including on iOS. */
+.detail-sheet,
+.control-drawer {
+  z-index: var(--ui-layer-overlay);
+}
+
+:is(.detail-sheet, .control-drawer)[data-overlay-active="true"] {
+  z-index: calc(var(--ui-layer-overlay) + 1);
+}
+
+.sheet-panel,
+.drawer-panel {
+  max-height: min(90vh, 820px);
+  max-height: min(90dvh, 820px);
+}
+
+.sheet-body {
+  min-width: 0;
+  overscroll-behavior: contain;
+  padding-bottom: calc(26px + env(safe-area-inset-bottom, 0px));
+}
+
+.drawer-panel {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+}
+
+:is(.sheet-panel, .drawer-panel) :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.sheet-panel .sheet-body:focus-visible {
+  outline-offset: -3px;
+}
+
+:is(.sheet-section, .history-lab, .history-layout, .history-card) {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.history-card-head,
+.sheet-decision-head {
+  flex-wrap: wrap;
+}
+
+.history-card-head > *,
+.sheet-decision-head > *,
+.sheet-flow-grid > div > *,
+.sheet-history-grid > div > * {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.sheet-flow-grid strong,
+.sheet-history-grid strong {
+  white-space: normal;
+}
+
+.history-lead-chart,
+.history-timeline {
+  max-width: 100%;
+  overscroll-behavior-x: contain;
+  scrollbar-color: var(--border-strong) var(--surface-control);
+}
+
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   .company-card .rank-badge,
   .validation-card .audit-rank,
@@ -877,7 +1105,11 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   .mini-bars .bar-track,
   .weekday-pressure i,
   .sheet-date-bar > span,
-  .sheet-weekday-bars b
+  .sheet-weekday-bars b,
+  .history-lead-chart span,
+  .history-timeline span,
+  .history-day-bars i,
+  .sheet-panel .date-row .progress
 ) {
   border-color: var(--border-subtle) !important;
   background: color-mix(in srgb, var(--accent) 16%, var(--surface-card)) !important;
@@ -888,7 +1120,11 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   .mini-bars .bar-fill,
   .weekday-pressure em,
   .sheet-date-bar > span i,
-  .sheet-weekday-bars i
+  .sheet-weekday-bars i,
+  .history-lead-chart i,
+  .history-timeline i,
+  .history-day-bars em,
+  .sheet-panel .date-row .progress:not(.missing) > span
 ) {
   background: var(--accent) !important;
   background-image: none !important;
@@ -896,11 +1132,17 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
 
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   .mini-bars .bar-stack.missing .bar-track,
-  .sheet-date-bar.missing > span
+  .sheet-date-bar.missing > span,
+  .sheet-panel .date-row .progress.missing
 ) {
   border-color: var(--text-tertiary) !important;
   outline-color: var(--text-tertiary) !important;
   background: var(--surface-control) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sheet-panel .date-row .progress.missing > span {
+  background: transparent !important;
+  background-image: none !important;
 }
 
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .structure-radar-labels text {

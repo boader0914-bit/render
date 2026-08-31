@@ -452,7 +452,7 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260831-b2b-menu-content-v97";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260901-sheet-history-ui-v98";
 const expectedAssetVersion = "datalab-20260829-tourism-full-metrics-v74";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
@@ -1699,7 +1699,7 @@ assert(
     && server.includes("lastRoutineStatus: checked.status")
     && server.includes("inventoryMode: entry.inventoryMode || \"unknown\"")
     && server.includes('if (key === "not_linked") return "연동 없음";')
-    && server.includes('"not_linked",\n    "needs_manual"'),
+    && /"not_linked",\r?\n\s*"needs_manual"/.test(server),
   "channel correction must hide Naver controls, configure three external channels, expose Yeogi full-screen paste after apply, and preserve manual routine settings",
   failures
 );
