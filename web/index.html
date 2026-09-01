@@ -338,15 +338,21 @@
                 </button>
               </div>
             </section>
-            <label class="field crawl-rank-range-field">
-              <span>수집 범위</span>
-              <span class="crawl-rank-range-control">
-                <b>1위</b>
-                <i aria-hidden="true">~</i>
-                <input id="detailRankEndInput" type="number" value="40" min="1" step="1" inputmode="numeric" aria-label="종료 순위">
-                <b>위</b>
-              </span>
-            </label>
+            <div class="crawl-rank-action-row">
+              <label class="field crawl-rank-range-field">
+                <span>수집 범위</span>
+                <span class="crawl-rank-range-control">
+                  <b>1위</b>
+                  <i aria-hidden="true">~</i>
+                  <input id="detailRankEndInput" type="number" value="40" min="1" step="1" inputmode="numeric" aria-label="종료 순위">
+                  <b>위</b>
+                </span>
+              </label>
+              <div class="crawl-submit-row">
+                <button class="primary-button" type="submit">수집 실행</button>
+                <span id="crawlSubmitMeta">예상 시간 계산 중</span>
+              </div>
+            </div>
             <input id="detailRankRangesInput" type="hidden" value="1-40">
             <div class="crawl-progress is-preview" id="crawlProgress">
               <span class="crawl-spinner" aria-hidden="true"></span>
@@ -363,10 +369,6 @@
                 <span><b id="crawlProgressEta">--:--</b><small>완료 예정</small></span>
               </div>
               <small class="crawl-progress-basis" id="crawlProgressBasis">조건 기반 예상값입니다.</small>
-            </div>
-            <div class="crawl-submit-row">
-              <button class="primary-button" type="submit">수집 실행</button>
-              <span id="crawlSubmitMeta">예상 시간 계산 중</span>
             </div>
             <p class="hint" id="crawlStatus">수집 목적과 범위를 확인한 뒤 실행하세요.</p>
             <p class="legal-inline-notice">수집 실행 전 <a href="/data-collection-notice" target="_blank" rel="noopener">데이터 수집 범위</a>와 <a href="/collection-failure-notice" target="_blank" rel="noopener">수집 실패 가능성</a>을 확인하세요.</p>

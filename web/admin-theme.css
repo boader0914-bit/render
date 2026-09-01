@@ -1293,6 +1293,7 @@ html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] :
 html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] :is(
   .crawl-purpose-options > button,
   .crawl-rank-range-field,
+  .crawl-submit-row,
   .crawl-speed-panel,
   .crawl-speed-options > button,
   .crawl-progress-stages > span,

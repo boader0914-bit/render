@@ -1241,6 +1241,10 @@ const databasePanelMarkup = indexHtml.slice(databasePanelStart, overviewPanelSta
 const collectPanelMarkup = indexHtml.slice(collectPanelStart, archivePanelStart);
 const runResultCardStart = collectPanelMarkup.indexOf('id="runResultAdminCard"');
 const runResultCardMarkup = runResultCardStart >= 0 ? collectPanelMarkup.slice(runResultCardStart) : "";
+const rankActionStart = collectPanelMarkup.indexOf('class="crawl-rank-action-row"');
+const rankActionMarkup = rankActionStart >= 0
+  ? collectPanelMarkup.slice(rankActionStart, collectPanelMarkup.indexOf('id="detailRankRangesInput"', rankActionStart))
+  : "";
 const crawlKeywordCssStart = styles.indexOf(".crawl-keyword-bar {");
 const crawlKeywordCssBlock = crawlKeywordCssStart >= 0
   ? styles.slice(crawlKeywordCssStart, styles.indexOf("\n.field {", crawlKeywordCssStart))
@@ -1248,6 +1252,14 @@ const crawlKeywordCssBlock = crawlKeywordCssStart >= 0
 const runResultDisclosureCssStart = styles.indexOf(".run-result-admin-card {");
 const runResultDisclosureCssBlock = runResultDisclosureCssStart >= 0
   ? styles.slice(runResultDisclosureCssStart, styles.indexOf("\n.run-apply-summary {", runResultDisclosureCssStart))
+  : "";
+const rankActionCssStart = styles.indexOf(".crawl-rank-action-row {");
+const rankActionCssBlock = rankActionCssStart >= 0
+  ? styles.slice(rankActionCssStart, styles.indexOf("\n.crawl-speed-panel {", rankActionCssStart))
+  : "";
+const crawlSubmitCssStart = styles.indexOf(".crawl-submit-row {");
+const crawlSubmitCssBlock = crawlSubmitCssStart >= 0
+  ? styles.slice(crawlSubmitCssStart, styles.indexOf("\n@keyframes crawl-spin", crawlSubmitCssStart))
   : "";
 const recentResultEntryBlock = app.slice(
   app.indexOf("function closeRecentResultDisclosureForFreshEntry()"),
@@ -1306,11 +1318,31 @@ assert(
   collectPanelMarkup.includes('class="crawl-keyword-bar"')
     && collectPanelMarkup.includes('id="crawlKeywordHeading"')
     && collectPanelMarkup.includes('id="keywordInput"')
+    && styles.includes(".admin-stack-collect {\n  grid-template-columns: minmax(0, 1fr)")
     && crawlKeywordCssBlock.includes("grid-template-columns: minmax(62px, 86px) minmax(0, 1fr)")
+    && crawlKeywordCssBlock.includes("width: min(100%, 298px)")
+    && crawlKeywordCssBlock.includes("width: 226px")
     && crawlKeywordCssBlock.includes("height: 54px")
     && crawlKeywordCssBlock.includes("@media (max-width: 860px)")
     && crawlKeywordCssBlock.includes("height: 58px"),
   "collection keyword title and input must share a responsive horizontal row at the main-menu heights",
+  failures
+);
+
+assert(
+  rankActionMarkup.includes('class="field crawl-rank-range-field"')
+    && rankActionMarkup.includes('id="detailRankEndInput"')
+    && rankActionMarkup.includes('class="crawl-submit-row"')
+    && rankActionMarkup.includes('<button class="primary-button" type="submit">수집 실행</button>')
+    && rankActionMarkup.includes('id="crawlSubmitMeta"')
+    && rankActionMarkup.indexOf('id="detailRankEndInput"') < rankActionMarkup.indexOf('type="submit"')
+    && rankActionCssBlock.includes("width: min(100%, 508px)")
+    && rankActionCssBlock.includes("grid-template-columns: minmax(190px, 280px) minmax(160px, 220px)")
+    && crawlSubmitCssBlock.includes("grid-template-rows: minmax(44px, 1fr) auto")
+    && crawlSubmitCssBlock.includes("@media (max-width: 600px)")
+    && crawlSubmitCssBlock.includes("@media (max-width: 360px)")
+    && themeStyles.includes(".crawl-submit-row,"),
+  "collection rank range and submit card must share one responsive action row without changing form behavior",
   failures
 );
 

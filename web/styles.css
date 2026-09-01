@@ -18001,6 +18001,10 @@ a.platform-row:hover {
   gap: 12px;
 }
 
+.admin-stack-collect {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .crawl-keyword-bar {
   min-width: 0;
   min-height: 54px;
@@ -18022,6 +18026,19 @@ a.platform-row:hover {
 .crawl-keyword-field input {
   height: 54px;
   min-height: 54px;
+}
+
+@media (min-width: 861px) {
+  .crawl-keyword-bar {
+    width: min(100%, 298px);
+    grid-template-columns: 62px minmax(0, 226px);
+    justify-content: start;
+  }
+
+  .crawl-keyword-field {
+    width: 226px;
+    max-width: 100%;
+  }
 }
 
 @media (max-width: 860px) {
@@ -18088,7 +18105,17 @@ a.platform-row:hover {
   gap: 10px;
 }
 
+.crawl-rank-action-row {
+  width: min(100%, 508px);
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(190px, 280px) minmax(160px, 220px);
+  align-items: stretch;
+  gap: 8px;
+}
+
 .crawl-rank-range-field {
+  min-width: 0;
   padding: 11px;
   border: 1px solid rgba(121, 184, 255, .22);
   border-radius: 14px;
@@ -18096,11 +18123,12 @@ a.platform-row:hover {
 }
 
 .crawl-rank-range-control {
+  min-width: 0;
   display: grid;
-  grid-template-columns: auto auto minmax(76px, 96px) auto;
+  grid-template-columns: auto auto minmax(42px, 64px) auto;
   align-items: center;
   justify-content: start;
-  gap: 8px;
+  gap: 4px;
 }
 
 .field .crawl-rank-range-control b,
@@ -18114,7 +18142,8 @@ a.platform-row:hover {
 }
 
 .field .crawl-rank-range-control input {
-  width: 96px;
+  width: 100%;
+  min-width: 0;
   min-height: 40px;
   padding: 0 8px;
   text-align: center;
@@ -18413,10 +18442,16 @@ a.platform-row:hover {
 }
 
 .crawl-submit-row {
+  min-width: 0;
   display: grid;
-  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(44px, 1fr) auto;
+  align-items: stretch;
+  gap: 4px;
+  border: 1px solid rgba(121, 184, 255, .22);
+  border-radius: 14px;
+  background: rgba(8, 13, 20, .52);
+  padding: 7px;
 }
 
 .crawl-submit-row .primary-button {
@@ -18426,15 +18461,37 @@ a.platform-row:hover {
 
 .crawl-submit-row span {
   min-width: 0;
-  border: 1px solid #dbeafe;
-  border-radius: 12px;
-  background: #f8fbff;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: #175cd3;
-  padding: 10px 12px;
-  font-size: 12px;
+  padding: 0 2px;
+  font-size: 10px;
   font-weight: 900;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
+  line-height: 1.2;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .crawl-rank-action-row {
+    width: 100%;
+    grid-template-columns: minmax(132px, 1fr) minmax(102px, 116px);
+  }
+}
+
+@media (max-width: 360px) {
+  .crawl-rank-action-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .crawl-submit-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto;
+    align-items: center;
+  }
 }
 
 @keyframes crawl-spin {
