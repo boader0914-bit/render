@@ -88,7 +88,6 @@ const state = {
   dictionaryProvince: "경남",
   dictionaryDetailTab: "basic",
   dictionaryPendingRegion: null,
-  dictionarySyncedRunId: null,
   locationProfiles: {},
   locationProfileLoading: {},
   locationTourismIndexRefresh: {},
@@ -34136,25 +34135,6 @@ function renderLocationDictionary(match = null) {
   );
 }
 
-function syncDictionaryInputToActiveRun(force = false) {
-  if (!els.dictionarySearchInput || !state.data?.run) return "";
-  const keyword = activeKeyword();
-  const runId = state.activeRunId || state.data.run.id || "";
-  if (!keyword) return "";
-  const preserveOpenLocationCard = state.activeTab === "dictionary"
-    && Boolean(state.selectedLocationCard || state.dictionaryPendingRegion);
-  if (force && preserveOpenLocationCard) {
-    state.dictionarySyncedRunId = runId;
-    return els.dictionarySearchInput.value.trim() || state.selectedLocationCard?.searchKeyword || state.dictionaryPendingRegion?.sigungu || "";
-  }
-  if (force || state.dictionarySyncedRunId !== runId) {
-    els.dictionarySearchInput.value = keyword;
-    state.dictionarySyncedRunId = runId;
-    state.selectedLocationCard = null;
-  }
-  return keyword;
-}
-
 function runDictionarySearch(query) {
   if (query && els.dictionarySearchInput) els.dictionarySearchInput.value = query;
   const searchValue = els.dictionarySearchInput?.value?.trim() || "";
@@ -38518,7 +38498,6 @@ async function loadRun(runId) {
     state.securityHardeningAdmin = null;
   }
   if (requestSequence !== loadRunRequestSequence) return null;
-  if (roleAllowsTab("dictionary")) syncDictionaryInputToActiveRun(true);
   if (els.runSelect) els.runSelect.value = runId;
   renderAll();
   if (isAdminRole() && adminDbCompanyIdFromRoute()) handleAdminDbCompanyHash();

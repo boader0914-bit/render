@@ -679,7 +679,6 @@ assert(
     && locationProfileBlock.includes("상세/재고 미관측")
     && locationProfileBlock.includes("부분수집·미관측은 선 단절")
     && locationProfileBlock.includes("기존 내부 입지판단 기준")
-    && app.includes('const preserveOpenLocationCard = state.activeTab === "dictionary"')
     && server.includes('reqUrl.pathname === "/api/tourism-data/location-history"'),
   "the common location profile must lead with exact source-backed evidence and keep missing observations non-zero",
   failures
@@ -901,8 +900,7 @@ assert(
     && app.includes('role="tabpanel"')
     && app.includes('" hidden"')
     && app.includes('state.dictionaryDetailTab = tab')
-    && app.includes('state.dictionaryPendingRegion = card ? null : region')
-    && app.includes('Boolean(state.selectedLocationCard || state.dictionaryPendingRegion)'),
+    && app.includes('state.dictionaryPendingRegion = card ? null : region'),
   "location dictionary must preserve exact province and region selection and expose four state-backed detail tabs",
   failures
 );
@@ -937,7 +935,7 @@ const selectDictionaryProvinceBlock = app.slice(
 );
 const renderLocationDictionaryBlock = app.slice(
   app.indexOf("function renderLocationDictionary("),
-  app.indexOf("function syncDictionaryInputToActiveRun(")
+  app.indexOf("function runDictionarySearch(")
 );
 const dictionaryRegionButtonBlock = app.slice(
   app.indexOf("function dictionaryRegionButton("),
