@@ -18005,6 +18005,24 @@ a.platform-row:hover {
   grid-template-columns: minmax(0, 1fr);
 }
 
+.crawl-query-row {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+}
+
+.crawl-query-row > .crawl-keyword-bar {
+  flex: 0 0 298px;
+}
+
+.crawl-query-row > .crawl-date-grid {
+  min-width: 0;
+  flex: 1 1 300px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .crawl-keyword-bar {
   min-width: 0;
   min-height: 54px;
@@ -18042,6 +18060,12 @@ a.platform-row:hover {
 }
 
 @media (max-width: 860px) {
+  .crawl-query-row > .crawl-keyword-bar,
+  .crawl-query-row > .crawl-date-grid {
+    width: 100%;
+    flex-basis: 100%;
+  }
+
   .crawl-keyword-bar {
     min-height: 58px;
     grid-template-columns: 62px minmax(0, 1fr);
@@ -18213,23 +18237,18 @@ a.platform-row:hover {
 .crawl-progress {
   position: relative;
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "copy status"
+    "meter meter";
   align-items: center;
-  gap: 12px;
+  gap: 8px 14px;
   overflow: hidden;
-  min-height: 148px;
   border: 1px solid #d0d5dd;
-  border-radius: 14px;
-  background: linear-gradient(135deg, #f8fbff 0%, #ffffff 58%, #f7fef9 100%);
-  box-shadow: 0 14px 28px rgba(16, 24, 40, 0.08);
-  padding: 13px;
-}
-
-.crawl-progress.is-preview {
-  min-height: 138px;
-  border-color: #bfdbfe;
-  background: linear-gradient(135deg, #f8fbff 0%, #ffffff 64%, #eef6ff 100%);
-  box-shadow: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #f8fbff 0%, #ffffff 68%, #f7fef9 100%);
+  box-shadow: 0 8px 18px rgba(16, 24, 40, 0.06);
+  padding: 10px 12px;
 }
 
 .crawl-progress[hidden] {
@@ -18241,51 +18260,11 @@ a.platform-row:hover {
   background: linear-gradient(135deg, #fffbeb 0%, #ffffff 62%, #fff7ed 100%);
 }
 
-.crawl-progress::after {
-  content: "";
-  position: absolute;
-  inset: auto 12px 8px 58px;
-  height: 3px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, rgba(49, 130, 246, 0.12), rgba(49, 130, 246, 0.75), rgba(49, 130, 246, 0.12));
-  animation: crawl-sweep 1.25s ease-in-out infinite;
-}
-
-.crawl-progress.is-preview::after {
-  opacity: 0.5;
-  animation: none;
-}
-
-.crawl-progress.is-delayed::after {
-  background: linear-gradient(90deg, rgba(247, 144, 9, 0.12), rgba(247, 144, 9, 0.78), rgba(247, 144, 9, 0.12));
-}
-
-.crawl-spinner {
-  width: 30px;
-  height: 30px;
-  border: 3px solid #dbeafe;
-  border-top-color: var(--blue);
-  border-radius: 999px;
-  animation: crawl-spin 0.8s linear infinite;
-}
-
-.crawl-progress.is-preview .crawl-spinner {
-  border-color: #bfdbfe;
-  border-top-color: #bfdbfe;
-  background: radial-gradient(circle at center, #3182f6 0 4px, transparent 5px);
-  animation: none;
-}
-
-.crawl-progress.is-delayed .crawl-spinner {
-  border-color: #fef0c7;
-  border-top-color: #f79009;
-}
-
 .crawl-progress-copy {
+  grid-area: copy;
   min-width: 0;
   display: grid;
-  gap: 3px;
-  padding-bottom: 5px;
+  gap: 2px;
 }
 
 .crawl-progress-copy strong {
@@ -18296,76 +18275,44 @@ a.platform-row:hover {
 
 .crawl-progress-copy small {
   color: #475467;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.crawl-progress-stages {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
-  gap: 6px;
-}
-
-.crawl-progress-stages span {
-  min-width: 0;
-  border: 1px solid #e4e7ec;
-  border-radius: 9px;
-  background: rgba(255, 255, 255, 0.78);
-  padding: 8px 9px;
-  transition: border-color 0.25s ease, background 0.25s ease, box-shadow 0.25s ease;
-}
-
-.crawl-progress-stages span.done {
-  border-color: #b7e4c7;
-  background: #f6fef9;
-}
-
-.crawl-progress-stages span.active {
-  border-color: #93c5fd;
-  background: #eff6ff;
-  box-shadow: inset 0 0 0 1px rgba(49, 130, 246, 0.16);
-}
-
-.crawl-progress-stages span.planned {
-  border-color: #dbeafe;
-  background: rgba(248, 251, 255, 0.9);
-}
-
-.crawl-progress-stages b,
-.crawl-progress-stages small {
-  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.crawl-progress-stages b {
-  color: #101828;
-  font-size: 12px;
-  font-weight: 900;
+.crawl-progress-status {
+  grid-area: status;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  white-space: nowrap;
 }
 
-.crawl-progress-stages small {
-  margin-top: 2px;
+.crawl-progress-status > b {
+  color: var(--blue-dark);
+  font-size: 17px;
+  font-weight: 950;
+}
+
+.crawl-progress-status > span {
   color: #667085;
-  font-size: 10px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.crawl-progress-status > span strong {
+  color: var(--ink);
+  font-size: inherit;
   font-weight: 900;
-}
-
-.crawl-progress-stages span.done small {
-  color: #12805c;
-}
-
-.crawl-progress-stages span.active small {
-  color: #175cd3;
 }
 
 .crawl-progress-meter {
-  grid-column: 1 / -1;
-  height: 7px;
+  grid-area: meter;
+  height: 5px;
   overflow: hidden;
   border-radius: 999px;
   background: #dbeafe;
@@ -18374,9 +18321,9 @@ a.platform-row:hover {
 .crawl-progress-meter span {
   position: relative;
   display: block;
-  width: 8%;
+  width: 0;
   height: 100%;
-  min-width: 26px;
+  min-width: 0;
   overflow: hidden;
   border-radius: inherit;
   background: linear-gradient(90deg, #2563eb, #12b76a);
@@ -18395,59 +18342,10 @@ a.platform-row:hover {
   animation: crawl-meter-shine 1.5s ease-in-out infinite;
 }
 
-.crawl-progress-numbers {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.crawl-progress-numbers span {
-  min-width: 0;
-  border: 1px solid #dbeafe;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.78);
-  padding: 8px 9px;
-  text-align: left;
-}
-
-.crawl-progress-numbers b,
-.crawl-progress-numbers small {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.crawl-progress-numbers b {
-  color: var(--ink);
-  font-size: 15px;
-  font-weight: 900;
-}
-
-.crawl-progress-numbers small {
-  margin-top: 2px;
-  color: #667085;
-  font-size: 11px;
-  font-weight: 800;
-}
-
-.crawl-progress-basis {
-  grid-column: 1 / -1;
-  color: #667085;
-  font-size: 11px;
-  font-weight: 800;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
 .crawl-submit-row {
   min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(44px, 1fr) auto;
+  display: flex;
   align-items: stretch;
-  gap: 4px;
   border: 1px solid rgba(121, 184, 255, .22);
   border-radius: 14px;
   background: rgba(8, 13, 20, .52);
@@ -18459,20 +18357,16 @@ a.platform-row:hover {
   min-height: 44px;
 }
 
-.crawl-submit-row span {
-  min-width: 0;
-  overflow: hidden;
+.crawl-status-line:empty {
+  display: none;
+}
+
+.crawl-legal-inline {
+  justify-self: start;
   border: 0;
-  border-radius: 0;
   background: transparent;
-  color: #175cd3;
-  padding: 0 2px;
-  font-size: 10px;
-  font-weight: 900;
-  line-height: 1.2;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  padding: 0;
+  font-size: 11px;
 }
 
 @media (max-width: 600px) {
@@ -18487,30 +18381,8 @@ a.platform-row:hover {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .crawl-submit-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-rows: auto;
-    align-items: center;
-  }
-}
-
-@keyframes crawl-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes crawl-sweep {
-  0% {
-    transform: translateX(-36%);
-    opacity: 0.35;
-  }
-  50% {
-    opacity: 1;
-  }
-  100% {
-    transform: translateX(36%);
-    opacity: 0.35;
+  .crawl-query-row > .crawl-date-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -28194,43 +28066,17 @@ body.role-admin .admin-db-company-index {
   color: #dcecff;
 }
 
-body.role-admin .crawl-submit-row span {
-  border-color: rgba(106, 168, 255, .28);
-  background: rgba(106, 168, 255, .12);
-  color: #dcecff;
-}
-
 body.role-admin .crawl-progress-copy small,
-body.role-admin .crawl-progress-basis,
-body.role-admin .crawl-progress-stages small,
-body.role-admin .crawl-progress-numbers small {
+body.role-admin .crawl-progress-status > span {
   color: var(--muted);
 }
 
-body.role-admin .crawl-progress-stages b,
-body.role-admin .crawl-progress-numbers b {
+body.role-admin .crawl-progress-status > span strong {
   color: var(--ink);
 }
 
-body.role-admin .crawl-progress-stages span,
-body.role-admin .crawl-progress-numbers span {
-  border-color: rgba(156, 174, 204, .24);
-  background: #121822;
-}
-
-body.role-admin .crawl-progress-stages span.planned {
-  border-color: rgba(106, 168, 255, .24);
-  background: rgba(106, 168, 255, .08);
-}
-
-body.role-admin .crawl-progress-stages span.active {
-  border-color: rgba(106, 168, 255, .46);
-  background: rgba(106, 168, 255, .14);
-}
-
-body.role-admin .crawl-progress-stages span.done {
-  border-color: rgba(52, 211, 153, .42);
-  background: rgba(52, 211, 153, .12);
+body.role-admin .crawl-progress-status > b {
+  color: #8fc4ff;
 }
 
 body.role-admin .header-user-view,
@@ -30213,51 +30059,17 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
 
 @media (max-width: 560px) {
   .crawl-progress {
-    grid-template-columns: 30px minmax(0, 1fr);
-    padding: 11px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 7px 10px;
+    padding: 9px 10px;
   }
 
-  .crawl-progress::after {
-    inset: auto 10px 8px 50px;
-  }
-
-  .crawl-progress-copy small,
-  .crawl-progress-basis {
+  .crawl-progress-copy small {
     white-space: normal;
   }
 
-  .crawl-progress-stages {
-    display: flex;
-    gap: 6px;
-    overflow-x: auto;
-    padding-bottom: 2px;
-    scrollbar-width: thin;
-  }
-
-  .crawl-progress-stages b,
-  .crawl-progress-stages small {
-    white-space: nowrap;
-  }
-
-  .crawl-progress-stages span {
-    flex: 0 0 120px;
-  }
-
-  .crawl-progress-numbers {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 6px;
-  }
-
-  .crawl-progress-numbers span {
-    padding: 7px 6px;
-  }
-
-  .crawl-progress-numbers b {
-    font-size: 13px;
-  }
-
-  .crawl-progress-numbers small {
-    font-size: 10px;
+  .crawl-progress-status {
+    gap: 7px;
   }
 
   .crawl-speed-panel > div:first-child {
@@ -30271,14 +30083,6 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
 
   .crawl-speed-options {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .crawl-submit-row {
-    grid-template-columns: 1fr;
-  }
-
-  .crawl-submit-row span {
-    text-align: center;
   }
 
   .summary-grid {

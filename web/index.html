@@ -303,22 +303,24 @@
         <section class="admin-section-panel" data-admin-section-panel="collect" aria-label="수집 실행">
         <div class="admin-stack admin-stack-collect">
           <form class="admin-card" id="crawlForm">
-            <div class="crawl-keyword-bar">
-              <h3 id="crawlKeywordHeading">키워드</h3>
-              <label class="field crawl-keyword-field" aria-labelledby="crawlKeywordHeading">
-                <span class="sr-only">키워드</span>
-                <input id="keywordInput" type="text" placeholder="예: 경남 숙소" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" aria-label="키워드" required>
-              </label>
-            </div>
-            <div class="field-grid">
-              <label class="field">
-                <span>시작일</span>
-                <input id="checkInInput" type="date">
-              </label>
-              <label class="field">
-                <span>종료일</span>
-                <input id="checkOutInput" type="date">
-              </label>
+            <div class="crawl-query-row">
+              <div class="crawl-keyword-bar">
+                <h3 id="crawlKeywordHeading">키워드</h3>
+                <label class="field crawl-keyword-field" aria-labelledby="crawlKeywordHeading">
+                  <span class="sr-only">키워드</span>
+                  <input id="keywordInput" type="text" placeholder="예: 경남 숙소" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" aria-label="키워드" required>
+                </label>
+              </div>
+              <div class="field-grid crawl-date-grid">
+                <label class="field">
+                  <span>시작일</span>
+                  <input id="checkInInput" type="date">
+                </label>
+                <label class="field">
+                  <span>종료일</span>
+                  <input id="checkOutInput" type="date">
+                </label>
+              </div>
             </div>
             <input id="searchModeInput" type="hidden" value="keyword">
             <input id="productModeInput" type="hidden" value="all">
@@ -350,28 +352,22 @@
               </label>
               <div class="crawl-submit-row">
                 <button class="primary-button" type="submit">수집 실행</button>
-                <span id="crawlSubmitMeta">예상 시간 계산 중</span>
               </div>
             </div>
             <input id="detailRankRangesInput" type="hidden" value="1-40">
-            <div class="crawl-progress is-preview" id="crawlProgress">
-              <span class="crawl-spinner" aria-hidden="true"></span>
+            <div class="crawl-progress" id="crawlProgress" hidden>
               <div class="crawl-progress-copy">
-                <strong id="crawlProgressTitle">예상 수집 시간</strong>
-                <small id="crawlProgressText">수집 조건을 기준으로 예상 완료 시간을 계산합니다.</small>
+                <strong id="crawlProgressTitle" role="status" aria-live="polite" aria-atomic="true">수집 진행 중</strong>
+                <small id="crawlProgressText">수집을 준비하고 있습니다.</small>
               </div>
-              <div class="crawl-progress-stages" id="crawlProgressStages" aria-label="수집 단계"></div>
-              <div class="crawl-progress-meter" aria-hidden="true"><span id="crawlProgressBar"></span></div>
-              <div class="crawl-progress-numbers" aria-label="수집 예상 시간">
-                <span><b id="crawlProgressPercent">예측중</b><small>진행률</small></span>
-                <span><b id="crawlProgressElapsed">0초</b><small>경과</small></span>
-                <span><b id="crawlProgressRemaining">계산 중</b><small>남은 시간</small></span>
-                <span><b id="crawlProgressEta">--:--</b><small>완료 예정</small></span>
+              <div class="crawl-progress-status" aria-label="수집 진행 상태">
+                <b id="crawlProgressPercent">0%</b>
+                <span>경과 <strong id="crawlProgressElapsed">0초</strong></span>
               </div>
-              <small class="crawl-progress-basis" id="crawlProgressBasis">조건 기반 예상값입니다.</small>
+              <div class="crawl-progress-meter" role="progressbar" aria-label="수집 진행률" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="crawlProgressBar"></span></div>
             </div>
-            <p class="hint" id="crawlStatus">수집 목적과 범위를 확인한 뒤 실행하세요.</p>
-            <p class="legal-inline-notice">수집 실행 전 <a href="/data-collection-notice" target="_blank" rel="noopener">데이터 수집 범위</a>와 <a href="/collection-failure-notice" target="_blank" rel="noopener">수집 실패 가능성</a>을 확인하세요.</p>
+            <p class="hint crawl-status-line" id="crawlStatus" aria-live="polite"></p>
+            <p class="legal-inline-notice crawl-legal-inline"><a href="/data-collection-notice" target="_blank" rel="noopener">수집 범위</a><span aria-hidden="true"> · </span><a href="/collection-failure-notice" target="_blank" rel="noopener">실패 가능성</a></p>
           </form>
 
           <details class="admin-card run-result-admin-card" id="runResultAdminCard">

@@ -1245,6 +1245,14 @@ const rankActionStart = collectPanelMarkup.indexOf('class="crawl-rank-action-row
 const rankActionMarkup = rankActionStart >= 0
   ? collectPanelMarkup.slice(rankActionStart, collectPanelMarkup.indexOf('id="detailRankRangesInput"', rankActionStart))
   : "";
+const crawlProgressStart = collectPanelMarkup.indexOf('id="crawlProgress"');
+const crawlProgressMarkup = crawlProgressStart >= 0
+  ? collectPanelMarkup.slice(crawlProgressStart, collectPanelMarkup.indexOf('id="crawlStatus"', crawlProgressStart))
+  : "";
+const crawlQueryCssStart = styles.indexOf(".crawl-query-row {");
+const crawlQueryCssBlock = crawlQueryCssStart >= 0
+  ? styles.slice(crawlQueryCssStart, styles.indexOf("\n.field {", crawlQueryCssStart))
+  : "";
 const crawlKeywordCssStart = styles.indexOf(".crawl-keyword-bar {");
 const crawlKeywordCssBlock = crawlKeywordCssStart >= 0
   ? styles.slice(crawlKeywordCssStart, styles.indexOf("\n.field {", crawlKeywordCssStart))
@@ -1259,8 +1267,32 @@ const rankActionCssBlock = rankActionCssStart >= 0
   : "";
 const crawlSubmitCssStart = styles.indexOf(".crawl-submit-row {");
 const crawlSubmitCssBlock = crawlSubmitCssStart >= 0
-  ? styles.slice(crawlSubmitCssStart, styles.indexOf("\n@keyframes crawl-spin", crawlSubmitCssStart))
+  ? styles.slice(crawlSubmitCssStart, styles.indexOf("\n@keyframes crawl-meter-shine", crawlSubmitCssStart))
   : "";
+const crawlProgressCssStart = styles.indexOf(".crawl-progress {");
+const crawlProgressCssBlock = crawlProgressCssStart >= 0
+  ? styles.slice(crawlProgressCssStart, styles.indexOf("\n.crawl-submit-row {", crawlProgressCssStart))
+  : "";
+const readinessPreviewBlock = app.slice(
+  app.indexOf("function renderCrawlReadinessPreview()"),
+  app.indexOf("function b2bSearchStageRows", app.indexOf("function renderCrawlReadinessPreview()"))
+);
+const updateCrawlProgressBlock = app.slice(
+  app.indexOf("function updateCrawlProgressNumbers("),
+  app.indexOf("function setCrawlProgress", app.indexOf("function updateCrawlProgressNumbers("))
+);
+const setCrawlProgressBlock = app.slice(
+  app.indexOf("function setCrawlProgress("),
+  app.indexOf("function formatElapsed", app.indexOf("function setCrawlProgress("))
+);
+const crawlFormatElapsedBlock = app.slice(
+  app.indexOf("function formatElapsed("),
+  app.indexOf("function clearCrawlStatusTimer", app.indexOf("function formatElapsed("))
+);
+const crawlStatusPollBlock = app.slice(
+  app.indexOf("async function pollCrawlStatusUntilIdle("),
+  app.indexOf("function normalizeVisitRegion", app.indexOf("async function pollCrawlStatusUntilIdle("))
+);
 const recentResultEntryBlock = app.slice(
   app.indexOf("function closeRecentResultDisclosureForFreshEntry()"),
   app.indexOf("function ensureLatestCollectionResult", app.indexOf("function closeRecentResultDisclosureForFreshEntry()"))
@@ -1314,11 +1346,77 @@ assert(
   failures
 );
 
+const crawlProgressClasses = new Set();
+const crawlProgressMeter = { value: "", setAttribute(name, value) { if (name === "aria-valuenow") this.value = value; } };
+const crawlProgressBehaviorContext = {
+  state: { crawlProgressRunning: false },
+  els: {
+    crawlProgress: {
+      hidden: true,
+      classList: {
+        toggle(name, force) { if (force) crawlProgressClasses.add(name); else crawlProgressClasses.delete(name); },
+        remove(...names) { names.forEach((name) => crawlProgressClasses.delete(name)); }
+      }
+    },
+    crawlProgressTitle: { textContent: "수집 진행 중" },
+    crawlProgressText: { textContent: "" },
+    crawlProgressPercent: { textContent: "" },
+    crawlProgressElapsed: { textContent: "" },
+    crawlProgressBar: { style: {}, closest() { return crawlProgressMeter; } }
+  }
+};
+vm.runInNewContext(
+  `${updateCrawlProgressBlock}\n${setCrawlProgressBlock}\n${crawlFormatElapsedBlock}\nthis.setCrawlProgressForTest = setCrawlProgress;`,
+  crawlProgressBehaviorContext
+);
+crawlProgressBehaviorContext.setCrawlProgressForTest(
+  true,
+  "수집 실행 중",
+  "기본정보 수집 · 1-40위",
+  { estimatedProgress: 37, elapsedSeconds: 90, currentStage: { label: "순위 수집" } }
+);
+const activeCrawlProgressBehavior = {
+  running: crawlProgressBehaviorContext.state.crawlProgressRunning,
+  hidden: crawlProgressBehaviorContext.els.crawlProgress.hidden,
+  title: crawlProgressBehaviorContext.els.crawlProgressTitle.textContent,
+  percent: crawlProgressBehaviorContext.els.crawlProgressPercent.textContent,
+  elapsed: crawlProgressBehaviorContext.els.crawlProgressElapsed.textContent,
+  width: crawlProgressBehaviorContext.els.crawlProgressBar.style.width,
+  aria: crawlProgressMeter.value,
+  activeClass: crawlProgressClasses.has("is-running")
+};
+crawlProgressBehaviorContext.setCrawlProgressForTest(false);
+
 assert(
-  collectPanelMarkup.includes('class="crawl-keyword-bar"')
+  activeCrawlProgressBehavior.running
+    && !activeCrawlProgressBehavior.hidden
+    && activeCrawlProgressBehavior.title === "순위 수집 진행 중"
+    && activeCrawlProgressBehavior.percent === "37%"
+    && activeCrawlProgressBehavior.elapsed === "1분 30초"
+    && activeCrawlProgressBehavior.width === "37%"
+    && activeCrawlProgressBehavior.aria === "37"
+    && activeCrawlProgressBehavior.activeClass
+    && !crawlProgressBehaviorContext.state.crawlProgressRunning
+    && crawlProgressBehaviorContext.els.crawlProgress.hidden
+    && crawlProgressBehaviorContext.els.crawlProgressPercent.textContent === "0%",
+  "collection progress must transition idle-active-idle and expose the first live stage immediately",
+  failures
+);
+
+assert(
+  collectPanelMarkup.includes('class="crawl-query-row"')
+    && collectPanelMarkup.includes('class="crawl-keyword-bar"')
+    && collectPanelMarkup.includes('class="field-grid crawl-date-grid"')
     && collectPanelMarkup.includes('id="crawlKeywordHeading"')
     && collectPanelMarkup.includes('id="keywordInput"')
+    && collectPanelMarkup.indexOf('id="keywordInput"') < collectPanelMarkup.indexOf('id="checkInInput"')
+    && collectPanelMarkup.indexOf('id="checkInInput"') < collectPanelMarkup.indexOf('id="checkOutInput"')
     && styles.includes(".admin-stack-collect {\n  grid-template-columns: minmax(0, 1fr)")
+    && crawlQueryCssBlock.includes("display: flex")
+    && crawlQueryCssBlock.includes("flex-wrap: wrap")
+    && crawlQueryCssBlock.includes("flex: 0 0 298px")
+    && crawlQueryCssBlock.includes("flex: 1 1 300px")
+    && crawlQueryCssBlock.includes("grid-template-columns: repeat(2, minmax(0, 1fr))")
     && crawlKeywordCssBlock.includes("grid-template-columns: minmax(62px, 86px) minmax(0, 1fr)")
     && crawlKeywordCssBlock.includes("width: min(100%, 298px)")
     && crawlKeywordCssBlock.includes("width: 226px")
@@ -1334,15 +1432,56 @@ assert(
     && rankActionMarkup.includes('id="detailRankEndInput"')
     && rankActionMarkup.includes('class="crawl-submit-row"')
     && rankActionMarkup.includes('<button class="primary-button" type="submit">수집 실행</button>')
-    && rankActionMarkup.includes('id="crawlSubmitMeta"')
+    && !rankActionMarkup.includes('id="crawlSubmitMeta"')
     && rankActionMarkup.indexOf('id="detailRankEndInput"') < rankActionMarkup.indexOf('type="submit"')
     && rankActionCssBlock.includes("width: min(100%, 508px)")
     && rankActionCssBlock.includes("grid-template-columns: minmax(190px, 280px) minmax(160px, 220px)")
-    && crawlSubmitCssBlock.includes("grid-template-rows: minmax(44px, 1fr) auto")
+    && crawlSubmitCssBlock.includes("display: flex")
     && crawlSubmitCssBlock.includes("@media (max-width: 600px)")
     && crawlSubmitCssBlock.includes("@media (max-width: 360px)")
     && themeStyles.includes(".crawl-submit-row,"),
   "collection rank range and submit card must share one responsive action row without changing form behavior",
+  failures
+);
+
+assert(
+  /^id="crawlProgress" hidden>/.test(crawlProgressMarkup)
+    && crawlProgressMarkup.includes('id="crawlProgressTitle"')
+    && crawlProgressMarkup.includes('role="status" aria-live="polite" aria-atomic="true"')
+    && crawlProgressMarkup.includes('id="crawlProgressText"')
+    && crawlProgressMarkup.includes('id="crawlProgressPercent"')
+    && crawlProgressMarkup.includes('id="crawlProgressElapsed"')
+    && crawlProgressMarkup.includes('role="progressbar"')
+    && crawlProgressMarkup.includes('aria-valuenow="0"')
+    && !/(crawlProgressRemaining|crawlProgressEta|crawlProgressBasis|crawlProgressStages|crawlSubmitMeta|남은 시간|완료 예정|조건 기반 예상값|예상 수집 시간)/.test(crawlProgressMarkup)
+    && crawlProgressCssBlock.includes("grid-template-areas:")
+    && crawlProgressCssBlock.includes("height: 5px")
+    && crawlProgressCssBlock.includes(".crawl-progress[hidden]")
+    && !/(min-height:\s*1(?:38|48)px|crawl-progress-stages|crawl-progress-numbers|crawl-progress-basis|crawl-spinner)/.test(crawlProgressCssBlock),
+  "collection progress must stay hidden while idle and show only stage, progress, elapsed time, and one slim meter",
+  failures
+);
+
+assert(
+  ensureCrawlControlsBlock.includes("progress.hidden = true")
+    && ensureCrawlControlsBlock.includes('role="status" aria-live="polite" aria-atomic="true"')
+    && !/(crawlProgressRemaining|crawlProgressEta|crawlProgressBasis|crawlProgressStages|crawlSubmitMeta|crawl-spinner|crawl-progress-numbers)/.test(ensureCrawlControlsBlock)
+    && readinessPreviewBlock.includes("els.crawlProgress.hidden = true")
+    && !readinessPreviewBlock.includes("els.crawlProgress.hidden = false")
+    && setCrawlProgressBlock.indexOf("state.crawlProgressRunning = Boolean(active)") < setCrawlProgressBlock.indexOf("if (!els.crawlProgress) return")
+    && setCrawlProgressBlock.includes("els.crawlProgress.hidden = true")
+    && setCrawlProgressBlock.includes("els.crawlProgress.hidden = false")
+    && setCrawlProgressBlock.includes("meta.currentStage?.label")
+    && setCrawlProgressBlock.includes('`${currentStageLabel} 진행 중`')
+    && updateCrawlProgressBlock.includes('setAttribute("aria-valuenow"')
+    && !/(crawlProgressRemaining|crawlProgressEta|crawlProgressBasis|crawlProgressStages|crawlSubmitMeta)/.test(updateCrawlProgressBlock)
+    && !crawlStatusPollBlock.includes("const estimate = crawlEstimateInlineText(status)")
+    && crawlStatusPollBlock.includes('els.crawlStatus.textContent = ""')
+    && app.includes('function revealActiveCrawlProgressOnMobile()')
+    && app.includes('window.matchMedia("(max-width: 860px)").matches')
+    && app.includes('els.crawlProgress.scrollIntoView({ behavior: "smooth", block: "center" })')
+    && submitCrawlBlock.includes("revealActiveCrawlProgressOnMobile()"),
+  "collection progress state must open only for a live crawl without duplicate ETA/status output",
   failures
 );
 

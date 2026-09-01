@@ -81,8 +81,6 @@ const state = {
   adminRegionCompanyQueryRenderTimer: null,
   adminUserViewMode: false,
   crawlEtaByKey: {},
-  crawlEstimateTimer: null,
-  crawlEstimateRequestId: 0,
   crawlProgressRunning: false,
   selectedLocationCard: null,
   dictionaryProvince: "경남",
@@ -522,11 +520,6 @@ const els = {
   crawlProgressBar: document.getElementById("crawlProgressBar"),
   crawlProgressPercent: document.getElementById("crawlProgressPercent"),
   crawlProgressElapsed: document.getElementById("crawlProgressElapsed"),
-  crawlProgressRemaining: document.getElementById("crawlProgressRemaining"),
-  crawlProgressEta: document.getElementById("crawlProgressEta"),
-  crawlProgressBasis: document.getElementById("crawlProgressBasis"),
-  crawlProgressStages: document.getElementById("crawlProgressStages"),
-  crawlSubmitMeta: document.getElementById("crawlSubmitMeta"),
   crawlStatus: document.getElementById("crawlStatus"),
   yeogiManualBadge: document.getElementById("yeogiManualBadge"),
   yeogiCurrentKeyword: document.getElementById("yeogiCurrentKeyword"),
@@ -1704,7 +1697,6 @@ function updateCrawlSpeedPreview() {
   }
   renderCollectionPurposeRoutePreview(payload, preview);
   renderCrawlReadinessPreview(payload, preview);
-  scheduleCrawlEstimatePreviewRefresh(payload);
 }
 
 function applyCrawlSpeedPreset(key = "") {
@@ -1870,7 +1862,18 @@ function focusAdminCrawlProgress() {
   setActiveTab("admin");
   setAdminPanelSection("collect");
   window.requestAnimationFrame(() => {
-    (els.crawlProgress || els.crawlForm)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    const target = state.crawlProgressRunning && els.crawlProgress && !els.crawlProgress.hidden
+      ? els.crawlProgress
+      : els.crawlForm;
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
+function revealActiveCrawlProgressOnMobile() {
+  if (!window.matchMedia("(max-width: 860px)").matches) return;
+  window.requestAnimationFrame(() => {
+    if (!state.crawlProgressRunning || !els.crawlProgress || els.crawlProgress.hidden) return;
+    els.crawlProgress.scrollIntoView({ behavior: "smooth", block: "center" });
   });
 }
 
@@ -2665,37 +2668,29 @@ function ensureCrawlControls() {
   }
 
   if (!els.crawlProgress) {
-    const submitButton = els.crawlForm.querySelector('button[type="submit"]');
     const progress = document.createElement("div");
-    progress.className = "crawl-progress is-preview";
+    progress.className = "crawl-progress";
     progress.id = "crawlProgress";
+    progress.hidden = true;
     progress.innerHTML = `
-      <span class="crawl-spinner" aria-hidden="true"></span>
       <div class="crawl-progress-copy">
-        <strong id="crawlProgressTitle">수집 준비</strong>
-        <small id="crawlProgressText">네이버·NOL·떠나요를 확인합니다.</small>
+        <strong id="crawlProgressTitle" role="status" aria-live="polite" aria-atomic="true">수집 진행 중</strong>
+        <small id="crawlProgressText">수집을 준비하고 있습니다.</small>
       </div>
-      <div class="crawl-progress-stages" id="crawlProgressStages" aria-label="수집 단계"></div>
-      <div class="crawl-progress-meter" aria-hidden="true"><span id="crawlProgressBar"></span></div>
-      <div class="crawl-progress-numbers" aria-label="수집 예상 시간">
-        <span><b id="crawlProgressPercent">예측중</b><small>진행률</small></span>
-        <span><b id="crawlProgressElapsed">0초</b><small>경과</small></span>
-        <span><b id="crawlProgressRemaining">계산 중</b><small>남은 시간</small></span>
-        <span><b id="crawlProgressEta">--:--</b><small>완료 예정</small></span>
+      <div class="crawl-progress-status" aria-label="수집 진행 상태">
+        <b id="crawlProgressPercent">0%</b>
+        <span>경과 <strong id="crawlProgressElapsed">0초</strong></span>
       </div>
-      <small class="crawl-progress-basis" id="crawlProgressBasis">조건 기반 예상값입니다.</small>
+      <div class="crawl-progress-meter" role="progressbar" aria-label="수집 진행률" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="crawlProgressBar"></span></div>
     `;
-    submitButton?.before(progress);
+    if (els.crawlStatus) els.crawlStatus.before(progress);
+    else els.crawlForm.append(progress);
     els.crawlProgress = progress;
     els.crawlProgressTitle = progress.querySelector("#crawlProgressTitle");
     els.crawlProgressText = progress.querySelector("#crawlProgressText");
     els.crawlProgressBar = progress.querySelector("#crawlProgressBar");
     els.crawlProgressPercent = progress.querySelector("#crawlProgressPercent");
     els.crawlProgressElapsed = progress.querySelector("#crawlProgressElapsed");
-    els.crawlProgressRemaining = progress.querySelector("#crawlProgressRemaining");
-    els.crawlProgressEta = progress.querySelector("#crawlProgressEta");
-    els.crawlProgressBasis = progress.querySelector("#crawlProgressBasis");
-    els.crawlProgressStages = progress.querySelector("#crawlProgressStages");
   }
 }
 
@@ -2859,63 +2854,10 @@ async function fetchCrawlEstimate(payload = {}) {
   }
 }
 
-function crawlReadinessMeta(payload = {}, preview = crawlPreviewMeta(payload)) {
-  const total = Math.max(1, Math.round(Number(preview.estimatedTotalSeconds || 1)));
-  return {
-    ...preview,
-    elapsedSeconds: 0,
-    remainingSeconds: total,
-    estimatedTotalSeconds: total,
-    estimatedProgress: 0,
-    estimatedCompleteAt: new Date(Date.now() + total * 1000).toISOString(),
-    currentStage: null,
-    stages: (Array.isArray(preview.stages) ? preview.stages : crawlStageFallbacks()).map((stage) => ({
-      ...stage,
-      status: "planned",
-      progress: 0
-    }))
-  };
-}
-
-function renderCrawlReadinessPreview(payload = currentCrawlFormPayload(), preview = crawlPreviewMeta(payload)) {
+function renderCrawlReadinessPreview() {
   if (!isAdminRole() || !els.crawlProgress || state.crawlProgressRunning) return;
-  const meta = crawlReadinessMeta(payload, preview);
-  const keyword = crawlKeywordInterpretationLabel(payload);
-  const purpose = collectionPurposeProfile(payload.collectionPurpose);
-  const detailText = `${payload.detailRankRanges || purpose.defaultRange}위`;
-  els.crawlProgress.hidden = false;
-  els.crawlProgress.classList.add("is-preview");
-  els.crawlProgress.classList.remove("is-running", "is-delayed");
-  if (els.crawlProgressTitle) els.crawlProgressTitle.textContent = "예상 수집 시간";
-  if (els.crawlProgressText) {
-    els.crawlProgressText.textContent = `${keyword} · ${purpose.shortLabel} · ${detailText} · ${purpose.dbApplyText || "DB 반영"} 기준`;
-  }
-  updateCrawlProgressNumbers(meta);
-}
-
-function clearCrawlEstimateTimer() {
-  if (!state.crawlEstimateTimer) return;
-  clearTimeout(state.crawlEstimateTimer);
-  state.crawlEstimateTimer = null;
-}
-
-function scheduleCrawlEstimatePreviewRefresh(payload = currentCrawlFormPayload()) {
-  if (!isAdminRole() || state.crawlProgressRunning || !payload.keyword) return;
-  clearCrawlEstimateTimer();
-  const requestId = ++state.crawlEstimateRequestId;
-  state.crawlEstimateTimer = setTimeout(async () => {
-    const estimate = await fetchCrawlEstimate(payload);
-    if (requestId !== state.crawlEstimateRequestId || state.crawlProgressRunning) return;
-    renderCollectionPurposeRoutePreview(payload, estimate);
-    renderCrawlReadinessPreview(payload, estimate);
-    if (els.crawlSpeedPreview) {
-      const purpose = collectionPurposeProfile(payload.collectionPurpose);
-      const detailText = `${payload.detailRankRanges || purpose.defaultRange}위`;
-      const rangeCount = rankRangeCountFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange);
-      const rangeText = rangeCount > 20 ? " · 넓은 범위는 수집시간 증가" : "";
-      els.crawlSpeedPreview.textContent = `${crawlKeywordInterpretationLabel(payload)} · ${purpose.shortLabel} · ${detailText} · ${purpose.dbApplyText || "DB 반영"} · 예상 ${formatElapsed(estimate.estimatedTotalSeconds)} · 완료 ${formatClockTime(estimate.estimatedCompleteAt)}${rangeText}`;
-    }
-  }, 220);
+  els.crawlProgress.hidden = true;
+  els.crawlProgress.classList.remove("is-running", "is-delayed", "is-preview");
 }
 
 function b2bSearchStageRows(preview = {}, elapsedSeconds = 0) {
@@ -3320,17 +3262,6 @@ function crawlStageStatusText(stage = {}) {
   return "대기";
 }
 
-function renderCrawlStages(meta = {}) {
-  if (!els.crawlProgressStages) return;
-  const rows = Array.isArray(meta.stages) && meta.stages.length ? meta.stages : crawlStageFallbacks();
-  els.crawlProgressStages.innerHTML = rows.map((stage) => `
-    <span class="${escapeHtml(stage.status || "pending")}">
-      <b>${escapeHtml(stage.label || "단계")}</b>
-      <small>${escapeHtml(crawlStageStatusText(stage))}</small>
-    </span>
-  `).join("");
-}
-
 function crawlCurrentStageText(meta = {}) {
   const stage = meta.currentStage || {};
   if (!stage.label) return "";
@@ -3342,46 +3273,34 @@ function crawlCurrentStageText(meta = {}) {
 function updateCrawlProgressNumbers(meta = {}) {
   const percent = Number(meta.estimatedProgress);
   const elapsed = Number(meta.elapsedSeconds);
-  const remaining = Number(meta.remainingSeconds);
   const hasPercent = Number.isFinite(percent);
-  const width = hasPercent ? Math.max(5, Math.min(99, percent)) : 8;
+  const width = hasPercent ? Math.max(0, Math.min(100, percent)) : 0;
+  const roundedPercent = hasPercent ? Math.round(width) : 0;
   if (els.crawlProgressBar) els.crawlProgressBar.style.width = `${width}%`;
-  if (els.crawlProgressPercent) els.crawlProgressPercent.textContent = hasPercent ? `${Math.round(percent)}%` : "예측중";
+  els.crawlProgressBar?.closest('[role="progressbar"]')?.setAttribute("aria-valuenow", String(roundedPercent));
+  if (els.crawlProgressPercent) els.crawlProgressPercent.textContent = `${roundedPercent}%`;
   if (els.crawlProgressElapsed) els.crawlProgressElapsed.textContent = formatElapsed(elapsed) || "0초";
-  if (els.crawlProgressRemaining) {
-    els.crawlProgressRemaining.textContent = meta.isDelayed
-      ? `지연 ${formatElapsed(meta.delayedSeconds) || "확인 중"}`
-      : (Number.isFinite(remaining)
-          ? (remaining <= 0 ? "곧 완료" : formatElapsed(remaining))
-          : "계산 중");
-  }
-  if (els.crawlProgressEta) els.crawlProgressEta.textContent = formatClockTime(meta.estimatedCompleteAt);
-  if (els.crawlProgressBasis) els.crawlProgressBasis.textContent = crawlEstimateBasisText(meta.estimateBasis);
-  if (els.crawlSubmitMeta) {
-    const totalText = formatElapsed(meta.estimatedTotalSeconds) || "계산 중";
-    const etaText = formatClockTime(meta.estimatedCompleteAt);
-    const remainingText = meta.isDelayed
-      ? `지연 ${formatElapsed(meta.delayedSeconds) || "확인 중"}`
-      : (Number.isFinite(remaining) ? (remaining <= 0 ? "곧 완료" : `${formatElapsed(remaining)} 남음`) : "남은 시간 계산 중");
-    els.crawlSubmitMeta.textContent = state.crawlProgressRunning
-      ? `${remainingText} · 완료 ${etaText}`
-      : `예상 ${totalText} · 완료 ${etaText}`;
-  }
-  renderCrawlStages(meta);
 }
 
 function setCrawlProgress(active, title = "", text = "", meta = {}) {
-  if (!els.crawlProgress) return;
   state.crawlProgressRunning = Boolean(active);
-  els.crawlProgress.hidden = false;
+  if (!els.crawlProgress) return;
   els.crawlProgress.classList.toggle("is-running", Boolean(active));
-  els.crawlProgress.classList.toggle("is-preview", !active);
+  els.crawlProgress.classList.remove("is-preview");
   els.crawlProgress.classList.toggle("is-delayed", Boolean(active && meta.isDelayed));
   if (!active) {
-    renderCrawlReadinessPreview();
+    els.crawlProgress.hidden = true;
+    updateCrawlProgressNumbers({ estimatedProgress: 0, elapsedSeconds: 0 });
     return;
   }
-  if (title && els.crawlProgressTitle) els.crawlProgressTitle.textContent = title;
+  els.crawlProgress.hidden = false;
+  const currentStageLabel = String(meta.currentStage?.label || "").trim();
+  const resolvedTitle = title === "수집 실행 중" && currentStageLabel
+    ? `${currentStageLabel} 진행 중`
+    : title;
+  if (resolvedTitle && els.crawlProgressTitle && els.crawlProgressTitle.textContent !== resolvedTitle) {
+    els.crawlProgressTitle.textContent = resolvedTitle;
+  }
   if (text && els.crawlProgressText) els.crawlProgressText.textContent = text;
   updateCrawlProgressNumbers(meta);
 }
@@ -3407,27 +3326,11 @@ function scheduleCrawlStatusPoll(delay = 5000, notifyIdle = false) {
   state.crawlStatusTimer = setTimeout(() => pollCrawlStatusUntilIdle(notifyIdle), delay);
 }
 
-function crawlEstimateInlineText(status = {}) {
-  const percent = Number(status.estimatedProgress);
-  const remaining = Number(status.remainingSeconds);
-  const eta = formatClockTime(status.estimatedCompleteAt);
-  const stage = crawlCurrentStageText(status);
-  const parts = [];
-  if (status.isDelayed) parts.push(`지연 ${formatElapsed(status.delayedSeconds) || "확인 중"}`);
-  if (stage) parts.push(stage);
-  if (Number.isFinite(percent)) parts.push(`예상 ${Math.round(percent)}%`);
-  if (Number.isFinite(remaining)) parts.push(`남은 ${remaining <= 0 ? "곧 완료" : formatElapsed(remaining)}`);
-  if (eta !== "--:--") parts.push(`완료 ${eta}`);
-  return parts.join(" · ");
-}
-
 async function pollCrawlStatusUntilIdle(notifyIdle = false) {
   clearCrawlStatusTimer();
   try {
     const status = await fetchJson("/api/crawl-status");
     if (status.active) {
-      const elapsed = formatElapsed(status.elapsedSeconds);
-      const estimate = crawlEstimateInlineText(status);
       const stage = status.currentStage || {};
       const delayed = Boolean(status.isDelayed);
       const recrawlText = recrawlContextStatusText(status.recrawlContext);
@@ -3442,17 +3345,13 @@ async function pollCrawlStatusUntilIdle(notifyIdle = false) {
       }
       setCrawlProgress(
         true,
-        delayed ? "예상보다 지연 중" : (stage.label ? `${stage.label} 진행 중` : "수집 진행 중"),
+        delayed ? "처리 지연 확인 중" : (stage.label ? `${stage.label} 진행 중` : "수집 진행 중"),
         delayed
-          ? `예상 완료 시간을 ${formatElapsed(status.delayedSeconds) || "초과"} 넘겼습니다. 마지막 단계와 저장 처리를 계속 확인하고 있습니다.`
-          : `${recrawlText ? `${recrawlText} · ` : ""}${stage.detail || `네이버·NOL·떠나요를 확인하고 있습니다${elapsed ? ` · ${elapsed} 경과` : ""}${estimate ? ` · ${estimate}` : ""}.`}`,
+          ? "마지막 단계와 저장 처리를 계속 확인하고 있습니다."
+          : `${recrawlText ? `${recrawlText} · ` : ""}${stage.detail || "자료를 확인하고 있습니다."}`,
         status
       );
-      if (els.crawlStatus) {
-        els.crawlStatus.textContent = delayed
-          ? `수집이 예상보다 오래 걸리고 있습니다${recrawlText ? ` · ${recrawlText}` : ""}${elapsed ? ` (${elapsed} 경과)` : ""}${estimate ? ` · ${estimate}` : ""}. 완료되면 결과를 자동 갱신합니다.`
-          : `수집이 진행 중입니다${recrawlText ? ` · ${recrawlText}` : ""}${elapsed ? ` (${elapsed} 경과)` : ""}${estimate ? ` · ${estimate}` : ""}. 완료되면 결과를 자동 갱신합니다.`;
-      }
+      if (els.crawlStatus) els.crawlStatus.textContent = "";
       setStatus("수집 중");
       scheduleCrawlStatusPoll(Number(status.remainingSeconds) <= 60 ? 5000 : 10000, true);
       return;
@@ -38188,7 +38087,7 @@ function applyQueueRecrawlSetting(button) {
   if (els.crawlStatus) {
     els.crawlStatus.textContent = inlineDetail
       ? `${company.primaryName || "업체"} 자동수집을 준비했습니다. 현재 화면에서 바로 실행합니다.`
-      : `${company.primaryName || "업체"} 재수집 설정을 적용했습니다. 상세 ${plan.range || "1-20"}위 · 예상 ${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}. 조건을 확인한 뒤 수집 실행을 누르세요.`;
+      : `${company.primaryName || "업체"} 재수집 설정을 적용했습니다. 상세 ${plan.range || "1-20"}위. 조건을 확인한 뒤 수집 실행을 누르세요.`;
   }
   if (inlineDetail && isAdminRole()) renderAdminConsoleDashboard();
   setStatus(inlineDetail ? "자동수집 준비" : "재수집 설정 적용");
@@ -38247,11 +38146,10 @@ function applyRecrawlBatchSetting(button) {
   focusAdminCrawlProgress();
   renderCrawlReadinessPreview(currentCrawlFormPayload(), eta);
   if (els.crawlStatus) {
-    const saved = batch.savedSeconds ? ` · 개별 실행 대비 ${formatElapsed(batch.savedSeconds)} 절감` : "";
     const label = source === "sales_gate" ? "보류 업체" : "후보";
     const purposeLabel = collectionPurposeProfile(plan.collectionPurpose || "revenue_detail").label;
     const executionLabel = singleCompanyTarget ? "단건 재수집" : "묶음 재수집";
-    els.crawlStatus.textContent = `${fmtNumber(batchCount)}개 ${label} ${executionLabel} 설정을 적용했습니다. ${purposeLabel} · ${plan.range || plan.detailRankRanges || "1-20"}위 · 예상 ${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}${saved}.`;
+    els.crawlStatus.textContent = `${fmtNumber(batchCount)}개 ${label} ${executionLabel} 설정을 적용했습니다. ${purposeLabel} · ${plan.range || plan.detailRankRanges || "1-20"}위.`;
   }
   setStatus("묶음 재수집 설정 적용");
 }
@@ -38989,8 +38887,6 @@ async function submitCrawl(event) {
     };
     if (isAdminRole()) renderAdminConsoleDashboard();
   }
-  clearCrawlEstimateTimer();
-  state.crawlEstimateRequestId += 1;
   const purpose = collectionPurposeProfile(payload.collectionPurpose);
   const detailText = `${payload.detailRankRanges || purpose.defaultRange}위`;
   let preview = crawlPreviewMeta(payload);
@@ -39001,6 +38897,7 @@ async function submitCrawl(event) {
     `${recrawlText ? `${recrawlText} · ` : ""}${purpose.label} · ${searchModeLabel(payload.searchMode)} · ${detailText}`,
     preview
   );
+  revealActiveCrawlProgressOnMobile();
   preview = await fetchCrawlEstimate(payload);
   setCrawlProgress(
     true,
@@ -39008,7 +38905,7 @@ async function submitCrawl(event) {
     `${recrawlText ? `${recrawlText} · ` : ""}${purpose.label} · ${searchModeLabel(payload.searchMode)} · ${detailText}`,
     preview
   );
-  els.crawlStatus.textContent = `${recrawlText ? `${recrawlText} 기준 ` : ""}${purpose.shortLabel || purpose.label} 수집을 시작했습니다. ${detailText}. 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}.`;
+  if (els.crawlStatus) els.crawlStatus.textContent = "";
   setStatus("수집 중");
   scheduleCrawlStatusPoll(1500, false);
   try {
