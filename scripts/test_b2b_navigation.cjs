@@ -109,7 +109,7 @@ function fixture({ data = false, running = false, role = "b2b" } = {}) {
     renderB2BSearchPanel() { throw new Error("Tab navigation must not rebuild the search form or progress UI"); }
   };
   // Expensive body renderers are outside this test; actual role/menu/panel updates run.
-  const api = vm.runInNewContext(`${declarations}\n({ setActiveTab, applyRoleUi, currentRole })`, context, { timeout: 1000 });
+  const api = vm.runInNewContext(`${declarations}\n({ setActiveTab, applyRoleUi, currentRole, adminPrimarySectionForTab, adminMobileSectionForTab })`, context, { timeout: 1000 });
   const preserved = () => JSON.stringify([
     els.b2bSearchInput.value, els.b2bSearchRangeInput.value, els.b2bSearchResults.innerHTML,
     els.b2bSearchStatus.textContent, els.b2bOnboarding.innerHTML, els.b2bSearchHistory.innerHTML,
@@ -164,6 +164,15 @@ for (const role of ["b2b", "preview"]) for (const data of [false, true]) for (co
 }
 
 for (const data of [false, true]) {
+  check(`administrator collection-analysis classification/data=${data}`, () => {
+    const test = fixture({ data, role: "admin" });
+    test.api.setActiveTab("rank");
+    assertView(test, "rank");
+    assert.equal(test.api.adminPrimarySectionForTab("rank"), "collect", "desktop collection analysis belongs to collection");
+    assert.equal(test.api.adminMobileSectionForTab("rank"), "collect", "mobile collection analysis belongs to collection");
+    test.api.setActiveTab("report");
+    assert.equal(test.api.adminPrimarySectionForTab("report"), "analysis", "industry briefing stays in industry analysis");
+  });
   for (const tab of ["dictionary", "target", "decisionQueue", "historyOps", "admin", "unknown"]) {
     check(`role restriction/data=${data}/${tab}`, () => {
       const test = fixture({ data });

@@ -354,6 +354,41 @@ const adminNavMetaBlock = app.slice(
   app.indexOf("const ADMIN_NAV_ICON_PATHS =")
 );
 
+const adminMobileSectionsBlock = app.slice(
+  app.indexOf("const ADMIN_MOBILE_SECTIONS ="),
+  app.indexOf("const ADMIN_COMPACT_SECTIONS =")
+);
+const adminCollectNavigationBlock = adminMobileSectionsBlock.slice(
+  adminMobileSectionsBlock.indexOf("  collect: {"),
+  adminMobileSectionsBlock.indexOf("  analysis: {")
+);
+const adminAnalysisNavigationBlock = adminMobileSectionsBlock.slice(
+  adminMobileSectionsBlock.indexOf("  analysis: {"),
+  adminMobileSectionsBlock.indexOf("  region: {")
+);
+const adminPrimaryRouteBlock = app.slice(
+  app.indexOf("function adminPrimarySectionForTab("),
+  app.indexOf("function adminMobileSectionForTab(")
+);
+const adminMobileRouteBlock = app.slice(
+  app.indexOf("function adminMobileSectionForTab("),
+  app.indexOf("function syncPrimaryNavButtons(")
+);
+
+assert(
+  adminCollectNavigationBlock.includes('{ label: "이번 수집 분석", tab: "rank" }')
+    && !adminAnalysisNavigationBlock.includes('tab: "rank"')
+    && adminPrimaryRouteBlock.includes('if (tab === "rank") return "collect";')
+    && adminMobileRouteBlock.includes('["rank", "historyOps"].includes(tab)')
+    && app.includes('rank: ["이번 수집 분석", "수집 완료 즉시 품질·확인 대상·저장된 플레이스 순서 분석"]')
+    && app.includes('analysis: { icon: "industry", detail: "시장 브리핑" }')
+    && indexHtml.includes('id="rankPanel" data-panel="rank" aria-label="이번 수집 분석"')
+    && indexHtml.includes("수집 완료 결과의 품질과 저장된 네이버 플레이스 노출순")
+    && app.includes("이번 수집 분석 보기"),
+  "completed collection results must live under collection analysis while industry briefing remains separate",
+  failures
+);
+
 assert(
   adminNavMetaBlock.length > 0 && !/[⌂▣⇩▥⌖♙⚙•]/.test(adminNavMetaBlock),
   "admin navigation must not regress to font-dependent symbol icons",
@@ -452,8 +487,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260901-sheet-history-ui-v98";
-const expectedAssetVersion = "datalab-20260829-tourism-full-metrics-v74";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260901-collection-analysis-v99";
+const expectedAssetVersion = "datalab-20260901-collection-analysis-v99";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -1087,6 +1122,13 @@ const submitCrawlBlock = app.slice(
   app.indexOf("function bindEvents()", app.indexOf("async function submitCrawl(event)"))
 );
 const broadPolicyBindEventsBlock = app.slice(app.indexOf("function bindEvents()"));
+
+assert(
+  submitCrawlBlock.includes('if (completedRecrawlContext?.source === "admin_db_detail")')
+    && /if \(completedRecrawlContext\?\.source === "admin_db_detail"\)[\s\S]*?\} else \{\s*setActiveTab\("rank"\);\s*\}/.test(submitCrawlBlock),
+  "completed administrator collection must open the newly classified current-run analysis instead of the industry briefing",
+  failures
+);
 
 assert(
   crawlFormMarkup.includes("<h3>키워드</h3>") && !crawlFormMarkup.includes("새 수집"),

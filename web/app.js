@@ -279,6 +279,7 @@ const ADMIN_MOBILE_SECTIONS = {
     anchor: "#crawlForm",
     items: [
       { label: "검색·시장 수집", tab: "admin", adminPanelSection: "collect", anchor: "#crawlForm" },
+      { label: "이번 수집 분석", tab: "rank" },
       { label: "결과 보관함", tab: "admin", adminPanelSection: "archive", anchor: "#collectionArchive" },
       { label: "수집 이력", tab: "historyOps" }
     ]
@@ -287,8 +288,7 @@ const ADMIN_MOBILE_SECTIONS = {
     label: "업종분석",
     target: "report",
     items: [
-      { label: "업종 현황", tab: "report" },
-      { label: "경쟁 비교", tab: "rank" }
+      { label: "업종 현황", tab: "report" }
     ]
   },
   region: {
@@ -362,7 +362,7 @@ const ADMIN_PANEL_MOBILE_TARGETS = {
 };
 const TAB_LABELS = {
   report: "요약 리포트",
-  rank: "업체 순위",
+  rank: "이번 수집 분석",
   dictionary: "입지사전",
   target: "영업 타깃",
   decisionQueue: "검수 필요",
@@ -382,7 +382,7 @@ const ADMIN_NAV_META = {
   summary: { icon: "home", detail: "운영 현황" },
   database: { icon: "database", detail: "목록 · 검토" },
   collect: { icon: "collect", detail: "실행 · 결과" },
-  analysis: { icon: "industry", detail: "시장 · 경쟁" },
+  analysis: { icon: "industry", detail: "시장 브리핑" },
   region: { icon: "region", detail: "지도 · 입지" },
   members: { icon: "members", detail: "권한 · 요청" },
   settings: { icon: "settings", detail: "연동 · 보안" }
@@ -1450,7 +1450,7 @@ function renderRunResultApplySummary() {
       <div class="run-result-receipt-actions">
         ${receipt.needsReview
           ? `<button class="primary-button" type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="needs_work">전체 업체 검수큐 열기</button>`
-          : `<button class="primary-button" type="button" data-open-place-rank-replay>업종분석 · 경쟁 비교 보기</button>`}
+          : `<button class="primary-button" type="button" data-open-place-rank-replay>이번 수집 분석 보기</button>`}
         <button class="secondary-button" type="button" data-open-collection-archive>결과 보관함</button>
         <button class="ghost-button" type="button" data-open-collection-run>다음 수집</button>
       </div>
@@ -2105,7 +2105,8 @@ function adminPrimarySectionForTab(tab, preferred = "") {
       files: "settings"
     }[state.adminPanelSection] || "summary";
   }
-  if (["report", "rank"].includes(tab)) return "analysis";
+  if (tab === "report") return "analysis";
+  if (tab === "rank") return "collect";
   if (["dictionary", "map", "demand"].includes(tab)) return "region";
   if (tab === "historyOps") return "collect";
   return "summary";
@@ -2119,8 +2120,8 @@ function adminMobileSectionForTab(tab, preferred = "") {
     if (preferredTabs.has(tab)) return preferred;
   }
   if (tab === "admin") return adminPanelMobileTarget(state.adminPanelSection).section;
-  if (["report", "rank", "dictionary", "map", "demand"].includes(tab)) return "analysis";
-  if (tab === "historyOps") return "collect";
+  if (["report", "dictionary", "map", "demand"].includes(tab)) return "analysis";
+  if (["rank", "historyOps"].includes(tab)) return "collect";
   return "summary";
 }
 
@@ -2400,7 +2401,7 @@ function setPanelHeading(panel, title, description) {
 
 function syncRoleStaticLabels() {
   if (isAdminRole()) {
-    setPanelHeading("rank", "업체 순위", "네이버 플레이스 노출순으로 비교");
+    setPanelHeading("rank", "이번 수집 분석", "수집 완료 결과의 품질과 저장된 네이버 플레이스 노출순");
     setPanelHeading("map", "지역 클러스터 지도", "시군구 경계 · 업체 스팟 · 검색량 · 판매율");
     setPanelHeading("demand", "수요구조 분석", "시즌 수요 기준과 검색수요를 함께 해석");
     return;
@@ -35062,7 +35063,7 @@ function adminHeaderView() {
   }
   return {
     report: ["업종분석", "업종 현황과 시장 요약"],
-    rank: ["업종분석 · 경쟁 비교", "네이버 플레이스 노출순과 경쟁 표본"],
+    rank: ["이번 수집 분석", "수집 완료 즉시 품질·확인 대상·저장된 플레이스 순서 분석"],
     dictionary: ["지역분석", "지역 현황·입지 보정·지역 운영"],
     map: ["지역분석 · 지도", "지역 내·인접 경쟁권과 반경 노출"],
     demand: ["지역분석 · 수요 전망", "시즌 수요와 네이버 트렌드"],
