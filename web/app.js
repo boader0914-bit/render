@@ -494,6 +494,9 @@ const els = {
   sheetBody: document.getElementById("sheetBody"),
   runSelect: document.getElementById("runSelect"),
   refreshRuns: document.getElementById("refreshRuns"),
+  runResultAdminCard: document.getElementById("runResultAdminCard"),
+  runResultAdminTitle: document.getElementById("runResultAdminTitle"),
+  runResultAdminMeta: document.getElementById("runResultAdminMeta"),
   runApplySummary: document.getElementById("runApplySummary"),
   crawlForm: document.getElementById("crawlForm"),
   logoutButton: document.getElementById("logoutButton"),
@@ -1545,9 +1548,29 @@ function runResultReviewQueueHtml(reviewRows = []) {
   `;
 }
 
+function syncRunResultAdminSummary(receipt = null) {
+  const run = receipt?.run || state.data?.run || state.runs?.[0] || {};
+  const title = run.keyword || run.label || run.runLabel || "";
+  if (els.runResultAdminTitle) {
+    els.runResultAdminTitle.textContent = title || "아직 수집 결과 없음";
+  }
+  if (!els.runResultAdminMeta) return;
+  if (!title) {
+    els.runResultAdminMeta.textContent = "키워드와 조건을 입력해 첫 수집을 시작하세요.";
+    return;
+  }
+  const completedAt = run.completedAt || run.finishedAt || run.updatedAt || run.collectedAt || run.createdAt || "";
+  els.runResultAdminMeta.textContent = [
+    receipt?.statusLabel || run.statusLabel || "수집 완료",
+    receipt ? (receipt.reviewCount ? `확인 필요 ${fmtNumber(receipt.reviewCount)}곳` : "추가 확인 없음") : "결과 보기",
+    completedAt ? compactDateTime(completedAt) : ""
+  ].filter(Boolean).join(" · ");
+}
+
 function renderRunResultApplySummary() {
   if (!isAdminRole() || !els.runApplySummary) return;
   if (!state.data?.run) {
+    syncRunResultAdminSummary();
     els.runApplySummary.innerHTML = `
       <div class="run-apply-empty">
         <strong>아직 수집 결과가 없습니다.</strong>
@@ -1560,6 +1583,7 @@ function renderRunResultApplySummary() {
   const status = runDbApplyStatusModel(model);
   const linkedQueue = runDbApplyLinkedQueueModel(model, status);
   const receipt = runResultReceiptModel(model, status, linkedQueue);
+  syncRunResultAdminSummary(receipt);
   els.runApplySummary.innerHTML = `
     <section class="run-result-receipt">
       <div class="run-result-receipt-head">
@@ -2435,6 +2459,10 @@ function activateAdminPrimaryNav(sectionKey = "summary") {
 
 let latestCollectionResultPromise = null;
 
+function closeRecentResultDisclosureForFreshEntry() {
+  if (els.runResultAdminCard) els.runResultAdminCard.open = false;
+}
+
 function resetCollectionKeywordForFreshEntry() {
   state.pendingRecrawlContext = null;
   if (els.keywordInput) {
@@ -2443,6 +2471,7 @@ function resetCollectionKeywordForFreshEntry() {
     els.keywordInput.setAttribute("autocomplete", "off");
   }
   if (els.searchModeInput) els.searchModeInput.value = "keyword";
+  closeRecentResultDisclosureForFreshEntry();
   syncBroadLodgingPurposePolicy({ resetRangeOnEntry: false });
   updateCrawlSpeedPreview();
 }
@@ -40368,6 +40397,11 @@ function bindEvents() {
     els.companyList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
   }));
   els.crawlForm.addEventListener("submit", submitCrawl);
+  els.runResultAdminCard?.querySelector(":scope > summary")?.addEventListener("keydown", (event) => {
+    if (!['Enter', ' '].includes(event.key)) return;
+    event.preventDefault();
+    els.runResultAdminCard.open = !els.runResultAdminCard.open;
+  });
   els.yeogiOpenButton.addEventListener("click", openYeogiSearch);
   els.yeogiCopyLinkButton.addEventListener("click", copyYeogiSearchLink);
   els.yeogiScriptButton.addEventListener("click", copyYeogiScript);

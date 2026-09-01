@@ -1131,13 +1131,13 @@ assert(
 );
 
 assert(
-  crawlFormMarkup.includes("<h3>키워드</h3>") && !crawlFormMarkup.includes("새 수집"),
+  crawlFormMarkup.includes('<h3 id="crawlKeywordHeading">키워드</h3>') && !crawlFormMarkup.includes("새 수집"),
   "collection form must use keyword as the heading without the old new-collection title",
   failures
 );
 
 assert(
-  /id="keywordInput"[^>]*placeholder="예: 경남 숙소, 경남 펜션"[^>]*required/.test(crawlFormMarkup)
+  /id="keywordInput"[^>]*placeholder="예: 경남 숙소"[^>]*required/.test(crawlFormMarkup)
     && !/id="keywordInput"[^>]*\bvalue=/.test(crawlFormMarkup)
     && /id="keywordInput"[^>]*autocomplete="off"[^>]*autocorrect="off"[^>]*spellcheck="false"/.test(crawlFormMarkup)
     && /<span id="crawlPurposeHint" role="status" aria-live="polite">[^<]+<\/span>/.test(crawlFormMarkup)
@@ -1241,6 +1241,18 @@ const databasePanelMarkup = indexHtml.slice(databasePanelStart, overviewPanelSta
 const collectPanelMarkup = indexHtml.slice(collectPanelStart, archivePanelStart);
 const runResultCardStart = collectPanelMarkup.indexOf('id="runResultAdminCard"');
 const runResultCardMarkup = runResultCardStart >= 0 ? collectPanelMarkup.slice(runResultCardStart) : "";
+const crawlKeywordCssStart = styles.indexOf(".crawl-keyword-bar {");
+const crawlKeywordCssBlock = crawlKeywordCssStart >= 0
+  ? styles.slice(crawlKeywordCssStart, styles.indexOf("\n.field {", crawlKeywordCssStart))
+  : "";
+const runResultDisclosureCssStart = styles.indexOf(".run-result-admin-card {");
+const runResultDisclosureCssBlock = runResultDisclosureCssStart >= 0
+  ? styles.slice(runResultDisclosureCssStart, styles.indexOf("\n.run-apply-summary {", runResultDisclosureCssStart))
+  : "";
+const recentResultEntryBlock = app.slice(
+  app.indexOf("function closeRecentResultDisclosureForFreshEntry()"),
+  app.indexOf("function ensureLatestCollectionResult", app.indexOf("function closeRecentResultDisclosureForFreshEntry()"))
+);
 const receiptEntityBlock = app.slice(
   app.indexOf("function runResultCanonicalEntityMap("),
   app.indexOf("function runResultReceiptModel(", app.indexOf("function runResultCanonicalEntityMap("))
@@ -1277,9 +1289,40 @@ const runDbUniqueNameBlock = app.slice(
 
 assert(
   runResultCardMarkup.includes("최근 수집 결과")
+    && /<details class="admin-card run-result-admin-card" id="runResultAdminCard">/.test(collectPanelMarkup)
+    && runResultCardMarkup.includes('class="run-result-admin-summary"')
+    && runResultCardMarkup.includes('id="runResultAdminTitle"')
+    && runResultCardMarkup.includes('id="runResultAdminMeta"')
+    && runResultCardMarkup.includes('id="runApplySummary"')
+    && runResultCardMarkup.includes("결과 보기")
+    && runResultCardMarkup.includes("접기")
     && !runResultCardMarkup.includes('id="runSelect"')
     && !runResultCardMarkup.includes('id="refreshRuns"'),
-  "collection result card must show only the latest receipt without duplicate history controls",
+  "collection result card must default to a compact native disclosure without duplicate history controls",
+  failures
+);
+
+assert(
+  collectPanelMarkup.includes('class="crawl-keyword-bar"')
+    && collectPanelMarkup.includes('id="crawlKeywordHeading"')
+    && collectPanelMarkup.includes('id="keywordInput"')
+    && crawlKeywordCssBlock.includes("grid-template-columns: minmax(62px, 86px) minmax(0, 1fr)")
+    && crawlKeywordCssBlock.includes("height: 54px")
+    && crawlKeywordCssBlock.includes("@media (max-width: 860px)")
+    && crawlKeywordCssBlock.includes("height: 58px"),
+  "collection keyword title and input must share a responsive horizontal row at the main-menu heights",
+  failures
+);
+
+assert(
+  recentResultEntryBlock.includes("els.runResultAdminCard.open = false")
+    && bindEventsBlock.includes('els.runResultAdminCard?.querySelector(":scope > summary")?.addEventListener("keydown"')
+    && bindEventsBlock.includes("els.runResultAdminCard.open = !els.runResultAdminCard.open")
+    && runResultDisclosureCssBlock.includes("min-height: 54px")
+    && runResultDisclosureCssBlock.includes("grid-template-columns: minmax(0, 1fr) auto")
+    && runResultDisclosureCssBlock.includes("@media (max-width: 760px)")
+    && runResultDisclosureCssBlock.includes("min-height: 58px"),
+  "recent collection result must return to its compact closed state on each fresh collection entry",
   failures
 );
 

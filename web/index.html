@@ -303,11 +303,13 @@
         <section class="admin-section-panel" data-admin-section-panel="collect" aria-label="수집 실행">
         <div class="admin-stack admin-stack-collect">
           <form class="admin-card" id="crawlForm">
-            <h3>키워드</h3>
-            <label class="field crawl-keyword-field">
-              <span class="sr-only">키워드</span>
-              <input id="keywordInput" type="text" placeholder="예: 경남 숙소, 경남 펜션" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" aria-label="키워드" required>
-            </label>
+            <div class="crawl-keyword-bar">
+              <h3 id="crawlKeywordHeading">키워드</h3>
+              <label class="field crawl-keyword-field" aria-labelledby="crawlKeywordHeading">
+                <span class="sr-only">키워드</span>
+                <input id="keywordInput" type="text" placeholder="예: 경남 숙소" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" aria-label="키워드" required>
+              </label>
+            </div>
             <div class="field-grid">
               <label class="field">
                 <span>시작일</span>
@@ -370,12 +372,17 @@
             <p class="legal-inline-notice">수집 실행 전 <a href="/data-collection-notice" target="_blank" rel="noopener">데이터 수집 범위</a>와 <a href="/collection-failure-notice" target="_blank" rel="noopener">수집 실패 가능성</a>을 확인하세요.</p>
           </form>
 
-          <section class="admin-card" id="runResultAdminCard">
-            <div class="card-head">
-              <h3>최근 수집 결과</h3>
-            </div>
+          <details class="admin-card run-result-admin-card" id="runResultAdminCard">
+            <summary class="run-result-admin-summary" data-ui-interactive="true">
+              <span class="run-result-admin-summary-copy">
+                <span>최근 수집 결과</span>
+                <strong id="runResultAdminTitle">아직 수집 결과 없음</strong>
+                <small id="runResultAdminMeta" aria-live="polite">키워드와 조건을 입력해 첫 수집을 시작하세요.</small>
+              </span>
+              <mark><span class="run-result-admin-open-label">결과 보기</span><span class="run-result-admin-close-label">접기</span></mark>
+            </summary>
             <div class="run-apply-summary" id="runApplySummary" aria-live="polite"></div>
-          </section>
+          </details>
 
         </div>
         </section>

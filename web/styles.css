@@ -18001,6 +18001,42 @@ a.platform-row:hover {
   gap: 12px;
 }
 
+.crawl-keyword-bar {
+  min-width: 0;
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: minmax(62px, 86px) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.crawl-keyword-bar > h3 {
+  min-width: 0;
+}
+
+.crawl-keyword-field {
+  min-width: 0;
+  gap: 0;
+}
+
+.crawl-keyword-field input {
+  height: 54px;
+  min-height: 54px;
+}
+
+@media (max-width: 860px) {
+  .crawl-keyword-bar {
+    min-height: 58px;
+    grid-template-columns: 62px minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .crawl-keyword-field input {
+    height: 58px;
+    min-height: 58px;
+  }
+}
+
 .field {
   display: grid;
   gap: 6px;
@@ -32168,6 +32204,127 @@ body.role-admin .admin-db-region-card-grid button.active {
   font-weight: 950;
   line-height: 1.18;
   overflow-wrap: anywhere;
+}
+
+.run-result-admin-card {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.run-result-admin-summary {
+  min-width: 0;
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.run-result-admin-summary::-webkit-details-marker {
+  display: none;
+}
+
+.run-result-admin-summary-copy {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(104px, .75fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.run-result-admin-summary-copy > span,
+.run-result-admin-summary-copy > strong,
+.run-result-admin-summary-copy > small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-result-admin-summary-copy > span {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.run-result-admin-summary-copy > strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.run-result-admin-summary-copy > small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.run-result-admin-summary > mark {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-control);
+  color: var(--ink);
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.run-result-admin-close-label,
+.run-result-admin-card[open] .run-result-admin-open-label {
+  display: none;
+}
+
+.run-result-admin-card[open] .run-result-admin-close-label {
+  display: inline;
+}
+
+.run-result-admin-card[open] > .run-result-admin-summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.run-result-admin-card > .run-apply-summary {
+  padding: 0 16px 16px;
+}
+
+@media (max-width: 760px) {
+  body.role-admin .run-result-admin-card {
+    padding: 0;
+  }
+
+  .run-result-admin-summary {
+    min-height: 58px;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  .run-result-admin-summary-copy {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      "label title"
+      "meta meta";
+    gap: 2px 8px;
+  }
+
+  .run-result-admin-summary-copy > span {
+    grid-area: label;
+  }
+
+  .run-result-admin-summary-copy > strong {
+    grid-area: title;
+  }
+
+  .run-result-admin-summary-copy > small {
+    grid-area: meta;
+  }
 }
 
 .run-apply-summary {
