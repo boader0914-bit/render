@@ -1222,6 +1222,23 @@ function runResultEntityKey(source = {}, fallback = "", canonicalMap = new Map()
   return fallback;
 }
 
+function runResultPreferredRank(incomingRank = 0, currentRank = 0) {
+  const incoming = Number(incomingRank);
+  const current = Number(currentRank);
+  if (Number.isFinite(current) && current > 0) return current;
+  if (Number.isFinite(incoming) && incoming > 0) return incoming;
+  return 0;
+}
+
+function runResultCurrentRank(item = {}, observedRank = 0, historicRank = 0, fallbackRank = 0) {
+  const candidates = [item.overallRank, item.rank, observedRank, historicRank, fallbackRank];
+  for (const candidate of candidates) {
+    const rank = Number(candidate);
+    if (Number.isFinite(rank) && rank > 0) return rank;
+  }
+  return 0;
+}
+
 function runResultReceiptModel(model = {}, status = {}, linkedQueue = {}) {
   const data = state.data || {};
   const run = model.run || data.run || {};
@@ -1243,26 +1260,86 @@ function runResultReceiptModel(model = {}, status = {}, linkedQueue = {}) {
     : `${detailRange} 기준`;
   const itemProfiles = items.map((item) => collectionStatusProfile(item));
   const canonicalEntityMap = runResultCanonicalEntityMap(linkedQueue.runRows || []);
+  const linkedRowByKey = new Map((linkedQueue.runRows || []).map((row, index) => [
+    runResultEntityKey(row, `run:${index}`, canonicalEntityMap),
+    row
+  ]));
+  const observedRankByKey = new Map(observedRankingItems.map((item, index) => [
+    runResultEntityKey(item, `ranking:${index}`, canonicalEntityMap),
+    runResultCurrentRank(item)
+  ]));
+  const reviewEntryMap = new Map();
+  let reviewEntryOrder = 0;
+  const addReviewEntry = (key, detail = {}) => {
+    const existing = reviewEntryMap.get(key) || { key, order: reviewEntryOrder++, reasons: [] };
+    const reasons = [...new Set([...(existing.reasons || []), ...(detail.reasons || [])].filter(Boolean))].slice(0, 5);
+    reviewEntryMap.set(key, {
+      ...existing,
+      name: detail.name || existing.name || "업체명 확인",
+      companyId: detail.companyId || existing.companyId || "",
+      rank: runResultPreferredRank(detail.rank, existing.rank),
+      provinceLabel: detail.provinceLabel || existing.provinceLabel || "",
+      localityLabel: detail.localityLabel || existing.localityLabel || "",
+      categoryLabel: detail.categoryLabel || existing.categoryLabel || "",
+      reasons
+    });
+  };
+  const addRowReviewEntry = (key, row = {}, reasons = []) => {
+    const company = row.company || {};
+    const metrics = row.metrics || {};
+    addReviewEntry(key, {
+      name: company.primaryName || company.name || "업체명 확인",
+      companyId: company.companyId || row.companyId || "",
+      rank: metrics.rank,
+      provinceLabel: row.provinceLabel || "",
+      localityLabel: row.localityLabel || "",
+      categoryLabel: metrics.category?.label || "",
+      reasons
+    });
+  };
   const productIssueKeys = new Set();
   itemProfiles.forEach((profile, index) => {
     if (profile.statusKey !== "ready" || profile.priceMissing || profile.quantityUnclear || profile.missingDates.length) {
-      productIssueKeys.add(runResultEntityKey(items[index], `item:${index}`, canonicalEntityMap));
+      const item = items[index] || {};
+      const key = runResultEntityKey(item, `item:${index}`, canonicalEntityMap);
+      const linkedRow = linkedRowByKey.get(key) || {};
+      const company = linkedRow.company || {};
+      const metrics = linkedRow.metrics || {};
+      productIssueKeys.add(key);
+      addReviewEntry(key, {
+        name: company.primaryName || item.name || item.primaryName || "업체명 확인",
+        companyId: company.companyId || linkedRow.companyId || item.companyId || "",
+        rank: runResultCurrentRank(item, observedRankByKey.get(key), metrics.rank, index + 1),
+        provinceLabel: linkedRow.provinceLabel || item.provinceLabel || "",
+        localityLabel: linkedRow.localityLabel || item.localityLabel || "",
+        categoryLabel: metrics.category?.label || item.categoryLabel || "",
+        reasons: profile.reasons || []
+      });
     }
   });
   const channelIssueKeys = new Set();
   (linkedQueue.runRows || []).forEach((row, index) => {
     if (Number(row.metrics?.channels?.reviewNeeded || 0) > 0) {
-      channelIssueKeys.add(runResultEntityKey(row, `channel:${index}`, canonicalEntityMap));
+      const key = runResultEntityKey(row, `channel:${index}`, canonicalEntityMap);
+      channelIssueKeys.add(key);
+      addRowReviewEntry(key, row, ["예약·채널 연결 확인"]);
     }
   });
   const reviewKeys = new Set([...productIssueKeys, ...channelIssueKeys]);
   (linkedQueue.queueRows || []).forEach((entry, index) => {
-    reviewKeys.add(runResultEntityKey(entry.row || {}, `queue:${index}`, canonicalEntityMap));
+    const key = runResultEntityKey(entry.row || {}, `queue:${index}`, canonicalEntityMap);
+    reviewKeys.add(key);
+    addRowReviewEntry(key, entry.row || {}, entry.reasons || []);
   });
   const handledKeys = new Set([...productIssueKeys, ...channelIssueKeys]);
   const otherReviewCount = [...reviewKeys].filter((key) => !handledKeys.has(key)).length;
   const channelOnlyIssueCount = [...channelIssueKeys].filter((key) => !productIssueKeys.has(key)).length;
   const reviewCount = reviewKeys.size;
+  const reviewRows = [...reviewEntryMap.values()].sort((a, b) => {
+    const rankA = a.rank > 0 ? a.rank : Number.MAX_SAFE_INTEGER;
+    const rankB = b.rank > 0 ? b.rank : Number.MAX_SAFE_INTEGER;
+    return rankA - rankB || a.order - b.order || String(a.name || "").localeCompare(String(b.name || ""), "ko");
+  });
   const salesRateCount = items.filter((item) => {
     const lodging = salesStats(item, "lodging");
     const day = salesStats(item, "day");
@@ -1301,6 +1378,7 @@ function runResultReceiptModel(model = {}, status = {}, linkedQueue = {}) {
     run,
     kpis,
     reviewCount,
+    reviewRows,
     needsReview,
     statusUi,
     statusLabel: status.key === "complete" ? "DB 반영 완료" : status.key === "partial" ? "DB 일부 확인" : "DB 반영 확인",
@@ -1344,6 +1422,24 @@ function runDbApplyCompanyMatchSets(data = state.data || {}) {
   return { ids, names, runId: data.run?.runId || data.run?.id || "" };
 }
 
+function runDbApplyUniqueNameFallbacks(rows = [], candidateNames = new Set()) {
+  const ownersByName = new Map();
+  rows.forEach((row, index) => {
+    const company = row.company || {};
+    const ownerKey = String(company.companyId || `row:${index}`);
+    const rowNames = new Set([company.primaryName, ...(company.aliases || [])]
+      .map((value) => compactSearchText(value || ""))
+      .filter((name) => name && candidateNames.has(name)));
+    rowNames.forEach((name) => {
+      if (!ownersByName.has(name)) ownersByName.set(name, new Set());
+      ownersByName.get(name).add(ownerKey);
+    });
+  });
+  return new Set([...ownersByName.entries()]
+    .filter(([, owners]) => owners.size === 1)
+    .map(([name]) => name));
+}
+
 function rowMatchesRunApply(row = {}, match = {}) {
   const company = row.company || {};
   if (company.companyId && match.ids?.has(String(company.companyId))) return true;
@@ -1359,6 +1455,7 @@ function runDbApplyLinkedQueueModel(model = {}, status = {}) {
   const master = companyMasterSource();
   const allRows = adminDbRows(master);
   const match = runDbApplyCompanyMatchSets(state.data || {});
+  match.names = runDbApplyUniqueNameFallbacks(allRows, match.names);
   const runRows = allRows.filter((row) => rowMatchesRunApply(row, match));
   const decisionMap = new Map(companyDecisionQueueEntries(master).map((entry) => [entry.company?.companyId, entry]));
   const queueRows = runRows.map((row) => {
@@ -1409,6 +1506,45 @@ function runDbApplyLinkedQueueModel(model = {}, status = {}) {
   };
 }
 
+function runResultReviewQueueHtml(reviewRows = []) {
+  if (!reviewRows.length) return "";
+  return `
+    <details class="run-result-review-queue" id="runResultReviewQueue">
+      <summary data-ui-interactive="true">
+        <div>
+          <span>이번 수집 검수대상</span>
+          <strong>${fmtNumber(reviewRows.length)}곳</strong>
+          <small>현재 수집 회차에서 확인이 필요한 업체만 모았습니다.</small>
+        </div>
+        <mark><span class="run-result-review-queue-open-label">목록 펼치기</span><span class="run-result-review-queue-close-label">목록 접기</span></mark>
+      </summary>
+      <div class="run-result-review-queue-list">
+        ${reviewRows.map((item, index) => {
+          const companyId = item.companyId || "";
+          const rank = finiteNumber(item.rank, 0);
+          const meta = [
+            rank > 0 ? `플레이스 ${fmtNumber(rank)}위` : "순위 확인",
+            item.provinceLabel || "",
+            item.localityLabel || "",
+            item.categoryLabel || ""
+          ].filter(Boolean).join(" · ");
+          return `
+            <article>
+              <span class="run-result-review-queue-index">${fmtNumber(index + 1)}</span>
+              <div>
+                <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
+                <small>${escapeHtml(meta)}</small>
+                <p>${escapeHtml((item.reasons || []).join(" · ") || "수집 결과 확인 필요")}</p>
+              </div>
+              ${companyId ? `<a href="${escapeHtml(adminDbCompanyDetailUrl(companyId))}" data-open-run-review-company="${escapeHtml(companyId)}">이 업체 검수</a>` : `<span class="run-result-review-queue-unlinked">DB 연결 확인</span>`}
+            </article>
+          `;
+        }).join("")}
+      </div>
+    </details>
+  `;
+}
+
 function renderRunResultApplySummary() {
   if (!isAdminRole() || !els.runApplySummary) return;
   if (!state.data?.run) {
@@ -1448,12 +1584,14 @@ function renderRunResultApplySummary() {
         <span>${escapeHtml(receipt.exceptionDetail)}</span>
       </div>
       <div class="run-result-receipt-actions">
-        ${receipt.needsReview
-          ? `<button class="primary-button" type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="needs_work">전체 업체 검수큐 열기</button>`
+        ${receipt.reviewRows.length
+          ? `<button class="primary-button" type="button" data-open-run-review-queue>이번 수집 검수대상 ${fmtNumber(receipt.reviewRows.length)}곳 보기</button>`
           : `<button class="primary-button" type="button" data-open-place-rank-replay>이번 수집 분석 보기</button>`}
+        ${receipt.needsReview ? `<button class="secondary-button" type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="needs_work" data-admin-db-reset-filters>전체 DB 검수큐</button>` : ""}
         <button class="secondary-button" type="button" data-open-collection-archive>결과 보관함</button>
         <button class="ghost-button" type="button" data-open-collection-run>다음 수집</button>
       </div>
+      ${runResultReviewQueueHtml(receipt.reviewRows)}
     </section>
   `;
 }
@@ -39156,6 +39294,27 @@ function bindEvents() {
       setActiveTab(b2bRegionTab.dataset.b2bRegionTab || "map");
       return;
     }
+    if (event.target.closest("[data-open-run-review-queue]")) {
+      const reviewQueue = document.getElementById("runResultReviewQueue");
+      if (reviewQueue) {
+        reviewQueue.open = true;
+        window.requestAnimationFrame(() => {
+          reviewQueue.scrollIntoView({ behavior: "smooth", block: "start" });
+          reviewQueue.querySelector("summary")?.focus({ preventScroll: true });
+        });
+      }
+      return;
+    }
+    const runReviewCompany = event.target.closest("[data-open-run-review-company]");
+    if (runReviewCompany) {
+      if (adminDbCompanyUseNativeLink(event, runReviewCompany)) return;
+      event.preventDefault();
+      const companyId = runReviewCompany.getAttribute("data-open-run-review-company") || "";
+      setActiveTab("admin");
+      setAdminPanelSection("database");
+      activateAdminDbCompanyDetail(companyId);
+      return;
+    }
     const placeRankReplay = event.target.closest("[data-open-place-rank-replay]");
     if (placeRankReplay) {
       openPlaceRankReplay(placeRankReplay.dataset.placeRankRunId || "").catch((error) => {
@@ -39900,7 +40059,25 @@ function bindEvents() {
         adminDbStatusLink = adminDbStatusLink || "contact_ready";
       }
       if (adminDbStatusLink) {
-        state.adminDbFilters = { ...(state.adminDbFilters || {}), status: adminDbStatusLink };
+        const resetAdminDbFilters = drawerTab.hasAttribute("data-admin-db-reset-filters");
+        if (resetAdminDbFilters) {
+          clearAdminDbCompanyHash();
+          state.adminDbSelectedCompanyId = "";
+        }
+        state.adminDbFilters = resetAdminDbFilters
+          ? {
+              query: "",
+              province: "all",
+              region: "all",
+              sort: "confidence_low",
+              category: "all",
+              status: adminDbStatusLink,
+              confidence: "all",
+              source: "all",
+              ota: "all",
+              feature: "all"
+            }
+          : { ...(state.adminDbFilters || {}), status: adminDbStatusLink };
         state.adminDbViewMode = "list";
         state.adminDbOpsOpen = true;
       }

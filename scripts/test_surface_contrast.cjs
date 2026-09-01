@@ -1245,6 +1245,10 @@ const receiptEntityBlock = app.slice(
   app.indexOf("function runResultCanonicalEntityMap("),
   app.indexOf("function runResultReceiptModel(", app.indexOf("function runResultCanonicalEntityMap("))
 );
+const receiptPreferredRankBlock = app.slice(
+  app.indexOf("function runResultPreferredRank("),
+  app.indexOf("function runResultReceiptModel(", app.indexOf("function runResultPreferredRank("))
+);
 const receiptModelBlock = app.slice(
   app.indexOf("function runResultReceiptModel("),
   app.indexOf("function collectionRouteRunCount", app.indexOf("function runResultReceiptModel("))
@@ -1252,6 +1256,10 @@ const receiptModelBlock = app.slice(
 const receiptRendererBlock = app.slice(
   app.indexOf("function renderRunResultApplySummary()"),
   app.indexOf("function updateCrawlSpeedPreview", app.indexOf("function renderRunResultApplySummary()"))
+);
+const receiptQueueRendererBlock = app.slice(
+  app.indexOf("function runResultReviewQueueHtml("),
+  app.indexOf("function renderRunResultApplySummary()", app.indexOf("function runResultReviewQueueHtml("))
 );
 const receiptCssBlock = styles.slice(
   styles.indexOf(".run-apply-summary"),
@@ -1262,6 +1270,10 @@ const loadRunsBlock = app.slice(
   app.indexOf("async function loadRun(", app.indexOf("async function loadRuns("))
 );
 const bindEventsBlock = app.slice(app.indexOf("function bindEvents()"));
+const runDbUniqueNameBlock = app.slice(
+  app.indexOf("function runDbApplyUniqueNameFallbacks("),
+  app.indexOf("function rowMatchesRunApply(", app.indexOf("function runDbApplyUniqueNameFallbacks("))
+);
 
 assert(
   runResultCardMarkup.includes("최근 수집 결과")
@@ -1275,15 +1287,30 @@ assert(
   receiptRendererBlock.includes('class="run-result-receipt"')
     && receiptRendererBlock.includes('class="run-result-receipt-kpis"')
     && receiptRendererBlock.includes('class="run-result-receipt-exception"')
+    && receiptRendererBlock.includes("data-open-run-review-queue")
     && receiptRendererBlock.includes('data-admin-db-status-link="needs_work"')
+    && receiptRendererBlock.includes("data-admin-db-reset-filters")
     && receiptRendererBlock.includes("data-open-place-rank-replay")
     && receiptRendererBlock.includes("data-open-collection-archive")
     && receiptRendererBlock.includes("data-open-collection-run")
-    && receiptRendererBlock.includes("전체 업체 검수큐 열기")
+    && receiptRendererBlock.includes("이번 수집 검수대상")
+    && receiptRendererBlock.includes("전체 DB 검수큐")
+    && receiptRendererBlock.includes("runResultReviewQueueHtml(receipt.reviewRows)")
+    && receiptQueueRendererBlock.includes('id="runResultReviewQueue"')
+    && receiptQueueRendererBlock.includes("reviewRows.map")
+    && receiptQueueRendererBlock.includes("이 업체 검수")
+    && receiptQueueRendererBlock.includes("data-open-run-review-company")
+    && bindEventsBlock.includes('event.target.closest("[data-open-run-review-queue]")')
+    && bindEventsBlock.includes("reviewQueue.open = true")
+    && bindEventsBlock.includes('event.target.closest("[data-open-run-review-company]")')
+    && bindEventsBlock.includes('setAdminPanelSection("database")')
+    && bindEventsBlock.includes('drawerTab.hasAttribute("data-admin-db-reset-filters")')
+    && bindEventsBlock.includes("clearAdminDbCompanyHash();")
+    && bindEventsBlock.includes('state.adminDbSelectedCompanyId = "";')
+    && receiptCssBlock.includes(".run-result-review-queue-list")
     && !receiptRendererBlock.includes('class="run-result-receipt" data-ui-surface="card"')
-    && !receiptRendererBlock.includes("placeRankComparisonSummaryHtml")
-    && !receiptRendererBlock.includes("runDbApplyLinkedQueueHtml"),
-  "collection receipt must keep three summary layers and route details to their dedicated screens",
+    && !receiptRendererBlock.includes("placeRankComparisonSummaryHtml"),
+  "collection receipt must keep this-run review rows in the collection screen and separate the reset global DB queue route",
   failures
 );
 
@@ -1294,7 +1321,9 @@ assert(
     && receiptModelBlock.includes('label: "판매율 산출"')
     && receiptModelBlock.includes('label: "확인 필요"')
     && receiptModelBlock.includes('`요청 ${fmtNumber(requestedRankCount)}곳 · 실제 ${fmtNumber(observedRankCount)}곳 확인`')
-    && receiptModelBlock.includes("rankInSegments"),
+    && receiptModelBlock.includes("rankInSegments")
+    && receiptModelBlock.includes("const reviewEntryMap = new Map()")
+    && receiptModelBlock.includes("reviewRows,"),
   "collection receipt must expose the agreed KPIs and distinguish the requested range from actual Naver observations",
   failures
 );
@@ -1306,9 +1335,43 @@ assert(
     && receiptEntityBlock.includes("canonicalMap.has")
     && receiptModelBlock.includes("const canonicalEntityMap")
     && receiptModelBlock.includes("canonicalEntityMap)")
+    && receiptModelBlock.includes("const observedRankByKey = new Map(")
+    && receiptModelBlock.includes("runResultCurrentRank(item, observedRankByKey.get(key), metrics.rank, index + 1)")
     && receiptModelBlock.includes("const channelOnlyIssueCount")
-    && receiptModelBlock.includes('salesStats(item, "day")'),
+    && receiptModelBlock.includes('salesStats(item, "day")')
+    && receiptModelBlock.includes("runResultPreferredRank(detail.rank, existing.rank)")
+    && app.includes("match.names = runDbApplyUniqueNameFallbacks(allRows, match.names)"),
   "collection receipt must deduplicate by stable IDs, keep issue totals disjoint, and count day-use sales rates",
+  failures
+);
+
+const reviewQueueMatchSandbox = {
+  compactSearchText(value) {
+    return String(value || "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
+  }
+};
+vm.createContext(reviewQueueMatchSandbox);
+vm.runInContext(
+  `${receiptPreferredRankBlock}\n${runDbUniqueNameBlock}\nthis.runResultPreferredRank = runResultPreferredRank;\nthis.runResultCurrentRank = runResultCurrentRank;\nthis.runDbApplyUniqueNameFallbacks = runDbApplyUniqueNameFallbacks;`,
+  reviewQueueMatchSandbox
+);
+const uniqueRunNames = reviewQueueMatchSandbox.runDbApplyUniqueNameFallbacks([
+  { company: { companyId: "same-1", primaryName: "같은 글램핑", aliases: [] } },
+  { company: { companyId: "same-2", primaryName: "다른 상호", aliases: ["같은글램핑"] } },
+  { company: { companyId: "unique-1", primaryName: "고유 캠프", aliases: ["고유캠프"] } }
+], new Set(["같은글램핑", "고유캠프"]));
+assert(
+  reviewQueueMatchSandbox.runResultPreferredRank(null, 7) === 7
+    && reviewQueueMatchSandbox.runResultPreferredRank(0, 7) === 7
+    && reviewQueueMatchSandbox.runResultPreferredRank(3, 7) === 7
+    && reviewQueueMatchSandbox.runResultPreferredRank(3, 0) === 3
+    && reviewQueueMatchSandbox.runResultPreferredRank(undefined, undefined) === 0
+    && reviewQueueMatchSandbox.runResultCurrentRank({ overallRank: 18 }, 0, 3, 1) === 18
+    && reviewQueueMatchSandbox.runResultCurrentRank({}, 18, 3, 1) === 18
+    && reviewQueueMatchSandbox.runResultCurrentRank({}, 0, 3, 1) === 3
+    && uniqueRunNames.has("고유캠프")
+    && !uniqueRunNames.has("같은글램핑"),
+  "review queue merging must preserve a valid Place rank and reject ambiguous duplicate-name DB fallbacks",
   failures
 );
 
@@ -1429,6 +1492,10 @@ const adminDbAutocompleteBlock = app.slice(
 const adminDbAutocompleteCssBlock = styles.slice(
   styles.indexOf(".admin-db-autocomplete {"),
   styles.indexOf(".admin-db-company-filter {", styles.indexOf(".admin-db-autocomplete {"))
+);
+const adminDbFilterGridCssBlock = styles.slice(
+  styles.indexOf(".admin-db-company-filter-grid {"),
+  styles.indexOf('.admin-db-company-filter:not([open]) > .admin-db-company-filter-grid', styles.indexOf(".admin-db-company-filter-grid {"))
 );
 const adminDbSearchShellBlock = app.slice(
   app.indexOf("function adminDbCompanySearchShellHtml("),
@@ -1658,13 +1725,17 @@ assert(
 assert(
   adminDbExplorerCssBlock.includes(".admin-db-company-autocomplete") === false
     && adminDbExplorerCssBlock.includes(".admin-db-autocomplete")
+    && /\.admin-db-company-filter\[open\]\s*\{[^}]*grid-column:\s*1\s*\/\s*-1;[^}]*width:\s*100%;/i.test(adminDbExplorerCssBlock)
+    && /position:\s*static;/i.test(adminDbFilterGridCssBlock)
+    && /width:\s*100%;/i.test(adminDbFilterGridCssBlock)
+    && !/position:\s*absolute;/i.test(adminDbFilterGridCssBlock)
     && adminDbExplorerCssBlock.includes('.admin-db-company-filter:not([open]) > .admin-db-company-filter-grid')
     && adminDbExplorerCssBlock.includes("grid-template-columns: repeat(5, minmax(0, 1fr))")
     && adminDbExplorerCssBlock.includes("grid-template-columns: repeat(4, minmax(0, 1fr))")
     && adminDbExplorerCssBlock.includes("@media (max-width: 460px)")
     && !/#[0-9a-f]{3,8}|linear-gradient|radial-gradient|!important/i.test(adminDbExplorerCssBlock)
     && !/body\.role-admin \.admin-db-hero span,/.test(styles),
-  "company explorer must use token-only light and dark surfaces and remove the legacy invisible hero label paint",
+  "company explorer must keep an open filter panel in document flow and use token-only light and dark surfaces",
   failures
 );
 

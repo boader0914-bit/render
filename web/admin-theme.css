@@ -2067,6 +2067,19 @@ html[data-theme-resolved] body.role-admin:has(#adminPanel.active [data-layout-co
 
 }
 
+@media (min-width: 861px) and (max-width: 900px) {
+  html[data-theme-resolved] body.role-admin .app-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  html[data-theme-resolved] body.role-admin .header-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   html[data-theme-resolved] *,
   html[data-theme-resolved] *::before,

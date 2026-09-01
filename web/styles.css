@@ -32317,6 +32317,125 @@ body.role-admin .admin-db-region-card-grid button.active {
   min-height: 40px;
 }
 
+.run-result-review-queue {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  background: var(--surface-control);
+  overflow: hidden;
+}
+
+.run-result-review-queue > summary {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.run-result-review-queue > summary::-webkit-details-marker {
+  display: none;
+}
+
+.run-result-review-queue > summary > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.run-result-review-queue > summary strong {
+  font-size: 18px;
+}
+
+.run-result-review-queue > summary mark {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-card);
+  color: var(--ink);
+  padding: 6px 9px;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.run-result-review-queue[open] > summary mark {
+  color: var(--accent);
+}
+
+.run-result-review-queue-close-label,
+.run-result-review-queue[open] .run-result-review-queue-open-label {
+  display: none;
+}
+
+.run-result-review-queue[open] .run-result-review-queue-close-label {
+  display: inline;
+}
+
+.run-result-review-queue-list {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  padding: 10px;
+}
+
+.run-result-review-queue-list > article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-card);
+  padding: 11px;
+}
+
+.run-result-review-queue-index {
+  width: 30px;
+  height: 30px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--surface-soft);
+  color: var(--accent) !important;
+  font-weight: 900 !important;
+}
+
+.run-result-review-queue-list > article > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.run-result-review-queue-list > article strong,
+.run-result-review-queue-list > article small,
+.run-result-review-queue-list > article p {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.run-result-review-queue-list > article > a,
+.run-result-review-queue-unlinked {
+  min-height: 36px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-control);
+  color: var(--ink);
+  padding: 7px 9px;
+  font-size: 11px;
+  font-weight: 900;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
 @media (max-width: 760px) {
   .run-result-receipt-head {
     display: grid;
@@ -32346,6 +32465,20 @@ body.role-admin .admin-db-region-card-grid button.active {
   .run-result-receipt-actions > button {
     width: 100%;
     min-height: 44px;
+  }
+
+  .run-result-review-queue > summary {
+    align-items: flex-start;
+  }
+
+  .run-result-review-queue-list > article {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .run-result-review-queue-list > article > a,
+  .run-result-review-queue-unlinked {
+    grid-column: 1 / -1;
+    width: 100%;
   }
 }
 body.role-admin .crawl-purpose-panel {
@@ -44781,6 +44914,15 @@ html[data-theme-resolved] body.role-admin .admin-db-hero p {
   position: relative;
 }
 
+.admin-db-company-filter[open] {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
+.admin-db-company-filter[open] > summary {
+  width: 100%;
+}
+
 .admin-db-company-filter > summary {
   min-width: 100px;
   display: grid;
@@ -44811,14 +44953,12 @@ html[data-theme-resolved] body.role-admin .admin-db-hero p {
 }
 
 .admin-db-company-filter-grid {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 25;
-  width: min(720px, calc(100vw - 48px));
+  position: static;
+  width: 100%;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+  margin-top: 7px;
   border: 1px solid var(--border-subtle);
   border-radius: 14px;
   background: var(--surface-card);
@@ -44987,6 +45127,10 @@ body.role-admin .admin-db-company-explorer-list .admin-db-company.admin-db-compa
 }
 
 @media (max-width: 900px) {
+  .admin-db-company-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .admin-db-company-province-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
