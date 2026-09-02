@@ -376,15 +376,15 @@ const adminMobileRouteBlock = app.slice(
 );
 
 assert(
-  adminCollectNavigationBlock.includes('{ label: "이번 수집 분석", tab: "rank" }')
+  adminCollectNavigationBlock.includes('{ label: "수집 결과 분석", tab: "rank" }')
     && !adminAnalysisNavigationBlock.includes('tab: "rank"')
     && adminPrimaryRouteBlock.includes('if (tab === "rank") return "collect";')
     && adminMobileRouteBlock.includes('["rank", "historyOps"].includes(tab)')
-    && app.includes('rank: ["이번 수집 분석", "수집 완료 즉시 품질·확인 대상·저장된 플레이스 순서 분석"]')
+    && app.includes('rank: ["수집 결과 분석", "수집 완료 즉시 품질·확인 대상·저장된 플레이스 순서 분석"]')
     && app.includes('analysis: { icon: "industry", detail: "시장 브리핑" }')
-    && indexHtml.includes('id="rankPanel" data-panel="rank" aria-label="이번 수집 분석"')
+    && indexHtml.includes('id="rankPanel" data-panel="rank" aria-label="수집 결과 분석"')
     && indexHtml.includes("수집 완료 결과의 품질과 저장된 네이버 플레이스 노출순")
-    && app.includes("이번 수집 분석 보기"),
+    && app.includes("수집 결과 분석 보기"),
   "completed collection results must live under collection analysis while industry briefing remains separate",
   failures
 );
@@ -487,8 +487,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260901-collection-analysis-v99";
-const expectedAssetVersion = "datalab-20260901-collection-analysis-v99";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260902-collection-results-v100";
+const expectedAssetVersion = "datalab-20260902-collection-results-v100";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -1358,7 +1358,7 @@ const crawlProgressBehaviorContext = {
         remove(...names) { names.forEach((name) => crawlProgressClasses.delete(name)); }
       }
     },
-    crawlProgressTitle: { textContent: "수집 진행 중" },
+    crawlProgressTitle: { textContent: "실시간 수집 현황" },
     crawlProgressText: { textContent: "" },
     crawlProgressPercent: { textContent: "" },
     crawlProgressElapsed: { textContent: "" },
@@ -1379,6 +1379,7 @@ const activeCrawlProgressBehavior = {
   running: crawlProgressBehaviorContext.state.crawlProgressRunning,
   hidden: crawlProgressBehaviorContext.els.crawlProgress.hidden,
   title: crawlProgressBehaviorContext.els.crawlProgressTitle.textContent,
+  text: crawlProgressBehaviorContext.els.crawlProgressText.textContent,
   percent: crawlProgressBehaviorContext.els.crawlProgressPercent.textContent,
   elapsed: crawlProgressBehaviorContext.els.crawlProgressElapsed.textContent,
   width: crawlProgressBehaviorContext.els.crawlProgressBar.style.width,
@@ -1390,7 +1391,8 @@ crawlProgressBehaviorContext.setCrawlProgressForTest(false);
 assert(
   activeCrawlProgressBehavior.running
     && !activeCrawlProgressBehavior.hidden
-    && activeCrawlProgressBehavior.title === "순위 수집 진행 중"
+    && activeCrawlProgressBehavior.title === "실시간 수집 현황"
+    && activeCrawlProgressBehavior.text === "순위 수집 진행 중 · 기본정보 수집 · 1-40위"
     && activeCrawlProgressBehavior.percent === "37%"
     && activeCrawlProgressBehavior.elapsed === "1분 30초"
     && activeCrawlProgressBehavior.width === "37%"
@@ -1447,8 +1449,8 @@ assert(
 assert(
   /^id="crawlProgress" hidden>/.test(crawlProgressMarkup)
     && crawlProgressMarkup.includes('id="crawlProgressTitle"')
-    && crawlProgressMarkup.includes('role="status" aria-live="polite" aria-atomic="true"')
-    && crawlProgressMarkup.includes('id="crawlProgressText"')
+    && crawlProgressMarkup.includes('id="crawlProgressTitle">실시간 수집 현황</strong>')
+    && crawlProgressMarkup.includes('id="crawlProgressText" role="status" aria-live="polite" aria-atomic="true"')
     && crawlProgressMarkup.includes('id="crawlProgressPercent"')
     && crawlProgressMarkup.includes('id="crawlProgressElapsed"')
     && crawlProgressMarkup.includes('role="progressbar"')
@@ -1464,7 +1466,8 @@ assert(
 
 assert(
   ensureCrawlControlsBlock.includes("progress.hidden = true")
-    && ensureCrawlControlsBlock.includes('role="status" aria-live="polite" aria-atomic="true"')
+    && ensureCrawlControlsBlock.includes('id="crawlProgressTitle">실시간 수집 현황</strong>')
+    && ensureCrawlControlsBlock.includes('id="crawlProgressText" role="status" aria-live="polite" aria-atomic="true"')
     && !/(crawlProgressRemaining|crawlProgressEta|crawlProgressBasis|crawlProgressStages|crawlSubmitMeta|crawl-spinner|crawl-progress-numbers)/.test(ensureCrawlControlsBlock)
     && readinessPreviewBlock.includes("els.crawlProgress.hidden = true")
     && !readinessPreviewBlock.includes("els.crawlProgress.hidden = false")
@@ -1472,6 +1475,7 @@ assert(
     && setCrawlProgressBlock.includes("els.crawlProgress.hidden = true")
     && setCrawlProgressBlock.includes("els.crawlProgress.hidden = false")
     && setCrawlProgressBlock.includes("meta.currentStage?.label")
+    && setCrawlProgressBlock.includes('const fixedTitle = "실시간 수집 현황"')
     && setCrawlProgressBlock.includes('`${currentStageLabel} 진행 중`')
     && updateCrawlProgressBlock.includes('setAttribute("aria-valuenow"')
     && !/(crawlProgressRemaining|crawlProgressEta|crawlProgressBasis|crawlProgressStages|crawlSubmitMeta)/.test(updateCrawlProgressBlock)

@@ -277,7 +277,7 @@ const ADMIN_MOBILE_SECTIONS = {
     anchor: "#crawlForm",
     items: [
       { label: "검색·시장 수집", tab: "admin", adminPanelSection: "collect", anchor: "#crawlForm" },
-      { label: "이번 수집 분석", tab: "rank" },
+      { label: "수집 결과 분석", tab: "rank" },
       { label: "결과 보관함", tab: "admin", adminPanelSection: "archive", anchor: "#collectionArchive" },
       { label: "수집 이력", tab: "historyOps" }
     ]
@@ -360,7 +360,7 @@ const ADMIN_PANEL_MOBILE_TARGETS = {
 };
 const TAB_LABELS = {
   report: "요약 리포트",
-  rank: "이번 수집 분석",
+  rank: "수집 결과 분석",
   dictionary: "입지사전",
   target: "영업 타깃",
   decisionQueue: "검수 필요",
@@ -1603,7 +1603,7 @@ function renderRunResultApplySummary() {
       <div class="run-result-receipt-actions">
         ${receipt.reviewRows.length
           ? `<button class="primary-button" type="button" data-open-run-review-queue>이번 수집 검수대상 ${fmtNumber(receipt.reviewRows.length)}곳 보기</button>`
-          : `<button class="primary-button" type="button" data-open-place-rank-replay>이번 수집 분석 보기</button>`}
+          : `<button class="primary-button" type="button" data-open-place-rank-replay>수집 결과 분석 보기</button>`}
         ${receipt.needsReview ? `<button class="secondary-button" type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="needs_work" data-admin-db-reset-filters>전체 DB 검수큐</button>` : ""}
         <button class="secondary-button" type="button" data-open-collection-archive>결과 보관함</button>
         <button class="ghost-button" type="button" data-open-collection-run>다음 수집</button>
@@ -2571,7 +2571,7 @@ function setPanelHeading(panel, title, description) {
 
 function syncRoleStaticLabels() {
   if (isAdminRole()) {
-    setPanelHeading("rank", "이번 수집 분석", "수집 완료 결과의 품질과 저장된 네이버 플레이스 노출순");
+    setPanelHeading("rank", "수집 결과 분석", "수집 완료 결과의 품질과 저장된 네이버 플레이스 노출순");
     setPanelHeading("map", "지역 클러스터 지도", "시군구 경계 · 업체 스팟 · 검색량 · 판매율");
     setPanelHeading("demand", "수요구조 분석", "시즌 수요 기준과 검색수요를 함께 해석");
     return;
@@ -2674,8 +2674,8 @@ function ensureCrawlControls() {
     progress.hidden = true;
     progress.innerHTML = `
       <div class="crawl-progress-copy">
-        <strong id="crawlProgressTitle" role="status" aria-live="polite" aria-atomic="true">수집 진행 중</strong>
-        <small id="crawlProgressText">수집을 준비하고 있습니다.</small>
+        <strong id="crawlProgressTitle">실시간 수집 현황</strong>
+        <small id="crawlProgressText" role="status" aria-live="polite" aria-atomic="true">수집을 준비하고 있습니다.</small>
       </div>
       <div class="crawl-progress-status" aria-label="수집 진행 상태">
         <b id="crawlProgressPercent">0%</b>
@@ -3295,13 +3295,18 @@ function setCrawlProgress(active, title = "", text = "", meta = {}) {
   }
   els.crawlProgress.hidden = false;
   const currentStageLabel = String(meta.currentStage?.label || "").trim();
-  const resolvedTitle = title === "수집 실행 중" && currentStageLabel
+  const resolvedStatus = title === "수집 실행 중" && currentStageLabel
     ? `${currentStageLabel} 진행 중`
     : title;
-  if (resolvedTitle && els.crawlProgressTitle && els.crawlProgressTitle.textContent !== resolvedTitle) {
-    els.crawlProgressTitle.textContent = resolvedTitle;
+  const fixedTitle = "실시간 수집 현황";
+  if (els.crawlProgressTitle && els.crawlProgressTitle.textContent !== fixedTitle) {
+    els.crawlProgressTitle.textContent = fixedTitle;
   }
-  if (text && els.crawlProgressText) els.crawlProgressText.textContent = text;
+  const resolvedText = [resolvedStatus, text]
+    .map((value) => String(value || "").trim())
+    .filter((value, index, values) => value && values.indexOf(value) === index)
+    .join(" · ");
+  if (resolvedText && els.crawlProgressText) els.crawlProgressText.textContent = resolvedText;
   updateCrawlProgressNumbers(meta);
 }
 
@@ -35129,7 +35134,7 @@ function adminHeaderView() {
   }
   return {
     report: ["업종분석", "업종 현황과 시장 요약"],
-    rank: ["이번 수집 분석", "수집 완료 즉시 품질·확인 대상·저장된 플레이스 순서 분석"],
+    rank: ["수집 결과 분석", "수집 완료 즉시 품질·확인 대상·저장된 플레이스 순서 분석"],
     dictionary: ["지역분석", "지역 현황·입지 보정·지역 운영"],
     map: ["지역분석 · 지도", "지역 내·인접 경쟁권과 반경 노출"],
     demand: ["지역분석 · 수요 전망", "시즌 수요와 네이버 트렌드"],
