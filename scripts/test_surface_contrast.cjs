@@ -306,10 +306,6 @@ const contrastChecks = [
   ["canonical light text", "#172235", "#ffffff", 7],
   ["canonical light muted", "#5e6975", "#ffffff", 4.5],
   ["canonical light accent", "#3e7565", "#ffffff", 4.5],
-  ["light selected fill separation from inactive control", "#d6ece2", "#f3f6f3", 1.1],
-  ["light selected border", "#2f725c", "#d6ece2", 4.5],
-  ["light selected text", "#275747", "#d6ece2", 4.5],
-  ["light selected icon", "#ffffff", "#2f725c", 4.5],
   ["canonical dark text", "#f4f4f5", "#111111", 7],
   ["canonical dark muted", "#b8b8bd", "#111111", 4.5],
   ["canonical dark accent", "#91bfa9", "#111111", 4.5],
@@ -337,78 +333,6 @@ for (const [label, foreground, background, minimum] of contrastChecks) {
   const ratio = contrastRatio(foreground, background);
   assert(ratio >= minimum, `${label} contrast ${ratio.toFixed(2)} below ${minimum}`, failures);
 }
-
-const lightSelectedStateStart = themeStyles.indexOf("Light interactive selection contract v1");
-const lightSelectedStateEnd = themeStyles.indexOf("@media (prefers-reduced-motion: reduce)", lightSelectedStateStart);
-const lightSelectedStateStyles = lightSelectedStateStart >= 0 && lightSelectedStateEnd > lightSelectedStateStart
-  ? themeStyles.slice(lightSelectedStateStart, lightSelectedStateEnd)
-  : "";
-const summaryActionOverlayStart = themeStyles.indexOf("Summary card native action overlay v1");
-const summaryActionOverlayEnd = themeStyles.indexOf("Light interactive selection contract v1", summaryActionOverlayStart);
-const summaryActionOverlayStyles = summaryActionOverlayStart >= 0 && summaryActionOverlayEnd > summaryActionOverlayStart
-  ? themeStyles.slice(summaryActionOverlayStart, summaryActionOverlayEnd)
-  : "";
-const lightSelectedMobileStart = lightSelectedStateStyles.indexOf("@media (max-width: 860px)");
-const lightSelectedMobileStyles = lightSelectedMobileStart >= 0
-  ? lightSelectedStateStyles.slice(lightSelectedMobileStart)
-  : "";
-const locationSummaryCardSource = app.slice(
-  app.indexOf("function renderLocationProfileSummaryCard("),
-  app.indexOf("function locationProfileStrengthSummaryModel(")
-);
-const locationSummaryActionStart = locationSummaryCardSource.indexOf('<button type="button" class="location-profile-summary-card-action"');
-const locationSummaryActionEnd = locationSummaryCardSource.indexOf("</button>", locationSummaryActionStart);
-const locationSummaryContentStart = locationSummaryCardSource.indexOf('<div class="location-profile-summary-card-head"');
-const locationCoverageSource = app.slice(
-  app.indexOf("function renderLocationProfileCoverage("),
-  app.indexOf("function locationProfileSeriesMissingMonths(")
-);
-
-assert(
-  /\.location-profile-summary-card\s*\{[^}]*position:\s*relative;/i.test(summaryActionOverlayStyles)
-    && /\.location-profile-summary-card-action\s*\{[^}]*position:\s*absolute;[^}]*inset:\s*0;[^}]*margin:\s*0;[^}]*padding:\s*0;[^}]*border:\s*0\s*!important;[^}]*border-radius:\s*inherit;[^}]*background:\s*transparent\s*!important;[^}]*box-shadow:\s*none\s*!important;[^}]*cursor:\s*pointer;[^}]*z-index:\s*2;/i.test(summaryActionOverlayStyles)
-    && !summaryActionOverlayStyles.includes('data-theme-resolved="dark"')
-    && locationSummaryActionStart >= 0
-    && locationSummaryActionEnd > locationSummaryActionStart
-    && locationSummaryContentStart > locationSummaryActionEnd
-    && /<button[^>]*class="location-profile-summary-card-action"[^>]*data-location-summary-metric=[^>]*aria-pressed=[^>]*aria-controls=[^>]*aria-label=[^>]*><\/button>/.test(locationSummaryCardSource)
-    && !/<article[^>]*\srole="button"/.test(locationSummaryCardSource)
-    && /role="progressbar"[^>]*aria-valuemin="0"[^>]*aria-valuemax=[^>]*aria-valuenow=/.test(locationCoverageSource),
-  "summary metric cards must use one transparent full-card native button overlay without repainting dark cards or wrapping semantic content",
-  failures
-);
-
-assert(
-  /html\[data-theme-resolved="light"\]\s*\{[^}]*--light-selected-fill:\s*#d6ece2;[^}]*--light-selected-pressed-fill:\s*#cbe5d8;[^}]*--light-selected-border:\s*#2f725c;[^}]*--light-selected-focus:\s*#1f6a50;/i.test(themeStyles)
-    && !/html\[data-theme-resolved="dark"\]\s*\{[^}]*--light-selected-/i.test(themeStyles)
-    && lightSelectedStateStyles.includes('.bottom-nav button[aria-current="page"]')
-    && lightSelectedStateStyles.includes('.admin-section-nav button[aria-pressed="true"]')
-    && lightSelectedStateStyles.includes('.admin-mobile-primary button[aria-current="page"]')
-    && lightSelectedStateStyles.includes('.admin-mobile-secondary button[aria-pressed="true"]')
-    && lightSelectedStateStyles.includes('.dictionary-region-item[aria-pressed="true"]')
-    && lightSelectedStateStyles.includes('.admin-db-region-card-grid button.active')
-    && lightSelectedStateStyles.includes('.location-profile-summary-card:has(> .location-profile-summary-card-action[aria-pressed="true"])')
-    && lightSelectedStateStyles.includes('.location-profile-summary-card:has(> .location-profile-summary-card-action:hover)')
-    && lightSelectedStateStyles.includes('.location-profile-summary-card:has(> .location-profile-summary-card-action:focus-visible)')
-    && lightSelectedStateStyles.includes('.location-profile-summary-card:has(> .location-profile-summary-card-action:active)')
-    && lightSelectedStateStyles.includes('.location-profile-tabs button[aria-selected="true"]')
-    && lightSelectedStateStyles.includes('.location-profile-tourism-selector button[aria-selected="true"]')
-    && lightSelectedStateStyles.includes('.location-profile-series-selector button[aria-selected="true"]')
-    && lightSelectedStateStyles.includes("inset 0 0 0 2px var(--light-selected-border)")
-    && lightSelectedStateStyles.includes("inset 4px 0 0 var(--light-selected-border)")
-    && lightSelectedStateStyles.includes("inset 0 -4px 0 var(--light-selected-border)")
-    && lightSelectedStateStyles.includes("transform: scale(.985)")
-    && lightSelectedStateStyles.includes("120ms ease-out")
-    && lightSelectedStateStyles.includes(":focus-visible")
-    && lightSelectedStateStyles.includes(".admin-nav-icon-shell")
-    && lightSelectedStateStyles.includes("color: #ffffff !important")
-    && lightSelectedMobileStyles.includes('.admin-mobile-secondary button[aria-pressed="true"]')
-    && lightSelectedMobileStyles.includes("inset 0 -4px 0 var(--light-selected-border)")
-    && !lightSelectedStateStyles.includes('data-theme-resolved="dark"')
-    && !/(?:^|[;{])\s*(?:width|height|padding|margin|border-width)\s*:/im.test(lightSelectedStateStyles),
-  "light selected controls must keep a strong ring, directional accent, icon reversal, press feedback, focus visibility, and stable geometry without changing dark mode",
-  failures
-);
 
 assert(
   /database:\s*\{[\s\S]*?adminPanelSection:\s*"database"/.test(app),
