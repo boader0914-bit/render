@@ -40098,10 +40098,11 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
   gap: 12px;
 }
 
-.admin-db-selected-panel-cumulative .admin-company-detail-header.admin-company-reference-header {
+body.role-admin .admin-db-selected-panel-cumulative .admin-company-detail-header.admin-company-reference-header {
   min-height: 66px;
   align-items: end;
-  padding: 0;
+  box-sizing: border-box;
+  padding: 8px 18px 10px;
 }
 
 .admin-company-reference-title-block,
@@ -40124,9 +40125,13 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
 }
 
 .admin-db-selected-panel-cumulative .admin-company-reference-title-block nav strong {
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-primary);
   font-size: inherit;
   letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .admin-company-reference-title-block nav i {
@@ -40142,12 +40147,15 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
 }
 
 .admin-company-reference-title-row h2 {
+  min-width: 0;
+  max-width: 100%;
   margin: 0 8px 0 0;
   color: var(--text-primary);
   font-size: clamp(26px, 3vw, 34px);
   font-weight: 950;
   line-height: 1.05;
   letter-spacing: -.035em;
+  overflow-wrap: anywhere;
 }
 
 .admin-company-reference-chip {
@@ -41553,9 +41561,15 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
 }
 
 @media (max-width: 760px) {
-  .admin-db-selected-panel-cumulative .admin-company-detail-header.admin-company-reference-header {
+  body.role-admin .admin-db-selected-panel-cumulative .admin-company-detail-header.admin-company-reference-header {
     align-items: stretch;
     gap: 14px;
+    justify-content: stretch;
+    padding-inline: 16px;
+  }
+
+  .admin-company-reference-title-block {
+    width: 100%;
   }
 
   .admin-company-reference-title-row h2 {

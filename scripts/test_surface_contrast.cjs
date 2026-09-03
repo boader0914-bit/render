@@ -487,8 +487,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260903-collection-ui-signup-closed-v102";
-const expectedAssetVersion = "datalab-20260903-collection-ui-signup-closed-v102";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260903-db-company-title-gutter-v103";
+const expectedAssetVersion = "datalab-20260903-db-company-title-gutter-v103";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
