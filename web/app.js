@@ -34039,6 +34039,42 @@ function locationProfileActiveTourismMetric() {
     : "visitor";
 }
 
+function activateLocationProfileTourismMetric(metric = "visitor", options = {}) {
+  if (!LOCATION_PROFILE_TOURISM_METRICS.has(metric)) return false;
+  const revealTourism = Boolean(options.revealTourism);
+  const root = options.root || (typeof els !== "undefined" ? els.dictionaryResult : null);
+  state.dictionaryTourismMetric = metric;
+  if (revealTourism) state.dictionaryDetailTab = "tourism";
+
+  root?.querySelectorAll("[data-location-summary-metric]").forEach((button) => {
+    const selected = button.dataset.locationSummaryMetric === metric;
+    button.setAttribute("aria-pressed", selected ? "true" : "false");
+    button.closest(".location-profile-summary-card")?.classList.toggle("active", selected);
+  });
+  root?.querySelectorAll("[data-location-tourism-metric]").forEach((button) => {
+    const selected = button.dataset.locationTourismMetric === metric;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-selected", selected ? "true" : "false");
+    button.tabIndex = selected ? 0 : -1;
+  });
+  root?.querySelectorAll("[data-location-tourism-metric-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.locationTourismMetricPanel !== metric;
+  });
+
+  if (revealTourism) {
+    root?.querySelectorAll("[data-location-profile-tab]").forEach((button) => {
+      const selected = button.dataset.locationProfileTab === "tourism";
+      button.classList.toggle("active", selected);
+      button.setAttribute("aria-selected", selected ? "true" : "false");
+      button.tabIndex = selected ? 0 : -1;
+    });
+    root?.querySelectorAll("[data-location-profile-panel]").forEach((panel) => {
+      panel.hidden = panel.dataset.locationProfilePanel !== "tourism";
+    });
+  }
+  return true;
+}
+
 function renderLocationProfileTourismDashboard(panels = {}) {
   const active = locationProfileActiveTourismMetric();
   const items = [
@@ -34064,8 +34100,11 @@ function renderLocationProfileSummaryCard(options = {}) {
   const items = Array.isArray(options.items) && options.items.length
     ? options.items
     : [{ label: options.valueLabel || "최신값", value: options.value || "관측 없음" }];
+  const metric = LOCATION_PROFILE_TOURISM_METRICS.has(options.key) ? options.key : "visitor";
+  const selected = metric === locationProfileActiveTourismMetric();
   return `
-    <article class="location-profile-summary-card ${escapeHtml(options.tone || "")}" data-location-summary-metric="${escapeHtml(options.key || "")}">
+    <article class="location-profile-summary-card ${escapeHtml(options.tone || "")}${selected ? " active" : ""}">
+      <button type="button" class="location-profile-summary-card-action" data-location-summary-metric="${escapeHtml(metric)}" aria-pressed="${selected ? "true" : "false"}" aria-controls="location-profile-tourism-panel-${escapeHtml(metric)}" aria-label="${escapeHtml(`${options.title || "지표"} 관광 상세 보기`)}"></button>
       <div class="location-profile-summary-card-head"><span>${escapeHtml(options.title || "지표")}</span>${options.note ? `<small>${escapeHtml(options.note)}</small>` : ""}</div>
       <div class="location-profile-summary-values ${items.length === 1 ? "is-single" : ""}">
         ${items.map((item) => `<div><span>${escapeHtml(item.label || "지표")}</span><strong>${escapeHtml(item.value || "관측 없음")}</strong></div>`).join("")}
@@ -40793,21 +40832,17 @@ function bindEvents() {
     runDictionarySearch(button.dataset.locationQuery);
   });
   els.dictionaryResult?.addEventListener("click", (event) => {
+    const summaryMetric = event.target.closest("[data-location-summary-metric]");
+    if (summaryMetric) {
+      activateLocationProfileTourismMetric(summaryMetric.dataset.locationSummaryMetric || "visitor", {
+        revealTourism: true
+      });
+      return;
+    }
     const tourismMetric = event.target.closest("[data-location-tourism-metric]");
     if (tourismMetric) {
       const metric = tourismMetric.dataset.locationTourismMetric || "visitor";
-      if (!LOCATION_PROFILE_TOURISM_METRICS.has(metric)) return;
-      state.dictionaryTourismMetric = metric;
-      const dashboard = tourismMetric.closest(".location-profile-tourism-dashboard");
-      dashboard?.querySelectorAll("[data-location-tourism-metric]").forEach((button) => {
-        const selected = button.dataset.locationTourismMetric === metric;
-        button.classList.toggle("active", selected);
-        button.setAttribute("aria-selected", selected ? "true" : "false");
-        button.tabIndex = selected ? 0 : -1;
-      });
-      dashboard?.querySelectorAll("[data-location-tourism-metric-panel]").forEach((panel) => {
-        panel.hidden = panel.dataset.locationTourismMetricPanel !== metric;
-      });
+      activateLocationProfileTourismMetric(metric);
       return;
     }
     const tourismSeries = event.target.closest("[data-location-tourism-series]");

@@ -30,6 +30,11 @@ html[data-theme-resolved="light"] {
   --accent: #3e7565;
   --accent-strong: #275747;
   --accent-contrast: #ffffff;
+  --light-selected-fill: #d6ece2;
+  --light-selected-pressed-fill: #cbe5d8;
+  --light-selected-border: #2f725c;
+  --light-selected-focus: #1f6a50;
+  --light-selected-shadow: 0 2px 8px rgba(39, 87, 71, .12);
   --positive: #2f7d5f;
   --warning: #b87912;
   --warning-strong: #805009;
@@ -2090,6 +2095,189 @@ html[data-theme-resolved] body.role-admin:has(#adminPanel.active [data-layout-co
     width: 100%;
     flex-wrap: wrap;
     justify-content: flex-start;
+  }
+}
+
+/* Summary card native action overlay v1: the button stays paint-free above semantic card content. */
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .location-profile-summary-card {
+  position: relative;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .location-profile-summary-card-action {
+  appearance: none;
+  position: absolute;
+  inset: 0;
+  display: block;
+  margin: 0;
+  padding: 0;
+  border: 0 !important;
+  border-radius: inherit;
+  background: transparent !important;
+  box-shadow: none !important;
+  cursor: pointer;
+  touch-action: manipulation;
+  z-index: 2;
+}
+
+/* Light interactive selection contract v1: persistent state stays visible after the press ends. */
+html[data-theme-resolved="light"] :is(body.role-admin, body.role-b2b) :is(
+  .bottom-nav button,
+  .admin-section-nav button,
+  .admin-mobile-primary button,
+  .admin-mobile-secondary button,
+  .dictionary-region-item,
+  .admin-db-region-card-grid button,
+  .location-profile-summary-card,
+  .location-profile-tabs button,
+  .location-profile-tourism-selector button,
+  .location-profile-series-selector button
+) {
+  transition: background-color 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out, box-shadow 120ms ease-out, transform 120ms ease-out;
+  transform-origin: center;
+}
+
+html[data-theme-resolved="light"] :is(body.role-admin, body.role-b2b) :is(
+  .bottom-nav button,
+  .admin-section-nav button,
+  .admin-mobile-primary button,
+  .admin-mobile-secondary button,
+  .dictionary-region-item,
+  .admin-db-region-card-grid button,
+  .location-profile-tabs button,
+  .location-profile-tourism-selector button,
+  .location-profile-series-selector button
+):focus-visible {
+  outline: 3px solid var(--light-selected-focus) !important;
+  outline-offset: -3px;
+}
+
+html[data-theme-resolved="light"] :is(body.role-admin, body.role-b2b) :is(
+  .bottom-nav button,
+  .admin-section-nav button,
+  .admin-mobile-primary button,
+  .admin-mobile-secondary button,
+  .dictionary-region-item,
+  .admin-db-region-card-grid button,
+  .location-profile-tabs button,
+  .location-profile-tourism-selector button,
+  .location-profile-series-selector button
+):active {
+  background: var(--light-selected-pressed-fill) !important;
+  transform: scale(.985);
+}
+
+html[data-theme-resolved="light"] :is(body.role-admin, body.role-b2b) :is(
+  .bottom-nav button.active,
+  .bottom-nav button[aria-current="page"],
+  .bottom-nav button[aria-pressed="true"],
+  .admin-section-nav button.active,
+  .admin-section-nav button[aria-current="page"],
+  .admin-section-nav button[aria-pressed="true"],
+  .admin-mobile-primary button.active,
+  .admin-mobile-primary button[aria-current="page"],
+  .admin-mobile-primary button[aria-pressed="true"],
+  .admin-mobile-secondary button.active,
+  .admin-mobile-secondary button[aria-current="page"],
+  .admin-mobile-secondary button[aria-pressed="true"]
+) {
+  border-color: var(--light-selected-border) !important;
+  background: var(--light-selected-fill) !important;
+  color: var(--accent-strong) !important;
+  box-shadow: inset 0 0 0 2px var(--light-selected-border), inset 4px 0 0 var(--light-selected-border), var(--light-selected-shadow) !important;
+}
+
+html[data-theme-resolved="light"] :is(body.role-admin, body.role-b2b) :is(
+  .bottom-nav button.active,
+  .bottom-nav button[aria-current="page"],
+  .bottom-nav button[aria-pressed="true"],
+  .admin-mobile-primary button.active,
+  .admin-mobile-primary button[aria-current="page"],
+  .admin-mobile-primary button[aria-pressed="true"]
+) .admin-nav-icon-shell,
+html[data-theme-resolved="light"] body.role-b2b .bottom-nav button:is(.active, [aria-current="page"], [aria-pressed="true"])::before {
+  border-color: var(--light-selected-border) !important;
+  background: var(--light-selected-border) !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved="light"] :is(body.role-admin, body.role-b2b) :is(
+  .dictionary-region-item.active,
+  .dictionary-region-item[aria-pressed="true"],
+  .admin-db-region-card-grid button.active,
+  .admin-db-region-card-grid button[aria-pressed="true"]
+) {
+  border-color: var(--light-selected-border) !important;
+  background: var(--light-selected-fill) !important;
+  color: var(--accent-strong) !important;
+  box-shadow: inset 0 0 0 2px var(--light-selected-border), inset 4px 0 0 var(--light-selected-border), var(--light-selected-shadow) !important;
+}
+
+html[data-theme-resolved="light"] :is(body.role-admin, body.role-b2b) .dictionary-region-item:is(.active, [aria-pressed="true"]) span {
+  color: var(--accent-strong) !important;
+}
+
+html[data-theme-resolved="light"] :is(body.role-admin, body.role-b2b) .location-profile-summary-card-action:focus-visible {
+  outline: none !important;
+}
+
+html[data-theme-resolved="light"] :is(body.role-admin, body.role-b2b) .location-profile-summary-card:has(> .location-profile-summary-card-action:hover) {
+  border-color: var(--border-strong) !important;
+  background: color-mix(in srgb, var(--light-selected-fill) 55%, var(--surface-card)) !important;
+  box-shadow: 0 1px 5px rgba(39, 87, 71, .08) !important;
+}
+
+html[data-theme-resolved="light"] :is(body.role-admin, body.role-b2b) :is(
+  .location-profile-summary-card.active,
+  .location-profile-summary-card:has(> .location-profile-summary-card-action[aria-pressed="true"])
+) {
+  border-color: var(--light-selected-border) !important;
+  background: var(--light-selected-fill) !important;
+  color: var(--accent-strong) !important;
+  box-shadow: inset 0 0 0 2px var(--light-selected-border), var(--light-selected-shadow) !important;
+}
+
+html[data-theme-resolved="light"] :is(body.role-admin, body.role-b2b) .location-profile-summary-card:has(> .location-profile-summary-card-action:focus-visible) {
+  outline: 3px solid var(--light-selected-focus) !important;
+  outline-offset: -3px;
+}
+
+html[data-theme-resolved="light"] :is(body.role-admin, body.role-b2b) .location-profile-summary-card:has(> .location-profile-summary-card-action:active) {
+  background: var(--light-selected-pressed-fill) !important;
+  transform: scale(.985);
+}
+
+html[data-theme-resolved="light"] :is(body.role-admin, body.role-b2b) :is(
+  .location-profile-tabs button.active,
+  .location-profile-tabs button[aria-selected="true"],
+  .location-profile-tourism-selector button.active,
+  .location-profile-tourism-selector button[aria-selected="true"],
+  .location-profile-series-selector button.active,
+  .location-profile-series-selector button[aria-selected="true"]
+) {
+  border-color: var(--light-selected-border) !important;
+  background: var(--light-selected-fill) !important;
+  color: var(--accent-strong) !important;
+  box-shadow: inset 0 0 0 2px var(--light-selected-border), var(--light-selected-shadow) !important;
+}
+
+html[data-theme-resolved="light"] :is(body.role-admin, body.role-b2b) .location-profile-series-selector button:is(.active, [aria-selected="true"]) :is(span, strong) {
+  color: var(--accent-strong) !important;
+}
+
+@media (max-width: 860px) {
+  html[data-theme-resolved="light"] :is(body.role-admin, body.role-b2b) :is(
+    .bottom-nav button.active,
+    .bottom-nav button[aria-current="page"],
+    .bottom-nav button[aria-pressed="true"],
+    .admin-mobile-primary button.active,
+    .admin-mobile-primary button[aria-current="page"],
+    .admin-mobile-primary button[aria-pressed="true"],
+    .admin-mobile-secondary button.active,
+    .admin-mobile-secondary button[aria-current="page"],
+    .admin-mobile-secondary button[aria-pressed="true"]
+  ) {
+    box-shadow: inset 0 0 0 2px var(--light-selected-border), inset 0 -4px 0 var(--light-selected-border), var(--light-selected-shadow) !important;
   }
 }
 
