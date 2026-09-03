@@ -1,4 +1,4 @@
-const CACHE_VERSION = "lodging-datalab-pwa-v20260902-collection-results-v100";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260903-collection-ui-signup-closed-v102";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",

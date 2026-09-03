@@ -18046,6 +18046,11 @@ a.platform-row:hover {
   min-height: 54px;
 }
 
+.crawl-date-grid .field input {
+  height: 54px;
+  min-height: 54px;
+}
+
 @media (min-width: 861px) {
   .crawl-keyword-bar {
     width: min(100%, 298px);
@@ -18072,7 +18077,8 @@ a.platform-row:hover {
     gap: 8px;
   }
 
-  .crawl-keyword-field input {
+  .crawl-keyword-field input,
+  .crawl-date-grid .field input {
     height: 58px;
     min-height: 58px;
   }

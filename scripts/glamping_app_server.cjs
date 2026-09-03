@@ -89,6 +89,8 @@ const ADMIN_USERNAME = String(process.env.GLAMPING_ADMIN_USER || process.env.ADM
 const ADMIN_PASSWORD = String(process.env.GLAMPING_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || "0914").trim();
 const B2B_USERNAME = String(process.env.GLAMPING_B2B_USER || process.env.B2B_USER || "b2b").trim();
 const B2B_PASSWORD = String(process.env.GLAMPING_B2B_PASSWORD || process.env.B2B_PASSWORD || "0914").trim();
+const SIGNUP_ENABLED = /^(1|true|on|yes)$/i.test(String(process.env.GLAMPING_SIGNUP_ENABLED || "0").trim());
+const SIGNUP_CLOSED_MESSAGE = "Beta 서비스 종료로 신규 회원가입이 중단되었습니다.";
 const B2B_ENABLED = !/^(0|false|off)$/i.test(String(process.env.GLAMPING_B2B_ENABLED || "1").trim())
   && Boolean(B2B_USERNAME && B2B_PASSWORD);
 const B2B_MEMBER_DAILY_SEARCH_LIMIT = 2;
@@ -4520,6 +4522,12 @@ function loginPage(message = "") {
   const escapedMessage = String(message || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const lockMinutes = Math.max(1, Math.ceil(LOGIN_LOCK_MS / 60000));
   const sessionHours = Math.max(1, Math.round(SESSION_TTL_MS / 3600000));
+  const signupEntry = SIGNUP_ENABLED
+    ? '<a class="link" href="/signup">회원가입</a>'
+    : `<details class="signup-closed">
+        <summary class="link">회원가입</summary>
+        <p role="status" aria-live="polite">${escapeHtml(SIGNUP_CLOSED_MESSAGE)}</p>
+      </details>`;
   return `<!doctype html>
 <html lang="ko">
 <head>
@@ -4657,6 +4665,20 @@ function loginPage(message = "") {
     button:hover { background: #c8decc; border-color: #c8decc; }
     button:disabled { opacity: .6; cursor: wait; }
     .link { display: block; margin-top: 18px; color: #c8decc; font-size: 13px; font-weight: 800; text-align: center; text-decoration: none; }
+    .signup-closed { margin-top: 18px; text-align: center; }
+    .signup-closed .link { margin-top: 0; cursor: pointer; list-style: none; }
+    .signup-closed .link::-webkit-details-marker { display: none; }
+    .signup-closed p {
+      margin: 10px 0 0;
+      padding: 11px 12px;
+      border: 1px solid #3a3a3a;
+      border-radius: 10px;
+      background: #171717;
+      color: #c8decc;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.45;
+    }
     .legal-links {
       display: flex;
       flex-wrap: wrap;
@@ -4711,7 +4733,7 @@ function loginPage(message = "") {
         <p class="security-note">보안을 위해 ${LOGIN_FAILURE_LIMIT}회 이상 실패하면 ${lockMinutes}분간 로그인이 제한됩니다. 로그인 세션은 최대 ${sessionHours}시간 유지됩니다.</p>
         <div class="error">${escapedMessage}</div>
       </form>
-      <a class="link" href="/signup">회원가입</a>
+      ${signupEntry}
       <div class="legal-links" aria-label="정책 문서">
         <a href="/terms" target="_blank" rel="noopener">이용약관</a>
         <a href="/privacy" target="_blank" rel="noopener">개인정보처리방침</a>
@@ -17375,9 +17397,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=datalab-20260902-collection-results-v100"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=datalab-20260902-collection-results-v100"')
-      .replace('src="/app.js"', 'src="/app.js?v=datalab-20260902-collection-results-v100"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=datalab-20260903-collection-ui-signup-closed-v102"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=datalab-20260903-collection-ui-signup-closed-v102"')
+      .replace('src="/app.js"', 'src="/app.js?v=datalab-20260903-collection-ui-signup-closed-v102"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -17482,6 +17504,10 @@ async function route(req, res) {
     }
 
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/api/signup/check-username") {
+      if (!SIGNUP_ENABLED) {
+        if (req.method === "HEAD") return sendHead(res, 503);
+        return send(res, 503, { error: SIGNUP_CLOSED_MESSAGE });
+      }
       if (req.method === "HEAD") return sendHead(res, 200);
       assertRequestRateLimit(req, "signupCheck", RATE_LIMIT_POLICIES.signupCheck);
       return send(res, 200, await checkSignupUsernameAvailability(reqUrl.searchParams.get("username") || ""));
@@ -17490,11 +17516,16 @@ async function route(req, res) {
     if (req.method === "GET" && reqUrl.pathname === "/signup") {
       const session = getSession(req);
       if (session) return send(res, 302, "", "text/plain; charset=utf-8", { Location: redirectPathForRole(session.role) });
+      if (!SIGNUP_ENABLED) return send(res, 503, loginPage(SIGNUP_CLOSED_MESSAGE), "text/html; charset=utf-8");
       return send(res, 200, signupPage(), "text/html; charset=utf-8");
     }
 
     if (req.method === "POST" && (reqUrl.pathname === "/signup" || reqUrl.pathname === "/api/signup")) {
       const payload = await parseLoginBody(req);
+      if (!SIGNUP_ENABLED) {
+        if (reqUrl.pathname === "/signup") return send(res, 503, loginPage(SIGNUP_CLOSED_MESSAGE), "text/html; charset=utf-8");
+        return send(res, 503, { error: SIGNUP_CLOSED_MESSAGE });
+      }
       try {
         assertRequestRateLimit(req, "signup", RATE_LIMIT_POLICIES.signup);
         const account = await registerB2BMember(payload, { req });
