@@ -68,6 +68,7 @@ const VISITOR_HISTORY_MAX_MONTHS = 36;
 const VISITOR_HISTORY_DEFAULT_CONCURRENCY = 2;
 const VISITOR_HISTORY_MAX_CONCURRENCY = 4;
 const VISITOR_ROLLING_MONTHS = 12;
+const VISITOR_ROLLING_ANALYSIS_MONTHS = VISITOR_ROLLING_MONTHS * 2;
 const VISITOR_CATEGORY_LABELS = Object.freeze({
   "1": "현지인",
   "2": "외지인",
@@ -1539,7 +1540,9 @@ function createCollector(options = {}) {
   }
 
   function visitorRolling12(series = [], now = currentDate()) {
-    const targetEndYearMonth = currentKstYearMonth(now);
+    const currentYearMonth = currentKstYearMonth(now);
+    const latestClosedMonth = latestClosedYearMonth(now);
+    const targetEndYearMonth = latestClosedMonth;
     const latestComplete = [...series]
       .filter((point) => point.status === "complete" && Number.isFinite(Number(point.visitorDays)))
       .sort((left, right) => left.yearMonth.localeCompare(right.yearMonth))
@@ -1550,7 +1553,7 @@ function createCollector(options = {}) {
       series,
       targetEndYearMonth,
       "target",
-      "current_month_or_api_observation_pending"
+      "latest_closed_month_observation_pending"
     );
     const confirmed = rollingVisitorWindow(series, confirmedEndYearMonth, "confirmed");
     const previous = rollingVisitorWindow(series, previousEndYearMonth, "previous");
@@ -1583,6 +1586,8 @@ function createCollector(options = {}) {
     return {
       schemaVersion: 1,
       basis: "calendar_month_rolling_12",
+      currentYearMonth,
+      latestClosedYearMonth: latestClosedMonth,
       targetYearMonth: targetEndYearMonth,
       latestCompleteYearMonth: latestComplete?.yearMonth || "",
       target,
@@ -1590,7 +1595,8 @@ function createCollector(options = {}) {
       previous,
       comparison,
       policy: {
-        currentMonthIncludedInTarget: true,
+        currentMonthIncludedInTarget: false,
+        targetEndsAtLatestClosedMonth: true,
         confirmedEndsAtLatestCompleteMonth: true,
         previousWindowNonOverlapping: true,
         completeMonthsRequired: VISITOR_ROLLING_MONTHS,
@@ -1790,6 +1796,12 @@ function createCollector(options = {}) {
       Math.round(Number(input.months) || VISITOR_HISTORY_DEFAULT_MONTHS)
     ));
     const months = visitorHistoryMonths(endYearMonth, monthCount);
+    const analysisMonthCount = Math.max(monthCount, Math.min(
+      VISITOR_HISTORY_MAX_MONTHS,
+      Math.round(Number(input.analysisMonths) || monthCount)
+    ));
+    const analysisMonths = visitorHistoryMonths(endYearMonth, analysisMonthCount);
+    const requestedMonthSet = new Set(months);
     const collectMissing = Boolean(input.collectMissing || input.refresh);
     const retryIncomplete = collectMissing && input.retryIncomplete !== false;
     const force = Boolean(input.force);
@@ -1834,26 +1846,31 @@ function createCollector(options = {}) {
       };
     }
 
-    const monthResults = new Array(months.length);
+    const analysisMonthResults = new Array(analysisMonths.length);
     let cursor = 0;
     async function worker() {
-      while (cursor < months.length) {
+      while (cursor < analysisMonths.length) {
         const index = cursor;
         cursor += 1;
-        monthResults[index] = await visitorMonthForHistory(months[index], regionMap, {
-          collectMissing,
-          retryIncomplete,
+        const yearMonth = analysisMonths[index];
+        const requestedMonth = requestedMonthSet.has(yearMonth);
+        analysisMonthResults[index] = await visitorMonthForHistory(yearMonth, regionMap, {
+          collectMissing: requestedMonth && collectMissing,
+          retryIncomplete: requestedMonth && retryIncomplete,
           regionKeys: hasSelector ? selectedRegions.map((region) => region.regionKey) : [],
-          force,
+          force: requestedMonth && force,
           ttlHours
         });
       }
     }
-    await Promise.all(Array.from({ length: Math.min(concurrency, months.length) }, () => worker()));
+    await Promise.all(Array.from({ length: Math.min(concurrency, analysisMonths.length) }, () => worker()));
 
-    const latestMonthSnapshot = monthResults.at(-1)?.snapshot || {};
+    const analysisResultByYearMonth = new Map(analysisMonthResults.map((result) => [result.yearMonth, result]));
+    const monthResults = months.map((yearMonth) => analysisResultByYearMonth.get(yearMonth));
+
     const regions = selectedRegions.map((region) => {
       const series = monthResults.map((monthResult) => visitorHistoryPoint(monthResult, region));
+      const analysisSeries = analysisMonthResults.map((monthResult) => visitorHistoryPoint(monthResult, region));
       const recentSeries = series.slice(-VISITOR_OUTLOOK_SCORE_MINIMUMS.recentWindowMonths);
       const previousSeries = series.slice(
         -(VISITOR_OUTLOOK_SCORE_MINIMUMS.recentWindowMonths + VISITOR_OUTLOOK_SCORE_MINIMUMS.previousWindowMonths),
@@ -1865,21 +1882,35 @@ function createCollector(options = {}) {
         previous12: coverageWindow(previousSeries)
       };
       const latest = series.at(-1) || null;
-      const latestAvailable = [...series].reverse().find((point) => point.status === "complete") || null;
-      const yoy = visitorSameMonthComparison(series, endYearMonth);
-      const recent12VsPrevious12 = visitorGrowthComparison(recentSeries, previousSeries);
+      const latestAvailable = [...analysisSeries].reverse().find((point) => point.status === "complete") || null;
+      const metricEndYearMonth = latestAvailable?.yearMonth || endYearMonth;
+      const metricSeries = analysisSeries.filter((point) => point.yearMonth <= metricEndYearMonth);
+      const metricRecentSeries = metricSeries.slice(-VISITOR_OUTLOOK_SCORE_MINIMUMS.recentWindowMonths);
+      const metricPreviousSeries = metricSeries.slice(
+        -(VISITOR_OUTLOOK_SCORE_MINIMUMS.recentWindowMonths + VISITOR_OUTLOOK_SCORE_MINIMUMS.previousWindowMonths),
+        -VISITOR_OUTLOOK_SCORE_MINIMUMS.recentWindowMonths
+      );
+      const analysisCoverage = {
+        ...coverageWindow(analysisSeries),
+        recent12: coverageWindow(metricRecentSeries),
+        previous12: coverageWindow(metricPreviousSeries)
+      };
+      const yoy = visitorSameMonthComparison(analysisSeries, metricEndYearMonth);
+      const recent12VsPrevious12 = visitorGrowthComparison(metricRecentSeries, metricPreviousSeries);
+      const latestCompleteSnapshot = analysisResultByYearMonth.get(metricEndYearMonth)?.snapshot || {};
       return {
         regionKey: region.regionKey,
         sido: region.sido,
         sigungu: region.sigungu,
         series,
         coverage,
+        analysisCoverage,
         latest,
         latestAvailable,
         yoy,
         recent12VsPrevious12,
-        rolling12: visitorRolling12(series, currentDate()),
-        visitorOutlookScore: visitorOutlook(series, coverage, latestMonthSnapshot, endYearMonth)
+        rolling12: visitorRolling12(analysisSeries, currentDate()),
+        visitorOutlookScore: visitorOutlook(metricSeries, analysisCoverage, latestCompleteSnapshot, metricEndYearMonth)
       };
     });
 
@@ -1905,7 +1936,8 @@ function createCollector(options = {}) {
         endYearMonth,
         months: monthCount,
         latestClosedYearMonth: closedYearMonth,
-        rollingTargetYearMonth: currentKstYearMonth(currentDate())
+        rollingTargetYearMonth: closedYearMonth,
+        currentYearMonth: currentKstYearMonth(currentDate())
       },
       collection: {
         mode: force ? "force_refresh" : collectMissing ? "backfill_missing" : "cache_only",
@@ -1913,8 +1945,12 @@ function createCollector(options = {}) {
         regionRequestsPerMonth: 0,
         concurrency,
         requestedMonths: months.length,
+        analysisMonths: analysisMonths.length,
+        analysisCacheOnlyMonths: analysisMonths.length - months.length,
         cacheHitMonths,
         missingCacheMonths: monthResults.filter((result) => result.access === "missing").length,
+        analysisCacheHitMonths: analysisMonthResults.filter((result) => result.access === "cache").length,
+        analysisMissingCacheMonths: analysisMonthResults.filter((result) => result.access === "missing").length,
         networkAttemptedMonths: networkResults.length,
         networkSucceededMonths,
         networkFailedMonths: networkResults.length - networkSucceededMonths,
@@ -1944,6 +1980,8 @@ function createCollector(options = {}) {
         failedRefreshDoesNotOverwriteCompleteCache: true,
         retryIncompleteOnBackfill: retryIncomplete,
         monthlyCacheSharedAcrossRegions: true,
+        rollingAnalysisReadsCacheOnly: true,
+        rollingAnalysisMinimumMonths: VISITOR_ROLLING_ANALYSIS_MONTHS,
         rolling12RequiresCompleteMonths: VISITOR_ROLLING_MONTHS,
         coverageRateUnit: "ratio_0_to_1",
         scoreMinimums: { ...VISITOR_OUTLOOK_SCORE_MINIMUMS },
@@ -4403,6 +4441,7 @@ module.exports = {
   visitorHistoryMonths,
   VISITOR_ADAPTER_VERSION,
   VISITOR_ROLLING_MONTHS,
+  VISITOR_ROLLING_ANALYSIS_MONTHS,
   VISITOR_OUTLOOK_MODEL_VERSION,
   VISITOR_OUTLOOK_SCORE_MINIMUMS,
   DEMAND_STRENGTH_ADAPTER_VERSION,

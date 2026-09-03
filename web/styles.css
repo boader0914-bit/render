@@ -30063,6 +30063,515 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
   }
 }
 
+/* Region tourism dashboard v3: metric-first cards and one readable chart at a time. */
+.location-profile-overview-status {
+  flex: 0 0 auto;
+  display: grid;
+  justify-items: end;
+  gap: 7px;
+}
+
+.location-profile-period-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--surface-control);
+  color: var(--text-secondary);
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.location-profile-summary-card {
+  min-height: 188px;
+  align-content: start;
+  gap: 13px !important;
+  padding: 16px !important;
+  border-radius: var(--card-radius) !important;
+}
+
+.location-profile-summary-card-head {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.location-profile-summary-card-head > span {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.location-profile-summary-card-head > small {
+  min-height: 34px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.location-profile-summary-values {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+  gap: 0;
+}
+
+.location-profile-summary-values > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding: 0 10px;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.location-profile-summary-values > div:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.location-profile-summary-values > div:last-child {
+  padding-right: 0;
+}
+
+.location-profile-summary-values span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.location-profile-summary-values strong {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: clamp(20px, 2vw, 28px);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.05;
+  overflow-wrap: anywhere;
+}
+
+.location-profile-summary-values.is-single strong {
+  font-size: clamp(23px, 2.4vw, 32px);
+}
+
+.location-profile-coverage {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+.location-profile-summary-card > .location-profile-coverage {
+  margin-top: auto;
+}
+
+.location-profile-coverage > div {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.location-profile-coverage > div span,
+.location-profile-coverage > div strong,
+.location-profile-coverage > div em,
+.location-profile-coverage > small {
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.location-profile-coverage > div span,
+.location-profile-coverage > small {
+  color: var(--text-secondary);
+}
+
+.location-profile-coverage > div strong {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.location-profile-coverage > div em {
+  margin-left: auto;
+  color: var(--text-secondary);
+}
+
+.location-profile-coverage.is-complete > div em {
+  color: var(--positive);
+}
+
+.location-profile-coverage.is-partial > div em,
+.location-profile-status.is-partial {
+  color: var(--warning-strong);
+}
+
+.location-profile-status.is-partial {
+  border-color: color-mix(in srgb, var(--warning) 52%, var(--border-subtle));
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface-card));
+}
+
+.location-profile-coverage-track {
+  display: block;
+  width: 100%;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-secondary) 24%, var(--surface-control));
+}
+
+.location-profile-coverage-track i {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--theme-accent-strong);
+}
+
+.location-profile-coverage.is-partial .location-profile-coverage-track i {
+  background: color-mix(in srgb, var(--theme-accent-strong) 78%, var(--warning));
+}
+
+.location-profile-tourism-dashboard {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.location-profile-tourism-selector {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--card-radius);
+  background: var(--surface-control);
+  padding: 4px;
+}
+
+.location-profile-tourism-selector button {
+  min-width: 0;
+  min-height: 44px;
+  border: 0;
+  border-radius: calc(var(--card-radius) - 4px);
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.location-profile-tourism-selector button:hover,
+.location-profile-tourism-selector button:focus-visible {
+  background: color-mix(in srgb, var(--surface-selected) 58%, transparent);
+  color: var(--text-primary);
+}
+
+.location-profile-tourism-selector button.active,
+.location-profile-tourism-selector button[aria-selected="true"] {
+  background: var(--surface-selected);
+  color: var(--theme-accent-strong);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-accent) 45%, var(--border-subtle));
+}
+
+.location-profile-tourism-metric-panel,
+.location-profile-series-panel {
+  min-width: 0;
+}
+
+.location-profile-tourism-metric-panel[hidden],
+.location-profile-series-panel[hidden] {
+  display: none;
+}
+
+.location-profile-tourism-metric-panel > .location-profile-panel {
+  box-shadow: none;
+}
+
+.location-profile-series-selector {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.location-profile-series-selector button {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 3px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--ui-radius-control);
+  background: var(--surface-control);
+  color: var(--text-secondary);
+  padding: 11px 12px;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.location-profile-series-selector button span,
+.location-profile-series-selector button small {
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.location-profile-series-selector button strong {
+  color: var(--text-primary);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.location-profile-series-selector button small {
+  grid-column: 1 / -1;
+  color: var(--text-secondary);
+}
+
+.location-profile-series-selector button:hover,
+.location-profile-series-selector button:focus-visible,
+.location-profile-series-selector button.active,
+.location-profile-series-selector button[aria-selected="true"] {
+  border-color: color-mix(in srgb, var(--theme-accent) 60%, var(--border-subtle));
+  background: var(--surface-selected);
+  color: var(--theme-accent-strong);
+}
+
+.location-profile-analysis-layout {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+  align-items: stretch;
+  gap: 12px;
+}
+
+.location-profile-analysis-chart,
+.location-profile-analysis-facts {
+  min-width: 0;
+  border-radius: var(--card-radius);
+  background: var(--surface-control);
+}
+
+.location-profile-analysis-chart {
+  overflow: hidden;
+}
+
+.location-profile-analysis-facts {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 12px;
+}
+
+.location-profile-analysis-facts > div:not(.location-profile-coverage) {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 3px 2px 11px;
+}
+
+.location-profile-analysis-facts > div:not(.location-profile-coverage) span,
+.location-profile-analysis-facts > div:not(.location-profile-coverage) small {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.location-profile-analysis-facts > div:not(.location-profile-coverage) strong {
+  color: var(--text-primary);
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.location-profile-analysis-facts > .location-profile-coverage {
+  border: 0;
+  padding: 3px 2px;
+}
+
+.location-profile-tourism-dashboard .location-profile-chart-scroll {
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  padding: 10px;
+}
+
+.location-profile-tourism-dashboard .location-profile-chart,
+.location-profile-tourism-dashboard .location-profile-strength .location-profile-chart {
+  width: 100%;
+  min-width: 0;
+  height: auto;
+}
+
+.location-profile-chart-gridline line {
+  stroke: color-mix(in srgb, var(--text-secondary) 34%, var(--surface-control));
+}
+
+.location-profile-chart-gridline text,
+.location-profile-chart-axis,
+.location-profile-chart-unit {
+  fill: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.location-profile-chart-point-hit {
+  fill: transparent;
+  pointer-events: all;
+}
+
+.location-profile-chart-point-group:focus {
+  outline: none;
+}
+
+.location-profile-chart-point-group:focus .location-profile-chart-point {
+  fill: var(--surface-selected);
+  stroke-width: 5;
+}
+
+.location-profile-chart-missing-zone rect {
+  fill: color-mix(in srgb, var(--warning) 11%, transparent);
+  stroke: color-mix(in srgb, var(--warning) 58%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.location-profile-chart-missing-zone text {
+  fill: var(--warning-strong);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.location-profile-chart-latest-label rect {
+  fill: var(--surface-selected);
+  stroke: color-mix(in srgb, var(--theme-accent) 72%, var(--border-subtle));
+  stroke-width: 1;
+}
+
+.location-profile-chart-latest-label text {
+  fill: var(--theme-accent-strong);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.location-profile-tourism-dashboard .location-profile-index-series {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.location-profile-tourism-dashboard .location-profile-index-chart,
+.location-profile-tourism-dashboard .location-profile-index-detail {
+  border-color: color-mix(in srgb, var(--border-subtle) 75%, transparent);
+}
+
+.location-profile-tourism-dashboard .location-profile-index-detail {
+  align-content: start;
+}
+
+@media (max-width: 1100px) {
+  .location-profile-analysis-layout,
+  .location-profile-index-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(210px, 260px);
+  }
+}
+
+@media (max-width: 900px) {
+  .location-profile-analysis-layout,
+  .location-profile-index-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .location-profile-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .location-profile-summary-card {
+    min-height: 176px;
+  }
+}
+
+@media (max-width: 600px) {
+  .location-profile-overview-status {
+    justify-items: start;
+  }
+
+  .location-profile-period-chip {
+    white-space: normal;
+  }
+
+  .location-profile-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .location-profile-summary-card {
+    min-height: 0;
+    padding: 13px !important;
+  }
+
+  .location-profile-summary-card-head > small,
+  .location-profile-summary-card > .location-profile-coverage > small {
+    min-height: 0;
+  }
+
+  .location-profile-summary-values {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .location-profile-summary-values > div,
+  .location-profile-summary-values > div:first-child,
+  .location-profile-summary-values > div:last-child {
+    padding: 0;
+    border-left: 0;
+  }
+
+  .location-profile-summary-values strong,
+  .location-profile-summary-values.is-single strong {
+    font-size: 20px;
+  }
+
+  .location-profile-tourism-selector {
+    grid-template-columns: repeat(4, minmax(78px, 1fr));
+    overflow-x: auto;
+  }
+
+  .location-profile-analysis-facts {
+    grid-template-columns: 1fr;
+  }
+
+}
+
+@media (max-width: 430px) {
+  .location-profile-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .location-profile-tourism-selector {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow-x: hidden;
+  }
+
+  .location-profile-series-selector {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .location-profile-tourism-dashboard *,
+  .location-profile-summary-card * {
+    scroll-behavior: auto;
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
 @media (max-width: 560px) {
   .crawl-progress {
     grid-template-columns: minmax(0, 1fr) auto;
@@ -35269,7 +35778,7 @@ body.role-admin .admin-db-company-action a + a {
 
 .location-profile-chart-scroll {
   min-width: 0;
-  overflow-x: auto;
+  overflow: hidden;
   border: 1px solid var(--border-subtle);
   border-radius: var(--card-radius);
   background: var(--surface-control);
@@ -35280,12 +35789,12 @@ body.role-admin .admin-db-company-action a + a {
   --profile-series-accent: var(--theme-accent);
   display: block;
   width: 100%;
-  min-width: 620px;
+  min-width: 0;
   height: auto;
 }
 
 .location-profile-strength .location-profile-chart {
-  min-width: 820px;
+  min-width: 0;
 }
 
 .location-profile-chart.is-stay {
@@ -35786,12 +36295,9 @@ body.role-admin .admin-db-company-action a + a {
     grid-column: 2;
   }
 
-  .location-profile-chart {
-    min-width: 560px;
-  }
-
+  .location-profile-chart,
   .location-profile-strength .location-profile-chart {
-    min-width: 820px;
+    min-width: 0;
   }
 
   .location-profile-source-list > div {
@@ -45362,4 +45868,235 @@ body.role-admin .admin-db-company-explorer-list .admin-db-company.admin-db-compa
     white-space: normal;
     overflow-wrap: anywhere;
   }
+}
+
+/* Keep the tourism redesign above the legacy location-card cascade. */
+.location-profile-summary-grid .location-profile-summary-card {
+  min-height: 188px;
+  align-content: start;
+  gap: 13px;
+  padding: 16px;
+  border-radius: var(--card-radius);
+}
+
+.location-profile-summary-card .location-profile-summary-card-head > span {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.location-profile-summary-card .location-profile-summary-card-head > small,
+.location-profile-summary-card .location-profile-summary-values span,
+.location-profile-summary-card .location-profile-coverage :is(span, strong, em, small) {
+  font-size: 12px;
+}
+
+.location-profile-summary-card .location-profile-summary-values strong {
+  color: var(--text-primary);
+  font-size: clamp(20px, 2vw, 28px);
+  line-height: 1.05;
+}
+
+.location-profile-summary-card .location-profile-summary-values.is-single strong {
+  font-size: clamp(23px, 2.4vw, 32px);
+}
+
+.location-profile-summary-card .location-profile-summary-values:not(.is-single) {
+  grid-template-columns: 1fr;
+  gap: 7px;
+}
+
+.location-profile-summary-card .location-profile-summary-values:not(.is-single) > div,
+.location-profile-summary-card .location-profile-summary-values:not(.is-single) > div:first-child,
+.location-profile-summary-card .location-profile-summary-values:not(.is-single) > div:last-child {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 8px;
+  border-left: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 0 0 6px;
+}
+
+.location-profile-summary-card .location-profile-summary-values:not(.is-single) > div:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.location-profile-summary-card .location-profile-summary-values:not(.is-single) strong {
+  font-size: 18px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.location-profile-summary-card .location-profile-coverage > div strong,
+.location-profile-summary-card .location-profile-coverage > div em {
+  white-space: nowrap;
+}
+
+.location-profile-tourism-dashboard .location-profile-chart-scroll {
+  container-type: inline-size;
+}
+
+.location-profile-tourism-dashboard .location-profile-chart {
+  max-width: 600px;
+  margin-inline: auto;
+}
+
+.location-profile-tourism-dashboard :is(.location-profile-chart-gridline text, .location-profile-chart-axis, .location-profile-chart-unit, .location-profile-chart-missing-zone text, .location-profile-chart-latest-label text) {
+  fill: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.location-profile-tourism-dashboard .location-profile-chart-latest-label text {
+  fill: var(--theme-accent-strong);
+  font-weight: 900;
+}
+
+.location-profile-tourism-dashboard .location-profile-chart-missing-zone text {
+  fill: var(--warning-strong);
+  font-weight: 850;
+}
+
+.location-profile-tourism-dashboard .location-profile-chart-missing-zone.is-failed rect {
+  fill: color-mix(in srgb, var(--danger) 13%, transparent);
+  stroke: color-mix(in srgb, var(--danger) 70%, transparent);
+}
+
+.location-profile-tourism-dashboard .location-profile-chart-missing-zone.is-failed text {
+  fill: var(--danger-strong);
+}
+
+.location-profile-tourism-dashboard .location-profile-chart-state-key {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px 10px;
+  padding: 2px 2px 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.location-profile-tourism-dashboard .location-profile-chart-state-key span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.location-profile-tourism-dashboard .location-profile-chart-state-key span::before {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warning);
+  content: "";
+}
+
+.location-profile-tourism-dashboard .location-profile-chart-state-key .is-partial::before {
+  background: var(--theme-accent);
+}
+
+.location-profile-tourism-dashboard .location-profile-chart-state-key .is-failed {
+  color: var(--danger-strong);
+}
+
+.location-profile-tourism-dashboard .location-profile-chart-state-key .is-failed::before {
+  background: var(--danger);
+}
+
+.location-profile-series-controls {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.location-profile-series-unavailable {
+  min-width: 0;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--ui-radius-control);
+  background: color-mix(in srgb, var(--surface-control) 78%, transparent);
+  color: var(--text-secondary);
+  padding: 9px 11px;
+  font-size: 12px;
+}
+
+.location-profile-series-unavailable summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.location-profile-series-unavailable > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.location-profile-series-unavailable span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 999px;
+  background: var(--surface-card);
+  padding: 5px 8px;
+}
+
+.location-profile-series-unavailable small {
+  color: var(--text-tertiary);
+}
+
+@container (max-width: 500px) {
+  .location-profile-tourism-dashboard :is(.location-profile-chart-gridline text, .location-profile-chart-axis, .location-profile-chart-unit, .location-profile-chart-missing-zone text, .location-profile-chart-latest-label text) {
+    font-size: 11px;
+  }
+}
+
+@container (max-width: 420px) {
+  .location-profile-tourism-dashboard :is(.location-profile-chart-gridline text, .location-profile-chart-axis, .location-profile-chart-unit, .location-profile-chart-missing-zone text, .location-profile-chart-latest-label text) {
+    font-size: 14px;
+  }
+
+  .location-profile-tourism-dashboard .location-profile-chart-axis.is-compact-secondary {
+    display: none;
+  }
+}
+
+@container (max-width: 320px) {
+  .location-profile-tourism-dashboard :is(.location-profile-chart-gridline text, .location-profile-chart-axis, .location-profile-chart-unit, .location-profile-chart-missing-zone text, .location-profile-chart-latest-label text) {
+    font-size: 18px;
+  }
+}
+
+@media (max-width: 900px) {
+  .location-profile-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+}
+
+@media (max-width: 600px) {
+  .location-profile-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .location-profile-summary-grid .location-profile-summary-card {
+    min-height: 0;
+    padding: 13px;
+  }
+
+  .location-profile-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow-x: hidden;
+  }
+
+  .location-profile-tabs button {
+    min-width: 0;
+    width: 100%;
+    padding-inline: 8px;
+  }
+
 }

@@ -724,16 +724,19 @@ assert(
     && !locationProfileBlock.includes("snapshot.axisLabel = roles[index]")
     && locationProfileBlock.includes("12개월 누적 방문자 구간 비교")
     && locationProfileBlock.includes("각 점은 표시된 12개월 전체 누적값")
-    && locationProfileBlock.includes("<h4>현재월 포함 최근 12개월</h4>")
-    && locationProfileBlock.includes("현재월은 완전월 확정 전 자료 대기")
+    && !locationProfileBlock.includes("<h4>현재월 포함 최근 12개월</h4>")
+    && locationProfileBlock.includes("<h4>최근 완료월 기준 12개월 지역 방문자</h4>")
+    && locationProfileBlock.includes("최근 달력상 완료월까지 조회")
     && locationProfileBlock.includes("최근 확정월 기준 12개월 방문자")
     && locationProfileBlock.includes("조회 대상 ${visitor.period}")
     && locationProfileBlock.includes("function locationProfileRecentSeriesWindow(")
-    && locationProfileBlock.includes("방문자 그래프 동일 기간 ${referencePeriodLabel}")
+    && locationProfileBlock.includes("체류·소비 자료 기준 ${referencePeriodLabel}")
     && locationProfileBlock.includes("최근 완료월 기준 12개월")
+    && locationProfileBlock.includes("renderLocationProfileCoverage(target.coverage")
     && locationProfileBlock.includes("referencePeriod: strengthReferencePeriod")
-    && locationProfileBlock.includes('const textAnchor = points.length === 1 ? "middle" : index === 0 ? "start" : index === points.length - 1 ? "end" : "middle";'),
-  "location graphs must distinguish rolling monthly periods, 12-month snapshot ranges, and requested strength windows",
+    && locationProfileBlock.includes('const textAnchor = index === 0 ? "start" : index === lastIndex ? "end" : "middle";')
+    && locationProfileBlock.includes("is-compact-secondary"),
+  "location graphs must use completed-month windows, separate coverage, source-specific strength periods, and inward compact labels",
   failures
 );
 
@@ -825,11 +828,14 @@ assert(
 );
 
 assert(
-  locationProfileBlock.includes("실제 관측 · 체류 ${stayCoverage.completeMonths}/${expectedMonths}")
+  locationProfileBlock.includes("체류 ${stayCoverage.completeMonths}/${expectedMonths} · 소비 ${spendCoverage.completeMonths}/${expectedMonths}")
     && locationProfileBlock.includes('최근월 미수집')
-    && styles.includes(".location-profile-strength .location-profile-chart")
-    && styles.includes("min-width: 820px;"),
-  "strength cards must distinguish partial 12-month coverage and keep monthly labels readable in a scrollable chart",
+    && locationProfileBlock.includes('renderLocationProfileSeriesSelector("strength"')
+    && locationProfileBlock.includes("renderLocationProfileCoverage(item.coverage")
+    && styles.includes(".location-profile-analysis-layout")
+    && styles.includes(".location-profile-chart-missing-zone")
+    && !styles.includes("min-width: 820px;"),
+  "strength cards must expose partial coverage and keep responsive charts readable without a forced desktop width",
   failures
 );
 
@@ -851,12 +857,15 @@ assert(
     && tourismIndexUiBlock.includes('{ key: "spend", label: "소비"')
     && tourismIndexUiBlock.includes('{ key: "international", label: "국제"')
     && tourismIndexUiBlock.includes("entry?.values?.[spec.key] ?? operation?.overallValue")
-    && tourismIndexUiBlock.includes("graphReady: observedPoints.length >= 8")
+    && tourismIndexUiBlock.includes("graphReady: observedPoints.length >= 2")
     && tourismIndexUiBlock.includes("legacySeries")
     && tourismIndexUiBlock.includes("const referencePeriod = evidence.periodRange")
     && tourismIndexUiBlock.includes("latestClosedYearMonth")
     && tourismIndexUiBlock.includes("최신 확정월")
     && tourismIndexUiBlock.includes("metric.hasValue && !metric.isOverall")
+    && tourismIndexUiBlock.includes("function renderLocationProfileSeriesSelector(")
+    && tourismIndexUiBlock.includes("data-location-tourism-series-panel")
+    && tourismIndexUiBlock.includes("단일 관측")
     && tourismIndexUiBlock.includes("function renderLocationProfileTourismIndexDetailRows(")
     && tourismIndexUiBlock.includes("const visible = rows.slice(0, 5)")
     && tourismIndexUiBlock.includes("const folded = rows.slice(5)")
@@ -865,7 +874,7 @@ assert(
     && styles.includes(".location-profile-index-series-grid")
     && styles.includes(".location-profile-index-detail-empty")
     && styles.includes(".location-profile-index-detail-more"),
-  "resource-demand and diversity cards must use their own confirmed 12-month periods and fold observed detail metrics after five rows",
+  "resource-demand and diversity cards must keep their source periods, render one-point evidence, and fold detail metrics after five rows",
   failures
 );
 

@@ -16088,6 +16088,10 @@ async function readTourismDataStatus() {
 }
 
 const TOURISM_LOCATION_HISTORY_MONTHS = 12;
+// Keep the public chart window at 12 months, but inspect older stored visitor
+// months so the latest confirmed and prior non-overlapping windows can be built
+// without making a provider request during a page read.
+const TOURISM_LOCATION_VISITOR_ANALYSIS_MONTHS = 36;
 const TOURISM_LOCATION_HISTORY_QUERY_FIELDS = new Set(["regionKey", "regionName"]);
 const TOURISM_LOCATION_HISTORY_FORBIDDEN_QUERY_FIELDS = new Set([
   "servicekey",
@@ -16530,6 +16534,10 @@ async function readTourismLocationHistoryCache(selector = {}) {
     force: false,
     maxPagesPerOperation: 1
   };
+  const visitorCacheInput = {
+    ...cacheInput,
+    analysisMonths: TOURISM_LOCATION_VISITOR_ANALYSIS_MONTHS
+  };
   const [
     tourismVisitorHistory,
     tourismDemandStrengthHistory,
@@ -16537,7 +16545,7 @@ async function readTourismLocationHistoryCache(selector = {}) {
     tourismDiversityHistory,
     tourismVisitorPeriodSummary
   ] = await Promise.all([
-    tourismCollector.collectVisitorHistory(cacheInput),
+    tourismCollector.collectVisitorHistory(visitorCacheInput),
     tourismCollector.collectDemandStrengthHistory(cacheInput),
     tourismCollector.collectResourceDemandHistory(cacheInput),
     tourismCollector.collectDiversityHistory(cacheInput),
@@ -16579,8 +16587,12 @@ async function readTourismLocationHistoryCache(selector = {}) {
       requestedMonths: TOURISM_LOCATION_HISTORY_MONTHS,
       externalRequestsAttempted,
       visitors: {
+        requestedMonths: Number(tourismVisitorHistory?.collection?.requestedMonths || 0),
+        analysisMonths: Number(tourismVisitorHistory?.collection?.analysisMonths || 0),
         cacheHitMonths: Number(tourismVisitorHistory?.collection?.cacheHitMonths || 0),
-        missingCacheMonths: Number(tourismVisitorHistory?.collection?.missingCacheMonths || 0)
+        missingCacheMonths: Number(tourismVisitorHistory?.collection?.missingCacheMonths || 0),
+        analysisCacheHitMonths: Number(tourismVisitorHistory?.collection?.analysisCacheHitMonths || 0),
+        analysisMissingCacheMonths: Number(tourismVisitorHistory?.collection?.analysisMissingCacheMonths || 0)
       },
       demandStrength: {
         cacheHitMonths: Number(tourismDemandStrengthHistory?.collection?.cacheHitMonths || 0),

@@ -659,6 +659,8 @@ async function main() {
     assert.equal(byRegionKey.body.cache.mode, "cache_only");
     assert.equal(byRegionKey.body.cache.requestedMonths, 12);
     assert.equal(byRegionKey.body.cache.externalRequestsAttempted, 0);
+    assert.equal(byRegionKey.body.cache.visitors.requestedMonths, 12);
+    assert.equal(byRegionKey.body.cache.visitors.analysisMonths, 36);
     assert.equal(byRegionKey.body.tourismVisitorPeriodSummary.ok, true);
     assert.equal(byRegionKey.body.tourismVisitorPeriodSummary.status, "ok");
     assert.equal(byRegionKey.body.tourismVisitorPeriodSummary.snapshots.length, 3);
@@ -681,7 +683,28 @@ async function main() {
     assert.equal(byRegionKey.body.cache.visitorPeriodSummary.snapshotCount, 3);
     assert.equal(byRegionKey.body.cache.visitorPeriodSummary.externalRequestsAttempted, 0);
     assert.equal(byRegionKey.body.tourismVisitorHistory.collection.mode, "cache_only");
+    assert.equal(byRegionKey.body.tourismVisitorHistory.collection.requestedMonths, 12);
+    assert.equal(byRegionKey.body.tourismVisitorHistory.collection.analysisMonths, 36);
+    assert.equal(byRegionKey.body.tourismVisitorHistory.collection.analysisCacheOnlyMonths, 24);
     assert.equal(byRegionKey.body.tourismVisitorHistory.collection.networkAttemptedMonths, 0);
+    assert.equal(byRegionKey.body.tourismVisitorHistory.regions[0].series.length, 12);
+    assert.equal(byRegionKey.body.tourismVisitorHistory.regions[0].analysisCoverage.expectedMonths, 36);
+    assert.equal(
+      byRegionKey.body.tourismVisitorHistory.regions[0].rolling12.targetYearMonth,
+      byRegionKey.body.tourismVisitorHistory.period.latestClosedYearMonth
+    );
+    assert.equal(
+      byRegionKey.body.tourismVisitorHistory.regions[0].rolling12.target.period.endYearMonth,
+      byRegionKey.body.tourismVisitorHistory.period.latestClosedYearMonth
+    );
+    assert.equal(
+      byRegionKey.body.tourismVisitorHistory.regions[0].rolling12.policy.currentMonthIncludedInTarget,
+      false
+    );
+    assert.equal(
+      byRegionKey.body.tourismVisitorHistory.regions[0].rolling12.policy.targetEndsAtLatestClosedMonth,
+      true
+    );
     assert.deepEqual(
       byRegionKey.body.tourismVisitorHistory.regions.map((region) => region.regionKey),
       [SANCHEONG_REGION_KEY]

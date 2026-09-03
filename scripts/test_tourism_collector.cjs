@@ -539,8 +539,11 @@ async function main() {
     assert.equal(emptyHistory.regions[0].coverage.completeMonths, 0);
     assert.equal(emptyHistory.regions[0].series.every((point) => point.status === "missing"), true);
     assert.equal(emptyHistory.regions[0].series.every((point) => point.averageDailyVisitors === null), true);
-    assert.equal(emptyHistory.regions[0].rolling12.target.period.startYearMonth, "202508");
-    assert.equal(emptyHistory.regions[0].rolling12.target.period.endYearMonth, "202607");
+    assert.equal(emptyHistory.regions[0].rolling12.currentYearMonth, "202607");
+    assert.equal(emptyHistory.regions[0].rolling12.latestClosedYearMonth, "202606");
+    assert.equal(emptyHistory.regions[0].rolling12.targetYearMonth, "202606");
+    assert.equal(emptyHistory.regions[0].rolling12.target.period.startYearMonth, "202507");
+    assert.equal(emptyHistory.regions[0].rolling12.target.period.endYearMonth, "202606");
     assert.equal(emptyHistory.regions[0].rolling12.target.coverage.completeMonths, 0);
     assert.equal(emptyHistory.regions[0].rolling12.target.totalVisitors, null);
     assert.equal(emptyHistory.regions[0].rolling12.confirmed.totalVisitors, null);
@@ -559,7 +562,8 @@ async function main() {
       endYearMonth: "202606",
       months: 36,
       latestClosedYearMonth: "202606",
-      rollingTargetYearMonth: "202607"
+      rollingTargetYearMonth: "202606",
+      currentYearMonth: "202607"
     });
     assert.equal(history.collection.mode, "backfill_missing");
     assert.equal(history.collection.requestGrain, "month_all_regions");
@@ -587,11 +591,12 @@ async function main() {
     assert.equal(sancheongHistory.recent12VsPrevious12.status, "ready");
     assert.equal(sancheongHistory.recent12VsPrevious12.comparableMonthPairs, 10);
     assert.ok(sancheongHistory.recent12VsPrevious12.changeRate > 0);
-    assert.equal(sancheongHistory.rolling12.target.period.startYearMonth, "202508");
-    assert.equal(sancheongHistory.rolling12.target.period.endYearMonth, "202607");
-    assert.equal(sancheongHistory.rolling12.target.coverage.completeMonths, 10);
+    assert.equal(sancheongHistory.rolling12.target.period.startYearMonth, "202507");
+    assert.equal(sancheongHistory.rolling12.target.period.endYearMonth, "202606");
+    assert.equal(sancheongHistory.rolling12.target.coverage.completeMonths, 11);
     assert.equal(sancheongHistory.rolling12.target.coverage.partialMonths, 1);
-    assert.deepEqual(sancheongHistory.rolling12.target.coverage.missingYearMonths, ["202607"]);
+    assert.deepEqual(sancheongHistory.rolling12.target.coverage.missingYearMonths, []);
+    assert.deepEqual(sancheongHistory.rolling12.target.coverage.partialYearMonths, ["202511"]);
     assert.equal(sancheongHistory.rolling12.target.totalVisitors, null);
     assert.equal(sancheongHistory.rolling12.confirmed.period.startYearMonth, "202507");
     assert.equal(sancheongHistory.rolling12.confirmed.period.endYearMonth, "202606");
@@ -646,10 +651,10 @@ async function main() {
     const completeRolling = completeHistory.regions[0].rolling12;
     assert.equal(completeHistory.status, "ok");
     assert.equal(completeHistory.coverage.completeRegionMonths, 36);
-    assert.equal(completeRolling.target.status, "incomplete");
-    assert.equal(completeRolling.target.coverage.completeMonths, 11);
-    assert.equal(completeRolling.target.coverage.missingMonths, 1);
-    assert.equal(completeRolling.target.totalVisitors, null);
+    assert.equal(completeRolling.target.status, "ready");
+    assert.equal(completeRolling.target.coverage.completeMonths, 12);
+    assert.equal(completeRolling.target.coverage.missingMonths, 0);
+    assert.ok(Number.isFinite(completeRolling.target.totalVisitors));
     assert.equal(completeRolling.latestCompleteYearMonth, "202606");
     assert.equal(completeRolling.confirmed.status, "ready");
     assert.equal(completeRolling.confirmed.coverage.completeMonths, 12);
@@ -668,6 +673,127 @@ async function main() {
     assert.equal(completeRolling.policy.completeMonthsRequired, 12);
     assert.equal(completeRolling.policy.incompleteWindowTotalIsNull, true);
     assert.equal(completeRolling.policy.previousWindowNonOverlapping, true);
+    assert.equal(completeRolling.policy.currentMonthIncludedInTarget, false);
+    assert.equal(completeRolling.policy.targetEndsAtLatestClosedMonth, true);
+
+    const requestCountBeforeAnalysisRead = historyRequests.length;
+    const compactHistoryWithAnalysis = await historyCollector.collectVisitorHistory({
+      regionNames: ["산청"],
+      months: 12,
+      analysisMonths: 36
+    });
+    assert.equal(compactHistoryWithAnalysis.period.months, 12);
+    assert.equal(compactHistoryWithAnalysis.regions[0].series.length, 12);
+    assert.equal(compactHistoryWithAnalysis.collection.requestedMonths, 12);
+    assert.equal(compactHistoryWithAnalysis.collection.analysisMonths, 36);
+    assert.equal(compactHistoryWithAnalysis.collection.analysisCacheOnlyMonths, 24);
+    assert.equal(compactHistoryWithAnalysis.collection.networkAttemptedMonths, 0);
+    assert.equal(compactHistoryWithAnalysis.regions[0].analysisCoverage.completeMonths, 36);
+    assert.equal(compactHistoryWithAnalysis.regions[0].rolling12.confirmed.status, "ready");
+    assert.equal(compactHistoryWithAnalysis.regions[0].rolling12.previous.status, "ready");
+    assert.equal(compactHistoryWithAnalysis.regions[0].visitorOutlookScore.status, "ready");
+    assert.equal(historyRequests.length, requestCountBeforeAnalysisRead);
+
+    const historyCacheDir = path.join(historyDataDir, "cache");
+    const visitorCacheFile = (yearMonth) => path.join(
+      historyCacheDir,
+      `visitors__locgo-regn-visitors-v1__regionmap__${yearMonth}.json`
+    );
+    const analysisOnlyMissingMonth = "202307";
+    const requestedMissingMonth = "202606";
+    const analysisOnlyCachePath = visitorCacheFile(analysisOnlyMissingMonth);
+    const requestedCachePath = visitorCacheFile(requestedMissingMonth);
+    const [analysisOnlyCacheFixture, requestedCacheFixture] = await Promise.all([
+      fsp.readFile(analysisOnlyCachePath),
+      fsp.readFile(requestedCachePath)
+    ]);
+    await Promise.all([
+      fsp.rm(analysisOnlyCachePath),
+      fsp.rm(requestedCachePath)
+    ]);
+    try {
+      const requestCountBeforeAnalysisRefresh = historyRequests.length;
+      const refreshedCompactHistory = await historyCollector.collectVisitorHistory({
+        regionNames: ["산청"],
+        months: 12,
+        analysisMonths: 36,
+        collectMissing: true
+      });
+      const refreshRequests = historyRequests.slice(requestCountBeforeAnalysisRefresh);
+      assert.deepEqual(refreshRequests, [requestedMissingMonth]);
+      assert.equal(refreshRequests.includes(analysisOnlyMissingMonth), false);
+      assert.equal(refreshedCompactHistory.collection.networkAttemptedMonths, 1);
+      assert.equal(refreshedCompactHistory.collection.networkSucceededMonths, 1);
+      assert.equal(refreshedCompactHistory.collection.cacheHitMonths, 11);
+      assert.equal(refreshedCompactHistory.collection.missingCacheMonths, 0);
+      assert.equal(refreshedCompactHistory.collection.analysisCacheHitMonths, 34);
+      assert.equal(refreshedCompactHistory.collection.analysisMissingCacheMonths, 1);
+      assert.equal(refreshedCompactHistory.regions[0].series.length, 12);
+      assert.equal(refreshedCompactHistory.regions[0].coverage.completeMonths, 12);
+      assert.equal(
+        refreshedCompactHistory.regions[0].analysisCoverage.completeMonths,
+        35
+      );
+
+      const requestCountBeforeAnalysisForce = historyRequests.length;
+      const forcedCompactHistory = await historyCollector.collectVisitorHistory({
+        regionNames: ["산청"],
+        months: 12,
+        analysisMonths: 36,
+        force: true
+      });
+      const forceRequests = historyRequests.slice(requestCountBeforeAnalysisForce);
+      assert.deepEqual(
+        [...forceRequests].sort(),
+        [...visitorHistoryMonths("202606", 12)].sort()
+      );
+      assert.equal(forceRequests.includes(analysisOnlyMissingMonth), false);
+      assert.equal(forcedCompactHistory.collection.networkAttemptedMonths, 12);
+      assert.equal(forcedCompactHistory.collection.networkSucceededMonths, 12);
+      assert.equal(forcedCompactHistory.collection.analysisMissingCacheMonths, 1);
+    } finally {
+      await Promise.all([
+        fsp.writeFile(analysisOnlyCachePath, analysisOnlyCacheFixture),
+        fsp.writeFile(requestedCachePath, requestedCacheFixture)
+      ]);
+    }
+
+    const laggedHistoryCollector = createCollector({
+      rootDir: tmp,
+      webDir,
+      dataDir,
+      tourismDataDir: historyDataDir,
+      env: {},
+      now: () => new Date("2026-08-15T00:00:00.000Z"),
+      fetchImpl: async () => {
+        throw new Error("analysis-only history read attempted a network request");
+      }
+    });
+    const laggedHistory = await laggedHistoryCollector.collectVisitorHistory({
+      regionNames: ["산청"],
+      months: 12,
+      analysisMonths: 36
+    });
+    const laggedRolling = laggedHistory.regions[0].rolling12;
+    assert.equal(laggedHistory.collection.networkAttemptedMonths, 0);
+    assert.equal(laggedHistory.regions[0].series.length, 12);
+    assert.equal(laggedHistory.regions[0].latest.yearMonth, "202607");
+    assert.equal(laggedHistory.regions[0].latest.status, "missing");
+    assert.equal(laggedHistory.regions[0].latest.averageDailyVisitors, null);
+    assert.equal(laggedHistory.regions[0].latestAvailable.yearMonth, "202606");
+    assert.equal(laggedRolling.currentYearMonth, "202608");
+    assert.equal(laggedRolling.latestClosedYearMonth, "202607");
+    assert.equal(laggedRolling.target.period.endYearMonth, "202607");
+    assert.equal(laggedRolling.target.coverage.completeMonths, 11);
+    assert.deepEqual(laggedRolling.target.coverage.missingYearMonths, ["202607"]);
+    assert.equal(laggedRolling.target.totalVisitors, null);
+    assert.equal(laggedRolling.confirmed.period.endYearMonth, "202606");
+    assert.equal(laggedRolling.confirmed.status, "ready");
+    assert.equal(laggedRolling.confirmed.coverage.completeMonths, 12);
+    assert.ok(Number.isFinite(laggedRolling.confirmed.totalVisitors));
+    assert.equal(laggedRolling.previous.period.endYearMonth, "202506");
+    assert.equal(laggedRolling.previous.status, "ready");
+    assert.equal(laggedRolling.comparison.status, "ready");
 
     const historyRequestCountBeforeSecondRegion = historyRequests.length;
     const cachedHadongHistory = await historyCollector.collectVisitorHistory({ regionNames: ["하동"], months: 36 });
