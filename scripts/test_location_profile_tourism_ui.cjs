@@ -278,7 +278,9 @@ check(count(twoPointChart, /class="location-profile-chart-line"/g) === 1, "two a
 check(count(gapChart, /class="location-profile-chart-point"/g) === 2, "a missing month must not render a zero-value point");
 check(count(gapChart, /class="location-profile-chart-line"/g) === 0, "a missing month must break the line between isolated observations");
 check(gapChart.includes("location-profile-chart-missing-zone"), "missing months must have an explicit visual zone");
-check(gapChart.includes("location-profile-chart-latest-label"), "the latest observed value must be labelled on the graph");
+check(/<\/svg>\s*<div class="location-profile-chart-latest-label">/.test(gapChart), "the latest observed value must remain visible outside the plotting area");
+check(!gapChart.split("</svg>")[0].includes("location-profile-chart-latest-label"), "the latest value must not obscure chart lines or observation points");
+check(/location-profile-chart-latest-label[^>]*><span>최근 관측/.test(gapChart), "the external value must retain its observation date");
 check(!gapChart.includes("NaN"), "chart markup must never expose NaN coordinates or values");
 check(gapChart.includes('viewBox="0 0 400 240"'), "chart must use the compact responsive viewBox");
 check(gapChart.includes('text-anchor="end"'), "y-axis values must align away from the plotting area");
@@ -287,7 +289,7 @@ check(failedReasonChart.includes("location-profile-chart-missing-zone is-failed"
 check(!gapChart.includes('tabindex="0"') && gapChart.includes('aria-hidden="true"'), "chart points must not create redundant nested image focus stops");
 check(gapChart.includes("관측값:"), "the chart description must expose its observed values to assistive technology");
 check(compactChart.includes("location-profile-chart-state-key") && compactChart.includes("부분수집 1") && compactChart.includes("수집실패 1"), "dense 12-month charts must move missing-state labels into a non-overlapping key");
-check(!/location-profile-chart-missing-zone[^>]*>[\s\S]*?<text[^>]*>/.test(compactChart.split("location-profile-chart-latest-label")[0]), "dense 12-month missing zones must not repeat overlapping text inside every month");
+check([...compactChart.matchAll(/<g class="location-profile-chart-missing-zone[^"]*">([\s\S]*?)<\/g>/g)].every((match) => !match[1].includes("<text")), "dense 12-month missing zones must not repeat overlapping text inside every month");
 check(count(compactChart, /location-profile-chart-axis/g) === 6, "the compact chart must render six desktop month labels");
 check(count(compactChart, /location-profile-chart-axis is-compact-secondary/g) === 2, "two lower-priority month labels must be available for compact-container hiding");
 check(compactChart.includes('text-anchor="start">25.08</text>') && compactChart.includes('text-anchor="end">26.07</text>'), "edge month labels must anchor inward to avoid clipping");
@@ -691,9 +693,9 @@ check(
   "failed-month text must use the high-contrast danger token"
 );
 check(
-  /\.location-profile-chart-latest-label rect\s*\{[^}]*var\(--surface-selected\)/s.test(styles)
-    && /\.location-profile-chart-latest-label text\s*\{[^}]*var\(--theme-accent-strong\)/s.test(styles),
-  "latest-value labels must use selected-surface and accent theme tokens"
+  /\.location-profile-chart-latest-label\s*\{[^}]*var\(--text-secondary\)/s.test(styles)
+    && /\.location-profile-chart-latest-label strong\s*\{[^}]*var\(--theme-accent-strong\)/s.test(styles),
+  "external latest-value captions must use readable text and accent theme tokens"
 );
 
 if (failures.length) {

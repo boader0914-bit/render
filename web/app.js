@@ -83,6 +83,7 @@ const state = {
   crawlEtaByKey: {},
   crawlProgressRunning: false,
   selectedLocationCard: null,
+  demandRegionContext: null,
   dictionaryProvince: "경남",
   dictionaryDetailTab: "basic",
   dictionaryTourismMetric: "visitor",
@@ -371,7 +372,7 @@ const TAB_LABELS = {
   target: "영업 타깃",
   decisionQueue: "검수 필요",
   map: "지역 클러스터 지도",
-  demand: "수요구조 분석",
+  demand: "수요 전망",
   historyOps: "수집 이력",
   admin: "관리"
 };
@@ -2579,7 +2580,7 @@ function syncRoleStaticLabels() {
   if (isAdminRole()) {
     setPanelHeading("rank", "수집 결과 분석", "수집 완료 결과의 품질과 저장된 네이버 플레이스 노출순");
     setPanelHeading("map", "지역 클러스터 지도", "시군구 경계 · 업체 스팟 · 검색량 · 판매율");
-    setPanelHeading("demand", "수요구조 분석", "시즌 수요 기준과 검색수요를 함께 해석");
+    setPanelHeading("demand", "수요 전망", "수집 키워드의 검색 추세와 시즌별 수요구조를 함께 해석");
     return;
   }
   setPanelHeading("rank", "경쟁업체 노출", "네이버 상위 노출 경쟁업체의 매출·판매율 표본 비교");
@@ -29336,8 +29337,79 @@ function renderHistoryOps() {
   `;
 }
 
+function dictionaryDemandContext() {
+  const pendingRegion = state.dictionaryPendingRegion;
+  const card = state.selectedLocationCard
+    || (pendingRegion ? locationProfileSubjectForRegion(pendingRegion) : null);
+  const region = pendingRegion || (card ? administrativeRegionForLocationCard(card) : null);
+  const alias = card ? locationProfileAlias(card, region) : null;
+  const regionNameKey = locationProfileKeywordKey(alias?.sigungu || region?.sigungu || "").replace(/[시군구]$/, "");
+  const sameNameRegionKeys = new Set(regionNameKey ? administrativeRegionEntries()
+    .filter((entry) => locationProfileKeywordKey(entry.sigungu || "").replace(/[시군구]$/, "") === regionNameKey)
+    .map((entry) => entry.providerMappings?.kto?.regionKey || entry.regionKey)
+    .filter(Boolean) : []);
+  return {
+    regionKey: String(card?.regionKey || region?.regionKey || ""),
+    label: [alias?.sido || region?.sido, alias?.sigungu || region?.sigungu || region?.name].filter(Boolean).join(" ").trim(),
+    keyword: String(card?.searchKeyword || "").trim(),
+    requiresRegionEvidence: sameNameRegionKeys.size > 1
+  };
+}
+
+function demandRegionContextMatchesRun(context = state.demandRegionContext) {
+  if (!context) return true;
+  // A regional tourism observation does not make an unrelated collection run
+  // suitable for that region. Keep aggregate search and sales data together.
+  if (!context.regionKey || !context.keyword || !state.data?.run
+    || !locationProfileIsExactKeyword({ keyword: activeKeyword() }, context.keyword)) return false;
+  const sources = [state.data.tourismVisitors, state.data.tourismVisitorHistory, state.data.tourismDemandStrengthHistory].filter(Boolean);
+  const regionRows = [
+    ...(state.data.regions || []),
+    ...sources.flatMap((source) => [...(source.regions || []), ...(source.region ? [source.region] : []), ...(source.regionKey ? [source] : [])])
+  ];
+  const observedRegionKeys = new Set(regionRows.map((row) => row.regionKey).filter(Boolean));
+  if (observedRegionKeys.size) return observedRegionKeys.size === 1 && observedRegionKeys.has(context.regionKey);
+  return !context.requiresRegionEvidence;
+}
+
+function renderDemandRegionPending(context = state.demandRegionContext) {
+  const selectedLabel = context?.label || "지역 미선택";
+  const currentKeyword = state.data?.run ? activeKeyword() : "수집결과 없음";
+  if (els.demandState) els.demandState.textContent = "선택지역 자료 대기";
+  els.demandDashboard.innerHTML = `
+    <section class="demand-hero-card" data-surface="dark">
+      <div>
+        <p class="eyebrow">수요 전망</p>
+        <h3>${escapeHtml(selectedLabel)}</h3>
+        <p>선택한 지역과 연결된 수집자료로만 수요를 해석합니다.</p>
+      </div>
+      <span>자료 대기</span>
+    </section>
+    <section class="structure-empty-card" role="status">
+      <strong>${context?.regionKey ? "선택지역의 수요 분석자료가 필요합니다" : "입지사전에서 지역을 먼저 선택하세요"}</strong>
+      <p>현재 수집자료: ${escapeHtml(currentKeyword)}${context?.keyword ? ` · 필요한 키워드: ${escapeHtml(context.keyword)}` : ""}</p>
+      <p>입지사전의 관광 관측자료와 수집결과의 검색·판매 자료는 별도입니다. 다른 지역의 수치를 선택지역 전망으로 표시하지 않습니다.</p>
+      ${context?.requiresRegionEvidence ? "<p>같은 이름의 행정구역이 여러 곳 있어, 수집자료의 지역코드까지 일치해야 연결합니다.</p>" : ""}
+      <p>${context?.keyword ? "해당 키워드의 저장된 수집결과를 선택하거나 수집을 완료한 후 다시 확인하세요." : "이 지역에 연결된 수집 키워드가 아직 없습니다. 관광 기반 탭에서 확보된 방문자·체류·소비 추이를 확인할 수 있습니다."}</p>
+    </section>
+  `;
+}
+
+function openDictionaryDemand() {
+  setActiveTab("demand", { demandRegionContext: dictionaryDemandContext() });
+}
+
 function renderDemand() {
   if (!els.demandDashboard) return;
+  if (!demandRegionContextMatchesRun()) {
+    renderDemandRegionPending();
+    return;
+  }
+  if (!state.data) {
+    if (els.demandState) els.demandState.textContent = "수집자료 대기";
+    els.demandDashboard.innerHTML = `<div class="empty">수집결과를 선택하면 해당 키워드의 수요 전망을 표시합니다.</div>`;
+    return;
+  }
   const data = state.data || {};
   const run = data.run || {};
   const traffic = demandTrafficAggregate();
@@ -29361,7 +29433,7 @@ function renderDemand() {
   els.demandDashboard.innerHTML = `
     <section class="demand-hero-card" data-surface="dark">
       <div>
-        <p class="eyebrow">수요구조 분석</p>
+        <p class="eyebrow">수요 전망 · 수집자료 기준</p>
         <h3>${escapeHtml(activeKeyword())}</h3>
         <p>${escapeHtml(dateRangeLabel(run))} · 네이버 검색수요 · 한국관광공사 지역 방문자</p>
       </div>
@@ -33158,12 +33230,9 @@ function renderLocationProfileLineChart(series = [], options = {}) {
     .map((point) => `${point.tooltipLabel || (point.yearMonth ? tourismVisitorMonthLabel(point.yearMonth) : point.label || "관측")} ${formatValue(point.value)}${options.unit ? ` ${options.unit}` : ""}`)
     .join(", ");
   const latestLabel = latestPoint ? (() => {
-    const monthLabel = latestPoint.yearMonth ? latestPoint.yearMonth.slice(2, 4) + "." + latestPoint.yearMonth.slice(4, 6) : "최신";
-    const text = `${monthLabel} · ${formatValue(latestPoint.value)}`;
-    const labelWidth = Math.max(100, Math.min(210, text.length * 10.5 + 24));
-    const labelX = Math.max(left, Math.min(width - right - labelWidth, latestPoint.x - labelWidth / 2));
-    const labelY = Math.max(top + 4, latestPoint.y - 40);
-    return `<g class="location-profile-chart-latest-label" transform="translate(${labelX.toFixed(1)} ${labelY.toFixed(1)})"><rect width="${labelWidth.toFixed(1)}" height="29" rx="8"></rect><text x="${(labelWidth / 2).toFixed(1)}" y="19" text-anchor="middle">${escapeHtml(text)}</text></g>`;
+    const monthLabel = latestPoint.tooltipLabel || (latestPoint.yearMonth ? tourismVisitorMonthLabel(latestPoint.yearMonth) : latestPoint.label || "");
+    const valueLabel = `${formatValue(latestPoint.value)}${options.unit ? ` ${options.unit}` : ""}`;
+    return `<div class="location-profile-chart-latest-label"><span>${escapeHtml(`최근 관측 · ${monthLabel}`)}</span><strong>${escapeHtml(valueLabel)}</strong></div>`;
   })() : "";
   const stateKey = missingCount
     ? `<div class="location-profile-chart-state-key" aria-hidden="true">${partialCount ? `<span class="is-partial">부분수집 ${fmtNumber(partialCount)}</span>` : ""}${pendingCount ? `<span class="is-pending">자료대기 ${fmtNumber(pendingCount)}</span>` : ""}${failedCount ? `<span class="is-failed">수집실패 ${fmtNumber(failedCount)}</span>` : ""}</div>`
@@ -33183,10 +33252,10 @@ function renderLocationProfileLineChart(series = [], options = {}) {
           const tooltip = `${point.tooltipLabel || (point.yearMonth ? tourismVisitorMonthLabel(point.yearMonth) : point.label || "관측")} · ${formatValue(point.value)}${options.unit ? ` ${options.unit}` : ""}`;
           return `<g class="location-profile-chart-point-group" aria-hidden="true" focusable="false"><circle class="location-profile-chart-point-hit" cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="13"></circle><circle class="location-profile-chart-point" cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="5"><title>${escapeHtml(tooltip)}</title></circle></g>`;
         }).join("")}
-        ${latestLabel}
         <text class="location-profile-chart-unit" x="${left}" y="12">${escapeHtml(options.unit || "")}</text>
         ${labels}
       </svg>
+      ${latestLabel}
       ${stateKey}
     </div>
   `;
@@ -33456,7 +33525,7 @@ function renderLocationProfileVisitorRollingPanel(visitor = {}) {
           })}
         </section>
         <aside class="location-profile-analysis-facts">
-          <div><span>최신 완전월</span><strong>${escapeHtml(targetLatestText)}</strong><small>${escapeHtml(targetLatest?.yearMonth ? tourismVisitorMonthLabel(targetLatest.yearMonth) : "실제 완전월 관측 대기")}</small></div>
+          <div><span>최근 수집 완료 월</span><strong>${escapeHtml(targetLatestText)}</strong><small>${escapeHtml(targetLatest?.yearMonth ? `${tourismVisitorMonthLabel(targetLatest.yearMonth)} · 모든 날짜 자료 확보` : "한 달 전체 자료 확보 대기")}</small></div>
           <div><span>최근 확정 12개월 누적</span><strong>${escapeHtml(confirmedText)}</strong><small>${escapeHtml(confirmed.periodLabel || "완전한 12개월 관측 대기")}</small></div>
           <div><span>직전 기간 대비</span><strong>${escapeHtml(changeText)}</strong><small>${escapeHtml(comparison.ready ? `${previousText} 기준` : "두 기간이 모두 완전할 때 계산")}</small></div>
           ${renderLocationProfileCoverage(target.coverage, { detail: missingText })}
@@ -33481,7 +33550,7 @@ function renderLocationProfileVisitorPanel(visitor = {}) {
         ${locationProfileStatusBadge(visitor.observed, "실제 완전월 관측", "해당 기간 관측 없음")}
       </div>
       <div class="location-profile-kpi-row">
-        <div><span>최근 완전월</span><strong>${escapeHtml(latestText)}</strong><small>${escapeHtml(latest ? tourismVisitorMonthLabel(latest.yearMonth) : "실제 완전월 관측 대기")}</small></div>
+        <div><span>최근 수집 완료 월</span><strong>${escapeHtml(latestText)}</strong><small>${escapeHtml(latest ? `${tourismVisitorMonthLabel(latest.yearMonth)} · 모든 날짜 자료 확보` : "한 달 전체 자료 확보 대기")}</small></div>
         <div><span>자료 충족률</span><strong>${escapeHtml(visitor.observed && visitor.coverage?.expectedMonths ? `${fmtNumber(visitor.coverage.completeMonths)}/${fmtNumber(visitor.coverage.expectedMonths)}` : "관측 없음")}</strong><small>${escapeHtml(coverageText)}</small></div>
       </div>
       ${renderLocationProfileLineChart(visitor.comparison?.series || [], {
@@ -34177,7 +34246,7 @@ function renderObservedLocationProfile(card, alias, tourismMatch, clusters, inde
   const visitorCoverageDetail = visitorRolling
     ? `${visitorSummaryWindow?.periodLabel || "기간 확인"} · ${locationProfileCoverageText(visitorCoverage)}`
     : locationProfileCoverageText(visitorCoverage);
-  const visitorValueLabel = visitorRolling?.confirmed?.ready ? "확정 12개월 누적" : "최신 완전월";
+  const visitorValueLabel = visitorRolling?.confirmed?.ready ? "확정 12개월 누적" : "최근 수집 완료 월";
   const visitorHeadline = providerCodePending
     ? "코드 확인 대기"
     : visitorRolling
@@ -34197,7 +34266,7 @@ function renderObservedLocationProfile(card, alias, tourismMatch, clusters, inde
     ? visitorRolling.confirmed?.ready
       ? `${visitorRolling.confirmed.periodLabel} 최근 확정 누적`
       : visitorLatest?.yearMonth
-        ? `${tourismVisitorMonthLabel(visitorLatest.yearMonth)} 최신 완전월`
+        ? `${tourismVisitorMonthLabel(visitorLatest.yearMonth)} · 모든 날짜 자료 확보`
         : `${visitorRolling.target?.periodLabel || "최근 완료월 기준"} 자료 대기`
     : visitorPeriodSummary?.latest?.periodLabel
       ? `${visitorPeriodSummary.latest.periodLabel} 공식 누적`
@@ -34309,7 +34378,7 @@ function renderObservedLocationProfile(card, alias, tourismMatch, clusters, inde
       <button class="secondary-button" type="button" data-dictionary-navigate="analysis"${industryContextReady ? "" : " disabled"}>${industryContextReady ? "업종 분석 연결" : "업종 분석 연결 준비"}</button>
       <button class="primary-button" type="button" data-dictionary-navigate="demand"${forecastReady ? "" : " disabled"}>${forecastReady ? "지역 수요전망" : "수요전망 자료 대기"}</button>
     </div>
-    <p class="location-profile-action-note">${forecastReady ? `${escapeHtml(`${sido} ${sigungu}`)}의 실제 관광 관측자료로 수요전망을 확인합니다.` : "방문자·체류·소비 실제 관측이 확보되면 지역 수요전망을 연결합니다."}</p>
+    <p class="location-profile-action-note">${forecastReady ? `${escapeHtml(`${sido} ${sigungu}`)}의 수집결과가 있어야 검색·관광 수요를 함께 확인할 수 있습니다.` : "방문자·체류·소비 관측과 해당 지역 수집결과가 필요합니다."}</p>
   `;
   return `
     <article class="location-card location-profile-card" data-location-profile-region="${escapeHtml(card.regionKey)}">
@@ -35593,6 +35662,7 @@ function renderAll() {
     renderPlaceRankReplayNotice();
     renderB2BEmptyPanels();
     if (roleAllowsTab("dictionary")) renderLocationDictionary();
+    if (state.activeTab === "demand") renderDemand();
     return;
   }
   renderHeader();
@@ -35622,7 +35692,8 @@ function syncAppHistoryState(push = false) {
   const nextState = {
     app: "lodging-datalab",
     role: state.session?.role || "",
-    tab: state.activeTab || firstRoleTab()
+    tab: state.activeTab || firstRoleTab(),
+    demandRegionContext: state.activeTab === "demand" ? state.demandRegionContext : null
   };
   try {
     if (push && window.history.pushState && window.history.state?.tab !== nextState.tab) {
@@ -35637,6 +35708,7 @@ function syncAppHistoryState(push = false) {
 
 function setActiveTab(tab, options = {}) {
   state.activeTab = roleAllowsTab(tab) ? tab : firstRoleTab();
+  state.demandRegionContext = state.activeTab === "demand" ? (options.demandRegionContext || null) : null;
   if (isAdminRole()) {
     state.adminMobileSection = adminMobileSectionForTab(state.activeTab, options.adminMobileSection || "");
     if (state.activeTab !== "admin") state.adminMobileAnchor = "";
@@ -35657,6 +35729,7 @@ function setActiveTab(tab, options = {}) {
   if (!state.data) {
     renderB2BEmptyPanels();
     if (state.activeTab === "dictionary") renderLocationDictionary();
+    if (state.activeTab === "demand") renderDemand();
     return;
   }
   if (state.activeTab === "report") renderReport();
@@ -37151,7 +37224,7 @@ function bindPwaLifecycleEvents() {
   window.addEventListener("online", () => resumeB2BSearchAfterReturn("online").catch(() => {}));
   window.addEventListener("popstate", (event) => {
     const tab = event.state?.tab;
-    if (tab && roleAllowsTab(tab)) setActiveTab(tab, { fromHistory: true });
+    if (tab && roleAllowsTab(tab)) setActiveTab(tab, { fromHistory: true, demandRegionContext: event.state?.demandRegionContext || null });
   });
 }
 
@@ -40767,7 +40840,8 @@ function bindEvents() {
         window.requestAnimationFrame(() => els.dictionaryResult?.scrollIntoView({ behavior: "smooth", block: "start" }));
         return;
       }
-      setActiveTab("demand");
+      if (view === "demand") openDictionaryDemand();
+      else setActiveTab("demand");
       if (view === "compare") {
         window.requestAnimationFrame(() => {
           const heading = [...document.querySelectorAll(".demand-table-card h3")].find((entry) => entry.textContent?.trim() === "지역 비교");
@@ -40869,7 +40943,7 @@ function bindEvents() {
     if (dictionaryNavigate && !dictionaryNavigate.disabled) {
       const target = dictionaryNavigate.dataset.dictionaryNavigate || "";
       if (target === "analysis") activateAdminPrimaryNav("analysis");
-      if (target === "demand") setActiveTab("demand");
+      if (target === "demand") openDictionaryDemand();
       return;
     }
     const saveLocationScore = event.target.closest("[data-save-location-score-override]");
