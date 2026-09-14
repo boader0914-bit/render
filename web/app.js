@@ -34066,10 +34066,11 @@ function renderLocationProfileSummaryCard(options = {}) {
     : [{ label: options.valueLabel || "최신값", value: options.value || "관측 없음" }];
   return `
     <article class="location-profile-summary-card ${escapeHtml(options.tone || "")}" data-location-summary-metric="${escapeHtml(options.key || "")}">
-      <div class="location-profile-summary-card-head"><span>${escapeHtml(options.title || "지표")}</span>${options.note ? `<small>${escapeHtml(options.note)}</small>` : ""}</div>
-      <div class="location-profile-summary-values ${items.length === 1 ? "is-single" : ""}">
+      <div class="location-profile-summary-card-head"><span>${escapeHtml(options.title || "지표")}</span></div>
+      <div class="location-profile-summary-values ${items.length === 1 ? "is-single" : items.length >= 3 ? "is-triple" : "is-double"}">
         ${items.map((item) => `<div><span>${escapeHtml(item.label || "지표")}</span><strong>${escapeHtml(item.value || "관측 없음")}</strong></div>`).join("")}
       </div>
+      ${options.note ? `<p class="location-profile-summary-note">${escapeHtml(options.note)}</p>` : ""}
       ${options.coverage ? renderLocationProfileCoverage(options.coverage, { label: options.coverageLabel || "자료 확보", detail: options.coverageDetail || "" }) : ""}
     </article>
   `;
@@ -34174,7 +34175,7 @@ function renderObservedLocationProfile(card, alias, tourismMatch, clusters, inde
     ? visitorRolling.confirmed?.ready ? "확정기간 자료" : "최신 기준창 자료"
     : "자료 확보";
   const visitorCoverageDetail = visitorRolling
-    ? `${visitorSummaryWindow?.periodLabel || "기간 확인"} · ${locationProfileVisitorMissingMonths(visitorSummaryWindow)}`
+    ? `${visitorSummaryWindow?.periodLabel || "기간 확인"} · ${locationProfileCoverageText(visitorCoverage)}`
     : locationProfileCoverageText(visitorCoverage);
   const visitorValueLabel = visitorRolling?.confirmed?.ready ? "확정 12개월 누적" : "최신 완전월";
   const visitorHeadline = providerCodePending
@@ -34320,7 +34321,7 @@ function renderObservedLocationProfile(card, alias, tourismMatch, clusters, inde
         </div>
           <div class="location-profile-overview-status"><span class="location-profile-period-chip">방문자 기준 ${escapeHtml(tourismPeriodLabel)} · 지표별 기간 상이</span><span class="location-profile-api-state ${loading ? "is-loading" : exactRegion ? "is-ready" : "is-fallback"}" role="status" aria-live="polite">${escapeHtml(loading ? "저장 이력 확인 중" : exactRegion ? "행정구역·관광코드 확정" : providerCodePending ? "관광코드 확인 대기" : "관광코드 연결 대기")}</span></div>
       </header>
-      <div class="location-profile-summary-grid">
+      <div class="location-profile-summary-grid location-profile-metric-grid">
         ${renderLocationProfileSummaryCard({ key: "visitor", title: "지역 방문자", tone: "is-visitor", items: [{ label: visitorValueLabel, value: visitorHeadline }], note: visitorNote, coverage: visitorCoverage, coverageLabel: visitorCoverageLabel, coverageDetail: visitorCoverageDetail })}
         ${renderLocationProfileSummaryCard({ key: "strength", title: "체류·소비", tone: "is-strength", items: [{ label: strengthSummary.stayLabel, value: strengthSummary.stayPoint ? tourismDemandStrengthNumberLabel(strengthSummary.stayPoint.value) : "관측 없음" }, { label: strengthSummary.spendLabel, value: strengthSummary.spendPoint ? tourismDemandStrengthNumberLabel(strengthSummary.spendPoint.value) : "관측 없음" }], note: strengthSummary.note, coverage: strengthCoverage, coverageDetail: strengthCompleteMonths ? "두 계열 공통 완전월" : strengthSummary.stayPoint || strengthSummary.spendPoint ? "공통 완전월 없음 · 계열별 기준월" : "체류·소비 자료 대기" })}
         ${renderLocationProfileSummaryCard({ key: "resourceDemand", title: "관광자원 수요", tone: "is-resource", items: resourceDemandSummary.items, note: resourceDemandSummary.note, coverage: resourceDemandSummary.coverage, coverageDetail: "서비스·문화 계열별 실제 관측" })}
