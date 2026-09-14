@@ -67,6 +67,7 @@ html[data-theme-resolved="dark"] {
 
 /* Resolve legacy aliases at each independently rendered workspace or overlay. */
 html[data-theme-resolved],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b),
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.report-body, .demand-dashboard, .history-lab, .sheet-panel, .drawer-panel) {
   --bg: var(--app-bg);
   --panel: var(--surface-card);
@@ -478,8 +479,8 @@ html[data-theme-resolved] body.role-admin .admin-home-metric > mark {
 }
 
 html[data-theme-resolved] body.role-admin .admin-home-metric > mark[data-ui-status="positive"] { color: var(--positive) !important; }
-html[data-theme-resolved] body.role-admin .admin-home-metric > mark[data-ui-status="warning"] { color: var(--warning) !important; }
-html[data-theme-resolved] body.role-admin .admin-home-metric > mark[data-ui-status="danger"] { color: var(--danger) !important; }
+html[data-theme-resolved] body.role-admin .admin-home-metric > mark[data-ui-status="warning"] { color: var(--warning-strong) !important; }
+html[data-theme-resolved] body.role-admin .admin-home-metric > mark[data-ui-status="danger"] { color: var(--danger-strong) !important; }
 
 html[data-theme-resolved] body.role-admin .admin-home-metric > .admin-home-arrow {
   position: absolute;
@@ -691,7 +692,16 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   .b2b-live-search-panel,
   .admin-db-applied-values,
   .admin-db-channel-state,
-  .history-ops-log
+  .history-ops-log,
+  .b2b-simple-summary, .b2b-simple-card, .b2b-simple-answer,
+  .b2b-location-score, .b2b-location-score-main > div, .b2b-location-conclusion,
+  .b2b-location-driver-grid > article, .b2b-detail-pack, .b2b-detail-pack-body,
+  .b2b-brief-score, .b2b-map-metrics > article,
+  .b2b-map-cluster-detail, .b2b-map-cluster-card,
+  .b2b-map-board-grid > article, .b2b-map-action-board > div,
+  .b2b-map-location-score, .b2b-map-location-conclusion, .b2b-map-location-parts > div,
+  .b2b-map-competition-board, .b2b-map-radius-list > button,
+  .b2b-rank-exposure-board, .b2b-legal-notice, .b2b-legal-notice dl > div
 ):not(.tab-panel, .admin-section-panel) {
   /* Legacy child text still reads these tokens after the card is recolored. */
   --surface-bg-token: var(--surface-card);
@@ -1548,11 +1558,11 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
 }
 
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.good, .positive, .success) > :is(.status, mark, em) { color: var(--positive) !important; }
-html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.watch, .warning, .caution) > :is(.status, mark, em) { color: var(--warning) !important; }
-html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.hot, .bad, .danger, .error) > :is(.status, mark, em) { color: var(--danger) !important; }
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.watch, .warning, .caution) > :is(.status, mark, em) { color: var(--warning-strong) !important; }
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.hot, .bad, .danger, .error) > :is(.status, mark, em) { color: var(--danger-strong) !important; }
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-status="positive"]:not([data-ui-surface]) { color: var(--positive); }
-html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-status="warning"]:not([data-ui-surface]) { color: var(--warning); }
-html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-status="danger"]:not([data-ui-surface]) { color: var(--danger); }
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-status="warning"]:not([data-ui-surface]) { color: var(--warning-strong); }
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-status="danger"]:not([data-ui-surface]) { color: var(--danger-strong); }
 
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(button, a, input, select, textarea):focus-visible {
   outline: 3px solid var(--focus-ring) !important;
@@ -1657,7 +1667,7 @@ html[data-theme-resolved] body.role-admin .admin-integration-list mark {
 }
 
 html[data-theme-resolved] body.role-admin .admin-integration-list mark[data-ui-status="positive"] { color: var(--positive) !important; }
-html[data-theme-resolved] body.role-admin .admin-integration-list mark[data-ui-status="warning"] { color: var(--warning) !important; }
+html[data-theme-resolved] body.role-admin .admin-integration-list mark[data-ui-status="warning"] { color: var(--warning-strong) !important; }
 
 html[data-theme-resolved] body.role-admin .admin-region-analysis-dashboard {
   margin-bottom: 24px;
@@ -2090,6 +2100,280 @@ html[data-theme-resolved] body.role-admin:has(#adminPanel.active [data-layout-co
     width: 100%;
     flex-wrap: wrap;
     justify-content: flex-start;
+  }
+}
+
+/* Populated-state audit: pair legacy surfaces with their foreground tokens. */
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.header-system-status, .app-legal-footer a) {
+  color: var(--text-secondary) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-legal-footer a:hover {
+  color: var(--accent-strong) !important;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard {
+  --history-ops-card: var(--surface-card);
+  --history-ops-card-raised: var(--surface-control);
+  --history-ops-line: var(--border-subtle);
+  --history-ops-line-strong: var(--border-strong);
+  --history-ops-title: var(--text-primary);
+  --history-ops-text: var(--text-secondary);
+  --history-ops-muted: var(--text-secondary);
+  --history-ops-blue: var(--accent-strong);
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(
+  .history-ops-hero, .history-ops-empty, .history-ops-card,
+  .history-ops-metrics article, .history-ops-keyword-list article,
+  .history-ops-log button, .history-ops-log article,
+  .history-ops-company-list button, .history-ops-comparison article,
+  .collection-quality-panel, .collection-quality-metrics article,
+  .collection-quality-grid > article, .collection-quality-alerts > div,
+  .collection-quality-recrawl > div, .collection-quality-feedback > div
+) {
+  border-color: var(--border-subtle);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  box-shadow: none;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(button, .history-ops-hero > span, .collection-quality-recrawl mark) {
+  border-color: var(--border-subtle);
+  background: var(--surface-control);
+  color: var(--text-primary);
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(button:hover, button.active, .history-ops-keyword-list article.active) {
+  border-color: var(--border-strong);
+  background: var(--surface-selected);
+  color: var(--text-primary);
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-timeline span {
+  background: var(--surface-control);
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(.history-ops-timeline i, .history-ops-spark span) {
+  background: var(--accent);
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(.history-ops-metrics article, .history-ops-comparison article) {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-card) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-company-list strong {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(.collection-quality-grid > article, .collection-quality-alerts) {
+  align-content: start;
+}
+
+html[data-theme-resolved] body.role-admin .collection-archive {
+  min-width: 0;
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr);
+  box-sizing: border-box;
+}
+
+html[data-theme-resolved] body.role-admin .collection-archive > * {
+  min-width: 0;
+}
+
+/* Business reports had their own fixed dark palette outside the admin scopes. */
+html[data-theme-resolved] body.role-b2b :is(
+  .b2b-live-search-panel, .b2b-brief-head, .b2b-brief-score,
+  .b2b-simple-summary, .b2b-location-score, .b2b-detail-pack,
+  .b2b-rank-brief, .b2b-map-brief, .b2b-my-lodge-board, .b2b-map-cluster-detail,
+  .b2b-map-competition-board, .b2b-legal-notice
+) :is(h2, h3, h4, strong, b) {
+  color: var(--text-primary) !important;
+  text-shadow: none;
+}
+
+html[data-theme-resolved] body.role-b2b :is(
+  .b2b-live-search-panel, .b2b-brief-head, .b2b-brief-score,
+  .b2b-simple-summary, .b2b-location-score, .b2b-detail-pack,
+  .b2b-rank-brief, .b2b-map-brief, .b2b-my-lodge-board, .b2b-map-cluster-detail,
+  .b2b-map-competition-board, .b2b-legal-notice
+) :is(p, span, small, em, dt, dd) {
+  color: var(--text-secondary) !important;
+  text-shadow: none;
+}
+
+html[data-theme-resolved] body.role-b2b :is(
+  .b2b-live-search-meta > em, .b2b-history-actions > *, .section-title > span,
+  .b2b-rank-head > strong, .b2b-rank-context > span, .b2b-map-head > strong,
+  .b2b-map-cluster-row > span, .b2b-map-board-head > em,
+  .b2b-map-radius-list > button > :is(em, span), .b2b-my-lodge-head-actions > em,
+  .b2b-location-basis > span, .b2b-rank-board-head > em
+) {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-control) !important;
+  color: var(--text-secondary) !important;
+}
+
+html[data-theme-resolved] body.role-b2b .b2b-legal-notice > a {
+  color: var(--accent-strong);
+}
+
+html[data-theme-resolved] body.role-b2b .notice-card {
+  border-color: var(--border-subtle);
+  background: var(--surface-control);
+  color: var(--text-secondary);
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .map-caption {
+  box-sizing: border-box;
+  width: max-content;
+  max-width: calc(100% - 28px);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
+  line-height: 1.5;
+  border-radius: var(--ui-radius-control);
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
+  .location-score-component-grid article > div > em,
+  .location-action-panel span b
+) {
+  background: var(--surface-selected) !important;
+  color: var(--accent-strong) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
+  .location-profile-summary-grid span, .location-profile-summary-grid small,
+  .dictionary-region-item > span
+) {
+  color: var(--text-secondary);
+}
+
+html[data-theme-resolved] body.role-admin #adminMemberRequestDashboard .admin-member-request-hero > small {
+  background: var(--surface-control);
+  color: var(--text-secondary) !important;
+  border-color: var(--border-subtle);
+}
+
+html[data-theme-resolved] body.role-admin :is(
+  #adminMemberRequestDashboard .admin-member-request-hero,
+  .admin-db-selected-review, .admin-db-audit-stats > span,
+  .admin-db-more, .admin-region-company-more
+) {
+  background: var(--surface-card) !important;
+  border-color: var(--border-subtle) !important;
+  color: var(--text-primary);
+  box-shadow: none;
+}
+
+html[data-theme-resolved] body.role-admin :is(
+  .admin-db-profile-intro > mark, .company-manual-segments-head > em,
+  .company-manual-actions > button, .company-manual-segments-toolbar > button
+) {
+  background: var(--surface-control) !important;
+  border-color: var(--border-subtle) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Selection remains quiet; keyboard focus keeps the dedicated focus ring. */
+html[data-theme-resolved] body.role-admin .admin-db-company.selected {
+  outline: none;
+  border-color: var(--border-strong) !important;
+  background: var(--surface-selected) !important;
+  box-shadow: none !important;
+}
+
+/* Region lists live inside a narrow dashboard column even on wide screens. */
+html[data-theme-resolved] body.role-admin .admin-region-company-row {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding: 14px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-region-company-row > * {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+html[data-theme-resolved] body.role-admin .admin-region-company-row > :is(.admin-region-company-metrics, .admin-region-company-tags, button) {
+  grid-column: 1 / -1;
+}
+
+html[data-theme-resolved] body.role-admin .admin-region-company-metrics :is(b, small) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sheet-panel .reason-chip-row > span {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+  border-radius: var(--ui-radius-control);
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sheet-panel .search-row > div > strong {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .report-target-row > strong {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 860px) {
+  html[data-theme-resolved] body.role-admin .admin-mobile-secondary button {
+    min-width: 0;
+    min-height: 44px;
+    padding: 6px 5px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+    text-align: center;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-reference-archive-days .admin-reference-recent-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-reference-archive-days .admin-reference-recent-row > span:first-child {
+    grid-column: 1 / -1;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-reference-archive-days .admin-reference-recent-row > span:last-child {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 560px) {
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .company-manual-segment-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .company-manual-segment-row > label {
+    grid-column: auto;
+    min-width: 0;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .company-manual-segment-row > :is(label.type, button) {
+    grid-column: 1 / -1;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-region-company-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-region-company-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
