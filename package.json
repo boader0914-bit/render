@@ -31,9 +31,10 @@
     "master-db:audit": "node scripts/master_db_baseline_audit.cjs",
     "sync:region-master": "node scripts/sync_region_master.cjs",
     "sync:tourism-region-map": "node scripts/sync_tourism_region_map.cjs",
-    "test": "npm run check && npm run test:navigation && npm run test:overlay && npm run test:dictionary-state && npm run test:dictionary-demand && npm run test:company-region && npm run test:master-db && npm run test:master-db-audit && npm run test:master-db-incremental && npm run test:yeogi && npm run test:search-mode && npm run test:naver-ota && npm run test:naver-ota-master && npm run test:tourism && npm run test:tourism-period && npm run test:tourism-monthly-scheduler && npm run test:tourism-demand-backfill && npm run test:tourism-location && npm run test:location-tourism-ui && npm run test:daily-collection && npm run test:public-policy",
+    "test": "npm run check && npm run test:navigation && npm run test:overlay && npm run test:dictionary-state && npm run test:dictionary-demand && npm run test:company-region && npm run test:master-db && npm run test:master-db-audit && npm run test:master-db-incremental && npm run test:yeogi && npm run test:search-mode && npm run test:naver-ota && npm run test:naver-ota-master && npm run test:tourism && npm run test:tourism-period && npm run test:tourism-monthly-scheduler && npm run test:tourism-demand-backfill && npm run test:tourism-location && npm run test:location-tourism-ui && npm run test:daily-collection && npm run test:public-policy && npm run test:shared-inventory",
     "test:daily-collection": "node scripts/test_daily_keyword_collection_scheduler.cjs && node scripts/test_daily_collection_quality.cjs && node scripts/test_daily_collection_integration.cjs",
-    "test:public-policy": "node scripts/test_public_policy_pages.cjs"
+    "test:public-policy": "node scripts/test_public_policy_pages.cjs",
+    "test:shared-inventory": "node scripts/test_inventory_estimation.cjs && node scripts/test_crawler_inventory_evidence.cjs && node scripts/test_inventory_evidence_server.cjs && node scripts/test_inventory_evidence_ui.cjs"
   },
   "engines": {
     "node": ">=22.13 <25"

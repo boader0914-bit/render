@@ -17,7 +17,7 @@ const channelAssetPaths = {
   ddnayo: path.join(root, "web", "assets", "channels", "ddnayo.ico"),
   sources: path.join(root, "web", "assets", "channels", "SOURCES.md")
 };
-const styles = fs.readFileSync(stylesPath, "utf8");
+const styles = fs.readFileSync(stylesPath, "utf8").replace(/\r\n/g, "\n");
 const themeStyles = fs.readFileSync(themePath, "utf8");
 const app = fs.readFileSync(appPath, "utf8");
 const indexHtml = fs.readFileSync(indexPath, "utf8");
@@ -487,8 +487,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260903-db-company-title-gutter-v103";
-const expectedAssetVersion = "datalab-20260903-db-company-title-gutter-v103";
+const expectedCacheVersion = "staydatalab-v20260920-shared-room-evidence-v104";
+const expectedAssetVersion = "datalab-20260920-shared-room-evidence-v104";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm

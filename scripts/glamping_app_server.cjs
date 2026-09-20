@@ -10,6 +10,7 @@ const yeogiImportParser = require("./yeogi_import_parser.cjs");
 const { publicHeader } = require("./public_site_chrome.cjs");
 const { createPublicPages } = require("./public_site_pages.cjs");
 const { buildPolicyDocument } = require("./public_policy_content.cjs");
+const { applyInventoryEvidence } = require("./inventory_estimation.cjs");
 const { otaProviderFromUrl } = require("./naver_place_ota_observation.cjs");
 const { createCollector: createTourismCollector } = require("./tourism_collector.cjs");
 const { createMonthlyVisitorScheduler } = require("./tourism_visitor_monthly_scheduler.cjs");
@@ -8949,6 +8950,16 @@ function singleAvailabilityRow(stayDate, available, total) {
 }
 
 function historySeriesForItem(item, productType, checkIn) {
+  if (item.inventoryEvidence?.version === 2) {
+    const evidence = productType === "dayuse" ? item.inventoryEvidence.dayUse : item.inventoryEvidence.lodging;
+    return (Array.isArray(evidence?.rows) ? evidence.rows : []).map((row) => ({
+      ...row,
+      stayDate: row.date,
+      label: row.date,
+      offlineReserved: 0,
+      inventoryEvidenceVersion: 2
+    }));
+  }
   if (productType === "dayuse") {
     const rows = parseAvailabilityDetail(item.dayUseWeeklyDetail, checkIn)
       .concat(parseReservationRateDetail(item.dayUseWeeklyReservationRateDetail, checkIn))
@@ -8988,6 +8999,22 @@ function toNullableRate(value) {
 function normalizeSignalRows(rows = []) {
   return rows
     .map((row) => {
+      if (row.inventoryEvidenceVersion === 2) {
+        if (row.missing) return null;
+        const total = productSnapshotNumber(row.total);
+        const available = productSnapshotNumber(row.available);
+        const sold = productSnapshotNumber(row.sold);
+        if (total === null || total < 0 || sold === null || sold < 0) return null;
+        return {
+          ...row,
+          stayDate: row.stayDate || row.date || "",
+          dayOfWeek: dayOfWeekFromDate(row.stayDate || row.date),
+          total,
+          available,
+          sold,
+          rate: total > 0 && sold <= total && !row.inventoryConflict ? sold / total : null
+        };
+      }
       const total = Number(row.total);
       const available = Number(row.available);
       if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(available)) return null;
@@ -9022,12 +9049,18 @@ function summarizeProductSalesSignal(rows = []) {
   const saturdayRate = averageSignalRate(byDay(6));
   const sundayRate = averageSignalRate(byDay(0));
   const weekdayRate = averageSignalRate(weekdayRows);
-  const overallRate = averageSignalRate(normalized);
+  const evidenceBased = rows.some((row) => row.inventoryEvidenceVersion === 2);
+  const totalSupply = normalized.reduce((sum, row) => sum + row.total, 0);
+  const totalSold = normalized.reduce((sum, row) => sum + row.sold, 0);
+  const overallRate = evidenceBased
+    ? (totalSupply > 0 && totalSold <= totalSupply && !normalized.some((row) => row.inventoryConflict)
+      ? toNullableRate(totalSold / totalSupply) : null)
+    : averageSignalRate(normalized);
   const anchorRate = saturdayRate ?? overallRate ?? null;
   return {
     days: normalized.length,
-    totalSupply: normalized.reduce((sum, row) => sum + row.total, 0),
-    totalSold: normalized.reduce((sum, row) => sum + row.sold, 0),
+    totalSupply,
+    totalSold,
     averageRate: overallRate,
     fridayRate,
     saturdayRate,
@@ -9261,16 +9294,21 @@ function productSnapshotObservation(row = {}, fallbackDate = "", index = 0) {
   const date = productSnapshotDate(row.date || row.stayDate, fallbackDate);
   const totalValue = productSnapshotNumber(row.total ?? row.stock ?? row.totalQuantity);
   const availableValue = productSnapshotNumber(row.available ?? row.availableQuantity);
-  const bookingCount = Math.max(0, productSnapshotNumber(row.bookingCount) || 0)
-    + Math.max(0, productSnapshotNumber(row.occupiedBookingCount) || 0);
+  const observedBookingCount = productSnapshotNumber(row.bookingCount);
+  const bookingCount = observedBookingCount !== null ? Math.max(0, Math.round(observedBookingCount)) : null;
+  const occupiedBookingCount = productSnapshotNumber(row.occupiedBookingCount);
+  const unverifiedOccupied = Math.max(0, Math.round(occupiedBookingCount || 0));
   const total = totalValue !== null && totalValue >= 0 ? Math.round(totalValue) : null;
   const available = total !== null && availableValue !== null
     ? Math.max(0, Math.min(total, Math.round(availableValue)))
     : (availableValue !== null && availableValue >= 0 ? Math.round(availableValue) : null);
   const explicitSold = productSnapshotNumber(row.soldOut ?? row.sold ?? row.soldQuantity);
-  const sold = explicitSold !== null
-    ? Math.max(0, total !== null ? Math.min(total, Math.round(explicitSold)) : Math.round(explicitSold))
-    : (total !== null && available !== null ? Math.max(0, total - available) : Math.round(bookingCount));
+  const closed = row.open === false || row.isBusinessDay === false || row.isSaleDay === false;
+  const sold = bookingCount !== null
+    ? bookingCount
+    : (closed ? null : (explicitSold !== null
+      ? Math.max(0, total !== null ? Math.min(total, Math.round(explicitSold)) : Math.round(explicitSold))
+      : (total !== null && available !== null ? Math.max(0, total - available) : null)));
   const priceValue = productSnapshotNumber(row.price);
   const price = priceValue !== null && priceValue > 0 ? Math.round(priceValue) : null;
   const identity = bizItemId
@@ -9289,8 +9327,10 @@ function productSnapshotObservation(row = {}, fallbackDate = "", index = 0) {
     total,
     available,
     sold,
+    bookingCount,
+    unverifiedOccupied,
     price,
-    open: row.open === false ? false : true
+    open: !closed
   };
 }
 
@@ -9476,6 +9516,45 @@ function parseProductSnapshotRevenueDetail(detail = "", checkIn = "", productTyp
 }
 
 function compactProductSnapshotDaily(item = {}, run = {}, observations = []) {
+  if (item.inventoryEvidence?.version === 2) {
+    return ["lodging", "dayuse"].flatMap((productType) => {
+      const part = productType === "dayuse" ? item.inventoryEvidence.dayUse : item.inventoryEvidence.lodging;
+      return (Array.isArray(part?.rows) ? part.rows : []).map((row) => {
+        const date = productSnapshotDate(row.date);
+        if (!date) return null;
+        const productRows = observations.filter((observation) => observation.date === date && observation.productType === productType);
+        const prices = productRows.map((observation) => observation.price).filter((price) => Number.isFinite(price) && price > 0);
+        const total = row.missing ? null : productSnapshotNumber(row.total);
+        const sold = row.missing ? null : productSnapshotNumber(row.sold);
+        return {
+          date,
+          dayOfWeek: dayOfWeekFromDate(date),
+          productType,
+          productCount: new Set(productRows.map((observation) => observation.key)).size,
+          total,
+          available: row.missing ? null : productSnapshotNumber(row.available),
+          sold,
+          reservationRate: total !== null && total > 0 && sold !== null && sold >= 0 && sold <= total && !row.inventoryConflict
+            ? Number((sold / total).toFixed(4)) : null,
+          minPrice: prices.length ? Math.min(...prices) : null,
+          maxPrice: prices.length ? Math.max(...prices) : null,
+          estimatedRevenue: row.missing ? null : productSnapshotNumber(row.estimatedRevenue),
+          actualRevenue: null,
+          pricedSoldOut: row.missing ? null : productSnapshotNumber(row.pricedSoldOut),
+          missingPriceSoldOut: row.missing ? null : productSnapshotNumber(row.missingPriceSoldOut),
+          unverifiedOccupied: productSnapshotNumber(row.unverifiedOccupied),
+          inventoryShortfall: productSnapshotNumber(row.inventoryShortfall),
+          inventoryConflict: Boolean(row.inventoryConflict),
+          partial: Boolean(row.partial),
+          missing: Boolean(row.missing),
+          offlineReserved: 0,
+          inventoryEvidenceVersion: 2,
+          revenueType: "estimated"
+        };
+      }).filter(Boolean);
+    }).sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.productType).localeCompare(String(b.productType)))
+      .slice(-COMPANY_PRODUCT_SNAPSHOT_DAILY_LIMIT);
+  }
   const checkIn = String(run.checkIn || runDateFromId(run.id) || "").slice(0, 10);
   const byDate = new Map();
   for (const row of observations) {
@@ -9631,6 +9710,7 @@ function compactCompanyProductSnapshot(item = {}, run = {}, collectedAt = "") {
   const dates = daily.map((row) => row.date).filter(Boolean).sort();
   return {
     schemaVersion: 1,
+    inventoryEvidenceVersion: item.inventoryEvidence?.version === 2 ? 2 : null,
     source: "naver_public_observation",
     revenueType: "estimated",
     actualRevenueAvailable: false,
@@ -10290,29 +10370,20 @@ function applyManualBasisToSalesSummary(summary = {}, basisTotal) {
       : summary;
   }
   const roundedBasis = Math.round(basis);
-  const correctedSupply = roundedBasis * days;
-  const offlineReserved = Math.max(0, correctedSupply - rawTotalSupply);
-  const correctedSold = Math.max(0, Math.min(correctedSupply, rawTotalSold + offlineReserved));
-  const rawDailyTotal = rawTotalSupply / days;
+  const potentialSupply = roundedBasis * days;
   return {
     ...summary,
     rawTotalSupply,
     rawTotalSold,
     rawAverageRate: summary.averageRate ?? null,
     manualBasisTotal: roundedBasis,
-    manualOfflineReserved: Math.round(offlineReserved),
+    manualOfflineReserved: 0,
+    manualPotentialSupply: potentialSupply,
+    manualInventoryGap: Math.max(0, potentialSupply - rawTotalSupply),
+    manualBasisUsedForSales: false,
     manualCorrectionApplied: true,
-    totalSupply: correctedSupply,
-    totalSold: Math.round(correctedSold),
-    averageRate: toNullableRate(correctedSupply ? correctedSold / correctedSupply : null),
-    fridayRate: adjustedRateForBasis(summary.fridayRate, rawDailyTotal, roundedBasis),
-    saturdayRate: adjustedRateForBasis(summary.saturdayRate, rawDailyTotal, roundedBasis),
-    sundayRate: adjustedRateForBasis(summary.sundayRate, rawDailyTotal, roundedBasis),
-    weekdayRate: adjustedRateForBasis(summary.weekdayRate, rawDailyTotal, roundedBasis),
-    stockVariance: Boolean(summary.stockVariance || summary.minTotal !== roundedBasis || summary.maxTotal !== roundedBasis),
-    stockVarianceRatio: summary.minTotal ? summary.stockVarianceRatio : null,
-    minTotal: roundedBasis,
-    maxTotal: roundedBasis
+    totalSupply: rawTotalSupply,
+    totalSold: rawTotalSold
   };
 }
 
@@ -10380,6 +10451,7 @@ function companyProductSnapshotSummary(snapshot = null) {
   if (!snapshot || typeof snapshot !== "object") return null;
   return {
     schemaVersion: snapshot.schemaVersion || 1,
+    inventoryEvidenceVersion: snapshot.inventoryEvidenceVersion === 2 ? 2 : null,
     source: snapshot.source || "",
     revenueType: snapshot.revenueType || "estimated",
     actualRevenueAvailable: Boolean(snapshot.actualRevenueAvailable),
@@ -13220,8 +13292,9 @@ function companyHistoryDailyFallback(company = {}, observations = []) {
   const observedRows = [...latestByStayDate.entries()]
     .map(([key, row]) => {
       const [productType, date] = key.split(":");
+      const evidenceBased = row.inventoryEvidenceVersion === 2;
       const supplyValue = productSnapshotNumber(row.supply ?? row.total);
-      const total = supplyValue !== null && supplyValue > 0 ? Math.round(supplyValue) : null;
+      const total = supplyValue !== null && (supplyValue > 0 || (evidenceBased && supplyValue === 0)) ? Math.round(supplyValue) : null;
       const availableValue = productSnapshotNumber(row.available);
       const available = total !== null
         && availableValue !== null
@@ -13230,19 +13303,22 @@ function companyHistoryDailyFallback(company = {}, observations = []) {
         ? Math.round(availableValue)
         : null;
       const soldValue = productSnapshotNumber(row.sold);
-      const explicitSold = total !== null
+      const explicitSold = (evidenceBased || total !== null)
         && soldValue !== null
         && soldValue >= 0
-        && soldValue <= total
+        && (evidenceBased || soldValue <= total)
         ? Math.round(soldValue)
         : null;
       const derivedSold = total !== null && available !== null ? total - available : null;
-      const sold = explicitSold !== null && derivedSold !== null && explicitSold !== derivedSold
-        ? null
-        : (explicitSold ?? derivedSold);
+      const sold = evidenceBased ? explicitSold
+        : (explicitSold !== null && derivedSold !== null && explicitSold !== derivedSold
+          ? null : (explicitSold ?? derivedSold));
       const priceValue = productSnapshotNumber(row.price);
       const price = priceValue !== null && priceValue > 0 ? Math.round(priceValue) : null;
-      const estimatedRevenue = sold !== null && price !== null ? Math.round(sold * price) : null;
+      const estimatedRevenue = evidenceBased ? productSnapshotNumber(row.estimatedRevenue)
+        : (sold !== null && price !== null ? Math.round(sold * price) : null);
+      const rate = total !== null && total > 0 && sold !== null && sold <= total && !row.inventoryConflict
+        ? Number((sold / total).toFixed(4)) : null;
       return {
         date,
         dayOfWeek: dayOfWeekFromDate(date),
@@ -13252,8 +13328,8 @@ function companyHistoryDailyFallback(company = {}, observations = []) {
         supply: total,
         available,
         sold,
-        saleRate: total !== null && sold !== null ? Number((sold / total).toFixed(4)) : null,
-        reservationRate: total !== null && sold !== null ? Number((sold / total).toFixed(4)) : null,
+        saleRate: rate,
+        reservationRate: rate,
         price,
         minPrice: price,
         maxPrice: price,
@@ -13261,8 +13337,12 @@ function companyHistoryDailyFallback(company = {}, observations = []) {
         priceEvidenceType: price !== null ? "representative_observed_price" : "none",
         revenueEligible: false,
         actualRevenue: null,
-        pricedSoldOut: sold !== null && price !== null ? sold : null,
-        missingPriceSoldOut: sold !== null && price === null ? sold : null,
+        pricedSoldOut: evidenceBased ? productSnapshotNumber(row.pricedSoldOut) : (sold !== null && price !== null ? sold : null),
+        missingPriceSoldOut: evidenceBased ? productSnapshotNumber(row.missingPriceSoldOut) : (sold !== null && price === null ? sold : null),
+        inventoryEvidenceVersion: evidenceBased ? 2 : null,
+        unverifiedOccupied: evidenceBased ? productSnapshotNumber(row.unverifiedOccupied) : null,
+        inventoryShortfall: evidenceBased ? productSnapshotNumber(row.inventoryShortfall) : null,
+        inventoryConflict: evidenceBased && Boolean(row.inventoryConflict),
         offlineReserved: null,
         revenueType: "estimated",
         reservationRateType: "public_inventory_estimate",
@@ -13691,7 +13771,10 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
       skipHistory: true,
       skipTraffic: true,
       skipTourismVisitors: true,
-      skipTourismDemandStrengthHistory: true
+      skipTourismVisitorHistory: true,
+      skipTourismDemandStrengthHistory: true,
+      skipTourismResourceDemandHistory: true,
+      skipTourismDiversityHistory: true
     }).catch(() => null);
     if (!data) continue;
     const item = (data.availability?.items || []).find((candidate) => companyProductAvailabilityMatch(company, candidate));
@@ -13713,6 +13796,27 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
       - (Number.isInteger(left.insertionOrder) ? left.insertionOrder : -1)
   );
 
+  const evidenceProjections = loadedCandidates
+    .filter((candidate) => candidate.item.inventoryEvidence?.version === 2)
+    .map(({ data, item, runId, observedAt }) => ({
+      runId,
+      snapshot: {
+        runId,
+        collectedAt: observedAt,
+        inventoryEvidenceVersion: 2,
+        readOnlyRecalculated: true,
+        salesSignal: companySalesSignalFromItem(item, data.run || {}),
+        revenue: companyRevenueSnapshotFromItem(item),
+        productSnapshot: {
+          ...compactCompanyProductSnapshot(item, data.run || {}, observedAt),
+          readOnlyRecalculated: true
+        }
+      },
+      observations: buildHistoryObservations({
+        run: data.run,
+        availability: { items: [{ ...item, companyId: company.companyId }] }
+      }, observedAt)
+    }));
   let legacyProductPreview = null;
   for (const candidate of loadedCandidates) {
     const { data, item, identityMatch, observedAt } = candidate;
@@ -13720,6 +13824,7 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
     if (Array.isArray(recoveredSnapshot?.products) && recoveredSnapshot.products.length) {
       return {
         productSnapshot: recoveredSnapshot,
+        evidenceProjections,
         legacyProductPreview: null,
         recoveredFromRun: true,
         identityMatch
@@ -13738,9 +13843,36 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
   }
   return {
     productSnapshot: null,
+    evidenceProjections,
     legacyProductPreview,
     recoveredFromRun: Boolean(legacyProductPreview),
     identityMatch: legacyProductPreview?.identityMatch || ""
+  };
+}
+
+function companyInventoryEvidenceReadView(company = {}, observations = [], projections = []) {
+  if (!projections.length) return { company, observations };
+  const byRun = new Map(projections.map((projection) => [projection.runId, projection]));
+  const projectSnapshot = (snapshot) => {
+    if (!snapshot || !byRun.has(snapshot.runId)) return snapshot;
+    return { ...snapshot, ...byRun.get(snapshot.runId).snapshot };
+  };
+  const inventory = company.inventory || {};
+  const identity = companyHistoryDailyIdentity(company);
+  return {
+    company: {
+      ...company,
+      inventory: {
+        ...inventory,
+        latest: projectSnapshot(inventory.latest),
+        previousLatest: projectSnapshot(inventory.previousLatest),
+        snapshots: (inventory.snapshots || []).map(projectSnapshot)
+      }
+    },
+    observations: [
+      ...observations.filter((row) => !(byRun.has(row.runId) && historyDailyObservationMatchesCompany(row, identity))),
+      ...projections.flatMap((projection) => projection.observations || [])
+    ]
   };
 }
 
@@ -13750,28 +13882,42 @@ async function summarizeCompanyMasterDetail(companyId = "") {
   const [master, observations] = await Promise.all([readCompanyMaster(), readHistoryObservations()]);
   const rawCompany = master.companies?.[id];
   if (!rawCompany) return null;
-  const company = companyRecordSummary(rawCompany);
-  const productSnapshotCandidates = [
+  const storedProductSnapshot = [
     rawCompany.inventory?.latest,
     rawCompany.inventory?.previousLatest,
     ...(rawCompany.inventory?.snapshots || [])
+  ].map((inventory) => inventory?.productSnapshot)
+    .filter((snapshot) => Array.isArray(snapshot?.products) && snapshot.products.length)
+    .sort((a, b) => String(b.collectedAt || "").localeCompare(String(a.collectedAt || "")))[0];
+  const recoveredProductSource = storedProductSnapshot?.inventoryEvidenceVersion === 2
+    ? { productSnapshot: null, legacyProductPreview: null, recoveredFromRun: false, evidenceProjections: [] }
+    : await recoverCompanyProductSourceFromRuns(rawCompany, observations);
+  const readView = companyInventoryEvidenceReadView(rawCompany, observations, recoveredProductSource.evidenceProjections || []);
+  const viewCompany = readView.company;
+  const viewObservations = readView.observations;
+  const company = companyRecordSummary(viewCompany);
+  const productSnapshotCandidates = [
+    viewCompany.inventory?.latest,
+    viewCompany.inventory?.previousLatest,
+    ...(viewCompany.inventory?.snapshots || [])
   ]
     .filter(Boolean)
     .map((inventory) => inventory.productSnapshot)
     .filter((snapshot) => snapshot && typeof snapshot === "object")
     .sort((a, b) => String(b.collectedAt || "").localeCompare(String(a.collectedAt || "")));
-  const latestSnapshot = productSnapshotCandidates[0] || rawCompany.inventory?.latest?.productSnapshot || null;
+  const latestSnapshot = productSnapshotCandidates[0] || viewCompany.inventory?.latest?.productSnapshot || null;
   let productSnapshot = productSnapshotCandidates.find((snapshot) => Array.isArray(snapshot.products) && snapshot.products.length) || latestSnapshot;
-  const recoveredProductSource = Array.isArray(productSnapshot?.products) && productSnapshot.products.length
-    ? { productSnapshot: null, legacyProductPreview: null, recoveredFromRun: false }
-    : await recoverCompanyProductSourceFromRuns(rawCompany, observations);
-  if (Array.isArray(recoveredProductSource.productSnapshot?.products) && recoveredProductSource.productSnapshot.products.length) {
+  if (!(Array.isArray(productSnapshot?.products) && productSnapshot.products.length)
+    && Array.isArray(recoveredProductSource.productSnapshot?.products) && recoveredProductSource.productSnapshot.products.length) {
     productSnapshot = recoveredProductSource.productSnapshot;
   }
-  const dailySnapshot = productSnapshotCandidates.find((snapshot) => Array.isArray(snapshot.daily) && snapshot.daily.length) || latestSnapshot;
+  const recoveredDaily = recoveredProductSource.productSnapshot?.inventoryEvidenceVersion === 2
+    ? recoveredProductSource.productSnapshot : null;
+  const dailySnapshot = productSnapshotCandidates.find((snapshot) => Array.isArray(snapshot.daily) && snapshot.daily.length)
+    || recoveredDaily || latestSnapshot;
   const snapshotDaily = Array.isArray(dailySnapshot?.daily) ? dailySnapshot.daily : [];
-  const historyDailyFallback = snapshotDaily.length ? null : companyHistoryDailyFallback(rawCompany, observations);
-  const historySalesArchive = historyDailyFallback || companyHistoryDailyFallback(rawCompany, observations);
+  const historyDailyFallback = snapshotDaily.length ? null : companyHistoryDailyFallback(viewCompany, viewObservations);
+  const historySalesArchive = historyDailyFallback || companyHistoryDailyFallback(viewCompany, viewObservations);
   const daily = snapshotDaily.length ? snapshotDaily : historyDailyFallback.daily;
   const observationBasis = {
     latest: {
@@ -13784,8 +13930,9 @@ async function summarizeCompanyMasterDetail(companyId = "") {
     },
     daily: snapshotDaily.length
       ? {
-          source: "product_snapshot",
-          sourceLabel: "업체 마스터 상품 스냅샷",
+          source: dailySnapshot.readOnlyRecalculated ? "source_recalculation" : "product_snapshot",
+          sourceLabel: dailySnapshot.readOnlyRecalculated ? "저장 원문 기준 재계산" : "업체 마스터 상품 스냅샷",
+          inventoryEvidenceVersion: dailySnapshot.inventoryEvidenceVersion === 2 ? 2 : null,
           runId: dailySnapshot?.dailyRunId || dailySnapshot?.runId || "",
           collectedAt: dailySnapshot?.dailyCollectedAt || dailySnapshot?.collectedAt || "",
           dateRange: dailySnapshot?.dateRange || { start: "", end: "" },
@@ -13814,12 +13961,16 @@ async function summarizeCompanyMasterDetail(companyId = "") {
     productSummary: productSnapshot?.summary || latestSnapshot?.summary || null,
     observationBasis,
     rankTrend: companyRankTrend(rawCompany, master, observations),
-    performanceTrend: companyPerformanceTrend(rawCompany, observations),
-    leadTime: companyLeadTimeSummary(rawCompany, observations),
+    performanceTrend: companyPerformanceTrend(viewCompany, viewObservations),
+    leadTime: companyLeadTimeSummary(viewCompany, viewObservations),
     definitions: {
-      estimatedRevenue: "네이버 공개 가격과 재고 변화로 계산한 예상매출",
+      estimatedRevenue: dailySnapshot?.inventoryEvidenceVersion === 2
+        ? "공개 예약 필드 관측 수량과 상품별 공개 가격의 예상액. 실제 결제 매출이 아님"
+        : "네이버 공개 가격과 재고 변화로 계산한 예상매출",
       actualRevenue: "업체 실제 예약·결제 자료가 연결되기 전에는 제공하지 않음",
-      dailyReservationRate: "네이버 공개 재고의 전체 수량과 잔여 수량 차이로 계산한 판매 추정률",
+      dailyReservationRate: dailySnapshot?.inventoryEvidenceVersion === 2
+        ? "공개 예약 필드 관측 수량을 같은 날짜의 채널 공급 수량으로 나눈 비율"
+        : "네이버 공개 재고의 전체 수량과 잔여 수량 차이로 계산한 판매 추정률",
       leadTime: "동일 숙박일의 반복 재고 관측에서 증가한 판매 추정량 기준",
       regionalMedianRank: "같은 키워드·같은 수집 회차에서 관측된 업체들을 순위순으로 놓았을 때의 중간순위. 지역 전체 숙박시장 평균이 아님"
     }
@@ -13897,10 +14048,13 @@ function buildHistoryObservations(data, collectedAt) {
     for (const productType of ["lodging", "dayuse"]) {
       const series = historySeriesForItem(item, productType, checkIn);
       for (const row of series) {
-        const total = normalizeObservationNumber(row.total);
-        const available = normalizeObservationNumber(row.available);
-        if (total === null || available === null || total <= 0) continue;
-        const sold = Math.max(0, total - Math.max(0, available));
+        const evidenceBased = row.inventoryEvidenceVersion === 2;
+        if (evidenceBased && row.missing) continue;
+        const total = evidenceBased ? productSnapshotNumber(row.total) : normalizeObservationNumber(row.total);
+        const available = evidenceBased ? productSnapshotNumber(row.available) : normalizeObservationNumber(row.available);
+        if (total === null || available === null || total < 0 || (!evidenceBased && total === 0)) continue;
+        const sold = evidenceBased ? productSnapshotNumber(row.sold) : Math.max(0, total - Math.max(0, available));
+        if (sold === null || sold < 0) continue;
         const leadTimeDays = dateDiffDays(collectedDate, row.stayDate);
         const observationId = stableHash([
           run.id,
@@ -13940,8 +14094,17 @@ function buildHistoryObservations(data, collectedAt) {
           supply: total,
           available: Math.max(0, available),
           sold,
-          saleRate: total ? Number((sold / total).toFixed(4)) : null,
-          price: item.price || "",
+          saleRate: total > 0 && sold <= total && !row.inventoryConflict ? Number((sold / total).toFixed(4)) : null,
+          price: evidenceBased ? "" : (item.price || ""),
+          ...(evidenceBased ? {
+            inventoryEvidenceVersion: 2,
+            estimatedRevenue: productSnapshotNumber(row.estimatedRevenue),
+            pricedSoldOut: productSnapshotNumber(row.pricedSoldOut),
+            missingPriceSoldOut: productSnapshotNumber(row.missingPriceSoldOut),
+            unverifiedOccupied: productSnapshotNumber(row.unverifiedOccupied),
+            inventoryShortfall: productSnapshotNumber(row.inventoryShortfall),
+            inventoryConflict: Boolean(row.inventoryConflict)
+          } : {}),
           listType: item.listType || "",
           inventoryScope: item.inventoryScope || "",
           inventoryMemo: item.inventoryMemo || "",
@@ -14866,6 +15029,7 @@ function summarizeAvailabilityRows(rows, baseDir = "") {
   }
 
   const items = [...byPlace.values()]
+    .map(applyInventoryEvidence)
     .map((item) => {
       const confidence = evaluateInventoryConfidence({
         availableRooms: item.availableRooms,
@@ -16972,9 +17136,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=datalab-20260903-db-company-title-gutter-v103"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=datalab-20260903-db-company-title-gutter-v103"')
-      .replace('src="/app.js"', 'src="/app.js?v=datalab-20260903-db-company-title-gutter-v103"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=datalab-20260920-shared-room-evidence-v104"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=datalab-20260920-shared-room-evidence-v104"')
+      .replace('src="/app.js"', 'src="/app.js?v=datalab-20260920-shared-room-evidence-v104"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

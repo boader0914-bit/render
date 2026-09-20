@@ -1712,6 +1712,95 @@ async function main() {
     assert.equal(mergedCompanyDetail.statusCode, 200);
     assert.equal(mergedCompanyDetail.body.products.length, 2, "company merge must preserve the only detailed product snapshot");
     assert.equal(mergedCompanyDetail.body.observationBasis.products.runId, detailSecondRunId);
+
+    // Existing detailed snapshots must not bypass the evidence-based read model.
+    // This regression uses the same closed-day shape as the Mint audit, with a
+    // deliberately stale snapshot already containing products and daily rows.
+    const evidenceRunId = "mint_evidence_read_view_20260920_150137";
+    const evidenceCompanyId = "cmp_place_1975818551";
+    const evidenceAt = "2026-09-20T06:06:08.000Z";
+    const evidenceDates = ["2026-09-20", "2026-09-26", "2026-10-03", "2026-10-10", "2026-10-17"];
+    const lodgingEvidence = evidenceDates.flatMap((date, index) => [
+      { date, bizItemId: "4066789", name: "민트 1~21번", saleType: "숙박", listType: "객실 묶음 상품리스트", stock: 16, total: 16, available: index ? 16 : 14, bookingCount: index ? 0 : 2, occupiedBookingCount: 0, price: 100000, open: true },
+      { date, bizItemId: "4066841", name: "라벤더 1~7번", saleType: "숙박", listType: "객실 묶음 상품리스트", stock: 5, total: 5, available: 5, bookingCount: 0, occupiedBookingCount: 0, price: 100000, open: true }
+    ]);
+    const dayEvidence = evidenceDates.map((date, index) => ({
+      date, bizItemId: "4223868", name: "당일글램핑", saleType: "데이유즈",
+      stock: index ? 0 : 3, total: index ? 1 : 3, available: index ? 0 : 2,
+      soldOut: 1, bookingCount: index ? 0 : 1, occupiedBookingCount: 0,
+      price: index ? 0 : 99000, open: !index
+    }));
+    await writeRun(outputsDir, {
+      runId: evidenceRunId, placeId: "1975818551", companyName: "민트글램핑", keyword: "포천글램핑",
+      checkIn: "2026-09-20", checkOut: "2026-10-20", bookingRangeDays: 31,
+      completedAt: evidenceAt, observedAt: evidenceAt, collectionPurpose: "revenue_detail",
+      inventory: {
+        네이버예약업체ID: "571273",
+        숙박확인재고수: 21, 숙박예약가능수: 19,
+        주간전체수량합계: 105, 주간판매수량합계: 10,
+        주간숙박예상매출: 1000000, weeklyAdjustedRevenue: 1000000,
+        dayUseWeeklyTotalStock: 15, dayUseWeeklyTotalSoldOut: 13,
+        dayUseWeeklyEstimatedRevenue: 99000, dayUseWeeklyAdjustedRevenue: 1287000,
+        네이버요일별상품상세JSON: lodgingEvidence,
+        dayUseWeeklyProductDetailsJson: dayEvidence
+      }
+    });
+    const evidenceMaster = JSON.parse(await fsp.readFile(masterFile, "utf8"));
+    const staleProductSnapshot = {
+      schemaVersion: 1, runId: evidenceRunId, collectedAt: evidenceAt,
+      products: [{ key: "id:4223868", name: "당일글램핑", productType: "dayuse", latestSold: 13 }],
+      priceGroups: [],
+      daily: [{ date: "2026-09-26", productType: "dayuse", total: 3, available: 0, sold: 3, estimatedRevenue: 297000, actualRevenue: null }],
+      summary: { productCount: 1, priceGroupCount: 1, adjustedEstimatedRevenue: 2287000 }
+    };
+    evidenceMaster.companies[evidenceCompanyId] = {
+      ...structuredClone(evidenceMaster.companies[mergeTargetId]),
+      companyId: evidenceCompanyId, primaryName: "민트글램핑", aliases: ["민트글램핑"],
+      placeIds: ["1975818551"], bookingBusinessIds: ["571273"],
+      runIds: [evidenceRunId], firstRunId: evidenceRunId, lastRunId: evidenceRunId,
+      keywords: {}, manualCorrection: null,
+      inventory: {
+        runIds: [evidenceRunId], snapshots: [], previousLatest: null,
+        latest: {
+          runId: evidenceRunId, collectedAt: evidenceAt,
+          productSnapshot: staleProductSnapshot,
+          revenue: {
+            lodging: { revenue: 1000000, adjustedRevenue: 1000000, pricedSoldOut: 10 },
+            dayUse: { revenue: 99000, adjustedRevenue: 1287000, pricedSoldOut: 1, missingPriceSoldOut: 12 }
+          },
+          salesSignal: { lodging: { days: 5, totalSupply: 105, totalSold: 10 }, dayUse: { days: 5, totalSupply: 15, totalSold: 13 } }
+        }
+      }
+    };
+    await fsp.writeFile(masterFile, JSON.stringify(evidenceMaster, null, 2), "utf8");
+    const sourceCsv = path.join(outputsDir, evidenceRunId, `${evidenceRunId}_overall_place_rank.csv`);
+    const masterBeforeEvidence = await fsp.readFile(masterFile, "utf8");
+    const historyBeforeEvidence = await readTextIfExists(historyFile);
+    const csvBeforeEvidence = await fsp.readFile(sourceCsv, "utf8");
+    const evidenceDetail = await request(baseUrl, "GET", `/api/company-master/detail?companyId=${evidenceCompanyId}`, null, cookies);
+    assert.equal(evidenceDetail.statusCode, 200);
+    const evidenceLodging = evidenceDetail.body.daily.filter((row) => row.productType === "lodging");
+    const evidenceDayUse = evidenceDetail.body.daily.filter((row) => row.productType === "dayuse");
+    assert.equal(evidenceLodging.reduce((sum, row) => sum + row.sold, 0), 2);
+    assert.equal(evidenceDayUse.reduce((sum, row) => sum + row.sold, 0), 1);
+    assert.ok(evidenceDayUse.filter((row) => row.date !== "2026-09-20").every((row) => row.sold === 0 && row.estimatedRevenue === 0));
+    assert.equal(evidenceDetail.body.productSummary.adjustedEstimatedRevenue, 299000);
+    assert.equal(evidenceDetail.body.performanceTrend.points.at(-1).estimatedRevenue, 299000);
+    assert.equal(evidenceDetail.body.company.inventory.latest.salesSignal.lodging.totalSold, 2);
+    assert.equal(evidenceDetail.body.company.inventory.latest.salesSignal.dayUse.totalSold, 1);
+    assert.equal(evidenceDetail.body.observationBasis.daily.source, "source_recalculation");
+    assert.equal(evidenceDetail.body.observationBasis.daily.inventoryEvidenceVersion, 2);
+    assert.equal(await fsp.readFile(masterFile, "utf8"), masterBeforeEvidence, "read recalculation must not rewrite a prior company snapshot");
+    assert.equal(await readTextIfExists(historyFile), historyBeforeEvidence, "read recalculation must not append or rewrite history");
+    assert.equal(await fsp.readFile(sourceCsv, "utf8"), csvBeforeEvidence, "read recalculation must preserve collected raw evidence");
+    const repeatedEvidenceDetail = await request(baseUrl, "GET", `/api/company-master/detail?companyId=${evidenceCompanyId}`, null, cookies);
+    assert.deepEqual(repeatedEvidenceDetail.body.daily, evidenceDetail.body.daily, "repeated reads cannot subtract a shared booking twice");
+    const evidenceRun = await request(baseUrl, "GET", `/api/runs/${evidenceRunId}`, null, cookies);
+    assert.equal(evidenceRun.statusCode, 200);
+    const evidenceItem = evidenceRun.body.availability.items.find((row) => row.placeId === "1975818551");
+    assert.equal(evidenceItem.inventoryEvidence.version, 2);
+    assert.equal(evidenceItem.weeklyTotalSoldOut, evidenceLodging.reduce((sum, row) => sum + row.sold, 0));
+    assert.equal(evidenceItem.dayUseWeeklyTotalSoldOut, evidenceDayUse.reduce((sum, row) => sum + row.sold, 0));
   } finally {
     await stopChild(child);
     await fsp.rm(tmp, { recursive: true, force: true });

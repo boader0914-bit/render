@@ -1,0 +1,19 @@
+{
+  "1975818551": {
+    "bookingBusinessId": "571273",
+    "physicalRooms": {
+      "count": 28,
+      "label": "객실 안내에서 확인",
+      "source": "민트 1~21번 21실 + 라벤더 1~7번 7실. 2026-09-20 공개 객실 안내 및 사용자 확인.",
+      "sourceUrl": "https://pcmap.place.naver.com/accommodation/1975818551/room",
+      "verifiedAt": "2026-09-20",
+      "products": [{ "id": "4066789", "count": 21 }, { "id": "4066841", "count": 7 }]
+    },
+    "sharedRooms": {
+      "status": "confirmed",
+      "note": "당일글램핑은 민트 또는 라벤더 객실을 함께 사용합니다. 객실 공유는 확인했지만 날짜별 예약의 중복 여부는 확인되지 않았습니다.",
+      "sourceUrl": "https://m.booking.naver.com/booking/3/bizes/571273/items/4223868?tab=details",
+      "verifiedAt": "2026-09-20"
+    }
+  }
+}

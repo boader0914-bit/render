@@ -1,0 +1,32 @@
+"use strict";
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
+const path = require("node:path");
+const {applyInventoryEvidence} = require("./inventory_estimation.cjs");
+const mint = applyInventoryEvidence(require("./fixtures/mint_20260920.cjs"));
+const source = fs.readFileSync(path.join(__dirname,"../web/app.js"),"utf8");
+const names = ["inventoryAssessment","weeklyRows","salesStats","bookingGraphRows","itemRevenueStats","projectedRevenueFields","finiteNumber","optionalNumber","parseDate","monthDay","isoAddDays","normalizeMonthDayLabel","bookingRangeLabels","bookingDays"];
+const context = vm.createContext({state:{data:{run:{checkIn:"2026-09-20",checkOut:"2026-10-20",bookingRangeDays:31}}},DEFAULT_BOOKING_DAYS:31});
+for (const name of names) {
+  const declaration = source.match(new RegExp(`^function ${name}\\([^]*?^}`,"m"))?.[0];
+  assert.ok(declaration, name);
+  vm.runInContext(declaration, context);
+}
+const stats = context.salesStats(mint);
+const chart = context.bookingGraphRows(mint);
+assert.equal(stats.supply,667);
+assert.equal(chart.reduce((n,r)=>n+r.total,0),stats.supply,"List and detail must share a denominator");
+assert.equal(chart.reduce((n,r)=>n+r.sold,0),stats.sold);
+assert.equal(stats.sold,151);
+assert.equal(context.itemRevenueStats(mint).adjustedRevenue,35699000);
+assert.equal(context.itemRevenueStats(mint,"day").adjustedRevenue,297000);
+assert.equal(context.salesStats(mint,"day").sold,3);
+assert.equal(context.weeklyRows(mint,"day").filter(r=>r.total===0).length,4,"Closed days must remain inspectable");
+const missing = {...mint,inventoryEvidence:{...mint.inventoryEvidence,lodging:{...mint.inventoryEvidence.lodging,rows:mint.inventoryEvidence.lodging.rows.slice(1)}}};
+assert.equal(context.bookingGraphRows(missing)[0].missing,true,"Uncollected dates are not zero-booking observations");
+const conflictItem = applyInventoryEvidence({weeklyProductDetails:[{date:"2026-09-20",stock:0,bookingCount:2,price:100000}]});
+assert.ok(Number.isNaN(context.salesStats(conflictItem).rate),"Conflicting stock/booking data must not become 100 percent");
+assert.ok(Number.isNaN(context.weeklyRows(conflictItem)[0].rate));
+assert.ok(Number.isNaN(context.bookingGraphRows(conflictItem)[0].rate));
+console.log("inventory UI: list/detail/revenue/closed-day consistency passed");
