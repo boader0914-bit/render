@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>수집 실패 가능성 고지</title>
+  <style>
+    :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f4f6f8; color: #101828; }
+    main { width: min(100% - 32px, 860px); margin: 36px auto; padding: 30px; border: 1px solid #e4e7ec; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); }
+    .eyebrow { margin: 0 0 8px; color: #175cd3; font-size: 13px; font-weight: 900; }
+    .brand-beta-badge { display: inline-grid; place-items: center; min-height: 24px; margin-left: 7px; padding: 0 11px; border: 1px solid rgba(49, 130, 246, .24); border-radius: 999px; background: linear-gradient(135deg, rgba(49, 130, 246, .10), rgba(20, 184, 166, .12)); color: #175cd3; font-size: 11px; font-weight: 900; line-height: 1; text-transform: uppercase; vertical-align: .16em; }
+    h1 { margin: 0 0 10px; font-size: 30px; line-height: 1.2; letter-spacing: 0; }
+    h2 { margin: 26px 0 10px; font-size: 18px; letter-spacing: 0; }
+    p, li { color: #344054; font-size: 15px; line-height: 1.7; }
+    ul { margin: 8px 0 0; padding-left: 20px; }
+    a { color: #175cd3; font-weight: 900; text-decoration: none; }
+    .meta { margin: 0 0 18px; color: #667085; font-size: 13px; font-weight: 700; }
+    .back { display: inline-grid; place-items: center; min-height: 42px; margin-top: 24px; padding: 0 16px; border-radius: 12px; background: #3182f6; color: #fff; }
+    @media (max-width: 560px) { main { margin-block: 18px; padding: 22px; } h1 { font-size: 25px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">운영 고지</p>
+    <h1>수집 실패 가능성 고지</h1>
+    <p class="meta">시행일 2026.07.08 · 운영자 사분</p>
+    
+    <section>
+      <h2>실패 가능 원인</h2>
+      <ul><li>외부 플랫폼 구조 변경 또는 접근 제한</li><li>예약 페이지 차단, 로그인 요구, 성인/지역/기기 제한</li><li>네트워크 장애, API 장애, 서버 점검</li><li>업체명 변경, 중복 업체명, 예약 ID 미노출</li></ul>
+    </section>
+    <section>
+      <h2>표시 방식</h2>
+      <p>수집 실패 또는 누락이 발생하면 리포트와 관리자 화면에 실패 항목, 확인 필요 채널, 수동 보완 필요 여부를 표시합니다. 실패 항목은 데이터가 없다는 뜻이지 반드시 영업 또는 운영상 문제가 있다는 뜻은 아닙니다.</p>
+    </section>
+    <section>
+      <h2>재수집과 보완</h2>
+      <p>관리자는 동일 조건 재수집, 수동 보정, 보조 채널 확인으로 데이터를 보완할 수 있습니다. 단 외부 플랫폼 정책상 접근이 제한된 항목은 자동화로 보장하지 않습니다.</p>
+    </section>
+    <a class="back" href="/signup">회원가입으로 돌아가기</a>
+  </main>
+</body>
+</html>

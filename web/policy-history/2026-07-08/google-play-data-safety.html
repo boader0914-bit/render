@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>구글플레이 Data Safety 입력용 정리</title>
+  <style>
+    :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f4f6f8; color: #101828; }
+    main { width: min(100% - 32px, 860px); margin: 36px auto; padding: 30px; border: 1px solid #e4e7ec; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); }
+    .eyebrow { margin: 0 0 8px; color: #175cd3; font-size: 13px; font-weight: 900; }
+    .brand-beta-badge { display: inline-grid; place-items: center; min-height: 24px; margin-left: 7px; padding: 0 11px; border: 1px solid rgba(49, 130, 246, .24); border-radius: 999px; background: linear-gradient(135deg, rgba(49, 130, 246, .10), rgba(20, 184, 166, .12)); color: #175cd3; font-size: 11px; font-weight: 900; line-height: 1; text-transform: uppercase; vertical-align: .16em; }
+    h1 { margin: 0 0 10px; font-size: 30px; line-height: 1.2; letter-spacing: 0; }
+    h2 { margin: 26px 0 10px; font-size: 18px; letter-spacing: 0; }
+    p, li { color: #344054; font-size: 15px; line-height: 1.7; }
+    ul { margin: 8px 0 0; padding-left: 20px; }
+    a { color: #175cd3; font-weight: 900; text-decoration: none; }
+    .meta { margin: 0 0 18px; color: #667085; font-size: 13px; font-weight: 700; }
+    .back { display: inline-grid; place-items: center; min-height: 42px; margin-top: 24px; padding: 0 16px; border-radius: 12px; background: #3182f6; color: #fff; }
+    @media (max-width: 560px) { main { margin-block: 18px; padding: 22px; } h1 { font-size: 25px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">앱 출시 점검</p>
+    <h1>구글플레이 Data Safety 입력용 정리</h1>
+    <p class="meta">시행일 2026.07.08 · 운영자 사분</p>
+    
+    <section>
+      <h2>기본 답변</h2>
+      <ul><li>사용자 데이터 수집 여부: 예</li><li>개인정보처리방침 URL: /privacy</li><li>계정 및 데이터 삭제 요청 URL: /account-delete</li><li>전송 중 암호화: 예. 운영 URL은 HTTPS로 제공합니다.</li><li>데이터 공유: 판매 또는 광고 목적 공유 없음. 서버 호스팅, API 연동, 장애·보안 대응 등 서비스 운영에 필요한 처리만 사용합니다.</li><li>독립 보안 심사: 현재 미해당. 심사 또는 인증을 받은 뒤에만 예로 변경합니다.</li></ul>
+    </section>
+    <section>
+      <h2>수집 데이터 유형</h2>
+      <ul><li>개인 정보: 아이디, 이메일, 연락처, 선택 입력한 숙소 또는 회사명</li><li>앱 활동: 검색 키워드, 검색 기간, 순위 범위, 검색 이력, 리포트 열람·재사용 기록</li><li>기기 또는 기타 식별자: 세션 식별값, IP 해시, 브라우저 식별값 해시</li><li>사용자 콘텐츠: 관심숙소 등록 정보, 숙소명, 객실수, 객실종류, 요일별 가격, 시설 정보</li><li>위치 정보: 기기 위치는 수집하지 않습니다. 사용자가 입력한 지역명과 검색 키워드만 분석 기준으로 사용합니다.</li><li>결제 정보: 현재 앱 내부 결제 정보는 수집하지 않습니다. 유료 결제 기능 추가 시 별도 갱신해야 합니다.</li></ul>
+    </section>
+    <section>
+      <h2>사용 목적</h2>
+      <ul><li>앱 기능: 로그인, 회원 식별, 리포트 생성, 검색 이력 재사용, 관심숙소 비교</li><li>분석: 지역 경쟁 리포트 품질 개선, 검색 속도 개선, 오류 재현</li><li>보안·부정 이용 방지: 로그인 실패 제한, 검색 요청 제한, 세션 보호</li><li>고객 지원: 계정·데이터 삭제 요청, 문의 대응, 처리 상태 안내</li></ul>
+    </section>
+    <section>
+      <h2>제출 전 확인</h2>
+      <ul><li>광고 SDK, 결제 SDK, 푸시 알림, 앱 분석 SDK를 추가하면 해당 SDK의 수집 항목을 다시 반영해야 합니다.</li><li>Play Console Data Safety는 앱의 모든 배포 버전 기준으로 작성해야 하므로 TWA 패키징 전후에 최종 점검합니다.</li><li>이 페이지는 운영 초안입니다. 실제 제출 전 법무·정책 검토로 최종 문구를 확정합니다.</li></ul>
+    </section>
+    <a class="back" href="/admin">관리자 화면으로 돌아가기</a>
+  </main>
+</body>
+</html>

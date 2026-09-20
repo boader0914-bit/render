@@ -7,6 +7,9 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { URL } = require("node:url");
 const yeogiImportParser = require("./yeogi_import_parser.cjs");
+const { publicHeader } = require("./public_site_chrome.cjs");
+const { createPublicPages } = require("./public_site_pages.cjs");
+const { buildPolicyDocument } = require("./public_policy_content.cjs");
 const { otaProviderFromUrl } = require("./naver_place_ota_observation.cjs");
 const { createCollector: createTourismCollector } = require("./tourism_collector.cjs");
 const { createMonthlyVisitorScheduler } = require("./tourism_visitor_monthly_scheduler.cjs");
@@ -70,15 +73,19 @@ const ACCOUNT_DELETE_REQUESTS_FILE = path.join(CUSTOMER_DB_DIR, "account_delete_
 const COMPANY_MASTER_DIR = path.join(DATA_DIR, "company_master");
 const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
 const TOURISM_DATA_DIR = path.join(DATA_DIR, "tourism_data");
-const LEGAL_POLICY_VERSION = "2026-07-08";
+const LEGAL_POLICY_VERSION = "2026-09-20";
 const TERMS_VERSION = LEGAL_POLICY_VERSION;
 const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
 const MARKETING_CONSENT_VERSION = LEGAL_POLICY_VERSION;
 const SERVICE_BUSINESS_NAME = String(process.env.LODGING_DATALAB_BUSINESS_NAME || "사분").trim();
 const SERVICE_BUSINESS_REGISTRATION_NO = String(process.env.LODGING_DATALAB_BUSINESS_REGISTRATION_NO || "515-13-21899").trim();
-const SERVICE_BUSINESS_ADDRESS = String(process.env.LODGING_DATALAB_BUSINESS_ADDRESS || "경상남도 진주시 도동로3번길 10, 1층 일부(상평동)").trim();
+const SERVICE_BUSINESS_ADDRESS = String(process.env.LODGING_DATALAB_BUSINESS_ADDRESS || "경상남도 진주시 도동로36번길 10").trim();
 const SERVICE_OPERATOR_NAME = String(process.env.LODGING_DATALAB_OPERATOR_NAME || process.env.GLAMPING_OPERATOR_NAME || SERVICE_BUSINESS_NAME).trim();
-const PRIVACY_CONTACT_EMAIL = String(process.env.GLAMPING_PRIVACY_EMAIL || "").trim();
+const PRIVACY_CONTACT_EMAIL = String(process.env.GLAMPING_PRIVACY_EMAIL || "info@sabun.co.kr").trim();
+const SERVICE_CONTACT_PHONE = "070-4001-6668";
+const SERVICE_REPRESENTATIVE_NAME = "최지혜";
+const SERVICE_MAIL_ORDER_NO = "제2026-경남진주-0462호";
+const SERVICE_PRIVACY_OFFICER_NAME = "김정환";
 const DATALAB_TREND_CACHE_POLICY = "same_keyword_same_date";
 const CRAWL_TIMING_MAX_ENTRIES = 240;
 const PORT = Number(process.env.PORT || 3210);
@@ -92,7 +99,7 @@ const ADMIN_PASSWORD = String(process.env.GLAMPING_ADMIN_PASSWORD || process.env
 const B2B_USERNAME = String(process.env.GLAMPING_B2B_USER || process.env.B2B_USER || "b2b").trim();
 const B2B_PASSWORD = String(process.env.GLAMPING_B2B_PASSWORD || process.env.B2B_PASSWORD || "0914").trim();
 const SIGNUP_ENABLED = /^(1|true|on|yes)$/i.test(String(process.env.GLAMPING_SIGNUP_ENABLED || "0").trim());
-const SIGNUP_CLOSED_MESSAGE = "Beta 서비스 종료로 신규 회원가입이 중단되었습니다.";
+const SIGNUP_CLOSED_MESSAGE = "현재 신규 회원가입을 받지 않습니다. 기존 계정으로 로그인하거나 이용 문의를 남겨주세요.";
 const B2B_ENABLED = !/^(0|false|off)$/i.test(String(process.env.GLAMPING_B2B_ENABLED || "1").trim())
   && Boolean(B2B_USERNAME && B2B_PASSWORD);
 const B2B_MEMBER_DAILY_SEARCH_LIMIT = 2;
@@ -1774,6 +1781,7 @@ const DEMAND_AI_SIGNALS = [
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
+  ".otf": "font/otf",
   ".js": "application/javascript; charset=utf-8",
   ".webmanifest": "application/manifest+json; charset=utf-8",
   ".json": "application/json; charset=utf-8",
@@ -3419,7 +3427,14 @@ async function createAccountDeleteRequest(payload = {}, context = {}) {
   const store = await readAccountDeleteRequestStore();
   store.requests = [request, ...(store.requests || [])].slice(0, 1000);
   await writeAccountDeleteRequestStore(store);
-  return accountDeleteRequestPublicRow(request);
+  return {
+    requestId: request.requestId,
+    requestedAt: request.requestedAt,
+    requestType: request.requestType,
+    requestTypeLabel: request.requestTypeLabel,
+    status: request.status,
+    statusLabel: request.statusLabel
+  };
 }
 
 async function updateAccountDeleteRequestStatus(requestId = "", payload = {}, adminSession = {}) {
@@ -3571,39 +3586,15 @@ function accountDeletePage(session = null, options = {}) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>계정·데이터 삭제 요청</title>
-  <style>
-    :root { color-scheme: light; font-family: "Pretendard Variable", Pretendard, Arial, "Malgun Gothic", sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: #f4f7fb; color: #101828; }
-    main { width: min(100% - 32px, 920px); margin: 34px auto; display: grid; gap: 18px; }
-    .hero, form, .notice, .account-delete-result { border: 1px solid #dbe4f0; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); padding: 26px; }
-    .eyebrow { margin: 0 0 8px; color: #175cd3; font-size: 13px; font-weight: 950; }
-    h1 { margin: 0; font-size: clamp(28px, 5vw, 42px); line-height: 1.12; letter-spacing: 0; }
-    p { margin: 10px 0 0; color: #475467; font-size: 15px; font-weight: 750; line-height: 1.65; }
-    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-    label { display: grid; gap: 7px; min-width: 0; color: #344054; font-size: 13px; font-weight: 950; }
-    input, select, textarea { width: 100%; min-height: 48px; border: 1px solid #d0d5dd; border-radius: 14px; background: #fff; color: #101828; padding: 0 14px; font: inherit; font-weight: 850; }
-    textarea { min-height: 112px; padding-top: 12px; resize: vertical; }
-    .full { grid-column: 1 / -1; }
-    .check { display: flex; gap: 10px; align-items: flex-start; margin-top: 2px; color: #344054; font-size: 13px; font-weight: 850; line-height: 1.55; }
-    .check input { width: 18px; min-width: 18px; min-height: 18px; margin-top: 2px; }
-    .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 16px; }
-    button, .back { min-height: 48px; display: inline-grid; place-items: center; border: 0; border-radius: 14px; background: #3182f6; color: #fff; padding: 0 18px; font: inherit; font-weight: 950; text-decoration: none; cursor: pointer; }
-    .back { border: 1px solid #d5e3f7; background: #eef5ff; color: #175cd3; }
-    .notice ul { margin: 8px 0 0; padding-left: 20px; color: #475467; line-height: 1.7; }
-    .account-delete-result.success { border-color: #a6f4c5; background: #f6fef9; }
-    .account-delete-result.error { border-color: #fecdca; background: #fffbfa; }
-    .account-delete-result strong { color: #101828; font-size: 18px; font-weight: 950; }
-    .required { color: #d92d20; }
-    @media (max-width: 680px) { main { margin-block: 18px; } .hero, form, .notice, .account-delete-result { padding: 20px; border-radius: 20px; } .grid { grid-template-columns: 1fr; } }
-  </style>
+  <link rel="stylesheet" href="/public-site.css?v=20260920">
 </head>
 <body>
-  <main>
+  ${publicHeader()}
+  <main id="main" class="document-layout request-layout">
     <section class="hero">
       <p class="eyebrow">회원 권리 요청</p>
       <h1>계정·데이터 삭제 요청</h1>
-      <p>계정 삭제, 검색 이력 삭제, 관심숙소 삭제, 전체 데이터 삭제를 요청할 수 있습니다. 요청은 고객 DB에 접수되고 관리자가 본인 확인 후 처리합니다.</p>
+      <p>계정 삭제, 검색 이력 삭제, 관심숙소 삭제, 전체 데이터 삭제를 요청할 수 있습니다. 접수하면 관리자가 본인과 요청 범위를 확인한 뒤 처리 방법을 안내합니다. 접수만으로 계정이나 자료가 즉시 삭제되지는 않습니다.</p>
     </section>
     ${requestSummary}
     ${errorSummary}
@@ -3647,13 +3638,14 @@ function accountDeletePage(session = null, options = {}) {
     <section class="notice">
       <strong>처리 기준</strong>
       <ul>
-        <li>요청 일시, 아이디, 연락처, 약관 버전, 처리 상태는 고객 DB에 보관합니다.</li>
-        <li>법령상 보관이 필요한 결제·정산·보안 로그는 별도 보관 기간 후 삭제될 수 있습니다.</li>
-        <li>처리 현황은 관리자 큐에서 접수, 본인 확인중, 처리중, 완료, 반려 상태로 관리합니다.</li>
+        <li>본인 확인과 처리 결과 안내를 위해 아이디, 회신 연락처, 요청 내용과 처리 이력을 보관합니다.</li>
+        <li>별도 보관이 필요한 정보가 있으면 적용 근거와 보관 범위를 확인해 안내합니다. 문의 내용에 비밀번호나 예약 고객의 개인정보를 입력하지 마세요.</li>
+        <li>열람·정정·처리정지·동의 철회는 아래 문의처로 요청할 수 있습니다. 자세한 처리 기준은 <a href="/privacy">개인정보처리방침</a>에서 확인해 주세요.</li>
         <li>문의: ${policyContactHtml()}</li>
       </ul>
     </section>
   </main>
+  ${publicFooterHtml()}
 </body>
 </html>`;
 }
@@ -4214,261 +4206,75 @@ function brandTitleHtml(text = "") {
   );
 }
 
+function publicPageContext() {
+  return {
+    escapeHtml, contactHtml: policyContactHtml(), contactEmail: PRIVACY_CONTACT_EMAIL,
+    contactPhone: SERVICE_CONTACT_PHONE, operatorName: SERVICE_OPERATOR_NAME,
+    policyVersion: LEGAL_POLICY_VERSION, signupEnabled: SIGNUP_ENABLED,
+    signupClosedMessage: SIGNUP_CLOSED_MESSAGE, loginFailureLimit: LOGIN_FAILURE_LIMIT,
+    lockMinutes: Math.max(1, Math.ceil(LOGIN_LOCK_MS / 60000)),
+    sessionHours: Math.max(1, Math.round(SESSION_TTL_MS / 3600000)),
+    businessName: SERVICE_BUSINESS_NAME, businessRegistrationNo: SERVICE_BUSINESS_REGISTRATION_NO,
+    businessAddress: SERVICE_BUSINESS_ADDRESS, representativeName: SERVICE_REPRESENTATIVE_NAME,
+    mailOrderNo: SERVICE_MAIL_ORDER_NO, privacyOfficerName: SERVICE_PRIVACY_OFFICER_NAME
+  };
+}
+
+function publicFooterHtml() {
+  return createPublicPages(publicPageContext()).footer();
+}
+
 function legalPage(title, eyebrow, sections, options = {}) {
-  const backHref = options.backHref || "/signup";
-  const backLabel = options.backLabel || "회원가입으로 돌아가기";
-  const rows = sections.map((section) => `
-    <section>
-      <h2>${escapeHtml(section.title)}</h2>
-      ${section.body}
-    </section>`).join("");
-  return `<!doctype html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escapeHtml(title)}</title>
-  <style>
-    :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: #f4f6f8; color: #101828; }
-    main { width: min(100% - 32px, 860px); margin: 36px auto; padding: 30px; border: 1px solid #e4e7ec; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); }
-    .eyebrow { margin: 0 0 8px; color: #175cd3; font-size: 13px; font-weight: 900; }
-    .brand-beta-badge { display: inline-grid; place-items: center; min-height: 24px; margin-left: 7px; padding: 0 11px; border: 1px solid rgba(49, 130, 246, .24); border-radius: 999px; background: linear-gradient(135deg, rgba(49, 130, 246, .10), rgba(20, 184, 166, .12)); color: #175cd3; font-size: 11px; font-weight: 900; line-height: 1; text-transform: uppercase; vertical-align: .16em; }
-    h1 { margin: 0 0 10px; font-size: 30px; line-height: 1.2; letter-spacing: 0; }
-    h2 { margin: 26px 0 10px; font-size: 18px; letter-spacing: 0; }
-    p, li { color: #344054; font-size: 15px; line-height: 1.7; }
-    ul { margin: 8px 0 0; padding-left: 20px; }
-    a { color: #175cd3; font-weight: 900; text-decoration: none; }
-    .meta { margin: 0 0 18px; color: #667085; font-size: 13px; font-weight: 700; }
-    .back { display: inline-grid; place-items: center; min-height: 42px; margin-top: 24px; padding: 0 16px; border-radius: 12px; background: #3182f6; color: #fff; }
-    @media (max-width: 560px) { main { margin-block: 18px; padding: 22px; } h1 { font-size: 25px; } }
-  </style>
-</head>
-<body>
-  <main>
-    <p class="eyebrow">${escapeHtml(eyebrow)}</p>
-    <h1>${brandTitleHtml(title)}</h1>
-    <p class="meta">시행일 ${PRIVACY_VERSION.replace(/-/g, ".")} · 운영자 ${escapeHtml(SERVICE_OPERATOR_NAME)}</p>
-    ${rows}
-    <a class="back" href="${escapeHtml(backHref)}">${escapeHtml(backLabel)}</a>
-  </main>
-</body>
-</html>`;
+  return createPublicPages(publicPageContext()).legalPage(title, eyebrow, sections, options);
+}
+
+function policyDocumentPage(name) {
+  const document = buildPolicyDocument(name, publicPageContext());
+  const historyNames = { terms: "terms", privacy: "privacy", refund: "refund", collection: "data-collection-notice", quality: "data-quality-notice", failure: "collection-failure-notice", retention: "api-key-retention-policy", disclaimer: "report-disclaimer", business: "business-info", dataSafety: "google-play-data-safety" };
+  return legalPage(document.title, document.eyebrow, document.sections, {
+    ...document.options,
+    historyHref: "/policy-history/2026-07-08/" + historyNames[name] + ".html"
+  });
 }
 
 function termsPage() {
-  return legalPage("숙박업 데이터랩 beta 사업자(개인) 이용약관", "필수 동의", [
-    {
-      title: "목적",
-      body: "<p>이 약관은 숙박업 데이터랩 beta 사업자(개인) 서비스의 회원가입, 로그인, 경쟁 리포트 조회, 검색 이력 관리 및 관리자 검토 기능 이용 조건을 정합니다.</p>"
-    },
-    {
-      title: "서비스의 성격",
-      body: "<p>서비스는 네이버 플레이스 노출, 네이버 예약 표본, 공개 가격·상품 정보, 검색 수요와 내부 보정 데이터를 결합해 지역 경쟁 리포트를 제공합니다. 자동 수집 및 추정 데이터는 의사결정 보조 자료이며 실제 매출, 예약률, 객실 수를 보증하지 않습니다.</p>"
-    },
-    {
-      title: "회원가입과 계정 관리",
-      body: "<p>회원은 가입 양식에 따라 계정 정보와 사업 관련 정보를 입력합니다. 회원은 본인 또는 소속 사업자가 관리 권한을 가진 정보만 입력해야 하며, 계정 공유·도용·허위 정보 입력으로 발생한 문제에 대한 책임은 회원에게 있습니다.</p>"
-    },
-    {
-      title: "데이터 보관 구조",
-      body: "<ul><li>업체 기준 데이터: 관리자 검토와 보정이 완료된 업체 고유정보, 객실 수, 가격 기준, 채널 정보 등을 저장합니다.</li><li>고객 데이터: 회원 계정, 숙소 또는 회사명, 숙박업소 보유 여부, 검색 이력, 동의 이력 등 회원별 이용 정보를 저장합니다.</li><li>가입 단계에서 입력한 정보는 고객 데이터에 보관하며, 업체 기준 데이터와는 분리해 관리합니다.</li></ul>"
-    },
-    {
-      title: "회원의 의무",
-      body: "<ul><li>서비스를 무단 자동화, 역분석, 과도한 요청, 제3자 권리 침해 목적으로 사용하지 않아야 합니다.</li><li>수집 결과를 외부에 제공할 때에는 원자료의 한계와 추정값임을 인지해야 합니다.</li><li>계정 정보가 유출되거나 부정 사용이 의심되면 즉시 운영자에게 알려야 합니다.</li></ul>"
-    },
-    {
-      title: "서비스 변경과 제한",
-      body: "<p>외부 플랫폼 구조, API 정책, 네트워크 상태, 운영 정책에 따라 일부 수집 항목이나 리포트 항목은 변경·중단될 수 있습니다. 과도한 사용, 부정 사용, 보안 위험이 확인되면 이용을 제한할 수 있습니다.</p>"
-    },
-    {
-      title: "문의와 해지",
-      body: `<p>회원은 계정 삭제, 정보 정정, 검색 이력 삭제를 운영자에게 요청할 수 있습니다. 삭제 요청은 <a href="/account-delete" target="_blank" rel="noopener">계정·데이터 삭제 요청 화면</a>에서도 접수할 수 있습니다. 문의: ${policyContactHtml()}</p>`
-    }
-  ]);
+  return policyDocumentPage("terms");
 }
 
 function privacyPage() {
-  return legalPage("개인정보 수집 및 이용 안내", "필수 동의", [
-    {
-      title: "수집 목적",
-      body: "<ul><li>사업자(개인) 회원 식별, 로그인, 검색 이력 묶음 제공</li><li>지역 경쟁 리포트 생성 및 회원별 최근 분석 관리</li><li>회원이 제출한 숙소 또는 회사 정보의 관리자 검토와 고객 DB 관리</li><li>서비스 안정성 확보, 부정 이용 방지, 문의 대응</li></ul>"
-    },
-    {
-      title: "수집 항목",
-      body: "<ul><li>필수: 아이디, 비밀번호 해시, 연락처, 이메일, 만 14세 이상 확인, 약관 및 개인정보 동의 이력</li><li>선택 입력: 숙소 또는 회사명, 숙박업소 보유 여부</li><li>자동 생성: 회원ID, 가입일, 최근 로그인, 검색 횟수, 검색 키워드, 검색 기간, 순위 범위, 실행 리포트 ID, IP 해시, 세션 해시, 브라우저 식별값 해시</li></ul>"
-    },
-    {
-      title: "보관 위치",
-      body: "<ul><li>업체 기준 데이터: 운영 서버의 영구 저장소 내 업체 기준값 영역에 보관합니다.</li><li>고객 데이터: 운영 서버의 영구 저장소 내 회원 정보 영역에 보관합니다.</li><li>로컬 개발 환경에서는 동일한 구조로 프로젝트 데이터 폴더 아래에 보관됩니다.</li></ul>"
-    },
-    {
-      title: "보유 및 이용 기간",
-      body: "<p>회원 정보와 검색 이력은 회원 탈퇴, 삭제 요청 또는 수집 목적 달성 시까지 보관합니다. 단, 관계 법령상 보존이 필요한 경우에는 해당 법령에서 정한 기간 동안 보관할 수 있습니다.</p>"
-    },
-    {
-      title: "계정·데이터 삭제 절차",
-      body: "<ul><li>회원은 앱 하단 또는 웹 공개 URL의 <a href=\"/account-delete\" target=\"_blank\" rel=\"noopener\">계정·데이터 삭제 요청</a> 화면에서 계정 삭제, 검색 이력 삭제, 관심숙소 삭제, 전체 데이터 삭제를 선택해 요청할 수 있습니다.</li><li>요청 시 아이디, 연락처, 요청 유형, 상세 사유, 약관·개인정보처리방침 버전, 동의 일시, 처리 상태가 고객 DB에 저장됩니다.</li><li>운영자는 본인 확인 후 접수, 확인중, 처리중, 완료, 반려 상태로 처리하며 상태 변경 이력은 삭제 요청 로그에 보관합니다.</li><li>전체 데이터 삭제는 법령상 보관이 필요한 기록과 부정 이용 방지에 필요한 최소 로그를 제외하고 처리합니다.</li></ul>"
-    },
-    {
-      title: "제3자 제공 및 처리위탁",
-      body: "<p>회원 개인정보를 별도 동의 없이 제3자에게 판매하거나 제공하지 않습니다. 다만 서버 호스팅, API 연동, 보안·장애 대응 등 서비스 운영에 필요한 외부 인프라를 사용할 수 있으며, 세부 위탁·국외 처리 내용은 운영 환경 확정 시 최신 처리방침에 반영합니다.</p>"
-    },
-    {
-      title: "정보주체의 권리",
-      body: `<p>회원은 개인정보 열람, 정정, 삭제, 처리정지, 동의 철회를 요청할 수 있습니다. 운영자는 본인 확인 후 관련 법령에 따라 처리합니다. 문의: ${policyContactHtml()}</p>`
-    },
-    {
-      title: "안전성 확보 조치",
-      body: "<p>비밀번호는 평문이 아니라 PBKDF2-SHA256 해시로 저장합니다. 접속 IP와 브라우저 식별값은 원문 대신 해시로 저장하며, 관리자 권한과 B2B 권한을 분리해 접근 범위를 제한합니다.</p>"
-    },
-    {
-      title: "동의 거부권",
-      body: "<p>회원은 개인정보 수집 및 이용에 동의하지 않을 수 있습니다. 다만 필수 항목 동의를 거부하면 회원가입과 리포트 이용이 제한됩니다.</p>"
-    }
-  ]);
+  return policyDocumentPage("privacy");
 }
 
 function refundPolicyPage() {
-  return legalPage("환불·결제·해지 정책", "결제 고지", [
-    {
-      title: "요금과 제공 범위",
-      body: "<p>유료 서비스의 가격, 이용 기간, 수집 가능 횟수, 저장 기간, 제공 기능은 결제 화면 또는 견적서에 표시합니다. 베타 또는 테스트 계정에는 별도 결제 없이 제한된 검색 횟수와 기능 범위가 적용될 수 있습니다.</p>"
-    },
-    {
-      title: "환불 기준",
-      body: "<ul><li>서비스 제공 전 또는 수집 실행 전에는 결제 취소 또는 환불을 요청할 수 있습니다.</li><li>수집 실행, 리포트 생성, 파일 다운로드 등 디지털 결과물이 제공된 뒤에는 제공 범위에 따라 환불이 제한될 수 있습니다.</li><li>외부 플랫폼 장애 또는 접근 제한으로 일부 데이터가 누락된 경우에는 누락 범위와 대체 제공 가능성을 확인한 뒤 처리합니다.</li></ul>"
-    },
-    {
-      title: "해지 기준",
-      body: "<p>회원은 언제든지 해지를 요청할 수 있습니다. 월 구독 또는 정기 계약이 도입되는 경우 해지 적용일, 잔여 기간 처리, 데이터 보관 기간을 결제 화면 또는 계약서에 명시합니다.</p>"
-    },
-    {
-      title: "외부 플랫폼 수집 실패 가능성",
-      body: "<p>네이버, 여기어때, 야놀자/NOL, 떠나요 등 외부 플랫폼의 구조 변경, 접근 차단, 장애, 보안 정책 변경으로 일부 항목이 수집되지 않을 수 있습니다. 이 경우 서비스는 실패 항목을 별도 표시하고 가능한 대체 표본 또는 수동 확인 기준을 안내합니다.</p>"
-    }
-  ]);
+  return policyDocumentPage("refund");
 }
 
 function dataCollectionNoticePage() {
-  return legalPage("데이터 수집 범위 고지", "운영 고지", [
-    {
-      title: "수집 대상",
-      body: "<p>서비스는 사용자가 입력한 지역/키워드와 검색범위 기준으로 네이버 플레이스 노출, 네이버 예약 가능 여부, 공개 가격, 상품 구성, 검색량, 트렌드 지표, 보조 OTA 노출 정보를 수집·정리합니다.</p>"
-    },
-    {
-      title: "수집 기준",
-      body: "<ul><li>수집 기준일과 수집 시점은 리포트 상단에 표시합니다.</li><li>검색범위는 기본 1~10위, 확장 1~20위 등 사용자가 지정한 범위를 따릅니다.</li><li>데이유즈/캠프닉은 동일한 당일 이용 상품군으로 처리합니다.</li><li>미오픈/차단 등 총량보다 적게 확인되는 수량은 오프라인 예약 또는 운영상 차단 가능성으로 별도 해석합니다.</li></ul>"
-    },
-    {
-      title: "수동 보완",
-      body: "<p>여기어때 등 일부 채널은 자동 수집보다 수동 보완값을 우선할 수 있습니다. 관리자가 보정한 업체 고유정보는 업체 기준 데이터에 기록되며 이후 분석의 기준값으로 활용될 수 있습니다.</p>"
-    }
-  ]);
+  return policyDocumentPage("collection");
 }
 
 function dataQualityNoticePage() {
-  return legalPage("외부 플랫폼 데이터 한계 고지", "데이터 한계", [
-    {
-      title: "외부 플랫폼 기준",
-      body: "<p>서비스는 네이버, 여기어때, 야놀자/NOL, 떠나요 등 외부 플랫폼의 공개 화면 또는 API 응답을 바탕으로 데이터를 해석합니다. 각 플랫폼의 내부 정렬 방식, 광고 노출, 재고 동기화 정책은 서비스가 통제하지 않습니다.</p>"
-    },
-    {
-      title: "정확성 한계",
-      body: "<ul><li>수집 결과는 특정 시점의 관측값입니다.</li><li>실제 예약 가능 여부, 오프라인 판매, 전화 예약, OTA별 재고 분리 판매는 화면 표시와 다를 수 있습니다.</li><li>매출과 예약율은 표본 기반 추정값이며 회계상 확정 매출이 아닙니다.</li></ul>"
-    },
-    {
-      title: "활용 기준",
-      body: "<p>리포트는 지역 경쟁 상태, 수요 흐름, 상품/채널 점검을 위한 참고 자료입니다. 가격 변경, 광고 집행, 투자, 입점, 영업 판단의 최종 책임은 사용자에게 있습니다.</p>"
-    }
-  ]);
+  return policyDocumentPage("quality");
 }
 
 function collectionFailureNoticePage() {
-  return legalPage("수집 실패 가능성 고지", "운영 고지", [
-    {
-      title: "실패 가능 원인",
-      body: "<ul><li>외부 플랫폼 구조 변경 또는 접근 제한</li><li>예약 페이지 차단, 로그인 요구, 성인/지역/기기 제한</li><li>네트워크 장애, API 장애, 서버 점검</li><li>업체명 변경, 중복 업체명, 예약 ID 미노출</li></ul>"
-    },
-    {
-      title: "표시 방식",
-      body: "<p>수집 실패 또는 누락이 발생하면 리포트와 관리자 화면에 실패 항목, 확인 필요 채널, 수동 보완 필요 여부를 표시합니다. 실패 항목은 데이터가 없다는 뜻이지 반드시 영업 또는 운영상 문제가 있다는 뜻은 아닙니다.</p>"
-    },
-    {
-      title: "재수집과 보완",
-      body: "<p>관리자는 동일 조건 재수집, 수동 보정, 보조 채널 확인으로 데이터를 보완할 수 있습니다. 단 외부 플랫폼 정책상 접근이 제한된 항목은 자동화로 보장하지 않습니다.</p>"
-    }
-  ]);
+  return policyDocumentPage("failure");
 }
 
 function apiRetentionPolicyPage() {
-  return legalPage("관리자 API 키 및 고객 데이터 보관 정책", "보안 고지", [
-    {
-      title: "API 키 보관",
-      body: "<p>네이버 데이터랩, 검색광고 API 키는 운영 서버의 설정 저장소에 보관합니다. 키 입력 화면은 관리자 권한으로 제한되며 화면에는 민감값을 마스킹해 표시합니다.</p>"
-    },
-    {
-      title: "고객 데이터 보관",
-      body: "<ul><li>고객 데이터: 회원 계정, 검색 이력, 관심숙소, 동의 이력</li><li>업체 기준 데이터: 관리자 보정 업체정보, 객실 수, 가격 기준, 채널 정보</li><li>수집 이력: 수집 실행 이력, 저장된 트렌드, 관측 기록</li></ul>"
-    },
-    {
-      title: "접근 통제",
-      body: "<p>관리자 계정과 B2B 계정은 권한이 분리됩니다. 저장 자료, 원본 파일, 관리자 보정값, API 키 설정은 관리자 권한에서만 접근하도록 제한합니다.</p>"
-    }
-  ]);
+  return policyDocumentPage("retention");
 }
 
 function reportDisclaimerPage() {
-  return legalPage("리포트 결과 면책 문구", "리포트 고지", [
-    {
-      title: "분석 결과의 성격",
-      body: "<p>리포트는 외부 플랫폼 관측값, 공개 가격, 예약 가능 수량, 검색량, 내부 보정값을 조합한 참고용 분석 결과입니다. 실제 매출, 예약 완료, 광고 성과, 입점 성공, 투자 성과를 보장하지 않습니다.</p>"
-    },
-    {
-      title: "누락 데이터",
-      body: "<p>외부 플랫폼 구조 변경, 네트워크, 차단, 업체명 불일치, 예약 ID 미노출 등으로 일부 데이터가 누락될 수 있습니다. 누락/실패 데이터는 리포트 내 별도 표시를 기준으로 확인해야 합니다.</p>"
-    },
-    {
-      title: "의사결정 책임",
-      body: "<p>가격, 상품, 광고, 영업, 투자 관련 최종 의사결정은 사용자 책임입니다. 중요한 의사결정 전에는 직접 예약 화면, OTA, 전화 확인, 회계 자료 등으로 재검증해야 합니다.</p>"
-    }
-  ]);
+  return policyDocumentPage("disclaimer");
 }
 
 function businessInfoPage() {
-  return legalPage("사업자정보", "공개 정보", [
-    {
-      title: "운영자 정보",
-      body: `<ul><li>서비스명: 숙박업 데이터랩 beta</li><li>상호: ${escapeHtml(SERVICE_BUSINESS_NAME)}</li><li>사업자등록번호: ${escapeHtml(SERVICE_BUSINESS_REGISTRATION_NO)}</li><li>사업장 소재지: ${escapeHtml(SERVICE_BUSINESS_ADDRESS)}</li><li>운영자: ${escapeHtml(SERVICE_OPERATOR_NAME)}</li><li>문의: ${policyContactHtml()}</li></ul>`
-    },
-    {
-      title: "추가 확정 필요 항목",
-      body: "<p>유료 공개 전 통신판매업 신고번호, 고객센터 연락처, 개인정보 보호책임자, 환불 담당 연락처를 확정해 이 페이지에 게시해야 합니다. 사업자등록증의 생년월일 등 공개가 불필요한 개인정보는 게시하지 않습니다.</p>"
-    }
-  ]);
+  return policyDocumentPage("business");
 }
 
 function googlePlayDataSafetyPage() {
-  return legalPage("구글플레이 Data Safety 입력용 정리", "앱 출시 점검", [
-    {
-      title: "기본 답변",
-      body: "<ul><li>사용자 데이터 수집 여부: 예</li><li>개인정보처리방침 URL: /privacy</li><li>계정 및 데이터 삭제 요청 URL: /account-delete</li><li>전송 중 암호화: 예. 운영 URL은 HTTPS로 제공합니다.</li><li>데이터 공유: 판매 또는 광고 목적 공유 없음. 서버 호스팅, API 연동, 장애·보안 대응 등 서비스 운영에 필요한 처리만 사용합니다.</li><li>독립 보안 심사: 현재 미해당. 심사 또는 인증을 받은 뒤에만 예로 변경합니다.</li></ul>"
-    },
-    {
-      title: "수집 데이터 유형",
-      body: "<ul><li>개인 정보: 아이디, 이메일, 연락처, 선택 입력한 숙소 또는 회사명</li><li>앱 활동: 검색 키워드, 검색 기간, 순위 범위, 검색 이력, 리포트 열람·재사용 기록</li><li>기기 또는 기타 식별자: 세션 식별값, IP 해시, 브라우저 식별값 해시</li><li>사용자 콘텐츠: 관심숙소 등록 정보, 숙소명, 객실수, 객실종류, 요일별 가격, 시설 정보</li><li>위치 정보: 기기 위치는 수집하지 않습니다. 사용자가 입력한 지역명과 검색 키워드만 분석 기준으로 사용합니다.</li><li>결제 정보: 현재 앱 내부 결제 정보는 수집하지 않습니다. 유료 결제 기능 추가 시 별도 갱신해야 합니다.</li></ul>"
-    },
-    {
-      title: "사용 목적",
-      body: "<ul><li>앱 기능: 로그인, 회원 식별, 리포트 생성, 검색 이력 재사용, 관심숙소 비교</li><li>분석: 지역 경쟁 리포트 품질 개선, 검색 속도 개선, 오류 재현</li><li>보안·부정 이용 방지: 로그인 실패 제한, 검색 요청 제한, 세션 보호</li><li>고객 지원: 계정·데이터 삭제 요청, 문의 대응, 처리 상태 안내</li></ul>"
-    },
-    {
-      title: "제출 전 확인",
-      body: "<ul><li>광고 SDK, 결제 SDK, 푸시 알림, 앱 분석 SDK를 추가하면 해당 SDK의 수집 항목을 다시 반영해야 합니다.</li><li>Play Console Data Safety는 앱의 모든 배포 버전 기준으로 작성해야 하므로 TWA 패키징 전후에 최종 점검합니다.</li><li>이 페이지는 운영 초안입니다. 실제 제출 전 법무·정책 검토로 최종 문구를 확정합니다.</li></ul>"
-    }
-  ], { backHref: "/admin", backLabel: "관리자 화면으로 돌아가기" });
+  return policyDocumentPage("dataSafety");
 }
 
 function accountRequestPage(session = {}) {
@@ -4493,273 +4299,21 @@ function accountRequestPage(session = {}) {
     },
     {
       title: "처리 기준",
-      body: "<p>운영자는 본인 확인 후 요청 범위를 확인하고 처리합니다. 법령상 보존이 필요한 정보, 보안 사고 대응에 필요한 최소 로그, 이미 비식별화된 통계성 데이터는 즉시 삭제 대상에서 제외될 수 있습니다.</p>"
+      body: "<p>운영자는 본인 확인 후 요청 범위와 처리 방법을 안내합니다. 별도 보관이 필요한 정보가 있으면 해당 근거와 범위를 확인합니다. 접수나 상태 변경만으로 자료의 삭제가 완료되는 것은 아닙니다.</p>"
     },
     {
       title: "요청 방법",
-      body: `<p>운영자에게 로그인 아이디와 요청 유형을 전달하세요. 문의: ${policyContactHtml()}</p><p>처리 전 실수로 인한 데이터 손실을 막기 위해 삭제 범위는 한 번 더 확인합니다.</p>`
+      body: `<p><a href="/account-delete">계정·데이터 삭제 요청 화면</a>에서 접수하거나 운영자에게 로그인 아이디와 요청 유형을 전달하세요. 문의: ${policyContactHtml()}</p><p>처리 전 실수로 인한 데이터 손실을 막기 위해 삭제 범위를 확인합니다. 자세한 기준은 <a href="/privacy">개인정보처리방침</a>을 확인해 주세요.</p>`
     }
   ], { backHref: role === USER_ROLES.admin ? "/admin" : "/b2b", backLabel: "서비스 화면으로 돌아가기" });
 }
 
 function forbiddenPage(message = "") {
-  const escapedMessage = String(message || "접근 권한이 없습니다.").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return `<!doctype html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>숙박업 데이터랩 beta 권한 없음</title>
-  <style>
-    :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); background: #f4f6f8; color: #101828; }
-    main { width: min(100% - 32px, 420px); padding: 30px; border: 1px solid #e4e7ec; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); }
-    h1 { margin: 0 0 8px; font-size: 28px; font-weight: 900; letter-spacing: 0; }
-    p { margin: 0 0 22px; color: #667085; line-height: 1.45; }
-    a, button { display: inline-grid; place-items: center; width: 100%; min-height: 50px; border: 0; border-radius: 16px; background: #3182f6; color: #fff; font: inherit; font-weight: 900; text-decoration: none; cursor: pointer; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>접근 권한 없음</h1>
-    <p>${escapedMessage}</p>
-    <a href="/">분석 화면으로 이동</a>
-  </main>
-</body>
-</html>`;
+  return createPublicPages(publicPageContext()).forbiddenPage(message);
 }
 
 function loginPage(message = "") {
-  const escapedMessage = String(message || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const lockMinutes = Math.max(1, Math.ceil(LOGIN_LOCK_MS / 60000));
-  const sessionHours = Math.max(1, Math.round(SESSION_TTL_MS / 3600000));
-  const signupEntry = SIGNUP_ENABLED
-    ? '<a class="link" href="/signup">회원가입</a>'
-    : `<details class="signup-closed">
-        <summary class="link">회원가입</summary>
-        <p role="status" aria-live="polite">${escapeHtml(SIGNUP_CLOSED_MESSAGE)}</p>
-      </details>`;
-  return `<!doctype html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="application-name" content="사분 데이터랩">
-  <meta name="apple-mobile-web-app-title" content="사분 데이터랩">
-  <meta name="theme-color" content="#000000">
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="apple-touch-icon" href="/icons/icon-192.png">
-  <title>사분 데이터랩 로그인</title>
-  <style>
-    @font-face { font-family: "Sabun MaruBuri"; src: url("https://www.sabun.co.kr/fonts/MaruBuri-Regular.otf") format("opentype"); font-weight: 400; font-style: normal; font-display: swap; }
-    :root { color-scheme: dark; font-family: "Pretendard Variable", Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
-      padding:
-        calc(24px + env(safe-area-inset-top))
-        calc(24px + env(safe-area-inset-right))
-        calc(24px + env(safe-area-inset-bottom))
-        calc(24px + env(safe-area-inset-left));
-      background: #000;
-      color: #f5f5f5;
-    }
-    main {
-      width: min(100%, 920px);
-      display: grid;
-      grid-template-columns: minmax(0, .92fr) minmax(340px, .68fr);
-      overflow: hidden;
-      border: 1px solid #2a2a2a;
-      border-radius: 14px;
-      background: #111;
-      box-shadow: none;
-    }
-    .login-brand-panel {
-      min-height: 520px;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      padding: 38px;
-      background: #171717;
-      border-right: 1px solid #2a2a2a;
-    }
-    .login-form-panel {
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      min-width: 0;
-      padding: 38px;
-      background: #111;
-    }
-    .brand-kicker {
-      margin: 0 0 12px;
-      color: #a7c5ae;
-      font-size: 11px;
-      font-weight: 800;
-      letter-spacing: .11em;
-    }
-    h1 {
-      max-width: 560px;
-      margin: 0;
-      color: #f5f5f5;
-      font-family: "Sabun MaruBuri", "MaruBuri", Georgia, serif;
-      font-size: clamp(34px, 5vw, 52px);
-      font-weight: 400;
-      line-height: 1.18;
-      letter-spacing: -.06em;
-    }
-    .brand-note {
-      max-width: 420px;
-      margin: 18px 0 0;
-      color: #b5b5b5;
-      font-size: 16px;
-      font-weight: 500;
-      line-height: 1.55;
-    }
-    .form-head { margin-bottom: 22px; }
-    .form-head strong {
-      display: block;
-      color: #f5f5f5;
-      font-size: 26px;
-      font-weight: 800;
-      letter-spacing: -.04em;
-    }
-    .form-head p {
-      margin: 8px 0 0;
-      color: #b5b5b5;
-      font-size: 14px;
-      font-weight: 500;
-      line-height: 1.5;
-    }
-    form { display: grid; gap: 15px; }
-    label { display: grid; gap: 8px; color: #e1e1e1; font-size: 13px; font-weight: 700; }
-    input {
-      width: 100%;
-      min-height: 54px;
-      padding: 0 15px;
-      border: 1px solid #3a3a3a;
-      border-radius: 10px;
-      background: #171717;
-      color: #f5f5f5;
-      font: inherit;
-      font-size: 16px;
-      font-weight: 600;
-      outline: none;
-    }
-    input::placeholder { color: #929292; }
-    input:focus {
-      border-color: #a7c5ae;
-      box-shadow: 0 0 0 3px rgba(167, 197, 174, .16);
-    }
-    button {
-      width: 100%;
-      min-height: 56px;
-      margin-top: 4px;
-      border: 0;
-      border: 1px solid #a7c5ae;
-      border-radius: 10px;
-      background: #a7c5ae;
-      color: #0b120d;
-      font: inherit;
-      font-size: 17px;
-      font-weight: 800;
-      cursor: pointer;
-      box-shadow: none;
-      transition: background-color 160ms ease-out, border-color 160ms ease-out, color 160ms ease-out;
-    }
-    button:hover { background: #c8decc; border-color: #c8decc; }
-    button:disabled { opacity: .6; cursor: wait; }
-    .link { display: block; margin-top: 18px; color: #c8decc; font-size: 13px; font-weight: 800; text-align: center; text-decoration: none; }
-    .signup-closed { margin-top: 18px; text-align: center; }
-    .signup-closed .link { margin-top: 0; cursor: pointer; list-style: none; }
-    .signup-closed .link::-webkit-details-marker { display: none; }
-    .signup-closed p {
-      margin: 10px 0 0;
-      padding: 11px 12px;
-      border: 1px solid #3a3a3a;
-      border-radius: 10px;
-      background: #171717;
-      color: #c8decc;
-      font-size: 13px;
-      font-weight: 700;
-      line-height: 1.45;
-    }
-    .legal-links {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: center;
-      gap: 10px;
-      margin-top: 12px;
-    }
-    .legal-links a {
-      color: #929292;
-      font-size: 12px;
-      font-weight: 700;
-      text-decoration: none;
-    }
-    .legal-links a:hover { color: #f5f5f5; }
-    .security-note {
-      margin: 2px 0 0;
-      color: #929292;
-      font-size: 12px;
-      font-weight: 500;
-      line-height: 1.5;
-      word-break: keep-all;
-    }
-    .error { min-height: 20px; color: #ffb0aa; font-size: 13px; font-weight: 800; line-height: 1.35; }
-    @media (max-width: 760px) {
-      body { align-items: stretch; padding: 14px; }
-      main { grid-template-columns: 1fr; border-radius: 14px; }
-      .login-brand-panel { min-height: auto; padding: 26px; border-right: 0; border-bottom: 1px solid #2a2a2a; }
-      .login-form-panel { padding: 26px; }
-      h1 { font-size: 36px; }
-      .brand-note { font-size: 15px; }
-    }
-  </style>
-</head>
-<body>
-  <main>
-    <section class="login-brand-panel" aria-label="사분 데이터랩">
-      <div>
-        <p class="brand-kicker">SABUN LABS · DATA LAB</p>
-        <h1>데이터로 운영의<br>기준을 만듭니다.</h1>
-        <p class="brand-note">숙박업의 흐름을 읽고, 다음 판단을 위한 기준을 남깁니다.</p>
-      </div>
-    </section>
-    <section class="login-form-panel" aria-label="로그인">
-      <div class="form-head">
-        <strong>로그인</strong>
-        <p>계정 정보를 입력하세요.</p>
-      </div>
-      <form method="post" action="/login">
-        <label>아이디<input name="username" autocomplete="username" autofocus required></label>
-        <label>비밀번호<input name="password" type="password" autocomplete="current-password" required></label>
-        <button type="submit">로그인</button>
-        <p class="security-note">보안을 위해 ${LOGIN_FAILURE_LIMIT}회 이상 실패하면 ${lockMinutes}분간 로그인이 제한됩니다. 로그인 세션은 최대 ${sessionHours}시간 유지됩니다.</p>
-        <div class="error">${escapedMessage}</div>
-      </form>
-      ${signupEntry}
-      <div class="legal-links" aria-label="정책 문서">
-        <a href="/terms" target="_blank" rel="noopener">이용약관</a>
-        <a href="/privacy" target="_blank" rel="noopener">개인정보처리방침</a>
-        <a href="/refund" target="_blank" rel="noopener">환불·결제·해지</a>
-        <a href="/data-collection-notice" target="_blank" rel="noopener">데이터 수집 범위</a>
-        <a href="/data-quality-notice" target="_blank" rel="noopener">데이터 수집 한계</a>
-        <a href="/collection-failure-notice" target="_blank" rel="noopener">수집 실패 가능성</a>
-        <a href="/business-info" target="_blank" rel="noopener">사업자정보</a>
-        <a href="/account-delete" target="_blank" rel="noopener">계정·데이터 삭제 요청</a>
-      </div>
-    </section>
-  </main>
-</body>
-</html>`;
+  return createPublicPages(publicPageContext()).loginPage(message);
 }
 
 function signupPage(message = "", values = {}) {
@@ -4775,7 +4329,7 @@ function signupPage(message = "", values = {}) {
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="application-name" content="사분 데이터랩">
   <meta name="apple-mobile-web-app-title" content="사분 데이터랩">
-  <meta name="theme-color" content="#f7f5f0">
+  <meta name="theme-color" content="#f7f6f0">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -4783,7 +4337,6 @@ function signupPage(message = "", values = {}) {
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <title>사분 데이터랩 회원가입</title>
   <style>
-    @font-face { font-family: "Sabun MaruBuri"; src: url("https://www.sabun.co.kr/fonts/MaruBuri-Regular.otf") format("opentype"); font-weight: 400; font-style: normal; font-display: swap; }
     :root { color-scheme: light; font-family: "Pretendard Variable", Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #f7f5f0; color: #162637; }
@@ -4865,17 +4418,14 @@ function signupPage(message = "", values = {}) {
       .inline-action { width: 100%; }
     }
   </style>
+  <link rel="stylesheet" href="/public-site.css?v=20260920">
 </head>
-<body>
-  <main>
-    <p class="brand-kicker">SABUN LABS · DATA LAB</p>
+<body class="signup-page">
+  ${publicHeader()}
+  <main id="main">
+    <p class="brand-kicker">STAYDATALAB · ACCOUNT</p>
     <h1>회원가입</h1>
     <p>가입하면 일반 회원 기준으로 시작하며, 검색 이력과 관심숙소는 로그인 아이디 기준으로 관리됩니다.</p>
-    <div class="signup-summary" aria-label="회원가입 후 이용 기준">
-      <article><strong>일반 회원</strong><span>새 리포트 하루 2회 · 기본 1~10위 검색</span></article>
-      <article><strong>고객 DB</strong><span>아이디, 연락처, 이메일, 검색 이력, 동의 이력을 보관</span></article>
-      <article><strong>보안 관리</strong><span>비밀번호는 해시 저장 · IP/세션 식별값은 해시로 관리</span></article>
-    </div>
     <form method="post" action="/signup" data-signup-form>
       <label>
         <span>아이디 <b class="required">*</b></span>
@@ -4903,9 +4453,9 @@ function signupPage(message = "", values = {}) {
         </select></label>
       </div>
       <section class="agreements" aria-label="회원가입 필수 동의">
-        <p class="agreement-note">필수 동의 후 고객 데이터에 계정 정보, 동의 일시, 약관 버전 ${escapeHtml(TERMS_VERSION)}, 개인정보 버전 ${escapeHtml(PRIVACY_VERSION)}, 이용 이력이 저장됩니다. 업체 기준 데이터와는 분리해 관리합니다.</p>
-        <label class="check"><input type="checkbox" name="agreeTerms" value="1" required${checked("agreeTerms")}><span>(필수) 숙박업 데이터랩 beta 사업자(개인) 이용약관에 동의합니다.</span><a href="/terms" target="_blank" rel="noopener">보기</a></label>
-        <label class="check"><input type="checkbox" name="agreePrivacy" value="1" required${checked("agreePrivacy")}><span>(필수) 개인정보 수집 및 이용에 동의합니다.</span><a href="/privacy" target="_blank" rel="noopener">보기</a></label>
+        <p class="agreement-note">가입에 필요한 정보와 선택 동의를 각각 확인해 주세요. 선택 항목을 동의하지 않아도 회원가입이 가능합니다.</p>
+        <label class="check"><input type="checkbox" name="agreeTerms" value="1" required${checked("agreeTerms")}><span>(필수) STAYDATALAB 이용약관에 동의합니다.</span><a href="/terms" target="_blank" rel="noopener">보기</a></label>
+        <label class="check"><input type="checkbox" name="agreePrivacy" value="1" required${checked("agreePrivacy")}><span>(필수) 개인정보 수집 및 이용에 동의합니다.</span><a href="/privacy#required-consent" target="_blank" rel="noopener">보기</a></label>
         <label class="check"><input type="checkbox" name="agreeMarketing" value="1"${checked("agreeMarketing")}><span>(선택) 서비스 업데이트, 요금제, 운영 안내 등 마케팅 수신에 동의합니다.</span><span>선택</span></label>
         <label class="check"><input type="checkbox" name="confirmAge" value="1" required${checked("confirmAge")}><span>(필수) 만 14세 이상입니다.</span><span></span></label>
       </section>
@@ -4914,17 +4464,8 @@ function signupPage(message = "", values = {}) {
       <div class="error">${escapedMessage}</div>
     </form>
     <a class="link" href="/login">이미 계정이 있습니다</a>
-    <div class="legal-links" aria-label="정책 문서">
-      <a href="/terms" target="_blank" rel="noopener">이용약관</a>
-      <a href="/privacy" target="_blank" rel="noopener">개인정보처리방침</a>
-      <a href="/refund" target="_blank" rel="noopener">환불·결제·해지</a>
-      <a href="/data-collection-notice" target="_blank" rel="noopener">데이터 수집 범위</a>
-      <a href="/data-quality-notice" target="_blank" rel="noopener">데이터 수집 한계</a>
-      <a href="/collection-failure-notice" target="_blank" rel="noopener">수집 실패 가능성</a>
-      <a href="/business-info" target="_blank" rel="noopener">사업자정보</a>
-      <a href="/account-delete" target="_blank" rel="noopener">계정·데이터 삭제 요청</a>
-    </div>
   </main>
+  ${publicFooterHtml()}
   <script src="/signup.js" defer></script>
 </body>
 </html>`;
@@ -17455,6 +16996,11 @@ async function route(req, res) {
 
   try {
     const publicStaticPaths = new Set([
+      "/public-site.css",
+      "/fonts/MaruBuri-Regular.otf",
+      "/fonts/Pretendard-Regular.otf",
+      "/fonts/Pretendard-Bold.otf",
+      ...["terms", "privacy", "refund", "data-collection-notice", "data-quality-notice", "collection-failure-notice", "api-key-retention-policy", "report-disclaimer", "business-info", "google-play-data-safety"].map((name) => "/policy-history/2026-07-08/" + name + ".html"),
       "/manifest.webmanifest",
       "/sw.js",
       "/offline.html",
