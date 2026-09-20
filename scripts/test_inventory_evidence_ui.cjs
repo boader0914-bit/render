@@ -30,25 +30,78 @@ assert.ok(Number.isNaN(context.salesStats(conflictItem).rate),"Conflicting stock
 assert.ok(Number.isNaN(context.weeklyRows(conflictItem)[0].rate));
 assert.ok(Number.isNaN(context.bookingGraphRows(conflictItem)[0].rate));
 assert.equal(context.roomCapacityPresentation(mint).count,28);
+assert.equal(context.roomCapacityPresentation(mint).physicalCount,28);
+assert.equal(context.roomCapacityPresentation(mint).estimated,false,"Verified physical rooms must not be labeled as a collection estimate");
 assert.equal(context.roomCapacityPresentation({...mint,companyManualCorrection:{lodgingBasisTotal:26}}).count,28,"Operating basis must not replace verified physical capacity");
 assert.equal(context.roomCapacityPresentation({...mint,companyManualCorrection:{lodgingBasisTotal:26}}).operatingCount,26);
 assert.equal(context.roomCapacityPresentation({...mint,companyManualCorrection:{active:false,lodgingBasisTotal:26}}).operatingCount,null);
 const example = {
   inventoryEvidence: {version:2,physicalRooms:{count:null},lodging:{
     total:246,sold:68,status:"observed",complete:true,
-    rows:Array.from({length:31},(_,i)=>({date:`2026-09-${i+1}`,rawTotal:i===0?6:8,total:i===0?6:8}))
+    rows:Array.from({length:31},(_,i)=>({date:new Date(Date.UTC(2026,8,20+i)).toISOString().slice(0,10),rawTotal:i===0?6:8,total:i===0?6:8}))
   }}
 };
-assert.equal(context.roomCapacityPresentation(example).count,null,"246 over 31 days does not prove 8 physical rooms");
+assert.equal(context.roomCapacityPresentation(example).count,8,"Use the largest observed daily lodging quantity as the displayed estimate");
+assert.equal(context.roomCapacityPresentation(example).physicalCount,null,"An observed maximum does not become verified physical capacity");
+assert.equal(context.roomCapacityPresentation(example).estimated,true);
+assert.equal(context.roomCapacityPresentation(example).minimum,6);
+assert.equal(context.roomCapacityPresentation(example).maximum,8);
 assert.equal(context.roomCapacityPresentation(example).dailyText,"6~8실 / 일");
-assert.equal(context.roomCapacityPresentation({...example,companyManualCorrection:{roomSegments:[{type:"부분 입력",count:4}]}}).count,null,"Partial room-type input must not become physical total");
+const partialSegments = context.roomCapacityPresentation({...example,companyManualCorrection:{roomSegments:[{type:"부분 입력",count:4}]}});
+assert.equal(partialSegments.count,8,"Partial room-type input must not replace the daily maximum");
+assert.equal(partialSegments.physicalCount,null,"Partial room-type input must not become physical total");
+assert.equal(partialSegments.estimated,true);
+const operating = context.roomCapacityPresentation({...example,companyManualCorrection:{lodgingBasisTotal:26}});
+assert.equal(operating.count,8,"An administrator's operating basis must not override the collection estimate");
+assert.equal(operating.physicalCount,null);
+assert.equal(operating.operatingCount,26);
 const exampleHtml = context.sheetInventorySummary(example);
-assert.match(exampleHtml,/<span>객실 총량<\/span><strong>확인 전/);
+assert.match(exampleHtml,/<span>객실 총량<\/span><strong>8실<\/strong>/);
+assert.match(exampleHtml,/수집 기준 추정/);
 assert.match(exampleHtml,/<strong>68박<\/strong>/);
 assert.match(exampleHtml,/31일 집계 · 예약 비율 28%/);
+assert.equal(context.salesStats(example).rate,68/246,"The room estimate must not change the period booking-rate denominator");
 assert.doesNotMatch(exampleHtml,/<strong>68 \/ 246<\/strong>/);
 assert.match(exampleHtml,/246은 날짜별 공개 수량의 합계/);
 const allMissing = {...example,inventoryEvidence:{...example.inventoryEvidence,lodging:{...example.inventoryEvidence.lodging,status:"missing",rows:[{missing:true,total:0}]}}};
 assert.equal(context.roomCapacityPresentation(allMissing).maximum,null,"Missing dates are not zero capacity");
+assert.equal(context.roomCapacityPresentation(allMissing).count,null);
+assert.equal(context.roomCapacityPresentation(allMissing).estimated,false);
 assert.equal(context.roomCapacityPresentation(conflictItem).maximum,0,"Conflicting reservations must not inflate public room stock");
-console.log("inventory UI: list/detail/revenue/closed-day consistency passed");
+assert.equal(context.roomCapacityPresentation(conflictItem).count,null,"A zero observed quantity does not become a positive room estimate");
+assert.equal(context.roomCapacityPresentation(conflictItem).estimated,false);
+
+const withLodgingRows = (rows, additions = {}) => ({...example,inventoryEvidence:{...example.inventoryEvidence,...additions,lodging:{...example.inventoryEvidence.lodging,rows}}});
+const periodOnly = context.roomCapacityPresentation(withLodgingRows([]));
+assert.equal(periodOnly.count,null,"Never reverse-calculate room capacity from 246 room-nights / 31 days");
+assert.equal(periodOnly.maximum,null);
+assert.equal(periodOnly.estimated,false);
+const allZero = context.roomCapacityPresentation(withLodgingRows([{rawTotal:0,total:0},{rawTotal:0,total:0}]));
+assert.equal(allZero.count,null);
+assert.equal(allZero.maximum,0,"Keep zero as a valid observed range endpoint");
+assert.equal(allZero.dailyText,"0실 / 일");
+assert.equal(allZero.estimated,false);
+
+const rawPriority = context.roomCapacityPresentation(withLodgingRows([
+  {rawTotal:6,total:60}, {rawTotal:8,total:80}, {missing:true,rawTotal:999,total:999}
+],{dayUse:{rows:[{rawTotal:1000,total:1000}],total:1000}}));
+assert.equal(rawPriority.count,8,"Prefer raw lodging stock; ignore inferred totals, missing dates and day-use capacity");
+assert.equal(rawPriority.maximum,8);
+assert.equal(context.roomCapacityPresentation(withLodgingRows([{total:7},{rawTotal:null,total:9}])).count,9,"Use daily total only when rawTotal is absent");
+const verified = context.roomCapacityPresentation(withLodgingRows([{rawTotal:40,total:40}],{physicalRooms:{count:28}}));
+assert.equal(verified.count,28,"Verified physical count remains first even when a public daily quantity is larger");
+assert.equal(verified.physicalCount,28);
+assert.equal(verified.maximum,40,"Keep the observed range separate from the displayed physical count");
+assert.equal(verified.estimated,false);
+
+const shiftingProducts = applyInventoryEvidence({weeklyProductDetails:[
+  {date:"2026-09-20",bizItemId:"room-a",saleType:"숙박",stock:8,bookingCount:0,price:100000},
+  {date:"2026-09-20",bizItemId:"room-b",saleType:"숙박",stock:2,bookingCount:0,price:100000},
+  {date:"2026-09-21",bizItemId:"room-a",saleType:"숙박",stock:3,bookingCount:0,price:100000},
+  {date:"2026-09-21",bizItemId:"room-b",saleType:"숙박",stock:7,bookingCount:0,price:100000}
+]});
+const simultaneousMaximum = context.roomCapacityPresentation(shiftingProducts);
+assert.equal(simultaneousMaximum.count,10,"Use max(8+2, 3+7)=10 from the same dates, never max(8,3)+max(2,7)=15 across products");
+assert.equal(simultaneousMaximum.physicalCount,null);
+assert.equal(simultaneousMaximum.estimated,true);
+console.log("inventory UI: room-capacity estimates, physical precedence, same-date maximum, booking rate and closed-day consistency passed");

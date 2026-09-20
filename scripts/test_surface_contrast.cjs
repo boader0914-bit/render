@@ -487,8 +487,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "staydatalab-v20260920-room-capacity-edit-v105";
-const expectedAssetVersion = "datalab-20260920-room-capacity-edit-v105";
+const expectedCacheVersion = "staydatalab-v20260920-max-observed-rooms-v106";
+const expectedAssetVersion = "datalab-20260920-max-observed-rooms-v106";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
