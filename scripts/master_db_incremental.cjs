@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const { allowsDerivedUpdates } = require("./daily_collection_quality.cjs");
 const {
   ROOT,
   nowIso,
@@ -269,6 +270,11 @@ function prepareNaverRun(event, options) {
   const runDir = resolveExistingInside(options.outputsDir, requestedDir);
   const manifestPath = resolveExistingInside(runDir, path.join(runDir, "manifest.json"));
   const manifest = safeJsonFile(manifestPath);
+  if (!allowsDerivedUpdates(manifest)) {
+    const error = new Error(`예약 수집의 불완전한 회차는 원본만 보관합니다: ${runId}`);
+    error.code = "scheduled_collection_quality_hold";
+    throw error;
+  }
   const manifestSha = sha256File(manifestPath);
   const expectedManifestSha = cleanText(event.manifestSha256);
   if (expectedManifestSha && expectedManifestSha !== manifestSha) {

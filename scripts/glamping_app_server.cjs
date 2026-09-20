@@ -11,6 +11,8 @@ const { otaProviderFromUrl } = require("./naver_place_ota_observation.cjs");
 const { createCollector: createTourismCollector } = require("./tourism_collector.cjs");
 const { createMonthlyVisitorScheduler } = require("./tourism_visitor_monthly_scheduler.cjs");
 const { createDemandStrengthBackfillScheduler } = require("./tourism_demand_strength_backfill_scheduler.cjs");
+const { createDailyKeywordCollectionScheduler } = require("./daily_keyword_collection_scheduler.cjs");
+const { inspectResult: inspectDailyCollectionResult, allowsDerivedUpdates } = require("./daily_collection_quality.cjs");
 const { createMasterDbDualWriteQueue } = require("./master_db_dual_write.cjs");
 
 function loadOptionalTourismPeriodSummaryModule() {
@@ -235,6 +237,15 @@ let activeCrawlSourceRole = "";
 let activeCrawlJob = null;
 let crawlJobSequence = 0;
 const crawlQueue = [];
+const dailyKeywordCollectionScheduler = createDailyKeywordCollectionScheduler({
+  configFile: path.join(CONFIG_DIR, "daily_keyword_collection.json"),
+  stateFile: path.join(HISTORY_DIR, "daily_keyword_collection_state.json"),
+  dataDir: DATA_DIR,
+  runCrawler: (payload) => runCrawler(payload),
+  isBusy: () => Boolean(activeCrawlPromise || activeCrawlJob || crawlQueue.length),
+  inspectResult: (result, payload) => result?.collectionQuality || inspectDailyCollectionResult(result, payload),
+  logger: console
+});
 const recentCrawlResults = new Map();
 const CRAWL_RESULT_REUSE_TTL_MS = 5 * 60 * 1000;
 const B2B_COMPLETED_SEARCH_REUSE_TTL_MS = Math.max(
@@ -1023,6 +1034,7 @@ function crawlPayloadSignature(payload = {}) {
     detailRankRanges: plan.detailRankRanges,
     collectionSource,
     sourceRole,
+    scheduledCollection: payload.scheduledCollection === true,
     recrawlContext
   };
   return crypto.createHash("sha1").update(stableJson(signaturePayload)).digest("hex");
@@ -1383,7 +1395,7 @@ function startCrawlJob(job) {
     }).catch((error) => {
       console.warn(`Could not record crawl timing: ${error.message || error}`);
     });
-    if (!failure && result?.runId) {
+    if (!failure && result?.runId && (!job.payload.scheduledCollection || result.collectionQuality?.status === "complete")) {
       cleanupRecentCrawlResults();
       recentCrawlResults.set(job.signature, { createdAt: Date.now(), result });
       await ensureB2BSearchHistoryForJob(job, result).catch((error) => {
@@ -14477,6 +14489,9 @@ async function storeRunHistoryEvidence(runId, observations = []) {
 async function appendHistoryForRun(runId) {
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return { appended: 0, reason: "run_not_found" };
+  if (!allowsDerivedUpdates(await readManifest(dirPath))) {
+    return { appended: 0, reason: "scheduled_collection_quality_hold" };
+  }
   const data = await loadRun(runId, {
     skipHistory: true,
     skipTourismVisitors: true,
@@ -16631,6 +16646,7 @@ async function loadRun(runId, options = {}) {
   const files = await fsp.readdir(dirPath);
   const manifest = await readManifest(dirPath);
   if (isIncompleteRunDirectory(manifest, files)) return null;
+  const derivedUpdatesAllowed = allowsDerivedUpdates(manifest);
   const collectedAt = runCollectedAt(runId, manifest || {}, stat);
   const provinceKey = provinceKeyForRun(runId, manifest);
   const province = PROVINCES[provinceKey] || PROVINCES.local;
@@ -16846,6 +16862,8 @@ async function loadRun(runId, options = {}) {
       collectedAt,
       updatedAt: collectedAt,
       counts: manifest?.counts || {},
+      scheduledCollection: manifest?.scheduledCollection === true,
+      collectionQuality: manifest?.collectionQuality || null,
       files: {
         regional: regionalFile,
         overall: overallFile,
@@ -16882,7 +16900,7 @@ async function loadRun(runId, options = {}) {
     result.rankComparison = await placeRankComparisonForRun(result);
   }
 
-  if (!options.skipCompanyMaster) {
+  if (!options.skipCompanyMaster && derivedUpdatesAllowed) {
     result.companyMaster = await upsertCompanyMasterForRun(result, collectedAt).catch((error) => ({
       error: error.message || String(error),
       totalCompanies: 0,
@@ -16900,7 +16918,7 @@ async function loadRun(runId, options = {}) {
 
   if (!options.skipHistory) {
     let history = await summarizeHistoryForRun(result);
-    if (!history.currentRunObservationCount && availability.items.length) {
+    if (derivedUpdatesAllowed && !history.currentRunObservationCount && availability.items.length) {
       await appendHistoryForRun(runId).catch((error) => {
         console.warn(`Could not backfill history for ${runId}: ${error.message || error}`);
       });
@@ -17343,6 +17361,7 @@ async function runCrawlerInternal(payload) {
     SOURCE_ROLE: sourceRole,
     COLLECTION_SOURCE: collectionSource,
     COLLECTION_SOURCE_LABEL: collectionSourceLabel(collectionSource),
+    SCHEDULED_COLLECTION: payload.scheduledCollection === true ? "1" : "0",
     DATA_DIR,
     OUTPUTS_DIR,
     CONFIG_DIR,
@@ -17394,10 +17413,13 @@ async function runCrawlerInternal(payload) {
         const parsed = jsonStart >= 0 ? JSON.parse(trimmed.slice(jsonStart)) : null;
         const outputDir = parsed?.outputDir || "";
         const runId = outputDir ? path.basename(outputDir) : null;
-        const history = runId
+        const collectionQuality = payload.scheduledCollection === true
+          ? await inspectDailyCollectionResult({ output: parsed, runId }, payload)
+          : null;
+        const history = runId && (!payload.scheduledCollection || collectionQuality?.status === "complete")
           ? await appendHistoryForRun(runId).catch((error) => ({ appended: 0, error: error.message || String(error) }))
           : null;
-        resolve({ output: parsed, runId, history });
+        resolve({ output: parsed, runId, history, collectionQuality });
       } catch {
         resolve({ output: stdout, runId: null });
       }
@@ -17738,6 +17760,11 @@ async function route(req, res) {
     if (req.method === "GET" && reqUrl.pathname === "/api/crawl-status") {
       if (!requireAdminSession(session, req, res)) return;
       return send(res, 200, currentCrawlStatus({ clientRequestId: reqUrl.searchParams.get("clientRequestId") }));
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/collection-schedule") {
+      if (!requireAdminSession(session, req, res)) return;
+      return send(res, 200, await dailyKeywordCollectionScheduler.status());
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/crawl-estimate") {
@@ -18277,6 +18304,11 @@ seedOutputsFromRepo()
       if (HOST === "0.0.0.0") {
         for (const url of localNetworkUrls()) console.log(`Mobile/LAN URL: ${url}`);
       }
+      dailyKeywordCollectionScheduler.start().then((status) => {
+        if (status.enabled) console.log(`Daily keyword collection enabled; next run ${status.nextRunAt || "see schedule status"}`);
+      }).catch((error) => {
+        console.error(`Daily keyword collection scheduler unavailable: ${error.message || error}`);
+      });
       const monthlySync = tourismVisitorMonthlyScheduler.start();
       if (monthlySync.enabled) {
         console.log(`Tourism visitor monthly sync check scheduled at ${monthlySync.nextCheckAt}`);

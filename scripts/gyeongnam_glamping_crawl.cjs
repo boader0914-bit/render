@@ -1,6 +1,15 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { inspectManifest } = require("./daily_collection_quality.cjs");
+const SCHEDULED_COLLECTION = process.env.SCHEDULED_COLLECTION === "1";
+const scheduledCollectionDiagnostics = {
+  naverScheduleRequested: 0,
+  naverScheduleSucceeded: 0,
+  naverScheduleFailed: 0,
+  naverScheduleBlocked: 0,
+};
+let naverScheduleBlockedStatus = 0;
 const {
   notCollectedObservation,
   observationToCsvFields,
@@ -1164,6 +1173,12 @@ function mapNaverItem(state, item, extras = {}) {
 async function getNaverState(query) {
   const url = `https://pcmap.place.naver.com/accommodation/list?query=${encodeURIComponent(query)}`;
   const { res, text } = await fetchText(url);
+  if (res.status === 429 || res.status === 403) {
+    const error = new Error(`NAVER_MAIN_BLOCKED HTTP ${res.status}`);
+    error.code = "NAVER_MAIN_BLOCKED";
+    error.statusCode = res.status;
+    throw error;
+  }
   const state = extractApolloState(text);
   return { status: res.status, state, url };
 }
@@ -1288,7 +1303,15 @@ async function mapWithConcurrency(items, limit, mapper) {
       results[index] = await mapper(rows[index], index);
     }
   }
-  await Promise.all(Array.from({ length: workerCount }, worker));
+  const workers = Array.from({ length: workerCount }, worker);
+  if (SCHEDULED_COLLECTION) {
+    // Drain already-started requests before writing the final response counters.
+    const settled = await Promise.allSettled(workers);
+    const failure = settled.find((result) => result.status === "rejected");
+    if (failure) throw failure.reason;
+  } else {
+    await Promise.all(workers);
+  }
   return results;
 }
 
@@ -1595,6 +1618,12 @@ async function getNaverBookingBusinessFromPlacePage(placeId) {
 }
 
 async function postNaverBookingGraphql(operationName, query, variables, businessId, date = CHECK_IN) {
+  if (SCHEDULED_COLLECTION && naverScheduleBlockedStatus) {
+    const error = new Error(`NAVER_SCHEDULE_BLOCKED HTTP ${naverScheduleBlockedStatus}`);
+    error.code = "NAVER_SCHEDULE_BLOCKED";
+    error.statusCode = naverScheduleBlockedStatus;
+    throw error;
+  }
   const checkOut = addDays(date, 1);
   const response = await fetch(NAVER_BOOKING_GRAPHQL_URL, {
     method: "POST",
@@ -1607,6 +1636,11 @@ async function postNaverBookingGraphql(operationName, query, variables, business
     },
     body: JSON.stringify({ operationName, query, variables }),
   });
+  if (SCHEDULED_COLLECTION && (response.status === 403 || response.status === 429)) {
+    // Applies to the product-list request as well as the per-date schedule request.
+    // Return this response normally so the schedule reader counts it only once.
+    naverScheduleBlockedStatus = response.status;
+  }
   const data = await response.json().catch(() => null);
   return { status: response.status, data };
 }
@@ -1626,6 +1660,12 @@ async function getNaverBookingItems(bookingBusinessId) {
 }
 
 async function getNaverDailySchedule(bookingBusinessId, bizItemId, date = CHECK_IN) {
+  if (SCHEDULED_COLLECTION && naverScheduleBlockedStatus) {
+    const error = new Error(`NAVER_SCHEDULE_BLOCKED HTTP ${naverScheduleBlockedStatus}`);
+    error.code = "NAVER_SCHEDULE_BLOCKED";
+    error.statusCode = naverScheduleBlockedStatus;
+    throw error;
+  }
   const scheduleParams = {
     businessId: String(bookingBusinessId),
     businessTypeId: 3,
@@ -1633,18 +1673,41 @@ async function getNaverDailySchedule(bookingBusinessId, bizItemId, date = CHECK_
     endDateTime: `${date}T00:00:00`,
     bizItemId: String(bizItemId),
   };
-  const result = await postNaverBookingGraphql(
-    "dailySchedule",
-    naverDailyScheduleQuery,
-    { scheduleParams },
-    bookingBusinessId,
-    date,
-  );
-  return {
-    status: result.status,
-    day: result.data?.data?.schedule?.bizItemSchedule?.daily?.date?.[date] || null,
-    errors: result.data?.errors || null,
-  };
+  let responseCounted = false;
+  if (SCHEDULED_COLLECTION) scheduledCollectionDiagnostics.naverScheduleRequested += 1;
+  try {
+    const result = await postNaverBookingGraphql(
+      "dailySchedule",
+      naverDailyScheduleQuery,
+      { scheduleParams },
+      bookingBusinessId,
+      date,
+    );
+    const day = result.data?.data?.schedule?.bizItemSchedule?.daily?.date?.[date] || null;
+    const errors = result.data?.errors || null;
+    if (SCHEDULED_COLLECTION) {
+      const hasErrors = Array.isArray(errors) ? errors.length > 0 : Boolean(errors);
+      const stock = day?.stock;
+      const hasStock = ["number", "string"].includes(typeof stock) && String(stock).trim() !== "" && Number.isFinite(Number(stock));
+      const succeeded = result.status >= 200 && result.status < 300 && !hasErrors
+        && day && typeof day === "object" && !Array.isArray(day) && hasStock;
+      const blocked = result.status === 403 || result.status === 429;
+      scheduledCollectionDiagnostics[succeeded ? "naverScheduleSucceeded" : "naverScheduleFailed"] += 1;
+      responseCounted = true;
+      if (blocked) {
+        scheduledCollectionDiagnostics.naverScheduleBlocked += 1;
+        naverScheduleBlockedStatus = result.status;
+        const error = new Error(`NAVER_SCHEDULE_BLOCKED HTTP ${result.status}`);
+        error.code = "NAVER_SCHEDULE_BLOCKED";
+        error.statusCode = result.status;
+        throw error;
+      }
+    }
+    return { status: result.status, day, errors };
+  } catch (error) {
+    if (SCHEDULED_COLLECTION && !responseCounted) scheduledCollectionDiagnostics.naverScheduleFailed += 1;
+    throw error;
+  }
 }
 
 function asStockNumber(value) {
@@ -2563,6 +2626,12 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
 async function collectNaverBookingAvailability(placeId, cache, options = {}) {
   if (!placeId) return { status: "place_id 없음" };
   if (cache.has(placeId)) return cache.get(placeId);
+  if (SCHEDULED_COLLECTION && naverScheduleBlockedStatus) {
+    const error = new Error(`NAVER_SCHEDULE_BLOCKED HTTP ${naverScheduleBlockedStatus}`);
+    error.code = "NAVER_SCHEDULE_BLOCKED";
+    error.statusCode = naverScheduleBlockedStatus;
+    throw error;
+  }
 
   let booking = await getNaverBookingBusiness(placeId);
   let pageBooking = null;
@@ -4371,6 +4440,12 @@ async function main() {
       detailJsonFiles: detailJsonFiles.length,
     },
   };
+  if (SCHEDULED_COLLECTION) {
+    manifest.scheduledCollection = true;
+    manifest.naverBookingBlockedStatus = naverScheduleBlockedStatus;
+    Object.assign(manifest.counts, scheduledCollectionDiagnostics);
+    manifest.collectionQuality = inspectManifest(manifest);
+  }
   await fs.writeFile(path.join(OUTPUT_DIR, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
   console.log(JSON.stringify(manifest, null, 2));
 }
