@@ -407,13 +407,17 @@ const specialDaysUiBlock = app.slice(
   app.indexOf("const SPECIAL_DAY_KINDS ="),
   app.indexOf("async function loadTourismDataStatus(")
 );
+const tourismForecastUiBlock = app.slice(
+  app.indexOf("function tourismForecastRegionKey("),
+  app.indexOf("const SPECIAL_DAY_KINDS =")
+);
 const adminIntegrationContext = {
   fmtNumber: (value) => String(value),
   compactDateTime: (value) => String(value),
   escapeHtml: (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"),
   URL,
   document: { activeElement: null, getElementById: () => null },
-  els: { specialDaysAdminCard: { innerHTML: "" } },
+  els: { specialDaysAdminCard: { innerHTML: "" }, tourismForecastAdminCard: { innerHTML: "" } },
   isAdminRole: () => true,
   state: {
     specialDaysSettings: null,
@@ -422,6 +426,14 @@ const adminIntegrationContext = {
     specialDaysKind: "all",
     specialDaysExpanded: false,
     specialDaysError: "",
+    tourismForecastSettings: null,
+    tourismForecastData: {},
+    tourismForecastAreaCd: "",
+    tourismForecastSignguCd: "",
+    tourismForecastDestinationId: "",
+    tourismForecastQuery: "",
+    tourismForecastError: "",
+    tourismForecastExpanded: false,
     trafficKeyState: {
       datalabConfigured: true,
       searchadConfigured: true,
@@ -443,7 +455,7 @@ const adminIntegrationContext = {
   }
 };
 vm.runInNewContext(
-  `${adminIntegrationDefinitionsBlock}\n${adminIntegrationRowsBlock}\n${specialDaysUiBlock}\nthis.getAdminIntegrationRows = adminIntegrationRows; this.getAdminIntegrationSummary = adminIntegrationSummary; this.getAdminIntegrationSummaryLabel = adminIntegrationSummaryLabel; this.getSpecialDaysStatus = adminSpecialDaysIntegrationRow; this.rememberSpecialDays = rememberSpecialDaysYear; this.renderSpecialDays = renderSpecialDaysAdminCard;`,
+  `${adminIntegrationDefinitionsBlock}\n${adminIntegrationRowsBlock}\n${specialDaysUiBlock}\n${tourismForecastUiBlock}\nthis.getAdminIntegrationRows = adminIntegrationRows; this.getAdminIntegrationSummary = adminIntegrationSummary; this.getAdminIntegrationSummaryLabel = adminIntegrationSummaryLabel; this.getSpecialDaysStatus = adminSpecialDaysIntegrationRow; this.rememberSpecialDays = rememberSpecialDaysYear; this.renderSpecialDays = renderSpecialDaysAdminCard; this.getForecastStatus = adminTourismForecastIntegrationRow; this.rememberForecast = rememberTourismForecastData; this.renderForecast = renderTourismForecastAdminCard; this.forecastChart = tourismForecastChart; this.selectedForecastDestination = tourismForecastSelectedDestination;`,
   adminIntegrationContext
 );
 const connectedAdminIntegrations = adminIntegrationContext.getAdminIntegrationRows();
@@ -456,9 +468,9 @@ assert(
     && connectedAdminIntegrations.find((row) => row.key === "tourism-diversity")?.status === "connected"
     && connectedAdminIntegrationSummary.connected === 4
     && connectedAdminIntegrationSummary.configured === 2
-    && connectedAdminIntegrationSummary.checking === 1
-    && connectedAdminIntegrationSummary.planned === 8
-    && adminIntegrationContext.getAdminIntegrationSummaryLabel(connectedAdminIntegrationSummary) === "4 정상 · 2 설정 · 1 확인 중 · 8 예정",
+    && connectedAdminIntegrationSummary.checking === 2
+    && connectedAdminIntegrationSummary.planned === 7
+    && adminIntegrationContext.getAdminIntegrationSummaryLabel(connectedAdminIntegrationSummary) === "4 정상 · 2 설정 · 2 확인 중 · 7 예정",
   "admin API registry must map four stored tourism sources to 4/15 connected without merging planned APIs",
   failures
 );
@@ -497,9 +509,9 @@ assert(
   missingTourismRows.find((row) => row.key === "regional-visitors")?.status === "missing"
     && missingTourismRows.find((row) => row.key === "regional-visitors")?.statusLabel === "설정 필요"
     && missingTourismSummary.missing === 1
-    && missingTourismSummary.planned === 8
+    && missingTourismSummary.planned === 7
     && adminIntegrationContext.getAdminIntegrationSummaryLabel(missingTourismSummary).includes("1 확인")
-    && adminIntegrationContext.getAdminIntegrationSummaryLabel(missingTourismSummary).includes("8 예정"),
+    && adminIntegrationContext.getAdminIntegrationSummaryLabel(missingTourismSummary).includes("7 예정"),
   "admin API registry must keep missing configuration separate from planned integrations",
   failures
 );
@@ -548,8 +560,60 @@ adminIntegrationContext.state.specialDaysYears = {};
 adminIntegrationContext.rememberSpecialDays({ year: 2026, status: "error", items: [], errors: specialDaysKinds.map((kind) => ({ kind, code: "NOT_COLLECTED" })) });
 assert(adminIntegrationContext.getSpecialDaysStatus().status === "configured" && adminIntegrationContext.getSpecialDaysStatus().statusLabel === "자료 대기", "configured but not yet collected special-day data must prompt loading rather than imply an API failure", failures);
 
-const expectedCacheVersion = "staydatalab-v20260921-special-days-v107";
-const expectedAssetVersion = "datalab-20260921-special-days-v107";
+const forecastRegion = { areaCd: "41", areaNm: "경기도", signguCd: "41650", signguNm: "포천시" };
+const otherForecastRegion = { areaCd: "51", areaNm: "강원특별자치도", signguCd: "51130", signguNm: "원주시" };
+const forecastFixture = {
+  status: "ready", region: forecastRegion, stale: false, collectedAt: "2026-09-21T00:00:00.000Z", queryDate: "2026-09-21", errors: [],
+  source: { name: "관광지 방문 전망 공식 출처", url: "https://www.data.go.kr/data/15128555/openapi.do" },
+  destinations: [{
+    ...forecastRegion, id: "exact-region-name-fixture", name: "<같은 이름 관광지>", complete: true,
+    startDate: "2026-09-20", endDate: "2026-10-19", upcomingDayCount: 29, providerLagDays: 1,
+    series: Array.from({ length: 30 }, (_, index) => ({ date: new Date(Date.UTC(2026, 8, 20 + index)).toISOString().slice(0, 10), value: index * 3 }))
+  }]
+};
+adminIntegrationContext.state.tourismForecastSettings = { configured: true, regions: [forecastRegion, otherForecastRegion], source: forecastFixture.source };
+adminIntegrationContext.state.tourismForecastAreaCd = "41";
+adminIntegrationContext.state.tourismForecastSignguCd = "41650";
+adminIntegrationContext.rememberForecast(forecastFixture, "41:41650");
+adminIntegrationContext.renderForecast();
+assert(adminIntegrationContext.getForecastStatus().status === "connected" && !adminIntegrationContext.selectedForecastDestination() && !adminIntegrationContext.els.tourismForecastAdminCard.innerHTML.includes('<svg'), "forecast region response must not silently select a destination or generate an area-average chart", failures);
+adminIntegrationContext.state.tourismForecastDestinationId = "exact-region-name-fixture";
+adminIntegrationContext.renderForecast();
+const forecastHtml = adminIntegrationContext.els.tourismForecastAdminCard.innerHTML;
+assert(
+  forecastHtml.includes("2026-09-20 ~ 2026-10-19")
+    && forecastHtml.includes("오늘 포함 29일 남음")
+    && forecastHtml.includes("&lt;같은 이름 관광지&gt;")
+    && (forecastHtml.match(/class="tourism-forecast-point"/g) || []).length === 30
+    && /<details[^>]*data-tourism-forecast-details\s*>/.test(forecastHtml)
+    && forecastHtml.includes("실제 방문자 수·예약률·매출과 다릅니다"),
+  "forecast UI must show the original 30 provider dates, inclusive remaining days, safe names, and forecast-only labels in a collapsed detail view",
+  failures
+);
+const forecastGaps = adminIntegrationContext.forecastChart({ name: "결측 검증", series: [
+  { date: "2026-09-20", value: 0 }, { date: "2026-09-21", value: 100 },
+  { date: "2026-09-22", value: null }, { date: "2026-09-24", value: 40 }, { date: "2026-09-25", value: 50 }
+] });
+assert((forecastGaps.match(/<polyline/g) || []).length === 2 && (forecastGaps.match(/class="tourism-forecast-point"/g) || []).length === 4 && forecastGaps.includes("2026-09-20 · 예측지수 0") && !forecastGaps.includes("2026-09-22 · 예측지수 0"), "forecast chart must retain real zero and 100 values while breaking both null and absent-day gaps without interpolation", failures);
+adminIntegrationContext.state.tourismForecastAreaCd = "51";
+adminIntegrationContext.state.tourismForecastSignguCd = "51130";
+adminIntegrationContext.renderForecast();
+assert(!adminIntegrationContext.selectedForecastDestination() && !adminIntegrationContext.els.tourismForecastAdminCard.innerHTML.includes('<svg'), "changing region must hide the previous destination forecast even when names may match", failures);
+let rejectedForecastMismatch = false;
+try { adminIntegrationContext.rememberForecast(forecastFixture, "51:51130"); } catch { rejectedForecastMismatch = true; }
+assert(rejectedForecastMismatch && !adminIntegrationContext.state.tourismForecastData["51:51130"], "forecast responses for another exact region must be rejected instead of stored under current selection", failures);
+adminIntegrationContext.state.tourismForecastAreaCd = "41";
+adminIntegrationContext.state.tourismForecastSignguCd = "41650";
+adminIntegrationContext.rememberForecast({ ...forecastFixture, status: "partial", stale: true }, "41:41650");
+assert(adminIntegrationContext.getForecastStatus().status === "missing", "partial or old forecast data must not appear as a healthy live integration", failures);
+adminIntegrationContext.rememberForecast({ ...forecastFixture, status: "error", destinations: [], errors: [{ code: "TIMEOUT", message: "조회 시간 초과" }] }, "41:41650");
+assert(adminIntegrationContext.getForecastStatus().statusLabel === "갱신 실패" && adminIntegrationContext.state.tourismForecastData["41:41650"].destinations.length === 1 && adminIntegrationContext.state.tourismForecastData["41:41650"].stale, "failed forecast refresh must keep prior exact-region data while clearly marking it old", failures);
+adminIntegrationContext.rememberForecast({ ...forecastFixture, status: "no_data", destinations: [] }, "41:41650");
+adminIntegrationContext.renderForecast();
+assert(adminIntegrationContext.getForecastStatus().statusLabel === "제공 자료 없음" && !adminIntegrationContext.els.tourismForecastAdminCard.innerHTML.includes('<svg'), "valid no-data forecast response must not become a zero curve or retain another forecast", failures);
+
+const expectedCacheVersion = "staydatalab-v20260921-tourism-forecast-v108";
+const expectedAssetVersion = "datalab-20260921-tourism-forecast-v108";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
