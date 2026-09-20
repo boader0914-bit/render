@@ -46383,7 +46383,11 @@ html[data-theme-resolved] body .booking-sheet-compact .sheet-section {
 }
 
 @media (max-width: 600px) {
-  html[data-theme-resolved] body .company-card.company-card-compact { padding: 12px; }
+  html[data-theme-resolved] body .company-card.company-card-compact {
+    padding: 12px;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "main" "metrics" "note" "action" "evidence";
+  }
   .company-compact-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 8px; }
   .company-compact-metrics strong { font-size: 18px; }
   .booking-sheet-compact .revenue-summary-grid { grid-template-columns: 1fr; gap: 10px; }
@@ -46391,4 +46395,39 @@ html[data-theme-resolved] body .booking-sheet-compact .sheet-section {
   .booking-sheet-compact .revenue-summary-grid small { grid-column: 1 / -1; }
   .sheet-disclosure > summary { flex-wrap: wrap; gap: 3px 8px; }
   .sheet-disclosure > summary > small { max-width: 45%; }
+}
+
+.sheet-company-edit-actions {
+  display: flex;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.sheet-company-edit-actions[hidden] { display: none; }
+
+.company-edit-shortcut {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 7px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.company-edit-shortcut:focus-visible {
+  outline: 2px solid var(--theme-accent);
+  outline-offset: 2px;
+}
+
+.company-card-compact .company-action:has(.company-edit-shortcut) {
+  gap: 6px;
+  flex-wrap: wrap;
 }

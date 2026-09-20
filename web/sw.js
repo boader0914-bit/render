@@ -1,4 +1,4 @@
-const CACHE_VERSION = "staydatalab-v20260920-shared-room-evidence-v104";
+const CACHE_VERSION = "staydatalab-v20260920-room-capacity-edit-v105";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",

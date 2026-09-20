@@ -487,8 +487,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "staydatalab-v20260920-shared-room-evidence-v104";
-const expectedAssetVersion = "datalab-20260920-shared-room-evidence-v104";
+const expectedCacheVersion = "staydatalab-v20260920-room-capacity-edit-v105";
+const expectedAssetVersion = "datalab-20260920-room-capacity-edit-v105";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -1882,7 +1882,7 @@ assert(
     && app.includes("restoreAdminDbInlineSearchViewport(preservedScroll, { clear: false });")
     && app.includes("detailRequest.finally(() => restoreAdminDbInlineSearchViewport(preservedScroll)).catch(() => {});")
     && app.includes("if (options.load !== false) loadAdminDbCompanyDetail(selectedCompanyId).catch(() => {});")
-    && app.includes('if (state.adminDbViewMode === "review" && state.adminDbSelectedCompanyId === companyId) return true;')
+    && /if \(state\.adminDbViewMode === "review" && state\.adminDbSelectedCompanyId === companyId\s*&& state\.activeTab === "admin" && state\.adminPanelSection === "database"\) return true;/.test(app)
     && /\.admin-db-company-search-shell\.compact\s*\{[^}]*grid-template-columns:\s*minmax\(170px,\s*0\.34fr\)\s*minmax\(0,\s*1fr\)/i.test(styles)
     && /@media \(max-width: 760px\)[\s\S]*?\.admin-db-company-search-shell\.compact\s*\{[^}]*grid-template-columns:\s*1fr/i.test(styles),
   "company detail search must keep the current screen, show inline autocomplete, and replace only the selected company detail",

@@ -4585,6 +4585,27 @@ function inventoryAssessment(item = {}) {
   return item.inventoryEvidence?.version === 2 ? item.inventoryEvidence : null;
 }
 
+function roomCapacityPresentation(item = {}) {
+  const evidence = inventoryAssessment(item);
+  const physical = evidence?.physicalRooms || {};
+  const count = Number.isInteger(physical.count) && physical.count > 0 ? physical.count : null;
+  const correction = item.companyManualCorrection || item.companyProfile?.manualCorrection || {};
+  const registered = optionalNumber(correction.lodgingBasisTotal);
+  const operatingCount = correction.active !== false && Number.isInteger(registered) && registered > 0 ? registered : null;
+  // Daily channel stock is useful context, but neither its maximum nor a
+  // period total divided by days establishes the property's physical capacity.
+  const rows = evidence ? (evidence.lodging?.rows || []) : weeklyRows(item);
+  const totals = rows.filter((row) => !row.missing)
+    .map((row) => optionalNumber(row.rawTotal ?? row.total))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+  const minimum = totals.length ? Math.min(...totals) : null;
+  const maximum = totals.length ? Math.max(...totals) : null;
+  const dailyText = maximum === null ? "공개 수량 미확인"
+    : minimum === maximum ? `${fmtNumber(maximum)}실 / 일`
+      : `${fmtNumber(minimum)}~${fmtNumber(maximum)}실 / 일`;
+  return { count, physical, operatingCount, dailyText, minimum, maximum };
+}
+
 function finiteNumber(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -6404,8 +6425,7 @@ function renderCompanies() {
     const day = salesStats(item, "day");
     const revenue = preciseRevenueProfile(item);
     const evidence = inventoryAssessment(item);
-    const physical = evidence?.physicalRooms || {};
-    const physicalKnown = Number.isFinite(physical.count) && physical.count > 0;
+    const capacity = roomCapacityPresentation(item);
     const lodgingObserved = evidence ? Boolean(evidence.lodging && evidence.lodging.status !== "missing") : lodging.supply > 0;
     const dayObserved = evidence ? Boolean(evidence.dayUse && evidence.dayUse.status !== "missing") : day.supply > 0;
     const incomplete = Boolean(evidence && [evidence.lodging, evidence.dayUse].some((part) => part && part.complete === false));
@@ -6429,18 +6449,20 @@ function renderCompanies() {
           </div>
         </div>
         <div class="company-compact-metrics">
+          <div><span>객실 총량</span><strong>${capacity.count ? `${fmtNumber(capacity.count)}실` : "확인 전"}</strong><small>네이버 공개 ${escapeHtml(capacity.dailyText)}${capacity.operatingCount ? `<br>관리자 운영 기준 ${fmtNumber(capacity.operatingCount)}실` : ""}</small></div>
+          <div><span>숙박 예약 수량</span><strong>${linked && lodgingObserved ? `${fmtNumber(lodging.sold)}${lodging.basis === "basis" ? "실" : "박"}` : "자료 미확인"}</strong><small>${escapeHtml(lodging.label)}${linked && lodgingObserved && Number.isFinite(lodging.rate) ? ` · 예약 비율 ${fmtRate(lodging.rate)}` : ""}</small></div>
+          <div><span>당일 이용 예약 수량</span><strong>${linked && dayObserved ? `${fmtNumber(day.sold)}회` : "자료 미확인"}</strong><small>${dayObserved ? escapeHtml(day.label) : "예약 자료 필요"} · 숙박과 별도</small></div>
           <div><span>예상 매출</span><strong>${linked && (lodgingObserved || dayObserved) ? fmtWon(revenue.totalAdjustedRevenue || revenue.totalRevenue) : "자료 미확인"}</strong><small>${linked ? `수집된 가격·예약 기준${incomplete ? " · 일부 자료 미확인" : ""}` : "상세 수량·가격 확인 필요"}</small></div>
-          <div><span>숙박 예약 수량</span><strong>${linked && lodgingObserved ? `${fmtNumber(lodging.sold)} / ${fmtNumber(lodging.supply)}` : "자료 미확인"}</strong><small>객실·박${linked && Number.isFinite(lodging.rate) ? ` · ${fmtRate(lodging.rate)}` : ""}${evidence?.lodging?.complete === false ? " · 일부 자료 미확인" : ""}</small></div>
-          <div><span>당일 이용 예약 수량</span><strong>${linked && dayObserved ? `${fmtNumber(day.sold)} / ${fmtNumber(day.supply)}` : "자료 미확인"}</strong><small>회 · 숙박과 별도 집계${evidence?.dayUse?.complete === false ? " · 일부 자료 미확인" : ""}</small></div>
-          <div><span>실제 객실 수</span><strong>${physicalKnown ? `${fmtNumber(physical.count)}객실` : "확인 전"}</strong><small>${physicalKnown ? inventorySourceHtml(physical, true) : "판매 수량과 다를 수 있음"}</small></div>
         </div>
         ${evidence?.sharedRooms?.status === "confirmed" ? `<p class="company-shared-note">객실 공유 · 당일 이용을 실제 객실 수에 더하지 않으며, 수량 감소만으로 예약을 추정하지 않습니다.</p>` : ""}
         <div class="company-action">
           ${linked
             ? `<button class="more-button" type="button" data-open-company="${Number(item.availabilityIndex)}" aria-label="${escapeHtml(`${item.name || "업체"} 상세 보기`)}">상세 보기</button>`
             : `<button class="more-button" type="button" disabled title="${escapeHtml(stockStatus)}">상세 없음</button>`}
+          ${companyEditShortcutHtml(item)}
         </div>
         ${sheetDisclosure("수집 근거와 판매 흐름", linked ? `${fmtNumber(bookingGraphRows(item).filter((row) => !row.missing).length)}일 · 펼쳐 보기` : "순위 수집 정보", `
+          ${sheetBookingQuantityBasis(item)}
           <div class="company-badges">${companyBadges(item, linked, stockStatus)}</div>
           ${linked ? (evidence ? `<p class="inventory-rule">숙박과 당일 이용 예약을 따로 표시합니다. 점유 사유가 확인되지 않은 수량과 판매 수량 감소분은 예약·매출에서 제외합니다.</p>${miniBars(item)}` : `${publicMode ? b2bCompanyCardSummary(item, insight) : companyRankInsightGrid(insight)}${miniBars(item)}`) : `<p class="inventory-rule">${escapeHtml(stockStatus)}</p>`}
           ${publicMode ? "" : `<div class="company-price-platform">${priceBlock(item)}<div class="platform-chips">${platformChips(item)}</div></div>`}
@@ -21018,7 +21040,7 @@ function restoreAdminDbInlineSearchViewport(position = null, options = {}) {
 function activateAdminDbCompanyDetail(companyId = "", options = {}) {
   const selectedCompanyId = String(companyId || "").trim();
   if (!selectedCompanyId) return false;
-  const preservedScroll = options.scroll === false
+  const preservedScroll = options.scroll === false && options.preserveScroll !== false
     ? (state.adminDbInlineSearchScroll || { left: window.scrollX || 0, top: window.scrollY || 0 })
     : null;
   state.adminDbRouteCompanyId = selectedCompanyId;
@@ -26256,6 +26278,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
     </section>
   `;
   bindAdminDbCompanySelectButtons();
+  applyPendingCompanyEdit();
 }
 
 function adminConsoleKpis(master = {}, entries = []) {
@@ -35774,28 +35797,37 @@ function inventorySourceHtml(physical = {}, compact = false) {
     : escapeHtml(label);
 }
 
+function sheetBookingQuantityBasis(item = {}) {
+  const evidence = inventoryAssessment(item);
+  const lodging = salesStats(item, "lodging");
+  const observed = evidence ? evidence.lodging && evidence.lodging.status !== "missing" : lodging.supply > 0;
+  const capacity = roomCapacityPresentation(item);
+  return `<div class="sheet-calculation-list">
+    <p><strong>객실 총량</strong> 숙소가 보유한 실제 객실 수입니다. ${capacity.count ? `${fmtNumber(capacity.count)}실 · ${inventorySourceHtml(capacity.physical, true)}` : "아직 확인되지 않았습니다. 네이버에 공개된 수량과 다를 수 있습니다."}</p>
+    ${capacity.operatingCount ? `<p><strong>관리자 운영 기준</strong> ${fmtNumber(capacity.operatingCount)}실 · 등록된 판매 기준이며, 실제 보유 객실 수와 구분합니다.</p>` : ""}
+    <p><strong>숙박 예약 수량</strong> ${lodging.basis === "basis" ? "기준일의 예약 객실 수입니다." : "선택 기간의 예약된 객실을 날짜별로 더한 값입니다. 객실 1실을 2박 예약하면 2박으로 셉니다. 예약 건수와는 다릅니다."}</p>
+    ${observed ? `<p><strong>예약 비율 계산</strong> ${fmtNumber(lodging.sold)} ÷ ${fmtNumber(lodging.supply)}${Number.isFinite(lodging.rate) ? ` = ${fmtRate(lodging.rate)}` : " · 비율 미확인"}. ${lodging.basis === "basis" ? "기준일 네이버 공개 수량 대비 예약 수량입니다." : `${fmtNumber(lodging.supply)}은 날짜별 공개 수량의 합계이며, 업체의 객실 총량이 아닙니다.`}</p>` : ""}
+  </div>`;
+}
+
 function sheetInventorySummary(item = {}) {
   const evidence = inventoryAssessment(item);
   const lodging = salesStats(item, "lodging");
   const day = salesStats(item, "day");
-  const physical = evidence?.physicalRooms || {};
-  const physicalKnown = Number.isFinite(physical.count) && physical.count > 0;
+  const capacity = roomCapacityPresentation(item);
   const lodgingObserved = evidence ? Boolean(evidence.lodging && evidence.lodging.status !== "missing") : lodging.supply > 0;
   const dayObserved = evidence ? Boolean(evidence.dayUse && evidence.dayUse.status !== "missing") : day.supply > 0;
-  const totals = (evidence?.lodging?.rows || []).filter((row) => !row.missing).map((row) => finiteNumber(row.total, 0));
-  const observedText = totals.length
-    ? `${fmtNumber(Math.min(...totals))}–${fmtNumber(Math.max(...totals))}객실 / 일`
-    : "날짜별 수량 확인 필요";
   const shared = evidence?.sharedRooms?.status === "confirmed";
   return `<section class="sheet-section sheet-inventory-summary">
     <div class="sheet-structure-title"><h3>객실과 예약 수량</h3><span class="structure-badge ${shared ? "watch" : "neutral"}">${shared ? "숙박·당일 이용 객실 공유" : "객실 공유 여부 미확인"}</span></div>
     <div class="inventory-summary-grid">
-      <div><span>실제 객실 수</span><strong>${physicalKnown ? `${fmtNumber(physical.count)}객실` : "확인 전"}</strong><small>${physicalKnown ? inventorySourceHtml(physical, true) : "판매 화면 수량만으로 확정하지 않습니다."}</small></div>
-      <div><span>수집된 기준 수량</span><strong>${escapeHtml(observedText)}</strong><small>날짜별 공개 수량 · 판매 중지 포함</small></div>
-      <div><span>숙박 예약 수량</span><strong>${lodgingObserved ? `${fmtNumber(lodging.sold)} / ${fmtNumber(lodging.supply)}` : "자료 미확인"}</strong><small>객실·박 · 날짜별 합계${evidence?.lodging?.complete === false ? " · 일부 자료 미확인" : ""}</small></div>
-      <div><span>당일 이용 예약 수량</span><strong>${dayObserved ? `${fmtNumber(day.sold)} / ${fmtNumber(day.supply)}` : "자료 미확인"}</strong><small>회 · 숙박과 별도${evidence?.dayUse?.complete === false ? " · 일부 자료 미확인" : ""}</small></div>
+      <div><span>객실 총량</span><strong>${capacity.count ? `${fmtNumber(capacity.count)}실` : "확인 전"}</strong><small>${capacity.count ? inventorySourceHtml(capacity.physical, true) : "실제 보유 객실 수 확인 필요"}${capacity.operatingCount ? `<br>관리자 운영 기준 ${fmtNumber(capacity.operatingCount)}실` : ""}</small></div>
+      <div><span>네이버 공개 객실 수</span><strong>${escapeHtml(capacity.dailyText)}</strong><small>하루 기준 · 날짜마다 달라질 수 있음</small></div>
+      <div><span>숙박 예약 수량</span><strong>${lodgingObserved ? `${fmtNumber(lodging.sold)}${lodging.basis === "basis" ? "실" : "박"}` : "자료 미확인"}</strong><small>${escapeHtml(lodging.label)}${lodgingObserved && Number.isFinite(lodging.rate) ? ` · 예약 비율 ${fmtRate(lodging.rate)}` : ""}</small></div>
+      <div><span>당일 이용 예약 수량</span><strong>${dayObserved ? `${fmtNumber(day.sold)}회` : "자료 미확인"}</strong><small>${dayObserved ? escapeHtml(day.label) : "예약 자료 필요"} · 숙박과 별도</small></div>
     </div>
     <p class="inventory-rule">${shared ? "같은 객실을 숙박과 당일 이용으로 판매합니다. 두 상품의 수량을 실제 객실 수로 더하지 않습니다." : "실제 객실 수와 날짜별 판매 수량은 다를 수 있습니다."} ${evidence ? "수량 감소나 사유가 확인되지 않은 점유는 예약·매출에 더하지 않습니다." : "수집 근거를 확인한 뒤 예상 매출을 판단해 주세요."}</p>
+    ${sheetDisclosure("예약 수량과 비율 계산", "기간 합계 확인", sheetBookingQuantityBasis(item))}
   </section>`;
 }
 
@@ -36878,6 +36910,7 @@ function renderSheet() {
   if (!item) return;
   els.sheetTitle.textContent = `${item.name} 상세`;
   els.sheetSubtitle.textContent = `${categoryText(item)} · ${priceText(item.price)}`;
+  renderSheetCompanyEditShortcut(item);
   document.querySelectorAll(".sheet-tabs button").forEach((button) => {
     button.classList.toggle("active", button.dataset.sheetTab === state.selectedSheetTab);
   });
@@ -37004,6 +37037,112 @@ function keepAppOverlayFocus(event) {
     event.stopPropagation();
     focusAppOverlay(active);
   }
+}
+
+function companyEditShortcutId(item = {}) {
+  const direct = String(item.companyId || "").trim();
+  const profile = String(item.companyProfile?.companyId || "").trim();
+  if (direct && profile && direct !== profile) return "";
+  if (direct || profile) return direct || profile;
+  // Availability rows can omit master metadata that is present on the ranking
+  // row. Only the same exact Place ID may bridge that read-model boundary.
+  const placeId = String(item.placeId || item.place_id || "").trim();
+  if (!placeId) return "";
+  const matches = (state.data?.ranking?.items || []).filter((row) => String(row.placeId || row.place_id || "").trim() === placeId);
+  const ids = new Set();
+  for (const row of matches) {
+    const rowId = String(row.companyId || "").trim();
+    const profileId = String(row.companyProfile?.companyId || "").trim();
+    if (rowId && profileId && rowId !== profileId) return "";
+    if (rowId || profileId) ids.add(rowId || profileId);
+  }
+  return ids.size === 1 ? [...ids][0] : "";
+}
+
+function companyEditShortcutUrl(companyId = "", fold = "correction") {
+  const key = fold === "profile" ? "profile" : "correction";
+  return adminDbCompanyDetailUrl(companyId).replace("#", `&adminEdit=${key}#`);
+}
+
+function companyEditShortcutHtml(item = {}, fold = "correction") {
+  if (!isAdminRole()) return "";
+  const companyId = companyEditShortcutId(item);
+  if (!companyId) return "";
+  const key = fold === "profile" ? "profile" : "correction";
+  return `<a class="company-edit-shortcut" href="${escapeHtml(companyEditShortcutUrl(companyId, key))}" data-company-edit-shortcut="${escapeHtml(companyId)}" data-company-edit-fold="${key}" aria-label="${escapeHtml(`${item.name || item.companyProfile?.primaryName || "업체"} 수정`)}">업체 정보 수정</a>`;
+}
+
+function renderSheetCompanyEditShortcut(item = {}) {
+  let slot = els.detailSheet.querySelector("[data-sheet-company-edit-slot]");
+  if (!slot) {
+    slot = document.createElement("div");
+    slot.className = "sheet-company-edit-actions";
+    slot.setAttribute("data-sheet-company-edit-slot", "");
+    els.sheetSubtitle.insertAdjacentElement("afterend", slot);
+  }
+  slot.innerHTML = companyEditShortcutHtml(item);
+  slot.hidden = !slot.innerHTML;
+}
+
+async function openCompanyEditorFromShortcut(companyId = "", fold = "correction") {
+  const selectedId = String(companyId || "").trim();
+  if (!isAdminRole() || !selectedId) return false;
+  const matchesMaster = () => (companyMasterSource().companies || []).some((company) => String(company.companyId || "") === selectedId);
+  if (!matchesMaster()) {
+    setStatus("업체 연결 확인 중");
+    await loadCompanyMasterSummary();
+    if (!matchesMaster()) {
+      setStatus("연결된 업체를 찾지 못했습니다. 업체 DB에서 확인해 주세요.");
+      return false;
+    }
+  }
+  const key = fold === "profile" ? "profile" : "correction";
+  state.adminDbEditTarget = { companyId: selectedId, fold: key };
+  state.adminDbEditNavigating = true;
+  try {
+    closeSheet();
+    // Set the exact route before rendering so a previous company's URL cannot win.
+    setAdminDbCompanyRoute(selectedId);
+    window.history.replaceState(null, "", companyEditShortcutUrl(selectedId, key));
+    setActiveTab("admin", { pushHistory: false });
+    setAdminPanelSection("database");
+  } finally {
+    state.adminDbEditNavigating = false;
+  }
+  activateAdminDbCompanyDetail(selectedId, { updateRoute: false, scroll: false, preserveScroll: false });
+  applyPendingCompanyEdit();
+  return true;
+}
+
+function applyPendingCompanyEdit() {
+  if (!isAdminRole() || state.adminDbEditNavigating || state.activeTab !== "admin" || state.adminPanelSection !== "database") return false;
+  const routeCompanyId = adminDbCompanyIdFromRoute();
+  const routeFold = new URLSearchParams(window.location.search || "").get("adminEdit");
+  const target = state.adminDbEditTarget || (["profile", "correction"].includes(routeFold) ? { companyId: routeCompanyId, fold: routeFold } : null);
+  if (!target?.companyId || target.companyId !== routeCompanyId || target.companyId !== state.adminDbSelectedCompanyId) return false;
+  const routeKey = `${target.companyId}|${target.fold}`;
+  const detail = state.adminDbCompanyDetails?.[target.companyId];
+  if (state.adminDbCompanyDetailLoading?.[target.companyId] || String(detail?.company?.companyId || "") !== target.companyId) return false;
+  const panel = Array.from(document.querySelectorAll(".admin-db-selected-panel[data-admin-db-selected-company]"))
+    .find((element) => element.dataset.adminDbSelectedCompany === target.companyId);
+  const key = target.fold === "profile" ? "profile" : "correction";
+  const fold = panel?.querySelector(`[data-admin-db-fold="${key}"]`);
+  const maintenance = fold?.closest(".admin-company-maintenance");
+  if (!fold || !maintenance) return false;
+  if (!state.adminDbEditTarget && state.adminDbHandledEditRoute === routeKey && state.adminDbHandledEditElement === fold) return false;
+  maintenance.open = true;
+  panel.querySelectorAll(".admin-db-selected-fold[data-admin-db-fold]").forEach((element) => { element.open = element === fold; });
+  fold.open = true;
+  state.adminDbHandledEditRoute = routeKey;
+  state.adminDbHandledEditElement = fold;
+  state.adminDbEditTarget = null;
+  window.requestAnimationFrame(() => {
+    if (!fold.isConnected || state.adminDbSelectedCompanyId !== target.companyId || adminDbCompanyIdFromRoute() !== target.companyId) return;
+    const input = fold.querySelector("input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])") || fold.querySelector("summary");
+    (input || fold).scrollIntoView({ behavior: "auto", block: "center" });
+    input?.focus({ preventScroll: true });
+  });
+  return true;
 }
 
 function openSheet(index) {
@@ -39592,10 +39731,17 @@ function openAdminDbCompanyReview(companyId = "", options = {}) {
 function handleAdminDbCompanyHash() {
   const companyId = adminDbCompanyIdFromRoute();
   if (!companyId || !isAdminRole()) return false;
-  if (state.adminDbViewMode === "review" && state.adminDbSelectedCompanyId === companyId) return true;
-  if (state.activeTab !== "admin") setActiveTab("admin");
-  setAdminPanelSection("database");
-  openAdminDbCompanyReview(companyId);
+  if (state.adminDbViewMode === "review" && state.adminDbSelectedCompanyId === companyId
+    && state.activeTab === "admin" && state.adminPanelSection === "database") return true;
+  const editing = ["profile", "correction"].includes(new URLSearchParams(window.location.search || "").get("adminEdit"));
+  if (editing) state.adminDbEditNavigating = true;
+  try {
+    if (state.activeTab !== "admin") setActiveTab("admin");
+    setAdminPanelSection("database");
+  } finally {
+    if (editing) state.adminDbEditNavigating = false;
+  }
+  openAdminDbCompanyReview(companyId, { scroll: !editing });
   return true;
 }
 
@@ -39704,6 +39850,20 @@ function bindEvents() {
   window.addEventListener("hashchange", () => {
     handleAdminDbCompanyHash();
   });
+  document.addEventListener("click", (event) => {
+    const shortcut = event.target.closest?.("[data-company-edit-shortcut]");
+    if (!shortcut) return;
+    if (!isAdminRole()) {
+      event.preventDefault();
+      return;
+    }
+    if (adminDbCompanyUseNativeLink(event, shortcut)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation?.();
+    openCompanyEditorFromShortcut(shortcut.dataset.companyEditShortcut || "", shortcut.dataset.companyEditFold || "correction")
+      .catch(() => setStatus("업체 수정 화면을 열지 못했습니다. 다시 시도해 주세요."));
+  }, true);
   document.addEventListener("click", (event) => {
     const adminDbCompanySelect = event.target.closest?.("[data-admin-db-company-select]");
     if (!adminDbCompanySelect) return;
