@@ -13,6 +13,7 @@ const { buildPolicyDocument } = require("./public_policy_content.cjs");
 const { applyInventoryEvidence } = require("./inventory_estimation.cjs");
 const { otaProviderFromUrl } = require("./naver_place_ota_observation.cjs");
 const { createCollector: createTourismCollector } = require("./tourism_collector.cjs");
+const { createSpecialDaysService } = require("./lib/special_days.cjs");
 const { createMonthlyVisitorScheduler } = require("./tourism_visitor_monthly_scheduler.cjs");
 const { createDemandStrengthBackfillScheduler } = require("./tourism_demand_strength_backfill_scheduler.cjs");
 const { createDailyKeywordCollectionScheduler } = require("./daily_keyword_collection_scheduler.cjs");
@@ -142,6 +143,14 @@ const masterDbDualWriteQueue = createMasterDbDualWriteQueue({
   databasePath: process.env.MASTER_DB_PATH || path.join(DATA_DIR, "master_db", "sabun_master.sqlite"),
   mode: process.env.MASTER_DB_WRITE_MODE,
   logger: console
+});
+const specialDaysService = createSpecialDaysService({
+  dataDir: path.join(DATA_DIR, "history", "special_days"),
+  readServiceKey: () => process.env.DATA_GO_KR_SPECIAL_DAYS_SERVICE_KEY
+    || process.env.DATA_GO_KR_SERVICE_KEY
+    || process.env.KTO_DATA_GO_KR_SERVICE_KEY
+    || process.env.KTO_TOURISM_SERVICE_KEY
+    || ""
 });
 const tourismCollector = createTourismCollector({
   rootDir: ROOT,
@@ -17136,9 +17145,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=datalab-20260920-max-observed-rooms-v106"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=datalab-20260920-max-observed-rooms-v106"')
-      .replace('src="/app.js"', 'src="/app.js?v=datalab-20260920-max-observed-rooms-v106"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=datalab-20260921-special-days-v107"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=datalab-20260921-special-days-v107"')
+      .replace('src="/app.js"', 'src="/app.js?v=datalab-20260921-special-days-v107"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -17922,6 +17931,38 @@ async function route(req, res) {
       if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
       return send(res, 200, await backfillCompanyMasterFromRuns(payload));
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/settings/special-days") {
+      if (!requireAdminSession(session, req, res)) return;
+      return send(res, 200, await specialDaysService.status(reqUrl.searchParams.get("year") || undefined));
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/special-days") {
+      if (!requireAdminSession(session, req, res)) return;
+      assertRequestRateLimit(req, "adminSpecialDays", RATE_LIMIT_POLICIES.adminTourism, session.username || "");
+      return send(res, 200, await specialDaysService.getYear(reqUrl.searchParams.get("year") || undefined));
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/settings/special-days/refresh") {
+      if (!requireAdminSession(session, req, res)) return;
+      if (!/^application\/json(?:\s*;|$)/i.test(String(req.headers["content-type"] || ""))) {
+        return send(res, 415, { error: "JSON 형식으로 연도를 입력해 주세요." });
+      }
+      if (req.headers.origin) {
+        let originHost = "";
+        try { originHost = new URL(req.headers.origin).host; } catch { /* Reject malformed origins. */ }
+        if (!originHost || originHost !== req.headers.host) {
+          return send(res, 403, { error: "현재 서비스 화면에서 다시 요청해 주세요." });
+        }
+      }
+      const payload = await parseJsonBody(req);
+      if (!payload || Array.isArray(payload) || typeof payload !== "object"
+        || Object.keys(payload).some((field) => field !== "year")) {
+        return send(res, 400, { error: "특일정보 조회 연도만 입력할 수 있습니다." });
+      }
+      assertRequestRateLimit(req, "adminSpecialDays", RATE_LIMIT_POLICIES.adminTourism, session.username || "");
+      return send(res, 200, await specialDaysService.getYear(payload.year, { refresh: true }));
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/settings/traffic-keys") {

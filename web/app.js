@@ -143,6 +143,15 @@ const state = {
   },
   tourismDataStatus: null,
   tourismDataStatusError: "",
+  specialDaysSettings: null,
+  specialDaysYears: {},
+  specialDaysYear: null,
+  specialDaysKind: "all",
+  specialDaysFrom: "",
+  specialDaysTo: "",
+  specialDaysExpanded: false,
+  specialDaysLoading: false,
+  specialDaysError: "",
   tourismDemandStrengthBackfillRun: {
     loading: false,
     tone: "neutral",
@@ -477,6 +486,7 @@ const els = {
   adminConsoleDashboard: document.getElementById("adminConsoleDashboard"),
   adminRegionAnalysisDashboard: document.getElementById("adminRegionAnalysisDashboard"),
   adminIntegrationRegistry: document.getElementById("adminIntegrationRegistry"),
+  specialDaysAdminCard: document.getElementById("specialDaysAdminCard"),
   adminSecurityDashboard: document.getElementById("adminSecurityDashboard"),
   adminMemberRequestDashboard: document.getElementById("adminMemberRequestDashboard"),
   collectionArchive: document.getElementById("collectionArchive"),
@@ -28952,6 +28962,7 @@ function adminIntegrationRows() {
   const traffic = state.trafficKeyState || {};
   const tourism = state.tourismDataStatus || {};
   return ADMIN_INTEGRATIONS.map((integration) => {
+    if (integration.key === "holiday") return adminSpecialDaysIntegrationRow(integration);
     if (integration.tourismSourceKey) {
       return adminTourismIntegrationRow(integration, tourism);
     }
@@ -29033,9 +29044,9 @@ function adminHomeTasks(master = {}, entries = []) {
   if (memberRequests) {
     tasks.push({ route: "members", label: "회원 요청 처리", value: `${fmtNumber(memberRequests)}건`, note: "계정·데이터 요청 확인", tone: "danger" });
   }
-  const integrations = adminIntegrationRows().filter((row) => row.liveKey || row.tourismSourceKey);
+  const integrations = adminIntegrationRows().filter((row) => row.liveKey || row.tourismSourceKey || row.key === "holiday");
   const integrationIssues = integrations.filter((row) => row.status === "missing").length;
-  if ((state.trafficKeyState || state.tourismDataStatus) && integrationIssues) {
+  if ((state.trafficKeyState || state.tourismDataStatus || state.specialDaysSettings) && integrationIssues) {
     tasks.push({ route: "settings", label: "API 연동 점검", value: `${fmtNumber(integrationIssues)}건`, note: "인증키·API 주소·수집 상태 확인", tone: "warning" });
   }
   return tasks;
@@ -29163,6 +29174,7 @@ function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
   renderAdminDatabaseDashboard(master);
   renderAdminRegionAnalysisDashboard(master);
   renderAdminIntegrationRegistry();
+  renderSpecialDaysAdminCard();
   renderAdminSecurityDashboard();
   if (!els.adminConsoleDashboard) return;
   if (master.error) {
@@ -39084,6 +39096,147 @@ async function resumeTourismDemandStrengthBackfillPolling() {
   if (tourismDemandStrengthBackfillIsRunning()) startTourismDemandStrengthBackfillPolling();
 }
 
+const SPECIAL_DAY_KINDS = [
+  ["holidays", "공휴일"], ["nationalDays", "국경일"], ["anniversaries", "기념일"],
+  ["solarTerms", "24절기"], ["sundryDays", "잡절"]
+];
+
+function specialDaysToday() {
+  return new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function specialDaysSelectedYear() {
+  return state.specialDaysYear || Number(specialDaysToday().slice(0, 4));
+}
+
+function specialDaysSnapshot() {
+  return state.specialDaysYears[specialDaysSelectedYear()] || null;
+}
+
+function adminSpecialDaysIntegrationRow(integration = {}) {
+  const data = specialDaysSnapshot();
+  const configured = state.specialDaysSettings?.configured;
+  const base = { ...integration, status: "checking", statusLabel: "확인 대기", statusNote: "특일정보 연결 상태를 확인합니다." };
+  if (state.specialDaysLoading) return { ...base, statusNote: "공식 자료를 확인하고 있습니다." };
+  if (state.specialDaysError) return { ...base, status: "missing", statusLabel: "조회 실패", statusNote: data?.items?.length ? "저장 자료 표시 · 새 조회 결과 확인 필요" : state.specialDaysError };
+  if (data?.status === "missing_key" || configured === false) return { ...base, status: "missing", statusLabel: "키 설정 필요", statusNote: "서버의 공공데이터 인증키를 확인하세요." };
+  if (!data) return { ...base, status: configured ? "configured" : "checking", statusLabel: configured ? "설정 완료" : "확인 대기", statusNote: "자료 불러오기 후 실제 연결을 확인합니다." };
+  if (!data.items?.length && data.errors?.length && data.errors.every((error) => error.code === "NOT_COLLECTED")) return { ...base, status: "configured", statusLabel: "자료 대기", statusNote: "아직 저장된 자료가 없습니다. ‘자료 불러오기’를 눌러 확인하세요." };
+  const categories = SPECIAL_DAY_KINDS.map(([kind]) => data.categories?.[kind]);
+  const fresh = data.status === "ready" && !data.stale && categories.every((category) => category?.status === "ready" && !category.stale);
+  if (fresh) return { ...base, status: "connected", statusLabel: "연동 정상", statusNote: `${data.year}년 5개 종류의 최신 공식 자료 확인` };
+  if (data.status === "error") return { ...base, status: "missing", statusLabel: "갱신 실패", statusNote: data.items?.length ? "이전 저장 자료 표시 · 다시 확인 필요" : "공식 자료 조회에 실패했습니다." };
+  return { ...base, status: "missing", statusLabel: data.status === "partial" ? "일부 확인 필요" : "갱신 필요", statusNote: "일부 자료가 없거나 오래되었습니다. 저장 자료와 확인 시각을 함께 보세요." };
+}
+
+function specialDaysOfficialUrl(source = {}) {
+  try {
+    const url = new URL(source.url);
+    if (url.protocol === "https:" && /(^|\.)(data\.go\.kr|kasi\.re\.kr)$/.test(url.hostname)) return url.href;
+  } catch { /* Only official HTTPS source links are rendered. */ }
+  return "";
+}
+
+function renderSpecialDaysAdminCard() {
+  if (!els.specialDaysAdminCard || !isAdminRole()) return;
+  const focusedId = document.activeElement?.id || "";
+  const year = specialDaysSelectedYear();
+  const currentYear = Number(specialDaysToday().slice(0, 4));
+  const data = specialDaysSnapshot();
+  const status = adminSpecialDaysIntegrationRow();
+  const loading = state.specialDaysLoading;
+  const items = (Array.isArray(data?.items) ? data.items : [])
+    .filter((item) => String(item.date || "").startsWith(`${year}-`))
+    .sort((left, right) => String(left.date).localeCompare(String(right.date)) || String(left.name).localeCompare(String(right.name), "ko"));
+  const holidays = (Array.isArray(data?.holidays) ? data.holidays : items.filter((item) => item.kind === "holidays"))
+    .filter((item) => item.isHoliday === true && String(item.date || "").startsWith(`${year}-`));
+  const holidayDates = new Set(holidays.map((item) => item.date));
+  const holidayKnown = Boolean(data?.categories?.holidays?.updatedAt || data?.categories?.holidays?.status === "ready" || holidays.length);
+  const upcoming = [...new Map(holidays.map((item) => [`${item.date}:${item.name}`, item])).values()]
+    .filter((item) => item.date >= specialDaysToday()).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 4);
+  const from = state.specialDaysFrom || `${year}-01-01`;
+  const to = state.specialDaysTo || `${year}-12-31`;
+  const invalidRange = from > to;
+  const filtered = invalidRange ? [] : items.filter((item) => item.date >= from && item.date <= to && (state.specialDaysKind === "all" || item.kind === state.specialDaysKind));
+  const source = data?.source || state.specialDaysSettings?.source || {};
+  const sourceUrl = specialDaysOfficialUrl(source);
+  const errors = (Array.isArray(data?.errors) ? data.errors : []).filter((error) => error.code !== "NOT_COLLECTED");
+  const categoryStatus = (category) => category?.status === "ready" && !category.stale ? "확인" : category?.items?.length ? "저장 자료 · 갱신 필요" : "미확인";
+  els.specialDaysAdminCard.innerHTML = `
+    <div class="special-days-heading">
+      <div><h3>특일정보</h3><p>${year}년 공휴일 <strong>${holidayKnown ? `${fmtNumber(holidayDates.size)}일` : "확인 대기"}</strong></p></div>
+      <span class="special-days-state" data-status="${escapeHtml(status.status)}">${escapeHtml(status.statusLabel)}</span>
+    </div>
+    <div class="special-days-toolbar">
+      <label for="specialDaysYear">연도 <select id="specialDaysYear" ${loading ? "disabled" : ""}>${[currentYear - 1, currentYear, currentYear + 1].map((value) => `<option value="${value}"${value === year ? " selected" : ""}>${value}년</option>`).join("")}</select></label>
+      <button class="secondary-button" type="button" data-special-days-action="load" ${loading ? "disabled" : ""}>${loading ? "확인 중…" : "자료 불러오기"}</button>
+      <button class="ghost-button" type="button" data-special-days-action="refresh" ${loading ? "disabled" : ""}>새로 확인</button>
+    </div>
+    <p class="special-days-message" role="status" aria-live="polite">${escapeHtml(state.specialDaysError || status.statusNote)}</p>
+    <div class="special-days-upcoming"><span>다가오는 공휴일</span>${upcoming.length ? upcoming.map((item) => `<span><time datetime="${escapeHtml(item.date)}">${escapeHtml(item.date.slice(5).replace("-", "."))}</time> ${escapeHtml(item.name)}</span>`).join("") : `<span>${holidayKnown ? "해당 연도에 남은 공휴일이 없습니다." : "공식 자료를 불러오면 표시합니다."}</span>`}</div>
+    <details class="special-days-details" data-special-days-details ${state.specialDaysExpanded ? "open" : ""}>
+      <summary>전체 일정 ${fmtNumber(items.length)}건 <span>종류·기간 선택</span></summary>
+      <div class="special-days-filters">
+        <label for="specialDaysKind">종류<select id="specialDaysKind"><option value="all">전체</option>${SPECIAL_DAY_KINDS.map(([kind, label]) => `<option value="${kind}"${state.specialDaysKind === kind ? " selected" : ""}>${label}</option>`).join("")}</select></label>
+        <label for="specialDaysFrom">시작일<input id="specialDaysFrom" type="date" min="${year}-01-01" max="${year}-12-31" value="${escapeHtml(from)}"></label>
+        <label for="specialDaysTo">종료일<input id="specialDaysTo" type="date" min="${year}-01-01" max="${year}-12-31" value="${escapeHtml(to)}"></label>
+      </div>
+      <p class="special-days-note">공휴일 수는 공식 공휴일 목록의 날짜를 중복 없이 센 값입니다. 국경일·기념일·절기·잡절 항목 자체가 공휴일을 뜻하지는 않습니다.</p>
+      <div class="special-days-categories">${SPECIAL_DAY_KINDS.map(([kind, label]) => `<span>${label} · ${escapeHtml(categoryStatus(data?.categories?.[kind]))}</span>`).join("")}</div>
+      <p class="special-days-note">${invalidRange ? "시작일이 종료일보다 늦습니다. 기간을 다시 선택하세요." : `${escapeHtml(from)} ~ ${escapeHtml(to)} · ${fmtNumber(filtered.length)}건`}</p>
+      <ul class="special-days-list">${filtered.map((item) => `<li><time datetime="${escapeHtml(item.date)}">${escapeHtml(item.date)}</time><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(SPECIAL_DAY_KINDS.find(([kind]) => kind === item.kind)?.[1] || item.kindLabel || "특일")}${item.kind === "holidays" && item.isHoliday === true ? " · 공휴일 지정" : ""}</span></li>`).join("") || `<li class="special-days-empty">${invalidRange ? "조회 기간을 확인하세요." : data ? "선택한 조건의 저장 일정이 없습니다." : "먼저 자료를 불러오세요."}</li>`}</ul>
+      ${errors.length ? `<ul class="special-days-errors">${errors.map((error) => `<li>${escapeHtml(SPECIAL_DAY_KINDS.find(([kind]) => kind === error.kind)?.[1] || "특일정보")} · ${escapeHtml(error.message || error.code || "조회 확인 필요")}</li>`).join("")}</ul>` : ""}
+    </details>
+    <p class="special-days-source">${data?.updatedAt ? `자료 갱신 ${escapeHtml(compactDateTime(data.updatedAt))}` : "저장 자료 없음"}${data?.stale ? " · 이전 저장 자료" : ""} · ${sourceUrl ? `<a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(source.name || "공식 출처")}</a>` : escapeHtml(source.name || "한국천문연구원 · 공공데이터포털")}</p>
+  `;
+  if (focusedId.startsWith("specialDays")) document.getElementById(focusedId)?.focus({ preventScroll: true });
+}
+
+function rememberSpecialDaysYear(data) {
+  const year = Number(data?.year);
+  if (!Number.isInteger(year) || !Array.isArray(data?.items)) throw new Error("특일정보 응답을 확인하지 못했습니다.");
+  const previous = state.specialDaysYears[year];
+  state.specialDaysYears[year] = !data.items.length && previous?.items?.length && ["error", "missing_key"].includes(data.status)
+    ? { ...previous, status: data.status, stale: true, errors: data.errors || [] }
+    : data;
+}
+
+async function loadSpecialDaysYear(refresh = false) {
+  if (!isAdminRole() || state.specialDaysLoading) return;
+  const year = specialDaysSelectedYear();
+  state.specialDaysLoading = true;
+  state.specialDaysError = "";
+  renderSpecialDaysAdminCard();
+  renderAdminIntegrationRegistry();
+  try {
+    const data = refresh
+      ? await fetchJson("/api/settings/special-days/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ year }) })
+      : await fetchJson(`/api/special-days?year=${year}`);
+    rememberSpecialDaysYear(data);
+    if (data.status !== "missing_key") state.specialDaysSettings = { ...(state.specialDaysSettings || {}), configured: true, source: data.source };
+  } catch (error) {
+    state.specialDaysError = `특일정보 조회 실패 · ${error.message}`;
+  } finally {
+    state.specialDaysLoading = false;
+    renderSpecialDaysAdminCard();
+    renderAdminIntegrationRegistry();
+  }
+}
+
+async function loadSpecialDaysStatus() {
+  if (!isAdminRole()) return;
+  try {
+    const data = await fetchJson(`/api/settings/special-days?year=${specialDaysSelectedYear()}`);
+    state.specialDaysSettings = data;
+    state.specialDaysError = "";
+    if (data.yearStatus) rememberSpecialDaysYear(data.yearStatus);
+  } catch (error) {
+    state.specialDaysError = `특일정보 상태 확인 실패 · ${error.message}`;
+  }
+  renderSpecialDaysAdminCard();
+  renderAdminIntegrationRegistry();
+}
+
 async function loadTourismDataStatus(options = {}) {
   const render = options.render !== false;
   if (!isAdminRole()) {
@@ -41024,6 +41177,32 @@ function bindEvents() {
   els.yeogiClearButton.addEventListener("click", clearYeogiImport);
   els.trafficKeyForm.addEventListener("submit", submitTrafficKeys);
   els.trafficKeyVerifyButton?.addEventListener("click", verifyTrafficKeys);
+  els.specialDaysAdminCard?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-special-days-action]");
+    if (button) loadSpecialDaysYear(button.dataset.specialDaysAction === "refresh");
+  });
+  els.specialDaysAdminCard?.addEventListener("toggle", (event) => {
+    if (event.target.matches?.("[data-special-days-details]")) state.specialDaysExpanded = event.target.open;
+  }, true);
+  els.specialDaysAdminCard?.addEventListener("change", (event) => {
+    const input = event.target;
+    if (input.id === "specialDaysYear") {
+      const year = Number(input.value);
+      const currentYear = Number(specialDaysToday().slice(0, 4));
+      if (![currentYear - 1, currentYear, currentYear + 1].includes(year)) return;
+      state.specialDaysYear = year;
+      state.specialDaysFrom = "";
+      state.specialDaysTo = "";
+      state.specialDaysError = "";
+      loadSpecialDaysYear();
+      return;
+    }
+    if (input.id === "specialDaysKind") state.specialDaysKind = input.value;
+    else if (input.id === "specialDaysFrom") state.specialDaysFrom = input.value;
+    else if (input.id === "specialDaysTo") state.specialDaysTo = input.value;
+    else return;
+    renderSpecialDaysAdminCard();
+  });
   els.logoutButton?.addEventListener("click", logout);
   els.headerLogoutButton?.addEventListener("click", logout);
   if (els.headerUserViewButton?.tagName !== "A") els.headerUserViewButton?.addEventListener("click", openAdminUserView);
@@ -41250,7 +41429,7 @@ async function init() {
     setDefaultDates();
     syncAppHistoryState(false);
     if (isAdminRole()) {
-      await Promise.all([loadRuns(true), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadLocationScoreOverrides(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview(), loadTourismDataStatus({ render: false })]);
+      await Promise.all([loadRuns(true), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadLocationScoreOverrides(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview(), loadTourismDataStatus({ render: false }), loadSpecialDaysStatus()]);
       if (!state.companyMaster || !((state.companyMaster.companies || []).length || state.companyMaster.totalCompanies || state.companyMaster.error)) {
         await loadCompanyMasterSummary();
       }

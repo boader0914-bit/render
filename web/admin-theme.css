@@ -2387,3 +2387,52 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .report-target-row
     animation-iteration-count: 1 !important;
   }
 }
+
+/* Special-day reference data stays compact and separate from booking metrics. */
+html[data-theme-resolved] body.role-admin .special-days-card {
+  padding: 18px;
+  color: var(--text-primary);
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+}
+.special-days-heading, .special-days-toolbar, .special-days-upcoming, .special-days-categories {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+.special-days-heading { justify-content: space-between; align-items: start; }
+.special-days-heading h3 { margin: 0; font-size: 16px; }
+.special-days-heading p { margin: 7px 0 12px; color: var(--text-secondary); font-size: 13px; }
+.special-days-heading p strong { margin-left: 5px; color: var(--text-primary); font-size: 20px; }
+.special-days-state { padding: 4px 8px; border: 1px solid var(--border-subtle); border-radius: 6px; font-size: 12px; color: var(--text-secondary); }
+.special-days-state[data-status="connected"] { color: var(--positive); }
+.special-days-state[data-status="missing"] { color: var(--warning-strong); }
+.special-days-toolbar label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.special-days-card :is(select, input) { min-width: 0; min-height: 38px; padding: 7px 9px; color: var(--text-primary); background: var(--surface-control); border: 1px solid var(--border-subtle); border-radius: 6px; font: inherit; }
+.special-days-card button { min-height: 38px; padding: 8px 12px; font-size: 12px; }
+.special-days-message, .special-days-note, .special-days-source { margin: 10px 0; color: var(--text-secondary); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.special-days-upcoming { margin: 12px 0; padding: 10px 0; border-block: 1px solid var(--border-subtle); font-size: 12px; }
+.special-days-upcoming > span:first-child { color: var(--text-secondary); }
+.special-days-upcoming time { color: var(--accent-strong); font-variant-numeric: tabular-nums; }
+.special-days-details > summary { padding: 8px 0; cursor: pointer; font-size: 13px; font-weight: 600; }
+.special-days-details > summary > span { margin-left: 8px; color: var(--text-secondary); font-size: 12px; font-weight: 400; }
+.special-days-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+.special-days-filters label { display: grid; gap: 5px; color: var(--text-secondary); font-size: 12px; }
+.special-days-categories { gap: 5px 12px; color: var(--text-secondary); font-size: 11px; }
+.special-days-list { max-height: 380px; overflow: auto; margin: 0; padding: 0; list-style: none; overscroll-behavior: contain; }
+.special-days-list li { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; gap: 8px; padding: 10px 0; border-top: 1px solid var(--border-subtle); font-size: 12px; line-height: 1.5; }
+.special-days-list time, .special-days-list li > span { color: var(--text-secondary); }
+.special-days-list strong { font-weight: 500; overflow-wrap: anywhere; }
+.special-days-list .special-days-empty { display: block; color: var(--text-secondary); }
+.special-days-errors { margin: 10px 0; padding-left: 18px; color: var(--warning-strong); font-size: 12px; }
+.special-days-source { margin-bottom: 0; }
+.special-days-source a { color: var(--accent-strong); text-underline-offset: 3px; }
+@media (max-width: 560px) {
+  html[data-theme-resolved] body.role-admin .special-days-card { padding: 14px; }
+  .special-days-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .special-days-filters > label:first-child { grid-column: 1 / -1; }
+  .special-days-list li { grid-template-columns: 84px minmax(0, 1fr); }
+  .special-days-list li > span { grid-column: 2; }
+}

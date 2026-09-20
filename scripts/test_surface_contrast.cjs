@@ -403,9 +403,25 @@ const adminIntegrationRowsBlock = app.slice(
   app.indexOf("function adminTourismIntegrationEvidence("),
   app.indexOf("function adminHomeSourceTimestamp(")
 );
+const specialDaysUiBlock = app.slice(
+  app.indexOf("const SPECIAL_DAY_KINDS ="),
+  app.indexOf("async function loadTourismDataStatus(")
+);
 const adminIntegrationContext = {
   fmtNumber: (value) => String(value),
+  compactDateTime: (value) => String(value),
+  escapeHtml: (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"),
+  URL,
+  document: { activeElement: null, getElementById: () => null },
+  els: { specialDaysAdminCard: { innerHTML: "" } },
+  isAdminRole: () => true,
   state: {
+    specialDaysSettings: null,
+    specialDaysYears: {},
+    specialDaysYear: 2026,
+    specialDaysKind: "all",
+    specialDaysExpanded: false,
+    specialDaysError: "",
     trafficKeyState: {
       datalabConfigured: true,
       searchadConfigured: true,
@@ -427,7 +443,7 @@ const adminIntegrationContext = {
   }
 };
 vm.runInNewContext(
-  `${adminIntegrationDefinitionsBlock}\n${adminIntegrationRowsBlock}\nthis.getAdminIntegrationRows = adminIntegrationRows; this.getAdminIntegrationSummary = adminIntegrationSummary; this.getAdminIntegrationSummaryLabel = adminIntegrationSummaryLabel;`,
+  `${adminIntegrationDefinitionsBlock}\n${adminIntegrationRowsBlock}\n${specialDaysUiBlock}\nthis.getAdminIntegrationRows = adminIntegrationRows; this.getAdminIntegrationSummary = adminIntegrationSummary; this.getAdminIntegrationSummaryLabel = adminIntegrationSummaryLabel; this.getSpecialDaysStatus = adminSpecialDaysIntegrationRow; this.rememberSpecialDays = rememberSpecialDaysYear; this.renderSpecialDays = renderSpecialDaysAdminCard;`,
   adminIntegrationContext
 );
 const connectedAdminIntegrations = adminIntegrationContext.getAdminIntegrationRows();
@@ -440,8 +456,9 @@ assert(
     && connectedAdminIntegrations.find((row) => row.key === "tourism-diversity")?.status === "connected"
     && connectedAdminIntegrationSummary.connected === 4
     && connectedAdminIntegrationSummary.configured === 2
-    && connectedAdminIntegrationSummary.planned === 9
-    && adminIntegrationContext.getAdminIntegrationSummaryLabel(connectedAdminIntegrationSummary) === "4 정상 · 2 설정 · 9 예정",
+    && connectedAdminIntegrationSummary.checking === 1
+    && connectedAdminIntegrationSummary.planned === 8
+    && adminIntegrationContext.getAdminIntegrationSummaryLabel(connectedAdminIntegrationSummary) === "4 정상 · 2 설정 · 1 확인 중 · 8 예정",
   "admin API registry must map four stored tourism sources to 4/15 connected without merging planned APIs",
   failures
 );
@@ -463,7 +480,7 @@ const configuredTourismRows = adminIntegrationContext.getAdminIntegrationRows();
 assert(
   configuredTourismRows.find((row) => row.key === "regional-visitors")?.status === "configured"
     && configuredTourismRows.find((row) => row.key === "regional-visitors")?.statusLabel === "설정 완료"
-    && configuredTourismRows.find((row) => row.key === "holiday")?.status === "planned",
+    && configuredTourismRows.find((row) => row.key === "holiday")?.status === "checking",
   "admin API registry must separate configured-first-collection-waiting sources from undeveloped planned sources",
   failures
 );
@@ -480,15 +497,59 @@ assert(
   missingTourismRows.find((row) => row.key === "regional-visitors")?.status === "missing"
     && missingTourismRows.find((row) => row.key === "regional-visitors")?.statusLabel === "설정 필요"
     && missingTourismSummary.missing === 1
-    && missingTourismSummary.planned === 9
+    && missingTourismSummary.planned === 8
     && adminIntegrationContext.getAdminIntegrationSummaryLabel(missingTourismSummary).includes("1 확인")
-    && adminIntegrationContext.getAdminIntegrationSummaryLabel(missingTourismSummary).includes("9 예정"),
+    && adminIntegrationContext.getAdminIntegrationSummaryLabel(missingTourismSummary).includes("8 예정"),
   "admin API registry must keep missing configuration separate from planned integrations",
   failures
 );
 
-const expectedCacheVersion = "staydatalab-v20260920-max-observed-rooms-v106";
-const expectedAssetVersion = "datalab-20260920-max-observed-rooms-v106";
+const specialDaysKinds = ["holidays", "nationalDays", "anniversaries", "solarTerms", "sundryDays"];
+const specialDaysFixture = {
+  year: 2026, status: "ready", stale: false, updatedAt: "2026-09-21T00:00:00.000Z",
+  source: { name: "공식 특일정보", url: "https://www.data.go.kr/data/15012690/openapi.do" },
+  items: [
+    { date: "2026-10-03", name: "개천절", kind: "holidays", isHoliday: true },
+    { date: "2026-10-03", name: "같은 날짜의 휴일", kind: "holidays", isHoliday: true },
+    { date: "2026-10-04", name: "<기념일>", kind: "anniversaries", isHoliday: true }
+  ],
+  categories: Object.fromEntries(specialDaysKinds.map((kind) => [kind, { status: "ready", stale: false, updatedAt: "2026-09-21T00:00:00.000Z", items: [] }])),
+  errors: []
+};
+specialDaysFixture.holidays = specialDaysFixture.items.filter((item) => item.kind === "holidays");
+adminIntegrationContext.state.specialDaysSettings = { configured: true };
+adminIntegrationContext.rememberSpecialDays(specialDaysFixture);
+assert(adminIntegrationContext.getSpecialDaysStatus().status === "connected", "special-day registry must report connected only for all five fresh categories", failures);
+adminIntegrationContext.renderSpecialDays();
+const specialDaysHtml = adminIntegrationContext.els.specialDaysAdminCard.innerHTML;
+assert(
+  specialDaysHtml.includes("공휴일 <strong>1일</strong>")
+    && specialDaysHtml.includes("&lt;기념일&gt;")
+    && !specialDaysHtml.includes("기념일 · 공휴일 지정")
+    && /<details[^>]*data-special-days-details\s*>/.test(specialDaysHtml),
+  "special-day summary must count unique official holiday dates, escape names, and keep other categories distinct in a collapsed list",
+  failures
+);
+adminIntegrationContext.state.specialDaysKind = "anniversaries";
+adminIntegrationContext.state.specialDaysFrom = "2026-10-04";
+adminIntegrationContext.state.specialDaysTo = "2026-10-04";
+adminIntegrationContext.renderSpecialDays();
+const specialDaysFilteredList = adminIntegrationContext.els.specialDaysAdminCard.innerHTML.match(/<ul class="special-days-list">([\s\S]*?)<\/ul>/)?.[1] || "";
+assert(specialDaysFilteredList.includes("&lt;기념일&gt;") && !specialDaysFilteredList.includes("개천절"), "special-day list must apply both category and inclusive date filters", failures);
+adminIntegrationContext.rememberSpecialDays({ ...specialDaysFixture, status: "partial", stale: true, categories: { ...specialDaysFixture.categories, solarTerms: { status: "stale", stale: true, error: { code: "NETWORK_ERROR" }, items: [] } } });
+assert(adminIntegrationContext.getSpecialDaysStatus().statusLabel === "일부 확인 필요", "partial or stale special-day data must not appear connected", failures);
+adminIntegrationContext.rememberSpecialDays(specialDaysFixture);
+adminIntegrationContext.state.specialDaysError = "갱신 요청 실패";
+assert(adminIntegrationContext.getSpecialDaysStatus().status === "missing" && adminIntegrationContext.state.specialDaysYears[2026].items.length === 3, "failed refresh must retain prior items without keeping a misleading connected badge", failures);
+adminIntegrationContext.state.specialDaysError = "";
+adminIntegrationContext.rememberSpecialDays({ year: 2026, status: "error", stale: false, items: [], errors: [{ kind: "holidays", code: "TIMEOUT" }] });
+assert(adminIntegrationContext.getSpecialDaysStatus().statusLabel === "갱신 실패" && adminIntegrationContext.state.specialDaysYears[2026].items.length === 3 && adminIntegrationContext.state.specialDaysYears[2026].stale, "empty failed special-day response must not erase previously stored calendar items", failures);
+adminIntegrationContext.state.specialDaysYears = {};
+adminIntegrationContext.rememberSpecialDays({ year: 2026, status: "error", items: [], errors: specialDaysKinds.map((kind) => ({ kind, code: "NOT_COLLECTED" })) });
+assert(adminIntegrationContext.getSpecialDaysStatus().status === "configured" && adminIntegrationContext.getSpecialDaysStatus().statusLabel === "자료 대기", "configured but not yet collected special-day data must prompt loading rather than imply an API failure", failures);
+
+const expectedCacheVersion = "staydatalab-v20260921-special-days-v107";
+const expectedAssetVersion = "datalab-20260921-special-days-v107";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
