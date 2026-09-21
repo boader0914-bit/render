@@ -10,7 +10,8 @@ const vm = require("node:vm");
 const source = fs.readFileSync(path.join(__dirname, "glamping_app_server.cjs"), "utf8");
 const names = [
   "productSnapshotNumber", "productSnapshotType", "productSnapshotDate",
-  "productSnapshotObservation", "dayOfWeekFromDate", "toNullableRate",
+  "productSnapshotObservation", "dayOfWeekFromDate", "toNullableRate", "inventoryEstimateBreakdown",
+  "companyMaximumRoomCapacity", "withCompanyInventoryCapacity", "companyProductAvailabilityMatch",
   "historySeriesForItem", "normalizeSignalRows", "averageSignalRate",
   "summarizeProductSalesSignal", "compactProductSnapshotDaily",
   "applyManualBasisToSalesSummary", "buildHistoryObservations",
@@ -23,6 +24,8 @@ const context = vm.createContext({
   COMPANY_PRODUCT_SNAPSHOT_DAILY_LIMIT: 64,
   COLLECTION_PURPOSES: { revenue_detail: "상세정보 수집" },
   crypto: require("node:crypto"),
+  extractNaverPlaceId: (item) => item.placeId || item.place_id || "",
+  extractBookingBusinessId: (item) => item.bookingBusinessId || "",
   runCollectionDbRoute: () => ({ key: "test", label: "test" }),
   normalizeCollectionPurpose: () => "revenue_detail",
   compactKeyword: (value) => String(value || "").replace(/\s+/g, ""),
@@ -136,5 +139,63 @@ assert.equal(restoredLodging.sold, 2, "unverified occupancy does not make an evi
 assert.equal(restoredLodging.estimatedRevenue, 200000);
 assert.equal(restoredLodging.unverifiedOccupied, 3);
 assert.equal(restored.daily.find((row) => row.date === "2026-09-26").sold, 0);
+
+const fixedFixture = {
+  inventoryEvidence: { version: 3, lodging: { rows: [
+    { date: "2026-09-26", total: 10, rawTotal: 3, available: 0, sold: 10,
+      publicBookings: 3, phoneBookings: 7, sharedDayUseExcluded: 0, unknownUnavailable: 0,
+      estimatedRevenue: 3200000, publicRevenue: 960000, phoneRevenue: 2240000,
+      pricedSoldOut: 10, missingPriceSoldOut: 0, inventoryShortfall: 7 },
+    { date: "2026-09-27", total: 10, rawTotal: 10, available: 6, sold: 2,
+      publicBookings: 1, phoneBookings: 1, sharedDayUseExcluded: 2, unknownUnavailable: 0,
+      estimatedRevenue: 400000, publicRevenue: 200000, phoneRevenue: 200000,
+      pricedSoldOut: 2, missingPriceSoldOut: 0, inventoryShortfall: 0 }
+  ] }, dayUse: null }
+};
+const fixedSeries = context.historySeriesForItem(fixedFixture, "lodging", "2026-09-26");
+const fixedSignal = context.summarizeProductSalesSignal(fixedSeries);
+assert.equal(fixedSignal.totalSupply, 20);
+assert.equal(fixedSignal.totalSold, 12);
+assert.equal(fixedSignal.phoneBookings, 8);
+assert.equal(fixedSignal.publicBookings, 4);
+assert.equal(fixedSignal.sharedDayUseExcluded, 2);
+assert.equal(fixedSignal.averageRate, 0.6);
+const fixedDaily = context.compactProductSnapshotDaily(fixedFixture, {}, []);
+assert.equal(fixedDaily[0].inventoryEvidenceVersion, 3);
+assert.equal(fixedDaily[0].offlineReserved, 7);
+assert.equal(fixedDaily[0].phoneRevenue, 2240000);
+assert.equal(fixedDaily[1].sharedDayUseExcluded, 2);
+assert.equal(fixedDaily[1].sold, 2, "shared day-use is not reintroduced through total minus available");
+const fixedRecorded = context.buildHistoryObservations({
+  run: { id: "fixed_run", checkIn: "2026-09-26" },
+  availability: { items: [{ ...fixedFixture, name: "시즌 테스트", companyId: "cmp_fixed" }] }
+}, "2026-09-21T08:10:00.000Z");
+assert.equal(fixedRecorded[0].phoneBookings, 7);
+assert.equal(fixedRecorded[0].inventoryEvidenceVersion, 3);
+const fixedRestored = context.companyHistoryDailyFallback({ companyId: "cmp_fixed" }, fixedRecorded);
+assert.equal(fixedRestored.daily[0].sold, 10);
+assert.equal(fixedRestored.daily[0].phoneBookings, 7);
+assert.equal(fixedRestored.daily[1].sharedDayUseExcluded, 2);
+assert.equal(fixedRestored.daily[1].sold, 2);
+const missingFixed = context.summarizeProductSalesSignal([
+  ...fixedSeries,
+  { inventoryEvidenceVersion: 3, stayDate: "2026-09-28", total: 10, missing: true, unknownUnavailable: 10 }
+]);
+assert.equal(missingFixed.totalSupply, 30, "a failed day does not shrink maximum-room capacity");
+assert.equal(missingFixed.totalSold, 12, "a failed day is not a telephone booking");
+assert.equal(missingFixed.averageRate, null);
+const capacityCompanies = [{
+  companyId: "cmp_fixed", placeIds: ["10"], bookingBusinessIds: ["100"], inventory: {
+    latest: { stockBasis: { lodgingMaxTotal: 8 } },
+    snapshots: [{ stockBasis: { lodgingMaxTotal: 10 } }]
+  }
+}, { companyId: "cmp_other", placeIds: ["20"], bookingBusinessIds: ["200"], inventory: {
+  latest: { stockBasis: { lodgingMaxTotal: 50 } }
+} }];
+const fixedInput = { placeId: "10", bookingBusinessId: "100", name: "same name" };
+assert.equal(context.withCompanyInventoryCapacity(fixedInput, capacityCompanies).inventoryCapacityBaseline.lodging, 10);
+assert.equal(context.withCompanyInventoryCapacity({ name: "same name" }, capacityCompanies).inventoryCapacityBaseline, undefined);
+assert.equal(context.withCompanyInventoryCapacity({ placeId: "10", bookingBusinessId: "200" }, capacityCompanies).inventoryCapacityBaseline, undefined);
+assert.equal(fixedInput.inventoryCapacityBaseline, undefined);
 
 console.log("Inventory evidence server projection tests passed");

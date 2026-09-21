@@ -2,6 +2,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { inspectManifest } = require("./daily_collection_quality.cjs");
+const { applyInventoryEvidence, productEvidence } = require("./inventory_estimation.cjs");
 const SCHEDULED_COLLECTION = process.env.SCHEDULED_COLLECTION === "1";
 const scheduledCollectionDiagnostics = {
   naverScheduleRequested: 0,
@@ -1968,34 +1969,24 @@ function classifyNaverBookingList(items, schedules) {
 }
 
 function scheduleQuantityProfile(schedule, listType) {
-  const parsedStock = asStockNumber(schedule.stock);
-  const stock = parsedStock !== null && parsedStock >= 0 ? parsedStock : null;
-  const parsedBookingCount = asStockNumber(schedule.bookingCount);
-  const bookingCount = Math.max(0, parsedBookingCount || 0);
-  const occupiedBookingCount = Math.max(0, asStockNumber(schedule.occupiedBookingCount) || 0);
-  const price = asStockNumber(schedule.price);
+  // This is the observed product view. The common company/day calculator adds
+  // the maximum-capacity estimate only after lodging and day-use are collected.
+  const collectionFailed = Boolean(schedule.collectionFailed || (schedule.errors && (!Array.isArray(schedule.errors) || schedule.errors.length)));
+  const quantity = productEvidence({ ...schedule, listType, collectionFailed });
   const open = schedule.open !== false && schedule.isBusinessDay !== false && schedule.isSaleDay !== false;
-  const perRoom = listType === "객실별 예약리스트";
-  const observed = stock !== null && parsedBookingCount !== null && parsedBookingCount >= 0;
-  const observedTotal = observed ? (perRoom && stock > 0 ? 1 : stock) : 0;
-  // bookingCount is explicit reservation evidence. Occupied/shared-room blocks and
-  // unavailable channel stock are not proof of another paid reservation.
-  const soldOut = observed ? bookingCount : 0;
-  const total = Math.max(observedTotal, soldOut);
-  const available = observed && open ? Math.min(total, Math.max(0, observedTotal - soldOut - occupiedBookingCount)) : 0;
   return {
-    total,
-    rawTotal: observedTotal,
-    available,
-    soldOut,
-    price,
+    total: quantity.total,
+    rawTotal: quantity.rawTotal,
+    available: quantity.available,
+    soldOut: quantity.sold,
+    price: quantity.price,
     open,
-    stockObserved: stock !== null,
-    inventoryObserved: observed,
-    unverifiedOccupied: occupiedBookingCount,
-    unverifiedUnavailable: Math.max(0, total - available - soldOut),
-    inventoryConflict: observed && bookingCount > observedTotal,
-    calculationVersion: "booking-evidence-v2"
+    stockObserved: quantity.stockObserved,
+    inventoryObserved: quantity.observed,
+    unverifiedOccupied: quantity.unverifiedOccupied,
+    unverifiedUnavailable: quantity.unverifiedUnavailable,
+    inventoryConflict: quantity.inventoryConflict,
+    calculationVersion: "booking-observation-v3"
   };
 }
 
@@ -2038,6 +2029,9 @@ function compactNaverScheduleDetail(schedule, listType = "", date = CHECK_IN, av
     salesEvidence: "bookingCount",
     price: quantity.price,
     open: quantity.open,
+    isBusinessDay: schedule.isBusinessDay,
+    isSaleDay: schedule.isSaleDay,
+    collectionFailed: Boolean(schedule.collectionFailed || (schedule.errors && (!Array.isArray(schedule.errors) || schedule.errors.length))),
     couponStatus: schedule.couponStatus || "",
     couponNames: schedule.couponNames || ""
   };
@@ -2400,14 +2394,13 @@ function operatingTotalBasisFromTotals(totals = [], basisTotal = 0) {
   const frequency = new Map();
   validTotals.forEach((value) => frequency.set(value, (frequency.get(value) || 0) + 1));
   const maxTotalDays = frequency.get(basisTotal) || 0;
-  const mostFrequent = [...frequency.entries()].sort((left, right) => right[1] - left[1] || right[0] - left[0])[0];
-  const operatingTotal = mostFrequent ? mostFrequent[0] : basisTotal;
-  const operatingTotalDays = mostFrequent ? mostFrequent[1] : maxTotalDays;
+  const operatingTotal = basisTotal;
+  const operatingTotalDays = maxTotalDays;
   return {
     operatingTotal,
     operatingTotalDays,
     structuralBlockedTotal: 0,
-    stockBasisType: "booking_evidence_v2"
+    stockBasisType: "observed_product_daily_sum"
   };
 }
 
@@ -2490,7 +2483,7 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
       offlineReserved: 0,
       inventoryShortfall,
       unallocatedInventoryShortfall: shortfall.unallocated,
-      calculationVersion: "booking-evidence-v2",
+      calculationVersion: "booking-observation-v3",
       rate,
       estimatedRevenue: Number(item.estimatedRevenue || 0),
       pricedSoldOut: Number(item.pricedSoldOut || 0),
@@ -2543,7 +2536,7 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
     ? valid.map((item) => `${shortDate(item.date)} 관측 ${item.rawAvailable}/${item.rawTotal}${item.inventoryShortfall ? ` 재고 차이 ${item.inventoryShortfall}${unitLabel}(판매 미확인)` : ""}${item.rawTotal > operatingTotal ? ` 반복 관측값 초과 ${item.rawTotal - operatingTotal}${unitLabel}` : ""}`).join(", ")
     : "";
   const basisRule = basisTotal
-    ? `네이버 채널 최대 관측 재고 ${basisTotal}${unitLabel}(${maxTotalDays}일 확인) · 반복 관측값 ${operatingTotal}${unitLabel} · 실제 객실 수 아님${totalInventoryShortfall ? ` · 재고 차이 ${totalInventoryShortfall}${unitLabel}는 판매 여부 미확인` : ""}`
+    ? `네이버 채널 최대 관측 수량 ${basisTotal}${unitLabel}(${maxTotalDays}일 확인) · 추정 전 관측 집계${totalInventoryShortfall ? ` · 최대값 대비 수량 차이 ${totalInventoryShortfall}${unitLabel}` : ""}`
     : "";
   return {
     days: observedDays,
@@ -2562,7 +2555,7 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
     totalInventoryShortfall,
     totalUnverifiedOccupied,
     observedDays,
-    calculationVersion: "booking-evidence-v2",
+    calculationVersion: "booking-observation-v3",
     basisRule,
     avgAvailable,
     minAvailable,
@@ -2587,6 +2580,110 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
     dates: valid,
     productDetails: valid.flatMap((item) => item.productDetails || []),
   };
+}
+
+function applyCrawlerInventoryEvidence(result, placeId) {
+  const item = applyInventoryEvidence({
+    placeId,
+    itemDetails: result.itemDetails || [],
+    weeklyProductDetails: result.weekly?.productDetails || [],
+    dayUseWeeklyProductDetails: result.dayUseWeekly?.productDetails || [],
+    weeklyDays: result.weekly?.requestedDays ?? (result.itemDetails?.length ? 1 : 0),
+    dayUseWeeklyDays: result.dayUseWeekly?.requestedDays ?? (result.itemDetails?.length ? 1 : 0),
+    dayUseItemCount: result.dayUseItemCount,
+    inventoryCapacityBaseline: result.inventoryCapacityBaseline,
+    sharedRooms: result.sharedRooms,
+  });
+  if (!item.inventoryEvidence) return result;
+  const updated = { ...result, inventoryEvidence: item.inventoryEvidence };
+  for (const kind of ["lodging", "dayUse"]) {
+    const summary = item.inventoryEvidence[kind];
+    if (!summary) continue;
+    const prefix = kind === "lodging" ? "weekly" : "dayUseWeekly";
+    const resultKey = kind === "lodging" ? "weekly" : "dayUseWeekly";
+    const previous = result[resultKey];
+    if (previous) {
+      const originals = new Map((previous.dates || []).map(row => [row.date, row]));
+      const dates = summary.rows.map(row => ({
+        ...(originals.get(row.date) || {}), ...row,
+        soldOut: row.sold,
+        rawAvailable: row.available,
+        offlineReserved: row.phoneBookings,
+        offlineEstimatedRevenue: row.phoneRevenue,
+        calculationVersion: "maximum-capacity-v3",
+      }));
+      updated[resultKey] = {
+        ...previous,
+        dates,
+        // Product details remain the provider-observed view; estimated room/day
+        // totals live beside it and must never overwrite stock/bookingCount.
+        productDetails: previous.productDetails,
+        days: item[prefix + "Days"],
+        observedDays: dates.filter(row => !row.missing).length,
+        basisTotal: item[prefix + "BasisTotal"],
+        operatingTotal: item[prefix + "OperatingTotal"],
+        operatingTotalDays: dates.filter(row => row.rawTotal === summary.operatingTotal && !row.partial).length,
+        structuralBlockedTotal: item[prefix + "StructuralBlockedTotal"],
+        stockBasisType: item[prefix + "StockBasisType"],
+        minTotal: item[prefix + "MinTotal"],
+        maxTotal: item[prefix + "MaxTotal"],
+        maxTotalDays: dates.filter(row => row.rawTotal === summary.operatingTotal && !row.partial).length,
+        totalVarianceGap: item[prefix + "TotalVarianceGap"],
+        totalOfflineReserved: summary.phoneBookings,
+        publicBookings: summary.publicBookings,
+        phoneBookings: summary.phoneBookings,
+        sharedDayUseExcluded: summary.sharedDayUseExcluded,
+        unknownUnavailable: summary.unknownUnavailable,
+        totalInventoryShortfall: summary.inventoryShortfall,
+        totalUnverifiedOccupied: summary.unverifiedOccupied,
+        totalSoldOut: summary.sold,
+        totalStock: summary.total,
+        totalEstimatedRevenue: summary.revenue,
+        totalAdjustedEstimatedRevenue: item[prefix + "AdjustedRevenue"],
+        totalMissingPriceEstimatedRevenue: item[prefix + "MissingPriceEstimatedRevenue"],
+        revenuePrecisionRate: item[prefix + "RevenuePrecisionRate"],
+        totalPricedSoldOut: summary.pricedSoldOut,
+        totalMissingPriceSoldOut: summary.missingPriceSoldOut,
+        avgSoldUnitPrice: item[prefix + "AvgSoldUnitPrice"],
+        avgReservationRate: item[prefix + "AvgReservationRate"],
+        soldOutDays: dates.filter(row => row.total > 0 && !row.partial && row.sold >= row.total).length,
+        basisRule: item[prefix + "BasisRule"],
+        detail: item[prefix + "Detail"],
+        reservationRateDetail: item[prefix + "ReservationRateDetail"],
+        revenueDetail: item[prefix + "RevenueDetail"],
+        revenueByDayTypeDetail: item[prefix + "RevenueByDayType"],
+        offlineReservationDetail: item[prefix + "OfflineReservationDetail"],
+        totalVarianceDetail: item[prefix + "RawStockVariance"],
+        calculationVersion: "maximum-capacity-v3",
+        summary: `${previous.requestedDays}일 조회 · 수량 확인 ${dates.filter(row => !row.partial).length}일 · 최대 객실 수 기준`,
+      };
+    }
+    const basis = summary.rows.find(row => row.date === CHECK_IN);
+    if (!basis) continue;
+    const base = kind === "lodging" ? "night" : "dayUse";
+    updated[base + "TotalStock"] = basis.total;
+    updated[base + "AvailableStock"] = basis.available;
+    updated[base + "AvailabilityRate"] = basis.total && !basis.partial ? basis.available / basis.total : null;
+    updated[base + "EstimatedRevenue"] = basis.estimatedRevenue;
+    updated[base + "AdjustedEstimatedRevenue"] = basis.estimatedRevenue;
+    updated[base + "MissingPriceEstimatedRevenue"] = 0;
+    updated[base + "PricedSoldOut"] = basis.pricedSoldOut;
+    updated[base + "MissingPriceSoldOut"] = basis.missingPriceSoldOut;
+    updated[base + "RevenuePrecisionRate"] = basis.sold ? basis.pricedSoldOut / basis.sold : null;
+    updated[base + "AvgSoldUnitPrice"] = basis.pricedSoldOut ? Math.round(basis.estimatedRevenue / basis.pricedSoldOut) : null;
+    if (kind === "lodging") {
+      updated.totalRooms = basis.total;
+      updated.availableRooms = basis.available;
+      updated.rate = updated.nightAvailabilityRate;
+      updated.nightSoldOutStock = basis.sold;
+      updated.nightSoldOutRate = basis.rate;
+      updated.productTypeSummary = `숙박 총객실 ${summary.operatingTotal}실 · 공개 예약 ${basis.publicBookings}실 · 전화·타채널 예약 추정 ${basis.phoneBookings}실${basis.sharedDayUseExcluded ? ` · 데이유즈 제외 ${basis.sharedDayUseExcluded}실` : ""} · 데이유즈 상품 ${result.dayUseItemCount || 0}종`;
+    }
+  }
+  updated.inventoryScope = "최대 객실 수 기준 추정 · 네이버 공개 수량 별도 보존";
+  updated.inventoryMemo = "총객실은 최대 관측 수량으로 유지합니다. 예약 불가 수량 중 공개 예약과 같은 날 데이유즈 이용을 뺀 수량은 전화·타채널 예약으로 추정합니다. 수집 실패는 예약으로 만들지 않으며 실제 결제 내역을 뜻하지 않습니다.";
+  updated.evidence = [updated.inventoryMemo, item.weeklyBasisRule].filter(Boolean).join(" · ");
+  return updated;
 }
 
 async function collectNaverBookingAvailability(placeId, cache, options = {}) {
@@ -2664,7 +2761,7 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
     ? await collectWeeklyNaverAvailability(booking.bookingBusinessId, dayUseItems, dayUseSchedules, BOOKING_RANGE_DAYS, "회")
     : null;
 
-  const result = {
+  let result = {
     status: itemResult.errors
       ? "객실목록 일부 오류"
       : !nightItems.length && dayUseItems.length && !unknownItems.length
@@ -2687,6 +2784,7 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
     weekly,
     dayUseWeekly,
   };
+  result = applyCrawlerInventoryEvidence(result, placeId);
   if (fallbackBooking?.bookingBusinessId) {
     result.inventoryMemo = [
       result.inventoryMemo,
@@ -4248,12 +4346,12 @@ async function main() {
 - 예약가능률은 채널 통합 재고로 단정하지 않고, 네이버/야놀자/NOL/ONDA/떠나요의 채널별 노출·재고 기준을 분리해 기록한다.
 - 네이버의 "숙박상품수"는 상품종류 수이고, "숙박확인재고수"는 예약리스트 유형에 따라 객실상품/묶음상품/재고수량 단위로 계산한다. 실제 전체 보유 객실수로 단정하지 않는다.
 - 객실번호 범위형 묶음 상품(예: 1~3, 4~7)은 해당 날짜에 네이버에서 확인한 재고와 상품 개수를 구분한다. 상품명이나 재고만으로 실제 객실 수를 확정하지 않는다.
-- "숙박예약가능률"은 판매율이 아니다. 기존 "숙박판매완료율" 필드에는 직접 예약 수량이 관측 재고에서 차지하는 비율을 기록하며, 결제 완료나 실제 매출을 뜻하지 않는다.
+- "숙박예약가능률"은 예약 가능한 수량 / 고정 총객실 수이다. 기존 "숙박판매완료율" 필드는 공개 예약과 전화·타채널 예약 추정 합계의 비율이며, 결제 완료나 실제 매출을 뜻하지 않는다.
 - 데이유즈/캠프닉 상품은 1박 예약가능률 계산에서 제외하고, "데이유즈상품수/데이유즈확인재고수"로 같은 당일상품 카테고리에 별도 기록한다.
-- 기간 총량은 날짜별 관측 수량을 합산한다. 반복 관측값이나 최대 관측값을 실제 객실 수로 쓰거나 날짜별 분모를 늘리지 않는다.
-- 재고가 줄거나 판매가 중지된 수량은 판매 여부를 알 수 없는 재고 차이로 남기며, 오프라인 예약이나 매출로 더하지 않는다.
-- 직접 예약 필드(bookingCount)만 예약 수량에 사용한다. 점유 필드(occupiedBookingCount)는 공유 객실 차단일 수 있으므로 매출에 포함하지 않는다.
-- 숙박과 데이유즈에 같은 수량의 예약이 보여도 중복 예약이라는 증거 없이는 서로 빼지 않는다.
+- 총객실 수는 동일 업체의 최대 관측 수량을 기준으로 유지한다. 확인된 실제 객실 수가 더 크면 이를 하한으로 사용한다. 기간 총량은 고정 총객실 수 × 조회 일수이며 네이버 원문 수량은 따로 보존한다.
+- 총객실 수에서 예약 가능 수량과 공개 예약을 뺀 부분은 전화·타채널 예약으로 추정한다. 공개 예약이 0이어도 예약 가능한 객실이 있으면 그 수량은 예약으로 세지 않는다. 수집 실패·누락은 전화예약으로 만들지 않는다.
+- 직접 예약 필드(bookingCount)는 공개 예약으로 유지하며 전화·타채널 추정과 구분한다. 판매 닫힘의 실제 사유나 결제 내역까지 확인한 것은 아니다.
+- 숙박·데이유즈를 병행하면 같은 날짜 데이유즈의 공개 예약 수량을 전화·타채널 추정에서만 제외한다. 공유 여부가 미확인이면 함께 쓴다고 가정한 추정임을 표시하며, 별도 객실이 확인되면 제외하지 않는다. 숙박 공개 예약과 예약 가능 수량은 바꾸지 않는다.
 - 가격이 확인된 예약만 매출 추정에 사용한다. 예약은 있지만 가격이 없는 수량은 별도로 남기며 평균 가격으로 채우지 않는다.
 - 실제 전체객실수는 네이버 노출 재고, 야놀자/NOL, ONDA/떠나요, 사업자 직접 정보가 서로 다를 수 있으므로 검증 메모에 분리 기록한다.
 - 채널수는 목록 검색에서 확인되지 않으면 "미확인"으로 남기고, 전 채널 연동 여부와 네이버 분리 가능성을 별도 메모한다.
@@ -4269,7 +4367,7 @@ async function main() {
 - 판정 원칙: 네이버 공개 예약 URL에 허용된 외부 OTA 도메인이 있을 때만 노출 확인으로 저장한다. 대행사명만 파트너 운영 신호로 쓰며, 대행사 ID는 해석하지 않는 원시 식별값으로만 보관한다.
 - 예약재고: 상세 범위 ${naverBookingStock.detailRankRanges}, ${naverBookingStock.collected}개 확인, ${naverBookingStock.successful}건 성공, 범위 제외 ${naverBookingStock.skippedByRank}건
 - 입력기간 예약재고 테스트: ${BOOKING_RANGE_DAYS > 1 ? `${BOOKING_RANGE_DAYS}일, 상세 대상 중 최대 ${BOOKING_RANGE_PLACE_LIMIT}개 업체만 날짜별 잔여 반복 확인` : "비활성"}
-- 예약가능률 산식: 객실별 예약리스트는 예약가능 객실상품 수 / 노출 객실상품 수, 객실 묶음 상품리스트와 객실 종류별 리스트는 숙박 상품에 한해 \`sum(stock - bookingCount - occupiedBookingCount) / sum(stock)\`
+- 예약가능률 산식: 관측된 숙박 예약 가능 수량 / 고정 총객실 수. 예약 추정률은 (공개 예약 + 전화·타채널 예약 추정) / 고정 총객실 수이며 데이유즈 공유분을 추정에서 제외한다.
 - 네이버 상품 구분: 1박 조건은 \`ACCOMMODATION_NIGHT\` 숙박 상품만 예약가능률에 반영하고, \`ACCOMMODATION_DAY_USE\` 또는 상품명에 캠프닉/당일 이용 신호가 있는 상품은 데이유즈/캠프닉 상품종류와 재고합계를 별도 카운트로 분리
 - 네이버 분리 기준: ONDA/떠나요 등 전 채널 연동 재고와 섞지 않고 네이버예약 재고를 독립 확인
 

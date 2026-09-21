@@ -8981,15 +8981,23 @@ function singleAvailabilityRow(stayDate, available, total) {
   }];
 }
 
+function inventoryEstimateBreakdown(row = {}) {
+  const fields = ["rawTotal", "publicBookings", "phoneBookings", "sharedDayUseExcluded", "unknownUnavailable", "publicRevenue", "phoneRevenue", "phonePricedBookings", "phoneMissingPriceBookings"];
+  return {
+    ...Object.fromEntries(fields.filter((field) => Object.hasOwn(row, field)).map((field) => [field, productSnapshotNumber(row[field])])),
+    ...(Object.hasOwn(row, "sharedDayUseIncomplete") ? { sharedDayUseIncomplete: Boolean(row.sharedDayUseIncomplete) } : {})
+  };
+}
+
 function historySeriesForItem(item, productType, checkIn) {
-  if (item.inventoryEvidence?.version === 2) {
+  if (item.inventoryEvidence?.version >= 2) {
     const evidence = productType === "dayuse" ? item.inventoryEvidence.dayUse : item.inventoryEvidence.lodging;
     return (Array.isArray(evidence?.rows) ? evidence.rows : []).map((row) => ({
       ...row,
       stayDate: row.date,
       label: row.date,
-      offlineReserved: 0,
-      inventoryEvidenceVersion: 2
+      offlineReserved: Number(row.phoneBookings || 0),
+      inventoryEvidenceVersion: item.inventoryEvidence.version
     }));
   }
   if (productType === "dayuse") {
@@ -9031,8 +9039,12 @@ function toNullableRate(value) {
 function normalizeSignalRows(rows = []) {
   return rows
     .map((row) => {
-      if (row.inventoryEvidenceVersion === 2) {
-        if (row.missing) return null;
+      if (row.inventoryEvidenceVersion >= 2) {
+        if (row.missing && row.inventoryEvidenceVersion < 3) return null;
+        if (row.missing && row.inventoryEvidenceVersion >= 3) return {
+          ...row, stayDate: row.stayDate || row.date || "", dayOfWeek: dayOfWeekFromDate(row.stayDate || row.date),
+          total: productSnapshotNumber(row.total) || 0, available: null, sold: 0, rate: null
+        };
         const total = productSnapshotNumber(row.total);
         const available = productSnapshotNumber(row.available);
         const sold = productSnapshotNumber(row.sold);
@@ -9044,7 +9056,7 @@ function normalizeSignalRows(rows = []) {
           total,
           available,
           sold,
-          rate: total > 0 && sold <= total && !row.inventoryConflict ? sold / total : null
+          rate: total > 0 && sold <= total && !row.inventoryConflict && !(row.inventoryEvidenceVersion >= 3 && (row.partial || row.unknownUnavailable > 0)) ? sold / total : null
         };
       }
       const total = Number(row.total);
@@ -9081,11 +9093,11 @@ function summarizeProductSalesSignal(rows = []) {
   const saturdayRate = averageSignalRate(byDay(6));
   const sundayRate = averageSignalRate(byDay(0));
   const weekdayRate = averageSignalRate(weekdayRows);
-  const evidenceBased = rows.some((row) => row.inventoryEvidenceVersion === 2);
+  const evidenceBased = rows.some((row) => row.inventoryEvidenceVersion >= 2);
   const totalSupply = normalized.reduce((sum, row) => sum + row.total, 0);
   const totalSold = normalized.reduce((sum, row) => sum + row.sold, 0);
   const overallRate = evidenceBased
-    ? (totalSupply > 0 && totalSold <= totalSupply && !normalized.some((row) => row.inventoryConflict)
+    ? (totalSupply > 0 && totalSold <= totalSupply && !normalized.some((row) => row.inventoryConflict || (row.inventoryEvidenceVersion >= 3 && (row.partial || row.missing || row.unknownUnavailable > 0)))
       ? toNullableRate(totalSold / totalSupply) : null)
     : averageSignalRate(normalized);
   const anchorRate = saturdayRate ?? overallRate ?? null;
@@ -9093,6 +9105,10 @@ function summarizeProductSalesSignal(rows = []) {
     days: normalized.length,
     totalSupply,
     totalSold,
+    publicBookings: normalized.reduce((sum, row) => sum + Number(row.publicBookings ?? row.sold ?? 0), 0),
+    phoneBookings: normalized.reduce((sum, row) => sum + Number(row.phoneBookings || 0), 0),
+    sharedDayUseExcluded: normalized.reduce((sum, row) => sum + Number(row.sharedDayUseExcluded || 0), 0),
+    partial: normalized.some((row) => row.partial || row.missing || row.inventoryConflict || (row.inventoryEvidenceVersion >= 3 && row.unknownUnavailable > 0)),
     averageRate: overallRate,
     fridayRate,
     saturdayRate,
@@ -9239,6 +9255,7 @@ function companyRevenueSnapshotPart(item = {}, config = {}) {
     byDayType: item[config.byDayType] || "",
     detail: item[config.detail] || "",
     offlineDetail: item[config.offlineDetail] || "",
+    ...(item.inventoryEvidence?.version >= 3 ? inventoryEstimateBreakdown(config.weeklyRevenue === "dayUseWeeklyEstimatedRevenue" ? item.inventoryEvidence.dayUse || {} : item.inventoryEvidence.lodging || {}) : {}),
     basis: hasWeekly ? "range" : "basis"
   };
 }
@@ -9548,7 +9565,7 @@ function parseProductSnapshotRevenueDetail(detail = "", checkIn = "", productTyp
 }
 
 function compactProductSnapshotDaily(item = {}, run = {}, observations = []) {
-  if (item.inventoryEvidence?.version === 2) {
+  if (item.inventoryEvidence?.version >= 2) {
     return ["lodging", "dayuse"].flatMap((productType) => {
       const part = productType === "dayuse" ? item.inventoryEvidence.dayUse : item.inventoryEvidence.lodging;
       return (Array.isArray(part?.rows) ? part.rows : []).map((row) => {
@@ -9556,7 +9573,7 @@ function compactProductSnapshotDaily(item = {}, run = {}, observations = []) {
         if (!date) return null;
         const productRows = observations.filter((observation) => observation.date === date && observation.productType === productType);
         const prices = productRows.map((observation) => observation.price).filter((price) => Number.isFinite(price) && price > 0);
-        const total = row.missing ? null : productSnapshotNumber(row.total);
+        const total = row.missing && item.inventoryEvidence.version < 3 ? null : productSnapshotNumber(row.total);
         const sold = row.missing ? null : productSnapshotNumber(row.sold);
         return {
           date,
@@ -9566,7 +9583,7 @@ function compactProductSnapshotDaily(item = {}, run = {}, observations = []) {
           total,
           available: row.missing ? null : productSnapshotNumber(row.available),
           sold,
-          reservationRate: total !== null && total > 0 && sold !== null && sold >= 0 && sold <= total && !row.inventoryConflict
+          reservationRate: total !== null && total > 0 && sold !== null && sold >= 0 && sold <= total && !row.inventoryConflict && !(item.inventoryEvidence.version >= 3 && (row.partial || row.unknownUnavailable > 0))
             ? Number((sold / total).toFixed(4)) : null,
           minPrice: prices.length ? Math.min(...prices) : null,
           maxPrice: prices.length ? Math.max(...prices) : null,
@@ -9579,8 +9596,9 @@ function compactProductSnapshotDaily(item = {}, run = {}, observations = []) {
           inventoryConflict: Boolean(row.inventoryConflict),
           partial: Boolean(row.partial),
           missing: Boolean(row.missing),
-          offlineReserved: 0,
-          inventoryEvidenceVersion: 2,
+          offlineReserved: Number(row.phoneBookings || 0),
+          ...inventoryEstimateBreakdown(row),
+          inventoryEvidenceVersion: item.inventoryEvidence.version,
           revenueType: "estimated"
         };
       }).filter(Boolean);
@@ -9742,7 +9760,7 @@ function compactCompanyProductSnapshot(item = {}, run = {}, collectedAt = "") {
   const dates = daily.map((row) => row.date).filter(Boolean).sort();
   return {
     schemaVersion: 1,
-    inventoryEvidenceVersion: item.inventoryEvidence?.version === 2 ? 2 : null,
+    inventoryEvidenceVersion: item.inventoryEvidence?.version >= 2 ? item.inventoryEvidence.version : null,
     source: "naver_public_observation",
     revenueType: "estimated",
     actualRevenueAvailable: false,
@@ -10483,7 +10501,7 @@ function companyProductSnapshotSummary(snapshot = null) {
   if (!snapshot || typeof snapshot !== "object") return null;
   return {
     schemaVersion: snapshot.schemaVersion || 1,
-    inventoryEvidenceVersion: snapshot.inventoryEvidenceVersion === 2 ? 2 : null,
+    inventoryEvidenceVersion: snapshot.inventoryEvidenceVersion >= 2 ? snapshot.inventoryEvidenceVersion : null,
     source: snapshot.source || "",
     revenueType: snapshot.revenueType || "estimated",
     actualRevenueAvailable: Boolean(snapshot.actualRevenueAvailable),
@@ -11971,12 +11989,12 @@ function applyCompanyManualCorrection(item, company) {
     const operating = Math.round(lodgingBasis);
     const candidate = maxPositiveNumber(item.weeklyBasisTotal, item.weeklyMaxTotal, operating) || operating;
     const structural = Math.max(0, candidate - operating);
-    next.weeklyBasisTotal = candidate;
-    next.weeklyOperatingTotal = operating;
-    next.weeklyStructuralBlockedTotal = structural || null;
-    next.weeklyStockBasisType = structural ? "manual_operating_reduced" : "manual_operating";
-    next.weeklyBasisRule = stockBasisRule(item.weeklyBasisRule || "", candidate, operating, structural, item.weeklyOfflineReservedTotal, "개");
-    next.nightTotalStock = operating;
+    next.weeklyBasisTotal = item.inventoryEvidence?.version >= 3 ? item.weeklyBasisTotal : candidate;
+    next.weeklyOperatingTotal = item.inventoryEvidence?.version >= 3 ? item.weeklyOperatingTotal : operating;
+    next.weeklyStructuralBlockedTotal = item.inventoryEvidence?.version >= 3 ? 0 : (structural || null);
+    next.weeklyStockBasisType = item.inventoryEvidence?.version >= 3 ? item.weeklyStockBasisType : (structural ? "manual_operating_reduced" : "manual_operating");
+    next.weeklyBasisRule = item.inventoryEvidence?.version >= 3 ? item.weeklyBasisRule : stockBasisRule(item.weeklyBasisRule || "", candidate, operating, structural, item.weeklyOfflineReservedTotal, "개");
+    next.nightTotalStock = item.inventoryEvidence?.version >= 3 ? item.nightTotalStock : operating;
     next.manualLodgingBasisTotal = operating;
     next.manualCorrectionApplied = true;
   }
@@ -13187,9 +13205,10 @@ function companyPerformanceTrend(company = {}, observations = []) {
       const signal = snapshot.salesSignal || {};
       const lodging = signal.lodging || {};
       const dayUse = signal.dayUse || {};
+      const maximumPolicy = snapshot.inventoryEvidenceVersion >= 3 || snapshot.productSnapshot?.inventoryEvidenceVersion >= 3;
       const lodgingRate = snapshotNumber(lodging.averageRate);
       const dayUseRate = snapshotNumber(dayUse.averageRate);
-      const observedTypes = [lodging, dayUse].filter((part) =>
+      const observedTypes = (maximumPolicy ? [lodging] : [lodging, dayUse]).filter((part) =>
         Number(part.days || 0) > 0
         || Number(part.totalSupply || 0) > 0
         || Number(part.totalSold || 0) > 0
@@ -13205,7 +13224,8 @@ function companyPerformanceTrend(company = {}, observations = []) {
       const totalSold = hasCompleteSold
         ? soldValues.reduce((sum, value) => sum + value, 0)
         : null;
-      const combinedRate = totalSupply !== null
+      const incomplete = observedTypes.some((part) => part.partial);
+      const combinedRate = incomplete ? null : totalSupply !== null
         && totalSupply > 0
         && totalSold !== null
         ? Number((totalSold / totalSupply).toFixed(4))
@@ -13222,6 +13242,15 @@ function companyPerformanceTrend(company = {}, observations = []) {
         dayUseReservationRate: dayUseRate,
         totalSupply,
         totalSold,
+        ...(maximumPolicy ? {
+          inventoryEvidenceVersion: 3,
+          publicBookings: snapshotNumber(lodging.publicBookings),
+          phoneBookings: snapshotNumber(lodging.phoneBookings),
+          sharedDayUseExcluded: snapshotNumber(lodging.sharedDayUseExcluded),
+          dayUseBookings: snapshotNumber(dayUse.totalSold),
+          partial: incomplete,
+          reservationRateType: "lodging_maximum_capacity_estimate"
+        } : {}),
         estimatedRevenue: revenue.estimatedRevenue,
         confirmedPriceEstimatedRevenue: revenue.confirmedPriceEstimatedRevenue,
         missingPriceEstimatedRevenue: revenue.missingPriceEstimatedRevenue,
@@ -13324,7 +13353,7 @@ function companyHistoryDailyFallback(company = {}, observations = []) {
   const observedRows = [...latestByStayDate.entries()]
     .map(([key, row]) => {
       const [productType, date] = key.split(":");
-      const evidenceBased = row.inventoryEvidenceVersion === 2;
+      const evidenceBased = row.inventoryEvidenceVersion >= 2;
       const supplyValue = productSnapshotNumber(row.supply ?? row.total);
       const total = supplyValue !== null && (supplyValue > 0 || (evidenceBased && supplyValue === 0)) ? Math.round(supplyValue) : null;
       const availableValue = productSnapshotNumber(row.available);
@@ -13349,7 +13378,7 @@ function companyHistoryDailyFallback(company = {}, observations = []) {
       const price = priceValue !== null && priceValue > 0 ? Math.round(priceValue) : null;
       const estimatedRevenue = evidenceBased ? productSnapshotNumber(row.estimatedRevenue)
         : (sold !== null && price !== null ? Math.round(sold * price) : null);
-      const rate = total !== null && total > 0 && sold !== null && sold <= total && !row.inventoryConflict
+      const rate = total !== null && total > 0 && sold !== null && sold <= total && !row.inventoryConflict && !(row.inventoryEvidenceVersion >= 3 && (row.partial || row.missing || row.unknownUnavailable > 0))
         ? Number((sold / total).toFixed(4)) : null;
       return {
         date,
@@ -13371,11 +13400,14 @@ function companyHistoryDailyFallback(company = {}, observations = []) {
         actualRevenue: null,
         pricedSoldOut: evidenceBased ? productSnapshotNumber(row.pricedSoldOut) : (sold !== null && price !== null ? sold : null),
         missingPriceSoldOut: evidenceBased ? productSnapshotNumber(row.missingPriceSoldOut) : (sold !== null && price === null ? sold : null),
-        inventoryEvidenceVersion: evidenceBased ? 2 : null,
+        inventoryEvidenceVersion: evidenceBased ? row.inventoryEvidenceVersion : null,
+        ...(evidenceBased ? inventoryEstimateBreakdown(row) : {}),
         unverifiedOccupied: evidenceBased ? productSnapshotNumber(row.unverifiedOccupied) : null,
         inventoryShortfall: evidenceBased ? productSnapshotNumber(row.inventoryShortfall) : null,
         inventoryConflict: evidenceBased && Boolean(row.inventoryConflict),
-        offlineReserved: null,
+        partial: evidenceBased && Boolean(row.partial),
+        missing: evidenceBased && Boolean(row.missing),
+        offlineReserved: evidenceBased ? Number(row.phoneBookings || 0) : null,
         revenueType: "estimated",
         reservationRateType: "public_inventory_estimate",
         actualRevenueAvailable: false,
@@ -13433,6 +13465,7 @@ function companyHistoryDailyFallback(company = {}, observations = []) {
 }
 
 function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today = kstDate(0)) {
+  const estimateFields = ["publicBookings", "phoneBookings", "sharedDayUseExcluded", "unknownUnavailable", "publicRevenue", "phoneRevenue", "phonePricedBookings", "phoneMissingPriceBookings"];
   const isoDate = (value) => {
     const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (!match) return "";
@@ -13464,16 +13497,34 @@ function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today =
     const sold = productSnapshotNumber(row.sold);
     const estimatedRevenue = productSnapshotNumber(row.estimatedRevenue);
     const price = productSnapshotNumber(row.price ?? row.minPrice);
+    const evidenceVersion = productSnapshotNumber(row.inventoryEvidenceVersion);
+    const fixedPolicy = evidenceVersion >= 3;
+    const missing = Boolean(row.missing);
+    const partial = Boolean(row.partial || row.sharedDayUseIncomplete);
+    const inventoryConflict = Boolean(row.inventoryConflict);
+    const counts = Object.fromEntries(estimateFields.map((field) => [field, productSnapshotNumber(row[field])]));
+    const unpricedPhoneOnly = fixedPolicy && counts.phoneBookings > 0 && !(counts.publicBookings > 0)
+      && !(counts.phonePricedBookings > 0) && !(counts.phoneRevenue > 0);
     const existing = normalized.get(key);
     const next = {
       date,
       productType,
+      inventoryEvidenceVersion: evidenceVersion,
+      ...counts,
+      missing,
+      partial,
+      inventoryConflict,
+      sharedDayUseIncomplete: Boolean(row.sharedDayUseIncomplete),
       total: total !== null && total >= 0 ? total : null,
       sold: sold !== null && sold >= 0 ? sold : null,
       estimatedRevenue: estimatedRevenue !== null && estimatedRevenue >= 0 ? estimatedRevenue : null,
       price: price !== null && price > 0 ? price : null,
       priceEvidenceType: snapshot && price !== null && price > 0 ? "stay_date_observed_price" : (row.priceEvidenceType || "none"),
-      revenueEligible: snapshot && estimatedRevenue !== null && estimatedRevenue >= 0,
+      rateBlocked: fixedPolicy && (missing || partial || inventoryConflict || counts.unknownUnavailable > 0
+        || (Object.hasOwn(row, "reservationRate") && row.reservationRate === null)
+        || (Object.hasOwn(row, "saleRate") && row.saleRate === null)),
+      revenueEligible: snapshot && estimatedRevenue !== null && estimatedRevenue >= 0
+        && (!fixedPolicy || (!missing && !partial && !inventoryConflict && !unpricedPhoneOnly)),
       collectedAt: String(row.collectedAt || ""),
       collectedDate: row.collectedAt ? kstDayKeyFromValue(row.collectedAt) : isoDate(row.collectedDate),
       runId: String(row.runId || ""),
@@ -13491,10 +13542,20 @@ function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today =
     byDate.set(row.date, group);
   }
   const daily = [...byDate.values()].map((group) => {
-    const completeQuantity = group.rows.length > 0 && group.rows.every((row) => row.total !== null && row.sold !== null);
-    const total = completeQuantity ? group.rows.reduce((sum, row) => sum + row.total, 0) : null;
-    const sold = completeQuantity ? group.rows.reduce((sum, row) => sum + row.sold, 0) : null;
-    const revenueEligible = completeQuantity && group.rows.every((row) => row.sold === 0 || row.revenueEligible === true);
+    const fixedPolicy = group.rows.some((row) => row.inventoryEvidenceVersion >= 3);
+    // Shared day-use sessions are separate from room-night capacity and bookings.
+    const quantityRows = fixedPolicy ? group.rows.filter((row) => row.productType === "lodging") : group.rows;
+    const completeQuantity = quantityRows.length > 0 && quantityRows.every((row) => row.total !== null && row.sold !== null && !row.missing);
+    const total = quantityRows.length && quantityRows.every((row) => row.total !== null)
+      ? quantityRows.reduce((sum, row) => sum + row.total, 0) : null;
+    const sold = completeQuantity ? quantityRows.reduce((sum, row) => sum + row.sold, 0) : null;
+    const rateEligible = completeQuantity && total > 0 && sold <= total && !quantityRows.some((row) => row.rateBlocked);
+    const revenueEligible = group.rows.length > 0 && group.rows.every((row) => !row.missing && !row.partial && !row.inventoryConflict
+      && (row.sold === 0 || row.revenueEligible === true));
+    const breakdown = Object.fromEntries(estimateFields.map((field) => [field,
+      fixedPolicy && quantityRows.length && quantityRows.every((row) => row[field] !== null)
+        ? quantityRows.reduce((sum, row) => sum + row[field], 0) : null
+    ]));
     const estimatedRevenue = revenueEligible
       ? group.rows.reduce((sum, row) => sum + Number(row.estimatedRevenue || 0), 0)
       : null;
@@ -13503,12 +13564,19 @@ function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today =
       .at(-1) || {};
     return {
       date: group.date,
+      inventoryEvidenceVersion: fixedPolicy ? 3 : null,
+      ...breakdown,
       total,
       sold,
-      reservationRate: total !== null && total > 0 && sold !== null ? Number((sold / total).toFixed(4)) : null,
+      dayUseBookings: fixedPolicy ? group.rows.filter((row) => row.productType === "dayuse").reduce((sum, row) => sum + Number(row.publicBookings ?? row.sold ?? 0), 0) : null,
+      missing: quantityRows.some((row) => row.missing),
+      partial: quantityRows.some((row) => row.partial || row.rateBlocked),
+      inventoryConflict: quantityRows.some((row) => row.inventoryConflict),
+      reservationRate: rateEligible ? Number((sold / total).toFixed(4)) : null,
       estimatedRevenue,
-      rateEligible: total !== null && total > 0 && sold !== null,
+      rateEligible,
       revenueEligible,
+      revenuePartial: fixedPolicy && group.rows.some((row) => row.phoneMissingPriceBookings > 0),
       priceEvidenceType: revenueEligible ? "stay_date_observed_price" : (group.rows.some((row) => row.price !== null) ? "representative_only" : "none"),
       observedProductTypes: boundedUnique(group.rows.map((row) => row.productType), 4),
       collectedAt: collected.collectedAt || "",
@@ -13518,22 +13586,33 @@ function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today =
   }).sort((a, b) => a.date.localeCompare(b.date));
 
   const summaryFor = (rows, rangeStart, rangeEnd) => {
+    const fixedPolicy = rows.some((row) => row.inventoryEvidenceVersion >= 3);
     const rateRows = rows.filter((row) => row.rateEligible);
     const revenueRows = rows.filter((row) => row.revenueEligible);
-    const supply = rateRows.reduce((sum, row) => sum + Number(row.total || 0), 0);
-    const sold = rateRows.reduce((sum, row) => sum + Number(row.sold || 0), 0);
+    const quantityRows = fixedPolicy ? rows : rateRows;
+    const supply = quantityRows.reduce((sum, row) => sum + Number(row.total || 0), 0);
+    const sold = quantityRows.reduce((sum, row) => sum + Number(row.sold || 0), 0);
+    const completeRates = !fixedPolicy || rateRows.length === rows.length;
     const calendarDays = dayCount(rangeStart, rangeEnd);
     return {
       rangeStart: isoDate(rangeStart),
       rangeEnd: isoDate(rangeEnd),
       calendarDays,
+      inventoryEvidenceVersion: fixedPolicy ? 3 : null,
+      ...Object.fromEntries(estimateFields.map((field) => [field,
+        fixedPolicy && rows.length && rows.every((row) => row[field] !== null)
+          ? rows.reduce((sum, row) => sum + row[field], 0) : null
+      ])),
+      dayUseBookings: fixedPolicy ? rows.reduce((sum, row) => sum + Number(row.dayUseBookings || 0), 0) : null,
+      partial: fixedPolicy && (!completeRates || rows.some((row) => row.partial || row.missing)),
+      revenuePartial: fixedPolicy && rows.some((row) => row.revenuePartial || !row.revenueEligible),
       observedDays: rows.length,
-      missingDays: Math.max(0, calendarDays - rows.length),
+      missingDays: Math.max(0, calendarDays - rows.length) + rows.filter((row) => row.missing).length,
       rateObservedDays: rateRows.length,
       revenueObservedDays: revenueRows.length,
-      supply: rateRows.length ? supply : null,
-      sold: rateRows.length ? sold : null,
-      reservationRate: supply > 0 ? Number((sold / supply).toFixed(4)) : null,
+      supply: quantityRows.length ? supply : null,
+      sold: quantityRows.some((row) => row.sold !== null) ? sold : null,
+      reservationRate: completeRates && supply > 0 ? Number((sold / supply).toFixed(4)) : null,
       estimatedRevenue: revenueRows.length ? Math.round(revenueRows.reduce((sum, row) => sum + Number(row.estimatedRevenue || 0), 0)) : null
     };
   };
@@ -13592,7 +13671,9 @@ function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today =
   return {
     schemaVersion: 1,
     source: "history_observations",
-    actualObservation: true,
+    actualObservation: !daily.some((row) => row.phoneBookings > 0),
+    actualRevenueAvailable: false,
+    containsEstimates: daily.some((row) => row.inventoryEvidenceVersion >= 3),
     generatedAt: new Date().toISOString(),
     current: {
       summary: currentRows.length ? summaryFor(currentRows, today, latestCurrentDate) : null,
@@ -13613,8 +13694,8 @@ function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today =
         })
     },
     definitions: {
-      reservationRate: "판매추정수 합계 ÷ 공개 총량 합계",
-      estimatedRevenue: "숙박일별 가격 근거가 확인된 판매추정 건만 합산",
+      reservationRate: daily.some((row) => row.inventoryEvidenceVersion >= 3) ? "숙박 공개 예약 + 전화예약 추정 합계 ÷ 최대 객실 기준 총량. 당일 이용은 별도 집계하며 일부 미확인 기간은 비율 표시 보류" : "판매추정수 합계 ÷ 공개 총량 합계",
+      estimatedRevenue: "숙박일별 가격 근거가 확인된 예약과 전화예약 추정 금액. 실제 결제 매출이 아니며 가격 미확인 전화예약은 제외",
       missingDates: "수집하지 않은 날짜는 0으로 계산하지 않음",
       week: "월요일부터 일요일"
     }
@@ -13829,13 +13910,13 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
   );
 
   const evidenceProjections = loadedCandidates
-    .filter((candidate) => candidate.item.inventoryEvidence?.version === 2)
+    .filter((candidate) => candidate.item.inventoryEvidence?.version >= 2)
     .map(({ data, item, runId, observedAt }) => ({
       runId,
       snapshot: {
         runId,
         collectedAt: observedAt,
-        inventoryEvidenceVersion: 2,
+        inventoryEvidenceVersion: item.inventoryEvidence.version,
         readOnlyRecalculated: true,
         salesSignal: companySalesSignalFromItem(item, data.run || {}),
         revenue: companyRevenueSnapshotFromItem(item),
@@ -13914,16 +13995,35 @@ async function summarizeCompanyMasterDetail(companyId = "") {
   const [master, observations] = await Promise.all([readCompanyMaster(), readHistoryObservations()]);
   const rawCompany = master.companies?.[id];
   if (!rawCompany) return null;
-  const storedProductSnapshot = [
+  const storedInventories = [
     rawCompany.inventory?.latest,
     rawCompany.inventory?.previousLatest,
     ...(rawCompany.inventory?.snapshots || [])
-  ].map((inventory) => inventory?.productSnapshot)
+  ].filter(Boolean);
+  const storedProductSnapshot = storedInventories.map((inventory) => inventory.productSnapshot)
     .filter((snapshot) => Array.isArray(snapshot?.products) && snapshot.products.length)
     .sort((a, b) => String(b.collectedAt || "").localeCompare(String(a.collectedAt || "")))[0];
-  const recoveredProductSource = storedProductSnapshot?.inventoryEvidenceVersion === 2
-    ? { productSnapshot: null, legacyProductPreview: null, recoveredFromRun: false, evidenceProjections: [] }
-    : await recoverCompanyProductSourceFromRuns(rawCompany, observations);
+  const maximumRoomCapacity = companyMaximumRoomCapacity(rawCompany);
+  const needsEvidenceRecovery = !storedProductSnapshot || storedInventories.some((inventory) => {
+    const snapshot = inventory.productSnapshot;
+    const hasProductView = Boolean(snapshot?.products?.length || snapshot?.daily?.length);
+    const hasSignalView = Boolean(inventory.salesSignal?.lodging?.days || inventory.salesSignal?.dayUse?.days || inventory.revenue);
+    if (!hasProductView && !hasSignalView) return false;
+    const version = Number(inventory.inventoryEvidenceVersion ?? snapshot?.inventoryEvidenceVersion ?? 0);
+    if (version < 3 || (hasProductView && Number(snapshot.inventoryEvidenceVersion || 0) < 3)) return true;
+    if (!(maximumRoomCapacity > 0)) return false;
+    // A later-discovered maximum also applies to already-v3 read views. Inspect
+    // each displayed daily denominator and signal, rather than only their max.
+    const capacities = [
+      inventory.salesSignal?.lodging?.minTotal,
+      inventory.salesSignal?.lodging?.maxTotal,
+      ...(snapshot?.daily || []).filter((row) => row.productType === "lodging").map((row) => row.total)
+    ].map(productSnapshotNumber).filter((value) => value !== null);
+    return capacities.some((capacity) => capacity < maximumRoomCapacity);
+  });
+  const recoveredProductSource = needsEvidenceRecovery
+    ? await recoverCompanyProductSourceFromRuns(rawCompany, observations)
+    : { productSnapshot: null, legacyProductPreview: null, recoveredFromRun: false, evidenceProjections: [] };
   const readView = companyInventoryEvidenceReadView(rawCompany, observations, recoveredProductSource.evidenceProjections || []);
   const viewCompany = readView.company;
   const viewObservations = readView.observations;
@@ -13943,7 +14043,7 @@ async function summarizeCompanyMasterDetail(companyId = "") {
     && Array.isArray(recoveredProductSource.productSnapshot?.products) && recoveredProductSource.productSnapshot.products.length) {
     productSnapshot = recoveredProductSource.productSnapshot;
   }
-  const recoveredDaily = recoveredProductSource.productSnapshot?.inventoryEvidenceVersion === 2
+  const recoveredDaily = recoveredProductSource.productSnapshot?.inventoryEvidenceVersion >= 2
     ? recoveredProductSource.productSnapshot : null;
   const dailySnapshot = productSnapshotCandidates.find((snapshot) => Array.isArray(snapshot.daily) && snapshot.daily.length)
     || recoveredDaily || latestSnapshot;
@@ -13964,7 +14064,7 @@ async function summarizeCompanyMasterDetail(companyId = "") {
       ? {
           source: dailySnapshot.readOnlyRecalculated ? "source_recalculation" : "product_snapshot",
           sourceLabel: dailySnapshot.readOnlyRecalculated ? "저장 원문 기준 재계산" : "업체 마스터 상품 스냅샷",
-          inventoryEvidenceVersion: dailySnapshot.inventoryEvidenceVersion === 2 ? 2 : null,
+          inventoryEvidenceVersion: dailySnapshot.inventoryEvidenceVersion >= 2 ? dailySnapshot.inventoryEvidenceVersion : null,
           runId: dailySnapshot?.dailyRunId || dailySnapshot?.runId || "",
           collectedAt: dailySnapshot?.dailyCollectedAt || dailySnapshot?.collectedAt || "",
           dateRange: dailySnapshot?.dateRange || { start: "", end: "" },
@@ -13996,11 +14096,15 @@ async function summarizeCompanyMasterDetail(companyId = "") {
     performanceTrend: companyPerformanceTrend(viewCompany, viewObservations),
     leadTime: companyLeadTimeSummary(viewCompany, viewObservations),
     definitions: {
-      estimatedRevenue: dailySnapshot?.inventoryEvidenceVersion === 2
+      estimatedRevenue: dailySnapshot?.inventoryEvidenceVersion >= 3
+        ? "공개 예약과 전화예약 추정 수량에 같은 상품·날짜의 공개 가격을 적용한 예상액. 데이유즈 공유 차단 제외, 실제 결제 매출이 아님"
+        : dailySnapshot?.inventoryEvidenceVersion === 2
         ? "공개 예약 필드 관측 수량과 상품별 공개 가격의 예상액. 실제 결제 매출이 아님"
         : "네이버 공개 가격과 재고 변화로 계산한 예상매출",
       actualRevenue: "업체 실제 예약·결제 자료가 연결되기 전에는 제공하지 않음",
-      dailyReservationRate: dailySnapshot?.inventoryEvidenceVersion === 2
+      dailyReservationRate: dailySnapshot?.inventoryEvidenceVersion >= 3
+        ? "공개 예약과 전화예약 추정 합계를 최대 객실 수 기준 총량으로 나눈 비율. 데이유즈 공유 차단은 숙박 예약에서 제외"
+        : dailySnapshot?.inventoryEvidenceVersion === 2
         ? "공개 예약 필드 관측 수량을 같은 날짜의 채널 공급 수량으로 나눈 비율"
         : "네이버 공개 재고의 전체 수량과 잔여 수량 차이로 계산한 판매 추정률",
       leadTime: "동일 숙박일의 반복 재고 관측에서 증가한 판매 추정량 기준",
@@ -14080,7 +14184,7 @@ function buildHistoryObservations(data, collectedAt) {
     for (const productType of ["lodging", "dayuse"]) {
       const series = historySeriesForItem(item, productType, checkIn);
       for (const row of series) {
-        const evidenceBased = row.inventoryEvidenceVersion === 2;
+        const evidenceBased = row.inventoryEvidenceVersion >= 2;
         if (evidenceBased && row.missing) continue;
         const total = evidenceBased ? productSnapshotNumber(row.total) : normalizeObservationNumber(row.total);
         const available = evidenceBased ? productSnapshotNumber(row.available) : normalizeObservationNumber(row.available);
@@ -14126,10 +14230,13 @@ function buildHistoryObservations(data, collectedAt) {
           supply: total,
           available: Math.max(0, available),
           sold,
-          saleRate: total > 0 && sold <= total && !row.inventoryConflict ? Number((sold / total).toFixed(4)) : null,
+          saleRate: total > 0 && sold <= total && !row.inventoryConflict && !(row.inventoryEvidenceVersion >= 3 && (row.partial || row.unknownUnavailable > 0)) ? Number((sold / total).toFixed(4)) : null,
           price: evidenceBased ? "" : (item.price || ""),
           ...(evidenceBased ? {
-            inventoryEvidenceVersion: 2,
+            inventoryEvidenceVersion: row.inventoryEvidenceVersion,
+            ...inventoryEstimateBreakdown(row),
+            partial: Boolean(row.partial),
+            missing: Boolean(row.missing),
             estimatedRevenue: productSnapshotNumber(row.estimatedRevenue),
             pricedSoldOut: productSnapshotNumber(row.pricedSoldOut),
             missingPriceSoldOut: productSnapshotNumber(row.missingPriceSoldOut),
@@ -14815,13 +14922,56 @@ function summarizeRankingRows(overallRows = [], adRows = [], regionalRows = [], 
   };
 }
 
-function summarizeAvailabilityRows(rows, baseDir = "") {
+function companyMaximumRoomCapacity(company = {}) {
+  const snapshots = [company.inventory?.latest, company.inventory?.previousLatest, ...(company.inventory?.snapshots || [])].filter(Boolean);
+  const values = [];
+  for (const snapshot of snapshots) {
+    values.push(snapshot.stockBasis?.lodgingMaxTotal, snapshot.salesSignal?.lodging?.maxTotal);
+    const productSnapshot = snapshot.productSnapshot;
+    for (const row of productSnapshot?.daily || []) {
+      if (row.productType !== "lodging" || row.missing || row.inventoryConflict) continue;
+      values.push(row.rawTotal ?? row.total);
+      if (row.inventoryEvidenceVersion >= 3) values.push(row.total);
+    }
+  }
+  return Math.max(0, ...values.map(productSnapshotNumber).filter((value) => value !== null && value > 0));
+}
+
+function withCompanyInventoryCapacity(item = {}, companies = []) {
+  // Exact provider identities only: similarly named companies must never share capacity.
+  const matches = companies.filter((company) => companyProductAvailabilityMatch(company, item));
+  if (matches.length !== 1) return item;
+  const company = matches[0];
+  const count = companyMaximumRoomCapacity(company);
+  if (!count) return item;
+  return {
+    ...item,
+    inventoryCapacityBaseline: {
+      ...(item.inventoryCapacityBaseline || {}),
+      lodging: count,
+      companyId: company.companyId,
+      source: "same_company_saved_maximum"
+    }
+  };
+}
+
+function summarizeAvailabilityRows(rows, baseDir = "", capacityCompanies = [], collectionRange = {}) {
   const byPlace = new Map();
   for (const row of rows) {
     const availableRooms = numericField(row, ["숙박예약가능수", "예약가능객실수", "availableRooms"]);
     const totalRooms = numericField(row, ["숙박확인재고수", "확인객실수", "totalRooms"]);
     const rate = numericField(row, ["숙박예약가능률", "예약가능률", "availabilityRate"]);
-    if (availableRooms === null || totalRooms === null || totalRooms <= 0) continue;
+    const itemDetails = jsonArrayField(row, ["네이버상품상세JSON", "itemDetailsJson", "itemDetails"], baseDir);
+    const weeklyProductDetails = [
+      ...jsonArrayField(row, ["네이버요일별상품상세JSON", "weeklyProductDetailsJson", "weeklyProductDetails"], baseDir),
+      ...jsonArrayField(row, ["dayUseWeeklyProductDetailsJson"], baseDir)
+    ];
+    const hasProductEvidence = [...itemDetails, ...weeklyProductDetails].some((product) => {
+      if (!product || product.collectionFailed || !/^\d{4}-\d{2}-\d{2}$/.test(product.date || "")) return false;
+      const stock = productSnapshotNumber(product.stock), booked = productSnapshotNumber(product.bookingCount);
+      return stock !== null && stock >= 0 && booked !== null && booked >= 0;
+    });
+    if ((availableRooms === null || totalRooms === null || totalRooms <= 0) && !hasProductEvidence) continue;
     const soldOutRooms = numericField(row, ["숙박판매완료수", "soldOutRooms"]);
     const soldOutRate = numericField(row, ["숙박판매완료율", "soldOutRate"]);
     const resolvedSoldOutRooms = soldOutRooms !== null ? soldOutRooms : Math.max(0, totalRooms - availableRooms);
@@ -14915,12 +15065,6 @@ function summarizeAvailabilityRows(rows, baseDir = "") {
     const naverCouponDetail = row["네이버쿠폰상세"] || row.naverCouponDetail || "";
     const naverOtaExposures = jsonArrayField(row, ["네이버OTA노출JSON", "naverOtaExposures"], baseDir);
     const naverChannelObservation = naverChannelObservationFromItem({ ...row, naverOtaExposures });
-    const itemDetails = jsonArrayField(row, ["네이버상품상세JSON", "itemDetailsJson", "itemDetails"], baseDir);
-    const weeklyProductDetails = [
-      ...jsonArrayField(row, ["네이버요일별상품상세JSON", "weeklyProductDetailsJson", "weeklyProductDetails"], baseDir),
-      ...jsonArrayField(row, ["dayUseWeeklyProductDetailsJson"], baseDir)
-    ];
-
     const key = availabilityPlaceKey(row);
     if (!key || byPlace.has(key)) continue;
     const placeId = extractNaverPlaceId(row);
@@ -15061,7 +15205,13 @@ function summarizeAvailabilityRows(rows, baseDir = "") {
   }
 
   const items = [...byPlace.values()]
-    .map(applyInventoryEvidence)
+    .map((item) => applyInventoryEvidence(withCompanyInventoryCapacity({
+      ...item,
+      ...(item.itemDetails.length || item.weeklyProductDetails.length ? {
+        checkIn: collectionRange.checkIn || "",
+        bookingRangeDays: Number(collectionRange.bookingRangeDays || 0)
+      } : {})
+    }, capacityCompanies)))
     .map((item) => {
       const confidence = evaluateInventoryConfidence({
         availableRooms: item.availableRooms,
@@ -16544,7 +16694,11 @@ async function loadRun(runId, options = {}) {
   }
   const stats = summarizeStats(regions);
   if (datalabTrend) stats.datalabTrend = datalabTrend;
-  const availability = summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows], dirPath);
+  const capacityMaster = await readCompanyMaster();
+  const availability = summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows], dirPath, Object.values(capacityMaster.companies || {}), {
+    checkIn: manifest?.checkIn || conditions.checkIn || runDateFromId(runId),
+    bookingRangeDays: manifest?.bookingRangeDays || 1
+  });
   const ranking = summarizeRankingRows(overallRows, adRows, regionalRows, availability);
   const demandStructure = buildDemandStructure({
     manifest,

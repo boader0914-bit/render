@@ -6,8 +6,8 @@ const path = require("node:path");
 const {applyInventoryEvidence} = require("./inventory_estimation.cjs");
 const mint = applyInventoryEvidence(require("./fixtures/mint_20260920.cjs"));
 const source = fs.readFileSync(path.join(__dirname,"../web/app.js"),"utf8");
-const names = ["inventoryAssessment","roomCapacityPresentation","sheetInventorySummary","sheetBookingQuantityBasis","inventorySourceHtml","sheetDisclosure","escapeHtml","fmtNumber","fmtRate","weeklyRows","salesStats","bookingGraphRows","itemRevenueStats","projectedRevenueFields","finiteNumber","optionalNumber","parseDate","monthDay","isoAddDays","normalizeMonthDayLabel","bookingRangeLabels","bookingDays"];
-const context = vm.createContext({state:{data:{run:{checkIn:"2026-09-20",checkOut:"2026-10-20",bookingRangeDays:31}}},DEFAULT_BOOKING_DAYS:31});
+const names = ["inventoryAssessment","roomCapacityPresentation","sheetInventorySummary","sheetBookingQuantityBasis","sheetCollectionStatusPanel","inventorySourceHtml","sheetDisclosure","escapeHtml","fmtNumber","fmtRate","weeklyRows","salesStats","bookingGraphRows","bookingQuantityBreakdown","sheetRowsForBooking","dateRow","miniBars","itemRevenueStats","projectedRevenueFields","finiteNumber","optionalNumber","parseDate","monthDay","isoAddDays","normalizeMonthDayLabel","bookingRangeLabels","bookingDays"];
+const context = vm.createContext({state:{data:{run:{checkIn:"2026-09-20",checkOut:"2026-10-20",bookingRangeDays:31}}},DEFAULT_BOOKING_DAYS:31,isAdminRole:()=>true});
 for (const name of names) {
   const declaration = source.match(new RegExp(`^function ${name}\\([^]*?^}`,"m"))?.[0];
   assert.ok(declaration, name);
@@ -15,14 +15,18 @@ for (const name of names) {
 }
 const stats = context.salesStats(mint);
 const chart = context.bookingGraphRows(mint);
-assert.equal(stats.supply,667);
+assert.equal(stats.supply,28 * 31,"The fixed maximum capacity stays in every date's denominator");
 assert.equal(chart.reduce((n,r)=>n+r.total,0),stats.supply,"List and detail must share a denominator");
 assert.equal(chart.reduce((n,r)=>n+r.sold,0),stats.sold);
-assert.equal(stats.sold,151);
-assert.equal(context.itemRevenueStats(mint).adjustedRevenue,35699000);
+assert.equal(stats.rawSold,151,"Observed Naver bookings remain independently visible");
+assert.equal(stats.sharedDayUseExcluded,3);
+assert.equal(stats.sold,600,"Fixed room capacity includes inferred phone bookings but excludes three shared day-use blocks");
+assert.equal(stats.phoneBookings,449);
+assert.equal(mint.inventoryEvidence.lodging.publicRevenue,35699000);
+assert.equal(context.itemRevenueStats(mint).adjustedRevenue,mint.inventoryEvidence.lodging.revenue);
 assert.equal(context.itemRevenueStats(mint,"day").adjustedRevenue,297000);
 assert.equal(context.salesStats(mint,"day").sold,3);
-assert.equal(context.weeklyRows(mint,"day").filter(r=>r.total===0).length,4,"Closed days must remain inspectable");
+assert.equal(context.weeklyRows(mint,"day").filter(r=>r.rawTotal===0).length,4,"Zero public-stock days must remain inspectable with the fixed denominator");
 const missing = {...mint,inventoryEvidence:{...mint.inventoryEvidence,lodging:{...mint.inventoryEvidence.lodging,rows:mint.inventoryEvidence.lodging.rows.slice(1)}}};
 assert.equal(context.bookingGraphRows(missing)[0].missing,true,"Uncollected dates are not zero-booking observations");
 const conflictItem = applyInventoryEvidence({weeklyProductDetails:[{date:"2026-09-20",stock:0,bookingCount:2,price:100000}]});
@@ -31,7 +35,7 @@ assert.ok(Number.isNaN(context.weeklyRows(conflictItem)[0].rate));
 assert.ok(Number.isNaN(context.bookingGraphRows(conflictItem)[0].rate));
 assert.equal(context.roomCapacityPresentation(mint).count,28);
 assert.equal(context.roomCapacityPresentation(mint).physicalCount,28);
-assert.equal(context.roomCapacityPresentation(mint).estimated,false,"Verified physical rooms must not be labeled as a collection estimate");
+assert.equal(context.roomCapacityPresentation(mint).estimated,true,"The fixed maximum remains a calculation basis while physical evidence stays separate");
 assert.equal(context.roomCapacityPresentation({...mint,companyManualCorrection:{lodgingBasisTotal:26}}).count,28,"Operating basis must not replace verified physical capacity");
 assert.equal(context.roomCapacityPresentation({...mint,companyManualCorrection:{lodgingBasisTotal:26}}).operatingCount,26);
 assert.equal(context.roomCapacityPresentation({...mint,companyManualCorrection:{active:false,lodgingBasisTotal:26}}).operatingCount,null);
@@ -104,4 +108,71 @@ const simultaneousMaximum = context.roomCapacityPresentation(shiftingProducts);
 assert.equal(simultaneousMaximum.count,10,"Use max(8+2, 3+7)=10 from the same dates, never max(8,3)+max(2,7)=15 across products");
 assert.equal(simultaneousMaximum.physicalCount,null);
 assert.equal(simultaneousMaximum.estimated,true);
-console.log("inventory UI: room-capacity estimates, physical precedence, same-date maximum, booking rate and closed-day consistency passed");
+
+// Season regression: a lower public inventory must not shrink the total.
+const season = applyInventoryEvidence({weeklyDays:2,weeklyProductDetails:[
+  {date:"2026-09-20",bizItemId:"season",saleType:"숙박",stock:10,bookingCount:0,price:100000},
+  {date:"2026-09-21",bizItemId:"season",saleType:"숙박",stock:3,bookingCount:3,price:100000}
+]});
+const seasonRows = context.sheetRowsForBooking(season);
+assert.equal(context.roomCapacityPresentation(season).count,10);
+assert.equal(context.salesStats(season).supply,20);
+assert.equal(seasonRows[0].sold,0,"Zero public bookings with ten available rooms must stay zero bookings");
+assert.equal(seasonRows[0].phoneBookings,0);
+assert.equal(seasonRows[1].supply,10);
+assert.equal(seasonRows[1].publicBookings,3);
+assert.equal(seasonRows[1].phoneBookings,7);
+assert.equal(seasonRows[1].sold,10);
+assert.equal(seasonRows[1].rate,1);
+const seasonDateHtml = context.dateRow(seasonRows[1]);
+assert.match(seasonDateHtml,/예약 추정 10객실 \/ 객실 총량 10객실/);
+assert.match(seasonDateHtml,/네이버 3객실 · 전화예약 추정 7객실/);
+assert.doesNotMatch(seasonDateHtml,/과거 추정|예약 관측 10/);
+assert.match(context.miniBars(season),/네이버 3실 · 전화예약 추정 7실/);
+const seasonSummary = context.sheetInventorySummary(season);
+assert.match(seasonSummary,/최대 관측 기준 · 날짜별 고정/);
+assert.match(seasonSummary,/네이버 3박 · 전화예약 추정 7박/);
+assert.match(seasonSummary,/10박 ÷ 20객실·박 = 50%/);
+assert.match(seasonSummary,/예약 가능한 객실의 예약 수량이 0인 경우는 전화예약으로 더하지 않습니다/);
+const seasonCollectionStatus = context.sheetCollectionStatusPanel(season);
+assert.match(seasonCollectionStatus,/예약 추정 보류 0박/);
+assert.doesNotMatch(seasonCollectionStatus,/판매 중지·기타 이용 불가 0건/);
+assert.match(context.sheetCollectionStatusPanel(example),/판매 중지·기타 이용 불가 0건/,"The v2 label keeps its original meaning");
+
+const sharedSeason = applyInventoryEvidence({...season,inventoryEvidence:undefined,weeklyProductDetails:[
+  ...season.weeklyProductDetails,
+  {date:"2026-09-20",bizItemId:"day",saleType:"데이유즈",stock:3,bookingCount:0,price:50000},
+  {date:"2026-09-21",bizItemId:"day",saleType:"데이유즈",stock:3,bookingCount:2,price:50000}
+]});
+const sharedRows = context.sheetRowsForBooking(sharedSeason);
+assert.equal(sharedRows[1].supply,10);
+assert.equal(sharedRows[1].publicBookings,3,"Day-use blocks never erase direct lodging bookings");
+assert.equal(sharedRows[1].phoneBookings,5);
+assert.equal(sharedRows[1].sharedDayUseExcluded,2);
+assert.equal(sharedRows[1].sold,8);
+assert.equal(sharedRows[1].rate,0.8);
+assert.equal(context.salesStats(sharedSeason,"day").sold,2);
+assert.match(context.dateRow(sharedRows[1]),/당일 이용 차단 제외 2객실/);
+const sharedSummary = context.sheetInventorySummary(sharedSeason);
+assert.match(sharedSummary,/객실 공유 가정/);
+assert.match(sharedSummary,/전화예약 추정 5박 · 당일 이용 차단 제외 2박/);
+assert.match(sharedSummary,/당일 이용 차단 2박은 숙박 예약 추정에서 제외/);
+
+const closedSeason = applyInventoryEvidence({weeklyDays:2,weeklyProductDetails:[
+  {date:"2026-09-20",bizItemId:"season",saleType:"숙박",stock:10,bookingCount:0,price:100000},
+  {date:"2026-09-21",bizItemId:"season",saleType:"숙박",stock:10,bookingCount:0,open:false,price:100000}
+]});
+const closedRow = context.sheetRowsForBooking(closedSeason)[1];
+assert.equal(closedRow.publicBookings,0);
+assert.equal(closedRow.phoneBookings,10,"Unavailable stock is explicitly estimated instead of being presented as confirmed bookings");
+assert.match(context.dateRow(closedRow),/네이버 0객실 · 전화예약 추정 10객실/);
+const partialSeason = applyInventoryEvidence({weeklyDays:2,weeklyProductDetails:[
+  {date:"2026-09-20",bizItemId:"a",saleType:"숙박",stock:5,bookingCount:0,price:100000},
+  {date:"2026-09-20",bizItemId:"b",saleType:"숙박",stock:5,bookingCount:0,price:100000},
+  {date:"2026-09-21",bizItemId:"a",saleType:"숙박",stock:3,bookingCount:1,price:100000}
+]});
+assert.equal(context.sheetRowsForBooking(partialSeason)[1].phoneBookings,0,"Missing products must not turn into telephone reservations");
+assert.ok(Number.isNaN(context.sheetRowsForBooking(partialSeason)[1].rate));
+assert.ok(Number.isNaN(context.weeklyRows(partialSeason)[1].rate));
+assert.ok(Number.isNaN(context.salesStats(partialSeason).rate),"A partial period does not display an apparently complete booking rate");
+console.log("inventory UI: fixed total, observed/phone split, available zero-booking rooms, shared day-use exclusion, closed dates and legacy compatibility passed");

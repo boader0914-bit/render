@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const test = require("node:test");
-const { productEvidence, summarizeEvidence } = require("./inventory_estimation.cjs");
+const { applyInventoryEvidence, productEvidence } = require("./inventory_estimation.cjs");
 
 const source = fs.readFileSync(path.join(__dirname, "gyeongnam_glamping_crawl.cjs"), "utf8");
 function section(startText, endText) {
@@ -17,6 +17,7 @@ const addDays = (date, days) => new Date(Date.parse(`${date}T00:00:00Z`) + days 
 function harness(byDate = {}, checkIn = "2026-09-20") {
   const context = {
     CHECK_IN: checkIn, addDays,
+    applyInventoryEvidence, productEvidence,
     shortDate: date => date.slice(5), formatWon: value => `${value}원`, formatRate: value => value === null ? "미확인" : `${Math.round(value * 100)}%`,
     collectNaverSchedulesForItems: async (_business, _items, _limit, date) => byDate[date] || [],
     mergeNaverCouponSignals: () => ({}), summarizeNaverCouponExposure: () => ({}), couponSource: () => ({})
@@ -29,7 +30,7 @@ function harness(byDate = {}, checkIn = "2026-09-20") {
     section("function dayTypeLabel(", "async function collectNaverSchedulesForItems("),
     section("function operatingTotalBasisFromTotals(", "async function collectNaverBookingAvailability(")
   ].join("\n");
-  return vm.runInNewContext(`${functions}\n({ naverBookingSaleType, scheduleQuantityProfile, compactNaverScheduleDetail, summarizeNaverScheduleGroup, summarizeNaverScheduleRevenue, summarizeNaverBookingAvailability, collectWeeklyNaverAvailability, operatingTotalBasisFromTotals })`, context);
+  return vm.runInNewContext(`${functions}\n({ naverBookingSaleType, scheduleQuantityProfile, compactNaverScheduleDetail, summarizeNaverScheduleGroup, summarizeNaverScheduleRevenue, summarizeNaverBookingAvailability, collectWeeklyNaverAvailability, applyCrawlerInventoryEvidence, operatingTotalBasisFromTotals })`, context);
 }
 
 function schedule(overrides = {}) {
@@ -54,7 +55,7 @@ test("explicit provider product type takes precedence over promotional day-use w
   }
 });
 
-test("closed zero-stock rows never become one sold room and occupied counts never become sales", () => {
+test("raw product rows preserve zero stock and keep occupied counts separate from direct bookings", () => {
   const api = harness();
   for (const listType of ["객실별 예약리스트", "객실 묶음 상품리스트", "객실 종류별 리스트"]) {
     const closed = api.scheduleQuantityProfile(schedule({ stock: 0, price: 0, isSaleDay: false }), listType);
@@ -121,15 +122,14 @@ test("Mint 31-day day-use sample has three observed bookings and no 1,188,000-wo
     assert.equal(date.inventoryShortfall, date.productDetails.reduce((sum, row) => sum + row.inventoryShortfall, 0));
     if (closed.has(date.date)) { assert.equal(date.soldOut, 0); assert.equal(date.total, 0); }
   }
-  const read = summarizeEvidence(weekly.productDetails.map(productEvidence), "dayUse");
-  assert.equal(read.total, weekly.totalStock);
-  assert.equal(read.sold, weekly.totalSoldOut);
-  assert.equal(read.revenue, weekly.totalEstimatedRevenue);
-  assert.equal(read.inventoryShortfall, weekly.totalInventoryShortfall);
+  const projected = api.applyCrawlerInventoryEvidence({ dayUseWeekly: weekly }, "fixture");
+  assert.equal(projected.dayUseWeekly.totalSoldOut, 3);
+  assert.equal(projected.dayUseWeekly.totalEstimatedRevenue, 297000);
+  assert.equal(projected.dayUseWeekly.totalOfflineReserved, 0);
   assert.doesNotMatch(weekly.basisRule, /전체객실수후보|오프라인/);
 });
 
-test("lower observed channel inventory stays separate from sales and the denominator is the date sum", async () => {
+test("raw product evidence stays separate while crawler aggregates use fixed maximum inventory", async () => {
   const byDate = {};
   for (let index = 0; index < 7; index += 1) {
     const date = addDays("2026-09-20", index);
@@ -150,6 +150,22 @@ test("lower observed channel inventory stays separate from sales and the denomin
   assert.equal(weekly.dates[6].soldOut, 0);
   assert.equal(weekly.dates[6].inventoryShortfall, 8);
   assert.equal(weekly.totalStock, weekly.productDetails.reduce((sum, row) => sum + row.total, 0));
+  const before = JSON.stringify(weekly.productDetails);
+  const projected = api.applyCrawlerInventoryEvidence({ weekly }, "fixture");
+  assert.equal(projected.weekly.basisTotal, 21);
+  assert.equal(projected.weekly.totalStock, 147);
+  assert.equal(projected.weekly.totalSoldOut, 11);
+  assert.equal(projected.weekly.totalOfflineReserved, 8);
+  assert.equal(projected.weekly.publicBookings, 3);
+  assert.equal(projected.weekly.totalEstimatedRevenue, 1100000);
+  assert.equal(projected.weekly.dates[6].total, 21);
+  assert.equal(projected.weekly.dates[6].available, 13);
+  assert.equal(projected.weekly.dates[6].phoneBookings, 8);
+  assert.equal(JSON.stringify(projected.weekly.productDetails), before);
+  assert.equal(JSON.stringify(weekly.productDetails), before);
+  const repeated = api.applyCrawlerInventoryEvidence(projected, "fixture");
+  assert.equal(repeated.weekly.totalSoldOut, 11);
+  assert.equal(repeated.weekly.totalEstimatedRevenue, 1100000);
 });
 
 test("real bookings with missing prices stay missing instead of borrowing another product price", () => {
@@ -176,5 +192,79 @@ test("shared-room day-use evidence does not blindly subtract separate direct ove
   const details = result.itemDetails;
   assert.equal(details[0].unverifiedOccupied, 2);
   assert.equal(details[0].soldOut, 2);
-  assert.equal(details[0].calculationVersion, "booking-evidence-v2");
+  assert.equal(details[0].calculationVersion, "booking-observation-v3");
+});
+
+test("zero public bookings retain available rooms and closed rooms become telephone estimates", async () => {
+  const byDate = {
+    "2026-09-20": [schedule({ saleType: "숙박", name: "1~10번", stock: 10, price: 100000 })],
+    "2026-09-21": [schedule({ saleType: "숙박", name: "1~10번", stock: 10, price: 100000, isSaleDay: false })],
+  };
+  const api = harness(byDate);
+  const weekly = await api.collectWeeklyNaverAvailability("fixture", byDate["2026-09-20"], byDate["2026-09-20"], 2);
+  const projected = api.applyCrawlerInventoryEvidence({ weekly }, "fixture");
+  assert.equal(projected.weekly.dates[0].phoneBookings, 0);
+  assert.equal(projected.weekly.dates[0].available, 10);
+  assert.equal(projected.weekly.dates[1].phoneBookings, 10);
+  assert.equal(projected.weekly.dates[1].available, 0);
+  assert.equal(projected.weekly.dates[1].total, 10);
+  assert.equal(projected.weekly.productDetails[1].bookingCount, 0);
+});
+
+test("shared day-use bookings remove inferred overnight blocks without changing direct bookings or availability", async () => {
+  const byDate = {};
+  for (let index = 0; index < 2; index++) {
+    const date = addDays("2026-09-20", index);
+    byDate[date] = [schedule({ date, saleType: "숙박", name: "1~10번", stock: index ? 6 : 10, bookingCount: index ? 2 : 0, price: 100000 })];
+  }
+  const api = harness(byDate);
+  const weekly = await api.collectWeeklyNaverAvailability("fixture", byDate["2026-09-20"], byDate["2026-09-20"], 2);
+  const dayDetails = [0, 1].map(index => api.compactNaverScheduleDetail(schedule({ date: addDays("2026-09-20", index), bizItemId: "day", stock: 3, bookingCount: index ? 3 : 0 }), "객실 종류별 리스트", addDays("2026-09-20", index), "회"));
+  const projected = api.applyCrawlerInventoryEvidence({ weekly, dayUseWeekly: { requestedDays: 2, productDetails: dayDetails } }, "fixture");
+  const next = projected.weekly.dates[1];
+  assert.equal(next.total, 10);
+  assert.equal(next.available, 4);
+  assert.equal(next.publicBookings, 2);
+  assert.equal(next.sharedDayUseExcluded, 3);
+  assert.equal(next.phoneBookings, 1);
+  assert.equal(next.sold, 3);
+  assert.equal(projected.dayUseWeekly.totalSoldOut, 3);
+  assert.equal(weekly.productDetails[1].bookingCount, 2);
+});
+
+test("failed schedules preserve failure provenance and do not become telephone bookings", async () => {
+  const byDate = {
+    "2026-09-20": [schedule({ saleType: "숙박", name: "1~10번", stock: 10 })],
+    "2026-09-21": [schedule({ saleType: "숙박", name: "1~10번", stock: 0, bookingCount: 0, errors: [{ message: "fixture failure" }] })],
+  };
+  const api = harness(byDate);
+  const weekly = await api.collectWeeklyNaverAvailability("fixture", byDate["2026-09-20"], byDate["2026-09-20"], 2);
+  const projected = api.applyCrawlerInventoryEvidence({ weekly }, "fixture");
+  assert.equal(projected.weekly.productDetails[1].collectionFailed, true);
+  assert.equal(projected.weekly.dates[1].phoneBookings, 0);
+  assert.equal(projected.weekly.dates[1].sold, 0);
+  assert.equal(projected.weekly.dates[1].missing, true);
+});
+
+test("a missing shared day-use response leaves unexplained overnight inventory unknown", () => {
+  const api = harness();
+  const date = "2026-09-20";
+  const night = api.compactNaverScheduleDetail(schedule({ saleType: "숙박", name: "1~10번", stock: 10, bookingCount: 2, occupiedBookingCount: 3 }), "객실 묶음 상품리스트", date);
+  const day = api.compactNaverScheduleDetail(schedule({ bizItemId: "day", stock: null, bookingCount: null, errors: [{ message: "fixture failure" }] }), "객실 종류별 리스트", date);
+  const result = api.applyCrawlerInventoryEvidence({ itemDetails: [night, day] }, "fixture");
+  const row = result.inventoryEvidence.lodging.rows[0];
+  assert.equal(row.publicBookings, 2);
+  assert.equal(row.available, 5);
+  assert.equal(row.phoneBookings, 0);
+  assert.equal(row.unknownUnavailable, 3);
+  assert.equal(row.rate, null);
+});
+
+test("a known day-use product with no schedule rows also prevents blind telephone inference", () => {
+  const api = harness();
+  const night = api.compactNaverScheduleDetail(schedule({ saleType: "숙박", name: "1~10번", stock: 10, bookingCount: 2, occupiedBookingCount: 3 }), "객실 묶음 상품리스트", "2026-09-20");
+  const result = api.applyCrawlerInventoryEvidence({ itemDetails: [night], dayUseItemCount: 1 }, "fixture");
+  assert.equal(result.inventoryEvidence.lodging.rows[0].phoneBookings, 0);
+  assert.equal(result.inventoryEvidence.lodging.rows[0].unknownUnavailable, 3);
+  assert.equal(result.inventoryEvidence.lodging.complete, false);
 });

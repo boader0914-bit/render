@@ -1713,7 +1713,7 @@ async function main() {
     assert.equal(mergedCompanyDetail.body.products.length, 2, "company merge must preserve the only detailed product snapshot");
     assert.equal(mergedCompanyDetail.body.observationBasis.products.runId, detailSecondRunId);
 
-    // Existing detailed snapshots must not bypass the evidence-based read model.
+    // Existing detailed snapshots must not bypass the maximum-capacity read model.
     // This regression uses the same closed-day shape as the Mint audit, with a
     // deliberately stale snapshot already containing products and daily rows.
     const evidenceRunId = "mint_evidence_read_view_20260920_150137";
@@ -1781,15 +1781,44 @@ async function main() {
     assert.equal(evidenceDetail.statusCode, 200);
     const evidenceLodging = evidenceDetail.body.daily.filter((row) => row.productType === "lodging");
     const evidenceDayUse = evidenceDetail.body.daily.filter((row) => row.productType === "dayuse");
-    assert.equal(evidenceLodging.reduce((sum, row) => sum + row.sold, 0), 2);
+    // Known 28 rooms minus the 21 public rooms produces seven inferred bookings
+    // on each observed date. The first date excludes one shared day-use booking:
+    // public 2 + phone (7 * 5 - 1) = 36 lodging reservations in total.
+    assert.equal(evidenceLodging.length, 31, "Use the requested observation period, not the count of sparse successful dates");
+    assert.ok(evidenceLodging.every((row) => row.total === 28), "Neither reduced stock nor missing responses may shrink the fixed room capacity");
+    assert.equal(evidenceLodging.reduce((sum, row) => sum + row.sold, 0), 36);
+    assert.equal(evidenceLodging.reduce((sum, row) => sum + row.publicBookings, 0), 2);
+    assert.equal(evidenceLodging.reduce((sum, row) => sum + row.phoneBookings, 0), 34);
+    assert.equal(evidenceLodging.reduce((sum, row) => sum + row.sharedDayUseExcluded, 0), 1);
+    assert.equal(evidenceLodging.reduce((sum, row) => sum + row.publicRevenue, 0), 200000);
+    assert.equal(evidenceLodging.reduce((sum, row) => sum + row.phoneRevenue, 0), 2800000);
+    assert.equal(evidenceLodging.reduce((sum, row) => sum + row.phoneMissingPriceBookings, 0), 6, "Unmapped shared-room price uncertainty survives the company detail projection");
+    const firstEvidenceDay = evidenceLodging.find((row) => row.date === "2026-09-20");
+    assert.deepEqual([firstEvidenceDay.total, firstEvidenceDay.available, firstEvidenceDay.publicBookings, firstEvidenceDay.phoneBookings, firstEvidenceDay.sharedDayUseExcluded], [28, 19, 2, 6, 1]);
+    const missingEvidenceDays = evidenceLodging.filter((row) => row.missing);
+    assert.equal(missingEvidenceDays.length, 26);
+    assert.ok(missingEvidenceDays.every((row) => row.sold === null && row.phoneBookings === 0 && row.unknownUnavailable === 28 && row.reservationRate === null), "Missing dates remain unknown, never telephone reservations or zero-percent occupancy");
+    assert.equal(evidenceDayUse.length, 31);
+    assert.ok(evidenceDayUse.every((row) => row.total === 3));
     assert.equal(evidenceDayUse.reduce((sum, row) => sum + row.sold, 0), 1);
-    assert.ok(evidenceDayUse.filter((row) => row.date !== "2026-09-20").every((row) => row.sold === 0 && row.estimatedRevenue === 0));
-    assert.equal(evidenceDetail.body.productSummary.adjustedEstimatedRevenue, 299000);
-    assert.equal(evidenceDetail.body.performanceTrend.points.at(-1).estimatedRevenue, 299000);
-    assert.equal(evidenceDetail.body.company.inventory.latest.salesSignal.lodging.totalSold, 2);
+    assert.equal(evidenceDayUse.reduce((sum, row) => sum + row.phoneBookings, 0), 0, "Closed day-use sales do not become telephone lodging reservations");
+    assert.ok(evidenceDayUse.filter((row) => !row.missing && row.date !== "2026-09-20").every((row) => row.sold === 0 && row.estimatedRevenue === 0));
+    assert.equal(evidenceDetail.body.productSummary.adjustedEstimatedRevenue, 3099000);
+    assert.equal(evidenceDetail.body.performanceTrend.points.at(-1).estimatedRevenue, 3099000);
+    assert.equal(evidenceDetail.body.performanceTrend.points.at(-1).reservationRate, null, "A combined lodging/day-use trend must not reconstruct occupancy from partial observations");
+    assert.equal(evidenceDetail.body.performanceTrend.points.at(-1).totalSupply, 868, "Day-use sessions must not inflate the fixed lodging-room denominator");
+    assert.equal(evidenceDetail.body.performanceTrend.points.at(-1).totalSold, 36);
+    assert.equal(evidenceDetail.body.performanceTrend.points.at(-1).dayUseBookings, 1);
+    assert.equal(evidenceDetail.body.company.inventory.latest.salesSignal.lodging.totalSold, 36);
+    assert.equal(evidenceDetail.body.company.inventory.latest.salesSignal.lodging.totalSupply, 868);
+    assert.equal(evidenceDetail.body.company.inventory.latest.salesSignal.lodging.publicBookings, 2);
+    assert.equal(evidenceDetail.body.company.inventory.latest.salesSignal.lodging.phoneBookings, 34);
+    assert.equal(evidenceDetail.body.company.inventory.latest.salesSignal.lodging.sharedDayUseExcluded, 1);
+    assert.equal(evidenceDetail.body.company.inventory.latest.salesSignal.lodging.averageRate, null);
     assert.equal(evidenceDetail.body.company.inventory.latest.salesSignal.dayUse.totalSold, 1);
+    assert.equal(evidenceDetail.body.company.inventory.latest.salesSignal.dayUse.totalSupply, 93);
     assert.equal(evidenceDetail.body.observationBasis.daily.source, "source_recalculation");
-    assert.equal(evidenceDetail.body.observationBasis.daily.inventoryEvidenceVersion, 2);
+    assert.equal(evidenceDetail.body.observationBasis.daily.inventoryEvidenceVersion, 3);
     assert.equal(await fsp.readFile(masterFile, "utf8"), masterBeforeEvidence, "read recalculation must not rewrite a prior company snapshot");
     assert.equal(await readTextIfExists(historyFile), historyBeforeEvidence, "read recalculation must not append or rewrite history");
     assert.equal(await fsp.readFile(sourceCsv, "utf8"), csvBeforeEvidence, "read recalculation must preserve collected raw evidence");
@@ -1798,9 +1827,129 @@ async function main() {
     const evidenceRun = await request(baseUrl, "GET", `/api/runs/${evidenceRunId}`, null, cookies);
     assert.equal(evidenceRun.statusCode, 200);
     const evidenceItem = evidenceRun.body.availability.items.find((row) => row.placeId === "1975818551");
-    assert.equal(evidenceItem.inventoryEvidence.version, 2);
+    assert.equal(evidenceItem.inventoryEvidence.version, 3);
+    assert.equal(evidenceItem.weeklyTotalStock, 868);
+    assert.equal(evidenceItem.weeklyPhoneBookings, 34);
+    assert.equal(evidenceItem.weeklyPublicBookings, 2);
+    assert.equal(evidenceItem.weeklySharedDayUseExcluded, 1);
     assert.equal(evidenceItem.weeklyTotalSoldOut, evidenceLodging.reduce((sum, row) => sum + row.sold, 0));
     assert.equal(evidenceItem.dayUseWeeklyTotalSoldOut, evidenceDayUse.reduce((sum, row) => sum + row.sold, 0));
+
+    const zeroBasisPlaceId = "919191911";
+    const zeroBasisBusinessId = "919191912";
+    const zeroBasisRunId = "zero_basis_maximum_20260921_180000";
+    const zeroBasisConfig = {
+      placeId: zeroBasisPlaceId, companyName: "최대 객실 회귀 테스트 글램핑", keyword: "테스트글램핑",
+      lodgingType: "글램핑", category: "캠핑,야영장", collectionPurpose: "revenue_detail",
+      runId: zeroBasisRunId, checkIn: "2026-09-21", checkOut: "2026-09-23", bookingRangeDays: 2,
+      completedAt: "2026-09-21T09:00:00.000Z", observedAt: "2026-09-21T09:00:00.000Z",
+      inventory: {
+        네이버예약업체ID: zeroBasisBusinessId, 숙박확인재고수: 0, 숙박예약가능수: 0, 주간재고수집일수: 2,
+        네이버요일별상품상세JSON: [
+          { date: "2026-09-21", bizItemId: "zero-basis-room", name: "숙박 객실", saleType: "숙박", stock: 0, bookingCount: 0, price: 100000, open: true },
+          { date: "2026-09-22", bizItemId: "zero-basis-room", name: "숙박 객실", saleType: "숙박", stock: 10, bookingCount: 1, price: 100000, open: true }
+        ]
+      }
+    };
+    await writeRun(outputsDir, zeroBasisConfig);
+    const zeroBasisCsvPath = path.join(outputsDir, zeroBasisRunId, `${zeroBasisRunId}_overall_place_rank.csv`);
+    const zeroBasisCsv = await fsp.readFile(zeroBasisCsvPath, "utf8");
+    const [zeroBasisHeader, ...zeroBasisValidRows] = zeroBasisCsv.trimEnd().split(/\r?\n/);
+    const zeroBasisHeaders = zeroBasisHeader.split(",");
+    const failedEarlierRows = ["[]", "@json-file:details/response-not-saved.json"].map((details) => {
+      const failed = {
+        query: zeroBasisConfig.keyword, overall_rank: "1", place_id: zeroBasisPlaceId,
+        업체명: zeroBasisConfig.companyName, 카테고리: zeroBasisConfig.category, 숙박유형클러스터: "글램핑",
+        네이버예약업체ID: zeroBasisBusinessId, 숙박확인재고수: 0, 숙박예약가능수: 0,
+        네이버요일별상품상세JSON: details
+      };
+      return zeroBasisHeaders.map((header) => csvCell(failed[header] ?? "")).join(",");
+    });
+    await fsp.writeFile(zeroBasisCsvPath, [zeroBasisHeader, ...failedEarlierRows, ...zeroBasisValidRows, ""].join("\n"), "utf8");
+    const zeroBasisRun = await request(baseUrl, "GET", `/api/runs/${zeroBasisRunId}`, null, cookies);
+    assert.equal(zeroBasisRun.statusCode, 200);
+    const zeroBasisItems = zeroBasisRun.body.availability.items.filter((row) => row.placeId === zeroBasisPlaceId);
+    assert.equal(zeroBasisItems.length, 1, "Earlier empty/unreadable detail rows cannot mask the later valid same-place evidence");
+    const zeroBasisItem = zeroBasisItems[0];
+    assert.equal(zeroBasisItem.inventoryEvidence.version, 3);
+    assert.equal(zeroBasisItem.totalRooms, 10, "A valid zero-stock first date remains visible using the future observed maximum");
+    assert.equal(zeroBasisItem.weeklyTotalStock, 20);
+    assert.deepEqual(zeroBasisItem.inventoryEvidence.lodging.rows.map((row) => [row.rawTotal, row.total, row.publicBookings, row.phoneBookings]), [[0, 10, 0, 10], [10, 10, 1, 0]]);
+
+    const narrowerRunId = "narrower_maximum_20260922_180000";
+    await writeRun(outputsDir, {
+      ...zeroBasisConfig, runId: narrowerRunId, checkIn: "2026-09-22", checkOut: "2026-09-24",
+      completedAt: "2026-09-22T09:00:00.000Z", observedAt: "2026-09-22T09:00:00.000Z",
+      inventory: {
+        네이버예약업체ID: zeroBasisBusinessId, 숙박확인재고수: 8, 숙박예약가능수: 6, 주간재고수집일수: 2,
+        네이버요일별상품상세JSON: [
+          { date: "2026-09-22", bizItemId: "zero-basis-room", name: "숙박 객실", saleType: "숙박", stock: 8, bookingCount: 2, price: 100000, open: true },
+          { date: "2026-09-23", bizItemId: "zero-basis-room", name: "숙박 객실", saleType: "숙박", stock: 8, bookingCount: 0, price: 100000, open: true }
+        ]
+      }
+    });
+    const narrowerRun = await request(baseUrl, "GET", `/api/runs/${narrowerRunId}`, null, cookies);
+    assert.equal(narrowerRun.statusCode, 200);
+    const narrowerItem = narrowerRun.body.availability.items.find((row) => row.placeId === zeroBasisPlaceId);
+    assert.ok(narrowerItem);
+    assert.equal(narrowerItem.inventoryEvidence.lodging.observedMaximum, 8);
+    assert.equal(narrowerItem.totalRooms, 10, "The same company's saved maximum survives a later collection showing only eight rooms");
+    assert.equal(narrowerItem.weeklyTotalStock, 20);
+    assert.equal(narrowerItem.weeklyPublicBookings, 2);
+    assert.equal(narrowerItem.weeklyPhoneBookings, 4);
+    assert.ok(narrowerItem.inventoryEvidence.lodging.rows.every((row) => row.total === 10));
+
+    const capacityMasterBeforeStale = await fsp.readFile(masterFile, "utf8");
+    const staleCapacityMaster = JSON.parse(capacityMasterBeforeStale);
+    const staleCapacityCompany = Object.values(staleCapacityMaster.companies).find((company) => company.placeIds?.includes(zeroBasisPlaceId));
+    assert.ok(staleCapacityCompany);
+    for (const snapshot of [staleCapacityCompany.inventory.latest, staleCapacityCompany.inventory.previousLatest, ...staleCapacityCompany.inventory.snapshots].filter(Boolean)) {
+      if (snapshot.runId !== narrowerRunId) continue;
+      snapshot.inventoryEvidenceVersion = 3;
+      snapshot.stockBasis.lodgingMaxTotal = 8;
+      Object.assign(snapshot.salesSignal.lodging, { minTotal: 8, maxTotal: 8, totalSupply: 16, totalSold: 2, publicBookings: 2, phoneBookings: 0, averageRate: 0.125 });
+      snapshot.productSnapshot.inventoryEvidenceVersion = 3;
+      for (const row of snapshot.productSnapshot.daily.filter((entry) => entry.productType === "lodging")) {
+        Object.assign(row, { total: 8, sold: row.publicBookings, phoneBookings: 0, offlineReserved: 0, phoneMissingPriceBookings: 0, reservationRate: row.publicBookings / 8 });
+      }
+    }
+    await fsp.writeFile(masterFile, JSON.stringify(staleCapacityMaster, null, 2), "utf8");
+    const staleCapacityMasterText = await fsp.readFile(masterFile, "utf8");
+    const capacityHistoryBeforeRead = await readTextIfExists(historyFile);
+    const narrowerCsvPath = path.join(outputsDir, narrowerRunId, `${narrowerRunId}_overall_place_rank.csv`);
+    const narrowerCsvBeforeRead = await fsp.readFile(narrowerCsvPath, "utf8");
+    const refreshedCapacityDetail = await request(baseUrl, "GET", `/api/company-master/detail?companyId=${staleCapacityCompany.companyId}`, null, cookies);
+    assert.equal(refreshedCapacityDetail.statusCode, 200);
+    const refreshedCapacityDaily = refreshedCapacityDetail.body.daily.filter((row) => row.productType === "lodging");
+    assert.equal(refreshedCapacityDaily.length, 2);
+    assert.ok(refreshedCapacityDaily.every((row) => row.total === 10), "Already-v3 detail must recover when an older saved observation establishes a larger maximum");
+    assert.equal(refreshedCapacityDaily.reduce((sum, row) => sum + row.phoneBookings, 0), 4);
+    assert.equal(refreshedCapacityDetail.body.company.inventory.latest.salesSignal.lodging.totalSupply, 20);
+    assert.equal(refreshedCapacityDetail.body.company.inventory.latest.salesSignal.lodging.totalSold, 6);
+    assert.equal(refreshedCapacityDetail.body.observationBasis.daily.source, "source_recalculation");
+    assert.equal(await fsp.readFile(masterFile, "utf8"), staleCapacityMasterText, "Refreshing a stale v3 capacity must not persist the read projection");
+    assert.equal(await readTextIfExists(historyFile), capacityHistoryBeforeRead);
+    assert.equal(await fsp.readFile(narrowerCsvPath, "utf8"), narrowerCsvBeforeRead);
+
+    const mixedVersionMaster = JSON.parse(capacityMasterBeforeStale);
+    const mixedVersionCompany = mixedVersionMaster.companies[staleCapacityCompany.companyId];
+    for (const snapshot of [mixedVersionCompany.inventory.latest, mixedVersionCompany.inventory.previousLatest, ...mixedVersionCompany.inventory.snapshots].filter(Boolean)) {
+      if (snapshot.runId !== zeroBasisRunId) continue;
+      snapshot.inventoryEvidenceVersion = 2;
+      snapshot.productSnapshot.inventoryEvidenceVersion = 2;
+      Object.assign(snapshot.salesSignal.lodging, { totalSupply: 10, totalSold: 1, phoneBookings: 0 });
+      for (const row of (snapshot.productSnapshot.daily || []).filter((entry) => entry.productType === "lodging")) Object.assign(row, { inventoryEvidenceVersion: 2, total: row.rawTotal, sold: row.publicBookings, phoneBookings: 0 });
+    }
+    await fsp.writeFile(masterFile, JSON.stringify(mixedVersionMaster, null, 2), "utf8");
+    const mixedVersionMasterBeforeRead = await fsp.readFile(masterFile, "utf8");
+    const mixedVersionDetail = await request(baseUrl, "GET", `/api/company-master/detail?companyId=${mixedVersionCompany.companyId}`, null, cookies);
+    assert.equal(mixedVersionDetail.statusCode, 200);
+    assert.equal(mixedVersionDetail.body.company.inventory.latest.productSnapshot.inventoryEvidenceVersion, 3);
+    assert.equal(mixedVersionDetail.body.company.inventory.previousLatest.productSnapshot.inventoryEvidenceVersion, 3, "A current latest v3 snapshot must not bypass recovery of older displayed v2 history");
+    assert.equal(mixedVersionDetail.body.company.inventory.previousLatest.salesSignal.lodging.totalSupply, 20);
+    assert.equal(mixedVersionDetail.body.company.inventory.previousLatest.salesSignal.lodging.totalSold, 11);
+    assert.equal(await fsp.readFile(masterFile, "utf8"), mixedVersionMasterBeforeRead);
+    assert.equal(await readTextIfExists(historyFile), capacityHistoryBeforeRead);
   } finally {
     await stopChild(child);
     await fsp.rm(tmp, { recursive: true, force: true });
