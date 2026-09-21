@@ -17154,9 +17154,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=datalab-20260921-region-analysis-v109"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=datalab-20260921-region-analysis-v109"')
-      .replace('src="/app.js"', 'src="/app.js?v=datalab-20260921-region-analysis-v109"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=datalab-20260921-source-layout-v110"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=datalab-20260921-source-layout-v110"')
+      .replace('src="/app.js"', 'src="/app.js?v=datalab-20260921-source-layout-v110"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

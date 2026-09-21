@@ -36137,12 +36137,13 @@ body.role-admin .admin-db-company-action a + a {
 .location-profile-source-list {
   display: grid;
   gap: 7px;
+  container: location-sources / inline-size;
 }
 
 .location-profile-source-list > div {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(120px, .7fr) auto minmax(190px, 1.2fr) minmax(130px, .8fr);
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.35fr) minmax(0, 1.65fr) minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   border: 1px solid var(--border-subtle);
@@ -36168,6 +36169,33 @@ body.role-admin .admin-db-company-action a + a {
 .location-profile-source-list small {
   color: var(--text-secondary);
   font-size: 11px;
+}
+
+.location-profile-source-list .location-profile-status {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  justify-self: start;
+  justify-content: flex-start;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+@container location-sources (max-width: 720px) {
+  .location-profile-source-list > div {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .location-profile-source-list strong { grid-column: 1; }
+  .location-profile-source-list small { grid-column: 2; }
+}
+
+@container location-sources (max-width: 420px) {
+  .location-profile-source-list > div { grid-template-columns: minmax(0, 1fr); }
+  .location-profile-source-list strong,
+  .location-profile-source-list small { grid-column: auto; }
 }
 
 .location-profile-internal {
@@ -36237,13 +36265,6 @@ body.role-admin .admin-db-company-action a + a {
     grid-column: auto;
   }
 
-  .location-profile-source-list > div {
-    grid-template-columns: minmax(120px, .8fr) auto minmax(180px, 1.2fr);
-  }
-
-  .location-profile-source-list small {
-    grid-column: 1 / -1;
-  }
 }
 
 @media (max-width: 600px) {
@@ -36310,14 +36331,6 @@ body.role-admin .admin-db-company-action a + a {
     min-width: 0;
   }
 
-  .location-profile-source-list > div {
-    grid-template-columns: 1fr;
-    align-items: start;
-  }
-
-  .location-profile-source-list small {
-    grid-column: auto;
-  }
 
   .location-profile-internal > summary {
     align-items: flex-start;
