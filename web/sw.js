@@ -1,4 +1,4 @@
-const CACHE_VERSION = "staydatalab-v20260921-tourism-forecast-v108";
+const CACHE_VERSION = "staydatalab-v20260921-region-analysis-v109";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",

@@ -2491,6 +2491,50 @@ html[data-theme-resolved] body.role-admin .tourism-forecast-places > button[aria
 .tourism-forecast-errors { padding-left: 18px; }
 .tourism-forecast-source { margin-bottom: 0; }
 .tourism-forecast-source a { color: var(--accent-strong); text-underline-offset: 3px; }
+.region-analysis-shell[hidden], .region-data-management[hidden], #tourismForecastAdminCard[hidden] { display: none !important; }
+html[data-theme-resolved] body.role-admin .region-analysis-shell {
+  min-width: 0;
+  margin-bottom: 20px;
+  padding: 16px 0;
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+}
+.region-analysis-context { display: flex; align-items: end; justify-content: space-between; gap: 16px; }
+.region-analysis-context label { display: grid; gap: 6px; width: min(100%, 460px); min-width: 0; font-size: 12px; color: var(--text-secondary); }
+html[data-theme-resolved] body.role-admin #analysisRegionSelect { width: 100%; min-height: 42px; border: 1px solid var(--border-subtle); border-radius: 6px; padding: 8px 10px; font: inherit; font-size: 14px; color: var(--text-primary); background: var(--surface-control); }
+.region-analysis-context > button { flex: 0 0 auto; min-height: 42px; }
+#analysisRegionStatus { margin: 8px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.region-analysis-mobile-tabs { display: none; }
+.region-management-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 0 14px; border-top: 1px solid var(--border-subtle); }
+.region-management-heading h3 { margin: 0; font-size: 18px; color: var(--text-primary); }
+.region-management-heading p { margin: 6px 0 0; font-size: 12px; color: var(--text-secondary); }
+.region-management-heading button { min-height: 42px; }
+.region-management-requests { margin-top: 16px; border-top: 1px solid var(--border-subtle); color: var(--text-primary); }
+.region-management-requests > summary { padding: 14px 0; cursor: pointer; font-size: 13px; }
+.region-management-overview { margin-top: 16px; border-top: 1px solid var(--border-subtle); }
+.region-management-overview > summary { padding: 14px 0; cursor: pointer; color: var(--text-primary); font-size: 13px; }
+.region-management-overview[open] > summary { margin-bottom: 10px; }
+.region-data-management { min-width: 0; }
+.tourism-forecast-analysis-region { display: grid; gap: 5px; min-width: 0; }
+.tourism-forecast-analysis-region > span, .tourism-forecast-analysis-region > small { color: var(--text-secondary); font-size: 12px; }
+.tourism-forecast-analysis-region > strong { color: var(--text-primary); font-size: 15px; }
+#tourismForecastAdminCard .tourism-forecast-region-form { grid-template-columns: minmax(0, 1fr) auto; }
+.tourism-forecast-connection-card .tourism-forecast-region-form { grid-template-columns: minmax(0, 1fr) auto; margin-top: 12px; }
+.tourism-forecast-connection-card select { width: 100%; min-height: 40px; padding: 8px; border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-primary); background: var(--surface-control); font: inherit; }
+.tourism-forecast-connection-card button { min-height: 40px; }
+html[data-theme-resolved] body.role-admin .tourism-forecast-connection-card { padding: 18px; color: var(--text-primary); background: var(--surface-card); border: 1px solid var(--border-subtle); }
+html[data-theme-resolved] body.role-admin #demandPanel > .tourism-forecast-card { margin-top: 20px; width: 100%; box-sizing: border-box; }
+@media (max-width: 860px) {
+  .region-analysis-mobile-tabs { display: flex; gap: 4px; overflow-x: auto; padding: 12px 0 0; overscroll-behavior-x: contain; }
+  html[data-theme-resolved] body.role-admin .region-analysis-mobile-tabs button { min-height: 42px; padding: 8px 12px; flex: 0 0 auto; border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-secondary); background: var(--surface-control); font-size: 13px; }
+  html[data-theme-resolved] body.role-admin .region-analysis-mobile-tabs button[aria-current="page"],
+  html[data-theme-resolved] body.role-admin .region-analysis-mobile-tabs button[aria-pressed="true"] { color: var(--text-primary); background: var(--surface-selected); border-color: var(--accent); }
+  .region-analysis-context, .region-management-heading { align-items: stretch; flex-direction: column; gap: 10px; }
+  .region-analysis-context label { width: 100%; }
+  .region-analysis-context > button, .region-management-heading > button { align-self: start; }
+  .tourism-forecast-connection-card .tourism-forecast-region-form { grid-template-columns: minmax(0, 1fr); }
+}
 @media (max-width: 560px) {
   html[data-theme-resolved] body.role-admin .tourism-forecast-card { padding: 14px; }
   .tourism-forecast-region-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }

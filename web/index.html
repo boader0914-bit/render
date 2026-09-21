@@ -119,21 +119,29 @@
         <div class="company-list" id="companyList"></div>
       </section>
 
-      <section class="tab-panel" id="dictionaryPanel" data-panel="dictionary" aria-label="입지사전">
+      <section class="region-analysis-shell" id="regionAnalysisShell" aria-label="지역분석 공통 선택" hidden>
+        <div class="region-analysis-context">
+          <label for="analysisRegionSelect"><span>선택 지역</span><select id="analysisRegionSelect" aria-describedby="analysisRegionStatus"><option value="">지역 선택</option></select></label>
+          <button class="secondary-button" id="analysisRegionManageButton" type="button" data-analysis-region-manage disabled>지역 자료 관리</button>
+        </div>
+        <p id="analysisRegionStatus" role="status">분석할 지역을 선택해 주세요.</p>
+        <nav class="region-analysis-mobile-tabs" aria-label="지역분석 세부 메뉴">
+          <button type="button" data-region-analysis-tab="dictionary">지역 현황</button>
+          <button type="button" data-region-analysis-tab="map">지역 지도</button>
+          <button type="button" data-region-analysis-tab="demand">수요 전망</button>
+          <button type="button" data-region-analysis-tab="regionCompare">지역 비교</button>
+          <button type="button" data-region-analysis-tab="regionSources">자료·출처</button>
+        </nav>
+      </section>
+
+      <section class="tab-panel" id="dictionaryPanel" data-panel="dictionary" aria-label="지역 현황">
         <div class="section-title">
           <div>
-            <h2>입지사전</h2>
+            <h2>지역 현황</h2>
             <p>지역을 먼저 찾고, 행정구역·관광 기반·숙박 공급을 같은 기준으로 확인</p>
           </div>
           <span id="dictionaryCount">0 지역</span>
         </div>
-
-        <nav class="dictionary-view-tabs" aria-label="지역분석 화면">
-          <button class="active" type="button" data-dictionary-view="dictionary" aria-current="page">입지사전</button>
-          <button type="button" data-dictionary-view="demand">수요전망</button>
-          <button type="button" data-dictionary-view="compare">지역 비교</button>
-          <button type="button" data-dictionary-view="sources">분석자료</button>
-        </nav>
 
         <section class="dictionary-search-card">
           <form class="dictionary-search" id="dictionarySearchForm">
@@ -161,14 +169,6 @@
           <div class="dictionary-result" id="dictionaryResult"></div>
         </section>
 
-        <details class="dictionary-admin-operations">
-          <summary>
-            <span><strong>관리·검수</strong><small>지역 공개상태·표본 보강·관리자 감수</small></span>
-            <b>펼쳐보기</b>
-          </summary>
-          <div id="dictionaryRequestQueue"></div>
-          <section class="admin-region-analysis-dashboard" id="adminRegionAnalysisDashboard" aria-label="관리자 지역 운영" hidden></section>
-        </details>
       </section>
 
       <section class="tab-panel" id="targetPanel" data-panel="target" aria-label="컨택 후보">
@@ -201,7 +201,7 @@
       <section class="tab-panel" id="mapPanel" data-panel="map" aria-label="지역지도">
         <div class="section-title">
           <div>
-            <h2>지역 클러스터 지도</h2>
+            <h2>지역 지도</h2>
             <p>시군구 경계 · 업체 스팟 · 검색량 · 판매율</p>
           </div>
           <span id="mapCount">0 지역</span>
@@ -221,11 +221,22 @@
         <div class="section-title">
           <div>
             <h2>수요 전망</h2>
-            <p>숙박업 메인터넌스 사전과 검색수요를 함께 해석</p>
+            <p>선택 지역의 숙박 수요와 관광지 방문 전망</p>
           </div>
           <span id="demandState">대기</span>
         </div>
         <div class="demand-dashboard" id="demandDashboard"></div>
+        <section class="admin-card tourism-forecast-card" id="tourismForecastAdminCard" data-ui-surface="card" aria-label="관광지 방문 전망 조회" hidden></section>
+      </section>
+
+      <section class="tab-panel" id="regionComparePanel" data-panel="regionCompare" aria-label="지역 비교">
+        <div class="section-title"><div><h2>지역 비교</h2><p>선택 지역을 기준으로 비교 가능한 지역 자료를 확인합니다.</p></div></div>
+        <div id="regionCompareDashboard"></div>
+      </section>
+
+      <section class="tab-panel" id="regionSourcesPanel" data-panel="regionSources" aria-label="자료·출처">
+        <div class="section-title"><div><h2>자료·출처</h2><p>선택 지역 자료의 관측 기간, 출처와 확인 상태</p></div></div>
+        <div id="regionSourcesDashboard"></div>
       </section>
 
       <section class="tab-panel" id="accountPanel" data-panel="account" aria-label="계정">
@@ -246,6 +257,11 @@
       <section class="tab-panel" id="adminPanel" data-panel="admin" aria-label="관리">
         <section class="admin-section-panel" data-admin-section-panel="database" aria-label="업체 관리">
           <section class="admin-console-dashboard" id="adminDatabaseDashboard" aria-label="업체 관리"></section>
+          <section class="region-data-management" id="regionDataManagement" aria-label="지역 자료 관리" hidden>
+            <div class="region-management-heading"><div><h3>지역 자료 관리</h3><p>지역별 자료 보완, 기준값 수정과 공개 상태를 관리합니다.</p></div><button class="secondary-button" type="button" data-return-region-analysis hidden>지역분석으로 돌아가기</button></div>
+            <section class="admin-region-analysis-dashboard" id="adminRegionAnalysisDashboard" aria-label="관리자 지역 운영" hidden></section>
+            <details class="region-management-requests"><summary>지역 자료 요청</summary><div id="dictionaryRequestQueue"></div></details>
+          </section>
           <details class="admin-card admin-files-collapsible" id="companyMasterAdminCard" data-ui-surface="card" hidden aria-hidden="true">
             <summary>업체 기준값 관리</summary>
             <div class="admin-files-collapsible-body">
@@ -397,7 +413,7 @@
         <div class="admin-stack admin-stack-files">
           <section class="admin-integration-registry" id="adminIntegrationRegistry" aria-label="API 연동 레지스트리"></section>
           <section class="admin-card special-days-card" id="specialDaysAdminCard" data-ui-surface="card" aria-label="특일정보 조회"></section>
-          <section class="admin-card tourism-forecast-card" id="tourismForecastAdminCard" data-ui-surface="card" aria-label="관광지 방문 전망 조회"></section>
+          <section class="admin-card tourism-forecast-connection-card" id="tourismForecastConnectionCard" data-ui-surface="card" aria-label="관광지 방문 전망 연결 상태"></section>
           <section class="admin-card" id="trafficAdminCard" data-ui-surface="card">
             <div class="card-head">
               <h3>트래픽 API</h3>

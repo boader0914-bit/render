@@ -42,6 +42,7 @@ const state = {
     salesGate: "all"
   },
   adminSelectedRegionKey: "",
+  regionManagementReturnContext: null,
   adminRegionReviewFilter: "all",
   adminRegionAuditFilter: "all",
   adminRegionCompanyFilter: "priority",
@@ -83,8 +84,10 @@ const state = {
   crawlEtaByKey: {},
   crawlProgressRunning: false,
   selectedLocationCard: null,
+  analysisRegionSelection: null,
+  analysisRegionRestored: false,
   demandRegionContext: null,
-  dictionaryProvince: "경남",
+  dictionaryProvince: "",
   dictionaryDetailTab: "basic",
   dictionaryTourismMetric: "visitor",
   dictionaryTourismSeries: {
@@ -161,6 +164,11 @@ const state = {
   tourismForecastLoading: false,
   tourismForecastError: "",
   tourismForecastExpanded: false,
+  tourismForecastAnalysisRegion: null,
+  tourismForecastViews: {},
+  tourismForecastRequests: {},
+  tourismForecastRefreshRegionKey: "",
+  tourismForecastConnectionMessage: "",
   tourismDemandStrengthBackfillRun: {
     loading: false,
     tone: "neutral",
@@ -271,7 +279,7 @@ const LODGING_CATEGORY_PROFILES = {
 };
 const B2B_MY_LODGE_STORAGE_PREFIX = "glamping-datalab:b2b-my-lodge:v1";
 const ROLE_TABS = {
-  admin: ["report", "rank", "dictionary", "map", "demand", "historyOps", "admin"],
+  admin: ["report", "rank", "dictionary", "map", "demand", "regionCompare", "regionSources", "historyOps", "admin"],
   b2b: ["report", "rank", "map", "demand", "account"]
 };
 const B2B_PRIMARY_TABS = new Set(["report", "rank", "map", "account"]);
@@ -318,9 +326,11 @@ const ADMIN_MOBILE_SECTIONS = {
     label: "지역분석",
     target: "dictionary",
     items: [
-      { label: "지역 현황·입지", tab: "dictionary" },
+      { label: "지역 현황", tab: "dictionary" },
       { label: "지역 지도", tab: "map" },
-      { label: "수요 전망", tab: "demand" }
+      { label: "수요 전망", tab: "demand" },
+      { label: "지역 비교", tab: "regionCompare" },
+      { label: "자료·출처", tab: "regionSources" }
     ]
   },
   members: {
@@ -386,10 +396,12 @@ const ADMIN_PANEL_MOBILE_TARGETS = {
 const TAB_LABELS = {
   report: "요약 리포트",
   rank: "수집 결과 분석",
-  dictionary: "입지사전",
+  dictionary: "지역 현황",
+  regionCompare: "지역 비교",
+  regionSources: "자료·출처",
   target: "영업 타깃",
   decisionQueue: "검수 필요",
-  map: "지역 클러스터 지도",
+  map: "지역 지도",
   demand: "수요 전망",
   historyOps: "수집 이력",
   admin: "관리"
@@ -476,6 +488,12 @@ const els = {
   dictionaryQuickButtons: document.getElementById("dictionaryQuickButtons"),
   dictionarySearchStatus: document.getElementById("dictionarySearchStatus"),
   dictionaryResult: document.getElementById("dictionaryResult"),
+  regionAnalysisShell: document.getElementById("regionAnalysisShell"),
+  analysisRegionSelect: document.getElementById("analysisRegionSelect"),
+  analysisRegionStatus: document.getElementById("analysisRegionStatus"),
+  analysisRegionManageButton: document.getElementById("analysisRegionManageButton"),
+  regionCompareDashboard: document.getElementById("regionCompareDashboard"),
+  regionSourcesDashboard: document.getElementById("regionSourcesDashboard"),
   dictionaryRequestQueue: document.getElementById("dictionaryRequestQueue"),
   targetCount: document.getElementById("targetCount"),
   targetList: document.getElementById("targetList"),
@@ -497,6 +515,7 @@ const els = {
   adminIntegrationRegistry: document.getElementById("adminIntegrationRegistry"),
   specialDaysAdminCard: document.getElementById("specialDaysAdminCard"),
   tourismForecastAdminCard: document.getElementById("tourismForecastAdminCard"),
+  tourismForecastConnectionCard: document.getElementById("tourismForecastConnectionCard"),
   adminSecurityDashboard: document.getElementById("adminSecurityDashboard"),
   adminMemberRequestDashboard: document.getElementById("adminMemberRequestDashboard"),
   collectionArchive: document.getElementById("collectionArchive"),
@@ -2299,7 +2318,7 @@ function adminPrimarySectionForTab(tab, preferred = "") {
   }
   if (tab === "report") return "analysis";
   if (tab === "rank") return "collect";
-  if (["dictionary", "map", "demand"].includes(tab)) return "region";
+  if (["dictionary", "map", "demand", "regionCompare", "regionSources"].includes(tab)) return "region";
   if (tab === "historyOps") return "collect";
   return "summary";
 }
@@ -2312,7 +2331,7 @@ function adminMobileSectionForTab(tab, preferred = "") {
     if (preferredTabs.has(tab)) return preferred;
   }
   if (tab === "admin") return adminPanelMobileTarget(state.adminPanelSection).section;
-  if (["report", "dictionary", "map", "demand"].includes(tab)) return "analysis";
+  if (["report", "dictionary", "map", "demand", "regionCompare", "regionSources"].includes(tab)) return "analysis";
   if (["rank", "historyOps"].includes(tab)) return "collect";
   return "summary";
 }
@@ -2599,8 +2618,8 @@ function setPanelHeading(panel, title, description) {
 function syncRoleStaticLabels() {
   if (isAdminRole()) {
     setPanelHeading("rank", "수집 결과 분석", "수집 완료 결과의 품질과 저장된 네이버 플레이스 노출순");
-    setPanelHeading("map", "지역 클러스터 지도", "시군구 경계 · 업체 스팟 · 검색량 · 판매율");
-    setPanelHeading("demand", "수요 전망", "수집 키워드의 검색 추세와 시즌별 수요구조를 함께 해석");
+    setPanelHeading("map", "지역 지도", "시군구 경계 · 업체 위치 · 검색량 · 예약 비율");
+    setPanelHeading("demand", "수요 전망", "선택 지역의 숙박 수요와 관광지 방문 전망");
     return;
   }
   setPanelHeading("rank", "경쟁업체 노출", "네이버 상위 노출 경쟁업체의 매출·판매율 표본 비교");
@@ -26302,6 +26321,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   `;
   bindAdminDbCompanySelectButtons();
   applyPendingCompanyEdit();
+  renderAdminRegionAnalysisDashboard(master);
 }
 
 function adminConsoleKpis(master = {}, entries = []) {
@@ -27196,8 +27216,42 @@ function adminSelectedRegion(master = {}) {
   if (!regions.length) return null;
   const selected = regions.find((region) => region.regionKey === state.adminSelectedRegionKey);
   if (selected) return selected;
+  if (state.adminSelectedRegionKey) return null;
   state.adminSelectedRegionKey = regions[0].regionKey || "";
   return regions[0];
+}
+
+function openAnalysisRegionManagement() {
+  if (!isAdminRole()) return;
+  const region = typeof selectedAnalysisRegion === "function" ? selectedAnalysisRegion() : null;
+  if (!region?.regionKey) return;
+  state.regionManagementReturnContext = {
+    regionKey: region.regionKey,
+    label: region.fullName || [region.sidoFull || region.sido, region.sigungu || region.name].filter(Boolean).join(" "),
+    tab: state.activeTab
+  };
+  clearAdminDbCompanyHash();
+  state.adminSelectedRegionKey = region.regionKey;
+  state.adminRegionReviewFilter = "all";
+  state.adminRegionCompanyFilter = "priority";
+  state.adminRegionAuditFilter = "all";
+  state.adminRegionCompanyQuery = "";
+  state.adminDbFilters = { ...state.adminDbFilters, query: "", province: "all", region: region.regionKey, status: "all" };
+  state.adminDbViewMode = "region";
+  setActiveTab("admin");
+  setAdminPanelSection("database");
+  renderAdminDatabaseDashboard();
+  syncAppHistoryState(false);
+  window.requestAnimationFrame(() => document.getElementById("regionDataManagement")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+}
+
+function returnToRegionAnalysis() {
+  if (!isAdminRole()) return;
+  const previous = state.regionManagementReturnContext;
+  if (!previous?.regionKey) return;
+  if (typeof setAnalysisRegion === "function") setAnalysisRegion(previous.regionKey, { explicit: true, history: false, render: false });
+  const tab = ["dictionary", "map", "demand", "regionCompare", "regionSources"].includes(previous.tab) ? previous.tab : "dictionary";
+  setActiveTab(tab);
 }
 
 function adminRegionActionItems(region = {}, rows = []) {
@@ -28293,7 +28347,7 @@ function adminRegionalDatabasePanel(master = {}) {
         <div class="admin-regional-main">
           ${adminRegionOperationsQueuePanel(regions, selectedRegion?.regionKey || "")}
           ${adminRegionalMaintenanceBoard(regions, selectedRegion?.regionKey || "")}
-          <p class="admin-regional-rule">지역 운영 큐는 데이터 보강과 갱신 작업만 다룹니다. 지역 판정과 공개 검수는 지역분석에서 확인합니다.</p>
+          <p class="admin-regional-rule">자료 보강과 갱신 작업을 확인한 뒤 아래 지역 자료 관리에서 기준값과 공개 상태를 관리합니다.</p>
         </div>
         ${adminRunRegionalOpsHtml(runOps)}
       </div>
@@ -28310,6 +28364,9 @@ function adminRegionalAnalysisPanel(master = {}) {
   const generatedAt = masterOps.generatedAt ? compactDateTime(masterOps.generatedAt) : "";
   return `
     <section class="admin-console-panel admin-regional-ops-panel">
+      ${adminRegionalDetailPanel(selectedRegion, master)}
+      <details class="region-management-overview">
+        <summary>전국 지역 자료 현황·확인 목록</summary>
       <div class="admin-console-head">
         <div>
           <strong>지역별 현황</strong>
@@ -28340,7 +28397,7 @@ function adminRegionalAnalysisPanel(master = {}) {
           </p>
         </div>
       </div>
-      ${adminRegionalDetailPanel(selectedRegion, master)}
+      </details>
     </section>
   `;
 }
@@ -29146,9 +29203,23 @@ function adminHomeRecentRows(master = {}) {
 
 function renderAdminRegionAnalysisDashboard(master = adminConsoleMasterSource()) {
   if (!els.adminRegionAnalysisDashboard) return;
-  const visible = isAdminRole();
+  const visible = isAdminRole() && state.adminDbViewMode === "region" && !String(state.adminDbFilters?.query || "").trim();
+  const container = document.getElementById("regionDataManagement");
+  if (container) container.hidden = !visible;
   els.adminRegionAnalysisDashboard.hidden = !visible;
-  els.adminRegionAnalysisDashboard.innerHTML = visible ? adminRegionalAnalysisPanel(master) : "";
+  if (!visible) return;
+  const previous = state.regionManagementReturnContext;
+  const returnButton = container?.querySelector("[data-return-region-analysis]");
+  if (returnButton) {
+    returnButton.hidden = !previous?.regionKey;
+    returnButton.textContent = previous?.label ? `${previous.label} 분석으로 돌아가기` : "지역분석으로 돌아가기";
+  }
+  const region = adminSelectedRegion(master);
+  const missingSelected = Boolean(state.adminSelectedRegionKey && !region);
+  const selectedAdministrativeRegion = administrativeRegionForKey(state.adminSelectedRegionKey);
+  const missingLabel = selectedAdministrativeRegion?.fullName || (previous?.regionKey === state.adminSelectedRegionKey ? previous.label : "선택 지역");
+  els.adminRegionAnalysisDashboard.innerHTML = `${missingSelected ? `<p class="empty" role="status">${escapeHtml(missingLabel)}의 관리 자료가 아직 없습니다. 다른 지역 자료로 대체하지 않습니다.</p>` : ""}${adminRegionalAnalysisPanel(master)}`;
+  if (els.dictionaryRequestQueue) els.dictionaryRequestQueue.innerHTML = renderLocationCardRequestQueue() || `<p class="hint">현재 대기 중인 지역 자료 요청이 없습니다.</p>`;
 }
 
 function renderAdminIntegrationRegistry() {
@@ -29404,6 +29475,176 @@ function renderHistoryOps() {
   `;
 }
 
+const REGION_ANALYSIS_TABS = new Set(["dictionary", "map", "demand", "regionCompare", "regionSources"]);
+const ANALYSIS_REGION_STORAGE_KEY = "lodging-datalab:analysis-region:v1";
+
+function analysisRegionForKey(value = "") {
+  const key = String(value || "").trim();
+  if (!key) return null;
+  const matches = regionMasterUnits().filter((region) => region.active && region.selectable && [
+    region.regionKey, region.regionId, region.officialCode, region.locationCardKey, region.providerMappings?.kto?.regionKey
+  ].filter(Boolean).includes(key));
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function selectedAnalysisRegion() {
+  return analysisRegionForKey(state.analysisRegionSelection?.regionKey);
+}
+
+function analysisRegionLabel(region = selectedAnalysisRegion()) {
+  return region?.fullName || [region?.sido, region?.sigungu || region?.name].filter(Boolean).join(" ") || "지역 미선택";
+}
+
+function analysisRegionStorageKey() {
+  return `${ANALYSIS_REGION_STORAGE_KEY}:${state.session?.role || ""}:${state.session?.username || ""}`;
+}
+
+function analysisRunRegion(data = state.data) {
+  if (!data?.run || !regionMasterUnits().length) return null;
+  const explicitKey = data.run.regionKey || data.run.regionId || "";
+  if (explicitKey) return analysisRegionForKey(explicitKey);
+  // Only an exact, unambiguous administrative name may initialize the region.
+  // In particular, do not use the dictionary's previously selected province to
+  // disambiguate names such as 고성, or treat 서울근교 as one administrative area.
+  const query = locationProfileKeywordKey(data.run.keyword || "").replace(/글램핑|카라반|캠핑장|캠핑|펜션|풀빌라|숙소|숙박/g, "");
+  if (!query) return null;
+  const matches = regionMasterUnits().filter((region) => region.active && region.selectable && [
+    region.fullName, region.name, region.shortName, region.sigungu,
+    ...(region.level === "broad" ? [region.sido, region.sidoFull] : []), ...(region.aliases || [])
+  ].filter(Boolean).some((name) => locationProfileKeywordKey(name) === query));
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    const sources = [data.tourismVisitors, data.tourismVisitorHistory, data.tourismDemandStrengthHistory].filter(Boolean);
+    const rows = [...(data.regions || []), ...sources.flatMap((item) => [...(item.regions || []), ...(item.region ? [item.region] : []), ...(item.regionKey ? [item] : [])])];
+    const keys = [...new Set(rows.map((row) => row.regionKey || row.regionId).filter(Boolean))];
+    const observed = keys.map(analysisRegionForKey);
+    if (observed.length && observed.every((region) => region && region.regionKey === observed[0]?.regionKey)) {
+      return matches.find((region) => region.regionKey === observed[0].regionKey) || null;
+    }
+  }
+  return null;
+}
+
+function analysisRunMatchesRegion(region = selectedAnalysisRegion(), data = state.data) {
+  // Member reports retain their keyword/search-area scope (for example 서울근교).
+  // The shared administrative-region workspace is an administrator feature.
+  if (!isAdminRole()) return Boolean(data?.run);
+  if (!region || analysisRunRegion(data)?.regionKey !== region.regionKey) return false;
+  const sources = [data?.tourismVisitors, data?.tourismVisitorHistory, data?.tourismDemandStrengthHistory].filter(Boolean);
+  const rows = [...(data?.regions || []), ...sources.flatMap((source) => [
+    ...(source.regions || []), ...(source.region ? [source.region] : []), ...(source.regionKey ? [source] : [])
+  ])];
+  return rows.every((row) => {
+    if (!row.regionKey && !row.regionId) return true;
+    const observed = analysisRegionForKey(row.regionKey || row.regionId);
+    return observed && (observed.regionKey === region.regionKey || (region.level === "broad"
+      && [observed.provinceRegionKey, observed.provinceRegionId].includes(region.regionKey))
+      || (region.level === "broad" && observed.provinceRegionId === region.regionId));
+  });
+}
+
+function applyAnalysisRegionToDictionary(region = selectedAnalysisRegion()) {
+  const card = region ? dictionaryStoredCardForRegion(region) : null;
+  state.selectedLocationCard = card;
+  state.dictionaryPendingRegion = card ? null : region;
+  state.dictionaryProvince = region ? (administrativeProvinceForRegion(region)?.regionKey || region.sido || "") : "";
+  state.demandRegionContext = dictionaryDemandContext();
+}
+
+function setAnalysisRegion(regionKey = "", options = {}) {
+  const region = analysisRegionForKey(regionKey);
+  if (regionKey && !region) return false;
+  state.analysisRegionSelection = {
+    regionKey: region?.regionKey || "",
+    explicit: options.explicit !== false,
+    source: options.source || (options.explicit === false ? "collection" : "user")
+  };
+  state.analysisRegionRestored = true;
+  applyAnalysisRegionToDictionary(region);
+  state.dictionaryDetailTab = "basic";
+  if (els.dictionarySearchInput && !options.keepSearch) els.dictionarySearchInput.value = "";
+  if (state.analysisRegionSelection.explicit && !options.fromHistory) {
+    try { window.localStorage?.setItem(analysisRegionStorageKey(), JSON.stringify(state.analysisRegionSelection)); } catch { /* Storage is optional. */ }
+  }
+  if (typeof syncTourismForecastToAnalysisRegion === "function") syncTourismForecastToAnalysisRegion(region);
+  renderRegionAnalysisShell();
+  if (options.render !== false && REGION_ANALYSIS_TABS.has(state.activeTab)) renderHeader();
+  if (options.render !== false) renderActiveRegionAnalysis();
+  if (!options.fromHistory && options.history !== false) syncAppHistoryState(options.pushHistory !== false);
+  return true;
+}
+
+function reconcileAnalysisRegionSelection() {
+  if (!regionMasterUnits().length) return;
+  if (!state.analysisRegionRestored) {
+    state.analysisRegionRestored = true;
+    let restored = state.analysisRegionSelection || window.history?.state?.analysisRegionSelection || null;
+    if (!restored) {
+      try { restored = JSON.parse(window.localStorage?.getItem(analysisRegionStorageKey()) || "null"); } catch { /* Ignore invalid saved preferences. */ }
+    }
+    if (restored && (restored.regionKey === "" || analysisRegionForKey(restored.regionKey))) state.analysisRegionSelection = restored;
+  }
+  if (state.analysisRegionSelection?.explicit) {
+    applyAnalysisRegionToDictionary();
+    if (typeof syncTourismForecastToAnalysisRegion === "function") syncTourismForecastToAnalysisRegion(selectedAnalysisRegion());
+    renderRegionAnalysisShell();
+    return;
+  }
+  const inferred = analysisRunRegion();
+  setAnalysisRegion(inferred?.regionKey || "", { explicit: false, source: "collection", render: false, history: false });
+}
+
+function renderRegionAnalysisShell() {
+  const visible = isAdminRole() && REGION_ANALYSIS_TABS.has(state.activeTab) && roleAllowsTab(state.activeTab);
+  if (els.regionAnalysisShell) els.regionAnalysisShell.hidden = !visible;
+  const region = selectedAnalysisRegion();
+  if (els.analysisRegionSelect) {
+    const options = administrativeProvinceEntries().map((province) => {
+      const entries = [province, ...administrativeRegionsForProvince(province.regionKey)];
+      return `<optgroup label="${escapeHtml(province.sidoFull || province.name)}">${entries.map((entry) => `<option value="${escapeHtml(entry.regionKey)}">${escapeHtml(entry.level === "broad" ? `${entry.name} 전체` : entry.name)}</option>`).join("")}</optgroup>`;
+    }).join("");
+    const markup = `<option value="">지역 선택</option>${options}`;
+    if (els.analysisRegionSelect.innerHTML !== markup) els.analysisRegionSelect.innerHTML = markup;
+    els.analysisRegionSelect.value = region?.regionKey || "";
+    els.analysisRegionSelect.disabled = !regionMasterUnits().length;
+  }
+  if (els.analysisRegionStatus) els.analysisRegionStatus.textContent = !region
+    ? "지역을 선택하면 모든 지역분석 화면에 함께 적용됩니다."
+    : `${analysisRegionLabel(region)} · ${state.analysisRegionSelection?.explicit ? "직접 선택" : "수집지역에서 연결"} · ${analysisRunMatchesRegion(region) ? "같은 지역 수집자료 연결" : "이 지역의 수집자료 없음"}`;
+  if (els.analysisRegionManageButton) {
+    els.analysisRegionManageButton.hidden = !isAdminRole();
+    els.analysisRegionManageButton.disabled = !region;
+    els.analysisRegionManageButton.textContent = `${region ? `${analysisRegionLabel(region)} ` : ""}자료 관리`;
+  }
+  document.querySelectorAll("[data-region-analysis-tab]").forEach((button) => {
+    const tab = button.dataset.regionAnalysisTab;
+    button.hidden = !roleAllowsTab(tab);
+    button.classList.toggle("active", tab === state.activeTab);
+    button.setAttribute("aria-pressed", tab === state.activeTab ? "true" : "false");
+  });
+}
+
+function renderActiveRegionAnalysis() {
+  if (state.activeTab === "dictionary") renderLocationDictionary();
+  if (state.activeTab === "map") void renderMap();
+  if (state.activeTab === "demand") renderDemand();
+  if (state.activeTab === "regionCompare") renderRegionComparison();
+  if (state.activeTab === "regionSources") renderRegionSources();
+}
+
+function regionAnalysisEmptyHtml(kind = "분석") {
+  const region = selectedAnalysisRegion();
+  return `<div class="empty" role="status"><strong>${escapeHtml(region ? `${analysisRegionLabel(region)} · ${kind} 자료 없음` : "지역을 먼저 선택하세요")}</strong><p>${region ? "선택한 지역과 연결되는 자료만 표시합니다. 다른 지역의 수집결과는 사용하지 않습니다." : "상단 지역 선택에서 분석할 행정구역을 고르세요."}</p>${analysisMatchingRunButton()}</div>`;
+}
+
+function analysisMatchingRunButton() {
+  const region = selectedAnalysisRegion();
+  if (!region) return "";
+  const run = (state.runs || []).find((entry) => entry.id && entry.id !== state.activeRunId
+    && analysisRunRegion({ run: entry })?.regionKey === region.regionKey);
+  return run ? `<button type="button" class="secondary-button" data-analysis-open-run="${escapeHtml(run.id)}">저장된 ${escapeHtml(analysisRegionLabel(region))} 수집결과 보기</button>` : "";
+}
+
 function dictionaryDemandContext() {
   const pendingRegion = state.dictionaryPendingRegion;
   const card = state.selectedLocationCard
@@ -29424,19 +29665,7 @@ function dictionaryDemandContext() {
 }
 
 function demandRegionContextMatchesRun(context = state.demandRegionContext) {
-  if (!context) return true;
-  // A regional tourism observation does not make an unrelated collection run
-  // suitable for that region. Keep aggregate search and sales data together.
-  if (!context.regionKey || !context.keyword || !state.data?.run
-    || !locationProfileIsExactKeyword({ keyword: activeKeyword() }, context.keyword)) return false;
-  const sources = [state.data.tourismVisitors, state.data.tourismVisitorHistory, state.data.tourismDemandStrengthHistory].filter(Boolean);
-  const regionRows = [
-    ...(state.data.regions || []),
-    ...sources.flatMap((source) => [...(source.regions || []), ...(source.region ? [source.region] : []), ...(source.regionKey ? [source] : [])])
-  ];
-  const observedRegionKeys = new Set(regionRows.map((row) => row.regionKey).filter(Boolean));
-  if (observedRegionKeys.size) return observedRegionKeys.size === 1 && observedRegionKeys.has(context.regionKey);
-  return !context.requiresRegionEvidence;
+  return analysisRunMatchesRegion();
 }
 
 function renderDemandRegionPending(context = state.demandRegionContext) {
@@ -29453,17 +29682,18 @@ function renderDemandRegionPending(context = state.demandRegionContext) {
       <span>자료 대기</span>
     </section>
     <section class="structure-empty-card" role="status">
-      <strong>${context?.regionKey ? "선택지역의 수요 분석자료가 필요합니다" : "입지사전에서 지역을 먼저 선택하세요"}</strong>
+      <strong>${context?.regionKey ? "선택지역의 수요 분석자료가 필요합니다" : "상단에서 지역을 먼저 선택하세요"}</strong>
       <p>현재 수집자료: ${escapeHtml(currentKeyword)}${context?.keyword ? ` · 필요한 키워드: ${escapeHtml(context.keyword)}` : ""}</p>
-      <p>입지사전의 관광 관측자료와 수집결과의 검색·판매 자료는 별도입니다. 다른 지역의 수치를 선택지역 전망으로 표시하지 않습니다.</p>
+      <p>지역 현황의 관광 관측자료와 수집결과의 검색·판매 자료는 별도입니다. 다른 지역의 수치를 선택지역 전망으로 표시하지 않습니다.</p>
       ${context?.requiresRegionEvidence ? "<p>같은 이름의 행정구역이 여러 곳 있어, 수집자료의 지역코드까지 일치해야 연결합니다.</p>" : ""}
       <p>${context?.keyword ? "해당 키워드의 저장된 수집결과를 선택하거나 수집을 완료한 후 다시 확인하세요." : "이 지역에 연결된 수집 키워드가 아직 없습니다. 관광 기반 탭에서 확보된 방문자·체류·소비 추이를 확인할 수 있습니다."}</p>
+      ${analysisMatchingRunButton()}
     </section>
   `;
 }
 
 function openDictionaryDemand() {
-  setActiveTab("demand", { demandRegionContext: dictionaryDemandContext() });
+  setActiveTab("demand");
 }
 
 function renderDemand() {
@@ -29551,34 +29781,59 @@ function renderDemand() {
       </article>
     </section>
 
-    <section class="demand-table-card" data-surface="dark">
-      <div class="demand-card-head">
-        <div>
-          <h3>지역 비교</h3>
-          <p>지역 키워드별 월검색량·완전월 일평균 방문자·영업 우선순위</p>
-        </div>
-        <span>${fmtNumber(regions.length)} 지역</span>
-      </div>
-      <div class="demand-region-table">
-        <div class="demand-region-head">
-          <span>지역</span><span>월검색량</span><span>최근 방문자</span><span>트렌드</span><span>클러스터</span><span>판단</span>
-        </div>
-        ${regions.length ? regions.map(({ region, traffic: rowTraffic, primary }) => `
-          <div class="demand-region-row">
-            <strong>${escapeHtml(region.region || region.name || "지역")}</strong>
-            <span>${rowTraffic.totalSearchVolume ? fmtNumber(rowTraffic.totalSearchVolume) : "확인필요"}</span>
-            <span>${escapeHtml(tourismVisitorTableValue(region.region || region.name || ""))}</span>
-            <span>${escapeHtml(rowTraffic.trendLabel || "확인중")}</span>
-            <span>${escapeHtml(primary)}</span>
-            <em>${escapeHtml(demandPriorityLabel(rowTraffic))}</em>
-          </div>
-        `).join("") : `<div class="empty">지역별 검색수요 데이터가 없습니다.</div>`}
-      </div>
-      ${tourismVisitorSourceNote()}
-    </section>
-
     ${demandCompanySample()}
   `;
+}
+
+function renderRegionComparison() {
+  if (!els.regionCompareDashboard) return;
+  if (!analysisRunMatchesRegion()) {
+    els.regionCompareDashboard.innerHTML = regionAnalysisEmptyHtml("비교");
+    return;
+  }
+  const rows = demandRegionRows();
+  els.regionCompareDashboard.innerHTML = `
+    <section class="demand-table-card" data-surface="dark">
+      <div class="demand-card-head"><div><h3>${escapeHtml(analysisRegionLabel())} · 지역 비교</h3><p>기준지역을 유지한 채 같은 수집결과 안의 지역별 자료를 비교합니다.</p></div><span>${fmtNumber(rows.length)}개 지역</span></div>
+      <p class="hint">${escapeHtml(activeKeyword())} · ${escapeHtml(dateRangeLabel(state.data?.run || {}))} · 서로 다른 자료의 기준월은 출처에서 확인하세요.</p>
+      <div class="demand-region-table">
+        <div class="demand-region-head"><span>지역</span><span>월검색량</span><span>최근 방문자</span><span>트렌드</span><span>클러스터</span><span>판단</span></div>
+        ${rows.map(({ region, traffic, primary }) => `<div class="demand-region-row"><strong>${escapeHtml(region.region || region.name || "지역")}</strong><span>${traffic.totalSearchVolume ? fmtNumber(traffic.totalSearchVolume) : "확인필요"}</span><span>${escapeHtml(tourismVisitorTableValue(region.region || region.name || ""))}</span><span>${escapeHtml(traffic.trendLabel || "확인중")}</span><span>${escapeHtml(primary)}</span><em>${escapeHtml(demandPriorityLabel(traffic))}</em></div>`).join("") || '<div class="empty">비교할 지역별 검색수요 자료가 없습니다.</div>'}
+      </div>
+      ${rows.length < 2 ? '<p class="hint">비교 가능한 지역이 두 곳 미만입니다. 확인되지 않은 비교 수치를 만들지 않습니다.</p>' : ""}
+      ${tourismVisitorSourceNote()}
+    </section>`;
+}
+
+function renderRegionSources() {
+  if (!els.regionSourcesDashboard) return;
+  const region = selectedAnalysisRegion();
+  if (!region) {
+    els.regionSourcesDashboard.innerHTML = regionAnalysisEmptyHtml("출처");
+    return;
+  }
+  const card = dictionaryStoredCardForRegion(region) || locationProfileSubjectForRegion(region);
+  const alias = locationProfileAlias(card, region);
+  const provider = region.providerMappings?.kto || {};
+  const providerCodePending = Boolean(provider.status && provider.status !== "ready");
+  if (region.level === "local" && provider.ktoSggCd && !providerCodePending) void ensureLocationProfile(card);
+  const entry = locationProfileEntry(card);
+  const profile = locationProfilePayload(entry);
+  const runtime = analysisRunMatchesRegion(region) ? locationRuntimeStats(card, alias) : {};
+  const evidence = {
+    place: locationProfilePlaceEvidence(profile, runtime, card, alias),
+    traffic: locationProfileTrafficEvidence(profile, card),
+    trend: locationProfileTrendEvidence(profile, card),
+    visitor: locationProfileVisitorEvidence(profile, card, alias),
+    strength: locationProfileStrengthEvidence(profile, card, alias),
+    resourceDemand: locationProfileResourceDemandEvidence(profile, card, alias),
+    diversity: locationProfileDiversityEvidence(profile, card, alias)
+  };
+  els.regionSourcesDashboard.innerHTML = `<section class="location-card location-profile-card">
+    <header class="location-profile-overview"><div><p class="eyebrow">자료·출처</p><h3>${escapeHtml(analysisRegionLabel(region))}</h3><p>지역코드가 연결된 자료의 출처·기준기간·확보 상태를 확인합니다.</p></div></header>
+    <p class="hint">행정구역 ${escapeHtml(region.officialCode || region.regionId || region.regionKey)} · ${region.level === "broad" ? "광역 자료와 시군구 자료를 구분합니다." : "시군구 기준"}</p>
+    ${renderLocationProfileSourcePanel(entry, profile, evidence, card.regionKey, { providerCodePending })}
+  </section>`;
 }
 
 function renderTargets() {
@@ -30540,11 +30795,24 @@ function featureName(feature) {
 }
 
 async function renderMap() {
+  if (!analysisRunMatchesRegion()) {
+    if (els.mapCount) els.mapCount.textContent = selectedAnalysisRegion() ? "선택지역 자료 없음" : "지역 미선택";
+    if (els.clusterMap) els.clusterMap.innerHTML = `<text x="50%" y="50%" text-anchor="middle" class="map-empty-label">${escapeHtml(analysisRegionLabel())} · 지도 자료 없음</text>`;
+    if (els.regionList) els.regionList.innerHTML = regionAnalysisEmptyHtml("지도");
+    if (els.mapLegend) els.mapLegend.innerHTML = "";
+    if (els.mapLayerRow) els.mapLayerRow.innerHTML = "";
+    const caption = document.querySelector(".map-caption");
+    if (caption) caption.textContent = "선택한 지역의 수집자료가 있어야 업체 위치와 경쟁권을 표시합니다.";
+    return;
+  }
+  const renderingRegionKey = selectedAnalysisRegion()?.regionKey;
+  const renderingRun = state.data;
   renderMapControls();
   const regions = state.data?.regions || [];
   const items = state.data?.availability?.items || [];
   els.mapCount.textContent = `${fmtNumber(regions.length)} 지역`;
   const geojson = await loadLocalMap();
+  if (renderingRun !== state.data || renderingRegionKey !== selectedAnalysisRegion()?.regionKey || !analysisRunMatchesRegion()) return;
   const features = geojson?.features || [];
   const activeNames = new Set(regions.map((region) => String(region.region || region.name || "").replace(/\s+/g, "")));
   const bounds = regionBounds(regions, features, items);
@@ -31355,7 +31623,14 @@ function regionGroupLocationScoreModel(group = {}, cards = [], runtime = {}, tou
   };
 }
 
+function locationProfileRunMatchesRegion(card = {}) {
+  if (!isAdminRole()) return true;
+  const region = analysisRegionForKey(card.regionKey);
+  return Boolean(region && region.regionKey === selectedAnalysisRegion()?.regionKey && analysisRunMatchesRegion(region));
+}
+
 function locationRuntimeScope(card = {}, alias = null) {
+  if (!locationProfileRunMatchesRegion(card)) return { items: [], regions: [], exactActive: false };
   const allItems = state.data?.availability?.items || [];
   const regions = state.data?.regions || [];
   const terms = [
@@ -32119,12 +32394,7 @@ function renderLocationGroupDictionary(group) {
   `;
 }
 
-const DEFAULT_LOCATION_REGION_KEY = "kr_gyeongnam_sancheong";
 const LOCATION_PROFILE_RETRY_INTERVAL_MS = 30_000;
-
-function isDefaultLocationCard(card = {}) {
-  return card?.regionKey === DEFAULT_LOCATION_REGION_KEY;
-}
 
 function administrativeRegionForLocationCard(card = {}) {
   const regionKey = String(card?.regionKey || "").trim();
@@ -32222,6 +32492,7 @@ async function ensureLocationProfile(card = {}, options = {}) {
     if (state.activeTab === "dictionary" && selectedRegionKey === regionKey) {
       renderLocationDictionary();
     }
+    if (state.activeTab === "regionSources" && selectedRegionKey === regionKey) renderRegionSources();
   }
   return true;
 }
@@ -32361,7 +32632,7 @@ function locationProfileTrafficEvidence(profile, card = {}) {
   const endpointRows = locationProfileTrafficRows(profile);
   let row = endpointRows.find((candidate) => locationProfileIsExactKeyword(candidate, expectedKeyword)) || null;
   let origin = row ? "profile" : "";
-  if (!row) {
+  if (!row && locationProfileRunMatchesRegion(card)) {
     const regionRows = (state.data?.regions || []).map((region) => ({
       ...(region.traffic || {}),
       keyword: region.traffic?.keyword || region.trafficKeyword || region.keyword || region.searchKeyword || region.region || region.name || "",
@@ -32408,6 +32679,9 @@ function locationProfilePlaceRowHasDetail(item = {}) {
 }
 
 function locationProfilePlaceEvidence(profile, runtime = {}, card = {}, alias = null) {
+  // Stored profile evidence belongs to its requested region. A current run is a
+  // separate source and must pass the exact region guard before name filtering.
+  const runMatchesRegion = locationProfileRunMatchesRegion(card);
   const container = locationProfileFirstObject(
     profile?.naverPlace,
     profile?.place,
@@ -32429,10 +32703,10 @@ function locationProfilePlaceEvidence(profile, runtime = {}, card = {}, alias = 
     const haystack = compactSearchText(values.filter(Boolean).join(" "));
     return localTerms.some((term) => haystack.includes(term));
   };
-  const regionalRows = (runtime.regions || [])
+  const regionalRows = (runMatchesRegion ? runtime.regions || [] : [])
     .filter((region) => matchesLocal([region.region, region.name, region.target, region.note]))
     .flatMap((region) => Array.isArray(region?.places) ? region.places : []);
-  const detailRows = (runtime.items || []).filter((item) => matchesLocal([
+  const detailRows = (runMatchesRegion ? runtime.items || [] : []).filter((item) => matchesLocal([
     item.region,
     item.address,
     item.location,
@@ -32456,7 +32730,7 @@ function locationProfilePlaceEvidence(profile, runtime = {}, card = {}, alias = 
         rows[0]?.collectedAt,
         rows[0]?.observedAt,
         profile?.collectedAt,
-        locationProfileCurrentRunObservedAt()
+        origin === "run" ? locationProfileCurrentRunObservedAt() : ""
       )
     : "";
   return {
@@ -32482,7 +32756,7 @@ function locationProfileTrendEvidence(profile, card = {}) {
     profile?.trend,
     profile?.evidence?.datalabTrend
   );
-  const fallback = demandTrendSource();
+  const fallback = locationProfileRunMatchesRegion(card) ? demandTrendSource() : null;
   const source = endpoint && locationProfileIsExactKeyword(endpoint, card.searchKeyword)
     ? endpoint
     : (fallback && locationProfileIsExactKeyword(fallback, card.searchKeyword) ? fallback : null);
@@ -34599,7 +34873,6 @@ function renderAdministrativeRegionChoices(regions = [], query = "") {
 }
 
 function renderLocationDictionary(match = null) {
-  renderAdminRegionAnalysisDashboard();
   if (!els.dictionaryResult) return;
   const cards = state.dictionary?.cards || [];
   const groups = state.dictionary?.regionGroups || [];
@@ -34616,16 +34889,20 @@ function renderLocationDictionary(match = null) {
   if (els.dictionaryRequestQueue) {
     els.dictionaryRequestQueue.innerHTML = requestQueueHtml || `<p class="hint">현재 대기 중인 지역카드 개발 요청이 없습니다.</p>`;
   }
-  const defaultCard = cards.find((card) => isDefaultLocationCard(card)) || cards[0] || null;
+  const selectedRegion = selectedAnalysisRegion();
   const result = match
-    || (query ? locationCardForQuery(query) : null)
-    || (state.dictionaryPendingRegion ? {
-        card: dictionaryStoredCardForRegion(state.dictionaryPendingRegion),
-        administrativeRegion: state.dictionaryPendingRegion,
-        province: state.dictionaryPendingRegion.level === "broad" ? state.dictionaryPendingRegion : null
+    || (selectedRegion ? {
+        card: dictionaryStoredCardForRegion(selectedRegion),
+        administrativeRegion: selectedRegion,
+        province: selectedRegion.level === "broad" ? selectedRegion : null
       } : null)
-    || (state.selectedLocationCard ? { card: state.selectedLocationCard, alias: dictionaryAliasForCard(state.selectedLocationCard) } : null)
-    || (defaultCard ? { card: defaultCard, alias: dictionaryAliasForCard(defaultCard) } : {});
+    || {};
+  if (!match && !selectedRegion) {
+    renderDictionaryQuickButtons();
+    if (els.dictionarySearchStatus) els.dictionarySearchStatus.textContent = "상단에서 분석할 지역을 선택하세요.";
+    els.dictionaryResult.innerHTML = regionAnalysisEmptyHtml("현황");
+    return;
+  }
   if (result.group) {
     state.dictionaryProvince = result.group.sido || state.dictionaryProvince;
     state.dictionaryPendingRegion = null;
@@ -34742,59 +35019,25 @@ function runDictionarySearch(query) {
   if (query && els.dictionarySearchInput) els.dictionarySearchInput.value = query;
   const searchValue = els.dictionarySearchInput?.value?.trim() || "";
   if (!searchValue) {
-    renderLocationDictionary(state.selectedLocationCard
-      ? { card: state.selectedLocationCard, alias: dictionaryAliasForCard(state.selectedLocationCard) }
-      : null);
+    renderLocationDictionary();
     return;
   }
   const result = locationCardForQuery(searchValue);
-  state.selectedLocationCard = result.card || null;
-  state.dictionaryPendingRegion = result.card ? null : (result.administrativeRegion || null);
-  state.dictionaryDetailTab = "basic";
+  const region = result.province || result.administrativeRegion || administrativeRegionForLocationCard(result.card || {});
+  if (region && !result.ambiguousRegions?.length) {
+    setAnalysisRegion(region.regionKey);
+    return;
+  }
   renderLocationDictionary(result);
 }
 
 function selectDictionaryRegion(regionKey = "") {
-  const region = administrativeRegionForKey(regionKey)
-    || tourismRegionEntries().find((entry) => entry.regionKey === regionKey)
-    || dictionaryRegionsForProvince().find((entry) => entry.regionKey === regionKey)
-    || null;
-  if (!region) return;
-  const card = dictionaryStoredCardForRegion(region);
-  const province = administrativeProvinceForRegion(region);
-  state.dictionaryProvince = province?.regionKey || region.sido || state.dictionaryProvince;
-  state.dictionaryDetailTab = "basic";
-  state.dictionaryPendingRegion = card ? null : region;
-  state.selectedLocationCard = card;
-  if (els.dictionarySearchInput) els.dictionarySearchInput.value = "";
-  renderLocationDictionary(card
-    ? { card, alias: dictionaryAliasForCard(card), administrativeRegion: region }
-    : region.level === "broad"
-      ? { card: null, province: region, administrativeRegion: region }
-      : { card: null, administrativeRegion: region });
+  setAnalysisRegion(regionKey);
 }
 
 function selectDictionaryProvince(province = "") {
-  const nextValue = String(province || "").trim() || state.dictionaryProvince;
-  const administrativeProvince = administrativeProvinceForValue(nextValue);
-  state.dictionaryProvince = administrativeProvince?.regionKey || nextValue;
-  state.dictionaryDetailTab = "basic";
-  if (els.dictionarySearchInput) els.dictionarySearchInput.value = "";
-  if (administrativeProvince) {
-    state.selectedLocationCard = null;
-    state.dictionaryPendingRegion = administrativeProvince;
-    renderLocationDictionary({ province: administrativeProvince, administrativeRegion: administrativeProvince });
-    return;
-  }
-  state.dictionaryPendingRegion = null;
-  const regions = dictionaryRegionsForProvince(state.dictionaryProvince);
-  const nextRegion = regions.find((region) => dictionaryStoredCardForRegion(region)) || regions[0] || null;
-  if (!nextRegion) {
-    state.selectedLocationCard = null;
-    renderLocationDictionary({ card: null, missingRegion: null });
-    return;
-  }
-  selectDictionaryRegion(nextRegion.regionKey);
+  const region = administrativeProvinceForValue(String(province || "").trim());
+  if (region) setAnalysisRegion(region.regionKey);
 }
 
 async function loadLocationDictionary() {
@@ -34807,16 +35050,9 @@ async function loadLocationDictionary() {
     state.dictionary = dictionary;
     state.regionMaster = regionMaster;
     state.tourismRegionMap = tourismRegionMap;
-    const initialQuery = els.dictionarySearchInput?.value?.trim() || "";
-    if (initialQuery) {
-      runDictionarySearch(initialQuery);
-    } else {
-      const initialCard = state.dictionary.cards?.find((card) => isDefaultLocationCard(card)) || state.dictionary.cards?.[0] || null;
-      state.selectedLocationCard = initialCard;
-      state.dictionaryProvince = dictionaryProvinceForCard(initialCard) || state.dictionaryProvince;
-      state.dictionaryDetailTab = "basic";
-      renderLocationDictionary(initialCard ? { card: initialCard, alias: dictionaryAliasForCard(initialCard) } : null);
-    }
+    reconcileAnalysisRegionSelection();
+    renderLocationDictionary();
+    renderActiveRegionAnalysis();
     if (isAdminRole() && state.companyMaster) renderAdminConsoleDashboard();
     if (!isAdminRole()) renderB2BSearchPanel();
   } catch (error) {
@@ -35666,9 +35902,11 @@ function adminHeaderView() {
   return {
     report: ["업종분석", "업종 현황과 시장 요약"],
     rank: ["수집 결과 분석", "수집 완료 즉시 품질·확인 대상·저장된 플레이스 순서 분석"],
-    dictionary: ["지역분석", "지역 현황·입지 보정·지역 운영"],
-    map: ["지역분석 · 지도", "지역 내·인접 경쟁권과 반경 노출"],
+    dictionary: ["지역분석 · 지역 현황", "선택지역의 기본정보와 관광·숙박 자료"],
+    map: ["지역분석 · 지역 지도", "지역 내·인접 경쟁권과 반경 노출"],
     demand: ["지역분석 · 수요 전망", "시즌 수요와 네이버 트렌드"],
+    regionCompare: ["지역분석 · 지역 비교", "기준지역을 유지하며 연결된 지역별 자료 비교"],
+    regionSources: ["지역분석 · 자료·출처", "선택지역 자료의 출처와 기준기간"],
     historyOps: ["수집 · 이력", "반복 수집 회차와 업체별 변화"],
     admin: ["운영 홈", "오늘 판단할 운영 현황과 데이터 기준시점"]
   }[state.activeTab] || ["관리자 콘솔", "운영 현황"];
@@ -35681,7 +35919,9 @@ function renderHeader() {
     els.pageTitle.textContent = viewTitle;
     if (els.pageSubtitle) {
       els.pageSubtitle.hidden = false;
-      els.pageSubtitle.textContent = `${viewDescription} · ${basis}`;
+      els.pageSubtitle.textContent = REGION_ANALYSIS_TABS.has(state.activeTab)
+        ? `${analysisRegionLabel()} · ${viewDescription}`
+        : `${viewDescription} · ${basis}`;
     }
     document.title = `${APP_BRAND_NAME} · ${viewTitle}`;
     return;
@@ -35717,7 +35957,9 @@ function renderHeader() {
 }
 
 function renderAll() {
+  reconcileAnalysisRegionSelection();
   applyRoleUi();
+  renderRegionAnalysisShell();
   renderB2BSearchPanel();
   renderB2BAccountPanel();
   if (!state.data) {
@@ -35730,6 +35972,9 @@ function renderAll() {
     renderB2BEmptyPanels();
     if (roleAllowsTab("dictionary")) renderLocationDictionary();
     if (state.activeTab === "demand") renderDemand();
+    if (state.activeTab === "map") void renderMap();
+    if (state.activeTab === "regionCompare") renderRegionComparison();
+    if (state.activeTab === "regionSources") renderRegionSources();
     return;
   }
   renderHeader();
@@ -35752,6 +35997,8 @@ function renderAll() {
     renderAdminConsoleDashboard();
   }
   if (roleAllowsTab("dictionary")) renderLocationDictionary();
+  if (state.activeTab === "regionCompare") renderRegionComparison();
+  if (state.activeTab === "regionSources") renderRegionSources();
 }
 
 function syncAppHistoryState(push = false) {
@@ -35760,10 +36007,16 @@ function syncAppHistoryState(push = false) {
     app: "lodging-datalab",
     role: state.session?.role || "",
     tab: state.activeTab || firstRoleTab(),
-    demandRegionContext: state.activeTab === "demand" ? state.demandRegionContext : null
+    analysisRegionSelection: state.analysisRegionSelection ? { ...state.analysisRegionSelection } : null,
+    activeRunId: state.activeRunId || null,
+    adminPanelSection: state.adminPanelSection,
+    adminDbViewMode: state.adminDbViewMode,
+    adminSelectedRegionKey: state.adminSelectedRegionKey,
+    regionManagementReturnContext: state.regionManagementReturnContext ? { ...state.regionManagementReturnContext } : null
   };
   try {
-    if (push && window.history.pushState && window.history.state?.tab !== nextState.tab) {
+    if (push && window.history.pushState && (window.history.state?.tab !== nextState.tab
+      || window.history.state?.analysisRegionSelection?.regionKey !== nextState.analysisRegionSelection?.regionKey)) {
       window.history.pushState(nextState, "", window.location.href);
       return;
     }
@@ -35775,7 +36028,13 @@ function syncAppHistoryState(push = false) {
 
 function setActiveTab(tab, options = {}) {
   state.activeTab = roleAllowsTab(tab) ? tab : firstRoleTab();
-  state.demandRegionContext = state.activeTab === "demand" ? (options.demandRegionContext || null) : null;
+  if (options.analysisRegionSelection !== undefined) {
+    const selection = options.analysisRegionSelection;
+    setAnalysisRegion(selection?.regionKey || "", {
+      explicit: Boolean(selection?.explicit), source: selection?.source || "history", fromHistory: true, render: false
+    });
+  }
+  applyAnalysisRegionToDictionary();
   if (isAdminRole()) {
     state.adminMobileSection = adminMobileSectionForTab(state.activeTab, options.adminMobileSection || "");
     if (state.activeTab !== "admin") state.adminMobileAnchor = "";
@@ -35790,6 +36049,7 @@ function setActiveTab(tab, options = {}) {
   });
   syncPrimaryNavButtons();
   syncB2BRegionSecondaryNav();
+  renderRegionAnalysisShell();
   renderHeader();
   if (state.activeTab === "rank") renderPlaceRankReplayNotice();
   closeDrawer();
@@ -35797,6 +36057,9 @@ function setActiveTab(tab, options = {}) {
     renderB2BEmptyPanels();
     if (state.activeTab === "dictionary") renderLocationDictionary();
     if (state.activeTab === "demand") renderDemand();
+    if (state.activeTab === "map") void renderMap();
+    if (state.activeTab === "regionCompare") renderRegionComparison();
+    if (state.activeTab === "regionSources") renderRegionSources();
     return;
   }
   if (state.activeTab === "report") renderReport();
@@ -35810,6 +36073,26 @@ function setActiveTab(tab, options = {}) {
     syncYeogiManualInterface();
   }
   if (state.activeTab === "dictionary") renderLocationDictionary();
+  if (state.activeTab === "regionCompare") renderRegionComparison();
+  if (state.activeTab === "regionSources") renderRegionSources();
+}
+
+async function restoreAppHistoryState(historyState = {}) {
+  if (!historyState.tab || !roleAllowsTab(historyState.tab)) return;
+  // Even when the target run is already on screen, invalidate an older pending
+  // history request so its late response cannot replace the newly restored view.
+  loadRunRequestSequence += 1;
+  if (isAdminRole()) {
+    if (["overview", "database", "collect", "archive", "members", "files"].includes(historyState.adminPanelSection)) state.adminPanelSection = historyState.adminPanelSection;
+    if (["list", "region", "review"].includes(historyState.adminDbViewMode)) state.adminDbViewMode = historyState.adminDbViewMode;
+    if (typeof historyState.adminSelectedRegionKey === "string") state.adminSelectedRegionKey = historyState.adminSelectedRegionKey;
+    const returnContext = historyState.regionManagementReturnContext;
+    state.regionManagementReturnContext = returnContext && typeof returnContext.regionKey === "string"
+      && ["dictionary", "map", "demand", "regionCompare", "regionSources"].includes(returnContext.tab)
+      ? { regionKey: returnContext.regionKey, label: String(returnContext.label || ""), tab: returnContext.tab } : null;
+  }
+  setActiveTab(historyState.tab, { fromHistory: true, analysisRegionSelection: historyState.analysisRegionSelection || null });
+  if (historyState.activeRunId && historyState.activeRunId !== state.activeRunId) await loadRun(historyState.activeRunId);
 }
 
 function sheetDisclosure(title, count, content, className = "") {
@@ -37469,8 +37752,7 @@ function bindPwaLifecycleEvents() {
   });
   window.addEventListener("online", () => resumeB2BSearchAfterReturn("online").catch(() => {}));
   window.addEventListener("popstate", (event) => {
-    const tab = event.state?.tab;
-    if (tab && roleAllowsTab(tab)) setActiveTab(tab, { fromHistory: true, demandRegionContext: event.state?.demandRegionContext || null });
+    void restoreAppHistoryState(event.state || {}).catch(() => setStatus("이전 화면의 자료를 불러오지 못했습니다."));
   });
 }
 
@@ -39118,6 +39400,51 @@ function tourismForecastSelectedRegionKey() {
   return tourismForecastRegionKey({ areaCd: state.tourismForecastAreaCd, signguCd: state.tourismForecastSignguCd });
 }
 
+function tourismForecastMappedRegion(region) {
+  if (!region || region.active === false || region.status === "retired" || region.selectable === false) return null;
+  const provider = region.providerMappings?.kto || {};
+  const candidates = [region.code5, provider.ktoSggCd, region.ktoSggCd].filter(value => value !== undefined && value !== null && value !== "").map(String);
+  for (const value of [region.officialCode, provider.officialCode].filter(Boolean)) {
+    if (!/^\d{10}$/.test(String(value))) return null;
+    candidates.push(String(value).slice(0, 5));
+  }
+  if (!candidates.length || candidates.some(code => !/^\d{5}$/.test(code) || code !== candidates[0])) return null;
+  const key = `${candidates[0].slice(0, 2)}:${candidates[0]}`;
+  return (state.tourismForecastSettings?.regions || []).find(row => tourismForecastRegionKey(row) === key) || null;
+}
+
+function tourismForecastView(key = tourismForecastSelectedRegionKey()) {
+  state.tourismForecastViews ||= {};
+  if (!key) return { destinationId: "", query: "", expanded: false, error: "" };
+  return state.tourismForecastViews[key] ||= { destinationId: "", query: "", expanded: false, error: "" };
+}
+
+function rememberTourismForecastView() {
+  const key = tourismForecastSelectedRegionKey();
+  if (!key) return;
+  Object.assign(tourismForecastView(key), { destinationId: state.tourismForecastDestinationId, query: state.tourismForecastQuery, expanded: state.tourismForecastExpanded, error: state.tourismForecastError });
+}
+
+function syncTourismForecastToAnalysisRegion(region) {
+  rememberTourismForecastView();
+  state.tourismForecastAnalysisRegion = region || null;
+  const mapped = tourismForecastMappedRegion(region);
+  state.tourismForecastAreaCd = mapped?.areaCd || "";
+  state.tourismForecastSignguCd = mapped?.signguCd || "";
+  const view = tourismForecastView();
+  state.tourismForecastDestinationId = view.destinationId;
+  state.tourismForecastQuery = view.query;
+  state.tourismForecastExpanded = view.expanded;
+  state.tourismForecastError = view.error;
+  state.tourismForecastLoading = Boolean(state.tourismForecastRequests?.[tourismForecastSelectedRegionKey()]);
+  renderTourismForecastAdminCard();
+}
+
+function tourismForecastAnalysisRegionLabel() {
+  const region = state.tourismForecastAnalysisRegion;
+  return region ? (region.fullName || [region.sidoFull || region.sido, region.sigungu || region.name].filter(Boolean).join(" ") || "선택 지역") : "분석 지역 선택 전";
+}
+
 function tourismForecastSnapshot() {
   return state.tourismForecastData[tourismForecastSelectedRegionKey()] || null;
 }
@@ -39135,7 +39462,8 @@ function adminTourismForecastIntegrationRow(integration = {}) {
   if (state.tourismForecastLoading) return { ...base, statusLabel: "조회 중", statusNote: "선택한 지역의 공식 자료를 확인합니다." };
   if (state.tourismForecastError) return { ...base, status: "missing", statusLabel: "조회 실패", statusNote: data?.destinations?.length ? "이전 저장 자료 표시 · 새 조회 결과 확인 필요" : state.tourismForecastError };
   if (configured === false || data?.status === "missing_key") return { ...base, status: "missing", statusLabel: "키 설정 필요", statusNote: "서버의 공공데이터 인증키를 확인하세요." };
-  if (!data) return { ...base, status: configured ? "configured" : "checking", statusLabel: configured ? "조회 대기" : "확인 대기", statusNote: "시도·시군구를 선택하고 관광지를 불러오세요." };
+  if (!tourismForecastSelectedRegionKey()) return { ...base, status: configured ? "configured" : "checking", statusLabel: state.tourismForecastAnalysisRegion ? "연결 지역 없음" : "지역 선택 필요", statusNote: state.tourismForecastAnalysisRegion ? "선택 지역에 정확히 연결되는 예측 제공 코드가 없습니다. 다른 지역 자료로 대체하지 않습니다." : "지역분석의 공통 지역을 선택해 주세요." };
+  if (!data) return { ...base, status: configured ? "configured" : "checking", statusLabel: configured ? "조회 대기" : "확인 대기", statusNote: "선택한 분석 지역의 관광지를 불러오세요. 지역 변경만으로 조회하지 않습니다." };
   if (data.status === "ready" && !data.stale && data.destinations?.length && data.destinations.every((destination) => destination.complete)) return { ...base, status: "connected", statusLabel: "연동 정상", statusNote: "선택한 지역의 공식 예측자료 확인 · 제공기간은 관광지별로 표시" };
   if (data.status === "no_data") return { ...base, status: "configured", statusLabel: "제공 자료 없음", statusNote: "이 지역의 예측자료가 없습니다. 방문지수 0을 뜻하지 않습니다." };
   return { ...base, status: "missing", statusLabel: data.status === "error" ? "갱신 실패" : data.stale ? "이전 자료" : "일부 확인 필요", statusNote: "제공기간과 갱신 시각을 확인하세요. 없는 날짜를 0으로 채우지 않습니다." };
@@ -39173,14 +39501,51 @@ function tourismForecastChart(destination = {}) {
   </svg></div>`;
 }
 
+function tourismForecastSavedRegions() {
+  const known = new Map((state.tourismForecastSettings?.regions || []).map(region => [tourismForecastRegionKey(region), region]));
+  const saved = new Map();
+  for (const item of [...(state.tourismForecastSettings?.cachedRegions || []), ...Object.values(state.tourismForecastData || {}).map(data => ({ ...data.region, collectedAt: data.collectedAt, stale: data.stale }))]) {
+    const key = tourismForecastRegionKey(item);
+    if (!known.has(key) || !item.collectedAt) continue;
+    if (!saved.has(key) || String(saved.get(key).collectedAt) <= String(item.collectedAt)) saved.set(key, { ...known.get(key), key, collectedAt: item.collectedAt, stale: Boolean(item.stale) });
+  }
+  return [...saved.values()].sort((left, right) => `${left.areaNm} ${left.signguNm}`.localeCompare(`${right.areaNm} ${right.signguNm}`, "ko"));
+}
+
+function renderTourismForecastConnectionCard() {
+  if (!els.tourismForecastConnectionCard) return;
+  els.tourismForecastConnectionCard.hidden = !isAdminRole();
+  if (!isAdminRole()) {
+    els.tourismForecastConnectionCard.innerHTML = "";
+    return;
+  }
+  const configured = state.tourismForecastSettings?.configured;
+  const saved = tourismForecastSavedRegions();
+  const target = saved.find(region => region.key === state.tourismForecastRefreshRegionKey);
+  const targetName = target ? `${target.areaNm} ${target.signguNm}` : "저장 지역";
+  const busy = Boolean(target && state.tourismForecastRequests?.[target.key]);
+  const latest = saved.map(region => region.collectedAt).sort().at(-1);
+  els.tourismForecastConnectionCard.innerHTML = `
+    <div class="tourism-forecast-heading"><div><h3>관광지 방문 전망 연결</h3><p>예측 그래프와 관광지 선택은 지역분석의 수요 전망에서 확인합니다.</p></div><span class="tourism-forecast-state" data-status="${configured ? "configured" : "checking"}">${configured === true ? "연결 설정됨" : configured === false ? "키 설정 필요" : "연결 확인 전"}</span></div>
+    <p class="tourism-forecast-source">마지막 저장 갱신 ${latest ? escapeHtml(compactDateTime(latest)) : "저장 자료 없음"}</p>
+    <button class="secondary-button" type="button" data-tourism-forecast-action="open-demand">수요 전망 바로가기</button>
+    ${saved.length ? `<div class="tourism-forecast-region-form"><label for="tourismForecastRefreshRegion">새로 확인할 저장 지역<select id="tourismForecastRefreshRegion"><option value="">갱신 대상 지역 선택</option>${saved.map(region => `<option value="${escapeHtml(region.key)}"${region.key === target?.key ? " selected" : ""}>${escapeHtml(`${region.areaNm} ${region.signguNm}`)}</option>`).join("")}</select></label><button class="ghost-button" type="button" data-tourism-forecast-action="refresh-saved" ${!target || busy || configured !== true ? "disabled" : ""}>${busy ? `${escapeHtml(targetName)} 확인 중…` : `${escapeHtml(targetName)} 자료 새로 확인`}</button></div><p class="tourism-forecast-note">선택한 저장 지역만 갱신합니다. 현재 분석 지역은 바뀌지 않습니다.</p>` : `<p class="tourism-forecast-note">저장된 지역이 없습니다. 수요 전망에서 분석 지역의 관광지를 먼저 불러오세요.</p>`}
+    <p class="tourism-forecast-message" role="status" aria-live="polite">${escapeHtml(state.tourismForecastConnectionMessage || "")}</p>
+  `;
+}
+
 function renderTourismForecastAdminCard() {
-  if (!els.tourismForecastAdminCard || !isAdminRole()) return;
+  renderTourismForecastConnectionCard();
+  if (!els.tourismForecastAdminCard) return;
+  els.tourismForecastAdminCard.hidden = !isAdminRole();
+  if (!isAdminRole()) {
+    els.tourismForecastAdminCard.innerHTML = "";
+    return;
+  }
   const active = document.activeElement;
   const focus = active?.id?.startsWith("tourismForecast") ? { id: active.id, start: active.selectionStart, end: active.selectionEnd } : null;
   const settings = state.tourismForecastSettings || {};
   const regions = Array.isArray(settings.regions) ? settings.regions : [];
-  const areas = [...new Map(regions.map((region) => [String(region.areaCd), region.areaNm])).entries()];
-  const districts = regions.filter((region) => String(region.areaCd) === state.tourismForecastAreaCd);
   const data = tourismForecastSnapshot();
   const destination = tourismForecastSelectedDestination();
   const status = adminTourismForecastIntegrationRow();
@@ -39196,17 +39561,16 @@ function renderTourismForecastAdminCard() {
   els.tourismForecastAdminCard.innerHTML = `
     <div class="tourism-forecast-heading"><div><h3>관광지 방문 전망</h3><p>관광지를 선택해 날짜별 방문 집중 예측지수를 확인합니다.</p></div><span class="tourism-forecast-state" data-status="${escapeHtml(status.status)}">${escapeHtml(status.statusLabel)}</span></div>
     <form class="tourism-forecast-region-form" data-tourism-forecast-region-form>
-      <label for="tourismForecastArea">시도<select id="tourismForecastArea" required ${busy ? "disabled" : ""}><option value="">시도 선택</option>${areas.map(([code, name]) => `<option value="${escapeHtml(code)}"${code === state.tourismForecastAreaCd ? " selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select></label>
-      <label for="tourismForecastDistrict">시군구<select id="tourismForecastDistrict" required ${busy || !districts.length ? "disabled" : ""}><option value="">시군구 선택</option>${districts.map((region) => `<option value="${escapeHtml(region.signguCd)}"${String(region.signguCd) === state.tourismForecastSignguCd ? " selected" : ""}>${escapeHtml(region.signguNm)}</option>`).join("")}</select></label>
+      <div class="tourism-forecast-analysis-region"><span>연결된 분석 지역</span><strong>${escapeHtml(tourismForecastAnalysisRegionLabel())}</strong><small>${selectedRegion ? "공통 지역 선택과 연결" : state.tourismForecastAnalysisRegion ? "선택 지역 자료 없음 · 정확한 제공 지역 코드 미연결" : "위에서 분석 지역을 선택해 주세요."}</small></div>
       <button class="secondary-button" type="submit" ${busy || !selectedRegion || settings.configured === false ? "disabled" : ""}>${busy ? "불러오는 중…" : "관광지 불러오기"}</button>
     </form>
     <p class="tourism-forecast-message" role="status" aria-live="polite">${escapeHtml(state.tourismForecastError || status.statusNote)}</p>
-    ${!regions.length && state.tourismForecastError ? `<button class="ghost-button" type="button" data-tourism-forecast-action="status">연결 상태 다시 확인</button>` : ""}
+    ${!regions.length && (state.tourismForecastError || state.tourismForecastConnectionMessage) ? `<button class="ghost-button" type="button" data-tourism-forecast-action="status">연결 상태 다시 확인</button>` : ""}
     ${data ? `<div class="tourism-forecast-place-picker"><div class="tourism-forecast-picker-head"><label for="tourismForecastQuery">관광지 검색 <small>${fmtNumber(destinations.length)}곳</small></label><button class="ghost-button" type="button" data-tourism-forecast-action="refresh" ${busy ? "disabled" : ""}>새로 확인</button></div><input id="tourismForecastQuery" type="search" maxlength="100" value="${escapeHtml(state.tourismForecastQuery || "")}" placeholder="불러온 지역의 관광지명" autocomplete="off" ${busy ? "disabled" : ""}><div class="tourism-forecast-places" aria-label="정확한 관광지 선택">${matches.map((item) => `<button type="button" data-tourism-forecast-place="${escapeHtml(item.id)}" aria-pressed="${destination?.id === item.id}" ${busy ? "disabled" : ""}><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.areaNm)} ${escapeHtml(item.signguNm)}</span></button>`).join("") || `<p class="tourism-forecast-note">${destinations.length ? "검색어와 일치하는 관광지가 없습니다." : data.status === "no_data" ? "제공된 관광지 예측자료가 없습니다. 다른 지역을 선택해 보세요." : "관광지 목록을 확인하지 못했습니다."}</p>`}</div></div>` : ""}
     ${destination ? `<section class="tourism-forecast-result" aria-label="선택 관광지 예측"><h4>${escapeHtml(destination.name)} <small>${escapeHtml(destination.areaNm)} ${escapeHtml(destination.signguNm)}</small></h4><p class="tourism-forecast-period">제공기간 ${escapeHtml(destination.startDate)} ~ ${escapeHtml(destination.endDate)} · ${fmtNumber(rows.length)}일 제공${Number.isFinite(destination.upcomingDayCount) ? ` · 오늘 포함 ${fmtNumber(destination.upcomingDayCount)}일 남음` : ""}</p>${destination.providerLagDays > 0 ? `<p class="tourism-forecast-note">제공기간은 오늘보다 ${fmtNumber(destination.providerLagDays)}일 앞서 시작합니다. 날짜를 임의로 옮기지 않고 표시합니다.</p>` : ""}${!destination.complete ? `<p class="tourism-forecast-warning">일부 날짜의 자료가 없습니다. 없는 값은 0으로 채우거나 선으로 이어 추정하지 않습니다.</p>` : ""}<div class="tourism-forecast-chart-label">방문 집중 예측지수 <span>0~100</span></div>${tourismForecastChart(destination)}<details class="tourism-forecast-details" data-tourism-forecast-details ${state.tourismForecastExpanded ? "open" : ""}><summary>날짜별 지수 ${fmtNumber(rows.length)}건</summary><ul>${rows.map((row) => `<li><time datetime="${escapeHtml(row.date)}">${escapeHtml(row.date)}</time><span>${tourismForecastValidValue(row.value) ? escapeHtml(row.value) : "자료 없음"}</span></li>`).join("")}</ul></details></section>` : destinations.length ? `<p class="tourism-forecast-note">목록에서 관광지를 선택하면 해당 장소의 예측지수를 보여줍니다.</p>` : ""}
     <p class="tourism-forecast-note">0~100 지수는 방문 집중에 대한 예측입니다. 실제 방문자 수·예약률·매출과 다릅니다. 관광지와 제공기간을 함께 확인하세요.</p>
     ${errors.length ? `<ul class="tourism-forecast-errors">${errors.map((error) => `<li>${escapeHtml(error.message || error.code || "조회 확인 필요")}</li>`).join("")}</ul>` : ""}
-    <p class="tourism-forecast-source">${data?.collectedAt ? `자료 조회 ${escapeHtml(compactDateTime(data.collectedAt))}${data.stale ? " · 이전 저장 자료" : ""}` : "지역 선택 전 · 예측자료 조회 없음"} · ${sourceUrl ? `<a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(source.name || "한국관광공사 공식 출처")}</a>` : escapeHtml(source.name || "한국관광공사 · 공공데이터포털")}</p>
+    <p class="tourism-forecast-source">${data?.collectedAt ? `자료 조회 ${escapeHtml(compactDateTime(data.collectedAt))}${data.stale ? " · 이전 저장 자료" : ""}` : "선택 지역의 예측자료 조회 없음"} · ${sourceUrl ? `<a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(source.name || "한국관광공사 공식 출처")}</a>` : escapeHtml(source.name || "한국관광공사 · 공공데이터포털")}</p>
   `;
   if (focus) {
     const input = document.getElementById(focus.id);
@@ -39221,16 +39585,26 @@ function rememberTourismForecastData(data, requestedKey) {
   state.tourismForecastData[requestedKey] = !data.destinations.length && previous?.destinations?.length && ["error", "missing_key"].includes(data.status)
     ? { ...previous, status: data.status, stale: true, errors: data.errors || [] }
     : data;
-  if (!state.tourismForecastData[requestedKey].destinations.some((destination) => destination.id === state.tourismForecastDestinationId)) state.tourismForecastDestinationId = "";
+  const view = tourismForecastView(requestedKey);
+  if (!state.tourismForecastData[requestedKey].destinations.some((destination) => destination.id === view.destinationId)) view.destinationId = "";
+  if (requestedKey === tourismForecastSelectedRegionKey()) state.tourismForecastDestinationId = view.destinationId;
 }
 
-async function loadTourismForecastRegion(refresh = false) {
-  if (!isAdminRole() || state.tourismForecastLoading) return;
-  const areaCd = state.tourismForecastAreaCd, signguCd = state.tourismForecastSignguCd;
+async function loadTourismForecastRegion(refresh = false, targetRegion = null) {
+  if (!isAdminRole()) return;
+  const areaCd = targetRegion?.areaCd || state.tourismForecastAreaCd;
+  const signguCd = targetRegion?.signguCd || state.tourismForecastSignguCd;
   const requestedKey = tourismForecastRegionKey({ areaCd, signguCd });
-  if (!requestedKey || !(state.tourismForecastSettings?.regions || []).some((region) => tourismForecastRegionKey(region) === requestedKey)) return;
-  state.tourismForecastLoading = true;
-  state.tourismForecastError = "";
+  const requestedRegion = (state.tourismForecastSettings?.regions || []).find(region => tourismForecastRegionKey(region) === requestedKey);
+  state.tourismForecastRequests ||= {};
+  if (!requestedKey || !requestedRegion || state.tourismForecastRequests[requestedKey]) return;
+  rememberTourismForecastView();
+  state.tourismForecastRequests[requestedKey] = true;
+  tourismForecastView(requestedKey).error = "";
+  if (requestedKey === tourismForecastSelectedRegionKey()) state.tourismForecastError = "";
+  state.tourismForecastLoading = Boolean(state.tourismForecastRequests[tourismForecastSelectedRegionKey()]);
+  const requestedLabel = `${requestedRegion.areaNm} ${requestedRegion.signguNm}`;
+  if (targetRegion) state.tourismForecastConnectionMessage = `${requestedLabel} 자료를 새로 확인하고 있습니다.`;
   renderTourismForecastAdminCard();
   renderAdminIntegrationRegistry();
   try {
@@ -39238,10 +39612,15 @@ async function loadTourismForecastRegion(refresh = false) {
       ? await fetchJson("/api/settings/tourism-forecast/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ areaCd, signguCd }) })
       : await fetchJson(`/api/tourism-forecast?areaCd=${encodeURIComponent(areaCd)}&signguCd=${encodeURIComponent(signguCd)}`);
     rememberTourismForecastData(data, requestedKey);
+    if (targetRegion) state.tourismForecastConnectionMessage = `${requestedLabel} · ${data.status === "ready" ? "자료 갱신 완료" : data.status === "no_data" ? "제공 자료 없음" : "이전 자료 또는 갱신 상태 확인 필요"}`;
   } catch (error) {
-    state.tourismForecastError = `관광지 전망 조회 실패 · ${error.message}`;
+    const message = `관광지 전망 조회 실패 · ${error.message}`;
+    tourismForecastView(requestedKey).error = message;
+    if (requestedKey === tourismForecastSelectedRegionKey()) state.tourismForecastError = message;
+    if (targetRegion) state.tourismForecastConnectionMessage = `${requestedLabel} · ${message}`;
   } finally {
-    state.tourismForecastLoading = false;
+    delete state.tourismForecastRequests[requestedKey];
+    state.tourismForecastLoading = Boolean(state.tourismForecastRequests[tourismForecastSelectedRegionKey()]);
     renderTourismForecastAdminCard();
     renderAdminIntegrationRegistry();
   }
@@ -39251,11 +39630,11 @@ async function loadTourismForecastStatus() {
   if (!isAdminRole()) return;
   try {
     state.tourismForecastSettings = await fetchJson("/api/settings/tourism-forecast");
-    state.tourismForecastError = "";
+    state.tourismForecastConnectionMessage = "";
   } catch (error) {
-    state.tourismForecastError = `관광지 전망 상태 확인 실패 · ${error.message}`;
+    state.tourismForecastConnectionMessage = `관광지 전망 상태 확인 실패 · ${error.message}`;
   }
-  renderTourismForecastAdminCard();
+  syncTourismForecastToAnalysisRegion(typeof selectedAnalysisRegion === "function" ? selectedAnalysisRegion() : state.tourismForecastAnalysisRegion);
   renderAdminIntegrationRegistry();
 }
 
@@ -39559,6 +39938,7 @@ async function loadRun(runId) {
   if (requestSequence !== loadRunRequestSequence) return null;
   state.data = data;
   state.activeRunId = runId;
+  reconcileAnalysisRegionSelection();
   if (state.placeRankReplayRunId && state.placeRankReplayRunId !== runId) state.placeRankReplayRunId = null;
   if (isAdminRole()) {
     await loadHistoryOps();
@@ -40082,9 +40462,18 @@ function openAdminHomeRoute(route = "summary") {
     renderAdminDatabaseDashboard();
     return;
   }
-  if (route === "region" || route === "region-review") {
+  if (route === "region-review") {
+    clearAdminDbCompanyHash();
+    state.adminDbViewMode = "region";
+    state.adminDbFilters = { ...state.adminDbFilters, query: "" };
+    setActiveTab("admin");
+    setAdminPanelSection("database");
+    renderAdminDatabaseDashboard();
+    window.requestAnimationFrame(() => document.getElementById("regionDataManagement")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    return;
+  }
+  if (route === "region") {
     setActiveTab("dictionary");
-    window.requestAnimationFrame(() => els.adminRegionAnalysisDashboard?.scrollIntoView({ behavior: "smooth", block: "start" }));
     return;
   }
   if (route === "members") {
@@ -40319,6 +40708,14 @@ function bindEvents() {
         if (els.collectionArchive) els.collectionArchive.insertAdjacentHTML("afterbegin", `<div class="empty">${escapeHtml(error.message)}</div>`);
         setStatus("보관함 새로고침 실패");
       });
+      return;
+    }
+    if (event.target.closest("[data-analysis-region-manage]")) {
+      openAnalysisRegionManagement();
+      return;
+    }
+    if (event.target.closest("[data-return-region-analysis]")) {
+      returnToRegionAnalysis();
       return;
     }
     const adminWorkspaceSection = event.target.closest("[data-admin-workspace-section]");
@@ -41345,28 +41742,17 @@ function bindEvents() {
     event.preventDefault();
     loadTourismForecastRegion();
   });
-  els.tourismForecastAdminCard?.addEventListener("change", (event) => {
-    if (state.tourismForecastLoading) return;
-    if (event.target.id === "tourismForecastArea") {
-      state.tourismForecastAreaCd = event.target.value;
-      state.tourismForecastSignguCd = "";
-    } else if (event.target.id === "tourismForecastDistrict") {
-      state.tourismForecastSignguCd = event.target.value;
-    } else return;
-    state.tourismForecastDestinationId = "";
-    state.tourismForecastQuery = "";
-    state.tourismForecastError = "";
-    state.tourismForecastExpanded = false;
-    renderTourismForecastAdminCard();
-    renderAdminIntegrationRegistry();
-  });
   els.tourismForecastAdminCard?.addEventListener("input", (event) => {
     if (event.target.id !== "tourismForecastQuery") return;
     state.tourismForecastQuery = event.target.value;
+    rememberTourismForecastView();
     renderTourismForecastAdminCard();
   });
   els.tourismForecastAdminCard?.addEventListener("toggle", (event) => {
-    if (event.target.matches?.("[data-tourism-forecast-details]")) state.tourismForecastExpanded = event.target.open;
+    if (event.target.matches?.("[data-tourism-forecast-details]") && els.tourismForecastAdminCard.contains(event.target)) {
+      state.tourismForecastExpanded = event.target.open;
+      rememberTourismForecastView();
+    }
   }, true);
   els.tourismForecastAdminCard?.addEventListener("click", (event) => {
     const action = event.target.closest("[data-tourism-forecast-action]");
@@ -41381,9 +41767,24 @@ function bindEvents() {
     if (!destination) return;
     state.tourismForecastDestinationId = destination.id;
     state.tourismForecastExpanded = false;
+    rememberTourismForecastView();
     renderTourismForecastAdminCard();
     [...els.tourismForecastAdminCard.querySelectorAll("[data-tourism-forecast-place]")]
       .find((item) => item.dataset.tourismForecastPlace === destination.id)?.focus({ preventScroll: true });
+  });
+  els.tourismForecastConnectionCard?.addEventListener("change", (event) => {
+    if (event.target.id !== "tourismForecastRefreshRegion") return;
+    state.tourismForecastRefreshRegionKey = event.target.value;
+    state.tourismForecastConnectionMessage = "";
+    renderTourismForecastConnectionCard();
+  });
+  els.tourismForecastConnectionCard?.addEventListener("click", (event) => {
+    const action = event.target.closest("[data-tourism-forecast-action]");
+    if (action?.dataset.tourismForecastAction === "open-demand") setActiveTab("demand");
+    if (action?.dataset.tourismForecastAction === "refresh-saved") {
+      const target = tourismForecastSavedRegions().find(region => region.key === state.tourismForecastRefreshRegionKey);
+      if (target) loadTourismForecastRegion(true, target);
+    }
   });
   els.specialDaysAdminCard?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-special-days-action]");
@@ -41455,29 +41856,34 @@ function bindEvents() {
   els.dictionaryProvinceSelect?.addEventListener("change", () => {
     selectDictionaryProvince(els.dictionaryProvinceSelect.value);
   });
+  els.analysisRegionSelect?.addEventListener("change", () => setAnalysisRegion(els.analysisRegionSelect.value));
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest?.("[data-analysis-open-run]");
+    if (!button) return;
+    const region = selectedAnalysisRegion();
+    const run = (state.runs || []).find((entry) => entry.id === button.dataset.analysisOpenRun);
+    if (!region || !run || analysisRunRegion({ run })?.regionKey !== region.regionKey) return;
+    button.disabled = true;
+    void loadRun(run.id).then(() => syncAppHistoryState(false)).catch(() => {
+      button.disabled = false;
+      setStatus("저장된 수집결과를 불러오지 못했습니다.");
+    });
+  });
+  document.querySelectorAll("[data-region-analysis-tab]").forEach((button) => {
+    button.addEventListener("click", () => setActiveTab(button.dataset.regionAnalysisTab));
+  });
+  els.regionSourcesDashboard?.addEventListener("click", (event) => {
+    const refresh = event.target.closest("[data-location-profile-refresh]");
+    const region = selectedAnalysisRegion();
+    if (!refresh || !region) return;
+    const card = dictionaryStoredCardForRegion(region) || locationProfileSubjectForRegion(region);
+    if (refresh.dataset.locationProfileRefresh !== card.regionKey) return;
+    void ensureLocationProfile(card, { force: true });
+  });
   document.querySelectorAll("[data-dictionary-view]").forEach((button) => {
     button.addEventListener("click", () => {
       const view = button.dataset.dictionaryView || "dictionary";
-      if (view === "dictionary") {
-        els.dictionarySearchInput?.focus();
-        return;
-      }
-      if (view === "sources") {
-        state.dictionaryDetailTab = "history";
-        renderLocationDictionary(state.selectedLocationCard
-          ? { card: state.selectedLocationCard, alias: dictionaryAliasForCard(state.selectedLocationCard) }
-          : null);
-        window.requestAnimationFrame(() => els.dictionaryResult?.scrollIntoView({ behavior: "smooth", block: "start" }));
-        return;
-      }
-      if (view === "demand") openDictionaryDemand();
-      else setActiveTab("demand");
-      if (view === "compare") {
-        window.requestAnimationFrame(() => {
-          const heading = [...document.querySelectorAll(".demand-table-card h3")].find((entry) => entry.textContent?.trim() === "지역 비교");
-          heading?.closest(".demand-table-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
-        });
-      }
+      setActiveTab({ dictionary: "dictionary", sources: "regionSources", compare: "regionCompare", demand: "demand", map: "map" }[view] || "dictionary");
     });
   });
   els.b2bSearchForm?.addEventListener("submit", (event) => {
@@ -41626,12 +42032,14 @@ function bindEvents() {
 }
 
 async function init() {
+  const initialHistory = window.history?.state?.app === "lodging-datalab" ? window.history.state : null;
   initializeThemeMode();
   ensureCrawlControls();
   registerPwaServiceWorker();
   bindPwaLifecycleEvents();
   try {
     await loadSession();
+    if (initialHistory?.role === state.session?.role) state.analysisRegionSelection = initialHistory.analysisRegionSelection || null;
     syncCollectionModeInputs();
     bindEvents();
     setDefaultDates();
@@ -41656,6 +42064,8 @@ async function init() {
         if (!latestLoaded) renderB2BEmptyPanels();
       }
     }
+    if (initialHistory?.role === state.session?.role && !adminDbCompanyIdFromRoute()) await restoreAppHistoryState(initialHistory);
+    syncAppHistoryState(false);
     renderB2BSearchPanel();
     if (isAdminRole()) pollCrawlStatusUntilIdle(false);
   } catch (error) {

@@ -103,6 +103,9 @@ function fixture({ data = false, running = false, role = "b2b" } = {}) {
     adminNavIconSvg: () => "", syncAdminDesktopSecondaryNav: noOp,
     syncRoleStaticLabels: noOp, syncAdminSectionPanels: noOp, syncAdminMobileNav: noOp, releaseAppBoot: noOp,
     renderHeader: noOp, renderPlaceRankReplayNotice: noOp, closeDrawer: noOp,
+    // Shared regional state and data guards run in test_region_analysis_navigation.
+    // This suite isolates role/menu/panel behavior and unfinished member forms.
+    applyAnalysisRegionToDictionary: noOp, renderRegionAnalysisShell: noOp,
     renderB2BEmptyPanels: noOp, renderLocationDictionary: noOp, renderReport: noOp,
     renderDecisionQueue: noOp, renderMap: noOp, renderDemand: noOp, renderHistoryOps: noOp,
     renderCompanyMasterPanel: noOp, renderDownloads: noOp, syncYeogiManualInterface: noOp,

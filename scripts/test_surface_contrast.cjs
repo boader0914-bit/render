@@ -417,7 +417,7 @@ const adminIntegrationContext = {
   escapeHtml: (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"),
   URL,
   document: { activeElement: null, getElementById: () => null },
-  els: { specialDaysAdminCard: { innerHTML: "" }, tourismForecastAdminCard: { innerHTML: "" } },
+  els: { specialDaysAdminCard: { innerHTML: "" }, tourismForecastAdminCard: { innerHTML: "" }, tourismForecastConnectionCard: { innerHTML: "" } },
   isAdminRole: () => true,
   state: {
     specialDaysSettings: null,
@@ -434,6 +434,11 @@ const adminIntegrationContext = {
     tourismForecastQuery: "",
     tourismForecastError: "",
     tourismForecastExpanded: false,
+    tourismForecastAnalysisRegion: null,
+    tourismForecastViews: {},
+    tourismForecastRequests: {},
+    tourismForecastRefreshRegionKey: "",
+    tourismForecastConnectionMessage: "",
     trafficKeyState: {
       datalabConfigured: true,
       searchadConfigured: true,
@@ -562,6 +567,8 @@ assert(adminIntegrationContext.getSpecialDaysStatus().status === "configured" &&
 
 const forecastRegion = { areaCd: "41", areaNm: "경기도", signguCd: "41650", signguNm: "포천시" };
 const otherForecastRegion = { areaCd: "51", areaNm: "강원특별자치도", signguCd: "51130", signguNm: "원주시" };
+const forecastAnalysisRegion = { code5: "41650", officialCode: "4165000000", fullName: "경기도 포천시", active: true, selectable: true };
+const otherForecastAnalysisRegion = { code5: "51130", officialCode: "5113000000", fullName: "강원특별자치도 원주시", active: true, selectable: true };
 const forecastFixture = {
   status: "ready", region: forecastRegion, stale: false, collectedAt: "2026-09-21T00:00:00.000Z", queryDate: "2026-09-21", errors: [],
   source: { name: "관광지 방문 전망 공식 출처", url: "https://www.data.go.kr/data/15128555/openapi.do" },
@@ -572,8 +579,7 @@ const forecastFixture = {
   }]
 };
 adminIntegrationContext.state.tourismForecastSettings = { configured: true, regions: [forecastRegion, otherForecastRegion], source: forecastFixture.source };
-adminIntegrationContext.state.tourismForecastAreaCd = "41";
-adminIntegrationContext.state.tourismForecastSignguCd = "41650";
+adminIntegrationContext.syncTourismForecastToAnalysisRegion(forecastAnalysisRegion);
 adminIntegrationContext.rememberForecast(forecastFixture, "41:41650");
 adminIntegrationContext.renderForecast();
 assert(adminIntegrationContext.getForecastStatus().status === "connected" && !adminIntegrationContext.selectedForecastDestination() && !adminIntegrationContext.els.tourismForecastAdminCard.innerHTML.includes('<svg'), "forecast region response must not silently select a destination or generate an area-average chart", failures);
@@ -586,7 +592,11 @@ assert(
     && forecastHtml.includes("&lt;같은 이름 관광지&gt;")
     && (forecastHtml.match(/class="tourism-forecast-point"/g) || []).length === 30
     && /<details[^>]*data-tourism-forecast-details\s*>/.test(forecastHtml)
-    && forecastHtml.includes("실제 방문자 수·예약률·매출과 다릅니다"),
+    && forecastHtml.includes("실제 방문자 수·예약률·매출과 다릅니다")
+    && forecastHtml.includes("경기도 포천시")
+    && !forecastHtml.includes('id="tourismForecastArea"')
+    && !forecastHtml.includes('id="tourismForecastDistrict"')
+    && !adminIntegrationContext.els.tourismForecastConnectionCard.innerHTML.includes("<svg"),
   "forecast UI must show the original 30 provider dates, inclusive remaining days, safe names, and forecast-only labels in a collapsed detail view",
   failures
 );
@@ -595,15 +605,14 @@ const forecastGaps = adminIntegrationContext.forecastChart({ name: "결측 검�
   { date: "2026-09-22", value: null }, { date: "2026-09-24", value: 40 }, { date: "2026-09-25", value: 50 }
 ] });
 assert((forecastGaps.match(/<polyline/g) || []).length === 2 && (forecastGaps.match(/class="tourism-forecast-point"/g) || []).length === 4 && forecastGaps.includes("2026-09-20 · 예측지수 0") && !forecastGaps.includes("2026-09-22 · 예측지수 0"), "forecast chart must retain real zero and 100 values while breaking both null and absent-day gaps without interpolation", failures);
-adminIntegrationContext.state.tourismForecastAreaCd = "51";
-adminIntegrationContext.state.tourismForecastSignguCd = "51130";
+adminIntegrationContext.syncTourismForecastToAnalysisRegion(otherForecastAnalysisRegion);
 adminIntegrationContext.renderForecast();
 assert(!adminIntegrationContext.selectedForecastDestination() && !adminIntegrationContext.els.tourismForecastAdminCard.innerHTML.includes('<svg'), "changing region must hide the previous destination forecast even when names may match", failures);
 let rejectedForecastMismatch = false;
 try { adminIntegrationContext.rememberForecast(forecastFixture, "51:51130"); } catch { rejectedForecastMismatch = true; }
 assert(rejectedForecastMismatch && !adminIntegrationContext.state.tourismForecastData["51:51130"], "forecast responses for another exact region must be rejected instead of stored under current selection", failures);
-adminIntegrationContext.state.tourismForecastAreaCd = "41";
-adminIntegrationContext.state.tourismForecastSignguCd = "41650";
+adminIntegrationContext.syncTourismForecastToAnalysisRegion(forecastAnalysisRegion);
+assert(adminIntegrationContext.state.tourismForecastDestinationId === "exact-region-name-fixture", "returning to an analysis region must restore its explicit destination selection", failures);
 adminIntegrationContext.rememberForecast({ ...forecastFixture, status: "partial", stale: true }, "41:41650");
 assert(adminIntegrationContext.getForecastStatus().status === "missing", "partial or old forecast data must not appear as a healthy live integration", failures);
 adminIntegrationContext.rememberForecast({ ...forecastFixture, status: "error", destinations: [], errors: [{ code: "TIMEOUT", message: "조회 시간 초과" }] }, "41:41650");
@@ -612,8 +621,8 @@ adminIntegrationContext.rememberForecast({ ...forecastFixture, status: "no_data"
 adminIntegrationContext.renderForecast();
 assert(adminIntegrationContext.getForecastStatus().statusLabel === "제공 자료 없음" && !adminIntegrationContext.els.tourismForecastAdminCard.innerHTML.includes('<svg'), "valid no-data forecast response must not become a zero curve or retain another forecast", failures);
 
-const expectedCacheVersion = "staydatalab-v20260921-tourism-forecast-v108";
-const expectedAssetVersion = "datalab-20260921-tourism-forecast-v108";
+const expectedCacheVersion = "staydatalab-v20260921-region-analysis-v109";
+const expectedAssetVersion = "datalab-20260921-region-analysis-v109";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -1047,18 +1056,17 @@ assert(
   indexHtml.includes('data-location-workspace')
     && indexHtml.includes('id="dictionaryProvinceSelect"')
     && indexHtml.includes('id="dictionaryQuickButtons"')
-    && indexHtml.includes('class="dictionary-admin-operations"')
-    && indexHtml.indexOf('id="dictionaryResult"') < indexHtml.indexOf('class="dictionary-admin-operations"')
-    && indexHtml.includes('data-dictionary-view="dictionary"')
-    && indexHtml.includes('data-dictionary-view="demand"')
-    && indexHtml.includes('data-dictionary-view="compare"')
-    && indexHtml.includes('data-dictionary-view="sources"'),
-  "location dictionary must lead with search, province and region selection before collapsed admin operations",
+    && indexHtml.includes('id="dictionaryResult"')
+    && !indexHtml.includes('class="dictionary-admin-operations"')
+    && indexHtml.includes('id="analysisRegionSelect"')
+    && ["dictionary", "map", "demand", "regionCompare", "regionSources"].every((tab) => indexHtml.includes(`data-region-analysis-tab="${tab}"`)),
+  "regional analysis must share one region picker and five routes while retaining dictionary search assistance",
   failures
 );
 
 assert(
-  app.includes('dictionaryProvince: "경남"')
+  app.includes('dictionaryProvince: ""')
+    && !app.includes("DEFAULT_LOCATION_REGION_KEY")
     && app.includes('dictionaryDetailTab: "basic"')
     && app.includes('data-location-region-item data-location-region-key=')
     && app.includes('function selectDictionaryProvince(')
@@ -1160,8 +1168,9 @@ assert(
 );
 
 assert(
-  selectDictionaryProvinceBlock.includes("administrativeProvinceForValue(nextValue)")
-    && selectDictionaryProvinceBlock.includes("renderLocationDictionary({ province: administrativeProvince")
+  selectDictionaryProvinceBlock.includes("administrativeProvinceForValue(")
+    && selectDictionaryProvinceBlock.includes("setAnalysisRegion(region.regionKey)")
+    && !selectDictionaryProvinceBlock.includes("regions[0]")
     && renderLocationDictionaryBlock.includes("result.province")
     && app.includes("data-location-province-master")
     && app.includes('const label = broad ? "광역 전체"'),
