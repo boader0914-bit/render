@@ -17,7 +17,15 @@ const state = {
   data: null,
   activeRunId: null,
   placeRankReplayRunId: null,
+  industryHomeFilters: { category: "", keyword: "", period: "" },
+  industryHomeVisibleCount: 12,
+  industryHomeLoadingRunId: "",
+  industryHomeError: "",
+  industryRecentRunIds: null,
+  industryRecentStorageKey: "",
+  industryHomeOpenSequence: 0,
   activeTab: "report",
+  analysisNavigationSequence: 0,
   themeMode: "system",
   adminMobileSection: "summary",
   adminMobileAnchor: "",
@@ -86,6 +94,9 @@ const state = {
   selectedLocationCard: null,
   analysisRegionSelection: null,
   analysisRegionRestored: false,
+  regionHomeQuery: "",
+  regionHomeCandidateKey: "",
+  lastRegionAnalysisTab: "dictionary",
   demandRegionContext: null,
   dictionaryProvince: "",
   dictionaryDetailTab: "basic",
@@ -279,7 +290,7 @@ const LODGING_CATEGORY_PROFILES = {
 };
 const B2B_MY_LODGE_STORAGE_PREFIX = "glamping-datalab:b2b-my-lodge:v1";
 const ROLE_TABS = {
-  admin: ["report", "rank", "dictionary", "map", "demand", "regionCompare", "regionSources", "historyOps", "admin"],
+  admin: ["industryHome", "regionHome", "report", "rank", "dictionary", "map", "demand", "regionCompare", "regionSources", "historyOps", "admin"],
   b2b: ["report", "rank", "map", "demand", "account"]
 };
 const B2B_PRIMARY_TABS = new Set(["report", "rank", "map", "account"]);
@@ -317,14 +328,14 @@ const ADMIN_MOBILE_SECTIONS = {
   },
   analysis: {
     label: "업종분석",
-    target: "report",
+    target: "industryHome",
     items: [
-      { label: "업종 현황", tab: "report" }
+      { label: "업종 현황", tab: "industryHome" }
     ]
   },
   region: {
     label: "지역분석",
-    target: "dictionary",
+    target: "regionHome",
     items: [
       { label: "지역 현황", tab: "dictionary" },
       { label: "지역 지도", tab: "map" },
@@ -360,10 +371,10 @@ const ADMIN_COMPACT_SECTIONS = {
   database: ADMIN_MOBILE_SECTIONS.database,
   analysis: {
     label: "분석",
-    target: "report",
+    target: "industryHome",
     items: [
-      { label: "업종분석", tab: "report" },
-      { label: "지역분석", tab: "dictionary" }
+      { label: "업종분석", tab: "industryHome" },
+      { label: "지역분석", tab: "regionHome" }
     ]
   },
   more: {
@@ -394,6 +405,8 @@ const ADMIN_PANEL_MOBILE_TARGETS = {
   files: { section: "more", anchor: "#adminIntegrationRegistry" }
 };
 const TAB_LABELS = {
+  industryHome: "업종분석",
+  regionHome: "지역분석",
   report: "요약 리포트",
   rank: "수집 결과 분석",
   dictionary: "지역 현황",
@@ -477,6 +490,7 @@ const els = {
   summaryGrid: document.getElementById("summaryGrid"),
   noticeCard: document.getElementById("noticeCard"),
   reportBody: document.getElementById("reportBody"),
+  industryHomeDashboard: document.getElementById("industryHomeDashboard"),
   rankCount: document.getElementById("rankCount"),
   companyList: document.getElementById("companyList"),
   dictionaryCount: document.getElementById("dictionaryCount"),
@@ -494,6 +508,7 @@ const els = {
   analysisRegionManageButton: document.getElementById("analysisRegionManageButton"),
   regionCompareDashboard: document.getElementById("regionCompareDashboard"),
   regionSourcesDashboard: document.getElementById("regionSourcesDashboard"),
+  regionHomeDashboard: document.getElementById("regionHomeDashboard"),
   dictionaryRequestQueue: document.getElementById("dictionaryRequestQueue"),
   targetCount: document.getElementById("targetCount"),
   targetList: document.getElementById("targetList"),
@@ -2316,9 +2331,9 @@ function adminPrimarySectionForTab(tab, preferred = "") {
       files: "settings"
     }[state.adminPanelSection] || "summary";
   }
-  if (tab === "report") return "analysis";
+  if (["industryHome", "report"].includes(tab)) return "analysis";
   if (tab === "rank") return "collect";
-  if (["dictionary", "map", "demand", "regionCompare", "regionSources"].includes(tab)) return "region";
+  if (["regionHome", "dictionary", "map", "demand", "regionCompare", "regionSources"].includes(tab)) return "region";
   if (tab === "historyOps") return "collect";
   return "summary";
 }
@@ -2331,7 +2346,7 @@ function adminMobileSectionForTab(tab, preferred = "") {
     if (preferredTabs.has(tab)) return preferred;
   }
   if (tab === "admin") return adminPanelMobileTarget(state.adminPanelSection).section;
-  if (["report", "dictionary", "map", "demand", "regionCompare", "regionSources"].includes(tab)) return "analysis";
+  if (["industryHome", "regionHome", "report", "dictionary", "map", "demand", "regionCompare", "regionSources"].includes(tab)) return "analysis";
   if (["rank", "historyOps"].includes(tab)) return "collect";
   return "summary";
 }
@@ -2391,7 +2406,7 @@ function syncAdminDesktopSecondaryNav() {
     container.innerHTML = items.map((item) => {
       const tab = item.tab || section.target || "admin";
       const panel = item.adminPanelSection || section.adminPanelSection || "";
-      const active = tab === state.activeTab
+      const active = (tab === state.activeTab || (tab === "industryHome" && state.activeTab === "report"))
         && (!panel || panel === state.adminPanelSection)
         && (!item.adminDbViewMode || item.adminDbViewMode === state.adminDbViewMode)
         && (!item.anchor || item.anchor === state.adminMobileAnchor);
@@ -2468,7 +2483,8 @@ function syncAdminMobileNav() {
       const anchor = item.anchor || "";
       const adminPanelSection = item.adminPanelSection || section.adminPanelSection || "";
       const adminDbStatus = item.adminDbStatus || "";
-      const active = tab === state.activeTab
+      const active = (tab === state.activeTab || (tab === "industryHome" && state.activeTab === "report")
+        || (tab === "regionHome" && REGION_ANALYSIS_TABS.has(state.activeTab)))
         && (!adminPanelSection || adminPanelSection === state.adminPanelSection)
         && (!item.adminDbViewMode || item.adminDbViewMode === state.adminDbViewMode)
         && (!item.anchor || item.anchor === state.adminMobileAnchor);
@@ -29632,6 +29648,89 @@ function renderActiveRegionAnalysis() {
   if (state.activeTab === "regionSources") renderRegionSources();
 }
 
+function regionHomeMatchingRegions(query = state.regionHomeQuery) {
+  const normalized = locationProfileKeywordKey(query || "");
+  return regionMasterUnits().filter((region) => region.active && region.selectable && (!normalized || [
+    analysisRegionLabel(region), region.name, region.shortName, ...(region.aliases || [])
+  ].filter(Boolean).some((value) => locationProfileKeywordKey(value).includes(normalized))));
+}
+
+function regionHomeOptionsHtml() {
+  const regions = regionHomeMatchingRegions();
+  const selected = state.regionHomeCandidateKey;
+  return `<option value="">${regions.length ? "분석할 지역 선택" : "일치하는 지역 없음"}</option>${regions.map((region) =>
+    `<option value="${escapeHtml(region.regionKey)}"${region.regionKey === selected ? " selected" : ""}>${escapeHtml(analysisRegionLabel(region))}${region.level === "broad" ? " 전체" : ""}</option>`
+  ).join("")}`;
+}
+
+function regionHomeSavedRuns(region) {
+  return region ? (state.runs || []).filter((run) => analysisRunRegion({ run })?.regionKey === region.regionKey) : [];
+}
+
+function regionHomeAvailabilityHtml(region) {
+  if (!region) return `<p class="hint">지역을 선택하면 저장된 숙박 자료와 분석할 수 있는 항목을 안내합니다.</p>`;
+  const runs = regionHomeSavedRuns(region);
+  return `<div class="analysis-home-availability" aria-label="선택 지역의 자료 안내">
+    <h3>${escapeHtml(analysisRegionLabel(region))}</h3>
+    <dl><div><dt>지역 기본정보</dt><dd>행정구역 정보 연결</dd></div>
+    <div><dt>저장된 숙박 수집</dt><dd>${runs.length ? `${fmtNumber(runs.length)}회` : "아직 없음"}</dd></div>
+    <div><dt>마지막 숙박 수집일</dt><dd>${runs.length ? escapeHtml(analysisRunCollectedLabel(runs[0])) : "자료 없음"}</dd></div>
+    <div><dt>관광 자료 갱신일</dt><dd>자료·출처에서 항목별 확인</dd></div></dl>
+    <p class="hint">지역 현황·지도·수요 전망·지역 비교·자료 출처를 확인할 수 있습니다. 각 항목은 저장 자료가 있는 범위까지 표시합니다.</p>
+  </div>`;
+}
+
+function updateRegionHomeDraft() {
+  if (!els.regionHomeDashboard || !isAdminRole()) return;
+  const matches = regionHomeMatchingRegions();
+  if (!matches.some((region) => region.regionKey === state.regionHomeCandidateKey)) state.regionHomeCandidateKey = "";
+  const select = els.regionHomeDashboard.querySelector("#regionHomeSelect");
+  if (select) select.innerHTML = regionHomeOptionsHtml();
+  const preview = els.regionHomeDashboard.querySelector("[data-region-home-preview]");
+  if (preview) preview.innerHTML = regionHomeAvailabilityHtml(analysisRegionForKey(state.regionHomeCandidateKey));
+  const submit = els.regionHomeDashboard.querySelector("[data-region-home-submit]");
+  if (submit) submit.disabled = !analysisRegionForKey(state.regionHomeCandidateKey);
+}
+
+function openRegionHomeAnalysis(regionKey, resume = false) {
+  if (!isAdminRole()) return false;
+  const region = analysisRegionForKey(regionKey);
+  if (!region) return false;
+  const tab = resume && REGION_ANALYSIS_TABS.has(state.lastRegionAnalysisTab) ? state.lastRegionAnalysisTab : "dictionary";
+  setAnalysisRegion(region.regionKey, { explicit: true, render: false, history: false });
+  setActiveTab(tab);
+  return true;
+}
+
+function renderRegionHome() {
+  if (!els.regionHomeDashboard) return;
+  if (!isAdminRole()) { els.regionHomeDashboard.innerHTML = ""; return; }
+  const selected = selectedAnalysisRegion();
+  const resume = selected && state.analysisRegionSelection?.explicit;
+  const recent = new Map();
+  for (const run of state.runs || []) {
+    const region = analysisRunRegion({ run });
+    if (region && !recent.has(region.regionKey)) recent.set(region.regionKey, { region, run });
+    if (recent.size >= 6) break;
+  }
+  els.regionHomeDashboard.innerHTML = `<div class="analysis-home">
+    <header class="analysis-home-intro"><p class="eyebrow">지역분석</p><h2>분석할 지역을 선택하세요</h2><p>지역을 직접 선택하거나 이전에 보던 분석을 이어서 확인하세요.</p></header>
+    <section class="analysis-home-selector" aria-label="지역 분석 시작">
+      <form class="analysis-home-form analysis-home-region-form" id="regionHomeForm">
+        <label><span>지역 검색</span><input id="regionHomeQuery" type="search" placeholder="예: 포천, 경남 고성" autocomplete="off" value="${escapeHtml(state.regionHomeQuery || "")}"></label>
+        <label><span>분석할 지역</span><select id="regionHomeSelect">${regionHomeOptionsHtml()}</select></label>
+        <button class="primary-button" type="submit" data-region-home-submit${analysisRegionForKey(state.regionHomeCandidateKey) ? "" : " disabled"}>지역 분석 보기</button>
+      </form>
+      <div data-region-home-preview>${regionHomeAvailabilityHtml(analysisRegionForKey(state.regionHomeCandidateKey))}</div>
+    </section>
+    ${resume ? `<section class="analysis-home-resume" aria-label="이전 지역 분석 이어보기"><div><p class="eyebrow">최근 선택 지역</p><h3>${escapeHtml(analysisRegionLabel(selected))}</h3><p>${escapeHtml(TAB_LABELS[state.lastRegionAnalysisTab] || "지역 현황")}에서 이어서 확인합니다.</p></div><button class="secondary-button" type="button" data-region-home-open="${escapeHtml(selected.regionKey)}" data-region-home-resume>이전 분석 이어보기</button></section>` : ""}
+    <section aria-label="저장 자료가 있는 지역"><div class="analysis-home-section-head"><h3>저장 자료가 있는 지역</h3><span>최근 수집 기준 · 최대 6곳</span></div>
+      <div class="analysis-home-list">${recent.size ? [...recent.values()].map(({ region, run }) => `<article class="analysis-home-row"><div><h4>${escapeHtml(analysisRegionLabel(region))}</h4><p>${escapeHtml(run.keyword || "저장된 수집 자료")}</p><div class="analysis-home-meta"><span>자료 수집일 ${escapeHtml(analysisRunCollectedLabel(run))}</span><span>대상 숙박기간 ${escapeHtml(analysisRunPeriodLabel(run))}</span></div></div><button class="secondary-button" type="button" data-region-home-open="${escapeHtml(region.regionKey)}">지역 분석 보기</button></article>`).join("") : `<div class="analysis-home-empty"><strong>지역이 확인된 숙박 수집 자료가 아직 없습니다.</strong><p>위에서 지역을 선택하면 기본정보와 관광 자료를 확인할 수 있습니다.</p></div>`}</div>
+    </section>
+    <div class="analysis-home-actions"><p>새로운 숙박 자료가 필요하면 수집 화면에서 조건을 정할 수 있습니다.</p><button class="secondary-button" type="button" data-region-home-collect>수집 화면으로 이동</button></div>
+  </div>`;
+}
+
 function regionAnalysisEmptyHtml(kind = "분석") {
   const region = selectedAnalysisRegion();
   return `<div class="empty" role="status"><strong>${escapeHtml(region ? `${analysisRegionLabel(region)} · ${kind} 자료 없음` : "지역을 먼저 선택하세요")}</strong><p>${region ? "선택한 지역과 연결되는 자료만 표시합니다. 다른 지역의 수집결과는 사용하지 않습니다." : "상단 지역 선택에서 분석할 행정구역을 고르세요."}</p>${analysisMatchingRunButton()}</div>`;
@@ -35053,6 +35152,7 @@ async function loadLocationDictionary() {
     reconcileAnalysisRegionSelection();
     renderLocationDictionary();
     renderActiveRegionAnalysis();
+    if (isAdminRole() && state.activeTab === "regionHome") renderRegionHome();
     if (isAdminRole() && state.companyMaster) renderAdminConsoleDashboard();
     if (!isAdminRole()) renderB2BSearchPanel();
   } catch (error) {
@@ -35900,7 +36000,9 @@ function adminHeaderView() {
     }[state.adminPanelSection] || ["운영 홈", "오늘 판단할 운영 현황과 데이터 기준시점"];
   }
   return {
-    report: ["업종분석", "업종 현황과 시장 요약"],
+    industryHome: ["업종분석", "업종·지역·기간을 선택하고 저장된 자료로 분석을 시작하세요"],
+    regionHome: ["지역분석", "분석할 지역을 선택하거나 이전 지역 분석을 이어보세요"],
+    report: ["업종분석 · 시장 브리핑", "선택한 수집 자료의 업종 현황과 시장 요약"],
     rank: ["수집 결과 분석", "수집 완료 즉시 품질·확인 대상·저장된 플레이스 순서 분석"],
     dictionary: ["지역분석 · 지역 현황", "선택지역의 기본정보와 관광·숙박 자료"],
     map: ["지역분석 · 지역 지도", "지역 내·인접 경쟁권과 반경 노출"],
@@ -35915,13 +36017,19 @@ function adminHeaderView() {
 function renderHeader() {
   if (isAdminRole()) {
     const [viewTitle, viewDescription] = adminHeaderView();
-    const basis = adminHomeBasis(adminConsoleMasterSource());
     els.pageTitle.textContent = viewTitle;
     if (els.pageSubtitle) {
       els.pageSubtitle.hidden = false;
-      els.pageSubtitle.textContent = REGION_ANALYSIS_TABS.has(state.activeTab)
-        ? `${analysisRegionLabel()} · ${viewDescription}`
-        : `${viewDescription} · ${basis}`;
+      if (["industryHome", "regionHome"].includes(state.activeTab)) {
+        els.pageSubtitle.textContent = viewDescription;
+      } else if (state.activeTab === "report") {
+        const run = state.data?.run || {};
+        els.pageSubtitle.textContent = `${run.keyword || run.label || "선택한 분석"} · 자료 수집일 ${analysisRunCollectedLabel(run)} · 분석 대상 숙박기간 ${analysisRunPeriodLabel(run)}`;
+      } else {
+        els.pageSubtitle.textContent = REGION_ANALYSIS_TABS.has(state.activeTab)
+          ? `${analysisRegionLabel()} · ${viewDescription}`
+          : `${viewDescription} · ${adminHomeBasis(adminConsoleMasterSource())}`;
+      }
     }
     document.title = `${APP_BRAND_NAME} · ${viewTitle}`;
     return;
@@ -35960,6 +36068,8 @@ function renderAll() {
   reconcileAnalysisRegionSelection();
   applyRoleUi();
   renderRegionAnalysisShell();
+  if (isAdminRole() && state.activeTab === "industryHome") renderIndustryHome();
+  if (isAdminRole() && state.activeTab === "regionHome") renderRegionHome();
   renderB2BSearchPanel();
   renderB2BAccountPanel();
   if (!state.data) {
@@ -36008,6 +36118,7 @@ function syncAppHistoryState(push = false) {
     role: state.session?.role || "",
     tab: state.activeTab || firstRoleTab(),
     analysisRegionSelection: state.analysisRegionSelection ? { ...state.analysisRegionSelection } : null,
+    lastRegionAnalysisTab: state.lastRegionAnalysisTab || "dictionary",
     activeRunId: state.activeRunId || null,
     adminPanelSection: state.adminPanelSection,
     adminDbViewMode: state.adminDbViewMode,
@@ -36027,6 +36138,8 @@ function syncAppHistoryState(push = false) {
 }
 
 function setActiveTab(tab, options = {}) {
+  const previousTab = state.activeTab;
+  state.analysisNavigationSequence = (state.analysisNavigationSequence || 0) + 1;
   state.activeTab = roleAllowsTab(tab) ? tab : firstRoleTab();
   if (options.analysisRegionSelection !== undefined) {
     const selection = options.analysisRegionSelection;
@@ -36036,6 +36149,7 @@ function setActiveTab(tab, options = {}) {
   }
   applyAnalysisRegionToDictionary();
   if (isAdminRole()) {
+    if (REGION_ANALYSIS_TABS.has(state.activeTab)) state.lastRegionAnalysisTab = state.activeTab;
     state.adminMobileSection = adminMobileSectionForTab(state.activeTab, options.adminMobileSection || "");
     if (state.activeTab !== "admin") state.adminMobileAnchor = "";
     if (state.activeTab === "admin" && !state.adminMobileAnchor) {
@@ -36053,6 +36167,11 @@ function setActiveTab(tab, options = {}) {
   renderHeader();
   if (state.activeTab === "rank") renderPlaceRankReplayNotice();
   closeDrawer();
+  if (isAdminRole() && state.activeTab === "industryHome") renderIndustryHome();
+  if (isAdminRole() && state.activeTab === "regionHome") renderRegionHome();
+  if (isAdminRole() && !options.fromHistory && [previousTab, state.activeTab].some((value) => ["industryHome", "regionHome"].includes(value))) {
+    window.scrollTo?.({ top: 0, left: 0, behavior: "instant" });
+  }
   if (!state.data) {
     renderB2BEmptyPanels();
     if (state.activeTab === "dictionary") renderLocationDictionary();
@@ -36083,6 +36202,7 @@ async function restoreAppHistoryState(historyState = {}) {
   // history request so its late response cannot replace the newly restored view.
   loadRunRequestSequence += 1;
   if (isAdminRole()) {
+    if (REGION_ANALYSIS_TABS.has(historyState.lastRegionAnalysisTab)) state.lastRegionAnalysisTab = historyState.lastRegionAnalysisTab;
     if (["overview", "database", "collect", "archive", "members", "files"].includes(historyState.adminPanelSection)) state.adminPanelSection = historyState.adminPanelSection;
     if (["list", "region", "review"].includes(historyState.adminDbViewMode)) state.adminDbViewMode = historyState.adminDbViewMode;
     if (typeof historyState.adminSelectedRegionKey === "string") state.adminSelectedRegionKey = historyState.adminSelectedRegionKey;
@@ -39155,6 +39275,179 @@ function applyRecrawlBatchSetting(button) {
   setStatus("묶음 재수집 설정 적용");
 }
 
+function analysisRunCollectedLabel(run = {}) {
+  const raw = String(run.collectedAt || "").trim();
+  const time = raw ? Date.parse(raw) : NaN;
+  if (!Number.isFinite(time)) return "확인 전";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+  }).formatToParts(new Date(time));
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const label = `${values.year}.${values.month}.${values.day} ${values.hour}:${values.minute}`;
+  return run.collectedAtSource === "filesystem" ? `확인 전 (저장 시점 ${label})` : label;
+}
+
+function analysisRunPeriod(run = {}) {
+  const start = String(run.checkIn || "").trim();
+  const startTime = /^\d{4}-\d{2}-\d{2}$/.test(start) ? Date.parse(`${start}T00:00:00Z`) : NaN;
+  if (!Number.isFinite(startTime) || new Date(startTime).toISOString().slice(0, 10) !== start) return null;
+  const rawDays = Number(run.bookingRangeDays);
+  const end = String(run.checkOut || "").trim();
+  const endTime = /^\d{4}-\d{2}-\d{2}$/.test(end) ? Date.parse(`${end}T00:00:00Z`) : NaN;
+  let days = Number.isInteger(rawDays) && rawDays >= 1 && rawDays <= 31 ? rawDays : 0;
+  if (!days && Number.isFinite(endTime) && endTime >= startTime && new Date(endTime).toISOString().slice(0, 10) === end) {
+    const span = Math.round((endTime - startTime) / 86400000);
+    days = span <= 1 ? 1 : span + 1;
+  }
+  if (days < 1 || days > 31) return null;
+  const lastStayDate = new Date(startTime + (days - 1) * 86400000).toISOString().slice(0, 10);
+  return { key: `${start}:${days}`, start, end: lastStayDate, days };
+}
+
+function analysisRunPeriodLabel(run = {}) {
+  const period = analysisRunPeriod(run);
+  if (!period) return "확인 전";
+  const start = period.start.replace(/-/g, ".");
+  return period.days === 1 ? `${start} (1일)` : `${start} ~ ${period.end.replace(/-/g, ".")} (${period.days}일)`;
+}
+
+function industryRunKeyword(run = {}) {
+  return String(run.keyword || run.searchKeyword || run.naverKeyword || "").trim();
+}
+
+function industryRunCategoryKey(run = {}) {
+  const explicit = String(run.lodgingCategoryKey || run.categoryKey || "").trim();
+  if (LODGING_CATEGORY_PROFILES[explicit]) return explicit;
+  const keyword = industryRunKeyword(run);
+  if (!/글램핑|카라반|캠핑|야영장|풀빌라|펜션|독채|한옥|별채|프라이빗스테이|프라이빗숙소|모텔|무인텔|호텔|리조트|콘도/.test(keyword)) return "unknown";
+  return detectLodgingCategoryKey(keyword);
+}
+
+function industryHomeRuns() {
+  return (state.runs || []).filter((run) => run?.id).slice().sort((left, right) => {
+    const leftTime = Date.parse(left.collectedAt || "") || 0;
+    const rightTime = Date.parse(right.collectedAt || "") || 0;
+    return rightTime - leftTime || String(right.id).localeCompare(String(left.id));
+  });
+}
+
+function industryRecentRuns() {
+  if (!isAdminRole()) return [];
+  const key = `staydatalab:industry-analysis-history:v1:${encodeURIComponent(state.session?.username || "admin")}`;
+  if (state.industryRecentStorageKey !== key || !Array.isArray(state.industryRecentRunIds)) {
+    state.industryRecentStorageKey = key;
+    state.industryRecentRunIds = [];
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(key) || "[]");
+      if (Array.isArray(stored)) state.industryRecentRunIds = [...new Set(stored.filter((id) => typeof id === "string"))].slice(0, 8);
+    } catch {
+      // Browsers that block local storage still retain opened analyses during this visit.
+    }
+  }
+  const byId = new Map((state.runs || []).map((run) => [run.id, run]));
+  return state.industryRecentRunIds.map((id) => byId.get(id)).filter(Boolean);
+}
+
+function rememberIndustryAnalysisRun(runId) {
+  if (!isAdminRole() || !(state.runs || []).some((run) => run.id === runId)) return;
+  industryRecentRuns();
+  state.industryRecentRunIds = [runId, ...state.industryRecentRunIds.filter((id) => id !== runId)].slice(0, 8);
+  try {
+    window.localStorage.setItem(state.industryRecentStorageKey, JSON.stringify(state.industryRecentRunIds));
+  } catch {
+    // Opening a saved analysis does not depend on browser storage availability.
+  }
+}
+
+function industryHomeRunRow(run, resume = false) {
+  const category = LODGING_CATEGORY_PROFILES[industryRunCategoryKey(run)]?.label || "업종 확인 전";
+  const busy = state.industryHomeLoadingRunId === run.id;
+  return `<article class="analysis-home-row">
+    <div><strong>${escapeHtml(industryRunKeyword(run) || run.label || run.id)}</strong>
+      <div class="analysis-home-meta"><span>${escapeHtml(category)}</span><span>자료 수집일 ${escapeHtml(analysisRunCollectedLabel(run))} (한국시간)</span></div>
+      <div class="analysis-home-meta"><span>분석 대상 숙박기간 ${escapeHtml(analysisRunPeriodLabel(run))}</span><span>${escapeHtml(run.collectionPurposeLabel || collectionPurposeProfile(run.collectionPurpose || "revenue_detail").label)}</span>${run.detailRankRanges ? `<span>${escapeHtml(run.detailRankRanges)}위</span>` : ""}</div>
+    </div>
+    <div class="analysis-home-actions"><button class="${resume ? "secondary-button" : "primary-button"}" type="button" data-industry-open-run="${escapeHtml(run.id)}"${busy ? " disabled" : ""}>${busy ? "불러오는 중" : resume ? "이어보기" : "분석 보기"}</button></div>
+  </article>`;
+}
+
+function renderIndustryHome() {
+  if (!els.industryHomeDashboard) return;
+  if (!isAdminRole()) {
+    els.industryHomeDashboard.innerHTML = "";
+    return;
+  }
+  const allRuns = industryHomeRuns();
+  const filters = state.industryHomeFilters || { category: "", keyword: "", period: "" };
+  const categoryRuns = allRuns.filter((run) => !filters.category || industryRunCategoryKey(run) === filters.category);
+  const keywords = [...new Set(categoryRuns.map(industryRunKeyword).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ko"));
+  const scopeRuns = categoryRuns.filter((run) => !filters.keyword || industryRunKeyword(run) === filters.keyword);
+  const periods = [...new Map(scopeRuns.map((run) => [analysisRunPeriod(run)?.key || "unknown", run])).entries()];
+  const matches = scopeRuns.filter((run) => !filters.period || (analysisRunPeriod(run)?.key || "unknown") === filters.period);
+  const categories = Object.entries(LODGING_CATEGORY_PROFILES).map(([key, profile]) => [key, profile.label]);
+  if (allRuns.some((run) => industryRunCategoryKey(run) === "unknown")) categories.push(["unknown", "업종 확인 전"]);
+  const recent = industryRecentRuns().slice(0, 3);
+  const visibleCount = state.industryHomeVisibleCount || 12;
+  const options = (entries, selected) => entries.map(([value, label]) => `<option value="${escapeHtml(value)}"${value === selected ? " selected" : ""}>${escapeHtml(label)}</option>`).join("");
+  const matchingSummary = filters.category || filters.keyword || filters.period ? "선택 조건의 저장 자료" : "최근 저장 자료";
+  els.industryHomeDashboard.innerHTML = `<div class="analysis-home">
+    <header class="analysis-home-intro"><p class="eyebrow">업종분석</p><h2>분석할 자료를 선택하세요</h2><p>업종과 검색 권역, 숙박기간을 고른 뒤 저장된 분석을 열어 보세요.</p><small>자료 수집일은 수집 기록의 시점입니다. 기록이 없는 이전 자료는 저장 시점을 별도로 안내합니다. 분석 대상 숙박기간은 그때 확인한 숙박일의 범위입니다.</small></header>
+    <form class="analysis-home-form" aria-label="업종 분석 조건">
+      <label>업종<select name="industryCategory" data-industry-home-filter="category"><option value="">전체 업종</option>${options(categories, filters.category)}</select></label>
+      <label>지역·검색 권역<select name="industryKeyword" data-industry-home-filter="keyword"><option value="">전체 검색어</option>${options(keywords.map((value) => [value, value]), filters.keyword)}</select><small>저장된 실제 검색어를 표시합니다.</small></label>
+      <label>분석 대상 숙박기간<select name="industryPeriod" data-industry-home-filter="period"><option value="">전체 저장 기간</option>${options(periods.map(([key, run]) => [key, analysisRunPeriodLabel(run)]), filters.period)}</select></label>
+    </form>
+    ${state.industryHomeError ? `<div class="analysis-home-empty" role="alert">${escapeHtml(state.industryHomeError)}</div>` : ""}
+    <section aria-label="저장된 업종 분석"><div class="analysis-home-section-heading"><h3>${matchingSummary}</h3><span>${fmtNumber(matches.length)}회</span></div>
+      ${matches.length ? `<div class="analysis-home-list">${matches.slice(0, visibleCount).map((run) => industryHomeRunRow(run)).join("")}</div>${matches.length > visibleCount ? `<div class="analysis-home-actions"><button class="secondary-button" type="button" data-industry-home-more>저장 자료 더 보기</button></div>` : ""}` : `<div class="analysis-home-empty"><strong>선택 조건에 맞는 저장 자료가 없습니다.</strong><p>수집 화면에서 업종과 지역을 입력해 자료를 준비할 수 있습니다.</p><button class="secondary-button" type="button" data-industry-home-collect>수집 화면으로 이동</button></div>`}
+    </section>
+    ${recent.length ? `<section class="analysis-home-resume" aria-label="최근에 연 업종 분석"><div class="analysis-home-section-heading"><h3>이전 분석 이어보기</h3><span>직접 열어 본 분석</span></div><div class="analysis-home-list">${recent.map((run) => industryHomeRunRow(run, true)).join("")}</div></section>` : ""}
+  </div>`;
+}
+
+async function openIndustryAnalysisRun(runId) {
+  if (!isAdminRole() || state.activeTab !== "industryHome") return;
+  const target = (state.runs || []).find((run) => run.id === String(runId || ""));
+  if (!target) return;
+  const request = ++state.industryHomeOpenSequence;
+  const navigationSequence = state.analysisNavigationSequence || 0;
+  state.industryHomeLoadingRunId = target.id;
+  state.industryHomeError = "";
+  renderIndustryHome();
+  try {
+    const data = await loadRun(target.id);
+    if (!data || request !== state.industryHomeOpenSequence || state.activeTab !== "industryHome"
+      || navigationSequence !== (state.analysisNavigationSequence || 0) || state.activeRunId !== target.id || !isAdminRole()) return;
+    rememberIndustryAnalysisRun(target.id);
+    setActiveTab("report");
+  } catch (error) {
+    if (request === state.industryHomeOpenSequence && state.activeTab === "industryHome"
+      && navigationSequence === (state.analysisNavigationSequence || 0) && isAdminRole()) {
+      state.industryHomeError = `저장된 분석을 불러오지 못했습니다. ${error.message || "잠시 후 다시 시도해 주세요."}`;
+    }
+  } finally {
+    if (request === state.industryHomeOpenSequence) {
+      state.industryHomeLoadingRunId = "";
+      renderIndustryHome();
+    }
+  }
+}
+
+function changeIndustryHomeFilter(field, value) {
+  if (!isAdminRole() || !["category", "keyword", "period"].includes(field)) return;
+  const next = { ...(state.industryHomeFilters || { category: "", keyword: "", period: "" }), [field]: String(value || "") };
+  if (field === "category") next.keyword = "";
+  if (field !== "period") next.period = "";
+  state.industryHomeFilters = next;
+  state.industryHomeOpenSequence = (state.industryHomeOpenSequence || 0) + 1;
+  state.industryHomeLoadingRunId = "";
+  state.industryHomeVisibleCount = 12;
+  state.industryHomeError = "";
+  renderIndustryHome();
+  els.industryHomeDashboard?.querySelector(`[data-industry-home-filter="${field}"]`)?.focus({ preventScroll: true });
+}
+
 async function backfillCompanyMaster(button) {
   if (!button) return;
   button.disabled = true;
@@ -39201,6 +39494,9 @@ async function loadRuns(selectLatest = false) {
   }
   if (!state.runs.length) {
     state.data = null;
+    state.activeRunId = null;
+    if (state.activeTab === "industryHome") renderIndustryHome();
+    if (state.activeTab === "regionHome") renderRegionHome();
     renderRunResultApplySummary();
     renderB2BSearchPanel();
     const emptyText = isAdminRole() ? "실행 결과가 없습니다. 관리 탭에서 새 수집을 실행하세요." : "검색어를 입력하면 새 경쟁 리포트를 수집합니다.";
@@ -40473,7 +40769,7 @@ function openAdminHomeRoute(route = "summary") {
     return;
   }
   if (route === "region") {
-    setActiveTab("dictionary");
+    setActiveTab("regionHome");
     return;
   }
   if (route === "members") {
@@ -40497,7 +40793,7 @@ function openAdminHomeRoute(route = "summary") {
     return;
   }
   if (route === "industry") {
-    setActiveTab("report");
+    setActiveTab("industryHome");
     return;
   }
   if (route === "history") setActiveTab("historyOps");
@@ -41849,6 +42145,26 @@ function bindEvents() {
       updateCrawlSpeedPreview();
     });
   });
+  els.regionHomeDashboard?.addEventListener("input", (event) => {
+    if (event.target.id !== "regionHomeQuery" || !isAdminRole()) return;
+    state.regionHomeQuery = event.target.value;
+    updateRegionHomeDraft();
+  });
+  els.regionHomeDashboard?.addEventListener("change", (event) => {
+    if (event.target.id !== "regionHomeSelect" || !isAdminRole()) return;
+    state.regionHomeCandidateKey = event.target.value;
+    updateRegionHomeDraft();
+  });
+  els.regionHomeDashboard?.addEventListener("submit", (event) => {
+    if (event.target.id !== "regionHomeForm") return;
+    event.preventDefault();
+    openRegionHomeAnalysis(state.regionHomeCandidateKey);
+  });
+  els.regionHomeDashboard?.addEventListener("click", (event) => {
+    const open = event.target.closest("[data-region-home-open]");
+    if (open) openRegionHomeAnalysis(open.dataset.regionHomeOpen, open.hasAttribute("data-region-home-resume"));
+    else if (event.target.closest("[data-region-home-collect]") && isAdminRole()) activateAdminPrimaryNav("collect");
+  });
   els.dictionarySearchForm?.addEventListener("submit", (event) => {
     event.preventDefault();
     runDictionarySearch();
@@ -41857,6 +42173,25 @@ function bindEvents() {
     selectDictionaryProvince(els.dictionaryProvinceSelect.value);
   });
   els.analysisRegionSelect?.addEventListener("change", () => setAnalysisRegion(els.analysisRegionSelect.value));
+  els.industryHomeDashboard?.addEventListener("submit", (event) => event.preventDefault());
+  els.industryHomeDashboard?.addEventListener("change", (event) => {
+    const input = event.target.closest?.("[data-industry-home-filter]");
+    if (input) changeIndustryHomeFilter(input.dataset.industryHomeFilter, input.value);
+  });
+  els.industryHomeDashboard?.addEventListener("click", (event) => {
+    if (!isAdminRole()) return;
+    const open = event.target.closest?.("[data-industry-open-run]");
+    if (open) {
+      void openIndustryAnalysisRun(open.dataset.industryOpenRun);
+      return;
+    }
+    if (event.target.closest?.("[data-industry-home-more]")) {
+      state.industryHomeVisibleCount = (state.industryHomeVisibleCount || 12) + 12;
+      renderIndustryHome();
+      return;
+    }
+    if (event.target.closest?.("[data-industry-home-collect]")) openAdminHomeRoute("collect");
+  });
   document.addEventListener("click", (event) => {
     const button = event.target.closest?.("[data-analysis-open-run]");
     if (!button) return;

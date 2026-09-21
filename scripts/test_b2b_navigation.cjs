@@ -13,7 +13,7 @@ const source = fs.readFileSync(args[1] === "-" ? 0 : args[1] || path.join(__dirn
 const html = fs.readFileSync(path.join(__dirname, "..", "web", "index.html"), "utf8");
 const constantNames = [
   "ROLE_TABS", "B2B_PRIMARY_TABS", "TAB_LABELS", "B2B_TAB_LABELS", "B2B_NAV_META",
-  "ADMIN_MOBILE_SECTIONS", "ADMIN_COMPACT_SECTIONS", "ADMIN_PANEL_MOBILE_TARGETS", "ADMIN_NAV_META"
+  "ADMIN_MOBILE_SECTIONS", "ADMIN_COMPACT_SECTIONS", "ADMIN_PANEL_MOBILE_TARGETS", "ADMIN_NAV_META", "REGION_ANALYSIS_TABS"
 ];
 const functionNames = [
   "escapeHtml", "isAdminUserViewMode", "currentRole", "isAdminRole", "roleTabs", "roleAllowsTab", "firstRoleTab", "tabLabel",
@@ -107,6 +107,7 @@ function fixture({ data = false, running = false, role = "b2b" } = {}) {
     // This suite isolates role/menu/panel behavior and unfinished member forms.
     applyAnalysisRegionToDictionary: noOp, renderRegionAnalysisShell: noOp,
     renderB2BEmptyPanels: noOp, renderLocationDictionary: noOp, renderReport: noOp,
+    renderIndustryHome: noOp, renderRegionHome: noOp,
     renderDecisionQueue: noOp, renderMap: noOp, renderDemand: noOp, renderHistoryOps: noOp,
     renderCompanyMasterPanel: noOp, renderDownloads: noOp, syncYeogiManualInterface: noOp,
     renderB2BSearchPanel() { throw new Error("Tab navigation must not rebuild the search form or progress UI"); }
@@ -139,7 +140,7 @@ function assertView(test, expectedTab) {
   const regional = ["map", "demand"].includes(expectedTab);
   assert.equal(test.els.b2bRegionSecondaryNav.hidden, !regional);
   if (regional) assert.deepEqual(test.secondary.filter((button) => button.classList.contains("active")).map((button) => button.dataset.b2bRegionTab), [expectedTab]);
-  for (const panel of test.panels.filter((panel) => ["dictionary", "target", "decisionQueue", "historyOps", "admin"].includes(panel.dataset.panel))) {
+  for (const panel of test.panels.filter((panel) => ["industryHome", "regionHome", "dictionary", "target", "decisionQueue", "historyOps", "admin"].includes(panel.dataset.panel))) {
     assert.equal(panel.hidden, true, `restricted panel ${panel.dataset.panel} remains hidden`);
   }
 }
@@ -176,7 +177,7 @@ for (const data of [false, true]) {
     test.api.setActiveTab("report");
     assert.equal(test.api.adminPrimarySectionForTab("report"), "analysis", "industry briefing stays in industry analysis");
   });
-  for (const tab of ["dictionary", "target", "decisionQueue", "historyOps", "admin", "unknown"]) {
+  for (const tab of ["industryHome", "regionHome", "dictionary", "target", "decisionQueue", "historyOps", "admin", "unknown"]) {
     check(`role restriction/data=${data}/${tab}`, () => {
       const test = fixture({ data });
       test.api.setActiveTab("account");

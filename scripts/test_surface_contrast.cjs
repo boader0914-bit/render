@@ -621,8 +621,8 @@ adminIntegrationContext.rememberForecast({ ...forecastFixture, status: "no_data"
 adminIntegrationContext.renderForecast();
 assert(adminIntegrationContext.getForecastStatus().statusLabel === "제공 자료 없음" && !adminIntegrationContext.els.tourismForecastAdminCard.innerHTML.includes('<svg'), "valid no-data forecast response must not become a zero curve or retain another forecast", failures);
 
-const expectedCacheVersion = "staydatalab-v20260921-source-layout-v110";
-const expectedAssetVersion = "datalab-20260921-source-layout-v110";
+const expectedCacheVersion = "staydatalab-v20260921-analysis-home-v111";
+const expectedAssetVersion = "datalab-20260921-analysis-home-v111";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm

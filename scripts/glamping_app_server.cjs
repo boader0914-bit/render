@@ -4929,6 +4929,16 @@ function downloadLabelForFile(file, manifest = {}) {
   return file;
 }
 
+function runCollectedAtSource(manifest = {}) {
+  for (const key of ["completedAt", "finishedAt", "collectedAt", "startedAt", "createdAt"]) {
+    if (!Number.isFinite(Date.parse(String(manifest?.[key] || "")))) continue;
+    // A manual supplement can preserve a legacy directory timestamp in the
+    // manifest. That preserved value must not become an observed collection time.
+    return key === "collectedAt" && manifest.collectedAtSource === "filesystem" ? "filesystem" : "recorded";
+  }
+  return "filesystem";
+}
+
 function runCollectedAt(runId = "", manifest = {}, stat = {}) {
   for (const value of [
     manifest.completedAt,
@@ -4967,6 +4977,7 @@ async function listRuns() {
     const stat = await fsp.stat(dirPath);
     const provinceKey = provinceKeyForRun(entry.name, manifest);
     const collectedAt = runCollectedAt(entry.name, manifest || {}, stat);
+    const collectedAtSource = runCollectedAtSource(manifest);
 
     runs.push({
       id: entry.name,
@@ -4996,6 +5007,7 @@ async function listRuns() {
       province: provinceKey,
       provinceLabel: (PROVINCES[provinceKey] || PROVINCES.local).label,
       collectedAt,
+      collectedAtSource,
       updatedAt: stat.mtime.toISOString(),
       counts: manifest?.counts || {},
       files: manifest?.files || files
@@ -6231,6 +6243,7 @@ async function importYeogiSupplement(payload) {
   const files = await fsp.readdir(dirPath);
   const manifest = (await readManifest(dirPath)) || {};
   const collectedAt = runCollectedAt(runId, manifest, stat);
+  const collectedAtSource = runCollectedAtSource(manifest);
   if (collectedAt && ![
     manifest.completedAt,
     manifest.finishedAt,
@@ -6239,6 +6252,7 @@ async function importYeogiSupplement(payload) {
     manifest.createdAt
   ].some((value) => Number.isFinite(Date.parse(String(value || ""))))) {
     manifest.collectedAt = collectedAt;
+    manifest.collectedAtSource = collectedAtSource;
   }
   const platformFile = manifestFile(manifest, "platform", files, (file) => file.endsWith("_glamping_crawl_test.csv"));
   if (!platformFile) throw new Error("플랫폼 결과 CSV를 찾을 수 없습니다.");
@@ -16371,6 +16385,7 @@ async function loadRun(runId, options = {}) {
   if (isIncompleteRunDirectory(manifest, files)) return null;
   const derivedUpdatesAllowed = allowsDerivedUpdates(manifest);
   const collectedAt = runCollectedAt(runId, manifest || {}, stat);
+  const collectedAtSource = runCollectedAtSource(manifest);
   const provinceKey = provinceKeyForRun(runId, manifest);
   const province = PROVINCES[provinceKey] || PROVINCES.local;
   const regionalFile = manifestFile(manifest, "regional", files, (file) => file.endsWith("_naver_place_glamping_clusters.csv"));
@@ -16583,6 +16598,7 @@ async function loadRun(runId, options = {}) {
       bookingRangeDays: manifest?.bookingRangeDays || 1,
       bookingRangePlaceLimit: manifest?.bookingRangePlaceLimit || 0,
       collectedAt,
+      collectedAtSource,
       updatedAt: collectedAt,
       counts: manifest?.counts || {},
       scheduledCollection: manifest?.scheduledCollection === true,
@@ -17154,9 +17170,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=datalab-20260921-source-layout-v110"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=datalab-20260921-source-layout-v110"')
-      .replace('src="/app.js"', 'src="/app.js?v=datalab-20260921-source-layout-v110"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=datalab-20260921-analysis-home-v111"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=datalab-20260921-analysis-home-v111"')
+      .replace('src="/app.js"', 'src="/app.js?v=datalab-20260921-analysis-home-v111"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
