@@ -17,7 +17,7 @@ const { createSpecialDaysService } = require("./lib/special_days.cjs");
 const { createTourismForecastService } = require("./lib/tourism_forecast.cjs");
 const { createMonthlyVisitorScheduler } = require("./tourism_visitor_monthly_scheduler.cjs");
 const { createDemandStrengthBackfillScheduler } = require("./tourism_demand_strength_backfill_scheduler.cjs");
-const { createDailyKeywordCollectionScheduler } = require("./daily_keyword_collection_scheduler.cjs");
+const { createDailyKeywordCollectionScheduler, validateRequestPacing, effectiveRequestPacing } = require("./daily_keyword_collection_scheduler.cjs");
 const { inspectResult: inspectDailyCollectionResult, allowsDerivedUpdates } = require("./daily_collection_quality.cjs");
 const { createMasterDbDualWriteQueue } = require("./master_db_dual_write.cjs");
 
@@ -17226,6 +17226,22 @@ function activeCrawlStageStatus(elapsedSeconds = 0) {
   return { currentStage, stages: rendered };
 }
 
+function scheduledCrawlerPacingEnv(payload = {}, checkIn = "") {
+  const disabled = { NAVER_REQUEST_PACING_ENABLED: "0" };
+  if (payload.scheduledCollection !== true || !payload.requestPacing) return disabled;
+  const profile = effectiveRequestPacing({ requestPacing: validateRequestPacing(payload.requestPacing) }, checkIn);
+  if (!profile) return disabled;
+  return {
+    NAVER_REQUEST_PACING_ENABLED: "1",
+    NAVER_REQUEST_MIN_INTERVAL_MS: String(profile.minIntervalMs),
+    NAVER_REQUEST_MAX_CONCURRENCY: String(profile.maxConcurrentRequests),
+    NAVER_REQUEST_PACING_START_DATE: profile.startDate,
+    NAVER_BOOKING_DETAIL_CONCURRENCY: String(profile.detailConcurrency),
+    NAVER_SCHEDULE_CONCURRENCY: String(profile.scheduleConcurrency),
+    NAVER_OTA_OBSERVATION_CONCURRENCY: String(profile.otaConcurrency)
+  };
+}
+
 async function runCrawlerInternal(payload) {
   const plan = crawlExecutionPlan(payload);
   const keyword = plan.keyword;
@@ -17255,6 +17271,7 @@ async function runCrawlerInternal(payload) {
     COLLECTION_SOURCE: collectionSource,
     COLLECTION_SOURCE_LABEL: collectionSourceLabel(collectionSource),
     SCHEDULED_COLLECTION: payload.scheduledCollection === true ? "1" : "0",
+    ...scheduledCrawlerPacingEnv(payload, plan.checkIn),
     DATA_DIR,
     OUTPUTS_DIR,
     CONFIG_DIR,

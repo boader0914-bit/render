@@ -3,7 +3,27 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { inspectManifest } = require("./daily_collection_quality.cjs");
 const { applyInventoryEvidence, productEvidence } = require("./inventory_estimation.cjs");
+const { createNaverRequestGate } = require("./naver_request_pacing.cjs");
 const SCHEDULED_COLLECTION = process.env.SCHEDULED_COLLECTION === "1";
+const NAVER_REQUEST_PACING_ENABLED = SCHEDULED_COLLECTION && process.env.NAVER_REQUEST_PACING_ENABLED === "1";
+let naverRequestBlockedStatus = 0;
+const naverRequestGate = createNaverRequestGate({
+  enabled: NAVER_REQUEST_PACING_ENABLED,
+  minIntervalMs: NAVER_REQUEST_PACING_ENABLED ? process.env.NAVER_REQUEST_MIN_INTERVAL_MS : 500,
+  maxConcurrency: NAVER_REQUEST_PACING_ENABLED ? process.env.NAVER_REQUEST_MAX_CONCURRENCY : 1,
+  fetchImpl: globalThis.fetch,
+  onResponse: (response, { stop }) => {
+    if (![403, 429].includes(response.status)) return;
+    naverRequestBlockedStatus = response.status;
+    const error = new Error(`NAVER_REQUEST_BLOCKED HTTP ${response.status}`);
+    error.code = "NAVER_REQUEST_BLOCKED";
+    error.statusCode = response.status;
+    stop(error);
+  },
+});
+// Every Naver fetch path (including fallback pages) shares one gate. Other
+// hosts and collections without the scheduled opt-in keep their old behavior.
+const fetch = naverRequestGate.fetch;
 const scheduledCollectionDiagnostics = {
   naverScheduleRequested: 0,
   naverScheduleSucceeded: 0,
@@ -4508,6 +4528,13 @@ async function main() {
   if (SCHEDULED_COLLECTION) {
     manifest.scheduledCollection = true;
     manifest.naverBookingBlockedStatus = naverScheduleBlockedStatus;
+    manifest.requestPacing = {
+      ...naverRequestGate.diagnostics(),
+      detailConcurrency: NAVER_BOOKING_DETAIL_CONCURRENCY,
+      scheduleConcurrency: NAVER_SCHEDULE_CONCURRENCY,
+      otaConcurrency: NAVER_OTA_OBSERVATION_CONCURRENCY,
+      blockedStatus: naverRequestBlockedStatus || null,
+    };
     Object.assign(manifest.counts, scheduledCollectionDiagnostics);
     manifest.collectionQuality = inspectManifest(manifest);
   }

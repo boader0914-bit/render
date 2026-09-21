@@ -2,8 +2,10 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const {
-  createDailyKeywordCollectionScheduler, defaultConfig, KEYWORDS, MIN_FREE_BYTES, dateKey, addDays
+  createDailyKeywordCollectionScheduler, defaultConfig, KEYWORDS, MIN_FREE_BYTES, dateKey, addDays,
+  validateConfig, lowLoadRequestPacing
 } = require("./daily_keyword_collection_scheduler.cjs");
 
 const cases = [];
@@ -72,6 +74,116 @@ test("completed jobs never repeat on same-day ticks or restart", async () => {
     await fresh.tick();
     assert.equal(f.calls.length, 26);
     assert.equal(Object.keys((await f.state()).days).length, 2);
+  } finally { await f.close(); }
+});
+
+test("future low-load CLI preserves today's legacy ledger and starts on the selected KST date", async () => {
+  const f = await fixture();
+  try {
+    f.setTime("2026-09-21T05:00:00Z");
+    await f.scheduler.tick();
+    const state = await f.state();
+    // Legacy records did not include pacing or batch timing metadata.
+    const oldDay = state.days["2026-09-21"];
+    delete oldDay.requestPacing;
+    delete oldDay.startedAt;
+    delete oldDay.durationMs;
+    oldDay.items.forEach((item) => { delete item.requestPacing; });
+    const original = JSON.stringify(state, null, 2);
+    await fs.writeFile(f.stateFile, original);
+    const cli = spawnSync(process.execPath, [path.join(__dirname, "configure_daily_collection.cjs"),
+      "--low-load-from", "2026-09-22", "--data-dir", f.dataDir], { encoding: "utf8" });
+    assert.equal(cli.status, 0, cli.stderr);
+    const saved = JSON.parse(await fs.readFile(f.configFile, "utf8"));
+    assert.equal(saved.enabled, true);
+    assert.deepEqual(saved.keywords, KEYWORDS);
+    assert.equal(saved.hour, 14);
+    assert.equal(saved.bookingDays, 31);
+    assert.equal(saved.rankLimit, 20);
+    const pacing = lowLoadRequestPacing("2026-09-22");
+    assert.deepEqual(saved.requestPacing, pacing);
+    assert.equal(await fs.readFile(f.stateFile, "utf8"), original);
+    await f.scheduler.tick();
+    assert.equal(f.calls.length, 13);
+    assert.equal(await fs.readFile(f.stateFile, "utf8"), original);
+    assert.equal((await f.scheduler.status()).requestPacing, null);
+    assert.equal((await f.scheduler.status()).totalCollectionDurationMs, 26_000);
+    f.setTime("2026-09-21T15:00:00Z"); // KST start date, still before 14:00.
+    await f.scheduler.tick();
+    assert.equal(f.calls.length, 13);
+    assert.deepEqual((await f.scheduler.status()).requestPacing, pacing);
+    f.setTime("2026-09-22T05:00:00Z");
+    await f.scheduler.tick();
+    assert.equal(f.calls.length, 26);
+    assert.ok(f.calls.slice(13).every((payload) => JSON.stringify(payload.requestPacing) === JSON.stringify(pacing)));
+    const status = await f.scheduler.status();
+    assert.deepEqual(status.requestPacing, pacing);
+    assert.ok(status.items.every((item) => item.durationMs === 2000 && item.requestPacing.maxConcurrentRequests === 2));
+    assert.equal(status.durationMs, 26_000);
+    assert.equal(status.totalCollectionDurationMs, 26_000);
+    assert.deepEqual((await f.state()).days["2026-09-21"], oldDay);
+    f.setTime("2026-09-23T05:00:00Z");
+    await f.scheduler.tick();
+    assert.equal(f.calls.length, 39);
+    assert.deepEqual(f.calls[38].requestPacing, pacing); // No automatic return to higher load.
+  } finally { await f.close(); }
+});
+
+test("low-load CLI retains disabled configuration and rejects invalid input without writes", async () => {
+  const f = await fixture();
+  try {
+    await f.writeConfig({ ...f.config, enabled: false, minFreeBytes: MIN_FREE_BYTES * 2 });
+    const invoke = (date) => spawnSync(process.execPath, [path.join(__dirname, "configure_daily_collection.cjs"),
+      "--low-load-from", date, "--data-dir", f.dataDir], { encoding: "utf8" });
+    const cli = invoke("2026-09-22");
+    assert.equal(cli.status, 0, cli.stderr);
+    const original = await fs.readFile(f.configFile, "utf8");
+    const saved = JSON.parse(original);
+    assert.equal(saved.enabled, false);
+    assert.equal(saved.minFreeBytes, MIN_FREE_BYTES * 2);
+    for (const invalid of ["2026-02-30", "2026-9-22", "garbage", "2026-09-22T00:00:00Z"]) {
+      const result = invoke(invalid);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /invalid_daily_collection_request_pacing/);
+      assert.equal(await fs.readFile(f.configFile, "utf8"), original);
+    }
+    await f.scheduler.tick();
+    assert.equal(f.calls.length, 0);
+    await assert.rejects(fs.access(f.stateFile), { code: "ENOENT" });
+    assert.deepEqual((await fs.readdir(path.dirname(f.configFile))).sort(), ["daily_keyword_collection.json"]);
+  } finally { await f.close(); }
+});
+
+test("pacing validates integer bounds and only a fixed trusted payload shape", async () => {
+  const baseline = lowLoadRequestPacing("2026-09-22");
+  for (const invalid of [null, [], { ...baseline, enabled: "true" }, { ...baseline, minIntervalMs: 0 },
+    { ...baseline, minIntervalMs: 60_001 }, { ...baseline, detailConcurrency: 1.5 },
+    { ...baseline, maxConcurrentRequests: 3 }, { ...baseline, maxConcurrentRequests: 9 }, { ...baseline, otaConcurrency: 0 },
+    { ...baseline, extraEnvironment: "unsafe" }]) {
+    assert.throws(() => validateConfig({ ...defaultConfig(), requestPacing: invalid }), /invalid_daily_collection_request_pacing/);
+  }
+  assert.equal(Object.hasOwn(validateConfig(defaultConfig()), "requestPacing"), false);
+});
+
+test("same-day effective pacing change halts remaining jobs without resetting history", async () => {
+  let f;
+  let count = 0;
+  const pacing = lowLoadRequestPacing("2026-09-20");
+  f = await fixture({ runCrawler: async () => {
+    count += 1;
+    await f.writeConfig({ ...f.config, requestPacing: { ...pacing, minIntervalMs: 1000 } });
+    return { runId: "first" };
+  } });
+  try {
+    await f.writeConfig({ ...f.config, requestPacing: pacing });
+    await f.scheduler.tick();
+    assert.equal(count, 1);
+    const status = await f.scheduler.status();
+    assert.equal(status.blockedReason, "same_day_configuration_changed");
+    assert.deepEqual(status.requestPacing, pacing);
+    assert.deepEqual(status.items[0].requestPacing, pacing);
+    assert.equal(status.items[0].status, "completed");
+    assert.equal(status.items[1].status, "pending");
   } finally { await f.close(); }
 });
 
@@ -207,6 +319,9 @@ test("explicit 429, ENOSPC and administrator cancellation stop all remaining job
     [new Error("NAVER_MAIN_BLOCKED HTTP 403"), "naver_main_http_403"],
     [new Error("NAVER_SCHEDULE_BLOCKED HTTP 403"), "naver_schedule_http_403"],
     [new Error("NAVER_SCHEDULE_BLOCKED HTTP 429"), "rate_limited"],
+    [new Error("NAVER_REQUEST_BLOCKED HTTP 403"), "naver_request_http_403"],
+    [new Error("NAVER_REQUEST_BLOCKED HTTP 429"), "rate_limited"],
+    [Object.assign(new Error("captcha detected"), { code: "NAVER_REQUEST_BLOCKED" }), "naver_request_blocked"],
     [Object.assign(new Error("full"), { code: "ENOSPC" }), "disk_full"],
     [Object.assign(new Error("cancel"), { cancelled: true, statusCode: 499 }), "cancel_requested"],
     [Object.assign(new Error("cancel"), { code: "ABORT_ERR" }), "cancel_requested"],

@@ -25,6 +25,10 @@ function inspectManifest(manifest, options = {}) {
     }
   }
   const attempts = Array.isArray(manifest.naverAttemptedQueries) ? manifest.naverAttemptedQueries : [];
+  const requestBlockedStatus = count(manifest.requestPacing?.blockedStatus);
+  if (manifest.scheduledCollection && manifest.requestPacing?.enabled === true && [403, 429].includes(requestBlockedStatus)) {
+    return receipt("blocked", "naver_request_blocked", counts, { blockedReason: `naver_request_http_${requestBlockedStatus}` });
+  }
   const blockedAttempt = attempts.find((attempt) => [403, 429].includes(count(attempt?.status)));
   if (blockedAttempt) {
     const status = Number(blockedAttempt.status);

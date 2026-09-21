@@ -1,0 +1,162 @@
+"use strict";
+
+const DEFAULT_MIN_INTERVAL_MS = 500;
+
+function isNaverRequest(input) {
+  try {
+    const url = new URL(typeof input === "object" && input !== null && "url" in input ? input.url : String(input));
+    if (!["http:", "https:"].includes(url.protocol)) return false;
+    const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
+    return ["naver.com", "naver.net"].some(domain => hostname === domain || hostname.endsWith(`.${domain}`));
+  } catch {
+    return false;
+  }
+}
+
+function intervalMilliseconds(value) {
+  if (value === null || value === undefined || value === "") return DEFAULT_MIN_INTERVAL_MS;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) throw new TypeError("Naver request interval must be a nonnegative number.");
+  return Math.round(parsed);
+}
+
+function concurrencyLimit(value) {
+  if (value === null || value === undefined || value === "") return 1;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 2) throw new TypeError("Naver request concurrency must be 1 or 2.");
+  return parsed;
+}
+
+function stoppedError(reason) {
+  if (reason instanceof Error || Object.prototype.toString.call(reason) === "[object Error]") return reason;
+  const error = new Error(String(reason || "Naver request gate stopped."));
+  error.code = "NAVER_REQUEST_GATE_STOPPED";
+  return error;
+}
+
+function signalFor(input, init) {
+  return init?.signal || (typeof input === "object" && input !== null ? input.signal : null);
+}
+
+function throwIfAborted(signal) {
+  if (!signal?.aborted) return;
+  if (typeof signal.throwIfAborted === "function") signal.throwIfAborted();
+  const error = new Error("The request was aborted.");
+  error.name = "AbortError";
+  throw error;
+}
+
+function createNaverRequestGate(options = {}) {
+  const fetchImpl = options.fetchImpl || globalThis.fetch;
+  if (typeof fetchImpl !== "function") throw new TypeError("A fetch implementation is required.");
+  const enabled = options.enabled !== false;
+  const minIntervalMs = intervalMilliseconds(options.minIntervalMs);
+  const maxConcurrency = concurrencyLimit(options.maxConcurrency);
+  const now = options.now || (() => performance.now());
+  const sleep = options.sleep || (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)));
+  const onResponse = typeof options.onResponse === "function" ? options.onResponse : null;
+  let lastStartedAt = null;
+  let stopReason = null;
+  let inFlight = 0;
+  let pumping = false;
+  const queue = [];
+  const metrics = { requestCount: 0, failedRequests: 0, cancelledBeforeStart: 0, totalWaitMs: 0, maxInFlight: 0, minObservedStartIntervalMs: null };
+
+  function stop(reason) {
+    if (!stopReason) stopReason = stoppedError(reason);
+    while (queue.length) {
+      metrics.cancelledBeforeStart++;
+      queue.shift().reject(stopReason);
+    }
+  }
+
+  function diagnostics() {
+    return {
+      enabled, minIntervalMs, maxConcurrentRequests: maxConcurrency, ...metrics,
+      totalWaitMs: Math.round(metrics.totalWaitMs),
+      minObservedStartIntervalMs: metrics.minObservedStartIntervalMs === null ? null : Math.round(metrics.minObservedStartIntervalMs),
+      queued: queue.length, inFlight, stopped: Boolean(stopReason),
+    };
+  }
+
+  async function execute(job) {
+    try {
+      const response = await fetchImpl(job.input, job.init);
+      // Status-based stops take effect as soon as headers arrive, before a slow
+      // body could permit more queued requests to start.
+      if (onResponse) await onResponse(response, { stop });
+      // Fetch resolves when headers arrive. Keep the gate until the body has
+      // downloaded, but return the original Response with its URL, headers,
+      // status and unread text()/json() body unchanged.
+      if (response?.body !== null && typeof response?.clone === "function") await response.clone().arrayBuffer();
+      job.resolve(response);
+    } catch (error) {
+      metrics.failedRequests++;
+      job.reject(error);
+    } finally {
+      inFlight--;
+      void pump();
+    }
+  }
+
+  async function pump() {
+    if (pumping) return;
+    pumping = true;
+    try {
+      while (queue.length && inFlight < maxConcurrency) {
+        const job = queue[0];
+        try {
+          if (stopReason) throw stopReason;
+          throwIfAborted(signalFor(job.input, job.init));
+          // One pump owns all starts, even with two active downloads. The
+          // interval therefore applies across the whole process, not per worker.
+          while (lastStartedAt !== null && now() - lastStartedAt < minIntervalMs) {
+            await sleep(Math.max(1, minIntervalMs - (now() - lastStartedAt)));
+            if (stopReason) throw stopReason;
+            throwIfAborted(signalFor(job.input, job.init));
+          }
+          if (stopReason) throw stopReason;
+          queue.shift();
+          const startedAt = now();
+          metrics.totalWaitMs += Math.max(0, startedAt - job.enqueuedAt);
+          if (lastStartedAt !== null) {
+            const elapsed = Math.max(0, startedAt - lastStartedAt);
+            metrics.minObservedStartIntervalMs = metrics.minObservedStartIntervalMs === null ? elapsed : Math.min(metrics.minObservedStartIntervalMs, elapsed);
+          }
+          lastStartedAt = startedAt;
+          inFlight++;
+          metrics.requestCount++;
+          metrics.maxInFlight = Math.max(metrics.maxInFlight, inFlight);
+          void execute(job);
+        } catch (error) {
+          // stop() already rejects and drains the queue. Other preflight
+          // failures affect only the request at its head, without retrying it.
+          if (queue[0] === job) {
+            queue.shift();
+            metrics.cancelledBeforeStart++;
+            job.reject(error);
+          }
+        }
+      }
+    } finally {
+      pumping = false;
+      if (queue.length && inFlight < maxConcurrency) void pump();
+    }
+  }
+
+  function pacedFetch(input, init) {
+    if (!enabled || !isNaverRequest(input)) return fetchImpl(input, init);
+    if (stopReason) {
+      metrics.cancelledBeforeStart++;
+      return Promise.reject(stopReason);
+    }
+    return new Promise((resolve, reject) => {
+      queue.push({ input, init, resolve, reject, enqueuedAt: now() });
+      void pump();
+    });
+  }
+
+  return { fetch: pacedFetch, stop, diagnostics };
+}
+
+module.exports = { DEFAULT_MIN_INTERVAL_MS, isNaverRequest, createNaverRequestGate };

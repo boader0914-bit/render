@@ -16,6 +16,31 @@ function defaultConfig() {
     keywords: [...KEYWORDS], bookingDays: 31, rankLimit: 20, minFreeBytes: MIN_FREE_BYTES };
 }
 
+function lowLoadRequestPacing(startDate) {
+  return validateRequestPacing({ enabled: true, startDate, minIntervalMs: 200,
+    maxConcurrentRequests: 2, detailConcurrency: 1, scheduleConcurrency: 2, otaConcurrency: 1 });
+}
+
+function validateRequestPacing(value) {
+  const keys = ["enabled", "startDate", "minIntervalMs", "maxConcurrentRequests", "detailConcurrency", "scheduleConcurrency", "otaConcurrency"];
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).some((key) => !keys.includes(key)) || typeof value.enabled !== "boolean"
+    || typeof value.startDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.startDate)
+    || !Number.isFinite(Date.parse(`${value.startDate}T00:00:00Z`))
+    || new Date(`${value.startDate}T00:00:00Z`).toISOString().slice(0, 10) !== value.startDate
+    || !Number.isSafeInteger(value.minIntervalMs) || value.minIntervalMs < 100 || value.minIntervalMs > 60_000
+    || value.maxConcurrentRequests > 2
+    || keys.slice(3).some((key) => !Number.isSafeInteger(value[key]) || value[key] < 1 || value[key] > 8)) {
+    throw new Error("invalid_daily_collection_request_pacing");
+  }
+  return Object.fromEntries(keys.map((key) => [key, value[key]]));
+}
+
+function effectiveRequestPacing(config, day) {
+  const value = config?.requestPacing;
+  return value?.enabled && day >= value.startDate ? { ...value } : null;
+}
+
 function validateConfig(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)
     || value.version !== VERSION || typeof value.enabled !== "boolean"
@@ -26,7 +51,9 @@ function validateConfig(value) {
     || !Number.isSafeInteger(value.minFreeBytes) || value.minFreeBytes < MIN_FREE_BYTES) {
     throw new Error("invalid_daily_collection_config");
   }
-  return { ...defaultConfig(), enabled: value.enabled, minFreeBytes: value.minFreeBytes };
+  const result = { ...defaultConfig(), enabled: value.enabled, minFreeBytes: value.minFreeBytes };
+  if (Object.hasOwn(value, "requestPacing")) result.requestPacing = validateRequestPacing(value.requestPacing);
+  return result;
 }
 
 function dateKey(value) {
@@ -45,8 +72,11 @@ function scheduledAt(day) {
   return `${day}T05:00:00.000Z`;
 }
 
-function fingerprint(config) {
-  const { enabled, minFreeBytes, ...collectionConfig } = config;
+function fingerprint(config, day) {
+  const { enabled, minFreeBytes, requestPacing, ...collectionConfig } = config;
+  const effective = effectiveRequestPacing(config, day);
+  // Preparing a future profile must not invalidate an already-running day's ledger.
+  if (effective) collectionConfig.requestPacing = effective;
   return crypto.createHash("sha256").update(JSON.stringify(collectionConfig)).digest("hex");
 }
 
@@ -61,8 +91,10 @@ function blockingError(error) {
   if (error?.code === "ENOSPC" || /\bENOSPC\b/.test(message)) return "disk_full";
   if (/\bNAVER_MAIN_BLOCKED\s+HTTP\s+403\b/i.test(message)) return "naver_main_http_403";
   if (/\bNAVER_SCHEDULE_BLOCKED\s+HTTP\s+403\b/i.test(message)) return "naver_schedule_http_403";
+  if (/\bNAVER_REQUEST_BLOCKED\s+HTTP\s+403\b/i.test(message)) return "naver_request_http_403";
   if (Number(error?.statusCode || error?.status) === 429
     || /\b(?:HTTP(?:\/\d(?:\.\d)?)?|status(?:Code)?)\s*[:=]?\s*429\b/i.test(message)) return "rate_limited";
+  if (error?.code === "NAVER_REQUEST_BLOCKED" || /\bNAVER_REQUEST_BLOCKED\b/.test(message)) return "naver_request_blocked";
   return "";
 }
 
@@ -177,12 +209,15 @@ function createDailyKeywordCollectionScheduler(options = {}) {
   }
 
   function payloadFor(keyword, day, policy) {
-    return { keyword, checkIn: day, checkOut: addDays(day, policy.bookingDays - 1),
+    const payload = { keyword, checkIn: day, checkOut: addDays(day, policy.bookingDays - 1),
       searchMode: "keyword", productMode: "all", collectionMode: "precision", collectionPurpose: "revenue_detail",
       detailRankRanges: `1-${policy.rankLimit}`, bookingRangeDays: policy.bookingDays,
       bookingRangePlaceLimit: policy.rankLimit, sourceRole: "admin", collectionSource: "admin_search",
       scheduledCollection: true,
       clientRequestId: `daily_${day}_${KEYWORDS.indexOf(keyword) + 1}` };
+    const requestPacing = effectiveRequestPacing(policy, day);
+    if (requestPacing) payload.requestPacing = requestPacing;
+    return payload;
   }
 
   async function executeTick() {
@@ -198,12 +233,13 @@ function createDailyKeywordCollectionScheduler(options = {}) {
       if (at.getTime() < new Date(scheduledAt(key)).getTime()) return;
       let day = state.days[key];
       if (!day) {
-        day = { day: key, scheduledAt: scheduledAt(key), configFingerprint: fingerprint(policy),
+        day = { day: key, scheduledAt: scheduledAt(key), configFingerprint: fingerprint(policy, key),
+          requestPacing: effectiveRequestPacing(policy, key),
           createdAt: at.toISOString(), blockedReason: "", items: policy.keywords.map((keyword) => ({ keyword, status: "pending" })) };
         state.days[key] = day;
         await persist(state);
       }
-      if (day.configFingerprint !== fingerprint(policy)) {
+      if (day.configFingerprint !== fingerprint(policy, key)) {
         await halt(state, day, "same_day_configuration_changed");
         return;
       }
@@ -214,7 +250,7 @@ function createDailyKeywordCollectionScheduler(options = {}) {
         if (stopRequested || dateKey(instant()) !== key) return;
         const currentPolicy = await config();
         if (!currentPolicy.enabled) return;
-        if (fingerprint(currentPolicy) !== day.configFingerprint) {
+        if (fingerprint(currentPolicy, key) !== day.configFingerprint) {
           await halt(state, day, "same_day_configuration_changed");
           return;
         }
@@ -236,6 +272,8 @@ function createDailyKeywordCollectionScheduler(options = {}) {
         const payload = payloadFor(item.keyword, key, currentPolicy);
         item.status = "running";
         item.startedAt = instant().toISOString();
+        item.requestPacing = payload.requestPacing ? { ...payload.requestPacing } : null;
+        day.startedAt ||= day.items.find((entry) => entry.startedAt)?.startedAt || item.startedAt;
         await persist(state); // An unrecorded job must never be started.
         let blockingReason = "";
         try {
@@ -265,6 +303,7 @@ function createDailyKeywordCollectionScheduler(options = {}) {
         await persist(state);
       }
       day.finishedAt = instant().toISOString();
+      day.durationMs = Math.max(0, new Date(day.finishedAt).getTime() - new Date(day.startedAt).getTime());
       await persist(state);
     } catch (error) {
       // Never replace a corrupt ledger or continue after an unrecorded completion.
@@ -293,6 +332,10 @@ function createDailyKeywordCollectionScheduler(options = {}) {
     return { enabled: Boolean(policy?.enabled && !error), active: Boolean(activePromise),
       config: policy || null, nextRunAt: policy?.enabled && !error ? scheduledAt(nextDay) : null,
       day: key, scheduledAt: scheduledAt(key), items: day?.items || [],
+      requestPacing: day ? day.requestPacing || null : effectiveRequestPacing(policy, key),
+      startedAt: day?.startedAt || day?.items.find((item) => item.startedAt)?.startedAt || null,
+      durationMs: day?.durationMs ?? null,
+      totalCollectionDurationMs: day ? day.items.reduce((sum, item) => sum + (Number(item.durationMs) || 0), 0) : null,
       finishedAt: day?.finishedAt || null, blockedReason: day?.blockedReason || error || "",
       lastError: error, lastFreeBytes: day?.lastFreeBytes ?? null, diskCheckedAt: day?.diskCheckedAt || null };
   }
@@ -327,4 +370,4 @@ function createDailyKeywordCollectionScheduler(options = {}) {
 }
 
 module.exports = { createDailyKeywordCollectionScheduler, defaultConfig, validateConfig, dateKey,
-  addDays, blockingError, KEYWORDS, MIN_FREE_BYTES };
+  addDays, blockingError, KEYWORDS, MIN_FREE_BYTES, lowLoadRequestPacing, validateRequestPacing, effectiveRequestPacing };

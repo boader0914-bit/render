@@ -62,6 +62,21 @@ test("explicit main HTTP 403 and 429 are blocked while server failures stay fail
   assert.equal(inspectManifest(manifest).status, "failed");
 });
 
+test("paced auxiliary Naver blocks stop the batch and never update derived inventory", () => {
+  for (const status of [403, 429]) {
+    const manifest = fixture();
+    manifest.requestPacing = { enabled: true, blockedStatus: status };
+    // An auxiliary/business lookup can fail before any booking-specific block is recorded.
+    manifest.naverBookingBlockedStatus = 0;
+    assert.equal(inspectManifest(manifest).status, "blocked");
+    assert.equal(inspectManifest(manifest).blockedReason, `naver_request_http_${status}`);
+    assert.equal(allowsDerivedUpdates(manifest), false);
+  }
+  const normal = fixture();
+  normal.requestPacing = { enabled: true, blockedStatus: null };
+  assert.equal(inspectManifest(normal).status, "complete");
+});
+
 test("actual crawler rejects 403/429 before trying to parse a blocked HTML response", async () => {
   const source = await fs.readFile(path.join(__dirname, "gyeongnam_glamping_crawl.cjs"), "utf8");
   const start = source.indexOf("async function getNaverState(query) {");
