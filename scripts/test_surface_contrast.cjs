@@ -830,7 +830,7 @@ const tourismIndexUiBlock = app.slice(
   app.indexOf("function renderLocationProfileSourcePanel(")
 );
 const tourismIndexRefreshBlock = app.slice(
-  app.indexOf("async function refreshLocationTourismIndexHistory("),
+  app.indexOf("function locationTourismIndexRefreshOutcome("),
   app.indexOf("function locationProfileObservedAt(")
 );
 const locationHistoryServerBlock = server.slice(
@@ -1018,8 +1018,12 @@ assert(
     && tourismIndexRefreshBlock.includes("JSON.stringify({ regionKey, months: 12 })")
     && tourismIndexRefreshBlock.includes("if (!isAdminRole()")
     && tourismIndexRefreshBlock.includes("await ensureLocationProfile(activeCard, { force: true })")
-    && tourismIndexRefreshBlock.includes("공급기관 제공자료 없음"),
-  "admin-only tourism index refresh must collect exactly 12 months and reload the cache-only location profile without treating provider gaps as request failures",
+    && tourismIndexRefreshBlock.includes("공급기관 제공자료 없음")
+    && tourismIndexRefreshBlock.includes("networkFailedMonths")
+    && tourismIndexRefreshBlock.includes('status: "partial"')
+    && tourismIndexRefreshBlock.includes('status: "empty"')
+    && tourismIndexRefreshBlock.includes('status: "error"'),
+  "admin-only tourism index refresh must request 12 months, reload the cache-only profile, and distinguish verified empty, partial and failed collection responses",
   failures
 );
 

@@ -35956,6 +35956,10 @@ body.role-admin .admin-db-company-action a + a {
   color: var(--danger);
 }
 
+.location-profile-index-refresh-message.is-neutral {
+  color: var(--text-secondary);
+}
+
 .location-profile-index-series-grid {
   min-width: 0;
   display: grid;

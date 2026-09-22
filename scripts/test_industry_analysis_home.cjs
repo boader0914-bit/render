@@ -65,6 +65,13 @@ async function main() {
   assert.match(basic.dashboard.innerHTML, /분석 대상 숙박기간 2026\.09\.21 ~ 2026\.10\.21/);
   assert.doesNotMatch(basic.dashboard.innerHTML, /이전 분석 이어보기/, "Background activeRunId does not create a previous analysis");
   assert.equal(basic.calls.length, 0, "Rendering the home cannot load an analysis or collect data");
+  const blockedRow = basic.api.industryHomeRunRow({ ...runs[0], collectionQuality: {
+    status: "blocked", counts: { naverScheduleRequested: 12, naverScheduleSucceeded: 3 }
+  } });
+  assert.match(blockedRow, /접근 제한으로 중단/);
+  assert.match(blockedRow, /예약 일정 조회 3\/12건 확보/);
+  assert.match(basic.api.industryHomeRunRow(runs[0]), /수집 상태 확인 전/,
+    "A saved file without quality metadata cannot be labelled complete");
   basic.api.changeIndustryHomeFilter("category", "glamping");
   assert.doesNotMatch(basic.dashboard.innerHTML, /data-industry-open-run="hotel"/);
   basic.api.changeIndustryHomeFilter("keyword", "포천글램핑");

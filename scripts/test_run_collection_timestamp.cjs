@@ -47,6 +47,12 @@ async function main() {
   assert.equal(runs.find((run) => run.id === recordedId).collectedAtSource, "recorded");
   assert.equal(runs.find((run) => run.id === legacyId).collectedAtSource, "filesystem");
   assert.equal(runs.find((run) => run.id === legacyId).collectedAt, fallback);
+  const quality = { status: "blocked", counts: { naverScheduleRequested: 12, naverScheduleSucceeded: 3 } };
+  manifests.get(recordedId).collectionQuality = quality;
+  const qualityRuns = await api.listRuns();
+  assert.equal(qualityRuns.find((run) => run.id === recordedId).collectionQuality.status, "blocked");
+  assert.equal(qualityRuns.find((run) => run.id === recordedId).collectionQuality.counts.naverScheduleSucceeded, 3);
+  assert.equal(qualityRuns.find((run) => run.id === legacyId).collectionQuality, null, "Legacy runs do not invent completion metadata");
   const detail = declaration("loadRun");
   assert.match(detail, /const collectedAtSource = runCollectedAtSource\(manifest\)/);
   assert.match(detail, /collectedAt,\s+collectedAtSource,\s+updatedAt: collectedAt/);

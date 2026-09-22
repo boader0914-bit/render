@@ -39,8 +39,8 @@
     "test:shared-inventory": "node scripts/test_inventory_estimation.cjs && node scripts/test_crawler_inventory_evidence.cjs && node scripts/test_inventory_evidence_server.cjs && node scripts/test_inventory_history_summary.cjs && node scripts/test_inventory_evidence_ui.cjs && node scripts/test_company_edit_shortcut.cjs",
     "test:special-days": "node scripts/test_special_days.cjs && node scripts/test_special_days_api.cjs",
     "test:tourism-forecast": "node scripts/test_tourism_forecast.cjs && node scripts/test_tourism_forecast_api.cjs && node scripts/test_tourism_forecast_demand_ui.cjs",
-    "test:region-analysis": "node scripts/test_region_analysis_navigation.cjs && node scripts/test_region_management_navigation.cjs && node scripts/test_location_profile_analysis_links.cjs && node scripts/test_demand_strength_refresh_state.cjs",
-    "test:analysis-home": "node scripts/test_analysis_home_navigation.cjs && node scripts/test_industry_analysis_home.cjs && node scripts/test_region_analysis_home.cjs && node scripts/test_run_collection_timestamp.cjs"
+    "test:region-analysis": "node scripts/test_region_analysis_navigation.cjs && node scripts/test_region_management_navigation.cjs && node scripts/test_region_management_disclosure.cjs && node scripts/test_location_profile_analysis_links.cjs && node scripts/test_demand_strength_refresh_state.cjs && node scripts/test_location_tourism_index_refresh.cjs",
+    "test:analysis-home": "node scripts/test_analysis_home_navigation.cjs && node scripts/test_industry_analysis_home.cjs && node scripts/test_region_analysis_home.cjs && node scripts/test_run_collection_timestamp.cjs && node scripts/test_sales_observation_summary.cjs"
   },
   "engines": {
     "node": ">=22.13 <25"

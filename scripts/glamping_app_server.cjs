@@ -1962,6 +1962,8 @@ function sanitizeLocationRequestEvidence(value = {}) {
     itemCount: sanitizeLocationRequestNumber(value.itemCount),
     regionCount: sanitizeLocationRequestNumber(value.regionCount),
     salesSupply: sanitizeLocationRequestNumber(value.salesSupply),
+    salesComplete: value.salesComplete === true,
+    salesRate: value.salesComplete === true && Number.isFinite(value.salesRate) ? value.salesRate : null,
     salesSold: sanitizeLocationRequestNumber(value.salesSold),
     targetCount: sanitizeLocationRequestNumber(value.targetCount),
     searchVolume: sanitizeLocationRequestNumber(value.searchVolume),
@@ -5031,6 +5033,7 @@ async function listRuns() {
       collectedAtSource,
       updatedAt: stat.mtime.toISOString(),
       counts: manifest?.counts || {},
+      collectionQuality: manifest?.collectionQuality || null,
       files: manifest?.files || files
     });
   }

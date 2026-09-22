@@ -2659,13 +2659,27 @@ html[data-theme-resolved] body.role-admin .analysis-home select { width: 100%; m
   .analysis-home-region-form > button { grid-column: 1 / -1; justify-self: start; }
 }
 @media (max-width: 560px) {
-  .analysis-home { gap: 20px; }
-  .analysis-home-selector { padding: 15px; }
-  .analysis-home-form, .analysis-home-availability dl { grid-template-columns: minmax(0, 1fr); }
-  .analysis-home-row { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .analysis-home { gap: 16px; }
+  .analysis-home-intro .eyebrow { margin-bottom: 4px; font-size: 11px; }
+  .analysis-home-intro h2 { font-size: 20px; line-height: 1.35; }
+  .analysis-home-intro > p:not(.eyebrow) { margin: 6px 0 0; font-size: 13px; line-height: 1.5; }
+  .analysis-home-intro > small { margin-top: 6px; line-height: 1.5; }
+  .analysis-home-selector { padding: 12px; }
+  .analysis-home-form { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .analysis-home-form label { gap: 4px; }
+  .analysis-home-region-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .analysis-home-availability { margin-top: 12px; padding-top: 12px; }
+  .analysis-home-availability h3 { margin-bottom: 8px; font-size: 16px; }
+  .analysis-home-availability dl { gap: 10px 12px; }
+  .analysis-home-availability dd { margin-top: 3px; font-size: 13px; }
+  .analysis-home-row { grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 12px 0; }
   .analysis-home-row > button, .analysis-home-row > .analysis-home-actions { justify-self: start; }
-  .analysis-home-resume { align-items: flex-start; flex-direction: column; padding: 16px; }
+  .analysis-home-resume { align-items: flex-start; flex-direction: column; padding: 12px; gap: 12px; }
   .analysis-home-meta { flex-direction: column; gap: 4px; }
+}
+@media (min-width: 380px) and (max-width: 560px) {
+  #industryHomeDashboard .analysis-home-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #industryHomeDashboard .analysis-home-form > label:last-child { grid-column: 1 / -1; }
 }
 .region-management-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 0 14px; border-top: 1px solid var(--border-subtle); }
 .region-management-heading h3 { margin: 0; font-size: 18px; color: var(--text-primary); }

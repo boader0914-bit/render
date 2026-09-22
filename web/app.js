@@ -52,6 +52,7 @@ const state = {
   adminSelectedRegionKey: "",
   regionManagementReturnContext: null,
   adminRegionReviewFilter: "all",
+  adminRegionOverviewOpen: false,
   adminRegionAuditFilter: "all",
   adminRegionCompanyFilter: "priority",
   adminRegionCompanyQuery: "",
@@ -740,12 +741,10 @@ function bookingRangeLabels(run = {}) {
 }
 
 function dateRangeLabel(run = {}) {
-  const start = monthDay(run.checkIn);
-  const end = monthDay(run.checkOut);
-  const days = bookingDays(run);
-  if (days <= 1) return start ? `${start} 기준` : "기준일 확인";
-  if (start && end) return `${start}~${end}`;
-  return "기간 확인";
+  const period = analysisRunPeriod(run);
+  if (!period) return "기간 확인";
+  const start = monthDay(period.start);
+  return period.days === 1 ? `${start} 기준` : `${start}~${monthDay(period.end)} (${period.days}일)`;
 }
 
 function b2bLongDateLabel(date) {
@@ -758,15 +757,9 @@ function b2bLongDateLabel(date) {
 }
 
 function b2bDateRangeLabel(run = {}) {
-  const start = parseDate(run.checkIn);
-  if (!start) return dateRangeLabel(run);
-  const days = Math.max(1, Math.min(31, bookingDays(run) || DEFAULT_BOOKING_DAYS));
-  let end = parseDate(run.checkOut);
-  if (!end || end < start) {
-    end = new Date(start);
-    end.setDate(start.getDate() + days - 1);
-  }
-  return `${b2bLongDateLabel(start)} ~ ${b2bLongDateLabel(end)} (${days}일)`;
+  const period = analysisRunPeriod(run);
+  if (!period) return "기간 확인";
+  return `${b2bLongDateLabel(parseDate(period.start))} ~ ${b2bLongDateLabel(parseDate(period.end))} (${period.days}일)`;
 }
 
 function bookingDays(run = {}) {
@@ -3881,6 +3874,8 @@ function locationCandidateFromQuery(query) {
     regionCount: runtime.regions?.length || 0,
     salesSupply: sales.supply || 0,
     salesSold: sales.sold || 0,
+    salesComplete: sales.complete === true,
+    salesRate: Number.isFinite(sales.rate) ? sales.rate : null,
     targetCount: runtime.targets?.length || 0,
     searchVolume: runtime.searchVolume || 0,
     platformGap: runtime.platformGap || 0,
@@ -3900,7 +3895,7 @@ function locationCandidateFromQuery(query) {
 
 function renderLocationCandidateEvidence(candidate = {}) {
   const evidence = candidate.evidence || {};
-  const salesRate = evidence.salesSupply ? fmtRate(evidence.salesSold / evidence.salesSupply) : "확인필요";
+  const salesRate = evidence.salesComplete === true && Number.isFinite(evidence.salesRate) ? fmtRate(evidence.salesRate) : "확인필요";
   return `
     <div class="location-candidate-evidence">
       <div><span>상위노출</span><strong>${fmtNumber(evidence.itemCount)}</strong><small>업체</small></div>
@@ -4067,7 +4062,7 @@ function locationCardRequestItems() {
 }
 
 function locationRequestEvidenceText(evidence = {}) {
-  const salesRate = evidence.salesSupply ? fmtRate(evidence.salesSold / evidence.salesSupply) : "판매 확인필요";
+  const salesRate = evidence.salesComplete === true && Number.isFinite(evidence.salesRate) ? fmtRate(evidence.salesRate) : "판매 확인필요";
   return [
     `업체 ${fmtNumber(evidence.itemCount || 0)}`,
     salesRate,
@@ -4814,15 +4809,46 @@ function salesLine(item, kind = "lodging") {
 }
 
 function summarizeSales(items = []) {
-  return items.reduce((acc, item) => {
+  const result = items.reduce((acc, item) => {
     const lodging = salesStats(item, "lodging");
     const day = salesStats(item, "day");
     acc.sold += finiteNumber(lodging.sold);
     acc.supply += finiteNumber(lodging.supply);
     acc.daySold += finiteNumber(day.sold);
     acc.daySupply += finiteNumber(day.supply);
+    const evidence = inventoryAssessment(item)?.lodging;
+    const rows = evidence?.rows || weeklyRows(item);
+    const invalidRow = (row) => row.missing || row.partial || row.inventoryConflict;
+    const incomplete = evidence?.complete === false || evidence?.status === "missing"
+      || rows.some(invalidRow) || !Number.isFinite(lodging.rate);
+    if (incomplete) acc.incompleteItems += 1;
+    acc.expectedDays += rows.length;
+    const observed = rows.filter((row) => !invalidRow(row));
+    acc.observedDays += observed.length;
+    if (incomplete) {
+      acc.observedSold += observed.reduce((sum, row) => sum + finiteNumber(row.sold), 0);
+      acc.observedSupply += observed.reduce((sum, row) => sum + finiteNumber(row.total), 0);
+    } else {
+      acc.observedSold += finiteNumber(lodging.sold);
+      acc.observedSupply += finiteNumber(lodging.supply);
+    }
     return acc;
-  }, { sold: 0, supply: 0, daySold: 0, daySupply: 0 });
+  }, { sold: 0, supply: 0, daySold: 0, daySupply: 0, incompleteItems: 0,
+    observedSold: 0, observedSupply: 0, observedDays: 0, expectedDays: 0 });
+  // Keep fixed room capacity even on missing dates; missing bookings are not zero sales.
+  const collectionStatus = state.data?.run?.collectionQuality?.status;
+  result.complete = items.length > 0 && result.incompleteItems === 0 && result.supply > 0
+    && !["partial", "failed", "blocked", "interrupted"].includes(collectionStatus);
+  result.rate = result.complete && result.supply > 0 ? result.sold / result.supply : NaN;
+  result.observedRate = result.observedSupply > 0 ? result.observedSold / result.observedSupply : NaN;
+  return result;
+}
+
+function salesObservationNote(sales = {}) {
+  if (sales.complete !== false) return "고정 객실 총량 기준 · 예약 추정 포함";
+  const sample = Number.isFinite(sales.observedRate) ? `확보된 표본의 예약 비율 ${fmtRate(sales.observedRate)}` : "확보된 예약 표본 없음";
+  const coverage = sales.expectedDays ? ` · 업체별 관측일 ${fmtNumber(sales.observedDays)}/${fmtNumber(sales.expectedDays)}일 확보` : "";
+  return `일부 자료 미확보로 전체 기간 판매율은 미확인입니다. ${sample}${coverage}. 최대 객실 총량은 유지하며 미확보일을 예약 0건으로 보지 않습니다.`;
 }
 
 function itemRevenueStats(item = {}, kind = "lodging") {
@@ -5392,7 +5418,7 @@ function b2bRankBoardModel(items = b2bScopedRankedCompanyItems()) {
   const gapRows = linkedRows.filter((row) => Number.isFinite(row.rate) && row.rate <= lowReservationRate);
   const hotRows = linkedRows.filter((row) => Number.isFinite(row.rate) && row.rate >= highReservationRate);
   const sales = summarizeSales(linkedRows.map((row) => row.item));
-  const rate = sales.supply ? sales.sold / sales.supply : NaN;
+  const rate = sales.rate;
   const focusRows = rows
     .slice()
     .sort((a, b) => b.opportunityScore - a.opportunityScore || a.rank - b.rank)
@@ -5464,7 +5490,7 @@ function b2bRankRangeModel(model = b2bRankBoardModel()) {
       hotCount: hotRows.length,
       gapCount: gapRows.length,
       revenueTotal,
-      rate: sales.supply ? sales.sold / sales.supply : NaN,
+      rate: sales.rate,
       width: Math.max(8, Math.round((bucket.rows.length / maxCount) * 100))
     };
   });
@@ -6263,7 +6289,7 @@ function renderSummary() {
   const stats = state.data?.availability?.stats || {};
   const sales = summarizeSales(items);
   const revenue = summarizeRevenue(items);
-  const rate = sales.supply ? sales.sold / sales.supply : finiteNumber(stats.weightedSoldOutRate, NaN);
+  const rate = sales.rate;
   const checked = stats.checkedPlaces || items.length;
   const lowConfidence = finiteNumber(stats.lowConfidenceCount, 0);
   const stockVariance = finiteNumber(stats.stockVarianceCount, 0);
@@ -6281,7 +6307,7 @@ function renderSummary() {
   els.summaryGrid.innerHTML = `
     <article class="summary-card">
       <span class="summary-icon blue">${summaryIcon("sales")}</span>
-      <div><strong>${fmtNumber(sales.sold)}/${fmtNumber(sales.supply)}</strong><small>숙박 예약 추정 · 객실·박</small></div>
+      <div><strong>${fmtNumber(sales.sold)}/${fmtNumber(sales.supply)}</strong><small>숙박 예약 추정 · 객실·박${sales.complete ? "" : " · 일부 자료 미확보"}</small></div>
     </article>
     <article class="summary-card">
       <span class="summary-icon green">${summaryIcon("money")}</span>
@@ -6293,7 +6319,7 @@ function renderSummary() {
     </article>
     <article class="summary-card">
       <span class="summary-icon green">${summaryIcon("rate")}</span>
-      <div><strong>${fmtRate(rate)}</strong><small>평균 예약 비율 · 추정 포함</small></div>
+      <div><strong>${Number.isFinite(rate) ? fmtRate(rate) : "미확인"}</strong><small>${sales.complete ? "평균 예약 비율 · 추정 포함" : "일부 미확보 · 전체 기간 비율 보류"}</small></div>
     </article>
     <article class="summary-card">
       <span class="summary-icon amber">${summaryIcon("trust")}</span>
@@ -10074,7 +10100,7 @@ function b2bMarketBriefModel(data = state.data || {}) {
   const stats = data.availability?.stats || {};
   const sales = summarizeSales(items);
   const revenue = summarizeRevenue(items);
-  const rate = sales.supply ? sales.sold / sales.supply : finiteNumber(stats.weightedSoldOutRate, NaN);
+  const rate = sales.rate;
   const sold = finiteNumber(sales.sold, 0);
   const supply = finiteNumber(sales.supply, 0);
   const remainingSupply = Math.max(0, supply - sold);
@@ -10134,6 +10160,7 @@ function b2bMarketBriefModel(data = state.data || {}) {
     supply,
     remainingSupply,
     salesSampleCount,
+    salesComplete: sales.complete,
     rate,
     averageRevenue,
     revenueSampleCount,
@@ -10147,8 +10174,8 @@ function b2bMarketBriefModel(data = state.data || {}) {
     opportunityRows,
     lowSalesCount,
     strongSalesCount,
-    score,
-    decision,
+    score: sales.complete ? score : NaN,
+    decision: sales.complete ? decision : { tone: "watch", label: "판단 보류", summary: "미확보 자료가 있어 전체 기간 판매율과 경쟁강도 판단을 보류합니다." },
     regions,
     topRegion
   };
@@ -12951,7 +12978,7 @@ function b2bSimpleSummaryModel(
   revenueModel = b2bRevenueBenchmarkModel(brief),
   snapshotModel = b2bCompetitiveSnapshotModel(brief)
 ) {
-  const decision = strategyModel.decision || brief.decision || {};
+  const decision = brief.salesComplete === false ? brief.decision : strategyModel.decision || brief.decision || {};
   const rankModel = snapshotModel.rankModel || b2bRankBoardModel();
   const highReservationRate = finiteNumber(brief.highReservationRate, rankModel.highReservationRate || B2B_HIGH_RESERVATION_RATE);
   const lowReservationRate = finiteNumber(brief.lowReservationRate, rankModel.lowReservationRate || B2B_LOW_RESERVATION_RATE);
@@ -12965,8 +12992,8 @@ function b2bSimpleSummaryModel(
     : "매출 표본 대기";
   const hotCount = finiteNumber(rankModel.hotRows?.length, 0);
   const gapCount = finiteNumber(rankModel.gapRows?.length, 0);
-  const competitionScore = Math.max(0, Math.min(100, Math.round(finiteNumber(brief.score, 0))));
-  const actualReservationRate = Number.isFinite(brief.rate)
+  const competitionScore = brief.salesComplete === false ? NaN : Math.max(0, Math.min(100, Math.round(finiteNumber(brief.score, 0))));
+  const actualReservationRate = brief.salesComplete === false ? NaN : Number.isFinite(brief.rate)
     ? brief.rate
     : (Number.isFinite(rankModel.rate) ? rankModel.rate : NaN);
   const analysisDays = finiteNumber(brief.analysisDays, b2bAnalysisDays(brief.run || {}));
@@ -12997,9 +13024,9 @@ function b2bSimpleSummaryModel(
     {
       tone: competitionScore >= 78 ? "hot" : competitionScore >= 64 ? "strong" : competitionScore >= 50 ? "watch" : "neutral",
       label: "경쟁강도",
-      value: `${fmtNumber(competitionScore)}점`,
-      note: `지정 검색범위 ${fmtNumber(rankModel.rows.length || brief.itemCount)}곳 비교`,
-      barValue: competitionScore,
+      value: Number.isFinite(competitionScore) ? `${fmtNumber(competitionScore)}점` : "판단 보류",
+      note: brief.salesComplete === false ? "예약 자료 미확보 · 전체 기간 판단 대기" : `지정 검색범위 ${fmtNumber(rankModel.rows.length || brief.itemCount)}곳 비교`,
+      barValue: Number.isFinite(competitionScore) ? competitionScore : 0,
       meterLabel: "강도 점수"
     },
     {
@@ -13054,7 +13081,7 @@ function b2bSimpleSummaryModel(
   return {
     decision,
     headline: decision.label || brief.decision.label || "경쟁 리포트",
-    summary: summaryByTone[decision.tone] || decision.summary || brief.decision.summary,
+    summary: brief.salesComplete === false ? decision.summary : summaryByTone[decision.tone] || decision.summary || brief.decision.summary,
     cards,
     actions,
     dataNote: `${brief.categoryLabel || "숙박업"} · ${brief.longRange || brief.range} · ${reservationBasisText} · ${fmtNumber(brief.itemCount)}개 경쟁업체`
@@ -13153,7 +13180,7 @@ function b2bPublicOverviewModel(brief = b2bMarketBriefModel()) {
     {
       tone: "strong",
       label: "경쟁강도",
-      value: fmtNumber(brief.score),
+      value: Number.isFinite(brief.score) ? fmtNumber(brief.score) : "판단 보류",
       detail: "경쟁업체 예약율, 매출 표본, 검색수요를 같은 기준으로 봅니다.",
       tab: "report",
       button: "강도 보기"
@@ -13481,7 +13508,7 @@ function renderB2BLocationScoreCard(brief = b2bMarketBriefModel(), context = b2b
   const sales = runtime.sales || {};
   const rate = Number.isFinite(Number(runtime.rate))
     ? Number(runtime.rate)
-    : (sales.supply ? sales.sold / sales.supply : brief.rate);
+    : (sales.complete === false ? NaN : (sales.rate ?? brief.rate));
   if (!context.available || !scoreModel) {
     return `
       <section class="b2b-location-score pending">
@@ -13700,7 +13727,7 @@ function renderReport() {
   }
 
   const sales = summarizeSales(items);
-  const rate = sales.supply ? sales.sold / sales.supply : finiteNumber(data.availability?.stats?.weightedSoldOutRate, NaN);
+  const rate = sales.rate;
   const publicMode = !isAdminRole();
   const allTargets = publicMode ? [] : targetEntries(0);
   const platformStats = reportPlatformStats(items);
@@ -13723,12 +13750,14 @@ function renderReport() {
   const keyword = activeKeyword();
   const range = dateRangeLabel(run);
   const b2bBrief = publicMode ? b2bMarketBriefModel(data) : null;
-  const heroDecision = publicMode && b2bBrief ? b2bBrief.decision : decision;
-  const heroScore = publicMode && b2bBrief ? b2bBrief.score : score;
+  const heroDecision = sales.complete === false
+    ? { tone: "watch", label: "자료 확인 필요", summary: "미확보 자료가 있어 전체 기간의 판매율과 시장 판단을 보류합니다." }
+    : publicMode && b2bBrief ? b2bBrief.decision : decision;
+  const heroScore = sales.complete === false ? NaN : publicMode && b2bBrief ? b2bBrief.score : score;
   const heroTitle = publicMode ? `${keyword} 지역 경쟁 리포트` : `${keyword} 시장 브리핑`;
   const heroCopy = publicMode
     ? `${range} 리포트로 지역 내 ${b2bBrief?.categoryLabel || "숙박업"} 경쟁업체의 네이버 노출, 예상 매출, 판매율, 상품 구성, 월별 검색량을 함께 비교합니다.`
-    : `${range} 입력기간 기준으로 네이버 노출, 객실 판매율, OTA 보조 확인, 상품 구성을 함께 판정했습니다.`;
+    : `${range} 숙박일 기준으로 네이버 노출, 객실 판매율, OTA 보조 확인, 상품 구성을 함께 확인합니다.`;
   const reportActionTitle = publicMode ? "경쟁 리포트 체크포인트" : "이번 주 액션";
   const reportActionSubtitle = publicMode ? "지역 경쟁상황을 판단할 핵심 범위" : "먼저 확인해야 할 영업/운영 과제";
   const reportActionItems = publicMode
@@ -13770,19 +13799,20 @@ function renderReport() {
       </div>
       <div class="report-score-card">
         <span>${publicMode ? "경쟁강도" : "공략 매력도"}</span>
-        <strong>${fmtNumber(heroScore)}</strong>
+        <strong>${Number.isFinite(heroScore) ? fmtNumber(heroScore) : "판단 보류"}</strong>
         <small>${escapeHtml(heroDecision.summary)}</small>
       </div>
     </section>
 
+    ${sales.complete === false ? `<section class="report-card" role="status"><strong>전체 기간 판매율 미확인</strong><p>${escapeHtml(salesObservationNote(sales))}</p></section>` : ""}
     ${publicMode ? renderB2BMarketBrief(b2bBrief) : ""}
     ${publicMode ? renderB2BReportBasisNotice(platformStats) : ""}
 
     <section class="report-metric-grid ${publicMode ? "b2b-legacy-detail" : ""}" aria-label="보고서 핵심 지표">
       <article>
         <span>객실 판매율</span>
-        <strong>${fmtRate(rate)}</strong>
-        <small>${fmtNumber(sales.sold)}/${fmtNumber(sales.supply)}개 추정</small>
+        <strong>${Number.isFinite(rate) ? fmtRate(rate) : "미확인"}</strong>
+        <small>예약 추정 ${fmtNumber(sales.sold)}박 / 기간 총량 ${fmtNumber(sales.supply)}객실·박${sales.complete ? "" : " · 일부 자료 미확보"}</small>
       </article>
       <article>
         <span>${publicMode ? "경쟁업체" : "분석 업체"}</span>
@@ -14820,7 +14850,7 @@ function b2bDemandPlaybookModel(traffic = demandTrafficAggregate()) {
   const ctr = Number(traffic.combinedCtr);
   const items = state.data?.availability?.items || [];
   const sales = summarizeSales(items);
-  const salesRate = sales.supply ? sales.sold / sales.supply : NaN;
+  const salesRate = sales.rate;
   const peakText = trend.hasSeries && stats.peak ? `${stats.peak.label} ${trendIndexLabel(stats.peak.value)}` : "확인필요";
   const recentText = trend.hasSeries && stats.last ? `${stats.last.label} ${trendIndexLabel(stats.last.value)}` : "대기";
   const searchDemandBand = total >= 30000
@@ -20701,9 +20731,14 @@ function adminDbFilterState(master = {}) {
   if (filters.status !== "all" && !statusOptions.some(([value]) => value === filters.status)) filters.status = "all";
   if (filters.confidence !== "all" && !confidenceOptions.some(([value]) => value === filters.confidence)) filters.confidence = "all";
   if (filters.source !== "all" && !sourceOptions.some(([value]) => value === filters.source)) filters.source = "all";
-  if (filters.province !== "all" && !provinceOptions.some((option) => option.key === filters.province)) filters.province = "all";
+  const managementScope = state.regionManagementReturnContext;
+  const preserveManagementScope = Boolean(managementScope?.managementRegionKey
+    && state.adminSelectedRegionKey === managementScope.managementRegionKey
+    && filters.province === managementScope.provinceKey
+    && (filters.region === managementScope.managementRegionKey || filters.region === "all"));
+  if (filters.province !== "all" && !provinceOptions.some((option) => option.key === filters.province) && !preserveManagementScope) filters.province = "all";
   const regionOptions = adminDbRegionOptions(rows, filters.province);
-  if (filters.region !== "all" && !regionOptions.some((option) => option.key === filters.region)) filters.region = "all";
+  if (filters.region !== "all" && !regionOptions.some((option) => option.key === filters.region) && !preserveManagementScope) filters.region = "all";
   const query = compactSearchText(filters.query || "");
   const filteredRows = rows.filter((row) => {
     if (filters.province !== "all" && row.provinceKey !== filters.province) return false;
@@ -27246,10 +27281,22 @@ function adminRegionAuditPanel(region = {}, rows = []) {
   `;
 }
 
+function adminManagementRegionIdentity(region = {}) {
+  if (!region.regionKey || !["broad", "local"].includes(region.level)) return null;
+  const province = adminDbProvinceIdentity(region.sidoFull || region.sido || (region.level === "broad" ? region.name : ""));
+  if (!province) return { provinceKey: region.provinceRegionKey || region.regionKey, regionKey: region.regionKey, mappingPending: true };
+  const locality = region.level === "local" ? adminDbLocalityKey(region.sigungu || region.name) : "";
+  if (region.level === "local" && !locality) return null;
+  return { provinceKey: province.provinceKey, regionKey: locality ? `${province.provinceKey}:${locality}` : province.provinceKey };
+}
+
 function adminSelectedRegion(master = {}) {
   const regions = master.adminRegionalOperations?.regions || [];
   if (!regions.length) return null;
-  const selected = regions.find((region) => region.regionKey === state.adminSelectedRegionKey);
+  const requestedKey = state.adminSelectedRegionKey;
+  const administrativeRegion = administrativeRegionForKey(requestedKey);
+  const managementKey = administrativeRegion ? adminManagementRegionIdentity(administrativeRegion)?.regionKey : requestedKey;
+  const selected = regions.find((region) => region.regionKey === managementKey);
   if (selected) return selected;
   if (state.adminSelectedRegionKey) return null;
   state.adminSelectedRegionKey = regions[0].regionKey || "";
@@ -27260,18 +27307,24 @@ function openAnalysisRegionManagement() {
   if (!isAdminRole()) return;
   const region = typeof selectedAnalysisRegion === "function" ? selectedAnalysisRegion() : null;
   if (!region?.regionKey) return;
+  const management = adminManagementRegionIdentity(region);
+  if (!management) return;
   state.regionManagementReturnContext = {
     regionKey: region.regionKey,
+    managementRegionKey: management.regionKey,
+    provinceKey: management.provinceKey,
+    mappingPending: Boolean(management.mappingPending),
     label: region.fullName || [region.sidoFull || region.sido, region.sigungu || region.name].filter(Boolean).join(" "),
     tab: state.activeTab
   };
   clearAdminDbCompanyHash();
-  state.adminSelectedRegionKey = region.regionKey;
+  state.adminSelectedRegionKey = management.regionKey;
   state.adminRegionReviewFilter = "all";
   state.adminRegionCompanyFilter = "priority";
   state.adminRegionAuditFilter = "all";
   state.adminRegionCompanyQuery = "";
-  state.adminDbFilters = { ...state.adminDbFilters, query: "", province: "all", region: region.regionKey, status: "all" };
+  state.adminDbFilters = { ...state.adminDbFilters, query: "", province: management.provinceKey,
+    region: region.level === "local" ? management.regionKey : "all", category: "all", status: "all", confidence: "all", source: "all", ota: "all", feature: "all", quality: "all" };
   state.adminDbViewMode = "region";
   setActiveTab("admin");
   setAdminPanelSection("database");
@@ -28400,7 +28453,7 @@ function adminRegionalAnalysisPanel(master = {}) {
   return `
     <section class="admin-console-panel admin-regional-ops-panel">
       ${adminRegionalDetailPanel(selectedRegion, master)}
-      <details class="region-management-overview">
+      <details class="region-management-overview" ${state.adminRegionOverviewOpen ? "open" : ""}>
         <summary>전국 지역 자료 현황·확인 목록</summary>
       <div class="admin-console-head">
         <div>
@@ -29238,6 +29291,8 @@ function adminHomeRecentRows(master = {}) {
 
 function renderAdminRegionAnalysisDashboard(master = adminConsoleMasterSource()) {
   if (!els.adminRegionAnalysisDashboard) return;
+  const overview = els.adminRegionAnalysisDashboard.querySelector(".region-management-overview");
+  if (overview) state.adminRegionOverviewOpen = overview.open;
   const visible = isAdminRole() && state.adminDbViewMode === "region" && !String(state.adminDbFilters?.query || "").trim();
   const container = document.getElementById("regionDataManagement");
   if (container) container.hidden = !visible;
@@ -29252,8 +29307,10 @@ function renderAdminRegionAnalysisDashboard(master = adminConsoleMasterSource())
   const region = adminSelectedRegion(master);
   const missingSelected = Boolean(state.adminSelectedRegionKey && !region);
   const selectedAdministrativeRegion = administrativeRegionForKey(state.adminSelectedRegionKey);
-  const missingLabel = selectedAdministrativeRegion?.fullName || (previous?.regionKey === state.adminSelectedRegionKey ? previous.label : "선택 지역");
-  els.adminRegionAnalysisDashboard.innerHTML = `${missingSelected ? `<p class="empty" role="status">${escapeHtml(missingLabel)}의 관리 자료가 아직 없습니다. 다른 지역 자료로 대체하지 않습니다.</p>` : ""}${adminRegionalAnalysisPanel(master)}`;
+  const missingLabel = selectedAdministrativeRegion?.fullName
+    || ([previous?.regionKey, previous?.managementRegionKey].includes(state.adminSelectedRegionKey) ? previous?.label : "") || "선택 지역";
+  const mappingPending = previous?.managementRegionKey === state.adminSelectedRegionKey && previous?.mappingPending;
+  els.adminRegionAnalysisDashboard.innerHTML = `${missingSelected ? `<p class="empty" role="status">${escapeHtml(missingLabel)}의 ${mappingPending ? "관리 분류 연결을 확인해야 합니다" : "관리 자료가 아직 없습니다"}. 다른 지역 자료로 대체하지 않습니다.</p>` : ""}${adminRegionalAnalysisPanel(master)}`;
   if (els.dictionaryRequestQueue) els.dictionaryRequestQueue.innerHTML = renderLocationCardRequestQueue() || `<p class="hint">현재 대기 중인 지역 자료 요청이 없습니다.</p>`;
 }
 
@@ -30217,7 +30274,7 @@ function regionRuntimeForMapRegion(region = {}) {
     items,
     sales,
     outsideCount,
-    salesRate: sales.supply ? sales.sold / sales.supply : NaN
+    salesRate: sales.rate
   };
 }
 
@@ -30345,6 +30402,7 @@ function b2bRegionMapModel() {
         unknownCount: 0,
         sold: 0,
         supply: 0,
+        salesComplete: true,
         revenueSampleCount: 0,
         revenueTotal: 0
       };
@@ -30365,13 +30423,14 @@ function b2bRegionMapModel() {
     acc[primary].unknownCount += finiteNumber(boundaryCounts.unknown, 0);
     acc[primary].sold += finiteNumber(runtime.sales?.sold, 0);
     acc[primary].supply += finiteNumber(runtime.sales?.supply, 0);
+    acc[primary].salesComplete &&= runtime.sales?.complete === true;
     acc[primary].revenueSampleCount += revenueMetrics.sampleCount;
     acc[primary].revenueTotal += revenueMetrics.total;
     return acc;
   }, {});
   const clusters = Object.values(clusterStats)
     .map((cluster) => {
-      const salesRate = cluster.supply ? cluster.sold / cluster.supply : NaN;
+      const salesRate = cluster.salesComplete && cluster.supply ? cluster.sold / cluster.supply : NaN;
       const revenueAverage = cluster.revenueSampleCount ? cluster.revenueTotal / cluster.revenueSampleCount : 0;
       const detail = clusterScoreDetail({ ...cluster, salesRate, revenueAverage });
       return { ...cluster, salesRate, revenueAverage, score: detail.score, scoreParts: detail.parts };
@@ -30390,7 +30449,7 @@ function b2bRegionMapModel() {
     regions,
     items,
     sales,
-    salesRate: sales.supply ? sales.sold / sales.supply : NaN,
+    salesRate: sales.rate,
     totalSearchVolume,
     outsideCount,
     regionRuntime,
@@ -31809,7 +31868,7 @@ function locationRuntimeStats(card = {}, alias = null) {
   const scope = locationRuntimeScope(card, alias);
   const items = scope.items;
   const sales = summarizeSales(items);
-  const rate = sales.supply ? sales.sold / sales.supply : NaN;
+  const rate = sales.rate;
   const platformStats = reportPlatformStats(items);
   const itemSet = new Set(items);
   const targets = targetEntries(0).filter((entry) => itemSet.has(entry.item));
@@ -32206,7 +32265,7 @@ function locationGroupRuntimeStats(group = {}, cards = []) {
   const items = scopedItems.length ? scopedItems : (exactActive ? allItems : []);
   const regions = scopedRegions.length ? scopedRegions : (exactActive ? allRegions : []);
   const sales = summarizeSales(items);
-  const rate = sales.supply ? sales.sold / sales.supply : NaN;
+  const rate = sales.rate;
   const platformStats = reportPlatformStats(items);
   const itemSet = new Set(items);
   const targets = targetEntries(0).filter((entry) => itemSet.has(entry.item));
@@ -32653,6 +32712,47 @@ function locationProfileFirstObject(...values) {
   return values.find((value) => value && typeof value === "object" && !Array.isArray(value)) || null;
 }
 
+function locationTourismIndexRefreshOutcome(result = {}, sourceKey = "", regionKey = "", evidence = {}) {
+  const history = result[sourceKey === "resourceDemand" ? "tourismResourceDemandHistory" : "tourismDiversityHistory"];
+  if (!history || history.region?.regionKey !== regionKey || !Array.isArray(history.series)) {
+    throw new Error("요청한 지역의 관광 지표 갱신 결과를 확인하지 못했습니다.");
+  }
+  const rows = history.series;
+  const expected = Math.max(1, Number(history.coverage?.expectedMonths) || 12);
+  const complete = rows.filter((row) => row.status === "complete").length;
+  const verifiedEmpty = (row) => {
+    const operations = Object.values(row.operations || {});
+    return operations.length ? operations.every((operation) => operation.status === "no_observation") : row.reason === "no_observation";
+  };
+  const emptyRows = rows.filter(verifiedEmpty);
+  const failedRows = rows.filter((row) => !verifiedEmpty(row) && (
+    Object.values(row.operations || {}).some((operation) => operation.status === "error"
+      || Number(operation.quality?.metricQueryFailedCount) > 0
+      || (operation.metricRequests || []).some((request) => request.status === "error"))
+    || (row.access === "network" && !["complete", "partial"].includes(row.status))
+  ));
+  // The collector also counts verified empty and partial responses as networkFailedMonths.
+  const nonErrorNetworkMonths = rows.filter((row) => row.access === "network" && (verifiedEmpty(row) || row.status === "partial")).length;
+  const failedCount = Math.max(failedRows.length, (Number(history.collection?.networkFailedMonths) || 0) - nonErrorNetworkMonths);
+  const coverage = `완전월 ${fmtNumber(complete)}/${fmtNumber(expected)}`;
+  const hasSaved = Boolean(evidence.observed);
+  if (failedCount > 0 || [result.status, history.status].includes("error")) {
+    return { status: "error", error: true,
+      message: `관광 지표 갱신 실패${failedCount ? ` · 호출 실패 ${fmtNumber(failedCount)}개월` : ""} · ${coverage}${hasSaved ? " · 확보된 저장자료는 유지합니다." : " · 자료 없음으로 판단하지 않습니다."}`,
+      statusMessage: "관광 지수 갱신 실패 · 저장자료와 실패 내역 확인" };
+  }
+  if (result.ok === true && history.ok === true && complete >= expected && rows.length >= expected) {
+    return { status: "complete", error: false, message: `최근 ${fmtNumber(expected)}개월 갱신 완료 · ${coverage}`, statusMessage: "관광 지수 최근 12개월 갱신 완료" };
+  }
+  if (complete > 0 || hasSaved || rows.some((row) => row.status === "partial")) {
+    return { status: "partial", error: false, message: `일부 저장자료 확인 · ${coverage} · 부족한 기간은 추가 확인이 필요합니다.`, statusMessage: "관광 지수 일부 자료 확인 · 전체 기간 미완료" };
+  }
+  if (emptyRows.length >= expected) {
+    return { status: "empty", error: false, message: `최근 ${fmtNumber(expected)}개월 정상 조회 · 공급기관 제공자료 없음`, statusMessage: "관광 지수 정상 조회 · 제공자료 없음" };
+  }
+  return { status: "unavailable", error: true, message: `정상 저장자료 없음 · ${coverage} · 연동 상태와 갱신 결과를 확인해 주세요.`, statusMessage: "관광 지수 자료 확인 필요" };
+}
+
 async function refreshLocationTourismIndexHistory(sourceKey = "", regionKey = "") {
   const endpoints = {
     resourceDemand: "/api/tourism-data/resource-demand/history",
@@ -32672,38 +32772,35 @@ async function refreshLocationTourismIndexHistory(sourceKey = "", regionKey = ""
   };
   renderLocationDictionary();
   try {
-    await fetchJson(endpoint, {
+    const result = await fetchJson(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ regionKey, months: 12 })
     });
+    locationTourismIndexRefreshOutcome(result, sourceKey, regionKey);
     delete state.locationProfiles[regionKey];
     await ensureLocationProfile(activeCard, { force: true });
-    if (state.locationProfiles?.[regionKey]?.status === "error") {
-      throw new Error(state.locationProfiles[regionKey].error || "저장자료를 다시 불러오지 못했습니다.");
+    if (state.locationProfiles?.[regionKey]?.status !== "ready") {
+      throw new Error(state.locationProfiles?.[regionKey]?.error || "저장자료를 다시 불러오지 못했습니다.");
     }
     const refreshedProfile = locationProfilePayload(state.locationProfiles?.[regionKey]);
     const refreshedAlias = dictionaryAliasForCard(activeCard);
     const refreshedEvidence = sourceKey === "resourceDemand"
       ? locationProfileResourceDemandEvidence(refreshedProfile, activeCard, refreshedAlias)
       : locationProfileDiversityEvidence(refreshedProfile, activeCard, refreshedAlias);
-    const completeMonths = Math.min(12, (refreshedEvidence.rawSeries || []).filter((entry) => String(entry?.status || "").toLowerCase() === "complete").length);
-    const refreshMessage = refreshedEvidence.observed
-      ? `최근 12개월 호출·저장 완료 · 완전월 ${fmtNumber(completeMonths)}/12`
-      : "최근 12개월 호출 완료 · 공급기관 제공자료 없음";
+    const outcome = locationTourismIndexRefreshOutcome(result, sourceKey, regionKey, refreshedEvidence);
     state.locationTourismIndexRefresh[refreshKey] = {
       loading: false,
-      error: false,
-      message: refreshMessage
+      ...outcome
     };
-    setStatus("관광 지수 최근 12개월 갱신 완료");
+    if ((state.selectedLocationCard?.regionKey || state.dictionaryPendingRegion?.providerMappings?.kto?.regionKey || state.dictionaryPendingRegion?.regionKey) === regionKey) setStatus(outcome.statusMessage);
   } catch (error) {
     state.locationTourismIndexRefresh[refreshKey] = {
       loading: false,
       error: true,
       message: error.message || "최근 12개월 갱신에 실패했습니다."
     };
-    setStatus("관광 지수 최근 12개월 갱신 실패");
+    if ((state.selectedLocationCard?.regionKey || state.dictionaryPendingRegion?.providerMappings?.kto?.regionKey || state.dictionaryPendingRegion?.regionKey) === regionKey) setStatus("관광 지수 최근 12개월 갱신 실패");
   } finally {
     if (state.activeTab === "dictionary") renderLocationDictionary();
   }
@@ -34381,7 +34478,7 @@ function renderLocationProfileTourismIndexPanel(evidence = {}, regionLabel = "�
         <div><p class="eyebrow">${escapeHtml(evidence.sourceLabel || options.sourceLabel || "한국관광공사")}</p><h4>${escapeHtml(`${regionLabel} 최근 12개월 ${options.title || "관광 지수"}`)}</h4><small>${escapeHtml(`${periodBasis} · 해당 API 실제 조회기간`)}</small></div>
         <div class="location-profile-index-head-actions">${locationProfileStatusBadge(observed, statusText, statusText)}${refreshButton}</div>
       </div>
-      ${refreshState.message ? `<p class="location-profile-index-refresh-message ${refreshState.error ? "is-error" : "is-success"}" role="status">${escapeHtml(refreshState.message)}</p>` : ""}
+      ${refreshState.message ? `<p class="location-profile-index-refresh-message ${refreshState.error ? "is-error" : refreshState.status === "complete" ? "is-success" : "is-neutral"}" role="status">${escapeHtml(refreshState.message)}</p>` : ""}
       ${renderLocationProfileSeriesSelector(options.sourceKey, selectorItems, activeSeries)}
       <div class="location-profile-index-series-grid">${seriesHtml}${legacyHtml}</div>
       <p class="location-profile-basis">${escapeHtml(`${evidence.sourceLabel || options.sourceLabel || "한국관광공사"} · ${periodBasis} · 실제 관측점만 사용 · 각 계열을 합산하거나 평균내지 않음`)}</p>
@@ -36283,7 +36380,8 @@ async function restoreAppHistoryState(historyState = {}) {
     const returnContext = historyState.regionManagementReturnContext;
     state.regionManagementReturnContext = returnContext && typeof returnContext.regionKey === "string"
       && ["dictionary", "map", "demand", "regionCompare", "regionSources"].includes(returnContext.tab)
-      ? { regionKey: returnContext.regionKey, label: String(returnContext.label || ""), tab: returnContext.tab } : null;
+      ? { regionKey: returnContext.regionKey, label: String(returnContext.label || ""), tab: returnContext.tab,
+        managementRegionKey: String(returnContext.managementRegionKey || ""), provinceKey: String(returnContext.provinceKey || ""), mappingPending: Boolean(returnContext.mappingPending) } : null;
   }
   setActiveTab(historyState.tab, { fromHistory: true, analysisRegionSelection: historyState.analysisRegionSelection || null });
   if (historyState.activeRunId && historyState.activeRunId !== state.activeRunId) await loadRun(historyState.activeRunId);
@@ -39456,9 +39554,16 @@ function rememberIndustryAnalysisRun(runId) {
 function industryHomeRunRow(run, resume = false) {
   const category = LODGING_CATEGORY_PROFILES[industryRunCategoryKey(run)]?.label || "업종 확인 전";
   const busy = state.industryHomeLoadingRunId === run.id;
+  const quality = run.collectionQuality || {};
+  const qualityLabel = { complete: "수집 완료", partial: "부분 수집", blocked: "접근 제한으로 중단", failed: "수집 실패", interrupted: "수집 중단" }[quality.status] || "수집 상태 확인 전";
+  const requested = quality.counts?.naverScheduleRequested;
+  const succeeded = quality.counts?.naverScheduleSucceeded;
+  const coverage = Number.isInteger(requested) && requested > 0 && Number.isInteger(succeeded) && succeeded >= 0
+    ? ` · 예약 일정 조회 ${fmtNumber(succeeded)}/${fmtNumber(requested)}건 확보` : "";
   return `<article class="analysis-home-row">
     <div><strong>${escapeHtml(industryRunKeyword(run) || run.label || run.id)}</strong>
       <div class="analysis-home-meta"><span>${escapeHtml(category)}</span><span>자료 수집일 ${escapeHtml(analysisRunCollectedLabel(run))} (한국시간)</span></div>
+      <div class="analysis-home-meta"><span>${escapeHtml(qualityLabel + coverage)}</span></div>
       <div class="analysis-home-meta"><span>분석 대상 숙박기간 ${escapeHtml(analysisRunPeriodLabel(run))}</span><span>${escapeHtml(run.collectionPurposeLabel || collectionPurposeProfile(run.collectionPurpose || "revenue_detail").label)}</span>${run.detailRankRanges ? `<span>${escapeHtml(run.detailRankRanges)}위</span>` : ""}</div>
     </div>
     <div class="analysis-home-actions"><button class="${resume ? "secondary-button" : "primary-button"}" type="button" data-industry-open-run="${escapeHtml(run.id)}"${busy ? " disabled" : ""}>${busy ? "불러오는 중" : resume ? "이어보기" : "분석 보기"}</button></div>
