@@ -36681,6 +36681,23 @@ body.role-admin .admin-db-company-action a + a {
   margin-top: 12px;
 }
 
+.location-profile-industry-select {
+  display: grid;
+  gap: 6px;
+  margin-top: 16px;
+  min-width: 0;
+}
+
+.location-profile-industry-select select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.location-profile-industry-select small {
+  color: var(--text-muted);
+}
+
 .location-profile-action-note {
   margin: 8px 0 0;
   color: var(--accent-strong);

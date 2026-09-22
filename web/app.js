@@ -174,6 +174,8 @@ const state = {
   tourismForecastQuery: "",
   tourismForecastLoading: false,
   tourismForecastError: "",
+  tourismForecastStatusLoading: false,
+  tourismForecastStatusError: "",
   tourismForecastExpanded: false,
   tourismForecastAnalysisRegion: null,
   tourismForecastViews: {},
@@ -29812,6 +29814,32 @@ function openDictionaryDemand() {
   setActiveTab("demand");
 }
 
+function locationProfileIndustryRuns(regionKey) {
+  const byKeyword = new Map();
+  for (const run of industryHomeRuns()) {
+    if (analysisRunRegion({ run })?.regionKey !== regionKey) continue;
+    const keyword = locationProfileKeywordKey(industryRunKeyword(run));
+    if (!keyword || byKeyword.has(keyword)) continue;
+    byKeyword.set(keyword, run);
+  }
+  return [...byKeyword.values()];
+}
+
+function locationProfileSelectedIndustryRun(regionKey, runs = locationProfileIndustryRuns(regionKey)) {
+  return runs.find((run) => run.id === state.locationProfileIndustrySelections?.[regionKey])
+    || runs.find((run) => locationProfileKeywordKey(industryRunKeyword(run)) === locationProfileKeywordKey(activeKeyword()))
+    || runs[0];
+}
+
+async function openDictionaryIndustry(runId, regionKey) {
+  if (!isAdminRole() || selectedAnalysisRegion()?.regionKey !== regionKey) return;
+  const run = locationProfileIndustryRuns(regionKey).find((entry) => entry.id === runId);
+  if (runId && !run) return;
+  state.industryHomeFilters = { category: "", keyword: run ? industryRunKeyword(run) : "", period: "" };
+  setActiveTab("industryHome");
+  if (run) await openIndustryAnalysisRun(run.id);
+}
+
 function renderDemand() {
   if (!els.demandDashboard) return;
   if (!demandRegionContextMatchesRun()) {
@@ -32580,12 +32608,17 @@ async function ensureLocationProfile(card = {}, options = {}) {
     && existing
     && Number.isFinite(existingAge)
     && existingAge < LOCATION_PROFILE_RETRY_INTERVAL_MS;
-  if (state.locationProfileLoading?.[regionKey]
+  if ((state.locationProfileLoading?.[regionKey] && !options.force)
     || forceRefreshCoolingDown
     || (!options.force && existing && !retryable)) return false;
+  state.locationProfileRequestVersions ||= {};
+  const requestVersion = (state.locationProfileRequestVersions[regionKey] || 0) + 1;
+  state.locationProfileRequestVersions[regionKey] = requestVersion;
+  const currentRequest = () => state.locationProfileRequestVersions[regionKey] === requestVersion;
   state.locationProfileLoading[regionKey] = true;
   try {
     const data = await fetchJson(`/api/tourism-data/location-history?regionKey=${encodeURIComponent(regionKey)}`);
+    if (!currentRequest()) return false;
     state.locationProfiles[regionKey] = {
       status: data?.ok === false ? "unavailable" : "ready",
       data,
@@ -32593,6 +32626,7 @@ async function ensureLocationProfile(card = {}, options = {}) {
       receivedAt: new Date().toISOString()
     };
   } catch (error) {
+    if (!currentRequest()) return false;
     state.locationProfiles[regionKey] = {
       status: "error",
       data: null,
@@ -32600,15 +32634,17 @@ async function ensureLocationProfile(card = {}, options = {}) {
       receivedAt: new Date().toISOString()
     };
   } finally {
-    state.locationProfileLoading[regionKey] = false;
-    const selectedRegionKey = state.selectedLocationCard?.regionKey
-      || state.dictionaryPendingRegion?.providerMappings?.kto?.regionKey
-      || state.dictionaryPendingRegion?.regionKey
-      || "";
-    if (state.activeTab === "dictionary" && selectedRegionKey === regionKey) {
-      renderLocationDictionary();
+    if (currentRequest()) {
+      state.locationProfileLoading[regionKey] = false;
+      const selectedRegionKey = state.selectedLocationCard?.regionKey
+        || state.dictionaryPendingRegion?.providerMappings?.kto?.regionKey
+        || state.dictionaryPendingRegion?.regionKey
+        || "";
+      if (state.activeTab === "dictionary" && selectedRegionKey === regionKey) {
+        renderLocationDictionary();
+      }
+      if (state.activeTab === "regionSources" && selectedRegionKey === regionKey) renderRegionSources();
     }
-    if (state.activeTab === "regionSources" && selectedRegionKey === regionKey) renderRegionSources();
   }
   return true;
 }
@@ -34092,6 +34128,18 @@ function renderLocationProfileStrengthPanel(strength = {}, regionLabel = "선택
   const stayCoverage = locationProfileSeriesCoverage(staySeries);
   const spendCoverage = locationProfileSeriesCoverage(spendSeries);
   const recentObserved = staySeries.some((entry) => entry.hasValue) || spendSeries.some((entry) => entry.hasValue);
+  const queryState = options.queryState || (strength.source ? "ready" : "unqueried");
+  const queryFailed = ["error", "unavailable"].includes(queryState);
+  const storedFailure = !recentObserved && [...staySeries, ...spendSeries].some(locationProfileTourismSeriesEntryFailed);
+  const storedPartial = !recentObserved && stayCoverage.partialMonths + spendCoverage.partialMonths > 0;
+  const storedStatus = storedFailure ? "이전 수집 실패" : storedPartial ? "완전월 자료 없음" : "저장 자료 없음";
+  const emptyStatus = queryFailed ? "저장 자료 조회 실패" : queryState === "loading" ? "저장 자료 확인 중" : queryState === "ready" ? storedStatus : "저장 자료 미조회";
+  const emptyNote = queryFailed ? "저장된 체류·소비 자료를 읽지 못했습니다. 값이 없는 것으로 확정하지 않습니다."
+    : queryState === "loading" ? "저장된 체류·소비 자료를 확인하고 있습니다."
+    : queryState === "ready" ? storedFailure ? "이전 수집의 실패 기록이 있습니다. 확인되지 않은 값을 0으로 표시하지 않습니다."
+      : storedPartial ? "부분 자료는 저장되어 있지만 표시할 완전월 관측값이 없습니다. 값은 0으로 표시하지 않습니다."
+      : "최근 12개월의 저장된 관측값이 없습니다. 값은 0으로 표시하지 않습니다."
+    : "저장된 체류·소비 자료를 아직 확인하지 않았습니다.";
   const referencePeriodLabel = referencePeriod
     ? locationProfileVisitorPeriodLabel(referencePeriod)
     : locationProfilePeriodLabel(staySeries.length ? staySeries : spendSeries);
@@ -34101,15 +34149,15 @@ function renderLocationProfileStrengthPanel(strength = {}, regionLabel = "선택
   const expectedMonths = Math.max(stayCoverage.expectedMonths, spendCoverage.expectedMonths, 12);
   const statusText = recentObserved
     ? `체류 ${stayCoverage.completeMonths}/${expectedMonths} · 소비 ${spendCoverage.completeMonths}/${expectedMonths}`
-    : "최근 12개월 관측 없음";
+    : emptyStatus;
   const stayLatestExpected = staySeries.at(-1)?.yearMonth || "";
   const spendLatestExpected = spendSeries.at(-1)?.yearMonth || "";
   const stayDateText = stayLatest
     ? `${tourismVisitorMonthLabel(stayLatest.yearMonth)} · 실제 관측${stayLatest.yearMonth === stayLatestExpected ? "" : " · 최근월 미수집"}`
-    : "실제 관측 대기";
+    : emptyStatus;
   const spendDateText = spendLatest
     ? `${tourismVisitorMonthLabel(spendLatest.yearMonth)} · 실제 관측${spendLatest.yearMonth === spendLatestExpected ? "" : " · 최근월 미수집"}`
-    : "실제 관측 대기";
+    : emptyStatus;
   const seriesItems = [
     {
       key: "stay",
@@ -34137,7 +34185,7 @@ function renderLocationProfileStrengthPanel(strength = {}, regionLabel = "선택
     }
   ].map((item) => ({
     ...item,
-    valueLabel: item.latest ? tourismDemandStrengthNumberLabel(item.latest.value) : "관측 없음",
+    valueLabel: item.latest ? tourismDemandStrengthNumberLabel(item.latest.value) : emptyStatus,
     note: `${item.coverage.completeMonths}/${Math.max(item.coverage.expectedMonths, 12)}개월${item.coverage.partialMonths ? ` · 부분수집 ${item.coverage.partialMonths}개월` : ""}`,
     hasData: locationProfileTourismSeriesHasObservedValue(item.series)
   }));
@@ -34149,6 +34197,7 @@ function renderLocationProfileStrengthPanel(strength = {}, regionLabel = "선택
         <div><p class="eyebrow">한국관광공사 실제 지수</p><h4>${escapeHtml(regionLabel)} 최근 12개월 체류·소비 강도</h4><small>${escapeHtml(`${periodBasis} · 방문자수와 단위가 다른 월별 지수`)}</small></div>
         <span class="location-profile-status ${recentObserved ? "is-partial" : "is-missing"}">${escapeHtml(statusText)}</span>
       </div>
+      ${!recentObserved || queryFailed ? `<p class="location-profile-basis" role="status">${escapeHtml(emptyNote)}</p>` : ""}
       ${renderLocationProfileSeriesSelector("strength", seriesItems, activeSeries)}
       ${selectableSeriesItems.map((item) => `
         <section class="location-profile-series-panel" id="location-profile-series-strength-${escapeHtml(item.key)}" data-location-tourism-series-panel="${escapeHtml(`strength:${item.key}`)}" role="tabpanel" aria-labelledby="location-profile-series-tab-strength-${escapeHtml(item.key)}"${item.key === activeSeries ? "" : " hidden"}>
@@ -34163,7 +34212,7 @@ function renderLocationProfileStrengthPanel(strength = {}, regionLabel = "선택
                 compactMonthLabels: true,
                 focusRange: true,
                 emptyText: item.emptyText
-              }) : `<div class="location-profile-chart-empty">${escapeHtml(item.emptyText)}</div>`}
+              }) : `<div class="location-profile-chart-empty">${escapeHtml(queryState === "ready" ? item.emptyText : emptyNote)}</div>`}
             </section>
             <aside class="location-profile-analysis-facts">
               <div><span>최신값</span><strong>${escapeHtml(item.valueLabel)}</strong><small>${escapeHtml(item.dateText)}</small></div>
@@ -34173,6 +34222,7 @@ function renderLocationProfileStrengthPanel(strength = {}, regionLabel = "선택
         </section>
       `).join("")}
       <p class="location-profile-basis">${escapeHtml(`${strength.sourceLabel} · 최근 완료월 기준 12개월 · 체류와 소비는 별도 계열 · 부분수집·미관측은 선 단절`)}</p>
+      <p class="location-profile-basis">이 화면은 저장 자료만 읽습니다. 외부 자료를 자동 수집하지 않습니다.</p>
     </article>
   `;
 }
@@ -34635,7 +34685,7 @@ function locationProfileStrengthSummaryModel(staySeries = [], spendSeries = []) 
     spendPoint,
     stayLabel: monthLabel("체류", stayPoint),
     spendLabel: monthLabel("소비", spendPoint),
-    note: stayPoint || spendPoint ? "공통 완전월 없음 · 계열별 최신월" : "최근 자료 대기"
+    note: stayPoint || spendPoint ? "공통 완전월 없음 · 계열별 최신월" : "저장 자료 없음"
   };
 }
 
@@ -34732,9 +34782,8 @@ function renderObservedLocationProfile(card, alias, tourismMatch, clusters, inde
         : "한국관광공사 자료 대기";
   const industryKeyword = hasStoredCard ? String(card.searchKeyword || "").trim() : "";
   const placeKeywordScope = String(evidence.place.keyword || industryKeyword || "").trim();
-  const industryContextReady = Boolean(industryKeyword)
-    && locationProfileIsExactKeyword({ keyword: activeKeyword() }, industryKeyword);
-  const forecastReady = exactRegion && evidence.visitor.observed && evidence.strength.observed;
+  const industryRuns = locationProfileIndustryRuns(card.regionKey);
+  const selectedIndustryRun = locationProfileSelectedIndustryRun(card.regionKey, industryRuns);
   const providerStatus = exactRegion
     ? `연결 완료 · ${providerCode}`
     : providerCodePending
@@ -34814,7 +34863,7 @@ function renderObservedLocationProfile(card, alias, tourismMatch, clusters, inde
       }
     : {
         visitor: renderLocationProfileVisitorPanel(evidence.visitor),
-        strength: renderLocationProfileStrengthPanel(evidence.strength, sigungu, { referencePeriod: strengthReferencePeriod }),
+        strength: renderLocationProfileStrengthPanel(evidence.strength, sigungu, { referencePeriod: strengthReferencePeriod, queryState: loading ? "loading" : entry?.status || "unqueried" }),
         resourceDemand: renderLocationProfileResourceDemandPanel(evidence.resourceDemand, sigungu, { regionKey: card.regionKey }),
         diversity: renderLocationProfileDiversityPanel(evidence.diversity, sigungu, { regionKey: card.regionKey })
       };
@@ -34829,13 +34878,21 @@ function renderObservedLocationProfile(card, alias, tourismMatch, clusters, inde
       <div><span>분석 단위</span><strong>시군구 기준</strong><small>공공 기준</small></div>
       <div><span>데이터 기준</span><strong>실제 관측 최신값 우선</strong><small>출처별 날짜</small></div>
       <div><span>관광 API</span><strong>${escapeHtml(providerStatus)}</strong><small>${exactRegion ? "호출·저장 대상" : "잘못된 값 저장 안 함"}</small></div>
-      <div><span>업종 분석 키워드</span><strong>${escapeHtml(industryKeyword || "업종 분석에서 별도 선택")}</strong><small>지역명과 분리</small></div>
+      <div><span>저장된 숙박 업종</span><strong>${industryRuns.length ? `${fmtNumber(industryRuns.length)}개 검색어` : "저장 자료 없음"}</strong><small>선택 지역과 일치하는 수집자료</small></div>
     </div>
+    ${hasStoredCard ? `<section class="location-block" aria-label="기본 입지 참고 평가">
+      <div class="location-block-head"><h4>기본 입지 참고 평가</h4><span>기존 내부 기준 · 공식 통계 아님</span></div>
+      <p>${escapeHtml(card.interpretation || "저장된 내부 입지 기준입니다.")}</p>
+      <div class="location-index-grid">${indexes.filter((index) => index.value !== null && index.value !== "" && Number.isFinite(Number(index.value))).map((index) => `<div class="location-index"><div><strong>${escapeHtml(index.shortLabel || index.label)}</strong><em>${fmtNumber(index.value)}</em></div><span>내부 참고 점수 / 100</span></div>`).join("")}</div>
+      ${card.caution ? `<p class="hint">확인할 점: ${escapeHtml(card.caution)}</p>` : ""}
+      <p class="hint">실제 방문자·체류·소비 관측과 구분해 참고하세요. 자세한 판단 기준은 아래 펼침 영역에서 확인할 수 있습니다.</p>
+    </section>` : ""}
+    ${industryRuns.length ? `<label class="location-profile-industry-select"><span>업종분석에 연결할 저장자료</span><select data-location-industry-run aria-label="업종분석에 연결할 저장자료">${industryRuns.map((run) => `<option value="${escapeHtml(run.id)}"${run.id === selectedIndustryRun?.id ? " selected" : ""}>${escapeHtml(industryRunKeyword(run))} · ${escapeHtml(analysisRunCollectedLabel(run))}</option>`).join("")}</select><small>검색어별 가장 최근 자료를 표시합니다.</small></label>` : ""}
     <div class="location-profile-actions">
-      <button class="secondary-button" type="button" data-dictionary-navigate="analysis"${industryContextReady ? "" : " disabled"}>${industryContextReady ? "업종 분석 연결" : "업종 분석 연결 준비"}</button>
-      <button class="primary-button" type="button" data-dictionary-navigate="demand"${forecastReady ? "" : " disabled"}>${forecastReady ? "지역 수요전망" : "수요전망 자료 대기"}</button>
+      <button class="secondary-button" type="button" data-dictionary-navigate="analysis" data-dictionary-region="${escapeHtml(card.regionKey)}">${industryRuns.length ? "선택 자료로 업종분석" : "업종분석에서 자료 찾기"}</button>
+      <button class="primary-button" type="button" data-dictionary-navigate="demand">지역 수요전망 보기</button>
     </div>
-    <p class="location-profile-action-note">${forecastReady ? `${escapeHtml(`${sido} ${sigungu}`)}의 수집결과가 있어야 검색·관광 수요를 함께 확인할 수 있습니다.` : "방문자·체류·소비 관측과 해당 지역 수집결과가 필요합니다."}</p>
+    <p class="location-profile-action-note">수요전망은 확보된 자료부터 확인할 수 있습니다. 체류·소비 등 일부 자료가 없어도 화면을 열 수 있으며, 부족한 항목은 따로 안내합니다.</p>
   `;
   return `
     <article class="location-card location-profile-card" data-location-profile-region="${escapeHtml(card.regionKey)}">
@@ -34849,7 +34906,7 @@ function renderObservedLocationProfile(card, alias, tourismMatch, clusters, inde
       </header>
       <div class="location-profile-summary-grid location-profile-metric-grid">
         ${renderLocationProfileSummaryCard({ key: "visitor", title: "지역 방문자", tone: "is-visitor", items: [{ label: visitorValueLabel, value: visitorHeadline }], note: visitorNote, coverage: visitorCoverage, coverageLabel: visitorCoverageLabel, coverageDetail: visitorCoverageDetail })}
-        ${renderLocationProfileSummaryCard({ key: "strength", title: "체류·소비", tone: "is-strength", items: [{ label: strengthSummary.stayLabel, value: strengthSummary.stayPoint ? tourismDemandStrengthNumberLabel(strengthSummary.stayPoint.value) : "관측 없음" }, { label: strengthSummary.spendLabel, value: strengthSummary.spendPoint ? tourismDemandStrengthNumberLabel(strengthSummary.spendPoint.value) : "관측 없음" }], note: strengthSummary.note, coverage: strengthCoverage, coverageDetail: strengthCompleteMonths ? "두 계열 공통 완전월" : strengthSummary.stayPoint || strengthSummary.spendPoint ? "공통 완전월 없음 · 계열별 기준월" : "체류·소비 자료 대기" })}
+        ${renderLocationProfileSummaryCard({ key: "strength", title: "체류·소비", tone: "is-strength", items: [{ label: strengthSummary.stayLabel, value: strengthSummary.stayPoint ? tourismDemandStrengthNumberLabel(strengthSummary.stayPoint.value) : "관측 없음" }, { label: strengthSummary.spendLabel, value: strengthSummary.spendPoint ? tourismDemandStrengthNumberLabel(strengthSummary.spendPoint.value) : "관측 없음" }], note: loading ? "저장 자료 확인 중" : ["error", "unavailable"].includes(entry?.status) ? "저장 자료 조회 실패" : strengthSummary.note, coverage: strengthCoverage, coverageDetail: strengthCompleteMonths ? "두 계열 공통 완전월" : strengthSummary.stayPoint || strengthSummary.spendPoint ? "공통 완전월 없음 · 계열별 기준월" : "체류·소비 관측값 미확보" })}
         ${renderLocationProfileSummaryCard({ key: "resourceDemand", title: "관광자원 수요", tone: "is-resource", items: resourceDemandSummary.items, note: resourceDemandSummary.note, coverage: resourceDemandSummary.coverage, coverageDetail: "서비스·문화 계열별 실제 관측" })}
         ${renderLocationProfileSummaryCard({ key: "diversity", title: "관광 다양성", tone: "is-diversity", items: diversitySummary.items, note: diversitySummary.note, coverage: diversitySummary.coverage, coverageDetail: "관광객·소비·국제 계열별 실제 관측" })}
       </div>
@@ -39790,12 +39847,21 @@ function tourismForecastSelectedDestination() {
 function adminTourismForecastIntegrationRow(integration = {}) {
   const data = tourismForecastSnapshot();
   const configured = state.tourismForecastSettings?.configured;
-  const base = { ...integration, status: "checking", statusLabel: "확인 대기", statusNote: "관광지 방문 전망 연결 상태를 확인합니다." };
+  const base = { ...integration, status: "checking", statusLabel: "연결 미확인", statusNote: "관광지 방문 전망의 연결 상태를 아직 확인하지 않았습니다." };
   if (state.tourismForecastLoading) return { ...base, statusLabel: "조회 중", statusNote: "선택한 지역의 공식 자료를 확인합니다." };
   if (state.tourismForecastError) return { ...base, status: "missing", statusLabel: "조회 실패", statusNote: data?.destinations?.length ? "이전 저장 자료 표시 · 새 조회 결과 확인 필요" : state.tourismForecastError };
+  if (state.tourismForecastStatusLoading && !state.tourismForecastSettings) return { ...base, statusLabel: "연결 확인 중", statusNote: "서버의 연결 설정과 저장 자료 목록을 확인하고 있습니다." };
+  if (state.tourismForecastStatusError && !state.tourismForecastSettings) return { ...base, status: "missing", statusLabel: "연결 확인 실패", statusNote: state.tourismForecastStatusError };
+  if (!state.tourismForecastSettings) return base;
   if (configured === false || data?.status === "missing_key") return { ...base, status: "missing", statusLabel: "키 설정 필요", statusNote: "서버의 공공데이터 인증키를 확인하세요." };
   if (!tourismForecastSelectedRegionKey()) return { ...base, status: configured ? "configured" : "checking", statusLabel: state.tourismForecastAnalysisRegion ? "연결 지역 없음" : "지역 선택 필요", statusNote: state.tourismForecastAnalysisRegion ? "선택 지역에 정확히 연결되는 예측 제공 코드가 없습니다. 다른 지역 자료로 대체하지 않습니다." : "지역분석의 공통 지역을 선택해 주세요." };
-  if (!data) return { ...base, status: configured ? "configured" : "checking", statusLabel: configured ? "조회 대기" : "확인 대기", statusNote: "선택한 분석 지역의 관광지를 불러오세요. 지역 변경만으로 조회하지 않습니다." };
+  if (!data) {
+    const cachedRegions = state.tourismForecastSettings.cachedRegions;
+    const cached = Array.isArray(cachedRegions) && cachedRegions.some(region => tourismForecastRegionKey(region) === tourismForecastSelectedRegionKey());
+    const noStoredData = Array.isArray(cachedRegions) && !cached && !state.tourismForecastStatusError;
+    return { ...base, status: configured ? "configured" : "checking", statusLabel: noStoredData ? "저장 자료 없음" : "미조회",
+      statusNote: `${noStoredData ? "이 지역의 저장된 전망 자료가 없습니다." : cached ? "서버에 저장 자료가 있지만 이 화면에서는 아직 불러오지 않았습니다." : "이 지역의 전망 자료를 아직 조회하지 않았습니다."} ‘관광지 불러오기’를 누르면 확인합니다. 지역 변경만으로 자동 조회하지 않습니다.` };
+  }
   if (data.status === "ready" && !data.stale && data.destinations?.length && data.destinations.every((destination) => destination.complete)) return { ...base, status: "connected", statusLabel: "연동 정상", statusNote: "선택한 지역의 공식 예측자료 확인 · 제공기간은 관광지별로 표시" };
   if (data.status === "no_data") return { ...base, status: "configured", statusLabel: "제공 자료 없음", statusNote: "이 지역의 예측자료가 없습니다. 방문지수 0을 뜻하지 않습니다." };
   return { ...base, status: "missing", statusLabel: data.status === "error" ? "갱신 실패" : data.stale ? "이전 자료" : "일부 확인 필요", statusNote: "제공기간과 갱신 시각을 확인하세요. 없는 날짜를 0으로 채우지 않습니다." };
@@ -39852,17 +39918,19 @@ function renderTourismForecastConnectionCard() {
     return;
   }
   const configured = state.tourismForecastSettings?.configured;
+  const connectionState = state.tourismForecastStatusLoading ? "checking" : state.tourismForecastStatusError ? "missing" : configured ? "configured" : "checking";
+  const connectionLabel = state.tourismForecastStatusLoading ? "연결 확인 중" : state.tourismForecastStatusError ? "연결 확인 실패" : configured === true ? "연결 설정됨" : configured === false ? "키 설정 필요" : "연결 미확인";
   const saved = tourismForecastSavedRegions();
   const target = saved.find(region => region.key === state.tourismForecastRefreshRegionKey);
   const targetName = target ? `${target.areaNm} ${target.signguNm}` : "저장 지역";
   const busy = Boolean(target && state.tourismForecastRequests?.[target.key]);
   const latest = saved.map(region => region.collectedAt).sort().at(-1);
   els.tourismForecastConnectionCard.innerHTML = `
-    <div class="tourism-forecast-heading"><div><h3>관광지 방문 전망 연결</h3><p>예측 그래프와 관광지 선택은 지역분석의 수요 전망에서 확인합니다.</p></div><span class="tourism-forecast-state" data-status="${configured ? "configured" : "checking"}">${configured === true ? "연결 설정됨" : configured === false ? "키 설정 필요" : "연결 확인 전"}</span></div>
+    <div class="tourism-forecast-heading"><div><h3>관광지 방문 전망 연결</h3><p>예측 그래프와 관광지 선택은 지역분석의 수요 전망에서 확인합니다.</p></div><span class="tourism-forecast-state" data-status="${connectionState}">${connectionLabel}</span></div>
     <p class="tourism-forecast-source">마지막 저장 갱신 ${latest ? escapeHtml(compactDateTime(latest)) : "저장 자료 없음"}</p>
     <button class="secondary-button" type="button" data-tourism-forecast-action="open-demand">수요 전망 바로가기</button>
     ${saved.length ? `<div class="tourism-forecast-region-form"><label for="tourismForecastRefreshRegion">새로 확인할 저장 지역<select id="tourismForecastRefreshRegion"><option value="">갱신 대상 지역 선택</option>${saved.map(region => `<option value="${escapeHtml(region.key)}"${region.key === target?.key ? " selected" : ""}>${escapeHtml(`${region.areaNm} ${region.signguNm}`)}</option>`).join("")}</select></label><button class="ghost-button" type="button" data-tourism-forecast-action="refresh-saved" ${!target || busy || configured !== true ? "disabled" : ""}>${busy ? `${escapeHtml(targetName)} 확인 중…` : `${escapeHtml(targetName)} 자료 새로 확인`}</button></div><p class="tourism-forecast-note">선택한 저장 지역만 갱신합니다. 현재 분석 지역은 바뀌지 않습니다.</p>` : `<p class="tourism-forecast-note">저장된 지역이 없습니다. 수요 전망에서 분석 지역의 관광지를 먼저 불러오세요.</p>`}
-    <p class="tourism-forecast-message" role="status" aria-live="polite">${escapeHtml(state.tourismForecastConnectionMessage || "")}</p>
+    <p class="tourism-forecast-message" role="status" aria-live="polite">${escapeHtml(state.tourismForecastStatusError || state.tourismForecastConnectionMessage || "")}</p>
   `;
 }
 
@@ -39894,10 +39962,10 @@ function renderTourismForecastAdminCard() {
     <div class="tourism-forecast-heading"><div><h3>관광지 방문 전망</h3><p>관광지를 선택해 날짜별 방문 집중 예측지수를 확인합니다.</p></div><span class="tourism-forecast-state" data-status="${escapeHtml(status.status)}">${escapeHtml(status.statusLabel)}</span></div>
     <form class="tourism-forecast-region-form" data-tourism-forecast-region-form>
       <div class="tourism-forecast-analysis-region"><span>연결된 분석 지역</span><strong>${escapeHtml(tourismForecastAnalysisRegionLabel())}</strong><small>${selectedRegion ? "공통 지역 선택과 연결" : state.tourismForecastAnalysisRegion ? "선택 지역 자료 없음 · 정확한 제공 지역 코드 미연결" : "위에서 분석 지역을 선택해 주세요."}</small></div>
-      <button class="secondary-button" type="submit" ${busy || !selectedRegion || settings.configured === false ? "disabled" : ""}>${busy ? "불러오는 중…" : "관광지 불러오기"}</button>
+      <button class="secondary-button" type="submit" ${busy || !selectedRegion || settings.configured !== true ? "disabled" : ""}>${busy ? "불러오는 중…" : "관광지 불러오기"}</button>
     </form>
     <p class="tourism-forecast-message" role="status" aria-live="polite">${escapeHtml(state.tourismForecastError || status.statusNote)}</p>
-    ${!regions.length && (state.tourismForecastError || state.tourismForecastConnectionMessage) ? `<button class="ghost-button" type="button" data-tourism-forecast-action="status">연결 상태 다시 확인</button>` : ""}
+    ${!regions.length || state.tourismForecastStatusError ? `<button class="ghost-button" type="button" data-tourism-forecast-action="status" ${state.tourismForecastStatusLoading ? "disabled" : ""}>연결 상태 다시 확인</button>` : ""}
     ${data ? `<div class="tourism-forecast-place-picker"><div class="tourism-forecast-picker-head"><label for="tourismForecastQuery">관광지 검색 <small>${fmtNumber(destinations.length)}곳</small></label><button class="ghost-button" type="button" data-tourism-forecast-action="refresh" ${busy ? "disabled" : ""}>새로 확인</button></div><input id="tourismForecastQuery" type="search" maxlength="100" value="${escapeHtml(state.tourismForecastQuery || "")}" placeholder="불러온 지역의 관광지명" autocomplete="off" ${busy ? "disabled" : ""}><div class="tourism-forecast-places" aria-label="정확한 관광지 선택">${matches.map((item) => `<button type="button" data-tourism-forecast-place="${escapeHtml(item.id)}" aria-pressed="${destination?.id === item.id}" ${busy ? "disabled" : ""}><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.areaNm)} ${escapeHtml(item.signguNm)}</span></button>`).join("") || `<p class="tourism-forecast-note">${destinations.length ? "검색어와 일치하는 관광지가 없습니다." : data.status === "no_data" ? "제공된 관광지 예측자료가 없습니다. 다른 지역을 선택해 보세요." : "관광지 목록을 확인하지 못했습니다."}</p>`}</div></div>` : ""}
     ${destination ? `<section class="tourism-forecast-result" aria-label="선택 관광지 예측"><h4>${escapeHtml(destination.name)} <small>${escapeHtml(destination.areaNm)} ${escapeHtml(destination.signguNm)}</small></h4><p class="tourism-forecast-period">제공기간 ${escapeHtml(destination.startDate)} ~ ${escapeHtml(destination.endDate)} · ${fmtNumber(rows.length)}일 제공${Number.isFinite(destination.upcomingDayCount) ? ` · 오늘 포함 ${fmtNumber(destination.upcomingDayCount)}일 남음` : ""}</p>${destination.providerLagDays > 0 ? `<p class="tourism-forecast-note">제공기간은 오늘보다 ${fmtNumber(destination.providerLagDays)}일 앞서 시작합니다. 날짜를 임의로 옮기지 않고 표시합니다.</p>` : ""}${!destination.complete ? `<p class="tourism-forecast-warning">일부 날짜의 자료가 없습니다. 없는 값은 0으로 채우거나 선으로 이어 추정하지 않습니다.</p>` : ""}<div class="tourism-forecast-chart-label">방문 집중 예측지수 <span>0~100</span></div>${tourismForecastChart(destination)}<details class="tourism-forecast-details" data-tourism-forecast-details ${state.tourismForecastExpanded ? "open" : ""}><summary>날짜별 지수 ${fmtNumber(rows.length)}건</summary><ul>${rows.map((row) => `<li><time datetime="${escapeHtml(row.date)}">${escapeHtml(row.date)}</time><span>${tourismForecastValidValue(row.value) ? escapeHtml(row.value) : "자료 없음"}</span></li>`).join("")}</ul></details></section>` : destinations.length ? `<p class="tourism-forecast-note">목록에서 관광지를 선택하면 해당 장소의 예측지수를 보여줍니다.</p>` : ""}
     <p class="tourism-forecast-note">0~100 지수는 방문 집중에 대한 예측입니다. 실제 방문자 수·예약률·매출과 다릅니다. 관광지와 제공기간을 함께 확인하세요.</p>
@@ -39923,7 +39991,7 @@ function rememberTourismForecastData(data, requestedKey) {
 }
 
 async function loadTourismForecastRegion(refresh = false, targetRegion = null) {
-  if (!isAdminRole()) return;
+  if (!isAdminRole() || state.tourismForecastSettings?.configured !== true) return;
   const areaCd = targetRegion?.areaCd || state.tourismForecastAreaCd;
   const signguCd = targetRegion?.signguCd || state.tourismForecastSignguCd;
   const requestedKey = tourismForecastRegionKey({ areaCd, signguCd });
@@ -39959,12 +40027,18 @@ async function loadTourismForecastRegion(refresh = false, targetRegion = null) {
 }
 
 async function loadTourismForecastStatus() {
-  if (!isAdminRole()) return;
+  if (!isAdminRole() || state.tourismForecastStatusLoading) return;
+  state.tourismForecastStatusLoading = true;
+  state.tourismForecastStatusError = "";
+  renderTourismForecastAdminCard();
   try {
     state.tourismForecastSettings = await fetchJson("/api/settings/tourism-forecast");
     state.tourismForecastConnectionMessage = "";
   } catch (error) {
-    state.tourismForecastConnectionMessage = `관광지 전망 상태 확인 실패 · ${error.message}`;
+    state.tourismForecastStatusError = `관광지 전망 상태 확인 실패 · ${error.message}`;
+    state.tourismForecastConnectionMessage = state.tourismForecastStatusError;
+  } finally {
+    state.tourismForecastStatusLoading = false;
   }
   syncTourismForecastToAnalysisRegion(typeof selectedAnalysisRegion === "function" ? selectedAnalysisRegion() : state.tourismForecastAnalysisRegion);
   renderAdminIntegrationRegistry();
@@ -40201,7 +40275,11 @@ async function runTourismDemandStrengthBackfill() {
 
 async function refreshTourismDemandStrengthHistory() {
   if (!isAdminRole() || state.tourismDemandStrengthRefresh?.loading) return;
-  const selector = tourismDemandStrengthRefreshSelector();
+  const selectedRegion = selectedAnalysisRegion();
+  const selectedCard = selectedRegion?.level === "local" ? locationProfileSubjectForRegion(selectedRegion) : null;
+  const selector = selectedRegion
+    ? selectedCard?.regionKey ? { regionKey: selectedCard.regionKey, label: selectedRegion.sigungu || selectedRegion.name || selectedCard.regionKey } : null
+    : tourismDemandStrengthRefreshSelector();
   if (!selector) {
     state.tourismDemandStrengthRefresh = {
       loading: false,
@@ -40211,11 +40289,21 @@ async function refreshTourismDemandStrengthHistory() {
     renderDemand();
     return;
   }
-  state.tourismDemandStrengthRefresh = {
+  const requestedRunId = state.activeRunId;
+  const requestedRunSequence = loadRunRequestSequence;
+  const requestedData = state.data;
+  const requestedSelection = JSON.stringify(state.analysisRegionSelection || null);
+  const currentContext = () => state.activeRunId === requestedRunId
+    && loadRunRequestSequence === requestedRunSequence
+    && state.data === requestedData
+    && JSON.stringify(state.analysisRegionSelection || null) === requestedSelection;
+  const refreshState = {
     loading: true,
     tone: "neutral",
+    regionKey: selector.regionKey || "",
     message: `${selector.label} 체류·소비 강도 최근 12개월을 확인하고 있습니다.`
   };
+  state.tourismDemandStrengthRefresh = refreshState;
   renderDemand();
   setStatus("관광 수요 강도 최근 12개월 갱신 중");
   try {
@@ -40234,31 +40322,53 @@ async function refreshTourismDemandStrengthHistory() {
       || result?.snapshot?.tourismDemandStrengthHistory
       || (Array.isArray(result?.series) || Array.isArray(result?.regions) ? result : null);
     if (!returnedHistory) throw new Error("갱신된 관광 수요 강도 이력을 확인하지 못했습니다.");
-    const activeRunId = state.activeRunId;
-    if (activeRunId) await loadRun(activeRunId);
-    state.data = { ...(state.data || {}), tourismDemandStrengthHistory: returnedHistory };
-    const region = tourismDemandStrengthPrimaryRegion();
-    const stayCoverage = tourismDemandStrengthCoverage(region, "stay");
-    const spendCoverage = tourismDemandStrengthCoverage(region, "spend");
+    const returnedRegion = tourismDemandStrengthHistoryRegions(returnedHistory).find((region) => selector.regionKey
+      ? region.regionKey === selector.regionKey
+      : compactSearchText(region.sigungu) === compactSearchText(selector.regionName));
+    if (!returnedRegion?.regionKey) throw new Error("요청한 지역과 갱신 응답의 지역이 일치하지 않습니다.");
+    const regionKey = returnedRegion.regionKey;
+    const profileCard = selectedCard?.regionKey === regionKey ? selectedCard : { regionKey };
+    delete state.locationProfiles[regionKey];
+    await ensureLocationProfile(profileCard, { force: true });
+    if (state.locationProfiles[regionKey]?.status === "error") {
+      throw new Error("저장자료 재조회 실패 · " + state.locationProfiles[regionKey].error);
+    }
+    const stayCoverage = tourismDemandStrengthCoverage(returnedRegion, "stay", returnedHistory);
+    const spendCoverage = tourismDemandStrengthCoverage(returnedRegion, "spend", returnedHistory);
+    const completeMonths = Math.max(0, Number(returnedHistory.coverage?.completeMonths ?? returnedRegion.coverage?.completeMonths) || 0);
+    const expectedMonths = Math.max(stayCoverage.expectedMonths, spendCoverage.expectedMonths, 12);
+    const complete = result?.ok !== false && returnedHistory.ok !== false && completeMonths >= expectedMonths;
+    await loadTourismDataStatus({ render: false });
+    if (!currentContext()) return;
+    // A saved regional response must not be relabelled as another run's evidence.
+    if (completeMonths > 0 && (!selectedRegion || analysisRunMatchesRegion(selectedRegion, requestedData))) {
+      state.data = { ...(requestedData || {}), tourismDemandStrengthHistory: returnedHistory };
+    }
     state.tourismDemandStrengthRefresh = {
       loading: false,
-      tone: "success",
-      message: stayCoverage.expectedMonths || spendCoverage.expectedMonths
-        ? `최근 12개월 갱신 완료 · 체류 ${fmtNumber(stayCoverage.completeMonths)}/${fmtNumber(stayCoverage.expectedMonths)}개월 · 소비 ${fmtNumber(spendCoverage.completeMonths)}/${fmtNumber(spendCoverage.expectedMonths)}개월`
-        : "최근 12개월 갱신 요청을 완료했습니다."
+      tone: complete ? "success" : completeMonths > 0 ? "neutral" : "error",
+      regionKey,
+      message: `${selector.label} ${complete ? "최근 12개월 갱신 완료" : completeMonths > 0 ? "일부 저장자료 확인" : "정상 저장자료 없음 · 확인 필요"} · 체류 ${fmtNumber(stayCoverage.completeMonths)}/${fmtNumber(stayCoverage.expectedMonths)}개월 · 소비 ${fmtNumber(spendCoverage.completeMonths)}/${fmtNumber(spendCoverage.expectedMonths)}개월`
     };
-    await loadTourismDataStatus({ render: false });
     renderDemand();
-    setStatus("관광 수요 강도 최근 12개월 갱신 완료");
+    if (state.activeTab === "dictionary") renderLocationDictionary();
+    setStatus(complete ? "관광 수요 강도 최근 12개월 갱신 완료" : "관광 수요 강도 자료 확인 필요");
   } catch (error) {
+    await loadTourismDataStatus({ render: false });
+    if (!currentContext()) return;
     state.tourismDemandStrengthRefresh = {
       loading: false,
       tone: "error",
-      message: `최근 12개월 갱신 실패 · ${error.message}`
+      regionKey: selector.regionKey || "",
+      message: `${selector.label} 최근 12개월 갱신 실패 · ${error.message}`
     };
-    await loadTourismDataStatus({ render: false });
     renderDemand();
+    if (state.activeTab === "dictionary") renderLocationDictionary();
     setStatus("관광 수요 강도 최근 12개월 갱신 실패");
+  } finally {
+    if (state.tourismDemandStrengthRefresh === refreshState) {
+      state.tourismDemandStrengthRefresh = { loading: false, tone: "neutral", regionKey: selector.regionKey || "", message: "" };
+    }
   }
 }
 
@@ -42349,7 +42459,10 @@ function bindEvents() {
     const dictionaryNavigate = event.target.closest("[data-dictionary-navigate]");
     if (dictionaryNavigate && !dictionaryNavigate.disabled) {
       const target = dictionaryNavigate.dataset.dictionaryNavigate || "";
-      if (target === "analysis") activateAdminPrimaryNav("analysis");
+      if (target === "analysis") {
+        const runId = els.dictionaryResult?.querySelector("[data-location-industry-run]")?.value || "";
+        void openDictionaryIndustry(runId, dictionaryNavigate.dataset.dictionaryRegion || "");
+      }
       if (target === "demand") openDictionaryDemand();
       return;
     }
@@ -42380,6 +42493,13 @@ function bindEvents() {
     const button = event.target.closest("[data-location-query]");
     if (!button) return;
     runDictionarySearch(button.dataset.locationQuery);
+  });
+  els.dictionaryResult?.addEventListener("change", (event) => {
+    const select = event.target.closest?.("[data-location-industry-run]");
+    const regionKey = selectedAnalysisRegion()?.regionKey;
+    if (!select || !regionKey || !locationProfileIndustryRuns(regionKey).some((run) => run.id === select.value)) return;
+    state.locationProfileIndustrySelections ||= {};
+    state.locationProfileIndustrySelections[regionKey] = select.value;
   });
   els.dictionaryResult?.addEventListener("keydown", (event) => {
     const tab = event.target.closest?.(

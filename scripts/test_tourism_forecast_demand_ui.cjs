@@ -211,10 +211,63 @@ test("status refresh failure is visible even when a previously configured connec
   await f.context.loadTourismForecastStatus();
   assert.equal(f.state.tourismForecastSettings.configured, true);
   assert.match(f.settings.innerHTML, /관광지 전망 상태 확인 실패/);
+  assert.match(f.settings.innerHTML, /연결 확인 실패/);
   assert.equal(f.context.tourismForecastSelectedRegionKey(), "41:41650");
   assert.equal(f.calls.length, 1);
   f.state.tourismForecastSettings = null;
   await f.context.loadTourismForecastStatus();
   assert.match(f.main.innerHTML, /연결 상태 다시 확인/);
   assert.equal(f.calls.length, 2);
+});
+
+test("unqueried screen, absent stored forecast and unknown connection never imply automatic work", () => {
+  const f = harness();
+  f.context.syncTourismForecastToAnalysisRegion(region("가평군"));
+  assert.equal(f.context.tourismForecastSelectedRegionKey(), "41:41820");
+  assert.equal(f.context.adminTourismForecastIntegrationRow().statusLabel, "저장 자료 없음");
+  assert.match(f.main.innerHTML, /관광지 불러오기/);
+  assert.match(f.main.innerHTML, /지역 변경만으로 자동 조회하지 않습니다/);
+  f.state.tourismForecastSettings.cachedRegions.push({ areaCd: "41", signguCd: "41820", collectedAt: "2026-09-21T01:00:00Z" });
+  f.context.renderTourismForecastAdminCard();
+  assert.equal(f.context.adminTourismForecastIntegrationRow().statusLabel, "미조회");
+  assert.match(f.main.innerHTML, /서버에 저장 자료가 있지만 이 화면에서는 아직 불러오지 않았습니다/);
+  f.state.tourismForecastSettings = null;
+  f.context.syncTourismForecastToAnalysisRegion(region("가평군"));
+  assert.equal(f.context.adminTourismForecastIntegrationRow().statusLabel, "연결 미확인");
+  assert.equal(f.calls.length, 0);
+});
+
+test("loading appears only during an explicit forecast request and failure stays distinct from no data", async () => {
+  let reject;
+  const f = harness(() => new Promise((_, fail) => { reject = fail; }));
+  f.context.syncTourismForecastToAnalysisRegion(pocheon);
+  assert.notEqual(f.context.adminTourismForecastIntegrationRow().statusLabel, "조회 중");
+  const pending = f.context.loadTourismForecastRegion();
+  assert.equal(f.context.adminTourismForecastIntegrationRow().statusLabel, "조회 중");
+  assert.equal(f.calls.length, 1);
+  reject(new Error("응답 확인 실패"));
+  await pending;
+  assert.equal(f.context.adminTourismForecastIntegrationRow().statusLabel, "조회 실패");
+  assert.equal(f.state.tourismForecastLoading, false);
+  assert.equal(f.calls.length, 1);
+  f.state.tourismForecastError = "";
+  f.context.rememberTourismForecastData({ ...payload(), status: "no_data", destinations: [] }, "41:41650");
+  assert.equal(f.context.adminTourismForecastIntegrationRow().statusLabel, "제공 자료 없음");
+});
+
+test("connection status requests show real progress, do not duplicate, and never fetch a forecast", async () => {
+  let resolve;
+  const f = harness(() => new Promise(done => { resolve = done; }));
+  f.state.tourismForecastSettings = null;
+  f.context.syncTourismForecastToAnalysisRegion(pocheon);
+  const pending = f.context.loadTourismForecastStatus();
+  assert.equal(f.context.adminTourismForecastIntegrationRow().statusLabel, "연결 확인 중");
+  await f.context.loadTourismForecastStatus();
+  await f.context.loadTourismForecastRegion();
+  assert.equal(f.calls.length, 1);
+  resolve({ configured: true, regions: directory.regions, cachedRegions: [] });
+  await pending;
+  assert.equal(f.state.tourismForecastStatusLoading, false);
+  assert.equal(f.context.adminTourismForecastIntegrationRow().statusLabel, "저장 자료 없음");
+  assert.deepEqual(f.calls.map(call => call.url), ["/api/settings/tourism-forecast"]);
 });

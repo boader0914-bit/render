@@ -458,6 +458,7 @@ const panelSandbox = {
   locationProfilePeriodLabel: () => "최근 저장 기간",
   locationProfileLatestPoint: (series = []) => series.filter((entry) => entry.hasValue && Number.isFinite(Number(entry.value))).at(-1) || null,
   locationProfileTourismSeriesHasObservedValue: chartSandbox.seriesObserved,
+  locationProfileTourismSeriesEntryFailed: chartSandbox.entryFailed,
   tourismDemandStrengthUnitLabel: () => "지수",
   tourismDemandStrengthSeriesState: () => ({ chartText: "최근 12개월 관측 없음" }),
   tourismDemandStrengthNumberLabel: (value) => String(value),
@@ -479,6 +480,19 @@ const strengthPanelHtml = panelSandbox.renderStrengthPanel({
 }, "산청군", { referencePeriod });
 check(tagsWithAttribute(strengthPanelHtml, "data-location-tourism-series").length === 1, "a partial-only strength series must be folded behind the observed series");
 check(strengthPanelHtml.includes("완전월 없는 계열 1개") && strengthPanelHtml.includes("부분수집 3개월"), "the folded strength series must retain its partial-month metadata");
+
+for (const [queryState, label] of [["unqueried", "저장 자료 미조회"], ["loading", "저장 자료 확인 중"], ["ready", "저장 자료 없음"], ["error", "저장 자료 조회 실패"], ["unavailable", "저장 자료 조회 실패"]]) {
+  const emptyStrength = panelSandbox.renderStrengthPanel({ staySeries: [], spendSeries: [], sourceLabel: "한국관광공사" }, "가평군", { referencePeriod, queryState });
+  check(emptyStrength.includes(label), `empty strength panel must distinguish ${queryState}`);
+  check(!emptyStrength.includes("실제 관측 대기"), "empty strength must not imply that collection is automatically pending");
+  check(emptyStrength.includes("외부 자료를 자동 수집하지 않습니다"), "strength panel must identify its saved-data-only scope");
+}
+const retainedStrength = panelSandbox.renderStrengthPanel({ staySeries: buildMonthlySeries({ values: { 11: 103 } }), spendSeries: [], sourceLabel: "한국관광공사" }, "가평군", { referencePeriod, queryState: "error" });
+check(retainedStrength.includes("test-chart") && retainedStrength.includes("저장된 체류·소비 자료를 읽지 못했습니다"), "a cache-read failure must remain visible without erasing an existing observed series");
+const partialStrength = panelSandbox.renderStrengthPanel({ staySeries: buildMonthlySeries({ partial: [11] }), spendSeries: [], sourceLabel: "한국관광공사" }, "가평군", { referencePeriod, queryState: "ready" });
+check(partialStrength.includes("완전월 자료 없음") && partialStrength.includes("부분 자료는 저장되어 있지만"), "partial stored metadata must not be described as no stored data");
+const failedStrength = panelSandbox.renderStrengthPanel({ staySeries: buildMonthlySeries({ failed: [11] }), spendSeries: [], sourceLabel: "한국관광공사" }, "가평군", { referencePeriod, queryState: "ready" });
+check(failedStrength.includes("이전 수집 실패"), "previous collection failure must be separate from a failed cache read or absent stored data");
 
 const indexPanelHtml = panelSandbox.renderIndexPanel({
   periodRange: referencePeriod,
@@ -522,7 +536,7 @@ check(!noCommonMonthSummary.commonYearMonth, "different latest months must not b
 check(noCommonMonthSummary.stayLabel === "체류 · 2026.07" && noCommonMonthSummary.spendLabel === "소비 · 2026.06", "without a common month, each strength value must carry its own month");
 check(noCommonMonthSummary.note.includes("공통 완전월 없음"), "without a common month, the summary must disclose the mismatch");
 const emptyStrengthSummary = strengthSummarySandbox.summaryModel(buildMonthlySeries(), buildMonthlySeries());
-check(emptyStrengthSummary.stayPoint === null && emptyStrengthSummary.spendPoint === null && emptyStrengthSummary.note === "최근 자료 대기", "missing strength observations must stay missing rather than becoming zero");
+check(emptyStrengthSummary.stayPoint === null && emptyStrengthSummary.spendPoint === null && emptyStrengthSummary.note === "저장 자료 없음", "missing strength observations must stay missing rather than becoming zero");
 const nullStrengthSummary = strengthSummarySandbox.summaryModel(
   [{ yearMonth: "202607", status: "complete", hasValue: true, value: null }],
   [{ yearMonth: "202607", status: "complete", hasValue: true, value: null }]

@@ -1197,9 +1197,9 @@ assert(
   renderObservedLocationProfileBlock.includes("administrativeRegion?.sido")
     && renderObservedLocationProfileBlock.includes("administrativeRegion?.sigungu")
     && renderObservedLocationProfileBlock.includes('<h3>${escapeHtml(`${shortSido} ${sigungu}`)}</h3>')
-    && renderObservedLocationProfileBlock.includes("업종 분석 키워드")
-    && renderObservedLocationProfileBlock.includes('industryKeyword || "업종 분석에서 별도 선택"')
-    && renderObservedLocationProfileBlock.includes("지역명과 분리")
+    && renderObservedLocationProfileBlock.includes("저장된 숙박 업종")
+    && renderObservedLocationProfileBlock.includes("업종분석에 연결할 저장자료")
+    && renderObservedLocationProfileBlock.includes("선택 지역과 일치하는 수집자료")
     && renderObservedLocationProfileBlock.includes("hasStoredCard ? renderLocationProfileInternalDictionary")
     && !renderObservedLocationProfileBlock.includes("<h3>${escapeHtml(card.searchKeyword)}</h3>"),
   "official administrative names must remain the profile title while lodging keywords stay in a separate field",
@@ -1220,7 +1220,7 @@ assert(
     && renderObservedLocationProfileBlock.includes("providerMappingStatus !== \"ready\"")
     && renderObservedLocationProfileBlock.includes("const exactRegion = Boolean(providerCode && !providerCodePending)")
     && renderObservedLocationProfileBlock.includes("if (exactRegion) void ensureLocationProfile(card)")
-    && renderObservedLocationProfileBlock.includes("const forecastReady = exactRegion && evidence.visitor.observed && evidence.strength.observed"),
+    && !renderObservedLocationProfileBlock.includes("const forecastReady = exactRegion && evidence.visitor.observed && evidence.strength.observed"),
   "provider-code-pending regions must be labelled and blocked from being treated as callable observations",
   failures
 );
