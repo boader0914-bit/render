@@ -2279,6 +2279,116 @@ html[data-theme-resolved] body.role-admin :is(
   color: var(--text-primary) !important;
 }
 
+/* Review support is also rendered without explicit surface attributes. Keep its
+   nested evidence and work cards on the active theme, including legacy states. */
+html[data-theme-resolved] body.role-admin .admin-db-review-support {
+  --review-status-color: var(--text-secondary);
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-support,
+html[data-theme-resolved] body.role-admin .admin-db-review-support :is(
+  article,
+  .admin-db-audit-panel,
+  .admin-db-audit-detail,
+  .admin-db-audit-gate,
+  .admin-db-audit-stats > span,
+  .admin-db-work-panel,
+  .admin-db-collect-panel,
+  .admin-db-review-flash,
+  .admin-db-more
+) {
+  --surface-bg-token: var(--surface-card);
+  --surface-bg-soft-token: var(--surface-control);
+  --surface-border-token: var(--border-subtle);
+  --surface-text-token: var(--text-primary);
+  --surface-muted-token: var(--text-secondary);
+  --surface-subtle-token: var(--text-tertiary);
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-card) !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-support :is(h1, h2, h3, h4, strong, b, label, summary) {
+  color: var(--text-primary) !important;
+  text-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-support :is(p, small, span, em, li) {
+  color: var(--text-secondary) !important;
+  text-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-support :is(button, a, input, select, textarea),
+html[data-theme-resolved] body.role-admin .admin-db-review-support > summary > span {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-control) !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-support :is(
+  .admin-db-audit-list > article.active,
+  .company-review-actions > button.active
+) {
+  border-color: var(--border-strong) !important;
+  background: var(--surface-selected) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-support :is(.good, .positive, .success, .confirmed, .contact_ready) {
+  --review-status-color: var(--positive);
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-support :is(.watch, .warning, .check_needed, .recrawl_needed, .manual_needed, .hold) {
+  --review-status-color: var(--warning-strong);
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-support :is(.hot, .bad, .danger, .exclude) {
+  --review-status-color: var(--danger-strong);
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-support .neutral {
+  --review-status-color: var(--text-secondary);
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-support :is(
+  mark,
+  .admin-db-audit-checks > em,
+  .admin-db-audit-task-tags > em,
+  .admin-db-work-title > span,
+  .admin-db-collect-list em,
+  .company-review-badge,
+  .admin-db-review-flash > em
+) {
+  border-color: color-mix(in srgb, var(--review-status-color) 28%, var(--border-subtle)) !important;
+  background: color-mix(in srgb, var(--review-status-color) 8%, var(--surface-card)) !important;
+  color: var(--review-status-color) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-support :is(.admin-db-audit-scorebar, .admin-db-audit-gatebar) {
+  background: var(--border-subtle) !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-support :is(.admin-db-audit-scorebar, .admin-db-audit-gatebar) > i {
+  background: var(--review-status-color) !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-support .admin-db-support-toggle > span {
+  color: inherit !important;
+}
+
+.admin-db-review-support > summary .when-open,
+.admin-db-review-support[open] > summary .when-closed {
+  display: none;
+}
+
+.admin-db-review-support[open] > summary .when-open {
+  display: inline;
+}
+
 /* Selection remains quiet; keyboard focus keeps the dedicated focus ring. */
 html[data-theme-resolved] body.role-admin .admin-db-company.selected {
   outline: none;

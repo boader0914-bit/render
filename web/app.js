@@ -26320,7 +26320,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
           <strong>검수 보조자료</strong>
           <small>전체 지표와 확인 수집 대상은 필요할 때만 확인합니다.</small>
         </div>
-        <span>펼치기</span>
+        <span class="admin-db-support-toggle"><span class="when-closed">펼치기</span><span class="when-open">접기</span></span>
       </summary>
       <div class="admin-db-review-support-body">
         ${metricSummaryHtml}
