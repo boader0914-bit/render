@@ -8,7 +8,7 @@ const TERMINAL = new Set(STATUSES.slice(0, 5));
 const SCOPE_FIELDS = ["searchMode", "collectionMode", "collectionPurpose", "productMode", "detailRankRanges", "bookingRangeDays", "bookingRangePlaceLimit"];
 const SCHEDULE_FIELDS = ["naverScheduleRequested", "naverScheduleSucceeded", "naverScheduleFailed", "naverScheduleBlocked"];
 const COUNT_FIELDS = ["naverOverall", "naverBookingStockChecked", "naverBookingStockSucceeded", ...SCHEDULE_FIELDS];
-const STOP_REASONS = new Set(["cancel_requested", "disk_full", "naver_main_http_403", "naver_main_http_429", "naver_schedule_http_403", "naver_schedule_http_429", "naver_schedule_http_403_or_429", "naver_booking_http_403", "naver_booking_http_429", "naver_request_http_403", "naver_request_http_429", "rate_limited", "collection_blocked", "same_day_configuration_changed", "disk_check_failed", "insufficient_disk_space"]);
+const STOP_REASONS = new Set(["collector_worker_unavailable", "naver_booking_api_too_many_requests", "naver_request_blocked", "cancel_requested", "disk_full", "naver_main_http_403", "naver_main_http_429", "naver_schedule_http_403", "naver_schedule_http_429", "naver_schedule_http_403_or_429", "naver_booking_http_403", "naver_booking_http_429", "naver_request_http_403", "naver_request_http_429", "rate_limited", "collection_blocked", "same_day_configuration_changed", "disk_check_failed", "insufficient_disk_space"]);
 const finite = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 const instant = (value) => typeof value === "string" && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
 const keywordKey = (value) => String(value || "").replace(/\s+/g, "");

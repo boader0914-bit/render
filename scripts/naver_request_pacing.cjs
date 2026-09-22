@@ -2,6 +2,12 @@
 
 const DEFAULT_MIN_INTERVAL_MS = 500;
 
+function isNaverBookingRateLimit(data) {
+  return Array.isArray(data?.errors) && data.errors.some(error =>
+    [error?.extensions?.code, error?.extensions?.message, error?.message].some(value =>
+      typeof value === "string" && /\bBookingAPITooManyRequests\b/.test(value)));
+}
+
 function isNaverRequest(input) {
   try {
     const url = new URL(typeof input === "object" && input !== null && "url" in input ? input.url : String(input));
@@ -82,13 +88,18 @@ function createNaverRequestGate(options = {}) {
   async function execute(job) {
     try {
       const response = await fetchImpl(job.input, job.init);
+      let bufferedBody;
+      const readBody = () => bufferedBody ||= response.clone().arrayBuffer();
       // Status-based stops take effect as soon as headers arrive, before a slow
       // body could permit more queued requests to start.
-      if (onResponse) await onResponse(response, { stop });
+      if (onResponse) await onResponse(response, {
+        stop,
+        readJson: async () => JSON.parse(new TextDecoder().decode(await readBody())),
+      });
       // Fetch resolves when headers arrive. Keep the gate until the body has
       // downloaded, but return the original Response with its URL, headers,
       // status and unread text()/json() body unchanged.
-      if (response?.body !== null && typeof response?.clone === "function") await response.clone().arrayBuffer();
+      if (response?.body !== null && typeof response?.clone === "function") await readBody();
       job.resolve(response);
     } catch (error) {
       metrics.failedRequests++;
@@ -159,4 +170,4 @@ function createNaverRequestGate(options = {}) {
   return { fetch: pacedFetch, stop, diagnostics };
 }
 
-module.exports = { DEFAULT_MIN_INTERVAL_MS, isNaverRequest, createNaverRequestGate };
+module.exports = { DEFAULT_MIN_INTERVAL_MS, isNaverRequest, isNaverBookingRateLimit, createNaverRequestGate };

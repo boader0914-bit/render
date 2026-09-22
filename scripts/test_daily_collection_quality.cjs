@@ -5,6 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const test = require("node:test");
 const { inspectManifest, inspectResult, allowsDerivedUpdates } = require("./daily_collection_quality.cjs");
+const { isNaverBookingRateLimit } = require("./naver_request_pacing.cjs");
 
 function fixture() {
   return {
@@ -150,7 +151,7 @@ async function scheduleHarness(post, scheduled = true) {
   const end = source.indexOf("\nfunction asStockNumber", start);
   assert.ok(start >= 0 && end > start);
   const context = {
-    SCHEDULED_COLLECTION: scheduled, CHECK_IN: "2026-09-20", naverDailyScheduleQuery: "fixture-query",
+    GUARDED_COLLECTION: scheduled, CHECK_IN: "2026-09-20", naverDailyScheduleQuery: "fixture-query",
     naverScheduleBlockedStatus: 0,
     scheduledCollectionDiagnostics: { naverScheduleRequested: 0, naverScheduleSucceeded: 0, naverScheduleFailed: 0, naverScheduleBlocked: 0 },
     postNaverBookingGraphql: post
@@ -218,7 +219,7 @@ test("schedule block latch stops new booking GraphQL calls and new place lookups
   assert.ok(graphqlStart >= 0 && graphqlEnd > graphqlStart);
   let fetchCalls = 0;
   const graphql = vm.runInNewContext(`(${source.slice(graphqlStart, graphqlEnd).trim()})`, {
-    SCHEDULED_COLLECTION: true, naverScheduleBlockedStatus: 429, CHECK_IN: "2026-09-20",
+    GUARDED_COLLECTION: true, naverScheduleBlockedStatus: 429, CHECK_IN: "2026-09-20",
     fetch: async () => { fetchCalls += 1; throw new Error("unexpected_network"); }
   });
   await assert.rejects(graphql("searchBizItem", "fixture", {}, "fixture-business"), /NAVER_SCHEDULE_BLOCKED HTTP 429/);
@@ -228,7 +229,7 @@ test("schedule block latch stops new booking GraphQL calls and new place lookups
   assert.ok(availabilityStart >= 0 && availabilityEnd > availabilityStart);
   let lookupCalls = 0;
   const availability = vm.runInNewContext(`(${source.slice(availabilityStart, availabilityEnd).trim()})`, {
-    SCHEDULED_COLLECTION: true, naverScheduleBlockedStatus: 403,
+    GUARDED_COLLECTION: true, naverScheduleBlockedStatus: 403,
     getNaverBookingBusiness: async () => { lookupCalls += 1; throw new Error("unexpected_lookup"); }
   });
   await assert.rejects(availability("fixture-place", new Map()), /NAVER_SCHEDULE_BLOCKED HTTP 403/);
@@ -243,7 +244,7 @@ test("product-list HTTP 403/429 sets the booking latch even before any schedule 
   for (const status of [403, 429]) {
     let requests = 0;
     const context = {
-      SCHEDULED_COLLECTION: true, naverScheduleBlockedStatus: 0, CHECK_IN: "2026-09-20", ADULTS: 2,
+      GUARDED_COLLECTION: true, naverScheduleBlockedStatus: 0, CHECK_IN: "2026-09-20", ADULTS: 2, isNaverBookingRateLimit,
       NAVER_BOOKING_GRAPHQL_URL: "https://fixture.invalid/graphql", headers: {}, addDays: () => "2026-09-21",
       fetch: async () => { requests += 1; return { status, json: async () => ({ fixture: true }) }; }
     };
@@ -261,7 +262,7 @@ test("scheduled concurrent mapper waits for started responses before exposing an
   const start = source.indexOf("async function mapWithConcurrency(");
   const end = source.indexOf("\nfunction naverBookingEvidenceFromRow", start);
   assert.ok(start >= 0 && end > start);
-  const mapper = vm.runInNewContext(`(${source.slice(start, end).trim()})`, { SCHEDULED_COLLECTION: true });
+  const mapper = vm.runInNewContext(`(${source.slice(start, end).trim()})`, { GUARDED_COLLECTION: true });
   let resolveSecond;
   const second = new Promise(resolve => { resolveSecond = resolve; });
   let finished = false;

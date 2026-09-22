@@ -86,6 +86,7 @@ function brief(value, limit = 400) {
 
 function blockingError(error) {
   const message = String(error?.message || error || "");
+  if (/^COLLECTOR_/.test(error?.code || "")) return "collector_worker_unavailable";
   if (error?.cancelled || /^(ABORT_ERR|CRAWL_CANCELLED|cancel_requested)$/i.test(error?.code || "") || error?.name === "AbortError"
     || Number(error?.statusCode) === 499 || /\b(?:cancel_requested|crawl_cancelled)\b/i.test(message)) return "cancel_requested";
   if (error?.code === "ENOSPC" || /\bENOSPC\b/.test(message)) return "disk_full";

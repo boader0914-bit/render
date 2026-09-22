@@ -3,26 +3,32 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { inspectManifest } = require("./daily_collection_quality.cjs");
 const { applyInventoryEvidence, productEvidence } = require("./inventory_estimation.cjs");
-const { createNaverRequestGate } = require("./naver_request_pacing.cjs");
+const { createNaverRequestGate, isNaverBookingRateLimit } = require("./naver_request_pacing.cjs");
 const SCHEDULED_COLLECTION = process.env.SCHEDULED_COLLECTION === "1";
-const NAVER_REQUEST_PACING_ENABLED = SCHEDULED_COLLECTION && process.env.NAVER_REQUEST_PACING_ENABLED === "1";
+const WORKER_COLLECTION = process.env.COLLECTOR_WORKER_RUNTIME === "1";
+const GUARDED_COLLECTION = SCHEDULED_COLLECTION || WORKER_COLLECTION;
+const NAVER_REQUEST_PACING_ENABLED = WORKER_COLLECTION || (SCHEDULED_COLLECTION && process.env.NAVER_REQUEST_PACING_ENABLED === "1");
 let naverRequestBlockedStatus = 0;
+let naverRequestBlockedCode = null;
 const naverRequestGate = createNaverRequestGate({
   enabled: NAVER_REQUEST_PACING_ENABLED,
-  minIntervalMs: NAVER_REQUEST_PACING_ENABLED ? process.env.NAVER_REQUEST_MIN_INTERVAL_MS : 500,
-  maxConcurrency: NAVER_REQUEST_PACING_ENABLED ? process.env.NAVER_REQUEST_MAX_CONCURRENCY : 1,
+  minIntervalMs: NAVER_REQUEST_PACING_ENABLED ? (process.env.NAVER_REQUEST_MIN_INTERVAL_MS || (WORKER_COLLECTION ? 200 : undefined)) : 500,
+  maxConcurrency: NAVER_REQUEST_PACING_ENABLED ? (process.env.NAVER_REQUEST_MAX_CONCURRENCY || (WORKER_COLLECTION ? 2 : undefined)) : 1,
   fetchImpl: globalThis.fetch,
-  onResponse: (response, { stop }) => {
-    if (![403, 429].includes(response.status)) return;
+  onResponse: async (response, { stop, readJson }) => {
+    const httpBlocked = [403, 429].includes(response.status);
+    const apiBlocked = !httpBlocked && response.status === 200 && isNaverBookingRateLimit(await readJson().catch(() => null));
+    if (!httpBlocked && !apiBlocked) return;
     naverRequestBlockedStatus = response.status;
-    const error = new Error(`NAVER_REQUEST_BLOCKED HTTP ${response.status}`);
+    naverRequestBlockedCode = apiBlocked ? "BookingAPITooManyRequests" : null;
+    const error = new Error(apiBlocked ? "NAVER_REQUEST_BLOCKED BookingAPITooManyRequests" : `NAVER_REQUEST_BLOCKED HTTP ${response.status}`);
     error.code = "NAVER_REQUEST_BLOCKED";
     error.statusCode = response.status;
     stop(error);
   },
 });
 // Every Naver fetch path (including fallback pages) shares one gate. Other
-// hosts and collections without the scheduled opt-in keep their old behavior.
+// hosts and local collections without the scheduled opt-in keep their old behavior.
 const fetch = naverRequestGate.fetch;
 const scheduledCollectionDiagnostics = {
   naverScheduleRequested: 0,
@@ -783,9 +789,9 @@ const NAVER_OTA_OBSERVATION_LIMIT = boundedInteger(
   0,
   ADMIN_COLLECTION_RANK_SAFETY_MAX
 );
-const NAVER_OTA_OBSERVATION_CONCURRENCY = boundedInteger(process.env.NAVER_OTA_OBSERVATION_CONCURRENCY, 2, 1, 3);
-const NAVER_BOOKING_DETAIL_CONCURRENCY = boundedInteger(process.env.NAVER_BOOKING_DETAIL_CONCURRENCY, 2, 1, 4);
-const NAVER_SCHEDULE_CONCURRENCY = boundedInteger(process.env.NAVER_SCHEDULE_CONCURRENCY, 4, 1, 8);
+const NAVER_OTA_OBSERVATION_CONCURRENCY = boundedInteger(process.env.NAVER_OTA_OBSERVATION_CONCURRENCY, WORKER_COLLECTION ? 1 : 2, 1, 3);
+const NAVER_BOOKING_DETAIL_CONCURRENCY = boundedInteger(process.env.NAVER_BOOKING_DETAIL_CONCURRENCY, WORKER_COLLECTION ? 1 : 2, 1, 4);
+const NAVER_SCHEDULE_CONCURRENCY = boundedInteger(process.env.NAVER_SCHEDULE_CONCURRENCY, WORKER_COLLECTION ? 2 : 4, 1, 8);
 const NAVER_SCHEDULE_DELAY_MS = boundedInteger(process.env.NAVER_SCHEDULE_DELAY_MS, 35, 0, 500);
 const NAVER_BOOKING_GRAPHQL_URL = "https://m.booking.naver.com/graphql";
 const NAVER_BOOKING_ID_FALLBACK = String(process.env.NAVER_BOOKING_ID_FALLBACK || "1") !== "0";
@@ -853,13 +859,42 @@ function parseCsvRows(text) {
 
 let historicalNaverBookingBusinessMap = null;
 
+async function loadHistoricalBookingContext() {
+  const contextFile = process.env.HISTORY_BOOKING_BUSINESS_CONTEXT_FILE;
+  if (!contextFile) return new Map();
+  try {
+    if (!path.isAbsolute(contextFile)) throw new Error();
+    const rows = JSON.parse((await fs.readFile(contextFile, "utf8")).replace(/^\uFEFF/, ""));
+    if (!Array.isArray(rows)) throw new Error();
+    const map = new Map();
+    for (const row of rows) {
+      if (!row || typeof row !== "object" || Array.isArray(row) || Object.keys(row).length !== 2
+        || ![row.placeId, row.businessId].every(value => typeof value === "string" && /^[1-9]\d{0,29}$/.test(value))) throw new Error();
+      if (map.has(row.placeId) && map.get(row.placeId).bookingBusinessId !== row.businessId) throw new Error();
+      map.set(row.placeId, {
+        bookingBusinessId: row.businessId,
+        bookingUrl: `https://m.booking.naver.com/booking/3/bizes/${row.businessId}/search`,
+        source: "historical",
+        sourceRun: "worker-context",
+      });
+    }
+    return map;
+  } catch {
+    // Neither contents nor the host's context-file path belong in worker logs.
+    const error = new Error("HISTORY_BOOKING_CONTEXT_INVALID");
+    error.code = "HISTORY_BOOKING_CONTEXT_INVALID";
+    throw error;
+  }
+}
+
 async function loadHistoricalNaverBookingBusinessMap() {
   if (historicalNaverBookingBusinessMap) return historicalNaverBookingBusinessMap;
-  const map = new Map();
+  let map = new Map();
   if (!NAVER_BOOKING_ID_FALLBACK) {
     historicalNaverBookingBusinessMap = map;
     return map;
   }
+  map = await loadHistoricalBookingContext();
 
   const root = path.resolve(OUTPUT_ROOT);
   let directories = [];
@@ -1325,7 +1360,7 @@ async function mapWithConcurrency(items, limit, mapper) {
     }
   }
   const workers = Array.from({ length: workerCount }, worker);
-  if (SCHEDULED_COLLECTION) {
+  if (GUARDED_COLLECTION) {
     // Drain already-started requests before writing the final response counters.
     const settled = await Promise.allSettled(workers);
     const failure = settled.find((result) => result.status === "rejected");
@@ -1639,7 +1674,7 @@ async function getNaverBookingBusinessFromPlacePage(placeId) {
 }
 
 async function postNaverBookingGraphql(operationName, query, variables, businessId, date = CHECK_IN) {
-  if (SCHEDULED_COLLECTION && naverScheduleBlockedStatus) {
+  if (GUARDED_COLLECTION && naverScheduleBlockedStatus) {
     const error = new Error(`NAVER_SCHEDULE_BLOCKED HTTP ${naverScheduleBlockedStatus}`);
     error.code = "NAVER_SCHEDULE_BLOCKED";
     error.statusCode = naverScheduleBlockedStatus;
@@ -1657,13 +1692,15 @@ async function postNaverBookingGraphql(operationName, query, variables, business
     },
     body: JSON.stringify({ operationName, query, variables }),
   });
-  if (SCHEDULED_COLLECTION && (response.status === 403 || response.status === 429)) {
+  if (GUARDED_COLLECTION && (response.status === 403 || response.status === 429)) {
     // Applies to the product-list request as well as the per-date schedule request.
     // Return this response normally so the schedule reader counts it only once.
     naverScheduleBlockedStatus = response.status;
   }
   const data = await response.json().catch(() => null);
-  return { status: response.status, data };
+  const blockedCode = GUARDED_COLLECTION && isNaverBookingRateLimit(data) ? "BookingAPITooManyRequests" : null;
+  if (blockedCode) naverScheduleBlockedStatus = response.status;
+  return { status: response.status, data, blockedCode };
 }
 
 async function getNaverBookingItems(bookingBusinessId) {
@@ -1681,7 +1718,7 @@ async function getNaverBookingItems(bookingBusinessId) {
 }
 
 async function getNaverDailySchedule(bookingBusinessId, bizItemId, date = CHECK_IN) {
-  if (SCHEDULED_COLLECTION && naverScheduleBlockedStatus) {
+  if (GUARDED_COLLECTION && naverScheduleBlockedStatus) {
     const error = new Error(`NAVER_SCHEDULE_BLOCKED HTTP ${naverScheduleBlockedStatus}`);
     error.code = "NAVER_SCHEDULE_BLOCKED";
     error.statusCode = naverScheduleBlockedStatus;
@@ -1695,7 +1732,7 @@ async function getNaverDailySchedule(bookingBusinessId, bizItemId, date = CHECK_
     bizItemId: String(bizItemId),
   };
   let responseCounted = false;
-  if (SCHEDULED_COLLECTION) scheduledCollectionDiagnostics.naverScheduleRequested += 1;
+  if (GUARDED_COLLECTION) scheduledCollectionDiagnostics.naverScheduleRequested += 1;
   try {
     const result = await postNaverBookingGraphql(
       "dailySchedule",
@@ -1706,13 +1743,13 @@ async function getNaverDailySchedule(bookingBusinessId, bizItemId, date = CHECK_
     );
     const day = result.data?.data?.schedule?.bizItemSchedule?.daily?.date?.[date] || null;
     const errors = result.data?.errors || null;
-    if (SCHEDULED_COLLECTION) {
+    if (GUARDED_COLLECTION) {
       const hasErrors = Array.isArray(errors) ? errors.length > 0 : Boolean(errors);
       const stock = day?.stock;
       const hasStock = ["number", "string"].includes(typeof stock) && String(stock).trim() !== "" && Number.isFinite(Number(stock));
       const succeeded = result.status >= 200 && result.status < 300 && !hasErrors
         && day && typeof day === "object" && !Array.isArray(day) && hasStock;
-      const blocked = result.status === 403 || result.status === 429;
+      const blocked = result.status === 403 || result.status === 429 || result.blockedCode === "BookingAPITooManyRequests";
       scheduledCollectionDiagnostics[succeeded ? "naverScheduleSucceeded" : "naverScheduleFailed"] += 1;
       responseCounted = true;
       if (blocked) {
@@ -1726,7 +1763,7 @@ async function getNaverDailySchedule(bookingBusinessId, bizItemId, date = CHECK_
     }
     return { status: result.status, day, errors };
   } catch (error) {
-    if (SCHEDULED_COLLECTION && !responseCounted) scheduledCollectionDiagnostics.naverScheduleFailed += 1;
+    if (GUARDED_COLLECTION && !responseCounted) scheduledCollectionDiagnostics.naverScheduleFailed += 1;
     throw error;
   }
 }
@@ -2709,7 +2746,7 @@ function applyCrawlerInventoryEvidence(result, placeId) {
 async function collectNaverBookingAvailability(placeId, cache, options = {}) {
   if (!placeId) return { status: "place_id 없음" };
   if (cache.has(placeId)) return cache.get(placeId);
-  if (SCHEDULED_COLLECTION && naverScheduleBlockedStatus) {
+  if (GUARDED_COLLECTION && naverScheduleBlockedStatus) {
     const error = new Error(`NAVER_SCHEDULE_BLOCKED HTTP ${naverScheduleBlockedStatus}`);
     error.code = "NAVER_SCHEDULE_BLOCKED";
     error.statusCode = naverScheduleBlockedStatus;
@@ -3009,6 +3046,7 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
   rows.forEach(setNaverInventoryAuditFields);
   return {
     limit: NAVER_BOOKING_STOCK_LIMIT,
+    eligible: uniquePlaceIds.size,
     collected,
     successful,
     skippedByMode,
@@ -3741,6 +3779,8 @@ async function buildWorkbook(filePath, sheets) {
 
 async function main() {
   await fs.mkdir(OUTPUT_DIR, { recursive: true });
+  // Validate transferred identifiers before starting any external request.
+  if (process.env.HISTORY_BOOKING_BUSINESS_CONTEXT_FILE) await loadHistoricalNaverBookingBusinessMap();
 
   console.log("Collecting Naver main...");
   const naver = await collectNaverMain();
@@ -4515,6 +4555,7 @@ async function main() {
       naverOtaSkippedByRank: naverOtaObservation.skippedByRank,
       naverOtaSkippedByLimit: naverOtaObservation.skippedByLimit,
       naverBookingStockChecked: naverBookingStock.collected,
+      naverBookingStockEligible: naverBookingStock.eligible,
       naverBookingStockSucceeded: naverBookingStock.successful,
       naverBookingStockSkippedByMode: naverBookingStock.skippedByMode,
       naverBookingStockSkippedByRank: naverBookingStock.skippedByRank,
@@ -4525,8 +4566,15 @@ async function main() {
       detailJsonFiles: detailJsonFiles.length,
     },
   };
-  if (SCHEDULED_COLLECTION) {
-    manifest.scheduledCollection = true;
+  addCollectionDiagnostics(manifest);
+  await fs.writeFile(path.join(OUTPUT_DIR, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+  console.log(JSON.stringify(manifest, null, 2));
+}
+
+function addCollectionDiagnostics(manifest) {
+  if (GUARDED_COLLECTION) {
+    if (SCHEDULED_COLLECTION) manifest.scheduledCollection = true;
+    if (WORKER_COLLECTION) manifest.workerCollection = true;
     manifest.naverBookingBlockedStatus = naverScheduleBlockedStatus;
     manifest.requestPacing = {
       ...naverRequestGate.diagnostics(),
@@ -4534,15 +4582,48 @@ async function main() {
       scheduleConcurrency: NAVER_SCHEDULE_CONCURRENCY,
       otaConcurrency: NAVER_OTA_OBSERVATION_CONCURRENCY,
       blockedStatus: naverRequestBlockedStatus || null,
+      blockedCode: naverRequestBlockedCode,
     };
     Object.assign(manifest.counts, scheduledCollectionDiagnostics);
     manifest.collectionQuality = inspectManifest(manifest);
   }
-  await fs.writeFile(path.join(OUTPUT_DIR, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
-  console.log(JSON.stringify(manifest, null, 2));
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
+main().catch(async (error) => {
+  if (GUARDED_COLLECTION) {
+    // A main-stage block may occur before ordinary artifact creation. Preserve
+    // its safe acceptance receipt without recording the raw response/error.
+    const manifest = {
+      outputDir: OUTPUT_DIR, collectedAt: new Date().toISOString(), keyword: RAW_KEYWORD,
+      searchMode: SEARCH_MODE, searchIntent: SEARCH_INTENT, searchRegion: SEARCH_REGION, searchScope: SEARCH_SCOPE,
+      collectionMode: COLLECTION_MODE, collectionPurpose: COLLECTION_PURPOSE,
+      sourceRole: SOURCE_ROLE, collectionSource: COLLECTION_SOURCE,
+      checkIn: CHECK_IN, checkOut: CHECK_OUT, adults: ADULTS,
+      detailRankRanges: DETAIL_RANK_RANGE_LABEL, productMode: PRODUCT_MODE,
+      bookingRangeDays: BOOKING_RANGE_DAYS, bookingRangePlaceLimit: BOOKING_RANGE_PLACE_LIMIT,
+      files: [], detailJsonFiles: [], fileRoles: {}, counts: {}, collectionFailed: true
+    };
+    addCollectionDiagnostics(manifest);
+    try {
+      await fs.mkdir(OUTPUT_DIR, { recursive: true });
+      // Preserve any files already written before failure in the same verified
+      // artifact transfer, without treating them as a successful collection.
+      async function retainedFiles(directory, prefix = "") {
+        const files = [];
+        for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+          const relative = prefix + entry.name;
+          if (entry.isDirectory()) files.push(...await retainedFiles(path.join(directory, entry.name), relative + "/"));
+          else if (entry.isFile() && relative !== "manifest.json") files.push(relative);
+        }
+        return files;
+      }
+      manifest.files = await retainedFiles(OUTPUT_DIR);
+      await fs.writeFile(path.join(OUTPUT_DIR, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+    } catch { /* Failure to save the receipt must not expose filesystem details. */ }
+    console.error("COLLECTION_FAILED", manifest.collectionQuality?.status || "failed");
+  } else {
+    console.error(error);
+    process.exit(1);
+  }
+  process.exitCode = 1;
 });

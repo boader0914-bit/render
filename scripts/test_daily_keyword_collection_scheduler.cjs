@@ -314,6 +314,8 @@ test("unreadable or invalid disk measurement fails closed", async () => {
 
 test("explicit 429, ENOSPC and administrator cancellation stop all remaining jobs", async () => {
   const errors = [
+    [Object.assign(new Error("worker offline"), { code: "COLLECTOR_WORKER_UNAVAILABLE" }), "collector_worker_unavailable"],
+    [Object.assign(new Error("lease expired"), { code: "COLLECTOR_WORKER_INTERRUPTED" }), "collector_worker_unavailable"],
     [Object.assign(new Error("throttled"), { statusCode: 429 }), "rate_limited"],
     [new Error("HTTP 429"), "rate_limited"],
     [new Error("NAVER_MAIN_BLOCKED HTTP 403"), "naver_main_http_403"],

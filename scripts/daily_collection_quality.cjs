@@ -15,18 +15,23 @@ function receipt(status, reason, counts = {}, extra = {}) {
 function inspectManifest(manifest, options = {}) {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) return receipt("failed", "manifest_missing");
   const expected = options.expected || options.payload || options;
+  const guardedCollection = manifest.scheduledCollection || manifest.workerCollection;
+  const manualWorker = manifest.workerCollection && !manifest.scheduledCollection;
   const counts = {};
   for (const key of ["naverOverall", "naverBookingStockChecked", "naverBookingStockSucceeded", "naverOtaObservationChecked", "naverOtaBlocked", "naverOtaFailed"]) {
     counts[key] = count(manifest.counts?.[key]);
   }
-  if (manifest.scheduledCollection) {
+  if (guardedCollection) {
     for (const key of ["naverScheduleRequested", "naverScheduleSucceeded", "naverScheduleFailed", "naverScheduleBlocked"]) {
       counts[key] = count(manifest.counts?.[key]);
     }
   }
   const attempts = Array.isArray(manifest.naverAttemptedQueries) ? manifest.naverAttemptedQueries : [];
   const requestBlockedStatus = count(manifest.requestPacing?.blockedStatus);
-  if (manifest.scheduledCollection && manifest.requestPacing?.enabled === true && [403, 429].includes(requestBlockedStatus)) {
+  if (guardedCollection && manifest.requestPacing?.blockedCode === "BookingAPITooManyRequests") {
+    return receipt("blocked", "naver_request_blocked", counts, { blockedReason: "naver_booking_api_too_many_requests" });
+  }
+  if (guardedCollection && manifest.requestPacing?.enabled === true && [403, 429].includes(requestBlockedStatus)) {
     return receipt("blocked", "naver_request_blocked", counts, { blockedReason: `naver_request_http_${requestBlockedStatus}` });
   }
   const blockedAttempt = attempts.find((attempt) => [403, 429].includes(count(attempt?.status)));
@@ -35,12 +40,13 @@ function inspectManifest(manifest, options = {}) {
     return receipt("blocked", status === 429 ? "naver_main_rate_limited" : "naver_main_access_blocked", counts, { blockedReason: `naver_main_http_${status}` });
   }
   const bookingBlockedStatus = count(manifest.naverBookingBlockedStatus);
-  if (manifest.scheduledCollection && [403, 429].includes(bookingBlockedStatus)) {
+  if (guardedCollection && [403, 429].includes(bookingBlockedStatus)) {
     return receipt("blocked", "naver_booking_blocked", counts, { blockedReason: `naver_booking_http_${bookingBlockedStatus}` });
   }
   if (counts.naverScheduleBlocked > 0) {
     return receipt("blocked", "naver_schedule_blocked", counts, { blockedReason: "naver_schedule_http_403_or_429" });
   }
+  if (manifest.collectionFailed) return receipt("failed", "collection_execution_failed", counts);
   if (attempts.some((attempt) => count(attempt?.status) !== null && (Number(attempt.status) < 200 || Number(attempt.status) >= 300))) {
     return receipt("failed", "naver_main_request_failed", counts);
   }
@@ -53,14 +59,22 @@ function inspectManifest(manifest, options = {}) {
   const expectedDays = count(expected.bookingRangeDays ?? expected.bookingDays);
   if (expectedDays !== null && count(manifest.bookingRangeDays) !== expectedDays) return receipt("failed", "booking_days_mismatch", counts);
   if (counts.naverOverall === 0) return receipt("failed", "no_main_results", counts);
-  if (counts.naverBookingStockChecked === 0 || counts.naverBookingStockSucceeded === 0) return receipt("failed", "no_successful_booking_results", counts);
-  if (counts.naverScheduleRequested === 0) return receipt("failed", "no_booking_schedule_requests", counts);
+  let bookingExpected = true;
+  if (manualWorker) {
+    const enabled = manifest.collectionProfileFlags?.collectBookingStock;
+    if (typeof enabled !== "boolean") return receipt("partial", "collection_profile_missing", counts);
+    counts.naverBookingStockEligible = count(manifest.counts?.naverBookingStockEligible);
+    bookingExpected = enabled && counts.naverBookingStockEligible !== 0;
+  }
+  if (bookingExpected && (counts.naverBookingStockChecked === 0 || counts.naverBookingStockSucceeded === 0)) return receipt("failed", "no_successful_booking_results", counts);
+  if (bookingExpected && counts.naverScheduleRequested === 0) return receipt("failed", "no_booking_schedule_requests", counts);
   if (Object.values(counts).some((value) => value === null) || !attempts.length || attempts.some((attempt) => count(attempt?.status) === null)) {
     return receipt("partial", "quality_metadata_missing", counts);
   }
   if (counts.naverBookingStockSucceeded > counts.naverBookingStockChecked) return receipt("failed", "inconsistent_booking_counts", counts);
+  if (manualWorker && counts.naverBookingStockChecked !== counts.naverBookingStockEligible) return receipt("partial", "booking_targets_incomplete", counts);
   if (counts.naverOtaBlocked + counts.naverOtaFailed > counts.naverOtaObservationChecked) return receipt("failed", "inconsistent_ota_counts", counts);
-  if (manifest.scheduledCollection) {
+  if (guardedCollection) {
     if (counts.naverScheduleSucceeded + counts.naverScheduleFailed !== counts.naverScheduleRequested || counts.naverScheduleBlocked > counts.naverScheduleFailed) {
       return receipt("failed", "inconsistent_schedule_counts", counts);
     }
@@ -73,7 +87,7 @@ function inspectManifest(manifest, options = {}) {
 }
 
 function allowsDerivedUpdates(manifest) {
-  return !manifest?.scheduledCollection || inspectManifest(manifest).status === "complete";
+  return !(manifest?.scheduledCollection || manifest?.workerCollection) || inspectManifest(manifest).status === "complete";
 }
 
 async function inspectResult(result, payload = {}) {

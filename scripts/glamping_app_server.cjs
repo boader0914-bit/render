@@ -20,6 +20,8 @@ const { createDemandStrengthBackfillScheduler } = require("./tourism_demand_stre
 const { createDailyKeywordCollectionScheduler, validateRequestPacing, effectiveRequestPacing } = require("./daily_keyword_collection_scheduler.cjs");
 const { inspectResult: inspectDailyCollectionResult, allowsDerivedUpdates } = require("./daily_collection_quality.cjs");
 const { createMasterDbDualWriteQueue } = require("./master_db_dual_write.cjs");
+const { createCollectorBroker } = require("./collector_broker.cjs");
+const { dispatchCollector, createHistoricalBookingContext } = require("./collector_dispatch.cjs");
 
 function loadOptionalTourismPeriodSummaryModule() {
   const filePath = path.join(__dirname, "tourism_datalab_period_summary.cjs");
@@ -261,6 +263,23 @@ let activeCrawlCancelRequested = false;
 let activeCrawlCancelReason = "";
 let activeCrawlSourceRole = "";
 let activeCrawlJob = null;
+let activeCollectorJobId = null;
+const COLLECTOR_EXECUTION_MODE = String(process.env.COLLECTOR_EXECUTION_MODE || "local").trim();
+if (!["local", "worker"].includes(COLLECTOR_EXECUTION_MODE)) throw new Error("invalid_collector_execution_mode");
+const collectorBroker = COLLECTOR_EXECUTION_MODE === "worker" ? createCollectorBroker({
+  dataDir: DATA_DIR,
+  outputsDir: OUTPUTS_DIR,
+  token: process.env.COLLECTOR_WORKER_TOKEN || "",
+  workerId: process.env.COLLECTOR_WORKER_ID || "staydatalab-collector",
+  onProgress: ({ id, stage }) => {
+    if (id === activeCollectorJobId && CRAWL_RUNTIME_STAGE_DEFS.some(item => item.key === stage)) {
+      recordCrawlRuntimeStage(activeCrawlJob, stage);
+    }
+  }
+}) : null;
+const collectorBrokerReady = collectorBroker ? collectorBroker.initialize() : Promise.resolve();
+collectorBrokerReady.catch(() => console.error("collector_broker_initialization_failed"));
+const historicalBookingContext = createHistoricalBookingContext({ outputsDir: OUTPUTS_DIR, parseCsv });
 let crawlJobSequence = 0;
 const crawlQueue = [];
 const dailyKeywordCollectionScheduler = createDailyKeywordCollectionScheduler({
@@ -1421,7 +1440,8 @@ function startCrawlJob(job) {
     }).catch((error) => {
       console.warn(`Could not record crawl timing: ${error.message || error}`);
     });
-    if (!failure && result?.runId && (!job.payload.scheduledCollection || result.collectionQuality?.status === "complete")) {
+    if (!failure && result?.runId && allowsDerivedUpdates(result.output)
+      && (!(job.payload.scheduledCollection || result.output?.workerCollection) || result.collectionQuality?.status === "complete")) {
       cleanupRecentCrawlResults();
       recentCrawlResults.set(job.signature, { createdAt: Date.now(), result });
       await ensureB2BSearchHistoryForJob(job, result).catch((error) => {
@@ -1456,6 +1476,7 @@ function startCrawlJob(job) {
     activeCrawlStartedAt = null;
     activeCrawlEstimate = null;
     activeCrawlChild = null;
+    activeCollectorJobId = null;
     activeCrawlCancelRequested = false;
     activeCrawlCancelReason = "";
     activeCrawlSourceRole = "";
@@ -17101,6 +17122,9 @@ function terminateActiveCrawlChild(reason = "사용자 요청으로 수집을 �
   }
   activeCrawlCancelRequested = true;
   activeCrawlCancelReason = reason;
+  if (collectorBroker && activeCollectorJobId) {
+    collectorBroker.cancel(activeCollectorJobId).catch(() => console.error("collector_cancel_failed"));
+  }
   if (activeCrawlJob) activeCrawlJob.status = "cancelling";
   const child = activeCrawlChild;
   if (!child || child.killed || !child.pid) {
@@ -17280,6 +17304,30 @@ async function runCrawlerInternal(payload) {
 
   const scriptPath = path.join(ROOT, "scripts", "gyeongnam_glamping_crawl.cjs");
 
+  if (COLLECTOR_EXECUTION_MODE === "worker") {
+    await collectorBrokerReady;
+    const expected = {
+      keyword, checkIn: plan.checkIn, checkOut: plan.checkOut,
+      collectionMode: plan.collectionMode, collectionPurpose: plan.collectionPurpose,
+      productMode: plan.productMode, detailRankRanges: plan.detailRankRanges,
+      bookingRangeDays: plan.bookingRangeDays, scheduledCollection: payload.scheduledCollection === true
+    };
+    const completed = await dispatchCollector({
+      broker: collectorBroker, keyword, env, payload: expected,
+      context: await historicalBookingContext(),
+      onJob: id => { activeCollectorJobId = id; },
+      isCancelled: () => activeCrawlCancelRequested
+    });
+    const output = completed.manifest;
+    const runId = completed.runId;
+    const collectionQuality = await inspectDailyCollectionResult({ output, runId }, expected);
+    if (collectionQuality?.status === "blocked") await collectorBroker.halt("COLLECTOR_PROVIDER_BLOCKED");
+    const history = runId && collectionQuality?.status === "complete" && allowsDerivedUpdates(output)
+      ? await appendHistoryForRun(runId).catch(() => ({ appended: 0, error: "history_append_failed" }))
+      : null;
+    return { output, runId, history, collectionQuality };
+  }
+
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [scriptPath, keyword], {
       cwd: ROOT,
@@ -17364,6 +17412,12 @@ async function route(req, res) {
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
 
   try {
+    if (reqUrl.pathname.startsWith("/api/collector-worker/")) {
+      if (!collectorBroker) return notFound(res);
+      await collectorBrokerReady;
+      if (await collectorBroker.handleHttp(req, res, reqUrl)) return;
+      return notFound(res);
+    }
     const publicStaticPaths = new Set([
       "/public-site.css",
       "/fonts/MaruBuri-Regular.otf",
@@ -17674,7 +17728,33 @@ async function route(req, res) {
 
     if (req.method === "GET" && reqUrl.pathname === "/api/crawl-status") {
       if (!requireAdminSession(session, req, res)) return;
-      return send(res, 200, currentCrawlStatus({ clientRequestId: reqUrl.searchParams.get("clientRequestId") }));
+      return send(res, 200, { ...currentCrawlStatus({ clientRequestId: reqUrl.searchParams.get("clientRequestId") }), executionMode: COLLECTOR_EXECUTION_MODE });
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/collector-status") {
+      if (!requireAdminSession(session, req, res)) return;
+      await collectorBrokerReady;
+      return send(res, 200, { executionMode: COLLECTOR_EXECUTION_MODE, ...(collectorBroker ? await collectorBroker.status() : {}) });
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/collector-reset-halt") {
+      if (!requireAdminSession(session, req, res)) return;
+      if (!collectorBroker) return notFound(res);
+      if (!/^application\/json(?:\s*;|$)/i.test(String(req.headers["content-type"] || ""))) {
+        return send(res, 415, { error: "JSON 형식으로 요청해 주세요." });
+      }
+      if (req.headers.origin) {
+        let origin;
+        try { origin = new URL(req.headers.origin); } catch {}
+        if (!origin || origin.host !== req.headers.host) return send(res, 403, { error: "현재 서비스에서 다시 요청해 주세요." });
+      }
+      const payload = await parseJsonBody(req);
+      if (payload?.confirm !== "resume-after-review" || Object.keys(payload).length !== 1) {
+        return send(res, 400, { error: "중단 원인을 확인한 뒤 보호 해제를 요청해 주세요." });
+      }
+      if (activeCrawlPromise || activeCrawlJob || crawlQueue.length) return send(res, 409, { error: "진행 또는 대기 중인 수집이 있습니다." });
+      await collectorBrokerReady;
+      return send(res, 200, await collectorBroker.resetHalt());
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/collection-schedule") {
