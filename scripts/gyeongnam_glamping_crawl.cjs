@@ -9,9 +9,11 @@ const COLLECTION_STARTED_AT = new Date().toISOString();
 const productCoverage = createProductCoverage();
 const SCHEDULED_COLLECTION = process.env.SCHEDULED_COLLECTION === "1";
 const WORKER_COLLECTION = process.env.COLLECTOR_WORKER_RUNTIME === "1";
-const GUARDED_COLLECTION = SCHEDULED_COLLECTION || WORKER_COLLECTION;
+const WEB_COLLECTION = process.env.COLLECTOR_WEB_RUNTIME === "1";
+if (WEB_COLLECTION && (WORKER_COLLECTION || SCHEDULED_COLLECTION)) throw new Error("COLLECTOR_ROLE_MISMATCH");
+const GUARDED_COLLECTION = SCHEDULED_COLLECTION || WORKER_COLLECTION || WEB_COLLECTION;
 const NAVER_REQUEST_PACING_ENABLED = GUARDED_COLLECTION && process.env.NAVER_REQUEST_PACING_ENABLED === "1";
-// Worker collection always observes blocks and records requests. Only an explicit
+// Managed collection always observes blocks and records requests. Only an explicit
 // job profile adds a global interval/concurrency cap; default throughput remains
 // bounded by the historical per-stage pools below.
 const NAVER_REQUEST_GUARD_ENABLED = GUARDED_COLLECTION;
@@ -48,7 +50,7 @@ const naverRequestGate = createNaverRequestGate({
     stop(error);
   },
 });
-// Every worker Naver fetch (including fallback pages) shares the block latch,
+// Every managed Naver fetch (including fallback pages) shares the block latch,
 // even without pacing. Other hosts and local collections keep their old behavior.
 const fetch = naverRequestGate.fetch;
 const scheduledCollectionDiagnostics = {
@@ -792,9 +794,12 @@ const RUN_TIME = new Date().toLocaleTimeString("en-GB", { timeZone: "Asia/Seoul"
 const RUN_STAMP = process.env.RUN_STAMP || `${RUN_DATE}_${RUN_TIME}`;
 const COLLECTOR_RUN_TOKEN = process.env.COLLECTOR_RUN_TOKEN || "";
 if (COLLECTOR_RUN_TOKEN && !/^[a-p]{24}$/.test(COLLECTOR_RUN_TOKEN)) throw new Error("COLLECTOR_RUN_TOKEN_INVALID");
-const COLLECTOR_WORKER_KEY = process.env.COLLECTOR_WORKER_KEY || "manual";
+const COLLECTOR_WORKER_KEY = process.env.COLLECTOR_WORKER_KEY || (WEB_COLLECTION ? "web" : "manual");
 const COLLECTOR_TRIGGER = process.env.COLLECTOR_TRIGGER || (SCHEDULED_COLLECTION ? "scheduled" : "manual");
-if (!["manual", "scheduled"].includes(COLLECTOR_WORKER_KEY) || !["manual", "scheduled"].includes(COLLECTOR_TRIGGER)) throw new Error("COLLECTOR_ROLE_MISMATCH");
+if (!["manual", "scheduled", "web"].includes(COLLECTOR_WORKER_KEY) || !["manual", "scheduled"].includes(COLLECTOR_TRIGGER)
+  || (COLLECTOR_WORKER_KEY === "web") !== WEB_COLLECTION || (WEB_COLLECTION && COLLECTOR_TRIGGER !== "manual")) throw new Error("COLLECTOR_ROLE_MISMATCH");
+const COLLECTOR_ENGINE = process.env.COLLECTOR_ENGINE || (WEB_COLLECTION ? "operating-web-v2" : "current-manual-v2");
+if (WEB_COLLECTION && COLLECTOR_ENGINE !== "operating-web-v2") throw new Error("COLLECTOR_ROLE_MISMATCH");
 const RUN_PREFIX = COLLECTOR_RUN_TOKEN ? `${province.slug}_${COLLECTOR_WORKER_KEY}_${COLLECTOR_RUN_TOKEN}` : province.slug;
 const OUTPUT_ROOT = process.env.OUTPUTS_DIR || process.env.DATA_DIR || "outputs";
 const OUTPUT_DIR = path.resolve(OUTPUT_ROOT, `${RUN_PREFIX}_glamping_${RUN_STAMP}`);
@@ -4616,13 +4621,18 @@ function addCollectionDiagnostics(manifest) {
     workerKey: COLLECTOR_WORKER_KEY,
     trigger: COLLECTOR_TRIGGER,
     jobId: process.env.COLLECTOR_JOB_ID || null,
-    collectorEngine: process.env.COLLECTOR_ENGINE || "current-manual-v2",
+    collectorRunToken: COLLECTOR_RUN_TOKEN || null,
+    collectorEngine: COLLECTOR_ENGINE,
     engineProvenance: { lineageCommit: "4e4e190", implementation: "gyeongnam_glamping_crawl.cjs", adapted: true },
     productCoverage: productCoverage.snapshot(),
   });
   if (GUARDED_COLLECTION) {
     if (SCHEDULED_COLLECTION) manifest.scheduledCollection = true;
     if (WORKER_COLLECTION) manifest.workerCollection = true;
+    if (WEB_COLLECTION) {
+      manifest.webCollection = true;
+      manifest.executionHost = { role: "operating_web", serviceId: process.env.RENDER_SERVICE_ID || null };
+    }
     manifest.naverBookingBlockedStatus = naverScheduleBlockedStatus;
     manifest.requestPacing = {
       ...naverRequestGate.diagnostics(),

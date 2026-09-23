@@ -91,6 +91,37 @@ function guardOnlyFixture(manualWorker = false) {
   return manifest;
 }
 
+test("operating web quality rejects blocks, missing schedules and incomplete coverage without worker impersonation", () => {
+  function webFixture() {
+    const manifest = guardOnlyFixture(true);
+    delete manifest.workerCollection;
+    delete manifest.scheduledCollection;
+    manifest.webCollection = true;
+    return manifest;
+  }
+  assert.equal(inspectManifest(webFixture()).status, "complete");
+  assert.equal(allowsDerivedUpdates(webFixture()), true);
+  for (const [status, code] of [[403, null], [429, null], [200, "BookingAPITooManyRequests"], [200, "NAVER_CAPTCHA"]]) {
+    const manifest = webFixture();
+    Object.assign(manifest.requestPacing, { blockedStatus: status, blockedCode: code });
+    manifest.collectionQuality = { status: "complete" };
+    assert.equal(inspectManifest(manifest).status, "blocked");
+    assert.equal(allowsDerivedUpdates(manifest), false);
+  }
+  const missing = webFixture();
+  delete missing.counts.naverScheduleRequested;
+  assert.equal(inspectManifest(missing).status, "partial");
+  assert.equal(allowsDerivedUpdates(missing), false);
+  const incomplete = webFixture();
+  incomplete.counts.naverBookingStockEligible += 1;
+  assert.equal(inspectManifest(incomplete).reason, "booking_targets_incomplete");
+  assert.equal(allowsDerivedUpdates(incomplete), false);
+  const noCoverage = webFixture();
+  noCoverage.schemaVersion = 2;
+  assert.equal(inspectManifest(noCoverage).reason, "product_coverage_missing");
+  assert.equal(allowsDerivedUpdates(noCoverage), false);
+});
+
 test("guard-only HTTP and BookingAPITooManyRequests blocks reject scheduled and manual worker results", () => {
   for (const manualWorker of [false, true]) {
     for (const [blockedStatus, blockedCode, reason] of [

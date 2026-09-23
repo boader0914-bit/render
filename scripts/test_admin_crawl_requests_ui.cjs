@@ -163,3 +163,28 @@ test("company review collection refreshes that company only on verified completi
     assert.equal(ui.context.state.adminDbInlineCollect.status, status === "complete" ? "complete" : "error");
   }
 });
+
+
+test("basic worker selection survives submit, request restore, status polling and company context", async () => {
+  const ui = harness();
+  ui.nodes.crawlWorkerKey.value = "web";
+  ui.context.state.pendingRecrawlContext = { type: "company", companyIds: ["company-123"], source: "admin_db_detail" };
+  ui.context.hasExplicitCompanyCollectionTarget = () => true;
+  await ui.context.submitCrawl({ preventDefault() {} });
+  const sent = JSON.parse(ui.calls.find(item => item.options?.method === "POST").options.body);
+  assert.equal(sent.workerKey, "web");
+  assert.equal(sent.recrawlContext.companyIds[0], "company-123");
+  assert.match(ui.els.crawlStatus.textContent, /기본워커/);
+  const id = sent.clientRequestId;
+  const pending = JSON.parse(ui.data.get("glamping:admin:crawl-requests:test-admin"));
+  assert.equal(pending.requests[0].workerKey, "web");
+  ui.context.state.adminCrawlRequests = {};
+  ui.context.restoreAdminCrawlRequests();
+  assert.equal(ui.context.state.adminCrawlRequests[id].workerKey, "web");
+  ui.context.response = url => url.startsWith("/api/crawl-requests/") ? { status: "pending" } : { active: true };
+  await ui.context.pollAdminCrawlRequests();
+  assert.ok(ui.calls.some(item => item.url === "/api/crawl-status?workerKey=web"));
+  assert.equal(ui.calls.filter(item => item.options?.method === "POST").length, 1);
+  await ui.context.finishAdminCrawlRequest(ui.context.state.adminCrawlRequests[id], { status: "complete", result: { runId: "web_glamping_20260923_230000", collectionQuality: { status: "complete" } } });
+  assert.match(ui.els.crawlStatus.textContent, /기본워커.*수집을 완료/);
+});

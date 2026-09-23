@@ -3396,7 +3396,7 @@ async function pollCrawlStatusUntilIdle(notifyIdle = false) {
     return;
   }
   try {
-    const workerKey = document.getElementById("crawlWorkerKey")?.value === "scheduled" ? "scheduled" : "manual";
+    const workerKey = selectedAdminCrawlWorkerKey();
     const status = await fetchJson(`/api/crawl-status?workerKey=${workerKey}`);
     if (status.active) {
       const stage = status.currentStage || {};
@@ -25050,6 +25050,7 @@ function adminDbConfirmCollectPlanHtml(row = {}) {
           <span>관리자 확인 수집</span>
           <strong>수집 조건을 먼저 고정합니다</strong>
           <small>신뢰도가 낮은 업체는 같은 기간·지정 범위로 다시 수집한 뒤 수량·가격·예약율 근거를 보강합니다.</small>
+          <small>실행 수집기: ${escapeHtml(adminCrawlWorkerLabel(selectedAdminCrawlWorkerKey()))} · 수집 메뉴에서 변경할 수 있습니다.</small>
         </div>
         <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_confirm_collect">수집 설정 적용</button>
       </div>
@@ -40810,6 +40811,15 @@ function adminCrawlStorageKey() {
   return owner ? `glamping:admin:crawl-requests:${owner}` : "";
 }
 
+function selectedAdminCrawlWorkerKey() {
+  const value = document.getElementById("crawlWorkerKey")?.value;
+  return ["manual", "web", "scheduled"].includes(value) ? value : "manual";
+}
+
+function adminCrawlWorkerLabel(key) {
+  return ({ manual: "0922 수동워커", web: "기본워커", scheduled: "0923 예약워커" })[key] || "수집기";
+}
+
 function syncAdminCrawlSubmitAvailability() {
   const button = els.crawlForm?.querySelector('button[type="submit"]');
   const hint = document.getElementById("crawlWorkerHint");
@@ -40861,7 +40871,7 @@ function restoreAdminCrawlRequests() {
   try {
     const saved = JSON.parse(window.localStorage.getItem(adminCrawlStorageKey()) || "null");
     if (saved?.version === 1 && Array.isArray(saved.requests)) for (const item of saved.requests.slice(-100)) {
-      if (!/^[a-zA-Z0-9_-]{8,120}$/.test(item?.requestId || "") || !["manual", "scheduled"].includes(item.workerKey)) continue;
+      if (!/^[a-zA-Z0-9_-]{8,120}$/.test(item?.requestId || "") || !["manual", "web", "scheduled"].includes(item.workerKey)) continue;
       state.adminCrawlRequests[item.requestId] = { requestId: item.requestId, workerKey: item.workerKey, keyword: String(item.keyword || "").slice(0, 160), createdAt: item.createdAt, status: "pending" };
     }
   } catch { /* Do not submit a new collection to repair missing browser storage. */ }
@@ -40882,7 +40892,7 @@ async function finishAdminCrawlRequest(request, receipt) {
   request.status = outcome.status;
   request.result = receipt.result;
   saveAdminCrawlRequests();
-  const worker = request.workerKey === "scheduled" ? "0923 예약워커" : "0922 수동워커";
+  const worker = adminCrawlWorkerLabel(request.workerKey);
   if (els.crawlStatus) els.crawlStatus.textContent = `${worker} · ${request.keyword}: ${outcome.message}${!outcome.success && receipt.message ? ` ${receipt.message}` : ""}`;
   setStatus(outcome.success ? "수집 결과 확인" : "수집 결과 확인 필요");
   if (outcome.success) await loadRuns(false);
@@ -40922,7 +40932,7 @@ async function pollAdminCrawlRequests() {
     }
     const remaining = Object.values(state.adminCrawlRequests || {}).filter(request => request.status === "pending");
     if (remaining.length) {
-      const selected = document.getElementById("crawlWorkerKey")?.value || "manual";
+      const selected = selectedAdminCrawlWorkerKey();
       const selectedPending = remaining.filter(request => request.workerKey === selected);
       let progress = { stages: crawlStageFallbacks() };
       try { if (selectedPending.length) progress = await fetchJson(`/api/crawl-status?workerKey=${selected}`); } catch { /* Receipt tracking remains authoritative if progress is temporarily unavailable. */ }
@@ -40962,7 +40972,7 @@ async function submitCrawl(event) {
   }
   const payload = currentCrawlFormPayload();
   payload.searchMode = resolvedMode;
-  payload.workerKey = document.getElementById("crawlWorkerKey")?.value === "scheduled" ? "scheduled" : "manual";
+  payload.workerKey = selectedAdminCrawlWorkerKey();
   payload.allowRepeat = document.getElementById("crawlAllowRepeat")?.checked === true;
   payload.repeatReason = payload.allowRepeat ? (document.getElementById("crawlRepeatReason")?.value || "").trim() : "";
   if (payload.allowRepeat && payload.repeatReason.length < 4) {
@@ -41006,7 +41016,7 @@ async function submitCrawl(event) {
     });
     if (["complete", "reused", "partial", "blocked", "failed", "interrupted"].includes(receipt.status)) await finishAdminCrawlRequest(request, receipt);
     else {
-      if (els.crawlStatus) els.crawlStatus.textContent = `${payload.workerKey === "scheduled" ? "0923 예약워커" : "0922 수동워커"}에 ${keyword} 수집을 접수했습니다. 최근 즉시수집에서 진행 상태와 결과를 확인하세요.`;
+      if (els.crawlStatus) els.crawlStatus.textContent = `${adminCrawlWorkerLabel(payload.workerKey)}에 ${keyword} 수집을 접수했습니다. 최근 즉시수집에서 진행 상태와 결과를 확인하세요.`;
       setStatus("수집 요청 접수");
     }
     if (payload.recrawlContext) state.pendingRecrawlContext = null;

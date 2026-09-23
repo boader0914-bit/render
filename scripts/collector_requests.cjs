@@ -27,7 +27,7 @@ function createCollectorRequests({dataDir,run,preflight=async()=>{},now=()=>new 
   ready ||= (async()=>{await fs.mkdir(dir,{recursive:true});
    for(const name of await fs.readdir(dir)){if(!name.endsWith('.json')||!ID.test(name.slice(0,-5)))continue;
     let row;try{row=JSON.parse(await fs.readFile(path.join(dir,name),'utf8'));}catch{throw fault('COLLECTION_RECEIPT_UNREADABLE','수집 요청 기록을 확인해야 합니다.');}
-    if(row.version!==1||row.requestId!==name.slice(0,-5)||!STATES.has(row.status)||!['manual','scheduled'].includes(row.workerKey))throw fault('COLLECTION_RECEIPT_INVALID','수집 요청 기록을 확인해야 합니다.');
+    if(row.version!==1||row.requestId!==name.slice(0,-5)||!STATES.has(row.status)||!['manual','scheduled','web'].includes(row.workerKey))throw fault('COLLECTION_RECEIPT_INVALID','수집 요청 기록을 확인해야 합니다.');
     if(row.status==='pending'){Object.assign(row,{status:'interrupted',finishedAt:stamp(),errorCode:'COLLECTOR_RESTART_INTERRUPTED',message:'서버 재시작으로 결과 확인이 중단되었습니다. 기존 수집 기록을 확인하세요.'});await write(row);}
     rows.set(row.requestId,row);
    }

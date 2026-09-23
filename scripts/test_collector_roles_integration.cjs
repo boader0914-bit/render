@@ -147,7 +147,8 @@ async function main() {
     const manual = start("manual", 1, { beforeSave: () => gate }), scheduled = start("scheduled", 2, { beforeSave: () => gate });
     await waitUntil(() => manual.spawned.length === 1 && scheduled.spawned.length === 1, "Independent workers did not both execute");
     const concurrent = await status();
-    assert.ok(concurrent.workers.every(worker => worker.activeJobId));
+    assert.ok(concurrent.workers.filter(worker=>worker.workerKey!=="web").every(worker => worker.activeJobId));
+    assert.equal(concurrent.workers.find(worker=>worker.workerKey==="web").activeJobId,null);
     release();
     const [a, b] = await Promise.all([finish(manual, first), finish(scheduled, second)]);
     for (const result of [a, b]) { assert.equal(result.response.status, 200, JSON.stringify(result.body)); assert.equal(result.body.collectionQuality.status, "complete", JSON.stringify(result.body.collectionQuality)); }

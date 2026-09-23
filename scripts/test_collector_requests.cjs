@@ -103,3 +103,17 @@ test("invalid and absent request IDs cannot read or create receipts", async t =>
   await assert.rejects(api.get("request-absent-1"), { statusCode: 404 });
   assert.deepEqual(await api.list(), []);
 });
+
+test("operating web receipts survive restart with their actual execution role", async t => {
+  const input={...payload("request-web-restart-1"),workerKey:"web"};
+  const {api,dataDir}=await fixture(t,{run:async()=>result("complete",{workerKey:"web"})});
+  assert.equal((await api.submit(input)).workerKey,"web");
+  assert.equal((await terminal(api,input.clientRequestId)).result.workerKey,"web");
+  let reruns=0;
+  const restarted=createCollectorRequests({dataDir,run:async()=>{reruns++;return result();}});
+  const saved=await restarted.get(input.clientRequestId);
+  assert.equal(saved.status,"complete");
+  assert.equal(saved.workerKey,"web");
+  assert.equal((await restarted.submit(input)).result.workerKey,"web");
+  assert.equal(reruns,0);
+});

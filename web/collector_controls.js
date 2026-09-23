@@ -2,6 +2,9 @@
   "use strict";
   const STATUS_LABELS = { pending: "접수 · 처리 중", queued: "대기", running: "처리 중", complete: "완료", completed: "완료", reused: "기존 자료 사용", partial: "일부 완료", failed: "실패", blocked: "접근 제한", interrupted: "중단", missed: "실행 시각 지남" };
   const WORKER_FRESH_MS = 90000;
+  const WORKER_LABELS = { manual: "0922 수동워커", web: "기본워커", scheduled: "0923 예약워커" };
+  function workerKey(value) { return Object.hasOwn(WORKER_LABELS, value) ? value : "manual"; }
+  function workerLabel(value) { return WORKER_LABELS[workerKey(value)]; }
   function keywordEntries(value) { return String(value || "").split(/\r?\n/).map(text => text.normalize("NFKC").trim()).filter(Boolean); }
   function keywordLines(value) {
     const seen = new Set();
@@ -33,13 +36,15 @@
     return Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
   }
   function workerFresh(worker, now = Date.now()) {
+    if (worker.workerKey === "web") return worker.connected === true;
     const seen = Date.parse(worker.workerLastSeenAt);
     return Number.isFinite(seen) && seen <= now + 30000 && now - seen <= WORKER_FRESH_MS;
   }
   function workerState(worker, now = Date.now()) {
     if (worker.halted) return "보호 중";
     if (!worker.configured) return "연결 설정 전";
-    if (!workerFresh(worker, now)) return worker.workerLastSeenAt ? "연결 갱신 지연" : "연결 확인 필요";
+    if (!workerFresh(worker, now)) return worker.workerKey !== "web" && worker.workerLastSeenAt ? "연결 갱신 지연" : "연결 확인 필요";
+    if (worker.ready === false) return "실행 확인 필요";
     if (worker.activeJobId || worker.crawl?.active) return "작업 중";
     if (workerQueueCount(worker) > 0) return "작업 대기";
     return "대기";
@@ -63,12 +68,13 @@
   function workerAvailability(data, key, now = Date.now()) {
     if (!data) return { ready: false, reason: "수집기 상태를 새로고침하여 연결을 확인하세요." };
     const workers = Array.isArray(data.workers) ? data.workers : [];
-    if (workers.some(worker => worker.halted && /PROVIDER.*BLOCK|PROVIDER_ACCESS/.test(worker.errorCode || ""))) return { ready: false, reason: "접근 제한 보호 중입니다. 두 수집기의 새 요청을 보류합니다." };
+    if (workers.some(worker => worker.halted && /PROVIDER.*BLOCK|PROVIDER_ACCESS/.test(worker.errorCode || ""))) return { ready: false, reason: "접근 제한 보호 중입니다. 모든 수집기의 새 요청을 보류합니다." };
     const worker = workers.find(item => item.workerKey === key);
     if (!worker?.configured) return { ready: false, reason: "수집기 연결 설정이 필요합니다. 조건은 미리 저장할 수 있습니다." };
     if (worker.halted) return { ready: false, reason: errorMessage(worker.errorCode) || "수집기 보호 상태를 먼저 확인하세요." };
+    if (worker.workerKey === "web" && !workerFresh(worker, now)) return { ready: false, reason: "운영 웹서버의 수집 연결을 확인하지 못했습니다. 상태를 새로고침하세요." };
     if (!workerFresh(worker, now)) return { ready: false, reason: worker.workerLastSeenAt ? "90초 동안 연결이 갱신되지 않았습니다. 새로고침 후 연결을 확인하세요." : "수집기의 첫 연결을 기다리고 있습니다." };
-    if (worker.ready === false) return { ready: false, reason: "수집기가 실행 준비 중입니다. 잠시 후 상태를 새로고침하세요." };
+    if (worker.ready === false) return { ready: false, reason: errorMessage(worker.errorCode) || "수집기가 실행 준비 중입니다. 잠시 후 상태를 새로고침하세요." };
     return { ready: true, reason: worker.activeJobId || worker.crawl?.active || workerQueueCount(worker) ? "실행하면 현재 작업 뒤에 대기합니다." : "지금 수집할 수 있습니다." };
   }
   function durationLabel(entry, now = Date.now()) {
@@ -82,7 +88,7 @@
     const seconds = Math.round(duration / 1000);
     return seconds >= 3600 ? `${Math.floor(seconds / 3600)}시간 ${Math.floor(seconds % 3600 / 60)}분` : seconds >= 60 ? `${Math.floor(seconds / 60)}분 ${seconds % 60}초` : `${seconds}초`;
   }
-  if (typeof module !== "undefined" && module.exports) module.exports = { keywordLines, duplicateKeywordCount, scheduleConfig, formatTime, workerState, workerQueueCount, workerAvailability, durationLabel, errorMessage, STATUS_LABELS };
+  if (typeof module !== "undefined" && module.exports) module.exports = { workerKey, workerLabel, keywordLines, duplicateKeywordCount, scheduleConfig, formatTime, workerState, workerQueueCount, workerAvailability, durationLabel, errorMessage, STATUS_LABELS };
   if (typeof document === "undefined") return;
   const byId = id => document.getElementById(id);
   const panel = byId("collectorControlsCard");
@@ -127,10 +133,10 @@
     syncSelectedWorker();
   }
   function syncSelectedWorker() {
-    const key = byId("crawlWorkerKey").value === "scheduled" ? "scheduled" : "manual";
+    const key = workerKey(byId("crawlWorkerKey").value);
     const availability = workerAvailability(workerData, key);
     const worker = workerData?.workers?.find(item => item.workerKey === key);
-    byId("crawlWorkerHint").textContent = `${key === "manual" ? "수동워커" : "예약워커"}에서 지금 한 번 수집합니다. ${availability.reason} 두 워커의 당일 자료를 먼저 확인합니다.`;
+    byId("crawlWorkerHint").textContent = `${workerLabel(key)}에서 지금 한 번 수집합니다. ${availability.reason} 모든 수집기의 당일 자료를 먼저 확인합니다.`;
     byId("crawlWorkerHint").dataset.ready = String(availability.ready);
     byId("crawlWorkerHint").dataset.workerKey = key;
     byId("crawlWorkerScheduleShortcut").hidden = key !== "scheduled";
@@ -161,14 +167,14 @@
     const container = byId("collectorWorkerStates");
     container.replaceChildren();
     const workers = Array.isArray(data?.workers) ? data.workers : [];
-    for (const key of ["manual", "scheduled"]) {
+    for (const key of ["manual", "web", "scheduled"]) {
       const worker = workers.find(item => item.workerKey === key) || { workerKey: key, configured: false };
       const card = node("article", "", "collector-worker");
       card.dataset.workerKey = key;
       const head = node("div", "", "collector-worker-head");
-      head.append(node("h4", key === "manual" ? "0922 수동워커" : "0923 예약워커"), node("span", workerState(worker), "state-badge"));
-      card.append(head, node("p", `${key === "manual" ? "즉시수집" : "즉시수집 · 예약수집"} · 대기 ${workerQueueCount(worker)}건`));
-      card.append(node("p", `최근 연결 ${formatTime(worker.workerLastSeenAt)} · 연결 시각은 수집 완료 시각이 아닙니다.`));
+      head.append(node("h4", workerLabel(key)), node("span", workerState(worker), "state-badge"));
+      card.append(head, node("p", `${key === "scheduled" ? "즉시수집 · 예약수집" : "즉시수집"} · 대기 ${workerQueueCount(worker)}건`));
+      card.append(node("p", key === "web" ? "운영 웹서버에서 직접 수집합니다." : `최근 연결 ${formatTime(worker.workerLastSeenAt)} · 연결 시각은 수집 완료 시각이 아닙니다.`));
       const current = worker.crawl?.activeJob || worker.crawl?.currentJob;
       if (current?.keyword) card.append(node("p", `현재 작업: ${current.keyword}${Number.isFinite(worker.crawl.elapsedSeconds) ? ` · ${durationLabel({ durationMs: worker.crawl.elapsedSeconds * 1000 })} 경과` : ""}`));
       const availability = workerAvailability(data, key);
@@ -228,7 +234,7 @@
     for (const request of entries.slice(0, 10)) {
       const row = node("article", "", "collector-history-row");
       const info = node("div", "");
-      info.append(node("strong", `${request.workerKey === "scheduled" ? "예약워커" : "수동워커"} · ${request.keyword || "키워드 확인 중"}`));
+      info.append(node("strong", `${workerLabel(request.workerKey)} · ${request.keyword || "키워드 확인 중"}`));
       info.append(node("small", `${formatTime(request.createdAt)}${durationLabel(request) ? ` · ${durationLabel(request)}${request.status === "pending" ? " 경과" : ""}` : ""}`));
       if (request.errorCode || request.message && ["failed", "blocked", "interrupted"].includes(request.status)) info.append(node("small", errorMessage(request.errorCode || request.message), "collector-worker-alert"));
       row.append(info, node("span", STATUS_LABELS[request.status] || "확인 필요", "state-badge"));

@@ -4,7 +4,7 @@
 .collector-choice-info .hint { overflow-wrap: anywhere; }
 .collector-choice-info button[hidden] { display: none; }
 .collector-controls-card { min-width: 0; }
-.collector-worker-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.collector-worker-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 12px; }
 .collector-worker { min-width: 0; padding: 14px; border: 1px solid var(--border-subtle); border-radius: var(--ui-radius-control); background: var(--surface-control); }
 .collector-worker-head { display: flex; justify-content: space-between; gap: 10px; align-items: start; }
 .collector-worker h4 { margin: 0; font-size: 14px; color: var(--text-primary); }

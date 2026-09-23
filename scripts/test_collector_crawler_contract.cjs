@@ -137,6 +137,74 @@ test("job-derived alphabetic prefixes preserve the legacy suffix and real collec
   assert.throws(() => harness({ env: { COLLECTOR_RUN_TOKEN: "20260101" } }), /COLLECTOR_RUN_TOKEN_INVALID/);
 });
 
+test("operating web collection preserves basic speed, role identity and complete quality evidence", async () => {
+  const token = "abcdefghijklmnopabcdefgh";
+  const crawler = harness({ env: { COLLECTOR_WEB_RUNTIME: "1", NAVER_REQUEST_PACING_ENABLED: "0",
+    COLLECTOR_RUN_TOKEN: token, COLLECTOR_JOB_ID: "collector_web_fixture", RENDER_SERVICE_ID: "srv-web-fixture" },
+    fetchImpl: async () => new Response(JSON.stringify({ data: { schedule: { bizItemSchedule: { daily: { date: { "2026-09-22": { stock: 0 } } } } } } })),
+  });
+  assert.deepEqual(Array.from(crawler.concurrency), [2, 4, 2]);
+  assert.match(path.basename(crawler.outputDir), /^gyeongnam_web_[a-p]{24}_glamping_20260922_\d{6}$/);
+  await crawler.getNaverDailySchedule("123", "456");
+  crawler.productCoverage.discover("123", [{ bizItemId: "456" }], [{ bizItemId: "456" }], ["2026-09-22"]);
+  crawler.productCoverage.record("123", [{ bizItemId: "456" }], 40, "2026-09-22", [{ bizItemId: "456", stock: 0 }]);
+  const manifest = manifestFixture();
+  delete manifest.workerCollection;
+  crawler.addCollectionDiagnostics(manifest);
+  assert.equal(manifest.webCollection, true);
+  assert.equal(manifest.workerCollection, undefined);
+  assert.equal(manifest.scheduledCollection, undefined);
+  assert.equal(manifest.executionHost.role, "operating_web");
+  assert.equal(manifest.executionHost.serviceId, "srv-web-fixture");
+  assert.equal(manifest.workerKey, "web");
+  assert.equal(manifest.trigger, "manual");
+  assert.equal(manifest.collectorRunToken, token);
+  assert.equal(manifest.jobId, "collector_web_fixture");
+  assert.equal(manifest.collectorEngine, "operating-web-v2");
+  assert.equal(manifest.counts.naverScheduleRequested, 1);
+  assert.equal(manifest.counts.naverScheduleSucceeded, 1);
+  assert.equal(manifest.requestPacing.pacingEnabled, false);
+  assert.equal(manifest.requestPacing.guardEnabled, true);
+  assert.equal(manifest.requestPacing.minIntervalMs, 0);
+  assert.equal(manifest.requestPacing.maxConcurrentRequests, null);
+  assert.equal(manifest.collectionQuality.status, "complete");
+  assert.equal(allowsDerivedUpdates(manifest), true);
+});
+
+test("web role rejects worker, schedule and engine identity mismatches before any request", () => {
+  for (const env of [
+    { COLLECTOR_WEB_RUNTIME: "1", COLLECTOR_WORKER_RUNTIME: "1" },
+    { COLLECTOR_WEB_RUNTIME: "1", SCHEDULED_COLLECTION: "1" },
+    { COLLECTOR_WEB_RUNTIME: "1", COLLECTOR_WORKER_KEY: "manual" },
+    { COLLECTOR_WEB_RUNTIME: "1", COLLECTOR_TRIGGER: "scheduled" },
+    { COLLECTOR_WEB_RUNTIME: "1", COLLECTOR_ENGINE: "archive-keyword-adapted-v2" },
+    { COLLECTOR_WORKER_KEY: "web" },
+  ]) assert.throws(() => harness({ env }), /COLLECTOR_ROLE_MISMATCH/);
+});
+
+test("web main-stage standalone captcha preserves a blocked receipt without a worker or scheduled marker", async () => {
+  let calls = 0;
+  const crawler = harness({ runFailure: true, env: { COLLECTOR_WEB_RUNTIME: "1", COLLECTOR_JOB_ID: "web-block-fixture" },
+    readdir: async () => [],
+    fetchImpl: async () => { calls++; return new Response('<html><body><div id="wtm-captcha-root"></div></body></html>'); },
+  });
+  await crawler.completion;
+  const saved = Array.from(crawler.writes.values());
+  assert.equal(calls, 1);
+  assert.equal(crawler.process.exitCode, 1);
+  assert.equal(saved.length, 1);
+  const manifest = JSON.parse(saved[0]);
+  assert.equal(manifest.webCollection, true);
+  assert.equal(manifest.workerCollection, undefined);
+  assert.equal(manifest.scheduledCollection, undefined);
+  assert.equal(manifest.jobId, "web-block-fixture");
+  assert.equal(manifest.executionHost.role, "operating_web");
+  assert.equal(manifest.collectionQuality.status, "blocked");
+  assert.equal(manifest.requestPacing.blockedCode, "NAVER_CAPTCHA");
+  assert.equal(allowsDerivedUpdates(manifest), false);
+  assert.doesNotMatch(saved[0] + crawler.logs.join(" "), /wtm-captcha-root|fixture-sensitive-body/);
+});
+
 test("real schedule reader preserves zero, missing and failure while coverage records limited products for every date", async () => {
   const items = Array.from({ length: 42 }, (_, index) => ({ bizItemId: String(index), name: `객실 ${index}`, bizItemSubType: "ACCOMMODATION_NIGHT" }));
   const crawler = harness({ env: { COLLECTOR_WORKER_RUNTIME: "1", NAVER_SCHEDULE_DELAY_MS: "0" }, fetchImpl: async (_url, init) => {

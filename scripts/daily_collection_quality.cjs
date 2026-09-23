@@ -39,8 +39,8 @@ function inspectProductCoverage(coverage, bookingExpected) {
 function inspectManifest(manifest, options = {}) {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) return receipt("failed", "manifest_missing");
   const expected = options.expected || options.payload || options;
-  const guardedCollection = manifest.scheduledCollection || manifest.workerCollection;
-  const manualWorker = manifest.workerCollection && !manifest.scheduledCollection;
+  const guardedCollection = manifest.scheduledCollection || manifest.workerCollection || manifest.webCollection;
+  const manualWorker = (manifest.workerCollection || manifest.webCollection) && !manifest.scheduledCollection;
   const counts = {};
   for (const key of ["naverOverall", "naverBookingStockChecked", "naverBookingStockSucceeded", "naverOtaObservationChecked", "naverOtaBlocked", "naverOtaFailed"]) {
     counts[key] = count(manifest.counts?.[key]);
@@ -121,7 +121,7 @@ function inspectManifest(manifest, options = {}) {
 }
 
 function allowsDerivedUpdates(manifest) {
-  return !(manifest?.scheduledCollection || manifest?.workerCollection) || inspectManifest(manifest).status === "complete";
+  return !(manifest?.scheduledCollection || manifest?.workerCollection || manifest?.webCollection) || inspectManifest(manifest).status === "complete";
 }
 
 async function inspectResult(result, payload = {}) {

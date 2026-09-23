@@ -1,5 +1,9 @@
 "use strict";
 
+// The observation parser is dependency-free. Reuse its standalone challenge
+// recognition so OTA and the process-wide guard agree without an import cycle.
+const { parseNaverPlaceHtmlObservation } = require("./naver_place_ota_observation.cjs");
+
 const DEFAULT_MIN_INTERVAL_MS = 500;
 
 function isNaverBookingRateLimit(data) {
@@ -15,7 +19,8 @@ function isNaverCaptchaResponse(body) {
   return /<title\b[^>]*>[^<]*(?:captcha|자동입력\s*방지|보안\s*확인|비정상적인\s*접근)[^<]*<\/title>/i.test(text)
     || /<(?:form|input|img)\b[^>]*(?:captcha|자동입력)/i.test(text)
     || /(?:자동입력\s*방지\s*문자|보안\s*문자.{0,40}입력|비정상적인\s*접근.{0,40}(?:감지|차단)|자동화된\s*요청.{0,40}(?:감지|차단))/i.test(text)
-    || /"(?:code|errorCode)"\s*:\s*"(?:CaptchaRequired|CAPTCHA_REQUIRED)"/i.test(text);
+    || /"(?:code|errorCode)"\s*:\s*"(?:CaptchaRequired|CAPTCHA_REQUIRED)"/i.test(text)
+    || parseNaverPlaceHtmlObservation(text).status === "blocked";
 }
 
 function isNaverRequest(input) {

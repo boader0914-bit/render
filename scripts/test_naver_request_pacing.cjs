@@ -292,6 +292,40 @@ test("HTTP 200 captcha stops all new Naver hosts and emits one safe cross-worker
   assert.equal(isNaverCaptchaResponse('<title>예약 상품</title><script src="captcha.js"></script><div>예약 상품</div>'), false);
 });
 
+test("standalone challenges stop every managed runtime while normal Apollo pages retain captcha library references", async () => {
+  const blockedBodies = [
+    '<html><body><div id="wtm-captcha-root"></div></body></html>',
+    '<html><body><section class="challenge-container"></section></body></html>',
+    '<html><body>접근이 제한되었습니다. 잠시 후 다시 시도해주세요.</body></html>',
+  ];
+  const ordinaryBodies = [
+    '<html><body><script>window.__APOLLO_STATE__={};</script><script src="https://ncpt.naver.com/captcha.js"></script><div id="wtm-captcha-root"></div></body></html>',
+    '<html><body class="place_on_pcm"><script src="WtmCaptcha.js"></script><div>예약 상품</div></body></html>',
+  ];
+  for (const env of [{ COLLECTOR_WEB_RUNTIME: "1" }, { COLLECTOR_WORKER_RUNTIME: "1" }, { SCHEDULED_COLLECTION: "1" }]) {
+    for (const body of blockedBodies) {
+      let calls = 0;
+      const logs = [];
+      const gate = crawlerGate(env, async () => { calls++; return new Response(body); }, logs);
+      await gate.fetch("https://pcmap.place.naver.com/first");
+      await assert.rejects(gate.fetch("https://m.place.naver.com/fallback"), /NAVER_REQUEST_BLOCKED/);
+      await assert.rejects(gate.fetch("https://m.booking.naver.com/graphql"), /NAVER_REQUEST_BLOCKED/);
+      assert.equal(calls, 1);
+      assert.equal(gate.blockedCode(), "NAVER_CAPTCHA");
+      assert.equal(gate.diagnostics().guardEnabled, true);
+      assert.equal(gate.diagnostics().pacingEnabled, false);
+      assert.deepEqual(logs, ["COLLECTOR_PROVIDER_BLOCKED"]);
+    }
+    for (const body of ordinaryBodies) {
+      const gate = crawlerGate(env, async () => new Response(body));
+      await gate.fetch("https://pcmap.place.naver.com/first");
+      await gate.fetch("https://m.booking.naver.com/next");
+      assert.equal(gate.diagnostics().stopped, false);
+      assert.equal(gate.diagnostics().requestCount, 2);
+    }
+  }
+});
+
 test("scheduled unpaced collection retains provider protection without a speed cap", async () => {
   const gate = crawlerGate({ SCHEDULED_COLLECTION: "1" }, async () => new Response("<title>비정상적인 접근</title>"));
   await gate.fetch("https://naver.com/first");

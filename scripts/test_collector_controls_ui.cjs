@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { test } = require("node:test");
-const { scheduleConfig, keywordLines, duplicateKeywordCount, workerState, workerQueueCount, workerAvailability, durationLabel, errorMessage } = require("../web/collector_controls.js");
+const { workerKey, workerLabel, scheduleConfig, keywordLines, duplicateKeywordCount, workerState, workerQueueCount, workerAvailability, durationLabel, errorMessage } = require("../web/collector_controls.js");
 const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8");
 const source = fs.readFileSync(path.join(__dirname, "../web/collector_controls.js"), "utf8");
 const config = { version: 1, enabled: false, timezone: "Asia/Seoul", repeat: "daily", firstDate: "2026-09-23", time: "14:00", keywords: ["포천글램핑"],
@@ -52,7 +52,7 @@ async function mockUi({ initial = config, failFirstRun = false, workers, history
     const payload = options.body ? JSON.parse(options.body) : undefined;
     calls.push({ url, method: options.method, payload });
     let result = {};
-    if (url === "/api/collector-status") result = { workers: workers || ["manual", "scheduled"].map(workerKey => ({ workerKey, configured: true, workerLastSeenAt: new Date().toISOString(), queued: 0 })) };
+    if (url === "/api/collector-status") result = { workers: workers || ["manual", "web", "scheduled"].map(workerKey => ({ workerKey, configured: true, connected: true, workerLastSeenAt: new Date().toISOString(), queued: 0 })) };
     else if (url === "/api/crawl-requests") { if (failRequests) throw new Error("requests_unavailable"); result = { requests }; }
     else if (url === "/api/worker-schedule" && options.method === "GET") result = snapshot();
     else if (url === "/api/worker-schedule" && options.method === "PUT") { saved = { ...saved, ...payload }; result = clone(saved); }
@@ -142,7 +142,7 @@ test("unconfigured, stale, and provider-protected workers prevent start but keep
   }
   const allBlocked = workerAvailability({ workers: [{ workerKey: "manual", configured: true, workerLastSeenAt: current, halted: true, errorCode: "COLLECTOR_PROVIDER_BLOCKED" }, { workerKey: "scheduled", configured: true, workerLastSeenAt: current }] }, "scheduled");
   assert.equal(allBlocked.ready, false);
-  assert.match(allBlocked.reason, /두 수집기/);
+  assert.match(allBlocked.reason, /모든 수집기/);
 });
 
 test("active schedule can always be paused when connection, expiry, or history requires attention", async () => {
@@ -252,4 +252,45 @@ test("HTML loads isolated scripts and styles and all script IDs exist", () => {
   const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]);
   assert.equal(new Set(ids).size, ids.length);
   for (const match of source.matchAll(/byId\("([^"]+)"\)/g)) assert.ok(ids.includes(match[1]), `missing_html_id_${match[1]}`);
+});
+
+
+test("web collector uses live server readiness, appears as basic worker and has no scheduling action", async () => {
+  const web = { workerKey: "web", configured: true, connected: true, ready: true, queued: 0 };
+  assert.equal(workerKey("web"), "web");
+  assert.equal(workerKey("unknown"), "manual");
+  assert.equal(workerLabel("web"), "기본워커");
+  assert.equal(workerState(web), "대기");
+  assert.equal(workerAvailability({ workers: [web] }, "web").ready, true);
+  assert.equal(workerAvailability({ workers: [{ ...web, connected: false }] }, "web").ready, false);
+  assert.equal(workerAvailability({ workers: [{ ...web, ready: false }] }, "web").ready, false);
+  assert.equal(workerAvailability({ workers: [web, { workerKey: "scheduled", halted: true, errorCode: "COLLECTOR_PROVIDER_BLOCKED" }] }, "web").ready, false);
+  const ui = await mockUi({ requests: [{ workerKey: "web", keyword: "시즌글램핑", status: "complete", result: { runId: "web_result" } }] });
+  const cards = ui.nodes.get("collectorWorkerStates").children;
+  assert.equal(cards.length, 3);
+  const card = cards.find(item => item.dataset.workerKey === "web");
+  assert.match(allText(card), /기본워커.*운영 웹서버에서 직접 수집/);
+  assert.doesNotMatch(allText(card), /예약수집|최근 연결/);
+  assert.equal(descendants(card).some(item => item.textContent === "예약 설정"), false);
+  await descendants(card).find(item => item.textContent === "즉시수집에 선택").event("click");
+  assert.equal(ui.nodes.get("crawlWorkerKey").value, "web");
+  assert.equal(ui.nodes.get("crawlWorkerHint").dataset.workerKey, "web");
+  assert.equal(ui.nodes.get("crawlWorkerHint").dataset.ready, "true");
+  assert.equal(ui.nodes.get("crawlWorkerScheduleShortcut").hidden, true);
+  assert.match(ui.nodes.get("crawlWorkerHint").textContent, /기본워커/);
+  assert.match(allText(ui.nodes.get("collectorRequestHistory")), /기본워커.*시즌글램핑/);
+  assert.equal(ui.events.at(-1).detail.workerKey, "web");
+  assert.ok(ui.calls.every(call => call.method === "GET"));
+  const selector = html.match(/<select id="crawlWorkerKey"[\s\S]*?<\/select>/)[0];
+  assert.match(selector, /<option value="manual">0922 수동워커<\/option>/);
+  assert.ok(selector.indexOf('value="manual"') < selector.indexOf('value="web"'));
+  assert.match(selector, /value="web">기본워커 · 운영 웹서버/);
+});
+
+
+test("basic worker unavailable storage explains its readiness and badge", () => {
+  const web = { workerKey: "web", configured: true, connected: true, ready: false, errorCode: "COLLECTOR_DISK_LOW" };
+  assert.equal(workerState(web), "실행 확인 필요");
+  assert.equal(workerAvailability({ workers: [web] }, "web").ready, false);
+  assert.match(workerAvailability({ workers: [web] }, "web").reason, /저장공간/);
 });
