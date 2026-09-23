@@ -16,6 +16,7 @@ const JOB_ENV_KEYS = new Set([
   "NAVER_REQUEST_PACING_ENABLED", "NAVER_REQUEST_MIN_INTERVAL_MS", "NAVER_REQUEST_MAX_CONCURRENCY", "NAVER_REQUEST_PACING_START_DATE",
   "NAVER_BOOKING_DETAIL_CONCURRENCY", "NAVER_SCHEDULE_CONCURRENCY", "NAVER_SCHEDULE_DELAY_MS", "NAVER_OTA_OBSERVATION_CONCURRENCY",
   "NAVER_OTA_OBSERVATION_LIMIT", "NAVER_BOOKING_ID_FALLBACK", "NAVER_COUPON_PAGE_FALLBACK", "REGIONAL_LIMIT", "REGIONAL_SEARCH_CONCURRENCY"
+  , "COLLECTOR_WORKER_KEY", "COLLECTOR_TRIGGER", "COLLECTOR_RUN_TOKEN", "COLLECTOR_JOB_ID", "COLLECTOR_ENGINE"
 ]);
 const RUNTIME_ENV_KEYS = new Set(["PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "LANG", "LC_ALL", "TZ", "NODE_PATH"]);
 const STAGES = new Map([
@@ -25,7 +26,7 @@ const STAGES = new Map([
   ["Checking Naver booking stock...", "inventory"], ["Writing outputs...", "save"]
 ]);
 const ID_PATTERN = /^[a-zA-Z0-9_-]{1,160}$/;
-const FAIL_CODES = new Set(["COLLECTOR_CANCELLED", "COLLECTOR_SHUTDOWN", "COLLECTOR_HEARTBEAT_FAILED", "COLLECTOR_CRAWL_FAILED", "COLLECTOR_ARTIFACT_INVALID", "COLLECTOR_UPLOAD_FAILED", "COLLECTOR_JOB_INVALID"]);
+const FAIL_CODES = new Set(["COLLECTOR_CANCELLED", "COLLECTOR_SHUTDOWN", "COLLECTOR_HEARTBEAT_FAILED", "COLLECTOR_CRAWL_FAILED", "COLLECTOR_ARTIFACT_INVALID", "COLLECTOR_UPLOAD_FAILED", "COLLECTOR_JOB_INVALID", "COLLECTOR_DISK_LOW"]);
 
 function failure(code, status = 0) { const error = new Error(code); error.code = code; error.status = status; return error; }
 function safeCode(error, fallback) { return FAIL_CODES.has(error?.code) ? error.code : fallback; }
@@ -46,9 +47,13 @@ function workerOptions(env = process.env, overrides = {}) {
   if ((!localHttp && url.protocol !== "https:") || url.username || url.password || url.search || url.hash || url.pathname !== "/") throw failure("COLLECTOR_CONFIGURATION_INVALID");
   const token = overrides.token ?? env.COLLECTOR_WORKER_TOKEN;
   const workerId = overrides.workerId || env.COLLECTOR_WORKER_ID || "staydatalab-collector";
+  const workerKey = overrides.workerKey ?? env.COLLECTOR_WORKER_KEY ?? null;
+  if (workerKey !== null && !["manual", "scheduled"].includes(workerKey)) throw failure("COLLECTOR_CONFIGURATION_INVALID");
+  const apiBasePath = overrides.apiBasePath || env.COLLECTOR_API_PATH || (workerKey === "scheduled" ? "/api/collector-worker-scheduled" : "/api/collector-worker");
+  if (!["/api/collector-worker", "/api/collector-worker-scheduled"].includes(apiBasePath)) throw failure("COLLECTOR_CONFIGURATION_INVALID");
   if (typeof token !== "string" || token.length < 32 || token.length > 4096 || /[\s\x00-\x1f\x7f]/.test(token) || typeof workerId !== "string" || !ID_PATTERN.test(workerId)) throw failure("COLLECTOR_CONFIGURATION_INVALID");
   return {
-    enabled: true, serverUrl: url.origin, token, workerId,
+    enabled: true, serverUrl: url.origin, token, workerId, workerKey, apiBasePath,
     cwd: path.resolve(overrides.cwd || path.join(__dirname, "..")),
     workDir: path.resolve(overrides.workDir || env.COLLECTOR_WORK_DIR || path.join(os.tmpdir(), "staydatalab-collector")),
     runtimeEnv: overrides.runtimeEnv || env,
@@ -62,6 +67,7 @@ function workerOptions(env = process.env, overrides = {}) {
     maxFiles: bounded(overrides.maxFiles, 2048, 1, 2048),
     maxFileBytes: bounded(overrides.maxFileBytes, 64 * 1024 * 1024, 1, 64 * 1024 * 1024),
     maxTotalBytes: bounded(overrides.maxTotalBytes, 256 * 1024 * 1024, 1, 256 * 1024 * 1024),
+    minFreeBytes: bounded(overrides.minFreeBytes, 200 * 1024 * 1024, 1, Number.MAX_SAFE_INTEGER),
     maxJobs: overrides.maxJobs ?? Infinity,
     fetchImpl: overrides.fetchImpl || globalThis.fetch,
     spawnImpl: overrides.spawnImpl || spawn,
@@ -102,7 +108,7 @@ async function request(options, route, { method = "POST", body, file, headers = 
     let stream;
     try {
       stream = file ? fs.createReadStream(file) : null;
-      const response = await options.fetchImpl(`${options.serverUrl}/api/collector-worker${route}`, {
+      const response = await options.fetchImpl(`${options.serverUrl}${options.apiBasePath || "/api/collector-worker"}${route}`, {
         method, redirect: "error", signal: controller.signal,
         headers: { Authorization: `Bearer ${options.token}`, Accept: "application/json", "Content-Type": file ? "application/octet-stream" : "application/json", ...headers },
         body: stream || JSON.stringify(body ?? {}), ...(stream ? { duplex: "half" } : {})
@@ -125,7 +131,7 @@ async function request(options, route, { method = "POST", body, file, headers = 
   throw failure("COLLECTOR_REQUEST_FAILED");
 }
 
-function validateJob(job) {
+function validateJob(job, options = {}) {
   if (!job || typeof job.id !== "string" || !ID_PATTERN.test(job.id) || typeof job.keyword !== "string" || !job.keyword.trim() || job.keyword.length > 160 || /[\x00-\x1f\x7f]/.test(job.keyword)
     || typeof job.leaseToken !== "string" || !/^[a-zA-Z0-9_-]{24,256}$/.test(job.leaseToken)
     || !Number.isSafeInteger(job.leaseMs) || job.leaseMs < 1000 || job.leaseMs > 60000
@@ -135,6 +141,17 @@ function validateJob(job) {
   }
   if (job.env.RUN_STAMP && !/^[a-zA-Z0-9_-]{1,100}$/.test(job.env.RUN_STAMP)) throw failure("COLLECTOR_JOB_INVALID");
   if (job.env.SCHEDULED_COLLECTION && !["0", "1"].includes(job.env.SCHEDULED_COLLECTION)) throw failure("COLLECTOR_JOB_INVALID");
+  if (job.workerKey) {
+    const engine = job.workerKey === "scheduled" ? "archive-keyword-adapted-v2" : "current-manual-v2";
+    if (!["manual", "scheduled"].includes(job.workerKey) || job.workerKey !== (options.workerKey || "manual")
+      || !["manual", "scheduled"].includes(job.trigger) || (job.workerKey === "manual" && job.trigger !== "manual")
+      || job.env.COLLECTOR_WORKER_KEY !== job.workerKey || job.env.COLLECTOR_TRIGGER !== job.trigger
+      || job.env.COLLECTOR_JOB_ID !== job.id || job.env.COLLECTOR_ENGINE !== engine
+      || !/^[a-p]{24}$/.test(job.env.COLLECTOR_RUN_TOKEN || "")
+      || (job.env.SCHEDULED_COLLECTION === "1") !== (job.trigger === "scheduled")) throw failure("COLLECTOR_JOB_INVALID");
+  } else if (options.workerKey === "scheduled" || ["COLLECTOR_WORKER_KEY", "COLLECTOR_TRIGGER", "COLLECTOR_RUN_TOKEN", "COLLECTOR_JOB_ID", "COLLECTOR_ENGINE"].some(key => job.env[key] !== undefined)) {
+    throw failure("COLLECTOR_JOB_INVALID");
+  }
   const rows = job.context?.historicalBookingBusinesses ?? [];
   if (!Array.isArray(rows) || rows.length > 20000) throw failure("COLLECTOR_JOB_INVALID");
   const seen = new Set();
@@ -147,9 +164,11 @@ function validateJob(job) {
 }
 
 async function prepareJob(job, options) {
-  const context = validateJob(job);
+  const context = validateJob(job, options);
   await fsp.mkdir(options.workDir, { recursive: true, mode: 0o700 });
   const root = await fsp.realpath(options.workDir);
+  const storage = await fsp.statfs(root);
+  if (Number(storage.bavail) * Number(storage.bsize) < options.minFreeBytes + options.maxTotalBytes) throw failure("COLLECTOR_DISK_LOW");
   const directory = await fsp.mkdtemp(path.join(root, "job-"));
   const locations = Object.fromEntries(["data", "outputs", "config", "tmp"].map((name) => [name, path.join(directory, name)]));
   await Promise.all(Object.values(locations).map((dir) => fsp.mkdir(dir, { mode: 0o700 })));
@@ -163,13 +182,16 @@ async function prepareJob(job, options) {
   return { directory, root, ...locations, env };
 }
 
-function stageReader(update) {
+function stageReader(update, providerBlocked = () => {}) {
   let tail = "";
   return (chunk) => {
     tail += chunk.toString("utf8");
     const lines = tail.split(/\r?\n/);
     tail = lines.pop().slice(-512);
-    for (const line of lines) if (STAGES.has(line.trim())) update(STAGES.get(line.trim()));
+    for (const line of lines) {
+      if (STAGES.has(line.trim())) update(STAGES.get(line.trim()));
+      if (line.trim() === "COLLECTOR_PROVIDER_BLOCKED") providerBlocked();
+    }
   };
 }
 
@@ -227,6 +249,7 @@ async function runJob(job, options) {
   if (!options?.enabled) throw failure("COLLECTOR_CONFIGURATION_INVALID");
   let prepared, child, childDone, childClosed = true, stopCode = "", stage = "rank_main";
   let heartbeatTimer, deadlineTimer, escalationTimer, heartbeatPending;
+  let providerBlocked = false;
   const controller = new AbortController();
   const stop = (code) => {
     if (!stopCode) stopCode = code;
@@ -246,7 +269,7 @@ async function runJob(job, options) {
   }
   async function heartbeat() {
     try {
-      const reply = await request(options, `${jobPath}/heartbeat`, { body: { ...credentials, stage }, signal: controller.signal,
+      const reply = await request(options, `${jobPath}/heartbeat`, { body: { ...credentials, stage, ...(providerBlocked ? { providerBlocked: true } : {}) }, signal: controller.signal,
         timeoutMs: Math.min(options.heartbeatTimeoutMs, Math.floor(job.leaseMs / 3)) });
       if (typeof reply?.cancelled !== "boolean") throw failure("COLLECTOR_HEARTBEAT_FAILED");
       if (reply.cancelled) { stop("COLLECTOR_CANCELLED"); return; }
@@ -264,14 +287,21 @@ async function runJob(job, options) {
     await heartbeat();
     if (stopCode) throw failure(stopCode);
     nextHeartbeat();
-    child = options.spawnImpl(process.execPath, [path.join(options.cwd, "scripts", "gyeongnam_glamping_crawl.cjs"), job.keyword],
+    const collectorScript = job.workerKey === "scheduled" ? "archive_keyword_collector.cjs" : "gyeongnam_glamping_crawl.cjs";
+    child = options.spawnImpl(process.execPath, [path.join(options.cwd, "scripts", collectorScript), job.keyword],
       { cwd: prepared.directory, env: prepared.env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, shell: false });
     childClosed = false;
     childDone = new Promise((resolve) => {
       child.once("error", () => { stop("COLLECTOR_CRAWL_FAILED"); });
       child.once("close", (code, signal) => { childClosed = true; clearTimeout(escalationTimer); resolve({ code, signal }); });
     });
-    child.stdout?.on("data", stageReader((value) => { stage = value; }));
+    child.stdout?.on("data", stageReader((value) => { stage = value; }, () => {
+      if (providerBlocked || controller.signal.aborted) return;
+      providerBlocked = true;
+      // The marker is emitted by the crawler's global stop gate, not inferred from log text.
+      // Notify immediately; the already-stopped child may still save its failure receipt.
+      heartbeatPending = heartbeat();
+    }));
     child.stderr?.resume();
     const result = await childDone;
     if (stopCode) throw failure(stopCode);
@@ -350,14 +380,15 @@ async function runWorker(options = workerOptions()) {
   let jobs = 0;
   while (!options.signal?.aborted && jobs < options.maxJobs) {
     let reply;
-    try { reply = await request(options, "/claim", { body: { workerId: options.workerId, protocolVersion: PROTOCOL_VERSION }, signal: options.signal }); }
+    try { reply = await request(options, "/claim", { body: { workerId: options.workerId, protocolVersion: PROTOCOL_VERSION,
+      ...(options.workerKey ? { workerKey: options.workerKey } : {}) }, signal: options.signal }); }
     catch { if (options.signal?.aborted) break; throw failure("COLLECTOR_CLAIM_FAILED"); }
     if (!reply || !Object.hasOwn(reply, "job")) throw failure("COLLECTOR_RESPONSE_INVALID");
     if (reply.job === null) { try { await sleep(options.pollMs, options.signal); } catch { break; } continue; }
     const result = await runJob(reply.job, options);
     jobs++;
     if (!result.acknowledged) throw failure("COLLECTOR_TERMINAL_ACK_REQUIRED");
-    if (result.status === "failed" && result.code !== "COLLECTOR_CANCELLED") break;
+    if (result.status === "failed" && result.code !== "COLLECTOR_CANCELLED") return { enabled: true, jobs, halted: true, code: result.code };
   }
   return { enabled: true, jobs, stopped: Boolean(options.signal?.aborted) };
 }
@@ -372,4 +403,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch(() => { process.stderr.write("collector_worker_stopped\n"); process.exitCode = 1; });
-module.exports = { PROTOCOL_VERSION, JOB_ENV_KEYS, workerOptions, runWorker, runJob, artifactsFor, stageReader };
+module.exports = { PROTOCOL_VERSION, JOB_ENV_KEYS, workerOptions, runWorker, runJob, artifactsFor, stageReader, validateJob };

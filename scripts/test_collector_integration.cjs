@@ -82,11 +82,16 @@ globalThis.fetch = () => denied('fetch');
 }
 
 async function writeMockArtifacts(env, keyword, index, partial) {
-  const runId = `fixture_glamping_20260922_20000${index}`;
+  const runId = fixtureRunId(env, index);
   const runDir = path.join(env.OUTPUTS_DIR, runId);
   const csv = "fixture_네이버전체순위.csv";
   const manifest = {
-    outputDir: runDir, collectedAt: `2026-09-22T11:00:0${index}.000Z`, keyword,
+    outputDir: runDir, collectedAt: new Date().toISOString(), keyword,
+    schemaVersion: 2, workerKey: env.COLLECTOR_WORKER_KEY, trigger: env.COLLECTOR_TRIGGER,
+    jobId: env.COLLECTOR_JOB_ID, collectorEngine: env.COLLECTOR_ENGINE,
+    productCoverage: { version: 1, discovered: 2, eligible: 2, excluded: 0, queried: 2, truncated: 0,
+      targets: [{ discovered: 2, eligible: 2, excluded: 0, queried: 2, truncated: 0, expectedDays: 1,
+        days: [{ date: env.CHECK_IN, eligible: 2, queried: 2, succeeded: partial ? 1 : 2, failed: partial ? 1 : 0, truncated: 0 }] }] },
     workerCollection: true, ...(env.SCHEDULED_COLLECTION === "1" ? { scheduledCollection: true } : {}),
     collectionProfile: "revenue_detail_deep",
     collectionProfileFlags: { collectBookingStock: true, collectWeeklyRange: true, collectRegional: true, collectOta: true },
@@ -111,6 +116,10 @@ async function writeMockArtifacts(env, keyword, index, partial) {
   await fsp.writeFile(path.join(runDir, "manifest.json"), JSON.stringify(manifest));
   await fsp.writeFile(path.join(runDir, csv), "place_id,업체명,전체순위,overall_rank,주소,네이버예약사업자ID,예약,네이버예약재고수집상태\n123456,통합시험숙소,1,1,경기도 가평군,987654,Y,성공\n");
   return { runId, runDir, csv };
+}
+
+function fixtureRunId(env, index) {
+  return `fixture_${env.COLLECTOR_WORKER_KEY}_${env.COLLECTOR_RUN_TOKEN}_glamping_${env.CHECK_IN.replaceAll("-", "")}_${String(200000 + index).padStart(6, "0")}`;
 }
 
 function mockWorker(base, tempRoot, index, partial) {
@@ -230,7 +239,7 @@ async function main() {
       assert.ok(worker.requests.some(item => item.method === "PUT" && item.path.endsWith("/files")));
       assert.ok(worker.requests.some(item => item.path.endsWith("/complete")));
       assert.equal(worker.events.at(-1)?.event, "collector_job_completed");
-      const runId = `fixture_glamping_20260922_20000${index}`;
+      const runId = fixtureRunId(worker.spawned[0].config.env, index);
       const canonical = path.join(outputsDir, runId);
       assert.equal(result.body.runId, runId);
       assert.equal(result.body.output.outputDir, canonical);
@@ -268,12 +277,13 @@ async function main() {
     assert.equal(blockedResult.response.status, 200, JSON.stringify(blockedResult.body));
     assert.equal(blockedResult.body.collectionQuality.status, "blocked");
     assert.equal(blockedResult.body.history, null);
-    const blockedDir = path.join(outputsDir, "fixture_glamping_20260922_200003");
+    const blockedRunId = fixtureRunId(blockedWorker.spawned[0].config.env, 3);
+    const blockedDir = path.join(outputsDir, blockedRunId);
     const blockedManifest = JSON.parse(await fsp.readFile(path.join(blockedDir, "manifest.json"), "utf8"));
     assert.equal(blockedManifest.outputDir, blockedDir);
     assert.equal(blockedManifest.collectionFailed, true);
     assert.equal(blockedManifest.requestPacing.blockedCode, "BookingAPITooManyRequests");
-    assert.equal((await request(base, "/api/runs/fixture_glamping_20260922_200003", admin)).response.status, 200);
+    assert.equal((await request(base, `/api/runs/${blockedRunId}`, admin)).response.status, 200);
     assert.deepEqual(await Promise.all(derivedFiles.map(file => fsp.readFile(file).catch(error => { if (error.code === "ENOENT") return null; throw error; }))), before);
     await waitUntil(async () => !(await request(base, "/api/crawl-status", admin)).body.active, "Blocked job remained active");
     const finalStatus = await request(base, "/api/collector-status", admin);
@@ -282,7 +292,7 @@ async function main() {
     assert.equal(finalStatus.body.halted, true);
     assert.equal(finalStatus.body.errorCode, "COLLECTOR_PROVIDER_BLOCKED");
     const refused = await request(base, "/api/crawl", admin, jsonPost({ keyword: "태안글램핑", clientRequestId: "collector-after-block" }));
-    assert.equal(refused.response.status, 503);
+    assert.equal(refused.response.status, 409);
     const resetRoute = "/api/collector-reset-halt";
     const resetBody = { confirm: "resume-after-review" };
     assert.equal((await request(base, resetRoute, "", jsonPost(resetBody))).response.status, 401);
@@ -297,7 +307,7 @@ async function main() {
     assert.equal(resetStatus.halted, false);
     assert.equal(resetStatus.queued, 0);
     assert.equal(resetStatus.activeJobId, null);
-    assert.equal((await fsp.readdir(outputsDir)).filter(name => name.startsWith("fixture_glamping_")).length, 3);
+    assert.equal((await fsp.readdir(outputsDir)).filter(name => /^fixture_manual_[a-p]{24}_glamping_/.test(name)).length, 3);
     assert.equal(fs.existsSync(attemptsPath), false);
     console.log("collector integration: authenticated admin -> real HTTP worker -> canonical artifacts, partial hold, failed-child block receipt, durable halt, machine auth and no-local-fallback passed; crawler mocked, external IO forbidden");
   } finally {
@@ -312,4 +322,5 @@ async function main() {
   }
 }
 
-main().catch(error => { console.error(error.stack || error); process.exitCode = 1; });
+if (require.main === module) main().catch(error => { console.error(error.stack || error); process.exitCode = 1; });
+module.exports = { freePort, request, jsonPost, login, waitUntil, stopChild, executionGuard, writeMockArtifacts, fixtureRunId };

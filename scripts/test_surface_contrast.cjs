@@ -1269,11 +1269,14 @@ const submitCrawlBlock = app.slice(
   app.indexOf("function bindEvents()", app.indexOf("async function submitCrawl(event)"))
 );
 const broadPolicyBindEventsBlock = app.slice(app.indexOf("function bindEvents()"));
+const asyncCrawlFinishBlock = app.slice(app.indexOf("async function finishAdminCrawlRequest("), app.indexOf("async function pollAdminCrawlRequests("));
+const asyncCrawlOpenBlock = app.slice(app.indexOf("async function openAdminCrawlResult("), app.indexOf("function adminCrawlRequestOutcome("));
 
 assert(
-  submitCrawlBlock.includes('if (completedRecrawlContext?.source === "admin_db_detail")')
-    && /if \(completedRecrawlContext\?\.source === "admin_db_detail"\)[\s\S]*?\} else \{\s*setActiveTab\("rank"\);\s*\}/.test(submitCrawlBlock),
-  "completed administrator collection must open the newly classified current-run analysis instead of the industry briefing",
+  !asyncCrawlFinishBlock.includes("setActiveTab(")
+    && asyncCrawlOpenBlock.includes("await loadRun(runId)") && asyncCrawlOpenBlock.includes('setActiveTab("rank")')
+    && app.includes('window.addEventListener("collector:open-result", openAdminCrawlResult)'),
+  "async completion must preserve current work and explicit result opening must load that run into collection analysis",
   failures
 );
 
@@ -2960,9 +2963,10 @@ assert(
     && inlineRecrawlBlock.includes("if (!inlineDetail) focusAdminCrawlProgress();")
     && submitCrawlBlock.includes('payload.recrawlContext?.source === "admin_db_detail"')
     && submitCrawlBlock.includes('status: "running"')
-    && submitCrawlBlock.includes('status: "complete"')
-    && submitCrawlBlock.includes('status: "error"')
-    && submitCrawlBlock.includes('if (completedRecrawlContext?.source === "admin_db_detail")'),
+    && asyncCrawlFinishBlock.includes('status: outcome.success ? "complete" : "error"')
+    && asyncCrawlFinishBlock.includes('if (context.source === "admin_db_detail")')
+    && asyncCrawlFinishBlock.includes('if (outcome.success) await loadAdminDbCompanyDetail(companyId, { force: true })')
+    && !asyncCrawlFinishBlock.includes("setActiveTab("),
   "company auto collection must run and report progress without leaving the company review screen",
   failures
 );

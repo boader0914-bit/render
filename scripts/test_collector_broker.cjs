@@ -156,6 +156,49 @@ test("cancellation keeps lease exclusivity until the worker acknowledges stoppin
   assert.equal((await broker.status()).halted, false);
 }));
 
+test("schedule pause withdraws only its queued job and preserves active lease and unrelated queue", () => fixture(async ({ broker, dataDir }) => {
+  const active = await claimed(broker);
+  const withdrawn = await broker.submit(jobInput());
+  const remaining = await broker.submit(jobInput());
+  const receipt = await broker.cancelQueued(withdrawn.id, "COLLECTOR_SCHEDULE_PAUSED");
+  assert.equal(receipt.status, "cancelled");
+  assert.equal(receipt.errorCode, "COLLECTOR_SCHEDULE_PAUSED");
+  assert.equal((await broker.getJob(active.id)).status, "leased");
+  assert.equal((await broker.getJob(remaining.id)).status, "queued");
+  assert.equal((await broker.status()).activeJobId, active.id);
+  assert.equal((await broker.status()).halted, false);
+  assert.equal((await broker.status()).queued, 1);
+  assert.equal((await request(broker, "POST", `/api/collector-worker/jobs/${active.id}/heartbeat`, identity(active))).body.cancelled, false);
+  assert.equal((await request(broker, "POST", "/api/collector-worker/claim", { workerId: WORKER, protocolVersion: 1 })).body.job, null);
+  const ledger = JSON.parse(await fs.readFile(path.join(dataDir, "collector", "jobs.json"), "utf8"));
+  const stored = ledger.jobs.find(job => job.id === withdrawn.id);
+  assert.equal(stored.status, "cancelled");
+  assert.equal(stored.env, undefined);
+  assert.equal(stored.context, undefined);
+  assert.equal(stored.payload, undefined);
+  assert.equal((await broker.cancelQueued(withdrawn.id, "SECOND_PAUSE")).errorCode, "COLLECTOR_SCHEDULE_PAUSED");
+  const bundle = artifacts();
+  await uploadArtifacts(broker, active, bundle);
+  assert.equal((await finish(broker, active, bundle)).status, 200);
+  const next = (await request(broker, "POST", "/api/collector-worker/claim", { workerId: WORKER, protocolVersion: 1 })).body.job;
+  assert.equal(next.id, remaining.id);
+}));
+
+test("a claim winning the pause race remains leased and may complete normally", () => fixture(async ({ broker }) => {
+  const lease = await claimed(broker);
+  const preserved = await broker.cancelQueued(lease.id, "COLLECTOR_SCHEDULE_PAUSED");
+  assert.equal(preserved.status, "leased");
+  assert.equal(preserved.errorCode, undefined);
+  assert.equal((await broker.status()).activeJobId, lease.id);
+  assert.equal((await request(broker, "POST", `/api/collector-worker/jobs/${lease.id}/heartbeat`, identity(lease))).body.cancelled, false);
+  const bundle = artifacts();
+  await uploadArtifacts(broker, lease, bundle);
+  assert.equal((await finish(broker, lease, bundle)).status, 200);
+  assert.equal((await broker.cancelQueued(lease.id)).status, "completed");
+  assert.equal((await broker.getJob(lease.id)).runId, RUN);
+  assert.equal((await broker.status()).halted, false);
+}));
+
 test("path traversal, symlinks, case collisions and oversize uploads are rejected", () => fixture(async ({ broker, dataDir, outputsDir }) => {
   const lease = await claimed(broker);
   for (const name of ["../escape.json", "/escape.json", "details/../escape.json", "details\\escape.json", "con.json", "detail./x.json", "x.exe"]) {
@@ -326,6 +369,98 @@ test("restart reconciles an already-published commit receipt without running it 
   assert.equal((await restarted.getJob(lease.id)).status, "completed");
   assert.equal((await restarted.status()).halted, true);
   assert.equal((await finish(restarted, lease, bundle)).status, 200);
+}));
+
+test("role namespaces isolate credentials and allow scheduled-worker immediate and timed jobs", () => fixture(async ({ options, dataDir }) => {
+  const manual = createCollectorBroker({ ...options, workerKey: "manual" });
+  const scheduled = createCollectorBroker({ ...options, brokerDir: path.join(dataDir, "collector-scheduled"), workerKey: "scheduled", token: `${TOKEN}-other` });
+  await Promise.all([manual.initialize(), scheduled.initialize()]);
+  const manualInput = jobInput({ env: { ...jobInput().env, SCHEDULED_COLLECTION: "0" }, payload: { workerKey: "manual", trigger: "manual" } });
+  const manualJob = await manual.submit(manualInput);
+  await assert.rejects(manual.submit(jobInput({ payload: { workerKey: "scheduled", trigger: "scheduled" } })), { code: "COLLECTOR_WRONG_WORKER" });
+  await assert.rejects(manual.submit(jobInput({ payload: { workerKey: "manual", trigger: "scheduled" } })), { code: "COLLECTOR_WRONG_WORKER" });
+  await scheduled.submit({ ...manualInput, payload: { workerKey: "scheduled", trigger: "manual" } });
+  await scheduled.submit(jobInput({ payload: { workerKey: "scheduled", trigger: "scheduled" } }));
+  assert.equal((await manual.status()).queued, 1);
+  assert.equal((await scheduled.status()).queued, 2);
+  assert.equal((await request(scheduled, "POST", "/api/collector-worker/claim", {})).handled, false);
+  assert.equal((await request(scheduled, "POST", "/api/collector-worker-scheduled/claim", { workerId: WORKER, protocolVersion: 1 })).status, 401);
+  const lease = (await request(manual, "POST", "/api/collector-worker/claim", { workerId: WORKER, workerKey: "manual", protocolVersion: 1 })).body.job;
+  assert.equal(lease.id, manualJob.id);
+  assert.equal(lease.env.COLLECTOR_JOB_ID, manualJob.id);
+  assert.match(lease.env.COLLECTOR_RUN_TOKEN, /^[a-p]{24}$/);
+  assert.equal(lease.env.COLLECTOR_ENGINE, "current-manual-v2");
+  const claimedScheduled = await request(scheduled, "POST", "/api/collector-worker-scheduled/claim", { workerId: WORKER, workerKey: "scheduled", protocolVersion: 1 }, { authorization: `Bearer ${TOKEN}-other` });
+  assert.equal(claimedScheduled.body.job.trigger, "manual");
+  assert.equal(claimedScheduled.body.job.env.SCHEDULED_COLLECTION, "0");
+  assert.equal(claimedScheduled.body.job.env.COLLECTOR_ENGINE, "archive-keyword-adapted-v2");
+  assert.notEqual(claimedScheduled.body.job.env.COLLECTOR_RUN_TOKEN, lease.env.COLLECTOR_RUN_TOKEN);
+  assert.equal((await manual.status()).activeJobId, manualJob.id);
+}));
+
+test("provider stop callback runs outside lock and can cancel other active lanes without releasing their lease", () => fixture(async ({ options, dataDir }) => {
+  let callbacks = 0;
+  const other = createCollectorBroker({ ...options, brokerDir: path.join(dataDir, "other") });
+  await other.initialize();
+  const otherLease = await claimed(other);
+  let provider;
+  provider = createCollectorBroker({ ...options, brokerDir: path.join(dataDir, "source"), onProviderBlocked: async event => {
+    callbacks++;
+    assert.equal(event.code, "COLLECTOR_PROVIDER_BLOCKED");
+    assert.equal((await provider.status()).halted, true);
+    await other.halt(event.code, { cancelActive: true, cancelQueued: true });
+  } });
+  await provider.initialize();
+  const lease = await claimed(provider);
+  const route = `/api/collector-worker/jobs/${lease.id}/heartbeat`;
+  assert.equal((await request(provider, "POST", route, { ...identity(lease), providerBlocked: true })).status, 200);
+  assert.equal((await request(provider, "POST", route, { ...identity(lease), providerBlocked: true })).status, 200);
+  assert.equal(callbacks, 1);
+  assert.equal((await provider.getJob(lease.id)).status, "leased");
+  assert.equal((await other.getJob(otherLease.id)).status, "cancelled");
+  assert.equal((await other.status()).activeJobId, otherLease.id);
+  assert.equal((await request(other, "POST", `/api/collector-worker/jobs/${otherLease.id}/heartbeat`, identity(otherLease))).body.cancelled, true);
+  assert.equal((await request(other, "POST", `/api/collector-worker/jobs/${otherLease.id}/fail`, { ...identity(otherLease), code: "COLLECTOR_CANCELLED" })).status, 200);
+  assert.equal((await other.status()).errorCode, "COLLECTOR_PROVIDER_BLOCKED");
+  assert.equal((await other.status()).activeJobId, null);
+}));
+
+test("a failed cross-lane notification retries on the failure receipt and retains provider protection", () => fixture(async ({ options, dataDir }) => {
+  let attempts = 0;
+  const broker = createCollectorBroker({ ...options, brokerDir: path.join(dataDir, "notify"), onProviderBlocked: async () => {
+    if (++attempts === 1) throw new Error("temporary callback failure");
+  } });
+  await broker.initialize();
+  const lease = await claimed(broker);
+  assert.equal((await request(broker, "POST", `/api/collector-worker/jobs/${lease.id}/heartbeat`, { ...identity(lease), providerBlocked: true })).status, 500);
+  assert.equal((await request(broker, "POST", `/api/collector-worker/jobs/${lease.id}/fail`, { ...identity(lease), code: "COLLECTOR_HEARTBEAT_FAILED" })).status, 200);
+  assert.equal(attempts, 2);
+  assert.equal((await broker.status()).errorCode, "COLLECTOR_PROVIDER_BLOCKED");
+}));
+
+test("role receipt binds job identity and alphabetic run token before publication", () => fixture(async ({ options }) => {
+  const broker = createCollectorBroker({ ...options, workerKey: "scheduled", apiBasePath: "/api/collector-worker" });
+  await broker.initialize();
+  const lease = await claimed(broker, jobInput({ payload: { workerKey: "scheduled", trigger: "scheduled" } }));
+  const runId = `gapyeong_scheduled_${lease.env.COLLECTOR_RUN_TOKEN}_glamping_20260922_200000`;
+  const bundle = artifacts({ outputDir: `/worker/outputs/${runId}`, workerKey: "scheduled", trigger: "scheduled", jobId: "another-job", collectorEngine: "archive-keyword-adapted-v2" });
+  await uploadArtifacts(broker, lease, bundle);
+  assert.equal((await finish(broker, lease, bundle, runId)).body.error, "COLLECTOR_SCOPE_MISMATCH");
+  assert.equal((await broker.getJob(lease.id)).status, "leased");
+}));
+
+test("claim atomically expires scheduled queued jobs at deadline while a leased job may continue", () => fixture(async ({ broker, advance }) => {
+  const deadline = Date.parse("2026-09-22T11:00:00Z") + 500;
+  const expired = await broker.submit({ ...jobInput(), queueDeadline: deadline });
+  advance(500);
+  const idle = await request(broker, "POST", "/api/collector-worker/claim", { workerId: WORKER, protocolVersion: 1 });
+  assert.equal(idle.body.job, null);
+  assert.equal((await broker.getJob(expired.id)).errorCode, "COLLECTOR_QUEUE_DEADLINE");
+  assert.equal((await broker.status()).halted, false);
+  const live = await claimed(broker, { ...jobInput(), queueDeadline: deadline + 500 });
+  advance(1000);
+  assert.equal((await broker.getJob(live.id)).status, "leased");
+  assert.equal((await request(broker, "POST", `/api/collector-worker/jobs/${live.id}/heartbeat`, identity(live))).body.cancelled, false);
 }));
 
 (async () => {

@@ -6,7 +6,7 @@ const { validateRequestPacing, effectiveRequestPacing, lowLoadRequestPacing } = 
 const source = fs.readFileSync(path.join(__dirname, "glamping_app_server.cjs"), "utf8");
 const declaration = source.match(/^function scheduledCrawlerPacingEnv\([^]*?^}/m)?.[0];
 assert.ok(declaration);
-const context = vm.createContext({ validateRequestPacing, effectiveRequestPacing });
+const context = vm.createContext({ validateRequestPacing, effectiveRequestPacing, require });
 vm.runInContext(declaration, context);
 const envFor = (payload, day) => JSON.parse(JSON.stringify(context.scheduledCrawlerPacingEnv(payload, day)));
 const profile = lowLoadRequestPacing("2026-09-22");
@@ -24,4 +24,11 @@ assert.deepEqual(envFor({ scheduledCollection: true, requestPacing: profile }, "
 assert.deepEqual({ NAVER_REQUEST_PACING_ENABLED: "1", ...envFor({}, "2026-09-22") }, { NAVER_REQUEST_PACING_ENABLED: "0" }, "Unselected profiles cannot leak in from the server environment");
 assert.throws(() => envFor({ scheduledCollection: true, requestPacing: { ...profile, minIntervalMs: 0 } }, "2026-09-22"), /invalid_daily_collection_request_pacing/);
 assert.match(source, /SCHEDULED_COLLECTION: payload\.scheduledCollection === true \? "1" : "0",\s*\.\.\.scheduledCrawlerPacingEnv\(payload, plan\.checkIn\)/);
+const saved = {enabled:true,minIntervalMs:200,maxConcurrentRequests:2,detailConcurrency:1,scheduleConcurrency:2,otaConcurrency:1};
+assert.deepEqual(envFor({workerKey:'scheduled',scheduledCollection:false,requestPacing:saved},'2026-09-23'), {
+  NAVER_REQUEST_PACING_ENABLED:'1',NAVER_REQUEST_MIN_INTERVAL_MS:'200',NAVER_REQUEST_MAX_CONCURRENCY:'2',
+  NAVER_BOOKING_DETAIL_CONCURRENCY:'1',NAVER_SCHEDULE_CONCURRENCY:'2',NAVER_OTA_OBSERVATION_CONCURRENCY:'1'
+});
+assert.deepEqual(envFor({workerKey:'scheduled',requestPacing:{enabled:false}},'2026-09-23'),{NAVER_REQUEST_PACING_ENABLED:'0'});
+assert.throws(()=>envFor({workerKey:'scheduled',requestPacing:{...saved,maxConcurrentRequests:99}},'2026-09-23'),/KEYWORD_SCHEDULE_PACING_INVALID/);
 console.log("Daily pacing child environment: date activation, manual isolation, explicit overrides and validation passed");

@@ -8,6 +8,16 @@ function isNaverBookingRateLimit(data) {
       typeof value === "string" && /\bBookingAPITooManyRequests\b/.test(value)));
 }
 
+// Detect a challenge response, not an ordinary page that merely links to a
+// captcha library. Never log the provider body or attempt challenge bypass.
+function isNaverCaptchaResponse(body) {
+  const text = String(body || "");
+  return /<title\b[^>]*>[^<]*(?:captcha|자동입력\s*방지|보안\s*확인|비정상적인\s*접근)[^<]*<\/title>/i.test(text)
+    || /<(?:form|input|img)\b[^>]*(?:captcha|자동입력)/i.test(text)
+    || /(?:자동입력\s*방지\s*문자|보안\s*문자.{0,40}입력|비정상적인\s*접근.{0,40}(?:감지|차단)|자동화된\s*요청.{0,40}(?:감지|차단))/i.test(text)
+    || /"(?:code|errorCode)"\s*:\s*"(?:CaptchaRequired|CAPTCHA_REQUIRED)"/i.test(text);
+}
+
 function isNaverRequest(input) {
   try {
     const url = new URL(typeof input === "object" && input !== null && "url" in input ? input.url : String(input));
@@ -65,6 +75,7 @@ function createNaverRequestGate(options = {}) {
   const now = options.now || (() => performance.now());
   const sleep = options.sleep || (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)));
   const onResponse = typeof options.onResponse === "function" ? options.onResponse : null;
+  const onRequestStart = typeof options.onRequestStart === "function" ? options.onRequestStart : null;
   let lastStartedAt = null;
   let stopReason = null;
   let inFlight = 0;
@@ -92,6 +103,7 @@ function createNaverRequestGate(options = {}) {
 
   async function execute(job) {
     try {
+      if (onRequestStart) onRequestStart(job.input, job.init);
       const response = await fetchImpl(job.input, job.init);
       let bufferedBody;
       const readBody = () => bufferedBody ||= response.clone().arrayBuffer();
@@ -100,6 +112,7 @@ function createNaverRequestGate(options = {}) {
       if (onResponse) await onResponse(response, {
         stop,
         readJson: async () => JSON.parse(new TextDecoder().decode(await readBody())),
+        readText: async () => new TextDecoder().decode(await readBody()),
       });
       // Fetch resolves when headers arrive. Track the full body download (and,
       // when paced, retain its slot), but return the original Response with its
@@ -175,4 +188,4 @@ function createNaverRequestGate(options = {}) {
   return { fetch: pacedFetch, stop, diagnostics };
 }
 
-module.exports = { DEFAULT_MIN_INTERVAL_MS, isNaverRequest, isNaverBookingRateLimit, createNaverRequestGate };
+module.exports = { DEFAULT_MIN_INTERVAL_MS, isNaverRequest, isNaverBookingRateLimit, isNaverCaptchaResponse, createNaverRequestGate };

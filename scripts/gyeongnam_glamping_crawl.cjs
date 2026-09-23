@@ -3,7 +3,10 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { inspectManifest } = require("./daily_collection_quality.cjs");
 const { applyInventoryEvidence, productEvidence } = require("./inventory_estimation.cjs");
-const { createNaverRequestGate, isNaverBookingRateLimit } = require("./naver_request_pacing.cjs");
+const { createNaverRequestGate, isNaverBookingRateLimit, isNaverCaptchaResponse } = require("./naver_request_pacing.cjs");
+const { createProductCoverage } = require("./collector_product_coverage.cjs");
+const COLLECTION_STARTED_AT = new Date().toISOString();
+const productCoverage = createProductCoverage();
 const SCHEDULED_COLLECTION = process.env.SCHEDULED_COLLECTION === "1";
 const WORKER_COLLECTION = process.env.COLLECTOR_WORKER_RUNTIME === "1";
 const GUARDED_COLLECTION = SCHEDULED_COLLECTION || WORKER_COLLECTION;
@@ -11,7 +14,8 @@ const NAVER_REQUEST_PACING_ENABLED = GUARDED_COLLECTION && process.env.NAVER_REQ
 // Worker collection always observes blocks and records requests. Only an explicit
 // job profile adds a global interval/concurrency cap; default throughput remains
 // bounded by the historical per-stage pools below.
-const NAVER_REQUEST_GUARD_ENABLED = WORKER_COLLECTION || NAVER_REQUEST_PACING_ENABLED;
+const NAVER_REQUEST_GUARD_ENABLED = GUARDED_COLLECTION;
+const naverScheduleRequestsStarted = new Set();
 let naverRequestBlockedStatus = 0;
 let naverRequestBlockedCode = null;
 const naverRequestGate = createNaverRequestGate({
@@ -20,12 +24,24 @@ const naverRequestGate = createNaverRequestGate({
   minIntervalMs: NAVER_REQUEST_PACING_ENABLED ? (process.env.NAVER_REQUEST_MIN_INTERVAL_MS || (WORKER_COLLECTION ? 200 : undefined)) : 500,
   maxConcurrency: NAVER_REQUEST_PACING_ENABLED ? (process.env.NAVER_REQUEST_MAX_CONCURRENCY || (WORKER_COLLECTION ? 2 : undefined)) : 1,
   fetchImpl: globalThis.fetch,
-  onResponse: async (response, { stop, readJson }) => {
+  onRequestStart: (_input, init) => {
+    try {
+      const request = JSON.parse(init?.body || "null");
+      const params = request?.variables?.scheduleParams;
+      if (request?.operationName === "dailySchedule" && params) {
+        naverScheduleRequestsStarted.add(`${params.businessId}:${params.bizItemId}:${String(params.startDateTime).slice(0, 10)}`);
+      }
+    } catch { /* Non-GraphQL requests have no product coverage key. */ }
+  },
+  onResponse: async (response, { stop, readJson, readText }) => {
     const httpBlocked = [403, 429].includes(response.status);
     const apiBlocked = !httpBlocked && response.status === 200 && isNaverBookingRateLimit(await readJson().catch(() => null));
-    if (!httpBlocked && !apiBlocked) return;
+    const captchaBlocked = !httpBlocked && !apiBlocked && response.status === 200
+      && isNaverCaptchaResponse(await readText().catch(() => ""));
+    if (!httpBlocked && !apiBlocked && !captchaBlocked) return;
+    if (!naverRequestBlockedStatus) console.log("COLLECTOR_PROVIDER_BLOCKED");
     naverRequestBlockedStatus = response.status;
-    naverRequestBlockedCode = apiBlocked ? "BookingAPITooManyRequests" : null;
+    naverRequestBlockedCode = apiBlocked ? "BookingAPITooManyRequests" : captchaBlocked ? "NAVER_CAPTCHA" : null;
     const error = new Error(apiBlocked ? "NAVER_REQUEST_BLOCKED BookingAPITooManyRequests" : `NAVER_REQUEST_BLOCKED HTTP ${response.status}`);
     error.code = "NAVER_REQUEST_BLOCKED";
     error.statusCode = response.status;
@@ -774,8 +790,14 @@ const DDNAYO_QUERY_NORMALIZED = compactKeyword(IS_BROAD_LODGING_SEARCH || LODGIN
 const RUN_DATE = CHECK_IN.replaceAll("-", "");
 const RUN_TIME = new Date().toLocaleTimeString("en-GB", { timeZone: "Asia/Seoul", hour12: false }).replaceAll(":", "");
 const RUN_STAMP = process.env.RUN_STAMP || `${RUN_DATE}_${RUN_TIME}`;
+const COLLECTOR_RUN_TOKEN = process.env.COLLECTOR_RUN_TOKEN || "";
+if (COLLECTOR_RUN_TOKEN && !/^[a-p]{24}$/.test(COLLECTOR_RUN_TOKEN)) throw new Error("COLLECTOR_RUN_TOKEN_INVALID");
+const COLLECTOR_WORKER_KEY = process.env.COLLECTOR_WORKER_KEY || "manual";
+const COLLECTOR_TRIGGER = process.env.COLLECTOR_TRIGGER || (SCHEDULED_COLLECTION ? "scheduled" : "manual");
+if (!["manual", "scheduled"].includes(COLLECTOR_WORKER_KEY) || !["manual", "scheduled"].includes(COLLECTOR_TRIGGER)) throw new Error("COLLECTOR_ROLE_MISMATCH");
+const RUN_PREFIX = COLLECTOR_RUN_TOKEN ? `${province.slug}_${COLLECTOR_WORKER_KEY}_${COLLECTOR_RUN_TOKEN}` : province.slug;
 const OUTPUT_ROOT = process.env.OUTPUTS_DIR || process.env.DATA_DIR || "outputs";
-const OUTPUT_DIR = path.resolve(OUTPUT_ROOT, `${province.slug}_glamping_${RUN_STAMP}`);
+const OUTPUT_DIR = path.resolve(OUTPUT_ROOT, `${RUN_PREFIX}_glamping_${RUN_STAMP}`);
 const DETAIL_JSON_DIR_NAME = "details";
 const DETAIL_JSON_INLINE_LIMIT = 28000;
 const XLSX_CELL_TEXT_LIMIT = 32000;
@@ -2407,9 +2429,12 @@ function allocateInventoryShortfall(summary, productBasis, inventoryShortfall) {
 }
 
 async function collectNaverSchedulesForItems(bookingBusinessId, items, limit = 40, date = CHECK_IN) {
-  return mapWithConcurrency(items.slice(0, limit), NAVER_SCHEDULE_CONCURRENCY, async (item, index) => {
+  const schedules = await mapWithConcurrency(items.slice(0, limit), NAVER_SCHEDULE_CONCURRENCY, async (item, index) => {
     if (NAVER_SCHEDULE_DELAY_MS) await delay(NAVER_SCHEDULE_DELAY_MS * (index % NAVER_SCHEDULE_CONCURRENCY));
-    const schedule = await getNaverDailySchedule(bookingBusinessId, item.bizItemId, date);
+    let schedule;
+    try { schedule = await getNaverDailySchedule(bookingBusinessId, item.bizItemId, date); }
+    catch { schedule = { day: null, errors: ["schedule_request_failed"], status: 0 }; }
+    const queryAttempted = !GUARDED_COLLECTION || naverScheduleRequestsStarted.has(`${bookingBusinessId}:${item.bizItemId}:${date}`);
     const day = schedule.day || {};
     const stock = asStockNumber(day.stock);
     const bookingCount = asStockNumber(day.bookingCount);
@@ -2437,8 +2462,13 @@ async function collectNaverSchedulesForItems(bookingBusinessId, items, limit = 4
       isBusinessDay: day.isBusinessDay,
       isSaleDay: day.isSaleDay,
       errors: schedule.errors,
+      queryAttempted,
+      collectionFailed: schedule.status < 200 || schedule.status >= 300 || stock === null
+        || Boolean(Array.isArray(schedule.errors) ? schedule.errors.length : schedule.errors),
     };
   });
+  productCoverage.record(bookingBusinessId, items, limit, date, schedules);
+  return schedules;
 }
 
 function operatingTotalBasisFromTotals(totals = [], basisTotal = 0) {
@@ -2466,7 +2496,7 @@ function operatingTotalBasisFromTotals(totals = [], basisTotal = 0) {
   };
 }
 
-async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSchedules, days, unitLabel = "개") {
+async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSchedules, days, unitLabel = "개", productLimit = 40) {
   if (!items.length || days <= 1) return null;
   const summaries = [];
 
@@ -2474,7 +2504,7 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
     const date = addDays(CHECK_IN, index);
     const schedules = index === 0
       ? firstSchedules
-      : await collectNaverSchedulesForItems(bookingBusinessId, items, 40, date);
+      : await collectNaverSchedulesForItems(bookingBusinessId, items, productLimit, date);
     const listType = schedules.length ? classifyNaverBookingList(items, schedules) : "";
     const summary = summarizeNaverScheduleGroup(items, schedules, listType);
     const availabilityUnit = listType === "객실 묶음 상품리스트"
@@ -2801,6 +2831,8 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
   await delay(120);
   const itemResult = await getNaverBookingItems(booking.bookingBusinessId);
   const allItems = itemResult.items.filter((item) => item.isImp !== false && item.isClosedBooking !== true && item.isClosedBookingUser !== true);
+  productCoverage.discover(booking.bookingBusinessId, itemResult.items, allItems,
+    Array.from({ length: options.collectRange ? BOOKING_RANGE_DAYS : 1 }, (_, index) => addDays(CHECK_IN, index)));
   const nightItems = allItems.filter((item) => naverBookingSaleType(item) === "숙박");
   const dayUseItems = allItems.filter((item) => naverBookingSaleType(item) === "데이유즈");
   const unknownItems = allItems.filter((item) => naverBookingSaleType(item) === "미분류");
@@ -2820,7 +2852,7 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
     ? await collectWeeklyNaverAvailability(booking.bookingBusinessId, items, schedules, BOOKING_RANGE_DAYS)
     : null;
   const dayUseWeekly = options.collectRange
-    ? await collectWeeklyNaverAvailability(booking.bookingBusinessId, dayUseItems, dayUseSchedules, BOOKING_RANGE_DAYS, "회")
+    ? await collectWeeklyNaverAvailability(booking.bookingBusinessId, dayUseItems, dayUseSchedules, BOOKING_RANGE_DAYS, "회", 20)
     : null;
 
   let result = {
@@ -4577,6 +4609,16 @@ async function main() {
 }
 
 function addCollectionDiagnostics(manifest) {
+  Object.assign(manifest, {
+    schemaVersion: 2,
+    startedAt: COLLECTION_STARTED_AT,
+    workerKey: COLLECTOR_WORKER_KEY,
+    trigger: COLLECTOR_TRIGGER,
+    jobId: process.env.COLLECTOR_JOB_ID || null,
+    collectorEngine: process.env.COLLECTOR_ENGINE || "current-manual-v2",
+    engineProvenance: { lineageCommit: "4e4e190", implementation: "gyeongnam_glamping_crawl.cjs", adapted: true },
+    productCoverage: productCoverage.snapshot(),
+  });
   if (GUARDED_COLLECTION) {
     if (SCHEDULED_COLLECTION) manifest.scheduledCollection = true;
     if (WORKER_COLLECTION) manifest.workerCollection = true;

@@ -18,24 +18,32 @@ function collectionEnv(env) {
   return Object.fromEntries(ENV_KEYS.filter(key => env[key] !== undefined).map(key => [key, String(env[key])]));
 }
 
+function safeWorkerCode(value, fallback) {
+  return typeof value === "string" && /^[A-Z][A-Z0-9_]{1,100}$/.test(value) ? value : fallback;
+}
+
 function workerError(code, cancelled = false) {
-  const error = new Error(cancelled ? "수집이 중지되었습니다." : "수집 워커 연결 또는 작업 상태를 확인해야 합니다. 자동 재수집하지 않습니다.");
+  const blocked = code === "COLLECTOR_PROVIDER_BLOCKED";
+  const error = new Error(blocked ? "네이버 접근 제한으로 수집을 보류했습니다." : cancelled ? "수집이 중지되었습니다." : "수집 워커 연결 또는 작업 상태를 확인해야 합니다. 자동 재수집하지 않습니다.");
   error.code = code;
-  error.statusCode = cancelled ? 499 : 503;
-  error.cancelled = cancelled;
+  error.statusCode = blocked ? 409 : cancelled ? 499 : 503;
+  error.cancelled = blocked ? false : cancelled;
   return error;
 }
 
 // This is dispatch only: an unavailable worker must never fall back to local crawling.
 async function dispatchCollector({ broker, keyword, env, payload, context, onJob = () => {}, isCancelled = () => false,
-  pollMs = 500, queuedTimeoutMs = 120000, timeoutMs = 12 * 60 * 60 * 1000, now = Date.now, sleep = delay }) {
+  shouldCancelQueued = () => false, pollMs = 500, queuedTimeoutMs = Infinity, queueDeadline = null, timeoutMs = 12 * 60 * 60 * 1000, now = Date.now, sleep = delay }) {
+  if (queueDeadline !== null && (!Number.isSafeInteger(queueDeadline) || queueDeadline <= 0)) throw workerError("COLLECTOR_QUEUE_DEADLINE_INVALID");
   let job;
-  try { job = await broker.submit({ keyword, env: collectionEnv(env), payload, context }); }
-  catch { throw workerError("COLLECTOR_WORKER_UNAVAILABLE"); }
+  try { job = await broker.submit({ keyword, env: collectionEnv(env), payload, context, ...(queueDeadline === null ? {} : { queueDeadline }) }); }
+  catch (error) { throw workerError(safeWorkerCode(error?.code, "COLLECTOR_WORKER_UNAVAILABLE")); }
   onJob(job.id);
   const started = now();
+  let executionStarted = null;
   let cancellationSent = false;
   for (;;) {
+    if (shouldCancelQueued()) await broker.cancelQueued(job.id,"COLLECTOR_SCHEDULE_PAUSED");
     if (isCancelled() && !cancellationSent) {
       await broker.cancel(job.id);
       cancellationSent = true;
@@ -43,11 +51,26 @@ async function dispatchCollector({ broker, keyword, env, payload, context, onJob
     job = await broker.getJob(job.id);
     if (!job) throw workerError("COLLECTOR_WORKER_STATE_LOST");
     if (TERMINAL.has(job.status)) {
+      // Shared provider protection can cancel a pending job as well as fail an
+      // active one. Preserve that cause before generic cancellation handling.
+      if (job.errorCode === "COLLECTOR_PROVIDER_BLOCKED") throw workerError("COLLECTOR_PROVIDER_BLOCKED");
+      if (job.errorCode === "COLLECTOR_QUEUE_DEADLINE") throw workerError("COLLECTOR_QUEUE_DEADLINE");
       if (job.status === "completed" && !isCancelled()) return job;
       const cancelled = job.status === "cancelled" || isCancelled();
-      throw workerError(cancelled ? "CRAWL_CANCELLED" : "COLLECTOR_WORKER_INTERRUPTED", cancelled);
+      throw workerError(cancelled ? "CRAWL_CANCELLED" : safeWorkerCode(job.errorCode, "COLLECTOR_WORKER_INTERRUPTED"), cancelled);
     }
-    if ((job.status === "queued" && now() - started > queuedTimeoutMs) || now() - started > timeoutMs) {
+    if (job.status === "queued" && queueDeadline !== null && now() >= queueDeadline) {
+      await broker.cancel(job.id);
+      throw workerError("COLLECTOR_QUEUE_DEADLINE");
+    }
+    if (job.status === "queued" && now() - started > queuedTimeoutMs) {
+      await broker.cancel(job.id);
+      // Ordinary queue waiting is not evidence of a broken worker or provider block.
+      // An explicitly bounded wait cancels only this unclaimed job.
+      throw workerError("COLLECTOR_QUEUE_TIMEOUT");
+    }
+    if (job.status !== "queued" && executionStarted === null) executionStarted = now();
+    if (executionStarted !== null && now() - executionStarted > timeoutMs) {
       await broker.cancel(job.id);
       await broker.halt("COLLECTOR_WORKER_TIMEOUT");
       throw workerError("COLLECTOR_WORKER_UNAVAILABLE");

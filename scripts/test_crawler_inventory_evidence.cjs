@@ -268,3 +268,31 @@ test("a known day-use product with no schedule rows also prevents blind telephon
   assert.equal(result.inventoryEvidence.lodging.rows[0].unknownUnavailable, 3);
   assert.equal(result.inventoryEvidence.lodging.complete, false);
 });
+
+test("21 plus 7 room capacities stay 28 while quantity decline and day-use share are reconciled separately", async () => {
+  const byDate = {};
+  for (let index = 0; index < 2; index++) {
+    const date = addDays("2026-09-20", index);
+    byDate[date] = [
+      schedule({ date, bizItemId: "rooms21", name: "민트 1~21번", saleType: "숙박", stock: index ? 13 : 21, bookingCount: index ? 2 : 0, price: 100000 }),
+      schedule({ date, bizItemId: "rooms7", name: "라벤더 1~7번", saleType: "숙박", stock: 7, price: 100000 })
+    ];
+  }
+  const api = harness(byDate);
+  const weekly = await api.collectWeeklyNaverAvailability("fixture", byDate["2026-09-20"], byDate["2026-09-20"], 2);
+  const dayDetails = [0, 1].map(index => api.compactNaverScheduleDetail(schedule({
+    date: addDays("2026-09-20", index), bizItemId: "shared-day", stock: 7, bookingCount: index ? 3 : 0
+  }), "객실 종류별 리스트", addDays("2026-09-20", index), "회"));
+  const projected = api.applyCrawlerInventoryEvidence({ weekly, dayUseWeekly: { requestedDays: 2, productDetails: dayDetails } }, "fixture");
+  const row = projected.weekly.dates[1];
+  assert.equal(projected.weekly.basisTotal, 28);
+  assert.equal(row.total, 28);
+  assert.equal(row.rawTotal, 20);
+  assert.equal(row.publicBookings, 2);
+  assert.equal(row.available, 18);
+  assert.equal(row.sharedDayUseExcluded, 3);
+  assert.equal(row.phoneBookings, 5);
+  assert.equal(row.sold, 7);
+  assert.equal(projected.dayUseWeekly.totalSoldOut, 3);
+  assert.equal(weekly.productDetails.find(row => row.date === "2026-09-21" && row.bizItemId === "rooms21").stock, 13);
+});

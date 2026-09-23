@@ -312,6 +312,68 @@ test("progress accepts only exact recognized lines and never forwards raw stdout
   assert.deepEqual(stages, ["inventory", "save"]);
 });
 
+function roleJob(workerKey, trigger) {
+  const job = baseJob();
+  Object.assign(job, { workerKey, trigger });
+  Object.assign(job.env, { COLLECTOR_WORKER_KEY: workerKey, COLLECTOR_TRIGGER: trigger, COLLECTOR_JOB_ID: job.id,
+    COLLECTOR_RUN_TOKEN: "abcdefghijklmnopabcdefgh", COLLECTOR_ENGINE: workerKey === "scheduled" ? "archive-keyword-adapted-v2" : "current-manual-v2",
+    SCHEDULED_COLLECTION: trigger === "scheduled" ? "1" : "0" });
+  return job;
+}
+
+test("scheduled worker accepts manual and timed triggers using adapted archive engine only", async () => {
+  for (const trigger of ["manual", "scheduled"]) {
+    const job = roleJob("scheduled", trigger);
+    const f = await fixture({ jobs: [job], options: { workerKey: "scheduled" } });
+    try {
+      await runWorker(f.options);
+      assert.equal(f.state.spawned.length, 1);
+      assert.equal(path.basename(f.state.spawned[0].args[0]), "archive_keyword_collector.cjs");
+      assert.equal(f.state.spawned[0].config.env.COLLECTOR_TRIGGER, trigger);
+      assert.ok(f.state.requests.every(request => request.path.startsWith("/api/collector-worker-scheduled/")));
+    } finally { await f.close(); }
+  }
+});
+
+test("wrong targets, manual-worker scheduled triggers and missing role metadata cannot spawn", async () => {
+  for (const job of [roleJob("manual", "manual"), baseJob(), { ...roleJob("scheduled", "scheduled"), trigger: "manual" }]) {
+    const f = await fixture({ options: { workerKey: "scheduled" } });
+    try { assert.equal((await runJob(job, f.options)).code, "COLLECTOR_JOB_INVALID"); assert.equal(f.state.spawned.length, 0); }
+    finally { await f.close(); }
+  }
+  const f = await fixture({ options: { workerKey: "manual" } });
+  try { assert.equal((await runJob(roleJob("manual", "scheduled"), f.options)).code, "COLLECTOR_JOB_INVALID"); assert.equal(f.state.spawned.length, 0); }
+  finally { await f.close(); }
+});
+
+test("actual provider stop marker is reported promptly while failure artifacts can still be saved", async () => {
+  let seen = false;
+  const f = await fixture({ heartbeat: async ({ json, res }) => { if (json.providerBlocked) seen = true; reply(res, { cancelled: false }); },
+    crawl: async ({ child, config }) => {
+      child.stdout.write("COLLECTOR_PROVIDER_BLOCKED\n");
+      for (let attempt = 0; attempt < 100 && !seen; attempt++) await new Promise(resolve => setTimeout(resolve, 2));
+      assert.equal(seen, true);
+      const run = await writeArtifacts(config.env);
+      await fs.writeFile(path.join(run, "manifest.json"), JSON.stringify({ keyword: "산청글램핑", workerCollection: true,
+        collectionFailed: true, collectionQuality: { status: "blocked" } }));
+      child.close(1);
+    } });
+  try { assert.equal((await runJob(baseJob(), f.options)).code, "COLLECTOR_PROVIDER_BLOCKED"); assert.equal(f.state.spawned.length, 1); }
+  finally { await f.close(); }
+});
+
+test("insufficient workspace reserve prevents a child process and retains older workspace files", async () => {
+  const f = await fixture({ options: { minFreeBytes: Number.MAX_SAFE_INTEGER } });
+  try {
+    await fs.mkdir(f.options.workDir, { recursive: true });
+    const existing = path.join(f.options.workDir, "previous-receipt.json");
+    await fs.writeFile(existing, "{}");
+    assert.equal((await runJob(baseJob(), f.options)).code, "COLLECTOR_DISK_LOW");
+    assert.equal(f.state.spawned.length, 0);
+    assert.equal(await fs.readFile(existing, "utf8"), "{}");
+  } finally { await f.close(); }
+});
+
 (async () => {
   for (const { name, run } of cases) { await run(); console.log(`PASS ${name}`); }
   console.log(`${cases.length} collector worker tests passed`);

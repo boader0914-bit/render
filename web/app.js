@@ -2698,6 +2698,7 @@ async function fetchJson(url, options) {
   if (!response.ok) {
     const error = new Error(data.error || `요청 실패: ${response.status}`);
     error.status = response.status;
+    error.code = data.errorCode || data.code || "";
     if (response.status === 401 && !url.includes("/api/logout")) {
       location.replace("/login");
     } else if (response.status === 403) {
@@ -3390,8 +3391,13 @@ function scheduleCrawlStatusPoll(delay = 5000, notifyIdle = false) {
 
 async function pollCrawlStatusUntilIdle(notifyIdle = false) {
   clearCrawlStatusTimer();
+  if (Object.values(state.adminCrawlRequests || {}).some(request => request.status === "pending")) {
+    scheduleAdminCrawlRequestPoll(0);
+    return;
+  }
   try {
-    const status = await fetchJson("/api/crawl-status");
+    const workerKey = document.getElementById("crawlWorkerKey")?.value === "scheduled" ? "scheduled" : "manual";
+    const status = await fetchJson(`/api/crawl-status?workerKey=${workerKey}`);
     if (status.active) {
       const stage = status.currentStage || {};
       const delayed = Boolean(status.isDelayed);
@@ -3420,16 +3426,11 @@ async function pollCrawlStatusUntilIdle(notifyIdle = false) {
     }
     setCrawlProgress(false);
     setStatus("준비");
-    if (notifyIdle && els.crawlStatus) els.crawlStatus.textContent = "진행 중인 수집이 끝났습니다. 결과를 갱신했습니다.";
+    if (notifyIdle && els.crawlStatus && !Object.values(state.adminCrawlRequests || {}).some(request => request.status === "pending")) els.crawlStatus.textContent = "현재 워커에서 진행 중인 작업이 없습니다. 수집 성공 여부는 요청별 결과에서 확인하세요.";
     const inlineCompanyId = state.adminDbInlineCollect?.status === "running" ? state.adminDbInlineCollect.companyId : "";
     await loadRuns(true);
-    if (inlineCompanyId) {
-      state.adminDbInlineCollect = {
-        companyId: inlineCompanyId,
-        status: "complete",
-        startedAt: state.adminDbInlineCollect?.startedAt || Date.now(),
-        message: "최신 상품·가격·예약 관측을 업체 DB에 반영했습니다."
-      };
+    if (inlineCompanyId && !Object.values(state.adminCrawlRequests || {}).some(request => request.status === "pending" && request.recrawlContext?.companyIds?.includes(inlineCompanyId))) {
+      state.adminDbInlineCollect = { ...state.adminDbInlineCollect, status: "review", message: "작업이 더 이상 진행 중이지 않습니다. 요청별 결과에서 완료 여부를 확인하세요." };
       await loadAdminDbCompanyDetail(inlineCompanyId, { force: true });
       state.adminDbSelectedCompanyId = inlineCompanyId;
       state.adminDbViewMode = "review";
@@ -40782,10 +40783,143 @@ async function logout() {
   }
 }
 
+function adminCrawlStorageKey() {
+  const owner = state.session?.username || state.session?.memberId || "";
+  return owner ? `glamping:admin:crawl-requests:${owner}` : "";
+}
+
+function syncAdminCrawlSubmitAvailability() {
+  const button = els.crawlForm?.querySelector('button[type="submit"]');
+  const hint = document.getElementById("crawlWorkerHint");
+  if (!button) return;
+  const ready = !hint || hint.dataset.ready === "true";
+  button.disabled = Boolean(state.adminCrawlSubmitting) || !ready;
+  button.title = ready ? "선택한 워커에 수집을 접수합니다." : hint?.textContent || "수집기 연결을 확인하고 있습니다.";
+}
+
+async function openAdminCrawlResult(event) {
+  const runId = String(event.detail?.runId || "");
+  if (!/^[a-z0-9][a-z0-9_-]*_glamping_\d{8}(?:_\d{6})?$/.test(runId)) return;
+  try {
+    await loadRun(runId);
+    setActiveTab("rank");
+  } catch (error) {
+    if (els.crawlStatus) els.crawlStatus.textContent = `결과 조회 실패: ${error.message}`;
+  }
+}
+
+function adminCrawlRequestOutcome(receipt = {}) {
+  const result = receipt.result || {};
+  const quality = result.collectionQuality?.status;
+  const status = receipt.status === "complete" || receipt.status === "reused"
+    ? quality === "complete" && result.runId ? receipt.status : "failed"
+    : receipt.status;
+  const messages = {
+    complete: "수집을 완료했습니다. 결과를 확인할 수 있습니다.",
+    reused: "조건에 맞는 당일 자료를 사용했습니다. 새 수집은 실행하지 않았습니다.",
+    partial: "일부 자료만 수집되었습니다. 정상 자료로 반영하지 않았습니다.",
+    blocked: "접근 제한을 감지해 수집을 중단했습니다. 정상 자료로 반영하지 않았습니다.",
+    failed: "수집 또는 결과 검증에 실패했습니다. 정상 자료로 반영하지 않았습니다.",
+    interrupted: "수집이 중단됐거나 실행 결과를 확인하지 못했습니다. 자동으로 다시 실행하지 않습니다."
+  };
+  return { status, success: status === "complete" || status === "reused", message: messages[status] || "수집 요청을 처리하고 있습니다." };
+}
+
+function saveAdminCrawlRequests() {
+  const key = adminCrawlStorageKey();
+  if (!key) return;
+  const requests = Object.values(state.adminCrawlRequests || {}).filter(request => request.status === "pending").map(request => ({
+    requestId: request.requestId, workerKey: request.workerKey, keyword: request.keyword, createdAt: request.createdAt, status: "pending"
+  }));
+  try { window.localStorage.setItem(key, JSON.stringify({ version: 1, requests })); } catch { /* Tracking still works in this page when storage is unavailable. */ }
+}
+
+function restoreAdminCrawlRequests() {
+  state.adminCrawlRequests ||= {};
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(adminCrawlStorageKey()) || "null");
+    if (saved?.version === 1 && Array.isArray(saved.requests)) for (const item of saved.requests.slice(-100)) {
+      if (!/^[a-zA-Z0-9_-]{8,120}$/.test(item?.requestId || "") || !["manual", "scheduled"].includes(item.workerKey)) continue;
+      state.adminCrawlRequests[item.requestId] = { requestId: item.requestId, workerKey: item.workerKey, keyword: String(item.keyword || "").slice(0, 160), createdAt: item.createdAt, status: "pending" };
+    }
+  } catch { /* Do not submit a new collection to repair missing browser storage. */ }
+  if (Object.values(state.adminCrawlRequests).some(request => request.status === "pending")) scheduleAdminCrawlRequestPoll(0);
+}
+
+function notifyAdminCrawlRequestChange() {
+  window.dispatchEvent(new CustomEvent("collector:requests-changed"));
+}
+
+function scheduleAdminCrawlRequestPoll(delay = 3000) {
+  clearTimeout(state.adminCrawlRequestTimer);
+  state.adminCrawlRequestTimer = setTimeout(() => pollAdminCrawlRequests(), delay);
+}
+
+async function finishAdminCrawlRequest(request, receipt) {
+  const outcome = adminCrawlRequestOutcome(receipt);
+  request.status = outcome.status;
+  request.result = receipt.result;
+  saveAdminCrawlRequests();
+  const worker = request.workerKey === "scheduled" ? "0923 예약워커" : "0922 수동워커";
+  if (els.crawlStatus) els.crawlStatus.textContent = `${worker} · ${request.keyword}: ${outcome.message}${!outcome.success && receipt.message ? ` ${receipt.message}` : ""}`;
+  setStatus(outcome.success ? "수집 결과 확인" : "수집 결과 확인 필요");
+  if (outcome.success) await loadRuns(false);
+  const context = request.recrawlContext;
+  if (context?.type === "company" && context.companyIds?.length === 1) {
+    const companyId = context.companyIds[0];
+    setAdminDbDetailFlash(companyId, {
+      status: outcome.success ? "confirm_collect_complete" : "confirm_collect_failed", tone: outcome.success ? "success" : "danger",
+      title: outcome.status === "reused" ? "기존 확인 자료 사용" : outcome.success ? "확인 수집 완료" : "확인 수집 결과 확인 필요",
+      message: outcome.message, next: outcome.success ? "요청별 결과에서 상품·가격·예약 관측 근거를 확인하세요." : "작업 기록과 수집 조건을 확인하세요.",
+      items: [request.keyword, outcome.success ? "결과 확인 가능" : "정상 자료 미반영"]
+    });
+    if (context.source === "admin_db_detail") {
+      state.adminDbInlineCollect = { companyId, status: outcome.success ? "complete" : "error", startedAt: request.createdAt, message: outcome.message };
+      if (outcome.success) await loadAdminDbCompanyDetail(companyId, { force: true });
+    }
+    if (isAdminRole()) renderAdminConsoleDashboard();
+  }
+  notifyAdminCrawlRequestChange();
+}
+
+async function pollAdminCrawlRequests() {
+  if (!isAdminRole() || state.adminCrawlRequestPolling) return;
+  clearTimeout(state.adminCrawlRequestTimer);
+  state.adminCrawlRequestPolling = true;
+  try {
+    const pending = Object.values(state.adminCrawlRequests || {}).filter(request => request.status === "pending");
+    for (const request of pending) {
+      try {
+        const receipt = await fetchJson(`/api/crawl-requests/${encodeURIComponent(request.requestId)}`);
+        if (["complete", "reused", "partial", "blocked", "failed", "interrupted"].includes(receipt.status)) await finishAdminCrawlRequest(request, receipt);
+        else if (receipt.status !== "pending") throw new Error("요청 상태를 확인하지 못했습니다.");
+      } catch (error) {
+        if (error.status === 404) await finishAdminCrawlRequest(request, { status: "interrupted", message: "서버에서 해당 요청 기록을 찾지 못했습니다. 새 수집 전에 최근 작업을 확인하세요." });
+        else if (els.crawlStatus) els.crawlStatus.textContent = `수집 결과 확인 대기: ${error.message} 접수한 요청을 자동으로 다시 보내지 않습니다.`;
+      }
+    }
+    const remaining = Object.values(state.adminCrawlRequests || {}).filter(request => request.status === "pending");
+    if (remaining.length) {
+      const selected = document.getElementById("crawlWorkerKey")?.value || "manual";
+      const selectedPending = remaining.filter(request => request.workerKey === selected);
+      let progress = { stages: crawlStageFallbacks() };
+      try { if (selectedPending.length) progress = await fetchJson(`/api/crawl-status?workerKey=${selected}`); } catch { /* Receipt tracking remains authoritative if progress is temporarily unavailable. */ }
+      setCrawlProgress(Boolean(selectedPending.length), progress.active ? (progress.currentStage?.label || "수집 진행 중") : "접수한 수집 처리 중", progress.currentStage?.detail || `${remaining.length}건의 결과를 확인하고 있습니다. 다른 수집기를 선택하거나 페이지를 닫아도 서버 작업은 계속됩니다.`, progress);
+      scheduleAdminCrawlRequestPoll(5000);
+    } else setCrawlProgress(false);
+  } finally { state.adminCrawlRequestPolling = false; }
+}
+
 async function submitCrawl(event) {
   event.preventDefault();
   ensureCrawlControls();
   const submitButton = els.crawlForm?.querySelector('button[type="submit"]');
+  const workerHint = document.getElementById("crawlWorkerHint");
+  if (workerHint && workerHint.dataset.ready !== "true") {
+    if (els.crawlStatus) els.crawlStatus.textContent = workerHint.textContent || "수집기 연결을 확인한 뒤 실행하세요.";
+    syncAdminCrawlSubmitAvailability();
+    return;
+  }
   const keyword = els.keywordInput?.value?.trim() || "";
   const intent = regionalLodgingSearchIntent(keyword);
   const explicitCompanyOptions = { recrawlContext: state.pendingRecrawlContext };
@@ -40806,6 +40940,14 @@ async function submitCrawl(event) {
   }
   const payload = currentCrawlFormPayload();
   payload.searchMode = resolvedMode;
+  payload.workerKey = document.getElementById("crawlWorkerKey")?.value === "scheduled" ? "scheduled" : "manual";
+  payload.allowRepeat = document.getElementById("crawlAllowRepeat")?.checked === true;
+  payload.repeatReason = payload.allowRepeat ? (document.getElementById("crawlRepeatReason")?.value || "").trim() : "";
+  if (payload.allowRepeat && payload.repeatReason.length < 4) {
+    if (els.crawlStatus) els.crawlStatus.textContent = "당일 재수집 사유를 4글자 이상 입력하세요.";
+    document.getElementById("crawlRepeatReason")?.focus();
+    return;
+  }
   if (
     recrawlContextMatchesPayload(state.pendingRecrawlContext, payload) ||
     hasExplicitCompanyCollectionTarget({ recrawlContext: state.pendingRecrawlContext }, keyword)
@@ -40815,7 +40957,10 @@ async function submitCrawl(event) {
   payload.searchMode = correctedSearchMode(keyword, requestedMode, { recrawlContext: payload.recrawlContext });
   const inlineDetailContext = payload.recrawlContext?.source === "admin_db_detail" ? payload.recrawlContext : null;
   if (submitButton?.disabled) return;
+  state.adminCrawlSubmitting = true;
   if (submitButton) submitButton.disabled = true;
+  const workerSelector = document.getElementById("crawlWorkerKey");
+  if (workerSelector) workerSelector.disabled = true;
   if (inlineDetailContext?.companyIds?.length === 1) {
     state.adminDbInlineCollect = {
       companyId: inlineDetailContext.companyIds[0],
@@ -40825,127 +40970,41 @@ async function submitCrawl(event) {
     };
     if (isAdminRole()) renderAdminConsoleDashboard();
   }
-  const purpose = collectionPurposeProfile(payload.collectionPurpose);
-  const detailText = `${payload.detailRankRanges || purpose.defaultRange}위`;
-  let preview = crawlPreviewMeta(payload);
-  const recrawlText = recrawlContextStatusText(payload.recrawlContext);
-  setCrawlProgress(
-    true,
-    "수집 실행 중",
-    `${recrawlText ? `${recrawlText} · ` : ""}${purpose.label} · ${searchModeLabel(payload.searchMode)} · ${detailText}`,
-    preview
-  );
+  const requestId = typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `admin_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+  payload.clientRequestId = requestId;
+  const request = { requestId, workerKey: payload.workerKey, keyword, createdAt: Date.now(), status: "pending", recrawlContext: payload.recrawlContext || null };
+  state.adminCrawlRequests ||= {};
+  state.adminCrawlRequests[requestId] = request;
+  saveAdminCrawlRequests();
+  setCrawlProgress(true, "수집 요청 접수 중", "서버의 접수 기록을 확인하고 있습니다.", crawlPreviewMeta(payload));
   revealActiveCrawlProgressOnMobile();
-  preview = await fetchCrawlEstimate(payload);
-  setCrawlProgress(
-    true,
-    "수집 실행 중",
-    `${recrawlText ? `${recrawlText} · ` : ""}${purpose.label} · ${searchModeLabel(payload.searchMode)} · ${detailText}`,
-    preview
-  );
-  if (els.crawlStatus) els.crawlStatus.textContent = "";
-  setStatus("수집 중");
-  scheduleCrawlStatusPoll(1500, false);
   try {
-    const result = await fetchJson("/api/crawl", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+    const receipt = await fetchJson("/api/crawl?async=1", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
     });
-    state.runs = result.runs || state.runs;
-    state.activeRunId = result.runId || state.runs[0]?.id;
-    await loadRuns(false);
-    const completedRecrawlContext = payload.recrawlContext || null;
-    clearCrawlStatusTimer();
-    setCrawlProgress(false);
-    els.crawlStatus.textContent = payload.recrawlContext
-      ? `${recrawlContextStatusText(payload.recrawlContext)} 완료. 화면을 갱신했습니다.`
-      : "수집 완료. 화면을 갱신했습니다.";
-    if (completedRecrawlContext?.type === "company" && completedRecrawlContext.companyIds?.length === 1) {
-      setAdminDbDetailFlash(completedRecrawlContext.companyIds[0], {
-        status: "confirm_collect_complete",
-        tone: "success",
-        title: "확인 수집 완료",
-        message: `${completedRecrawlContext.companyNames?.[0] || "업체"} 확인 수집을 완료했습니다.`,
-        next: "최신 예약율·가격·수량 근거를 확인하고 검수 상태를 정리하세요.",
-        items: [
-          completedRecrawlContext.keyword || "키워드",
-          completedRecrawlContext.range ? `상세 ${completedRecrawlContext.range}위` : "상세 범위",
-          "결과 갱신"
-        ]
-      });
-      if (completedRecrawlContext.source === "admin_db_detail") {
-        state.adminDbInlineCollect = {
-          companyId: completedRecrawlContext.companyIds[0],
-          status: "complete",
-          startedAt: state.adminDbInlineCollect?.startedAt || Date.now(),
-          message: "최신 상품·가격·예약 관측을 업체 DB에 반영했습니다."
-        };
-        await loadAdminDbCompanyDetail(completedRecrawlContext.companyIds[0], { force: true });
-      }
-      if (isAdminRole()) renderAdminConsoleDashboard();
+    if (["complete", "reused", "partial", "blocked", "failed", "interrupted"].includes(receipt.status)) await finishAdminCrawlRequest(request, receipt);
+    else {
+      if (els.crawlStatus) els.crawlStatus.textContent = `${payload.workerKey === "scheduled" ? "0923 예약워커" : "0922 수동워커"}에 ${keyword} 수집을 접수했습니다. 최근 즉시수집에서 진행 상태와 결과를 확인하세요.`;
+      setStatus("수집 요청 접수");
     }
     if (payload.recrawlContext) state.pendingRecrawlContext = null;
-    if (completedRecrawlContext?.source === "admin_db_detail") {
-      state.adminDbViewMode = "review";
-      state.adminDbSelectedCompanyId = completedRecrawlContext.companyIds?.[0] || state.adminDbSelectedCompanyId;
-      setActiveTab("admin");
-      setAdminPanelSection("database");
-      renderAdminConsoleDashboard();
-    } else {
-      setActiveTab("rank");
-    }
+    notifyAdminCrawlRequestChange();
   } catch (error) {
-    if (error.status === 409) {
-      if (inlineDetailContext?.companyIds?.length === 1) {
-        state.adminDbInlineCollect = {
-          companyId: inlineDetailContext.companyIds[0],
-          status: "error",
-          startedAt: state.adminDbInlineCollect?.startedAt || Date.now(),
-          message: "다른 수집이 먼저 진행 중입니다. 완료된 뒤 다시 눌러주세요."
-        };
-        state.pendingRecrawlContext = null;
-        if (isAdminRole()) renderAdminConsoleDashboard();
-      }
-      setCrawlProgress(true, "수집 대기 중", "이미 진행 중인 수집이 끝나면 결과를 자동으로 불러옵니다.", { stages: crawlStageFallbacks() });
-      els.crawlStatus.textContent = `${error.message} 결과가 생기면 자동으로 갱신합니다.`;
-      setStatus("수집 중");
-      pollCrawlStatusUntilIdle(true);
+    if (error.status >= 400 && error.status < 500) {
+      // A rejected request is not queued work. In particular, 409 also means
+      // same-day scope conflict, disconnected worker, or active protection.
+      await finishAdminCrawlRequest(request, { status: "failed", errorCode: error.code, message: error.message });
     } else {
-      clearCrawlStatusTimer();
-      setCrawlProgress(false);
-      const failedRecrawlContext = payload.recrawlContext || null;
-      if (failedRecrawlContext?.type === "company" && failedRecrawlContext.companyIds?.length === 1) {
-        setAdminDbDetailFlash(failedRecrawlContext.companyIds[0], {
-          status: "confirm_collect_failed",
-          tone: "danger",
-          title: "확인 수집 실패",
-          message: error.message || "확인 수집 중 문제가 발생했습니다.",
-          next: "검색 조건과 로그인 상태를 확인한 뒤 다시 실행하세요.",
-          items: [
-            failedRecrawlContext.keyword || "키워드",
-            failedRecrawlContext.range ? `상세 ${failedRecrawlContext.range}위` : "상세 범위",
-            "결과 미반영"
-          ]
-        });
-        if (failedRecrawlContext.source === "admin_db_detail") {
-          state.adminDbInlineCollect = {
-            companyId: failedRecrawlContext.companyIds[0],
-            status: "error",
-            startedAt: state.adminDbInlineCollect?.startedAt || Date.now(),
-            message: error.message || "자동수집 중 문제가 발생했습니다."
-          };
-        }
-        if (isAdminRole()) renderAdminConsoleDashboard();
-      }
-      els.crawlStatus.textContent = `수집 실패: ${error.message}`;
-      setStatus("수집 실패");
+      if (els.crawlStatus) els.crawlStatus.textContent = "접수 응답을 확인하지 못했습니다. 같은 요청 번호로 서버 기록을 확인하며 자동 재수집은 하지 않습니다.";
+      setStatus("수집 접수 확인 중");
     }
   } finally {
-    if (submitButton) submitButton.disabled = false;
+    state.adminCrawlSubmitting = false;
+    syncAdminCrawlSubmitAvailability();
+    if (workerSelector) workerSelector.disabled = false;
+    scheduleAdminCrawlRequestPoll(500);
   }
 }
-
 function setDefaultDates() {
   const now = new Date();
   const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
@@ -42663,7 +42722,13 @@ async function init() {
     if (initialHistory?.role === state.session?.role && !adminDbCompanyIdFromRoute()) await restoreAppHistoryState(initialHistory);
     syncAppHistoryState(false);
     renderB2BSearchPanel();
-    if (isAdminRole()) pollCrawlStatusUntilIdle(false);
+    if (isAdminRole()) {
+      restoreAdminCrawlRequests();
+      pollCrawlStatusUntilIdle(false);
+      window.addEventListener("collector:worker-availability", () => syncAdminCrawlSubmitAvailability());
+      syncAdminCrawlSubmitAvailability();
+      window.addEventListener("collector:open-result", openAdminCrawlResult);
+    }
   } catch (error) {
     setStatus("오류");
     releaseAppBoot();

@@ -44,6 +44,7 @@ function harness(options = {}) {
   const exports = vm.runInNewContext(`${setup}\n({
     loadHistoricalNaverBookingBusinessMap, getHistoricalNaverBookingBusiness, getNaverDailySchedule,
     addCollectionDiagnostics, diagnostics: scheduledCollectionDiagnostics,
+    collectNaverSchedulesForItems, collectWeeklyNaverAvailability, productCoverage, outputDir: OUTPUT_DIR,
     profile: COLLECTION_PROFILE,
     concurrency: [NAVER_BOOKING_DETAIL_CONCURRENCY, NAVER_SCHEDULE_CONCURRENCY, NAVER_OTA_OBSERVATION_CONCURRENCY],
   })`, context);
@@ -104,6 +105,8 @@ test("malformed context fails with a constant safe error and fallback opt-out pr
 test("manual worker counts successful schedules and records worker marker without scheduled marker", async () => {
   const crawler = harness({ env: { COLLECTOR_WORKER_RUNTIME: "1", NAVER_REQUEST_MIN_INTERVAL_MS: "0" }, fetchImpl: async () => new Response(JSON.stringify({ data: { schedule: { bizItemSchedule: { daily: { date: { "2026-09-22": { stock: 0 } } } } } } })) });
   await crawler.getNaverDailySchedule("123", "456");
+  crawler.productCoverage.discover("123", [{ bizItemId: "456" }], [{ bizItemId: "456" }], ["2026-09-22"]);
+  crawler.productCoverage.record("123", [{ bizItemId: "456" }], 40, "2026-09-22", [{ bizItemId: "456", stock: 0 }]);
   const manifest = manifestFixture();
   crawler.addCollectionDiagnostics(manifest);
   assert.equal(manifest.workerCollection, true);
@@ -115,6 +118,86 @@ test("manual worker counts successful schedules and records worker marker withou
   assert.equal(manifest.requestPacing.minIntervalMs, 0);
   assert.equal(manifest.requestPacing.maxConcurrentRequests, null);
   assert.equal(manifest.collectionQuality.status, "complete");
+});
+
+test("job-derived alphabetic prefixes preserve the legacy suffix and real collection timestamps", () => {
+  const before = Date.now();
+  const crawler = harness({ env: { COLLECTOR_WORKER_RUNTIME: "1", COLLECTOR_WORKER_KEY: "scheduled", COLLECTOR_TRIGGER: "manual",
+    COLLECTOR_RUN_TOKEN: "abcdefghijklmnopabcdefgh", COLLECTOR_JOB_ID: "collector_fixture", COLLECTOR_ENGINE: "archive-keyword-adapted-v2" } });
+  const runId = path.basename(crawler.outputDir);
+  assert.match(runId, /^gyeongnam_scheduled_[a-p]{24}_glamping_20260922_\d{6}$/);
+  assert.match(runId, /_glamping_\d{8}(?:_\d{6})?$/);
+  assert.equal(runId.match(/\d{8}/)[0], "20260922");
+  const manifest = manifestFixture(); crawler.addCollectionDiagnostics(manifest);
+  assert.equal(manifest.workerKey, "scheduled");
+  assert.equal(manifest.trigger, "manual");
+  assert.equal(manifest.jobId, "collector_fixture");
+  assert.equal(manifest.collectorEngine, "archive-keyword-adapted-v2");
+  assert.ok(Date.parse(manifest.startedAt) >= before && Date.parse(manifest.startedAt) <= Date.now());
+  assert.throws(() => harness({ env: { COLLECTOR_RUN_TOKEN: "20260101" } }), /COLLECTOR_RUN_TOKEN_INVALID/);
+});
+
+test("real schedule reader preserves zero, missing and failure while coverage records limited products for every date", async () => {
+  const items = Array.from({ length: 42 }, (_, index) => ({ bizItemId: String(index), name: `객실 ${index}`, bizItemSubType: "ACCOMMODATION_NIGHT" }));
+  const crawler = harness({ env: { COLLECTOR_WORKER_RUNTIME: "1", NAVER_SCHEDULE_DELAY_MS: "0" }, fetchImpl: async (_url, init) => {
+    const params = JSON.parse(init.body).variables.scheduleParams;
+    const date = params.startDateTime.slice(0, 10);
+    const id = Number(params.bizItemId);
+    if (id === 2) throw new Error("fixture network failure");
+    return new Response(JSON.stringify({ data: { schedule: { bizItemSchedule: { daily: { date: { [date]: { stock: id === 0 ? 0 : id === 1 ? null : 3, bookingCount: 0, occupiedBookingCount: 0 } } } } } } }));
+  } });
+  crawler.productCoverage.discover("biz", [...items, { bizItemId: "excluded" }], items, ["2026-09-22", "2026-09-23"]);
+  const first = await crawler.collectNaverSchedulesForItems("biz", items, 40);
+  assert.equal(first.length, 40);
+  assert.equal(first[0].stock, 0); assert.equal(first[0].collectionFailed, false);
+  assert.equal(first[1].stock, null); assert.equal(first[1].collectionFailed, true);
+  assert.equal(first[2].stock, null); assert.equal(first[2].collectionFailed, true);
+  await crawler.collectWeeklyNaverAvailability("biz", items, first, 2);
+  const coverage = crawler.productCoverage.snapshot();
+  assert.equal(coverage.discovered, 43); assert.equal(coverage.eligible, 42); assert.equal(coverage.excluded, 1);
+  assert.equal(coverage.queried, 40); assert.equal(coverage.truncated, 2);
+  for (const day of coverage.targets[0].days) { assert.equal(day.queried, 40); assert.equal(day.succeeded, 38); assert.equal(day.failed, 2); assert.equal(day.truncated, 2); }
+});
+
+test("day-use 20-product limit is consistent on the first and all later dates", async () => {
+  const items = Array.from({ length: 21 }, (_, index) => ({ bizItemId: String(index), name: `데이유즈 ${index}`, bizItemSubType: "ACCOMMODATION_DAY_USE" }));
+  const crawler = harness({ env: { COLLECTOR_WORKER_RUNTIME: "1", NAVER_SCHEDULE_DELAY_MS: "0" }, fetchImpl: async (_url, init) => {
+    const date = JSON.parse(init.body).variables.scheduleParams.startDateTime.slice(0, 10);
+    return new Response(JSON.stringify({ data: { schedule: { bizItemSchedule: { daily: { date: { [date]: { stock: 0, bookingCount: 0, occupiedBookingCount: 0 } } } } } } }));
+  } });
+  crawler.productCoverage.discover("biz", items, items, ["2026-09-22", "2026-09-23"]);
+  const first = await crawler.collectNaverSchedulesForItems("biz", items, 20);
+  await crawler.collectWeeklyNaverAvailability("biz", items, first, 2, "회", 20);
+  for (const day of crawler.productCoverage.snapshot().targets[0].days) { assert.equal(day.queried, 20); assert.equal(day.truncated, 1); assert.equal(day.failed, 0); }
+});
+
+test("paced captcha cancellation counts only schedules that reached the network", async () => {
+  const items = Array.from({ length: 4 }, (_, index) => ({ bizItemId: String(index), name: `객실 ${index}` }));
+  let calls = 0;
+  const crawler = harness({ env: { COLLECTOR_WORKER_RUNTIME: "1", NAVER_REQUEST_PACING_ENABLED: "1",
+    NAVER_REQUEST_MIN_INTERVAL_MS: "0", NAVER_REQUEST_MAX_CONCURRENCY: "1", NAVER_SCHEDULE_CONCURRENCY: "4", NAVER_SCHEDULE_DELAY_MS: "0" },
+    fetchImpl: async () => { calls++; return new Response('<title>자동입력 방지</title>'); } });
+  crawler.productCoverage.discover("biz", items, items, ["2026-09-22"]);
+  await crawler.collectNaverSchedulesForItems("biz", items, 40);
+  assert.equal(calls, 1);
+  const coverage = crawler.productCoverage.snapshot();
+  assert.equal(coverage.queried, 1);
+  assert.equal(coverage.targets[0].days[0].queried, 1);
+  assert.equal(coverage.targets[0].days[0].failed, 1);
+  assert.equal(crawler.logs.filter(line => line === "COLLECTOR_PROVIDER_BLOCKED").length, 1);
+});
+
+test("0923 entry selects the maintained archive engine and preserves the authorized trigger", () => {
+  const wrapper = fs.readFileSync(path.join(__dirname, "archive_keyword_collector.cjs"), "utf8");
+  for (const trigger of ["manual", "scheduled"]) {
+    const env = { COLLECTOR_WORKER_KEY: "scheduled", COLLECTOR_TRIGGER: trigger };
+    const loaded = [];
+    vm.runInNewContext(wrapper, { process: { env }, require: name => loaded.push(name) });
+    assert.equal(env.COLLECTOR_ENGINE, "archive-keyword-adapted-v2");
+    assert.equal(env.SCHEDULED_COLLECTION, trigger === "scheduled" ? "1" : "0");
+    assert.deepEqual(loaded, ["./gyeongnam_glamping_crawl.cjs"]);
+  }
+  assert.throws(() => vm.runInNewContext(wrapper, { process: { env: { COLLECTOR_WORKER_KEY: "manual", COLLECTOR_TRIGGER: "manual" } }, require: () => assert.fail("must not start") }), /COLLECTOR_ROLE_MISMATCH/);
 });
 
 test("manual worker HTTP 200 throttling stops subsequent schedules and prevents derived updates", async () => {

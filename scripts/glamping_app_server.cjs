@@ -6,6 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { URL } = require("node:url");
+const { AsyncLocalStorage } = require("node:async_hooks");
 const yeogiImportParser = require("./yeogi_import_parser.cjs");
 const { publicHeader } = require("./public_site_chrome.cjs");
 const { createPublicPages } = require("./public_site_pages.cjs");
@@ -22,6 +23,9 @@ const { inspectResult: inspectDailyCollectionResult, allowsDerivedUpdates } = re
 const { createMasterDbDualWriteQueue } = require("./master_db_dual_write.cjs");
 const { createCollectorBroker } = require("./collector_broker.cjs");
 const { dispatchCollector, createHistoricalBookingContext } = require("./collector_dispatch.cjs");
+const { createCollectionReuse, serialExecutor } = require("./collection_reuse.cjs");
+const { createKeywordWorkerScheduler } = require("./keyword_worker_scheduler.cjs");
+const { createCollectorRequests } = require("./collector_requests.cjs");
 
 function loadOptionalTourismPeriodSummaryModule() {
   const filePath = path.join(__dirname, "tourism_datalab_period_summary.cjs");
@@ -255,42 +259,106 @@ const tourismDemandStrengthBackfillScheduler = createDemandStrengthBackfillSched
   enabled: TOURISM_DEMAND_STRENGTH_BACKFILL_ENABLED,
   dailyCallBudget: TOURISM_DEMAND_STRENGTH_DAILY_CALL_BUDGET
 });
-let activeCrawlPromise = null;
-let activeCrawlStartedAt = null;
-let activeCrawlEstimate = null;
-let activeCrawlChild = null;
-let activeCrawlCancelRequested = false;
-let activeCrawlCancelReason = "";
-let activeCrawlSourceRole = "";
-let activeCrawlJob = null;
-let activeCollectorJobId = null;
+const crawlLaneContext = new AsyncLocalStorage();
+const crawlLanes = Object.fromEntries(["manual", "scheduled"].map(key => [key, {
+  key, activeCrawlPromise:null, activeCrawlStartedAt:null, activeCrawlEstimate:null,
+  activeCrawlChild:null, activeCrawlCancelRequested:false, activeCrawlCancelReason:"",
+  activeCrawlSourceRole:"", activeCrawlJob:null, activeCollectorJobId:null, crawlQueue:[]
+}]));
+function crawlLane() { return crawlLaneContext.getStore() || crawlLanes.manual; }
+function withCrawlLane(key, fn) { return crawlLaneContext.run(crawlLanes[key] || crawlLanes.manual, fn); }
+function selectedWorkerKey(value = "manual") {
+  if (!["manual", "scheduled"].includes(value)) throw Object.assign(new Error("수집기를 확인해 주세요."), {statusCode:400});
+  return value;
+}
+const sharedWrite = serialExecutor();
 const COLLECTOR_EXECUTION_MODE = String(process.env.COLLECTOR_EXECUTION_MODE || "local").trim();
 if (!["local", "worker"].includes(COLLECTOR_EXECUTION_MODE)) throw new Error("invalid_collector_execution_mode");
-const collectorBroker = COLLECTOR_EXECUTION_MODE === "worker" ? createCollectorBroker({
+const collectorBrokers = Object.fromEntries(["manual", "scheduled"].map(key => [key, COLLECTOR_EXECUTION_MODE === "worker" ? createCollectorBroker({
   dataDir: DATA_DIR,
   outputsDir: OUTPUTS_DIR,
-  token: process.env.COLLECTOR_WORKER_TOKEN || "",
-  workerId: process.env.COLLECTOR_WORKER_ID || "staydatalab-collector",
-  onProgress: ({ id, stage }) => {
-    if (id === activeCollectorJobId && CRAWL_RUNTIME_STAGE_DEFS.some(item => item.key === stage)) {
-      recordCrawlRuntimeStage(activeCrawlJob, stage);
+  brokerDir: path.join(DATA_DIR, key === "manual" ? "collector" : "collector-scheduled"),
+  workerKey: key,
+  apiBasePath: key === "manual" ? "/api/collector-worker" : "/api/collector-worker-scheduled",
+  token: (key === "manual" ? process.env.COLLECTOR_WORKER_TOKEN : process.env.COLLECTOR_SCHEDULED_WORKER_TOKEN) || "",
+  workerId: (key === "manual" ? process.env.COLLECTOR_WORKER_ID : process.env.COLLECTOR_SCHEDULED_WORKER_ID) || (key === "manual" ? "staydatalab-collector" : "staydatalab-collector-scheduled"),
+  onProviderBlocked: () => stopOtherCollectorLanes(key),
+  onProgress: ({ id, stage }) => withCrawlLane(key, () => {
+    if (id === crawlLane().activeCollectorJobId && CRAWL_RUNTIME_STAGE_DEFS.some(item => item.key === stage)) {
+      recordCrawlRuntimeStage(crawlLane().activeCrawlJob, stage);
     }
-  }
-}) : null;
-const collectorBrokerReady = collectorBroker ? collectorBroker.initialize() : Promise.resolve();
+  })
+}) : null]));
+function collectorBrokerForLane() { return collectorBrokers[crawlLane().key]; }
+const collectorBrokerReady = Promise.all(Object.values(collectorBrokers).filter(Boolean).map(broker => broker.initialize()));
 collectorBrokerReady.catch(() => console.error("collector_broker_initialization_failed"));
+async function stopOtherCollectorLanes(sourceKey) {
+  await Promise.all(Object.entries(collectorBrokers).filter(([key, broker]) => key !== sourceKey && broker).map(async([key,broker]) => {
+    await broker.halt("COLLECTOR_PROVIDER_BLOCKED", {cancelActive:true,cancelQueued:true});
+    withCrawlLane(key, () => {
+      if (crawlLane().activeCrawlJob) terminateActiveCrawlChild("네이버 접근 제한으로 수집을 보류합니다.");
+      for (const job of crawlLane().crawlQueue.splice(0)) job.reject(Object.assign(new Error("네이버 접근 제한으로 수집을 보류합니다."), {code:"COLLECTOR_PROVIDER_BLOCKED",statusCode:409}));
+    });
+  }));
+}
 const historicalBookingContext = createHistoricalBookingContext({ outputsDir: OUTPUTS_DIR, parseCsv });
 let crawlJobSequence = 0;
-const crawlQueue = [];
+const collectionReuse = createCollectionReuse({
+  dataDir:DATA_DIR, outputsDir:OUTPUTS_DIR,
+  onJoin: (record, payload) => withCrawlLane(record.workerKey, () => {
+    const job=[crawlLane().activeCrawlJob,...crawlLane().crawlQueue].find(job=>job && String(job.payload.keyword||'').normalize('NFKC').trim().toLowerCase()===record.scope.keyword);
+    if(job) attachCrawlJobClient(job,{...payload,b2bSubscriber:payload.b2bSubscriber ? {...payload.b2bSubscriber,quotaCounted:false} : undefined});
+  })
+});
 const dailyKeywordCollectionScheduler = createDailyKeywordCollectionScheduler({
   configFile: path.join(CONFIG_DIR, "daily_keyword_collection.json"),
   stateFile: path.join(HISTORY_DIR, "daily_keyword_collection_state.json"),
   dataDir: DATA_DIR,
-  runCrawler: (payload) => runCrawler(payload),
-  isBusy: () => Boolean(activeCrawlPromise || activeCrawlJob || crawlQueue.length),
+  runCrawler: (payload) => runCrawler({...payload, workerKey:"scheduled",trigger:"scheduled"}),
+  isBusy: () => Boolean(crawlLanes.scheduled.activeCrawlPromise || crawlLanes.scheduled.crawlQueue.length),
   inspectResult: (result, payload) => result?.collectionQuality || inspectDailyCollectionResult(result, payload),
   logger: console
 });
+const keywordWorkerScheduler = createKeywordWorkerScheduler({
+  dataDir:DATA_DIR,
+  runCrawler: payload => runCrawler({...payload,sourceRole:USER_ROLES.admin,collectionSource:"admin_search"}),
+  beforeImmediateRun: () => assertCollectorReady("scheduled",true),
+  cancelPendingScheduled: cancelPendingScheduledCollections,
+  inspectResult: (result,payload) => result?.collectionQuality || inspectDailyCollectionResult(result,payload)
+});
+const collectorRequests = createCollectorRequests({dataDir:DATA_DIR,run:runCrawler,preflight:payload=>assertCollectorReady(payload.workerKey,true)});
+const pausedScheduleOccurrences = new Set();
+
+async function assertCollectorReady(workerKey,requireConnection=false) {
+  selectedWorkerKey(workerKey);
+  await collectorBrokerReady;
+  const broker=collectorBrokers[workerKey];
+  if(!broker) throw Object.assign(new Error("수집워커 연결 설정이 필요합니다."),{statusCode:409,code:"COLLECTOR_NOT_CONFIGURED"});
+  const statuses=await Promise.all(Object.values(collectorBrokers).map(item=>item.status()));
+  if(statuses.some(status=>status.errorCode==="COLLECTOR_PROVIDER_BLOCKED")) throw Object.assign(new Error("네이버 접근 제한 보호 상태입니다. 원인을 확인하세요."),{statusCode:409,code:"COLLECTOR_PROVIDER_BLOCKED"});
+  const status=await broker.status();
+  if(!status.configured) throw Object.assign(new Error("선택한 워커의 연결 설정을 먼저 완료하세요."),{statusCode:409,code:"COLLECTOR_NOT_CONFIGURED"});
+  if(status.halted) throw Object.assign(new Error("선택한 워커가 보호 상태입니다. 원인을 확인하세요."),{statusCode:409,code:status.errorCode||"COLLECTOR_HALTED"});
+  const lastSeen=Date.parse(status.workerLastSeenAt);
+  if(requireConnection && (!Number.isFinite(lastSeen) || lastSeen>Date.now()+30000 || Date.now()-lastSeen>90000)) throw Object.assign(new Error("선택한 워커의 최근 연결을 확인하지 못했습니다. 연결 후 다시 요청하세요."),{statusCode:409,code:"COLLECTOR_OFFLINE"});
+  const disk=await fsp.statfs(DATA_DIR);
+  if(Number(disk.bavail)*Number(disk.bsize)<=200*1024*1024) throw Object.assign(new Error("결과 저장공간이 부족합니다."),{statusCode:409,code:"COLLECTOR_DISK_LOW"});
+}
+
+async function cancelPendingScheduledCollections({occurrenceIds=[]}) {
+  for(const id of occurrenceIds) pausedScheduleOccurrences.add(id);
+  return withCrawlLane("scheduled",async()=>{
+    for(const job of [...crawlLane().crawlQueue]) {
+      if(job.payload.trigger!=="scheduled" || !occurrenceIds.includes(job.payload.scheduleOccurrenceId) || job.waiterCount>1) continue;
+      crawlLane().crawlQueue.splice(crawlLane().crawlQueue.indexOf(job),1);
+      job.reject(Object.assign(new Error("예약 일시정지로 대기 작업을 취소했습니다."),{code:"COLLECTOR_SCHEDULE_PAUSED",cancelled:true,statusCode:409}));
+    }
+    const job=crawlLane().activeCrawlJob;
+    if(job?.payload.trigger==="scheduled" && occurrenceIds.includes(job.payload.scheduleOccurrenceId) && job.waiterCount<=1 && crawlLane().activeCollectorJobId) {
+      await collectorBrokers.scheduled.cancelQueued(crawlLane().activeCollectorJobId,"COLLECTOR_SCHEDULE_PAUSED");
+    }
+  });
+}
 const recentCrawlResults = new Map();
 const CRAWL_RESULT_REUSE_TTL_MS = 5 * 60 * 1000;
 const B2B_COMPLETED_SEARCH_REUSE_TTL_MS = Math.max(
@@ -1065,6 +1133,7 @@ function crawlPayloadSignature(payload = {}) {
   const recrawlContext = sanitizeRecrawlContext(payload.recrawlContext, plan);
   const signaturePayload = {
     keyword: compactKeyword(plan.keyword || "").toLowerCase(),
+    adults: Number(payload.adults || 2),
     checkIn: plan.checkIn,
     checkOut: plan.checkOut,
     bookingRangeDays: plan.bookingRangeDays,
@@ -1102,11 +1171,11 @@ function reusableRecentCrawlResult(signature) {
 }
 
 function activeCrawlRemainingSeconds() {
-  if (!activeCrawlPromise) return 0;
-  const elapsedSeconds = activeCrawlStartedAt
-    ? Math.max(0, Math.round((Date.now() - activeCrawlStartedAt.getTime()) / 1000))
+  if (!crawlLane().activeCrawlPromise) return 0;
+  const elapsedSeconds = crawlLane().activeCrawlStartedAt
+    ? Math.max(0, Math.round((Date.now() - crawlLane().activeCrawlStartedAt.getTime()) / 1000))
     : 0;
-  const estimatedTotalSeconds = Number(activeCrawlEstimate?.estimatedTotalSeconds || activeCrawlJob?.estimate?.estimatedTotalSeconds || 0);
+  const estimatedTotalSeconds = Number(crawlLane().activeCrawlEstimate?.estimatedTotalSeconds || crawlLane().activeCrawlJob?.estimate?.estimatedTotalSeconds || 0);
   if (!estimatedTotalSeconds) return 30;
   return Math.max(5, Math.round(estimatedTotalSeconds - elapsedSeconds));
 }
@@ -1114,7 +1183,7 @@ function activeCrawlRemainingSeconds() {
 function crawlJobWaitSeconds(job) {
   if (!job || job.status === "active") return 0;
   let seconds = activeCrawlRemainingSeconds();
-  for (const queued of crawlQueue) {
+  for (const queued of crawlLane().crawlQueue) {
     if (queued === job) break;
     seconds += Math.max(1, Number(queued.estimate?.estimatedTotalSeconds || 1));
   }
@@ -1127,6 +1196,8 @@ function publicCrawlJob(job, position = 0) {
   const ownSeconds = Math.max(1, Number(job.estimate?.estimatedTotalSeconds || 1));
   return {
     id: job.id,
+    workerKey: job.payload?.workerKey || "manual",
+    trigger: job.payload?.trigger || "manual",
     signature: job.signature,
     status: job.status,
     keyword: job.plan?.keyword || "",
@@ -1163,8 +1234,8 @@ function publicCrawlJob(job, position = 0) {
 }
 
 function findReusableCrawlJob(signature) {
-  if (activeCrawlJob?.signature === signature && !activeCrawlCancelRequested) return activeCrawlJob;
-  return crawlQueue.find((job) => job.signature === signature && job.status === "queued") || null;
+  if (crawlLane().activeCrawlJob?.signature === signature && !crawlLane().activeCrawlCancelRequested) return crawlLane().activeCrawlJob;
+  return crawlLane().crawlQueue.find((job) => job.signature === signature && job.status === "queued") || null;
 }
 
 function crawlJobHasClientRequestId(job, clientRequestId) {
@@ -1174,8 +1245,8 @@ function crawlJobHasClientRequestId(job, clientRequestId) {
 function findCrawlJobByClientRequestId(clientRequestId) {
   const id = crawlQueueClientRequestId(clientRequestId);
   if (!id) return null;
-  if (crawlJobHasClientRequestId(activeCrawlJob, id)) return activeCrawlJob;
-  return crawlQueue.find((job) => crawlJobHasClientRequestId(job, id)) || null;
+  if (crawlJobHasClientRequestId(crawlLane().activeCrawlJob, id)) return crawlLane().activeCrawlJob;
+  return crawlLane().crawlQueue.find((job) => crawlJobHasClientRequestId(job, id)) || null;
 }
 
 function resolveCrawlJob(result, job, mode = "completed") {
@@ -1195,9 +1266,9 @@ function crawlRuntimeStageDef(key) {
   return CRAWL_RUNTIME_STAGE_DEFS.find((stage) => stage.key === key) || { key, label: key, group: key, estimatedRatio: 0.1, detail: "" };
 }
 
-function crawlRuntimeStageEstimatedSeconds(key, estimate = activeCrawlEstimate) {
+function crawlRuntimeStageEstimatedSeconds(key, estimate = crawlLane().activeCrawlEstimate) {
   const def = crawlRuntimeStageDef(key);
-  const total = Math.max(1, Number(estimate?.estimatedTotalSeconds || activeCrawlEstimate?.estimatedTotalSeconds || 1));
+  const total = Math.max(1, Number(estimate?.estimatedTotalSeconds || crawlLane().activeCrawlEstimate?.estimatedTotalSeconds || 1));
   return Math.max(4, Math.round(total * Number(def.estimatedRatio || 0.1)));
 }
 
@@ -1266,7 +1337,7 @@ function recordCrawlRuntimeOutputChunk(job, chunk = "", flush = false) {
   recordCrawlRuntimeLog(job, flush ? source : lines.join("\n"));
 }
 
-function crawlRuntimeStageRows(job = activeCrawlJob, elapsedSeconds = 0) {
+function crawlRuntimeStageRows(job = crawlLane().activeCrawlJob, elapsedSeconds = 0) {
   if (!job || !Array.isArray(job.stageEvents) || !job.stageEvents.length) return null;
   const byKey = new Map(job.stageEvents.map((event) => [event.key, event]));
   const rows = CRAWL_RUNTIME_STAGE_DEFS.map((def) => {
@@ -1393,8 +1464,9 @@ function attachCrawlJobClient(job, payload = {}) {
 }
 
 function startNextCrawlJob() {
-  if (activeCrawlPromise || activeCrawlJob) return;
-  const job = crawlQueue.shift();
+  if (crawlLane().activeCrawlPromise || crawlLane().activeCrawlJob) return;
+  crawlLane().crawlQueue.sort((a,b) => Number(b.payload.trigger === "scheduled") - Number(a.payload.trigger === "scheduled") || a.queuedAt - b.queuedAt);
+  const job = crawlLane().crawlQueue.shift();
   if (!job) return;
   startCrawlJob(job);
 }
@@ -1402,15 +1474,15 @@ function startNextCrawlJob() {
 function startCrawlJob(job) {
   job.status = "active";
   job.startedAt = new Date();
-  activeCrawlJob = job;
-  activeCrawlStartedAt = job.startedAt;
-  activeCrawlEstimate = estimateCrawlCompletion(job.payload, readCrawlTimingStoreSync());
-  job.estimate = activeCrawlEstimate;
-  activeCrawlCancelRequested = false;
-  activeCrawlCancelReason = "";
-  activeCrawlSourceRole = job.sourceRole;
+  crawlLane().activeCrawlJob = job;
+  crawlLane().activeCrawlStartedAt = job.startedAt;
+  crawlLane().activeCrawlEstimate = estimateCrawlCompletion(job.payload, readCrawlTimingStoreSync());
+  job.estimate = crawlLane().activeCrawlEstimate;
+  crawlLane().activeCrawlCancelRequested = false;
+  crawlLane().activeCrawlCancelReason = "";
+  crawlLane().activeCrawlSourceRole = job.sourceRole;
   const internalPromise = runCrawlerInternal(job.payload);
-  activeCrawlPromise = internalPromise;
+  crawlLane().activeCrawlPromise = internalPromise;
 
   (async () => {
     let result = null;
@@ -1423,10 +1495,10 @@ function startCrawlJob(job) {
     const endedAt = new Date();
     finishOpenCrawlRuntimeStage(job, endedAt);
     const stageTimings = publicCrawlStageTimings(job);
-    const estimate = activeCrawlEstimate;
+    const estimate = crawlLane().activeCrawlEstimate;
     await appendCrawlTimingEntry({
       plan: estimate,
-      startedAt: activeCrawlStartedAt,
+      startedAt: crawlLane().activeCrawlStartedAt,
       endedAt,
       estimate,
       result,
@@ -1472,15 +1544,15 @@ function startCrawlJob(job) {
         });
       }
     }
-    activeCrawlPromise = null;
-    activeCrawlStartedAt = null;
-    activeCrawlEstimate = null;
-    activeCrawlChild = null;
-    activeCollectorJobId = null;
-    activeCrawlCancelRequested = false;
-    activeCrawlCancelReason = "";
-    activeCrawlSourceRole = "";
-    activeCrawlJob = null;
+    crawlLane().activeCrawlPromise = null;
+    crawlLane().activeCrawlStartedAt = null;
+    crawlLane().activeCrawlEstimate = null;
+    crawlLane().activeCrawlChild = null;
+    crawlLane().activeCollectorJobId = null;
+    crawlLane().activeCrawlCancelRequested = false;
+    crawlLane().activeCrawlCancelReason = "";
+    crawlLane().activeCrawlSourceRole = "";
+    crawlLane().activeCrawlJob = null;
     job.status = failure ? "failed" : "completed";
     if (failure) job.reject(failure);
     else job.resolve(resolveCrawlJob(result, job, job.waiterCount > 1 ? "shared" : "completed"));
@@ -2417,7 +2489,11 @@ function consentRecordFromRequest(req, acceptedAt, payload = {}) {
   };
 }
 
-async function registerB2BMember(payload = {}, context = {}) {
+async function registerB2BMember(...args) {
+  return sharedWrite(() => registerB2BMemberUnlocked(...args));
+}
+
+async function registerB2BMemberUnlocked(payload = {}, context = {}) {
   const { username, password } = validateSignupPayload(payload);
   const store = await readB2BMemberStore();
   if (store.members.some((member) => normalizeLoginId(member.username) === username)) {
@@ -2446,7 +2522,11 @@ async function registerB2BMember(payload = {}, context = {}) {
   return { ...publicB2BMember(member), passwordHash: member.passwordHash };
 }
 
-async function authenticateB2BMember(username, password) {
+async function authenticateB2BMember(...args) {
+  return sharedWrite(() => authenticateB2BMemberUnlocked(...args));
+}
+
+async function authenticateB2BMemberUnlocked(username, password) {
   const normalized = normalizeLoginId(username);
   if (!normalized) return null;
   const store = await readB2BMemberStore();
@@ -3699,7 +3779,11 @@ function parseBooleanOption(value, fallback = false) {
   return fallback;
 }
 
-async function updateB2BMemberAdminPolicy(memberId = "", payload = {}, adminSession = {}) {
+async function updateB2BMemberAdminPolicy(...args) {
+  return sharedWrite(() => updateB2BMemberAdminPolicyUnlocked(...args));
+}
+
+async function updateB2BMemberAdminPolicyUnlocked(memberId = "", payload = {}, adminSession = {}) {
   const targetId = String(memberId || payload.memberId || "").trim();
   if (!targetId) {
     const error = new Error("회원 ID가 필요합니다.");
@@ -3905,7 +3989,11 @@ function b2bSearchResultSummary(data = {}) {
   };
 }
 
-async function ensureB2BSearchHistory({ session, subscriber, req, payload, runId, data, crawlTiming, quotaCounted = true }) {
+async function ensureB2BSearchHistory(...args) {
+  return sharedWrite(() => ensureB2BSearchHistoryUnlocked(...args));
+}
+
+async function ensureB2BSearchHistoryUnlocked({ session, subscriber, req, payload, runId, data, crawlTiming, quotaCounted = true }) {
   const now = new Date().toISOString();
   const store = await readB2BSearchHistoryStore();
   const owner = subscriber || session || {};
@@ -5033,6 +5121,9 @@ async function listRuns() {
       collectedAtSource,
       updatedAt: stat.mtime.toISOString(),
       counts: manifest?.counts || {},
+      workerKey: manifest?.workerKey || null,
+      trigger: manifest?.trigger || null,
+      collectorEngine: manifest?.collectorEngine || null,
       collectionQuality: manifest?.collectionQuality || null,
       files: manifest?.files || files
     });
@@ -5990,7 +6081,11 @@ function mergeYeogiBulkExposure(currentExposure = {}, nextExposure = {}) {
   });
 }
 
-async function applyYeogiImportToCompanyMaster(rows = [], context = {}) {
+async function applyYeogiImportToCompanyMaster(...args) {
+  return sharedWrite(() => applyYeogiImportToCompanyMasterUnlocked(...args));
+}
+
+async function applyYeogiImportToCompanyMasterUnlocked(rows = [], context = {}) {
   const master = await readCompanyMaster();
   const nameIndex = new Map();
   for (const company of Object.values(master.companies || {})) {
@@ -6185,7 +6280,11 @@ async function resolveYeogiCompanyPaste(payload = {}) {
   };
 }
 
-async function saveYeogiCompanyPaste(payload = {}) {
+async function saveYeogiCompanyPaste(...args) {
+  return sharedWrite(() => saveYeogiCompanyPasteUnlocked(...args));
+}
+
+async function saveYeogiCompanyPasteUnlocked(payload = {}) {
   const action = String(payload.action || "preview").trim();
   const resolved = await resolveYeogiCompanyPaste(payload);
   if (action !== "apply") return { preview: resolved.preview };
@@ -12296,7 +12395,11 @@ function mergeCompanyRecords(master, companyIds = [], candidateKey = "") {
   return target;
 }
 
-async function resolveCompanyMasterDuplicate(payload = {}) {
+async function resolveCompanyMasterDuplicate(...args) {
+  return sharedWrite(() => resolveCompanyMasterDuplicateUnlocked(...args));
+}
+
+async function resolveCompanyMasterDuplicateUnlocked(payload = {}) {
   const action = String(payload.action || "").trim();
   const candidateKey = String(payload.candidateKey || "").trim();
   const companyIds = Array.isArray(payload.companyIds) ? payload.companyIds.map((value) => String(value || "").trim()) : [];
@@ -12321,7 +12424,11 @@ async function resolveCompanyMasterDuplicate(payload = {}) {
   throw error;
 }
 
-async function saveCompanyManualCorrection(payload = {}) {
+async function saveCompanyManualCorrection(...args) {
+  return sharedWrite(() => saveCompanyManualCorrectionUnlocked(...args));
+}
+
+async function saveCompanyManualCorrectionUnlocked(payload = {}) {
   const companyId = String(payload.companyId || "").trim();
   const master = await readCompanyMaster();
   const company = master.companies?.[companyId];
@@ -12385,7 +12492,11 @@ async function saveCompanyManualCorrection(payload = {}) {
   };
 }
 
-async function saveCompanyChannelExposure(payload = {}) {
+async function saveCompanyChannelExposure(...args) {
+  return sharedWrite(() => saveCompanyChannelExposureUnlocked(...args));
+}
+
+async function saveCompanyChannelExposureUnlocked(payload = {}) {
   const companyId = String(payload.companyId || "").trim();
   const master = await readCompanyMaster();
   const company = master.companies?.[companyId];
@@ -12593,7 +12704,11 @@ function sanitizeAdminReviewContext(value = {}) {
   return hasText || hasMetrics ? context : null;
 }
 
-async function saveCompanyAdminReview(payload = {}) {
+async function saveCompanyAdminReview(...args) {
+  return sharedWrite(() => saveCompanyAdminReviewUnlocked(...args));
+}
+
+async function saveCompanyAdminReviewUnlocked(payload = {}) {
   const companyId = String(payload.companyId || "").trim();
   const status = String(payload.status || "").trim();
   const master = await readCompanyMaster();
@@ -12662,7 +12777,11 @@ async function saveCompanyAdminReview(payload = {}) {
   };
 }
 
-async function saveAdminRegionReview(payload = {}, session = {}) {
+async function saveAdminRegionReview(...args) {
+  return sharedWrite(() => saveAdminRegionReviewUnlocked(...args));
+}
+
+async function saveAdminRegionReviewUnlocked(payload = {}, session = {}) {
   const regionKey = regionReviewKey(payload.regionKey || payload.key || payload.regionLabel);
   const regionLabel = sanitizeMemberText(payload.regionLabel || payload.label || regionKey, 80);
   const provinceLabel = sanitizeMemberText(payload.provinceLabel, 80);
@@ -12729,7 +12848,11 @@ async function saveAdminRegionReview(payload = {}, session = {}) {
   };
 }
 
-async function saveCompanySalesContact(payload = {}) {
+async function saveCompanySalesContact(...args) {
+  return sharedWrite(() => saveCompanySalesContactUnlocked(...args));
+}
+
+async function saveCompanySalesContactUnlocked(payload = {}) {
   const companyId = String(payload.companyId || "").trim();
   const status = String(payload.status || "not_contacted").trim();
   const responseStatus = String(payload.responseStatus || "not_recorded").trim();
@@ -12812,7 +12935,11 @@ async function saveCompanySalesContact(payload = {}) {
   };
 }
 
-async function upsertCompanyMasterForRun(data, collectedAt) {
+async function upsertCompanyMasterForRun(...args) {
+  return sharedWrite(() => upsertCompanyMasterForRunUnlocked(...args));
+}
+
+async function upsertCompanyMasterForRunUnlocked(data, collectedAt) {
   const master = await readCompanyMaster();
   const run = data?.run || {};
   const runDbRoute = runCollectionDbRoute(run);
@@ -12964,7 +13091,11 @@ async function summarizeCompanyMaster() {
   };
 }
 
-async function saveCompanyAdminProfile(payload = {}, session = {}) {
+async function saveCompanyAdminProfile(...args) {
+  return sharedWrite(() => saveCompanyAdminProfileUnlocked(...args));
+}
+
+async function saveCompanyAdminProfileUnlocked(payload = {}, session = {}) {
   const companyId = String(payload.companyId || "").trim();
   const master = await readCompanyMaster();
   const company = master.companies?.[companyId];
@@ -14353,7 +14484,11 @@ async function storeRunHistoryEvidence(runId, observations = []) {
   };
 }
 
-async function appendHistoryForRun(runId) {
+async function appendHistoryForRun(...args) {
+  return sharedWrite(() => appendHistoryForRunUnlocked(...args));
+}
+
+async function appendHistoryForRunUnlocked(runId) {
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return { appended: 0, reason: "run_not_found" };
   if (!allowsDerivedUpdates(await readManifest(dirPath))) {
@@ -14374,6 +14509,7 @@ async function appendHistoryForRun(runId) {
       dbRoute
     };
   }
+  const knownObservations = new Set((await readHistoryObservations()).map(row => row.observationId));
   const observations = buildHistoryObservations(data, collectedAt);
   if (!observations.length) return { appended: 0, reason: "no_observations" };
   const evidence = masterDbDualWriteQueue.mode === "shadow"
@@ -14382,13 +14518,14 @@ async function appendHistoryForRun(runId) {
       code: error.code || "history_evidence_write_failed"
     }))
     : null;
+  const missing = observations.filter(row => !knownObservations.has(row.observationId));
   await fsp.mkdir(HISTORY_DIR, { recursive: true });
-  await fsp.appendFile(
+  if (missing.length) await fsp.appendFile(
     HISTORY_OBSERVATIONS_FILE,
-    `${observations.map((row) => JSON.stringify(row)).join("\n")}\n`,
+    `${missing.map((row) => JSON.stringify(row)).join("\n")}\n`,
     "utf8"
   );
-  const result = { appended: observations.length, file: "history/observations.jsonl" };
+  const result = { appended: missing.length, observationCount: observations.length, file: "history/observations.jsonl" };
   if (masterDbDualWriteQueue.mode === "shadow") result.evidence = evidence;
   return result;
 }
@@ -16780,6 +16917,9 @@ async function loadRun(runId, options = {}) {
       updatedAt: collectedAt,
       counts: manifest?.counts || {},
       scheduledCollection: manifest?.scheduledCollection === true,
+      workerKey: manifest?.workerKey || null,
+      trigger: manifest?.trigger || null,
+      collectorEngine: manifest?.collectorEngine || null,
       collectionQuality: manifest?.collectionQuality || null,
       files: {
         regional: regionalFile,
@@ -17014,7 +17154,11 @@ function crawlTimingErrorSummary(error) {
   return text.length > 180 ? `${text.slice(0, 177)}...` : text;
 }
 
-async function appendCrawlTimingEntry({ plan, startedAt, endedAt, estimate, result, error, stageTimings = [] }) {
+async function appendCrawlTimingEntry(...args) {
+  return sharedWrite(() => appendCrawlTimingEntryUnlocked(...args));
+}
+
+async function appendCrawlTimingEntryUnlocked({ plan, startedAt, endedAt, estimate, result, error, stageTimings = [] }) {
   if (!startedAt || !endedAt) return { recorded: false, reason: "missing_time" };
   const durationSeconds = Math.max(1, Math.round((endedAt.getTime() - startedAt.getTime()) / 1000));
   const success = !error;
@@ -17040,37 +17184,37 @@ async function appendCrawlTimingEntry({ plan, startedAt, endedAt, estimate, resu
 }
 
 async function runCrawlerLegacySingleFlight(payload) {
-  if (activeCrawlPromise) {
-    const elapsedSeconds = activeCrawlStartedAt
-      ? Math.max(1, Math.round((Date.now() - activeCrawlStartedAt.getTime()) / 1000))
+  if (crawlLane().activeCrawlPromise) {
+    const elapsedSeconds = crawlLane().activeCrawlStartedAt
+      ? Math.max(1, Math.round((Date.now() - crawlLane().activeCrawlStartedAt.getTime()) / 1000))
       : 0;
     const error = new Error(`이미 수집이 진행 중입니다${elapsedSeconds ? ` (${elapsedSeconds}초 경과)` : ""}. 완료 후 다시 실행하세요.`);
     error.statusCode = 409;
     throw error;
   }
-  activeCrawlStartedAt = new Date();
-  activeCrawlEstimate = estimateCrawlCompletion(payload, readCrawlTimingStoreSync());
-  activeCrawlCancelRequested = false;
-  activeCrawlCancelReason = "";
-  activeCrawlSourceRole = sourceRoleForCollectionSource(
+  crawlLane().activeCrawlStartedAt = new Date();
+  crawlLane().activeCrawlEstimate = estimateCrawlCompletion(payload, readCrawlTimingStoreSync());
+  crawlLane().activeCrawlCancelRequested = false;
+  crawlLane().activeCrawlCancelReason = "";
+  crawlLane().activeCrawlSourceRole = sourceRoleForCollectionSource(
     normalizeCollectionSource(payload.collectionSource, payload.sourceRole),
     payload.sourceRole
   );
-  activeCrawlPromise = runCrawlerInternal(payload);
+  crawlLane().activeCrawlPromise = runCrawlerInternal(payload);
   let result = null;
   let failure = null;
   try {
-    result = await activeCrawlPromise;
+    result = await crawlLane().activeCrawlPromise;
     return result;
   } catch (error) {
     failure = error;
     throw error;
   } finally {
     const endedAt = new Date();
-    const estimate = activeCrawlEstimate;
+    const estimate = crawlLane().activeCrawlEstimate;
     await appendCrawlTimingEntry({
       plan: estimate,
-      startedAt: activeCrawlStartedAt,
+      startedAt: crawlLane().activeCrawlStartedAt,
       endedAt,
       estimate,
       result,
@@ -17083,19 +17227,38 @@ async function runCrawlerLegacySingleFlight(payload) {
     }).catch((error) => {
       console.warn(`Could not record crawl timing: ${error.message || error}`);
     });
-    activeCrawlPromise = null;
-    activeCrawlStartedAt = null;
-    activeCrawlEstimate = null;
-    activeCrawlChild = null;
-    activeCrawlCancelRequested = false;
-    activeCrawlCancelReason = "";
-    activeCrawlSourceRole = "";
+    crawlLane().activeCrawlPromise = null;
+    crawlLane().activeCrawlStartedAt = null;
+    crawlLane().activeCrawlEstimate = null;
+    crawlLane().activeCrawlChild = null;
+    crawlLane().activeCrawlCancelRequested = false;
+    crawlLane().activeCrawlCancelReason = "";
+    crawlLane().activeCrawlSourceRole = "";
   }
 }
 
 async function runCrawler(payload) {
+  const workerKey = selectedWorkerKey(payload.workerKey || "manual");
+  if (workerKey === "scheduled" && COLLECTOR_EXECUTION_MODE !== "worker") {
+    throw Object.assign(new Error("예약워커 연결 설정이 필요합니다."), {statusCode:409,code:"COLLECTOR_NOT_CONFIGURED"});
+  }
+  const request = {...payload,workerKey,trigger:payload.trigger === "scheduled" ? "scheduled" : "manual"};
+  request.scheduledCollection = request.trigger === "scheduled";
+  const occurrenceDay = /^scheduled_(\d{4}-\d{2}-\d{2})$/.exec(String(payload.scheduleOccurrenceId || ""))?.[1]
+    || new Date(Date.now() + 9 * 3600000).toISOString().slice(0,10);
+  request.queueDeadline = request.scheduledCollection ? Date.parse(`${occurrenceDay}T23:59:59.999+09:00`) : null;
+  return withCrawlLane(workerKey, async () => {
+    if (COLLECTOR_EXECUTION_MODE !== "worker") return runCrawlerInLane(request);
+    await assertCollectorReady(workerKey);
+    const plan=crawlExecutionPlan(request);
+    if(!plan.keyword) throw Object.assign(new Error("키워드를 입력하세요."),{statusCode:400,code:"COLLECTION_KEYWORD_REQUIRED"});
+    return collectionReuse.run({...request,...plan,adults:Number(request.adults||2)}, () => runCrawlerInLane(request));
+  });
+}
+
+async function runCrawlerInLane(payload) {
   const signature = crawlPayloadSignature(payload);
-  const cached = reusableRecentCrawlResult(signature);
+  const cached = payload.allowRepeat ? null : reusableRecentCrawlResult(signature);
   if (cached) {
     return resolveCrawlJob(cached, { signature, waiterCount: 1 }, "recent_reuse");
   }
@@ -17106,7 +17269,7 @@ async function runCrawler(payload) {
     return resolveCrawlJob(result, existing, "shared");
   }
   const job = createCrawlJob(payload, signature);
-  crawlQueue.push(job);
+  crawlLane().crawlQueue.push(job);
   startNextCrawlJob();
   return job.promise;
 }
@@ -17119,17 +17282,20 @@ function crawlCancelledError(reason = "") {
 }
 
 function terminateActiveCrawlChild(reason = "사용자 요청으로 수집을 중지합니다.", requesterRole = USER_ROLES.admin) {
-  if (!activeCrawlPromise) return { ok: false, active: false, message: "진행 중인 수집이 없습니다." };
-  if (normalizeUserRole(requesterRole) === USER_ROLES.b2b && normalizeUserRole(activeCrawlSourceRole) !== USER_ROLES.b2b) {
+  if (!crawlLane().activeCrawlPromise) return { ok: false, active: false, message: "진행 중인 수집이 없습니다." };
+  if (normalizeUserRole(requesterRole) === USER_ROLES.b2b && normalizeUserRole(crawlLane().activeCrawlSourceRole) !== USER_ROLES.b2b) {
     return { ok: false, active: true, blocked: true, message: "관리자 수집은 B2B 화면에서 중지할 수 없습니다." };
   }
-  activeCrawlCancelRequested = true;
-  activeCrawlCancelReason = reason;
-  if (collectorBroker && activeCollectorJobId) {
-    collectorBroker.cancel(activeCollectorJobId).catch(() => console.error("collector_cancel_failed"));
+  if (normalizeUserRole(requesterRole) === USER_ROLES.b2b && crawlLane().activeCrawlJob?.waiterCount > 1) {
+    return {ok:false,active:true,blocked:true,message:"다른 요청과 함께 진행 중인 수집은 이 화면에서 중지할 수 없습니다."};
   }
-  if (activeCrawlJob) activeCrawlJob.status = "cancelling";
-  const child = activeCrawlChild;
+  crawlLane().activeCrawlCancelRequested = true;
+  crawlLane().activeCrawlCancelReason = reason;
+  if (collectorBrokerForLane() && crawlLane().activeCollectorJobId) {
+    collectorBrokerForLane().cancel(crawlLane().activeCollectorJobId).catch(() => console.error("collector_cancel_failed"));
+  }
+  if (crawlLane().activeCrawlJob) crawlLane().activeCrawlJob.status = "cancelling";
+  const child = crawlLane().activeCrawlChild;
   if (!child || child.killed || !child.pid) {
     return { ok: true, active: true, message: "수집 중지 요청을 접수했습니다." };
   }
@@ -17140,7 +17306,7 @@ function terminateActiveCrawlChild(reason = "사용자 요청으로 수집을 �
   }
   if (process.platform === "win32") {
     setTimeout(() => {
-      if (!activeCrawlCancelRequested || !child.pid || child.killed) return;
+      if (!crawlLane().activeCrawlCancelRequested || !child.pid || child.killed) return;
       try {
         spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true });
       } catch {
@@ -17155,61 +17321,61 @@ function currentCrawlStatus(options = {}) {
   const clientRequestId = crawlQueueClientRequestId(options.clientRequestId);
   const requesterJob = findCrawlJobByClientRequestId(clientRequestId);
   const requesterQueueIndex = requesterJob
-    ? (requesterJob === activeCrawlJob ? 0 : crawlQueue.indexOf(requesterJob) + 1)
+    ? (requesterJob === crawlLane().activeCrawlJob ? 0 : crawlLane().crawlQueue.indexOf(requesterJob) + 1)
     : -1;
-  const elapsedSeconds = activeCrawlStartedAt
-    ? Math.max(1, Math.round((Date.now() - activeCrawlStartedAt.getTime()) / 1000))
+  const elapsedSeconds = crawlLane().activeCrawlStartedAt
+    ? Math.max(1, Math.round((Date.now() - crawlLane().activeCrawlStartedAt.getTime()) / 1000))
     : 0;
-  const estimatedTotalSeconds = activeCrawlEstimate?.estimatedTotalSeconds || 0;
-  const remainingSeconds = activeCrawlPromise && estimatedTotalSeconds
+  const estimatedTotalSeconds = crawlLane().activeCrawlEstimate?.estimatedTotalSeconds || 0;
+  const remainingSeconds = crawlLane().activeCrawlPromise && estimatedTotalSeconds
     ? Math.max(0, Math.round(estimatedTotalSeconds - elapsedSeconds))
     : null;
-  const estimatedProgress = activeCrawlPromise && estimatedTotalSeconds
+  const estimatedProgress = crawlLane().activeCrawlPromise && estimatedTotalSeconds
     ? Math.max(1, Math.min(99, Math.round((elapsedSeconds / estimatedTotalSeconds) * 100)))
     : null;
-  const estimatedCompleteAt = activeCrawlStartedAt && estimatedTotalSeconds
-    ? new Date(activeCrawlStartedAt.getTime() + estimatedTotalSeconds * 1000).toISOString()
+  const estimatedCompleteAt = crawlLane().activeCrawlStartedAt && estimatedTotalSeconds
+    ? new Date(crawlLane().activeCrawlStartedAt.getTime() + estimatedTotalSeconds * 1000).toISOString()
     : null;
   const delayThresholdSeconds = estimatedTotalSeconds
     ? Math.max(30, Math.round(estimatedTotalSeconds * 0.15))
     : 0;
-  const delayedSeconds = activeCrawlPromise && estimatedTotalSeconds && elapsedSeconds > estimatedTotalSeconds + delayThresholdSeconds
+  const delayedSeconds = crawlLane().activeCrawlPromise && estimatedTotalSeconds && elapsedSeconds > estimatedTotalSeconds + delayThresholdSeconds
     ? elapsedSeconds - estimatedTotalSeconds
     : 0;
-  const stageStatus = activeCrawlPromise
+  const stageStatus = crawlLane().activeCrawlPromise
     ? activeCrawlStageStatus(elapsedSeconds)
     : { currentStage: null, stages: [] };
   return {
-    active: !!activeCrawlPromise,
-    startedAt: activeCrawlStartedAt ? activeCrawlStartedAt.toISOString() : null,
+    active: !!crawlLane().activeCrawlPromise,
+    startedAt: crawlLane().activeCrawlStartedAt ? crawlLane().activeCrawlStartedAt.toISOString() : null,
     elapsedSeconds,
-    estimatedTotalSeconds: activeCrawlPromise ? estimatedTotalSeconds : null,
+    estimatedTotalSeconds: crawlLane().activeCrawlPromise ? estimatedTotalSeconds : null,
     remainingSeconds,
     estimatedProgress,
     estimatedCompleteAt,
     isDelayed: delayedSeconds > 0,
     delayedSeconds,
-    cancelling: Boolean(activeCrawlCancelRequested),
-    cancelReason: activeCrawlCancelReason || "",
-    sourceRole: activeCrawlPromise ? normalizeUserRole(activeCrawlSourceRole) : "",
-    delayThresholdSeconds: activeCrawlPromise ? delayThresholdSeconds : null,
-    recrawlContext: activeCrawlPromise ? activeCrawlEstimate?.recrawlContext || null : null,
+    cancelling: Boolean(crawlLane().activeCrawlCancelRequested),
+    cancelReason: crawlLane().activeCrawlCancelReason || "",
+    sourceRole: crawlLane().activeCrawlPromise ? normalizeUserRole(crawlLane().activeCrawlSourceRole) : "",
+    delayThresholdSeconds: crawlLane().activeCrawlPromise ? delayThresholdSeconds : null,
+    recrawlContext: crawlLane().activeCrawlPromise ? crawlLane().activeCrawlEstimate?.recrawlContext || null : null,
     currentStage: stageStatus.currentStage,
     stages: stageStatus.stages,
-    stageTimings: activeCrawlPromise ? publicCrawlStageTimings(activeCrawlJob) : [],
+    stageTimings: crawlLane().activeCrawlPromise ? publicCrawlStageTimings(crawlLane().activeCrawlJob) : [],
     stageSource: stageStatus.stages?.some((stage) => stage.actual) ? "runtime" : "estimate",
-    estimateBasis: activeCrawlPromise ? activeCrawlEstimate?.basis || null : null,
-    activeJob: publicCrawlJob(activeCrawlJob, 0),
-    queueLength: crawlQueue.length,
-    queuedJobs: crawlQueue.map((job, index) => publicCrawlJob(job, index + 1)),
+    estimateBasis: crawlLane().activeCrawlPromise ? crawlLane().activeCrawlEstimate?.basis || null : null,
+    activeJob: publicCrawlJob(crawlLane().activeCrawlJob, 0),
+    queueLength: crawlLane().crawlQueue.length,
+    queuedJobs: crawlLane().crawlQueue.map((job, index) => publicCrawlJob(job, index + 1)),
     requesterJob: requesterJob ? publicCrawlJob(requesterJob, requesterQueueIndex) : null
   };
 }
 
 function activeCrawlStageStatus(elapsedSeconds = 0) {
-  const runtime = crawlRuntimeStageRows(activeCrawlJob, elapsedSeconds);
+  const runtime = crawlRuntimeStageRows(crawlLane().activeCrawlJob, elapsedSeconds);
   if (runtime) return runtime;
-  const stages = Array.isArray(activeCrawlEstimate?.stages) ? activeCrawlEstimate.stages : [];
+  const stages = Array.isArray(crawlLane().activeCrawlEstimate?.stages) ? crawlLane().activeCrawlEstimate.stages : [];
   if (!stages.length) return { currentStage: null, stages: [] };
   let cursor = 0;
   let currentStage = null;
@@ -17255,6 +17421,15 @@ function activeCrawlStageStatus(elapsedSeconds = 0) {
 
 function scheduledCrawlerPacingEnv(payload = {}, checkIn = "") {
   const disabled = { NAVER_REQUEST_PACING_ENABLED: "0" };
+  if (payload.workerKey === "scheduled" && payload.requestPacing && !payload.requestPacing.startDate) {
+    const config = require("./keyword_worker_scheduler.cjs").defaultConfig();
+    config.requestPacing = payload.requestPacing;
+    const profile = require("./keyword_worker_scheduler.cjs").validateConfig(config).requestPacing;
+    const env = {NAVER_REQUEST_PACING_ENABLED:profile.enabled ? "1" : "0"};
+    const mapping = {minIntervalMs:"NAVER_REQUEST_MIN_INTERVAL_MS",maxConcurrentRequests:"NAVER_REQUEST_MAX_CONCURRENCY",detailConcurrency:"NAVER_BOOKING_DETAIL_CONCURRENCY",scheduleConcurrency:"NAVER_SCHEDULE_CONCURRENCY",otaConcurrency:"NAVER_OTA_OBSERVATION_CONCURRENCY"};
+    for (const [field,name] of Object.entries(mapping)) if (profile[field] !== undefined) env[name]=String(profile[field]);
+    return env;
+  }
   if (payload.scheduledCollection !== true || !payload.requestPacing) return disabled;
   const profile = effectiveRequestPacing({ requestPacing: validateRequestPacing(payload.requestPacing) }, checkIn);
   if (!profile) return disabled;
@@ -17309,26 +17484,37 @@ async function runCrawlerInternal(payload) {
 
   if (COLLECTOR_EXECUTION_MODE === "worker") {
     await collectorBrokerReady;
+    if(payload.trigger==="scheduled" && pausedScheduleOccurrences.has(payload.scheduleOccurrenceId) && (crawlLane().activeCrawlJob?.waiterCount||1)<=1) throw Object.assign(new Error("예약이 일시정지되었습니다."),{code:"COLLECTOR_SCHEDULE_PAUSED",cancelled:true});
+    const statuses = await Promise.all(Object.values(collectorBrokers).map(broker => broker.status()));
+    if (statuses.some(status => status.halted && status.errorCode === "COLLECTOR_PROVIDER_BLOCKED")) {
+      throw Object.assign(new Error("네이버 접근 제한 보호 상태입니다. 원인을 확인해 주세요."), {statusCode:409,code:"COLLECTOR_PROVIDER_BLOCKED"});
+    }
     const expected = {
       keyword, checkIn: plan.checkIn, checkOut: plan.checkOut,
+      workerKey: payload.workerKey || "manual", trigger: payload.trigger || "manual",
       collectionMode: plan.collectionMode, collectionPurpose: plan.collectionPurpose,
       productMode: plan.productMode, detailRankRanges: plan.detailRankRanges,
       bookingRangeDays: plan.bookingRangeDays, scheduledCollection: payload.scheduledCollection === true
     };
     const completed = await dispatchCollector({
-      broker: collectorBroker, keyword, env, payload: expected,
+      broker: collectorBrokerForLane(), keyword, env, payload: expected,
+      queueDeadline: payload.queueDeadline,
+      shouldCancelQueued: () => payload.trigger==="scheduled" && pausedScheduleOccurrences.has(payload.scheduleOccurrenceId) && (crawlLane().activeCrawlJob?.waiterCount||1)<=1,
       context: await historicalBookingContext(),
-      onJob: id => { activeCollectorJobId = id; },
-      isCancelled: () => activeCrawlCancelRequested
+      onJob: id => { crawlLane().activeCollectorJobId = id; },
+      isCancelled: () => crawlLane().activeCrawlCancelRequested
     });
     const output = completed.manifest;
     const runId = completed.runId;
     const collectionQuality = await inspectDailyCollectionResult({ output, runId }, expected);
-    if (collectionQuality?.status === "blocked") await collectorBroker.halt("COLLECTOR_PROVIDER_BLOCKED");
+    if (collectionQuality?.status === "blocked") {
+      await collectorBrokerForLane().halt("COLLECTOR_PROVIDER_BLOCKED");
+      await stopOtherCollectorLanes(crawlLane().key);
+    }
     const history = runId && collectionQuality?.status === "complete" && allowsDerivedUpdates(output)
       ? await appendHistoryForRun(runId).catch(() => ({ appended: 0, error: "history_append_failed" }))
       : null;
-    return { output, runId, history, collectionQuality };
+    return { output, runId, history, collectionQuality, workerKey:payload.workerKey || "manual", trigger:payload.trigger || "manual" };
   }
 
   return new Promise((resolve, reject) => {
@@ -17337,30 +17523,30 @@ async function runCrawlerInternal(payload) {
       env,
       windowsHide: true
     });
-    activeCrawlChild = child;
+    crawlLane().activeCrawlChild = child;
     let stdout = "";
     let stderr = "";
 
     child.stdout.on("data", (chunk) => {
       const text = chunk.toString("utf8");
       stdout += text;
-      recordCrawlRuntimeOutputChunk(activeCrawlJob, text);
+      recordCrawlRuntimeOutputChunk(crawlLane().activeCrawlJob, text);
     });
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString("utf8");
     });
     child.on("error", (error) => {
-      if (activeCrawlCancelRequested) {
-        reject(crawlCancelledError(activeCrawlCancelReason));
+      if (crawlLane().activeCrawlCancelRequested) {
+        reject(crawlCancelledError(crawlLane().activeCrawlCancelReason));
         return;
       }
       reject(error);
     });
     child.on("close", async (code) => {
-      if (activeCrawlChild === child) activeCrawlChild = null;
-      recordCrawlRuntimeOutputChunk(activeCrawlJob, "", true);
-      if (activeCrawlCancelRequested) {
-        reject(crawlCancelledError(activeCrawlCancelReason));
+      if (crawlLane().activeCrawlChild === child) crawlLane().activeCrawlChild = null;
+      recordCrawlRuntimeOutputChunk(crawlLane().activeCrawlJob, "", true);
+      if (crawlLane().activeCrawlCancelRequested) {
+        reject(crawlCancelledError(crawlLane().activeCrawlCancelReason));
         return;
       }
       if (code !== 0) {
@@ -17415,10 +17601,11 @@ async function route(req, res) {
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
 
   try {
-    if (reqUrl.pathname.startsWith("/api/collector-worker/")) {
-      if (!collectorBroker) return notFound(res);
+    if (reqUrl.pathname.startsWith("/api/collector-worker/") || reqUrl.pathname.startsWith("/api/collector-worker-scheduled/")) {
+      const broker=collectorBrokers[reqUrl.pathname.startsWith("/api/collector-worker-scheduled/") ? "scheduled" : "manual"];
+      if (!broker) return notFound(res);
       await collectorBrokerReady;
-      if (await collectorBroker.handleHttp(req, res, reqUrl)) return;
+      if (await broker.handleHttp(req, res, reqUrl)) return;
       return notFound(res);
     }
     const publicStaticPaths = new Set([
@@ -17731,18 +17918,56 @@ async function route(req, res) {
 
     if (req.method === "GET" && reqUrl.pathname === "/api/crawl-status") {
       if (!requireAdminSession(session, req, res)) return;
-      return send(res, 200, { ...currentCrawlStatus({ clientRequestId: reqUrl.searchParams.get("clientRequestId") }), executionMode: COLLECTOR_EXECUTION_MODE });
+      const workerKey=selectedWorkerKey(reqUrl.searchParams.get("workerKey") || "manual");
+      return send(res, 200, withCrawlLane(workerKey,()=>({ ...currentCrawlStatus({ clientRequestId: reqUrl.searchParams.get("clientRequestId") }), workerKey, executionMode: COLLECTOR_EXECUTION_MODE })));
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/collector-status") {
       if (!requireAdminSession(session, req, res)) return;
       await collectorBrokerReady;
-      return send(res, 200, { executionMode: COLLECTOR_EXECUTION_MODE, ...(collectorBroker ? await collectorBroker.status() : {}) });
+      const workers=await Promise.all(["manual","scheduled"].map(async workerKey=>{
+        const status=collectorBrokers[workerKey]?await collectorBrokers[workerKey].status():{configured:false};
+        const crawl=withCrawlLane(workerKey,()=>currentCrawlStatus());
+        return {workerKey,name:workerKey==="manual"?"0922 수동키워드 워커":"0923 예약키워드워커",...status,waitingCount:Number(status.queued||0)+crawl.queueLength,crawl};
+      }));
+      return send(res, 200, { executionMode: COLLECTOR_EXECUTION_MODE, ...workers[0],workers });
+    }
+
+    if (req.method === "GET" && (reqUrl.pathname === "/api/crawl-requests" || reqUrl.pathname.startsWith("/api/crawl-requests/"))) {
+      if (!requireAdminSession(session,req,res)) return;
+      if(reqUrl.pathname === "/api/crawl-requests") return send(res,200,{requests:await collectorRequests.list()});
+      return send(res,200,await collectorRequests.get(reqUrl.pathname.slice("/api/crawl-requests/".length)));
+    }
+
+    if (reqUrl.pathname === "/api/worker-schedule" || reqUrl.pathname.startsWith("/api/worker-schedule/")) {
+      if (!requireAdminSession(session, req, res)) return;
+      if (req.method === "GET" && reqUrl.pathname === "/api/worker-schedule") return send(res,200,await keywordWorkerScheduler.status());
+      if (!["POST","PUT"].includes(req.method)) return send(res,405,{error:"Method not allowed"});
+      if (!/^application\/json(?:\s*;|$)/i.test(String(req.headers["content-type"] || ""))) return send(res,415,{error:"JSON 형식으로 요청해 주세요."});
+      if (req.headers.origin) {
+        let origin; try {origin=new URL(req.headers.origin);} catch {}
+        if (!origin || origin.host!==req.headers.host) return send(res,403,{error:"현재 데이터랩 화면에서 요청해 주세요."});
+      }
+      const payload=await parseJsonBody(req);
+      if (req.method === "PUT" && reqUrl.pathname === "/api/worker-schedule") return send(res,200,await keywordWorkerScheduler.updateConfig(payload));
+      if (req.method === "POST" && reqUrl.pathname === "/api/worker-schedule/enabled") {
+        if (typeof payload.enabled!=="boolean") return send(res,400,{error:"예약 활성화 여부를 확인해 주세요."});
+        if (payload.enabled) {
+          await assertCollectorReady("scheduled",true);
+          if ((await dailyKeywordCollectionScheduler.status()).enabled) return send(res,409,{error:"기존 일일 수집을 비활성화한 뒤 새 예약을 켜 주세요."});
+        }
+        return send(res,200,await keywordWorkerScheduler.setEnabled(payload.enabled));
+      }
+      if (req.method === "POST" && reqUrl.pathname === "/api/worker-schedule/run-now") {
+        assertRequestRateLimit(req,"adminCrawl",RATE_LIMIT_POLICIES.adminCrawl,session.username||"");
+        return send(res,202,await keywordWorkerScheduler.enqueueNow({requestId:payload.requestId}));
+      }
+      return notFound(res);
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/collector-reset-halt") {
       if (!requireAdminSession(session, req, res)) return;
-      if (!collectorBroker) return notFound(res);
+      if (!collectorBrokerForLane()) return notFound(res);
       if (!/^application\/json(?:\s*;|$)/i.test(String(req.headers["content-type"] || ""))) {
         return send(res, 415, { error: "JSON 형식으로 요청해 주세요." });
       }
@@ -17752,12 +17977,20 @@ async function route(req, res) {
         if (!origin || origin.host !== req.headers.host) return send(res, 403, { error: "현재 서비스에서 다시 요청해 주세요." });
       }
       const payload = await parseJsonBody(req);
-      if (payload?.confirm !== "resume-after-review" || Object.keys(payload).length !== 1) {
+      if (payload?.confirm !== "resume-after-review" || Object.keys(payload).some(key=>!["confirm","workerKey"].includes(key))) {
         return send(res, 400, { error: "중단 원인을 확인한 뒤 보호 해제를 요청해 주세요." });
       }
-      if (activeCrawlPromise || activeCrawlJob || crawlQueue.length) return send(res, 409, { error: "진행 또는 대기 중인 수집이 있습니다." });
+      if (Object.values(crawlLanes).some(lane=>lane.activeCrawlPromise || lane.activeCrawlJob || lane.crawlQueue.length)) return send(res, 409, { error: "진행 또는 대기 중인 수집이 있습니다." });
       await collectorBrokerReady;
-      return send(res, 200, await collectorBroker.resetHalt());
+      const workerKey=selectedWorkerKey(payload.workerKey || "manual");
+      const statuses=await Promise.all(Object.values(collectorBrokers).map(broker=>broker.status()));
+      if (statuses.some(status=>status.activeJobId || status.queued)) return send(res,409,{error:"워커의 종료 확인을 기다려 주세요."});
+      const commonBlock=statuses.some(status=>status.errorCode==="COLLECTOR_PROVIDER_BLOCKED");
+      if (commonBlock) {
+        await Promise.all(Object.values(collectorBrokers).map(broker=>broker.resetHalt()));
+        return send(res,200,{halted:false,errorCode:"",scope:"all_workers"});
+      }
+      return send(res, 200, await collectorBrokers[workerKey].resetHalt());
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/collection-schedule") {
@@ -18308,13 +18541,24 @@ async function route(req, res) {
 
     if (req.method === "POST" && reqUrl.pathname === "/api/crawl") {
       if (!requireAdminSession(session, req, res)) return;
+      if (!/^application\/json(?:\s*;|$)/i.test(String(req.headers["content-type"] || ""))) return send(res,415,{error:"JSON 형식으로 요청해 주세요."});
+      if (req.headers.origin) {
+        let origin; try {origin=new URL(req.headers.origin);} catch {}
+        if (!origin || origin.host!==req.headers.host) return send(res,403,{error:"현재 데이터랩 화면에서 요청해 주세요."});
+      }
       assertRequestRateLimit(req, "adminCrawl", RATE_LIMIT_POLICIES.adminCrawl, session.username || "");
       const payload = await parseJsonBody(req);
-      const result = await runCrawler({
+      const requestPayload = {
         ...payload,
+        workerKey:selectedWorkerKey(payload.workerKey || "manual"),
+        trigger:"manual",
+        scheduledCollection:false,
+        allowRepeat:payload.allowRepeat===true && String(payload.repeatReason||"").trim().length>=4,
         sourceRole: USER_ROLES.admin,
         collectionSource: normalizeCollectionSource(payload.collectionSource, USER_ROLES.admin)
-      });
+      };
+      if(reqUrl.searchParams.get("async")==="1") return send(res,202,await collectorRequests.submit(requestPayload));
+      const result = await runCrawler(requestPayload);
       const runs = publicRunsForRole(await listRuns(), session.role);
       return send(res, 200, { ...result, runs });
     }
@@ -18376,6 +18620,7 @@ seedOutputsFromRepo()
       }).catch((error) => {
         console.error(`Daily keyword collection scheduler unavailable: ${error.message || error}`);
       });
+      keywordWorkerScheduler.start().catch(error => console.error('Keyword worker scheduler unavailable:', error.code || error.message));
       const monthlySync = tourismVisitorMonthlyScheduler.start();
       if (monthlySync.enabled) {
         console.log(`Tourism visitor monthly sync check scheduled at ${monthlySync.nextCheckAt}`);

@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
-const { DEFAULT_MIN_INTERVAL_MS, isNaverRequest, isNaverBookingRateLimit, createNaverRequestGate } = require("./naver_request_pacing.cjs");
+const { DEFAULT_MIN_INTERVAL_MS, isNaverRequest, isNaverBookingRateLimit, isNaverCaptchaResponse, createNaverRequestGate } = require("./naver_request_pacing.cjs");
 
 function deferred() {
   let resolve, reject;
@@ -181,20 +181,20 @@ test("disabled pacing is a transparent passthrough and interval validation is ex
   for (const value of [0, 3, 1.5, "no"]) assert.throws(() => createNaverRequestGate({ maxConcurrency: value }), /1 or 2/);
 });
 
-function crawlerGate(env, fetchImpl) {
+function crawlerGate(env, fetchImpl, logs = []) {
   const source = fs.readFileSync(path.join(__dirname, "gyeongnam_glamping_crawl.cjs"), "utf8");
   const start = source.indexOf("const SCHEDULED_COLLECTION =");
   const end = source.indexOf("const scheduledCollectionDiagnostics =", start);
   assert.ok(start >= 0 && end > start);
   return vm.runInNewContext(`${source.slice(start, end)}\n({ fetch, diagnostics: naverRequestGate.diagnostics, blockedStatus: () => naverRequestBlockedStatus, blockedCode: () => naverRequestBlockedCode })`, {
-    process: { env }, fetch: fetchImpl, createNaverRequestGate, isNaverBookingRateLimit,
+    process: { env }, fetch: fetchImpl, createNaverRequestGate, isNaverBookingRateLimit, isNaverCaptchaResponse,
+    console: { log: text => logs.push(text) },
   });
 }
 
 test("crawler opt-in requires both scheduled collection and pacing flags", async () => {
   for (const env of [
     {},
-    { SCHEDULED_COLLECTION: "1" },
     { SCHEDULED_COLLECTION: "0", NAVER_REQUEST_PACING_ENABLED: "1", NAVER_REQUEST_MIN_INTERVAL_MS: "invalid" },
   ]) {
     const promise = Promise.resolve(new Response("unchanged"));
@@ -276,6 +276,28 @@ test("ordinary GraphQL errors and HTML bodies do not create a rate-limit latch",
     assert.equal(gate.diagnostics().requestCount, 2);
     assert.equal(gate.diagnostics().stopped, false);
   }
+});
+
+test("HTTP 200 captcha stops all new Naver hosts and emits one safe cross-worker marker", async () => {
+  for (const body of ['<html><title>자동입력 방지</title><form><input name="captcha_input"></form></html>', '<form>보안 확인을 위해 보안 문자를 입력하세요</form>', '<title>비정상적인 접근</title>']) {
+    const logs = [];
+    let calls = 0;
+    const gate = crawlerGate({ COLLECTOR_WORKER_RUNTIME: "1" }, async () => { calls++; return new Response(body); }, logs);
+    assert.equal(await (await gate.fetch("https://pcmap.place.naver.com/first")).text(), body);
+    for (const url of ["https://m.place.naver.com/home", "https://booking.naver.com/graphql", "https://static.naver.net/fallback"]) await assert.rejects(gate.fetch(url), /NAVER_REQUEST_BLOCKED/);
+    assert.equal(calls, 1);
+    assert.equal(gate.blockedCode(), "NAVER_CAPTCHA");
+    assert.deepEqual(logs, ["COLLECTOR_PROVIDER_BLOCKED"]);
+  }
+  assert.equal(isNaverCaptchaResponse('<title>예약 상품</title><script src="captcha.js"></script><div>예약 상품</div>'), false);
+});
+
+test("scheduled unpaced collection retains provider protection without a speed cap", async () => {
+  const gate = crawlerGate({ SCHEDULED_COLLECTION: "1" }, async () => new Response("<title>비정상적인 접근</title>"));
+  await gate.fetch("https://naver.com/first");
+  assert.equal(gate.diagnostics().pacingEnabled, false);
+  assert.equal(gate.diagnostics().guardEnabled, true);
+  assert.equal(gate.diagnostics().stopped, true);
 });
 
 test("two-slot workers let only already-started requests drain after a GraphQL block", async () => {

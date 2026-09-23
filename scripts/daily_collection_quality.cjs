@@ -12,6 +12,30 @@ function receipt(status, reason, counts = {}, extra = {}) {
   return { status, reason, counts, ...extra };
 }
 
+function inspectProductCoverage(coverage, bookingExpected) {
+  if (!coverage || coverage.version !== 1 || !Array.isArray(coverage.targets)) return "product_coverage_missing";
+  if (bookingExpected && !coverage.targets.length) return "product_coverage_missing";
+  const keys = ["discovered", "eligible", "excluded", "queried", "truncated"];
+  if (keys.some(key => count(coverage[key]) === null)) return "product_coverage_invalid";
+  for (const target of coverage.targets) {
+    if (keys.some(key => count(target[key]) === null) || target.discovered !== target.eligible + target.excluded
+      || target.queried > target.eligible || target.truncated > target.eligible
+      || !Array.isArray(target.days) || !target.days.length || count(target.expectedDays) !== target.days.length
+      || new Set(target.days.map(day => day.date)).size !== target.days.length) return "product_coverage_invalid";
+    if (target.truncated > 0) return "product_targets_truncated";
+    if (target.queried < target.eligible) return "product_targets_incomplete";
+    for (const day of target.days) {
+      if (["eligible", "queried", "succeeded", "failed", "truncated"].some(key => count(day[key]) === null)
+        || day.eligible !== target.eligible || day.succeeded + day.failed !== day.queried
+        || day.queried + day.truncated > day.eligible) return "product_coverage_invalid";
+      if (day.truncated) return "product_targets_truncated";
+      if (day.queried < day.eligible || day.failed) return "product_day_targets_incomplete";
+    }
+  }
+  if (keys.some(key => coverage.targets.reduce((sum, target) => sum + target[key], 0) !== coverage[key])) return "product_coverage_invalid";
+  return null;
+}
+
 function inspectManifest(manifest, options = {}) {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) return receipt("failed", "manifest_missing");
   const expected = options.expected || options.payload || options;
@@ -36,6 +60,9 @@ function inspectManifest(manifest, options = {}) {
   }
   if (guardedCollection && requestGuardEnabled && [403, 429].includes(requestBlockedStatus)) {
     return receipt("blocked", "naver_request_blocked", counts, { blockedReason: `naver_request_http_${requestBlockedStatus}` });
+  }
+  if (guardedCollection && manifest.requestPacing?.blockedCode === "NAVER_CAPTCHA") {
+    return receipt("blocked", "naver_request_blocked", counts, { blockedReason: "naver_captcha" });
   }
   const blockedAttempt = attempts.find((attempt) => [403, 429].includes(count(attempt?.status)));
   if (blockedAttempt) {
@@ -85,6 +112,10 @@ function inspectManifest(manifest, options = {}) {
   }
   if (counts.naverBookingStockSucceeded < counts.naverBookingStockChecked) return receipt("partial", "booking_results_incomplete", counts);
   if (counts.naverOtaBlocked || counts.naverOtaFailed) return receipt("partial", "auxiliary_ota_incomplete", counts);
+  if (guardedCollection && manifest.schemaVersion >= 2) {
+    const coverageReason = inspectProductCoverage(manifest.productCoverage, bookingExpected);
+    if (coverageReason) return receipt("partial", coverageReason, counts);
+  }
   // Requested rank count is an upper bound. Fewer available places is valid.
   return receipt("complete", "manifest_checks_passed", counts);
 }
@@ -109,4 +140,4 @@ async function inspectResult(result, payload = {}) {
   }
 }
 
-module.exports = { inspectManifest, inspectResult, allowsDerivedUpdates };
+module.exports = { inspectManifest, inspectResult, allowsDerivedUpdates, inspectProductCoverage };

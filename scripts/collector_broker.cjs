@@ -21,11 +21,13 @@ const ENV_KEYS = new Set([
   "NAVER_REQUEST_PACING_START_DATE", "NAVER_BOOKING_DETAIL_CONCURRENCY", "NAVER_SCHEDULE_CONCURRENCY",
   "NAVER_OTA_OBSERVATION_CONCURRENCY", "NAVER_SCHEDULE_DELAY_MS", "NAVER_OTA_OBSERVATION_LIMIT",
   "REGIONAL_LIMIT", "REGIONAL_SEARCH_CONCURRENCY", "NAVER_BOOKING_ID_FALLBACK", "NAVER_COUPON_PAGE_FALLBACK",
+  "COLLECTOR_WORKER_KEY", "COLLECTOR_TRIGGER", "COLLECTOR_RUN_TOKEN", "COLLECTOR_ENGINE", "COLLECTOR_JOB_ID",
 ]);
 const PAYLOAD_KEYS = new Set([
   "keyword", "checkIn", "checkOut", "adults", "searchMode", "searchIntent", "searchRegion", "searchScope",
   "searchScopeLabel", "collectionMode", "collectionPurpose", "productMode", "detailRankRanges",
   "bookingRangeDays", "bookingRangePlaceLimit", "sourceRole", "collectionSource", "scheduledCollection",
+  "workerKey", "trigger", "collectionEngine",
 ]);
 const STAGES = new Set(["rank_main", "rank_regional", "ota_nol", "ota_yeogi", "ota_ddnayo", "inventory", "save", "uploading", "completing"]);
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted"]);
@@ -176,6 +178,11 @@ function descriptorKey(files) { return digest(JSON.stringify(files)); }
 function scopeCheck(manifest, job, runId, files) {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw problem("COLLECTOR_INVALID_MANIFEST", 400);
   if (manifest.workerCollection !== true) throw problem("COLLECTOR_WORKER_RECEIPT_REQUIRED", 400);
+  if (job.workerKey) {
+    if (manifest.workerKey !== job.workerKey || manifest.trigger !== job.trigger || manifest.jobId !== job.id
+      || manifest.collectorEngine !== job.env.COLLECTOR_ENGINE
+      || !runId.includes(`_${job.workerKey}_${job.env.COLLECTOR_RUN_TOKEN}_glamping_`)) throw problem("COLLECTOR_SCOPE_MISMATCH", 400);
+  }
   const compact = value => String(value ?? "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
   if (compact(manifest.keyword) !== compact(job.keyword)) throw problem("COLLECTOR_SCOPE_MISMATCH", 400);
   if (String(manifest.outputDir || "").replace(/\\/g, "/").split("/").pop() !== runId) throw problem("COLLECTOR_RUN_ID_MISMATCH", 400);
@@ -249,7 +256,11 @@ function send(res, status, value) {
 function createCollectorBroker(options = {}) {
   const dataDir = path.resolve(options.dataDir || "");
   const outputsDir = path.resolve(options.outputsDir || path.join(dataDir, "outputs"));
-  const brokerDir = path.join(dataDir, "collector");
+  const brokerDir = path.resolve(options.brokerDir || path.join(dataDir, "collector"));
+  const workerKey = options.workerKey || null;
+  if (workerKey !== null && !["manual", "scheduled"].includes(workerKey)) throw problem("COLLECTOR_INVALID_WORKER", 400);
+  const apiBasePath = options.apiBasePath || (workerKey === "scheduled" ? "/api/collector-worker-scheduled" : "/api/collector-worker");
+  if (!["/api/collector-worker", "/api/collector-worker-scheduled"].includes(apiBasePath)) throw problem("COLLECTOR_INVALID_ROUTE", 400);
   const stagingDir = path.join(brokerDir, "staging");
   const receiptsDir = path.join(brokerDir, "receipts");
   const stateFile = path.join(brokerDir, "jobs.json");
@@ -290,6 +301,10 @@ function createCollectorBroker(options = {}) {
     } catch { throw problem("COLLECTOR_STATE_INVALID", 503); }
   };
   const ownsLease = job => Boolean(job.leaseHash && !job.leaseReleasedAt);
+  function setHalt(code) {
+    // A later cancellation/lease error must not obscure an observed provider block.
+    if (state.halted?.code !== "COLLECTOR_PROVIDER_BLOCKED") state.halted = { code, at: iso() };
+  }
   function releasePrivateInput(job) { delete job.env; delete job.context; delete job.payload; }
   async function persist() {
     try {
@@ -307,11 +322,21 @@ function createCollectorBroker(options = {}) {
   }
   function publicJob(job) {
     const output = { id: job.id, status: job.status, keyword: job.keyword, createdAt: job.createdAt, updatedAt: job.updatedAt };
-    for (const key of ["startedAt", "finishedAt", "errorCode", "stage"]) if (job[key]) output[key] = job[key];
+    for (const key of ["startedAt", "finishedAt", "errorCode", "stage", "workerKey", "trigger"]) if (job[key]) output[key] = job[key];
     if (job.status === "completed") Object.assign(output, { runId: job.runId, outputDir: job.outputDir, manifest: clone(job.manifest), collectionQuality: clone(job.collectionQuality) });
     return output;
   }
   async function expireLeases() {
+    // A scheduled job waiting through its observation day must never be claimed
+    // on a later day, even between dispatch polling intervals. Active leases finish normally.
+    const expiredQueue = state.jobs.filter(job => job.status === "queued" && Number.isSafeInteger(job.queueDeadline) && timestamp() >= job.queueDeadline);
+    for (const job of expiredQueue) {
+      job.status = "cancelled";
+      job.errorCode = "COLLECTOR_QUEUE_DEADLINE";
+      job.finishedAt = job.updatedAt = iso();
+      releasePrivateInput(job);
+    }
+    if (expiredQueue.length) await persist();
     const expired = state.jobs.filter(job => ownsLease(job) && timestamp() >= job.leaseExpiresAt);
     if (!expired.length) return;
     for (const job of expired) {
@@ -319,10 +344,18 @@ function createCollectorBroker(options = {}) {
       job.leaseReleasedAt = job.finishedAt = job.updatedAt = iso();
       releasePrivateInput(job);
     }
-    state.halted = { code: "COLLECTOR_LEASE_EXPIRED", at: iso() };
+    setHalt("COLLECTOR_LEASE_EXPIRED");
     await persist();
   }
   async function ensureReady() { if (!ready) await initialize(); }
+  async function notifyProvider(event) {
+    if (!event || !options.onProviderBlocked) return;
+    // Callbacks may halt another broker or inspect this one; never call under locked().
+    // Mark delivery only after success so a lost callback can be retried by a later
+    // heartbeat, failure receipt, or idempotent completion handshake.
+    await options.onProviderBlocked(event);
+    await locked(async () => { const job = await jobById(event.id); job.providerNotifiedAt = iso(); await persist(); });
+  }
   async function initialize() {
     if (initialization) return initialization;
     initialization = locked(async () => {
@@ -357,7 +390,7 @@ function createCollectorBroker(options = {}) {
           job.finishedAt = job.updatedAt = job.leaseReleasedAt = iso();
           releasePrivateInput(job);
         }
-        if (openJobs.length) state.halted = { code: "COLLECTOR_RESTART_INTERRUPTED", at: iso() };
+        if (openJobs.length) setHalt("COLLECTOR_RESTART_INTERRUPTED");
       }
       await persist();
       ready = true;
@@ -374,6 +407,30 @@ function createCollectorBroker(options = {}) {
       if (!keyword || keyword.length > 200 || /[\x00-\x1f]/.test(keyword)) throw problem("COLLECTOR_INVALID_KEYWORD", 400);
       const job = { id: `collector_${crypto.randomUUID()}`, status: "queued", keyword, env: cleanEnv(input.env), payload: cleanPayload(input.payload),
         context: cleanContext(input.context), createdAt: iso(), updatedAt: iso(), uploads: {} };
+      const target = job.payload.workerKey || workerKey;
+      const trigger = job.payload.trigger || (job.env.SCHEDULED_COLLECTION === "1" || job.payload.scheduledCollection === true ? "scheduled" : "manual");
+      if ((target && !["manual", "scheduled"].includes(target)) || !["manual", "scheduled"].includes(trigger)
+        || (workerKey && target !== workerKey) || (target === "manual" && trigger !== "manual")
+        || (job.payload.trigger && job.env.SCHEDULED_COLLECTION !== undefined && (job.env.SCHEDULED_COLLECTION === "1") !== (trigger === "scheduled"))) {
+        throw problem("COLLECTOR_WRONG_WORKER", 400);
+      }
+      if (input.queueDeadline !== undefined) {
+        if (trigger !== "scheduled" || !Number.isSafeInteger(input.queueDeadline) || input.queueDeadline <= 0) throw problem("COLLECTOR_QUEUE_DEADLINE_INVALID", 400);
+        job.queueDeadline = input.queueDeadline;
+      }
+      if (target) {
+        job.workerKey = target;
+        job.trigger = trigger;
+        job.payload.workerKey = target;
+        job.payload.trigger = trigger;
+        job.env.COLLECTOR_WORKER_KEY = target;
+        job.env.COLLECTOR_TRIGGER = trigger;
+        job.env.COLLECTOR_JOB_ID = job.id;
+        job.env.COLLECTOR_RUN_TOKEN = [...crypto.randomBytes(12).toString("hex")].map(character => String.fromCharCode(97 + parseInt(character, 16))).join("");
+        job.env.COLLECTOR_ENGINE = target === "scheduled" ? "archive-keyword-adapted-v2" : "current-manual-v2";
+        job.env.SCHEDULED_COLLECTION = trigger === "scheduled" ? "1" : "0";
+        job.payload.scheduledCollection = trigger === "scheduled";
+      }
       state.jobs.push(job);
       await persist();
       return publicJob(job);
@@ -387,13 +444,27 @@ function createCollectorBroker(options = {}) {
     await ensureReady();
     return locked(async () => {
       await expireLeases();
-      return { configured, halted: Boolean(state.halted), errorCode: state.halted?.code || "", activeJobId: state.jobs.find(ownsLease)?.id || null,
+      return { configured, workerKey, halted: Boolean(state.halted), errorCode: state.halted?.code || "", activeJobId: state.jobs.find(ownsLease)?.id || null,
         queued: state.jobs.filter(job => job.status === "queued").length, workerLastSeenAt: state.workerLastSeenAt || null };
     });
   }
-  async function halt(code) {
+  async function halt(code, { cancelActive = false, cancelQueued = false, exceptJobId = null } = {}) {
     await ensureReady();
-    return locked(async () => { state.halted = { code: errorCode(code, "COLLECTOR_HALTED"), at: iso() }; await persist(); return { halted: true, errorCode: state.halted.code }; });
+    return locked(async () => {
+      setHalt(errorCode(code, "COLLECTOR_HALTED"));
+      for (const job of state.jobs) {
+        if (job.id === exceptJobId || TERMINAL.has(job.status)) continue;
+        if ((job.status === "queued" && cancelQueued) || (ownsLease(job) && cancelActive)) {
+          job.status = "cancelled";
+          job.errorCode = state.halted.code;
+          job.finishedAt = job.updatedAt = iso();
+          releasePrivateInput(job);
+          // Keep a running lease until its worker acknowledges stopping or it expires.
+        }
+      }
+      await persist();
+      return { halted: true, errorCode: state.halted.code };
+    });
   }
   async function resetHalt() {
     await ensureReady();
@@ -420,6 +491,17 @@ function createCollectorBroker(options = {}) {
       return publicJob(job);
     });
   }
+  async function cancelQueued(id,code="COLLECTOR_SCHEDULE_PAUSED") {
+    await ensureReady();
+    return locked(async()=>{
+      const job=await jobById(id);
+      if(job.status==="queued") {
+        job.status="cancelled";job.errorCode=errorCode(code,"COLLECTOR_SCHEDULE_PAUSED");
+        job.finishedAt=job.updatedAt=iso();releasePrivateInput(job);await persist();
+      }
+      return publicJob(job);
+    });
+  }
   function workerIdentity(value) { if (value !== workerId) throw problem("COLLECTOR_WRONG_WORKER", 403); }
   function checkLease(job, identity, leaseToken, allowTerminal = false) {
     workerIdentity(identity);
@@ -429,6 +511,7 @@ function createCollectorBroker(options = {}) {
   async function claim(body) {
     return locked(async () => {
       workerIdentity(body.workerId);
+      if (body.workerKey !== undefined && body.workerKey !== workerKey) throw problem("COLLECTOR_WRONG_WORKER", 403);
       if (body.protocolVersion !== 1) throw problem("COLLECTOR_PROTOCOL_MISMATCH", 400);
       await expireLeases();
       state.workerLastSeenAt = iso();
@@ -448,23 +531,33 @@ function createCollectorBroker(options = {}) {
       job.status = "leased";
       await checkedDirectory(path.join(stagingDir, job.id), true);
       await persist();
-      return { job: { id: job.id, keyword: job.keyword, env: clone(job.env), context: clone(job.context), leaseToken, leaseMs: LEASE_MS } };
+      return { job: { id: job.id, keyword: job.keyword, env: clone(job.env), context: clone(job.context), leaseToken, leaseMs: LEASE_MS,
+        ...(job.workerKey ? { workerKey: job.workerKey, trigger: job.trigger } : {}) } };
     });
   }
   async function heartbeat(id, body) {
-    let event;
+    let event, providerEvent;
     const result = await locked(async () => {
       await expireLeases();
       const job = await jobById(id);
       checkLease(job, body.workerId, body.leaseToken);
       if (body.stage !== undefined && !STAGES.has(body.stage)) throw problem("COLLECTOR_INVALID_STAGE", 400);
+      if (body.providerBlocked !== undefined && typeof body.providerBlocked !== "boolean") throw problem("COLLECTOR_INVALID_STAGE", 400);
       job.leaseExpiresAt = timestamp() + LEASE_MS;
       state.workerLastSeenAt = job.updatedAt = iso();
       if (body.stage && job.stage !== body.stage) { job.stage = body.stage; event = { id, stage: body.stage }; }
+      if (body.providerBlocked === true && !job.providerBlockedAt) {
+        job.providerBlockedAt = iso();
+        state.halted = { code: "COLLECTOR_PROVIDER_BLOCKED", at: iso() };
+      }
+      if (job.providerBlockedAt && !job.providerNotifiedAt) {
+        providerEvent = { id, workerKey, code: "COLLECTOR_PROVIDER_BLOCKED" };
+      }
       await persist();
       return { cancelled: job.status === "cancelled" };
     });
     if (event && options.onProgress) { try { await options.onProgress(event); } catch { /* Progress display cannot invalidate the receipt. */ } }
+    await notifyProvider(providerEvent);
     return result;
   }
   async function upload(id, relative, req) {
@@ -542,7 +635,8 @@ function createCollectorBroker(options = {}) {
     }
   }
   async function complete(id, body) {
-    return locked(async () => {
+    let providerEvent;
+    const result = await locked(async () => {
       await expireLeases();
       const job = await jobById(id);
       checkLease(job, body.workerId, body.leaseToken, true);
@@ -551,12 +645,13 @@ function createCollectorBroker(options = {}) {
       const key = descriptorKey(files);
       if (job.status === "completed") {
         if (job.runId !== runId || job.completion?.descriptorKey !== key) throw problem("COLLECTOR_COMPLETION_CONFLICT");
+        if (job.providerBlockedAt && !job.providerNotifiedAt) providerEvent = { id, workerKey, code: "COLLECTOR_PROVIDER_BLOCKED" };
         return { ok: true };
       }
       checkLease(job, body.workerId, body.leaseToken);
       if (job.status === "cancelled") {
         job.leaseReleasedAt = job.updatedAt = iso();
-        state.halted = { code: "COLLECTOR_CANCELLED", at: iso() };
+        setHalt("COLLECTOR_CANCELLED");
         await persist();
         return { ok: true, cancelled: true };
       }
@@ -574,6 +669,7 @@ function createCollectorBroker(options = {}) {
       const outputDir = path.join(outputsDir, runId);
       manifest.outputDir = outputDir;
       const quality = inspectManifest(manifest);
+      if (job.providerBlockedAt && quality.status !== "blocked") throw problem("COLLECTOR_BLOCK_RECEIPT_REQUIRED", 400);
       await atomicJson(manifestPath, manifest);
       const publishedFiles = files.map(file => ({ ...file }));
       const manifestEntry = publishedFiles.find(file => file.path === "manifest.json");
@@ -599,11 +695,15 @@ function createCollectorBroker(options = {}) {
         job.finishedAt = job.updatedAt = job.leaseReleasedAt = iso();
         releasePrivateInput(job);
         if (quality.status === "blocked" || manifest.collectionFailed === true) {
-          state.halted = { code: quality.status === "blocked" ? "COLLECTOR_PROVIDER_BLOCKED" : "COLLECTOR_CRAWL_FAILED", at: iso() };
+          setHalt(quality.status === "blocked" ? "COLLECTOR_PROVIDER_BLOCKED" : "COLLECTOR_CRAWL_FAILED");
+          if (quality.status === "blocked" && !job.providerNotifiedAt) {
+            job.providerBlockedAt ||= iso();
+            providerEvent = { id, workerKey, code: "COLLECTOR_PROVIDER_BLOCKED" };
+          }
         }
         await persist();
       } catch (error) {
-        state.halted = { code: "COLLECTOR_PUBLICATION_FAILED", at: iso() };
+        setHalt("COLLECTOR_PUBLICATION_FAILED");
         await persist().catch(() => {});
         throw problem(error.code === "COLLECTOR_OUTPUT_EXISTS" ? error.code : "COLLECTOR_PUBLICATION_FAILED", 503);
       } finally {
@@ -612,12 +712,16 @@ function createCollectorBroker(options = {}) {
       }
       return { ok: true };
     });
+    await notifyProvider(providerEvent);
+    return result;
   }
   async function fail(id, body) {
-    return locked(async () => {
+    let providerEvent;
+    const result = await locked(async () => {
       await expireLeases();
       const job = await jobById(id);
       checkLease(job, body.workerId, body.leaseToken, true);
+      if (job.providerBlockedAt && !job.providerNotifiedAt) providerEvent = { id, workerKey, code: "COLLECTOR_PROVIDER_BLOCKED" };
       if (job.status === "failed" && job.errorCode === errorCode(body.code)) return { ok: true };
       if (job.status === "cancelled" && job.leaseReleasedAt) return { ok: true };
       checkLease(job, body.workerId, body.leaseToken);
@@ -626,14 +730,16 @@ function createCollectorBroker(options = {}) {
       releasePrivateInput(job);
       // An explicit failed execution is never permission to start the next one.
       // This also protects failures before a complete artifact receipt exists.
-      state.halted = { code: job.errorCode, at: iso() };
+      setHalt(job.errorCode);
       await persist();
       return { ok: true };
     });
+    await notifyProvider(providerEvent);
+    return result;
   }
   async function handleHttp(req, res, inputUrl) {
     const url = inputUrl instanceof URL ? inputUrl : new URL(inputUrl || req.url, "http://collector.invalid");
-    if (url.pathname !== "/api/collector-worker" && !url.pathname.startsWith("/api/collector-worker/")) return false;
+    if (url.pathname !== apiBasePath && !url.pathname.startsWith(`${apiBasePath}/`)) return false;
     if (!configured) { req.resume?.(); send(res, 404, { error: "not_found" }); return true; }
     const authorization = req.headers?.authorization;
     if (typeof authorization !== "string" || !authorization.startsWith("Bearer ") || !sameSecret(authorization.slice(7), token)) {
@@ -642,9 +748,9 @@ function createCollectorBroker(options = {}) {
     try {
       await ensureReady();
       let result;
-      if (req.method === "POST" && url.pathname === "/api/collector-worker/claim") result = await claim(await readJsonRequest(req));
+      if (req.method === "POST" && url.pathname === `${apiBasePath}/claim`) result = await claim(await readJsonRequest(req));
       else {
-        const match = /^\/api\/collector-worker\/jobs\/(collector_[a-f0-9-]{36})\/(heartbeat|files|complete|fail)$/.exec(url.pathname);
+        const match = /^\/jobs\/(collector_[a-f0-9-]{36})\/(heartbeat|files|complete|fail)$/.exec(url.pathname.slice(apiBasePath.length));
         if (!match) throw problem("COLLECTOR_ROUTE_NOT_FOUND", 404);
         const [, id, action] = match;
         if (action === "files" && req.method === "PUT") {
@@ -664,7 +770,7 @@ function createCollectorBroker(options = {}) {
     }
     return true;
   }
-  return { initialize, submit, getJob, cancel, status, halt, resetHalt, handleHttp };
+  return { initialize, submit, getJob, cancel, cancelQueued, status, halt, resetHalt, handleHttp };
 }
 
 module.exports = { createCollectorBroker, LEASE_MS, MAX_FILE_BYTES, MAX_RUN_BYTES };

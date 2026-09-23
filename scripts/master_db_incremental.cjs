@@ -323,7 +323,7 @@ function prepareNaverRun(event, options) {
     history = { ...fallbackHistory, rows: dedupeHistoryRows(fallbackHistory.rows), evidence: null };
   }
   const filesComplete = listedNames.length > 0 && missingFiles.length === 0;
-  const expectedHistoryCount = Number(event.history?.appended);
+  const expectedHistoryCount = Number(event.history?.observationCount ?? event.history?.appended);
   const historyCountMatches = !Number.isFinite(expectedHistoryCount) || expectedHistoryCount === history.rows.length;
   const observationsComplete = history.rows.length > 0 && historyCountMatches && Boolean(history.evidence?.immutable);
   const status = filesComplete ? "complete" : "partial";

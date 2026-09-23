@@ -213,7 +213,7 @@ async function run() {
     );
     assert.match(
       serverSource,
-      /const result = \{ appended: observations\.length, file: "history\/observations\.jsonl" \};\s+if \(masterDbDualWriteQueue\.mode === "shadow"\) result\.evidence = evidence;/,
+      /const result = \{ appended: missing\.length, observationCount: observations\.length, file: "history\/observations\.jsonl" \};\s+if \(masterDbDualWriteQueue\.mode === "shadow"\) result\.evidence = evidence;/,
       "off 모드 history 응답에는 evidence 필드를 추가하면 안 됩니다."
     );
 

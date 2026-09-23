@@ -1,0 +1,57 @@
+.collector-choice-row { display: grid; grid-template-columns: minmax(180px, 250px) 1fr; gap: 12px; align-items: end; margin-bottom: 16px; }
+.collector-choice-row .hint { margin: 0 0 8px; }
+.collector-choice-info { min-width: 0; }
+.collector-choice-info .hint { overflow-wrap: anywhere; }
+.collector-choice-info button[hidden] { display: none; }
+.collector-controls-card { min-width: 0; }
+.collector-worker-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.collector-worker { min-width: 0; padding: 14px; border: 1px solid var(--border-subtle); border-radius: var(--ui-radius-control); background: var(--surface-control); }
+.collector-worker-head { display: flex; justify-content: space-between; gap: 10px; align-items: start; }
+.collector-worker h4 { margin: 0; font-size: 14px; color: var(--text-primary); }
+.collector-worker p { margin: 8px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.collector-worker .collector-worker-alert { color: var(--warning-strong); }
+.collector-worker[data-selected="true"] { border-color: var(--accent); }
+.collector-worker-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.collector-worker-actions > button { min-height: 36px; }
+.collector-schedule-details { margin-top: 16px; border-top: 1px solid var(--border-subtle); padding-top: 14px; }
+.collector-schedule-details > summary { display: flex; justify-content: space-between; align-items: center; gap: 12px; cursor: pointer; list-style: none; color: var(--text-primary); }
+.collector-schedule-details > summary::-webkit-details-marker { display: none; }
+.collector-schedule-details > summary::after { content: "펼치기"; flex: 0 0 auto; color: var(--text-secondary); font-size: 12px; }
+.collector-schedule-details[open] > summary::after { content: "접기"; }
+.collector-schedule-details > summary > span:first-child { flex: 1; }
+.collector-schedule-details summary strong { display: block; font-size: 14px; }
+.collector-schedule-details summary small { display: block; margin-top: 5px; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+#workerScheduleForm { display: grid; gap: 14px; margin-top: 16px; }
+#workerScheduleForm > .hint { margin: 0; }
+.collector-settings-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.collector-settings-grid > .field { min-width: 0; }
+.collector-schedule-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.collector-control-status { margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.collector-control-status[data-tone="error"] { color: var(--danger-strong); }
+.collector-control-status[data-tone="success"] { color: var(--positive); }
+.collector-check { display: flex; align-items: center; gap: 8px; margin: 12px 0; color: var(--text-primary); font-size: 13px; }
+.collector-check input { width: 16px; height: 16px; margin: 0; }
+.collector-repeat-options { margin-top: 14px; }
+.collector-repeat-options .field { margin-bottom: 10px; }
+.collector-history-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; padding: 12px 0; border-bottom: 1px solid var(--border-subtle); }
+.collector-history-row:last-child { border-bottom: 0; }
+.collector-history-row strong { color: var(--text-primary); font-size: 13px; }
+.collector-history-row small { display: block; color: var(--text-secondary); font-size: 12px; line-height: 1.5; margin-top: 4px; overflow-wrap: anywhere; }
+.collector-history-row details { grid-column: 1 / -1; color: var(--text-secondary); font-size: 12px; }
+.collector-history-row details summary { cursor: pointer; }
+.collector-history-row ul { padding-left: 18px; margin: 8px 0 0; }
+.collector-history-row li { margin-top: 4px; overflow-wrap: anywhere; }
+.collector-result-button { margin-left: 8px; min-height: 32px; font-size: 12px; }
+.collector-history-row > .collector-result-button { justify-self: start; margin: 0; }
+.collector-history-row .collector-worker-alert { color: var(--warning-strong); }
+.collector-controls-card [hidden] { display: none !important; }
+.collector-controls-card button:disabled { cursor: not-allowed; opacity: .55; }
+.collector-controls-card :is(button, select, input, textarea, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 720px) {
+  .collector-choice-row, .collector-worker-grid { grid-template-columns: minmax(0, 1fr); }
+  .collector-settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .collector-schedule-actions > button { flex: 1 1 140px; min-height: 44px; }
+  .collector-worker-actions > button, .collector-result-button { min-height: 44px; }
+  .collector-choice-row select, .collector-controls-card :is(input, select, textarea) { font-size: 16px; }
+}
+@media (max-width: 420px) { .collector-settings-grid { grid-template-columns: minmax(0, 1fr); } }
