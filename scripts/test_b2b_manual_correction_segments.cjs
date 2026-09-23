@@ -89,6 +89,16 @@ async function main() {
         keywords: {},
         inventory: {
           latest: {
+            inventoryEvidenceVersion: 4,
+            stockBasis: { lodgingMaxTotal: 10 },
+            productSnapshot: {
+              inventoryEvidenceVersion: 4,
+              capacityBasis: { count: 10, source: "observed_maximum", observedMaximum: 10 },
+              products: [{ key: "room", productType: "lodging", name: "기본" }],
+              daily: [{ date: "2026-09-26", productType: "lodging", total: 10, rawTotal: 10, available: 5,
+                publicBookings: 1, phoneBookings: 4, sold: 5, reservationRate: 0.5,
+                publicRevenue: 100000, phoneRevenue: 400000, estimatedRevenue: 500000, inventoryEvidenceVersion: 4 }]
+            },
             salesSignal: {
               lodging: { days: 7, totalSupply: 70, totalSold: 14, averageRate: 0.2 },
               dayUse: { days: 0, totalSupply: 0, totalSold: 0 }
@@ -162,6 +172,32 @@ async function main() {
     assert.equal(company.inventory.latest.correctionBasis.lodgingBasisTotal, 6);
     assert.equal(company.inventory.latest.correctionBasis.roomSegments.length, 2);
     assert.deepEqual(company.inventory.latest.correctionBasis.otaChannels, ["여기어때", "야놀자"]);
+    assert.equal(company.inventory.latest.stockBasis.lodgingBasisTotal, 6);
+    const detail = await request(baseUrl, "GET", `/api/company-master/detail?companyId=${companyId}`, null, cookies);
+    assert.equal(detail.statusCode, 200);
+    assert.equal(detail.body.daily[0].total, 6, "detail uses the lower DB correction immediately");
+    assert.equal(detail.body.daily[0].publicBookings, 1);
+    assert.equal(detail.body.daily[0].phoneBookings, 0, "snapshot-only correction does not retain stale phone estimates");
+    assert.equal(detail.body.daily[0].reservationRate, null);
+    assert.equal(detail.body.capacityBasis.source, "db_correction");
+    assert.equal(detail.body.capacityReview.required, true);
+
+    const updated = await request(baseUrl, "POST", "/api/company-master/manual-correction", {
+      companyId, lodgingBasisTotal: 8
+    }, cookies);
+    assert.equal(updated.statusCode, 200);
+    const reloaded = await request(baseUrl, "GET", `/api/company-master/detail?companyId=${companyId}`, null, cookies);
+    assert.equal(reloaded.body.daily[0].total, 8, "updating the DB correction invalidates the previous read view");
+    const saved = JSON.parse(await fsp.readFile(path.join(companyMasterDir, "companies.json"), "utf8"));
+    assert.equal(saved.companies[companyId].manualCorrection.lodgingBasisTotal, 8);
+    assert.equal(saved.companies[companyId].inventory.latest.productSnapshot.daily[0].total, 10, "original stored inventory remains untouched");
+    assert.equal(saved.companies[companyId].inventory.latest.productSnapshot.daily[0].phoneBookings, 4);
+
+    const cleared = await request(baseUrl, "POST", "/api/company-master/manual-correction", { companyId, active: false }, cookies);
+    assert.equal(cleared.statusCode, 200);
+    const afterClear = await request(baseUrl, "GET", `/api/company-master/detail?companyId=${companyId}`, null, cookies);
+    assert.equal(afterClear.body.daily[0].total, 10);
+    assert.equal(afterClear.body.capacityBasis.source, "observed_maximum");
   } finally {
     child.kill();
     await fsp.rm(tmp, { recursive: true, force: true });

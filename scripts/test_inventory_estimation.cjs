@@ -3,10 +3,13 @@ const assert = require("node:assert/strict");
 const { applyInventoryEvidence, productEvidence } = require("./inventory_estimation.cjs");
 const mint = require("./fixtures/mint_20260920.cjs");
 const before = JSON.stringify(mint);
-const result = applyInventoryEvidence(mint);
+const result = applyInventoryEvidence({ ...mint, inventoryCapacityBaseline: { lodgingOverride: {
+  count: 28, source: "db_manual_correction", products: [{ id: "4066789", count: 21 }, { id: "4066841", count: 7 }]
+} } });
 assert.equal(JSON.stringify(mint), before, "Original evidence must stay unchanged");
 assert.equal(result.inventoryEvidence.physicalRooms.count, 28);
-assert.equal(result.inventoryEvidence.version, 3);
+assert.equal(result.inventoryEvidence.version, 4);
+assert.equal(result.inventoryEvidence.capacityBasis.source, "db_correction");
 assert.equal(result.weeklyTotalStock, 868, "Known 28-room capacity remains fixed for all 31 dates");
 assert.equal(result.weeklyPublicBookings, 151, "Preserve observed public booking evidence");
 assert.equal(result.weeklyPhoneBookings, 449);
@@ -169,4 +172,47 @@ const conflictCapacity = applyInventoryEvidence({ weeklyProductDetails: [row("20
 assert.equal(conflictCapacity.totalRooms, 0, "Conflicting booking count must not inflate maximum observed room stock");
 assert.equal(conflictCapacity.weeklyPublicBookings, 2);
 assert.equal(conflictCapacity.weeklyAvgReservationRate, null);
+const guideOnly = applyInventoryEvidence(mint);
+assert.equal(guideOnly.totalRooms, 27, "Public room guide 28 cannot override observed maximum 27");
+assert.equal(guideOnly.inventoryEvidence.capacityBasis.source, "observed_maximum");
+assert.equal(guideOnly.inventoryEvidence.roomGuideReference.count, 28);
+assert.equal(guideOnly.inventoryEvidence.roomGuideReference.role, "reference_only");
+assert.equal(guideOnly.weeklyTotalStock, 837);
+const noGuide = applyInventoryEvidence({ ...mint, placeId: "no-guide" });
+assert.equal(guideOnly.weeklyPhoneRevenue, noGuide.weeklyPhoneRevenue, "Guide product counts must not inflate inferred revenue");
+const lowerCorrection = applyInventoryEvidence({ ...season, inventoryCapacityBaseline: { lodging: 15, lodgingOverride: { count: 8 } } });
+assert.equal(lowerCorrection.totalRooms, 8, "A DB correction wins even below current and historical observations");
+assert.equal(lowerCorrection.inventoryEvidence.capacityBasis.observedMaximum, 15);
+assert.equal(lowerCorrection.inventoryEvidence.capacityBasis.currentObservedMaximum, 10);
+assert.equal(lowerCorrection.inventoryEvidence.capacityReview.required, true);
+assert.deepEqual(lowerCorrection.inventoryEvidence.lodging.rows.map(r => r.capacityConflict), [true, false, false, true]);
+assert.equal(lowerCorrection.inventoryEvidence.lodging.rows[0].available, 10, "Do not falsify channel availability to fit a correction");
+assert.equal(lowerCorrection.inventoryEvidence.lodging.rows[3].phoneBookings, 0, "Contradicting capacity must not synthesize telephone reservations");
+assert.equal(lowerCorrection.weeklyAvgReservationRate, null);
+const higherCorrection = applyInventoryEvidence({ ...season, inventoryCapacityBaseline: { lodgingOverride: { count: 12 } } });
+assert.equal(higherCorrection.totalRooms, 12);
+assert.equal(higherCorrection.inventoryEvidence.capacityBasis.source, "db_correction");
+assert.equal(higherCorrection.inventoryEvidence.capacityReview.required, false);
+const clearedCorrection = applyInventoryEvidence({ ...higherCorrection, inventoryCapacityBaseline: { lodging: 10 } });
+assert.equal(clearedCorrection.totalRooms, 10, "Removing DB correction invalidates its cached total");
+assert.equal(clearedCorrection.inventoryEvidence.capacityBasis.source, "observed_maximum");
+const updatedCorrection = applyInventoryEvidence({ ...higherCorrection, inventoryCapacityBaseline: { lodgingOverride: { count: 11 } } });
+assert.equal(updatedCorrection.totalRooms, 11, "A lower DB revision must replace an already projected count");
+for (const count of [null, undefined, "", " ", -1, 0, false, "wrong", 2.5, Infinity]) {
+  const invalid = applyInventoryEvidence({ ...season, inventoryCapacityBaseline: { lodgingOverride: { count } } });
+  assert.equal(invalid.totalRooms, 10, `Invalid correction ${count} falls back to observed max`);
+  assert.equal(invalid.inventoryEvidence.capacityBasis.source, "observed_maximum");
+}
+for (const count of [40, 41, 110017]) {
+  const large = applyInventoryEvidence({ name: "검증 글램핑", weeklyProductDetails: [row("2026-09-26", count, 0)] });
+  assert.equal(large.totalRooms, count, "The review threshold is never an automatic cap");
+  assert.equal(large.inventoryEvidence.capacityReview.required, count > 40);
+}
+const reviewedLarge = applyInventoryEvidence({ name: "검증 글램핑", inventoryCapacityBaseline: { lodgingOverride: { count: 50 } }, weeklyProductDetails: [row("2026-09-26", 50, 0)] });
+assert.equal(reviewedLarge.totalRooms, 50);
+assert.equal(reviewedLarge.inventoryEvidence.capacityReview.required, false, "A consistent DB-reviewed exception is accepted");
+const hotel = applyInventoryEvidence({ name: "검증 호텔", weeklyProductDetails: [row("2026-09-26", 50, 0)] });
+assert.equal(hotel.inventoryEvidence.capacityReview.required, false, "Glamping threshold does not apply to every lodging category");
+const legacyGuideProjected = applyInventoryEvidence({ ...guideOnly, inventoryEvidence: { ...guideOnly.inventoryEvidence, version: 3, lodging: { ...guideOnly.inventoryEvidence.lodging, operatingTotal: 28 } }, totalRooms: 28 });
+assert.equal(legacyGuideProjected.totalRooms, 27, "Version 3 guide-derived capacity is rebuilt from evidence");
 console.log("inventory estimation: fixed capacity, phone estimates, shared day-use exclusions, missing evidence and same-product pricing passed");

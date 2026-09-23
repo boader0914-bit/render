@@ -2677,6 +2677,7 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
 function applyCrawlerInventoryEvidence(result, placeId) {
   const item = applyInventoryEvidence({
     placeId,
+    keyword: RAW_KEYWORD,
     itemDetails: result.itemDetails || [],
     weeklyProductDetails: result.weekly?.productDetails || [],
     dayUseWeeklyProductDetails: result.dayUseWeekly?.productDetails || [],
@@ -2702,7 +2703,7 @@ function applyCrawlerInventoryEvidence(result, placeId) {
         rawAvailable: row.available,
         offlineReserved: row.phoneBookings,
         offlineEstimatedRevenue: row.phoneRevenue,
-        calculationVersion: "maximum-capacity-v3",
+        calculationVersion: "maximum-capacity-v4",
       }));
       updated[resultKey] = {
         ...previous,
@@ -2738,7 +2739,7 @@ function applyCrawlerInventoryEvidence(result, placeId) {
         totalMissingPriceSoldOut: summary.missingPriceSoldOut,
         avgSoldUnitPrice: item[prefix + "AvgSoldUnitPrice"],
         avgReservationRate: item[prefix + "AvgReservationRate"],
-        soldOutDays: dates.filter(row => row.total > 0 && !row.partial && row.sold >= row.total).length,
+        soldOutDays: dates.filter(row => row.total > 0 && !row.partial && !row.inventoryConflict && row.sold >= row.total).length,
         basisRule: item[prefix + "BasisRule"],
         detail: item[prefix + "Detail"],
         reservationRateDetail: item[prefix + "ReservationRateDetail"],
@@ -2746,8 +2747,8 @@ function applyCrawlerInventoryEvidence(result, placeId) {
         revenueByDayTypeDetail: item[prefix + "RevenueByDayType"],
         offlineReservationDetail: item[prefix + "OfflineReservationDetail"],
         totalVarianceDetail: item[prefix + "RawStockVariance"],
-        calculationVersion: "maximum-capacity-v3",
-        summary: `${previous.requestedDays}일 조회 · 수량 확인 ${dates.filter(row => !row.partial).length}일 · 최대 객실 수 기준`,
+        calculationVersion: "maximum-capacity-v4",
+        summary: `${previous.requestedDays}일 조회 · 수량 확인 ${dates.filter(row => !row.partial && !row.inventoryConflict).length}일 · ${summary.capacitySource === "db_correction" ? "DB 보정" : "최대 관측(추정)"} 기준`,
       };
     }
     const basis = summary.rows.find(row => row.date === CHECK_IN);
@@ -2755,7 +2756,7 @@ function applyCrawlerInventoryEvidence(result, placeId) {
     const base = kind === "lodging" ? "night" : "dayUse";
     updated[base + "TotalStock"] = basis.total;
     updated[base + "AvailableStock"] = basis.available;
-    updated[base + "AvailabilityRate"] = basis.total && !basis.partial ? basis.available / basis.total : null;
+    updated[base + "AvailabilityRate"] = basis.total && !basis.partial && !basis.inventoryConflict ? basis.available / basis.total : null;
     updated[base + "EstimatedRevenue"] = basis.estimatedRevenue;
     updated[base + "AdjustedEstimatedRevenue"] = basis.estimatedRevenue;
     updated[base + "MissingPriceEstimatedRevenue"] = 0;
@@ -2772,8 +2773,8 @@ function applyCrawlerInventoryEvidence(result, placeId) {
       updated.productTypeSummary = `숙박 총객실 ${summary.operatingTotal}실 · 공개 예약 ${basis.publicBookings}실 · 전화·타채널 예약 추정 ${basis.phoneBookings}실${basis.sharedDayUseExcluded ? ` · 데이유즈 제외 ${basis.sharedDayUseExcluded}실` : ""} · 데이유즈 상품 ${result.dayUseItemCount || 0}종`;
     }
   }
-  updated.inventoryScope = "최대 객실 수 기준 추정 · 네이버 공개 수량 별도 보존";
-  updated.inventoryMemo = "총객실은 최대 관측 수량으로 유지합니다. 예약 불가 수량 중 공개 예약과 같은 날 데이유즈 이용을 뺀 수량은 전화·타채널 예약으로 추정합니다. 수집 실패는 예약으로 만들지 않으며 실제 결제 내역을 뜻하지 않습니다.";
+  updated.inventoryScope = "DB 보정 우선 · 최대 관측 수량 기준 추정 · 객실 안내는 참고";
+  updated.inventoryMemo = "총객실은 DB 보정값이 있으면 우선 적용하고, 없으면 최대 관측 수량으로 유지합니다. 객실 안내는 참고값입니다. 예약 불가 수량 중 공개 예약과 같은 날 데이유즈 이용을 뺀 수량은 전화·타채널 예약으로 추정합니다. 수집 실패·수량 충돌은 예약으로 만들지 않으며 실제 결제 내역을 뜻하지 않습니다.";
   updated.evidence = [updated.inventoryMemo, item.weeklyBasisRule].filter(Boolean).join(" · ");
   return updated;
 }

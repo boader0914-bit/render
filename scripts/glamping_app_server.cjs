@@ -9108,6 +9108,10 @@ function inventoryEstimateBreakdown(row = {}) {
   const fields = ["rawTotal", "publicBookings", "phoneBookings", "sharedDayUseExcluded", "unknownUnavailable", "publicRevenue", "phoneRevenue", "phonePricedBookings", "phoneMissingPriceBookings"];
   return {
     ...Object.fromEntries(fields.filter((field) => Object.hasOwn(row, field)).map((field) => [field, productSnapshotNumber(row[field])])),
+    ...(Object.hasOwn(row, "capacityConflict") ? { capacityConflict: Boolean(row.capacityConflict) } : {}),
+    ...(row.capacityBasis ? { capacityBasis: row.capacityBasis } : {}),
+    ...(row.capacityReview ? { capacityReview: row.capacityReview } : {}),
+    ...(row.recalculationUnavailable ? { recalculationUnavailable: true } : {}),
     ...(Object.hasOwn(row, "sharedDayUseIncomplete") ? { sharedDayUseIncomplete: Boolean(row.sharedDayUseIncomplete) } : {})
   };
 }
@@ -9120,6 +9124,8 @@ function historySeriesForItem(item, productType, checkIn) {
       stayDate: row.date,
       label: row.date,
       offlineReserved: Number(row.phoneBookings || 0),
+      capacityBasis: item.inventoryEvidence.capacityBasis || null,
+      capacityReview: item.inventoryEvidence.capacityReview || null,
       inventoryEvidenceVersion: item.inventoryEvidence.version
     }));
   }
@@ -9179,7 +9185,7 @@ function normalizeSignalRows(rows = []) {
           total,
           available,
           sold,
-          rate: total > 0 && sold <= total && !row.inventoryConflict && !(row.inventoryEvidenceVersion >= 3 && (row.partial || row.unknownUnavailable > 0)) ? sold / total : null
+          rate: total > 0 && sold <= total && !row.inventoryConflict && !row.capacityConflict && !(row.inventoryEvidenceVersion >= 3 && (row.partial || row.unknownUnavailable > 0)) ? sold / total : null
         };
       }
       const total = Number(row.total);
@@ -9706,7 +9712,7 @@ function compactProductSnapshotDaily(item = {}, run = {}, observations = []) {
           total,
           available: row.missing ? null : productSnapshotNumber(row.available),
           sold,
-          reservationRate: total !== null && total > 0 && sold !== null && sold >= 0 && sold <= total && !row.inventoryConflict && !(item.inventoryEvidence.version >= 3 && (row.partial || row.unknownUnavailable > 0))
+          reservationRate: total !== null && total > 0 && sold !== null && sold >= 0 && sold <= total && !row.inventoryConflict && !row.capacityConflict && !(item.inventoryEvidence.version >= 3 && (row.partial || row.unknownUnavailable > 0))
             ? Number((sold / total).toFixed(4)) : null,
           minPrice: prices.length ? Math.min(...prices) : null,
           maxPrice: prices.length ? Math.max(...prices) : null,
@@ -9722,6 +9728,8 @@ function compactProductSnapshotDaily(item = {}, run = {}, observations = []) {
           offlineReserved: Number(row.phoneBookings || 0),
           ...inventoryEstimateBreakdown(row),
           inventoryEvidenceVersion: item.inventoryEvidence.version,
+          capacityBasis: item.inventoryEvidence.capacityBasis || null,
+          capacityReview: item.inventoryEvidence.capacityReview || null,
           revenueType: "estimated"
         };
       }).filter(Boolean);
@@ -9884,6 +9892,9 @@ function compactCompanyProductSnapshot(item = {}, run = {}, collectedAt = "") {
   return {
     schemaVersion: 1,
     inventoryEvidenceVersion: item.inventoryEvidence?.version >= 2 ? item.inventoryEvidence.version : null,
+    capacityBasis: item.inventoryEvidence?.capacityBasis || null,
+    capacityReview: item.inventoryEvidence?.capacityReview || null,
+    roomGuideReference: item.inventoryEvidence?.roomGuideReference || null,
     source: "naver_public_observation",
     revenueType: "estimated",
     actualRevenueAvailable: false,
@@ -10535,8 +10546,8 @@ function adjustedRateForBasis(rate, rawDailyTotal, basisTotal) {
 function applyManualBasisToSalesSummary(summary = {}, basisTotal) {
   const basis = Number(basisTotal);
   const days = Number(summary.days || 0);
-  const rawTotalSupply = Number(summary.totalSupply || 0);
-  const rawTotalSold = Number(summary.totalSold || 0);
+  const rawTotalSupply = productSnapshotNumber(summary.totalSupply);
+  const rawTotalSold = productSnapshotNumber(summary.totalSold);
   if (!Number.isFinite(basis) || basis <= 0 || !Number.isFinite(days) || days <= 0 || !Number.isFinite(rawTotalSupply) || rawTotalSupply <= 0) {
     return Number.isFinite(basis) && basis > 0
       ? { ...summary, manualBasisTotal: Math.round(basis), manualCorrectionApplied: false }
@@ -10592,8 +10603,75 @@ function salesSignalWithManualCorrection(signal = {}, correction = {}) {
   };
 }
 
+function companyInventorySnapshotWithCurrentCapacity(snapshot, company = {}) {
+  if (!snapshot) return snapshot;
+  const productSnapshot = snapshot.productSnapshot;
+  const previousBasis = productSnapshot?.capacityBasis || snapshot.capacityBasis;
+  const correction = manualCorrectionLodgingBasisTotal(company.manualCorrection);
+  const observedMaximum = companyMaximumRoomCapacity(company);
+  const version = Number(productSnapshot?.inventoryEvidenceVersion || snapshot.inventoryEvidenceVersion || 0);
+  const outdatedCapacity = version >= 3 && observedMaximum > 0 && (
+    version < 4 || previousBasis?.count !== observedMaximum
+    || (productSnapshot?.daily || []).some((row) => row.productType === "lodging" && row.total !== observedMaximum)
+  );
+  if (!correction && previousBasis?.source !== "db_correction" && !snapshot.manualCorrectionApplied && !outdatedCapacity) return snapshot;
+  const count = correction || observedMaximum || null;
+  const source = correction ? "db_correction" : "observed_maximum";
+  if (previousBasis?.count === count && previousBasis.source === source && Number(productSnapshot?.inventoryEvidenceVersion || snapshot.inventoryEvidenceVersion || 0) >= 4) return snapshot;
+  const message = "현재 객실 수 기준을 반영했습니다. 저장 원문이 없어 전화·타채널 예약과 예약률을 다시 계산할 수 없습니다.";
+  const capacityBasis = { count, source, label: correction ? "DB 수정/보정값" : "관측 최대 객실 수", observedMaximum: companyMaximumRoomCapacity(company) };
+  const capacityReview = { required: true, codes: ["correction_recalculation_unavailable"], message };
+  const daily = (productSnapshot?.daily || []).map((row) => {
+    if (row.productType !== "lodging") return row;
+    const publicBookings = productSnapshotNumber(row.publicBookings ?? (row.inventoryEvidenceVersion === 2 ? row.sold : null));
+    const publicRevenue = productSnapshotNumber(row.publicRevenue ?? (row.inventoryEvidenceVersion === 2 ? row.estimatedRevenue : null));
+    const capacityConflict = count !== null && (Number(row.rawTotal || 0) > count || Number(row.available || 0) + Number(publicBookings || 0) > count);
+    return {
+      ...row, total: count, sold: publicBookings, publicBookings, phoneBookings: 0, offlineReserved: 0,
+      phoneRevenue: 0, phonePricedBookings: 0, phoneMissingPriceBookings: 0,
+      estimatedRevenue: publicRevenue, publicRevenue, reservationRate: null,
+      pricedSoldOut: null, missingPriceSoldOut: null,
+      unknownUnavailable: count === null ? null : Math.max(0, count - Number(row.available || 0) - Number(publicBookings || 0)),
+      partial: true, capacityConflict, inventoryConflict: Boolean(row.inventoryConflict || capacityConflict),
+      recalculationUnavailable: true, capacityBasis, capacityReview
+    };
+  });
+  const lodgingDaily = daily.filter((row) => row.productType === "lodging");
+  const signal = snapshot.salesSignal || {};
+  const lodging = signal.lodging || {};
+  const days = lodgingDaily.length || Number(lodging.days || 0);
+  const publicBookings = lodgingDaily.length && lodgingDaily.every((row) => row.publicBookings !== null)
+    ? lodgingDaily.reduce((sum, row) => sum + row.publicBookings, 0) : productSnapshotNumber(lodging.publicBookings);
+  return {
+    ...snapshot, capacityBasis, capacityReview, recalculationUnavailable: true,
+    stockBasis: { ...(snapshot.stockBasis || {}), lodgingBasisTotal: count, lodgingOperatingTotal: count, lodgingMaxTotal: count },
+    salesSignal: {
+      ...signal, lodgingBasisTotal: count, lodgingOperatingTotal: count, lodgingOfflineReservedTotal: 0,
+      lodging: { ...lodging, days, totalSupply: count === null ? null : count * days, totalSold: publicBookings,
+        publicBookings, phoneBookings: 0, minTotal: count, maxTotal: count, partial: true,
+        averageRate: null, fridayRate: null, saturdayRate: null, sundayRate: null, weekdayRate: null,
+        fridayWeak: false, sundayWeak: false, weekdayWeak: false }
+    },
+    revenue: { ...(snapshot.revenue || {}), lodging: {
+      ...(snapshot.revenue?.lodging || {}), revenue: null, adjustedRevenue: null,
+      missingPriceEstimatedRevenue: null, offlineRevenue: null, phoneRevenue: null, precisionRate: null,
+      pricedSoldOut: null, missingPriceSoldOut: null,
+      recalculationUnavailable: true
+    } },
+    productSnapshot: productSnapshot ? {
+      ...productSnapshot, daily, capacityBasis, capacityReview, recalculationUnavailable: true,
+      summary: { ...(productSnapshot.summary || {}), confirmedEstimatedRevenue: null, adjustedEstimatedRevenue: null }
+    } : productSnapshot
+  };
+}
+
 function companyInventoryWithManualCorrection(company = {}) {
-  const inventory = company.inventory || {};
+  const storedInventory = company.inventory || {};
+  const project = (snapshot) => companyInventorySnapshotWithCurrentCapacity(snapshot, company);
+  const inventory = {
+    ...storedInventory, latest: project(storedInventory.latest), previousLatest: project(storedInventory.previousLatest),
+    snapshots: (storedInventory.snapshots || []).map(project)
+  };
   const correction = company.manualCorrection;
   if (!manualCorrectionHasBasis(correction)) return inventory;
   const latest = inventory.latest || {};
@@ -10625,6 +10703,9 @@ function companyProductSnapshotSummary(snapshot = null) {
   return {
     schemaVersion: snapshot.schemaVersion || 1,
     inventoryEvidenceVersion: snapshot.inventoryEvidenceVersion >= 2 ? snapshot.inventoryEvidenceVersion : null,
+    capacityBasis: snapshot.capacityBasis || null,
+    capacityReview: snapshot.capacityReview || null,
+    roomGuideReference: snapshot.roomGuideReference || null,
     source: snapshot.source || "",
     revenueType: snapshot.revenueType || "estimated",
     actualRevenueAvailable: Boolean(snapshot.actualRevenueAvailable),
@@ -12095,16 +12176,19 @@ function applyCompanyMasterIdentity(item = {}, company = {}) {
 
 function applyCompanyManualCorrection(item, company) {
   const correction = company?.manualCorrection;
-  if (!manualCorrectionHasValue(correction)) return item;
+  const projectedItem = applyInventoryEvidence(withCompanyInventoryCapacityRecord({
+    ...item, companyManualCorrection: correction || null, manualCorrectionApplied: false
+  }, company));
+  if (!manualCorrectionHasValue(correction)) return projectedItem;
   const correctionMeta = sanitizeManualCorrectionMeta(correction);
   const next = {
-    ...item,
+    ...projectedItem,
     companyManualCorrection: correction,
     manualCorrectionApplied: false,
-    rawWeeklyBasisTotal: item.weeklyBasisTotal ?? null,
-    rawNightTotalStock: item.nightTotalStock ?? item.totalRooms ?? null,
-    rawDayUseWeeklyBasisTotal: item.dayUseWeeklyBasisTotal ?? null,
-    rawDayUseTotalStock: item.dayUseTotalStock ?? null
+    rawWeeklyBasisTotal: item.rawWeeklyBasisTotal ?? item.weeklyBasisTotal ?? null,
+    rawNightTotalStock: item.rawNightTotalStock ?? item.nightTotalStock ?? item.totalRooms ?? null,
+    rawDayUseWeeklyBasisTotal: item.rawDayUseWeeklyBasisTotal ?? item.dayUseWeeklyBasisTotal ?? null,
+    rawDayUseTotalStock: item.rawDayUseTotalStock ?? item.dayUseTotalStock ?? null
   };
   const lodgingBasis = manualCorrectionLodgingBasisTotal(correction);
   const dayUseBasis = Number(correction.dayUseBasisTotal);
@@ -12112,12 +12196,13 @@ function applyCompanyManualCorrection(item, company) {
     const operating = Math.round(lodgingBasis);
     const candidate = maxPositiveNumber(item.weeklyBasisTotal, item.weeklyMaxTotal, operating) || operating;
     const structural = Math.max(0, candidate - operating);
-    next.weeklyBasisTotal = item.inventoryEvidence?.version >= 3 ? item.weeklyBasisTotal : candidate;
-    next.weeklyOperatingTotal = item.inventoryEvidence?.version >= 3 ? item.weeklyOperatingTotal : operating;
-    next.weeklyStructuralBlockedTotal = item.inventoryEvidence?.version >= 3 ? 0 : (structural || null);
-    next.weeklyStockBasisType = item.inventoryEvidence?.version >= 3 ? item.weeklyStockBasisType : (structural ? "manual_operating_reduced" : "manual_operating");
-    next.weeklyBasisRule = item.inventoryEvidence?.version >= 3 ? item.weeklyBasisRule : stockBasisRule(item.weeklyBasisRule || "", candidate, operating, structural, item.weeklyOfflineReservedTotal, "개");
-    next.nightTotalStock = item.inventoryEvidence?.version >= 3 ? item.nightTotalStock : operating;
+    next.weeklyBasisTotal = projectedItem.inventoryEvidence?.version >= 4 ? projectedItem.weeklyBasisTotal : operating;
+    next.weeklyOperatingTotal = projectedItem.inventoryEvidence?.version >= 4 ? projectedItem.weeklyOperatingTotal : operating;
+    next.weeklyStructuralBlockedTotal = projectedItem.inventoryEvidence?.version >= 4 ? projectedItem.weeklyStructuralBlockedTotal : (structural || null);
+    next.weeklyStockBasisType = projectedItem.inventoryEvidence?.version >= 4 ? projectedItem.weeklyStockBasisType : (structural ? "manual_operating_reduced" : "manual_operating");
+    next.weeklyBasisRule = projectedItem.inventoryEvidence?.version >= 4 ? projectedItem.weeklyBasisRule : stockBasisRule(item.weeklyBasisRule || "", candidate, operating, structural, item.weeklyOfflineReservedTotal, "개");
+    next.nightTotalStock = operating;
+    next.totalRooms = operating;
     next.manualLodgingBasisTotal = operating;
     next.manualCorrectionApplied = true;
   }
@@ -12125,11 +12210,11 @@ function applyCompanyManualCorrection(item, company) {
     const operating = Math.round(dayUseBasis);
     const candidate = maxPositiveNumber(item.dayUseWeeklyBasisTotal, item.dayUseWeeklyMaxTotal, operating) || operating;
     const structural = Math.max(0, candidate - operating);
-    next.dayUseWeeklyBasisTotal = candidate;
+    next.dayUseWeeklyBasisTotal = projectedItem.inventoryEvidence?.version >= 4 ? projectedItem.dayUseWeeklyBasisTotal : operating;
     next.dayUseWeeklyOperatingTotal = operating;
-    next.dayUseWeeklyStructuralBlockedTotal = structural || null;
-    next.dayUseWeeklyStockBasisType = structural ? "manual_operating_reduced" : "manual_operating";
-    next.dayUseWeeklyBasisRule = stockBasisRule(item.dayUseWeeklyBasisRule || "", candidate, operating, structural, item.dayUseWeeklyOfflineReservedTotal, "회", "데이유즈/캠프닉");
+    next.dayUseWeeklyStructuralBlockedTotal = projectedItem.inventoryEvidence?.version >= 4 ? projectedItem.dayUseWeeklyStructuralBlockedTotal : (structural || null);
+    next.dayUseWeeklyStockBasisType = projectedItem.inventoryEvidence?.version >= 4 ? projectedItem.dayUseWeeklyStockBasisType : (structural ? "manual_operating_reduced" : "manual_operating");
+    next.dayUseWeeklyBasisRule = projectedItem.inventoryEvidence?.version >= 4 ? projectedItem.dayUseWeeklyBasisRule : stockBasisRule(item.dayUseWeeklyBasisRule || "", candidate, operating, structural, item.dayUseWeeklyOfflineReservedTotal, "회", "데이유즈/캠프닉");
     next.dayUseTotalStock = operating;
     next.manualDayUseBasisTotal = operating;
     next.manualCorrectionApplied = true;
@@ -13293,6 +13378,10 @@ function companyRankTrend(company = {}, master = {}, observations = []) {
 }
 
 function companySnapshotEstimatedRevenue(snapshot = {}) {
+  if (snapshot.recalculationUnavailable) return {
+    estimatedRevenue: null, confirmedPriceEstimatedRevenue: null, missingPriceEstimatedRevenue: null,
+    pricedSoldOut: null, missingPriceSoldOut: null, priceCoverageRate: null, priceEvidenceObserved: false
+  };
   const parts = [snapshot.revenue?.lodging || {}, snapshot.revenue?.dayUse || {}];
   const snapshotPriceGroupCount = snapshotNumber(snapshot.productSnapshot?.summary?.priceGroupCount);
   const snapshotPrice = snapshotNumber(snapshot.price);
@@ -13491,6 +13580,25 @@ function historyDailyObservationIsNewer(candidate = {}, current = {}) {
   return left.runId.localeCompare(right.runId) > 0;
 }
 
+function companyHistoryObservationWithCurrentCapacity(row = {}, company = {}) {
+  if (row.productType !== "lodging") return row;
+  const correction = manualCorrectionLodgingBasisTotal(company.manualCorrection);
+  const count = correction || companyMaximumRoomCapacity(company);
+  if (!count) return row;
+  const total = productSnapshotNumber(row.supply ?? row.total);
+  if (row.inventoryEvidenceVersion >= 4 && total === count && !row.recalculationUnavailable) return row;
+  const snapshot = {
+    inventoryEvidenceVersion: row.inventoryEvidenceVersion,
+    capacityBasis: row.capacityBasis,
+    productSnapshot: { inventoryEvidenceVersion: row.inventoryEvidenceVersion,
+      capacityBasis: row.capacityBasis, daily: [{ ...row, total }] }
+  };
+  const projected = companyInventorySnapshotWithCurrentCapacity(snapshot, company);
+  if (projected === snapshot) return row;
+  const daily = projected.productSnapshot.daily[0];
+  return { ...row, ...daily, supply: daily.total, saleRate: null };
+}
+
 function companyHistoryDailyFallback(company = {}, observations = []) {
   const identity = companyHistoryDailyIdentity(company);
   const latestByStayDate = new Map();
@@ -13506,7 +13614,8 @@ function companyHistoryDailyFallback(company = {}, observations = []) {
   }
 
   const observedRows = [...latestByStayDate.entries()]
-    .map(([key, row]) => {
+    .map(([key, originalRow]) => {
+      const row = companyHistoryObservationWithCurrentCapacity(originalRow, company);
       const [productType, date] = key.split(":");
       const evidenceBased = row.inventoryEvidenceVersion >= 2;
       const supplyValue = productSnapshotNumber(row.supply ?? row.total);
@@ -14045,8 +14154,9 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
       skipTourismDiversityHistory: true
     }).catch(() => null);
     if (!data) continue;
-    const item = (data.availability?.items || []).find((candidate) => companyProductAvailabilityMatch(company, candidate));
-    if (!item) continue;
+    const sourceItem = (data.availability?.items || []).find((candidate) => companyProductAvailabilityMatch(company, candidate));
+    if (!sourceItem) continue;
+    const item = applyCompanyManualCorrection(sourceItem, company);
     const actualObservedAt = companyProductRunObservedAt(company, observations, runId);
     const runObservedAt = String(data.run?.collectedAt || data.run?.updatedAt || "").trim();
     loadedCandidates.push({
@@ -14064,6 +14174,15 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
       - (Number.isInteger(left.insertionOrder) ? left.insertionOrder : -1)
   );
 
+  // Historical summary snapshots may have discarded their raw daily stock.
+  // Recover every run's observed maximum before applying one shared capacity.
+  const recoveredMaximum = Math.max(companyMaximumRoomCapacity(company), ...loadedCandidates.map(({ item }) =>
+    Number(item.inventoryEvidence?.capacityBasis?.observedMaximum || item.inventoryEvidence?.lodging?.observedMaximum || 0)
+  ));
+  for (const candidate of loadedCandidates) candidate.item = applyInventoryEvidence({
+    ...candidate.item,
+    inventoryCapacityBaseline: { ...(candidate.item.inventoryCapacityBaseline || {}), lodging: recoveredMaximum }
+  });
   const evidenceProjections = loadedCandidates
     .filter((candidate) => candidate.item.inventoryEvidence?.version >= 2)
     .map(({ data, item, runId, observedAt }) => ({
@@ -14144,43 +14263,45 @@ function companyInventoryEvidenceReadView(company = {}, observations = [], proje
   };
 }
 
+function companyInventoryNeedsEvidenceRecovery(company = {}) {
+  const inventories = [company.inventory?.latest, company.inventory?.previousLatest, ...(company.inventory?.snapshots || [])].filter(Boolean);
+  const maximum = companyMaximumRoomCapacity(company);
+  const override = manualCorrectionLodgingBasisTotal(company.manualCorrection);
+  const expected = override || maximum;
+  const expectedSource = override ? "db_correction" : "observed_maximum";
+  if (!inventories.some((inventory) => inventory.productSnapshot?.products?.length)) return true;
+  return inventories.some((inventory) => {
+    const snapshot = inventory.productSnapshot;
+    const hasProductView = Boolean(snapshot?.products?.length || snapshot?.daily?.length);
+    const hasSignalView = Boolean(inventory.salesSignal?.lodging?.days || inventory.salesSignal?.dayUse?.days || inventory.revenue);
+    if (!hasProductView && !hasSignalView) return false;
+    const version = Number(inventory.inventoryEvidenceVersion ?? snapshot?.inventoryEvidenceVersion ?? 0);
+    if (version < 4 || (hasProductView && Number(snapshot.inventoryEvidenceVersion || 0) < 4)) return true;
+    const basis = snapshot?.capacityBasis || inventory.capacityBasis;
+    if (basis?.source && basis.source !== expectedSource) return true;
+    if (!(expected > 0)) return false;
+    const capacities = [
+      basis?.count,
+      inventory.salesSignal?.lodging?.minTotal,
+      inventory.salesSignal?.lodging?.maxTotal,
+      ...(snapshot?.daily || []).filter((row) => row.productType === "lodging").map((row) => row.total)
+    ].map(productSnapshotNumber).filter((value) => value !== null);
+    return capacities.some((capacity) => capacity !== expected);
+  });
+}
+
 async function summarizeCompanyMasterDetail(companyId = "") {
   const id = String(companyId || "").trim();
   if (!id) return null;
   const [master, observations] = await Promise.all([readCompanyMaster(), readHistoryObservations()]);
   const rawCompany = master.companies?.[id];
   if (!rawCompany) return null;
-  const storedInventories = [
-    rawCompany.inventory?.latest,
-    rawCompany.inventory?.previousLatest,
-    ...(rawCompany.inventory?.snapshots || [])
-  ].filter(Boolean);
-  const storedProductSnapshot = storedInventories.map((inventory) => inventory.productSnapshot)
-    .filter((snapshot) => Array.isArray(snapshot?.products) && snapshot.products.length)
-    .sort((a, b) => String(b.collectedAt || "").localeCompare(String(a.collectedAt || "")))[0];
-  const maximumRoomCapacity = companyMaximumRoomCapacity(rawCompany);
-  const needsEvidenceRecovery = !storedProductSnapshot || storedInventories.some((inventory) => {
-    const snapshot = inventory.productSnapshot;
-    const hasProductView = Boolean(snapshot?.products?.length || snapshot?.daily?.length);
-    const hasSignalView = Boolean(inventory.salesSignal?.lodging?.days || inventory.salesSignal?.dayUse?.days || inventory.revenue);
-    if (!hasProductView && !hasSignalView) return false;
-    const version = Number(inventory.inventoryEvidenceVersion ?? snapshot?.inventoryEvidenceVersion ?? 0);
-    if (version < 3 || (hasProductView && Number(snapshot.inventoryEvidenceVersion || 0) < 3)) return true;
-    if (!(maximumRoomCapacity > 0)) return false;
-    // A later-discovered maximum also applies to already-v3 read views. Inspect
-    // each displayed daily denominator and signal, rather than only their max.
-    const capacities = [
-      inventory.salesSignal?.lodging?.minTotal,
-      inventory.salesSignal?.lodging?.maxTotal,
-      ...(snapshot?.daily || []).filter((row) => row.productType === "lodging").map((row) => row.total)
-    ].map(productSnapshotNumber).filter((value) => value !== null);
-    return capacities.some((capacity) => capacity < maximumRoomCapacity);
-  });
+  const needsEvidenceRecovery = companyInventoryNeedsEvidenceRecovery(rawCompany);
   const recoveredProductSource = needsEvidenceRecovery
     ? await recoverCompanyProductSourceFromRuns(rawCompany, observations)
     : { productSnapshot: null, legacyProductPreview: null, recoveredFromRun: false, evidenceProjections: [] };
   const readView = companyInventoryEvidenceReadView(rawCompany, observations, recoveredProductSource.evidenceProjections || []);
-  const viewCompany = readView.company;
+  const viewCompany = { ...readView.company, inventory: companyInventoryWithManualCorrection(readView.company) };
   const viewObservations = readView.observations;
   const company = companyRecordSummary(viewCompany);
   const productSnapshotCandidates = [
@@ -14246,6 +14367,9 @@ async function summarizeCompanyMasterDetail(companyId = "") {
     ),
     priceGroups: Array.isArray(productSnapshot?.priceGroups) ? productSnapshot.priceGroups : [],
     productSummary: productSnapshot?.summary || latestSnapshot?.summary || null,
+    capacityBasis: dailySnapshot?.capacityBasis || viewCompany.inventory?.latest?.capacityBasis || null,
+    capacityReview: dailySnapshot?.capacityReview || viewCompany.inventory?.latest?.capacityReview || null,
+    roomGuideReference: dailySnapshot?.roomGuideReference || null,
     observationBasis,
     rankTrend: companyRankTrend(rawCompany, master, observations),
     performanceTrend: companyPerformanceTrend(viewCompany, viewObservations),
@@ -15087,33 +15211,59 @@ function companyMaximumRoomCapacity(company = {}) {
   const snapshots = [company.inventory?.latest, company.inventory?.previousLatest, ...(company.inventory?.snapshots || [])].filter(Boolean);
   const values = [];
   for (const snapshot of snapshots) {
-    values.push(snapshot.stockBasis?.lodgingMaxTotal, snapshot.salesSignal?.lodging?.maxTotal);
     const productSnapshot = snapshot.productSnapshot;
-    for (const row of productSnapshot?.daily || []) {
-      if (row.productType !== "lodging" || row.missing || row.inventoryConflict) continue;
-      values.push(row.rawTotal ?? row.total);
-      if (row.inventoryEvidenceVersion >= 3) values.push(row.total);
+    const daily = (productSnapshot?.daily || []).filter((row) => row.productType === "lodging" && !row.missing);
+    const rawValues = daily.map((row) => productSnapshotNumber(row.rawTotal)).filter((value) => value !== null);
+    const version = Number(productSnapshot?.inventoryEvidenceVersion || snapshot.inventoryEvidenceVersion || 0);
+    const observedMaximum = productSnapshotNumber(productSnapshot?.capacityBasis?.observedMaximum ?? snapshot.capacityBasis?.observedMaximum);
+    if (version >= 4 && observedMaximum !== null) values.push(observedMaximum);
+    if (rawValues.length) {
+      // Stored totals can contain old Place guide counts or DB overrides. Only
+      // the provider's raw quantity establishes a historical observed maximum.
+      values.push(...rawValues);
+      continue;
     }
+    if (version >= 4 && observedMaximum !== null) {
+      continue;
+    }
+    if (snapshot.manualCorrectionApplied || snapshot.correctionBasis || Number(productSnapshot?.inventoryEvidenceVersion || snapshot.inventoryEvidenceVersion || 0) >= 3) continue;
+    values.push(snapshot.stockBasis?.lodgingMaxTotal, snapshot.salesSignal?.lodging?.maxTotal);
+    values.push(...daily.filter((row) => !row.inventoryConflict).map((row) => row.total));
   }
   return Math.max(0, ...values.map(productSnapshotNumber).filter((value) => value !== null && value > 0));
+}
+
+function withCompanyInventoryCapacityRecord(item = {}, company = {}) {
+  const count = companyMaximumRoomCapacity(company);
+  const correction = company.manualCorrection;
+  const lodgingOverride = manualCorrectionLodgingBasisTotal(correction);
+  const dayUseOverride = correction && correction.active !== false ? productSnapshotNumber(correction.dayUseBasisTotal) : null;
+  const baseline = {
+    ...(item.inventoryCapacityBaseline || {}),
+    lodging: count,
+    companyId: company.companyId,
+    businessType: (company.lodgingTypes || []).join(" "),
+    source: "same_company_saved_maximum"
+  };
+  // Always resolve against the current DB, including a reduced or cleared value.
+  delete baseline.lodgingOverride;
+  delete baseline.dayUseOverride;
+  if (lodgingOverride > 0) baseline.lodgingOverride = {
+    count: lodgingOverride, source: "db_manual_correction", updatedAt: correction.updatedAt || ""
+  };
+  if (dayUseOverride > 0) baseline.dayUseOverride = {
+    count: Math.round(dayUseOverride), source: "db_manual_correction", updatedAt: correction.updatedAt || ""
+  };
+  return {
+    ...item,
+    inventoryCapacityBaseline: baseline
+  };
 }
 
 function withCompanyInventoryCapacity(item = {}, companies = []) {
   // Exact provider identities only: similarly named companies must never share capacity.
   const matches = companies.filter((company) => companyProductAvailabilityMatch(company, item));
-  if (matches.length !== 1) return item;
-  const company = matches[0];
-  const count = companyMaximumRoomCapacity(company);
-  if (!count) return item;
-  return {
-    ...item,
-    inventoryCapacityBaseline: {
-      ...(item.inventoryCapacityBaseline || {}),
-      lodging: count,
-      companyId: company.companyId,
-      source: "same_company_saved_maximum"
-    }
-  };
+  return matches.length === 1 ? withCompanyInventoryCapacityRecord(item, matches[0]) : item;
 }
 
 function summarizeAvailabilityRows(rows, baseDir = "", capacityCompanies = [], collectionRange = {}) {
@@ -15241,6 +15391,7 @@ function summarizeAvailabilityRows(rows, baseDir = "", capacityCompanies = [], c
       bookingBusinessId,
       rank: numericField(row, ["overall_rank", "순위", "rank_or_order"]) || byPlace.size + 1,
       name: row["업체명"] || row.name || "확인불가",
+      keyword: row["기준키워드"] || row["검색키워드"] || row.keyword || collectionRange.keyword || "",
       region: addressRegion || searchRegion || "",
       searchRegion,
       searchCluster: searchRegion,
@@ -16857,6 +17008,7 @@ async function loadRun(runId, options = {}) {
   if (datalabTrend) stats.datalabTrend = datalabTrend;
   const capacityMaster = await readCompanyMaster();
   const availability = summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows], dirPath, Object.values(capacityMaster.companies || {}), {
+    keyword: manifest?.keyword || conditions.keyword || "",
     checkIn: manifest?.checkIn || conditions.checkIn || runDateFromId(runId),
     bookingRangeDays: manifest?.bookingRangeDays || 1
   });

@@ -9,6 +9,10 @@ const dayType = (date) => ["일요일", "평일", "평일", "평일", "평일", 
 const POLICY = "maximum_capacity_phone_estimate";
 const SUM_FIELDS = ["total", "rawTotal", "available", "sold", "publicBookings", "phoneBookings", "sharedDayUseExcluded", "unknownUnavailable", "publicRevenue", "phoneRevenue", "pricedSoldOut", "missingPriceSoldOut", "phonePricedBookings", "phoneMissingPriceBookings", "inventoryShortfall", "unverifiedOccupied", "unverifiedUnavailable"];
 const capacityNumber = (value) => nonnegative(value && typeof value === "object" ? value.count : value);
+const correctionCapacity = (value) => {
+  const count = number(value && typeof value === "object" ? value.count : value);
+  return Number.isInteger(count) && count > 0 ? count : null;
+};
 
 function productKind(row) {
   const explicit = [row.saleType, row.bizItemSubType].filter(Boolean).join(" ");
@@ -103,9 +107,15 @@ function summarizeEvidence(products, kind, options = {}) {
   }
   const rows = [...dates.values()].sort((a, b) => a.date.localeCompare(b.date));
   const observedMaximum = Math.max(0, ...rows.map((row) => row.rawTotal));
-  const operatingTotal = Math.max(observedMaximum, capacityNumber(options.capacity));
+  const maximumObservedCapacity = Math.max(observedMaximum, capacityNumber(options.capacity));
+  const overrideCount = correctionCapacity(options.override);
+  const operatingTotal = overrideCount ?? maximumObservedCapacity;
   for (const row of rows) {
     row.total = operatingTotal;
+    // A reviewed DB count may be smaller than the channel observation. Keep
+    // both pieces of evidence without forcing impossible quantities into sales.
+    row.capacityConflict = overrideCount !== null && (row.rawTotal > operatingTotal || row.available + row.publicBookings > operatingTotal);
+    row.inventoryConflict ||= row.capacityConflict;
     row.inventoryShortfall = Math.max(0, operatingTotal - row.rawTotal);
     row.missing = row.observedProducts === 0;
     row.partial = row.observedProducts < productKeys.size;
@@ -131,7 +141,7 @@ function summarizeEvidence(products, kind, options = {}) {
     row.estimatedRevenue = row.publicRevenue + row.phoneRevenue;
     row.rate = row.total > 0 && canEstimate ? row.sold / row.total : null;
   }
-  const result = { rows, operatingTotal, observedMaximum, ...Object.fromEntries(SUM_FIELDS.map((field) => [field, 0])), revenue: 0 };
+  const result = { rows, operatingTotal, observedMaximum, maximumObservedCapacity, capacitySource: overrideCount !== null ? "db_correction" : "observed_maximum", ...Object.fromEntries(SUM_FIELDS.map((field) => [field, 0])), revenue: 0 };
   for (const row of rows) {
     for (const field of SUM_FIELDS) result[field] += row[field];
     result.revenue += row.estimatedRevenue;
@@ -170,8 +180,9 @@ function applyKindFields(item, summary, kind) {
   set("AvgSoldUnitPrice", summary.pricedSoldOut ? Math.round(summary.revenue / summary.pricedSoldOut) : null);
   set("AvgReservationRate", summary.complete && summary.total ? summary.sold / summary.total : null);
   set("OfflineReservationDetail", rows.filter((row) => row.phoneBookings).map((row) => `${shortDate(row.date)} 전화·타채널 추정 ${row.phoneBookings}${unit}`).join(", "));
-  set("BasisRule", kind === "lodging" ? "최대 객실 수를 매일 총량으로 유지합니다. 총량에서 예약 가능·공개 예약·당일 이용 공유 차단을 뺀 수량은 전화·타채널 예약으로 추정합니다. 수집 실패·누락은 예약으로 추정하지 않습니다." : "최대 관측 수량을 매일 총량으로 유지하며, 당일 이용 예약은 공개 예약 수량만 사용합니다.");
-  set("StockBasisType", "maximum_capacity_phone_estimate_v3");
+  const capacityLabel = summary.capacitySource === "db_correction" ? "DB 보정 수량" : "최대 관측 수량(추정)";
+  set("BasisRule", kind === "lodging" ? `${capacityLabel}을 매일 총량으로 유지합니다. 총량에서 예약 가능·공개 예약·당일 이용 공유 차단을 뺀 수량은 전화·타채널 예약으로 추정합니다. 수집 실패·누락·수량 충돌은 예약으로 추정하지 않습니다. 객실 안내는 참고값입니다.` : `${capacityLabel}을 매일 총량으로 유지하며, 당일 이용 예약은 공개 예약 수량만 사용합니다.`);
+  set("StockBasisType", "maximum_capacity_phone_estimate_v4");
   set("Detail", rows.filter((row) => !row.missing).map((row) => `${shortDate(row.date)} ${row.available}/${row.total}`).join(", "));
   set("ReservationRateDetail", rows.filter((row) => row.rate !== null).map((row) => `${shortDate(row.date)} ${Math.round(row.rate * 100)}%(${row.sold}/${row.total})`).join(", "));
   set("RawStockVariance", rows.map((row) => `${shortDate(row.date)} 수집 ${row.available}/${row.rawTotal}`).join(", "));
@@ -216,7 +227,6 @@ function requestedDates(products, original) {
 
 function applyInventoryEvidence(original) {
   const previous = original.inventoryEvidence;
-  if (previous?.version === 3 && previous.policy === POLICY && ["lodging", "dayUse"].every((kind) => capacityNumber(original.inventoryCapacityBaseline?.[kind]) <= (previous[kind]?.operatingTotal || 0))) return original;
   const rawProducts = evidenceProducts(original);
   if (!rawProducts.some((row) => Object.hasOwn(row, "stock") && Object.hasOwn(row, "bookingCount"))) return original;
   const products = rawProducts.map(productEvidence);
@@ -228,18 +238,33 @@ function applyInventoryEvidence(original) {
   let sharedRooms = original.sharedRooms || verified?.sharedRooms || previous?.sharedRooms || { status: "unknown" };
   if (hasLodging && hasDayUse && !["confirmed", "separate", "confirmed_separate", "not_shared"].includes(sharedRooms.status)) sharedRooms = { ...sharedRooms, status: "assumed_shared", note: "숙박과 당일 이용을 병행하는 업체는 공유 객실로 가정하여, 같은 날짜의 당일 이용 공개 예약만큼 숙박 전화·타채널 예약 추정에서 제외합니다." };
   if (!hasDayUse) sharedRooms = { ...sharedRooms, note: sharedRooms.note || "데이유즈 상품이 관측되지 않았습니다." };
-  const dayUse = summarizeEvidence(products, "dayUse", { dates, capacity: original.inventoryCapacityBaseline?.dayUse });
-  const physicalRooms = verified?.physicalRooms || previous?.physicalRooms || { count: null, label: "실제 객실 수 미확인", source: "최대 관측 객실 수를 계산 기준으로 사용합니다." };
+  const baseline = original.inventoryCapacityBaseline || {};
+  const dayUse = summarizeEvidence(products, "dayUse", { dates, capacity: baseline.dayUse, override: baseline.dayUseOverride });
+  const physicalRooms = original.roomGuideReference || verified?.physicalRooms || previous?.roomGuideReference || previous?.physicalRooms || { count: null, label: "객실 안내 참고값 없음" };
+  // Public room descriptions are a reference, never an automatic capacity
+  // override or a source of extra product capacity for inferred revenue.
+  const roomGuideReference = { ...physicalRooms, label: "객실 안내 참고", role: "reference_only" };
   const lodging = summarizeEvidence(products, "lodging", {
-    dates, capacity: Math.max(capacityNumber(original.inventoryCapacityBaseline?.lodging), nonnegative(physicalRooms.count)),
-    productCapacities: Object.fromEntries((physicalRooms.products || []).map((product) => [String(product.id), nonnegative(product.count)])),
+    dates, capacity: baseline.lodging, override: baseline.lodgingOverride,
+    productCapacities: correctionCapacity(baseline.lodgingOverride) === null ? {} : Object.fromEntries((baseline.lodgingOverride.products || []).map((product) => [String(product.id), nonnegative(product.count)])),
     dayUse, shared: ["confirmed", "assumed_shared"].includes(sharedRooms.status)
   });
   if (!lodging && !dayUse) return original;
+  const capacityBasis = lodging ? {
+    count: lodging.operatingTotal, source: lodging.capacitySource,
+    label: lodging.capacitySource === "db_correction" ? "DB 보정" : "최대 관측(추정)",
+    observedMaximum: lodging.maximumObservedCapacity,
+    currentObservedMaximum: lodging.observedMaximum,
+  } : null;
+  const glamping = /글램핑|glamping/i.test([item.name, item.keyword, item.searchKeyword, item.category, item.businessType, item.lodgingType, item.accommodationMarketType, baseline.businessType].filter(Boolean).join(" "));
+  const reviewCodes = [];
+  if (glamping && lodging?.capacitySource === "observed_maximum" && lodging.operatingTotal > 40) reviewCodes.push("glamping_observed_over_40");
+  if (lodging?.rows.some((row) => row.capacityConflict)) reviewCodes.push("db_capacity_observation_conflict");
+  const capacityReview = { required: reviewCodes.length > 0, codes: reviewCodes, threshold: 40, message: reviewCodes.map((code) => code === "glamping_observed_over_40" ? "글램핑 최대 관측 수량이 40실을 초과합니다. 객실 수와 상품 구성을 검토해 주세요." : "DB 보정 객실 수보다 수집 수량이 큽니다. 해당 날짜의 전화예약 추정과 예약률은 계산하지 않습니다.").join(" ") };
   const originalRevenue = nonnegative(item.weeklyAdjustedRevenue ?? item.weeklyEstimatedRevenue) + nonnegative(item.dayUseWeeklyAdjustedRevenue ?? item.dayUseWeeklyEstimatedRevenue);
   item.inventoryEvidence = {
-    version: 3, policy: POLICY, lodging, dayUse, physicalRooms, sharedRooms,
-    legacyExcluded: {
+    version: 4, policy: POLICY, lodging, dayUse, physicalRooms: roomGuideReference, roomGuideReference, sharedRooms, capacityBasis, capacityReview,
+    legacyExcluded: previous?.version === 4 && previous.policy === POLICY ? previous.legacyExcluded : {
       lodgingSold: lodging ? Math.max(0, nonnegative(original.weeklyTotalSoldOut) - lodging.sold) : 0,
       dayUseSold: dayUse ? Math.max(0, nonnegative(original.dayUseWeeklyTotalSoldOut) - dayUse.sold) : 0,
       revenue: Math.max(0, originalRevenue - (lodging?.revenue || 0) - (dayUse?.revenue || 0))
@@ -247,6 +272,7 @@ function applyInventoryEvidence(original) {
   };
   applyKindFields(item, lodging, "lodging");
   applyKindFields(item, dayUse, "dayUse");
+  if (previous?.version === 4 && JSON.stringify(previous) === JSON.stringify(item.inventoryEvidence) && Object.keys(item).every((key) => typeof item[key] === "object" || item[key] === original[key])) return original;
   return item;
 }
 

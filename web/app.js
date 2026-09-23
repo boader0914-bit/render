@@ -4635,33 +4635,47 @@ function offlineSoldForTotal(basisTotal, rawTotal) {
 }
 
 function inventoryAssessment(item = {}) {
-  return [2, 3].includes(item.inventoryEvidence?.version) ? item.inventoryEvidence : null;
+  return [2, 3, 4].includes(item.inventoryEvidence?.version) ? item.inventoryEvidence : null;
 }
 
 function roomCapacityPresentation(item = {}) {
   const evidence = inventoryAssessment(item);
-  const physical = evidence?.physicalRooms || {};
+  const physical = evidence?.roomGuideReference || evidence?.physicalRooms || {};
   const physicalCount = Number.isInteger(physical.count) && physical.count > 0 ? physical.count : null;
   const correction = item.companyManualCorrection || item.companyProfile?.manualCorrection || {};
   const registered = optionalNumber(correction.lodgingBasisTotal);
-  const operatingCount = correction.active !== false && Number.isInteger(registered) && registered > 0 ? registered : null;
-  // The v3 policy keeps the maximum observed lodging capacity fixed across dates.
-  // Physical-room references and day-use products remain separate from that basis.
+  const segmentTotal = correction.active !== false
+    ? manualCorrectionRoomSegments(correction).reduce((sum, row) => sum + row.count, 0)
+    : 0;
+  const correctionTotal = Number.isFinite(registered) && registered > 0 ? Math.round(registered) : segmentTotal;
+  const operatingCount = correction.active !== false && correctionTotal > 0 ? correctionTotal : null;
+  // Public room descriptions remain reference material, never a capacity override.
   const rows = evidence ? (evidence.lodging?.rows || []) : weeklyRows(item);
   const totals = rows.filter((row) => !row.missing)
-    .map((row) => optionalNumber(row.rawTotal ?? row.total))
+    .map((row) => optionalNumber(evidence?.version >= 3 ? row.rawTotal : row.rawTotal ?? row.total))
     .filter((value) => Number.isFinite(value) && value >= 0);
   const minimum = totals.length ? Math.min(...totals) : null;
   const maximum = totals.length ? Math.max(...totals) : null;
-  const policyMaximum = evidence?.version >= 3 ? optionalNumber(evidence.lodging?.operatingTotal) : NaN;
-  const estimatedCount = Number.isInteger(policyMaximum) && policyMaximum > 0 ? policyMaximum
-    : Number.isInteger(maximum) && maximum > 0 ? maximum : null;
-  const count = evidence?.version >= 3 ? estimatedCount : physicalCount || estimatedCount;
-  const estimated = evidence?.version >= 3 ? estimatedCount !== null : !physicalCount && estimatedCount !== null;
+  const basis = evidence?.capacityBasis || {};
+  const basisCount = optionalNumber(basis.count);
+  const manualBasis = basis.source === "db_correction" && correction.active !== false && Number.isInteger(basisCount) && basisCount > 0 ? basisCount : null;
+  const observedCandidates = [
+    basis.observedMaximum,
+    evidence?.lodging?.observedMaximum,
+    basis.source === "observed_maximum" ? basisCount : null,
+    maximum
+  ].map(optionalNumber).filter((value) => Number.isInteger(value) && value > 0);
+  const estimatedCount = observedCandidates.length ? Math.max(...observedCandidates) : null;
+  const count = operatingCount || manualBasis || estimatedCount;
+  const estimated = !operatingCount && !manualBasis && estimatedCount !== null;
+  const sourceLabel = count === null ? "수집 자료 부족" : estimated ? "최대 관측(추정)" : "DB 보정";
+  const review = evidence?.capacityReview || {};
+  const reviewRequired = review.required === true;
+  const reviewNote = reviewRequired ? String(review.message || "객실 수 검토 필요") : "";
   const dailyText = maximum === null ? "공개 수량 미확인"
     : minimum === maximum ? `${fmtNumber(maximum)}실 / 일`
       : `${fmtNumber(minimum)}~${fmtNumber(maximum)}실 / 일`;
-  return { count, physicalCount, estimated, physical, operatingCount, dailyText, minimum, maximum };
+  return { count, physicalCount, estimated, physical, operatingCount, dailyText, minimum, maximum, sourceLabel, reviewRequired, reviewNote };
 }
 
 function finiteNumber(value, fallback = 0) {
@@ -6553,7 +6567,7 @@ function renderCompanies() {
           </div>
         </div>
         <div class="company-compact-metrics">
-          <div><span>객실 총량</span><strong>${capacity.count ? `${fmtNumber(capacity.count)}실` : "확인 전"}</strong><small>${evidence?.version >= 3 ? "최대 관측 기준 · 날짜별 고정" : capacity.estimated ? "수집 기준 추정" : capacity.physicalCount ? "확인된 객실 수" : "수집 자료 부족"}<br>네이버 공개 ${escapeHtml(capacity.dailyText)}</small></div>
+          <div><span>객실 총량</span><strong>${capacity.count ? `${fmtNumber(capacity.count)}실` : "확인 전"}</strong><small>${escapeHtml(capacity.sourceLabel)}${capacity.count && evidence?.version >= 3 ? " · 날짜별 고정" : ""}<br>네이버 공개 ${escapeHtml(capacity.dailyText)}${capacity.reviewRequired ? "<br>객실 수 검토 필요" : ""}</small></div>
           <div><span>${lodging.estimated ? "숙박 예약 추정" : "숙박 예약 수량"}</span><strong>${linked && lodgingObserved ? `${fmtNumber(lodging.sold)}${lodging.basis === "basis" ? "실" : "박"}` : "자료 미확인"}</strong><small>${escapeHtml(lodging.label)}${linked && lodgingObserved && Number.isFinite(lodging.rate) ? ` · 예약 비율 ${fmtRate(lodging.rate)}` : ""}${lodging.estimated && lodgingObserved ? `<br>${escapeHtml(bookingQuantityBreakdown(lodging, lodging.basis === "basis" ? "실" : "박"))}` : ""}</small></div>
           <div><span>당일 이용 예약 수량</span><strong>${linked && dayObserved ? `${fmtNumber(day.sold)}회` : "자료 미확인"}</strong><small>${dayObserved ? escapeHtml(day.label) : "예약 자료 필요"} · 숙박과 별도</small></div>
           <div><span>예상 매출</span><strong>${linked && (lodgingObserved || dayObserved) ? fmtWon(revenue.totalAdjustedRevenue || revenue.totalRevenue) : "자료 미확인"}</strong><small>${linked ? `${lodging.estimated ? "네이버 예약·전화예약 추정 포함" : "수집된 가격·예약 기준"}${incomplete ? " · 일부 자료 미확인" : ""}` : "상세 수량·가격 확인 필요"}</small></div>
@@ -36394,7 +36408,7 @@ function sheetDisclosure(title, count, content, className = "") {
 }
 
 function inventorySourceHtml(physical = {}, compact = false) {
-  const label = compact ? "객실 수 확인 근거" : (physical.source || "객실 안내");
+  const label = compact ? "객실 안내 참고" : (physical.source || "객실 안내 참고");
   return /^https?:\/\//i.test(String(physical.sourceUrl || ""))
     ? `<a href="${escapeHtml(physical.sourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`
     : escapeHtml(label);
@@ -36405,9 +36419,15 @@ function sheetBookingQuantityBasis(item = {}) {
   const lodging = salesStats(item, "lodging");
   const observed = evidence ? evidence.lodging && evidence.lodging.status !== "missing" : lodging.supply > 0;
   const capacity = roomCapacityPresentation(item);
+  const capacityExplanation = capacity.count
+    ? `${fmtNumber(capacity.count)}실 · ${capacity.sourceLabel}. ${capacity.estimated ? "같은 업체에서 관측한 최대 숙박 수량을 사용합니다. 실제 보유 객실 수와 다를 수 있습니다." : "DB에 저장한 보정값을 객실 총량으로 우선 적용합니다."}`
+    : "총량을 정할 숙박 수량이 아직 확인되지 않았습니다.";
+  const capacityReference = capacity.physicalCount ? `<p><strong>객실 안내 참고</strong> ${fmtNumber(capacity.physicalCount)}실 · ${inventorySourceHtml(capacity.physical, true)}. 공개 안내 내용은 총량 계산에 반영하지 않습니다.</p>` : "";
+  const capacityReview = capacity.reviewRequired ? `<p><strong>객실 수 검토 필요</strong> ${escapeHtml(capacity.reviewNote)}. 표시된 수량을 유지하며 DB 보정으로 확인할 수 있습니다.</p>` : "";
   if (evidence?.version >= 3) return `<div class="sheet-calculation-list">
-    <p><strong>객실 총량</strong> ${capacity.count ? `${fmtNumber(capacity.count)}실 · 최대 관측 기준. 같은 업체에서 확인한 최대 객실 수를 모든 날짜에 고정합니다. 공개 판매 수량이 줄어도 총량은 줄이지 않습니다.` : "총량을 정할 숙박 수량이 아직 확인되지 않았습니다."} 당일 이용 수량은 더하지 않습니다.</p>
-    ${capacity.physicalCount ? `<p><strong>객실 수 확인 자료</strong> ${fmtNumber(capacity.physicalCount)}실 · ${inventorySourceHtml(capacity.physical, true)}.</p>` : ""}
+    <p><strong>객실 총량</strong> ${escapeHtml(capacityExplanation)} ${capacity.count ? "선택한 총량을 모든 날짜에 고정하며, 공개 판매 수량이 줄어도 총량은 줄이지 않습니다. " : ""}당일 이용 수량은 더하지 않습니다.</p>
+    ${capacityReference}
+    ${capacityReview}
     <p><strong>전화예약 추정</strong> 총객실 − 예약 가능 − 네이버 예약 − 당일 이용 차단 제외. 예약 가능한 객실의 예약 수량이 0인 경우는 전화예약으로 더하지 않습니다. 수집 실패나 일부 상품 미수집도 전화예약으로 계산하지 않습니다.</p>
     <p><strong>숙박 예약 추정</strong> 네이버 공개 예약 + 전화예약 추정입니다. 전화·타채널 예약으로 가정한 수량이며 실제 예약 경로를 확인한 값은 아닙니다. ${observed ? escapeHtml(bookingQuantityBreakdown(lodging)) + "." : ""}</p>
     <p><strong>당일 이용 제외</strong> ${fmtNumber(lodging.sharedDayUseExcluded)}박. 같은 객실을 쓰면 당일 이용 예약 때문에 막힌 수량을 전화예약에서 제외합니다. ${evidence.sharedRooms?.status === "assumed_shared" ? "객실 공유 여부가 확인되지 않은 병행 업체는 공유한다고 가정하며, 별도 객실로 확인되면 제외하지 않습니다." : "확인된 네이버 숙박 예약을 당일 이용 수량만큼 다시 빼지는 않습니다."}</p>
@@ -36415,8 +36435,9 @@ function sheetBookingQuantityBasis(item = {}) {
     ${observed ? `<p><strong>예약 비율 계산</strong> ${fmtNumber(lodging.sold)}박 ÷ ${fmtNumber(lodging.supply)}객실·박${Number.isFinite(lodging.rate) ? ` = ${fmtRate(lodging.rate)}` : " · 비율 미확인"}. 분모는 객실 총량 ${fmtNumber(capacity.count)}실 × 집계 일수이며, 미수집 날짜의 예약은 추정하지 않습니다.</p>` : ""}
   </div>`;
   return `<div class="sheet-calculation-list">
-    <p><strong>객실 총량</strong> ${capacity.physicalCount ? `${fmtNumber(capacity.count)}실 · ${inventorySourceHtml(capacity.physical, true)}. 직접 확인한 객실 수를 우선 표시합니다.` : capacity.estimated ? `${fmtNumber(capacity.count)}실 · 수집 기준 추정. 선택 기간의 날짜별 숙박 총수량 중 최대값입니다. 네이버에 일부 객실만 공개되어 있다면 실제 전체 객실 수와 다를 수 있습니다.` : "추정에 필요한 숙박 수량이 아직 확인되지 않았습니다."} 당일 이용 수량은 더하지 않습니다.</p>
-    ${capacity.operatingCount ? `<p><strong>관리자 운영 기준</strong> ${fmtNumber(capacity.operatingCount)}실 · 등록된 판매 기준이며, 실제 보유 객실 수와 구분합니다.</p>` : ""}
+    <p><strong>객실 총량</strong> ${escapeHtml(capacityExplanation)} 당일 이용 수량은 더하지 않습니다.</p>
+    ${capacityReference}
+    ${capacityReview}
     <p><strong>숙박 예약 수량</strong> ${lodging.basis === "basis" ? "기준일의 예약 객실 수입니다." : "선택 기간의 예약된 객실을 날짜별로 더한 값입니다. 객실 1실을 2박 예약하면 2박으로 셉니다. 예약 건수와는 다릅니다."}</p>
     ${observed ? `<p><strong>예약 비율 계산</strong> ${fmtNumber(lodging.sold)} ÷ ${fmtNumber(lodging.supply)}${Number.isFinite(lodging.rate) ? ` = ${fmtRate(lodging.rate)}` : " · 비율 미확인"}. ${lodging.basis === "basis" ? "기준일 네이버 공개 수량 대비 예약 수량입니다." : `${fmtNumber(lodging.supply)}은 날짜별 공개 수량의 합계이며, 업체의 객실 총량이 아닙니다.`}</p>` : ""}
   </div>`;
@@ -36433,7 +36454,7 @@ function sheetInventorySummary(item = {}) {
   return `<section class="sheet-section sheet-inventory-summary">
     <div class="sheet-structure-title"><h3>객실과 예약 수량</h3><span class="structure-badge ${shared ? "watch" : "neutral"}">${evidence?.sharedRooms?.status === "assumed_shared" ? "숙박·당일 이용 객실 공유 가정" : shared ? "숙박·당일 이용 객실 공유" : "숙박 기준"}</span></div>
     <div class="inventory-summary-grid">
-      <div><span>객실 총량</span><strong>${capacity.count ? `${fmtNumber(capacity.count)}실` : "확인 전"}</strong><small>${lodging.estimated ? "최대 관측 기준 · 날짜별 고정" : capacity.estimated ? "수집 기준 추정" : capacity.physicalCount ? inventorySourceHtml(capacity.physical, true) : "수집 자료 부족"}</small></div>
+      <div><span>객실 총량</span><strong>${capacity.count ? `${fmtNumber(capacity.count)}실` : "확인 전"}</strong><small>${escapeHtml(capacity.sourceLabel)}${capacity.count && lodging.estimated ? " · 날짜별 고정" : ""}${capacity.reviewRequired ? "<br>객실 수 검토 필요" : ""}</small></div>
       <div><span>네이버 공개 객실 수</span><strong>${escapeHtml(capacity.dailyText)}</strong><small>공개 수량이 줄어도 객실 총량은 유지</small></div>
       <div><span>${lodging.estimated ? "숙박 예약 추정" : "숙박 예약 수량"}</span><strong>${lodgingObserved ? `${fmtNumber(lodging.sold)}${lodging.basis === "basis" ? "실" : "박"}` : "자료 미확인"}</strong><small>${escapeHtml(lodging.label)}${lodgingObserved && Number.isFinite(lodging.rate) ? ` · 예약 비율 ${fmtRate(lodging.rate)}` : ""}${lodging.estimated && lodgingObserved ? `<br>${escapeHtml(bookingQuantityBreakdown(lodging, lodging.basis === "basis" ? "실" : "박"))}` : ""}</small></div>
       <div><span>당일 이용 예약 수량</span><strong>${dayObserved ? `${fmtNumber(day.sold)}회` : "자료 미확인"}</strong><small>${dayObserved ? escapeHtml(day.label) : "예약 자료 필요"} · 숙박과 별도</small></div>
@@ -36452,6 +36473,7 @@ function sheetRowsForBooking(item) {
     unit: "객실",
     missing: row.missing,
     partial: row.partial,
+    capacityConflict: row.capacityConflict,
     sharedDayUseIncomplete: row.sharedDayUseIncomplete,
     closed: row.closed,
     closedProducts: row.closedProducts,
@@ -36541,7 +36563,7 @@ function dateRow(row) {
   const availabilityNote = Number.isFinite(row.available)
     ? ` · 예약 가능 ${fmtNumber(row.available)}${row.unit}${row.unverifiedUnavailable ? ` · 판매 중지·점유 미확인 ${fmtNumber(row.unverifiedUnavailable)}${row.unit}` : ""}`
     : "";
-  const stateNote = row.sharedDayUseIncomplete ? " · 당일 이용 수량 미확인으로 전화예약 추정 보류" : row.partial ? " · 일부 상품 미수집" : row.closed ? " · 판매 중지" : row.closedProducts ? " · 일부 상품 판매 중지" : "";
+  const stateNote = row.capacityConflict ? " · DB 보정과 수집 수량 충돌 · 전화예약 추정 보류" : row.sharedDayUseIncomplete ? " · 당일 이용 수량 미확인으로 전화예약 추정 보류" : row.partial ? " · 일부 상품 미수집" : row.closed ? " · 판매 중지" : row.closedProducts ? " · 일부 상품 판매 중지" : "";
   const stockNote = row.estimated
     ? `${bookingQuantityBreakdown(row, row.unit)} · 공개 수량 ${fmtNumber(openStock)}${row.unit}${row.unknownUnavailable ? ` · 추정 보류 ${fmtNumber(row.unknownUnavailable)}${row.unit}` : ""}`
     : hidden
@@ -37252,7 +37274,7 @@ function renderSheetBooking(item) {
   const missingRows = lodgingRows.length - collectedRows;
   const dayRows = sheetRowsForDayUse(item);
   const evidence = inventoryAssessment(item);
-  const physical = evidence?.physicalRooms || {};
+  const physical = evidence?.roomGuideReference || evidence?.physicalRooms || {};
   const publicMode = !isAdminRole();
   const publicBlocks = publicMode
     ? sheetDisclosure("경쟁 위치와 운영 참고", "분석 보기", `${renderB2BDetailPositionPanel(item)}${sheetB2BInsightPanel(item)}${evidence ? "" : renderB2BBookingQualityPanel(item, lodgingRows, dayRows)}`)
@@ -37262,10 +37284,10 @@ function renderSheetBooking(item) {
     : "";
   const evidenceContent = `<div class="sheet-calculation-list">
     <p><strong>수집 기간</strong> ${escapeHtml(rangeLabel)} · ${fmtNumber(rangeDays)}일 중 ${fmtNumber(collectedRows)}일 수집${missingRows ? ` · ${fmtNumber(missingRows)}일 미수집` : ""}</p>
-    <p><strong>수량 단위</strong> 실제 객실 수는 시설 규모입니다. 객실·박은 날짜별 숙박 수량의 합계이며, 당일 이용은 회 단위로 따로 표시합니다.</p>
+    <p><strong>수량 단위</strong> 객실 총량은 DB 보정 또는 최대 관측을 기준으로 정합니다. 객실·박은 날짜별 숙박 수량의 합계이며, 당일 이용은 회 단위로 따로 표시합니다.</p>
     <p><strong>공유 객실</strong> ${escapeHtml(evidence?.sharedRooms?.note || "객실 공유 여부는 확인 전입니다. 숙박과 당일 이용의 수량을 더해 실제 객실 수로 해석하지 않습니다.")}</p>
     <p><strong>예약과 점유</strong> ${evidence?.version >= 3 ? "총객실에서 예약 가능 수량과 네이버 예약, 당일 이용 차단을 뺀 나머지를 전화예약으로 추정합니다. 미수집이나 수량 충돌은 전화예약으로 채우지 않습니다." : "수량 감소·판매 중지·사유 미확인 점유는 예약과 구분합니다."}</p>
-    ${physical.count ? `<p><strong>객실 수 출처</strong> ${inventorySourceHtml(physical)}${physical.verifiedAt ? ` · 확인 ${escapeHtml(String(physical.verifiedAt).slice(0, 10))}` : ""}</p>` : ""}
+    ${physical.count ? `<p><strong>객실 안내 참고</strong> ${inventorySourceHtml(physical)}${physical.verifiedAt ? ` · 자료 확인 ${escapeHtml(String(physical.verifiedAt).slice(0, 10))}` : ""} · 총량 계산에는 반영하지 않습니다.</p>` : ""}
     ${item.weeklyRawStockVariance ? `<p><strong>날짜별 수집 수량</strong> ${escapeHtml(item.weeklyRawStockVariance)}</p>` : ""}
   </div>`;
   return `

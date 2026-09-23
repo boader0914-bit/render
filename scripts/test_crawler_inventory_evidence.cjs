@@ -16,7 +16,7 @@ function section(startText, endText) {
 const addDays = (date, days) => new Date(Date.parse(`${date}T00:00:00Z`) + days * 86400000).toISOString().slice(0, 10);
 function harness(byDate = {}, checkIn = "2026-09-20") {
   const context = {
-    CHECK_IN: checkIn, addDays,
+    CHECK_IN: checkIn, RAW_KEYWORD: "검증글램핑", addDays,
     applyInventoryEvidence, productEvidence,
     shortDate: date => date.slice(5), formatWon: value => `${value}원`, formatRate: value => value === null ? "미확인" : `${Math.round(value * 100)}%`,
     collectNaverSchedulesForItems: async (_business, _items, _limit, date) => byDate[date] || [],
@@ -295,4 +295,18 @@ test("21 plus 7 room capacities stay 28 while quantity decline and day-use share
   assert.equal(row.sold, 7);
   assert.equal(projected.dayUseWeekly.totalSoldOut, 3);
   assert.equal(weekly.productDetails.find(row => row.date === "2026-09-21" && row.bizItemId === "rooms21").stock, 13);
+});
+
+test("DB capacity overrides crawler totals without impossible availability rates; large glamping totals are flagged", () => {
+  const api = harness();
+  const product = api.compactNaverScheduleDetail(schedule({ saleType: "숙박", name: "객실", stock: 50, bookingCount: 0 }), "객실 묶음 상품리스트", "2026-09-20");
+  const observed = api.applyCrawlerInventoryEvidence({ itemDetails: [product] }, "fixture");
+  assert.equal(observed.totalRooms, 50);
+  assert.equal(observed.inventoryEvidence.capacityReview.required, true);
+  const corrected = api.applyCrawlerInventoryEvidence({ itemDetails: [product], inventoryCapacityBaseline: { lodgingOverride: { count: 10 } } }, "fixture");
+  assert.equal(corrected.totalRooms, 10);
+  assert.equal(corrected.availableRooms, 50);
+  assert.equal(corrected.nightAvailabilityRate, null);
+  assert.equal(corrected.nightSoldOutRate, null);
+  assert.equal(corrected.inventoryEvidence.lodging.phoneBookings, 0);
 });

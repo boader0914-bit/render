@@ -11,7 +11,15 @@ const source = fs.readFileSync(path.join(__dirname, "glamping_app_server.cjs"), 
 const names = [
   "productSnapshotNumber", "productSnapshotType", "productSnapshotDate",
   "productSnapshotObservation", "dayOfWeekFromDate", "toNullableRate", "inventoryEstimateBreakdown",
-  "companyMaximumRoomCapacity", "withCompanyInventoryCapacity", "companyProductAvailabilityMatch",
+  "companyMaximumRoomCapacity", "withCompanyInventoryCapacity", "withCompanyInventoryCapacityRecord", "companyProductAvailabilityMatch",
+  "companyInventoryNeedsEvidenceRecovery", "companyInventorySnapshotWithCurrentCapacity", "applyCompanyManualCorrection",
+  "companySnapshotEstimatedRevenue", "snapshotNumber", "companyHistoryObservationWithCurrentCapacity",
+  "recoverCompanyProductSourceFromRuns",
+  "summarizeAvailabilityRows",
+  "manualCorrectionLodgingBasisTotal", "manualCorrectionRoomSegmentTotal", "manualCorrectionRoomSegments",
+  "sanitizeManualCorrectionRoomSegments", "sanitizeB2BInterestLodgeSegment", "b2bInterestLodgeSegmentHasInput",
+  "sanitizeInterestLodgeNumberText", "sanitizeManualCorrectionMeta", "manualCorrectionHasValue",
+  "manualCorrectionHasBasis", "manualCorrectionMetaHasValue", "maxPositiveNumber",
   "historySeriesForItem", "normalizeSignalRows", "averageSignalRate",
   "summarizeProductSalesSignal", "compactProductSnapshotDaily",
   "applyManualBasisToSalesSummary", "buildHistoryObservations",
@@ -22,6 +30,9 @@ const names = [
 ];
 const context = vm.createContext({
   COMPANY_PRODUCT_SNAPSHOT_DAILY_LIMIT: 64,
+  B2B_INTEREST_LODGE_SEGMENT_LIMIT: 12,
+  applyInventoryEvidence: require("./inventory_estimation.cjs").applyInventoryEvidence,
+  sanitizeMemberText: (value, max) => String(value || "").trim().slice(0, max),
   COLLECTION_PURPOSES: { revenue_detail: "상세정보 수집" },
   crypto: require("node:crypto"),
   extractNaverPlaceId: (item) => item.placeId || item.place_id || "",
@@ -33,7 +44,8 @@ const context = vm.createContext({
   boundedUnique: (values, limit) => [...new Set(values)].slice(0, limit)
 });
 for (const name of names) {
-  const start = source.indexOf(`function ${name}(`);
+  const asyncStart = source.indexOf(`async function ${name}(`);
+  const start = asyncStart >= 0 ? asyncStart : source.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `${name} is present`);
   const next = /\n(?:async )?function /.exec(source.slice(start + 1));
   const end = next ? start + 1 + next.index : -1;
@@ -198,4 +210,154 @@ assert.equal(context.withCompanyInventoryCapacity({ name: "same name" }, capacit
 assert.equal(context.withCompanyInventoryCapacity({ placeId: "10", bookingBusinessId: "200" }, capacityCompanies).inventoryCapacityBaseline, undefined);
 assert.equal(fixedInput.inventoryCapacityBaseline, undefined);
 
-console.log("Inventory evidence server projection tests passed");
+const sourceItem = {
+  ...fixedInput,
+  weeklyProductDetails: [{ date: "2026-09-26", bizItemId: "room", name: "숙박", saleType: "숙박", stock: 10, bookingCount: 1, price: 100000 }]
+};
+const correctedCompany = {
+  ...capacityCompanies[0],
+  manualCorrection: { active: true, roomSegments: [{ type: "기본", count: 4 }, { type: "대형", count: 2 }], updatedAt: "2026-09-23T01:00:00Z" }
+};
+const sourceBefore = JSON.stringify(sourceItem);
+const companyBefore = JSON.stringify(correctedCompany);
+const baseline = context.withCompanyInventoryCapacity(sourceItem, [correctedCompany]).inventoryCapacityBaseline;
+assert.equal(baseline.lodging, 10, "observed maximum remains separate from the DB correction");
+assert.equal(baseline.lodgingOverride.count, 6, "DB room segment counts provide the authoritative correction");
+assert.equal(baseline.lodgingOverride.source, "db_manual_correction");
+const corrected = context.applyCompanyManualCorrection(sourceItem, correctedCompany);
+assert.equal(corrected.inventoryEvidence.version, 4);
+assert.equal(corrected.inventoryEvidence.capacityBasis.source, "db_correction");
+assert.equal(corrected.inventoryEvidence.lodging.operatingTotal, 6, "lower DB correction wins over an observed maximum");
+assert.equal(corrected.weeklyBasisTotal, 6);
+assert.equal(corrected.nightTotalStock, 6);
+assert.equal(corrected.totalRooms, 6);
+assert.equal(corrected.inventoryEvidence.lodging.rows[0].phoneBookings, 0);
+assert.equal(corrected.inventoryEvidence.lodging.rows[0].rate, null, "contradictory public counts are not a valid rate");
+assert.equal(corrected.inventoryEvidence.lodging.rows[0].publicBookings, 1);
+const increased = context.applyCompanyManualCorrection(corrected, {
+  ...correctedCompany, manualCorrection: { active: true, lodgingBasisTotal: 12 }
+});
+assert.equal(increased.weeklyBasisTotal, 12, "a saved v4 read view recalculates when correction changes");
+const restoredObserved = context.applyCompanyManualCorrection(increased, { ...correctedCompany, manualCorrection: null });
+assert.equal(restoredObserved.weeklyBasisTotal, 10, "clearing the DB correction restores the observed maximum");
+assert.equal(restoredObserved.inventoryCapacityBaseline.lodgingOverride, undefined);
+assert.equal(restoredObserved.inventoryEvidence.capacityBasis.source, "observed_maximum");
+assert.equal(JSON.stringify(sourceItem), sourceBefore);
+assert.equal(JSON.stringify(correctedCompany), companyBefore);
+
+const correctedHistory = {
+  inventory: { latest: {
+    stockBasis: { lodgingMaxTotal: 100 }, salesSignal: { lodging: { maxTotal: 100 } },
+    productSnapshot: { inventoryEvidenceVersion: 3, daily: [{ productType: "lodging", total: 100, rawTotal: 10 }] }
+  } }
+};
+assert.equal(context.companyMaximumRoomCapacity(correctedHistory), 10, "old guide or correction totals do not contaminate observed maxima");
+assert.equal(context.companyMaximumRoomCapacity({ inventory: { latest: {
+  productSnapshot: { inventoryEvidenceVersion: 4, capacityBasis: { observedMaximum: 28 },
+    daily: [{ productType: "lodging", total: 28, rawTotal: 21 }] }
+} } }), 28, "trusted v4 observed maximum survives after older runs age out");
+const legacyRead = context.companyInventorySnapshotWithCurrentCapacity(correctedHistory.inventory.latest, correctedHistory);
+assert.equal(legacyRead.productSnapshot.daily[0].total, 10, "snapshot-only v3 guide totals are removed even without a DB override");
+assert.equal(legacyRead.capacityReview.required, true);
+assert.equal(legacyRead.productSnapshot.daily[0].phoneBookings, 0);
+const snapshotCompany = {
+  ...correctedCompany,
+  inventory: { latest: {
+    runId: "saved_run", productSnapshot: {
+      inventoryEvidenceVersion: 4, products: [{ key: "room" }], capacityBasis: { count: 10, source: "observed_maximum", observedMaximum: 10 },
+      daily: [{ date: "2026-09-26", productType: "lodging", total: 10, rawTotal: 10, available: 7,
+        publicBookings: 1, phoneBookings: 2, sold: 3, publicRevenue: 100000, phoneRevenue: 200000, estimatedRevenue: 300000,
+        reservationRate: 0.3, inventoryEvidenceVersion: 4 }]
+    },
+    salesSignal: { lodging: { days: 1, minTotal: 10, maxTotal: 10, totalSupply: 10, totalSold: 3, phoneBookings: 2, averageRate: 0.3 } },
+    revenue: { lodging: { revenue: 300000, adjustedRevenue: 300000 } }
+  } }
+};
+assert.equal(context.companyInventoryNeedsEvidenceRecovery(snapshotCompany), true, "lower corrections request source recovery");
+const savedSnapshot = snapshotCompany.inventory.latest;
+const savedBefore = JSON.stringify(savedSnapshot);
+const fallback = context.companyInventorySnapshotWithCurrentCapacity(savedSnapshot, snapshotCompany);
+assert.equal(fallback.productSnapshot.daily[0].total, 6);
+assert.equal(fallback.productSnapshot.daily[0].publicBookings, 1);
+assert.equal(fallback.productSnapshot.daily[0].phoneBookings, 0);
+assert.equal(fallback.productSnapshot.daily[0].estimatedRevenue, 100000, "only explicit public revenue survives without original product evidence");
+assert.equal(fallback.productSnapshot.daily[0].reservationRate, null);
+assert.equal(fallback.salesSignal.lodging.averageRate, null);
+assert.equal(fallback.revenue.lodging.adjustedRevenue, null);
+assert.equal(context.companySnapshotEstimatedRevenue({ ...fallback, price: 100000 }).estimatedRevenue, null, "missing recalculation is not a zero-revenue result");
+assert.equal(fallback.capacityReview.required, true);
+assert.equal(JSON.stringify(savedSnapshot), savedBefore, "snapshot-only fallback is a read projection");
+const freshSnapshot = {
+  ...savedSnapshot,
+  productSnapshot: { ...savedSnapshot.productSnapshot, capacityBasis: { count: 6, source: "db_correction", observedMaximum: 10 },
+    daily: savedSnapshot.productSnapshot.daily.map((row) => ({ ...row, total: 6 })) },
+  salesSignal: { lodging: { minTotal: 6, maxTotal: 6 } }
+};
+assert.equal(context.companyInventorySnapshotWithCurrentCapacity(freshSnapshot, snapshotCompany), freshSnapshot);
+assert.equal(context.companyInventoryNeedsEvidenceRecovery({ ...snapshotCompany, inventory: { latest: freshSnapshot } }), false);
+assert.equal(context.companyInventoryNeedsEvidenceRecovery({ ...snapshotCompany, manualCorrection: null, inventory: { latest: freshSnapshot } }), true, "clearing a correction requests recovery even when version is current");
+const originalHistoryRow = {
+  ...savedSnapshot.productSnapshot.daily[0], companyKey: correctedCompany.companyId,
+  stayDate: "2026-09-26", supply: 10, runId: "saved_run", collectedAt: "2026-09-23T01:00:00Z"
+};
+const projectedHistory = context.companyHistoryDailyFallback(snapshotCompany, [originalHistoryRow]);
+assert.equal(projectedHistory.daily[0].total, 6);
+assert.equal(projectedHistory.daily[0].phoneBookings, 0);
+assert.equal(projectedHistory.daily[0].publicBookings, 1);
+assert.equal(projectedHistory.daily[0].reservationRate, null);
+assert.equal(originalHistoryRow.phoneBookings, 2, "history read projection preserves the persisted observation");
+const clearedHistory = context.companyHistoryDailyFallback({ ...snapshotCompany, manualCorrection: null }, [{
+  ...originalHistoryRow, supply: 6, total: 6
+}]);
+assert.equal(clearedHistory.daily[0].total, 10, "old v4 history without basis metadata is invalidated when the correction is cleared");
+assert.equal(clearedHistory.daily[0].reservationRate, null);
+
+// Keep unrelated legacy CSV parsing and confidence scoring out of this fixture;
+// exercise the real row-to-evidence boundary with an otherwise anonymous name.
+Object.assign(context, {
+  numericField: (row, fields) => context.productSnapshotNumber(fields.map((key) => row[key]).find((value) => value !== undefined)),
+  jsonArrayField: (row, fields) => fields.map((key) => row[key]).find(Array.isArray) || [],
+  parseWeeklyReservationRates: () => ({}), parseStockVarianceDetail: () => ({}), parseBasisTotalFromRule: () => null,
+  resolvedStockBasis: () => ({}), offlineReservedTotalForOperating: () => 0, stockBasisRule: () => "",
+  naverChannelObservationFromItem: () => ({}), availabilityPlaceKey: (row) => `place:${row.placeId}`,
+  availabilityBookingBusinessId: () => "", rowSearchRegion: () => "", rowAddressRegion: () => "",
+  regionBoundaryInfo: () => ({}), normalizeInventoryMemo: () => "",
+  evaluateInventoryConfidence: () => ({ structure: {} }), naverCouponSignalFromItem: () => ({ named: false })
+});
+const largeRow = { placeId: "no_glamping_name", name: "양주 르", totalRooms: 50, availableRooms: 49,
+  weeklyProductDetails: [{ date: "2026-09-26", bizItemId: "room", name: "숙박", stock: 50, bookingCount: 1, price: 100000 }] };
+const keywordReview = context.summarizeAvailabilityRows([largeRow], "", [], { keyword: "검증글램핑" }).items[0];
+assert.equal(keywordReview.inventoryEvidence.lodging.operatingTotal, 50);
+assert.equal(keywordReview.inventoryEvidence.capacityReview.required, true, "collection keyword enables >40 review even when the name has no glamping text");
+const typeReview = context.applyCompanyManualCorrection({ ...sourceItem, name: "양주 르", weeklyProductDetails: largeRow.weeklyProductDetails }, {
+  ...capacityCompanies[0], lodgingTypes: ["글램핑"]
+});
+assert.equal(typeReview.inventoryEvidence.capacityReview.required, true, "the same-company DB lodging type reaches the inventory policy");
+
+const recoveryCompany = { companyId: "recovery", placeIds: ["10"], runIds: ["old", "latest"], inventory: {
+  latest: { stockBasis: { lodgingMaxTotal: 21 }, productSnapshot: { inventoryEvidenceVersion: 3 } },
+  snapshots: [{ stockBasis: { lodgingMaxTotal: 28 }, productSnapshot: { inventoryEvidenceVersion: 3 } }]
+} };
+context.listRuns = async () => [];
+context.companyProductStoredRunTimeMap = () => new Map();
+context.companyProductRecoveryRunIds = () => ["old", "latest"];
+context.companyProductRunObservedAt = (_company, _observations, runId) => runId === "old" ? "2026-09-20T01:00:00Z" : "2026-09-23T01:00:00Z";
+context.loadRun = async (runId) => ({ run: { id: runId }, availability: { items: [{
+  placeId: "10", weeklyProductDetails: [{ date: "2026-09-26", bizItemId: "room", name: "숙박", saleType: "숙박",
+    stock: runId === "old" ? 27 : 21, bookingCount: 1, price: 100000 }]
+}] } });
+context.companySalesSignalFromItem = (item) => ({ lodging: { maxTotal: item.weeklyBasisTotal } });
+context.companyRevenueSnapshotFromItem = () => ({});
+context.compactCompanyProductSnapshot = (item) => ({ products: [{ key: "room" }], capacityBasis: item.inventoryEvidence.capacityBasis });
+context.buildHistoryObservations = () => [];
+context.recoverCompanyProductSourceFromRuns(recoveryCompany, []).then((recovered) => {
+  assert.equal(recovered.evidenceProjections.length, 2);
+  for (const projection of recovered.evidenceProjections) {
+    assert.equal(projection.snapshot.salesSignal.lodging.maxTotal, 27, "all recovered runs share the maximum observed across their raw sources");
+    assert.equal(projection.snapshot.productSnapshot.capacityBasis.observedMaximum, 27);
+  }
+  console.log("Inventory evidence server projection tests passed");
+}).catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
