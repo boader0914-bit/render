@@ -81,11 +81,12 @@ test("form parser preserves defaults, exact keyword meaning, and omits activatio
   assert.deepEqual(keywordLines("a\r\nb\r\na"), ["a", "b"]);
 });
 
-test("fixed inclusive date range and explicit pacing are validated before writes", () => {
-  const parsed = scheduleConfig({ ...values, dateMode: "fixed", checkIn: "2026-09-23", checkOut: "2026-09-23", pacing: "paced", detailConcurrency: "1" });
+test("fixed inclusive dates preserve worker defaults even with obsolete form values", () => {
+  const parsed = scheduleConfig({ ...values, dateMode: "fixed", checkIn: "2026-09-23", checkOut: "2026-09-23", adults: "6", pacing: "paced", detailConcurrency: "1" });
   assert.equal(parsed.collection.bookingDays, 1);
-  assert.deepEqual(parsed.requestPacing, { enabled: true, minIntervalMs: 200, maxConcurrentRequests: 2, detailConcurrency: 1 });
-  for (const patch of [{ days: "32" }, { firstDate: "2026-02-30" }, { time: "24:00" }, { ranks: "20-1" }, { ranks: "0-20" }, { pacing: "paced", concurrency: "0" }]) assert.throws(() => scheduleConfig({ ...values, ...patch }));
+  assert.equal(parsed.collection.adults, 2);
+  assert.equal(parsed.requestPacing, null);
+  for (const patch of [{ days: "32" }, { firstDate: "2026-02-30" }, { time: "24:00" }, { ranks: "20-1" }, { ranks: "0-20" }]) assert.throws(() => scheduleConfig({ ...values, ...patch }));
 });
 
 test("worker state distinguishes configuration, protection, real job and queue", () => {

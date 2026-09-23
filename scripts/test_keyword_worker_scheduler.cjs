@@ -5,7 +5,7 @@ const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
-const { createKeywordWorkerScheduler, defaultConfig, validateConfig, uniqueKeywords, dateKey, MIN_FREE_BYTES, GRACE_MS } = require("./keyword_worker_scheduler.cjs");
+const { createKeywordWorkerScheduler, defaultConfig, validateConfig, uniqueKeywords, payloadFor, dateKey, MIN_FREE_BYTES, GRACE_MS } = require("./keyword_worker_scheduler.cjs");
 
 async function fixture(overrides = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "keyword-worker-scheduler-test-"));
@@ -113,16 +113,65 @@ test("immediate run works while disabled and leaves saved config and future sche
   } finally { await f.close(); }
 });
 
-test("pacing remains explicit, snapshot uses configured values only", async () => {
+test("new settings and immediate overrides cannot reapply removed pacing or guest controls", async () => {
   const f = await fixture();
   try {
     const pacing = { enabled: true, minIntervalMs: 200, maxConcurrentRequests: 2, detailConcurrency: 1, scheduleConcurrency: 2, otaConcurrency: 1 };
-    await f.prepare({ keywords: ["포천글램핑"], requestPacing: pacing });
-    await f.scheduler.runNow();
-    assert.deepEqual(f.calls[0].requestPacing, pacing);
-    await f.scheduler.runNow({ requestPacing: { enabled: false } });
-    assert.deepEqual(f.calls[1].requestPacing, { enabled: false });
-    assert.deepEqual((await f.scheduler.status()).config.requestPacing, pacing);
+    const saved = await f.prepare({ keywords: ["포천글램핑"], collection: { adults: 6 }, requestPacing: pacing });
+    assert.equal(saved.collection.adults, 2);
+    assert.equal(saved.requestPacing, null);
+    assert.deepEqual(JSON.parse(await fs.readFile(f.configFile, "utf8")), saved);
+    const first = await f.scheduler.runNow();
+    const second = await f.scheduler.runNow({ collection: { adults: 8 }, requestPacing: pacing });
+    for (const payload of f.calls) {
+      assert.equal(payload.adults, 2);
+      assert.equal(Object.hasOwn(payload, "requestPacing"), false);
+    }
+    for (const receipt of [first, second]) {
+      assert.equal(receipt.config.collection.adults, 2);
+      assert.equal(receipt.config.requestPacing, null);
+    }
+    assert.deepEqual((await f.scheduler.status()).config, saved);
+  } finally { await f.close(); }
+});
+
+test("legacy saved controls are ignored without resaving while historical receipts remain unchanged", async () => {
+  const f = await fixture();
+  try {
+    await f.prepare({ keywords: ["포천글램핑"] });
+    const oldReceipt = await f.scheduler.runNow({ requestId: "legacy-request-001" });
+    const legacy = defaultConfig("2026-09-23T00:00:00Z");
+    legacy.enabled = true;
+    legacy.keywords = ["포천글램핑"];
+    legacy.collection.adults = 6;
+    legacy.requestPacing = { enabled: true, minIntervalMs: 500, maxConcurrentRequests: 1, detailConcurrency: 1, scheduleConcurrency: 1, otaConcurrency: 1 };
+    oldReceipt.config = structuredClone(legacy);
+    const oldPath = path.join(f.receiptDir, `${oldReceipt.id}.json`);
+    await fs.writeFile(oldPath, JSON.stringify(oldReceipt));
+    await fs.writeFile(f.configFile, JSON.stringify(legacy));
+    const oldReceiptBytes = await fs.readFile(oldPath, "utf8");
+    const savedBytes = await fs.readFile(f.configFile, "utf8");
+    assert.deepEqual(validateConfig(legacy), legacy);
+    const status = await f.scheduler.status();
+    assert.equal(status.config.collection.adults, 2);
+    assert.equal(status.config.requestPacing, null);
+    assert.deepEqual(status.latest[0].config, legacy);
+    const retry = await f.scheduler.runNow({ requestId: "legacy-request-001" });
+    assert.deepEqual(retry.config, legacy);
+    assert.equal(f.calls.length, 1);
+    const immediate = await f.scheduler.runNow({ requestId: "current-request-001" });
+    f.setTime("2026-09-23T05:00:00Z");
+    const scheduled = await f.scheduler.tick();
+    for (const receipt of [immediate, scheduled]) {
+      assert.equal(receipt.config.collection.adults, 2);
+      assert.equal(receipt.config.requestPacing, null);
+    }
+    for (const payload of [...f.calls.slice(1), payloadFor(legacy, "포천글램핑", "2026-09-23", "scheduled_2026-09-23", 0, "scheduled")]) {
+      assert.equal(payload.adults, 2);
+      assert.equal(Object.hasOwn(payload, "requestPacing"), false);
+    }
+    assert.equal(await fs.readFile(f.configFile, "utf8"), savedBytes);
+    assert.equal(await fs.readFile(oldPath, "utf8"), oldReceiptBytes);
   } finally { await f.close(); }
 });
 

@@ -101,6 +101,12 @@ function validateConfig(value) {
   return { version: VERSION, enabled: value.enabled, timezone: "Asia/Seoul", repeat: value.repeat, firstDate: value.firstDate, time: value.time,
     keywords: uniqueKeywords(value.keywords), collection, requestPacing: validatePacing(value.requestPacing) };
 }
+function executionConfig(value) {
+  // New runs use the worker's current defaults. Keep validateConfig unchanged
+  // so historical receipts retain the conditions that actually ran.
+  const config = validateConfig(value);
+  return { ...config, collection: { ...config.collection, adults: 2 }, requestPacing: null };
+}
 function eligible(config, day) {
   if (day < config.firstDate || (config.repeat === "once" && day !== config.firstDate)) return false;
   const weekday = new Date(`${day}T00:00:00Z`).getUTCDay();
@@ -150,12 +156,11 @@ function payloadFor(config, keyword, day, occurrenceId, index, trigger) {
   const lastDate = collection.dateMode === "fixed" ? collection.checkOut : addDays(day, collection.bookingDays - 1);
   const payload = { keyword, workerKey: "scheduled", trigger, scheduledCollection: trigger === "scheduled",
     searchMode: "keyword", checkIn, checkOut: collection.bookingDays === 1 ? addDays(checkIn, 1) : lastDate,
-    adults: collection.adults, collectionMode: collection.collectionMode, collectionPurpose: collection.collectionPurpose,
+    adults: 2, collectionMode: collection.collectionMode, collectionPurpose: collection.collectionPurpose,
     productMode: collection.productMode, detailRankRanges: collection.detailRankRanges, bookingRangeDays: collection.bookingDays,
     bookingRangePlaceLimit: rankRange(collection.detailRankRanges).max, sourceRole: "admin", collectionSource: "admin_search",
     collectionSourceLabel: trigger === "scheduled" ? "예약워커 · 예약수집" : "예약워커 · 즉시수집",
     clientRequestId: `${occurrenceId}_${index + 1}`, scheduleOccurrenceId: occurrenceId };
-  if (config.requestPacing !== null) payload.requestPacing = clone(config.requestPacing);
   return payload;
 }
 function safeCode(value, fallback = "KEYWORD_SCHEDULE_OPERATION_FAILED") {
@@ -229,7 +234,7 @@ function createKeywordWorkerScheduler(options = {}) {
     try { text = await fs.readFile(file, "utf8"); } catch (error) { if (error.code === "ENOENT") return missing; throw error; }
     return JSON.parse(text.replace(/^\uFEFF/, ""));
   }
-  async function readConfig() { return validateConfig(await readJson(configFile, defaultConfig(instant()))); }
+  async function readConfig() { return executionConfig(await readJson(configFile, defaultConfig(instant()))); }
   function validateReceipt(value, id) {
     keysOnly(value, ["version", "id", "day", "trigger", "workerKey", "status", "createdAt", "scheduledAt", "startedAt", "finishedAt", "errorCode", "config", "items", "durationMs"], "KEYWORD_SCHEDULE_STATE_INVALID");
     if (!object(value) || value.version !== VERSION || value.id !== id || !RECEIPT_ID.test(id) || !STATES.has(value.status)
@@ -283,7 +288,7 @@ function createKeywordWorkerScheduler(options = {}) {
       keysOnly(patch, ["version", "enabled", "timezone", "repeat", "firstDate", "time", "keywords", "collection", "requestPacing"], "KEYWORD_SCHEDULE_CONFIG_INVALID");
       if (patch.enabled !== undefined && patch.enabled !== existing.enabled) throw fault("KEYWORD_SCHEDULE_USE_ENABLE_ACTION");
       if (patch.collection !== undefined && !object(patch.collection)) throw fault("KEYWORD_SCHEDULE_COLLECTION_INVALID");
-      const config = validateConfig({ ...existing, ...patch, collection: { ...existing.collection, ...patch.collection }, enabled: existing.enabled });
+      const config = executionConfig({ ...existing, ...patch, collection: { ...existing.collection, ...patch.collection }, enabled: existing.enabled });
       await atomicWrite(configFile, config);
       return clone(config);
     });
@@ -408,7 +413,7 @@ function createKeywordWorkerScheduler(options = {}) {
     if (stopped || persistenceFailed) throw fault(lastError || "KEYWORD_SCHEDULE_STOPPED", 503);
     if (overrides.collection !== undefined && !object(overrides.collection)) throw fault("KEYWORD_SCHEDULE_COLLECTION_INVALID");
     const existing = await readConfig();
-    const config = validateConfig({ ...existing, ...(overrides.keywords === undefined ? {} : { keywords: overrides.keywords }),
+    const config = executionConfig({ ...existing, ...(overrides.keywords === undefined ? {} : { keywords: overrides.keywords }),
       collection: { ...existing.collection, ...overrides.collection }, requestPacing: overrides.requestPacing === undefined ? existing.requestPacing : overrides.requestPacing });
     if (!config.keywords.length) throw fault("KEYWORD_SCHEDULE_KEYWORDS_REQUIRED");
     if (config.collection.dateMode === "fixed" && config.collection.checkIn < dateKey(instant())) throw fault("KEYWORD_SCHEDULE_DATE_EXPIRED");

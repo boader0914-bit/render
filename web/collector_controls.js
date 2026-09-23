@@ -18,21 +18,11 @@
     const bookingDays = fixed ? Math.round((Date.parse(values.checkOut) - Date.parse(values.checkIn)) / 86400000) + 1 : Number(values.days);
     if (fixed && (!validDay(values.checkIn) || !validDay(values.checkOut))) throw new Error("첫 관측일과 마지막 관측일을 확인하세요.");
     if (!Number.isInteger(bookingDays) || bookingDays < 1 || bookingDays > 31) throw new Error("관측 기간은 1~31일로 설정하세요. 마지막 관측일도 포함합니다.");
-    const adults = Number(values.adults);
-    if (!Number.isInteger(adults) || adults < 1 || adults > 30) throw new Error("성인 인원은 1~30명으로 입력하세요.");
     const ranks = String(values.ranks).trim();
     if (!/^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/.test(ranks) || ranks.split(",").some(range => { const [first, last = first] = range.split("-").map(Number); return first < 1 || last > 100 || first > last; })) throw new Error("상세수집 순위를 1~100위 안에서 입력하세요. 예: 1-20");
-    let requestPacing = values.pacing === "default" ? { enabled: false } : null;
-    if (values.pacing === "paced") {
-      requestPacing = { enabled: true, minIntervalMs: Number(values.interval), maxConcurrentRequests: Number(values.concurrency) };
-      const optional = { detailConcurrency: values.detailConcurrency, scheduleConcurrency: values.queryConcurrency, otaConcurrency: values.otaConcurrency };
-      for (const [key, value] of Object.entries(optional)) if (value !== "") requestPacing[key] = Number(value);
-      if (!Number.isInteger(requestPacing.minIntervalMs) || requestPacing.minIntervalMs < 0 || requestPacing.minIntervalMs > 60000
-        || Object.entries(requestPacing).some(([key, value]) => !["enabled", "minIntervalMs"].includes(key) && (!Number.isInteger(value) || value < 1 || value > 8))) throw new Error("요청 간격은 0~60,000ms, 동시 처리 수는 1~8로 설정하세요.");
-    }
     return { version: 1, timezone: "Asia/Seoul", repeat: values.repeat, firstDate: values.firstDate, time: values.time, keywords,
       collection: { dateMode: fixed ? "fixed" : "rolling", bookingDays, checkIn: fixed ? values.checkIn : null, checkOut: fixed ? values.checkOut : null,
-        adults, detailRankRanges: ranks, productMode: "all", collectionMode: "precision", collectionPurpose: "revenue_detail" }, requestPacing };
+        adults: 2, detailRankRanges: ranks, productMode: "all", collectionMode: "precision", collectionPurpose: "revenue_detail" }, requestPacing: null };
   }
   function formatTime(value) {
     const date = new Date(value);
@@ -99,8 +89,7 @@
   if (!panel) return;
   const form = byId("workerScheduleForm");
   const fieldIds = { keywords: "workerScheduleKeywords", repeat: "workerScheduleRepeat", firstDate: "workerScheduleFirstDate", time: "workerScheduleTime",
-    dateMode: "workerScheduleDateMode", days: "workerScheduleDays", checkIn: "workerScheduleCheckIn", checkOut: "workerScheduleCheckOut", ranks: "workerScheduleRanks", adults: "workerScheduleAdults",
-    pacing: "workerSchedulePacing", interval: "workerScheduleInterval", concurrency: "workerScheduleConcurrency", detailConcurrency: "workerScheduleDetailConcurrency", queryConcurrency: "workerScheduleQueryConcurrency", otaConcurrency: "workerScheduleOtaConcurrency" };
+    dateMode: "workerScheduleDateMode", days: "workerScheduleDays", checkIn: "workerScheduleCheckIn", checkOut: "workerScheduleCheckOut", ranks: "workerScheduleRanks" };
   let latest = null;
   let workerData = null;
   let dirty = false;
@@ -119,7 +108,6 @@
       byId(`workerSchedule${name}Field`).hidden = !fixed;
       byId(`workerSchedule${name}`).required = fixed;
     }
-    byId("workerSchedulePacingFields").hidden = byId("workerSchedulePacing").value !== "paced";
   }
   function syncButtons() {
     const enabled = latest?.config?.enabled === true;
@@ -251,9 +239,7 @@
   function fill(config) {
     const values = { keywords: config.keywords.join("\n"), repeat: config.repeat, firstDate: config.firstDate, time: config.time,
       dateMode: config.collection.dateMode, days: config.collection.bookingDays, checkIn: config.collection.checkIn || "", checkOut: config.collection.checkOut || "",
-      ranks: config.collection.detailRankRanges, adults: config.collection.adults, pacing: config.requestPacing === null ? "inherit" : config.requestPacing.enabled ? "paced" : "default",
-      interval: config.requestPacing?.minIntervalMs ?? 200, concurrency: config.requestPacing?.maxConcurrentRequests ?? 2,
-      detailConcurrency: config.requestPacing?.detailConcurrency ?? "", queryConcurrency: config.requestPacing?.scheduleConcurrency ?? "", otaConcurrency: config.requestPacing?.otaConcurrency ?? "" };
+      ranks: config.collection.detailRankRanges };
     for (const [name, id] of Object.entries(fieldIds)) byId(id).value = values[name];
     dirty = false;
     syncFields();

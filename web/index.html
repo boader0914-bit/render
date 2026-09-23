@@ -428,21 +428,8 @@
                   <label class="field" id="workerScheduleCheckInField" hidden><span>첫 관측일</span><input id="workerScheduleCheckIn" type="date" min="2000-01-01" max="2099-12-31"></label>
                   <label class="field" id="workerScheduleCheckOutField" hidden><span>마지막 관측일 · 포함</span><input id="workerScheduleCheckOut" type="date" min="2000-01-01" max="2099-12-31"></label>
                   <label class="field"><span>상세수집 순위</span><input id="workerScheduleRanks" type="text" value="1-20" maxlength="150" placeholder="예: 1-20" required></label>
-                  <label class="field"><span>성인 인원</span><input id="workerScheduleAdults" type="number" value="2" min="1" max="30" step="1" required></label>
                 </div>
                 <p class="hint">상세정보 · 전체 상품 기준입니다. 당일 정상 자료가 조건을 충족하면 재사용합니다.</p>
-                <details class="advanced-box">
-                  <summary>요청 속도 설정</summary>
-                  <label class="field"><span>속도 정책</span><select id="workerSchedulePacing"><option value="inherit">현재 기본 설정 사용</option><option value="paced">요청 간격과 동시 처리 수 지정</option><option value="default">기본속도 · 전역 간격 제한 사용 안 함</option></select></label>
-                  <div class="collector-settings-grid" id="workerSchedulePacingFields" hidden>
-                    <label class="field"><span>요청 시작 간격 · ms</span><input id="workerScheduleInterval" type="number" value="200" min="0" max="60000" step="1"></label>
-                    <label class="field"><span>동시 HTTP 요청</span><input id="workerScheduleConcurrency" type="number" value="2" min="1" max="8" step="1"></label>
-                    <label class="field"><span>동시 업체</span><input id="workerScheduleDetailConcurrency" type="number" min="1" max="8" step="1" placeholder="기본값"></label>
-                    <label class="field"><span>동시 예약 조회</span><input id="workerScheduleQueryConcurrency" type="number" min="1" max="8" step="1" placeholder="기본값"></label>
-                    <label class="field"><span>동시 외부예약 조회</span><input id="workerScheduleOtaConcurrency" type="number" min="1" max="8" step="1" placeholder="기본값"></label>
-                  </div>
-                  <p class="hint">차단 감지는 모든 속도 설정에서 유지됩니다.</p>
-                </details>
                 <div class="collector-schedule-actions">
                   <button type="submit" class="secondary-button" id="workerScheduleSave" disabled>조건 저장</button>
                   <button type="button" class="primary-button" id="workerScheduleEnable" disabled>예약 켜기</button>
