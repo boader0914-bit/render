@@ -63,9 +63,11 @@ function manifestFixture() {
   };
 }
 
-test("worker uses low-load detail/schedule/OTA defaults and preserves explicit job profile", () => {
+test("worker restores historical stage pools and preserves explicit low-load job profiles", () => {
   assert.deepEqual(Array.from(harness().concurrency), [2, 4, 2]);
-  assert.deepEqual(Array.from(harness({ env: { COLLECTOR_WORKER_RUNTIME: "1" } }).concurrency), [1, 2, 1]);
+  assert.deepEqual(Array.from(harness({ env: { COLLECTOR_WORKER_RUNTIME: "1" } }).concurrency), [2, 4, 2]);
+  assert.deepEqual(Array.from(harness({ env: { COLLECTOR_WORKER_RUNTIME: "1", NAVER_REQUEST_PACING_ENABLED: "0" } }).concurrency), [2, 4, 2]);
+  assert.deepEqual(Array.from(harness({ env: { COLLECTOR_WORKER_RUNTIME: "1", NAVER_REQUEST_PACING_ENABLED: "1" } }).concurrency), [1, 2, 1]);
   const explicit = harness({ env: { COLLECTOR_WORKER_RUNTIME: "1", NAVER_BOOKING_DETAIL_CONCURRENCY: "2", NAVER_SCHEDULE_CONCURRENCY: "4", NAVER_OTA_OBSERVATION_CONCURRENCY: "2", COLLECTION_PURPOSE: "basic_db" } });
   assert.deepEqual(Array.from(explicit.concurrency), [2, 4, 2]);
   assert.equal(explicit.profile.collectBookingStock, true);
@@ -108,7 +110,10 @@ test("manual worker counts successful schedules and records worker marker withou
   assert.equal(manifest.scheduledCollection, undefined);
   assert.equal(manifest.counts.naverScheduleRequested, 1);
   assert.equal(manifest.counts.naverScheduleSucceeded, 1);
-  assert.equal(manifest.requestPacing.enabled, true);
+  assert.equal(manifest.requestPacing.enabled, false);
+  assert.equal(manifest.requestPacing.guardEnabled, true);
+  assert.equal(manifest.requestPacing.minIntervalMs, 0);
+  assert.equal(manifest.requestPacing.maxConcurrentRequests, null);
   assert.equal(manifest.collectionQuality.status, "complete");
 });
 

@@ -56,8 +56,12 @@ function createNaverRequestGate(options = {}) {
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   if (typeof fetchImpl !== "function") throw new TypeError("A fetch implementation is required.");
   const enabled = options.enabled !== false;
-  const minIntervalMs = intervalMilliseconds(options.minIntervalMs);
-  const maxConcurrency = concurrencyLimit(options.maxConcurrency);
+  // The guard can remain active without a global speed limit. `enabled: false`
+  // deliberately retains the original, transparent passthrough contract.
+  const pacingEnabled = enabled && options.pacingEnabled !== false;
+  const guardOnly = enabled && !pacingEnabled;
+  const minIntervalMs = guardOnly ? 0 : intervalMilliseconds(options.minIntervalMs);
+  const maxConcurrency = guardOnly ? Infinity : concurrencyLimit(options.maxConcurrency);
   const now = options.now || (() => performance.now());
   const sleep = options.sleep || (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)));
   const onResponse = typeof options.onResponse === "function" ? options.onResponse : null;
@@ -78,7 +82,8 @@ function createNaverRequestGate(options = {}) {
 
   function diagnostics() {
     return {
-      enabled, minIntervalMs, maxConcurrentRequests: maxConcurrency, ...metrics,
+      enabled: pacingEnabled, guardEnabled: enabled, pacingEnabled,
+      minIntervalMs, maxConcurrentRequests: guardOnly ? null : maxConcurrency, ...metrics,
       totalWaitMs: Math.round(metrics.totalWaitMs),
       minObservedStartIntervalMs: metrics.minObservedStartIntervalMs === null ? null : Math.round(metrics.minObservedStartIntervalMs),
       queued: queue.length, inFlight, stopped: Boolean(stopReason),
@@ -96,9 +101,9 @@ function createNaverRequestGate(options = {}) {
         stop,
         readJson: async () => JSON.parse(new TextDecoder().decode(await readBody())),
       });
-      // Fetch resolves when headers arrive. Keep the gate until the body has
-      // downloaded, but return the original Response with its URL, headers,
-      // status and unread text()/json() body unchanged.
+      // Fetch resolves when headers arrive. Track the full body download (and,
+      // when paced, retain its slot), but return the original Response with its
+      // URL, headers, status and unread text()/json() body unchanged.
       if (response?.body !== null && typeof response?.clone === "function") await readBody();
       job.resolve(response);
     } catch (error) {
@@ -119,9 +124,9 @@ function createNaverRequestGate(options = {}) {
         try {
           if (stopReason) throw stopReason;
           throwIfAborted(signalFor(job.input, job.init));
-          // One pump owns all starts, even with two active downloads. The
-          // interval therefore applies across the whole process, not per worker.
-          while (lastStartedAt !== null && now() - lastStartedAt < minIntervalMs) {
+          // One pump owns all starts. In paced mode its interval applies across
+          // the whole process; guard-only mode neither waits nor limits slots.
+          while (pacingEnabled && lastStartedAt !== null && now() - lastStartedAt < minIntervalMs) {
             await sleep(Math.max(1, minIntervalMs - (now() - lastStartedAt)));
             if (stopReason) throw stopReason;
             throwIfAborted(signalFor(job.input, job.init));
@@ -129,7 +134,7 @@ function createNaverRequestGate(options = {}) {
           if (stopReason) throw stopReason;
           queue.shift();
           const startedAt = now();
-          metrics.totalWaitMs += Math.max(0, startedAt - job.enqueuedAt);
+          if (pacingEnabled) metrics.totalWaitMs += Math.max(0, startedAt - job.enqueuedAt);
           if (lastStartedAt !== null) {
             const elapsed = Math.max(0, startedAt - lastStartedAt);
             metrics.minObservedStartIntervalMs = metrics.minObservedStartIntervalMs === null ? elapsed : Math.min(metrics.minObservedStartIntervalMs, elapsed);

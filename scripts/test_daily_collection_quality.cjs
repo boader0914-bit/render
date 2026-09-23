@@ -78,6 +78,58 @@ test("paced auxiliary Naver blocks stop the batch and never update derived inven
   assert.equal(inspectManifest(normal).status, "complete");
 });
 
+function guardOnlyFixture(manualWorker = false) {
+  const manifest = fixture();
+  manifest.workerCollection = true;
+  manifest.scheduledCollection = !manualWorker;
+  manifest.collectionProfileFlags = { collectBookingStock: true };
+  manifest.counts.naverBookingStockEligible = manifest.counts.naverBookingStockChecked;
+  manifest.requestPacing = {
+    enabled: false, guardEnabled: true, pacingEnabled: false,
+    minIntervalMs: 0, maxConcurrentRequests: null, blockedStatus: null, blockedCode: null
+  };
+  return manifest;
+}
+
+test("guard-only HTTP and BookingAPITooManyRequests blocks reject scheduled and manual worker results", () => {
+  for (const manualWorker of [false, true]) {
+    for (const [blockedStatus, blockedCode, reason] of [
+      [403, null, "naver_request_http_403"],
+      [429, null, "naver_request_http_429"],
+      [200, "BookingAPITooManyRequests", "naver_booking_api_too_many_requests"]
+    ]) {
+      const manifest = guardOnlyFixture(manualWorker);
+      Object.assign(manifest.requestPacing, { blockedStatus, blockedCode });
+      // Auxiliary requests can latch a block while all main/schedule counters still show success.
+      manifest.collectionQuality = { status: "complete" };
+      assert.equal(inspectManifest(manifest).status, "blocked");
+      assert.equal(inspectManifest(manifest).blockedReason, reason);
+      assert.equal(allowsDerivedUpdates(manifest), false);
+    }
+  }
+});
+
+test("guard-only speed leaves normal acceptance and missing, partial and inconsistent counters unchanged", () => {
+  for (const manualWorker of [false, true]) {
+    const complete = guardOnlyFixture(manualWorker);
+    assert.equal(inspectManifest(complete).status, "complete");
+    assert.equal(allowsDerivedUpdates(complete), true);
+    for (const [mutate, status, reason] of [
+      [manifest => { delete manifest.counts.naverScheduleRequested; }, "partial", "quality_metadata_missing"],
+      [manifest => { manifest.counts.naverScheduleSucceeded -= 1; manifest.counts.naverScheduleFailed += 1; }, "partial", "booking_schedule_responses_incomplete"],
+      [manifest => { manifest.counts.naverScheduleSucceeded -= 1; }, "failed", "inconsistent_schedule_counts"],
+      [manifest => { manifest.counts.naverBookingStockSucceeded += 1; }, "failed", "inconsistent_booking_counts"]
+    ]) {
+      const manifest = guardOnlyFixture(manualWorker);
+      mutate(manifest);
+      const result = inspectManifest(manifest);
+      assert.equal(result.status, status);
+      assert.equal(result.reason, reason);
+      assert.equal(allowsDerivedUpdates(manifest), false);
+    }
+  }
+});
+
 test("actual crawler rejects 403/429 before trying to parse a blocked HTML response", async () => {
   const source = await fs.readFile(path.join(__dirname, "gyeongnam_glamping_crawl.cjs"), "utf8");
   const start = source.indexOf("async function getNaverState(query) {");

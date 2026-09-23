@@ -28,10 +28,13 @@ function inspectManifest(manifest, options = {}) {
   }
   const attempts = Array.isArray(manifest.naverAttemptedQueries) ? manifest.naverAttemptedQueries : [];
   const requestBlockedStatus = count(manifest.requestPacing?.blockedStatus);
+  // Legacy paced manifests used enabled for both throttling and the block latch.
+  // New worker manifests can retain the latch while request pacing is disabled.
+  const requestGuardEnabled = manifest.requestPacing?.guardEnabled === true || manifest.requestPacing?.enabled === true;
   if (guardedCollection && manifest.requestPacing?.blockedCode === "BookingAPITooManyRequests") {
     return receipt("blocked", "naver_request_blocked", counts, { blockedReason: "naver_booking_api_too_many_requests" });
   }
-  if (guardedCollection && manifest.requestPacing?.enabled === true && [403, 429].includes(requestBlockedStatus)) {
+  if (guardedCollection && requestGuardEnabled && [403, 429].includes(requestBlockedStatus)) {
     return receipt("blocked", "naver_request_blocked", counts, { blockedReason: `naver_request_http_${requestBlockedStatus}` });
   }
   const blockedAttempt = attempts.find((attempt) => [403, 429].includes(count(attempt?.status)));

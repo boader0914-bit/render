@@ -223,15 +223,17 @@ test("crawler gate catches 403 and 429 on every Naver host before a fallback can
   }
 });
 
-test("manual and scheduled workers force pacing while preserving explicit job limits", async () => {
+test("manual and scheduled workers keep guarding without a default global speed cap", async () => {
   for (const scheduled of [undefined, "1"]) {
     const gate = crawlerGate({ COLLECTOR_WORKER_RUNTIME: "1", SCHEDULED_COLLECTION: scheduled, NAVER_REQUEST_PACING_ENABLED: "0" }, async () => new Response("ok"));
-    assert.equal(gate.diagnostics().enabled, true);
-    assert.equal(gate.diagnostics().minIntervalMs, 200);
-    assert.equal(gate.diagnostics().maxConcurrentRequests, 2);
+    assert.equal(gate.diagnostics().enabled, false);
+    assert.equal(gate.diagnostics().guardEnabled, true);
+    assert.equal(gate.diagnostics().minIntervalMs, 0);
+    assert.equal(gate.diagnostics().maxConcurrentRequests, null);
     await gate.fetch("https://naver.com/worker");
   }
-  const explicit = crawlerGate({ COLLECTOR_WORKER_RUNTIME: "1", NAVER_REQUEST_MIN_INTERVAL_MS: "700", NAVER_REQUEST_MAX_CONCURRENCY: "1" }, async () => new Response("ok"));
+  const explicit = crawlerGate({ COLLECTOR_WORKER_RUNTIME: "1", NAVER_REQUEST_PACING_ENABLED: "1", NAVER_REQUEST_MIN_INTERVAL_MS: "700", NAVER_REQUEST_MAX_CONCURRENCY: "1" }, async () => new Response("ok"));
+  assert.equal(explicit.diagnostics().enabled, true);
   assert.equal(explicit.diagnostics().minIntervalMs, 700);
   assert.equal(explicit.diagnostics().maxConcurrentRequests, 1);
 });
@@ -244,7 +246,7 @@ test("HTTP 200 GraphQL rate limits stop all queued and future Naver requests wit
   ]) {
     const body = JSON.stringify({ errors: [error] });
     let calls = 0;
-    const gate = crawlerGate({ COLLECTOR_WORKER_RUNTIME: "1", NAVER_REQUEST_MIN_INTERVAL_MS: "0", NAVER_REQUEST_MAX_CONCURRENCY: "1" }, async () => { calls++; return new Response(body); });
+    const gate = crawlerGate({ COLLECTOR_WORKER_RUNTIME: "1", NAVER_REQUEST_PACING_ENABLED: "1", NAVER_REQUEST_MIN_INTERVAL_MS: "0", NAVER_REQUEST_MAX_CONCURRENCY: "1" }, async () => { calls++; return new Response(body); });
     const settled = await Promise.allSettled([
       gate.fetch("https://m.booking.naver.com/graphql"),
       gate.fetch("https://pcmap-api.place.naver.com/graphql"),
@@ -280,7 +282,7 @@ test("two-slot workers let only already-started requests drain after a GraphQL b
   const first = deferred();
   const second = deferred();
   let calls = 0;
-  const gate = crawlerGate({ COLLECTOR_WORKER_RUNTIME: "1", NAVER_REQUEST_MIN_INTERVAL_MS: "0", NAVER_REQUEST_MAX_CONCURRENCY: "2" }, () => ++calls === 1 ? first.promise : second.promise);
+  const gate = crawlerGate({ COLLECTOR_WORKER_RUNTIME: "1", NAVER_REQUEST_PACING_ENABLED: "1", NAVER_REQUEST_MIN_INTERVAL_MS: "0", NAVER_REQUEST_MAX_CONCURRENCY: "2" }, () => ++calls === 1 ? first.promise : second.promise);
   const requests = [0, 1, 2].map(index => gate.fetch(`https://naver.com/${index}`));
   const settled = Promise.allSettled(requests);
   assert.equal(calls, 2);
@@ -293,4 +295,34 @@ test("two-slot workers let only already-started requests drain after a GraphQL b
   assert.equal(results[1].status, "fulfilled");
   assert.equal(results[2].status, "rejected");
   assert.equal(calls, 2);
+});
+
+test("default-speed workers allow more than two starts but stop all future Naver hosts on a block", async () => {
+  for (const status of [403, 429, 200]) {
+    const pending = [deferred(), deferred(), deferred()];
+    let calls = 0;
+    const gate = crawlerGate({ COLLECTOR_WORKER_RUNTIME: "1", NAVER_REQUEST_PACING_ENABLED: "0" }, () => pending[calls++].promise);
+    const requests = ["https://pcmap-api.place.naver.com/graphql", "https://m.booking.naver.com/graphql", "https://m.place.naver.com/home"].map(url => gate.fetch(url));
+    assert.equal(calls, 3);
+    assert.equal(gate.diagnostics().enabled, false);
+    assert.equal(gate.diagnostics().guardEnabled, true);
+    assert.equal(gate.diagnostics().maxConcurrentRequests, null);
+    const body = status === 200 ? JSON.stringify({ errors: [{ extensions: { code: "BookingAPITooManyRequests" }, message: "private fixture" }] }) : "limited";
+    pending[0].resolve(new Response(body, { status }));
+    const blockedResponse = await requests[0];
+    assert.equal(blockedResponse.bodyUsed, false);
+    assert.equal(await blockedResponse.text(), body);
+    assert.equal(gate.blockedStatus(), status);
+    assert.equal(gate.diagnostics().stopped, true);
+    for (const url of ["https://m.booking.naver.com/graphql", "https://static.naver.net/fallback"]) {
+      await assert.rejects(gate.fetch(url), error => error.code === "NAVER_REQUEST_BLOCKED" && !error.message.includes("private fixture"));
+    }
+    assert.equal(calls, 3);
+    pending[1].resolve(new Response("already started 2"));
+    pending[2].resolve(new Response("already started 3"));
+    await Promise.all(requests);
+    assert.equal(gate.diagnostics().requestCount, 3);
+    assert.equal(gate.diagnostics().maxInFlight, 3);
+    assert.equal(gate.diagnostics().inFlight, 0);
+  }
 });

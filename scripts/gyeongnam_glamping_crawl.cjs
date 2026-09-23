@@ -7,11 +7,16 @@ const { createNaverRequestGate, isNaverBookingRateLimit } = require("./naver_req
 const SCHEDULED_COLLECTION = process.env.SCHEDULED_COLLECTION === "1";
 const WORKER_COLLECTION = process.env.COLLECTOR_WORKER_RUNTIME === "1";
 const GUARDED_COLLECTION = SCHEDULED_COLLECTION || WORKER_COLLECTION;
-const NAVER_REQUEST_PACING_ENABLED = WORKER_COLLECTION || (SCHEDULED_COLLECTION && process.env.NAVER_REQUEST_PACING_ENABLED === "1");
+const NAVER_REQUEST_PACING_ENABLED = GUARDED_COLLECTION && process.env.NAVER_REQUEST_PACING_ENABLED === "1";
+// Worker collection always observes blocks and records requests. Only an explicit
+// job profile adds a global interval/concurrency cap; default throughput remains
+// bounded by the historical per-stage pools below.
+const NAVER_REQUEST_GUARD_ENABLED = WORKER_COLLECTION || NAVER_REQUEST_PACING_ENABLED;
 let naverRequestBlockedStatus = 0;
 let naverRequestBlockedCode = null;
 const naverRequestGate = createNaverRequestGate({
-  enabled: NAVER_REQUEST_PACING_ENABLED,
+  enabled: NAVER_REQUEST_GUARD_ENABLED,
+  pacingEnabled: NAVER_REQUEST_PACING_ENABLED,
   minIntervalMs: NAVER_REQUEST_PACING_ENABLED ? (process.env.NAVER_REQUEST_MIN_INTERVAL_MS || (WORKER_COLLECTION ? 200 : undefined)) : 500,
   maxConcurrency: NAVER_REQUEST_PACING_ENABLED ? (process.env.NAVER_REQUEST_MAX_CONCURRENCY || (WORKER_COLLECTION ? 2 : undefined)) : 1,
   fetchImpl: globalThis.fetch,
@@ -27,8 +32,8 @@ const naverRequestGate = createNaverRequestGate({
     stop(error);
   },
 });
-// Every Naver fetch path (including fallback pages) shares one gate. Other
-// hosts and local collections without the scheduled opt-in keep their old behavior.
+// Every worker Naver fetch (including fallback pages) shares the block latch,
+// even without pacing. Other hosts and local collections keep their old behavior.
 const fetch = naverRequestGate.fetch;
 const scheduledCollectionDiagnostics = {
   naverScheduleRequested: 0,
@@ -789,9 +794,9 @@ const NAVER_OTA_OBSERVATION_LIMIT = boundedInteger(
   0,
   ADMIN_COLLECTION_RANK_SAFETY_MAX
 );
-const NAVER_OTA_OBSERVATION_CONCURRENCY = boundedInteger(process.env.NAVER_OTA_OBSERVATION_CONCURRENCY, WORKER_COLLECTION ? 1 : 2, 1, 3);
-const NAVER_BOOKING_DETAIL_CONCURRENCY = boundedInteger(process.env.NAVER_BOOKING_DETAIL_CONCURRENCY, WORKER_COLLECTION ? 1 : 2, 1, 4);
-const NAVER_SCHEDULE_CONCURRENCY = boundedInteger(process.env.NAVER_SCHEDULE_CONCURRENCY, WORKER_COLLECTION ? 2 : 4, 1, 8);
+const NAVER_OTA_OBSERVATION_CONCURRENCY = boundedInteger(process.env.NAVER_OTA_OBSERVATION_CONCURRENCY, WORKER_COLLECTION && NAVER_REQUEST_PACING_ENABLED ? 1 : 2, 1, 3);
+const NAVER_BOOKING_DETAIL_CONCURRENCY = boundedInteger(process.env.NAVER_BOOKING_DETAIL_CONCURRENCY, WORKER_COLLECTION && NAVER_REQUEST_PACING_ENABLED ? 1 : 2, 1, 4);
+const NAVER_SCHEDULE_CONCURRENCY = boundedInteger(process.env.NAVER_SCHEDULE_CONCURRENCY, WORKER_COLLECTION && NAVER_REQUEST_PACING_ENABLED ? 2 : 4, 1, 8);
 const NAVER_SCHEDULE_DELAY_MS = boundedInteger(process.env.NAVER_SCHEDULE_DELAY_MS, 35, 0, 500);
 const NAVER_BOOKING_GRAPHQL_URL = "https://m.booking.naver.com/graphql";
 const NAVER_BOOKING_ID_FALLBACK = String(process.env.NAVER_BOOKING_ID_FALLBACK || "1") !== "0";
