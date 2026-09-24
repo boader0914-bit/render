@@ -5,7 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { test } = require("node:test");
 const helpers = require("../web/collector_controls.js");
-const { workerLabel, workerState, workerAvailability, scheduleConfig, collectionDates, defaultDraft, historyEntries, filterHistory, keywordLines, errorMessage } = helpers;
+const { workerLabel, workerState, workerAvailability, scheduleConfig, collectionDates, defaultDraft, historyEntries, filterHistory, keywordLines, errorMessage, progressModel, etaRange } = helpers;
 const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8");
 const source = fs.readFileSync(path.join(__dirname, "../web/collector_controls.js"), "utf8");
 const app = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8");
@@ -13,12 +13,13 @@ const clone = value => JSON.parse(JSON.stringify(value));
 const keys = ["web", "manual", "scheduled"];
 const config = { version: 1, enabled: false, timezone: "Asia/Seoul", repeat: "once", firstDate: "2026-09-25", time: "14:00", keywords: [], collection: { dateMode: "rolling", bookingDays: 7, checkIn: null, checkOut: null, adults: 2, detailRankRanges: "1-20", productMode: "all", collectionMode: "precision", collectionPurpose: "revenue_detail", dayUseMode: "inspect" }, requestPacing: null };
 class Element {
-  constructor(tag, registry) { this.tagName = tag.toUpperCase(); this.registry = registry; this.children = []; this.listeners = {}; this.className = ""; this.value = ""; this.dataset = {}; this.type = ""; this.disabled = false; this.hidden = false; this.textContent = ""; this.checked = false; this.classList = { contains: name => this.className.split(" ").includes(name) }; }
+  constructor(tag, registry) { this.tagName = tag.toUpperCase(); this.registry = registry; this.children = []; this.listeners = {}; this.className = ""; this.value = ""; this.dataset = {}; this.style = {}; this.type = ""; this.disabled = false; this.hidden = false; this.textContent = ""; this.checked = false; this.classList = { contains: name => this.className.split(" ").includes(name) }; }
   set id(value) { this._id = value; this.registry.set(value, this); }
   get id() { return this._id; }
   append(...children) { for (const child of children) { child.parent = this; this.children.push(child); } }
   replaceChildren(...children) { this.children = []; this.append(...children); }
   setAttribute(key, value) { this[key] = value; }
+  removeAttribute(key) { delete this[key]; }
   addEventListener(name, callback) { (this.listeners[name] ||= []).push(callback); }
   dispatchEvent(event) { for (const callback of this.listeners[event.type] || []) callback({ ...event, target: this }); return true; }
   closest() { return this.section || null; }
@@ -29,12 +30,13 @@ class Element {
 const descendants = element => [element, ...element.children.flatMap(descendants)];
 const text = element => descendants(element).map(item => item.textContent).filter(Boolean).join(" ");
 async function until(predicate) { for (let i = 0; i < 120; i++) { if (predicate()) return; await new Promise(resolve => setImmediate(resolve)); } throw new Error("ui_condition_not_reached"); }
-async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}, drafts = {}, failedSchedules = [], failRequests = false, uncertainSubmit = false } = {}) {
+async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}, drafts = {}, failedSchedules = [], failRequests = false, uncertainSubmit = false, outsideCollection = false } = {}) {
   const nodes = new Map();
   for (const match of html.matchAll(/<([\w-]+)\b[^>]*\bid="([^"]+)"[^>]*>/g)) { const el = new Element(match[1], nodes); el.id = match[2]; }
   const body = new Element("body", nodes); body.className = "role-admin";
-  const section = new Element("section", nodes); section.className = "active"; nodes.get("collectorControlsCard").section = section;
-  const document = { body, hidden: false, getElementById: id => nodes.get(id), createElement: tag => new Element(tag, nodes), addEventListener() {} };
+  const section = new Element("section", nodes); section.className = outsideCollection ? "" : "active"; nodes.get("collectorControlsCard").section = section;
+  const navigation = { clicks: 0, click() { this.clicks++; section.className = "active"; } };
+  const document = { body, hidden: false, getElementById: id => nodes.get(id), createElement: tag => new Element(tag, nodes), querySelector: () => navigation, addEventListener() {} };
   const saved = Object.fromEntries(keys.map(key => [key, clone(configs[key] || config)])); const calls = [], submissions = [], events = [], windowListeners = {};
   const storage = new Map([["staydatalab:collector-drafts:v2", JSON.stringify(drafts)]]);
   const window = { localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) }, addEventListener(name, callback) { (windowListeners[name] ||= []).push(callback); }, dispatchEvent(event) { events.push(event); if (event.type === "collector:submit-card") { submissions.push(clone(event.detail.input)); event.detail.resolve({ status: "pending", submissionUncertain: uncertainSubmit }); } for (const fn of windowListeners[event.type] || []) fn(event); } };
@@ -60,7 +62,7 @@ async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}
   const input = (key, name) => nodes.get(`collector-${key}-${name}`);
   const button = (key, label) => descendants(card(key)).find(el => el.tagName === "BUTTON" && el.textContent === label);
   async function set(key, name, value) { if (typeof value === "boolean") input(key, name).checked = value; else input(key, name).value = value; await form(key).event("change"); }
-  return { nodes, calls, submissions, saved, events, window, storage, card, form, input, button, set };
+  return { nodes, calls, submissions, saved, events, window, storage, card, form, input, button, set, navigation };
 }
 
 test("drafts default to day-use presence check and inclusive lodging dates", () => {
@@ -169,4 +171,66 @@ test("new day-use presence never turns unqueried detail into an absent-product s
   assert.equal(context.companySalesAction({ salesTarget: { signals: { dayUseMissing: true } } }).label, "캠프닉 추가");
   assert.equal(context.companySalesAction({ salesTarget: { signals: { dayUseMissing: false } } }).label, "상품 재정리");
   assert.ok(!/if \(signals\.dayUseMissing\s*\|\|/.test(app));
+});
+
+function progressWorker(now = Date.now(), patch = {}) {
+  return { workerKey: "manual", configured: true, ready: true, workerLastSeenAt: new Date(now - 1000).toISOString(), activeJobId: "test-job", crawl: { active: true, elapsedSeconds: 120, remainingSeconds: 300, estimatedTotalSeconds: 420, estimatedProgress: 91, estimatedCompleteAt: new Date(now + 300000).toISOString(), stageSource: "runtime", currentStage: { key: "inventory" }, lastProgressAt: new Date(now - 1000).toISOString(), activeJob: { keyword: "경남글램핑" }, progress: { version: 1, source: "actual", phase: "inventory", completedPlaces: 12, totalPlaces: 20, currentPlaceName: "검수용 숙소", receivedAt: new Date(now - 1000).toISOString() }, ...patch } };
+}
+
+test("ETA uses an explicitly approximate range while actual counts ignore time-based percentages", () => {
+  const now = Date.parse("2026-09-24T10:00:00Z"), worker = progressWorker(now), model = progressModel(worker, null, now, now);
+  assert.equal(etaRange(300), "약 4~6분"); assert.equal(etaRange(299), "약 4~6분"); assert.equal(etaRange(0), "응답 확인 중");
+  assert.equal(model.percent, 60); assert.equal(model.countText, "12 / 20곳 처리"); assert.equal(model.eta, "약 4~6분"); assert.equal(model.animated, true); assert.equal(model.phase, 1);
+  assert.match(model.detail, /실패한 업체가 포함/);
+  const unknown = progressModel(progressWorker(now, {progress: null}), null, now, now); assert.equal(unknown.percent, null); assert.equal(unknown.countText, "처리 수량 확인 중");
+});
+
+test("100 percent of places processed is still saving until a verified terminal receipt", () => {
+  const now = Date.now(), worker = progressWorker(now); worker.crawl.progress.completedPlaces = 20; worker.crawl.currentStage.key = "uploading";
+  let model = progressModel(worker, {status:"complete",runId:"earlier-result"}, now, now);
+  assert.equal(model.percent, 100); assert.equal(model.state, "running"); assert.equal(model.phase, 2); assert.equal(model.runId, null); assert.doesNotMatch(model.eta, /완료/);
+  const inactive = {...worker,activeJobId:null,crawl:{active:false}};
+  model = progressModel(inactive, {status:"complete",result:{runId:"validated-run",collectionQuality:{status:"complete"}}}, now, now);
+  assert.equal(model.state, "complete"); assert.equal(model.animated, false); assert.equal(model.eta, "저장·검증 완료");
+  model = progressModel(inactive, {status:"complete",result:{runId:"unchecked-run"}}, now, now);
+  assert.equal(model.state,"attention"); assert.equal(model.eta,"정상 저장 확인 필요"); assert.equal(model.runId,null);
+});
+
+test("stale responses, no new progress, zero ETA, block and cancellation stop movement", () => {
+  const now = Date.now(), base = progressWorker(now);
+  for (const [worker, receivedAt, expected] of [
+    [{...base, workerLastSeenAt:new Date(now - 100000).toISOString()}, now, "연결 확인 필요"],
+    [base, now - 31000, "연결 확인 필요"],
+    [{...base,crawl:{...base.crawl,lastProgressAt:new Date(now - 100000).toISOString(),progress:{...base.crawl.progress,receivedAt:new Date(now - 100000).toISOString()}}},now,"응답 확인 중"],
+    [{...base,crawl:{...base.crawl,remainingSeconds:0}},now,"예상보다 지연"],
+    [{...base,halted:true,errorCode:"COLLECTOR_PROVIDER_BLOCKED"},now,"수집 중단"],
+    [{...base,crawl:{...base.crawl,cancelling:true}},now,"중단 처리 중"]
+  ]) { const model=progressModel(worker,null,now,receivedAt); assert.equal(model.animated,false); assert.equal(model.eta,expected); assert.equal(model.completeAt,""); }
+});
+
+test("estimated stages and invalid counters never become measured progress", () => {
+  const now=Date.now(), worker=progressWorker(now,{stageSource:"estimate",progress:null});
+  assert.equal(progressModel(worker,null,now,now).phase,-1);
+  for (const patch of [{completedPlaces:21},{completedPlaces:-1},{totalPlaces:0},{source:"estimate"},{completedPlaces:12.5}]) {
+    const sample=progressWorker(now); sample.crawl.progress={...sample.crawl.progress,...patch}; assert.equal(progressModel(sample,null,now,now).percent,null);
+  }
+});
+
+test("worker card exposes measured meter and collapsed summary with accessible stage status", async () => {
+  const ui=await mockUi({workers:[progressWorker()]}); const card=ui.card("manual");
+  const panel=descendants(card).find(el=>el.className==="collector-live-progress"), meter=descendants(card).find(el=>el.className==="collector-actual-meter");
+  assert.equal(panel.hidden,false); assert.equal(panel.dataset.animated,"true"); assert.equal(meter["aria-valuenow"],"12"); assert.equal(meter["aria-valuemax"],"20"); assert.equal(meter.children[0].style.width,"60%");
+  assert.match(text(panel),/약 4~6분/); assert.doesNotMatch(text(panel),/91%/);
+  const summary=descendants(card).find(el=>el.className==="collector-summary-progress"); assert.match(summary.textContent,/경남글램핑.*약 4~6분/); assert.equal(summary.hidden,false);
+  assert.ok(descendants(panel).some(el=>el["aria-live"]==="polite"));
+});
+
+test("compact monitor follows the existing collection navigation without issuing collection requests", async () => {
+  const worker=progressWorker(), ui=await mockUi({workers:[worker],outsideCollection:true}); const monitor=ui.nodes.get("collectorCompactProgress");
+  assert.equal(monitor.hidden,false); assert.match(text(monitor),/BG worker.*경남글램핑.*약 4~6분/);
+  const focusedButton=descendants(monitor).find(el=>el.className==="collector-compact-row");
+  worker.crawl.remainingSeconds=120; await ui.nodes.get("collectorRefresh").event("click");
+  assert.equal(descendants(monitor).find(el=>el.className==="collector-compact-row"),focusedButton,"status refresh must preserve keyboard focus identity");
+  assert.match(text(monitor),/약 2~3분/);
+  await focusedButton.event("click"); assert.equal(ui.navigation.clicks,1); assert.ok(ui.calls.every(call=>call.method==="GET")); assert.equal(ui.submissions.length,0);
 });

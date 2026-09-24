@@ -27,6 +27,7 @@ const { createCollectionReuse, serialExecutor } = require("./collection_reuse.cj
 const { createKeywordWorkerScheduler } = require("./keyword_worker_scheduler.cjs");
 const { createCollectorRequests } = require("./collector_requests.cjs");
 const { createOperatingWebCollector } = require("./operating_web_collector.cjs");
+const { sanitizeCollectionProgress, parseCollectionProgressLine } = require("./collection_progress.cjs");
 
 function loadOptionalTourismPeriodSummaryModule() {
   const filePath = path.join(__dirname, "tourism_datalab_period_summary.cjs");
@@ -284,10 +285,10 @@ const collectorBrokers = Object.fromEntries(["manual", "scheduled"].map(key => [
   token: (key === "manual" ? process.env.COLLECTOR_WORKER_TOKEN : process.env.COLLECTOR_SCHEDULED_WORKER_TOKEN) || "",
   workerId: (key === "manual" ? process.env.COLLECTOR_WORKER_ID : process.env.COLLECTOR_SCHEDULED_WORKER_ID) || (key === "manual" ? "staydatalab-collector" : "staydatalab-collector-scheduled"),
   onProviderBlocked: () => stopOtherCollectorLanes(key),
-  onProgress: ({ id, stage }) => withCrawlLane(key, () => {
-    if (id === crawlLane().activeCollectorJobId && CRAWL_RUNTIME_STAGE_DEFS.some(item => item.key === stage)) {
-      recordCrawlRuntimeStage(crawlLane().activeCrawlJob, stage);
-    }
+  onProgress: ({ id, stage, progress, progressReceivedAt }) => withCrawlLane(key, () => {
+    if (id !== crawlLane().activeCollectorJobId) return;
+    if (CRAWL_RUNTIME_STAGE_DEFS.some(item => item.key === stage)) recordCrawlRuntimeStage(crawlLane().activeCrawlJob, stage);
+    if (progress) recordCrawlCollectionProgress(crawlLane().activeCrawlJob, progress, progressReceivedAt);
   })
 }) : null]));
 function collectorBrokerForLane() { return collectorBrokers[crawlLane().key]; }
@@ -383,7 +384,9 @@ const CRAWL_RUNTIME_STAGE_DEFS = [
   { key: "ota_yeogi", label: "여기어때 확인", group: "ota", estimatedRatio: 0.08, detail: "여기어때 보조 채널 노출을 확인합니다." },
   { key: "ota_ddnayo", label: "떠나요 확인", group: "ota", estimatedRatio: 0.08, detail: "떠나요 보조 채널 노출을 확인합니다." },
   { key: "inventory", label: "예약/가격 확인", group: "inventory", estimatedRatio: 0.36, detail: "네이버 예약 수량, 요일별 가격, 상품 구성을 확인합니다." },
-  { key: "save", label: "저장/분석", group: "save", estimatedRatio: 0.10, detail: "수집 결과와 업체 기준값을 정리합니다." }
+  { key: "save", label: "파일 정리", group: "save", estimatedRatio: 0.05, detail: "수집 결과 파일을 정리합니다." },
+  { key: "uploading", label: "결과 전송", group: "save", estimatedRatio: 0.02, detail: "2G 운영 서버에 결과를 전송합니다." },
+  { key: "completing", label: "검증·저장", group: "save", estimatedRatio: 0.03, detail: "결과 검증과 보관함·업체 DB 반영을 확인합니다." }
 ];
 const CRAWL_LOG_STAGE_RULES = [
   { key: "rank_main", pattern: /Collecting Naver main/i },
@@ -396,7 +399,8 @@ const CRAWL_LOG_STAGE_RULES = [
   { key: "ota_ddnayo", pattern: /Collecting DDNayo/i },
   { key: "ota_ddnayo", pattern: /Skipping DDNayo/i, skipped: true },
   { key: "inventory", pattern: /Checking Naver booking stock/i },
-  { key: "save", pattern: /Writing outputs/i }
+  { key: "save", pattern: /Writing outputs/i },
+  { key: "completing", pattern: /^Verifying collected outputs\.\.\.$/ }
 ];
 const DEFAULT_NODE_MODULES = path.join(
   process.env.USERPROFILE || "C:\\Users\\User",
@@ -824,6 +828,7 @@ function crawlExecutionPlan(payload = {}) {
     : 0;
   return {
     keyword,
+    workerKey: ["web", "manual", "scheduled"].includes(payload.workerKey) ? payload.workerKey : null,
     checkIn,
     checkOut,
     bookingRangeDays,
@@ -980,6 +985,7 @@ function scaleCrawlStages(stages = [], targetTotalSeconds = 0) {
 
 function crawlTimingConditions(plan = {}) {
   return {
+    workerKey: ["web", "manual", "scheduled"].includes(plan.workerKey) ? plan.workerKey : null,
     searchMode: plan.resolvedSearchMode || plan.searchMode || "keyword",
     requestedSearchMode: normalizeSearchMode(plan.requestedSearchMode || plan.searchMode || "keyword"),
     productMode: normalizeProductMode(plan.productMode),
@@ -1030,6 +1036,10 @@ function crawlTimingSimilarityScore(plan = {}, entry = {}) {
   if (right.collectionProfile && right.collectionProfile !== left.collectionProfile) return 0;
   if (right.searchMode !== left.searchMode) return 0;
   if (right.productMode !== left.productMode) return 0;
+  // Missing historical mode means the former all-product detail collection.
+  // A named different worker is not a comparable server-speed measurement.
+  if ((right.dayUseMode || "detail") !== left.dayUseMode) return 0;
+  if (left.workerKey && right.workerKey && left.workerKey !== right.workerKey) return 0;
 
   let score = 9;
   const dayDelta = Math.abs(Number(right.bookingRangeDays || 1) - left.bookingRangeDays);
@@ -1043,7 +1053,7 @@ function crawlTimingSimilarityScore(plan = {}, entry = {}) {
   else if (limitDelta <= 5) score += 1;
 
   if ((right.detailRankRanges || "없음") === left.detailRankRanges) score += 2;
-  return score;
+  return score + (left.workerKey && right.workerKey === left.workerKey ? 4 : 0) + (right.dayUseMode ? 3 : 0);
 }
 
 function crawlTimingAdjustment(plan = {}, modelTotalSeconds = 0, timingStore = null) {
@@ -1320,6 +1330,7 @@ function recordCrawlRuntimeStage(job, key, options = {}) {
     return existing;
   }
   finishOpenCrawlRuntimeStage(job, now);
+  job.lastProgressAt = now.toISOString();
   const event = {
     key,
     group: def.group || key,
@@ -1337,9 +1348,30 @@ function recordCrawlRuntimeStage(job, key, options = {}) {
   return event;
 }
 
+function recordCrawlCollectionProgress(job, value, receivedAt = new Date().toISOString()) {
+  if (!ensureCrawlRuntimeState(job)) return false;
+  const progress = sanitizeCollectionProgress(value);
+  if (!progress || Date.parse(progress.updatedAt) > Date.now() + 30000) return false;
+  const previous = job.collectionProgress;
+  if (previous && (progress.totalPlaces !== previous.totalPlaces || progress.completedPlaces < previous.completedPlaces || progress.updatedAt < previous.updatedAt)) return false;
+  const same = previous && ["completedPlaces", "totalPlaces", "currentPlaceName", "updatedAt"].every(key => previous[key] === progress[key]);
+  if (same) return false;
+  const receipt = Number.isFinite(Date.parse(receivedAt)) ? receivedAt : new Date().toISOString();
+  job.collectionProgress = { ...progress, receivedAt: receipt, source: "actual" };
+  job.lastProgressAt = receipt;
+  // A short crawl may deliver its first count together with uploading. Keep
+  // the real final count without reopening an earlier collection stage.
+  if (!["save", "uploading", "completing"].some(key => job.stageEventByKey.has(key))) {
+    recordCrawlRuntimeStage(job, "inventory", { at: new Date(receipt) });
+  }
+  return true;
+}
+
 function recordCrawlRuntimeLog(job, text = "") {
   if (!job || !text) return;
   for (const line of String(text).split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
+    const progress = parseCollectionProgressLine(line);
+    if (progress) { recordCrawlCollectionProgress(job, progress); continue; }
     const rule = CRAWL_LOG_STAGE_RULES.find((item) => item.pattern.test(line));
     if (rule) recordCrawlRuntimeStage(job, rule.key, { skipped: rule.skipped });
   }
@@ -3980,7 +4012,16 @@ function completedB2BSearchReuseEstimate(base = {}, reuse = {}) {
 }
 
 async function publicCrawlEstimateForSession(payload = {}, timingStore = null, session = {}) {
-  if (normalizeUserRole(session?.role) !== USER_ROLES.b2b) return publicCrawlEstimate(payload, timingStore);
+  const role = normalizeUserRole(session?.role);
+  if (role !== USER_ROLES.b2b) {
+    // Preview must use the same new-request defaults as POST /api/crawl;
+    // otherwise an omitted worker mixes histories from different servers.
+    const estimatePayload = role === USER_ROLES.admin ? { ...payload,
+      workerKey: selectedWorkerKey(payload.workerKey || "manual"),
+      dayUseMode: normalizeDayUseMode(payload.dayUseMode ?? "inspect")
+    } : payload;
+    return publicCrawlEstimate(estimatePayload, timingStore);
+  }
   let crawlPayload = null;
   try {
     crawlPayload = b2bSearchPayload(payload);
@@ -17391,7 +17432,8 @@ async function appendCrawlTimingEntry(...args) {
 async function appendCrawlTimingEntryUnlocked({ plan, startedAt, endedAt, estimate, result, error, stageTimings = [] }) {
   if (!startedAt || !endedAt) return { recorded: false, reason: "missing_time" };
   const durationSeconds = Math.max(1, Math.round((endedAt.getTime() - startedAt.getTime()) / 1000));
-  const success = !error;
+  const success = !error && (!result?.collectionQuality || result.collectionQuality.status === "complete")
+    && !result?.reused && !result?.crawlTiming?.reused;
   const store = await readCrawlTimingStore();
   const entry = {
     id: crypto.randomUUID(),
@@ -17578,6 +17620,8 @@ function currentCrawlStatus(options = {}) {
     : { currentStage: null, stages: [] };
   return {
     active: !!crawlLane().activeCrawlPromise,
+    progress: crawlLane().activeCrawlJob?.collectionProgress || null,
+    lastProgressAt: crawlLane().activeCrawlJob?.lastProgressAt || null,
     startedAt: crawlLane().activeCrawlStartedAt ? crawlLane().activeCrawlStartedAt.toISOString() : null,
     elapsedSeconds,
     estimatedTotalSeconds: crawlLane().activeCrawlPromise ? estimatedTotalSeconds : null,

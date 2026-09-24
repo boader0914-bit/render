@@ -6,6 +6,8 @@ const path = require("node:path");
 const os = require("node:os");
 const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
+const { parseCollectionProgressLine } = require("./collection_progress.cjs");
+const { StringDecoder } = require("node:string_decoder");
 
 const PROTOCOL_VERSION = 1;
 const JOB_ENV_KEYS = new Set([
@@ -207,15 +209,18 @@ async function prepareJob(job, options) {
   return { directory, root, ...locations, env };
 }
 
-function stageReader(update, providerBlocked = () => {}) {
+function stageReader(update, providerBlocked = () => {}, onCollectionProgress = () => {}) {
   let tail = "";
+  const decoder = new StringDecoder("utf8");
   return (chunk) => {
-    tail += chunk.toString("utf8");
+    tail += typeof chunk === "string" ? chunk : decoder.write(chunk);
     const lines = tail.split(/\r?\n/);
-    tail = lines.pop().slice(-512);
+    tail = lines.pop().slice(-4096);
     for (const line of lines) {
       if (STAGES.has(line.trim())) update(STAGES.get(line.trim()));
       if (line.trim() === "COLLECTOR_PROVIDER_BLOCKED") providerBlocked();
+      const progress = parseCollectionProgressLine(line);
+      if (progress) onCollectionProgress(progress);
     }
   };
 }
@@ -273,7 +278,9 @@ async function removeOwnedJob(prepared) {
 async function runJob(job, options) {
   if (!options?.enabled) throw failure("COLLECTOR_CONFIGURATION_INVALID");
   let prepared, child, childDone, childClosed = true, stopCode = "", stage = "rank_main";
-  let heartbeatTimer, deadlineTimer, escalationTimer, heartbeatPending;
+  let heartbeatTimer, deadlineTimer, escalationTimer, urgentHeartbeat, progressTimer;
+  let heartbeatChain = Promise.resolve(), completionAcknowledged = false;
+  let progress = null;
   let providerBlocked = false;
   const controller = new AbortController();
   const stop = (code) => {
@@ -292,18 +299,26 @@ async function runJob(job, options) {
     clearTimeout(deadlineTimer);
     deadlineTimer = setTimeout(() => stop("COLLECTOR_HEARTBEAT_FAILED"), Math.max(1, job.leaseMs - Math.min(5000, job.leaseMs / 4)));
   }
-  async function heartbeat() {
+  async function sendHeartbeat(blockOnly = false) {
+    if (controller.signal.aborted || completionAcknowledged) return;
     try {
-      const reply = await request(options, `${jobPath}/heartbeat`, { body: { ...credentials, stage, ...(providerBlocked ? { providerBlocked: true } : {}) }, signal: controller.signal,
+      const body = blockOnly ? { ...credentials, providerBlocked: true }
+        : { ...credentials, stage, ...(progress ? { progress } : {}), ...(providerBlocked ? { providerBlocked: true } : {}) };
+      const reply = await request(options, `${jobPath}/heartbeat`, { body, signal: controller.signal,
         timeoutMs: Math.min(options.heartbeatTimeoutMs, Math.floor(job.leaseMs / 3)) });
+      if (controller.signal.aborted || completionAcknowledged) return;
       if (typeof reply?.cancelled !== "boolean") throw failure("COLLECTOR_HEARTBEAT_FAILED");
       if (reply.cancelled) { stop("COLLECTOR_CANCELLED"); return; }
       deadline();
-    } catch { stop(stopCode || "COLLECTOR_HEARTBEAT_FAILED"); }
+    } catch { if (!completionAcknowledged) stop(stopCode || "COLLECTOR_HEARTBEAT_FAILED"); }
+  }
+  function heartbeat() {
+    heartbeatChain = heartbeatChain.then(() => sendHeartbeat());
+    return heartbeatChain;
   }
   function nextHeartbeat() {
-    if (controller.signal.aborted) return;
-    heartbeatTimer = setTimeout(() => { heartbeatPending = heartbeat().finally(nextHeartbeat); }, Math.min(options.heartbeatMs, Math.floor(job.leaseMs / 4)));
+    if (controller.signal.aborted || completionAcknowledged) return;
+    heartbeatTimer = setTimeout(() => { heartbeat().finally(nextHeartbeat); }, Math.min(options.heartbeatMs, Math.floor(job.leaseMs / 4)));
   }
   try {
     if (options.signal?.aborted) throw failure("COLLECTOR_SHUTDOWN");
@@ -325,12 +340,24 @@ async function runJob(job, options) {
       providerBlocked = true;
       // The marker is emitted by the crawler's global stop gate, not inferred from log text.
       // Notify immediately; the already-stopped child may still save its failure receipt.
-      heartbeatPending = heartbeat();
+      // Protection bypasses the progress queue: another slow heartbeat must
+      // not delay the broker's stop notification to the other worker lanes.
+      urgentHeartbeat = sendHeartbeat(true);
+    }, value => {
+      if (controller.signal.aborted || (progress && (value.totalPlaces !== progress.totalPlaces || value.completedPlaces < progress.completedPlaces || value.updatedAt < progress.updatedAt))) return;
+      progress = value;
+      // Coalesce fast per-place updates. This contacts only our broker and never
+      // changes the provider request rate or the lease's regular heartbeat.
+      if (!progressTimer) progressTimer = setTimeout(() => {
+        progressTimer = null;
+        if (!controller.signal.aborted) heartbeat();
+      }, 1000);
     }));
     child.stderr?.resume();
     const result = await childDone;
     if (stopCode) throw failure(stopCode);
     if (result.signal) throw failure("COLLECTOR_CRAWL_FAILED");
+    clearTimeout(progressTimer); progressTimer = null;
     stage = "save";
     let artifacts;
     try { artifacts = await artifactsFor(prepared, options); } catch { throw failure("COLLECTOR_ARTIFACT_INVALID"); }
@@ -348,6 +375,9 @@ async function runJob(job, options) {
     let completionCancelled = false;
     let failurePhase = "file_upload";
     try {
+      stage = "uploading";
+      await heartbeat();
+      if (stopCode) throw failure(stopCode);
       for (const file of artifacts.files) {
         if (stopCode) throw failure(stopCode);
         const reply = await request(options, `${jobPath}/files?path=${encodeURIComponent(file.path)}`, {
@@ -357,8 +387,10 @@ async function runJob(job, options) {
         if (reply?.ok !== true) throw failure("COLLECTOR_UPLOAD_FAILED");
       }
       if (stopCode) throw failure(stopCode);
-      stage = "save";
+      stage = "completing";
       failurePhase = "final_validation";
+      await heartbeat();
+      if (stopCode) throw failure(stopCode);
       const reply = await request(options, `${jobPath}/complete`, { body: { ...credentials, runId: artifacts.runId,
         files: artifacts.files.map(({ path: filePath, size, sha256 }) => ({ path: filePath, size, sha256 })) },
         // The child has exited and all bytes are uploaded. A completion may
@@ -366,14 +398,15 @@ async function runJob(job, options) {
         // allow only this idempotent completion handshake to resolve that case.
         signal: options.signal, attempts: options.uploadAttempts });
       if (reply?.ok !== true) throw failure("COLLECTOR_UPLOAD_FAILED");
+      completionAcknowledged = true;
       completionCancelled = reply.cancelled === true;
     } catch (error) {
       const transferError = failure(stopCode || safeCode(error, "COLLECTOR_UPLOAD_FAILED"));
       if (!stopCode) Object.assign(transferError, safeFailureDetails({ failurePhase, brokerErrorCode: error?.brokerErrorCode }));
       throw transferError;
     }
-    clearTimeout(heartbeatTimer); clearTimeout(deadlineTimer);
-    await heartbeatPending;
+    clearTimeout(heartbeatTimer); clearTimeout(deadlineTimer); clearTimeout(progressTimer);
+    await Promise.all([heartbeatChain, urgentHeartbeat]);
     if (completionCancelled) {
       options.logger({ event: "collector_job_cancelled", jobId: job.id, artifactsRetained: true });
       return { status: "cancelled", acknowledged: true, code: "COLLECTOR_CANCELLED", retainedDirectory: prepared.directory };
@@ -400,10 +433,10 @@ async function runJob(job, options) {
     options.logger({ event: "collector_job_failed", jobId: ID_PATTERN.test(job?.id || "") ? job.id : null, code, ...details, artifactsRetained: Boolean(prepared) });
     return { status: "failed", acknowledged, code, ...details, retainedDirectory: prepared?.directory || null };
   } finally {
-    clearTimeout(heartbeatTimer); clearTimeout(deadlineTimer); clearTimeout(escalationTimer);
+    clearTimeout(heartbeatTimer); clearTimeout(deadlineTimer); clearTimeout(escalationTimer); clearTimeout(progressTimer);
     controller.abort();
     options.signal?.removeEventListener("abort", shutdown);
-    await heartbeatPending;
+    await Promise.all([heartbeatChain, urgentHeartbeat]);
   }
 }
 

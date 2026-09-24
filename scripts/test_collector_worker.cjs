@@ -174,6 +174,22 @@ test("completion cancellation acknowledgement is not reported as a completed cra
   } finally { await f.close(); }
 });
 
+test("a heartbeat response arriving after the committed completion ACK cannot cancel the completed result", async () => {
+  let completionResponse;
+  const f = await fixture({ complete: ({ res }) => { completionResponse = res; },
+    heartbeat: ({ res }) => {
+      if (!completionResponse) { reply(res, { cancelled: false }); return; }
+      reply(completionResponse, { ok: true }); completionResponse = null;
+      setTimeout(() => reply(res, { cancelled: true }), 10);
+    }
+  });
+  try {
+    const result = await runJob(baseJob(), f.options);
+    assert.equal(result.status, "completed"); assert.equal(f.state.failures.length, 0);
+    assert.equal(f.state.kills.length, 0);
+  } finally { await f.close(); }
+});
+
 test("failed upload retains local artifacts and reports a generic code with its upload phase", async () => {
   const f = await fixture({ upload: ({ res }) => reply(res, { ok: false }, 503) });
   try {
@@ -375,6 +391,38 @@ test("progress accepts only exact recognized lines and never forwards raw stdout
   assert.deepEqual(stages, ["inventory", "save"]);
 });
 
+test("actual place progress is sanitized and preserves split Korean UTF-8 characters", () => {
+  const reports = [], stages = [];
+  const read = stageReader(stage => stages.push(stage), () => {}, progress => reports.push(progress));
+  const report = { version: 1, phase: "inventory", completedPlaces: 1, totalPlaces: 2,
+    currentPlaceName: "시즌글램핑", updatedAt: new Date().toISOString() };
+  const bytes = Buffer.from(`COLLECTOR_PROGRESS ${JSON.stringify({ ...report, secret: "DO_NOT_FORWARD" })}\n`);
+  const split = bytes.indexOf(Buffer.from("시즌")) + 2;
+  read(bytes.subarray(0, split)); read(bytes.subarray(split));
+  read(Buffer.from('COLLECTOR_PROGRESS {"completedPlaces":99}\n'));
+  assert.deepEqual(reports, [report]); assert.deepEqual(stages, []);
+});
+
+test("a fast crawl sends final actual counts before upload and validation without declaring completion", async () => {
+  const beats = [];
+  const report = { version: 1, phase: "inventory", completedPlaces: 2, totalPlaces: 2,
+    currentPlaceName: "", updatedAt: new Date().toISOString() };
+  const f = await fixture({ crawl: async ({ child, config }) => {
+    child.stdout.write(`COLLECTOR_PROGRESS ${JSON.stringify(report)}\n`);
+    await writeArtifacts(config.env); child.close();
+  }, heartbeat: async ({ json, res, state }) => {
+    beats.push(json);
+    if (json.progress) assert.equal(state.completions.length, 0);
+    reply(res, { cancelled: false });
+  }, options: { heartbeatMs: 500 } });
+  try {
+    const result = await runJob(baseJob(), f.options);
+    assert.equal(result.status, "completed"); assert.equal(f.state.completions.length, 1);
+    assert.deepEqual(beats.filter(beat => beat.progress).map(beat => beat.stage), ["uploading", "completing"]);
+    for (const beat of beats.filter(beat => beat.progress)) assert.deepEqual(beat.progress, report);
+  } finally { await f.close(); }
+});
+
 function roleJob(workerKey, trigger) {
   const job = baseJob();
   Object.assign(job, { workerKey, trigger });
@@ -438,6 +486,36 @@ test("actual provider stop marker is reported promptly while failure artifacts c
     } });
   try { assert.equal((await runJob(baseJob(), f.options)).code, "COLLECTOR_PROVIDER_BLOCKED"); assert.equal(f.state.spawned.length, 1); }
   finally { await f.close(); }
+});
+
+test("provider protection bypasses a pending slow progress heartbeat", async () => {
+  let slowResponse, releaseSlow, seen = false;
+  const slowStarted = new Promise(resolve => { releaseSlow = resolve; });
+  const f = await fixture({ options: { heartbeatTimeoutMs: 300 },
+    heartbeat: ({ json, res, state }) => {
+      if (json.providerBlocked) {
+        if (!seen) { assert.equal(json.stage, undefined); assert.equal(json.progress, undefined); }
+        seen = true;
+        reply(res, { cancelled: false }); return;
+      }
+      if (state.heartbeats === 2) { slowResponse = res; releaseSlow(); return; }
+      reply(res, { cancelled: false });
+    }, crawl: async ({ child, config }) => {
+      await slowStarted;
+      child.stdout.write("COLLECTOR_PROVIDER_BLOCKED\n");
+      for (let attempt = 0; attempt < 100 && !seen; attempt++) await new Promise(resolve => setTimeout(resolve, 2));
+      assert.equal(seen, true, "protection notification must arrive before releasing the slow heartbeat");
+      reply(slowResponse, { cancelled: false }); slowResponse = null;
+      const run = await writeArtifacts(config.env);
+      await fs.writeFile(path.join(run, "manifest.json"), JSON.stringify({ keyword: "산청글램핑", workerCollection: true,
+        collectionFailed: true, collectionQuality: { status: "blocked" } }));
+      child.close(1);
+    }
+  });
+  try {
+    const result = await runJob(baseJob(), f.options);
+    assert.equal(result.code, "COLLECTOR_PROVIDER_BLOCKED"); assert.equal(result.acknowledged, true);
+  } finally { await f.close(); }
 });
 
 test("insufficient workspace reserve prevents a child process and retains older workspace files", async () => {

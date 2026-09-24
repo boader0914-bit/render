@@ -5,6 +5,7 @@ const fsp = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { inspectManifest } = require("./daily_collection_quality.cjs");
+const { sanitizeCollectionProgress } = require("./collection_progress.cjs");
 
 const LEASE_MS = 60_000;
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
@@ -324,7 +325,7 @@ function createCollectorBroker(options = {}) {
   }
   function publicJob(job) {
     const output = { id: job.id, status: job.status, keyword: job.keyword, createdAt: job.createdAt, updatedAt: job.updatedAt };
-    for (const key of ["startedAt", "finishedAt", "errorCode", "stage", "workerKey", "trigger", "failurePhase", "brokerErrorCode", "recovery"]) if (job[key]) output[key] = clone(job[key]);
+    for (const key of ["startedAt", "finishedAt", "errorCode", "stage", "workerKey", "trigger", "failurePhase", "brokerErrorCode", "recovery", "progress", "progressReceivedAt"]) if (job[key]) output[key] = clone(job[key]);
     if (job.status === "completed") Object.assign(output, { runId: job.runId, outputDir: job.outputDir, manifest: clone(job.manifest), collectionQuality: clone(job.collectionQuality) });
     return output;
   }
@@ -545,9 +546,19 @@ function createCollectorBroker(options = {}) {
       checkLease(job, body.workerId, body.leaseToken);
       if (body.stage !== undefined && !STAGES.has(body.stage)) throw problem("COLLECTOR_INVALID_STAGE", 400);
       if (body.providerBlocked !== undefined && typeof body.providerBlocked !== "boolean") throw problem("COLLECTOR_INVALID_STAGE", 400);
+      const progress = body.progress === undefined ? null : sanitizeCollectionProgress(body.progress);
+      if (body.progress !== undefined && !progress) throw problem("COLLECTOR_INVALID_PROGRESS", 400);
       job.leaseExpiresAt = timestamp() + LEASE_MS;
       state.workerLastSeenAt = job.updatedAt = iso();
       if (body.stage && job.stage !== body.stage) { job.stage = body.stage; event = { id, stage: body.stage }; }
+      const previous = job.progress;
+      if (progress && Date.parse(progress.updatedAt) <= timestamp() + 30000
+        && (!previous || (progress.totalPlaces === previous.totalPlaces && progress.completedPlaces >= previous.completedPlaces && progress.updatedAt >= previous.updatedAt))
+        && JSON.stringify(progress) !== JSON.stringify(previous)) {
+        job.progress = progress;
+        job.progressReceivedAt = iso();
+        event = { ...event, id, progress: clone(progress), progressReceivedAt: job.progressReceivedAt };
+      }
       if (body.providerBlocked === true && !job.providerBlockedAt) {
         job.providerBlockedAt = iso();
         state.halted = { code: "COLLECTOR_PROVIDER_BLOCKED", at: iso() };

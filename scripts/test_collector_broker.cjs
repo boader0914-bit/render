@@ -107,6 +107,31 @@ async function failedRecoverySource(broker, overrides = {}) {
   return { lease, runId, bundle, input, recoveryInput: { manifestSha256: sha(bundle.contents["manifest.json"]), expected } };
 }
 
+test("actual progress is monotonic and heartbeat freshness cannot impersonate new place progress", () => fixture(async ({ broker, progress, advance }) => {
+  const lease = await claimed(broker), route = `/api/collector-worker/jobs/${lease.id}/heartbeat`;
+  const report = { version: 1, phase: "inventory", completedPlaces: 1, totalPlaces: 2,
+    currentPlaceName: "시즌글램핑", updatedAt: "2026-09-22T11:00:00.000Z" };
+  assert.equal((await request(broker, "POST", route, { ...identity(lease), progress: { ...report, token: "DO_NOT_FORWARD" } })).status, 200);
+  const first = await broker.getJob(lease.id);
+  assert.deepEqual(first.progress, report); assert.equal(first.progressReceivedAt, report.updatedAt);
+  assert.deepEqual(progress[0], { id: lease.id, progress: report, progressReceivedAt: report.updatedAt });
+  advance(1000);
+  assert.equal((await request(broker, "POST", route, { ...identity(lease), progress: report })).status, 200);
+  assert.equal((await broker.getJob(lease.id)).progressReceivedAt, report.updatedAt); assert.equal(progress.length, 1);
+  assert.notEqual((await broker.status()).workerLastSeenAt, report.updatedAt);
+  for (const value of [{ ...report, completedPlaces: 0 }, { ...report, totalPlaces: 3 }, { ...report, updatedAt: "2026-09-22T11:01:00.000Z" }]) {
+    assert.equal((await request(broker, "POST", route, { ...identity(lease), progress: value })).status, 200);
+    assert.deepEqual((await broker.getJob(lease.id)).progress, report);
+  }
+  assert.equal((await request(broker, "POST", route, { ...identity(lease), progress: { ...report, completedPlaces: 3 } })).status, 400);
+  const final = { ...report, completedPlaces: 2, currentPlaceName: "", updatedAt: "2026-09-22T11:00:01.000Z" };
+  assert.equal((await request(broker, "POST", route, { ...identity(lease), stage: "uploading", progress: final })).status, 200);
+  assert.deepEqual((await broker.getJob(lease.id)).progress, final);
+  assert.equal((await broker.getJob(lease.id)).status, "leased");
+  assert.equal((await broker.status()).activeJobId, lease.id);
+  assert.equal(progress.at(-1).stage, "uploading");
+}));
+
 test("disabled and invalid authentication do not expose work", () => fixture(async ({ broker, options }) => {
   const disabled = createCollectorBroker({ ...options, token: "short" });
   assert.equal((await request(disabled, "POST", "/api/collector-worker/claim", {})).status, 404);

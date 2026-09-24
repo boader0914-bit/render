@@ -7,6 +7,8 @@ const { spawn } = require("node:child_process");
 const { serialExecutor } = require("./collection_reuse.cjs");
 const { collectionEnv } = require("./collector_dispatch.cjs");
 const { inspectResult } = require("./daily_collection_quality.cjs");
+const { parseCollectionProgressLine, COLLECTOR_PROGRESS_PREFIX } = require("./collection_progress.cjs");
+const { StringDecoder } = require("node:string_decoder");
 
 const RUNTIME_KEYS = new Set(["PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "LANG", "LC_ALL", "TZ", "NODE_PATH"]);
 const SPEED_KEYS = /^(?:NAVER_REQUEST_|NAVER_BOOKING_DETAIL_CONCURRENCY$|NAVER_SCHEDULE_CONCURRENCY$|NAVER_SCHEDULE_DELAY_MS$|NAVER_OTA_OBSERVATION_CONCURRENCY$|REGIONAL_SEARCH_CONCURRENCY$)/;
@@ -196,15 +198,20 @@ function createOperatingWebCollector({ dataDir, outputsDir, root, spawnImpl = sp
       });
       finished.catch(() => {});
       let tail = "";
+      const decoder = new StringDecoder("utf8");
       child.stdout?.on("data", chunk => {
-        tail += chunk.toString("utf8");
-        const lines = tail.split(/\r?\n/); tail = lines.pop().slice(-1024);
+        tail += typeof chunk === "string" ? chunk : decoder.write(chunk);
+        const lines = tail.split(/\r?\n/); tail = lines.pop().slice(-4096);
         for (const line of lines) {
           if (line === "COLLECTOR_PROVIDER_BLOCKED" && !blocked) {
             blocked = true;
             blockedWork = halt("COLLECTOR_PROVIDER_BLOCKED").then(() => onProviderBlocked());
             blockedWork.catch(() => runtime.stop("COLLECTOR_PROVIDER_BLOCKED"));
           } else if (PROGRESS.test(line)) { try { onProgress(`${line}\n`); } catch {} }
+          else {
+            const progress = parseCollectionProgressLine(line);
+            if (progress) { try { onProgress(`${COLLECTOR_PROGRESS_PREFIX}${JSON.stringify(progress)}\n`); } catch {} }
+          }
         }
       });
       child.stderr?.resume();
@@ -220,6 +227,7 @@ function createOperatingWebCollector({ dataDir, outputsDir, root, spawnImpl = sp
       };
       assertCanFinish();
       if (outcome.signal) throw fault("COLLECTOR_CRAWL_FAILED");
+      try { onProgress("Verifying collected outputs...\n"); } catch {}
       const result = await verify(locations.outputs, keyword, env, payload, jobId, token, outcome.code, assertCanFinish);
       assertCanFinish();
       if (result.collectionQuality.status === "blocked" && !blocked) {

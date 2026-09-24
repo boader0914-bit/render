@@ -1025,6 +1025,7 @@ function currentCrawlFormPayload() {
   const detailRankRanges = /^(none|skip|없음)$/i.test(rawDetailRankRanges) ? defaultRange : (rawDetailRankRanges || defaultRange);
   return {
     keyword,
+    workerKey: selectedAdminCrawlWorkerKey(),
     checkIn: els.checkInInput?.value || "",
     checkOut: els.checkOutInput?.value || "",
     searchMode: resolvedMode,
@@ -3250,6 +3251,8 @@ async function waitForB2BSearchIdle(timeoutMs = 12000) {
 function crawlEstimatePayloadFromPlan(plan = {}) {
   return {
     keyword: plan.keyword || activeKeyword(),
+    workerKey: ["web", "manual", "scheduled"].includes(plan.workerKey) ? plan.workerKey : selectedAdminCrawlWorkerKey(),
+    dayUseMode: ["inspect", "lodging_only", "detail"].includes(plan.dayUseMode) ? plan.dayUseMode : document.getElementById("crawlForm")?.dataset.dayUseMode || "inspect",
     checkIn: plan.checkIn || els.checkInInput?.value || "",
     checkOut: plan.checkOut || els.checkOutInput?.value || "",
     searchMode: plan.searchMode || "keyword",
@@ -3264,6 +3267,8 @@ function crawlEtaKey(plan = {}) {
   const payload = crawlEstimatePayloadFromPlan(plan);
   return [
     payload.keyword,
+    payload.workerKey,
+    payload.dayUseMode,
     payload.checkIn,
     payload.checkOut,
     payload.searchMode,

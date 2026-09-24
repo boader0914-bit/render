@@ -5,6 +5,7 @@ const { inspectManifest } = require("./daily_collection_quality.cjs");
 const { applyInventoryEvidence, productEvidence } = require("./inventory_estimation.cjs");
 const { createNaverRequestGate, isNaverBookingRateLimit, isNaverCaptchaResponse } = require("./naver_request_pacing.cjs");
 const { createProductCoverage } = require("./collector_product_coverage.cjs");
+const { createCollectionProgressReporter } = require("./collection_progress.cjs");
 const { DAY_USE_MODES, normalizeDayUseMode, dayUsePlan, withoutUncollectedDayUse } = require("./collector_day_use.cjs");
 const COLLECTION_STARTED_AT = new Date().toISOString();
 const productCoverage = createProductCoverage();
@@ -2989,6 +2990,9 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
     bookingTasks.push({ row, alreadyKnown, collectRange });
   }
 
+  const progress = createCollectionProgressReporter({ totalPlaces: uniquePlaceIds.size });
+  progress.start();
+
   async function collectBookingTaskResult(placeId, collectRange) {
     const key = String(placeId || "");
     if (!key) return { status: "place_id 없음" };
@@ -2999,6 +3003,10 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
   }
 
   await mapWithConcurrency(bookingTasks, NAVER_BOOKING_DETAIL_CONCURRENCY, async ({ row, alreadyKnown, collectRange }) => {
+    // Rows can repeat a place across search lists. A place skipped because the
+    // provider already blocked requests is not newly processed work either.
+    const trackProgress = !alreadyKnown && !(GUARDED_COLLECTION && (naverScheduleBlockedStatus || naverRequestBlockedStatus));
+    if (trackProgress) progress.startPlace(row.place_id, row.업체명 || row.name || "");
     try {
       const result = await collectBookingTaskResult(row.place_id, collectRange);
       if (!alreadyKnown) collected += 1;
@@ -3130,6 +3138,8 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
     } catch (error) {
       if (!alreadyKnown) collected += 1;
       row.네이버예약재고수집상태 = `실패: ${error.message || error}`;
+    } finally {
+      if (trackProgress) progress.completePlace(row.place_id);
     }
   });
 

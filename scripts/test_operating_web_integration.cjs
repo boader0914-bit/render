@@ -66,6 +66,10 @@ function installFixture(config) {
         assert.equal(env.COLLECTOR_WORKER_TOKEN, undefined);
         assert.equal(env.GLAMPING_ADMIN_PASSWORD, undefined);
         child.stdout.write("Checking Naver booking stock...\n");
+        if (config.progressFixture) {
+          const progress = count => child.stdout.write("COLLECTOR_PROGRESS " + JSON.stringify({ version: 1, phase: "inventory", completedPlaces: count, totalPlaces: 2, currentPlaceName: "진행 확인 업체", updatedAt: new Date().toISOString() }) + "\n");
+          progress(0); await delay(80); progress(1); await delay(2000); progress(2);
+        }
         await delay(keyword.includes("순차") ? 450 : 80);
         if (closed) return;
         const blocked = keyword.includes("차단"), partial = keyword.includes("부분");

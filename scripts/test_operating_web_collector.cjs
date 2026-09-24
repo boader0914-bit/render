@@ -85,7 +85,7 @@ test("web directly executes one guarded native-speed child without credentials a
   assert.equal(child.config.env.NAVER_REQUEST_PACING_ENABLED, "0"); assert.equal(child.config.env.COLLECTOR_WEB_RUNTIME, "1");
   assert.equal(child.config.env.COLLECTOR_WORKER_RUNTIME, "0"); assert.equal(child.config.env.SCHEDULED_COLLECTION, "0");
   assert.equal(child.config.env.RENDER_SERVICE_ID, "srv-test123");
-  assert.deepEqual(progress, ["Checking Naver booking stock...\n"]); assert.equal(children.at(-1), null);
+  assert.deepEqual(progress, ["Checking Naver booking stock...\n", "Verifying collected outputs...\n"]); assert.equal(children.at(-1), null);
   assert.equal(result.manifest.outputDir, path.join(f.outputsDir, result.runId));
   const saved = JSON.parse(await fs.readFile(path.join(result.manifest.outputDir, "manifest.json"), "utf8"));
   assert.equal(saved.collectionQuality.status, "complete"); assert.equal((await f.api.status()).activeJobId, null);
@@ -94,6 +94,20 @@ test("web directly executes one guarded native-speed child without credentials a
 test("partial responses remain partial and do not become successful results", async t => {
   const f = await fixture(t, { execute: async ({ args, config, close }) => { await artifacts(config.env, args[1], { partial: true }); close(); } });
   assert.equal((await f.run()).collectionQuality.status, "partial");
+});
+
+test("web relays sanitized actual counts across UTF-8 chunk boundaries before final verification", async t => {
+  const progress = [], report = { version: 1, phase: "inventory", completedPlaces: 2, totalPlaces: 2,
+    currentPlaceName: "시즌글램핑", updatedAt: new Date().toISOString() };
+  const f = await fixture(t, { onProgress: line => progress.push(line), execute: async ({ child, args, config, close }) => {
+    const bytes = Buffer.from(`COLLECTOR_PROGRESS ${JSON.stringify({ ...report, secret: "DO_NOT_FORWARD" })}\n`);
+    const split = bytes.indexOf(Buffer.from("시즌")) + 1;
+    child.stdout.write(bytes.subarray(0, split)); child.stdout.write(bytes.subarray(split));
+    child.stdout.write('COLLECTOR_PROGRESS {"version":1,"completedPlaces":999}\n');
+    await artifacts(config.env, args[1]); close();
+  } });
+  assert.equal((await f.run()).collectionQuality.status, "complete");
+  assert.deepEqual(progress, [`COLLECTOR_PROGRESS ${JSON.stringify(report)}\n`, "Verifying collected outputs...\n"]);
 });
 
 test("web scheduled work preserves its trigger and rejects a receipt for the wrong day-use mode", async t => {

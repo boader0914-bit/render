@@ -12,6 +12,7 @@
     "test:yeogi": "node scripts/test_yeogi_import_parser.cjs",
     "test:surface": "node scripts/test_surface_contrast.cjs",
     "test:worker-cards": "node --test scripts/test_collector_day_use.cjs scripts/test_keyword_worker_scheduler.cjs scripts/test_collector_controls_ui.cjs && node scripts/test_worker_cards_integration.cjs",
+    "test:collection-progress": "node --test scripts/test_collection_progress.cjs scripts/test_collector_progress_server.cjs scripts/test_collector_controls_ui.cjs && node scripts/test_worker_cards_integration.cjs",
     "test:navigation": "node scripts/test_b2b_navigation.cjs",
     "test:overlay": "node scripts/test_overlay_lifecycle.cjs",
     "test:dictionary-state": "node scripts/test_dictionary_search_state.cjs",

@@ -215,3 +215,25 @@ test("worker-card bridge submits through existing receipt tracking with isolated
   assert.equal(ui.context.state.adminCrawlRequests[receipt.requestId].workerKey, "manual");
   assert.equal(ui.els.crawlForm.dataset.bookingDateScope, "2026-09-24|2026-09-25");
 });
+
+test("ETA preview preserves selected worker and day-use scope and separates cached estimates", () => {
+  const start=source.indexOf("function currentCrawlFormPayload()"), end=source.indexOf("function selectedCrawlSpeedPresetKey(",start);
+  const planStart=source.indexOf("function crawlEstimatePayloadFromPlan("), planEnd=source.indexOf("function crawlEtaForPlan(",planStart);
+  const form={dataset:{dayUseMode:"inspect"}}, ctx={
+    selection:"manual", state:{}, els:{crawlForm:form,keywordInput:{value:"경남글램핑"},checkInInput:{value:"2026-09-24"},checkOutInput:{value:"2026-09-30"},searchModeInput:{value:"keyword"},collectionPurposeInput:{value:"revenue_detail"},detailRankRangesInput:{value:"1-20"}},
+    document:{getElementById:()=>form}, activeKeyword:()=>"경남글램핑", selectedAdminCrawlWorkerKey:()=>ctx.selection,
+    regionalLodgingSearchIntent:()=>({kind:"typed_lodging",region:"경남",scope:"lodging_type:글램핑",label:"글램핑"}),correctedSearchMode:()=>"keyword",
+    normalizeCrawlFormPurpose:value=>value, collectionPurposeProfile:()=>({defaultRange:"1-20",collectWeeklyRange:true}),collectionPurposeDefaultRange:()=>"1-20",rankRangeCountFromText:()=>20,rankRangePlaceLimitFromText:()=>20
+  };
+  vm.runInNewContext(source.slice(start,end)+source.slice(planStart,planEnd),ctx);
+  const keys=new Set();
+  for(const worker of ["web","manual","scheduled"]) for(const dayUseMode of ["inspect","lodging_only","detail"]) {
+    ctx.selection=worker; form.dataset.dayUseMode=dayUseMode;
+    const payload=ctx.currentCrawlFormPayload(), preview=ctx.crawlEstimatePayloadFromPlan(payload);
+    assert.equal(payload.workerKey,worker); assert.equal(preview.workerKey,worker); assert.equal(preview.dayUseMode,dayUseMode);
+    keys.add(ctx.crawlEtaKey(preview));
+  }
+  assert.equal(keys.size,9,"worker or day-use changes must never reuse a mismatched ETA cache entry");
+  const explicit=ctx.crawlEstimatePayloadFromPlan({workerKey:"web",dayUseMode:"lodging_only"});
+  assert.equal(explicit.workerKey,"web"); assert.equal(explicit.dayUseMode,"lodging_only");
+});

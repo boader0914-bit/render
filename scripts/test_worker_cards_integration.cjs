@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs"), fsp = require("node:fs/promises"), path = require("node:path"), os = require("node:os");
 const { spawn } = require("node:child_process");
 const { EventEmitter } = require("node:events"), { PassThrough } = require("node:stream");
+const { setTimeout: delay } = require("node:timers/promises");
 const { installFixture } = require("./test_operating_web_integration.cjs");
 const { workerOptions, runWorker } = require("./collector_worker.cjs");
 const { freePort, request, jsonPost, login, waitUntil, stopChild, writeMockArtifacts } = require("./test_collector_integration.cjs");
@@ -38,6 +39,9 @@ function mockWorker(base, temporary, key, index) {
       setImmediate(async()=>{try {
         assert.equal(executable,process.execPath); assert.equal(settings.shell,false);
         assert.equal(settings.env.COLLECTOR_WORKER_TOKEN,undefined);
+        child.stdout.write("Checking Naver booking stock...\n");
+        const progress = count => child.stdout.write("COLLECTOR_PROGRESS " + JSON.stringify({ version:1,phase:"inventory",completedPlaces:count,totalPlaces:2,currentPlaceName:"진행 확인 업체",updatedAt:new Date().toISOString() }) + "\n");
+        progress(0); await delay(80); progress(1); await delay(2000); progress(2);
         await enrichFixture(await writeMockArtifacts(settings.env,args[1],index,false),settings.env,args[1]);
         child.stdout.end();child.stderr.end();child.emit("close",0);
       } catch(error) { errors.push(error);child.emit("close",1); }});
@@ -55,7 +59,7 @@ async function main() {
     const dataDir=path.join(temporary,"data"), outputsDir=path.join(dataDir,"outputs"), configDir=path.join(dataDir,"config");
     await fsp.mkdir(configDir,{recursive:true});
     const attempts=path.join(temporary,"forbidden.log"),events=path.join(temporary,"events.jsonl"),preload=path.join(temporary,"preload.cjs");
-    await fsp.writeFile(preload,`(${installFixture.toString()})(${JSON.stringify({root:ROOT,attempts,events,richRows:true})});\n`);
+    await fsp.writeFile(preload,`(${installFixture.toString()})(${JSON.stringify({root:ROOT,attempts,events,richRows:true,progressFixture:true})});\n`);
     const port=await freePort(),base=`http://127.0.0.1:${port}`,logs=[];
     server=spawn(process.execPath,["--require",preload,path.join(ROOT,"scripts/glamping_app_server.cjs")],{
       cwd:ROOT,windowsHide:true,stdio:["ignore","pipe","pipe"],env:{...process.env,NODE_OPTIONS:"",PORT:String(port),HOST:"127.0.0.1",
@@ -102,6 +106,23 @@ async function main() {
       const route="/api/worker-schedule/run-now?workerKey="+key;
       const start=await request(base,route,cookie,jsonPost({requestId:"cards_run_"+key}));
       assert.equal(start.response.status,202,JSON.stringify(start.body));
+      let activeProgress;
+      await waitUntil(async()=>{
+        activeProgress=(await status()).body.workers.find(w=>w.workerKey===key)?.crawl;
+        return activeProgress?.progress?.completedPlaces===1;
+      },key+" actual progress",10000);
+      assert.equal(activeProgress.active,true);
+      assert.equal(activeProgress.progress.totalPlaces,2);
+      assert.equal(activeProgress.progress.currentPlaceName,"진행 확인 업체");
+      assert.equal(activeProgress.progress.source,"actual");
+      assert.ok(Number.isFinite(Date.parse(activeProgress.lastProgressAt)));
+      const directProgress=(await request(base,"/api/crawl-status?workerKey="+key,cookie)).body;
+      assert.deepEqual(directProgress.progress,activeProgress.progress);
+      // Heartbeat freshness is not evidence of new collection progress.
+      await delay(90);
+      const unchanged=(await status()).body.workers.find(w=>w.workerKey===key).crawl;
+      assert.equal(unchanged.lastProgressAt,activeProgress.lastProgressAt);
+      assert.equal(unchanged.progress.completedPlaces,1);
       let terminal;
       await waitUntil(async()=>{
         const s=(await request(base,"/api/worker-schedule?workerKey="+key,cookie)).body;
@@ -126,7 +147,7 @@ async function main() {
     const runs=(await request(base,"/api/runs",cookie)).body;
     assert.equal((Array.isArray(runs)?runs:runs.runs).length,3);
     assert.ok(!fs.existsSync(attempts),fs.existsSync(attempts)?await fsp.readFile(attempts,"utf8"):"");
-    console.log("PASS web/BG/AWS labeled collectors publish validated results to one central archive and company DB without provider calls");
+    console.log("PASS web/BG/AWS actual progress, stable progress timestamps and validated central archive/DB without provider calls");
   } finally {
     for(const worker of workers)worker.stop();await Promise.allSettled(workers.map(w=>w.done));await stopChild(server);
     const actual=await fsp.realpath(temporary),relative=path.relative(tempBase,actual);

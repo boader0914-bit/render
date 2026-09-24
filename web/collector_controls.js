@@ -118,14 +118,54 @@
     });
   }
   function filterHistory(rows, filters) { return rows.filter(row => { const stamp = Date.parse(row.stamp) || Number(row.stamp); return (filters.worker === "all" || row.workerKey === filters.worker) && (!filters.keyword || String(row.keyword || "").toLowerCase().includes(filters.keyword.toLowerCase())) && (!filters.date || Number.isFinite(stamp) && todayKst(stamp) === filters.date) && (filters.state === "all" || (filters.state === "pending" ? ["pending", "queued", "running"].includes(row.status) : filters.state === "complete" ? ["complete", "completed", "reused"].includes(row.status) : !["pending", "queued", "running", "complete", "completed", "reused"].includes(row.status))); }); }
-  if (typeof module !== "undefined" && module.exports) module.exports = { workerKey, workerLabel, keywordLines, duplicateKeywordCount, scheduleConfig, formatTime, workerState, workerQueueCount, workerAvailability, durationLabel, errorMessage, STATUS_LABELS, normalizeDayUse, collectionDates, defaultDraft, historyEntries, filterHistory };
+  function etaRange(seconds) {
+    if (!Number.isFinite(seconds) || seconds <= 0) return "응답 확인 중";
+    if (seconds < 60) { const low = Math.max(10, Math.floor(seconds * .8 / 10) * 10), high = Math.max(low, Math.ceil(seconds * 1.2 / 10) * 10); return low === high ? `약 ${low}초` : `약 ${low}~${high}초`; }
+    const low = Math.max(1, Math.round(seconds * .8 / 60)), high = Math.max(low, Math.ceil(seconds * 1.2 / 60));
+    return low === high ? `약 ${low}분` : `약 ${low}~${high}분`;
+  }
+  function progressModel(worker = {}, record = null, now = Date.now(), receivedAt = now) {
+    const crawl = worker.crawl || {}, active = Boolean(crawl.active || worker.activeJobId);
+    const terminalStatus = !active && workerQueueCount(worker) === 0 && ["complete", "completed", "reused", "failed", "partial", "blocked", "interrupted", "cancelled"].includes(record?.status) ? record.status : "";
+    const verified = ["complete", "completed", "reused"].includes(terminalStatus) && Boolean(record?.runId || record?.result?.runId)
+      && (!record?.result || record.result.collectionQuality?.status === "complete");
+    const progress = crawl.progress;
+    const validCounts = active && progress?.version === 1 && progress.source === "actual" && Number.isInteger(progress.totalPlaces) && progress.totalPlaces > 0
+      && Number.isInteger(progress.completedPlaces) && progress.completedPlaces >= 0 && progress.completedPlaces <= progress.totalPlaces;
+    const reportAt = Math.max(Date.parse(crawl.lastProgressAt || "") || 0, Date.parse(progress?.receivedAt || progress?.updatedAt || "") || 0);
+    const staleConnection = active && (!workerFresh(worker, now) || now - receivedAt > 30000);
+    const stalled = active && reportAt > 0 && now - reportAt > 90000;
+    const paused = Boolean(worker.halted || crawl.cancelling || staleConnection || stalled);
+    const pending = !active && !terminalStatus && (workerQueueCount(worker) > 0 || ["pending", "queued", "running"].includes(record?.status));
+    const stageKey = crawl.stageSource === "runtime" ? crawl.currentStage?.key || "" : "";
+    const phase = verified ? 3 : /^(save|uploading|completing)$/.test(stageKey) ? 2 : stageKey === "inventory" || validCounts ? 1 : stageKey ? 0 : -1;
+    let state = verified ? "complete" : terminalStatus ? "attention" : active ? "running" : pending ? "queued" : "idle";
+    if (worker.halted || crawl.cancelling || staleConnection || stalled) state = "attention";
+    const secondsSinceStatus = receivedAt > 0 ? Math.max(0, Math.min(30, Math.floor((now - receivedAt) / 1000))) : 0;
+    const remaining = Number.isFinite(crawl.remainingSeconds) ? Math.max(0, crawl.remainingSeconds - secondsSinceStatus) : null;
+    const delay = active && (crawl.isDelayed || remaining === 0);
+    const eta = worker.halted ? "수집 중단" : crawl.cancelling ? "중단 처리 중" : staleConnection ? "연결 확인 필요" : stalled ? "응답 확인 중" : verified ? "저장·검증 완료" : ["complete", "completed", "reused"].includes(terminalStatus) ? "정상 저장 확인 필요" : terminalStatus ? STATUS_LABELS[terminalStatus] || "확인 필요" : pending ? "차례를 기다리는 중" : delay ? "예상보다 지연" : active ? etaRange(remaining) : "";
+    const error = worker.halted ? errorMessage(worker.brokerErrorCode || worker.errorCode) : terminalStatus && !verified ? errorMessage(record.brokerErrorCode || record.errorCode) : "";
+    const keyword = crawl.activeJob?.keyword || crawl.currentJob?.keyword || record?.keyword || "수집 작업";
+    return { visible: active || pending || Boolean(terminalStatus) || Boolean(worker.halted), state, active, animated: active && !paused && !delay, keyword, eta,
+      label: active && !paused && !delay ? "예상 남은 시간" : verified ? "결과 확인" : "진행 상태", phase,
+      elapsed: Number.isFinite(crawl.elapsedSeconds) ? durationLabel({durationMs:(crawl.elapsedSeconds + (active && !staleConnection ? secondsSinceStatus : 0)) * 1000}) : "",
+      completeAt: active && !paused && !delay ? formatTime(crawl.estimatedCompleteAt) : "",
+      countText: validCounts ? `${progress.completedPlaces} / ${progress.totalPlaces}곳 처리` : "처리 수량 확인 중",
+      percent: validCounts ? Math.round(progress.completedPlaces / progress.totalPlaces * 100) : null,
+      completedPlaces: validCounts ? progress.completedPlaces : null, totalPlaces: validCounts ? progress.totalPlaces : null,
+      detail: error || (staleConnection ? "최근 서버 상태를 받지 못했습니다. 완료 여부를 확인하고 있습니다." : stalled ? "워커 연결과 별도로 새 처리 보고를 기다립니다." : delay ? "완료 시각을 다시 확인하고 있습니다. 수집 결과 저장 전까지 완료로 표시하지 않습니다." : verified ? "정상 결과가 중앙 보관함에 저장되었습니다." : phase === 2 ? "2G 서버로 결과를 보내고 저장·검증하고 있습니다." : validCounts ? `${progress.currentPlaceName ? `${progress.currentPlaceName} · ` : ""}처리 수량에는 실패한 업체가 포함될 수 있습니다.` : "서버에서 확인한 단계와 처리 수량을 표시합니다."),
+      basis: crawl.estimateBasis?.timing?.source === "measured" ? `최근 유사 수집 ${crawl.estimateBasis.timing.sampleCount || 0}건 기준` : "수집 조건 기준 추정",
+      runId: verified ? record.runId || record.result.runId : null };
+  }
+  if (typeof module !== "undefined" && module.exports) module.exports = { workerKey, workerLabel, keywordLines, duplicateKeywordCount, scheduleConfig, formatTime, workerState, workerQueueCount, workerAvailability, durationLabel, errorMessage, STATUS_LABELS, normalizeDayUse, collectionDates, defaultDraft, historyEntries, filterHistory, etaRange, progressModel };
   if (typeof document === "undefined") return;
   const byId = id => document.getElementById(id);
   const panel = byId("collectorControlsCard");
   if (!panel) return;
   const cards = new Map();
   const schedules = {};
-  let workerData = null, requests = [], refreshInFlight = null, loaded = false, requestsReadError = false;
+  let workerData = null, lastWorkerData = null, requests = [], refreshInFlight = null, loaded = false, requestsReadError = false, statusReceivedAt = 0, lastRefreshAt = 0;
   const admin = () => document.body.classList.contains("role-admin") && !document.body.classList.contains("admin-user-view");
   const visible = () => admin() && !document.hidden && Boolean(panel.closest("[data-admin-section-panel]")?.classList.contains("active"));
   const storageKey = "staydatalab:collector-drafts:v2";
@@ -148,15 +188,30 @@
   function button(text, className, callback) { const el = node("button", text, className); el.type = "button"; if (callback) el.addEventListener("click", callback); return el; }
   function notice(card, message, tone = "") { card.notice.textContent = message; card.notice.dataset.tone = tone; }
   function resultButton(runId) { return button("결과 보기", "ghost-button collector-result-button", () => window.dispatchEvent(new CustomEvent("collector:open-result", { detail: { runId } }))); }
+  function makeProgress(card) {
+    const panel = node("section", "", "collector-live-progress"); panel.hidden = true; panel.setAttribute("aria-label", `${workerLabel(card.key)} 수집 진행`);
+    const heading = node("div", "", "collector-progress-heading"); heading.append(node("span", "", "collector-progress-dot"));
+    const keyword = node("strong", "수집 작업"); heading.append(keyword);
+    const label = node("span", "예상 남은 시간", "collector-eta-label"), eta = node("strong", "시간 확인 중", "collector-eta-value"), meta = node("small", "", "collector-progress-meta");
+    const count = node("strong", "처리 수량 확인 중", "collector-progress-count"), meter = node("div", "", "collector-actual-meter"), bar = node("span");
+    meter.setAttribute("role", "progressbar"); meter.setAttribute("aria-label", "업체 처리 진행 · 결과 저장과 검증은 별도"); meter.append(bar);
+    const steps = node("ol", "", "collector-progress-steps");
+    for (const [index, title] of ["목록 확인", "상세수집", "저장·검증"].entries()) { const step = node("li"); step.append(node("span", String(index + 1)), node("small", title)); steps.append(step); }
+    const detail = node("p", "", "collector-progress-detail"), basis = node("small", "", "collector-progress-basis"), announcement = node("span", "", "sr-only");
+    announcement.setAttribute("aria-live", "polite"); announcement.setAttribute("aria-atomic", "true");
+    panel.append(heading, label, eta, meta, count, meter, steps, detail, basis, announcement);
+    card.progress = { panel, keyword, label, eta, meta, count, meter, bar, steps, detail, basis, announcement };
+    return panel;
+  }
   function makeCard(key, index) {
     const card = { key, inputs: {}, fields: {}, dirty: false, busy: false, loaded: false };
     card.root = node("details", "", "collector-worker-card"); card.root.dataset.workerKey = key; card.root.open = true;
     const summary = node("summary", "", "collector-worker-summary");
     const identity = node("div", "", "collector-worker-identity"); identity.append(node("span", `0${index + 1}`, "collector-worker-number"));
-    const name = node("div"); name.append(node("h4", workerLabel(key))); card.summary = node("small", "조건을 설정하세요"); name.append(card.summary); identity.append(name);
+    const name = node("div"); name.append(node("h4", workerLabel(key))); card.summary = node("small", "조건을 설정하세요"); card.summaryProgress = node("small", "", "collector-summary-progress"); card.summaryProgress.hidden = true; name.append(card.summary, card.summaryProgress); identity.append(name);
     card.badge = node("span", "확인 중", "state-badge"); summary.append(identity, card.badge, node("span", "", "collector-chevron")); card.root.append(summary);
     card.form = node("form", "", "collector-worker-form");
-    const intro = node("div", "", "collector-card-status"); card.state = node("p", "연결 상태 확인 중"); card.next = node("small", "예약 꺼짐"); intro.append(card.state, card.next); card.form.append(intro);
+    const intro = node("div", "", "collector-card-status"); card.state = node("p", "연결 상태 확인 중"); card.next = node("small", "예약 꺼짐"); intro.append(card.state, card.next); card.form.append(intro, makeProgress(card));
     card.form.append(field(card, "keywords", "검색 키워드", "textarea", { rows: 2, maxLength: 17000, placeholder: "예: 경남글램핑\n여러 키워드는 한 줄에 하나씩", required: true }));
     const grid = node("div", "", "collector-settings-grid");
     grid.append(field(card, "period", "조회할 숙박일", "select", { choices: [["1", "수집 당일"], ["7", "수집일부터 7일"], ["14", "수집일부터 14일"], ["31", "수집일부터 31일"], ["custom", "날짜 직접 지정"]] }), field(card, "ranks", "수집 순위", "text", { maxLength: 150, placeholder: "예: 1-20", required: true }));
@@ -201,14 +256,72 @@
   }
   function renderWorkers() {
     for (const card of cards.values()) {
-      const worker = workerData?.workers?.find(item => item.workerKey === card.key) || { workerKey: card.key, configured: false };
+      const worker = (workerData || lastWorkerData)?.workers?.find(item => item.workerKey === card.key) || { workerKey: card.key, configured: false };
       card.badge.textContent = workerData ? workerState(worker) : "연결 확인 필요";
       card.root.dataset.state = worker.halted ? "alert" : worker.activeJobId || worker.crawl?.active ? "running" : "idle";
       const current = worker.crawl?.activeJob || worker.crawl?.currentJob;
       card.state.textContent = current?.keyword ? `${current.keyword} 수집 중${Number.isFinite(worker.crawl?.elapsedSeconds) ? ` · ${durationLabel({ durationMs: worker.crawl.elapsedSeconds * 1000 })} 경과` : ""}` : `${workerAvailability(workerData, card.key).reason} 대기 ${workerQueueCount(worker)}건`;
       syncCard(card);
     }
+    renderProgress();
     syncLegacyAvailability();
+  }
+  function renderProgress() {
+    const rows = historyEntries(requests, schedules), compactRows = [];
+    for (const card of cards.values()) {
+      const worker = (workerData || lastWorkerData)?.workers?.find(item => item.workerKey === card.key) || { workerKey: card.key, configured: false };
+      const latest = rows.find(row => row.workerKey === card.key);
+      const recordedAt = latest ? Date.parse(latest.finishedAt || latest.endedAt || latest.stamp) || Number(latest.stamp) : 0;
+      const recent = latest && (["pending", "running", "queued"].includes(latest.status) || Date.now() - recordedAt < 300000) ? latest : null;
+      const model = progressModel(worker, recent, Date.now(), statusReceivedAt);
+      const p = card.progress; p.panel.hidden = !model.visible; p.panel.dataset.state = model.state; p.panel.dataset.animated = String(model.animated);
+      card.summaryProgress.hidden = !model.visible; card.summaryProgress.textContent = model.visible ? `${model.keyword} · ${model.eta}` : "";
+      card.root.dataset.progress = model.visible ? model.state : "idle";
+      if (!model.visible) continue;
+      p.keyword.textContent = model.keyword; p.label.textContent = model.label; p.eta.textContent = model.eta;
+      p.meta.textContent = [model.active && model.elapsed ? `경과 ${model.elapsed}` : "", model.completeAt && model.completeAt !== "없음" ? `종료 예상 ${model.completeAt}` : ""].filter(Boolean).join(" · ");
+      p.count.textContent = model.state === "complete" ? "결과 저장·검증 확인" : model.countText;
+      p.count.hidden = !model.active && model.state !== "complete";
+      p.meter.hidden = model.state === "complete" || !model.active;
+      p.steps.hidden = !model.active && model.state !== "complete";
+      p.meter.dataset.determinate = String(model.percent !== null);
+      p.bar.style.width = model.percent === null ? "35%" : `${model.percent}%`;
+      p.meter.setAttribute("aria-valuetext", `${model.countText}. 전체 완료는 결과 저장·검증 후 확인합니다.`);
+      if (model.percent !== null) { p.meter.setAttribute("aria-valuemin", "0"); p.meter.setAttribute("aria-valuemax", String(model.totalPlaces)); p.meter.setAttribute("aria-valuenow", String(model.completedPlaces)); }
+      else { p.meter.removeAttribute("aria-valuemin"); p.meter.removeAttribute("aria-valuemax"); p.meter.removeAttribute("aria-valuenow"); }
+      for (const [index, step] of [...p.steps.children].entries()) { step.dataset.state = model.phase > index ? "done" : model.phase === index ? "active" : "pending"; if (model.phase === index) step.setAttribute("aria-current", "step"); else step.removeAttribute("aria-current"); }
+      p.detail.textContent = model.detail; p.basis.hidden = !model.active; p.basis.textContent = `${model.basis} · 시간 범위는 참고값이며 응답 속도에 따라 달라집니다.`;
+      const announcement = `${workerLabel(card.key)} ${model.keyword}. ${model.state === "running" ? ["목록 확인", "상세수집", "저장·검증"][model.phase] || "진행 중" : model.eta}. ${model.percent !== null ? model.countText : ""}`;
+      if (p.announcement.textContent !== announcement) p.announcement.textContent = announcement;
+      if (model.active || model.state === "queued" || model.state === "attention" || model.state === "complete") compactRows.push({card, model});
+    }
+    renderCompactProgress(compactRows);
+  }
+  const compactProgress = node("aside", "", "collector-compact-progress"), compactButtons = new Map(); compactProgress.id = "collectorCompactProgress"; compactProgress.hidden = true; compactProgress.setAttribute("aria-label", "백그라운드 수집 진행"); compactProgress.append(node("strong", "수집 진행", "collector-compact-title")); document.body.append(compactProgress);
+  function renderCompactProgress(rows) {
+    compactProgress.hidden = !admin() || visible() || !rows.length;
+    if (compactProgress.hidden) return;
+    const signature = rows.map(({card, model}) => `${card.key}|${model.state}|${model.keyword}|${model.eta}|${model.countText}|${model.animated}`).join(";");
+    if (compactProgress.dataset.signature === signature) return;
+    compactProgress.dataset.signature = signature;
+    const shown = new Set(rows.map(({card}) => card.key));
+    for (const [key, item] of compactButtons) item.row.hidden = !shown.has(key);
+    for (const {card, model} of rows) {
+      let item = compactButtons.get(card.key);
+      if (!item) {
+        const row = button("", "collector-compact-row", () => {
+          const navigation = document.querySelector('[data-admin-primary="collect"]') || document.querySelector('[data-admin-mobile-section="collect"]');
+          if (navigation) navigation.click();
+          else window.dispatchEvent(new CustomEvent("collector:show-workspace"));
+          card.root.open = true; card.root.scrollIntoView({block:"start",behavior:"smooth"});
+        });
+        const copy = node("span"), keyword = node("small"), eta = node("b"); copy.append(node("strong", workerLabel(card.key)), keyword); row.append(node("span", "", "collector-progress-dot"), copy, eta); compactProgress.append(row);
+        item = {row, keyword, eta}; compactButtons.set(card.key, item);
+      }
+      // Reuse the focused button while status text changes on each poll.
+      item.row.hidden = false; item.row.dataset.animated = String(model.animated); item.row.dataset.state = model.state;
+      item.keyword.textContent = model.keyword; item.eta.textContent = model.eta;
+    }
   }
   function syncLegacyAvailability() {
     const key = workerKey(byId("crawlWorkerKey")?.value), availability = workerAvailability(workerData, key), hint = byId("crawlWorkerHint");
@@ -268,6 +381,8 @@
     refreshInFlight = (async () => {
       const results = await Promise.allSettled([api("/api/collector-status"), api("/api/crawl-requests"), ...WORKER_KEYS.map(key => api(scheduleUrl(key)))]);
       workerData = results[0].status === "fulfilled" ? results[0].value : null;
+      if (workerData) { lastWorkerData = workerData; statusReceivedAt = Date.now(); } else statusReceivedAt = 0;
+      lastRefreshAt = Date.now();
       requestsReadError = results[1].status !== "fulfilled"; if (!requestsReadError) requests = results[1].value.requests || [];
       for (let i = 0; i < WORKER_KEYS.length; i += 1) {
         const key = WORKER_KEYS[i], result = results[i + 2], card = cards.get(key);
@@ -291,9 +406,15 @@
     fill(card, { keywords: input.keyword || "", period: "custom", checkIn: input.checkIn, checkOut: input.bookingRangeDays === 1 ? input.checkIn : input.checkOut, purpose: input.collectionPurpose || "revenue_detail", ranks: input.detailRankRanges || "1-20", dayUseMode: input.dayUseMode || "inspect", execution: "now" });
     card.root.open = true; card.root.scrollIntoView({ block: "start", behavior: "smooth" }); saveDraft(card);
   });
-  const observer = new MutationObserver(() => { if (visible() && !loaded) refresh(); }); observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+  const observer = new MutationObserver(() => { renderProgress(); if (admin() && !loaded) refresh(); }); observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
   const section = panel.closest("[data-admin-section-panel]"); if (section) observer.observe(section, { attributes: true, attributeFilter: ["class"] });
-  document.addEventListener("visibilitychange", () => { if (visible()) refresh(); });
+  document.addEventListener("visibilitychange", () => { if (admin() && !document.hidden) refresh(); });
   window.addEventListener("pagehide", () => observer.disconnect(), { once: true });
-  setInterval(() => { if (visible()) refresh(); }, 15000); if (visible()) refresh();
+  setInterval(() => {
+    if (!admin() || document.hidden) { compactProgress.hidden = true; return; }
+    renderProgress();
+    const active = (workerData || lastWorkerData)?.workers?.some(worker => worker.activeJobId || worker.crawl?.active || workerQueueCount(worker));
+    if (Date.now() - lastRefreshAt >= (active ? 5000 : visible() ? 15000 : 60000)) refresh();
+  }, 1000);
+  if (admin()) refresh();
 })();
