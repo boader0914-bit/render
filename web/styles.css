@@ -21,6 +21,24 @@
   font-family: var(--font-sans);
 }
 
+/* Booking evidence palette: independent of brand/accent colors. */
+:root,
+html[data-theme-resolved="light"] {
+  --booking-public-color: #087443;
+  --booking-blocked-color: #7040b0;
+  --booking-public-fill: #087443;
+  --booking-blocked-fill: #7040b0;
+}
+
+html[data-theme-resolved="dark"] {
+  --booking-public-color: #70dfb0;
+  --booking-blocked-color: #ceadff;
+  --booking-public-fill: #70dfb0;
+  --booking-blocked-fill: #ceadff;
+}
+
+/* End booking evidence palette. */
+
 * {
   box-sizing: border-box;
 }
@@ -46467,12 +46485,6 @@ html[data-theme-resolved] body .booking-sheet-compact .sheet-section {
 }
 
 /* Public reservations and inferred room blocks remain distinguishable in both themes. */
-body {
-  --booking-public-color: var(--status-positive, var(--green));
-  --booking-blocked-color: var(--purple);
-  --booking-public-fill: var(--status-positive, var(--green));
-  --booking-blocked-fill: var(--purple);
-}
 .booking-evidence-legend,
 .booking-evidence-chips { display: flex; flex-wrap: wrap; gap: 6px 12px; min-width: 0; }
 .booking-evidence-legend { color: var(--text-secondary, var(--muted)); font-size: 11px; line-height: 1.5; }
@@ -46518,3 +46530,7 @@ html[data-theme-resolved] body .booking-revenue-breakdown small { color: var(--t
   .booking-evidence-chips { gap: 5px; }
 }
 html[data-theme-resolved] body .booking-blocked-history { display: block; color: var(--booking-blocked-color); font-size: 11px; line-height: 1.5; white-space: normal; }
+/* Revenue history uses the same public/block semantics as booking detail. */
+html[data-theme-resolved] body .admin-company-chart-revenue-bar.booking-public { fill: var(--booking-public-fill); stroke: var(--booking-public-fill); }
+html[data-theme-resolved] body .admin-company-chart-revenue-bar.booking-blocked { fill: var(--booking-blocked-fill); stroke: var(--booking-blocked-fill); }
+html[data-theme-resolved] body .admin-company-chart-revenue-bar.booking-unavailable { fill: var(--text-tertiary); stroke: var(--text-tertiary); }

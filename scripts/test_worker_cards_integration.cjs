@@ -17,9 +17,22 @@ const names = { web: "2Gweb_worker", manual: "BG worker", scheduled: "AWS worker
 const date = n => new Date(Date.now() + 9 * 3600000 + n * 86400000).toISOString().slice(0,10);
 
 async function enrichFixture(saved, env, keyword) {
+  const products = [
+    { date:env.CHECK_IN,bizItemId:"room-public",name:"공개예약 객실",saleType:"숙박",stock:3,bookingCount:1,occupiedBookingCount:0,price:100000,open:true,collectionFailed:false },
+    { date:env.CHECK_IN,bizItemId:"room-blocked",name:"방막기 객실",saleType:"숙박",stock:2,bookingCount:0,occupiedBookingCount:0,price:150000,open:false,collectionFailed:false }
+  ];
+  const detailFile="details/123456_weekly_product_details.json",serialized=JSON.stringify(products);
+  await fsp.mkdir(path.join(saved.runDir,"details"),{recursive:true});
+  await fsp.writeFile(path.join(saved.runDir,detailFile),serialized);
+  const manifestPath=path.join(saved.runDir,"manifest.json");
+  const manifest=JSON.parse(await fsp.readFile(manifestPath,"utf8"));
+  manifest.detailJsonFiles=[{file:detailFile,field:"weekly_product_details",placeId:"123456",bookingBusinessId:"987654",itemCount:2,originalLength:serialized.length}];
+  manifest.counts.detailJsonFiles=1;
+  await fsp.writeFile(manifestPath,JSON.stringify(manifest));
   const fields={query:keyword,place_id:"123456",업체명:"카드 통합시험 글램핑",overall_rank:1,주소:"경남 산청군 시험로 1",카테고리:"글램핑",숙박유형클러스터:"글램핑",예약:"Y",
-    url:"https://pcmap.place.naver.com/accommodation/123456",네이버예약사업자ID:"987654",네이버예약재고수집상태:"수집 완료",숙박확인재고수:10,숙박예약가능수:7,숙박판매완료수:3,
-    예약최저가:100000,예약리스트유형:"객실 종류별 리스트",주간재고수집일수:1,주간전체수량합계:10,주간판매수량합계:3,
+    url:"https://pcmap.place.naver.com/accommodation/123456",네이버예약사업자ID:"987654",네이버예약재고수집상태:"수집 완료",숙박확인재고수:5,숙박예약가능수:2,숙박판매완료수:3,
+    예약최저가:100000,예약리스트유형:"객실 종류별 리스트",주간재고수집일수:1,주간전체수량합계:5,주간판매수량합계:3,
+    네이버요일별상품상세JSON:"@json-file:"+detailFile,
     dayUseMode:env.DAY_USE_MODE,dayUsePresence:env.DAY_USE_MODE==="lodging_only"?"unknown":"absent",dayUseScheduleStatus:env.DAY_USE_MODE==="detail"?"requested":"not_requested",dayUseSharingStatus:"not_applicable"};
   const cell=value=>'"'+String(value??"").replaceAll('"','""')+'"';
   await fsp.writeFile(path.join(saved.runDir,saved.csv),Object.keys(fields).map(cell).join(",")+"\n"+Object.values(fields).map(cell).join(",")+"\n");
@@ -134,11 +147,27 @@ async function main() {
       const manifest=JSON.parse(await fsp.readFile(path.join(outputsDir,runId,"manifest.json"),"utf8"));
       assert.equal(manifest.workerKey,key);assert.equal(manifest.dayUseMode,modes[key]);
       assert.equal(manifest.trigger,"manual");
-      assert.equal((await request(base,"/api/runs/"+runId,cookie)).response.status,200);
+      const savedRun=await request(base,"/api/runs/"+runId,cookie);
+      assert.equal(savedRun.response.status,200);
+      const item=savedRun.body.availability.items.find(item=>item.placeId==="123456");
+      assert.ok(item?.inventoryEvidence,key+" preserves detailed inventory evidence after central publication");
+      const day=item.inventoryEvidence.lodging.rows[0];
+      assert.deepEqual([day.publicBookings,day.phoneBookings,day.explicitBlockedBookings],[1,2,2]);
+      assert.deepEqual([day.publicRevenue,day.phoneRevenue,day.explicitBlockedRevenue,day.estimatedRevenue],[100000,300000,300000,400000]);
+      assert.equal(day.phonePriceEstimates[0].source,"same_product_same_date");
+      assert.equal(day.phonePriceEstimates[0].sourceDate,manifest.checkIn);
+      assert.equal(day.explicitBlockedDayUseUnverified,key==="manual","Lodging-only unknown day-use scope stays marked without erasing normal blocked observations");
+      const retainedProducts=JSON.parse(await fsp.readFile(path.join(outputsDir,runId,manifest.detailJsonFiles[0].file),"utf8"));
+      assert.deepEqual(retainedProducts.map(product=>[product.stock,product.bookingCount,product.open,product.collectionFailed]),[[3,1,true,false],[2,0,false,false]],"Central sidecar retains provider quantities and response provenance");
       const summary=(await request(base,"/api/company-master/summary",cookie)).body;
       const masterPath=path.join(dataDir,"company_master/companies.json");
       const master=fs.existsSync(masterPath)?JSON.parse(await fsp.readFile(masterPath,"utf8")):null;
       assert.ok(Object.values(master?.companies||{}).some(company=>company.lastRunId===runId),JSON.stringify({reason:"result connected to central company DB",runId,summaryKeys:Object.keys(summary),masterKeys:master&&Object.keys(master),logs:logs.slice(-8)},null,2));
+      const company=Object.values(master.companies).find(company=>company.lastRunId===runId);
+      const snapshotDay=company.inventory.latest.productSnapshot.daily.find(day=>day.productType==="lodging");
+      assert.deepEqual([snapshotDay.publicBookings,snapshotDay.phoneBookings,snapshotDay.explicitBlockedBookings],[1,2,2],"Central company history retains the public/blocked split");
+      assert.deepEqual([snapshotDay.publicRevenue,snapshotDay.phoneRevenue,snapshotDay.explicitBlockedRevenue],[100000,300000,300000]);
+      assert.equal(snapshotDay.phonePriceEstimates[0].source,"same_product_same_date");
       const again=await request(base,route,cookie,jsonPost({requestId:"cards_run_"+key}));
       assert.equal(again.body.id,start.body.id,"repeated request does not create another run");
       assert.equal((await request(base,"/api/worker-schedule?workerKey="+key,cookie)).body.enabled,false);
@@ -147,7 +176,7 @@ async function main() {
     const runs=(await request(base,"/api/runs",cookie)).body;
     assert.equal((Array.isArray(runs)?runs:runs.runs).length,3);
     assert.ok(!fs.existsSync(attempts),fs.existsSync(attempts)?await fsp.readFile(attempts,"utf8"):"");
-    console.log("PASS web/BG/AWS actual progress, stable progress timestamps and validated central archive/DB without provider calls");
+    console.log("PASS web/BG/AWS progress, raw sidecar transport and public/blocked revenue in central archive/DB without provider calls");
   } finally {
     for(const worker of workers)worker.stop();await Promise.allSettled(workers.map(w=>w.done));await stopChild(server);
     const actual=await fsp.realpath(temporary),relative=path.relative(tempBase,actual);

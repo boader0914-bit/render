@@ -6600,9 +6600,9 @@ function renderCompanies() {
         </div>
         <div class="company-compact-metrics">
           <div><span>객실 총량</span><strong>${capacity.count ? `${fmtNumber(capacity.count)}실` : "확인 전"}</strong><small>${escapeHtml(capacity.sourceLabel)}${capacity.count && evidence?.version >= 3 ? " · 날짜별 고정" : ""}<br>네이버 공개 ${escapeHtml(capacity.dailyText)}${capacity.reviewRequired ? "<br>객실 수 검토 필요" : ""}</small></div>
-          <div><span>${lodging.estimated ? "숙박 예약 추정" : "숙박 예약 수량"}</span><strong>${linked && lodgingObserved ? `${fmtNumber(lodging.sold)}${lodging.basis === "basis" ? "실" : "박"}` : "자료 미확인"}</strong><small>${escapeHtml(lodging.label)}${linked && lodgingObserved && Number.isFinite(lodging.rate) ? ` · 예약 비율 ${fmtRate(lodging.rate)}` : ""}${lodging.estimated && lodgingObserved ? `<br>${escapeHtml(bookingQuantityBreakdown(lodging, lodging.basis === "basis" ? "실" : "박"))}` : ""}</small></div>
+          <div><span>${lodging.estimated ? "숙박 예약 추정" : "숙박 예약 수량"}</span><strong>${linked && lodgingObserved ? `${fmtNumber(lodging.sold)}${lodging.basis === "basis" ? "실" : "객실·박"}` : "자료 미확인"}</strong><small>${escapeHtml(lodging.label)}${linked && lodgingObserved && Number.isFinite(lodging.rate) ? ` · 예약 비율 ${fmtRate(lodging.rate)}` : ""}</small>${linked && lodging.estimated && lodgingObserved ? bookingEvidenceChips(lodging, lodging.basis === "basis" ? "실" : "객실·박") : ""}</div>
           <div><span>당일 이용 예약 수량</span><strong>${linked && dayObserved ? `${fmtNumber(day.sold)}회` : "자료 미확인"}</strong><small>${dayObserved ? escapeHtml(day.label) : "예약 자료 필요"} · 숙박과 별도</small></div>
-          <div><span>예상 매출</span><strong>${linked && (lodgingObserved || dayObserved) ? fmtWon(revenue.totalAdjustedRevenue || revenue.totalRevenue) : "자료 미확인"}</strong><small>${linked ? `${lodging.estimated ? "네이버 예약·전화예약 추정 포함" : "수집된 가격·예약 기준"}${incomplete ? " · 일부 자료 미확인" : ""}` : "상세 수량·가격 확인 필요"}</small></div>
+          <div><span>예상 매출</span><strong>${linked && (lodgingObserved || dayObserved) ? fmtWon(revenue.totalAdjustedRevenue || revenue.totalRevenue) : "자료 미확인"}</strong><small>${linked ? `${lodging.estimated ? "공개예약·방막기 추정 포함" : "수집된 가격·예약 기준"}${incomplete ? " · 일부 자료 미확인" : ""}` : "상세 수량·가격 확인 필요"}</small></div>
         </div>
         ${["confirmed", "assumed_shared"].includes(evidence?.sharedRooms?.status) ? `<p class="company-shared-note">${evidence.sharedRooms.status === "confirmed" ? "객실 공유" : "객실 공유 가정"} · 당일 이용으로 차단된 ${fmtNumber(lodging.sharedDayUseExcluded || 0)}박은 숙박 예약 추정에서 제외합니다.</p>` : ""}
         <div class="company-action">
@@ -23190,13 +23190,25 @@ function adminDbRankHistoryChartHtml(row = {}, model = {}) {
 
 function adminDbPerformanceChartModel(row = {}, detail = {}) {
   const raw = adminDbTrendPoints(row, detail, "performance").slice(-12);
-  const observed = raw.map((point) => ({
-    ...point,
-    reservationRate: adminDbChartRate(point.reservationRate ?? point.salesSignal?.lodging?.averageRate ?? point.rate),
-    estimatedRevenue: point.priceEvidenceObserved === false ? NaN : optionalNumber(point.estimatedRevenue ?? point.revenue?.lodging?.adjustedRevenue ?? point.revenue?.lodging?.revenue ?? point.revenue),
-    synthetic: false,
-    decisionEligible: true
-  })).filter((point) => Number.isFinite(point.reservationRate) || Number.isFinite(point.estimatedRevenue));
+  const inventory = (detail.company || row.company || {}).inventory || {};
+  const snapshots = [inventory.latest, inventory.previousLatest, ...(inventory.snapshots || [])].filter(Boolean);
+  const observed = raw.map((point) => {
+    const snapshot = point.revenue?.lodging ? point : snapshots.find(value => point.runId && value.runId === point.runId);
+    const part = snapshot?.revenue?.lodging || {};
+    const estimatedRevenue = point.priceEvidenceObserved === false ? NaN : optionalNumber(point.estimatedRevenue ?? point.revenue?.lodging?.adjustedRevenue ?? point.revenue?.lodging?.revenue ?? point.revenue);
+    const publicRevenue = optionalNumber(point.publicRevenue ?? part.publicRevenue);
+    const phoneRevenue = optionalNumber(point.phoneRevenue ?? part.phoneRevenue);
+    // An older total does not establish how much came from public reservations.
+    const revenueBreakdownAvailable = Number.isFinite(publicRevenue) && publicRevenue >= 0
+      && Number.isFinite(phoneRevenue) && phoneRevenue >= 0 && Number.isFinite(estimatedRevenue)
+      && Math.abs(publicRevenue + phoneRevenue - estimatedRevenue) < 1;
+    return {
+      ...point, publicRevenue, phoneRevenue, revenueBreakdownAvailable,
+      reservationRate: point.partial || point.inventoryConflict || (Object.hasOwn(point, "reservationRate") && point.reservationRate === null)
+        ? NaN : adminDbChartRate(point.reservationRate ?? point.salesSignal?.lodging?.averageRate ?? point.rate),
+      estimatedRevenue, synthetic: false, decisionEligible: true
+    };
+  }).filter((point) => Number.isFinite(point.reservationRate) || Number.isFinite(point.estimatedRevenue));
   const latest = observed.at(-1) || {};
   const latestRate = adminDbChartRate(latest.reservationRate ?? row.metrics?.rate);
   const latestRevenue = optionalNumber(latest.estimatedRevenue ?? row.metrics?.revenue);
@@ -23232,6 +23244,11 @@ function adminDbPerformanceChartHtml(row = {}, model = {}) {
   const plotWidth = width - left - right;
   const plotHeight = height - top - bottom;
   const hasRevenueSeries = model.revenueMode === "currency";
+  const splitRevenue = point => point.revenueBreakdownAvailable === true
+    && Number.isFinite(point.publicRevenue) && Number.isFinite(point.phoneRevenue)
+    && Math.abs(point.publicRevenue + point.phoneRevenue - point.estimatedRevenue) < 1;
+  const hasSplitRevenue = hasRevenueSeries && points.some(splitRevenue);
+  const latestSplit = splitRevenue(points.at(-1) || {}) ? points.at(-1) : null;
   const values = points.map((point) => model.revenueMode === "currency" ? optionalNumber(point.estimatedRevenue) : optionalNumber(point.momentumIndex)).map((value) => Number.isFinite(value) ? Math.max(0, value) : 0);
   const maxValue = Math.max(1, ...values);
   const step = plotWidth / Math.max(1, points.length);
@@ -23250,9 +23267,20 @@ function adminDbPerformanceChartHtml(row = {}, model = {}) {
     const barHeight = (value / maxValue) * plotHeight;
     const labelVisible = points.length <= 8 || index === 0 || index === points.length - 1;
     const evidenceLabel = point.actualAnchor ? "실제 추정 기준점" : point.synthetic ? "합성 보조" : "관측 기반 추정";
-    return `<g><title>${escapeHtml(`${point.collectedAt || point.label || `관측 ${index + 1}`} · ${model.revenueMode === "currency" && Number.isFinite(point.estimatedRevenue) ? fmtWon(point.estimatedRevenue) : `모멘텀 ${fmtNumber(point.momentumIndex || 0)}`} · 예약율 ${Number.isFinite(point.reservationRate) ? fmtRate(point.reservationRate) : "-"} · ${evidenceLabel}`)}</title><rect class="admin-company-chart-performance-bar ${point.synthetic && !point.actualAnchor ? "is-synthetic" : "is-observed"}" x="${(x - barWidth / 2).toFixed(1)}" y="${(top + plotHeight - barHeight).toFixed(1)}" width="${barWidth.toFixed(1)}" height="${Math.max(1, barHeight).toFixed(1)}" rx="5"></rect>${labelVisible ? `<text class="admin-company-chart-x-label" x="${x.toFixed(1)}" y="${height - 13}" text-anchor="middle">${escapeHtml(adminDbChartDateLabel(point.collectedAt || point.label || "", index))}</text>` : ""}</g>`;
+    const isSplit = splitRevenue(point);
+    const publicHeight = isSplit ? point.publicRevenue / maxValue * plotHeight : 0;
+    const phoneHeight = isSplit ? point.phoneRevenue / maxValue * plotHeight : 0;
+    const rectangles = isSplit
+      ? `${publicHeight > 0 ? `<rect class="admin-company-chart-revenue-bar booking-public" x="${(x - barWidth / 2).toFixed(1)}" y="${(top + plotHeight - publicHeight).toFixed(1)}" width="${barWidth.toFixed(1)}" height="${publicHeight.toFixed(1)}"></rect>` : ""}${phoneHeight > 0 ? `<rect class="admin-company-chart-revenue-bar booking-blocked" x="${(x - barWidth / 2).toFixed(1)}" y="${(top + plotHeight - publicHeight - phoneHeight).toFixed(1)}" width="${barWidth.toFixed(1)}" height="${phoneHeight.toFixed(1)}"></rect>` : ""}`
+      : `<rect class="admin-company-chart-revenue-bar booking-unavailable" x="${(x - barWidth / 2).toFixed(1)}" y="${(top + plotHeight - barHeight).toFixed(1)}" width="${barWidth.toFixed(1)}" height="${Math.max(0, barHeight).toFixed(1)}" rx="5"></rect>`;
+    const breakdownLabel = isSplit ? `공개예약 ${fmtWon(point.publicRevenue)} · 방막기 ${fmtWon(point.phoneRevenue)}` : "매출 구분자료 없음";
+    return `<g><title>${escapeHtml(`${point.collectedAt || point.label || `관측 ${index + 1}`} · ${fmtWon(point.estimatedRevenue)} · ${breakdownLabel} · 예약율 ${Number.isFinite(point.reservationRate) ? fmtRate(point.reservationRate) : "미확인"} · ${evidenceLabel}`)}</title>${rectangles}${labelVisible ? `<text class="admin-company-chart-x-label" x="${x.toFixed(1)}" y="${height - 13}" text-anchor="middle">${escapeHtml(adminDbChartDateLabel(point.collectedAt || point.label || "", index))}</text>` : ""}</g>`;
   }).join("") : "";
-  const ratePoints = coordinates.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const rateSegments = coordinates.slice(1).map((current, index) => {
+    const previous = coordinates[index];
+    return Number.isFinite(previous.point.reservationRate) && Number.isFinite(current.point.reservationRate)
+      ? `<line class="admin-company-chart-rate-line is-observed" x1="${previous.x.toFixed(1)}" y1="${previous.y.toFixed(1)}" x2="${current.x.toFixed(1)}" y2="${current.y.toFixed(1)}"></line>` : "";
+  }).join("");
   return `
     <figure class="admin-company-chart-panel admin-company-performance-chart" data-ui-surface="soft" data-evidence-class="${escapeHtml(model.evidenceClass || "derived")}">
       <div class="admin-company-chart-heading">
@@ -23263,9 +23291,11 @@ function adminDbPerformanceChartHtml(row = {}, model = {}) {
         <title id="${chartId}Title">${hasRevenueSeries ? "예상매출과 추정 예약율" : "추정 예약율 관측"} 그래프</title>
         <desc id="${chartId}Desc">${escapeHtml(model.disclosure || "누적 판매 흐름을 표시합니다.")}</desc>
         ${grid}${bars}
-        ${coordinates.length >= 2 ? `<polyline class="admin-company-chart-rate-line is-observed" points="${ratePoints}"></polyline>` : ""}
-        ${coordinates.map(({ point, x, y }) => `<circle class="admin-company-chart-rate-point ${point.synthetic && !point.actualAnchor ? "is-synthetic" : "is-observed"}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4"></circle>`).join("")}
+        ${rateSegments}
+        ${coordinates.filter(({ point }) => Number.isFinite(point.reservationRate)).map(({ point, x, y }) => `<circle class="admin-company-chart-rate-point ${point.synthetic && !point.actualAnchor ? "is-synthetic" : "is-observed"}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4"></circle>`).join("")}
       </svg>
+      ${hasRevenueSeries ? `<div class="booking-evidence-legend" aria-label="예상매출 구성 범례">${hasSplitRevenue ? `<span class="booking-public"><i aria-hidden="true"></i>공개예약</span><span class="booking-blocked"><i aria-hidden="true"></i>방막기 추정</span>` : ""}${points.some(point => !splitRevenue(point)) ? `<span class="booking-unavailable"><i aria-hidden="true"></i>합계 · 구분자료 없음</span>` : ""}</div>` : ""}
+      ${latestSplit ? `<div class="booking-evidence-chips admin-company-revenue-components" aria-label="최근 관측 매출 구성"><span class="booking-evidence-chip booking-public">공개예약 ${escapeHtml(fmtWon(latestSplit.publicRevenue))}</span><span class="booking-evidence-chip booking-blocked">방막기 ${escapeHtml(fmtWon(latestSplit.phoneRevenue))}</span></div>` : ""}
       <figcaption>${escapeHtml(model.disclosure || "")}</figcaption>
     </figure>
   `;
@@ -24543,6 +24573,7 @@ function adminDbReferenceCurrentSection(row = {}, model = {}) {
         </div>
         ${adminDbReferencePeriodRateChartHtml(row, currentRows, currentPeriod)}
       </div>
+      ${history.current.phoneBookings !== undefined && history.current.phoneBookings !== null ? sheetBookingRevenueBreakdown(history.current, observedDays > 0) : ""}
       <p class="admin-reference-footnote">예약율과 예상매출은 네이버 공개 가격·재고 관측 기반 추정값입니다. 미수집 날짜는 0으로 계산하지 않습니다.</p>
     </section>
   `;

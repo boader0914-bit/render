@@ -336,6 +336,58 @@ for (const [label, foreground, background, minimum] of contrastChecks) {
   assert(ratio >= minimum, `${label} contrast ${ratio.toFixed(2)} below ${minimum}`, failures);
 }
 
+// Read the actual booking palette and the later canonical theme together. A
+// token-only preview cannot catch admin-theme.css overriding every fill green.
+const bookingPalette = styles.slice(styles.indexOf("/* Booking evidence palette:"), styles.indexOf("/* End booking evidence palette. */"));
+const bookingContrastResults = [];
+function mixedHex(foreground, background, ratio) {
+  const fg = hexToRgb(foreground);
+  const bg = hexToRgb(background);
+  if (!fg || !bg) return "";
+  return `#${["r", "g", "b"].map((key) => Math.round(fg[key] * ratio + bg[key] * (1 - ratio)).toString(16).padStart(2, "0")).join("")}`;
+}
+for (const mode of ["light", "dark"]) {
+  const modeBody = bookingPalette.match(new RegExp(`html\\[data-theme-resolved="${mode}"\\]\\s*\\{([^}]+)\\}`))?.[1] || "";
+  const themeBody = themeStyles.match(new RegExp(`html\\[data-theme-resolved="${mode}"\\]\\s*\\{([^}]+)\\}`))?.[1] || "";
+  const token = (body, key) => body.match(new RegExp(`--${key}:\\s*(#[0-9a-f]{6})\\s*;`, "i"))?.[1] || "";
+  const card = token(themeBody, "surface-card");
+  const track = mixedHex(token(themeBody, "accent"), card, 0.16);
+  for (const kind of ["public", "blocked"]) {
+    const text = token(modeBody, `booking-${kind}-color`);
+    const fill = token(modeBody, `booking-${kind}-fill`);
+    const chip = mixedHex(fill, card, 0.09);
+    assert(Boolean(text && fill), `${mode} ${kind} booking colors require dedicated theme tokens`, failures);
+    for (const [label, foreground, background, minimum] of [
+      ["card text", text, card, 4.5], ["chip text", text, chip, 4.5],
+      ["card fill", fill, card, 3], ["track fill", fill, track, 3]
+    ]) {
+      const ratio = contrastRatio(foreground, background);
+      bookingContrastResults.push(ratio);
+      assert(ratio >= minimum, `${mode} ${kind} ${label} contrast ${ratio.toFixed(2)} below ${minimum}`, failures);
+    }
+    const rgb = hexToRgb(fill);
+    assert(rgb && (kind === "public" ? rgb.g > rgb.r && rgb.g > rgb.b : rgb.r > rgb.g && rgb.b > rgb.g),
+      `${mode} ${kind} booking fill must remain ${kind === "public" ? "green" : "purple"}`, failures);
+  }
+}
+assert(
+  themeStyles.includes(".mini-bars .bar-stack:not(.booking-evidence-split) .bar-fill")
+    && themeStyles.includes(".sheet-date-bar:not(.booking-evidence-split) > span i")
+    && themeStyles.includes(".sheet-panel .date-row .progress:not(.missing):not(.booking-evidence-progress) > span")
+    && !themeStyles.includes(".mini-bars .bar-fill,")
+    && !themeStyles.includes(".sheet-date-bar > span i,")
+    && !themeStyles.includes(".sheet-panel .date-row .progress:not(.missing) > span\n")
+    && styles.includes(".booking-evidence-progress > .booking-public { background: var(--booking-public-fill)")
+    && styles.includes(".booking-evidence-progress > .booking-blocked { background: var(--booking-blocked-fill)")
+    && themeStyles.includes(".company-card, .validation-card, .sheet-booking-bars) :is(p, small, span, em):where(:not(.booking-public, .booking-blocked,")
+    && themeStyles.includes(".sheet-panel, .drawer-panel, .history-lab) :is(p, small, span, em, li):where(:not(.platform-dot, .booking-public, .booking-blocked,")
+    && styles.includes(".admin-company-chart-revenue-bar.booking-public { fill: var(--booking-public-fill)")
+    && styles.includes(".admin-company-chart-revenue-bar.booking-blocked { fill: var(--booking-blocked-fill)")
+    && styles.includes(".admin-company-chart-revenue-bar.booking-unavailable { fill: var(--text-tertiary)")
+    && styles.includes("height: var(--public-share, 0%); background: var(--booking-public-fill)"),
+  "canonical important green fills must exclude public/blocked split bars across both loaded stylesheets", failures
+);
+
 assert(
   /database:\s*\{[\s\S]*?adminPanelSection:\s*"database"/.test(app),
   "mobile database navigation must open the database panel",
@@ -3011,4 +3063,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`Surface contrast checks passed (${lightSelectors.length} light, ${darkSelectors.length} dark selectors)`);
+console.log(`Surface contrast checks passed (${lightSelectors.length} light, ${darkSelectors.length} dark selectors; ${bookingContrastResults.length} booking color checks, minimum ${Math.min(...bookingContrastResults).toFixed(2)}:1)`);

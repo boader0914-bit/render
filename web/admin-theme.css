@@ -858,7 +858,7 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   .admin-security-grid > article,
   .location-score-component-grid > article,
   .location-score-validation-grid > article
-) :is(p, small, span, em, li) {
+) :is(p, small, span, em, li):where(:not(.booking-public, .booking-blocked, .booking-blocked-revenue, .booking-blocked-history, .booking-public > span, .booking-blocked > span)) {
   color: var(--text-secondary) !important;
   text-shadow: none !important;
 }
@@ -869,7 +869,7 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.company-card,
   text-shadow: none !important;
 }
 
-html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.company-card, .validation-card, .sheet-booking-bars) :is(p, small, span, em) {
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.company-card, .validation-card, .sheet-booking-bars) :is(p, small, span, em):where(:not(.booking-public, .booking-blocked, .booking-blocked-revenue, .booking-blocked-history, .booking-public > span, .booking-blocked > span)) {
   color: var(--text-secondary) !important;
   text-shadow: none !important;
 }
@@ -880,7 +880,7 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.sheet-panel, 
   text-shadow: none !important;
 }
 
-html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.sheet-panel, .drawer-panel, .history-lab) :is(p, small, span, em, li):where(:not(.platform-dot)) {
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.sheet-panel, .drawer-panel, .history-lab) :is(p, small, span, em, li):where(:not(.platform-dot, .booking-public, .booking-blocked, .booking-blocked-revenue, .booking-blocked-history, .booking-public > span, .booking-blocked > span)) {
   color: var(--text-secondary) !important;
   text-shadow: none !important;
 }
@@ -1106,7 +1106,7 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .run-result-receip
   color: var(--danger-strong) !important;
 }
 
-/* Sales use one green fill at every rate; missing observations stay unfilled. */
+/* Legacy sales use one green fill; evidence splits retain public/block colors. */
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sheet-booking-bars .sheet-date-bar > em {
   color: var(--text-secondary) !important;
 }
@@ -1127,14 +1127,14 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
 }
 
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
-  .mini-bars .bar-fill,
+  .mini-bars .bar-stack:not(.booking-evidence-split) .bar-fill,
   .weekday-pressure em,
-  .sheet-date-bar > span i,
+  .sheet-date-bar:not(.booking-evidence-split) > span i,
   .sheet-weekday-bars i,
   .history-lead-chart i,
   .history-timeline i,
   .history-day-bars em,
-  .sheet-panel .date-row .progress:not(.missing) > span
+  .sheet-panel .date-row .progress:not(.missing):not(.booking-evidence-progress) > span
 ) {
   background: var(--accent) !important;
   background-image: none !important;
@@ -2315,7 +2315,7 @@ html[data-theme-resolved] body.role-admin .admin-db-review-support :is(h1, h2, h
   text-shadow: none !important;
 }
 
-html[data-theme-resolved] body.role-admin .admin-db-review-support :is(p, small, span, em, li) {
+html[data-theme-resolved] body.role-admin .admin-db-review-support :is(p, small, span, em, li):where(:not(.booking-public, .booking-blocked, .booking-blocked-revenue, .booking-blocked-history, .booking-public > span, .booking-blocked > span)) {
   color: var(--text-secondary) !important;
   text-shadow: none !important;
 }
