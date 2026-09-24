@@ -57,7 +57,10 @@ async function dispatchCollector({ broker, keyword, env, payload, context, onJob
       if (job.errorCode === "COLLECTOR_QUEUE_DEADLINE") throw workerError("COLLECTOR_QUEUE_DEADLINE");
       if (job.status === "completed" && !isCancelled()) return job;
       const cancelled = job.status === "cancelled" || isCancelled();
-      throw workerError(cancelled ? "CRAWL_CANCELLED" : safeWorkerCode(job.errorCode, "COLLECTOR_WORKER_INTERRUPTED"), cancelled);
+      const failure = workerError(cancelled ? "CRAWL_CANCELLED" : safeWorkerCode(job.errorCode, "COLLECTOR_WORKER_INTERRUPTED"), cancelled);
+      if (["file_upload", "final_validation"].includes(job.failurePhase)) failure.failurePhase = job.failurePhase;
+      if (require("./collector_worker.cjs").BROKER_FAILURE_CODES.has(job.brokerErrorCode)) failure.brokerErrorCode = job.brokerErrorCode;
+      throw failure;
     }
     if (job.status === "queued" && queueDeadline !== null && now() >= queueDeadline) {
       await broker.cancel(job.id);

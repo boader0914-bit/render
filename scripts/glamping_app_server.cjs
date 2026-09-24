@@ -14619,7 +14619,7 @@ async function appendHistoryForRun(...args) {
   return sharedWrite(() => appendHistoryForRunUnlocked(...args));
 }
 
-async function appendHistoryForRunUnlocked(runId) {
+async function appendHistoryForRunUnlocked(runId, options = {}) {
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return { appended: 0, reason: "run_not_found" };
   if (!allowsDerivedUpdates(await readManifest(dirPath))) {
@@ -14628,7 +14628,8 @@ async function appendHistoryForRunUnlocked(runId) {
   const data = await loadRun(runId, {
     skipHistory: true,
     skipTourismVisitors: true,
-    skipTourismDemandStrengthHistory: true
+    skipTourismDemandStrengthHistory: true,
+    ...(options.skipExternal ? {skipTraffic:true,skipTourismVisitorHistory:true,skipTourismResourceDemandHistory:true,skipTourismDiversityHistory:true} : {})
   });
   if (!data) return { appended: 0, reason: "run_not_found" };
   const collectedAt = data.run?.collectedAt || "";
@@ -14656,7 +14657,7 @@ async function appendHistoryForRunUnlocked(runId) {
     `${missing.map((row) => JSON.stringify(row)).join("\n")}\n`,
     "utf8"
   );
-  const result = { appended: missing.length, observationCount: observations.length, file: "history/observations.jsonl" };
+  const result = { appended: missing.length, observationCount: observations.length, file: "history/observations.jsonl", companyMaster: data.companyMaster || null };
   if (masterDbDualWriteQueue.mode === "shadow") result.evidence = evidence;
   return result;
 }
@@ -18144,6 +18145,41 @@ async function route(req, res) {
         return send(res,202,await keywordWorkerScheduler.enqueueNow({requestId:payload.requestId}));
       }
       return notFound(res);
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/collector-recover") {
+      if (!requireAdminSession(session,req,res)) return;
+      if (!/^application\/json(?:\s*;|$)/i.test(String(req.headers["content-type"] || ""))) return send(res,415,{error:"JSON 형식으로 요청해 주세요."});
+      if (req.headers.origin) {
+        let origin;try{origin=new URL(req.headers.origin);}catch{}
+        if(!origin || origin.host!==req.headers.host)return send(res,403,{error:"현재 서비스에서 다시 요청해 주세요."});
+      }
+      const payload=await parseJsonBody(req);
+      if(!payload || typeof payload!=="object" || Array.isArray(payload) || !payload.expected || typeof payload.expected!=="object" || Array.isArray(payload.expected) || payload.confirm!=="recover-retained-result"||Object.keys(payload).some(key=>!["confirm","workerKey","jobId","requestId","manifestSha256","expected"].includes(key)))return send(res,400,{error:"복구 대상과 보존 자료를 확인해 주세요."});
+      const workerKey=selectedWorkerKey(payload.workerKey);
+      if(!collectorBrokers[workerKey])return send(res,409,{error:"외부 워커의 보존 결과만 복구할 수 있습니다."});
+      await collectorBrokerReady;
+      if(Object.values(crawlLanes).some(lane=>lane.activeCrawlPromise||lane.activeCrawlJob||lane.crawlQueue.length))return send(res,409,{error:"진행 중인 수집이 있습니다."});
+      const states=await Promise.all(Object.values(collectorControllers()).map(controller=>controller.status()));
+      if(states.some(state=>state.activeJobId||state.queued||state.errorCode==="COLLECTOR_PROVIDER_BLOCKED"))return send(res,409,{error:"진행 중인 작업 또는 접근 제한 보호 상태를 확인하세요."});
+      const request=await collectorRequests.get(payload.requestId);
+      const job=await collectorBrokers[workerKey].getJob(payload.jobId);
+      if(request.workerKey!==workerKey||request.keyword!==job.keyword||job.trigger!=="manual"
+        ||Date.parse(job.createdAt)<Date.parse(request.createdAt)||Date.parse(job.finishedAt)>Date.parse(request.finishedAt)+1000
+        ||!(request.status==="failed"&&request.errorCode==="COLLECTOR_UPLOAD_FAILED"||request.recovery?.jobId===job.id))return send(res,409,{error:"실패 작업과 요청 기록이 일치하지 않습니다."});
+      const originalScope=await collectionReuse.recoveryScope({keyword:job.keyword,workerKey,createdAt:request.createdAt,jobCreatedAt:job.createdAt});
+      if(JSON.stringify(originalScope)!==JSON.stringify(require("./collection_reuse.cjs").scope(payload.expected)))return send(res,409,{error:"복구 조건이 원 수집 조건과 다릅니다."});
+      if(fs.existsSync(COMPANY_MASTER_FILE)) {
+        const master=JSON.parse((await fsp.readFile(COMPANY_MASTER_FILE,"utf8")).replace(/^\uFEFF/,""));
+        if(!master.companies || typeof master.companies!=="object" || Array.isArray(master.companies))throw Object.assign(new Error("기존 업체 DB 구조를 확인해야 합니다."),{code:"COLLECTOR_RECOVERY_DB_INVALID",statusCode:503});
+      }
+      const result=await collectorBrokers[workerKey].recover(payload.jobId,{manifestSha256:payload.manifestSha256,expected:payload.expected});
+      const history=await appendHistoryForRun(result.runId,{skipExternal:true});
+      if(history.reason||history.companyMaster?.error||!history.companyMaster?.currentRunCompanies)throw Object.assign(new Error("보관함 복구 후 DB 반영을 확인해야 합니다."),{code:"COLLECTOR_RECOVERY_DB_PENDING",statusCode:503});
+      let masterDbSync=null;
+      if(masterDbDualWriteQueue.mode==="shadow")masterDbSync=masterDbDualWriteQueue.enqueue({type:"naver_run",runId:result.runId,runDir:result.outputDir,manifestSha256:crypto.createHash("sha256").update(await fsp.readFile(path.join(result.outputDir,"manifest.json"))).digest("hex"),startedAt:result.manifest.startedAt,endedAt:result.manifest.collectedAt,collectionSource:result.manifest.collectionSource,sourceRole:result.manifest.sourceRole,plan:payload.expected,history});
+      const receipt=await collectorRequests.recover(payload.requestId,{...result,workerKey,keyword:job.keyword});
+      return send(res,200,{ok:true,runId:result.runId,collectionQuality:result.collectionQuality,recovery:result.recovery,history,masterDbSync,request:receipt});
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/collector-reset-halt") {

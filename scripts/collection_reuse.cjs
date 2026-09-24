@@ -155,6 +155,14 @@ function createCollectionReuse({dataDir, outputsDir, now = () => new Date(), ins
       throw error;
     }
   }
-  return {run, initialize:()=>lock(initialize)};
+  async function recoveryScope({keyword,workerKey,createdAt,jobCreatedAt}) {return lock(async()=>{
+    await initialize();
+    const matches=rows.filter(row=>row.workerKey===workerKey && row.scope?.keyword===keywordKey(keyword)
+      && row.status==='failed' && row.errorCode==='COLLECTOR_UPLOAD_FAILED'
+      && Date.parse(row.createdAt)>=Date.parse(createdAt) && Date.parse(row.createdAt)<=Date.parse(jobCreatedAt));
+    if(matches.length!==1)throw problem('COLLECTION_RECOVERY_SCOPE_UNCONFIRMED','원 수집 조건을 하나로 확인하지 못했습니다.');
+    return structuredClone(matches[0].scope);
+  });}
+  return {run, recoveryScope, initialize:()=>lock(initialize)};
 }
 module.exports={createCollectionReuse,serialExecutor,dayKey,keywordKey,scope,covers};

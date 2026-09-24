@@ -322,7 +322,7 @@ function createCollectorBroker(options = {}) {
   }
   function publicJob(job) {
     const output = { id: job.id, status: job.status, keyword: job.keyword, createdAt: job.createdAt, updatedAt: job.updatedAt };
-    for (const key of ["startedAt", "finishedAt", "errorCode", "stage", "workerKey", "trigger"]) if (job[key]) output[key] = job[key];
+    for (const key of ["startedAt", "finishedAt", "errorCode", "stage", "workerKey", "trigger", "failurePhase", "brokerErrorCode", "recovery"]) if (job[key]) output[key] = clone(job[key]);
     if (job.status === "completed") Object.assign(output, { runId: job.runId, outputDir: job.outputDir, manifest: clone(job.manifest), collectionQuality: clone(job.collectionQuality) });
     return output;
   }
@@ -444,7 +444,7 @@ function createCollectorBroker(options = {}) {
     await ensureReady();
     return locked(async () => {
       await expireLeases();
-      return { configured, workerKey, halted: Boolean(state.halted), errorCode: state.halted?.code || "", activeJobId: state.jobs.find(ownsLease)?.id || null,
+      return { configured, workerKey, halted: Boolean(state.halted), errorCode: state.halted?.code || "", ...(state.halted?.failurePhase ? {failurePhase:state.halted.failurePhase} : {}), ...(state.halted?.brokerErrorCode ? {brokerErrorCode:state.halted.brokerErrorCode} : {}), activeJobId: state.jobs.find(ownsLease)?.id || null,
         queued: state.jobs.filter(job => job.status === "queued").length, workerLastSeenAt: state.workerLastSeenAt || null };
     });
   }
@@ -726,11 +726,17 @@ function createCollectorBroker(options = {}) {
       if (job.status === "cancelled" && job.leaseReleasedAt) return { ok: true };
       checkLease(job, body.workerId, body.leaseToken);
       if (job.status !== "cancelled") { job.status = "failed"; job.errorCode = errorCode(body.code); }
+      if (["file_upload", "final_validation"].includes(body.failurePhase)) job.failurePhase = body.failurePhase;
+      if (require("./collector_worker.cjs").BROKER_FAILURE_CODES?.has(body.brokerErrorCode)) job.brokerErrorCode = body.brokerErrorCode;
       job.finishedAt = job.updatedAt = job.leaseReleasedAt = iso();
       releasePrivateInput(job);
       // An explicit failed execution is never permission to start the next one.
       // This also protects failures before a complete artifact receipt exists.
       setHalt(job.errorCode);
+      if(state.halted?.code===job.errorCode) {
+        if(job.failurePhase)state.halted.failurePhase=job.failurePhase;
+        if(job.brokerErrorCode)state.halted.brokerErrorCode=job.brokerErrorCode;
+      }
       await persist();
       return { ok: true };
     });
@@ -770,7 +776,116 @@ function createCollectorBroker(options = {}) {
     }
     return true;
   }
-  return { initialize, submit, getJob, cancel, cancelQueued, status, halt, resetHalt, handleHttp };
+  // Explicit administrator recovery only. Never re-lease a failed job or issue provider requests.
+  async function recover(id, input = {}) {
+    await ensureReady();
+    return locked(async () => {
+      await expireLeases();
+      if (state.jobs.some(job => !TERMINAL.has(job.status) || ownsLease(job)) || uploading.size) throw problem("COLLECTOR_RECOVERY_BUSY");
+      const job = await jobById(id);
+      if (job.status !== "failed" || job.errorCode !== "COLLECTOR_UPLOAD_FAILED" || !job.leaseReleasedAt || job.providerBlockedAt
+        || state.halted?.code === "COLLECTOR_PROVIDER_BLOCKED") throw problem("COLLECTOR_RECOVERY_NOT_ELIGIBLE");
+      const files = descriptors(Object.values(job.uploads || {}));
+      const original = files.find(file => file.path === "manifest.json");
+      if (!original || original.sha256 !== input.manifestSha256) throw problem("COLLECTOR_RECOVERY_SOURCE_MISMATCH");
+      const base = path.join(stagingDir, id);
+      await validateFiles(base, files);
+      if (original.size > MAX_JSON_BYTES) throw problem("COLLECTOR_MANIFEST_TOO_LARGE",413);
+      const manifest = JSON.parse(await fsp.readFile(path.join(base, "manifest.json"), "utf8"));
+      const expected = cleanPayload(input.expected);
+      for (const key of ["keyword", "checkIn", "checkOut", "adults", "searchMode", "searchIntent", "searchRegion", "searchScope", "collectionMode", "collectionPurpose", "productMode", "detailRankRanges", "bookingRangeDays", "bookingRangePlaceLimit", "sourceRole", "collectionSource", "workerKey", "trigger", "scheduledCollection"]) {
+        if (expected[key] === undefined) throw problem("COLLECTOR_RECOVERY_SCOPE_REQUIRED", 400);
+      }
+      if (expected.workerKey !== job.workerKey || expected.trigger !== job.trigger || expected.keyword !== job.keyword) throw problem("COLLECTOR_SCOPE_MISMATCH", 400);
+      const normalized = clone(manifest);
+      const unique = new Map();
+      let duplicateReferences = 0;
+      for (const entry of normalized.detailJsonFiles || []) {
+        const name = relativeFile(entry.file);
+        if (unique.has(name)) {
+          const prior = unique.get(name);
+          if (["field", "placeId", "bookingBusinessId", "itemCount", "originalLength"].some(key => prior[key] !== entry[key])) throw problem("COLLECTOR_RECOVERY_REFERENCE_CONFLICT");
+          duplicateReferences++;
+        } else unique.set(name, entry);
+      }
+      if (!duplicateReferences) throw problem("COLLECTOR_RECOVERY_NO_DUPLICATES");
+      normalized.detailJsonFiles = [...unique.values()];
+      if (normalized.counts) normalized.counts.detailJsonFiles = unique.size;
+      const runId = runIdentifier(path.basename(String(manifest.outputDir || "")));
+      const scopeJob = {...job, payload: expected, env: {
+        COLLECTOR_ENGINE: job.workerKey === "scheduled" ? "archive-keyword-adapted-v2" : "current-manual-v2",
+        COLLECTOR_RUN_TOKEN: manifest.collectorRunToken
+      }};
+      if (!/^[a-p]{24}$/.test(manifest.collectorRunToken || "")) throw problem("COLLECTOR_SCOPE_MISMATCH", 400);
+      scopeCheck(normalized, scopeJob, runId, files);
+      const quality = inspectManifest(normalized, expected);
+      if (quality.status !== "complete") throw problem("COLLECTOR_RECOVERY_QUALITY_HOLD");
+      const outputDir = path.join(outputsDir, runId);
+      await checkedDirectory(outputsDir);
+      if ((await fsp.readdir(outputsDir)).some(name=>name.toLowerCase()===runId.toLowerCase() && name!==runId)) throw problem("COLLECTOR_OUTPUT_EXISTS");
+      const recoveryRoot = path.join(brokerDir, "recovery", id);
+      await checkedDirectory(recoveryRoot, true);
+      const sourceReceipt = path.join(recoveryRoot, "source.json");
+      const sourceRecord = {version:1, jobId:id, originalStatus:job.status, originalErrorCode:job.errorCode, originalFinishedAt:job.finishedAt, manifestSha256:original.sha256, files};
+      if (!await exists(sourceReceipt)) await fsp.writeFile(sourceReceipt, JSON.stringify(sourceRecord), {flag:"wx", mode:0o600});
+      else {
+        await regularFile(sourceReceipt);
+        if (await fsp.readFile(sourceReceipt,"utf8") !== JSON.stringify(sourceRecord)) throw problem("COLLECTOR_RECOVERY_SOURCE_MISMATCH");
+      }
+      let published;
+      if (await exists(outputDir)) {
+        await checkedDirectory(outputDir);
+        await regularFile(path.join(outputDir,"manifest.json"));
+        published = JSON.parse(await fsp.readFile(path.join(outputDir, "manifest.json"), "utf8"));
+        const proof = published.recovery;
+        if (proof?.jobId !== id || proof?.originalManifestSha256 !== original.sha256) throw problem("COLLECTOR_OUTPUT_EXISTS");
+        normalized.outputDir = outputDir;
+        normalized.collectionQuality = quality;
+        normalized.recovery = proof;
+        if (JSON.stringify(normalized) !== JSON.stringify(published)) throw problem("COLLECTOR_RECOVERY_SOURCE_MISMATCH");
+      } else {
+        const disk = await fsp.statfs(dataDir);
+        if (Number(disk.bavail) * Number(disk.bsize) < files.reduce((sum,file)=>sum+file.size,0) + 200*1024*1024) throw problem("COLLECTOR_DISK_LOW");
+        normalized.outputDir = outputDir;
+        normalized.collectionQuality = quality;
+        normalized.recovery = {version:1, jobId:id, recoveredAt:iso(), method:"deduplicate-detail-file-references", scopeVerification:"administrator-reviewed", originalManifestSha256:original.sha256, duplicateReferences};
+        const candidate = path.join(recoveryRoot, `candidate-${crypto.randomUUID()}`);
+        await checkedDirectory(candidate, true);
+        for (const file of files) {
+          const target = path.join(candidate, ...file.path.split("/"));
+          await checkedDirectory(path.dirname(target), true);
+          await fsp.copyFile(path.join(base, ...file.path.split("/")), target, fs.constants.COPYFILE_EXCL);
+        }
+        await atomicJson(path.join(candidate,"manifest.json"), normalized);
+        const candidateFiles = files.map(file=>({...file}));
+        const candidateManifest = candidateFiles.find(file=>file.path==="manifest.json");
+        candidateManifest.size = (await regularFile(path.join(candidate,"manifest.json"))).size;
+        candidateManifest.sha256 = await fileHash(path.join(candidate,"manifest.json"));
+        await validateFiles(candidate,candidateFiles);
+        const lockPath = path.join(outputsDir, `.collector-${runId}.lock`);
+        let publicationLock;
+        try {
+          publicationLock = await fsp.open(lockPath,"wx",0o600);
+          if (await exists(outputDir)) throw problem("COLLECTOR_OUTPUT_EXISTS");
+          await fsp.rename(candidate,outputDir);
+        } finally {
+          await publicationLock?.close().catch(()=>{});
+          if (publicationLock) await fsp.unlink(lockPath).catch(()=>{});
+        }
+        published = normalized;
+      }
+      const publishedFiles = files.map(file=>({...file}));
+      const manifestFile = publishedFiles.find(file=>file.path === "manifest.json");
+      manifestFile.size = (await regularFile(path.join(outputDir,"manifest.json"))).size;
+      manifestFile.sha256 = await fileHash(path.join(outputDir,"manifest.json"));
+      await validateFiles(outputDir,publishedFiles);
+      job.recovery = {runId, ...published.recovery};
+      if (!state.jobs.includes(job)) await atomicJson(path.join(receiptsDir,`${id}.json`),job);
+      await persist();
+      return {runId,outputDir,manifest:published,collectionQuality:quality,recovery:clone(job.recovery)};
+    });
+  }
+  return { initialize, submit, getJob, cancel, cancelQueued, status, halt, resetHalt, recover, handleHttp };
 }
 
 module.exports = { createCollectorBroker, LEASE_MS, MAX_FILE_BYTES, MAX_RUN_BYTES };

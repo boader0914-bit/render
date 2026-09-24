@@ -11,13 +11,16 @@ function publicRow(row){
  const {requestId,workerKey,trigger,keyword,status,createdAt,finishedAt,errorCode,message}=row;
  const source=row.result;
  const result=source?{runId:source.runId,collectionQuality:source.collectionQuality?{status:source.collectionQuality.status}:null,reused:source.reused===true,workerKey:source.workerKey,trigger:source.trigger}:null;
- return {requestId,workerKey,trigger,keyword,status,createdAt,finishedAt,result,errorCode,message};
+ return {requestId,workerKey,trigger,keyword,status,createdAt,finishedAt,result,errorCode,message,...(row.failurePhase?{failurePhase:row.failurePhase}:{}),...(row.brokerErrorCode?{brokerErrorCode:row.brokerErrorCode}:{}),...(row.recovery?{recovery:row.recovery}:{})};
 }
 function safeFailure(error){
  const code=/^[A-Z][A-Z0-9_]{1,100}$/.test(error?.code||'')?error.code:'COLLECTION_FAILED';
  const status=/BLOCK|CAPTCHA/.test(code)?'blocked':/CANCEL|INTERRUPT|SHUTDOWN|PAUSED/.test(code)?'interrupted':'failed';
  const known={COLLECTION_SCOPE_BUSY:'같은 키워드의 수집이 진행 중입니다. 완료 후 범위를 확인하세요.',COLLECTION_SCOPE_REVIEW:'오늘 자료와 요청 범위가 다릅니다. 재수집 사유를 확인하세요.',COLLECTION_REVIEW_REQUIRED:'오늘 미완료 기록이 있습니다. 기록과 재수집 사유를 확인하세요.'};
- return {status,errorCode:code,message:known[code]||(status==='blocked'?'접근 제한으로 중단했습니다. 정상 자료로 반영하지 않았습니다.':status==='interrupted'?'수집이 중단되었습니다. 자동으로 다시 실행하지 않습니다.':'수집을 완료하지 못했습니다. 워커 상태와 실행 기록을 확인하세요.')};
+ const diagnostics={};
+ if(['file_upload','final_validation'].includes(error?.failurePhase)) diagnostics.failurePhase=error.failurePhase;
+ if(require('./collector_worker.cjs').BROKER_FAILURE_CODES.has(error?.brokerErrorCode)) diagnostics.brokerErrorCode=error.brokerErrorCode;
+ return {status,errorCode:code,...diagnostics,message:known[code]||(diagnostics.failurePhase==='final_validation'?'수집 결과의 최종 저장 검증에 실패했습니다. 보존 자료와 상세 오류를 확인하세요.':status==='blocked'?'접근 제한으로 중단했습니다. 정상 자료로 반영하지 않았습니다.':status==='interrupted'?'수집이 중단되었습니다. 자동으로 다시 실행하지 않습니다.':'수집을 완료하지 못했습니다. 워커 상태와 실행 기록을 확인하세요.')};
 }
 function createCollectorRequests({dataDir,run,preflight=async()=>{},now=()=>new Date()}){
  const dir=path.join(dataDir,'history','collector-requests');const lock=serialExecutor();const rows=new Map();let ready;
@@ -58,6 +61,15 @@ function createCollectorRequests({dataDir,run,preflight=async()=>{},now=()=>new 
  });if(accepted.start)setImmediate(()=>execute(accepted.row,payload));return publicRow(accepted.row);}
  async function get(id){await initialize();if(!ID.test(id||'')||!rows.has(id))throw fault('COLLECTION_REQUEST_NOT_FOUND','수집 요청을 찾지 못했습니다.',404);return publicRow(rows.get(id));}
  async function list(){await initialize();return [...rows.values()].sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,50).map(publicRow);}
- return {submit,get,list};
+ async function recover(id,value){return lock(async()=>{
+  await initialize();const row=rows.get(id);
+  if(!row)throw fault('COLLECTION_REQUEST_NOT_FOUND','수집 요청을 찾지 못했습니다.',404);
+  if(value?.collectionQuality?.status!=='complete'||!value.runId||value.workerKey!==row.workerKey||value.keyword!==row.keyword||!value.recovery?.jobId)throw fault('COLLECTION_RECOVERY_MISMATCH','복구 결과의 조건을 확인하세요.');
+  if(row.status==='complete'&&row.recovery?.jobId===value.recovery.jobId&&row.result?.runId===value.runId)return publicRow(row);
+  if(row.status!=='failed'||row.errorCode!=='COLLECTOR_UPLOAD_FAILED')throw fault('COLLECTION_RECOVERY_NOT_ELIGIBLE','복구 가능한 실패 요청이 아닙니다.');
+  const next={...row,status:'complete',errorCode:null,message:'보존된 수집 결과를 검증해 복구했습니다.',result:{runId:value.runId,collectionQuality:{status:'complete'},workerKey:row.workerKey,trigger:row.trigger,reused:false},recovery:{jobId:value.recovery.jobId,recoveredAt:stamp(),originalStatus:row.status,originalErrorCode:row.errorCode,originalFinishedAt:row.finishedAt}};
+  await write(next);Object.assign(row,next);return publicRow(row);
+ });}
+ return {submit,get,list,recover};
 }
 module.exports={createCollectorRequests};

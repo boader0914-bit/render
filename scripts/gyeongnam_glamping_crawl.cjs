@@ -807,6 +807,7 @@ const DETAIL_JSON_DIR_NAME = "details";
 const DETAIL_JSON_INLINE_LIMIT = 28000;
 const XLSX_CELL_TEXT_LIMIT = 32000;
 const detailJsonFiles = [];
+const detailJsonFileWrites = new Map();
 const REGIONAL_LIMIT = Number(process.env.REGIONAL_LIMIT || 10);
 const REGIONAL_SEARCH_CONCURRENCY = boundedInteger(process.env.REGIONAL_SEARCH_CONCURRENCY, 4, 1, 8);
 const NAVER_BOOKING_STOCK_LIMIT = boundedInteger(
@@ -2131,18 +2132,44 @@ async function jsonCell(value, meta = {}) {
   const jsonText = JSON.stringify(value);
   if (jsonText.length <= DETAIL_JSON_INLINE_LIMIT) return jsonText;
   const relativePath = detailJsonRelativePath(meta, jsonText);
-  const filePath = path.join(OUTPUT_DIR, ...relativePath.split("/"));
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, JSON.stringify(value, null, 2), "utf8");
-  detailJsonFiles.push({
-    field: meta.field || "",
-    name: meta.name || "",
-    placeId: meta.placeId || "",
-    bookingBusinessId: meta.bookingBusinessId || "",
-    file: relativePath,
-    itemCount: Array.isArray(value) ? value.length : 1,
-    originalLength: jsonText.length
-  });
+  const fingerprint = crypto.createHash("sha256").update(JSON.stringify([
+    meta.field || "detail", String(meta.placeId || meta.bookingBusinessId || meta.name || "item"), jsonText
+  ])).digest("hex");
+  let registered = detailJsonFileWrites.get(relativePath);
+  if (registered && registered.fingerprint !== fingerprint) {
+    const error = new Error("DETAIL_JSON_PATH_CONFLICT");
+    error.code = "DETAIL_JSON_PATH_CONFLICT";
+    throw error;
+  }
+  if (!registered) {
+    const filePath = path.join(OUTPUT_DIR, ...relativePath.split("/"));
+    const fileText = JSON.stringify(JSON.parse(jsonText), null, 2);
+    const detailFile = {
+      field: meta.field || "",
+      name: meta.name || "",
+      placeId: meta.placeId || "",
+      bookingBusinessId: meta.bookingBusinessId || "",
+      file: relativePath,
+      itemCount: Array.isArray(value) ? value.length : 1,
+      originalLength: jsonText.length
+    };
+    // Overall, advertisement and regional rows may share the same detail. Keep
+    // their cell links while registering the physical file only once. Register
+    // its pending write before yielding so concurrent rows reuse it as well.
+    registered = { fingerprint, write: null };
+    detailJsonFileWrites.set(relativePath, registered);
+    registered.write = (async () => {
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, fileText, "utf8");
+      detailJsonFiles.push(detailFile);
+    })();
+  }
+  try {
+    await registered.write;
+  } catch (error) {
+    if (detailJsonFileWrites.get(relativePath) === registered) detailJsonFileWrites.delete(relativePath);
+    throw error;
+  }
   return `@json-file:${relativePath}`;
 }
 

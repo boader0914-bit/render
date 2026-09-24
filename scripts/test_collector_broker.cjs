@@ -83,6 +83,30 @@ async function finish(broker, lease, bundle, runId = RUN) {
   return request(broker, "POST", `/api/collector-worker/jobs/${lease.id}/complete`, { ...identity(lease), runId, files: bundle.files });
 }
 
+async function failedRecoverySource(broker, overrides = {}) {
+  const expected = { keyword: "가평 풀빌라", checkIn: "2026-09-22", checkOut: "2026-10-22", adults: 2,
+    searchMode: "keyword", searchIntent: "lodging", searchRegion: "", searchScope: "nationwide",
+    collectionMode: "precision", collectionPurpose: "revenue_detail", productMode: "all", detailRankRanges: "1-20",
+    bookingRangeDays: 31, bookingRangePlaceLimit: 0, sourceRole: "admin", collectionSource: "admin_search",
+    workerKey: "manual", trigger: "manual", scheduledCollection: false };
+  const input = jobInput({ payload: expected, env: { ...jobInput().env, ADULTS: "2", SEARCH_MODE: "keyword", SEARCH_INTENT: "lodging",
+    SEARCH_REGION: "", SEARCH_SCOPE: "nationwide", BOOKING_RANGE_PLACE_LIMIT: "0", SOURCE_ROLE: "admin", COLLECTION_SOURCE: "admin_search", SCHEDULED_COLLECTION: "0" } });
+  const lease = await claimed(broker, input);
+  const runId = `gapyeong_manual_${lease.env.COLLECTOR_RUN_TOKEN}_glamping_20260922_200000`;
+  const reference = { file: "details/items.json", field: "naver_booking_schedules", placeId: "123", bookingBusinessId: "456", itemCount: 1, originalLength: 45 };
+  const bundle = artifacts({ ...expected, outputDir: `/worker/outputs/${runId}`, jobId: lease.id,
+    collectorEngine: "current-manual-v2", collectorRunToken: lease.env.COLLECTOR_RUN_TOKEN,
+    collectionProfileFlags: { collectBookingStock: true },
+    detailJsonFiles: [{ ...reference }, { ...reference }],
+    counts: { ...artifacts().manifest.counts, naverBookingStockEligible: 2, detailJsonFiles: 2 }, ...overrides });
+  await uploadArtifacts(broker, lease, bundle);
+  assert.equal((await finish(broker, lease, bundle, runId)).body.error, "COLLECTOR_DUPLICATE_PATH");
+  const failed = await request(broker, "POST", `/api/collector-worker/jobs/${lease.id}/fail`, { ...identity(lease), code: "COLLECTOR_UPLOAD_FAILED",
+    failurePhase: "final_validation", brokerErrorCode: "COLLECTOR_DUPLICATE_PATH" });
+  assert.equal(failed.status, 200);
+  return { lease, runId, bundle, input, recoveryInput: { manifestSha256: sha(bundle.contents["manifest.json"]), expected } };
+}
+
 test("disabled and invalid authentication do not expose work", () => fixture(async ({ broker, options }) => {
   const disabled = createCollectorBroker({ ...options, token: "short" });
   assert.equal((await request(disabled, "POST", "/api/collector-worker/claim", {})).status, 404);
@@ -462,6 +486,137 @@ test("claim atomically expires scheduled queued jobs at deadline while a leased 
   assert.equal((await broker.getJob(live.id)).status, "leased");
   assert.equal((await request(broker, "POST", `/api/collector-worker/jobs/${live.id}/heartbeat`, identity(live))).body.cancelled, false);
 }));
+
+test("explicit recovery publishes verified files once while retaining the original failure and staging bytes", () => fixture(async ({ broker, dataDir, outputsDir, options, advance }) => {
+  const source = await failedRecoverySource(broker);
+  const originalJob = await broker.getJob(source.lease.id);
+  const originalHalt = await broker.status();
+  const recovered = await broker.recover(source.lease.id, source.recoveryInput);
+  assert.equal(recovered.runId, source.runId);
+  assert.equal(recovered.collectionQuality.status, "complete");
+  assert.equal(recovered.manifest.detailJsonFiles.length, 1);
+  assert.equal(recovered.manifest.counts.detailJsonFiles, 1);
+  assert.equal(recovered.recovery.duplicateReferences, 1);
+  assert.equal(recovered.recovery.originalManifestSha256, source.recoveryInput.manifestSha256);
+  assert.equal(recovered.outputDir, path.join(outputsDir, source.runId));
+  assert.deepEqual(recovered.manifest.fileRoles, source.bundle.manifest.fileRoles);
+  const staging = path.join(dataDir, "collector", "staging", source.lease.id);
+  for (const [name, original] of Object.entries(source.bundle.contents)) {
+    assert.deepEqual(await fs.readFile(path.join(staging, name)), original);
+    if (name !== "manifest.json") assert.equal(sha(await fs.readFile(path.join(recovered.outputDir, name))), sha(original));
+  }
+  const publishedManifest = await fs.readFile(path.join(recovered.outputDir, "manifest.json"));
+  assert.deepEqual(JSON.parse(publishedManifest), recovered.manifest);
+  const current = await broker.getJob(source.lease.id);
+  assert.deepEqual(Object.fromEntries(Object.entries(current).filter(([key]) => key !== "recovery")), originalJob);
+  assert.deepEqual(await broker.status(), originalHalt);
+  assert.equal(current.status, "failed"); assert.equal(current.errorCode, "COLLECTOR_UPLOAD_FAILED");
+  const receipt = JSON.parse(await fs.readFile(path.join(dataDir, "collector", "recovery", source.lease.id, "source.json")));
+  assert.equal(receipt.originalStatus, "failed"); assert.equal(receipt.originalFinishedAt, originalJob.finishedAt);
+  assert.equal(receipt.manifestSha256, source.recoveryInput.manifestSha256);
+  assert.deepEqual(receipt.files.map(file => [file.path, file.sha256]).sort(), source.bundle.files.map(file => [file.path, file.sha256]).sort());
+  advance(1000);
+  assert.deepEqual(await broker.recover(source.lease.id, source.recoveryInput), recovered);
+  const restarted = createCollectorBroker(options);
+  await restarted.initialize();
+  assert.deepEqual(await restarted.recover(source.lease.id, source.recoveryInput), recovered);
+  assert.deepEqual(await fs.readFile(path.join(recovered.outputDir, "manifest.json")), publishedManifest);
+  assert.deepEqual(await fs.readdir(outputsDir), [source.runId]);
+  assert.equal((await restarted.getJob(source.lease.id)).status, "failed");
+  assert.equal((await restarted.status()).halted, true);
+}, { workerKey: "manual" }));
+
+test("recovery refuses a wrong source hash or changed uploaded content before publication", async () => {
+  for (const variant of ["manifest-hash", "content-hash"]) {
+    await fixture(async ({ broker, dataDir, outputsDir }) => {
+      const source = await failedRecoverySource(broker);
+      const before = await broker.getJob(source.lease.id);
+      if (variant === "manifest-hash") source.recoveryInput.manifestSha256 = sha("another manifest");
+      else await fs.writeFile(path.join(dataDir, "collector", "staging", source.lease.id, "details", "items.json"),
+        Buffer.alloc(source.bundle.contents["details/items.json"].length, "x"));
+      await assert.rejects(broker.recover(source.lease.id, source.recoveryInput), {
+        code: variant === "manifest-hash" ? "COLLECTOR_RECOVERY_SOURCE_MISMATCH" : "COLLECTOR_FILE_HASH_MISMATCH"
+      });
+      assert.deepEqual(await fs.readdir(outputsDir), []);
+      assert.deepEqual(await broker.getJob(source.lease.id), before);
+    }, { workerKey: "manual" });
+  }
+});
+
+test("recovery refuses blocked or partial collection quality even when file hashes match", async () => {
+  for (const overrides of [
+    { naverBookingBlockedStatus: 429 },
+    { counts: { ...artifacts().manifest.counts, naverBookingStockEligible: 2, detailJsonFiles: 2, naverScheduleSucceeded: 61, naverScheduleFailed: 1 } }
+  ]) {
+    await fixture(async ({ broker, outputsDir }) => {
+      const source = await failedRecoverySource(broker, overrides);
+      await assert.rejects(broker.recover(source.lease.id, source.recoveryInput), { code: "COLLECTOR_RECOVERY_QUALITY_HOLD" });
+      assert.deepEqual(await fs.readdir(outputsDir), []);
+      assert.equal((await broker.getJob(source.lease.id)).recovery, undefined);
+    }, { workerKey: "manual" });
+  }
+});
+
+test("recovery requires the full reviewed scope and rejects a mismatched collection interval", async () => {
+  for (const variant of ["missing", "mismatch"]) {
+    await fixture(async ({ broker, outputsDir }) => {
+      const source = await failedRecoverySource(broker);
+      if (variant === "missing") delete source.recoveryInput.expected.adults;
+      else source.recoveryInput.expected.bookingRangeDays = 7;
+      await assert.rejects(broker.recover(source.lease.id, source.recoveryInput), {
+        code: variant === "missing" ? "COLLECTOR_RECOVERY_SCOPE_REQUIRED" : "COLLECTOR_SCOPE_MISMATCH"
+      });
+      assert.deepEqual(await fs.readdir(outputsDir), []);
+    }, { workerKey: "manual" });
+  }
+});
+
+test("conflicting duplicate detail descriptors are never silently normalized", () => fixture(async ({ broker, outputsDir }) => {
+  const source = await failedRecoverySource(broker, { detailJsonFiles: [
+    { file: "details/items.json", placeId: "123", itemCount: 1 },
+    { file: "details/items.json", placeId: "123", itemCount: 2 }
+  ] });
+  await assert.rejects(broker.recover(source.lease.id, source.recoveryInput), { code: "COLLECTOR_RECOVERY_REFERENCE_CONFLICT" });
+  assert.deepEqual(await fs.readdir(outputsDir), []);
+}, { workerKey: "manual" }));
+
+test("recovery does not run alongside an active job or clear provider protection", async () => {
+  for (const variant of ["active", "provider-protection"]) {
+    await fixture(async ({ broker, outputsDir }) => {
+      const source = await failedRecoverySource(broker);
+      let active;
+      if (variant === "active") {
+        await broker.resetHalt();
+        active = await claimed(broker, source.input);
+      } else await broker.halt("COLLECTOR_PROVIDER_BLOCKED");
+      await assert.rejects(broker.recover(source.lease.id, source.recoveryInput), {
+        code: variant === "active" ? "COLLECTOR_RECOVERY_BUSY" : "COLLECTOR_RECOVERY_NOT_ELIGIBLE"
+      });
+      assert.deepEqual(await fs.readdir(outputsDir), []);
+      if (active) assert.equal((await broker.status()).activeJobId, active.id);
+      else assert.equal((await broker.status()).errorCode, "COLLECTOR_PROVIDER_BLOCKED");
+    }, { workerKey: "manual" });
+  }
+});
+
+test("fail diagnostics retain only allowed phase and broker code across restart", async () => {
+  for (const valid of [true, false]) {
+    await fixture(async ({ broker, options, dataDir }) => {
+      const lease = await claimed(broker);
+      const secret = "DO_NOT_STORE_FAILURE_SECRET";
+      const response = await request(broker, "POST", `/api/collector-worker/jobs/${lease.id}/fail`, { ...identity(lease), code: "COLLECTOR_UPLOAD_FAILED",
+        failurePhase: valid ? "final_validation" : `${secret}/private/path`,
+        brokerErrorCode: valid ? "COLLECTOR_DUPLICATE_PATH" : `COLLECTOR_${secret}`, raw: secret });
+      assert.equal(response.status, 200);
+      const restarted = createCollectorBroker(options);
+      await restarted.initialize();
+      const receipt = await restarted.getJob(lease.id);
+      assert.equal(receipt.failurePhase, valid ? "final_validation" : undefined);
+      assert.equal(receipt.brokerErrorCode, valid ? "COLLECTOR_DUPLICATE_PATH" : undefined);
+      assert.equal((await fs.readFile(path.join(dataDir, "collector", "jobs.json"), "utf8")).includes(secret), false);
+    });
+  }
+});
 
 (async () => {
   for (const { name, operation } of tests) {

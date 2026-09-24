@@ -27,9 +27,23 @@ const STAGES = new Map([
 ]);
 const ID_PATTERN = /^[a-zA-Z0-9_-]{1,160}$/;
 const FAIL_CODES = new Set(["COLLECTOR_CANCELLED", "COLLECTOR_SHUTDOWN", "COLLECTOR_HEARTBEAT_FAILED", "COLLECTOR_CRAWL_FAILED", "COLLECTOR_ARTIFACT_INVALID", "COLLECTOR_UPLOAD_FAILED", "COLLECTOR_JOB_INVALID", "COLLECTOR_DISK_LOW"]);
+const BROKER_FAILURE_CODES = new Set([
+  "COLLECTOR_DUPLICATE_PATH", "COLLECTOR_FILE_SET_MISMATCH", "COLLECTOR_FILE_HASH_MISMATCH", "COLLECTOR_FILE_LENGTH_MISMATCH",
+  "COLLECTOR_INVALID_MANIFEST", "COLLECTOR_INVALID_FILES", "COLLECTOR_INVALID_FILE_DESCRIPTOR", "COLLECTOR_INVALID_FILE_HASH",
+  "COLLECTOR_INVALID_PATH", "COLLECTOR_INVALID_FILE_TYPE", "COLLECTOR_INVALID_RUN_ID", "COLLECTOR_RUN_ID_MISMATCH",
+  "COLLECTOR_SCOPE_MISMATCH", "COLLECTOR_WORKER_RECEIPT_REQUIRED", "COLLECTOR_BLOCK_RECEIPT_REQUIRED",
+  "COLLECTOR_FILE_TOO_LARGE", "COLLECTOR_RUN_TOO_LARGE", "COLLECTOR_MANIFEST_TOO_LARGE", "COLLECTOR_TOO_MANY_FILES",
+  "COLLECTOR_UPLOAD_CONFLICT", "COLLECTOR_UPLOAD_IN_PROGRESS", "COLLECTOR_COMPLETION_CONFLICT", "COLLECTOR_OUTPUT_EXISTS",
+  "COLLECTOR_UNSAFE_FILE", "COLLECTOR_UNSAFE_STORAGE", "COLLECTOR_PUBLICATION_FAILED", "COLLECTOR_PERSISTENCE_FAILED"
+]);
+const FAILURE_PHASES = new Set(["file_upload", "final_validation"]);
 
 function failure(code, status = 0) { const error = new Error(code); error.code = code; error.status = status; return error; }
 function safeCode(error, fallback) { return FAIL_CODES.has(error?.code) ? error.code : fallback; }
+function safeFailureDetails(value) {
+  if (!FAILURE_PHASES.has(value?.failurePhase)) return {};
+  return { failurePhase: value.failurePhase, ...(BROKER_FAILURE_CODES.has(value?.brokerErrorCode) ? { brokerErrorCode: value.brokerErrorCode } : {}) };
+}
 function bounded(value, fallback, min, max) {
   if (value === undefined || value === null || value === "") return fallback;
   const number = Number(value);
@@ -86,13 +100,13 @@ function sleep(ms, signal) {
   });
 }
 
-async function readResponseJson(response) {
+async function readResponseJson(response, maxBytes = 4 * 1024 * 1024) {
   const chunks = [];
   let length = 0;
   if (!response.body) throw failure("COLLECTOR_RESPONSE_INVALID");
   for await (const chunk of response.body) {
     length += chunk.length;
-    if (length > 4 * 1024 * 1024) throw failure("COLLECTOR_RESPONSE_INVALID");
+    if (length > maxBytes) throw failure("COLLECTOR_RESPONSE_INVALID");
     chunks.push(chunk);
   }
   try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw failure("COLLECTOR_RESPONSE_INVALID"); }
@@ -114,13 +128,23 @@ async function request(options, route, { method = "POST", body, file, headers = 
         body: stream || JSON.stringify(body ?? {}), ...(stream ? { duplex: "half" } : {})
       });
       if (!response.ok) {
-        await response.body?.cancel().catch(() => {});
-        throw failure("COLLECTOR_REQUEST_FAILED", response.status);
+        const error = failure("COLLECTOR_REQUEST_FAILED", response.status);
+        // Never forward the response body: it can contain credentials, paths or
+        // provider text. Only recognized broker codes from bounded JSON survive.
+        try {
+          const reply = await readResponseJson(response, 8 * 1024);
+          if (BROKER_FAILURE_CODES.has(reply?.error)) error.brokerErrorCode = reply.error;
+        } catch {}
+        throw error;
       }
       return await readResponseJson(response);
     } catch (error) {
       const retryable = !error.status || error.status === 408 || error.status === 429 || error.status >= 500;
-      if (signal?.aborted || !retryable || attempt + 1 >= attempts) throw failure("COLLECTOR_REQUEST_FAILED", error.status || 0);
+      if (signal?.aborted || !retryable || attempt + 1 >= attempts) {
+        const safeError = failure("COLLECTOR_REQUEST_FAILED", error.status || 0);
+        if (BROKER_FAILURE_CODES.has(error?.brokerErrorCode)) safeError.brokerErrorCode = error.brokerErrorCode;
+        throw safeError;
+      }
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener("abort", abort);
@@ -321,6 +345,7 @@ async function runJob(job, options) {
     }
     if (stopCode) throw failure(stopCode);
     let completionCancelled = false;
+    let failurePhase = "file_upload";
     try {
       for (const file of artifacts.files) {
         if (stopCode) throw failure(stopCode);
@@ -332,6 +357,7 @@ async function runJob(job, options) {
       }
       if (stopCode) throw failure(stopCode);
       stage = "save";
+      failurePhase = "final_validation";
       const reply = await request(options, `${jobPath}/complete`, { body: { ...credentials, runId: artifacts.runId,
         files: artifacts.files.map(({ path: filePath, size, sha256 }) => ({ path: filePath, size, sha256 })) },
         // The child has exited and all bytes are uploaded. A completion may
@@ -340,7 +366,11 @@ async function runJob(job, options) {
         signal: options.signal, attempts: options.uploadAttempts });
       if (reply?.ok !== true) throw failure("COLLECTOR_UPLOAD_FAILED");
       completionCancelled = reply.cancelled === true;
-    } catch (error) { throw failure(stopCode || safeCode(error, "COLLECTOR_UPLOAD_FAILED")); }
+    } catch (error) {
+      const transferError = failure(stopCode || safeCode(error, "COLLECTOR_UPLOAD_FAILED"));
+      if (!stopCode) Object.assign(transferError, safeFailureDetails({ failurePhase, brokerErrorCode: error?.brokerErrorCode }));
+      throw transferError;
+    }
     clearTimeout(heartbeatTimer); clearTimeout(deadlineTimer);
     await heartbeatPending;
     if (completionCancelled) {
@@ -359,14 +389,15 @@ async function runJob(job, options) {
     return { status: "completed", acknowledged: true, runId: artifacts.runId, retainedDirectory };
   } catch (error) {
     const code = stopCode || safeCode(error, "COLLECTOR_JOB_INVALID");
+    const details = stopCode ? {} : safeFailureDetails(error);
     stop(code);
     if (childDone && !childClosed) await childDone;
     let acknowledged = false;
     if (ID_PATTERN.test(job?.id || "") && typeof job?.leaseToken === "string") {
-      try { acknowledged = (await request(options, `${jobPath}/fail`, { body: { ...credentials, code }, timeoutMs: options.heartbeatTimeoutMs }))?.ok === true; } catch {}
+      try { acknowledged = (await request(options, `${jobPath}/fail`, { body: { ...credentials, code, ...details }, timeoutMs: options.heartbeatTimeoutMs }))?.ok === true; } catch {}
     }
-    options.logger({ event: "collector_job_failed", jobId: ID_PATTERN.test(job?.id || "") ? job.id : null, code, artifactsRetained: Boolean(prepared) });
-    return { status: "failed", acknowledged, code, retainedDirectory: prepared?.directory || null };
+    options.logger({ event: "collector_job_failed", jobId: ID_PATTERN.test(job?.id || "") ? job.id : null, code, ...details, artifactsRetained: Boolean(prepared) });
+    return { status: "failed", acknowledged, code, ...details, retainedDirectory: prepared?.directory || null };
   } finally {
     clearTimeout(heartbeatTimer); clearTimeout(deadlineTimer); clearTimeout(escalationTimer);
     controller.abort();
@@ -388,7 +419,7 @@ async function runWorker(options = workerOptions()) {
     const result = await runJob(reply.job, options);
     jobs++;
     if (!result.acknowledged) throw failure("COLLECTOR_TERMINAL_ACK_REQUIRED");
-    if (result.status === "failed" && result.code !== "COLLECTOR_CANCELLED") return { enabled: true, jobs, halted: true, code: result.code };
+    if (result.status === "failed" && result.code !== "COLLECTOR_CANCELLED") return { enabled: true, jobs, halted: true, code: result.code, ...safeFailureDetails(result) };
   }
   return { enabled: true, jobs, stopped: Boolean(options.signal?.aborted) };
 }
@@ -403,4 +434,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch(() => { process.stderr.write("collector_worker_stopped\n"); process.exitCode = 1; });
-module.exports = { PROTOCOL_VERSION, JOB_ENV_KEYS, workerOptions, runWorker, runJob, artifactsFor, stageReader, validateJob };
+module.exports = { PROTOCOL_VERSION, JOB_ENV_KEYS, BROKER_FAILURE_CODES, workerOptions, runWorker, runJob, artifactsFor, stageReader, validateJob };

@@ -117,3 +117,64 @@ test("operating web receipts survive restart with their actual execution role", 
   assert.equal((await restarted.submit(input)).result.workerKey,"web");
   assert.equal(reruns,0);
 });
+
+test("recovery preserves the original failure time and is idempotent across restart without recollection", async t => {
+  let clock = "2026-09-23T05:00:00Z", calls = 0;
+  const { api, dataDir } = await fixture(t, { now: () => clock, run: async () => {
+    calls++; clock = "2026-09-23T05:02:00Z";
+    throw Object.assign(new Error("private logs must not be saved"), { code: "COLLECTOR_UPLOAD_FAILED", failurePhase: "final_validation", brokerErrorCode: "COLLECTOR_DUPLICATE_PATH" });
+  } });
+  await api.submit(payload());
+  const failed = await terminal(api);
+  assert.equal(failed.status, "failed"); assert.equal(failed.errorCode, "COLLECTOR_UPLOAD_FAILED");
+  const recoveredValue = result("complete", { keyword: payload().keyword, recovery: { jobId: "collector_recovery_test" } });
+  clock = "2026-09-24T01:00:00Z";
+  const recovered = await api.recover(failed.requestId, recoveredValue);
+  assert.equal(recovered.status, "complete"); assert.equal(recovered.errorCode, null);
+  assert.equal(recovered.createdAt, failed.createdAt); assert.equal(recovered.finishedAt, failed.finishedAt);
+  assert.equal(recovered.failurePhase, "final_validation"); assert.equal(recovered.brokerErrorCode, "COLLECTOR_DUPLICATE_PATH");
+  assert.deepEqual(recovered.recovery, { jobId: "collector_recovery_test", recoveredAt: new Date(clock).toISOString(), originalStatus: "failed",
+    originalErrorCode: "COLLECTOR_UPLOAD_FAILED", originalFinishedAt: failed.finishedAt });
+  assert.deepEqual(recovered.result, { runId: recoveredValue.runId, collectionQuality: { status: "complete" }, reused: false, workerKey: "scheduled", trigger: "manual" });
+  const saved = await fs.readFile(path.join(dataDir, "history/collector-requests/request-test-0001.json"), "utf8");
+  clock = "2026-09-24T02:00:00Z";
+  assert.deepEqual(await api.recover(failed.requestId, recoveredValue), recovered);
+  assert.equal(await fs.readFile(path.join(dataDir, "history/collector-requests/request-test-0001.json"), "utf8"), saved);
+  const restarted = createCollectorRequests({ dataDir, now: () => clock, run: async () => { calls++; throw Error("must not collect"); } });
+  assert.deepEqual(await restarted.get(failed.requestId), recovered);
+  assert.deepEqual(await restarted.recover(failed.requestId, recoveredValue), recovered);
+  assert.deepEqual(await restarted.submit(payload()), recovered);
+  assert.equal(calls, 1);
+  await assert.rejects(restarted.recover(failed.requestId, { ...recoveredValue, runId: "another_run" }), { code: "COLLECTION_RECOVERY_NOT_ELIGIBLE" });
+  await assert.rejects(restarted.recover(failed.requestId, { ...recoveredValue, recovery: { jobId: "another_job" } }), { code: "COLLECTION_RECOVERY_NOT_ELIGIBLE" });
+});
+
+test("recovery rejects different worker, keyword, unverified quality and missing job without changing the failure", async t => {
+  const { api, dataDir } = await fixture(t, { run: async () => { throw Object.assign(new Error("upload failed"), { code: "COLLECTOR_UPLOAD_FAILED" }); } });
+  await api.submit(payload());
+  const failed = await terminal(api);
+  const value = result("complete", { keyword: payload().keyword, recovery: { jobId: "collector_recovery_test" } });
+  const before = await fs.readFile(path.join(dataDir, "history/collector-requests/request-test-0001.json"), "utf8");
+  for (const change of [
+    { workerKey: "manual" }, { keyword: "가평글램핑" }, { collectionQuality: { status: "partial" } },
+    { collectionQuality: { status: "blocked" } }, { collectionQuality: null }, { runId: null }, { recovery: {} }
+  ]) {
+    await assert.rejects(api.recover(failed.requestId, { ...value, ...change }), { code: "COLLECTION_RECOVERY_MISMATCH" });
+    assert.deepEqual(await api.get(failed.requestId), failed);
+  }
+  assert.equal(await fs.readFile(path.join(dataDir, "history/collector-requests/request-test-0001.json"), "utf8"), before);
+});
+
+test("only upload-failed requests are eligible for a recovered completion", async t => {
+  const { api } = await fixture(t, { run: async input => {
+    if (input.clientRequestId === "request-complete-11") return result();
+    throw Object.assign(new Error("failed"), { code: "COLLECTOR_CRAWL_FAILED" });
+  } });
+  const value = result("complete", { keyword: payload().keyword, recovery: { jobId: "collector_recovery_test" } });
+  for (const id of ["request-complete-11", "request-crawl-failed"]) {
+    await api.submit(payload(id)); const before = await terminal(api, id);
+    await assert.rejects(api.recover(id, value), { code: "COLLECTION_RECOVERY_NOT_ELIGIBLE" });
+    assert.deepEqual(await api.get(id), before);
+  }
+  await assert.rejects(api.recover("request-absent-1", value), { code: "COLLECTION_REQUEST_NOT_FOUND" });
+});

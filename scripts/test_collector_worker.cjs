@@ -174,7 +174,7 @@ test("completion cancellation acknowledgement is not reported as a completed cra
   } finally { await f.close(); }
 });
 
-test("failed upload retains local artifacts and reports only a generic failure code", async () => {
+test("failed upload retains local artifacts and reports a generic code with its upload phase", async () => {
   const f = await fixture({ upload: ({ res }) => reply(res, { ok: false }, 503) });
   try {
     const result = await runJob(baseJob(), f.options);
@@ -182,9 +182,72 @@ test("failed upload retains local artifacts and reports only a generic failure c
     assert.equal(result.acknowledged, true); assert.equal(f.state.uploads.length, 3);
     assert.equal(f.state.spawned.length, 1);
     assert.equal(f.state.failures[0].code, "COLLECTOR_UPLOAD_FAILED");
-    assert.deepEqual(Object.keys(f.state.failures[0]).sort(), ["code", "leaseToken", "workerId"]);
+    assert.equal(result.failurePhase, "file_upload");
+    assert.equal(f.state.failures[0].failurePhase, "file_upload");
+    assert.deepEqual(Object.keys(f.state.failures[0]).sort(), ["code", "failurePhase", "leaseToken", "workerId"]);
     assert.ok((await fs.readdir(path.join(result.retainedDirectory, "outputs"))).length > 0);
   } finally { await f.close(); }
+});
+
+test("rejected completion preserves only the allowlisted broker code and final validation phase", async () => {
+  const secret = "DO_NOT_LOG_COMPLETION_SECRET";
+  const f = await fixture({ complete: ({ res }) => reply(res, {
+    error: "COLLECTOR_DUPLICATE_PATH", message: `${secret} ${TOKEN} /private/customer/예약.json`,
+    failurePhase: secret, brokerErrorCode: secret, credentials: { token: TOKEN }
+  }, 400) });
+  try {
+    const result = await runJob(baseJob(), f.options);
+    assert.equal(result.status, "failed"); assert.equal(result.acknowledged, true);
+    assert.equal(result.code, "COLLECTOR_UPLOAD_FAILED");
+    assert.equal(result.failurePhase, "final_validation");
+    assert.equal(result.brokerErrorCode, "COLLECTOR_DUPLICATE_PATH");
+    assert.equal(f.state.uploads.length, 3); assert.equal(f.state.completions.length, 1);
+    assert.equal(f.state.spawned.length, 1);
+    assert.deepEqual(f.state.failures[0], { workerId: "fixture-worker", leaseToken, code: "COLLECTOR_UPLOAD_FAILED",
+      failurePhase: "final_validation", brokerErrorCode: "COLLECTOR_DUPLICATE_PATH" });
+    assert.deepEqual(f.state.events.at(-1), { event: "collector_job_failed", jobId: "job_1", code: "COLLECTOR_UPLOAD_FAILED",
+      failurePhase: "final_validation", brokerErrorCode: "COLLECTOR_DUPLICATE_PATH", artifactsRetained: true });
+    for (const value of [secret, TOKEN, "/private/customer/"]) assert.equal(JSON.stringify(f.state.events).includes(value), false);
+    assert.ok((await fs.readdir(path.join(result.retainedDirectory, "outputs"))).length > 0);
+  } finally { await f.close(); }
+});
+
+test("malformed, unknown, nested and oversized failure bodies cannot inject diagnostics", async () => {
+  const secret = "DO_NOT_LOG_RESPONSE_SECRET";
+  const responses = [
+    `<html>${secret} ${TOKEN}</html>`,
+    JSON.stringify({ error: `COLLECTOR_${secret}`, message: TOKEN }),
+    JSON.stringify({ error: { code: "COLLECTOR_DUPLICATE_PATH", secret }, failurePhase: "file_upload" }),
+    JSON.stringify({ error: "COLLECTOR_DUPLICATE_PATH", secret, padding: "x".repeat(8192) })
+  ];
+  for (const response of responses) {
+    const f = await fixture({ complete: ({ res }) => { res.writeHead(400, { "Content-Type": "application/json" }); res.end(response); } });
+    try {
+      const result = await runJob(baseJob(), f.options);
+      assert.equal(result.code, "COLLECTOR_UPLOAD_FAILED"); assert.equal(result.failurePhase, "final_validation");
+      assert.equal(Object.hasOwn(result, "brokerErrorCode"), false);
+      assert.equal(f.state.completions.length, 1);
+      assert.deepEqual(f.state.failures[0], { workerId: "fixture-worker", leaseToken, code: "COLLECTOR_UPLOAD_FAILED", failurePhase: "final_validation" });
+      for (const value of [secret, TOKEN, "padding"]) assert.equal(JSON.stringify(f.state.events).includes(value), false);
+    } finally { await f.close(); }
+  }
+});
+
+test("safe broker diagnostics preserve retry limits and distinguish file transfer from completion", async () => {
+  const f = await fixture({ complete: ({ res }) => reply(res, { error: "COLLECTOR_PUBLICATION_FAILED" }, 503) });
+  try {
+    const result = await runWorker(f.options);
+    assert.equal(result.halted, true); assert.equal(result.code, "COLLECTOR_UPLOAD_FAILED");
+    assert.equal(result.failurePhase, "final_validation"); assert.equal(result.brokerErrorCode, "COLLECTOR_PUBLICATION_FAILED");
+    assert.equal(f.state.completions.length, 3); assert.equal(f.state.spawned.length, 1); assert.equal(f.state.claims, 1);
+  } finally { await f.close(); }
+  const upload = await fixture({ upload: ({ res }) => reply(res, { error: "COLLECTOR_FILE_HASH_MISMATCH" }, 400) });
+  try {
+    const result = await runJob(baseJob(), upload.options);
+    assert.equal(result.failurePhase, "file_upload"); assert.equal(result.brokerErrorCode, "COLLECTOR_FILE_HASH_MISMATCH");
+    assert.equal(upload.state.uploads.length, 1); assert.equal(upload.state.completions.length, 0);
+    assert.equal(upload.state.failures[0].failurePhase, "file_upload");
+  } finally { await upload.close(); }
 });
 
 test("a natural nonzero exit can publish a bounded worker failure receipt without claiming completion", async () => {

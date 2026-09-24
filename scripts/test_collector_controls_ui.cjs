@@ -219,6 +219,9 @@ test("user-facing helpers preserve keyword meaning and distinguish failed reques
   assert.equal(duplicateKeywordCount("a\nＡ\n a\n\n"), 2);
   assert.equal(durationLabel({ createdAt: "2026-09-23T05:00:00Z", finishedAt: "2026-09-23T06:02:10Z" }), "1시간 2분");
   assert.match(errorMessage("COLLECTOR_PROVIDER_BLOCKED"), /접근 제한/);
+  assert.match(errorMessage("COLLECTOR_DUPLICATE_PATH"), /상세 파일 목록.*최종 저장/);
+  assert.doesNotMatch(errorMessage("COLLECTOR_DUPLICATE_PATH"), /당일 수집 기록/);
+  assert.match(errorMessage("COLLECTOR_UPLOAD_FAILED"), /전송 또는 최종 저장/);
   assert.doesNotMatch(errorMessage("UNFAMILIAR_FAILURE_CODE"), /UNFAMILIAR/);
 });
 

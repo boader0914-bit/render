@@ -92,3 +92,43 @@ test('reentrant storage transaction prevents lost updates',async()=>{
   await Promise.all(Array.from({length:30},()=>serial(async()=>{const old=value;await serial(()=>new Promise(r=>setImmediate(r)));value=old+1;})));
   assert.equal(value,30);
 });
+
+test('recovery scope selects the unique upload failure within the original request-to-job interval',async t=>{
+  const f=await fixture(t);const reuse=f.create();
+  const fail=code=>async()=>{throw Object.assign(Error('fixture'),{code});};
+  await assert.rejects(reuse.run(payload,fail('COLLECTOR_UPLOAD_FAILED')),{code:'COLLECTOR_UPLOAD_FAILED'});
+  f.setClock('2026-09-23T01:01:00Z');
+  await assert.rejects(reuse.run({...payload,workerKey:'scheduled',allowRepeat:true,repeatReason:'검증용 별도 실행'},fail('COLLECTOR_UPLOAD_FAILED')),{code:'COLLECTOR_UPLOAD_FAILED'});
+  f.setClock('2026-09-23T01:02:00Z');
+  await assert.rejects(reuse.run({...payload,allowRepeat:true,repeatReason:'검증용 별도 실행'},fail('COLLECTOR_CRAWL_FAILED')),{code:'COLLECTOR_CRAWL_FAILED'});
+  f.setClock('2026-09-23T01:03:00Z');
+  await assert.rejects(reuse.run({...payload,keyword:'가평글램핑'},fail('COLLECTOR_UPLOAD_FAILED')),{code:'COLLECTOR_UPLOAD_FAILED'});
+  const target={...payload,bookingRangeDays:7,detailRankRanges:'1-5',adults:3};
+  f.setClock('2026-09-23T01:04:00Z');
+  await assert.rejects(reuse.run({...target,allowRepeat:true,repeatReason:'복구 범위 검증'},fail('COLLECTOR_UPLOAD_FAILED')),{code:'COLLECTOR_UPLOAD_FAILED'});
+  const query={keyword:'  포천글램핑  ',workerKey:'manual',createdAt:'2026-09-23T01:00:00.001Z',jobCreatedAt:'2026-09-23T01:04:00Z'};
+  const filename=path.join(f.options.dataDir,'history','collection-reuse.json');
+  const before=await fs.readFile(filename,'utf8');
+  const found=await reuse.recoveryScope(query);
+  assert.deepEqual(found,scope(target));
+  found.ranks.push(999);found.adults=999;
+  assert.deepEqual(await reuse.recoveryScope(query),scope(target),'returned scope must not mutate stored evidence');
+  assert.deepEqual(await f.create().recoveryScope(query),scope(target));
+  assert.equal(await fs.readFile(filename,'utf8'),before,'scope review must not rewrite failure receipts');
+});
+
+test('recovery scope fails closed for ambiguous, absent, outside-window and invalid-time matches',async t=>{
+  const f=await fixture(t);const reuse=f.create();
+  const fail=async()=>{throw Object.assign(Error('fixture'),{code:'COLLECTOR_UPLOAD_FAILED'});};
+  await assert.rejects(reuse.run(payload,fail),{code:'COLLECTOR_UPLOAD_FAILED'});
+  f.setClock('2026-09-23T01:01:00Z');
+  await assert.rejects(reuse.run({...payload,allowRepeat:true,repeatReason:'중복 판정 검증'},fail),{code:'COLLECTOR_UPLOAD_FAILED'});
+  const query={keyword:payload.keyword,workerKey:'manual',createdAt:at,jobCreatedAt:'2026-09-23T01:01:00Z'};
+  for(const change of [{},{keyword:'없는키워드'},{workerKey:'scheduled'},
+    {createdAt:'2026-09-23T01:02:00Z',jobCreatedAt:'2026-09-23T01:03:00Z'},
+    {createdAt:'2026-09-23T00:58:00Z',jobCreatedAt:'2026-09-23T00:59:00Z'},
+    {createdAt:'2026-09-23T01:02:00Z',jobCreatedAt:at},{createdAt:'invalid'},{jobCreatedAt:'invalid'}]){
+    await assert.rejects(reuse.recoveryScope({...query,...change}),{code:'COLLECTION_RECOVERY_SCOPE_UNCONFIRMED'});
+  }
+  assert.deepEqual(await reuse.recoveryScope({...query,jobCreatedAt:at}),scope(payload),'interval endpoints are inclusive');
+});

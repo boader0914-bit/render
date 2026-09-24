@@ -52,6 +52,8 @@
   function errorMessage(code) {
     const text = String(code || "");
     if (!text) return "";
+    if (text === "COLLECTOR_DUPLICATE_PATH") return "상세 파일 목록이 중복되어 최종 저장 검증에 실패했습니다. 보존 자료 복구가 필요합니다.";
+    if (text === "COLLECTOR_UPLOAD_FAILED") return "수집 결과의 전송 또는 최종 저장 확인에 실패했습니다.";
     if (/PROVIDER|NAVER.*BLOCK|CAPTCHA|TOO_MANY|BookingAPITooManyRequests|HTTP_(403|429)/i.test(text)) return "네이버 접근 제한이 감지되어 수집을 멈췄습니다. 운영 점검이 필요합니다.";
     if (/REPEAT|SCOPE_REVIEW|SAME_DAY|DUPLICATE/.test(text)) return "당일 수집 기록 또는 조건이 다른 자료가 있습니다. 기존 결과와 수집 범위를 확인하세요.";
     if (/PERSISTENCE|STATE_INVALID|STATE_UNREADABLE/.test(text)) return "저장된 작업 기록을 확인하지 못했습니다. 기록 점검 후 실행할 수 있습니다.";
@@ -71,7 +73,7 @@
     if (workers.some(worker => worker.halted && /PROVIDER.*BLOCK|PROVIDER_ACCESS/.test(worker.errorCode || ""))) return { ready: false, reason: "접근 제한 보호 중입니다. 모든 수집기의 새 요청을 보류합니다." };
     const worker = workers.find(item => item.workerKey === key);
     if (!worker?.configured) return { ready: false, reason: "수집기 연결 설정이 필요합니다. 조건은 미리 저장할 수 있습니다." };
-    if (worker.halted) return { ready: false, reason: errorMessage(worker.errorCode) || "수집기 보호 상태를 먼저 확인하세요." };
+    if (worker.halted) return { ready: false, reason: errorMessage(worker.brokerErrorCode || worker.errorCode) || "수집기 보호 상태를 먼저 확인하세요." };
     if (worker.workerKey === "web" && !workerFresh(worker, now)) return { ready: false, reason: "운영 웹서버의 수집 연결을 확인하지 못했습니다. 상태를 새로고침하세요." };
     if (!workerFresh(worker, now)) return { ready: false, reason: worker.workerLastSeenAt ? "90초 동안 연결이 갱신되지 않았습니다. 새로고침 후 연결을 확인하세요." : "수집기의 첫 연결을 기다리고 있습니다." };
     if (worker.ready === false) return { ready: false, reason: errorMessage(worker.errorCode) || "수집기가 실행 준비 중입니다. 잠시 후 상태를 새로고침하세요." };
@@ -236,8 +238,9 @@
       const info = node("div", "");
       info.append(node("strong", `${workerLabel(request.workerKey)} · ${request.keyword || "키워드 확인 중"}`));
       info.append(node("small", `${formatTime(request.createdAt)}${durationLabel(request) ? ` · ${durationLabel(request)}${request.status === "pending" ? " 경과" : ""}` : ""}`));
-      if (request.errorCode || request.message && ["failed", "blocked", "interrupted"].includes(request.status)) info.append(node("small", errorMessage(request.errorCode || request.message), "collector-worker-alert"));
-      row.append(info, node("span", STATUS_LABELS[request.status] || "확인 필요", "state-badge"));
+      if (request.errorCode || request.message && ["failed", "blocked", "interrupted"].includes(request.status)) info.append(node("small", errorMessage(request.brokerErrorCode || request.errorCode || request.message), "collector-worker-alert"));
+      if(request.recovery && request.status === "complete")info.append(node("small", "보존된 수집 자료를 검증하여 보관함과 업체 DB에 복구했습니다."));
+      row.append(info, node("span", request.recovery && request.status === "complete" ? "복구 완료" : STATUS_LABELS[request.status] || "확인 필요", "state-badge"));
       if (request.result?.runId) row.append(resultButton(request.result.runId));
       container.append(row);
     }
