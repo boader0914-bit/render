@@ -187,6 +187,9 @@ async function main() {
     assert.equal(requestAfter.result.runId, fixture.runId);
     const historyFile = path.join(dataDir, "history", "observations.jsonl");
     const historyBeforeRepeat = await fsp.readFile(historyFile, "utf8"), masterBeforeRepeat = await fsp.readFile(masterFile, "utf8");
+    const storedMaster = JSON.parse(masterBeforeRepeat);
+    assert.equal(storedMaster.sourceIndex["place:123456"], "cmp_place_123456");
+    assert.ok(storedMaster.companies.cmp_place_123456.placeIds.includes("123456"));
     const observations = historyBeforeRepeat.trim().split("\n").map(line => JSON.parse(line));
     assert.ok(observations.length > 0);
     assert.ok(observations.every(row => row.runId === fixture.runId && row.companyName === "복구 통합시험 글램핑"
