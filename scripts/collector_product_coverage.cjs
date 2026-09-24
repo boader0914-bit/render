@@ -2,12 +2,12 @@
 
 function createProductCoverage() {
   const businesses = new Map();
-  function discover(businessId, all, eligible, dates = []) {
+  function discover(businessId, all, eligible, dates = [], metadata = {}) {
     const key = String(businessId);
     if (!businesses.has(key)) businesses.set(key, {
       businessId: key, discovered: all.length, eligible: eligible.length,
       excluded: all.length - eligible.length, expectedDates: [...dates],
-      queriedIds: new Set(), truncatedIds: new Set(), days: new Map()
+      queriedIds: new Set(), truncatedIds: new Set(), days: new Map(), metadata
     });
   }
   function record(businessId, items, limit, date, rows) {
@@ -32,6 +32,7 @@ function createProductCoverage() {
     const targets = [...businesses.values()].map(state => ({
       businessId: state.businessId, discovered: state.discovered, eligible: state.eligible,
       excluded: state.excluded, queried: state.queriedIds.size, truncated: state.truncatedIds.size,
+      ...state.metadata,
       expectedDays: state.expectedDates.length,
       days: state.expectedDates.map(date => {
         const groups = state.days.get(date);

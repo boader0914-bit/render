@@ -132,3 +132,14 @@ test('recovery scope fails closed for ambiguous, absent, outside-window and inva
   }
   assert.deepEqual(await reuse.recoveryScope({...query,jobCreatedAt:at}),scope(payload),'interval endpoints are inclusive');
 });
+
+test('legacy recovery lookup preserves its missing mode and original key order without rewriting evidence',async t=>{
+  const f=await fixture(t),file=path.join(f.options.dataDir,'history','collection-reuse.json');
+  const legacy=scope(payload);delete legacy.dayUseMode;
+  const storedScope=Object.fromEntries(Object.entries(legacy).reverse());
+  const stored=JSON.stringify({version:1,entries:[{id:'legacy-upload',day:'2026-09-23',status:'failed',errorCode:'COLLECTOR_UPLOAD_FAILED',workerKey:'manual',createdAt:at,scope:storedScope}]});
+  await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,stored);
+  const found=await f.create().recoveryScope({keyword:payload.keyword,workerKey:'manual',createdAt:at,jobCreatedAt:at});
+  assert.deepEqual(found,storedScope);assert.equal(Object.hasOwn(found,'dayUseMode'),false);
+  assert.equal(await fs.readFile(file,'utf8'),stored);
+});

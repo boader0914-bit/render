@@ -69,6 +69,8 @@
 
 관리자 `POST /api/collector-recover`는 실패한 외부 워커 작업의 영속 staging 자료만 대상으로 한다. JSON에 `confirm: "recover-retained-result"`, `workerKey`, `jobId`, `requestId`, 원본 `manifestSha256`, 원 수집 조건 `expected`를 지정한다. 원 요청·중복 확인 장부의 수집 조건·작업 식별자와 모든 파일 해시를 확인하고, 상세 JSON의 완전히 일치하는 중복 참조만 제거한다. 접근 제한 또는 불완전한 수집은 복구하지 않는다.
 
+새 자료의 `expected.dayUseMode`는 원 수집의 `inspect`, `lodging_only`, `detail` 값과 일치해야 한다. 선택 기능 도입 전 장부·manifest에서 이 필드가 없는 경우만 기존 전체 상품 상세수집인 `detail`로 해석한다. JSON 키 순서는 비교에 영향을 주지 않으며, 원본 장부에 기본값을 덧써 저장하지 않는다.
+
 검증을 통과하면 결과 폴더를 새로 게시하고 외부 API 호출 없이 업체 DB·누적 이력을 반영한다. 원본 staging, 실패한 broker 기록과 종료 시각은 보존하며 별도 복구 영수증을 남긴다. 요청 카드는 결과 링크가 있는 `복구 완료`로 표시한다. 같은 복구를 반복해도 결과를 덮어쓰거나 이력을 중복 추가하지 않는다. SQLite shadow 모드에서는 별도 동기화 완료도 확인한다. 복구 API는 수집을 재실행하거나 워커 보호를 해제하지 않는다. 자료와 DB 반영을 확인한 후 기존 관리자 보호 해제 API를 사용한다.
 
 - 관리자 `GET /api/collector-status`: 실행 위치, 설정 여부, 보호 상태, 실행 중 작업, 워커 마지막 연결 시각. 비밀값 제외.

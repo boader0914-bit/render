@@ -122,7 +122,7 @@ function summarizeEvidence(products, kind, options = {}) {
     row.closed = row.productCount > 0 && row.closedProducts === row.productCount;
     const unavailable = Math.max(0, row.total - row.available - row.publicBookings);
     const dayUse = options.dayUse?.rows.find((entry) => entry.date === row.date);
-    row.sharedDayUseIncomplete = kind === "lodging" && options.shared && (!dayUse || dayUse.partial || dayUse.inventoryConflict);
+    row.sharedDayUseIncomplete = kind === "lodging" && (options.dayUseUnverified || (options.shared && (!dayUse || dayUse.partial || dayUse.inventoryConflict)));
     row.partial ||= Boolean(row.sharedDayUseIncomplete);
     const canEstimate = !row.partial && !row.inventoryConflict;
     if (kind === "lodging" && canEstimate) {
@@ -247,7 +247,12 @@ function applyInventoryEvidence(original) {
   const lodging = summarizeEvidence(products, "lodging", {
     dates, capacity: baseline.lodging, override: baseline.lodgingOverride,
     productCapacities: correctionCapacity(baseline.lodgingOverride) === null ? {} : Object.fromEntries((baseline.lodgingOverride.products || []).map((product) => [String(product.id), nonnegative(product.count)])),
-    dayUse, shared: ["confirmed", "assumed_shared"].includes(sharedRooms.status)
+    dayUse, shared: ["confirmed", "assumed_shared"].includes(sharedRooms.status),
+    // An incomplete product list cannot establish that day use is absent. Do
+    // not turn unmeasured sharing/stock into synthetic telephone reservations.
+    dayUseUnverified: original.dayUsePresence === "unknown"
+      || (original.dayUsePresence === "present" && original.dayUseScheduleStatus !== undefined
+        && original.dayUseScheduleStatus !== "requested" && !["separate", "confirmed_separate", "not_shared"].includes(sharedRooms.status))
   });
   if (!lodging && !dayUse) return original;
   const capacityBasis = lodging ? {

@@ -15,7 +15,7 @@ const TERMINAL_JOBS_IN_LEDGER = 200;
 const ENV_KEYS = new Set([
   "CHECK_IN", "CHECK_OUT", "ADULTS", "SEARCH_MODE", "SEARCH_MODE_REQUESTED", "SEARCH_MODE_AUTO_CORRECTED",
   "SEARCH_INTENT", "SEARCH_REGION", "SEARCH_SCOPE", "SEARCH_SCOPE_LABEL", "COLLECTION_MODE", "COLLECTION_PURPOSE",
-  "DETAIL_RANK_RANGES", "PRODUCT_MODE", "BOOKING_RANGE_DAYS", "BOOKING_RANGE_PLACE_LIMIT", "NAVER_BOOKING_STOCK_LIMIT",
+  "DETAIL_RANK_RANGES", "PRODUCT_MODE", "DAY_USE_MODE", "BOOKING_RANGE_DAYS", "BOOKING_RANGE_PLACE_LIMIT", "NAVER_BOOKING_STOCK_LIMIT",
   "SOURCE_ROLE", "COLLECTION_SOURCE", "COLLECTION_SOURCE_LABEL", "SCHEDULED_COLLECTION", "WORKER_COLLECTION", "RUN_STAMP",
   "NAVER_REQUEST_PACING_ENABLED", "NAVER_REQUEST_MIN_INTERVAL_MS", "NAVER_REQUEST_MAX_CONCURRENCY",
   "NAVER_REQUEST_PACING_START_DATE", "NAVER_BOOKING_DETAIL_CONCURRENCY", "NAVER_SCHEDULE_CONCURRENCY",
@@ -25,7 +25,7 @@ const ENV_KEYS = new Set([
 ]);
 const PAYLOAD_KEYS = new Set([
   "keyword", "checkIn", "checkOut", "adults", "searchMode", "searchIntent", "searchRegion", "searchScope",
-  "searchScopeLabel", "collectionMode", "collectionPurpose", "productMode", "detailRankRanges",
+  "searchScopeLabel", "collectionMode", "collectionPurpose", "productMode", "dayUseMode", "detailRankRanges",
   "bookingRangeDays", "bookingRangePlaceLimit", "sourceRole", "collectionSource", "scheduledCollection",
   "workerKey", "trigger", "collectionEngine",
 ]);
@@ -126,6 +126,7 @@ function cleanEnv(input) {
     if (!ENV_KEYS.has(key) || typeof value !== "string" || value.length > 2048 || /[\x00\r\n]/.test(value)) throw problem("COLLECTOR_INVALID_ENV", 400);
     output[key] = value;
   }
+  if (output.DAY_USE_MODE !== undefined && !["inspect", "lodging_only", "detail"].includes(output.DAY_USE_MODE)) throw problem("COLLECTOR_INVALID_ENV", 400);
   return output;
 }
 function cleanPayload(input = {}) {
@@ -137,6 +138,7 @@ function cleanPayload(input = {}) {
     if (!["string", "boolean", "number"].includes(typeof value) || String(value).length > 2048) throw problem("COLLECTOR_INVALID_PAYLOAD", 400);
     output[key] = value;
   }
+  if (output.dayUseMode !== undefined && !["inspect", "lodging_only", "detail"].includes(output.dayUseMode)) throw problem("COLLECTOR_INVALID_PAYLOAD", 400);
   return output;
 }
 function cleanContext(input = {}) {
@@ -192,11 +194,11 @@ function scopeCheck(manifest, job, runId, files) {
   }
   const fields = { CHECK_IN: "checkIn", CHECK_OUT: "checkOut", ADULTS: "adults", SEARCH_MODE: "searchMode", SEARCH_INTENT: "searchIntent",
     SEARCH_REGION: "searchRegion", SEARCH_SCOPE: "searchScope", COLLECTION_MODE: "collectionMode", COLLECTION_PURPOSE: "collectionPurpose",
-    PRODUCT_MODE: "productMode", BOOKING_RANGE_DAYS: "bookingRangeDays", BOOKING_RANGE_PLACE_LIMIT: "bookingRangePlaceLimit",
+    PRODUCT_MODE: "productMode", DAY_USE_MODE: "dayUseMode", BOOKING_RANGE_DAYS: "bookingRangeDays", BOOKING_RANGE_PLACE_LIMIT: "bookingRangePlaceLimit",
     SOURCE_ROLE: "sourceRole", COLLECTION_SOURCE: "collectionSource" };
   for (const [key, field] of Object.entries(fields)) {
     const expected = job.env[key] ?? job.payload[field];
-    if (expected !== undefined && String(expected) !== String(manifest[field] ?? "")) throw problem("COLLECTOR_SCOPE_MISMATCH", 400);
+    if (expected !== undefined && String(expected) !== String(manifest[field] ?? (field === "dayUseMode" ? "detail" : ""))) throw problem("COLLECTOR_SCOPE_MISMATCH", 400);
   }
   const ranks = value => compact(value).replace(/[~–]/g, "-");
   const expectedRanks = job.env.DETAIL_RANK_RANGES ?? job.payload.detailRankRanges;
@@ -410,7 +412,7 @@ function createCollectorBroker(options = {}) {
       const target = job.payload.workerKey || workerKey;
       const trigger = job.payload.trigger || (job.env.SCHEDULED_COLLECTION === "1" || job.payload.scheduledCollection === true ? "scheduled" : "manual");
       if ((target && !["manual", "scheduled"].includes(target)) || !["manual", "scheduled"].includes(trigger)
-        || (workerKey && target !== workerKey) || (target === "manual" && trigger !== "manual")
+        || (workerKey && target !== workerKey)
         || (job.payload.trigger && job.env.SCHEDULED_COLLECTION !== undefined && (job.env.SCHEDULED_COLLECTION === "1") !== (trigger === "scheduled"))) {
         throw problem("COLLECTOR_WRONG_WORKER", 400);
       }

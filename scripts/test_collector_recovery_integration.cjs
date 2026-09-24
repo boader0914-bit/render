@@ -21,10 +21,11 @@ const DAY = value => new Date(value + 9 * 3600000).toISOString().slice(0, 10);
 const hash = value => crypto.createHash("sha256").update(value).digest("hex");
 const csvCell = value => `"${String(value ?? "").replaceAll('"', '""')}"`;
 
-async function retainedFixture(env, keyword) {
+async function retainedFixture(env, keyword, { legacy = false } = {}) {
   const fixture = await writeMockArtifacts(env, keyword, 31, false);
   const manifestPath = path.join(fixture.runDir, "manifest.json");
   const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8"));
+  if (legacy) delete manifest.dayUseMode;
   manifest.collectorRunToken = env.COLLECTOR_RUN_TOKEN;
   manifest.startedAt = manifest.collectedAt;
   const products = [1, 2].map(index => ({
@@ -51,7 +52,7 @@ async function retainedFixture(env, keyword) {
   return { ...fixture, manifest, detailFile };
 }
 
-function mockWorker(base, temporary) {
+function mockWorker(base, temporary, { legacy = false } = {}) {
   const errors = [], spawned = [], events = [], calls = [];
   const controller = new AbortController();
   let fixture;
@@ -78,7 +79,7 @@ function mockWorker(base, temporary) {
       child.kill = () => { setImmediate(() => close(1)); return true; };
       spawned.push(config);
       setImmediate(async () => {
-        try { fixture = await retainedFixture(config.env, args[1]); close(0); }
+        try { fixture = await retainedFixture(config.env, args[1], { legacy }); close(0); }
         catch (error) { errors.push(error); close(1); }
       });
       return child;
@@ -88,7 +89,7 @@ function mockWorker(base, temporary) {
   return { completed, errors, spawned, events, calls, fixture: () => fixture, stop: () => controller.abort() };
 }
 
-async function main() {
+async function main({ legacy = false } = {}) {
   const temporaryBase = await fsp.realpath(os.tmpdir());
   const temporary = await fsp.mkdtemp(path.join(temporaryBase, "collector-recovery-integration-"));
   const dataDir = path.join(temporary, "data"), outputsDir = path.join(dataDir, "outputs"), configDir = path.join(dataDir, "config");
@@ -102,7 +103,8 @@ async function main() {
     const { guardPath, attemptsPath } = await executionGuard(temporary);
     const port = await freePort(), base = `http://127.0.0.1:${port}`;
     const logs = [];
-    server = spawn(process.execPath, ["--require", guardPath, path.join(__dirname, "glamping_app_server.cjs")], {
+    const startServer = async () => {
+      server = spawn(process.execPath, ["--require", guardPath, path.join(__dirname, "glamping_app_server.cjs")], {
       cwd: ROOT, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: {
         ...process.env, NODE_OPTIONS: "", PORT: String(port), HOST: "127.0.0.1", DATA_DIR: dataDir, OUTPUTS_DIR: outputsDir, CONFIG_DIR: configDir,
         MASTER_DB_PATH: path.join(dataDir, "master_db", "fixture.sqlite"), MASTER_DB_WRITE_MODE: "off", SEED_OUTPUTS_FROM_REPO: "0",
@@ -118,12 +120,15 @@ async function main() {
       if (server.exitCode !== null || server.signalCode !== null) throw new Error(logs.join(""));
       try { return (await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(500) })).ok; } catch { return false; }
     }, "Recovery fixture server did not start", 15000);
-    const admin = await login(base, ADMIN), member = await login(base, B2B);
-    worker = mockWorker(base, temporary);
+    };
+    await startServer();
+    let admin = await login(base, ADMIN), member = await login(base, B2B);
+    worker = mockWorker(base, temporary, { legacy });
     await waitUntil(async () => Boolean((await request(base, "/api/collector-status", admin)).body.workerLastSeenAt), "Mock worker did not connect");
     const payload = { keyword: "경남글램핑", workerKey: "manual", searchMode: "keyword", adults: 2,
       checkIn: DAY(Date.now()), checkOut: DAY(Date.now() + 86400000), collectionMode: "precision", collectionPurpose: "revenue_detail",
       productMode: "all", bookingRangeDays: 1, bookingRangePlaceLimit: 0, detailRankRanges: "1-20", clientRequestId: "recovery-integration-request-0001" };
+    if (legacy) payload.dayUseMode = "detail";
     const accepted = await request(base, "/api/crawl?async=1", admin, jsonPost(payload));
     assert.equal(accepted.response.status, 202, JSON.stringify(accepted.body));
     await worker.completed;
@@ -151,16 +156,31 @@ async function main() {
     assert.equal(manifestSha256, job.uploads["manifest.json"].sha256);
     assert.equal(fs.existsSync(path.join(outputsDir, fixture.runId)), false);
     assert.equal((await request(base, "/api/runs", admin)).body.runs.some(row => row.id === fixture.runId), false);
-    const expectedKeys = ["keyword", "checkIn", "checkOut", "adults", "searchMode", "searchIntent", "searchRegion", "searchScope", "collectionMode", "collectionPurpose", "productMode", "detailRankRanges", "bookingRangeDays", "bookingRangePlaceLimit", "sourceRole", "collectionSource", "workerKey", "trigger"];
+    const expectedKeys = ["keyword", "checkIn", "checkOut", "adults", "searchMode", "searchIntent", "searchRegion", "searchScope", "collectionMode", "collectionPurpose", "productMode", "dayUseMode", "detailRankRanges", "bookingRangeDays", "bookingRangePlaceLimit", "sourceRole", "collectionSource", "workerKey", "trigger"];
     const expected = Object.fromEntries(expectedKeys.map(key => [key, fixture.manifest[key]]));
     expected.scheduledCollection = false;
     const body = { confirm: "recover-retained-result", workerKey: "manual", jobId: job.id, requestId: payload.clientRequestId, manifestSha256, expected };
     const recoverRoute = "/api/collector-recover";
+    const reuseFile=path.join(dataDir,"history","collection-reuse.json");
+    let legacyReuseBytes;
+    if(legacy) {
+      await stopChild(server);
+      const stored=JSON.parse(await fsp.readFile(reuseFile,"utf8"));
+      const oldScope=stored.entries.find(row=>row.scope.keyword===payload.keyword).scope;
+      delete oldScope.dayUseMode;
+      // Simulate real pre-selector evidence, including a different JSON key order.
+      stored.entries.find(row=>row.scope.keyword===payload.keyword).scope=Object.fromEntries(Object.entries(oldScope).reverse());
+      legacyReuseBytes=JSON.stringify(stored);
+      await fsp.writeFile(reuseFile,legacyReuseBytes);
+      await startServer();
+      admin=await login(base,ADMIN);member=await login(base,B2B);
+    }
     assert.equal((await request(base, recoverRoute, "", jsonPost(body))).response.status, 401);
     assert.equal((await request(base, recoverRoute, member, jsonPost(body))).response.status, 403);
     const crossOrigin = jsonPost(body); crossOrigin.headers.Origin = "https://unrelated.invalid";
     assert.equal((await request(base, recoverRoute, admin, crossOrigin)).response.status, 403);
     assert.equal((await request(base, recoverRoute, admin, jsonPost({ ...body, expected: { ...expected, adults: 3 } }))).response.status, 409);
+    assert.equal((await request(base, recoverRoute, admin, jsonPost({ ...body, expected: { ...expected, dayUseMode: legacy ? "inspect" : "detail" } }))).response.status, 409, "Inspect and detail scopes must never be substituted during recovery");
     assert.equal((await request(base, recoverRoute, admin, jsonPost({ ...body, manifestSha256: "0".repeat(64) }))).response.status, 409);
     assert.equal(fs.existsSync(path.join(outputsDir, fixture.runId)), false, "Rejected recovery must not publish artifacts");
 
@@ -209,8 +229,9 @@ async function main() {
     assert.equal(finalStatus.halted, true, "Recovery must not release the existing safety halt");
     assert.equal(finalStatus.activeJobId, null); assert.equal(finalStatus.queued, 0);
     assert.equal(worker.spawned.length, 1, "Recovery must not start another crawl");
+    if(legacy) assert.equal(await fsp.readFile(reuseFile,"utf8"),legacyReuseBytes,"Legacy scope evidence must not be rewritten by recovery");
     assert.equal(fs.existsSync(attemptsPath), false, "Server recovery must not perform provider requests or spawn a crawler");
-    console.log(`collector recovery integration passed: failed duplicate-reference upload -> ${observations.length} observations, company list, archive and durable request recovered; repeat idempotent, original failure retained, auth/scope/hash rejected; external IO forbidden`);
+    console.log(`collector recovery integration passed (${legacy?"legacy missing day-use scope":"inspect scope"}): failed duplicate-reference upload -> ${observations.length} observations, company list, archive and durable request recovered; repeat idempotent, original failure retained, auth/scope/hash rejected; external IO forbidden`);
   } finally {
     worker?.stop();
     await worker?.completed.catch(() => {});
@@ -222,5 +243,5 @@ async function main() {
   }
 }
 
-if (require.main === module) main().catch(error => { console.error(error.stack || error); process.exitCode = 1; });
+if (require.main === module) (async()=>{await main();await main({legacy:true});})().catch(error => { console.error(error.stack || error); process.exitCode = 1; });
 module.exports = { retainedFixture, mockWorker };

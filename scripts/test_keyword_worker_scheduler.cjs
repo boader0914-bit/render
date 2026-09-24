@@ -14,8 +14,9 @@ async function fixture(overrides = {}) {
   const options = { dataDir: directory, now: () => time, getFreeBytes: async () => 1024 * 1024 * 1024,
     runCrawler: async payload => { calls.push(payload); return { runId: `test_glamping_20260923_${String(calls.length).padStart(6, "0")}`, collectionQuality: { status: "complete" } }; }, ...overrides };
   const scheduler = createKeywordWorkerScheduler(options);
-  const configFile = path.join(directory, "config", "keyword-worker-schedule.json");
-  const receiptDir = path.join(directory, "history", "keyword-worker-schedule");
+  const namespace = !options.workerKey || options.workerKey === "scheduled" ? "keyword-worker-schedule" : `keyword-worker-schedule-${options.workerKey}`;
+  const configFile = path.join(directory, "config", `${namespace}.json`);
+  const receiptDir = path.join(directory, "history", namespace);
   return { scheduler, options, directory, calls, configFile, receiptDir, setTime: value => { time = new Date(value); },
     prepare: async patch => scheduler.updateConfig({ keywords: ["포천글램핑", "가평글램핑"], ...patch }),
     close: async () => {
@@ -666,4 +667,78 @@ test("timer lifecycle starts with no immediate run and stop clears the interval"
     assert.equal(cleared, true);
     await assert.rejects(() => f.scheduler.runNow(), { code: "KEYWORD_SCHEDULE_STOPPED" });
   } finally { await f.close(); }
+});
+
+test("three worker schedules persist independently and dispatch the selected collector without changing disabled neighbors", async () => {
+  const f = await fixture();
+  const calls = [];
+  const workers = Object.fromEntries(["web", "manual", "scheduled"].map(workerKey => [workerKey, createKeywordWorkerScheduler({
+    ...f.options, workerKey, runCrawler: async payload => { calls.push(payload); return {runId:`run_${payload.workerKey}_${calls.length}`,quality:{status:"complete"}}; }
+  })]));
+  try {
+    for (const [index, key] of Object.keys(workers).entries()) {
+      const status = await workers[key].status();
+      assert.equal(status.workerKey, key); assert.equal(status.enabled, false);
+      assert.equal(status.config.collection.dayUseMode, "inspect");
+      await workers[key].updateConfig({keywords:[`${key}글램핑`], collection:{bookingDays:index+1,collectionPurpose:index===0?"basic_db":"revenue_detail",dayUseMode:["inspect","lodging_only","detail"][index]}});
+    }
+    await workers.web.setEnabled(true);
+    assert.equal((await workers.manual.status()).enabled,false);
+    assert.equal((await workers.scheduled.status()).enabled,false);
+    f.setTime("2026-09-23T05:00:00Z");
+    await workers.web.tick(); await workers.manual.tick(); await workers.scheduled.tick();
+    assert.equal(calls.length,1); assert.equal(calls[0].workerKey,"web"); assert.equal(calls[0].trigger,"scheduled");
+    assert.equal(calls[0].collectionPurpose,"basic_db"); assert.equal(calls[0].dayUseMode,"inspect");
+    assert.equal(calls[0].scheduleOccurrenceId,"web_scheduled_2026-09-23");
+    for (const key of ["manual","scheduled"]) { await workers[key].setEnabled(true); await workers[key].tick(); }
+    assert.deepEqual(calls.map(p=>p.workerKey),["web","manual","scheduled"]);
+    assert.deepEqual(calls.map(p=>p.bookingRangeDays),[1,2,3]);
+    assert.deepEqual(calls.map(p=>p.dayUseMode),["inspect","lodging_only","detail"]);
+    assert.equal(new Set(calls.map(p=>p.clientRequestId)).size,3);
+    assert.equal(new Set(calls.map(p=>p.scheduleOccurrenceId)).size,3);
+    for (const key of Object.keys(workers)) {
+      await workers[key].tick();
+      const immediate = await workers[key].runNow({requestId:"same-browser-request-001"});
+      assert.equal(immediate.workerKey,key);
+      assert.equal(calls.at(-1).workerKey,key); assert.equal(calls.at(-1).trigger,"manual");
+      const count=calls.length;
+      await workers[key].runNow({requestId:"same-browser-request-001"}); assert.equal(calls.length,count);
+      const filename=key==="scheduled"?"keyword-worker-schedule.json":`keyword-worker-schedule-${key}.json`;
+      assert.deepEqual(JSON.parse(await fs.readFile(path.join(f.directory,"config",filename),"utf8")).keywords,[`${key}글램핑`]);
+    }
+    assert.equal(calls.length,6);
+  } finally { Object.values(workers).forEach(worker=>worker.stop()); await f.close(); }
+});
+
+test("legacy day-use condition stays detail while new defaults inspect and invalid modes are rejected", async () => {
+  const f = await fixture();
+  try {
+    const legacy=defaultConfig("2026-09-23T00:00:00Z");
+    delete legacy.collection.dayUseMode;
+    legacy.keywords=["경남글램핑"];
+    await fs.mkdir(path.dirname(f.configFile),{recursive:true});
+    const original=JSON.stringify(legacy);
+    await fs.writeFile(f.configFile,original);
+    assert.equal((await f.scheduler.status()).config.collection.dayUseMode,"detail");
+    assert.equal(await fs.readFile(f.configFile,"utf8"),original);
+    await f.scheduler.runNow(); assert.equal(f.calls[0].dayUseMode,"detail");
+    await f.scheduler.runNow({collection:{dayUseMode:"inspect",collectionPurpose:"basic_db"}});
+    assert.equal(f.calls[1].dayUseMode,"inspect"); assert.equal(f.calls[1].collectionPurpose,"basic_db");
+    await assert.rejects(f.scheduler.updateConfig({collection:{dayUseMode:"anything"}}),{code:"KEYWORD_SCHEDULE_COLLECTION_INVALID"});
+    assert.throws(()=>createKeywordWorkerScheduler({...f.options,workerKey:"unknown"}),{code:"KEYWORD_SCHEDULE_WORKER_INVALID"});
+  } finally { await f.close(); }
+});
+
+test("web and manual pause callbacks identify only their own scheduled occurrence", async () => {
+  for(const workerKey of ["web","manual"]) {
+    const gate=deferred(),started=deferred(),withdrawals=[];
+    const f=await fixture({workerKey,runCrawler:async()=>{started.resolve();await gate.promise;return{runId:"test_run",quality:{status:"complete"}};},cancelPendingScheduled:async event=>withdrawals.push(event)});
+    try {
+      await f.prepare({keywords:["경남글램핑"]}); await f.scheduler.setEnabled(true);
+      f.setTime("2026-09-23T05:00:00Z"); const executing=f.scheduler.tick(); await started.promise;
+      await f.scheduler.setEnabled(false);
+      assert.deepEqual(withdrawals,[{occurrenceIds:[`${workerKey}_scheduled_2026-09-23`],reason:"SCHEDULE_PAUSED"}]);
+      gate.resolve(); await executing;
+    } finally {gate.resolve();await f.close();}
+  }
 });

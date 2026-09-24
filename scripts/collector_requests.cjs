@@ -11,7 +11,7 @@ function publicRow(row){
  const {requestId,workerKey,trigger,keyword,status,createdAt,finishedAt,errorCode,message}=row;
  const source=row.result;
  const result=source?{runId:source.runId,collectionQuality:source.collectionQuality?{status:source.collectionQuality.status}:null,reused:source.reused===true,workerKey:source.workerKey,trigger:source.trigger}:null;
- return {requestId,workerKey,trigger,keyword,status,createdAt,finishedAt,result,errorCode,message,...(row.failurePhase?{failurePhase:row.failurePhase}:{}),...(row.brokerErrorCode?{brokerErrorCode:row.brokerErrorCode}:{}),...(row.recovery?{recovery:row.recovery}:{})};
+ return {requestId,workerKey,trigger,keyword,status,createdAt,finishedAt,result,errorCode,message,...(row.conditions?{conditions:row.conditions}:{}),...(row.failurePhase?{failurePhase:row.failurePhase}:{}),...(row.brokerErrorCode?{brokerErrorCode:row.brokerErrorCode}:{}),...(row.recovery?{recovery:row.recovery}:{})};
 }
 function safeFailure(error){
  const code=/^[A-Z][A-Z0-9_]{1,100}$/.test(error?.code||'')?error.code:'COLLECTION_FAILED';
@@ -55,6 +55,7 @@ function createCollectorRequests({dataDir,run,preflight=async()=>{},now=()=>new 
   if(rows.has(requestId)){const old=rows.get(requestId);if(old.fingerprint!==fingerprint)throw fault('COLLECTION_REQUEST_CONFLICT','같은 요청 번호의 수집 조건이 다릅니다.');return {row:old};}
   await preflight(payload);
   const row={version:1,requestId,fingerprint,workerKey:payload.workerKey||'manual',trigger:'manual',keyword:String(payload.keyword||'').slice(0,160),status:'pending',createdAt:stamp(),finishedAt:null,result:null,errorCode:null,message:'수집 요청을 접수했습니다. 실제 실행 상태는 워커 카드에서 확인하세요.'};
+  row.conditions=Object.fromEntries(['checkIn','checkOut','bookingRangeDays','detailRankRanges','collectionPurpose','dayUseMode'].filter(key=>payload[key]!==undefined).map(key=>[key,payload[key]]));
   await write(row);rows.set(requestId,row);
   // The durable receipt precedes execution, and every rejection has a terminal handler.
   return {row,start:true};

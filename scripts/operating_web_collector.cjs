@@ -17,7 +17,7 @@ function fault(code, statusCode = 409) { return Object.assign(new Error(code), {
 function safeCode(value, fallback = "COLLECTOR_WEB_FAILED") { return SAFE_CODE.test(value || "") ? value : fallback; }
 function compact(value) { return String(value ?? "").normalize("NFKC").replace(/\s+/g, "").toLowerCase(); }
 
-function createOperatingWebCollector({ dataDir, outputsDir, root, spawnImpl = spawn, onProviderBlocked = async () => {}, onProgress = () => {} }) {
+function createOperatingWebCollector({ dataDir, outputsDir, root, spawnImpl = spawn, onProviderBlocked = async () => {}, onProgress = () => {}, now = Date.now }) {
   const base = path.resolve(dataDir, "collector-web"), stateFile = path.join(base, "state.json");
   const destinationRoot = path.resolve(outputsDir), lock = serialExecutor();
   let ready, state = { version: 1, halted: null, active: null }, active = null;
@@ -93,17 +93,18 @@ function createOperatingWebCollector({ dataDir, outputsDir, root, spawnImpl = sp
     if (!manifestFile || manifestFile.size > 1024 * 1024) throw fault("COLLECTOR_INVALID_MANIFEST");
     let manifest;
     try { manifest = JSON.parse(await fs.readFile(path.join(directory, "manifest.json"), "utf8")); } catch { throw fault("COLLECTOR_INVALID_MANIFEST"); }
-    if (!manifest || manifest.schemaVersion !== 2 || manifest.webCollection !== true || manifest.workerCollection === true || manifest.scheduledCollection === true
-      || manifest.workerKey !== "web" || manifest.trigger !== "manual" || manifest.jobId !== jobId || manifest.collectorEngine !== "operating-web-v2"
+    if (!manifest || manifest.schemaVersion !== 2 || manifest.webCollection !== true || manifest.workerCollection === true
+      || Boolean(manifest.scheduledCollection) !== (env.COLLECTOR_TRIGGER === "scheduled")
+      || manifest.workerKey !== "web" || manifest.trigger !== env.COLLECTOR_TRIGGER || manifest.jobId !== jobId || manifest.collectorEngine !== "operating-web-v2"
       || manifest.collectorRunToken !== token || manifest.executionHost?.role !== "operating_web"
       || compact(manifest.keyword) !== compact(keyword) || path.resolve(manifest.outputDir || "") !== directory) throw fault("COLLECTOR_SCOPE_MISMATCH");
     const fields = { CHECK_IN: "checkIn", CHECK_OUT: "checkOut", ADULTS: "adults", SEARCH_MODE: "searchMode", SEARCH_INTENT: "searchIntent",
       SEARCH_REGION: "searchRegion", SEARCH_SCOPE: "searchScope", COLLECTION_MODE: "collectionMode", COLLECTION_PURPOSE: "collectionPurpose",
-      PRODUCT_MODE: "productMode", BOOKING_RANGE_DAYS: "bookingRangeDays", BOOKING_RANGE_PLACE_LIMIT: "bookingRangePlaceLimit",
+      PRODUCT_MODE: "productMode", DAY_USE_MODE: "dayUseMode", BOOKING_RANGE_DAYS: "bookingRangeDays", BOOKING_RANGE_PLACE_LIMIT: "bookingRangePlaceLimit",
       SOURCE_ROLE: "sourceRole", COLLECTION_SOURCE: "collectionSource" };
     for (const [key, field] of Object.entries(fields)) {
       const expected = env[key] ?? payload[field];
-      if (expected !== undefined && String(expected) !== String(manifest[field] ?? "")) throw fault("COLLECTOR_SCOPE_MISMATCH");
+      if (expected !== undefined && String(expected) !== String(manifest[field] ?? (field === "dayUseMode" ? "detail" : ""))) throw fault("COLLECTOR_SCOPE_MISMATCH");
     }
     if (compact(env.DETAIL_RANK_RANGES).replace(/[~–]/g, "-") !== compact(manifest.detailRankRanges).replace(/[~–]/g, "-")) throw fault("COLLECTOR_SCOPE_MISMATCH");
     if (manifest.requestPacing?.guardEnabled !== true || manifest.requestPacing?.enabled !== false
@@ -135,6 +136,15 @@ function createOperatingWebCollector({ dataDir, outputsDir, root, spawnImpl = sp
     await initialize();
     if (!ID.test(jobId) || typeof keyword !== "string" || !keyword.trim() || keyword.length > 160 || /[\x00-\x1f]/.test(keyword)
       || !/^\d{4}-\d{2}-\d{2}$/.test(suppliedEnv.CHECK_IN || "")) throw fault("COLLECTOR_JOB_INVALID", 400);
+    const trigger = payload.trigger || (suppliedEnv.SCHEDULED_COLLECTION === "1" || payload.scheduledCollection === true ? "scheduled" : "manual");
+    if (!["manual", "scheduled"].includes(trigger) || (payload.workerKey !== undefined && payload.workerKey !== "web")
+      || (suppliedEnv.SCHEDULED_COLLECTION !== undefined && (suppliedEnv.SCHEDULED_COLLECTION === "1") !== (trigger === "scheduled"))
+      || (payload.scheduledCollection !== undefined && payload.scheduledCollection !== (trigger === "scheduled"))
+      || (suppliedEnv.DAY_USE_MODE !== undefined && !["inspect", "lodging_only", "detail"].includes(suppliedEnv.DAY_USE_MODE))) throw fault("COLLECTOR_JOB_INVALID", 400);
+    const queueDeadline = payload.queueDeadline;
+    if (queueDeadline != null && (trigger !== "scheduled" || !Number.isSafeInteger(queueDeadline) || queueDeadline <= 0)) throw fault("COLLECTOR_QUEUE_DEADLINE_INVALID", 400);
+    const assertWithinSchedule = () => { if (queueDeadline != null && now() >= queueDeadline) throw fault("COLLECTOR_QUEUE_DEADLINE"); };
+    assertWithinSchedule();
     const runtime = { stopCode: null, child: null, closed: false, killTimer: null, stop(code) {
       this.stopCode = code === "COLLECTOR_PROVIDER_BLOCKED" ? code : (this.stopCode || code);
       if (this.child && !this.closed) {
@@ -173,9 +183,10 @@ function createOperatingWebCollector({ dataDir, outputsDir, root, spawnImpl = sp
       for (const key of Object.keys(env)) if (SPEED_KEYS.test(key)) delete env[key];
       Object.assign(env, { DATA_DIR: locations.data, OUTPUTS_DIR: locations.outputs, CONFIG_DIR: locations.config, TMPDIR: locations.tmp, TMP: locations.tmp, TEMP: locations.tmp,
         HISTORY_BOOKING_BUSINESS_CONTEXT_FILE: contextFile, COLLECTOR_WEB_RUNTIME: "1", COLLECTOR_WORKER_RUNTIME: "0", COLLECTOR_WORKER_KEY: "web",
-        COLLECTOR_TRIGGER: "manual", COLLECTOR_ENGINE: "operating-web-v2", COLLECTOR_JOB_ID: jobId, COLLECTOR_RUN_TOKEN: token,
-        SCHEDULED_COLLECTION: "0", NAVER_REQUEST_PACING_ENABLED: "0", RUN_STAMP: stamp });
+        COLLECTOR_TRIGGER: trigger, COLLECTOR_ENGINE: "operating-web-v2", COLLECTOR_JOB_ID: jobId, COLLECTOR_RUN_TOKEN: token,
+        SCHEDULED_COLLECTION: trigger === "scheduled" ? "1" : "0", NAVER_REQUEST_PACING_ENABLED: "0", RUN_STAMP: stamp });
       if (runtime.stopCode || isCancelled()) throw fault(runtime.stopCode || "CRAWL_CANCELLED");
+      assertWithinSchedule();
       const child = spawnImpl(process.execPath, [path.join(root, "scripts", "gyeongnam_glamping_crawl.cjs"), keyword],
         { cwd: root, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, shell: false });
       runtime.child = child;

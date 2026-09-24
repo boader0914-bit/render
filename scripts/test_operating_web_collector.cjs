@@ -18,11 +18,11 @@ async function artifacts(env, keyword, { partial = false, blocked = false, mutat
   const runId = `company_fixture_web_${env.COLLECTOR_RUN_TOKEN}_glamping_${env.RUN_STAMP}`;
   const outputDir = path.join(env.OUTPUTS_DIR, runId);
   const manifest = { schemaVersion: 2, outputDir, keyword, startedAt: new Date().toISOString(), collectedAt: new Date().toISOString(),
-    webCollection: true, workerKey: "web", trigger: "manual", jobId: env.COLLECTOR_JOB_ID, collectorEngine: "operating-web-v2",
+    webCollection: true, workerKey: "web", trigger: env.COLLECTOR_TRIGGER, scheduledCollection: env.SCHEDULED_COLLECTION === "1", jobId: env.COLLECTOR_JOB_ID, collectorEngine: "operating-web-v2",
     collectorRunToken: env.COLLECTOR_RUN_TOKEN, executionHost: {role:"operating_web",serviceId:env.RENDER_SERVICE_ID||null},
     files: ["rooms.csv"], detailJsonFiles: [], fileRoles: { overall: "rooms.csv" },
     checkIn: env.CHECK_IN, checkOut: env.CHECK_OUT, adults: env.ADULTS, searchMode: env.SEARCH_MODE,
-    collectionMode: env.COLLECTION_MODE, collectionPurpose: env.COLLECTION_PURPOSE, productMode: env.PRODUCT_MODE,
+    collectionMode: env.COLLECTION_MODE, collectionPurpose: env.COLLECTION_PURPOSE, productMode: env.PRODUCT_MODE, dayUseMode: env.DAY_USE_MODE,
     bookingRangeDays: env.BOOKING_RANGE_DAYS, bookingRangePlaceLimit: env.BOOKING_RANGE_PLACE_LIMIT,
     detailRankRanges: env.DETAIL_RANK_RANGES, sourceRole: env.SOURCE_ROLE, collectionSource: env.COLLECTION_SOURCE,
     collectionProfileFlags: { collectBookingStock: true }, naverAttemptedQueries: [{ status: 200 }],
@@ -94,6 +94,35 @@ test("web directly executes one guarded native-speed child without credentials a
 test("partial responses remain partial and do not become successful results", async t => {
   const f = await fixture(t, { execute: async ({ args, config, close }) => { await artifacts(config.env, args[1], { partial: true }); close(); } });
   assert.equal((await f.run()).collectionQuality.status, "partial");
+});
+
+test("web scheduled work preserves its trigger and rejects a receipt for the wrong day-use mode", async t => {
+  const f = await fixture(t);
+  const result = await f.run({ payload: { workerKey: "web", trigger: "scheduled", scheduledCollection: true, dayUseMode: "inspect" },
+    env: { ...requestEnv, SCHEDULED_COLLECTION: "1", DAY_USE_MODE: "inspect" } });
+  assert.equal(result.manifest.trigger, "scheduled");
+  assert.equal(result.manifest.scheduledCollection, true);
+  assert.equal(result.manifest.dayUseMode, "inspect");
+  assert.equal(result.collectionQuality.status, "complete");
+  assert.equal(f.spawned[0].config.env.NAVER_REQUEST_PACING_ENABLED, "0");
+  const bad = await fixture(t, { execute: async ({args,config,close}) => {
+    await artifacts(config.env,args[1],{mutate:manifest=>{manifest.dayUseMode="detail";}}); close();
+  } });
+  await assert.rejects(bad.run({payload:{trigger:"scheduled"},env:{...requestEnv,SCHEDULED_COLLECTION:"1",DAY_USE_MODE:"inspect"}}), {code:"COLLECTOR_SCOPE_MISMATCH"});
+  await assert.rejects(f.run({payload:{trigger:"manual"},env:{...requestEnv,SCHEDULED_COLLECTION:"1"}}), {code:"COLLECTOR_JOB_INVALID"});
+});
+
+test("expired web schedules cannot spawn even when the deadline passes during setup", async t => {
+  let time = Date.now();
+  const f = await fixture(t, { now: () => time });
+  const payload = { workerKey: "web", trigger: "scheduled", queueDeadline: time + 1000 };
+  const env = { ...requestEnv, SCHEDULED_COLLECTION: "1" };
+  await assert.rejects(f.run({payload:{...payload,queueDeadline:time},env}),{code:"COLLECTOR_QUEUE_DEADLINE"});
+  await assert.rejects(f.run({payload,env,context:{get historicalBookingBusinesses(){time += 1001;return [];}}}),{code:"COLLECTOR_QUEUE_DEADLINE"});
+  assert.equal(f.spawned.length,0);
+  assert.equal((await f.api.status()).activeJobId,null);
+  assert.equal((await f.api.status()).halted,false);
+  await assert.rejects(f.run({payload:{...payload,queueDeadline:"bad"},env}),{code:"COLLECTOR_QUEUE_DEADLINE_INVALID"});
 });
 
 test("block marker promptly persists protection and reports once while retaining the blocked receipt", async t => {

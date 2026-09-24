@@ -37,6 +37,7 @@ function scope(value) {
     searchMode:value.resolvedSearchMode || value.searchMode || 'keyword', searchIntent:value.searchIntent || '',
     searchRegion:value.searchRegion || '', searchScope:value.searchScope || '',
     productMode:value.productMode || 'all', collectionMode:value.collectionMode || 'precision',
+    dayUseMode:value.dayUseMode || 'detail',
     collectionPurpose:value.collectionPurpose || 'revenue_detail',
     ranks, bookingRangePlaceLimit:cap > 0 && ranks && cap < ranks.length ? cap : 0
   };
@@ -46,6 +47,9 @@ function covers(have, wanted) {
     if (have[key] !== wanted[key]) return false;
   }
   if (have.productMode !== wanted.productMode && have.productMode !== 'all') return false;
+  // Legacy manifests collected both product types. New modes retain their own
+  // explicit scope; inspecting a list never satisfies a detailed day-use query.
+  if ((have.dayUseMode || 'detail') !== (wanted.dayUseMode || 'detail')) return false;
   if (!have.ranks || !wanted.ranks || wanted.ranks.some(n => !have.ranks.includes(n))) return false;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(have.checkIn) || !/^\d{4}-\d{2}-\d{2}$/.test(wanted.checkIn)) return false;
   // Arrival/departure affect the initial search and prices, independently of the daily snapshot range.

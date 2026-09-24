@@ -11,6 +11,7 @@ const GRACE_MS = 5 * 60 * 1000;
 const STATES = new Set(["queued", "running", "complete", "reused", "partial", "failed", "blocked", "interrupted", "missed"]);
 const TERMINAL = new Set([...STATES].filter(value => !["queued", "running"].includes(value)));
 const RECEIPT_ID = /^(?:scheduled_\d{4}-\d{2}-\d{2}|manual_[a-f0-9]{32,64})$/;
+const WORKER_NAMES = { web: "2Gweb_worker", manual: "BG worker", scheduled: "AWS worker" };
 
 function fault(code, statusCode = 400) {
   const error = new Error(code);
@@ -76,7 +77,7 @@ function validatePacing(value) {
 function defaultConfig(at = new Date()) {
   return { version: VERSION, enabled: false, timezone: "Asia/Seoul", repeat: "daily", firstDate: dateKey(at), time: "14:00", keywords: [],
     collection: { dateMode: "rolling", bookingDays: 31, checkIn: null, checkOut: null, adults: 2, detailRankRanges: "1-20",
-      productMode: "all", collectionMode: "precision", collectionPurpose: "revenue_detail" }, requestPacing: null };
+      productMode: "all", collectionMode: "precision", collectionPurpose: "revenue_detail", dayUseMode: "inspect" }, requestPacing: null };
 }
 function validateConfig(value) {
   keysOnly(value, ["version", "enabled", "timezone", "repeat", "firstDate", "time", "keywords", "collection", "requestPacing"], "KEYWORD_SCHEDULE_CONFIG_INVALID");
@@ -84,10 +85,11 @@ function validateConfig(value) {
     || !["once", "daily", "weekdays"].includes(value.repeat) || !date(value.firstDate)
     || typeof value.time !== "string" || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value.time)) throw fault("KEYWORD_SCHEDULE_CONFIG_INVALID");
   const input = value.collection;
-  keysOnly(input, ["dateMode", "bookingDays", "checkIn", "checkOut", "adults", "detailRankRanges", "productMode", "collectionMode", "collectionPurpose"], "KEYWORD_SCHEDULE_COLLECTION_INVALID");
+  keysOnly(input, ["dateMode", "bookingDays", "checkIn", "checkOut", "adults", "detailRankRanges", "productMode", "collectionMode", "collectionPurpose", "dayUseMode"], "KEYWORD_SCHEDULE_COLLECTION_INVALID");
   if (!["rolling", "fixed"].includes(input.dateMode) || !Number.isSafeInteger(input.bookingDays) || input.bookingDays < 1 || input.bookingDays > 31
     || !Number.isSafeInteger(input.adults) || input.adults < 1 || input.adults > 30 || input.productMode !== "all"
-    || input.collectionMode !== "precision" || input.collectionPurpose !== "revenue_detail") throw fault("KEYWORD_SCHEDULE_COLLECTION_INVALID");
+    || input.collectionMode !== "precision" || !["basic_db", "revenue_detail"].includes(input.collectionPurpose)
+    || (input.dayUseMode !== undefined && !["inspect", "lodging_only", "detail"].includes(input.dayUseMode))) throw fault("KEYWORD_SCHEDULE_COLLECTION_INVALID");
   rankRange(input.detailRankRanges);
   const collection = clone(input);
   if (input.dateMode === "fixed") {
@@ -105,7 +107,7 @@ function executionConfig(value) {
   // New runs use the worker's current defaults. Keep validateConfig unchanged
   // so historical receipts retain the conditions that actually ran.
   const config = validateConfig(value);
-  return { ...config, collection: { ...config.collection, adults: 2 }, requestPacing: null };
+  return { ...config, collection: { ...config.collection, adults: 2, dayUseMode: config.collection.dayUseMode || "detail" }, requestPacing: null };
 }
 function eligible(config, day) {
   if (day < config.firstDate || (config.repeat === "once" && day !== config.firstDate)) return false;
@@ -150,17 +152,19 @@ function previewSchedule(config, at, taken) {
   }
   return null;
 }
-function payloadFor(config, keyword, day, occurrenceId, index, trigger) {
+function occurrenceScope(workerKey, occurrenceId) { return workerKey === "scheduled" ? occurrenceId : `${workerKey}_${occurrenceId}`; }
+function payloadFor(config, keyword, day, occurrenceId, index, trigger, workerKey = "scheduled") {
+  if (!Object.hasOwn(WORKER_NAMES, workerKey)) throw fault("KEYWORD_SCHEDULE_WORKER_INVALID");
   const collection = config.collection;
   const checkIn = collection.dateMode === "fixed" ? collection.checkIn : day;
   const lastDate = collection.dateMode === "fixed" ? collection.checkOut : addDays(day, collection.bookingDays - 1);
-  const payload = { keyword, workerKey: "scheduled", trigger, scheduledCollection: trigger === "scheduled",
+  const payload = { keyword, workerKey, trigger, scheduledCollection: trigger === "scheduled",
     searchMode: "keyword", checkIn, checkOut: collection.bookingDays === 1 ? addDays(checkIn, 1) : lastDate,
     adults: 2, collectionMode: collection.collectionMode, collectionPurpose: collection.collectionPurpose,
-    productMode: collection.productMode, detailRankRanges: collection.detailRankRanges, bookingRangeDays: collection.bookingDays,
+    productMode: collection.productMode, dayUseMode: collection.dayUseMode || "detail", detailRankRanges: collection.detailRankRanges, bookingRangeDays: collection.bookingDays,
     bookingRangePlaceLimit: rankRange(collection.detailRankRanges).max, sourceRole: "admin", collectionSource: "admin_search",
-    collectionSourceLabel: trigger === "scheduled" ? "예약워커 · 예약수집" : "예약워커 · 즉시수집",
-    clientRequestId: `${occurrenceId}_${index + 1}`, scheduleOccurrenceId: occurrenceId };
+    collectionSourceLabel: `${WORKER_NAMES[workerKey]} · ${trigger === "scheduled" ? "예약수집" : "즉시수집"}`,
+    clientRequestId: `${workerKey === "scheduled" ? "" : `${workerKey}_`}${occurrenceId}_${index + 1}`, scheduleOccurrenceId: occurrenceScope(workerKey, occurrenceId) };
   return payload;
 }
 function safeCode(value, fallback = "KEYWORD_SCHEDULE_OPERATION_FAILED") {
@@ -189,9 +193,12 @@ function finalResult(value, quality) {
 
 function createKeywordWorkerScheduler(options = {}) {
   if (typeof options.runCrawler !== "function" || typeof options.dataDir !== "string") throw fault("KEYWORD_SCHEDULE_DEPENDENCIES_REQUIRED");
+  const workerKey = options.workerKey || "scheduled";
+  if (!Object.hasOwn(WORKER_NAMES, workerKey)) throw fault("KEYWORD_SCHEDULE_WORKER_INVALID");
   const dataDir = path.resolve(options.dataDir);
-  const configFile = path.join(dataDir, "config", "keyword-worker-schedule.json");
-  const receiptDir = path.join(dataDir, "history", "keyword-worker-schedule");
+  const namespace = workerKey === "scheduled" ? "keyword-worker-schedule" : `keyword-worker-schedule-${workerKey}`;
+  const configFile = path.join(dataDir, "config", `${namespace}.json`);
+  const receiptDir = path.join(dataDir, "history", namespace);
   const now = options.now || (() => new Date());
   const setIntervalImpl = options.setIntervalImpl || setInterval;
   const clearIntervalImpl = options.clearIntervalImpl || clearInterval;
@@ -238,7 +245,7 @@ function createKeywordWorkerScheduler(options = {}) {
   function validateReceipt(value, id) {
     keysOnly(value, ["version", "id", "day", "trigger", "workerKey", "status", "createdAt", "scheduledAt", "startedAt", "finishedAt", "errorCode", "config", "items", "durationMs"], "KEYWORD_SCHEDULE_STATE_INVALID");
     if (!object(value) || value.version !== VERSION || value.id !== id || !RECEIPT_ID.test(id) || !STATES.has(value.status)
-      || !["manual", "scheduled"].includes(value.trigger) || !date(value.day) || !Array.isArray(value.items) || value.items.length > 100
+      || value.workerKey !== workerKey || !["manual", "scheduled"].includes(value.trigger) || !date(value.day) || !Array.isArray(value.items) || value.items.length > 100
       || value.items.some(item => !object(item) || !STATES.has(item.status) || typeof item.keyword !== "string" || uniqueKeywords([item.keyword])[0] !== item.keyword)) throw fault("KEYWORD_SCHEDULE_STATE_INVALID", 503);
     validateConfig(value.config);
     for (const item of value.items) keysOnly(item, ["keyword", "status", "runId", "startedAt", "endedAt", "durationMs", "errorCode"], "KEYWORD_SCHEDULE_STATE_INVALID");
@@ -308,7 +315,7 @@ function createKeywordWorkerScheduler(options = {}) {
         pauseEpoch += 1;
         // Only future/unclaimed scheduled work is withdrawn by the application.
         // Immediate batches and an already running worker remain unaffected.
-        const occurrenceIds = [...active.keys()].filter(id => id.startsWith("scheduled_"));
+        const occurrenceIds = [...active.keys()].filter(id => id.startsWith("scheduled_")).map(id => occurrenceScope(workerKey, id));
         if (occurrenceIds.length && typeof options.cancelPendingScheduled === "function") {
           await options.cancelPendingScheduled({ occurrenceIds, reason: "SCHEDULE_PAUSED" });
         }
@@ -319,7 +326,7 @@ function createKeywordWorkerScheduler(options = {}) {
   async function createReceipt(config, day, trigger, requestId, missed = false) {
     const id = trigger === "scheduled" ? `scheduled_${day}` : `manual_${requestId ? crypto.createHash("sha256").update(requestId).digest("hex") : crypto.randomBytes(16).toString("hex")}`;
     const createdAt = instant().toISOString();
-    const entry = { version: VERSION, id, day, trigger, workerKey: "scheduled", status: missed ? "missed" : "queued", createdAt,
+    const entry = { version: VERSION, id, day, trigger, workerKey, status: missed ? "missed" : "queued", createdAt,
       scheduledAt: trigger === "scheduled" ? scheduledAt(day, config.time) : null, startedAt: null, finishedAt: missed ? createdAt : null,
       errorCode: missed ? "SCHEDULE_WINDOW_MISSED" : null, config: clone(config), items: config.keywords.map(keyword => ({ keyword, status: missed ? "missed" : "queued", runId: null })) };
     let handle;
@@ -358,7 +365,7 @@ function createKeywordWorkerScheduler(options = {}) {
         if (persistenceFailed) throw fault(lastError, 503);
         const freeBytes = await getFreeBytes();
         if (!Number.isFinite(freeBytes) || freeBytes <= MIN_FREE_BYTES) { pendingEnd(entry, "failed", "DISK_SPACE_UNAVAILABLE"); break; }
-        const payload = payloadFor(entry.config, item.keyword, entry.day, entry.id, index, entry.trigger);
+        const payload = payloadFor(entry.config, item.keyword, entry.day, entry.id, index, entry.trigger, workerKey);
         if (payload.checkIn < dateKey(instant())) { pendingEnd(entry, "missed", "COLLECTION_DATE_EXPIRED"); break; }
         entry.status = "running";
         entry.startedAt ||= instant().toISOString();
@@ -466,12 +473,12 @@ function createKeywordWorkerScheduler(options = {}) {
       const previewNextRunAt = previewSchedule(config, at, taken);
       const nextRunAt = config.enabled && !persistenceFailed && !stopped ? previewNextRunAt : null;
       const ordered = receipts.sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
-      return { enabled: config.enabled, active: active.size > 0, activeOccurrenceIds: [...active.keys()], workerKey: "scheduled", config: clone(config), nextRunAt,
+      return { enabled: config.enabled, active: active.size > 0, activeOccurrenceIds: [...active.keys()], workerKey, config: clone(config), nextRunAt,
         previewNextRunAt, expired: Boolean(expiryReason), expiryReason,
         day: today, graceMs: GRACE_MS, today: ordered.filter(entry => entry.day === today).slice(0, 100), latest: ordered.slice(0, 20),
         lastError, stopped, note: "active means awaiting dispatch/result; use collector status for actual worker execution" };
     } catch (error) {
-      return { enabled: false, active: active.size > 0, activeOccurrenceIds: [...active.keys()], workerKey: "scheduled", config: null, nextRunAt: null,
+      return { enabled: false, active: active.size > 0, activeOccurrenceIds: [...active.keys()], workerKey, config: null, nextRunAt: null,
         previewNextRunAt: null, expired: false, expiryReason: null,
         day: dateKey(instant()), today: [], latest: [], lastError: safeCode(error?.code, "KEYWORD_SCHEDULE_STATE_INVALID"), stopped };
     }

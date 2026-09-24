@@ -18,6 +18,11 @@ function inspectProductCoverage(coverage, bookingExpected) {
   const keys = ["discovered", "eligible", "excluded", "queried", "truncated"];
   if (keys.some(key => count(coverage[key]) === null)) return "product_coverage_invalid";
   for (const target of coverage.targets) {
+    if (target.productListComplete === false) return "product_list_incomplete";
+    if (target.dayUseMode !== undefined && (!["inspect", "lodging_only", "detail"].includes(target.dayUseMode)
+      || !["present", "absent", "unknown"].includes(target.dayUsePresence)
+      || count(target.dayUseExcludedByMode) === null || target.dayUseExcludedByMode > target.excluded
+      || (target.dayUseMode !== "detail" && target.dayUseSchedulesRequested !== false))) return "product_coverage_invalid";
     if (keys.some(key => count(target[key]) === null) || target.discovered !== target.eligible + target.excluded
       || target.queried > target.eligible || target.truncated > target.eligible
       || !Array.isArray(target.days) || !target.days.length || count(target.expectedDays) !== target.days.length
@@ -85,6 +90,9 @@ function inspectManifest(manifest, options = {}) {
   for (const key of ["collectionMode", "collectionPurpose", "productMode", "checkIn", "checkOut"]) {
     if (expected[key] !== undefined && String(expected[key]) !== String(manifest[key] ?? "")) return receipt("failed", `${key}_mismatch`, counts);
   }
+  if (expected.dayUseMode !== undefined && expected.dayUseMode !== (manifest.dayUseMode || "detail")) return receipt("failed", "dayUseMode_mismatch", counts);
+  if (manifest.dayUseMode !== undefined && !["inspect", "lodging_only", "detail"].includes(manifest.dayUseMode)) return receipt("failed", "dayUseMode_invalid", counts);
+  if (manifest.productCoverage?.targets?.some(target => target.dayUseMode !== undefined && target.dayUseMode !== manifest.dayUseMode)) return receipt("failed", "dayUseMode_coverage_mismatch", counts);
   if (expected.detailRankRanges && compact(expected.detailRankRanges) !== compact(manifest.detailRankRanges)) return receipt("failed", "detail_rank_range_mismatch", counts);
   const expectedDays = count(expected.bookingRangeDays ?? expected.bookingDays);
   if (expectedDays !== null && count(manifest.bookingRangeDays) !== expectedDays) return receipt("failed", "booking_days_mismatch", counts);
@@ -97,7 +105,9 @@ function inspectManifest(manifest, options = {}) {
     bookingExpected = enabled && counts.naverBookingStockEligible !== 0;
   }
   if (bookingExpected && (counts.naverBookingStockChecked === 0 || counts.naverBookingStockSucceeded === 0)) return receipt("failed", "no_successful_booking_results", counts);
-  if (bookingExpected && counts.naverScheduleRequested === 0) return receipt("failed", "no_booking_schedule_requests", counts);
+  const noScheduleTargets = manifest.dayUseMode !== undefined && Array.isArray(manifest.productCoverage?.targets)
+    && manifest.productCoverage.targets.length > 0 && manifest.productCoverage.targets.every(target => target.productListComplete === true && target.eligible === 0);
+  if (bookingExpected && !noScheduleTargets && counts.naverScheduleRequested === 0) return receipt("failed", "no_booking_schedule_requests", counts);
   if (Object.values(counts).some((value) => value === null) || !attempts.length || attempts.some((attempt) => count(attempt?.status) === null)) {
     return receipt("partial", "quality_metadata_missing", counts);
   }

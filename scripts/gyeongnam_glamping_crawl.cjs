@@ -5,6 +5,7 @@ const { inspectManifest } = require("./daily_collection_quality.cjs");
 const { applyInventoryEvidence, productEvidence } = require("./inventory_estimation.cjs");
 const { createNaverRequestGate, isNaverBookingRateLimit, isNaverCaptchaResponse } = require("./naver_request_pacing.cjs");
 const { createProductCoverage } = require("./collector_product_coverage.cjs");
+const { DAY_USE_MODES, normalizeDayUseMode, dayUsePlan, withoutUncollectedDayUse } = require("./collector_day_use.cjs");
 const COLLECTION_STARTED_AT = new Date().toISOString();
 const productCoverage = createProductCoverage();
 const SCHEDULED_COLLECTION = process.env.SCHEDULED_COLLECTION === "1";
@@ -293,6 +294,7 @@ const CHECK_OUT = process.env.CHECK_OUT || kstDate(6);
 const ADULTS = Number(process.env.ADULTS || 2);
 const PRODUCT_MODE = normalizeProductMode(process.env.PRODUCT_MODE || "all");
 const PRODUCT_MODE_LABEL = PRODUCT_MODES[PRODUCT_MODE];
+const DAY_USE_MODE = normalizeDayUseMode(process.env.DAY_USE_MODE);
 const BOOKING_RANGE_DAYS = boundedInteger(process.env.BOOKING_RANGE_DAYS, 7, 1, 31);
 const RAW_KEYWORD = process.argv[2] || "경남글램핑";
 const SEARCH_MODE = normalizeSearchMode(process.env.SEARCH_MODE || "keyword");
@@ -1745,7 +1747,8 @@ async function getNaverBookingItems(bookingBusinessId) {
   );
   return {
     status: result.status,
-    items: result.data?.data?.searchBizItem?.bizItems || [],
+    items: Array.isArray(result.data?.data?.searchBizItem?.bizItems) ? result.data.data.searchBizItem.bizItems : [],
+    listObserved: Array.isArray(result.data?.data?.searchBizItem?.bizItems),
     errors: result.data?.errors || null,
   };
 }
@@ -2716,6 +2719,9 @@ function applyCrawlerInventoryEvidence(result, placeId) {
     weeklyDays: result.weekly?.requestedDays ?? (result.itemDetails?.length ? 1 : 0),
     dayUseWeeklyDays: result.dayUseWeekly?.requestedDays ?? (result.itemDetails?.length ? 1 : 0),
     dayUseItemCount: result.dayUseItemCount,
+    dayUseMode: result.dayUseMode,
+    dayUsePresence: result.dayUsePresence,
+    dayUseScheduleStatus: result.dayUseScheduleStatus,
     inventoryCapacityBaseline: result.inventoryCapacityBaseline,
     sharedRooms: result.sharedRooms,
   });
@@ -2854,6 +2860,7 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
         : "네이버예약 사업자ID 없음";
     const result = {
       status,
+      dayUseMode: DAY_USE_MODE, dayUsePresence: "unknown", dayUseScheduleStatus: "unavailable", dayUseSharingStatus: "unconfirmed",
       bookingBusinessId: "",
       bookingUrl: booking?.bookingUrl || "",
     };
@@ -2863,15 +2870,19 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
 
   await delay(120);
   const itemResult = await getNaverBookingItems(booking.bookingBusinessId);
-  const allItems = itemResult.items.filter((item) => item.isImp !== false && item.isClosedBooking !== true && item.isClosedBookingUser !== true);
-  productCoverage.discover(booking.bookingBusinessId, itemResult.items, allItems,
-    Array.from({ length: options.collectRange ? BOOKING_RANGE_DAYS : 1 }, (_, index) => addDays(CHECK_IN, index)));
+  const dayUse = dayUsePlan({ mode: DAY_USE_MODE, itemResult, classify: naverBookingSaleType, collectDetail: COLLECTION_PROFILE.collectWeeklyRange });
+  const allItems = dayUse.all;
+  productCoverage.discover(booking.bookingBusinessId, itemResult.items, dayUse.eligible,
+    Array.from({ length: options.collectRange ? BOOKING_RANGE_DAYS : 1 }, (_, index) => addDays(CHECK_IN, index)), {
+      dayUseMode: DAY_USE_MODE, dayUsePresence: dayUse.presence, dayUseExcludedByMode: dayUse.excludedDayUse,
+      dayUseSchedulesRequested: dayUse.collectDayUseSchedules, productListComplete: dayUse.listComplete,
+    });
   const nightItems = allItems.filter((item) => naverBookingSaleType(item) === "숙박");
   const dayUseItems = allItems.filter((item) => naverBookingSaleType(item) === "데이유즈");
   const unknownItems = allItems.filter((item) => naverBookingSaleType(item) === "미분류");
   const items = [...nightItems, ...unknownItems];
   const schedules = await collectNaverSchedulesForItems(booking.bookingBusinessId, items, 40);
-  const dayUseSchedules = await collectNaverSchedulesForItems(booking.bookingBusinessId, dayUseItems, 20);
+  const dayUseSchedules = dayUse.collectDayUseSchedules ? await collectNaverSchedulesForItems(booking.bookingBusinessId, dayUseItems, 20) : [];
   const couponSeed = summarizeNaverCouponExposure([
     couponSource("숙박상품", items),
     couponSource("데이유즈상품", dayUseItems),
@@ -2884,15 +2895,15 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
   const weekly = options.collectRange
     ? await collectWeeklyNaverAvailability(booking.bookingBusinessId, items, schedules, BOOKING_RANGE_DAYS)
     : null;
-  const dayUseWeekly = options.collectRange
+  const dayUseWeekly = options.collectRange && dayUse.collectDayUseSchedules
     ? await collectWeeklyNaverAvailability(booking.bookingBusinessId, dayUseItems, dayUseSchedules, BOOKING_RANGE_DAYS, "회", 20)
     : null;
 
   let result = {
-    status: itemResult.errors
+    status: !dayUse.listComplete
       ? "객실목록 일부 오류"
       : !nightItems.length && dayUseItems.length && !unknownItems.length
-        ? "숙박상품 없음(데이유즈만)"
+        ? "성공(숙박상품 없음·데이유즈만)"
         : fallbackBooking?.bookingBusinessId
           ? "성공(과거ID)"
           : pageBooking?.bookingBusinessId
@@ -2911,6 +2922,7 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
     weekly,
     dayUseWeekly,
   };
+  result = withoutUncollectedDayUse(result, dayUse);
   result = applyCrawlerInventoryEvidence(result, placeId);
   if (fallbackBooking?.bookingBusinessId) {
     result.inventoryMemo = [
@@ -2939,6 +2951,10 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
   const bookingResultPromises = new Map();
 
   for (const row of rows) {
+    row.dayUseMode = DAY_USE_MODE;
+    row.dayUsePresence = "unknown";
+    row.dayUseScheduleStatus = "unavailable";
+    row.dayUseSharingStatus = "unconfirmed";
     if (!row.place_id || row.예약 !== "Y") {
       row.네이버예약재고수집상태 = row.예약 === "Y" ? "place_id 없음" : "네이버예약 미노출";
       continue;
@@ -2995,6 +3011,10 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       row.네이버상품구성 = result.productTypeSummary || "";
       row.숙박상품수 = result.nightItemCount ?? "";
       row.데이유즈상품수 = result.dayUseItemCount ?? "";
+      row.dayUseMode = DAY_USE_MODE;
+      row.dayUsePresence = result.dayUsePresence || "unknown";
+      row.dayUseScheduleStatus = result.dayUseScheduleStatus || "unavailable";
+      row.dayUseSharingStatus = result.dayUseSharingStatus || "unconfirmed";
       row.미분류상품수 = result.unknownItemCount ?? "";
       row.예약계산대상상품수 = result.countedItemCount ?? "";
       row.예약가능객실수 = result.availableRooms ?? "";
@@ -3602,6 +3622,10 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       "네이버상품구성": row.네이버상품구성 || "",
       "숙박상품수": row.숙박상품수 ?? "",
       "데이유즈상품수": row.데이유즈상품수 ?? "",
+      dayUseMode: row.dayUseMode || DAY_USE_MODE,
+      dayUsePresence: row.dayUsePresence || "unknown",
+      dayUseScheduleStatus: row.dayUseScheduleStatus || "unavailable",
+      dayUseSharingStatus: row.dayUseSharingStatus || "unconfirmed",
       "예약계산대상상품수": row.예약계산대상상품수 ?? "",
       "예약가능객실수": row.예약가능객실수 ?? "",
       "확인객실수": row.확인객실수 ?? "",
@@ -3690,6 +3714,10 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       "네이버상품구성": row.네이버상품구성 || "",
       "숙박상품수": row.숙박상품수 ?? "",
       "데이유즈상품수": row.데이유즈상품수 ?? "",
+      dayUseMode: row.dayUseMode || DAY_USE_MODE,
+      dayUsePresence: row.dayUsePresence || "unknown",
+      dayUseScheduleStatus: row.dayUseScheduleStatus || "unavailable",
+      dayUseSharingStatus: row.dayUseSharingStatus || "unconfirmed",
       "예약계산대상상품수": row.예약계산대상상품수 ?? "",
       "예약가능객실수": row.예약가능객실수 ?? "",
       "확인객실수": row.확인객실수 ?? "",
@@ -3967,6 +3995,7 @@ async function main() {
     "네이버상품구성",
     "숙박상품수",
     "데이유즈상품수",
+    "dayUseMode", "dayUsePresence", "dayUseScheduleStatus", "dayUseSharingStatus",
     "예약계산대상상품수",
     "예약가능객실수",
     "확인객실수",
@@ -4080,6 +4109,7 @@ async function main() {
     "네이버상품구성",
     "숙박상품수",
     "데이유즈상품수",
+    "dayUseMode", "dayUsePresence", "dayUseScheduleStatus", "dayUseSharingStatus",
     "미분류상품수",
     "예약계산대상상품수",
     "예약가능객실수",
@@ -4196,6 +4226,7 @@ async function main() {
     "네이버상품구성",
     "숙박상품수",
     "데이유즈상품수",
+    "dayUseMode", "dayUsePresence", "dayUseScheduleStatus", "dayUseSharingStatus",
     "미분류상품수",
     "예약계산대상상품수",
     "예약가능객실수",
@@ -4310,6 +4341,7 @@ async function main() {
     "네이버상품구성",
     "숙박상품수",
     "데이유즈상품수",
+    "dayUseMode", "dayUsePresence", "dayUseScheduleStatus", "dayUseSharingStatus",
     "미분류상품수",
     "예약계산대상상품수",
     "예약가능객실수",
@@ -4604,6 +4636,8 @@ async function main() {
     adults: ADULTS,
     productMode: PRODUCT_MODE,
     productModeLabel: PRODUCT_MODE_LABEL,
+    dayUseMode: DAY_USE_MODE,
+    dayUseModeLabel: DAY_USE_MODES[DAY_USE_MODE],
     bookingRangeDays: BOOKING_RANGE_DAYS,
     bookingRangePlaceLimit: BOOKING_RANGE_PLACE_LIMIT,
     naverOtaObservationLimit: NAVER_OTA_OBSERVATION_LIMIT,
@@ -4644,6 +4678,7 @@ async function main() {
 function addCollectionDiagnostics(manifest) {
   Object.assign(manifest, {
     schemaVersion: 2,
+    dayUseMode: DAY_USE_MODE,
     startedAt: COLLECTION_STARTED_AT,
     workerKey: COLLECTOR_WORKER_KEY,
     trigger: COLLECTOR_TRIGGER,

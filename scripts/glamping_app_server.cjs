@@ -326,13 +326,13 @@ const dailyKeywordCollectionScheduler = createDailyKeywordCollectionScheduler({
   inspectResult: (result, payload) => result?.collectionQuality || inspectDailyCollectionResult(result, payload),
   logger: console
 });
-const keywordWorkerScheduler = createKeywordWorkerScheduler({
-  dataDir:DATA_DIR,
+const keywordWorkerSchedulers = Object.fromEntries(["web", "manual", "scheduled"].map(workerKey => [workerKey, createKeywordWorkerScheduler({
+  dataDir:DATA_DIR, workerKey,
   runCrawler: payload => runCrawler({...payload,sourceRole:USER_ROLES.admin,collectionSource:"admin_search"}),
-  beforeImmediateRun: () => assertCollectorReady("scheduled",true),
-  cancelPendingScheduled: cancelPendingScheduledCollections,
+  beforeImmediateRun: () => assertCollectorReady(workerKey,true),
+  cancelPendingScheduled: options => cancelPendingScheduledCollections({...options,workerKey}),
   inspectResult: (result,payload) => result?.collectionQuality || inspectDailyCollectionResult(result,payload)
-});
+})]));
 const collectorRequests = createCollectorRequests({dataDir:DATA_DIR,run:runCrawler,preflight:payload=>assertCollectorReady(payload.workerKey,true)});
 const pausedScheduleOccurrences = new Set();
 
@@ -352,9 +352,9 @@ async function assertCollectorReady(workerKey,requireConnection=false) {
   if(Number(disk.bavail)*Number(disk.bsize)<=200*1024*1024) throw Object.assign(new Error("결과 저장공간이 부족합니다."),{statusCode:409,code:"COLLECTOR_DISK_LOW"});
 }
 
-async function cancelPendingScheduledCollections({occurrenceIds=[]}) {
+async function cancelPendingScheduledCollections({occurrenceIds=[],workerKey="scheduled"}) {
   for(const id of occurrenceIds) pausedScheduleOccurrences.add(id);
-  return withCrawlLane("scheduled",async()=>{
+  return withCrawlLane(workerKey,async()=>{
     for(const job of [...crawlLane().crawlQueue]) {
       if(job.payload.trigger!=="scheduled" || !occurrenceIds.includes(job.payload.scheduleOccurrenceId) || job.waiterCount>1) continue;
       crawlLane().crawlQueue.splice(crawlLane().crawlQueue.indexOf(job),1);
@@ -362,7 +362,7 @@ async function cancelPendingScheduledCollections({occurrenceIds=[]}) {
     }
     const job=crawlLane().activeCrawlJob;
     if(job?.payload.trigger==="scheduled" && occurrenceIds.includes(job.payload.scheduleOccurrenceId) && job.waiterCount<=1 && crawlLane().activeCollectorJobId) {
-      await collectorBrokers.scheduled.cancelQueued(crawlLane().activeCollectorJobId,"COLLECTOR_SCHEDULE_PAUSED");
+      await collectorControllers()[workerKey]?.cancelQueued?.(crawlLane().activeCollectorJobId,"COLLECTOR_SCHEDULE_PAUSED");
     }
   });
 }
@@ -763,6 +763,12 @@ function resolveSearchModeForCrawl(keyword, value, payload = {}) {
     : mode;
 }
 
+function normalizeDayUseMode(value) {
+  const mode = value == null ? "detail" : String(value);
+  if (!["inspect", "lodging_only", "detail"].includes(mode)) throw Object.assign(new Error("데이유즈 확인 범위를 선택하세요."), {statusCode:400,code:"COLLECTION_DAY_USE_MODE_INVALID"});
+  return mode;
+}
+
 function crawlExecutionPlan(payload = {}) {
   const keyword = String(payload.keyword || "").trim();
   const rawSearchIntent = regionalLodgingSearchIntent(keyword);
@@ -780,6 +786,7 @@ function crawlExecutionPlan(payload = {}) {
   const checkIn = payload.checkIn || process.env.CHECK_IN || kstDate(0);
   const checkOut = payload.checkOut || process.env.CHECK_OUT || kstDate(6);
   const productMode = normalizeProductMode(payload.productMode || process.env.PRODUCT_MODE || "all");
+  const dayUseMode = normalizeDayUseMode(payload.dayUseMode);
   const broadLodging = rawSearchIntent.kind === "broad_lodging" && resolvedSearchMode !== "company";
   const collectionMode = broadLodging
     ? "precision"
@@ -829,6 +836,7 @@ function crawlExecutionPlan(payload = {}) {
     searchScope: searchIntent.scope,
     searchScopeLabel: searchIntent.label,
     productMode,
+    dayUseMode,
     collectionMode,
     collectionPurpose,
     collectionProfile: executionProfile.key,
@@ -975,6 +983,7 @@ function crawlTimingConditions(plan = {}) {
     searchMode: plan.resolvedSearchMode || plan.searchMode || "keyword",
     requestedSearchMode: normalizeSearchMode(plan.requestedSearchMode || plan.searchMode || "keyword"),
     productMode: normalizeProductMode(plan.productMode),
+    dayUseMode: normalizeDayUseMode(plan.dayUseMode),
     collectionMode: normalizeCollectionMode(plan.collectionMode),
     collectionPurpose: normalizeCollectionPurpose(plan.collectionPurpose),
     collectionProfile: plan.collectionProfile || collectionExecutionProfile(plan.collectionPurpose, plan.collectionMode).key,
@@ -1149,6 +1158,7 @@ function crawlPayloadSignature(payload = {}) {
     requestedSearchMode: normalizeSearchMode(plan.requestedSearchMode),
     searchScope: plan.searchScope,
     productMode: plan.productMode,
+    dayUseMode: plan.dayUseMode,
     collectionMode: plan.collectionMode,
     collectionPurpose: plan.collectionPurpose,
     collectionProfile: plan.collectionProfile,
@@ -5116,6 +5126,7 @@ async function listRuns() {
       collectionSource: normalizeCollectionSource(manifest?.collectionSource, manifest?.sourceRole || USER_ROLES.admin),
       collectionSourceLabel: manifest?.collectionSourceLabel || collectionSourceLabel(normalizeCollectionSource(manifest?.collectionSource, manifest?.sourceRole || USER_ROLES.admin)),
       collectionPurpose: manifest?.collectionPurpose || "revenue_detail",
+      dayUseMode: manifest?.dayUseMode || "detail",
       collectionPurposeLabel: manifest?.collectionPurposeLabel || COLLECTION_PURPOSES[manifest?.collectionPurpose] || COLLECTION_PURPOSES.revenue_detail,
       detailRankRanges: manifest?.detailRankRanges || "",
       bookingRangeDays: manifest?.bookingRangeDays || 1,
@@ -8375,6 +8386,10 @@ function summarizeRegionalRows(rows, provinceKey, fallbackKeyword = "") {
       productTypeSummary: row["네이버상품구성"] || "",
       nightItemCount: row["숙박상품수"] || "",
       dayUseItemCount: row["데이유즈상품수"] || "",
+      dayUseMode: row.dayUseMode || "detail",
+      dayUsePresence: row.dayUsePresence || (row.dayUseMode ? "unknown" : undefined),
+      dayUseScheduleStatus: row.dayUseScheduleStatus || "",
+      dayUseSharingStatus: row.dayUseSharingStatus || "",
       countedItemCount: row["예약계산대상상품수"] || "",
       availableRooms: row["숙박예약가능수"] || row["예약가능객실수"] || "",
       totalRooms: row["숙박확인재고수"] || row["확인객실수"] || "",
@@ -9263,7 +9278,14 @@ function summarizeProductSalesSignal(rows = []) {
 function companySalesSignalFromItem(item = {}, run = {}) {
   const checkIn = run.checkIn || runDateFromId(run.id) || kstDate(0);
   const lodging = summarizeProductSalesSignal(historySeriesForItem(item, "lodging", checkIn));
-  const dayUse = summarizeProductSalesSignal(historySeriesForItem(item, "dayuse", checkIn));
+  const dayUseUnobserved = Boolean(item.dayUseScheduleStatus)
+    && (item.dayUseScheduleStatus !== "requested" || item.dayUsePresence === "absent");
+  const dayUse = dayUseUnobserved ? {
+    ...summarizeProductSalesSignal([]), totalSupply: null, totalSold: null,
+    publicBookings: null, phoneBookings: null, sharedDayUseExcluded: null,
+    partial: true, observed: false,
+    missingReason: item.dayUsePresence === "absent" ? "no_day_use_product" : item.dayUseScheduleStatus
+  } : summarizeProductSalesSignal(historySeriesForItem(item, "dayuse", checkIn));
   const structureFlags = Array.isArray(item.inventoryStructureFlags) ? item.inventoryStructureFlags : [];
   const manualApplied = hasActiveManualCorrection(item);
   const confidenceGrade = String(item.inventoryConfidenceGrade || "").toUpperCase();
@@ -9272,11 +9294,15 @@ function companySalesSignalFromItem(item = {}, run = {}) {
   const couponSignal = naverCouponSignalFromItem(item);
   return {
     checkIn,
+    dayUseMode: item.dayUseMode || "detail",
+    dayUsePresence: item.dayUsePresence,
+    dayUseScheduleStatus: item.dayUseScheduleStatus || "",
+    dayUseSharingStatus: item.dayUseSharingStatus || "",
     lodging,
     dayUse,
     lodgingDays: lodging.days,
     dayUseDays: dayUse.days,
-    dayUseMissing: !dayUseHasSupply,
+    dayUseMissing: dayUseUnobserved || !dayUseHasSupply,
     lodgingBasisTotal: snapshotNumber(item.weeklyBasisTotal),
     lodgingOperatingTotal: snapshotNumber(item.weeklyOperatingTotal),
     lodgingStructuralBlockedTotal: snapshotNumber(item.weeklyStructuralBlockedTotal),
@@ -9357,6 +9383,13 @@ function snapshotNumber(value) {
 }
 
 function companyRevenueSnapshotPart(item = {}, config = {}) {
+  if (config.weeklyRevenue === "dayUseWeeklyEstimatedRevenue" && item.dayUseScheduleStatus
+    && (item.dayUseScheduleStatus !== "requested" || item.dayUsePresence === "absent")) {
+    return { revenue: null, adjustedRevenue: null, missingPriceEstimatedRevenue: null,
+      revenuePrecisionRate: null, pricedSoldOut: null, missingPriceSoldOut: null, avgSoldUnitPrice: null,
+      byDayType: "", detail: "", offlineDetail: "", basis: "unobserved", observed: false,
+      missingReason: item.dayUsePresence === "absent" ? "no_day_use_product" : item.dayUseScheduleStatus };
+  }
   const weeklyRevenue = snapshotNumber(item[config.weeklyRevenue]);
   const basisRevenue = snapshotNumber(item[config.basisRevenue]);
   const weeklyAdjusted = snapshotNumber(item[config.weeklyAdjusted]);
@@ -9713,6 +9746,8 @@ function compactProductSnapshotDaily(item = {}, run = {}, observations = []) {
         const sold = row.missing ? null : productSnapshotNumber(row.sold);
         return {
           date,
+          ...(item.dayUseScheduleStatus ? { dayUseMode: item.dayUseMode, dayUsePresence: item.dayUsePresence,
+            dayUseScheduleStatus: item.dayUseScheduleStatus, dayUseSharingStatus: item.dayUseSharingStatus } : {}),
           dayOfWeek: dayOfWeekFromDate(date),
           productType,
           productCount: new Set(productRows.map((observation) => observation.key)).size,
@@ -13653,6 +13688,8 @@ function companyHistoryDailyFallback(company = {}, observations = []) {
         ? Number((sold / total).toFixed(4)) : null;
       return {
         date,
+        ...(row.dayUseScheduleStatus ? { dayUseMode: row.dayUseMode, dayUsePresence: row.dayUsePresence,
+          dayUseScheduleStatus: row.dayUseScheduleStatus, dayUseSharingStatus: row.dayUseSharingStatus } : {}),
         dayOfWeek: dayOfWeekFromDate(date),
         productType,
         productCount: null,
@@ -13780,6 +13817,10 @@ function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today =
     const next = {
       date,
       productType,
+      dayUseMode: row.dayUseMode,
+      dayUsePresence: row.dayUsePresence,
+      dayUseScheduleStatus: row.dayUseScheduleStatus || "",
+      dayUseSharingStatus: row.dayUseSharingStatus,
       inventoryEvidenceVersion: evidenceVersion,
       ...counts,
       missing,
@@ -13814,6 +13855,9 @@ function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today =
   }
   const daily = [...byDate.values()].map((group) => {
     const fixedPolicy = group.rows.some((row) => row.inventoryEvidenceVersion >= 3);
+    const dayUseUnobservedRows = group.rows.filter(row => row.dayUseScheduleStatus
+      && (row.dayUseScheduleStatus !== "requested" || row.dayUsePresence === "absent"));
+    const dayUseRows = group.rows.filter(row => row.productType === "dayuse");
     // Shared day-use sessions are separate from room-night capacity and bookings.
     const quantityRows = fixedPolicy ? group.rows.filter((row) => row.productType === "lodging") : group.rows;
     const completeQuantity = quantityRows.length > 0 && quantityRows.every((row) => row.total !== null && row.sold !== null && !row.missing);
@@ -13839,7 +13883,10 @@ function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today =
       ...breakdown,
       total,
       sold,
-      dayUseBookings: fixedPolicy ? group.rows.filter((row) => row.productType === "dayuse").reduce((sum, row) => sum + Number(row.publicBookings ?? row.sold ?? 0), 0) : null,
+      dayUseBookings: fixedPolicy && !dayUseUnobservedRows.length ? dayUseRows.reduce((sum, row) => sum + Number(row.publicBookings ?? row.sold ?? 0), 0) : null,
+      dayUseObserved: fixedPolicy ? !dayUseUnobservedRows.length && dayUseRows.length > 0 : null,
+      dayUseMissingReason: dayUseUnobservedRows.length ? (dayUseUnobservedRows.some(row => row.dayUsePresence === "absent")
+        ? "no_day_use_product" : dayUseUnobservedRows[0].dayUseScheduleStatus) : "",
       missing: quantityRows.some((row) => row.missing),
       partial: quantityRows.some((row) => row.partial || row.rateBlocked),
       inventoryConflict: quantityRows.some((row) => row.inventoryConflict),
@@ -13874,7 +13921,11 @@ function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today =
         fixedPolicy && rows.length && rows.every((row) => row[field] !== null)
           ? rows.reduce((sum, row) => sum + row[field], 0) : null
       ])),
-      dayUseBookings: fixedPolicy ? rows.reduce((sum, row) => sum + Number(row.dayUseBookings || 0), 0) : null,
+      dayUseBookings: fixedPolicy && rows.every(row => row.dayUseBookings !== null)
+        ? rows.reduce((sum, row) => sum + Number(row.dayUseBookings || 0), 0) : null,
+      dayUseObservedDays: rows.filter(row => row.dayUseObserved === true).length,
+      dayUseUnobservedDays: rows.filter(row => row.dayUseMissingReason).length,
+      dayUsePartial: rows.some(row => row.dayUseMissingReason),
       partial: fixedPolicy && (!completeRates || rows.some((row) => row.partial || row.missing)),
       revenuePartial: fixedPolicy && rows.some((row) => row.revenuePartial || !row.revenueEligible),
       observedDays: rows.length,
@@ -14495,6 +14546,8 @@ function buildHistoryObservations(data, collectedAt) {
           keywordKey,
           searchMode: run.searchMode || "",
           productMode: run.productMode || "",
+          ...(item.dayUseScheduleStatus ? { dayUseMode: item.dayUseMode, dayUsePresence: item.dayUsePresence,
+            dayUseScheduleStatus: item.dayUseScheduleStatus, dayUseSharingStatus: item.dayUseSharingStatus } : {}),
           sourceRole: run.sourceRole || "",
           collectionSource: run.collectionSource || "",
           collectionSourceLabel: run.collectionSourceLabel || "",
@@ -15424,6 +15477,10 @@ function summarizeAvailabilityRows(rows, baseDir = "", capacityCompanies = [], c
       weeklyProductDetails,
       nightItemCount: numericField(row, ["숙박상품수"]),
       dayUseItemCount: numericField(row, ["데이유즈상품수"]),
+      dayUseMode: row.dayUseMode || "detail",
+      dayUsePresence: row.dayUsePresence || (row.dayUseMode ? "unknown" : undefined),
+      dayUseScheduleStatus: row.dayUseScheduleStatus || "",
+      dayUseSharingStatus: row.dayUseSharingStatus || "",
       countedItemCount: numericField(row, ["예약계산대상상품수"]),
       availableRooms,
       totalRooms,
@@ -15582,9 +15639,15 @@ function summarizeAvailabilityRows(rows, baseDir = "", capacityCompanies = [], c
   const totalMissingPriceEstimatedRevenue = items.reduce((sum, item) => sum + Number(item.weeklyMissingPriceEstimatedRevenue ?? item.basisLodgingMissingPriceEstimatedRevenue ?? 0), 0);
   const totalPricedSoldOut = items.reduce((sum, item) => sum + Number(item.weeklyPricedSoldOut ?? item.basisLodgingPricedSoldOut ?? 0), 0);
   const totalMissingPriceSoldOut = items.reduce((sum, item) => sum + Number(item.weeklyMissingPriceSoldOut ?? item.basisLodgingMissingPriceSoldOut ?? 0), 0);
-  const dayUseEstimatedRevenue = items.reduce((sum, item) => sum + Number(item.dayUseWeeklyEstimatedRevenue ?? item.basisDayUseRevenue ?? 0), 0);
-  const dayUseAdjustedEstimatedRevenue = items.reduce((sum, item) => sum + Number(item.dayUseWeeklyAdjustedRevenue ?? item.basisDayUseAdjustedRevenue ?? item.dayUseWeeklyEstimatedRevenue ?? item.basisDayUseRevenue ?? 0), 0);
-  const dayUseMissingPriceEstimatedRevenue = items.reduce((sum, item) => sum + Number(item.dayUseWeeklyMissingPriceEstimatedRevenue ?? item.basisDayUseMissingPriceEstimatedRevenue ?? 0), 0);
+  const dayUseMeasuredItems = items.filter(item => !item.dayUseScheduleStatus
+    || (item.dayUseScheduleStatus === "requested" && item.dayUsePresence !== "absent"));
+  const dayUseUnobservedCount = items.length - dayUseMeasuredItems.length;
+  const dayUseEstimatedRevenue = dayUseUnobservedCount && !dayUseMeasuredItems.length ? null
+    : dayUseMeasuredItems.reduce((sum, item) => sum + Number(item.dayUseWeeklyEstimatedRevenue ?? item.basisDayUseRevenue ?? 0), 0);
+  const dayUseAdjustedEstimatedRevenue = dayUseUnobservedCount && !dayUseMeasuredItems.length ? null
+    : dayUseMeasuredItems.reduce((sum, item) => sum + Number(item.dayUseWeeklyAdjustedRevenue ?? item.basisDayUseAdjustedRevenue ?? item.dayUseWeeklyEstimatedRevenue ?? item.basisDayUseRevenue ?? 0), 0);
+  const dayUseMissingPriceEstimatedRevenue = dayUseUnobservedCount && !dayUseMeasuredItems.length ? null
+    : dayUseMeasuredItems.reduce((sum, item) => sum + Number(item.dayUseWeeklyMissingPriceEstimatedRevenue ?? item.basisDayUseMissingPriceEstimatedRevenue ?? 0), 0);
   const revenuePrecisionRate = (totalPricedSoldOut + totalMissingPriceSoldOut)
     ? Number((totalPricedSoldOut / (totalPricedSoldOut + totalMissingPriceSoldOut)).toFixed(3))
     : null;
@@ -15614,6 +15677,9 @@ function summarizeAvailabilityRows(rows, baseDir = "", capacityCompanies = [], c
       dayUseEstimatedRevenue,
       dayUseAdjustedEstimatedRevenue,
       dayUseMissingPriceEstimatedRevenue,
+      dayUseObservedCount: dayUseMeasuredItems.length,
+      dayUseUnobservedCount,
+      dayUseRevenuePartial: dayUseUnobservedCount > 0,
       combinedEstimatedRevenue,
       combinedAdjustedEstimatedRevenue,
       averageEstimatedRevenue,
@@ -17049,6 +17115,7 @@ async function loadRun(runId, options = {}) {
       collectionPurpose: manifest?.collectionPurpose || "revenue_detail",
       collectionPurposeLabel: manifest?.collectionPurposeLabel || COLLECTION_PURPOSES[manifest?.collectionPurpose] || COLLECTION_PURPOSES.revenue_detail,
       collectionProfile: manifest?.collectionProfile || collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").key,
+      dayUseMode: manifest?.dayUseMode || "detail",
       collectionProfileLabel: manifest?.collectionProfileLabel || collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").label,
       collectionProfileNote: manifest?.collectionProfileNote || collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").note,
       collectionProfileFlags: manifest?.collectionProfileFlags || {
@@ -17400,12 +17467,12 @@ async function runCrawlerLegacySingleFlight(payload) {
 async function runCrawler(payload) {
   const workerKey = selectedWorkerKey(payload.workerKey || "manual");
   if (workerKey === "scheduled" && COLLECTOR_EXECUTION_MODE !== "worker") {
-    throw Object.assign(new Error("예약워커 연결 설정이 필요합니다."), {statusCode:409,code:"COLLECTOR_NOT_CONFIGURED"});
+    throw Object.assign(new Error("AWS worker 연결 설정이 필요합니다."), {statusCode:409,code:"COLLECTOR_NOT_CONFIGURED"});
   }
   const request = {...payload,workerKey,trigger:payload.trigger === "scheduled" ? "scheduled" : "manual"};
-  if(workerKey==="web") { request.trigger="manual"; request.requestPacing=null; }
+  if(workerKey==="web") request.requestPacing=null;
   request.scheduledCollection = request.trigger === "scheduled";
-  const occurrenceDay = /^scheduled_(\d{4}-\d{2}-\d{2})$/.exec(String(payload.scheduleOccurrenceId || ""))?.[1]
+  const occurrenceDay = /^(?:(?:web|manual)_)?scheduled_(\d{4}-\d{2}-\d{2})$/.exec(String(payload.scheduleOccurrenceId || ""))?.[1]
     || new Date(Date.now() + 9 * 3600000).toISOString().slice(0,10);
   request.queueDeadline = request.scheduledCollection ? Date.parse(`${occurrenceDay}T23:59:59.999+09:00`) : null;
   return withCrawlLane(workerKey, async () => {
@@ -17606,6 +17673,9 @@ function scheduledCrawlerPacingEnv(payload = {}, checkIn = "") {
 }
 
 async function runCrawlerInternal(payload) {
+  if (payload.scheduledCollection && Number.isFinite(payload.queueDeadline) && Date.now() >= payload.queueDeadline) {
+    throw Object.assign(new Error("예약 실행일이 지나 대기 작업을 중단했습니다."), {code:"COLLECTOR_QUEUE_DEADLINE",statusCode:409});
+  }
   const plan = crawlExecutionPlan(payload);
   const keyword = plan.keyword;
   const collectionSource = normalizeCollectionSource(payload.collectionSource, payload.sourceRole);
@@ -17627,6 +17697,7 @@ async function runCrawlerInternal(payload) {
     COLLECTION_PURPOSE: plan.collectionPurpose,
     DETAIL_RANK_RANGES: plan.detailRankRanges,
     PRODUCT_MODE: plan.productMode,
+    DAY_USE_MODE: plan.dayUseMode,
     BOOKING_RANGE_DAYS: String(plan.bookingRangeDays),
     BOOKING_RANGE_PLACE_LIMIT: String(plan.bookingRangePlaceLimit),
     NAVER_BOOKING_STOCK_LIMIT: String(plan.bookingStockPlaceLimit),
@@ -17646,7 +17717,8 @@ async function runCrawlerInternal(payload) {
   if (payload.workerKey === "web") {
     // An explicit choice only: never fall back here when a remote worker fails.
     await assertCollectorReady("web");
-    const expected = {...plan,adults:Number(payload.adults||2),workerKey:"web",trigger:"manual",scheduledCollection:false};
+    if(payload.trigger==="scheduled" && pausedScheduleOccurrences.has(payload.scheduleOccurrenceId) && (crawlLane().activeCrawlJob?.waiterCount||1)<=1) throw Object.assign(new Error("예약이 일시정지되었습니다."),{code:"COLLECTOR_SCHEDULE_PAUSED",cancelled:true});
+    const expected = {...plan,adults:Number(payload.adults||2),workerKey:"web",trigger:payload.trigger||"manual",scheduledCollection:payload.scheduledCollection===true,queueDeadline:payload.queueDeadline};
     const completed = await collectorWeb.run({keyword,env,payload:expected,jobId:crawlLane().activeCrawlJob.id,context:await historicalBookingContext(),
       onChild: child => { crawlLane().activeCrawlChild=child; },
       isCancelled: () => crawlLane().activeCrawlCancelRequested
@@ -17654,7 +17726,7 @@ async function runCrawlerInternal(payload) {
     const output=completed.manifest, runId=completed.runId, collectionQuality=completed.collectionQuality;
     const history=runId && collectionQuality?.status==="complete" && allowsDerivedUpdates(output)
       ? await appendHistoryForRun(runId).catch(()=>({appended:0,error:"history_append_failed"})) : null;
-    return {output,runId,history,collectionQuality,workerKey:"web",trigger:"manual"};
+    return {output,runId,history,collectionQuality,workerKey:"web",trigger:payload.trigger||"manual"};
   }
 
   if (COLLECTOR_EXECUTION_MODE === "worker") {
@@ -17668,7 +17740,7 @@ async function runCrawlerInternal(payload) {
       keyword, checkIn: plan.checkIn, checkOut: plan.checkOut,
       workerKey: payload.workerKey || "manual", trigger: payload.trigger || "manual",
       collectionMode: plan.collectionMode, collectionPurpose: plan.collectionPurpose,
-      productMode: plan.productMode, detailRankRanges: plan.detailRankRanges,
+      productMode: plan.productMode, dayUseMode:plan.dayUseMode, detailRankRanges: plan.detailRankRanges,
       bookingRangeDays: plan.bookingRangeDays, scheduledCollection: payload.scheduledCollection === true
     };
     const completed = await dispatchCollector({
@@ -18104,7 +18176,8 @@ async function route(req, res) {
       const workers=await Promise.all(["manual","scheduled","web"].map(async workerKey=>{
         const status=controllers[workerKey]?await controllers[workerKey].status():{configured:false};
         const crawl=withCrawlLane(workerKey,()=>currentCrawlStatus());
-        return {workerKey,name:workerKey==="web"?"기본워커":workerKey==="manual"?"0922 수동키워드 워커":"0923 예약키워드워커",...status,
+        return {workerKey,name:workerKey==="web"?"2Gweb_worker":workerKey==="manual"?"BG worker":"AWS worker",...status,
+          resultDestination:{role:"central",label:"2G 운영 서버",archive:"/api/runs",validatedBeforePublish:true},
           ...(workerKey==="web"?{connected:true,executionMode:"local",requestPacing:{enabled:false,guardEnabled:true},ready:!status.halted}:{}),
           waitingCount:Number(status.queued||0)+crawl.queueLength,crawl};
       }));
@@ -18123,6 +18196,8 @@ async function route(req, res) {
 
     if (reqUrl.pathname === "/api/worker-schedule" || reqUrl.pathname.startsWith("/api/worker-schedule/")) {
       if (!requireAdminSession(session, req, res)) return;
+      const scheduleWorkerKey=selectedWorkerKey(reqUrl.searchParams.get("workerKey") || "scheduled");
+      const keywordWorkerScheduler=keywordWorkerSchedulers[scheduleWorkerKey];
       if (req.method === "GET" && reqUrl.pathname === "/api/worker-schedule") return send(res,200,await keywordWorkerScheduler.status());
       if (!["POST","PUT"].includes(req.method)) return send(res,405,{error:"Method not allowed"});
       if (!/^application\/json(?:\s*;|$)/i.test(String(req.headers["content-type"] || ""))) return send(res,415,{error:"JSON 형식으로 요청해 주세요."});
@@ -18135,7 +18210,7 @@ async function route(req, res) {
       if (req.method === "POST" && reqUrl.pathname === "/api/worker-schedule/enabled") {
         if (typeof payload.enabled!=="boolean") return send(res,400,{error:"예약 활성화 여부를 확인해 주세요."});
         if (payload.enabled) {
-          await assertCollectorReady("scheduled",true);
+          await assertCollectorReady(scheduleWorkerKey,true);
           if ((await dailyKeywordCollectionScheduler.status()).enabled) return send(res,409,{error:"기존 일일 수집을 비활성화한 뒤 새 예약을 켜 주세요."});
         }
         return send(res,200,await keywordWorkerScheduler.setEnabled(payload.enabled));
@@ -18168,7 +18243,10 @@ async function route(req, res) {
         ||Date.parse(job.createdAt)<Date.parse(request.createdAt)||Date.parse(job.finishedAt)>Date.parse(request.finishedAt)+1000
         ||!(request.status==="failed"&&request.errorCode==="COLLECTOR_UPLOAD_FAILED"||request.recovery?.jobId===job.id))return send(res,409,{error:"실패 작업과 요청 기록이 일치하지 않습니다."});
       const originalScope=await collectionReuse.recoveryScope({keyword:job.keyword,workerKey,createdAt:request.createdAt,jobCreatedAt:job.createdAt});
-      if(JSON.stringify(originalScope)!==JSON.stringify(require("./collection_reuse.cjs").scope(payload.expected)))return send(res,409,{error:"복구 조건이 원 수집 조건과 다릅니다."});
+      // Older evidence predates the day-use selector and collected both product
+      // types. Normalize only that absent field; retain every other scope value.
+      const reviewedScope={dayUseMode:"detail",...originalScope};
+      if(!require("node:util").isDeepStrictEqual(reviewedScope,require("./collection_reuse.cjs").scope(payload.expected)))return send(res,409,{error:"복구 조건이 원 수집 조건과 다릅니다."});
       if(fs.existsSync(COMPANY_MASTER_FILE)) {
         const master=JSON.parse((await fsp.readFile(COMPANY_MASTER_FILE,"utf8")).replace(/^\uFEFF/,""));
         if(!master.companies || typeof master.companies!=="object" || Array.isArray(master.companies))throw Object.assign(new Error("기존 업체 DB 구조를 확인해야 합니다."),{code:"COLLECTOR_RECOVERY_DB_INVALID",statusCode:503});
@@ -18768,6 +18846,7 @@ async function route(req, res) {
       const payload = await parseJsonBody(req);
       const requestPayload = {
         ...payload,
+        dayUseMode:normalizeDayUseMode(payload.dayUseMode ?? "inspect"),
         workerKey:selectedWorkerKey(payload.workerKey || "manual"),
         trigger:"manual",
         scheduledCollection:false,
@@ -18838,7 +18917,7 @@ seedOutputsFromRepo()
       }).catch((error) => {
         console.error(`Daily keyword collection scheduler unavailable: ${error.message || error}`);
       });
-      keywordWorkerScheduler.start().catch(error => console.error('Keyword worker scheduler unavailable:', error.code || error.message));
+      for (const [workerKey,scheduler] of Object.entries(keywordWorkerSchedulers)) scheduler.start().catch(error => console.error(`Keyword worker scheduler ${workerKey} unavailable:`, error.code || error.message));
       const monthlySync = tourismVisitorMonthlyScheduler.start();
       if (monthlySync.enabled) {
         console.log(`Tourism visitor monthly sync check scheduled at ${monthlySync.nextCheckAt}`);

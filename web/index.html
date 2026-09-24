@@ -327,14 +327,14 @@
 
         <section class="admin-section-panel" data-admin-section-panel="collect" aria-label="수집 실행">
         <div class="admin-stack admin-stack-collect">
-          <form class="admin-card" id="crawlForm">
+          <form class="admin-card collector-legacy-bridge" id="crawlForm" hidden aria-hidden="true">
             <div class="collector-choice-row">
               <label class="field">
                 <span>실행할 수집기</span>
                 <select id="crawlWorkerKey" aria-describedby="crawlWorkerHint">
-                  <option value="manual">0922 수동워커</option>
-                  <option value="web">기본워커 · 운영 웹서버</option>
-                  <option value="scheduled">0923 예약워커</option>
+                  <option value="manual">BG worker</option>
+                  <option value="web">2Gweb_worker</option>
+                  <option value="scheduled">AWS worker</option>
                 </select>
               </label>
               <div class="collector-choice-info"><p class="hint" id="crawlWorkerHint" aria-live="polite">선택한 워커에서 지금 한 번 수집합니다. 모든 수집기의 당일 자료를 먼저 확인합니다.</p><button type="button" class="ghost-button" id="crawlWorkerScheduleShortcut" hidden>예약 설정 열기</button></div>
@@ -412,39 +412,17 @@
             <p class="legal-inline-notice crawl-legal-inline"><a href="/data-collection-notice" target="_blank" rel="noopener">수집 범위</a><span aria-hidden="true"> · </span><a href="/collection-failure-notice" target="_blank" rel="noopener">실패 가능성</a></p>
           </form>
 
-          <section class="admin-card collector-controls-card" id="collectorControlsCard" aria-label="수집기와 예약 관리">
-            <div class="card-head"><h3>수집기 상태</h3><button type="button" class="ghost-button" id="collectorRefresh">새로고침</button></div>
-            <div class="collector-worker-grid" id="collectorWorkerStates" aria-live="polite"><p class="hint">관리자 연결을 확인하고 있습니다.</p></div>
-            <details class="collector-schedule-details" id="workerScheduleDetails">
-              <summary><span><strong>예약워커 설정</strong><small id="workerScheduleNext">예약 상태 확인 중</small></span><span class="state-badge" id="workerScheduleBadge">확인 중</span></summary>
-              <form id="workerScheduleForm">
-                <p class="hint">저장한 조건으로 예약하거나 지금 한 번 실행할 수 있습니다. 시간은 한국시간 기준입니다.</p>
-                <label class="field"><span>키워드 · 한 줄에 하나씩</span><textarea id="workerScheduleKeywords" rows="4" maxlength="17000" placeholder="포천글램핑&#10;가평글램핑" required></textarea></label>
-                <div class="collector-settings-grid">
-                  <label class="field"><span>반복</span><select id="workerScheduleRepeat"><option value="daily">매일</option><option value="weekdays">평일 · 월~금</option><option value="once">한 번</option></select></label>
-                  <label class="field"><span>첫 실행일</span><input id="workerScheduleFirstDate" type="date" min="2000-01-01" max="2099-12-31" required></label>
-                  <label class="field"><span>실행 시각</span><input id="workerScheduleTime" type="time" value="14:00" required></label>
-                  <label class="field"><span>관측 기간</span><select id="workerScheduleDateMode"><option value="rolling">수집 당일부터</option><option value="fixed">날짜 지정</option></select></label>
-                  <label class="field" id="workerScheduleRollingField"><span>관측 일수</span><input id="workerScheduleDays" type="number" value="31" min="1" max="31" step="1" required></label>
-                  <label class="field" id="workerScheduleCheckInField" hidden><span>첫 관측일</span><input id="workerScheduleCheckIn" type="date" min="2000-01-01" max="2099-12-31"></label>
-                  <label class="field" id="workerScheduleCheckOutField" hidden><span>마지막 관측일 · 포함</span><input id="workerScheduleCheckOut" type="date" min="2000-01-01" max="2099-12-31"></label>
-                  <label class="field"><span>상세수집 순위</span><input id="workerScheduleRanks" type="text" value="1-20" maxlength="150" placeholder="예: 1-20" required></label>
-                </div>
-                <p class="hint">상세정보 · 전체 상품 기준입니다. 당일 정상 자료가 조건을 충족하면 재사용합니다.</p>
-                <div class="collector-schedule-actions">
-                  <button type="submit" class="secondary-button" id="workerScheduleSave" disabled>조건 저장</button>
-                  <button type="button" class="primary-button" id="workerScheduleEnable" disabled>예약 켜기</button>
-                  <button type="button" class="ghost-button" id="workerScheduleRunNow" disabled>저장 조건으로 지금 수집</button>
-                </div>
-                <p class="hint" id="workerScheduleSaveHint">조건 저장과 예약 켜기는 별개입니다. 지금 수집해도 예약 일정은 유지됩니다.</p>
-                <p class="collector-control-status" id="workerScheduleStatus" role="status" aria-live="polite"></p>
-              </form>
-            </details>
-            <details class="collector-schedule-details"><summary><span><strong>즉시수집 최근 요청</strong><small>위 수집 화면에서 요청한 수집기의 처리 상태와 결과입니다.</small></span></summary><div id="collectorRequestHistory" class="collector-history"><p class="hint">아직 요청이 없습니다.</p></div></details>
-            <details class="collector-schedule-details"><summary><span><strong>예약 조건 실행 기록</strong><small>저장한 키워드 묶음의 지금 수집과 예약수집 기록입니다.</small></span></summary><div id="workerScheduleHistory" class="collector-history"><p class="hint">아직 기록이 없습니다.</p></div></details>
+          <section class="collector-controls-card" id="collectorControlsCard" aria-label="워커별 수집 관리">
+            <header class="collector-page-head"><div><p class="collector-eyebrow">COLLECTION WORKSPACE</p><h3>워커별 수집</h3><p>조건은 워커별로, 결과는 한곳에.</p></div><button type="button" class="ghost-button" id="collectorRefresh">상태 새로고침</button></header>
+            <div class="collector-destination"><span class="collector-destination-mark" aria-hidden="true">↳</span><div><strong>모든 결과는 2G 서버로 모입니다</strong><span>정상 결과 검증 → 보관함 저장 → 업체 DB·플레이스 연결</span></div><span class="collector-destination-tag">중앙 보관</span></div>
+            <div class="collector-worker-grid" id="collectorWorkerStates"><p class="hint">관리자 연결을 확인하고 있습니다.</p></div>
+            <section class="collector-history-panel" aria-label="통합 수집 기록"><div class="card-head"><div><h3>수집 기록</h3><p class="hint">즉시수집과 예약수집의 진행 상태와 결과를 함께 확인합니다.</p></div><span id="collectorHistoryCount" class="state-badge">0건</span></div>
+              <div class="collector-history-filters"><label class="field"><span>워커</span><select id="collectorHistoryWorker"><option value="all">전체 워커</option><option value="web">2Gweb_worker</option><option value="manual">BG worker</option><option value="scheduled">AWS worker</option></select></label><label class="field"><span>키워드 검색</span><input id="collectorHistoryKeyword" type="search" placeholder="키워드로 찾기"></label><label class="field"><span>실행일</span><input id="collectorHistoryDate" type="date"></label><label class="field"><span>처리 상태</span><select id="collectorHistoryState"><option value="all">모든 상태</option><option value="pending">진행·대기</option><option value="complete">완료·기존 자료</option><option value="attention">확인 필요</option></select></label></div>
+              <div id="collectorUnifiedHistory" class="collector-history" aria-live="polite"><p class="hint">기록을 확인하고 있습니다.</p></div>
+            </section>
+            <p class="legal-inline-notice"><a href="/data-collection-notice" target="_blank" rel="noopener">수집 범위</a><span aria-hidden="true"> · </span><a href="/collection-failure-notice" target="_blank" rel="noopener">실패 가능성</a></p>
           </section>
-
-          <details class="admin-card run-result-admin-card" id="runResultAdminCard">
+          <details class="admin-card run-result-admin-card collector-legacy-bridge" id="runResultAdminCard" hidden aria-hidden="true">
             <summary class="run-result-admin-summary" data-ui-interactive="true">
               <span class="run-result-admin-summary-copy">
                 <span>최근 수집 결과</span>

@@ -398,14 +398,29 @@ test("scheduled worker accepts manual and timed triggers using adapted archive e
   }
 });
 
-test("wrong targets, manual-worker scheduled triggers and missing role metadata cannot spawn", async () => {
+test("manual worker accepts timed trigger while retaining its collector engine and day-use mode", async () => {
+  const job = roleJob("manual", "scheduled");
+  job.env.DAY_USE_MODE = "lodging_only";
+  const f = await fixture({ jobs: [job], options: { workerKey: "manual" } });
+  try {
+    await runWorker(f.options);
+    assert.equal(f.state.spawned.length, 1);
+    assert.equal(path.basename(f.state.spawned[0].args[0]), "gyeongnam_glamping_crawl.cjs");
+    assert.equal(f.state.spawned[0].config.env.COLLECTOR_TRIGGER, "scheduled");
+    assert.equal(f.state.spawned[0].config.env.SCHEDULED_COLLECTION, "1");
+    assert.equal(f.state.spawned[0].config.env.DAY_USE_MODE, "lodging_only");
+  } finally { await f.close(); }
+});
+
+test("wrong targets, contradictory triggers and missing role metadata cannot spawn", async () => {
   for (const job of [roleJob("manual", "manual"), baseJob(), { ...roleJob("scheduled", "scheduled"), trigger: "manual" }]) {
     const f = await fixture({ options: { workerKey: "scheduled" } });
     try { assert.equal((await runJob(job, f.options)).code, "COLLECTOR_JOB_INVALID"); assert.equal(f.state.spawned.length, 0); }
     finally { await f.close(); }
   }
   const f = await fixture({ options: { workerKey: "manual" } });
-  try { assert.equal((await runJob(roleJob("manual", "scheduled"), f.options)).code, "COLLECTOR_JOB_INVALID"); assert.equal(f.state.spawned.length, 0); }
+  const invalidMode = roleJob("manual", "scheduled"); invalidMode.env.DAY_USE_MODE = "anything";
+  try { assert.equal((await runJob(invalidMode, f.options)).code, "COLLECTOR_JOB_INVALID"); assert.equal(f.state.spawned.length, 0); }
   finally { await f.close(); }
 });
 

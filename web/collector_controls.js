@@ -2,7 +2,7 @@
   "use strict";
   const STATUS_LABELS = { pending: "접수 · 처리 중", queued: "대기", running: "처리 중", complete: "완료", completed: "완료", reused: "기존 자료 사용", partial: "일부 완료", failed: "실패", blocked: "접근 제한", interrupted: "중단", missed: "실행 시각 지남" };
   const WORKER_FRESH_MS = 90000;
-  const WORKER_LABELS = { manual: "0922 수동워커", web: "기본워커", scheduled: "0923 예약워커" };
+  const WORKER_LABELS = { manual: "BG worker", web: "2Gweb_worker", scheduled: "AWS worker" };
   function workerKey(value) { return Object.hasOwn(WORKER_LABELS, value) ? value : "manual"; }
   function workerLabel(value) { return WORKER_LABELS[workerKey(value)]; }
   function keywordEntries(value) { return String(value || "").split(/\r?\n/).map(text => text.normalize("NFKC").trim()).filter(Boolean); }
@@ -25,7 +25,7 @@
     if (!/^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/.test(ranks) || ranks.split(",").some(range => { const [first, last = first] = range.split("-").map(Number); return first < 1 || last > 100 || first > last; })) throw new Error("상세수집 순위를 1~100위 안에서 입력하세요. 예: 1-20");
     return { version: 1, timezone: "Asia/Seoul", repeat: values.repeat, firstDate: values.firstDate, time: values.time, keywords,
       collection: { dateMode: fixed ? "fixed" : "rolling", bookingDays, checkIn: fixed ? values.checkIn : null, checkOut: fixed ? values.checkOut : null,
-        adults: 2, detailRankRanges: ranks, productMode: "all", collectionMode: "precision", collectionPurpose: "revenue_detail" }, requestPacing: null };
+        adults: 2, detailRankRanges: ranks, productMode: "all", collectionMode: "precision", collectionPurpose: values.purpose === "basic_db" ? "basic_db" : "revenue_detail", dayUseMode: normalizeDayUse(values.dayUseMode) }, requestPacing: null };
   }
   function formatTime(value) {
     const date = new Date(value);
@@ -90,247 +90,210 @@
     const seconds = Math.round(duration / 1000);
     return seconds >= 3600 ? `${Math.floor(seconds / 3600)}시간 ${Math.floor(seconds % 3600 / 60)}분` : seconds >= 60 ? `${Math.floor(seconds / 60)}분 ${seconds % 60}초` : `${seconds}초`;
   }
-  if (typeof module !== "undefined" && module.exports) module.exports = { workerKey, workerLabel, keywordLines, duplicateKeywordCount, scheduleConfig, formatTime, workerState, workerQueueCount, workerAvailability, durationLabel, errorMessage, STATUS_LABELS };
+  const WORKER_KEYS = ["web", "manual", "scheduled"];
+  const DAY_USE_LABELS = { inspect: "유무확인", lodging_only: "숙박만", detail: "상세수집" };
+  function normalizeDayUse(value) { return Object.hasOwn(DAY_USE_LABELS, value) ? value : "inspect"; }
+  function todayKst(now = Date.now()) { return new Date(now + 9 * 3600000).toISOString().slice(0, 10); }
+  function addDays(day, count) { return new Date(Date.parse(`${day}T00:00:00Z`) + count * 86400000).toISOString().slice(0, 10); }
+  function collectionDates(values, now = Date.now()) {
+    const fixed = values.period === "custom";
+    const checkIn = fixed ? values.checkIn : todayKst(now);
+    const days = fixed ? Math.round((Date.parse(values.checkOut) - Date.parse(checkIn)) / 86400000) + 1 : Number(values.period);
+    if (!validDay(checkIn) || !Number.isInteger(days) || days < 1 || days > 31 || (fixed && !validDay(values.checkOut))) throw new Error("조회할 숙박일을 1~31일 범위로 설정하세요. 시작일과 종료일을 모두 포함합니다.");
+    return { checkIn, checkOut: fixed ? values.checkOut : addDays(checkIn, days - 1), bookingDays: days };
+  }
+  function defaultDraft(now = Date.now()) { const today = todayKst(now), firstDate = Date.parse(`${today}T14:00:00+09:00`) <= now ? addDays(today, 1) : today; return { keywords: "", period: "7", checkIn: today, checkOut: addDays(today, 6), purpose: "basic_db", ranks: "1-20", dayUseMode: "inspect", execution: "now", repeat: "once", firstDate, time: "14:00", allowRepeat: false, repeatReason: "" }; }
+  function scheduleStartError(values, now = Date.now()) { return values.repeat === "once" && Date.parse(`${values.firstDate}T${values.time}:00+09:00`) <= now ? "예약 시각이 지났습니다. 앞으로 실행할 날짜와 시각을 선택하세요." : ""; }
+  function historyEntries(requests = [], schedules = {}) {
+    const rows = requests.map(item => ({ ...item, workerKey: workerKey(item.workerKey), trigger: "manual", runId: item.result?.runId, stamp: item.createdAt || item.startedAt }));
+    for (const key of WORKER_KEYS) for (const occurrence of schedules[key]?.latest || []) {
+      const items = occurrence.items?.length ? occurrence.items : [{ keyword: "예약 실행", status: occurrence.status, errorCode: occurrence.errorCode }];
+      for (const item of items) rows.push({ ...item, workerKey: key, trigger: occurrence.trigger || "scheduled", stamp: item.startedAt || occurrence.startedAt || occurrence.createdAt, startedAt: item.startedAt || occurrence.startedAt, finishedAt: item.endedAt || occurrence.finishedAt, status: item.status || occurrence.status });
+    }
+    const seen = new Set();
+    return rows.sort((a, b) => (Date.parse(b.stamp) || Number(b.stamp) || 0) - (Date.parse(a.stamp) || Number(a.stamp) || 0)).filter(row => {
+      const identity = row.requestId ? `request:${row.requestId}` : row.runId ? `${row.workerKey}:${row.runId}:${row.keyword}` : `${row.workerKey}:${row.stamp}:${row.keyword}:${row.trigger}`;
+      if (seen.has(identity)) return false;
+      seen.add(identity); return true;
+    });
+  }
+  function filterHistory(rows, filters) { return rows.filter(row => { const stamp = Date.parse(row.stamp) || Number(row.stamp); return (filters.worker === "all" || row.workerKey === filters.worker) && (!filters.keyword || String(row.keyword || "").toLowerCase().includes(filters.keyword.toLowerCase())) && (!filters.date || Number.isFinite(stamp) && todayKst(stamp) === filters.date) && (filters.state === "all" || (filters.state === "pending" ? ["pending", "queued", "running"].includes(row.status) : filters.state === "complete" ? ["complete", "completed", "reused"].includes(row.status) : !["pending", "queued", "running", "complete", "completed", "reused"].includes(row.status))); }); }
+  if (typeof module !== "undefined" && module.exports) module.exports = { workerKey, workerLabel, keywordLines, duplicateKeywordCount, scheduleConfig, formatTime, workerState, workerQueueCount, workerAvailability, durationLabel, errorMessage, STATUS_LABELS, normalizeDayUse, collectionDates, defaultDraft, historyEntries, filterHistory };
   if (typeof document === "undefined") return;
   const byId = id => document.getElementById(id);
   const panel = byId("collectorControlsCard");
   if (!panel) return;
-  const form = byId("workerScheduleForm");
-  const fieldIds = { keywords: "workerScheduleKeywords", repeat: "workerScheduleRepeat", firstDate: "workerScheduleFirstDate", time: "workerScheduleTime",
-    dateMode: "workerScheduleDateMode", days: "workerScheduleDays", checkIn: "workerScheduleCheckIn", checkOut: "workerScheduleCheckOut", ranks: "workerScheduleRanks" };
-  let latest = null;
-  let workerData = null;
-  let dirty = false;
-  let busy = false;
-  let refreshInFlight = null;
-  let pendingRequestId = null;
-  let loaded = false;
+  const cards = new Map();
+  const schedules = {};
+  let workerData = null, requests = [], refreshInFlight = null, loaded = false, requestsReadError = false;
   const admin = () => document.body.classList.contains("role-admin") && !document.body.classList.contains("admin-user-view");
   const visible = () => admin() && !document.hidden && Boolean(panel.closest("[data-admin-section-panel]")?.classList.contains("active"));
-  function notice(message, tone = "") { byId("workerScheduleStatus").textContent = message; byId("workerScheduleStatus").dataset.tone = tone; }
-  function syncFields() {
-    const fixed = byId("workerScheduleDateMode").value === "fixed";
-    byId("workerScheduleRollingField").hidden = fixed;
-    byId("workerScheduleDays").required = !fixed;
-    for (const name of ["CheckIn", "CheckOut"]) {
-      byId(`workerSchedule${name}Field`).hidden = !fixed;
-      byId(`workerSchedule${name}`).required = fixed;
+  const storageKey = "staydatalab:collector-drafts:v2";
+  let drafts = {};
+  try { drafts = JSON.parse(window.localStorage.getItem(storageKey) || "{}"); } catch { /* Drafts remain in memory when local storage is unavailable. */ }
+  if (!drafts || typeof drafts !== "object" || Array.isArray(drafts)) drafts = {};
+  function node(tag, text = "", className = "") { const el = document.createElement(tag); el.textContent = text; if (className) el.className = className; return el; }
+  function saveDraft(card) { drafts[card.key] = values(card); try { window.localStorage.setItem(storageKey, JSON.stringify(drafts)); } catch { /* No collection is issued to repair draft storage. */ } }
+  function values(card) { return Object.fromEntries(Object.entries(card.inputs).map(([name, input]) => [name, input.type === "checkbox" ? input.checked : input.value])); }
+  function fill(card, value) { for (const [name, input] of Object.entries(card.inputs)) if (Object.hasOwn(value, name)) { if (input.type === "checkbox") input.checked = value[name] === true; else input.value = value[name]; } syncCard(card); }
+  function field(card, name, label, type, options = {}) {
+    const wrapper = node("label", "", "field"); wrapper.append(node("span", label));
+    const input = node(type === "select" ? "select" : type === "textarea" ? "textarea" : "input");
+    input.id = `collector-${card.key}-${name}`; input.name = name;
+    if (!["select", "textarea"].includes(type)) input.type = type;
+    if (type === "select") for (const [value, text] of options.choices || []) { const choice = node("option", text); choice.value = value; input.append(choice); }
+    for (const [key, value] of Object.entries(options)) if (key !== "choices") input[key] = value;
+    wrapper.append(input); card.inputs[name] = input; card.fields[name] = wrapper; return wrapper;
+  }
+  function button(text, className, callback) { const el = node("button", text, className); el.type = "button"; if (callback) el.addEventListener("click", callback); return el; }
+  function notice(card, message, tone = "") { card.notice.textContent = message; card.notice.dataset.tone = tone; }
+  function resultButton(runId) { return button("결과 보기", "ghost-button collector-result-button", () => window.dispatchEvent(new CustomEvent("collector:open-result", { detail: { runId } }))); }
+  function makeCard(key, index) {
+    const card = { key, inputs: {}, fields: {}, dirty: false, busy: false, loaded: false };
+    card.root = node("details", "", "collector-worker-card"); card.root.dataset.workerKey = key; card.root.open = true;
+    const summary = node("summary", "", "collector-worker-summary");
+    const identity = node("div", "", "collector-worker-identity"); identity.append(node("span", `0${index + 1}`, "collector-worker-number"));
+    const name = node("div"); name.append(node("h4", workerLabel(key))); card.summary = node("small", "조건을 설정하세요"); name.append(card.summary); identity.append(name);
+    card.badge = node("span", "확인 중", "state-badge"); summary.append(identity, card.badge, node("span", "", "collector-chevron")); card.root.append(summary);
+    card.form = node("form", "", "collector-worker-form");
+    const intro = node("div", "", "collector-card-status"); card.state = node("p", "연결 상태 확인 중"); card.next = node("small", "예약 꺼짐"); intro.append(card.state, card.next); card.form.append(intro);
+    card.form.append(field(card, "keywords", "검색 키워드", "textarea", { rows: 2, maxLength: 17000, placeholder: "예: 경남글램핑\n여러 키워드는 한 줄에 하나씩", required: true }));
+    const grid = node("div", "", "collector-settings-grid");
+    grid.append(field(card, "period", "조회할 숙박일", "select", { choices: [["1", "수집 당일"], ["7", "수집일부터 7일"], ["14", "수집일부터 14일"], ["31", "수집일부터 31일"], ["custom", "날짜 직접 지정"]] }), field(card, "ranks", "수집 순위", "text", { maxLength: 150, placeholder: "예: 1-20", required: true }));
+    grid.append(field(card, "checkIn", "숙박 시작일", "date"), field(card, "checkOut", "숙박 종료일 · 포함", "date"));
+    grid.append(field(card, "purpose", "수집 종류", "select", { choices: [["basic_db", "기본수집"], ["revenue_detail", "상세수집"]] }), field(card, "dayUseMode", "데이유즈", "select", { choices: [["inspect", "유무확인"], ["lodging_only", "숙박만"], ["detail", "상세수집"]] }));
+    card.form.append(grid); card.detailHint = node("p", "", "collector-field-hint"); card.form.append(card.detailHint);
+    const execution = node("div", "", "collector-execution-field"); execution.append(field(card, "execution", "실행 방식", "select", { choices: [["now", "즉시수집"], ["schedule", "예약수집"]] })); card.form.append(execution);
+    card.reservation = node("div", "", "collector-reservation"); const reservationGrid = node("div", "", "collector-settings-grid");
+    reservationGrid.append(field(card, "firstDate", "수집 실행일", "date", { min: "2000-01-01", max: "2099-12-31" }), field(card, "time", "실행 시각 · 한국시간", "time"), field(card, "repeat", "반복", "select", { choices: [["once", "한 번"], ["daily", "매일"], ["weekdays", "평일 · 월~금"]] })); card.reservationHint = node("p", "", "collector-field-hint"); card.reservation.append(reservationGrid, card.reservationHint); card.form.append(card.reservation);
+    card.repeat = node("details", "", "collector-repeat-options"); card.repeat.append(node("summary", "당일 재수집 옵션")); card.repeat.append(field(card, "allowRepeat", "기존 자료 대신 다시 수집", "checkbox"), field(card, "repeatReason", "재수집 사유", "text", { maxLength: 200, placeholder: "4글자 이상 입력" }), node("p", "기본은 세 워커의 당일 정상 자료를 먼저 확인합니다. 접근 제한 보호는 유지됩니다.", "collector-field-hint")); card.form.append(card.repeat);
+    const actions = node("div", "", "collector-card-actions"); card.submit = node("button", "지금 수집", "primary-button"); card.submit.type = "submit"; card.save = button("예약 조건 저장", "secondary-button", () => action(card, () => saveSchedule(card))); card.pause = button("예약 일시정지", "ghost-button", () => action(card, () => pauseSchedule(card))); actions.append(card.save, card.submit, card.pause); card.form.append(actions);
+    card.notice = node("p", "", "collector-control-status"); card.notice.setAttribute("role", "status"); card.notice.setAttribute("aria-live", "polite"); card.form.append(card.notice);
+    card.lastResult = node("div", "", "collector-last-result"); card.form.append(card.lastResult); card.root.append(card.form);
+    card.form.addEventListener("input", () => { card.dirty = true; syncCard(card); saveDraft(card); });
+    card.form.addEventListener("change", () => { card.dirty = true; syncCard(card); saveDraft(card); });
+    card.form.addEventListener("submit", event => { event.preventDefault(); if (card.form.reportValidity()) action(card, () => values(card).execution === "schedule" ? enableSchedule(card) : runNow(card)); });
+    cards.set(key, card); fill(card, { ...defaultDraft(), ...(drafts[key] || {}) }); return card.root;
+  }
+  function syncCard(card) {
+    const v = values(card), custom = v.period === "custom", reservation = v.execution === "schedule";
+    const availability = workerAvailability(workerData, card.key), schedule = schedules[card.key];
+    card.fields.checkIn.hidden = card.fields.checkOut.hidden = !custom;
+    card.inputs.checkIn.required = card.inputs.checkOut.required = custom;
+    card.reservation.hidden = !reservation; card.inputs.firstDate.required = card.inputs.time.required = reservation;
+    card.repeat.hidden = reservation; card.inputs.repeatReason.disabled = !v.allowRepeat; card.inputs.repeatReason.required = v.allowRepeat && !reservation;
+    const detailChoice = [...card.inputs.dayUseMode.children].find(option => option.value === "detail"); if (detailChoice) detailChoice.disabled = v.purpose === "basic_db";
+    if (v.purpose === "basic_db" && v.dayUseMode === "detail") { card.inputs.dayUseMode.value = "inspect"; v.dayUseMode = "inspect"; }
+    card.detailHint.textContent = v.purpose === "basic_db" ? "기본수집은 업체·상품 목록과 데이유즈 유무를 확인합니다. 날짜별 예약·가격은 상세수집에서 확인합니다." : v.dayUseMode === "detail" ? "숙박과 데이유즈의 날짜별 예약·가격을 함께 확인합니다. 객실 공유 여부는 수집 근거로 별도 판단합니다." : v.dayUseMode === "lodging_only" ? "숙박의 날짜별 예약·가격을 확인합니다. 데이유즈 예약 상세는 수집하지 않습니다." : "상품 목록에서 데이유즈 유무를 확인하고, 숙박의 날짜별 예약·가격을 수집합니다.";
+    const keyword = keywordLines(v.keywords); const date = custom ? `${v.checkIn || "시작일"} ~ ${v.checkOut || "종료일"}` : `${v.period}일`;
+    card.summary.textContent = `${keyword[0] || "키워드 미입력"}${keyword.length > 1 ? ` 외 ${keyword.length - 1}개` : ""} · ${date} · ${v.purpose === "basic_db" ? "기본" : "상세"}`;
+    const expiredDraft = scheduleStartError(v);
+    card.reservationHint.textContent = expiredDraft || "조회할 숙박일과 수집 실행일은 서로 다릅니다. 예약 시각은 한국시간입니다.";
+    card.reservationHint.className = expiredDraft ? "collector-field-hint collector-worker-alert" : "collector-field-hint";
+    card.submit.disabled = card.busy || !availability.ready || (reservation && (!schedule?.config || Boolean(expiredDraft)));
+    card.submit.title = !availability.ready ? availability.reason : reservation ? expiredDraft : "";
+    const reservationLabel = v.repeat === "once" ? `${v.firstDate.slice(5).replace("-", "/")} ${v.time}` : `${v.repeat === "weekdays" ? "평일" : "매일"} ${v.time}`;
+    card.submit.textContent = card.busy ? "처리 중…" : reservation ? `${reservationLabel} ${schedule?.config?.enabled ? "예약 변경" : "예약 등록"}` : "지금 수집";
+    card.save.hidden = !reservation; card.save.disabled = card.busy || !schedule?.config;
+    card.pause.hidden = !schedule?.config?.enabled; card.pause.disabled = card.busy;
+    card.next.textContent = schedule?.enabled && schedule.nextRunAt ? `다음 예약 ${formatTime(schedule.nextRunAt)}` : schedule?.enabled ? "예약 켜짐 · 다음 실행 확인 필요" : "예약 꺼짐";
+    if (schedule?.expired) card.next.textContent = "예약 날짜 확인 필요 · 실행일 또는 숙박일을 수정하세요";
+  }
+  function renderWorkers() {
+    for (const card of cards.values()) {
+      const worker = workerData?.workers?.find(item => item.workerKey === card.key) || { workerKey: card.key, configured: false };
+      card.badge.textContent = workerData ? workerState(worker) : "연결 확인 필요";
+      card.root.dataset.state = worker.halted ? "alert" : worker.activeJobId || worker.crawl?.active ? "running" : "idle";
+      const current = worker.crawl?.activeJob || worker.crawl?.currentJob;
+      card.state.textContent = current?.keyword ? `${current.keyword} 수집 중${Number.isFinite(worker.crawl?.elapsedSeconds) ? ` · ${durationLabel({ durationMs: worker.crawl.elapsedSeconds * 1000 })} 경과` : ""}` : `${workerAvailability(workerData, card.key).reason} 대기 ${workerQueueCount(worker)}건`;
+      syncCard(card);
     }
+    syncLegacyAvailability();
   }
-  function syncButtons() {
-    const enabled = latest?.config?.enabled === true;
-    const availability = workerAvailability(workerData, "scheduled");
-    const timeExpired = latest?.expiryReason === "KEYWORD_SCHEDULE_TIME_EXPIRED";
-    const dateExpired = latest?.expired && !timeExpired;
-    const blockedReason = !latest?.config ? "예약 조건을 읽지 못했습니다. 상태를 새로고침하세요." : dateExpired ? "관측 기간이 지났습니다. 날짜를 수정하고 저장하세요." : latest?.lastError ? errorMessage(latest.lastError) : !availability.ready ? availability.reason : "";
-    const enableReason = blockedReason || (timeExpired ? "예약 시각이 지났습니다. 예약하려면 실행일과 시각을 수정하세요. 저장 조건으로 지금 수집은 가능합니다." : "");
-    byId("workerScheduleSave").disabled = busy || !latest?.config;
-    byId("workerScheduleEnable").disabled = busy || !latest?.config || (!enabled && (dirty || !latest.config.keywords.length || Boolean(enableReason)));
-    byId("workerScheduleEnable").textContent = enabled ? "예약 일시정지" : "예약 켜기";
-    byId("workerScheduleRunNow").disabled = busy || !latest?.config || dirty || !latest.config.keywords.length || Boolean(blockedReason);
-    byId("collectorRefresh").disabled = busy;
-    byId("workerScheduleSaveHint").textContent = dirty ? "변경한 조건을 먼저 저장하세요. 저장해도 꺼진 예약이 켜지지 않습니다." : enableReason || "조건 저장과 예약 켜기는 별개입니다. 지금 수집해도 예약 일정은 유지됩니다.";
-    byId("workerScheduleEnable").title = enabled ? "예약된 후속 실행을 일시정지합니다." : enableReason;
-    byId("workerScheduleRunNow").title = blockedReason;
-    syncSelectedWorker();
-  }
-  function syncSelectedWorker() {
-    const key = workerKey(byId("crawlWorkerKey").value);
-    const availability = workerAvailability(workerData, key);
-    const worker = workerData?.workers?.find(item => item.workerKey === key);
-    byId("crawlWorkerHint").textContent = `${workerLabel(key)}에서 지금 한 번 수집합니다. ${availability.reason} 모든 수집기의 당일 자료를 먼저 확인합니다.`;
-    byId("crawlWorkerHint").dataset.ready = String(availability.ready);
-    byId("crawlWorkerHint").dataset.workerKey = key;
-    byId("crawlWorkerScheduleShortcut").hidden = key !== "scheduled";
-    for (const card of byId("collectorWorkerStates").children) card.dataset.selected = String(card.dataset.workerKey === key);
-    window.dispatchEvent(new CustomEvent("collector:worker-availability", { detail: { workerKey: key, ...availability, status: worker ? workerState(worker) : "확인 중" } }));
-  }
-  function selectWorker(key, openSchedule = false) {
-    byId("crawlWorkerKey").value = key;
-    byId("crawlWorkerKey").dispatchEvent(new Event("change", { bubbles: true }));
-    if (openSchedule) {
-      byId("workerScheduleDetails").open = true;
-      byId("workerScheduleDetails").scrollIntoView({ block: "nearest", behavior: "smooth" });
-      byId("workerScheduleKeywords").focus({ preventScroll: true });
-    } else {
-      byId("crawlWorkerKey").scrollIntoView({ block: "nearest", behavior: "smooth" });
-      byId("crawlWorkerKey").focus({ preventScroll: true });
-    }
+  function syncLegacyAvailability() {
+    const key = workerKey(byId("crawlWorkerKey")?.value), availability = workerAvailability(workerData, key), hint = byId("crawlWorkerHint");
+    if (hint) { hint.textContent = `${workerLabel(key)} · ${availability.reason}`; hint.dataset.ready = String(availability.ready); hint.dataset.workerKey = key; }
+    window.dispatchEvent(new CustomEvent("collector:worker-availability", { detail: { workerKey: key, ...availability } }));
   }
   async function api(url, method = "GET", body) {
     const response = await fetch(url, { method, credentials: "same-origin", ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }) });
-    let value;
-    try { value = await response.json(); } catch { throw new Error("서버 응답을 확인하지 못했습니다. 상태를 새로고침하세요."); }
-    if (!response.ok) throw new Error(response.status === 401 ? "관리자 로그인이 필요합니다." : response.status === 403 ? "운영관리자 권한이 필요합니다." : errorMessage(value.code || value.error) || "요청을 처리하지 못했습니다.");
-    return value;
+    let value; try { value = await response.json(); } catch { throw new Error("서버 응답을 확인하지 못했습니다. 기록을 새로고침하세요."); }
+    if (!response.ok) throw new Error(response.status === 401 ? "관리자 로그인이 필요합니다." : response.status === 403 ? "운영관리자 권한이 필요합니다." : errorMessage(value.code || value.error) || "요청을 처리하지 못했습니다."); return value;
   }
-  function node(tag, text, className = "") { const element = document.createElement(tag); element.textContent = text; if (className) element.className = className; return element; }
-  function renderWorkers(data) {
-    const container = byId("collectorWorkerStates");
-    container.replaceChildren();
-    const workers = Array.isArray(data?.workers) ? data.workers : [];
-    for (const key of ["manual", "web", "scheduled"]) {
-      const worker = workers.find(item => item.workerKey === key) || { workerKey: key, configured: false };
-      const card = node("article", "", "collector-worker");
-      card.dataset.workerKey = key;
-      const head = node("div", "", "collector-worker-head");
-      head.append(node("h4", workerLabel(key)), node("span", workerState(worker), "state-badge"));
-      card.append(head, node("p", `${key === "scheduled" ? "즉시수집 · 예약수집" : "즉시수집"} · 대기 ${workerQueueCount(worker)}건`));
-      card.append(node("p", key === "web" ? "운영 웹서버에서 직접 수집합니다." : `최근 연결 ${formatTime(worker.workerLastSeenAt)} · 연결 시각은 수집 완료 시각이 아닙니다.`));
-      const current = worker.crawl?.activeJob || worker.crawl?.currentJob;
-      if (current?.keyword) card.append(node("p", `현재 작업: ${current.keyword}${Number.isFinite(worker.crawl.elapsedSeconds) ? ` · ${durationLabel({ durationMs: worker.crawl.elapsedSeconds * 1000 })} 경과` : ""}`));
-      const availability = workerAvailability(data, key);
-      card.append(node("p", availability.reason, availability.ready ? "" : "collector-worker-alert"));
-      const actions = node("div", "", "collector-worker-actions");
-      const select = node("button", "즉시수집에 선택", "ghost-button");
-      select.type = "button";
-      select.addEventListener("click", () => selectWorker(key));
-      actions.append(select);
-      if (key === "scheduled") {
-        const schedule = node("button", "예약 설정", "secondary-button");
-        schedule.type = "button";
-        schedule.addEventListener("click", () => selectWorker(key, true));
-        actions.append(schedule);
-      }
-      card.append(actions);
-      container.append(card);
+  const scheduleUrl = (key, suffix = "") => `/api/worker-schedule${suffix}?workerKey=${key}`;
+  function configFor(card) { const v = values(card); return scheduleConfig({ ...v, days: v.period, dateMode: v.period === "custom" ? "fixed" : "rolling" }); }
+  async function saveSchedule(card) {
+    const config = configFor(card); await api(scheduleUrl(card.key), "PUT", config); card.dirty = false; saveDraft(card); await refresh(); notice(card, "예약 조건을 저장했습니다. 예약 켜짐 여부는 그대로 유지했습니다.", "success"); return config;
+  }
+  async function enableSchedule(card) {
+    if (!workerAvailability(workerData, card.key).ready) throw new Error(workerAvailability(workerData, card.key).reason);
+    if (scheduleStartError(values(card))) throw new Error(scheduleStartError(values(card)));
+    const config = configFor(card); await api(scheduleUrl(card.key), "PUT", config);
+    await api(scheduleUrl(card.key, "/enabled"), "POST", { enabled: true }); card.dirty = false; saveDraft(card); await refresh(); notice(card, `${formatTime(schedules[card.key]?.nextRunAt)} 예약을 등록했습니다.`, "success");
+  }
+  async function pauseSchedule(card) { await api(scheduleUrl(card.key, "/enabled"), "POST", { enabled: false }); await refresh(); notice(card, "예약을 일시정지했습니다. 실행 중인 작업은 마무리하며 후속 예약을 멈춥니다.", "success"); }
+  async function runNow(card) {
+    const v = values(card), keywords = keywordLines(v.keywords), dates = collectionDates(v);
+    if (!keywords.length || keywords.length > 100 || keywords.some(keyword => keyword.length > 160 || /[\x00-\x1f\x7f]/.test(keyword))) throw new Error("키워드를 한 줄에 하나씩 최대 100개 입력하세요.");
+    // Share validation with reservations without requiring a future execution date for immediate work.
+    scheduleConfig({ ...v, firstDate: todayKst(), time: "14:00", dateMode: "fixed", ...dates, days: dates.bookingDays });
+    if (v.allowRepeat && String(v.repeatReason).trim().length < 4) throw new Error("재수집 사유를 4글자 이상 입력하세요.");
+    let accepted = 0;
+    for (const keyword of keywords) {
+      if (!workerAvailability(workerData, card.key).ready) throw new Error(workerAvailability(workerData, card.key).reason);
+      const receipt = await new Promise((resolve, reject) => window.dispatchEvent(new CustomEvent("collector:submit-card", { detail: { input: { workerKey: card.key, keyword, checkIn: dates.checkIn, checkOut: dates.bookingDays === 1 ? addDays(dates.checkIn, 1) : dates.checkOut, bookingRangeDays: dates.bookingDays, collectionPurpose: v.purpose, detailRankRanges: v.ranks, dayUseMode: v.dayUseMode, allowRepeat: v.allowRepeat, repeatReason: v.repeatReason }, resolve, reject } })));
+      accepted += 1; notice(card, `${accepted}/${keywords.length}개 키워드를 접수했습니다. 아래 기록에서 진행 상태를 확인하세요.`, "success");
+      if (receipt?.submissionUncertain) { notice(card, "접수 응답 확인 중입니다. 후속 키워드 접수를 보류했습니다. 기록을 확인하세요.", "error"); break; }
     }
+    saveDraft(card); await refresh();
   }
-  function resultButton(runId) {
-    const button = node("button", "결과 보기", "ghost-button collector-result-button");
-    button.type = "button";
-    button.addEventListener("click", () => window.dispatchEvent(new CustomEvent("collector:open-result", { detail: { runId } })));
-    return button;
-  }
-  function renderHistory(entries) {
-    const container = byId("workerScheduleHistory");
-    container.replaceChildren();
-    if (!entries?.length) { container.append(node("p", "아직 기록이 없습니다.", "hint")); return; }
-    for (const entry of entries.slice(0, 10)) {
-      const row = node("article", "", "collector-history-row");
-      const info = node("div", "");
-      info.append(node("strong", `${entry.trigger === "scheduled" ? "예약수집" : "즉시수집"} · ${(entry.items || []).length}개 키워드`));
-      const elapsed = durationLabel(entry) ? ` · ${durationLabel(entry)}` : "";
-      info.append(node("small", `${formatTime(entry.startedAt || entry.createdAt)}${elapsed}`));
-      if (entry.errorCode) info.append(node("small", errorMessage(entry.errorCode), "collector-worker-alert"));
-      row.append(info, node("span", STATUS_LABELS[entry.status] || "확인 필요", "state-badge"));
-      const detail = node("details", "");
-      detail.append(node("summary", "키워드별 결과"));
-      const list = node("ul", "");
-      for (const item of (entry.items || []).slice(0, 100)) {
-        const itemRow = node("li", "");
-        itemRow.append(node("span", `${item.keyword} · ${STATUS_LABELS[item.status] || "확인 필요"}${durationLabel(item) ? ` · ${durationLabel(item)}` : ""}`));
-        if (item.runId) itemRow.append(resultButton(item.runId));
-        if (item.errorCode) itemRow.append(node("small", errorMessage(item.errorCode), "collector-worker-alert"));
-        list.append(itemRow);
-      }
-      detail.append(list);
-      row.append(detail);
-      container.append(row);
+  async function action(card, operation) { if (card.busy || !admin()) return; card.busy = true; syncCard(card); try { await operation(); } catch (error) { notice(card, error.message, "error"); } finally { card.busy = false; syncCard(card); } }
+  function renderHistory() {
+    const rows = historyEntries(requests, schedules), filters = { worker: byId("collectorHistoryWorker").value || "all", keyword: byId("collectorHistoryKeyword").value.trim(), date: byId("collectorHistoryDate").value, state: byId("collectorHistoryState").value || "all" };
+    const filtered = filterHistory(rows, filters), container = byId("collectorUnifiedHistory"); container.replaceChildren(); byId("collectorHistoryCount").textContent = `${filtered.length}건`;
+    if (requestsReadError) container.append(node("p", "일부 즉시수집 기록을 읽지 못했습니다. 상태를 새로고침하세요.", "collector-control-status"));
+    if (!filtered.length) container.append(node("p", "조건에 맞는 수집 기록이 없습니다.", "hint"));
+    for (const entry of filtered.slice(0, 50)) {
+      const row = node("article", "", "collector-history-row"), info = node("div");
+      info.append(node("strong", entry.keyword || "키워드 확인 중"), node("small", `${workerLabel(entry.workerKey)} · ${entry.trigger === "scheduled" ? "예약" : "즉시"} · ${formatTime(entry.stamp)}${durationLabel(entry) ? ` · ${durationLabel(entry)}` : ""}`));
+      if (entry.errorCode) info.append(node("small", errorMessage(entry.brokerErrorCode || entry.errorCode), "collector-worker-alert"));
+      if (entry.recovery) info.append(node("small", "보존 자료 복구 완료 · 업체 DB 반영"));
+      row.append(info, node("span", entry.recovery && entry.status === "complete" ? "복구 완료" : STATUS_LABELS[entry.status] || "확인 필요", "state-badge"));
+      if (entry.runId) row.append(resultButton(entry.runId)); container.append(row);
     }
+    for (const card of cards.values()) { card.lastResult.replaceChildren(); const last = rows.find(row => row.workerKey === card.key && row.runId); if (last) card.lastResult.append(node("small", `최근 결과 · ${last.keyword}`), resultButton(last.runId)); }
   }
-  function renderRequests(entries) {
-    const container = byId("collectorRequestHistory");
-    container.replaceChildren();
-    if (!entries?.length) { container.append(node("p", "아직 요청이 없습니다.", "hint")); return; }
-    for (const request of entries.slice(0, 10)) {
-      const row = node("article", "", "collector-history-row");
-      const info = node("div", "");
-      info.append(node("strong", `${workerLabel(request.workerKey)} · ${request.keyword || "키워드 확인 중"}`));
-      info.append(node("small", `${formatTime(request.createdAt)}${durationLabel(request) ? ` · ${durationLabel(request)}${request.status === "pending" ? " 경과" : ""}` : ""}`));
-      if (request.errorCode || request.message && ["failed", "blocked", "interrupted"].includes(request.status)) info.append(node("small", errorMessage(request.brokerErrorCode || request.errorCode || request.message), "collector-worker-alert"));
-      if(request.recovery && request.status === "complete")info.append(node("small", "보존된 수집 자료를 검증하여 보관함과 업체 DB에 복구했습니다."));
-      row.append(info, node("span", request.recovery && request.status === "complete" ? "복구 완료" : STATUS_LABELS[request.status] || "확인 필요", "state-badge"));
-      if (request.result?.runId) row.append(resultButton(request.result.runId));
-      container.append(row);
-    }
-  }
-  function fill(config) {
-    const values = { keywords: config.keywords.join("\n"), repeat: config.repeat, firstDate: config.firstDate, time: config.time,
-      dateMode: config.collection.dateMode, days: config.collection.bookingDays, checkIn: config.collection.checkIn || "", checkOut: config.collection.checkOut || "",
-      ranks: config.collection.detailRankRanges };
-    for (const [name, id] of Object.entries(fieldIds)) byId(id).value = values[name];
-    dirty = false;
-    syncFields();
-  }
-  async function refresh(forceForm = false) {
-    if (!admin()) return;
-    if (refreshInFlight) return refreshInFlight;
+  async function refresh() {
+    if (!admin()) return; if (refreshInFlight) return refreshInFlight;
     refreshInFlight = (async () => {
-      const results = await Promise.allSettled([api("/api/collector-status"), api("/api/worker-schedule"), api("/api/crawl-requests")]);
-      if (results[0].status === "fulfilled") { workerData = results[0].value; renderWorkers(workerData); }
-      else { workerData = null; byId("collectorWorkerStates").replaceChildren(node("p", results[0].reason.message, "hint")); }
-      if (results[1].status === "fulfilled") {
-        latest = results[1].value;
-        if (latest.config && (forceForm || !loaded)) fill(latest.config);
-        loaded = true;
-        byId("workerScheduleBadge").textContent = latest.lastError || latest.expired ? "확인 필요" : latest.enabled ? "예약 켜짐" : "예약 꺼짐";
-        byId("workerScheduleNext").textContent = latest.expiryReason === "KEYWORD_SCHEDULE_TIME_EXPIRED" ? "예약 시각이 지났습니다. 관측 기간은 유효하여 지금 수집은 가능합니다." : latest.expired ? "날짜가 지난 조건입니다. 관측 기간을 수정하세요." : latest.nextRunAt ? `다음 예약 ${formatTime(latest.nextRunAt)} · 한국시간` : !latest.enabled && latest.previewNextRunAt ? `예약 꺼짐 · 켜면 ${formatTime(latest.previewNextRunAt)}부터 · 한국시간` : latest.enabled ? "다음 예약 없음 · 기록과 실행일을 확인하세요." : "예약이 꺼져 있습니다. 조건 저장 후 연결 상태를 확인하세요.";
-        renderHistory(latest.latest);
-        if (latest.lastError) notice(errorMessage(latest.lastError), "error");
-      } else {
-        latest = null;
-        byId("workerScheduleBadge").textContent = "확인 필요";
-        byId("workerScheduleNext").textContent = "상태를 읽지 못했습니다.";
-        notice(results[1].reason.message, "error");
+      const results = await Promise.allSettled([api("/api/collector-status"), api("/api/crawl-requests"), ...WORKER_KEYS.map(key => api(scheduleUrl(key)))]);
+      workerData = results[0].status === "fulfilled" ? results[0].value : null;
+      requestsReadError = results[1].status !== "fulfilled"; if (!requestsReadError) requests = results[1].value.requests || [];
+      for (let i = 0; i < WORKER_KEYS.length; i += 1) {
+        const key = WORKER_KEYS[i], result = results[i + 2], card = cards.get(key);
+        if (result.status === "fulfilled") {
+          schedules[key] = result.value; const config = result.value.config;
+          if (!card.loaded && !drafts[key] && config?.keywords?.length) fill(card, { keywords: config.keywords.join("\n"), period: config.collection.dateMode === "fixed" ? "custom" : String(config.collection.bookingDays), checkIn: config.collection.checkIn || todayKst(), checkOut: config.collection.checkOut || todayKst(), purpose: config.collection.collectionPurpose, ranks: config.collection.detailRankRanges, dayUseMode: config.collection.dayUseMode || "detail", firstDate: config.firstDate, time: config.time, repeat: config.repeat, execution: config.enabled ? "schedule" : "now" });
+          card.loaded = true;
+        } else { schedules[key] = null; notice(card, "예약 상태를 읽지 못했습니다. 즉시수집과 연결 상태는 별도로 확인합니다.", "error"); }
       }
-      if (results[2].status === "fulfilled") renderRequests(results[2].value.requests);
-      else byId("collectorRequestHistory").replaceChildren(node("p", "즉시수집 요청 기록을 읽지 못했습니다. 상태를 새로고침하세요.", "hint"));
-      syncButtons();
-    })().finally(() => { refreshInFlight = null; });
-    return refreshInFlight;
+      loaded = true; renderWorkers(); renderHistory();
+    })().finally(() => { refreshInFlight = null; }); return refreshInFlight;
   }
-  async function action(fn) {
-    if (busy || !admin()) return;
-    busy = true;
-    syncButtons();
-    try { await fn(); } catch (error) { notice(error.message, "error"); }
-    finally { busy = false; syncButtons(); }
-  }
-  form.addEventListener("input", () => { dirty = true; syncFields(); syncButtons(); });
-  form.addEventListener("change", () => { dirty = true; syncFields(); syncButtons(); });
-  form.addEventListener("submit", event => {
-    event.preventDefault();
-    if (!form.reportValidity()) return;
-    action(async () => {
-      const rawKeywords = byId("workerScheduleKeywords").value;
-      const duplicates = duplicateKeywordCount(rawKeywords);
-      const config = scheduleConfig(Object.fromEntries(Object.entries(fieldIds).map(([name, id]) => [name, byId(id).value])));
-      await api("/api/worker-schedule", "PUT", config);
-      await refresh(true);
-      notice(`조건을 저장했습니다.${duplicates ? ` 중복 키워드 ${duplicates}개를 제외하고 ${config.keywords.length}개를 저장했습니다.` : ""} 예약 켜짐 여부는 그대로 유지했습니다.`, "success");
-    });
-  });
-  byId("workerScheduleEnable").addEventListener("click", () => action(async () => {
-    const enabled = latest?.config?.enabled !== true;
-    if (enabled && !workerAvailability(workerData, "scheduled").ready) throw new Error(workerAvailability(workerData, "scheduled").reason);
-    if (enabled && latest?.expired) throw new Error("예약 날짜 또는 관측 기간을 수정하고 저장하세요.");
-    await api("/api/worker-schedule/enabled", "POST", { enabled });
-    await refresh();
-    notice(enabled ? "예약을 켰습니다. 표시된 다음 예약 시각부터 실행합니다." : "예약을 일시정지했습니다. 실행 중인 작업은 마무리하고, 대기 중인 예약과 나머지 키워드는 중단합니다. 다른 즉시수집 요청과 함께 처리하는 작업은 유지합니다.", "success");
-  }));
-  byId("workerScheduleRunNow").addEventListener("click", () => action(async () => {
-    if (dirty) throw new Error("변경한 조건을 먼저 저장하세요.");
-    if (!workerAvailability(workerData, "scheduled").ready) throw new Error(workerAvailability(workerData, "scheduled").reason);
-    if (latest?.expired && latest.expiryReason !== "KEYWORD_SCHEDULE_TIME_EXPIRED") throw new Error("관측 기간을 수정하고 저장하세요.");
-    pendingRequestId ||= typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `manual-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const result = await api("/api/worker-schedule/run-now", "POST", { requestId: pendingRequestId });
-    pendingRequestId = null;
-    await refresh();
-    const state = result.status || result.occurrence?.status;
-    notice(state && STATUS_LABELS[state] ? `예약워커 즉시수집: ${STATUS_LABELS[state]}. 예약 일정은 유지됩니다.` : "예약워커에 즉시수집을 요청했습니다. 최근 작업에서 결과를 확인하세요. 예약 일정은 유지됩니다.", ["blocked", "failed", "interrupted"].includes(state) ? "error" : "success");
-  }));
+  byId("collectorWorkerStates").replaceChildren(...WORKER_KEYS.map(makeCard));
+  for (const id of ["collectorHistoryWorker", "collectorHistoryKeyword", "collectorHistoryDate", "collectorHistoryState"]) byId(id).addEventListener(id === "collectorHistoryKeyword" ? "input" : "change", renderHistory);
   byId("collectorRefresh").addEventListener("click", () => refresh());
-  byId("crawlWorkerKey").addEventListener("change", syncSelectedWorker);
-  byId("crawlWorkerScheduleShortcut").addEventListener("click", () => selectWorker("scheduled", true));
+  byId("crawlWorkerKey")?.addEventListener("change", syncLegacyAvailability);
+  byId("crawlAllowRepeat")?.addEventListener("change", event => { byId("crawlRepeatReason").disabled = !event.target.checked; byId("crawlRepeatReason").required = event.target.checked; });
   window.addEventListener("collector:requests-changed", () => { if (admin()) refresh(); });
-  byId("crawlAllowRepeat")?.addEventListener("change", event => { byId("crawlRepeatReason").disabled = !event.target.checked; byId("crawlRepeatReason").required = event.target.checked; if (!event.target.checked) byId("crawlRepeatReason").value = ""; });
-  const observer = new MutationObserver(() => { if (visible() && !loaded) refresh(); });
-  observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
-  const section = panel.closest("[data-admin-section-panel]");
-  if (section) observer.observe(section, { attributes: true, attributeFilter: ["class"] });
+  window.addEventListener("collector:prepare-card", event => {
+    const input = event.detail || {}, card = cards.get(workerKey(input.workerKey));
+    fill(card, { keywords: input.keyword || "", period: "custom", checkIn: input.checkIn, checkOut: input.bookingRangeDays === 1 ? input.checkIn : input.checkOut, purpose: input.collectionPurpose || "revenue_detail", ranks: input.detailRankRanges || "1-20", dayUseMode: input.dayUseMode || "inspect", execution: "now" });
+    card.root.open = true; card.root.scrollIntoView({ block: "start", behavior: "smooth" }); saveDraft(card);
+  });
+  const observer = new MutationObserver(() => { if (visible() && !loaded) refresh(); }); observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+  const section = panel.closest("[data-admin-section-panel]"); if (section) observer.observe(section, { attributes: true, attributeFilter: ["class"] });
   document.addEventListener("visibilitychange", () => { if (visible()) refresh(); });
   window.addEventListener("pagehide", () => observer.disconnect(), { once: true });
-  setInterval(() => { if (visible() && !busy) refresh(); }, 15000);
-  if (visible()) refresh();
+  setInterval(() => { if (visible()) refresh(); }, 15000); if (visible()) refresh();
 })();

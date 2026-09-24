@@ -174,7 +174,7 @@ test("basic worker selection survives submit, request restore, status polling an
   const sent = JSON.parse(ui.calls.find(item => item.options?.method === "POST").options.body);
   assert.equal(sent.workerKey, "web");
   assert.equal(sent.recrawlContext.companyIds[0], "company-123");
-  assert.match(ui.els.crawlStatus.textContent, /기본워커/);
+  assert.match(ui.els.crawlStatus.textContent, /2Gweb_worker/);
   const id = sent.clientRequestId;
   const pending = JSON.parse(ui.data.get("glamping:admin:crawl-requests:test-admin"));
   assert.equal(pending.requests[0].workerKey, "web");
@@ -186,5 +186,32 @@ test("basic worker selection survives submit, request restore, status polling an
   assert.ok(ui.calls.some(item => item.url === "/api/crawl-status?workerKey=web"));
   assert.equal(ui.calls.filter(item => item.options?.method === "POST").length, 1);
   await ui.context.finishAdminCrawlRequest(ui.context.state.adminCrawlRequests[id], { status: "complete", result: { runId: "web_glamping_20260923_230000", collectionQuality: { status: "complete" } } });
-  assert.match(ui.els.crawlStatus.textContent, /기본워커.*수집을 완료/);
+  assert.match(ui.els.crawlStatus.textContent, /2Gweb_worker.*수집을 완료/);
+});
+
+test("worker-card bridge submits through existing receipt tracking with isolated scope and day-use", async () => {
+  const ui = harness();
+  ui.els.crawlForm.dataset = {};
+  ui.els.checkInInput = { value: "" };
+  ui.els.checkOutInput = { value: "" };
+  ui.els.collectionPurposeInput = { value: "basic_db" };
+  ui.nodes.crawlWorkerKey.dispatchEvent = () => {};
+  ui.context.Event = class { constructor(type) { this.type = type; } };
+  ui.context.setDetailRankRange = value => { ui.els.crawlForm.dataset.ranks = value; };
+  ui.context.currentCrawlFormPayload = () => ({
+    keyword: ui.els.keywordInput.value, checkIn: ui.els.checkInInput.value, checkOut: ui.els.checkOutInput.value,
+    collectionPurpose: ui.els.collectionPurposeInput.value, dayUseMode: ui.els.crawlForm.dataset.dayUseMode,
+    bookingRangeDays: Number(ui.els.crawlForm.dataset.bookingRangeDays), detailRankRanges: ui.els.crawlForm.dataset.ranks
+  });
+  ui.context.state.pendingRecrawlContext = { type: "company", companyIds: ["unrelated-company"] };
+  const receipt = await ui.context.submitCollectorCard({ workerKey: "manual", keyword: "가평글램핑", checkIn: "2026-09-24", checkOut: "2026-09-25", bookingRangeDays: 1, collectionPurpose: "revenue_detail", detailRankRanges: "1-5", dayUseMode: "lodging_only", allowRepeat: false });
+  const sent = JSON.parse(ui.calls.find(item => item.options?.method === "POST").options.body);
+  assert.equal(sent.workerKey, "manual");
+  assert.equal(sent.keyword, "가평글램핑");
+  assert.equal(sent.dayUseMode, "lodging_only");
+  assert.equal(sent.bookingRangeDays, 1);
+  assert.equal(sent.recrawlContext, undefined);
+  assert.equal(receipt.status, "pending");
+  assert.equal(ui.context.state.adminCrawlRequests[receipt.requestId].workerKey, "manual");
+  assert.equal(ui.els.crawlForm.dataset.bookingDateScope, "2026-09-24|2026-09-25");
 });

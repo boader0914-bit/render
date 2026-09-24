@@ -24,6 +24,8 @@ const indexHtml = fs.readFileSync(indexPath, "utf8");
 const serviceWorker = fs.readFileSync(serviceWorkerPath, "utf8");
 const server = fs.readFileSync(serverPath, "utf8");
 const crawler = fs.readFileSync(crawlerPath, "utf8");
+const collectorUi = fs.readFileSync(path.join(root, "web", "collector_controls.js"), "utf8");
+const collectorStyles = fs.readFileSync(path.join(root, "web", "collector-controls.css"), "utf8");
 
 const requiredMarkers = [
   "Surface contrast contract v3",
@@ -1244,7 +1246,7 @@ assert(
   failures
 );
 
-const crawlFormMatch = indexHtml.match(/<form class="admin-card" id="crawlForm">([\s\S]*?)<\/form>/);
+const crawlFormMatch = indexHtml.match(/<form[^>]*id="crawlForm"[^>]*>([\s\S]*?)<\/form>/);
 const crawlFormMarkup = crawlFormMatch?.[1] || "";
 const purposeOptionsMarkup = crawlFormMarkup.match(/<div class="crawl-purpose-options">([\s\S]*?)<\/div>/)?.[1] || "";
 const purposeButtons = [...crawlFormMarkup.matchAll(/data-collection-purpose="([^"]+)"/g)].map((match) => match[1]);
@@ -1281,21 +1283,22 @@ assert(
 );
 
 assert(
-  crawlFormMarkup.includes('<h3 id="crawlKeywordHeading">키워드</h3>') && !crawlFormMarkup.includes("새 수집"),
-  "collection form must use keyword as the heading without the old new-collection title",
+  indexHtml.includes('aria-label="워커별 수집 관리"')
+    && collectorUi.includes('const WORKER_KEYS = ["web", "manual", "scheduled"]')
+    && collectorUi.includes('manual: "BG worker", web: "2Gweb_worker", scheduled: "AWS worker"')
+    && /id="crawlForm" hidden aria-hidden="true"/.test(indexHtml),
+  "collection workspace must present three named worker cards and hide the compatibility form",
   failures
 );
 
 assert(
-  /id="keywordInput"[^>]*placeholder="예: 경남 숙소"[^>]*required/.test(crawlFormMarkup)
-    && !/id="keywordInput"[^>]*\bvalue=/.test(crawlFormMarkup)
-    && /id="keywordInput"[^>]*autocomplete="off"[^>]*autocorrect="off"[^>]*spellcheck="false"/.test(crawlFormMarkup)
-    && /<span id="crawlPurposeHint" role="status" aria-live="polite">[^<]+<\/span>/.test(crawlFormMarkup)
-    && (crawlFormMarkup.match(/aria-describedby="crawlPurposeHint"/g) || []).length === 2,
-  "collection form must start with a blank non-restored keyword and expose its automatic policy hint",
+  collectorUi.includes('drafts[card.key] = values(card)')
+    && collectorUi.includes('dayUseMode: "inspect"')
+    && collectorUi.includes('field(card, "keywords", "검색 키워드"')
+    && collectorUi.includes('card.notice.setAttribute("aria-live", "polite")'),
+  "worker cards must preserve independent drafts, default to day-use presence check, and announce action status",
   failures
 );
-
 assert(
   /id="searchModeInput" type="hidden" value="keyword"/.test(crawlFormMarkup)
     && /id="productModeInput" type="hidden" value="all"/.test(crawlFormMarkup)
@@ -1306,33 +1309,31 @@ assert(
 );
 
 assert(
-  crawlFormMarkup.includes("<span>시작일</span>")
-    && crawlFormMarkup.includes("<span>종료일</span>")
-    && !crawlFormMarkup.includes("<span>체크인</span>"),
-  "collection date labels must read start and end date",
+  collectorUi.includes('"숙박 시작일"') && collectorUi.includes('"숙박 종료일 · 포함"')
+    && collectorUi.includes('"수집 실행일"') && collectorUi.includes('"실행 시각 · 한국시간"'),
+  "worker cards must distinguish inclusive lodging dates from scheduled execution dates",
   failures
 );
 
 assert(
-  purposeButtons.length === 2
-    && purposeButtons[0] === "basic_db"
-    && purposeButtons[1] === "revenue_detail"
-    && !crawlFormMarkup.includes('data-collection-purpose="demand_location"')
-    && !crawlFormMarkup.includes("crawlPurposeRoutePreview")
-    && !/<(?:span|em)\b/.test(purposeOptionsMarkup),
-  "collection form must expose only the two simplified collection purposes",
+  collectorUi.includes('choices: [["basic_db", "기본수집"], ["revenue_detail", "상세수집"]]')
+    && collectorUi.includes('choices: [["inspect", "유무확인"], ["lodging_only", "숙박만"], ["detail", "상세수집"]]')
+    && collectorUi.includes('detailChoice.disabled = v.purpose === "basic_db"'),
+  "worker cards must expose two collection purposes and three day-use choices without misleading basic-detail coverage",
   failures
 );
 
 assert(
-  /id="collectionPurposeInput" type="hidden" value="basic_db"/.test(crawlFormMarkup)
-    && /id="detailRankEndInput"[^>]*value="40"/.test(crawlFormMarkup)
-    && !/id="detailRankEndInput"[^>]*\bmax=/.test(crawlFormMarkup)
-    && /id="detailRankRangesInput" type="hidden" value="1-40"/.test(crawlFormMarkup),
-  "basic collection must start at 1-40 without treating the default as an input cap",
+  collectorUi.includes('ranks: "1-20"') && collectorUi.includes('field(card, "ranks", "수집 순위", "text"')
+    && /first < 1 \|\| last > 100 \|\| first > last/.test(collectorUi)
+    && collectorStyles.includes('background: var(--surface-card)')
+    && collectorStyles.includes('background: var(--surface-control)')
+    && collectorStyles.includes('color: var(--text-primary)')
+    && collectorStyles.includes('color: var(--text-secondary)')
+    && collectorStyles.includes('@media (max-width: 720px)'),
+  "worker-card ranks must remain editable within supported limits and use responsive light-dark theme contrast tokens",
   failures
 );
-
 assert(
   /basic_db:\s*\{[\s\S]*?defaultRange:\s*"1-40"/.test(app)
     && /revenue_detail:\s*\{[\s\S]*?defaultRange:\s*"1-20"/.test(app)
@@ -1483,7 +1484,7 @@ const runDbUniqueNameBlock = app.slice(
 
 assert(
   runResultCardMarkup.includes("최근 수집 결과")
-    && /<details class="admin-card run-result-admin-card" id="runResultAdminCard">/.test(collectPanelMarkup)
+    && /<details[^>]*id="runResultAdminCard" hidden aria-hidden="true">/.test(collectPanelMarkup)
     && runResultCardMarkup.includes('class="run-result-admin-summary"')
     && runResultCardMarkup.includes('id="runResultAdminTitle"')
     && runResultCardMarkup.includes('id="runResultAdminMeta"')
@@ -1492,7 +1493,7 @@ assert(
     && runResultCardMarkup.includes("접기")
     && !runResultCardMarkup.includes('id="runSelect"')
     && !runResultCardMarkup.includes('id="refreshRuns"'),
-  "collection result card must default to a compact native disclosure without duplicate history controls",
+  "legacy result bridge must stay hidden while worker results and unified history provide the visible entry points",
   failures
 );
 

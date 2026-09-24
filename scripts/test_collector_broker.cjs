@@ -402,10 +402,12 @@ test("role namespaces isolate credentials and allow scheduled-worker immediate a
   const manualInput = jobInput({ env: { ...jobInput().env, SCHEDULED_COLLECTION: "0" }, payload: { workerKey: "manual", trigger: "manual" } });
   const manualJob = await manual.submit(manualInput);
   await assert.rejects(manual.submit(jobInput({ payload: { workerKey: "scheduled", trigger: "scheduled" } })), { code: "COLLECTOR_WRONG_WORKER" });
-  await assert.rejects(manual.submit(jobInput({ payload: { workerKey: "manual", trigger: "scheduled" } })), { code: "COLLECTOR_WRONG_WORKER" });
+  const manualScheduled = await manual.submit(jobInput({ payload: { workerKey: "manual", trigger: "scheduled", dayUseMode: "inspect" },
+    env: { ...jobInput().env, DAY_USE_MODE: "inspect" } }));
+  assert.equal(manualScheduled.trigger, "scheduled");
   await scheduled.submit({ ...manualInput, payload: { workerKey: "scheduled", trigger: "manual" } });
   await scheduled.submit(jobInput({ payload: { workerKey: "scheduled", trigger: "scheduled" } }));
-  assert.equal((await manual.status()).queued, 1);
+  assert.equal((await manual.status()).queued, 2);
   assert.equal((await scheduled.status()).queued, 2);
   assert.equal((await request(scheduled, "POST", "/api/collector-worker/claim", {})).handled, false);
   assert.equal((await request(scheduled, "POST", "/api/collector-worker-scheduled/claim", { workerId: WORKER, protocolVersion: 1 })).status, 401);

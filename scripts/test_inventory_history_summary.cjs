@@ -80,4 +80,32 @@ assert.equal(mixed.current.summary.rateObservedDays, 1);
 const legacy = history([{ ...lodging, inventoryEvidenceVersion: 2, total: 8, sold: 2 }]);
 assert.equal(legacy.current.summary.supply, 8);
 assert.equal(legacy.current.summary.reservationRate, 0.25);
+assert.equal(complete.current.summary.dayUseBookings, 0, "legacy summary retains its prior shape and values");
+
+for (const [mode, status] of [["inspect", "not_requested"], ["lodging_only", "excluded"], ["detail", "not_requested_basic"]]) {
+  for (const presence of ["present", "unknown", "absent"]) {
+    const unqueried = { ...lodging, inventoryEvidenceVersion: 4,
+      dayUseMode: mode, dayUsePresence: presence, dayUseScheduleStatus: status,
+      publicBookings: 3, phoneBookings: 0, sold: 3, partial: presence !== "absent" };
+    const current = history([unqueried]);
+    assert.equal(current.current.daily[0].dayUseBookings, null);
+    assert.equal(current.current.daily[0].dayUseObserved, false);
+    assert.equal(current.current.daily[0].dayUseMissingReason, presence === "absent" ? "no_day_use_product" : status);
+    assert.equal(current.current.summary.dayUseBookings, null);
+    assert.equal(current.current.summary.dayUseObservedDays, 0);
+    assert.equal(current.current.summary.dayUseUnobservedDays, 1);
+    const month = context.companySalesHistorySummary([], [unqueried], "2026-10-01");
+    assert.equal(month.past.years[0].months[0].summary.dayUseBookings, null, "monthly reporting must not convert unqueried day use into zero bookings");
+  }
+}
+const observedDayUseZero = history([lodging, { ...lodging, productType: "dayuse", total: 3, sold: 0,
+  publicBookings: 0, phoneBookings: 0, sharedDayUseExcluded: 0, dayUseMode: "detail",
+  dayUsePresence: "present", dayUseScheduleStatus: "requested" }]);
+assert.equal(observedDayUseZero.current.daily[0].dayUseBookings, 0);
+assert.equal(observedDayUseZero.current.daily[0].dayUseObserved, true);
+assert.equal(observedDayUseZero.current.summary.dayUseObservedDays, 1);
+const mixedCoverage = history([lodging, { ...lodging, date: "2026-09-22", dayUseMode: "inspect",
+  dayUsePresence: "present", dayUseScheduleStatus: "not_requested" }]);
+assert.equal(mixedCoverage.current.summary.dayUseBookings, null);
+assert.equal(mixedCoverage.current.summary.dayUsePartial, true);
 console.log("Inventory history summary: fixed capacity, partial-rate suppression, public/phone separation, shared day-use units and missing phone prices passed");

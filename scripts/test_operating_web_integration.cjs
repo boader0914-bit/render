@@ -70,12 +70,13 @@ function installFixture(config) {
         if (closed) return;
         const blocked = keyword.includes("차단"), partial = keyword.includes("부분");
         const saved = await writeMockArtifacts(env, keyword, 1, blocked ? "blocked" : partial);
+        if (config.richRows) await require(path.join(config.root,"scripts/test_worker_cards_integration.cjs")).enrichFixture(saved,env,keyword);
         const runId = `fixture_web_${env.COLLECTOR_RUN_TOKEN}_glamping_${env.RUN_STAMP}`;
         const destination = path.join(env.OUTPUTS_DIR, runId);
         if (saved.runDir !== destination) await fsp.rename(saved.runDir, destination);
         const manifestPath = path.join(destination, "manifest.json");
         const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8"));
-        delete manifest.workerCollection; delete manifest.scheduledCollection;
+        delete manifest.workerCollection;
         Object.assign(manifest, { outputDir: destination, webCollection: true, collectorRunToken: env.COLLECTOR_RUN_TOKEN,
           executionHost: { role: "operating_web" }, requestPacing: { ...manifest.requestPacing, enabled: false, pacingEnabled: false,
             guardEnabled: true, minIntervalMs: 0, maxConcurrentRequests: null } });
@@ -153,7 +154,7 @@ async function main() {
 
     const initial = await status(), web = initial.workers.find(worker => worker.workerKey === "web");
     assert.equal(web.connected, true); assert.equal(web.ready, true); assert.equal(web.configured, true);
-    assert.match(web.label || web.name || "", /기본워커/);
+    assert.equal(web.label || web.name || "", "2Gweb_worker");
     for (const [cookie, expected] of [["", 401], [member, 403]]) {
       assert.equal((await request(base, "/api/crawl?async=1", cookie, jsonPost(payload("인증글램핑")))).response.status, expected);
     }
@@ -242,4 +243,5 @@ async function main() {
   }
 }
 
-main().catch(error => { console.error(error.stack || error); process.exitCode = 1; });
+if (require.main === module) main().catch(error => { console.error(error.stack || error); process.exitCode = 1; });
+module.exports = { installFixture };

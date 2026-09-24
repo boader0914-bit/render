@@ -41,10 +41,10 @@ function harness(options = {}) {
     const script = `${setup}\nmain = async () => { await fetch('https://m.booking.naver.com/graphql'); throw new Error('fixture-sensitive-body'); };${source.slice(entryPoint)}`;
     return { completion: vm.runInNewContext(script, context), writes, logs, process: processMock };
   }
-  const exports = vm.runInNewContext(`${setup}\n({
+  const exports = vm.runInNewContext(`${setup}\n${options.setup || ""}\n({
     loadHistoricalNaverBookingBusinessMap, getHistoricalNaverBookingBusiness, getNaverDailySchedule,
     addCollectionDiagnostics, diagnostics: scheduledCollectionDiagnostics,
-    collectNaverSchedulesForItems, collectWeeklyNaverAvailability, productCoverage, outputDir: OUTPUT_DIR,
+    collectNaverSchedulesForItems, collectWeeklyNaverAvailability, collectNaverBookingAvailability, productCoverage, outputDir: OUTPUT_DIR,
     profile: COLLECTION_PROFILE,
     concurrency: [NAVER_BOOKING_DETAIL_CONCURRENCY, NAVER_SCHEDULE_CONCURRENCY, NAVER_OTA_OBSERVATION_CONCURRENCY],
   })`, context);
@@ -73,6 +73,64 @@ test("worker restores historical stage pools and preserves explicit low-load job
   assert.deepEqual(Array.from(explicit.concurrency), [2, 4, 2]);
   assert.equal(explicit.profile.collectBookingStock, true);
   assert.equal(explicit.profile.collectWeeklyRange, false);
+});
+
+test("real booking path preserves seven lodging dates and only queries day-use dates for detail", async () => {
+  for (const mode of ["inspect", "lodging_only", "detail"]) {
+    const called = [];
+    const crawler = harness({ env: { COLLECTOR_WORKER_RUNTIME: "1", DAY_USE_MODE: mode, BOOKING_RANGE_DAYS: "7",
+      NAVER_SCHEDULE_DELAY_MS: "0", NAVER_COUPON_PAGE_FALLBACK: "0" },
+      setup: 'getNaverBookingBusiness = async () => ({bookingBusinessId:"123",bookingUrl:"fixture"});',
+      fetchImpl: async (_url, init) => {
+        const query = JSON.parse(init.body);
+        if (query.operationName === "searchBizItem") return new Response(JSON.stringify({ data: { searchBizItem: { bizItems: [
+          { bizItemId: "night", name: "숙박", bizItemSubType: "ACCOMMODATION_NIGHT" },
+          { bizItemId: "day", name: "데이유즈", bizItemSubType: "ACCOMMODATION_DAY_USE" }
+        ] } } }));
+        assert.equal(query.operationName, "dailySchedule");
+        const params = query.variables.scheduleParams; called.push(params);
+        const date = params.startDateTime.slice(0, 10);
+        return new Response(JSON.stringify({ data: { schedule: { bizItemSchedule: { daily: { date: {
+          [date]: { stock: 10, bookingCount: 1, occupiedBookingCount: 0, price: 100000 }
+        } } } } } }));
+      }
+    });
+    const result = await crawler.collectNaverBookingAvailability("456", new Map(), { collectRange: true });
+    assert.equal(called.filter(row => row.bizItemId === "night").length, 7, mode);
+    assert.equal(called.filter(row => row.bizItemId === "day").length, mode === "detail" ? 7 : 0, mode);
+    assert.equal(result.dayUsePresence, "present");
+    assert.equal(result.dayUseSharingStatus, "unconfirmed");
+    assert.equal(result.weekly.dates.length, 7);
+    if (mode !== "detail") { assert.equal(result.dayUseTotalStock, null); assert.equal(result.dayUseEstimatedRevenue, null); }
+    const manifest = manifestFixture();
+    manifest.counts.naverBookingStockEligible = manifest.counts.naverBookingStockChecked = manifest.counts.naverBookingStockSucceeded = 1;
+    crawler.addCollectionDiagnostics(manifest);
+    assert.equal(manifest.collectionQuality.status, "complete", JSON.stringify(manifest.collectionQuality));
+    assert.equal(manifest.dayUseMode, mode);
+  }
+});
+
+test("basic collection never adds day-use schedule requests even when detail is selected", async () => {
+  const called = [];
+  const crawler = harness({ env: { COLLECTOR_WORKER_RUNTIME: "1", DAY_USE_MODE: "detail", COLLECTION_PURPOSE: "basic_db", NAVER_COUPON_PAGE_FALLBACK: "0" },
+    setup: 'getNaverBookingBusiness = async () => ({bookingBusinessId:"123",bookingUrl:"fixture"});',
+    fetchImpl: async (_url, init) => {
+      const query = JSON.parse(init.body);
+      if (query.operationName === "searchBizItem") return new Response(JSON.stringify({ data: { searchBizItem: { bizItems: [
+        { bizItemId: "night", name: "숙박", bizItemSubType: "ACCOMMODATION_NIGHT" },
+        { bizItemId: "day", name: "데이유즈", bizItemSubType: "ACCOMMODATION_DAY_USE" }
+      ] } } }));
+      const params = query.variables.scheduleParams; called.push(params.bizItemId);
+      return new Response(JSON.stringify({ data: { schedule: { bizItemSchedule: { daily: { date: {
+        "2026-09-22": { stock: 0, bookingCount: 0, occupiedBookingCount: 0 }
+      } } } } } }));
+    }
+  });
+  const result = await crawler.collectNaverBookingAvailability("456", new Map());
+  assert.deepEqual(called, ["night"]);
+  assert.equal(result.dayUsePresence, "present");
+  assert.equal(result.dayUseScheduleStatus, "not_requested_basic");
+  assert.equal(result.dayUseTotalStock, null);
 });
 
 test("transferred historical identifiers survive absent worker history and local CSV history retains precedence", async () => {

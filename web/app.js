@@ -321,9 +321,9 @@ const ADMIN_MOBILE_SECTIONS = {
     label: "수집",
     target: "admin",
     adminPanelSection: "collect",
-    anchor: "#crawlForm",
+    anchor: "#collectorControlsCard",
     items: [
-      { label: "검색·시장 수집", tab: "admin", adminPanelSection: "collect", anchor: "#crawlForm" },
+      { label: "검색·시장 수집", tab: "admin", adminPanelSection: "collect", anchor: "#collectorControlsCard" },
       { label: "수집 결과 분석", tab: "rank" },
       { label: "결과 보관함", tab: "admin", adminPanelSection: "archive", anchor: "#collectionArchive" },
       { label: "수집 이력", tab: "historyOps" }
@@ -402,7 +402,7 @@ const ADMIN_PANEL_SECTIONS = {
 const ADMIN_PANEL_MOBILE_TARGETS = {
   database: { section: "database", anchor: "#adminDatabaseDashboard" },
   overview: { section: "summary", anchor: "#adminConsoleDashboard" },
-  collect: { section: "collect", anchor: "#crawlForm" },
+  collect: { section: "collect", anchor: "#collectorControlsCard" },
   archive: { section: "collect", anchor: "#collectionArchive" },
   members: { section: "more", anchor: "#adminMemberRequestDashboard" },
   files: { section: "more", anchor: "#adminIntegrationRegistry" }
@@ -1037,6 +1037,8 @@ function currentCrawlFormPayload() {
     collectionPurpose,
     collectionMode,
     detailRankRanges,
+    dayUseMode: document.getElementById("crawlForm")?.dataset.dayUseMode || "inspect",
+    ...(Number(els.crawlForm?.dataset.bookingRangeDays) > 0 && els.crawlForm.dataset.bookingDateScope === `${els.checkInInput?.value}|${els.checkOutInput?.value}` ? { bookingRangeDays: Number(els.crawlForm.dataset.bookingRangeDays) } : {}),
     rankRangeCount: rankRangeCountFromText(detailRankRanges, defaultRange),
     bookingRangePlaceLimit: purpose.collectWeeklyRange ? rankRangePlaceLimitFromText(detailRankRanges, defaultRange) : 0
   };
@@ -1917,10 +1919,11 @@ function focusAdminCrawlProgress() {
   ensureCrawlControls();
   setActiveTab("admin");
   setAdminPanelSection("collect");
+  window.dispatchEvent(new CustomEvent("collector:prepare-card", { detail: { ...currentCrawlFormPayload(), workerKey: selectedAdminCrawlWorkerKey() } }));
   window.requestAnimationFrame(() => {
     const target = state.crawlProgressRunning && els.crawlProgress && !els.crawlProgress.hidden
       ? els.crawlProgress
-      : els.crawlForm;
+      : document.getElementById("collectorControlsCard") || els.crawlForm;
     target?.scrollIntoView({ behavior: "smooth", block: "start" });
   });
 }
@@ -8705,6 +8708,16 @@ function companyRecrawlComparisonHtml(company = {}, profile = {}, decision = {})
   `;
 }
 
+function companyDayUseAbsentForProposal(company = {}, legacyMissing = false) {
+  const latest = company.inventory?.latest || {};
+  const presence = latest.salesSignal?.dayUsePresence ?? latest.dayUsePresence ?? company.salesTarget?.signals?.dayUsePresence;
+  // New collection coverage distinguishes missing reservation detail from an
+  // absent product. Preserve the former rule only for pre-coverage snapshots.
+  return presence !== undefined && presence !== null && presence !== ""
+    ? presence === "absent"
+    : Boolean(legacyMissing);
+}
+
 function companySalesAction(company = {}) {
   const tags = company.salesTarget?.priorityTags || [];
   const signals = company.salesTarget?.signals || {};
@@ -8731,7 +8744,7 @@ function companySalesAction(company = {}) {
       next: "평일 평균 판매율과 지역 생활권 수요 확인"
     };
   }
-  if (has("당일") || has("캠프닉") || signals.dayUseMissing) {
+  if (companyDayUseAbsentForProposal(company, has("당일") || has("캠프닉") || signals.dayUseMissing)) {
     return {
       label: "캠프닉 추가",
       pitch: "숙박 외 당일상품을 보조 매출 상품으로 설계",
@@ -9307,7 +9320,7 @@ function companySalesProposalSignals(company = {}, entry = {}) {
     signals.fridayWeak ? { label: "금요일", value: `공백 ${fmtRate(signals.fridayRate)}` } : null,
     signals.sundayWeak ? { label: "일요일", value: `공백 ${fmtRate(signals.sundayRate)}` } : null,
     signals.weekdayWeak ? { label: "평일", value: `공백 ${fmtRate(signals.weekdayRate)}` } : null,
-    signals.dayUseMissing ? { label: "캠프닉", value: "데이유즈/캠프닉 확인" } : null,
+    companyDayUseAbsentForProposal(company, signals.dayUseMissing) ? { label: "캠프닉", value: "데이유즈/캠프닉 확인" } : null,
     manualCorrectionHasValue(company.manualCorrection) ? { label: "보정", value: company.correctionStatus?.detail || "수동 보정 있음" } : null
   ].filter((row) => row && row.value && row.value !== "0원");
   return rows.slice(0, 8);
@@ -9330,7 +9343,7 @@ function companySalesProposalQuestions(company = {}, entry = {}) {
   if (signals.weekdayWeak || String(action.label || "").includes("평일")) {
     questions.push("월~목 평일에 가족, 단체, 기업 소규모 체류 상품을 운영할 수 있나요?");
   }
-  if (signals.dayUseMissing || String(action.label || "").includes("캠프닉")) {
+  if (companyDayUseAbsentForProposal(company, signals.dayUseMissing || String(action.label || "").includes("캠프닉"))) {
     questions.push("데이유즈/캠프닉은 숙박과 같은 카테고리로 묶어 회차, 기준 인원, 바비큐 포함 여부를 확인해야 합니다.");
   }
   questions.push("NOL, 떠나요, 여기어때 등 OTA 채널별 노출 가격과 네이버 예약 가격이 일치하나요?");
@@ -18005,7 +18018,7 @@ function companyNeedsCorrection(company = {}) {
   if (signals.bookingIdReused || hasText("예약ID")) {
     issues.push({ key: "booking", label: "예약ID", task: "네이버 예약ID와 상품명이 현재 객실 구조와 맞는지 확인" });
   }
-  if (signals.dayUseMissing || hasText("당일") || hasText("캠프닉")) {
+  if (companyDayUseAbsentForProposal(company, signals.dayUseMissing || hasText("당일") || hasText("캠프닉"))) {
     issues.push({ key: "dayuse", label: "당일상품", task: "데이유즈/캠프닉 회차와 판매 가능 수량 확인" });
   }
   if (signals.otaReviewNeeded || hasText("OTA")) {
@@ -18383,7 +18396,7 @@ function companyCheckPriority(company = {}, profile = {}, type = {}, workflow = 
   const sales = latest.salesSignal || {};
   const lodging = sales.lodging || {};
   const dayUse = sales.dayUse || {};
-  if (dayUse.days === 0 && sales.dayUseMissing) score += 6;
+  if (dayUse.days === 0 && companyDayUseAbsentForProposal(company, sales.dayUseMissing)) score += 6;
   if (company.salesTarget?.category === "contact") score += 14;
   if (company.salesTarget?.category === "verify") score += 10;
   if (company.salesTarget?.category === "benchmark") score += 2;
@@ -40817,7 +40830,7 @@ function selectedAdminCrawlWorkerKey() {
 }
 
 function adminCrawlWorkerLabel(key) {
-  return ({ manual: "0922 수동워커", web: "기본워커", scheduled: "0923 예약워커" })[key] || "수집기";
+  return ({ manual: "BG worker", web: "2Gweb_worker", scheduled: "AWS worker" })[key] || "수집기";
 }
 
 function syncAdminCrawlSubmitAvailability() {
@@ -41027,6 +41040,7 @@ async function submitCrawl(event) {
       // same-day scope conflict, disconnected worker, or active protection.
       await finishAdminCrawlRequest(request, { status: "failed", errorCode: error.code, message: error.message });
     } else {
+      request.submissionUncertain = true;
       if (els.crawlStatus) els.crawlStatus.textContent = "접수 응답을 확인하지 못했습니다. 같은 요청 번호로 서버 기록을 확인하며 자동 재수집은 하지 않습니다.";
       setStatus("수집 접수 확인 중");
     }
@@ -41036,6 +41050,30 @@ async function submitCrawl(event) {
     if (workerSelector) workerSelector.disabled = false;
     scheduleAdminCrawlRequestPoll(500);
   }
+  return request;
+}
+let collectorCardSubmissionQueue = Promise.resolve();
+async function submitCollectorCard(input) {
+  if (!isAdminRole()) throw new Error("관리자 로그인이 필요합니다.");
+  if (state.adminCrawlSubmitting) throw new Error("다른 요청을 접수하고 있습니다. 잠시 후 다시 시도하세요.");
+  const prepared = currentCrawlFormPayload();
+  if (prepared.keyword !== input.keyword || prepared.checkIn !== input.checkIn || prepared.checkOut !== input.checkOut) state.pendingRecrawlContext = null;
+  document.getElementById("crawlWorkerKey").value = input.workerKey;
+  document.getElementById("crawlWorkerKey").dispatchEvent(new Event("change", { bubbles: true }));
+  els.keywordInput.value = input.keyword;
+  els.checkInInput.value = input.checkIn;
+  els.checkOutInput.value = input.checkOut;
+  els.searchModeInput.value = state.pendingRecrawlContext ? correctedSearchMode(input.keyword, "company", { recrawlContext: state.pendingRecrawlContext }) : "keyword";
+  els.collectionPurposeInput.value = input.collectionPurpose;
+  els.crawlForm.dataset.dayUseMode = input.dayUseMode || "inspect";
+  els.crawlForm.dataset.bookingRangeDays = String(input.bookingRangeDays || "");
+  els.crawlForm.dataset.bookingDateScope = `${input.checkIn}|${input.checkOut}`;
+  setDetailRankRange(input.detailRankRanges, input.collectionPurpose);
+  document.getElementById("crawlAllowRepeat").checked = input.allowRepeat === true;
+  document.getElementById("crawlRepeatReason").value = input.repeatReason || "";
+  const request = await submitCrawl({ preventDefault() {} });
+  if (!request || ["failed", "blocked", "interrupted"].includes(request.status)) throw new Error(els.crawlStatus?.textContent || "수집 요청을 접수하지 못했습니다.");
+  return request;
 }
 function setDefaultDates() {
   const now = new Date();
@@ -41319,7 +41357,7 @@ function bindEvents() {
     if (event.target.closest("[data-open-collection-run]")) {
       setActiveTab("admin");
       setAdminPanelSection("collect", { freshEntry: true });
-      window.requestAnimationFrame(() => els.crawlForm?.scrollIntoView({ behavior: "smooth", block: "start" }));
+      window.requestAnimationFrame(() => document.getElementById("collectorControlsCard")?.scrollIntoView({ behavior: "smooth", block: "start" }));
       return;
     }
     const adminHomeRoute = event.target.closest("[data-admin-home-route]");
@@ -42361,6 +42399,12 @@ function bindEvents() {
     els.companyList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
   }));
   els.crawlForm.addEventListener("submit", submitCrawl);
+  window.addEventListener("collector:submit-card", event => {
+    const { input, resolve, reject } = event.detail;
+    const task = collectorCardSubmissionQueue.then(() => submitCollectorCard(input));
+    collectorCardSubmissionQueue = task.catch(() => {});
+    task.then(resolve, reject);
+  });
   els.runResultAdminCard?.querySelector(":scope > summary")?.addEventListener("keydown", (event) => {
     if (!['Enter', ' '].includes(event.key)) return;
     event.preventDefault();

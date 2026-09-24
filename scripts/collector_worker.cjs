@@ -11,7 +11,7 @@ const PROTOCOL_VERSION = 1;
 const JOB_ENV_KEYS = new Set([
   "CHECK_IN", "CHECK_OUT", "ADULTS", "SEARCH_MODE", "SEARCH_MODE_REQUESTED", "SEARCH_MODE_AUTO_CORRECTED",
   "SEARCH_INTENT", "SEARCH_REGION", "SEARCH_SCOPE", "SEARCH_SCOPE_LABEL", "COLLECTION_MODE", "COLLECTION_PURPOSE",
-  "DETAIL_RANK_RANGES", "PRODUCT_MODE", "BOOKING_RANGE_DAYS", "BOOKING_RANGE_PLACE_LIMIT", "NAVER_BOOKING_STOCK_LIMIT",
+  "DETAIL_RANK_RANGES", "PRODUCT_MODE", "DAY_USE_MODE", "BOOKING_RANGE_DAYS", "BOOKING_RANGE_PLACE_LIMIT", "NAVER_BOOKING_STOCK_LIMIT",
   "SOURCE_ROLE", "COLLECTION_SOURCE", "COLLECTION_SOURCE_LABEL", "SCHEDULED_COLLECTION", "RUN_STAMP",
   "NAVER_REQUEST_PACING_ENABLED", "NAVER_REQUEST_MIN_INTERVAL_MS", "NAVER_REQUEST_MAX_CONCURRENCY", "NAVER_REQUEST_PACING_START_DATE",
   "NAVER_BOOKING_DETAIL_CONCURRENCY", "NAVER_SCHEDULE_CONCURRENCY", "NAVER_SCHEDULE_DELAY_MS", "NAVER_OTA_OBSERVATION_CONCURRENCY",
@@ -165,10 +165,11 @@ function validateJob(job, options = {}) {
   }
   if (job.env.RUN_STAMP && !/^[a-zA-Z0-9_-]{1,100}$/.test(job.env.RUN_STAMP)) throw failure("COLLECTOR_JOB_INVALID");
   if (job.env.SCHEDULED_COLLECTION && !["0", "1"].includes(job.env.SCHEDULED_COLLECTION)) throw failure("COLLECTOR_JOB_INVALID");
+  if (job.env.DAY_USE_MODE !== undefined && !["inspect", "lodging_only", "detail"].includes(job.env.DAY_USE_MODE)) throw failure("COLLECTOR_JOB_INVALID");
   if (job.workerKey) {
     const engine = job.workerKey === "scheduled" ? "archive-keyword-adapted-v2" : "current-manual-v2";
     if (!["manual", "scheduled"].includes(job.workerKey) || job.workerKey !== (options.workerKey || "manual")
-      || !["manual", "scheduled"].includes(job.trigger) || (job.workerKey === "manual" && job.trigger !== "manual")
+      || !["manual", "scheduled"].includes(job.trigger)
       || job.env.COLLECTOR_WORKER_KEY !== job.workerKey || job.env.COLLECTOR_TRIGGER !== job.trigger
       || job.env.COLLECTOR_JOB_ID !== job.id || job.env.COLLECTOR_ENGINE !== engine
       || !/^[a-p]{24}$/.test(job.env.COLLECTOR_RUN_TOKEN || "")

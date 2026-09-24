@@ -14,6 +14,7 @@ const names = [
   "companyMaximumRoomCapacity", "withCompanyInventoryCapacity", "withCompanyInventoryCapacityRecord", "companyProductAvailabilityMatch",
   "companyInventoryNeedsEvidenceRecovery", "companyInventorySnapshotWithCurrentCapacity", "applyCompanyManualCorrection",
   "companySnapshotEstimatedRevenue", "snapshotNumber", "companyHistoryObservationWithCurrentCapacity",
+  "companySalesSignalFromItem", "companyRevenueSnapshotFromItem", "companyRevenueSnapshotPart", "hasActiveManualCorrection",
   "recoverCompanyProductSourceFromRuns",
   "summarizeAvailabilityRows",
   "manualCorrectionLodgingBasisTotal", "manualCorrectionRoomSegmentTotal", "manualCorrectionRoomSegments",
@@ -333,6 +334,60 @@ const typeReview = context.applyCompanyManualCorrection({ ...sourceItem, name: "
   ...capacityCompanies[0], lodgingTypes: ["글램핑"]
 });
 assert.equal(typeReview.inventoryEvidence.capacityReview.required, true, "the same-company DB lodging type reaches the inventory policy");
+
+for (const [mode, scheduleStatus] of [["inspect", "not_requested"], ["lodging_only", "excluded"], ["detail", "not_requested_basic"]]) {
+  for (const presence of ["present", "unknown", "absent"]) {
+    const unqueriedRow = { placeId: "day-use-unqueried", name: "검증업체", totalRooms: 10, availableRooms: 5,
+      dayUseMode: mode, dayUsePresence: presence, dayUseScheduleStatus: scheduleStatus, dayUseSharingStatus: "unconfirmed",
+      "데이유즈상품수": presence === "present" ? 1 : "",
+      weeklyProductDetails: [{ date: "2026-09-26", bizItemId: "room", name: "숙박", stock: 10,
+        bookingCount: 1, occupiedBookingCount: 4, price: 100000 }] };
+    const result = context.summarizeAvailabilityRows([unqueriedRow], "", [], { keyword: "검증", checkIn: "2026-09-26" });
+    const item = result.items[0];
+    assert.equal(item.dayUseMode, mode);
+    assert.equal(item.dayUsePresence, presence);
+    assert.equal(item.inventoryEvidence.dayUse, null);
+    assert.equal(item.inventoryEvidence.lodging.phoneBookings, presence === "absent" ? 4 : 0);
+    const sales = context.companySalesSignalFromItem(item, { checkIn: "2026-09-26" });
+    assert.equal(sales.dayUse.totalSold, null, "company DB never treats unqueried day-use sales as observed zero");
+    assert.equal(sales.dayUse.totalSupply, null);
+    assert.equal(sales.dayUse.observed, false);
+    assert.equal(sales.dayUseMissing, true);
+    assert.equal(sales.dayUse.missingReason, presence === "absent" ? "no_day_use_product" : scheduleStatus);
+    const revenue = context.companyRevenueSnapshotFromItem(item);
+    assert.equal(revenue.dayUse.revenue, null);
+    assert.equal(revenue.dayUse.adjustedRevenue, null);
+    assert.equal(revenue.dayUse.observed, false);
+    assert.equal(result.stats.dayUseEstimatedRevenue, null, "run summary retains unobserved revenue as null");
+    assert.equal(result.stats.dayUseObservedCount, 0);
+    assert.equal(result.stats.dayUseUnobservedCount, 1);
+    const historyRows = context.buildHistoryObservations({ run: { id: "day_use_fixture", keyword: "검증", checkIn: "2026-09-26" },
+      availability: { items: [{ ...item, companyId: "cmp_day_use" }] } }, "2026-09-24T00:00:00Z");
+    assert.equal(historyRows.filter(row => row.productType === "dayuse").length, 0);
+    assert.equal(historyRows[0].phoneBookings, presence === "absent" ? 4 : 0);
+    assert.equal(historyRows[0].dayUseMode, mode);
+    assert.equal(historyRows[0].dayUseScheduleStatus, scheduleStatus);
+    const dailySnapshot = context.compactProductSnapshotDaily(item, { checkIn: "2026-09-26" });
+    assert.equal(dailySnapshot[0].dayUsePresence, presence);
+    assert.equal(dailySnapshot[0].dayUseScheduleStatus, scheduleStatus);
+    const fallbackSnapshot = context.companyHistoryDailyFallback({ companyId: "cmp_day_use" }, historyRows);
+    assert.equal(fallbackSnapshot.daily[0].dayUseMode, mode);
+    assert.equal(fallbackSnapshot.daily[0].dayUseScheduleStatus, scheduleStatus);
+  }
+}
+const legacyProjection = context.summarizeAvailabilityRows([{ ...largeRow, weeklyProductDetails: [{
+  date: "2026-09-26", bizItemId: "room", name: "숙박", stock: 10, bookingCount: 1, occupiedBookingCount: 4, price: 100000
+}] }], "", [], { checkIn: "2026-09-26" });
+assert.equal(legacyProjection.items[0].dayUsePresence, undefined, "legacy absence of metadata is not silently upgraded to unknown");
+assert.equal(legacyProjection.items[0].inventoryEvidence.lodging.phoneBookings, 4, "legacy calculation remains unchanged");
+assert.equal(legacyProjection.stats.dayUseEstimatedRevenue, 0, "legacy summary compatibility is retained");
+
+const trueZero = context.companySalesSignalFromItem({ dayUseMode: "detail", dayUsePresence: "present", dayUseScheduleStatus: "requested",
+  inventoryEvidence: { version: 4, dayUse: { rows: [{ date: "2026-09-26", total: 3, available: 3, sold: 0,
+    publicBookings: 0, phoneBookings: 0, partial: false, missing: false }] } } }, { checkIn: "2026-09-26" });
+assert.equal(trueZero.dayUse.totalSold, 0, "observed normal zero bookings remain zero");
+assert.equal(trueZero.dayUse.totalSupply, 3);
+assert.equal(trueZero.dayUse.averageRate, 0);
 
 const recoveryCompany = { companyId: "recovery", placeIds: ["10"], runIds: ["old", "latest"], inventory: {
   latest: { stockBasis: { lodgingMaxTotal: 21 }, productSnapshot: { inventoryEvidenceVersion: 3 } },

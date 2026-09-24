@@ -105,7 +105,7 @@ async function writeMockArtifacts(env, keyword, index, partial) {
   };
   const fields = { CHECK_IN: "checkIn", CHECK_OUT: "checkOut", ADULTS: "adults", SEARCH_MODE: "searchMode", SEARCH_INTENT: "searchIntent",
     SEARCH_REGION: "searchRegion", SEARCH_SCOPE: "searchScope", COLLECTION_MODE: "collectionMode", COLLECTION_PURPOSE: "collectionPurpose",
-    PRODUCT_MODE: "productMode", BOOKING_RANGE_DAYS: "bookingRangeDays", BOOKING_RANGE_PLACE_LIMIT: "bookingRangePlaceLimit",
+    PRODUCT_MODE: "productMode", DAY_USE_MODE: "dayUseMode", BOOKING_RANGE_DAYS: "bookingRangeDays", BOOKING_RANGE_PLACE_LIMIT: "bookingRangePlaceLimit",
     SOURCE_ROLE: "sourceRole", COLLECTION_SOURCE: "collectionSource" };
   for (const [key, field] of Object.entries(fields)) if (env[key] !== undefined) manifest[field] = env[key];
   if (partial === "blocked") {
