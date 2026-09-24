@@ -246,27 +246,50 @@ test("failed schedules preserve failure provenance and do not become telephone b
   assert.equal(projected.weekly.dates[1].missing, true);
 });
 
-test("a missing shared day-use response leaves unexplained overnight inventory unknown", () => {
+test("a missing shared day-use response retains explicit occupied blocks while aggregate shortages remain unknown", () => {
   const api = harness();
   const date = "2026-09-20";
   const night = api.compactNaverScheduleDetail(schedule({ saleType: "숙박", name: "1~10번", stock: 10, bookingCount: 2, occupiedBookingCount: 3 }), "객실 묶음 상품리스트", date);
   const day = api.compactNaverScheduleDetail(schedule({ bizItemId: "day", stock: null, bookingCount: null, errors: [{ message: "fixture failure" }] }), "객실 종류별 리스트", date);
-  const result = api.applyCrawlerInventoryEvidence({ itemDetails: [night, day] }, "fixture");
+  const input = { itemDetails: [night, day], inventoryCapacityBaseline: { lodging: 12 } };
+  const before = JSON.stringify(input);
+  const result = api.applyCrawlerInventoryEvidence(input, "fixture");
   const row = result.inventoryEvidence.lodging.rows[0];
   assert.equal(row.publicBookings, 2);
   assert.equal(row.available, 5);
-  assert.equal(row.phoneBookings, 0);
-  assert.equal(row.unknownUnavailable, 3);
+  assert.equal(row.phoneBookings, 3, "Only the normally observed occupied count becomes a blocked estimate");
+  assert.equal(row.explicitBlockedBookings, 3);
+  assert.equal(row.phoneRevenue, 297000);
+  assert.equal(row.explicitBlockedRevenue, 297000);
+  assert.equal(row.unknownUnavailable, 2, "Unknown shared day use cannot justify the additional historical-capacity gap");
+  assert.equal(row.sharedDayUseIncomplete, true);
+  assert.equal(row.explicitBlockedDayUseUnverified, true);
+  assert.equal(row.partial, true);
   assert.equal(row.rate, null);
+  assert.equal(result.inventoryEvidence.dayUse.sold, 0, "A failed day-use schedule never produces sales");
+  assert.equal(result.inventoryEvidence.dayUse.status, "missing");
+  assert.equal(JSON.stringify(input), before, "Projection must not overwrite provider observations or failure provenance");
 });
 
-test("a known day-use product with no schedule rows also prevents blind telephone inference", () => {
+test("a known day-use product with no schedule rows keeps observed blocked revenue separate from day-use uncertainty", () => {
   const api = harness();
   const night = api.compactNaverScheduleDetail(schedule({ saleType: "숙박", name: "1~10번", stock: 10, bookingCount: 2, occupiedBookingCount: 3 }), "객실 묶음 상품리스트", "2026-09-20");
+  const before = JSON.stringify(night);
   const result = api.applyCrawlerInventoryEvidence({ itemDetails: [night], dayUseItemCount: 1 }, "fixture");
-  assert.equal(result.inventoryEvidence.lodging.rows[0].phoneBookings, 0);
-  assert.equal(result.inventoryEvidence.lodging.rows[0].unknownUnavailable, 3);
+  const row = result.inventoryEvidence.lodging.rows[0];
+  assert.equal(row.phoneBookings, 3);
+  assert.equal(row.explicitBlockedBookings, 3);
+  assert.equal(row.unknownUnavailable, 0);
+  assert.equal(row.phoneRevenue, 297000);
+  assert.equal(row.publicRevenue, 198000);
+  assert.equal(row.estimatedRevenue, 495000, "Public revenue and blocked estimates are added once");
+  assert.equal(row.sharedDayUseIncomplete, true);
+  assert.equal(row.explicitBlockedDayUseUnverified, true);
+  assert.equal(row.partial, true);
+  assert.equal(row.rate, null);
   assert.equal(result.inventoryEvidence.lodging.complete, false);
+  assert.equal(result.inventoryEvidence.dayUse, null, "Unobserved day-use schedules stay unobserved");
+  assert.equal(JSON.stringify(night), before);
 });
 
 test("21 plus 7 room capacities stay 28 while quantity decline and day-use share are reconciled separately", async () => {

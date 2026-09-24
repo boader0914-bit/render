@@ -6,7 +6,7 @@ const path = require("node:path");
 const {applyInventoryEvidence} = require("./inventory_estimation.cjs");
 const mint = applyInventoryEvidence(require("./fixtures/mint_20260920.cjs"));
 const source = fs.readFileSync(path.join(__dirname,"../web/app.js"),"utf8");
-const names = ["inventoryAssessment","roomCapacityPresentation","manualCorrectionRoomSegments","cleanManualCorrectionSegment","manualCorrectionSegmentHasValue","sheetInventorySummary","sheetBookingQuantityBasis","sheetCollectionStatusPanel","inventorySourceHtml","sheetDisclosure","escapeHtml","fmtNumber","fmtRate","weeklyRows","salesStats","bookingGraphRows","bookingQuantityBreakdown","sheetRowsForBooking","dateRow","miniBars","itemRevenueStats","projectedRevenueFields","finiteNumber","optionalNumber","parseDate","monthDay","isoAddDays","normalizeMonthDayLabel","bookingRangeLabels","bookingDays"];
+const names = ["inventoryAssessment","roomCapacityPresentation","manualCorrectionRoomSegments","cleanManualCorrectionSegment","manualCorrectionSegmentHasValue","sheetInventorySummary","sheetBookingQuantityBasis","sheetCollectionStatusPanel","inventorySourceHtml","sheetDisclosure","escapeHtml","fmtNumber","fmtWon","fmtRate","weeklyRows","salesStats","bookingGraphRows","bookingQuantityBreakdown","bookingEvidenceLegend","bookingEvidenceSplit","bookingEvidenceChips","sheetBookingRevenueBreakdown","sheetRowsForBooking","dateRow","miniBars","itemRevenueStats","projectedRevenueFields","finiteNumber","optionalNumber","parseDate","monthDay","isoAddDays","normalizeMonthDayLabel","bookingRangeLabels","bookingDays"];
 const context = vm.createContext({state:{data:{run:{checkIn:"2026-09-20",checkOut:"2026-10-20",bookingRangeDays:31}}},DEFAULT_BOOKING_DAYS:31,B2B_MY_LODGE_SEGMENT_LIMIT:8,isAdminRole:()=>true});
 for (const name of names) {
   const declaration = source.match(new RegExp(`^function ${name}\\([^]*?^}`,"m"))?.[0];
@@ -244,3 +244,72 @@ assert.ok(Number.isNaN(context.sheetRowsForBooking(partialSeason)[1].rate));
 assert.ok(Number.isNaN(context.weeklyRows(partialSeason)[1].rate));
 assert.ok(Number.isNaN(context.salesStats(partialSeason).rate),"A partial period does not display an apparently complete booking rate");
 console.log("inventory UI: fixed total, observed/phone split, available zero-booking rooms, shared day-use exclusion, closed dates and legacy compatibility passed");
+
+// A normally observed block may be counted while day-use remains unqueried.
+// Price coverage never changes the visible number of rooms, and missing responses
+// remain visibly unknown instead of becoming zero sales.
+const blockedFixture = {
+  label: "9/25", estimated: true, supply: 10, sold: 5, publicBookings: 1, phoneBookings: 4,
+  available: 5, rate: NaN, unit: "객실", partial: true, sharedDayUseIncomplete: true,
+  explicitBlockedDayUseUnverified: true, phoneRevenue: 1036000, phoneMissingPriceBookings: 0,
+  phoneFallbackBookings: 2, phoneFallbackRevenue: 518000
+};
+const blockedHtml = context.dateRow(blockedFixture);
+assert.match(blockedHtml, /booking-evidence-chip booking-public">공개예약 1객실/);
+assert.match(blockedHtml, /booking-evidence-chip booking-blocked">방막기 추정 4객실/);
+assert.match(blockedHtml, /방막기 추정매출 104만원/);
+assert.match(blockedHtml, /데이유즈 미확인 · 정상 관측 방막기만 추정/);
+assert.match(blockedHtml, /다른 날짜 가격 참고 2객실/);
+assert.match(blockedHtml, /class="booking-public" style="width:10%"/);
+assert.match(blockedHtml, /class="booking-blocked" style="width:40%"/);
+assert.doesNotMatch(blockedHtml, /정상응답|전화예약 추정 보류/);
+const unpricedBlockedHtml = context.dateRow({...blockedFixture, phoneRevenue: 0, phoneMissingPriceBookings: 4, phoneFallbackBookings: 0});
+assert.match(unpricedBlockedHtml, /방막기 추정 4객실/);
+assert.match(unpricedBlockedHtml, /방막기 추정매출 가격 미확인/);
+assert.doesNotMatch(unpricedBlockedHtml, /방막기 추정매출 0원/);
+const missingBlockedHtml = context.dateRow({...blockedFixture, missing: true});
+assert.match(missingBlockedHtml, /오류·차단·누락은 예약 0으로 계산하지 않음/);
+assert.doesNotMatch(missingBlockedHtml, /공개예약 0객실|방막기 추정매출/);
+const zeroHtml = context.dateRow({...blockedFixture, sold: 0, publicBookings: 0, phoneBookings: 0, available: 10, rate: 0, partial: false, sharedDayUseIncomplete: false});
+assert.match(zeroHtml, /공개예약 0객실/);
+assert.match(zeroHtml, /정상응답/);
+const revenuePart = {publicBookings: 1, publicRevenue: 259000, phoneBookings: 4, phoneRevenue: 1036000,
+  phoneFallbackBookings: 2, phoneFallbackRevenue: 518000, phoneMissingPriceBookings: 0,
+  explicitBlockedDayUseUnverified: true, missingPriceSoldOut: 0};
+const revenueSplit = context.sheetBookingRevenueBreakdown(revenuePart, true);
+assert.match(revenueSplit, /공개예약 추정매출<\/span><strong>26만원/);
+assert.match(revenueSplit, /방막기 추정매출<\/span><strong>104만원/);
+assert.match(revenueSplit, /데이유즈 미확인 · 정상 관측 방막기 포함/);
+assert.match(revenueSplit, /다른 날짜 가격 참고 2객실·박 · 52만원 포함/);
+const unpricedSplit = context.sheetBookingRevenueBreakdown({...revenuePart, phoneRevenue: null, phoneMissingPriceBookings: 4, missingPriceSoldOut: 4}, true);
+assert.match(unpricedSplit, /방막기 추정매출<\/span><strong>가격 미확인/);
+assert.match(unpricedSplit, /4객실·박 · 수량에는 포함/);
+assert.match(context.sheetBookingRevenueBreakdown(revenuePart, false), /수집 미확인/);
+assert.match(context.bookingEvidenceLegend(), /공개예약/);
+assert.match(context.bookingEvidenceLegend(), /방막기 추정/);
+assert.match(context.miniBars(season), /booking-evidence-split/);
+assert.match(context.miniBars(season), /--fill-h:0px/);
+for (const name of ["sheetRevenuePanel", "revenueProductRowsHtml", "adminDbReferenceRecentRowHtml", "adminDbReferenceArchiveMetricsHtml"]) {
+  const declaration = source.match(new RegExp(`^function ${name}\\([^]*?^}`, "m"))?.[0];
+  assert.ok(declaration, name);
+  vm.runInContext(declaration, context);
+}
+context.adminDbReferenceDateLabel = (value) => value;
+context.preciseRevenueProfile = (item) => ({lodging: {revenue: item.inventoryEvidence.lodging.revenue},
+  dayUse: {revenue: 0}, precision: {}, productRows: [], totalRevenue: item.inventoryEvidence.lodging.revenue});
+const partialRevenuePart = {...revenuePart, status: "partial", complete: false, sold: 5, pricedSoldOut: 5, revenue: 1295000};
+const partialRevenueHtml = context.sheetRevenuePanel({inventoryEvidence: {version: 4, lodging: partialRevenuePart}});
+assert.match(partialRevenueHtml, /<span>전체<\/span><strong>130만원/);
+assert.match(partialRevenueHtml, /방막기 추정매출<\/span><strong>104만원/);
+assert.match(partialRevenueHtml, /일부 자료 미확인/);
+assert.match(partialRevenueHtml, /데이유즈 미확인/);
+const whollyUnpricedHtml = context.sheetRevenuePanel({inventoryEvidence: {version: 4, lodging: {
+  ...partialRevenuePart, pricedSoldOut: 0, missingPriceSoldOut: 5, phoneMissingPriceBookings: 4, publicRevenue: 0, phoneRevenue: 0, revenue: 0
+}}});
+assert.match(whollyUnpricedHtml, /<span>전체<\/span><strong>가격 미확인/);
+assert.doesNotMatch(whollyUnpricedHtml, /<span>전체<\/span><strong>0원/);
+const historyHtml = context.adminDbReferenceRecentRowHtml({date: "2026-09-25", ...revenuePart, estimatedRevenue: 1295000});
+assert.match(historyHtml, /방막기 4객실 · 104만원 · 데이유즈 미확인/);
+const archiveHtml = context.adminDbReferenceArchiveMetricsHtml({...revenuePart, observedDays: 1, estimatedRevenue: 1295000});
+assert.match(archiveHtml, /방막기 4객실·박 · 104만원/);
+console.log("inventory UI: public/block colors, partial day-use blocks, price references, missing-price counts and response-zero distinction passed");

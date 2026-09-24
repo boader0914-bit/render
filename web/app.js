@@ -4867,6 +4867,29 @@ function summarizeSales(items = []) {
   return result;
 }
 
+function bookingEvidenceLegend() {
+  return `<div class="booking-evidence-legend" aria-label="예약 수량 색상 안내"><span class="booking-public"><i aria-hidden="true"></i>공개예약</span><span class="booking-blocked"><i aria-hidden="true"></i>방막기 추정 · 전화·타채널 포함</span><span class="booking-unavailable"><i aria-hidden="true"></i>수집 미확인</span></div>`;
+}
+
+function bookingEvidenceSplit(row = {}) {
+  const total = Math.max(0, finiteNumber(row.supply ?? row.total, 0));
+  const publicBookings = row.missing ? 0 : Math.max(0, finiteNumber(row.publicBookings ?? row.rawSold, row.sold));
+  const phoneBookings = row.missing ? 0 : Math.max(0, finiteNumber(row.phoneBookings ?? row.offlineSold, 0));
+  const sold = publicBookings + phoneBookings;
+  return {
+    publicBookings, phoneBookings,
+    publicWidth: total ? Math.min(100, publicBookings / total * 100) : 0,
+    phoneWidth: total ? Math.min(Math.max(0, 100 - publicBookings / total * 100), phoneBookings / total * 100) : 0,
+    publicShare: sold ? publicBookings / sold * 100 : 0
+  };
+}
+
+function bookingEvidenceChips(row = {}, unit = "객실") {
+  if (row.missing) return `<span class="booking-evidence-chip booking-unavailable">수량·매출 미확인</span>`;
+  const split = bookingEvidenceSplit(row);
+  return `<span class="booking-evidence-chips"><span class="booking-evidence-chip booking-public">공개예약 ${fmtNumber(split.publicBookings)}${escapeHtml(unit)}</span><span class="booking-evidence-chip booking-blocked">방막기 추정 ${fmtNumber(split.phoneBookings)}${escapeHtml(unit)}</span>${row.sharedDayUseExcluded ? `<span class="booking-evidence-chip">당일 이용 제외 ${fmtNumber(row.sharedDayUseExcluded)}${escapeHtml(unit)}</span>` : ""}</span>`;
+}
+
 function salesObservationNote(sales = {}) {
   if (sales.complete !== false) return "고정 객실 총량 기준 · 예약 추정 포함";
   const sample = Number.isFinite(sales.observedRate) ? `확보된 표본의 예약 비율 ${fmtRate(sales.observedRate)}` : "확보된 예약 표본 없음";
@@ -6280,6 +6303,7 @@ function bookingGraphRows(item) {
 
 function miniBars(item) {
   const visible = bookingGraphRows(item);
+  const splitEvidence = inventoryAssessment(item)?.version >= 3;
   const maxTotal = Math.max(1, ...visible.map((row) => finiteNumber(row.maxTotal || row.total, 0)));
   const first = visible[0]?.label || monthDay(state.data?.run?.checkIn) || "";
   const last = visible[visible.length - 1]?.label || "";
@@ -6288,7 +6312,7 @@ function miniBars(item) {
       <div class="bar-row">
         ${visible.map((row) => {
           const rangeHeight = row.total ? Math.max(18, Math.round((row.total / maxTotal) * 32)) : 32;
-          const fillHeight = row.missing ? 0 : Math.max(2, Math.round((row.sold / maxTotal) * 32));
+          const fillHeight = row.missing || !row.sold ? 0 : Math.max(2, Math.round((row.sold / maxTotal) * 32));
           const hot = !row.missing && Number(row.rate) >= 0.45 ? "hot" : "";
           const missing = row.missing ? "missing" : "";
           const openStock = finiteNumber(row.rawTotal, row.total);
@@ -6296,7 +6320,7 @@ function miniBars(item) {
             ? `${row.label} 미수집 · 기준총량 ${fmtNumber(row.total)}개`
             : `${row.label} 예약 추정 ${fmtNumber(row.sold)}/${fmtNumber(row.total)}실 · ${bookingQuantityBreakdown(row, "실")} · 공개 수량 ${fmtNumber(openStock)}실`;
           return `
-            <span class="bar-stack ${hot} ${missing}" title="${escapeHtml(title)}" style="--range-h:${rangeHeight}px; --fill-h:${fillHeight}px">
+            <span class="bar-stack ${hot} ${missing}${splitEvidence ? " booking-evidence-split" : ""}" title="${escapeHtml(title)}" style="--range-h:${rangeHeight}px; --fill-h:${fillHeight}px; --public-share:${bookingEvidenceSplit(row).publicShare}%">
               <span class="bar-track"><span class="bar-fill"></span></span>
             </span>
           `;
@@ -24731,7 +24755,7 @@ function adminDbReferenceRecentRowHtml(item = {}) {
     <article class="admin-reference-table-row admin-reference-recent-row" role="row">
       <span role="cell" data-label="예약일"><strong>${escapeHtml(adminDbReferenceDateLabel(item.date))}</strong></span>
       <span role="cell" data-label="추정 예약율">${Number.isFinite(rate) ? escapeHtml(fmtRate(rate)) : "수집값 없음"}</span>
-      <span role="cell" data-label="예상매출">${Number.isFinite(item.estimatedRevenue) ? escapeHtml(fmtWon(item.estimatedRevenue)) : "수집값 없음"}</span>
+      <span role="cell" data-label="예상매출">${Number.isFinite(item.estimatedRevenue) ? escapeHtml(fmtWon(item.estimatedRevenue)) : item.missing ? "수집 미확인" : "가격 미확인"}${item.phoneBookings > 0 ? `<small class="booking-blocked-history">방막기 ${fmtNumber(item.phoneBookings)}객실 · ${item.phoneRevenue > 0 ? escapeHtml(fmtWon(item.phoneRevenue)) : "가격 미확인"}${item.explicitBlockedDayUseUnverified ? " · 데이유즈 미확인" : ""}</small>` : ""}</span>
     </article>
   `;
 }
@@ -24744,7 +24768,7 @@ function adminDbReferenceArchiveMetricsHtml(summary = {}) {
   const calendarDays = Number(summary.calendarDays || observedDays || 0);
   const rateDays = Number(summary.rateObservedDays ?? summary.completeRateDays ?? 0);
   const revenueDays = Number(summary.revenueObservedDays ?? summary.completeRevenueDays ?? 0);
-  return `<span class="admin-reference-archive-metrics"><span>추정 예약율 <strong>${escapeHtml(rate)}</strong></span><span>예상매출 <strong>${escapeHtml(revenue)}</strong></span><small>관측 ${fmtNumber(observedDays)}/${fmtNumber(calendarDays)}일 · 가격 ${fmtNumber(revenueDays)}일${rateDays < observedDays ? ` · 수량근거 ${fmtNumber(rateDays)}일` : ""}</small></span>`;
+  return `<span class="admin-reference-archive-metrics"><span>추정 예약율 <strong>${escapeHtml(rate)}</strong></span><span>예상매출 <strong>${escapeHtml(revenue)}</strong></span>${summary.phoneBookings > 0 ? `<small class="booking-blocked-history">방막기 ${fmtNumber(summary.phoneBookings)}객실·박 · ${summary.phoneRevenue > 0 ? escapeHtml(fmtWon(summary.phoneRevenue)) : "가격 미확인"}${summary.explicitBlockedDayUseUnverified ? " · 데이유즈 미확인" : ""}</small>` : ""}<small>관측 ${fmtNumber(observedDays)}/${fmtNumber(calendarDays)}일 · 가격 ${fmtNumber(revenueDays)}일${rateDays < observedDays ? ` · 수량근거 ${fmtNumber(rateDays)}일` : ""}</small></span>`;
 }
 
 function adminDbReferenceArchiveWeekHtml(week = {}) {
@@ -24790,6 +24814,15 @@ function adminDbReferenceResolvedSalesHistory(model = {}) {
       currentEnd: currentSummary.rangeEnd || currentRows.at(-1)?.date || "",
       currentRows,
       current: {
+        publicBookings: currentSummary.publicBookings,
+        publicRevenue: currentSummary.publicRevenue,
+        phoneBookings: currentSummary.phoneBookings,
+        phoneRevenue: currentSummary.phoneRevenue,
+        phoneMissingPriceBookings: currentSummary.phoneMissingPriceBookings,
+        missingPriceSoldOut: currentSummary.missingPriceSoldOut,
+        phoneFallbackBookings: currentSummary.phoneFallbackBookings,
+        phoneFallbackRevenue: currentSummary.phoneFallbackRevenue,
+        explicitBlockedDayUseUnverified: currentSummary.explicitBlockedDayUseUnverified,
         rate: optionalNumber(currentSummary.reservationRate),
         estimatedRevenue: optionalNumber(currentSummary.estimatedRevenue),
         observedDays: Number(currentSummary.observedDays || 0),
@@ -24829,6 +24862,7 @@ function adminDbReferenceRecentSection(model = {}) {
           <article><span>관측</span><strong>${history.current.observedDays ? `${fmtNumber(history.current.observedDays)}/${fmtNumber(history.current.calendarDays || history.current.observedDays)}일` : "없음"}</strong></article>
           <article><span>미수집</span><strong>${history.expectedCurrentDays ? `${fmtNumber(history.missingCurrentDays)}일` : "-"}</strong></article>
         </div>
+        ${history.current.phoneBookings !== undefined && history.current.phoneBookings !== null ? sheetBookingRevenueBreakdown(history.current, hasCurrentObservation) : ""}
       </div>
       <div class="admin-reference-archive">
         <div class="admin-reference-observation-head"><div><strong>지난 관측자료</strong><small>${escapeHtml(pastPeriod)} · 연도 → 월 → 주 순서로 펼쳐봅니다.</small></div></div>
@@ -24836,7 +24870,7 @@ function adminDbReferenceRecentSection(model = {}) {
           ${history.archive.length ? adminDbReferenceArchiveHtml(history.archive) : `<div class="admin-reference-empty">어제 이전의 날짜별 관측자료가 없습니다.</div>`}
         </div>
       </div>
-      <p class="admin-reference-footnote">월간·주간 예약율은 판매추정수 합계 ÷ 공개 총량 합계입니다. 예상매출은 숙박일별 가격 근거가 확인된 건만 합산하며, 미수집 날짜는 0으로 계산하지 않습니다.</p>
+      <p class="admin-reference-footnote">월간·주간 예약율은 예약 추정 수량 ÷ 객실 총량입니다. 예상매출은 공개예약과 가격 근거가 있는 방막기 추정을 합산합니다. 미수집은 예약 0으로 계산하지 않습니다.</p>
     </section>
   `;
 }
@@ -36478,7 +36512,8 @@ function sheetInventorySummary(item = {}) {
       <div><span>${lodging.estimated ? "숙박 예약 추정" : "숙박 예약 수량"}</span><strong>${lodgingObserved ? `${fmtNumber(lodging.sold)}${lodging.basis === "basis" ? "실" : "박"}` : "자료 미확인"}</strong><small>${escapeHtml(lodging.label)}${lodgingObserved && Number.isFinite(lodging.rate) ? ` · 예약 비율 ${fmtRate(lodging.rate)}` : ""}${lodging.estimated && lodgingObserved ? `<br>${escapeHtml(bookingQuantityBreakdown(lodging, lodging.basis === "basis" ? "실" : "박"))}` : ""}</small></div>
       <div><span>당일 이용 예약 수량</span><strong>${dayObserved ? `${fmtNumber(day.sold)}회` : "자료 미확인"}</strong><small>${dayObserved ? escapeHtml(day.label) : "예약 자료 필요"} · 숙박과 별도</small></div>
     </div>
-    <p class="inventory-rule">${lodging.estimated ? `전화·타채널 예약으로 추정한 수량을 포함합니다. 당일 이용 차단 ${fmtNumber(lodging.sharedDayUseExcluded)}박은 숙박 예약 추정에서 제외합니다.${evidence.sharedRooms?.status === "assumed_shared" ? " 객실 공유는 가정한 상태입니다." : ""}` : "숙박과 당일 이용의 수량을 실제 객실 수로 더하지 않습니다."}</p>
+    ${lodging.estimated && lodgingObserved ? bookingEvidenceChips(lodging, lodging.basis === "basis" ? "객실" : "객실·박") : ""}
+    <p class="inventory-rule">${lodging.estimated ? `전화·타채널 등을 포함한 방막기 추정 수량입니다. 당일 이용 차단 ${fmtNumber(lodging.sharedDayUseExcluded)}박은 숙박 예약 추정에서 제외합니다.${evidence.lodging?.rows?.some((row) => row.explicitBlockedDayUseUnverified) ? " 데이유즈 미확인 날짜도 정상 관측 방막기는 포함합니다." : ""}${evidence.sharedRooms?.status === "assumed_shared" ? " 객실 공유는 가정한 상태입니다." : ""}` : "숙박과 당일 이용의 수량을 실제 객실 수로 더하지 않습니다."}</p>
     ${sheetDisclosure("예약 수량과 비율 계산", "기간 합계 확인", sheetBookingQuantityBasis(item))}
   </section>`;
 }
@@ -36504,6 +36539,15 @@ function sheetRowsForBooking(item) {
     offlineSold: row.offlineSold || row.hidden || 0,
     publicBookings: row.publicBookings ?? row.rawSold ?? row.sold,
     phoneBookings: row.phoneBookings ?? row.offlineSold ?? 0,
+    publicRevenue: row.publicRevenue,
+    phoneRevenue: row.phoneRevenue,
+    phoneMissingPriceBookings: row.phoneMissingPriceBookings,
+    phoneFallbackRevenue: row.phoneFallbackRevenue,
+    phoneFallbackBookings: row.phoneFallbackBookings,
+    phonePriceEstimates: row.phonePriceEstimates,
+    explicitBlockedBookings: row.explicitBlockedBookings,
+    explicitBlockedRevenue: row.explicitBlockedRevenue,
+    explicitBlockedDayUseUnverified: row.explicitBlockedDayUseUnverified,
     sharedDayUseExcluded: row.sharedDayUseExcluded || 0,
     unknownUnavailable: row.unknownUnavailable || 0,
     estimated: inventoryAssessment(item)?.version >= 3,
@@ -36582,7 +36626,14 @@ function dateRow(row) {
   const availabilityNote = Number.isFinite(row.available)
     ? ` · 예약 가능 ${fmtNumber(row.available)}${row.unit}${row.unverifiedUnavailable ? ` · 판매 중지·점유 미확인 ${fmtNumber(row.unverifiedUnavailable)}${row.unit}` : ""}`
     : "";
-  const stateNote = row.capacityConflict ? " · DB 보정과 수집 수량 충돌 · 전화예약 추정 보류" : row.sharedDayUseIncomplete ? " · 당일 이용 수량 미확인으로 전화예약 추정 보류" : row.partial ? " · 일부 상품 미수집" : row.closed ? " · 판매 중지" : row.closedProducts ? " · 일부 상품 판매 중지" : "";
+  const stateNote = row.capacityConflict ? " · DB 보정과 수집 수량 충돌 · 전화예약 추정 보류" : row.sharedDayUseIncomplete ? (row.phoneBookings > 0 ? " · 데이유즈 미확인 · 정상 관측 방막기만 추정" : " · 당일 이용 수량 미확인으로 전화예약 추정 보류") : row.partial ? " · 일부 상품 미수집" : row.closed ? " · 판매 중지 사유 미확정" : row.closedProducts ? " · 일부 상품 판매 중지 사유 미확정" : row.estimated ? " · 정상응답" : "";
+  const split = bookingEvidenceSplit(row);
+  const phoneMissingPrice = finiteNumber(row.phoneMissingPriceBookings, 0);
+  const phonePriced = Math.max(0, split.phoneBookings - phoneMissingPrice);
+  const phoneRevenueText = row.phoneRevenue === null || row.phoneRevenue === undefined || (split.phoneBookings > 0 && !phonePriced) ? "가격 미확인" : fmtWon(row.phoneRevenue);
+  const revenueNote = row.estimated && split.phoneBookings > 0
+    ? `<small class="booking-blocked-revenue">방막기 추정매출 ${escapeHtml(phoneRevenueText)}${row.phoneFallbackBookings ? ` · 다른 날짜 가격 참고 ${fmtNumber(row.phoneFallbackBookings)}객실 (${escapeHtml(fmtWon(row.phoneFallbackRevenue))})` : ""}${phoneMissingPrice ? ` · 가격 미확인 ${fmtNumber(phoneMissingPrice)}객실, 수량에는 포함` : ""}</small>`
+    : "";
   const stockNote = row.estimated
     ? `${bookingQuantityBreakdown(row, row.unit)} · 공개 수량 ${fmtNumber(openStock)}${row.unit}${row.unknownUnavailable ? ` · 추정 보류 ${fmtNumber(row.unknownUnavailable)}${row.unit}` : ""}`
     : hidden
@@ -36595,7 +36646,7 @@ function dateRow(row) {
       <div class="date-row missing">
         <div>
           <strong>${escapeHtml(row.label)} · 미수집</strong>
-          <small>${escapeHtml(note)}수량 확인 필요</small>
+          <small>${escapeHtml(note)}수량·매출 미확인 · 오류·차단·누락은 예약 0으로 계산하지 않음</small>
         </div>
         <div class="progress missing"><span style="width:100%"></span></div>
       </div>
@@ -36605,9 +36656,11 @@ function dateRow(row) {
     <div class="date-row">
       <div>
         <strong>${escapeHtml(row.label)} · ${escapeHtml(statusText)} ${fmtNumber(row.sold)}${row.unit} / ${row.estimated ? "객실 총량" : "수집된 기준 수량"} ${fmtNumber(row.supply)}${row.unit}</strong>
+        ${row.estimated ? bookingEvidenceChips(row, row.unit) : ""}
         <small>${escapeHtml(note)}${escapeHtml(stockNote + availabilityNote + stateNote)}${row.supply > 0 ? ` · 예약 비율 ${Number.isFinite(row.rate) ? fmtRate(row.rate) : "확인 필요"}` : " · 수집된 수량 없음"}</small>
+        ${revenueNote}
       </div>
-      <div class="progress"><span style="width:${Math.max(0, Math.min(100, rate * 100))}%"></span></div>
+      ${row.estimated ? `<div class="progress booking-evidence-progress" role="img" aria-label="${escapeHtml(`공개예약 ${fmtNumber(split.publicBookings)}${row.unit}, 방막기 추정 ${fmtNumber(split.phoneBookings)}${row.unit}, 총량 ${fmtNumber(row.supply)}${row.unit}`)}"><span class="booking-public" style="width:${split.publicWidth}%"></span><span class="booking-blocked" style="width:${split.phoneWidth}%"></span></div>` : `<div class="progress"><span style="width:${Math.max(0, Math.min(100, rate * 100))}%"></span></div>`}
     </div>
   `;
 }
@@ -36906,6 +36959,21 @@ function revenueProductRowsHtml(rows = []) {
   `;
 }
 
+function sheetBookingRevenueBreakdown(part = {}, observed = false) {
+  const publicBookings = finiteNumber(part.publicBookings, 0);
+  const phoneBookings = finiteNumber(part.phoneBookings, 0);
+  const phoneMissing = finiteNumber(part.phoneMissingPriceBookings, 0);
+  const publicMissing = Math.max(0, finiteNumber(part.missingPriceSoldOut, 0) - phoneMissing);
+  const dayUseUnverified = part.explicitBlockedDayUseUnverified || part.rows?.some((row) => row.explicitBlockedDayUseUnverified);
+  const value = (quantity, missing, revenue) => !observed ? "수집 미확인"
+    : quantity > 0 && (quantity <= missing || !Number.isFinite(optionalNumber(revenue))) ? "가격 미확인"
+      : fmtWon(finiteNumber(revenue, 0));
+  return `<div class="booking-revenue-breakdown" aria-label="숙박 추정매출 구성">
+    <div class="booking-public"><span>공개예약 추정매출</span><strong>${escapeHtml(value(publicBookings, publicMissing, part.publicRevenue))}</strong><small>${observed ? `${fmtNumber(publicBookings)}객실·박${publicMissing ? ` · 가격 미확인 ${fmtNumber(publicMissing)}객실·박` : ""}` : "예약 자료 필요"}</small></div>
+    <div class="booking-blocked"><span>방막기 추정매출</span><strong>${escapeHtml(value(phoneBookings, phoneMissing, part.phoneRevenue))}</strong><small>${observed ? `${fmtNumber(phoneBookings)}객실·박 · 전화·타채널 등${dayUseUnverified ? "<br>데이유즈 미확인 · 정상 관측 방막기 포함" : ""}${phoneMissing ? `<br>가격 미확인 ${fmtNumber(phoneMissing)}객실·박 · 수량에는 포함` : ""}${part.phoneFallbackBookings ? `<br>다른 날짜 가격 참고 ${fmtNumber(part.phoneFallbackBookings)}객실·박 · ${escapeHtml(fmtWon(part.phoneFallbackRevenue))} 포함` : ""}` : "예약 자료 필요"}</small></div>
+  </div>`;
+}
+
 function sheetRevenuePanel(item = {}) {
   const profile = preciseRevenueProfile(item);
   const { lodging, dayUse, precision } = profile;
@@ -36917,23 +36985,27 @@ function sheetRevenuePanel(item = {}) {
     const lodgingObserved = Boolean(evidence.lodging && evidence.lodging.status !== "missing");
     const dayObserved = Boolean(evidence.dayUse && evidence.dayUse.status !== "missing");
     const inferred = evidence.version >= 3;
+    const unpricedOnly = (part = {}) => finiteNumber(part.missingPriceSoldOut, 0) > 0 && !finiteNumber(part.pricedSoldOut, 0);
+    const totalUnpricedOnly = finiteNumber(evidence.lodging?.missingPriceSoldOut, 0) + finiteNumber(evidence.dayUse?.missingPriceSoldOut, 0) > 0
+      && !finiteNumber(evidence.lodging?.pricedSoldOut, 0) && !finiteNumber(evidence.dayUse?.pricedSoldOut, 0);
     const calculations = `<div class="sheet-calculation-list">
-      <p>${inferred ? "날짜별 상품 가격 × (네이버 공개 예약 + 전화예약 추정)을 더합니다. 전화예약 가격은 같은 상품·날짜의 가격을 확인할 수 있을 때만 반영합니다." : "날짜별 상품 가격 × 예약 화면에서 확인한 수량을 더합니다."} 실제 결제 매출과는 차이가 있을 수 있습니다.</p>
+      <p>${inferred ? "공개예약 추정매출 + 방막기 추정매출을 더합니다. 방막기는 같은 상품·숙박일의 가격을 우선하며, 없으면 같은 상품의 같은 요일 또는 가까운 날짜 가격을 참고합니다. 참고한 가격의 금액은 별도로 표시합니다." : "날짜별 상품 가격 × 예약 화면에서 확인한 수량을 더합니다."} 실제 결제 매출과는 차이가 있을 수 있습니다.</p>
       <p>숙박 ${fmtNumber(lodging.revenue)}원 + 당일 이용 ${fmtNumber(dayUse.revenue)}원 = ${fmtNumber(profile.totalRevenue)}원${incomplete ? " · 일부 자료 미확인" : ""}</p>
       ${inferred ? `<p>숙박 매출 구성: 네이버 예약 ${fmtNumber(evidence.lodging?.publicRevenue || 0)}원 + 전화예약 추정 ${fmtNumber(evidence.lodging?.phoneRevenue || 0)}원. 전화예약 중 가격 미확인 ${fmtNumber(evidence.lodging?.phoneMissingPriceBookings || 0)}박은 매출에 더하지 않습니다.</p>` : ""}
       <p>가격 미확인 예약: 숙박 ${fmtNumber(evidence.lodging?.missingPriceSoldOut || 0)}객실·박 · 당일 이용 ${fmtNumber(evidence.dayUse?.missingPriceSoldOut || 0)}회. 가격을 확인하기 전에는 매출에 더하지 않습니다.</p>
-      <p>${inferred ? "총객실에서 예약 가능·네이버 예약·당일 이용 차단을 뺀 수량을 전화예약으로 추정합니다. 예약 경로를 직접 확인한 수량은 아닙니다." : "판매 중지, 사유가 확인되지 않은 점유, 기준 수량 감소는 예약으로 계산하지 않습니다."}</p>
+      <p>${inferred ? "총객실에서 예약 가능·네이버 예약·당일 이용 차단을 뺀 수량을 방막기로 추정합니다. 데이유즈 미확인 날짜에는 정상응답에서 직접 확인한 방막기만 포함하고, 사유 미확정 수량을 추가하지 않습니다. 예약 경로를 직접 확인한 수량은 아닙니다." : "판매 중지, 사유가 확인되지 않은 점유, 기준 수량 감소는 예약으로 계산하지 않습니다."}</p>
       <p>${inferred ? `당일 이용 차단 ${fmtNumber(evidence.lodging?.sharedDayUseExcluded || 0)}박은 숙박 예약·매출 추정에서 제외합니다.${evidence.sharedRooms?.status === "assumed_shared" ? " 객실 공유 여부가 확인되지 않아 공유한다고 가정했습니다." : ""}` : evidence.sharedRooms?.status === "confirmed" ? "객실 공유가 확인되었습니다. 공유로 인한 차단은 예약 수량에 더하지 않습니다." : "숙박과 당일 이용의 객실 공유 여부는 확인 전입니다."} 평일·주말 모두 같은 근거로 계산합니다.</p>
       ${!inferred && excludedRevenue > 0 ? `<p>이전 계산의 미확인 추정액 ${fmtNumber(excludedRevenue)}원을 제외했습니다.</p>` : ""}
     </div>`;
     return `<section class="sheet-section sheet-revenue-section sheet-revenue-compact">
-      <div class="sheet-structure-title"><h3>예상 매출</h3><span class="structure-badge neutral">${inferred ? "전화예약 추정 포함" : "수집된 가격·예약 기준"}${incomplete ? " · 일부 자료 미확인" : ""}</span></div>
+      <div class="sheet-structure-title"><h3>예상 매출</h3><span class="structure-badge neutral">${inferred ? "방막기 추정 포함" : "수집된 가격·예약 기준"}${incomplete ? " · 일부 자료 미확인" : ""}</span></div>
       <div class="inventory-summary-grid revenue-summary-grid">
-        <div><span>전체</span><strong>${lodgingObserved || dayObserved ? fmtWon(profile.totalRevenue) : "자료 미확인"}</strong><small>숙박 + 당일 이용</small></div>
-        <div><span>숙박</span><strong>${lodgingObserved ? fmtWon(lodging.revenue) : "자료 미확인"}</strong><small>${lodgingObserved ? `${fmtNumber(evidence.lodging?.pricedSoldOut || 0)}객실·박 가격 확인` : "예약 자료 필요"}</small></div>
-        <div><span>당일 이용</span><strong>${dayObserved ? fmtWon(dayUse.revenue) : "자료 미확인"}</strong><small>${dayObserved ? `${fmtNumber(evidence.dayUse?.pricedSoldOut || 0)}회 가격 확인` : "예약 자료 필요"}</small></div>
+        <div><span>전체</span><strong>${lodgingObserved || dayObserved ? totalUnpricedOnly ? "가격 미확인" : fmtWon(profile.totalRevenue) : "자료 미확인"}</strong><small>숙박 + 당일 이용 · 가격 근거가 있는 합계</small></div>
+        <div><span>숙박</span><strong>${lodgingObserved ? unpricedOnly(evidence.lodging) ? "가격 미확인" : fmtWon(lodging.revenue) : "자료 미확인"}</strong><small>${lodgingObserved ? `${fmtNumber(evidence.lodging?.pricedSoldOut || 0)}객실·박 가격 확인·참고` : "예약 자료 필요"}</small></div>
+        <div><span>당일 이용</span><strong>${dayObserved ? unpricedOnly(evidence.dayUse) ? "가격 미확인" : fmtWon(dayUse.revenue) : "자료 미확인"}</strong><small>${dayObserved ? `${fmtNumber(evidence.dayUse?.pricedSoldOut || 0)}회 가격 확인` : "예약 자료 필요"}</small></div>
       </div>
-      <p class="inventory-rule">${inferred ? "네이버 공개 예약과 전화예약 추정을 포함한 예상값입니다." : "예약 화면의 수량과 가격으로 계산한 예상값입니다."} 실제 결제·정산 내역과 차이가 있을 수 있습니다.</p>
+      ${inferred ? sheetBookingRevenueBreakdown(evidence.lodging, lodgingObserved) : ""}
+      <p class="inventory-rule">${inferred ? "공개예약과 방막기 추정매출을 합산합니다. 가격 미확인은 수량에 남기고, 오류·차단·누락은 예약 0과 구분합니다." : "예약 화면의 수량과 가격으로 계산한 예상값입니다."} 실제 결제·정산 내역과 차이가 있을 수 있습니다.</p>
       ${sheetDisclosure("매출 계산 방법", !inferred && excludedRevenue > 0 ? `${fmtWon(excludedRevenue)} 추정 제외` : "가격·수량 기준", calculations)}
       ${sheetDisclosure("상품별 수량과 가격", `${fmtNumber(productRows.length)}개 상품 · 기준일`, `<p class="inventory-rule">기준일에 수집된 상품 상태입니다. 예약·점유에는 사유 미확인 점유가 포함될 수 있습니다. 기간별 예약과 전화예약 추정은 날짜별 계산에서 확인합니다.</p>${revenueProductRowsHtml(productRows)}`)}
     </section>`;
@@ -37236,6 +37308,7 @@ function sheetBookingBarsPanel(item = {}, lodgingRows = sheetRowsForBooking(item
         </div>
         <span>${fmtNumber(collectedRows)}/${fmtNumber(rows.length)}일 확보</span>
       </div>
+      ${inventoryAssessment(item)?.version >= 3 ? bookingEvidenceLegend() : ""}
       <div class="sheet-date-bars" aria-label="검색 기간 날짜별 판매율">
         ${rows.map((row) => {
           const date = dateForRangeLabel(row.label, run);
@@ -37255,11 +37328,11 @@ function sheetBookingBarsPanel(item = {}, lodgingRows = sheetRowsForBooking(item
                 : rate >= 0.20
                   ? "watch"
                   : "low";
-          const title = `${row.label}${dayName ? ` ${dayName}요일` : ""} · ${rateText} · ${fmtNumber(sold)}/${fmtNumber(supply)}${row.unit}${row.estimated ? ` · ${bookingQuantityBreakdown(row, row.unit)}` : ""}`;
+          const title = `${row.label}${dayName ? ` ${dayName}요일` : ""} · ${rateText} · ${fmtNumber(sold)}/${fmtNumber(supply)}${row.unit}${row.estimated ? ` · ${bookingQuantityBreakdown(row, row.unit)} · 방막기 추정 포함` : ""}`;
           return `
-            <div class="sheet-date-bar ${tone}" title="${escapeHtml(title)}">
+            <div class="sheet-date-bar ${tone}${row.estimated ? " booking-evidence-split" : ""}" title="${escapeHtml(title)}">
               <strong>${escapeHtml(row.label)}</strong>
-              <span style="--range-h:${rangeHeight}px; --fill-h:${fillHeight}px"><i></i></span>
+              <span style="--range-h:${rangeHeight}px; --fill-h:${fillHeight}px; --public-share:${bookingEvidenceSplit(row).publicShare}%"><i></i></span>
               <em>${escapeHtml(dayName || "-")}</em>
               <small>${escapeHtml(rateText)}</small>
             </div>
@@ -37316,7 +37389,7 @@ function renderSheetBooking(item) {
     ${publicBlocks}
     ${adminBlocks}
     ${sheetDisclosure("날짜·요일별 예약 흐름", `${fmtNumber(collectedRows)}일 수집`, `${sheetFlowOverview(item)}${sheetBookingBarsPanel(item, lodgingRows)}`)}
-    ${sheetDisclosure("숙박 날짜별 수량", `${fmtNumber(lodgingRows.length)}일${missingRows ? ` · 미수집 ${fmtNumber(missingRows)}일` : ""}`, lodgingRows.length ? lodgingRows.map(dateRow).join("") : `<div class="empty">숙박 수량이 확인되지 않았습니다.</div>`)}
+    ${sheetDisclosure("숙박 날짜별 수량", `${fmtNumber(lodgingRows.length)}일${missingRows ? ` · 미수집 ${fmtNumber(missingRows)}일` : ""}`, lodgingRows.length ? `${evidence?.version >= 3 ? bookingEvidenceLegend() : ""}${lodgingRows.map(dateRow).join("")}` : `<div class="empty">숙박 수량이 확인되지 않았습니다.</div>`)}
     ${sheetDisclosure("당일 이용 날짜별 수량", `${fmtNumber(dayRows.length)}일`, dayRows.length ? dayRows.map(dateRow).join("") : `<div class="empty">당일 이용 상품이 확인되지 않았습니다.</div>`)}
     ${sheetDisclosure("수집 근거와 수량 해석", `${fmtNumber(collectedRows)}일 · 출처 확인`, evidenceContent)}
     </div>

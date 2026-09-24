@@ -46465,3 +46465,56 @@ html[data-theme-resolved] body .booking-sheet-compact .sheet-section {
   gap: 6px;
   flex-wrap: wrap;
 }
+
+/* Public reservations and inferred room blocks remain distinguishable in both themes. */
+body {
+  --booking-public-color: var(--status-positive, var(--green));
+  --booking-blocked-color: var(--purple);
+  --booking-public-fill: var(--status-positive, var(--green));
+  --booking-blocked-fill: var(--purple);
+}
+.booking-evidence-legend,
+.booking-evidence-chips { display: flex; flex-wrap: wrap; gap: 6px 12px; min-width: 0; }
+.booking-evidence-legend { color: var(--text-secondary, var(--muted)); font-size: 11px; line-height: 1.5; }
+.booking-evidence-legend > span { display: inline-flex; gap: 5px; align-items: center; }
+.booking-evidence-legend i { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 9px; background: var(--text-tertiary, var(--weak)); }
+.booking-evidence-legend .booking-public i { background: var(--booking-public-fill); }
+.booking-evidence-legend .booking-blocked i { background: var(--booking-blocked-fill); }
+.booking-evidence-legend .booking-unavailable i { background: transparent; border: 1px dashed currentColor; }
+.booking-evidence-chips { margin: 5px 0; }
+html[data-theme-resolved] body .booking-evidence-chip {
+  display: inline-flex; padding: 3px 6px; border-radius: 4px; border: 1px solid var(--border-subtle);
+  background: var(--surface-muted, var(--panel)); color: var(--text-secondary); font-size: 11px; line-height: 1.5;
+}
+html[data-theme-resolved] body .booking-evidence-chip.booking-public { color: var(--booking-public-color); border-color: color-mix(in srgb, var(--booking-public-color) 25%, transparent); background: color-mix(in srgb, var(--booking-public-fill) 9%, var(--surface-card)); }
+html[data-theme-resolved] body .booking-evidence-chip.booking-blocked { color: var(--booking-blocked-color); border-color: color-mix(in srgb, var(--booking-blocked-color) 25%, transparent); background: color-mix(in srgb, var(--booking-blocked-fill) 9%, var(--surface-card)); }
+html[data-theme-resolved] body .progress.booking-evidence-progress { display: flex; background: var(--surface-muted, var(--line)); }
+html[data-theme-resolved] body .progress.booking-evidence-progress > span { flex-shrink: 0; border-radius: 0; }
+html[data-theme-resolved] body .progress.booking-evidence-progress > .booking-public { background: var(--booking-public-fill); }
+html[data-theme-resolved] body .progress.booking-evidence-progress > .booking-blocked { background: var(--booking-blocked-fill); }
+html[data-theme-resolved] body .booking-evidence-split .bar-fill,
+html[data-theme-resolved] body .sheet-date-bar.booking-evidence-split > span i {
+  background: var(--booking-blocked-fill);
+}
+html[data-theme-resolved] body .sheet-date-bar.booking-evidence-split > span i { position: relative; }
+html[data-theme-resolved] body .booking-evidence-split .bar-fill::after,
+html[data-theme-resolved] body .sheet-date-bar.booking-evidence-split > span i::after {
+  content: ""; position: absolute; inset: auto 0 0; height: var(--public-share, 0%); background: var(--booking-public-fill);
+}
+html[data-theme-resolved] body .date-row .booking-blocked-revenue { color: var(--booking-blocked-color); margin-top: 5px; }
+.booking-revenue-breakdown { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; min-width: 0; }
+html[data-theme-resolved] body .booking-revenue-breakdown > div {
+  display: grid; gap: 4px; padding: 10px; min-width: 0; border: 1px solid var(--border-subtle); border-left-width: 3px; border-radius: 4px; background: var(--surface-card);
+}
+html[data-theme-resolved] body .booking-revenue-breakdown > .booking-public { border-left-color: var(--booking-public-fill); }
+html[data-theme-resolved] body .booking-revenue-breakdown > .booking-blocked { border-left-color: var(--booking-blocked-fill); }
+html[data-theme-resolved] body .booking-revenue-breakdown > .booking-public > span { color: var(--booking-public-color); }
+html[data-theme-resolved] body .booking-revenue-breakdown > .booking-blocked > span { color: var(--booking-blocked-color); }
+.booking-revenue-breakdown > div > span { font-size: 11px; font-weight: 600; }
+html[data-theme-resolved] body .booking-revenue-breakdown strong { color: var(--text-primary); font-size: 17px; line-height: 1.5; }
+html[data-theme-resolved] body .booking-revenue-breakdown small { color: var(--text-secondary); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+@media (max-width: 540px) {
+  .booking-revenue-breakdown { grid-template-columns: 1fr; }
+  .booking-evidence-chips { gap: 5px; }
+}
+html[data-theme-resolved] body .booking-blocked-history { display: block; color: var(--booking-blocked-color); font-size: 11px; line-height: 1.5; white-space: normal; }

@@ -9167,9 +9167,19 @@ function singleAvailabilityRow(stayDate, available, total) {
 }
 
 function inventoryEstimateBreakdown(row = {}) {
-  const fields = ["rawTotal", "publicBookings", "phoneBookings", "sharedDayUseExcluded", "unknownUnavailable", "publicRevenue", "phoneRevenue", "phonePricedBookings", "phoneMissingPriceBookings"];
+  const fields = ["rawTotal", "publicBookings", "phoneBookings", "sharedDayUseExcluded", "unknownUnavailable", "publicRevenue", "phoneRevenue", "phonePricedBookings", "phoneMissingPriceBookings", "phoneFallbackRevenue", "phoneFallbackBookings", "explicitBlockedBookings", "explicitBlockedRevenue"];
   return {
     ...Object.fromEntries(fields.filter((field) => Object.hasOwn(row, field)).map((field) => [field, productSnapshotNumber(row[field])])),
+    ...(Array.isArray(row.phonePriceEstimates) ? { phonePriceEstimates: row.phonePriceEstimates.map(value => ({
+      productKey: String(value?.productKey || "").slice(0, 160),
+      quantity: productSnapshotNumber(value?.quantity), unitPrice: productSnapshotNumber(value?.unitPrice),
+      revenue: productSnapshotNumber(value?.revenue), source: value?.source,
+      sourceDate: String(value?.sourceDate || "")
+    })).filter(value => value.quantity > 0 && value.unitPrice > 0 && value.revenue > 0
+      && ["same_product_same_date", "same_product_same_weekday", "same_product_nearest_date"].includes(value.source)
+      && /^\d{4}-\d{2}-\d{2}$/.test(value.sourceDate)) } : {}),
+    ...(row.phoneValuationPolicy === "same_product_observed_price_v1" ? { phoneValuationPolicy: row.phoneValuationPolicy } : {}),
+    ...(Object.hasOwn(row, "explicitBlockedDayUseUnverified") ? { explicitBlockedDayUseUnverified: Boolean(row.explicitBlockedDayUseUnverified) } : {}),
     ...(Object.hasOwn(row, "capacityConflict") ? { capacityConflict: Boolean(row.capacityConflict) } : {}),
     ...(row.capacityBasis ? { capacityBasis: row.capacityBasis } : {}),
     ...(row.capacityReview ? { capacityReview: row.capacityReview } : {}),
@@ -9188,6 +9198,7 @@ function historySeriesForItem(item, productType, checkIn) {
       offlineReserved: Number(row.phoneBookings || 0),
       capacityBasis: item.inventoryEvidence.capacityBasis || null,
       capacityReview: item.inventoryEvidence.capacityReview || null,
+      phoneValuationPolicy: item.inventoryEvidence.phoneValuationPolicy || null,
       inventoryEvidenceVersion: item.inventoryEvidence.version
     }));
   }
@@ -9812,6 +9823,7 @@ function compactProductSnapshotDaily(item = {}, run = {}, observations = []) {
           inventoryEvidenceVersion: item.inventoryEvidence.version,
           capacityBasis: item.inventoryEvidence.capacityBasis || null,
           capacityReview: item.inventoryEvidence.capacityReview || null,
+          phoneValuationPolicy: item.inventoryEvidence.phoneValuationPolicy || null,
           revenueType: "estimated"
         };
       }).filter(Boolean);
@@ -9974,6 +9986,10 @@ function compactCompanyProductSnapshot(item = {}, run = {}, collectedAt = "") {
   return {
     schemaVersion: 1,
     inventoryEvidenceVersion: item.inventoryEvidence?.version >= 2 ? item.inventoryEvidence.version : null,
+    phoneValuationPolicy: item.inventoryEvidence?.phoneValuationPolicy || null,
+    exclusionEvidence: item.inventoryEvidence?.exclusionEvidence || [],
+    normalizationEvidence: item.inventoryEvidence?.normalizationEvidence || [],
+    excludedNonRoomProductCount: Number(item.inventoryEvidence?.excludedNonRoomProductCount || 0),
     capacityBasis: item.inventoryEvidence?.capacityBasis || null,
     capacityReview: item.inventoryEvidence?.capacityReview || null,
     roomGuideReference: item.inventoryEvidence?.roomGuideReference || null,
@@ -10711,6 +10727,8 @@ function companyInventorySnapshotWithCurrentCapacity(snapshot, company = {}) {
     return {
       ...row, total: count, sold: publicBookings, publicBookings, phoneBookings: 0, offlineReserved: 0,
       phoneRevenue: 0, phonePricedBookings: 0, phoneMissingPriceBookings: 0,
+      phoneFallbackRevenue: 0, phoneFallbackBookings: 0, phonePriceEstimates: [],
+      explicitBlockedBookings: 0, explicitBlockedRevenue: 0, explicitBlockedDayUseUnverified: false,
       estimatedRevenue: publicRevenue, publicRevenue, reservationRate: null,
       pricedSoldOut: null, missingPriceSoldOut: null,
       unknownUnavailable: count === null ? null : Math.max(0, count - Number(row.available || 0) - Number(publicBookings || 0)),
@@ -10737,6 +10755,8 @@ function companyInventorySnapshotWithCurrentCapacity(snapshot, company = {}) {
     revenue: { ...(snapshot.revenue || {}), lodging: {
       ...(snapshot.revenue?.lodging || {}), revenue: null, adjustedRevenue: null,
       missingPriceEstimatedRevenue: null, offlineRevenue: null, phoneRevenue: null, precisionRate: null,
+      phoneFallbackRevenue: null, phoneFallbackBookings: null, phonePriceEstimates: [],
+      explicitBlockedBookings: null, explicitBlockedRevenue: null, explicitBlockedDayUseUnverified: false,
       pricedSoldOut: null, missingPriceSoldOut: null,
       recalculationUnavailable: true
     } },
@@ -10785,6 +10805,10 @@ function companyProductSnapshotSummary(snapshot = null) {
   return {
     schemaVersion: snapshot.schemaVersion || 1,
     inventoryEvidenceVersion: snapshot.inventoryEvidenceVersion >= 2 ? snapshot.inventoryEvidenceVersion : null,
+    phoneValuationPolicy: snapshot.phoneValuationPolicy || null,
+    exclusionEvidence: snapshot.exclusionEvidence || [],
+    normalizationEvidence: snapshot.normalizationEvidence || [],
+    excludedNonRoomProductCount: Number(snapshot.excludedNonRoomProductCount || 0),
     capacityBasis: snapshot.capacityBasis || null,
     capacityReview: snapshot.capacityReview || null,
     roomGuideReference: snapshot.roomGuideReference || null,
@@ -10830,6 +10854,7 @@ function mergeCompanyProductSnapshots(previous = null, incoming = null) {
     products: Array.isArray(productSource.products) ? productSource.products : [],
     priceGroups: Array.isArray(productSource.priceGroups) ? productSource.priceGroups : [],
     daily: Array.isArray(dailySource.daily) ? dailySource.daily : [],
+    phoneValuationPolicy: dailySource.phoneValuationPolicy || null,
     productsRunId: productSource.productsRunId || productSource.runId || "",
     productsCollectedAt: productSource.productsCollectedAt || productSource.collectedAt || "",
     dailyRunId: dailySource.dailyRunId || dailySource.runId || "",
@@ -13813,7 +13838,7 @@ function companyHistoryDailyFallback(company = {}, observations = []) {
 }
 
 function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today = kstDate(0)) {
-  const estimateFields = ["publicBookings", "phoneBookings", "sharedDayUseExcluded", "unknownUnavailable", "publicRevenue", "phoneRevenue", "phonePricedBookings", "phoneMissingPriceBookings"];
+  const estimateFields = ["publicBookings", "phoneBookings", "sharedDayUseExcluded", "unknownUnavailable", "publicRevenue", "phoneRevenue", "phonePricedBookings", "phoneMissingPriceBookings", "phoneFallbackRevenue", "phoneFallbackBookings", "explicitBlockedBookings", "explicitBlockedRevenue"];
   const isoDate = (value) => {
     const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (!match) return "";
@@ -13853,6 +13878,17 @@ function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today =
     const counts = Object.fromEntries(estimateFields.map((field) => [field, productSnapshotNumber(row[field])]));
     const unpricedPhoneOnly = fixedPolicy && counts.phoneBookings > 0 && !(counts.publicBookings > 0)
       && !(counts.phonePricedBookings > 0) && !(counts.phoneRevenue > 0);
+    // Current evidence-derived history carries per-day valued public/phone
+    // amounts. Legacy representative-price history still cannot become revenue.
+    const valuedHistory = fixedPolicy && counts.publicRevenue !== null && counts.publicRevenue >= 0
+      && counts.phoneRevenue !== null && counts.phoneRevenue >= 0 && estimatedRevenue !== null
+      && Math.abs(estimatedRevenue - counts.publicRevenue - counts.phoneRevenue) < 1;
+    // For incomplete coverage, count only values supported by normal product
+    // responses: public bookings and explicit blocks. Unexplained capacity gaps
+    // and unqueried day-use inventory never supply the missing revenue.
+    const partialObservedRevenue = valuedHistory
+      ? counts.publicRevenue + Math.min(counts.phoneRevenue, Math.max(0, counts.explicitBlockedRevenue || 0)) : 0;
+    const countedRevenue = fixedPolicy && partial ? (partialObservedRevenue > 0 ? partialObservedRevenue : null) : estimatedRevenue;
     const existing = normalized.get(key);
     const next = {
       date,
@@ -13863,20 +13899,23 @@ function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today =
       dayUseSharingStatus: row.dayUseSharingStatus,
       inventoryEvidenceVersion: evidenceVersion,
       ...counts,
+      ...(Array.isArray(row.phonePriceEstimates) ? { phonePriceEstimates: inventoryEstimateBreakdown(row).phonePriceEstimates } : {}),
+      phoneValuationPolicy: row.phoneValuationPolicy || null,
+      explicitBlockedDayUseUnverified: Boolean(row.explicitBlockedDayUseUnverified),
       missing,
       partial,
       inventoryConflict,
       sharedDayUseIncomplete: Boolean(row.sharedDayUseIncomplete),
       total: total !== null && total >= 0 ? total : null,
       sold: sold !== null && sold >= 0 ? sold : null,
-      estimatedRevenue: estimatedRevenue !== null && estimatedRevenue >= 0 ? estimatedRevenue : null,
+      estimatedRevenue: countedRevenue !== null && countedRevenue >= 0 ? countedRevenue : null,
       price: price !== null && price > 0 ? price : null,
       priceEvidenceType: snapshot && price !== null && price > 0 ? "stay_date_observed_price" : (row.priceEvidenceType || "none"),
       rateBlocked: fixedPolicy && (missing || partial || inventoryConflict || counts.unknownUnavailable > 0
         || (Object.hasOwn(row, "reservationRate") && row.reservationRate === null)
         || (Object.hasOwn(row, "saleRate") && row.saleRate === null)),
-      revenueEligible: snapshot && estimatedRevenue !== null && estimatedRevenue >= 0
-        && (!fixedPolicy || (!missing && !partial && !inventoryConflict && !unpricedPhoneOnly)),
+      revenueEligible: (snapshot || valuedHistory) && countedRevenue !== null && countedRevenue >= 0
+        && (!fixedPolicy || (!missing && (!partial || partialObservedRevenue > 0) && !inventoryConflict && !unpricedPhoneOnly)),
       collectedAt: String(row.collectedAt || ""),
       collectedDate: row.collectedAt ? kstDayKeyFromValue(row.collectedAt) : isoDate(row.collectedDate),
       runId: String(row.runId || ""),
@@ -13905,14 +13944,17 @@ function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today =
       ? quantityRows.reduce((sum, row) => sum + row.total, 0) : null;
     const sold = completeQuantity ? quantityRows.reduce((sum, row) => sum + row.sold, 0) : null;
     const rateEligible = completeQuantity && total > 0 && sold <= total && !quantityRows.some((row) => row.rateBlocked);
-    const revenueEligible = group.rows.length > 0 && group.rows.every((row) => !row.missing && !row.partial && !row.inventoryConflict
+    const completeRevenue = group.rows.length > 0 && group.rows.every((row) => !row.missing && !row.partial && !row.inventoryConflict
       && (row.sold === 0 || row.revenueEligible === true));
+    const observedPartialRevenue = quantityRows.some(row => row.revenueEligible && row.partial);
+    const revenueEligible = completeRevenue || observedPartialRevenue;
+    const valuedRows = group.rows.filter(row => row.revenueEligible || (row.sold === 0 && !row.missing && !row.partial && !row.inventoryConflict));
     const breakdown = Object.fromEntries(estimateFields.map((field) => [field,
       fixedPolicy && quantityRows.length && quantityRows.every((row) => row[field] !== null)
         ? quantityRows.reduce((sum, row) => sum + row[field], 0) : null
     ]));
     const estimatedRevenue = revenueEligible
-      ? group.rows.reduce((sum, row) => sum + Number(row.estimatedRevenue || 0), 0)
+      ? valuedRows.reduce((sum, row) => sum + Number(row.estimatedRevenue || 0), 0)
       : null;
     const collected = [...group.rows]
       .sort((a, b) => String(a.collectedAt || a.collectedDate).localeCompare(String(b.collectedAt || b.collectedDate)))
@@ -13921,6 +13963,8 @@ function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today =
       date: group.date,
       inventoryEvidenceVersion: fixedPolicy ? 3 : null,
       ...breakdown,
+      phonePriceEstimates: quantityRows.flatMap(row => row.phonePriceEstimates || []),
+      explicitBlockedDayUseUnverified: quantityRows.some(row => row.explicitBlockedDayUseUnverified),
       total,
       sold,
       dayUseBookings: fixedPolicy && !dayUseUnobservedRows.length ? dayUseRows.reduce((sum, row) => sum + Number(row.publicBookings ?? row.sold ?? 0), 0) : null,
@@ -13934,8 +13978,10 @@ function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today =
       estimatedRevenue,
       rateEligible,
       revenueEligible,
-      revenuePartial: fixedPolicy && group.rows.some((row) => row.phoneMissingPriceBookings > 0),
-      priceEvidenceType: revenueEligible ? "stay_date_observed_price" : (group.rows.some((row) => row.price !== null) ? "representative_only" : "none"),
+      revenuePartial: fixedPolicy && (group.rows.some((row) => row.phoneMissingPriceBookings > 0 || row.partial || row.explicitBlockedDayUseUnverified)
+        || (revenueEligible && valuedRows.length < group.rows.length)),
+      priceEvidenceType: revenueEligible ? (breakdown.phoneFallbackRevenue > 0 ? "same_product_observed_fallback" : "stay_date_observed_price")
+        : (group.rows.some((row) => row.price !== null) ? "representative_only" : "none"),
       observedProductTypes: boundedUnique(group.rows.map((row) => row.productType), 4),
       collectedAt: collected.collectedAt || "",
       collectedDate: collected.collectedDate || "",
@@ -13966,6 +14012,7 @@ function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today =
       dayUseObservedDays: rows.filter(row => row.dayUseObserved === true).length,
       dayUseUnobservedDays: rows.filter(row => row.dayUseMissingReason).length,
       dayUsePartial: rows.some(row => row.dayUseMissingReason),
+      explicitBlockedDayUseUnverified: rows.some(row => row.explicitBlockedDayUseUnverified),
       partial: fixedPolicy && (!completeRates || rows.some((row) => row.partial || row.missing)),
       revenuePartial: fixedPolicy && rows.some((row) => row.revenuePartial || !row.revenueEligible),
       observedDays: rows.length,
@@ -14375,6 +14422,11 @@ function companyInventoryNeedsEvidenceRecovery(company = {}) {
     if (!hasProductView && !hasSignalView) return false;
     const version = Number(inventory.inventoryEvidenceVersion ?? snapshot?.inventoryEvidenceVersion ?? 0);
     if (version < 4 || (hasProductView && Number(snapshot.inventoryEvidenceVersion || 0) < 4)) return true;
+    if (snapshot?.phoneValuationPolicy !== "same_product_observed_price_v1"
+      && (Number(inventory.revenue?.lodging?.phoneMissingPriceBookings || 0) > 0
+        || inventory.salesSignal?.lodging?.partial
+        || (snapshot?.daily || []).some(row => row.productType === "lodging"
+          && (Number(row.phoneMissingPriceBookings || 0) > 0 || row.partial || row.sharedDayUseIncomplete || Number(row.unknownUnavailable || 0) > 0)))) return true;
     const basis = snapshot?.capacityBasis || inventory.capacityBasis;
     if (basis?.source && basis.source !== expectedSource) return true;
     if (!(expected > 0)) return false;
@@ -14468,13 +14520,18 @@ async function summarizeCompanyMasterDetail(companyId = "") {
     capacityBasis: dailySnapshot?.capacityBasis || viewCompany.inventory?.latest?.capacityBasis || null,
     capacityReview: dailySnapshot?.capacityReview || viewCompany.inventory?.latest?.capacityReview || null,
     roomGuideReference: dailySnapshot?.roomGuideReference || null,
+    inventoryReviewEvidence: {
+      exclusionEvidence: dailySnapshot?.exclusionEvidence || [],
+      normalizationEvidence: dailySnapshot?.normalizationEvidence || [],
+      excludedNonRoomProductCount: Number(dailySnapshot?.excludedNonRoomProductCount || 0)
+    },
     observationBasis,
     rankTrend: companyRankTrend(rawCompany, master, observations),
     performanceTrend: companyPerformanceTrend(viewCompany, viewObservations),
     leadTime: companyLeadTimeSummary(viewCompany, viewObservations),
     definitions: {
       estimatedRevenue: dailySnapshot?.inventoryEvidenceVersion >= 3
-        ? "공개 예약과 전화예약 추정 수량에 같은 상품·날짜의 공개 가격을 적용한 예상액. 데이유즈 공유 차단 제외, 실제 결제 매출이 아님"
+        ? "공개 예약과 방막기(전화·타채널 예약 추정)를 포함한 예상액. 당일 가격이 없는 전화예약은 같은 상품의 다른 관측일 가격으로 보완하고 근거 날짜를 표시함. 확인된 데이유즈 공유 수량은 제외하며 미조회 공유 수량은 확인 필요. 실제 결제 매출이 아님"
         : dailySnapshot?.inventoryEvidenceVersion === 2
         ? "공개 예약 필드 관측 수량과 상품별 공개 가격의 예상액. 실제 결제 매출이 아님"
         : "네이버 공개 가격과 재고 변화로 계산한 예상매출",

@@ -220,6 +220,23 @@ assert.equal(fixedRestored.daily[0].sold, 10);
 assert.equal(fixedRestored.daily[0].phoneBookings, 7);
 assert.equal(fixedRestored.daily[1].sharedDayUseExcluded, 2);
 assert.equal(fixedRestored.daily[1].sold, 2);
+const fallbackPricingFixture = {
+  ...fixedFixture,
+  inventoryEvidence: { ...fixedFixture.inventoryEvidence, version: 4, phoneValuationPolicy: "same_product_observed_price_v1",
+    lodging: { rows: [{ ...fixedFixture.inventoryEvidence.lodging.rows[0], phoneFallbackRevenue: 2240000, phoneFallbackBookings: 7,
+      phonePriceEstimates: [{ productKey: "room-1", quantity: 7, unitPrice: 320000, revenue: 2240000,
+        source: "same_product_same_weekday", sourceDate: "2026-10-03" }] }] } }
+};
+const fallbackDaily = context.compactProductSnapshotDaily(fallbackPricingFixture, {}, []);
+assert.equal(fallbackDaily[0].phoneFallbackRevenue, 2240000);
+assert.equal(fallbackDaily[0].phonePriceEstimates[0].sourceDate, "2026-10-03");
+assert.equal(fallbackDaily[0].phoneValuationPolicy, "same_product_observed_price_v1");
+const fallbackRecorded = context.buildHistoryObservations({ run: { id: "phone_fallback", checkIn: "2026-09-26" },
+  availability: { items: [{ ...fallbackPricingFixture, companyId: "cmp_phone_fallback" }] } }, "2026-09-24T01:00:00.000Z");
+const fallbackRestored = context.companyHistoryDailyFallback({ companyId: "cmp_phone_fallback" }, fallbackRecorded);
+assert.equal(fallbackRestored.daily[0].phoneFallbackBookings, 7);
+assert.equal(fallbackRestored.daily[0].phonePriceEstimates[0].unitPrice, 320000);
+assert.equal(fallbackRestored.daily[0].phoneValuationPolicy, "same_product_observed_price_v1");
 const missingFixed = context.summarizeProductSalesSignal([
   ...fixedSeries,
   { inventoryEvidenceVersion: 3, stayDate: "2026-09-28", total: 10, missing: true, unknownUnavailable: 10 }
@@ -363,6 +380,17 @@ const freshSnapshot = {
 };
 assert.equal(context.companyInventorySnapshotWithCurrentCapacity(freshSnapshot, snapshotCompany), freshSnapshot);
 assert.equal(context.companyInventoryNeedsEvidenceRecovery({ ...snapshotCompany, inventory: { latest: freshSnapshot } }), false);
+const unpricedStoredSnapshot = { ...freshSnapshot, productSnapshot: { ...freshSnapshot.productSnapshot,
+  daily: freshSnapshot.productSnapshot.daily.map(row => ({ ...row, phoneRevenue: 0, phonePricedBookings: 0, phoneMissingPriceBookings: 2 })) } };
+const unpricedStoredCompany = { ...snapshotCompany, inventory: { latest: unpricedStoredSnapshot } };
+assert.equal(context.companyInventoryNeedsEvidenceRecovery(unpricedStoredCompany), true, "current capacity does not skip the new same-product phone-price projection");
+const currentPricingCompany = { ...unpricedStoredCompany, inventory: { latest: { ...unpricedStoredSnapshot,
+  productSnapshot: { ...unpricedStoredSnapshot.productSnapshot, phoneValuationPolicy: "same_product_observed_price_v1" } } } };
+assert.equal(context.companyInventoryNeedsEvidenceRecovery(currentPricingCompany), false, "a current pricing projection without any available price does not force repeated migration checks");
+const oldSharedUnknown = { ...snapshotCompany, inventory: { latest: { ...freshSnapshot,
+  productSnapshot: { ...freshSnapshot.productSnapshot, daily: freshSnapshot.productSnapshot.daily.map(row => ({ ...row,
+    partial: true, sharedDayUseIncomplete: true, phoneBookings: 0, phoneMissingPriceBookings: 0 })) } } } };
+assert.equal(context.companyInventoryNeedsEvidenceRecovery(oldSharedUnknown), true, "old shared-day-use suppression reopens the read projection for explicit blocks");
 assert.equal(context.companyInventoryNeedsEvidenceRecovery({ ...snapshotCompany, manualCorrection: null, inventory: { latest: freshSnapshot } }), true, "clearing a correction requests recovery even when version is current");
 const originalHistoryRow = {
   ...savedSnapshot.productSnapshot.daily[0], companyKey: correctedCompany.companyId,
@@ -414,7 +442,8 @@ for (const [mode, scheduleStatus] of [["inspect", "not_requested"], ["lodging_on
     assert.equal(item.dayUseMode, mode);
     assert.equal(item.dayUsePresence, presence);
     assert.equal(item.inventoryEvidence.dayUse, null);
-    assert.equal(item.inventoryEvidence.lodging.phoneBookings, presence === "absent" ? 4 : 0);
+    assert.equal(item.inventoryEvidence.lodging.phoneBookings, 4, "normally observed occupied rooms remain explicit estimates even before day-use verification");
+    assert.equal(item.inventoryEvidence.lodging.rows[0].explicitBlockedDayUseUnverified, presence !== "absent");
     const sales = context.companySalesSignalFromItem(item, { checkIn: "2026-09-26" });
     assert.equal(sales.dayUse.totalSold, null, "company DB never treats unqueried day-use sales as observed zero");
     assert.equal(sales.dayUse.totalSupply, null);
@@ -431,7 +460,10 @@ for (const [mode, scheduleStatus] of [["inspect", "not_requested"], ["lodging_on
     const historyRows = context.buildHistoryObservations({ run: { id: "day_use_fixture", keyword: "검증", checkIn: "2026-09-26" },
       availability: { items: [{ ...item, companyId: "cmp_day_use" }] } }, "2026-09-24T00:00:00Z");
     assert.equal(historyRows.filter(row => row.productType === "dayuse").length, 0);
-    assert.equal(historyRows[0].phoneBookings, presence === "absent" ? 4 : 0);
+    assert.equal(historyRows[0].phoneBookings, 4);
+    assert.equal(historyRows[0].explicitBlockedBookings, 4);
+    assert.equal(historyRows[0].explicitBlockedRevenue, 400000);
+    assert.equal(historyRows[0].explicitBlockedDayUseUnverified, presence !== "absent");
     assert.equal(historyRows[0].dayUseMode, mode);
     assert.equal(historyRows[0].dayUseScheduleStatus, scheduleStatus);
     const dailySnapshot = context.compactProductSnapshotDaily(item, { checkIn: "2026-09-26" });

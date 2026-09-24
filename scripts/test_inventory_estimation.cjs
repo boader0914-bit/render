@@ -128,12 +128,61 @@ const alternatingProducts = applyInventoryEvidence({ weeklyProductDetails: [
 ] });
 assert.equal(alternatingProducts.totalRooms, 10, "Different dates' product maxima must not be summed into 16 rooms");
 assert.equal(alternatingProducts.weeklyPhoneBookings, 0);
-const noPriceBorrow = applyInventoryEvidence({ weeklyProductDetails: [
+const sameProductPriceFallback = applyInventoryEvidence({ weeklyProductDetails: [
   row("2026-09-25", 10, 0), row("2026-09-26", 0, 0, { price: null })
 ] });
-assert.equal(noPriceBorrow.weeklyPhoneBookings, 10);
-assert.equal(noPriceBorrow.weeklyPhoneRevenue, 0, "No implicit cross-date price fallback");
-assert.equal(noPriceBorrow.weeklyPhoneMissingPriceBookings, 10);
+assert.equal(sameProductPriceFallback.weeklyPhoneBookings, 10);
+assert.equal(sameProductPriceFallback.weeklyPhoneRevenue, 1000000, "A normally observed blocked date can use the same product's observed price");
+assert.equal(sameProductPriceFallback.weeklyPhoneMissingPriceBookings, 0);
+assert.equal(sameProductPriceFallback.weeklyPhoneFallbackRevenue, 1000000);
+assert.equal(sameProductPriceFallback.weeklyPhoneFallbackBookings, 10);
+assert.equal(sameProductPriceFallback.weeklyRevenuePrecisionRate, 0, "Fallback prices must not count as observed stay-date prices");
+assert.deepEqual(sameProductPriceFallback.inventoryEvidence.lodging.rows[1].phonePriceEstimates, [{
+  productKey: "room", quantity: 10, unitPrice: 100000, revenue: 1000000,
+  source: "same_product_nearest_date", sourceDate: "2026-09-25", quantitySource: "capacity_shortfall"
+}]);
+assert.equal(applyInventoryEvidence(sameProductPriceFallback), sameProductPriceFallback, "Price fallback is idempotent and retains its provenance");
+const weekdayPriceFallback = applyInventoryEvidence({ weeklyProductDetails: [
+  row("2026-09-25", 2, 0, { price: 120000 }),
+  row("2026-09-26", 2, 0, { price: 230000 }),
+  row("2026-10-02", 2, 0, { price: 130000 }),
+  row("2026-10-03", 0, 0, { price: 0, open: false }),
+  row("2026-10-04", 0, 0, { price: 330000, open: false })
+] });
+const holidayBlocked = weekdayPriceFallback.inventoryEvidence.lodging.rows.find((entry) => entry.date === "2026-10-03");
+assert.equal(holidayBlocked.phoneRevenue, 460000, "The same weekday wins over a nearer weekday price for a holiday blocked date");
+assert.deepEqual(holidayBlocked.phonePriceEstimates, [{
+  productKey: "room", quantity: 2, unitPrice: 230000, revenue: 460000,
+  source: "same_product_same_weekday", sourceDate: "2026-09-26", quantitySource: "capacity_shortfall"
+}]);
+const pricedBlocked = weekdayPriceFallback.inventoryEvidence.lodging.rows.find((entry) => entry.date === "2026-10-04");
+assert.equal(pricedBlocked.phoneRevenue, 660000, "The target date's price always wins when present");
+assert.equal(pricedBlocked.phoneFallbackRevenue, 0);
+assert.equal(pricedBlocked.phonePriceEstimates[0].source, "same_product_same_date");
+const failedPriceSource = applyInventoryEvidence({ inventoryCapacityBaseline: { lodging: 2 }, weeklyProductDetails: [
+  row("2026-09-25", 2, 0, { price: null }),
+  row("2026-09-26", 0, 0, { price: null, open: false }),
+  row("2026-10-03", 0, 0, { price: 400000, collectionFailed: true })
+] });
+assert.equal(failedPriceSource.weeklyPhoneBookings, 2, "Error placeholder zero cannot become blocked sales");
+assert.equal(failedPriceSource.weeklyPhoneRevenue, 0, "A failed source response cannot contribute a fallback price");
+assert.equal(failedPriceSource.weeklyPhoneMissingPriceBookings, 2);
+const differentProductPrice = applyInventoryEvidence({ weeklyProductDetails: [
+  row("2026-09-25", 2, 0, { price: null }),
+  row("2026-09-25", 1, 0, { bizItemId: "expensive", price: 900000 }),
+  row("2026-09-26", 0, 0, { price: null }),
+  row("2026-09-26", 1, 0, { bizItemId: "expensive", price: 900000 })
+] });
+assert.equal(differentProductPrice.weeklyPhoneBookings, 2);
+assert.equal(differentProductPrice.weeklyPhoneRevenue, 0, "Another product's price is not a fallback for an unpriced product");
+const sharedFallback = applyInventoryEvidence({ sharedRooms: { status: "confirmed" }, weeklyProductDetails: [
+  row("2026-09-25", 10, 0), row("2026-09-26", 0, 0, { price: null }),
+  row("2026-09-25", 3, 0, { bizItemId: "day", saleType: "데이유즈", price: 50000 }),
+  row("2026-09-26", 3, 3, { bizItemId: "day", saleType: "데이유즈", price: 50000 })
+] });
+assert.equal(sharedFallback.weeklySharedDayUseExcluded, 3);
+assert.equal(sharedFallback.weeklyPhoneBookings, 7);
+assert.equal(sharedFallback.weeklyPhoneFallbackRevenue, 700000, "Same-room day-use reservations are excluded before fallback valuation");
 const unmatchedHistoricalCapacity = applyInventoryEvidence({ inventoryCapacityBaseline: { lodging: 10 }, weeklyProductDetails: [row("2026-09-26", 3, 3)] });
 assert.equal(unmatchedHistoricalCapacity.weeklyPhoneBookings, 7);
 assert.equal(unmatchedHistoricalCapacity.weeklyPhoneRevenue, 0, "Unmatched aggregate capacity must not borrow a product's price");
