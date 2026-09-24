@@ -21,6 +21,7 @@ const names = [
   "sanitizeManualCorrectionRoomSegments", "sanitizeB2BInterestLodgeSegment", "b2bInterestLodgeSegmentHasInput",
   "sanitizeInterestLodgeNumberText", "sanitizeManualCorrectionMeta", "manualCorrectionHasValue",
   "manualCorrectionHasBasis", "manualCorrectionMetaHasValue", "maxPositiveNumber",
+  "parseBasisTotalFromRule", "operatingTotalFromVarianceRows", "resolvedStockBasis", "stockBasisRule",
   "historySeriesForItem", "normalizeSignalRows", "averageSignalRate",
   "summarizeProductSalesSignal", "compactProductSnapshotDaily",
   "applyManualBasisToSalesSummary", "buildHistoryObservations",
@@ -52,6 +53,35 @@ for (const name of names) {
   const end = next ? start + 1 + next.index : -1;
   vm.runInContext(source.slice(start, end < 0 ? source.length : end), context);
 }
+
+// Historical production rules include a period-wide inventory gap after the
+// actual room-count candidate. That aggregate must never raise room capacity.
+for (const [name, count, days, gap] of [
+  ["월명", 16, 27, 27], ["시즌", 10, 21, 28], ["피카푸", 38, 2, 147],
+  ["토리", 19, 19, 103], ["더뷰", 29, 9, 56]
+]) {
+  const rule = `전체객실수후보=${count}개(날짜별 총량 최대값, ${days}일 확인) · 운영기준 미만 ${gap}개 오프라인/차단 추정`;
+  assert.equal(context.parseBasisTotalFromRule(rule), count, `${name}: the period gap is not room capacity`);
+  const basis = context.resolvedStockBasis({
+    basisTotal: count, explicitBasisTotal: count, storedRule: rule,
+    variance: { rows: [{ rawTotal: count }, { rawTotal: count - 1 }] }
+  });
+  assert.equal(basis.basisTotal, count, `${name}: legacy projection keeps the observed capacity`);
+  assert.equal(basis.operatingTotal, count);
+  assert.equal(context.stockBasisRule(rule, count, count, 0, gap), rule, "stored source text remains unchanged");
+}
+for (const [rule, count] of [
+  ["전체객실수후보 19 · 운영기준 16", 19],
+  ["데이유즈/캠프닉총량후보=3회(날짜별 총량 최대값)", 3],
+  ["DB 보정값 = 10실", 10], ["보정값：10동", 10],
+  ["기준=10", 10], ["후보: 12개", 12],
+  ["전체객실수후보=19개 · 운영판매기준=16개 · 상시차단/운영축소 3개", 19]
+]) assert.equal(context.parseBasisTotalFromRule(rule), count, `explicit legacy quantity: ${rule}`);
+for (const rule of [
+  "운영기준 미만 103개 오프라인/차단 추정", "기준 미만 147개", "기간 합계=147개",
+  "기준 2명, 31일 기준", "기준=31일", "후보=10.5개", "보정값=1,000개", "기준=100000실",
+  "전체객실수후보=0개", "기준 2026-09-20", "기준=28%", ""
+]) assert.equal(context.parseBasisTotalFromRule(rule), null, `unrelated or ambiguous quantity: ${rule}`);
 
 const closedDayUse = context.productSnapshotObservation({
   date: "2026-09-26", bizItemId: "4223868", name: "당일글램핑", saleType: "데이유즈",
@@ -256,7 +286,44 @@ assert.equal(context.companyMaximumRoomCapacity(correctedHistory), 10, "old guid
 assert.equal(context.companyMaximumRoomCapacity({ inventory: { latest: {
   productSnapshot: { inventoryEvidenceVersion: 4, capacityBasis: { observedMaximum: 28 },
     daily: [{ productType: "lodging", total: 28, rawTotal: 21 }] }
-} } }), 28, "trusted v4 observed maximum survives after older runs age out");
+} } }), 21, "inherited v4 maxima cannot overrule actual daily stock");
+assert.equal(context.companyMaximumRoomCapacity({ inventory: { latest: {
+  productSnapshot: { inventoryEvidenceVersion: 4, capacityBasis: { observedMaximum: 147, currentObservedMaximum: 28 },
+    daily: [{ productType: "lodging", total: 147, rawTotal: 21 }] }
+} } }), 28, "run-local observed maximum survives a truncated daily snapshot without inheriting its baseline");
+
+function pollutedCapacityCompany(current, inherited, priorStock = current, priorSales = inherited) {
+  return { companyId: "pollution_fixture", placeIds: ["pollution"], inventory: {
+    latest: { runId: "latest", stockBasis: { lodgingMaxTotal: inherited }, salesSignal: { lodging: { maxTotal: inherited } },
+      productSnapshot: { inventoryEvidenceVersion: 4, capacityBasis: { count: inherited, source: "observed_maximum",
+        observedMaximum: inherited, currentObservedMaximum: current },
+        daily: [{ date: "2026-09-26", productType: "lodging", rawTotal: current, total: inherited }] } },
+    previousLatest: { runId: "old", stockBasis: { lodgingMaxTotal: priorStock }, salesSignal: { lodging: { maxTotal: priorSales } } }
+  } };
+}
+for (const [current, inherited, priorStock, expected] of [
+  [19, 103, 19, 19], [10, 28, 10, 10], [37, 147, 38, 38], [29, 56, 29, 29], [44, 47, 47, 47]
+]) {
+  const company = pollutedCapacityCompany(current, inherited, priorStock);
+  const before = JSON.stringify(company);
+  assert.equal(context.companyMaximumRoomCapacity(company), expected, `current=${current}, inherited=${inherited}, prior stock=${priorStock}`);
+  const input = { placeId: "pollution", weeklyProductDetails: [{ date: "2026-09-26", bizItemId: "room",
+    name: "숙박", saleType: "숙박", stock: current, bookingCount: 1, price: 100000 }] };
+  const projected = context.applyCompanyManualCorrection(input, company);
+  assert.equal(projected.inventoryEvidence.capacityBasis.count, expected);
+  assert.equal(projected.inventoryEvidence.capacityBasis.observedMaximum, expected);
+  assert.equal(projected.inventoryEvidence.capacityBasis.currentObservedMaximum, current);
+  const reviewed = context.applyCompanyManualCorrection(input, { ...company, manualCorrection: { active: true, lodgingBasisTotal: 8 } });
+  assert.equal(reviewed.inventoryEvidence.capacityBasis.count, 8);
+  assert.equal(reviewed.inventoryEvidence.capacityBasis.source, "db_correction");
+  assert.equal(JSON.stringify(company), before, "fix is a read projection, not a stored snapshot rewrite");
+}
+assert.equal(context.companyMaximumRoomCapacity({ inventory: { latest: {
+  salesSignal: { lodging: { maxTotal: 147 } }, productSnapshot: { daily: [{ productType: "lodging", total: 147 }] }
+} } }), 0, "legacy sales and inferred daily totals alone are not verified stock");
+assert.equal(context.companyMaximumRoomCapacity({ inventory: { latest: {
+  manualCorrectionApplied: true, stockBasis: { lodgingMaxTotal: 147 }
+} } }), 0, "a corrected legacy summary cannot establish a provider-observed maximum");
 const legacyRead = context.companyInventorySnapshotWithCurrentCapacity(correctedHistory.inventory.latest, correctedHistory);
 assert.equal(legacyRead.productSnapshot.daily[0].total, 10, "snapshot-only v3 guide totals are removed even without a DB override");
 assert.equal(legacyRead.capacityReview.required, true);
@@ -390,7 +457,8 @@ assert.equal(trueZero.dayUse.totalSupply, 3);
 assert.equal(trueZero.dayUse.averageRate, 0);
 
 const recoveryCompany = { companyId: "recovery", placeIds: ["10"], runIds: ["old", "latest"], inventory: {
-  latest: { stockBasis: { lodgingMaxTotal: 21 }, productSnapshot: { inventoryEvidenceVersion: 3 } },
+  latest: { stockBasis: { lodgingMaxTotal: 147 }, productSnapshot: { inventoryEvidenceVersion: 4,
+    capacityBasis: { observedMaximum: 147, currentObservedMaximum: 21 }, daily: [{ productType: "lodging", rawTotal: 21, total: 147 }] } },
   snapshots: [{ stockBasis: { lodgingMaxTotal: 28 }, productSnapshot: { inventoryEvidenceVersion: 3 } }]
 } };
 context.listRuns = async () => [];

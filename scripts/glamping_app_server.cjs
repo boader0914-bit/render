@@ -8912,13 +8912,12 @@ function maxPositiveNumber(...values) {
 
 function parseBasisTotalFromRule(rule) {
   const text = String(rule || "");
-  const matches = Array.from(text.matchAll(/(?:후보|보정값|기준)[^\d]{0,24}(\d{1,5})/g))
+  // Only an immediately stated capacity is evidence. The same description can
+  // contain a period sum such as "운영기준 미만 103개", which is not room capacity.
+  const matches = Array.from(text.matchAll(/(?:후보|보정값|기준)\s*(?:[=:：]\s*)?(\d{1,5})(?=\s*(?:(?:개|실|회|동)(?![가-힣])|$|[()·;]))/g))
     .map((match) => Number(match[1]))
     .filter((value) => Number.isFinite(value) && value > 0);
-  if (matches.length) return Math.max(...matches);
-  const equalsMatch = text.match(/=\s*(\d{1,5})\s*(?:개|회)?/);
-  const equalsValue = equalsMatch ? Number(equalsMatch[1]) : null;
-  return Number.isFinite(equalsValue) && equalsValue > 0 ? equalsValue : null;
+  return matches.length ? Math.max(...matches) : null;
 }
 
 function basisRuleForTotal(storedRule, basisTotal, fallbackBuilder) {
@@ -14235,7 +14234,7 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
   // Historical summary snapshots may have discarded their raw daily stock.
   // Recover every run's observed maximum before applying one shared capacity.
   const recoveredMaximum = Math.max(companyMaximumRoomCapacity(company), ...loadedCandidates.map(({ item }) =>
-    Number(item.inventoryEvidence?.capacityBasis?.observedMaximum || item.inventoryEvidence?.lodging?.observedMaximum || 0)
+    Number(item.inventoryEvidence?.capacityBasis?.currentObservedMaximum || item.inventoryEvidence?.lodging?.observedMaximum || 0)
   ));
   for (const candidate of loadedCandidates) candidate.item = applyInventoryEvidence({
     ...candidate.item,
@@ -15276,20 +15275,24 @@ function companyMaximumRoomCapacity(company = {}) {
     const daily = (productSnapshot?.daily || []).filter((row) => row.productType === "lodging" && !row.missing);
     const rawValues = daily.map((row) => productSnapshotNumber(row.rawTotal)).filter((value) => value !== null);
     const version = Number(productSnapshot?.inventoryEvidenceVersion || snapshot.inventoryEvidenceVersion || 0);
-    const observedMaximum = productSnapshotNumber(productSnapshot?.capacityBasis?.observedMaximum ?? snapshot.capacityBasis?.observedMaximum);
-    if (version >= 4 && observedMaximum !== null) values.push(observedMaximum);
+    // observedMaximum includes the inherited company baseline in v4. Feeding it
+    // back here perpetuates old sales-summary errors as fresh observations.
+    const currentObservedMaximum = productSnapshotNumber(productSnapshot?.capacityBasis?.currentObservedMaximum ?? snapshot.capacityBasis?.currentObservedMaximum);
+    if (version >= 4 && currentObservedMaximum !== null) values.push(currentObservedMaximum);
     if (rawValues.length) {
       // Stored totals can contain old Place guide counts or DB overrides. Only
       // the provider's raw quantity establishes a historical observed maximum.
       values.push(...rawValues);
       continue;
     }
-    if (version >= 4 && observedMaximum !== null) {
+    if (version >= 4 && currentObservedMaximum !== null) {
       continue;
     }
     if (snapshot.manualCorrectionApplied || snapshot.correctionBasis || Number(productSnapshot?.inventoryEvidenceVersion || snapshot.inventoryEvidenceVersion || 0) >= 3) continue;
-    values.push(snapshot.stockBasis?.lodgingMaxTotal, snapshot.salesSignal?.lodging?.maxTotal);
-    values.push(...daily.filter((row) => !row.inventoryConflict).map((row) => row.total));
+    // Before evidence v3, this stock field came from the maximum daily stock
+    // in the collector receipt. Sales signals/daily totals could already carry
+    // inferred capacity and are not equivalent to provider-observed stock.
+    values.push(snapshot.stockBasis?.lodgingMaxTotal);
   }
   return Math.max(0, ...values.map(productSnapshotNumber).filter((value) => value !== null && value > 0));
 }
