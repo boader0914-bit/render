@@ -18,6 +18,7 @@
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/admin-theme.css">
   <link rel="stylesheet" href="/collector-controls.css">
+  <link rel="stylesheet" href="/monthly-reports.css">
 </head>
 <body class="app-booting">
   <a class="skip-link" href="#appMain">본문 바로가기</a>
@@ -79,6 +80,7 @@
         <button type="button" data-admin-primary="database">DB</button>
         <button type="button" data-admin-primary="analysis">업종분석</button>
         <button type="button" data-admin-primary="region">지역분석</button>
+        <button type="button" data-admin-primary="reports">리포트</button>
         <button type="button" data-admin-primary="members">회원</button>
         <button type="button" data-admin-primary="settings">설정</button>
         <div class="admin-desktop-secondary" data-admin-desktop-secondary></div>
@@ -116,6 +118,10 @@
         <div id="reportBody" class="report-body"></div>
       </section>
 
+      <section class="tab-panel" id="monthlyReportsPanel" data-panel="monthlyReports" aria-label="월간 리포트 관리" hidden>
+        <div id="monthlyReportsDashboard"></div>
+      </section>
+
       <section class="tab-panel" id="rankPanel" data-panel="rank" aria-label="수집 결과 분석">
         <div class="section-title">
           <div>
@@ -132,6 +138,7 @@
         <div class="region-analysis-context">
           <label for="analysisRegionSelect"><span>선택 지역</span><select id="analysisRegionSelect" aria-describedby="analysisRegionStatus"><option value="">지역 선택</option></select></label>
           <button class="secondary-button" id="analysisRegionManageButton" type="button" data-analysis-region-manage disabled>지역 자료 관리</button>
+          <button class="secondary-button" type="button" data-monthly-report-context="region">월간 리포트 만들기</button>
         </div>
         <p id="analysisRegionStatus" role="status">분석할 지역을 선택해 주세요.</p>
         <nav class="region-analysis-mobile-tabs" aria-label="지역분석 세부 메뉴">
@@ -559,6 +566,7 @@
     </section>
   </div>
 
+  <script src="/monthly-reports.js"></script>
   <script src="/app.js"></script>
   <script src="/collector_controls.js"></script>
 </body>

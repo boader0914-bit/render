@@ -16,6 +16,11 @@ const { otaProviderFromUrl } = require("./naver_place_ota_observation.cjs");
 const { createCollector: createTourismCollector } = require("./tourism_collector.cjs");
 const { createSpecialDaysService } = require("./lib/special_days.cjs");
 const { createKosisService } = require("./lib/kosis.cjs");
+const { createMonthlyReportService } = require("./lib/monthly_reports.cjs");
+const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs");
+const { createMonthlyReportContext } = require("./lib/monthly_report_context.cjs");
+const { createMonthlyReportHttpHandler } = require("./lib/monthly_report_http.cjs");
+const { renderMonthlyReportPdf } = require("./lib/monthly_report_pdf.cjs");
 const { createTourismForecastService } = require("./lib/tourism_forecast.cjs");
 const { createMonthlyVisitorScheduler } = require("./tourism_visitor_monthly_scheduler.cjs");
 const { createDemandStrengthBackfillScheduler } = require("./tourism_demand_strength_backfill_scheduler.cjs");
@@ -302,6 +307,22 @@ const kosisService = createKosisService({
   dataDir: path.join(DATA_DIR, "history", "kosis"),
   regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
   readApiKey: () => process.env.KOSIS_API_KEY || ""
+});
+const monthlyReportSources = createMonthlyReportSources({
+  dataDir: DATA_DIR,
+  regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
+  listRuns,
+  projectObservation: companyHistoryObservationWithCurrentCapacity,
+  capacityForCompany: company => manualCorrectionLodgingBasisTotal(company.manualCorrection) || companyMaximumRoomCapacity(company) || null,
+  readContext: createMonthlyReportContext({ kosisService, tourismCollector })
+});
+const monthlyReportService = createMonthlyReportService({
+  dataDir: path.join(DATA_DIR, "monthly_reports"), loadSources: monthlyReportSources.loadSources
+});
+const handleMonthlyReport = createMonthlyReportHttpHandler({
+  service: monthlyReportService, sources: monthlyReportSources, renderPdf: renderMonthlyReportPdf,
+  dataDir: path.join(DATA_DIR, "monthly_reports"), requireAdmin: requireAdminSession, parseJsonBody, send,
+  rateLimit: (req, session) => assertRequestRateLimit(req, "adminMonthlyReport", { limit: 30, windowMs: 60000 }, session.username || "")
 });
 function collectorControllers() { return {...Object.fromEntries(Object.entries(collectorBrokers).filter(([,broker]) => broker)), web:collectorWeb}; }
 const collectorBrokerReady = Promise.all(Object.values(collectorControllers()).map(broker => broker.initialize()));
@@ -18237,6 +18258,8 @@ async function route(req, res) {
     if (req.method === "GET" && reqUrl.pathname === "/api/runs") {
       return send(res, 200, { runs: publicRunsForRole(await listRuns(), session.role) });
     }
+
+    if (await handleMonthlyReport(req, res, reqUrl, session)) return;
 
     if (req.method === "POST" && reqUrl.pathname === "/api/b2b-search") {
       if (normalizeUserRole(session.role) !== USER_ROLES.b2b) {

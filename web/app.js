@@ -304,7 +304,7 @@ const LODGING_CATEGORY_PROFILES = {
 };
 const B2B_MY_LODGE_STORAGE_PREFIX = "glamping-datalab:b2b-my-lodge:v1";
 const ROLE_TABS = {
-  admin: ["industryHome", "regionHome", "report", "rank", "dictionary", "map", "demand", "regionCompare", "regionSources", "historyOps", "admin"],
+  admin: ["industryHome", "regionHome", "report", "monthlyReports", "rank", "dictionary", "map", "demand", "regionCompare", "regionSources", "historyOps", "admin"],
   b2b: ["report", "rank", "map", "demand", "account"]
 };
 const B2B_PRIMARY_TABS = new Set(["report", "rank", "map", "account"]);
@@ -358,6 +358,11 @@ const ADMIN_MOBILE_SECTIONS = {
       { label: "자료·출처", tab: "regionSources" }
     ]
   },
+  reports: {
+    label: "리포트",
+    target: "monthlyReports",
+    items: [{ label: "월간 리포트", tab: "monthlyReports" }]
+  },
   members: {
     label: "회원",
     target: "admin",
@@ -397,6 +402,7 @@ const ADMIN_COMPACT_SECTIONS = {
     adminPanelSection: "members",
     anchor: "#adminMemberRequestDashboard",
     items: [
+      { label: "리포트", tab: "monthlyReports" },
       { label: "회원", tab: "admin", adminPanelSection: "members", anchor: "#adminMemberRequestDashboard" },
       { label: "설정", tab: "admin", adminPanelSection: "files", anchor: "#adminIntegrationRegistry" }
     ]
@@ -422,6 +428,7 @@ const TAB_LABELS = {
   industryHome: "업종분석",
   regionHome: "지역분석",
   report: "요약 리포트",
+  monthlyReports: "월간 리포트",
   rank: "수집 결과 분석",
   dictionary: "지역 현황",
   regionCompare: "지역 비교",
@@ -446,6 +453,7 @@ const ADMIN_NAV_META = {
   collect: { icon: "collect", detail: "실행 · 결과" },
   analysis: { icon: "industry", detail: "시장 브리핑" },
   region: { icon: "region", detail: "지도 · 입지" },
+  reports: { icon: "report", detail: "월간 · 발행" },
   members: { icon: "members", detail: "권한 · 요청" },
   settings: { icon: "settings", detail: "연동 · 보안" }
 };
@@ -462,6 +470,7 @@ const ADMIN_NAV_ICON_PATHS = Object.freeze({
   database: '<ellipse cx="12" cy="5.5" rx="7.5" ry="3"/><path d="M4.5 5.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6"/><path d="M4.5 11.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6"/>',
   industry: '<rect x="4" y="10" width="4" height="10" rx="1"/><rect x="10" y="4" width="4" height="16" rx="1"/><rect x="16" y="13" width="4" height="7" rx="1"/>',
   region: '<path d="M19 10c0 4.8-7 11-7 11S5 14.8 5 10a7 7 0 1 1 14 0Z"/><circle cx="12" cy="10" r="2.5"/>',
+  report: '<path d="M6 3.5h8l4 4v13H6z"/><path d="M14 3.5v5h4M9 12h6M9 16h6"/>',
   members: '<circle cx="12" cy="8" r="3.25"/><path d="M5.5 20.5c.5-4 2.7-6.25 6.5-6.25s6 2.25 6.5 6.25"/>',
   settings: '<path d="M4 6h7m4 0h5"/><circle cx="13" cy="6" r="2"/><path d="M4 12h3m4 0h9"/><circle cx="9" cy="12" r="2"/><path d="M4 18h9m4 0h3"/><circle cx="15" cy="18" r="2"/>',
   more: '<circle cx="5" cy="12" r="1.25" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.25" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.25" fill="currentColor" stroke="none"/>'
@@ -2499,6 +2508,7 @@ function adminPrimarySectionForTab(tab, preferred = "") {
     }[state.adminPanelSection] || "summary";
   }
   if (["industryHome", "report"].includes(tab)) return "analysis";
+  if (tab === "monthlyReports") return "reports";
   if (tab === "rank") return "collect";
   if (["regionHome", "dictionary", "map", "demand", "regionCompare", "regionSources"].includes(tab)) return "region";
   if (tab === "historyOps") return "collect";
@@ -2513,6 +2523,7 @@ function adminMobileSectionForTab(tab, preferred = "") {
     if (preferredTabs.has(tab)) return preferred;
   }
   if (tab === "admin") return adminPanelMobileTarget(state.adminPanelSection).section;
+  if (tab === "monthlyReports") return "more";
   if (["industryHome", "regionHome", "report", "dictionary", "map", "demand", "regionCompare", "regionSources"].includes(tab)) return "analysis";
   if (["rank", "historyOps"].includes(tab)) return "collect";
   return "summary";
@@ -2648,7 +2659,7 @@ function syncAdminMobileNav() {
     container.innerHTML = items.map((item) => {
       const tab = item.tab || section.target || "report";
       const anchor = item.anchor || "";
-      const adminPanelSection = item.adminPanelSection || section.adminPanelSection || "";
+      const adminPanelSection = tab === "admin" ? item.adminPanelSection || section.adminPanelSection || "" : "";
       const adminDbStatus = item.adminDbStatus || "";
       const active = (tab === state.activeTab || (tab === "industryHome" && state.activeTab === "report")
         || (tab === "regionHome" && REGION_ANALYSIS_TABS.has(state.activeTab)))
@@ -14016,6 +14027,7 @@ function renderReport() {
     ];
 
   els.reportBody.innerHTML = `
+    ${isAdminRole() ? `<div class="mr-entry-actions"><button class="secondary-button" type="button" data-monthly-report-context="keyword" data-monthly-report-target="${escapeHtml(run.keyword || "")}">이 키워드로 월간 리포트 만들기</button></div>` : ""}
     <section class="report-hero">
       <div class="report-hero-copy">
         <span class="report-badge ${escapeHtml(heroDecision.tone)}">${escapeHtml(heroDecision.label)}</span>
@@ -36446,6 +36458,7 @@ function adminHeaderView() {
     industryHome: ["업종분석", "업종·지역·기간을 선택하고 저장된 자료로 분석을 시작하세요"],
     regionHome: ["지역분석", "분석할 지역을 선택하거나 이전 지역 분석을 이어보세요"],
     report: ["업종분석 · 시장 브리핑", "선택한 수집 자료의 업종 현황과 시장 요약"],
+    monthlyReports: ["리포트", "월별 업체·키워드·지역 리포트를 검토하고 발행하세요"],
     rank: ["수집 결과 분석", "수집 완료 즉시 품질·확인 대상·저장된 플레이스 순서 분석"],
     dictionary: ["지역분석 · 지역 현황", "선택지역의 기본정보와 관광·숙박 자료"],
     map: ["지역분석 · 지역 지도", "지역 내·인접 경쟁권과 반경 노출"],
@@ -36463,7 +36476,7 @@ function renderHeader() {
     els.pageTitle.textContent = viewTitle;
     if (els.pageSubtitle) {
       els.pageSubtitle.hidden = false;
-      if (["industryHome", "regionHome"].includes(state.activeTab)) {
+      if (["industryHome", "regionHome", "monthlyReports"].includes(state.activeTab)) {
         els.pageSubtitle.textContent = viewDescription;
       } else if (state.activeTab === "report") {
         const run = state.data?.run || {};
@@ -36614,6 +36627,10 @@ function setActiveTab(tab, options = {}) {
   if (isAdminRole() && state.activeTab === "regionHome") renderRegionHome();
   if (isAdminRole() && !options.fromHistory && [previousTab, state.activeTab].some((value) => ["industryHome", "regionHome"].includes(value))) {
     window.scrollTo?.({ top: 0, left: 0, behavior: "instant" });
+  }
+  if (isAdminRole() && state.activeTab === "monthlyReports") {
+    void window.MonthlyReports?.show(document.getElementById("monthlyReportsDashboard"), options.monthlyReportContext);
+    return;
   }
   if (!state.data) {
     renderB2BEmptyPanels();
@@ -38021,6 +38038,8 @@ function renderSheetCompanyEditShortcut(item = {}) {
     els.sheetSubtitle.insertAdjacentElement("afterend", slot);
   }
   slot.innerHTML = companyEditShortcutHtml(item);
+  const monthlyReportCompanyId = isAdminRole() ? companyEditShortcutId(item) : "";
+  if (monthlyReportCompanyId) slot.innerHTML += `<button class="secondary-button" type="button" data-monthly-report-context="company" data-monthly-report-target="${escapeHtml(monthlyReportCompanyId)}">월간 리포트 만들기</button>`;
   slot.hidden = !slot.innerHTML;
 }
 
@@ -41692,6 +41711,15 @@ function bindEvents() {
     handleAdminDbCompanyHash();
   });
   document.addEventListener("click", (event) => {
+    const monthlyReportShortcut = event.target.closest?.("[data-monthly-report-context]");
+    if (monthlyReportShortcut && isAdminRole()) {
+      event.preventDefault();
+      const type = monthlyReportShortcut.dataset.monthlyReportContext;
+      const targetId = type === "region" ? selectedAnalysisRegion()?.regionKey || "" : monthlyReportShortcut.dataset.monthlyReportTarget || "";
+      closeSheet();
+      setActiveTab("monthlyReports", { monthlyReportContext: { type, targetId } });
+      return;
+    }
     const shortcut = event.target.closest?.("[data-company-edit-shortcut]");
     if (!shortcut) return;
     if (!isAdminRole()) {
