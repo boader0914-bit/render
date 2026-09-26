@@ -13,7 +13,7 @@ async function readJson(file, fallback) {
   catch (error) { if (error.code === "ENOENT") return fallback; throw sourceError(); }
 }
 
-function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, projectObservation = row => row, capacityForCompany = () => null, readContext = async () => ({ sources: [], networkAttempted: false }) }) {
+function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, projectObservation = row => row, capacityForCompany = () => null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null }) {
   const companyFile = path.join(dataDir, "company_master", "companies.json");
   const historyFile = path.join(dataDir, "history", "observations.jsonl");
   async function catalog() {
@@ -177,12 +177,28 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, proje
     if (globalDuplicatePlaceCompanies) globalWarnings.push(`전체 DB 참고: 이 리포트 대상 밖에 플레이스 번호가 중복 연결된 업체 ${globalDuplicatePlaceCompanies}개가 있습니다.`);
     if (request.type === "region" && unmappedRegionCompanies) globalWarnings.push(`전체 DB 참고: 소재지가 미확정인 업체 ${unmappedRegionCompanies}개는 선택 지역에 포함되는지 알 수 없어 이 리포트의 품질 평가와 분리했습니다.`);
     let context;
-    try { context = await readContext(request, data); }
+    try { context = await readContext(request, { ...data, companies: data.companies.filter(company => scopeIds.has(company.companyId) && !conflictingCompanyIds.has(company.companyId)) }); }
     catch (error) {
       if (error.message === "MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY") throw error;
       context = { sources: [], networkAttempted: false, warnings: ["저장된 지역 보조지표를 불러오지 못했습니다."] };
     }
-    return { companies: data.companies, regions: data.regions, runs: data.runs, observations: [...observations.values()], rankObservations,
+    const year = Number(request.month.slice(0, 4));
+    const holidayYears = [...new Set([year, request.month.endsWith("-12") ? year + 1 : year])];
+    const specialDays = { years: [] };
+    for (const holidayYear of holidayYears) {
+      try {
+        const result = await readSpecialDays(holidayYear);
+        if (result?.networkAttempted) throw new Error("MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY");
+        const holidays = result?.categories?.holidays;
+        specialDays.years.push({ year: holidayYear, status: holidays?.status === "ready" ? "ready" : "missing",
+          updatedAt: holidays?.updatedAt || result?.updatedAt || "", source: result?.source || null,
+          holidays: holidays?.status === "ready" ? (holidays.items || []).filter(item => item.isHoliday).map(item => ({ date: item.date, name: item.name })) : [] });
+      } catch (error) {
+        if (error.message === "MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY") throw error;
+        specialDays.years.push({ year: holidayYear, status: "missing", updatedAt: "", holidays: [] });
+      }
+    }
+    return { companies: data.companies, regions: data.regions, runs: data.runs, observations: [...observations.values()], rankObservations, specialDays,
       warnings, sourceDiagnostics: { unmatchedCompanyRows, duplicatePlaceCompanies },
       globalWarnings, globalDiagnostics: { malformedHistoryLines, unmatchedCompanyRows: globalUnmatchedCompanyRows, duplicatePlaceCompanies: globalDuplicatePlaceCompanies,
         ...(request.type === "region" ? { unmappedRegionCompanies } : {}) }, context };

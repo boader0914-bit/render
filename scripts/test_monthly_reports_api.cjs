@@ -11,7 +11,7 @@ const { seedMonthlyReportFixture } = require("./fixtures/monthly_report_fixture.
 async function main() {
   const root = path.resolve(__dirname, "..");
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "monthly-api-"));
-  const fixture = await seedMonthlyReportFixture(dataDir);
+  const fixture = await seedMonthlyReportFixture(dataDir, { includePreviousMonth: true });
   const socket = net.createServer().listen(0, "127.0.0.1"); await once(socket, "listening");
   const port = socket.address().port; await new Promise(resolve => socket.close(resolve));
   const base = `http://127.0.0.1:${port}`;
@@ -58,6 +58,21 @@ async function main() {
     assert.equal(preview.data.summary.lodging.coveredCompanyDays, 31, JSON.stringify(preview.data.quality));
     assert.equal(preview.data.summary.lodging.supply, 310);
     assert.ok(preview.data.previewToken);
+    assert.equal(preview.data.comparison.previousMonth, "2026-07");
+    assert.equal(preview.data.comparison.common.companyCount, 1);
+    assert.equal(preview.data.comparison.common.matched.deltas.sold, 31);
+    const keywordPreview = await request(endpoint + "/preview", admin, "POST", { ...condition, type: "keyword", targetId: "포천글램핑" });
+    assert.equal(keywordPreview.status, 200);
+    assert.equal(keywordPreview.data.comparison.all.current.companyCount, 2);
+    assert.equal(keywordPreview.data.comparison.all.previous.companyCount, 1);
+    assert.deepEqual(keywordPreview.data.comparison.newlyObservedCompanyIds, ["cmp_place_monthly_b"]);
+    assert.equal(keywordPreview.data.comparison.common.matched.deltas.sold, 31, "new company's sales never inflate common-company movement");
+    assert.equal(keywordPreview.data.insights.overview.totalRooms, 18, "physical room basis is not the monthly room-night total");
+    assert.equal(keywordPreview.data.insights.overview.collectionDateCount, 2);
+    assert.equal(keywordPreview.data.insights.pricing.lodging.companyDistribution.companyCount, 2);
+    assert.equal(keywordPreview.data.insights.pickup.lodging.public.increase, 34);
+    assert.equal(keywordPreview.data.insights.rankVisibility.rows[0].observedDays, 2, "31 stay dates do not become 31 search observations");
+    assert.equal(keywordPreview.data.insights.calendarGroups.status, "unavailable", "missing holiday cache is not ordinary-weekday evidence");
     const create = await request(endpoint, admin, "POST", { ...condition, previewToken: preview.data.previewToken, title: "[모의] 8월 월간 리포트", notes: "검수용 가상 자료입니다." });
     assert.equal(create.status, 201, JSON.stringify(create.data));
     const reportUrl = endpoint + "/" + create.data.id;

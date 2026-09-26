@@ -163,3 +163,95 @@ test("quantities, capacity and freshness distinguish monthly observation totals 
   const missingCapacity = ui.renderSnapshot({ companies: [{ companyId: "missing", capacity: null }] });
   assert.doesNotMatch(missingCapacity, /객실 규모 0실/);
 });
+
+test("keyword market sections keep observation months, matched comparisons and price bases explicit", () => {
+  const current = { ...metric, companyCount: 2, coveredCompanyDays: 2, expectedCompanyDays: 3 };
+  const previous = { ...current, estimatedRevenue: 200000, sold: 2 };
+  const market = { ...structuredClone(snapshot), request: { ...snapshot.request, type: "keyword" }, target: { id: "경남글램핑", label: "경남글램핑", type: "keyword" },
+    comparison: { previousMonth: "2026-07", currentMonth: "2026-08", status: "limited", all: { current, previous }, common: { companyCount: 2, current, previous, matched: { companyCount: 1, companyDays: 1, excludedCompanyDays: 2, current, previous, deltas: { sold: 1, estimatedRevenue: 100000, reservationRatePoints: 10, estimatedRevenueRate: .5 } } }, newlyObservedCompanyIds: ["new"], noLongerObservedCompanyIds: ["old"], warnings: ["관측 표본은 시장 전체가 아닙니다."] },
+    ranks: { rows: [{ companyId: "c1", companyName: "테스트 숙소", keyword: "경남글램핑", firstRank: 5, lastRank: 3, rankImprovement: 2, observations: 3, firstCollectedAt: "2026-08-02T01:00:00Z", lastCollectedAt: "2026-08-28T01:00:00Z" }] },
+    insights: { schemaVersion: 1,
+      overview: { companyCount: 2, knownCapacityCompanyCount: 1, totalRooms: 10, capacityComplete: false, collectionDateCount: 5, publicBookingShare: 2 / 3, blockedBookingShare: 1 / 3 },
+      pickup: { lodging: { comparableIntervals: 2, baselinePublicBookings: 1, baselineBlockedBookings: 2, rejectedByReason: { capacity_changed: 1 }, offsettingChannelChangeIntervals: 1, includesPartialRuns: true, public: { status: "ready", increase: 2, decrease: 1, net: 1, leadTime: { averageDays: 6, medianDays: 6, averageMinDays: 5, averageMaxDays: 7, intervalCrossingPickup: 1, bins: [{ label: "4~7일 전", pickup: 2, share: 1 }] } }, blocked: { status: "no_increase", increase: 0, decrease: 0, net: 0 } } },
+      pace: { lodging: [{ leadDays: 7, ...metric, coveredCompanyDays: 1, expectedCompanyDays: 2 }] },
+      weekdays: { lodging: [{ dayOfWeek: 1, label: "월", ...metric, coveredCompanyDays: 1, expectedCompanyDays: 2 }] },
+      pricing: { lodging: { pricedCompanyDays: 1, expectedCompanyDays: 2, pricedSupply: 10, pricedSold: 3, estimatedPerSoldUnit: 100000, estimatedPerSupplyUnit: 30000, priceCoverageRate: .5, excludedPriceCompanyDays: 1, containsFallbackPrice: true, companyDistribution: { companyCount: 2, medianUnitPrice: 150000, minUnitPrice: 100000, maxUnitPrice: 200000, bands: [{ label: "10~20만원 미만", companyCount: 1 }, { label: "20~30만원 미만", companyCount: 1 }] } } },
+      rankVisibility: { rows: [{ companyId: "c1", companyName: "테스트 숙소", keyword: "경남글램핑", observedDays: 3, meanRank: 4, bestRank: 3, worstRank: 5, top3ObservedShare: 1 / 3, top10ObservedShare: 1 }] },
+      geography: { rows: [{ regionKey: "gyeongnam", regionLabel: "경상남도", companyCount: 2, lodging: metric }] }, calendarGroups: { status: "partial", classifiedDays: 30, missingYears: [2027], sourceYears: [{ year: 2026, status: "ready", updatedAt: "2026-01-02T01:00:00Z" }, { year: 2027, status: "missing" }], rows: [{ key: "holiday", label: "공휴일", calendarDays: 3, lodging: metric, dayuse: metric }, { key: "unclassified", label: "달력 근거 미확인", calendarDays: 1, lodging: { estimatedRevenue: null } }] }, definitions: { pickup: "반복 관측 증가 기준" }
+    }
+  };
+  const markup = ui.renderSnapshot(market);
+  const sectionOrder = ["summary", "comparison", "ranks", "timing", "pricing", "context"].map((key) => markup.indexOf(`data-mr-section="${key}"`));
+  assert.ok(sectionOrder.every((position, index) => position >= 0 && (!index || sectionOrder[index - 1] < position)));
+  assert.match(markup, /시장 요약/);
+  assert.match(markup, /객실 기준 총량<\/dt><dd>10실/);
+  assert.match(markup, /기준값 있는 업체 1 \/ 2곳 · 일부 업체 소계/);
+  assert.match(markup, /title="숙박월 이전 관측 포함">분석에 사용한 수집일<\/dt><dd>5일/);
+  assert.match(markup, /DB 보정값을 우선하고, 없으면 최대 관측 추정값/);
+  assert.match(markup, /공개 예약 비중<\/dt><dd>66\.7%/);
+  assert.match(markup, /업체별 단가 중간값<\/dt><dd>150,000원/);
+  assert.match(markup, /meter min="0" max="2" value="1" aria-label="10~20만원 미만 2곳 중 1곳"/);
+  assert.match(markup, /순위의 관측월/);
+  assert.match(markup, /숙박일 기준 예약·매출과 시간 기준이 다릅니다/);
+  assert.match(markup, /지역 전체 숙박시장의 합계가 아닙니다/);
+  assert.match(markup, /동일 조건으로 비교한 변화/);
+  assert.match(markup, /\+10%p/);
+  assert.match(markup, /\+50%/);
+  assert.match(markup, /개업·폐업을 뜻하지 않습니다/);
+  assert.match(markup, /관측되지 않은 날은 분모에서 제외/);
+  assert.match(markup, /수집 간격을 고려한 평균 범위 5~7일 전/);
+  assert.match(markup, /구간 경계를 넘은 수량 1실·박/);
+  assert.match(markup, /최초 관측 공개 예약 1실·박 · 방막기 추정 2실·박/);
+  assert.match(markup, /채널 분류 변화일 수 있습니다/);
+  assert.match(markup, /두 행의 차이를 예약 증가량으로 해석하지 않습니다/);
+  assert.match(markup, /감소는 취소 확정 건수가 아닙니다/);
+  assert.match(markup, /실제 결제 객단가가 아닙니다/);
+  assert.match(markup, /다른 관측일의 보완 가격 포함/);
+  assert.match(markup, /관측 업체의 지역 구성/);
+  assert.match(markup, /공휴일·전날·그 외 날짜 비교/);
+  assert.match(markup, /2027년 달력 근거가 없어 해당 날짜는 미확인/);
+  assert.match(markup, /달력 근거 미확인<\/th><td>1일/);
+  assert.match(markup, /반복 관측 증가 기준/);
+  assert.match(markup, /mr-pickup-card mr-public/);
+  assert.match(markup, /mr-pickup-card mr-phone/);
+});
+
+test("missing insight evidence stays unknown and untrusted new insight strings are escaped", () => {
+  const dangerous = '<svg onload="bad()">';
+  const markup = ui.renderSnapshot({ ...snapshot,
+    comparison: { status: "unavailable", previousMonth: "2026-07", common: { matched: { companyDays: null, deltas: { estimatedRevenue: 999999 } } }, warnings: [dangerous] },
+    insights: { pickup: { lodging: { public: { status: "insufficient", increase: null, decrease: null, net: null }, blocked: { status: "insufficient" } } }, pace: { lodging: [{ leadDays: 14, supply: null, sold: null, publicBookings: null, phoneBookings: null, reservationRate: null, coverageRate: 0, coveredCompanyDays: 0, expectedCompanyDays: 31 }] }, weekdays: { lodging: [{ label: dangerous, estimatedRevenue: null }] }, pricing: { lodging: { priceCoverageRate: 0, pricedCompanyDays: 0, expectedCompanyDays: 31, pricedSold: null, pricedSupply: null, estimatedPerSoldUnit: null, estimatedPerSupplyUnit: null } }, rankVisibility: { rows: [{ companyName: dangerous, keyword: dangerous, meanRank: null }] }, geography: { rows: [{ regionLabel: dangerous, companyCount: 1, lodging: { estimatedRevenue: null } }] }, definitions: { timing: dangerous } }
+  });
+  assert.doesNotMatch(markup, /<svg|999,999원|동일 조건으로 비교한 변화/);
+  assert.match(markup, /&lt;svg/);
+  assert.match(markup, /이전 월 자료가 부족합니다/);
+  assert.match(markup, /예약 시점을 추정할 수 없습니다/);
+  assert.match(markup, /14일 전<\/th><td>0 \/ 31<\/td><td class="mr-public">확인 불가/);
+  assert.match(markup, /예약 추정 1실·박당 금액<\/dt><dd>확인 불가/);
+  assert.doesNotMatch(markup, /예약 추정 1실·박당 금액<\/dt><dd>0원/);
+  const legacy = ui.renderSnapshot(snapshot);
+  assert.match(legacy, /이 저장본에 요일별 분석 자료가 없습니다/);
+  assert.match(legacy, /가까운 날짜의 값으로 채우지 않습니다/);
+  const noPrices = ui.renderSnapshot({ ...snapshot, insights: { overview: { companyCount: 1, knownCapacityCompanyCount: 0, totalRooms: null, capacityComplete: false, collectionDateCount: 0, publicBookingShare: null, blockedBookingShare: null }, pricing: { lodging: { companyDistribution: { companyCount: 0, medianUnitPrice: null, bands: [] } } } } });
+  assert.match(noPrices, /객실 기준 총량<\/dt><dd>확인 불가/);
+  assert.match(noPrices, /공개 예약 비중<\/dt><dd>확인 불가/);
+  assert.match(noPrices, /업체별 단가를 계산할 가격 근거가 없습니다/);
+  assert.doesNotMatch(noPrices, /<meter|업체별 단가 중간값<\/dt><dd>0원/);
+});
+
+test("keyword preview titles use search market language and unsupported dates cannot save a stale preview", async () => {
+  assert.equal(ui.reportTitle({ month: "2026-08", type: "keyword" }, { label: "경남글램핑" }), "2026년 8월 경남글램핑 검색시장 리포트");
+  assert.equal(ui.reportTitle({ month: "2026-08", type: "company" }, { label: "테스트 숙소" }), "2026년 8월 테스트 숙소 월간 리포트");
+  const f = fixture();
+  await f.controller.open({ type: "keyword", targetId: "경남글램핑" });
+  await f.controller.action("preview");
+  assert.match(f.controller.state.title, /^2026년 8월 .* 검색시장 리포트$/);
+  f.controller.input("month", "1900-01");
+  f.fail(new Error("지원하지 않는 연도입니다. 저장 자료가 있는 월을 선택해 주세요."));
+  await f.controller.action("preview");
+  assert.equal(f.controller.state.preview, null);
+  assert.match(f.container.innerHTML, /role="alert"[^>]*>지원하지 않는 연도/);
+  await f.controller.action("save");
+  assert.equal(f.calls.filter((call) => call.url === "" && call.method === "POST").length, 0);
+  assert.ok(f.calls.every((call) => !/collect|crawl|provider/.test(call.url)));
+});

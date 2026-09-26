@@ -314,7 +314,8 @@ const monthlyReportSources = createMonthlyReportSources({
   listRuns,
   projectObservation: companyHistoryObservationWithCurrentCapacity,
   capacityForCompany: company => manualCorrectionLodgingBasisTotal(company.manualCorrection) || companyMaximumRoomCapacity(company) || null,
-  readContext: createMonthlyReportContext({ kosisService, tourismCollector })
+  readContext: createMonthlyReportContext({ kosisService, tourismCollector }),
+  readSpecialDays: async year => (await specialDaysService.status(year)).yearStatus
 });
 const monthlyReportService = createMonthlyReportService({
   dataDir: path.join(DATA_DIR, "monthly_reports"), loadSources: monthlyReportSources.loadSources

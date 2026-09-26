@@ -4,6 +4,17 @@
 // a provider, starts a crawler, or turns annual statistics into monthly values.
 function createMonthlyReportContext({ kosisService, tourismCollector }) {
   return async function readContext(request, catalog) {
+    if (request.type === "keyword") {
+      const regionIds = [...new Set(catalog.companies.map(company => company.regionKey).filter(Boolean))].sort();
+      const sources = [], warnings = ["검색 키워드와 실제 소재지를 구분합니다. 아래 지역 통계는 관측 업체의 실제 소재지별 참고 자료이며 지역 간 합산하지 않습니다."];
+      for (const regionId of regionIds) {
+        const context = await readContext({ ...request, type: "region", targetId: regionId }, catalog);
+        sources.push(...context.sources.map(source => ({ ...source, key: `${regionId}:${source.key}`, regionKey: regionId })));
+        warnings.push(...context.warnings);
+      }
+      if (!regionIds.length) warnings.push("관측 업체의 실제 소재지를 확인하지 못해 지역 통계를 연결하지 않았습니다.");
+      return { sources, warnings: [...new Set(warnings)], networkAttempted: false };
+    }
     const regionId = request.type === "region" ? request.targetId
       : request.type === "company" ? catalog.companies.find(company => company.companyId === request.targetId)?.regionKey : "";
     const region = catalog.regions.find(item => item.id === regionId);

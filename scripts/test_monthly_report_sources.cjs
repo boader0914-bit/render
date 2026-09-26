@@ -143,3 +143,37 @@ test("context uses cache-only exact month, keeps genuine zero and KOSIS vintage"
   assert.equal(result.sources.find(item => item.key === "tourism_diversity").rows[2].value, 4);
   assert.equal(result.networkAttempted, false);
 });
+
+test("keyword regional background follows distinct actual locations, never the keyword name", async () => {
+  const regions = [];
+  const read = createMonthlyReportContext({ kosisService: { getRegion: async id => {
+    regions.push(id); return { networkAttempted: false, datasets: [{ key: "population", label: "인구", period: "2025", rows: [] }] };
+  } }, tourismCollector: {} });
+  const value = await read({ type: "keyword", targetId: "서울근교글램핑", month: "2026-08" }, {
+    companies: [{ regionKey: "pocheon" }, { regionKey: "gapyeong" }, { regionKey: "pocheon" }, { regionKey: "" }],
+    regions: [{ id: "pocheon", level: "local", label: "포천" }, { id: "gapyeong", level: "local", label: "가평" }] });
+  assert.deepEqual(regions, ["gapyeong", "pocheon"]);
+  assert.equal(value.sources.length, 2);
+  assert.deepEqual(value.sources.map(item => item.regionKey), ["gapyeong", "pocheon"]);
+  assert.equal(value.networkAttempted, false);
+  const violating = createMonthlyReportContext({ kosisService: { getRegion: async () => ({ networkAttempted: true }) }, tourismCollector: {} });
+  await assert.rejects(violating({ type: "keyword", month: "2026-08" }, { companies: [{ regionKey: "pocheon" }], regions: [] }), /CACHE_ONLY/);
+});
+
+test("holiday classification reads both cache years at year boundary and refuses a provider attempt", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "monthly-special-days-"));
+  t.after(async () => { assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep)); await fs.rm(root, { recursive: true, force: true }); });
+  const input = { dataDir: root, regionMasterFile: path.join(root, "regions.json"), listRuns: async () => [] };
+  const years = [];
+  const adapter = createMonthlyReportSources({ ...input, readSpecialDays: async year => {
+    years.push(year); return { networkAttempted: false, updatedAt: "2026-12-01T00:00:00Z", categories: { holidays: {
+      status: "ready", items: [{ date: `${year}-01-01`, name: "신정", isHoliday: true }, { date: `${year}-01-02`, name: "기념일", isHoliday: false }] } } };
+  } });
+  const result = await adapter.loadSources({ type: "keyword", targetId: "키워드", month: "2026-12", cutoffDate: "2026-12-31" });
+  assert.deepEqual(years, [2026, 2027]);
+  assert.equal(result.specialDays.years[1].holidays.length, 1);
+  const stale = createMonthlyReportSources({ ...input, readSpecialDays: async () => ({ categories: { holidays: { status: "stale", items: [] } } }) });
+  assert.equal((await stale.loadSources({ type: "company", targetId: "a", month: "2026-12" })).specialDays.years[0].status, "missing");
+  const violating = createMonthlyReportSources({ ...input, readSpecialDays: async () => ({ networkAttempted: true }) });
+  await assert.rejects(violating.loadSources({ type: "company", targetId: "a", month: "2026-12" }), /CACHE_ONLY/);
+});

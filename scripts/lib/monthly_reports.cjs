@@ -3,6 +3,8 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { buildMonthlyReportInsights } = require("./monthly_report_insights.cjs");
+const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./monthly_report_comparison.cjs");
 
 const SCHEMA_VERSION = 1;
 const PREVIEW_TTL_MS = 15 * 60 * 1000;
@@ -361,7 +363,9 @@ function buildSnapshot(request, source, generatedAt) {
       sharedDayUseExcluded: number(row.sharedDayUseExcluded) || 0, explicitBlockedBookings: number(row.explicitBlockedBookings) || 0,
       ...valuation, revenueEligible: valuation.eligible, revenueMissingReason: valuation.reason,
       phonePriceEstimates: Array.isArray(row.phonePriceEstimates) ? clone(row.phonePriceEstimates) : [],
-      capacityBasis: row.capacityBasis ? clone(row.capacityBasis) : null
+      capacityBasis: row.capacityBasis ? clone(row.capacityBasis) : null,
+      dayUseSharingStatus: String(row.dayUseSharingStatus || ""),
+      phoneValuationPolicy: String(row.phoneValuationPolicy || "")
     };
     const key = rowKey(row);
     const group = groups.get(key) || [];
@@ -437,10 +441,23 @@ function buildSnapshot(request, source, generatedAt) {
     globalDiagnostics: source?.globalDiagnostics ? clone(source.globalDiagnostics) : null
   };
   const cleanSelected = selected.map(({ time, tie, eligible, reason, ...row }) => row);
+  const insights = buildMonthlyReportInsights({ request, period, companies: [...companyMap.values()],
+    observations: [...groups.values()].flat(), selected, rankObservations: [...rankObservations, ...observations], runs, specialDays: source?.specialDays });
+  // Timing/distribution uses intermediate observations as well as the selected
+  // final values. Preserve those run references in the issued report's sources.
+  const listedRunIds = new Set(sourceRuns.map(run => run.id));
+  for (const id of insights.sourceRunIds) {
+    selectedRunIds.add(id);
+    if (listedRunIds.has(id)) continue;
+    const run = runMap.get(id);
+    if (run) sourceRuns.push({ id, keyword: String(run.keyword || ""), collectedAt: String(run.collectedAt || ""),
+      collectionQuality: { status: runStatus(run) }, observationCount: 0, selectedObservationCount: 0, rankSeriesCount: 0 });
+  }
+  sourceRuns.sort((a, b) => a.id.localeCompare(b.id));
   return {
     schemaVersion: SCHEMA_VERSION, generatedAt, request: clone(request), period, target,
     summary, daily: dailyFor(selected, partialRows, companyMap.size), companies,
-    changes: pairedChanges(groups), ranks,
+    changes: pairedChanges(groups), ranks, insights,
     quality,
     sources: {
       runIds: [...selectedRunIds].sort(), partialRunIds: sourceRuns.filter(run => run.collectionQuality.status === "partial" && run.selectedObservationCount).map(run => run.id),
@@ -545,7 +562,13 @@ function createMonthlyReportService({ dataDir, loadSources, now = () => new Date
     if (report.revision !== revision) throw fail("revision_conflict", "다른 변경이 먼저 저장되었습니다. 보고서를 다시 열어 주세요.", 409);
   };
   const build = (request, generatedAt) => {
-    const task = buildQueue.then(async () => buildSnapshot(request, await loadSources(clone(request)), generatedAt));
+    const task = buildQueue.then(async () => {
+      const snapshot = buildSnapshot(request, await loadSources(clone(request)), generatedAt);
+      const previousRequest = previousMonthlyReportRequest(request);
+      const previous = buildSnapshot(previousRequest, await loadSources(clone(previousRequest)), generatedAt);
+      snapshot.comparison = buildMonthlyComparison(snapshot, previous);
+      return snapshot;
+    });
     buildQueue = task.then(() => undefined, () => undefined);
     return task;
   };
@@ -581,7 +604,7 @@ function createMonthlyReportService({ dataDir, loadSources, now = () => new Date
     } else snapshot = await build(request, date.toISOString());
     const id = `mr_${crypto.randomUUID()}`;
     const report = { schemaVersion: SCHEMA_VERSION, id, revision: 1, status: "draft", ...request,
-      title: input.title === undefined ? `${request.month} ${snapshot.target.label} 월간 보고서` : textInput(input.title, "title", 200),
+      title: input.title === undefined ? `${request.month.slice(0, 4)}년 ${Number(request.month.slice(5))}월 ${snapshot.target.label} ${request.type === "keyword" ? "검색시장 리포트" : "월간 보고서"}` : textInput(input.title, "title", 200),
       notes: input.notes === undefined ? "" : textInput(input.notes, "notes", 20000),
       createdAt: date.toISOString(), updatedAt: date.toISOString(), publishedAt: null, version: 1, supersedesId: null, snapshot };
     await write(report);

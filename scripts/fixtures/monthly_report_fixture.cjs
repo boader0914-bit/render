@@ -2,7 +2,7 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 
-async function seedMonthlyReportFixture(root) {
+async function seedMonthlyReportFixture(root, { includePreviousMonth = false } = {}) {
   const regionKey = "kr_gyeonggi_pocheon";
   const runIds = ["pocheon_glamping_20260801_090000", "pocheon_glamping_20260815_090000", "gyeonggi_glamping_20260815_090000"];
   const runs = runIds.map((id, index) => ({ id, keyword: index === 2 ? "경기글램핑" : "포천글램핑", searchMode: "keyword", collectionMode: "precision", collectionPurpose: "revenue_detail",
@@ -38,6 +38,27 @@ async function seedMonthlyReportFixture(root) {
           sharedDayUseExcluded: 0, unknownUnavailable: 0, partial: false, missing: false, inventoryConflict: false,
           dayUsePresence: "absent", dayUseScheduleStatus: "no_day_use_product", dayUseSharingStatus: "not_shared" });
       }
+    }
+  }
+  if (includePreviousMonth) {
+    // Previous month contains only company A. This exercises sample composition
+    // changes separately from the matched company's booking changes.
+    const previousRows = observations.filter(row => row.companyKey === "cmp_place_monthly_a").map(row => {
+      const value = JSON.parse(JSON.stringify(row).replaceAll("202608", "202607").replaceAll("2026-08", "2026-07"));
+      const unitPrice = value.publicRevenue / value.publicBookings;
+      value.publicBookings -= 1; value.sold -= 1; value.available += 1;
+      value.publicRevenue -= unitPrice; value.estimatedRevenue -= unitPrice;
+      return value;
+    });
+    observations.push(...previousRows);
+    for (const run of [...runs]) {
+      const prior = JSON.parse(JSON.stringify(run).replaceAll("202608", "202607").replaceAll("2026-08", "2026-07"));
+      prior.checkOut = "2026-08-01"; prior.counts.overall = 1;
+      const directory = path.join(root, "outputs", prior.id);
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(path.join(directory, "manifest.json"), JSON.stringify(prior));
+      companies.cmp_place_monthly_a.keywords[prior.keyword].runs.push({ runId: prior.id, collectedAt: prior.completedAt, rank: 5 });
+      runs.push(prior);
     }
   }
   await fs.mkdir(path.join(root, "company_master"), { recursive: true });
