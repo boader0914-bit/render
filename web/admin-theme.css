@@ -2687,6 +2687,53 @@ html[data-theme-resolved] body.role-admin .analysis-home select { width: 100%; m
 .region-management-heading button { min-height: 42px; }
 .region-management-requests { margin-top: 16px; border-top: 1px solid var(--border-subtle); color: var(--text-primary); }
 .region-management-requests > summary { padding: 14px 0; cursor: pointer; font-size: 13px; }
+.kosis-admin-card, .kosis-region-panel { min-width: 0; color: var(--text-primary); }
+html[data-theme-resolved] body.role-admin .admin-stack-files > #kosisAdminCard { grid-column: 1 / -1; width: 100%; }
+.kosis-region-panel { container-type: inline-size; }
+.kosis-admin-card > .kosis-region-panel { margin-top: 16px; border-top: 1px solid var(--border-subtle); padding-top: 16px; }
+.kosis-region-panel .location-block-head { align-items: flex-start; }
+.kosis-region-panel .location-block-head h4 { margin: 0; }
+.kosis-note, .kosis-source, .kosis-warning { margin: 8px 0; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; color: var(--text-secondary); }
+.kosis-warning { color: var(--warning-strong); }
+.kosis-source a { color: var(--accent-strong); text-underline-offset: 3px; }
+.kosis-connection-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
+.kosis-connection-summary > div { display: grid; gap: 7px; padding: 12px; border-radius: 8px; background: var(--surface-control); }
+.kosis-connection-summary span { color: var(--text-secondary); font-size: 12px; }
+.kosis-connection-summary strong { font-size: 14px; overflow-wrap: anywhere; }
+.kosis-region-picker { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin: 16px 0; }
+.kosis-region-picker label { display: grid; gap: 7px; flex: 1; min-width: 160px; color: var(--text-secondary); font-size: 12px; }
+.kosis-region-picker select { width: 100%; min-height: 40px; padding: 8px; border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-primary); background: var(--surface-control); font: inherit; }
+.kosis-dataset { margin: 14px 0; padding: 14px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--surface-control); }
+.kosis-dataset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 14px 0; }
+.kosis-dataset-grid > .kosis-dataset { margin: 0; }
+.kosis-dataset-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.kosis-dataset-head h5 { margin: 0; font-size: 14px; }
+.kosis-dataset-head p { margin: 7px 0 0; font-size: 12px; color: var(--text-secondary); }
+.kosis-state { display: inline-block; flex-shrink: 0; border: 1px solid var(--border-subtle); border-radius: 6px; padding: 4px 7px; color: var(--text-secondary); font-size: 11px; }
+.kosis-state[data-status="ready"] { color: var(--positive); }
+.kosis-state:is([data-status="error"], [data-status="partial"], [data-status="stale"], [data-status="mapping_missing"]) { color: var(--warning-strong); }
+.kosis-stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 145px), 1fr)); gap: 14px; margin: 18px 0 14px; }
+.kosis-stat-grid > div { min-width: 0; }
+.kosis-stat-grid dt { font-size: 12px; color: var(--text-secondary); }
+.kosis-stat-grid dt > small { display: block; margin-top: 4px; }
+.kosis-stat-grid dd { margin: 7px 0 0; font-size: 22px; font-variant-numeric: tabular-nums; font-weight: 650; white-space: nowrap; overflow-wrap: normal; word-break: normal; }
+.kosis-stat-grid dd > small { margin-left: 4px; font-size: 12px; font-weight: 400; }
+.kosis-stat-grid .kosis-missing { color: var(--text-secondary); font-size: 14px; font-weight: 400; white-space: normal; }
+.kosis-detail { border-top: 1px solid var(--border-subtle); padding-top: 10px; margin-top: 10px; }
+.kosis-detail summary { cursor: pointer; font-size: 12px; color: var(--text-secondary); }
+.kosis-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.kosis-actions button, .kosis-region-picker button { min-height: 40px; }
+@container (max-width: 720px) {
+  .kosis-dataset-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .kosis-dataset-grid { grid-template-columns: 1fr; }
+  .kosis-connection-summary { grid-template-columns: 1fr; gap: 8px; }
+  .kosis-connection-summary > div { grid-template-columns: 1fr 1fr; align-items: center; }
+  .kosis-dataset { padding: 12px; }
+  .kosis-dataset-head, .kosis-region-panel .location-block-head { flex-wrap: wrap; }
+  .kosis-stat-grid dd { font-size: 19px; }
+}
 .region-management-overview { margin-top: 16px; border-top: 1px solid var(--border-subtle); }
 .region-management-overview > summary { padding: 14px 0; cursor: pointer; color: var(--text-primary); font-size: 13px; }
 .region-management-overview[open] > summary { margin-bottom: 10px; }

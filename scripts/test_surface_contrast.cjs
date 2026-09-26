@@ -465,6 +465,10 @@ const tourismForecastUiBlock = app.slice(
   app.indexOf("function tourismForecastRegionKey("),
   app.indexOf("const SPECIAL_DAY_KINDS =")
 );
+const kosisUiBlock = app.slice(
+  app.indexOf("function kosisStatusLabel("),
+  app.indexOf("function tourismForecastRegionKey(")
+);
 const adminIntegrationContext = {
   fmtNumber: (value) => String(value),
   compactDateTime: (value) => String(value),
@@ -474,6 +478,8 @@ const adminIntegrationContext = {
   els: { specialDaysAdminCard: { innerHTML: "" }, tourismForecastAdminCard: { innerHTML: "" }, tourismForecastConnectionCard: { innerHTML: "" } },
   isAdminRole: () => true,
   state: {
+    kosisSettings: null,
+    kosisStatusError: "",
     specialDaysSettings: null,
     specialDaysYears: {},
     specialDaysYear: 2026,
@@ -514,7 +520,7 @@ const adminIntegrationContext = {
   }
 };
 vm.runInNewContext(
-  `${adminIntegrationDefinitionsBlock}\n${adminIntegrationRowsBlock}\n${specialDaysUiBlock}\n${tourismForecastUiBlock}\nthis.getAdminIntegrationRows = adminIntegrationRows; this.getAdminIntegrationSummary = adminIntegrationSummary; this.getAdminIntegrationSummaryLabel = adminIntegrationSummaryLabel; this.getSpecialDaysStatus = adminSpecialDaysIntegrationRow; this.rememberSpecialDays = rememberSpecialDaysYear; this.renderSpecialDays = renderSpecialDaysAdminCard; this.getForecastStatus = adminTourismForecastIntegrationRow; this.rememberForecast = rememberTourismForecastData; this.renderForecast = renderTourismForecastAdminCard; this.forecastChart = tourismForecastChart; this.selectedForecastDestination = tourismForecastSelectedDestination;`,
+  `${adminIntegrationDefinitionsBlock}\n${adminIntegrationRowsBlock}\n${specialDaysUiBlock}\n${tourismForecastUiBlock}\n${kosisUiBlock}\nthis.getAdminIntegrationRows = adminIntegrationRows; this.getAdminIntegrationSummary = adminIntegrationSummary; this.getAdminIntegrationSummaryLabel = adminIntegrationSummaryLabel; this.getSpecialDaysStatus = adminSpecialDaysIntegrationRow; this.rememberSpecialDays = rememberSpecialDaysYear; this.renderSpecialDays = renderSpecialDaysAdminCard; this.getForecastStatus = adminTourismForecastIntegrationRow; this.rememberForecast = rememberTourismForecastData; this.renderForecast = renderTourismForecastAdminCard; this.forecastChart = tourismForecastChart; this.selectedForecastDestination = tourismForecastSelectedDestination;`,
   adminIntegrationContext
 );
 const connectedAdminIntegrations = adminIntegrationContext.getAdminIntegrationRows();
@@ -527,9 +533,9 @@ assert(
     && connectedAdminIntegrations.find((row) => row.key === "tourism-diversity")?.status === "connected"
     && connectedAdminIntegrationSummary.connected === 4
     && connectedAdminIntegrationSummary.configured === 2
-    && connectedAdminIntegrationSummary.checking === 2
-    && connectedAdminIntegrationSummary.planned === 7
-    && adminIntegrationContext.getAdminIntegrationSummaryLabel(connectedAdminIntegrationSummary) === "4 정상 · 2 설정 · 2 확인 중 · 7 예정",
+    && connectedAdminIntegrationSummary.checking === 3
+    && connectedAdminIntegrationSummary.planned === 6
+    && adminIntegrationContext.getAdminIntegrationSummaryLabel(connectedAdminIntegrationSummary) === "4 정상 · 2 설정 · 3 확인 중 · 6 예정",
   "admin API registry must map four stored tourism sources to 4/15 connected without merging planned APIs",
   failures
 );
@@ -568,9 +574,9 @@ assert(
   missingTourismRows.find((row) => row.key === "regional-visitors")?.status === "missing"
     && missingTourismRows.find((row) => row.key === "regional-visitors")?.statusLabel === "설정 필요"
     && missingTourismSummary.missing === 1
-    && missingTourismSummary.planned === 7
+    && missingTourismSummary.planned === 6
     && adminIntegrationContext.getAdminIntegrationSummaryLabel(missingTourismSummary).includes("1 확인")
-    && adminIntegrationContext.getAdminIntegrationSummaryLabel(missingTourismSummary).includes("7 예정"),
+    && adminIntegrationContext.getAdminIntegrationSummaryLabel(missingTourismSummary).includes("6 예정"),
   "admin API registry must keep missing configuration separate from planned integrations",
   failures
 );

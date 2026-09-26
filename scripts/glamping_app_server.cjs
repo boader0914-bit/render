@@ -15,6 +15,7 @@ const { applyInventoryEvidence } = require("./inventory_estimation.cjs");
 const { otaProviderFromUrl } = require("./naver_place_ota_observation.cjs");
 const { createCollector: createTourismCollector } = require("./tourism_collector.cjs");
 const { createSpecialDaysService } = require("./lib/special_days.cjs");
+const { createKosisService } = require("./lib/kosis.cjs");
 const { createTourismForecastService } = require("./lib/tourism_forecast.cjs");
 const { createMonthlyVisitorScheduler } = require("./tourism_visitor_monthly_scheduler.cjs");
 const { createDemandStrengthBackfillScheduler } = require("./tourism_demand_strength_backfill_scheduler.cjs");
@@ -296,6 +297,11 @@ const collectorWeb = createOperatingWebCollector({
   dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR, root: ROOT,
   onProviderBlocked: () => stopOtherCollectorLanes("web"),
   onProgress: text => withCrawlLane("web", () => recordCrawlRuntimeOutputChunk(crawlLane().activeCrawlJob, text))
+});
+const kosisService = createKosisService({
+  dataDir: path.join(DATA_DIR, "history", "kosis"),
+  regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
+  readApiKey: () => process.env.KOSIS_API_KEY || ""
 });
 function collectorControllers() { return {...Object.fromEntries(Object.entries(collectorBrokers).filter(([,broker]) => broker)), web:collectorWeb}; }
 const collectorBrokerReady = Promise.all(Object.values(collectorControllers()).map(broker => broker.initialize()));
@@ -18843,6 +18849,46 @@ async function route(req, res) {
       if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
       return send(res, 200, await backfillCompanyMasterFromRuns(payload));
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/settings/kosis") {
+      if (!requireAdminSession(session, req, res)) return;
+      if (reqUrl.searchParams.size) return send(res, 400, { error: "KOSIS 설정 상태는 별도 입력 없이 조회해 주세요." });
+      return send(res, 200, await kosisService.status());
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/kosis/region") {
+      if (!requireAdminSession(session, req, res)) return;
+      if ([...reqUrl.searchParams.keys()].some((field) => field !== "regionKey")
+        || reqUrl.searchParams.getAll("regionKey").length !== 1) {
+        return send(res, 400, { error: "조회할 지역 하나를 선택해 주세요." });
+      }
+      // Viewing a region must never spend the provider quota or change a saved snapshot.
+      const result = await kosisService.getRegion(reqUrl.searchParams.get("regionKey"));
+      return send(res, ["INVALID_REGION", "AMBIGUOUS_REGION"].includes(result.error?.code) ? 400 : 200, result);
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/settings/kosis/refresh") {
+      if (!requireAdminSession(session, req, res)) return;
+      if (!/^application\/json(?:\s*;|$)/i.test(String(req.headers["content-type"] || ""))) {
+        return send(res, 415, { error: "JSON 형식으로 조회 지역을 입력해 주세요." });
+      }
+      if (req.headers.origin) {
+        let originHost = "";
+        try { originHost = new URL(req.headers.origin).host; } catch { /* Reject malformed origins. */ }
+        if (!originHost || originHost !== req.headers.host) {
+          return send(res, 403, { error: "현재 서비스 화면에서 다시 요청해 주세요." });
+        }
+      }
+      const payload = await parseJsonBody(req);
+      if (!payload || Array.isArray(payload) || typeof payload !== "object"
+        || Object.keys(payload).some((field) => field !== "regionKey")
+        || typeof payload.regionKey !== "string" || !payload.regionKey.trim()) {
+        return send(res, 400, { error: "조회할 지역 하나만 선택해 주세요." });
+      }
+      assertRequestRateLimit(req, "adminKosis", { limit: 6, windowMs: 60 * 60 * 1000 }, session.username || "");
+      const result = await kosisService.refreshRegion(payload.regionKey);
+      return send(res, ["INVALID_REGION", "AMBIGUOUS_REGION"].includes(result.error?.code) ? 400 : 200, result);
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/settings/tourism-forecast") {

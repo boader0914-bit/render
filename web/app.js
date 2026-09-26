@@ -162,6 +162,13 @@ const state = {
   },
   tourismDataStatus: null,
   tourismDataStatusError: "",
+  kosisSettings: null,
+  kosisStatusLoading: false,
+  kosisStatusError: "",
+  kosisRegions: {},
+  kosisRegionRequests: {},
+  kosisRegionErrors: {},
+  kosisRefreshRegionKey: "",
   specialDaysSettings: null,
   specialDaysYears: {},
   specialDaysYear: null,
@@ -536,6 +543,7 @@ const els = {
   adminRegionAnalysisDashboard: document.getElementById("adminRegionAnalysisDashboard"),
   adminIntegrationRegistry: document.getElementById("adminIntegrationRegistry"),
   specialDaysAdminCard: document.getElementById("specialDaysAdminCard"),
+  kosisAdminCard: document.getElementById("kosisAdminCard"),
   tourismForecastAdminCard: document.getElementById("tourismForecastAdminCard"),
   tourismForecastConnectionCard: document.getElementById("tourismForecastConnectionCard"),
   adminSecurityDashboard: document.getElementById("adminSecurityDashboard"),
@@ -29376,6 +29384,7 @@ function adminIntegrationRows() {
   const traffic = state.trafficKeyState || {};
   const tourism = state.tourismDataStatus || {};
   return ADMIN_INTEGRATIONS.map((integration) => {
+    if (integration.key === "kosis") return adminKosisIntegrationRow(integration);
     if (integration.key === "holiday") return adminSpecialDaysIntegrationRow(integration);
     if (integration.key === "concentration-forecast") return adminTourismForecastIntegrationRow(integration);
     if (integration.tourismSourceKey) {
@@ -29608,6 +29617,7 @@ function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
   renderAdminRegionAnalysisDashboard(master);
   renderAdminIntegrationRegistry();
   renderSpecialDaysAdminCard();
+  renderKosisAdminCard();
   renderTourismForecastAdminCard();
   renderAdminSecurityDashboard();
   if (!els.adminConsoleDashboard) return;
@@ -29918,6 +29928,7 @@ function setAnalysisRegion(regionKey = "", options = {}) {
     try { window.localStorage?.setItem(analysisRegionStorageKey(), JSON.stringify(state.analysisRegionSelection)); } catch { /* Storage is optional. */ }
   }
   if (typeof syncTourismForecastToAnalysisRegion === "function") syncTourismForecastToAnalysisRegion(region);
+  if (typeof renderKosisAdminCard === "function") renderKosisAdminCard();
   renderRegionAnalysisShell();
   if (options.render !== false && REGION_ANALYSIS_TABS.has(state.activeTab)) renderHeader();
   if (options.render !== false) renderActiveRegionAnalysis();
@@ -30293,6 +30304,7 @@ function renderRegionSources() {
     <header class="location-profile-overview"><div><p class="eyebrow">자료·출처</p><h3>${escapeHtml(analysisRegionLabel(region))}</h3><p>지역코드가 연결된 자료의 출처·기준기간·확보 상태를 확인합니다.</p></div></header>
     <p class="hint">행정구역 ${escapeHtml(region.officialCode || region.regionId || region.regionKey)} · ${region.level === "broad" ? "광역 자료와 시군구 자료를 구분합니다." : "시군구 기준"}</p>
     ${renderLocationProfileSourcePanel(entry, profile, evidence, card.regionKey, { providerCodePending })}
+    ${renderKosisRegionPanel(region)}
   </section>`;
 }
 
@@ -35229,6 +35241,7 @@ function renderObservedLocationProfile(card, alias, tourismMatch, clusters, inde
     || evidence.resourceDemand.period
     || "지표별 최신 기간";
   const basicPanel = `
+    ${renderKosisRegionPanel(administrativeRegion || { regionKey: card.regionKey, name: sigungu })}
     <div class="location-profile-definition-list">
       <div><span>행정구역</span><strong>${escapeHtml(`${sido} ${sigungu}`)}</strong><small>${administrativeRegion?.active ? "공식 원장" : "확인 중"}</small></div>
       <div><span>분석 단위</span><strong>시군구 기준</strong><small>공공 기준</small></div>
@@ -35371,7 +35384,7 @@ function renderAdministrativeProfile(region = {}, options = {}) {
         ${locationProfileTabButton("supply", "숙박 공급")}
         ${locationProfileTabButton("history", "과거 자료")}
       </nav>
-      ${locationProfileTabPanel("basic", `${administrativeProfileDefinitionRows(basicRows)}<div class="location-profile-actions"><button class="secondary-button" type="button" data-dictionary-navigate="analysis" disabled>업종 분석 연결 준비</button><button class="primary-button" type="button" data-dictionary-navigate="demand" disabled>수요전망 자료 대기</button></div><p class="location-profile-action-note">실제 관측이 확보되면 이 행정구역에 연결합니다.</p>`)}
+      ${locationProfileTabPanel("basic", `${renderKosisRegionPanel(region)}${administrativeProfileDefinitionRows(basicRows)}<div class="location-profile-actions"><button class="secondary-button" type="button" data-dictionary-navigate="analysis" disabled>업종 분석 연결 준비</button><button class="primary-button" type="button" data-dictionary-navigate="demand" disabled>수요전망 자료 대기</button></div><p class="location-profile-action-note">실제 관측이 확보되면 이 행정구역에 연결합니다.</p>`)}
       ${locationProfileTabPanel("tourism", tourismPanel)}
       ${locationProfileTabPanel("supply", supplyPanel)}
       ${locationProfileTabPanel("history", historyPanel)}
@@ -40190,6 +40203,181 @@ async function resumeTourismDemandStrengthBackfillPolling() {
   if (tourismDemandStrengthBackfillIsRunning()) startTourismDemandStrengthBackfillPolling();
 }
 
+function kosisStatusLabel(status = "") {
+  return ({ ready: "저장 자료 확인", partial: "일부 자료 확인", stale: "이전 저장 자료", not_collected: "저장 자료 없음", mapping_missing: "지역코드 확인 필요", error: "조회 실패", needs_key: "인증키 설정 필요", cooldown: "잠시 후 갱신 가능", missing: "자료 없음", suppressed: "비공개 값", observed: "공식 관측" })[status] || "상태 확인 필요";
+}
+
+function kosisPeriodLabel(period = "", periodType = "") {
+  const value = String(period || "");
+  if (periodType === "M" && /^\d{6}$/.test(value)) return `${value.slice(0, 4)}년 ${Number(value.slice(4))}월`;
+  if (periodType === "Y" && /^\d{4}$/.test(value)) return `${value}년`;
+  return value || "기준기간 확인 필요";
+}
+
+function kosisObservedRow(row = {}) {
+  return row.status === "observed" && typeof row.value === "number" && Number.isFinite(row.value);
+}
+
+function kosisHasObservedData(data) {
+  return (data?.datasets || []).some(dataset => (dataset.rows || []).some(kosisObservedRow));
+}
+
+function kosisDatasetGroups(datasets = []) {
+  const primaryKeys = ["population", "households", "establishments", "employment"];
+  return {
+    primary: primaryKeys.map(key => datasets.find(dataset => dataset.key === key)).filter(Boolean),
+    additional: datasets.filter(dataset => !primaryKeys.includes(dataset.key))
+  };
+}
+
+function kosisRegionOptions() {
+  return typeof regionMasterUnits === "function" ? regionMasterUnits().filter(region => region.active && region.selectable !== false) : [];
+}
+
+function kosisSelectedRefreshRegion() {
+  const selected = state.kosisRefreshRegionKey || (typeof selectedAnalysisRegion === "function" ? selectedAnalysisRegion()?.regionKey : "");
+  return kosisRegionOptions().find(region => region.regionKey === selected) || null;
+}
+
+function adminKosisIntegrationRow(integration = {}) {
+  const settings = state.kosisSettings;
+  const base = { ...integration, status: "checking", statusLabel: "연결 확인 중", statusNote: "KOSIS 설정과 저장 자료를 확인합니다." };
+  if (state.kosisStatusError) return { ...base, status: "missing", statusLabel: "상태 확인 실패", statusNote: state.kosisStatusError };
+  if (!settings) return base;
+  if (!settings.configured) return { ...base, status: "missing", statusLabel: "인증키 설정 필요", statusNote: "KOSIS 전용 인증키 · 서버 환경변수 설정" };
+  if (settings.error || settings.status === "error" || settings.status === "stale") return { ...base, status: "missing", statusLabel: "갱신 확인 필요", statusNote: Number(settings.cachedRegionCount) > 0 ? "이전 저장 자료 유지 · 최근 갱신 상태 확인 필요" : "공식자료 조회 결과를 확인하세요." };
+  if (Number(settings.cachedRegionCount) > 0) return { ...base, status: "connected", statusLabel: "저장 자료 확인", statusNote: `${fmtNumber(settings.cachedRegionCount)}개 지역 · 지역·지표별 기간 확인` };
+  return { ...base, status: "configured", statusLabel: "키 설정됨", statusNote: "지역을 선택해 공식자료 갱신 필요" };
+}
+
+function kosisOfficialSourceUrl(value = "") {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && (url.hostname === "kosis.kr" || url.hostname.endsWith(".kosis.kr")) ? url.href : "";
+  } catch { return ""; }
+}
+
+function renderKosisDataset(dataset = {}) {
+  const rows = Array.isArray(dataset.rows) ? dataset.rows : [];
+  const latestRows = rows.filter(row => !row.period || row.period === dataset.period);
+  const historyRows = rows.filter(row => row.period && row.period !== dataset.period);
+  const sourceUrl = kosisOfficialSourceUrl(dataset.sourceUrl);
+  const renderRows = entries => `<dl class="kosis-stat-grid">${entries.map(row => `<div><dt>${escapeHtml(row.label || row.key || "통계값")}${row.period && row.period !== dataset.period ? `<small>${escapeHtml(kosisPeriodLabel(row.period, dataset.periodType))}</small>` : ""}</dt><dd>${kosisObservedRow(row) ? `${fmtNumber(row.value)}<small>${escapeHtml(row.unit || "")}</small>` : `<span class="kosis-missing">${escapeHtml(kosisStatusLabel(row.status))}</span>`}</dd></div>`).join("")}</dl>`;
+  return `<section class="kosis-dataset" data-kosis-dataset="${escapeHtml(dataset.key || "")}">
+    <div class="kosis-dataset-head"><div><h5>${escapeHtml(dataset.label || "공식 통계")}</h5><p>기준 ${escapeHtml(kosisPeriodLabel(dataset.period, dataset.periodType))}</p></div><span class="kosis-state" data-status="${escapeHtml(dataset.status || "not_collected")}">${escapeHtml(kosisStatusLabel(dataset.status))}</span></div>
+    ${latestRows.length ? renderRows(latestRows.slice(0, 6)) : `<p class="kosis-note">해당 기준기간의 저장 자료가 없습니다. 미확인 값을 0으로 표시하지 않습니다.</p>`}
+    ${latestRows.length > 6 ? `<details class="kosis-detail"><summary>세부 통계 ${fmtNumber(latestRows.length - 6)}개 더 보기</summary>${renderRows(latestRows.slice(6))}</details>` : ""}
+    ${historyRows.length ? `<details class="kosis-detail"><summary>이전 기간 ${fmtNumber(historyRows.length)}개 관측 보기</summary>${renderRows(historyRows)}</details>` : ""}
+    <p class="kosis-source">${sourceUrl ? `<a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer">KOSIS 공식 통계표</a>` : "KOSIS 국가통계포털"}${dataset.tableId ? ` · ${escapeHtml(dataset.tableId)}` : ""}${dataset.sourceUpdatedAt ? ` · 원자료 갱신 ${escapeHtml(dataset.sourceUpdatedAt)}` : ""}${dataset.updatedAt ? ` · 확인 ${escapeHtml(compactDateTime(dataset.updatedAt))}` : ""}</p>
+    ${dataset.error ? `<p class="kosis-warning">${escapeHtml(typeof dataset.error === "string" ? dataset.error : dataset.error.message || "공식자료 갱신 상태를 확인하세요.")}</p>` : ""}
+  </section>`;
+}
+
+function renderKosisRegionPanel(region = {}, options = {}) {
+  const regionKey = String(region?.regionKey || "");
+  if (!regionKey || !isAdminRole()) return "";
+  if (options.load !== false) void loadKosisRegion(regionKey);
+  const data = state.kosisRegions?.[regionKey];
+  const loading = Boolean(state.kosisRegionRequests?.[regionKey]);
+  const error = state.kosisRegionErrors?.[regionKey] || "";
+  const configured = state.kosisSettings?.configured === true || data?.configured === true;
+  const label = region.fullName || region.name || regionKey;
+  const datasets = Array.isArray(data?.datasets) ? data.datasets : [];
+  const groups = kosisDatasetGroups(datasets);
+  return `<section class="kosis-region-panel location-block" data-ui-surface="card" data-kosis-region="${escapeHtml(regionKey)}">
+    <div class="location-block-head"><div><h4>공식 인구·산업 통계</h4><p class="kosis-note">${escapeHtml(label)} · 인구는 월별, 산업은 연도별 공표자료</p></div><span class="kosis-state" data-status="${escapeHtml(error ? "error" : data?.status || "not_collected")}">${loading ? state.kosisRegionRequests[regionKey] === "refresh" ? "공식자료 갱신 중" : "저장 자료 확인 중" : error ? "조회 실패" : escapeHtml(kosisStatusLabel(data?.status || "not_collected"))}</span></div>
+    ${error ? `<p class="kosis-warning" role="status">${escapeHtml(error)}${kosisHasObservedData(data) ? " · 이전 저장 자료를 유지합니다." : ""}</p>` : ""}
+    ${!error && data?.error?.message ? `<p class="kosis-warning" role="status">${escapeHtml(data.error.message)}</p>` : ""}
+    ${datasets.length ? `<div class="kosis-dataset-grid">${groups.primary.map(renderKosisDataset).join("")}</div>${groups.additional.length ? `<details class="kosis-detail"><summary>추가 통계 ${fmtNumber(groups.additional.length)}종 보기</summary><div class="kosis-dataset-grid">${groups.additional.map(renderKosisDataset).join("")}</div></details>` : ""}` : `<p class="kosis-note">${loading ? "선택한 지역의 저장 자료를 확인하고 있습니다." : configured ? "저장 자료가 없습니다. 공식자료 갱신으로 최신 공표자료를 연결할 수 있습니다." : "서버에 KOSIS 전용 인증키를 설정한 뒤 공식자료를 연결할 수 있습니다."}</p>`}
+    <div class="kosis-actions"><button class="ghost-button" type="button" data-kosis-action="cache" data-kosis-region-key="${escapeHtml(regionKey)}"${loading ? " disabled" : ""}>저장자료 새로고침</button><button class="secondary-button" type="button" data-kosis-action="refresh" data-kosis-region-key="${escapeHtml(regionKey)}"${loading || !configured ? " disabled" : ""}>${loading && state.kosisRegionRequests[regionKey] === "refresh" ? "공식자료 갱신 중" : "공식자료 갱신"}</button></div>
+    <p class="kosis-note">인구와 종사자는 주민·사업체 통계이며 관광객 수가 아닙니다. 산업 연간값을 월별로 나누지 않으며, 기존 입지 점수를 자동 변경하지 않습니다.</p>
+  </section>`;
+}
+
+function renderKosisAdminCard() {
+  if (!els.kosisAdminCard) return;
+  els.kosisAdminCard.hidden = !isAdminRole();
+  if (!isAdminRole()) { els.kosisAdminCard.innerHTML = ""; return; }
+  const status = adminKosisIntegrationRow();
+  const settings = state.kosisSettings;
+  const selected = kosisSelectedRefreshRegion();
+  const options = kosisRegionOptions();
+  els.kosisAdminCard.innerHTML = `<div class="card-head"><h3>인구·산업 통계</h3><span class="state-badge">${escapeHtml(status.statusLabel)}</span></div>
+    <p class="kosis-note">KOSIS 공식 통계의 기준기간·출처·저장 상태를 함께 확인합니다. 화면을 열면 저장 자료만 읽습니다.</p>
+    <div class="kosis-connection-summary"><div><span>인증 설정</span><strong>${settings?.configured ? "서버에 설정됨" : settings ? "설정 필요" : "확인 중"}</strong></div><div><span>저장 지역</span><strong>${settings ? `${fmtNumber(settings.cachedRegionCount || 0)}곳` : "확인 중"}</strong></div><div><span>최근 정상 확인</span><strong>${escapeHtml(settings?.lastSuccessAt ? compactDateTime(settings.lastSuccessAt) : "확인 이력 없음")}</strong></div></div>
+    <p class="kosis-note">KOSIS 전용 인증키가 필요하며 공공데이터포털 공통키와 별도입니다. 서버 환경변수 KOSIS_API_KEY에 설정합니다. 인증키 값은 화면에 표시하거나 입력받지 않습니다.</p>
+    <div class="kosis-region-picker"><label for="kosisRefreshRegion">조회 지역<select id="kosisRefreshRegion"><option value="">지역 선택</option>${options.map(region => `<option value="${escapeHtml(region.regionKey)}"${selected?.regionKey === region.regionKey ? " selected" : ""}>${escapeHtml(region.fullName || region.name || region.regionKey)}</option>`).join("")}</select></label><button type="button" class="ghost-button" data-kosis-action="status"${state.kosisStatusLoading ? " disabled" : ""}>연결 상태 확인</button></div>
+    <p class="kosis-note" role="status" aria-live="polite">${escapeHtml(status.statusNote)}</p>
+    ${selected ? renderKosisRegionPanel(selected) : `<p class="kosis-note">지역을 선택하면 인구·산업의 저장 자료를 확인합니다.</p>`}`;
+}
+
+function renderKosisViews(regionKey = "") {
+  renderKosisAdminCard();
+  renderAdminIntegrationRegistry();
+  const selected = typeof selectedAnalysisRegion === "function" ? selectedAnalysisRegion() : null;
+  if (!regionKey || selected?.regionKey === regionKey) {
+    if (state.activeTab === "dictionary") renderLocationDictionary();
+    if (state.activeTab === "regionSources") renderRegionSources();
+  }
+}
+
+async function loadKosisStatus() {
+  if (!isAdminRole() || state.kosisStatusLoading) return;
+  state.kosisStatusLoading = true;
+  state.kosisStatusError = "";
+  renderKosisAdminCard();
+  try {
+    state.kosisSettings = await fetchJson("/api/settings/kosis");
+  } catch {
+    state.kosisStatusError = "KOSIS 설정 상태를 확인하지 못했습니다. 다시 확인해 주세요.";
+  } finally {
+    state.kosisStatusLoading = false;
+    renderKosisViews();
+  }
+}
+
+async function loadKosisRegion(regionKey = "", options = {}) {
+  if (!isAdminRole() || !regionKey || state.kosisRegionRequests?.[regionKey]) return;
+  const force = options.force === true || options.refresh === true;
+  if (!force && (state.kosisRegions?.[regionKey] || state.kosisRegionErrors?.[regionKey])) return;
+  if (options.refresh && state.kosisSettings?.configured !== true) return;
+  state.kosisRegionRequests ||= {};
+  state.kosisRegionErrors ||= {};
+  state.kosisRegions ||= {};
+  state.kosisRegionRequests[regionKey] = options.refresh ? "refresh" : "cache";
+  state.kosisRegionErrors[regionKey] = "";
+  if (force) renderKosisViews(regionKey);
+  try {
+    const data = options.refresh
+      ? await fetchJson("/api/settings/kosis/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ regionKey }) })
+      : await fetchJson(`/api/kosis/region?regionKey=${encodeURIComponent(regionKey)}`);
+    if (data?.region?.regionKey !== regionKey || !Array.isArray(data.datasets)) throw new Error("REGION_MISMATCH");
+    if (kosisHasObservedData(state.kosisRegions[regionKey]) && !kosisHasObservedData(data) && ["error", "needs_key", "stale"].includes(data.status)) {
+      state.kosisRegionErrors[regionKey] = "새 자료를 확인하지 못했습니다.";
+    } else {
+      state.kosisRegions[regionKey] = data;
+      if (["error", "stale"].includes(data.status)) state.kosisRegionErrors[regionKey] = "공식자료 갱신에 실패했거나 일부 자료를 확인해야 합니다.";
+    }
+  } catch (error) {
+    state.kosisRegionErrors[regionKey] = error.message === "REGION_MISMATCH" ? "요청 지역과 응답 지역이 달라 자료를 반영하지 않았습니다." : "지역 통계 조회에 실패했습니다. 연결 상태를 확인해 주세요.";
+  } finally {
+    delete state.kosisRegionRequests[regionKey];
+    renderKosisViews(regionKey);
+    if (options.refresh) void loadKosisStatus();
+  }
+}
+
+function handleKosisClick(event) {
+  const button = event.target.closest("[data-kosis-action]");
+  if (!button) return;
+  const action = button.dataset.kosisAction;
+  if (action === "status") { void loadKosisStatus(); return; }
+  if (!["cache", "refresh"].includes(action)) return;
+  const regionKey = button.dataset.kosisRegionKey;
+  if (!kosisRegionOptions().some(region => region.regionKey === regionKey)) return;
+  void loadKosisRegion(regionKey, { force: true, refresh: action === "refresh" });
+}
+
 function tourismForecastRegionKey(region = {}) {
   const area = String(region.areaCd || "");
   const district = String(region.signguCd || "");
@@ -42689,6 +42877,12 @@ function bindEvents() {
   els.yeogiClearButton.addEventListener("click", clearYeogiImport);
   els.trafficKeyForm.addEventListener("submit", submitTrafficKeys);
   els.trafficKeyVerifyButton?.addEventListener("click", verifyTrafficKeys);
+  [els.kosisAdminCard, els.dictionaryResult, els.regionSourcesDashboard].forEach(element => element?.addEventListener("click", handleKosisClick));
+  els.kosisAdminCard?.addEventListener("change", (event) => {
+    if (event.target.id !== "kosisRefreshRegion") return;
+    state.kosisRefreshRegionKey = event.target.value;
+    renderKosisAdminCard();
+  });
   els.tourismForecastAdminCard?.addEventListener("submit", (event) => {
     if (!event.target.matches("[data-tourism-forecast-region-form]")) return;
     event.preventDefault();
@@ -43046,7 +43240,7 @@ async function init() {
     setDefaultDates();
     syncAppHistoryState(false);
     if (isAdminRole()) {
-      await Promise.all([loadRuns(true), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadLocationScoreOverrides(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview(), loadTourismDataStatus({ render: false }), loadSpecialDaysStatus(), loadTourismForecastStatus()]);
+      await Promise.all([loadRuns(true), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadLocationScoreOverrides(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview(), loadTourismDataStatus({ render: false }), loadSpecialDaysStatus(), loadTourismForecastStatus(), loadKosisStatus()]);
       if (!state.companyMaster || !((state.companyMaster.companies || []).length || state.companyMaster.totalCompanies || state.companyMaster.error)) {
         await loadCompanyMasterSummary();
       }

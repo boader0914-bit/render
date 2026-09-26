@@ -17,6 +17,7 @@ This app must keep API key integration stable across releases.
 - `DATA_GO_KR_VISITOR_SERVICE_KEY` (current regional visitor API)
 - `DATA_GO_KR_DEMAND_STRENGTH_SERVICE_KEY` (regional tourism demand-strength API)
 - `DATA_GO_KR_SERVICE_KEY`
+- `KOSIS_API_KEY` (KOSIS dedicated key; no data.go.kr common-key fallback)
 - `NAVER_CLIENT_ID`
 - `NAVER_CLIENT_SECRET`
 - `NAVER_SEARCHAD_API_KEY`
@@ -33,6 +34,13 @@ URL, logs, reports, or Git. The legacy aliases
 compatibility fallbacks; new deployments must use `DATA_GO_KR_SERVICE_KEY`.
 
 ## Release Rule
+
+KOSIS keys are environment-only secrets, using `KOSIS_API_KEY` on the operating
+web service. They are issued by KOSIS and are separate from data.go.kr common
+service keys. The administrator screen displays only whether the variable is
+configured. Never copy the key into a URL in the browser, a settings form,
+local configuration, public responses, logs, or Git. The backend uses the key
+only when requesting the official HTTPS KOSIS endpoint and refuses redirects.
 
 Future V2 releases must keep the same key names and the same `CONFIG_DIR` based storage path.
 Code can change, but key storage must remain outside the deployed source directory.
