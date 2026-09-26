@@ -242,6 +242,43 @@ if (require.main === module) {
     assert.match(text, /채널 간 전환일 수 있어 신규 예약으로 단정하지 않습니다/);
   });
 
+  test("entirely missing context sources are compact while observed zero and mixed rows remain tables", async () => {
+    const report = createPdfFixture();
+    const base = report.snapshot.context.sources[0];
+    report.snapshot.context.sources = [
+      { ...base, label: "전부 미확보 통계", status: "missing", rows: [{ label: "빈 지표 A", value: null }, { label: "빈 지표 B", value: "" }] },
+      { ...base, label: "관측값 0 통계", rows: [{ label: "확인된 영값", value: 0, unit: "명" }, { label: "부분 미확보 행", value: null, unit: "명" }] }
+    ];
+    const text = extractText(await renderMonthlyReportPdf(report));
+    assert.match(text, /전부 미확보 통계 · 해당 기간 자료 미확보/);
+    assert.match(text, /기준 기간 2025 \(연간\) \/ 자료 상태: 미확보 · 참고용/);
+    assert.match(text, /원자료: https:\/\/kosis.kr\//);
+    assert.doesNotMatch(text, /빈 지표 A|빈 지표 B/);
+    assert.match(text, /확인된 영값\n0\n명/);
+    assert.match(text, /부분 미확보 행\n미확보\n명/);
+  });
+
+  test("empty dayuse accumulator zeros do not produce analysis tables but observed zeros and pickup do", async () => {
+    const report = createPdfInsightsFixture();
+    const empty = metric({ supply: 0, sold: 0, publicBookings: 0, phoneBookings: 0, estimatedRevenue: 0, coveredCompanyDays: 0, revenueCoveredCompanyDays: 0 });
+    report.snapshot.summary.dayuse = empty;
+    report.snapshot.daily.forEach(row => { row.dayuse = empty; });
+    report.snapshot.insights.pace.dayuse = [{ leadDays: 7, ...empty }];
+    report.snapshot.insights.weekdays.dayuse = [{ label: "월", ...empty }];
+    report.snapshot.insights.pricing.dayuse = { pricedCompanyDays: 0, pricedSupply: 0, pricedSold: 0, estimatedRevenue: 0 };
+    report.snapshot.insights.pickup.dayuse = { comparableIntervals: 0, public: { increase: 0, decrease: 0, comparableIntervals: 0 }, blocked: { increase: 0, decrease: 0, comparableIntervals: 0 } };
+    const emptyText = extractText(await renderMonthlyReportPdf(report));
+    assert.equal((emptyText.match(/데이유즈 분석자료 없음/g) || []).length, 1);
+    assert.doesNotMatch(emptyText, /대실 예약 증가 관측|대실 요일별 현황|대실 가격 근거 지표|대실 · 숙박과 별도/);
+    report.snapshot.insights.pace.dayuse[0].coveredCompanyDays = 1;
+    const observedZero = extractText(await renderMonthlyReportPdf(report));
+    assert.match(observedZero, /대실 이용일 전 예약 현황/);
+    assert.doesNotMatch(observedZero, /데이유즈 분석자료 없음/);
+    report.snapshot.insights.pace.dayuse[0].coveredCompanyDays = 0;
+    report.snapshot.insights.pickup.dayuse.comparableIntervals = 2;
+    assert.match(extractText(await renderMonthlyReportPdf(report)), /대실 예약 증가 관측/);
+  });
+
   test("scope and per-company price distributions distinguish room capacity, prior-month collections and estimated prices", async () => {
     const report = createPdfInsightsFixture();
     report.snapshot.insights.overview = { companyCount: 6, knownCapacityCompanyCount: 5, totalRooms: 47, capacityComplete: false, collectionDateCount: 9, publicBookingShare: 0.75, blockedBookingShare: 0.25 };

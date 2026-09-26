@@ -31,7 +31,22 @@ function dateText(value, withTime = false) {
 function typeLabel(type) { return ({ company: "업체", keyword: "키워드", region: "지역" })[type] || "대상"; }
 function qualityLabel(value) { return ({ complete: "관측 충족", ready: "관측 충족", partial: "일부 관측", missing: "근거 없음", insufficient: "관측 부족", empty: "근거 없음" })[value] || clean(value) || UNKNOWN; }
 function metricOf(row) { return row && row.lodging && typeof row.lodging === "object" ? row.lodging : {}; }
-function hasEvidence(metric) { return metric && [metric.supply, metric.sold, metric.publicBookings, metric.phoneBookings, metric.estimatedRevenue].some(known); }
+function hasEvidence(metric) {
+  if (!metric) return false;
+  const values = [metric.supply, metric.sold, metric.publicBookings, metric.phoneBookings, metric.estimatedRevenue];
+  // Explicitly empty cohorts may contain accumulator zeros. Keep genuine
+  // observed zeros, but do not present empty accumulators as observed data.
+  return values.some(value => known(value) && value !== 0) || values.some(known) && (!known(metric.coveredCompanyDays) || metric.coveredCompanyDays > 0 || metric.revenueCoveredCompanyDays > 0);
+}
+function hasProductInsightEvidence(snapshot, type) {
+  const insights = snapshot.insights || {};
+  const metrics = [(snapshot.summary || {})[type], ...array(snapshot.daily).map(row => row[type]), ...array((insights.pace || {})[type]), ...array((insights.weekdays || {})[type]), ...array((insights.calendarGroups || {}).rows).map(row => row[type]), ...array((insights.geography || {}).rows).map(row => row[type])];
+  if (metrics.some(metric => hasEvidence(metric) || metric && metric.coveredCompanyDays > 0)) return true;
+  const pickup = (insights.pickup || {})[type] || {};
+  const pricing = (insights.pricing || {})[type] || {};
+  return [pickup.comparableIntervals, pickup.baselineOnlyCompanyDays, pickup.baselinePublicBookings, pickup.baselineBlockedBookings, pricing.pricedCompanyDays, pricing.pricedSupply, pricing.pricedSold, pricing.estimatedRevenue, (pricing.companyDistribution || {}).companyCount,
+    ...[pickup.public || {}, pickup.blocked || {}].flatMap(channel => [channel.comparableIntervals, channel.increase, channel.decrease])].some(value => known(value) && value > 0);
+}
 
 class ReportLayout {
   constructor(doc, report) { this.doc = doc; this.report = report; this.y = PAGE.top; this.sections = []; }
@@ -386,8 +401,10 @@ function drawMonthlyInsights(layout, snapshot) {
       layout.paragraph(`객실 기준 확보 업체 ${amount(overview.knownCapacityCompanyCount)} / ${amount(overview.companyCount)}곳${overview.capacityComplete === false ? " · 일부 업체 객실 기준 미확인" : overview.capacityComplete === true ? "" : " · 객실 기준 완전성 확인 불가"}. DB 보정을 우선하고, 없으면 최대 관측 객실수로 추정합니다. 업체별 객실 기준을 한 번씩 합한 총량이며 누적 실·박이 아닙니다.`, { size: 8, color: COLORS.muted, after: 7 });
       layout.paragraph("수집일 수는 숙박 대상 월 이전의 관측일도 포함합니다. 공개 예약·방막기 비중은 숙박 유효 관측의 예약 수량 구성이며 분모가 0이면 확인 불가입니다.", { size: 8, color: COLORS.muted, after: 13 });
     }
-    const productTypes = ["lodging", ...(hasEvidence((snapshot.summary || {}).dayuse) ? ["dayuse"] : [])];
+    const hasDayuse = hasProductInsightEvidence(snapshot, "dayuse");
+    const productTypes = ["lodging", ...(hasDayuse ? ["dayuse"] : [])];
     productTypes.forEach(type => drawProductInsights(layout, insights, type));
+    if (!hasDayuse) layout.paragraph("데이유즈 분석자료 없음 · 유효 관측·예약 변화·가격 근거가 없습니다.", { size: 8, color: COLORS.muted, after: 12 });
     drawCalendarGroups(layout, insights.calendarGroups, productTypes);
     const geography = array((insights.geography || {}).rows);
     if (geography.length) {
@@ -585,19 +602,26 @@ function drawContext(layout, context) {
   layout.paragraph("통계의 기준 기간은 보고 대상 월과 다를 수 있습니다. 연간 자료와 다른 기간 자료는 참고용이며 숙박 매출 산식에 합산하지 않습니다.", { size: 8.5, color: COLORS.muted });
   array((context || {}).warnings).forEach(warning => layout.paragraph(clean(warning), { size: 8, color: COLORS.muted, section: "부록 B · 외부 통계 · 계속" }));
   sources.forEach(source => {
-    layout.ensure(122, "부록 B · 외부 통계 · 계속");
-    layout.smallHeading(clean(source.label) || clean(source.key) || "외부 통계");
     const status = ({ ready: "확보", cached: "저장 자료", missing: "미확보", not_collected: "미확보", unavailable: "미확보", partial: "일부 확보", needs_key: "미확보", needs_refresh: "갱신 필요" })[source.status] || clean(source.status) || "미확보";
     const period = typeof source.period === "string" || typeof source.period === "number" ? clean(source.period).trim() || "미확보" : "미확보";
     const yearly = ["Y", "A", "yearly", "annual"].includes(source.periodType);
-    layout.paragraph(`${clean(source.provider) || "제공처 미확보"} / ${clean(source.regionLabel) || "지역 미확보"} / 기준 기간 ${period}${yearly ? " (연간)" : ""}\n자료 상태: ${status}${source.referenceOnly || yearly ? " · 참고용" : ""}\n저장 시점: ${dateText(source.retrievedAt, true)}${source.sourceUpdatedAt ? ` / 원자료 갱신: ${dateText(source.sourceUpdatedAt)}` : ""}`, { size: 8.5, after: 4, section: "부록 B · 외부 통계 · 계속" });
     const url = sourceUrl(source.sourceUrl);
+    const rows = array(source.rows);
+    if (!rows.some(row => known(row.value) || typeof row.value === "string" && row.value.trim())) {
+      const missing = `${clean(source.label) || clean(source.key) || "외부 통계"} · 해당 기간 자료 미확보\n${clean(source.provider) || "제공처 미확보"} / ${clean(source.regionLabel) || "지역 미확보"} / 기준 기간 ${period}${yearly ? " (연간)" : ""} / 자료 상태: ${status}${source.referenceOnly || yearly ? " · 참고용" : ""}${source.retrievedAt ? `\n저장 시점: ${dateText(source.retrievedAt, true)}` : ""}${source.sourceUpdatedAt ? ` / 원자료 갱신: ${dateText(source.sourceUpdatedAt)}` : ""}${url ? `\n원자료: ${url}` : ""}`;
+      layout.ensure(layout.height(missing, WIDTH, 8.5) + 13, "부록 B · 외부 통계 · 계속");
+      layout.paragraph(missing, { size: 8.5, color: COLORS.muted, after: 13, section: "부록 B · 외부 통계 · 계속" });
+      return;
+    }
+    layout.ensure(122, "부록 B · 외부 통계 · 계속");
+    layout.smallHeading(clean(source.label) || clean(source.key) || "외부 통계");
+    layout.paragraph(`${clean(source.provider) || "제공처 미확보"} / ${clean(source.regionLabel) || "지역 미확보"} / 기준 기간 ${period}${yearly ? " (연간)" : ""}\n자료 상태: ${status}${source.referenceOnly || yearly ? " · 참고용" : ""}\n저장 시점: ${dateText(source.retrievedAt, true)}${source.sourceUpdatedAt ? ` / 원자료 갱신: ${dateText(source.sourceUpdatedAt)}` : ""}`, { size: 8.5, after: 4, section: "부록 B · 외부 통계 · 계속" });
     if (url) layout.paragraph(`원자료: ${url}`, { size: 7.5, color: COLORS.muted, after: 5, section: "부록 B · 외부 통계 · 계속" });
     layout.table([
       { label: "참고 지표", width: 0.52, value: row => clean(row.label) || clean(row.key) || "지표명 미확보" },
       { label: "값", width: 0.25, align: "right", value: row => known(row.value) ? amount(row.value) : typeof row.value === "string" && row.value.trim() ? clean(row.value) : "미확보" },
       { label: "단위", width: 0.23, value: row => clean(row.unit) || "미확보" }
-    ], array(source.rows), { section: "부록 B · 외부 통계 · 계속", empty: "확보된 지표가 없습니다.", size: 8.5 });
+    ], rows, { section: "부록 B · 외부 통계 · 계속", empty: "확보된 지표가 없습니다.", size: 8.5 });
   });
 }
 
