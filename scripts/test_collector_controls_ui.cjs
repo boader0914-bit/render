@@ -111,7 +111,7 @@ test("uncertain immediate acknowledgement stops following keywords without autom
 
 test("all worker reservations save without activating, then register only selected worker", async () => {
   for (const key of keys) {
-    const ui = await mockUi(); await ui.set(key, "keywords", "가평글램핑"); await ui.set(key, "execution", "schedule"); await ui.set(key, "firstDate", "2026-09-25");
+    const ui = await mockUi(); await ui.set(key, "keywords", "가평글램핑"); await ui.set(key, "execution", "schedule"); await ui.set(key, "firstDate", defaultDraft().firstDate);
     await ui.button(key, "예약 조건 저장").event("click"); await until(() => text(ui.card(key)).includes("예약 조건을 저장했습니다")); assert.equal(ui.saved[key].enabled, false); assert.equal(ui.calls.filter(call => call.method === "POST").length, 0);
     await ui.form(key).event("submit"); await until(() => ui.saved[key].enabled); const enabled = ui.calls.filter(call => call.url.startsWith("/api/worker-schedule/enabled")); assert.equal(enabled.length, 1); assert.equal(enabled[0].url, `/api/worker-schedule/enabled?workerKey=${key}`); assert.deepEqual(enabled[0].payload, { enabled: true });
     for (const other of keys.filter(other => other !== key)) assert.equal(ui.saved[other].enabled, false);

@@ -16,6 +16,10 @@ const state = {
   runs: [],
   data: null,
   activeRunId: null,
+  collectionArchiveFilters: { keyword: "", startDate: "", endDate: "", worker: "all", quality: "all", dateMode: "all" },
+  collectionArchiveDraft: null,
+  collectionArchivePage: 1,
+  collectionArchiveError: "",
   placeRankReplayRunId: null,
   industryHomeFilters: { category: "", keyword: "", period: "" },
   industryHomeVisibleCount: 12,
@@ -1862,12 +1866,139 @@ function placeRankComparisonSummaryHtml(comparison = {}, options = {}) {
   `;
 }
 
+function collectionArchiveDate(value = "") {
+  const date = String(value || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return "";
+  const time = Date.parse(`${date}T00:00:00Z`);
+  return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === date ? date : "";
+}
+
+function collectionArchiveDay(value) {
+  const time = Date.parse(String(value || ""));
+  return Number.isFinite(time) ? new Date(time + 9 * 3600000).toISOString().slice(0, 10) : "";
+}
+
+function collectionArchiveWorker(run = {}) {
+  const key = ["web", "manual", "scheduled"].includes(run.workerKey) ? run.workerKey : "unknown";
+  return { key, label: { web: "2Gweb_worker", manual: "BG worker", scheduled: "AWS worker", unknown: "수집기 미확인" }[key] };
+}
+
+function collectionArchiveQuality(run = {}) {
+  const labels = { complete: "완료", reused: "기존 자료", partial: "일부 완료", blocked: "접근 제한", failed: "실패", interrupted: "중단", unknown: "상태 미확인" };
+  const raw = run.collectionQuality?.status;
+  const key = Object.hasOwn(labels, raw) ? raw : "unknown";
+  return { key, label: labels[key] };
+}
+
+function collectionArchiveModel(runs = [], filters = {}, requestedPage = 1) {
+  const compact = value => String(value || "").normalize("NFKC").replace(/\s+/g, "").toLocaleLowerCase("ko-KR");
+  const keyword = compact(filters.keyword);
+  const base = runs.filter(run => run?.id).filter(run => {
+    const keywordMatches = !keyword || [run.keyword, run.searchKeyword, run.naverKeyword, run.label].some(value => compact(value).includes(keyword));
+    return keywordMatches && (!filters.worker || filters.worker === "all" || collectionArchiveWorker(run).key === filters.worker)
+      && (!filters.quality || filters.quality === "all" || collectionArchiveQuality(run).key === filters.quality);
+  });
+  const knownDate = run => run.collectedAtSource !== "filesystem" && Boolean(collectionArchiveDay(run.collectedAt));
+  const unknownDateCount = base.filter(run => !knownDate(run)).length;
+  const filtered = base.filter(run => {
+    if (filters.dateMode === "unknown") return !knownDate(run);
+    if (!filters.startDate && !filters.endDate) return true;
+    if (!knownDate(run)) return false;
+    const day = collectionArchiveDay(run.collectedAt);
+    return (!filters.startDate || day >= filters.startDate) && (!filters.endDate || day <= filters.endDate);
+  }).sort((a, b) => Number(knownDate(b)) - Number(knownDate(a))
+    || (Date.parse(b.collectedAt || "") || 0) - (Date.parse(a.collectedAt || "") || 0)
+    || String(b.id).localeCompare(String(a.id)));
+  const pageSize = 20;
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const page = Math.min(pageCount, Math.max(1, Math.floor(Number(requestedPage) || 1)));
+  return { total: runs.length, count: filtered.length, unknownDateCount, page, pageCount, pageSize,
+    start: filtered.length ? (page - 1) * pageSize + 1 : 0, end: Math.min(page * pageSize, filtered.length),
+    rows: filtered.slice((page - 1) * pageSize, page * pageSize) };
+}
+
+function collectionArchiveReadForm() {
+  const form = els.collectionArchive?.querySelector("[data-archive-search-form]");
+  const previous = state.collectionArchiveDraft || state.collectionArchiveFilters || {};
+  if (!form) return { ...previous };
+  const field = name => form.elements.namedItem(name)?.value || "";
+  return { keyword: field("keyword"), startDate: field("startDate"), endDate: field("endDate"),
+    worker: field("worker") || "all", quality: field("quality") || "all", dateMode: previous.dateMode || "all" };
+}
+
+function applyCollectionArchiveFilters(filters = {}) {
+  const draft = { keyword: "", startDate: "", endDate: "", worker: "all", quality: "all", dateMode: "all", ...filters };
+  state.collectionArchiveDraft = draft;
+  const invalidDate = [draft.startDate, draft.endDate].some(value => value && !collectionArchiveDate(value));
+  const reversed = draft.startDate && draft.endDate && draft.startDate > draft.endDate;
+  state.collectionArchiveError = invalidDate ? "수집일을 올바른 날짜로 입력하세요." : reversed ? "시작일은 종료일보다 늦을 수 없습니다." : "";
+  if (!state.collectionArchiveError) {
+    state.collectionArchiveFilters = { ...draft };
+    state.collectionArchivePage = 1;
+  }
+  renderCollectionArchive();
+}
+
+function collectionArchiveDatePreset(preset, now = new Date()) {
+  const today = collectionArchiveDay(now.toISOString());
+  if (preset === "today") return { startDate: today, endDate: today, dateMode: "range" };
+  if (preset === "week") return { startDate: new Date(Date.parse(`${today}T00:00:00Z`) - 6 * 86400000).toISOString().slice(0, 10), endDate: today, dateMode: "range" };
+  if (preset === "month") return { startDate: `${today.slice(0, 7)}-01`, endDate: today, dateMode: "range" };
+  return { startDate: "", endDate: "", dateMode: preset === "unknown" ? "unknown" : "all" };
+}
+
+function refreshCollectionArchive() {
+  // Refresh the catalogue only; do not open a result or change the active analysis.
+  return fetchJson("/api/runs").then(data => {
+    state.collectionArchiveDraft = collectionArchiveReadForm();
+    state.runs = data.runs || [];
+    if (els.runSelect) els.runSelect.innerHTML = state.runs.map(run => `<option value="${escapeHtml(run.id)}">${escapeHtml(run.label || run.id)}</option>`).join("");
+    if (els.runSelect) els.runSelect.value = state.activeRunId || "";
+    renderCollectionArchive();
+  });
+}
+
+function bindCollectionArchiveEvents() {
+  els.collectionArchive?.addEventListener("input", event => {
+    if (!event.target.closest("[data-archive-search-form]")) return;
+    state.collectionArchiveDraft = collectionArchiveReadForm();
+    if (["startDate", "endDate"].includes(event.target.name)) state.collectionArchiveDraft.dateMode = "range";
+  });
+  els.collectionArchive?.addEventListener("change", event => {
+    if (!event.target.closest("[data-archive-search-form]")) return;
+    state.collectionArchiveDraft = collectionArchiveReadForm();
+    if (["startDate", "endDate"].includes(event.target.name)) state.collectionArchiveDraft.dateMode = "range";
+  });
+  els.collectionArchive?.addEventListener("submit", event => {
+    if (!event.target.matches("[data-archive-search-form]")) return;
+    event.preventDefault();
+    applyCollectionArchiveFilters(collectionArchiveReadForm());
+  });
+  els.collectionArchive?.addEventListener("click", event => {
+    const preset = event.target.closest("[data-archive-date-preset]");
+    const reset = event.target.closest("[data-archive-reset]");
+    const page = event.target.closest("[data-archive-page]");
+    if (preset) applyCollectionArchiveFilters({ ...collectionArchiveReadForm(), ...collectionArchiveDatePreset(preset.dataset.archiveDatePreset) });
+    else if (reset) applyCollectionArchiveFilters({});
+    else if (page && !page.disabled) {
+      state.collectionArchiveDraft = collectionArchiveReadForm();
+      state.collectionArchivePage = Number(page.dataset.archivePage);
+      renderCollectionArchive();
+      window.requestAnimationFrame(() => els.collectionArchive?.querySelector(".collection-archive-list-head")?.scrollIntoView({ block: "start" }));
+    }
+  });
+}
+
 function renderCollectionArchive() {
   if (!isAdminRole() || !els.collectionArchive) return;
   const runs = state.runs || [];
   const activeRunId = state.activeRunId || "";
   const activeRun = runs.find((run) => run.id === activeRunId) || state.data?.run || null;
   const comparison = state.data?.run?.id === activeRunId ? state.data.rankComparison : null;
+  const filters = state.collectionArchiveFilters || {};
+  const draft = state.collectionArchiveDraft || filters;
+  const model = collectionArchiveModel(runs, filters, state.collectionArchivePage);
+  state.collectionArchivePage = model.page;
   if (!runs.length) {
     els.collectionArchive.innerHTML = `
       <section class="collection-archive-empty">
@@ -1884,28 +2015,55 @@ function renderCollectionArchive() {
       <div>
         <span>COLLECTION ARCHIVE</span>
         <h3>수집 결과 보관함</h3>
-        <p>과거 수집 결과를 다시 열고, 동일 조건의 직전 수집과 플레이스 순위 변동을 확인합니다.</p>
+        <p>수집일과 키워드로 저장된 결과를 찾고, 당시 자료를 다시 확인합니다.</p>
       </div>
       <button class="small-button" type="button" data-collection-archive-refresh>목록 새로고침</button>
     </section>
     <section class="collection-archive-summary">
-      <article><span>저장 결과</span><strong>${fmtNumber(runs.length)}건</strong><small>최근 수집순</small></article>
-      <article><span>현재 결과</span><strong>${escapeHtml(activeRun?.keyword || activeRun?.label || "선택 대기")}</strong><small>${escapeHtml(activeRun?.updatedAt ? compactDateTime(activeRun.updatedAt) : "결과를 선택하세요")}</small></article>
+      <article><span>저장 결과</span><strong>${fmtNumber(runs.length)}건</strong><small>전체 저장 목록에서 검색</small></article>
+      <article><span>현재 결과</span><strong>${escapeHtml(activeRun?.keyword || activeRun?.label || "선택 대기")}</strong><small>${escapeHtml(activeRun ? analysisRunCollectedLabel(activeRun) : "결과를 선택하세요")}</small></article>
       <article><span>비교 범위</span><strong>${escapeHtml(activeRun?.detailRankRanges ? `${activeRun.detailRankRanges}위` : "확인 필요")}</strong><small>동일 키워드·순위 범위끼리 비교</small></article>
     </section>
-    ${activeRun ? `<div class="collection-archive-actions"><button class="primary-button" type="button" data-open-place-rank-replay="" data-place-rank-run-id="${escapeHtml(activeRun.id || "")}">플레이스 순서 다시 보기</button><small>재수집 없이 열람 중인 회차의 저장된 네이버 노출순을 표시합니다.</small></div>` : ""}
-    ${placeRankComparisonSummaryHtml(comparison)}
+    <form class="collection-archive-filters" data-archive-search-form aria-label="보관함 검색" novalidate>
+      <div class="collection-archive-filter-grid">
+        <label class="field"><span>키워드</span><input type="search" name="keyword" value="${escapeHtml(draft.keyword || "")}" placeholder="예: 경남, 글램핑" maxlength="120"></label>
+        <label class="field"><span>수집 시작일</span><input type="date" name="startDate" value="${escapeHtml(draft.startDate || "")}"></label>
+        <label class="field"><span>수집 종료일</span><input type="date" name="endDate" value="${escapeHtml(draft.endDate || "")}"></label>
+        <label class="field"><span>수집기</span><select name="worker">${[["all", "전체 수집기"], ["web", "2Gweb_worker"], ["manual", "BG worker"], ["scheduled", "AWS worker"], ["unknown", "수집기 미확인"]].map(([value, label]) => `<option value="${value}"${(draft.worker || "all") === value ? " selected" : ""}>${label}</option>`).join("")}</select></label>
+        <label class="field"><span>상태</span><select name="quality">${[["all", "전체 상태"], ["complete", "완료"], ["reused", "기존 자료"], ["partial", "일부 완료"], ["blocked", "접근 제한"], ["failed", "실패"], ["interrupted", "중단"], ["unknown", "상태 미확인"]].map(([value, label]) => `<option value="${value}"${(draft.quality || "all") === value ? " selected" : ""}>${label}</option>`).join("")}</select></label>
+      </div>
+      <div class="collection-archive-filter-actions"><div role="group" aria-label="수집일 빠른 선택">${[["today", "오늘"], ["week", "최근 7일"], ["month", "이번 달"], ["all", "전체 기간"]].map(([key, label]) => {
+        const preset = collectionArchiveDatePreset(key);
+        const selected = !state.collectionArchiveError && filters.dateMode !== "unknown" && (filters.startDate || "") === preset.startDate && (filters.endDate || "") === preset.endDate;
+        return `<button class="small-button${selected ? " is-active" : ""}" type="button" data-archive-date-preset="${key}" aria-pressed="${selected}">${label}</button>`;
+      }).join("")}</div><div><button class="primary-button" type="submit">검색</button><button class="small-button" type="button" data-archive-reset>초기화</button></div></div>
+      <p class="hint">수집일은 한국시간 기준입니다. 조회한 숙박기간은 결과마다 별도로 표시합니다.</p>
+    </form>
+    <div class="collection-archive-filter-feedback" aria-live="polite">
+      ${state.collectionArchiveError ? `<p role="alert">${escapeHtml(state.collectionArchiveError)} 이전 검색 결과를 유지합니다.</p>` : ""}
+      <strong>검색 결과 ${fmtNumber(model.count)}건 <small>/ 전체 ${fmtNumber(model.total)}건</small></strong>
+      <span>최신 수집순 · 수집일 미확인 자료는 뒤에 표시</span>
+      ${model.unknownDateCount ? `<p>${filters.dateMode === "unknown" ? "수집일 미확인 자료를 보고 있습니다." : `수집일 미확인 ${fmtNumber(model.unknownDateCount)}건${filters.startDate || filters.endDate ? "은 날짜 검색에서 제외했습니다." : "은 저장 시점을 참고로 표시합니다."}`} <button class="small-button" type="button" data-archive-date-preset="${filters.dateMode === "unknown" ? "all" : "unknown"}">${filters.dateMode === "unknown" ? "전체 기간 보기" : "수집일 미확인 보기"}</button></p>` : ""}
+      <small>결과 파일이 저장된 수집만 표시합니다. 저장되지 않은 실패·대기 작업은 수집 기록에서 확인하세요.</small>
+    </div>
     <section class="collection-archive-list" aria-label="저장된 수집 결과 목록">
-      <div class="collection-archive-list-head"><strong>저장된 결과</strong><small>열기를 누르면 수집 당시 결과를 다시 표시합니다.</small></div>
-      ${runs.slice(0, 40).map((run) => {
+      <div class="collection-archive-list-head"><strong>저장된 결과</strong><small>${fmtNumber(model.start)}–${fmtNumber(model.end)} / ${fmtNumber(model.count)}건 · 열기는 저장 자료 조회입니다.</small></div>
+      ${model.rows.length ? `<div class="collection-archive-table-head" aria-hidden="true"><span>수집일시 · 한국시간</span><span>키워드</span><span>조회한 숙박기간</span><span>수집기</span><span>상태</span><span>결과</span></div>` : `<div class="collection-archive-empty"><h4>검색 조건에 맞는 결과가 없습니다.</h4><p>키워드나 기간을 바꾸거나 검색 조건을 초기화하세요.</p><button type="button" class="small-button" data-archive-reset>전체 결과 보기</button></div>`}
+      ${model.rows.map((run) => {
         const active = run.id === activeRunId;
         const range = run.detailRankRanges ? `${run.detailRankRanges}위` : "순위 범위 확인";
         const count = Number(run.counts?.overall || run.counts?.place || run.counts?.companies || 0);
+        const worker = collectionArchiveWorker(run);
+        const quality = collectionArchiveQuality(run);
+        const unknownDate = run.collectedAtSource === "filesystem" || !collectionArchiveDay(run.collectedAt);
         return `
-          <article class="${active ? "active" : ""}">
-            <div><strong>${escapeHtml(run.keyword || run.label || run.id)}</strong><small>${escapeHtml([compactDateTime(run.updatedAt || ""), range, run.collectionPurposeLabel || "수집 결과"].filter(Boolean).join(" · "))}</small></div>
-            <span>${count ? `${fmtNumber(count)}개` : "결과"}</span>
-            <div class="collection-archive-row-actions">
+          <article class="collection-archive-row${active ? " active" : ""}" aria-label="${escapeHtml(run.keyword || run.label || run.id)} 수집 결과">
+            <div class="archive-collected" data-label="수집일시"><strong>${unknownDate ? "수집일 미확인" : escapeHtml(analysisRunCollectedLabel(run))}</strong>${unknownDate && collectionArchiveDay(run.collectedAt) ? `<small>${escapeHtml(analysisRunCollectedLabel({ ...run, collectedAtSource: "recorded" }))} 저장</small>` : ""}</div>
+            <div class="archive-keyword" data-label="키워드"><strong>${escapeHtml(run.keyword || run.label || run.id)}</strong><small>${escapeHtml([range, run.collectionPurposeLabel || "수집 결과", count ? `${fmtNumber(count)}개 업체` : ""].filter(Boolean).join(" · "))}</small></div>
+            <div class="archive-stay" data-label="조회한 숙박기간"><strong>${escapeHtml(analysisRunPeriodLabel(run))}</strong></div>
+            <div class="archive-worker" data-label="수집기">${escapeHtml(worker.label)}</div>
+            <div data-label="상태"><span class="archive-quality is-${quality.key}">${quality.label}</span></div>
+            <div class="collection-archive-row-actions" data-label="결과">
               <button type="button" data-archive-run-id="${escapeHtml(run.id)}">${active ? "열람 중" : "열기"}</button>
               <button type="button" data-open-place-rank-replay="" data-place-rank-run-id="${escapeHtml(run.id)}">순서 보기</button>
             </div>
@@ -1913,6 +2071,8 @@ function renderCollectionArchive() {
         `;
       }).join("")}
     </section>
+    ${model.count ? `<nav class="collection-archive-pagination" aria-label="보관함 페이지"><span>${fmtNumber(model.page)} / ${fmtNumber(model.pageCount)}페이지 · 20건씩</span><div><button class="small-button" type="button" data-archive-page="1" ${model.page === 1 ? "disabled" : ""}>처음</button><button class="small-button" type="button" data-archive-page="${model.page - 1}" ${model.page === 1 ? "disabled" : ""}>이전</button><button class="small-button" type="button" data-archive-page="${model.page + 1}" ${model.page === model.pageCount ? "disabled" : ""}>다음</button><button class="small-button" type="button" data-archive-page="${model.pageCount}" ${model.page === model.pageCount ? "disabled" : ""}>마지막</button></div></nav>` : ""}
+    ${activeRun ? `<details class="collection-archive-comparison"><summary>열람 중인 결과 · 플레이스 순위 비교</summary><div class="collection-archive-actions"><button class="primary-button" type="button" data-open-place-rank-replay="" data-place-rank-run-id="${escapeHtml(activeRun.id || "")}">플레이스 순서 다시 보기</button><small>열람 중인 회차의 저장된 네이버 노출순을 표시합니다.</small></div>${placeRankComparisonSummaryHtml(comparison)}</details>` : ""}
   `;
 }
 
@@ -41489,7 +41649,7 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-collection-archive-refresh]")) {
-      loadRuns(false).catch((error) => {
+      refreshCollectionArchive().catch((error) => {
         if (els.collectionArchive) els.collectionArchive.insertAdjacentHTML("afterbegin", `<div class="empty">${escapeHtml(error.message)}</div>`);
         setStatus("보관함 새로고침 실패");
       });
@@ -42499,6 +42659,7 @@ function bindEvents() {
       return;
     }
   });
+  bindCollectionArchiveEvents();
   els.runSelect?.addEventListener("change", (event) => loadRun(event.target.value).catch((error) => {
     setStatus("오류");
     els.companyList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
