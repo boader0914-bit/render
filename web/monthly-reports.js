@@ -186,6 +186,8 @@
   }
   function createController(container, api = request) {
     const state = { options: null, reports: [], filter: "all", form: { month: "", type: "company", targetId: "", cutoffDate: "" }, search: "", preview: null, previewRequest: null, previewToken: null, report: null, title: "", notes: "", acknowledged: false, busy: "", message: "", error: "" };
+    let openRevision = 0;
+    const idleWaiters = [];
     const optionsForType = () => state.options?.[{ company: "companies", keyword: "keywords", region: "regions" }[state.form.type]] || [];
     const setReport = (report) => { state.report = report; state.preview = null; state.previewRequest = null; state.previewToken = null; state.title = report.title || ""; state.notes = report.notes || ""; state.acknowledged = false; };
     const invalidatePreview = () => { state.preview = null; state.previewRequest = null; state.previewToken = null; };
@@ -212,9 +214,14 @@
       if (state.busy) return false;
       state.busy = label; state.error = ""; state.message = ""; render();
       try { await operation(); return true; } catch (error) { state.error = String(error.message || "리포트를 처리하지 못했습니다."); return false; }
-      finally { state.busy = ""; render(); }
+      finally { state.busy = ""; render(); for (const resolve of idleWaiters.splice(0)) resolve(); }
     }
     async function open(context = {}) {
+      const revision = ++openRevision;
+      // A previous preview/save can finish while the user is in the region DB.
+      // Apply the latest destination after it finishes; never drop that handoff.
+      while (state.busy) await new Promise(resolve => idleWaiters.push(resolve));
+      if (revision !== openRevision) return false;
       await execute("저장된 리포트와 선택 항목을 불러오는 중입니다.", async () => {
         if (!state.options) {
           const data = await api("/options"); state.options = data;
@@ -223,8 +230,31 @@
         if (context.type && Object.hasOwn(TYPES, context.type)) {
           state.form.type = context.type; state.form.targetId = context.targetId || ""; state.search = ""; invalidatePreview();
           state.report = null; state.title = ""; state.notes = "";
+          if (Object.hasOwn(context, "month")) {
+            state.form.month = ""; state.form.cutoffDate = "";
+            if (typeof context.month !== "string" || !/^(20\d{2})-(0[1-9]|1[0-2])$/.test(context.month) || context.month > today().slice(0, 7)) {
+              throw new Error("전달된 대상 월을 확인해 주세요.");
+            }
+            state.form.month = context.month;
+            state.form.cutoffDate = defaultCutoff(context.month);
+          }
+          if (Object.hasOwn(context, "cutoffDate")) {
+            state.form.cutoffDate = "";
+            const date = context.cutoffDate;
+            const parsed = typeof date === "string" && /^20\d{2}-\d{2}-\d{2}$/.test(date) ? new Date(`${date}T00:00:00Z`) : null;
+            if (!parsed || !Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date || date > today()) {
+              throw new Error("전달된 관측 마감일을 확인해 주세요.");
+            }
+            state.form.cutoffDate = date;
+          }
+          if (context.type === "region" && context.targetId && !optionsForType().some(item => item.id === context.targetId)) {
+            state.form.targetId = "";
+            throw new Error("전달된 지역을 리포트 목록에서 찾지 못했습니다. 지역 DB에서 다시 선택해 주세요.");
+          }
         }
-        await loadList(); state.message = "조건을 선택해 미리보기를 만들 수 있습니다.";
+        await loadList(); state.message = context.type === "region" && context.month
+          ? "지역 DB에서 선택한 지역·대상 월·관측 마감일을 가져왔습니다. 저장 자료로 미리보기를 만들 수 있습니다."
+          : "조건을 선택해 미리보기를 만들 수 있습니다.";
       });
     }
     async function action(name, value) {

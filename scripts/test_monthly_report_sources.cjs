@@ -239,3 +239,17 @@ test("holiday classification reads both cache years at year boundary and refuses
   const violating = createMonthlyReportSources({ ...input, readSpecialDays: async () => ({ networkAttempted: true }) });
   await assert.rejects(violating.loadSources({ type: "company", targetId: "a", month: "2026-12" }), /CACHE_ONLY/);
 });
+
+
+test("regional trend report context reads exact saved window and distinguishes zero and missing", async () => {
+  let calls=0;
+  const read=createMonthlyReportContext({kosisService:{getRegion:async()=>({datasets:[]})},tourismCollector:{},
+    searchTrendService:{get:async input=>{calls++;assert.deepEqual(input,{regionKey:'sancheong',month:'2026-09'});return {
+      status:'partial',keyword:'산청글램핑',startDate:'2025-10-01',endDate:'2026-09-26',partialMonth:true,networkAttempted:false,
+      series:[{period:'2026-08-01',value:0,status:'observed'},{period:'2026-09-01',value:null,status:'missing'}]};},
+      refresh:async()=>{throw Error('must not refresh');}}});
+  const context=await read({type:'region',targetId:'sancheong',month:'2026-09'}, {regions:[{id:'sancheong',level:'local',label:'산청군'}]});
+  assert.equal(calls,1);const source=context.sources.find(row=>row.key==='naver_search_trend');
+  assert.equal(source.rows[0].value,0); assert.equal(source.rows[1].value,null); assert.equal(source.rows[0].unit,'상대지수');
+  assert.equal(source.partialMonth,true);assert.match(source.label,/산청글램핑/);assert.ok(context.warnings.some(row=>row.includes('합산하지')));
+});

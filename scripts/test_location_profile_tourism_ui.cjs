@@ -712,6 +712,66 @@ check(
   "external latest-value captions must use readable text and accent theme tokens"
 );
 
+// A regional baseline is identified by all three region keys, independent of
+// whichever collection result is currently open elsewhere in the app.
+const trendRuntimeSource = ["locationProfileKeywordKey", "locationProfileFirstObject", "locationProfileCandidateKeyword", "locationProfileIsExactKeyword", "locationProfileObservedAt", "trendPeriodInfo", "locationProfileTrendEvidence", "renderLocationProfileTrendPanel"]
+  .map((name) => {
+    const source = app.match(new RegExp(`^function ${name}\\([^]*?^}`, "m"))?.[0];
+    if (!source) throw new Error(`trend test function missing: ${name}`);
+    return source;
+  }).join("\n");
+const trendSandbox = {
+  optionalNumber: (value) => value === null || value === undefined || value === "" ? NaN : Number(value),
+  locationProfileRunMatchesRegion: (card) => card.allowRun === true,
+  demandTrendSource: () => trendSandbox.fallback,
+  locationProfileCurrentRunObservedAt: () => "2099-01-01T00:00:00Z",
+  locationProfilePeriodLabel: () => "기존 조회기간",
+  locationProfileStatusBadge: (observed, yes, no) => observed ? yes : no,
+  compactDateTime: (value) => value,
+  escapeHtml: chartSandbox.escapeHtml,
+  renderLocationProfileLineChart: () => "trend-chart"
+};
+vm.runInNewContext(`${trendRuntimeSource}\nthis.evidence = locationProfileTrendEvidence; this.renderTrend = renderLocationProfileTrendPanel;`, trendSandbox);
+const baselineTrend = {
+  regionKey: "kto_36_10", regionalBaseline: true, keyword: "산청글램핑", status: "partial", partialMonth: true,
+  startDate: "2025-10-01", endDate: "2026-09-26", retrievedAt: "2026-09-27T00:00:00Z",
+  collectedAt: "2098-01-01T00:00:00Z",
+  series: [{ period: "2026-07-01", ratio: 0, status: "observed" }, { period: "2026-08-01", ratio: 0, status: "missing" }, { period: "2026-09-01", ratio: 100, status: "observed" }]
+};
+const baselineProfile = { region: { regionKey: "kto_36_10" }, datalabTrend: baselineTrend, collectedAt: "2097-01-01T00:00:00Z" };
+const baselineCard = { regionKey: "kto_36_10", searchKeyword: "", allowRun: true };
+trendSandbox.fallback = { keyword: "포천펜션", series: [{ period: "2026-09", ratio: 90 }] };
+const baselineEvidence = trendSandbox.evidence(baselineProfile, baselineCard);
+check(baselineEvidence.origin === "profile" && baselineEvidence.regionalBaseline === true && baselineEvidence.observed, "a matching region baseline must work without a card search keyword");
+check(baselineEvidence.keyword === "산청글램핑", "the regional trend must retain the server criterion rather than the current run keyword");
+check(baselineEvidence.series[0].hasValue && baselineEvidence.series[0].value === 0, "a normal zero response is a real search observation");
+check(!baselineEvidence.series[1].hasValue && baselineEvidence.series[1].value === null, "a missing search response must not become a zero observation");
+check(baselineEvidence.collectedAt === baselineTrend.retrievedAt, "regional search evidence must use its own retrieval time");
+const unobservedTimestamp = trendSandbox.evidence({ ...baselineProfile, datalabTrend: { ...baselineTrend, retrievedAt: "" } }, baselineCard);
+check(unobservedTimestamp.collectedAt === "", "a regional cache must not borrow the current run or profile retrieval time");
+const mismatchedProfile = trendSandbox.evidence({ ...baselineProfile, region: { regionKey: "different" } }, { ...baselineCard, searchKeyword: "산청글램핑", allowRun: false });
+check(!mismatchedProfile.exact && !mismatchedProfile.observed, "an equal keyword must not bypass mismatched baseline and profile region keys");
+const mismatchedCard = trendSandbox.evidence(baselineProfile, { ...baselineCard, regionKey: "different", searchKeyword: "산청글램핑", allowRun: false });
+check(!mismatchedCard.exact && !mismatchedCard.observed, "the card region key must also exactly match a regional baseline");
+const noProfileIdentity = trendSandbox.evidence({ datalabTrend: baselineTrend }, { ...baselineCard, allowRun: false });
+check(!noProfileIdentity.exact, "a baseline without profile region identity cannot be selected");
+const noBaselineKeyword = trendSandbox.evidence({ ...baselineProfile, datalabTrend: { ...baselineTrend, keyword: "" } }, baselineCard);
+check(!noBaselineKeyword.exact, "an unnamed regional baseline cannot borrow an unrelated run keyword");
+const outsideRatio = trendSandbox.evidence({ ...baselineProfile, datalabTrend: { ...baselineTrend, series: [{ period: "2026-09-01", ratio: 101, status: "observed" }] } }, baselineCard);
+check(!outsideRatio.observed, "relative search evidence outside 0–100 must not render as an observation");
+const partialTrendHtml = trendSandbox.renderTrend(baselineEvidence);
+check(partialTrendHtml.includes("2025-10-01 ~ 2026-09-26") && partialTrendHtml.includes("일부 기간 실제 관측"), "a current-month trend must show its actual partial date range");
+check(partialTrendHtml.includes("월 마감 전 자료") && partialTrendHtml.includes("절대 검색량이 아닙니다"), "the trend panel must explain the partial month and relative-index meaning");
+check(!partialTrendHtml.includes("포천펜션"), "a trend panel must not mix in an unrelated run keyword");
+trendSandbox.fallback = { keyword: "산청 글램핑", series: [{ period: "2026-09", ratio: 30 }] };
+const sameKeywordFallback = trendSandbox.evidence({}, { ...baselineCard, searchKeyword: "산청글램핑" });
+check(sameKeywordFallback.origin === "run" && sameKeywordFallback.observed, "a region-matched run with the exact normalized keyword remains a valid fallback");
+check(!trendSandbox.evidence({}, baselineCard).exact, "a card without a keyword cannot adopt the active run trend");
+check(!trendSandbox.evidence({}, { ...baselineCard, searchKeyword: "산청펜션" }).exact, "a different industry keyword cannot reuse the run trend");
+check(!trendSandbox.evidence({}, { ...baselineCard, searchKeyword: "산청글램핑", allowRun: false }).exact, "a run from another region must remain ineligible");
+trendSandbox.fallback = { exactMatch: true, series: [{ period: "2026-09", ratio: 30 }] };
+check(!trendSandbox.evidence({}, { ...baselineCard, searchKeyword: "산청글램핑" }).exact, "an exact-match flag without the run keyword is insufficient evidence");
+
 if (failures.length) {
   console.error("Location profile tourism UI checks failed:");
   failures.forEach((failure) => console.error(`- ${failure}`));

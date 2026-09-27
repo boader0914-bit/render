@@ -1368,6 +1368,7 @@ html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] .
 
 /* Region analysis uses the same components as the former home dashboard. */
 html[data-theme-resolved] body.role-admin #adminRegionAnalysisDashboard :is(
+  .admin-region-detail-panel,
   .admin-location-score-queue,
   .admin-location-score-queue-list > article,
   .admin-maintenance-lane,

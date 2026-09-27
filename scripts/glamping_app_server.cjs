@@ -22,6 +22,9 @@ const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs
 const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
 const { createMonthlyReportContext } = require("./lib/monthly_report_context.cjs");
 const { createMonthlyReportHttpHandler } = require("./lib/monthly_report_http.cjs");
+const { createRegionalReportPreparation } = require("./lib/regional_report_preparation.cjs");
+const { createRegionalSearchTrendService } = require("./lib/regional_search_trends.cjs");
+const { createRegionalReportPreparationHttpHandler } = require("./lib/regional_report_preparation_http.cjs");
 const { renderMonthlyReportPdf } = require("./lib/monthly_report_pdf.cjs");
 const { createTourismForecastService } = require("./lib/tourism_forecast.cjs");
 const { createMonthlyVisitorScheduler } = require("./tourism_visitor_monthly_scheduler.cjs");
@@ -310,6 +313,64 @@ const kosisService = createKosisService({
   regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
   readApiKey: () => process.env.KOSIS_API_KEY || ""
 });
+async function prepareRegionalTourismHistory(method, input) {
+  if (!input.collectMissing && !input.refresh && !input.force) return tourismCollector[method](input);
+  if (method === "collectVisitorHistory") return runTourismVisitorHistoryCollection(input);
+  const lanes = {
+    collectDemandStrengthHistory: [() => activeTourismDemandStrengthHistoryPromise, value => { activeTourismDemandStrengthHistoryPromise = value; }],
+    collectResourceDemandHistory: [() => activeTourismResourceDemandHistoryPromise, value => { activeTourismResourceDemandHistoryPromise = value; }],
+    collectDiversityHistory: [() => activeTourismDiversityHistoryPromise, value => { activeTourismDiversityHistoryPromise = value; }]
+  };
+  const [getActive, setActive] = lanes[method];
+  if (getActive()) throw Object.assign(new Error("Regional source is already refreshing"), { code: "REGIONAL_SOURCE_BUSY", statusCode: 409 });
+  const work = (async () => {
+    if (method !== "collectDemandStrengthHistory") return tourismCollector[method](input);
+    // Use the same persisted daily call budget as the existing regional refresh.
+    const reservation = await tourismDemandStrengthBackfillScheduler.beginManualReservation({ months: input.months, maxPagesPerOperation: 1 });
+    try {
+      const history = await tourismCollector[method](input);
+      await tourismDemandStrengthBackfillScheduler.finishManualReservation({
+        reservationId: reservation.reservationId,
+        actualCalls: Math.max(0, Number(history?.collection?.operationCallsAttempted || 0)),
+        completedPairs: (history?.series || []).filter(point => point.status === "complete" && /^\d{6}$/.test(point.yearMonth))
+          .map(point => ({ regionKey: history.region?.regionKey, yearMonth: point.yearMonth }))
+      });
+      return history;
+    } catch (error) {
+      await tourismDemandStrengthBackfillScheduler.finishManualReservation({ reservationId: reservation.reservationId, failed: true }).catch(() => {});
+      throw error;
+    }
+  })();
+  setActive(work);
+  try { return await work; } finally { if (getActive() === work) setActive(null); }
+}
+const resolveRegionalReportRegion = async regionKey => {
+  const master = JSON.parse(await fsp.readFile(path.join(WEB_DIR, "data", "region_master.json"), "utf8"));
+  const units = (master.units || []).filter(unit => unit.active && unit.selectable);
+  const region = units.find(unit => unit.regionKey === regionKey);
+  if (!region) return null;
+  const ambiguous = units.filter(unit => unit.name === region.name).length > 1 || region.name === "광주시";
+  const local = String(region.name || "").replace(/[시군]$/, "");
+  const province = String(region.fullName || "").split(/\s+/)[0];
+  const shortProvinces = { 경상남도: "경남", 경상북도: "경북", 충청남도: "충남", 충청북도: "충북", 전라남도: "전남", 전라북도: "전북", 전북특별자치도: "전북", 강원특별자치도: "강원", 제주특별자치도: "제주" };
+  const prefix = shortProvinces[province] || province.replace(/(특별자치시|특별시|광역시|직할시|도)$/, "");
+  const searchTrendKeyword = `${ambiguous || /구$/.test(region.name) ? prefix : ""}${local}글램핑`.replace(/\s+/g, "");
+  return { ...region, searchTrendKeyword };
+};
+const regionalSearchTrendService = createRegionalSearchTrendService({
+  dataDir: path.join(DATA_DIR, "regional_search_trends"), readTrafficKeys, resolveRegion: resolveRegionalReportRegion
+});
+const regionalReportPreparation = createRegionalReportPreparation({
+  dataDir: path.join(DATA_DIR, "regional_report_preparation"),
+  kosisService, searchTrendService: regionalSearchTrendService,
+  tourismCollector: Object.fromEntries(["collectVisitorHistory", "collectDemandStrengthHistory", "collectResourceDemandHistory", "collectDiversityHistory"]
+    .map(method => [method, input => prepareRegionalTourismHistory(method, input)])),
+  resolveRegion: resolveRegionalReportRegion
+});
+const handleRegionalReportPreparation = createRegionalReportPreparationHttpHandler({
+  service: regionalReportPreparation, requireAdmin: requireAdminSession, parseJsonBody, send,
+  rateLimit: (req, session) => assertRequestRateLimit(req, "adminRegionalPreparation", { limit: 6, windowMs: 60 * 60 * 1000 }, session.username || "")
+});
 const monthlyReportSources = createMonthlyReportSources({
   dataDir: DATA_DIR,
   regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
@@ -319,7 +380,7 @@ const monthlyReportSources = createMonthlyReportSources({
   recalculateCompanyObservations: createMonthlyCompanyRecalculation({
     loadRun, applyCompanyManualCorrection, companyProductAvailabilityMatch, buildHistoryObservations
   }),
-  readContext: createMonthlyReportContext({ kosisService, tourismCollector }),
+  readContext: createMonthlyReportContext({ kosisService, tourismCollector, searchTrendService: regionalSearchTrendService }),
   readSpecialDays: async year => (await specialDaysService.status(year)).yearStatus
 });
 const monthlyReportService = createMonthlyReportService({
@@ -16985,6 +17046,22 @@ async function readTourismLocationHistoryCache(selector = {}) {
     readTourismVisitorPeriodSummaryCache(region)
   ]);
   const { naverPlace, naverKeyword } = await readTourismLocationNaverSnapshots(match.region);
+  // Regional search evidence is read from its own cache and never collected by a page view.
+  let datalabTrend = null;
+  try {
+    const todayKst = new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10);
+    const previousMonth = new Date(Date.UTC(Number(todayKst.slice(0, 4)), Number(todayKst.slice(5, 7)) - 1, 0)).toISOString().slice(0, 7);
+    for (const month of [todayKst.slice(0, 7), previousMonth]) {
+      const stored = await regionalSearchTrendService.get({ regionKey: region.regionKey, month });
+      if (stored.networkAttempted) throw new Error("REGIONAL_TREND_CACHE_ONLY_VIOLATION");
+      if (stored.series?.some(point => point.status === "observed")) {
+        datalabTrend = { ...stored, collectedAt: stored.retrievedAt, regionalBaseline: true }; break;
+      }
+    }
+  } catch (error) {
+    if (error.message === "REGIONAL_TREND_CACHE_ONLY_VIOLATION") throw error;
+    // Missing/invalid cached evidence stays unavailable; no unrelated run is substituted here.
+  }
   const visitorNetworkAttempts = Number(tourismVisitorHistory?.collection?.networkAttemptedMonths || 0);
   const demandStrengthNetworkAttempts = Number(tourismDemandStrengthHistory?.collection?.networkAttemptedMonths || 0);
   const resourceDemandNetworkAttempts = Number(tourismResourceDemandHistory?.collection?.networkAttemptedMonths || 0);
@@ -17015,6 +17092,7 @@ async function readTourismLocationHistoryCache(selector = {}) {
     tourismDiversityHistory,
     naverPlace,
     naverKeyword,
+    datalabTrend,
     cache: {
       mode: "cache_only",
       requestedMonths: TOURISM_LOCATION_HISTORY_MONTHS,
@@ -18277,6 +18355,7 @@ async function route(req, res) {
     }
 
     if (await handleMonthlyReport(req, res, reqUrl, session)) return;
+    if (await handleRegionalReportPreparation(req, res, reqUrl, session)) return;
 
     if (req.method === "POST" && reqUrl.pathname === "/api/b2b-search") {
       if (normalizeUserRole(session.role) !== USER_ROLES.b2b) {

@@ -2783,6 +2783,7 @@ function setAdminPanelSection(sectionKey = "overview", options = {}) {
       document.querySelector(`[data-admin-section-panel="${sectionKey}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 80);
   }
+  syncRegionalReportPreparation();
 }
 
 function syncAdminSectionPanels() {
@@ -27569,6 +27570,31 @@ function adminManagementRegionIdentity(region = {}) {
   return { provinceKey: province.provinceKey, regionKey: locality ? `${province.provinceKey}:${locality}` : province.provinceKey };
 }
 
+function adminReportPreparationRegion(region = null) {
+  const key = region?.regionKey || state.adminSelectedRegionKey || "";
+  const exact = administrativeRegionForKey(key);
+  if (exact) return exact;
+  const matches = regionMasterUnits().filter(unit => unit.active && unit.selectable
+    && adminManagementRegionIdentity(unit)?.regionKey === key);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function syncRegionalReportPreparation(region = null) {
+  const visible = () => isAdminRole() && state.activeTab === "admin" && state.adminPanelSection === "database"
+    && state.adminDbViewMode === "region" && !String(state.adminDbFilters?.query || "").trim();
+  const slot = els.adminRegionAnalysisDashboard?.querySelector("[data-regional-report-preparation]");
+  if (!visible() || !slot) { window.RegionalReportPreparation?.pause(); return; }
+  const selected = region || adminSelectedRegion(adminConsoleMasterSource());
+  const resolved = adminReportPreparationRegion(selected);
+  void window.RegionalReportPreparation?.show(slot, {
+    regionKey: resolved?.regionKey || "", level: resolved?.level || "",
+    regionLabel: resolved?.fullName || [selected?.provinceLabel, selected?.regionLabel].filter(Boolean).join(" ") || "지역 미선택"
+  }, { isVisible: visible, onSend: context => {
+    closeSheet();
+    setActiveTab("monthlyReports", { monthlyReportContext: context });
+  } });
+}
+
 function adminSelectedRegion(master = {}) {
   const regions = master.adminRegionalOperations?.regions || [];
   if (!regions.length) return null;
@@ -28440,6 +28466,7 @@ function adminRegionalDetailPanel(region = null, master = {}) {
           <small>${escapeHtml(verdict.note)}</small>
         </div>
       </div>
+      <div data-regional-report-preparation></div>
       ${adminRegionDetailFocusPanel(region, rows, maintenance)}
       ${adminRegionFinalApprovalPanel(region, rows, maintenance)}
       ${adminRegionReviewSummaryPanel(region, rows)}
@@ -29577,7 +29604,7 @@ function renderAdminRegionAnalysisDashboard(master = adminConsoleMasterSource())
   const container = document.getElementById("regionDataManagement");
   if (container) container.hidden = !visible;
   els.adminRegionAnalysisDashboard.hidden = !visible;
-  if (!visible) return;
+  if (!visible) { window.RegionalReportPreparation?.pause(); return; }
   const previous = state.regionManagementReturnContext;
   const returnButton = container?.querySelector("[data-return-region-analysis]");
   if (returnButton) {
@@ -29590,7 +29617,8 @@ function renderAdminRegionAnalysisDashboard(master = adminConsoleMasterSource())
   const missingLabel = selectedAdministrativeRegion?.fullName
     || ([previous?.regionKey, previous?.managementRegionKey].includes(state.adminSelectedRegionKey) ? previous?.label : "") || "선택 지역";
   const mappingPending = previous?.managementRegionKey === state.adminSelectedRegionKey && previous?.mappingPending;
-  els.adminRegionAnalysisDashboard.innerHTML = `${missingSelected ? `<p class="empty" role="status">${escapeHtml(missingLabel)}의 ${mappingPending ? "관리 분류 연결을 확인해야 합니다" : "관리 자료가 아직 없습니다"}. 다른 지역 자료로 대체하지 않습니다.</p>` : ""}${adminRegionalAnalysisPanel(master)}`;
+  els.adminRegionAnalysisDashboard.innerHTML = `${missingSelected ? `<p class="empty" role="status">${escapeHtml(missingLabel)}의 ${mappingPending ? "관리 분류 연결을 확인해야 합니다" : "관리 자료가 아직 없습니다"}. 다른 지역 자료로 대체하지 않습니다.</p><div data-regional-report-preparation></div>` : ""}${adminRegionalAnalysisPanel(master)}`;
+  syncRegionalReportPreparation(region);
   if (els.dictionaryRequestQueue) els.dictionaryRequestQueue.innerHTML = renderLocationCardRequestQueue() || `<p class="hint">현재 대기 중인 지역 자료 요청이 없습니다.</p>`;
 }
 
@@ -33289,16 +33317,26 @@ function locationProfileTrendEvidence(profile, card = {}) {
     profile?.evidence?.datalabTrend
   );
   const fallback = locationProfileRunMatchesRegion(card) ? demandTrendSource() : null;
-  const source = endpoint && locationProfileIsExactKeyword(endpoint, card.searchKeyword)
+  const baselineMatches = endpoint?.regionalBaseline === true
+    && Boolean(endpoint.regionKey && locationProfileCandidateKeyword(endpoint))
+    && endpoint.regionKey === profile?.region?.regionKey
+    && endpoint.regionKey === card.regionKey;
+  const endpointMatches = endpoint?.regionalBaseline === true ? baselineMatches : endpoint && locationProfileIsExactKeyword(endpoint, card.searchKeyword);
+  const fallbackMatches = fallback && card.searchKeyword && locationProfileCandidateKeyword(fallback)
+    && locationProfileIsExactKeyword(fallback, card.searchKeyword);
+  const source = endpointMatches
     ? endpoint
-    : (fallback && locationProfileIsExactKeyword(fallback, card.searchKeyword) ? fallback : null);
+    : (fallbackMatches ? fallback : null);
+  const regionalBaseline = source === endpoint && baselineMatches;
   const rawSeries = Array.isArray(source?.series) ? source.series : (Array.isArray(source?.data) ? source.data : []);
   const series = rawSeries.map((entry, index) => {
     const rawLabel = entry?.yearMonth || entry?.month || entry?.period || entry?.date || entry?.label || "";
     const period = trendPeriodInfo(rawLabel, index);
     const status = String(entry?.status || "").trim().toLowerCase();
     const value = optionalNumber(entry?.ratio ?? entry?.value ?? entry?.score);
-    const complete = Number.isFinite(value) && !["missing", "partial", "unavailable", "failed", "error"].includes(status);
+    const complete = Number.isFinite(value) && (regionalBaseline
+      ? status === "observed" && value >= 0 && value <= 100
+      : !["missing", "partial", "unavailable", "failed", "error"].includes(status));
     return {
       ...entry,
       yearMonth: period.year && period.month ? `${period.year}${String(period.month).padStart(2, "0")}` : "",
@@ -33312,10 +33350,16 @@ function locationProfileTrendEvidence(profile, card = {}) {
     source,
     origin: source === endpoint ? "profile" : (source ? "run" : ""),
     exact: Boolean(source),
+    regionalBaseline,
+    partialMonth: Boolean(source?.partialMonth),
+    status: source?.status || "missing",
+    errorCode: source?.errorCode || "",
+    startDate: source?.startDate || "",
+    endDate: source?.endDate || "",
     series,
     observed: series.some((entry) => entry.hasValue),
     keyword: source ? locationProfileCandidateKeyword(source) || card.searchKeyword : card.searchKeyword,
-    collectedAt: source ? locationProfileObservedAt(source.collectedAt, source.updatedAt, profile?.collectedAt, locationProfileCurrentRunObservedAt()) : "",
+    collectedAt: source ? regionalBaseline ? locationProfileObservedAt(source.retrievedAt) : locationProfileObservedAt(source.retrievedAt, source.collectedAt, source.updatedAt, profile?.collectedAt, locationProfileCurrentRunObservedAt()) : "",
     sourceLabel: source?.source?.label || source?.sourceLabel || "네이버 DataLab 검색어 트렌드"
   };
 }
@@ -34273,12 +34317,15 @@ function renderLocationProfileTrafficPanel(traffic = {}) {
 }
 
 function renderLocationProfileTrendPanel(trend = {}) {
-  const period = trend.observed ? locationProfilePeriodLabel(trend.series) : "기간 관측 없음";
+  const period = trend.regionalBaseline && trend.startDate && trend.endDate
+    ? `${trend.startDate} ~ ${trend.endDate}`
+    : trend.observed ? locationProfilePeriodLabel(trend.series) : "기간 관측 없음";
+  const observedLabel = trend.partialMonth ? "일부 기간 실제 관측" : trend.status === "partial" ? "일부 자료 실제 관측" : trend.regionalBaseline ? "지역 기준 검색어 실제 관측" : "정확 키워드 실제 관측";
   return `
     <article class="location-profile-panel location-profile-wide location-profile-trend" data-ui-surface="card">
       <div class="location-profile-panel-head">
         <div><p class="eyebrow">Naver DataLab</p><h4>${escapeHtml(trend.keyword || "선택 지역 키워드")} 검색 추이</h4><small>${escapeHtml(period)} · 최고점 100 상대지수</small></div>
-        ${locationProfileStatusBadge(trend.observed && trend.exact, "정확 키워드 실제 관측", "정확 일치 관측 없음")}
+        ${locationProfileStatusBadge(trend.observed && trend.exact, observedLabel, "정확 일치 관측 없음")}
       </div>
       ${renderLocationProfileLineChart(trend.series, {
         id: "administrative-location-datalab",
@@ -34288,6 +34335,7 @@ function renderLocationProfileTrendPanel(trend = {}) {
         emptyText: "정확히 일치하는 DataLab 관측이 없습니다. 다른 키워드 추이나 합성값을 대신 표시하지 않습니다."
       })}
       <p class="location-profile-basis">${escapeHtml(trend.collectedAt ? `${compactDateTime(trend.collectedAt)} 확인 · ${trend.sourceLabel}` : "정확 키워드 관측일 없음")}</p>
+      <p class="location-profile-basis">${escapeHtml(`${trend.partialMonth ? "월 마감 전 자료로 현재월은 조회 전날까지 포함합니다. " : ""}${trend.errorCode ? "최근 갱신 상태를 확인해 주세요. " : ""}0–100의 상대 관심도이며 절대 검색량이 아닙니다. 검색어·조회기간이 다른 지수를 합산하거나 직접 비교하지 않습니다.`)}</p>
     </article>
   `;
 }
@@ -36597,6 +36645,7 @@ function setActiveTab(tab, options = {}) {
   const previousTab = state.activeTab;
   state.analysisNavigationSequence = (state.analysisNavigationSequence || 0) + 1;
   state.activeTab = roleAllowsTab(tab) ? tab : firstRoleTab();
+  if (state.activeTab !== "admin") window.RegionalReportPreparation?.pause();
   if (options.analysisRegionSelection !== undefined) {
     const selection = options.analysisRegionSelection;
     setAnalysisRegion(selection?.regionKey || "", {
@@ -41715,7 +41764,7 @@ function bindEvents() {
     if (monthlyReportShortcut && isAdminRole()) {
       event.preventDefault();
       const type = monthlyReportShortcut.dataset.monthlyReportContext;
-      const targetId = type === "region" ? selectedAnalysisRegion()?.regionKey || "" : monthlyReportShortcut.dataset.monthlyReportTarget || "";
+      const targetId = monthlyReportShortcut.dataset.monthlyReportTarget || (type === "region" ? selectedAnalysisRegion()?.regionKey || "" : "");
       closeSheet();
       setActiveTab("monthlyReports", { monthlyReportContext: { type, targetId } });
       return;

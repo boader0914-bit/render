@@ -27,8 +27,11 @@ const dashboard = {
   get innerHTML() { return renderedHtml; }
 };
 const state = { adminDbViewMode: "region", adminDbFilters: { query: "" }, adminRegionReviewFilter: "all", adminRegionOverviewOpen: false };
+let preparationSyncs = 0, preparationPauses = 0;
 const context = vm.createContext({
   state,
+  window: { RegionalReportPreparation: { pause: () => { preparationPauses++; } } },
+  syncRegionalReportPreparation: () => { preparationSyncs++; },
   els: { adminRegionAnalysisDashboard: dashboard },
   document: { getElementById: () => null },
   isAdminRole: () => true,
@@ -63,7 +66,9 @@ overview.open = true;
 state.adminDbViewMode = "list";
 render({});
 assert.equal(dashboard.hidden, true);
+assert.equal(preparationPauses, 1, "Leaving region DB pauses preparation polling");
 state.adminDbViewMode = "region";
 render({});
 assert.equal(overview.open, true, "Returning to region DB preserves the last disclosure choice");
+assert.equal(preparationSyncs, 5, "Visible region DB rendering synchronizes the selected preparation card");
 console.log("Region management disclosure: initial collapse, filter results, repeated rendering, manual collapse and return state passed");

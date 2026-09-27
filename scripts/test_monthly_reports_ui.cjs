@@ -17,7 +17,7 @@ function fixture() {
   const api = async (url, method = "GET", body) => {
     calls.push({ url, method, body: structuredClone(body) });
     if (nextFailure) { const error = nextFailure; nextFailure = null; throw error; }
-    if (url === "/options") return { companies: [{ id: "c1", label: "테스트 숙소" }], keywords: [], regions: [], months: ["2026-08"], defaultMonth: "2026-08" };
+    if (url === "/options") return { companies: [{ id: "c1", label: "테스트 숙소" }], keywords: [], regions: [{ id: "kr_gyeongnam_sancheong", label: "경상남도 산청군" }], months: ["2026-08"], defaultMonth: "2026-08" };
     if (url === "/preview") return structuredClone(snapshot);
     if (url === "" && method === "GET") return { reports: saved ? [structuredClone(saved)] : [] };
     if (url === "" && method === "POST") { saved = { id: "mr_1", revision: 1, version: 1, status: "draft", ...body, snapshot: structuredClone(snapshot) }; return structuredClone(saved); }
@@ -54,6 +54,65 @@ test("cutoff defaults use the month end, capped at the current Korea day", () =>
   assert.equal(ui.defaultCutoff("2026-08", "2026-09-26"), "2026-08-31");
   assert.equal(ui.defaultCutoff("2026-09", "2026-09-26"), "2026-09-26");
   assert.equal(ui.defaultCutoff("2024-02", "2026-09-26"), "2024-02-29");
+});
+
+test("region DB handoff preserves the explicit month and cutoff and invalidates other previews", async () => {
+  const { controller: c, calls, container } = fixture();
+  await c.open({ type: "company", targetId: "c1" });
+  await c.action("preview");
+  const context = { type: "region", targetId: "kr_gyeongnam_sancheong", month: "2026-07", cutoffDate: "2026-07-26" };
+  await c.open(context);
+  assert.deepEqual(c.state.form, context);
+  assert.equal(c.state.preview, null);
+  assert.equal(c.state.previewToken, null);
+  assert.equal(c.state.report, null);
+  assert.match(container.innerHTML, /지역 DB에서 선택한 지역/);
+  assert.equal(calls.filter(call => call.method === "POST").length, 1, "handoff never collects, previews or publishes automatically");
+  await c.action("preview");
+  assert.deepEqual(calls.at(-1).body, context);
+  await c.open({ ...context, month: "2026-06", cutoffDate: "2026-06-30" });
+  assert.equal(c.state.form.month, "2026-06");
+  await c.open({ type: "region", targetId: context.targetId, month: "2024-02" });
+  assert.equal(c.state.form.cutoffDate, "2024-02-29", "changing month without a cutoff resets it to that month's end");
+});
+
+test("invalid regional handoff never silently selects another region or retains a stale preview", async () => {
+  const { controller: c, calls } = fixture();
+  const context = { type: "region", targetId: "kr_gyeongnam_sancheong", month: "2026-07", cutoffDate: "2026-07-26" };
+  await c.open(context); await c.action("preview");
+  await c.open({ ...context, targetId: "missing-region" });
+  assert.equal(c.state.form.targetId, "");
+  assert.equal(c.state.preview, null);
+  assert.match(c.state.error, /지역을 리포트 목록에서 찾지 못했습니다/);
+  await c.open({ ...context, month: "2099-12" });
+  assert.equal(c.state.form.month, "");
+  assert.match(c.state.error, /대상 월/);
+  await c.open({ ...context, cutoffDate: "2026-02-30" });
+  assert.equal(c.state.form.cutoffDate, "");
+  assert.match(c.state.error, /관측 마감일/);
+  assert.ok(calls.every(call => !/collect|crawl|publish/.test(call.url)));
+});
+
+test("latest region handoff waits for an in-flight preview and cannot be replaced by its old result", async () => {
+  const container = { innerHTML: "", addEventListener() {} };
+  let release;
+  const c = ui.createController(container, async url => {
+    if (url === "/options") return { defaultMonth: "2026-08", companies: [{ id: "c1", label: "숙소" }], regions: [{ id: "sancheong", label: "산청군" }, { id: "pocheon", label: "포천시" }] };
+    if (url === "/preview") { await new Promise(resolve => { release = resolve; }); return structuredClone(snapshot); }
+    if (url === "") return { reports: [] };
+    throw new Error(url);
+  });
+  await c.open({ type: "company", targetId: "c1" });
+  const preview = c.action("preview");
+  const first = c.open({ type: "region", targetId: "sancheong", month: "2026-07", cutoffDate: "2026-07-31" });
+  const latest = { type: "region", targetId: "pocheon", month: "2026-08", cutoffDate: "2026-08-26" };
+  const last = c.open(latest);
+  release();
+  await Promise.all([preview, first, last]);
+  assert.deepEqual(c.state.form, latest);
+  assert.equal(c.state.preview, null);
+  assert.equal(c.state.previewToken, null);
+  assert.equal(c.state.busy, "");
 });
 test("preview token freezes saved numbers and form edits invalidate the preview", async () => {
   const { controller: c, calls } = fixture();

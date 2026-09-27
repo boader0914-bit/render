@@ -2,7 +2,7 @@
 
 // All dependencies supplied here are cache-only readers. A report never refreshes
 // a provider, starts a crawler, or turns annual statistics into monthly values.
-function createMonthlyReportContext({ kosisService, tourismCollector }) {
+function createMonthlyReportContext({ kosisService, tourismCollector, searchTrendService }) {
   return async function readContext(request, catalog) {
     if (request.type === "keyword") {
       const regionIds = [...new Set(catalog.companies.map(company => company.regionKey).filter(Boolean))].sort();
@@ -31,6 +31,29 @@ function createMonthlyReportContext({ kosisService, tourismCollector }) {
     if (region?.level !== "local") {
       warnings.push("관광 지표는 시군구 단위로 제공되며 광역 지표로 임의 합산하지 않았습니다.");
       return { sources, warnings, networkAttempted: false };
+    }
+    if (searchTrendService) {
+      try {
+        const trend = await searchTrendService.get({ regionKey: regionId, month: request.month });
+        if (trend.networkAttempted) throw new Error("MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY");
+        sources.push({ key: "naver_search_trend", label: `검색 트렌드 · ${trend.keyword || "기준 검색어 확인 필요"}`,
+          provider: "네이버 데이터랩", regionLabel: region?.label || regionId, status: trend.status,
+          period: `${trend.startDate || ""} ~ ${trend.endDate || ""}`, periodType: "M", keyword: trend.keyword,
+          sourceUrl: "https://developers.naver.com/docs/serviceapi/datalab/search/search.md", retrievedAt: trend.retrievedAt || "",
+          referenceOnly: true, partialMonth: Boolean(trend.partialMonth), errorCode: trend.errorCode || "",
+          rows: (trend.series || []).map(point => ({ key: point.period, label: `${point.period.slice(0, 7)}${trend.partialMonth && point.period.startsWith(request.month) ? " (진행 중)" : ""}`,
+            value: point.status === "observed" && Number.isFinite(point.value) ? point.value : null,
+            unit: "상대지수", status: point.status === "observed" && Number.isFinite(point.value) ? "observed" : "missing" })) });
+        if (!["ready", "partial"].includes(trend.status)) warnings.push("선택한 기간의 지역 검색 트렌드가 준비되지 않았습니다. 지역 DB에서 지역 지표 일괄 수집으로 준비할 수 있습니다.");
+        if (trend.partialMonth) warnings.push("진행 중인 보고월의 검색 트렌드는 수집 시점 전일까지의 자료이며 월 전체 결과가 아닙니다.");
+        if (trend.errorCode && trend.status === "partial") warnings.push("검색 트렌드의 일부 자료가 없거나 최근 갱신에 실패했습니다. 표시된 저장 시점과 누락 월을 확인해 주세요.");
+      } catch (error) {
+        if (error.message === "MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY") throw error;
+        sources.push({ key: "naver_search_trend", label: "검색 트렌드", provider: "네이버 데이터랩", regionLabel: region?.label || regionId,
+          status: "missing", period: request.month, rows: [], referenceOnly: true });
+        warnings.push("지역 검색 트렌드 저장 자료를 확인하지 못했습니다.");
+      }
+      warnings.push("검색 트렌드는 지역명+글램핑 기준 검색 관심의 상대지수입니다. 같은 조회기간의 최고점을 100으로 표시하며, 절대 검색량이나 지역 전체 수요가 아닙니다. 다른 검색어·조회기간의 지수를 합산하지 않습니다.");
     }
     const yearMonth = request.month.replace("-", "");
     const input = { regionKeys: [regionId], regionKey: regionId, endYearMonth: yearMonth, months: 1, analysisMonths: 1,
