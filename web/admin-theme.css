@@ -1354,6 +1354,31 @@ html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] .
   color: var(--accent) !important;
 }
 
+/* Preserve semantic progress colors beneath the legacy collection text rules. */
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] .collector-progress-steps li:is([data-state="active"], [data-state="done"]) {
+  color: var(--accent-strong) !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] .collector-progress-steps li > small {
+  color: inherit !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] .collector-progress-steps li[data-state="done"] > span {
+  color: var(--accent-contrast) !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] .collector-live-progress[data-state="attention"] .collector-eta-value {
+  color: var(--warning-strong) !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] .collector-control-status[data-tone="error"] {
+  color: var(--danger-strong) !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] :is(.collector-control-status[data-tone="success"], .collector-live-progress[data-state="complete"] .collector-eta-value) {
+  color: var(--positive) !important;
+}
+
 html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] .run-result-admin-summary-copy > span {
   color: var(--accent) !important;
 }
@@ -1445,6 +1470,49 @@ html[data-theme-resolved] body.role-admin #adminRegionAnalysisDashboard button.a
   background: var(--surface-selected) !important;
   color: var(--accent-strong) !important;
   box-shadow: none !important;
+}
+
+/* A preparation action and its outcomes must survive the regional reset. */
+html[data-theme-resolved] body.role-admin #adminRegionAnalysisDashboard .rrp-card button.primary-button:not(:disabled) {
+  background: var(--accent-strong) !important;
+  color: var(--accent-contrast) !important;
+  border-color: var(--accent-strong) !important;
+}
+
+html[data-theme-resolved] body.role-admin #adminRegionAnalysisDashboard .rrp-card button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+html[data-theme-resolved] body.role-admin .rrp-card .rrp-step-status.is-ready {
+  color: var(--rrp-good) !important;
+  border-color: currentColor !important;
+  background: color-mix(in srgb, var(--rrp-good) 8%, var(--surface-card)) !important;
+}
+
+html[data-theme-resolved] body.role-admin .rrp-card .rrp-step-status.is-partial {
+  color: var(--rrp-warn) !important;
+  border-color: currentColor !important;
+  background: color-mix(in srgb, var(--rrp-warn) 8%, var(--surface-card)) !important;
+}
+
+html[data-theme-resolved] body.role-admin .rrp-card .rrp-step-status:is(.is-failed, .is-interrupted) {
+  color: var(--rrp-bad) !important;
+  border-color: currentColor !important;
+  background: color-mix(in srgb, var(--rrp-bad) 8%, var(--surface-card)) !important;
+}
+
+html[data-theme-resolved] body.role-admin .rrp-card .rrp-step-status.is-running {
+  color: var(--accent-strong) !important;
+  border-color: currentColor !important;
+}
+
+html[data-theme-resolved] body.role-admin .rrp-card :is(.rrp-live.is-error, .rrp-search-connection.is-error strong) {
+  color: var(--rrp-bad) !important;
+}
+
+html[data-theme-resolved] body.role-admin .rrp-card .rrp-message {
+  color: var(--rrp-warn) !important;
 }
 
 html[data-theme-resolved] body.role-admin #adminRegionAnalysisDashboard :is(
@@ -1972,6 +2040,8 @@ html[data-theme-resolved] body.role-admin .admin-region-analysis-dashboard {
     bottom: calc(78px + env(safe-area-inset-bottom));
     left: 10px;
     display: grid;
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 5px;
     padding: 8px;
@@ -2237,6 +2307,30 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .map-caption {
   text-align: center;
   line-height: 1.5;
   border-radius: var(--ui-radius-control);
+}
+
+html[data-theme-resolved] body.role-admin .map-frame {
+  background: var(--surface-control);
+}
+
+html[data-theme-resolved] body.role-admin .map-region {
+  fill: var(--surface-selected);
+  stroke: var(--border-strong);
+}
+
+html[data-theme-resolved] body.role-admin .map-region.active {
+  fill: color-mix(in srgb, var(--accent) 22%, var(--surface-card));
+  stroke: var(--accent-strong);
+}
+
+html[data-theme-resolved] body.role-admin .map-empty-label {
+  fill: var(--text-secondary);
+}
+
+html[data-theme-resolved] body.role-admin .map-caption {
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
 }
 
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(

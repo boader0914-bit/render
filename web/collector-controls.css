@@ -10,11 +10,14 @@
 .collector-destination strong { display: block; font-size: 13px; color: var(--text-primary); }
 .collector-destination div > span { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 4px; line-height: 1.5; }
 .collector-destination-tag { margin-left: auto; color: var(--accent-strong); font-size: 11px; white-space: nowrap; }
-.collector-worker-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.collector-worker-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
 .collector-worker-card { min-width: 0; border: 1px solid var(--border-subtle); border-radius: var(--ui-radius-card); background: var(--surface-card); box-shadow: var(--theme-card-shadow); overflow: clip; }
+.collector-worker-card[open] { display: flex; flex-direction: column; }
+.collector-worker-card[open]::details-content { display: flex; flex-direction: column; flex: 1; }
+.collector-worker-card:not([open]) { align-self: start; }
 .collector-worker-card[data-state="running"] { border-color: var(--accent); }
 .collector-worker-card[data-state="alert"] { border-color: var(--warning-strong); }
-.collector-worker-summary { display: flex; align-items: center; gap: 8px; padding: 20px 18px; color: var(--text-primary); cursor: pointer; list-style: none; }
+.collector-worker-summary { display: flex; align-items: center; gap: 8px; padding: 20px 18px; min-height: 94px; box-sizing: border-box; flex-shrink: 0; color: var(--text-primary); cursor: pointer; list-style: none; }
 .collector-worker-summary::-webkit-details-marker { display: none; }
 .collector-worker-identity { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
 .collector-worker-number { align-self: flex-start; color: var(--accent-strong); font-size: 10px; line-height: 23px; font-weight: 750; font-variant-numeric: tabular-nums; }
@@ -24,8 +27,9 @@
 .collector-worker-summary .state-badge { flex: 0 0 auto; font-size: 10px; }
 .collector-chevron { width: 7px; height: 7px; flex: 0 0 7px; margin: 0 2px 4px 3px; border-right: 1.5px solid var(--text-tertiary); border-bottom: 1.5px solid var(--text-tertiary); transform: rotate(45deg); }
 .collector-worker-card[open] .collector-chevron { transform: rotate(225deg); margin-top: 5px; }
-.collector-worker-form { display: grid; gap: 16px; padding: 0 18px 18px; }
-.collector-card-status { padding: 11px 12px; background: var(--surface-control); border-radius: var(--ui-radius-control); }
+.collector-worker-form { display: flex; flex-direction: column; flex: 1; gap: 16px; min-width: 0; padding: 0 18px 18px; }
+.collector-common-fields { display: grid; gap: 16px; min-width: 0; }
+.collector-card-status { padding: 11px 12px; min-height: 80px; box-sizing: border-box; background: var(--surface-control); border-radius: var(--ui-radius-control); }
 .collector-card-status p, .collector-card-status small { display: block; margin: 0; font-size: 11px; color: var(--text-secondary); line-height: 1.55; overflow-wrap: anywhere; }
 .collector-card-status small { margin-top: 4px; color: var(--accent-strong); }
 .collector-controls-card .field { display: flex; flex-direction: column; gap: 7px; min-width: 0; margin: 0; }
@@ -36,23 +40,33 @@
 .collector-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 10px; }
 .collector-field-hint { margin: -6px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.65; }
 .collector-execution-field { border-top: 1px solid var(--border-subtle); padding-top: 15px; }
-.collector-reservation { padding: 12px; border: 1px solid var(--border-subtle); border-radius: var(--ui-radius-control); background: var(--surface-control); }
+.collector-reservation { border: 1px solid var(--border-subtle); border-radius: var(--ui-radius-control); background: var(--surface-control); min-width: 0; }
+.collector-reservation-summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 54px; padding: 12px; cursor: pointer; list-style: none; }
+.collector-reservation-summary::-webkit-details-marker { display: none; }
+.collector-reservation-summary > span:first-child { min-width: 0; }
+.collector-reservation-summary strong { display: block; font-size: 11px; font-weight: 650; color: var(--text-primary); }
+.collector-reservation-summary small { display: block; margin-top: 5px; color: var(--text-secondary); font-size: 11px; font-weight: 400; line-height: 1.5; overflow-wrap: anywhere; }
+.collector-reservation:not([open]) .collector-chevron { transform: rotate(45deg); }
+.collector-reservation[open] .collector-chevron { transform: rotate(225deg); }
+.collector-reservation-body { padding: 0 12px 12px; }
 .collector-reservation .collector-field-hint { margin: 12px 0 0; }
 .collector-repeat-options { color: var(--text-secondary); font-size: 11px; }
 .collector-repeat-options summary { cursor: pointer; }
 .collector-repeat-options > .field { margin-top: 10px; }
 .collector-repeat-options > .field:has(input[type="checkbox"]) { flex-direction: row-reverse; justify-content: flex-end; align-items: center; }
 .collector-repeat-options .collector-field-hint { margin-top: 8px; }
-.collector-card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.collector-card-actions > button { flex: 1 1 100px; min-height: 41px; padding: 10px 8px; font-size: 12px; border-radius: 8px; }
+.collector-card-footer { display: grid; gap: 12px; margin-top: auto; padding-top: 4px; min-width: 0; }
+.collector-card-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; gap: 8px; min-height: 90px; }
+.collector-card-actions > button { min-width: 0; min-height: 41px; padding: 10px 8px; font-size: 12px; line-height: 1.45; border-radius: 8px; white-space: normal; }
+.collector-card-actions > .primary-button { grid-column: 1 / -1; }
 .collector-card-actions > .primary-button { background: var(--accent-strong); color: var(--accent-contrast); }
 .collector-control-status { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .collector-control-status:empty { display: none; }
 .collector-control-status[data-tone="error"] { color: var(--danger-strong); }
 .collector-control-status[data-tone="success"] { color: var(--positive); }
-.collector-last-result { display: flex; justify-content: space-between; align-items: center; gap: 8px; border-top: 1px solid var(--border-subtle); padding-top: 12px; }
-.collector-last-result:empty { display: none; }
-.collector-last-result small { color: var(--text-secondary); font-size: 11px; overflow-wrap: anywhere; }
+.collector-last-result { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 45px; border-top: 1px solid var(--border-subtle); padding-top: 12px; }
+.collector-last-result small { min-width: 0; color: var(--text-secondary); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collector-last-result button { flex-shrink: 0; }
 .collector-history-panel { margin-top: 22px; padding: 20px; background: var(--surface-card); border: 1px solid var(--border-subtle); border-radius: var(--ui-radius-card); }
 .collector-history-panel h3 { margin: 0; font-size: 16px; color: var(--text-primary); }
 .collector-history-panel .hint { font-size: 12px; line-height: 1.6; color: var(--text-secondary); margin: 6px 0 0; }
@@ -66,8 +80,10 @@
 .collector-controls-card [hidden] { display: none !important; }
 .collector-controls-card button:disabled { cursor: not-allowed; opacity: .55; }
 .collector-controls-card :is(button, select, input, textarea, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-@media (max-width: 1200px) { .collector-worker-grid { grid-template-columns: minmax(0, 1fr); } .collector-worker-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } .collector-worker-form > :is(.collector-card-status, .collector-field-hint, .collector-execution-field, .collector-reservation, .collector-repeat-options, .collector-card-actions, .collector-control-status, .collector-last-result) { grid-column: 1 / -1; } .collector-worker-form > .field textarea { min-height: 134px; } .collector-worker-identity small { max-width: 550px; } }
-@media (max-width: 720px) { .collector-worker-form { display: grid; grid-template-columns: minmax(0, 1fr); } .collector-worker-form > .field textarea { min-height: 76px; } .collector-page-head { align-items: flex-start; gap: 10px; } .collector-page-head h3 { font-size: 23px; } .collector-page-head > button { font-size: 11px; min-height: 40px; } .collector-destination { padding: 13px; } .collector-destination-tag { display: none; } .collector-worker-summary { padding: 17px 15px; } .collector-worker-form { padding: 0 15px 16px; } .collector-history-panel { padding: 16px; } .collector-history-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } .collector-controls-card .field :is(input, select, textarea) { font-size: 16px; min-height: 44px; } .collector-card-actions > button, .collector-result-button { min-height: 44px; } .collector-history-row { grid-template-columns: minmax(0, 1fr) auto; } .collector-history-row > button { grid-column: 1 / -1; justify-self: start; } }
+@media (max-width: 1200px) { .collector-worker-grid { grid-template-columns: minmax(0, 1fr); } .collector-common-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } .collector-common-fields > .collector-execution-field { grid-column: 1 / -1; } .collector-common-fields > .field textarea { min-height: 134px; } .collector-card-actions { min-height: 0; } .collector-worker-identity small { max-width: 550px; } }
+@media (max-width: 720px) { .collector-common-fields { grid-template-columns: minmax(0, 1fr); } .collector-common-fields > .field textarea { min-height: 76px; } .collector-page-head { align-items: flex-start; gap: 10px; } .collector-page-head h3 { font-size: 23px; } .collector-page-head > button { font-size: 11px; min-height: 40px; } .collector-destination { padding: 13px; } .collector-destination-tag { display: none; } .collector-worker-summary { padding: 17px 15px; } .collector-worker-form { padding: 0 15px 16px; } .collector-history-panel { padding: 16px; } .collector-history-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } .collector-controls-card .field :is(input, select, textarea) { font-size: 16px; min-height: 44px; } .collector-card-actions > button, .collector-result-button { min-height: 44px; } .collector-history-row { grid-template-columns: minmax(0, 1fr) auto; } .collector-history-row > button { grid-column: 1 / -1; justify-self: start; } }
+@media (max-width: 420px) { .collector-custom-dates, .collector-reservation .collector-settings-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 360px) { .collector-common-fields .collector-settings-grid, .collector-history-filters { grid-template-columns: minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) { .collector-controls-card * { scroll-behavior: auto !important; } }
 /* Actual collection progress; time estimates never drive this meter. */
 .collector-live-progress { grid-column: 1 / -1; position: relative; padding: 16px; border: 1px solid var(--border-strong); border-radius: var(--ui-radius-control); background: var(--surface-selected); min-width: 0; }
@@ -109,7 +125,8 @@
 .collector-compact-row strong { display: block; font-size: 11px; }
 .collector-compact-row small { display: block; font-size: 10px; color: var(--text-secondary); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .collector-compact-row b { font-size: 12px; color: var(--accent-strong); flex: 0 0 auto; }
-.collector-compact-row[data-state="attention"] b, .collector-compact-row[data-state="attention"] .collector-progress-dot { color: var(--warning-strong); }
+.collector-compact-row[data-state="attention"] b { color: var(--warning-strong); }
+.collector-compact-row[data-state="attention"] .collector-progress-dot { background: var(--warning-strong); }
 .collector-compact-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 @keyframes collector-pulse { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 transparent; } 50% { opacity: .45; box-shadow: 0 0 0 3px var(--surface-card); } }
 @keyframes collector-flow { from { transform: translateX(-100%); } to { transform: translateX(100%); } }

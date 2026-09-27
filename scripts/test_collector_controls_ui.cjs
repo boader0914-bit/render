@@ -93,6 +93,48 @@ test("three independent cards load by GET only, using approved names and default
   assert.equal(ui.calls.filter(call => call.url.startsWith("/api/worker-schedule?")).length, 3);
 });
 
+test("saved reservations open as a folded summary and toggling never changes the schedule", async () => {
+  const configured = { ...clone(config), enabled: true, firstDate: defaultDraft().firstDate, keywords: ["산청글램핑"], time: "13:25", repeat: "weekdays" };
+  const ui = await mockUi({ configs: { scheduled: configured } });
+  const reservation = descendants(ui.card("scheduled")).find(el => el.className === "collector-reservation");
+  assert.equal(reservation.tagName, "DETAILS"); assert.equal(Boolean(reservation.open), false); assert.equal(reservation.hidden, false);
+  const summary = reservation.children[0];
+  assert.equal(summary.tagName, "SUMMARY"); assert.match(text(summary), /13:25 KST · 평일 · 월~금/);
+  assert.match(text(summary), new RegExp(configured.firstDate.replace(/-/g, "\\.")));
+  const before = clone(ui.saved.scheduled);
+  reservation.open = true; await reservation.event("toggle"); reservation.open = false; await reservation.event("toggle");
+  assert.deepEqual(ui.saved.scheduled, before); assert.ok(ui.calls.every(call => call.method === "GET"));
+  await ui.set("scheduled", "time", "15:40");
+  assert.match(text(summary), /15:40 KST/);
+  assert.equal(ui.saved.scheduled.time, "13:25", "editing the folded form remains a local draft until explicit save");
+  assert.equal(ui.input("manual", "time").value, "14:00");
+});
+
+test("invalid fields reveal their folded section and progress remains above common fields", async () => {
+  const ui = await mockUi();
+  await ui.set("manual", "execution", "schedule");
+  const card = ui.card("manual"), form = ui.form("manual");
+  const reservation = descendants(card).find(el => el.className === "collector-reservation");
+  reservation.open = false;
+  for (const callback of form.listeners.invalid) callback({ target: ui.input("manual", "firstDate") });
+  assert.equal(reservation.open, true, "browser validation must be able to focus the invalid date inside details");
+  reservation.open = false;
+  for (const callback of form.listeners.change) callback({ target: ui.input("manual", "execution") });
+  assert.equal(reservation.open, true, "choosing reservation mode exposes its editing controls");
+  const commonIndex = form.children.findIndex(el => el.className === "collector-common-fields");
+  assert.ok(commonIndex > form.children.findIndex(el => el.className === "collector-live-progress"));
+  assert.ok(commonIndex > form.children.findIndex(el => el.className === "collector-card-status"));
+  assert.equal(form.children.at(-1).className, "collector-card-footer");
+  const footer = form.children.at(-1);
+  assert.equal(footer.children[0].className, "collector-card-actions");
+  assert.equal(footer.children.at(-1).className, "collector-last-result");
+  await ui.set("manual", "execution", "now");
+  const repeat = descendants(card).find(el => el.className === "collector-repeat-options"); repeat.open = false;
+  for (const callback of form.listeners.invalid) callback({ target: ui.input("manual", "repeatReason") });
+  assert.equal(repeat.open, true);
+  assert.ok(ui.calls.every(call => call.method === "GET")); assert.equal(ui.submissions.length, 0);
+});
+
 test("card drafts do not leak into other workers and survive a reload", async () => {
   const ui = await mockUi(); await ui.set("manual", "keywords", "경남글램핑"); await ui.set("manual", "period", "14"); await ui.set("scheduled", "keywords", "포천글램핑");
   assert.equal(ui.input("web", "keywords").value, ""); assert.equal(ui.input("scheduled", "period").value, "7");

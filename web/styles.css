@@ -6560,6 +6560,15 @@ a {
   align-items: stretch;
 }
 
+/* This overview has one content panel, unlike the two-column operations view. */
+.region-management-overview > .admin-regional-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.region-management-overview .admin-regional-summary-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 130px), 1fr));
+}
+
 .admin-regional-main {
   min-width: 0;
   display: grid;
@@ -7106,6 +7115,8 @@ a {
 
 .admin-region-detail-panel {
   display: grid;
+  min-width: 0;
+  container: regional-detail / inline-size;
   gap: 12px;
   border: 1px solid #d5e3f7;
   border-radius: 16px;
@@ -9793,7 +9804,7 @@ a {
 
 .admin-security-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
   gap: 8px;
 }
 
@@ -11410,9 +11421,30 @@ a {
 
 .location-score-admin-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
   align-items: center;
+}
+
+/* Review forms share the available region-card width, not the viewport width. */
+@container regional-detail (max-width: 800px) {
+  .admin-region-detail-panel :is(.admin-region-review-form, .location-score-admin-form) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .admin-region-detail-panel :is(.admin-region-review-form, .location-score-admin-form) > div:first-child,
+  .admin-region-detail-panel :is(.admin-region-review-form > div:last-child, .location-score-admin-actions) {
+    grid-column: 1 / -1;
+  }
+  .admin-region-detail-panel .location-score-admin-actions {
+    justify-content: flex-start;
+  }
+}
+
+@container regional-detail (max-width: 480px) {
+  .admin-region-detail-panel :is(.admin-region-review-form, .location-score-admin-form) {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .location-score-admin-actions button,

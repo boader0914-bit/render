@@ -16,16 +16,18 @@ html[data-theme-resolved="dark"] .monthly-reports { --mr-public: #92d4aa; --mr-p
 .mr-notice { font-size: 12px; color: var(--text-secondary, #5e6975); min-height: 1.5em; }
 .mr-error { border: 1px solid var(--danger, #c54848); border-radius: 10px; padding: 12px 16px; font-size: 13px; color: var(--danger-strong, #a83c3c); }
 .mr-card { border: 1px solid var(--border-subtle, #dce4df); border-radius: 16px; background: var(--surface-card, #fff); min-width: 0; }
-.mr-create { padding: 20px 22px; }
+.mr-create { padding: 20px 22px; container: monthly-report-form / inline-size; }
 .mr-section-title h3 { font-size: 14px; letter-spacing: -.02em; }
 .mr-section-title h3 span { color: var(--text-secondary, #5e6975); font-weight: 500; margin-left: 5px; }
 .mr-muted { color: var(--text-secondary, #5e6975); font-size: 11px; }
-.mr-form-grid { display: grid; grid-template-columns: minmax(130px, .7fr) minmax(115px, .6fr) minmax(180px, 1.6fr) minmax(165px, 1fr); gap: 14px; margin-top: 18px; }
-.monthly-reports label { display: grid; gap: 7px; font-size: 12px; font-weight: 650; color: var(--text-secondary, #5e6975); }
+.mr-form-grid { display: grid; grid-template-columns: minmax(0, .7fr) minmax(0, .6fr) minmax(0, 1.6fr) minmax(0, 1fr); align-items: start; gap: 14px; margin-top: 18px; }
+.monthly-reports label { display: grid; align-content: start; min-width: 0; gap: 7px; font-size: 12px; line-height: 1.5; font-weight: 650; color: var(--text-secondary, #5e6975); }
 .monthly-reports :is(input:not([type="checkbox"]),select,textarea) { width: 100%; min-width: 0; border: 1px solid var(--border-subtle, #dce4df); border-radius: 8px; background: var(--surface-control, #f3f6f3); color: var(--text-primary, #172235); font: inherit; font-weight: 450; padding: 10px 11px; }
 .monthly-reports textarea { resize: vertical; line-height: 1.7; }
 .monthly-reports label small { font-size: 10px; font-weight: 400; }
+.mr-form-grid :is(input,select), .mr-form-actions input { height: 42px; min-height: 42px; }
 .mr-form-actions { margin-top: 14px; }
+.monthly-reports .mr-form-actions .primary-button { min-height: 42px; }
 .mr-search-label { max-width: 360px; width: 100%; }
 .monthly-reports :is(.primary-button,.secondary-button) { min-height: 38px; font-size: 12px; white-space: nowrap; border-radius: 9px; padding: 10px 14px; text-decoration: none; }
 .mr-workspace { display: grid; grid-template-columns: minmax(230px, 300px) minmax(0, 1fr); align-items: start; gap: 16px; }
@@ -81,7 +83,7 @@ html[data-theme-resolved="dark"] .monthly-reports { --mr-public: #92d4aa; --mr-p
 .mr-pickup-card { padding: 13px; border: 1px solid var(--border-subtle, #dce4df); border-top: 3px solid currentColor; border-radius: 9px; min-width: 0; }
 .mr-pickup-card h4 { font-size: 12px; }
 .mr-pickup-card p { font-size: 10px; color: var(--text-secondary, #5e6975); margin-top: 7px; }
-.mr-pickup-card .mr-inline-metrics { grid-template-columns: 1fr; gap: 5px; margin: 10px 0; }
+.mr-pickup-card .mr-inline-metrics { display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; margin: 10px 0; }
 .mr-pickup-card .mr-inline-metrics > div { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding-top: 5px; }
 .mr-pickup-card .mr-inline-metrics dd { margin-top: 0; }
 .mr-pickup-bins { display: grid; gap: 4px; margin-top: 9px; font-size: 10px; color: var(--text-secondary, #5e6975); }
@@ -175,3 +177,15 @@ html[data-theme-resolved="dark"] .monthly-reports { --mr-public: #92d4aa; --mr-p
 @media (prefers-reduced-motion: reduce) { .monthly-reports * { scroll-behavior: auto; transition: none; } }
 @media (max-width: 560px) { .mr-library { grid-template-columns: 1fr; } .mr-library .mr-report-list { grid-template-columns: 1fr; } .mr-overview-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 420px) { .mr-pickup-grid, .mr-insight-stats { grid-template-columns: 1fr; } .mr-fold > summary > span { display: block; margin: 5px 0 0 14px; } .mr-insight-stats dd { font-size: 16px; } }
+
+/* A desktop sidebar can leave a narrow card even when the viewport is wide. */
+@container monthly-report-form (max-width: 700px) {
+  .mr-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .mr-create > .mr-section-title { align-items: flex-start; flex-direction: column; gap: 5px; }
+}
+@container monthly-report-form (max-width: 440px) {
+  .mr-form-grid { grid-template-columns: minmax(0, 1fr); }
+  .mr-form-actions { flex-wrap: wrap; }
+  .mr-form-actions .mr-search-label { max-width: none; }
+  .mr-form-actions .primary-button { width: 100%; white-space: normal; }
+}
