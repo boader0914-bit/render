@@ -80,6 +80,17 @@ test("errors are recorded without tokens, raw logs or request secrets", async t 
   assert.equal(Object.hasOwn(row, "fingerprint"), false);
 });
 
+test("partial reason and counts survive request receipt and restart without raw diagnostics", async t => {
+  const quality = { status: "partial", reason: "product_targets_truncated", counts: { naverScheduleSucceeded: 560, naverScheduleFailed: 0, secret: "SECRET" }, token: "TOKEN" };
+  const { api, dataDir } = await fixture(t, { run: async () => result("partial", { collectionQuality: quality }) });
+  await api.submit(payload());
+  const finished = await terminal(api);
+  assert.deepEqual(finished.result.collectionQuality, { status: "partial", reason: "product_targets_truncated", counts: { naverScheduleSucceeded: 560, naverScheduleFailed: 0 } });
+  const restarted = createCollectorRequests({ dataDir, run: async () => { throw new Error("must not collect"); } });
+  assert.deepEqual((await restarted.get(payload().clientRequestId)).result.collectionQuality, finished.result.collectionQuality);
+  assert.doesNotMatch(await fs.readFile(path.join(dataDir, "history/collector-requests/request-test-0001.json"), "utf8"), /SECRET|TOKEN/);
+});
+
 test("restart marks pending receipt interrupted and never repeats collection", async t => {
   const { api, dataDir } = await fixture(t);
   await api.submit(payload()); await terminal(api);

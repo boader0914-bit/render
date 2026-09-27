@@ -31,6 +31,7 @@ const { createMonthlyVisitorScheduler } = require("./tourism_visitor_monthly_sch
 const { createDemandStrengthBackfillScheduler } = require("./tourism_demand_strength_backfill_scheduler.cjs");
 const { createDailyKeywordCollectionScheduler, validateRequestPacing, effectiveRequestPacing } = require("./daily_keyword_collection_scheduler.cjs");
 const { inspectResult: inspectDailyCollectionResult, allowsDerivedUpdates } = require("./daily_collection_quality.cjs");
+const { readCollectionDiagnostics } = require("./lib/collection_diagnostics.cjs");
 const { createMasterDbDualWriteQueue } = require("./master_db_dual_write.cjs");
 const { createCollectorBroker } = require("./collector_broker.cjs");
 const { dispatchCollector, createHistoricalBookingContext } = require("./collector_dispatch.cjs");
@@ -17134,6 +17135,21 @@ async function readTourismLocationHistoryCache(selector = {}) {
   };
 }
 
+async function loadRunCollectionDiagnostics(runId) {
+  if (!/^[A-Za-z0-9_-]{1,220}$/.test(String(runId || ""))) return null;
+  const dirPath = resolveRunDir(runId);
+  if (!dirPath) return null;
+  try {
+    const [base, directory] = await Promise.all([fsp.realpath(OUTPUTS_DIR), fsp.realpath(dirPath)]);
+    if (path.relative(base, directory) !== runId || !(await fsp.stat(directory)).isDirectory()) return null;
+    // This route reads collection artifacts only: no provider requests, DB writes or recovery.
+    return await readCollectionDiagnostics({ runDir: directory, parseCsv });
+  } catch (error) {
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") return null;
+    throw Object.assign(new Error("저장된 수집 원인 기록을 읽지 못했습니다."), { statusCode: 500 });
+  }
+}
+
 async function loadRun(runId, options = {}) {
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return null;
@@ -17382,6 +17398,7 @@ async function loadRun(runId, options = {}) {
       }
     },
     stats,
+    collectionDiagnostics: await readCollectionDiagnostics({ runDir: dirPath, parseCsv }),
     datalabTrend,
     tourismVisitors,
     tourismVisitorHistory,
@@ -19093,6 +19110,14 @@ async function route(req, res) {
     if (req.method === "POST" && reqUrl.pathname === "/api/settings/traffic-keys/verify") {
       if (!requireAdminSession(session, req, res)) return;
       return send(res, 200, await verifyTrafficKeys());
+    }
+
+    const diagnosticsMatch = /^\/api\/runs\/([^/]+)\/diagnostics$/.exec(reqUrl.pathname);
+    if (req.method === "GET" && diagnosticsMatch) {
+      if (!requireAdminSession(session, req, res)) return;
+      const runId = decodeURIComponent(diagnosticsMatch[1]);
+      const collectionDiagnostics = await loadRunCollectionDiagnostics(runId);
+      return collectionDiagnostics ? send(res, 200, { runId, collectionDiagnostics }) : notFound(res);
     }
 
     if (req.method === "GET" && reqUrl.pathname.startsWith("/api/runs/")) {

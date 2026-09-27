@@ -2095,6 +2095,49 @@ function scheduleProductLabel(schedule) {
   return text.length > 22 ? `${text.slice(0, 22)}...` : text;
 }
 
+function safeNaverScheduleDiagnostics(value = {}) {
+  // Keep diagnostics machine-readable. Provider messages, response bodies and
+  // request URLs can contain credentials and must never enter compact details.
+  const allowed = ["TIMEOUT", "NETWORK_ERROR", "HTTP_ERROR", "PROVIDER_BLOCKED", "GRAPHQL_ERROR",
+    "MISSING_SCHEDULE", "INVALID_STOCK", "UNKNOWN_ERROR"];
+  const status = Number(value.responseStatus);
+  return {
+    collectionErrorCode: allowed.includes(value.collectionErrorCode) ? value.collectionErrorCode : "",
+    responseStatus: Number.isInteger(status) && status >= 100 && status <= 599 ? status : 0,
+    collectionPhase: "booking_schedule",
+  };
+}
+
+function naverScheduleFailureDiagnostics(error) {
+  const status = [error?.statusCode, error?.status, error?.cause?.statusCode, error?.cause?.status]
+    .map(Number).find(value => Number.isInteger(value) && value >= 100 && value <= 599) || 0;
+  const codes = [error?.code, error?.cause?.code];
+  let code = "UNKNOWN_ERROR";
+  if ([403, 429].includes(status) || codes.some(value => ["NAVER_REQUEST_BLOCKED", "NAVER_SCHEDULE_BLOCKED",
+    "COLLECTOR_PROVIDER_BLOCKED", "BookingAPITooManyRequests", "NAVER_CAPTCHA"].includes(value))) code = "PROVIDER_BLOCKED";
+  else if (error?.name === "TimeoutError" || error?.cause?.name === "TimeoutError"
+    || codes.some(value => ["ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT"].includes(value))) code = "TIMEOUT";
+  else if (status && (status < 200 || status >= 300)) code = "HTTP_ERROR";
+  else if (codes.some(value => ["ECONNRESET", "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH",
+    "EPIPE", "UND_ERR_SOCKET"].includes(value)) || (error?.name === "TypeError" && error?.message === "fetch failed")) code = "NETWORK_ERROR";
+  return safeNaverScheduleDiagnostics({ collectionErrorCode: code, responseStatus: status });
+}
+
+function naverScheduleResponseDiagnostics(schedule, stock) {
+  if (schedule.collectionErrorCode) return safeNaverScheduleDiagnostics(schedule);
+  const status = Number(schedule.status);
+  const hasErrors = Boolean(Array.isArray(schedule.errors) ? schedule.errors.length : schedule.errors);
+  let code = "";
+  if ([403, 429].includes(status) || (Array.isArray(schedule.errors) && schedule.errors.some(error =>
+    error?.extensions?.code === "BookingAPITooManyRequests"))) code = "PROVIDER_BLOCKED";
+  else if (!Number.isInteger(status) || status < 100 || status > 599) code = "UNKNOWN_ERROR";
+  else if (status < 200 || status >= 300) code = "HTTP_ERROR";
+  else if (hasErrors) code = "GRAPHQL_ERROR";
+  else if (!schedule.day || typeof schedule.day !== "object" || Array.isArray(schedule.day)) code = "MISSING_SCHEDULE";
+  else if (stock === null) code = "INVALID_STOCK";
+  return safeNaverScheduleDiagnostics({ collectionErrorCode: code, responseStatus: status });
+}
+
 function compactNaverScheduleDetail(schedule, listType = "", date = CHECK_IN, availabilityUnit = "") {
   const quantity = scheduleQuantityProfile(schedule, listType);
   return {
@@ -2126,6 +2169,7 @@ function compactNaverScheduleDetail(schedule, listType = "", date = CHECK_IN, av
     isBusinessDay: schedule.isBusinessDay,
     isSaleDay: schedule.isSaleDay,
     collectionFailed: Boolean(schedule.collectionFailed || (schedule.errors && (!Array.isArray(schedule.errors) || schedule.errors.length))),
+    ...safeNaverScheduleDiagnostics(schedule),
     couponStatus: schedule.couponStatus || "",
     couponNames: schedule.couponNames || ""
   };
@@ -2469,7 +2513,7 @@ async function collectNaverSchedulesForItems(bookingBusinessId, items, limit = 4
     if (NAVER_SCHEDULE_DELAY_MS) await delay(NAVER_SCHEDULE_DELAY_MS * (index % NAVER_SCHEDULE_CONCURRENCY));
     let schedule;
     try { schedule = await getNaverDailySchedule(bookingBusinessId, item.bizItemId, date); }
-    catch { schedule = { day: null, errors: ["schedule_request_failed"], status: 0 }; }
+    catch (error) { schedule = { day: null, errors: ["schedule_request_failed"], status: 0, ...naverScheduleFailureDiagnostics(error) }; }
     const queryAttempted = !GUARDED_COLLECTION || naverScheduleRequestsStarted.has(`${bookingBusinessId}:${item.bizItemId}:${date}`);
     const day = schedule.day || {};
     const stock = asStockNumber(day.stock);
@@ -2499,6 +2543,7 @@ async function collectNaverSchedulesForItems(bookingBusinessId, items, limit = 4
       isSaleDay: day.isSaleDay,
       errors: schedule.errors,
       queryAttempted,
+      ...naverScheduleResponseDiagnostics(schedule, stock),
       collectionFailed: schedule.status < 200 || schedule.status >= 300 || stock === null
         || Boolean(Array.isArray(schedule.errors) ? schedule.errors.length : schedule.errors),
     };

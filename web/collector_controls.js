@@ -54,7 +54,7 @@
     if (!text) return "";
     if (text === "COLLECTOR_DUPLICATE_PATH") return "상세 파일 목록이 중복되어 최종 저장 검증에 실패했습니다. 보존 자료 복구가 필요합니다.";
     if (text === "COLLECTOR_UPLOAD_FAILED") return "수집 결과의 전송 또는 최종 저장 확인에 실패했습니다.";
-    if (/PROVIDER|NAVER.*BLOCK|CAPTCHA|TOO_MANY|BookingAPITooManyRequests|HTTP_(403|429)/i.test(text)) return "네이버 접근 제한이 감지되어 수집을 멈췄습니다. 운영 점검이 필요합니다.";
+    if (/PROVIDER_(?:BLOCKED|ACCESS)|NAVER.*BLOCK|CAPTCHA|TOO_MANY|BookingAPITooManyRequests|HTTP_(403|429)/i.test(text)) return "네이버 접근 제한이 감지되어 수집을 멈췄습니다. 운영 점검이 필요합니다.";
     if (/REPEAT|SCOPE_REVIEW|SAME_DAY|DUPLICATE/.test(text)) return "당일 수집 기록 또는 조건이 다른 자료가 있습니다. 기존 결과와 수집 범위를 확인하세요.";
     if (/PERSISTENCE|STATE_INVALID|STATE_UNREADABLE/.test(text)) return "저장된 작업 기록을 확인하지 못했습니다. 기록 점검 후 실행할 수 있습니다.";
     if (/NOT_CONFIGURED|TOKEN|AUTH/.test(text)) return "수집기 연결 설정을 확인해야 합니다.";
@@ -111,7 +111,7 @@
     return `${date} · ${time} · ${repeat}`;
   }
   function historyEntries(requests = [], schedules = {}) {
-    const rows = requests.map(item => ({ ...item, workerKey: workerKey(item.workerKey), trigger: "manual", runId: item.result?.runId, stamp: item.createdAt || item.startedAt }));
+    const rows = requests.map(item => ({ ...item, collectionQuality: item.result?.collectionQuality || item.collectionQuality, workerKey: workerKey(item.workerKey), trigger: "manual", runId: item.result?.runId, stamp: item.createdAt || item.startedAt }));
     for (const key of WORKER_KEYS) for (const occurrence of schedules[key]?.latest || []) {
       const items = occurrence.items?.length ? occurrence.items : [{ keyword: "예약 실행", status: occurrence.status, errorCode: occurrence.errorCode }];
       for (const item of items) rows.push({ ...item, workerKey: key, trigger: occurrence.trigger || "scheduled", stamp: item.startedAt || occurrence.startedAt || occurrence.createdAt, startedAt: item.startedAt || occurrence.startedAt, finishedAt: item.endedAt || occurrence.finishedAt, status: item.status || occurrence.status });
@@ -151,7 +151,7 @@
     const remaining = Number.isFinite(crawl.remainingSeconds) ? Math.max(0, crawl.remainingSeconds - secondsSinceStatus) : null;
     const delay = active && (crawl.isDelayed || remaining === 0);
     const eta = worker.halted ? "수집 중단" : crawl.cancelling ? "중단 처리 중" : staleConnection ? "연결 확인 필요" : stalled ? "응답 확인 중" : verified ? "저장·검증 완료" : ["complete", "completed", "reused"].includes(terminalStatus) ? "정상 저장 확인 필요" : terminalStatus ? STATUS_LABELS[terminalStatus] || "확인 필요" : pending ? "차례를 기다리는 중" : delay ? "예상보다 지연" : active ? etaRange(remaining) : "";
-    const error = worker.halted ? errorMessage(worker.brokerErrorCode || worker.errorCode) : terminalStatus && !verified ? errorMessage(record.brokerErrorCode || record.errorCode) : "";
+    const error = worker.halted ? errorMessage(worker.brokerErrorCode || worker.errorCode) : terminalStatus && !verified ? qualityReason(record.collectionQuality || record.result?.collectionQuality) || errorMessage(record.brokerErrorCode || record.errorCode) : "";
     const keyword = crawl.activeJob?.keyword || crawl.currentJob?.keyword || record?.keyword || "수집 작업";
     return { visible: active || pending || Boolean(terminalStatus) || Boolean(worker.halted), state, active, animated: active && !paused && !delay, keyword, eta,
       label: active && !paused && !delay ? "예상 남은 시간" : verified ? "결과 확인" : "진행 상태", phase,
@@ -164,8 +164,126 @@
       basis: crawl.estimateBasis?.timing?.source === "measured" ? `최근 유사 수집 ${crawl.estimateBasis.timing.sampleCount || 0}건 기준` : "수집 조건 기준 추정",
       runId: verified ? record.runId || record.result.runId : null };
   }
-  if (typeof module !== "undefined" && module.exports) module.exports = { workerKey, workerLabel, keywordLines, duplicateKeywordCount, scheduleConfig, formatTime, workerState, workerQueueCount, workerAvailability, durationLabel, errorMessage, STATUS_LABELS, normalizeDayUse, collectionDates, defaultDraft, reservationSummary, historyEntries, filterHistory, etaRange, progressModel };
+  const QUALITY_REASONS = {
+    product_targets_truncated: "상품 수 제한으로 일부 미수집", product_targets_incomplete: "일부 상품을 조회하지 못함",
+    product_day_targets_incomplete: "일부 상품·숙박일 응답 미확보", product_list_incomplete: "상품 목록을 끝까지 확인하지 못함",
+    product_coverage_missing: "상품별 조회 범위 기록 없음", product_coverage_invalid: "상품별 조회 범위 검증 필요",
+    booking_schedule_responses_incomplete: "일부 예약 일정 응답 미확보", booking_results_incomplete: "일부 업체의 예약 자료 미확보",
+    booking_targets_incomplete: "일부 대상 업체 미수집", auxiliary_ota_incomplete: "보조 예약채널 자료 일부 미확보",
+    quality_metadata_missing: "수집 품질 기록 일부 없음", collection_profile_missing: "수집 조건 기록 없음",
+    naver_request_blocked: "네이버 접근 제한 감지", naver_main_rate_limited: "네이버 요청량 제한 감지",
+    naver_main_access_blocked: "네이버 접근 제한 감지", naver_booking_blocked: "네이버 예약 접근 제한 감지", naver_schedule_blocked: "예약 일정 접근 제한 감지",
+    collection_execution_failed: "수집 작업 실패", naver_main_request_failed: "검색 응답 미확보", no_main_results: "검색 결과 없음",
+    no_successful_booking_results: "예약 자료 미확보", no_booking_schedule_requests: "예약 일정 조회 기록 없음",
+    inconsistent_booking_counts: "업체 성공 건수 검증 필요", inconsistent_ota_counts: "보조 예약채널 건수 검증 필요", inconsistent_schedule_counts: "예약 일정 건수 검증 필요",
+    inventory_review_required: "객실 수량 검토 필요", quantity_review_required: "객실 수량 검토 필요",
+    manifest_missing: "결과 확인 기록 없음", manifest_unreadable: "결과 확인 기록을 읽지 못함", result_artifacts_missing: "결과 파일 기록 없음"
+  };
+  function qualityReason(quality = {}) {
+    const reason = quality?.reason || "";
+    if (reason === "manifest_checks_passed") return "";
+    if (Object.hasOwn(QUALITY_REASONS, reason)) return QUALITY_REASONS[reason];
+    if (/_mismatch$|_invalid$/.test(reason)) return "수집 조건·결과 검증 필요";
+    return reason || ["partial", "failed", "blocked", "interrupted"].includes(quality?.status) ? "세부 원인 기록 확인 필요" : "";
+  }
+  function diagnosticCount(value) { return value !== null && value !== undefined && value !== "" && Number.isInteger(Number(value)) && Number(value) >= 0 ? Number(value).toLocaleString("ko-KR") : "미기록"; }
+  function diagnosticMetrics(counts = {}) {
+    const rows = [
+      `업체 응답 성공 ${diagnosticCount(counts.naverBookingStockSucceeded)} / 확인 ${diagnosticCount(counts.naverBookingStockChecked)}`,
+      `예약 일정 성공 ${diagnosticCount(counts.naverScheduleSucceeded)} / 요청 ${diagnosticCount(counts.naverScheduleRequested)}`,
+      `예약 일정 실패 ${diagnosticCount(counts.naverScheduleFailed)} · 차단 ${diagnosticCount(counts.naverScheduleBlocked)}`
+    ];
+    if (counts.productEligible != null || counts.productQueried != null || counts.productTruncated != null) rows.push(`대상 상품 ${diagnosticCount(counts.productEligible)}개 · 조회 ${diagnosticCount(counts.productQueried)}개 · 수 제한으로 미조회 ${diagnosticCount(counts.productTruncated)}개`);
+    return rows;
+  }
+  function diagnosticDates(values = []) {
+    const dates = [...new Set((Array.isArray(values) ? values : []).filter(validDay))].sort();
+    if (!dates.length) return "세부 기록 없음";
+    if (dates.length > 2 && dates.every((date, index) => index === 0 || Date.parse(date) - Date.parse(dates[index - 1]) === 86400000)) return `${dates[0]} ~ ${dates.at(-1)} (${dates.length}일)`;
+    return dates.join(", ");
+  }
+  if (typeof module !== "undefined" && module.exports) module.exports = { workerKey, workerLabel, keywordLines, duplicateKeywordCount, scheduleConfig, formatTime, workerState, workerQueueCount, workerAvailability, durationLabel, errorMessage, STATUS_LABELS, normalizeDayUse, collectionDates, defaultDraft, reservationSummary, historyEntries, filterHistory, etaRange, progressModel, qualityReason, diagnosticMetrics, diagnosticDates };
   if (typeof document === "undefined") return;
+  // Reuse the same stored-only diagnosis in history and the archive. Opening it never starts collection.
+  const diagnosticCache = new Map(), diagnosticOpen = new Map();
+  function diagnosticIssueTone(issue = {}) {
+    return /quantity|inventory|capacity|stock.*review/i.test(issue.code || "") ? "review" : /truncat|limit|coverage|unqueried/i.test(issue.code || "") ? "scope" : "attention";
+  }
+  function renderDiagnosticBody(body, value, quality = {}) {
+    body.replaceChildren();
+    if (!value) {
+      body.append(node("p", "세부 기록 없음 · 이 결과에는 원인을 확인할 세부 기록이 없습니다.", "collection-diagnostic-note"));
+      for (const metric of diagnosticMetrics(quality.counts)) body.append(node("p", metric, "collection-diagnostic-count"));
+      return;
+    }
+    body.append(node("p", value.summary || value.reasonLabel || qualityReason(value) || "저장된 수집 기록을 확인했습니다.", "collection-diagnostic-summary"));
+    const metrics = node("div", "", "collection-diagnostic-metrics");
+    for (const metric of diagnosticMetrics(value.counts || quality.counts)) metrics.append(node("p", metric, "collection-diagnostic-count"));
+    body.append(metrics);
+    if (Number.isInteger(value.observedZeroScheduleCount) && Number.isInteger(value.failedZeroScheduleCount) && (value.observedZeroScheduleCount > 0 || value.failedZeroScheduleCount > 0)) body.append(node("p", `재고 0 응답: 정상 응답 ${diagnosticCount(value.observedZeroScheduleCount)}건 · 오류가 동반된 0 ${diagnosticCount(value.failedZeroScheduleCount)}건 (상품·숙박일 기준)`, "collection-diagnostic-note"));
+    const issues = Array.isArray(value.issues) ? value.issues : [];
+    for (const issue of issues) {
+      const item = node("article", "", "collection-diagnostic-issue"), tone = diagnosticIssueTone(issue);
+      item.dataset.tone = tone;
+      item.append(node("strong", `${tone === "review" ? "수량 검토 · " : ""}${issue.label || "수집 기록 확인"}`));
+      item.append(node("p", `업체: ${issue.companyName || "이름 미기록"}${issue.productName ? ` · 상품: ${issue.productName}` : ""}`));
+      if (!issue.productName && issue.phase !== "validation") item.append(node("small", "상품별 이름은 미기록"));
+      item.append(node("p", `숙박일: ${diagnosticDates(issue.dates)}`));
+      if (issue.code === "PRODUCT_TARGETS_TRUNCATED" && Number.isInteger(issue.affectedCount)) item.append(node("p", `대상 ${diagnosticCount(issue.expectedCount)}개 상품 · 조회 ${diagnosticCount(issue.queriedCount)}개 · 수 제한으로 미조회 ${diagnosticCount(issue.affectedCount)}개 · 요청 실패와 구분`));
+      else if (issue.countUnit === "product_dates" && Number.isInteger(issue.affectedCount)) item.append(node("p", `미확보 ${diagnosticCount(issue.affectedCount)}건 · 상품·숙박일별 조회 기준`));
+      if (Number.isInteger(issue.httpStatus) && issue.httpStatus >= 100 && issue.httpStatus <= 599) item.append(node("p", `응답 상태 HTTP ${issue.httpStatus}`));
+      if (issue.message && issue.message !== issue.label && issue.detailStatus !== "unrecorded") item.append(node("p", issue.message));
+      if (issue.detailStatus === "unrecorded") item.append(node("small", "세부 기록 없음 · 개별 응답 원인을 확정할 수 없습니다."));
+      body.append(item);
+    }
+    if (!issues.length) body.append(node("p", value.status === "complete" ? "저장 기록에서 수집 실패는 확인되지 않았습니다. 객실 수량 검토는 별도입니다." : "세부 기록 없음 · 일부 완료만으로 접근 차단을 판단하지 않습니다.", "collection-diagnostic-note"));
+    if (value.truncated) body.append(node("p", "세부 기록이 많아 일부만 표시합니다.", "collection-diagnostic-note"));
+    for (const limitation of value.limitations || []) body.append(node("p", limitation, "collection-diagnostic-note"));
+    body.append(node("p", "상품 수는 실제 객실 수와 다릅니다. 숙박일별 기록을 더해 객실 수로 계산하지 않습니다.", "collection-diagnostic-note"));
+  }
+  async function storedDiagnostics(runId) {
+    if (diagnosticCache.has(runId)) return diagnosticCache.get(runId);
+    const pending = (async () => {
+      const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/diagnostics`, { method: "GET", credentials: "same-origin" });
+      if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? "관리자 로그인을 확인하세요." : "저장된 원인 기록을 불러오지 못했습니다.");
+      const payload = await response.json();
+      if (payload.runId !== runId) throw new Error("결과 번호가 일치하지 않아 표시하지 않았습니다.");
+      return payload.collectionDiagnostics || null;
+    })();
+    diagnosticCache.set(runId, pending);
+    return pending;
+  }
+  function diagnosticCard(runId, quality = {}, scope = "history") {
+    const details = node("details", "", "collection-diagnostics"), summary = node("summary"), body = node("div", "", "collection-diagnostic-body");
+    const key = `${scope}:${runId}`, reason = qualityReason(quality);
+    summary.append(node("strong", "원인 확인"));
+    if (reason) summary.append(node("small", reason));
+    details.append(summary, body); body.setAttribute("aria-live", "polite");
+    let loaded = false;
+    const load = async () => {
+      if (loaded) return; loaded = true; body.replaceChildren(node("p", "저장된 원인 기록을 확인하는 중입니다.", "collection-diagnostic-note"));
+      if (!runId) { renderDiagnosticBody(body, null, quality); return; }
+      try { renderDiagnosticBody(body, await storedDiagnostics(runId), quality); }
+      catch (error) {
+        body.replaceChildren(node("p", error.message, "collection-diagnostic-note"));
+        const retry = node("button", "다시 확인", "small-button"); retry.type = "button";
+        retry.addEventListener("click", () => { diagnosticCache.delete(runId); loaded = false; return load(); }); body.append(retry);
+      }
+    };
+    details.addEventListener("toggle", () => { diagnosticOpen.set(key, details.open); if (details.open) return load(); });
+    if (diagnosticOpen.get(key)) { details.open = true; load(); }
+    return details;
+  }
+  window.CollectionDiagnosticsUi = {
+    qualityReason,
+    mount(root, runs) {
+      for (const slot of root?.querySelectorAll?.("[data-collection-diagnostics]") || []) {
+        const run = runs.find(item => item.id === slot.dataset.collectionDiagnostics);
+        if (run) slot.replaceChildren(diagnosticCard(run.id, run.collectionQuality, "archive"));
+      }
+    }
+  };
+  window.dispatchEvent(new CustomEvent("collector:diagnostics-ready"));
   const byId = id => document.getElementById(id);
   const panel = byId("collectorControlsCard");
   if (!panel) return;
@@ -385,10 +503,14 @@
     for (const entry of filtered.slice(0, 50)) {
       const row = node("article", "", "collector-history-row"), info = node("div");
       info.append(node("strong", entry.keyword || "키워드 확인 중"), node("small", `${workerLabel(entry.workerKey)} · ${entry.trigger === "scheduled" ? "예약" : "즉시"} · ${formatTime(entry.stamp)}${durationLabel(entry) ? ` · ${durationLabel(entry)}` : ""}`));
+      const reason = qualityReason(entry.collectionQuality);
+      if (reason) info.append(node("small", reason, "collector-worker-alert"));
       if (entry.errorCode) info.append(node("small", errorMessage(entry.brokerErrorCode || entry.errorCode), "collector-worker-alert"));
       if (entry.recovery) info.append(node("small", "보존 자료 복구 완료 · 업체 DB 반영"));
       row.append(info, node("span", entry.recovery && entry.status === "complete" ? "복구 완료" : STATUS_LABELS[entry.status] || "확인 필요", "state-badge"));
-      if (entry.runId) row.append(resultButton(entry.runId)); container.append(row);
+      if (entry.runId) row.append(resultButton(entry.runId));
+      if (entry.runId || ["partial", "failed", "blocked", "interrupted"].includes(entry.status)) row.append(diagnosticCard(entry.runId || "", entry.collectionQuality || { status: entry.status }, `history:${entry.requestId || entry.keyword}`));
+      container.append(row);
     }
     for (const card of cards.values()) {
       card.lastResult.replaceChildren(); const last = rows.find(row => row.workerKey === card.key && row.runId);

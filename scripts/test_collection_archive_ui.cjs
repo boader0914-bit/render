@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { test } = require("node:test");
+const { qualityReason } = require("../web/collector_controls.js");
 const source = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8").replace(/\r\n/g, "\n");
 const clone = value => JSON.parse(JSON.stringify(value));
 const defaults = () => ({ keyword: "", startDate: "", endDate: "", worker: "all", quality: "all", dateMode: "all" });
@@ -20,7 +21,7 @@ function row(id, overrides = {}) {
     workerKey: "web", collectionQuality: { status: "complete" }, checkIn: "2026-10-01", checkOut: "2026-10-02", bookingRangeDays: 1, ...overrides };
 }
 function fixture(runs = []) {
-  const listeners = {}, calls = [];
+  const listeners = {}, calls = [], diagnosticMounts = [];
   const root = {
     html: "", form: null, scrolled: 0,
     set innerHTML(value) {
@@ -43,7 +44,7 @@ function fixture(runs = []) {
     collectionArchiveFilters: defaults(), collectionArchiveDraft: null, collectionArchivePage: 1, collectionArchiveError: "" };
   const context = vm.createContext({ Date: FixedDate, Intl, Object, state, els: { collectionArchive: root, runSelect: { innerHTML: "", value: state.activeRunId } },
     isAdminRole: () => true, escapeHtml, fmtNumber: value => String(value), placeRankComparisonSummaryHtml: () => "<p>comparison</p>",
-    window: { requestAnimationFrame: fn => fn() }, fetchJson: async (url, options = {}) => {
+    window: { requestAnimationFrame: fn => fn(), CollectionDiagnosticsUi: { qualityReason, mount: (element, rows) => diagnosticMounts.push({ element, runIds: rows.map(row => row.id) }) } }, fetchJson: async (url, options = {}) => {
       calls.push({ url, method: options.method || "GET" });
       assert.equal(url, "/api/runs", "Archive refresh must not request collection or analysis endpoints");
       assert.equal(options.method || "GET", "GET");
@@ -55,8 +56,19 @@ function fixture(runs = []) {
   const emit = (type, target) => { const event = { target, prevented: false, preventDefault() { this.prevented = true; } }; for (const listener of listeners[type] || []) listener(event); return event; };
   const set = (name, value, event = "input") => { const field = root.form.fields[name]; field.value = value; field.closest = selector => selector === "[data-archive-search-form]" ? root.form : null; emit(event, field); };
   const click = (kind, value = "", disabled = false) => { const attr = { preset: "archiveDatePreset", page: "archivePage", reset: "archiveReset" }[kind]; const selector = { preset: "[data-archive-date-preset]", page: "[data-archive-page]", reset: "[data-archive-reset]" }[kind]; const button = { dataset: { [attr]: value }, disabled, closest: match => match === selector ? button : null }; return emit("click", button); };
-  return { api: context, state, root, calls, set, click, submit: () => emit("submit", root.form), visibleIds: () => [...root.html.matchAll(/data-archive-run-id="([^"]+)"/g)].map(match => decode(match[1])) };
+  return { api: context, state, root, calls, diagnosticMounts, set, click, submit: () => emit("submit", root.form), visibleIds: () => [...root.html.matchAll(/data-archive-run-id="([^"]+)"/g)].map(match => decode(match[1])) };
 }
+
+test("archive labels stored quality reasons and mounts only the visible saved result diagnostics", () => {
+  const ui = fixture([row("partial", { collectionQuality: { status: "partial", reason: "product_targets_truncated" } }), row("failed", { collectionQuality: { status: "partial", reason: "booking_schedule_responses_incomplete" } }), row("unknown", { collectionQuality: { status: "partial", reason: "SECRET_RAW_ERROR" } })]);
+  assert.match(ui.root.html, /상품 수 제한으로 일부 미수집/);
+  assert.match(ui.root.html, /일부 예약 일정 응답 미확보/);
+  assert.doesNotMatch(ui.root.html, /SECRET_RAW_ERROR|네이버 접근 제한 감지/);
+  assert.deepEqual(clone(ui.diagnosticMounts.at(-1).runIds).sort(), ["failed", "partial", "unknown"]);
+  assert.equal(ui.diagnosticMounts.at(-1).element, ui.root);
+  assert.equal((ui.root.html.match(/data-collection-diagnostics=/g) || []).length, 3);
+  assert.equal(ui.calls.length, 0, "Rendering cause placeholders must not start collection or fetch per-run details");
+});
 
 test("collection dates use inclusive KST boundaries and never folder updatedAt", () => {
   const { api } = fixture();

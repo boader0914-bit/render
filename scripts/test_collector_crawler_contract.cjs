@@ -44,7 +44,7 @@ function harness(options = {}) {
   const exports = vm.runInNewContext(`${setup}\n${options.setup || ""}\n({
     loadHistoricalNaverBookingBusinessMap, getHistoricalNaverBookingBusiness, getNaverDailySchedule,
     addCollectionDiagnostics, diagnostics: scheduledCollectionDiagnostics,
-    collectNaverSchedulesForItems, collectWeeklyNaverAvailability, collectNaverBookingAvailability, productCoverage, outputDir: OUTPUT_DIR,
+    collectNaverSchedulesForItems, collectWeeklyNaverAvailability, collectNaverBookingAvailability, compactNaverScheduleDetail, productCoverage, outputDir: OUTPUT_DIR,
     profile: COLLECTION_PROFILE,
     concurrency: [NAVER_BOOKING_DETAIL_CONCURRENCY, NAVER_SCHEDULE_CONCURRENCY, NAVER_OTA_OBSERVATION_CONCURRENCY],
   })`, context);
@@ -283,6 +283,56 @@ test("real schedule reader preserves zero, missing and failure while coverage re
   assert.equal(coverage.discovered, 43); assert.equal(coverage.eligible, 42); assert.equal(coverage.excluded, 1);
   assert.equal(coverage.queried, 40); assert.equal(coverage.truncated, 2);
   for (const day of coverage.targets[0].days) { assert.equal(day.queried, 40); assert.equal(day.succeeded, 38); assert.equal(day.failed, 2); assert.equal(day.truncated, 2); }
+});
+
+test("schedule failure details retain safe evidence without guessing causes or leaking provider text", async () => {
+  const secret = "private-token=https://fixture.invalid/path?access_token=do-not-persist";
+  const dayBody = (day, errors) => ({ data: { schedule: { bizItemSchedule: { daily: { date: { "2026-09-22": day } } } } }, errors });
+  const cases = [
+    { name: "normal zero", body: dayBody({ stock: 0, bookingCount: 0 }), status: 200, code: "", failed: false },
+    { name: "timeout name", error: Object.assign(new Error(secret), { name: "TimeoutError" }), status: 0, code: "TIMEOUT" },
+    { name: "timeout cause", error: new TypeError("fetch failed", { cause: { code: "UND_ERR_HEADERS_TIMEOUT", message: secret } }), status: 0, code: "TIMEOUT" },
+    { name: "network cause", error: new TypeError("fetch failed", { cause: { code: "ECONNRESET", message: secret } }), status: 0, code: "NETWORK_ERROR" },
+    { name: "http response", body: { message: secret }, status: 503, code: "HTTP_ERROR" },
+    { name: "graphql response", body: dayBody({ stock: 2 }, [{ message: secret, extensions: { code: "INTERNAL_SERVER_ERROR" } }]), status: 200, code: "GRAPHQL_ERROR" },
+    { name: "missing schedule", body: dayBody(null), status: 200, code: "MISSING_SCHEDULE" },
+    { name: "invalid stock", body: dayBody({ stock: "unavailable" }), status: 200, code: "INVALID_STOCK" },
+    { name: "unknown error", error: new Error(secret), status: 0, code: "UNKNOWN_ERROR" },
+    { name: "abort is not proof of timeout", error: Object.assign(new Error(secret), { name: "AbortError" }), status: 0, code: "UNKNOWN_ERROR" },
+    { name: "http block", body: { message: secret }, status: 429, code: "PROVIDER_BLOCKED" },
+    { name: "http200 throttle", body: { errors: [{ message: secret, extensions: { code: "BookingAPITooManyRequests" } }] }, status: 200, code: "PROVIDER_BLOCKED" },
+  ];
+  for (const fixture of cases) {
+    let requests = 0;
+    const crawler = harness({ env: { COLLECTOR_WORKER_RUNTIME: "1", NAVER_SCHEDULE_DELAY_MS: "0" }, fetchImpl: async () => {
+      requests++;
+      if (fixture.error) throw fixture.error;
+      return new Response(JSON.stringify(fixture.body), { status: fixture.status });
+    } });
+    const [row] = await crawler.collectNaverSchedulesForItems("fixture-business", [{ bizItemId: "fixture-product", name: "객실", bizItemSubType: "ACCOMMODATION_NIGHT" }], 40);
+    const detail = crawler.compactNaverScheduleDetail(row, "객실 종류별 리스트", "2026-09-22");
+    assert.equal(requests, 1, fixture.name);
+    assert.equal(detail.collectionErrorCode, fixture.code, fixture.name);
+    assert.equal(detail.responseStatus, fixture.status, fixture.name);
+    assert.equal(detail.collectionPhase, "booking_schedule", fixture.name);
+    assert.equal(detail.collectionFailed, fixture.failed !== false, fixture.name);
+    assert.equal(row.queryAttempted, true, fixture.name);
+    assert.doesNotMatch(JSON.stringify(detail), /private-token|access_token|do-not-persist|fixture\.invalid|INTERNAL_SERVER_ERROR/, fixture.name);
+  }
+});
+
+test("compact schedule diagnostics accept only the diagnostic vocabulary and real HTTP statuses", () => {
+  const crawler = harness();
+  const input = { bizItemId: "p", name: "객실", stock: null, collectionFailed: true,
+    collectionErrorCode: "https://fixture.invalid/?token=secret", responseStatus: 999,
+    collectionPhase: "private-query", error: "secret", errors: [{ message: "private-response" }] };
+  const detail = crawler.compactNaverScheduleDetail(input, "객실 종류별 리스트", "2026-09-22");
+  assert.equal(detail.collectionErrorCode, "");
+  assert.equal(detail.responseStatus, 0);
+  assert.equal(detail.collectionPhase, "booking_schedule");
+  assert.doesNotMatch(JSON.stringify(detail), /fixture\.invalid|secret|private-query|private-response/);
+  const legacy = crawler.compactNaverScheduleDetail({ bizItemId: "p", collectionFailed: true });
+  assert.equal(legacy.collectionErrorCode, "", "old unrecorded failures must not acquire a guessed cause");
 });
 
 test("day-use 20-product limit is consistent on the first and all later dates", async () => {

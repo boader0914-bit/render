@@ -30,6 +30,21 @@ async function fixture(overrides = {}) {
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 async function waitFor(predicate) { for (let attempt = 0; attempt < 150; attempt += 1) { if (await predicate()) return; await new Promise(resolve => setTimeout(resolve, 2)); } throw new Error("condition_not_reached"); }
 
+test("scheduled receipts preserve safe partial causes across status reads", async () => {
+  const f = await fixture({ runCrawler: async () => ({ runId: "test_glamping_20260923_140000", collectionQuality: {
+    status: "partial", reason: "product_targets_truncated", counts: { naverScheduleFailed: 0, naverScheduleSucceeded: 560, token: "SECRET" }, cookie: "PRIVATE" } }) });
+  try {
+    await f.prepare({ keywords: ["포천글램핑"] }); await f.scheduler.setEnabled(true);
+    f.setTime("2026-09-23T05:00:00Z");
+    const entry = await f.scheduler.tick();
+    assert.equal(entry.status, "partial");
+    assert.deepEqual(entry.items[0].collectionQuality, { status: "partial", reason: "product_targets_truncated", counts: { naverScheduleSucceeded: 560, naverScheduleFailed: 0 } });
+    const saved = (await f.scheduler.status()).latest[0];
+    assert.deepEqual(saved.items[0].collectionQuality, entry.items[0].collectionQuality);
+    assert.doesNotMatch(JSON.stringify(saved), /SECRET|PRIVATE/);
+  } finally { await f.close(); }
+});
+
 test("disabled default and saving never initiate collection or activate former daily policy", async () => {
   const f = await fixture();
   try {

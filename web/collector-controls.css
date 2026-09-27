@@ -77,6 +77,25 @@
 .collector-history-row small { display: block; color: var(--text-secondary); font-size: 11px; line-height: 1.6; margin-top: 4px; overflow-wrap: anywhere; }
 .collector-result-button { min-height: 32px; white-space: nowrap; font-size: 11px; padding: 5px 9px; }
 .collector-worker-alert { color: var(--warning-strong) !important; }
+/* Stored result diagnostics are shared by collection history and the archive. */
+.collector-history-row > .collection-diagnostics,
+#collectionArchive .collection-archive-row > .collection-archive-diagnostics { grid-column: 1 / -1; min-width: 0; }
+:is(#collectorControlsCard, #collectionArchive) .collection-diagnostics { margin: 3px 0 0; width: 100%; min-width: 0; border: 1px solid var(--border-subtle); border-radius: 9px; background: var(--surface-soft); box-sizing: border-box; }
+:is(#collectorControlsCard, #collectionArchive) .collection-diagnostics > summary { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 12px; padding: 10px 12px; cursor: pointer; list-style: none; min-height: 40px; box-sizing: border-box; }
+:is(#collectorControlsCard, #collectionArchive) .collection-diagnostics > summary::-webkit-details-marker { display: none; }
+:is(#collectorControlsCard, #collectionArchive) .collection-diagnostics > summary::after { content: "+"; margin-left: auto; font-size: 17px; line-height: 1; color: var(--text-secondary); }
+:is(#collectorControlsCard, #collectionArchive) .collection-diagnostics[open] > summary::after { content: "−"; }
+:is(#collectorControlsCard, #collectionArchive) .collection-diagnostics > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+:is(#collectorControlsCard, #collectionArchive) .collection-diagnostics :is(strong, p, small) { margin: 0; min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.65; }
+:is(#collectorControlsCard, #collectionArchive) .collection-diagnostics strong { color: var(--text-primary) !important; font-size: 12px; }
+:is(#collectorControlsCard, #collectionArchive) .collection-diagnostics :is(p, small) { color: var(--text-secondary) !important; font-size: 11px; }
+:is(#collectorControlsCard, #collectionArchive) .collection-diagnostic-body { display: grid; gap: 11px; padding: 1px 12px 12px; min-width: 0; }
+:is(#collectorControlsCard, #collectionArchive) .collection-diagnostic-metrics { display: grid; gap: 3px; border-top: 1px solid var(--border-subtle); padding-top: 9px; }
+:is(#collectorControlsCard, #collectionArchive) .collection-diagnostic-body > .collection-diagnostic-summary { color: var(--text-primary) !important; }
+:is(#collectorControlsCard, #collectionArchive) .collection-diagnostic-issue { display: grid; gap: 4px; padding: 10px 12px; min-width: 0; border: 1px solid var(--border-subtle); border-left: 3px solid var(--warning-strong); border-radius: 6px; background: var(--surface-card); }
+:is(#collectorControlsCard, #collectionArchive) .collection-diagnostic-issue[data-tone="review"] { border-left-color: var(--text-secondary); }
+:is(#collectorControlsCard, #collectionArchive) .collection-diagnostic-body button { justify-self: start; }
+@media (max-width: 720px) { :is(#collectorControlsCard, #collectionArchive) .collection-diagnostics > summary { min-height: 44px; } :is(#collectorControlsCard, #collectionArchive) .collection-diagnostics :is(p, small) { font-size: 12px; } }
 .collector-controls-card [hidden] { display: none !important; }
 .collector-controls-card button:disabled { cursor: not-allowed; opacity: .55; }
 .collector-controls-card :is(button, select, input, textarea, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }

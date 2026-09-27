@@ -1976,6 +1976,7 @@ function refreshCollectionArchive() {
 }
 
 function bindCollectionArchiveEvents() {
+  window.addEventListener?.("collector:diagnostics-ready", () => renderCollectionArchive());
   els.collectionArchive?.addEventListener("input", event => {
     if (!event.target.closest("[data-archive-search-form]")) return;
     state.collectionArchiveDraft = collectionArchiveReadForm();
@@ -2072,6 +2073,7 @@ function renderCollectionArchive() {
         const count = Number(run.counts?.overall || run.counts?.place || run.counts?.companies || 0);
         const worker = collectionArchiveWorker(run);
         const quality = collectionArchiveQuality(run);
+        const reason = window.CollectionDiagnosticsUi?.qualityReason(run.collectionQuality) || "";
         const unknownDate = run.collectedAtSource === "filesystem" || !collectionArchiveDay(run.collectedAt);
         return `
           <article class="collection-archive-row${active ? " active" : ""}" aria-label="${escapeHtml(run.keyword || run.label || run.id)} 수집 결과">
@@ -2079,11 +2081,12 @@ function renderCollectionArchive() {
             <div class="archive-keyword" data-label="키워드"><strong>${escapeHtml(run.keyword || run.label || run.id)}</strong><small>${escapeHtml([range, run.collectionPurposeLabel || "수집 결과", count ? `${fmtNumber(count)}개 업체` : ""].filter(Boolean).join(" · "))}</small></div>
             <div class="archive-stay" data-label="조회한 숙박기간"><strong>${escapeHtml(analysisRunPeriodLabel(run))}</strong></div>
             <div class="archive-worker" data-label="수집기">${escapeHtml(worker.label)}</div>
-            <div data-label="상태"><span class="archive-quality is-${quality.key}">${quality.label}</span></div>
+            <div data-label="상태"><span class="archive-quality is-${quality.key}">${quality.label}</span>${reason ? `<small class="collection-quality-reason">${escapeHtml(reason)}</small>` : ""}</div>
             <div class="collection-archive-row-actions" data-label="결과">
               <button type="button" data-archive-run-id="${escapeHtml(run.id)}">${active ? "열람 중" : "열기"}</button>
               <button type="button" data-open-place-rank-replay="" data-place-rank-run-id="${escapeHtml(run.id)}">순서 보기</button>
             </div>
+            <div class="collection-archive-diagnostics" data-collection-diagnostics="${escapeHtml(run.id)}"></div>
           </article>
         `;
       }).join("")}
@@ -2091,6 +2094,7 @@ function renderCollectionArchive() {
     ${model.count ? `<nav class="collection-archive-pagination" aria-label="보관함 페이지"><span>${fmtNumber(model.page)} / ${fmtNumber(model.pageCount)}페이지 · 20건씩</span><div><button class="small-button" type="button" data-archive-page="1" ${model.page === 1 ? "disabled" : ""}>처음</button><button class="small-button" type="button" data-archive-page="${model.page - 1}" ${model.page === 1 ? "disabled" : ""}>이전</button><button class="small-button" type="button" data-archive-page="${model.page + 1}" ${model.page === model.pageCount ? "disabled" : ""}>다음</button><button class="small-button" type="button" data-archive-page="${model.pageCount}" ${model.page === model.pageCount ? "disabled" : ""}>마지막</button></div></nav>` : ""}
     ${activeRun ? `<details class="collection-archive-comparison"><summary>열람 중인 결과 · 플레이스 순위 비교</summary><div class="collection-archive-actions"><button class="primary-button" type="button" data-open-place-rank-replay="" data-place-rank-run-id="${escapeHtml(activeRun.id || "")}">플레이스 순서 다시 보기</button><small>열람 중인 회차의 저장된 네이버 노출순을 표시합니다.</small></div>${placeRankComparisonSummaryHtml(comparison)}</details>` : ""}
   `;
+  window.CollectionDiagnosticsUi?.mount(els.collectionArchive, model.rows);
 }
 
 function focusAdminCrawlProgress() {

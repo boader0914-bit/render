@@ -4,6 +4,7 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
+    "test:collection-diagnostics": "node --test scripts/test_collection_diagnostics.cjs scripts/test_collector_requests.cjs scripts/test_keyword_worker_scheduler.cjs scripts/test_collector_controls_ui.cjs && node scripts/test_collector_crawler_contract.cjs && node scripts/test_collection_diagnostics_api.cjs",
     "test:regional-report-preparation": "node --test scripts/test_regional_search_trends.cjs scripts/test_regional_report_preparation.cjs scripts/test_regional_report_preparation_http.cjs scripts/test_regional_report_preparation_ui.cjs && node scripts/test_regional_report_preparation_api.cjs",
     "test:monthly-reports": "node --test scripts/test_monthly_company_recalculation.cjs scripts/test_monthly_reports.cjs scripts/test_monthly_report_comparison.cjs scripts/test_monthly_report_insights.cjs scripts/test_monthly_report_sources.cjs scripts/test_monthly_reports_ui.cjs scripts/test_monthly_report_pdf.cjs && node scripts/test_monthly_reports_api.cjs",
     "start": "node scripts/glamping_app_server.cjs",

@@ -3,6 +3,7 @@ const fs=require('node:fs/promises');
 const path=require('node:path');
 const crypto=require('node:crypto');
 const {serialExecutor}=require('./collection_reuse.cjs');
+const {sanitizeCollectionQuality}=require('./lib/collection_diagnostics.cjs');
 const ID=/^[a-zA-Z0-9_-]{8,120}$/;
 const STATES=new Set(['pending','complete','partial','blocked','failed','interrupted','reused']);
 function fault(code,message,statusCode=409){return Object.assign(new Error(message),{code,statusCode});}
@@ -10,7 +11,7 @@ function canonical(value){if(Array.isArray(value))return value.map(canonical);if
 function publicRow(row){
  const {requestId,workerKey,trigger,keyword,status,createdAt,finishedAt,errorCode,message}=row;
  const source=row.result;
- const result=source?{runId:source.runId,collectionQuality:source.collectionQuality?{status:source.collectionQuality.status}:null,reused:source.reused===true,workerKey:source.workerKey,trigger:source.trigger}:null;
+ const result=source?{runId:source.runId,collectionQuality:sanitizeCollectionQuality(source.collectionQuality),reused:source.reused===true,workerKey:source.workerKey,trigger:source.trigger}:null;
  return {requestId,workerKey,trigger,keyword,status,createdAt,finishedAt,result,errorCode,message,...(row.conditions?{conditions:row.conditions}:{}),...(row.failurePhase?{failurePhase:row.failurePhase}:{}),...(row.brokerErrorCode?{brokerErrorCode:row.brokerErrorCode}:{}),...(row.recovery?{recovery:row.recovery}:{})};
 }
 function safeFailure(error){
@@ -43,7 +44,7 @@ function createCollectorRequests({dataDir,run,preflight=async()=>{},now=()=>new 
    const state=quality?.status;
    const runId=typeof value?.runId==='string'&&/^[a-zA-Z0-9_-]{1,220}$/.test(value.runId)?value.runId:null;
    const status=['complete','partial','blocked','failed'].includes(state)&&runId?(state==='complete'&&value.reused?'reused':state):'failed';
-   const result={runId,collectionQuality:quality?{status:quality.status}:null,reused:value?.reused===true,workerKey:value?.workerKey||row.workerKey,trigger:value?.trigger||'manual'};
+   const result={runId,collectionQuality:sanitizeCollectionQuality(quality),reused:value?.reused===true,workerKey:value?.workerKey||row.workerKey,trigger:value?.trigger||'manual'};
    const message={complete:'수집과 결과 검증을 완료했습니다.',reused:'조건에 맞는 당일 자료를 사용했습니다.',partial:'일부 자료가 누락되었습니다. 정상 자료로 반영하지 않았습니다.',blocked:'접근 제한으로 중단했습니다. 정상 자료로 반영하지 않았습니다.',failed:'수집을 완료하지 못했습니다. 결과와 워커 상태를 확인하세요.'}[status];
    await lock(()=>finish(row,{status,result,message,errorCode:status==='failed'&&!runId?'RESULT_RUN_ID_MISSING':null}));
   }catch(error){try{await lock(()=>finish(row,safeFailure(error)));}catch{Object.assign(row,{status:'interrupted',errorCode:'COLLECTOR_RECEIPT_WRITE_FAILED',message:'최종 상태 저장을 확인하지 못했습니다. 기존 결과를 확인하세요.',finishedAt:stamp()});}}
@@ -68,7 +69,7 @@ function createCollectorRequests({dataDir,run,preflight=async()=>{},now=()=>new 
   if(value?.collectionQuality?.status!=='complete'||!value.runId||value.workerKey!==row.workerKey||value.keyword!==row.keyword||!value.recovery?.jobId)throw fault('COLLECTION_RECOVERY_MISMATCH','복구 결과의 조건을 확인하세요.');
   if(row.status==='complete'&&row.recovery?.jobId===value.recovery.jobId&&row.result?.runId===value.runId)return publicRow(row);
   if(row.status!=='failed'||row.errorCode!=='COLLECTOR_UPLOAD_FAILED')throw fault('COLLECTION_RECOVERY_NOT_ELIGIBLE','복구 가능한 실패 요청이 아닙니다.');
-  const next={...row,status:'complete',errorCode:null,message:'보존된 수집 결과를 검증해 복구했습니다.',result:{runId:value.runId,collectionQuality:{status:'complete'},workerKey:row.workerKey,trigger:row.trigger,reused:false},recovery:{jobId:value.recovery.jobId,recoveredAt:stamp(),originalStatus:row.status,originalErrorCode:row.errorCode,originalFinishedAt:row.finishedAt}};
+  const next={...row,status:'complete',errorCode:null,message:'보존된 수집 결과를 검증해 복구했습니다.',result:{runId:value.runId,collectionQuality:sanitizeCollectionQuality(value.collectionQuality),workerKey:row.workerKey,trigger:row.trigger,reused:false},recovery:{jobId:value.recovery.jobId,recoveredAt:stamp(),originalStatus:row.status,originalErrorCode:row.errorCode,originalFinishedAt:row.finishedAt}};
   await write(next);Object.assign(row,next);return publicRow(row);
  });}
  return {submit,get,list,recover};

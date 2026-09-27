@@ -5,7 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { test } = require("node:test");
 const helpers = require("../web/collector_controls.js");
-const { workerLabel, workerState, workerAvailability, scheduleConfig, collectionDates, defaultDraft, historyEntries, filterHistory, keywordLines, errorMessage, progressModel, etaRange } = helpers;
+const { workerLabel, workerState, workerAvailability, scheduleConfig, collectionDates, defaultDraft, historyEntries, filterHistory, keywordLines, errorMessage, progressModel, etaRange, qualityReason, diagnosticMetrics, diagnosticDates } = helpers;
 const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8");
 const source = fs.readFileSync(path.join(__dirname, "../web/collector_controls.js"), "utf8");
 const app = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8");
@@ -30,7 +30,7 @@ class Element {
 const descendants = element => [element, ...element.children.flatMap(descendants)];
 const text = element => descendants(element).map(item => item.textContent).filter(Boolean).join(" ");
 async function until(predicate) { for (let i = 0; i < 120; i++) { if (predicate()) return; await new Promise(resolve => setImmediate(resolve)); } throw new Error("ui_condition_not_reached"); }
-async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}, drafts = {}, failedSchedules = [], failRequests = false, uncertainSubmit = false, outsideCollection = false } = {}) {
+async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}, drafts = {}, failedSchedules = [], failRequests = false, uncertainSubmit = false, outsideCollection = false, diagnostics = {}, diagnosticStatus = 200, diagnosticRunId } = {}) {
   const nodes = new Map();
   for (const match of html.matchAll(/<([\w-]+)\b[^>]*\bid="([^"]+)"[^>]*>/g)) { const el = new Element(match[1], nodes); el.id = match[2]; }
   const body = new Element("body", nodes); body.className = "role-admin";
@@ -44,6 +44,11 @@ async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}
     const payload = options.body ? JSON.parse(options.body) : undefined; calls.push({ url, method: options.method, payload }); let result;
     if (url === "/api/collector-status") result = { workers: workers || keys.map(workerKey => ({ workerKey, configured: true, connected: true, ready: true, workerLastSeenAt: new Date().toISOString(), queued: 0 })) };
     else if (url === "/api/crawl-requests") { if (failRequests) throw Error("requests_unavailable"); result = { requests }; }
+    else if (/^\/api\/runs\/[^/]+\/diagnostics$/.test(url)) {
+      const runId = decodeURIComponent(url.split("/")[3]);
+      assert.equal(options.method, "GET");
+      return { ok: diagnosticStatus === 200, status: diagnosticStatus, json: async () => ({ runId: diagnosticRunId || runId, collectionDiagnostics: diagnostics[runId] || null }) };
+    }
     else {
       const [route, query] = url.split("?"), key = new URLSearchParams(query).get("workerKey"); assert.ok(keys.includes(key), "every schedule operation must select a worker");
       if (failedSchedules.includes(key)) throw Error("schedule_unavailable");
@@ -189,6 +194,85 @@ test("read errors, freshness and broker failures remain distinguishable", async 
   assert.equal(workerState({ workerKey: "web", configured: true, connected: true, ready: false }), "실행 확인 필요");
   assert.equal(workerAvailability({ workers: [{ workerKey: "manual", configured: true, workerLastSeenAt: "2000-01-01T00:00:00Z" }] }, "manual").ready, false);
   assert.match(errorMessage("COLLECTOR_DUPLICATE_PATH"), /상세 파일 목록/); assert.deepEqual(keywordLines("Ａ\nA\n포천 글램핑\n포천글램핑"), ["A", "포천 글램핑", "포천글램핑"]);
+});
+
+test("partial quality reasons distinguish unqueried products, response failures and quantity review", () => {
+  assert.equal(qualityReason({ status: "partial", reason: "product_targets_truncated" }), "상품 수 제한으로 일부 미수집");
+  assert.match(qualityReason({ reason: "booking_schedule_responses_incomplete" }), /응답 미확보/);
+  assert.match(qualityReason({ reason: "inventory_review_required" }), /수량 검토/);
+  assert.match(qualityReason({ reason: "naver_schedule_blocked" }), /접근 제한/);
+  assert.equal(qualityReason({ status: "partial", reason: "https://secret.example/token=never-show" }), "세부 원인 기록 확인 필요");
+  assert.doesNotMatch(errorMessage("COLLECTOR_PROVIDER_CONNECTION_FAILED"), /접근 제한/);
+  const rows = historyEntries([{ keyword: "전남글램핑", result: { runId: "partial", collectionQuality: { status: "partial", reason: "product_targets_truncated", counts: { naverScheduleFailed: 0 } } } }]);
+  assert.equal(rows[0].collectionQuality.reason, "product_targets_truncated");
+  assert.equal(rows[0].collectionQuality.counts.naverScheduleFailed, 0);
+  assert.match(progressModel({ workerKey: "web", connected: true }, { ...rows[0], status: "partial" }).detail, /상품 수 제한/);
+});
+
+test("diagnostic counts retain zero versus missing and never multiply product counts by stay days", () => {
+  const labels = diagnosticMetrics({ naverBookingStockSucceeded: 20, naverBookingStockChecked: 20, naverScheduleSucceeded: 100, naverScheduleRequested: 100, naverScheduleFailed: 0, naverScheduleBlocked: null, productEligible: 62, productQueried: 40, productTruncated: 22 });
+  assert.match(labels.join(" "), /업체 응답 성공 20 \/ 확인 20/);
+  assert.match(labels.join(" "), /실패 0 · 차단 미기록/);
+  assert.match(labels.join(" "), /대상 상품 62개 · 조회 40개 · 수 제한으로 미조회 22개/);
+  assert.equal(diagnosticDates(["2026-09-29", "2026-09-27", "2026-09-28", "2026-09-27"]), "2026-09-27 ~ 2026-09-29 (3일)");
+  assert.equal(diagnosticDates(["2026-09-27", "2026-09-29", "2026-09-30"]), "2026-09-27, 2026-09-29, 2026-09-30");
+  assert.equal(diagnosticDates(["2026-02-30", "2026-09-27T01:00:00Z"]), "세부 기록 없음");
+});
+
+test("history diagnostics load only on expansion, preserve safe detail and reuse the same stored response", async () => {
+  const quality = { status: "partial", reason: "product_targets_truncated", counts: { naverBookingStockChecked: 20, naverBookingStockSucceeded: 20, naverScheduleRequested: 100, naverScheduleSucceeded: 100, naverScheduleFailed: 0, naverScheduleBlocked: 0 } };
+  const diagnostic = { ...quality, summary: "상품 수 제한으로 일부 상세 조회 제외 · 확인 대상 업체 1곳", observedZeroScheduleCount: 2, failedZeroScheduleCount: 0, counts: { ...quality.counts, productEligible: 62, productQueried: 40, productTruncated: 22 },
+    issues: [{ code: "PRODUCT_TARGETS_TRUNCATED", phase: "product_list", label: "상품 수 제한으로 상세 조회 제외", message: "상품 수 제한으로 상세 조회 제외", companyName: "대상 글램핑", productName: "", expectedCount: 62, queriedCount: 40, affectedCount: 22, countUnit: "products", detailStatus: "recorded", dates: ["2026-09-27", "2026-09-28", "2026-09-29"], rawError: "SECRET_TOKEN", requestedAt: "2026-09-27T01:00:00Z" }] };
+  const ui = await mockUi({ requests: [{ workerKey: "manual", keyword: "전남글램핑", status: "partial", result: { runId: "partial_run", collectionQuality: quality } }], diagnostics: { partial_run: diagnostic } });
+  const history = ui.nodes.get("collectorUnifiedHistory");
+  assert.match(text(history), /상품 수 제한으로 일부 미수집/);
+  assert.equal(ui.calls.filter(call => call.url.endsWith("/diagnostics")).length, 0);
+  let card = descendants(history).find(el => el.className === "collection-diagnostics");
+  card.open = true; await card.event("toggle");
+  assert.match(text(card), /대상 62개 상품 · 조회 40개 · 수 제한으로 미조회 22개/);
+  assert.match(text(card), /상품별 이름은 미기록/);
+  assert.match(text(card), /2026-09-27 ~ 2026-09-29 \(3일\)/);
+  assert.match(text(card), /정상 응답 2건 · 오류가 동반된 0 0건/);
+  assert.match(text(card), /실패 0 · 차단 0/);
+  assert.doesNotMatch(text(card), /SECRET_TOKEN|T01:00:00Z|HTTP|차단 감지/);
+  assert.equal(descendants(card).filter(el => el.textContent === diagnostic.issues[0].label).length, 1);
+  card.open = false; await card.event("toggle"); card.open = true; await card.event("toggle");
+  await ui.nodes.get("collectorHistoryWorker").event("change");
+  card = descendants(history).find(el => el.className === "collection-diagnostics");
+  await until(() => text(card).includes("미조회 22개"));
+  assert.equal(card.open, true);
+  assert.equal(ui.calls.filter(call => call.url.endsWith("/diagnostics")).length, 1);
+  assert.ok(ui.calls.every(call => call.method === "GET")); assert.equal(ui.submissions.length, 0);
+});
+
+test("legacy failures show absent details without inventing block reasons or zero successes", async () => {
+  const ui = await mockUi({ requests: [{ workerKey: "manual", keyword: "충남글램핑", status: "partial", result: { runId: "legacy", collectionQuality: { status: "partial" } } }], diagnostics: { legacy: { status: "partial", summary: "일부 업체의 예약 상세 미확보", counts: {}, issues: [{ label: "예약 응답 미확보", companyName: "업체 가", productName: "상품 나", httpStatus: 503, dates: ["2026-09-27"], detailStatus: "unrecorded", message: "세부 응답 원인은 기록되지 않았습니다." }] } } });
+  const card = descendants(ui.nodes.get("collectorUnifiedHistory")).find(el => el.className === "collection-diagnostics");
+  card.open = true; await card.event("toggle");
+  assert.match(text(card), /업체 응답 성공 미기록 \/ 확인 미기록/);
+  assert.match(text(card), /세부 기록 없음 · 개별 응답 원인을 확정할 수 없습니다/);
+  assert.match(text(card), /응답 상태 HTTP 503/);
+  assert.doesNotMatch(text(card), /접근 제한 감지|세부 응답 원인은 기록되지 않았습니다/);
+  const unavailable = await mockUi({ requests: [{ workerKey: "web", keyword: "저장 안 된 실패", status: "failed" }] });
+  const emptyCard = descendants(unavailable.nodes.get("collectorUnifiedHistory")).find(el => el.className === "collection-diagnostics"); emptyCard.open = true; await emptyCard.event("toggle");
+  assert.match(text(emptyCard), /세부 기록 없음/);
+  assert.equal(unavailable.calls.filter(call => call.url.endsWith("/diagnostics")).length, 0);
+});
+
+test("diagnostic read errors require explicit retry and mismatched runs never display", async () => {
+  const request = { workerKey: "manual", keyword: "경주글램핑", status: "partial", result: { runId: "run_requested", collectionQuality: { status: "partial" } } };
+  const ui = await mockUi({ requests: [request], diagnosticStatus: 403 });
+  const history = ui.nodes.get("collectorUnifiedHistory");
+  let card = descendants(history).find(el => el.className === "collection-diagnostics"); card.open = true; await card.event("toggle");
+  assert.match(text(card), /관리자 로그인을 확인/);
+  await ui.nodes.get("collectorHistoryWorker").event("change");
+  card = descendants(history).find(el => el.className === "collection-diagnostics"); await until(() => text(card).includes("다시 확인"));
+  assert.equal(ui.calls.filter(call => call.url.endsWith("/diagnostics")).length, 1);
+  await descendants(card).find(el => el.textContent === "다시 확인").event("click");
+  assert.equal(ui.calls.filter(call => call.url.endsWith("/diagnostics")).length, 2);
+  const wrong = await mockUi({ requests: [request], diagnosticRunId: "other_run", diagnostics: { run_requested: { summary: "OTHER COMPANY SECRET" } } });
+  const wrongCard = descendants(wrong.nodes.get("collectorUnifiedHistory")).find(el => el.className === "collection-diagnostics"); wrongCard.open = true; await wrongCard.event("toggle");
+  assert.match(text(wrongCard), /결과 번호가 일치하지/); assert.doesNotMatch(text(wrongCard), /OTHER COMPANY/);
 });
 
 test("HTML hides compatibility form, loads workspace once and supports retained DB recrawl bridge", () => {

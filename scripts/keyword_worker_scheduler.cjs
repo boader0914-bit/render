@@ -1,4 +1,5 @@
 "use strict";
+const { sanitizeCollectionQuality } = require("./lib/collection_diagnostics.cjs");
 
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -182,7 +183,7 @@ function finalResult(value, quality) {
   const candidate = quality || value?.collectionQuality || value?.quality || value?.output?.collectionQuality;
   const status = candidate?.status;
   const runId = typeof value?.runId === "string" && /^[a-zA-Z0-9_-]{1,240}$/.test(value.runId) ? value.runId : null;
-  const result = { status: ["complete", "partial", "failed", "blocked"].includes(status) ? status : "failed", runId,
+  const result = { status: ["complete", "partial", "failed", "blocked"].includes(status) ? status : "failed", runId, collectionQuality: sanitizeCollectionQuality(candidate),
     errorCode: ["complete", "partial", "failed", "blocked"].includes(status) ? null : "RESULT_QUALITY_UNKNOWN" };
   if (result.status === "complete" && !runId) return { status: "failed", runId: null, errorCode: "RESULT_RUN_ID_MISSING" };
   if (result.status === "complete" && (candidate?.counts?.mainCount === 0 || value?.output?.counts?.naverOverall === 0)) return { status: "failed", runId, errorCode: "RESULT_EMPTY" };
@@ -248,7 +249,12 @@ function createKeywordWorkerScheduler(options = {}) {
       || value.workerKey !== workerKey || !["manual", "scheduled"].includes(value.trigger) || !date(value.day) || !Array.isArray(value.items) || value.items.length > 100
       || value.items.some(item => !object(item) || !STATES.has(item.status) || typeof item.keyword !== "string" || uniqueKeywords([item.keyword])[0] !== item.keyword)) throw fault("KEYWORD_SCHEDULE_STATE_INVALID", 503);
     validateConfig(value.config);
-    for (const item of value.items) keysOnly(item, ["keyword", "status", "runId", "startedAt", "endedAt", "durationMs", "errorCode"], "KEYWORD_SCHEDULE_STATE_INVALID");
+    for (const item of value.items) {
+      keysOnly(item, ["keyword", "status", "runId", "startedAt", "endedAt", "durationMs", "errorCode", "collectionQuality"], "KEYWORD_SCHEDULE_STATE_INVALID");
+      if (item.collectionQuality !== undefined && !require("node:util").isDeepStrictEqual(item.collectionQuality, sanitizeCollectionQuality(item.collectionQuality))) {
+        throw fault("KEYWORD_SCHEDULE_STATE_INVALID", 503);
+      }
+    }
     return value;
   }
   async function readReceipt(id) {
