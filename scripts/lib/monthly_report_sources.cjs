@@ -13,7 +13,7 @@ async function readJson(file, fallback) {
   catch (error) { if (error.code === "ENOENT") return fallback; throw sourceError(); }
 }
 
-function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, projectObservation = row => row, capacityForCompany = () => null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null }) {
+function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null }) {
   const companyFile = path.join(dataDir, "company_master", "companies.json");
   const historyFile = path.join(dataDir, "history", "observations.jsonl");
   async function catalog() {
@@ -159,6 +159,16 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, proje
           collectedAt: row.collectedAt || snapshot.collectedAt || snapshot.productSnapshot.collectedAt,
           productType: row.productType || "lodging", supply: row.supply ?? row.total }, true);
       }
+    }
+    // This optional hook must only read saved collection evidence: never collect
+    // again or refresh an external API. Current calculations replace the same
+    // company/run/product/date row, while report quality and time gates remain.
+    if (recalculateCompanyObservations !== null) {
+      try {
+        const recalculated = await recalculateCompanyObservations(request, data);
+        if (!Array.isArray(recalculated) || recalculated.some(row => !row || typeof row !== "object" || Array.isArray(row))) throw sourceError();
+        for (const row of recalculated) addRow(row);
+      } catch { throw sourceError(); }
     }
     const scopeIds = request.type === "keyword"
       ? monthlyReportKeywordMembership(request, { observations: diagnosticInventoryRows, rankObservations: diagnosticRankRows, runs: data.runs }).members

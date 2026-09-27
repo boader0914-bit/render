@@ -293,6 +293,32 @@ assert.equal(restoredObserved.inventoryEvidence.capacityBasis.source, "observed_
 assert.equal(JSON.stringify(sourceItem), sourceBefore);
 assert.equal(JSON.stringify(correctedCompany), companyBefore);
 
+const reviewedStockRule = { bizItemId: "room", stayDate: "2026-09-26", observedStock: 10, correctedStock: 6, reason: "업주 확인 재고 설정 실수" };
+const stockReviewedCompany = { ...correctedCompany, manualCorrection: { ...correctedCompany.manualCorrection, productStockCorrections: [reviewedStockRule] } };
+const staleStockRule = { ...reviewedStockRule, correctedStock: 4 };
+const staleStockInput = { ...sourceItem, inventoryCapacityBaseline: { companyId: "stale_company", productStockCorrections: [staleStockRule] } };
+const reviewedBaseline = context.withCompanyInventoryCapacity(staleStockInput, [stockReviewedCompany]).inventoryCapacityBaseline;
+assert.deepEqual(reviewedBaseline.productStockCorrections, [reviewedStockRule], "current company DB replaces an inherited product correction");
+const stockReviewed = context.applyCompanyManualCorrection(staleStockInput, stockReviewedCompany);
+assert.equal(stockReviewed.inventoryEvidence.lodging.rows[0].rawTotal, 6);
+assert.equal(stockReviewed.inventoryEvidence.lodging.rows[0].publicBookings, 1);
+assert.equal(stockReviewed.inventoryEvidence.lodging.rows[0].capacityConflict, false);
+assert.equal(stockReviewed.inventoryEvidence.normalizationEvidence[0].source.stock, 10);
+assert.equal(stockReviewed.inventoryEvidence.normalizationEvidence[0].applied.stock, 6);
+assert.equal(sourceItem.weeklyProductDetails[0].stock, 10);
+assert.equal(staleStockInput.inventoryCapacityBaseline.productStockCorrections[0].correctedStock, 4, "input is not mutated when the DB rule wins");
+for (const clearedCorrection of [null, { ...stockReviewedCompany.manualCorrection, active: false }]) {
+  const clearedStock = context.applyCompanyManualCorrection(stockReviewed, { ...stockReviewedCompany, manualCorrection: clearedCorrection });
+  assert.equal(clearedStock.inventoryCapacityBaseline.productStockCorrections, undefined, "clearing or disabling a DB correction removes inherited product rules");
+  assert.equal(clearedStock.inventoryEvidence.lodging.rows[0].rawTotal, 10, "reprojection restores original stock after clearing");
+  assert.equal(clearedStock.inventoryEvidence.normalizationEvidence.length, 0);
+}
+const otherStockInput = { ...staleStockInput, placeId: "20", bookingBusinessId: "200" };
+const otherStockProjection = context.withCompanyInventoryCapacity(otherStockInput, [stockReviewedCompany, capacityCompanies[1]]);
+assert.equal(otherStockProjection.inventoryCapacityBaseline.companyId, "cmp_other");
+assert.equal(otherStockProjection.inventoryCapacityBaseline.productStockCorrections, undefined, "a different matched company never inherits the reviewed company's product rule");
+assert.equal(context.applyCompanyManualCorrection(otherStockProjection, capacityCompanies[1]).inventoryEvidence.lodging.rows[0].rawTotal, 10);
+
 const correctedHistory = {
   inventory: { latest: {
     stockBasis: { lodgingMaxTotal: 100 }, salesSignal: { lodging: { maxTotal: 100 } },
@@ -380,6 +406,10 @@ const freshSnapshot = {
 };
 assert.equal(context.companyInventorySnapshotWithCurrentCapacity(freshSnapshot, snapshotCompany), freshSnapshot);
 assert.equal(context.companyInventoryNeedsEvidenceRecovery({ ...snapshotCompany, inventory: { latest: freshSnapshot } }), false);
+assert.equal(context.manualCorrectionHasValue({ active: true, productStockCorrections: [reviewedStockRule] }), true, "a reviewed product rule remains an active correction even without a company-total edit");
+assert.equal(context.companyInventoryNeedsEvidenceRecovery({ ...snapshotCompany,
+  manualCorrection: { ...snapshotCompany.manualCorrection, productStockCorrections: [reviewedStockRule] },
+  inventory: { latest: freshSnapshot } }), true, "a new product rule requests raw-source reprojection even when the company total already matches");
 const unpricedStoredSnapshot = { ...freshSnapshot, productSnapshot: { ...freshSnapshot.productSnapshot,
   daily: freshSnapshot.productSnapshot.daily.map(row => ({ ...row, phoneRevenue: 0, phonePricedBookings: 0, phoneMissingPriceBookings: 2 })) } };
 const unpricedStoredCompany = { ...snapshotCompany, inventory: { latest: unpricedStoredSnapshot } };

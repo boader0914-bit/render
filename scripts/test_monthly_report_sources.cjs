@@ -124,6 +124,68 @@ test("company, region and monthly keyword quality ignore unrelated global defect
   assert.equal(unknownInScope.globalDiagnostics.unmatchedCompanyRows, 1);
 });
 
+test("saved-evidence recalculation replaces the same observation while retaining identity, quality and cutoff gates", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "monthly-recalculation-"));
+  t.after(async () => { assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep)); await fs.rm(root, { recursive: true, force: true }); });
+  await fs.mkdir(path.join(root, "company_master")); await fs.mkdir(path.join(root, "history"));
+  const request = { type: "company", targetId: "cmp_a", month: "2026-09", cutoffDate: "2026-09-26" };
+  const base = { companyKey: "cmp_a", companyName: "같은숙소", runId: "normal", stayDate: "2026-09-25", collectedAt: "2026-09-25T00:00:00Z",
+    productType: "lodging", inventoryEvidenceVersion: 3, supply: 27, sold: 20, publicBookings: 2, phoneBookings: 18,
+    publicRevenue: 200000, phoneRevenue: 1800000, estimatedRevenue: 2000000 };
+  const master = { companies: { cmp_a: { companyId: "cmp_a", primaryName: "같은숙소", placeIds: ["1001"],
+    inventory: { latest: { runId: "normal", collectedAt: base.collectedAt, productSnapshot: { daily: [{ ...base, sold: 24, phoneBookings: 22 }] } } } } } };
+  const runs = [
+    { id: "normal", keyword: "광역글램핑", collectionQuality: { status: "complete" } },
+    { id: "local", keyword: "지역글램핑", collectionQuality: { status: "complete" } },
+    { id: "late", keyword: "지역글램핑", collectionQuality: { status: "complete" } },
+    { id: "blocked", keyword: "지역글램핑", collectionQuality: { status: "blocked" } },
+    { id: "legacy", keyword: "광역글램핑" }
+  ];
+  const companyFile = path.join(root, "company_master", "companies.json"), historyFile = path.join(root, "history", "observations.jsonl");
+  await fs.writeFile(companyFile, JSON.stringify(master)); await fs.writeFile(historyFile, JSON.stringify(base) + "\n");
+  const input = { dataDir: root, regionMasterFile: path.join(root, "regions.json"), listRuns: async () => runs };
+  const original = await createMonthlyReportSources(input).loadSources(request);
+  assert.equal(original.observations.length, 1);
+  assert.equal(original.observations[0].supply, 27, "without a hook, existing history and fallback behavior stays unchanged");
+  const corrected = { ...base, companyKey: "", placeId: "1001", inventoryEvidenceVersion: 4, supply: 16, sold: 4, phoneBookings: 2,
+    phoneRevenue: 200000, estimatedRevenue: 400000 };
+  let hookCalls = 0, projectedCorrected = 0;
+  const adapter = createMonthlyReportSources({ ...input,
+    projectObservation: (row, company) => {
+      assert.equal(row.companyKey, "cmp_a"); assert.equal(company.companyId, "cmp_a");
+      if (row.inventoryEvidenceVersion === 4) projectedCorrected++;
+      return row;
+    },
+    recalculateCompanyObservations: async (received, catalog) => {
+      hookCalls++; assert.deepEqual(received, request); assert.equal(catalog.rawCompanies.get("cmp_a").companyId, "cmp_a");
+      assert.equal(catalog.runs.length, runs.length);
+      return [corrected,
+        { ...corrected, runId: "local", stayDate: "2026-09-26", collectedAt: "2026-09-26T00:00:00Z" },
+        { ...corrected, runId: "late", stayDate: "2026-09-28", collectedAt: "2026-09-27T00:00:00Z" },
+        { ...corrected, runId: "blocked", stayDate: "2026-09-27" },
+        { ...corrected, runId: "legacy", stayDate: "2026-09-27" }];
+    }
+  });
+  const source = await adapter.loadSources(request);
+  assert.equal(hookCalls, 1); assert.equal(projectedCorrected, 5);
+  assert.equal(source.observations.length, 5, "recalculated evidence replaces history and snapshot with the same canonical key");
+  assert.equal(source.observations.find(row => row.runId === "normal").supply, 16);
+  const snapshot = buildMonthlyReportSnapshot(request, source, "2026-09-27T00:00:00Z");
+  assert.equal(snapshot.sources.selectedObservationCount, 2);
+  assert.equal(snapshot.summary.lodging.sold, 8, "two keyword runs contribute distinct stay dates without counting the old row again");
+  assert.equal(snapshot.quality.discardedByReason.after_cutoff, 1);
+  assert.equal(snapshot.quality.discardedByReason.run_blocked, 1);
+  assert.equal(snapshot.quality.discardedByReason.unknown_legacy_run_quality, 1);
+  assert.equal(snapshot.quality.discardedByReason.duplicate_observation, undefined);
+  assert.equal(await fs.readFile(companyFile, "utf8"), JSON.stringify(master));
+  assert.equal(await fs.readFile(historyFile, "utf8"), JSON.stringify(base) + "\n", "recalculation only changes the report read view");
+  for (const hook of [async () => { throw new Error("unreadable saved evidence"); }, async () => null, async () => [null]]) {
+    await assert.rejects(createMonthlyReportSources({ ...input, recalculateCompanyObservations: hook }).loadSources(request),
+      error => error.code === "MONTHLY_SOURCE_UNAVAILABLE" && error.statusCode === 503);
+  }
+  assert.equal((await createMonthlyReportSources({ ...input, recalculateCompanyObservations: async () => [] }).loadSources(request)).observations.length, 1);
+});
+
 test("context uses cache-only exact month, keeps genuine zero and KOSIS vintage", async () => {
   let calls = 0;
   const cache = async input => {

@@ -2,6 +2,7 @@
 
 // A read model only: original CSVs, provider responses and saved snapshots stay intact.
 const verifiedInventory = require("./verified_room_inventory.json");
+const { applyProductStockCorrections } = require("./lib/inventory_manual_corrections.cjs");
 const number = (value) => value === null || value === undefined || typeof value === "boolean" || (typeof value === "string" && !value.trim()) ? null : (Number.isFinite(Number(value)) ? Number(value) : null);
 const nonnegative = (value) => Math.max(0, number(value) || 0);
 const shortDate = (date) => `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}`;
@@ -346,7 +347,8 @@ function applyInventoryEvidence(original) {
   const rawProducts = evidenceProducts(original);
   if (!rawProducts.some((row) => Object.hasOwn(row, "stock") && Object.hasOwn(row, "bookingCount"))) return original;
   const baseline = original.inventoryCapacityBaseline || {};
-  const reviewedProducts = reviewedProductEvidence(rawProducts, baseline);
+  const stockCorrections = applyProductStockCorrections(rawProducts, baseline.productStockCorrections, (row) => productKind(row) === "lodging");
+  const reviewedProducts = reviewedProductEvidence(stockCorrections.rows, baseline);
   const products = reviewedProducts.rows.map(productEvidence);
   const item = { ...original };
   const dates = requestedDates(products, original);
@@ -386,7 +388,8 @@ function applyInventoryEvidence(original) {
   const originalRevenue = nonnegative(item.weeklyAdjustedRevenue ?? item.weeklyEstimatedRevenue) + nonnegative(item.dayUseWeeklyAdjustedRevenue ?? item.dayUseWeeklyEstimatedRevenue);
   item.inventoryEvidence = {
     version: 4, policy: POLICY, phoneValuationPolicy: PHONE_VALUATION_POLICY, lodging, dayUse, physicalRooms: roomGuideReference, roomGuideReference, sharedRooms, capacityBasis, capacityReview,
-    exclusionEvidence: reviewedProducts.exclusionEvidence, normalizationEvidence: reviewedProducts.normalizationEvidence,
+    exclusionEvidence: reviewedProducts.exclusionEvidence,
+    normalizationEvidence: [...stockCorrections.normalizationEvidence, ...reviewedProducts.normalizationEvidence],
     excludedNonRoomProductCount: reviewedProducts.excludedProductCount,
     legacyExcluded: previous?.version === 4 && previous.policy === POLICY ? previous.legacyExcluded : {
       lodgingSold: lodging ? Math.max(0, nonnegative(original.weeklyTotalSoldOut) - lodging.sold) : 0,

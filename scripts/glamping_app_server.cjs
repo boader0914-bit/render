@@ -12,12 +12,14 @@ const { publicHeader } = require("./public_site_chrome.cjs");
 const { createPublicPages } = require("./public_site_pages.cjs");
 const { buildPolicyDocument } = require("./public_policy_content.cjs");
 const { applyInventoryEvidence } = require("./inventory_estimation.cjs");
+const { sanitizeProductStockCorrections } = require("./lib/inventory_manual_corrections.cjs");
 const { otaProviderFromUrl } = require("./naver_place_ota_observation.cjs");
 const { createCollector: createTourismCollector } = require("./tourism_collector.cjs");
 const { createSpecialDaysService } = require("./lib/special_days.cjs");
 const { createKosisService } = require("./lib/kosis.cjs");
 const { createMonthlyReportService } = require("./lib/monthly_reports.cjs");
 const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs");
+const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
 const { createMonthlyReportContext } = require("./lib/monthly_report_context.cjs");
 const { createMonthlyReportHttpHandler } = require("./lib/monthly_report_http.cjs");
 const { renderMonthlyReportPdf } = require("./lib/monthly_report_pdf.cjs");
@@ -314,6 +316,9 @@ const monthlyReportSources = createMonthlyReportSources({
   listRuns,
   projectObservation: companyHistoryObservationWithCurrentCapacity,
   capacityForCompany: company => manualCorrectionLodgingBasisTotal(company.manualCorrection) || companyMaximumRoomCapacity(company) || null,
+  recalculateCompanyObservations: createMonthlyCompanyRecalculation({
+    loadRun, applyCompanyManualCorrection, companyProductAvailabilityMatch, buildHistoryObservations
+  }),
   readContext: createMonthlyReportContext({ kosisService, tourismCollector }),
   readSpecialDays: async year => (await specialDaysService.status(year)).yearStatus
 });
@@ -9137,6 +9142,7 @@ function manualCorrectionHasValue(correction = {}) {
   if (!correction || correction.active === false) return false;
   const note = String(correction.note || "").trim();
   return manualCorrectionHasBasis(correction)
+    || (Array.isArray(correction.productStockCorrections) && correction.productStockCorrections.length > 0)
     || manualCorrectionRoomSegments(correction).length > 0
     || manualCorrectionMetaHasValue(correction)
     || note.length > 0;
@@ -12662,11 +12668,15 @@ async function saveCompanyManualCorrectionUnlocked(payload = {}) {
   const dayUseBasisTotal = Number(payload.dayUseBasisTotal);
   const roomSegments = sanitizeManualCorrectionRoomSegments(payload.roomSegments);
   const correctionMeta = sanitizeManualCorrectionMeta(payload);
+  const productStockCorrections = sanitizeProductStockCorrections(
+    Object.hasOwn(payload, "productStockCorrections") ? payload.productStockCorrections : (company.manualCorrection?.productStockCorrections || [])
+  );
   const nextCorrection = {
     active: true,
     lodgingBasisTotal: Number.isFinite(lodgingBasisTotal) && lodgingBasisTotal > 0 ? Math.round(lodgingBasisTotal) : null,
     dayUseBasisTotal: Number.isFinite(dayUseBasisTotal) && dayUseBasisTotal > 0 ? Math.round(dayUseBasisTotal) : null,
     roomSegments,
+    productStockCorrections,
     ...correctionMeta,
     note: String(payload.note || "").trim(),
     source: "admin",
@@ -12686,6 +12696,7 @@ async function saveCompanyManualCorrectionUnlocked(payload = {}) {
       lodgingBasisTotal: company.manualCorrection?.lodgingBasisTotal || null,
       dayUseBasisTotal: company.manualCorrection?.dayUseBasisTotal || null,
       roomSegmentCount: company.manualCorrection?.roomSegments?.length || 0,
+      productStockCorrections: company.manualCorrection?.productStockCorrections || [],
       regionOverride: company.manualCorrection?.regionOverride || "",
       channelNote: company.manualCorrection?.channelNote || "",
       couponNote: company.manualCorrection?.couponNote || "",
@@ -14437,6 +14448,7 @@ function companyInventoryEvidenceReadView(company = {}, observations = [], proje
 }
 
 function companyInventoryNeedsEvidenceRecovery(company = {}) {
+  if (company.manualCorrection?.active !== false && company.manualCorrection?.productStockCorrections?.length) return true;
   const inventories = [company.inventory?.latest, company.inventory?.previousLatest, ...(company.inventory?.snapshots || [])].filter(Boolean);
   const maximum = companyMaximumRoomCapacity(company);
   const override = manualCorrectionLodgingBasisTotal(company.manualCorrection);
@@ -15438,6 +15450,10 @@ function withCompanyInventoryCapacityRecord(item = {}, company = {}) {
   // Always resolve against the current DB, including a reduced or cleared value.
   delete baseline.lodgingOverride;
   delete baseline.dayUseOverride;
+  delete baseline.productStockCorrections;
+  if (correction && correction.active !== false && Array.isArray(correction.productStockCorrections)) {
+    baseline.productStockCorrections = correction.productStockCorrections;
+  }
   if (lodgingOverride > 0) baseline.lodgingOverride = {
     count: lodgingOverride, source: "db_manual_correction", updatedAt: correction.updatedAt || ""
   };
