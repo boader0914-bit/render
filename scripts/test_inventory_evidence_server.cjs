@@ -34,6 +34,8 @@ const context = vm.createContext({
   COMPANY_PRODUCT_SNAPSHOT_DAILY_LIMIT: 64,
   B2B_INTEREST_LODGE_SEGMENT_LIMIT: 12,
   applyInventoryEvidence: require("./inventory_estimation.cjs").applyInventoryEvidence,
+  buildCapacityReview: require("./inventory_estimation.cjs").buildCapacityReview,
+  collectionCapacityCoverageForBusiness: require("./lib/collection_capacity_coverage.cjs").collectionCapacityCoverageForBusiness,
   sanitizeMemberText: (value, max) => String(value || "").trim().slice(0, max),
   COLLECTION_PURPOSES: { revenue_detail: "상세정보 수집" },
   crypto: require("node:crypto"),
@@ -446,7 +448,7 @@ Object.assign(context, {
   parseWeeklyReservationRates: () => ({}), parseStockVarianceDetail: () => ({}), parseBasisTotalFromRule: () => null,
   resolvedStockBasis: () => ({}), offlineReservedTotalForOperating: () => 0, stockBasisRule: () => "",
   naverChannelObservationFromItem: () => ({}), availabilityPlaceKey: (row) => `place:${row.placeId}`,
-  availabilityBookingBusinessId: () => "", rowSearchRegion: () => "", rowAddressRegion: () => "",
+  availabilityBookingBusinessId: (row) => row.bookingBusinessId || "", rowSearchRegion: () => "", rowAddressRegion: () => "",
   regionBoundaryInfo: () => ({}), normalizeInventoryMemo: () => "",
   evaluateInventoryConfidence: () => ({ structure: {} }), naverCouponSignalFromItem: () => ({ named: false })
 });
@@ -459,6 +461,21 @@ const typeReview = context.applyCompanyManualCorrection({ ...sourceItem, name: "
   ...capacityCompanies[0], lodgingTypes: ["글램핑"]
 });
 assert.equal(typeReview.inventoryEvidence.capacityReview.required, true, "the same-company DB lodging type reaches the inventory policy");
+
+const limitedRow = { ...largeRow, placeId: "limited", bookingBusinessId: "1680978", totalRooms: 10,
+  weeklyProductDetails: [{ date: "2026-09-26", bizItemId: "room", name: "숙박", stock: 10, bookingCount: 1, price: 100000 }] };
+const coverageReceipt = { targets: [{ businessId: "1680978", eligible: 62, queried: 40, truncated: 22,
+  productListComplete: true, expectedDays: 1,
+  days: [{ date: "2026-09-26", eligible: 62, queried: 40, succeeded: 40, failed: 0, truncated: 22 }] }] };
+const limitedBefore = JSON.stringify(limitedRow);
+const limitedProjection = context.summarizeAvailabilityRows([limitedRow], "", [], { productCoverage: coverageReceipt }).items[0];
+assert.equal(limitedProjection.collectionProductCoverage.truncated, 22);
+assert.ok(limitedProjection.capacityReview.codes.includes("product_targets_truncated"), "saved per-business cap omissions warn even below 40 observed rooms");
+assert.equal(limitedProjection.inventoryEvidence.capacityBasis.count, 10, "a warning does not adjust room capacity");
+assert.equal(JSON.stringify(limitedRow), limitedBefore, "stored source rows remain intact");
+const unrelatedProjection = context.summarizeAvailabilityRows([{ ...limitedRow, bookingBusinessId: "111" }], "", [], { productCoverage: coverageReceipt }).items[0];
+assert.equal(unrelatedProjection.collectionProductCoverage, null);
+assert.equal(unrelatedProjection.capacityReview.codes.includes("product_targets_truncated"), false, "other businesses do not inherit a keyword-wide cap warning");
 
 for (const [mode, scheduleStatus] of [["inspect", "not_requested"], ["lodging_only", "excluded"], ["detail", "not_requested_basic"]]) {
   for (const presence of ["present", "unknown", "absent"]) {

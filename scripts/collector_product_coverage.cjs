@@ -1,8 +1,26 @@
 "use strict";
 
+// Zero (including the omitted default) means all products. A positive integer
+// retains an explicit caller limit, such as the separate day-use limit.
+function selectProductTargets(items, limit = 0) {
+  if (!Number.isSafeInteger(limit) || limit < 0) throw new RangeError("INVALID_PRODUCT_LIMIT");
+  const seen = new Set();
+  const unique = (Array.isArray(items) ? items : []).filter(item => {
+    const id = String(item?.bizItemId ?? "").trim();
+    // Keep malformed entries visible to validation instead of hiding them.
+    if (!id) return true;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+  return limit === 0 ? unique : unique.slice(0, limit);
+}
+
 function createProductCoverage() {
   const businesses = new Map();
   function discover(businessId, all, eligible, dates = [], metadata = {}) {
+    all = selectProductTargets(all);
+    eligible = selectProductTargets(eligible);
     const key = String(businessId);
     if (!businesses.has(key)) businesses.set(key, {
       businessId: key, discovered: all.length, eligible: eligible.length,
@@ -13,18 +31,19 @@ function createProductCoverage() {
   function record(businessId, items, limit, date, rows) {
     const state = businesses.get(String(businessId));
     if (!state) return;
-    const selected = items.slice(0, limit);
+    items = selectProductTargets(items);
+    const selected = selectProductTargets(items, limit);
     const groups = state.days.get(date) || new Map();
     const day = { date, eligible: items.length, queried: 0, succeeded: 0, failed: 0, truncated: 0 };
-    const attempted = rows.filter(row => row.queryAttempted !== false);
+    const attempted = selectProductTargets(rows.filter(row => row.queryAttempted !== false));
     day.queried += attempted.length;
     day.truncated += items.length - selected.length;
-    const succeeded = rows.filter(row => !row.collectionFailed && row.stock !== null && row.stock !== undefined
+    const succeeded = attempted.filter(row => !row.collectionFailed && row.stock !== null && row.stock !== undefined
       && Number.isFinite(Number(row.stock)) && !(Array.isArray(row.errors) ? row.errors.length : row.errors)).length;
     day.succeeded += succeeded;
     day.failed += attempted.length - succeeded;
     for (const item of attempted) state.queriedIds.add(String(item.bizItemId));
-    for (const item of items.slice(limit)) state.truncatedIds.add(String(item.bizItemId));
+    for (const item of items.slice(selected.length)) state.truncatedIds.add(String(item.bizItemId));
     groups.set(JSON.stringify(items.map(item => String(item.bizItemId)).sort()), day);
     state.days.set(date, groups);
   }
@@ -49,4 +68,4 @@ function createProductCoverage() {
   return { discover, record, snapshot };
 }
 
-module.exports = { createProductCoverage };
+module.exports = { createProductCoverage, selectProductTargets };

@@ -1,4 +1,4 @@
-const CACHE_VERSION = "staydatalab-v20260922-review-theme-v112";
+const CACHE_VERSION = "staydatalab-v20260928-capacity-review-v113";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",

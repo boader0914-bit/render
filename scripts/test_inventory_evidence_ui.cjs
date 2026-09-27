@@ -6,7 +6,7 @@ const path = require("node:path");
 const {applyInventoryEvidence} = require("./inventory_estimation.cjs");
 const mint = applyInventoryEvidence(require("./fixtures/mint_20260920.cjs"));
 const source = fs.readFileSync(path.join(__dirname,"../web/app.js"),"utf8");
-const names = ["inventoryAssessment","roomCapacityPresentation","manualCorrectionRoomSegments","cleanManualCorrectionSegment","manualCorrectionSegmentHasValue","sheetInventorySummary","sheetBookingQuantityBasis","sheetCollectionStatusPanel","inventorySourceHtml","sheetDisclosure","escapeHtml","fmtNumber","fmtWon","fmtRate","weeklyRows","salesStats","bookingGraphRows","bookingQuantityBreakdown","bookingEvidenceLegend","bookingEvidenceSplit","bookingEvidenceChips","sheetBookingRevenueBreakdown","sheetRowsForBooking","dateRow","miniBars","itemRevenueStats","projectedRevenueFields","finiteNumber","optionalNumber","parseDate","monthDay","isoAddDays","normalizeMonthDayLabel","bookingRangeLabels","bookingDays"];
+const names = ["inventoryAssessment","roomCapacityPresentation","roomCapacityReviewPresentation","roomCapacityWarningBadgeHtml","roomCapacityWarningNoteHtml","roomCapacityValueHtml","roomCapacityReviewHtml","adminDbRoomCapacityPresentation","adminDbSelectedMetricCard","manualCorrectionRoomSegments","cleanManualCorrectionSegment","manualCorrectionSegmentHasValue","sheetInventorySummary","sheetBookingQuantityBasis","sheetCollectionStatusPanel","inventorySourceHtml","sheetDisclosure","escapeHtml","fmtNumber","fmtWon","fmtRate","weeklyRows","salesStats","bookingGraphRows","bookingQuantityBreakdown","bookingEvidenceLegend","bookingEvidenceSplit","bookingEvidenceChips","sheetBookingRevenueBreakdown","sheetRowsForBooking","dateRow","miniBars","itemRevenueStats","projectedRevenueFields","finiteNumber","optionalNumber","parseDate","monthDay","isoAddDays","normalizeMonthDayLabel","bookingRangeLabels","bookingDays"];
 const context = vm.createContext({state:{data:{run:{checkIn:"2026-09-20",checkOut:"2026-10-20",bookingRangeDays:31}}},DEFAULT_BOOKING_DAYS:31,B2B_MY_LODGE_SEGMENT_LIMIT:8,isAdminRole:()=>true});
 for (const name of names) {
   const declaration = source.match(new RegExp(`^function ${name}\\([^]*?^}`,"m"))?.[0];
@@ -146,11 +146,53 @@ const reviewNeeded = withLodgingRows([{rawTotal:52,total:52}],{
   capacityReview:{required:true,threshold:40,message:"글램핑 객실 총량 40실 초과"}
 });
 assert.equal(context.roomCapacityPresentation(reviewNeeded).count,52,"Review flags must never cap the displayed total");
-assert.match(context.sheetInventorySummary(reviewNeeded),/객실 수 검토 필요/);
+assert.match(context.sheetInventorySummary(reviewNeeded),/객실 수 확인 필요/);
 assert.match(context.sheetInventorySummary(reviewNeeded),/글램핑 객실 총량 40실 초과/);
 assert.equal(context.roomCapacityPresentation(withLodgingRows([{rawTotal:52,total:52}])).reviewRequired,false,"The UI does not infer glamping classification from a large total");
 const maliciousReview = withLodgingRows([{rawTotal:52,total:52}],{capacityReview:{required:true,message:'<img src=x onerror=alert(1)>'}});
 assert.doesNotMatch(context.sheetInventorySummary(maliciousReview),/<img src=x/);
+const uncertainReview = {
+  version:2,required:true,capacityUncertain:true,reviewed:false,basis:"observed_maximum",
+  reasons:[
+    {code:"duplicate_room_product_names",severity:"warning",scope:"composition",message:"같은 객실 이름의 상품이 겹칩니다."},
+    {code:"product_targets_truncated",severity:"warning",scope:"capacity",message:"일부 상품의 수량을 확인하지 못했습니다."}
+  ]
+};
+const uncertainItem = withLodgingRows([{rawTotal:52,total:52}],{capacityReview:uncertainReview});
+const uncertainHtml = context.sheetInventorySummary(uncertainItem);
+assert.match(uncertainHtml,/<strong>52실<\/strong><span class="room-capacity-warning"/);
+assert.match(uncertainHtml,/aria-hidden="true">!<\/span>객실 수 확인 필요/);
+assert.match(uncertainHtml,/같은 객실 이름의 상품이 겹칩니다/);
+assert.match(uncertainHtml,/외 1가지/);
+assert.match(uncertainHtml,/<li>일부 상품의 수량을 확인하지 못했습니다\.<\/li>/);
+assert.match(uncertainHtml,/수집 완료 여부와는 별도 검토/);
+assert.equal(context.roomCapacityPresentation({...uncertainItem,companyManualCorrection:{lodgingBasisTotal:31}}).count,31);
+assert.equal(context.roomCapacityPresentation({...uncertainItem,companyManualCorrection:{lodgingBasisTotal:31}}).reviewRequired,false,"An active DB total remains authoritative even with stale uncertain evidence");
+const conflictReview = {required:true,reviewed:true,capacityUncertain:false,basis:"db_correction",reasons:[
+  {code:"db_capacity_observation_conflict",severity:"warning",scope:"observation",message:"DB 검수값보다 수집 수량이 큽니다."},
+  {code:"duplicate_room_product_names",severity:"info",scope:"composition",message:"동일 객실 상품을 참고해 주세요."}
+]};
+const dbReviewCapacity = context.adminDbRoomCapacityPresentation({company:{manualCorrection:{lodgingBasisTotal:31},inventory:{latest:{capacityReview:conflictReview,capacityBasis:{source:"db_correction",count:31}}}}});
+assert.equal(dbReviewCapacity.count,31);
+assert.equal(dbReviewCapacity.reviewRequired,false);
+const dbReviewHtml = context.adminDbSelectedMetricCard({label:"현재 객실 기준",value:"31실",capacity:dbReviewCapacity,note:"관리자 보정값 우선"});
+assert.match(dbReviewHtml,/<strong>31실<\/strong><span class="room-capacity-warning"/);
+assert.match(dbReviewHtml,/수집 수량 확인/);
+assert.doesNotMatch(dbReviewHtml,/객실 수 확인 필요/);
+assert.match(context.roomCapacityReviewHtml(dbReviewCapacity),/DB 검수 객실 수는 그대로 적용/);
+assert.match(context.roomCapacityReviewHtml(dbReviewCapacity),/동일 객실 상품을 참고/);
+const infoReview = context.roomCapacityReviewPresentation({reviewed:true,required:false,capacityUncertain:false,reasons:conflictReview.reasons.slice(1)});
+assert.equal(context.roomCapacityWarningBadgeHtml(infoReview),"");
+assert.match(context.roomCapacityReviewHtml(infoReview),/객실 수 참고사항/);
+const legacyMissingItem = {capacityReview:{required:true,message:"객실 수를 정할 자료가 부족합니다."}};
+const missingCapacity = context.roomCapacityPresentation(legacyMissingItem);
+assert.equal(missingCapacity.count,null,"No rows must never become zero physical rooms");
+assert.equal(missingCapacity.reviewRequired,true,"Legacy top-level review metadata also marks missing evidence");
+assert.match(context.roomCapacityValueHtml(missingCapacity),/<strong>확인 전<\/strong>/);
+assert.match(context.roomCapacityWarningNoteHtml(missingCapacity),/자료가 부족/);
+const maliciousReasons = context.roomCapacityReviewPresentation({required:true,capacityUncertain:true,reasons:[{scope:"capacity",severity:"warning",message:'<img src=x onerror=alert(1)>'}]});
+assert.doesNotMatch(context.roomCapacityReviewHtml(maliciousReasons),/<img/);
+assert.match(context.roomCapacityReviewHtml(maliciousReasons),/&lt;img/);
 const smallerDbCapacity = applyInventoryEvidence({
   inventoryCapacityBaseline:{lodgingOverride:{count:5,source:"db_manual_correction"}},
   weeklyProductDetails:[{date:"2026-09-20",bizItemId:"db-room",saleType:"숙박",stock:10,bookingCount:9,price:100000}]
@@ -160,7 +202,10 @@ assert.equal(context.roomCapacityPresentation(smallerDbCapacity).count,5,"Keep a
 assert.equal(context.salesStats(smallerDbCapacity).phoneBookings,0);
 assert.ok(Number.isNaN(context.salesStats(smallerDbCapacity).rate));
 assert.ok(Number.isNaN(smallerDbRow.rate));
-assert.match(context.sheetInventorySummary(smallerDbCapacity),/<strong>5실<\/strong><small>DB 보정/);
+assert.match(context.sheetInventorySummary(smallerDbCapacity),/<strong>5실<\/strong>/);
+assert.match(context.sheetInventorySummary(smallerDbCapacity),/<small>DB 보정/);
+assert.match(context.sheetInventorySummary(smallerDbCapacity),/수집 수량 확인/);
+assert.doesNotMatch(context.sheetInventorySummary(smallerDbCapacity),/객실 수 확인 필요/);
 assert.match(context.dateRow(smallerDbRow),/DB 보정과 수집 수량 충돌/);
 assert.match(context.dateRow(smallerDbRow),/예약 비율 확인 필요/);
 assert.doesNotMatch(context.sheetInventorySummary(smallerDbCapacity),/180%/);

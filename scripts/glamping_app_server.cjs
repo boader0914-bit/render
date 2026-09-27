@@ -11,7 +11,8 @@ const yeogiImportParser = require("./yeogi_import_parser.cjs");
 const { publicHeader } = require("./public_site_chrome.cjs");
 const { createPublicPages } = require("./public_site_pages.cjs");
 const { buildPolicyDocument } = require("./public_policy_content.cjs");
-const { applyInventoryEvidence } = require("./inventory_estimation.cjs");
+const { applyInventoryEvidence, buildCapacityReview, buildStoredCapacityReview } = require("./inventory_estimation.cjs");
+const { collectionCapacityCoverageForBusiness } = require("./lib/collection_capacity_coverage.cjs");
 const { sanitizeProductStockCorrections } = require("./lib/inventory_manual_corrections.cjs");
 const { otaProviderFromUrl } = require("./naver_place_ota_observation.cjs");
 const { createCollector: createTourismCollector } = require("./tourism_collector.cjs");
@@ -10087,7 +10088,7 @@ function compactCompanyProductSnapshot(item = {}, run = {}, collectedAt = "") {
     normalizationEvidence: item.inventoryEvidence?.normalizationEvidence || [],
     excludedNonRoomProductCount: Number(item.inventoryEvidence?.excludedNonRoomProductCount || 0),
     capacityBasis: item.inventoryEvidence?.capacityBasis || null,
-    capacityReview: item.inventoryEvidence?.capacityReview || null,
+    capacityReview: item.inventoryEvidence?.capacityReview || item.capacityReview || null,
     roomGuideReference: item.inventoryEvidence?.roomGuideReference || null,
     source: "naver_public_observation",
     revenueType: "estimated",
@@ -10960,12 +10961,27 @@ function mergeCompanyProductSnapshots(previous = null, incoming = null) {
   };
 }
 
-function companyInventorySummaryView(inventory = {}) {
+function companySnapshotCapacityReview(snapshot = {}, company = {}) {
+  return buildStoredCapacityReview(snapshot || {}, {
+    name: company.primaryName || "",
+    keyword: Object.values(company.keywords || {}).map((row) => row.keyword || "").join(" "),
+    businessType: (company.lodgingTypes || []).join(" "),
+    baseline: {
+      lodging: companyMaximumRoomCapacity(company),
+      lodgingOverride: manualCorrectionLodgingBasisTotal(company.manualCorrection) || null
+    }
+  });
+}
+
+function companyInventorySummaryView(inventory = {}, company = {}) {
   const summarizeSnapshot = (snapshot) => {
     if (!snapshot || typeof snapshot !== "object") return snapshot || null;
+    const capacityReview = companySnapshotCapacityReview(snapshot.productSnapshot || {}, company);
+    const productSnapshot = companyProductSnapshotSummary(snapshot.productSnapshot);
     return {
       ...snapshot,
-      productSnapshot: companyProductSnapshotSummary(snapshot.productSnapshot)
+      capacityReview,
+      productSnapshot: productSnapshot ? { ...productSnapshot, capacityReview } : productSnapshot
     };
   };
   return {
@@ -11068,7 +11084,7 @@ function companyKeywordRecentRuns(keyword = {}, limit = 12, observedTimesByRunId
 }
 
 function companyRecordSummary(company = {}, activeKeywordKey = "") {
-  const inventory = companyInventorySummaryView(companyInventoryWithManualCorrection(company));
+  const inventory = companyInventorySummaryView(companyInventoryWithManualCorrection(company), company);
   const manualCorrection = manualCorrectionHasValue(company.manualCorrection) ? company.manualCorrection : null;
   const regions = companyRegionsWithManualCorrection(company);
   const keywords = Object.values(company.keywords || {})
@@ -14620,7 +14636,7 @@ async function summarizeCompanyMasterDetail(companyId = "") {
     priceGroups: Array.isArray(productSnapshot?.priceGroups) ? productSnapshot.priceGroups : [],
     productSummary: productSnapshot?.summary || latestSnapshot?.summary || null,
     capacityBasis: dailySnapshot?.capacityBasis || viewCompany.inventory?.latest?.capacityBasis || null,
-    capacityReview: dailySnapshot?.capacityReview || viewCompany.inventory?.latest?.capacityReview || null,
+    capacityReview: companySnapshotCapacityReview(dailySnapshot || viewCompany.inventory?.latest?.productSnapshot || {}, viewCompany),
     roomGuideReference: dailySnapshot?.roomGuideReference || null,
     inventoryReviewEvidence: {
       exclusionEvidence: dailySnapshot?.exclusionEvidence || [],
@@ -15657,6 +15673,7 @@ function summarizeAvailabilityRows(rows, baseDir = "", capacityCompanies = [], c
       placeId,
       place_id: placeId,
       bookingBusinessId,
+      collectionProductCoverage: collectionCapacityCoverageForBusiness(collectionRange.productCoverage, bookingBusinessId),
       rank: numericField(row, ["overall_rank", "순위", "rank_or_order"]) || byPlace.size + 1,
       name: row["업체명"] || row.name || "확인불가",
       keyword: row["기준키워드"] || row["검색키워드"] || row.keyword || collectionRange.keyword || "",
@@ -15820,6 +15837,7 @@ function summarizeAvailabilityRows(rows, baseDir = "", capacityCompanies = [], c
       });
       return {
         ...item,
+        capacityReview: item.inventoryEvidence?.capacityReview || buildCapacityReview(item),
         inventoryConfidence: confidence,
         inventoryStructure: confidence.structure,
         inventoryStructureType: confidence.structure.type,
@@ -17323,7 +17341,8 @@ async function loadRun(runId, options = {}) {
   const availability = summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows], dirPath, Object.values(capacityMaster.companies || {}), {
     keyword: manifest?.keyword || conditions.keyword || "",
     checkIn: manifest?.checkIn || conditions.checkIn || runDateFromId(runId),
-    bookingRangeDays: manifest?.bookingRangeDays || 1
+    bookingRangeDays: manifest?.bookingRangeDays || 1,
+    productCoverage: manifest?.productCoverage || null
   });
   const ranking = summarizeRankingRows(overallRows, adRows, regionalRows, availability);
   const demandStructure = buildDemandStructure({
@@ -18068,9 +18087,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=datalab-20260922-review-theme-v112"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=datalab-20260922-review-theme-v112"')
-      .replace('src="/app.js"', 'src="/app.js?v=datalab-20260922-review-theme-v112"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=datalab-20260928-capacity-review-v113"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=datalab-20260928-capacity-review-v113"')
+      .replace('src="/app.js"', 'src="/app.js?v=datalab-20260928-capacity-review-v113"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

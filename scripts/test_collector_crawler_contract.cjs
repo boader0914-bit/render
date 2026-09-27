@@ -133,6 +133,59 @@ test("basic collection never adds day-use schedule requests even when detail is 
   assert.equal(result.dayUseTotalStock, null);
 });
 
+test("real lodging path queries all 68 or 85 unique products on the first and subsequent dates and retains every detail", async () => {
+  for (const productCount of [68, 85]) {
+    const products = Array.from({ length: productCount }, (_, index) => ({
+      bizItemId: String(index), name: "숙박 상품", bizItemSubType: "ACCOMMODATION_NIGHT",
+    }));
+    const called = [];
+    const dates = ["2026-09-22", "2026-09-23", "2026-09-24"];
+    const crawler = harness({
+      env: { COLLECTOR_WORKER_RUNTIME: "1", DAY_USE_MODE: "inspect", BOOKING_RANGE_DAYS: "3",
+        NAVER_SCHEDULE_DELAY_MS: "0", NAVER_COUPON_PAGE_FALLBACK: "0" },
+      setup: 'getNaverBookingBusiness = async () => ({bookingBusinessId:"123",bookingUrl:"fixture"});',
+      fetchImpl: async (_url, init) => {
+        const query = JSON.parse(init.body);
+        if (query.operationName === "searchBizItem") return new Response(JSON.stringify({ data: {
+          searchBizItem: { bizItems: [...products, { ...products[0] }, { ...products[productCount - 1] }] },
+        } }));
+        assert.equal(query.operationName, "dailySchedule");
+        const params = query.variables.scheduleParams;
+        const date = params.startDateTime.slice(0, 10);
+        called.push({ date, id: params.bizItemId });
+        return new Response(JSON.stringify({ data: { schedule: { bizItemSchedule: { daily: { date: {
+          [date]: { stock: 1, bookingCount: 0, occupiedBookingCount: 0, price: 100000 },
+        } } } } } }));
+      },
+    });
+    const result = await crawler.collectNaverBookingAvailability("456", new Map(), { collectRange: true });
+    assert.equal(called.length, productCount * dates.length);
+    assert.equal(result.itemDetails.length, productCount);
+    assert.equal(result.weekly.productDetails.length, productCount * dates.length);
+    for (const date of dates) {
+      const ids = called.filter(row => row.date === date).map(row => row.id).sort();
+      assert.deepEqual(ids, products.map(row => row.bizItemId).sort());
+      assert.equal(result.weekly.dates.find(row => row.date === date).productDetails.length, productCount);
+    }
+    const coverage = crawler.productCoverage.snapshot();
+    assert.equal(coverage.discovered, productCount);
+    assert.equal(coverage.queried, productCount);
+    assert.equal(coverage.truncated, 0);
+    assert.equal(result.collectionProductCoverage.businessId, "123");
+    assert.equal(result.collectionProductCoverage.eligible, productCount);
+    for (const day of coverage.targets[0].days) {
+      assert.equal(day.queried, productCount);
+      assert.equal(day.succeeded, productCount);
+      assert.equal(day.failed, 0);
+      assert.equal(day.truncated, 0);
+    }
+    const manifest = manifestFixture();
+    manifest.counts.naverBookingStockEligible = manifest.counts.naverBookingStockChecked = manifest.counts.naverBookingStockSucceeded = 1;
+    crawler.addCollectionDiagnostics(manifest);
+    assert.equal(manifest.collectionQuality.status, "complete", JSON.stringify(manifest.collectionQuality));
+  }
+});
+
 test("transferred historical identifiers survive absent worker history and local CSV history retains precedence", async () => {
   const files = new Map([[contextFile, '\uFEFF[{"placeId":"123","businessId":"456"},{"placeId":"789","businessId":"987"}]']]);
   const seeded = harness({ env: { HISTORY_BOOKING_BUSINESS_CONTEXT_FILE: contextFile }, files });
@@ -278,7 +331,7 @@ test("real schedule reader preserves zero, missing and failure while coverage re
   assert.equal(first[0].stock, 0); assert.equal(first[0].collectionFailed, false);
   assert.equal(first[1].stock, null); assert.equal(first[1].collectionFailed, true);
   assert.equal(first[2].stock, null); assert.equal(first[2].collectionFailed, true);
-  await crawler.collectWeeklyNaverAvailability("biz", items, first, 2);
+  await crawler.collectWeeklyNaverAvailability("biz", items, first, 2, "개", 40);
   const coverage = crawler.productCoverage.snapshot();
   assert.equal(coverage.discovered, 43); assert.equal(coverage.eligible, 42); assert.equal(coverage.excluded, 1);
   assert.equal(coverage.queried, 40); assert.equal(coverage.truncated, 2);
@@ -348,19 +401,56 @@ test("day-use 20-product limit is consistent on the first and all later dates", 
 });
 
 test("paced captcha cancellation counts only schedules that reached the network", async () => {
-  const items = Array.from({ length: 4 }, (_, index) => ({ bizItemId: String(index), name: `객실 ${index}` }));
+  const items = Array.from({ length: 68 }, (_, index) => ({ bizItemId: String(index), name: `객실 ${index}` }));
   let calls = 0;
   const crawler = harness({ env: { COLLECTOR_WORKER_RUNTIME: "1", NAVER_REQUEST_PACING_ENABLED: "1",
     NAVER_REQUEST_MIN_INTERVAL_MS: "0", NAVER_REQUEST_MAX_CONCURRENCY: "1", NAVER_SCHEDULE_CONCURRENCY: "4", NAVER_SCHEDULE_DELAY_MS: "0" },
     fetchImpl: async () => { calls++; return new Response('<title>자동입력 방지</title>'); } });
   crawler.productCoverage.discover("biz", items, items, ["2026-09-22"]);
-  await crawler.collectNaverSchedulesForItems("biz", items, 40);
+  const schedules = await crawler.collectNaverSchedulesForItems("biz", items);
   assert.equal(calls, 1);
+  assert.equal(schedules.length, 68);
+  assert.equal(schedules.filter(row => row.queryAttempted === false).length, 67);
   const coverage = crawler.productCoverage.snapshot();
+  assert.equal(coverage.eligible, 68);
   assert.equal(coverage.queried, 1);
+  assert.equal(coverage.truncated, 0, "guard cancellation is not a product count limit");
   assert.equal(coverage.targets[0].days[0].queried, 1);
   assert.equal(coverage.targets[0].days[0].failed, 1);
+  assert.equal(coverage.targets[0].days[0].succeeded, 0);
+  const manifest = manifestFixture();
+  crawler.addCollectionDiagnostics(manifest);
+  assert.equal(manifest.collectionQuality.status, "blocked");
+  assert.equal(allowsDerivedUpdates(manifest), false);
   assert.equal(crawler.logs.filter(line => line === "COLLECTOR_PROVIDER_BLOCKED").length, 1);
+});
+
+test("unlimited default-speed lodging stops new requests after a block and later dates remain unqueried", async () => {
+  const items = Array.from({ length: 68 }, (_, index) => ({ bizItemId: String(index), name: `객실 ${index}` }));
+  let calls = 0;
+  const crawler = harness({
+    env: { COLLECTOR_WORKER_RUNTIME: "1", NAVER_SCHEDULE_DELAY_MS: "0" },
+    fetchImpl: async () => { calls++; return new Response("{}", { status: 429 }); },
+  });
+  crawler.productCoverage.discover("biz", items, items, ["2026-09-22", "2026-09-23", "2026-09-24"]);
+  const first = await crawler.collectNaverSchedulesForItems("biz", items);
+  const startedBeforeStop = calls;
+  assert.ok(startedBeforeStop > 0 && startedBeforeStop <= crawler.concurrency[1]);
+  await crawler.collectWeeklyNaverAvailability("biz", items, first, 3);
+  assert.equal(calls, startedBeforeStop, "later dates must not restart blocked requests");
+  const coverage = crawler.productCoverage.snapshot();
+  assert.equal(coverage.truncated, 0);
+  assert.equal(coverage.targets[0].days[0].queried, startedBeforeStop);
+  assert.equal(coverage.targets[0].days[0].succeeded, 0);
+  for (const day of coverage.targets[0].days.slice(1)) {
+    assert.equal(day.queried, 0);
+    assert.equal(day.succeeded, 0);
+    assert.equal(day.failed, 0, "unstarted requests are not failed network responses");
+  }
+  const manifest = manifestFixture();
+  crawler.addCollectionDiagnostics(manifest);
+  assert.equal(manifest.collectionQuality.status, "blocked");
+  assert.equal(allowsDerivedUpdates(manifest), false);
 });
 
 test("0923 entry selects the maintained archive engine and preserves the authorized trigger", () => {

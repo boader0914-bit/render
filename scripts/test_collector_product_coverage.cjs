@@ -2,7 +2,7 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { createProductCoverage } = require("./collector_product_coverage.cjs");
+const { createProductCoverage, selectProductTargets } = require("./collector_product_coverage.cjs");
 const { inspectManifest, inspectProductCoverage, allowsDerivedUpdates } = require("./daily_collection_quality.cjs");
 
 function fixture() {
@@ -19,6 +19,58 @@ function fixture() {
     productCoverage: tracker.snapshot()
   };
 }
+
+test("product selection defaults to unlimited and keeps explicit positive limits", () => {
+  const items = Array.from({ length: 68 }, (_, index) => ({ bizItemId: String(index), name: "숙박 상품" }));
+  assert.equal(selectProductTargets(items).length, 68);
+  assert.equal(selectProductTargets(items, 0).length, 68);
+  assert.equal(selectProductTargets(items, 20).length, 20);
+  assert.equal(selectProductTargets(items, 100).length, 68);
+  for (const invalid of [-1, 0.5, NaN, Infinity, "40", null]) {
+    assert.throws(() => selectProductTargets(items, invalid), /INVALID_PRODUCT_LIMIT/);
+  }
+});
+
+test("unlimited coverage counts each product ID once without merging matching names", () => {
+  const tracker = createProductCoverage();
+  const items = Array.from({ length: 68 }, (_, index) => ({ bizItemId: String(index), name: "숙박 상품" }));
+  const repeated = [...items, { ...items[0] }, { ...items[67] }];
+  tracker.discover("biz", repeated, repeated, ["2026-09-23", "2026-09-24"]);
+  for (const date of ["2026-09-23", "2026-09-24"]) {
+    tracker.record("biz", repeated, 0, date, repeated.map(item => ({ ...item, stock: 0 })));
+  }
+  const coverage = tracker.snapshot();
+  assert.equal(coverage.discovered, 68);
+  assert.equal(coverage.eligible, 68);
+  assert.equal(coverage.queried, 68);
+  assert.equal(coverage.truncated, 0);
+  for (const day of coverage.targets[0].days) {
+    assert.equal(day.eligible, 68);
+    assert.equal(day.queried, 68);
+    assert.equal(day.succeeded, 68);
+    assert.equal(day.failed, 0);
+    assert.equal(day.truncated, 0);
+  }
+  assert.equal(inspectProductCoverage(coverage, true), null);
+});
+
+test("positive limits record omitted unique products and canceled rows cannot become successes", () => {
+  const tracker = createProductCoverage();
+  const items = [{ bizItemId: "one" }, { bizItemId: "one" }, { bizItemId: "two" }, { bizItemId: "three" }];
+  tracker.discover("biz", items, items, ["2026-09-23"]);
+  tracker.record("biz", items, 2, "2026-09-23", [
+    { bizItemId: "one", stock: 0 },
+    { bizItemId: "two", stock: 0, queryAttempted: false },
+  ]);
+  const coverage = tracker.snapshot();
+  assert.equal(coverage.eligible, 3);
+  assert.equal(coverage.queried, 1);
+  assert.equal(coverage.truncated, 1);
+  const day = coverage.targets[0].days[0];
+  assert.equal(day.succeeded, 1);
+  assert.equal(day.failed, 0);
+  assert.equal(inspectProductCoverage(coverage, true), "product_targets_truncated");
+});
 
 test("schema 2 needs full per-date coverage; observed zero is a complete observation", () => {
   const manifest = fixture();

@@ -4861,13 +4861,77 @@ function roomCapacityPresentation(item = {}) {
   const count = operatingCount || manualBasis || estimatedCount;
   const estimated = !operatingCount && !manualBasis && estimatedCount !== null;
   const sourceLabel = count === null ? "수집 자료 부족" : estimated ? "최대 관측(추정)" : "DB 보정";
-  const review = evidence?.capacityReview || {};
-  const reviewRequired = review.required === true;
-  const reviewNote = reviewRequired ? String(review.message || "객실 수 검토 필요") : "";
+  const review = roomCapacityReviewPresentation(evidence?.capacityReview || item.capacityReview, Boolean(operatingCount || manualBasis));
   const dailyText = maximum === null ? "공개 수량 미확인"
     : minimum === maximum ? `${fmtNumber(maximum)}실 / 일`
       : `${fmtNumber(minimum)}~${fmtNumber(maximum)}실 / 일`;
-  return { count, physicalCount, estimated, physical, operatingCount, dailyText, minimum, maximum, sourceLabel, reviewRequired, reviewNote };
+  return { count, physicalCount, estimated, physical, operatingCount, dailyText, minimum, maximum, sourceLabel, ...review };
+}
+
+function roomCapacityReviewPresentation(review = {}, hasCorrection = false) {
+  review = review && typeof review === "object" ? review : {};
+  const reviewed = hasCorrection || review.reviewed === true || review.basis === "db_correction";
+  const reasons = (Array.isArray(review.reasons) ? review.reasons : [])
+    .filter((reason) => reason && typeof reason.message === "string" && reason.message.trim())
+    .map((reason) => ({
+      code: String(reason.code || ""),
+      message: reason.message.trim(),
+      severity: reason.severity === "warning" && (!reviewed || reason.scope === "observation") ? "warning" : "info",
+      scope: ["capacity", "composition", "observation"].includes(reason.scope) ? reason.scope : "observation"
+    }));
+  if (!reasons.length && review.required === true) reasons.push({
+    code: "legacy_capacity_review", message: String(review.message || "객실 수의 근거를 확인해 주세요."),
+    severity: "warning", scope: reviewed ? "observation" : "capacity"
+  });
+  const capacityReasons = reasons.filter((reason) => reason.severity === "warning" && ["capacity", "composition"].includes(reason.scope));
+  const reviewRequired = !reviewed && (typeof review.capacityUncertain === "boolean" ? review.capacityUncertain : capacityReasons.length > 0);
+  const reviewReasons = reasons.filter((reason, index) => reasons.findIndex((other) => other.message === reason.message) === index);
+  const observationReasons = reviewReasons.filter((reason) => reason.severity === "warning" && reason.scope === "observation");
+  const observationReviewRequired = observationReasons.length > 0;
+  const reviewNote = reviewRequired ? (capacityReasons[0]?.message || String(review.message || "객실 수의 근거를 확인해 주세요.")) : (observationReasons[0]?.message || "");
+  return { reviewRequired, observationReviewRequired, reviewNote, reviewReasons, reviewed };
+}
+
+function roomCapacityWarningBadgeHtml(capacity = {}) {
+  if (!capacity.reviewRequired && !capacity.observationReviewRequired) return "";
+  return `<span class="room-capacity-warning" title="${escapeHtml(capacity.reviewNote)}"><span class="room-capacity-warning-icon" aria-hidden="true">!</span>${capacity.reviewRequired ? "객실 수 확인 필요" : "수집 수량 확인"}</span>`;
+}
+
+function roomCapacityValueHtml(capacity = {}, value = "") {
+  const number = `<strong>${escapeHtml(value || (capacity.count ? `${fmtNumber(capacity.count)}실` : "확인 전"))}</strong>`;
+  return capacity.reviewRequired || capacity.observationReviewRequired ? `<div class="room-capacity-value">${number}${roomCapacityWarningBadgeHtml(capacity)}</div>` : number;
+}
+
+function roomCapacityWarningNoteHtml(capacity = {}) {
+  if (!capacity.reviewRequired && !capacity.observationReviewRequired) return "";
+  const extra = (capacity.reviewReasons || []).filter((reason) => reason.severity === "warning").length - 1;
+  const note = String(capacity.reviewNote || "");
+  const brief = note.length > 90 ? `${note.slice(0, 89).trim()}…` : note;
+  return `<small class="room-capacity-warning-note">${escapeHtml(brief)}${extra > 0 ? ` · 외 ${fmtNumber(extra)}가지` : ""}</small>`;
+}
+
+function roomCapacityReviewHtml(capacity = {}) {
+  const reasons = capacity.reviewReasons || [];
+  if (!reasons.length) return "";
+  const warning = capacity.reviewRequired || reasons.some((reason) => reason.severity === "warning");
+  const title = capacity.reviewRequired ? "객실 수 확인 필요" : warning ? "수집 수량 확인 필요" : "객실 수 참고사항";
+  return `<div class="room-capacity-review ${warning ? "is-warning" : "is-info"}"><div class="room-capacity-review-title"><span aria-hidden="true">${warning ? "!" : "ⓘ"}</span><strong>${title}</strong></div><ul>${reasons.map((reason) => `<li>${escapeHtml(reason.message)}</li>`).join("")}</ul><p>${capacity.reviewed ? "DB 검수 객실 수는 그대로 적용합니다." : "표시된 총량은 유지합니다. 업체 DB에서 실제 객실 수를 확인·보정해 주세요."} 수집 완료 여부와는 별도 검토입니다.</p></div>`;
+}
+
+function adminDbRoomCapacityPresentation(row = {}) {
+  const company = row.company || {};
+  const latest = row.metrics?.latest || company.inventory?.latest || {};
+  const snapshot = latest.productSnapshot || {};
+  return roomCapacityPresentation({
+    companyManualCorrection: company.manualCorrection,
+    inventoryEvidence: {
+      version: 4,
+      capacityBasis: latest.capacityBasis || snapshot.capacityBasis,
+      capacityReview: latest.capacityReview || snapshot.capacityReview,
+      roomGuideReference: latest.roomGuideReference || snapshot.roomGuideReference,
+      lodging: { rows: [] }
+    }
+  });
 }
 
 function finiteNumber(value, fallback = 0) {
@@ -6783,7 +6847,7 @@ function renderCompanies() {
           </div>
         </div>
         <div class="company-compact-metrics">
-          <div><span>객실 총량</span><strong>${capacity.count ? `${fmtNumber(capacity.count)}실` : "확인 전"}</strong><small>${escapeHtml(capacity.sourceLabel)}${capacity.count && evidence?.version >= 3 ? " · 날짜별 고정" : ""}<br>네이버 공개 ${escapeHtml(capacity.dailyText)}${capacity.reviewRequired ? "<br>객실 수 검토 필요" : ""}</small></div>
+          <div><span>객실 총량</span>${roomCapacityValueHtml(capacity)}${roomCapacityWarningNoteHtml(capacity)}<small>${escapeHtml(capacity.sourceLabel)}${capacity.count && evidence?.version >= 3 ? " · 날짜별 고정" : ""}<br>네이버 공개 ${escapeHtml(capacity.dailyText)}</small></div>
           <div><span>${lodging.estimated ? "숙박 예약 추정" : "숙박 예약 수량"}</span><strong>${linked && lodgingObserved ? `${fmtNumber(lodging.sold)}${lodging.basis === "basis" ? "실" : "객실·박"}` : "자료 미확인"}</strong><small>${escapeHtml(lodging.label)}${linked && lodgingObserved && Number.isFinite(lodging.rate) ? ` · 예약 비율 ${fmtRate(lodging.rate)}` : ""}</small>${linked && lodging.estimated && lodgingObserved ? bookingEvidenceChips(lodging, lodging.basis === "basis" ? "실" : "객실·박") : ""}</div>
           <div><span>당일 이용 예약 수량</span><strong>${linked && dayObserved ? `${fmtNumber(day.sold)}회` : "자료 미확인"}</strong><small>${dayObserved ? escapeHtml(day.label) : "예약 자료 필요"} · 숙박과 별도</small></div>
           <div><span>예상 매출</span><strong>${linked && (lodgingObserved || dayObserved) ? fmtWon(revenue.totalAdjustedRevenue || revenue.totalRevenue) : "자료 미확인"}</strong><small>${linked ? `${lodging.estimated ? "공개예약·방막기 추정 포함" : "수집된 가격·예약 기준"}${incomplete ? " · 일부 자료 미확인" : ""}` : "상세 수량·가격 확인 필요"}</small></div>
@@ -19859,6 +19923,7 @@ function adminDbQuickCorrectionSummaryCards(row = {}) {
     {
       label: "현재 객실 기준",
       value: roomTotal ? `${fmtNumber(roomTotal)}실` : "확인 필요",
+      capacity: adminDbRoomCapacityPresentation(row),
       note: correctionApplied ? "관리자 보정값 우선" : "자동수집 기준",
       tone: roomTotal ? "neutral" : "watch"
     },
@@ -20012,6 +20077,7 @@ function adminDbQuickCorrectionPanel(row = {}, detail = {}) {
       <div class="admin-db-quick-edit-summary">
         ${cards.map(adminDbSelectedMetricCard).join("")}
       </div>
+      ${roomCapacityReviewHtml(adminDbRoomCapacityPresentation(row))}
       ${adminDbCorrectionImpactHtml(row)}
       ${companyCorrectionFormHtml(company, true, { detail })}
     </section>
@@ -22448,7 +22514,7 @@ function adminDbSelectedMetricCard(card = {}) {
   return `
     <article class="${escapeHtml(card.tone || "neutral")}">
       <span>${escapeHtml(card.label || "")}</span>
-      <strong>${escapeHtml(card.value || "")}</strong>
+      ${card.capacity ? roomCapacityValueHtml(card.capacity, card.value) + roomCapacityWarningNoteHtml(card.capacity) : `<strong>${escapeHtml(card.value || "")}</strong>`}
       <small>${escapeHtml(card.note || "")}</small>
     </article>
   `;
@@ -22505,6 +22571,7 @@ function adminDbSelectedAppliedCards(row = {}) {
     {
       label: "객실·상품",
       value: basisRoomTotal ? `${fmtNumber(basisRoomTotal)}실` : "수량 확인",
+      capacity: adminDbRoomCapacityPresentation(row),
       note: productNote,
       tone: basisRoomTotal ? "neutral" : "watch"
     },
@@ -22548,7 +22615,7 @@ function adminDbSelectedKpiCardsHtml(row = {}) {
       ${cards.map((card) => `
         <article class="${escapeHtml(card.tone || "neutral")}">
           <span>${escapeHtml(card.label || "")}</span>
-          <strong>${escapeHtml(card.value || "")}</strong>
+          ${card.capacity ? roomCapacityValueHtml(card.capacity, card.value) + roomCapacityWarningNoteHtml(card.capacity) : `<strong>${escapeHtml(card.value || "")}</strong>`}
           <small>${escapeHtml(card.note || "")}</small>
         </article>
       `).join("")}
@@ -36750,7 +36817,7 @@ function sheetBookingQuantityBasis(item = {}) {
     ? `${fmtNumber(capacity.count)}실 · ${capacity.sourceLabel}. ${capacity.estimated ? "같은 업체에서 관측한 최대 숙박 수량을 사용합니다. 실제 보유 객실 수와 다를 수 있습니다." : "DB에 저장한 보정값을 객실 총량으로 우선 적용합니다."}`
     : "총량을 정할 숙박 수량이 아직 확인되지 않았습니다.";
   const capacityReference = capacity.physicalCount ? `<p><strong>객실 안내 참고</strong> ${fmtNumber(capacity.physicalCount)}실 · ${inventorySourceHtml(capacity.physical, true)}. 공개 안내 내용은 총량 계산에 반영하지 않습니다.</p>` : "";
-  const capacityReview = capacity.reviewRequired ? `<p><strong>객실 수 검토 필요</strong> ${escapeHtml(capacity.reviewNote)}. 표시된 수량을 유지하며 DB 보정으로 확인할 수 있습니다.</p>` : "";
+  const capacityReview = roomCapacityReviewHtml(capacity);
   if (evidence?.version >= 3) return `<div class="sheet-calculation-list">
     <p><strong>객실 총량</strong> ${escapeHtml(capacityExplanation)} ${capacity.count ? "선택한 총량을 모든 날짜에 고정하며, 공개 판매 수량이 줄어도 총량은 줄이지 않습니다. " : ""}당일 이용 수량은 더하지 않습니다.</p>
     ${capacityReference}
@@ -36781,7 +36848,7 @@ function sheetInventorySummary(item = {}) {
   return `<section class="sheet-section sheet-inventory-summary">
     <div class="sheet-structure-title"><h3>객실과 예약 수량</h3><span class="structure-badge ${shared ? "watch" : "neutral"}">${evidence?.sharedRooms?.status === "assumed_shared" ? "숙박·당일 이용 객실 공유 가정" : shared ? "숙박·당일 이용 객실 공유" : "숙박 기준"}</span></div>
     <div class="inventory-summary-grid">
-      <div><span>객실 총량</span><strong>${capacity.count ? `${fmtNumber(capacity.count)}실` : "확인 전"}</strong><small>${escapeHtml(capacity.sourceLabel)}${capacity.count && lodging.estimated ? " · 날짜별 고정" : ""}${capacity.reviewRequired ? "<br>객실 수 검토 필요" : ""}</small></div>
+      <div><span>객실 총량</span>${roomCapacityValueHtml(capacity)}${roomCapacityWarningNoteHtml(capacity)}<small>${escapeHtml(capacity.sourceLabel)}${capacity.count && lodging.estimated ? " · 날짜별 고정" : ""}</small></div>
       <div><span>네이버 공개 객실 수</span><strong>${escapeHtml(capacity.dailyText)}</strong><small>공개 수량이 줄어도 객실 총량은 유지</small></div>
       <div><span>${lodging.estimated ? "숙박 예약 추정" : "숙박 예약 수량"}</span><strong>${lodgingObserved ? `${fmtNumber(lodging.sold)}${lodging.basis === "basis" ? "실" : "박"}` : "자료 미확인"}</strong><small>${escapeHtml(lodging.label)}${lodgingObserved && Number.isFinite(lodging.rate) ? ` · 예약 비율 ${fmtRate(lodging.rate)}` : ""}${lodging.estimated && lodgingObserved ? `<br>${escapeHtml(bookingQuantityBreakdown(lodging, lodging.basis === "basis" ? "실" : "박"))}` : ""}</small></div>
       <div><span>당일 이용 예약 수량</span><strong>${dayObserved ? `${fmtNumber(day.sold)}회` : "자료 미확인"}</strong><small>${dayObserved ? escapeHtml(day.label) : "예약 자료 필요"} · 숙박과 별도</small></div>

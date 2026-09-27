@@ -4,7 +4,7 @@ const crypto = require("node:crypto");
 const { inspectManifest } = require("./daily_collection_quality.cjs");
 const { applyInventoryEvidence, productEvidence } = require("./inventory_estimation.cjs");
 const { createNaverRequestGate, isNaverBookingRateLimit, isNaverCaptchaResponse } = require("./naver_request_pacing.cjs");
-const { createProductCoverage } = require("./collector_product_coverage.cjs");
+const { createProductCoverage, selectProductTargets } = require("./collector_product_coverage.cjs");
 const { createCollectionProgressReporter } = require("./collection_progress.cjs");
 const { DAY_USE_MODES, normalizeDayUseMode, dayUsePlan, withoutUncollectedDayUse } = require("./collector_day_use.cjs");
 const COLLECTION_STARTED_AT = new Date().toISOString();
@@ -1748,7 +1748,7 @@ async function getNaverBookingItems(bookingBusinessId) {
   );
   return {
     status: result.status,
-    items: Array.isArray(result.data?.data?.searchBizItem?.bizItems) ? result.data.data.searchBizItem.bizItems : [],
+    items: selectProductTargets(result.data?.data?.searchBizItem?.bizItems),
     listObserved: Array.isArray(result.data?.data?.searchBizItem?.bizItems),
     errors: result.data?.errors || null,
   };
@@ -2508,8 +2508,8 @@ function allocateInventoryShortfall(summary, productBasis, inventoryShortfall) {
   return { byProduct, unallocated: remaining };
 }
 
-async function collectNaverSchedulesForItems(bookingBusinessId, items, limit = 40, date = CHECK_IN) {
-  const schedules = await mapWithConcurrency(items.slice(0, limit), NAVER_SCHEDULE_CONCURRENCY, async (item, index) => {
+async function collectNaverSchedulesForItems(bookingBusinessId, items, limit = 0, date = CHECK_IN) {
+  const schedules = await mapWithConcurrency(selectProductTargets(items, limit), NAVER_SCHEDULE_CONCURRENCY, async (item, index) => {
     if (NAVER_SCHEDULE_DELAY_MS) await delay(NAVER_SCHEDULE_DELAY_MS * (index % NAVER_SCHEDULE_CONCURRENCY));
     let schedule;
     try { schedule = await getNaverDailySchedule(bookingBusinessId, item.bizItemId, date); }
@@ -2577,7 +2577,7 @@ function operatingTotalBasisFromTotals(totals = [], basisTotal = 0) {
   };
 }
 
-async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSchedules, days, unitLabel = "개", productLimit = 40) {
+async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSchedules, days, unitLabel = "개", productLimit = 0) {
   if (!items.length || days <= 1) return null;
   const summaries = [];
 
@@ -2642,8 +2642,7 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
       .map((schedule) => ({
         ...compactNaverScheduleDetail(schedule, item.listType, item.date, item.availabilityUnit),
         inventoryShortfall: shortfall.byProduct.get(scheduleProductKey(schedule)) || 0,
-      }))
-      .slice(0, 80);
+      }));
     return {
       ...item,
       schedules: undefined,
@@ -2756,8 +2755,10 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
 }
 
 function applyCrawlerInventoryEvidence(result, placeId) {
+  const collectionProductCoverage = result.collectionProductCoverage;
   const item = applyInventoryEvidence({
     placeId,
+    bookingBusinessId: result.bookingBusinessId,
     keyword: RAW_KEYWORD,
     itemDetails: result.itemDetails || [],
     weeklyProductDetails: result.weekly?.productDetails || [],
@@ -2770,9 +2771,10 @@ function applyCrawlerInventoryEvidence(result, placeId) {
     dayUseScheduleStatus: result.dayUseScheduleStatus,
     inventoryCapacityBaseline: result.inventoryCapacityBaseline,
     sharedRooms: result.sharedRooms,
+    collectionProductCoverage,
   });
   if (!item.inventoryEvidence) return result;
-  const updated = { ...result, inventoryEvidence: item.inventoryEvidence };
+  const updated = { ...result, collectionProductCoverage, inventoryEvidence: item.inventoryEvidence };
   for (const kind of ["lodging", "dayUse"]) {
     const summary = item.inventoryEvidence[kind];
     if (!summary) continue;
@@ -2927,7 +2929,7 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
   const dayUseItems = allItems.filter((item) => naverBookingSaleType(item) === "데이유즈");
   const unknownItems = allItems.filter((item) => naverBookingSaleType(item) === "미분류");
   const items = [...nightItems, ...unknownItems];
-  const schedules = await collectNaverSchedulesForItems(booking.bookingBusinessId, items, 40);
+  const schedules = await collectNaverSchedulesForItems(booking.bookingBusinessId, items);
   const dayUseSchedules = dayUse.collectDayUseSchedules ? await collectNaverSchedulesForItems(booking.bookingBusinessId, dayUseItems, 20) : [];
   const couponSeed = summarizeNaverCouponExposure([
     couponSource("숙박상품", items),
@@ -2967,6 +2969,8 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
     }),
     weekly,
     dayUseWeekly,
+    collectionProductCoverage: productCoverage.snapshot().targets
+      .find(target => target.businessId === String(booking.bookingBusinessId)),
   };
   result = withoutUncollectedDayUse(result, dayUse);
   result = applyCrawlerInventoryEvidence(result, placeId);

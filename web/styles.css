@@ -45582,6 +45582,101 @@ html[data-theme-resolved="dark"] body.role-admin [data-admin-section-panel="file
   #collectionArchive .collection-archive-filter-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
+/* Capacity warnings are independent of crawl completion and reservation colors. */
+html[data-theme-resolved] body .room-capacity-value {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+  min-width: 0;
+}
+html[data-theme-resolved] body :is(.room-capacity-warning, .room-capacity-warning-note, .room-capacity-review) {
+  --capacity-warning-color: #a12d36;
+  --capacity-warning-background: #fff0f1;
+  --capacity-warning-border: #dc9299;
+}
+html[data-theme-resolved="dark"] body :is(.room-capacity-warning, .room-capacity-warning-note, .room-capacity-review) {
+  --capacity-warning-color: #ffb7bf;
+  --capacity-warning-background: #3b222a;
+  --capacity-warning-border: #a95564;
+}
+html[data-theme-resolved] body .room-capacity-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px 6px;
+  border: 1px solid var(--capacity-warning-border);
+  border-radius: 4px;
+  color: var(--capacity-warning-color) !important;
+  background: var(--capacity-warning-background) !important;
+  font-size: 11px !important;
+  font-weight: 750;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+html[data-theme-resolved] body .room-capacity-warning .room-capacity-warning-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  color: inherit !important;
+  font-size: 10px !important;
+  line-height: 1;
+}
+html[data-theme-resolved] body .room-capacity-warning-note {
+  display: block;
+  color: var(--capacity-warning-color) !important;
+  font-size: 11px !important;
+  line-height: 1.6;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+html[data-theme-resolved] body .room-capacity-review {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  background: var(--surface-card);
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+html[data-theme-resolved] body .room-capacity-review.is-warning {
+  border-color: var(--capacity-warning-border);
+  background: var(--capacity-warning-background);
+}
+html[data-theme-resolved] body .room-capacity-review-title {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  color: var(--text-primary);
+}
+html[data-theme-resolved] body .room-capacity-review.is-warning .room-capacity-review-title,
+html[data-theme-resolved] body .room-capacity-review.is-warning .room-capacity-review-title strong {
+  color: var(--capacity-warning-color) !important;
+}
+html[data-theme-resolved] body .room-capacity-review ul { margin: 6px 0; padding-left: 19px; }
+html[data-theme-resolved] body .room-capacity-review li + li { margin-top: 4px; }
+html[data-theme-resolved] body .room-capacity-review p { margin: 6px 0 0; color: var(--text-secondary); }
+/* The canonical admin theme mutes nested card spans/small with !important.
+   Scope these overrides to the capacity component and its actual metric hosts. */
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .room-capacity-value .room-capacity-warning,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .room-capacity-warning .room-capacity-warning-icon,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.company-compact-metrics, .inventory-summary-grid, .admin-db-quick-edit-summary, .admin-db-applied-grid, .admin-db-detail-kpis) .room-capacity-warning-note,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .room-capacity-review.is-warning .room-capacity-review-title,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .room-capacity-review.is-warning .room-capacity-review-title :is(span, strong),
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .room-capacity-review.is-warning li {
+  color: var(--capacity-warning-color) !important;
+}
+
 /* Company DB explorer v1: search first, then province, municipality, and company. */
 html[data-theme-resolved] body.role-admin .admin-db-hero {
   border-color: var(--border-subtle);

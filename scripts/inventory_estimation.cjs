@@ -342,6 +342,198 @@ function requestedDates(products, original) {
   return [...result].sort();
 }
 
+// Warning evidence is deliberately separate from the capacity/revenue model.
+// It never caps a count, combines products, downgrades a reviewed DB total, or
+// changes collectionQuality. A normal zero is not an error or a room count.
+function buildCapacityReview(item = {}, context = {}) {
+  const baseline = context.baseline || item.inventoryCapacityBaseline || {};
+  const corrected = context.rows || reviewedProductEvidence(applyProductStockCorrections(evidenceProducts(item), baseline.productStockCorrections, (row) => productKind(row) === "lodging").rows, baseline).rows;
+  const rows = corrected.filter((row) => productKind(row) === "lodging");
+  const lodging = Object.hasOwn(context, "lodging") ? context.lodging : item.inventoryEvidence?.lodging;
+  const existingBasis = item.inventoryEvidence?.capacityBasis || item.capacityBasis;
+  // An explicit baseline (including a cleared correction) wins over cached UI.
+  const hasBaseline = Object.hasOwn(context, "baseline") || Object.hasOwn(item, "inventoryCapacityBaseline");
+  const reviewedCount = correctionCapacity(baseline.lodgingOverride)
+    ?? (!hasBaseline && (lodging?.capacitySource === "db_correction" || existingBasis?.source === "db_correction")
+      ? correctionCapacity(lodging?.operatingTotal ?? existingBasis?.count) : null);
+  const reviewed = reviewedCount !== null;
+  const keyFor = (row) => String(row.bizItemId || row.key || row.name || "");
+  const failed = (row) => Boolean(row.collectionFailed || row.collectionErrorCode
+    || (Array.isArray(row.errors) ? row.errors.length : row.errors));
+  const stockKnown = (row) => !failed(row) && row.stockObserved !== false && row.queryAttempted !== false && row.missing !== true
+    && number(row.stock) !== null && number(row.stock) >= 0;
+  const groups = new Map();
+  for (const row of rows) {
+    const key = keyFor(row);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  const validRows = rows.filter(stockKnown);
+  const byDate = new Map();
+  for (const row of validRows) {
+    if (!byDate.has(row.date)) byDate.set(row.date, { keys: new Set(), total: 0 });
+    const date = byDate.get(row.date);
+    date.keys.add(keyFor(row)); date.total += productEvidence(row).rawTotal;
+  }
+  const currentMaximum = Math.max(0, ...[...byDate.values()].map((row) => row.total));
+  const observedMaximum = Math.max(currentMaximum, capacityNumber(baseline.lodging), nonnegative(lodging?.maximumObservedCapacity),
+    !hasBaseline && existingBasis?.source !== "db_correction" ? nonnegative(existingBasis?.observedMaximum ?? existingBasis?.count) : 0);
+  const basis = reviewed ? "db_correction" : observedMaximum > 0 ? "observed_maximum" : "missing";
+  const reasons = [];
+  const add = (code, message, scope = "capacity", evidence = {}, severity = reviewed ? "info" : "warning") => {
+    reasons.push({ code, severity, scope, message, evidence });
+  };
+  const glamping = /글램핑|glamping/i.test([item.name, item.keyword, item.searchKeyword, item.category, item.businessType, item.lodgingType, item.accommodationMarketType, baseline.businessType].filter(Boolean).join(" "));
+  if (glamping && !reviewed && observedMaximum > 40) add("glamping_observed_over_40", "글램핑 최대 관측 수량이 40실을 초과합니다. 실제 객실 수를 확인해 주세요.", "capacity", { observedMaximum, threshold: 40 });
+
+  const coverage = item.collectionProductCoverage;
+  const ownBusinessId = String(item.bookingBusinessId || item.businessId || "");
+  if (coverage && (!ownBusinessId || !coverage.businessId || String(coverage.businessId) === ownBusinessId)) {
+    const target = nonnegative(coverage.eligible), queried = nonnegative(coverage.queried), truncated = nonnegative(coverage.truncated);
+    if (truncated > 0) add("product_targets_truncated", `상품 ${truncated}개가 제한으로 미조회되어 전체 객실 구성을 확인하지 못했습니다.`, "capacity", { eligibleProducts: target, queriedProducts: queried, omittedProducts: truncated });
+    if (coverage.productListComplete === false) add("product_list_incomplete", "전체 상품 목록을 확인하지 못해 객실 수 근거가 부족합니다.", "capacity");
+    const days = Array.isArray(coverage.days) ? coverage.days : [];
+    const incompleteDays = days.filter((day) => day && nonnegative(day.eligible) > nonnegative(day.queried) + nonnegative(day.truncated));
+    const absentDays = Math.max(0, nonnegative(coverage.expectedDays) - days.length);
+    if (incompleteDays.length || absentDays) add("product_day_targets_incomplete", "일부 날짜의 상품 조회가 빠져 객실 수 근거를 모두 확인하지 못했습니다.", "capacity", { incompleteDays: incompleteDays.length, absentDays, dates: incompleteDays.map((day) => day.date).filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date || "")).slice(0, 5) });
+  }
+
+  const normalizeRoomName = (name) => String(name || "").normalize("NFKC").trim()
+    .replace(/^(?:\[(?:연박(?:특가|할인|전용|상품)?|일반(?:가|상품)?|\d+박(?:이상)?(?:특가|할인|전용)?)\]\s*)+/i, "")
+    .replace(/^[*\s]+|[*\s]+$/g, "").replace(/\s+/g, " ");
+  const roomIdentity = (name) => /(?:[a-z][-\s]?\d{1,3}(?:동|호)?|\d{1,4}(?:동|호(?:실)?|번)|(?:글램핑|방갈로|카라반|펜션|풀빌라)\s+\d{1,3}(?:\s|\(|$))/i.test(name);
+  const nameGroups = new Map();
+  for (const [id, productRows] of groups) {
+    for (const row of productRows) {
+      const name = normalizeRoomName(row.name);
+      if (!roomIdentity(name)) continue;
+      const normalized = name.toLowerCase().replace(/[\s-]+/g, "");
+      if (!nameGroups.has(normalized)) nameGroups.set(normalized, { name, products: new Map() });
+      const group = nameGroups.get(normalized);
+      if (!group.products.has(id)) group.products.set(id, new Set());
+      group.products.get(id).add(row.date);
+    }
+  }
+  const duplicates = [...nameGroups.values()].filter((group) => {
+    const seenDates = new Set();
+    for (const dates of group.products.values()) for (const date of dates) {
+      if (seenDates.has(date)) return true;
+      seenDates.add(date);
+    }
+    return false;
+  });
+  if (duplicates.length) add("duplicate_room_product_names", "같은 객실명의 일반·연박 등 중복 상품 후보가 있습니다. 재고 공유 여부를 확인해 주세요.", "composition", {
+    candidateGroups: duplicates.length, examples: duplicates.slice(0, 5).map((group) => ({ name: group.name.slice(0, 100), productIds: [...group.products.keys()].slice(0, 6) }))
+  });
+  const facilityKind = (name) => {
+    if (/글램핑|glamping/i.test(name)) return "glamping";
+    if (/방갈로|bungalow/i.test(name)) return "bungalow";
+    if (/카라반|caravan/i.test(name)) return "caravan";
+    if (/펜션|풀빌라|pension|pool\s*villa/i.test(name)) return "pension";
+    if (/오토\s*캠핑|캠핑\s*(?:면|사이트|빌리지|장|[A-Z][\s-]*\d)|파쇄석|데크|camp(?:ing)?\s*site/i.test(name)) return "campsite";
+    return "unknown";
+  };
+  const facilityCounts = {};
+  for (const productRows of groups.values()) {
+    const kinds = new Set(productRows.map((row) => facilityKind(String(row.name || ""))).filter((kind) => kind !== "unknown"));
+    for (const kind of kinds) facilityCounts[kind] = (facilityCounts[kind] || 0) + 1;
+  }
+  if (glamping && ["bungalow", "caravan", "pension", "campsite"].some((kind) => facilityCounts[kind])) add("glamping_mixed_facility_types", "글램핑 집계에 펜션·방갈로·캠핑면 등 다른 시설 상품이 포함돼 있습니다.", "composition", { productCountsByFacility: facilityCounts });
+  if (/묶음|범위/.test(String(item.listType || "")) || nonnegative(item.groupedRoomCount) > 0) add("grouped_room_stock_unverified", "묶음·범위형 상품이 있어 상품 수와 실제 객실 수를 대조해야 합니다.", "composition", { groupedRoomCount: nonnegative(item.groupedRoomCount) });
+
+  if (!context.summaryOnly) {
+  const dates = context.dates || ((rows.length || /^\d{4}-\d{2}-\d{2}$/.test(item.checkIn || item.checkInDate || "")) ? requestedDates(rows, item) : []);
+  const failedRows = rows.filter(failed);
+  const missingRows = rows.filter((row) => !failed(row) && !stockKnown(row));
+  const productsWithoutStock = [...groups.values()].filter((productRows) => !productRows.some(stockKnown)).length;
+  const completeDates = [...byDate.values()].filter((day) => groups.size > 0 && day.keys.size === groups.size).length;
+  const presentDates = new Set(rows.map((row) => row.date));
+  const missingDays = dates.filter((date) => !presentDates.has(date)).length;
+  // With at least one complete stock date, isolated later gaps are collection
+  // caveats. They do not by themselves invalidate an observed capacity basis.
+  const weakStockBasis = !validRows.length || productsWithoutStock > 0 || completeDates === 0;
+  const stockSeverity = reviewed || !weakStockBasis ? "info" : "warning";
+  const stockScope = stockSeverity === "warning" ? "capacity" : "observation";
+  const onlyDayUse = corrected.length > 0 && rows.length === 0 && !reviewed && observedMaximum === 0;
+  if (!onlyDayUse && (!rows.length || missingRows.length || missingDays)) add("stock_evidence_missing", "객실 재고가 없는 상품·날짜가 있습니다. 누락을 0실로 해석하지 않습니다.", stockScope,
+    { missingProductDates: missingRows.length, missingDays, productsWithoutStock, productDetailsAvailable: rows.length > 0 }, stockSeverity);
+  if (failedRows.length) add("stock_collection_failed", "일부 객실 재고 응답에 오류·차단이 있습니다. 오류의 0은 정상 재고 0과 다릅니다.", stockScope, { failedProductDates: failedRows.length, productsWithoutStock }, stockSeverity);
+  const zeroOnlyProducts = [...groups.values()].filter((productRows) => productRows.some(stockKnown) && productRows.filter(stockKnown).every((row) => number(row.stock) === 0)).length;
+  if (zeroOnlyProducts) {
+    const noCapacity = !reviewed && observedMaximum === 0;
+    add("zero_stock_capacity_unverified", noCapacity ? "정상 응답 재고가 모두 0이어서 실제 객실 총량을 확인할 수 없습니다." : "정상 재고가 계속 0인 상품이 있습니다. 실제 객실 수 감소나 전화예약 확정 근거는 아닙니다.", noCapacity ? "capacity" : "observation",
+      { normalZeroProducts: zeroOnlyProducts }, noCapacity ? "warning" : "info");
+  }
+  }
+  const conflicts = (lodging?.rows || []).filter((row) => row.capacityConflict);
+  const rawOverReviewed = reviewed ? [...byDate].filter(([, day]) => day.total > reviewedCount).map(([date]) => date) : [];
+  if (conflicts.length || rawOverReviewed.length) add("db_capacity_observation_conflict", "DB 검수 객실 수보다 수집 수량이 큽니다. 검수값을 유지하고 수집 수량을 검토해 주세요.", "observation",
+    { reviewedCount, dates: [...new Set([...conflicts.map((row) => row.date), ...rawOverReviewed])].slice(0, 5) }, "warning");
+  const bookingConflicts = validRows.filter((row) => productEvidence(row).inventoryConflict);
+  if (bookingConflicts.length) add("stock_booking_conflict", "공개 예약 수가 해당 상품 재고보다 커 수량이 서로 맞지 않습니다.", reviewed ? "observation" : "capacity", { conflictingProductDates: bookingConflicts.length }, "warning");
+  const warnings = reasons.filter((reason) => reason.severity === "warning");
+  return { version: 2, required: warnings.length > 0, codes: warnings.map((reason) => reason.code), threshold: 40,
+    message: warnings.map((reason) => reason.message).join(" "), level: warnings.length ? "warning" : reasons.length ? "info" : "none", basis, reviewed,
+    capacityUncertain: !reviewed && warnings.some((reason) => reason.scope === "capacity" || reason.scope === "composition"), reasons };
+}
+
+// Company snapshots retain product identities and aggregate daily evidence,
+// not the original per-product stock/error flags. Reassess identity/composition
+// without pretending the stored product maximum is a healthy daily response.
+function buildStoredCapacityReview(snapshot = {}, context = {}) {
+  const baseline = context.baseline || {};
+  const sourceProducts = Array.isArray(snapshot.products) ? snapshot.products : [];
+  const sourceDaily = (Array.isArray(snapshot.daily) ? snapshot.daily : []).filter((row) => row?.productType === "lodging");
+  const rows = sourceProducts.filter((product) => product && product.productType !== "dayuse").flatMap((product) => {
+    const identity = { bizItemId: product.bizItemId, key: product.key, name: product.name,
+      saleType: product.saleType || (product.productType === "lodging" ? "숙박" : ""), bizItemSubType: product.bizItemSubType };
+    const dates = [...new Set((Array.isArray(product.priceByDate) ? product.priceByDate : []).map((row) => row?.date).filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date || "")))];
+    return dates.length ? dates.map((date) => ({ ...identity, date })) : [identity];
+  });
+  const count = correctionCapacity(baseline.lodgingOverride);
+  // Re-evaluate conflict flags against the *current* correction. Old flags
+  // must not survive a reviewed count change merely because a snapshot is old.
+  const daily = sourceDaily.map((row) => ({ ...row, capacityConflict: count !== null
+    && ((number(row.rawTotal) !== null && number(row.rawTotal) > count)
+      || (number(row.available) !== null && number(row.publicBookings) !== null && number(row.available) + number(row.publicBookings) > count)) }));
+  const observedMaximum = Math.max(nonnegative(snapshot.capacityBasis?.observedMaximum), nonnegative(snapshot.capacityBasis?.currentObservedMaximum),
+    ...sourceDaily.filter((row) => !row.missing).map((row) => nonnegative(row.rawTotal)));
+  const review = buildCapacityReview({ name: context.name, keyword: context.keyword, businessType: context.businessType,
+    inventoryCapacityBaseline: baseline, collectionProductCoverage: snapshot.collectionProductCoverage,
+    listType: sourceProducts.map((product) => product?.listType || "").join(" ") },
+  { baseline, rows, summaryOnly: true, lodging: { rows: daily, maximumObservedCapacity: observedMaximum } });
+  const reasons = [...review.reasons];
+  const add = (code, message, scope, evidence = {}, severity = review.reviewed ? "info" : "warning") => {
+    if (!reasons.some((reason) => reason.code === code)) reasons.push({ code, message, scope, severity, evidence: { source: "stored_snapshot", ...evidence } });
+  };
+  const fullDaily = sourceDaily.filter((row) => !row.missing && !row.partial && number(row.rawTotal) !== null && number(row.rawTotal) >= 0);
+  const weakDaily = sourceDaily.filter((row) => row.missing || row.partial || number(row.rawTotal) === null);
+  const noFullDaily = fullDaily.length === 0;
+  const collectionScope = review.reviewed || !noFullDaily ? "observation" : "capacity";
+  const collectionSeverity = review.reviewed || !noFullDaily ? "info" : "warning";
+  const onlyDayUse = sourceProducts.length > 0 && rows.length === 0 && sourceDaily.length === 0;
+  if (!onlyDayUse && (!sourceDaily.length || weakDaily.length)) add("stock_evidence_missing", "저장된 일부 날짜의 재고 근거가 부족합니다. 오류·누락의 세부 원인은 원문 확인이 필요합니다.", collectionScope,
+    { incompleteDays: weakDaily.length, dailySummaryAvailable: sourceDaily.length > 0 }, collectionSeverity);
+  if (!onlyDayUse && !rows.length) add("product_identity_evidence_missing", "저장된 상품명·번호가 없어 객실 구성과 중복 상품을 확인하지 못했습니다.", "composition");
+  if (snapshot.summary?.productTruncated === true) add("product_identity_summary_truncated", "업체 DB의 상품 목록이 일부만 저장되어 전체 객실 구성은 확인이 필요합니다.", "composition", { observedProducts: nonnegative(snapshot.summary.observedProductCount), storedProducts: sourceProducts.length });
+  // Preserve already-recorded provider/coverage facts that aggregate summaries
+  // cannot reconstruct. Change their severity only when the DB basis changes.
+  const retainedCodes = new Set(["product_targets_truncated", "product_list_incomplete", "product_day_targets_incomplete", "stock_collection_failed", "zero_stock_capacity_unverified", "stock_booking_conflict"]);
+  for (const previous of Array.isArray(snapshot.capacityReview?.reasons) ? snapshot.capacityReview.reasons : []) {
+    if (!retainedCodes.has(previous?.code) || reasons.some((reason) => reason.code === previous.code)) continue;
+    const collection = ["stock_collection_failed", "zero_stock_capacity_unverified"].includes(previous.code);
+    const noZeroBasis = previous.code === "zero_stock_capacity_unverified" && !review.reviewed && review.basis === "missing";
+    const scope = noZeroBasis ? "capacity" : collection ? collectionScope : previous.code === "stock_booking_conflict" && review.reviewed ? "observation" : "capacity";
+    const severity = noZeroBasis || previous.code === "stock_booking_conflict" ? "warning" : collection ? collectionSeverity : review.reviewed ? "info" : "warning";
+    reasons.push({ ...previous, scope, severity });
+  }
+  if (snapshot.recalculationUnavailable || snapshot.capacityReview?.codes?.includes("correction_recalculation_unavailable")) add("correction_recalculation_unavailable", "현재 DB 검수값을 적용했지만 저장 원문이 없어 예약·매출 재계산을 확인하지 못했습니다.", "observation", {}, "warning");
+  const warnings = reasons.filter((reason) => reason.severity === "warning");
+  return { ...review, reasons, required: warnings.length > 0, codes: warnings.map((reason) => reason.code), message: warnings.map((reason) => reason.message).join(" "),
+    level: warnings.length ? "warning" : reasons.length ? "info" : "none",
+    capacityUncertain: !review.reviewed && warnings.some((reason) => reason.scope === "capacity" || reason.scope === "composition"), source: "stored_snapshot" };
+}
+
 function applyInventoryEvidence(original) {
   const previous = original.inventoryEvidence;
   const rawProducts = evidenceProducts(original);
@@ -380,11 +572,7 @@ function applyInventoryEvidence(original) {
     observedMaximum: lodging.maximumObservedCapacity,
     currentObservedMaximum: lodging.observedMaximum,
   } : null;
-  const glamping = /글램핑|glamping/i.test([item.name, item.keyword, item.searchKeyword, item.category, item.businessType, item.lodgingType, item.accommodationMarketType, baseline.businessType].filter(Boolean).join(" "));
-  const reviewCodes = [];
-  if (glamping && lodging?.capacitySource === "observed_maximum" && lodging.operatingTotal > 40) reviewCodes.push("glamping_observed_over_40");
-  if (lodging?.rows.some((row) => row.capacityConflict)) reviewCodes.push("db_capacity_observation_conflict");
-  const capacityReview = { required: reviewCodes.length > 0, codes: reviewCodes, threshold: 40, message: reviewCodes.map((code) => code === "glamping_observed_over_40" ? "글램핑 최대 관측 수량이 40실을 초과합니다. 객실 수와 상품 구성을 검토해 주세요." : "DB 보정 객실 수보다 수집 수량이 큽니다. 해당 날짜의 전화예약 추정과 예약률은 계산하지 않습니다.").join(" ") };
+  const capacityReview = buildCapacityReview(item, { baseline, rows: reviewedProducts.rows, lodging, dates });
   const originalRevenue = nonnegative(item.weeklyAdjustedRevenue ?? item.weeklyEstimatedRevenue) + nonnegative(item.dayUseWeeklyAdjustedRevenue ?? item.dayUseWeeklyEstimatedRevenue);
   item.inventoryEvidence = {
     version: 4, policy: POLICY, phoneValuationPolicy: PHONE_VALUATION_POLICY, lodging, dayUse, physicalRooms: roomGuideReference, roomGuideReference, sharedRooms, capacityBasis, capacityReview,
@@ -403,4 +591,4 @@ function applyInventoryEvidence(original) {
   return item;
 }
 
-module.exports = { applyInventoryEvidence, productEvidence, summarizeEvidence };
+module.exports = { applyInventoryEvidence, productEvidence, summarizeEvidence, buildCapacityReview, buildStoredCapacityReview };
