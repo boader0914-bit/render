@@ -30,6 +30,15 @@ function observedDay(value) {
   const time = Date.parse(value);
   return Number.isFinite(time) ? new Date(time + 9 * 3600000).toISOString().slice(0, 10) : "";
 }
+function collectionEndsBeforeMonth(run, monthStart) {
+  const start = dayKey(run.checkIn);
+  const days = Number(run.bookingRangeDays);
+  // checkOut is normally one night even for a 31-day inventory query. Only
+  // an explicit, valid collection span can rule a saved run out of this month.
+  if (!start || !Object.hasOwn(run, "bookingRangeDays") || !Number.isSafeInteger(days) || days < 1 || days > 366) return false;
+  const end = new Date(Date.parse(`${start}T00:00:00Z`) + (days - 1) * 86400000).toISOString().slice(0, 10);
+  return end < monthStart;
+}
 function hasInventoryCorrection(company) {
   const correction = company?.manualCorrection;
   if (!correction || correction.active === false) return false;
@@ -68,7 +77,8 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
     const eligibleRuns = new Map((data.runs || []).filter(run => {
       const day = observedDay(run.collectedAt);
       return ["complete", "reused", "partial"].includes(quality(run)) && run.collectedAtSource !== "filesystem"
-        && day && day <= cutoff && day <= monthEnd && (!dayKey(run.checkIn) || run.checkIn <= monthEnd);
+        && day && day <= cutoff && day <= monthEnd && (!dayKey(run.checkIn) || run.checkIn <= monthEnd)
+        && !collectionEndsBeforeMonth(run, monthStart);
     }).map(run => [String(run.id || run.runId || ""), run]));
     const catalogCompanies = new Map((data.companies || []).map(company => [company.companyId, company]));
     const targetsByRun = new Map();

@@ -89,6 +89,26 @@ test("only inventory corrections and exact report scope trigger saved-run loadin
   assert.equal(calls, 1, "metadata-only correction does not read any raw runs");
 });
 
+test("known collection spans outside the month are skipped without reading unrelated old evidence", async () => {
+  const runs = [
+    makeRun("old", { collectedAt: "2026-07-01T00:00:00Z", checkIn: "2026-07-01", checkOut: "2026-07-02", bookingRangeDays: 31 }),
+    makeRun("boundary", { collectedAt: "2026-08-31T00:00:00Z", checkIn: "2026-08-31", checkOut: "2026-09-01", bookingRangeDays: 1 }),
+    makeRun("overlap", { collectedAt: "2026-08-15T00:00:00Z", checkIn: "2026-08-15", checkOut: "2026-08-16", bookingRangeDays: 31 }),
+    makeRun("unknown_span", { collectedAt: "2026-08-01T00:00:00Z", checkIn: "2026-08-01", checkOut: "2026-08-02" }),
+    makeRun("current", { bookingRangeDays: 31 })
+  ];
+  const company = makeCompany("cmp_a", { runIds: runs.map(run => run.id) });
+  const calls = [];
+  const helper = createMonthlyCompanyRecalculation(dependencies(async id => {
+    calls.push(id);
+    if (["old", "boundary"].includes(id)) throw new Error("unrelated old evidence is unavailable");
+    return { run: { id }, availability: { items: [{ placeId: "1001" }] } };
+  }));
+  const rows = await helper(request, catalog([company], runs));
+  assert.deepEqual(calls, ["overlap", "unknown_span", "current"]);
+  assert.equal(rows.length, 3, "unknown spans remain candidates and one-night checkout never truncates a 31-day query");
+});
+
 test("keyword reports only recalculate matching keyword runs and strong provider identities", async () => {
   const runs = [makeRun("broad"), makeRun("local", { keyword: "산청글램핑" })];
   const company = makeCompany("cmp_a", { runIds: runs.map(run => run.id) });
