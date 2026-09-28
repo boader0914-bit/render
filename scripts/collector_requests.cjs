@@ -68,7 +68,10 @@ function createCollectorRequests({dataDir,run,preflight=async()=>{},now=()=>new 
   if(!row)throw fault('COLLECTION_REQUEST_NOT_FOUND','수집 요청을 찾지 못했습니다.',404);
   if(value?.collectionQuality?.status!=='complete'||!value.runId||value.workerKey!==row.workerKey||value.keyword!==row.keyword||!value.recovery?.jobId)throw fault('COLLECTION_RECOVERY_MISMATCH','복구 결과의 조건을 확인하세요.');
   if(row.status==='complete'&&row.recovery?.jobId===value.recovery.jobId&&row.result?.runId===value.runId)return publicRow(row);
-  if(row.status!=='failed'||row.errorCode!=='COLLECTOR_UPLOAD_FAILED')throw fault('COLLECTION_RECOVERY_NOT_ELIGIBLE','복구 가능한 실패 요청이 아닙니다.');
+  const webRegionRecovery=row.workerKey==='web' && row.errorCode==='COLLECTOR_SCOPE_MISMATCH'
+    && value.recovery.method==='reviewed-empty-search-region' && value.recovery.requestId===row.requestId
+    && /^[a-f0-9]{64}$/.test(value.recovery.originalManifestSha256||'');
+  if(row.status!=='failed'||!(row.errorCode==='COLLECTOR_UPLOAD_FAILED'||webRegionRecovery))throw fault('COLLECTION_RECOVERY_NOT_ELIGIBLE','복구 가능한 실패 요청이 아닙니다.');
   const next={...row,status:'complete',errorCode:null,message:'보존된 수집 결과를 검증해 복구했습니다.',result:{runId:value.runId,collectionQuality:sanitizeCollectionQuality(value.collectionQuality),workerKey:row.workerKey,trigger:row.trigger,reused:false},recovery:{jobId:value.recovery.jobId,recoveredAt:stamp(),originalStatus:row.status,originalErrorCode:row.errorCode,originalFinishedAt:row.finishedAt}};
   await write(next);Object.assign(row,next);return publicRow(row);
  });}

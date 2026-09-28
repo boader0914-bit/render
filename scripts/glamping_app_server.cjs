@@ -287,6 +287,7 @@ function selectedWorkerKey(value = "manual") {
   return value;
 }
 const sharedWrite = serialExecutor();
+let collectionRecoveryActive = false;
 const COLLECTOR_EXECUTION_MODE = String(process.env.COLLECTOR_EXECUTION_MODE || "local").trim();
 if (!["local", "worker"].includes(COLLECTOR_EXECUTION_MODE)) throw new Error("invalid_collector_execution_mode");
 const collectorBrokers = Object.fromEntries(["manual", "scheduled"].map(key => [key, COLLECTOR_EXECUTION_MODE === "worker" ? createCollectorBroker({
@@ -434,6 +435,7 @@ const collectorRequests = createCollectorRequests({dataDir:DATA_DIR,run:runCrawl
 const pausedScheduleOccurrences = new Set();
 
 async function assertCollectorReady(workerKey,requireConnection=false) {
+  if(collectionRecoveryActive)throw Object.assign(new Error("보존 자료를 복구 중입니다. 완료 후 수집해 주세요."),{code:"COLLECTOR_RECOVERY_BUSY",statusCode:409});
   selectedWorkerKey(workerKey);
   await collectorBrokerReady;
   const broker=collectorControllers()[workerKey];
@@ -17745,6 +17747,7 @@ async function runCrawler(payload) {
 }
 
 async function runCrawlerInLane(payload) {
+  if(collectionRecoveryActive)throw Object.assign(new Error("보존 자료 복구가 진행 중입니다."),{code:"COLLECTOR_RECOVERY_BUSY",statusCode:409});
   const signature = crawlPayloadSignature(payload);
   const cached = payload.allowRepeat ? null : reusableRecentCrawlResult(signature);
   if (cached) {
@@ -18485,6 +18488,38 @@ async function route(req, res) {
         return send(res,202,await keywordWorkerScheduler.enqueueNow({requestId:payload.requestId}));
       }
       return notFound(res);
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/collector-web-recover") {
+      if (!requireAdminSession(session,req,res)) return;
+      if (!/^application\/json(?:\s*;|$)/i.test(String(req.headers["content-type"] || ""))) return send(res,415,{error:"JSON 형식으로 요청해 주세요."});
+      if(req.headers.origin) {
+        let origin; try {origin=new URL(req.headers.origin);} catch {}
+        if(!origin || origin.host!==req.headers.host)return send(res,403,{error:"현재 서비스에서 다시 요청해 주세요."});
+      }
+      const payload=await parseJsonBody(req);
+      if(!payload || typeof payload!=="object" || Array.isArray(payload) || payload.confirm!=="recover-retained-web-result"
+        || !payload.expected || typeof payload.expected!=="object" || Array.isArray(payload.expected)
+        || Object.keys(payload).some(k=>!["confirm","requestId","retainedJobDirectory","manifestSha256","expected"].includes(k)))return send(res,400,{error:"복구 대상과 원 수집 조건을 확인해 주세요."});
+      if(collectionRecoveryActive)return send(res,409,{error:"자료 복구가 진행 중입니다."});
+      collectionRecoveryActive=true;
+      try {
+        await collectorBrokerReady;
+        if(Object.values(crawlLanes).some(lane=>lane.activeCrawlPromise||lane.activeCrawlJob||lane.crawlQueue.length))return send(res,409,{error:"진행 중인 수집이 있습니다."});
+        const states=await Promise.all(Object.values(collectorControllers()).map(controller=>controller.status()));
+        if(states.some(state=>state.activeJobId||state.queued||state.halted))return send(res,409,{error:"진행 중인 작업 또는 보호 상태를 확인하세요."});
+        const request=await collectorRequests.get(payload.requestId);
+        const originalScope=await collectionReuse.webRecoveryScope(request);
+        if(!require("node:util").isDeepStrictEqual(originalScope,require("./collection_reuse.cjs").scope(payload.expected)))return send(res,409,{error:"복구 조건이 원 수집 조건과 다릅니다."});
+        for(const [key,value] of Object.entries(request.conditions||{}))if(String(payload.expected[key])!==String(value))return send(res,409,{error:"복구 조건이 요청 영수증과 다릅니다."});
+        const result=await collectorWeb.recover({...payload,request});
+        const history=await appendHistoryForRun(result.runId,{skipExternal:true});
+        if(history.reason||history.companyMaster?.error||!history.companyMaster?.currentRunCompanies)throw Object.assign(new Error("보관함 복구 후 DB 반영을 확인해야 합니다."),{code:"COLLECTOR_RECOVERY_DB_PENDING",statusCode:503});
+        let masterDbSync=null;
+        if(masterDbDualWriteQueue.mode==="shadow")masterDbSync=masterDbDualWriteQueue.enqueue({type:"naver_run",runId:result.runId,runDir:result.outputDir,manifestSha256:crypto.createHash("sha256").update(await fsp.readFile(path.join(result.outputDir,"manifest.json"))).digest("hex"),startedAt:result.manifest.startedAt,endedAt:result.manifest.collectedAt,collectionSource:result.manifest.collectionSource,sourceRole:result.manifest.sourceRole,plan:payload.expected,history});
+        const receipt=await collectorRequests.recover(payload.requestId,{...result,workerKey:"web",keyword:request.keyword});
+        return send(res,200,{ok:true,runId:result.runId,collectionQuality:result.collectionQuality,recovery:result.recovery,history,masterDbSync,request:receipt});
+      } finally {collectionRecoveryActive=false;}
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/collector-recover") {

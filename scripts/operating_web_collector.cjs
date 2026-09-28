@@ -85,7 +85,7 @@ function createOperatingWebCollector({ dataDir, outputsDir, root, spawnImpl = sp
       || value.split("/").some(part => !part || part === "." || part === "..") || /[:\x00-\x1f]/.test(value)) throw fault("COLLECTOR_ARTIFACT_INVALID");
     return value;
   }
-  async function verify(stagingOutputs, keyword, env, payload, jobId, token, exitCode, assertCanFinish) {
+  async function validateOutputs(stagingOutputs, keyword, env, payload, jobId, token, exitCode, reviewedEmptyRegion = false) {
     const entries = await fs.readdir(stagingOutputs, { withFileTypes: true });
     if (entries.length !== 1 || !entries[0].isDirectory()) throw fault("COLLECTOR_ARTIFACT_INVALID");
     const runId = entries[0].name, directory = path.join(stagingOutputs, runId);
@@ -106,6 +106,9 @@ function createOperatingWebCollector({ dataDir, outputsDir, root, spawnImpl = sp
       SOURCE_ROLE: "sourceRole", COLLECTION_SOURCE: "collectionSource" };
     for (const [key, field] of Object.entries(fields)) {
       const expected = env[key] ?? payload[field];
+      // Recovery alone may reconcile the verified empty-region fallback bug.
+      // Normal collection acceptance remains strict.
+      if (reviewedEmptyRegion && key === "SEARCH_REGION" && expected === "") continue;
       if (expected !== undefined && String(expected) !== String(manifest[field] ?? (field === "dayUseMode" ? "detail" : ""))) throw fault("COLLECTOR_SCOPE_MISMATCH");
     }
     if (compact(env.DETAIL_RANK_RANGES).replace(/[~–]/g, "-") !== compact(manifest.detailRankRanges).replace(/[~–]/g, "-")) throw fault("COLLECTOR_SCOPE_MISMATCH");
@@ -119,6 +122,10 @@ function createOperatingWebCollector({ dataDir, outputsDir, root, spawnImpl = sp
     if (Object.values(manifest.fileRoles || {}).some(name => !manifest.files.includes(relativeFile(name)))) throw fault("COLLECTOR_FILE_SET_MISMATCH");
     if (exitCode !== 0 && manifest.collectionFailed !== true) throw fault("COLLECTOR_CRAWL_FAILED");
     const quality = await inspectResult({ output: manifest, runId }, { ...payload, keyword });
+    return {manifest, runId, directory, files, quality};
+  }
+  async function verify(stagingOutputs, keyword, env, payload, jobId, token, exitCode, assertCanFinish) {
+    const {manifest, runId, directory, quality} = await validateOutputs(stagingOutputs, keyword, env, payload, jobId, token, exitCode);
     // Reserve the final directory exclusively. Publish the manifest last so a
     // partially transferred directory cannot appear as an accepted result.
     assertCanFinish();
@@ -254,7 +261,17 @@ function createOperatingWebCollector({ dataDir, outputsDir, root, spawnImpl = sp
       });
     }
   }
-  return { initialize, status, halt, resetHalt, run };
+  async function recover(input) {
+    await initialize();
+    return lock(async () => {
+      if (active || state.active || state.halted) throw fault("COLLECTOR_RECOVERY_BUSY");
+      return require("./operating_web_recovery.cjs").recoverRetainedWebResult({
+        ...input, base, destinationRoot, validateOutputs, checkedTree,
+        assertIdle: () => { if (active || state.active || state.halted) throw fault("COLLECTOR_RECOVERY_BUSY"); }
+      });
+    });
+  }
+  return { initialize, status, halt, resetHalt, run, recover };
 }
 
 module.exports = { createOperatingWebCollector };

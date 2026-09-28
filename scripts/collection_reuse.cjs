@@ -167,6 +167,15 @@ function createCollectionReuse({dataDir, outputsDir, now = () => new Date(), ins
     if(matches.length!==1)throw problem('COLLECTION_RECOVERY_SCOPE_UNCONFIRMED','원 수집 조건을 하나로 확인하지 못했습니다.');
     return structuredClone(matches[0].scope);
   });}
-  return {run, recoveryScope, initialize:()=>lock(initialize)};
+  async function webRecoveryScope(request) {return lock(async()=>{
+    await initialize();
+    const finished=request.recovery?.originalFinishedAt||request.finishedAt;
+    const matches=rows.filter(row=>row.workerKey==='web' && row.trigger==='manual' && row.scope?.keyword===keywordKey(request.keyword)
+      && row.status==='failed' && row.errorCode==='COLLECTOR_SCOPE_MISMATCH'
+      && Date.parse(row.createdAt)>=Date.parse(request.createdAt) && Date.parse(row.finishedAt)<=Date.parse(finished)+1000);
+    if(matches.length!==1)throw problem('COLLECTION_RECOVERY_SCOPE_UNCONFIRMED','원 수집 조건을 하나로 확인하지 못했습니다.');
+    return structuredClone(matches[0].scope);
+  });}
+  return {run, recoveryScope, webRecoveryScope, initialize:()=>lock(initialize)};
 }
 module.exports={createCollectionReuse,serialExecutor,dayKey,keywordKey,scope,covers};
