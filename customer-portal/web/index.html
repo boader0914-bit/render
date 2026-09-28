@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ko" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="사분 인사이트 고객 서비스의 검수용 페이지입니다. 모든 업체와 지표는 예시입니다.">
+  <title>사분 인사이트 · 홈</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">본문으로 건너뛰기</a>
+  <aside class="sidebar" id="sidebar" aria-label="주 메뉴">
+    <a href="#home" class="brand" aria-label="사분 인사이트 홈">
+      <span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span><strong>SABUN</strong><small>INSIGHT</small></span>
+    </a>
+    <div class="sidebar-caption">YOUR STAY, IN PERSPECTIVE</div>
+    <nav id="navigation"></nav>
+    <div class="sidebar-bottom">
+      <div class="sidebar-note"><span class="small-eyebrow">THOUGHTFUL DECISIONS</span><p>숫자 너머의 흐름을 읽고,<br>내일의 운영을 준비합니다.</p><span class="thin-line"></span></div>
+      <button class="profile-button" data-action="onboard"><span class="profile-avatar" aria-hidden="true">S</span><span id="sidebar-profile">예시 회원<small>내 매장 설정</small></span><span aria-hidden="true">↗</span></button>
+      <span class="sidebar-domain">insight.sabun.co.kr</span>
+    </div>
+  </aside>
+  <button class="nav-backdrop" data-action="toggle-menu" aria-label="메뉴 닫기" hidden></button>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-left"><button class="icon-button mobile-menu" data-action="toggle-menu" aria-label="메뉴 열기" aria-expanded="false" aria-controls="sidebar">☰</button><span class="breadcrumb">워크스페이스 <span aria-hidden="true">/</span> <strong id="breadcrumb-current">홈</strong></span></div>
+      <div class="topbar-tools">
+        <span class="preview-badge"><span aria-hidden="true"></span>검수용 · 예시 데이터</span>
+        <label class="sr-only" for="preview-profile">예시 회원 전환</label><select id="preview-profile" aria-label="예시 회원 전환"><option value="owner">운영 중 회원</option><option value="planning">준비 중 회원</option></select>
+        <button class="icon-button" id="theme-toggle" data-action="theme" aria-label="다크 모드로 전환" title="화면 테마 전환"></button>
+        <button class="admin-entry" data-action="admin">관리자 미리보기</button>
+      </div>
+    </header>
+    <main id="main" tabindex="-1"><div class="initial-loading" role="status"><span class="loading-ring"></span><p>인사이트를 준비하고 있습니다.</p></div></main>
+    <footer class="page-footer"><span>© SABUN INSIGHT</span><span>가상의 업체·지역 지표로 구성한 검수본입니다. 실제 서비스 연결 전입니다.</span></footer>
+  </div>
+  <div id="modal-root"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
