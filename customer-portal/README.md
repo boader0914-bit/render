@@ -10,7 +10,25 @@ Node.js 22.13 이상, 25 미만. 추가 패키지 설치 없이 저장소 루트
 node customer-portal/server.cjs --preview
 ```
 
-기본 주소는 `http://127.0.0.1:57831`이다. 실행 시 `PORT`로 다른 로컬 포트를 지정할 수 있다. 서버는 명시적으로 미리보기 모드로 시작하며, 운영 환경에서는 시작을 거부한다. 기존 STAYDATALAB 실행 명령과 서버는 변경하지 않는다.
+기본 주소는 `http://127.0.0.1:57831`이다. 실행 시 `PORT`로 다른 로컬 포트를 지정할 수 있다. 기본적으로 로컬 접속만 허용하며 `production` 실행을 거부한다. 아래의 명시적 호스팅 검수 모드는 별도로 허용한다. 기존 STAYDATALAB 실행 명령과 서버는 변경하지 않는다.
+
+## Render 무료 검수 서비스
+
+사용자가 승인한 고객 포털 실물 페이지 배포이며, 실제 회원 서비스 출시가 아니다.
+
+- 저장소: `boader0914-bit/render`, 브랜치: `codex/insight-render-preview`
+- 서비스: `sabun-insight-preview`, Web Service / Node / Singapore / **Free**
+- Root Directory: 비워 둔다. 공용 `web/fonts`의 세 글꼴을 참조한다.
+- Build Command: `node --check customer-portal/server.cjs && node --check customer-portal/web/app.js && node --test customer-portal/test/*.test.cjs`
+- Start Command: `node customer-portal/server.cjs --preview`
+- Health Check Path: `/api/health`
+- 환경변수: `INSIGHT_HOSTED_PREVIEW=1`, `SKIP_INSTALL_DEPS=true`, `NODE_VERSION=22.16.0`
+- 외부 주소는 Render의 `RENDER_EXTERNAL_HOSTNAME`과 `insight.sabun.co.kr`만 허용한다. 요청의 임의 forwarded-host는 사용하지 않는다.
+- 실제 DB, 데이터랩 환경변수, 유료 디스크를 연결하지 않는다. 자동 배포는 끄고 검수된 커밋을 배포한다.
+
+호스팅 모드는 방문자별 임시 쿠키로 예시 상태를 분리한다. 이 쿠키는 실제 고객 인증 수단이 아니다. 최대 200개 방문 세션을 메모리에 보관하고, 마지막 사용 후 2시간이 지나거나 서버 재시작·휴면 복귀 시 초기화할 수 있다. 신규 세션 한도 초과 시 기존 방문자의 상태를 덮어쓰지 않고 일시적인 혼잡 안내를 반환한다. 검색엔진에는 색인 제외를 요청한다.
+
+무료 웹서비스는 사용하지 않으면 휴면하고 다시 열 때 기동 시간이 생긴다. 무료 사용시간·트래픽은 Render 워크스페이스 한도를 공유한다. 실제 고객 가입과 리포트 영속 보관을 시작하기 전에는 인증·권한·DB 연결 및 개인정보 정책 검수가 필요하다.
 
 ## 검수할 흐름
 
@@ -24,7 +42,7 @@ node customer-portal/server.cjs --preview
 8. 주간·월간 예시 리포트를 열고 인쇄 / PDF 저장 화면을 확인한다.
 9. 라이트·다크 모드와 모바일 화면에서 같은 기능을 확인한다.
 
-예시 숫자와 업체명은 화면 검수를 위한 가상 자료다. 임의 조작이 운영 회원, 업체 DB, 수집 작업, 원본 자료에 반영되지 않는다. 화면의 상태는 격리된 서버 메모리에 유지하며 서버를 재시작하면 초기화한다. 여러 검수 창에서 같은 프로필을 변경하면 변경 버전 검사가 충돌을 알린다.
+예시 숫자와 업체명은 화면 검수를 위한 가상 자료다. 임의 조작이 운영 회원, 업체 DB, 수집 작업, 원본 자료에 반영되지 않는다. 화면의 상태는 격리된 서버 메모리에 유지하며 서버를 재시작하면 초기화한다. 같은 방문자의 여러 검수 창에서 같은 프로필을 변경하면 변경 버전 검사가 충돌을 알린다.
 
 ## 검증
 
@@ -44,6 +62,6 @@ node --test customer-portal/test/*.test.cjs
 - 고객용 API는 허용된 저장 분석 자료와 발행본만 제공한다.
 - 기존 월간 집계·PDF를 재사용하고 주간 리포트 집계를 추가한다.
 - 검수용 프로필 전환·관리자 체험 기능을 운영 공개 서비스에 포함하지 않는다.
-- DNS·TLS와 별도 고객 서비스 배포는 실제 연결 검증 이후 수행한다.
+- 현재 별도 무료 서비스는 예시 페이지 검수 용도다. 실제 고객 서비스로 전환하는 배포는 운영 연결 검증 이후 수행한다.
 
 전체 범위는 [고객 포털 계획](../docs/customer-portal-plan-20260928.md)을 따른다. 실제 계정·권한·DB 연결은 [운영 연결 계약](../docs/customer-portal-connection-contract.md)에 정리했다. 현재 검수 결과와 남은 범위는 [1차 검증 기록](../docs/customer-portal-stage1-validation.md)을 참고한다.
