@@ -1,7 +1,8 @@
 "use strict";
 
 // Zero (including the omitted default) means all products. A positive integer
-// retains an explicit caller limit, such as the separate day-use limit.
+// remains available for coverage diagnostics of legacy limited observations.
+// Current lodging and day-use collection both use the unlimited default.
 function selectProductTargets(items, limit = 0) {
   if (!Number.isSafeInteger(limit) || limit < 0) throw new RangeError("INVALID_PRODUCT_LIMIT");
   const seen = new Set();

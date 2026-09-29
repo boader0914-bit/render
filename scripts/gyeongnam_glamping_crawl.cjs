@@ -2930,7 +2930,7 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
   const unknownItems = allItems.filter((item) => naverBookingSaleType(item) === "미분류");
   const items = [...nightItems, ...unknownItems];
   const schedules = await collectNaverSchedulesForItems(booking.bookingBusinessId, items);
-  const dayUseSchedules = dayUse.collectDayUseSchedules ? await collectNaverSchedulesForItems(booking.bookingBusinessId, dayUseItems, 20) : [];
+  const dayUseSchedules = dayUse.collectDayUseSchedules ? await collectNaverSchedulesForItems(booking.bookingBusinessId, dayUseItems) : [];
   const couponSeed = summarizeNaverCouponExposure([
     couponSource("숙박상품", items),
     couponSource("데이유즈상품", dayUseItems),
@@ -2944,7 +2944,7 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
     ? await collectWeeklyNaverAvailability(booking.bookingBusinessId, items, schedules, BOOKING_RANGE_DAYS)
     : null;
   const dayUseWeekly = options.collectRange && dayUse.collectDayUseSchedules
-    ? await collectWeeklyNaverAvailability(booking.bookingBusinessId, dayUseItems, dayUseSchedules, BOOKING_RANGE_DAYS, "회", 20)
+    ? await collectWeeklyNaverAvailability(booking.bookingBusinessId, dayUseItems, dayUseSchedules, BOOKING_RANGE_DAYS, "회")
     : null;
 
   let result = {

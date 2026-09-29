@@ -388,16 +388,57 @@ test("compact schedule diagnostics accept only the diagnostic vocabulary and rea
   assert.equal(legacy.collectionErrorCode, "", "old unrecorded failures must not acquire a guessed cause");
 });
 
-test("day-use 20-product limit is consistent on the first and all later dates", async () => {
-  const items = Array.from({ length: 21 }, (_, index) => ({ bizItemId: String(index), name: `데이유즈 ${index}`, bizItemSubType: "ACCOMMODATION_DAY_USE" }));
-  const crawler = harness({ env: { COLLECTOR_WORKER_RUNTIME: "1", NAVER_SCHEDULE_DELAY_MS: "0" }, fetchImpl: async (_url, init) => {
-    const date = JSON.parse(init.body).variables.scheduleParams.startDateTime.slice(0, 10);
-    return new Response(JSON.stringify({ data: { schedule: { bizItemSchedule: { daily: { date: { [date]: { stock: 0, bookingCount: 0, occupiedBookingCount: 0 } } } } } } }));
-  } });
-  crawler.productCoverage.discover("biz", items, items, ["2026-09-22", "2026-09-23"]);
-  const first = await crawler.collectNaverSchedulesForItems("biz", items, 20);
-  await crawler.collectWeeklyNaverAvailability("biz", items, first, 2, "회", 20);
-  for (const day of crawler.productCoverage.snapshot().targets[0].days) { assert.equal(day.queried, 20); assert.equal(day.truncated, 1); assert.equal(day.failed, 0); }
+test("all three runtimes retain all lodging and day-use products beyond former limits on every date", async () => {
+  const products = [
+    ...Array.from({ length: 68 }, (_, i) => ({ bizItemId: `night-${i}`, name: `숙박 ${i}`, bizItemSubType: "ACCOMMODATION_NIGHT" })),
+    ...Array.from({ length: 85 }, (_, i) => ({ bizItemId: `day-${i}`, name: `데이유즈 ${i}`, bizItemSubType: "ACCOMMODATION_DAY_USE" })),
+  ];
+  const dates = ["2026-09-22", "2026-09-23", "2026-09-24"];
+  for (const runtime of [
+    { COLLECTOR_WEB_RUNTIME: "1", COLLECTOR_WORKER_KEY: "web" },
+    { COLLECTOR_WORKER_RUNTIME: "1", COLLECTOR_WORKER_KEY: "manual" },
+    { COLLECTOR_WORKER_RUNTIME: "1", COLLECTOR_WORKER_KEY: "scheduled", COLLECTOR_TRIGGER: "scheduled", SCHEDULED_COLLECTION: "1" },
+  ]) {
+    const called = [];
+    const crawler = harness({ env: { ...runtime, DAY_USE_MODE: "detail", BOOKING_RANGE_DAYS: "3",
+      NAVER_SCHEDULE_DELAY_MS: "0", NAVER_COUPON_PAGE_FALLBACK: "0" },
+      setup: 'getNaverBookingBusiness = async () => ({bookingBusinessId:"123",bookingUrl:"fixture"});',
+      fetchImpl: async (_url, init) => {
+        const query = JSON.parse(init.body);
+        if (query.operationName === "searchBizItem") return new Response(JSON.stringify({ data: {
+          searchBizItem: { bizItems: [...products, { ...products[0] }, { ...products.at(-1) }] },
+        } }));
+        assert.equal(query.operationName, "dailySchedule");
+        const params = query.variables.scheduleParams, date = params.startDateTime.slice(0, 10);
+        called.push({ date, id: params.bizItemId });
+        return new Response(JSON.stringify({ data: { schedule: { bizItemSchedule: { daily: { date: {
+          [date]: { stock: 1, bookingCount: 0, occupiedBookingCount: 0, price: 100000 },
+        } } } } } }));
+      },
+    });
+    const result = await crawler.collectNaverBookingAvailability("456", new Map(), { collectRange: true });
+    assert.equal(called.length, 153 * 3, runtime.COLLECTOR_WORKER_KEY);
+    assert.equal(result.itemDetails.length, 153);
+    assert.equal(result.weekly.productDetails.length, 68 * 3);
+    assert.equal(result.dayUseWeekly.productDetails.length, 85 * 3);
+    for (const date of dates) {
+      assert.deepEqual(called.filter(row => row.date === date).map(row => row.id).sort(), products.map(row => row.bizItemId).sort());
+      assert.equal(result.weekly.dates.find(row => row.date === date).productDetails.length, 68);
+      assert.equal(result.dayUseWeekly.dates.find(row => row.date === date).productDetails.length, 85);
+    }
+    const coverage = crawler.productCoverage.snapshot();
+    assert.equal(coverage.queried, 153);
+    assert.equal(coverage.truncated, 0);
+    for (const day of coverage.targets[0].days) {
+      assert.equal(day.queried, 153); assert.equal(day.succeeded, 153);
+      assert.equal(day.truncated, 0); assert.equal(day.failed, 0);
+    }
+    assert.ok(result.inventoryEvidence.capacityReview.codes.includes("glamping_observed_over_40"), "large capacity remains a warning, not a collection cap");
+    const manifest = manifestFixture();
+    manifest.counts.naverBookingStockEligible = manifest.counts.naverBookingStockChecked = manifest.counts.naverBookingStockSucceeded = 1;
+    crawler.addCollectionDiagnostics(manifest);
+    assert.equal(manifest.collectionQuality.status, "complete", JSON.stringify(manifest.collectionQuality));
+  }
 });
 
 test("paced captcha cancellation counts only schedules that reached the network", async () => {
