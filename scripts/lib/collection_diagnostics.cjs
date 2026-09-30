@@ -2,6 +2,7 @@
 
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { sanitizeCollectionFailure, FAILURE_LABELS, PHASE_LABELS } = require("./collection_failure.cjs");
 
 const STATUSES = new Set(["complete", "partial", "failed", "blocked", "interrupted", "reused", "unknown"]);
 const COUNT_KEYS = ["naverOverall", "naverBookingStockEligible", "naverBookingStockChecked", "naverBookingStockSucceeded",
@@ -29,6 +30,7 @@ const REASON_LABELS = {
 const BLOCKED_REASONS = new Set(["naver_booking_api_too_many_requests", "naver_request_http_403", "naver_request_http_429", "naver_captcha",
   "naver_main_http_403", "naver_main_http_429", "naver_booking_http_403", "naver_booking_http_429", "naver_schedule_http_403_or_429"]);
 const ERROR_LABELS = {
+  ...FAILURE_LABELS,
   TIMEOUT: "예약 응답 시간 초과", NETWORK_ERROR: "예약 서버 통신 실패", HTTP_ERROR: "예약 서버 오류 응답",
   PROVIDER_BLOCKED: "예약 접근 제한", GRAPHQL_ERROR: "예약 API 오류 응답", MISSING_SCHEDULE: "요청 날짜의 예약 응답 없음",
   INVALID_STOCK: "예약 응답의 객실 수량 확인 불가", UNKNOWN_ERROR: "예약 요청 오류",
@@ -59,6 +61,8 @@ function sanitizeCollectionQuality(value) {
     for (const key of COUNT_KEYS) if (Object.hasOwn(value.counts, key)) result.counts[key] = count(value.counts[key]);
   }
   if (BLOCKED_REASONS.has(value.blockedReason)) result.blockedReason = value.blockedReason;
+  const failure = sanitizeCollectionFailure(value.failure);
+  if (failure) result.failure = failure;
   return result;
 }
 
@@ -86,7 +90,7 @@ function buildCollectionDiagnostics({ manifest = null, rows = [], limitations = 
   const knownLimitations = new Set(limitations.filter(value => ["일부 상세 파일을 읽을 수 없어 저장된 집계만 표시합니다.", "자료 크기 제한으로 일부 상세를 생략했습니다."].includes(value)));
   function add(code, identity = {}, detail = {}) {
     const safeCode = Object.hasOwn(ERROR_LABELS, code) ? code : "DIAGNOSTIC_DETAILS_UNAVAILABLE";
-    const phase = ["booking_schedule", "product_list", "booking_detail", "ota", "validation"].includes(detail.phase) ? detail.phase : "booking_schedule";
+    const phase = ["booking_schedule", "product_list", "booking_detail", "ota", "validation", ...Object.keys(PHASE_LABELS)].includes(detail.phase) ? detail.phase : "booking_schedule";
     const httpStatus = Number.isInteger(detail.httpStatus) && detail.httpStatus >= 100 && detail.httpStatus <= 599 ? detail.httpStatus : null;
     const bizItemId = identifier(detail.bizItemId), productName = label(detail.productName);
     const key = JSON.stringify([safeCode, identity.placeId || "", identity.bookingBusinessId || "", identity.companyName || "", bizItemId, productName, httpStatus]);
@@ -173,6 +177,7 @@ function buildCollectionDiagnostics({ manifest = null, rows = [], limitations = 
   if (Array.isArray(manifest?.productCoverage?.targets)) Object.assign(counts, productTotals);
   const missingFailedDetails = Math.max(0, (counts.naverScheduleFailed || 0) - Math.max(coverageFailures, productFailures));
   if (missingFailedDetails) add("SCHEDULE_RESPONSE_UNRECORDED", {}, { affectedCount: missingFailedDetails });
+  if (quality?.failure) add(quality.failure.code, {}, { ...quality.failure, recorded: true, affectedCount: 0, countUnit: "records" });
   if (!issueGroups.size && ["partial", "failed", "blocked", "interrupted", "unknown"].includes(status)) {
     add("DIAGNOSTIC_DETAILS_UNAVAILABLE", {}, { phase: "validation", affectedCount: 0 });
   }
@@ -180,7 +185,7 @@ function buildCollectionDiagnostics({ manifest = null, rows = [], limitations = 
   const allIssues = [...issueGroups.values()];
   const affectedCompanyCount = new Set(allIssues.map(item => item.placeId || item.bookingBusinessId || item.companyName).filter(Boolean)).size;
   const issues = allIssues.slice(0, MAX_ISSUES).map(item => ({ ...item, dates: [...item.dates].sort() }));
-  const reasonLabel = REASON_LABELS[reason];
+  const reasonLabel = quality?.failure ? `${PHASE_LABELS[quality.failure.phase]} · ${FAILURE_LABELS[quality.failure.code]}` : REASON_LABELS[reason];
   return { version: 1, source: "stored_artifacts", status, reason, reasonLabel,
     summary: reasonLabel + (affectedCompanyCount ? ` · 확인 대상 업체 ${affectedCompanyCount}곳` : ""), counts, issues,
     issueCount: allIssues.length, affectedCompanyCount, truncated: allIssues.length > MAX_ISSUES || detailTruncated || rows.length > 5000,

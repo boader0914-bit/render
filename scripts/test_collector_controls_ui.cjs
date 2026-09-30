@@ -360,3 +360,33 @@ test("compact monitor follows the existing collection navigation without issuing
   assert.match(text(monitor),/약 2~3분/);
   await focusedButton.event("click"); assert.equal(ui.navigation.clicks,1); assert.ok(ui.calls.every(call=>call.method==="GET")); assert.equal(ui.submissions.length,0);
 });
+
+test("worker cards send and restore the selected company search mode", async () => {
+  const ui=await mockUi();
+  for(const key of keys) {
+    assert.equal(ui.input(key,"searchMode").value,"keyword");
+    await ui.set(key,"keywords","제주바블"); await ui.set(key,"searchMode","company");
+    await ui.form(key).event("submit");
+    await until(()=>ui.submissions.some(row=>row.workerKey===key));
+    assert.equal(ui.submissions.find(row=>row.workerKey===key).searchMode,"company");
+  }
+  const configured={...config,keywords:["제주바블"],collection:{...config.collection,searchMode:"company"}};
+  const restored=await mockUi({configs:{web:configured}});
+  assert.equal(restored.input("web","searchMode").value,"company");
+  assert.equal(scheduleConfig({...defaultDraft(),keywords:"제주바블",searchMode:"company",days:7}).collection.searchMode,"company");
+  assert.match(qualityReason({reason:"collection_execution_failed",failure:{code:"NAVER_SEARCH_STATE_MISSING",phase:"naver_main",httpStatus:200}}),/첫 검색.*업체 목록.*HTTP 200/);
+});
+
+test("app submission keeps company mode instead of silently changing it to keyword", async () => {
+  const start=app.indexOf("async function submitCollectorCard(input) {");
+  const end=app.indexOf("function setDefaultDates()",start);
+  let submitted;
+  const controls=new Map(); const input=()=>({value:"",checked:false,dispatchEvent(){}});
+  const els={keywordInput:input(),checkInInput:input(),checkOutInput:input(),searchModeInput:input(),collectionPurposeInput:input(),crawlForm:{dataset:{}}};
+  const context={isAdminRole:()=>true,state:{adminCrawlSubmitting:false,pendingRecrawlContext:null},currentCrawlFormPayload:()=>({keyword:"",checkIn:"",checkOut:""}),document:{getElementById(id){if(!controls.has(id))controls.set(id,input());return controls.get(id);}},els,correctedSearchMode:(_keyword,mode)=>mode,Event:class{},setDetailRankRange(){},submitCrawl:async()=>{submitted=els.searchModeInput.value;return{status:"pending"};}};
+  const submit=vm.runInNewContext(`${app.slice(start,end)};submitCollectorCard`,context);
+  await submit({keyword:"제주바블",searchMode:"company",workerKey:"web",checkIn:"2026-09-30",checkOut:"2026-10-01"});
+  assert.equal(submitted,"company");
+  await submit({keyword:"조천 숙소",searchMode:"keyword",workerKey:"web",checkIn:"2026-09-30",checkOut:"2026-10-01"});
+  assert.equal(submitted,"keyword");
+});

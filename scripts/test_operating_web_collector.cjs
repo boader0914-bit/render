@@ -22,6 +22,7 @@ async function artifacts(env, keyword, { partial = false, blocked = false, mutat
     collectorRunToken: env.COLLECTOR_RUN_TOKEN, executionHost: {role:"operating_web",serviceId:env.RENDER_SERVICE_ID||null},
     files: ["rooms.csv"], detailJsonFiles: [], fileRoles: { overall: "rooms.csv" },
     checkIn: env.CHECK_IN, checkOut: env.CHECK_OUT, adults: env.ADULTS, searchMode: env.SEARCH_MODE,
+    searchRegion: env.SEARCH_REGION, searchIntent: env.SEARCH_INTENT, searchScope: env.SEARCH_SCOPE,
     collectionMode: env.COLLECTION_MODE, collectionPurpose: env.COLLECTION_PURPOSE, productMode: env.PRODUCT_MODE, dayUseMode: env.DAY_USE_MODE,
     bookingRangeDays: env.BOOKING_RANGE_DAYS, bookingRangePlaceLimit: env.BOOKING_RANGE_PLACE_LIMIT,
     detailRankRanges: env.DETAIL_RANK_RANGES, sourceRole: env.SOURCE_ROLE, collectionSource: env.COLLECTION_SOURCE,
@@ -239,4 +240,24 @@ test("historical booking IDs use the crawler array contract and run stamp record
   await f.run({ env: { ...requestEnv, CHECK_IN: "2030-01-05", CHECK_OUT: "2030-01-06" },
     context: { historicalBookingBusinesses: [{ placeId: "1104404759", businessId: "1040638" }] } });
   assert.equal(checked, true); assert.deepEqual(f.errors, []);
+});
+
+test("empty-region keyword results publish but changed regions are still rejected", async t => {
+  const env={...requestEnv,SEARCH_MODE:"keyword",SEARCH_INTENT:"keyword",SEARCH_SCOPE:"keyword",SEARCH_REGION:""};
+  const f=await fixture(t);
+  const result=await f.run({keyword:"조천 숙소",env,payload:{searchMode:"keyword",searchRegion:""}});
+  assert.equal(result.collectionQuality.status,"complete"); assert.equal(result.manifest.searchRegion,"");
+  const bad=await fixture(t,{execute:async({args,config,close})=>{await artifacts(config.env,args[1],{mutate:m=>{m.searchRegion="조천";}});close();}});
+  await assert.rejects(bad.run({keyword:"조천 숙소",env}),{code:"COLLECTOR_SCOPE_MISMATCH"});
+});
+
+test("failed first search preserves its diagnosis in the published failure receipt", async t => {
+  const failure={code:"NAVER_SEARCH_STATE_MISSING",phase:"naver_main",httpStatus:200};
+  const f=await fixture(t,{execute:async({args,config,close})=>{
+    await artifacts(config.env,args[1],{mutate:m=>{m.collectionFailed=true;m.collectionFailure=failure;}});close(1);
+  }});
+  const result=await f.run({keyword:"제주바블",env:{...requestEnv,SEARCH_REGION:""}});
+  assert.equal(result.collectionQuality.status,"failed"); assert.deepEqual(result.collectionQuality.failure,failure);
+  const manifest=JSON.parse(await fs.readFile(path.join(result.manifest.outputDir,"manifest.json"),"utf8"));
+  assert.deepEqual(manifest.collectionQuality.failure,failure);
 });

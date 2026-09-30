@@ -2,12 +2,15 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { inspectManifest } = require("./daily_collection_quality.cjs");
+const { collectionFailure } = require("./lib/collection_failure.cjs");
 const { applyInventoryEvidence, productEvidence } = require("./inventory_estimation.cjs");
 const { createNaverRequestGate, isNaverBookingRateLimit, isNaverCaptchaResponse } = require("./naver_request_pacing.cjs");
 const { createProductCoverage, selectProductTargets } = require("./collector_product_coverage.cjs");
 const { createCollectionProgressReporter } = require("./collection_progress.cjs");
 const { DAY_USE_MODES, normalizeDayUseMode, dayUsePlan, withoutUncollectedDayUse } = require("./collector_day_use.cjs");
 const COLLECTION_STARTED_AT = new Date().toISOString();
+let collectionPhase = "setup";
+const naverMainAttempts = [];
 const productCoverage = createProductCoverage();
 const SCHEDULED_COLLECTION = process.env.SCHEDULED_COLLECTION === "1";
 const WORKER_COLLECTION = process.env.COLLECTOR_WORKER_RUNTIME === "1";
@@ -776,7 +779,9 @@ const BOOKING_RANGE_PLACE_LIMIT = COLLECTION_PROFILE.collectWeeklyRange
 const RAW_KEYWORD_SUFFIX = LODGING_QUERY_PLAN.suffix;
 const IS_BROAD_LODGING_SEARCH = LODGING_QUERY_PLAN.broad;
 const SEARCH_INTENT = REQUESTED_SEARCH_INTENT || LODGING_QUERY_PLAN.searchIntent;
-const SEARCH_REGION = REQUESTED_SEARCH_REGION || (province.isCompany ? "" : province.short);
+// An explicitly empty region means unrestricted keyword/company search.
+// Only legacy CLI callers without this field may infer a display region.
+const SEARCH_REGION = Object.hasOwn(process.env, "SEARCH_REGION") ? REQUESTED_SEARCH_REGION : (province.isCompany ? "" : province.short);
 const SEARCH_SCOPE = REQUESTED_SEARCH_SCOPE || LODGING_QUERY_PLAN.searchScope;
 const SEARCH_SCOPE_LABEL = REQUESTED_SEARCH_SCOPE_LABEL || LODGING_QUERY_PLAN.searchScopeLabel;
 const EXACT_LODGING_QUERY = LODGING_QUERY_PLAN.exactQuery;
@@ -1005,11 +1010,12 @@ function jsonEnd(s, start) {
 function extractApolloState(html) {
   const marker = "window.__APOLLO_STATE__ = ";
   const markerIndex = html.indexOf(marker);
-  if (markerIndex < 0) throw new Error("Naver Apollo state was not found.");
+  if (markerIndex < 0) throw Object.assign(new Error("Naver Apollo state was not found."), { code: "NAVER_SEARCH_STATE_MISSING" });
   const start = markerIndex + marker.length;
   const end = jsonEnd(html, start);
-  if (end < 0) throw new Error("Naver Apollo state JSON did not terminate.");
-  return JSON.parse(html.slice(start, end));
+  if (end < 0) throw Object.assign(new Error("Naver Apollo state JSON did not terminate."), { code: "NAVER_SEARCH_STATE_INVALID" });
+  try { return JSON.parse(html.slice(start, end)); }
+  catch { throw Object.assign(new Error("Naver Apollo state JSON was invalid."), { code: "NAVER_SEARCH_STATE_INVALID" }); }
 }
 
 async function fetchText(url, options = {}) {
@@ -1271,7 +1277,10 @@ async function getNaverState(query) {
     error.statusCode = res.status;
     throw error;
   }
-  const state = extractApolloState(text);
+  if (res.status < 200 || res.status >= 300) throw Object.assign(new Error("Naver search HTTP error."), { code: "NAVER_SEARCH_HTTP_ERROR", statusCode: res.status });
+  let state;
+  try { state = extractApolloState(text); }
+  catch (error) { error.statusCode = res.status; throw error; }
   return { status: res.status, state, url };
 }
 
@@ -3212,12 +3221,19 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
 
 async function collectNaverMain() {
   const queries = province.isCompany ? companySearchQueries(RAW_KEYWORD) : [NAVER_QUERY];
-  const attemptedQueries = [];
+  const attemptedQueries = naverMainAttempts;
   let lastStatus = 0;
   let lastUrl = "";
 
   for (const query of queries) {
-    const { state, status, url } = await getNaverState(query);
+    let response;
+    try { response = await getNaverState(query); }
+    catch (error) {
+      const failure = collectionFailure(error, "naver_main");
+      attemptedQueries.push({ query, status: failure.httpStatus ?? null, errorCode: failure.code });
+      throw error;
+    }
+    const { state, status, url } = response;
     lastStatus = status;
     lastUrl = url;
     const searchKey = pickNaverSearchKey(state, query) || (province.isCompany ? pickNaverPlaceListKey(state, query) : "");
@@ -3298,7 +3314,7 @@ async function collectNaverMain() {
       attemptedQueries,
     };
   }
-  throw new Error("Naver main search key not found.");
+  throw Object.assign(new Error("Naver main search key not found."), { code: "NAVER_SEARCH_RESULT_UNSUPPORTED", statusCode: lastStatus });
 }
 
 async function collectNaverRegional() {
@@ -3940,30 +3956,37 @@ async function main() {
   if (process.env.HISTORY_BOOKING_BUSINESS_CONTEXT_FILE) await loadHistoricalNaverBookingBusinessMap();
 
   console.log("Collecting Naver main...");
+  collectionPhase = "naver_main";
   const naver = await collectNaverMain();
 
   console.log(`Collection profile: ${COLLECTION_PROFILE.label} - ${COLLECTION_PROFILE.note}`);
 
   console.log(COLLECTION_PROFILE.collectRegional ? "Collecting Naver regional clusters..." : `Skipping Naver regional clusters: ${COLLECTION_PROFILE.regionalSkipNote || COLLECTION_PROFILE.note}`);
+  collectionPhase = "naver_regional";
   const regional = COLLECTION_PROFILE.collectRegional ? await collectNaverRegional() : skippedRegional(COLLECTION_PROFILE.regionalSkipNote || COLLECTION_PROFILE.note);
 
   console.log(COLLECTION_PROFILE.collectOta ? "Collecting NOL..." : `Skipping NOL: ${COLLECTION_PROFILE.otaSkipNote || COLLECTION_PROFILE.note}`);
+  collectionPhase = "nol";
   const nol = COLLECTION_PROFILE.collectOta ? await collectNol() : skippedNol(COLLECTION_PROFILE.otaSkipNote || COLLECTION_PROFILE.note);
 
   console.log(COLLECTION_PROFILE.collectOta ? "Checking Yeogi..." : `Skipping Yeogi: ${COLLECTION_PROFILE.otaSkipNote || COLLECTION_PROFILE.note}`);
+  collectionPhase = "yeogi";
   const yeogi = COLLECTION_PROFILE.collectOta ? await collectYeogi() : skippedYeogi(COLLECTION_PROFILE.otaSkipNote || COLLECTION_PROFILE.note);
 
   console.log(COLLECTION_PROFILE.collectOta ? "Collecting DDNayo..." : `Skipping DDNayo: ${COLLECTION_PROFILE.otaSkipNote || COLLECTION_PROFILE.note}`);
+  collectionPhase = "ddnayo";
   const ddnayo = COLLECTION_PROFILE.collectOta ? await collectDdnayo() : skippedDdnayo(COLLECTION_PROFILE.otaSkipNote || COLLECTION_PROFILE.note);
 
   applyNaverAdClusters(naver, regional.rows);
   console.log("Observing external reservation links on Naver Place...");
+  collectionPhase = "ota";
   const naverOtaObservation = await enrichNaverRowsWithOtaObservation([
     ...naver.overall,
     ...naver.ads,
     ...regional.rows,
   ]);
   console.log("Checking Naver booking stock...");
+  collectionPhase = "booking";
   const naverBookingStock = await enrichNaverRowsWithBookingAvailability([
     ...naver.overall,
     ...naver.ads,
@@ -4637,6 +4660,7 @@ async function main() {
 - 떠나요: 자동수집 가능. 단, 띄어쓰기 키워드와 공백 제거 키워드의 결과 수가 다를 수 있어 둘 다 확인했다.
 `;
   console.log("Writing outputs...");
+  collectionPhase = "output";
   await fs.writeFile(path.join(OUTPUT_DIR, fileRoles.report), report, "utf8");
 
   const allWorkbook = path.join(OUTPUT_DIR, fileRoles.workbook);
@@ -4780,7 +4804,8 @@ main().catch(async (error) => {
       checkIn: CHECK_IN, checkOut: CHECK_OUT, adults: ADULTS,
       detailRankRanges: DETAIL_RANK_RANGE_LABEL, productMode: PRODUCT_MODE,
       bookingRangeDays: BOOKING_RANGE_DAYS, bookingRangePlaceLimit: BOOKING_RANGE_PLACE_LIMIT,
-      files: [], detailJsonFiles: [], fileRoles: {}, counts: {}, collectionFailed: true
+      files: [], detailJsonFiles: [], fileRoles: {}, counts: {}, collectionFailed: true,
+      collectionFailure: collectionFailure(error, collectionPhase), naverAttemptedQueries: naverMainAttempts
     };
     addCollectionDiagnostics(manifest);
     try {

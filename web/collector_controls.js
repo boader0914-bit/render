@@ -13,6 +13,7 @@
   function duplicateKeywordCount(value) { return keywordEntries(value).length - keywordLines(value).length; }
   function validDay(value) { return /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value; }
   function scheduleConfig(values) {
+    if (values.searchMode !== undefined && !["keyword", "company"].includes(values.searchMode)) throw new Error("검색 대상을 지역·키워드 또는 업체명으로 선택하세요.");
     const keywords = keywordLines(values.keywords);
     if (!keywords.length || keywords.length > 100 || keywords.some(keyword => keyword.length > 160 || /[\x00-\x1f\x7f]/.test(keyword))) throw new Error("키워드를 한 줄에 하나씩, 최대 100개 입력하세요.");
     if (!validDay(values.firstDate)) throw new Error("첫 실행일을 확인하세요.");
@@ -25,7 +26,7 @@
     if (!/^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/.test(ranks) || ranks.split(",").some(range => { const [first, last = first] = range.split("-").map(Number); return first < 1 || last > 100 || first > last; })) throw new Error("상세수집 순위를 1~100위 안에서 입력하세요. 예: 1-20");
     return { version: 1, timezone: "Asia/Seoul", repeat: values.repeat, firstDate: values.firstDate, time: values.time, keywords,
       collection: { dateMode: fixed ? "fixed" : "rolling", bookingDays, checkIn: fixed ? values.checkIn : null, checkOut: fixed ? values.checkOut : null,
-        adults: 2, detailRankRanges: ranks, productMode: "all", collectionMode: "precision", collectionPurpose: values.purpose === "basic_db" ? "basic_db" : "revenue_detail", dayUseMode: normalizeDayUse(values.dayUseMode) }, requestPacing: null };
+        adults: 2, searchMode: values.searchMode || "keyword", detailRankRanges: ranks, productMode: "all", collectionMode: "precision", collectionPurpose: values.purpose === "basic_db" ? "basic_db" : "revenue_detail", dayUseMode: normalizeDayUse(values.dayUseMode) }, requestPacing: null };
   }
   function formatTime(value) {
     const date = new Date(value);
@@ -52,6 +53,7 @@
   function errorMessage(code) {
     const text = String(code || "");
     if (!text) return "";
+    if (text === "COLLECTOR_SCOPE_MISMATCH") return "요청한 검색 조건과 결과의 조건이 달라 등록하지 못했습니다. 보존 자료와 수집 조건을 확인하세요.";
     if (text === "COLLECTOR_DUPLICATE_PATH") return "상세 파일 목록이 중복되어 최종 저장 검증에 실패했습니다. 보존 자료 복구가 필요합니다.";
     if (text === "COLLECTOR_UPLOAD_FAILED") return "수집 결과의 전송 또는 최종 저장 확인에 실패했습니다.";
     if (/PROVIDER_(?:BLOCKED|ACCESS)|NAVER.*BLOCK|CAPTCHA|TOO_MANY|BookingAPITooManyRequests|HTTP_(403|429)/i.test(text)) return "네이버 접근 제한이 감지되어 수집을 멈췄습니다. 운영 점검이 필요합니다.";
@@ -102,7 +104,7 @@
     if (!validDay(checkIn) || !Number.isInteger(days) || days < 1 || days > 31 || (fixed && !validDay(values.checkOut))) throw new Error("조회할 숙박일을 1~31일 범위로 설정하세요. 시작일과 종료일을 모두 포함합니다.");
     return { checkIn, checkOut: fixed ? values.checkOut : addDays(checkIn, days - 1), bookingDays: days };
   }
-  function defaultDraft(now = Date.now()) { const today = todayKst(now), firstDate = Date.parse(`${today}T14:00:00+09:00`) <= now ? addDays(today, 1) : today; return { keywords: "", period: "7", checkIn: today, checkOut: addDays(today, 6), purpose: "basic_db", ranks: "1-20", dayUseMode: "inspect", execution: "now", repeat: "once", firstDate, time: "14:00", allowRepeat: false, repeatReason: "" }; }
+  function defaultDraft(now = Date.now()) { const today = todayKst(now), firstDate = Date.parse(`${today}T14:00:00+09:00`) <= now ? addDays(today, 1) : today; return { keywords: "", searchMode: "keyword", period: "7", checkIn: today, checkOut: addDays(today, 6), purpose: "basic_db", ranks: "1-20", dayUseMode: "inspect", execution: "now", repeat: "once", firstDate, time: "14:00", allowRepeat: false, repeatReason: "" }; }
   function scheduleStartError(values, now = Date.now()) { return values.repeat === "once" && Date.parse(`${values.firstDate}T${values.time}:00+09:00`) <= now ? "예약 시각이 지났습니다. 앞으로 실행할 날짜와 시각을 선택하세요." : ""; }
   function reservationSummary(values) {
     const date = validDay(values.firstDate) ? values.firstDate.replace(/-/g, ".") : "날짜 확인 필요";
@@ -181,6 +183,10 @@
   };
   function qualityReason(quality = {}) {
     const reason = quality?.reason || "";
+    const failureLabels = { NAVER_SEARCH_STATE_MISSING: "검색 응답에 업체 목록 데이터가 없음", NAVER_SEARCH_STATE_INVALID: "검색 응답의 업체 목록을 해석하지 못함", NAVER_SEARCH_RESULT_UNSUPPORTED: "선택한 검색 방식에 맞는 결과 목록이 없음", NAVER_SEARCH_HTTP_ERROR: "검색 서버 오류 응답", COLLECTION_NETWORK_ERROR: "수집 서버 통신 실패", COLLECTION_TIMEOUT: "수집 응답 시간 초과", COLLECTION_STAGE_FAILED: "수집 단계 실행 실패" };
+    const phases = { setup: "수집 준비", naver_main: "첫 검색", naver_regional: "지역 검색", nol: "NOL 조회", yeogi: "여기어때 조회", ddnayo: "떠나요 조회", ota: "예약 채널 확인", booking: "예약 상세 조회", output: "결과 파일 저장" };
+    const failure = quality?.failure;
+    if (reason === "collection_execution_failed" && Object.hasOwn(failureLabels, failure?.code) && Object.hasOwn(phases, failure?.phase)) return `${phases[failure.phase]} · ${failureLabels[failure.code]}${Number.isInteger(failure.httpStatus) && failure.httpStatus >= 100 && failure.httpStatus <= 599 ? ` (HTTP ${failure.httpStatus})` : ""}`;
     if (reason === "manifest_checks_passed") return "";
     if (Object.hasOwn(QUALITY_REASONS, reason)) return QUALITY_REASONS[reason];
     if (/_mismatch$|_invalid$/.test(reason)) return "수집 조건·결과 검증 필요";
@@ -337,6 +343,8 @@
     card.form = node("form", "", "collector-worker-form");
     const intro = node("div", "", "collector-card-status"); card.state = node("p", "연결 상태 확인 중"); card.next = node("small", "예약 꺼짐"); intro.append(card.state, card.next); card.form.append(intro, makeProgress(card));
     const common = node("div", "", "collector-common-fields");
+    common.append(field(card, "searchMode", "검색 대상", "select", { choices: [["keyword", "지역·키워드"], ["company", "업체명"]] }));
+    common.append(node("p", "특정 숙소를 찾을 때는 업체명을 선택하세요. 선택한 방식은 즉시수집과 예약수집에 함께 적용됩니다.", "collector-field-hint"));
     common.append(field(card, "keywords", "검색 키워드", "textarea", { rows: 2, maxLength: 17000, placeholder: "예: 경남글램핑\n여러 키워드는 한 줄에 하나씩", required: true }));
     const grid = node("div", "", "collector-settings-grid");
     grid.append(field(card, "period", "조회할 숙박일", "select", { choices: [["1", "수집 당일"], ["7", "수집일부터 7일"], ["14", "수집일부터 14일"], ["31", "수집일부터 31일"], ["custom", "날짜 직접 지정"]] }), field(card, "ranks", "수집 순위", "text", { maxLength: 150, placeholder: "예: 1-20", required: true }));
@@ -363,6 +371,7 @@
   }
   function syncCard(card) {
     const v = values(card), custom = v.period === "custom", reservation = v.execution === "schedule";
+    card.inputs.keywords.placeholder = v.searchMode === "company" ? "예: 제주바블\n업체명은 한 줄에 하나씩" : "예: 조천숙소\n여러 키워드는 한 줄에 하나씩";
     const availability = workerAvailability(workerData, card.key), schedule = schedules[card.key];
     card.fields.checkIn.hidden = card.fields.checkOut.hidden = !custom;
     card.customDates.hidden = !custom;
@@ -488,7 +497,7 @@
     let accepted = 0;
     for (const keyword of keywords) {
       if (!workerAvailability(workerData, card.key).ready) throw new Error(workerAvailability(workerData, card.key).reason);
-      const receipt = await new Promise((resolve, reject) => window.dispatchEvent(new CustomEvent("collector:submit-card", { detail: { input: { workerKey: card.key, keyword, checkIn: dates.checkIn, checkOut: dates.bookingDays === 1 ? addDays(dates.checkIn, 1) : dates.checkOut, bookingRangeDays: dates.bookingDays, collectionPurpose: v.purpose, detailRankRanges: v.ranks, dayUseMode: v.dayUseMode, allowRepeat: v.allowRepeat, repeatReason: v.repeatReason }, resolve, reject } })));
+      const receipt = await new Promise((resolve, reject) => window.dispatchEvent(new CustomEvent("collector:submit-card", { detail: { input: { workerKey: card.key, keyword, searchMode: v.searchMode, checkIn: dates.checkIn, checkOut: dates.bookingDays === 1 ? addDays(dates.checkIn, 1) : dates.checkOut, bookingRangeDays: dates.bookingDays, collectionPurpose: v.purpose, detailRankRanges: v.ranks, dayUseMode: v.dayUseMode, allowRepeat: v.allowRepeat, repeatReason: v.repeatReason }, resolve, reject } })));
       accepted += 1; notice(card, `${accepted}/${keywords.length}개 키워드를 접수했습니다. 아래 기록에서 진행 상태를 확인하세요.`, "success");
       if (receipt?.submissionUncertain) { notice(card, "접수 응답 확인 중입니다. 후속 키워드 접수를 보류했습니다. 기록을 확인하세요.", "error"); break; }
     }
@@ -530,7 +539,7 @@
         const key = WORKER_KEYS[i], result = results[i + 2], card = cards.get(key);
         if (result.status === "fulfilled") {
           schedules[key] = result.value; const config = result.value.config;
-          if (!card.loaded && !drafts[key] && config?.keywords?.length) fill(card, { keywords: config.keywords.join("\n"), period: config.collection.dateMode === "fixed" ? "custom" : String(config.collection.bookingDays), checkIn: config.collection.checkIn || todayKst(), checkOut: config.collection.checkOut || todayKst(), purpose: config.collection.collectionPurpose, ranks: config.collection.detailRankRanges, dayUseMode: config.collection.dayUseMode || "detail", firstDate: config.firstDate, time: config.time, repeat: config.repeat, execution: config.enabled ? "schedule" : "now" });
+          if (!card.loaded && !drafts[key] && config?.keywords?.length) fill(card, { keywords: config.keywords.join("\n"), searchMode: config.collection.searchMode || "keyword", period: config.collection.dateMode === "fixed" ? "custom" : String(config.collection.bookingDays), checkIn: config.collection.checkIn || todayKst(), checkOut: config.collection.checkOut || todayKst(), purpose: config.collection.collectionPurpose, ranks: config.collection.detailRankRanges, dayUseMode: config.collection.dayUseMode || "detail", firstDate: config.firstDate, time: config.time, repeat: config.repeat, execution: config.enabled ? "schedule" : "now" });
           card.loaded = true;
         } else { schedules[key] = null; notice(card, "예약 상태를 읽지 못했습니다. 즉시수집과 연결 상태는 별도로 확인합니다.", "error"); }
       }
@@ -545,7 +554,7 @@
   window.addEventListener("collector:requests-changed", () => { if (admin()) refresh(); });
   window.addEventListener("collector:prepare-card", event => {
     const input = event.detail || {}, card = cards.get(workerKey(input.workerKey));
-    fill(card, { keywords: input.keyword || "", period: "custom", checkIn: input.checkIn, checkOut: input.bookingRangeDays === 1 ? input.checkIn : input.checkOut, purpose: input.collectionPurpose || "revenue_detail", ranks: input.detailRankRanges || "1-20", dayUseMode: input.dayUseMode || "inspect", execution: "now" });
+    fill(card, { keywords: input.keyword || "", searchMode: input.searchMode === "company" ? "company" : "keyword", period: "custom", checkIn: input.checkIn, checkOut: input.bookingRangeDays === 1 ? input.checkIn : input.checkOut, purpose: input.collectionPurpose || "revenue_detail", ranks: input.detailRankRanges || "1-20", dayUseMode: input.dayUseMode || "inspect", execution: "now" });
     card.root.open = true; card.root.scrollIntoView({ block: "start", behavior: "smooth" }); saveDraft(card);
   });
   const observer = new MutationObserver(() => { renderProgress(); if (admin() && !loaded) refresh(); }); observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });

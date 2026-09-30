@@ -86,11 +86,12 @@ function validateConfig(value) {
     || !["once", "daily", "weekdays"].includes(value.repeat) || !date(value.firstDate)
     || typeof value.time !== "string" || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value.time)) throw fault("KEYWORD_SCHEDULE_CONFIG_INVALID");
   const input = value.collection;
-  keysOnly(input, ["dateMode", "bookingDays", "checkIn", "checkOut", "adults", "detailRankRanges", "productMode", "collectionMode", "collectionPurpose", "dayUseMode"], "KEYWORD_SCHEDULE_COLLECTION_INVALID");
+  keysOnly(input, ["dateMode", "bookingDays", "checkIn", "checkOut", "adults", "detailRankRanges", "productMode", "collectionMode", "collectionPurpose", "dayUseMode", "searchMode"], "KEYWORD_SCHEDULE_COLLECTION_INVALID");
   if (!["rolling", "fixed"].includes(input.dateMode) || !Number.isSafeInteger(input.bookingDays) || input.bookingDays < 1 || input.bookingDays > 31
     || !Number.isSafeInteger(input.adults) || input.adults < 1 || input.adults > 30 || input.productMode !== "all"
     || input.collectionMode !== "precision" || !["basic_db", "revenue_detail"].includes(input.collectionPurpose)
-    || (input.dayUseMode !== undefined && !["inspect", "lodging_only", "detail"].includes(input.dayUseMode))) throw fault("KEYWORD_SCHEDULE_COLLECTION_INVALID");
+    || (input.dayUseMode !== undefined && !["inspect", "lodging_only", "detail"].includes(input.dayUseMode))
+    || (input.searchMode !== undefined && !["keyword", "company"].includes(input.searchMode))) throw fault("KEYWORD_SCHEDULE_COLLECTION_INVALID");
   rankRange(input.detailRankRanges);
   const collection = clone(input);
   if (input.dateMode === "fixed") {
@@ -160,7 +161,7 @@ function payloadFor(config, keyword, day, occurrenceId, index, trigger, workerKe
   const checkIn = collection.dateMode === "fixed" ? collection.checkIn : day;
   const lastDate = collection.dateMode === "fixed" ? collection.checkOut : addDays(day, collection.bookingDays - 1);
   const payload = { keyword, workerKey, trigger, scheduledCollection: trigger === "scheduled",
-    searchMode: "keyword", checkIn, checkOut: collection.bookingDays === 1 ? addDays(checkIn, 1) : lastDate,
+    searchMode: collection.searchMode || "keyword", checkIn, checkOut: collection.bookingDays === 1 ? addDays(checkIn, 1) : lastDate,
     adults: 2, collectionMode: collection.collectionMode, collectionPurpose: collection.collectionPurpose,
     productMode: collection.productMode, dayUseMode: collection.dayUseMode || "detail", detailRankRanges: collection.detailRankRanges, bookingRangeDays: collection.bookingDays,
     bookingRangePlaceLimit: rankRange(collection.detailRankRanges).max, sourceRole: "admin", collectionSource: "admin_search",

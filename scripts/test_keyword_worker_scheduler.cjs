@@ -757,3 +757,14 @@ test("web and manual pause callbacks identify only their own scheduled occurrenc
     } finally {gate.resolve();await f.close();}
   }
 });
+
+test("company search mode survives reservation validation and dispatch on every worker", () => {
+  const original=defaultConfig(new Date("2026-09-30T00:00:00Z"));
+  const old=validateConfig(original);
+  assert.equal(payloadFor(old,"조천숙소","2026-09-30","scheduled_2026-09-30",0,"scheduled").searchMode,"keyword");
+  for (const worker of ["web","manual","scheduled"]) {
+    const config=validateConfig({...original,keywords:["제주바블"],collection:{...original.collection,searchMode:"company"}});
+    assert.equal(payloadFor(config,"제주바블","2026-09-30","scheduled_2026-09-30",0,"scheduled",worker).searchMode,"company");
+  }
+  assert.throws(()=>validateConfig({...original,collection:{...original.collection,searchMode:"guess"}}),{code:"KEYWORD_SCHEDULE_COLLECTION_INVALID"});
+});

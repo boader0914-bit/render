@@ -95,3 +95,14 @@ test("artifact reader resolves stored JSON only inside run, preserves original b
   assert.equal(await fs.readFile(path.join(runDir, "manifest.json"), "utf8"), manifest);
   assert.equal(await fs.readFile(path.join(runDir, "detail_json", "one.json"), "utf8"), detail);
 });
+
+test("first-search diagnosis remains visible and excludes arbitrary error text", () => {
+  const failure={code:"NAVER_SEARCH_STATE_MISSING",phase:"naver_main",httpStatus:200,stack:"SECRET",message:"cookie=PRIVATE"};
+  const collectionQuality=sanitizeCollectionQuality({status:"failed",reason:"collection_execution_failed",failure});
+  assert.deepEqual(collectionQuality.failure,{code:failure.code,phase:"naver_main",httpStatus:200});
+  const report=buildCollectionDiagnostics({manifest:{collectionQuality}});
+  assert.match(report.summary,/첫 검색.*업체 목록/);
+  assert.equal(report.issues.length,1); assert.equal(report.issues[0].code,failure.code); assert.equal(report.issues[0].detailStatus,"recorded");
+  assert.doesNotMatch(JSON.stringify(report),/SECRET|PRIVATE|cookie|stack/);
+  assert.equal(sanitizeCollectionQuality({status:"failed",failure:{code:"SECRET",phase:"naver_main"}}).failure,undefined);
+});

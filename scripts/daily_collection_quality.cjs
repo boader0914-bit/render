@@ -1,5 +1,6 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { sanitizeCollectionFailure } = require("./lib/collection_failure.cjs");
 
 // Acceptance receipt for collection counts, not a guarantee of every date/product value.
 // This module only reads artifacts; the crawler writes its immutable receipt once.
@@ -81,7 +82,10 @@ function inspectManifest(manifest, options = {}) {
   if (counts.naverScheduleBlocked > 0) {
     return receipt("blocked", "naver_schedule_blocked", counts, { blockedReason: "naver_schedule_http_403_or_429" });
   }
-  if (manifest.collectionFailed) return receipt("failed", "collection_execution_failed", counts);
+  if (manifest.collectionFailed) {
+    const failure = sanitizeCollectionFailure(manifest.collectionFailure);
+    return receipt("failed", "collection_execution_failed", counts, failure ? { failure } : {});
+  }
   if (attempts.some((attempt) => count(attempt?.status) !== null && (Number(attempt.status) < 200 || Number(attempt.status) >= 300))) {
     return receipt("failed", "naver_main_request_failed", counts);
   }

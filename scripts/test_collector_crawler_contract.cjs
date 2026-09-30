@@ -24,12 +24,12 @@ function harness(options = {}) {
     mkdir: async () => {},
     writeFile: async (file, value) => { writes.set(file, value); },
   };
-  const processMock = { env: { CHECK_IN: "2026-09-22", CHECK_OUT: "2026-09-23", OUTPUTS_DIR: root, ...options.env }, argv: ["node", "crawler", "경남글램핑"] };
+  const processMock = { env: { CHECK_IN: "2026-09-22", CHECK_OUT: "2026-09-23", OUTPUTS_DIR: root, ...options.env }, argv: ["node", "crawler", options.keyword || "경남글램핑"] };
   const context = {
     process: processMock,
     console: { log: (...args) => logs.push(args.join(" ")), error: (...args) => logs.push(args.join(" ")) },
     fetch: options.fetchImpl || (async () => { throw new Error("unexpected_external_request"); }),
-    setTimeout, clearTimeout, URL, Response, TextDecoder,
+    setTimeout, clearTimeout, URL, Response, TextDecoder, Buffer,
     require: name => {
       if (name === "node:fs/promises") return fsMock;
       if (name === "xlsx") return {};
@@ -37,6 +37,7 @@ function harness(options = {}) {
     },
   };
   const setup = source.slice(0, entryPoint);
+  if (options.runMainFailure) return { completion: vm.runInNewContext(source, context), writes, logs, process: processMock };
   if (options.runFailure) {
     const script = `${setup}\nmain = async () => { await fetch('https://m.booking.naver.com/graphql'); throw new Error('fixture-sensitive-body'); };${source.slice(entryPoint)}`;
     return { completion: vm.runInNewContext(script, context), writes, logs, process: processMock };
@@ -45,7 +46,7 @@ function harness(options = {}) {
     loadHistoricalNaverBookingBusinessMap, getHistoricalNaverBookingBusiness, getNaverDailySchedule,
     addCollectionDiagnostics, diagnostics: scheduledCollectionDiagnostics,
     collectNaverSchedulesForItems, collectWeeklyNaverAvailability, collectNaverBookingAvailability, compactNaverScheduleDetail, productCoverage, outputDir: OUTPUT_DIR,
-    profile: COLLECTION_PROFILE,
+    profile: COLLECTION_PROFILE, searchRegion: SEARCH_REGION, collectNaverMain,
     concurrency: [NAVER_BOOKING_DETAIL_CONCURRENCY, NAVER_SCHEDULE_CONCURRENCY, NAVER_OTA_OBSERVATION_CONCURRENCY],
   })`, context);
   return { ...exports, writes, logs, process: processMock };
@@ -576,4 +577,45 @@ test("main-stage block writes a safe failure manifest before worker exit", async
   assert.equal(manifest.sourceRole, "admin");
   assert.equal(manifest.requestPacing.blockedCode, "BookingAPITooManyRequests");
   assert.doesNotMatch(saved[0] + crawler.logs.join(" "), /fixture-sensitive-body/);
+});
+
+test("explicit empty regions remain empty in every collector while legacy CLI inference is preserved", () => {
+  for (const runtime of [{COLLECTOR_WEB_RUNTIME:"1"}, {COLLECTOR_WORKER_RUNTIME:"1"}, {COLLECTOR_WORKER_RUNTIME:"1",COLLECTOR_WORKER_KEY:"scheduled",SCHEDULED_COLLECTION:"1"}]) {
+    for (const keyword of ["조천 숙소", "함덕펜션", "제주바블"]) {
+      const crawler = harness({ keyword, env: {...runtime, SEARCH_MODE:"keyword",SEARCH_REGION:""} });
+      assert.equal(crawler.searchRegion, "", keyword);
+    }
+    assert.equal(harness({ keyword:"조천 숙소", env:{...runtime, SEARCH_REGION:"조천"} }).searchRegion,"조천");
+  }
+  assert.equal(harness({ keyword:"조천 숙소" }).searchRegion,"조천");
+});
+
+test("company search reads a placeList response and excludes unrelated companies", async () => {
+  const key = 'placeList({"input":{"query":"제주바블","display":50}})';
+  const state = { ROOT_QUERY: { [key]: { businesses: { total:2,items:[{__ref:"a"},{__ref:"b"}] } } }, a:{id:"123",name:"제주바블",category:"펜션"}, b:{id:"456",name:"다른 펜션",category:"펜션"} };
+  let calls=0;
+  const crawler=harness({keyword:"제주바블",env:{COLLECTOR_WORKER_RUNTIME:"1",SEARCH_MODE:"company",SEARCH_REGION:""},fetchImpl:async()=>{calls++;return new Response(`window.__APOLLO_STATE__ = ${JSON.stringify(state)};`);}});
+  const result=await crawler.collectNaverMain();
+  assert.equal(calls,1); assert.equal(result.overall.length,1); assert.equal(result.overall[0].업체명,"제주바블");
+  assert.equal(result.attemptedQueries[0].searchType,"placeList"); assert.equal(result.attemptedQueries[0].filteredOut,1);
+});
+
+test("actual first-search failures retain safe codes, stage, HTTP status and region without raw bodies", async () => {
+  for (const [body,status,code] of [
+    ["private-response-body",200,"NAVER_SEARCH_STATE_MISSING"],
+    ['window.__APOLLO_STATE__ = {broken}',200,"NAVER_SEARCH_STATE_INVALID"],
+    ['window.__APOLLO_STATE__ = {"ROOT_QUERY":{}};',200,"NAVER_SEARCH_RESULT_UNSUPPORTED"],
+    ["private-response-body",503,"NAVER_SEARCH_HTTP_ERROR"]
+  ]) {
+    let calls=0;
+    const crawler=harness({keyword:"제주바블",runMainFailure:true,readdir:async()=>[],env:{COLLECTOR_WEB_RUNTIME:"1",SEARCH_MODE:"keyword",SEARCH_REGION:""},fetchImpl:async()=>{calls++; return new Response(body,{status});}});
+    await crawler.completion;
+    const json=[...crawler.writes.entries()].find(([file])=>path.basename(file)==="manifest.json")?.[1];
+    assert.ok(json); const manifest=JSON.parse(json);
+    assert.equal(calls,1); assert.equal(manifest.searchRegion,""); assert.equal(manifest.collectionQuality.status,"failed");
+    assert.deepEqual(manifest.collectionQuality.failure,{code,phase:"naver_main",httpStatus:status});
+    assert.equal(manifest.naverAttemptedQueries.length,1); assert.equal(manifest.naverAttemptedQueries[0].status,status);
+    assert.equal(manifest.requestPacing.stopped,false); assert.equal(allowsDerivedUpdates(manifest),false);
+    assert.doesNotMatch(json,/private-response-body|broken|stack/);
+  }
 });

@@ -41659,7 +41659,7 @@ async function submitCollectorCard(input) {
   els.keywordInput.value = input.keyword;
   els.checkInInput.value = input.checkIn;
   els.checkOutInput.value = input.checkOut;
-  els.searchModeInput.value = state.pendingRecrawlContext ? correctedSearchMode(input.keyword, "company", { recrawlContext: state.pendingRecrawlContext }) : "keyword";
+  els.searchModeInput.value = state.pendingRecrawlContext ? correctedSearchMode(input.keyword, "company", { recrawlContext: state.pendingRecrawlContext }) : correctedSearchMode(input.keyword, input.searchMode === "company" ? "company" : "keyword");
   els.collectionPurposeInput.value = input.collectionPurpose;
   els.crawlForm.dataset.dayUseMode = input.dayUseMode || "inspect";
   els.crawlForm.dataset.bookingRangeDays = String(input.bookingRangeDays || "");
