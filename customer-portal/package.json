@@ -1,0 +1,17 @@
+{
+  "name": "sabun-insight-preview",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Interactive local review for insight.sabun.co.kr; production integration follows design review.",
+  "scripts": {
+    "start": "node server.cjs --preview",
+    "check": "node --check server.cjs && node --check web/app.js && node --check connected-server.cjs && node --check web/connected.js",
+    "test": "node --test test/*.test.cjs",
+    "start:connected": "node connected-server.cjs",
+    "dev:connected": "node dev-connected.cjs"
+  },
+  "engines": {
+    "node": ">=22.13 <25"
+  }
+}

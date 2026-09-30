@@ -4698,8 +4698,7 @@ function manualCorrectionRoomSegments(correction = {}) {
   if (!correction || typeof correction !== "object") correction = {};
   return (Array.isArray(correction.roomSegments) ? correction.roomSegments : [])
     .map((row) => cleanManualCorrectionSegment(row))
-    .filter((row) => manualCorrectionSegmentHasValue(row))
-    .slice(0, B2B_MY_LODGE_SEGMENT_LIMIT);
+    .filter((row) => manualCorrectionSegmentHasValue(row));
 }
 
 function manualCorrectionRoomSegmentsText(correction = {}) {
@@ -4732,8 +4731,7 @@ function parseManualCorrectionRoomSegments(text = "") {
         sundayPrice: parts[5] || ""
       });
     })
-    .filter((row) => manualCorrectionSegmentHasValue(row))
-    .slice(0, B2B_MY_LODGE_SEGMENT_LIMIT);
+    .filter((row) => manualCorrectionSegmentHasValue(row));
 }
 
 function manualCorrectionSegmentInputValue(value) {
@@ -4799,7 +4797,7 @@ function manualCorrectionRoomSegmentsField(correction = {}, options = {}) {
       <div class="company-manual-segments-body">
         <div class="company-manual-segments-toolbar">
           <span>객실 종류별 수량과 요일 가격을 입력합니다.</span>
-          <button type="button" data-manual-segment-add ${displayRows.length >= B2B_MY_LODGE_SEGMENT_LIMIT ? "disabled" : ""}>객실종류 +</button>
+          <button type="button" data-manual-segment-add>객실종류 +</button>
         </div>
         <div class="company-manual-segment-list" data-manual-segment-list>
           ${displayRows.map((row, index) => manualCorrectionRoomSegmentRowHtml(row, index, displayRows.length)).join("")}
@@ -17588,7 +17586,7 @@ function sheetManualCorrectionForm(profile = {}, item = {}) {
   const correction = manualCorrectionHasValue(candidateCorrection) ? candidateCorrection : {};
   const regionPlaceholder = (profile.regions || [])[0] || item.region || "예: 포천";
   return `
-    <div class="company-manual-form" data-company-manual-form data-company-id="${escapeHtml(profile.companyId)}">
+    <div class="company-manual-form" data-company-manual-form data-company-id="${escapeHtml(profile.companyId)}" data-correction-revision="${Number(profile.manualCorrectionRevision || 0)}">
       <div>
         <label>
           <span>숙박 운영 판매 기준</span>
@@ -19778,7 +19776,7 @@ function companyCorrectionFormHtml(company = {}, compact = false, options = {}) 
     || meta.couponNames
   );
   return `
-    <div class="company-manual-form correction-inline-form ${compact ? "compact" : ""}" data-company-manual-form data-company-id="${escapeHtml(company.companyId || "")}">
+    <div class="company-manual-form correction-inline-form ${compact ? "compact" : ""}" data-company-manual-form data-company-id="${escapeHtml(company.companyId || "")}" data-correction-revision="${Number(company.manualCorrectionRevision || 0)}">
       ${showCollectedBasis ? adminDbCollectedCorrectionEvidenceHtml(collectedBasis, correctionDraft) : ""}
       <section class="company-manual-section">
         <div class="company-manual-section-head">
@@ -20088,7 +20086,7 @@ function adminDbAdminProfilePanel(row = {}) {
   const company = row.company || {};
   const fixed = adminDbCompanyFixedProfile(company);
   return `
-    <form class="admin-db-profile-form company-manual-form" data-company-admin-profile-form data-company-manual-form data-company-id="${escapeHtml(company.companyId || "")}">
+    <form class="admin-db-profile-form company-manual-form" data-company-admin-profile-form data-company-manual-form data-company-id="${escapeHtml(company.companyId || "")}" data-correction-revision="${Number(company.manualCorrectionRevision || 0)}">
       <div class="admin-db-profile-intro">
         <div><span>관리자 확정 기본정보</span><strong>자동수집으로 바뀌지 않는 업체 기준값</strong><small>업체명·주소·지역·업종·객실 기준을 저장합니다.</small></div>
         <mark data-ui-status="${fixed.confirmed ? "positive" : "neutral"}">${fixed.confirmed ? `확정 ${compactDateTime(fixed.updatedAt)}` : "확인 전"}</mark>
@@ -22773,8 +22771,7 @@ function adminDbCollectedCorrectionBasis(company = {}, detail = {}) {
       saturdayPrice: product.saturdayPrice,
       sundayPrice: product.sundayPrice
     }))
-    .filter((segment) => manualCorrectionSegmentHasValue(segment))
-    .slice(0, B2B_MY_LODGE_SEGMENT_LIMIT);
+    .filter((segment) => manualCorrectionSegmentHasValue(segment));
   const completeQuantityTotal = (rows = []) => rows.length > 0 && rows.every((product) => Number.isFinite(product.quantity) && product.quantity > 0)
     ? rows.reduce((sum, product) => sum + product.quantity, 0)
     : NaN;
@@ -22787,8 +22784,8 @@ function adminDbCollectedCorrectionBasis(company = {}, detail = {}) {
     runId: String(productsBasis.runId || snapshot.productsRunId || snapshot.runId || "").trim(),
     legacyProductPreview,
     structured: mappedProducts.length > 0,
-    editableProductLimit: B2B_MY_LODGE_SEGMENT_LIMIT,
-    omittedEditableCount: Math.max(0, lodgingProducts.length - B2B_MY_LODGE_SEGMENT_LIMIT)
+    editableProductLimit: null,
+    omittedEditableCount: 0
   };
 }
 
@@ -38626,8 +38623,7 @@ function collectManualCorrectionRoomSegments(form = null, options = {}) {
         saturdayPrice: value("saturdayPrice"),
         sundayPrice: value("sundayPrice")
       });
-    })
-    .slice(0, B2B_MY_LODGE_SEGMENT_LIMIT);
+    });
   const filtered = rows.filter((row) => manualCorrectionSegmentHasValue(row));
   if (filtered.length || includeBlank) return includeBlank ? rows : filtered;
   const legacyText = form.querySelector("[data-manual-room-segments]")?.value || "";
@@ -38642,7 +38638,7 @@ function updateManualCorrectionSegmentPanel(panel = null) {
   const summary = panel.querySelector("[data-manual-segment-summary]");
   if (summary) summary.textContent = manualCorrectionRoomSegmentsSummary(validRows);
   const addButton = panel.querySelector("[data-manual-segment-add]");
-  if (addButton) addButton.disabled = rows.length >= B2B_MY_LODGE_SEGMENT_LIMIT;
+  if (addButton) addButton.disabled = false;
   const removeButtons = Array.from(panel.querySelectorAll("[data-manual-segment-remove]"));
   removeButtons.forEach((button) => {
     button.disabled = removeButtons.length <= 1;
@@ -38656,7 +38652,6 @@ function addManualCorrectionSegmentRow(button = null) {
   const list = panel?.querySelector("[data-manual-segment-list]");
   if (!panel || !list) return;
   const rows = Array.from(list.querySelectorAll("[data-manual-segment-row]"));
-  if (rows.length >= B2B_MY_LODGE_SEGMENT_LIMIT) return;
   list.insertAdjacentHTML("beforeend", manualCorrectionRoomSegmentRowHtml({}, rows.length, rows.length + 1));
   updateManualCorrectionSegmentPanel(panel);
 }
@@ -38738,6 +38733,7 @@ async function saveCompanyCorrection(button, clear = false) {
         couponNames,
         note
       };
+  if (form?.dataset.correctionRevision !== undefined) payload.expectedRevision = Number(form.dataset.correctionRevision);
   try {
     const data = await fetchJson("/api/company-master/manual-correction", {
       method: "POST",

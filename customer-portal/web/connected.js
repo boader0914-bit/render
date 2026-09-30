@@ -1,0 +1,99 @@
+(() => {
+  'use strict';
+  const koreaDate = value => Number.isFinite(Date.parse(value)) ? new Date(Date.parse(value) + 9 * 3600000).toISOString().slice(0,10) : '일자 확인 전';
+  const $ = selector => document.querySelector(selector);
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
+  const menus = [['home','홈'],['property','내 매장'],['competitors','경쟁 분석'],['regions','지역 분석'],['reports','리포트'],['settings','설정']];
+  const labels = { pending:'확인 대기',active:'등록 완료',rejected:'반려',verified:'반영 확인',withdrawn:'철회',superseded:'새 요청으로 대체',needs_review:'자료 준비 접수' };
+  const dayUse = { unknown:'확인 전',none:'없음',separate:'별도 객실',shared:'숙박과 공유' };
+  let state = null, config = {}, busy = false, searchSequence = 0;
+  const route = () => location.hash.slice(1) || 'home';
+  const toast = message => { $('#toast').textContent = message; $('#toast').classList.add('visible'); setTimeout(() => $('#toast').classList.remove('visible'), 4500); };
+  async function api(url, data) {
+    const response = await fetch(`/api/customer/v1${url}`, { method:data ? 'POST':'GET', headers:data ? { 'Content-Type':'application/json','X-CSRF-Token':state?.csrfToken || '' }: { Accept:'application/json' }, ...(data ? { body:JSON.stringify(data) }: {}) });
+    const value = await response.json();
+    if (!response.ok) { const error = new Error(value.error?.message || '요청을 처리하지 못했습니다.'); error.status = response.status; error.code = value.error?.code; throw error; }
+    return value;
+  }
+  async function command(action, payload) {
+    state = await api('/commands', { revision:state.customer.revision, requestKey:crypto.randomUUID(), action, payload });
+    render(); toast('저장했습니다.');
+  }
+  const field = (label, name, value = '', type = 'text', extra = '') => `<label class="field"><span>${esc(label)}</span><input name="${name}" type="${type}" value="${esc(value)}" ${extra}></label>`;
+  function auth() {
+    const signup = route() === 'signup' && config.signupEnabled;
+    $('#main').innerHTML = `<section class="card auth-card"><span class="eyebrow">SABUN INSIGHT</span><h1>${signup ? '함께 시작하는 숙박 분석':'운영의 흐름을 한곳에서'}</h1><p class="muted">${signup ? '계정을 만든 후 내 매장 또는 준비 중인 사업을 등록하세요.':'데이터랩 이용자 계정으로 로그인하세요.'}</p><form id="auth-form">${field('아이디','username','','text','required autocomplete="username" maxlength="120"')}${field('비밀번호','password','','password',`required autocomplete="${signup?'new':'current'}-password" maxlength="256"`)}${signup ? `${field('비밀번호 확인','passwordConfirm','','password','required autocomplete="new-password"')}${field('연락처','phone','','tel','required')}${field('이메일','email','','email','required')}<label class="check-field"><input name="agreeTerms" type="checkbox" required><span><a href="${esc(config.termsUrl)}" target="_blank" rel="noopener">이용약관</a> 동의</span></label><label class="check-field"><input name="agreePrivacy" type="checkbox" required><span><a href="${esc(config.privacyUrl)}" target="_blank" rel="noopener">개인정보 안내</a> 동의</span></label><label class="check-field"><input name="confirmAge" type="checkbox" required><span>만 14세 이상입니다.</span></label>`:''}<p class="form-error" role="alert"></p><button class="button primary" type="submit">${signup?'회원가입':'로그인'}</button></form>${config.signupEnabled ? `<a class="text-link" href="#${signup?'login':'signup'}">${signup?'로그인으로 돌아가기':'처음 이용하시나요? 회원가입'}</a>`:''}</section>`;
+  }
+  function companyCard(relation) {
+    const company = state.companies.find(row => row.companyId === relation.companyId);
+    if (!company) return `<article class="connected-row"><strong>업체 연결 확인 필요</strong><p class="muted">기존 관계를 보존했습니다. 관리자에게 연결 상태를 확인해 주세요.</p></article>`;
+    const settings = state.customer.settings[company.companyId] || {};
+    const requests = state.corrections.filter(row => row.companyId === company.companyId);
+    const prep = state.preparations.find(row => row.companyId === company.companyId);
+    return `<article class="connected-row"><div><span class="status-pill ${relation.status==='pending'?'pending':''}">${esc(labels[relation.status])}</span></div><h3>${esc(settings.nickname || company.name)}</h3><p class="muted">${esc(company.name)} · ${esc(company.address)}</p><p>객실 총량 <strong>${company.rooms===null?'확인 전':`${esc(company.rooms)}실`}</strong> <span class="muted">${esc(company.roomCountSource)}</span></p><div class="connected-actions"><button class="button small" data-action="prepare" data-company="${esc(company.companyId)}">자료 준비 요청</button><button class="button small" data-action="archive" data-relation="${esc(relation.relationId)}">등록 해제</button></div>${prep?`<p class="muted">${esc(prep.message)} · ${esc(koreaDate(prep.submittedAt))}</p>`:''}<details><summary>정보 수정 · 검수 요청 ${requests.some(row=>row.status==='pending')?'(대기 중)':''}</summary><form data-settings="${esc(company.companyId)}">${field('나만의 별칭','nickname',settings.nickname || '')}<label class="field"><span>나만의 메모</span><textarea name="note" maxlength="1000">${esc(settings.note || '')}</textarea></label><button class="button" type="submit">개인 설정 저장</button></form><form data-correction="${esc(company.companyId)}"><p class="muted">공통 정보는 관리자가 근거를 검토한 후 반영합니다.</p><div class="form-grid">${field('매장명','name',company.name)}${field('객실 수','rooms',company.rooms ?? '', 'number','min="1" step="1"')}${field('주소','address',company.address)}<label class="field"><span>데이유즈</span><select name="dayUse">${Object.entries(dayUse).map(([v,n])=>`<option value="${v}" ${company.dayUse===v?'selected':''}>${n}</option>`).join('')}</select></label></div>${field('시설·편의정보','facilities',company.facilities)}<label class="field"><span>변경 근거</span><textarea name="reason" required maxlength="1000" placeholder="확인한 객실 수, 안내 위치, 확인 날짜 등을 적어 주세요."></textarea></label><button class="button primary" type="submit">검수 요청 보내기</button></form>${requests.length?`<ol class="history-list">${requests.map(row=>`<li>${esc(labels[row.status] || row.status)} · ${esc(koreaDate(row.submittedAt))}<p>${esc(row.reason)}</p>${row.reviewMessage?`<p>${esc(row.reviewMessage)}</p>`:''}${row.status==='pending'?`<button class="button small" data-action="withdraw" data-request="${esc(row.requestId)}">요청 철회</button>`:''}</li>`).join('')}</ol>`:''}</details></article>`;
+  }
+  function search(kind) { return `<section class="card search-box"><h2>${kind==='region'?'관심지역 추가':kind==='own'?'내 매장 등록':'경쟁업체 추가'}</h2><form id="search-form" data-kind="${kind}"><label class="field"><span>${kind==='region'?'시군구 이름':'업체명·주소·플레이스 번호'}</span><input name="q" required minlength="2" maxlength="120" placeholder="두 글자 이상 입력하세요."></label><button class="button" type="submit">저장된 업체·지역 검색</button></form><div id="search-results" class="search-results" aria-live="polite"></div></section>`; }
+  function render() {
+    searchSequence++;
+    $('#logout').hidden = !state;
+    $('#navigation').innerHTML = state ? menus.map(([key,label])=>`<a href="#${key}" class="nav-link ${route()===key?'active':''}">${label}</a>`).join(''):'';
+    $('#customer-name').textContent = state ? state.customer.username : '사분 인사이트';
+    if (!state) { auth(); return; }
+    const c = state.customer, relations = c.relations.filter(row=>['active','pending'].includes(row.status));
+    const own = relations.filter(row=>row.kind==='own'), competitors = relations.filter(row=>row.kind==='competitor');
+    const current = menus.find(([key])=>key===route()) || menus[0];
+    let content = '';
+    if (current[0]==='home') content = `<section class="welcome-banner"><div><span class="eyebrow">YOUR BUSINESS, CONNECTED</span><h2>${esc(c.projectName || c.username)}님의 분석 공간</h2><p>등록한 매장과 비교 대상을 한곳에서 관리하세요.</p></div></section><div class="stat-grid"><article class="stat-card"><div class="stat-label">내 매장</div><div class="stat-value">${own.length}<small> / 1곳</small></div></article><article class="stat-card"><div class="stat-label">경쟁업체</div><div class="stat-value">${competitors.length}<small> / ${c.entitlements.competitorLimit}곳</small></div></article><article class="stat-card"><div class="stat-label">관심지역</div><div class="stat-value">${c.regions.filter(row=>row.status==='active').length}<small> / ${c.entitlements.interestRegionLimit}곳</small></div></article></div><div class="connected-list">${own.map(companyCard).join('') || '<div class="empty-note">내 매장을 등록하거나, 설정에서 매장 준비 중으로 시작하세요.</div>'}</div>`;
+    if (current[0]==='property') content = `<div class="connected-list">${own.map(companyCard).join('') || '<div class="empty-note">내 매장 등록 후 관리자의 연결 확인을 받습니다.</div>'}</div>${own.length?'':search('own')}`;
+    if (current[0]==='competitors') content = `<p class="muted">등록 ${competitors.length} / ${c.entitlements.competitorLimit}곳 · 제공 수량 변경은 관리자에게 문의하세요.</p><div class="connected-list">${competitors.map(companyCard).join('') || '<div class="empty-note">비교할 업체를 등록해 주세요.</div>'}</div>${competitors.length<c.entitlements.competitorLimit?search('competitor'):''}`;
+    if (current[0]==='regions') content = `<div class="connected-list">${state.regions.map(row=>`<article class="connected-row"><h3>${esc(row.label)}</h3><p class="muted">지역 지표 연결 준비 중 · 자료 없음은 0으로 표시하지 않습니다.</p>${c.regions.some(r=>r.regionKey===row.id&&r.status==='active')?`<button class="button small" data-action="archive-region" data-relation="${esc(c.regions.find(r=>r.regionKey===row.id&&r.status==='active').relationId)}">관심지역 해제</button>`:'<span class="status-pill">내 매장 소재 지역</span>'}</article>`).join('') || '<div class="empty-note">관심지역을 등록해 주세요.</div>'}</div>${c.regions.filter(activeRegion).length<c.entitlements.interestRegionLimit?search('region'):''}`;
+    if (current[0]==='reports') content = '<section class="card"><h2>리포트 연결 준비 중</h2><p class="muted">검토·발행한 월간 리포트를 이곳에 배정할 예정입니다. 주간 리포트는 집계 검증 후 제공합니다.</p></section>';
+    if (current[0]==='settings') content = `<section class="card"><h2>사업 정보</h2><form id="onboarding-form"><label class="field"><span>현재 상태</span><select name="businessStatus"><option value="planning" ${c.businessStatus==='planning'?'selected':''}>매장 준비 중</option><option value="owned" ${c.businessStatus==='owned'?'selected':''}>내 매장 등록</option></select></label>${field('매장·프로젝트 이름','projectName',c.projectName)}<button class="button primary" type="submit">저장</button></form></section>`;
+    $('#main').innerHTML = `<div class="page-heading"><div><span class="eyebrow">SABUN INSIGHT</span><h1>${current[1]}</h1><p>등록한 대상과 정보 수정 내역을 관리합니다.</p></div></div>${content}`;
+  }
+  function activeRegion(row) { return row.status==='active'; }
+  document.addEventListener('submit', async event => {
+    event.preventDefault(); if(busy) return;
+    const form=event.target, p=Object.fromEntries(new FormData(form)); busy=true;
+    form.querySelectorAll('button').forEach(button=>button.disabled=true);
+    try {
+      if(form.id==='auth-form') {
+        const signup=route()==='signup'&&config.signupEnabled;
+        state=await api(signup?'/auth/signup':'/auth/login', {...p,...(signup?{agreeTerms:!!p.agreeTerms,agreePrivacy:!!p.agreePrivacy,confirmAge:!!p.confirmAge,termsVersion:config.termsVersion,privacyVersion:config.privacyVersion}:{})}); location.hash='home'; render();
+      } else if(form.id==='onboarding-form') await command('onboarding',p);
+      else if(form.id==='search-form') {
+        const serial=++searchSequence, kind=form.dataset.kind;
+        const data=await api(`/catalog/${kind==='region'?'regions':'companies'}?q=${encodeURIComponent(p.q)}`);
+        if(serial!==searchSequence)return;
+        $('#search-results').innerHTML=data.results.map(row=>`<button type="button" data-action="add" data-kind="${kind}" data-id="${esc(row.companyId||row.id)}"><strong>${esc(row.name||row.label)}</strong><span class="muted">${esc(row.address||'')} · 등록</span></button>`).join('') || '<p class="muted">저장된 후보가 없습니다. 관리자에게 업체 등록을 요청해 주세요.</p>';
+      } else if(form.dataset.settings) await command('settings',{companyId:form.dataset.settings,...p});
+      else if(form.dataset.correction) {
+        const company=state.companies.find(row=>row.companyId===form.dataset.correction), proposed={};
+        for(const key of ['name','address','rooms','dayUse','facilities']) {
+          if(key==='rooms'&&p[key]==='')continue;
+          const value=key==='rooms'?Number(p[key]):p[key].trim(); if(value!==company[key])proposed[key]=value;
+        }
+        if(!Object.keys(proposed).length)throw new Error('변경할 정보를 입력해 주세요.');
+        await command('correction',{companyId:company.companyId,baseVersion:company.version,proposed,reason:p.reason});
+      }
+    } catch(error) { const slot=form.querySelector('.form-error'); if(slot)slot.textContent=error.message; else toast(error.message); if(error.code==='STALE_REVISION'||error.code==='STALE_COMPANY'){state=await api('/me');render();} }
+    finally {busy=false;form.querySelectorAll('button').forEach(button=>button.disabled=false);}
+  });
+  document.addEventListener('click',async event=>{
+    const button=event.target.closest('[data-action]');if(!button||busy)return;
+    const action=button.dataset.action;
+    if(action==='theme'){const theme=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=theme;try{localStorage.setItem('insight-theme',theme);}catch{}return;}
+    busy=true;button.disabled=true;
+    try{
+      if(action==='logout'){await api('/auth/logout',{});state=null;location.hash='login';render();}
+      else if(action==='add')await command(button.dataset.kind==='region'?'add-region':'add-company',button.dataset.kind==='region'?{regionKey:button.dataset.id}:{kind:button.dataset.kind,companyId:button.dataset.id});
+      else if(action==='archive')await command('archive-company',{relationId:button.dataset.relation});
+      else if(action==='archive-region')await command('archive-region',{relationId:button.dataset.relation});
+      else if(action==='withdraw')await command('withdraw-correction',{requestId:button.dataset.request});
+      else if(action==='prepare')await command('prepare-data',{companyId:button.dataset.company});
+    }catch(error){toast(error.message);}finally{busy=false;button.disabled=false;}
+  });
+  window.addEventListener('hashchange',render);
+  try{document.documentElement.dataset.theme=localStorage.getItem('insight-theme')==='dark'?'dark':'light';}catch{}
+  (async()=>{try{config=await api('/config');try{state=await api('/me');}catch(error){if(error.status!==401)throw error;}render();}catch(error){$('#main').innerHTML=`<section class="card"><h1>자료 연결 확인이 필요합니다.</h1><p>${esc(error.message)}</p><a class="button" href="/">다시 열기</a></section>`;}})();
+})();

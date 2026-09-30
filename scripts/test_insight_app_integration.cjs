@@ -1,0 +1,60 @@
+'use strict';
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const net = require('node:net');
+const crypto = require('node:crypto');
+const {spawn} = require('node:child_process');
+const {test} = require('node:test');
+
+test('real DataLab registration records the actual Insight consent, exposes customer admin, and preserves state on restart', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(),'insight-app-test-'));
+  await fs.mkdir(path.join(dir,'company_master'),{recursive:true});
+  await fs.writeFile(path.join(dir,'company_master','companies.json'),JSON.stringify({companies:{cmp_test:{companyId:'cmp_test',primaryName:'수집 업체명',addresses:['이전 주소'],placeIds:['0000000001'],runIds:[],keywords:{},manualCorrection:{active:true,lodgingBasisTotal:16},adminProfile:{active:true,primaryName:'검수 업체명',address:'검수된 주소',businessVerification:{registrationNumber:'private-fixture'}}}}}));
+  const reservation = net.createServer();
+  await new Promise(resolve => reservation.listen(0,'127.0.0.1',resolve));
+  const port=reservation.address().port;
+  await new Promise(resolve=>reservation.close(resolve));
+  const origin=`http://127.0.0.1:${port}`, token=crypto.randomBytes(32).toString('hex');
+  const inherited=Object.fromEntries(Object.entries(process.env).filter(([key])=>['PATH','SYSTEMROOT','WINDIR','TEMP','TMP'].includes(key.toUpperCase())));
+  const env={...inherited,PORT:String(port),HOST:'127.0.0.1',DATA_DIR:dir,OUTPUTS_DIR:path.join(dir,'outputs'),CONFIG_DIR:path.join(dir,'config'),GLAMPING_ADMIN_USER:'fixture-admin',GLAMPING_ADMIN_PASSWORD:'FixtureAdmin2026!',GLAMPING_B2B_ENABLED:'1',GLAMPING_B2B_USER:'reserved-fixture',GLAMPING_B2B_PASSWORD:'FixtureReserved2026!',TOURISM_VISITOR_MONTHLY_SYNC_ENABLED:'0',TOURISM_DEMAND_STRENGTH_BACKFILL_ENABLED:'0',INSIGHT_CONNECTION_ENABLED:'1',INSIGHT_SERVICE_TOKEN:token,INSIGHT_SIGNUP_ENABLED:'1',INSIGHT_TERMS_VERSION:'insight-fixture-terms-v1',INSIGHT_PRIVACY_VERSION:'insight-fixture-privacy-v1',INSIGHT_TERMS_URL:'https://example.com/insight-terms',INSIGHT_PRIVACY_URL:'https://example.com/insight-privacy'};
+  let child;
+  async function start(){
+    child=spawn(process.execPath,[path.join(__dirname,'glamping_app_server.cjs')],{cwd:path.resolve(__dirname,'..'),env,stdio:['ignore','pipe','pipe']});
+    await new Promise((resolve,reject)=>{
+      const timeout=setTimeout(()=>reject(new Error('local app startup timed out')),15000);
+      child.stdout.on('data',chunk=>{if(String(chunk).includes('Lodging datalab beta app running')){clearTimeout(timeout);resolve();}});
+      child.once('exit',code=>{clearTimeout(timeout);reject(new Error(`local app exit ${code}`));});
+    });
+  }
+  async function stop(){if(child&&!child.killed){const current=child;await new Promise(resolve=>{current.once('exit',resolve);current.kill();});}}
+  t.after(stop);
+  const internal=(route,body,session)=>fetch(`${origin}/api/insight/v1${route}`,{method:body?'POST':'GET',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json',...(session?{'X-Insight-Session':session}:{})},...(body?{body:JSON.stringify(body)}:{})});
+  await start();
+  const signup=await internal('/auth/signup',{username:'fixture-member',password:'FixtureMember2026!',passwordConfirm:'FixtureMember2026!',phone:'01000000000',email:'fixture@example.invalid',agreeTerms:true,agreePrivacy:true,confirmAge:true,termsVersion:env.INSIGHT_TERMS_VERSION,privacyVersion:env.INSIGHT_PRIVACY_VERSION});
+  assert.equal(signup.status,200);const customer=await signup.json();
+  assert.equal(customer.customer.insightConsent.termsVersion,env.INSIGHT_TERMS_VERSION);
+  const central=JSON.parse(await fs.readFile(path.join(dir,'customer_db','b2b_members.json'),'utf8')).members[0];
+  assert.equal(central.consents.source,'insight');
+  assert.equal(central.consents.termsVersion,env.INSIGHT_TERMS_VERSION);
+  assert.equal(central.consents.privacyUrl,env.INSIGHT_PRIVACY_URL);
+  assert.match(central.passwordHash,/^pbkdf2_sha256/);
+  assert.equal(JSON.stringify(customer).includes('passwordHash'),false);
+  const linked=await fetch(`${origin}/api/insight/v1/commands`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','X-Insight-Session':customer.token,'X-CSRF-Token':customer.csrfToken},body:JSON.stringify({action:'add-company',revision:customer.customer.revision,requestKey:crypto.randomUUID(),payload:{kind:'competitor',companyId:'cmp_test'}})});
+  assert.equal(linked.status,200);const linkedState=await linked.json();
+  assert.equal(linkedState.companies[0].name,'검수 업체명');assert.equal(linkedState.companies[0].address,'검수된 주소');assert.equal(linkedState.companies[0].rooms,16);
+  assert.equal(JSON.stringify(linkedState).includes('private-fixture'),false);
+  const adminLogin=await fetch(`${origin}/api/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'fixture-admin',password:'FixtureAdmin2026!'})});
+  assert.equal(adminLogin.status,200);
+  const cookie=adminLogin.headers.get('set-cookie').split(';')[0];
+  const listing=await fetch(`${origin}/api/admin/insight-customers`,{headers:{Cookie:cookie}});
+  assert.equal(listing.status,200);assert.equal((await listing.json()).customers[0].customerId,customer.customer.customerId);
+  const disabled=await fetch(`${origin}/api/admin/insight-customers/${customer.customer.customerId}/commands`,{method:'POST',headers:{Cookie:cookie,Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({action:'entitlements',revision:linkedState.customer.revision,requestKey:crypto.randomUUID(),payload:{competitorLimit:5,interestRegionLimit:2,reason:'fixture plan'}})});
+  assert.equal(disabled.status,200);
+  await stop();await start();
+  const resumed=await internal('/me',null,customer.token);
+  assert.equal(resumed.status,200);assert.equal((await resumed.json()).customer.entitlements.competitorLimit,5);
+  const noService=await fetch(`${origin}/api/insight/v1/me`);assert.equal(noService.status,401);
+  const noAdmin=await fetch(`${origin}/api/admin/insight-customers`,{redirect:'manual'});assert.ok([302,401].includes(noAdmin.status));
+});

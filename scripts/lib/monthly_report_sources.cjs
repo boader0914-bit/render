@@ -213,7 +213,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, proje
       globalWarnings, globalDiagnostics: { malformedHistoryLines, unmatchedCompanyRows: globalUnmatchedCompanyRows, duplicatePlaceCompanies: globalDuplicatePlaceCompanies,
         ...(request.type === "region" ? { unmappedRegionCompanies } : {}) }, context };
   }
-  return { options, loadSources };
+  return { options, loadSources, catalog };
 }
 
 module.exports = { createMonthlyReportSources };

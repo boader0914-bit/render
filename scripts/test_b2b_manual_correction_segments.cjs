@@ -192,6 +192,25 @@ async function main() {
     assert.equal(saved.companies[companyId].manualCorrection.lodgingBasisTotal, 8);
     assert.equal(saved.companies[companyId].inventory.latest.productSnapshot.daily[0].total, 10, "original stored inventory remains untouched");
     assert.equal(saved.companies[companyId].inventory.latest.productSnapshot.daily[0].phoneBookings, 4);
+    assert.equal(saved.companies[companyId].manualCorrection.roomSegments.length, 2, "partial edits retain existing room types");
+    assert.deepEqual(saved.companies[companyId].manualCorrection.facilityTags, ["수영장", "바베큐"]);
+    const revision = saved.companies[companyId].manualCorrectionRevision;
+    const manyTypes = await request(baseUrl, "POST", "/api/company-master/manual-correction", {
+      companyId, expectedRevision: revision, roomSegments: Array.from({length: 12}, (_,i)=>({type:`객실 ${i+1}`,count:4}))
+    }, cookies);
+    assert.equal(manyTypes.statusCode, 200);
+    assert.equal(manyTypes.body.company.manualCorrection.roomSegments.length, 12, "reviewed room types are not truncated at eight");
+    const stale = await request(baseUrl, "POST", "/api/company-master/manual-correction", {companyId,expectedRevision:revision,lodgingBasisTotal:99}, cookies);
+    assert.equal(stale.statusCode,409,"stale editor cannot overwrite a newer correction");
+    for (let n=0;n<32;n++) {
+      const changed = await request(baseUrl, "POST", "/api/company-master/manual-correction", {companyId,note:`검수 이력 ${n}`}, cookies);
+      assert.equal(changed.statusCode,200);
+    }
+    const history = JSON.parse(await fsp.readFile(path.join(companyMasterDir, "companies.json"), "utf8")).companies[companyId];
+    assert.equal(history.manualCorrectionHistory.length,35,"full review history survives beyond thirty edits");
+    assert.equal(history.manualCorrectionHistory[2].previousCorrection.roomSegments.length,2);
+    assert.equal(history.manualCorrectionHistory[2].correction.roomSegments.length,12);
+    assert.equal(history.inventory.latest.productSnapshot.daily[0].total,10);
 
     const cleared = await request(baseUrl, "POST", "/api/company-master/manual-correction", { companyId, active: false }, cookies);
     assert.equal(cleared.statusCode, 200);

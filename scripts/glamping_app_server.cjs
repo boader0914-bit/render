@@ -432,6 +432,19 @@ const keywordWorkerSchedulers = Object.fromEntries(["web", "manual", "scheduled"
   inspectResult: (result,payload) => result?.collectionQuality || inspectDailyCollectionResult(result,payload)
 })]));
 const collectorRequests = createCollectorRequests({dataDir:DATA_DIR,run:runCrawler,preflight:payload=>assertCollectorReady(payload.workerKey,true)});
+const insightIntegration = require('./lib/insight_integration.cjs').createInsightIntegration({
+  dataDir: DATA_DIR, readCatalog: monthlyReportSources.catalog, readMembers: readB2BMemberStore,
+  authenticateMember: authenticateB2BMember, registerMember: payload => registerB2BMember(payload, { insightConsent: { termsVersion: process.env.INSIGHT_TERMS_VERSION, privacyVersion: process.env.INSIGHT_PRIVACY_VERSION, termsUrl: process.env.INSIGHT_TERMS_URL, privacyUrl: process.env.INSIGHT_PRIVACY_URL } }), requireAdmin: requireAdminSession, collectorRequests,
+  verifyStored: async (job, runId) => {
+    const master = await readCompanyMaster();
+    const company = master.companies?.[job.companyId];
+    if (!company || !company.runIds?.includes(runId)) return false;
+    const manifest = JSON.parse(await fsp.readFile(path.join(OUTPUTS_DIR, runId, 'manifest.json'), 'utf8'));
+    return manifest.keyword === job.keyword && manifest.searchMode === 'company' && manifest.checkIn === job.scope.checkIn
+      && manifest.checkOut === job.scope.checkOut && Number(manifest.bookingRangeDays) >= job.scope.bookingRangeDays
+      && manifest.dayUseMode === job.scope.dayUseMode && (company.placeIds || []).includes(job.placeIds[0]);
+  }
+});
 const pausedScheduleOccurrences = new Set();
 
 async function assertCollectorReady(workerKey,requireConnection=false) {
@@ -2661,7 +2674,7 @@ async function registerB2BMemberUnlocked(payload = {}, context = {}) {
     lastLoginAt: "",
     searchCount: 0,
     policy: normalizeB2BMemberPolicy({}, "member"),
-    consents: consentRecordFromRequest(context.req, now, payload),
+    consents: { ...consentRecordFromRequest(context.req, now, payload), ...(context.insightConsent ? { ...context.insightConsent, source: 'insight' } : {}) },
     profile: memberProfileFromPayload(payload)
   };
   store.members.push(member);
@@ -2785,8 +2798,7 @@ function b2bInterestLodgeSegmentHasInput(row = {}) {
 function sanitizeManualCorrectionRoomSegments(value = []) {
   return (Array.isArray(value) ? value : [])
     .map((row) => sanitizeB2BInterestLodgeSegment(row))
-    .filter((row) => b2bInterestLodgeSegmentHasInput(row))
-    .slice(0, B2B_INTEREST_LODGE_SEGMENT_LIMIT);
+    .filter((row) => b2bInterestLodgeSegmentHasInput(row));
 }
 
 function manualCorrectionRoomSegments(correction = {}) {
@@ -5456,6 +5468,7 @@ const B2B_PRIVATE_FIELD_KEYS = new Set([
   "regionalOperations",
   "manualCorrection",
   "manualCorrectionHistory",
+  "manualCorrectionRevision",
   "adminProfile",
   "adminProfileHistory",
   "companyManualCorrection",
@@ -11157,6 +11170,7 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     correctionStatus: companyCorrectionStatus(company, inventory),
     manualCorrection,
     manualCorrectionHistory: (company.manualCorrectionHistory || []).slice(-8),
+    manualCorrectionRevision: company.manualCorrectionRevision || 0,
     adminReview: company.adminReview || null,
     adminReviewHistory: (company.adminReviewHistory || []).slice(-8),
     salesContact: company.salesContact || null,
@@ -12660,8 +12674,8 @@ function mergeCompanyRecords(master, companyIds = [], candidateKey = "") {
       ...(target.manualCorrectionHistory || []),
       ...(source.manualCorrectionHistory || [])
     ]
-      .sort((a, b) => String(a.at || "").localeCompare(String(b.at || "")))
-      .slice(-50);
+      .sort((a, b) => String(a.at || "").localeCompare(String(b.at || "")));
+    target.manualCorrectionRevision = Math.max(target.manualCorrectionRevision || 0, source.manualCorrectionRevision || 0) + 1;
     if (!target.adminReview && source.adminReview) {
       target.adminReview = source.adminReview;
     }
@@ -12743,6 +12757,12 @@ async function saveCompanyManualCorrectionUnlocked(payload = {}) {
     error.statusCode = 404;
     throw error;
   }
+  if (Object.hasOwn(payload, 'expectedRevision') && payload.expectedRevision !== (company.manualCorrectionRevision || 0)) {
+    throw Object.assign(new Error('다른 화면에서 업체 검수값을 수정했습니다. 최신값을 확인해 주세요.'), { statusCode: 409, code: 'STALE_COMPANY_CORRECTION' });
+  }
+  const previousCorrection = company.manualCorrection ? structuredClone(company.manualCorrection) : null;
+  // A partial edit must not erase room types, product corrections or price bases not submitted by this screen.
+  payload = { ...(company.manualCorrection || {}), ...payload };
   const savedAt = new Date().toISOString();
   const lodgingBasisTotal = Number(payload.lodgingBasisTotal);
   const dayUseBasisTotal = Number(payload.dayUseBasisTotal);
@@ -12773,6 +12793,8 @@ async function saveCompanyManualCorrectionUnlocked(payload = {}) {
     {
       at: savedAt,
       action: shouldClear ? "clear" : "save",
+      previousCorrection,
+      correction: company.manualCorrection ? structuredClone(company.manualCorrection) : null,
       lodgingBasisTotal: company.manualCorrection?.lodgingBasisTotal || null,
       dayUseBasisTotal: company.manualCorrection?.dayUseBasisTotal || null,
       roomSegmentCount: company.manualCorrection?.roomSegments?.length || 0,
@@ -12787,7 +12809,8 @@ async function saveCompanyManualCorrectionUnlocked(payload = {}) {
       couponNames: company.manualCorrection?.couponNames || "",
       note: company.manualCorrection?.note || ""
     }
-  ].slice(-30);
+  ];
+  company.manualCorrectionRevision = (company.manualCorrectionRevision || 0) + 1;
   company.duplicateNotes = [
     ...(company.duplicateNotes || []),
     {
@@ -18113,6 +18136,10 @@ async function route(req, res) {
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
 
   try {
+    if (reqUrl.pathname.startsWith('/api/insight/v1/')) {
+      if (insightIntegration && await insightIntegration.internal(req, res, reqUrl)) return;
+      return notFound(res);
+    }
     if (reqUrl.pathname.startsWith("/api/collector-worker/") || reqUrl.pathname.startsWith("/api/collector-worker-scheduled/")) {
       const broker=collectorBrokers[reqUrl.pathname.startsWith("/api/collector-worker-scheduled/") ? "scheduled" : "manual"];
       if (!broker) return notFound(res);
@@ -18311,6 +18338,13 @@ async function route(req, res) {
 
     if (!requireLogin(req, res, reqUrl)) return;
     const session = getSession(req);
+
+    if (reqUrl.pathname === '/api/admin/insight-customers' || reqUrl.pathname.startsWith('/api/admin/insight-customers/')) {
+      if (!requireAdminSession(session, req, res)) return;
+      if (!insightIntegration) return send(res, 503, { error: { code: 'INSIGHT_NOT_CONFIGURED', message: '인사이트 연결 설정 전입니다.' } });
+      if (await insightIntegration.admin(req, res, reqUrl, session)) return;
+      return notFound(res);
+    }
 
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/account-request") {
       if (req.method === "HEAD") return sendHead(res, 200, "text/html; charset=utf-8");

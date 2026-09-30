@@ -50,7 +50,8 @@
     "test:region-analysis": "node scripts/test_region_analysis_navigation.cjs && node scripts/test_region_management_navigation.cjs && node scripts/test_region_management_disclosure.cjs && node scripts/test_location_profile_analysis_links.cjs && node scripts/test_demand_strength_refresh_state.cjs && node scripts/test_location_tourism_index_refresh.cjs",
     "test:analysis-home": "node scripts/test_analysis_home_navigation.cjs && node scripts/test_industry_analysis_home.cjs && node scripts/test_region_analysis_home.cjs && node scripts/test_run_collection_timestamp.cjs && node scripts/test_sales_observation_summary.cjs",
     "start:collector-worker-web": "node scripts/collector_worker_web.cjs",
-    "test:collector-roles": "node --test scripts/test_collector_requests.cjs scripts/test_admin_crawl_requests_ui.cjs scripts/test_collection_reuse.cjs scripts/test_collection_shared_storage.cjs scripts/test_keyword_worker_scheduler.cjs scripts/test_collector_controls_ui.cjs scripts/test_collector_worker_web.cjs scripts/test_collector_product_coverage.cjs && node scripts/test_collector_roles_integration.cjs && npm run test:operating-web"
+    "test:collector-roles": "node --test scripts/test_collector_requests.cjs scripts/test_admin_crawl_requests_ui.cjs scripts/test_collection_reuse.cjs scripts/test_collection_shared_storage.cjs scripts/test_keyword_worker_scheduler.cjs scripts/test_collector_controls_ui.cjs scripts/test_collector_worker_web.cjs scripts/test_collector_product_coverage.cjs && node scripts/test_collector_roles_integration.cjs && npm run test:operating-web",
+    "test:insight-connection": "node --test scripts/test_insight_connection.cjs scripts/test_insight_app_integration.cjs scripts/test_monthly_report_sources.cjs customer-portal/test/*.test.cjs && node scripts/test_b2b_manual_correction_segments.cjs"
   },
   "engines": {
     "node": ">=22.13 <25"

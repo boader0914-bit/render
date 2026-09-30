@@ -94,7 +94,7 @@ test("server save preserves product corrections on ordinary edits, validates bef
   let master = { companies: { [companyId]: { companyId, manualCorrection: null } } }, writes = 0;
   // Exercise the production persistence function with memory-only I/O. Other
   // field sanitizers are outside this contract; the new strict sanitizer is real.
-  const context = vm.createContext({ sanitizeProductStockCorrections,
+  const context = vm.createContext({ sanitizeProductStockCorrections, structuredClone,
     readCompanyMaster: async () => master,
     writeCompanyMaster: async (value) => { master = value; writes++; },
     summarizeCompanyMaster: async () => ({}), companyRecordSummary: (company) => company,
