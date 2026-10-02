@@ -31,7 +31,7 @@
 
 ## 검증 및 배포 경계
 
-2026-10-02 로컬 개발. 운영 배포와 실제 외부 수집은 이 작업에서 실행하지 않았다.
+2026-10-02 로컬 개발 및 검증 후, 같은 날 사용자 지시로 중앙 웹과 인사이트에 운영 배포했다. 실제 외부 수집은 배포 검수 중 실행하지 않았다.
 
 검사 64건 통과:
 
@@ -42,3 +42,16 @@ node --test scripts/test_insight_collection.cjs scripts/test_insight_connection.
 실제 로컬 DataLab/BFF 서버에서 지역 키워드 결과 재사용, 동명 타 업체 제외, DB 검수 16실 유지, 상품 7→6 보정 조회, 원본 파일 불변, 고객/관리자 고객 보기 권한을 확인했다. 가상 업체로 브라우저 수집→결과→상품 수정 요청→변경 이력까지 검수했고 390px 모바일과 라이트/다크 색상을 확인했다.
 
 실제 운영 수집 성공 여부는 별도 운영 검증 대상이다. 배포 시 현재 수집/일정을 먼저 확인하고 중앙 웹과 인사이트에 검증한 동일 커밋을 지정한다. 워커 재배포는 필요하지 않다.
+
+## 운영 배포 확인 — 2026-10-02
+
+- 배포 커밋: `4e01dd65d060bf1495afd8d1c75f908efb7dd6a3`.
+- 중앙 웹 `srv-da9q6don74is738t7id0`: `dep-davqr8hsrm7s73d1mphg`, Render `Deploy succeeded | Live`, 22:12:42 KST, 표시 소요 40.3초.
+- 인사이트 `srv-dathlifavr4c73dj3jt0`: `dep-davqrj0u01pc73fq957g`, Render `Deploy succeeded | Live`, 22:13:14 KST, 표시 소요 29.8초.
+- 두 서비스 `/api/health`의 `buildCommit=4e01dd65d060` 확인. 인사이트 `mode=connected`.
+- 배포 전후 세 수집기 모두 실행·대기 0, 보호 중단 없음. 기존 일일 일정과 web/scheduled 일정은 비활성, manual 예약은 활성 및 다음 실행 `2026-10-03T08:00:00.000Z`로 유지. 디스크 여유 약 8,603MiB.
+- 로그인된 실제 관리자 고객 화면에서 등록된 월명 글램핑(`cmp_place_35644668`)의 결과 조회 확인: DB 검수 16실, 상품 5개, 2026-10-02~10-15의 14일 자료. 저장 run `gyeongnam_manual_coeejjcoimbddhlcniekmaog_glamping_20261002_170013`.
+- 이전 자료와 당일 21:03 접수 요청의 상태가 분리되어 표시됨. 상품별 날짜·정상 응답 0·판매금액 및 상품 수정 요청 폼을 확인. 운영 검수 중 실제 수집 버튼이나 수정 요청 제출은 누르지 않았다.
+- 고객/관리자 고객 보기의 새 결과 API는 비로그인 요청에 HTTP 401. 실제 운영 화면 콘솔 오류·경고 없음.
+- 화면 증빙: `C:/Users/User/.codex/visualizations/2026/10/02/insight-collection-review/production-collection-result.png`, `production-product-review.png`, `production-central-live.png`, `production-insight-live.png`.
+- 수집워커 배포, 속도·일정 변경, 운영 데이터 보정은 이번 배포 범위에 포함하지 않았다.
