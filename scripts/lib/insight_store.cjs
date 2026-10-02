@@ -181,7 +181,7 @@ function createInsightStore({ file, now = () => Date.now() }) {
   function corrections(customerId) {
     return db.prepare('SELECT data FROM corrections WHERE customer_id=? ORDER BY rowid DESC').all(customerId).map(row => JSON.parse(row.data));
   }
-  function correct(customerId, command, company) {
+  function correct(customerId, command, company, collection = null) {
     return mutate(customerId, command, customerId, (c, p) => {
       if (command.action === 'withdraw-correction') {
         fields(p, ['requestId']);
@@ -189,6 +189,33 @@ function createInsightStore({ file, now = () => Date.now() }) {
         if (!old) throw fault('NOT_FOUND', '철회할 요청을 찾지 못했습니다.', 404);
         old.status = 'withdrawn'; old.closedAt = stamp();
         db.prepare('UPDATE corrections SET status=?,data=? WHERE id=?').run(old.status, JSON.stringify(old), old.requestId);
+        return;
+      }
+      if (command.action === 'product-correction') {
+        fields(p, ['companyId','baseVersion','target','proposed','reason']);
+        fields(p.target, ['runId','productKey','date']); fields(p.proposed, ['total','productType']);
+        if (!company || company.companyId !== p.companyId || !hasCompany(c,p.companyId)) throw fault('NOT_FOUND','등록 업체를 찾을 수 없습니다.',404);
+        if (!collection || collection.companyId !== p.companyId || collection.runId !== p.target.runId || collection.version !== p.baseVersion) throw fault('STALE_COMPANY','수집 결과가 변경되었습니다. 최신 결과를 다시 확인해 주세요.',409);
+        const product = collection.products.find(row => row.key === p.target.productKey);
+        const observation = product?.days.find(row => row.date === p.target.date);
+        if (!observation) throw fault('NOT_FOUND','수정할 상품·숙박일을 확인해 주세요.',404);
+        const proposed = {};
+        if (p.proposed.total !== undefined) {
+          if (observation.status !== 'observed' || observation.total === null) throw fault('RESPONSE_REQUIRED','정상 응답이 있는 날짜의 수량만 보정 요청할 수 있습니다.');
+          if (!Number.isSafeInteger(p.proposed.total) || p.proposed.total < 1 || p.proposed.total > 10000) throw fault('INVALID_ROOMS','객실 수는 1~10,000실의 정수로 입력해 주세요.');
+          proposed.total = p.proposed.total;
+        }
+        if (p.proposed.productType !== undefined) {
+          if (!['lodging','dayuse','unknown'].includes(p.proposed.productType)) throw fault('INVALID_PRODUCT_TYPE','상품 구분을 확인해 주세요.');
+          proposed.productType = p.proposed.productType;
+        }
+        const baseValues = { total:observation.total, productType:product.productType, name:product.name, bizItemId:product.bizItemId };
+        if (!Object.keys(proposed).length || !Object.entries(proposed).some(([k,v])=>baseValues[k]!==v) || !text(p.reason || '',1000)) throw fault('REASON_REQUIRED','변경할 내용과 근거를 입력해 주세요.');
+        const old = corrections(customerId).find(row => row.kind==='product' && row.status==='pending' && row.companyId===p.companyId && JSON.stringify(row.target)===JSON.stringify(p.target));
+        if (old && JSON.stringify(old.proposed)===JSON.stringify(proposed) && old.reason===p.reason) return;
+        if (old) { old.status='superseded'; old.closedAt=stamp(); db.prepare('UPDATE corrections SET status=?,data=? WHERE id=?').run(old.status,JSON.stringify(old),old.requestId); }
+        const row = {requestId:id('cor'),customerId,companyId:p.companyId,kind:'product',target:p.target,status:'pending',baseVersion:collection.version,baseValues,proposed,reason:p.reason,submittedAt:stamp()};
+        db.prepare('INSERT INTO corrections VALUES(?,?,?,?,?)').run(row.requestId,customerId,p.companyId,row.status,JSON.stringify(row));
         return;
       }
       fields(p, ['companyId', 'proposed', 'reason', 'baseVersion']);
@@ -202,7 +229,7 @@ function createInsightStore({ file, now = () => Date.now() }) {
         else proposed[key] = text(value, key === 'facilities' ? 1000 : 200);
       }
       if (!Object.keys(proposed).length || !Object.entries(proposed).some(([key, value]) => company[key] !== value) || !text(p.reason || '', 1000)) throw fault('REASON_REQUIRED', '변경할 내용과 근거를 입력해 주세요.');
-      const old = corrections(customerId).find(row => row.companyId === p.companyId && row.status === 'pending');
+      const old = corrections(customerId).find(row => row.kind !== 'product' && row.companyId === p.companyId && row.status === 'pending');
       if (old && old.baseVersion === company.version && old.reason === p.reason && Object.keys(old.proposed).length === Object.keys(proposed).length && Object.entries(proposed).every(([key,value]) => old.proposed[key] === value)) return;
       if (old) {
         old.status = 'superseded'; old.closedAt = stamp();
@@ -213,7 +240,7 @@ function createInsightStore({ file, now = () => Date.now() }) {
       db.prepare('INSERT INTO corrections VALUES(?,?,?,?,?)').run(row.requestId, customerId, p.companyId, row.status, JSON.stringify(row));
     });
   }
-  function reviewCorrection(requestId, decision, reason, actor, currentCompany) {
+  function reviewCorrection(requestId, decision, reason, actor, currentCompany, collection = null) {
     return transaction(() => {
       const saved = db.prepare('SELECT data FROM corrections WHERE id=?').get(requestId);
       if (!saved) throw fault('NOT_FOUND', '검수 요청을 찾을 수 없습니다.', 404);
@@ -221,7 +248,9 @@ function createInsightStore({ file, now = () => Date.now() }) {
       if (row.status !== 'pending') throw fault('REVIEW_CLOSED', '이미 처리한 검수 요청입니다.', 409);
       if (!['verified', 'rejected'].includes(decision) || !text(reason || '', 1000)) throw fault('INVALID_REVIEW', '처리 결과와 사유를 확인해 주세요.');
       // This endpoint certifies an existing central edit; it never guesses how to apply a historic correction.
-      if (decision === 'verified' && (!currentCompany || currentCompany.companyId !== row.companyId || Object.entries(row.proposed).some(([key, value]) => currentCompany[key] !== value))) throw fault('CENTRAL_EDIT_REQUIRED', '업체 DB에서 제안값을 검수·반영한 뒤 확인해 주세요.', 409);
+      const product = row.kind==='product' ? collection?.products?.find(p=>p.bizItemId === row.baseValues.bizItemId && p.bizItemId) : null;
+      const current = row.kind==='product' ? {total:product?.days.find(d=>d.date===row.target.date)?.total,productType:product?.productType} : currentCompany;
+      if (decision === 'verified' && (!currentCompany || currentCompany.companyId !== row.companyId || !current || Object.entries(row.proposed).some(([key, value]) => current[key] !== value))) throw fault('CENTRAL_EDIT_REQUIRED', '업체 DB에서 제안값을 검수·반영한 뒤 확인해 주세요.', 409);
       row.status = decision; row.closedAt = stamp(); row.reviewMessage = reason;
       db.prepare('UPDATE corrections SET status=?,data=? WHERE id=?').run(row.status, JSON.stringify(row), requestId);
       audit(row.customerId, actor, 'correction-review', { requestId, decision, reason, companyVersion: currentCompany?.version });
@@ -231,13 +260,14 @@ function createInsightStore({ file, now = () => Date.now() }) {
   }
   function preparation(customerId, command, company) {
     return mutate(customerId, command, customerId, (c, p) => {
-      fields(p, ['companyId']);
+      fields(p, command.action === 'collect' ? ['companyId','checkIn','bookingRangeDays','dayUseMode'] : ['companyId']);
       if (!company || !hasCompany(c, p.companyId)) throw fault('NOT_FOUND', '등록 업체를 찾을 수 없습니다.', 404);
       const day = new Date(now() + 9 * 3600000).toISOString().slice(0, 10);
-      const existing = db.prepare('SELECT data FROM preparations WHERE customer_id=? AND company_id=?').all(customerId, p.companyId).map(row => JSON.parse(row.data)).find(row => row.observationDay === day);
+      const intent = command.action === 'collect' ? {checkIn:p.checkIn,bookingRangeDays:p.bookingRangeDays,dayUseMode:p.dayUseMode} : null;
+      const existing = db.prepare('SELECT data FROM preparations WHERE customer_id=? AND company_id=?').all(customerId, p.companyId).map(row => JSON.parse(row.data)).find(row => row.observationDay === day && (!intent || JSON.stringify(row.intent)===JSON.stringify(intent)));
       if (existing) return;
       const row = { requestId: id('prep'), companyId: p.companyId, customerId, observationDay: day, status: 'needs_review',
-        submittedAt: stamp(), message: '요청을 접수했습니다. 관리자가 기존 자료와 준비 범위를 확인합니다.' };
+        intent, submittedAt: stamp(), message: '요청을 접수했습니다. 관리자가 기존 자료와 준비 범위를 확인합니다.' };
       db.prepare('INSERT INTO preparations VALUES(?,?,?,?,?)').run(row.requestId, customerId, p.companyId, command.requestKey, JSON.stringify(row));
     });
   }
@@ -258,7 +288,8 @@ function createInsightStore({ file, now = () => Date.now() }) {
       const job = existing ? JSON.parse(existing.data) : { jobId: crypto.randomUUID(), companyId: company.companyId, observationDay: request.observationDay,
         scope, keyword: company.name, placeIds: company.placeIds, status: 'dispatching', createdAt: stamp(), updatedAt: stamp() };
       if (!existing) db.prepare('INSERT INTO preparation_jobs VALUES(?,?,?)').run(job.jobId, fingerprint, JSON.stringify(job));
-      request.jobId = job.jobId; request.status = job.status; request.scope = scope; request.message = '자료 준비 작업의 접수 상태를 확인하고 있습니다.';
+      request.jobId = job.jobId; request.status = job.status; request.scope = scope; request.message = job.message || '자료 준비 작업의 접수 상태를 확인하고 있습니다.';
+      Object.assign(request,{runId:job.runId || null,errorCode:job.errorCode || null,reused:job.reused===true,updatedAt:job.updatedAt});
       db.prepare('UPDATE preparations SET data=? WHERE id=?').run(JSON.stringify(request), requestId);
       audit(customerId, actor, 'preparation-dispatch', { requestId, jobId: job.jobId, shared: Boolean(existing), scope });
       return { job, start: !existing };
@@ -272,7 +303,7 @@ function createInsightStore({ file, now = () => Date.now() }) {
       db.prepare('UPDATE preparation_jobs SET data=? WHERE id=?').run(JSON.stringify(job), jobId);
       for (const row of db.prepare('SELECT id,data FROM preparations').all()) {
         const request = JSON.parse(row.data); if (request.jobId !== jobId) continue;
-        Object.assign(request, { status, message, updatedAt: job.updatedAt, ...(job.runId ? { runId: job.runId } : {}) });
+        Object.assign(request, { status, message, updatedAt: job.updatedAt, errorCode:job.errorCode || null, reused:job.reused===true, ...(job.runId ? { runId: job.runId } : {}) });
         db.prepare('UPDATE preparations SET data=? WHERE id=?').run(JSON.stringify(request), row.id);
       }
       return job;

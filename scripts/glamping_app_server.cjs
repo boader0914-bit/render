@@ -435,16 +435,58 @@ const collectorRequests = createCollectorRequests({dataDir:DATA_DIR,run:runCrawl
 const insightIntegration = require('./lib/insight_integration.cjs').createInsightIntegration({
   dataDir: DATA_DIR, readCatalog: monthlyReportSources.catalog, readMembers: readB2BMemberStore,
   authenticateMember: authenticateB2BMember, registerMember: (payload, insightConsent) => registerB2BMember(payload, { insightConsent }), checkUsername: checkSignupUsernameAvailability, policyContext: publicPageContext(), requireAdmin: requireAdminSession, collectorRequests,
+  readEvidence: readInsightCompanyEvidence,
   verifyStored: async (job, runId) => {
     const master = await readCompanyMaster();
     const company = master.companies?.[job.companyId];
     if (!company || !company.runIds?.includes(runId)) return false;
-    const manifest = JSON.parse(await fsp.readFile(path.join(OUTPUTS_DIR, runId, 'manifest.json'), 'utf8'));
+    const evidence = await readInsightCompanyEvidence(job.companyId,{runId});
+    if (!evidence?.snapshot?.products?.length) return false;
+    const manifest = evidence.run;
     return manifest.keyword === job.keyword && manifest.searchMode === 'company' && manifest.checkIn === job.scope.checkIn
       && manifest.checkOut === job.scope.checkOut && Number(manifest.bookingRangeDays) >= job.scope.bookingRangeDays
       && manifest.dayUseMode === job.scope.dayUseMode && (company.placeIds || []).includes(job.placeIds[0]);
   }
 });
+async function readInsightCompanyEvidence(companyId, { runId = null, scope = null, observationDay = null } = {}) {
+  const company = (await readCompanyMaster()).companies?.[companyId];
+  if (!company) return null;
+  const runs = await listRuns();
+  const candidates = runId ? [{ id: runId }] : runs.filter(run => company.runIds?.includes(run.id))
+    .sort((a,b) => String(b.collectedAt || b.updatedAt || '').localeCompare(String(a.collectedAt || a.updatedAt || '')));
+  for (const candidate of candidates) {
+    const observedAt = Date.parse(candidate.collectedAt || candidate.updatedAt || '');
+    if (observationDay && (!Number.isFinite(observedAt) || new Date(observedAt + 9 * 3600000).toISOString().slice(0,10) !== observationDay)) continue;
+    const data = await loadRun(candidate.id, { skipCompanyMaster:true, skipHistory:true, skipTraffic:true,
+      skipTourismVisitors:true, skipTourismVisitorHistory:true, skipTourismDemandStrengthHistory:true,
+      skipTourismResourceDemandHistory:true, skipTourismDiversityHistory:true }).catch(() => null);
+    if (!data) continue;
+    const matches = (data.availability?.items || []).filter(item => companyProductAvailabilityMatch(company, item));
+    if (matches.length !== 1) continue;
+    const run = data.run;
+    if (scope && (run.collectionQuality?.status !== 'complete' || run.collectionPurpose !== 'revenue_detail'
+      || run.checkIn !== scope.checkIn || run.checkOut !== scope.checkOut || Number(run.bookingRangeDays) !== scope.bookingRangeDays
+      || Number(run.adults) !== scope.adults || run.dayUseMode !== scope.dayUseMode || run.productMode !== scope.productMode)) continue;
+    const source = matches[0], corrected = applyCompanyManualCorrection(source, company);
+    const rows = item => [...(item.itemDetails || []), ...(item.weeklyProductDetails || []), ...(item.dayUseWeeklyProductDetails || [])]
+      .map((row, index) => ({ source: row, observation: productSnapshotObservation(row, run.checkIn, index) }));
+    const snapshot = compactCompanyProductSnapshot(corrected, run, run.collectedAt);
+    // A DB capacity disagreement needs review, not another request to the provider.
+    const observedRows=rows(source).filter(row=>row.observation?.productType==='lodging');
+    if (scope && (!snapshot?.products?.length || observedRows.some(row=>row.source.collectionFailed || row.source.missing || row.source.collectionErrorCode || Number(row.source.responseStatus)>=400)
+      || new Set(observedRows.filter(row=>row.observation.total!==null).map(row=>row.observation.date)).size < scope.bookingRangeDays)) continue;
+    const correctedRows = rows(corrected).map(row => {
+      const applied = corrected.inventoryEvidence?.normalizationEvidence?.find(entry => entry.reason==='db_reviewed_product_stock_correction' && entry.productKey===row.observation?.bizItemId && entry.date===row.observation?.date);
+      return applied ? {...row,observation:{...row.observation,total:applied.applied.stock}} : row;
+    });
+    return { run, dayUsePresence:corrected.dayUsePresence,dayUseSharingStatus:corrected.dayUseSharingStatus, rows: correctedRows, originalRows: rows(source), snapshot: snapshot || {},
+      originalSnapshot: compactCompanyProductSnapshot(applyInventoryEvidence(source), run, run.collectedAt) || {},
+      reasonLabel: data.collectionDiagnostics?.reasonLabel,
+      issues: (data.collectionDiagnostics?.issues || []).filter(issue =>
+        (issue.placeId && company.placeIds?.includes(String(issue.placeId))) || (issue.bookingBusinessId && company.bookingBusinessIds?.includes(String(issue.bookingBusinessId)))) };
+  }
+  return null;
+}
 const pausedScheduleOccurrences = new Set();
 
 async function assertCollectorReady(workerKey,requireConnection=false) {

@@ -13,7 +13,7 @@ async function body(req) {
 }
 function json(res, status, value) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(value)); }
 function createInsightHttp({ store, serviceToken, authenticateMember, memberActive, registerMember, checkUsername, catalog, requireAdmin, preparationBridge = null,
-  signup = { enabled: false }, policies = {}, supportEmail = '', adminStore = null }) {
+  signup = { enabled: false }, policies = {}, supportEmail = '', adminStore = null, collectionResults = null }) {
   if (typeof serviceToken !== 'string' || serviceToken.length < 32) throw new Error('Insight service credential must contain at least 32 characters');
   async function state(customer) {
     if (preparationBridge) await preparationBridge.refresh(customer.customerId);
@@ -24,10 +24,21 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
     const own = customer.relations.find(row => row.kind === 'own' && row.status === 'active');
     if (own) regionKeys.add(companies.find(row => row.companyId === own.companyId)?.regionKey);
     return { customer, companies, regions: data.regions.filter(row => regionKeys.has(row.id)), corrections: store.corrections(customer.customerId),
-      preparations: store.requests(customer.customerId), features: { weeklyReports: false, reportDelivery: false, directCollection: false, dataPreparationRequests: true } };
+      preparations: store.requests(customer.customerId), features: { weeklyReports: false, reportDelivery: false, directCollection: Boolean(preparationBridge && collectionResults), dataPreparationRequests: true } };
+  }
+  async function companyCollection(c, companyId) {
+    if (!store.hasCompany(c,companyId) || !collectionResults) throw fault('NOT_FOUND','등록한 업체의 결과를 찾을 수 없습니다.',404);
+    if (preparationBridge) await preparationBridge.refresh(c.customerId);
+    const request = store.requests(c.customerId).find(row => row.companyId===companyId) || null;
+    const result = await collectionResults.read(companyId,request?.runId || null);
+    return {request,result,previousResult:Boolean(result && request && result.runId!==request.runId)};
   }
   async function customerRequest(req, res, url, tail, c, token, context = {}) {
       if (req.method === 'GET' && tail === '/me') json(res, 200, { ...(await state(c)), csrfToken: csrf(token), ...context });
+      else if (req.method === 'GET' && /^\/companies\/[a-zA-Z0-9_-]+\/collection$/.test(tail)) {
+        if (url.search) throw fault('INVALID_FIELDS','결과는 등록 업체의 저장 이력에서 선택합니다.');
+        json(res,200,await companyCollection(c,tail.split('/')[2]));
+      }
       else if (!context.view && req.method === 'POST' && tail === '/auth/logout') { store.logout(token); json(res, 200, { ok: true }); }
       else if (req.method === 'GET' && ['/catalog/companies', '/catalog/regions'].includes(tail)) {
         const query = (url.searchParams.get('q') || '').normalize('NFKC').trim().toLowerCase();
@@ -42,7 +53,24 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
         const command = await body(req); const data = await catalog();
         const company = data.companies.find(row => row.companyId === command.payload?.companyId);
         let result;
-        if (['correction', 'withdraw-correction'].includes(command.action)) result = store.correct(c.customerId, command, company);
+        if (command.action === 'collect') {
+          if (!preparationBridge || !collectionResults) throw fault('COLLECTION_NOT_READY','수집 연결을 준비 중입니다.',409);
+          const p=command.payload; fields(p,['companyId','checkIn','bookingRangeDays','dayUseMode']);
+          const today=new Date(Date.now()+9*3600000).toISOString().slice(0,10);
+          const stamp=Date.parse(`${p.checkIn}T00:00:00Z`);
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(p.checkIn||'') || !Number.isFinite(stamp) || new Date(stamp).toISOString().slice(0,10)!==p.checkIn || p.checkIn<today || p.checkIn>new Date(Date.now()+366*86400000).toISOString().slice(0,10) || !Number.isInteger(p.bookingRangeDays) || p.bookingRangeDays<1 || p.bookingRangeDays>31 || !['inspect','lodging_only','detail'].includes(p.dayUseMode)) throw fault('INVALID_COLLECTION_RANGE','숙박 시작일과 1~31일의 기간, 데이유즈 범위를 확인해 주세요.');
+          if (!company || !store.hasCompany(c,company.companyId)) throw fault('NOT_FOUND','등록한 업체를 찾을 수 없습니다.',404);
+          if (company.placeIds?.length!==1) throw fault('PLACE_REVIEW_REQUIRED','업체 고유번호 확인이 필요합니다.',409);
+          store.throttle(`collection:${c.customerId}`,20);
+          result=store.preparation(c.customerId,command,company);
+          const request=store.requests(c.customerId).find(row=>row.observationDay===today && row.companyId===company.companyId && JSON.stringify(row.intent)===JSON.stringify({checkIn:p.checkIn,bookingRangeDays:p.bookingRangeDays,dayUseMode:p.dayUseMode}));
+          await preparationBridge.dispatch(c.customerId,{requestId:request.requestId,checkIn:p.checkIn,bookingRangeDays:p.bookingRangeDays,dayUseMode:p.dayUseMode},c.customerId);
+        }
+        else if (command.action === 'product-correction') {
+          const view=await companyCollection(c,company?.companyId);
+          result=store.correct(c.customerId,command,company,view.result);
+        }
+        else if (['correction', 'withdraw-correction'].includes(command.action)) result = store.correct(c.customerId, command, company);
         else if (command.action === 'prepare-data') result = store.preparation(c.customerId, command, company);
         else result = store.update(c.customerId, command, data);
         json(res, 200, { ...(await state(result)), csrfToken: csrf(token), ...context });
@@ -172,7 +200,8 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
         const correction = store.corrections(tail[0]).find(row => row.requestId === p.requestId);
         if (!correction) throw fault('NOT_FOUND', '검수 요청을 찾을 수 없습니다.', 404);
         const company = (await catalog()).companies.find(row => row.companyId === correction.companyId);
-        store.reviewCorrection(p.requestId, p.decision, p.reason, actor, company);
+        const collection=correction.kind==='product' && collectionResults ? await collectionResults.read(correction.companyId,correction.target.runId) : null;
+        store.reviewCorrection(p.requestId, p.decision, p.reason, actor, company, collection);
       } else throw fault('NOT_FOUND', '요청한 기능을 찾을 수 없습니다.', 404);
       json(res, 200, await state(store.get(tail[0])));
     } catch (error) { json(res, error.statusCode || 503, { error: { code: error.code || 'SERVICE_UNAVAILABLE', message: error.statusCode ? error.message : '고객 자료 처리 상태를 확인해 주세요.' } }); }
