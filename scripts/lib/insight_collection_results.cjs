@@ -1,6 +1,7 @@
 'use strict';
 // Customer projection: one identified company, one stored run. Never expose raw files or other companies.
 const { hash } = require('./insight_store.cjs');
+const { projectCompanyDetail } = require('./insight_company_detail.cjs');
 const number = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
 const text = (value, limit = 180) => String(value || '').slice(0, limit);
 const day = value => /^\d{4}-\d{2}-\d{2}$/.test(value || '') ? value : null;
@@ -54,7 +55,7 @@ function projectCollection(company, evidence) {
     actualRevenueAvailable: false };
   return { ...result, version: hash(JSON.stringify([company.version, result])) };
 }
-function createCollectionResults({ catalog, readEvidence }) {
+function createCollectionResults({ catalog, readEvidence, readCompanyDetail }) {
   async function read(companyId, runId = null) {
     const company = (await catalog()).companies.find(row => row.companyId === companyId);
     if (!company) return null;
@@ -64,6 +65,11 @@ function createCollectionResults({ catalog, readEvidence }) {
     const evidence = await readEvidence(companyId, { scope, observationDay });
     return evidence?.run?.id || null;
   }
-  return { read, reusable };
+  async function companyDetail(companyId) {
+    if (!readCompanyDetail) return null;
+    const company=(await catalog()).companies.find(c=>c.companyId===companyId);
+    return company ? projectCompanyDetail(company,await readCompanyDetail(companyId)) : null;
+  }
+  return { read, reusable, companyDetail };
 }
 module.exports = { createCollectionResults, projectCollection, productRows };

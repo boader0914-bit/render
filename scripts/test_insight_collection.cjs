@@ -56,10 +56,12 @@ test('real HTTP/BFF collects only registered identities, rejects forged worker/r
   let response=await request('/companies/cmp_other/collection');assert.equal(response.status,404);
   response=await request('/companies/cmp_100/collection?runId=secret');assert.equal(response.status,400);
   const send=payload=>request('/commands',{revision:store.get(c.customerId).revision,requestKey:randomUUID(),action:'collect',payload});
-  const payload={companyId:company.companyId,checkIn:today,bookingRangeDays:1,dayUseMode:'inspect'};
+  const payload={companyId:company.companyId,checkIn:today,bookingRangeDays:30,dayUseMode:'inspect'};
   response=await send({...payload,workerKey:'web'});assert.equal(response.status,400);assert.equal(submits,0);
   response=await send({...payload,bookingRangeDays:60});assert.equal(response.status,400);assert.equal(store.requests(c.customerId).length,0);
+  response=await send({...payload,bookingRangeDays:31});assert.equal(response.status,400);assert.equal(store.collectionAllowance(c.customerId).used,0);
   response=await send(payload);assert.equal(response.status,200);response=await send(payload);assert.equal(response.status,200);assert.equal(submits,1);
+  response=await send({...payload,dayUseMode:'detail'});assert.equal(response.status,429);assert.equal((await response.json()).error.code,'DAILY_COLLECTION_LIMIT');assert.equal(submits,1);
   response=await request('/companies/cmp_100/collection');const data=await response.json();assert.equal(data.previousResult,true);assert.equal(data.request.status,'collecting');assert.equal(data.result.rooms,16);
   response=await fetch(origin+'/api/insight-admin/v1/customer-view/companies/cmp_100/collection');assert.equal(response.status,401,'admin route is whitelisted but authenticated');
   const account=adminStore.reserve('fixture-admin','test');await adminStore.activate(account.adminId,'FixtureAdmin2026!','FixtureAdmin2026!','test');
@@ -68,6 +70,7 @@ test('real HTTP/BFF collects only registered identities, rejects forged worker/r
   response=await ar('/customer-view/start',{});const preview=await response.json();
   response=await ar('/customer-view/commands',{revision:preview.customer.revision,requestKey:randomUUID(),action:'add-company',payload:{kind:'own',companyId:company.companyId}});assert.equal(response.status,200);
   response=await ar('/customer-view/companies/cmp_100/collection');assert.equal(response.status,200);assert.equal((await response.json()).result.companyId,company.companyId);
+  response=await ar('/customer-view/me');const adminView=await response.json();assert.equal(adminView.collectionAllowance.limit,null);
   response=await ar('/customer-view/companies/cmp_other/collection');assert.equal(response.status,404);
   response=await request('/commands');assert.equal(response.status,404);
 });

@@ -24,14 +24,15 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
     const own = customer.relations.find(row => row.kind === 'own' && row.status === 'active');
     if (own) regionKeys.add(companies.find(row => row.companyId === own.companyId)?.regionKey);
     return { customer, companies, regions: data.regions.filter(row => regionKeys.has(row.id)), corrections: store.corrections(customer.customerId),
-      preparations: store.requests(customer.customerId), features: { weeklyReports: false, reportDelivery: false, directCollection: Boolean(preparationBridge && collectionResults), dataPreparationRequests: true } };
+      preparations: store.requests(customer.customerId), collectionAllowance:store.collectionAllowance(customer.customerId), features: { weeklyReports: false, reportDelivery: false, directCollection: Boolean(preparationBridge && collectionResults), dataPreparationRequests: true } };
   }
   async function companyCollection(c, companyId) {
     if (!store.hasCompany(c,companyId) || !collectionResults) throw fault('NOT_FOUND','등록한 업체의 결과를 찾을 수 없습니다.',404);
     if (preparationBridge) await preparationBridge.refresh(c.customerId);
     const request = store.requests(c.customerId).find(row => row.companyId===companyId) || null;
     const result = await collectionResults.read(companyId,request?.runId || null);
-    return {request,result,previousResult:Boolean(result && request && result.runId!==request.runId)};
+    const companyDetail=await collectionResults.companyDetail?.(companyId) || null;
+    return {request,result,companyDetail,collectionAllowance:store.collectionAllowance(c.customerId),previousResult:Boolean(result && request && result.runId!==request.runId)};
   }
   async function customerRequest(req, res, url, tail, c, token, context = {}) {
       if (req.method === 'GET' && tail === '/me') json(res, 200, { ...(await state(c)), csrfToken: csrf(token), ...context });
@@ -56,9 +57,10 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
         if (command.action === 'collect') {
           if (!preparationBridge || !collectionResults) throw fault('COLLECTION_NOT_READY','수집 연결을 준비 중입니다.',409);
           const p=command.payload; fields(p,['companyId','checkIn','bookingRangeDays','dayUseMode']);
+          if (p.bookingRangeDays !== 30) throw fault('INVALID_COLLECTION_RANGE','예약·추정매출 수집 기간은 30일입니다.');
           const today=new Date(Date.now()+9*3600000).toISOString().slice(0,10);
           const stamp=Date.parse(`${p.checkIn}T00:00:00Z`);
-          if (!/^\d{4}-\d{2}-\d{2}$/.test(p.checkIn||'') || !Number.isFinite(stamp) || new Date(stamp).toISOString().slice(0,10)!==p.checkIn || p.checkIn<today || p.checkIn>new Date(Date.now()+366*86400000).toISOString().slice(0,10) || !Number.isInteger(p.bookingRangeDays) || p.bookingRangeDays<1 || p.bookingRangeDays>31 || !['inspect','lodging_only','detail'].includes(p.dayUseMode)) throw fault('INVALID_COLLECTION_RANGE','숙박 시작일과 1~31일의 기간, 데이유즈 범위를 확인해 주세요.');
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(p.checkIn||'') || !Number.isFinite(stamp) || new Date(stamp).toISOString().slice(0,10)!==p.checkIn || p.checkIn<today || p.checkIn>new Date(Date.now()+366*86400000).toISOString().slice(0,10) || !Number.isInteger(p.bookingRangeDays) || p.bookingRangeDays<1 || p.bookingRangeDays>31 || !['inspect','lodging_only','detail'].includes(p.dayUseMode)) throw fault('INVALID_COLLECTION_RANGE','숙박 시작일과 데이유즈 범위를 확인해 주세요.');
           if (!company || !store.hasCompany(c,company.companyId)) throw fault('NOT_FOUND','등록한 업체를 찾을 수 없습니다.',404);
           if (company.placeIds?.length!==1) throw fault('PLACE_REVIEW_REQUIRED','업체 고유번호 확인이 필요합니다.',409);
           store.throttle(`collection:${c.customerId}`,20);

@@ -436,6 +436,7 @@ const insightIntegration = require('./lib/insight_integration.cjs').createInsigh
   dataDir: DATA_DIR, readCatalog: monthlyReportSources.catalog, readMembers: readB2BMemberStore,
   authenticateMember: authenticateB2BMember, registerMember: (payload, insightConsent) => registerB2BMember(payload, { insightConsent }), checkUsername: checkSignupUsernameAvailability, policyContext: publicPageContext(), requireAdmin: requireAdminSession, collectorRequests,
   readEvidence: readInsightCompanyEvidence,
+  readCompanyDetail: companyId => summarizeCompanyMasterDetail(companyId, { strictIdentity:true }),
   verifyStored: async (job, runId) => {
     const master = await readCompanyMaster();
     const company = master.companies?.[job.companyId];
@@ -14625,12 +14626,14 @@ function companyInventoryNeedsEvidenceRecovery(company = {}) {
   });
 }
 
-async function summarizeCompanyMasterDetail(companyId = "") {
+async function summarizeCompanyMasterDetail(companyId = "", { strictIdentity = false } = {}) {
   const id = String(companyId || "").trim();
   if (!id) return null;
-  const [master, observations] = await Promise.all([readCompanyMaster(), readHistoryObservations()]);
+  const [master, allObservations] = await Promise.all([readCompanyMaster(), readHistoryObservations()]);
   const rawCompany = master.companies?.[id];
   if (!rawCompany) return null;
+  const ids = companyHistoryDailyIdentity(rawCompany).companyIds;
+  const observations = strictIdentity ? allObservations.filter(row => ids.has(String(row.companyKey || row.companyId || '').trim().toLowerCase())) : allObservations;
   const needsEvidenceRecovery = companyInventoryNeedsEvidenceRecovery(rawCompany);
   const recoveredProductSource = needsEvidenceRecovery
     ? await recoverCompanyProductSourceFromRuns(rawCompany, observations)

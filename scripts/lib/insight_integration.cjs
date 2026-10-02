@@ -7,7 +7,7 @@ const { createCollectionResults } = require('./insight_collection_results.cjs');
 const { POLICY_VERSION, insightPolicies } = require('./insight_policy.cjs');
 const { createInsightAdminStore } = require('./insight_admin_store.cjs');
 const { createInsightAdminProvisioning } = require('./insight_admin_provisioning.cjs');
-function createInsightIntegration({ dataDir, readCatalog, readMembers, authenticateMember, registerMember, checkUsername, policyContext = {}, requireAdmin, collectorRequests, verifyStored, readEvidence, env = process.env }) {
+function createInsightIntegration({ dataDir, readCatalog, readMembers, authenticateMember, registerMember, checkUsername, policyContext = {}, requireAdmin, collectorRequests, verifyStored, readEvidence, readCompanyDetail, env = process.env }) {
   if (env.INSIGHT_CONNECTION_ENABLED !== '1') return null;
   const serviceToken = env.INSIGHT_SERVICE_TOKEN;
   if (!serviceToken || serviceToken.length < 32) throw new Error('INSIGHT_SERVICE_TOKEN is required when Insight connection is enabled');
@@ -25,7 +25,7 @@ function createInsightIntegration({ dataDir, readCatalog, readMembers, authentic
       return { ...company, version: hash(JSON.stringify({ company, correctionAt: raw.manualCorrection?.updatedAt || null })) };
     }) };
   }
-  const collectionResults = readEvidence ? createCollectionResults({catalog,readEvidence}) : null;
+  const collectionResults = readEvidence ? createCollectionResults({catalog,readEvidence,readCompanyDetail}) : null;
   const preparationBridge = collectorRequests && verifyStored ? createInsightPreparation({store,catalog,collectorRequests,verifyStored,findReusable:collectionResults?.reusable}) : null;
   const signup = { enabled: env.INSIGHT_SIGNUP_ENABLED === '1', termsVersion: env.INSIGHT_TERMS_VERSION || POLICY_VERSION, privacyVersion: env.INSIGHT_PRIVACY_VERSION || POLICY_VERSION, termsUrl: env.INSIGHT_TERMS_URL || '/terms', privacyUrl: env.INSIGHT_PRIVACY_URL || '/privacy' };
   const handlers = createInsightHttp({ store, serviceToken, catalog, authenticateMember, registerMember, checkUsername, requireAdmin, preparationBridge, collectionResults,

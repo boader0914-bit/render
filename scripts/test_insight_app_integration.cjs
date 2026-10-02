@@ -57,8 +57,12 @@ test('real DataLab registration records the actual Insight consent, exposes cust
   assert.equal(evidence.result.products.find(p=>p.bizItemId==='fixture_b').days[0].total,6);
   assert.equal(evidence.result.products.find(p=>p.bizItemId==='fixture_b').original[0].total,7);
   assert.equal(JSON.stringify(evidence).includes('다른 업체'),false);
-  const collection=await fetch(origin+'/api/insight/v1/commands',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json','X-Insight-Session':customer.token,'X-CSRF-Token':customer.csrfToken},body:JSON.stringify({action:'collect',revision:linkedState.customer.revision,requestKey:crypto.randomUUID(),payload:{companyId:'cmp_test',checkIn:fixture.today,bookingRangeDays:31,dayUseMode:'inspect'}})});
+  assert.equal(evidence.companyDetail.basics.rooms,16);assert.equal(evidence.companyDetail.basics.name,'검수 업체명');
+  assert.equal(evidence.companyDetail.source,'company_db');assert.equal(JSON.stringify(evidence).includes('private-fixture'),false);
+  assert.equal(evidence.collectionAllowance.remaining,1);
+  const collection=await fetch(origin+'/api/insight/v1/commands',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json','X-Insight-Session':customer.token,'X-CSRF-Token':customer.csrfToken},body:JSON.stringify({action:'collect',revision:linkedState.customer.revision,requestKey:crypto.randomUUID(),payload:{companyId:'cmp_test',checkIn:fixture.today,bookingRangeDays:30,dayUseMode:'inspect'}})});
   const collected=await collection.json();assert.equal(collection.status,200);assert.equal(collected.preparations[0].status,'ready');assert.equal(collected.preparations[0].runId,fixture.runId);assert.equal(collected.preparations[0].reused,true);
+  assert.equal(collected.collectionAllowance.remaining,0);
   assert.equal(await fs.readFile(rawFile,'utf8'),rawBefore,'customer reads and reuse never overwrite raw collection files');
   linkedState.customer=collected.customer;
   const adminLogin=await fetch(`${origin}/api/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'fixture-admin',password:'FixtureAdmin2026!'})});
@@ -70,7 +74,7 @@ test('real DataLab registration records the actual Insight consent, exposes cust
   assert.equal(disabled.status,200);
   await stop();await start();
   const resumed=await internal('/me',null,customer.token);
-  assert.equal(resumed.status,200);assert.equal((await resumed.json()).customer.entitlements.competitorLimit,5);
+  assert.equal(resumed.status,200);const resumedData=await resumed.json();assert.equal(resumedData.customer.entitlements.competitorLimit,5);assert.equal(resumedData.collectionAllowance.remaining,0);
   const noService=await fetch(`${origin}/api/insight/v1/me`);assert.equal(noService.status,401);
   const noAdmin=await fetch(`${origin}/api/admin/insight-customers`,{redirect:'manual'});assert.ok([302,401].includes(noAdmin.status));
 });

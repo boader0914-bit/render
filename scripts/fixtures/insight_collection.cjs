@@ -1,7 +1,7 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path');
 // Invented, local test evidence. This helper never calls a provider or a collector.
-function writeInsightCollectionFixture(dataDir,{name='검수 예시 글램핑',placeId='0000000001',days=31}={}) {
+function writeInsightCollectionFixture(dataDir,{name='검수 예시 글램핑',placeId='0000000001',days=30}={}) {
   const today=new Date(Date.now()+9*3600000).toISOString().slice(0,10),stamp=new Date().toISOString();
   const add=n=>new Date(Date.parse(today+'T00:00:00Z')+n*86400000).toISOString().slice(0,10);
   const runId='insight_fixture_glamping_'+today.replaceAll('-','')+'_090000',runDir=path.join(dataDir,'outputs',runId);

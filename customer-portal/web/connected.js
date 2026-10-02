@@ -60,7 +60,7 @@
     if(route().startsWith('collection=')) {
       const id=decodeURIComponent(route().slice('collection='.length)),relation=relations.find(r=>r.companyId===id),company=state.companies.find(r=>r.companyId===id);
       if(!relation||!company){$('#main').innerHTML='<section class="card"><h1>등록한 업체를 찾을 수 없습니다.</h1><a href="#property">내 매장으로 이동</a></section>';return;}
-      $('#main').innerHTML='<a class="text-link" href="#'+(relation.kind==='own'?'property':'competitors')+'">← 등록 업체로 돌아가기</a>'+window.InsightCollection.panel(company,state.features.directCollection,state.preparations.find(r=>r.companyId===id))+'<section class="collection-company-edit"><h2>업체 정보 수정</h2>'+companyCard(relation,true)+'</section>';
+      $('#main').innerHTML='<a class="text-link" href="#'+(relation.kind==='own'?'property':'competitors')+'">← 등록 업체로 돌아가기</a>'+window.InsightCollection.panel(company,state.features.directCollection,state.preparations.find(r=>r.companyId===id),state.collectionAllowance)+'<section class="collection-company-edit"><h2>업체 정보 수정</h2>'+companyCard(relation,true)+'</section>';
       window.InsightCollection.mount(id,api);return;
     }
     const current = menus.find(([key])=>key===route()) || menus[0];
@@ -103,7 +103,7 @@
         await command('correction',{companyId:company.companyId,baseVersion:company.version,proposed,reason:p.reason});
       }
     } catch(error) { const slot=form.querySelector('.form-error'); if(slot){slot.textContent=error.message;slot.focus();} else toast(error.message); if(error.code==='STALE_REVISION'||error.code==='STALE_COMPANY'){state=await api('/me');render();} }
-    finally {busy=false;form.querySelectorAll('button').forEach(button=>button.disabled=false);}
+    finally {busy=false;form.querySelectorAll('button').forEach(button=>button.disabled=false);if(form.dataset.collect)await window.InsightCollection.refresh();}
   });
   document.addEventListener('click',async event=>{
     const button=event.target.closest('[data-action]');if(!button||busy)return;

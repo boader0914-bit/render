@@ -266,6 +266,7 @@ function createInsightStore({ file, now = () => Date.now() }) {
       const intent = command.action === 'collect' ? {checkIn:p.checkIn,bookingRangeDays:p.bookingRangeDays,dayUseMode:p.dayUseMode} : null;
       const existing = db.prepare('SELECT data FROM preparations WHERE customer_id=? AND company_id=?').all(customerId, p.companyId).map(row => JSON.parse(row.data)).find(row => row.observationDay === day && (!intent || JSON.stringify(row.intent)===JSON.stringify(intent)));
       if (existing) return;
+      if (intent && !collectionAllowance(customerId).canRequest) throw fault('DAILY_COLLECTION_LIMIT', '오늘의 30일 수집 요청을 사용했습니다. 한국시간 내일 00:00부터 다시 요청할 수 있습니다. 저장 자료는 계속 확인할 수 있습니다.', 429);
       const row = { requestId: id('prep'), companyId: p.companyId, customerId, observationDay: day, status: 'needs_review',
         intent, submittedAt: stamp(), message: '요청을 접수했습니다. 관리자가 기존 자료와 준비 범위를 확인합니다.' };
       db.prepare('INSERT INTO preparations VALUES(?,?,?,?,?)').run(row.requestId, customerId, p.companyId, command.requestKey, JSON.stringify(row));
@@ -295,6 +296,16 @@ function createInsightStore({ file, now = () => Date.now() }) {
       return { job, start: !existing };
     });
   }
+  function collectionAllowance(customerId) {
+    const customer = get(customerId);
+    const observationDay = new Date(now() + 9 * 3600000).toISOString().slice(0,10);
+    const requests = db.prepare('SELECT data FROM preparations WHERE customer_id=?').all(customerId)
+      .map(row => JSON.parse(row.data)).filter(row => row.observationDay === observationDay && row.intent);
+    const limited = customer.accountKind !== 'admin_preview';
+    return { scope:'account', timezone:'Asia/Seoul', observationDay, limit:limited ? 1 : null, used:requests.length,
+      remaining:limited ? Math.max(0,1-requests.length) : null, canRequest:!limited || requests.length===0,
+      resetsAt:new Date(Date.parse(observationDay+'T00:00:00+09:00')+86400000).toISOString(), bookingRangeDays:30 };
+  }
   function updatePreparationJob(jobId, status, message, extra = {}) {
     return transaction(() => {
       const found = db.prepare('SELECT data FROM preparation_jobs WHERE id=?').get(jobId);
@@ -310,7 +321,7 @@ function createInsightStore({ file, now = () => Date.now() }) {
     });
   }
   return { get, findMember, ensure, session, authenticate, throttle, update, adminUpdate, corrections, correct, reviewCorrection, preparation, hasCompany,
-    reservePreparation, updatePreparationJob,
+    reservePreparation, updatePreparationJob, collectionAllowance,
     preparationJobs: () => db.prepare('SELECT data FROM preparation_jobs').all().map(row => JSON.parse(row.data)),
     recordConsent: (customerId, consent) => transaction(() => { const c = get(customerId); c.insightConsent = { ...consent, acceptedAt: stamp() }; c.revision++; put(c); audit(customerId, customerId, 'insight-consent', c.insightConsent); return c; }),
     logout: token => db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hash(token || '')),
