@@ -1,5 +1,17 @@
 # SABUN Insight 무료 실물 페이지 배포
 
+## 2026-10-02 실제 연결 모드 배포 완료
+
+- 사용자가 두 서버의 새 `INSIGHT_SERVICE_TOKEN` 생성·저장을 명시적으로 요청했다. 암호학적 난수 32바이트를 64자리 16진수로 만들어 두 서비스에 같은 값을 저장했고, 다시 읽은 값의 일치를 확인한 뒤 화면에서 숨겼다. 값 자체는 채팅·파일·로그에 남기지 않았고 작업 메모리의 참조를 정리했다.
+- 중앙 `glamping-datalab-v2`에 `INSIGHT_CONNECTION_ENABLED=1`을 저장하고 커밋 `75768bf465b7ab2c84912d75b8fa80b3fbcd1ea3`을 배포했다. 배포 `dep-davk0hbncjis73em6d50`, 한국시간 14:25:25 시작, 44.5초, `Deploy succeeded | Live`.
+- 무료 `sabun-insight-preview` 시작 명령을 `node customer-portal/connected-server.cjs`로 전환하고 같은 커밋을 배포했다. 배포 `dep-davk1b67bikc73ecclpg`, 한국시간 14:27:08 시작, 32.1초, `Deploy succeeded | Live`. Render 빌드 테스트 44개 통과.
+- 공개 고객 health는 `mode=connected`, `buildCommit=75768bf465b7`. 고객 서버의 `/api/customer/v1/config`가 중앙 연결 인증을 거쳐 HTTP 200을 반환했다. 로그인하지 않은 `/me`는 401, 서비스 인증 없는 중앙 `/api/insight/v1/config`도 401이었다.
+- 운영 관리 API와 실제 영속 고객 SQLite 파일 존재를 확인했다. 현재 인사이트 고객 0명, 사용 가능한 B2B 회원 0명이며 `signupEnabled=false`다. **서버 간 연결과 로그인 화면은 활성화됐지만, 실제 이용자 로그인·업체 등록 흐름의 운영 검수는 아직 하지 않았다. 가입용 실제 약관·개인정보 설정 또는 이용자 계정 준비가 필요하다.** 지역 지표·리포트 제공은 기존 후속 개발 범위다.
+- 배포 전 세 수집기 모두 실행·대기 0, 디스크 여유 8,659MiB였다. 배포 후에도 세 수집기 실행·대기 0을 확인했다. 기존 수동 워커의 다음 예약 `2026-10-02 17:00 KST`와 나머지 일정 비활성 상태를 보존했다. 수집 실행이나 워커 배포는 하지 않았다.
+- 첫 배포 후 진단에서 회원 파일 경로를 `/var/data/customer_db/b2b_members.json`으로 고정해 ENOENT가 발생했다. 운영 회원 API와 실제 DATA_DIR 기준으로 진단을 수정해 정상 결과를 확인했다. 앱 자체의 연결 오류는 아니며 기존 파일을 이동하거나 변경하지 않았다.
+- 실제 HTTPS 로그인 화면 표시와 브라우저 오류 없음 확인. 증빙: `C:/Users/User/.codex/visualizations/2026/10/02/insight-connected-live/`의 `login-live.jpg`, `customer-render-live.jpg`, `central-render-live.jpg`.
+- DNS는 연결하지 않았으며 현재 접속 주소는 https://sabun-insight-preview.onrender.com 이다. 아래 오전 기록은 연결 활성화 전 이력이다.
+
 ## 2026-10-02 무료 서버 코드 갱신
 
 - 기존 Free 서비스 `srv-dathlifavr4c73dj3jt0`를 유지했다. 서비스 추가나 유료 전환은 하지 않았다.
