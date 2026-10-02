@@ -28,7 +28,7 @@
   async function load() {
     const id=++seq,slot=document.querySelector('#analysis-output'),form=document.querySelector('#analysis-form');if(!slot||!form)return;
     const params=Object.fromEntries(new FormData(form));if(kind==='regions'&&!params.regionKey)return;
-    const button=form.querySelector('button');button.disabled=true;slot.innerHTML='<p class="empty-note" role="status">저장 자료를 연결하고 있습니다.</p>';
+    const button=form.querySelector('button');button.disabled=true;slot.innerHTML='<p class="empty-note" role="status">'+(kind==='reports'?'업체별 보존 이력을 계산하고 있습니다. 자료량에 따라 최대 3분 정도 걸릴 수 있습니다.':'저장 자료를 연결하고 있습니다.')+'</p>';
     try {const data=await api(kind==='regions'?`/regions/${encodeURIComponent(params.regionKey)}/analysis?month=${encodeURIComponent(params.month)}`:`/reports/briefing${params.ownId?'?ownId='+encodeURIComponent(params.ownId):''}`);if(id===seq&&slot.isConnected)slot.innerHTML=kind==='regions'?regionView(data):reportView(data);}
     catch(e){if(id===seq&&slot.isConnected)slot.innerHTML=`<p class="collection-warning">${esc(e.message)}</p>`;}
     finally{if(id===seq&&button.isConnected)button.disabled=false;}

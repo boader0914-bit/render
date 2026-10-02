@@ -56,6 +56,7 @@ function projectCollection(company, evidence) {
   return { ...result, version: hash(JSON.stringify([company.version, result])) };
 }
 function createCollectionResults({ catalog, readEvidence, readCompanyDetail }) {
+  const readingDetails = new Map();
   async function read(companyId, runId = null) {
     const company = (await catalog()).companies.find(row => row.companyId === companyId);
     if (!company) return null;
@@ -67,8 +68,13 @@ function createCollectionResults({ catalog, readEvidence, readCompanyDetail }) {
   }
   async function companyDetail(companyId) {
     if (!readCompanyDetail) return null;
-    const company=(await catalog()).companies.find(c=>c.companyId===companyId);
-    return company ? projectCompanyDetail(company,await readCompanyDetail(companyId)) : null;
+    if (readingDetails.has(companyId)) return readingDetails.get(companyId);
+    const pending=(async()=>{
+      const company=(await catalog()).companies.find(c=>c.companyId===companyId);
+      return company ? projectCompanyDetail(company,await readCompanyDetail(companyId)) : null;
+    })();
+    readingDetails.set(companyId,pending);
+    try { return await pending; } finally { if(readingDetails.get(companyId)===pending)readingDetails.delete(companyId); }
   }
   return { read, reusable, companyDetail };
 }

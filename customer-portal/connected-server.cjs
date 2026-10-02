@@ -15,6 +15,9 @@ function configuration(env = process.env) {
   return { origin: origin.origin, backend: backend.origin, serviceToken, port, host: env.RENDER ? '0.0.0.0' : '127.0.0.1' };
 }
 function createConnectedServer({ origin, backend, serviceToken, fetchImpl = fetch }) {
+  // Historical source recalculation can take longer than a login or command.
+  // Extend only these read endpoints; collection dispatch retains its timeout.
+  const readTimeout = (method, route) => method === 'GET' && /\/(?:companies\/[a-zA-Z0-9_-]+\/collection|reports\/briefing)$/.test(route) ? 180000 : 20000;
   const secure = new URL(origin).protocol === 'https:';
   const cookieName = secure ? '__Host-sabun_insight_session' : 'insight_local_session';
   const cookie = (token, expire = false) => `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${expire ? 0 : 43200}${secure ? '; Secure' : ''}`;
@@ -39,7 +42,7 @@ function createConnectedServer({ origin, backend, serviceToken, fetchImpl = fetc
         const headers = { Authorization: `Bearer ${serviceToken}`, Accept: 'application/json', 'X-Insight-Admin-Session': session, 'X-CSRF-Token': req.headers['x-csrf-token'] || '' };
         let payload;
         if (req.method === 'POST') { payload = JSON.stringify(await body(req)); headers['Content-Type'] = 'application/json'; }
-        const response = await fetchImpl(`${backend}/api/insight/v1/admin${route}${url.search}`, { method: req.method, headers, body: payload, redirect: 'error', signal: AbortSignal.timeout(20000) });
+        const response = await fetchImpl(`${backend}/api/insight/v1/admin${route}${url.search}`, { method: req.method, headers, body: payload, redirect: 'error', signal: AbortSignal.timeout(readTimeout(req.method,route)) });
         const data = await response.json();
         if (response.ok && route === '/auth/login') {
           if (!/^[A-Za-z0-9_-]{43}$/.test(data.token || '')) throw new Error('Missing administrator session');
@@ -58,7 +61,7 @@ function createConnectedServer({ origin, backend, serviceToken, fetchImpl = fetc
         const headers = { Authorization: `Bearer ${serviceToken}`, Accept: 'application/json', 'X-Insight-Session': session, 'X-CSRF-Token': req.headers['x-csrf-token'] || '' };
         let payload;
         if (req.method === 'POST') { payload = JSON.stringify(await body(req)); headers['Content-Type'] = 'application/json'; }
-        const response = await fetchImpl(`${backend}/api/insight/v1${route}${url.search}`, { method: req.method, headers, body: payload, redirect: 'error', signal: AbortSignal.timeout(20000) });
+        const response = await fetchImpl(`${backend}/api/insight/v1${route}${url.search}`, { method: req.method, headers, body: payload, redirect: 'error', signal: AbortSignal.timeout(readTimeout(req.method,route)) });
         const data = await response.json();
         if (response.ok && ['/auth/login', '/auth/signup'].includes(route)) {
           if (!/^[A-Za-z0-9_-]{43}$/.test(data.token || '')) throw new Error('Missing session');
