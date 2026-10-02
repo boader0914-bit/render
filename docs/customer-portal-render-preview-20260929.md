@@ -1,5 +1,21 @@
 # SABUN Insight 무료 실물 페이지 배포
 
+## 2026-10-02 무료 서버 코드 갱신
+
+- 기존 Free 서비스 `srv-dathlifavr4c73dj3jt0`를 유지했다. 서비스 추가나 유료 전환은 하지 않았다.
+- 브랜치: `codex/insight-customer-connection-20261001`
+- 배포 커밋: `75768bf465b7ab2c84912d75b8fa80b3fbcd1ea3`
+- 배포: `dep-davf76u7bikc73dr85s0`, 한국시간 08:58:19 시작, 30.2초, `Deploy succeeded | Live` 확인.
+- Render 빌드에서 연결 계층 및 기존 예시 화면 테스트 44개 통과, 실패 0개. 공개 `/api/health`의 위 커밋 일치와 실제 내 매장/정보 수정 화면 및 브라우저 오류 없음 확인.
+- 실행 명령은 `node customer-portal/server.cjs --preview`로 유지했다. **연결 코드가 서버에 포함되어 있지만 현재 공개 서비스는 여전히 가상 자료·임시 세션의 예시 화면이다. 실제 회원·업체 DB 연결이 완료된 상태가 아니다.**
+- 무료 서버에 `INSIGHT_PUBLIC_ORIGIN=https://sabun-insight-preview.onrender.com`, `INSIGHT_DATALAB_ORIGIN=https://staydatalab.kr`를 `Save only`로 저장했다. 다음 배포부터 사용할 연결 주소다.
+- 양쪽 서버에 `INSIGHT_SERVICE_TOKEN`이 없음을 키 이름만으로 확인했다. 새 인증키의 생성·입력은 사용자에게 인계했다. 값은 읽거나 출력·저장하지 않았다.
+- 다음 단계: 사용자가 양쪽 서버에 같은 인증키를 저장한 뒤, 중앙 서버 실행/대기 작업을 확인하고 연결 API 코드를 배포·활성화한다. 고객 서버 시작 명령을 `node customer-portal/connected-server.cjs`로 전환하고 실제 인증·검색·권한을 검증한다. 해당 중앙 배포와 연결 활성화는 아직 하지 않았다.
+- 기존 데이터랩은 공개 health 기준 `ba6d62ba3fc3`을 유지한다. 수집워커, 일정, 실제 수집 및 DNS는 변경하지 않았다.
+- 증빙: `C:/Users/User/.codex/visualizations/2026/10/02/insight-render-release/`의 `render-live.jpg`, `preview-live.jpg`, `token-setup.jpg`.
+
+## 최초 배포 기록
+
 - 확인일: 2026-09-29 KST
 - URL: https://sabun-insight-preview.onrender.com
 - Render: `sabun-insight-preview`, `srv-dathlifavr4c73dj3jt0`
