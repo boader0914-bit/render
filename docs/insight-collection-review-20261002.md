@@ -55,3 +55,9 @@ node --test scripts/test_insight_collection.cjs scripts/test_insight_connection.
 - 고객/관리자 고객 보기의 새 결과 API는 비로그인 요청에 HTTP 401. 실제 운영 화면 콘솔 오류·경고 없음.
 - 화면 증빙: `C:/Users/User/.codex/visualizations/2026/10/02/insight-collection-review/production-collection-result.png`, `production-product-review.png`, `production-central-live.png`, `production-insight-live.png`.
 - 수집워커 배포, 속도·일정 변경, 운영 데이터 보정은 이번 배포 범위에 포함하지 않았다.
+
+## 경쟁업체 두 번째 이후 카드의 결과 링크 수정
+
+운영 경쟁 분석에서 두 번째 업체(해핑글램핑)의 결과 링크가 표시되지 않는 현상을 재현했다. `Array.map(companyCard)`가 전달하는 두 번째 인자(index)를 `companyCard`의 `editingOnly` 인자로 받아 두 번째 이후 카드를 편집 전용으로 표시하는 오류였다. 목록에서는 관계 데이터만 명시적으로 넘기도록 홈·내 매장·경쟁 분석의 세 호출부를 수정했다. 결과 상세 안의 편집 전용 카드는 기존 동작을 유지한다.
+
+`node --test customer-portal/test/connected-company-cards.test.cjs`에서 일반 고객과 관리자 고객 보기 각각 경쟁업체 3개의 링크, 업체별 이동 및 목록 복귀, 상세 안의 자기 링크 미표시, 조회 중 수집 명령 미실행을 검증했다. 수정 전 두 번째 업체에서 실패한 2개 테스트가 수정 후 통과했다. 화면 코드만 변경하므로 인사이트 서비스만 배포 대상으로 한다.
