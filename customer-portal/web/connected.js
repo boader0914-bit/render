@@ -6,11 +6,15 @@
   const menus = [['home','홈'],['property','내 매장'],['competitors','경쟁 분석'],['regions','지역 분석'],['reports','리포트'],['settings','설정']];
   const labels = { pending:'확인 대기',active:'등록 완료',rejected:'반려',verified:'반영 확인',withdrawn:'철회',superseded:'새 요청으로 대체',needs_review:'자료 준비 접수' };
   const dayUse = { unknown:'확인 전',none:'없음',separate:'별도 객실',shared:'숙박과 공유' };
+  const adminView = location.pathname === '/customer-view';
+  let adminCsrf = '';
   let state = null, config = {}, busy = false, searchSequence = 0;
   const route = () => location.hash.slice(1) || ({'/signup':'signup','/login':'login','/terms':'terms','/privacy':'privacy'}[location.pathname]) || 'home';
   const toast = message => { $('#toast').textContent = message; $('#toast').classList.add('visible'); setTimeout(() => $('#toast').classList.remove('visible'), 4500); };
   async function api(url, data) {
-    const response = await fetch(`/api/customer/v1${url}`, { method:data ? 'POST':'GET', headers:data ? { 'Content-Type':'application/json','X-CSRF-Token':state?.csrfToken || '' }: { Accept:'application/json' }, ...(data ? { body:JSON.stringify(data) }: {}) });
+    const base = adminView ? '/api/insight-admin/v1' : '/api/customer/v1';
+    const target = adminView && url !== '/auth/logout' ? '/customer-view' + url : url;
+    const response = await fetch(`${base}${target}`, { method:data ? 'POST':'GET', headers:data ? { 'Content-Type':'application/json','X-CSRF-Token':state?.csrfToken || adminCsrf || '' }: { Accept:'application/json' }, ...(data ? { body:JSON.stringify(data) }: {}) });
     const value = await response.json();
     if (!response.ok) { const error = new Error(value.error?.message || '요청을 처리하지 못했습니다.'); error.status = response.status; error.code = value.error?.code; throw error; }
     return value;
@@ -20,7 +24,7 @@
     render(); toast('저장했습니다.');
   }
   const field = (label, name, value = '', type = 'text', extra = '') => `<label class="field"><span>${esc(label)}</span><input name="${name}" type="${type}" value="${esc(value)}" ${extra}></label>`;
-  function auth() { $('#main').innerHTML = window.InsightAuth.screen({ signup: route()==='signup', config }); }
+  function auth() { $('#main').innerHTML = adminView ? '<section class="card"><h1>관리자 로그인이 필요합니다.</h1><p>고객 화면을 이용하려면 관리자 계정으로 로그인해 주세요.</p><a class="button primary" href="/admin">관리자 로그인</a></section>' : window.InsightAuth.screen({ signup: route()==='signup', config }); }
   let policySequence = 0;
   async function policy(kind) {
     const serial = ++policySequence;
@@ -43,6 +47,7 @@
   function render() {
     searchSequence++;
     $('#logout').hidden = !state;
+    $('#admin-view-banner').hidden = !adminView || !state;
     $('#navigation').innerHTML = state ? menus.map(([key,label])=>`<a href="#${key}" class="nav-link ${route()===key?'active':''}">${label}</a>`).join(''):'';
     $('#customer-name').textContent = state ? state.customer.username : '사분 인사이트';
     document.body.classList.toggle('auth-view', !state);
@@ -99,7 +104,7 @@
     busy=true;button.disabled=true;
     try{
       if(action==='check-username'){const input=$('[name=username]'), slot=$('#username-status');if(!input.reportValidity())return;const requested=input.value.trim(), value=await api(`/auth/username?username=${encodeURIComponent(requested)}`);if(!slot.isConnected||input.value.trim()!==requested)return;slot.textContent=value.message;slot.dataset.available=String(value.available);}
-      else if(action==='logout'){await api('/auth/logout',{});state=null;location.hash='login';render();}
+      else if(action==='logout'){await api('/auth/logout',{});state=null;adminCsrf='';if(adminView){location.assign('/admin');return;}location.hash='login';render();}
       else if(action==='add')await command(button.dataset.kind==='region'?'add-region':'add-company',button.dataset.kind==='region'?{regionKey:button.dataset.id}:{kind:button.dataset.kind,companyId:button.dataset.id});
       else if(action==='archive')await command('archive-company',{relationId:button.dataset.relation});
       else if(action==='archive-region')await command('archive-region',{relationId:button.dataset.relation});
@@ -110,5 +115,13 @@
   document.addEventListener('input',event=>{if(event.target.name==='username'&&$('#username-status'))$('#username-status').textContent='';});
   window.addEventListener('hashchange',()=>{render();$('#main').focus();window.scrollTo(0,0);});
   try{document.documentElement.dataset.theme=localStorage.getItem('insight-theme')==='dark'?'dark':'light';}catch{}
-  (async()=>{try{config=await api('/config');try{state=await api('/me');}catch(error){if(error.status!==401)throw error;}render();}catch(error){$('#main').innerHTML=`<section class="card"><h1>자료 연결 확인이 필요합니다.</h1><p>${esc(error.message)}</p><a class="button" href="/">다시 열기</a></section>`;}})();
+  (async()=>{try{
+    if(adminView){
+      const response=await fetch('/api/insight-admin/v1/me',{headers:{Accept:'application/json'}});
+      if(response.status===401){render();return;}
+      const identity=await response.json();if(!response.ok)throw new Error(identity.error?.message||'관리자 연결을 확인해 주세요.');
+      adminCsrf=identity.csrfToken;config=await api('/config');state=await api('/start',{});
+    }else{config=await api('/config');try{state=await api('/me');}catch(error){if(error.status!==401)throw error;}}
+    render();
+  }catch(error){if(adminView&&error.status===401){state=null;render();return;}$('#main').innerHTML=`<section class="card"><h1>자료 연결 확인이 필요합니다.</h1><p>${esc(error.message)}</p><a class="button" href="${adminView?'/customer-view':'/'}">다시 열기</a></section>`;}})();
 })();

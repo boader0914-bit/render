@@ -38,6 +38,10 @@ function createInsightStore({ file, now = () => Date.now() }) {
     if (!row) throw fault('NOT_FOUND', '이용자를 찾을 수 없습니다.', 404);
     return JSON.parse(row.data);
   }
+  function findMember(memberId) {
+    const row = db.prepare('SELECT data FROM customers WHERE member_id=?').get(memberId);
+    return row ? JSON.parse(row.data) : null;
+  }
   function put(customer) { db.prepare('UPDATE customers SET revision=?,data=? WHERE id=?').run(customer.revision, JSON.stringify(customer), customer.customerId); }
   function ensure(member) {
     if (!member?.memberId || member.role !== 'b2b' || member.status === 'disabled') throw fault('CUSTOMER_REQUIRED', '활성 이용자 계정으로 로그인해 주세요.', 403);
@@ -45,6 +49,7 @@ function createInsightStore({ file, now = () => Date.now() }) {
       const old = db.prepare('SELECT id FROM customers WHERE member_id=?').get(member.memberId);
       if (old) return get(old.id);
       const customer = { schemaVersion: 1, customerId: id('cus'), memberId: member.memberId, username: member.username,
+        accountKind: member.accountKind === 'admin_preview' ? 'admin_preview' : 'customer',
         revision: 1, accountStatus: 'active', businessStatus: 'planning', projectName: '', relations: [], regions: [],
         entitlements: { competitorLimit: 3, interestRegionLimit: 1 }, settings: {}, createdAt: stamp() };
       db.prepare('INSERT INTO customers VALUES(?,?,?,?)').run(customer.customerId, customer.memberId, customer.revision, JSON.stringify(customer));
@@ -273,7 +278,7 @@ function createInsightStore({ file, now = () => Date.now() }) {
       return job;
     });
   }
-  return { get, ensure, session, authenticate, throttle, update, adminUpdate, corrections, correct, reviewCorrection, preparation, hasCompany,
+  return { get, findMember, ensure, session, authenticate, throttle, update, adminUpdate, corrections, correct, reviewCorrection, preparation, hasCompany,
     reservePreparation, updatePreparationJob,
     preparationJobs: () => db.prepare('SELECT data FROM preparation_jobs').all().map(row => JSON.parse(row.data)),
     recordConsent: (customerId, consent) => transaction(() => { const c = get(customerId); c.insightConsent = { ...consent, acceptedAt: stamp() }; c.revision++; put(c); audit(customerId, customerId, 'insight-consent', c.insightConsent); return c; }),

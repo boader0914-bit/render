@@ -29,6 +29,8 @@ test('actual DataLab and customer BFF isolate admin privileges, protect provisio
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'insight-admin-http-'));const backendPort=await port(),frontPort=await port();
   const backend=`http://127.0.0.1:${backendPort}`,origin=`http://127.0.0.1:${frontPort}`,serviceToken=randomBytes(32).toString('hex');
   const env={...Object.fromEntries(Object.entries(process.env).filter(([k])=>['PATH','SYSTEMROOT','WINDIR','TEMP','TMP'].includes(k.toUpperCase()))),PORT:String(backendPort),HOST:'127.0.0.1',DATA_DIR:dir,OUTPUTS_DIR:path.join(dir,'outputs'),CONFIG_DIR:path.join(dir,'config'),GLAMPING_ADMIN_USER:'fixture-central',GLAMPING_ADMIN_PASSWORD:'FixtureCentral2026!',GLAMPING_B2B_USER:'reserved-fixture',GLAMPING_B2B_PASSWORD:'FixtureReserved2026!',TOURISM_VISITOR_MONTHLY_SYNC_ENABLED:'0',TOURISM_DEMAND_STRENGTH_BACKFILL_ENABLED:'0',INSIGHT_CONNECTION_ENABLED:'1',INSIGHT_SERVICE_TOKEN:serviceToken,INSIGHT_SIGNUP_ENABLED:'1'};
+  await fs.mkdir(path.join(dir,'company_master'),{recursive:true});
+  await fs.writeFile(path.join(dir,'company_master','companies.json'),JSON.stringify({schemaVersion:1,companies:Object.fromEntries(Array.from({length:5},(_,i)=>[`company-preview-${i}`,{companyId:`company-preview-${i}`,primaryName:`체험 검증 숙소 ${i}`,addresses:['경남 산청군'],placeIds:[String(900000+i)],regions:['산청'],runIds:[],keywords:{}}])),sourceIndex:{},duplicateResolutions:{}}));
   let child;
   async function start(){child=spawn(process.execPath,[path.join(__dirname,'glamping_app_server.cjs')],{env,stdio:['ignore','pipe','pipe']});await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Fixture startup timeout')),15000);child.stdout.on('data',c=>{if(String(c).includes('Lodging datalab beta app running')){clearTimeout(timeout);resolve();}});child.once('exit',code=>{clearTimeout(timeout);reject(Error('Fixture exited '+code));});});}
   async function stop(){if(child&&!child.killed)await new Promise(r=>{child.once('exit',r);child.kill();});}
@@ -68,7 +70,30 @@ test('actual DataLab and customer BFF isolate admin privileges, protect provisio
   assert.equal((await request('/api/crawl',{},adminHeaders)).status,404);
   assert.equal((await request('/api/admin/insight-admin-accounts',{},adminHeaders)).status,404);
   const state=await(await request(route,null,adminHeaders)).json();assert.equal(state.customer.entitlements.competitorLimit,5);assert.equal(state.history[0].actor,pending.adminId);
+  const view=prefix+'/customer-view';
+  assert.equal((await request(view+'/start',{}, {Cookie:customerCookie})).status,401);
+  assert.equal((await request(view+'/start',{}, {Cookie:adminCookie})).status,403);
+  assert.equal((await request(view+'/start',{customerId:customer.customerId},adminHeaders)).status,400);
+  let preview=await(await request(view+'/start',{},adminHeaders)).json();
+  const previewId=preview.customer.customerId;assert.notEqual(previewId,customer.customerId);assert.equal(preview.customer.accountKind,'admin_preview');assert.equal(preview.view.mode,'admin_customer');
+  assert.equal((await(await request(view+'/start',{},adminHeaders)).json()).customer.customerId,previewId);
+  const candidates=await(await request(view+'/catalog/companies?q='+encodeURIComponent('체험'),null,adminHeaders)).json();assert.equal(candidates.results.length,5);
+  const updatePreview=async(action,payload)=>{const r=await request(view+'/commands',{action,payload,revision:preview.customer.revision,requestKey:randomUUID()},adminHeaders);const data=await r.json();if(r.ok)preview=data;return {r,data};};
+  assert.equal((await updatePreview('onboarding',{businessStatus:'planning',projectName:'관리자 체험 매장'})).r.status,200);
+  assert.equal((await updatePreview('add-company',{kind:'own',companyId:candidates.results[4].companyId})).r.status,200);
+  assert.equal(preview.customer.relations[0].status,'pending');
+  for(let i=0;i<3;i++)assert.equal((await updatePreview('add-company',{kind:'competitor',companyId:candidates.results[i].companyId})).r.status,200);
+  assert.equal((await updatePreview('add-company',{kind:'competitor',companyId:candidates.results[3].companyId})).data.error.code,'COMPETITOR_LIMIT');
+  assert.equal((await updatePreview('entitlements',{competitorLimit:999,interestRegionLimit:999,reason:'not allowed in customer mode'})).data.error.code,'UNKNOWN_ACTION');
+  assert.equal((await request(view+'/commands',{customerId:customer.customerId,action:'onboarding',payload:{businessStatus:'planning',projectName:'leak'},revision:preview.customer.revision,requestKey:randomUUID()},adminHeaders)).status,400);
+  const actual=await(await request('/api/customer/v1/me',null,{Cookie:customerCookie+'; '+adminCookie})).json();assert.equal(actual.customer.customerId,customer.customerId);assert.notEqual(actual.customer.projectName,'관리자 체험 매장');assert.equal(actual.customer.relations.length,0);
+  const listing=await(await request(prefix+'/customers',null,adminHeaders)).json();assert.equal(listing.customers.find(c=>c.customerId===previewId).accountKind,'admin_preview');
+  await provision({action:'reserve',username:'second-admin'});const second=(await(await provision()).json()).accounts.find(a=>a.username==='second-admin');await provision({action:'activate',adminId:second.adminId,password,passwordConfirm:password});
+  const secondLogin=await request(prefix+'/auth/login',{username:'second-admin',password});const secondBody=await secondLogin.json();const secondHeaders={Cookie:secondLogin.headers.get('set-cookie').split(';')[0],'X-CSRF-Token':secondBody.csrfToken};
+  const secondView=await(await request(view+'/start',{},secondHeaders)).json();assert.notEqual(secondView.customer.customerId,previewId);assert.equal(secondView.customer.relations.length,0);
   await stop();await start();assert.equal((await request(prefix+'/me',null,adminHeaders)).status,200);
+  const restored=await(await request(view+'/me',null,adminHeaders)).json();assert.equal(restored.customer.customerId,previewId);assert.equal(restored.customer.projectName,'관리자 체험 매장');assert.equal(restored.customer.relations.length,4);
   centralCookie=await centralLogin();assert.equal((await provision({action:'disable',adminId:pending.adminId})).status,200);
   assert.equal((await request(prefix+'/me',null,adminHeaders)).status,401);assert.equal((await request(prefix+'/auth/login',{username:'admin',password})).status,401);
+  assert.equal((await request(view+'/me',null,adminHeaders)).status,401);assert.equal((await request(view+'/commands',{},adminHeaders)).status,401);
 });

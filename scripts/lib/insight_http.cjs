@@ -26,6 +26,28 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
     return { customer, companies, regions: data.regions.filter(row => regionKeys.has(row.id)), corrections: store.corrections(customer.customerId),
       preparations: store.requests(customer.customerId), features: { weeklyReports: false, reportDelivery: false, directCollection: false, dataPreparationRequests: true } };
   }
+  async function customerRequest(req, res, url, tail, c, token, context = {}) {
+      if (req.method === 'GET' && tail === '/me') json(res, 200, { ...(await state(c)), csrfToken: csrf(token), ...context });
+      else if (!context.view && req.method === 'POST' && tail === '/auth/logout') { store.logout(token); json(res, 200, { ok: true }); }
+      else if (req.method === 'GET' && ['/catalog/companies', '/catalog/regions'].includes(tail)) {
+        const query = (url.searchParams.get('q') || '').normalize('NFKC').trim().toLowerCase();
+        if (query.length < 2 || query.length > 120) throw fault('SEARCH_QUERY', '두 글자 이상으로 검색해 주세요.');
+        const data = await catalog();
+        const rows = tail.endsWith('/companies') ? data.companies : data.regions.filter(row => row.level === 'local');
+        const results = rows.filter(row => [row.name, row.address, row.label, ...(row.placeIds || [])].filter(Boolean).join(' ').toLowerCase().includes(query)).sort((a,b) => String(a.name || a.label).localeCompare(String(b.name || b.label), 'ko')).slice(0, 30);
+        // Registration candidates intentionally contain no private notes, analysis or raw observations.
+        json(res, 200, { results: results.map(row => tail.endsWith('/companies') ? { companyId: row.companyId, name: row.name, address: row.address, placeIds: row.placeIds, regionLabel: row.regionLabel } : row) });
+      } else if (req.method === 'POST' && tail === '/commands') {
+        store.throttle(`changes:${c.customerId}`, 120);
+        const command = await body(req); const data = await catalog();
+        const company = data.companies.find(row => row.companyId === command.payload?.companyId);
+        let result;
+        if (['correction', 'withdraw-correction'].includes(command.action)) result = store.correct(c.customerId, command, company);
+        else if (command.action === 'prepare-data') result = store.preparation(c.customerId, command, company);
+        else result = store.update(c.customerId, command, data);
+        json(res, 200, { ...(await state(result)), csrfToken: csrf(token), ...context });
+      } else throw fault('NOT_FOUND', '요청한 기능을 찾을 수 없습니다.', 404);
+  }
   const policyUrl = (value, kind) => {
     if (value === `/${kind}`) return policies[kind]?.version === signup[`${kind}Version`];
     try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password; } catch { return false; }
@@ -48,9 +70,32 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
         const token = req.headers['x-insight-admin-session'];
         const admin = adminStore.authenticate(token);
         if (req.method === 'POST' && !equal(req.headers['x-csrf-token'], csrf(token))) throw fault('CSRF_INVALID', '관리자 화면을 새로 열어 주세요.', 403);
+        if (tail.startsWith('/admin/customer-view/')) {
+          const route = tail.slice('/admin/customer-view'.length);
+          const context = { view: { mode: 'admin_customer', adminUsername: admin.username } };
+          if (route === '/config' && req.method === 'GET') {
+            json(res, 200, { signupEnabled: false, supportEmail, usernameCheckEnabled: false }); return true;
+          }
+          if (req.method === 'GET' && ['/policies/terms', '/policies/privacy'].includes(route)) {
+            const doc = policies[route.split('/').pop()];
+            if (!doc) throw fault('NOT_FOUND', '안내 문서를 준비 중입니다.', 404);
+            json(res, 200, doc); return true;
+          }
+          const memberId = 'insight-admin:' + admin.adminId;
+          let customer;
+          if (route === '/start' && req.method === 'POST') {
+            fields(await body(req), []);
+            customer = store.ensure({ memberId, username: admin.username, role: 'b2b', status: 'active', accountKind: 'admin_preview' });
+          } else customer = store.findMember(memberId);
+          if (!customer) throw fault('CUSTOMER_VIEW_REQUIRED', '고객 화면을 다시 열어 주세요.', 409);
+          if (customer.accountStatus !== 'active') throw fault('ACCOUNT_DISABLED', '고객 체험 계정의 이용이 중지되었습니다.', 403);
+          if (route === '/start' && req.method === 'POST') json(res, 200, { ...(await state(customer)), csrfToken: csrf(token), ...context });
+          else await customerRequest(req, res, url, route, customer, token, context);
+          return true;
+        }
         if (tail === '/admin/me' && req.method === 'GET') json(res, 200, { admin, csrfToken: csrf(token) });
         else if (tail === '/admin/auth/logout' && req.method === 'POST') { adminStore.logout(token); json(res, 200, { ok: true }); }
-        else if (tail === '/admin/customers' && req.method === 'GET') json(res, 200, { customers: store.list().map(c => ({ customerId: c.customerId, username: c.username, accountStatus: c.accountStatus, businessStatus: c.businessStatus, projectName: c.projectName, entitlements: c.entitlements, relations: c.relations.filter(active) })) });
+        else if (tail === '/admin/customers' && req.method === 'GET') json(res, 200, { customers: store.list().map(c => ({ customerId: c.customerId, username: c.username, accountKind: c.accountKind || 'customer', accountStatus: c.accountStatus, businessStatus: c.businessStatus, projectName: c.projectName, entitlements: c.entitlements, relations: c.relations.filter(active) })) });
         else {
           const match = /^\/admin\/customers\/(cus_[a-zA-Z0-9-]+)(\/commands)?$/.exec(tail);
           if (!match) throw fault('NOT_FOUND', '지원하지 않는 관리자 기능입니다.', 404);
@@ -104,26 +149,7 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
       const c = store.authenticate(token);
       if (!await memberActive(c.memberId)) { store.logout(token); throw fault('ACCOUNT_DISABLED', '이용자 계정이 중지되었습니다.', 403); }
       if (req.method === 'POST' && !equal(req.headers['x-csrf-token'], csrf(token))) throw fault('CSRF_INVALID', '화면을 새로 열고 다시 요청해 주세요.', 403);
-      if (req.method === 'GET' && tail === '/me') json(res, 200, { ...(await state(c)), csrfToken: csrf(token) });
-      else if (req.method === 'POST' && tail === '/auth/logout') { store.logout(token); json(res, 200, { ok: true }); }
-      else if (req.method === 'GET' && ['/catalog/companies', '/catalog/regions'].includes(tail)) {
-        const query = (url.searchParams.get('q') || '').normalize('NFKC').trim().toLowerCase();
-        if (query.length < 2 || query.length > 120) throw fault('SEARCH_QUERY', '두 글자 이상으로 검색해 주세요.');
-        const data = await catalog();
-        const rows = tail.endsWith('/companies') ? data.companies : data.regions.filter(row => row.level === 'local');
-        const results = rows.filter(row => [row.name, row.address, row.label, ...(row.placeIds || [])].filter(Boolean).join(' ').toLowerCase().includes(query)).sort((a,b) => String(a.name || a.label).localeCompare(String(b.name || b.label), 'ko')).slice(0, 30);
-        // Registration candidates intentionally contain no private notes, analysis or raw observations.
-        json(res, 200, { results: results.map(row => tail.endsWith('/companies') ? { companyId: row.companyId, name: row.name, address: row.address, placeIds: row.placeIds, regionLabel: row.regionLabel } : row) });
-      } else if (req.method === 'POST' && tail === '/commands') {
-        store.throttle(`changes:${c.customerId}`, 120);
-        const command = await body(req); const data = await catalog();
-        const company = data.companies.find(row => row.companyId === command.payload?.companyId);
-        let result;
-        if (['correction', 'withdraw-correction'].includes(command.action)) result = store.correct(c.customerId, command, company);
-        else if (command.action === 'prepare-data') result = store.preparation(c.customerId, command, company);
-        else result = store.update(c.customerId, command, data);
-        json(res, 200, { ...(await state(result)), csrfToken: csrf(token) });
-      } else throw fault('NOT_FOUND', '요청한 기능을 찾을 수 없습니다.', 404);
+      await customerRequest(req, res, url, tail, c, token);
     } catch (error) { const safe = Number.isInteger(error.statusCode) && error.statusCode < 500; json(res, safe ? error.statusCode : 503, { error: { code: safe ? error.code || 'REQUEST_FAILED' : 'SERVICE_UNAVAILABLE', message: safe ? error.message : '자료 연결을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.' } }); }
     return true;
   }
@@ -133,7 +159,7 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
     if (!requireAdmin(session, req, res)) return true;
     try {
       const tail = url.pathname.slice(base.length).split('/').filter(Boolean);
-      if (req.method === 'GET' && !tail.length) { json(res, 200, { customers: store.list().map(c => ({ customerId: c.customerId, memberId: c.memberId, username: c.username, accountStatus: c.accountStatus, businessStatus: c.businessStatus, relations: c.relations.filter(active), entitlements: c.entitlements, revision: c.revision })) }); return true; }
+      if (req.method === 'GET' && !tail.length) { json(res, 200, { customers: store.list().map(c => ({ customerId: c.customerId, memberId: c.memberId, username: c.username, accountKind: c.accountKind || 'customer', accountStatus: c.accountStatus, businessStatus: c.businessStatus, relations: c.relations.filter(active), entitlements: c.entitlements, revision: c.revision })) }); return true; }
       if (req.method === 'GET' && tail.length === 1) { const c = store.get(tail[0]); json(res, 200, { ...(await state(c)), history: store.history(c.customerId) }); return true; }
       if (req.method !== 'POST' || tail.length !== 2) throw fault('METHOD_NOT_ALLOWED', '지원하지 않는 요청입니다.', 405);
       let origin; try { origin = new URL(req.headers.origin); } catch {}
