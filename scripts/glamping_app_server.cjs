@@ -374,6 +374,7 @@ const handleRegionalReportPreparation = createRegionalReportPreparationHttpHandl
   service: regionalReportPreparation, requireAdmin: requireAdminSession, parseJsonBody, send,
   rateLimit: (req, session) => assertRequestRateLimit(req, "adminRegionalPreparation", { limit: 6, windowMs: 60 * 60 * 1000 }, session.username || "")
 });
+const readMonthlyRegionContext = createMonthlyReportContext({ kosisService, tourismCollector, searchTrendService: regionalSearchTrendService });
 const monthlyReportSources = createMonthlyReportSources({
   dataDir: DATA_DIR,
   regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
@@ -383,7 +384,7 @@ const monthlyReportSources = createMonthlyReportSources({
   recalculateCompanyObservations: createMonthlyCompanyRecalculation({
     loadRun, applyCompanyManualCorrection, companyProductAvailabilityMatch, buildHistoryObservations
   }),
-  readContext: createMonthlyReportContext({ kosisService, tourismCollector, searchTrendService: regionalSearchTrendService }),
+  readContext: readMonthlyRegionContext,
   readSpecialDays: async year => (await specialDaysService.status(year)).yearStatus
 });
 const monthlyReportService = createMonthlyReportService({
@@ -437,6 +438,16 @@ const insightIntegration = require('./lib/insight_integration.cjs').createInsigh
   authenticateMember: authenticateB2BMember, registerMember: (payload, insightConsent) => registerB2BMember(payload, { insightConsent }), checkUsername: checkSignupUsernameAvailability, policyContext: publicPageContext(), requireAdmin: requireAdminSession, collectorRequests,
   readEvidence: readInsightCompanyEvidence,
   readCompanyDetail: companyId => summarizeCompanyMasterDetail(companyId, { strictIdentity:true }),
+  readRegionContext: readMonthlyRegionContext,
+  readRegionLocation: async regionKey => {
+    const region=await resolveRegionalReportRegion(regionKey);
+    if(!region || region.regionKey!==regionKey)return null;
+    const dictionary=JSON.parse(await fsp.readFile(path.join(WEB_DIR,'data','location_dictionary.json'),'utf8'));
+    const card=(dictionary.cards||[]).find(c=>c.regionKey===(region.locationCardKey||regionKey));
+    if(!card)return null;
+    const codes=String(card.primaryCluster||'').split('+').map(c=>c.trim());
+    return {...card,regionKey,source:'데이터랩 입지 판단 사전 · 통계가 아닌 참고 해석',updatedAt:dictionary.generatedAt,clusters:(dictionary.clusters||[]).filter(c=>codes.includes(c.code))};
+  },
   verifyStored: async (job, runId) => {
     const master = await readCompanyMaster();
     const company = master.companies?.[job.companyId];
@@ -14701,7 +14712,10 @@ async function summarizeCompanyMasterDetail(companyId = "", { strictIdentity = f
     },
     salesHistory: companySalesHistorySummary(
       Array.isArray(historySalesArchive?.archiveDaily) ? historySalesArchive.archiveDaily : [],
-      snapshotDaily
+      snapshotDaily.map(row => ({...row,
+        collectedAt: row.collectedAt || (!row.collectedDate ? dailySnapshot?.dailyCollectedAt || dailySnapshot?.collectedAt : "") || "",
+        runId: row.runId || dailySnapshot?.dailyRunId || dailySnapshot?.runId || ""
+      }))
     ),
     priceGroups: Array.isArray(productSnapshot?.priceGroups) ? productSnapshot.priceGroups : [],
     productSummary: productSnapshot?.summary || latestSnapshot?.summary || null,

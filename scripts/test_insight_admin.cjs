@@ -83,7 +83,8 @@ test('actual DataLab and customer BFF isolate admin privileges, protect provisio
   assert.equal((await updatePreview('add-company',{kind:'own',companyId:candidates.results[4].companyId})).r.status,200);
   assert.equal(preview.customer.relations[0].status,'pending');
   for(let i=0;i<3;i++)assert.equal((await updatePreview('add-company',{kind:'competitor',companyId:candidates.results[i].companyId})).r.status,200);
-  assert.equal((await updatePreview('add-company',{kind:'competitor',companyId:candidates.results[3].companyId})).data.error.code,'COMPETITOR_LIMIT');
+  assert.equal((await updatePreview('add-company',{kind:'competitor',companyId:candidates.results[3].companyId})).r.status,200);
+  assert.deepEqual(preview.registrationAllowance,{ownLimit:null,competitorLimit:null,interestRegionLimit:null});
   assert.equal((await updatePreview('entitlements',{competitorLimit:999,interestRegionLimit:999,reason:'not allowed in customer mode'})).data.error.code,'UNKNOWN_ACTION');
   assert.equal((await request(view+'/commands',{customerId:customer.customerId,action:'onboarding',payload:{businessStatus:'planning',projectName:'leak'},revision:preview.customer.revision,requestKey:randomUUID()},adminHeaders)).status,400);
   const actual=await(await request('/api/customer/v1/me',null,{Cookie:customerCookie+'; '+adminCookie})).json();assert.equal(actual.customer.customerId,customer.customerId);assert.notEqual(actual.customer.projectName,'관리자 체험 매장');assert.equal(actual.customer.relations.length,0);
@@ -92,7 +93,7 @@ test('actual DataLab and customer BFF isolate admin privileges, protect provisio
   const secondLogin=await request(prefix+'/auth/login',{username:'second-admin',password});const secondBody=await secondLogin.json();const secondHeaders={Cookie:secondLogin.headers.get('set-cookie').split(';')[0],'X-CSRF-Token':secondBody.csrfToken};
   const secondView=await(await request(view+'/start',{},secondHeaders)).json();assert.notEqual(secondView.customer.customerId,previewId);assert.equal(secondView.customer.relations.length,0);
   await stop();await start();assert.equal((await request(prefix+'/me',null,adminHeaders)).status,200);
-  const restored=await(await request(view+'/me',null,adminHeaders)).json();assert.equal(restored.customer.customerId,previewId);assert.equal(restored.customer.projectName,'관리자 체험 매장');assert.equal(restored.customer.relations.length,4);
+  const restored=await(await request(view+'/me',null,adminHeaders)).json();assert.equal(restored.customer.customerId,previewId);assert.equal(restored.customer.projectName,'관리자 체험 매장');assert.equal(restored.customer.relations.length,5);
   centralCookie=await centralLogin();assert.equal((await provision({action:'disable',adminId:pending.adminId})).status,200);
   assert.equal((await request(prefix+'/me',null,adminHeaders)).status,401);assert.equal((await request(prefix+'/auth/login',{username:'admin',password})).status,401);
   assert.equal((await request(view+'/me',null,adminHeaders)).status,401);assert.equal((await request(view+'/commands',{},adminHeaders)).status,401);

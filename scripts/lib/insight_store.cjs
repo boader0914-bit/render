@@ -116,8 +116,8 @@ function createInsightStore({ file, now = () => Date.now() }) {
         fields(p, ['kind', 'companyId']);
         if (!['own', 'competitor'].includes(p.kind) || !companies.has(p.companyId)) throw fault('INVALID_COMPANY', '등록할 업체를 다시 선택해 주세요.');
         if (c.relations.some(row => row.companyId === p.companyId && active(row))) throw fault('DUPLICATE_COMPANY', '이미 등록한 업체입니다.', 409);
-        if (p.kind === 'own' && c.relations.some(row => row.kind === 'own' && active(row))) throw fault('OWN_LIMIT', '내 매장은 1곳까지 등록할 수 있습니다.', 409);
-        if (p.kind === 'competitor' && c.relations.filter(row => row.kind === 'competitor' && active(row)).length >= c.entitlements.competitorLimit) throw fault('COMPETITOR_LIMIT', '경쟁업체 등록 한도에 도달했습니다.', 409);
+        if (c.accountKind !== 'admin_preview' && p.kind === 'own' && c.relations.some(row => row.kind === 'own' && active(row))) throw fault('OWN_LIMIT', '내 매장은 1곳까지 등록할 수 있습니다.', 409);
+        if (c.accountKind !== 'admin_preview' && p.kind === 'competitor' && c.relations.filter(row => row.kind === 'competitor' && active(row)).length >= c.entitlements.competitorLimit) throw fault('COMPETITOR_LIMIT', '경쟁업체 등록 한도에 도달했습니다.', 409);
         c.relations.push({ relationId: id('rel'), companyId: p.companyId, kind: p.kind, status: p.kind === 'own' ? 'pending' : 'active', createdAt: stamp() });
         if (p.kind === 'own') c.businessStatus = 'owned';
       } else if (command.action === 'archive-company') {
@@ -127,9 +127,9 @@ function createInsightStore({ file, now = () => Date.now() }) {
       } else if (command.action === 'add-region') {
         fields(p, ['regionKey']);
         if (!regions.has(p.regionKey) || regions.get(p.regionKey).level !== 'local') throw fault('INVALID_REGION', '시군구 지역을 선택해 주세요.');
-        const own = c.relations.find(row => row.kind === 'own' && row.status === 'active');
-        if (c.regions.some(row => row.regionKey === p.regionKey && active(row)) || (own && companies.get(own.companyId)?.regionKey === p.regionKey)) throw fault('DUPLICATE_REGION', '이미 제공되는 지역입니다.', 409);
-        if (c.regions.filter(active).length >= c.entitlements.interestRegionLimit) throw fault('REGION_LIMIT', '관심지역 등록 한도에 도달했습니다.', 409);
+        const own = c.relations.filter(row => row.kind === 'own' && row.status === 'active');
+        if (c.regions.some(row => row.regionKey === p.regionKey && active(row)) || own.some(row=>companies.get(row.companyId)?.regionKey === p.regionKey)) throw fault('DUPLICATE_REGION', '이미 제공되는 지역입니다.', 409);
+        if (c.accountKind !== 'admin_preview' && c.regions.filter(active).length >= c.entitlements.interestRegionLimit) throw fault('REGION_LIMIT', '관심지역 등록 한도에 도달했습니다.', 409);
         c.regions.push({ relationId: id('region'), regionKey: p.regionKey, status: 'active', createdAt: stamp() });
       } else if (command.action === 'archive-region') {
         fields(p, ['relationId']); const row = c.regions.find(row => row.relationId === p.relationId && active(row));
@@ -145,6 +145,7 @@ function createInsightStore({ file, now = () => Date.now() }) {
   function adminUpdate(customerId, command, actor, catalog = { companies: [] }) {
     return mutate(customerId, command, actor, (c, p) => {
       if (command.action === 'entitlements') {
+        if(c.accountKind==='admin_preview')throw fault('ADMIN_UNLIMITED','관리자 계정은 등록 수량 제한을 적용하지 않습니다.',409);
         fields(p, ['competitorLimit', 'interestRegionLimit', 'keepCompetitorRelationIds', 'keepInterestRegionRelationIds', 'reason']);
         if (!text(p.reason || '', 500)) throw fault('REASON_REQUIRED', '변경 사유를 입력해 주세요.');
         for (const [field, rows, keepField] of [['competitorLimit', c.relations.filter(row => row.kind === 'competitor'), 'keepCompetitorRelationIds'], ['interestRegionLimit', c.regions, 'keepInterestRegionRelationIds']]) {

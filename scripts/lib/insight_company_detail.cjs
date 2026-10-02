@@ -14,7 +14,7 @@ function summary(s) {
     ...Object.fromEntries(['calendarDays','observedDays','missingDays','rateObservedDays','revenueObservedDays','supply','sold','reservationRate','estimatedRevenue','publicBookings','phoneBookings','publicRevenue','phoneRevenue','sharedDayUseExcluded'].map(k => [k,num(s[k])])) };
 }
 function daily(d) {
-  return {date:date(d.date),collectedAt:stamp(d.collectedAt),missing:d.missing === true,partial:d.partial === true,
+  return {date:date(d.date),collectedAt:stamp(d.collectedAt),collectedDate:date(d.collectedDate),missing:d.missing === true,partial:d.partial === true,revenuePartial:d.revenuePartial===true,inventoryConflict:d.inventoryConflict===true,
     ...Object.fromEntries(['total','sold','reservationRate','estimatedRevenue','publicBookings','phoneBookings','publicRevenue','phoneRevenue','sharedDayUseExcluded'].map(k=>[k,num(d[k])]))};
 }
 function projectCompanyDetail(company, detail) {

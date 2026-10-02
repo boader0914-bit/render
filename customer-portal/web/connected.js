@@ -10,6 +10,7 @@
   let adminCsrf = '';
   let state = null, config = {}, busy = false, searchSequence = 0;
   const route = () => location.hash.slice(1) || ({'/signup':'signup','/login':'login','/terms':'terms','/privacy':'privacy'}[location.pathname]) || 'home';
+  const menuRoute=()=>route().startsWith('regions=')?'regions':route();
   const toast = message => { $('#toast').textContent = message; $('#toast').classList.add('visible'); setTimeout(() => $('#toast').classList.remove('visible'), 4500); };
   async function api(url, data) {
     const base = adminView ? '/api/insight-admin/v1' : '/api/customer/v1';
@@ -45,10 +46,10 @@
   }
   function search(kind) { return `<section class="card search-box"><h2>${kind==='region'?'관심지역 추가':kind==='own'?'내 매장 등록':'경쟁업체 추가'}</h2><form id="search-form" data-kind="${kind}"><label class="field"><span>${kind==='region'?'시군구 이름':'업체명·주소·플레이스 번호'}</span><input name="q" required minlength="2" maxlength="120" placeholder="두 글자 이상 입력하세요."></label><button class="button" type="submit">저장된 업체·지역 검색</button></form><div id="search-results" class="search-results" aria-live="polite"></div></section>`; }
   function render() {
-    searchSequence++;
+    searchSequence++; window.InsightAnalysis?.stop(); window.InsightCollection?.stop?.();
     $('#logout').hidden = !state;
     $('#admin-view-banner').hidden = !adminView || !state;
-    $('#navigation').innerHTML = state ? menus.map(([key,label])=>`<a href="#${key}" class="nav-link ${route()===key?'active':''}">${label}</a>`).join(''):'';
+    $('#navigation').innerHTML = state ? menus.map(([key,label])=>`<a href="#${key}" class="nav-link ${menuRoute()===key?'active':''}">${label}</a>`).join(''):'';
     $('#customer-name').textContent = state ? state.customer.username : '사분 인사이트';
     document.body.classList.toggle('auth-view', !state);
     if (['terms','privacy'].includes(route())) { policy(route()); return; }
@@ -56,6 +57,8 @@
     if (!state) { auth(); return; }
     if (route() === 'welcome') { $('#main').innerHTML=window.InsightAuth.welcome(state.customer); return; }
     const c = state.customer, relations = c.relations.filter(row=>['active','pending'].includes(row.status));
+    const limits=state.registrationAllowance || {ownLimit:1,...c.entitlements};
+    const limitText=v=>v===null?'제한 없음':`${v}곳`;
     const own = relations.filter(row=>row.kind==='own'), competitors = relations.filter(row=>row.kind==='competitor');
     if(route().startsWith('collection=')) {
       const id=decodeURIComponent(route().slice('collection='.length)),relation=relations.find(r=>r.companyId===id),company=state.companies.find(r=>r.companyId===id);
@@ -63,15 +66,16 @@
       $('#main').innerHTML='<a class="text-link" href="#'+(relation.kind==='own'?'property':'competitors')+'">← 등록 업체로 돌아가기</a>'+window.InsightCollection.panel(company,state.features.directCollection,state.preparations.find(r=>r.companyId===id),state.collectionAllowance)+'<section class="collection-company-edit"><h2>업체 정보 수정</h2>'+companyCard(relation,true)+'</section>';
       window.InsightCollection.mount(id,api);return;
     }
-    const current = menus.find(([key])=>key===route()) || menus[0];
+    const current = menus.find(([key])=>key===menuRoute()) || menus[0];
     let content = '';
-    if (current[0]==='home') content = `<section class="welcome-banner"><div><span class="eyebrow">YOUR BUSINESS, CONNECTED</span><h2>${esc(c.projectName || c.username)}님의 분석 공간</h2><p>등록한 매장과 비교 대상을 한곳에서 관리하세요.</p></div></section><div class="stat-grid"><article class="stat-card"><div class="stat-label">내 매장</div><div class="stat-value">${own.length}<small> / 1곳</small></div></article><article class="stat-card"><div class="stat-label">경쟁업체</div><div class="stat-value">${competitors.length}<small> / ${c.entitlements.competitorLimit}곳</small></div></article><article class="stat-card"><div class="stat-label">관심지역</div><div class="stat-value">${c.regions.filter(row=>row.status==='active').length}<small> / ${c.entitlements.interestRegionLimit}곳</small></div></article></div><div class="connected-list">${own.map(relation => companyCard(relation)).join('') || '<div class="empty-note">내 매장을 등록하거나, 설정에서 매장 준비 중으로 시작하세요.</div>'}</div>`;
-    if (current[0]==='property') content = `<div class="connected-list">${own.map(relation => companyCard(relation)).join('') || '<div class="empty-note">내 매장 등록 후 관리자의 연결 확인을 받습니다.</div>'}</div>${own.length?'':search('own')}`;
-    if (current[0]==='competitors') content = `<p class="muted">등록 ${competitors.length} / ${c.entitlements.competitorLimit}곳 · 제공 수량 변경은 관리자에게 문의하세요.</p><div class="connected-list">${competitors.map(relation => companyCard(relation)).join('') || '<div class="empty-note">비교할 업체를 등록해 주세요.</div>'}</div>${competitors.length<c.entitlements.competitorLimit?search('competitor'):''}`;
-    if (current[0]==='regions') content = `<div class="connected-list">${state.regions.map(row=>`<article class="connected-row"><h3>${esc(row.label)}</h3><p class="muted">지역 지표 연결 준비 중 · 자료 없음은 0으로 표시하지 않습니다.</p>${c.regions.some(r=>r.regionKey===row.id&&r.status==='active')?`<button class="button small" data-action="archive-region" data-relation="${esc(c.regions.find(r=>r.regionKey===row.id&&r.status==='active').relationId)}">관심지역 해제</button>`:'<span class="status-pill">내 매장 소재 지역</span>'}</article>`).join('') || '<div class="empty-note">관심지역을 등록해 주세요.</div>'}</div>${c.regions.filter(activeRegion).length<c.entitlements.interestRegionLimit?search('region'):''}`;
-    if (current[0]==='reports') content = '<section class="card"><h2>리포트 연결 준비 중</h2><p class="muted">검토·발행한 월간 리포트를 이곳에 배정할 예정입니다. 주간 리포트는 집계 검증 후 제공합니다.</p></section>';
+    if (current[0]==='home') content = `<section class="welcome-banner"><div><span class="eyebrow">YOUR BUSINESS, CONNECTED</span><h2>${esc(c.projectName || c.username)}님의 분석 공간</h2><p>등록한 매장과 비교 대상을 한곳에서 관리하세요.</p></div></section><div class="stat-grid"><article class="stat-card"><div class="stat-label">내 매장</div><div class="stat-value">${own.length}<small> / ${limitText(limits.ownLimit)}</small></div></article><article class="stat-card"><div class="stat-label">경쟁업체</div><div class="stat-value">${competitors.length}<small> / ${limitText(limits.competitorLimit)}</small></div></article><article class="stat-card"><div class="stat-label">관심지역</div><div class="stat-value">${c.regions.filter(row=>row.status==='active').length}<small> / ${limitText(limits.interestRegionLimit)}</small></div></article></div><div class="connected-list">${own.map(relation => companyCard(relation)).join('') || '<div class="empty-note">내 매장을 등록하거나, 설정에서 매장 준비 중으로 시작하세요.</div>'}</div>`;
+    if (current[0]==='property') content = `<div class="connected-list">${own.map(relation => companyCard(relation)).join('') || '<div class="empty-note">내 매장 등록 후 관리자의 연결 확인을 받습니다.</div>'}</div>${limits.ownLimit===null||own.length<limits.ownLimit?search('own'):''}`;
+    if (current[0]==='competitors') content = `<p class="muted">등록 ${competitors.length} / ${limitText(limits.competitorLimit)} · ${limits.competitorLimit===null?'관리자 등록 수량 무제한':'제공 수량 변경은 관리자에게 문의하세요.'}</p><div class="connected-list">${competitors.map(relation => companyCard(relation)).join('') || '<div class="empty-note">비교할 업체를 등록해 주세요.</div>'}</div>${limits.competitorLimit===null||competitors.length<limits.competitorLimit?search('competitor'):''}`;
+    if (current[0]==='regions') content = window.InsightAnalysis.panel('regions',state)+`<div class="connected-list region-registrations">${state.regions.map(row=>`<article class="connected-row"><h3>${esc(row.label)}</h3>${c.regions.some(r=>r.regionKey===row.id&&r.status==='active')?`<button class="button small" data-action="archive-region" data-relation="${esc(c.regions.find(r=>r.regionKey===row.id&&r.status==='active').relationId)}">관심지역 해제</button>`:'<span class="status-pill">내 매장 소재 지역</span>'}</article>`).join('')}</div>${limits.interestRegionLimit===null||c.regions.filter(activeRegion).length<limits.interestRegionLimit?search('region'):''}`;
+    if (current[0]==='reports') content = window.InsightAnalysis.panel('reports',state);
     if (current[0]==='settings') content = `<section class="card"><h2>사업 정보</h2><form id="onboarding-form"><label class="field"><span>현재 상태</span><select name="businessStatus"><option value="planning" ${c.businessStatus==='planning'?'selected':''}>매장 준비 중</option><option value="owned" ${c.businessStatus==='owned'?'selected':''}>내 매장 등록</option></select></label>${field('매장·프로젝트 이름','projectName',c.projectName)}<button class="button primary" type="submit">저장</button></form></section>`;
     $('#main').innerHTML = `<div class="page-heading"><div><span class="eyebrow">SABUN INSIGHT</span><h1>${current[1]}</h1><p>등록한 대상과 정보 수정 내역을 관리합니다.</p></div></div>${content}`;
+    if(['regions','reports'].includes(current[0]))window.InsightAnalysis.mount(current[0],api,state,route().startsWith('regions=')?decodeURIComponent(route().slice(8)):null);
   }
   function activeRegion(row) { return row.status==='active'; }
   document.addEventListener('submit', async event => {

@@ -1,6 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
 const { fault, fields, hash, active } = require('./insight_store.cjs');
+const {regionIds}=require('./insight_analysis.cjs');
 const csrf = token => crypto.createHmac('sha256', token).update('insight-csrf-v1').digest('base64url');
 const equal = (a, b) => crypto.timingSafeEqual(Buffer.from(hash(a || '')), Buffer.from(hash(b || '')));
 async function body(req) {
@@ -13,17 +14,17 @@ async function body(req) {
 }
 function json(res, status, value) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(value)); }
 function createInsightHttp({ store, serviceToken, authenticateMember, memberActive, registerMember, checkUsername, catalog, requireAdmin, preparationBridge = null,
-  signup = { enabled: false }, policies = {}, supportEmail = '', adminStore = null, collectionResults = null }) {
+  signup = { enabled: false }, policies = {}, supportEmail = '', adminStore = null, collectionResults = null, analysis = null }) {
   if (typeof serviceToken !== 'string' || serviceToken.length < 32) throw new Error('Insight service credential must contain at least 32 characters');
   async function state(customer) {
     if (preparationBridge) await preparationBridge.refresh(customer.customerId);
     const data = await catalog();
     const allowed = new Set(customer.relations.filter(active).map(row => row.companyId));
     const companies = data.companies.filter(row => allowed.has(row.companyId));
-    const regionKeys = new Set(customer.regions.filter(active).map(row => row.regionKey));
-    const own = customer.relations.find(row => row.kind === 'own' && row.status === 'active');
-    if (own) regionKeys.add(companies.find(row => row.companyId === own.companyId)?.regionKey);
+    const regionKeys = regionIds(customer,data);
+    const unlimited=customer.accountKind==='admin_preview';
     return { customer, companies, regions: data.regions.filter(row => regionKeys.has(row.id)), corrections: store.corrections(customer.customerId),
+      registrationAllowance:{ownLimit:unlimited?null:1,competitorLimit:unlimited?null:customer.entitlements.competitorLimit,interestRegionLimit:unlimited?null:customer.entitlements.interestRegionLimit},
       preparations: store.requests(customer.customerId), collectionAllowance:store.collectionAllowance(customer.customerId), features: { weeklyReports: false, reportDelivery: false, directCollection: Boolean(preparationBridge && collectionResults), dataPreparationRequests: true } };
   }
   async function companyCollection(c, companyId) {
@@ -36,6 +37,16 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
   }
   async function customerRequest(req, res, url, tail, c, token, context = {}) {
       if (req.method === 'GET' && tail === '/me') json(res, 200, { ...(await state(c)), csrfToken: csrf(token), ...context });
+      else if(req.method==='GET' && /^\/regions\/[a-zA-Z0-9_-]+\/analysis$/.test(tail)) {
+        if(!analysis)throw fault('REGION_NOT_READY','지역 자료 연결을 준비 중입니다.',503);
+        if([...url.searchParams.keys()].some(k=>k!=='month')||url.searchParams.getAll('month').length>1)throw fault('INVALID_FIELDS','조회할 기준월만 지정해 주세요.');
+        json(res,200,await analysis.region(c,tail.split('/')[2],url.searchParams.get('month')||undefined));
+      }
+      else if(req.method==='GET' && tail==='/reports/briefing') {
+        if(!analysis)throw fault('REPORT_NOT_READY','리포트 연결을 준비 중입니다.',503);
+        if([...url.searchParams.keys()].some(k=>k!=='ownId')||url.searchParams.getAll('ownId').length>1)throw fault('INVALID_FIELDS','등록한 내 매장만 선택해 주세요.');
+        json(res,200,await analysis.briefing(c,url.searchParams.get('ownId')||undefined));
+      }
       else if (req.method === 'GET' && /^\/companies\/[a-zA-Z0-9_-]+\/collection$/.test(tail)) {
         if (url.search) throw fault('INVALID_FIELDS','결과는 등록 업체의 저장 이력에서 선택합니다.');
         json(res,200,await companyCollection(c,tail.split('/')[2]));
