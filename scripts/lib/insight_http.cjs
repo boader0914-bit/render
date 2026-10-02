@@ -12,8 +12,8 @@ async function body(req) {
   return value;
 }
 function json(res, status, value) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(value)); }
-function createInsightHttp({ store, serviceToken, authenticateMember, memberActive, registerMember, catalog, requireAdmin, preparationBridge = null,
-  signup = { enabled: false } }) {
+function createInsightHttp({ store, serviceToken, authenticateMember, memberActive, registerMember, checkUsername, catalog, requireAdmin, preparationBridge = null,
+  signup = { enabled: false }, policies = {}, supportEmail = '' }) {
   if (typeof serviceToken !== 'string' || serviceToken.length < 32) throw new Error('Insight service credential must contain at least 32 characters');
   async function state(customer) {
     if (preparationBridge) await preparationBridge.refresh(customer.customerId);
@@ -26,8 +26,11 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
     return { customer, companies, regions: data.regions.filter(row => regionKeys.has(row.id)), corrections: store.corrections(customer.customerId),
       preparations: store.requests(customer.customerId), features: { weeklyReports: false, reportDelivery: false, directCollection: false, dataPreparationRequests: true } };
   }
-  const policyUrl = value => { try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password; } catch { return false; } };
-  const signupReady = signup.enabled === true && registerMember && signup.termsVersion && signup.privacyVersion && policyUrl(signup.termsUrl) && policyUrl(signup.privacyUrl);
+  const policyUrl = (value, kind) => {
+    if (value === `/${kind}`) return policies[kind]?.version === signup[`${kind}Version`];
+    try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password; } catch { return false; }
+  };
+  const signupReady = signup.enabled === true && registerMember && signup.termsVersion && signup.privacyVersion && policyUrl(signup.termsUrl, 'terms') && policyUrl(signup.privacyUrl, 'privacy');
   async function internal(req, res, url) {
     const base = '/api/insight/v1';
     if (!url.pathname.startsWith(base + '/')) return false;
@@ -35,10 +38,20 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
       if (!equal(req.headers.authorization, `Bearer ${serviceToken}`)) throw fault('SERVICE_UNAUTHORIZED', '서비스 연결 인증이 필요합니다.', 401);
       const tail = url.pathname.slice(base.length);
       if (!['GET', 'POST'].includes(req.method)) throw fault('METHOD_NOT_ALLOWED', '지원하지 않는 요청입니다.', 405);
-      if (tail === '/config' && req.method === 'GET') { json(res, 200, { signupEnabled: Boolean(signupReady), termsVersion: signup.termsVersion || null, privacyVersion: signup.privacyVersion || null, termsUrl: signup.termsUrl || null, privacyUrl: signup.privacyUrl || null }); return true; }
+      if (tail === '/config' && req.method === 'GET') { json(res, 200, { signupEnabled: Boolean(signupReady), signupMessage: signupReady ? '' : '현재 신규 가입을 준비하고 있습니다. 이용 문의를 남겨 주세요.', termsVersion: signup.termsVersion || null, privacyVersion: signup.privacyVersion || null, termsUrl: signup.termsUrl || null, privacyUrl: signup.privacyUrl || null, supportEmail, usernameCheckEnabled: Boolean(checkUsername) }); return true; }
+      if (req.method === 'GET' && ['/policies/terms', '/policies/privacy'].includes(tail)) {
+        const doc = policies[tail.split('/').pop()];
+        if (!doc) throw fault('NOT_FOUND', '안내 문서를 준비 중입니다.', 404);
+        json(res, 200, doc); return true;
+      }
+      if (req.method === 'GET' && tail === '/auth/username') {
+        if (!signupReady || !checkUsername) throw fault('SIGNUP_NOT_READY', '현재 신규 가입을 받지 않습니다.', 403);
+        store.throttle('signup-username-check', 120);
+        json(res, 200, await checkUsername(url.searchParams.get('username') || '')); return true;
+      }
       if ((tail === '/auth/login' || tail === '/auth/signup') && req.method === 'POST') {
         const p = await body(req);
-        fields(p, ['username', 'password', 'passwordConfirm', 'phone', 'email', 'agreeTerms', 'agreePrivacy', 'confirmAge', 'termsVersion', 'privacyVersion']);
+        fields(p, ['username', 'password', 'passwordConfirm', 'phone', 'email', 'agreeTerms', 'agreePrivacy', 'confirmAge', 'termsVersion', 'privacyVersion', 'businessStatus', 'projectName']);
         if (typeof p.username !== 'string' || p.username.length > 120 || typeof p.password !== 'string' || p.password.length > 256) throw fault('INVALID_LOGIN', '아이디와 비밀번호를 확인해 주세요.');
         store.throttle(`auth:${p.username.trim().toLowerCase()}`, 10);
         store.throttle('auth-service-total', 100);
@@ -46,11 +59,18 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
         if (tail === '/auth/signup') {
           if (!signupReady) throw fault('SIGNUP_NOT_READY', '회원가입 준비 중입니다. 관리자에게 문의해 주세요.', 503);
           if (p.termsVersion !== signup.termsVersion || p.privacyVersion !== signup.privacyVersion || p.agreeTerms !== true || p.agreePrivacy !== true || p.confirmAge !== true) throw fault('CONSENT_REQUIRED', '최신 약관과 개인정보 안내를 확인해 주세요.');
-          member = await registerMember(p);
+          if (p.businessStatus !== undefined && !['owned', 'planning'].includes(p.businessStatus)) throw fault('INVALID_INPUT', '운영 중 또는 준비 중을 선택해 주세요.');
+          if (p.projectName !== undefined && (typeof p.projectName !== 'string' || p.projectName.length > 100)) throw fault('INVALID_INPUT', '매장·프로젝트 이름은 100자 이내로 입력해 주세요.');
+          if (typeof p.phone !== 'string' || !/^\+?[0-9 ()-]{7,30}$/.test(p.phone) || p.phone.replace(/\D/g, '').length < 7 || typeof p.email !== 'string' || p.email.length > 120) throw fault('INVALID_INPUT', '연락처와 이메일 형식을 확인해 주세요.');
+          const { businessStatus, projectName, ...registration } = p;
+          member = await registerMember({ ...registration, ownershipStatus: businessStatus || 'planning', companyName: projectName || '' }, { termsVersion: signup.termsVersion, privacyVersion: signup.privacyVersion, termsUrl: signup.termsUrl, privacyUrl: signup.privacyUrl });
         } else member = await authenticateMember(p.username, p.password);
         if (!member || member.role !== 'b2b' || !member.memberId || member.status === 'disabled') throw fault('INVALID_LOGIN', '아이디 또는 비밀번호가 올바르지 않습니다.', 401);
         let c = store.ensure(member);
-        if (tail === '/auth/signup') c = store.recordConsent(c.customerId, { termsVersion: signup.termsVersion, privacyVersion: signup.privacyVersion, termsUrl: signup.termsUrl, privacyUrl: signup.privacyUrl, ageConfirmed: true });
+        if (tail === '/auth/signup') {
+          c = store.recordConsent(c.customerId, { termsVersion: signup.termsVersion, privacyVersion: signup.privacyVersion, termsUrl: signup.termsUrl, privacyUrl: signup.privacyUrl, ageConfirmed: true });
+          c = store.update(c.customerId, { revision: c.revision, requestKey: crypto.randomUUID(), action: 'onboarding', payload: { businessStatus: p.businessStatus || 'planning', projectName: p.projectName || '' } }, { companies: [], regions: [] });
+        }
         if (c.accountStatus !== 'active') throw fault('ACCOUNT_DISABLED', '이용이 중지된 계정입니다.', 403);
         const token = store.session(c.customerId);
         json(res, 200, { token, csrfToken: csrf(token), ...(await state(c)) }); return true;

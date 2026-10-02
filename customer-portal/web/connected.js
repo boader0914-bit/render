@@ -7,7 +7,7 @@
   const labels = { pending:'확인 대기',active:'등록 완료',rejected:'반려',verified:'반영 확인',withdrawn:'철회',superseded:'새 요청으로 대체',needs_review:'자료 준비 접수' };
   const dayUse = { unknown:'확인 전',none:'없음',separate:'별도 객실',shared:'숙박과 공유' };
   let state = null, config = {}, busy = false, searchSequence = 0;
-  const route = () => location.hash.slice(1) || 'home';
+  const route = () => location.hash.slice(1) || ({'/signup':'signup','/login':'login','/terms':'terms','/privacy':'privacy'}[location.pathname]) || 'home';
   const toast = message => { $('#toast').textContent = message; $('#toast').classList.add('visible'); setTimeout(() => $('#toast').classList.remove('visible'), 4500); };
   async function api(url, data) {
     const response = await fetch(`/api/customer/v1${url}`, { method:data ? 'POST':'GET', headers:data ? { 'Content-Type':'application/json','X-CSRF-Token':state?.csrfToken || '' }: { Accept:'application/json' }, ...(data ? { body:JSON.stringify(data) }: {}) });
@@ -20,9 +20,16 @@
     render(); toast('저장했습니다.');
   }
   const field = (label, name, value = '', type = 'text', extra = '') => `<label class="field"><span>${esc(label)}</span><input name="${name}" type="${type}" value="${esc(value)}" ${extra}></label>`;
-  function auth() {
-    const signup = route() === 'signup' && config.signupEnabled;
-    $('#main').innerHTML = `<section class="card auth-card"><span class="eyebrow">SABUN INSIGHT</span><h1>${signup ? '함께 시작하는 숙박 분석':'운영의 흐름을 한곳에서'}</h1><p class="muted">${signup ? '계정을 만든 후 내 매장 또는 준비 중인 사업을 등록하세요.':'데이터랩 이용자 계정으로 로그인하세요.'}</p><form id="auth-form">${field('아이디','username','','text','required autocomplete="username" maxlength="120"')}${field('비밀번호','password','','password',`required autocomplete="${signup?'new':'current'}-password" maxlength="256"`)}${signup ? `${field('비밀번호 확인','passwordConfirm','','password','required autocomplete="new-password"')}${field('연락처','phone','','tel','required')}${field('이메일','email','','email','required')}<label class="check-field"><input name="agreeTerms" type="checkbox" required><span><a href="${esc(config.termsUrl)}" target="_blank" rel="noopener">이용약관</a> 동의</span></label><label class="check-field"><input name="agreePrivacy" type="checkbox" required><span><a href="${esc(config.privacyUrl)}" target="_blank" rel="noopener">개인정보 안내</a> 동의</span></label><label class="check-field"><input name="confirmAge" type="checkbox" required><span>만 14세 이상입니다.</span></label>`:''}<p class="form-error" role="alert"></p><button class="button primary" type="submit">${signup?'회원가입':'로그인'}</button></form>${config.signupEnabled ? `<a class="text-link" href="#${signup?'login':'signup'}">${signup?'로그인으로 돌아가기':'처음 이용하시나요? 회원가입'}</a>`:''}</section>`;
+  function auth() { $('#main').innerHTML = window.InsightAuth.screen({ signup: route()==='signup', config }); }
+  let policySequence = 0;
+  async function policy(kind) {
+    const serial = ++policySequence;
+    $('#main').innerHTML = '<section class="card policy-card"><p role="status">안내 문서를 불러옵니다.</p></section>';
+    try {
+      const doc = await api(`/policies/${kind}`);
+      if (serial !== policySequence || route() !== kind) return;
+      $('#main').innerHTML = window.InsightAuth.policy(doc, config, Boolean(state));
+    } catch(error) { if (serial===policySequence&&route()===kind) $('#main').innerHTML=`<section class="card"><h1>안내 문서를 확인하지 못했습니다.</h1><p>${esc(error.message)}</p><a href="/${kind}" class="button">다시 열기</a></section>`; }
   }
   function companyCard(relation) {
     const company = state.companies.find(row => row.companyId === relation.companyId);
@@ -38,7 +45,11 @@
     $('#logout').hidden = !state;
     $('#navigation').innerHTML = state ? menus.map(([key,label])=>`<a href="#${key}" class="nav-link ${route()===key?'active':''}">${label}</a>`).join(''):'';
     $('#customer-name').textContent = state ? state.customer.username : '사분 인사이트';
+    document.body.classList.toggle('auth-view', !state);
+    if (['terms','privacy'].includes(route())) { policy(route()); return; }
+    policySequence++;
     if (!state) { auth(); return; }
+    if (route() === 'welcome') { $('#main').innerHTML=window.InsightAuth.welcome(state.customer); return; }
     const c = state.customer, relations = c.relations.filter(row=>['active','pending'].includes(row.status));
     const own = relations.filter(row=>row.kind==='own'), competitors = relations.filter(row=>row.kind==='competitor');
     const current = menus.find(([key])=>key===route()) || menus[0];
@@ -58,8 +69,10 @@
     form.querySelectorAll('button').forEach(button=>button.disabled=true);
     try {
       if(form.id==='auth-form') {
-        const signup=route()==='signup'&&config.signupEnabled;
-        state=await api(signup?'/auth/signup':'/auth/login', {...p,...(signup?{agreeTerms:!!p.agreeTerms,agreePrivacy:!!p.agreePrivacy,confirmAge:!!p.confirmAge,termsVersion:config.termsVersion,privacyVersion:config.privacyVersion}:{})}); location.hash='home'; render();
+        const signup=route()==='signup';
+        if(signup&&!config.signupEnabled)throw new Error('현재 신규 가입을 받지 않습니다.');
+        if(signup&&p.password!==p.passwordConfirm)throw new Error('비밀번호 확인이 일치하지 않습니다.');
+        state=await api(signup?'/auth/signup':'/auth/login', {...p,...(signup?{agreeTerms:!!p.agreeTerms,agreePrivacy:!!p.agreePrivacy,confirmAge:!!p.confirmAge,termsVersion:config.termsVersion,privacyVersion:config.privacyVersion}:{})}); location.hash=signup?'welcome':'home'; render();
       } else if(form.id==='onboarding-form') await command('onboarding',p);
       else if(form.id==='search-form') {
         const serial=++searchSequence, kind=form.dataset.kind;
@@ -76,7 +89,7 @@
         if(!Object.keys(proposed).length)throw new Error('변경할 정보를 입력해 주세요.');
         await command('correction',{companyId:company.companyId,baseVersion:company.version,proposed,reason:p.reason});
       }
-    } catch(error) { const slot=form.querySelector('.form-error'); if(slot)slot.textContent=error.message; else toast(error.message); if(error.code==='STALE_REVISION'||error.code==='STALE_COMPANY'){state=await api('/me');render();} }
+    } catch(error) { const slot=form.querySelector('.form-error'); if(slot){slot.textContent=error.message;slot.focus();} else toast(error.message); if(error.code==='STALE_REVISION'||error.code==='STALE_COMPANY'){state=await api('/me');render();} }
     finally {busy=false;form.querySelectorAll('button').forEach(button=>button.disabled=false);}
   });
   document.addEventListener('click',async event=>{
@@ -85,7 +98,8 @@
     if(action==='theme'){const theme=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=theme;try{localStorage.setItem('insight-theme',theme);}catch{}return;}
     busy=true;button.disabled=true;
     try{
-      if(action==='logout'){await api('/auth/logout',{});state=null;location.hash='login';render();}
+      if(action==='check-username'){const input=$('[name=username]'), slot=$('#username-status');if(!input.reportValidity())return;const requested=input.value.trim(), value=await api(`/auth/username?username=${encodeURIComponent(requested)}`);if(!slot.isConnected||input.value.trim()!==requested)return;slot.textContent=value.message;slot.dataset.available=String(value.available);}
+      else if(action==='logout'){await api('/auth/logout',{});state=null;location.hash='login';render();}
       else if(action==='add')await command(button.dataset.kind==='region'?'add-region':'add-company',button.dataset.kind==='region'?{regionKey:button.dataset.id}:{kind:button.dataset.kind,companyId:button.dataset.id});
       else if(action==='archive')await command('archive-company',{relationId:button.dataset.relation});
       else if(action==='archive-region')await command('archive-region',{relationId:button.dataset.relation});
@@ -93,7 +107,8 @@
       else if(action==='prepare')await command('prepare-data',{companyId:button.dataset.company});
     }catch(error){toast(error.message);}finally{busy=false;button.disabled=false;}
   });
-  window.addEventListener('hashchange',render);
+  document.addEventListener('input',event=>{if(event.target.name==='username'&&$('#username-status'))$('#username-status').textContent='';});
+  window.addEventListener('hashchange',()=>{render();$('#main').focus();window.scrollTo(0,0);});
   try{document.documentElement.dataset.theme=localStorage.getItem('insight-theme')==='dark'?'dark':'light';}catch{}
   (async()=>{try{config=await api('/config');try{state=await api('/me');}catch(error){if(error.status!==401)throw error;}render();}catch(error){$('#main').innerHTML=`<section class="card"><h1>자료 연결 확인이 필요합니다.</h1><p>${esc(error.message)}</p><a class="button" href="/">다시 열기</a></section>`;}})();
 })();

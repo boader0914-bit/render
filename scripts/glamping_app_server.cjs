@@ -434,7 +434,7 @@ const keywordWorkerSchedulers = Object.fromEntries(["web", "manual", "scheduled"
 const collectorRequests = createCollectorRequests({dataDir:DATA_DIR,run:runCrawler,preflight:payload=>assertCollectorReady(payload.workerKey,true)});
 const insightIntegration = require('./lib/insight_integration.cjs').createInsightIntegration({
   dataDir: DATA_DIR, readCatalog: monthlyReportSources.catalog, readMembers: readB2BMemberStore,
-  authenticateMember: authenticateB2BMember, registerMember: payload => registerB2BMember(payload, { insightConsent: { termsVersion: process.env.INSIGHT_TERMS_VERSION, privacyVersion: process.env.INSIGHT_PRIVACY_VERSION, termsUrl: process.env.INSIGHT_TERMS_URL, privacyUrl: process.env.INSIGHT_PRIVACY_URL } }), requireAdmin: requireAdminSession, collectorRequests,
+  authenticateMember: authenticateB2BMember, registerMember: (payload, insightConsent) => registerB2BMember(payload, { insightConsent }), checkUsername: checkSignupUsernameAvailability, policyContext: publicPageContext(), requireAdmin: requireAdminSession, collectorRequests,
   verifyStored: async (job, runId) => {
     const master = await readCompanyMaster();
     const company = master.companies?.[job.companyId];

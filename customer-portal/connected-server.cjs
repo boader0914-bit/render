@@ -18,7 +18,7 @@ function createConnectedServer({ origin, backend, serviceToken, fetchImpl = fetc
   const secure = new URL(origin).protocol === 'https:';
   const cookieName = secure ? '__Host-sabun_insight_session' : 'insight_local_session';
   const cookie = (token, expire = false) => `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${expire ? 0 : 43200}${secure ? '; Secure' : ''}`;
-  const staticMap = { '/': ['connected.html', 'text/html'], '/app': ['connected.html', 'text/html'], '/login': ['connected.html', 'text/html'], '/signup': ['connected.html', 'text/html'], '/connected.js': ['connected.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/connected.css': ['connected.css', 'text/css'], '/favicon.svg': ['favicon.svg', 'image/svg+xml'] };
+  const staticMap = { '/': ['connected.html', 'text/html'], '/app': ['connected.html', 'text/html'], '/login': ['connected.html', 'text/html'], '/signup': ['connected.html', 'text/html'], '/terms': ['connected.html', 'text/html'], '/privacy': ['connected.html', 'text/html'], '/connected.js': ['connected.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/connected.css': ['connected.css', 'text/css'], '/favicon.svg': ['favicon.svg', 'image/svg+xml'] };
   const server = http.createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'private, no-store'); res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
@@ -29,7 +29,7 @@ function createConnectedServer({ origin, backend, serviceToken, fetchImpl = fetc
       if (req.method === 'GET' && url.pathname === '/api/health') { json(res, 200, { status: 'ok', mode: 'connected', buildCommit: process.env.RENDER_GIT_COMMIT?.slice(0, 12) || null }); return; }
       if (url.pathname.startsWith('/api/customer/v1/')) {
         const route = url.pathname.slice('/api/customer/v1'.length);
-        const allowed = { '/config': 'GET', '/me': 'GET', '/auth/login': 'POST', '/auth/signup': 'POST', '/auth/logout': 'POST', '/commands': 'POST', '/catalog/companies': 'GET', '/catalog/regions': 'GET' };
+        const allowed = { '/config': 'GET', '/me': 'GET', '/auth/username': 'GET', '/policies/terms': 'GET', '/policies/privacy': 'GET', '/auth/login': 'POST', '/auth/signup': 'POST', '/auth/logout': 'POST', '/commands': 'POST', '/catalog/companies': 'GET', '/catalog/regions': 'GET' };
         if (allowed[route] !== req.method) throw fault('NOT_FOUND', '요청한 기능을 찾을 수 없습니다.', 404);
         if (req.method === 'POST' && req.headers.origin !== origin) throw fault('INVALID_ORIGIN', '현재 인사이트 화면에서 요청해 주세요.', 403);
         const cookies = String(req.headers.cookie || '').split(';').map(s => s.trim().split('='));
@@ -47,7 +47,7 @@ function createConnectedServer({ origin, backend, serviceToken, fetchImpl = fetc
         json(res, response.status, data); return;
       }
       if (!['GET', 'HEAD'].includes(req.method)) throw fault('NOT_FOUND', '요청한 화면을 찾을 수 없습니다.', 404);
-      let item = staticMap[url.pathname]; let file;
+      let item = url.pathname === '/auth.js' ? ['auth.js', 'text/javascript'] : staticMap[url.pathname]; let file;
       if (item) file = path.join(__dirname, 'web', item[0]);
       else if (/^\/fonts\/(Pretendard-Regular|Pretendard-Bold|MaruBuri-Regular)\.otf$/.test(url.pathname)) { file = path.join(__dirname, '..', 'web', 'fonts', path.basename(url.pathname)); item = ['', 'font/otf']; }
       else throw fault('NOT_FOUND', '요청한 화면을 찾을 수 없습니다.', 404);
