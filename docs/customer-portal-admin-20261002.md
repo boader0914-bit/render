@@ -28,4 +28,17 @@
 
 로컬 `57970`/`57971`의 가상 고객으로 관리자 로그인→목록→상세→한도 저장을 브라우저에서 확인했다. 390px 다크모드 가로 넘침 없음. 운영 비밀번호는 대신 입력하지 않는다.
 
-운영 반영·계정 상태는 배포 후 아래에 기록한다.
+## 운영 반영과 남은 사용자 설정
+
+2026-10-02 20:05 KST 확인:
+
+- 운영 코드 `08da40da39e8d7145c74838956612b2321f73149`를 두 웹에 명시적으로 배포했다. 수집 워커는 배포하지 않았다.
+- 데이터랩 `srv-da9q6don74is738t7id0`: `dep-davouohsrm7s73cr7mbg`, Render `Deploy succeeded | Live`, 42.7초.
+- 인사이트 `srv-dathlifavr4c73dj3jt0`: `dep-davov4m7bikc73etdelg`, Render `Deploy succeeded | Live`, 31.5초.
+- 두 공개 `/api/health`의 `buildCommit=08da40da39e8`, 인사이트 `mode=connected`를 확인했다. 운영 `/admin` 전용 로그인 화면을 확인했다.
+- 비로그인 관리자 상태·고객 목록·계정 발급 API는 모두 HTTP 401로 보호됐다.
+- 중앙 운영 관리자 인증 API로 `admin`을 **비밀번호 설정 대기(pending)** 상태로 준비했다. 준비 시각 `2026-10-02T11:05:04.971Z`. 비밀번호를 생성하거나 입력하지 않았으며, 활성화·실제 운영 관리자 로그인은 아직 완료되지 않았다.
+- 사용자에게 `https://staydatalab.kr/insight-admin-accounts`를 열어 두었다. 배포로 운영 관리자 세션이 만료되어 데이터랩 로그인부터 필요하다. 로그인 후 해당 설정 주소에서 비밀번호 입력·확인 및 최종 활성화를 직접 완료해야 한다.
+- 활성화 후 로그인 주소는 `https://sabun-insight-preview.onrender.com/admin`이다. `insight.sabun.co.kr` 연결 완료를 의미하지 않는다.
+- 배포 전후 수집 실행·대기 0, 워커 보호 중단 없음. 기존 BG 수집 예약은 유지됐고 다음 실행은 `2026-10-03T08:00:00.000Z`(17:00 KST)다. 다른 워커 예약과 기존 일일 자동수집은 비활성 상태를 유지했다. 디스크 여유 8,603 MiB.
+- 화면 증빙: `C:/Users/User/.codex/visualizations/2026/10/02/insight-admin/production-admin-login.png`, `central-live.png`, `insight-live.png`.
