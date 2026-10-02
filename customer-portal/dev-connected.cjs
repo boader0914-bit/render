@@ -6,6 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const {spawn} = require('node:child_process');
 const {createConnectedServer} = require('./connected-server.cjs');
+if (process.env.RENDER || process.env.NODE_ENV === 'production') throw new Error('Review fixtures may only run locally');
 const root = path.resolve(__dirname,'..');
 const backendPort = Number(process.env.INSIGHT_REVIEW_BACKEND_PORT || 57950);
 const frontendPort = Number(process.env.INSIGHT_REVIEW_PORT || 57951);
@@ -13,11 +14,14 @@ const dataDir = fs.mkdtempSync(path.join(os.tmpdir(),'insight-connected-review-'
 const token = crypto.randomBytes(32).toString('hex');
 const env = Object.fromEntries(Object.entries(process.env).filter(([key])=>['PATH','SYSTEMROOT','WINDIR','TEMP','TMP'].includes(key.toUpperCase())));
 const stamp = new Date().toISOString();
-const salt = 'local-review-only';
 const password = 'LocalReview2026!';
-const passwordHash = `pbkdf2_sha256$10000$${salt}$${crypto.pbkdf2Sync(password,salt,10000,32,'sha256').toString('base64url')}`;
+const reviewUsername = process.env.INSIGHT_REVIEW_USERNAME || 'review-user';
+const reviewPassword = process.env.INSIGHT_REVIEW_PASSWORD || password;
+if (!/^[a-z0-9._@-]{4,80}$/i.test(reviewUsername) || ['review-admin','fixture-reserved'].includes(reviewUsername.toLowerCase())) throw new Error('Choose a separate review customer username');
+const salt = crypto.randomBytes(16).toString('base64url');
+const passwordHash = `pbkdf2_sha256$10000$${salt}$${crypto.pbkdf2Sync(reviewPassword,salt,10000,32,'sha256').toString('base64url')}`;
 function save(name,data){const file=path.join(dataDir,name);fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,JSON.stringify(data));}
-save('customer_db/b2b_members.json',{schemaVersion:1,members:[{memberId:'insight-fixture-member',username:'review-user',role:'b2b',status:'active',passwordHash,createdAt:stamp}]});
+save('customer_db/b2b_members.json',{schemaVersion:1,members:[{memberId:'insight-fixture-member',username:reviewUsername,role:'b2b',accountType:'test',status:'active',passwordHash,createdAt:stamp}]});
 const names=['검수 예시 글램핑','검수 예시 풀빌라','검수 예시 펜션','검수 예시 캠핑'];
 save('company_master/companies.json',{schemaVersion:1,companies:Object.fromEntries(names.map((name,i)=>{
   const companyId=`company-insight-fixture-${i+1}`;
