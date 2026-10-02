@@ -13,7 +13,7 @@ async function body(req) {
 }
 function json(res, status, value) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(value)); }
 function createInsightHttp({ store, serviceToken, authenticateMember, memberActive, registerMember, checkUsername, catalog, requireAdmin, preparationBridge = null,
-  signup = { enabled: false }, policies = {}, supportEmail = '' }) {
+  signup = { enabled: false }, policies = {}, supportEmail = '', adminStore = null }) {
   if (typeof serviceToken !== 'string' || serviceToken.length < 32) throw new Error('Insight service credential must contain at least 32 characters');
   async function state(customer) {
     if (preparationBridge) await preparationBridge.refresh(customer.customerId);
@@ -38,6 +38,31 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
       if (!equal(req.headers.authorization, `Bearer ${serviceToken}`)) throw fault('SERVICE_UNAUTHORIZED', '서비스 연결 인증이 필요합니다.', 401);
       const tail = url.pathname.slice(base.length);
       if (!['GET', 'POST'].includes(req.method)) throw fault('METHOD_NOT_ALLOWED', '지원하지 않는 요청입니다.', 405);
+      if (tail.startsWith('/admin/')) {
+        if (!adminStore) throw fault('NOT_FOUND', '관리자 로그인을 준비 중입니다.', 404);
+        if (tail === '/admin/auth/login' && req.method === 'POST') {
+          const p = await body(req); fields(p, ['username', 'password']);
+          const result = await adminStore.login(p.username, p.password);
+          json(res, 200, { ...result, csrfToken: csrf(result.token) }); return true;
+        }
+        const token = req.headers['x-insight-admin-session'];
+        const admin = adminStore.authenticate(token);
+        if (req.method === 'POST' && !equal(req.headers['x-csrf-token'], csrf(token))) throw fault('CSRF_INVALID', '관리자 화면을 새로 열어 주세요.', 403);
+        if (tail === '/admin/me' && req.method === 'GET') json(res, 200, { admin, csrfToken: csrf(token) });
+        else if (tail === '/admin/auth/logout' && req.method === 'POST') { adminStore.logout(token); json(res, 200, { ok: true }); }
+        else if (tail === '/admin/customers' && req.method === 'GET') json(res, 200, { customers: store.list().map(c => ({ customerId: c.customerId, username: c.username, accountStatus: c.accountStatus, businessStatus: c.businessStatus, projectName: c.projectName, entitlements: c.entitlements, relations: c.relations.filter(active) })) });
+        else {
+          const match = /^\/admin\/customers\/(cus_[a-zA-Z0-9-]+)(\/commands)?$/.exec(tail);
+          if (!match) throw fault('NOT_FOUND', '지원하지 않는 관리자 기능입니다.', 404);
+          if (req.method === 'GET' && !match[2]) json(res, 200, { ...(await state(store.get(match[1]))), history: store.history(match[1]) });
+          else if (req.method === 'POST' && match[2]) {
+            store.throttle(`admin-changes:${admin.adminId}`, 120);
+            store.adminUpdate(match[1], await body(req), admin.adminId, await catalog());
+            json(res, 200, await state(store.get(match[1])));
+          } else throw fault('NOT_FOUND', '지원하지 않는 관리자 기능입니다.', 404);
+        }
+        return true;
+      }
       if (tail === '/config' && req.method === 'GET') { json(res, 200, { signupEnabled: Boolean(signupReady), signupMessage: signupReady ? '' : '현재 신규 가입을 준비하고 있습니다. 이용 문의를 남겨 주세요.', termsVersion: signup.termsVersion || null, privacyVersion: signup.privacyVersion || null, termsUrl: signup.termsUrl || null, privacyUrl: signup.privacyUrl || null, supportEmail, usernameCheckEnabled: Boolean(checkUsername) }); return true; }
       if (req.method === 'GET' && ['/policies/terms', '/policies/privacy'].includes(tail)) {
         const doc = policies[tail.split('/').pop()];

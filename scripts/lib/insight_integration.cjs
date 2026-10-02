@@ -4,11 +4,14 @@ const { createInsightStore, hash } = require('./insight_store.cjs');
 const { createInsightHttp } = require('./insight_http.cjs');
 const { createInsightPreparation } = require('./insight_preparation.cjs');
 const { POLICY_VERSION, insightPolicies } = require('./insight_policy.cjs');
+const { createInsightAdminStore } = require('./insight_admin_store.cjs');
+const { createInsightAdminProvisioning } = require('./insight_admin_provisioning.cjs');
 function createInsightIntegration({ dataDir, readCatalog, readMembers, authenticateMember, registerMember, checkUsername, policyContext = {}, requireAdmin, collectorRequests, verifyStored, env = process.env }) {
   if (env.INSIGHT_CONNECTION_ENABLED !== '1') return null;
   const serviceToken = env.INSIGHT_SERVICE_TOKEN;
   if (!serviceToken || serviceToken.length < 32) throw new Error('INSIGHT_SERVICE_TOKEN is required when Insight connection is enabled');
   const store = createInsightStore({ file: path.join(dataDir, 'customer_insight', 'insight.sqlite') });
+  const adminStore = createInsightAdminStore({ file: path.join(dataDir, 'customer_insight', 'admins.sqlite') });
   async function catalog() {
     const data = await readCatalog();
     return { regions: data.regions, companies: data.companies.map(row => {
@@ -25,7 +28,7 @@ function createInsightIntegration({ dataDir, readCatalog, readMembers, authentic
   const signup = { enabled: env.INSIGHT_SIGNUP_ENABLED === '1', termsVersion: env.INSIGHT_TERMS_VERSION || POLICY_VERSION, privacyVersion: env.INSIGHT_PRIVACY_VERSION || POLICY_VERSION, termsUrl: env.INSIGHT_TERMS_URL || '/terms', privacyUrl: env.INSIGHT_PRIVACY_URL || '/privacy' };
   const handlers = createInsightHttp({ store, serviceToken, catalog, authenticateMember, registerMember, checkUsername, requireAdmin, preparationBridge,
     memberActive: async memberId => (await readMembers()).members.some(row => row.memberId === memberId && row.status !== 'disabled' && row.role === 'b2b'),
-    signup, policies: insightPolicies(policyContext), supportEmail: policyContext.contactEmail || '' });
-  return { ...handlers, store };
+    signup, policies: insightPolicies(policyContext), supportEmail: policyContext.contactEmail || '', adminStore });
+  return { ...handlers, store, adminStore, provision: createInsightAdminProvisioning({ adminStore, requireAdmin }) };
 }
 module.exports = { createInsightIntegration };

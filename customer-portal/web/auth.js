@@ -3,7 +3,7 @@
   const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
   const field = (label, name, type, extra = '') => `<label class="field"><span>${label}</span><input name="${name}" type="${type}" ${extra}></label>`;
   const support = c => c.supportEmail ? `<a href="mailto:${esc(c.supportEmail)}">이용·계정 문의</a>` : '';
-  const links = c => `<a href="/terms" target="_blank" rel="noopener">이용약관</a><a href="/privacy" target="_blank" rel="noopener">개인정보처리방침</a>${support(c)}`;
+  const links = c => `<a href="/terms" target="_blank" rel="noopener">이용약관</a><a href="/privacy" target="_blank" rel="noopener">개인정보처리방침</a>${support(c)}<a href="/admin">관리자 로그인</a>`;
   function screen({ signup, config: c }) {
     const login = `${field('아이디','username','text','required autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="80"')}${field('비밀번호','password','password','required autocomplete="current-password" maxlength="120"')}`;
     const registration = `<fieldset class="auth-section"><legend><span>01</span> 로그인 정보</legend>

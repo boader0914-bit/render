@@ -1,0 +1,37 @@
+(() => {
+  'use strict';
+  const main=document.querySelector('#main');let identity=null,csrf='',detail=null;
+  const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const labels={active:'연결됨',pending:'확인 대기',archived:'해제됨',rejected:'반려',disabled:'이용 중지',owned:'매장 운영 중',planning:'매장 준비 중',own:'내 매장',competitor:'경쟁업체'};
+  const label=v=>labels[v]||v;
+  const input=(name,title,value='',type='text',extra='')=>`<label class="field">${title}<input name="${name}" type="${type}" value="${esc(value)}" ${extra}></label>`;
+  async function api(route,payload) {
+    const r=await fetch('/api/insight-admin/v1'+route,{method:payload?'POST':'GET',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},...(payload?{body:JSON.stringify(payload)}:{})});
+    const d=await r.json();if(!r.ok){if(r.status===401&&route!=='/auth/login'){identity=null;csrf='';login();}throw Error(d.error?.message||'요청을 완료하지 못했습니다.');}return d;
+  }
+  function login() {
+    document.querySelector('#logout').hidden=true;detail=null;
+    main.innerHTML=`<section class="card login-card"><span class="eyebrow">ADMINISTRATOR</span><h1>인사이트 관리자 로그인</h1><p class="muted">고객과 등록 대상을 관리하는 전용 계정으로 로그인하세요.</p><form id="login">${input('username','관리자 아이디','admin','text','required autocomplete="username" maxlength="60"')}${input('password','비밀번호','','password','required autocomplete="current-password" maxlength="120"')}<p id="feedback" class="error" role="alert"></p><button class="primary">관리자 로그인</button></form><p class="muted">최초 비밀번호는 데이터랩 운영 관리자의 계정 설정 화면에서 설정합니다.</p><a href="/login">일반 이용자 로그인</a></section>`;
+  }
+  async function listing() {
+    const d=await api('/customers');detail=null;document.querySelector('#logout').hidden=false;
+    main.innerHTML=`<span class="eyebrow">CUSTOMER OPERATIONS</span><h1>인사이트 고객 관리</h1><p class="muted">${esc(identity.username)} 관리자 · 고객 ${d.customers.length}명</p><p id="feedback" class="error" role="alert"></p>${input('search','아이디·매장 이름 검색','','search','id="search" autocomplete="off"')}<section class="card customer-list" id="customer-list">${d.customers.length?d.customers.map(c=>`<article class="customer-row" data-search="${esc(`${c.username} ${c.projectName}`.toLowerCase())}"><div><strong>${esc(c.username)}</strong><p>${esc(c.projectName||'매장·프로젝트 이름 미등록')} · ${esc(label(c.businessStatus))}</p><small>${c.accountStatus==='active'?'이용 중':'이용 중지'} · 내 매장 확인 대기 ${c.relations.filter(r=>r.kind==='own'&&r.status==='pending').length}건</small></div><button data-customer="${esc(c.customerId)}">고객 상세</button></article>`).join(''):'<p>가입한 고객이 없습니다. 새 회원이 가입하면 이곳에 표시됩니다.</p>'}</section>`;
+  }
+  function renderDetail(d) {
+    detail=d;const c=d.customer;
+    main.innerHTML=`<button data-action="back">← 고객 목록</button><h1>${esc(c.username)} 고객</h1><p class="muted">${esc(c.projectName||'이름 미등록')} · ${esc(label(c.businessStatus))}</p><p id="feedback" class="error" role="alert"></p><div class="grid"><section class="card"><h2>등록 한도</h2><form id="entitlements">${input('competitorLimit','경쟁업체 수',c.entitlements.competitorLimit,'number','min="0" max="1000" required')}${input('interestRegionLimit','관심지역 수',c.entitlements.interestRegionLimit,'number','min="0" max="1000" required')}${input('reason','변경 사유','','text','required maxlength="500"')}<small>현재 등록 수보다 줄이려면 유지할 대상을 데이터랩에서 먼저 검토해 주세요.</small><button class="primary">등록 한도 저장</button></form></section><section class="card"><h2>고객 이용 상태</h2><form id="account-status"><label class="field">상태<select name="status"><option value="active" ${c.accountStatus==='active'?'selected':''}>이용 중</option><option value="disabled" ${c.accountStatus==='disabled'?'selected':''}>이용 중지</option></select></label>${input('reason','변경 사유','','text','required maxlength="500"')}<button>이용 상태 저장</button></form></section></div><section class="card"><h2>등록 업체</h2>${c.relations.filter(r=>['active','pending'].includes(r.status)).map(r=>{const company=d.companies.find(x=>x.companyId===r.companyId);return `<article class="customer-row"><div><strong>${esc(company?.name||r.companyId)}</strong><p>${esc(company?.address||'주소 확인 전')}</p><span class="status">${esc(label(r.kind))} · ${esc(label(r.status))}</span></div>${r.kind==='own'&&r.status==='pending'?`<form class="property-review" data-relation="${esc(r.relationId)}"><label class="field">판정<select name="decision"><option value="approve">확인 완료</option><option value="reject">반려</option></select></label>${input('reason','확인 근거·사유','','text','required maxlength="500"')}<button>매장 확인 저장</button></form>`:''}</article>`;}).join('')||'<p>등록한 업체가 없습니다.</p>'}</section><section class="card"><h2>관심지역</h2><p>${d.regions.map(r=>esc(r.label||r.name||r.id)).join(' · ')||'등록한 지역이 없습니다.'}</p></section><section class="card"><h2>요청 현황</h2><p>업체 정보 수정 ${d.corrections.length}건 · 자료 준비 ${d.preparations.length}건</p><p class="muted">업체 DB 보정과 자료 준비 실행은 데이터랩에서 처리합니다.</p>${d.corrections.map(r=>`<p>${esc(r.companyId)} · ${esc(label(r.status))} · ${esc(r.reason||r.note||'')}</p>`).join('')}</section>`;
+  }
+  main.addEventListener('input',e=>{if(e.target.id==='search'){const q=e.target.value.trim().toLowerCase();document.querySelectorAll('[data-search]').forEach(row=>row.hidden=!row.dataset.search.includes(q));}});
+  main.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b)return;try{if(b.dataset.customer){b.disabled=true;renderDetail(await api('/customers/'+encodeURIComponent(b.dataset.customer)));}else if(b.dataset.action==='back')await listing();}catch(err){const p=document.querySelector('#feedback');if(p)p.textContent=err.message;b.disabled=false;}});
+  main.addEventListener('submit',async e=>{
+    e.preventDefault();const f=e.target,b=f.querySelector('button');b.disabled=true;document.querySelector('#feedback').textContent='';document.querySelector('#feedback').dataset.kind='error';
+    try {
+      const p=Object.fromEntries(new FormData(f));
+      if(f.id==='login'){const d=await api('/auth/login',p);identity=d.admin;csrf=d.csrfToken;f.querySelector('[name=password]').value='';await listing();}
+      else {const action=f.classList.contains('property-review')?'property-review':f.id;if(action==='entitlements'){p.competitorLimit=Number(p.competitorLimit);p.interestRegionLimit=Number(p.interestRegionLimit);}if(action==='property-review')p.relationId=f.dataset.relation;const d=await api('/customers/'+encodeURIComponent(detail.customer.customerId)+'/commands',{action,revision:detail.customer.revision,requestKey:crypto.randomUUID(),payload:p});renderDetail(d);document.querySelector('#feedback').dataset.kind='success';document.querySelector('#feedback').textContent='저장했습니다.';}
+    }catch(err){const target=document.querySelector('#feedback');if(target)target.textContent=err.message;}finally{b.disabled=false;}
+  });
+  document.querySelector('#logout').addEventListener('click',async()=>{try{await api('/auth/logout',{});identity=null;csrf='';login();}catch(e){document.querySelector('#feedback').textContent=e.message;}});
+  document.querySelector('#theme').addEventListener('click',()=>{document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark';});
+  api('/me').then(d=>{identity=d.admin;csrf=d.csrfToken;return listing();}).catch(e=>{if(!identity)login();else main.innerHTML=`<p role="alert">${esc(e.message)}</p><button data-action="back">다시 확인</button>`;});
+})();

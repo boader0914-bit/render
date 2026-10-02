@@ -18339,6 +18339,13 @@ async function route(req, res) {
     if (!requireLogin(req, res, reqUrl)) return;
     const session = getSession(req);
 
+    if (reqUrl.pathname.startsWith('/insight-admin-accounts') || reqUrl.pathname === '/api/admin/insight-admin-accounts') {
+      if (!requireAdminSession(session, req, res)) return;
+      if (!insightIntegration) return send(res, 503, { error: '인사이트 연결 설정 전입니다.' });
+      if (await insightIntegration.provision(req, res, reqUrl, session)) return;
+      return notFound(res);
+    }
+
     if (reqUrl.pathname === '/api/admin/insight-customers' || reqUrl.pathname.startsWith('/api/admin/insight-customers/')) {
       if (!requireAdminSession(session, req, res)) return;
       if (!insightIntegration) return send(res, 503, { error: { code: 'INSIGHT_NOT_CONFIGURED', message: '인사이트 연결 설정 전입니다.' } });
