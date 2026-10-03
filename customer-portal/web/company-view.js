@@ -9,6 +9,14 @@
   const heading=(key,title)=>`<div class="db-section-heading"><b>${key}</b><h2>${title}</h2></div>`;
   const metric=(label,value,help='',tone='')=>`<article class="${tone}"><span>${label}</span><strong>${value}</strong><small>${help}</small></article>`;
   const sum=(rows,key)=>rows.length&&rows.every(d=>d[key]!=null)?rows.reduce((s,d)=>s+d[key],0):null;
+  const knownBlocked=d=>d&&!d.missing&&!d.partial&&!d.inventoryConflict&&typeof d.phoneBookings==='number'&&Number.isFinite(d.phoneBookings)&&d.phoneBookings>=0;
+  const amount=v=>`${n(Math.round(v/10000*10)/10)}만원`;
+  function blockedLabel(d) {
+    if(!knownBlocked(d))return '<small class="muted">방막기 미확인</small>';
+    if(d.phoneBookings<1)return '';
+    const price=typeof d.phoneRevenue==='number'&&Number.isFinite(d.phoneRevenue)&&d.phoneRevenue>=0&&!d.revenuePartial;
+    return `<small class="estimated-value">방막기 ${rooms(d.phoneBookings)}</small><small class="${price?'estimated-value':'muted'}">방막기 매출 ${price?amount(d.phoneRevenue):'미확인'}</small>`;
+  }
   function current(data) {
     if (data.companyDetail) return data.companyDetail.current;
     const rows=(data.result?.days||[]).filter(d=>d.productType==='lodging').map(d=>({date:d.date,total:d.total,sold:d.publicBookings!=null&&d.estimatedBlocked!=null?d.publicBookings+d.estimatedBlocked:null,publicBookings:d.publicBookings,phoneBookings:d.estimatedBlocked,publicRevenue:d.publicRevenue,phoneRevenue:d.estimatedRevenue,estimatedRevenue:d.publicRevenue!=null&&d.estimatedRevenue!=null?d.publicRevenue+d.estimatedRevenue:null,partial:d.status!=='observed',missing:d.status==='missing',sharedDayUseExcluded:d.sharedDayUseExcluded}));
@@ -23,7 +31,7 @@
       const [y,m]=month.split('-').map(Number),start=new Date(Date.UTC(y,m-1,1)).getUTCDay(),days=new Date(Date.UTC(y,m,0)).getUTCDate();
       return `<section class="db-calendar" aria-label="${month} 예약 관측"><h3>${y}년 ${m}월</h3><p class="muted db-calendar-hint">달력을 좌우로 밀어 날짜별 자료를 확인하세요.</p><div class="db-calendar-grid">${['일','월','화','수','목','금','토'].map(d=>`<div class="db-weekday">${d}</div>`).join('')}${Array.from({length:start},()=>'<div aria-hidden="true"></div>').join('')}${Array.from({length:days},(_,i)=>{
         const date=`${month}-${String(i+1).padStart(2,'0')}`,d=byDate.get(date);
-        return `<div class="db-calendar-day ${!d||d.missing?'unobserved':d.phoneBookings>0?'has-estimate':'has-public'}"><strong>${i+1}</strong>${!d||d.missing?'<small>미수집</small>':`<small>총량 ${rooms(d.total)}</small><small class="public-value">공개 ${n(d.publicBookings)}${d.publicBookings==null?'':'실'}</small><small class="estimated-value">방막기 ${n(d.phoneBookings)}${d.phoneBookings==null?'':'실'}</small><small>${d.estimatedRevenue==null?'매출 확인 전':`${n(Math.round(d.estimatedRevenue/10000*10)/10)}만원`}</small>${d.partial?'<small>일부 확인 필요</small>':''}`}</div>`;
+        return `<div class="db-calendar-day ${!d||d.missing?'unobserved':knownBlocked(d)&&d.phoneBookings>=1?'has-estimate':d.partial||d.inventoryConflict?'unobserved':'has-public'}"><strong>${i+1}</strong>${!d||d.missing?'<small>미확인 · 미수집</small>':`<small>총량 ${rooms(d.total)}</small><small class="public-value">공개 ${n(d.publicBookings)}${d.publicBookings==null?'':'실'}</small>${blockedLabel(d)}<small>${d.estimatedRevenue==null?'합계 매출 미확인':`합계 ${amount(d.estimatedRevenue)}`}</small>${d.partial||d.inventoryConflict?'<small>일부 확인 필요</small>':''}`}</div>`;
       }).join('')}</div></section>`;
     }).join('')}</div>`;
   }

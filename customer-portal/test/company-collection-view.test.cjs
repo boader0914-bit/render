@@ -27,8 +27,24 @@ test('A-D view preserves quality warnings and distinguishes unknown from observe
   const r={rooms:null,roomCountSource:'확인 전',productCount:0,range:{start:'2026-10-02',end:'2026-10-31',days:30},dayUse:{},days:[],issues:[],quality:{status:'partial',reason:'날짜 누락'},truncated:true};
   const detail={basics:{name:'가상 <업체>',lodgingTypes:[]},channels:[],current:{summary:null,daily:[{date:'2026-10-02',publicBookings:0,phoneBookings:null,estimatedRevenue:null,partial:true}]},history:{leadTime:{},ranks:[],performance:[],months:[]}};
   const html=w.InsightCompanyView.render({result:r,companyDetail:detail,previousResult:true},'');
-  for(const label of ['업체 기본정보','예약 채널','최근 운영 관측','누적 이력·관리','이번 요청의 완료 결과가 아닙니다','일부 완료','날짜 누락','보존된 상품 목록','공개 0실','방막기 확인 전','산출 보류'])assert.ok(html.includes(label),label);
+  for(const label of ['업체 기본정보','예약 채널','최근 운영 관측','누적 이력·관리','이번 요청의 완료 결과가 아닙니다','일부 완료','날짜 누락','보존된 상품 목록','공개 0실','방막기 미확인','산출 보류'])assert.ok(html.includes(label),label);
   assert.doesNotMatch(html,/확인 전실|가상 <업체>/);assert.match(html,/가상 &lt;업체&gt;/);
+});
+test('calendar highlights only confirmed positive blocked estimates and preserves totals and unknown days',()=>{
+  const {window:w}=ui(),daily=Object.freeze([
+    {date:'2026-10-01',total:16,publicBookings:0,phoneBookings:0,phoneRevenue:0,estimatedRevenue:0},
+    {date:'2026-10-02',total:16,publicBookings:1,phoneBookings:2,phoneRevenue:400000,estimatedRevenue:600000},
+    {date:'2026-10-03',phoneBookings:0,partial:true},
+    {date:'2026-10-04',phoneBookings:4,inventoryConflict:true},
+    {date:'2026-10-05',phoneBookings:2,phoneRevenue:null,revenuePartial:true},
+    {date:'2026-10-06',phoneBookings:0,missing:true},
+  ].map(Object.freeze)),before=JSON.stringify(daily);
+  const html=w.InsightCompanyView.currentView({companyDetail:{current:{daily}}},{mode:'calendar'});
+  assert.equal((html.match(/has-estimate/g)||[]).length,2);
+  assert.match(html,/방막기 2실/);assert.match(html,/방막기 매출 40만원/);assert.match(html,/합계 60만원/);
+  assert.doesNotMatch(html,/방막기 0실|방막기 4실|방막기 매출 0만원/);
+  assert.match(html,/공개 0실/);assert.match(html,/합계 0만원/);assert.match(html,/방막기 미확인/);assert.match(html,/방막기 매출 미확인/);assert.match(html,/미확인 · 미수집/);
+  assert.equal(JSON.stringify(daily),before);
 });
 
 test('view switches are local, persist the preference and preserve an open correction form; opening collection settings does not submit',async()=>{
