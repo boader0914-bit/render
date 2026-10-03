@@ -61,6 +61,11 @@ test('real DataLab registration records the actual Insight consent, exposes cust
   assert.equal(evidence.companyDetail.source,'company_db');assert.equal(JSON.stringify(evidence).includes('private-fixture'),false);
   assert.equal(evidence.collectionAllowance.remaining,1);
   assert.equal(evidence.companyDetail.current.daily[0].collectedAt,fixture.stamp,'snapshot observation time remains attached to daily evidence');
+  const flow=evidence.companyDetail.history.observationFlow;
+  assert.equal(flow.reviewBasis,'current_db_review');
+  assert.equal(flow.periods.reduce((n,p)=>n+p.comparisonDates.length,0),30,'saved run evidence reaches the observation flow without a new collection');
+  assert.equal(flow.periods[0].points.length,1,'duplicate company names and keyword snapshots do not add observation points');
+  assert.equal(flow.periods[0].points[0].observedDate,fixture.today);
   const collection=await fetch(origin+'/api/insight/v1/commands',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json','X-Insight-Session':customer.token,'X-CSRF-Token':customer.csrfToken},body:JSON.stringify({action:'collect',revision:linkedState.customer.revision,requestKey:crypto.randomUUID(),payload:{companyId:'cmp_test',checkIn:fixture.today,bookingRangeDays:30,dayUseMode:'inspect'}})});
   const collected=await collection.json();assert.equal(collection.status,200);assert.equal(collected.preparations[0].status,'ready');assert.equal(collected.preparations[0].runId,fixture.runId);assert.equal(collected.preparations[0].reused,true);
   assert.equal(collected.collectionAllowance.remaining,0);

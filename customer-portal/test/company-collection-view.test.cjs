@@ -30,3 +30,26 @@ test('A-D view preserves quality warnings and distinguishes unknown from observe
   for(const label of ['업체 기본정보','예약 채널','최근 운영 관측','누적 이력·관리','이번 요청의 완료 결과가 아닙니다','일부 완료','날짜 누락','보존된 상품 목록','공개 0실','방막기 확인 전','산출 보류'])assert.ok(html.includes(label),label);
   assert.doesNotMatch(html,/확인 전실|가상 <업체>/);assert.match(html,/가상 &lt;업체&gt;/);
 });
+
+test('view switches are local, persist the preference and preserve an open correction form; opening collection settings does not submit',async()=>{
+  const events={},storage=new Map(),elements=new Map(),modes=[],apiCalls=[];
+  for(const id of ['#collection-progress','#collection-result','#company-current-view','#company-history-flow','#company-flow-details','#collection-settings'])elements.set(id,{innerHTML:'',hidden:true});
+  const correction={value:'작성 중인 검수 근거'};elements.set('#product-correction',correction);
+  const buttons=['default','graph','calendar','table'].map(mode=>({dataset:{companyView:mode},setAttribute(k,v){this[k]=v;}}));
+  const window={InsightCompanyView:{render:(_,__,o)=>{modes.push(o.mode);return 'ABCD';},currentView:(_,o)=>o.mode,flowView:()=>'<graph>'}};
+  const context=vm.createContext({window,localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},document:{addEventListener:(type,fn)=>events[type]=fn,querySelector:s=>elements.get(s),querySelectorAll:()=>buttons},setTimeout:()=>0,clearTimeout(){}});
+  vm.runInContext(read('collection.js'),context);
+  window.InsightCollection.mount('cmp_1',async path=>{apiCalls.push(path);return {companyDetail:{},result:null};});
+  await new Promise(r=>setImmediate(r));assert.equal(modes.at(-1),'default');
+  for(const mode of ['graph','calendar','table']){
+    events.click({target:{closest:s=>s==='[data-company-view]'?buttons.find(b=>b.dataset.companyView===mode):null}});
+    assert.equal(elements.get('#company-current-view').innerHTML,mode);assert.equal(storage.get('insight-company-view'),mode);
+    assert.equal(correction.value,'작성 중인 검수 근거');
+  }
+  const trigger={setAttribute(k,v){this[k]=v;}};
+  events.click({target:{closest:s=>s==='[data-open-collection]'?trigger:null}});
+  assert.equal(elements.get('#collection-settings').hidden,false);assert.equal(trigger['aria-expanded'],'true');
+  assert.equal(apiCalls.length,1,'mode changes and collection settings do not issue network requests');
+  window.InsightCollection.mount('cmp_2',async path=>{apiCalls.push(path);return {};});await new Promise(r=>setImmediate(r));assert.equal(modes.at(-1),'table');
+  assert.deepEqual(apiCalls,['/companies/cmp_1/collection','/companies/cmp_2/collection']);
+});

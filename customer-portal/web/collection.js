@@ -8,16 +8,20 @@
   const active = r => ['dispatching','queued','collecting'].includes(r?.status);
   let api, companyId, view = null, serial = 0, timer, renderedVersion, loadOrder=0;
   const date = () => new Date(Date.now()+9*3600000).toISOString().slice(0,10);
-  let allowance=null;
+  let allowance=null,display={mode:'default',metric:'bookings',month:''};
+  function savedMode(){try{const mode=localStorage.getItem('insight-company-view');return ['default','graph','calendar','table'].includes(mode)?mode:'default';}catch{return 'default';}}
+  function refreshDisplay(){if(!view)return;const current=document.querySelector('#company-current-view'),history=document.querySelector('#company-history-flow');if(current)current.innerHTML=window.InsightCompanyView.currentView(view,display);if(history)history.innerHTML=window.InsightCompanyView.flowView(view,display);document.querySelectorAll?.('[data-company-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.companyView===display.mode)));const details=document.querySelector('#company-flow-details');if(details&&display.mode==='graph')details.open=true;}
+  document.addEventListener?.('click',event=>{const choice=event.target.closest?.('[data-company-view]');if(choice){display.mode=choice.dataset.companyView;try{localStorage.setItem('insight-company-view',display.mode);}catch{}refreshDisplay();return;}const button=event.target.closest?.('[data-open-collection]');if(button){const panel=document.querySelector('#collection-settings');if(panel){panel.hidden=!panel.hidden;button.setAttribute('aria-expanded',String(!panel.hidden));}}});
+  document.addEventListener?.('change',event=>{if(event.target.matches?.('[data-flow-metric]')){display.metric=event.target.value;refreshDisplay();}else if(event.target.matches?.('[data-flow-month]')){display.month=event.target.value;refreshDisplay();}});
   function allowanceText(q) {
     if(!q)return '오늘 수집 가능 여부를 확인하고 있습니다.';
     if(q.limit===null)return '관리자는 일일 횟수 제한을 적용하지 않습니다. 동일 업체·조건은 기존 작업을 확인합니다.';
     return q.canRequest ? '일반 고객 · 계정 전체 하루 1회 · 오늘 요청 가능 · 한국시간 기준' : '오늘 수집 요청 1/1회 사용 · '+new Date(q.resetsAt).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})+'부터 다시 요청 가능';
   }
-  function panel(company, enabled, request, quota) {
+  function panel(company, enabled, request, quota, openCollection=false) {
     allowance=quota||null;
     const intent=request?.intent || {}, start=intent.checkIn>=date()?intent.checkIn:date(), mode=intent.dayUseMode || 'inspect';
-    return '<section class="card collection-setup"><span class="eyebrow">COLLECTION</span><h1>'+esc(company.name)+' 업체 자료</h1><p class="muted">데이터랩 업체DB의 기본정보·예약 채널·최근 관측·누적 이력을 확인합니다.</p><form data-collect="'+esc(company.companyId)+'"><div class="form-grid collection-fields"><label class="field"><span>숙박 시작일</span><input name="checkIn" type="date" min="'+date()+'" value="'+esc(start)+'" required></label><label class="field"><span>수집 기간</span><input value="시작일 포함 30일" readonly><input type="hidden" name="bookingRangeDays" value="30"></label><label class="field"><span>데이유즈</span><select name="dayUseMode">'+Object.entries({inspect:'유무 확인',lodging_only:'숙박만',detail:'상세 수집'}).map(([v,n])=>'<option value="'+v+'" '+(mode===v?'selected':'')+'>'+n+'</option>').join('')+'</select></label></div><p class="muted">30일의 날짜별 예약 수량과 숙박 객실 판매금액을 확인합니다. 데이유즈의 날짜별 수량은 상세 수집을 선택하세요.</p><p class="collection-allowance" id="collection-allowance" role="status">'+esc(allowanceText(allowance))+'</p><button class="button primary" type="submit" data-ready="'+enabled+'" '+(!enabled||!allowance?.canRequest?'disabled':'')+'>30일 예약·추정매출 수집</button><p class="muted">저장 자료 조회·정보 수정 요청은 횟수 제한 없이 이용할 수 있습니다. 접수 후 실패·차단된 요청은 관리자 확인이 필요합니다.</p>'+(!enabled?'<p class="muted">수집기 연결을 준비 중입니다.</p>':'')+'</form></section><section id="collection-progress" class="collection-progress" aria-live="polite"></section><section id="collection-result" aria-label="업체DB 수집 결과"><p role="status">저장된 결과를 불러옵니다.</p></section>';
+    return '<section class="card company-data-heading"><span class="eyebrow">COMPANY DATABASE</span><h1>'+esc(company.name)+' 업체 자료</h1><p class="muted">데이터랩 업체DB의 기본정보·예약 채널·최근 관측·누적 이력을 확인합니다.</p><div class="connected-actions"><button type="button" class="button primary" data-open-collection aria-controls="collection-settings" aria-expanded="'+openCollection+'">30일 예약·추정매출 수집</button><button type="button" class="button" data-action="refresh-collection">저장 자료 다시 보기</button></div><p class="muted">업체 자료는 DB에서 불러옵니다. 수집은 별도로 실행할 때만 시작됩니다.</p></section><section id="collection-settings" class="card collection-setup" '+(openCollection?'':'hidden')+'><h2>새로운 예약·추정매출 수집</h2><form data-collect="'+esc(company.companyId)+'"><div class="form-grid collection-fields"><label class="field"><span>숙박 시작일</span><input name="checkIn" type="date" min="'+date()+'" value="'+esc(start)+'" required></label><label class="field"><span>수집 기간</span><input value="시작일 포함 30일" readonly><input type="hidden" name="bookingRangeDays" value="30"></label><label class="field"><span>데이유즈</span><select name="dayUseMode">'+Object.entries({inspect:'유무 확인',lodging_only:'숙박만',detail:'상세 수집'}).map(([v,n])=>'<option value="'+v+'" '+(mode===v?'selected':'')+'>'+n+'</option>').join('')+'</select></label></div><p class="muted">30일의 날짜별 예약 수량과 숙박 객실 판매금액을 확인합니다. 데이유즈의 날짜별 수량은 상세 수집을 선택하세요.</p><p class="collection-allowance" id="collection-allowance" role="status">'+esc(allowanceText(allowance))+'</p><button class="button primary" type="submit" data-ready="'+enabled+'" '+(!enabled||!allowance?.canRequest?'disabled':'')+'>수집 시작</button><p class="muted">저장 자료 조회·정보 수정 요청은 횟수 제한 없이 이용할 수 있습니다. 접수 후 실패·차단된 요청은 관리자 확인이 필요합니다.</p>'+(!enabled?'<p class="muted">수집기 연결을 준비 중입니다.</p>':'')+'</form></section><section id="collection-progress" class="collection-progress" aria-live="polite"></section><section id="collection-result" aria-label="업체DB 수집 결과"><p role="status">저장된 결과를 불러옵니다.</p></section>';
   }
   function progress(data) {
     const r=data?.request;
@@ -28,7 +32,7 @@
     const submit=document.querySelector('[data-collect] button[type=submit]'); if(submit)submit.disabled=active(r)||submit.dataset.ready!=='true'||!allowance?.canRequest;
   }
   function renderResult(data) {
-    return window.InsightCompanyView.render(data,(data.result?.products||[]).map((p,i)=>productCard(p,i,data.result)).join(''));
+    return window.InsightCompanyView.render(data,(data.result?.products||[]).map((p,i)=>productCard(p,i,data.result)).join(''),display);
   }
   function productCard(p,index,r) {
     const quantities=p.days.map(d=>d.total).filter(v=>v!==null),prices=p.days.map(d=>d.price).filter(v=>v!==null);
@@ -49,6 +53,6 @@
       if(active(data.request))timer=setTimeout(()=>{if(!document.hidden)load();else timer=setTimeout(()=>load(),10000);},5000);
     } catch(error) { if(mine===serial && document.querySelector('#collection-progress'))document.querySelector('#collection-progress').innerHTML=`<p class="collection-warning">${esc(error.message)} <button class="button small" data-action="refresh-collection">다시 확인</button></p>`; }
   }
-  window.InsightCollection={panel, mount(id,request){serial++;clearTimeout(timer);companyId=id;api=request;view=null;renderedVersion=null;load();},stop(){serial++;clearTimeout(timer);},refresh:()=>load(true),
+  window.InsightCollection={panel, mount(id,request){display={mode:savedMode(),metric:'bookings',month:''};serial++;clearTimeout(timer);companyId=id;api=request;view=null;renderedVersion=null;load();},stop(){serial++;clearTimeout(timer);},refresh:()=>load(true),
     correction(index,p){const r=view?.result, product=r?.products[Number(index)];if(!product)throw Error('수집 결과를 다시 열어 주세요.');const proposed={};if(p.total!=='')proposed.total=Number(p.total);if(p.productType!==product.productType)proposed.productType=p.productType;return {companyId,baseVersion:r.version,target:{runId:r.runId,productKey:product.key,date:p.date},proposed,reason:p.reason};}};
 })();

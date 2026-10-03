@@ -446,7 +446,7 @@ const insightIntegration = require('./lib/insight_integration.cjs').createInsigh
   dataDir: DATA_DIR, readCatalog: monthlyReportSources.catalog, readMembers: readB2BMemberStore,
   authenticateMember: authenticateB2BMember, registerMember: (payload, insightConsent) => registerB2BMember(payload, { insightConsent }), checkUsername: checkSignupUsernameAvailability, policyContext: publicPageContext(), requireAdmin: requireAdminSession, collectorRequests,
   readEvidence: readInsightCompanyEvidence,
-  readCompanyDetail: companyId => summarizeCompanyMasterDetail(companyId, { strictIdentity:true }),
+  readCompanyDetail: companyId => summarizeCompanyMasterDetail(companyId, { strictIdentity:true, includeObservationFlow:true }),
   readRegionContext: readInsightRegionContext,
   regionPreparation:insightRegionPreparation,
   readRegionLocation: async regionKey => {
@@ -14647,7 +14647,7 @@ function companyInventoryNeedsEvidenceRecovery(company = {}) {
   });
 }
 
-async function summarizeCompanyMasterDetail(companyId = "", { strictIdentity = false } = {}) {
+async function summarizeCompanyMasterDetail(companyId = "", { strictIdentity = false, includeObservationFlow = false } = {}) {
   const id = String(companyId || "").trim();
   if (!id) return null;
   const [master, allObservations] = await Promise.all([readCompanyMaster(), readHistoryObservations()]);
@@ -14740,6 +14740,14 @@ async function summarizeCompanyMasterDetail(companyId = "", { strictIdentity = f
     observationBasis,
     rankTrend: companyRankTrend(rawCompany, master, observations),
     performanceTrend: companyPerformanceTrend(viewCompany, viewObservations),
+    ...(includeObservationFlow ? { observationFlow: require('./lib/insight_observation_flow.cjs').buildObservationFlow(
+      viewObservations.filter(row => ids.has(String(row.companyKey || row.companyId || '').trim().toLowerCase())),
+      rows => {
+        const archive=companyHistoryDailyFallback(viewCompany,rows).archiveDaily;
+        const history=companySalesHistorySummary(archive,[]);
+        return [...history.current.daily,...history.past.years.flatMap(y=>y.months.flatMap(m=>m.weeks.flatMap(w=>w.daily)))];
+      }
+    ) } : {}),
     leadTime: companyLeadTimeSummary(viewCompany, viewObservations),
     definitions: {
       estimatedRevenue: dailySnapshot?.inventoryEvidenceVersion >= 3

@@ -31,7 +31,8 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
     if (!store.hasCompany(c,companyId) || !collectionResults) throw fault('NOT_FOUND','등록한 업체의 결과를 찾을 수 없습니다.',404);
     if (preparationBridge) await preparationBridge.refresh(c.customerId);
     const request = store.requests(c.customerId).find(row => row.companyId===companyId) || null;
-    const result = await collectionResults.read(companyId,request?.runId || null);
+    // A customer's previous request must not pin the shared company DB to an old run.
+    const result = await collectionResults.read(companyId);
     const companyDetail=await collectionResults.companyDetail?.(companyId) || null;
     return {request,result,companyDetail,collectionAllowance:store.collectionAllowance(c.customerId),previousResult:Boolean(result && request && result.runId!==request.runId)};
   }
