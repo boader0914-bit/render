@@ -13,6 +13,39 @@ const request = { regionKey: "sancheong", month: "2026-08", cutoffDate: "2026-09
 const methods = ["collectVisitorHistory", "collectDemandStrengthHistory", "collectResourceDemandHistory", "collectDiversityHistory"];
 const region = (regionKey) => ({ regionKey, name: regionKey, level: "local", active: true, selectable: true });
 const stamp = "2026-09-20T01:00:00.000Z";
+
+test("24-month preparation fills gaps in sequence, queries one search window, and reuses finished work across restart", async t => {
+  const f=await fixture(t,{historyMonths:24,reuseFinishedMs:3600000});
+  const {monthsEnding}=require('./lib/insight_region_history.cjs');
+  const periods=monthsEnding(request.month,24),calls=[];
+  methods.forEach((method,index)=>{f.options.tourismCollector[method]=async input=>{
+    calls.push({method,input:structuredClone(input)});
+    const result=tourismResult(index,input);
+    const target=index===0?result.regions[0]:result;
+    const example=target.series[0];
+    target.series=(input.collectMissing?periods:periods.slice(1)).map(month=>({...example,yearMonth:month.replace('-','')}));
+    return result;
+  };});
+  f.options.searchTrendService.refresh=async input=>{
+    calls.push({method:'search',input});
+    return {regionKey:input.regionKey,keyword:'산청글램핑',status:'ready',startDate:'2024-09-01',endDate:'2026-08-31',
+      retrievedAt:stamp,configured:true,networkAttempted:true,series:periods.map(month=>({period:month+'-01',value:0,status:'observed'}))};
+  };
+  const first=await f.service.start(request);
+  assert.equal((await f.service.start(request)).id,first.id);
+  await f.service.awaitIdle();
+  const job=await f.service.get(request);
+  assert.equal(job.status,'complete');
+  for(const step of job.steps.slice(0,4)){assert.equal(step.observedMonths,24);assert.equal(step.expectedMonths,24);}
+  for(const {input} of calls.filter(c=>c.method!=='search')){
+    assert.equal(input.months,24);assert.equal(input.concurrency,1);assert.equal(input.force,false);
+  }
+  assert.deepEqual(calls.map(c=>c.method),methods.flatMap(m=>[m,m]).concat('search'));
+  assert.deepEqual(calls.at(-1).input,{regionKey:'sancheong',month:'2026-08',months:24});
+  const reloaded=createRegionalReportPreparation(f.options),count=calls.length;
+  const reused=await reloaded.start(request);
+  assert.equal(reused.id,first.id);assert.equal(reused.reused,true);assert.equal(calls.length,count);
+});
 function tourismResult(index, input, status = "complete", value = 0) {
   const point = { yearMonth: input.endYearMonth, status, collectedAt: stamp, averageDailyVisitors: value, visitorDays: value,
     stayOverall: value, spendOverall: value, values: { service: value, culture: value, visitor: value, spend: value, international: value } };

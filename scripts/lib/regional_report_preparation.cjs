@@ -98,8 +98,9 @@ function kosisView(result, regionKey) {
     zeroValuesObserved: periods.reduce((sum, row) => sum + row.zeroValuesObserved, 0), referenceOnly: true };
 }
 
-function createRegionalReportPreparation({ dataDir, tourismCollector, kosisService, searchTrendService, resolveRegion, now = () => new Date(), kosisCacheTtlMs = 30 * 86400000 }) {
+function createRegionalReportPreparation({ dataDir, tourismCollector, kosisService, searchTrendService, resolveRegion, now = () => new Date(), kosisCacheTtlMs = 30 * 86400000, historyMonths = 1, reuseFinishedMs = 0 }) {
   if (!dataDir || typeof resolveRegion !== "function") throw problem("INVALID_REQUEST", 400);
+  if (![1,24].includes(historyMonths) || !Number.isFinite(reuseFinishedMs) || reuseFinishedMs < 0) throw problem("INVALID_REQUEST",400);
   if (!Number.isFinite(kosisCacheTtlMs) || kosisCacheTtlMs < 0) throw problem("INVALID_REQUEST", 400);
   const file = path.join(dataDir, "jobs.json");
   let jobs = {}, initialization, lock = Promise.resolve(), runner = null;
@@ -162,16 +163,28 @@ function createRegionalReportPreparation({ dataDir, tourismCollector, kosisServi
     if (job.month >= today().slice(0, 7)) return { status: "publication_pending", errorCode: "PUBLICATION_PENDING", period: "", requestedPeriod };
     const method = tourismCollector?.[spec.method];
     if (typeof method !== "function") throw problem("PROVIDER_UNAVAILABLE");
-    const input = { regionKeys: [job.regionKey], regionKey: job.regionKey, endYearMonth: requestedPeriod, months: 1, analysisMonths: 1,
+    const input = { regionKeys: [job.regionKey], regionKey: job.regionKey, endYearMonth: requestedPeriod, months: historyMonths, analysisMonths: historyMonths,
       collectMissing: false, refresh: false, force: false, concurrency: 1, maxPagesPerOperation: 1 };
+    const viewOf = result => {
+      if(historyMonths===1)return tourismView(spec,result,job.regionKey,requestedPeriod);
+      if(result?.period?.endYearMonth&&result.period.endYearMonth!==requestedPeriod)throw problem('PERIOD_MISMATCH');
+      const periods=Array.from({length:historyMonths},(_,i)=>new Date(Date.UTC(Number(job.month.slice(0,4)),Number(job.month.slice(5,7))-historyMonths+i,1)).toISOString().slice(0,7).replace('-',''));
+      const views=periods.map(period=>tourismView(spec,{...result,period:undefined},job.regionKey,period));
+      const ready=views.every(v=>v.status==='ready'),available=views.some(v=>v.dataAvailable);
+      return {status:ready?'ready':available?'partial':views.some(v=>v.status==='failed')?'failed':'missing',
+        requestedPeriod,period:`${periods[0]} ~ ${requestedPeriod}`,observedMonths:views.filter(v=>v.status==='ready').length,expectedMonths:historyMonths,
+        dataAvailable:available,cacheReused:ready&&!networkAttempted(result),networkAttempted:networkAttempted(result),
+        retrievedAt:views.map(v=>v.retrievedAt).filter(Boolean).sort().at(-1)||'',
+        errorCode:ready?'':views.find(v=>v.errorCode&&v.errorCode!=='NO_DATA')?.errorCode||'MISSING_VALUES'};
+    };
     const cached = await method.call(tourismCollector, input);
     if (networkAttempted(cached)) throw problem("CACHE_ONLY_VIOLATION");
-    const existing = tourismView(spec, cached, job.regionKey, requestedPeriod);
+    const existing = viewOf(cached);
     if (existing.status === "ready") return existing;
     if (["REGION_MISMATCH", "PUBLICATION_PENDING"].includes(existing.errorCode)) return existing;
     try {
       const collected = await method.call(tourismCollector, { ...input, collectMissing: true });
-      const view = tourismView(spec, collected, job.regionKey, requestedPeriod);
+      const view = viewOf(collected);
       return !view.dataAvailable && existing.dataAvailable
         ? { ...existing, status: "partial", cacheReused: true, networkAttempted: view.networkAttempted, errorCode: view.errorCode || "PROVIDER_FAILED" } : view;
     } catch (error) {
@@ -213,7 +226,7 @@ function createRegionalReportPreparation({ dataDir, tourismCollector, kosisServi
   }
   async function runSearchTrend(job) {
     if (typeof searchTrendService?.refresh !== "function") throw problem("PROVIDER_UNAVAILABLE");
-    const result = await searchTrendService.refresh({ regionKey: job.regionKey, month: job.month });
+    const result = await searchTrendService.refresh({ regionKey: job.regionKey, month: job.month, ...(historyMonths===24?{months:24}:{}) });
     if (!result || result.regionKey !== job.regionKey) throw problem("REGION_MISMATCH");
     if (!["ready", "partial", "missing", "failed", "publication_pending"].includes(result.status)) throw problem("INVALID_RESPONSE");
     const observed = (result.series || []).filter(row => row.status === "observed" && Number.isFinite(row.value) && row.value >= 0 && row.value <= 100);
@@ -249,7 +262,8 @@ function createRegionalReportPreparation({ dataDir, tourismCollector, kosisServi
     return exclusive(async () => {
       const key = keyFor(request.regionKey, request.month), existing = jobs[key];
       if (existing && ACTIVE.has(existing.status)) return clone(existing);
-      const job = { id: crypto.randomUUID(), ...request, regionName: String(region.fullName || region.name || region.regionKey).slice(0, 160),
+      if(existing?.finishedAt&&reuseFinishedMs>0&&instant().getTime()-Date.parse(existing.finishedAt)>=0&&instant().getTime()-Date.parse(existing.finishedAt)<reuseFinishedMs)return {...clone(existing),reused:true};
+      const job = { id: crypto.randomUUID(), ...request, historyMonths, regionName: String(region.fullName || region.name || region.regionKey).slice(0, 160),
         status: "queued", createdAt: iso(), startedAt: "", finishedAt: "", updatedAt: iso(), errorCode: "",
         steps: STEP_DEFINITIONS.map((spec) => ({ key: spec.key, label: spec.label, status: "queued", requestedPeriod: request.month.replace("-", ""),
           period: "", retrievedAt: "", errorCode: "", cacheReused: false, networkAttempted: false, dataAvailable: false, zeroValuesObserved: 0,

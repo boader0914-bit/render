@@ -9,6 +9,18 @@ const { createRegionalSearchTrendService } = require("./lib/regional_search_tren
 
 const query = { regionKey: "kr_gyeongnam_sancheong", month: "2026-08" };
 const region = (key) => ({ regionKey: key, name: key === "kr_gyeongnam_sancheong" ? "산청군" : "포천시", shortName: "산청", active: true, selectable: true, level: "local" });
+
+test("24-month comparisons use one normalization window and cannot overwrite the existing 12-month cache", async t => {
+  const f=await fixture(t);
+  const original=await f.service.refresh(query);
+  const extended=await f.service.refresh({...query,months:24});
+  assert.equal(extended.startDate,'2024-09-01');assert.equal(extended.endDate,'2026-08-31');
+  assert.equal(extended.series.length,24);assert.equal(f.calls.length,2);
+  assert.deepEqual((await f.service.get(query)).series,original.series);
+  assert.deepEqual((await f.service.get({...query,months:24})).series,extended.series);
+  assert.equal(f.calls.length,2);
+  await assert.rejects(f.service.refresh({...query,months:13}),e=>e.statusCode===400);
+});
 function payload(body, value = 0) {
   const rows = [];
   for (let cursor = new Date(body.startDate + "T12:00:00Z"); cursor.toISOString().slice(0, 10) <= body.endDate; cursor.setUTCMonth(cursor.getUTCMonth() + 1)) {

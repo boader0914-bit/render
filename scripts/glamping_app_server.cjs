@@ -375,6 +375,15 @@ const handleRegionalReportPreparation = createRegionalReportPreparationHttpHandl
   rateLimit: (req, session) => assertRequestRateLimit(req, "adminRegionalPreparation", { limit: 6, windowMs: 60 * 60 * 1000 }, session.username || "")
 });
 const readMonthlyRegionContext = createMonthlyReportContext({ kosisService, tourismCollector, searchTrendService: regionalSearchTrendService });
+const readInsightRegionContext = require('./lib/insight_region_history.cjs').createInsightRegionHistory({
+  readMonthlyContext:readMonthlyRegionContext,tourismCollector,searchTrendService:regionalSearchTrendService
+});
+const insightRegionPreparation=createRegionalReportPreparation({
+  dataDir:path.join(DATA_DIR,'insight_region_preparation'),historyMonths:24,reuseFinishedMs:3600000,
+  kosisService,searchTrendService:regionalSearchTrendService,resolveRegion:resolveRegionalReportRegion,
+  tourismCollector:Object.fromEntries(['collectVisitorHistory','collectDemandStrengthHistory','collectResourceDemandHistory','collectDiversityHistory']
+    .map(method=>[method,input=>prepareRegionalTourismHistory(method,input)]))
+});
 const monthlyReportSources = createMonthlyReportSources({
   dataDir: DATA_DIR,
   regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
@@ -438,7 +447,8 @@ const insightIntegration = require('./lib/insight_integration.cjs').createInsigh
   authenticateMember: authenticateB2BMember, registerMember: (payload, insightConsent) => registerB2BMember(payload, { insightConsent }), checkUsername: checkSignupUsernameAvailability, policyContext: publicPageContext(), requireAdmin: requireAdminSession, collectorRequests,
   readEvidence: readInsightCompanyEvidence,
   readCompanyDetail: companyId => summarizeCompanyMasterDetail(companyId, { strictIdentity:true }),
-  readRegionContext: readMonthlyRegionContext,
+  readRegionContext: readInsightRegionContext,
+  regionPreparation:insightRegionPreparation,
   readRegionLocation: async regionKey => {
     const region=await resolveRegionalReportRegion(regionKey);
     if(!region || region.regionKey!==regionKey)return null;

@@ -44,8 +44,10 @@ function createRegionalSearchTrendService({ dataDir, readTrafficKeys, resolveReg
     } catch { throw problem("CONFIG_READ_ERROR"); }
   }
   async function identity(input) {
-    if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some((key) => !["regionKey", "month"].includes(key))) throw problem("INVALID_REQUEST", 400);
+    if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some((key) => !["regionKey", "month", "months"].includes(key))) throw problem("INVALID_REQUEST", 400);
     const { regionKey, month } = input;
+    const months = input.months === undefined ? 12 : input.months;
+    if (![12, 24].includes(months)) throw problem("INVALID_REQUEST", 400);
     if (typeof regionKey !== "string" || !/^[A-Za-z0-9_:-]{1,120}$/.test(regionKey)) throw problem("INVALID_REGION", 400);
     const today = kstToday();
     if (typeof month !== "string" || !/^20\d{2}-(0[1-9]|1[0-2])$/.test(month) || month < "2016-01" || month > today.slice(0, 7)) throw problem("INVALID_MONTH", 400);
@@ -56,7 +58,7 @@ function createRegionalSearchTrendService({ dataDir, readTrafficKeys, resolveReg
     const token = qualifiedName.trim().replace(/\s+/g, "").replace(/[시군]$/, "");
     const keyword = region.searchTrendKeyword === undefined ? `${token}글램핑` : region.searchTrendKeyword;
     if (typeof keyword !== "string" || !/^[가-힣A-Za-z0-9-]{1,60}글램핑$/.test(keyword)) throw problem("INVALID_REGION", 400);
-    const firstMonth = shiftMonth(month, -11);
+    const firstMonth = shiftMonth(month, 1 - months);
     const startDate = `${firstMonth < "2016-01" ? "2016-01" : firstMonth}-01`;
     const partialMonth = month === today.slice(0, 7);
     const endDate = partialMonth
@@ -140,7 +142,7 @@ function createRegionalSearchTrendService({ dataDir, readTrafficKeys, resolveReg
     if (!Array.isArray(payload.results) || payload.results.length !== 1) throw problem("INVALID_RESPONSE");
     const group = payload.results[0];
     if (group.title !== value.keyword || !Array.isArray(group.keywords) || group.keywords.length !== 1 || group.keywords[0] !== value.keyword) throw problem("KEYWORD_MISMATCH");
-    if (!Array.isArray(group.data) || group.data.length > 12) throw problem("INVALID_RESPONSE");
+    if (!Array.isArray(group.data) || group.data.length > periodList(value.startDate, value.month).length) throw problem("INVALID_RESPONSE");
     const result = base(info, configured), allowed = new Set(result.series.map((point) => point.period)), found = new Map();
     for (const row of group.data) {
       if (!row || !allowed.has(row.period) || row.period > value.endDate || found.has(row.period)) throw problem("PERIOD_MISMATCH");

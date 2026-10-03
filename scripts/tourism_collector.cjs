@@ -140,6 +140,7 @@ const REGIONAL_INDEX_SUCCESS_CODES = new Set(["0000", "00"]);
 const REGIONAL_INDEX_PAGE_SIZE = 100;
 const REGIONAL_INDEX_MAX_PAGES = 10;
 const REGIONAL_INDEX_HISTORY_MONTHS = 12;
+const REGIONAL_INDEX_HISTORY_MAX_MONTHS = 24;
 const REGIONAL_INDEX_HISTORY_MAX_CONCURRENCY = 2;
 const RESOURCE_DEMAND_OPERATIONS = Object.freeze({
   service: Object.freeze({
@@ -3882,7 +3883,7 @@ function createCollector(options = {}) {
     const closedYearMonth = latestClosedYearMonth(currentDate());
     const requestedEndYearMonth = normalizeYearMonth(input.endYearMonth || input.yearMonth || closedYearMonth);
     const endYearMonth = requestedEndYearMonth > closedYearMonth ? closedYearMonth : requestedEndYearMonth;
-    const monthCount = Math.max(1, Math.min(REGIONAL_INDEX_HISTORY_MONTHS, Math.round(Number(input.months) || REGIONAL_INDEX_HISTORY_MONTHS)));
+    const monthCount = Math.max(1, Math.min(REGIONAL_INDEX_HISTORY_MAX_MONTHS, Math.round(Number(input.months) || REGIONAL_INDEX_HISTORY_MONTHS)));
     const months = visitorHistoryMonths(endYearMonth, monthCount);
     const collectMissing = Boolean(input.collectMissing || input.refresh);
     const force = Boolean(input.force);

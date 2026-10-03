@@ -37,6 +37,20 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
   }
   async function customerRequest(req, res, url, tail, c, token, context = {}) {
       if (req.method === 'GET' && tail === '/me') json(res, 200, { ...(await state(c)), csrfToken: csrf(token), ...context });
+      else if(['GET','POST'].includes(req.method)&&/^\/regions\/[a-zA-Z0-9_-]+\/preparation$/.test(tail)) {
+        if(!analysis)throw fault('REGION_NOT_READY','지역 자료 연결을 준비 중입니다.',503);
+        let month;
+        if(req.method==='POST') {
+          if(url.search)throw fault('INVALID_FIELDS','기준월만 지정해 주세요.');
+          const p=await body(req);fields(p,['month']);month=p.month;
+          store.throttle(`region-preparation:${c.customerId}`,6);
+        } else {
+          if([...url.searchParams.keys()].some(k=>k!=='month')||url.searchParams.getAll('month').length!==1)throw fault('INVALID_FIELDS','기준월만 지정해 주세요.');
+          month=url.searchParams.get('month');
+        }
+        const result=await analysis.preparation(c,tail.split('/')[2],month,req.method==='POST');
+        json(res,req.method==='POST'&&['queued','running'].includes(result.job?.status)?202:200,result);
+      }
       else if(req.method==='GET' && /^\/regions\/[a-zA-Z0-9_-]+\/analysis$/.test(tail)) {
         if(!analysis)throw fault('REGION_NOT_READY','지역 자료 연결을 준비 중입니다.',503);
         if([...url.searchParams.keys()].some(k=>k!=='month')||url.searchParams.getAll('month').length>1)throw fault('INVALID_FIELDS','조회할 기준월만 지정해 주세요.');

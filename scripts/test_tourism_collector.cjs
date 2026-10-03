@@ -1822,6 +1822,15 @@ async function main() {
       "산청군 12개월 전체 39개 지표는 지표 코드별 468회 호출이어야 합니다."
     );
 
+    const beforeExtendedRead = regionalIndexRequests.length;
+    for (const method of ['collectResourceDemandHistory', 'collectDiversityHistory']) {
+      const extended = await regionalIndexCollector[method]({regionName:'산청',endYearMonth:'202505',months:24,collectMissing:false});
+      assert.equal(extended.series.length,24,'Insight year-over-year history must not be capped at 12 months');
+      assert.equal(extended.series[0].yearMonth,'202306');
+      assert.equal(extended.coverage.completeMonths,12);
+    }
+    assert.equal(regionalIndexRequests.length,beforeExtendedRead,'history reads must not fetch missing months');
+
     assert.equal(dataGoKrServiceKey({
       DATA_GO_KR_SERVICE_KEY: " canonical-key ",
       KTO_DATA_GO_KR_SERVICE_KEY: "compatibility-key",

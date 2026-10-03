@@ -59,15 +59,15 @@ test('briefing includes only selected own location and explicit interests for mu
 });
 test('authenticated BFF limits region and briefing reads to registered identities with no dispatch',async t=>{
   const {store,customer,cmd}=setup(t);store.update(customer.customerId,cmd(customer,'add-region',{regionKey:'r0'}),catalog);store.update(customer.customerId,cmd(customer,'add-company',{kind:'own',companyId:'c0'}),catalog);
-  let reads=0;
-  const analysis=createInsightAnalysis({catalog:async()=>catalog,collectionResults:{companyDetail:async()=>({current:{daily:days(2)}})},now:()=>Date.parse('2026-10-02T02:00:00Z'),readRegionContext:async(req)=>{reads++;assert.equal(req.targetId,'r0');return {sources:[{key:'test',label:'저장 지표',status:'ready',period:req.month,rows:[{status:'observed',value:100}]}],networkAttempted:false};}});
+  let reads=0,prepared=0;
+  const analysis=createInsightAnalysis({catalog:async()=>catalog,collectionResults:{companyDetail:async()=>({current:{daily:days(2)}})},now:()=>Date.parse('2026-10-02T02:00:00Z'),regionPreparation:{get:async()=>null,start:async input=>{prepared++;assert.equal(input.regionKey,'r0');return {id:'fixture-job',status:'queued',progress:{completed:0},steps:[]};}},readRegionContext:async(req)=>{reads++;assert.equal(req.targetId,'r0');return {sources:[{key:'test',label:'저장 지표',status:'ready',period:req.month,rows:[{status:'observed',value:100}]}],networkAttempted:false};}});
   const serviceToken='fixture-service-token-only-32-characters',h=createInsightHttp({store,serviceToken,authenticateMember:async()=>({memberId:'ordinary',username:'ordinary',role:'b2b'}),memberActive:async()=>true,catalog:async()=>catalog,requireAdmin:()=>false,analysis});
   const backend=http.createServer((req,res)=>h.internal(req,res,new URL(req.url,'http://local')));
   await new Promise(r=>backend.listen(0,'127.0.0.1',r));t.after(()=>backend.close());
   const front=createConnectedServer({origin:'http://127.0.0.1:57991',backend:`http://127.0.0.1:${backend.address().port}`,serviceToken});
   await new Promise(r=>front.listen(0,'127.0.0.1',r));t.after(()=>front.close());
   // Use native HTTP so the fixture can bind any free port while testing the declared Host/Origin.
-  const request=(route,body,cookie)=>new Promise((resolve,reject)=>{const q=http.request({host:'127.0.0.1',port:front.address().port,path:'/api/customer/v1'+route,method:body?'POST':'GET',headers:{Host:'127.0.0.1:57991',Origin:'http://127.0.0.1:57991','Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})}},res=>{let text='';res.on('data',b=>text+=b);res.on('end',()=>resolve({status:res.statusCode,data:JSON.parse(text),cookie:res.headers['set-cookie']?.[0].split(';')[0]}));});q.on('error',reject);q.end(body?JSON.stringify(body):undefined);});
+  const request=(route,body,cookie,headers={})=>new Promise((resolve,reject)=>{const q=http.request({host:'127.0.0.1',port:front.address().port,path:'/api/customer/v1'+route,method:body?'POST':'GET',headers:{Host:'127.0.0.1:57991',Origin:'http://127.0.0.1:57991','Content-Type':'application/json',...(cookie?{Cookie:cookie}:{}),...headers}},res=>{let text='';res.on('data',b=>text+=b);res.on('end',()=>resolve({status:res.statusCode,data:JSON.parse(text),cookie:res.headers['set-cookie']?.[0].split(';')[0]}));});q.on('error',reject);q.end(body?JSON.stringify(body):undefined);});
   const auth=await request('/auth/login',{username:'ordinary',password:'fixture-password'}),cookie=auth.cookie;assert.equal(auth.status,200);
   const r=await request('/regions/r0/analysis?month=2026-09',null,cookie);assert.equal(r.status,200);assert.equal(r.data.region.id,'r0');assert.equal(r.data.month,'2026-09');
   assert.equal((await request('/regions/r1/analysis?month=2026-09',null,cookie)).status,404);
@@ -76,4 +76,17 @@ test('authenticated BFF limits region and briefing reads to registered identitie
   assert.equal((await request('/reports/briefing?ownId=c1',null,cookie)).status,404);
   const report=await request('/reports/briefing?ownId=c0',null,cookie);assert.equal(report.status,200);assert.deepEqual(report.data.companies.map(c=>c.companyId),['c0']);assert.equal(report.data.actions.some(a=>a.key==='verify'),true);
   assert.equal((await request('/reports/briefing')).status,401);assert.equal(reads,2);assert.equal(store.requests(customer.customerId).length,0);
+  assert.equal((await request('/regions/r0/preparation?month=2026-09')).status,401);
+  assert.equal((await request('/regions/r1/preparation?month=2026-09',null,cookie)).status,404);
+  assert.equal((await request('/regions/r0/preparation?month=2026-09&force=true',null,cookie)).status,400);
+  assert.equal((await request('/regions/r0/preparation',{month:'2026-09'},cookie)).status,403,'POST needs CSRF');
+  assert.equal(prepared,0,'reads and rejected writes never dispatch');
+  const headers={'X-CSRF-Token':auth.data.csrfToken};
+  assert.equal((await request('/regions/r1/preparation',{month:'2026-09'},cookie,headers)).status,404);
+  assert.equal((await request('/regions/r0/preparation',{month:'2026-10'},cookie,headers)).status,400);
+  assert.equal((await request('/regions/r0/preparation',{month:'2026-09',force:true},cookie,headers)).status,400);
+  assert.equal(prepared,0);
+  const started=await request('/regions/r0/preparation',{month:'2026-09'},cookie,headers);
+  assert.equal(started.status,202);assert.equal(started.data.job.id,'fixture-job');assert.equal(prepared,1);
+  assert.equal(store.requests(customer.customerId).length,0,'regional refresh does not dispatch a lodging crawl');
 });
