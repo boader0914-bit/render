@@ -3,10 +3,10 @@
   const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const numeric=v=>typeof v==='number'&&Number.isFinite(v)&&v>=0;
   const n=v=>numeric(v)?v.toLocaleString('ko-KR',{maximumFractionDigits:1}):'미확인';
-  const choices={bookings:'예약 수량',revenue:'숙박 추정매출',rate:'추정 예약률'};
-  const config=metric=>metric==='revenue'?{unit:'만원',scale:10000,series:[['publicRevenue','공개 예약 매출','public'],['phoneRevenue','방막기 추정 매출','estimate']]}:
+  const choices={bookings:'예약 수량',revenue:'매출',rate:'예약률'};
+  const config=metric=>metric==='revenue'?{unit:'만원',scale:10000,series:[['publicRevenue','네이버','public'],['phoneRevenue','타채널·전화','estimate']]}:
     metric==='rate'?{unit:'%',scale:.01,series:[['reservationRate','추정 예약률','combined']]}:
-      {unit:'실',scale:1,series:[['publicBookings','공개 예약','public'],['phoneBookings','방막기 추정','estimate']]};
+      {unit:'실',scale:1,series:[['publicBookings','네이버','public'],['phoneBookings','타채널·전화','estimate']]};
   const quality=d=>d&&!d.missing&&!d.partial&&!d.inventoryConflict;
   function fillDays(rows) {
     const data=[...rows].filter(r=>/^\d{4}-\d{2}-\d{2}$/.test(r.date||'')).sort((a,b)=>a.date.localeCompare(b.date));
@@ -15,26 +15,43 @@
     for(let ms=Date.parse(data[0].date+'T00:00:00Z'),end=Date.parse(data.at(-1).date+'T00:00:00Z');ms<=end;ms+=86400000){const date=new Date(ms).toISOString().slice(0,10);out.push(byDate.get(date)||{date,missing:true});}
     return out;
   }
+  const legend=()=>'<div class="collection-legend flow-legend"><span class="flow-label-public">■ 네이버 관측</span><span class="flow-label-estimate">■ 타채널·전화 추정</span><span class="flow-label-combined">━ 합계</span></div>';
   function chart(points,cfg,label) {
     if(!points.length)return '<p class="empty-note">흐름을 표시할 저장 자료가 없습니다.</p>';
-    const values=points.flatMap(p=>cfg.series.map(([key])=>p[key])).filter(numeric).map(v=>v/cfg.scale);
-    if(!values.length)return '<p class="empty-note">표시할 정상 수치가 없습니다. 오류·누락·객실 수 충돌을 확인해 주세요. 미확인은 0으로 표시하지 않습니다.</p>';
+    const stacked=cfg.series.length===2;
+    const total=p=>cfg.series.every(([key])=>numeric(p[key]))?cfg.series.reduce((sum,[key])=>sum+p[key],0):null;
+    const values=points.map(total).filter(numeric).map(v=>v/cfg.scale);
+    if(!values.length)return '<p class="empty-note">표시할 정상 수치가 없습니다. 미확인은 0으로 표시하지 않습니다.</p>';
     const max=Math.max(1,...values),start=Date.parse(points[0].date),end=Date.parse(points.at(-1).date);
-    const x=d=>56+(end===start ? .5 : (Date.parse(d)-start)/(end-start))*584,y=v=>176-v/max*134;
-    const step=Math.max(1,Math.ceil(points.length/6));
-    const gaps=points.slice(1).map((p,i)=>x(p.date)-x(points[i].date)).filter(v=>v>0),barWidth=Math.min(18,gaps.length?Math.min(...gaps)*.55:18);
-    const unknown=points.filter(p=>cfg.series.some(([key])=>!numeric(p[key])));
+    const x=d=>52+(end===start ? .5 :(Date.parse(d)-start)/(end-start))*392,y=v=>204-v/max*166;
+    const step=points.length<=7?1:Math.ceil(points.length/5);
+    const gaps=points.slice(1).map((p,i)=>x(p.date)-x(points[i].date)).filter(v=>v>0),width=Math.min(28,gaps.length?Math.min(...gaps)*.58:28);
     const axis=v=>v>=10000?`${n(v/10000)}만`:v>=1000?`${n(v/1000)}천`:n(v);
-    return `<div class="company-flow-chart"><svg viewBox="0 0 688 224" role="img" aria-label="${esc(label)}. 단위 ${esc(cfg.unit)}. 방막기는 있는 날짜만 막대로, 미확인은 ×로 표시합니다."><title>${esc(label)}</title>${[0,.5,1].map(v=>`<line class="flow-grid" x1="56" x2="640" y1="${y(v*max)}" y2="${y(v*max)}"/><text x="8" y="${y(v*max)-5}">${axis(v*max)}</text>`).join('')}${[...cfg.series].sort((a,b)=>(b[2]==='estimate')-(a[2]==='estimate')).map(([key,name,tone])=>{
-      if(tone==='estimate')return `<g class="flow-estimate">${points.filter(p=>numeric(p[key])&&p[key]>0&&numeric(p.phoneBookings)&&p.phoneBookings>=1).map(p=>`<rect x="${x(p.date)-barWidth/2}" y="${y(p[key]/cfg.scale)}" width="${barWidth}" height="${176-y(p[key]/cfg.scale)}" rx="2"><title>${esc(p.date)} · ${esc(name)} ${n(p[key]/cfg.scale)} ${esc(cfg.unit)}</title></rect>`).join('')}</g>`;
-      const segments=[];let segment=[];for(const p of points){if(numeric(p[key]))segment.push(`${x(p.date)},${y(p[key]/cfg.scale)}`);else{if(segment.length)segments.push(segment);segment=[];}}if(segment.length)segments.push(segment);
-      return `<g class="flow-${tone}">${segments.map(s=>`<polyline points="${s.join(' ')}"/>`).join('')}${points.filter(p=>numeric(p[key])).map(p=>`<circle cx="${x(p.date)}" cy="${y(p[key]/cfg.scale)}" r="3.5"><title>${esc(p.date)} · ${esc(name)} ${n(p[key]/cfg.scale)} ${esc(cfg.unit)}</title></circle>`).join('')}</g>`;
-    }).join('')}${unknown.map(p=>`<text class="flow-unknown" x="${x(p.date)}" y="189" text-anchor="middle"><title>${esc(p.date)} · 미확인</title>×</text>`).join('')}${points.filter((_,i)=>i%step===0||i===points.length-1).map(p=>`<text x="${x(p.date)}" y="214" text-anchor="middle">${esc(p.date.slice(5).replace('-','/'))}</text>`).join('')}</svg></div><div class="collection-legend">${cfg.series.map(([,name,tone])=>`<span class="flow-label-${tone}">${tone==='estimate'?'▮':'●'} ${esc(name)}</span>`).join('')}<span>단위 ${esc(cfg.unit)} · × 미확인${cfg.series.some(s=>s[2]==='estimate')?' · 방막기 0은 표시 생략':''}</span></div>`;
+    const segments=[];let segment=[];
+    for(const p of points){const v=total(p);if(numeric(v))segment.push(`${x(p.date)},${y(v/cfg.scale)}`);else{if(segment.length)segments.push(segment);segment=[];}}
+    if(segment.length)segments.push(segment);
+    return `<div class="company-flow-chart"><svg viewBox="0 0 480 252" role="group" aria-label="${esc(label)}. 단위 ${esc(cfg.unit)}"><title>${esc(label)}</title>${[0,.25,.5,.75,1].map(v=>`<line class="flow-grid" x1="52" x2="454" y1="${y(v*max)}" y2="${y(v*max)}"/><text x="6" y="${y(v*max)+4}">${axis(v*max)}</text>`).join('')}${points.map(p=>{
+      const v=total(p),valid=numeric(v),selected=p.date===cfg.selectedDate;
+      const tooltip=`${p.date} · 합계 ${valid?n(v/cfg.scale):'미확인'}${valid?' '+cfg.unit:''}`+(stacked?' · '+cfg.series.map(([key,name])=>`${name} ${numeric(p[key])?n(p[key]/cfg.scale)+' '+cfg.unit:'미확인'}`).join(' · '):'');
+      let base=0;
+      const bars=stacked?cfg.series.map(([key,name,tone])=>{
+        const value=p[key];if(!numeric(value))return '';
+        const bottom=base;base+=value/cfg.scale;
+        if(!valid||value===0)return '';
+        return `<rect class="flow-${tone}" x="${x(p.date)-width/2}" y="${y(base)}" width="${width}" height="${y(bottom)-y(base)}"><title>${esc(p.date)} · ${esc(name)} ${n(value/cfg.scale)} ${esc(cfg.unit)}</title></rect>`;
+      }).join(''):'';
+      return `<g ${cfg.selectable?`role="button" tabindex="0" data-company-date="${esc(p.date)}" aria-pressed="${selected}"`:''} aria-label="${esc(tooltip)}"><title>${esc(tooltip)}</title>${selected?`<rect class="flow-selection" x="${x(p.date)-Math.max(12,width/2+4)}" y="24" width="${Math.max(24,width+8)}" height="216" rx="4"/>`:''}<rect class="flow-hit" x="${x(p.date)-Math.max(6,width/2)}" y="24" width="${Math.max(12,width)}" height="216"/>${bars}${valid?`<circle class="flow-combined" cx="${x(p.date)}" cy="${y(v/cfg.scale)}" r="3.5"/>`:`<text class="flow-unknown" x="${x(p.date)}" y="216" text-anchor="middle">×</text>`}</g>`;
+    }).join('')}<g class="flow-combined flow-total-line" aria-hidden="true">${segments.map(s=>`<polyline points="${s.join(' ')}"/>`).join('')}</g>${points.filter((_,i)=>i%step===0||i===points.length-1).map(p=>`<text x="${x(p.date)}" y="240" text-anchor="middle">${esc(p.date.slice(5).replace('-','/'))}</text>`).join('')}</svg></div>${cfg.hideLegend?'':stacked?legend():`<div class="collection-legend"><span>단위 ${esc(cfg.unit)}</span></div>`}`;
   }
   const metricSelect=(value,id)=>`<label class="field"><span>표시 지표</span><select data-flow-metric aria-label="${id} 표시 지표">${Object.entries(choices).map(([k,v])=>`<option value="${k}" ${k===value?'selected':''}>${v}</option>`).join('')}</select></label>`;
-  function daily(rows,metric='bookings') {
-    const cfg=config(metric),points=fillDays(rows).map(d=>({...d,...Object.fromEntries(cfg.series.map(([key])=>[key,quality(d)&&!(metric==='revenue'&&d.revenuePartial)&&numeric(d[key])?d[key]:null]))}));
-    return `<div class="company-flow"><div class="company-flow-heading"><div><h3>숙박일별 흐름</h3><p class="muted">${esc(points[0]?.date||'')} ~ ${esc(points.at(-1)?.date||'')} · 날짜별 최신 저장 자료</p></div>${metricSelect(metric,'숙박일별')}</div>${chart(points,cfg,'숙박일별 '+choices[metric])}<p class="muted">숙박일에 예약·추정매출이 얼마나 집중되는지 보여줍니다. 상품 수가 아닌 객실 수 기준입니다.</p></div>`;
+  function daily(rows,options={}) {
+    if(typeof options==='string')options={};
+    const filled=fillDays(rows);
+    return `<div class="company-flow"><div class="company-flow-heading"><div><h3>날짜별 추정 예약·매출</h3><p class="muted">${esc(filled[0]?.date||'')} ~ ${esc(filled.at(-1)?.date||'')}</p></div></div>${legend()}<div class="company-chart-grid">${['bookings','revenue'].map(metric=>{
+      const cfg={...config(metric),hideLegend:true,selectable:true,selectedDate:options.selectedDate};
+      const points=filled.map(d=>({...d,...Object.fromEntries(cfg.series.map(([key])=>[key,quality(d)&&!(metric==='revenue'&&d.revenuePartial)&&numeric(d[key])?d[key]:null]))}));
+      return `<section class="company-chart-panel" data-chart-metric="${metric}"><div class="chart-panel-heading"><h4>${choices[metric]}</h4><span>단위: ${cfg.unit}</span></div>${chart(points,cfg,choices[metric])}</section>`;
+    }).join('')}</div></div>`;
   }
   function history(flow,options={}) {
     const periods=flow?.periods||[],thisMonth=new Date(Date.now()+9*3600000).toISOString().slice(0,7);
