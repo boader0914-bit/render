@@ -27,7 +27,7 @@
 
 ## 배포와 검수
 
-변경 대상은 DataLab 웹 서버(업체 DB 읽기 API)와 Insight 웹 서버(표시 화면)다. 워커 수집 로직, 예약 일정, 요청 속도 변경은 없다. 이 작업은 로컬 개발 상태이며 운영 배포는 별도다.
+변경 대상은 DataLab 웹 서버(업체 DB 읽기 API)와 Insight 웹 서버(표시 화면)다. 워커 수집 로직, 예약 일정, 요청 속도 변경은 없다. 2026-10-03 두 웹 서비스 운영 배포를 완료했으며, 실제 고객 화면 검수 범위는 [운영 배포 기록](insight-company-views-release-20261003.md)을 따른다.
 
 검증: `node --test scripts/test_insight_*.cjs customer-portal/test/*.test.cjs`
 
