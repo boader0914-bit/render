@@ -27,7 +27,7 @@ test('changing region suppresses old responses and maintains requested region se
   pending[1].resolve(region('r0','새 지역'));await new Promise(r=>setImmediate(r));
   pending[0].resolve(region('r1','이전 지역'));await new Promise(r=>setImmediate(r));
   assert.match(slot.innerHTML,/새 지역/);assert.doesNotMatch(slot.innerHTML,/이전 지역/);assert.equal(button.disabled,false);
-  handlers.change({target:{closest:()=>true}});view.stop();slot.isConnected=false;
+  view.clearCache();handlers.change({target:{closest:()=>true}});view.stop();slot.isConnected=false;
   pending[2].resolve(region('r0','이탈 후 응답'));await new Promise(r=>setImmediate(r));
   assert.doesNotMatch(slot.innerHTML,/이탈 후 응답/);
 });

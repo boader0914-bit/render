@@ -85,3 +85,14 @@ test('selected day and period summary show total plus components without double 
   const absent=w.InsightCompanyView.summaryView(data,{day:'2026-10-10'});assert.match(absent,/미확인/);assert.doesNotMatch(absent,/490.4만원|0실/);
   assert.equal(JSON.stringify(data),before);
 });
+
+test('inventory conflicts and failed observations cannot become normal values when switching to table or summary',()=>{
+  const {window:w}=ui();
+  for(const issue of [{inventoryConflict:true},{partial:true},{missing:true}]){
+    const d={date:'2026-10-04',total:16,publicBookings:5,phoneBookings:20,estimatedRevenue:5000000,publicRevenue:1000000,phoneRevenue:4000000,reservationRate:1.56,...issue};
+    const data={companyDetail:{basics:{rooms:16},current:{daily:[d]}}};
+    for(const html of [w.InsightCompanyView.currentView(data,{mode:'table'}),w.InsightCompanyView.summaryView(data,{day:d.date})]){
+      assert.doesNotMatch(html,/500만원|400만원|156\.0%|>관측<|20실/);assert.match(html,/미확인/);
+    }
+  }
+});

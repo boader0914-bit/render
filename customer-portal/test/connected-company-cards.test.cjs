@@ -18,7 +18,7 @@ async function customerScreen(adminView) {
   };
   const elements = new Map(), events = {}, calls = [], mounted = [];
   const element = selector => {
-    if (!elements.has(selector)) elements.set(selector, { innerHTML: '', classList: { toggle() {} }, focus() {} });
+    if (!elements.has(selector)) elements.set(selector, { innerHTML: '', dataset:{}, classList: { toggle() {} }, focus() {} });
     return elements.get(selector);
   };
   const location = { pathname: adminView ? '/customer-view' : '/', hash: '#competitors' };

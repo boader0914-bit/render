@@ -27,7 +27,7 @@
     e.preventDefault();const f=e.target,b=f.querySelector('button');b.disabled=true;document.querySelector('#feedback').textContent='';document.querySelector('#feedback').dataset.kind='error';
     try {
       const p=Object.fromEntries(new FormData(f));
-      if(f.id==='login'){const d=await api('/auth/login',p);identity=d.admin;csrf=d.csrfToken;f.querySelector('[name=password]').value='';location.assign('/customer-view#home');}
+      if(f.id==='login'){const d=await api('/auth/login',p);identity=d.admin;csrf=d.csrfToken;f.querySelector('[name=password]').value='';location.assign('/customer-view'+(window.InsightSession?.consume(true)||'#home'));}
       else {const action=f.classList.contains('property-review')?'property-review':f.id;if(action==='entitlements'){p.competitorLimit=Number(p.competitorLimit);p.interestRegionLimit=Number(p.interestRegionLimit);}if(action==='property-review')p.relationId=f.dataset.relation;const d=await api('/customers/'+encodeURIComponent(detail.customer.customerId)+'/commands',{action,revision:detail.customer.revision,requestKey:crypto.randomUUID(),payload:p});renderDetail(d);document.querySelector('#feedback').dataset.kind='success';document.querySelector('#feedback').textContent='저장했습니다.';}
     }catch(err){const target=document.querySelector('#feedback');if(target)target.textContent=err.message;}finally{b.disabled=false;}
   });
