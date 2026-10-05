@@ -67,8 +67,8 @@
     if(/^(company|collection|collect)=/.test(route())) {
       const id=decodeURIComponent(route().slice(route().indexOf('=')+1)),relation=relations.find(r=>r.companyId===id),company=state.companies.find(r=>r.companyId===id);
       if(!relation||!company){$('#main').innerHTML='<section class="card"><h1>등록한 업체를 찾을 수 없습니다.</h1><a href="#property">내 매장으로 이동</a></section>';return;}
-      $('#main').innerHTML='<a class="text-link" href="#'+(relation.kind==='own'?'property':'competitors')+'">← 등록 업체로 돌아가기</a>'+window.InsightCollection.panel(company,state.features.directCollection,state.preparations.find(r=>r.companyId===id),state.collectionAllowance,route().startsWith('collect='))+'<section class="collection-company-edit"><h2>업체 정보 수정</h2>'+companyCard(relation,true)+'</section>';
-      window.InsightCollection.mount(id,api);return;
+      $('#main').innerHTML='<a class="text-link" href="#'+(relation.kind==='own'?'property':'competitors')+'">← 등록 업체로 돌아가기</a>'+window.InsightCollection.panel(company,state.features.directCollection,state.preparations.find(r=>r.companyId===id),state.collectionAllowance,route().startsWith('collect='))+'<details class="card collection-company-edit"><summary>업체 정보 수정 · 등록 관리</summary>'+companyCard(relation,true)+'</details>';
+      window.InsightCollection.mount(id,api,{kind:relation.kind,status:relation.status});return;
     }
     const current = menus.find(([key])=>key===menuRoute()) || menus[0];
     let content = '';
@@ -85,7 +85,7 @@
   function activeRegion(row) { return row.status==='active'; }
   document.addEventListener('submit', async event => {
     event.preventDefault(); if(busy) return;
-    const form=event.target, p=Object.fromEntries(new FormData(form)); busy=true;
+    const form=event.target; if(form.matches?.('[data-company-adjustment-preview]'))return; const p=Object.fromEntries(new FormData(form)); busy=true;
     form.querySelectorAll('button').forEach(button=>button.disabled=true);
     try {
       if(form.id==='auth-form') {

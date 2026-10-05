@@ -27,7 +27,7 @@ test('A-D view preserves quality warnings and distinguishes unknown from observe
   const r={rooms:null,roomCountSource:'확인 전',productCount:0,range:{start:'2026-10-02',end:'2026-10-31',days:30},dayUse:{},days:[],issues:[],quality:{status:'partial',reason:'날짜 누락'},truncated:true};
   const detail={basics:{name:'가상 <업체>',lodgingTypes:[]},channels:[],current:{summary:null,daily:[{date:'2026-10-02',publicBookings:0,phoneBookings:null,estimatedRevenue:null,partial:true}]},history:{leadTime:{},ranks:[],performance:[],months:[]}};
   const html=w.InsightCompanyView.render({result:r,companyDetail:detail,previousResult:true},'');
-  for(const label of ['업체 기본정보','예약 채널','최근 운영 관측','누적 이력·관리','이번 요청의 완료 결과가 아닙니다','일부 완료','날짜 누락','보존된 상품 목록','네이버 미확인','타채널·전화 미확인','미확인'])assert.ok(html.includes(label),label);
+  for(const label of ['객실·상품','예약 채널','최근 운영 관측','누적 이력·관리','이번 요청의 완료 결과가 아닙니다','일부 완료','날짜 누락','보존된 상품 목록','네이버 미확인','타채널·전화 미확인','미확인'])assert.ok(html.includes(label),label);
   assert.doesNotMatch(html,/확인 전실|가상 <업체>/);assert.match(html,/가상 &lt;업체&gt;/);
 });
 test('calendar highlights only confirmed positive blocked estimates and preserves totals and unknown days',()=>{

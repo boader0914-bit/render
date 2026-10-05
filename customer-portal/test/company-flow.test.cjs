@@ -26,3 +26,46 @@ test('history keeps fixed partial-month scope and net declines without summing s
   const html=view.history({periods:[{month:'2026-10',start:'2026-10-01',end:'2026-10-31',calendarDays:31,completeMonth:false,comparisonDates:['2026-10-03'],points:[{observedDate:'2026-09-20',publicBookings:5,phoneBookings:1,status:'complete',validDays:1,comparisonDays:1,freshDays:1},{observedDate:'2026-09-21',publicBookings:3,phoneBookings:0,status:'complete',validDays:1,comparisonDays:1,freshDays:1}]}]});
   assert.match(html,/1\/31일/);assert.match(html,/월 전체 합계 아님/);assert.match(html,/네이버 -2객실·박/);assert.match(html,/타채널·전화 -1객실·박/);assert.match(html,/고정 비교 숙박일: 2026-10-03/);
 });
+
+const ratePanel=html=>html.match(/<section class="company-chart-panel company-rate-panel" data-chart-metric="rate">([\s\S]*?)<\/section>/)[1];
+test('daily rate uses a fixed 0 to 100 percent axis and preserves zero with clickable dates',()=>{
+  const rows=[{date:'2026-10-05',total:16,publicBookings:0,phoneBookings:0,sold:0,reservationRate:0},{date:'2026-10-06',total:16,publicBookings:5,phoneBookings:3,sold:8,reservationRate:.5},{date:'2026-10-07',total:16,publicBookings:5,phoneBookings:11,sold:16,reservationRate:1}];
+  const before=JSON.stringify(rows),html=view.daily(rows,{selectedDate:'2026-10-06'}),rate=ratePanel(html);
+  assert.match(rate,/2026-10-05 · 예약률 0 %/);
+  assert.match(rate,/2026-10-06 · 예약률 50 %/);
+  assert.match(rate,/2026-10-07 · 예약률 100 %/);
+  assert.match(rate,/<polyline points="52,204 488,121 924,38"/);
+  assert.equal((rate.match(/class="flow-grid"/g)||[]).length,3);
+  for(const tick of ['0%','50%','100%'])assert.ok(rate.includes('>'+tick+'</text>'));
+  assert.match(rate,/data-company-date="2026-10-06" aria-pressed="true"/);
+  assert.doesNotMatch(rate,/<rect class="flow-(public|estimate)"/);
+  assert.equal(JSON.stringify(rows),before);
+  assert.ok(html.indexOf('data-chart-metric="rate"')<html.indexOf('data-chart-metric="bookings"'));
+});
+
+test('central four decimal rate rounding does not hide a normal observation',()=>{
+  const rate=ratePanel(view.daily([{date:'2026-10-01',total:3,publicBookings:1,phoneBookings:0,sold:1,reservationRate:.3333}]));
+  assert.match(rate,/예약률 33.3 %/);
+  assert.doesNotMatch(rate,/예약률 미확인/);
+});
+
+test('rate calculation rejects contradictions and breaks lines at missing or invalid observations',()=>{
+  const base={total:10,publicBookings:3,phoneBookings:2,sold:5,reservationRate:.5};
+  const rows=[{...base,date:'2026-10-01'},{...base,date:'2026-10-03'},{...base,date:'2026-10-04',partial:true},{...base,date:'2026-10-05',inventoryConflict:true},{...base,date:'2026-10-06',publicBookings:9,phoneBookings:2,sold:11,reservationRate:1.1},{...base,date:'2026-10-07',reservationRate:.4},{...base,date:'2026-10-08',sold:6},{...base,date:'2026-10-09',phoneBookings:null},{...base,date:'2026-10-10',total:0},{...base,date:'2026-10-11',reservationRate:null,sold:null}];
+  const rate=ratePanel(view.daily(rows));
+  assert.equal((rate.match(/<polyline/g)||[]).length,3);
+  for(const day of ['02','04','05','06','07','08','09','10'])assert.match(rate,new RegExp('2026-10-'+day+' · 예약률 미확인'));
+  assert.match(rate,/2026-10-11 · 예약률 50 %/);
+  assert.doesNotMatch(rate,/예약률 110 %/);
+  assert.doesNotMatch(rate,/예약률 0 %/);
+});
+
+test('rates stay on the same scale for sparse data and retain unknown markers when all values are unavailable',()=>{
+  const valid=ratePanel(view.daily([{date:'2026-10-01',total:10,publicBookings:1,phoneBookings:0}]));
+  assert.match(valid,/cy="187.4"/);
+  assert.match(valid,/>100%<\/text>/);
+  const unknown=ratePanel(view.daily([{date:'2026-10-01',total:10,publicBookings:1,phoneBookings:0,missing:true}]));
+  assert.match(unknown,/2026-10-01 · 예약률 미확인/);
+  assert.match(unknown,/>100%<\/text>/);
+  assert.doesNotMatch(unknown,/<polyline|<circle/);
+});

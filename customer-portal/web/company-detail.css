@@ -1,0 +1,98 @@
+.connected-app .company-detail-layout{grid-template-columns:1fr;gap:16px}
+.connected-app .company-detail-layout>.card{padding:22px;margin:0}
+.connected-app .company-detail-layout .db-section-heading{margin-bottom:16px}
+.connected-app .company-detail-layout .db-section-heading h2{font-size:18px}
+.connected-app .company-data-heading{padding:22px;margin:18px 0}
+.connected-app .company-data-heading .connected-actions{margin:16px 0 0}
+.connected-app .company-capacity{display:flex;align-items:center;gap:36px;padding-bottom:20px;border-bottom:1px solid var(--line)}
+.connected-app .company-capacity>div{min-width:0}
+.connected-app .company-capacity span,.connected-app .company-capacity small{display:block;color:var(--muted);font-size:12px;line-height:1.7}
+.connected-app .company-capacity strong{display:block;font-size:29px;margin:7px 0}
+.connected-app .company-capacity .company-identity{margin-left:auto;text-align:right}
+.connected-app .company-identity h3{font-size:19px}
+.connected-app .company-identity p{font-size:12px;color:var(--muted);margin-top:8px}
+.connected-app .company-products-overview{margin:18px 0}
+.connected-app .cp-price-note{font-size:12px;color:var(--muted);margin-bottom:12px}
+.connected-app .cp-table-wrap{overflow-x:auto}
+.connected-app .cp-table{width:100%;border-collapse:collapse;font-size:13px}
+.connected-app .cp-table th,.connected-app .cp-table td{padding:13px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+.connected-app .cp-table th:first-child,.connected-app .cp-table td:first-child{text-align:left;white-space:normal;min-width:140px}
+.connected-app .cp-table thead{background:var(--surface-soft);color:var(--muted);font-size:11px}
+.connected-app .cp-type{font-size:11px;color:var(--muted);font-weight:400}
+.connected-app .company-source-details{font-size:13px;margin-top:12px}
+.connected-app .company-source-details>summary,.connected-app .company-detail-layout .db-history>summary,.connected-app .collection-company-edit>summary{cursor:pointer;font-weight:700}
+.connected-app .company-detail-layout .db-channel-list{display:flex;flex-wrap:wrap;gap:10px;margin:0}
+.connected-app .company-detail-layout .db-channel-list article{min-width:180px;flex:1;padding:12px 14px;border:1px solid var(--line);border-radius:5px}
+.connected-app .company-detail-layout .db-channel-list small{margin-top:4px}
+.connected-app .company-observation-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.connected-app .company-observation-heading .db-section-heading,.connected-app .company-observation-heading .company-view-switch{margin:0}
+.connected-app .company-observation-scope{font-size:12px;color:var(--muted);margin:16px 0}
+.connected-app .company-observation-scope span{float:right}
+.connected-app .company-detail-layout .company-summary-heading{margin:16px 0 12px}
+.connected-app .company-detail-layout .company-summary-heading h3{font-size:15px}
+.connected-app .company-detail-layout .company-flow{padding:4px 0 0}
+.connected-app .company-rate-panel{grid-column:1/-1}
+.connected-app .company-rate-panel .company-flow-chart{max-width:100%;overflow-x:auto}
+.connected-app .company-rate-panel svg{min-width:700px}
+.connected-app .company-month-calendar{border:1px solid var(--line);margin:20px 0 0;background:var(--surface)}
+.connected-app .company-month-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 20px;border-top:2px solid var(--text);border-bottom:1px solid var(--line)}
+.connected-app .company-month-heading .eyebrow{font-size:9px}
+.connected-app .company-month-heading h3{font-family:var(--serif);font-size:20px;font-weight:400;margin-top:8px}
+.connected-app .company-month-nav{display:flex;align-items:center;gap:5px}
+.connected-app .company-month-nav .button{font-size:22px;min-width:36px;min-height:42px;padding:2px 8px}
+.connected-app .company-month-nav select{font-family:var(--serif);min-height:42px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:4px;padding:8px;font-size:15px}
+.connected-app .company-month-hint{display:flex;justify-content:space-between;padding:9px 12px;margin:0!important;color:var(--muted);font-size:11px}
+.connected-app .public-dot,.connected-app .estimate-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--public-ink)}
+.connected-app .estimate-dot{background:var(--estimate-ink)}
+.connected-app .company-month-scroll{overflow-x:auto;overscroll-behavior-x:contain}
+.connected-app .company-ops-grid{gap:0;min-width:900px;background:var(--line);border-top:1px solid var(--line)}
+.connected-app .company-ops-grid .db-weekday{background:var(--surface-soft);border-right:1px solid var(--line);padding:10px 0;font-size:11px}
+.connected-app .company-ops-grid .db-calendar-day{border:0;border-top:1px solid var(--line);border-right:1px solid var(--line);border-radius:0;min-height:195px;padding:12px 9px;gap:5px}
+.connected-app .company-ops-grid .db-calendar-day:nth-child(7n){border-right:0}
+.connected-app .company-ops-grid .company-day-number{font-family:var(--serif);font-size:23px;margin-bottom:7px}
+.connected-app .company-ops-grid .calendar-total{flex-direction:row;justify-content:space-between;align-items:baseline;gap:3px;margin:0}
+.connected-app .company-ops-grid .calendar-total b{font-size:14px;white-space:nowrap}
+.connected-app .company-ops-grid .db-calendar-day small{font-size:10px;line-height:1.6}
+.connected-app .company-ops-grid .db-calendar-day.has-estimate{box-shadow:inset 0 3px 0 var(--estimate-ink)}
+.connected-app .company-ops-grid .db-calendar-day.has-public{box-shadow:inset 0 3px 0 var(--public-ink)}
+.connected-app .company-ops-grid .db-calendar-day.unobserved{background:var(--surface-soft)}
+.connected-app .company-month-blank{background:var(--surface-soft);border-top:1px solid var(--line);border-right:1px solid var(--line)}
+.connected-app .company-ops-grid .saturday .company-day-number,.connected-app .company-ops-grid .db-weekday.saturday{color:#3b6681}
+.connected-app .company-ops-grid .sunday .company-day-number,.connected-app .company-ops-grid .db-weekday.sunday{color:#a84c45}
+[data-theme=dark] .connected-app .company-ops-grid .saturday .company-day-number,[data-theme=dark] .connected-app .company-ops-grid .db-weekday.saturday{color:#94c5e5}
+[data-theme=dark] .connected-app .company-ops-grid .sunday .company-day-number,[data-theme=dark] .connected-app .company-ops-grid .db-weekday.sunday{color:#eeaaa1}
+.connected-app .company-day-detail{margin-top:16px;padding:20px;background:var(--surface-soft);border:1px solid var(--line);border-radius:6px}
+.connected-app .company-day-heading{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.connected-app .company-day-heading h3{font-size:17px}
+.connected-app .company-day-heading h3 span{font-size:12px;color:var(--muted);font-weight:400;margin-left:8px}
+.connected-app .company-day-detail .company-summary-heading{display:none}
+.connected-app .company-day-detail .collection-summary article{background:var(--surface)}
+.connected-app .ca-preview{border-top:1px solid var(--line);padding-top:16px;margin-top:16px}
+.connected-app .ca-heading{font-weight:700;font-size:14px}
+.connected-app .ca-heading{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.connected-app .ca-heading h3{font-size:15px}
+.connected-app .ca-heading>span{font-size:12px;color:var(--muted);font-weight:400}
+.connected-app .ca-preview p,.connected-app .ca-baseline{font-size:12px;color:var(--muted);margin:10px 0}
+.connected-app .ca-baseline{display:flex;gap:24px}
+.connected-app .ca-baseline>div{display:flex;gap:8px}
+.connected-app .ca-baseline dd{margin:0;color:var(--text);font-weight:600}
+.connected-app .ca-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:14px 0}
+.connected-app .ca-actions{display:flex;gap:8px}
+.connected-app .ca-output{display:block;margin-top:12px;font-size:13px;line-height:1.8}
+.connected-app .collection-company-edit{margin-top:18px}
+.connected-app .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+@media(max-width:760px){
+ .connected-app .company-detail-layout>.card,.connected-app .company-data-heading{padding:16px}
+ .connected-app .company-capacity{gap:20px;flex-wrap:wrap}
+ .connected-app .company-capacity .company-identity{flex-basis:100%;margin:0;text-align:left}
+ .connected-app .company-capacity strong{font-size:26px}
+ .connected-app .company-observation-heading .company-view-switch{width:100%}
+ .connected-app .company-observation-scope span{float:none;display:block;margin-top:4px}
+ .connected-app .company-month-heading{align-items:start;flex-direction:column;padding:14px}
+ .connected-app .company-month-nav{align-self:flex-end}
+ .connected-app .company-month-hint{font-size:10px;gap:8px}
+ .connected-app .company-day-detail{padding:14px}
+ .connected-app .company-day-heading{align-items:start;flex-direction:column}
+ .connected-app .ca-fields{grid-template-columns:1fr}
+ .connected-app .company-rate-panel svg{max-height:none}
+}

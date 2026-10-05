@@ -8,6 +8,15 @@
     metric==='rate'?{unit:'%',scale:.01,series:[['reservationRate','추정 예약률','combined']]}:
       {unit:'실',scale:1,series:[['publicBookings','네이버','public'],['phoneBookings','타채널·전화','estimate']]};
   const quality=d=>d&&!d.missing&&!d.partial&&!d.inventoryConflict;
+  function dailyRate(d) {
+    if(!quality(d)||!numeric(d.total)||d.total<=0||!numeric(d.publicBookings)||!numeric(d.phoneBookings))return null;
+    const sold=d.publicBookings+d.phoneBookings,rate=sold/d.total;
+    if(rate>1)return null;
+    if(d.sold!=null&&(!numeric(d.sold)||Math.abs(d.sold-sold)>1e-6))return null;
+    // The central daily projection rounds reservationRate to four decimal places.
+    if(d.reservationRate!=null&&(!numeric(d.reservationRate)||d.reservationRate>1||Math.abs(d.reservationRate-rate)>0.0000500001))return null;
+    return rate;
+  }
   function fillDays(rows) {
     const data=[...rows].filter(r=>/^\d{4}-\d{2}-\d{2}$/.test(r.date||'')).sort((a,b)=>a.date.localeCompare(b.date));
     if(!data.length)return [];
@@ -21,18 +30,19 @@
     const stacked=cfg.series.length===2;
     const total=p=>cfg.series.every(([key])=>numeric(p[key]))?cfg.series.reduce((sum,[key])=>sum+p[key],0):null;
     const values=points.map(total).filter(numeric).map(v=>v/cfg.scale);
-    if(!values.length)return '<p class="empty-note">표시할 정상 수치가 없습니다. 미확인은 0으로 표시하지 않습니다.</p>';
-    const max=Math.max(1,...values),start=Date.parse(points[0].date),end=Date.parse(points.at(-1).date);
-    const x=d=>52+(end===start ? .5 :(Date.parse(d)-start)/(end-start))*392,y=v=>204-v/max*166;
+    if(!values.length&&!cfg.showEmpty)return '<p class="empty-note">표시할 정상 수치가 없습니다. 미확인은 0으로 표시하지 않습니다.</p>';
+    const max=numeric(cfg.max)&&cfg.max>0?cfg.max:Math.max(1,...values),start=Date.parse(points[0].date),end=Date.parse(points.at(-1).date);
+    const chartWidth=cfg.wide?960:480;
+    const x=d=>52+(end===start ? .5 :(Date.parse(d)-start)/(end-start))*(chartWidth-88),y=v=>204-v/max*166;
     const step=points.length<=7?1:Math.ceil(points.length/5);
     const gaps=points.slice(1).map((p,i)=>x(p.date)-x(points[i].date)).filter(v=>v>0),width=Math.min(28,gaps.length?Math.min(...gaps)*.58:28);
     const axis=v=>v>=10000?`${n(v/10000)}만`:v>=1000?`${n(v/1000)}천`:n(v);
     const segments=[];let segment=[];
     for(const p of points){const v=total(p);if(numeric(v))segment.push(`${x(p.date)},${y(v/cfg.scale)}`);else{if(segment.length)segments.push(segment);segment=[];}}
     if(segment.length)segments.push(segment);
-    return `<div class="company-flow-chart"><svg viewBox="0 0 480 252" role="group" aria-label="${esc(label)}. 단위 ${esc(cfg.unit)}"><title>${esc(label)}</title>${[0,.25,.5,.75,1].map(v=>`<line class="flow-grid" x1="52" x2="454" y1="${y(v*max)}" y2="${y(v*max)}"/><text x="6" y="${y(v*max)+4}">${axis(v*max)}</text>`).join('')}${points.map(p=>{
+    return `<div class="company-flow-chart"><svg viewBox="0 0 ${chartWidth} 252" role="group" aria-label="${esc(label)}. 단위 ${esc(cfg.unit)}"><title>${esc(label)}</title>${(cfg.ticks||[0,.25,.5,.75,1]).map(v=>`<line class="flow-grid" x1="52" x2="${chartWidth-26}" y1="${y(v*max)}" y2="${y(v*max)}"/><text x="6" y="${y(v*max)+4}">${axis(v*max)}${cfg.axisUnit?esc(cfg.unit):''}</text>`).join('')}${points.map(p=>{
       const v=total(p),valid=numeric(v),selected=p.date===cfg.selectedDate;
-      const tooltip=`${p.date} · 합계 ${valid?n(v/cfg.scale):'미확인'}${valid?' '+cfg.unit:''}`+(stacked?' · '+cfg.series.map(([key,name])=>`${name} ${numeric(p[key])?n(p[key]/cfg.scale)+' '+cfg.unit:'미확인'}`).join(' · '):'');
+      const tooltip=`${p.date} · ${cfg.valueLabel||'합계'} ${valid?n(v/cfg.scale):'미확인'}${valid?' '+cfg.unit:''}`+(stacked?' · '+cfg.series.map(([key,name])=>`${name} ${numeric(p[key])?n(p[key]/cfg.scale)+' '+cfg.unit:'미확인'}`).join(' · '):'');
       let base=0;
       const bars=stacked?cfg.series.map(([key,name,tone])=>{
         const value=p[key];if(!numeric(value))return '';
@@ -41,13 +51,16 @@
         return `<rect class="flow-${tone}" x="${x(p.date)-width/2}" y="${y(base)}" width="${width}" height="${y(bottom)-y(base)}"><title>${esc(p.date)} · ${esc(name)} ${n(value/cfg.scale)} ${esc(cfg.unit)}</title></rect>`;
       }).join(''):'';
       return `<g ${cfg.selectable?`role="button" tabindex="0" data-company-date="${esc(p.date)}" aria-pressed="${selected}"`:''} aria-label="${esc(tooltip)}"><title>${esc(tooltip)}</title>${selected?`<rect class="flow-selection" x="${x(p.date)-Math.max(12,width/2+4)}" y="24" width="${Math.max(24,width+8)}" height="216" rx="4"/>`:''}<rect class="flow-hit" x="${x(p.date)-Math.max(6,width/2)}" y="24" width="${Math.max(12,width)}" height="216"/>${bars}${valid?`<circle class="flow-combined" cx="${x(p.date)}" cy="${y(v/cfg.scale)}" r="3.5"/>`:`<text class="flow-unknown" x="${x(p.date)}" y="216" text-anchor="middle">×</text>`}</g>`;
-    }).join('')}<g class="flow-combined flow-total-line" aria-hidden="true">${segments.map(s=>`<polyline points="${s.join(' ')}"/>`).join('')}</g>${points.filter((_,i)=>i%step===0||i===points.length-1).map(p=>`<text x="${x(p.date)}" y="240" text-anchor="middle">${esc(p.date.slice(5).replace('-','/'))}</text>`).join('')}</svg></div>${cfg.hideLegend?'':stacked?legend():`<div class="collection-legend"><span>단위 ${esc(cfg.unit)}</span></div>`}`;
+    }).join('')}<g class="flow-combined flow-total-line" aria-hidden="true">${segments.map(s=>`<polyline points="${s.join(' ')}"/>`).join('')}</g>${points.filter((_,i)=>i===0||i===points.length-1||(i%step===0&&points.length-1-i>=step*.6)).map(p=>`<text x="${x(p.date)}" y="240" text-anchor="middle">${esc(p.date.slice(5).replace('-','/'))}</text>`).join('')}</svg></div>${cfg.hideLegend?'':stacked?legend():`<div class="collection-legend"><span>단위 ${esc(cfg.unit)}</span></div>`}`;
   }
   const metricSelect=(value,id)=>`<label class="field"><span>표시 지표</span><select data-flow-metric aria-label="${id} 표시 지표">${Object.entries(choices).map(([k,v])=>`<option value="${k}" ${k===value?'selected':''}>${v}</option>`).join('')}</select></label>`;
   function daily(rows,options={}) {
     if(typeof options==='string')options={};
     const filled=fillDays(rows);
-    return `<div class="company-flow"><div class="company-flow-heading"><div><h3>날짜별 추정 예약·매출</h3><p class="muted">${esc(filled[0]?.date||'')} ~ ${esc(filled.at(-1)?.date||'')}</p></div></div>${legend()}<div class="company-chart-grid">${['bookings','revenue'].map(metric=>{
+    const rateConfig={...config('rate'),hideLegend:true,selectable:true,selectedDate:options.selectedDate,max:100,ticks:[0,.5,1],axisUnit:true,valueLabel:'예약률',showEmpty:true,wide:true};
+    const ratePoints=filled.map(d=>({...d,reservationRate:dailyRate(d)}));
+    const ratePanel=`<section class="company-chart-panel company-rate-panel" data-chart-metric="rate"><div class="chart-panel-heading"><h4>날짜별 추정 예약률</h4><span>0 ~ 100%</span></div>${chart(ratePoints,rateConfig,'날짜별 추정 예약률')}</section>`;
+    return `<div class="company-flow"><div class="company-flow-heading"><div><h3>날짜별 추정 예약·매출</h3><p class="muted">${esc(filled[0]?.date||'')} ~ ${esc(filled.at(-1)?.date||'')}</p></div></div>${legend()}<div class="company-chart-grid">${ratePanel}${['bookings','revenue'].map(metric=>{
       const cfg={...config(metric),hideLegend:true,selectable:true,selectedDate:options.selectedDate};
       const points=filled.map(d=>({...d,...Object.fromEntries(cfg.series.map(([key])=>[key,quality(d)&&!(metric==='revenue'&&d.revenuePartial)&&numeric(d[key])?d[key]:null]))}));
       return `<section class="company-chart-panel" data-chart-metric="${metric}"><div class="chart-panel-heading"><h4>${choices[metric]}</h4><span>단위: ${cfg.unit}</span></div>${chart(points,cfg,choices[metric])}</section>`;
