@@ -16,5 +16,5 @@ test('zero baseline is not a percentage and relative indices use arithmetic diff
 test('population keeps total and actual annual vintage; incomplete month stays explicitly separate',()=>{
   const html=view.render({region:{label:'예시'},window:{start:'2025-10',end:'2026-09'},refreshAvailable:true,warnings:[],sources:[{label:'인구',provider:'KOSIS',period:'2024',rows:[{key:'total',label:'전체',value:100,unit:'명'},{key:'female',label:'여성',value:50,unit:'명'}]}],interim:{month:'2026-10',sources:[]}});
   assert.match(html,/실제 공표기간 2024/);assert.match(html,/전체 <strong>100<\/strong>/);
-  assert.match(html,/이번 달 중간 현황 · 12개월 비교에서 제외/);
+  assert.match(html,/이번 달 중간 현황 · 기준 집계에서 제외/);
 });

@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { body, json } = require('../scripts/lib/insight_http.cjs');
 const { fault } = require('../scripts/lib/insight_store.cjs');
+const { projectResponse } = require('./lib/region-period.cjs');
 function configuration(env = process.env) {
   const origin = new URL(env.INSIGHT_PUBLIC_ORIGIN || 'http://127.0.0.1:57951');
   const backend = new URL(env.INSIGHT_DATALAB_ORIGIN || 'http://127.0.0.1:57950');
@@ -50,7 +51,7 @@ function createConnectedServer({ origin, backend, serviceToken, fetchImpl = fetc
           res.setHeader('Set-Cookie', adminCookie(data.token)); delete data.token;
         }
         if ((response.ok && route === '/auth/logout') || response.status === 401) res.setHeader('Set-Cookie', adminCookie('', true));
-        json(res, response.status, data); return;
+        json(res, response.status, response.ok && req.method === 'GET' ? projectResponse(route, data) : data); return;
       }
       if (url.pathname.startsWith('/api/customer/v1/')) {
         const route = url.pathname.slice('/api/customer/v1'.length);
@@ -70,7 +71,7 @@ function createConnectedServer({ origin, backend, serviceToken, fetchImpl = fetc
           res.setHeader('Set-Cookie', cookie(data.token)); delete data.token;
         }
         if ((route === '/auth/logout' && response.ok) || response.status === 401) res.setHeader('Set-Cookie', cookie('', true));
-        json(res, response.status, data); return;
+        json(res, response.status, response.ok && req.method === 'GET' ? projectResponse(route, data) : data); return;
       }
       if (!['GET', 'HEAD'].includes(req.method)) throw fault('NOT_FOUND', '요청한 화면을 찾을 수 없습니다.', 404);
       const adminAssets = { '/admin': ['admin.html', 'text/html'], '/admin.js': ['admin.js', 'text/javascript'], '/admin.css': ['admin.css', 'text/css'] };
