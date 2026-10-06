@@ -38,6 +38,7 @@
   document.addEventListener?.('keydown',event=>{const day=event.target.closest?.('svg [data-company-date]');if(day&&['Enter',' '].includes(event.key)){event.preventDefault();display.day=day.dataset.companyDate;display.calendarMonth=display.day.slice(0,7);refreshDisplay();}});
   document.addEventListener?.('submit',event=>{
     const form=event.target;if(!form.matches?.('[data-company-adjustment-preview]'))return;event.preventDefault();
+    if(!window.InsightCompanyAdjustment?.isEnabled?.())return;
     const output=form.querySelector('[data-adjustment-output]');if(!output||!display.own)return;
     try{const row=window.InsightCompanyView.current(view)?.daily?.find(d=>d.date===form.dataset.companyAdjustmentDate)||{missing:true};const values=Object.fromEntries(new FormData(form)),capacity=view?.companyDetail?.basics?.rooms??view?.result?.rooms;
       const result=window.InsightCompanyAdjustment.calculate(row,values,capacity),delta=(value,unit)=>value==null?'비교 불가':(value>0?'+':'')+value.toLocaleString('ko-KR')+unit;

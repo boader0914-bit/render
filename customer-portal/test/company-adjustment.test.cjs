@@ -60,17 +60,15 @@ test('booking limit follows known capacity without inventing capacity for unknow
   assert.equal(adjustment.calculate(observation(), { revenue: '6000000' }, 10).bookings, 16);
 });
 
-test('form is shown only for own company with a real selected date and cannot claim saved changes', () => {
+test('prepared editor stays locked for own company and is absent for competitors and invalid dates', () => {
   for (const own of [undefined, false, 'true', 1]) assert.equal(adjustment.render(observation(), { own }), '');
   for (const date of [undefined, '2026-02-30', '<img src=x onerror=alert(1)>', '2026-10-09" onfocus="alert(1)']) assert.equal(adjustment.render(observation({ date }), { own: true }), '');
   const html = adjustment.render(observation(), { own: true, capacity: 16 });
-  assert.match(html, /매출 보정 미리보기/); assert.match(html, /저장·리포트에는 반영되지 않습니다\./);
-  assert.match(html, /data-company-adjustment-preview/); assert.match(html, /name="bookings"[^>]*max="16"/);
-  assert.match(html, /name="revenue"/); assert.match(html, /data-adjustment-output/);
-  assert.match(html, /type="reset">초기화/); assert.match(html, /type="submit">계산하기/);
-  assert.doesNotMatch(html, /저장하기|action=|method=|<script| on\w+=/);
-  assert.match(adjustment.render(observation({ partial: true }), { own: true }), /원래 예약<\/dt><dd>미확인/);
-  assert.match(adjustment.render(observation({ estimatedRevenue: 0 }), { own: true }), /원래 매출<\/dt><dd>0원/);
+  assert.equal(adjustment.isEnabled(), false);
+  assert.match(html, /예약·매출 수정/); assert.match(html, /수집자료 통합 후 이용할 수 있습니다\./);
+  assert.match(html, /type="button" disabled>수정 준비 중/);
+  assert.doesNotMatch(html, /<form|<input|type="submit"|data-company-adjustment-preview|저장하기|action=|method=|<script| on\w+=/);
+  assert.equal(adjustment.render(observation(), { own: true, enabled: true, editingEnabled: true, preview: true }), html);
 });
 
 test('browser bundle defines only a pure API and never registers events or accesses storage or network', () => {

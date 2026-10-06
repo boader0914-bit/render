@@ -8,6 +8,15 @@ function ui() {
   return {window,elements};
 }
 const quota=allowed=>({limit:1,canRequest:allowed,resetsAt:'2026-10-02T15:00:00Z'});
+
+test('locked correction submissions stop before reading inputs, calculating or making requests',()=>{
+  const events={},window={InsightCompanyAdjustment:{isEnabled:()=>false,calculate(){assert.fail('locked calculation');}}};
+  const context=vm.createContext({window,document:{addEventListener:(type,fn)=>events[type]=fn},FormData:class{constructor(){assert.fail('locked inputs');}},fetch(){assert.fail('locked network');}});
+  vm.runInContext(read('collection.js'),context);
+  let prevented=false;
+  events.submit({target:{matches:s=>s==='[data-company-adjustment-preview]',querySelector(){assert.fail('locked output');}},preventDefault(){prevented=true;}});
+  assert.equal(prevented,true);
+});
 test('collection view waits for allowance, keeps the fixed range and disables another submission after server refresh',async()=>{
   const {window:w,elements}=ui();
   assert.match(w.InsightCollection.panel({companyId:'a',name:'가상 업체'},true,null,null),/type="submit"[^>]+disabled/);

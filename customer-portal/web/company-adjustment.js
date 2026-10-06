@@ -5,6 +5,9 @@
   else root.InsightCompanyAdjustment = api;
 })(typeof window !== 'undefined' ? window : globalThis, function () {
   'use strict';
+  // Keep the prepared editor locked until separate storage and report precedence are agreed.
+  // This is deliberately not controlled by a browser preference, URL or customer data.
+  const editingEnabled = false;
   const esc = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
   const integer = value => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
   const known = row => Boolean(row && !row.missing && !row.partial && !row.inventoryConflict);
@@ -49,9 +52,10 @@
 
   function render(row, options = {}) {
     if (options.own !== true || !validDate(row?.date)) return '';
+    if (!editingEnabled) return `<section class="ca-preview ca-locked" aria-label="예약·매출 수정"><div class="ca-heading"><h3>예약·매출 수정</h3><span>${esc(row.date)}</span></div><p class="muted">수집자료 통합 후 이용할 수 있습니다.</p><button class="button small" type="button" disabled>수정 준비 중</button></section>`;
     const original = baseline(row), capacity = capacityOf(row, options.capacity);
     return `<section class="ca-preview" aria-label="매출 보정 미리보기"><div class="ca-heading"><h3>매출 보정 미리보기</h3><span>${esc(row.date)}</span></div><p class="muted">저장·리포트에는 반영되지 않습니다.</p><dl class="ca-baseline"><div><dt>원래 예약</dt><dd>${count(original.bookings)}</dd></div><div><dt>원래 매출</dt><dd>${money(original.revenue)}</dd></div></dl><form class="ca-form" data-company-adjustment-preview data-company-adjustment-date="${esc(row.date)}"><div class="ca-fields"><label class="field"><span>예약 합계 (실)</span><input type="number" name="bookings" min="0" ${capacity === null ? '' : `max="${capacity}" `}step="1" inputmode="numeric" placeholder="변경할 때만 입력"></label><label class="field"><span>매출 합계 (원)</span><input type="number" name="revenue" min="0" max="${Number.MAX_SAFE_INTEGER}" step="1" inputmode="numeric" placeholder="변경할 때만 입력"></label></div><p class="muted">빈칸은 원래 값을 유지합니다. 채널별 수량·금액은 바꾸지 않습니다.</p><div class="ca-actions"><button class="button" type="submit">계산하기</button><button class="button small" type="reset">초기화</button></div><div class="ca-output" data-adjustment-output role="status" aria-live="polite"></div></form></section>`;
   }
 
-  return { render, calculate };
+  return { render, calculate, isEnabled: () => editingEnabled };
 });

@@ -79,25 +79,25 @@ test('normal zero remains visible and purple requires a positive non-error estim
   }
 });
 
-test('current DB-reviewed rooms take precedence over the older result throughout summary and preview', () => {
+test('current DB-reviewed rooms take precedence over the older result while corrections remain locked', () => {
   const ui = view(), data = fixture([day('2026-10-09')]);
   const summary = ui.summaryView(data, { day: '2026-10-09' });
   assert.match(summary, /객실 총량<\/span><strong>16실<\/strong>/); assert.doesNotMatch(summary, /17실/);
   const html = ui.render(data, '', { mode: 'calendar', own: true, day: '2026-10-09' });
   assert.match(html, /DB 검수/); assert.doesNotMatch(html, /17실/);
-  assert.match(html, /name="bookings"[^>]*max="16"/);
+  assert.match(html, /disabled>수정 준비 중/); assert.doesNotMatch(html, /name="bookings"/);
 });
 
-test('day detail offers a calculation-only preview for the own company and never for competitors or period totals', () => {
+test('day detail shows the locked editor only for the own company and preserves unknown observations', () => {
   const ui = view(), data = fixture([day('2026-10-09')]);
   const own = ui.dayDetail(data, { day: '2026-10-09', own: true });
-  assert.match(own, /data-company-adjustment-preview/); assert.match(own, /저장·리포트에는 반영되지 않습니다\./);
+  assert.match(own, /ca-locked/); assert.match(own, /disabled>수정 준비 중/); assert.doesNotMatch(own, /data-company-adjustment-preview/);
   for (const options of [{ day: '2026-10-09' }, { day: '2026-10-09', own: false }, { day: 'period', own: true }]) {
-    assert.doesNotMatch(ui.dayDetail(data, options), /data-company-adjustment-preview/);
+    assert.doesNotMatch(ui.dayDetail(data, options), /ca-locked|data-company-adjustment-preview/);
   }
   const absent = ui.dayDetail(data, { day: '2026-10-10', own: true });
-  assert.match(absent, /미확인/); assert.match(absent, /원래 예약<\/dt><dd>미확인/);
-  assert.doesNotMatch(absent, /원래 예약<\/dt><dd>0실/);
+  assert.match(absent, /미확인/); assert.match(absent, /disabled>수정 준비 중/);
+  assert.doesNotMatch(absent, /예약<\/span><strong>0실/);
 });
 
 test('rendering every presentation preserves the stored data and default view emphasizes the graph', () => {
