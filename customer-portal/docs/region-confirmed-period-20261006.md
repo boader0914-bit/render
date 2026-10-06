@@ -24,4 +24,9 @@
 ## Release
 
 - Deploy only Render Insight service `srv-dathlifavr4c73dj3jt0`.
-- Production verification pending deployment.
+- Deployed commit `c68064cb4afa25028bb2565ba0d57c1a62342812` through `dep-db294ccs728c73bj5eu0`, 2026-10-06 15:16:17 KST, duration 29.8s. Render confirms Deploy succeeded / Live.
+- Render build also passed all 118 tests. GitHub Actions has no configured runs; Render performed the release checks.
+- Insight health: `status=ok`, `mode=connected`, `buildCommit=c68064cb4afa`. Both changed browser assets match the checkout.
+- Authenticated production regional analysis and preparation GETs returned 200. API and UI show all five monthly groups confirmed with the expected 12-month periods, 6/6 usable preparation groups, and no browser errors.
+- Production screenshot: `production-confirmed.png` in the evidence directory above.
+- DataLab health remains `ok=true`, `buildCommit=d157bed15242`; no DataLab deployment or source-data write occurred.
