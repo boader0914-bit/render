@@ -38,6 +38,17 @@
 - 후속 잠금 적용 후 전체 관련 테스트 111개 통과, 실패 0. 상품 가격 신뢰 조건, 예약률 서버 반올림, 월 경계·윤년, 정상 0/누락/오류, DB 총량 16실 우선, 경쟁업체 보정 비노출, 원본 불변, 잠긴 제출의 입력·계산·통신 차단을 포함한다.
 - 별도 로컬 가상 자료로 PC 1280/1440px, 모바일 390px, 밝은·어두운 테마를 검수했다. 페이지 가로 넘침 없음, 표와 달력 내부 가로 스크롤 사용. 브라우저 오류·경고 없음.
 - 후속 잠금 표시는 PC 로컬 화면에서 버튼 비활성화와 입력란 없음, 기존 날짜별 수량·매출 유지를 확인했다. 이미지: `company-adjustment-locked.png` (가상 자료). 이번 잠금 변경 후 모바일 재검수는 하지 않았다.
-- 실제 예약·수집·데이터 수정 요청은 실행하지 않았다. 아직 운영 배포하지 않았다.
+- 실제 예약·수집·데이터 수정 요청은 실행하지 않았다. 운영 배포 결과는 아래에 구분해 기록한다.
 - 검수 화면: `http://127.0.0.1:57991/#company=own`. 가상 자료이며 DataLab에 접속하지 않는다.
 - 이미지와 실행 스크립트: `C:/Users/User/.codex/visualizations/2026/10/06/insight-company-detail/`.
+
+## 운영 배포 — 2026-10-06
+
+- 대상: `sabun-insight-preview` (`srv-dathlifavr4c73dj3jt0`), `https://sabun-insight-preview.onrender.com`.
+- 배포 커밋: `1098bc2d2e3411e4093cb532831787cb208d821d`. 업체자료 개선 `5d33dea`와 예약·매출 수정 잠금 `1098bc2`를 함께 포함한다.
+- Render 배포: `dep-db23qijbc2fs73f4pfi0`. 한국시간 09:14:02 시작, 32.6초, `Deploy succeeded | Live`. Render 빌드에서 111개 통과, 실패 0.
+- GitHub Actions 워크플로/실행은 없으며 필수 검증은 Render 빌드에서 실행했다. 서비스 브랜치·시작/빌드 명령·요금제·Auto-Deploy Off는 변경하지 않았다.
+- 공개 health: `status=ok`, `mode=connected`, `buildCommit=1098bc2d2e34`. 새 상품표·수정 잠금·업체 CSS·그래프·업체 화면·collection·connected의 정적 파일 7개 모두 HTTP 200이며 해당 커밋의 내용과 일치한다.
+- DataLab health의 `buildCommit=d157bed15242`가 배포 전후 동일하다. DataLab·수집워커 배포, 원본/DB 변경, 신규 수집은 실행하지 않았다.
+- 운영 고객 화면 새로고침 후 관리자 세션 만료가 확인돼 재로그인을 요청했다. 인증이 필요한 실제 업체자료·캘린더·수정 잠금의 최종 운영 검수는 아직 대기 중이다. 로컬 가상자료 검수를 운영 실제자료 검수로 표현하지 않는다.
+- Render Live 증빙: `C:/Users/User/.codex/visualizations/2026/10/06/insight-company-release/render-live.png`.
