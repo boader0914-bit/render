@@ -69,3 +69,7 @@
 - 기존 `observedDays`는 정상 여부와 무관한 날짜 기록 개수다. 인사이트에서 실제 날짜별 수량이 정상인 경우만 확인일수로 계산하도록 변경했다. 정상 0실은 포함하고 오류·누락·충돌·수량 null은 제외한다. 가격만 누락된 날짜의 정상 수량은 유지한다. 미확인 일수도 함께 표시한다.
 - 경쟁업체의 날짜별 수정 UI는 노출되지 않았다. 실제 부족한 수량·금액은 계속 미확인으로 유지하며 원본을 복구하거나 임의로 0을 채우지 않았다.
 - 변경 범위는 Insight 프런트엔드 표시와 해당 회귀 테스트뿐이다. DataLab 코드는 읽어서 원인을 대조했으며 수정하지 않았다. 관련 전체 테스트 112개 통과, 실패 0.
+
+- 후속 배포 커밋 `950659a34ccfe4d6e97dcff27a507650f5fed667`, Render `dep-db27hjvlot8c73e5c4l0`, 한국시간 13:27:59 시작, 33.1초, `Deploy succeeded | Live`. 빌드 112개 통과·실패 0.
+- 후속 health `buildCommit=950659a34ccf`, HTTP 200, status ok. 운영 `company-view.js`는 로컬 커밋과 줄바꿈 정규화 SHA256 일치. DataLab build는 `d157bed15242`로 동일.
+- 세션은 유지됐으며 배포 후 실제 경쟁업체 화면에서 `수량 확인 0/27일 · 미확인 27일`과 날짜별 미확인, 경쟁업체 수정 UI 비노출을 확인했다. 증빙은 release 폴더의 `production-coverage-fixed.png`, `render-coverage-live.png`.
