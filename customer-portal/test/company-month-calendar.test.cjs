@@ -111,3 +111,29 @@ test('rendering every presentation preserves the stored data and default view em
   assert.doesNotMatch(graph, /class="company-month-calendar"/);
   assert.equal(JSON.stringify(data), before);
 });
+
+test('coverage does not count missing records as confirmed quantities and includes normal zero', () => {
+  const ui = view();
+  const missing = Array.from({ length: 27 }, (_, index) => day(`2026-10-${String(index + 1).padStart(2, '0')}`, { missing: true, partial: true }));
+  function report(daily) {
+    const data = fixture(daily);
+    return freeze({ ...data, companyDetail: { ...data.companyDetail, current: { daily, summary: {
+      rangeStart: '2026-10-01', rangeEnd: '2026-10-27', calendarDays: 27, observedDays: 27,
+    } } } });
+  }
+  const absent = report(missing), before = JSON.stringify(absent);
+  for (const mode of ['graph', 'calendar', 'list', 'table']) {
+    assert.match(ui.render(absent, '', { mode, day: '2026-10-01' }), /수량 확인 0\/27일 · 미확인 27일/);
+  }
+  assert.equal(JSON.stringify(absent), before);
+  const mixed = [
+    day('2026-10-01', { publicBookings: 0, phoneBookings: 0 }),
+    day('2026-10-02', { revenuePartial: true, estimatedRevenue: null }),
+    day('2026-10-03', { partial: true }),
+    day('2026-10-04', { inventoryConflict: true }),
+    day('2026-10-05', { phoneBookings: null }),
+    day('2026-10-06', { total: null }),
+    ...missing.slice(6),
+  ];
+  assert.match(ui.render(report(mixed), '', { mode: 'calendar' }), /수량 확인 2\/27일 · 미확인 25일/);
+});
