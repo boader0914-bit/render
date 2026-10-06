@@ -19,4 +19,10 @@
 
 ## 배포
 
-- 인사이트 서비스 `srv-dathlifavr4c73dj3jt0`만 배포한다. 운영 적용 검증 대기.
+- 인사이트 서비스 `srv-dathlifavr4c73dj3jt0`에 커밋 `46e0327111db3e644960b581d6730c74cc57833f` 배포.
+- Render `dep-db2a6se0tbcc738gg9h0`: 2026-10-06 16:29:53 KST 시작, 40.0초, Deploy succeeded / Live. 빌드 테스트 122개 통과.
+- Health `status=ok`, `mode=connected`, `buildCommit=46e0327111db`. 운영 connected.js와 로컬 코드가 일치한다. GitHub Actions 실행은 없으며 Render 빌드에서 검증했다.
+- 인증된 운영 `#property` 진입 시 월명글램핑 collection GET 1회가 자동 발생했고 HTTP 200. 별도의 업체 자료 보기 클릭 없이 객실 16실·상품 5종·예약채널·운영관측·누적이력을 표시했다.
+- 30일 수집 설정은 닫힘이며 수집 command 요청이 없었다. 기존 DB 상세 응답에 대기 시간은 남아 있다. 매출 수정 잠금과 연결 확인 대기 상태는 유지한다.
+- 브라우저 오류 없음. 운영 증빙 `production-own-store.png`.
+- DataLab health `ok=true`, build `d157bed15242`로 동일. DataLab·워커 배포, 수집 요청, 원본 수정 없음.
