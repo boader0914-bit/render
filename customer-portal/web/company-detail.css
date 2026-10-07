@@ -47,7 +47,7 @@
 .connected-app .company-month-scroll{overflow-x:auto;overscroll-behavior-x:contain}
 .connected-app .company-ops-grid{gap:0;min-width:900px;background:var(--line);border-top:1px solid var(--line)}
 .connected-app .company-ops-grid .db-weekday{background:var(--surface-soft);border-right:1px solid var(--line);padding:10px 0;font-size:11px}
-.connected-app .company-ops-grid .db-calendar-day{border:0;border-top:1px solid var(--line);border-right:1px solid var(--line);border-radius:0;min-height:195px;padding:12px 9px;gap:5px}
+.connected-app .company-ops-grid .db-calendar-day{border:0;border-top:1px solid var(--line);border-right:1px solid var(--line);border-radius:0;min-height:145px;padding:12px 9px;gap:5px}
 .connected-app .company-ops-grid .db-calendar-day:nth-child(7n){border-right:0}
 .connected-app .company-ops-grid .company-day-number{font-family:var(--serif);font-size:23px;margin-bottom:7px}
 .connected-app .company-ops-grid .calendar-total{flex-direction:row;justify-content:space-between;align-items:baseline;gap:3px;margin:0}
@@ -81,6 +81,28 @@
 .connected-app .ca-output{display:block;margin-top:12px;font-size:13px;line-height:1.8}
 .connected-app .collection-company-edit{margin-top:18px}
 .connected-app .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.connected-app .company-reservation-flow .company-chart-panel{padding:8px;border:0}
+.connected-app .company-reservation-flow .flow-legend{margin:12px 0 0}
+.connected-app .company-booking-selection{display:flex;align-items:center;gap:24px;padding:16px 20px;background:var(--surface-soft);border:1px solid var(--line);border-radius:8px}
+.connected-app .company-booking-selection .field{font-size:11px;flex:0 0 160px}
+.connected-app .company-booking-selection>div{flex:1;min-width:0}
+.connected-app .company-booking-selection strong{font-size:20px}
+.connected-app .company-booking-selection strong>span{font-size:13px;font-weight:400;color:var(--muted)}
+.connected-app .company-booking-selection .company-breakdown{margin-top:6px}
+.connected-app .company-booking-selection .company-breakdown>span{flex:initial;padding:0;background:none}
+.connected-app .company-booking-selection .company-breakdown b{display:inline;font-size:13px}
+.connected-app .company-selected-rate{font-size:29px;white-space:nowrap}
+.connected-app .company-revenue-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:28px 0 16px;padding-top:24px;border-top:1px solid var(--line)}
+.connected-app .company-revenue-heading h3{font-size:18px;margin-bottom:5px}
+.connected-app .company-revenue-switch{margin:0;display:flex;width:auto}
+.connected-app .company-revenue-table,.connected-app .company-month-calendar{margin-top:0;border:1px solid var(--line)}
+.connected-app .company-revenue-table .collection-table-wrap{margin:0;border:0;border-radius:0}
+.connected-app .company-table-date{font:inherit;font-weight:600;color:var(--text);background:transparent;border:0;padding:6px;cursor:pointer}
+.connected-app .company-revenue-table .is-selected{outline:2px solid var(--green);outline-offset:-2px;background:var(--surface-soft)}
+.connected-app .company-revenue-table tfoot{background:var(--surface-soft);font-weight:700}
+.connected-app .company-revenue-detail{display:flex;align-items:center;gap:28px;margin-top:16px}
+.connected-app .company-revenue-detail>strong{font-size:28px;white-space:nowrap}
+.connected-app .company-revenue-detail .company-breakdown{flex:1;margin:0}
 @media(max-width:760px){
  .connected-app .company-detail-layout>.card,.connected-app .company-data-heading{padding:16px}
  .connected-app .company-capacity{gap:20px;flex-wrap:wrap}
@@ -95,4 +117,14 @@
  .connected-app .company-day-heading{align-items:start;flex-direction:column}
  .connected-app .ca-fields{grid-template-columns:1fr}
  .connected-app .company-rate-panel svg{max-height:none}
+ .connected-app .company-booking-selection{display:grid;grid-template-columns:minmax(0,1fr) auto;padding:14px;gap:14px}
+ .connected-app .company-booking-selection .field{grid-column:1/-1;max-width:200px}
+ .connected-app .company-booking-selection strong{font-size:18px}
+ .connected-app .company-booking-selection strong>span{display:block;margin-top:5px}
+ .connected-app .company-selected-rate{font-size:25px}
+ .connected-app .company-revenue-heading{gap:10px}
+ .connected-app .company-revenue-switch{display:flex;width:auto}
+ .connected-app .company-revenue-switch .button{min-width:54px;padding:8px}
+ .connected-app .company-revenue-detail{display:block}
+ .connected-app .company-revenue-detail .company-breakdown{margin-top:14px}
 }

@@ -8,21 +8,25 @@
   const active = r => ['dispatching','queued','collecting'].includes(r?.status);
   let api, companyId, view = null, serial = 0, timer, renderedVersion, loadOrder=0;
   const date = () => new Date(Date.now()+9*3600000).toISOString().slice(0,10);
-  let allowance=null,display={mode:'default',metric:'bookings',month:'',calendarMonth:'',day:undefined,own:false};
-  function savedMode(){try{const mode=localStorage.getItem('insight-company-view');return ['default','graph','calendar','list','table'].includes(mode)?mode:'default';}catch{return 'default';}}
+  let allowance=null,display={mode:'calendar',metric:'bookings',month:'',calendarMonth:'',day:undefined,own:false};
+  function savedMode(){try{return (localStorage.getItem('insight-company-revenue-view')||localStorage.getItem('insight-company-view'))==='table'?'table':'calendar';}catch{return 'calendar';}}
   function refreshDisplay(){
     if(!view)return;
     const active=document.activeElement,focusDate=active?.dataset?.companyDate,focusChart=active?.closest?.('[data-chart-metric]')?.dataset?.chartMetric,dateInput=active?.matches?.('[data-company-day]'),monthInput=active?.matches?.('[data-calendar-month-select]'),monthButton=active?.getAttribute?.('aria-label');
     const scrollLeft=document.querySelector('.company-month-scroll')?.scrollLeft||0;
+    const graphScroll=document.querySelector('.company-rate-panel .company-flow-chart')?.scrollLeft||0;
+    const reservation=document.querySelector('#company-reservation-flow');
+    if(reservation)reservation.innerHTML=window.InsightCompanyView.reservationView(view,display);
     const current=document.querySelector('#company-current-view'),history=document.querySelector('#company-history-flow'),detail=document.querySelector('#company-selected-detail');
     if(current)current.innerHTML=window.InsightCompanyView.currentView(view,display);
     const summary=document.querySelector('#company-current-summary');
-    if(summary&&window.InsightCompanyView.summaryView)summary.innerHTML=display.mode==='calendar'?'':window.InsightCompanyView.summaryView(view,display);
+    if(summary&&window.InsightCompanyView.bookingSummary)summary.innerHTML=window.InsightCompanyView.bookingSummary(view,display);
     if(history)history.innerHTML=window.InsightCompanyView.flowView(view,display);
-    if(detail)detail.innerHTML=display.mode==='calendar'?window.InsightCompanyView.dayDetail(view,display):'';
-    document.querySelectorAll?.('[data-company-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.companyView===(display.mode==='default'?'graph':display.mode))));
+    if(detail)detail.innerHTML=window.InsightCompanyView.dayDetail(view,display);
+    document.querySelectorAll?.('[data-company-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.companyView===display.mode)));
     const scroll=document.querySelector('.company-month-scroll');if(scroll)scroll.scrollLeft=scrollLeft;
-    if(/^\d{4}-\d{2}-\d{2}$/.test(focusDate||'')){const prefix=['rate','bookings','revenue'].includes(focusChart)?`[data-chart-metric="${focusChart}"] `:'';document.querySelector(`${prefix}[data-company-date="${focusDate}"]`)?.focus?.({preventScroll:true});}
+    const graph=document.querySelector('.company-rate-panel .company-flow-chart');if(graph)graph.scrollLeft=graphScroll;
+    if(/^\d{4}-\d{2}-\d{2}$/.test(focusDate||'')){const prefix=focusChart==='rate'?'[data-chart-metric="rate"] ':'#company-current-view ';document.querySelector(`${prefix}[data-company-date="${focusDate}"]`)?.focus?.({preventScroll:true});}
     else if(dateInput)document.querySelector('[data-company-day]')?.focus?.({preventScroll:true});
     else if(monthInput||['이전 달','다음 달'].includes(monthButton))document.querySelector('[data-calendar-month-select]')?.focus?.({preventScroll:true});
   }
@@ -31,10 +35,10 @@
     const day=event.target.closest?.('[data-company-date]');if(day){display.day=day.dataset.companyDate;display.calendarMonth=display.day.slice(0,7);refreshDisplay();return;}
     const month=event.target.closest?.('[data-calendar-month]');if(month&&!month.disabled){chooseMonth(month.dataset.calendarMonth);return;}
     if(event.target.closest?.('[data-company-period]')){display.day='period';refreshDisplay();return;}
-    const choice=event.target.closest?.('[data-company-view]');if(choice){display.mode=choice.dataset.companyView;try{localStorage.setItem('insight-company-view',display.mode);}catch{}refreshDisplay();return;}
+    const choice=event.target.closest?.('[data-company-view]');if(choice&&['calendar','table'].includes(choice.dataset.companyView)){display.mode=choice.dataset.companyView;try{localStorage.setItem('insight-company-revenue-view',display.mode);}catch{}refreshDisplay();return;}
     const button=event.target.closest?.('[data-open-collection]');if(button){const panel=document.querySelector('#collection-settings');if(panel){panel.hidden=!panel.hidden;button.setAttribute('aria-expanded',String(!panel.hidden));}}
   });
-  document.addEventListener?.('change',event=>{if(event.target.matches?.('[data-company-day]')){display.day=event.target.value||'period';if(display.day!=='period')display.calendarMonth=display.day.slice(0,7);refreshDisplay();}else if(event.target.matches?.('[data-calendar-month-select]'))chooseMonth(event.target.value);else if(event.target.matches?.('[data-flow-metric]')){display.metric=event.target.value;refreshDisplay();}else if(event.target.matches?.('[data-flow-month]')){display.month=event.target.value;refreshDisplay();}});
+  document.addEventListener?.('change',event=>{if(event.target.matches?.('[data-company-day]')){display.day=event.target.value||undefined;if(display.day)display.calendarMonth=display.day.slice(0,7);refreshDisplay();}else if(event.target.matches?.('[data-calendar-month-select]'))chooseMonth(event.target.value);else if(event.target.matches?.('[data-flow-metric]')){display.metric=event.target.value;refreshDisplay();}else if(event.target.matches?.('[data-flow-month]')){display.month=event.target.value;refreshDisplay();}});
   document.addEventListener?.('keydown',event=>{const day=event.target.closest?.('svg [data-company-date]');if(day&&['Enter',' '].includes(event.key)){event.preventDefault();display.day=day.dataset.companyDate;display.calendarMonth=display.day.slice(0,7);refreshDisplay();}});
   document.addEventListener?.('submit',event=>{
     const form=event.target;if(!form.matches?.('[data-company-adjustment-preview]'))return;event.preventDefault();

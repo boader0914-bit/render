@@ -69,9 +69,9 @@ test('normal zero remains visible and purple requires a positive non-error estim
   ]);
   const html = ui.currentView(data, { mode: 'calendar', calendarMonth: '2026-10' });
   const byDate = new Map(cells(html).map(cell => [cell.date, cell.html]));
-  assert.match(byDate.get('2026-10-01'), /has-public/); assert.match(byDate.get('2026-10-01'), /<b>0실<\/b>/); assert.match(byDate.get('2026-10-01'), /<b>0만원<\/b>/);
+  assert.match(byDate.get('2026-10-01'), /has-public/); assert.doesNotMatch(byDate.get('2026-10-01'), /예약|0실/); assert.match(byDate.get('2026-10-01'), /<b>0만원<\/b>/);
   assert.doesNotMatch(byDate.get('2026-10-01'), /타채널·전화/);
-  assert.match(byDate.get('2026-10-02'), /has-estimate/); assert.match(byDate.get('2026-10-02'), /타채널·전화 2실 · 20만원/);
+  assert.match(byDate.get('2026-10-02'), /has-estimate/); assert.match(byDate.get('2026-10-02'), /타채널·전화 20만원/);
   assert.equal((html.match(/has-estimate/g) || []).length, 1);
   for (const date of ['2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06']) {
     assert.match(byDate.get(date), /unobserved/); assert.match(byDate.get(date), /미확인/);
@@ -106,9 +106,9 @@ test('rendering every presentation preserves the stored data and default view em
     ui.render(data, '', { mode, own: true, day: '2026-10-09' });
     ui.currentView(data, { mode, day: '2026-10-09', calendarMonth: '2026-10' });
   }
-  const graph = ui.currentView(data, { mode: 'default' });
-  assert.match(graph, /data-chart-metric="bookings"/); assert.match(graph, /data-chart-metric="revenue"/);
-  assert.doesNotMatch(graph, /class="company-month-calendar"/);
+  const graph = ui.render(data, '', { mode: 'default' });
+  assert.match(graph, /data-chart-metric="rate"/); assert.doesNotMatch(graph, /data-chart-metric="bookings"|data-chart-metric="revenue"/);
+  assert.match(graph, /class="company-month-calendar"/);
   assert.equal(JSON.stringify(data), before);
 });
 
@@ -136,4 +136,30 @@ test('coverage does not count missing records as confirmed quantities and includ
     ...missing.slice(6),
   ];
   assert.match(ui.render(report(mixed), '', { mode: 'calendar' }), /수량 확인 2\/27일 · 미확인 25일/);
+});
+
+test('revenue table matches the selected calendar month and labels incomplete months as a subtotal', () => {
+  const ui=view(),data=fixture([
+    day('2026-10-01',{publicBookings:0,sold:0,publicRevenue:0,estimatedRevenue:0}),
+    day('2026-10-02',{publicRevenue:300000,phoneRevenue:200000,phoneBookings:2,estimatedRevenue:500000}),
+    day('2026-10-03',{estimatedRevenue:800000,revenuePartial:true}),
+    day('2026-10-04',{estimatedRevenue:900000,partial:true}),
+    day('2026-11-01',{estimatedRevenue:1000000}),
+  ]),before=JSON.stringify(data);
+  const html=ui.currentView(data,{mode:'table',calendarMonth:'2026-10',day:'2026-10-02'});
+  assert.equal(cells(html).length,31);assert.match(html,/aria-pressed="true">2026-10-02/);
+  assert.match(html,/<tfoot>[\s\S]*확인일 소계[\s\S]*매출 확인 2\/31일[\s\S]*<td>50만원<\/td><td>30만원<\/td><td>20만원<\/td>/);
+  assert.doesNotMatch(html,/예약 합계|객실 총량|월 합계|100만원|90만원/);
+  assert.match(html,/>0만원<\/td>/);assert.match(html,/미확인/);
+  const november=ui.currentView(data,{mode:'table',calendarMonth:'2026-11'});
+  assert.equal(cells(november).length,30);assert.ok(cells(november).every(c=>c.date.startsWith('2026-11-')));
+  assert.equal(JSON.stringify(data),before);
+});
+
+test('booking selection uses the same validated daily denominator as the graph',()=>{
+  const ui=view(),data=fixture([day('2026-10-09',{total:20,publicBookings:5,phoneBookings:5,sold:10}),day('2026-10-10',{total:16,publicBookings:10,phoneBookings:8,sold:18})]);
+  const normal=ui.bookingSummary(data,{day:'2026-10-09'});
+  assert.match(normal,/예약 10실/);assert.match(normal,/전체 20실/);assert.match(normal,/50.0%/);assert.doesNotMatch(normal,/만원/);
+  const conflict=ui.bookingSummary(data,{day:'2026-10-10'});
+  assert.match(conflict,/예약 미확인/);assert.doesNotMatch(conflict,/112.5%|예약 18실/);
 });

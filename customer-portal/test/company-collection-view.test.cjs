@@ -50,9 +50,9 @@ test('calendar highlights only confirmed positive blocked estimates and preserve
   ].map(Object.freeze)),before=JSON.stringify(daily);
   const html=w.InsightCompanyView.currentView({companyDetail:{current:{daily}}},{mode:'calendar'});
   assert.equal((html.match(/has-estimate/g)||[]).length,2);
-  assert.match(html,/타채널·전화 2실 · 40만원/);assert.match(html,/<b>3실<\/b>/);assert.match(html,/<b>60만원<\/b>/);
+  assert.match(html,/타채널·전화 40만원/);assert.doesNotMatch(html,/3실|예약 합계/);assert.match(html,/<b>60만원<\/b>/);
   assert.doesNotMatch(html,/방막기 0실|방막기 4실|방막기 매출 0만원/);
-  assert.match(html,/네이버 0실/);assert.match(html,/<b>0만원<\/b>/);assert.match(html,/타채널·전화 미확인/);assert.match(html,/타채널·전화 2실 · 미확인/);assert.match(html,/예약 미확인/);
+  assert.doesNotMatch(html,/네이버 0실/);assert.match(html,/<b>0만원<\/b>/);assert.match(html,/타채널·전화 미확인/);assert.match(html,/타채널·전화 미확인/);assert.match(html,/매출 미확인/);
   assert.equal(JSON.stringify(daily),before);
 });
 
@@ -60,15 +60,15 @@ test('view switches are local, persist the preference and preserve an open corre
   const events={},storage=new Map(),elements=new Map(),modes=[],apiCalls=[];
   for(const id of ['#collection-progress','#collection-result','#company-current-view','#company-history-flow','#company-current-summary','#company-flow-details','#collection-settings'])elements.set(id,{innerHTML:'',hidden:true});
   const correction={value:'작성 중인 검수 근거'};elements.set('#product-correction',correction);
-  const buttons=['default','graph','calendar','table'].map(mode=>({dataset:{companyView:mode},setAttribute(k,v){this[k]=v;}}));
-  const window={InsightCompanyView:{render:(_,__,o)=>{modes.push(o.mode);return 'ABCD';},currentView:(_,o)=>o.mode,summaryView:(_,o)=>o.day||'today',flowView:()=>'<graph>'}};
+  const buttons=['calendar','table'].map(mode=>({dataset:{companyView:mode},setAttribute(k,v){this[k]=v;}}));
+  const window={InsightCompanyView:{render:(_,__,o)=>{modes.push(o.mode);return 'ABCD';},currentView:(_,o)=>o.mode,bookingSummary:(_,o)=>o.day||'today',flowView:()=>'<graph>'}};
   const context=vm.createContext({window,localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},document:{addEventListener:(type,fn)=>events[type]=fn,querySelector:s=>elements.get(s),querySelectorAll:()=>buttons},setTimeout:()=>0,clearTimeout(){}});
   vm.runInContext(read('collection.js'),context);
   window.InsightCollection.mount('cmp_1',async path=>{apiCalls.push(path);return {companyDetail:{},result:null};});
-  await new Promise(r=>setImmediate(r));assert.equal(modes.at(-1),'default');
-  for(const mode of ['graph','calendar','table']){
+  await new Promise(r=>setImmediate(r));assert.equal(modes.at(-1),'calendar');
+  for(const mode of ['table','calendar','table']){
     events.click({target:{closest:s=>s==='[data-company-view]'?buttons.find(b=>b.dataset.companyView===mode):null}});
-    assert.equal(elements.get('#company-current-view').innerHTML,mode);assert.equal(storage.get('insight-company-view'),mode);
+    assert.equal(elements.get('#company-current-view').innerHTML,mode);assert.equal(storage.get('insight-company-revenue-view'),mode);
     assert.equal(correction.value,'작성 중인 검수 근거');
   }
   events.click({target:{closest:s=>s==='[data-company-date]'?{dataset:{companyDate:'2026-10-09'}}:null}});
