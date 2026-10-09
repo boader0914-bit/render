@@ -5,7 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { test } = require("node:test");
 const helpers = require("../web/collector_controls.js");
-const { workerLabel, workerState, workerAvailability, scheduleConfig, collectionDates, defaultDraft, historyEntries, filterHistory, keywordLines, errorMessage, progressModel, etaRange, qualityReason, diagnosticMetrics, diagnosticDates } = helpers;
+const { workerLabel, workerState, workerAvailability, scheduleConfig, keywordSchedule, collectionDates, defaultDraft, historyEntries, filterHistory, keywordLines, errorMessage, progressModel, etaRange, qualityReason, diagnosticMetrics, diagnosticDates } = helpers;
 const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8");
 const source = fs.readFileSync(path.join(__dirname, "../web/collector_controls.js"), "utf8");
 const app = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8");
@@ -89,6 +89,79 @@ test("schedule parser carries purpose/day-use but never overrides pacing or acti
   const parsed = scheduleConfig({ ...defaultDraft(), keywords: "포천글램핑\n포천글램핑\n포천 글램핑", dateMode: "rolling", days: 7 });
   assert.deepEqual(parsed.keywords, ["포천글램핑", "포천 글램핑"]); assert.equal(parsed.collection.collectionPurpose, "basic_db"); assert.equal(parsed.collection.dayUseMode, "inspect"); assert.equal(parsed.collection.adults, 2); assert.equal(parsed.requestPacing, null); assert.equal(Object.hasOwn(parsed, "enabled"), false);
   for (const patch of [{ time: "24:00" }, { ranks: "20-1" }, { firstDate: "2026-02-30" }]) assert.throws(() => scheduleConfig({ ...defaultDraft(), keywords: "가평글램핑", dateMode: "rolling", days: 7, ...patch }));
+});
+
+test("hourly keyword schedules preserve order, deduplicate and remain in the execution day", () => {
+  const values = { ...defaultDraft(), keywords: Array.from({ length: 7 }, (_, i) => `검수${i + 1}글램핑`).join("\n"), time: "11:00", keywordIntervalMinutes: "60", days: 7 };
+  assert.equal(scheduleConfig(values).keywordIntervalMinutes, 60);
+  assert.deepEqual(keywordSchedule(values).items.map(item => item.time), ["11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00"]);
+  assert.deepEqual(keywordSchedule({ ...values, keywords: "가평글램핑\n가평글램핑\n포천글램핑" }).items, [{ keyword: "가평글램핑", time: "11:00" }, { keyword: "포천글램핑", time: "12:00" }]);
+  for (const interval of [-1, 0.5, 1441, "invalid", ""]) assert.throws(() => scheduleConfig({ ...values, keywordIntervalMinutes: interval }), /키워드 간격/);
+  assert.throws(() => scheduleConfig({ ...values, time: "18:00" }), /다음 날/);
+  assert.equal(keywordSchedule({ ...values, keywords: "가평글램핑\n포천글램핑", time: "23:58", keywordIntervalMinutes: 1 }).items[1].time, "23:59");
+  assert.equal(scheduleConfig({ ...values, keywords: "가평글램핑", keywordIntervalMinutes: 1440 }).keywordIntervalMinutes, 1440);
+  delete values.keywordIntervalMinutes;
+  assert.equal(scheduleConfig(values).keywordIntervalMinutes, 0);
+  assert.equal(keywordSchedule(values).items[1].time, "앞 키워드 완료 후");
+});
+
+test("hourly reservation previews save and reload without activating or changing other workers", async () => {
+  const ui = await mockUi();
+  await ui.set("manual", "keywords", Array.from({ length: 7 }, (_, i) => `검수${i + 1}글램핑`).join("\n"));
+  await ui.set("manual", "execution", "schedule"); await ui.set("manual", "firstDate", defaultDraft(Date.now() + 86400000).firstDate); await ui.set("manual", "time", "11:00"); await ui.set("manual", "keywordIntervalMinutes", "60");
+  const table = descendants(ui.card("manual")).find(el => el.className === "collector-keyword-schedule");
+  assert.equal(table.hidden, false); assert.equal(table.children[1].children.length, 7);
+  assert.match(text(table), /검수1글램핑 11:00/); assert.match(text(table), /검수7글램핑 17:00/);
+  assert.match(text(ui.card("manual")), /1시간 간격/); assert.match(text(ui.card("manual")), /예정 시각보다 늦어질 수 있습니다/);
+  assert.ok(ui.calls.every(call => call.method === "GET"));
+  const localReload = await mockUi({ drafts: JSON.parse(ui.storage.get("staydatalab:collector-drafts:v2")) });
+  assert.equal(Number(localReload.input("manual", "keywordIntervalMinutes").value), 60);
+  assert.equal(Number(localReload.input("scheduled", "keywordIntervalMinutes").value), 0);
+  await ui.button("manual", "예약 조건 저장").event("click"); await until(() => text(ui.card("manual")).includes("예약 조건을 저장했습니다"));
+  assert.equal(ui.saved.manual.keywordIntervalMinutes, 60); assert.equal(ui.saved.manual.enabled, false);
+  assert.equal(ui.calls.filter(call => call.method !== "GET").length, 1);
+  const savedReload = await mockUi({ configs: { manual: ui.saved.manual } });
+  assert.equal(Number(savedReload.input("manual", "keywordIntervalMinutes").value), 60);
+  await savedReload.set("manual", "execution", "schedule");
+  assert.match(text(savedReload.card("manual")), /검수7글램핑 17:00/);
+  assert.equal(ui.submissions.length, 0);
+});
+
+test("active six-hour reservations show their receipt progress instead of an expired first slot", async () => {
+  const configured = { ...clone(config), enabled: true, firstDate: "2026-10-10", time: "11:00", keywordIntervalMinutes: 60, keywords: ["완료키워드", "진행키워드", "마지막키워드"] };
+  const patch = { enabled: true, active: true, expired: true, nextRunAt: null, activeOccurrenceIds: ["scheduled_2026-10-10"], latest: [
+    { id: "unrelated-receipt", status: "running", items: [{ keyword: "다른실행", status: "running" }] },
+    { id: "scheduled_2026-10-10", status: "running", items: [{ keyword: "완료키워드", status: "complete", scheduledAt: "2026-10-10T02:00:00Z" }, { keyword: "진행키워드", status: "running", scheduledAt: "2026-10-10T07:00:00Z" }, { keyword: "마지막키워드", status: "queued", scheduledAt: "2026-10-10T08:00:00Z" }] }
+  ] };
+  const statusText = ui => descendants(ui.card("manual")).find(el => el.className === "collector-card-status").children[1].textContent;
+  const running = await mockUi({ configs: { manual: configured }, schedulePatch: { manual: patch } });
+  assert.match(statusText(running), /예약 진행 중 · 진행키워드/);
+  assert.match(statusText(running), /다음 키워드 예정 .*17:00 · 마지막키워드/);
+  assert.doesNotMatch(statusText(running), /예약 날짜 확인 필요|다른실행/);
+  const waitingPatch = clone(patch); waitingPatch.latest[1].items[1].status = "complete";
+  const waiting = await mockUi({ configs: { manual: configured }, schedulePatch: { manual: waitingPatch } });
+  assert.match(statusText(waiting), /예약 진행 중 · 다음 키워드 예정 .*17:00 · 마지막키워드/);
+  assert.doesNotMatch(statusText(waiting), /예약 날짜 확인 필요|진행키워드|다른실행/);
+  const finished = await mockUi({ configs: { manual: configured }, schedulePatch: { manual: { ...waitingPatch, active: false, activeOccurrenceIds: [] } } });
+  assert.match(statusText(finished), /예약 날짜 확인 필요/);
+  for (const ui of [running, waiting, finished]) { assert.ok(ui.calls.every(call => call.method === "GET")); assert.equal(ui.submissions.length, 0); }
+});
+
+test("next-day keyword plans block saving and activation but do not block immediate work", async () => {
+  const ui = await mockUi(); await ui.set("manual", "keywords", "가평글램핑\n포천글램핑");
+  await ui.set("manual", "execution", "schedule"); await ui.set("manual", "time", "23:00"); await ui.set("manual", "keywordIntervalMinutes", "60");
+  assert.equal(ui.button("manual", "예약 조건 저장").disabled, true);
+  assert.equal(descendants(ui.card("manual")).find(el => el.type === "submit").disabled, true);
+  assert.match(text(ui.card("manual")), /마지막 키워드의 예정 시각이 다음 날/);
+  const reservation = descendants(ui.card("manual")).find(el => el.className === "collector-reservation"); reservation.open = false;
+  for (const callback of ui.form("manual").listeners.invalid) callback({ target: ui.input("manual", "keywordIntervalMinutes") });
+  assert.equal(reservation.open, true);
+  await ui.form("manual").event("submit"); await until(() => text(ui.card("manual")).includes("다음 날"));
+  assert.ok(ui.calls.every(call => call.method === "GET"));
+  await ui.set("manual", "keywordIntervalMinutes", "1440"); await ui.set("manual", "execution", "now");
+  assert.equal(ui.input("manual", "keywordIntervalMinutes").disabled, true);
+  await ui.form("manual").event("submit"); await until(() => ui.submissions.length === 2);
+  assert.ok(ui.calls.every(call => call.method === "GET"));
 });
 
 test("three independent cards load by GET only, using approved names and default day-use", async () => {

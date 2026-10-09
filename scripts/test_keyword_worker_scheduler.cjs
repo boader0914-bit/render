@@ -30,6 +30,185 @@ async function fixture(overrides = {}) {
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 async function waitFor(predicate) { for (let attempt = 0; attempt < 150; attempt += 1) { if (await predicate()) return; await new Promise(resolve => setTimeout(resolve, 2)); } throw new Error("condition_not_reached"); }
 
+test("keyword intervals default legacy schedules to zero and reject invalid or next-day timetables", () => {
+  const config = { ...defaultConfig("2026-10-09T00:00:00Z"), time: "11:00", keywords: ["a", "b", "c", "d", "e", "f", "g"] };
+  assert.equal(config.keywordIntervalMinutes, 0);
+  delete config.keywordIntervalMinutes;
+  assert.equal(validateConfig(config).keywordIntervalMinutes, 0);
+  assert.equal(validateConfig({ ...config, keywordIntervalMinutes: 60 }).keywordIntervalMinutes, 60);
+  for (const value of [-1, 0.5, "60", null, 1441]) {
+    assert.throws(() => validateConfig({ ...config, keywordIntervalMinutes: value }), { code: "KEYWORD_SCHEDULE_INTERVAL_INVALID" });
+  }
+  assert.throws(() => validateConfig({ ...config, time: "18:00", keywordIntervalMinutes: 60 }), { code: "KEYWORD_SCHEDULE_INTERVAL_INVALID" });
+});
+
+test("one-time hourly keywords expose their timetable and execute serially exactly once with a virtual clock", async () => {
+  let clock = Date.parse("2026-10-10T02:00:00Z");
+  let active = 0;
+  const starts = [], sleeps = [];
+  let f;
+  f = await fixture({ sleep: async milliseconds => { sleeps.push(milliseconds); clock += milliseconds; f.setTime(clock); },
+    runCrawler: async () => {
+      assert.equal(++active, 1);
+      starts.push(clock);
+      clock += 5 * 60000; f.setTime(clock); active--;
+      return { runId: `hourly_${starts.length}`, collectionQuality: { status: "complete" } };
+    } });
+  try {
+    await f.prepare({ repeat: "once", firstDate: "2026-10-10", time: "11:00", keywordIntervalMinutes: 60, keywords: ["a", "b", "c", "d", "e", "f", "g"] });
+    await f.scheduler.setEnabled(true);
+    const preview = (await f.scheduler.status()).upcomingItems;
+    assert.equal(preview.length, 7);
+    assert.equal(preview[0].scheduledAt, "2026-10-10T02:00:00.000Z");
+    assert.equal(preview[6].scheduledAt, "2026-10-10T08:00:00.000Z");
+    f.setTime(clock);
+    const entry = await f.scheduler.tick();
+    assert.equal(entry.status, "complete");
+    assert.deepEqual(starts, Array.from({ length: 7 }, (_, i) => Date.parse("2026-10-10T02:00:00Z") + i * 3600000));
+    assert.deepEqual(entry.items.map(item => item.scheduledAt), preview.map(item => item.scheduledAt));
+    assert.ok(sleeps.length > 0 && sleeps.every(value => value > 0 && value <= 15000));
+    await f.scheduler.tick();
+    f.setTime("2026-10-11T02:00:00Z"); await f.scheduler.tick();
+    assert.equal(starts.length, 7);
+    assert.equal((await f.scheduler.status()).nextRunAt, null);
+    assert.equal((await f.scheduler.status()).latest.length, 1);
+  } finally { await f.close(); }
+});
+
+test("late and long hourly work delays later starts without overlap or catch-up bursts", async () => {
+  let clock = Date.parse("2026-09-23T05:03:00Z");
+  const starts = [];
+  let f;
+  f = await fixture({ sleep: async milliseconds => { clock += milliseconds; f.setTime(clock); }, runCrawler: async () => {
+    starts.push(clock); clock += (starts.length === 1 ? 75 : 2) * 60000; f.setTime(clock);
+    return { runId: `late_${starts.length}`, quality: { status: "complete" } };
+  } });
+  try {
+    await f.prepare({ keywordIntervalMinutes: 60, keywords: ["a", "b", "c"] }); await f.scheduler.setEnabled(true); f.setTime(clock);
+    const entry = await f.scheduler.tick();
+    assert.equal(entry.status, "complete");
+    assert.deepEqual(starts.map(value => new Date(value).toISOString()), ["2026-09-23T05:03:00.000Z", "2026-09-23T06:18:00.000Z", "2026-09-23T07:18:00.000Z"]);
+  } finally { await f.close(); }
+});
+
+test("hourly spacing uses verified worker start after broker queueing", async () => {
+  let clock = Date.parse("2026-09-23T05:00:00Z");
+  const starts = [];
+  let f;
+  f = await fixture({ sleep: async milliseconds => { clock += milliseconds; f.setTime(clock); }, runCrawler: async () => {
+    starts.push(clock);
+    const actualStarted = clock + (starts.length === 1 ? 20 : 0) * 60000;
+    clock = actualStarted + 5 * 60000; f.setTime(clock);
+    return { runId: `queued_${starts.length}`, quality: { status: "complete" }, output: { startedAt: new Date(actualStarted).toISOString() } };
+  } });
+  try {
+    await f.prepare({ keywordIntervalMinutes: 60 }); await f.scheduler.setEnabled(true); f.setTime(clock);
+    const entry = await f.scheduler.tick();
+    assert.equal(entry.items[0].executionStartedAt, "2026-09-23T05:20:00.000Z");
+    assert.equal(new Date(starts[1]).toISOString(), "2026-09-23T06:20:00.000Z");
+  } finally { await f.close(); }
+});
+
+test("pausing or stopping during an hourly wait prevents the remaining keywords", async () => {
+  for (const action of ["pause", "stop"]) {
+    let sleeps = 0;
+    let f;
+    f = await fixture({ sleep: async milliseconds => {
+      assert.ok(milliseconds <= 15000); sleeps++;
+      if (action === "pause") await f.scheduler.setEnabled(false); else f.scheduler.stop();
+    } });
+    try {
+      await f.prepare({ keywordIntervalMinutes: 60 }); await f.scheduler.setEnabled(true); f.setTime("2026-09-23T05:00:00Z");
+      const entry = await f.scheduler.tick();
+      assert.equal(sleeps, 1); assert.equal(f.calls.length, 1);
+      assert.equal(entry.items[0].status, "complete"); assert.equal(entry.items[1].status, "interrupted");
+      assert.equal(entry.errorCode, "SCHEDULE_PAUSED");
+    } finally { await f.close(); }
+  }
+});
+
+test("provider block in an hourly batch ends all later keywords without another wait or request", async () => {
+  let clock = Date.parse("2026-09-23T05:00:00Z"), count = 0;
+  let f;
+  f = await fixture({ sleep: async milliseconds => { clock += milliseconds; f.setTime(clock); }, runCrawler: async () => {
+    if (++count === 2) throw Object.assign(new Error("provider protection"), { code: "COLLECTOR_PROVIDER_BLOCKED" });
+    return { runId: "first_hourly", quality: { status: "complete" } };
+  } });
+  try {
+    await f.prepare({ keywordIntervalMinutes: 60, keywords: ["a", "b", "c"] }); await f.scheduler.setEnabled(true); f.setTime(clock);
+    const entry = await f.scheduler.tick();
+    assert.equal(entry.status, "blocked"); assert.equal(count, 2);
+    assert.equal(clock, Date.parse("2026-09-23T06:00:00Z"));
+    assert.deepEqual(entry.items.map(item => item.status), ["complete", "blocked", "blocked"]);
+    await f.scheduler.tick(); assert.equal(count, 2);
+  } finally { await f.close(); }
+});
+
+test("date boundary during an hourly wait never collects yesterday's remaining keywords", async () => {
+  let f;
+  f = await fixture({ sleep: async () => { f.setTime("2026-09-23T15:00:00Z"); } });
+  try {
+    await f.prepare({ time: "23:00", keywordIntervalMinutes: 30 }); await f.scheduler.setEnabled(true); f.setTime("2026-09-23T14:00:00Z");
+    const entry = await f.scheduler.tick();
+    assert.equal(f.calls.length, 1); assert.equal(entry.status, "missed");
+    assert.equal(entry.items[0].status, "complete"); assert.equal(entry.items[1].errorCode, "COLLECTION_DATE_EXPIRED");
+  } finally { await f.close(); }
+});
+
+test("immediate batches ignore the saved hourly interval and preserve the scheduled timetable", async () => {
+  const f = await fixture({ sleep: async () => { throw new Error("immediate_must_not_wait"); } });
+  try {
+    await f.prepare({ keywordIntervalMinutes: 60 });
+    const entry = await f.scheduler.runNow({ keywords: ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"] });
+    assert.equal(entry.status, "complete"); assert.equal(f.calls.length, 11);
+    assert.equal(entry.config.keywordIntervalMinutes, 0);
+    assert.ok(entry.items.every(item => item.scheduledAt === undefined));
+    assert.equal((await f.scheduler.status()).config.keywordIntervalMinutes, 60);
+  } finally { await f.close(); }
+});
+
+test("legacy interval-free files and receipts remain readable without rewriting historical evidence", async () => {
+  const f = await fixture();
+  let restarted;
+  try {
+    await f.prepare();
+    const entry = await f.scheduler.runNow();
+    const savedConfig = JSON.parse(await fs.readFile(f.configFile, "utf8"));
+    delete savedConfig.keywordIntervalMinutes; delete entry.config.keywordIntervalMinutes;
+    const configText = JSON.stringify(savedConfig), receiptText = JSON.stringify(entry);
+    const file = path.join(f.receiptDir, `${entry.id}.json`);
+    await fs.writeFile(f.configFile, configText); await fs.writeFile(file, receiptText);
+    f.scheduler.stop(); restarted = createKeywordWorkerScheduler(f.options);
+    const status = await restarted.status();
+    assert.equal(status.config.keywordIntervalMinutes, 0);
+    assert.equal(status.latest[0].status, "complete");
+    assert.equal(await fs.readFile(f.configFile, "utf8"), configText);
+    assert.equal(await fs.readFile(file, "utf8"), receiptText);
+  } finally { restarted?.stop(); await f.close(); }
+});
+
+test("restart quarantines unfinished hourly receipts without resubmitting the remaining timetable", async () => {
+  let clock = Date.parse("2026-09-23T05:00:00Z");
+  let f, restarted;
+  f = await fixture({ sleep: async milliseconds => { clock += milliseconds; f.setTime(clock); } });
+  try {
+    await f.prepare({ repeat: "once", keywordIntervalMinutes: 60 }); await f.scheduler.setEnabled(true); f.setTime(clock);
+    const entry = await f.scheduler.tick();
+    entry.status = "running"; entry.finishedAt = null;
+    Object.assign(entry.items[1], { status: "queued", runId: null });
+    delete entry.items[1].startedAt; delete entry.items[1].endedAt; delete entry.items[1].durationMs;
+    await fs.writeFile(path.join(f.receiptDir, `${entry.id}.json`), JSON.stringify(entry));
+    f.scheduler.stop(); restarted = createKeywordWorkerScheduler(f.options);
+    const status = await restarted.status();
+    assert.equal(status.latest[0].status, "interrupted");
+    assert.equal(status.latest[0].items[0].status, "complete");
+    assert.equal(status.latest[0].items[1].errorCode, "RESTART_RESULT_UNKNOWN");
+    assert.equal(status.latest[0].items[1].scheduledAt, "2026-09-23T06:00:00.000Z");
+    const countBefore = f.calls.length;
+    await restarted.tick(); assert.equal(f.calls.length, countBefore);
+  } finally { restarted?.stop(); await f.close(); }
+});
+
 test("scheduled receipts preserve safe partial causes across status reads", async () => {
   const f = await fixture({ runCrawler: async () => ({ runId: "test_glamping_20260923_140000", collectionQuality: {
     status: "partial", reason: "product_targets_truncated", counts: { naverScheduleFailed: 0, naverScheduleSucceeded: 560, token: "SECRET" }, cookie: "PRIVATE" } }) });

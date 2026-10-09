@@ -12,19 +12,28 @@
   }
   function duplicateKeywordCount(value) { return keywordEntries(value).length - keywordLines(value).length; }
   function validDay(value) { return /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value; }
+  function keywordSchedule(values) {
+    const rawInterval = values.keywordIntervalMinutes ?? 0, intervalMinutes = Number(rawInterval);
+    if (String(rawInterval).trim() === "" || !Number.isInteger(intervalMinutes) || intervalMinutes < 0 || intervalMinutes > 1440) throw new Error("키워드 간격은 0~1440분 사이의 정수로 입력하세요. 0은 연속 수집입니다.");
+    if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(values.time)) throw new Error("실행 시각을 확인하세요.");
+    const keywords = keywordLines(values.keywords), [hour, minute] = values.time.split(":").map(Number), startMinutes = hour * 60 + minute;
+    if (startMinutes + Math.max(0, keywords.length - 1) * intervalMinutes >= 1440) throw new Error("마지막 키워드의 예정 시각이 다음 날로 넘어갑니다. 시작 시각이나 키워드 간격을 줄이세요.");
+    return { intervalMinutes, items: keywords.map((keyword, index) => { const minutes = startMinutes + index * intervalMinutes; return { keyword, time: intervalMinutes === 0 && index > 0 ? "앞 키워드 완료 후" : `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}` }; }) };
+  }
   function scheduleConfig(values) {
     if (values.searchMode !== undefined && !["keyword", "company"].includes(values.searchMode)) throw new Error("검색 대상을 지역·키워드 또는 업체명으로 선택하세요.");
     const keywords = keywordLines(values.keywords);
     if (!keywords.length || keywords.length > 100 || keywords.some(keyword => keyword.length > 160 || /[\x00-\x1f\x7f]/.test(keyword))) throw new Error("키워드를 한 줄에 하나씩, 최대 100개 입력하세요.");
     if (!validDay(values.firstDate)) throw new Error("첫 실행일을 확인하세요.");
     if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(values.time)) throw new Error("실행 시각을 확인하세요.");
+    const { intervalMinutes: keywordIntervalMinutes } = keywordSchedule(values);
     const fixed = values.dateMode === "fixed";
     const bookingDays = fixed ? Math.round((Date.parse(values.checkOut) - Date.parse(values.checkIn)) / 86400000) + 1 : Number(values.days);
     if (fixed && (!validDay(values.checkIn) || !validDay(values.checkOut))) throw new Error("첫 관측일과 마지막 관측일을 확인하세요.");
     if (!Number.isInteger(bookingDays) || bookingDays < 1 || bookingDays > 31) throw new Error("관측 기간은 1~31일로 설정하세요. 마지막 관측일도 포함합니다.");
     const ranks = String(values.ranks).trim();
     if (!/^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/.test(ranks) || ranks.split(",").some(range => { const [first, last = first] = range.split("-").map(Number); return first < 1 || last > 100 || first > last; })) throw new Error("상세수집 순위를 1~100위 안에서 입력하세요. 예: 1-20");
-    return { version: 1, timezone: "Asia/Seoul", repeat: values.repeat, firstDate: values.firstDate, time: values.time, keywords,
+    return { version: 1, timezone: "Asia/Seoul", repeat: values.repeat, firstDate: values.firstDate, time: values.time, keywords, keywordIntervalMinutes,
       collection: { dateMode: fixed ? "fixed" : "rolling", bookingDays, checkIn: fixed ? values.checkIn : null, checkOut: fixed ? values.checkOut : null,
         adults: 2, searchMode: values.searchMode || "keyword", detailRankRanges: ranks, productMode: "all", collectionMode: "precision", collectionPurpose: values.purpose === "basic_db" ? "basic_db" : "revenue_detail", dayUseMode: normalizeDayUse(values.dayUseMode) }, requestPacing: null };
   }
@@ -104,13 +113,14 @@
     if (!validDay(checkIn) || !Number.isInteger(days) || days < 1 || days > 31 || (fixed && !validDay(values.checkOut))) throw new Error("조회할 숙박일을 1~31일 범위로 설정하세요. 시작일과 종료일을 모두 포함합니다.");
     return { checkIn, checkOut: fixed ? values.checkOut : addDays(checkIn, days - 1), bookingDays: days };
   }
-  function defaultDraft(now = Date.now()) { const today = todayKst(now), firstDate = Date.parse(`${today}T14:00:00+09:00`) <= now ? addDays(today, 1) : today; return { keywords: "", searchMode: "keyword", period: "7", checkIn: today, checkOut: addDays(today, 6), purpose: "basic_db", ranks: "1-20", dayUseMode: "inspect", execution: "now", repeat: "once", firstDate, time: "14:00", allowRepeat: false, repeatReason: "" }; }
+  function defaultDraft(now = Date.now()) { const today = todayKst(now), firstDate = Date.parse(`${today}T14:00:00+09:00`) <= now ? addDays(today, 1) : today; return { keywords: "", searchMode: "keyword", period: "7", checkIn: today, checkOut: addDays(today, 6), purpose: "basic_db", ranks: "1-20", dayUseMode: "inspect", execution: "now", repeat: "once", firstDate, time: "14:00", keywordIntervalMinutes: 0, allowRepeat: false, repeatReason: "" }; }
   function scheduleStartError(values, now = Date.now()) { return values.repeat === "once" && Date.parse(`${values.firstDate}T${values.time}:00+09:00`) <= now ? "예약 시각이 지났습니다. 앞으로 실행할 날짜와 시각을 선택하세요." : ""; }
   function reservationSummary(values) {
     const date = validDay(values.firstDate) ? values.firstDate.replace(/-/g, ".") : "날짜 확인 필요";
     const time = /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(values.time) ? `${values.time} KST` : "시각 확인 필요";
     const repeat = { once: "한 번", daily: "매일", weekdays: "평일 · 월~금" }[values.repeat] || "반복 확인 필요";
-    return `${date} · ${time} · ${repeat}`;
+    const interval = Number(values.keywordIntervalMinutes || 0), intervalLabel = interval === 0 ? "연속 수집" : interval === 60 ? "1시간 간격" : `${interval}분 간격`;
+    return `${date} · ${time} · ${repeat} · ${intervalLabel}`;
   }
   function historyEntries(requests = [], schedules = {}) {
     const rows = requests.map(item => ({ ...item, collectionQuality: item.result?.collectionQuality || item.collectionQuality, workerKey: workerKey(item.workerKey), trigger: "manual", runId: item.result?.runId, stamp: item.createdAt || item.startedAt }));
@@ -208,7 +218,7 @@
     if (dates.length > 2 && dates.every((date, index) => index === 0 || Date.parse(date) - Date.parse(dates[index - 1]) === 86400000)) return `${dates[0]} ~ ${dates.at(-1)} (${dates.length}일)`;
     return dates.join(", ");
   }
-  if (typeof module !== "undefined" && module.exports) module.exports = { workerKey, workerLabel, keywordLines, duplicateKeywordCount, scheduleConfig, formatTime, workerState, workerQueueCount, workerAvailability, durationLabel, errorMessage, STATUS_LABELS, normalizeDayUse, collectionDates, defaultDraft, reservationSummary, historyEntries, filterHistory, etaRange, progressModel, qualityReason, diagnosticMetrics, diagnosticDates };
+  if (typeof module !== "undefined" && module.exports) module.exports = { workerKey, workerLabel, keywordLines, duplicateKeywordCount, scheduleConfig, keywordSchedule, formatTime, workerState, workerQueueCount, workerAvailability, durationLabel, errorMessage, STATUS_LABELS, normalizeDayUse, collectionDates, defaultDraft, reservationSummary, historyEntries, filterHistory, etaRange, progressModel, qualityReason, diagnosticMetrics, diagnosticDates };
   if (typeof document === "undefined") return;
   // Reuse the same stored-only diagnosis in history and the archive. Opening it never starts collection.
   const diagnosticCache = new Map(), diagnosticOpen = new Map();
@@ -357,7 +367,11 @@
     card.reservationLabel = node("strong", "예약 조건"); card.reservationValue = node("small", "조건 확인");
     reservationCopy.append(card.reservationLabel, card.reservationValue); reservationHeading.append(reservationCopy, node("span", "", "collector-chevron"));
     const reservationBody = node("div", "", "collector-reservation-body"), reservationGrid = node("div", "", "collector-settings-grid");
-    reservationGrid.append(field(card, "firstDate", "수집 실행일", "date", { min: "2000-01-01", max: "2099-12-31" }), field(card, "time", "실행 시각 · 한국시간", "time"), field(card, "repeat", "반복", "select", { choices: [["once", "한 번"], ["daily", "매일"], ["weekdays", "평일 · 월~금"]] })); card.reservationHint = node("p", "", "collector-field-hint"); reservationBody.append(reservationGrid, card.reservationHint); card.reservation.append(reservationHeading, reservationBody); card.form.append(card.reservation);
+    reservationGrid.append(field(card, "firstDate", "수집 실행일", "date", { min: "2000-01-01", max: "2099-12-31" }), field(card, "time", "첫 키워드 시각 · 한국시간", "time"), field(card, "repeat", "반복", "select", { choices: [["once", "한 번"], ["daily", "매일"], ["weekdays", "평일 · 월~금"]] }), field(card, "keywordIntervalMinutes", "키워드 간격 · 분", "number", { min: 0, max: 1440, step: 1 }));
+    card.intervalHint = node("p", "0: 앞 키워드 완료 후 연속 · 60: 1시간 간격. 모든 예정 시각은 수집 실행일 안에 설정하세요.", "collector-field-hint");
+    card.keywordSchedule = node("table", "", "collector-keyword-schedule"); card.keywordSchedule.append(node("caption", "키워드별 시작 예정 · 한국시간"));
+    card.keywordScheduleBody = node("tbody"); card.keywordSchedule.append(card.keywordScheduleBody);
+    card.reservationHint = node("p", "", "collector-field-hint"); reservationBody.append(reservationGrid, card.intervalHint, card.keywordSchedule, card.reservationHint); card.reservation.append(reservationHeading, reservationBody); card.form.append(card.reservation);
     card.repeat = node("details", "", "collector-repeat-options"); card.repeat.append(node("summary", "당일 재수집 옵션")); card.repeat.append(field(card, "allowRepeat", "기존 자료 대신 다시 수집", "checkbox"), field(card, "repeatReason", "재수집 사유", "text", { maxLength: 200, placeholder: "4글자 이상 입력" }), node("p", "기본은 세 워커의 당일 정상 자료를 먼저 확인합니다. 접근 제한 보호는 유지됩니다.", "collector-field-hint")); card.form.append(card.repeat);
     card.detailHint = node("p", "", "collector-field-hint"); card.form.append(card.detailHint);
     card.notice = node("p", "", "collector-control-status"); card.notice.setAttribute("role", "status"); card.notice.setAttribute("aria-live", "polite"); card.form.append(card.notice);
@@ -365,7 +379,7 @@
     card.lastResult = node("div", "", "collector-last-result"); footer.append(card.lastResult); card.form.append(footer); card.root.append(card.form);
     card.form.addEventListener("input", () => { card.dirty = true; syncCard(card); saveDraft(card); });
     card.form.addEventListener("change", event => { if (event.target === card.inputs.execution && event.target.value === "schedule") card.reservation.open = true; card.dirty = true; syncCard(card); saveDraft(card); });
-    card.form.addEventListener("invalid", event => { if ([card.inputs.firstDate, card.inputs.time, card.inputs.repeat].includes(event.target)) card.reservation.open = true; if (event.target === card.inputs.repeatReason) card.repeat.open = true; }, true);
+    card.form.addEventListener("invalid", event => { if ([card.inputs.firstDate, card.inputs.time, card.inputs.repeat, card.inputs.keywordIntervalMinutes].includes(event.target)) card.reservation.open = true; if (event.target === card.inputs.repeatReason) card.repeat.open = true; }, true);
     card.form.addEventListener("submit", event => { event.preventDefault(); if (card.form.reportValidity()) action(card, () => values(card).execution === "schedule" ? enableSchedule(card) : runNow(card)); });
     cards.set(key, card); fill(card, { ...defaultDraft(), ...(drafts[key] || {}) }); return card.root;
   }
@@ -377,25 +391,34 @@
     card.customDates.hidden = !custom;
     card.inputs.checkIn.required = card.inputs.checkOut.required = custom;
     card.reservation.hidden = !reservation; card.inputs.firstDate.required = card.inputs.time.required = reservation;
+    card.inputs.keywordIntervalMinutes.required = reservation; card.inputs.keywordIntervalMinutes.disabled = !reservation;
     card.repeat.hidden = reservation; card.inputs.repeatReason.disabled = !v.allowRepeat; card.inputs.repeatReason.required = v.allowRepeat && !reservation;
     const detailChoice = [...card.inputs.dayUseMode.children].find(option => option.value === "detail"); if (detailChoice) detailChoice.disabled = v.purpose === "basic_db";
     if (v.purpose === "basic_db" && v.dayUseMode === "detail") { card.inputs.dayUseMode.value = "inspect"; v.dayUseMode = "inspect"; }
     card.detailHint.textContent = v.purpose === "basic_db" ? "기본수집은 업체·상품 목록과 데이유즈 유무를 확인합니다. 날짜별 예약·가격은 상세수집에서 확인합니다." : v.dayUseMode === "detail" ? "숙박과 데이유즈의 날짜별 예약·가격을 함께 확인합니다. 객실 공유 여부는 수집 근거로 별도 판단합니다." : v.dayUseMode === "lodging_only" ? "숙박의 날짜별 예약·가격을 확인합니다. 데이유즈 예약 상세는 수집하지 않습니다." : "상품 목록에서 데이유즈 유무를 확인하고, 숙박의 날짜별 예약·가격을 수집합니다.";
     const keyword = keywordLines(v.keywords); const date = custom ? `${v.checkIn || "시작일"} ~ ${v.checkOut || "종료일"}` : `${v.period}일`;
     card.summary.textContent = `${keyword[0] || "키워드 미입력"}${keyword.length > 1 ? ` 외 ${keyword.length - 1}개` : ""} · ${date} · ${v.purpose === "basic_db" ? "기본" : "상세"}`;
-    const expiredDraft = scheduleStartError(v);
-    card.reservationLabel.textContent = expiredDraft ? "예약 시각 확인 필요" : "예약 조건";
+    let plan = null, intervalError = "";
+    try { plan = keywordSchedule(v); } catch (error) { intervalError = error.message; }
+    const expiredDraft = scheduleStartError(v), reservationError = expiredDraft || intervalError;
+    card.keywordSchedule.hidden = !plan?.items.length;
+    card.keywordScheduleBody.replaceChildren(...(plan?.items || []).map(item => { const row = node("tr"), keyword = node("th", item.keyword); keyword.setAttribute("scope", "row"); row.append(keyword, node("td", item.time)); return row; }));
+    card.reservationLabel.textContent = reservationError ? "예약 시각 확인 필요" : "예약 조건";
     card.reservationValue.textContent = reservationSummary(v);
-    card.reservationHint.textContent = expiredDraft || "조회할 숙박일과 수집 실행일은 서로 다릅니다. 예약 시각은 한국시간입니다.";
-    card.reservationHint.className = expiredDraft ? "collector-field-hint collector-worker-alert" : "collector-field-hint";
-    card.submit.disabled = card.busy || !availability.ready || (reservation && (!schedule?.config || Boolean(expiredDraft)));
-    card.submit.title = !availability.ready ? availability.reason : reservation ? expiredDraft : "";
+    card.reservationHint.textContent = reservationError || "조회할 숙박일과 수집 실행일은 서로 다릅니다. 키워드는 순서대로 수집하며, 앞 수집이 길어지면 예정 시각보다 늦어질 수 있습니다.";
+    card.reservationHint.className = reservationError ? "collector-field-hint collector-worker-alert" : "collector-field-hint";
+    card.submit.disabled = card.busy || !availability.ready || (reservation && (!schedule?.config || Boolean(reservationError)));
+    card.submit.title = !availability.ready ? availability.reason : reservation ? reservationError : "";
     const reservationLabel = v.repeat === "once" ? `${v.firstDate.slice(5).replace("-", "/")} ${v.time}` : `${v.repeat === "weekdays" ? "평일" : "매일"} ${v.time}`;
     card.submit.textContent = card.busy ? "처리 중…" : reservation ? `${reservationLabel} ${schedule?.config?.enabled ? "예약 변경" : "예약 등록"}` : "지금 수집";
-    card.save.hidden = !reservation; card.save.disabled = card.busy || !schedule?.config;
+    card.save.hidden = !reservation; card.save.disabled = card.busy || !schedule?.config || Boolean(intervalError);
     card.pause.hidden = !schedule?.config?.enabled; card.pause.disabled = card.busy;
     card.next.textContent = schedule?.enabled && schedule.nextRunAt ? `다음 예약 ${formatTime(schedule.nextRunAt)}` : schedule?.enabled ? "예약 켜짐 · 다음 실행 확인 필요" : "예약 꺼짐";
-    if (schedule?.expired) card.next.textContent = "예약 날짜 확인 필요 · 실행일 또는 숙박일을 수정하세요";
+    if (schedule?.active) {
+      const activeItems = (schedule.latest || []).filter(entry => schedule.activeOccurrenceIds?.includes(entry.id)).flatMap(entry => entry.items || []);
+      const running = activeItems.find(item => item.status === "running"), next = activeItems.find(item => item.status === "queued" && Number.isFinite(Date.parse(item.scheduledAt)));
+      card.next.textContent = `${running ? `예약 진행 중 · ${running.keyword}` : "예약 진행 중"}${next ? ` · 다음 키워드 예정 ${formatTime(next.scheduledAt)} · ${next.keyword}` : ""}`;
+    } else if (schedule?.expired) card.next.textContent = "예약 날짜 확인 필요 · 실행일 또는 숙박일을 수정하세요";
   }
   function renderWorkers() {
     for (const card of cards.values()) {
@@ -492,7 +515,7 @@
     const v = values(card), keywords = keywordLines(v.keywords), dates = collectionDates(v);
     if (!keywords.length || keywords.length > 100 || keywords.some(keyword => keyword.length > 160 || /[\x00-\x1f\x7f]/.test(keyword))) throw new Error("키워드를 한 줄에 하나씩 최대 100개 입력하세요.");
     // Share validation with reservations without requiring a future execution date for immediate work.
-    scheduleConfig({ ...v, firstDate: todayKst(), time: "14:00", dateMode: "fixed", ...dates, days: dates.bookingDays });
+    scheduleConfig({ ...v, firstDate: todayKst(), time: "14:00", keywordIntervalMinutes: 0, dateMode: "fixed", ...dates, days: dates.bookingDays });
     if (v.allowRepeat && String(v.repeatReason).trim().length < 4) throw new Error("재수집 사유를 4글자 이상 입력하세요.");
     let accepted = 0;
     for (const keyword of keywords) {
@@ -539,7 +562,7 @@
         const key = WORKER_KEYS[i], result = results[i + 2], card = cards.get(key);
         if (result.status === "fulfilled") {
           schedules[key] = result.value; const config = result.value.config;
-          if (!card.loaded && !drafts[key] && config?.keywords?.length) fill(card, { keywords: config.keywords.join("\n"), searchMode: config.collection.searchMode || "keyword", period: config.collection.dateMode === "fixed" ? "custom" : String(config.collection.bookingDays), checkIn: config.collection.checkIn || todayKst(), checkOut: config.collection.checkOut || todayKst(), purpose: config.collection.collectionPurpose, ranks: config.collection.detailRankRanges, dayUseMode: config.collection.dayUseMode || "detail", firstDate: config.firstDate, time: config.time, repeat: config.repeat, execution: config.enabled ? "schedule" : "now" });
+          if (!card.loaded && !drafts[key] && config?.keywords?.length) fill(card, { keywords: config.keywords.join("\n"), searchMode: config.collection.searchMode || "keyword", period: config.collection.dateMode === "fixed" ? "custom" : String(config.collection.bookingDays), checkIn: config.collection.checkIn || todayKst(), checkOut: config.collection.checkOut || todayKst(), purpose: config.collection.collectionPurpose, ranks: config.collection.detailRankRanges, dayUseMode: config.collection.dayUseMode || "detail", firstDate: config.firstDate, time: config.time, repeat: config.repeat, keywordIntervalMinutes: config.keywordIntervalMinutes ?? 0, execution: config.enabled ? "schedule" : "now" });
           card.loaded = true;
         } else { schedules[key] = null; notice(card, "예약 상태를 읽지 못했습니다. 즉시수집과 연결 상태는 별도로 확인합니다.", "error"); }
       }

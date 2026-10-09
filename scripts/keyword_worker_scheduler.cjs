@@ -36,6 +36,9 @@ function dateKey(value) {
 }
 function addDays(day, count) { return new Date(Date.parse(`${day}T00:00:00Z`) + count * DAY_MS).toISOString().slice(0, 10); }
 function scheduledAt(day, time) { return new Date(`${day}T${time}:00+09:00`).toISOString(); }
+function keywordScheduledAt(config, day, index) {
+  return new Date(Date.parse(scheduledAt(day, config.time)) + index * (config.keywordIntervalMinutes || 0) * 60000).toISOString();
+}
 function uniqueKeywords(value) {
   if (!Array.isArray(value) || value.length > 100) throw fault("KEYWORD_SCHEDULE_KEYWORDS_INVALID");
   const found = new Set();
@@ -76,15 +79,22 @@ function validatePacing(value) {
   return result;
 }
 function defaultConfig(at = new Date()) {
-  return { version: VERSION, enabled: false, timezone: "Asia/Seoul", repeat: "daily", firstDate: dateKey(at), time: "14:00", keywords: [],
+  return { version: VERSION, enabled: false, timezone: "Asia/Seoul", repeat: "daily", firstDate: dateKey(at), time: "14:00", keywordIntervalMinutes: 0, keywords: [],
     collection: { dateMode: "rolling", bookingDays: 31, checkIn: null, checkOut: null, adults: 2, detailRankRanges: "1-20",
       productMode: "all", collectionMode: "precision", collectionPurpose: "revenue_detail", dayUseMode: "inspect" }, requestPacing: null };
 }
 function validateConfig(value) {
-  keysOnly(value, ["version", "enabled", "timezone", "repeat", "firstDate", "time", "keywords", "collection", "requestPacing"], "KEYWORD_SCHEDULE_CONFIG_INVALID");
+  keysOnly(value, ["version", "enabled", "timezone", "repeat", "firstDate", "time", "keywordIntervalMinutes", "keywords", "collection", "requestPacing"], "KEYWORD_SCHEDULE_CONFIG_INVALID");
   if (value.version !== VERSION || typeof value.enabled !== "boolean" || value.timezone !== "Asia/Seoul"
     || !["once", "daily", "weekdays"].includes(value.repeat) || !date(value.firstDate)
     || typeof value.time !== "string" || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value.time)) throw fault("KEYWORD_SCHEDULE_CONFIG_INVALID");
+  const keywords = uniqueKeywords(value.keywords);
+  const keywordIntervalMinutes = value.keywordIntervalMinutes === undefined ? 0 : value.keywordIntervalMinutes;
+  const [hours, minutes] = value.time.split(":").map(Number);
+  if (!Number.isSafeInteger(keywordIntervalMinutes) || keywordIntervalMinutes < 0 || keywordIntervalMinutes > 1440
+    || hours * 60 + minutes + Math.max(0, keywords.length - 1) * keywordIntervalMinutes >= 1440) {
+    throw fault("KEYWORD_SCHEDULE_INTERVAL_INVALID");
+  }
   const input = value.collection;
   keysOnly(input, ["dateMode", "bookingDays", "checkIn", "checkOut", "adults", "detailRankRanges", "productMode", "collectionMode", "collectionPurpose", "dayUseMode", "searchMode"], "KEYWORD_SCHEDULE_COLLECTION_INVALID");
   if (!["rolling", "fixed"].includes(input.dateMode) || !Number.isSafeInteger(input.bookingDays) || input.bookingDays < 1 || input.bookingDays > 31
@@ -103,7 +113,7 @@ function validateConfig(value) {
     if (input.checkIn !== null || input.checkOut !== null) throw fault("KEYWORD_SCHEDULE_DATE_INVALID");
   }
   return { version: VERSION, enabled: value.enabled, timezone: "Asia/Seoul", repeat: value.repeat, firstDate: value.firstDate, time: value.time,
-    keywords: uniqueKeywords(value.keywords), collection, requestPacing: validatePacing(value.requestPacing) };
+    keywordIntervalMinutes, keywords, collection, requestPacing: validatePacing(value.requestPacing) };
 }
 function executionConfig(value) {
   // New runs use the worker's current defaults. Keep validateConfig unchanged
@@ -204,6 +214,7 @@ function createKeywordWorkerScheduler(options = {}) {
   const now = options.now || (() => new Date());
   const setIntervalImpl = options.setIntervalImpl || setInterval;
   const clearIntervalImpl = options.clearIntervalImpl || clearInterval;
+  const sleep = options.sleep || (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)));
   const tickIntervalMs = Math.max(1000, Number(options.tickIntervalMs) || 15000);
   const getFreeBytes = options.getFreeBytes || (async () => { const info = await fs.statfs(dataDir); return Number(info.bavail) * Number(info.bsize); });
   const active = new Map();
@@ -251,7 +262,10 @@ function createKeywordWorkerScheduler(options = {}) {
       || value.items.some(item => !object(item) || !STATES.has(item.status) || typeof item.keyword !== "string" || uniqueKeywords([item.keyword])[0] !== item.keyword)) throw fault("KEYWORD_SCHEDULE_STATE_INVALID", 503);
     validateConfig(value.config);
     for (const item of value.items) {
-      keysOnly(item, ["keyword", "status", "runId", "startedAt", "endedAt", "durationMs", "errorCode", "collectionQuality"], "KEYWORD_SCHEDULE_STATE_INVALID");
+      keysOnly(item, ["keyword", "status", "runId", "scheduledAt", "startedAt", "executionStartedAt", "endedAt", "durationMs", "errorCode", "collectionQuality"], "KEYWORD_SCHEDULE_STATE_INVALID");
+      for (const field of ["scheduledAt", "executionStartedAt"]) {
+        if (item[field] !== undefined && (typeof item[field] !== "string" || !Number.isFinite(Date.parse(item[field])))) throw fault("KEYWORD_SCHEDULE_STATE_INVALID", 503);
+      }
       if (item.collectionQuality !== undefined && !require("node:util").isDeepStrictEqual(item.collectionQuality, sanitizeCollectionQuality(item.collectionQuality))) {
         throw fault("KEYWORD_SCHEDULE_STATE_INVALID", 503);
       }
@@ -299,7 +313,7 @@ function createKeywordWorkerScheduler(options = {}) {
     return serializeConfig(async () => {
       if (persistenceFailed) throw fault(lastError, 503);
       const existing = await readConfig();
-      keysOnly(patch, ["version", "enabled", "timezone", "repeat", "firstDate", "time", "keywords", "collection", "requestPacing"], "KEYWORD_SCHEDULE_CONFIG_INVALID");
+      keysOnly(patch, ["version", "enabled", "timezone", "repeat", "firstDate", "time", "keywordIntervalMinutes", "keywords", "collection", "requestPacing"], "KEYWORD_SCHEDULE_CONFIG_INVALID");
       if (patch.enabled !== undefined && patch.enabled !== existing.enabled) throw fault("KEYWORD_SCHEDULE_USE_ENABLE_ACTION");
       if (patch.collection !== undefined && !object(patch.collection)) throw fault("KEYWORD_SCHEDULE_COLLECTION_INVALID");
       const config = executionConfig({ ...existing, ...patch, collection: { ...existing.collection, ...patch.collection }, enabled: existing.enabled });
@@ -335,7 +349,8 @@ function createKeywordWorkerScheduler(options = {}) {
     const createdAt = instant().toISOString();
     const entry = { version: VERSION, id, day, trigger, workerKey, status: missed ? "missed" : "queued", createdAt,
       scheduledAt: trigger === "scheduled" ? scheduledAt(day, config.time) : null, startedAt: null, finishedAt: missed ? createdAt : null,
-      errorCode: missed ? "SCHEDULE_WINDOW_MISSED" : null, config: clone(config), items: config.keywords.map(keyword => ({ keyword, status: missed ? "missed" : "queued", runId: null })) };
+      errorCode: missed ? "SCHEDULE_WINDOW_MISSED" : null, config: clone(config), items: config.keywords.map((keyword, index) => ({ keyword, status: missed ? "missed" : "queued", runId: null,
+        ...(trigger === "scheduled" ? { scheduledAt: keywordScheduledAt(config, day, index) } : {}) })) };
     let handle;
     try {
       handle = await fs.open(receiptPath(id), "wx", 0o600);
@@ -363,13 +378,33 @@ function createKeywordWorkerScheduler(options = {}) {
     if (states.some(state => ["complete", "reused", "partial"].includes(state))) return "partial";
     return "failed";
   }
+  async function awaitKeywordSlot(entry, index, epoch) {
+    const intervalMs = entry.trigger === "scheduled" ? (entry.config.keywordIntervalMinutes || 0) * 60000 : 0;
+    const previous = entry.items[index - 1];
+    const due = intervalMs ? Math.max(Date.parse(keywordScheduledAt(entry.config, entry.day, index)),
+      previous ? Date.parse(previous.executionStartedAt || previous.startedAt) + intervalMs : 0,
+      previous ? Date.parse(previous.endedAt) : 0) : 0;
+    while (true) {
+      const policy = await readConfig();
+      if (stopped || (entry.trigger === "scheduled" && (!policy.enabled || pauseEpoch !== epoch))) {
+        pendingEnd(entry, "interrupted", "SCHEDULE_PAUSED"); return false;
+      }
+      if (persistenceFailed) throw fault(lastError, 503);
+      // An overdue interval must never turn yesterday's collection into a new
+      // observation or a catch-up burst after a restart/date boundary.
+      if (entry.trigger === "scheduled" && dateKey(instant()) > entry.day) {
+        pendingEnd(entry, "missed", "COLLECTION_DATE_EXPIRED"); return false;
+      }
+      const remaining = due - instant().getTime();
+      if (remaining <= 0) return true;
+      await sleep(Math.min(15000, remaining));
+    }
+  }
   async function execute(entry, epoch) {
     try {
       for (let index = 0; index < entry.items.length; index += 1) {
         const item = entry.items[index];
-        const policy = await readConfig();
-        if (stopped || (entry.trigger === "scheduled" && (!policy.enabled || pauseEpoch !== epoch))) { pendingEnd(entry, "interrupted", "SCHEDULE_PAUSED"); break; }
-        if (persistenceFailed) throw fault(lastError, 503);
+        if (!await awaitKeywordSlot(entry, index, epoch)) break;
         const freeBytes = await getFreeBytes();
         if (!Number.isFinite(freeBytes) || freeBytes <= MIN_FREE_BYTES) { pendingEnd(entry, "failed", "DISK_SPACE_UNAVAILABLE"); break; }
         const payload = payloadFor(entry.config, item.keyword, entry.day, entry.id, index, entry.trigger, workerKey);
@@ -380,6 +415,10 @@ function createKeywordWorkerScheduler(options = {}) {
         await persistReceipt(entry); // Durable receipt always precedes submitting work.
         try {
           const result = await options.runCrawler(payload);
+          const actualStartedAt = Date.parse(result?.output?.startedAt || result?.crawlTiming?.startedAt);
+          if (Number.isFinite(actualStartedAt) && actualStartedAt >= Date.parse(item.startedAt) && actualStartedAt <= instant().getTime()) {
+            item.executionStartedAt = new Date(actualStartedAt).toISOString();
+          }
           const quality = options.inspectResult ? await options.inspectResult(result, payload) : null;
           Object.assign(item, finalResult(result, quality));
         } catch (error) { Object.assign(item, errorState(error)); }
@@ -427,7 +466,7 @@ function createKeywordWorkerScheduler(options = {}) {
     if (stopped || persistenceFailed) throw fault(lastError || "KEYWORD_SCHEDULE_STOPPED", 503);
     if (overrides.collection !== undefined && !object(overrides.collection)) throw fault("KEYWORD_SCHEDULE_COLLECTION_INVALID");
     const existing = await readConfig();
-    const config = executionConfig({ ...existing, ...(overrides.keywords === undefined ? {} : { keywords: overrides.keywords }),
+    const config = executionConfig({ ...existing, keywordIntervalMinutes: 0, ...(overrides.keywords === undefined ? {} : { keywords: overrides.keywords }),
       collection: { ...existing.collection, ...overrides.collection }, requestPacing: overrides.requestPacing === undefined ? existing.requestPacing : overrides.requestPacing });
     if (!config.keywords.length) throw fault("KEYWORD_SCHEDULE_KEYWORDS_REQUIRED");
     if (config.collection.dateMode === "fixed" && config.collection.checkIn < dateKey(instant())) throw fault("KEYWORD_SCHEDULE_DATE_EXPIRED");
@@ -479,13 +518,15 @@ function createKeywordWorkerScheduler(options = {}) {
       const expiryReason = scheduleExpiry(config, at);
       const previewNextRunAt = previewSchedule(config, at, taken);
       const nextRunAt = config.enabled && !persistenceFailed && !stopped ? previewNextRunAt : null;
+      const upcomingItems = previewNextRunAt ? config.keywords.map((keyword, index) => ({ keyword,
+        scheduledAt: keywordScheduledAt(config, dateKey(previewNextRunAt), index) })) : [];
       const ordered = receipts.sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
-      return { enabled: config.enabled, active: active.size > 0, activeOccurrenceIds: [...active.keys()], workerKey, config: clone(config), nextRunAt,
+      return { enabled: config.enabled, active: active.size > 0, activeOccurrenceIds: [...active.keys()], workerKey, config: clone(config), nextRunAt, upcomingItems,
         previewNextRunAt, expired: Boolean(expiryReason), expiryReason,
         day: today, graceMs: GRACE_MS, today: ordered.filter(entry => entry.day === today).slice(0, 100), latest: ordered.slice(0, 20),
         lastError, stopped, note: "active means awaiting dispatch/result; use collector status for actual worker execution" };
     } catch (error) {
-      return { enabled: false, active: active.size > 0, activeOccurrenceIds: [...active.keys()], workerKey, config: null, nextRunAt: null,
+      return { enabled: false, active: active.size > 0, activeOccurrenceIds: [...active.keys()], workerKey, config: null, nextRunAt: null, upcomingItems: [],
         previewNextRunAt: null, expired: false, expiryReason: null,
         day: dateKey(instant()), today: [], latest: [], lastError: safeCode(error?.code, "KEYWORD_SCHEDULE_STATE_INVALID"), stopped };
     }

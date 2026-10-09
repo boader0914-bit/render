@@ -50,6 +50,11 @@
 .collector-reservation[open] .collector-chevron { transform: rotate(225deg); }
 .collector-reservation-body { padding: 0 12px 12px; }
 .collector-reservation .collector-field-hint { margin: 12px 0 0; }
+.collector-keyword-schedule { width: 100%; margin-top: 12px; border-collapse: collapse; table-layout: fixed; color: var(--text-primary); font-size: 11px; line-height: 1.6; }
+.collector-keyword-schedule caption { text-align: left; margin-bottom: 5px; color: var(--text-secondary); }
+.collector-keyword-schedule :is(th, td) { padding: 6px 0; border-bottom: 1px solid var(--border-subtle); font-weight: 400; overflow-wrap: anywhere; }
+.collector-keyword-schedule th { text-align: left; padding-right: 10px; }
+.collector-keyword-schedule td { width: 112px; text-align: right; font-variant-numeric: tabular-nums; }
 .collector-repeat-options { color: var(--text-secondary); font-size: 11px; }
 .collector-repeat-options summary { cursor: pointer; }
 .collector-repeat-options > .field { margin-top: 10px; }
