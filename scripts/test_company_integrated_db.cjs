@@ -43,8 +43,11 @@ async function testReadPriority(root) {
     const queuedGeneration = (await service.status()).jobs.find(job => job.companyId === "e").generation;
     await service.get("e", { month: "2026-09" });
     const priorityQueue = await fs.readFile(queueFile, "utf8");
+    const priorityStat = await fs.stat(queueFile, { bigint: true });
     await service.get("e", { month: "2026-09" });
     assert.equal(await fs.readFile(queueFile, "utf8"), priorityQueue, "polling an already prioritized company does not rewrite the queue");
+    const polledStat = await fs.stat(queueFile, { bigint: true });
+    assert.deepEqual([polledStat.ino, polledStat.mtimeNs], [priorityStat.ino, priorityStat.mtimeNs], "repeated polling does not atomically replace or touch the queue file");
     assert.equal((await service.status()).jobs.find(job => job.companyId === "e").generation, queuedGeneration, "priority changes no source generation");
     await service.get("d", { month: "2026-09" });
     release(); await running;
