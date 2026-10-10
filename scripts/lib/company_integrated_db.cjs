@@ -123,8 +123,11 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
       if (stored) {
         if (stored.schemaVersion !== SCHEMA_VERSION || !stored.jobs || typeof stored.jobs !== "object" || Array.isArray(stored.jobs)) throw fault("COMPANY_INTEGRATION_STATE_INVALID");
         state = stored;
+        state.queueSequence = Math.max(Number(state.queueSequence) || 0, ...Object.values(state.jobs).map(job => Number(job.queueOrder) || 0));
+        state.readPrioritySequence = Math.max(Number(state.readPrioritySequence) || 0, ...Object.values(state.jobs).map(job => Number(job.readPriorityOrder) || 0));
         for (const [id, job] of Object.entries(state.jobs)) {
           validId(id); monthsOf(job.months || []);
+          if (!job.queueOrder) job.queueOrder = ++state.queueSequence;
           if (["processing", "queued", "failed"].includes(job.status)) { job.status = "queued"; job.recoveredAt = current().toISOString(); }
         }
         await saveState();
@@ -156,6 +159,8 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     const result = await locked(async () => {
       const prior = state.jobs[companyId], timestamp = current().toISOString();
       const job = state.jobs[companyId] = { ...prior, companyId, generation: (prior?.generation || 0) + 1,
+        queueOrder: prior?.status === "queued" && prior.queueOrder ? prior.queueOrder : (state.queueSequence = (state.queueSequence || 0) + 1),
+        readPriorityOrder: prior?.status === "queued" ? prior.readPriorityOrder || null : null,
         status: "queued", allMonths: requested === null || (prior?.status !== "idle" && Boolean(prior?.allMonths)),
         months: monthsOf([...(prior?.status !== "idle" ? prior?.months || [] : []), ...(requested || [])]),
         reason: String(reason).slice(0, 160), queuedAt: timestamp, updatedAt: timestamp, errorCode: null };
@@ -163,6 +168,16 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     });
     if (autoStart) kick();
     return result;
+  }
+  async function prioritizeQueuedRead(companyId) {
+    await locked(async () => {
+      const job = state.jobs[companyId];
+      // Repeated polling must not resubmit a job, invalidate its generation or
+      // continually move it ahead of other requested companies.
+      if (job?.status !== "queued" || job.readPriorityOrder) return;
+      job.readPriorityOrder = state.readPrioritySequence = (state.readPrioritySequence || 0) + 1;
+      await saveState();
+    });
   }
   async function queueRun({ runId = "", companyIds, months, reason = "collection_saved" } = {}) {
     if (companyIds !== undefined && !Array.isArray(companyIds)) throw fault("invalid_company_ids", 400);
@@ -240,8 +255,14 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     await init();
     while (!stopped) {
       const job = await locked(async () => {
-        const next = Object.values(state.jobs).find(value => value.status === "queued");
+        const queued = Object.values(state.jobs).filter(value => value.status === "queued").sort((a, b) => a.queueOrder - b.queueOrder);
+        // Alternate requested work with the oldest waiting job so background
+        // bootstrap continues to advance even while many users are browsing.
+        const priority = !state.lastDispatchWasReadPriority && queued.filter(value => value.readPriorityOrder).sort((a, b) => a.readPriorityOrder - b.readPriorityOrder)[0];
+        const next = priority || queued[0];
         if (!next) return null;
+        state.lastDispatchWasReadPriority = Boolean(priority);
+        next.readPriorityOrder = null;
         next.status = "processing"; next.startedAt = current().toISOString(); next.attempts = (next.attempts || 0) + 1;
         await saveState(); return clone(next);
       });
@@ -299,7 +320,9 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
       // empty month too, instead of requeuing an empty discovery on every read.
       const months = index ? [selectedMonth] : await targetsFor(companyId, [selectedMonth]);
       await queueCompany(companyId, { months, reason: "read_cache_miss" });
-    } else if (autoStart && job?.status === "queued") kick();
+    }
+    if (needsRefresh) await prioritizeQueuedRead(companyId);
+    if (autoStart && state.jobs[companyId]?.status === "queued") kick();
     const rows = [];
     for (const value of [...new Set([...monthList, ...(selected ? [selectedMonth] : [])])].sort().reverse()) {
       const entry = value === selectedMonth ? selected : await readJson(monthPath(companyId, value), null);

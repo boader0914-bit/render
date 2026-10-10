@@ -16,6 +16,64 @@ const observation = (overrides = {}) => ({ companyId: ID, companyKey: ID, runId:
   partial: false, missing: false, unknownUnavailable: 0, phoneMissingPriceBookings: 0,
   sharedDayUseExcluded: 0, capacityBasis: { count: 16, source: "manual_review" }, ...overrides });
 
+async function testReadPriority(root) {
+  const dataDir = path.join(root, "read-priority"), queueFile = path.join(dataDir, "company_integrated", "queue.json");
+  const companies = ["a", "b", "c", "d", "e", "f"].map(companyId => ({ companyId, primaryName: companyId, capacity: 16 }));
+  let markEntered, release, pause = true;
+  const entered = new Promise(resolve => { markEntered = resolve; });
+  const wait = new Promise(resolve => { release = resolve; });
+  const order = [];
+  const options = { dataDir, autoStart: false, now: () => new Date("2026-10-10T00:00:00Z"),
+    catalog: async () => ({ companies, runs: [] }),
+    listTargets: async ({ companyIds } = {}) => companies.filter(company => !companyIds || companyIds.includes(company.companyId)).map(company => ({ companyId: company.companyId, months: ["2026-09"] })),
+    loadSources: async request => {
+      if (request.month === "2026-09") {
+        order.push(request.targetId);
+        if (pause) { pause = false; markEntered(); await wait; }
+      }
+      return { companies, observations: [], runs: [] };
+    } };
+  let service = createCompanyIntegratedDb(options);
+  try {
+    await service.bootstrap();
+    const running = service.drain(); await entered;
+    const processingBefore = (await service.status()).jobs.find(job => job.companyId === "a");
+    await service.get("a", { month: "2026-09" });
+    assert.deepEqual((await service.status()).jobs.find(job => job.companyId === "a"), processingBefore, "a read cannot restart or invalidate the company currently processing");
+    const queuedGeneration = (await service.status()).jobs.find(job => job.companyId === "e").generation;
+    await service.get("e", { month: "2026-09" });
+    const priorityQueue = await fs.readFile(queueFile, "utf8");
+    await service.get("e", { month: "2026-09" });
+    assert.equal(await fs.readFile(queueFile, "utf8"), priorityQueue, "polling an already prioritized company does not rewrite the queue");
+    assert.equal((await service.status()).jobs.find(job => job.companyId === "e").generation, queuedGeneration, "priority changes no source generation");
+    await service.get("d", { month: "2026-09" });
+    release(); await running;
+    assert.deepEqual(order, ["a", "e", "b", "d", "c", "f"], "first request goes next, then priority and FIFO alternate without starving bootstrap");
+    assert.equal((await service.status()).counts.idle, 6);
+
+    order.length = 0;
+    await service.queueCompany("a", { months: ["2026-09"] });
+    await service.queueCompany("b", { months: ["2026-09"] });
+    const beforeFreshRead = await fs.readFile(queueFile, "utf8");
+    await service.get("b", { month: "2026-09" });
+    assert.equal(await fs.readFile(queueFile, "utf8"), beforeFreshRead, "a current cached month does not acquire read priority");
+    await service.drain();
+    assert.deepEqual(order, ["a", "b"]);
+
+    // Queue work in a new order, request an uncached month already included in
+    // that job, then restart. Both fair FIFO order and one-shot priority persist.
+    order.length = 0;
+    await service.queueCompany("c", { months: ["2026-09", "2026-10"] });
+    await service.queueCompany("a", { months: ["2026-09", "2026-10"] });
+    await service.queueCompany("f", { months: ["2026-09", "2026-10"] });
+    await service.get("f", { month: "2026-10" });
+    await service.stop();
+    service = createCompanyIntegratedDb(options);
+    await service.drain();
+    assert.deepEqual(order, ["f", "f", "c", "c", "a", "a"], "read priority and oldest waiting order survive restart; each company's September source also supplies October comparison");
+  } finally { release(); await service.stop(); }
+}
+
 async function main() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "company-integrated-db-"));
   const companyDirectory = path.join(root, "company_integrated", crypto.createHash("sha256").update(ID).digest("hex"));
@@ -184,6 +242,7 @@ async function main() {
       loadSources: async () => ({ companies: [company], observations: [], runs: [] }) });
     assert.equal((await currentRestricted.get(ID, { month: "2026-10", knownMonthsOnly: true })).status, "refreshing", "newly registered company can initialize current month without observations");
     await currentRestricted.drain(); await currentRestricted.stop();
+    await testReadPriority(root);
     console.log(`company integrated DB tests passed (${reads} source reads)`);
   } finally {
     await service.stop();
