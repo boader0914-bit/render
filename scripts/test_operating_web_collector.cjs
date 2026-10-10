@@ -11,6 +11,24 @@ const { setTimeout: delay } = require("node:timers/promises");
 const { createOperatingWebCollector } = require("./operating_web_collector.cjs");
 const ROOT = path.resolve(__dirname, "..");
 
+test("reviewed daily protection preserves the block and needs manual release after midnight", async t => {
+  let clock = Date.parse("2026-10-10T04:00:00Z");
+  const f = await fixture(t, {now:()=>clock});
+  await f.api.halt("COLLECTOR_PROVIDER_BLOCKED");
+  await assert.rejects(f.api.reviewHold("2026-10-11"),{code:"COLLECTOR_REVIEW_DATE_INVALID"});
+  await f.api.reviewHold("2026-10-10");
+  assert.equal((await f.api.status()).errorCode,"COLLECTOR_REVIEW_HOLD");
+  await assert.rejects(f.api.resetHalt(),{code:"COLLECTOR_REVIEW_HOLD"});
+  await f.api.halt("COLLECTOR_PROVIDER_BLOCKED");
+  await assert.rejects(f.api.resetHalt(),{code:"COLLECTOR_REVIEW_HOLD"});
+  clock=Date.parse("2026-10-10T15:00:01Z");
+  assert.equal((await f.api.status()).holdActive,false);
+  assert.equal((await f.api.status()).halted,true);
+  await f.api.resetHalt();
+  assert.equal((await f.api.status()).halted,false);
+  assert.equal(f.spawned.length,0);
+});
+
 const requestEnv = { CHECK_IN: "2026-09-23", CHECK_OUT: "2026-09-24", ADULTS: "2", SEARCH_MODE: "company",
   COLLECTION_MODE: "precision", COLLECTION_PURPOSE: "revenue_detail", PRODUCT_MODE: "all", BOOKING_RANGE_DAYS: "1", BOOKING_RANGE_PLACE_LIMIT: "0",
   DETAIL_RANK_RANGES: "1-20", SOURCE_ROLE: "admin", COLLECTION_SOURCE: "admin_search" };

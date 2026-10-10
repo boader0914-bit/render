@@ -190,6 +190,57 @@ test("lease expiration halts further work and rejects late heartbeat", () => fix
   assert.equal((await broker.status()).halted, true);
 }));
 
+test("review hold preserves source evidence across restart and never resumes automatically", () => fixture(async ({ broker, options, dataDir, advance }) => {
+  const stateFile = path.join(dataDir, "collector", "jobs.json");
+  await broker.halt("COLLECTOR_PROVIDER_BLOCKED");
+  const before = JSON.parse(await fs.readFile(stateFile, "utf8"));
+  await broker.reviewHold("2026-09-22");
+  const protectedStatus = await broker.status();
+  assert.equal(protectedStatus.halted, true); assert.equal(protectedStatus.errorCode, "COLLECTOR_REVIEW_HOLD");
+  assert.equal(protectedStatus.holdThrough, "2026-09-22"); assert.equal(protectedStatus.holdActive, true);
+  const heldState = JSON.parse(await fs.readFile(stateFile, "utf8"));
+  assert.equal(heldState.reviewHold.sourceBlock.code, before.halted.code);
+  assert.equal(heldState.reviewHold.sourceBlock.at, before.halted.at);
+  assert.equal(heldState.reviewHold.holdThrough, "2026-09-22");
+  assert.ok(Number.isFinite(Date.parse(heldState.reviewHold.reviewedAt)));
+  await broker.reviewHold("2026-09-22");
+  assert.deepEqual(JSON.parse(await fs.readFile(stateFile, "utf8")).reviewHold, heldState.reviewHold);
+  await assert.rejects(broker.resetHalt());
+  assert.equal((await broker.status()).errorCode, "COLLECTOR_REVIEW_HOLD");
+  await assert.rejects(broker.submit(jobInput()), { code: "COLLECTOR_REVIEW_HOLD" });
+  const restarted = createCollectorBroker(options); await restarted.initialize();
+  assert.equal((await restarted.status()).holdActive, true);
+  assert.equal((await request(restarted, "POST", "/api/collector-worker/claim", { workerId: WORKER, workerKey: "manual", protocolVersion: 1 })).body.job, null);
+  await assert.rejects(restarted.resetHalt());
+  await restarted.halt("COLLECTOR_PROVIDER_BLOCKED");
+  assert.equal((await restarted.status()).errorCode, "COLLECTOR_PROVIDER_BLOCKED");
+  assert.equal((await restarted.status()).holdActive, true);
+  assert.deepEqual(JSON.parse(await fs.readFile(stateFile, "utf8")).reviewHold, heldState.reviewHold);
+  await assert.rejects(restarted.resetHalt());
+  advance(24 * 3600000);
+  const tomorrow = await restarted.status();
+  assert.equal(tomorrow.holdActive, false); assert.equal(tomorrow.halted, true);
+  assert.equal((await request(restarted, "POST", "/api/collector-worker/claim", { workerId: WORKER, workerKey: "manual", protocolVersion: 1 })).body.job, null);
+  await restarted.resetHalt(); assert.equal((await restarted.status()).halted, false);
+}, { workerKey: "manual" }));
+
+test("review hold refuses invalid dates and pending jobs without changing protection", () => fixture(async ({ broker, dataDir }) => {
+  const stateFile = path.join(dataDir, "collector", "jobs.json");
+  await assert.rejects(broker.reviewHold("2026-09-22"));
+  await broker.halt("COLLECTOR_PROVIDER_BLOCKED");
+  const saved = await fs.readFile(stateFile, "utf8");
+  for (const value of ["2026-09-21", "2026-09-23", "2026-02-30", "", null, 20260922]) {
+    await assert.rejects(broker.reviewHold(value));
+    assert.equal(await fs.readFile(stateFile, "utf8"), saved);
+  }
+  await broker.resetHalt();
+  await broker.submit(jobInput());
+  await broker.halt("COLLECTOR_PROVIDER_BLOCKED");
+  const pending = await fs.readFile(stateFile, "utf8");
+  await assert.rejects(broker.reviewHold("2026-09-22"));
+  assert.equal(await fs.readFile(stateFile, "utf8"), pending);
+}, { workerKey: "manual" }));
+
 test("cancellation keeps lease exclusivity until the worker acknowledges stopping", () => fixture(async ({ broker }) => {
   const lease = await claimed(broker);
   const next = await broker.submit(jobInput());

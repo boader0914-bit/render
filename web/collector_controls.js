@@ -61,6 +61,7 @@
   }
   function errorMessage(code) {
     const text = String(code || "");
+    if (text === "COLLECTOR_REVIEW_HOLD") return "검토 후 이 수집기의 보호를 유지하고 있습니다. 당일 재개할 수 없으며 자동으로 재개되지 않습니다.";
     if (!text) return "";
     if (text === "COLLECTOR_SCOPE_MISMATCH") return "요청한 검색 조건과 결과의 조건이 달라 등록하지 못했습니다. 보존 자료와 수집 조건을 확인하세요.";
     if (text === "COLLECTOR_DUPLICATE_PATH") return "상세 파일 목록이 중복되어 최종 저장 검증에 실패했습니다. 보존 자료 복구가 필요합니다.";

@@ -235,6 +235,84 @@ async function main() {
     await remotePending;
     assert.equal((await request(base, "/api/crawl?async=1", admin, jsonPost(payload("원격차단후글램핑")))).response.status, 409);
     assert.equal(spawnCount(), afterBlock);
+
+    // Reviewed release keeps the affected worker held for today's date. All
+    // collection below remains mocked; changing protection never starts work.
+    await waitUntil(async () => (await status()).workers.every(worker => !worker.activeJobId && worker.queued === 0 && !worker.crawl?.active), "Protected workers did not become idle");
+    const releaseRoute = "/api/collector-review-release";
+    const review = { confirm: "resume-unaffected-after-review", heldWorkerKey: "manual", holdThrough: day(0) };
+    const protections = async () => (await status()).workers.map(worker => ({ workerKey: worker.workerKey, halted: worker.halted,
+      errorCode: worker.errorCode, holdThrough: worker.holdThrough, holdActive: worker.holdActive }));
+    const scheduleConfigs = async () => Promise.all(["web", "manual", "scheduled"].map(async workerKey =>
+      ({ workerKey, config: (await request(base, `/api/worker-schedule?workerKey=${workerKey}`, admin)).body.config })));
+    const schedulesBeforeReview = await scheduleConfigs();
+    const beforeReview = await protections();
+    for (const [cookie, expected] of [["", 401], [await login(base, MEMBER), 403]]) {
+      assert.equal((await request(base, releaseRoute, cookie, jsonPost(review))).response.status, expected);
+      assert.deepEqual(await protections(), beforeReview);
+    }
+    for (const invalid of [{}, { ...review, confirm: "wrong" }, { ...review, heldWorkerKey: "unknown" },
+      { ...review, holdThrough: day(-1) }, { ...review, holdThrough: day(1) }, { ...review, holdThrough: "2026-02-30" },
+      { ...review, force: true }]) {
+      const rejected = await request(base, releaseRoute, admin, jsonPost(invalid));
+      assert.ok([400, 409].includes(rejected.response.status), JSON.stringify({ invalid, status: rejected.response.status, body: rejected.body }));
+      assert.deepEqual(await protections(), beforeReview);
+    }
+    const foreignOrigin = jsonPost(review); foreignOrigin.headers.Origin = "https://unrelated.invalid";
+    assert.equal((await request(base, releaseRoute, admin, foreignOrigin)).response.status, 403);
+    assert.deepEqual(await protections(), beforeReview);
+    const released = await request(base, releaseRoute, admin, jsonPost(review));
+    assert.equal(released.response.status, 200, JSON.stringify(released.body));
+    assert.equal(released.body.heldWorkerKey, "manual"); assert.equal(released.body.holdThrough, day(0));
+    assert.deepEqual([...released.body.releasedWorkerKeys].sort(), ["scheduled", "web"]);
+    const reviewed = await protections(), held = reviewed.find(worker => worker.workerKey === "manual");
+    assert.equal(held.halted, true); assert.equal(held.errorCode, "COLLECTOR_REVIEW_HOLD");
+    assert.equal(held.holdThrough, day(0)); assert.equal(held.holdActive, true);
+    assert.ok(reviewed.filter(worker => worker.workerKey !== "manual").every(worker => !worker.halted && !worker.errorCode));
+    assert.equal((await status()).workers.find(worker => worker.workerKey === "web").ready, true);
+    assert.equal(spawnCount(), afterBlock);
+
+    assert.deepEqual(await scheduleConfigs(), schedulesBeforeReview);
+    const brokerStateFile = path.join(dataDir, "collector", "jobs.json");
+    const retainedState = JSON.parse(await fsp.readFile(brokerStateFile, "utf8"));
+    assert.equal(retainedState.reviewHold.holdThrough, day(0));
+    assert.equal(retainedState.reviewHold.sourceBlock.code, "COLLECTOR_PROVIDER_BLOCKED");
+    assert.ok(Number.isFinite(Date.parse(retainedState.reviewHold.sourceBlock.at)));
+    assert.ok(Number.isFinite(Date.parse(retainedState.reviewHold.reviewedAt)));
+    const preservedReview = retainedState.reviewHold;
+    assert.equal((await request(base, releaseRoute, admin, jsonPost(review))).response.status, 200);
+    assert.deepEqual(JSON.parse(await fsp.readFile(brokerStateFile, "utf8")).reviewHold, preservedReview);
+    assert.equal((await request(base, "/api/crawl?async=1", admin, jsonPost(payload("검토보류수집금지", "manual")))).response.status, 409);
+    for (const reset of [{ confirm: "resume-after-review" }, { confirm: "resume-after-review", workerKey: "manual" }]) {
+      assert.equal((await request(base, "/api/collector-reset-halt", admin, jsonPost(reset))).response.status, 409);
+      assert.deepEqual(await protections(), reviewed);
+    }
+    assert.equal((await request(base, "/api/collector-reset-halt", admin, jsonPost({ confirm: "resume-after-review", workerKey: "web" }))).response.status, 200);
+    assert.deepEqual(await protections(), reviewed);
+    assert.equal(spawnCount(), afterBlock);
+
+    await stopChild(server); await startServer(); admin = await login(base, ADMIN);
+    assert.deepEqual(await protections(), reviewed);
+    assert.deepEqual(JSON.parse(await fsp.readFile(brokerStateFile, "utf8")).reviewHold, preservedReview);
+    assert.deepEqual(await scheduleConfigs(), schedulesBeforeReview);
+    assert.equal((await request(base, "/api/collector-reset-halt", admin, jsonPost({ confirm: "resume-after-review", workerKey: "manual" }))).response.status, 409);
+    assert.equal(spawnCount(), afterBlock);
+
+    // Releasing unaffected workers must not weaken a later provider-wide stop.
+    const laterBlock = await finish(await accept(payload("검토후새차단글램핑")));
+    assert.equal(laterBlock.status, "blocked", JSON.stringify(laterBlock));
+    await waitUntil(async () => (await status()).workers.every(worker => worker.halted && worker.errorCode === "COLLECTOR_PROVIDER_BLOCKED"), "New provider block did not protect every lane");
+    await waitUntil(async () => !(await request(base, "/api/crawl-status?workerKey=web", admin)).body.active, "Later blocked web lane remained active");
+    const blockedAgain = await protections(), afterLaterBlock = spawnCount();
+    assert.equal(blockedAgain.find(worker => worker.workerKey === "manual").holdActive, true);
+    assert.deepEqual(JSON.parse(await fsp.readFile(brokerStateFile, "utf8")).reviewHold, preservedReview);
+    assert.equal((await request(base, "/api/collector-reset-halt", admin, jsonPost({ confirm: "resume-after-review", workerKey: "web" }))).response.status, 409);
+    assert.deepEqual(await protections(), blockedAgain, "All-worker reset must reject before clearing any worker");
+    for (const key of ["web", "manual", "scheduled"]) {
+      assert.equal((await request(base, "/api/crawl?async=1", admin, jsonPost(payload(`재차단후금지-${key}`, key)))).response.status, 409);
+    }
+    assert.equal(spawnCount(), afterLaterBlock);
+    console.log("PASS reviewed selective release authorization, today-only hold, source evidence, no autostart, restart persistence and renewed common block");
     assert.equal(fs.existsSync(attempts), false, "No external requests or real crawler subprocesses are permitted");
     assert.deepEqual(readEvents().filter(event => event.event === "fixture_error"), []);
     console.log("PASS remote-provider block also protects basic worker; all collection mocked and outbound IO forbidden");

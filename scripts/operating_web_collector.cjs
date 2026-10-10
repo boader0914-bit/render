@@ -23,6 +23,7 @@ function createOperatingWebCollector({ dataDir, outputsDir, root, spawnImpl = sp
   const base = path.resolve(dataDir, "collector-web"), stateFile = path.join(base, "state.json");
   const destinationRoot = path.resolve(outputsDir), lock = serialExecutor();
   let ready, state = { version: 1, halted: null, active: null }, active = null;
+  const reviewHoldActive = () => Boolean(state.reviewHold?.holdThrough && new Date(now() + 9 * 3600000).toISOString().slice(0, 10) <= state.reviewHold.holdThrough);
 
   async function persist() {
     const temporary = `${stateFile}.${crypto.randomUUID()}.tmp`;
@@ -50,7 +51,8 @@ function createOperatingWebCollector({ dataDir, outputsDir, root, spawnImpl = sp
   async function status() {
     await initialize();
     return { configured: true, connected: true, workerKey: "web", halted: Boolean(state.halted), errorCode: state.halted?.code || "",
-      activeJobId: state.active?.jobId || null, queued: 0, workerLastSeenAt: new Date().toISOString() };
+      activeJobId: state.active?.jobId || null, queued: 0, workerLastSeenAt: new Date().toISOString(),
+      ...(state.reviewHold ? {holdThrough:state.reviewHold.holdThrough,holdActive:reviewHoldActive()} : {}) };
   }
   async function halt(code, { cancelActive = false } = {}) {
     await initialize();
@@ -62,7 +64,23 @@ function createOperatingWebCollector({ dataDir, outputsDir, root, spawnImpl = sp
     await initialize();
     return lock(async () => {
       if (active || state.active) throw fault("COLLECTOR_WEB_BUSY");
+      if (reviewHoldActive()) throw fault("COLLECTOR_REVIEW_HOLD");
       state.halted = null; await persist(); return status();
+    });
+  }
+  async function reviewHold(holdThrough) {
+    await initialize();
+    return lock(async () => {
+      const today = new Date(now() + 9 * 3600000).toISOString().slice(0, 10);
+      if (holdThrough !== today) throw fault("COLLECTOR_REVIEW_DATE_INVALID", 400);
+      if (active || state.active) throw fault("COLLECTOR_WEB_BUSY");
+      if (!["COLLECTOR_PROVIDER_BLOCKED", "COLLECTOR_REVIEW_HOLD"].includes(state.halted?.code)) throw fault("COLLECTOR_REVIEW_BLOCK_REQUIRED");
+      if (state.halted.code === "COLLECTOR_REVIEW_HOLD" && state.reviewHold?.holdThrough === holdThrough) return status();
+      const sourceBlock = state.halted.code === "COLLECTOR_PROVIDER_BLOCKED" ? {...state.halted} : state.reviewHold?.sourceBlock;
+      if (!sourceBlock) throw fault("COLLECTOR_REVIEW_BLOCK_REQUIRED");
+      state.reviewHold = {holdThrough,reviewedAt:new Date(now()).toISOString(),sourceBlock};
+      state.halted = {code:"COLLECTOR_REVIEW_HOLD",at:new Date(now()).toISOString()};
+      await persist(); return status();
     });
   }
   async function checkedTree(directory, prefix = "", files = []) {
@@ -271,7 +289,7 @@ function createOperatingWebCollector({ dataDir, outputsDir, root, spawnImpl = sp
       });
     });
   }
-  return { initialize, status, halt, resetHalt, run, recover };
+  return { initialize, status, halt, resetHalt, reviewHold, run, recover };
 }
 
 module.exports = { createOperatingWebCollector };

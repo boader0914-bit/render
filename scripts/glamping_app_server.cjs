@@ -288,6 +288,7 @@ function selectedWorkerKey(value = "manual") {
 }
 const sharedWrite = serialExecutor();
 let collectionRecoveryActive = false;
+let collectorProtectionReviewActive = false;
 const COLLECTOR_EXECUTION_MODE = String(process.env.COLLECTOR_EXECUTION_MODE || "local").trim();
 if (!["local", "worker"].includes(COLLECTOR_EXECUTION_MODE)) throw new Error("invalid_collector_execution_mode");
 const collectorBrokers = Object.fromEntries(["manual", "scheduled"].map(key => [key, COLLECTOR_EXECUTION_MODE === "worker" ? createCollectorBroker({
@@ -512,6 +513,7 @@ async function readInsightCompanyEvidence(companyId, { runId = null, scope = nul
 const pausedScheduleOccurrences = new Set();
 
 async function assertCollectorReady(workerKey,requireConnection=false) {
+  if(collectorProtectionReviewActive)throw Object.assign(new Error("수집기 보호 상태를 검토 중입니다."),{code:"COLLECTOR_PROTECTION_REVIEW_BUSY",statusCode:409});
   if(collectionRecoveryActive)throw Object.assign(new Error("보존 자료를 복구 중입니다. 완료 후 수집해 주세요."),{code:"COLLECTOR_RECOVERY_BUSY",statusCode:409});
   selectedWorkerKey(workerKey);
   await collectorBrokerReady;
@@ -18678,6 +18680,54 @@ async function route(req, res) {
       return send(res,200,{ok:true,runId:result.runId,collectionQuality:result.collectionQuality,recovery:result.recovery,history,masterDbSync,request:receipt});
     }
 
+    if (req.method === "POST" && reqUrl.pathname === "/api/collector-review-release") {
+      if (!requireAdminSession(session, req, res)) return;
+      if (!/^application\/json(?:\s*;|$)/i.test(String(req.headers["content-type"] || ""))) return send(res,415,{error:"JSON 형식으로 요청해 주세요."});
+      if (req.headers.origin) {
+        let origin; try { origin=new URL(req.headers.origin); } catch {}
+        if(!origin || origin.host!==req.headers.host) return send(res,403,{error:"현재 서비스에서 다시 요청해 주세요."});
+      }
+      const payload=await parseJsonBody(req);
+      const today=new Date(Date.now()+9*3600000).toISOString().slice(0,10);
+      if(payload?.confirm!=="resume-unaffected-after-review" || payload.holdThrough!==today
+        || !["manual","scheduled","web"].includes(payload.heldWorkerKey)
+        || Object.keys(payload).some(key=>!["confirm","heldWorkerKey","holdThrough"].includes(key))) {
+        return send(res,400,{error:"보호할 수집기와 오늘 날짜를 확인해 주세요."});
+      }
+      if(collectorProtectionReviewActive || collectionRecoveryActive) return send(res,409,{error:"다른 보호 검토 또는 자료 복구를 먼저 완료해 주세요."});
+      collectorProtectionReviewActive=true;
+      const controllers=collectorControllers(), heldWorkerKey=payload.heldWorkerKey;
+      let changed=false;
+      try {
+        await collectorBrokerReady;
+        if(Object.values(crawlLanes).some(lane=>lane.activeCrawlPromise || lane.activeCrawlJob || lane.crawlQueue.length)) return send(res,409,{error:"진행 또는 대기 중인 수집이 있습니다."});
+        const entries=Object.entries(controllers), statuses=await Promise.all(entries.map(([,controller])=>controller.status()));
+        const source=statuses.find(status=>status.workerKey===heldWorkerKey);
+        if(!source || !["COLLECTOR_PROVIDER_BLOCKED","COLLECTOR_REVIEW_HOLD"].includes(source.errorCode)) return send(res,409,{error:"보호할 수집기의 접근 제한 기록을 확인해 주세요."});
+        if(statuses.some(status=>status.activeJobId || status.queued)) return send(res,409,{error:"워커의 종료 확인을 기다려 주세요."});
+        if(statuses.some(status=>status.workerKey!==heldWorkerKey && (status.holdActive || (status.halted && status.errorCode!=="COLLECTOR_PROVIDER_BLOCKED")))) return send(res,409,{error:"다른 수집기의 별도 보호 원인을 먼저 확인해 주세요."});
+        // Write a credential-free intent receipt before mutating live controllers.
+        const auditDir=path.join(DATA_DIR,"operations","collector-protection-reviews");
+        await fsp.mkdir(auditDir,{recursive:true,mode:0o700});
+        const auditFile=path.join(auditDir,`${today}_${crypto.randomUUID()}.json`);
+        const releasedWorkerKeys=entries.map(([key])=>key).filter(key=>key!==heldWorkerKey);
+        const audit={version:1,reviewedAt:new Date().toISOString(),heldWorkerKey,holdThrough:today,releasedWorkerKeys,before:statuses,status:"pending"};
+        await fsp.writeFile(auditFile,JSON.stringify(audit),{flag:"wx",mode:0o600});
+        changed=true;
+        await controllers[heldWorkerKey].reviewHold(today);
+        for(const key of releasedWorkerKeys) await controllers[key].resetHalt();
+        const workers=await Promise.all(entries.map(([,controller])=>controller.status()));
+        const temporary=`${auditFile}.tmp`;
+        await fsp.writeFile(temporary,JSON.stringify({...audit,status:"applied",completedAt:new Date().toISOString(),after:workers}),{flag:"wx",mode:0o600});
+        await fsp.rename(temporary,auditFile);
+        return send(res,200,{heldWorkerKey,holdThrough:today,releasedWorkerKeys,workers});
+      } catch(error) {
+        // If any step fails, keep every collector stopped; never leave a partial release.
+        if(changed) await Promise.allSettled(Object.values(controllers).map(controller=>controller.halt("COLLECTOR_PROVIDER_BLOCKED",{cancelActive:true,cancelQueued:true})));
+        throw error;
+      } finally { collectorProtectionReviewActive=false; }
+    }
+
     if (req.method === "POST" && reqUrl.pathname === "/api/collector-reset-halt") {
       if (!requireAdminSession(session, req, res)) return;
       if (!/^application\/json(?:\s*;|$)/i.test(String(req.headers["content-type"] || ""))) {
@@ -18692,6 +18742,7 @@ async function route(req, res) {
       if (payload?.confirm !== "resume-after-review" || Object.keys(payload).some(key=>!["confirm","workerKey"].includes(key))) {
         return send(res, 400, { error: "중단 원인을 확인한 뒤 보호 해제를 요청해 주세요." });
       }
+      if(collectorProtectionReviewActive) return send(res,409,{error:"수집기 보호 검토가 진행 중입니다."});
       if (Object.values(crawlLanes).some(lane=>lane.activeCrawlPromise || lane.activeCrawlJob || lane.crawlQueue.length)) return send(res, 409, { error: "진행 또는 대기 중인 수집이 있습니다." });
       await collectorBrokerReady;
       const workerKey=selectedWorkerKey(payload.workerKey || "manual");
@@ -18700,6 +18751,7 @@ async function route(req, res) {
       const statuses=await Promise.all(Object.values(controllers).map(broker=>broker.status()));
       if (statuses.some(status=>status.activeJobId || status.queued)) return send(res,409,{error:"워커의 종료 확인을 기다려 주세요."});
       const commonBlock=statuses.some(status=>status.errorCode==="COLLECTOR_PROVIDER_BLOCKED");
+      if(statuses.some(status=>status.holdActive && (commonBlock || status.workerKey===workerKey))) return send(res,409,{error:"오늘 보호를 유지하기로 한 수집기가 있습니다.",code:"COLLECTOR_REVIEW_HOLD"});
       if (commonBlock) {
         await Promise.all(Object.values(controllers).map(broker=>broker.resetHalt()));
         return send(res,200,{halted:false,errorCode:"",scope:"all_workers"});

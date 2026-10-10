@@ -11,6 +11,15 @@ const source = fs.readFileSync(path.join(__dirname, "../web/collector_controls.j
 const app = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8");
 const clone = value => JSON.parse(JSON.stringify(value));
 const keys = ["web", "manual", "scheduled"];
+test("reviewed source protection leaves only explicitly released workers available", () => {
+  const now=Date.now(), workers=keys.map(workerKey=>({workerKey,configured:true,connected:true,workerLastSeenAt:new Date(now).toISOString(),halted:workerKey==="manual",errorCode:workerKey==="manual"?"COLLECTOR_REVIEW_HOLD":""}));
+  assert.equal(workerAvailability({workers},"manual",now).ready,false);
+  assert.match(workerAvailability({workers},"manual",now).reason,/보호/);
+  assert.equal(workerAvailability({workers},"web",now).ready,true);
+  assert.equal(workerAvailability({workers},"scheduled",now).ready,true);
+  workers[2].halted=true; workers[2].errorCode="COLLECTOR_PROVIDER_BLOCKED";
+  assert.ok(keys.every(key=>!workerAvailability({workers},key,now).ready));
+});
 const config = { version: 1, enabled: false, timezone: "Asia/Seoul", repeat: "once", firstDate: "2026-09-25", time: "14:00", keywords: [], collection: { dateMode: "rolling", bookingDays: 7, checkIn: null, checkOut: null, adults: 2, detailRankRanges: "1-20", productMode: "all", collectionMode: "precision", collectionPurpose: "revenue_detail", dayUseMode: "inspect" }, requestPacing: null };
 class Element {
   constructor(tag, registry) { this.tagName = tag.toUpperCase(); this.registry = registry; this.children = []; this.listeners = {}; this.className = ""; this.value = ""; this.dataset = {}; this.style = {}; this.type = ""; this.disabled = false; this.hidden = false; this.textContent = ""; this.checked = false; this.classList = { contains: name => this.className.split(" ").includes(name) }; }

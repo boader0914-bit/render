@@ -285,6 +285,7 @@ function createCollectorBroker(options = {}) {
     return milliseconds;
   };
   const iso = () => new Date(timestamp()).toISOString();
+  const reviewHoldActive = () => Boolean(state.reviewHold?.holdThrough && new Date(timestamp() + 9 * 3600000).toISOString().slice(0, 10) <= state.reviewHold.holdThrough);
   const locked = operation => {
     const next = chain.then(operation, operation);
     chain = next.catch(() => {});
@@ -448,7 +449,8 @@ function createCollectorBroker(options = {}) {
     return locked(async () => {
       await expireLeases();
       return { configured, workerKey, halted: Boolean(state.halted), errorCode: state.halted?.code || "", ...(state.halted?.failurePhase ? {failurePhase:state.halted.failurePhase} : {}), ...(state.halted?.brokerErrorCode ? {brokerErrorCode:state.halted.brokerErrorCode} : {}), activeJobId: state.jobs.find(ownsLease)?.id || null,
-        queued: state.jobs.filter(job => job.status === "queued").length, workerLastSeenAt: state.workerLastSeenAt || null };
+        queued: state.jobs.filter(job => job.status === "queued").length, workerLastSeenAt: state.workerLastSeenAt || null,
+        ...(state.reviewHold ? {holdThrough:state.reviewHold.holdThrough,holdActive:reviewHoldActive()} : {}) };
     });
   }
   async function halt(code, { cancelActive = false, cancelQueued = false, exceptJobId = null } = {}) {
@@ -474,9 +476,27 @@ function createCollectorBroker(options = {}) {
     return locked(async () => {
       await expireLeases();
       if (state.jobs.some(job => ownsLease(job) || !TERMINAL.has(job.status))) throw problem("COLLECTOR_PENDING_JOBS");
+      if (reviewHoldActive()) throw problem("COLLECTOR_REVIEW_HOLD");
       state.halted = null;
       await persist();
       return { halted: false, errorCode: "" };
+    });
+  }
+  async function reviewHold(holdThrough) {
+    await ensureReady();
+    return locked(async () => {
+      await expireLeases();
+      const today = new Date(timestamp() + 9 * 3600000).toISOString().slice(0, 10);
+      if (holdThrough !== today) throw problem("COLLECTOR_REVIEW_DATE_INVALID", 400);
+      if (state.jobs.some(job => ownsLease(job) || !TERMINAL.has(job.status))) throw problem("COLLECTOR_PENDING_JOBS");
+      if (!["COLLECTOR_PROVIDER_BLOCKED", "COLLECTOR_REVIEW_HOLD"].includes(state.halted?.code)) throw problem("COLLECTOR_REVIEW_BLOCK_REQUIRED");
+      if (state.halted.code === "COLLECTOR_REVIEW_HOLD" && state.reviewHold?.holdThrough === holdThrough) return {halted:true,errorCode:state.halted.code,holdThrough,holdActive:true};
+      const sourceBlock = state.halted.code === "COLLECTOR_PROVIDER_BLOCKED" ? clone(state.halted) : state.reviewHold?.sourceBlock;
+      if (!sourceBlock) throw problem("COLLECTOR_REVIEW_BLOCK_REQUIRED");
+      state.reviewHold = {holdThrough,reviewedAt:iso(),sourceBlock};
+      state.halted = {code:"COLLECTOR_REVIEW_HOLD",at:iso()};
+      await persist();
+      return {halted:true,errorCode:state.halted.code,holdThrough,holdActive:true};
     });
   }
   async function cancel(id) {
@@ -898,7 +918,7 @@ function createCollectorBroker(options = {}) {
       return {runId,outputDir,manifest:published,collectionQuality:quality,recovery:clone(job.recovery)};
     });
   }
-  return { initialize, submit, getJob, cancel, cancelQueued, status, halt, resetHalt, recover, handleHttp };
+  return { initialize, submit, getJob, cancel, cancelQueued, status, halt, resetHalt, reviewHold, recover, handleHttp };
 }
 
 module.exports = { createCollectorBroker, LEASE_MS, MAX_FILE_BYTES, MAX_RUN_BYTES };
