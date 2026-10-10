@@ -180,7 +180,7 @@ async function main() {
     assert.equal(manifest.requestPacing.enabled, false); assert.equal(manifest.requestPacing.guardEnabled, true);
     await remoteIdle();
     const beforeReuse = spawnCount();
-    for (const workerKey of ["manual", "scheduled"]) {
+    for (const workerKey of ["web"]) {
       const reused = await request(base, "/api/crawl", admin, jsonPost({ ...target, workerKey, clientRequestId: `reuse-web-${workerKey}` }));
       assert.equal(reused.response.status, 200, JSON.stringify(reused.body));
       assert.equal(reused.body.runId, runId); assert.equal(reused.body.reuse.mode, "same_day");
@@ -191,7 +191,7 @@ async function main() {
     const restored = await receipt(completedId);
     assert.equal(restored.status, "complete"); assert.equal(restored.workerKey, "web"); assert.equal(restored.result.runId, runId);
     assert.equal(spawnCount(), beforeReuse);
-    console.log("PASS operating web authorization, complete/partial validation, default speed, cross-worker reuse and restart receipt");
+    console.log("PASS operating web authorization, complete/partial validation, default speed, same-worker reuse and restart receipt");
 
     const sequentialA = await accept(payload("순차첫글램핑"));
     const sequentialB = await accept(payload("순차둘글램핑"));
@@ -209,7 +209,8 @@ async function main() {
     const blocked = await finish(await accept(payload("차단글램핑")));
     assert.equal(blocked.status, "blocked", JSON.stringify(blocked));
     assert.deepEqual(await derived(), beforeBlocked);
-    await waitUntil(async () => (await status()).workers.every(worker => worker.halted && worker.errorCode === "COLLECTOR_PROVIDER_BLOCKED"), "Web block did not protect all lanes");
+    await waitUntil(async () => (await status()).workers.find(worker => worker.workerKey === "web").errorCode === "COLLECTOR_PROVIDER_BLOCKED", "Web block did not protect its own lane");
+    assert.ok((await status()).workers.filter(worker => worker.workerKey !== "web").every(worker => !worker.halted), "A web provider block must not protect either remote worker");
     const afterBlock = spawnCount();
     const refused = await request(base, "/api/crawl?async=1", admin, jsonPost(payload("추가글램핑")));
     assert.equal(refused.response.status, 409); assert.equal(spawnCount(), afterBlock);
@@ -217,7 +218,7 @@ async function main() {
     assert.equal((await request(base, "/api/collector-reset-halt", admin, jsonPost({ confirm: "resume-after-review", workerKey: "web" }))).response.status, 200);
     assert.ok((await status()).workers.every(worker => worker.halted === false));
     assert.equal(spawnCount(), afterBlock);
-    console.log("PASS serial web queue, partial/blocked derived-data hold and cross-lane provider protection/reset");
+    console.log("PASS serial web queue, partial/blocked derived-data hold and isolated web provider protection/reset");
 
     // Exercise the opposite direction with a simulated authenticated worker
     // heartbeat. No worker or actual collection process is launched.
@@ -230,23 +231,27 @@ async function main() {
     const job = claimed.body.job; assert.ok(job?.id);
     const credentials = { workerId: IDS.manual, leaseToken: job.leaseToken };
     assert.equal((await request(base, `/api/collector-worker/jobs/${job.id}/heartbeat`, "", machine({ ...credentials, providerBlocked: true }))).response.status, 200);
-    await waitUntil(async () => (await status()).workers.find(worker => worker.workerKey === "web").halted === true, "Remote provider block did not halt web");
+    await waitUntil(async () => (await status()).workers.find(worker => worker.workerKey === "manual").halted === true, "Remote provider block did not halt its own lane");
+    assert.ok((await status()).workers.filter(worker => worker.workerKey !== "manual").every(worker => !worker.halted), "A remote provider block must not halt web or the other remote worker");
     assert.equal((await request(base, `/api/collector-worker/jobs/${job.id}/fail`, "", machine({ ...credentials, code: "COLLECTOR_PROVIDER_BLOCKED" }))).response.status, 200);
     await remotePending;
-    assert.equal((await request(base, "/api/crawl?async=1", admin, jsonPost(payload("원격차단후글램핑")))).response.status, 409);
+    assert.equal((await request(base, "/api/crawl?async=1", admin, jsonPost(payload("원격차단후글램핑", "manual")))).response.status, 409);
     assert.equal(spawnCount(), afterBlock);
 
-    // Reviewed release keeps the affected worker held for today's date. All
+    // Reviewed hold keeps only the affected worker held for today's date. All
     // collection below remains mocked; changing protection never starts work.
     await waitUntil(async () => (await status()).workers.every(worker => !worker.activeJobId && worker.queued === 0 && !worker.crawl?.active), "Protected workers did not become idle");
-    const releaseRoute = "/api/collector-review-release";
-    const review = { confirm: "resume-unaffected-after-review", heldWorkerKey: "manual", holdThrough: day(0) };
+    const releaseRoute = "/api/collector-review-hold";
+    const review = { confirm: "hold-after-review", heldWorkerKey: "manual", holdThrough: day(0) };
     const protections = async () => (await status()).workers.map(worker => ({ workerKey: worker.workerKey, halted: worker.halted,
       errorCode: worker.errorCode, holdThrough: worker.holdThrough, holdActive: worker.holdActive }));
     const scheduleConfigs = async () => Promise.all(["web", "manual", "scheduled"].map(async workerKey =>
       ({ workerKey, config: (await request(base, `/api/worker-schedule?workerKey=${workerKey}`, admin)).body.config })));
     const schedulesBeforeReview = await scheduleConfigs();
     const beforeReview = await protections();
+    const retiredRelease = await request(base, "/api/collector-review-release", admin, jsonPost({ ...review, confirm: "resume-unaffected-after-review" }));
+    assert.equal(retiredRelease.response.status, 410, "The old route must no longer release multiple workers");
+    assert.deepEqual(await protections(), beforeReview);
     for (const [cookie, expected] of [["", 401], [await login(base, MEMBER), 403]]) {
       assert.equal((await request(base, releaseRoute, cookie, jsonPost(review))).response.status, expected);
       assert.deepEqual(await protections(), beforeReview);
@@ -264,11 +269,12 @@ async function main() {
     const released = await request(base, releaseRoute, admin, jsonPost(review));
     assert.equal(released.response.status, 200, JSON.stringify(released.body));
     assert.equal(released.body.heldWorkerKey, "manual"); assert.equal(released.body.holdThrough, day(0));
-    assert.deepEqual([...released.body.releasedWorkerKeys].sort(), ["scheduled", "web"]);
+    assert.equal(Object.hasOwn(released.body, "releasedWorkerKeys"), false, "A reviewed hold must not release other workers");
     const reviewed = await protections(), held = reviewed.find(worker => worker.workerKey === "manual");
     assert.equal(held.halted, true); assert.equal(held.errorCode, "COLLECTOR_REVIEW_HOLD");
     assert.equal(held.holdThrough, day(0)); assert.equal(held.holdActive, true);
     assert.ok(reviewed.filter(worker => worker.workerKey !== "manual").every(worker => !worker.halted && !worker.errorCode));
+    assert.deepEqual(reviewed.filter(worker => worker.workerKey !== "manual"), beforeReview.filter(worker => worker.workerKey !== "manual"));
     assert.equal((await status()).workers.find(worker => worker.workerKey === "web").ready, true);
     assert.equal(spawnCount(), afterBlock);
 
@@ -298,24 +304,30 @@ async function main() {
     assert.equal((await request(base, "/api/collector-reset-halt", admin, jsonPost({ confirm: "resume-after-review", workerKey: "manual" }))).response.status, 409);
     assert.equal(spawnCount(), afterBlock);
 
-    // Releasing unaffected workers must not weaken a later provider-wide stop.
+    // A later web block remains local, without changing the manual review hold.
     const laterBlock = await finish(await accept(payload("검토후새차단글램핑")));
     assert.equal(laterBlock.status, "blocked", JSON.stringify(laterBlock));
-    await waitUntil(async () => (await status()).workers.every(worker => worker.halted && worker.errorCode === "COLLECTOR_PROVIDER_BLOCKED"), "New provider block did not protect every lane");
+    await waitUntil(async () => (await status()).workers.find(worker => worker.workerKey === "web").errorCode === "COLLECTOR_PROVIDER_BLOCKED", "New web provider block did not protect its own lane");
     await waitUntil(async () => !(await request(base, "/api/crawl-status?workerKey=web", admin)).body.active, "Later blocked web lane remained active");
     const blockedAgain = await protections(), afterLaterBlock = spawnCount();
     assert.equal(blockedAgain.find(worker => worker.workerKey === "manual").holdActive, true);
+    assert.equal(blockedAgain.find(worker => worker.workerKey === "manual").errorCode, "COLLECTOR_REVIEW_HOLD");
+    assert.equal(blockedAgain.find(worker => worker.workerKey === "scheduled").halted, false);
     assert.deepEqual(JSON.parse(await fsp.readFile(brokerStateFile, "utf8")).reviewHold, preservedReview);
-    assert.equal((await request(base, "/api/collector-reset-halt", admin, jsonPost({ confirm: "resume-after-review", workerKey: "web" }))).response.status, 409);
-    assert.deepEqual(await protections(), blockedAgain, "All-worker reset must reject before clearing any worker");
-    for (const key of ["web", "manual", "scheduled"]) {
+    for (const key of ["web", "manual"]) {
       assert.equal((await request(base, "/api/crawl?async=1", admin, jsonPost(payload(`재차단후금지-${key}`, key)))).response.status, 409);
     }
+    assert.equal((await request(base, "/api/collector-reset-halt", admin, jsonPost({ confirm: "resume-after-review", workerKey: "web" }))).response.status, 200);
+    const afterIndividualReset = await protections();
+    assert.deepEqual(afterIndividualReset.find(worker => worker.workerKey === "manual"), blockedAgain.find(worker => worker.workerKey === "manual"), "Resetting web must preserve the manual worker's today-only review hold");
+    assert.deepEqual(afterIndividualReset.find(worker => worker.workerKey === "scheduled"), blockedAgain.find(worker => worker.workerKey === "scheduled"));
+    assert.equal(afterIndividualReset.find(worker => worker.workerKey === "web").halted, false);
+    assert.deepEqual(await scheduleConfigs(), schedulesBeforeReview);
     assert.equal(spawnCount(), afterLaterBlock);
-    console.log("PASS reviewed selective release authorization, today-only hold, source evidence, no autostart, restart persistence and renewed common block");
+    console.log("PASS reviewed hold authorization, retired multi-worker release, today-only hold, source evidence, no autostart, restart persistence and isolated reset after a new block");
     assert.equal(fs.existsSync(attempts), false, "No external requests or real crawler subprocesses are permitted");
     assert.deepEqual(readEvents().filter(event => event.event === "fixture_error"), []);
-    console.log("PASS remote-provider block also protects basic worker; all collection mocked and outbound IO forbidden");
+    console.log("PASS provider protection stays on the affected worker; all collection mocked and outbound IO forbidden");
   } finally {
     await stopChild(server);
     const actual = await fsp.realpath(temporary), relative = path.relative(tempBase, actual);

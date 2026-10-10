@@ -30,18 +30,108 @@ test('KST date and scope coverage retain query semantics',()=>{
   assert.equal(covers(scope({...payload,detailRankRanges:'1-40',bookingRangePlaceLimit:20}),scope({...payload,detailRankRanges:'21-40',bookingRangePlaceLimit:20})),false);
   for(const change of [{adults:3},{searchScope:'all_lodging'},{detailRankRanges:'1-21'},{bookingRangeDays:32},{keyword:'가평글램핑'}]) assert.equal(covers(broad,scope({...payload,...change})),false);
 });
-test('two worker requests share one active collection, then persisted artifact is reused',async t=>{
+test('same-worker requests share one active collection, then persisted artifact is reused',async t=>{
   const f=await fixture(t);let release;let called=0;let joined=0;
   const gate=new Promise(r=>{release=r;});const reuse=createCollectionReuse({...f.options,onJoin:()=>{joined++;}});
   const execute=async()=>{called++;await gate;return f.artifact();};
   const first=reuse.run(payload,execute);
   while(called===0)await new Promise(r=>setImmediate(r));
-  const second=reuse.run({...payload,workerKey:'scheduled',trigger:'scheduled'},execute);
+  const second=reuse.run({...payload,trigger:'scheduled'},execute);
   while(joined===0)await new Promise(r=>setImmediate(r));
   release();const [one,two]=await Promise.all([first,second]);
   assert.equal(called,1);assert.equal(two.runId,one.runId);assert.equal(two.reuse.mode,'shared');
   const next=await f.create().run(payload,()=>{throw Error('must not collect');});
   assert.equal(next.reuse.mode,'same_day');assert.equal(next.workerKey,'manual');assert.equal(next.crawlTiming.recorded,false);
+});
+test('same-keyword collections in three workers execute independently while one remains active',async t=>{
+  const f=await fixture(t);let release,started=false;const calls=[];
+  const gate=new Promise(r=>{release=r;});
+  const reuse=createCollectionReuse({...f.options,onJoin:()=>{throw Error('another worker must not join');}});
+  const first=reuse.run(payload,async()=>{started=true;calls.push('manual');await gate;return f.artifact();});
+  while(!started)await new Promise(r=>setImmediate(r));
+  try {
+    for(const workerKey of ['web','scheduled']) {
+      const next=await reuse.run({...payload,workerKey,adults:workerKey==='web'?3:2},async()=>{
+        calls.push(workerKey);return f.artifact({workerKey},`pocheon_${workerKey}_glamping_20260923_100000`);
+      });
+      assert.equal(next.reused,undefined);
+      assert.equal(next.runId,`pocheon_${workerKey}_glamping_20260923_100000`);
+    }
+    assert.deepEqual(calls,['manual','web','scheduled']);
+    await assert.rejects(reuse.run({...payload,adults:3},()=>{}),{code:'COLLECTION_SCOPE_BUSY'});
+  } finally {release();await first;}
+});
+test('failed and blocked history is isolated by worker and stays isolated after restart',async t=>{
+  for(const sourceWorker of ['manual','web','scheduled']) for(const errorCode of ['COLLECTOR_PROVIDER_BLOCKED','COLLECTOR_CRAWL_FAILED']) {
+    await t.test(`${sourceWorker} ${errorCode}`,async t=>{
+      const f=await fixture(t),request={...payload,workerKey:sourceWorker};
+      await assert.rejects(f.create().run(request,async()=>{throw Object.assign(Error('fixture'),{code:errorCode});}),{code:errorCode});
+      await assert.rejects(f.create().run(request,()=>{throw Error('same worker cannot retry silently');}),{code:'COLLECTION_REVIEW_REQUIRED'});
+      for(const workerKey of ['manual','web','scheduled'].filter(key=>key!==sourceWorker)) {
+        let called=0;
+        const result=await f.create().run({...payload,workerKey},async()=>{
+          called++;return f.artifact({workerKey},`pocheon_${workerKey}_glamping_20260923_100000`);
+        });
+        assert.equal(called,1);assert.equal(result.reused,undefined);
+      }
+      const saved=JSON.parse(await fs.readFile(path.join(f.options.dataDir,'history','collection-reuse.json'))).entries;
+      assert.equal(saved[0].workerKey,sourceWorker);assert.equal(saved[0].errorCode,errorCode);
+      assert.equal(saved[0].status,errorCode.includes('BLOCK')?'blocked':'failed');
+      await assert.rejects(f.create().run(request,()=>{}),{code:'COLLECTION_REVIEW_REQUIRED'},'other successes cannot erase the original worker failure');
+    });
+  }
+});
+test('completed and incomplete artifacts from another worker neither satisfy nor prevent a collection',async t=>{
+  for(const sourceWorker of ['manual','web','scheduled']) for(const status of ['complete','partial','blocked','failed']) {
+    await t.test(`${sourceWorker} ${status}`,async t=>{
+      const f=await fixture(t);
+      const source=await f.artifact({workerKey:sourceWorker,quality:{status}},`pocheon_${sourceWorker}_glamping_20260923_100000`);
+      const sourceFile=path.join(f.options.outputsDir,source.runId,'manifest.json');
+      const original=await fs.readFile(sourceFile,'utf8');
+      for(const workerKey of ['manual','web','scheduled'].filter(key=>key!==sourceWorker)) {
+        let called=0;
+        const result=await f.create().run({...payload,workerKey},async()=>{
+          called++;return f.artifact({workerKey},`pocheon_${workerKey}_glamping_20260923_100000`);
+        });
+        assert.equal(called,1);assert.equal(result.reused,undefined);
+        const reused=await f.create().run({...payload,workerKey},()=>{throw Error('same-worker artifact should be reused');});
+        assert.equal(reused.reused,true);assert.equal(reused.workerKey,workerKey);assert.equal(reused.runId,result.runId);
+      }
+      assert.equal(await fs.readFile(sourceFile,'utf8'),original,'source artifacts remain untouched');
+      if(status==='complete') {
+        const result=await f.create().run({...payload,workerKey:sourceWorker},()=>{throw Error('same-worker complete should be reused');});
+        assert.equal(result.runId,source.runId);
+      } else await assert.rejects(f.create().run({...payload,workerKey:sourceWorker},()=>{}),{code:'COLLECTION_REVIEW_REQUIRED'});
+    });
+  }
+});
+test('unknown legacy worker provenance cannot hold or satisfy any current worker',async t=>{
+  const f=await fixture(t),file=path.join(f.options.dataDir,'history','collection-reuse.json');
+  await fs.mkdir(path.dirname(file),{recursive:true});
+  await fs.writeFile(file,JSON.stringify({version:1,entries:['failed','blocked','running','complete'].map(status=>({
+    id:`legacy-${status}`,day:'2026-09-23',status,scope:scope(payload)
+  }))}));
+  const source=await f.artifact({workerKey:undefined});
+  const sourceFile=path.join(f.options.outputsDir,source.runId,'manifest.json'),original=await fs.readFile(sourceFile,'utf8');
+  for(const workerKey of ['manual','web','scheduled']) {
+    let called=0;
+    const result=await f.create().run({...payload,workerKey},async()=>{
+      called++;return f.artifact({workerKey},`pocheon_${workerKey}_glamping_20260923_100000`);
+    });
+    assert.equal(called,1);assert.equal(result.reused,undefined);
+  }
+  assert.equal(await fs.readFile(sourceFile,'utf8'),original);
+  const entries=JSON.parse(await fs.readFile(file,'utf8')).entries;
+  assert.equal(entries.find(row=>row.id==='legacy-running').status,'interrupted');
+  assert.ok(entries.filter(row=>row.id.startsWith('legacy-')).every(row=>!Object.hasOwn(row,'workerKey')),'do not invent provenance for legacy rows');
+});
+test('a missing worker on a new request keeps the existing manual default',async t=>{
+  const f=await fixture(t);let called=0;
+  const first=await f.create().run({...payload,workerKey:undefined},async()=>{called++;return f.artifact();});
+  const second=await f.create().run(payload,()=>{throw Error('manual duplicate');});
+  assert.equal(called,1);assert.equal(second.runId,first.runId);assert.equal(second.reused,true);
+  const entries=JSON.parse(await fs.readFile(path.join(f.options.dataDir,'history','collection-reuse.json'),'utf8')).entries;
+  assert.equal(entries[0].workerKey,'manual');
 });
 test('different keywords execute independently while a same-keyword scope conflict is blocked',async t=>{
   const f=await fixture(t);const reuse=f.create();let release;
@@ -73,9 +163,12 @@ test('pre-existing partial artifact without a coordinator ledger still requires 
 test('interrupted durable claim fails closed after restart',async t=>{
   const f=await fixture(t);
   const file=path.join(f.options.dataDir,'history','collection-reuse.json');await fs.mkdir(path.dirname(file),{recursive:true});
-  await fs.writeFile(file,JSON.stringify({version:1,entries:[{id:'old',day:'2026-09-23',status:'running',scope:scope(payload)}]}));
+  await fs.writeFile(file,JSON.stringify({version:1,entries:[{id:'old',day:'2026-09-23',workerKey:'manual',status:'running',scope:scope(payload)}]}));
   await assert.rejects(f.create().run(payload,()=>{}),{code:'COLLECTION_REVIEW_REQUIRED'});
   assert.equal(JSON.parse(await fs.readFile(file)).entries[0].status,'interrupted');
+  const result=await f.create().run({...payload,workerKey:'web'},()=>f.artifact({workerKey:'web'}));
+  assert.equal(result.collectionQuality.status,'complete');
+  await assert.rejects(f.create().run(payload,()=>{}),{code:'COLLECTION_REVIEW_REQUIRED'});
 });
 test('an active request survives a KST midnight without duplicate execution',async t=>{
   const f=await fixture(t);let release;let began=false;let joined=0;

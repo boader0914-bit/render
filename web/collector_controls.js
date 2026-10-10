@@ -62,6 +62,7 @@
   function errorMessage(code) {
     const text = String(code || "");
     if (text === "COLLECTOR_REVIEW_HOLD") return "검토 후 이 수집기의 보호를 유지하고 있습니다. 당일 재개할 수 없으며 자동으로 재개되지 않습니다.";
+    if (text === "COLLECTION_REVIEW_REQUIRED") return "재수집 검토 필요 · 미실행. 당일 동일 키워드의 기존 기록·수집 조건 확인이 필요해 네이버 요청 전에 멈췄습니다.";
     if (!text) return "";
     if (text === "COLLECTOR_SCOPE_MISMATCH") return "요청한 검색 조건과 결과의 조건이 달라 등록하지 못했습니다. 보존 자료와 수집 조건을 확인하세요.";
     if (text === "COLLECTOR_DUPLICATE_PATH") return "상세 파일 목록이 중복되어 최종 저장 검증에 실패했습니다. 보존 자료 복구가 필요합니다.";
@@ -79,10 +80,11 @@
     if (/FAILED|TIMEOUT|DEADLINE|HALT|UNKNOWN/.test(text)) return "작업을 완료하지 못했습니다. 수집기 상태와 상세 기록을 확인하세요.";
     return /^[A-Z][A-Z0-9_:-]+$/.test(text) ? "작업 상태를 확인해야 합니다. 운영 점검이 필요합니다." : text;
   }
+  function reviewRequired(entry) { return (entry?.brokerErrorCode || entry?.errorCode) === "COLLECTION_REVIEW_REQUIRED" && !(entry?.runId || entry?.result?.runId); }
+  function outcomeLabel(entry) { return reviewRequired(entry) ? "재수집 검토 필요 · 미실행" : STATUS_LABELS[entry?.status] || "확인 필요"; }
   function workerAvailability(data, key, now = Date.now()) {
     if (!data) return { ready: false, reason: "수집기 상태를 새로고침하여 연결을 확인하세요." };
     const workers = Array.isArray(data.workers) ? data.workers : [];
-    if (workers.some(worker => worker.halted && /PROVIDER.*BLOCK|PROVIDER_ACCESS/.test(worker.errorCode || ""))) return { ready: false, reason: "접근 제한 보호 중입니다. 모든 수집기의 새 요청을 보류합니다." };
     const worker = workers.find(item => item.workerKey === key);
     if (!worker?.configured) return { ready: false, reason: "수집기 연결 설정이 필요합니다. 조건은 미리 저장할 수 있습니다." };
     if (worker.halted) return { ready: false, reason: errorMessage(worker.brokerErrorCode || worker.errorCode) || "수집기 보호 상태를 먼저 확인하세요." };
@@ -163,8 +165,8 @@
     const secondsSinceStatus = receivedAt > 0 ? Math.max(0, Math.min(30, Math.floor((now - receivedAt) / 1000))) : 0;
     const remaining = Number.isFinite(crawl.remainingSeconds) ? Math.max(0, crawl.remainingSeconds - secondsSinceStatus) : null;
     const delay = active && (crawl.isDelayed || remaining === 0);
-    const eta = worker.halted ? "수집 중단" : crawl.cancelling ? "중단 처리 중" : staleConnection ? "연결 확인 필요" : stalled ? "응답 확인 중" : verified ? "저장·검증 완료" : ["complete", "completed", "reused"].includes(terminalStatus) ? "정상 저장 확인 필요" : terminalStatus ? STATUS_LABELS[terminalStatus] || "확인 필요" : pending ? "차례를 기다리는 중" : delay ? "예상보다 지연" : active ? etaRange(remaining) : "";
-    const error = worker.halted ? errorMessage(worker.brokerErrorCode || worker.errorCode) : terminalStatus && !verified ? qualityReason(record.collectionQuality || record.result?.collectionQuality) || errorMessage(record.brokerErrorCode || record.errorCode) : "";
+    const eta = worker.halted ? "수집 중단" : crawl.cancelling ? "중단 처리 중" : staleConnection ? "연결 확인 필요" : stalled ? "응답 확인 중" : verified ? "저장·검증 완료" : ["complete", "completed", "reused"].includes(terminalStatus) ? "정상 저장 확인 필요" : terminalStatus ? outcomeLabel(record) : pending ? "차례를 기다리는 중" : delay ? "예상보다 지연" : active ? etaRange(remaining) : "";
+    const error = worker.halted ? errorMessage(worker.brokerErrorCode || worker.errorCode) : terminalStatus && !verified ? reviewRequired(record) ? errorMessage("COLLECTION_REVIEW_REQUIRED") : qualityReason(record.collectionQuality || record.result?.collectionQuality) || errorMessage(record.brokerErrorCode || record.errorCode) : "";
     const keyword = crawl.activeJob?.keyword || crawl.currentJob?.keyword || record?.keyword || "수집 작업";
     return { visible: active || pending || Boolean(terminalStatus) || Boolean(worker.halted), state, active, animated: active && !paused && !delay, keyword, eta,
       label: active && !paused && !delay ? "예상 남은 시간" : verified ? "결과 확인" : "진행 상태", phase,
@@ -373,7 +375,7 @@
     card.keywordSchedule = node("table", "", "collector-keyword-schedule"); card.keywordSchedule.append(node("caption", "키워드별 시작 예정 · 한국시간"));
     card.keywordScheduleBody = node("tbody"); card.keywordSchedule.append(card.keywordScheduleBody);
     card.reservationHint = node("p", "", "collector-field-hint"); reservationBody.append(reservationGrid, card.intervalHint, card.keywordSchedule, card.reservationHint); card.reservation.append(reservationHeading, reservationBody); card.form.append(card.reservation);
-    card.repeat = node("details", "", "collector-repeat-options"); card.repeat.append(node("summary", "당일 재수집 옵션")); card.repeat.append(field(card, "allowRepeat", "기존 자료 대신 다시 수집", "checkbox"), field(card, "repeatReason", "재수집 사유", "text", { maxLength: 200, placeholder: "4글자 이상 입력" }), node("p", "기본은 세 워커의 당일 정상 자료를 먼저 확인합니다. 접근 제한 보호는 유지됩니다.", "collector-field-hint")); card.form.append(card.repeat);
+    card.repeat = node("details", "", "collector-repeat-options"); card.repeat.append(node("summary", "당일 재수집 옵션")); card.repeat.append(field(card, "allowRepeat", "기존 자료 대신 다시 수집", "checkbox"), field(card, "repeatReason", "재수집 사유", "text", { maxLength: 200, placeholder: "4글자 이상 입력" }), node("p", "선택한 워커의 당일 기록과 수집 조건을 확인합니다. 다른 워커의 자료를 자동 재사용하지 않으며, 접근 제한 보호도 워커별로 유지합니다.", "collector-field-hint")); card.form.append(card.repeat);
     card.detailHint = node("p", "", "collector-field-hint"); card.form.append(card.detailHint);
     card.notice = node("p", "", "collector-control-status"); card.notice.setAttribute("role", "status"); card.notice.setAttribute("aria-live", "polite"); card.form.append(card.notice);
     const footer = node("footer", "", "collector-card-footer"), actions = node("div", "", "collector-card-actions"); card.submit = node("button", "지금 수집", "primary-button"); card.submit.type = "submit"; card.save = button("예약 조건 저장", "secondary-button", () => action(card, () => saveSchedule(card))); card.pause = button("예약 일시정지", "ghost-button", () => action(card, () => pauseSchedule(card))); actions.append(card.submit, card.save, card.pause); footer.append(actions);
@@ -540,9 +542,9 @@
       if (reason) info.append(node("small", reason, "collector-worker-alert"));
       if (entry.errorCode) info.append(node("small", errorMessage(entry.brokerErrorCode || entry.errorCode), "collector-worker-alert"));
       if (entry.recovery) info.append(node("small", "보존 자료 복구 완료 · 업체 DB 반영"));
-      row.append(info, node("span", entry.recovery && entry.status === "complete" ? "복구 완료" : STATUS_LABELS[entry.status] || "확인 필요", "state-badge"));
+      row.append(info, node("span", entry.recovery && entry.status === "complete" ? "복구 완료" : outcomeLabel(entry), "state-badge"));
       if (entry.runId) row.append(resultButton(entry.runId));
-      if (entry.runId || ["partial", "failed", "blocked", "interrupted"].includes(entry.status)) row.append(diagnosticCard(entry.runId || "", entry.collectionQuality || { status: entry.status }, `history:${entry.requestId || entry.keyword}`));
+      if (!reviewRequired(entry) && (entry.runId || ["partial", "failed", "blocked", "interrupted"].includes(entry.status))) row.append(diagnosticCard(entry.runId || "", entry.collectionQuality || { status: entry.status }, `history:${entry.requestId || entry.keyword}`));
       container.append(row);
     }
     for (const card of cards.values()) {

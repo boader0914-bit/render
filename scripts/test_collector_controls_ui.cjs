@@ -11,14 +11,16 @@ const source = fs.readFileSync(path.join(__dirname, "../web/collector_controls.j
 const app = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8");
 const clone = value => JSON.parse(JSON.stringify(value));
 const keys = ["web", "manual", "scheduled"];
-test("reviewed source protection leaves only explicitly released workers available", () => {
+test("review and provider protection affect only their own worker", () => {
   const now=Date.now(), workers=keys.map(workerKey=>({workerKey,configured:true,connected:true,workerLastSeenAt:new Date(now).toISOString(),halted:workerKey==="manual",errorCode:workerKey==="manual"?"COLLECTOR_REVIEW_HOLD":""}));
   assert.equal(workerAvailability({workers},"manual",now).ready,false);
   assert.match(workerAvailability({workers},"manual",now).reason,/보호/);
   assert.equal(workerAvailability({workers},"web",now).ready,true);
   assert.equal(workerAvailability({workers},"scheduled",now).ready,true);
   workers[2].halted=true; workers[2].errorCode="COLLECTOR_PROVIDER_BLOCKED";
-  assert.ok(keys.every(key=>!workerAvailability({workers},key,now).ready));
+  assert.equal(workerAvailability({workers},"manual",now).ready,false);
+  assert.equal(workerAvailability({workers},"scheduled",now).ready,false);
+  assert.equal(workerAvailability({workers},"web",now).ready,true);
 });
 const config = { version: 1, enabled: false, timezone: "Asia/Seoul", repeat: "once", firstDate: "2026-09-25", time: "14:00", keywords: [], collection: { dateMode: "rolling", bookingDays: 7, checkIn: null, checkOut: null, adults: 2, detailRankRanges: "1-20", productMode: "all", collectionMode: "precision", collectionPurpose: "revenue_detail", dayUseMode: "inspect" }, requestPacing: null };
 class Element {
@@ -247,11 +249,35 @@ test("all worker reservations save without activating, then register only select
   }
 });
 
-test("provider protection blocks every start while active schedules remain pausable", async () => {
-  const ui = await mockUi({ configs: { scheduled: { ...config, enabled: true } }, workers: [{ workerKey: "manual", configured: true, halted: true, errorCode: "COLLECTOR_PROVIDER_BLOCKED" }] });
-  for (const key of keys) assert.equal(descendants(ui.card(key)).find(el => el.type === "submit").disabled, true);
-  assert.equal(ui.button("scheduled", "예약 일시정지").disabled, false); await ui.button("scheduled", "예약 일시정지").event("click"); await until(() => !ui.saved.scheduled.enabled);
-  assert.equal(ui.submissions.length, 0);
+test("each provider-protected worker stops only its own card while all schedules remain pausable", async () => {
+  for (const held of keys) {
+    const workers = keys.map(workerKey => ({ workerKey, configured: true, connected: true, ready: true, workerLastSeenAt: new Date().toISOString(), halted: workerKey === held, errorCode: workerKey === held ? "COLLECTOR_PROVIDER_BLOCKED" : "" }));
+    const ui = await mockUi({ configs: { scheduled: { ...config, enabled: true } }, workers });
+    for (const key of keys) assert.equal(descendants(ui.card(key)).find(el => el.type === "submit").disabled, key === held);
+    assert.match(text(ui.card(held)), /네이버 접근 제한/);
+    assert.doesNotMatch(text(ui.card(held)), /모든 수집기의 새 요청/);
+    const unaffected = keys.find(key => key !== held && key !== "scheduled");
+    await ui.set(unaffected, "keywords", "포천글램핑"); await ui.form(unaffected).event("submit"); await until(() => ui.submissions.length === 1);
+    assert.equal(ui.submissions[0].workerKey, unaffected);
+    assert.equal(ui.button("scheduled", "예약 일시정지").disabled, false); await ui.button("scheduled", "예약 일시정지").event("click"); await until(() => !ui.saved.scheduled.enabled);
+  }
+});
+
+test("same-day review rejection is unexecuted, not a provider block or zero collection", async () => {
+  const request = { workerKey: "web", keyword: "포천글램핑", status: "failed", errorCode: "COLLECTION_REVIEW_REQUIRED", createdAt: new Date().toISOString(), durationMs: 77 };
+  const ui = await mockUi({ requests: [request] });
+  const history = ui.nodes.get("collectorUnifiedHistory");
+  assert.equal(descendants(history).find(el => el.className === "state-badge").textContent, "재수집 검토 필요 · 미실행");
+  assert.match(text(history), /당일 동일 키워드.*네이버 요청 전에/);
+  assert.doesNotMatch(text(history), /접근 제한|예약 일정 성공 0|정상 응답 0|실패/);
+  assert.equal(descendants(history).filter(el => el.className === "collection-diagnostics").length, 0, "known preflight rejection needs no missing-result diagnosis");
+  assert.equal(ui.calls.filter(call => call.url.endsWith("/diagnostics")).length, 0);
+  const progress = progressModel({ workerKey: "web", configured: true, connected: true }, request);
+  assert.equal(progress.eta, "재수집 검토 필요 · 미실행"); assert.equal(progress.state, "attention"); assert.equal(progress.active, false);
+  assert.match(progress.detail, /네이버 요청 전에/); assert.equal(progress.runId, null);
+  assert.match(errorMessage("BookingAPITooManyRequests"), /네이버 접근 제한/);
+  assert.match(text(ui.card("web")), /선택한 워커의 당일 기록.*다른 워커의 자료를 자동 재사용하지 않으며/);
+  assert.ok(ui.calls.every(call => call.method === "GET")); assert.equal(ui.submissions.length, 0);
 });
 
 test("basic collection cannot request day-use reservation detail", async () => {

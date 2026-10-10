@@ -85,7 +85,7 @@ function createCollectionReuse({dataDir, outputsDir, now = () => new Date(), ins
     initialized=true;
   }
   async function persist() { await atomicJson(file,{version:1,entries:rows}); }
-  async function resultsToday(day) {
+  async function resultsToday(day, workerKey) {
     let dirs;
     try { dirs=await fs.readdir(outputsDir,{withFileTypes:true}); } catch(error) { if(error.code==='ENOENT') return []; throw error; }
     const results=[];
@@ -94,6 +94,9 @@ function createCollectionReuse({dataDir, outputsDir, now = () => new Date(), ins
       try {
         const outputDir=path.join(outputsDir,dir.name);
         const m=JSON.parse(await fs.readFile(path.join(outputDir,'manifest.json'),'utf8'));
+        // Only explicit worker provenance participates in execution guards. Legacy
+        // artifacts without it remain stored, but cannot hold or satisfy another lane.
+        if(m.workerKey!==workerKey)continue;
         const observed=m.startedAt || m.collectionStartedAt || m.collectedAt;
         if(!observed || !Number.isFinite(Date.parse(observed)) || dayKey(observed)!==day)continue;
         const quality=inspect(m);
@@ -110,25 +113,25 @@ function createCollectionReuse({dataDir, outputsDir, now = () => new Date(), ins
     return results.sort((a,b)=>b.observedAt.localeCompare(a.observedAt));
   }
   async function run(payload, execute) {
-    const wanted=scope(payload), day=dayKey(now());
+    const wanted=scope(payload), day=dayKey(now()), workerKey=payload.workerKey||'manual';
     const bypass=payload.allowRepeat===true && String(payload.repeatReason||'').trim().length>=4;
     const choice=await lock(async()=>{
       await initialize();
-      const same=rows.filter(row=>row.scope?.keyword===wanted.keyword && (row.day===day || active.has(row.id)));
+      const same=rows.filter(row=>row.workerKey===workerKey && row.scope?.keyword===wanted.keyword && (row.day===day || active.has(row.id)));
       const running=same.find(row=>active.has(row.id) && covers(row.scope,wanted));
       if(running) { await onJoin(running, payload); return {promise:active.get(running.id), shared:true}; }
-      if(same.some(row=>active.has(row.id))) throw problem('COLLECTION_SCOPE_BUSY','같은 키워드의 수집이 진행 중입니다. 완료 후 범위를 확인해 주세요.');
-      const available=await resultsToday(day);
+      if(same.some(row=>active.has(row.id))) throw problem('COLLECTION_SCOPE_BUSY','이 수집기에서 같은 키워드의 수집이 진행 중입니다. 완료 후 범위를 확인해 주세요.');
+      const available=await resultsToday(day,workerKey);
       const reusable=available.find(row=>row.valid && row.quality.status==='complete' && covers(row.scope,wanted));
       if(reusable && !bypass) return {reusable};
       if(!bypass && (same.some(row=>['failed','partial','blocked','interrupted','running'].includes(row.status))
         || available.some(row=>row.scope.keyword===wanted.keyword && (!row.valid || row.quality.status!=='complete')))) {
-        throw problem('COLLECTION_REVIEW_REQUIRED','오늘 같은 키워드의 미완료 기록이 있습니다. 원인을 확인한 뒤 별도 재수집 사유를 입력해 주세요.');
+        throw problem('COLLECTION_REVIEW_REQUIRED','오늘 이 수집기에서 같은 키워드의 미완료 기록이 있습니다. 원인을 확인한 뒤 별도 재수집 사유를 입력해 주세요.');
       }
       if(!bypass && (available.some(row=>row.scope.keyword===wanted.keyword) || same.some(row=>row.status==='complete'))) {
-        throw problem('COLLECTION_SCOPE_REVIEW','오늘 수집한 자료와 요청 범위가 다르거나 저장 파일 확인이 필요합니다. 필요한 범위를 확인하고 재수집 사유를 입력해 주세요.');
+        throw problem('COLLECTION_SCOPE_REVIEW','오늘 이 수집기에서 수집한 자료와 요청 범위가 다르거나 저장 파일 확인이 필요합니다. 필요한 범위를 확인하고 재수집 사유를 입력해 주세요.');
       }
-      const row={id:crypto.randomUUID(),day,scope:wanted,status:'running',workerKey:payload.workerKey||'manual',trigger:payload.trigger||'manual',createdAt:new Date(now()).toISOString(),repeatReason:bypass?String(payload.repeatReason).trim():''};
+      const row={id:crypto.randomUUID(),day,scope:wanted,status:'running',workerKey,trigger:payload.trigger||'manual',createdAt:new Date(now()).toISOString(),repeatReason:bypass?String(payload.repeatReason).trim():''};
       rows.push(row); await persist();
       let resolve,reject;
       const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});

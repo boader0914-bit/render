@@ -157,25 +157,30 @@ async function main() {
     assert.equal(scheduled.spawned[0].config.env.COLLECTOR_TRIGGER, "manual");
     console.log("PASS independent keywords execute on selected workers concurrently");
 
-    // The same in-flight keyword is joined even when requested from the other worker.
+    // Join/reuse applies only to the selected worker. Another worker gets its
+    // own job and result even when every collection parameter is identical.
     const sharedRequest = payload("경남글램핑", "manual");
     const shareA = submit(sharedRequest);
     await waitUntil(() => queue("manual", 1), "Shared source did not queue");
+    const joinedSameWorker = submit({ ...sharedRequest, clientRequestId: "roles-share-same-worker" });
     const shareB = submit({ ...sharedRequest, workerKey: "scheduled", clientRequestId: "roles-share-second" });
-    await delay(100);
-    assert.equal(await queue("scheduled", 0), true);
-    const sharedWorker = start("manual", 3);
-    const sharedA = await finish(sharedWorker, shareA), sharedB = await shareB;
+    await waitUntil(async () => await queue("manual", 1) && await queue("scheduled", 1), "Identical keywords must queue separately per worker");
+    const sharedWorker = start("manual", 3), separateWorker = start("scheduled", 30);
+    const [sharedA, sharedB, joined] = await Promise.all([finish(sharedWorker, shareA), finish(separateWorker, shareB), joinedSameWorker]);
     assert.equal(sharedA.response.status, 200, JSON.stringify(sharedA.body));
     assert.equal(sharedB.response.status, 200, JSON.stringify(sharedB.body));
-    assert.equal(sharedA.body.runId, sharedB.body.runId);
-    assert.equal(sharedB.body.reuse.mode, "shared");
-    const reused = await submit({ ...sharedRequest, workerKey: "scheduled", clientRequestId: "roles-reuse-next" });
-    assert.equal(reused.response.status, 200, JSON.stringify(reused.body));
-    assert.equal(reused.body.runId, sharedA.body.runId);
-    assert.equal(reused.body.reuse.mode, "same_day");
+    assert.notEqual(sharedA.body.runId, sharedB.body.runId);
+    assert.equal(joined.response.status, 200, JSON.stringify(joined.body));
+    assert.equal(joined.body.runId, sharedA.body.runId);
+    assert.equal(joined.body.reuse.mode, "shared");
+    for (const [workerKey, expected] of [["manual", sharedA], ["scheduled", sharedB]]) {
+      const reused = await submit({ ...sharedRequest, workerKey, clientRequestId: `roles-reuse-${workerKey}` });
+      assert.equal(reused.response.status, 200, JSON.stringify(reused.body));
+      assert.equal(reused.body.runId, expected.body.runId);
+      assert.equal(reused.body.reuse.mode, "same_day");
+    }
     assert.ok((await status()).workers.every(worker => worker.queued === 0 && !worker.activeJobId));
-    console.log("PASS cross-worker in-flight join and same-day successful reuse prevent recrawl");
+    console.log("PASS same-worker join/reuse prevents recrawl while identical keywords on different workers remain independent");
 
     // Browser requests receive a durable receipt before a worker is available
     // to execute the job. An identical receipt ID cannot create a second job.
@@ -269,23 +274,72 @@ async function main() {
     assert.equal((await request(base, "/api/worker-schedule/enabled", admin, jsonPost({ enabled: false }))).response.status, 200);
     console.log("PASS save and activation are separate; immediate scheduled-worker collection preserves the saved schedule and deduplicates request IDs");
 
-    // A real mocked stop-gate event cancels the other active lane and blocks new claims.
-    const blocker = submit(payload("충남글램핑", "manual")), victim = submit(payload("충북글램핑", "scheduled"));
+    // A mocked provider event stops only that worker and its queued jobs. The
+    // other worker's active job, queue and enabled schedule must remain intact.
+    assert.equal((await request(base, "/api/worker-schedule/enabled", admin, jsonPost({ enabled: true }))).response.status, 200);
+    const scheduleBeforeBlock = (await request(base, "/api/worker-schedule", admin)).body;
+    const blocker = submit(payload("충남글램핑", "manual")), unaffected = submit(payload("충북글램핑", "scheduled"));
     await waitUntil(async () => await queue("manual", 1) && await queue("scheduled", 1), "Block scenario did not queue both lanes");
-    const victimWorker = start("scheduled", 5, { neverFinish: true });
-    await waitUntil(() => victimWorker.spawned.length === 1, "Other lane did not begin before block");
+    let releaseUnaffected;
+    const unaffectedGate = new Promise(resolve => { releaseUnaffected = resolve; });
+    const unaffectedWorker = start("scheduled", 5, { beforeSave: () => unaffectedGate });
+    await waitUntil(() => unaffectedWorker.spawned.length === 1, "Other lane did not begin before block");
+    const sameLaneQueued = submit(payload("차단워커대기글램핑", "manual"));
+    const unaffectedQueued = submit(payload("정상워커대기글램핑", "scheduled"));
+    await waitUntil(async () => {
+      const current = await status();
+      return ["manual", "scheduled"].every(key => current.workers.find(worker => worker.workerKey === key).crawl?.queueLength === 1);
+    }, "Per-worker follow-up jobs were not queued");
     const blockerWorker = start("manual", 6, { blocked: true });
-    const blockedResult = await finish(blockerWorker, blocker), interrupted = await finish(victimWorker, victim);
+    const blockedResult = await finish(blockerWorker, blocker), cancelledSameLane = await sameLaneQueued;
     assert.equal(blockedResult.response.status, 200, JSON.stringify(blockedResult.body));
     assert.equal(blockedResult.body.collectionQuality.status, "blocked");
-    assert.notEqual(interrupted.response.status, 200);
-    assert.ok(victimWorker.kills.length >= 1);
+    assert.ok(blockedResult.body.runId, "The blocking job must still upload its blocked result evidence");
+    assert.equal((await request(base, `/api/runs/${blockedResult.body.runId}`, admin)).response.status, 200);
+    assert.notEqual(cancelledSameLane.response.status, 200);
     const protectedStatus = await status();
-    assert.ok(protectedStatus.workers.every(worker => worker.halted && worker.errorCode === "COLLECTOR_PROVIDER_BLOCKED"));
-    const refused = await submit(payload("전남글램핑", "scheduled"));
+    const protectedManual = protectedStatus.workers.find(worker => worker.workerKey === "manual");
+    assert.equal(protectedManual.halted, true); assert.equal(protectedManual.errorCode, "COLLECTOR_PROVIDER_BLOCKED");
+    assert.equal(protectedManual.queued, 0); assert.equal(protectedManual.activeJobId, null);
+    assert.equal(protectedManual.crawl.queueLength, 0);
+    assert.ok(protectedStatus.workers.filter(worker => worker.workerKey !== "manual").every(worker => !worker.halted));
+    const unaffectedStatus = protectedStatus.workers.find(worker => worker.workerKey === "scheduled");
+    assert.ok(unaffectedStatus.activeJobId); assert.equal(unaffectedStatus.crawl.queueLength, 1);
+    assert.equal(unaffectedWorker.kills.length, 0);
+    const scheduleAfterBlock = (await request(base, "/api/worker-schedule", admin)).body;
+    assert.deepEqual(scheduleAfterBlock.config, scheduleBeforeBlock.config);
+    assert.equal(scheduleAfterBlock.enabled, true); assert.equal(scheduleAfterBlock.nextRunAt, scheduleBeforeBlock.nextRunAt);
+    const refused = await submit(payload("전남글램핑", "manual"));
     assert.equal(refused.response.status, 409);
+    const heldReview = await request(base, "/api/collector-review-hold", admin, jsonPost({ confirm: "hold-after-review", heldWorkerKey: "manual", holdThrough: day(Date.now()) }));
+    assert.equal(heldReview.response.status, 200, JSON.stringify(heldReview.body));
+    const afterHold = await status();
+    assert.equal(afterHold.workers.find(worker => worker.workerKey === "manual").errorCode, "COLLECTOR_REVIEW_HOLD");
+    assert.equal(afterHold.workers.find(worker => worker.workerKey === "manual").holdActive, true);
+    assert.equal(afterHold.workers.find(worker => worker.workerKey === "scheduled").activeJobId, unaffectedStatus.activeJobId);
+    assert.equal(afterHold.workers.find(worker => worker.workerKey === "scheduled").crawl.queueLength, 1);
+    // Resetting an idle unaffected worker is allowed while another worker is
+    // active, and it cannot clear the manual worker's provider protection.
+    assert.equal((await request(base, "/api/collector-reset-halt", admin, jsonPost({ confirm: "resume-after-review", workerKey: "web" }))).response.status, 200);
+    assert.equal((await status()).workers.find(worker => worker.workerKey === "manual").halted, true);
+    releaseUnaffected();
+    const unaffectedResult = await finish(unaffectedWorker, unaffected);
+    assert.equal(unaffectedResult.response.status, 200, JSON.stringify(unaffectedResult.body));
+    assert.equal(unaffectedResult.body.collectionQuality.status, "complete");
+    assert.equal(unaffectedWorker.kills.length, 0);
+    const queuedWorker = start("scheduled", 8);
+    const queuedResult = await finish(queuedWorker, unaffectedQueued);
+    assert.equal(queuedResult.response.status, 200, JSON.stringify(queuedResult.body));
+    assert.equal(queuedResult.body.collectionQuality.status, "complete");
+    assert.equal((await status()).workers.find(worker => worker.workerKey === "manual").halted, true);
+    assert.equal((await request(base, "/api/collector-reset-halt", admin, jsonPost({ confirm: "resume-after-review", workerKey: "manual" }))).response.status, 409);
+    const finalStatus = await status();
+    assert.ok(finalStatus.workers.every(worker => !worker.activeJobId && !worker.queued));
+    assert.ok(finalStatus.workers.filter(worker => worker.workerKey !== "manual").every(worker => !worker.halted));
+    assert.equal(finalStatus.workers.find(worker => worker.workerKey === "manual").holdActive, true);
+    assert.equal((await request(base, "/api/worker-schedule/enabled", admin, jsonPost({ enabled: false }))).response.status, 200);
     assert.equal(fs.existsSync(attemptsPath), false, "Fixture forbids external HTTP and actual collector subprocesses");
-    console.log("PASS provider gate event stops the other active worker, preserves failed evidence, and prevents another collection");
+    console.log("PASS provider block stops only its own queued jobs, preserves blocked evidence and leaves other active jobs, queue and schedule untouched");
     console.log("collector roles integration: role isolation, readiness, concurrent collection, same-day reuse, async receipts, scheduling and provider protection passed with mock workers and no external collection");
   } finally {
     for (const worker of workers) worker.stop();
