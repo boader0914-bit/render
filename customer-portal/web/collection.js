@@ -6,13 +6,24 @@
   const types = {lodging:'숙박',dayuse:'데이유즈',unknown:'구분 확인 전'};
   const statuses = {dispatching:'접수 확인',queued:'수집 대기',collecting:'수집 대기·진행 중',ready:'완료',partial:'일부 완료',blocked:'접근 제한',failed:'실패',needs_review:'확인 필요'};
   const active = r => ['dispatching','queued','collecting'].includes(r?.status);
-  let api, companyId, view = null, serial = 0, timer, renderedVersion, loadOrder=0;
+  let api, companyId, view = null, serial = 0, timer, renderedVersion, loadOrder=0, selectedMonth='';
   const date = () => new Date(Date.now()+9*3600000).toISOString().slice(0,10);
   let allowance=null,display={mode:'default',metric:'bookings',month:''};
   function savedMode(){try{const mode=localStorage.getItem('insight-company-view');return ['default','graph','calendar','table'].includes(mode)?mode:'default';}catch{return 'default';}}
   function refreshDisplay(){if(!view)return;const current=document.querySelector('#company-current-view'),history=document.querySelector('#company-history-flow');if(current)current.innerHTML=window.InsightCompanyView.currentView(view,display);if(history)history.innerHTML=window.InsightCompanyView.flowView(view,display);document.querySelectorAll?.('[data-company-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.companyView===display.mode)));const details=document.querySelector('#company-flow-details');if(details&&display.mode==='graph')details.open=true;}
   document.addEventListener?.('click',event=>{const choice=event.target.closest?.('[data-company-view]');if(choice){display.mode=choice.dataset.companyView;try{localStorage.setItem('insight-company-view',display.mode);}catch{}refreshDisplay();return;}const button=event.target.closest?.('[data-open-collection]');if(button){const panel=document.querySelector('#collection-settings');if(panel){panel.hidden=!panel.hidden;button.setAttribute('aria-expanded',String(!panel.hidden));}}});
-  document.addEventListener?.('change',event=>{if(event.target.matches?.('[data-flow-metric]')){display.metric=event.target.value;refreshDisplay();}else if(event.target.matches?.('[data-flow-month]')){display.month=event.target.value;refreshDisplay();}});
+  document.addEventListener?.('change',event=>{
+    if(event.target.matches?.('[data-company-month]')){
+      if(document.querySelector('#collection-result form[data-dirty]')){
+        event.target.value=view?.companyDetail?.integrated?.selectedMonth||selectedMonth;
+        const progress=document.querySelector('#collection-progress');
+        if(progress)progress.innerHTML='<p class="collection-warning">작성 중인 수정 요청을 유지했습니다. 내용을 정리한 뒤 숙박월을 바꿔 주세요.</p>';
+        return;
+      }
+      selectedMonth=event.target.value;display.month=selectedMonth;load(true);
+    }else if(event.target.matches?.('[data-flow-metric]')){display.metric=event.target.value;refreshDisplay();}
+    else if(event.target.matches?.('[data-flow-month]')){display.month=event.target.value;refreshDisplay();}
+  });
   function allowanceText(q) {
     if(!q)return '오늘 수집 가능 여부를 확인하고 있습니다.';
     if(q.limit===null)return '관리자는 일일 횟수 제한을 적용하지 않습니다. 동일 업체·조건은 기존 작업을 확인합니다.';
@@ -42,7 +53,7 @@
     const mine=serial, id=companyId, order=++loadOrder;
     clearTimeout(timer);
     try {
-      const data=await api(`/companies/${encodeURIComponent(id)}/collection`);
+      const data=await api(`/companies/${encodeURIComponent(id)}/collection${selectedMonth?'?month='+encodeURIComponent(selectedMonth):''}`);
       if(mine!==serial || order!==loadOrder || !document.querySelector('#collection-result'))return;
       progress(data);
       const version=JSON.stringify([data.result?.version,data.previousResult,data.companyDetail]);
@@ -50,9 +61,9 @@
         if(!force && document.querySelector('#collection-result form:focus-within, #collection-result form[data-dirty]')) { const note=document.createElement('p'); note.className='muted';note.textContent='새 결과가 있습니다. 작성 중인 내용을 유지했습니다. 새로고침하면 최신 결과를 표시합니다.';document.querySelector('#collection-progress').append(note); if(active(data.request))timer=setTimeout(()=>load(),10000); return; }
         view=data;renderedVersion=version;document.querySelector('#collection-result').innerHTML=renderResult(data);
       }
-      if(active(data.request))timer=setTimeout(()=>{if(!document.hidden)load();else timer=setTimeout(()=>load(),10000);},5000);
+      if(active(data.request)||['pending','updating'].includes(data.companyDetail?.integrated?.status)&&!data.companyDetail?.legacyObservationView)timer=setTimeout(()=>{if(!document.hidden)load();else timer=setTimeout(()=>load(),10000);},10000);
     } catch(error) { if(mine===serial && document.querySelector('#collection-progress'))document.querySelector('#collection-progress').innerHTML=`<p class="collection-warning">${esc(error.message)} <button class="button small" data-action="refresh-collection">다시 확인</button></p>`; }
   }
-  window.InsightCollection={panel, mount(id,request){display={mode:savedMode(),metric:'bookings',month:''};serial++;clearTimeout(timer);companyId=id;api=request;view=null;renderedVersion=null;load();},stop(){serial++;clearTimeout(timer);},refresh:()=>load(true),
+  window.InsightCollection={panel, mount(id,request){display={mode:savedMode(),metric:'bookings',month:''};selectedMonth='';serial++;clearTimeout(timer);companyId=id;api=request;view=null;renderedVersion=null;load();},stop(){serial++;clearTimeout(timer);},refresh:()=>load(true),
     correction(index,p){const r=view?.result, product=r?.products[Number(index)];if(!product)throw Error('수집 결과를 다시 열어 주세요.');const proposed={};if(p.total!=='')proposed.total=Number(p.total);if(p.productType!==product.productType)proposed.productType=p.productType;return {companyId,baseVersion:r.version,target:{runId:r.runId,productKey:product.key,date:p.date},proposed,reason:p.reason};}};
 })();

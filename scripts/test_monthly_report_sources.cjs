@@ -62,6 +62,9 @@ test("canonical IDs, merged IDs, ambiguous names, exact regions and strict sourc
   await fs.appendFile(historyFile, JSON.stringify({ ...common, stayDate: "2026-08-17", companyKey: "9999999", companyName: "고유숙소" }) + "\n");
   const strongId = await source.loadSources({ month: "2026-08", type: "company", targetId: "cmp_a" });
   assert.equal(strongId.observations.filter(row => row.companyKey === "cmp_a").length, 2, "unknown numeric provider ID must not fall back to a display name");
+  await fs.appendFile(historyFile, JSON.stringify({ ...common, stayDate: "2026-08-18", companyKey: "고유숙소", companyName: "고유숙소" }) + "\n");
+  const nameOnly = await source.loadSources({ month: "2026-08", type: "company", targetId: "cmp_a" });
+  assert.equal(nameOnly.observations.length, 2, "even a unique current display name cannot identify a historical row without a durable ID");
   await fs.writeFile(companyFile, "{bad");
   await assert.rejects(source.options(), error => error.code === "MONTHLY_SOURCE_UNAVAILABLE");
 });

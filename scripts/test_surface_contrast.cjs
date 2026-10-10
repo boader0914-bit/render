@@ -1368,7 +1368,7 @@ assert(
 
 assert(
   collectorUi.includes('"숙박 시작일"') && collectorUi.includes('"숙박 종료일 · 포함"')
-    && collectorUi.includes('"수집 실행일"') && collectorUi.includes('"실행 시각 · 한국시간"'),
+    && collectorUi.includes('"수집 실행일"') && collectorUi.includes('"첫 키워드 시각 · 한국시간"'),
   "worker cards must distinguish inclusive lodging dates from scheduled execution dates",
   failures
 );

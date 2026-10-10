@@ -13,12 +13,13 @@ async function readJson(file, fallback) {
   catch (error) { if (error.code === "ENOENT") return fallback; throw sourceError(); }
 }
 
-function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null }) {
+function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepareCompanies = null, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null }) {
   const companyFile = path.join(dataDir, "company_master", "companies.json");
   const historyFile = path.join(dataDir, "history", "observations.jsonl");
   async function catalog() {
     const [master, regionMaster, runs] = await Promise.all([readJson(companyFile, { companies: {} }), readJson(regionMasterFile, { units: [] }), listRuns()]);
     if (!master.companies || typeof master.companies !== "object" || Array.isArray(master.companies)) throw sourceError();
+    if (prepareCompanies) master.companies = await prepareCompanies(master.companies, { runs });
     const units = (regionMaster.units || []).filter(unit => unit.active && unit.selectable && ["local", "broad"].includes(unit.level));
     const idIndex = new Map(units.flatMap(unit => [unit.regionKey, unit.regionId].filter(Boolean).map(key => [key, unit])));
     const aliases = units.flatMap(unit => [...new Set([unit.fullName, unit.name, ...(unit.aliases || [])].map(token).filter(Boolean))].map(alias => ({ alias, unit })));
@@ -54,7 +55,8 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, proje
         regionKey: region?.regionKey || "", regionKeys: [...new Set([region?.regionKey, region?.provinceRegionKey].filter(Boolean))],
         regionLabel: region?.fullName || "지역 확인 전", keywords: Object.values(company.keywords || {}).map(item => item.keyword).filter(Boolean),
         placeIds: [...new Set((company.placeIds || []).map(value => String(value).trim()).filter(Boolean))],
-        capacity: capacityForCompany(company), capacitySource: company.manualCorrection ? "DB 검토값 우선 · 저장 관측 기준" : "최대 관측 객실 수" };
+        capacity: capacityForCompany(company), capacityBasis: company._integratedCapacity || null,
+        capacitySource: company._integratedCapacity?.label || (company.manualCorrection ? "DB 검토값 우선 · 저장 관측 기준" : "최대 관측 객실 수") };
     });
     return { companies, rawCompanies, runs, regions: units.map(unit => ({ id: unit.regionKey, label: unit.fullName || unit.name, level: unit.level })) };
   }
@@ -102,15 +104,8 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, proje
         }
       }
     }
-    const names = new Map();
     for (const company of data.rawCompanies.values()) {
       for (const prior of company.duplicateNotes || []) if (prior.mergedCompanyId) ids.set(token(prior.mergedCompanyId), company.companyId);
-      for (const name of [company.primaryName, ...(company.aliases || [])]) {
-        const key = token(name);
-        if (!key) continue;
-        if (!names.has(key)) names.set(key, company.companyId);
-        else if (names.get(key) !== company.companyId) names.set(key, null);
-      }
     }
     function canonical(row, allowConflicting = false) {
       const key = token(row.companyKey || row.companyId);
@@ -119,8 +114,9 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, proje
       if (place) return places.get(place) || null;
       if (/^\d+$/.test(key)) return places.get(key) || null;
       if (key.startsWith("cmp_")) return null;
-      const byName = names.get(key) || names.get(token(row.companyName)) || null;
-      return !allowConflicting && conflictingCompanyIds.has(byName) ? null : byName;
+      // Names are display fields, not identity. A matching name alone cannot
+      // safely merge an old row into a reviewed company's historical totals.
+      return null;
     }
     const observations = new Map();
     const diagnosticInventoryRows = [], unmatchedRows = [];

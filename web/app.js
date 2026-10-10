@@ -2788,6 +2788,7 @@ function setAdminPanelSection(sectionKey = "overview", options = {}) {
     }, 80);
   }
   syncRegionalReportPreparation();
+  if (window.CompanyIntegrated) syncCompanyIntegratedPanel();
 }
 
 function syncAdminSectionPanels() {
@@ -25163,6 +25164,7 @@ function adminDbCompanyReferenceDashboardHtml(row = {}, detail = {}, maintenance
         ${adminDbReferenceBasicsCard(row, detail, model)}
         ${adminDbReferenceChannelsCard(row)}
       </div>
+      <div data-company-integrated data-company-id="${escapeHtml(row.company?.companyId || "")}" data-company-name="${escapeHtml(row.company?.primaryName || "")}"></div>
       ${adminDbReferenceCurrentSection(row, model)}
       ${adminDbReferenceHistorySection(row, detail, model, maintenanceHtml)}
     </div>
@@ -26639,8 +26641,22 @@ function scheduleAdminRegionCompanyQueryRender(input, delay = 120) {
   }, delay);
 }
 
+function syncCompanyIntegratedPanel() {
+  const board = els.adminDatabaseDashboard;
+  if (!board) return;
+  if (!isAdminRole() || state.activeTab !== "admin" || state.adminPanelSection !== "database") {
+    window.CompanyIntegrated?.disposeWithin(board);
+    return;
+  }
+  for (const container of board.querySelectorAll("[data-company-integrated]")) {
+    const companyId = container.dataset.companyId;
+    if (companyId) window.CompanyIntegrated?.show(container, { companyId, companyName: container.dataset.companyName });
+  }
+}
+
 function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   if (!isAdminRole() || !els.adminDatabaseDashboard) return;
+  window.CompanyIntegrated?.disposeWithin(els.adminDatabaseDashboard);
   if (master.error) {
     els.adminDatabaseDashboard.innerHTML = `<div class="admin-console-empty">업체 관리 로딩 실패: ${escapeHtml(master.error)}</div>`;
     return;
@@ -26738,6 +26754,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
     </section>
   `;
   bindAdminDbCompanySelectButtons();
+  if (window.CompanyIntegrated) syncCompanyIntegratedPanel();
   applyPendingCompanyEdit();
   renderAdminRegionAnalysisDashboard(master);
 }
@@ -36714,6 +36731,7 @@ function setActiveTab(tab, options = {}) {
   state.analysisNavigationSequence = (state.analysisNavigationSequence || 0) + 1;
   state.activeTab = roleAllowsTab(tab) ? tab : firstRoleTab();
   if (state.activeTab !== "admin") window.RegionalReportPreparation?.pause();
+  if (window.CompanyIntegrated) syncCompanyIntegratedPanel();
   if (options.analysisRegionSelection !== undefined) {
     const selection = options.analysisRegionSelection;
     setAnalysisRegion(selection?.regionKey || "", {
@@ -41832,8 +41850,9 @@ function bindEvents() {
       event.preventDefault();
       const type = monthlyReportShortcut.dataset.monthlyReportContext;
       const targetId = monthlyReportShortcut.dataset.monthlyReportTarget || (type === "region" ? selectedAnalysisRegion()?.regionKey || "" : "");
+      const month = monthlyReportShortcut.dataset.monthlyReportMonth || "";
       closeSheet();
-      setActiveTab("monthlyReports", { monthlyReportContext: { type, targetId } });
+      setActiveTab("monthlyReports", { monthlyReportContext: { type, targetId, ...(month ? { month } : {}) } });
       return;
     }
     const shortcut = event.target.closest?.("[data-company-edit-shortcut]");

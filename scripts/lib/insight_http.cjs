@@ -27,13 +27,16 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
       registrationAllowance:{ownLimit:unlimited?null:1,competitorLimit:unlimited?null:customer.entitlements.competitorLimit,interestRegionLimit:unlimited?null:customer.entitlements.interestRegionLimit},
       preparations: store.requests(customer.customerId), collectionAllowance:store.collectionAllowance(customer.customerId), features: { weeklyReports: false, reportDelivery: false, directCollection: Boolean(preparationBridge && collectionResults), dataPreparationRequests: true } };
   }
-  async function companyCollection(c, companyId) {
+  async function companyCollection(c, companyId, month) {
     if (!store.hasCompany(c,companyId) || !collectionResults) throw fault('NOT_FOUND','등록한 업체의 결과를 찾을 수 없습니다.',404);
+    // Polling remains available (10-second interval), but changing an arbitrary
+    // month cannot issue unbounded expensive source reads for a customer.
+    store.throttle(`company-read:${c.customerId}`,240);
     if (preparationBridge) await preparationBridge.refresh(c.customerId);
     const request = store.requests(c.customerId).find(row => row.companyId===companyId) || null;
     // A customer's previous request must not pin the shared company DB to an old run.
+    const companyDetail=await collectionResults.companyDetail?.(companyId, { month }) || null;
     const result = await collectionResults.read(companyId);
-    const companyDetail=await collectionResults.companyDetail?.(companyId) || null;
     return {request,result,companyDetail,collectionAllowance:store.collectionAllowance(c.customerId),previousResult:Boolean(result && request && result.runId!==request.runId)};
   }
   async function customerRequest(req, res, url, tail, c, token, context = {}) {
@@ -63,8 +66,10 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
         json(res,200,await analysis.briefing(c,url.searchParams.get('ownId')||undefined));
       }
       else if (req.method === 'GET' && /^\/companies\/[a-zA-Z0-9_-]+\/collection$/.test(tail)) {
-        if (url.search) throw fault('INVALID_FIELDS','결과는 등록 업체의 저장 이력에서 선택합니다.');
-        json(res,200,await companyCollection(c,tail.split('/')[2]));
+        if ([...url.searchParams.keys()].some(key => key !== 'month') || url.searchParams.getAll('month').length > 1) throw fault('INVALID_FIELDS','조회할 숙박월만 지정해 주세요.');
+        const month = url.searchParams.get('month') || undefined;
+        if (url.searchParams.has('month') && !/^20\d{2}-(0[1-9]|1[0-2])$/.test(month || '')) throw fault('INVALID_MONTH','숙박월 형식을 확인해 주세요.');
+        json(res,200,await companyCollection(c,tail.split('/')[2],month));
       }
       else if (!context.view && req.method === 'POST' && tail === '/auth/logout') { store.logout(token); json(res, 200, { ok: true }); }
       else if (req.method === 'GET' && ['/catalog/companies', '/catalog/regions'].includes(tail)) {

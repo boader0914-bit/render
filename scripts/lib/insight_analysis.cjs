@@ -99,9 +99,20 @@ function createInsightAnalysis({catalog,collectionResults,readRegionContext,regi
     const companies=[];
     for(const rel of rels.filter(r=>r.kind==='competitor'||r.companyId===ownId)) {
       const c=data.companies.find(c=>c.companyId===rel.companyId);if(!c)continue;
-      let detail=null,unavailable=false;try{detail=await collectionResults?.companyDetail(c.companyId);}catch{unavailable=true;}
+      let detail=null,unavailable=false,sourceDays=[];
+      try {
+        const startMonth=today().slice(0,7),endMonth=shift(today(),29).slice(0,7);
+        detail=await collectionResults?.companyDetail(c.companyId,{month:startMonth});
+        sourceDays=detail?.current?.daily||[];
+        if(detail?.integrated&&!detail.legacyObservationView&&endMonth!==startMonth){
+          const next=await collectionResults?.companyDetail(c.companyId,{month:endMonth});
+          sourceDays=[...sourceDays,...(next?.current?.daily||[])];
+          unavailable=!next?.integrated?.snapshot;
+        }
+        if(detail?.integrated&&!detail.legacyObservationView&&!detail.integrated.snapshot)unavailable=true;
+      } catch {unavailable=true;}
       companies.push({companyId:c.companyId,name:c.name,rooms:c.rooms,regionKey:c.regionKey,kind:rel.kind,relationStatus:rel.status,unavailable,
-        days:(detail?.current?.daily||[]).filter(d=>d.date>=today()&&d.date<=shift(today(),29))});
+        days:sourceDays.filter(d=>d.date>=today()&&d.date<=shift(today(),29))});
     }
     const regions=[],keys=new Set(customer.regions.filter(active).map(r=>r.regionKey));
     const selectedOwn=companies.find(c=>c.kind==='own'&&c.companyId===ownId&&c.relationStatus==='active');

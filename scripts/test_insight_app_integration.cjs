@@ -52,7 +52,13 @@ test('real DataLab registration records the actual Insight consent, exposes cust
   assert.equal(JSON.stringify(linkedState).includes('private-fixture'),false);
   const rawFile=path.join(dir,'outputs',fixture.runId,'fixture_glamping_crawl_test.csv'), rawBefore=await fs.readFile(rawFile,'utf8');
   const evidenceReply=await internal('/companies/cmp_test/collection',null,customer.token);
-  assert.equal(evidenceReply.status,200);const evidence=await evidenceReply.json();
+  assert.equal(evidenceReply.status,200);let evidence=await evidenceReply.json();
+  for(let attempt=0;!evidence.companyDetail?.integrated?.snapshot&&attempt<40;attempt++){
+    await new Promise(resolve=>setTimeout(resolve,100));
+    const reply=await internal('/companies/cmp_test/collection?month='+fixture.today.slice(0,7),null,customer.token);
+    assert.equal(reply.status,200);evidence=await reply.json();
+  }
+  assert.ok(evidence.companyDetail?.integrated?.snapshot,'shared month integration becomes available without a new collection');
   assert.ok(evidence.result,'stored run is projected');assert.equal(evidence.result.rooms,16);assert.equal(evidence.result.products.length,2);
   assert.equal(evidence.result.products.find(p=>p.bizItemId==='fixture_b').days[0].total,6);
   assert.equal(evidence.result.products.find(p=>p.bizItemId==='fixture_b').original[0].total,7);
@@ -60,12 +66,10 @@ test('real DataLab registration records the actual Insight consent, exposes cust
   assert.equal(evidence.companyDetail.basics.rooms,16);assert.equal(evidence.companyDetail.basics.name,'검수 업체명');
   assert.equal(evidence.companyDetail.source,'company_db');assert.equal(JSON.stringify(evidence).includes('private-fixture'),false);
   assert.equal(evidence.collectionAllowance.remaining,1);
-  assert.equal(evidence.companyDetail.current.daily[0].collectedAt,fixture.stamp,'snapshot observation time remains attached to daily evidence');
-  const flow=evidence.companyDetail.history.observationFlow;
-  assert.equal(flow.reviewBasis,'current_db_review');
-  assert.equal(flow.periods.reduce((n,p)=>n+p.comparisonDates.length,0),30,'saved run evidence reaches the observation flow without a new collection');
-  assert.equal(flow.periods[0].points.length,1,'duplicate company names and keyword snapshots do not add observation points');
-  assert.equal(flow.periods[0].points[0].observedDate,fixture.today);
+  assert.equal(evidence.companyDetail.current.daily.find(row=>row.date===fixture.today).collectedAt,fixture.stamp,'snapshot observation time remains attached to daily evidence');
+  assert.deepEqual(evidence.companyDetail.current.summary,evidence.companyDetail.integrated.snapshot.summary,'Insight uses the shared month amounts without independently summing snapshots');
+  assert.equal(evidence.companyDetail.history.observationFlow,null,'legacy archive calculations cannot replace the shared monthly analysis');
+  assert.equal(evidence.companyDetail.integrated.snapshot.analysis.collectionDateCount,1,'duplicate company names and keyword snapshots do not add observation dates');
   const collection=await fetch(origin+'/api/insight/v1/commands',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json','X-Insight-Session':customer.token,'X-CSRF-Token':customer.csrfToken},body:JSON.stringify({action:'collect',revision:linkedState.customer.revision,requestKey:crypto.randomUUID(),payload:{companyId:'cmp_test',checkIn:fixture.today,bookingRangeDays:30,dayUseMode:'inspect'}})});
   const collected=await collection.json();assert.equal(collection.status,200);assert.equal(collected.preparations[0].status,'ready');assert.equal(collected.preparations[0].runId,fixture.runId);assert.equal(collected.preparations[0].reused,true);
   assert.equal(collected.collectionAllowance.remaining,0);

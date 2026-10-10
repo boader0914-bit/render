@@ -20,6 +20,9 @@ const { createSpecialDaysService } = require("./lib/special_days.cjs");
 const { createKosisService } = require("./lib/kosis.cjs");
 const { createMonthlyReportService } = require("./lib/monthly_reports.cjs");
 const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs");
+const { createCompanyIntegratedDb } = require("./lib/company_integrated_db.cjs");
+const { createCompanyIntegratedTargets } = require("./lib/company_integrated_targets.cjs");
+const { createCompanyCapacityRegistry } = require("./lib/company_capacity_registry.cjs");
 const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
 const { createMonthlyReportContext } = require("./lib/monthly_report_context.cjs");
 const { createMonthlyReportHttpHandler } = require("./lib/monthly_report_http.cjs");
@@ -385,11 +388,21 @@ const insightRegionPreparation=createRegionalReportPreparation({
   tourismCollector:Object.fromEntries(['collectVisitorHistory','collectDemandStrengthHistory','collectResourceDemandHistory','collectDiversityHistory']
     .map(method=>[method,input=>prepareRegionalTourismHistory(method,input)]))
 });
+const companyCapacityRegistry = createCompanyCapacityRegistry({
+  dataDir: DATA_DIR, observedCapacity: companyMaximumRoomCapacity,
+  reviewedCapacity: company => company.manualCorrection?.active === false ? null : manualCorrectionLodgingBasisTotal(company.manualCorrection)
+});
 const monthlyReportSources = createMonthlyReportSources({
   dataDir: DATA_DIR,
   regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
   listRuns,
-  projectObservation: companyHistoryObservationWithCurrentCapacity,
+  prepareCompanies: companyCapacityRegistry.prepareCompanies,
+  projectObservation: (row, company) => {
+    const value = companyHistoryObservationWithCurrentCapacity(row, company);
+    if (row.productType !== "lodging" || !company._integratedCapacity?.capacity) return value;
+    return { ...value, capacityBasis: { ...(value.capacityBasis || {}), count: company._integratedCapacity.capacity,
+      source: company._integratedCapacity.source, revision: company._integratedCapacity.revision } };
+  },
   capacityForCompany: company => manualCorrectionLodgingBasisTotal(company.manualCorrection) || companyMaximumRoomCapacity(company) || null,
   recalculateCompanyObservations: createMonthlyCompanyRecalculation({
     loadRun, applyCompanyManualCorrection, companyProductAvailabilityMatch, buildHistoryObservations
@@ -397,6 +410,17 @@ const monthlyReportSources = createMonthlyReportSources({
   readContext: readMonthlyRegionContext,
   readSpecialDays: async year => (await specialDaysService.status(year)).yearStatus
 });
+const listCompanyIntegratedTargets = createCompanyIntegratedTargets({ dataDir: DATA_DIR, catalog: monthlyReportSources.catalog });
+const companyIntegratedDb = createCompanyIntegratedDb({
+  dataDir: DATA_DIR, loadSources: monthlyReportSources.loadSources, catalog: monthlyReportSources.catalog,
+  listTargets: listCompanyIntegratedTargets
+});
+const integratedCompanySignatures = new Map();
+async function queueIntegratedCompanies(companyIds, reason) {
+  if (!companyIds.length) return;
+  try { await companyIntegratedDb.queueRun({ companyIds, reason }); }
+  catch (error) { console.error("company_integration_queue_failed", error.code || "unavailable"); }
+}
 const monthlyReportService = createMonthlyReportService({
   dataDir: path.join(DATA_DIR, "monthly_reports"), loadSources: monthlyReportSources.loadSources
 });
@@ -447,6 +471,7 @@ const insightIntegration = require('./lib/insight_integration.cjs').createInsigh
   authenticateMember: authenticateB2BMember, registerMember: (payload, insightConsent) => registerB2BMember(payload, { insightConsent }), checkUsername: checkSignupUsernameAvailability, policyContext: publicPageContext(), requireAdmin: requireAdminSession, collectorRequests,
   readEvidence: readInsightCompanyEvidence,
   readCompanyDetail: companyId => summarizeCompanyMasterDetail(companyId, { strictIdentity:true, includeObservationFlow:true }),
+  readIntegrated: (companyId, options = {}) => companyIntegratedDb.get(companyId, options),
   readRegionContext: readInsightRegionContext,
   regionPreparation:insightRegionPreparation,
   readRegionLocation: async regionKey => {
@@ -10296,6 +10321,14 @@ async function writeCompanyMaster(master) {
   const tempPath = `${COMPANY_MASTER_FILE}.${process.pid}.tmp`;
   await fsp.writeFile(tempPath, JSON.stringify(next, null, 2), "utf8");
   await fsp.rename(tempPath, COMPANY_MASTER_FILE);
+  const changed = [];
+  for (const company of Object.values(next.companies || {})) {
+    if (!company?.companyId || company.deletedAt || company.mergedIntoCompanyId) continue;
+    const signature = stableHash(JSON.stringify(company));
+    if (integratedCompanySignatures.get(company.companyId) !== signature) changed.push(company.companyId);
+    integratedCompanySignatures.set(company.companyId, signature);
+  }
+  await queueIntegratedCompanies(changed, "company_saved");
 }
 
 function companySourceKeys(entity = {}) {
@@ -15028,6 +15061,9 @@ async function appendHistoryForRunUnlocked(runId, options = {}) {
     "utf8"
   );
   const result = { appended: missing.length, observationCount: observations.length, file: "history/observations.jsonl", companyMaster: data.companyMaster || null };
+  // Publish derived views only after durable source history. Run reads used by
+  // the aggregation pass skip both company-master and history writes.
+  if (missing.length) await queueIntegratedCompanies([...new Set(observations.map(row => row.companyKey).filter(Boolean))], "observations_saved");
   if (masterDbDualWriteQueue.mode === "shadow") result.evidence = evidence;
   return result;
 }
@@ -18792,6 +18828,16 @@ async function route(req, res) {
       return send(res, 200, detail);
     }
 
+    if (req.method === "GET" && reqUrl.pathname === "/api/company-master/integrated") {
+      if (!requireAdminSession(session, req, res)) return;
+      const companyId = String(reqUrl.searchParams.get("companyId") || "").trim();
+      if (!companyId) return send(res, 400, { error: "companyId가 필요합니다." });
+      const options = { ...(reqUrl.searchParams.has("month") ? { month: reqUrl.searchParams.get("month") } : {}),
+        ...(reqUrl.searchParams.has("cutoffDate") ? { cutoffDate: reqUrl.searchParams.get("cutoffDate") } : {}) };
+      const result = await companyIntegratedDb.get(companyId, options);
+      return send(res, 200, result);
+    }
+
     if (req.method === "GET" && reqUrl.pathname === "/api/location-card-requests") {
       if (!requireAdminSession(session, req, res)) return;
       return send(res, 200, publicLocationCardRequests(await readLocationCardRequests()));
@@ -19418,6 +19464,7 @@ seedOutputsFromRepo()
     server.listen(PORT, HOST, () => {
       const primaryUrl = HOST === "0.0.0.0" ? `http://127.0.0.1:${PORT}` : `http://${HOST}:${PORT}`;
       console.log(`Lodging datalab beta app running at ${primaryUrl}`);
+      companyIntegratedDb.bootstrap().catch(error => console.error("company_integration_bootstrap_failed", error.code || "unavailable"));
       if (HOST === "0.0.0.0") {
         for (const url of localNetworkUrls()) console.log(`Mobile/LAN URL: ${url}`);
       }

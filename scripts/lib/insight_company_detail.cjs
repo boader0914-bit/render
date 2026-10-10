@@ -1,4 +1,5 @@
 'use strict';
+const { projectIntegrated } = require('./insight_company_integrated.cjs');
 // Explicit customer-facing fields from the same read model used by DataLab's company DB.
 const num = v => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null;
 const text = v => typeof v === 'string' ? v.slice(0,500) : '';
@@ -17,7 +18,7 @@ function daily(d) {
   return {date:date(d.date),collectedAt:stamp(d.collectedAt),collectedDate:date(d.collectedDate),missing:d.missing === true,partial:d.partial === true,revenuePartial:d.revenuePartial===true,inventoryConflict:d.inventoryConflict===true,
     ...Object.fromEntries(['total','sold','reservationRate','estimatedRevenue','publicBookings','phoneBookings','publicRevenue','phoneRevenue','sharedDayUseExcluded'].map(k=>[k,num(d[k])]))};
 }
-function projectCompanyDetail(company, detail) {
+function projectCompanyDetail(company, detail, options = {}) {
   if (!detail || detail.company?.companyId !== company.companyId) return null;
   const c = detail.company, naver = c.naverChannelObservation || {};
   const channels = [{key:'naver',label:'네이버',status:text(naver.status || 'unknown'),statusLabel:text(naver.statusLabel || '관측 기록 없음'),checkedAt:stamp(naver.observedAt),url:channelUrl(naver.evidenceUrl)
@@ -29,7 +30,7 @@ function projectCompanyDetail(company, detail) {
   }
   const history = detail.salesHistory || {};
   const rank = detail.rankTrend || {}, lead=detail.leadTime || {};
-  return {companyId:company.companyId,source:'company_db',basics:{name:company.name,address:company.address,rooms:num(company.rooms),roomCountSource:company.roomCountSource,
+  const result = {companyId:company.companyId,source:'company_db',basics:{name:company.name,address:company.address,rooms:num(company.rooms),roomCountSource:company.roomCountSource,
       facilities:company.facilities,lodgingTypes:(c.lodgingTypes || []).map(text),firstObservedAt:stamp(c.firstSeenAt),lastObservedAt:stamp(c.lastSeenAt),runCount:num(c.runCount)},
     channels,
     current:{summary:summary(history.current?.summary),daily:(history.current?.daily || []).map(daily)},
@@ -40,5 +41,24 @@ function projectCompanyDetail(company, detail) {
       performance:(detail.performanceTrend?.points || []).map(p=>({collectedAt:stamp(p.collectedAt),checkIn:date(p.checkIn),observedDays:num(p.observedDays),reservationRate:num(p.reservationRate),estimatedRevenue:num(p.estimatedRevenue),partial:p.partial===true})),
       leadTime:{status:text(lead.status || 'insufficient_observations'),label:text(lead.statusLabel || '동일 숙박일 2회 이상 관측 필요'),averageDays:num(lead.averageDays),medianDays:num(lead.medianDays),pickupCount:num(lead.pickupCount),collectedDateCount:num(lead.collectedDateCount),actualBookingLeadTime:false}}
   };
+  const integrated = projectIntegrated(company.companyId, options.integrated ?? detail.integrated, options.month);
+  result.integrated = integrated;
+  const connected = options.integrationConnected === true || Object.hasOwn(detail, 'integrated');
+  result.legacyObservationView = !connected;
+  if (connected) {
+    // Never substitute legacy archive values when the shared monthly model is unavailable.
+    result.current = integrated.snapshot ? { summary: integrated.snapshot.summary, daily: integrated.snapshot.daily } : { summary: null, daily: [] };
+    result.history.months = integrated.snapshot ? [{ month: integrated.selectedMonth, ...result.current }] : [];
+    const pickup = integrated.snapshot?.analysis?.pickup;
+    result.history.leadTime = { status: pickup?.status || 'insufficient_observations', label: '공개 예약 증가가 관측된 구간 · 실제 예약 접수 시각 아님', averageDays: pickup?.leadTime.averageDays ?? null, medianDays: pickup?.leadTime.medianDays ?? null, averageMinDays: pickup?.leadTime.averageMinDays ?? null, averageMaxDays: pickup?.leadTime.averageMaxDays ?? null, pickupCount: pickup?.increase ?? null, collectedDateCount: integrated.snapshot?.analysis?.collectionDateCount ?? null, actualBookingLeadTime: false };
+    if (integrated.roomBasis?.count != null) {
+      result.basics.rooms = integrated.roomBasis.count;
+      result.basics.roomCountSource = integrated.roomBasis.label || integrated.roomBasis.source;
+    }
+    // The shared snapshot supplies the selected month's pickup and pace. Keep the
+    // older, separately calculated observation-flow model out of this view.
+    result.history.observationFlow = null;
+  }
+  return result;
 }
 module.exports={projectCompanyDetail};

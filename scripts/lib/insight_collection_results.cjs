@@ -1,6 +1,6 @@
 'use strict';
 // Customer projection: one identified company, one stored run. Never expose raw files or other companies.
-const { hash } = require('./insight_store.cjs');
+const { hash, fault } = require('./insight_store.cjs');
 const { projectCompanyDetail } = require('./insight_company_detail.cjs');
 const number = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
 const text = (value, limit = 180) => String(value || '').slice(0, limit);
@@ -55,8 +55,14 @@ function projectCollection(company, evidence) {
     actualRevenueAvailable: false };
   return { ...result, version: hash(JSON.stringify([company.version, result])) };
 }
-function createCollectionResults({ catalog, readEvidence, readCompanyDetail }) {
-  const readingDetails = new Map();
+function createCollectionResults({ catalog, readEvidence, readCompanyDetail, readIntegrated }) {
+  const readingDetails = new Map(), readingSources = new Map();
+  async function sourceDetail(companyId) {
+    if (readingSources.has(companyId)) return readingSources.get(companyId);
+    const pending = Promise.resolve().then(() => readCompanyDetail(companyId));
+    readingSources.set(companyId,pending);
+    try { return await pending; } finally { if(readingSources.get(companyId)===pending)readingSources.delete(companyId); }
+  }
   async function read(companyId, runId = null) {
     const company = (await catalog()).companies.find(row => row.companyId === companyId);
     if (!company) return null;
@@ -66,15 +72,27 @@ function createCollectionResults({ catalog, readEvidence, readCompanyDetail }) {
     const evidence = await readEvidence(companyId, { scope, observationDay });
     return evidence?.run?.id || null;
   }
-  async function companyDetail(companyId) {
+  async function companyDetail(companyId, { month } = {}) {
     if (!readCompanyDetail) return null;
-    if (readingDetails.has(companyId)) return readingDetails.get(companyId);
+    const key = JSON.stringify([companyId, month || '']);
+    if (readingDetails.has(key)) return readingDetails.get(key);
     const pending=(async()=>{
       const company=(await catalog()).companies.find(c=>c.companyId===companyId);
-      return company ? projectCompanyDetail(company,await readCompanyDetail(companyId)) : null;
+      if (!company) return null;
+      let integrated;
+      if (readIntegrated) {
+        try { integrated = await readIntegrated(companyId, { month, knownMonthsOnly:true }); }
+        catch (error) {
+          if (['MONTH_NOT_OBSERVED','month_not_observed'].includes(error.code)) throw fault('MONTH_NOT_OBSERVED','수집 이력이 있는 숙박월 또는 이번 달을 선택해 주세요.',400);
+          throw error;
+        }
+      }
+      const detail = await sourceDetail(companyId);
+      if (!readIntegrated) integrated=detail?.integrated;
+      return projectCompanyDetail(company, detail, { integrated, month, integrationConnected: Boolean(readIntegrated) });
     })();
-    readingDetails.set(companyId,pending);
-    try { return await pending; } finally { if(readingDetails.get(companyId)===pending)readingDetails.delete(companyId); }
+    readingDetails.set(key,pending);
+    try { return await pending; } finally { if(readingDetails.get(key)===pending)readingDetails.delete(key); }
   }
   return { read, reusable, companyDetail };
 }
