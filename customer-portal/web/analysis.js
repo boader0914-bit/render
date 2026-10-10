@@ -52,7 +52,15 @@
     const relations=viewState.customer.relations.filter(r=>['active','pending'].includes(r.status)&&(r.kind==='competitor'||r.companyId===params.ownId)),entries=[];
     for(const rel of relations){if(id!==seq)return null;const company=viewState.companies.find(c=>c.companyId===rel.companyId);if(!company)continue;
       const slot=document.querySelector('#analysis-output');if(slot)slot.textContent=`저장 이력을 확인합니다. ${entries.length+1}/${relations.length}개 업체`;
-      try{const result=await saved(`/companies/${encodeURIComponent(company.companyId)}/collection`);entries.push({...company,kind:rel.kind,detail:result.companyDetail});}
+      try{
+        const months=[...new Set([period.start.slice(0,7),period.end.slice(0,7)])],details=[];let unavailable=false;
+        for(const month of months){
+          try{const result=await saved(`/companies/${encodeURIComponent(company.companyId)}/collection?month=${encodeURIComponent(month)}`);if(result.companyDetail)details.push(result.companyDetail);}
+          catch(e){if(e.status===401)throw e;unavailable=true;}
+        }
+        const detail=details[0];
+        entries.push({...company,kind:rel.kind,unavailable:unavailable||!detail,detail:detail?{...detail,history:{...detail.history,months:details.flatMap(d=>d.history?.months||[])},current:{...detail.current,daily:details.flatMap(d=>d.current?.daily||[])}}:null});
+      }
       catch(e){if(e.status===401)throw e;entries.push({...company,kind:rel.kind,unavailable:true});}
     }
     const regions=[],month=period.end.slice(0,7)>prior()?prior():period.end.slice(0,7);

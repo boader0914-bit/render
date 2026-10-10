@@ -32,9 +32,14 @@
     const revenue=money('estimatedRevenue');
     return {days:rows.length,revenueDays:priced.length,supply,sold,publicBookings,phoneBookings,publicRevenue:money('publicRevenue'),phoneRevenue:money('phoneRevenue'),estimatedRevenue:revenue,reservationRate:supply>0?sold/supply:null,averageRate:sold>0&&revenue!==null?revenue/sold:null};
   }
+  function sharedMonthlySummary(detail,period) {
+    const model=detail?.integrated,s=model?.snapshot?.summary;
+    if(detail?.legacyObservationView||!s||period.type!=='monthly'||model.selectedMonth!==period.start.slice(0,7)||s.rangeStart!==period.start||s.rangeEnd!==period.end)return null;
+    return {days:s.observedDays,revenueDays:s.revenueObservedDays,supply:s.supply,sold:s.sold,publicBookings:s.publicBookings,phoneBookings:s.phoneBookings,publicRevenue:s.publicRevenue,phoneRevenue:s.phoneRevenue,estimatedRevenue:s.estimatedRevenue,reservationRate:s.reservationRate,averageRate:model.snapshot.analysis?.pricing?.estimatedPerSoldUnit??null,source:'company_db_integrated',partial:s.quantityPartial===true,revenuePartial:s.revenuePartial===true};
+  }
   function build(entries,period,{ownId,generatedAt=new Date().toISOString(),regions=[]}={}) {
     const unique=new Map();for(const e of entries)if(!unique.has(e.companyId)||e.kind==='own')unique.set(e.companyId,e);
-    const companies=[...unique.values()].map(e=>{const days=selectDays(e.detail,period);return {...e,detail:undefined,days,summary:totals(days),lastObservedAt:days.map(d=>d.collectedAt).filter(Boolean).sort().at(-1)||null};});
+    const companies=[...unique.values()].map(e=>{const days=selectDays(e.detail,period);return {...e,detail:undefined,days,summary:sharedMonthlySummary(e.detail,period)||totals(days),lastObservedAt:days.map(d=>d.collectedAt).filter(Boolean).sort().at(-1)||null};});
     const own=companies.find(c=>c.kind==='own'&&c.companyId===ownId);
     const comparisons=own?companies.filter(c=>c.kind==='competitor').map(c=>{
       const map=new Map(c.days.filter(valid).map(d=>[d.date,d]));

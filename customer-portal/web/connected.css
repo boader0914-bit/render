@@ -85,3 +85,5 @@ html[data-theme=dark] .connected-app input[data-company-day]{color-scheme:dark}
   body.connected-app a{display:none!important}body.connected-app .muted{font-size:10pt!important}body.connected-app svg{max-width:100%}
   @page{size:A4;margin:16mm}
 }
+
+.connected-app .company-integration-toolbar{display:flex;align-items:end;gap:16px;flex-wrap:wrap;padding:16px 0}.connected-app .company-integration-toolbar .field{min-width:180px;max-width:280px}.connected-app .company-integration-toolbar p{margin:0 0 12px}@media(max-width:760px){.connected-app .company-integration-toolbar .field{max-width:none;flex:1}}
