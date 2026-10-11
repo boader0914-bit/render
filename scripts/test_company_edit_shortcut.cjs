@@ -10,7 +10,8 @@ const names = [
   "escapeHtml", "adminDbCompanyHash", "adminDbCompanyDetailUrl", "adminDbCompanyIdFromRoute",
   "adminDbCompanyIdFromHash", "setAdminDbCompanyRoute", "adminDbCompanyUseNativeLink",
   "companyEditShortcutId", "companyEditShortcutUrl", "companyEditShortcutHtml",
-  "renderSheetCompanyEditShortcut", "openCompanyEditorFromShortcut", "applyPendingCompanyEdit"
+  "renderSheetCompanyEditShortcut", "openCompanyEditorFromShortcut", "applyPendingCompanyEdit",
+  "syncAdminDbReviewNavigation", "openAdminDbReviewFold", "handleAdminDbReviewToggle"
 ];
 const declarations = names.map((name) => {
   const declaration = source.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^}`, "m"))?.[0];
@@ -22,9 +23,19 @@ function fixture() {
   let url = new URL("https://example.invalid/admin?adminCompany=old#admin-db-company=old");
   const trace = [];
   const panels = ["old", "target"].map((companyId) => {
-    const maintenance = { open: false };
+    const maintenance = { open: false, dataset: { adminDbReviewCompany: companyId } };
+    const nav = ["profile", "correction", "channel", "collect", "review"].map((key) => {
+      const attributes = {};
+      return {
+        dataset: { adminDbOpenFold: key }, active: false,
+        classList: { toggle(_name, active) { this.button.active = active; }, button: null },
+        setAttribute: (name, value) => { attributes[name] = value; },
+        getAttribute: (name) => attributes[name]
+      };
+    });
+    nav.forEach((button) => { button.classList.button = button; });
     const folds = ["profile", "correction"].map((key) => ({
-      key, open: false, isConnected: true,
+      key, dataset: { adminDbFold: key }, open: false, isConnected: true,
       input: {
         focus: () => trace.push(`focus:${companyId}:${key}`),
         scrollIntoView: (options) => {
@@ -37,8 +48,9 @@ function fixture() {
       scrollIntoView: () => trace.push(`scroll:${companyId}:${key}`),
       querySelector() { return this.input; }
     }));
+    maintenance.querySelectorAll = (selector) => selector.includes("admin-db-detail-tabs") ? nav : folds;
     return {
-      dataset: { adminDbSelectedCompany: companyId }, maintenance, folds,
+      dataset: { adminDbSelectedCompany: companyId }, maintenance, folds, nav,
       querySelector: (selector) => folds.find((fold) => selector.includes(`="${fold.key}"`)),
       querySelectorAll: () => folds
     };
@@ -201,6 +213,8 @@ function hashRouteFixture({ activeTab = "admin", section = "overview", editing =
   assert.equal(context.panels[0].maintenance.open, false, "Never open another company's editor");
   assert.equal(context.panels[1].maintenance.open, true);
   assert.equal(context.panels[1].folds[1].open, true);
+  assert.deepEqual(context.panels[1].nav.filter((button) => button.active).map((button) => button.dataset.adminDbOpenFold), ["correction"], "The edit shortcut selects its opened review menu");
+  assert.equal(context.panels[1].nav[1].getAttribute("aria-pressed"), "true", "The edit shortcut exposes its selected menu to assistive technology");
   assert(context.trace.includes("focus:target:correction"));
   assert(context.trace.includes("scroll-input:target:correction"), "Reveal the input itself even when the editor summary is much higher on the page");
   assert.equal(context.applyPendingCompanyEdit(), false, "Later redraws must not steal focus or reopen tools");

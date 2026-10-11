@@ -406,7 +406,26 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
   const pendingSources = new Map();
   let sourceReadQueue = Promise.resolve(), sourceEpoch = 0, optionsTask = null, backgroundOptions = Promise.resolve();
   let optionsRefreshTimer = null, finishOptionsRefresh = null, serviceStopped = false;
-  function clearSources() { sourceEpoch++; sourceCache.clear(); }
+  let sourceExpiryTimer = null, sourceCacheGeneration = 0;
+  function releaseCompletedSources() {
+    sourceCacheGeneration++;
+    if (sourceExpiryTimer) clearTimeout(sourceExpiryTimer);
+    sourceExpiryTimer = null;
+    sourceCache.clear();
+  }
+  function scheduleSourceExpiry() {
+    // This separate scope captures only the generation, never the full source
+    // or the adapter's catalog. Expire idle data even if the next read belongs
+    // to a different engine, which cannot trigger this service's lazy expiry.
+    const generation = sourceCacheGeneration;
+    sourceExpiryTimer = setTimeout(() => {
+      if (generation !== sourceCacheGeneration) return;
+      sourceExpiryTimer = null;
+      sourceCache.clear();
+    }, 30000);
+    sourceExpiryTimer.unref?.();
+  }
+  function clearSources() { sourceEpoch++; releaseCompletedSources(); }
   function reusableSource(key, date) {
     // Keep expired entries out of an async reader's locals while it awaits the
     // next adapter. Clearing the Map must release every completed-cache reference.
@@ -428,7 +447,7 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
       // release expired or different-month data before constructing its successor.
       const queuedCached = reusableSource(key, now());
       if (queuedCached) return queuedCached;
-      sourceCache.clear();
+      releaseCompletedSources();
       const sourceRequest = { type: "industry", targetId: "__industry_all__", month: request.month, cutoffDate: request.cutoffDate };
       let value;
       if (typeof sources.loadSourcesWithCatalog === "function") {
@@ -446,7 +465,10 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
       }
       // Publish before the queue advances, so its next reader can evict this
       // source before allocating another month. Invalidation cannot repopulate it.
-      if (epoch === sourceEpoch) sourceCache.set(key, { value, expires: new Date(now()).getTime() + 30000 });
+      if (epoch === sourceEpoch && !serviceStopped) {
+        sourceCache.set(key, { value, expires: new Date(now()).getTime() + 30000 });
+        scheduleSourceExpiry();
+      }
       return value;
     });
     sourceReadQueue = promise.then(() => undefined, () => undefined);
@@ -491,7 +513,8 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     return result;
   }
   if (!dataDir) return { options: calculateOptions, analyze: calculate, rebuild: calculate,
-    invalidate: async () => clearSources(), notifySourceChanged: async () => clearSources(), bootstrap: async () => {}, drain: async () => {}, stop: async () => {} };
+    invalidate: async () => clearSources(), notifySourceChanged: async () => clearSources(), bootstrap: async () => {}, drain: async () => {},
+    stop: async () => { serviceStopped = true; clearSources(); } };
   const defaultSourceRevision = async () => JSON.stringify(await Promise.all([
     "company_master/companies.json", "history/observations.jsonl"
   ].map(async filename => {
@@ -579,7 +602,7 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
   return { options, analyze, bootstrap, invalidate, notifySourceChanged,
     rebuild: async input => store.rebuild(await validatedRequest(input)),
     drain: async () => { if (optionsRefreshTimer) await refreshOptionsNow(); await backgroundOptions; if (optionsTask) await optionsTask; return store.drain(); },
-    stop: async () => { serviceStopped = true; if (optionsRefreshTimer) clearTimeout(optionsRefreshTimer); if (finishOptionsRefresh) finishOptionsRefresh();
+    stop: async () => { serviceStopped = true; clearSources(); if (optionsRefreshTimer) clearTimeout(optionsRefreshTimer); if (finishOptionsRefresh) finishOptionsRefresh();
       optionsRefreshTimer = null; finishOptionsRefresh = null; if (optionsTask) await optionsTask.catch(() => {}); return store.stop(); } };
 }
 

@@ -5,6 +5,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const os = require("node:os");
 const crypto = require("node:crypto");
+const { spawnSync } = require("node:child_process");
 const { createCompanyIntegratedDb } = require("./lib/company_integrated_db.cjs");
 
 const ID = "cmp_place_35644668";
@@ -15,6 +16,100 @@ const observation = (overrides = {}) => ({ companyId: ID, companyKey: ID, runId:
   supply: 16, sold: 2, publicBookings: 2, phoneBookings: 0, publicRevenue: 200000, phoneRevenue: 0, estimatedRevenue: 200000,
   partial: false, missing: false, unknownUnavailable: 0, phoneMissingPriceBookings: 0,
   sharedDayUseExcluded: 0, capacityBasis: { count: 16, source: "manual_review" }, ...overrides });
+
+function freezeFixture(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  if (value instanceof Map) for (const item of value.values()) freezeFixture(item);
+  else for (const item of Object.values(value)) freezeFixture(item);
+  return Object.freeze(value);
+}
+async function metadataRetentionChild(root, baseline) {
+  global.fetch = async () => { throw new Error("External requests forbidden in metadata retention test"); };
+  assert.equal(typeof global.gc, "function");
+  let createDb = createCompanyIntegratedDb;
+  if (baseline) {
+    // The control changes only the private projection back to its original
+    // full-catalog return. It must retain that catalog during source awaits.
+    const Module = require("node:module"), filename = path.join(__dirname, "lib/company_integrated_db.cjs");
+    const text = await fs.readFile(filename, "utf8");
+    const original = text.replace(/  async function activeCompany\(companyId\) \{[\s\S]+?(?=  async function targetsFor)/,
+      `  async function activeCompany(companyId) {
+    const data = await catalog();
+    const company = (data.companies || []).find(row => identity(row) === companyId);
+    const raw = data.rawCompanies instanceof Map ? data.rawCompanies.get(companyId) : data.rawCompanies?.[companyId];
+    if (!company || company.deletedAt || company.mergedIntoCompanyId || raw?.deletedAt || raw?.mergedIntoCompanyId) throw fault("company_not_found", 404);
+    return { company, raw, data };
+  }
+`);
+    assert.notEqual(original, text, "baseline control replaces only activeCompany");
+    const control = new Module(filename, module); control.filename = filename;
+    control.paths = Module._nodeModulePaths(path.dirname(filename)); control._compile(original, filename);
+    createDb = control.exports.createCompanyIntegratedDb;
+  }
+  const company = { companyId: ID, primaryName: "모의 글램핑", capacity: 16, capacitySource: "검수 기준" };
+  const sources = freezeFixture({ companies: [company], runs: [run("gyeongnam", "경남글램핑"), run("sancheong", "산청글램핑", "blocked")],
+    observations: [observation(), observation({ collectedAt: "2026-09-02T03:00:00Z", sold: 3, publicBookings: 3,
+      publicRevenue: 300000, estimatedRevenue: 300000 })], rankObservations: [], sourceDiagnostics: {},
+    context: { sources: [], networkAttempted: false } });
+  const originalSource = JSON.stringify(sources), references = [];
+  function catalog() {
+    const selectedInventory = { products: Array.from({ length: 128 }, (_, index) => ({ index, note: Buffer.alloc(4000, index + 1).toString("base64") })) };
+    const otherInventory = { products: Array.from({ length: 128 }, (_, index) => ({ index, note: Buffer.alloc(4000, index + 2).toString("base64") })) };
+    const runPayload = { products: Array.from({ length: 128 }, (_, index) => ({ index, note: Buffer.alloc(4000, index + 3).toString("base64") })) };
+    const raw = { companyId: ID, inventory: selectedInventory,
+      manualCorrection: { roomCount: 16, revision: 3 },
+      _integratedCapacity: { capacity: 16, source: "db_review", label: "검수 기준", revision: 3, observedMaximum: 17, warnings: ["객실 기준 검토"] },
+      keywords: { broad: { keyword: "경남글램핑", unusedInventory: selectedInventory,
+        runs: [{ runId: "gyeongnam", rank: 4, collectedAt: "2026-09-01T03:00:00Z", unusedPayload: runPayload }] },
+        local: { keyword: "산청글램핑", runs: [{ id: "sancheong", overallRank: 2, collectedAt: "2026-09-02T03:00:00Z" }] } } };
+    const quality = { status: "complete", originalProducts: runPayload };
+    const data = freezeFixture({ companies: [{ ...company, capacityBasis: raw._integratedCapacity, unusedInventory: selectedInventory }],
+      rawCompanies: new Map([[ID, raw], ["unrelated", { companyId: "unrelated", inventory: otherInventory }]]),
+      runs: [{ id: "gyeongnam", collectionQuality: quality, rawProducts: runPayload },
+        { runId: "sancheong", collectionQuality: { status: "blocked" }, rawProducts: runPayload }] });
+    for (const [name, object] of Object.entries({ catalog: data, rawCompanies: data.rawCompanies, selectedRaw: raw,
+      selectedInventory, unrelatedInventory: otherInventory, runPayload, quality })) references.push({ name, weak: new WeakRef(object) });
+    return data;
+  }
+  let markEntered, release, first = true;
+  const entered = new Promise(resolve => { markEntered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const service = createDb({ dataDir: path.join(root, baseline ? "metadata-control" : "metadata-compact"), autoStart: false,
+    now: () => new Date("2026-10-11T00:00:00Z"), catalog: async () => catalog(),
+    listTargets: async () => [{ companyId: ID, months: ["2026-09"] }],
+    loadSources: async () => { if (first) { first = false; markEntered(); await gate; } return sources; } });
+  let running;
+  try {
+    await service.queueCompany(ID, { months: ["2026-09"] });
+    running = service.drain(); await entered;
+    await new Promise(resolve => setImmediate(resolve)); global.gc();
+    const retained = references.filter(value => value.weak.deref() !== undefined).map(value => value.name);
+    if (baseline) assert.equal(retained.length, references.length, "control retains the complete catalog throughout materialization");
+    else assert.deepEqual(retained, [], "selected metadata cannot retain full catalogs, inventory or run payloads across source awaits");
+    release(); await running;
+    const result = await service.get(ID, { month: "2026-09" });
+    assert.equal(JSON.stringify(sources), originalSource, "source rows remain byte-for-byte unchanged");
+    assert.equal(result.snapshot.summary.lodging.sold, 3);
+    assert.equal(result.roomBasis.capacity, 16);
+    assert.deepEqual(result.keywords.map(value => [value.keyword, value.runs[0].runId, value.runs[0].rank, value.runs[0].status]),
+      [["경남글램핑", "gyeongnam", 4, "complete"], ["산청글램핑", "sancheong", 2, "blocked"]]);
+    const storedPath = path.join(root, baseline ? "metadata-control" : "metadata-compact", "company_integrated",
+      crypto.createHash("sha256").update(ID).digest("hex"), "2026-09.json");
+    const stored = JSON.parse(await fs.readFile(storedPath, "utf8"));
+    console.log(JSON.stringify({ result, stored, retainedDuringRead: retained }));
+  } finally { release(); if (running) await running; await service.stop(); }
+}
+function testMetadataRetention(root) {
+  const results = ["control", "compact"].map(mode => {
+    const child = spawnSync(process.execPath, ["--expose-gc", __filename, "--metadata-child", root, mode],
+      { encoding: "utf8", windowsHide: true, timeout: 30000, maxBuffer: 1024 * 1024 });
+    assert.equal(child.status, 0, child.stderr || child.error?.message);
+    return JSON.parse(child.stdout.trim());
+  });
+  assert.deepEqual(results[1].result, results[0].result, "compact metadata preserves complete output, source digest and calculation fields");
+  assert.deepEqual(results[1].stored, results[0].stored, "the durable snapshot and sourceDigest are unchanged by metadata projection");
+  console.log("company integrated metadata: full-catalog control retained 7 payloads; compact projection retained none with identical complete outputs");
+}
 
 async function testReadPriority(root) {
   const dataDir = path.join(root, "read-priority"), queueFile = path.join(dataDir, "company_integrated", "queue.json");
@@ -246,6 +341,7 @@ async function main() {
     assert.equal((await currentRestricted.get(ID, { month: "2026-10", knownMonthsOnly: true })).status, "refreshing", "newly registered company can initialize current month without observations");
     await currentRestricted.drain(); await currentRestricted.stop();
     await testReadPriority(root);
+    testMetadataRetention(root);
     console.log(`company integrated DB tests passed (${reads} source reads)`);
   } finally {
     await service.stop();
@@ -254,4 +350,6 @@ async function main() {
     await fs.rm(resolved, { recursive: true, force: true });
   }
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+const task = process.argv[2] === "--metadata-child"
+  ? metadataRetentionChild(process.argv[3], process.argv[4] === "control") : main();
+task.catch(error => { console.error(error); process.exitCode = 1; });

@@ -43,6 +43,19 @@ async function child(mode) {
   assert.equal(typeof global.gc, "function", "fixture process must use --expose-gc");
   const createService = loadService(mode), weakSources = [], reads = [], samples = [];
   let clock = new Date("2026-10-11T00:00:00Z");
+  const idleTimers = new Set(), timerHistory = [];
+  if (mode === "idle") {
+    const realSetTimeout = global.setTimeout, realClearTimeout = global.clearTimeout;
+    global.setTimeout = (callback, delay, ...args) => {
+      if (delay !== 30000) return realSetTimeout(callback, delay, ...args);
+      const handle = { callback, unreferenced: false, unref() { this.unreferenced = true; return this; } };
+      idleTimers.add(handle); timerHistory.push(handle); return handle;
+    };
+    global.clearTimeout = handle => {
+      if (timerHistory.includes(handle)) idleTimers.delete(handle);
+      else realClearTimeout(handle);
+    };
+  }
   function memory(label) {
     const value = process.memoryUsage();
     samples.push({ label, heapMiB: Math.round(value.heapUsed / 1024 / 1024 * 10) / 10,
@@ -141,7 +154,31 @@ async function child(mode) {
   assert.deepEqual(stableResult(reopened), original, "reloading released sources preserves every numerical and source field");
   assert.deepEqual(reads, ["2026-09", "2026-09", "2026-10", "2026-09"]);
   unchangedSource(); memory("reopened-first-month");
+  if (mode === "idle") {
+    assert.equal(idleTimers.size, 1, "replaced sources cancel old expiry timers");
+    assert.ok(timerHistory.every(timer => timer.unreferenced), "source timers must not keep the server process alive");
+    timerHistory[0].callback();
+    unchangedSource();
+    assert.equal(idleTimers.size, 1, "stale callbacks cannot evict the current source");
+    clock = new Date(clock.getTime() + 31000);
+    for (const timer of idleTimers) timer.callback();
+    idleTimers.clear();
+    // No industry read occurs between idle expiration and the other engine's
+    // allocation. Lazy-only expiry would retain the last full observation set.
+    await new Promise(resolve => setImmediate(resolve)); global.gc();
+    assert.ok(weakSources.every(source => source.rows.deref() === undefined), "idle TTL must release rows without a subsequent industry request");
+    memory("idle-expired-before-company-read");
+    const independentCompanySource = pair("2026-10");
+    assert.equal(digestRows(independentCompanySource.source.observations), weakSources.at(-1).digest);
+    memory("independent-company-source-allocation");
+    assert.equal(reads.length, 4, "independent engine allocation is not an industry reload");
+  }
   await service.stop();
+  if (mode === "current") {
+    await new Promise(resolve => setImmediate(resolve)); global.gc();
+    assert.ok(weakSources.every(source => source.rows.deref() === undefined), "stop must release completed full-source references");
+  }
+  if (mode === "idle") assert.equal(idleTimers.size, 0, "stop leaves no source timer behind");
   console.log(JSON.stringify({ status: "passed", mode, heapLimitMiB: Math.round(v8.getHeapStatistics().heap_size_limit / 1024 / 1024),
     observationsPerRead: RUN_COUNT * 20 * DAYS_PER_RUN, companyCount: COMPANY_COUNT,
     peakRssMiB: Math.round(process.resourceUsage().maxRSS / 1024), samples }));
@@ -173,6 +210,8 @@ async function main() {
   }
   const current = runChild("current");
   assert.equal(current.status, 0, "current cache must pass bounded-heap and source-retention checks");
-  console.log("Industry memory fixture passed: same-month regional reuse, expired/new-month release, unchanged input hashes and exact reloaded outputs.");
+  const idle = runChild("idle");
+  assert.equal(idle.status, 0, "idle expiry must release full sources before another engine allocates");
+  console.log("Industry memory fixture passed: regional reuse, idle and replacement release, unchanged hashes and exact outputs.");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

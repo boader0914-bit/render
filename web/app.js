@@ -78,6 +78,7 @@ const state = {
   adminDbListPage: 1,
   adminDbListPageKey: "",
   adminDbSelectedCompanyId: "",
+  adminDbReviewUi: {},
   adminDbCompanyDetails: {},
   adminDbCompanyDetailLoading: {},
   adminDbRankKeywordByCompany: {},
@@ -18185,7 +18186,7 @@ function companyReviewActionsHtml(company = {}, compact = false, source = "") {
       <input type="text" data-company-review-note value="${escapeHtml(note)}" placeholder="확인 채널, 재수집 범위, 수량/가격 메모">
       <div class="company-review-actions ${compact ? "compact" : ""}">
         ${actions.map(([status, label]) => `
-          <button type="button" class="${current === status ? "active" : ""}" data-company-review-action="${status}" data-company-id="${escapeHtml(companyId)}"${sourceAttr}>${label}</button>
+          <button type="button" class="${current === status ? "active" : ""}" aria-pressed="${current === status ? "true" : "false"}" data-company-review-action="${status}" data-company-id="${escapeHtml(companyId)}"${sourceAttr}>${label}</button>
         `).join("")}
         ${current ? `<button type="button" data-company-review-action="clear" data-company-id="${escapeHtml(companyId)}"${sourceAttr}>해제</button>` : ""}
       </div>
@@ -25222,10 +25223,53 @@ function adminDbSelectedDetailTabs(activeFold = "") {
   return `
     <div class="admin-db-detail-tabs" aria-label="업체 검토 메뉴">
       ${tabs.map(([key, label]) => `
-        <button type="button" class="${activeFold === key ? "active" : ""}" data-admin-db-open-fold="${escapeHtml(key)}">${escapeHtml(label)}</button>
+        <button type="button" class="${activeFold === key ? "active" : ""}" aria-pressed="${activeFold === key ? "true" : "false"}" data-admin-db-open-fold="${escapeHtml(key)}">${escapeHtml(label)}</button>
       `).join("")}
     </div>
   `;
+}
+
+function syncAdminDbReviewNavigation(maintenance) {
+  if (!maintenance) return;
+  const folds = Array.from(maintenance.querySelectorAll(".admin-db-selected-fold[data-admin-db-fold]"));
+  const activeFold = folds.find((fold) => fold.open)?.dataset.adminDbFold || "";
+  maintenance.querySelectorAll(".admin-db-detail-tabs [data-admin-db-open-fold]").forEach((button) => {
+    const active = button.dataset.adminDbOpenFold === activeFold;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  const companyId = maintenance.dataset.adminDbReviewCompany || "";
+  if (companyId) {
+    state.adminDbReviewUi = state.adminDbReviewUi || {};
+    state.adminDbReviewUi[companyId] = { expanded: maintenance.open, foldKey: activeFold };
+  }
+}
+
+function openAdminDbReviewFold(target) {
+  const maintenance = target?.closest(".admin-company-maintenance");
+  if (!maintenance) return false;
+  maintenance.open = true;
+  maintenance.querySelectorAll(".admin-db-selected-fold[data-admin-db-fold]").forEach((fold) => {
+    fold.open = fold === target;
+  });
+  target.open = true;
+  syncAdminDbReviewNavigation(maintenance);
+  return true;
+}
+
+function handleAdminDbReviewToggle(event) {
+  const element = event.target;
+  if (!element?.isConnected) return;
+  const isFold = element.matches?.(".admin-db-selected-fold[data-admin-db-fold]");
+  const maintenance = element.matches?.(".admin-company-maintenance")
+    ? element : (isFold ? element.closest(".admin-company-maintenance") : null);
+  if (!maintenance) return;
+  if (isFold && element.open) {
+    maintenance.querySelectorAll(".admin-db-selected-fold[data-admin-db-fold]").forEach((fold) => {
+      if (fold !== element) fold.open = false;
+    });
+  }
+  syncAdminDbReviewNavigation(maintenance);
 }
 
 function adminDbWorkPriority(row = {}) {
@@ -26151,14 +26195,17 @@ function adminDbSelectedRow(rows = []) {
 }
 
 function adminDbCompanyMaintenanceHtml({ company = {}, selectedId = "", nextAction = {}, profileBody = "", correctionBody = "", channelBody = "", collectBody = "", reviewBody = "" } = {}) {
+  const companyId = selectedId || company.companyId || "";
+  const reviewUi = state.adminDbReviewUi?.[companyId];
+  const activeFold = reviewUi ? reviewUi.foldKey : nextAction.foldKey;
   return `
-    <details class="admin-company-maintenance" data-ui-surface="card">
+    <details class="admin-company-maintenance" data-ui-surface="card" data-admin-db-review-company="${escapeHtml(companyId)}" ${reviewUi?.expanded ? "open" : ""}>
       <summary>
         <div><strong>검토·수정 도구</strong><small>기준값, 채널, 수집 근거, 검수 상태가 필요할 때만 엽니다.</small></div>
         <span>도구 열기</span>
       </summary>
       <section class="admin-db-selected-workbench" aria-label="검토와 수정">
-        ${adminDbSelectedDetailTabs(nextAction.foldKey)}
+        ${adminDbSelectedDetailTabs(activeFold)}
         ${adminDbReviewFlashHtml(selectedId)}
         <div class="admin-db-selected-workbench-stack">
           ${adminDbSelectedFoldBlock({
@@ -26166,7 +26213,7 @@ function adminDbCompanyMaintenanceHtml({ company = {}, selectedId = "", nextActi
             title: "업체명·주소·지역·업종",
             note: company.adminProfile ? "관리자 확정값 저장됨" : "확정 전",
             body: profileBody,
-            open: nextAction.foldKey === "profile",
+            open: activeFold === "profile",
             tone: "profile",
             foldKey: "profile"
           })}
@@ -26175,7 +26222,7 @@ function adminDbCompanyMaintenanceHtml({ company = {}, selectedId = "", nextActi
             title: "객실 총량·상품·가격 기준 수정",
             note: nextAction.foldKey === "correction" ? "먼저 처리" : "접어서 보관",
             body: correctionBody,
-            open: nextAction.foldKey === "correction",
+            open: activeFold === "correction",
             tone: "edit",
             foldKey: "correction"
           })}
@@ -26184,7 +26231,7 @@ function adminDbCompanyMaintenanceHtml({ company = {}, selectedId = "", nextActi
             title: "OTA 및 기타 보정",
             note: nextAction.foldKey === "channel" ? "먼저 처리" : "접어서 보관",
             body: channelBody,
-            open: nextAction.foldKey === "channel",
+            open: activeFold === "channel",
             tone: "channel",
             foldKey: "channel"
           })}
@@ -26193,7 +26240,7 @@ function adminDbCompanyMaintenanceHtml({ company = {}, selectedId = "", nextActi
             title: "요일별 예상매출·추정 예약율·수량 근거",
             note: nextAction.foldKey === "collect" ? "먼저 처리" : (collectBody ? "필요 시 실행" : "현재 추가 없음"),
             body: collectBody,
-            open: nextAction.foldKey === "collect",
+            open: activeFold === "collect",
             tone: "collect",
             foldKey: "collect"
           })}
@@ -26202,7 +26249,7 @@ function adminDbCompanyMaintenanceHtml({ company = {}, selectedId = "", nextActi
             title: "완료·보류·보정 필요 상태 저장",
             note: nextAction.foldKey === "review" ? "먼저 처리" : "최종 상태 저장",
             body: reviewBody,
-            open: nextAction.foldKey === "review",
+            open: activeFold === "review",
             tone: "review",
             foldKey: "review"
           })}
@@ -38225,9 +38272,7 @@ function applyPendingCompanyEdit() {
   const maintenance = fold?.closest(".admin-company-maintenance");
   if (!fold || !maintenance) return false;
   if (!state.adminDbEditTarget && state.adminDbHandledEditRoute === routeKey && state.adminDbHandledEditElement === fold) return false;
-  maintenance.open = true;
-  panel.querySelectorAll(".admin-db-selected-fold[data-admin-db-fold]").forEach((element) => { element.open = element === fold; });
-  fold.open = true;
+  openAdminDbReviewFold(fold);
   state.adminDbHandledEditRoute = routeKey;
   state.adminDbHandledEditElement = fold;
   state.adminDbEditTarget = null;
@@ -38910,9 +38955,7 @@ function focusAdminDbChannelEditor(companyId = "", channelKey = "", options = {}
   const selectedPanel = Array.from(document.querySelectorAll("[data-admin-db-selected-company]"))
     .find((panel) => panel.dataset.adminDbSelectedCompany === companyId);
   const fold = selectedPanel?.querySelector('.admin-db-selected-fold[data-admin-db-fold="channel"]');
-  const maintenance = fold?.closest(".admin-company-maintenance");
-  if (maintenance) maintenance.open = true;
-  if (fold) fold.open = true;
+  if (fold) openAdminDbReviewFold(fold);
   const form = Array.from(selectedPanel?.querySelectorAll("[data-company-channel-form]") || [])
     .find((entry) => entry.dataset.channelKey === channelKey);
   if (form && options.openEntry !== false) {
@@ -41834,6 +41877,7 @@ function bindAdminDbCompanySelectButtons() {
 }
 
 function bindEvents() {
+  document.addEventListener("toggle", handleAdminDbReviewToggle, true);
   document.addEventListener("error", (event) => {
     const image = event.target?.closest?.("img[data-channel-brand-icon]");
     if (!image) return;
@@ -42654,12 +42698,7 @@ function bindEvents() {
       const folds = Array.from(document.querySelectorAll(".admin-db-selected-fold[data-admin-db-fold]"));
       const target = folds.find((fold) => fold.dataset.adminDbFold === key);
       if (target) {
-        const maintenance = target.closest(".admin-company-maintenance");
-        if (maintenance) maintenance.open = true;
-        folds.forEach((fold) => {
-          fold.open = fold === target;
-        });
-        target.open = true;
+        openAdminDbReviewFold(target);
         target.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }
       return;

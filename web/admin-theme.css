@@ -2475,6 +2475,200 @@ html[data-theme-resolved] body.role-admin .admin-db-review-support .admin-db-sup
   color: inherit !important;
 }
 
+/* Company DB detail tools share the same surfaces and states as the main workspace. */
+html[data-theme-resolved] body.role-admin .admin-db-selected-panel-cumulative .admin-company-maintenance {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.55;
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance > summary {
+  gap: 16px;
+  padding: 16px 18px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance > summary :is(strong, small),
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .admin-db-selected-fold > summary :is(strong, span, small) {
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .admin-db-selected-workbench {
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 16px;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .admin-db-detail-tabs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--ui-radius-control);
+  background: var(--surface-control);
+  padding: 6px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .admin-db-detail-tabs button,
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .company-review-actions button {
+  min-width: 0;
+  min-height: 42px;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: var(--ui-radius-control) !important;
+  background: var(--surface-control) !important;
+  color: var(--text-primary) !important;
+  padding: 8px 13px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  box-shadow: none !important;
+  transition: var(--ui-transition);
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .admin-db-detail-tabs button:not(:disabled):hover,
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .company-review-actions button:not(:disabled):hover {
+  border-color: var(--border-strong) !important;
+  background: var(--surface-selected) !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .admin-db-detail-tabs button:is(.active, [aria-pressed="true"]) {
+  border-color: var(--border-strong) !important;
+  background: var(--surface-selected) !important;
+  color: var(--accent-strong) !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .admin-db-selected-workbench-stack {
+  gap: 0;
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .admin-db-selected-fold {
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: 0;
+  background: var(--surface-card);
+  box-shadow: none;
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .admin-db-selected-fold:last-child {
+  border-bottom: 0;
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .admin-db-selected-fold > summary {
+  gap: 12px;
+  padding: 14px 4px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .admin-db-selected-fold-body {
+  border-top: 1px solid var(--border-subtle);
+  padding: 16px 4px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance :is(
+  .admin-db-selected-review,
+  .admin-db-selected-correction,
+  .admin-db-profile-intro,
+  .admin-db-profile-section,
+  .admin-db-channel-panel,
+  .admin-db-quick-edit
+) {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-card) !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .admin-db-selected-review {
+  gap: 14px;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .company-review-control.compact {
+  gap: 12px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance :is(input:not([type="checkbox"], [type="radio"]), select, textarea) {
+  min-height: 42px;
+  border-color: var(--border-subtle) !important;
+  border-radius: var(--ui-radius-control);
+  background: var(--surface-control) !important;
+  color: var(--text-primary) !important;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance :is(input, textarea)::placeholder {
+  color: var(--text-tertiary);
+  opacity: 1;
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .company-review-actions.compact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .company-review-actions button {
+  --review-status-color: var(--accent-strong);
+  flex: 0 1 auto;
+  min-width: 64px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .company-review-actions button:is([data-company-review-action="confirmed"], [data-company-review-action="contact_ready"]) {
+  --review-status-color: var(--positive);
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .company-review-actions button:is([data-company-review-action="check_needed"], [data-company-review-action="recrawl_needed"], [data-company-review-action="manual_needed"], [data-company-review-action="hold"]) {
+  --review-status-color: var(--warning-strong);
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .company-review-actions button[data-company-review-action="exclude"] {
+  --review-status-color: var(--danger-strong);
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance .company-review-actions button:is(.active, [aria-pressed="true"]) {
+  border-color: color-mix(in srgb, var(--review-status-color) 55%, var(--border-subtle)) !important;
+  background: color-mix(in srgb, var(--review-status-color) 6%, var(--surface-card)) !important;
+  color: var(--review-status-color) !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-company-maintenance :is(button, a, input, select, textarea, summary):focus-visible {
+  outline: 2px solid var(--accent) !important;
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  html[data-theme-resolved] body.role-admin .admin-company-maintenance > summary {
+    padding: 14px;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-company-maintenance .admin-db-selected-workbench {
+    padding: 12px;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-company-maintenance .admin-db-detail-tabs {
+    grid-template-columns: repeat(5, minmax(96px, 1fr));
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: thin;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-company-maintenance :is(input:not([type="checkbox"], [type="radio"]), select, textarea) {
+    font-size: 16px;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-company-maintenance .company-review-actions button {
+    flex: 1 1 64px;
+    min-height: 44px;
+  }
+}
+
 .admin-db-review-support > summary .when-open,
 .admin-db-review-support[open] > summary .when-closed {
   display: none;

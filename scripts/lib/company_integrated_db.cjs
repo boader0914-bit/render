@@ -140,7 +140,18 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     const company = (data.companies || []).find(row => identity(row) === companyId);
     const raw = data.rawCompanies instanceof Map ? data.rawCompanies.get(companyId) : data.rawCompanies?.[companyId];
     if (!company || company.deletedAt || company.mergedIntoCompanyId || raw?.deletedAt || raw?.mergedIntoCompanyId) throw fault("company_not_found", 404);
-    return { company, raw, data };
+    // Materialization awaits two source reads per month. Keep only its selected
+    // metadata here, so those reads do not overlap a retained complete catalog.
+    const compactCompany = clone({ companyId: identity(company), primaryName: company.primaryName,
+      capacity: company.capacity, capacitySource: company.capacitySource, capacityBasis: company.capacityBasis });
+    const compactRaw = raw ? clone({ manualCorrection: raw.manualCorrection, _integratedCapacity: raw._integratedCapacity,
+      keywords: Object.fromEntries(Object.entries(raw.keywords || {}).map(([key, exposure]) => [key, {
+        keyword: exposure.keyword, runs: (exposure.runs || []).map(run => ({ runId: run.runId, id: run.id,
+          collectedAt: run.collectedAt, rank: run.rank, overallRank: run.overallRank }))
+      }])) }) : undefined;
+    const runs = (data.runs || []).map(run => ({ id: run.id, runId: run.runId,
+      collectionQuality: { status: run.collectionQuality?.status } }));
+    return { company: compactCompany, raw: compactRaw, data: { runs } };
   }
   async function targetsFor(companyId, additional = []) {
     const [targets, index] = await Promise.all([listTargets({ companyIds: [companyId] }), readJson(indexPath(companyId), null)]);
