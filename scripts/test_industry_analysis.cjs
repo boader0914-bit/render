@@ -23,6 +23,122 @@ function observation(companyId, runId = "r1", extra = {}) {
 }
 function source(extra = {}) { return { companies: [company("a")], rankObservations: [rank("a")], observations: [observation("a")], runs: [run("r1")], regions: REGIONS, ...extra }; }
 function build(input, request = {}) { return buildIndustryAnalysis(input, { ...REQUEST, ...request }, { now: NOW }); }
+const flushTasks = () => new Promise(resolve => setImmediate(resolve));
+function pendingSourceFixture({ pendingCatalog = false } = {}) {
+  let millis = NOW.getTime(), reads = 0;
+  const pending = [], catalogs = [];
+  const catalog = { rawCompanies: new Map(), regions: REGIONS, runs: [] };
+  const service = createIndustryAnalysisService({ now: () => new Date(millis), sources: {
+    loadSources: () => { reads++; return new Promise((resolve, reject) => pending.push({ resolve, reject })); },
+    catalog: () => pendingCatalog ? new Promise((resolve, reject) => catalogs.push({ resolve, reject })) : Promise.resolve(catalog)
+  } });
+  return { service, pending, catalogs, catalog, reads: () => reads, advance: milliseconds => { millis += milliseconds; },
+    emptySource: () => source({ companies: [], observations: [], rankObservations: [], runs: [] }) };
+}
+
+test("slow pending requests share one source read and TTL starts after successful completion", async () => {
+  const fixture = pendingSourceFixture();
+  const first = fixture.service.analyze(REQUEST);
+  fixture.advance(61000);
+  const joined = fixture.service.analyze(REQUEST);
+  await flushTasks();
+  assert.equal(fixture.reads(), 1, "A running calculation cannot expire after 30 seconds");
+  fixture.pending[0].resolve(fixture.emptySource());
+  await Promise.all([first, joined]);
+  await fixture.service.analyze(REQUEST);
+  fixture.advance(29000);
+  await fixture.service.analyze(REQUEST);
+  assert.equal(fixture.reads(), 1, "The full TTL remains available after a slow completion");
+  fixture.advance(1001);
+  const expired = fixture.service.analyze(REQUEST);
+  await flushTasks();
+  assert.equal(fixture.reads(), 2, "A completed result expires 30 seconds after completion");
+  fixture.pending[1].resolve(fixture.emptySource());
+  await expired;
+});
+
+test("failed pending request is shared, then one replacement survives repeated retries", async () => {
+  const fixture = pendingSourceFixture();
+  const first = fixture.service.analyze(REQUEST);
+  fixture.advance(61000);
+  const joined = fixture.service.analyze(REQUEST);
+  const failures = Promise.allSettled([first, joined]);
+  await flushTasks();
+  fixture.pending[0].reject(Object.assign(new Error("mock unavailable"), { code: "MOCK_UNAVAILABLE" }));
+  assert.ok((await failures).every(result => result.status === "rejected" && result.reason.code === "MOCK_UNAVAILABLE"));
+  assert.equal(fixture.reads(), 1);
+  const replacement = fixture.service.analyze(REQUEST);
+  fixture.advance(61000);
+  const retried = fixture.service.analyze(REQUEST);
+  await flushTasks();
+  assert.equal(fixture.reads(), 2, "Failure cleanup cannot evict a replacement pending calculation");
+  fixture.pending[1].resolve(fixture.emptySource());
+  await Promise.all([replacement, retried]);
+  await fixture.service.analyze(REQUEST);
+  assert.equal(fixture.reads(), 2);
+});
+
+test("different months read serially; completed cache holds two without evicting pending months", async () => {
+  const fixture = pendingSourceFixture();
+  const requests = ["2026-08", "2026-09", "2026-10"].map(month => ({ ...REQUEST, month }));
+  const jobs = requests.map(request => fixture.service.analyze(request));
+  fixture.advance(61000);
+  jobs.push(fixture.service.analyze(requests[0]));
+  await flushTasks();
+  assert.equal(fixture.reads(), 1, "Only the first source reader starts while other months are queued");
+  fixture.pending[0].resolve(fixture.emptySource());
+  await jobs[0];
+  await flushTasks();
+  assert.equal(fixture.reads(), 2, "The second month starts only after the first has settled");
+  fixture.pending[1].resolve(fixture.emptySource());
+  await jobs[1];
+  await flushTasks();
+  assert.equal(fixture.reads(), 3, "Queued months retain their own shared promises without duplicate reads");
+  fixture.pending[2].resolve(fixture.emptySource());
+  await Promise.all(jobs);
+  await fixture.service.analyze(requests[1]);
+  await fixture.service.analyze(requests[2]);
+  assert.equal(fixture.reads(), 3);
+  const evicted = fixture.service.analyze(requests[0]);
+  await flushTasks();
+  assert.equal(fixture.reads(), 4, "Only the two latest completed source results are retained");
+  fixture.pending[3].resolve(fixture.emptySource());
+  await evicted;
+});
+
+test("one failed parallel reader cannot release the pending key while the other still runs", async () => {
+  const fixture = pendingSourceFixture({ pendingCatalog: true });
+  const first = fixture.service.analyze(REQUEST);
+  const firstResult = first.catch(error => error.code);
+  await flushTasks();
+  fixture.catalogs[0].reject(Object.assign(new Error("catalog unavailable"), { code: "MOCK_CATALOG_UNAVAILABLE" }));
+  await Promise.resolve();
+  fixture.advance(61000);
+  const joinedResult = fixture.service.analyze(REQUEST).catch(error => error.code);
+  assert.equal(fixture.reads(), 1, "The expensive source reader is still pending despite catalog failure");
+  fixture.pending[0].resolve(fixture.emptySource());
+  assert.deepEqual(await Promise.all([firstResult, joinedResult]), ["MOCK_CATALOG_UNAVAILABLE", "MOCK_CATALOG_UNAVAILABLE"]);
+  const retry = fixture.service.analyze(REQUEST);
+  await flushTasks();
+  assert.equal(fixture.reads(), 2);
+  fixture.pending[1].resolve(fixture.emptySource());
+  fixture.catalogs[1].resolve(fixture.catalog);
+  await retry;
+});
+
+test("a failed month releases the serial reader queue for the next month", async () => {
+  const fixture = pendingSourceFixture();
+  const failed = fixture.service.analyze(REQUEST).catch(error => error.code);
+  const next = fixture.service.analyze({ ...REQUEST, month: "2026-09" });
+  await flushTasks();
+  assert.equal(fixture.reads(), 1);
+  fixture.pending[0].reject(Object.assign(new Error("failed month"), { code: "MOCK_FAILED_MONTH" }));
+  assert.equal(await failed, "MOCK_FAILED_MONTH");
+  await flushTasks();
+  assert.equal(fixture.reads(), 2);
+  fixture.pending[1].resolve(fixture.emptySource());
+  assert.equal((await next).request.month, "2026-09");
+});
 
 test("top20 membership is explicit saved rank: rank21, unknown rank, company search and future observations do not enter", () => {
   const fixture = source({ companies: ["a", "b", "c", "d", "e", "f"].map(id => company(id)),

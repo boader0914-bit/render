@@ -247,12 +247,25 @@ function buildIndustryAnalysis(source = {}, input = {}, { now = new Date() } = {
 
 function createIndustryAnalysisService({ sources, readContext = async () => ({ sources: [], warnings: [], networkAttempted: false }), now = () => new Date() }) {
   const sourceCache = new Map();
+  const pendingSources = new Map();
+  let sourceReadQueue = Promise.resolve();
   async function savedSource(request, date) {
     const key = `${request.month}|${request.cutoffDate}`;
+    // Expiry and the completed-cache limit must never evict running work.
+    // A saved month can take longer than the cache TTL to reconstruct.
+    if (pendingSources.has(key)) return pendingSources.get(key);
     const cached = sourceCache.get(key);
-    if (cached && cached.expires > new Date(date).getTime()) return cached.promise;
-    const promise = (async () => {
-      const [source, catalog] = await Promise.all([sources.loadSources({ type: "industry", targetId: "__industry_all__", month: request.month, cutoffDate: request.cutoffDate }), sources.catalog()]);
+    if (cached && cached.expires > new Date(date).getTime()) return cached.value;
+    if (cached) sourceCache.delete(key);
+    // Distinct months can each reconstruct the complete saved source. Serialize
+    // those reads to avoid multiplying their peak memory under concurrent tabs.
+    const promise = sourceReadQueue.then(async () => {
+      // If either reader fails, keep sharing the pending request until both
+      // readers settle; the other reader may still be doing expensive work.
+      const results = await Promise.allSettled([sources.loadSources({ type: "industry", targetId: "__industry_all__", month: request.month, cutoffDate: request.cutoffDate }), sources.catalog()]);
+      const failed = results.find(result => result.status === "rejected");
+      if (failed) throw failed.reason;
+      const [source, catalog] = results.map(result => result.value);
       const localRegions = catalogRegions(catalog.regions);
       return { source: { ...source, companies: source.companies.map(company => {
         const raw = catalog.rawCompanies.get(company.companyId) || {};
@@ -260,10 +273,17 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
         return { ...company, lodgingTypes: raw.lodgingTypes || [], industryIds: raw.industryIds || [],
           regionKey: region?.id || "", regionKeys: region ? [region.id] : [], regionLabel: region?.label || "지역 확인 전" };
       }) }, catalog };
-    })();
-    sourceCache.set(key, { promise, expires: new Date(date).getTime() + 30000 });
-    while (sourceCache.size > 2) sourceCache.delete(sourceCache.keys().next().value);
-    try { return await promise; } catch (error) { sourceCache.delete(key); throw error; }
+    });
+    sourceReadQueue = promise.then(() => undefined, () => undefined);
+    pendingSources.set(key, promise);
+    try {
+      const value = await promise;
+      sourceCache.set(key, { value, expires: new Date(now()).getTime() + 30000 });
+      while (sourceCache.size > 2) sourceCache.delete(sourceCache.keys().next().value);
+      return value;
+    } finally {
+      if (pendingSources.get(key) === promise) pendingSources.delete(key);
+    }
   }
   async function options() {
     const [options, catalog] = await Promise.all([sources.options(), sources.catalog()]);
