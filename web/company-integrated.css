@@ -96,3 +96,157 @@ html[data-theme-resolved="dark"] .company-integrated { --ci-ink:#e8f0e9; --ci-mu
 @media (prefers-reduced-motion:reduce) { .ci-status-updating:before { animation:none; } }
 @media (max-width:1050px) { .ci-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }.ci-metrics>section:nth-child(3) { border-left:0; }.ci-metrics>section:nth-child(n+3) { border-top:1px solid var(--ci-border); }.ci-analysis-grid { grid-template-columns:1fr; } }
 @media (max-width:620px) { .company-integrated { padding:14px; gap:14px; border-radius:12px; }.ci-header h3 { font-size:20px; }.ci-controls { width:100%; justify-content:flex-start; gap:10px; }.ci-controls .ci-status { margin-right:auto; }.ci-metrics>section { padding:13px; }.ci-metrics strong { font-size:22px; }.ci-metrics>section>small { font-size:10px; }.ci-card { padding:12px; }.ci-coverage>span:last-child { width:100%; margin-left:0; }.ci-tabs button { padding:8px; font-size:12px; }.ci-facts { gap:12px; }.ci-footer { align-items:flex-start; }.ci-footer button { width:100%; }.ci-section-head>span { font-size:11px; } }
+
+/* The operational company review uses the workspace theme; other consumers keep their palette. */
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated {
+  --ci-ink: var(--text-primary);
+  --ci-muted: var(--text-secondary);
+  --ci-surface: var(--surface-card);
+  --ci-soft: var(--surface-control);
+  --ci-border: var(--border-subtle);
+  --ci-green: var(--booking-public-color, var(--positive));
+  --ci-purple: var(--booking-blocked-color, #7545a3);
+  --ci-alert: var(--danger-strong);
+  margin: 0;
+  padding: 20px;
+  border-radius: var(--ui-radius-card);
+  gap: 18px;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.6;
+  box-shadow: var(--card-shadow);
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated :is(.ci-header h3, .ci-card h4) {
+  color: var(--ci-ink);
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated .ci-header h3 {
+  font-family: var(--font-editorial);
+  font-size: 24px;
+  font-weight: 500;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated .ci-card {
+  padding: 18px;
+  border-radius: var(--ui-radius-card);
+  gap: 14px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated :is(button:not(.ci-day, .ci-link), select, input, textarea) {
+  min-width: 0;
+  min-height: 42px;
+  border: 1px solid var(--ci-border);
+  border-radius: var(--ui-radius-control);
+  background: var(--ci-soft);
+  color: var(--ci-ink);
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  box-shadow: none;
+  transition: var(--ui-transition);
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated button:not(.ci-day, .ci-link, :disabled):hover {
+  border-color: var(--border-strong);
+  background: var(--surface-selected);
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated :is(button, select, input, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated .ci-tabs {
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--ci-border);
+  border-radius: var(--ui-radius-control);
+  background: var(--ci-soft);
+  scrollbar-width: thin;
+  overscroll-behavior-inline: contain;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated :is(.ci-tabs button[aria-selected="true"], .ci-view-switch button[aria-pressed="true"]) {
+  border-color: var(--border-strong);
+  background: var(--surface-selected);
+  color: var(--accent-strong);
+  font-weight: 650;
+  box-shadow: none;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated :is(.ci-metrics, .ci-view-switch, .ci-empty, .ci-alert, .ci-warnings) {
+  border-radius: var(--ui-radius-control);
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated :is(.ci-metrics > section > small, .ci-table-scroll table, .ci-table-scroll caption, .ci-facts dt) {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated .ci-link {
+  min-height: 32px;
+  padding: 4px 2px;
+  color: var(--accent-strong);
+  line-height: 1.5;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated .ci-link:hover:not(:disabled) {
+  background: var(--surface-selected);
+}
+
+@media (max-width: 620px) {
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated button:not(.ci-day) {
+    min-height: 44px;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated {
+    padding: 14px;
+    gap: 16px;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated .ci-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 10px;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated .ci-controls .ci-status {
+    grid-column: 1 / -1;
+    justify-self: start;
+    margin: 0;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated .ci-controls select {
+    width: 100%;
+    font-size: 16px;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated .ci-tabs button {
+    flex: 0 0 auto;
+    min-height: 44px;
+    padding-inline: 14px;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated .ci-card {
+    padding: 14px;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated .ci-facts {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated .ci-section-head {
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-integrated .ci-link {
+    min-height: 44px;
+  }
+}

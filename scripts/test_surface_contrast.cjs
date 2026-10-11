@@ -19,6 +19,7 @@ const channelAssetPaths = {
 };
 const styles = fs.readFileSync(stylesPath, "utf8").replace(/\r\n/g, "\n");
 const themeStyles = fs.readFileSync(themePath, "utf8");
+const integratedStyles = fs.readFileSync(path.join(root, "web", "company-integrated.css"), "utf8");
 const app = fs.readFileSync(appPath, "utf8");
 const indexHtml = fs.readFileSync(indexPath, "utf8");
 const serviceWorker = fs.readFileSync(serviceWorkerPath, "utf8");
@@ -2971,6 +2972,225 @@ assert(
   "company detail must preserve sparse history, avoid hard list caps, sanitize channel links, and never invent zero revenue",
   failures
 );
+
+// The support panel is a sibling of the selected detail, and the integrated
+// panel is mounted asynchronously inside its reference dashboard. Exercise the
+// production shells so a narrower theme scope cannot silently miss either.
+const reviewShellNames = ["escapeHtml", "adminDbFoldedItemsHtml", "roomCapacityReviewHtml",
+  "adminDbReferenceHistorySection", "adminDbCompanyReferenceDashboardHtml", "renderAdminDatabaseDashboard"];
+const reviewShellDeclarations = reviewShellNames.map(name => app.match(new RegExp(`^function ${name}\\([^]*?^}`, "m"))?.[0]);
+assert(reviewShellDeclarations.every(Boolean), "review surface shell functions must remain available", failures);
+const reviewShellDashboard = { innerHTML: "" };
+const reviewShellRow = { company: { companyId: "review-surface-fixture" }, metrics: {} };
+const reviewShellContext = vm.createContext({
+  state: { adminDbSelectedCompanyId: reviewShellRow.company.companyId, adminDbViewMode: "review" },
+  els: { adminDatabaseDashboard: reviewShellDashboard }, window: {},
+  isAdminRole: () => true, adminConsoleMasterSource: () => ({}),
+  adminDbFilterState: () => ({ rows: [reviewShellRow], filteredRows: [reviewShellRow], filters: { query: "" } }),
+  adminDbGroupedRows: () => [], adminDbCompanyIdFromRoute: () => "", adminDbViewMode: () => "review",
+  adminDbMetricCard: () => "", fmtNumber: String, fmtWon: String,
+  adminDbCompanySearchShellHtml: () => "", adminDbUserViewBridgeHtml: () => "", adminDbSelectedRow: () => reviewShellRow,
+  adminDbAuditBoard: () => "", adminDbWorkPanel: () => "", adminDbCollectionPanel: () => "",
+  bindAdminDbCompanySelectButtons() {}, applyPendingCompanyEdit() {}, renderAdminRegionAnalysisDashboard() {},
+  adminDbCumulativeDashboardModel: () => ({}),
+  adminDbReferenceBasicsCard: () => '<section class="admin-reference-card admin-reference-basics"></section>',
+  adminDbReferenceChannelsCard: () => '<section class="admin-reference-card admin-reference-channels"></section>',
+  adminDbReferenceCurrentSection: () => '<section class="admin-reference-card admin-reference-current"></section>',
+  adminDbReferenceResolvedSalesHistory: () => ({ archive: [] }),
+  adminDbRankHistoryChartHtml: () => "", adminDbPerformanceChartHtml: () => "", adminDbLeadTimeTrendChartHtml: () => ""
+});
+vm.runInContext(reviewShellDeclarations.filter(Boolean).join("\n"), reviewShellContext);
+reviewShellContext.adminDbSelectedDetailPanel = () => `<section class="admin-db-selected-panel admin-db-selected-panel-cumulative">${
+  reviewShellContext.adminDbCompanyReferenceDashboardHtml(reviewShellRow, {}, '<details class="admin-company-maintenance"><summary>검토 도구</summary></details>')
+}</section>`;
+reviewShellContext.renderAdminDatabaseDashboard();
+const reviewBoundaries = ["admin-reference-dashboard", "admin-reference-card", "admin-company-maintenance", "admin-db-review-support", "data-company-integrated"];
+const reviewBoundaryCounts = new Map(reviewBoundaries.map(name => [name, 0]));
+const reviewElementStack = [];
+for (const tag of reviewShellDashboard.innerHTML.matchAll(/<(\/?)([a-z][\w-]*)\b([^>]*)>/gi)) {
+  if (tag[1]) {
+    const closingIndex = reviewElementStack.map(node => node.tag).lastIndexOf(tag[2]);
+    if (closingIndex >= 0) reviewElementStack.length = closingIndex;
+    continue;
+  }
+  const classes = tag[3].match(/\bclass="([^"]*)"/)?.[1].split(/\s+/) || [];
+  const insideReview = classes.includes("admin-db-review-surface") || reviewElementStack.some(node => node.classes.includes("admin-db-review-surface"));
+  for (const boundary of reviewBoundaries) if (classes.includes(boundary) || (boundary.startsWith("data-") && tag[3].includes(boundary))) {
+    reviewBoundaryCounts.set(boundary, reviewBoundaryCounts.get(boundary) + 1);
+    assert(insideReview, `${boundary} must render within the common review surface`, failures);
+  }
+  if (!["input", "img", "br", "hr", "meta", "link"].includes(tag[2])) reviewElementStack.push({ tag: tag[2], classes });
+}
+assert(reviewBoundaries.every(name => reviewBoundaryCounts.get(name) > 0), "reference, tools, support and integrated mount must all be rendered for review", failures);
+const reviewProductList = reviewShellContext.adminDbFoldedItemsHtml([1, 2, 3, 4, 5, 6], id => `<article role="row" data-fixture-product="${id}"></article>`, { noun: "상품" });
+assert((reviewProductList.match(/role="row"/g) || []).length === 6 && /class="admin-db-more-list"/.test(reviewProductList)
+  && /1개 더보기/.test(reviewProductList), "six-product review must preserve every row with an accessible more disclosure", failures);
+const reviewWarning = reviewShellContext.roomCapacityReviewHtml({ reviewRequired: true,
+  reviewReasons: [{ severity: "warning", message: "중복 상품 수량 확인 필요" }] });
+assert(reviewWarning.includes("is-warning") && reviewWarning.includes("객실 수 확인 필요") && reviewWarning.includes("중복 상품 수량 확인 필요"),
+  "room evidence warnings must remain explicit when review cards share a theme", failures);
+
+const reviewThemeStart = themeStyles.indexOf("Company DB review surfaces v2");
+const reviewThemeRules = Array.from(themeStyles.slice(Math.max(reviewThemeStart, 0)).matchAll(/([^{}]+)\{([^{}]+)\}/g))
+  .filter(rule => rule[1].includes(".admin-db-review-surface"));
+assert(reviewThemeStart >= 0 && [".admin-reference-card", ".admin-company-maintenance", ".admin-db-quick-edit", ".admin-db-review-support"]
+  .every(selector => reviewThemeRules.some(rule => rule[1].includes(selector))), "common review theme must cover reference cards, edit/review tools and sibling support", failures);
+const sharedReviewControlRule = reviewThemeRules.find(rule => /(?:^|[\s,(])button(?=[\s,:.)]|$)/.test(rule[1]) && rule[2].includes("--surface-control"));
+assert(sharedReviewControlRule
+  && reviewThemeRules.some(rule => /\.admin-db-review-surface[^{}]*\b(?:input|select|textarea)\b/.test(rule[1])),
+  "external card shortcuts and form controls must share the full review scope", failures);
+assert(sharedReviewControlRule && /not\(\.company-integrated\s+\*\)/.test(sharedReviewControlRule[1]),
+  "generic review control paint must exclude the integrated component's selected tabs and colored date controls", failures);
+
+// :is() takes its most specific branch, even when a different branch matches
+// the button. Check the cascade, not just the presence of later paint rules.
+function splitReviewSelectorList(selector) {
+  const parts = [];
+  let start = 0, depth = 0, quote = "";
+  for (let i = 0; i < selector.length; i += 1) {
+    const char = selector[i];
+    if (quote) {
+      if (char === quote && selector[i - 1] !== "\\") quote = "";
+    } else if (char === '"' || char === "'") quote = char;
+    else if (char === "(" || char === "[") depth += 1;
+    else if (char === ")" || char === "]") depth -= 1;
+    else if (char === "," && depth === 0) { parts.push(selector.slice(start, i).trim()); start = i + 1; }
+  }
+  parts.push(selector.slice(start).trim());
+  return parts;
+}
+function compareReviewSpecificity(a, b) {
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+}
+function reviewSelectorSpecificity(selector) {
+  const result = [0, 0, 0];
+  let simple = selector;
+  for (let match; (match = /:(is|not|has|where)\(/.exec(simple));) {
+    let end = match.index + match[0].length, depth = 1, quote = "";
+    const start = end;
+    for (; end < simple.length && depth; end += 1) {
+      const char = simple[end];
+      if (quote) { if (char === quote && simple[end - 1] !== "\\") quote = ""; }
+      else if (char === '"' || char === "'") quote = char;
+      else if (char === "(") depth += 1;
+      else if (char === ")") depth -= 1;
+    }
+    if (match[1] !== "where") {
+      const maximum = splitReviewSelectorList(simple.slice(start, end - 1)).map(reviewSelectorSpecificity)
+        .sort(compareReviewSpecificity).at(-1);
+      maximum.forEach((value, index) => { result[index] += value; });
+    }
+    simple = simple.slice(0, match.index) + simple.slice(end);
+  }
+  simple = simple.replace(/\[[^\]]*\]/g, () => { result[1] += 1; return ""; })
+    .replace(/::[\w-]+/g, () => { result[2] += 1; return ""; })
+    .replace(/#[\w-]+/g, () => { result[0] += 1; return ""; })
+    .replace(/\.[\w-]+|:[\w-]+/g, () => { result[1] += 1; return ""; });
+  result[2] += (simple.match(/(?:^|[\s>+~,])[a-zA-Z_][\w-]*/g) || []).length;
+  return result;
+}
+assert(String(reviewSelectorSpecificity(':is(button, .links a):where(:not(.integrated *)):not(:disabled):hover')) === "0,3,1"
+  && String(reviewSelectorSpecificity('button:is(.active, [aria-pressed="true"]):hover')) === "0,2,1",
+  "review cascade checker must respect maximum :is specificity, zero :where specificity and hover state", failures);
+const reviewPaintRules = reviewThemeRules.flatMap((rule, order) => {
+  const paint = Object.fromEntries(Array.from(rule[2].matchAll(/([\w-]+)\s*:\s*([^;]+);/g), declaration => {
+    const important = /!important\s*$/.test(declaration[2]);
+    return [declaration[1], { value: declaration[2].replace(/\s*!important\s*$/, "").replace(/\s+/g, " ").trim(), important }];
+  }));
+  return splitReviewSelectorList(rule[1].replace(/\/\*[\s\S]*?\*\//g, ""))
+    .map(selector => ({ selector, specificity: reviewSelectorSpecificity(selector), paint, order }));
+});
+const genericReviewPaint = reviewPaintRules.filter(rule => /:is\(\s*button\s*,/.test(rule.selector) && rule.paint.background);
+assert(genericReviewPaint.some(rule => !rule.selector.includes(":hover")) && genericReviewPaint.some(rule => rule.selector.includes(":hover")),
+  "review cascade checks must include both common control and common hover paint", failures);
+function reviewPaintWins(rule, property, hovered) {
+  const declaration = rule?.paint[property];
+  return declaration && genericReviewPaint.filter(generic => hovered || !generic.selector.includes(":hover")).every(generic => {
+    const competing = generic.paint[property] || (property === "border-color" ? generic.paint.border : null);
+    if (!competing) return true;
+    const priority = Number(declaration.important) - Number(competing.important)
+      || compareReviewSpecificity(rule.specificity, generic.specificity) || rule.order - generic.order;
+    return priority > 0;
+  });
+}
+for (const [group, hasAriaSelection] of [[".admin-db-detail-tabs", true], [".company-review-actions", true],
+  [".recrawl-range-presets", false], [".admin-db-correction-next-actions", false]]) {
+  const candidates = reviewPaintRules.filter(rule => rule.selector.includes(group)
+    && rule.selector.includes(".active") && (!hasAriaSelection || rule.selector.includes('[aria-pressed="true"]')));
+  const normal = candidates.find(rule => !rule.selector.includes(":hover"));
+  const hovered = candidates.find(rule => rule.selector.includes(":hover"));
+  assert(normal && hovered && ["background", "color", "border-color"].every(property =>
+    normal.paint[property]?.value === hovered.paint[property]?.value
+    && reviewPaintWins(normal, property, false) && reviewPaintWins(hovered, property, true)),
+    `${group} selected buttons must retain their paint over common control and hover rules`, failures);
+  if (group === ".company-review-actions") assert(candidates.some(rule => !rule.selector.includes(".admin-company-maintenance")),
+    "selected review status paint must also reach the sibling support panel", failures);
+}
+for (const attribute of ["data-save-company-admin-profile", "data-save-company-correction", "data-company-channel-save"]) {
+  const candidates = reviewPaintRules.filter(rule => rule.selector.includes(`[${attribute}]`));
+  const normal = candidates.find(rule => !rule.selector.includes(":hover"));
+  const hovered = candidates.find(rule => rule.selector.includes(":hover"));
+  assert(normal && hovered && ["background", "color", "border-color"].every(property =>
+    normal.paint[property]?.value === hovered.paint[property]?.value
+    && reviewPaintWins(normal, property, false) && reviewPaintWins(hovered, property, true))
+    && normal.paint.background.value === "var(--accent-strong)" && normal.paint.color.value === "var(--accent-contrast)",
+    `${attribute} primary paint must win the normal and hover cascade and keep contrast foreground`, failures);
+}
+for (const mode of ["light", "dark"]) {
+  const tokens = themeStyles.match(new RegExp(`html\\[data-theme-resolved="${mode}"\\]\\s*\\{([^}]+)\\}`))?.[1] || "";
+  const foreground = tokens.match(/--accent-contrast:\s*(#[0-9a-f]{6})/i)?.[1];
+  const background = tokens.match(/--accent-strong:\s*(#[0-9a-f]{6})/i)?.[1];
+  assert(contrastRatio(foreground, background) >= 4.5, `${mode} review save buttons must keep readable contrast in both normal and hover states`, failures);
+}
+
+// Keep the earlier 42px maintenance rule in this comparison: a later generic
+// mobile rule can still lose to it. Track media ancestry instead of treating
+// every min-height declaration as active at every viewport.
+function reviewCssLeafRules(css) {
+  const rules = [], stack = [];
+  const source = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  let start = 0;
+  for (let i = 0; i < source.length; i += 1) {
+    if (source[i] === "{") { stack.push({ selector: source.slice(start, i).trim() }); start = i + 1; }
+    else if (source[i] === "}") {
+      const node = stack.pop(), body = source.slice(start, i).trim();
+      if (node && !node.selector.startsWith("@") && body) rules.push({ selector: node.selector, body,
+        media: stack.map(parent => parent.selector).filter(selector => selector.startsWith("@media")), order: rules.length });
+      start = i + 1;
+    }
+  }
+  return rules;
+}
+const reviewHeightRules = reviewCssLeafRules(themeStyles).flatMap(rule => {
+  const minimum = rule.body.match(/\bmin-height:\s*(\d+)px\s*(!important)?\s*;/);
+  return minimum ? splitReviewSelectorList(rule.selector).map(selector => ({ ...rule, selector,
+    specificity: reviewSelectorSpecificity(selector), height: Number(minimum[1]), important: Boolean(minimum[2]) })) : [];
+});
+for (const [group, maintenance] of [[".admin-db-detail-tabs", true], [".company-review-actions", true], [".company-review-actions", false]]) {
+  const applicable = reviewHeightRules.filter(rule => /\bbutton\b/.test(rule.selector)
+    && (rule.selector.includes(group) || /:is\(\s*button(?:\s*[,)]|\s+)/.test(rule.selector))
+    && /\.admin-(?:company-maintenance|db-review-surface|db-review-support)\b/.test(rule.selector)
+    && (!rule.selector.includes(".admin-company-maintenance") || maintenance)
+    && (!rule.selector.includes(".admin-db-review-support") || !maintenance)
+    && rule.media.every(media => {
+      const maximum = media.match(/max-width:\s*(\d+)px/), minimum = media.match(/min-width:\s*(\d+)px/);
+      return (!maximum || 390 <= Number(maximum[1])) && (!minimum || 390 >= Number(minimum[1]));
+    }));
+  const winner = applicable.sort((a, b) => Number(a.important) - Number(b.important)
+    || compareReviewSpecificity(a.specificity, b.specificity) || a.order - b.order).at(-1);
+  assert(winner && winner.height >= 44,
+    `390px ${maintenance ? "maintenance" : "support"} ${group} controls must win the actual prior height cascade with at least 44px`, failures);
+}
+const integratedReviewTokens = integratedStyles.match(/\.admin-db-review-surface\s+\.company-integrated\s*\{([^}]+)\}/)?.[1] || "";
+assert(indexHtml.includes('href="/company-integrated.css"')
+  && /--ci-surface:\s*var\(--surface-card\)/.test(integratedReviewTokens)
+  && /--ci-green:\s*var\(--booking-public-color\b/.test(integratedReviewTokens)
+  && /--ci-purple:\s*var\(--booking-blocked-color\b/.test(integratedReviewTokens)
+  && /--ci-alert:\s*var\(--(?:danger|warning)-strong\)/.test(integratedReviewTokens)
+  && /\.ci-public-bar\s*\{[^}]*fill:\s*var\(--ci-green\)/.test(integratedStyles)
+  && /\.ci-other-bar\s*\{[^}]*fill:\s*var\(--ci-purple\)/.test(integratedStyles)
+  && /\.ci-warnings\s*\{[^}]*border-left:[^;]*var\(--ci-alert\)/.test(integratedStyles),
+  "integrated review must use common surfaces while preserving distinct public/other booking colors and warning cues", failures);
 
 const companyQuickToolStyles = styles.slice(
   styles.indexOf(".admin-db-quick-edit {"),

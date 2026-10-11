@@ -2669,6 +2669,336 @@ html[data-theme-resolved] body.role-admin .admin-company-maintenance :is(button,
   }
 }
 
+/* Company DB review surfaces v2: every company uses this shared review workspace. */
+html[data-theme-resolved] body.role-admin .admin-db-review-surface {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.55;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface :is(
+  .admin-reference-card, .admin-db-review-support, .admin-company-maintenance,
+  .admin-db-profile-intro, .admin-db-profile-section, .admin-db-quick-edit,
+  .admin-db-channel-panel, .admin-db-recheck-panel, .admin-db-confirm-plan,
+  .admin-db-audit-panel, .admin-db-audit-detail, .admin-db-audit-gate,
+  .admin-db-work-panel, .admin-db-collect-panel
+) {
+  min-width: 0;
+  border-color: var(--border-subtle) !important;
+  border-radius: var(--ui-radius-card);
+  background: var(--surface-card) !important;
+  color: var(--text-primary);
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface :is(
+  .company-manual-form, .company-manual-section, .company-manual-segments,
+  .admin-db-channel-product-box, .admin-db-collected-correction,
+  .admin-db-correction-impact, .admin-reference-history-fold,
+  .admin-company-chart-panel, .admin-db-confirm-grid > article
+) {
+  min-width: 0;
+  border-color: var(--border-subtle);
+  border-radius: var(--ui-radius-control);
+  background: var(--surface-control);
+  color: var(--text-primary);
+  box-shadow: none;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-db-confirm-focus em {
+  border-color: var(--border-subtle);
+  background: var(--surface-control);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-dashboard {
+  gap: 16px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-card {
+  padding: 16px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-product-table {
+  overflow-x: auto;
+  scrollbar-width: thin;
+  overscroll-behavior-inline: contain;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-basic-metrics > article {
+  gap: 5px;
+  padding: 12px 8px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-basic-metrics :is(span, small) {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-basic-metrics strong {
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+@media (min-width: 761px) {
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-product-table :is(.admin-reference-table-head, .admin-reference-product-row) {
+    min-width: 650px;
+    grid-template-columns: minmax(150px, 1.35fr) minmax(108px, .8fr) repeat(4, minmax(98px, .72fr));
+  }
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-section-title {
+  gap: 10px;
+  padding: 0 0 12px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-section-title h3 {
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface :is(
+  .admin-reference-subsection-head strong, .admin-reference-channel-row strong,
+  .admin-db-profile-intro strong, .admin-db-profile-section strong,
+  .company-manual-section-head strong, .company-manual-segments-head strong,
+  .company-manual-advanced summary strong, .admin-db-channel-product-box summary strong
+) {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface :is(
+  .admin-reference-section-title > small, .admin-reference-subsection-head small,
+  .admin-reference-channel-row small, .admin-reference-footnote,
+  .admin-reference-table-row small, .admin-reference-legacy-products :is(small, p, dt),
+  .admin-db-profile-grid label > span, .admin-db-profile-intro span,
+  .admin-db-profile-note > span, .company-manual-form label > span,
+  .company-manual-section-head :is(span, small), .company-manual-segments-help,
+  .admin-db-channel-fields label > span, .admin-db-channel-product-grid label > span,
+  .admin-db-channel-product-box summary small
+) {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-subsection-head {
+  margin: 12px 0 8px;
+  gap: 10px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-identity-list {
+  margin: 12px 0;
+  gap: 8px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-identity-list > div {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-identity-list :is(dt, dd) {
+  font-weight: 500;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface :is(
+  .admin-reference-table-head, .admin-reference-table-row
+) {
+  font-size: 12px;
+  line-height: 1.5;
+  padding-block: 10px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface :is(
+  .admin-reference-table-row strong, .admin-reference-basic-metrics strong
+) {
+  font-weight: 600;
+}
+
+/* The asynchronously rendered integrated component owns its semantic controls. */
+html[data-theme-resolved] body.role-admin .admin-db-review-surface :is(
+  button, .admin-reference-channel-actions a, .admin-db-channel-actions a,
+  .admin-db-work-list a, .admin-db-collect-list a, .admin-db-audit-queue a
+):where(:not(.company-integrated *)) {
+  min-width: 0;
+  min-height: 42px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: var(--ui-radius-control) !important;
+  background: var(--surface-control) !important;
+  color: var(--text-primary) !important;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-decoration: none;
+  box-shadow: none !important;
+  transition: var(--ui-transition);
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface :is(
+  button, .admin-reference-channel-actions a, .admin-db-channel-actions a,
+  .admin-db-work-list a, .admin-db-collect-list a, .admin-db-audit-queue a
+):where(:not(.company-integrated *)):not(:disabled):hover {
+  border-color: var(--border-strong) !important;
+  background: var(--surface-selected) !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface button:is(
+  [data-save-company-admin-profile], [data-save-company-correction], [data-company-channel-save]
+) {
+  border-color: var(--accent-strong) !important;
+  background: var(--accent-strong) !important;
+  color: var(--accent-contrast) !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-db-audit-list > article.active {
+  border-color: var(--border-strong) !important;
+  background: var(--surface-selected) !important;
+}
+
+/* Keep the selected tool and review status visible even while hovering. */
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-company-maintenance .admin-db-detail-tabs button:is(.active, [aria-pressed="true"]),
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-company-maintenance .admin-db-detail-tabs button:is(.active, [aria-pressed="true"]):hover {
+  border-color: var(--border-strong) !important;
+  background: var(--surface-selected) !important;
+  color: var(--accent-strong) !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-review-actions button:is(.active, [aria-pressed="true"]),
+html[data-theme-resolved] body.role-admin .admin-db-review-surface .company-review-actions button:is(.active, [aria-pressed="true"]):not(:disabled):hover {
+  border-color: color-mix(in srgb, var(--review-status-color) 55%, var(--border-subtle)) !important;
+  background: color-mix(in srgb, var(--review-status-color) 6%, var(--surface-card)) !important;
+  color: var(--review-status-color) !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface :is(.recrawl-range-presets, .admin-db-correction-next-actions) button.active,
+html[data-theme-resolved] body.role-admin .admin-db-review-surface :is(.recrawl-range-presets, .admin-db-correction-next-actions) button.active:not(:disabled):hover {
+  border-color: var(--border-strong) !important;
+  background: var(--surface-selected) !important;
+  color: var(--accent-strong) !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface button:is(
+  [data-save-company-admin-profile], [data-save-company-correction], [data-company-channel-save]
+):not(:disabled):hover {
+  border-color: var(--accent-strong) !important;
+  background: var(--accent-strong) !important;
+  color: var(--accent-contrast) !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface :is(
+  input:not([type="checkbox"], [type="radio"]), select, textarea
+):where(:not(.company-integrated *)) {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  box-sizing: border-box;
+  border-color: var(--border-subtle) !important;
+  border-radius: var(--ui-radius-control);
+  background: var(--surface-control) !important;
+  color: var(--text-primary) !important;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface :is(input, textarea)::placeholder {
+  color: var(--text-tertiary);
+  opacity: 1;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface :is(
+  button, a, input, select, textarea, summary
+):focus-visible {
+  outline: 2px solid var(--accent) !important;
+  outline-offset: 2px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface :is(
+  .admin-reference-channel-actions, .admin-db-channel-actions, .company-manual-actions,
+  .admin-db-recheck-actions, .admin-reference-section-actions
+) {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-review-surface :is(
+  .admin-db-more-list > summary, .admin-reference-history-fold > summary,
+  .admin-reference-archive-level > summary, .admin-db-review-support > summary,
+  .company-manual-segments > summary, .company-manual-advanced > summary,
+  .admin-db-channel-product-box > summary
+) {
+  min-height: 42px;
+  box-sizing: border-box;
+  gap: 10px;
+  color: var(--text-primary);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+@media (max-width: 640px) {
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-card {
+    padding: 12px;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-subsection-head {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-subsection-head button {
+    grid-column: 1 / -1;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-channel-row {
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 8px;
+    padding-block: 12px;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-channel-row > mark {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-channel-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface :is(button, summary):where(:not(.company-integrated *)),
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface :is(.admin-reference-channel-actions a, .admin-db-channel-actions a),
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface :is(.admin-db-detail-tabs, .company-review-actions) button {
+    min-height: 44px !important;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface :is(
+    input:not([type="checkbox"], [type="radio"]), select, textarea
+  ) {
+    min-height: 44px !important;
+    font-size: 16px !important;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-rank-keyword-control {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-db-review-surface .admin-reference-rank-keyword-control select {
+    min-width: 0;
+  }
+}
+
 .admin-db-review-support > summary .when-open,
 .admin-db-review-support[open] > summary .when-closed {
   display: none;
