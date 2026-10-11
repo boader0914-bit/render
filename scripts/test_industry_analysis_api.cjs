@@ -81,6 +81,9 @@ async function main() {
     assert.equal(analysis.data.context.networkAttempted, false);
     assert.equal(analysis.data.storage.stale, false);
     assert.equal(analysis.data.storage.sourceRevision, analysis.data.storage.resultRevision);
+    assert.equal(analysis.data.request.cutoffDate, "2026-08-31");
+    assert.equal(analysis.data.storage.monthClosed, true);
+    assert.equal(analysis.data.storage.reusePolicy, "closed_month");
     assert.ok(analysis.data.storage.calculatedAt);
     const savedRead = await request(route, admin);
     assert.equal(savedRead.data.storage.calculatedAt, analysis.data.storage.calculatedAt, "GET reuses saved result");
@@ -115,6 +118,32 @@ async function main() {
     assert.equal(reopened.data.storage.status, "ready", JSON.stringify(reopened.data));
     assert.equal(reopened.data.storage.calculatedAt, analysis.data.storage.calculatedAt);
     assert.deepEqual(reopened.data.summary, analysis.data.summary);
+    // A collection in another month is discovered after restart, without
+    // rebuilding or relabeling the already saved August result.
+    await stopServer();
+    const nextRunId = "pocheon_glamping_20260901_090000", nextRunDir = path.join(dataDir, "outputs", nextRunId);
+    const nextTime = "2026-09-01T00:00:00Z";
+    await fs.mkdir(nextRunDir, { recursive: true });
+    await fs.writeFile(path.join(nextRunDir, "manifest.json"), JSON.stringify({ id: nextRunId, keyword: "포천글램핑",
+      searchMode: "keyword", checkIn: "2026-09-01", checkOut: "2026-09-02", bookingRangeDays: 14,
+      completedAt: nextTime, collectionQuality: { status: "complete" }, counts: { overall: 1 }, files: ["manifest.json"] }));
+    const temporaryMaster = JSON.parse(originalMaster.toString());
+    const company = temporaryMaster.companies.cmp_place_monthly_a;
+    company.lastSeenAt = nextTime;
+    company.keywords["포천글램핑"].runs.push({ runId: nextRunId, collectedAt: nextTime, rank: 1 });
+    await fs.writeFile(masterFile, JSON.stringify(temporaryMaster));
+    const extraObservation = { ...JSON.parse(originalHistory.toString().split("\n")[0]),
+      observationId: "other-month-saved", runId: nextRunId, collectedAt: nextTime, stayDate: "2026-09-01", rank: 1 };
+    await fs.appendFile(historyFile, JSON.stringify(extraObservation) + "\n");
+    startServer(); await waitServer(); admin = await login("industry-admin");
+    const afterOtherMonth = await request(route, admin);
+    assert.equal(afterOtherMonth.data.storage.status, "ready", JSON.stringify(afterOtherMonth.data));
+    assert.equal(afterOtherMonth.data.storage.calculatedAt, analysis.data.storage.calculatedAt);
+    assert.equal(afterOtherMonth.data.storage.resultRevision, analysis.data.storage.resultRevision);
+    assert.deepEqual(afterOtherMonth.data.summary, analysis.data.summary);
+    await stopServer();
+    await fs.writeFile(masterFile, originalMaster); await fs.writeFile(historyFile, originalHistory);
+    startServer(); await waitServer(); admin = await login("industry-admin");
     // Reviewed capacity edits automatically dirty every saved historical scope.
     const correction = await request("/api/company-master/manual-correction", admin, "POST", { companyId: "cmp_place_monthly_a", lodgingBasisTotal: 11, expectedRevision: 0 });
     assert.equal(correction.status, 200, JSON.stringify(correction.data));
@@ -131,7 +160,7 @@ async function main() {
     assert.deepEqual(rebuilt.data.summary, updated.data.summary, "same input has unchanged arithmetic");
     assert.deepEqual(await fs.readFile(historyFile), originalHistory, "review refresh does not rewrite observations");
     assert.equal((await request("/api/crawl-status", admin)).data.active, false, "saved rebuild never starts a crawler");
-    console.log("Industry analysis API passed: durable/restart reuse, automatic historical review refresh, explicit rebuild guards, admin-only scopes, no external fetch, unchanged raw history");
+    console.log("Industry analysis API passed: closed-month cutoff and reuse across other-month collections/restart, automatic historical review refresh, explicit rebuild guards, admin-only scopes, no external fetch, unchanged raw history");
   } finally {
     await stopServer();
     assert.ok(path.resolve(dataDir).startsWith(path.resolve(os.tmpdir()) + path.sep));

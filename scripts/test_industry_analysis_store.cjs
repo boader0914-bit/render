@@ -121,6 +121,130 @@ test("fixed past cutoff refreshes month-closed state at the month boundary", asy
   assert.equal((await store.get(request)).period.monthClosed, true);
 });
 
+test("new-month evidence keeps closed-month saved results unchanged, including across restart", async t => {
+  const dataDir = await directory(t), calls = { "2026-09": 0, "2026-10": 0 };
+  let checks = 0, revision = { globalToken: "shared-v1", months: { "2026-09": "sep-v1", "2026-10": "oct-v1" } };
+  const readSourceRevision = async () => { checks++; return structuredClone(revision); };
+  const calculate = async request => result(request, ++calls[request.month]);
+  const closed = { ...REQUEST, cutoffDate: "2026-09-30" }, live = { ...REQUEST, month: "2026-10" };
+  let store = createStore(dataDir, { calculate, readSourceRevision });
+  await store.get(closed); await store.get(live); await store.drain();
+  const saved = await store.get(closed);
+  assert.equal(saved.storage.monthClosed, true); assert.equal(saved.storage.reusePolicy, "closed_month");
+  assert.equal((await store.get(live)).storage.reusePolicy, "live_month");
+  revision.months["2026-10"] = "oct-v2";
+  await store.notifySourceChanged({ reason: "run_saved" });
+  await store.notifySourceChanged({ reason: "observations_saved" });
+  assert.equal(checks, 1, "source writers record a durable dirty mark without a full input scan");
+  const state = JSON.parse(await fs.readFile(path.join(dataDir, "industry_analysis", "queue.json"), "utf8"));
+  assert.equal(state.sourceCheckPending, true);
+  await store.drain();
+  assert.deepEqual(calls, { "2026-09": 1, "2026-10": 2 });
+  assert.deepEqual(await store.get(closed), saved, "new-month collection neither requeues nor relabels the closed result");
+  await store.stop(); revision.months["2026-10"] = "oct-v3";
+  store = createStore(dataDir, { calculate, readSourceRevision });
+  await store.bootstrap();
+  assert.deepEqual(await store.get(closed), saved, "offline changes to another month cannot rebuild a closed month");
+  await store.drain(); assert.deepEqual(calls, { "2026-09": 1, "2026-10": 3 });
+  revision.months["2026-09"] = "sep-recovered";
+  await store.notifySourceChanged({ reason: "run_recovered" }); await store.drain();
+  assert.equal((await store.get(closed)).summary.sold, 2, "recovered evidence for the closed month still refreshes it");
+  revision.globalToken = "shared-review-v2";
+  await store.notifySourceChanged({ reason: "company_saved" }); await store.drain();
+  assert.deepEqual(calls, { "2026-09": 3, "2026-10": 4 });
+  const revisionDirectories = await fs.readdir(path.join(dataDir, "industry_analysis", "revisions"));
+  assert.equal(revisionDirectories.length, 1, "only corrected closed-month results retain previous versions");
+  const versions = await fs.readdir(path.join(dataDir, "industry_analysis", "revisions", revisionDirectories[0]));
+  assert.equal(versions.length, 2);
+  const firstVersion = JSON.parse(await fs.readFile(path.join(dataDir, "industry_analysis", "revisions", revisionDirectories[0], versions[0]), "utf8"));
+  assert.ok([1, 2].includes(firstVersion.result.summary.sold));
+  await store.stop();
+});
+
+test("a source event during calculation cannot publish the affected month's old generation", async t => {
+  const dataDir = await directory(t), entered = deferred(), gate = deferred();
+  let token = "before", calls = 0;
+  const store = createStore(dataDir, { readSourceRevision: async () => ({ globalToken: "global", months: { "2026-09": token } }),
+    calculate: async request => { const call = ++calls; if (call === 1) { entered.resolve(); await gate.promise; } return result(request, call); } });
+  await store.get(REQUEST); const draining = store.drain(); await entered.promise;
+  token = "after"; await store.notifySourceChanged({ reason: "observations_saved" }); gate.resolve(); await draining;
+  assert.equal(calls, 2); assert.equal((await store.get(REQUEST)).summary.sold, 2);
+  await store.stop();
+});
+
+test("rolling-cutoff legacy files stay preserved and obsolete jobs cannot recreate duplicate closed-month work", async t => {
+  const dataDir = await directory(t); let calls = 0;
+  const calculate = async request => { calls++; return result(request); };
+  let store = createStore(dataDir, { calculate, readSourceRevision: async () => "legacy-token" });
+  await store.get(REQUEST); await store.drain(); await store.stop();
+  const resultDir = path.join(dataDir, "industry_analysis", "results");
+  const [originalFile] = await fs.readdir(resultDir), original = await fs.readFile(path.join(resultDir, originalFile));
+  store = createStore(dataDir, { calculate, normalizeStoredRequest: request => ({ ...request, cutoffDate: "2026-09-30" }),
+    readSourceRevision: async () => ({ globalToken: "scoped-version", months: { "2026-09": "stable" } }) });
+  await store.bootstrap(); await store.drain();
+  assert.equal(calls, 1, "retired rolling-cutoff jobs are not scheduled during migration");
+  const request = { ...REQUEST, cutoffDate: "2026-09-30" };
+  await store.get(request); await store.drain();
+  assert.equal(calls, 2); assert.equal((await store.get(request)).storage.status, "ready");
+  assert.deepEqual(await fs.readFile(path.join(resultDir, originalFile)), original);
+  assert.equal((await fs.readdir(resultDir)).length, 2, "migration leaves original snapshots on disk");
+  await store.notifySourceChanged(); await store.drain(); assert.equal(calls, 2);
+  await store.stop();
+});
+
+test("closed-month revision backup failures keep the original result and retry resumes safely", async t => {
+  const dataDir = await directory(t); let value = 4, failArchive = false;
+  const writeJson = async (file, data) => {
+    if (failArchive && file.includes(`${path.sep}revisions${path.sep}`)) throw Object.assign(Error("disk unavailable"), { code: "EACCES" });
+    await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, JSON.stringify(data));
+  };
+  const store = createStore(dataDir, { writeJson, calculate: async request => result(request, value) });
+  await store.get(REQUEST); await store.drain();
+  const resultsDir = path.join(dataDir, "industry_analysis", "results"), [filename] = await fs.readdir(resultsDir);
+  const original = await fs.readFile(path.join(resultsDir, filename));
+  value = 5; failArchive = true; await store.invalidate({ months: ["2026-09"], reason: "capacity_review" }); await store.drain();
+  const failed = await store.get(REQUEST);
+  assert.equal(failed.storage.status, "failed"); assert.equal(failed.storage.errorCode, "EACCES"); assert.equal(failed.summary.sold, 4);
+  assert.deepEqual(await fs.readFile(path.join(resultsDir, filename)), original);
+  failArchive = false; await store.rebuild(REQUEST); await store.drain();
+  assert.equal((await store.get(REQUEST)).summary.sold, 5); await store.stop();
+});
+
+test("source verification failure after calculation cannot overwrite a last normal closed-month result", async t => {
+  const dataDir = await directory(t); let date = NOW.getTime(), calls = 0, failCheck = false;
+  const store = createStore(dataDir, { now: () => new Date(date),
+    readSourceRevision: async () => { if (failCheck) throw Object.assign(Error("saved inputs unavailable"), { code: "INDUSTRY_INPUT_UNAVAILABLE" }); return "source"; },
+    calculate: async request => { if (++calls === 2) { failCheck = true; date += 30001; } return result(request, calls); } });
+  await store.get(REQUEST); await store.drain();
+  const resultDir = path.join(dataDir, "industry_analysis", "results"), [filename] = await fs.readdir(resultDir);
+  const saved = await fs.readFile(path.join(resultDir, filename));
+  await store.invalidate({ months: ["2026-09"] }); await store.drain();
+  const failed = await store.get(REQUEST);
+  assert.equal(failed.storage.status, "failed"); assert.equal(failed.summary.sold, 1);
+  assert.equal(failed.storage.errorCode, "INDUSTRY_INPUT_UNAVAILABLE");
+  assert.deepEqual(await fs.readFile(path.join(resultDir, filename)), saved);
+  await store.stop();
+});
+
+test("a concurrent input write keeps the normal result and automatically recovers without a manual rebuild", async t => {
+  const dataDir = await directory(t); let source = "before", race = false, calls = 0;
+  const store = createStore(dataDir, { autoStart: true,
+    readSourceRevision: async () => { if (race) throw Object.assign(Error("source still saving"), { code: "INDUSTRY_SOURCE_CHANGED" });
+      return { globalToken: "shared", months: { "2026-09": source } }; },
+    calculate: async request => result(request, ++calls) });
+  await store.get(REQUEST); await store.drain();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  race = true; source = "after"; await store.notifySourceChanged();
+  const checking = await store.get(REQUEST);
+  assert.equal(checking.storage.status, "queued"); assert.equal(checking.storage.sourceCheckPending, true);
+  assert.equal(checking.storage.errorCode, null); assert.equal(checking.summary.sold, 1);
+  await store.drain(); assert.equal(calls, 1, "unverified input never overwrites the normal file or starts a busy loop");
+  race = false; t.mock.timers.tick(1500); await store.drain();
+  const ready = await store.get(REQUEST);
+  assert.equal(ready.storage.status, "ready"); assert.equal(ready.summary.sold, 2);
+  assert.equal(ready.storage.sourceCheckPending, false); await store.stop();
+});
+
 test("queue and result write failures retain normal files and explicit retry recovers when disk writes resume", async t => {
   const dataDir = await directory(t); let failQueue = false, failResult = false, sold = 1;
   const writeJson = async (file, value) => {
@@ -210,6 +334,27 @@ function sourceAdapter(overrides = {}) {
     options: async () => ({ regions: REGIONS, months: ["2026-10", "2026-09"], defaultMonth: "2026-10", today: "2026-10-11" }),
     catalog: async () => savedFixture("2026-10").catalog, ...overrides };
 }
+
+test("closed-month defaults use the same month-end file on later days and restart, earlier cutoffs stay separate", async t => {
+  const dataDir = await directory(t); let date = NOW, reads = 0;
+  const sources = sourceAdapter({ options: async () => ({ regions: REGIONS, months: ["2026-09"], defaultMonth: "2026-09" }),
+    catalog: async () => savedFixture("2026-09").catalog,
+    loadSourcesWithCatalog: async request => { reads++; return savedFixture(request.month); } });
+  const create = () => createIndustryAnalysisService({ dataDir, sources, now: () => date, autoStart: false });
+  let service = create(); await service.bootstrap(); await service.drain();
+  const saved = await service.analyze({ month: "2026-09" });
+  assert.equal(saved.request.cutoffDate, "2026-09-30"); assert.equal(saved.storage.monthClosed, true);
+  date = new Date("2026-10-12T00:00:00Z");
+  assert.deepEqual(await service.analyze({ month: "2026-09" }), saved);
+  assert.deepEqual(await service.analyze({ month: "2026-09", cutoffDate: "2026-10-11" }), saved);
+  await service.stop(); service = create(); await service.bootstrap(); await service.drain();
+  assert.deepEqual(await service.analyze({ month: "2026-09" }), saved); assert.equal(reads, 1);
+  await service.analyze({ month: "2026-09", cutoffDate: "2026-09-15" }); await service.drain();
+  assert.equal((await service.analyze({ month: "2026-09", cutoffDate: "2026-09-15" })).request.cutoffDate, "2026-09-15");
+  const files = await fs.readdir(path.join(dataDir, "industry_analysis", "results"));
+  assert.equal(files.length, 2, "later query dates do not accumulate duplicate closed-month files");
+  await service.stop();
+});
 
 test("persisted September and October results equal existing calculation in every field, including zero and missing", async t => {
   const dataDir = await directory(t), sources = sourceAdapter();

@@ -425,7 +425,7 @@ const handleIndustryAnalysis = createIndustryAnalysisHttpHandler({
   rateLimit: (req, session) => assertRequestRateLimit(req, "adminIndustryRebuild", { limit: 6, windowMs: 60000 }, session.username || "")
 });
 async function invalidateIndustryAnalysis(reason) {
-  try { await industryAnalysisService.invalidate({ reason }); }
+  try { await industryAnalysisService.notifySourceChanged({ reason }); }
   catch (error) { console.error("industry_analysis_invalidation_failed", error.code || "unavailable"); }
 }
 const companyIntegratedDb = createCompanyIntegratedDb({

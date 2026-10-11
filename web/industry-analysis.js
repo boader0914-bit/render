@@ -21,8 +21,10 @@
     const storage = state.storage || state.data?.storage, hasSnapshot = Boolean(state.data?.summary);
     if (!storage) return hasSnapshot && (state.loading || state.error) ? `<p class="ia-storage-note" role="status">${state.loading ? "저장 자료의 상태를 확인하고 있습니다." : "최근 조회에 실패했습니다."} 마지막 정상 자료를 표시합니다.</p>` : "";
     const status = storage.status || "pending";
-    const labels = { queued: "집계 대기", processing: "집계 중", ready: hasSnapshot ? "집계 완료" : "저장 집계 없음", failed: "최근 집계 실패", pending: "준비 대기" };
-    const description = status === "ready" ? "집계 완료는 저장 자료의 계산이 끝났다는 뜻이며, 관측 확보율과 다릅니다."
+    const closedReady = status === "ready" && hasSnapshot && storage.monthClosed === true;
+    const labels = { queued: "집계 대기", processing: "집계 중", ready: hasSnapshot ? closedReady ? "마감월 저장 집계" : "집계 완료" : "저장 집계 없음", failed: "최근 집계 실패", pending: "준비 대기" };
+    const description = closedReady ? "저장된 결과를 조회합니다. 객실 검수·자료 보완 시 갱신됩니다."
+      : status === "ready" ? "집계 완료는 저장 자료의 계산이 끝났다는 뜻이며, 관측 확보율과 다릅니다."
       : status === "failed" ? hasSnapshot ? "새 집계에 실패하여 마지막 정상 집계를 표시합니다." : "사용할 정상 집계가 아직 없습니다. 저장 자료로 다시 준비할 수 있습니다."
         : hasSnapshot ? "새 집계를 준비하는 동안 마지막 정상 집계를 표시합니다." : "저장된 자료를 준비하고 있습니다. 첫 집계는 몇 분 걸릴 수 있습니다.";
     const cutoff = state.data?.request?.cutoffDate || state.storageRequest?.cutoffDate;

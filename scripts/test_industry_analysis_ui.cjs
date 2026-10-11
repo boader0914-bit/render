@@ -245,6 +245,31 @@ test("queued and processing snapshots poll lightly until ready, without manufact
   controller.destroy();
 });
 
+test("closed-month ready snapshots show durable reuse and preserve partial observation coverage and dates", () => {
+  const closed = stored("ready", { month: "2026-09", monthClosed: true, reusePolicy: "closed_month" });
+  closed.request.cutoffDate = "2026-09-30";
+  closed.period = { start: "2026-09-01", end: "2026-09-30", days: 30, monthClosed: true };
+  const html = renderDashboard(state({ data: closed, selection: { industry: "glamping", month: "2026-09", region: "all" } }));
+  assert.match(html, /마감월 저장 집계/);
+  assert.match(html, /저장된 결과를 조회합니다\. 객실 검수·자료 보완 시 갱신됩니다\./);
+  assert.match(html, /마지막 정상 집계/);
+  assert.ok(html.includes(new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", dateStyle: "short", timeStyle: "short" }).format(new Date("2026-10-10T00:00:00Z"))));
+  assert.match(html, /관측 기준일 <b>2026.09.30/);
+  assert.match(html, /1 \/ 62 업체·숙박일/);
+  assert.match(html, /미관측일은 0으로 계산하지 않습니다/);
+  assert.doesNotMatch(html, /data-ia-action="rebuild"|관측 확보 완료/);
+});
+
+test("closed-month pending and failed states retain their status instead of appearing as a saved ready result", () => {
+  for (const [status, label] of [["queued", "집계 대기"], ["processing", "집계 중"], ["failed", "최근 집계 실패"]]) {
+    const html = renderDashboard(state({ data: stored(status, { monthClosed: true, reusePolicy: "closed_month" }) }));
+    assert.ok(html.includes(label), status);
+    assert.doesNotMatch(html, /마감월 저장 집계|저장된 결과를 조회합니다/, status);
+    assert.match(html, /마지막 정상 집계를 표시합니다/, status);
+  }
+  assert.match(renderDashboard(state({ data: stored("ready", { monthClosed: false, reusePolicy: "live_month" }) })), /집계 완료는 저장 자료의 계산이 끝났다는 뜻이며, 관측 확보율과 다릅니다/);
+});
+
 test("same-condition refresh preserves the last successful snapshot and a failed rebuild remains terminal", async () => {
   const clock = scheduled(); let response = () => stored("ready"), resolveRefresh;
   const element = host(), controller = createController({ ...clock, request: async url => url.endsWith("/options") ? catalog : response() });

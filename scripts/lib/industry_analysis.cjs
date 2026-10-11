@@ -65,8 +65,13 @@ function normalizeRequest(input = {}, now = new Date()) {
   const month = String(input.month || "");
   if (!/^(?:19|20|21)\d{2}-(?:0[1-9]|1[0-2])$/.test(month)) throw fail("invalid_month", "대상 월은 YYYY-MM 형식으로 선택해 주세요.");
   const today = new Date(new Date(now).getTime() + 9 * 3600000).toISOString().slice(0, 10);
-  const cutoffDate = input.cutoffDate || today;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(cutoffDate) || !Number.isFinite(Date.parse(cutoffDate)) || new Date(cutoffDate).toISOString().slice(0, 10) !== cutoffDate || cutoffDate > today) throw fail("invalid_cutoff", "관측 기준일을 확인해 주세요.");
+  const suppliedCutoff = input.cutoffDate || today;
+  if (typeof suppliedCutoff !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(suppliedCutoff) || !Number.isFinite(Date.parse(suppliedCutoff)) || new Date(suppliedCutoff).toISOString().slice(0, 10) !== suppliedCutoff || suppliedCutoff > today) throw fail("invalid_cutoff", "관측 기준일을 확인해 주세요.");
+  const [year, monthNumber] = month.split("-").map(Number);
+  const monthEnd = new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10);
+  // Post-stay observations cannot enter this calculation. Closed months have
+  // one month-end default key, while explicit earlier cutoffs remain distinct.
+  const cutoffDate = suppliedCutoff < monthEnd ? suppliedCutoff : monthEnd;
   const region = String(input.region || "all").trim();
   if (!region || region.length > 120 || /[\x00-\x1f]/.test(region)) throw fail("invalid_region", "지역을 확인해 주세요.");
   return { industry, month, region, cutoffDate };
@@ -347,7 +352,7 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     return result;
   }
   if (!dataDir) return { options: calculateOptions, analyze: calculate, rebuild: calculate,
-    invalidate: async () => clearSources(), bootstrap: async () => {}, drain: async () => {}, stop: async () => {} };
+    invalidate: async () => clearSources(), notifySourceChanged: async () => clearSources(), bootstrap: async () => {}, drain: async () => {}, stop: async () => {} };
   const defaultSourceRevision = async () => JSON.stringify(await Promise.all([
     "company_master/companies.json", "history/observations.jsonl"
   ].map(async filename => {
@@ -355,7 +360,9 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     catch (error) { if (error.code === "ENOENT") return [filename, null]; throw error; }
   })));
   const store = createIndustryAnalysisStore({ dataDir, calculate, calculationVersion, now, autoStart,
-    readSourceRevision: async () => JSON.stringify([await defaultSourceRevision(), readSourceRevision ? await readSourceRevision() : null]), onInvalidate: clearSources });
+    normalizeStoredRequest: request => normalizeRequest(request, now()),
+    readSourceRevision: typeof readSourceRevision?.periodRevisions === "function" ? () => readSourceRevision.periodRevisions()
+      : async () => JSON.stringify([await defaultSourceRevision(), readSourceRevision ? await readSourceRevision() : null]), onInvalidate: clearSources });
   async function options() {
     const saved = await store.readOptions(), revision = await store.optionsRevision();
     const today = new Date(new Date(now()).getTime() + 9 * 3600000).toISOString().slice(0, 10);
@@ -411,6 +418,11 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     scheduleOptionsRefresh();
     return state;
   }
+  async function notifySourceChanged(input) {
+    const state = await store.notifySourceChanged(input);
+    scheduleOptionsRefresh();
+    return state;
+  }
   async function refreshOptionsNow() {
     if (optionsRefreshTimer) { clearTimeout(optionsRefreshTimer); optionsRefreshTimer = null; }
     const finish = finishOptionsRefresh; finishOptionsRefresh = null;
@@ -424,7 +436,7 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     optionsRefreshTimer = setTimeout(refreshOptionsNow, 1500);
     optionsRefreshTimer.unref();
   }
-  return { options, analyze, bootstrap, invalidate,
+  return { options, analyze, bootstrap, invalidate, notifySourceChanged,
     rebuild: async input => store.rebuild(await validatedRequest(input)),
     drain: async () => { if (optionsRefreshTimer) await refreshOptionsNow(); await backgroundOptions; if (optionsTask) await optionsTask; return store.drain(); },
     stop: async () => { serviceStopped = true; if (optionsRefreshTimer) clearTimeout(optionsRefreshTimer); if (finishOptionsRefresh) finishOptionsRefresh();
