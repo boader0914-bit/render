@@ -102,7 +102,7 @@
     const industryName = industries.find(row => row.id === selection.industry)?.label || "업종";
     const selectedRegion = regions.find(row => row.id === selection.region)?.label || "전체 관측 지역";
     let body;
-    if (state.loading) body = `<div class="ia-loading" role="status"><span></span><strong>관측 자료를 불러오는 중입니다</strong><p>선택한 업종·지역·숙박월을 확인하고 있습니다.</p></div>`;
+    if (state.loading) body = `<div class="ia-loading" role="status"><span></span><strong>관측 자료를 불러오는 중입니다</strong><p>첫 조회는 저장 자료를 정리하므로 몇 분 걸릴 수 있습니다. 같은 조건으로 다시 조회하지 않고 기다려 주세요.</p></div>`;
     else if (state.error) body = `<div role="alert">${empty("자료를 불러오지 못했습니다", state.error, true)}</div>`;
     else if (data && state.tab === "companies") body = `${coverage(data.summary || {}, data.period || {})}${companyTable(data)}`;
     else if (data && state.tab === "industries") body = comparisons(data, "industries");
@@ -113,36 +113,55 @@
     const warnings = [...(data?.quality?.warnings || []), ...(data?.context?.warnings || [])].filter(item => typeof item === "string");
     const candidateLabels = regions.filter(row => row.indicatorCandidate).map(row => row.label);
     const metricDefinitions = [["reservationRate", "추정예약률"], ["averageBookedPrice", "예약 단위당 추정금액"], ["revenuePerAvailableUnitDay", "보유 단위당 하루 추정매출"], ["cohort", "순위 표본"]].filter(([key]) => data?.definitions?.[key]).map(([key, label]) => `<p><b>${label}:</b> ${escapeHtml(data.definitions[key])}</p>`).join("");
-    return `<div class="industry-analysis"><header class="ia-header"><div><span class="ia-kicker">INDUSTRY OBSERVATORY</span><h2>업종별 숙박 흐름</h2><p>지역의 차이부터 예약의 흐름까지, 저장된 관측 자료로 살펴보세요.</p></div><span class="ia-cohort">네이버 플레이스 <strong>1~20위</strong></span></header><form class="ia-filters" aria-label="업종분석 조건"><label>업종<select data-ia-filter="industry">${optionsHtml(industries, selection.industry)}</select></label><label>숙박월<select data-ia-filter="month">${months.length ? optionsHtml(months.map(id => ({ id, label: monthLabel(id) })), selection.month) : '<option value="">저장된 기간 없음</option>'}</select></label><label>지역<select data-ia-filter="region">${optionsHtml([{ id: "all", label: "전체 관측 지역" }, ...regions.filter(row => row.id !== "all")], selection.region)}</select></label><button type="button" class="ia-refresh" data-ia-action="retry" aria-label="저장 자료 다시 조회">새로고침 <span aria-hidden="true">↻</span></button></form><div class="ia-scope"><span><b>${escapeHtml(industryName)}</b> · ${escapeHtml(selectedRegion)} · ${escapeHtml(monthLabel(selection.month))}</span><span>기간 중 1~20위 관측 업체 · 전체 시장 대표 아님</span></div><nav class="ia-tabs" aria-label="업종분석 보기">${TABS.map(([id, label]) => `<button type="button" data-ia-tab="${id}" aria-pressed="${state.tab === id}">${label}</button>`).join("")}</nav><div class="ia-content" aria-busy="${Boolean(state.loading)}">${body}</div>${warnings.length ? `<details class="ia-disclosure"><summary>자료 해석 시 확인할 점 <span>${warnings.length}건</span></summary><ul>${warnings.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul></details>` : ""}<details class="ia-disclosure"><summary>지표 기준과 수집 구상</summary><div class="ia-method">${metricDefinitions}<p><b>대상:</b> 검색 시점의 네이버 플레이스 1~20위 업체. 여러 검색어의 동일 업체는 중복을 제거합니다.</p><p><b>지역:</b> 업체의 실제 주소지를 사용합니다. 복합시설은 해당하는 각 업종에 포함될 수 있습니다.</p><p><b>결측:</b> 미관측 값은 ‘—’로 표시합니다. 공개예약은 초록색, 타채널 추정은 보라색입니다.</p><p><b>규모와 성과등급:</b> 현재 구분을 보류합니다. 규모구간은 추후 업종별로 정의합니다.</p>${candidateLabels.length ? `<p><b>지역 지표 후보:</b> ${escapeHtml(candidateLabels.join(" · "))}. 후보 등록은 자료 확보를 뜻하지 않습니다.</p>` : ""}<p>정기수집 구성은 계획으로 보관하며, 이 화면은 저장 자료만 조회합니다.</p></div></details>${state.legacyHtml ? `<details class="ia-disclosure ia-legacy"${state.legacyOpen ? " open" : ""}><summary>기존 키워드별 저장 분석 열기</summary><div class="ia-legacy-content">${state.legacyHtml}</div></details>` : ""}</div>`;
+    return `<div class="industry-analysis"><header class="ia-header"><div><span class="ia-kicker">INDUSTRY OBSERVATORY</span><h2>업종별 숙박 흐름</h2><p>지역의 차이부터 예약의 흐름까지, 저장된 관측 자료로 살펴보세요.</p></div><span class="ia-cohort">네이버 플레이스 <strong>1~20위</strong></span></header><form class="ia-filters" aria-label="업종분석 조건"><label>업종<select data-ia-filter="industry">${optionsHtml(industries, selection.industry)}</select></label><label>숙박월<select data-ia-filter="month">${months.length ? optionsHtml(months.map(id => ({ id, label: monthLabel(id) })), selection.month) : '<option value="">저장된 기간 없음</option>'}</select></label><label>지역<select data-ia-filter="region">${optionsHtml([{ id: "all", label: "전체 관측 지역" }, ...regions.filter(row => row.id !== "all")], selection.region)}</select></label><button type="button" class="ia-refresh" data-ia-action="retry" aria-label="저장 자료 다시 조회"${state.loading ? " disabled" : ""}>${state.loading ? "조회 중" : "새로고침"} <span aria-hidden="true">↻</span></button></form><div class="ia-scope"><span><b>${escapeHtml(industryName)}</b> · ${escapeHtml(selectedRegion)} · ${escapeHtml(monthLabel(selection.month))}</span><span>기간 중 1~20위 관측 업체 · 전체 시장 대표 아님</span></div><nav class="ia-tabs" aria-label="업종분석 보기">${TABS.map(([id, label]) => `<button type="button" data-ia-tab="${id}" aria-pressed="${state.tab === id}">${label}</button>`).join("")}</nav><div class="ia-content" aria-busy="${Boolean(state.loading)}">${body}</div>${warnings.length ? `<details class="ia-disclosure"><summary>자료 해석 시 확인할 점 <span>${warnings.length}건</span></summary><ul>${warnings.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul></details>` : ""}<details class="ia-disclosure"><summary>지표 기준과 수집 구상</summary><div class="ia-method">${metricDefinitions}<p><b>대상:</b> 검색 시점의 네이버 플레이스 1~20위 업체. 여러 검색어의 동일 업체는 중복을 제거합니다.</p><p><b>지역:</b> 업체의 실제 주소지를 사용합니다. 복합시설은 해당하는 각 업종에 포함될 수 있습니다.</p><p><b>결측:</b> 미관측 값은 ‘—’로 표시합니다. 공개예약은 초록색, 타채널 추정은 보라색입니다.</p><p><b>규모와 성과등급:</b> 현재 구분을 보류합니다. 규모구간은 추후 업종별로 정의합니다.</p>${candidateLabels.length ? `<p><b>지역 지표 후보:</b> ${escapeHtml(candidateLabels.join(" · "))}. 후보 등록은 자료 확보를 뜻하지 않습니다.</p>` : ""}<p>정기수집 구성은 계획으로 보관하며, 이 화면은 저장 자료만 조회합니다.</p></div></details>${state.legacyHtml ? `<details class="ia-disclosure ia-legacy"${state.legacyOpen ? " open" : ""}><summary>기존 키워드별 저장 분석 열기</summary><div class="ia-legacy-content">${state.legacyHtml}</div></details>` : ""}</div>`;
   }
 
   async function requestJson(url) {
-    const response = await root.fetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } });
-    const body = await response.json();
-    if (!response.ok || body?.error) throw new Error(typeof body?.error === "string" ? body.error : body?.error?.message || `자료 조회 실패 (${response.status})`);
+    let response;
+    try { response = await root.fetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } }); }
+    catch { throw new Error("서버에 연결하지 못했습니다. 잠시 후 다시 조회해 주세요."); }
+    const failureMessage = response.status >= 500 ? "서버가 일시적으로 응답하지 않습니다. 잠시 후 다시 조회해 주세요." : "서버 응답을 확인하지 못했습니다. 잠시 후 다시 조회해 주세요.";
+    let body;
+    try { body = await response.json(); }
+    catch { throw new Error(failureMessage); }
+    if (!response.ok || body?.error) throw new Error(typeof body?.error === "string" ? body.error : body?.error?.message || failureMessage);
     return body;
   }
 
   function createController({ request = requestJson, isAuthorized = () => true } = {}) {
     const state = { catalog: null, data: null, selection: { industry: "glamping", month: "", region: "all" }, tab: "overview", loading: false, error: "", legacyHtml: "", legacyOpen: false };
-    let container, revision = 0, destroyed = false;
+    let container, revision = 0, destroyed = false, activeDataKey = "", dataTask = null;
+    const pendingData = new Map();
     const authorized = () => !destroyed && isAuthorized();
     function render() { if (container && authorized()) container.innerHTML = renderDashboard(state); }
-    async function loadData() {
+    function sharedDataRequest(url) {
+      if (!pendingData.has(url)) {
+        const pending = (async () => request(url))().finally(() => { if (pendingData.get(url) === pending) pendingData.delete(url); });
+        pendingData.set(url, pending);
+      }
+      return pendingData.get(url);
+    }
+    function loadData() {
+      if (!authorized()) return Promise.resolve();
+      const key = `${ENDPOINT}?${new URLSearchParams(state.selection)}`;
+      if (state.loading && activeDataKey === key && dataTask) return dataTask;
       const token = ++revision;
       state.data = null; state.error = "";
-      if (!state.selection.month) { state.loading = false; render(); return; }
-      state.loading = true; render();
-      try {
-        const query = new URLSearchParams(state.selection);
-        const result = await request(`${ENDPOINT}?${query}`);
-        if (token !== revision || !authorized()) return;
-        state.data = result;
-      } catch (error) {
-        if (token === revision && authorized()) state.error = error.message || "잠시 후 다시 시도해 주세요.";
-      } finally { if (token === revision && authorized()) { state.loading = false; render(); } }
+      if (!state.selection.month) { state.loading = false; activeDataKey = ""; dataTask = null; render(); return Promise.resolve(); }
+      state.loading = true; activeDataKey = key; render();
+      dataTask = (async () => {
+        try {
+          const result = await sharedDataRequest(key);
+          if (token !== revision || !authorized()) return;
+          state.data = result;
+        } catch (error) {
+          if (token === revision && authorized()) state.error = error.message || "잠시 후 다시 시도해 주세요.";
+        } finally { if (token === revision && authorized()) { state.loading = false; activeDataKey = ""; dataTask = null; render(); } }
+      })();
+      return dataTask;
     }
     async function loadCatalog() {
+      if (state.loading || !authorized()) return;
       const token = ++revision;
       state.loading = true; state.error = ""; state.data = null; render();
       try {
@@ -165,7 +184,7 @@
     function selectTab(value) { if (TABS.some(([id]) => id === value)) { state.tab = value; render(); } }
     function click(event) {
       const action = event.target.closest?.("[data-ia-action],[data-ia-tab],[data-ia-region]");
-      if (!action || !authorized()) return;
+      if (!action || action.disabled || !authorized()) return;
       if (action.dataset.iaAction === "retry") void loadCatalog();
       if (action.dataset.iaTab) { selectTab(action.dataset.iaTab); container.querySelector?.(`[data-ia-tab="${state.tab}"]`)?.focus({ preventScroll: true }); }
       if (action.dataset.iaRegion) { state.tab = "overview"; void input("region", action.dataset.iaRegion); }

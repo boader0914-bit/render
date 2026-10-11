@@ -115,6 +115,72 @@ test("a later filter response wins even if an earlier request finishes last", as
   assert.match(pending[1].url, /month=2026-09/);
 });
 
+test("loading refresh and identical analysis requests do not create duplicate work", async () => {
+  let optionsCount = 0, analysisCount = 0, resolveOptions, resolveAnalysis;
+  const controller = createController({ request: url => {
+    if (url.endsWith("/options")) { optionsCount++; return new Promise(resolve => { resolveOptions = resolve; }); }
+    analysisCount++; return new Promise(resolve => { resolveAnalysis = resolve; });
+  } });
+  const element = host(), mounting = controller.mount(element);
+  await Promise.all([controller.loadCatalog(), controller.loadCatalog()]);
+  assert.equal(optionsCount, 1);
+  assert.match(element.innerHTML, /aria-label="저장 자료 다시 조회" disabled/);
+  assert.match(element.innerHTML, /첫 조회는 저장 자료를 정리하므로 몇 분 걸릴 수 있습니다/);
+  resolveOptions(catalog);
+  await new Promise(done => setImmediate(done));
+  const duplicateOne = controller.loadData(), duplicateTwo = controller.loadData();
+  assert.equal(duplicateOne, duplicateTwo, "The same in-flight condition returns the existing task");
+  await Promise.all([controller.loadCatalog(), controller.loadCatalog()]);
+  assert.equal(optionsCount, 1);
+  assert.equal(analysisCount, 1);
+  resolveAnalysis(data); await Promise.all([mounting, duplicateOne, duplicateTwo]);
+  assert.equal(controller.state.loading, false);
+  assert.doesNotMatch(element.innerHTML, /aria-label="저장 자료 다시 조회" disabled/);
+});
+
+test("switching back to an in-flight condition reuses its request and ignores stale responses", async () => {
+  const pending = [];
+  const controller = createController({ request: async url => url.endsWith("/options") ? catalog : new Promise(resolve => pending.push({ url, resolve })) });
+  const mounting = controller.mount(host());
+  await new Promise(done => setImmediate(done));
+  const previousMonth = controller.input("month", "2026-09");
+  const currentMonth = controller.input("month", "2026-10");
+  assert.equal(pending.length, 2, "A to B to A requires only the two distinct pending requests");
+  pending[1].resolve({ ...data, marker: "september" }); await previousMonth;
+  assert.equal(controller.state.data, null);
+  assert.equal(controller.state.loading, true);
+  pending[0].resolve({ ...data, marker: "october" }); await Promise.all([mounting, currentMonth]);
+  assert.equal(controller.state.data.marker, "october");
+  assert.equal(controller.state.selection.month, "2026-10");
+  assert.equal(controller.state.loading, false);
+});
+
+test("network failures, non-JSON 503 and provider errors remain clear errors instead of zero data", async () => {
+  const originalFetch = globalThis.fetch;
+  const cases = [
+    { label: "network", response: async () => { throw new TypeError("Failed to fetch"); }, message: /서버에 연결하지 못했습니다/ },
+    { label: "html503", response: async () => ({ ok: false, status: 503, json: async () => { throw new SyntaxError("Unexpected token < in JSON"); } }), message: /서버가 일시적으로 응답하지 않습니다/ },
+    { label: "json503", response: async () => ({ ok: false, status: 503, json: async () => ({ error: "저장 자료 준비 중입니다." }) }), message: /저장 자료 준비 중입니다/ },
+    { label: "providerError200", response: async () => ({ ok: true, status: 200, json: async () => ({ error: { message: "관측 자료를 확인할 수 없습니다." } }) }), message: /관측 자료를 확인할 수 없습니다/ }
+  ];
+  try {
+    for (const item of cases) {
+      globalThis.fetch = async url => url.endsWith("/options") ? { ok: true, status: 200, json: async () => catalog } : item.response();
+      const element = host(), controller = createController();
+      await controller.mount(element);
+      assert.match(controller.state.error, item.message, item.label);
+      assert.match(element.innerHTML, /role="alert"/, item.label);
+      assert.doesNotMatch(element.innerHTML, /아직 분석할 관측 자료가 없습니다|Failed to fetch|Unexpected token|추정예약률<\/span><strong>0%/, item.label);
+      assert.equal(controller.state.loading, false, item.label);
+      assert.equal(controller.state.data, null, item.label);
+      globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => data });
+      await controller.loadData();
+      assert.equal(controller.state.error, "", "A completed failed request is removed so an explicit retry can succeed");
+      assert.deepEqual(controller.state.data, data);
+    }
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("failure, empty and loading are explicit; refreshing preserves choices", async () => {
   const element = host(); let fail = false;
   const controller = createController({ request: async url => { if (fail) throw new Error("API 연결 실패"); return url.endsWith("/options") ? catalog : data; } });

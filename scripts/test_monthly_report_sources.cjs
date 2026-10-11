@@ -8,6 +8,77 @@ const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs
 const { createMonthlyReportContext } = require("./lib/monthly_report_context.cjs");
 const { buildMonthlyReportSnapshot } = require("./lib/monthly_reports.cjs");
 
+const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
+async function sourceFixture(t, hooks = {}) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "monthly-concurrency-"));
+  t.after(async () => { assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep)); await fs.rm(root, { recursive: true, force: true }); });
+  await fs.mkdir(path.join(root, "company_master"));
+  await fs.writeFile(path.join(root, "company_master", "companies.json"), JSON.stringify({ companies: {
+    a: { companyId: "a", primaryName: "모의 글램핑", addresses: ["경기도 포천시 모의로"], keywords: {
+      search: { keyword: "포천글램핑", runs: [{ runId: "r1", rank: 3, collectedAt: "2026-08-01T00:00:00Z" }] }
+    } }
+  } }));
+  return createMonthlyReportSources({ dataDir: root, regionMasterFile: path.join(root, "regions.json"),
+    listRuns: async () => [{ id: "r1", keyword: "포천글램핑", collectedAt: "2026-08-01T00:00:00Z", collectionQuality: { status: "complete" } }], ...hooks });
+}
+
+test("concurrent catalogs share one preparation, then refresh after success and failure", async t => {
+  let preparations = 0, runReads = 0;
+  const gates = [deferred(), deferred(), deferred()], started = gates.map(deferred);
+  const adapter = await sourceFixture(t, {
+    listRuns: async () => { runReads++; return []; },
+    prepareCompanies: async companies => { const index = preparations++; started[index].resolve(); await gates[index].promise; return companies; }
+  });
+  const first = adapter.catalog(), second = adapter.catalog();
+  await started[0].promise;
+  assert.equal(preparations, 1); assert.equal(runReads, 1);
+  gates[0].resolve();
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(a, b, "concurrent callers receive the same prepared snapshot");
+  const failed = adapter.catalog(), failedJoin = adapter.catalog();
+  const failures = Promise.allSettled([failed, failedJoin]);
+  await started[1].promise; gates[1].reject(new Error("mock preparation failure"));
+  assert.ok((await failures).every(row => row.status === "rejected"));
+  const replacement = adapter.catalog();
+  await started[2].promise; gates[2].resolve();
+  assert.notEqual(await replacement, a, "settled catalogs are not retained as a stale full-master cache");
+  assert.equal(preparations, 3); assert.equal(runReads, 3);
+});
+
+test("shared monthly source queue serializes bootstrap and industry reads and recovers after failure", async t => {
+  const starts = [deferred(), deferred(), deferred()], gates = starts.map(deferred);
+  let active = 0, maxActive = 0, calls = 0, preparations = 0;
+  const adapter = await sourceFixture(t, {
+    prepareCompanies: async companies => { preparations++; return companies; },
+    recalculateCompanyObservations: async request => {
+      const index = calls++; active++; maxActive = Math.max(maxActive, active); starts[index].resolve(request);
+      try { await gates[index].promise; return []; } finally { active--; }
+    }
+  });
+  const request = { month: "2026-08", cutoffDate: "2026-08-31" };
+  const failed = adapter.loadSources({ ...request, type: "company", targetId: "a" });
+  const failure = assert.rejects(failed, error => error.code === "MONTHLY_SOURCE_UNAVAILABLE");
+  const industry = adapter.loadSourcesWithCatalog({ ...request, type: "industry", targetId: "__industry_all__" });
+  const next = adapter.loadSources({ ...request, type: "company", targetId: "a" });
+  await starts[0].promise;
+  assert.equal(calls, 1); assert.equal(preparations, 1, "queued readers do not prefetch full catalogs");
+  gates[0].reject(new Error("mock saved raw failure")); await failure;
+  assert.equal((await starts[1].promise).type, "industry");
+  assert.equal(calls, 2); assert.equal(preparations, 2);
+  gates[1].resolve();
+  const pair = await industry;
+  await starts[2].promise;
+  gates[2].resolve();
+  const ordinary = await next;
+  assert.equal(maxActive, 1, "saved raw reconstruction never overlaps across source consumers");
+  assert.equal(preparations, 3);
+  assert.deepEqual(pair.source, ordinary, "the paired reader preserves the existing source return contents");
+  assert.equal(pair.catalog.rawCompanies.get("a").companyId, "a");
+  assert.equal(pair.source.companies, pair.catalog.companies, "the paired result uses the exact prepared catalog");
+  assert.equal(Object.hasOwn(ordinary, "catalog"), false);
+  assert.equal(Object.hasOwn(ordinary, "rawCompanies"), false);
+});
+
 test("canonical IDs, merged IDs, ambiguous names, exact regions and strict source errors", async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "monthly-sources-"));
   t.after(async () => { assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep)); await fs.rm(root, { recursive: true, force: true }); });

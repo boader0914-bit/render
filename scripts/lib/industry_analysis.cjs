@@ -34,6 +34,28 @@ const dayOf = value => {
 };
 const fail = (code, message) => Object.assign(new Error(message), { code, statusCode: 400 });
 const publicIndustry = ({ pattern, ...industry }) => industry;
+const RANK_FIELDS = ["companyId", "companyKey", "id", "runId", "keyword", "rank", "overallRank", "collectedAt"];
+const RUN_FIELDS = ["id", "runId", "keyword", "searchMode", "collectedAt", "collectedAtSource", "collectionQuality"];
+const pick = (row, fields) => Object.fromEntries(fields.filter(key => Object.hasOwn(row, key)).map(key => [key, row[key]]));
+
+function compactIndustrySources(source, catalog) {
+  const localRegions = catalogRegions(catalog.regions);
+  const companies = (source.companies || []).map(company => {
+    const raw = catalog.rawCompanies.get(idOf(company)) || {};
+    const region = actualRegion(raw, localRegions);
+    return { ...pick(company, ["companyId", "companyKey", "id", "primaryName", "companyName", "name", "deletedAt", "mergedIntoCompanyId", "capacity", "capacityBasis", "capacitySource"]),
+      lodgingTypes: raw.lodgingTypes || [], industryIds: raw.industryIds || [], regionKey: region?.id || "",
+      regionKeys: region ? [region.id] : [], regionLabel: region?.label || "지역 확인 전" };
+  });
+  const compact = { ...pick(source, ["regions", "specialDays", "warnings", "sourceDiagnostics", "globalWarnings", "globalDiagnostics"]), companies,
+    // Keep each observation unchanged: the common engine hashes the complete
+    // original row to resolve equal-time observations and exact duplicates.
+    // Large raw company inventories and unused run payloads are not retained.
+    observations: source.observations || [],
+    rankObservations: (source.rankObservations || []).map(row => pick(row, RANK_FIELDS)),
+    runs: (source.runs || []).map(run => ({ ...pick(run, RUN_FIELDS), collectionQuality: { status: qualityOf(run) } })) };
+  return { source: compact, catalog: { companies, regions: catalog.regions } };
+}
 function normalizeRequest(input = {}, now = new Date()) {
   const industry = ({ camping: "campground", poolvilla: "poolVilla" })[input.industry] || input.industry || "glamping";
   if (!INDUSTRIES.some(item => item.id === industry)) throw fail("invalid_industry", "업종을 확인해 주세요.");
@@ -260,19 +282,19 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     // Distinct months can each reconstruct the complete saved source. Serialize
     // those reads to avoid multiplying their peak memory under concurrent tabs.
     const promise = sourceReadQueue.then(async () => {
-      // If either reader fails, keep sharing the pending request until both
-      // readers settle; the other reader may still be doing expensive work.
-      const results = await Promise.allSettled([sources.loadSources({ type: "industry", targetId: "__industry_all__", month: request.month, cutoffDate: request.cutoffDate }), sources.catalog()]);
+      const sourceRequest = { type: "industry", targetId: "__industry_all__", month: request.month, cutoffDate: request.cutoffDate };
+      if (typeof sources.loadSourcesWithCatalog === "function") {
+        // The adapter shares the exact prepared catalog used for correction,
+        // avoiding a second master parse/clone retained during a long read.
+        const pair = await sources.loadSourcesWithCatalog(sourceRequest);
+        return compactIndustrySources(pair.source, pair.catalog);
+      }
+      // Compatibility for adapters without the paired reader. Wait for both
+      // readers before releasing a failed pending key.
+      const results = await Promise.allSettled([sources.loadSources(sourceRequest), sources.catalog()]);
       const failed = results.find(result => result.status === "rejected");
       if (failed) throw failed.reason;
-      const [source, catalog] = results.map(result => result.value);
-      const localRegions = catalogRegions(catalog.regions);
-      return { source: { ...source, companies: source.companies.map(company => {
-        const raw = catalog.rawCompanies.get(company.companyId) || {};
-        const region = actualRegion(raw, localRegions);
-        return { ...company, lodgingTypes: raw.lodgingTypes || [], industryIds: raw.industryIds || [],
-          regionKey: region?.id || "", regionKeys: region ? [region.id] : [], regionLabel: region?.label || "지역 확인 전" };
-      }) }, catalog };
+      return compactIndustrySources(results[0].value, results[1].value);
     });
     sourceReadQueue = promise.then(() => undefined, () => undefined);
     pendingSources.set(key, promise);
@@ -321,4 +343,5 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
   return { options, analyze };
 }
 
-module.exports = { buildIndustryAnalysis, createIndustryAnalysisService, normalizeIndustryAnalysisRequest: normalizeRequest, industryAnalysisIndustries: INDUSTRIES.map(publicIndustry) };
+module.exports = { buildIndustryAnalysis, createIndustryAnalysisService, compactIndustrySources,
+  normalizeIndustryAnalysisRequest: normalizeRequest, industryAnalysisIndustries: INDUSTRIES.map(publicIndustry) };

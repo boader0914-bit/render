@@ -16,7 +16,8 @@ async function readJson(file, fallback) {
 function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepareCompanies = null, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null }) {
   const companyFile = path.join(dataDir, "company_master", "companies.json");
   const historyFile = path.join(dataDir, "history", "observations.jsonl");
-  async function catalog() {
+  let catalogInFlight = null, sourceReadQueue = Promise.resolve();
+  async function readCatalog() {
     const [master, regionMaster, runs] = await Promise.all([readJson(companyFile, { companies: {} }), readJson(regionMasterFile, { units: [] }), listRuns()]);
     if (!master.companies || typeof master.companies !== "object" || Array.isArray(master.companies)) throw sourceError();
     if (prepareCompanies) master.companies = await prepareCompanies(master.companies, { runs });
@@ -60,6 +61,13 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     });
     return { companies, rawCompanies, runs, regions: units.map(unit => ({ id: unit.regionKey, label: unit.fullName || unit.name, level: unit.level })) };
   }
+  async function catalog() {
+    if (catalogInFlight) return catalogInFlight;
+    const task = readCatalog();
+    catalogInFlight = task;
+    try { return await task; }
+    finally { if (catalogInFlight === task) catalogInFlight = null; }
+  }
   async function readHistory(consume) {
     try { await fsp.access(historyFile); } catch (error) { if (error.code === "ENOENT") return 0; throw sourceError(); }
     let malformed = 0;
@@ -90,7 +98,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
       keywords: [...new Set(data.runs.filter(run => run.searchMode !== "company").map(run => run.keyword).filter(Boolean))].sort().map(keyword => ({ id: keyword, label: keyword })),
       regions: data.regions, months: available, defaultMonth: months.has(previous) ? previous : current, today };
   }
-  async function loadSources(request) {
+  async function readSources(request, includeCatalog) {
     const data = await catalog();
     const byId = new Map(data.companies.map(company => [company.companyId, company]));
     const ids = new Map(data.companies.map(company => [token(company.companyId), company.companyId]));
@@ -204,12 +212,21 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
         specialDays.years.push({ year: holidayYear, status: "missing", updatedAt: "", holidays: [] });
       }
     }
-    return { companies: data.companies, regions: data.regions, runs: data.runs, observations: [...observations.values()], rankObservations, specialDays,
+    const source = { companies: data.companies, regions: data.regions, runs: data.runs, observations: [...observations.values()], rankObservations, specialDays,
       warnings, sourceDiagnostics: { unmatchedCompanyRows, duplicatePlaceCompanies },
       globalWarnings, globalDiagnostics: { malformedHistoryLines, unmatchedCompanyRows: globalUnmatchedCompanyRows, duplicatePlaceCompanies: globalDuplicatePlaceCompanies,
         ...(request.type === "region" ? { unmappedRegionCompanies } : {}) }, context };
+    return includeCatalog ? { source, catalog: data } : source;
   }
-  return { options, loadSources, catalog };
+  function queueSourceRead(request, includeCatalog = false) {
+    // All consumers (including background company materialization) share this
+    // queue. Separate UI/service queues cannot protect the shared heap alone.
+    const task = sourceReadQueue.then(() => readSources(request, includeCatalog));
+    sourceReadQueue = task.then(() => undefined, () => undefined);
+    return task;
+  }
+  return { options, loadSources: request => queueSourceRead(request), catalog,
+    loadSourcesWithCatalog: request => queueSourceRead(request, true) };
 }
 
 module.exports = { createMonthlyReportSources };

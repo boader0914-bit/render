@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { buildIndustryAnalysis, createIndustryAnalysisService } = require("./lib/industry_analysis.cjs");
+const { buildIndustryAnalysis, createIndustryAnalysisService, compactIndustrySources } = require("./lib/industry_analysis.cjs");
 const { createIndustryAnalysisHttpHandler } = require("./lib/industry_analysis_http.cjs");
 const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs");
 const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
@@ -24,6 +24,84 @@ function observation(companyId, runId = "r1", extra = {}) {
 function source(extra = {}) { return { companies: [company("a")], rankObservations: [rank("a")], observations: [observation("a")], runs: [run("r1")], regions: REGIONS, ...extra }; }
 function build(input, request = {}) { return buildIndustryAnalysis(input, { ...REQUEST, ...request }, { now: NOW }); }
 const flushTasks = () => new Promise(resolve => setImmediate(resolve));
+
+test("compact cached metadata preserves complete analysis output, original-row ties and rank identity", t => {
+  const heavy = "UNUSED_SAVED_PRODUCT_PAYLOAD".repeat(10000);
+  const companies = [
+    { ...company("a"), industryIds: ["glamping", "poolVilla"], capacityBasis: { source: "db_review", revision: 4, warnings: ["검토된 객실 기준"] } },
+    company("b", "pension", "kr_gyeongnam_sacheon"), company("c", "poolVilla"),
+    { id: "alias", name: "별칭 글램핑", industryIds: [], regionKey: "pocheon", regionLabel: REGIONS[0].label },
+    { ...company("deleted"), deletedAt: "2026-08-02" }, { ...company("merged"), mergedIntoCompanyId: "a" },
+    { ...company("keywordsOnly"), keywords: { search: { keyword: "포천글램핑", runs: [rank("keywordsOnly")] } } },
+    company("outside"), company("unknown", "glamping", "")
+  ].map(row => ({ ...row, regionKeys: row.regionKey ? [row.regionKey] : [], inventory: { productSnapshot: heavy } }));
+  const id = row => row.companyId || row.id;
+  const rawCompanies = new Map(companies.map(row => [id(row), { ...row, lodgingTypes: [],
+    addresses: row.regionKey ? [REGIONS.find(region => region.id === row.regionKey).label + " 모의로"] : [] }]));
+  const observations = [
+    ...companies.map(row => observation(id(row))),
+    observation("a", "r1", { decoration: "same timestamp distinct hash 1" }),
+    observation("a", "r1", { sold: 4, publicBookings: 2, publicRevenue: 200, estimatedRevenue: 400, decoration: "same timestamp distinct hash 2" }),
+    observation("a", "r1", { productType: "day-use", decoration: "legacy spelling" }),
+    observation("a", "r1", { productType: "dayuse", decoration: "normalized spelling" }),
+    observation("a", "r2", { collectedAt: "2026-08-02T00:00:00Z", failed: true }),
+    observation("b", "r1", { stayDate: "2026-08-02", sold: 0, publicBookings: 0, phoneBookings: 0, publicRevenue: 0, phoneRevenue: 0, estimatedRevenue: 0 }),
+    observation("c", "r1", { stayDate: "2026-08-02", partial: true, unknownUnavailable: 1, sharedDayUseIncomplete: true }),
+    observation("b", "r1", { stayDate: "2026-08-03", inventoryConflict: true, capacityConflict: true }),
+    observation("c", "r1", { stayDate: "2026-08-03", phonePriceEstimates: [{ sourceDate: "2026-09-01", sourceType: "lodging", bookings: 2, estimatedPrice: 100 }],
+      dayUsePresence: "present", dayUseScheduleStatus: "unknown", explicitBlockedDayUseUnverified: true }),
+    observation("outside", "r1", { rank: 2 })
+  ];
+  observations.push(observations[0]);
+  const full = source({ companies, observations,
+    rankObservations: companies.filter(row => !["keywordsOnly", "alias"].includes(id(row))).map(row => rank(id(row), "r1", {
+      overallRank: id(row) === "outside" ? 21 : 1, unusedPayload: heavy
+    })).concat([{ id: "alias", runId: "r1", rank: 8, collectedAt: "2026-08-01T00:00:00Z" }]),
+    runs: [run("r1", { rawProducts: heavy, collectionQuality: { status: "complete", report: heavy } }), run("r2")]
+  });
+  const catalog = { rawCompanies, companies, regions: REGIONS, runs: full.runs };
+  const originalJson = JSON.stringify(full);
+  const compact = compactIndustrySources(full, catalog);
+  for (const industry of ["glamping", "pension", "poolVilla"]) for (const region of ["all", "pocheon", "kr_gyeongnam_sacheon"]) {
+    assert.deepEqual(build(compact.source, { industry, region }), build(full, { industry, region }), `${industry}/${region}`);
+  }
+  assert.equal(compact.source.observations, full.observations, "original row bytes and duplicate identity remain unchanged");
+  assert.equal(compact.source.companies.find(row => row.companyId === "a").capacityBasis, companies[0].capacityBasis);
+  assert.deepEqual(Object.keys(compact.catalog).sort(), ["companies", "regions"]);
+  assert.ok(compact.source.companies.every(row => !Object.hasOwn(row, "inventory")));
+  assert.ok(compact.source.runs.every(row => !Object.hasOwn(row, "rawProducts")));
+  assert.equal(JSON.stringify(compact).includes("UNUSED_SAVED_PRODUCT_PAYLOAD"), false, "no retained path points into unused raw inventory or run payloads");
+  const originalBytes = Buffer.byteLength(JSON.stringify({ source: full, catalog: { ...catalog, rawCompanies: [...rawCompanies] } }));
+  const compactBytes = Buffer.byteLength(JSON.stringify(compact));
+  assert.ok(compactBytes < originalBytes * 0.05, `${compactBytes} bytes must be below 5% of padded metadata's ${originalBytes} bytes`);
+  t.diagnostic(`Synthetic metadata retention: ${originalBytes} -> ${compactBytes} serialized bytes; unchanged observation rows retained.`);
+  assert.equal(JSON.stringify(full), originalJson, "projection does not mutate saved-source objects");
+  const result = build(compact.source);
+  assert.ok(result.companies.some(row => row.companyId === "alias"), "id-only saved ranking keeps the canonical membership alias");
+  assert.ok(!result.companies.some(row => ["deleted", "merged", "keywordsOnly", "outside"].includes(row.companyId)));
+});
+
+test("industry service consumes the paired source catalog once and retains only compact context metadata", async () => {
+  const full = source();
+  let pairedReads = 0, contextReads = 0;
+  const catalog = { regions: REGIONS, rawCompanies: new Map([["a", { industryIds: ["glamping"], addresses: ["경기도 포천시 모의로"], inventory: { payload: "unused" } }]]) };
+  const service = createIndustryAnalysisService({ now: () => NOW, sources: {
+    loadSourcesWithCatalog: async request => { pairedReads++; assert.equal(request.type, "industry"); return { source: full, catalog }; },
+    loadSources: async () => { throw Error("paired reader must replace the duplicate source call"); },
+    catalog: async () => { throw Error("paired reader must replace the duplicate catalog call"); }
+  }, readContext: async (request, data) => {
+    contextReads++; assert.equal(request.targetId, "pocheon");
+    assert.deepEqual(Object.keys(data).sort(), ["companies", "regions"]);
+    assert.equal(data.companies[0].regionKey, "pocheon");
+    assert.equal(Object.hasOwn(data.companies[0], "inventory"), false);
+    return { sources: [], networkAttempted: false };
+  } });
+  const first = await service.analyze({ ...REQUEST, region: "pocheon" });
+  const second = await service.analyze({ ...REQUEST, region: "pocheon" });
+  assert.deepEqual(second, first); assert.equal(first.summary.companyCount, 1);
+  assert.equal(pairedReads, 1); assert.equal(contextReads, 2);
+});
+
 function pendingSourceFixture({ pendingCatalog = false } = {}) {
   let millis = NOW.getTime(), reads = 0;
   const pending = [], catalogs = [];
