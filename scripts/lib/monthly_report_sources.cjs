@@ -168,8 +168,8 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     }
     const scopeIds = request.type === "keyword"
       ? monthlyReportKeywordMembership(request, { observations: diagnosticInventoryRows, rankObservations: diagnosticRankRows, runs: data.runs }).members
-      : new Set(data.companies.filter(company => request.type === "company" ? company.companyId === request.targetId
-        : company.regionKey === request.targetId || company.regionKeys.includes(request.targetId)).map(company => company.companyId));
+      : new Set(data.companies.filter(company => request.type === "industry" || (request.type === "company" ? company.companyId === request.targetId
+        : company.regionKey === request.targetId || company.regionKeys.includes(request.targetId))).map(company => company.companyId));
     const unmatchedCompanyRows = unmatchedRows.filter(({ candidateId }) => scopeIds.has(candidateId)).length;
     const duplicatePlaceCompanies = [...conflictingCompanyIds].filter(id => scopeIds.has(id)).length;
     const warnings = [], globalWarnings = [];

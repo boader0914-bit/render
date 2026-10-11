@@ -20,6 +20,8 @@ const { createSpecialDaysService } = require("./lib/special_days.cjs");
 const { createKosisService } = require("./lib/kosis.cjs");
 const { createMonthlyReportService } = require("./lib/monthly_reports.cjs");
 const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs");
+const { createIndustryAnalysisService } = require("./lib/industry_analysis.cjs");
+const { createIndustryAnalysisHttpHandler } = require("./lib/industry_analysis_http.cjs");
 const { createCompanyIntegratedDb } = require("./lib/company_integrated_db.cjs");
 const { createCompanyIntegratedTargets } = require("./lib/company_integrated_targets.cjs");
 const { createCompanyCapacityRegistry } = require("./lib/company_capacity_registry.cjs");
@@ -411,6 +413,10 @@ const monthlyReportSources = createMonthlyReportSources({
   readSpecialDays: async year => (await specialDaysService.status(year)).yearStatus
 });
 const listCompanyIntegratedTargets = createCompanyIntegratedTargets({ dataDir: DATA_DIR, catalog: monthlyReportSources.catalog });
+const industryAnalysisService = createIndustryAnalysisService({ sources: monthlyReportSources, readContext: readMonthlyRegionContext });
+const handleIndustryAnalysis = createIndustryAnalysisHttpHandler({
+  service: industryAnalysisService, requireAdmin: requireAdminSession, send
+});
 const companyIntegratedDb = createCompanyIntegratedDb({
   dataDir: DATA_DIR, loadSources: monthlyReportSources.loadSources, catalog: monthlyReportSources.catalog,
   listTargets: listCompanyIntegratedTargets
@@ -18544,6 +18550,7 @@ async function route(req, res) {
     }
 
     if (await handleMonthlyReport(req, res, reqUrl, session)) return;
+    if (await handleIndustryAnalysis(req, res, reqUrl, session)) return;
     if (await handleRegionalReportPreparation(req, res, reqUrl, session)) return;
 
     if (req.method === "POST" && reqUrl.pathname === "/api/b2b-search") {

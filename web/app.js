@@ -40045,6 +40045,7 @@ function industryHomeRunRow(run, resume = false) {
 function renderIndustryHome() {
   if (!els.industryHomeDashboard) return;
   if (!isAdminRole()) {
+    window.StayIndustryAnalysis?.unmount(els.industryHomeDashboard);
     els.industryHomeDashboard.innerHTML = "";
     return;
   }
@@ -40061,7 +40062,7 @@ function renderIndustryHome() {
   const visibleCount = state.industryHomeVisibleCount || 12;
   const options = (entries, selected) => entries.map(([value, label]) => `<option value="${escapeHtml(value)}"${value === selected ? " selected" : ""}>${escapeHtml(label)}</option>`).join("");
   const matchingSummary = filters.category || filters.keyword || filters.period ? "선택 조건의 저장 자료" : "최근 저장 자료";
-  els.industryHomeDashboard.innerHTML = `<div class="analysis-home">
+  const legacyHtml = `<div class="analysis-home">
     <header class="analysis-home-intro"><p class="eyebrow">업종분석</p><h2>분석할 자료를 선택하세요</h2><p>업종과 검색 권역, 숙박기간을 고른 뒤 저장된 분석을 열어 보세요.</p><small>자료 수집일은 수집 기록의 시점입니다. 기록이 없는 이전 자료는 저장 시점을 별도로 안내합니다. 분석 대상 숙박기간은 그때 확인한 숙박일의 범위입니다.</small></header>
     <form class="analysis-home-form" aria-label="업종 분석 조건">
       <label>업종<select name="industryCategory" data-industry-home-filter="category"><option value="">전체 업종</option>${options(categories, filters.category)}</select></label>
@@ -40074,6 +40075,16 @@ function renderIndustryHome() {
     </section>
     ${recent.length ? `<section class="analysis-home-resume" aria-label="최근에 연 업종 분석"><div class="analysis-home-section-heading"><h3>이전 분석 이어보기</h3><span>직접 열어 본 분석</span></div><div class="analysis-home-list">${recent.map((run) => industryHomeRunRow(run, true)).join("")}</div></section>` : ""}
   </div>`;
+  if (window.StayIndustryAnalysis) {
+    const accountKey = state.session?.username || "admin";
+    void window.StayIndustryAnalysis.mount(els.industryHomeDashboard, {
+      legacyHtml,
+      accountKey,
+      isAuthorized: () => isAdminRole() && (state.session?.username || "admin") === accountKey
+    });
+  } else {
+    els.industryHomeDashboard.innerHTML = legacyHtml;
+  }
 }
 
 async function openIndustryAnalysisRun(runId) {

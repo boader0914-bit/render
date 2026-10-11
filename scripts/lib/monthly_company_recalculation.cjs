@@ -56,6 +56,9 @@ function companyRunIds(company) {
   ].filter(Boolean).map(String));
 }
 function inScope(request, company, catalogCompany, runs) {
+  // Internal saved-evidence read for industry analysis. Public monthly report
+  // request validation continues to accept only company/region/keyword.
+  if (request.type === "industry") return true;
   if (request.type === "company") return company.companyId === request.targetId;
   if (request.type === "region") return catalogCompany?.regionKey === request.targetId || (catalogCompany?.regionKeys || []).includes(request.targetId);
   if (request.type === "keyword") {
