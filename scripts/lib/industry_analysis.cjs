@@ -3,6 +3,9 @@
 // Read-only view over saved evidence. Inventory validation and capacity review
 // stay owned by the monthly-report pipeline; search rank is a separate cohort.
 const { buildMonthlyReportSnapshot } = require("./monthly_reports.cjs");
+const { createIndustryAnalysisStore } = require("./industry_analysis_store.cjs");
+const fs = require("node:fs/promises");
+const path = require("node:path");
 
 const INDUSTRIES = [
   { id: "glamping", label: "글램핑", unitLabel: "객실/동", pattern: /글램핑/ },
@@ -267,12 +270,15 @@ function buildIndustryAnalysis(source = {}, input = {}, { now = new Date() } = {
       industry: "저장 업종과 업체명에 명시된 업종으로 분류합니다. 검색어만으로 업종을 확정하지 않습니다." } };
 }
 
-function createIndustryAnalysisService({ sources, readContext = async () => ({ sources: [], warnings: [], networkAttempted: false }), now = () => new Date() }) {
+function createIndustryAnalysisService({ sources, readContext = async () => ({ sources: [], warnings: [], networkAttempted: false }), now = () => new Date(),
+  dataDir = null, calculationVersion, autoStart = true, readSourceRevision = null }) {
   const sourceCache = new Map();
   const pendingSources = new Map();
-  let sourceReadQueue = Promise.resolve();
+  let sourceReadQueue = Promise.resolve(), sourceEpoch = 0, optionsTask = null, backgroundOptions = Promise.resolve();
+  let optionsRefreshTimer = null, finishOptionsRefresh = null, serviceStopped = false;
+  function clearSources() { sourceEpoch++; sourceCache.clear(); }
   async function savedSource(request, date) {
-    const key = `${request.month}|${request.cutoffDate}`;
+    const epoch = sourceEpoch, key = `${epoch}|${request.month}|${request.cutoffDate}`;
     // Expiry and the completed-cache limit must never evict running work.
     // A saved month can take longer than the cache TTL to reconstruct.
     if (pendingSources.has(key)) return pendingSources.get(key);
@@ -300,14 +306,14 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     pendingSources.set(key, promise);
     try {
       const value = await promise;
-      sourceCache.set(key, { value, expires: new Date(now()).getTime() + 30000 });
+      if (epoch === sourceEpoch) sourceCache.set(key, { value, expires: new Date(now()).getTime() + 30000 });
       while (sourceCache.size > 2) sourceCache.delete(sourceCache.keys().next().value);
       return value;
     } finally {
       if (pendingSources.get(key) === promise) pendingSources.delete(key);
     }
   }
-  async function options() {
+  async function calculateOptions() {
     const [options, catalog] = await Promise.all([sources.options(), sources.catalog()]);
     const runMap = new Map((catalog.runs || []).map(run => [String(run.id || run.runId), run]));
     const today = options.today || new Date(new Date(now()).getTime() + 9 * 3600000).toISOString().slice(0, 10);
@@ -329,7 +335,7 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     return { industries: INDUSTRIES.map(publicIndustry), regions: catalogRegions(options.regions), months: options.months,
       defaultMonth, availableEvidenceMonths, defaultIndustry: "glamping", today, cohort: COHORT, features: FEATURES, scalePolicy: DEFERRED_SCALE };
   }
-  async function analyze(input) {
+  async function calculate(input) {
     const date = now(), request = normalizeRequest(input, date);
     const { source, catalog } = await savedSource(request, date);
     const result = buildIndustryAnalysis(source, request, { now: date });
@@ -340,7 +346,89 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     } else result.context.warnings = ["지역을 선택하면 저장된 방문·체류·소비 지표를 함께 확인할 수 있습니다. 사천은 남해안 지표 지역에 포함합니다."];
     return result;
   }
-  return { options, analyze };
+  if (!dataDir) return { options: calculateOptions, analyze: calculate, rebuild: calculate,
+    invalidate: async () => clearSources(), bootstrap: async () => {}, drain: async () => {}, stop: async () => {} };
+  const defaultSourceRevision = async () => JSON.stringify(await Promise.all([
+    "company_master/companies.json", "history/observations.jsonl"
+  ].map(async filename => {
+    try { const stat = await fs.stat(path.join(dataDir, filename), { bigint: true }); return [filename, String(stat.size), String(stat.mtimeNs), String(stat.ctimeNs)]; }
+    catch (error) { if (error.code === "ENOENT") return [filename, null]; throw error; }
+  })));
+  const store = createIndustryAnalysisStore({ dataDir, calculate, calculationVersion, now, autoStart,
+    readSourceRevision: async () => JSON.stringify([await defaultSourceRevision(), readSourceRevision ? await readSourceRevision() : null]), onInvalidate: clearSources });
+  async function options() {
+    const saved = await store.readOptions(), revision = await store.optionsRevision();
+    const today = new Date(new Date(now()).getTime() + 9 * 3600000).toISOString().slice(0, 10);
+    if (saved?.revision === revision) return { ...saved.value, today };
+    if (!optionsTask) {
+      optionsTask = (async () => {
+        let value;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const currentRevision = await store.optionsRevision();
+          value = await calculateOptions();
+          const published = await store.writeOptions(value, currentRevision);
+          if (!published) continue;
+          if (value.defaultMonth) await store.get(normalizeRequest({ month: value.defaultMonth, industry: "glamping", region: "all" }, now()));
+          return value;
+        }
+        scheduleOptionsRefresh(); return value;
+      })().finally(() => { optionsTask = null; });
+    }
+    // Previously stored selectors remain usable while refreshing lightweight
+    // catalog metadata. The queue/result read does not require a new catalog.
+    if (saved) { optionsTask.catch(() => {}); return { ...saved.value, today }; }
+    return optionsTask;
+  }
+  async function validatedRequest(input) {
+    const request = normalizeRequest(input, now());
+    if (request.region !== "all") {
+      let catalog = await options();
+      if (!catalog.regions.some(region => region.id === request.region) && optionsTask) catalog = await optionsTask;
+      if (!catalog.regions.some(region => region.id === request.region)) throw fail("invalid_region", "분석 가능한 지역을 선택해 주세요.");
+    }
+    return request;
+  }
+  async function analyze(input) {
+    const result = await store.get(await validatedRequest(input));
+    if (result.storage.hasSnapshot && result.request.region !== "all") {
+      const savedOptions = await store.readOptions();
+      const context = await readContext({ type: "region", targetId: result.request.region, month: result.request.month, cutoffDate: result.request.cutoffDate },
+        { companies: result.companies, regions: savedOptions?.value?.regions || result.regions });
+      if (context?.networkAttempted) throw Object.assign(new Error("저장된 지역 지표만 사용할 수 있습니다."), { code: "INDUSTRY_CONTEXT_MUST_BE_CACHE_ONLY", statusCode: 503 });
+      result.context = context;
+    }
+    return result;
+  }
+  async function bootstrap() {
+    await store.bootstrap();
+    const catalog = await options();
+    if (catalog.defaultMonth) await store.get(normalizeRequest({ month: catalog.defaultMonth, industry: "glamping", region: "all" }, now()));
+  }
+  async function invalidate(input) {
+    const state = await store.invalidate(input);
+    // A write hook waits only for the durable dirty mark. Selector refresh and
+    // preparing a newly discovered default month continue in the background.
+    scheduleOptionsRefresh();
+    return state;
+  }
+  async function refreshOptionsNow() {
+    if (optionsRefreshTimer) { clearTimeout(optionsRefreshTimer); optionsRefreshTimer = null; }
+    const finish = finishOptionsRefresh; finishOptionsRefresh = null;
+    try { await options(); if (optionsTask) await optionsTask; } catch { /* Saved selectors stay available on refresh failure. */ }
+    finally { if (finish) finish(); }
+  }
+  function scheduleOptionsRefresh() {
+    if (serviceStopped) return;
+    if (optionsRefreshTimer) clearTimeout(optionsRefreshTimer);
+    if (!finishOptionsRefresh) backgroundOptions = new Promise(resolve => { finishOptionsRefresh = resolve; });
+    optionsRefreshTimer = setTimeout(refreshOptionsNow, 1500);
+    optionsRefreshTimer.unref();
+  }
+  return { options, analyze, bootstrap, invalidate,
+    rebuild: async input => store.rebuild(await validatedRequest(input)),
+    drain: async () => { if (optionsRefreshTimer) await refreshOptionsNow(); await backgroundOptions; if (optionsTask) await optionsTask; return store.drain(); },
+    stop: async () => { serviceStopped = true; if (optionsRefreshTimer) clearTimeout(optionsRefreshTimer); if (finishOptionsRefresh) finishOptionsRefresh();
+      optionsRefreshTimer = null; finishOptionsRefresh = null; if (optionsTask) await optionsTask.catch(() => {}); return store.stop(); } };
 }
 
 module.exports = { buildIndustryAnalysis, createIndustryAnalysisService, compactIndustrySources,

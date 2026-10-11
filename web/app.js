@@ -36730,6 +36730,7 @@ function setActiveTab(tab, options = {}) {
   const previousTab = state.activeTab;
   state.analysisNavigationSequence = (state.analysisNavigationSequence || 0) + 1;
   state.activeTab = roleAllowsTab(tab) ? tab : firstRoleTab();
+  if (state.activeTab !== "industryHome") window.StayIndustryAnalysis?.pause(els.industryHomeDashboard);
   if (state.activeTab !== "admin") window.RegionalReportPreparation?.pause();
   if (window.CompanyIntegrated) syncCompanyIntegratedPanel();
   if (options.analysisRegionSelection !== undefined) {
@@ -40080,6 +40081,7 @@ function renderIndustryHome() {
     void window.StayIndustryAnalysis.mount(els.industryHomeDashboard, {
       legacyHtml,
       accountKey,
+      isVisible: () => state.activeTab === "industryHome",
       isAuthorized: () => isAdminRole() && (state.session?.username || "admin") === accountKey
     });
   } else {

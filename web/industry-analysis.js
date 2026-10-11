@@ -14,6 +14,20 @@
   };
   const optionsHtml = (rows, value) => rows.map(row => `<option value="${escapeHtml(row.id)}"${row.id === value ? " selected" : ""}>${escapeHtml(row.label)}</option>`).join("");
   const hasObservations = summary => Number(summary?.coveredCompanyDays) > 0 || Number(summary?.observedCompanies) > 0;
+  const activeStorage = storage => ["queued", "processing"].includes(storage?.status);
+  const timeLabel = value => value && Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", dateStyle: "short", timeStyle: "short" }).format(new Date(value)) : "확인 전";
+
+  function storageStatus(state) {
+    const storage = state.storage || state.data?.storage, hasSnapshot = Boolean(state.data?.summary);
+    if (!storage) return hasSnapshot && (state.loading || state.error) ? `<p class="ia-storage-note" role="status">${state.loading ? "저장 자료의 상태를 확인하고 있습니다." : "최근 조회에 실패했습니다."} 마지막 정상 자료를 표시합니다.</p>` : "";
+    const status = storage.status || "pending";
+    const labels = { queued: "집계 대기", processing: "집계 중", ready: hasSnapshot ? "집계 완료" : "저장 집계 없음", failed: "최근 집계 실패", pending: "준비 대기" };
+    const description = status === "ready" ? "집계 완료는 저장 자료의 계산이 끝났다는 뜻이며, 관측 확보율과 다릅니다."
+      : status === "failed" ? hasSnapshot ? "새 집계에 실패하여 마지막 정상 집계를 표시합니다." : "사용할 정상 집계가 아직 없습니다. 저장 자료로 다시 준비할 수 있습니다."
+        : hasSnapshot ? "새 집계를 준비하는 동안 마지막 정상 집계를 표시합니다." : "저장된 자료를 준비하고 있습니다. 첫 집계는 몇 분 걸릴 수 있습니다.";
+    const cutoff = state.data?.request?.cutoffDate || state.storageRequest?.cutoffDate;
+    return `<section class="ia-storage-status${status === "failed" ? " ia-storage-failed" : ""}" aria-label="저장 집계 상태"><div class="ia-storage-heading"><strong role="status">${escapeHtml(labels[status] || "상태 확인 필요")}</strong>${state.loading ? '<span>상태 확인 중</span>' : ""}</div><p>${escapeHtml(description)}</p><div class="ia-storage-times">${hasSnapshot ? `<span>마지막 정상 집계 <b>${escapeHtml(timeLabel(storage.calculatedAt))}</b></span>` : ""}${cutoff ? `<span>관측 기준일 <b>${escapeHtml(dateLabel(cutoff))}</b></span>` : ""}</div>${status === "failed" ? `<div class="ia-storage-actions">${state.rebuildNeedsCheck ? '<span>요청 결과를 확인하지 못했습니다. 위의 상태 확인 후 다시 준비해 주세요.</span>' : `<button type="button" data-ia-action="rebuild"${state.loading || state.rebuilding ? " disabled" : ""}>${state.rebuilding ? "집계 준비 요청 중" : "저장 자료로 집계 다시 준비"}</button>`}<small>저장된 자료만 다시 계산합니다. 새로운 외부 수집은 시작하지 않습니다.</small></div>` : ""}</section>`;
+  }
 
   function empty(title, detail, retry = false) {
     return `<div class="ia-empty"><span class="ia-empty-mark" aria-hidden="true">◇</span><h3>${escapeHtml(title)}</h3><p>${escapeHtml(detail)}</p>${retry ? '<button type="button" data-ia-action="retry">다시 불러오기</button>' : ""}</div>`;
@@ -101,24 +115,29 @@
     const industries = catalog.industries || [], regions = catalog.regions || [], months = catalog.months || [];
     const industryName = industries.find(row => row.id === selection.industry)?.label || "업종";
     const selectedRegion = regions.find(row => row.id === selection.region)?.label || "전체 관측 지역";
+    const storage = state.storage || data?.storage;
     let body;
-    if (state.loading) body = `<div class="ia-loading" role="status"><span></span><strong>관측 자료를 불러오는 중입니다</strong><p>첫 조회는 저장 자료를 정리하므로 몇 분 걸릴 수 있습니다. 같은 조건으로 다시 조회하지 않고 기다려 주세요.</p></div>`;
-    else if (state.error) body = `<div role="alert">${empty("자료를 불러오지 못했습니다", state.error, true)}</div>`;
+    if (state.loading && !data) body = `<div class="ia-loading" role="status"><span></span><strong>관측 자료를 불러오는 중입니다</strong><p>첫 조회는 저장 자료를 정리하므로 몇 분 걸릴 수 있습니다. 같은 조건으로 다시 조회하지 않고 기다려 주세요.</p></div>`;
+    else if (state.error && !data) body = `<div role="alert">${empty("자료를 불러오지 못했습니다", state.error, true)}</div>`;
+    else if (!data && activeStorage(storage)) body = `<div class="ia-loading" role="status"><span></span><strong>${storage.status === "queued" ? "저장 자료 집계 대기 중" : "저장 자료를 집계하고 있습니다"}</strong><p>상태가 자동으로 갱신됩니다. 아직 계산된 수치는 없습니다.</p></div>`;
+    else if (!data && storage?.status === "failed") body = empty("저장 집계를 준비하지 못했습니다", "실패를 0으로 계산하지 않습니다. 위에서 상태를 확인하거나 저장 자료로 집계를 다시 준비할 수 있습니다.");
+    else if (!data && storage) body = empty("저장 집계 준비 대기", "현재 조건으로 확인할 정상 집계가 아직 없습니다.");
     else if (data && state.tab === "companies") body = `${coverage(data.summary || {}, data.period || {})}${companyTable(data)}`;
     else if (data && state.tab === "industries") body = comparisons(data, "industries");
     else if (!data || !hasObservations(data.summary)) body = empty("아직 분석할 관측 자료가 없습니다", "저장된 네이버 플레이스 1~20위 자료 중 선택한 숙박월과 지역에 해당하는 자료가 없습니다. 다른 조건을 선택하거나 아래 저장 자료를 확인하세요.");
     else body = `${coverage(data.summary || {}, data.period || {})}${state.tab === "overview" ? overview(data) : state.tab === "companies" ? companyTable(data) : comparisons(data, state.tab)}`;
-    if (!state.loading && !state.error && data && !hasObservations(data.summary) && state.tab === "regions") body += comparisons(data, "regions");
-    if (!state.loading && !state.error && data && state.tab === "overview") body += regionalContext(data);
+    if (data && !hasObservations(data.summary) && state.tab === "regions") body += comparisons(data, "regions");
+    if (data && state.tab === "overview") body += regionalContext(data);
+    if (state.error && data) body = `<div class="ia-storage-error" role="alert">${escapeHtml(state.error)} 마지막 정상 집계를 표시합니다.</div>${body}`;
     const warnings = [...(data?.quality?.warnings || []), ...(data?.context?.warnings || [])].filter(item => typeof item === "string");
     const candidateLabels = regions.filter(row => row.indicatorCandidate).map(row => row.label);
     const metricDefinitions = [["reservationRate", "추정예약률"], ["averageBookedPrice", "예약 단위당 추정금액"], ["revenuePerAvailableUnitDay", "보유 단위당 하루 추정매출"], ["cohort", "순위 표본"]].filter(([key]) => data?.definitions?.[key]).map(([key, label]) => `<p><b>${label}:</b> ${escapeHtml(data.definitions[key])}</p>`).join("");
-    return `<div class="industry-analysis"><header class="ia-header"><div><span class="ia-kicker">INDUSTRY OBSERVATORY</span><h2>업종별 숙박 흐름</h2><p>지역의 차이부터 예약의 흐름까지, 저장된 관측 자료로 살펴보세요.</p></div><span class="ia-cohort">네이버 플레이스 <strong>1~20위</strong></span></header><form class="ia-filters" aria-label="업종분석 조건"><label>업종<select data-ia-filter="industry">${optionsHtml(industries, selection.industry)}</select></label><label>숙박월<select data-ia-filter="month">${months.length ? optionsHtml(months.map(id => ({ id, label: monthLabel(id) })), selection.month) : '<option value="">저장된 기간 없음</option>'}</select></label><label>지역<select data-ia-filter="region">${optionsHtml([{ id: "all", label: "전체 관측 지역" }, ...regions.filter(row => row.id !== "all")], selection.region)}</select></label><button type="button" class="ia-refresh" data-ia-action="retry" aria-label="저장 자료 다시 조회"${state.loading ? " disabled" : ""}>${state.loading ? "조회 중" : "새로고침"} <span aria-hidden="true">↻</span></button></form><div class="ia-scope"><span><b>${escapeHtml(industryName)}</b> · ${escapeHtml(selectedRegion)} · ${escapeHtml(monthLabel(selection.month))}</span><span>기간 중 1~20위 관측 업체 · 전체 시장 대표 아님</span></div><nav class="ia-tabs" aria-label="업종분석 보기">${TABS.map(([id, label]) => `<button type="button" data-ia-tab="${id}" aria-pressed="${state.tab === id}">${label}</button>`).join("")}</nav><div class="ia-content" aria-busy="${Boolean(state.loading)}">${body}</div>${warnings.length ? `<details class="ia-disclosure"><summary>자료 해석 시 확인할 점 <span>${warnings.length}건</span></summary><ul>${warnings.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul></details>` : ""}<details class="ia-disclosure"><summary>지표 기준과 수집 구상</summary><div class="ia-method">${metricDefinitions}<p><b>대상:</b> 검색 시점의 네이버 플레이스 1~20위 업체. 여러 검색어의 동일 업체는 중복을 제거합니다.</p><p><b>지역:</b> 업체의 실제 주소지를 사용합니다. 복합시설은 해당하는 각 업종에 포함될 수 있습니다.</p><p><b>결측:</b> 미관측 값은 ‘—’로 표시합니다. 공개예약은 초록색, 타채널 추정은 보라색입니다.</p><p><b>규모와 성과등급:</b> 현재 구분을 보류합니다. 규모구간은 추후 업종별로 정의합니다.</p>${candidateLabels.length ? `<p><b>지역 지표 후보:</b> ${escapeHtml(candidateLabels.join(" · "))}. 후보 등록은 자료 확보를 뜻하지 않습니다.</p>` : ""}<p>정기수집 구성은 계획으로 보관하며, 이 화면은 저장 자료만 조회합니다.</p></div></details>${state.legacyHtml ? `<details class="ia-disclosure ia-legacy"${state.legacyOpen ? " open" : ""}><summary>기존 키워드별 저장 분석 열기</summary><div class="ia-legacy-content">${state.legacyHtml}</div></details>` : ""}</div>`;
+    return `<div class="industry-analysis"><header class="ia-header"><div><span class="ia-kicker">INDUSTRY OBSERVATORY</span><h2>업종별 숙박 흐름</h2><p>지역의 차이부터 예약의 흐름까지, 저장된 관측 자료로 살펴보세요.</p></div><span class="ia-cohort">네이버 플레이스 <strong>1~20위</strong></span></header><form class="ia-filters" aria-label="업종분석 조건"><label>업종<select data-ia-filter="industry">${optionsHtml(industries, selection.industry)}</select></label><label>숙박월<select data-ia-filter="month">${months.length ? optionsHtml(months.map(id => ({ id, label: monthLabel(id) })), selection.month) : '<option value="">저장된 기간 없음</option>'}</select></label><label>지역<select data-ia-filter="region">${optionsHtml([{ id: "all", label: "전체 관측 지역" }, ...regions.filter(row => row.id !== "all")], selection.region)}</select></label><button type="button" class="ia-refresh" data-ia-action="retry" aria-label="저장 자료 다시 조회"${state.loading ? " disabled" : ""}>${state.loading ? "조회 중" : "상태 확인"} <span aria-hidden="true">↻</span></button></form><div class="ia-scope"><span><b>${escapeHtml(industryName)}</b> · ${escapeHtml(selectedRegion)} · ${escapeHtml(monthLabel(selection.month))}</span><span>기간 중 1~20위 관측 업체 · 전체 시장 대표 아님</span></div>${storageStatus(state)}<nav class="ia-tabs" aria-label="업종분석 보기">${TABS.map(([id, label]) => `<button type="button" data-ia-tab="${id}" aria-pressed="${state.tab === id}">${label}</button>`).join("")}</nav><div class="ia-content" aria-busy="${Boolean(state.loading)}">${body}</div>${warnings.length ? `<details class="ia-disclosure"><summary>자료 해석 시 확인할 점 <span>${warnings.length}건</span></summary><ul>${warnings.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul></details>` : ""}<details class="ia-disclosure"><summary>지표 기준과 수집 구상</summary><div class="ia-method">${metricDefinitions}<p><b>대상:</b> 검색 시점의 네이버 플레이스 1~20위 업체. 여러 검색어의 동일 업체는 중복을 제거합니다.</p><p><b>지역:</b> 업체의 실제 주소지를 사용합니다. 복합시설은 해당하는 각 업종에 포함될 수 있습니다.</p><p><b>결측:</b> 미관측 값은 ‘—’로 표시합니다. 공개예약은 초록색, 타채널 추정은 보라색입니다.</p><p><b>규모와 성과등급:</b> 현재 구분을 보류합니다. 규모구간은 추후 업종별로 정의합니다.</p>${candidateLabels.length ? `<p><b>지역 지표 후보:</b> ${escapeHtml(candidateLabels.join(" · "))}. 후보 등록은 자료 확보를 뜻하지 않습니다.</p>` : ""}<p>정기수집 구성은 계획으로 보관하며, 이 화면은 저장 자료만 조회합니다.</p></div></details>${state.legacyHtml ? `<details class="ia-disclosure ia-legacy"${state.legacyOpen ? " open" : ""}><summary>기존 키워드별 저장 분석 열기</summary><div class="ia-legacy-content">${state.legacyHtml}</div></details>` : ""}</div>`;
   }
 
-  async function requestJson(url) {
+  async function requestJson(url, options = {}) {
     let response;
-    try { response = await root.fetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } }); }
+    try { response = await root.fetch(url, { credentials: "same-origin", method: options.method || "GET", headers: { Accept: "application/json", ...(options.body ? { "Content-Type": "application/json" } : {}) }, ...(options.body ? { body: JSON.stringify(options.body) } : {}) }); }
     catch { throw new Error("서버에 연결하지 못했습니다. 잠시 후 다시 조회해 주세요."); }
     const failureMessage = response.status >= 500 ? "서버가 일시적으로 응답하지 않습니다. 잠시 후 다시 조회해 주세요." : "서버 응답을 확인하지 못했습니다. 잠시 후 다시 조회해 주세요.";
     let body;
@@ -128,12 +147,28 @@
     return body;
   }
 
-  function createController({ request = requestJson, isAuthorized = () => true } = {}) {
-    const state = { catalog: null, data: null, selection: { industry: "glamping", month: "", region: "all" }, tab: "overview", loading: false, error: "", legacyHtml: "", legacyOpen: false };
-    let container, revision = 0, destroyed = false, activeDataKey = "", dataTask = null;
-    const pendingData = new Map();
+  function createController({ request = requestJson, isAuthorized = () => true, isVisible = () => true,
+    setTimeout: schedule = root.setTimeout.bind(root), clearTimeout: cancel = root.clearTimeout.bind(root) } = {}) {
+    const state = { catalog: null, data: null, dataKey: "", storage: null, storageRequest: null,
+      selection: { industry: "glamping", month: "", region: "all" }, tab: "overview", loading: false,
+      rebuilding: false, rebuildNeedsCheck: false, error: "", legacyHtml: "", legacyOpen: false };
+    let container, revision = 0, destroyed = false, paused = false, timer = null, activeDataKey = "", dataTask = null;
+    const pendingData = new Map(), pendingRebuilds = new Set();
     const authorized = () => !destroyed && isAuthorized();
-    function render() { if (container && authorized()) container.innerHTML = renderDashboard(state); }
+    const visible = () => authorized() && !paused && isVisible() && container?.isConnected !== false && !container?.closest?.("[hidden]");
+    const selectionKey = () => `${ENDPOINT}?${new URLSearchParams(state.selection)}`;
+    function clearTimer() { if (timer !== null) { cancel(timer); timer = null; } }
+    function render() { if (container && visible()) container.innerHTML = renderDashboard(state); }
+    function pause() {
+      clearTimer(); paused = true; revision++;
+      if (state.rebuilding) state.rebuildNeedsCheck = true;
+      state.loading = false; state.rebuilding = false; activeDataKey = ""; dataTask = null;
+    }
+    function queuePoll() {
+      clearTimer();
+      if (!visible() || state.error || state.loading || state.rebuilding || !activeStorage(state.storage)) return;
+      timer = schedule(() => { timer = null; if (visible()) void loadData(); else pause(); }, 3000);
+    }
     function sharedDataRequest(url) {
       if (!pendingData.has(url)) {
         const pending = (async () => request(url))().finally(() => { if (pendingData.get(url) === pending) pendingData.delete(url); });
@@ -141,65 +176,101 @@
       }
       return pendingData.get(url);
     }
+    function accept(result, key) {
+      if (!result || typeof result !== "object") throw new Error("저장 집계 응답을 확인하지 못했습니다.");
+      const supplied = result.request;
+      if (supplied && ["industry", "month", "region"].every(field => supplied[field] !== undefined)
+        && ["industry", "month", "region"].some(field => supplied[field] !== state.selection[field])) throw new Error("선택한 조건과 집계 자료의 조건이 일치하지 않습니다.");
+      const hasSummary = Boolean(result.summary && typeof result.summary === "object");
+      if ((!result.storage && !hasSummary) || (result.storage?.hasSnapshot === true && !hasSummary)) throw new Error("저장 집계의 계산 결과를 확인하지 못했습니다.");
+      state.storage = result.storage || null; state.storageRequest = supplied || null;
+      state.data = result.storage?.hasSnapshot === false ? null : hasSummary ? result : null;
+      state.dataKey = key; state.rebuildNeedsCheck = false;
+    }
     function loadData() {
-      if (!authorized()) return Promise.resolve();
-      const key = `${ENDPOINT}?${new URLSearchParams(state.selection)}`;
+      if (!visible()) return Promise.resolve();
+      const key = selectionKey();
       if (state.loading && activeDataKey === key && dataTask) return dataTask;
-      const token = ++revision;
-      state.data = null; state.error = "";
-      if (!state.selection.month) { state.loading = false; activeDataKey = ""; dataTask = null; render(); return Promise.resolve(); }
+      clearTimer(); const token = ++revision;
+      if (state.dataKey !== key) { state.data = null; state.storage = null; state.storageRequest = null; state.rebuilding = false; state.rebuildNeedsCheck = false; }
+      state.error = "";
+      if (!state.selection.month) { state.loading = false; state.dataKey = ""; activeDataKey = ""; dataTask = null; render(); return Promise.resolve(); }
       state.loading = true; activeDataKey = key; render();
       dataTask = (async () => {
         try {
           const result = await sharedDataRequest(key);
-          if (token !== revision || !authorized()) return;
-          state.data = result;
+          if (token !== revision || !visible()) return;
+          accept(result, key);
         } catch (error) {
-          if (token === revision && authorized()) state.error = error.message || "잠시 후 다시 시도해 주세요.";
-        } finally { if (token === revision && authorized()) { state.loading = false; activeDataKey = ""; dataTask = null; render(); } }
+          if (token === revision && visible()) state.error = error.message || "잠시 후 다시 시도해 주세요.";
+        } finally {
+          if (token === revision && visible()) { state.loading = false; activeDataKey = ""; dataTask = null; render(); queuePoll(); }
+        }
       })();
       return dataTask;
     }
     async function loadCatalog() {
-      if (state.loading || !authorized()) return;
-      const token = ++revision;
-      state.loading = true; state.error = ""; state.data = null; render();
+      if (state.loading || state.rebuilding || !visible()) return;
+      clearTimer(); const token = ++revision;
+      state.loading = true; state.error = ""; render();
       try {
         const result = await request(`${ENDPOINT}/options`);
-        if (token !== revision || !authorized()) return;
+        if (token !== revision || !visible()) return;
         state.catalog = result;
         if (!(result.industries || []).some(row => row.id === state.selection.industry)) state.selection.industry = result.defaultIndustry || result.industries?.[0]?.id || "glamping";
         if (!(result.months || []).includes(state.selection.month)) state.selection.month = (result.months || []).includes(result.defaultMonth) ? result.defaultMonth : result.months?.[0] || "";
         if (state.selection.region !== "all" && !(result.regions || []).some(row => row.id === state.selection.region)) state.selection.region = "all";
         await loadData();
       } catch (error) {
-        if (token === revision && authorized()) { state.error = error.message || "조건 목록을 불러오지 못했습니다."; state.loading = false; render(); }
+        if (token === revision && visible()) { state.error = error.message || "조건 목록을 불러오지 못했습니다."; state.loading = false; render(); }
+      }
+    }
+    async function rebuild() {
+      const key = selectionKey();
+      if (!visible() || state.loading || state.rebuilding || state.rebuildNeedsCheck || state.storage?.status !== "failed" || pendingRebuilds.has(key)) return false;
+      clearTimer(); const token = ++revision;
+      pendingRebuilds.add(key); state.rebuilding = true; state.loading = true; state.error = ""; render();
+      const body = { ...state.selection, ...(state.storageRequest?.cutoffDate ? { cutoffDate: state.storageRequest.cutoffDate } : {}) };
+      try {
+        const result = await request(`${ENDPOINT}/rebuild`, { method: "POST", body });
+        if (token !== revision || !visible()) return false;
+        accept(result, key); return true;
+      } catch (error) {
+        if (token === revision && visible()) { state.rebuildNeedsCheck = true; state.error = `${error.message || "집계 준비 요청을 확인하지 못했습니다."} 다시 요청하기 전에 상태를 확인해 주세요.`; }
+        return false;
+      } finally {
+        pendingRebuilds.delete(key);
+        if (token === revision && visible()) { state.rebuilding = false; state.loading = false; render(); queuePoll(); }
       }
     }
     function input(field, value) {
-      if (!["industry", "month", "region"].includes(field) || !authorized()) return Promise.resolve();
+      if (!["industry", "month", "region"].includes(field) || !visible()) return Promise.resolve();
       state.selection[field] = String(value || "");
       return loadData();
     }
     function selectTab(value) { if (TABS.some(([id]) => id === value)) { state.tab = value; render(); } }
     function click(event) {
       const action = event.target.closest?.("[data-ia-action],[data-ia-tab],[data-ia-region]");
-      if (!action || action.disabled || !authorized()) return;
-      if (action.dataset.iaAction === "retry") void loadCatalog();
+      if (!action || action.disabled || !visible()) return;
+      if (action.dataset.iaAction === "retry") void (state.catalog ? loadData() : loadCatalog());
+      if (action.dataset.iaAction === "rebuild") void rebuild();
       if (action.dataset.iaTab) { selectTab(action.dataset.iaTab); container.querySelector?.(`[data-ia-tab="${state.tab}"]`)?.focus({ preventScroll: true }); }
       if (action.dataset.iaRegion) { state.tab = "overview"; void input("region", action.dataset.iaRegion); }
     }
     function change(event) { const field = event.target.dataset?.iaFilter; if (field) void input(field, event.target.value); }
     function toggle(event) { if (event.target.matches?.(".ia-legacy")) state.legacyOpen = event.target.open; }
     function submit(event) { if (event.target.matches?.(".ia-filters")) event.preventDefault(); }
-    function destroy() { destroyed = true; revision++; if (container) { container.removeEventListener("click", click); container.removeEventListener("change", change); container.removeEventListener("toggle", toggle, true); container.removeEventListener("submit", submit); } }
+    function destroy() { pause(); destroyed = true; pendingData.clear(); if (container) { container.removeEventListener("click", click); container.removeEventListener("change", change); container.removeEventListener("toggle", toggle, true); container.removeEventListener("submit", submit); } }
     function mount(element, context = {}) {
-      const first = !container;
-      container = element; state.legacyHtml = context.legacyHtml || "";
+      const first = !container, resume = paused;
+      container = element; paused = false; state.legacyHtml = context.legacyHtml || "";
       if (first) { container.addEventListener("click", click); container.addEventListener("change", change); container.addEventListener("toggle", toggle, true); container.addEventListener("submit", submit); }
-      render(); return first ? loadCatalog() : Promise.resolve();
+      render();
+      if (first || !state.catalog) return loadCatalog();
+      if (resume) return loadData();
+      if (timer === null) queuePoll(); return Promise.resolve();
     }
-    return { state, mount, input, selectTab, loadData, loadCatalog, render, destroy };
+    return { state, mount, input, selectTab, loadData, loadCatalog, rebuild, pause, render, destroy };
   }
 
   const mounted = new WeakMap();
@@ -207,9 +278,10 @@
     mount(element, context = {}) {
       let record = mounted.get(element);
       if (record && record.accountKey !== context.accountKey) { record.controller.destroy(); record = null; }
-      if (!record) { record = { accountKey: context.accountKey, controller: createController({ isAuthorized: context.isAuthorized }) }; mounted.set(element, record); }
+      if (!record) { record = { accountKey: context.accountKey, controller: createController({ isAuthorized: context.isAuthorized, isVisible: context.isVisible }) }; mounted.set(element, record); }
       return record.controller.mount(element, context);
     },
+    pause(element) { mounted.get(element)?.controller.pause(); },
     unmount(element) { mounted.get(element)?.controller.destroy(); mounted.delete(element); }
   };
   root.StayIndustryAnalysis = exported;

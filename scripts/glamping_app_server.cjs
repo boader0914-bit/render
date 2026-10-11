@@ -22,6 +22,7 @@ const { createMonthlyReportService } = require("./lib/monthly_reports.cjs");
 const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs");
 const { createIndustryAnalysisService } = require("./lib/industry_analysis.cjs");
 const { createIndustryAnalysisHttpHandler } = require("./lib/industry_analysis_http.cjs");
+const { createIndustrySourceRevision } = require("./lib/industry_source_revision.cjs");
 const { createCompanyIntegratedDb } = require("./lib/company_integrated_db.cjs");
 const { createCompanyIntegratedTargets } = require("./lib/company_integrated_targets.cjs");
 const { createCompanyCapacityRegistry } = require("./lib/company_capacity_registry.cjs");
@@ -413,10 +414,20 @@ const monthlyReportSources = createMonthlyReportSources({
   readSpecialDays: async year => (await specialDaysService.status(year)).yearStatus
 });
 const listCompanyIntegratedTargets = createCompanyIntegratedTargets({ dataDir: DATA_DIR, catalog: monthlyReportSources.catalog });
-const industryAnalysisService = createIndustryAnalysisService({ sources: monthlyReportSources, readContext: readMonthlyRegionContext });
-const handleIndustryAnalysis = createIndustryAnalysisHttpHandler({
-  service: industryAnalysisService, requireAdmin: requireAdminSession, send
+const industryAnalysisService = createIndustryAnalysisService({
+  dataDir: DATA_DIR, sources: monthlyReportSources, readContext: readMonthlyRegionContext,
+  readSourceRevision: createIndustrySourceRevision({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR,
+    regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
+    tourismRegionMapFile: path.join(WEB_DIR, "data", "tourism_region_map.json") })
 });
+const handleIndustryAnalysis = createIndustryAnalysisHttpHandler({
+  service: industryAnalysisService, requireAdmin: requireAdminSession, send, parseJsonBody,
+  rateLimit: (req, session) => assertRequestRateLimit(req, "adminIndustryRebuild", { limit: 6, windowMs: 60000 }, session.username || "")
+});
+async function invalidateIndustryAnalysis(reason) {
+  try { await industryAnalysisService.invalidate({ reason }); }
+  catch (error) { console.error("industry_analysis_invalidation_failed", error.code || "unavailable"); }
+}
 const companyIntegratedDb = createCompanyIntegratedDb({
   dataDir: DATA_DIR, loadSources: monthlyReportSources.loadSources, catalog: monthlyReportSources.catalog,
   listTargets: listCompanyIntegratedTargets
@@ -1767,6 +1778,8 @@ function startCrawlJob(job) {
     }).catch((error) => {
       console.warn(`Could not record crawl timing: ${error.message || error}`);
     });
+    // A failed process can still have published a partial/blocked manifest.
+    if (result?.runId || failure) await invalidateIndustryAnalysis(failure ? "run_failed" : "run_saved");
     if (!failure && result?.runId && allowsDerivedUpdates(result.output)
       && (!(job.payload.scheduledCollection || result.output?.workerCollection || result.output?.webCollection) || result.collectionQuality?.status === "complete")) {
       cleanupRecentCrawlResults();
@@ -6711,6 +6724,7 @@ async function importYeogiSupplement(payload) {
     companyLinkError: companyLink.error || ""
   };
   await fsp.writeFile(path.join(dirPath, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+  await invalidateIndustryAnalysis("run_manual_import");
 
   return {
     importedCount: importedRows.length,
@@ -10327,6 +10341,8 @@ async function writeCompanyMaster(master) {
   const tempPath = `${COMPANY_MASTER_FILE}.${process.pid}.tmp`;
   await fsp.writeFile(tempPath, JSON.stringify(next, null, 2), "utf8");
   await fsp.rename(tempPath, COMPANY_MASTER_FILE);
+  // Deletion, merging and changes to actual regions affect past cohorts too.
+  await invalidateIndustryAnalysis("company_saved");
   const changed = [];
   for (const company of Object.values(next.companies || {})) {
     if (!company?.companyId || company.deletedAt || company.mergedIntoCompanyId) continue;
@@ -15069,7 +15085,10 @@ async function appendHistoryForRunUnlocked(runId, options = {}) {
   const result = { appended: missing.length, observationCount: observations.length, file: "history/observations.jsonl", companyMaster: data.companyMaster || null };
   // Publish derived views only after durable source history. Run reads used by
   // the aggregation pass skip both company-master and history writes.
-  if (missing.length) await queueIntegratedCompanies([...new Set(observations.map(row => row.companyKey).filter(Boolean))], "observations_saved");
+  if (missing.length) {
+    await invalidateIndustryAnalysis("observations_saved");
+    await queueIntegratedCompanies([...new Set(observations.map(row => row.companyKey).filter(Boolean))], "observations_saved");
+  }
   if (masterDbDualWriteQueue.mode === "shadow") result.evidence = evidence;
   return result;
 }
@@ -18669,6 +18688,7 @@ async function route(req, res) {
         if(!require("node:util").isDeepStrictEqual(originalScope,require("./collection_reuse.cjs").scope(payload.expected)))return send(res,409,{error:"복구 조건이 원 수집 조건과 다릅니다."});
         for(const [key,value] of Object.entries(request.conditions||{}))if(String(payload.expected[key])!==String(value))return send(res,409,{error:"복구 조건이 요청 영수증과 다릅니다."});
         const result=await collectorWeb.recover({...payload,request});
+        await invalidateIndustryAnalysis("run_recovered");
         const history=await appendHistoryForRun(result.runId,{skipExternal:true});
         if(history.reason||history.companyMaster?.error||!history.companyMaster?.currentRunCompanies)throw Object.assign(new Error("보관함 복구 후 DB 반영을 확인해야 합니다."),{code:"COLLECTOR_RECOVERY_DB_PENDING",statusCode:503});
         let masterDbSync=null;
@@ -18708,6 +18728,7 @@ async function route(req, res) {
         if(!master.companies || typeof master.companies!=="object" || Array.isArray(master.companies))throw Object.assign(new Error("기존 업체 DB 구조를 확인해야 합니다."),{code:"COLLECTOR_RECOVERY_DB_INVALID",statusCode:503});
       }
       const result=await collectorBrokers[workerKey].recover(payload.jobId,{manifestSha256:payload.manifestSha256,expected:payload.expected});
+      await invalidateIndustryAnalysis("run_recovered");
       const history=await appendHistoryForRun(result.runId,{skipExternal:true});
       if(history.reason||history.companyMaster?.error||!history.companyMaster?.currentRunCompanies)throw Object.assign(new Error("보관함 복구 후 DB 반영을 확인해야 합니다."),{code:"COLLECTOR_RECOVERY_DB_PENDING",statusCode:503});
       let masterDbSync=null;
@@ -19472,6 +19493,7 @@ seedOutputsFromRepo()
       const primaryUrl = HOST === "0.0.0.0" ? `http://127.0.0.1:${PORT}` : `http://${HOST}:${PORT}`;
       console.log(`Lodging datalab beta app running at ${primaryUrl}`);
       companyIntegratedDb.bootstrap().catch(error => console.error("company_integration_bootstrap_failed", error.code || "unavailable"));
+      industryAnalysisService.bootstrap().catch(error => console.error("industry_analysis_bootstrap_failed", error.code || "unavailable"));
       if (HOST === "0.0.0.0") {
         for (const url of localNetworkUrls()) console.log(`Mobile/LAN URL: ${url}`);
       }

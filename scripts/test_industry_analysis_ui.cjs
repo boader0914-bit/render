@@ -8,6 +8,15 @@ const summary = { companyCount: 2, observedCompanies: 1, coveredCompanyDays: 1, 
 const data = { request: { region: "all" }, industry: catalog.industries[0], period: { start: "2026-10-01", end: "2026-10-31", days: 31 }, summary, daily: [{ date: "2026-10-01", publicBookings: 0, phoneBookings: 0 }, { date: "2026-10-02", publicBookings: null, phoneBookings: null }], regions: [{ id: "sacheon", label: "경남 사천시", companyCount: 0, observedCompanies: 0, coveredCompanyDays: 0, expectedCompanyDays: 0, coverageRate: null, reservationRate: null }], industryComparison: { status: "insufficient", rows: [] }, quality: { warnings: ["자료 범위가 다릅니다."] }, context: { sources: [] }, companies: [] };
 function state(extra = {}) { return { catalog, data: structuredClone(data), selection: { industry: "glamping", month: "2026-10", region: "all" }, tab: "overview", loading: false, error: "", ...extra }; }
 function host() { const listeners = new Map(); return { innerHTML: "", addEventListener(name, callback) { listeners.set(name, callback); }, removeEventListener(name) { listeners.delete(name); }, querySelector() { return { focus() {} }; }, listeners }; }
+function stored(status, { hasSnapshot = true, month = "2026-10", region = "all", ...extra } = {}) {
+  return { ...(hasSnapshot ? structuredClone(data) : {}), request: { industry: "glamping", month, region, cutoffDate: "2026-10-11" },
+    storage: { status, hasSnapshot, stale: status !== "ready", calculatedAt: hasSnapshot ? "2026-10-10T00:00:00Z" : null, sourceRevision: "source-1", resultRevision: 1, ...extra } };
+}
+function scheduled() {
+  const waiting = new Map(); let sequence = 0;
+  return { waiting, setTimeout(callback, ms) { assert.equal(ms, 3000); const id = ++sequence; waiting.set(id, callback); return id; }, clearTimeout(id) { waiting.delete(id); },
+    async tick() { const entry = waiting.entries().next().value; assert.ok(entry, "A poll must be scheduled"); waiting.delete(entry[0]); entry[1](); await new Promise(done => setImmediate(done)); } };
+}
 
 test("zero observations and missing values stay distinct in metrics and charts", () => {
   assert.equal(percent(0), "0%"); assert.equal(percent(null), "—"); assert.equal(money(0), "0원"); assert.equal(money(undefined), "—"); assert.equal(count(null), "—");
@@ -190,7 +199,8 @@ test("failure, empty and loading are explicit; refreshing preserves choices", as
   assert.equal(controller.state.selection.month, "2026-09");
   fail = true; await controller.loadCatalog();
   assert.match(element.innerHTML, /role="alert"/); assert.match(element.innerHTML, /API 연결 실패/);
-  assert.doesNotMatch(element.innerHTML, /추정예약률<\/span><strong>0%/);
+  assert.match(element.innerHTML, /추정예약률<\/span><strong>0%/, "A failed status refresh preserves the last known valid zero instead of discarding the snapshot");
+  assert.match(element.innerHTML, /마지막 정상/);
   assert.match(renderDashboard(state({ loading: true })), /role="status"/);
   assert.match(renderDashboard(state({ data: null })), /아직 분석할 관측 자료가 없습니다/);
 });
@@ -210,4 +220,122 @@ test("no month does not fetch observations, and revoked authorization suppresses
   assert.equal(guardedHost.innerHTML, "logged out");
   assert.equal(controller.state.data, null);
   controller.destroy(); assert.equal(guardedHost.listeners.size, 0);
+});
+
+test("queued and processing snapshots poll lightly until ready, without manufacturing zero metrics", async () => {
+  const clock = scheduled(), calls = [], results = [stored("queued", { hasSnapshot: false }), stored("processing", { hasSnapshot: false }), stored("ready")];
+  const element = host(), controller = createController({ ...clock, request: async (url, options) => { calls.push({ url, options }); return url.endsWith("/options") ? catalog : results.shift(); } });
+  await controller.mount(element);
+  assert.equal(controller.state.data, null);
+  assert.match(element.innerHTML, /집계 대기/);
+  assert.doesNotMatch(element.innerHTML, /추정예약률<\/span><strong>0%|관측 추정매출 소계/);
+  assert.equal(clock.waiting.size, 1);
+  await clock.tick();
+  assert.match(element.innerHTML, /저장 자료를 집계하고 있습니다/);
+  assert.equal(clock.waiting.size, 1);
+  await clock.tick();
+  assert.equal(clock.waiting.size, 0);
+  assert.match(element.innerHTML, /집계 완료/);
+  assert.match(element.innerHTML, /관측 확보율과 다릅니다/);
+  assert.match(element.innerHTML, /마지막 정상 집계/);
+  assert.ok(element.innerHTML.includes(new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", dateStyle: "short", timeStyle: "short" }).format(new Date("2026-10-10T00:00:00Z"))));
+  assert.match(element.innerHTML, /관측 기준일 <b>2026.10.11/);
+  assert.equal(calls.filter(call => call.url.endsWith("/options")).length, 1, "Polling does not reload the catalog");
+  assert.ok(calls.every(call => call.options?.method !== "POST"), "Status polling cannot request a rebuild");
+  controller.destroy();
+});
+
+test("same-condition refresh preserves the last successful snapshot and a failed rebuild remains terminal", async () => {
+  const clock = scheduled(); let response = () => stored("ready"), resolveRefresh;
+  const element = host(), controller = createController({ ...clock, request: async url => url.endsWith("/options") ? catalog : response() });
+  await controller.mount(element);
+  response = () => new Promise(resolve => { resolveRefresh = resolve; });
+  const refresh = controller.loadData();
+  assert.match(element.innerHTML, /추정예약률<\/span><strong>0%/);
+  assert.match(element.innerHTML, /상태 확인 중/);
+  resolveRefresh(stored("processing")); await refresh;
+  assert.match(element.innerHTML, /마지막 정상 집계를 표시/);
+  response = () => stored("failed"); await clock.tick();
+  assert.equal(clock.waiting.size, 0);
+  assert.match(element.innerHTML, /최근 집계 실패/);
+  assert.match(element.innerHTML, /추정예약률<\/span><strong>0%/);
+  assert.match(element.innerHTML, /data-ia-action="rebuild"/);
+  response = () => { throw new Error("연결 실패"); }; await controller.loadData();
+  assert.match(element.innerHTML, /role="alert"/);
+  assert.match(element.innerHTML, /추정예약률<\/span><strong>0%/);
+  assert.equal(clock.waiting.size, 0);
+  controller.destroy();
+});
+
+test("changing conditions clears old metrics and pending or failed without a snapshot never looks like zero", async () => {
+  const clock = scheduled(); let resolveChanged;
+  const element = host(), controller = createController({ ...clock, request: async url => url.endsWith("/options") ? catalog : url.includes("month=2026-10") ? stored("processing") : new Promise(resolve => { resolveChanged = resolve; }) });
+  await controller.mount(element);
+  assert.equal(clock.waiting.size, 1);
+  const change = controller.input("month", "2026-09");
+  assert.equal(clock.waiting.size, 0);
+  assert.equal(controller.state.data, null);
+  assert.doesNotMatch(element.innerHTML, /추정예약률<\/span><strong>0%/);
+  resolveChanged(stored("pending", { hasSnapshot: false, month: "2026-09" })); await change;
+  assert.match(element.innerHTML, /저장 집계 준비 대기/);
+  assert.equal(clock.waiting.size, 0);
+  const failed = renderDashboard(state({ data: null, storage: stored("failed", { hasSnapshot: false }).storage }));
+  assert.match(failed, /저장 집계를 준비하지 못했습니다/);
+  assert.doesNotMatch(failed, /추정예약률<\/span><strong>0%/);
+  controller.destroy();
+});
+
+test("pause, hidden views and revoked roles stop polling and suppress late replies; resuming reads status", async () => {
+  const clock = scheduled(); let visible = true, authorized = true, calls = 0, reply = () => stored("processing", { hasSnapshot: false }), resolveLate;
+  const element = host(), controller = createController({ ...clock, isVisible: () => visible, isAuthorized: () => authorized, request: async url => { if (url.endsWith("/options")) return catalog; calls++; return reply(); } });
+  await controller.mount(element); assert.equal(clock.waiting.size, 1);
+  controller.pause(); assert.equal(clock.waiting.size, 0);
+  await controller.loadData(); assert.equal(calls, 1);
+  await controller.mount(element); assert.equal(calls, 2); assert.equal(clock.waiting.size, 1);
+  visible = false; await clock.tick(); assert.equal(calls, 2); assert.equal(clock.waiting.size, 0);
+  visible = true; await controller.mount(element); assert.equal(calls, 3);
+  authorized = false; await clock.tick(); assert.equal(calls, 3); assert.equal(clock.waiting.size, 0);
+  authorized = true; reply = () => new Promise(resolve => { resolveLate = resolve; });
+  const resume = controller.mount(element);
+  controller.pause(); resolveLate(stored("ready")); await resume;
+  assert.equal(controller.state.data, null);
+  assert.equal(clock.waiting.size, 0);
+  controller.destroy(); assert.equal(element.listeners.size, 0);
+});
+
+test("rebuild requires an explicit failed-state action, guards duplicates and checks unknown outcomes before retry", async () => {
+  const clock = scheduled(), calls = []; let rejectPost, resolvePost;
+  const element = host(), controller = createController({ ...clock, request: async (url, options) => {
+    calls.push({ url, options });
+    if (url.endsWith("/options")) return catalog;
+    if (options?.method === "POST") return new Promise((resolve, reject) => { resolvePost = resolve; rejectPost = reject; });
+    return stored("failed", { hasSnapshot: false });
+  } });
+  await controller.mount(element);
+  assert.equal(clock.waiting.size, 0);
+  const attempt = controller.rebuild(); await controller.rebuild();
+  assert.equal(calls.filter(call => call.options?.method === "POST").length, 1);
+  const posted = calls.find(call => call.options?.method === "POST");
+  assert.equal(posted.url, "/api/industry-analysis/rebuild");
+  assert.deepEqual(posted.options.body, { industry: "glamping", month: "2026-10", region: "all", cutoffDate: "2026-10-11" });
+  rejectPost(new Error("연결 끊김")); await attempt;
+  assert.equal(controller.state.rebuildNeedsCheck, true);
+  await controller.rebuild(); assert.equal(calls.filter(call => call.options?.method === "POST").length, 1);
+  assert.equal(clock.waiting.size, 0, "An unknown POST outcome must not retry automatically");
+  await controller.loadData(); assert.equal(controller.state.rebuildNeedsCheck, false);
+  const retry = controller.rebuild(); resolvePost(stored("queued", { hasSnapshot: false })); await retry;
+  assert.equal(clock.waiting.size, 1);
+  await controller.rebuild(); assert.equal(calls.filter(call => call.options?.method === "POST").length, 2, "A queued rebuild cannot be resubmitted");
+  assert.match(element.innerHTML, /집계 대기/);
+  controller.destroy();
+});
+
+test("mismatched stored snapshot conditions cannot replace a valid selected snapshot", async () => {
+  let wrong = false;
+  const element = host(), controller = createController({ request: async url => url.endsWith("/options") ? catalog : stored("ready", wrong ? { month: "2026-09" } : {}) });
+  await controller.mount(element); wrong = true; await controller.loadData();
+  assert.match(controller.state.error, /조건이 일치하지 않습니다/);
+  assert.equal(controller.state.data.request.month, "2026-10");
+  assert.match(element.innerHTML, /마지막 정상 집계를 표시합니다/);
+  controller.destroy();
 });
