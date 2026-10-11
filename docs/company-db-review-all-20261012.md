@@ -24,4 +24,10 @@
 - 좁은 화면의 문서 폭은 390px으로 가로 넘침이 없다. 상품 가격표는 PC 카드 폭 463px 안에서 내용 폭 650px을 좌우로 이동한다. 상세 상품 없는 업체는 PC 양 테마, 완전 미관측 업체는 PC/모바일 양 테마에서 확인했다. 미관측 예약·매출은 모두 미확인으로 유지한다.
 - 로컬 화면 증빙: `C:/Users/User/.codex/visualizations/2026/10/12/staydatalab-company-db-review-all/`.
 
-운영 배포 및 인증 화면 확인 결과는 확인 후 아래에 추가한다.
+## 운영 적용 확인
+
+- 중앙 운영 웹에 커밋 `c8b312e4ab2440552cf3427e02e9789ec1b283b4`를 지정 배포했다. Render 배포 `dep-db5rdmtckfvc73b6jv60`은 2026-10-12 01:19:22 KST에 Live로 완료됐고, health 정상 및 `buildCommit=c8b312e4ab24`를 확인했다. 인사이트·BG·AWS 워커는 배포하지 않았다.
+- 배포 전 01:17:25 KST와 배포 후 01:20:53 KST의 읽기 전용 기록을 대조했다. `history/observations.jsonl`, `company_master/companies.json`, `config/daily_keyword_collection.json`, `config/keyword-worker-schedule-manual.json`의 SHA-256이 모두 같았다. `config/keyword-worker-schedule.json`과 `config/keyword-worker-schedule-operating_web.json`은 양쪽 기록에서 해시가 `null`이며 새 파일 생성 증거가 없다. 배포 후 디스크 여유는 약 7,997.64MiB다.
+- 기존 관리자 계정으로 실제 운영 우이동가족캠핑장과 월명 글램핑 상세를 열어 라이트·다크 두 테마의 A/B/C/D 카드 및 월별 통합 분석 영역을 확인했다. 월명 통합 분석은 `갱신 완료` 상태를 확인했다. 이 화면 검수에서 운영 업체의 검수값이나 보정값을 저장하지 않았다.
+- 실제 월명 글램핑에서 PC 1570px·모바일 390px, 라이트·다크의 검토 메뉴 5개 전환 총 20회를 추가 확인했다. 선택 표시·aria-pressed·도구 펼침이 모두 일치하며 버튼 높이는 PC 42px, 모바일 44px이다. 모바일 문서 폭은 390px으로 가로 넘침이 없다. 검수 보조자료도 두 테마의 공통 표면과 선택 색상을 확인했다. 임시 모바일 화면 크기 설정은 검수 후 해제했다.
+- 운영 증빙: 같은 검증 폴더의 `render-live-c8b312e.png`, `production-before.json`, `production-after.json`, `production-menu-checks.json`, `production-support-checks.json`, `production-tools-light.png`, `production-tools-dark.png`, `production-mobile-context-dark.png`.
