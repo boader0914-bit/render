@@ -128,14 +128,18 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     }
     const observations = new Map();
     const diagnosticInventoryRows = [], unmatchedRows = [];
+    // Only keyword membership needs discarded full rows. Company/region/
+    // industry sources need identity counts, so do not retain replaced raw
+    // history payloads throughout saved-evidence recalculation.
+    const needsMembershipEvidence = request.type === "keyword";
     function addRow(row, fallback = false) {
       if (!String(row.stayDate || row.date || "").startsWith(request.month + "-")) return;
       const id = canonical(row);
       // Keep rejected identity evidence separate so a relevant duplicate can be
       // diagnosed without adding its quantities to the report.
       const candidateId = id || canonical(row, true) || `unresolved-report-row-${unmatchedRows.length}`;
-      diagnosticInventoryRows.push({ ...row, companyId: candidateId, companyKey: candidateId });
-      if (!id) { unmatchedRows.push({ row, candidateId }); return; }
+      if (needsMembershipEvidence) diagnosticInventoryRows.push({ ...row, companyId: candidateId, companyKey: candidateId });
+      if (!id) { unmatchedRows.push({ candidateId }); return; }
       const company = byId.get(id);
       const original = data.rawCompanies.get(id);
       const normalized = projectObservation({ ...row, companyKey: id }, original);
@@ -150,7 +154,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
       for (const exposure of Object.values(company.keywords || {})) {
         for (const run of exposure.runs || []) {
           const row = { ...run, companyKey: id, companyId: id, companyName: company.primaryName, keyword: exposure.keyword };
-          diagnosticRankRows.push(row);
+          if (needsMembershipEvidence) diagnosticRankRows.push(row);
           if (!conflictingCompanyIds.has(id)) rankObservations.push(row);
         }
       }

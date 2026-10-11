@@ -236,7 +236,7 @@ test("failed pending request is shared, then one replacement survives repeated r
   assert.equal(fixture.reads(), 2);
 });
 
-test("different months read serially; completed cache holds two without evicting pending months", async () => {
+test("different months read serially; only the latest completed source is reused without evicting pending months", async () => {
   const fixture = pendingSourceFixture();
   const requests = ["2026-08", "2026-09", "2026-10"].map(month => ({ ...REQUEST, month }));
   const jobs = requests.map(request => fixture.service.analyze(request));
@@ -254,14 +254,60 @@ test("different months read serially; completed cache holds two without evicting
   assert.equal(fixture.reads(), 3, "Queued months retain their own shared promises without duplicate reads");
   fixture.pending[2].resolve(fixture.emptySource());
   await Promise.all(jobs);
-  await fixture.service.analyze(requests[1]);
   await fixture.service.analyze(requests[2]);
-  assert.equal(fixture.reads(), 3);
+  assert.equal(fixture.reads(), 3, "The latest month remains reusable for another region or industry");
+  const previous = fixture.service.analyze(requests[1]);
+  await flushTasks();
+  assert.equal(fixture.reads(), 4, "Loading a third month releases the second completed source");
+  fixture.pending[3].resolve(fixture.emptySource());
+  await previous;
+  await fixture.service.analyze(requests[1]);
+  assert.equal(fixture.reads(), 4, "The newly completed month is now the single reusable source");
   const evicted = fixture.service.analyze(requests[0]);
   await flushTasks();
-  assert.equal(fixture.reads(), 4, "Only the two latest completed source results are retained");
-  fixture.pending[3].resolve(fixture.emptySource());
+  assert.equal(fixture.reads(), 5, "Older months require their own source after the active month changes");
+  fixture.pending[4].resolve(fixture.emptySource());
   await evicted;
+});
+
+test("queued months evict a source published after their request and retain the final month only", async () => {
+  const fixture = pendingSourceFixture();
+  const august = fixture.service.analyze(REQUEST);
+  const septemberRequest = { ...REQUEST, month: "2026-09" };
+  const september = fixture.service.analyze(septemberRequest);
+  await flushTasks();
+  assert.equal(fixture.reads(), 1);
+  fixture.pending[0].resolve(fixture.emptySource());
+  await august;
+  await flushTasks();
+  assert.equal(fixture.reads(), 2, "September starts after August has published a completed source");
+  fixture.pending[1].resolve(fixture.emptySource());
+  await september;
+  await fixture.service.analyze(septemberRequest);
+  assert.equal(fixture.reads(), 2, "The final queued month can serve another request without reading raw data");
+  const augustAgain = fixture.service.analyze(REQUEST);
+  await flushTasks();
+  assert.equal(fixture.reads(), 3, "The later queued read must have removed August's newly published source");
+  fixture.pending[2].resolve(fixture.emptySource());
+  await augustAgain;
+});
+
+test("invalidation during a source read does not retain old data or duplicate the replacement", async () => {
+  const fixture = pendingSourceFixture();
+  const obsolete = fixture.service.analyze(REQUEST);
+  await flushTasks();
+  await fixture.service.invalidate();
+  const replacement = fixture.service.analyze(REQUEST);
+  const joined = fixture.service.analyze(REQUEST);
+  assert.equal(fixture.reads(), 1, "The replacement waits for the previous reader even across invalidation");
+  fixture.pending[0].resolve(fixture.emptySource());
+  await obsolete;
+  await flushTasks();
+  assert.equal(fixture.reads(), 2, "Invalidated completion cannot serve the new source epoch");
+  fixture.pending[1].resolve(fixture.emptySource());
+  await Promise.all([replacement, joined]);
+  await fixture.service.analyze(REQUEST);
+  assert.equal(fixture.reads(), 2, "The replacement retains same-key sharing and becomes the reusable source");
 });
 
 test("one failed parallel reader cannot release the pending key while the other still runs", async () => {

@@ -286,11 +286,13 @@ function createIndustrySourceRevision({ dataDir, outputsDir, regionMasterFile, t
         manifests.push({ row, run });
       }
     }
-    await mapBounded(manifests, concurrency, async ({ row, run }) => {
-      const manifest = await cached(row.file, row.revision, async file => {
-        try { return await metadata(() => json(file)); } catch { return null; }
+    // Parallel metadata checks stay cheap; manifest payloads can be large.
+    // Parse one at a time and retain only the period scope, not the full JSON.
+    await mapBounded(manifests, 1, async ({ row, run }) => {
+      const scope = await cached(row.file, row.revision, async file => {
+        try { return runScope(await json(file)); } catch { return runScope(null); }
       });
-      run.scope = runScope(manifest);
+      run.scope = scope || runScope(null);
     });
     for (const [id, values] of master?.runRows || []) {
       const collection = runs.get(id)?.scope.collection;

@@ -325,6 +325,37 @@ test("an atomic source replacement during reading is retried before returning a 
   } finally { fs.readFile = originalRead; await f.dispose(); }
 });
 
+test("large manifests are parsed one at a time and scope caching still detects payload edits", async () => {
+  const f = await revisionFixture(), originalRead = fs.readFile;
+  let active = 0, maximum = 0, reads = 0;
+  try {
+    const paths = [];
+    for (let index = 0; index < 8; index++) {
+      const dir = await f.writeRun({ id: `payload${index}_glamping_20261001_${String(index).padStart(6, "0")}`,
+        collectedAt: "2026-10-01T00:00:00Z", checkIn: "2026-10-01", bookingRangeDays: 31, unusedPayload: "x".repeat(150000) });
+      paths.push(path.join(dir, "manifest.json"));
+    }
+    fs.readFile = async function(file, ...rest) {
+      if (path.basename(file) !== "manifest.json") return originalRead.call(this, file, ...rest);
+      active++; reads++; maximum = Math.max(maximum, active);
+      try { await new Promise(resolve => setTimeout(resolve, 2)); return await originalRead.call(this, file, ...rest); }
+      finally { active--; }
+    };
+    const before = await f.revision.periodRevisions();
+    assert.equal(maximum, 1, "large JSON reads must not share the metadata parallelism");
+    const firstReads = reads;
+    assert.deepEqual(await f.revision.periodRevisions(), before);
+    assert.equal(reads, firstReads, "unchanged scope cache avoids reparsing manifests");
+    const manifest = JSON.parse(await originalRead(paths[0], "utf8"));
+    manifest.unusedPayload += "changed";
+    await fs.writeFile(paths[0], JSON.stringify(manifest));
+    const after = await f.revision.periodRevisions();
+    assert.notEqual(monthToken(after, "2026-10"), monthToken(before, "2026-10"), "compact scope does not hide other manifest edits");
+    assert.equal(monthToken(after, "2026-09"), monthToken(before, "2026-09"));
+    assert.equal(after.globalToken, before.globalToken);
+  } finally { fs.readFile = originalRead; await f.dispose(); }
+});
+
 test("large source inventories overlap bounded metadata I/O and still detect internal edits, additions and deletions", async t => {
   const f = await revisionFixture();
   const { performance } = require("node:perf_hooks"), originalStat = fs.stat, originalReaddir = fs.readdir;

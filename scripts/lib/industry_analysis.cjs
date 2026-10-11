@@ -407,38 +407,52 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
   let sourceReadQueue = Promise.resolve(), sourceEpoch = 0, optionsTask = null, backgroundOptions = Promise.resolve();
   let optionsRefreshTimer = null, finishOptionsRefresh = null, serviceStopped = false;
   function clearSources() { sourceEpoch++; sourceCache.clear(); }
+  function reusableSource(key, date) {
+    // Keep expired entries out of an async reader's locals while it awaits the
+    // next adapter. Clearing the Map must release every completed-cache reference.
+    const cached = sourceCache.get(key);
+    return cached && cached.expires > new Date(date).getTime() ? cached.value : null;
+  }
   async function savedSource(request, date) {
     const epoch = sourceEpoch, key = `${epoch}|${request.month}|${request.cutoffDate}`;
     // Expiry and the completed-cache limit must never evict running work.
     // A saved month can take longer than the cache TTL to reconstruct.
     if (pendingSources.has(key)) return pendingSources.get(key);
-    const cached = sourceCache.get(key);
-    if (cached && cached.expires > new Date(date).getTime()) return cached.value;
-    if (cached) sourceCache.delete(key);
+    const cached = reusableSource(key, date);
+    if (cached) return cached;
     // Distinct months can each reconstruct the complete saved source. Serialize
     // those reads to avoid multiplying their peak memory under concurrent tabs.
     const promise = sourceReadQueue.then(async () => {
+      // Recheck inside the queue: a preceding read may have filled the cache
+      // after this request was enqueued. Retain only one completed source, and
+      // release expired or different-month data before constructing its successor.
+      const queuedCached = reusableSource(key, now());
+      if (queuedCached) return queuedCached;
+      sourceCache.clear();
       const sourceRequest = { type: "industry", targetId: "__industry_all__", month: request.month, cutoffDate: request.cutoffDate };
+      let value;
       if (typeof sources.loadSourcesWithCatalog === "function") {
         // The adapter shares the exact prepared catalog used for correction,
         // avoiding a second master parse/clone retained during a long read.
         const pair = await sources.loadSourcesWithCatalog(sourceRequest);
-        return compactIndustrySources(pair.source, pair.catalog);
+        value = compactIndustrySources(pair.source, pair.catalog);
+      } else {
+        // Compatibility for adapters without the paired reader. Wait for both
+        // readers before releasing a failed pending key.
+        const results = await Promise.allSettled([sources.loadSources(sourceRequest), sources.catalog()]);
+        const failed = results.find(result => result.status === "rejected");
+        if (failed) throw failed.reason;
+        value = compactIndustrySources(results[0].value, results[1].value);
       }
-      // Compatibility for adapters without the paired reader. Wait for both
-      // readers before releasing a failed pending key.
-      const results = await Promise.allSettled([sources.loadSources(sourceRequest), sources.catalog()]);
-      const failed = results.find(result => result.status === "rejected");
-      if (failed) throw failed.reason;
-      return compactIndustrySources(results[0].value, results[1].value);
+      // Publish before the queue advances, so its next reader can evict this
+      // source before allocating another month. Invalidation cannot repopulate it.
+      if (epoch === sourceEpoch) sourceCache.set(key, { value, expires: new Date(now()).getTime() + 30000 });
+      return value;
     });
     sourceReadQueue = promise.then(() => undefined, () => undefined);
     pendingSources.set(key, promise);
     try {
-      const value = await promise;
-      if (epoch === sourceEpoch) sourceCache.set(key, { value, expires: new Date(now()).getTime() + 30000 });
-      while (sourceCache.size > 2) sourceCache.delete(sourceCache.keys().next().value);
-      return value;
+      return await promise;
     } finally {
       if (pendingSources.get(key) === promise) pendingSources.delete(key);
     }
