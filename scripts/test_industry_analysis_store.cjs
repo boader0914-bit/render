@@ -457,3 +457,75 @@ test("recovering a damaged queue cannot accept previous-epoch selector metadata 
   assert.equal(previousResult.summary.sold, 2, "new selector metadata does not hide or silently promote the old normal result");
   await service.stop();
 });
+
+test("unchanged full source checks avoid queue rewrites while pending events still clear durably", async t => {
+  const dataDir = await directory(t); let date = NOW.getTime(), checks = 0, queueWrites = 0, calls = 0;
+  const store = createStore(dataDir, { now: () => new Date(date),
+    readSourceRevision: async () => { checks++; return { globalToken: "same", months: { "2026-09": "saved" } }; },
+    calculate: async request => { calls++; return result(request, 0); },
+    writeJson: async (file, value) => { if (path.basename(file) === "queue.json") queueWrites++;
+      await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, JSON.stringify(value)); }
+  });
+  await store.get(REQUEST); await store.drain();
+  const stateFile = path.join(dataDir, "industry_analysis", "queue.json"), savedState = await fs.readFile(stateFile, "utf8"), writes = queueWrites;
+  for (let index = 0; index < 3; index++) {
+    date += 30001; const response = await store.get(REQUEST);
+    assert.equal(response.storage.status, "ready"); assert.equal(response.summary.sold, 0);
+  }
+  assert.equal(checks, 4); assert.equal(calls, 1); assert.equal(queueWrites, writes);
+  assert.equal(await fs.readFile(stateFile, "utf8"), savedState);
+  await store.notifySourceChanged({ reason: "touch_only" });
+  assert.equal(queueWrites, writes + 1);
+  const response = await store.get(REQUEST);
+  assert.equal(response.storage.sourceCheckPending, false); assert.equal(response.storage.status, "ready");
+  assert.equal(queueWrites, writes + 2, "pending acknowledgement is persisted even with equal source hashes");
+  assert.equal(JSON.parse(await fs.readFile(stateFile, "utf8")).sourceCheckPending, false);
+  await store.stop();
+});
+
+test("result schema upgrades preserve the original normal snapshot and archive it without changing its key or source revision", async t => {
+  const dataDir = await directory(t);
+  let store = createStore(dataDir, { calculate: async request => result(request, 0) });
+  await store.get(REQUEST); await store.drain(); await store.stop();
+  const resultsDir = path.join(dataDir, "industry_analysis", "results"), [filename] = await fs.readdir(resultsDir);
+  const oldBytes = await fs.readFile(path.join(resultsDir, filename)), old = JSON.parse(oldBytes);
+  let calls = 0;
+  store = createStore(dataDir, { needsResultRefresh: saved => saved.review?.schemaVersion !== 1,
+    calculate: async request => { calls++; return { ...result(request, 0), review: { schemaVersion: 1, rows: [] } }; }
+  });
+  const pending = await Promise.all(Array.from({ length: 12 }, () => store.get(REQUEST)));
+  assert.ok(pending.every(row => row.storage.hasSnapshot && row.storage.stale && row.storage.status === "queued" && row.summary.sold === 0));
+  assert.equal(calls, 0); assert.deepEqual(await fs.readFile(path.join(resultsDir, filename)), oldBytes);
+  const state = JSON.parse(await fs.readFile(path.join(dataDir, "industry_analysis", "queue.json"), "utf8"));
+  assert.equal(Object.values(state.jobs)[0].reason, "result_schema_upgrade");
+  await store.drain();
+  const ready = await store.get(REQUEST);
+  assert.equal(calls, 1); assert.equal(ready.storage.status, "ready"); assert.equal(ready.storage.stale, false);
+  assert.equal(ready.storage.resultRevision, old.sourceRevision); assert.equal(ready.review.schemaVersion, 1); assert.equal(ready.summary.sold, 0);
+  assert.deepEqual(await fs.readdir(resultsDir), [filename], "calculation key and normal file remain the same");
+  const key = path.basename(filename, ".json"), revisionsDir = path.join(dataDir, "industry_analysis", "revisions", key);
+  const backups = await fs.readdir(revisionsDir);
+  assert.equal(backups.length, 1); assert.deepEqual(await fs.readFile(path.join(revisionsDir, backups[0])), oldBytes);
+  await store.get(REQUEST); await store.drain(); assert.equal(calls, 1);
+  await store.stop();
+});
+
+test("failed schema upgrades retain a genuine zero and cannot publish an incomplete replacement", async t => {
+  const dataDir = await directory(t);
+  let store = createStore(dataDir, { calculate: async request => result(request, 0) });
+  await store.get(REQUEST); await store.drain(); await store.stop();
+  const resultsDir = path.join(dataDir, "industry_analysis", "results"), [filename] = await fs.readdir(resultsDir);
+  const oldBytes = await fs.readFile(path.join(resultsDir, filename));
+  let valid = false;
+  store = createStore(dataDir, { needsResultRefresh: saved => saved.review?.schemaVersion !== 1,
+    calculate: async request => ({ ...result(request, 0), ...(valid ? { review: { schemaVersion: 1, rows: [] } } : {}) })
+  });
+  await store.get(REQUEST); await store.drain();
+  const failed = await store.get(REQUEST);
+  assert.equal(failed.storage.status, "failed"); assert.equal(failed.storage.errorCode, "INDUSTRY_RESULT_SCHEMA_INVALID");
+  assert.equal(failed.storage.hasSnapshot, true); assert.equal(failed.storage.stale, true); assert.equal(failed.summary.sold, 0);
+  assert.deepEqual(await fs.readFile(path.join(resultsDir, filename)), oldBytes);
+  valid = true; await store.rebuild(REQUEST); await store.drain();
+  assert.equal((await store.get(REQUEST)).storage.status, "ready");
+  await store.stop();
+});

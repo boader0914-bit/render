@@ -27,7 +27,8 @@ async function atomicJson(file, value) {
   }
 }
 function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(), calculationVersion = CALCULATION_VERSION,
-  autoStart = true, onInvalidate = () => {}, readSourceRevision = null, normalizeStoredRequest = request => request, writeJson = atomicJson }) {
+  autoStart = true, onInvalidate = () => {}, readSourceRevision = null, normalizeStoredRequest = request => request,
+  needsResultRefresh = () => false, writeJson = atomicJson }) {
   if (!dataDir || typeof calculate !== "function") throw new TypeError("dataDir and calculate are required");
   const directory = path.resolve(dataDir, "industry_analysis"), stateFile = path.join(directory, "queue.json");
   const emptyState = () => ({ schemaVersion: SCHEMA_VERSION, epoch: crypto.randomUUID(), revision: 0, monthRevisions: {}, optionsRevision: 0, sequence: 0, jobs: {} });
@@ -85,22 +86,30 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
       if (value && typeof value === "object" && !scoped) throw fault("INDUSTRY_SOURCE_REVISION_INVALID");
       const token = scoped ? null : String(value);
       await locked(async () => {
+        let changed = false;
         if (scoped) {
           const previous = state.sourceSnapshot;
           if (!previous || previous.globalToken !== value.globalToken) {
+            changed = true;
             if (previous || state.sourceToken !== undefined) invalidateState(null, "source_revision_changed");
           } else {
             const months = [...new Set([...Object.keys(previous.months), ...Object.keys(value.months)])]
               .filter(month => previous.months[month] !== value.months[month]);
-            if (months.length) invalidateState(months, "month_source_changed");
+            if (months.length) { changed = true; invalidateState(months, "month_source_changed"); }
           }
-          state.sourceSnapshot = clone(value); delete state.sourceToken;
+          changed ||= state.sourceToken !== undefined;
+          if (changed) { state.sourceSnapshot = clone(value); delete state.sourceToken; }
         } else if (state.sourceToken !== token) {
+          changed = true;
           if (state.sourceToken !== undefined || state.sourceSnapshot) invalidateState(null, "source_revision_changed");
           state.sourceToken = token; delete state.sourceSnapshot;
         }
-        state.sourceCheckPending = eventSequence !== (state.sourceEventSequence || 0);
-        await saveState();
+        const pending = eventSequence !== (state.sourceEventSequence || 0);
+        changed ||= state.sourceCheckPending !== pending;
+        state.sourceCheckPending = pending;
+        // A verified unchanged inventory needs no durable queue rewrite.
+        // Pending events and revision changes still persist before publication.
+        if (changed) await saveState();
       });
       lastTokenCheck = new Date(now()).getTime();
       if (autoStart) scheduleKick();
@@ -180,14 +189,15 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
         } catch (error) { storeError = safeCode(error); }
       }
       let job = state.jobs[key];
-      const current = saved?.sourceRevision === revision;
+      const refreshNeeded = Boolean(saved && needsResultRefresh(saved.result));
+      const current = saved?.sourceRevision === revision && !refreshNeeded;
       const today = new Date(new Date(now()).getTime() + 9 * 3600000).toISOString().slice(0, 10);
       const [year, month] = request.month.split("-").map(Number);
       const monthEnd = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
       const calendarChanged = saved && saved.result.period?.monthClosed !== (today > monthEnd);
       if (!storeError && (!resultError || rebuild) && (!current || calendarChanged || rebuild) && !["queued", "processing", ...(rebuild ? [] : ["failed"])].includes(job?.status)) {
         if (rebuild) onInvalidate([request.month]);
-        job = enqueue(key, request, rebuild ? "manual_rebuild" : "read_cache_miss");
+        job = enqueue(key, request, rebuild ? "manual_rebuild" : refreshNeeded ? "result_schema_upgrade" : "read_cache_miss");
         try { await saveState(); } catch (error) { storeError = safeCode(error); }
       }
       const jobStatus = job?.status;
@@ -222,6 +232,7 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
       try {
         const result = await calculate(clone(job.request));
         if (!result || !result.summary || keyFor(result.request || {}) !== job.key) throw fault("INDUSTRY_RESULT_INVALID");
+        if (needsResultRefresh(result)) throw fault("INDUSTRY_RESULT_SCHEMA_INVALID");
         // A source write during calculation is checked before publication;
         // generation guards discard only the affected month's old result.
         await checkSource();
@@ -233,7 +244,7 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
           if (result.period?.monthClosed) {
             let previous;
             try { previous = await readResult(job.key, job.request); } catch { /* Invalid derived files are replaced only by a successful calculation. */ }
-            if (previous && previous.sourceRevision !== job.sourceRevision) {
+            if (previous && (previous.sourceRevision !== job.sourceRevision || needsResultRefresh(previous.result))) {
               const revisionKey = crypto.createHash("sha256").update(JSON.stringify([previous.sourceRevision, previous.calculatedAt])).digest("hex");
               await writeJson(path.join(directory, "revisions", job.key, `${revisionKey}.json`), previous);
             }

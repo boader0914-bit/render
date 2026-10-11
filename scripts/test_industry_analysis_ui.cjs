@@ -104,7 +104,8 @@ test("source labels, company names and evidence are escaped", () => {
   const html = renderDashboard(state({ data: payload, tab: "companies" }));
   assert.doesNotMatch(html, /<img|<script/);
   assert.match(html, /&lt;img/);
-  assert.match(html, /data-industry-open-run="a&quot; onclick=&quot;x"/);
+  assert.match(html, /href="\/admin\?adminCompany=1#admin-db-company=1"/);
+  assert.doesNotMatch(html, /data-industry-open-run=/);
   assert.match(html, /2026\.10\.11 수집/);
 });
 
@@ -243,6 +244,163 @@ test("queued and processing snapshots poll lightly until ready, without manufact
   assert.equal(calls.filter(call => call.url.endsWith("/options")).length, 1, "Polling does not reload the catalog");
   assert.ok(calls.every(call => call.options?.method !== "POST"), "Status polling cannot request a rebuild");
   controller.destroy();
+});
+
+function reviewData() {
+  const result = stored("ready");
+  result.review = { schemaVersion: 1, scope: "selected_industry_region_top20", companyCount: 2, expectedCompanyDays: 6, observedCompanyDays: 4, missingCompanyDays: 2,
+    daily: [
+      { date: "2026-10-01", expectedCompanies: 2, observedCompanies: 2, missingCompanies: 0, excludedCompanies: 0, partialCompanies: 0, priceUnavailableCompanies: 0 },
+      { date: "2026-10-02", expectedCompanies: 2, observedCompanies: 1, missingCompanies: 1, excludedCompanies: 0, partialCompanies: 0, priceUnavailableCompanies: 0 },
+      { date: "2026-10-03", expectedCompanies: 2, observedCompanies: 1, missingCompanies: 1, excludedCompanies: 1, partialCompanies: 0, priceUnavailableCompanies: 0 }
+    ], reasonsSummary: [{ code: "no_saved_observation", label: "저장 관측 자료 없음", companyDays: 1, companies: 1, type: "inventory" }, { code: "provider_blocked", label: "접근 제한으로 미확인", companyDays: 1, companies: 1, type: "latest_attempt" }],
+    companies: [
+      { companyId: "central-good", primaryName: "가 정상업체", regionLabel: "경남 사천시", observedDays: 3, missingDays: 0, priceUnavailableDays: 0, dates: [1, 2, 3].map(day => ({ date: `2026-10-0${day}`, status: "observed", reasons: [], runId: "good-run", collectedAt: "2026-10-01T02:00:00Z", reservationEligible: true, priceEligible: true, reservationCount: 1, observedZero: false })) },
+      { companyId: "central-review", placeId: "not-a-central-id", primaryName: "나 검토업체", regionLabel: "경남 사천시", observedDays: 1, missingDays: 2, priceUnavailableDays: 0, dates: [
+        { date: "2026-10-01", status: "observed", reasons: [], runId: "kept-run", collectedAt: "2026-10-01T01:15:00Z", reservationEligible: true, priceEligible: true, reservationCount: 0, observedZero: true, latestAttemptStatus: "excluded", latestAttemptRunId: "blocked-run", latestAttemptCollectedAt: "2026-10-01T04:30:00Z", latestAttemptReasons: [{ code: "provider_blocked", label: "접근 제한으로 미확인" }] },
+        { date: "2026-10-02", status: "missing", reasons: [{ code: "no_saved_observation", label: "저장 관측 자료 없음" }], runId: null, collectedAt: null, reservationEligible: false, priceEligible: false, reservationCount: null, observedZero: false },
+        { date: "2026-10-03", status: "excluded", reasons: [{ code: "incomplete_inventory", label: "상품 범위 확인 필요" }], runId: "partial-run", collectedAt: "2026-10-03T03:00:00Z", reservationEligible: false, priceEligible: false, reservationCount: null, observedZero: false }
+      ] }
+    ] };
+  return result;
+}
+
+test("review retains coverage and source times while distinguishing observed zero, gaps and latest failed attempts", () => {
+  const html = renderDashboard(state({ data: reviewData(), tab: "review" }));
+  assert.match(html, /마지막 정상 집계/); assert.match(html, /1 \/ 62 업체·숙박일/);
+  assert.match(html, /data-ia-review-date="2026-10-02"[^>]*aria-label="[^" ]* · 관측 1 \/ 2업체 · 미확인 1업체/);
+  assert.ok(html.indexOf('data-ia-review-company="central-review"') < html.indexOf('data-ia-review-company="central-good"'), "Companies with problems precede alphabetically earlier healthy companies");
+  assert.match(html, /data-tone="observed">관측 0/); assert.match(html, /data-tone="missing">자료 없음/); assert.match(html, /data-tone="attention">집계 제외/);
+  assert.match(html, /예약 0/); assert.match(html, /예약 수 미확인/);
+  assert.match(html, /이 날짜는 이전의 정상 관측 자료를 사용합니다/);
+  assert.match(html, /data-industry-open-run="kept-run"/); assert.match(html, /data-industry-open-run="blocked-run"/);
+  for (const instant of ["2026-10-01T01:15:00Z", "2026-10-01T04:30:00Z"]) assert.ok(html.includes(new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", dateStyle: "short", timeStyle: "short" }).format(new Date(instant))));
+  assert.match(html, /href="\/admin\?adminCompany=central-review#admin-db-company=central-review"/);
+  assert.doesNotMatch(html, /not-a-central-id/);
+  assert.match(html, /<details class="ia-review-date"[^>]*data-review-date="2026-10-01"[^>]* open>/);
+});
+
+test("legacy or unsupported review snapshots explicitly lack evidence instead of inventing normal days", () => {
+  for (const review of [undefined, { schemaVersion: 2, companies: [], daily: [] }, { schemaVersion: 1, companies: [] }]) {
+    const html = renderDashboard(state({ data: { ...stored("ready"), review }, tab: "review" }));
+    assert.match(html, /날짜별 검토 근거가 없습니다/); assert.match(html, /정상이나 0으로 판단하지 않습니다/);
+    assert.match(html, /마지막 정상 집계/); assert.doesNotMatch(html, /data-ia-review-date=|data-tone="observed"/);
+  }
+});
+
+test("saved-dataset source warnings remain separate from selected-scope warnings and escape HTML", () => {
+  const result = stored("ready");
+  result.quality = { warnings: ["선택 업종의 관측 범위 확인 필요"], scope: "selected_industry_region_top20", sourceWarningsScope: "saved_dataset",
+    sourceWarnings: ["업체 고유번호 미확정으로 일부 자료 제외", "플레이스번호 중복 확인 필요", '<img src=x onerror="unsafe"> <script>unsafe</script>', null] };
+  for (const tab of ["overview", "review"]) {
+    const html = renderDashboard(state({ data: result, tab }));
+    const overall = html.match(/<details class="ia-disclosure ia-source-warnings">[\s\S]*?<\/details>/)?.[0];
+    assert.ok(overall, "Source warnings have their own initially collapsed disclosure");
+    assert.match(overall, /저장 자료 전체 참고 <span>3건/);
+    assert.match(overall, /현재 선택한 업종·지역의 표본 밖/);
+    assert.match(overall, /업체 고유번호 미확정/); assert.match(overall, /플레이스번호 중복/);
+    assert.match(overall, /&lt;img src=x onerror=&quot;unsafe&quot;&gt; &lt;script&gt;unsafe&lt;\/script&gt;/);
+    assert.doesNotMatch(overall, /<img|<script|선택 업종의 관측 범위/);
+    const selected = html.match(/<details class="ia-disclosure"><summary>자료 해석 시 확인할 점[\s\S]*?<\/details>/)?.[0];
+    assert.match(selected, /선택 업종의 관측 범위 확인 필요/);
+    assert.doesNotMatch(selected, /업체 고유번호 미확정|플레이스번호 중복/);
+  }
+});
+
+test("expanded review companies show the shared verified or observed capacity basis without edit controls", () => {
+  for (const [capacity, capacitySource, capacityBasis, expected] of [
+    [12, "db_review", { source: "db_review" }, /객실·사이트 기준 <b>12개<\/b> · 관리자 검수값/],
+    [10, "observed_max_locked", null, /객실·사이트 기준 <b>10개<\/b> · 최대 관측값 고정 · 미검수/],
+    [null, "unknown", null, /객실·사이트 기준 <b>확인 전<\/b> · 객실 기준 확인 필요/]
+  ]) {
+    const result = reviewData(); Object.assign(result.review.companies[1], { capacity, capacitySource, capacityBasis });
+    const html = renderDashboard(state({ data: result, tab: "review" }));
+    assert.match(html, expected);
+    assert.doesNotMatch(html, /data-(?:capacity-edit|admin-db-edit)|객실 기준 수정/);
+  }
+});
+
+test("review filters, date selection and Korean text input only narrow saved results", async () => {
+  const calls = [], element = host(), controller = createController({ request: async url => { calls.push(url); return url.endsWith("/options") ? catalog : reviewData(); } });
+  await controller.mount(element); controller.selectTab("review");
+  controller.reviewInput("issue", "latest");
+  assert.match(element.innerHTML, /data-ia-review-company="central-review"/); assert.doesNotMatch(element.innerHTML, /data-ia-review-company="central-good"/);
+  assert.match(element.innerHTML, /data-review-date="2026-10-01"/); assert.doesNotMatch(element.innerHTML, /data-review-date="2026-10-02"/);
+  controller.reviewInput("issue", "missing"); controller.reviewInput("date", "2026-10-01");
+  assert.match(element.innerHTML, /조건에 맞는 업체가 없습니다/);
+  controller.reviewInput("date", "2026-10-02");
+  assert.match(element.innerHTML, /data-ia-review-date="2026-10-02" aria-pressed="true"/);
+  const target = { dataset: { iaReviewFilter: "company" }, value: "검토업체", selectionStart: 4, selectionEnd: 4 };
+  element.listeners.get("input")({ target, isComposing: true }); assert.equal(controller.state.reviewFilters.company, "");
+  element.listeners.get("compositionend")({ target, isComposing: false }); assert.equal(controller.state.reviewFilters.company, "검토업체");
+  assert.match(element.innerHTML, /data-ia-review-company="central-review"/);
+  assert.equal(calls.length, 2, "All review interactions use the loaded snapshot without requests");
+  element.listeners.get("click")({ target: { closest: () => ({ dataset: { iaReviewReset: "" } }) } });
+  assert.deepEqual(controller.state.reviewFilters, { company: "", issue: "all", date: "" });
+  controller.reviewInput("company", "없는 업체"); assert.match(element.innerHTML, /조건에 맞는 업체가 없습니다/);
+  await controller.input("month", "2026-09"); assert.deepEqual(controller.state.reviewFilters, { company: "", issue: "all", date: "" });
+  controller.destroy(); assert.equal(element.listeners.size, 0);
+});
+
+test("pending snapshot polling preserves review search focus and defers screen replacement during Korean composition", async () => {
+  const clock = scheduled(), element = host(), document = { activeElement: null };
+  let search, html = "", renders = 0;
+  element.ownerDocument = document; element.contains = target => target === search;
+  element.querySelector = selector => selector === '[data-ia-review-filter="company"]' ? search : { focus() {} };
+  Object.defineProperty(element, "innerHTML", { get: () => html, set(value) {
+    html = value; renders++; if (document.activeElement === search) document.activeElement = null;
+    search = { dataset: { iaReviewFilter: "company" }, value: value.match(/data-ia-review-filter="company" value="([^"]*)"/)?.[1] || "", selectionStart: 0, selectionEnd: 0, selectionDirection: "none",
+      focus() { document.activeElement = this; }, setSelectionRange(start, end, direction) { this.selectionStart = start; this.selectionEnd = end; this.selectionDirection = direction; } };
+  } });
+  const responses = ["queued", "processing", "ready"].map(status => { const result = reviewData(); result.storage.status = status; return result; });
+  const controller = createController({ ...clock, request: async url => url.endsWith("/options") ? catalog : responses.shift() });
+  await controller.mount(element); controller.selectTab("review");
+  search.focus(); search.value = "검토"; search.setSelectionRange(1, 2, "backward");
+  element.listeners.get("input")({ target: search, isComposing: false });
+  await clock.tick();
+  assert.equal(document.activeElement, search); assert.equal(search.value, "검토");
+  assert.deepEqual([search.selectionStart, search.selectionEnd, search.selectionDirection], [1, 2, "backward"]);
+  const composing = search, beforeHtml = html, beforeRenders = renders;
+  composing.value = "검토업체"; composing.setSelectionRange(4, 4, "none");
+  element.listeners.get("compositionstart")({ target: composing });
+  element.listeners.get("input")({ target: composing, isComposing: true });
+  await clock.tick();
+  assert.equal(controller.state.storage.status, "ready", "The newest response is accepted while the DOM waits for composition");
+  assert.equal(renders, beforeRenders); assert.equal(html, beforeHtml);
+  assert.equal(document.activeElement, composing); assert.equal(composing.value, "검토업체");
+  element.listeners.get("compositionend")({ target: composing });
+  assert.equal(controller.state.reviewFilters.company, "검토업체");
+  assert.equal(document.activeElement, search); assert.equal(search.value, "검토업체");
+  assert.deepEqual([search.selectionStart, search.selectionEnd], [4, 4]);
+  assert.match(html, /집계 완료/); assert.match(html, /data-ia-review-company="central-review"/);
+  controller.destroy(); assert.equal(element.listeners.size, 0);
+});
+
+test("review pagination and folding avoid rendering every company date at once", async () => {
+  const result = reviewData(); result.review.companies = Array.from({ length: 45 }, (_, index) => ({ ...result.review.companies[0], companyId: `company-${index}`, primaryName: `업체 ${String(index).padStart(2, "0")}` }));
+  const calls = [], element = host(), controller = createController({ request: async url => { calls.push(url); return url.endsWith("/options") ? catalog : result; } });
+  await controller.mount(element); controller.selectTab("review");
+  assert.equal((element.innerHTML.match(/class="ia-review-company"/g) || []).length, 20);
+  assert.equal((element.innerHTML.match(/class="ia-review-date"/g) || []).length, 0);
+  element.listeners.get("click")({ target: { closest: () => ({ dataset: { iaReviewPage: "1" } }) } });
+  assert.equal(controller.state.reviewPage, 1); assert.match(element.innerHTML, /업체 20/); assert.doesNotMatch(element.innerHTML, /업체 00/);
+  element.listeners.get("toggle")({ target: { dataset: { iaReviewCompany: "company-20", iaReviewExpanded: "false" }, open: true } });
+  assert.equal((element.innerHTML.match(/class="ia-review-date"/g) || []).length, 3);
+  element.listeners.get("toggle")({ target: { dataset: { iaReviewDay: "company-20:2026-10-01", iaReviewExpanded: "false" }, open: true } });
+  controller.render(); assert.match(element.innerHTML, /data-ia-review-day="company-20:2026-10-01"[^>]* open>/);
+  assert.equal(calls.length, 2);
+  controller.destroy();
+});
+
+test("review labels and source links escape content and never substitute provider IDs for missing company IDs", () => {
+  const result = reviewData(), row = result.review.companies[1];
+  row.companyId = ""; row.primaryName = '<img src=x onerror="x">'; row.placeId = "provider-only";
+  row.dates[0].runId = 'saved" onclick="x'; row.dates[0].latestAttemptReasons[0].label = "<script>unsafe</script>";
+  const html = renderDashboard(state({ data: result, tab: "review" }));
+  assert.doesNotMatch(html, /<img|<script|adminCompany=provider-only/);
+  assert.match(html, /&lt;img/); assert.match(html, /&lt;script&gt;unsafe/);
+  assert.match(html, /data-industry-open-run="saved&quot; onclick=&quot;x"/);
+  assert.match(html, /업체 DB 연결 정보 없음/);
 });
 
 test("closed-month ready snapshots show durable reuse and preserve partial observation coverage and dates", () => {

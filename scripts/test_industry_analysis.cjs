@@ -5,6 +5,7 @@ const { buildIndustryAnalysis, createIndustryAnalysisService, compactIndustrySou
 const { createIndustryAnalysisHttpHandler } = require("./lib/industry_analysis_http.cjs");
 const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs");
 const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
+const { buildMonthlyReportSnapshot } = require("./lib/monthly_reports.cjs");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
@@ -24,6 +25,85 @@ function observation(companyId, runId = "r1", extra = {}) {
 function source(extra = {}) { return { companies: [company("a")], rankObservations: [rank("a")], observations: [observation("a")], runs: [run("r1")], regions: REGIONS, ...extra }; }
 function build(input, request = {}) { return buildIndustryAnalysis(input, { ...REQUEST, ...request }, { now: NOW }); }
 const flushTasks = () => new Promise(resolve => setImmediate(resolve));
+
+test("review keeps observed zero, retained valid inventory and detailed gaps within selected industry and actual region", () => {
+  const a = { ...company("a"), capacityBasis: { source: "db_review", revision: 4, count: 10, warnings: ["확인 필요"], unused: "private metadata" } };
+  const fixture = source({ companies: [a, company("pension", "pension"), company("sacheon", "glamping", "kr_gyeongnam_sacheon"), company("outside")],
+    runs: [run("r1"), run("r2", { collectedAt: "2026-08-02T00:00:00Z" }), run("blocked", { collectionQuality: { status: "blocked" } })],
+    rankObservations: [rank("a"), rank("pension"), rank("sacheon"), rank("outside", "r1", { rank: 21 })],
+    observations: [
+      ...Array.from({ length: 120 }, (_, i) => observation("pension", "r1", { failed: true, observationId: `p${i}` })),
+      observation("sacheon", "blocked"),
+      observation("a", "r1", { sold: 0, publicBookings: 0, phoneBookings: 0, estimatedRevenue: 0, publicRevenue: 0, phoneRevenue: 0 }),
+      observation("a", "r1", { stayDate: "2026-08-02" }),
+      observation("a", "r2", { stayDate: "2026-08-02", collectedAt: "2026-08-02T00:00:00Z", failed: true, error: "sensitive detail 010-1111-2222" }),
+      observation("a", "blocked", { stayDate: "2026-08-03" }),
+      observation("a", "r1", { stayDate: "2026-08-04", missing: true }),
+      observation("a", "r1", { stayDate: "2026-08-05", partial: true, sharedDayUseIncomplete: true }),
+      observation("a", "r1", { stayDate: "2026-08-06", supply: null }),
+      observation("a", "r1", { stayDate: "2026-08-07", publicRevenue: 0, phoneRevenue: 0, estimatedRevenue: 0 }),
+      observation("a", "r1", { stayDate: "2026-08-08", recalculationUnavailable: true }),
+      observation("a", "r1", { stayDate: "2026-08-09", failed: true, responseStatus: "blocked", collectionErrorCode: "NAVER_RATE_LIMITED" }),
+      observation("a", "r1", { stayDate: "2026-08-10", failed: true, responseStatus: "200" })
+    ] });
+  const result = build(fixture, { region: "pocheon" }), review = result.review;
+  assert.equal(review.schemaVersion, 1); assert.equal(review.companyCount, 1); assert.equal(review.expectedCompanyDays, 31);
+  assert.equal(review.observedCompanyDays, 3); assert.equal(review.missingCompanyDays, 28);
+  assert.deepEqual(review.companies.map(row => row.companyId), ["a"]);
+  const cells = review.companies[0].dates, codes = index => cells[index].reasons.map(row => row.code);
+  assert.equal(cells.length, 31); assert.equal(cells[0].observedZero, true); assert.equal(cells[0].reservationCount, 0); assert.equal(cells[0].status, "observed");
+  assert.equal(cells[1].status, "observed"); assert.equal(cells[1].reservationCount, 5); assert.equal(cells[1].runId, "r1");
+  assert.equal(cells[1].latestAttemptRunId, "r2"); assert.equal(cells[1].latestAttemptStatus, "excluded");
+  assert.deepEqual(cells[1].latestAttemptReasons.map(row => row.code), ["collection_error"]);
+  assert.ok(codes(2).includes("run_blocked")); assert.ok(codes(3).includes("response_missing"));
+  assert.equal(cells[4].status, "partial"); assert.ok(codes(4).includes("dayuse_incomplete"));
+  assert.ok(codes(5).includes("missing_quantity")); assert.equal(cells[6].reservationEligible, true); assert.equal(cells[6].priceEligible, false);
+  assert.ok(codes(6).includes("unpriced_bookings")); assert.ok(codes(7).includes("capacity_recalculation_unavailable"));
+  assert.ok(codes(8).includes("collection_blocked")); assert.ok(!codes(8).includes("collection_error"));
+  assert.ok(codes(9).includes("collection_error")); assert.ok(!codes(9).includes("collection_blocked"));
+  assert.deepEqual(codes(10), ["no_saved_observation"]); assert.equal(cells[10].reservationCount, null);
+  assert.equal(review.daily[4].partialCompanies, 1); assert.equal(review.daily[4].missingCompanies, 1);
+  assert.equal(review.daily[2].excludedCompanies, 1); assert.equal(review.daily[6].priceUnavailableCompanies, 1);
+  assert.equal(result.quality.discardedByReason.missing_response, 4, "other industry/region excluded observations do not enter the selected quality counters");
+  assert.ok(result.quality.warnings.some(text => text.includes("3/31 업체·일")));
+  assert.ok(!result.quality.warnings.some(text => /\/62 |\/93 /.test(text)));
+  assert.equal(result.quality.rankExcludedByReason.outside_top20, 1);
+  assert.equal(review.companies[0].capacityBasis.revision, 4); assert.equal(review.companies[0].capacityBasis.unused, undefined);
+  assert.ok(!JSON.stringify(review).includes("010-1111-2222"));
+  assert.equal(review.reasonsSummary.find(row => row.code === "collection_error" && row.type === "latest_attempt").companyDays, 1);
+});
+
+test("review receives all common-engine diagnostics beyond its bounded sample without changing monthly values", () => {
+  const fixture = source({ observations: Array.from({ length: 130 }, (_, index) => observation("a", "r1", { failed: true, observationId: `f${index}` })) });
+  const request = { type: "company", targetId: "a", month: "2026-08", cutoffDate: "2026-08-31" };
+  const events = [], original = buildMonthlyReportSnapshot(request, fixture, NOW.toISOString());
+  const withCallback = buildMonthlyReportSnapshot(request, fixture, NOW.toISOString(), { onDiscard: (reason, row) => events.push([reason, row.companyId]) });
+  assert.deepEqual(withCallback, original); assert.equal(events.length, 130); assert.equal(original.quality.discardedSamples.length, 100);
+  const result = build(fixture);
+  assert.equal(result.quality.discardedByReason.missing_response, 130);
+  assert.equal(result.review.reasonsSummary.find(row => row.code === "collection_error").companyDays, 1, "day-based review counts do not multiply repeated failed attempts");
+});
+
+test("review cutoff excludes future attempt metadata and rank exclusion counters obey industry and actual region", () => {
+  const fixture = source({ companies: [company("a"), company("b", "pension"), company("c", "glamping", "kr_gyeongnam_sacheon")],
+    rankObservations: [rank("a"), rank("b", "r1", { rank: 21 }), rank("c", "r1", { rank: 21 })],
+    observations: [observation("a", "r1", { stayDate: "2026-08-03" }), observation("a", "r1", { stayDate: "2026-08-03", collectedAt: "2026-08-02T00:00:00Z", failed: true })] });
+  const result = build(fixture, { region: "pocheon", cutoffDate: "2026-08-01" });
+  assert.equal(result.quality.rankExcludedByReason.outside_top20, undefined); assert.equal(result.quality.excludedCompanies, 0);
+  const cell = result.review.companies[0].dates[2];
+  assert.equal(cell.status, "observed"); assert.equal(cell.latestAttemptCollectedAt, "2026-08-01T00:00:00Z");
+  assert.equal(cell.latestAttemptStatus, "observed"); assert.deepEqual(cell.latestAttemptReasons, []);
+});
+
+test("review same-attempt partial and failed evidence has an order-independent exclusion status", () => {
+  const records = [observation("a", "r1", { partial: true }), observation("a", "r1", { failed: true })];
+  for (const observations of [records, [...records].reverse()]) {
+    const cell = build(source({ observations })).review.companies[0].dates[0];
+    assert.equal(cell.status, "excluded"); assert.equal(cell.latestAttemptStatus, "excluded");
+    assert.equal(cell.reservationCount, null); assert.equal(cell.observedZero, false);
+    assert.deepEqual(cell.latestAttemptReasons.map(row => row.code).sort(), ["collection_error", "partial_inventory"]);
+  }
+});
 
 test("compact cached metadata preserves complete analysis output, original-row ties and rank identity", t => {
   const heavy = "UNUSED_SAVED_PRODUCT_PAYLOAD".repeat(10000);

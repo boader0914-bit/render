@@ -220,6 +220,116 @@ function industryComparison(companies, rows, regions, days) {
         metricBasis: "common_region_date_equal_region_date_company", commonRegionCount: commonRegionIds.length };
     }) };
 }
+const REVIEW_REASONS = {
+  no_saved_observation: "수집자료 없음 / 원인 기록 없음", no_eligible_observation: "유효한 숙박 관측 없음 / 원인 기록 없음",
+  missing_response: "수집 응답 확인 불가", response_missing: "수집 응답 누락", collection_error: "수집 오류", collection_blocked: "수집 차단",
+  run_blocked: "수집 회차 차단", run_failed: "수집 회차 실패", run_error: "수집 회차 오류", run_interrupted: "수집 회차 중단",
+  run_cancelled: "수집 회차 취소", run_canceled: "수집 회차 취소", unknown_legacy_run_quality: "수집 회차 품질 기록 확인 필요",
+  invalid_stay_date: "숙박일 기록 확인 필요", invalid_product_type: "상품 유형 확인 필요", invalid_collection_time: "수집 시각 기록 확인 필요",
+  unverified_collection_time: "실제 수집 시각 확인 불가", after_cutoff: "조회 기준일 이후 자료", post_stay_observation: "숙박일 이후 수집자료",
+  legacy_inventory_evidence: "재고 근거 확인 필요", missing_quantity: "객실 총량·예약 수량 확인 필요", quantity_conflict: "객실 총량과 예약 수량 불일치",
+  inventory_conflict: "재고 수량 충돌 / 총량 확인 필요", capacity_recalculation_unavailable: "검수 객실 기준 재계산 자료 없음",
+  partial_inventory: "재고 일부 미확인", dayuse_incomplete: "공유 데이유즈 확인 미완료", rate_unavailable: "예약률 계산 근거 미확인",
+  unpriced_bookings: "예약 가격 미확인", partial_price: "가격 일부 미확인", inconsistent_revenue: "매출 금액 근거 불일치",
+  price_after_cutoff: "기준일·숙박일 이후 가격 근거", excluded_observation: "집계 제외 / 상세 원인 기록 없음"
+};
+const reviewReason = code => ({ code, label: REVIEW_REASONS[code] || (/^run_/.test(code) ? "집계할 수 없는 수집 회차 상태" : REVIEW_REASONS.excluded_observation) });
+const reviewCellKey = (companyId, date) => JSON.stringify([companyId, date]);
+function reviewResponseReason(row) {
+  const status = String(row.responseStatus || row.status || "").toLowerCase();
+  const code = String(row.collectionErrorCode || "").toUpperCase();
+  const blocked = ["blocked", "provider_blocked", "429"].includes(status)
+    || /(?:^|_)(?:CAPTCHA|RATE_LIMITED|TOO_MANY_REQUESTS)(?:$|_)/.test(code)
+    || ["BOOKINGAPITOOMANYREQUESTS", "COLLECTOR_PROVIDER_BLOCKED", "NAVER_ACCESS_BLOCKED"].includes(code);
+  if (blocked) return "collection_blocked";
+  if (row.failed || row.error || ["error", "failed"].includes(status)) return "collection_error";
+  if (row.missing) return "response_missing";
+  return "";
+}
+function createReviewDiagnostics(selectedIds, request, source) {
+  const discardedByReason = {}, cells = new Map(), runs = new Map((source.runs || []).map(run => [String(run.id || run.runId), run]));
+  function onDiscard(reason, row) {
+    const id = idOf(row);
+    if (!selectedIds.has(id)) return;
+    discardedByReason[reason] = (discardedByReason[reason] || 0) + 1;
+    if (row.productType !== "lodging" || ["duplicate_observation", "superseded_observation"].includes(reason)) return;
+    const date = String(row.stayDate || row.date || "");
+    if (!date.startsWith(request.month + "-") || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    const key = reviewCellKey(id, date), cell = cells.get(key) || { reasons: new Set(), latest: null };
+    let code = reason;
+    const responseReason = reviewResponseReason(row);
+    if (reason === "missing_response") code = responseReason || reason;
+    const codes = [...new Set([code, ...(responseReason ? [responseReason] : []), ...(row.sharedDayUseIncomplete ? ["dayuse_incomplete"] : [])])];
+    for (const value of codes) cell.reasons.add(value);
+    const runId = String(row.runId || ""), stamp = String(row.collectedAt || runs.get(runId)?.collectedAt || ""), day = dayOf(stamp);
+    if (!day || day <= request.cutoffDate) {
+      const attempt = { runId, collectedAt: day ? stamp : null, time: day ? Date.parse(stamp) : -Infinity,
+        status: reason === "partial_inventory" ? "partial" : "excluded", reasons: codes.map(reviewReason) };
+      if (!cell.latest || attempt.time > cell.latest.time || (attempt.time === cell.latest.time && runId.localeCompare(cell.latest.runId) > 0)) cell.latest = attempt;
+      else if (cell.latest.time === attempt.time && cell.latest.runId === runId) {
+        cell.latest.reasons = [...new Map([...cell.latest.reasons, ...attempt.reasons].map(value => [value.code, value])).values()];
+        if (attempt.status === "excluded") cell.latest.status = "excluded";
+      }
+    }
+    cells.set(key, cell);
+  }
+  return { onDiscard, discardedByReason, cells };
+}
+function buildIndustryReview({ selected, rows, dates, diagnostics, source, request, cohort }) {
+  const rowMap = new Map(rows.map(row => [reviewCellKey(row.companyId, row.date), row]));
+  const selectedIds = new Set(selected.map(idOf)), selectedDates = new Set(dates), hasSaved = new Set();
+  // Bound this diagnostic index to the displayed company/month cells, even if
+  // the shared saved source contains other industries and observation months.
+  for (const row of source.observations || []) {
+    const companyId = idOf(row), date = String(row.stayDate || row.date || "");
+    if (row.productType === "lodging" && selectedIds.has(companyId) && selectedDates.has(date)) hasSaved.add(reviewCellKey(companyId, date));
+  }
+  const reasonsSummary = new Map();
+  function countReasons(reasons, companyId, type) {
+    for (const reason of reasons) {
+      const key = `${type}:${reason.code}`, value = reasonsSummary.get(key) || { ...reason, type, companyDays: 0, companyIds: new Set() };
+      value.companyDays++; value.companyIds.add(companyId); reasonsSummary.set(key, value);
+    }
+  }
+  const companies = selected.map(company => {
+    const cells = dates.map(date => {
+      const key = reviewCellKey(company.companyId, date), row = rowMap.get(key), excluded = diagnostics.cells.get(key);
+      const reservationEligible = Boolean(row), priceEligible = Boolean(row && row.revenueEligible && !row.revenuePartial);
+      const reasons = row ? (priceEligible ? [] : [reviewReason(row.revenueMissingReason || (row.phoneMissingPriceBookings > 0 ? "unpriced_bookings" : "partial_price"))])
+        : excluded?.reasons.size ? [...excluded.reasons].sort().map(reviewReason) : [reviewReason(hasSaved.has(key) ? "no_eligible_observation" : "no_saved_observation")];
+      const status = row ? "observed" : excluded?.latest?.status === "partial" ? "partial" : excluded ? "excluded" : "missing";
+      const failedAttempt = excluded?.latest, useFailed = failedAttempt && (!row || failedAttempt.time >= Date.parse(row.collectedAt));
+      const latestAttemptReasons = useFailed ? failedAttempt.reasons : [];
+      countReasons(reasons, company.companyId, row ? "price" : "inventory");
+      if (row && useFailed) countReasons(latestAttemptReasons, company.companyId, "latest_attempt");
+      return { date, status, reasons, reservationEligible, priceEligible, reservationCount: row?.sold ?? null, observedZero: Boolean(row && row.sold === 0),
+        runId: row?.runId || null, collectedAt: row?.collectedAt || null, latestAttemptRunId: useFailed ? failedAttempt.runId || null : row?.runId || null,
+        latestAttemptCollectedAt: useFailed ? failedAttempt.collectedAt : row?.collectedAt || null,
+        latestAttemptStatus: useFailed ? failedAttempt.status : row ? "observed" : null, latestAttemptReasons };
+    });
+    const observedDays = cells.filter(cell => cell.reservationEligible).length;
+    return { companyId: company.companyId, primaryName: company.primaryName || company.companyId, regionKey: company.regionKey || "", regionLabel: company.regionLabel || "지역 확인 전",
+      capacity: finite(company.capacity) ? company.capacity : null, capacitySource: company.capacitySource || "확인 전",
+      capacityBasis: company.capacityBasis ? structuredClone(pick(company.capacityBasis, ["source", "label", "revision", "updatedAt", "count", "capacity", "observedMaximum", "warnings"])) : null,
+      primaryRunId: cohort.members.get(company.companyId)?.[0]?.runId || null, observedDays, missingDays: dates.length - observedDays,
+      priceUnavailableDays: cells.filter(cell => cell.reservationEligible && !cell.priceEligible).length,
+      recentFailureDays: cells.filter(cell => cell.reservationEligible && ["excluded", "partial"].includes(cell.latestAttemptStatus)).length, dates: cells };
+  }).sort((a, b) => a.primaryName.localeCompare(b.primaryName, "ko"));
+  const daily = dates.map((date, index) => {
+    const cells = companies.map(company => company.dates[index]), observedCompanies = cells.filter(cell => cell.reservationEligible).length;
+    return { date, expectedCompanies: companies.length, observedCompanies, missingCompanies: companies.length - observedCompanies,
+      excludedCompanies: cells.filter(cell => cell.status === "excluded").length, partialCompanies: cells.filter(cell => cell.status === "partial").length,
+      priceUnavailableCompanies: cells.filter(cell => cell.reservationEligible && !cell.priceEligible).length };
+  });
+  const observedCompanyDays = rows.length, expectedCompanyDays = selected.length * dates.length;
+  return { schemaVersion: 1, scope: "selected_industry_region_top20", companyCount: selected.length, expectedCompanyDays, observedCompanyDays,
+    missingCompanyDays: expectedCompanyDays - observedCompanyDays, companies, daily,
+    reasonsSummary: [...reasonsSummary.values()].map(({ companyIds, ...value }) => ({ ...value, companies: companyIds.size })).sort((a, b) => b.companyDays - a.companyDays || a.code.localeCompare(b.code)),
+    definitions: { status: "정상 예약 0도 유효 관측입니다. 유효한 이전 관측이 있으면 최신 실패가 있어도 유지하며 최근 시도 상태를 따로 표시합니다.",
+      reasons: "저장된 관측의 공통 집계 제외 사유입니다. 자료가 없는 날짜의 실패 원인은 추정하지 않습니다.",
+      counts: "이유별 업체·일 수입니다. 한 업체·일에 여러 사유가 있을 수 있어 사유별 수를 더한 값은 전체 공백 수와 다릅니다.",
+      partial: "부분 자료와 제외 자료는 공백 수에 포함합니다. 가격 미확인은 예약 관측을 제거하지 않습니다.", cutoff: request.cutoffDate } };
+}
 function buildIndustryAnalysis(source = {}, input = {}, { now = new Date() } = {}) {
   const request = normalizeRequest(input, now);
   const allCompanies = new Map((source.companies || []).filter(company => idOf(company) && !company.deletedAt && !company.mergedIntoCompanyId).map(company => [idOf(company), { ...company, companyId: idOf(company), industryIds: industryIds(company) }]));
@@ -229,12 +339,13 @@ function buildIndustryAnalysis(source = {}, input = {}, { now = new Date() } = {
   const members = [...allCompanies.values()].filter(company => cohort.members.has(company.companyId));
   const scoped = members.filter(company => request.region === "all" || company.regionKey === request.region);
   const selected = scoped.filter(company => company.industryIds.includes(request.industry));
+  const selectedIds = new Set(selected.map(idOf)), diagnostics = createReviewDiagnostics(selectedIds, request, source);
   // A synthetic region merely scopes the existing engine to canonical members.
   // No location is inferred from the search keyword.
   const snapshot = buildMonthlyReportSnapshot({ type: "region", targetId: "__industry_cohort__", month: request.month, cutoffDate: request.cutoffDate },
-    { ...source, companies: scoped.map(company => ({ ...company, regionKeys: [...(company.regionKeys || []), "__industry_cohort__"] })) }, new Date(now).toISOString());
+    { ...source, companies: scoped.map(company => ({ ...company, regionKeys: [...(company.regionKeys || []), "__industry_cohort__"] })) }, new Date(now).toISOString(), { onDiscard: diagnostics.onDiscard });
   const allRows = snapshot.sources.observations.filter(row => row.productType === "lodging");
-  const selectedIds = new Set(selected.map(idOf)), rows = allRows.filter(row => selectedIds.has(row.companyId));
+  const rows = allRows.filter(row => selectedIds.has(row.companyId));
   const dates = snapshot.daily.map(row => row.date), days = snapshot.period.days;
   const regionRows = regions.filter(region => region.indicatorCandidate || selected.some(company => company.regionKey === region.id)).map(region => {
     const companies = selected.filter(company => company.regionKey === region.id), ids = new Set(companies.map(idOf));
@@ -247,10 +358,22 @@ function buildIndustryAnalysis(source = {}, input = {}, { now = new Date() } = {
     "복합시설은 해당 업종 각각에 시설 전체 실적을 포함합니다. 업종별 값을 더하면 중복되므로 전체 합계로 사용할 수 없습니다.",
     "예약과 매출은 저장된 숙박 재고의 추정값입니다. 수집 누락은 0이 아니며 금액은 관측된 업체·날짜의 소계입니다.",
     "지역별 표는 관측 현황입니다. 관측 날짜와 업체 수가 달라 성과 순위로 해석하지 않습니다.",
-    ...snapshot.quality.warnings, ...(source.warnings || [])];
+    ];
+  const expectedCompanyDays = selected.length * days, staleDays = rows.filter(row => row.observationLeadTimeDays > 0).length;
+  if (!selected.length) warnings.push("선택 조건에 해당하는 업체를 확인하지 못했습니다.");
+  if (rows.length < expectedCompanyDays) warnings.push(`숙박 관측 ${rows.length}/${expectedCompanyDays} 업체·일. 결측 날짜는 0으로 계산하지 않았습니다.`);
+  if (staleDays) warnings.push(`${staleDays} 업체·일은 숙박일 이전의 마지막 관측입니다. 월간 관측 커버리지가 100%여도 최종 예약·실제 매출을 뜻하지 않습니다.`);
+  if (rows.some(row => row.runQuality === "partial")) warnings.push("부분 완료 회차의 유효 업체 관측을 포함한 제한적 소계입니다.");
+  if (snapshot.sources.partialEvidence.some(row => selectedIds.has(row.companyId) && row.productType === "lodging" && row.includedInPartialSubtotal)) warnings.push("부분 응답에서 근거가 확인된 금액은 별도 소계이며 정상 예상매출과 합산하지 않습니다.");
+  if (rows.length < expectedCompanyDays || rows.some(row => !row.revenueEligible || row.revenuePartial)) warnings.push("가격 미확인 또는 미수집 날짜가 있어 예상매출은 확인된 날짜의 소계입니다.");
+  if (diagnostics.discardedByReason.unknown_legacy_run_quality || diagnostics.discardedByReason.legacy_inventory_evidence) warnings.push("수집 품질 또는 재고 근거 버전을 확인할 수 없는 과거 자료를 제외했습니다.");
+  if (!snapshot.period.monthClosed) warnings.push("아직 종료되지 않은 달의 중간 집계입니다.");
+  if (snapshot.period.end > request.cutoffDate) warnings.push("월 종료 전 기준일 보고서입니다. 향후 숙박일의 예약 관측이 포함될 수 있습니다.");
   if (unknownRegionCount) warnings.push(`실제 소재지가 확인되지 않은 업체 ${unknownRegionCount}개는 전체 현황에만 포함하고 지역 비교에서는 제외했습니다.`);
   const unclassified = scoped.filter(company => !company.industryIds.length).length;
   if (unclassified) warnings.push(`저장 업종이나 업체명으로 업종을 확인하지 못한 업체 ${unclassified}개는 업종별 집계에서 제외했습니다.`);
+  const rankCandidates = new Map([...allCompanies].filter(([, company]) => company.industryIds.includes(request.industry) && (request.region === "all" || company.regionKey === request.region)));
+  const scopedRank = rankCohort(source, request, rankCandidates);
   return { schemaVersion: 1, generatedAt: new Date(now).toISOString(), request, industry: publicIndustry(INDUSTRIES.find(item => item.id === request.industry)),
     period: snapshot.period, cohort: { ...COHORT, membershipCompanyCount: scoped.length, selectedCompanyCount: selected.length }, features: FEATURES, scalePolicy: DEFERRED_SCALE,
     summary: summary(rows, selected.length, days), daily: dates.map(date => ({ date, ...summary(rows.filter(row => row.date === date), selected.length, 1) })),
@@ -261,9 +384,11 @@ function buildIndustryAnalysis(source = {}, input = {}, { now = new Date() } = {
       capacityBasis: company.capacityBasis ? structuredClone(company.capacityBasis) : null,
       rankEvidence: cohort.members.get(company.companyId), primaryRunId: cohort.members.get(company.companyId)[0]?.runId || null,
       ...summary(rows.filter(row => row.companyId === company.companyId), 1, days) })).sort((a, b) => a.primaryName.localeCompare(b.primaryName, "ko")),
-    quality: { warnings: [...new Set(warnings)], rankExcludedByReason: cohort.excluded, unknownRegionCompanies: unknownRegionCount, unclassifiedCompanies: unclassified,
-      discardedByReason: snapshot.quality.discardedByReason, excludedCompanies: allCompanies.size - members.length, status: rows.length ? "partial" : "missing" },
-    sources: { runIds: snapshot.sources.runIds, observationPolicy: snapshot.sources.observationPolicy, rankPolicy: "valid_keyword_rank_1_to_20_observed_within_month_before_cutoff" },
+    review: buildIndustryReview({ selected, rows, dates, diagnostics, source, request, cohort }),
+    quality: { warnings: [...new Set(warnings)], scope: "selected_industry_region_top20", sourceWarnings: source.warnings || [], sourceWarningsScope: "saved_dataset",
+      rankExcludedByReason: scopedRank.excluded, rankExclusionScope: "selected_industry_region_candidates", unknownRegionCompanies: unknownRegionCount, unclassifiedCompanies: unclassified,
+      discardedByReason: diagnostics.discardedByReason, excludedCompanies: rankCandidates.size - scopedRank.members.size, status: rows.length ? "partial" : "missing" },
+    sources: { runIds: snapshot.sources.runIds, runIdsScope: "selected_region_all_industries_for_comparison", observationPolicy: snapshot.sources.observationPolicy, rankPolicy: "valid_keyword_rank_1_to_20_observed_within_month_before_cutoff" },
     context: { sources: [], warnings: [], networkAttempted: false },
     definitions: { cohort: "선택 월(한국시간)에 유효하게 관측된 검색어별 1~20위 업체의 합집합입니다. 같은 업체는 검색어·회차가 달라도 한 번만 계산합니다. 업체명 검색의 순위와 순위 미확인 자료는 제외합니다.",
       reservationRate: "날짜별로 업체의 예약 추정 수량/공급 수량을 동일 비중 평균한 뒤 관측 날짜끼리 동일 비중으로 평균합니다.",
@@ -362,7 +487,8 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
   const store = createIndustryAnalysisStore({ dataDir, calculate, calculationVersion, now, autoStart,
     normalizeStoredRequest: request => normalizeRequest(request, now()),
     readSourceRevision: typeof readSourceRevision?.periodRevisions === "function" ? () => readSourceRevision.periodRevisions()
-      : async () => JSON.stringify([await defaultSourceRevision(), readSourceRevision ? await readSourceRevision() : null]), onInvalidate: clearSources });
+      : async () => JSON.stringify([await defaultSourceRevision(), readSourceRevision ? await readSourceRevision() : null]), onInvalidate: clearSources,
+    needsResultRefresh: result => result.review?.schemaVersion !== 1 });
   async function options() {
     const saved = await store.readOptions(), revision = await store.optionsRevision();
     const today = new Date(new Date(now()).getTime() + 9 * 3600000).toISOString().slice(0, 10);

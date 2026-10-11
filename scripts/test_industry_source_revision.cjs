@@ -324,3 +324,74 @@ test("an atomic source replacement during reading is retried before returning a 
     assert.equal(after.globalToken, before.globalToken);
   } finally { fs.readFile = originalRead; await f.dispose(); }
 });
+
+test("large source inventories overlap bounded metadata I/O and still detect internal edits, additions and deletions", async t => {
+  const f = await revisionFixture();
+  const { performance } = require("node:perf_hooks"), originalStat = fs.stat, originalReaddir = fs.readdir;
+  const runCount = 48, filesPerRun = 40, writes = [], runDirs = [];
+  let activeIo = 0, maximumIo = 0, statCalls = 0;
+  async function pool(items, operation, limit = 24) {
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) { const index = next++; await operation(items[index], index); }
+    }));
+  }
+  try {
+    for (let index = 0; index < runCount; index++) {
+      const id = `fixture${index}_glamping_20261001_${String(index).padStart(6, "0")}`;
+      const runDir = await f.writeRun({ id, collectedAt: "2026-10-01T00:00:00Z", checkIn: "2026-10-01", bookingRangeDays: 31 });
+      runDirs.push(runDir); await fs.mkdir(path.join(runDir, "details"));
+      for (let item = 0; item < filesPerRun; item++) writes.push(path.join(runDir, "details", `product-${item}.json`));
+    }
+    await pool(writes, file => fs.writeFile(file, "{\"available\":0,\"rawTotal\":10}"));
+    const serial = createIndustrySourceRevision({ dataDir: f.root, outputsDir: f.outputsDir, metadataConcurrency: 1 });
+    // Even an oversized internal option must keep the filesystem limit at 16.
+    const parallel = createIndustrySourceRevision({ dataDir: f.root, outputsDir: f.outputsDir, metadataConcurrency: 32 });
+    const before = await parallel.periodRevisions();
+    assert.deepEqual(await serial.periodRevisions(), before);
+    // Model a modest 2 ms metadata latency independently of local disk speed.
+    // Both readers still inspect the same actual on-disk fixture files.
+    const delay = () => new Promise(resolve => setTimeout(resolve, 2));
+    for (const [name, original] of [["stat", originalStat], ["readdir", originalReaddir]]) {
+      fs[name] = async function(file, ...rest) {
+        activeIo++; maximumIo = Math.max(maximumIo, activeIo); if (name === "stat") statCalls++;
+        try { await delay(); return await original.call(this, file, ...rest); } finally { activeIo--; }
+      };
+    }
+    let start = performance.now(); assert.deepEqual(await serial.periodRevisions(), before);
+    const serialMs = performance.now() - start;
+    assert.equal(maximumIo, 1);
+    maximumIo = 0; statCalls = 0;
+    start = performance.now(); const parallelResult = await parallel.periodRevisions();
+    const parallelMs = performance.now() - start;
+    assert.deepEqual(parallelResult, before);
+    assert.ok(maximumIo > 1 && maximumIo <= 16, `metadata peak ${maximumIo}`);
+    assert.ok(statCalls >= runCount * (filesPerRun + 1), "warm cache still stats every relevant original file");
+    assert.ok(parallelMs < serialMs * .6, `bounded scan ${parallelMs.toFixed(0)}ms vs serial ${serialMs.toFixed(0)}ms`);
+    t.diagnostic(`${runCount} runs / ${runCount * (filesPerRun + 1) + 1} source files; 2ms metadata fixture: serial=${serialMs.toFixed(1)}ms parallel=${parallelMs.toFixed(1)}ms peak=${maximumIo}`);
+    fs.stat = originalStat; fs.readdir = originalReaddir;
+    parallelResult.months["2026-09"] = "caller mutation";
+    assert.deepEqual(await parallel.periodRevisions(), before, "caller mutation cannot corrupt the reusable hash result");
+    const detailDir = path.join(runDirs[0], "details"), savedDirStat = await fs.stat(detailDir);
+    const changedFile = path.join(detailDir, "product-0.json");
+    await fs.writeFile(changedFile, "{\"available\":1,\"rawTotal\":10}");
+    await fs.utimes(detailDir, savedDirStat.atime, savedDirStat.mtime);
+    const edited = await parallel.periodRevisions();
+    assert.notEqual(monthToken(edited, "2026-10"), monthToken(before, "2026-10"));
+    assert.equal(monthToken(edited, "2026-09"), monthToken(before, "2026-09"));
+    await fs.unlink(changedFile); await fs.utimes(detailDir, savedDirStat.atime, savedDirStat.mtime);
+    const removed = await parallel.periodRevisions();
+    assert.notEqual(monthToken(removed, "2026-10"), monthToken(edited, "2026-10"));
+    await fs.writeFile(path.join(detailDir, "restored.json"), "{\"available\":0,\"rawTotal\":10}");
+    await fs.utimes(detailDir, savedDirStat.atime, savedDirStat.mtime);
+    const added = await parallel.periodRevisions();
+    assert.notEqual(monthToken(added, "2026-10"), monthToken(removed, "2026-10"));
+    const outputsStat = await fs.stat(f.outputsDir);
+    assert.ok(path.resolve(runDirs[1]).startsWith(path.resolve(f.outputsDir) + path.sep));
+    await fs.rm(runDirs[1], { recursive: true, force: true });
+    await fs.utimes(f.outputsDir, outputsStat.atime, outputsStat.mtime);
+    const deletedRun = await parallel.periodRevisions();
+    assert.notEqual(monthToken(deletedRun, "2026-10"), monthToken(added, "2026-10"));
+    assert.equal(monthToken(deletedRun, "2026-09"), monthToken(before, "2026-09"));
+  } finally { fs.stat = originalStat; fs.readdir = originalReaddir; await f.dispose(); }
+});

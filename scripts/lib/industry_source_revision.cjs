@@ -63,6 +63,31 @@ const SNAPSHOT_QUALITY = ["partial", "missing", "inventoryConflict", "capacityCo
   "inventoryObserved", "stockObserved", "scheduleObserved", "queryAttempted"];
 const pick = (value, keys) => Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
 
+// Every directory and every relevant file is still checked on each scan.
+// Parallelism only overlaps the small filesystem operations, never substitutes
+// a directory timestamp for checking edits inside a saved run.
+function boundedIo(limit) {
+  let active = 0;
+  const pending = [];
+  function drain() {
+    while (active < limit && pending.length) {
+      const { operation, resolve, reject } = pending.shift(); active++;
+      Promise.resolve().then(operation).then(resolve, reject).finally(() => { active--; drain(); });
+    }
+  }
+  return operation => new Promise((resolve, reject) => { pending.push({ operation, resolve, reject }); drain(); });
+}
+async function mapBounded(items, limit, operation) {
+  const values = new Array(items.length);
+  let next = 0;
+  const workers = await Promise.allSettled(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) { const index = next++; values[index] = await operation(items[index], index); }
+  }));
+  const failed = workers.find(worker => worker.status === "rejected");
+  if (failed) throw failed.reason;
+  return values;
+}
+
 function companySummary(master) {
   if (!object(master) || !object(master.companies)) throw Object.assign(new Error("Invalid saved company master"), { code: "INDUSTRY_SOURCE_MASTER_INVALID" });
   const result = buckets();
@@ -164,31 +189,33 @@ function runScope(manifest) {
   return { months, collection, known: Boolean(known) };
 }
 
-function createIndustrySourceRevision({ dataDir, outputsDir, regionMasterFile, tourismRegionMapFile }) {
+function createIndustrySourceRevision({ dataDir, outputsDir, regionMasterFile, tourismRegionMapFile, metadataConcurrency = 16 }) {
   const calendarDir = path.join(dataDir, "history", "special_days");
   const singles = [regionMasterFile, tourismRegionMapFile].filter(Boolean);
   const cache = new Map();
-  let inFlight = null;
+  const concurrency = Number.isSafeInteger(metadataConcurrency) ? Math.max(1, Math.min(16, metadataConcurrency)) : 16;
+  const metadata = boundedIo(concurrency);
+  let inFlight = null, finalCache = null;
   async function stamp(file) {
-    try { const stat = await fs.stat(file, { bigint: true }); return stat.isFile() ? `${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}` : null; }
+    try { const stat = await metadata(() => fs.stat(file, { bigint: true })); return stat.isFile() ? `${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}` : null; }
     catch (error) { if (error.code === "ENOENT") return null; throw error; }
   }
   async function tree(directory, label, depth = 0, runs = false, includeReports = false) {
     let entries;
-    try { entries = await fs.readdir(directory, { withFileTypes: true }); }
+    try { entries = await metadata(() => fs.readdir(directory, { withFileTypes: true })); }
     catch (error) { if (error.code === "ENOENT") return []; throw error; }
-    const rows = [];
-    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-      if (entry.name.endsWith(".tmp") || entry.isSymbolicLink()) continue;
+    const rows = await mapBounded(entries.sort((a, b) => a.name.localeCompare(b.name)), concurrency, async entry => {
+      if (entry.name.endsWith(".tmp") || entry.isSymbolicLink()) return [];
       const file = path.join(directory, entry.name), next = `${label}/${entry.name}`;
       if (entry.isDirectory() && depth < (runs ? 2 : 4)
-        && (!runs || (depth === 0 ? /_glamping_\d{8}(?:_\d{6})?$/.test(entry.name) : entry.name === "details"))) rows.push(...await tree(file, next, depth + 1, runs, includeReports));
+        && (!runs || (depth === 0 ? /_glamping_\d{8}(?:_\d{6})?$/.test(entry.name) : entry.name === "details"))) return tree(file, next, depth + 1, runs, includeReports);
       else if (entry.isFile() && (/\.(?:json|csv)$/i.test(entry.name) || includeReports && /\.md$/i.test(entry.name))) {
         const revision = await stamp(file);
-        if (revision) rows.push({ file, label: next, revision });
+        if (revision) return [{ file, label: next, revision }];
       }
-    }
-    return rows;
+      return [];
+    });
+    return rows.flat();
   }
   async function cached(file, revision, reader) {
     if (!revision) { cache.delete(file); return null; }
@@ -199,15 +226,28 @@ function createIndustrySourceRevision({ dataDir, outputsDir, regionMasterFile, t
   }
   const json = file => fs.readFile(file, "utf8").then(text => JSON.parse(text.replace(/^\uFEFF/, "")));
   async function readIndustrySourceRevision() {
-    const rows = outputsDir ? await tree(outputsDir, "runs", 0, true) : [];
-    rows.push(...await tree(calendarDir, "calendar"));
+    const [outputRows, calendarRows, singleRevisions] = await Promise.all([
+      outputsDir ? tree(outputsDir, "runs", 0, true) : [], tree(calendarDir, "calendar"), Promise.all(singles.map(stamp))
+    ]);
+    const rows = [...outputRows, ...calendarRows];
     for (let index = 0; index < singles.length; index++) {
-      const revision = await stamp(singles[index]);
+      const revision = singleRevisions[index];
       if (revision) rows.push({ label: `file${index}`, revision });
     }
     return hash(rows.map(row => `${row.label}:${row.revision}`).sort().join("\n"));
   }
   async function periods() {
+    const masterFile = path.join(dataDir, "company_master", "companies.json"), historyFile = path.join(dataDir, "history", "observations.jsonl");
+    const [masterRevision, historyRevision, singleRevisions, outputRows, calendarRows] = await Promise.all([
+      stamp(masterFile), stamp(historyFile), Promise.all(singles.map(stamp)),
+      outputsDir ? tree(outputsDir, "runs", 0, true, true) : [], tree(calendarDir, "calendar")
+    ]);
+    // Reuse only the derived associations/hash result. The complete source
+    // inventory above is always scanned, including files in unchanged folders.
+    const fingerprint = hash([`master:${masterRevision}`, `history:${historyRevision}`,
+      ...singleRevisions.map((revision, index) => `file${index}:${revision}`),
+      ...outputRows.map(row => `${row.label}:${row.revision}`), ...calendarRows.map(row => `${row.label}:${row.revision}`)].join("\n"));
+    if (finalCache?.fingerprint === fingerprint) return structuredClone(finalCache.value);
     const global = new Set(["industry-period-revisions-v1"]), months = new Map(), runMonths = new Map(), companyMonths = new Map();
     function merge(summary) {
       if (!summary) return;
@@ -216,8 +256,7 @@ function createIndustrySourceRevision({ dataDir, outputsDir, regionMasterFile, t
       for (const [id, values] of summary.runMonths) for (const value of values) add(runMonths, id, value);
       for (const [id, values] of summary.companyMonths) for (const value of values) add(companyMonths, id, value);
     }
-    const masterFile = path.join(dataDir, "company_master", "companies.json"), historyFile = path.join(dataDir, "history", "observations.jsonl");
-    const master = await cached(masterFile, await stamp(masterFile), async file => {
+    const master = await cached(masterFile, masterRevision, async file => {
       const text = (await fs.readFile(file, "utf8")).replace(/^\uFEFF/, "");
       try { return companySummary(JSON.parse(text)); }
       catch (error) {
@@ -226,11 +265,11 @@ function createIndustrySourceRevision({ dataDir, outputsDir, regionMasterFile, t
         result.unknown.add(`unparsed-master:${hash(text)}`); return result;
       }
     });
-    const history = await cached(historyFile, await stamp(historyFile), historySummary);
+    const history = await cached(historyFile, historyRevision, historySummary);
     if (master) global.add(`master-schema:${master.rootToken}`);
     merge(master); merge(history);
     for (let index = 0; index < singles.length; index++) {
-      const revision = await stamp(singles[index]);
+      const revision = singleRevisions[index];
       const value = await cached(singles[index], revision, async file => {
         const text = (await fs.readFile(file, "utf8")).replace(/^\uFEFF/, "");
         try { return hash(stable(JSON.parse(text))); }
@@ -238,16 +277,21 @@ function createIndustrySourceRevision({ dataDir, outputsDir, regionMasterFile, t
       });
       global.add(`file${index}:${value || "missing"}`);
     }
-    const runs = new Map(), outputRows = outputsDir ? await tree(outputsDir, "runs", 0, true, true) : [];
+    const runs = new Map(), manifests = [];
     for (const row of outputRows) {
       const id = row.label.split("/")[1];
       if (!runs.has(id)) runs.set(id, { rows: [], scope: runScope(null) });
       const run = runs.get(id); run.rows.push(`${row.label}:${row.revision}`);
       if (path.basename(row.file) === "manifest.json" && path.dirname(row.file) === path.join(outputsDir, id)) {
-        const manifest = await cached(row.file, row.revision, async file => { try { return await json(file); } catch { return null; } });
-        run.scope = runScope(manifest);
+        manifests.push({ row, run });
       }
     }
+    await mapBounded(manifests, concurrency, async ({ row, run }) => {
+      const manifest = await cached(row.file, row.revision, async file => {
+        try { return await metadata(() => json(file)); } catch { return null; }
+      });
+      run.scope = runScope(manifest);
+    });
     for (const [id, values] of master?.runRows || []) {
       const collection = runs.get(id)?.scope.collection;
       for (const value of values) { if (collection) add(months, collection, value); else global.add(`unscoped:${id}:${value}`); }
@@ -287,7 +331,7 @@ function createIndustrySourceRevision({ dataDir, outputsDir, regionMasterFile, t
       if (!group.months.size || group.unknown) global.add(digest);
       else for (const month of group.months) add(months, month, digest);
     }
-    for (const row of await tree(calendarDir, "calendar")) {
+    for (const row of calendarRows) {
       const year = path.basename(row.file).match(/^(?:special-days-)?(\d{4})(?:\.json|\.csv)$/)?.[1];
       const digest = `calendar:${row.label}:${row.revision}`;
       if (!year) global.add(digest);
@@ -298,7 +342,9 @@ function createIndustrySourceRevision({ dataDir, outputsDir, regionMasterFile, t
     }
     const alive = new Set([masterFile, historyFile, ...singles, ...outputRows.map(row => row.file)]);
     for (const file of cache.keys()) if (!alive.has(file)) cache.delete(file);
-    return { globalToken: hash([...global].sort().join("\n")), months: Object.fromEntries([...months].sort(([a], [b]) => a.localeCompare(b)).map(([month, values]) => [month, hash([...values].sort().join("\n"))])) };
+    const value = { globalToken: hash([...global].sort().join("\n")), months: Object.fromEntries([...months].sort(([a], [b]) => a.localeCompare(b)).map(([month, values]) => [month, hash([...values].sort().join("\n"))])) };
+    finalCache = { fingerprint, value: structuredClone(value) };
+    return value;
   }
   readIndustrySourceRevision.periodRevisions = function periodRevisions() {
     if (inFlight) return inFlight;

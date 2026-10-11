@@ -280,7 +280,7 @@ function rankChanges(observations, companies, runMap, request, period) {
     period: { start: period.start, end: period.end, cutoffDate: request.cutoffDate }, basis: "동일 업체·동일 키워드의 해당 월 첫 관측과 마지막 관측. 양수는 순위 상승." };
 }
 
-function buildSnapshot(request, source, generatedAt) {
+function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}) {
   const { dates, ...period } = calendar(request.month);
   period.cutoffDate = request.cutoffDate;
   period.monthClosed = kstDate(generatedAt) > period.end;
@@ -308,6 +308,7 @@ function buildSnapshot(request, source, generatedAt) {
   let scopedObservationCount = 0, eligibleObservationCount = 0, partialRunObservationCount = 0;
   const discard = (reason, row) => {
     discardedByReason[reason] = (discardedByReason[reason] || 0) + 1;
+    if (onDiscard) onDiscard(reason, row);
     // Keep a bounded explanation sample instead of serializing source payloads.
     if (discarded.length < 100) discarded.push({ companyId: observationIdentity(row), date: row.date || row.stayDate || "", productType: row.productType || "", runId: String(row.runId || ""), reason });
   };

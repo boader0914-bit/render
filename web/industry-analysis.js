@@ -1,7 +1,7 @@
 (function (root) {
   "use strict";
   const ENDPOINT = "/api/industry-analysis";
-  const TABS = [["overview", "업종 현황"], ["regions", "지역별 비교"], ["industries", "업종 간 비교"], ["companies", "관측 업체"]];
+  const TABS = [["overview", "업종 현황"], ["regions", "지역별 비교"], ["industries", "업종 간 비교"], ["companies", "관측 업체"], ["review", "자료 검토"]];
   const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character]));
   const number = value => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value)) ? Number(value) : null;
   const count = value => number(value) === null ? "—" : Number(value).toLocaleString("ko-KR", { maximumFractionDigits: 1 });
@@ -16,6 +16,13 @@
   const hasObservations = summary => Number(summary?.coveredCompanyDays) > 0 || Number(summary?.observedCompanies) > 0;
   const activeStorage = storage => ["queued", "processing"].includes(storage?.status);
   const timeLabel = value => value && Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", dateStyle: "short", timeStyle: "short" }).format(new Date(value)) : "확인 전";
+  const companyDbUrl = companyId => typeof companyId === "string" && companyId.trim() ? `/admin?adminCompany=${encodeURIComponent(companyId.trim())}#admin-db-company=${encodeURIComponent(companyId.trim())}` : "";
+  const companyDbLink = row => companyDbUrl(row.companyId) ? `<a class="ia-text-button ia-company-link" href="${escapeHtml(companyDbUrl(row.companyId))}" aria-label="${escapeHtml(row.primaryName || "업체")} 업체 DB 열기">업체 DB 열기 ↗</a>` : '<span class="ia-note">업체 DB 연결 정보 없음</span>';
+  function capacityLabel(row) {
+    const basis = row.capacityBasis || {}, source = basis.source || row.capacitySource;
+    return (typeof basis.label === "string" ? basis.label : "") || { manual: "관리자 검수값", verified: "관리자 검수값", db_review: "관리자 검수값", observed_max: "최대 관측값 · 미검수", observed_locked: "최대 관측값 고정 · 미검수", observed_max_locked: "최대 관측값 고정 · 미검수", unverified: "미검수", unknown: "객실 기준 확인 필요" }[source]
+      || (/[가-힣]/.test(row.capacitySource || "") ? row.capacitySource : "객실 기준 확인 필요");
+  }
 
   function storageStatus(state) {
     const storage = state.storage || state.data?.storage, hasSnapshot = Boolean(state.data?.summary);
@@ -104,12 +111,75 @@
     if (!rows.length) return empty("조건에 맞는 관측 업체가 없습니다", "선택 지역·기간의 네이버 플레이스 1~20위 저장 자료가 필요합니다.");
     return `<section class="ia-card"><div class="ia-section-head"><h3>지표에 포함된 업체</h3><span class="ia-tag">${count(rows.length)}개 업체</span></div><p class="ia-note">객실·사이트 수는 DB 검수값 또는 고정 관측값입니다. 여러 검색어에 나타나는 업체는 중복을 제거합니다.</p><div class="ia-table-scroll"><table><caption>업체별 검색 순위 근거와 관측 범위</caption><thead><tr><th scope="col">업체</th><th scope="col">지역</th><th scope="col">검색 순위 근거</th><th scope="col">객실·사이트 수</th><th scope="col">자료 확보율</th><th scope="col">추정예약률</th><th scope="col">관측 매출</th></tr></thead><tbody>${rows.map(row => {
       const evidence = row.rankEvidence || [], first = evidence[0];
-      const basis = row.capacityBasis || {}, sourceKey = basis.source || row.capacitySource;
-      const source = (typeof basis.label === "string" ? basis.label : "") || { manual: "관리자 검수값", verified: "관리자 검수값", db_review: "관리자 검수값", observed_max: "최대 관측값 · 미검수", observed_locked: "최대 관측값 고정 · 미검수", observed_max_locked: "최대 관측값 고정 · 미검수", unverified: "미검수", unknown: "객실 기준 확인 필요" }[sourceKey]
-        || (/[가-힣]/.test(row.capacitySource || "") ? row.capacitySource : "객실 기준 확인 필요");
+      const basis = row.capacityBasis || {}, source = capacityLabel(row);
       const basisWarnings = (Array.isArray(basis.warnings) ? basis.warnings : []).filter(value => typeof value === "string");
-      return `<tr><th scope="row">${escapeHtml(row.primaryName || row.companyId)}${first?.runId ? `<button type="button" class="ia-text-button ia-open-source" data-industry-open-run="${escapeHtml(first.runId)}">저장 분석 열기 ↗</button>` : ""}</th><td>${escapeHtml(row.regionLabel || "지역 확인 전")}</td><td>${evidence.length ? evidence.slice(0, 3).map(item => `<span class="ia-evidence">${escapeHtml(item.keyword)} <b>${count(item.rank)}위</b></span>`).join("") : "순위 확인 전"}${first?.collectedAt ? `<small>${escapeHtml(dateLabel(first.collectedAt))} 수집</small>` : ""}</td><td>${count(row.capacity)}<small>${escapeHtml(source)}</small>${basisWarnings.map(warning => `<small class="ia-capacity-warning">${escapeHtml(warning)}</small>`).join("")}</td><td>${percent(row.coverageRate)}<small>${count(row.coveredCompanyDays)} / ${count(row.expectedCompanyDays)}일</small></td><td>${percent(row.reservationRate)}</td><td>${money(row.estimatedRevenue)}</td></tr>`;
+      return `<tr><th scope="row">${escapeHtml(row.primaryName || row.companyId)}${companyDbLink(row)}</th><td>${escapeHtml(row.regionLabel || "지역 확인 전")}</td><td>${evidence.length ? evidence.slice(0, 3).map(item => `<span class="ia-evidence">${escapeHtml(item.keyword)} <b>${count(item.rank)}위</b></span>`).join("") : "순위 확인 전"}${first?.collectedAt ? `<small>${escapeHtml(dateLabel(first.collectedAt))} 수집</small>` : ""}</td><td>${count(row.capacity)}<small>${escapeHtml(source)}</small>${basisWarnings.map(warning => `<small class="ia-capacity-warning">${escapeHtml(warning)}</small>`).join("")}</td><td>${percent(row.coverageRate)}<small>${count(row.coveredCompanyDays)} / ${count(row.expectedCompanyDays)}일</small></td><td>${percent(row.reservationRate)}</td><td>${money(row.estimatedRevenue)}</td></tr>`;
     }).join("")}</tbody></table></div></section>`;
+  }
+
+  const REVIEW_PAGE_SIZE = 20;
+  const REVIEW_ISSUES = [{ id: "all", label: "모든 업체" }, { id: "attention", label: "확인 필요" }, { id: "missing", label: "자료 없음" }, { id: "excluded", label: "집계 제외" }, { id: "partial", label: "일부 관측" }, { id: "price", label: "금액 미확인" }, { id: "latest", label: "최근 미확인" }];
+  const reviewDates = row => Array.isArray(row.dates) ? row.dates : [];
+  const latestNeedsReview = day => Boolean(day.latestAttemptStatus && day.latestAttemptStatus !== "observed");
+  const dayNeedsReview = day => day.status !== "observed" || day.reservationEligible !== true || day.priceEligible === false || latestNeedsReview(day);
+  const companyNeedsReview = row => !reviewDates(row).length || reviewDates(row).some(dayNeedsReview);
+  function reviewDayMatches(day, issue) {
+    if (issue === "all") return true;
+    if (issue === "attention") return dayNeedsReview(day);
+    if (issue === "price") return day.status === "observed" && day.priceEligible === false;
+    if (issue === "latest") return latestNeedsReview(day);
+    if (issue.startsWith("reason:")) return [...(day.reasons || []), ...(day.latestAttemptReasons || [])].some(reason => reason.code === issue.slice(7));
+    return day.status === issue;
+  }
+  function reviewSelection(state) {
+    const review = state.data?.review || {}, filters = { company: "", issue: "all", date: "", ...state.reviewFilters };
+    const name = filters.company.trim().normalize("NFKC").toLocaleLowerCase("ko-KR");
+    const rows = (review.companies || []).map((row, index) => ({ ...row, reviewKey: encodeURIComponent(row.companyId || `unlinked:${index}:${row.primaryName || ""}`) }))
+      .filter(row => (!name || String(row.primaryName || "").normalize("NFKC").toLocaleLowerCase("ko-KR").includes(name))
+        && (reviewDates(row).length ? reviewDates(row).some(day => (!filters.date || day.date === filters.date) && reviewDayMatches(day, filters.issue)) : !filters.date && ["all", "attention", "missing"].includes(filters.issue)))
+      .sort((a, b) => Number(companyNeedsReview(b)) - Number(companyNeedsReview(a)) || String(a.primaryName || "").localeCompare(String(b.primaryName || ""), "ko-KR"));
+    const pages = Math.max(1, Math.ceil(rows.length / REVIEW_PAGE_SIZE)), page = Math.max(0, Math.min(pages - 1, Number(state.reviewPage) || 0));
+    return { review, filters, rows, pages, page, visible: rows.slice(page * REVIEW_PAGE_SIZE, (page + 1) * REVIEW_PAGE_SIZE) };
+  }
+  function reviewDayState(day) {
+    if (day.status === "observed" && day.reservationEligible === true) return { tone: "observed", label: day.observedZero === true && number(day.reservationCount) === 0 ? "관측 0" : "관측 확보" };
+    const blocked = (day.reasons || []).some(reason => /block|captcha|access_denied|forbidden|too_many|403|429/i.test(reason.code || ""));
+    const explainedIssue = (day.reasons || []).some(reason => reason.code && reason.code !== "no_saved_observation");
+    return { tone: blocked ? "blocked" : ["excluded", "partial"].includes(day.status) || explainedIssue ? "attention" : "missing", label: { excluded: "집계 제외", partial: "일부 관측", missing: "자료 없음" }[day.status] || "확인 필요" };
+  }
+  function reasonLabels(reasons, fallback) {
+    const labels = [...new Set((Array.isArray(reasons) ? reasons : []).map(reason => reason.label).filter(label => typeof label === "string" && label.trim()))];
+    return labels.length ? `<ul class="ia-review-reasons">${labels.map(label => `<li>${escapeHtml(label)}</li>`).join("")}</ul>` : `<span class="ia-note">${escapeHtml(fallback)}</span>`;
+  }
+  function reviewRunButton(runId, label) { return typeof runId === "string" && runId ? `<button type="button" class="ia-text-button" data-industry-open-run="${escapeHtml(runId)}">${label} ↗</button>` : ""; }
+  function reviewCompanyDays(row, filters, state) {
+    const dates = reviewDates(row).filter(day => (!filters.date || day.date === filters.date) && reviewDayMatches(day, filters.issue));
+    if (!dates.length) return '<p class="ia-review-no-dates">날짜별 검토 기록이 없습니다. 정상 관측 여부를 확인할 수 없습니다.</p>';
+    const firstIssue = dates.find(dayNeedsReview);
+    return `<div class="ia-review-dates">${dates.map(day => {
+      const status = reviewDayState(day), observed = status.tone === "observed", latest = latestNeedsReview(day);
+      const reservation = observed && number(day.reservationCount) !== null ? `예약 ${count(day.reservationCount)}` : "예약 수 미확인";
+      const key = `${row.reviewKey}:${day.date}`, open = Object.hasOwn(state.reviewDateOpen || {}, key) ? state.reviewDateOpen[key] === true : day === firstIssue;
+      return `<details class="ia-review-date" data-ia-review-day="${escapeHtml(key)}" data-ia-review-expanded="${open}" data-review-date="${escapeHtml(day.date)}"${open ? " open" : ""}><summary class="ia-review-date-heading"><time datetime="${escapeHtml(day.date)}">${escapeHtml(dateLabel(day.date))}</time><span class="ia-review-state" data-tone="${status.tone}">${status.label}</span>${observed && day.priceEligible === false ? '<span class="ia-review-state" data-tone="attention">금액 미확인</span>' : ""}${latest ? '<span class="ia-review-state" data-tone="attention">최근 미확인</span>' : ""}<small>${reservation}</small><span class="ia-review-date-toggle">근거 보기</span></summary><div class="ia-review-date-evidence">${reasonLabels(day.reasons, observed ? "관측 자료가 집계에 포함되었습니다." : "관측 자료 또는 원인 기록이 없습니다.")}<div class="ia-review-evidence-meta"><span>${observed ? "실제 관측" : "저장 자료 확인"} <b>${escapeHtml(timeLabel(day.collectedAt))}</b></span>${reviewRunButton(day.runId, "근거 결과")}</div>${latest ? `<div class="ia-review-latest"><strong>최근 미확인 · ${escapeHtml(timeLabel(day.latestAttemptCollectedAt))}</strong>${observed ? '<p>이 날짜는 이전의 정상 관측 자료를 사용합니다.</p>' : ""}${reasonLabels(day.latestAttemptReasons, "최근 시도의 상세 사유는 기록되지 않았습니다.")}${reviewRunButton(day.latestAttemptRunId, "최근 시도 결과")}</div>` : ""}</div></details>`;
+    }).join("")}</div>`;
+  }
+  function reviewPanel(state) {
+    const saved = state.data?.review;
+    if (saved?.schemaVersion !== 1 || !Array.isArray(saved.companies) || !Array.isArray(saved.daily)) return `<section class="ia-card">${empty("날짜별 검토 근거가 없습니다", "이 저장 집계에는 날짜별 관측 공백과 제외 사유가 포함되어 있지 않습니다. 확인되지 않은 날짜를 정상이나 0으로 판단하지 않습니다.")}<p class="ia-note">기존 확보율과 집계 시각은 위에서 확인할 수 있습니다. 날짜별 검토 근거는 저장 자료가 갱신되면 표시됩니다.</p></section>`;
+    const { review, filters, rows, pages, page, visible } = reviewSelection(state);
+    const reasons = (review.reasonsSummary || []).filter(reason => reason.code && reason.label);
+    const issues = [...REVIEW_ISSUES, ...reasons.filter((reason, index) => reasons.findIndex(other => other.code === reason.code) === index).map(reason => ({ id: `reason:${reason.code}`, label: reason.label }))];
+    const daily = review.daily.map(day => {
+      const known = number(day.expectedCompanies) !== null && Number(day.expectedCompanies) > 0 && number(day.observedCompanies) !== null;
+      const rate = known ? Math.min(100, Math.max(0, Number(day.observedCompanies) / Number(day.expectedCompanies) * 100)) : 0;
+      const description = `${dateLabel(day.date)} · 관측 ${count(day.observedCompanies)} / ${count(day.expectedCompanies)}업체 · 미확인 ${count(day.missingCompanies)}업체 · 제외 ${count(day.excludedCompanies)}업체 · 일부 ${count(day.partialCompanies)}업체 · 금액 미확인 ${count(day.priceUnavailableCompanies)}업체`;
+      return `<button type="button" class="ia-review-day" data-ia-review-date="${escapeHtml(day.date)}" aria-pressed="${filters.date === day.date}" aria-label="${escapeHtml(description)}"><strong>${escapeHtml(String(day.date || "").slice(5).replace("-", "."))}</strong><span>관측 ${count(day.observedCompanies)}/${count(day.expectedCompanies)}</span><i class="ia-review-day-meter" aria-hidden="true"><b style="width:${rate}%"></b></i><small${Number(day.excludedCompanies) > 0 || Number(day.partialCompanies) > 0 ? ' class="ia-review-day-alert"' : ""}>미확인 ${count(day.missingCompanies)}</small>${Number(day.priceUnavailableCompanies) > 0 ? `<small class="ia-review-day-alert">금액 미확인 ${count(day.priceUnavailableCompanies)}</small>` : ""}</button>`;
+    }).join("");
+    const companies = visible.map((row, index) => {
+      const open = Object.hasOwn(state.reviewOpen || {}, row.reviewKey) ? state.reviewOpen[row.reviewKey] === true : page === 0 && index === 0 && companyNeedsReview(row);
+      return `<details class="ia-review-company" data-ia-review-company="${escapeHtml(row.reviewKey)}" data-ia-review-expanded="${open}"${open ? " open" : ""}><summary><span class="ia-review-company-name"><strong>${escapeHtml(row.primaryName || "업체명 확인 전")}</strong><small>${escapeHtml(row.regionLabel || "지역 확인 전")}</small></span><span class="ia-review-company-counts"><span>관측 ${count(row.observedDays)}일</span><span${Number(row.missingDays) > 0 ? ' class="ia-review-day-alert"' : ""}>미확인 ${count(row.missingDays)}일</span>${Number(row.priceUnavailableDays) > 0 ? `<span class="ia-review-day-alert">금액 ${count(row.priceUnavailableDays)}일 미확인</span>` : ""}${reviewDates(row).some(latestNeedsReview) ? '<span class="ia-review-day-alert">최근 미확인 있음</span>' : ""}</span><span class="ia-review-chevron" aria-hidden="true"></span></summary>${open ? `<div class="ia-review-company-body"><div class="ia-review-company-toolbar">${companyDbLink(row)}<span class="ia-note">날짜별 확인 시각 · 한국시간</span></div><p class="ia-note ia-review-capacity">객실·사이트 기준 <b>${number(row.capacity) === null ? "확인 전" : `${count(row.capacity)}개`}</b> · ${escapeHtml(capacityLabel(row))}</p>${reviewCompanyDays(row, filters, state)}</div>` : ""}</details>`;
+    }).join("");
+    return `<section class="ia-card ia-review-overview"><div class="ia-section-head"><div><span class="ia-kicker">날짜별 관측 공백</span><h3>어느 날짜의 자료를 확인해야 하나요</h3></div><span class="ia-tag">${count(review.companyCount)}개 업체</span></div><p class="ia-note">선택 업종·지역의 같은 1~20위 표본입니다. 날짜를 누르면 해당 날짜의 업체로 좁혀집니다. 미확인에는 일부 관측과 집계 제외가 포함됩니다.</p><div class="ia-review-legend"><span class="ia-review-state" data-tone="observed">관측 확보 · 정상 0 포함</span><span class="ia-review-state" data-tone="missing">자료 없음</span><span class="ia-review-state" data-tone="attention">일부 관측 · 제외 · 금액 미확인</span></div>${daily ? `<div class="ia-review-calendar">${daily}</div>` : '<p class="ia-review-no-dates">일별 검토 기록이 없습니다. 관측 상태를 확인할 수 없습니다.</p>'}</section><section class="ia-card ia-review-results"><div class="ia-review-filters" role="search" aria-label="자료 검토 업체 필터"><label>업체명<input type="search" data-ia-review-filter="company" value="${escapeHtml(filters.company)}" placeholder="업체명 검색" autocomplete="off"></label><label>확인할 문제<select data-ia-review-filter="issue">${optionsHtml(issues, filters.issue)}</select></label><button type="button" data-ia-review-reset>필터 초기화</button></div><div class="ia-review-result-heading"><h3 id="ia-review-result-count" tabindex="-1" aria-live="polite">${count(rows.length)}개 업체${filters.date ? ` · ${escapeHtml(dateLabel(filters.date))}` : ""}</h3>${filters.date ? '<button type="button" class="ia-text-button" data-ia-review-date="">날짜 선택 해제</button>' : '<span class="ia-note">문제가 있는 업체부터 표시합니다.</span>'}</div>${companies || empty("조건에 맞는 업체가 없습니다", "업체명이나 문제 필터를 바꾸어 확인하세요.")}<div class="ia-review-pagination"><button type="button" data-ia-review-page="-1"${page === 0 ? " disabled" : ""}>이전 업체</button><span>${page + 1} / ${pages} 페이지 · 페이지당 ${REVIEW_PAGE_SIZE}곳</span><button type="button" data-ia-review-page="1"${page >= pages - 1 ? " disabled" : ""}>다음 업체</button></div></section>`;
   }
 
   function renderDashboard(state) {
@@ -124,6 +194,7 @@
     else if (!data && activeStorage(storage)) body = `<div class="ia-loading" role="status"><span></span><strong>${storage.status === "queued" ? "저장 자료 집계 대기 중" : "저장 자료를 집계하고 있습니다"}</strong><p>상태가 자동으로 갱신됩니다. 아직 계산된 수치는 없습니다.</p></div>`;
     else if (!data && storage?.status === "failed") body = empty("저장 집계를 준비하지 못했습니다", "실패를 0으로 계산하지 않습니다. 위에서 상태를 확인하거나 저장 자료로 집계를 다시 준비할 수 있습니다.");
     else if (!data && storage) body = empty("저장 집계 준비 대기", "현재 조건으로 확인할 정상 집계가 아직 없습니다.");
+    else if (data && state.tab === "review") body = `${coverage(data.summary || {}, data.period || {})}${reviewPanel(state)}`;
     else if (data && state.tab === "companies") body = `${coverage(data.summary || {}, data.period || {})}${companyTable(data)}`;
     else if (data && state.tab === "industries") body = comparisons(data, "industries");
     else if (!data || !hasObservations(data.summary)) body = empty("아직 분석할 관측 자료가 없습니다", "저장된 네이버 플레이스 1~20위 자료 중 선택한 숙박월과 지역에 해당하는 자료가 없습니다. 다른 조건을 선택하거나 아래 저장 자료를 확인하세요.");
@@ -132,6 +203,8 @@
     if (data && state.tab === "overview") body += regionalContext(data);
     if (state.error && data) body = `<div class="ia-storage-error" role="alert">${escapeHtml(state.error)} 마지막 정상 집계를 표시합니다.</div>${body}`;
     const warnings = [...(data?.quality?.warnings || []), ...(data?.context?.warnings || [])].filter(item => typeof item === "string");
+    const sourceWarnings = (Array.isArray(data?.quality?.sourceWarnings) ? data.quality.sourceWarnings : []).filter(item => typeof item === "string" && item.trim());
+    if (sourceWarnings.length) body += `<details class="ia-disclosure ia-source-warnings"><summary>저장 자료 전체 참고 <span>${sourceWarnings.length}건</span></summary><p class="ia-note">전체 저장 자료에서 확인한 경고입니다. 현재 선택한 업종·지역의 표본 밖에 있는 자료도 포함할 수 있습니다.</p><ul>${sourceWarnings.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul></details>`;
     const candidateLabels = regions.filter(row => row.indicatorCandidate).map(row => row.label);
     const metricDefinitions = [["reservationRate", "추정예약률"], ["averageBookedPrice", "예약 단위당 추정금액"], ["revenuePerAvailableUnitDay", "보유 단위당 하루 추정매출"], ["cohort", "순위 표본"]].filter(([key]) => data?.definitions?.[key]).map(([key, label]) => `<p><b>${label}:</b> ${escapeHtml(data.definitions[key])}</p>`).join("");
     return `<div class="industry-analysis"><header class="ia-header"><div><span class="ia-kicker">INDUSTRY OBSERVATORY</span><h2>업종별 숙박 흐름</h2><p>지역의 차이부터 예약의 흐름까지, 저장된 관측 자료로 살펴보세요.</p></div><span class="ia-cohort">네이버 플레이스 <strong>1~20위</strong></span></header><form class="ia-filters" aria-label="업종분석 조건"><label>업종<select data-ia-filter="industry">${optionsHtml(industries, selection.industry)}</select></label><label>숙박월<select data-ia-filter="month">${months.length ? optionsHtml(months.map(id => ({ id, label: monthLabel(id) })), selection.month) : '<option value="">저장된 기간 없음</option>'}</select></label><label>지역<select data-ia-filter="region">${optionsHtml([{ id: "all", label: "전체 관측 지역" }, ...regions.filter(row => row.id !== "all")], selection.region)}</select></label><button type="button" class="ia-refresh" data-ia-action="retry" aria-label="저장 자료 다시 조회"${state.loading ? " disabled" : ""}>${state.loading ? "조회 중" : "상태 확인"} <span aria-hidden="true">↻</span></button></form><div class="ia-scope"><span><b>${escapeHtml(industryName)}</b> · ${escapeHtml(selectedRegion)} · ${escapeHtml(monthLabel(selection.month))}</span><span>기간 중 1~20위 관측 업체 · 전체 시장 대표 아님</span></div>${storageStatus(state)}<nav class="ia-tabs" aria-label="업종분석 보기">${TABS.map(([id, label]) => `<button type="button" data-ia-tab="${id}" aria-pressed="${state.tab === id}">${label}</button>`).join("")}</nav><div class="ia-content" aria-busy="${Boolean(state.loading)}">${body}</div>${warnings.length ? `<details class="ia-disclosure"><summary>자료 해석 시 확인할 점 <span>${warnings.length}건</span></summary><ul>${warnings.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul></details>` : ""}<details class="ia-disclosure"><summary>지표 기준과 수집 구상</summary><div class="ia-method">${metricDefinitions}<p><b>대상:</b> 검색 시점의 네이버 플레이스 1~20위 업체. 여러 검색어의 동일 업체는 중복을 제거합니다.</p><p><b>지역:</b> 업체의 실제 주소지를 사용합니다. 복합시설은 해당하는 각 업종에 포함될 수 있습니다.</p><p><b>결측:</b> 미관측 값은 ‘—’로 표시합니다. 공개예약은 초록색, 타채널 추정은 보라색입니다.</p><p><b>규모와 성과등급:</b> 현재 구분을 보류합니다. 규모구간은 추후 업종별로 정의합니다.</p>${candidateLabels.length ? `<p><b>지역 지표 후보:</b> ${escapeHtml(candidateLabels.join(" · "))}. 후보 등록은 자료 확보를 뜻하지 않습니다.</p>` : ""}<p>정기수집 구성은 계획으로 보관하며, 이 화면은 저장 자료만 조회합니다.</p></div></details>${state.legacyHtml ? `<details class="ia-disclosure ia-legacy"${state.legacyOpen ? " open" : ""}><summary>기존 키워드별 저장 분석 열기</summary><div class="ia-legacy-content">${state.legacyHtml}</div></details>` : ""}</div>`;
@@ -153,16 +226,29 @@
     setTimeout: schedule = root.setTimeout.bind(root), clearTimeout: cancel = root.clearTimeout.bind(root) } = {}) {
     const state = { catalog: null, data: null, dataKey: "", storage: null, storageRequest: null,
       selection: { industry: "glamping", month: "", region: "all" }, tab: "overview", loading: false,
-      rebuilding: false, rebuildNeedsCheck: false, error: "", legacyHtml: "", legacyOpen: false };
-    let container, revision = 0, destroyed = false, paused = false, timer = null, activeDataKey = "", dataTask = null;
+      rebuilding: false, rebuildNeedsCheck: false, error: "", legacyHtml: "", legacyOpen: false,
+      reviewFilters: { company: "", issue: "all", date: "" }, reviewPage: 0, reviewOpen: {}, reviewDateOpen: {} };
+    let container, revision = 0, destroyed = false, paused = false, timer = null, activeDataKey = "", dataTask = null, reviewComposing = false, deferredRender = false;
     const pendingData = new Map(), pendingRebuilds = new Set();
     const authorized = () => !destroyed && isAuthorized();
     const visible = () => authorized() && !paused && isVisible() && container?.isConnected !== false && !container?.closest?.("[hidden]");
     const selectionKey = () => `${ENDPOINT}?${new URLSearchParams(state.selection)}`;
     function clearTimer() { if (timer !== null) { cancel(timer); timer = null; } }
-    function render() { if (container && visible()) container.innerHTML = renderDashboard(state); }
+    function render() {
+      if (!container || !visible()) return;
+      if (reviewComposing) { deferredRender = true; return; }
+      const active = container.ownerDocument?.activeElement;
+      const focusedSearch = active?.dataset?.iaReviewFilter === "company" && container.contains?.(active);
+      const selection = focusedSearch ? [active.selectionStart, active.selectionEnd, active.selectionDirection] : null;
+      container.innerHTML = renderDashboard(state); deferredRender = false;
+      if (focusedSearch) {
+        const input = container.querySelector?.('[data-ia-review-filter="company"]');
+        input?.focus({ preventScroll: true });
+        if (Number.isInteger(selection[0])) input?.setSelectionRange?.(...selection);
+      }
+    }
     function pause() {
-      clearTimer(); paused = true; revision++;
+      clearTimer(); paused = true; revision++; reviewComposing = false; deferredRender = false;
       if (state.rebuilding) state.rebuildNeedsCheck = true;
       state.loading = false; state.rebuilding = false; activeDataKey = ""; dataTask = null;
     }
@@ -248,31 +334,66 @@
     function input(field, value) {
       if (!["industry", "month", "region"].includes(field) || !visible()) return Promise.resolve();
       state.selection[field] = String(value || "");
+      state.reviewFilters = { company: "", issue: "all", date: "" }; state.reviewPage = 0; state.reviewOpen = {}; state.reviewDateOpen = {};
       return loadData();
+    }
+    function reviewInput(field, value) {
+      if (!["company", "issue", "date"].includes(field) || !visible()) return;
+      state.reviewFilters[field] = String(value || ""); state.reviewPage = 0; render();
+    }
+    function reviewTextInput(event) {
+      if (event.target.dataset?.iaReviewFilter !== "company") return;
+      if (event.isComposing) { reviewComposing = true; return; }
+      if (state.reviewFilters.company === event.target.value) return;
+      reviewInput("company", event.target.value);
+    }
+    function reviewCompositionStart(event) { if (event.target.dataset?.iaReviewFilter === "company") reviewComposing = true; }
+    function reviewCompositionEnd(event) {
+      if (event.target.dataset?.iaReviewFilter !== "company") return;
+      reviewComposing = false; reviewTextInput(event);
+      if (deferredRender) render();
     }
     function selectTab(value) { if (TABS.some(([id]) => id === value)) { state.tab = value; render(); } }
     function click(event) {
-      const action = event.target.closest?.("[data-ia-action],[data-ia-tab],[data-ia-region]");
+      const action = event.target.closest?.("[data-ia-action],[data-ia-tab],[data-ia-region],[data-ia-review-date],[data-ia-review-page],[data-ia-review-reset]");
       if (!action || action.disabled || !visible()) return;
       if (action.dataset.iaAction === "retry") void (state.catalog ? loadData() : loadCatalog());
       if (action.dataset.iaAction === "rebuild") void rebuild();
       if (action.dataset.iaTab) { selectTab(action.dataset.iaTab); container.querySelector?.(`[data-ia-tab="${state.tab}"]`)?.focus({ preventScroll: true }); }
       if (action.dataset.iaRegion) { state.tab = "overview"; void input("region", action.dataset.iaRegion); }
+      if (action.dataset.iaReviewDate !== undefined) {
+        reviewInput("date", state.reviewFilters.date === action.dataset.iaReviewDate ? "" : action.dataset.iaReviewDate);
+        const dateButton = [...(container.querySelectorAll?.("[data-ia-review-date]") || [])].find(button => button.dataset.iaReviewDate === action.dataset.iaReviewDate);
+        (dateButton || container.querySelector?.("#ia-review-result-count"))?.focus({ preventScroll: true });
+      }
+      if (action.dataset.iaReviewPage) { state.reviewPage = Math.max(0, reviewSelection(state).page + Number(action.dataset.iaReviewPage)); render(); container.querySelector?.("#ia-review-result-count")?.focus({ preventScroll: true }); }
+      if (action.dataset.iaReviewReset !== undefined) { state.reviewFilters = { company: "", issue: "all", date: "" }; state.reviewPage = 0; render(); container.querySelector?.('[data-ia-review-filter="company"]')?.focus({ preventScroll: true }); }
     }
-    function change(event) { const field = event.target.dataset?.iaFilter; if (field) void input(field, event.target.value); }
-    function toggle(event) { if (event.target.matches?.(".ia-legacy")) state.legacyOpen = event.target.open; }
+    function change(event) {
+      const field = event.target.dataset?.iaFilter; if (field) void input(field, event.target.value);
+      if (event.target.dataset?.iaReviewFilter === "issue") { reviewInput("issue", event.target.value); container.querySelector?.('[data-ia-review-filter="issue"]')?.focus({ preventScroll: true }); }
+    }
+    function toggle(event) {
+      if (event.target.matches?.(".ia-legacy")) state.legacyOpen = event.target.open;
+      const day = event.target.dataset?.iaReviewDay;
+      if (day !== undefined && visible()) { state.reviewDateOpen[day] = event.target.open; return; }
+      const key = event.target.dataset?.iaReviewCompany;
+      if (key === undefined || event.target.open === (event.target.dataset.iaReviewExpanded === "true") || !visible()) return;
+      state.reviewOpen[key] = event.target.open; render();
+      [...(container.querySelectorAll?.("[data-ia-review-company]") || [])].find(item => item.dataset.iaReviewCompany === key)?.querySelector("summary")?.focus({ preventScroll: true });
+    }
     function submit(event) { if (event.target.matches?.(".ia-filters")) event.preventDefault(); }
-    function destroy() { pause(); destroyed = true; pendingData.clear(); if (container) { container.removeEventListener("click", click); container.removeEventListener("change", change); container.removeEventListener("toggle", toggle, true); container.removeEventListener("submit", submit); } }
+    function destroy() { pause(); destroyed = true; pendingData.clear(); if (container) { container.removeEventListener("click", click); container.removeEventListener("change", change); container.removeEventListener("input", reviewTextInput); container.removeEventListener("compositionstart", reviewCompositionStart); container.removeEventListener("compositionend", reviewCompositionEnd); container.removeEventListener("toggle", toggle, true); container.removeEventListener("submit", submit); } }
     function mount(element, context = {}) {
       const first = !container, resume = paused;
       container = element; paused = false; state.legacyHtml = context.legacyHtml || "";
-      if (first) { container.addEventListener("click", click); container.addEventListener("change", change); container.addEventListener("toggle", toggle, true); container.addEventListener("submit", submit); }
+      if (first) { container.addEventListener("click", click); container.addEventListener("change", change); container.addEventListener("input", reviewTextInput); container.addEventListener("compositionstart", reviewCompositionStart); container.addEventListener("compositionend", reviewCompositionEnd); container.addEventListener("toggle", toggle, true); container.addEventListener("submit", submit); }
       render();
       if (first || !state.catalog) return loadCatalog();
       if (resume) return loadData();
       if (timer === null) queuePoll(); return Promise.resolve();
     }
-    return { state, mount, input, selectTab, loadData, loadCatalog, rebuild, pause, render, destroy };
+    return { state, mount, input, reviewInput, selectTab, loadData, loadCatalog, rebuild, pause, render, destroy };
   }
 
   const mounted = new WeakMap();

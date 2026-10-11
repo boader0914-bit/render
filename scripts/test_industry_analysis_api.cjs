@@ -71,7 +71,7 @@ async function main() {
     assert.equal(options.status, 200, JSON.stringify(options.data));
     assert.ok(options.data.regions.some(row => row.id === "kr_gyeongnam_sacheon" && row.indicatorCandidate));
     assert.deepEqual(options.data.features, { scaleGroups: false, performanceTiers: false });
-    const analysis = await readyAnalysis(route, admin);
+    let analysis = await readyAnalysis(route, admin);
     assert.equal(analysis.status, 200, JSON.stringify(analysis.data));
     assert.equal(analysis.data.summary.companyCount, 2);
     assert.equal(analysis.data.summary.coveredCompanyDays, 62);
@@ -85,6 +85,13 @@ async function main() {
     assert.equal(analysis.data.storage.monthClosed, true);
     assert.equal(analysis.data.storage.reusePolicy, "closed_month");
     assert.ok(analysis.data.storage.calculatedAt);
+    assert.equal(analysis.data.review.schemaVersion, 1);
+    assert.equal(analysis.data.review.companyCount, analysis.data.summary.companyCount);
+    assert.equal(analysis.data.review.expectedCompanyDays, analysis.data.summary.expectedCompanyDays);
+    assert.equal(analysis.data.review.observedCompanyDays, analysis.data.summary.coveredCompanyDays);
+    assert.equal(analysis.data.review.missingCompanyDays, 0);
+    assert.equal(analysis.data.review.daily.length, analysis.data.period.days);
+    assert.ok(analysis.data.review.companies.every(company => company.dates.length === analysis.data.period.days));
     const savedRead = await request(route, admin);
     assert.equal(savedRead.data.storage.calculatedAt, analysis.data.storage.calculatedAt, "GET reuses saved result");
     assert.deepEqual(savedRead.data.summary, analysis.data.summary);
@@ -118,6 +125,34 @@ async function main() {
     assert.equal(reopened.data.storage.status, "ready", JSON.stringify(reopened.data));
     assert.equal(reopened.data.storage.calculatedAt, analysis.data.storage.calculatedAt);
     assert.deepEqual(reopened.data.summary, analysis.data.summary);
+    // Upgrade a legacy saved result in this isolated fixture. Preserve its
+    // arithmetic while preparing date-level evidence and archiving the prior
+    // normal result. This does not mutate any collection input or live DB.
+    await stopServer();
+    const queueFile = path.join(dataDir, "industry_analysis", "queue.json");
+    const queue = JSON.parse(await fs.readFile(queueFile, "utf8"));
+    const resultKey = Object.entries(queue.jobs).find(([, job]) => job.request.month === "2026-08"
+      && job.request.industry === "glamping" && job.request.region === "all" && job.request.cutoffDate === "2026-08-31")[0];
+    const resultFile = path.join(dataDir, "industry_analysis", "results", `${resultKey}.json`);
+    const legacy = JSON.parse(await fs.readFile(resultFile, "utf8"));
+    delete legacy.result.review;
+    await fs.writeFile(resultFile, JSON.stringify(legacy));
+    startServer(); await waitServer(); admin = await login("industry-admin");
+    const upgrading = await request(route, admin);
+    assert.equal(upgrading.status, 200);
+    assert.equal(upgrading.data.storage.hasSnapshot, true, "schema upgrade retains last normal arithmetic");
+    assert.deepEqual(upgrading.data.summary, analysis.data.summary);
+    if (upgrading.data.storage.status !== "ready") assert.equal(upgrading.data.storage.stale, true);
+    const upgraded = await readyAnalysis(route, admin, data => data.review?.schemaVersion === 1);
+    assert.deepEqual(upgraded.data.summary, analysis.data.summary, "date-level evidence does not alter arithmetic");
+    const revisionDir = path.join(dataDir, "industry_analysis", "revisions", resultKey);
+    const archived = await fs.readdir(revisionDir);
+    assert.ok(archived.length > 0, "legacy normal result is archived even with unchanged source revision");
+    const archivedResults = await Promise.all(archived.map(file => fs.readFile(path.join(revisionDir, file), "utf8").then(JSON.parse)));
+    assert.ok(archivedResults.some(value => !value.result.review && value.calculatedAt === legacy.calculatedAt), "original result remains readable");
+    assert.deepEqual(await fs.readFile(historyFile), originalHistory);
+    assert.deepEqual(await fs.readFile(masterFile), originalMaster);
+    analysis = upgraded;
     // A collection in another month is discovered after restart, without
     // rebuilding or relabeling the already saved August result.
     await stopServer();
@@ -160,7 +195,7 @@ async function main() {
     assert.deepEqual(rebuilt.data.summary, updated.data.summary, "same input has unchanged arithmetic");
     assert.deepEqual(await fs.readFile(historyFile), originalHistory, "review refresh does not rewrite observations");
     assert.equal((await request("/api/crawl-status", admin)).data.active, false, "saved rebuild never starts a crawler");
-    console.log("Industry analysis API passed: closed-month cutoff and reuse across other-month collections/restart, automatic historical review refresh, explicit rebuild guards, admin-only scopes, no external fetch, unchanged raw history");
+    console.log("Industry analysis API passed: saved review evidence, legacy snapshot upgrade/archive, closed-month reuse across other-month collections/restart, automatic historical review refresh, admin-only scopes, no external fetch, unchanged raw history");
   } finally {
     await stopServer();
     assert.ok(path.resolve(dataDir).startsWith(path.resolve(os.tmpdir()) + path.sep));
