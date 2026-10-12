@@ -273,7 +273,9 @@ function createInsightStore({ file, now = () => Date.now() }) {
       db.prepare('INSERT INTO preparations VALUES(?,?,?,?,?)').run(row.requestId, customerId, p.companyId, command.requestKey, JSON.stringify(row));
     });
   }
-  function reservePreparation(customerId, requestId, company, scope, actor) {
+  function reservePreparation(customerId, requestId, company, scope, actor, execution = {workerKey:'scheduled'}) {
+    fields(execution,['workerKey']);
+    if (!['web','manual','scheduled'].includes(execution.workerKey)) throw fault('INSIGHT_COLLECTION_WORKER_INVALID','인사이트 수집기 연결 설정을 확인해 주세요.',503);
     return transaction(() => {
       const found = db.prepare('SELECT data FROM preparations WHERE id=? AND customer_id=?').get(requestId, customerId);
       if (!found) throw fault('NOT_FOUND', '자료 준비 요청을 찾을 수 없습니다.', 404);
@@ -288,12 +290,12 @@ function createInsightStore({ file, now = () => Date.now() }) {
       const fingerprint = hash(JSON.stringify([company.companyId, request.observationDay, scope]));
       const existing = db.prepare('SELECT data FROM preparation_jobs WHERE fingerprint=?').get(fingerprint);
       const job = existing ? JSON.parse(existing.data) : { jobId: crypto.randomUUID(), companyId: company.companyId, observationDay: request.observationDay,
-        scope, keyword: company.name, placeIds: company.placeIds, status: 'dispatching', createdAt: stamp(), updatedAt: stamp() };
+        scope, execution:clone(execution), keyword: company.name, placeIds: company.placeIds, status: 'dispatching', createdAt: stamp(), updatedAt: stamp() };
       if (!existing) db.prepare('INSERT INTO preparation_jobs VALUES(?,?,?)').run(job.jobId, fingerprint, JSON.stringify(job));
       request.jobId = job.jobId; request.status = job.status; request.scope = scope; request.message = job.message || '자료 준비 작업의 접수 상태를 확인하고 있습니다.';
       Object.assign(request,{runId:job.runId || null,errorCode:job.errorCode || null,reused:job.reused===true,updatedAt:job.updatedAt});
       db.prepare('UPDATE preparations SET data=? WHERE id=?').run(JSON.stringify(request), requestId);
-      audit(customerId, actor, 'preparation-dispatch', { requestId, jobId: job.jobId, shared: Boolean(existing), scope });
+      audit(customerId, actor, 'preparation-dispatch', { requestId, jobId: job.jobId, shared: Boolean(existing), scope, execution:job.execution || null });
       return { job, start: !existing };
     });
   }
@@ -311,7 +313,12 @@ function createInsightStore({ file, now = () => Date.now() }) {
     return transaction(() => {
       const found = db.prepare('SELECT data FROM preparation_jobs WHERE id=?').get(jobId);
       if (!found) throw fault('NOT_FOUND', '자료 준비 작업을 찾을 수 없습니다.', 404);
-      const job = { ...JSON.parse(found.data), status, message, ...extra, updatedAt: stamp() };
+      const saved = JSON.parse(found.data);
+      const job = { ...saved, status, message, ...extra, updatedAt: stamp() };
+      // Status/result updates cannot retarget a durable execution or add a new
+      // target to a legacy receipt that is only being inspected.
+      if (Object.hasOwn(saved,'execution')) job.execution = saved.execution;
+      else delete job.execution;
       db.prepare('UPDATE preparation_jobs SET data=? WHERE id=?').run(JSON.stringify(job), jobId);
       for (const row of db.prepare('SELECT id,data FROM preparations').all()) {
         const request = JSON.parse(row.data); if (request.jobId !== jobId) continue;

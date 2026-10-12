@@ -45,6 +45,7 @@ const { dispatchCollector, createHistoricalBookingContext } = require("./collect
 const { createCollectionReuse, serialExecutor } = require("./collection_reuse.cjs");
 const { createKeywordWorkerScheduler } = require("./keyword_worker_scheduler.cjs");
 const { createCollectorRequests } = require("./collector_requests.cjs");
+const { createCollectorRetirementPolicy } = require("./lib/collector_retirement.cjs");
 const { createOperatingWebCollector } = require("./operating_web_collector.cjs");
 const { sanitizeCollectionProgress, parseCollectionProgressLine } = require("./collection_progress.cjs");
 
@@ -297,6 +298,7 @@ let collectionRecoveryActive = false;
 const collectorProtectionReviewWorkers = new Set();
 const COLLECTOR_EXECUTION_MODE = String(process.env.COLLECTOR_EXECUTION_MODE || "local").trim();
 if (!["local", "worker"].includes(COLLECTOR_EXECUTION_MODE)) throw new Error("invalid_collector_execution_mode");
+const collectorRetirement = createCollectorRetirementPolicy(process.env.COLLECTOR_RETIRED_WORKER_KEYS || "");
 const collectorBrokers = Object.fromEntries(["manual", "scheduled"].map(key => [key, COLLECTOR_EXECUTION_MODE === "worker" ? createCollectorBroker({
   dataDir: DATA_DIR,
   outputsDir: OUTPUTS_DIR,
@@ -305,6 +307,7 @@ const collectorBrokers = Object.fromEntries(["manual", "scheduled"].map(key => [
   apiBasePath: key === "manual" ? "/api/collector-worker" : "/api/collector-worker-scheduled",
   token: (key === "manual" ? process.env.COLLECTOR_WORKER_TOKEN : process.env.COLLECTOR_SCHEDULED_WORKER_TOKEN) || "",
   workerId: (key === "manual" ? process.env.COLLECTOR_WORKER_ID : process.env.COLLECTOR_SCHEDULED_WORKER_ID) || (key === "manual" ? "staydatalab-collector" : "staydatalab-collector-scheduled"),
+  canClaim: () => !collectorRetirement.isRetired(key),
   onProviderBlocked: event => stopCollectorLane(key, event?.id),
   onProgress: ({ id, stage, progress, progressReceivedAt }) => withCrawlLane(key, () => {
     if (id !== crawlLane().activeCollectorJobId) return;
@@ -466,7 +469,7 @@ const collectionReuse = createCollectionReuse({
     if(job) attachCrawlJobClient(job,{...payload,b2bSubscriber:payload.b2bSubscriber ? {...payload.b2bSubscriber,quotaCounted:false} : undefined});
   })
 });
-const dailyKeywordCollectionScheduler = createDailyKeywordCollectionScheduler({
+const dailyKeywordCollectionScheduler = collectorRetirement.scheduler("scheduled", createDailyKeywordCollectionScheduler({
   configFile: path.join(CONFIG_DIR, "daily_keyword_collection.json"),
   stateFile: path.join(HISTORY_DIR, "daily_keyword_collection_state.json"),
   dataDir: DATA_DIR,
@@ -474,14 +477,15 @@ const dailyKeywordCollectionScheduler = createDailyKeywordCollectionScheduler({
   isBusy: () => Boolean(crawlLanes.scheduled.activeCrawlPromise || crawlLanes.scheduled.crawlQueue.length),
   inspectResult: (result, payload) => result?.collectionQuality || inspectDailyCollectionResult(result, payload),
   logger: console
-});
-const keywordWorkerSchedulers = Object.fromEntries(["web", "manual", "scheduled"].map(workerKey => [workerKey, createKeywordWorkerScheduler({
+}));
+const keywordWorkerSchedulers = Object.fromEntries(["web", "manual", "scheduled"].map(workerKey => [workerKey, collectorRetirement.scheduler(workerKey, createKeywordWorkerScheduler({
   dataDir:DATA_DIR, workerKey,
   runCrawler: payload => runCrawler({...payload,sourceRole:USER_ROLES.admin,collectionSource:"admin_search"}),
+  beforeNewImmediateRun: () => collectorRetirement.assertAdmission(workerKey),
   beforeImmediateRun: () => assertCollectorReady(workerKey,true),
   cancelPendingScheduled: options => cancelPendingScheduledCollections({...options,workerKey}),
   inspectResult: (result,payload) => result?.collectionQuality || inspectDailyCollectionResult(result,payload)
-})]));
+}))]));
 const collectorRequests = createCollectorRequests({dataDir:DATA_DIR,run:runCrawler,preflight:payload=>assertCollectorReady(payload.workerKey,true)});
 const insightIntegration = require('./lib/insight_integration.cjs').createInsightIntegration({
   dataDir: DATA_DIR, readCatalog: monthlyReportSources.catalog, readMembers: readB2BMemberStore,
@@ -554,6 +558,7 @@ async function readInsightCompanyEvidence(companyId, { runId = null, scope = nul
 const pausedScheduleOccurrences = new Set();
 
 async function assertCollectorReady(workerKey,requireConnection=false) {
+  collectorRetirement.assertAdmission(workerKey);
   if(collectorProtectionReviewWorkers.has(workerKey))throw Object.assign(new Error("선택한 수집기의 보호 상태를 검토 중입니다."),{code:"COLLECTOR_PROTECTION_REVIEW_BUSY",statusCode:409});
   if(collectionRecoveryActive)throw Object.assign(new Error("보존 자료를 복구 중입니다. 완료 후 수집해 주세요."),{code:"COLLECTOR_RECOVERY_BUSY",statusCode:409});
   selectedWorkerKey(workerKey);
@@ -17889,6 +17894,7 @@ async function runCrawlerLegacySingleFlight(payload) {
 
 async function runCrawler(payload) {
   const workerKey = selectedWorkerKey(payload.workerKey || "manual");
+  collectorRetirement.assertAdmission(workerKey);
   if (workerKey === "scheduled" && COLLECTOR_EXECUTION_MODE !== "worker") {
     throw Object.assign(new Error("AWS worker 연결 설정이 필요합니다."), {statusCode:409,code:"COLLECTOR_NOT_CONFIGURED"});
   }
@@ -18610,7 +18616,7 @@ async function route(req, res) {
     if (req.method === "GET" && reqUrl.pathname === "/api/crawl-status") {
       if (!requireAdminSession(session, req, res)) return;
       const workerKey=selectedWorkerKey(reqUrl.searchParams.get("workerKey") || "manual");
-      return send(res, 200, withCrawlLane(workerKey,()=>({ ...currentCrawlStatus({ clientRequestId: reqUrl.searchParams.get("clientRequestId") }), workerKey, executionMode: workerKey==="web"?"local":COLLECTOR_EXECUTION_MODE })));
+      return send(res, 200, withCrawlLane(workerKey,()=>collectorRetirement.workerStatus(workerKey,{ ...currentCrawlStatus({ clientRequestId: reqUrl.searchParams.get("clientRequestId") }), workerKey, executionMode: workerKey==="web"?"local":COLLECTOR_EXECUTION_MODE })));
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/collector-status") {
@@ -18620,10 +18626,10 @@ async function route(req, res) {
       const workers=await Promise.all(["manual","scheduled","web"].map(async workerKey=>{
         const status=controllers[workerKey]?await controllers[workerKey].status():{configured:false};
         const crawl=withCrawlLane(workerKey,()=>currentCrawlStatus());
-        return {workerKey,name:workerKey==="web"?"2Gweb_worker":workerKey==="manual"?"BG worker":"AWS worker",...status,
+        return collectorRetirement.workerStatus(workerKey,{workerKey,name:workerKey==="web"?"2Gweb_worker":workerKey==="manual"?"BG worker":"AWS worker",...status,
           resultDestination:{role:"central",label:"2G 운영 서버",archive:"/api/runs",validatedBeforePublish:true},
           ...(workerKey==="web"?{connected:true,executionMode:"local",requestPacing:{enabled:false,guardEnabled:true},ready:!status.halted}:{}),
-          waitingCount:Number(status.queued||0)+crawl.queueLength,crawl};
+          waitingCount:Number(status.queued||0)+crawl.queueLength,crawl});
       }));
       const web=workers.find(worker=>worker.workerKey==="web");
       const disk=await fsp.statfs(DATA_DIR);
@@ -19467,6 +19473,7 @@ async function route(req, res) {
       : {};
     send(res, error.statusCode || 500, {
       error: error.message || String(error),
+      ...(error.code === "COLLECTOR_WORKER_RETIRED" ? { code: error.code } : {}),
       retryAfterSeconds: error.retryAfterSeconds || undefined
     }, "application/json; charset=utf-8", headers);
   }

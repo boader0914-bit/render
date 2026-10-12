@@ -17,6 +17,10 @@
 .collector-worker-card:not([open]) { align-self: start; }
 .collector-worker-card[data-state="running"] { border-color: var(--accent); }
 .collector-worker-card[data-state="alert"] { border-color: var(--warning-strong); }
+.collector-worker-card[data-retired="true"] { align-self: start; border-color: var(--border-subtle); }
+.collector-worker-card[data-retired="true"] .state-badge { color: var(--text-secondary); background: var(--surface-control); border-color: var(--border-subtle); }
+.collector-worker-card[data-retired="true"] .collector-card-status small { color: var(--text-secondary); }
+.collector-retired-history { justify-self: start; min-height: 44px; padding: 10px 12px; font-size: 12px; }
 .collector-worker-summary { display: flex; align-items: center; gap: 8px; padding: 20px 18px; min-height: 94px; box-sizing: border-box; flex-shrink: 0; color: var(--text-primary); cursor: pointer; list-style: none; }
 .collector-worker-summary::-webkit-details-marker { display: none; }
 .collector-worker-identity { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }

@@ -1,7 +1,14 @@
 'use strict';
 const { fields, fault } = require('./insight_store.cjs');
+const WORKER_LABELS = Object.freeze({ web:'2Gweb_worker', manual:'BG worker', scheduled:'AWS worker' });
+function insightCollectionWorkerKey(value) {
+  const key = value === undefined ? 'scheduled' : typeof value === 'string' ? value.trim() : '';
+  if (!Object.hasOwn(WORKER_LABELS,key)) throw fault('INSIGHT_COLLECTION_WORKER_INVALID','인사이트 수집기 연결 설정을 확인해 주세요.',503);
+  return key;
+}
 function date(value) { return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0,10) === value; }
-function createInsightPreparation({ store, catalog, collectorRequests, verifyStored, findReusable = null, now = () => Date.now() }) {
+function createInsightPreparation({ store, catalog, collectorRequests, verifyStored, findReusable = null, workerKey, now = () => Date.now() }) {
+  const configuredWorkerKey = insightCollectionWorkerKey(workerKey);
   const running = new Map();
   async function dispatch(customerId, payload, actor) {
     fields(payload, ['requestId','checkIn','bookingRangeDays','dayUseMode']);
@@ -14,17 +21,19 @@ function createInsightPreparation({ store, catalog, collectorRequests, verifySto
     if (company.placeIds?.length !== 1) throw fault('PLACE_REVIEW_REQUIRED','단일 플레이스 식별자를 먼저 검수해 주세요.',409);
     const scope = { checkIn:payload.checkIn, checkOut:new Date(Date.parse(`${payload.checkIn}T00:00:00Z`)+86400000).toISOString().slice(0,10), bookingRangeDays:payload.bookingRangeDays,
       adults:2, searchMode:'company', collectionMode:'precision', collectionPurpose:'revenue_detail', productMode:'all', dayUseMode:payload.dayUseMode || 'inspect', detailRankRanges:'1-1', schemaVersion:1 };
-    const {job,start} = store.reservePreparation(customerId,payload.requestId,company,scope,actor);
+    // The server chooses execution once, separately from the comparable data scope.
+    // Changing this setting must not create another job for an existing observation.
+    const {job,start} = store.reservePreparation(customerId,payload.requestId,company,scope,actor,{workerKey:configuredWorkerKey});
     if (!start) { await refreshJob(job); return; }
     // Durable job ID precedes dispatch. Any ambiguous failure is inspected, never blindly resubmitted.
     running.set(job.jobId,true);
     try {
       const reusable = findReusable ? await findReusable(company.companyId,scope,today) : null;
       if (reusable) { store.updatePreparationJob(job.jobId,'ready','오늘 같은 조건으로 확보한 업체 자료를 연결했습니다.',{runId:reusable,reused:true}); return; }
-      await collectorRequests.submit({ ...scope, keyword:company.name, workerKey:'scheduled', clientRequestId:job.jobId, sourceRole:'admin', collectionSource:'admin_search', trigger:'manual', scheduledCollection:false, searchRegion:'', searchScope:'', bookingRangePlaceLimit:0 });
-      store.updatePreparationJob(job.jobId,'queued','AWS worker에 자료 준비를 접수했습니다.');
+      await collectorRequests.submit({ ...job.scope, keyword:job.keyword, workerKey:job.execution.workerKey, clientRequestId:job.jobId, sourceRole:'admin', collectionSource:'admin_search', trigger:'manual', scheduledCollection:false, searchRegion:'', searchScope:'', bookingRangePlaceLimit:0 });
+      store.updatePreparationJob(job.jobId,'queued',`${WORKER_LABELS[job.execution.workerKey]}에 자료 준비를 접수했습니다.`);
     } catch (error) {
-      const known = { COLLECTOR_PROVIDER_BLOCKED:'접근 제한 보호 상태로 수집하지 않았습니다.', COLLECTOR_HALTED:'수집기가 보호 상태라 수집하지 않았습니다.', COLLECTOR_OFFLINE:'수집기 연결을 확인하지 못했습니다.', COLLECTOR_NOT_CONFIGURED:'수집기 연결 설정이 필요합니다.', COLLECTOR_DISK_LOW:'자료 저장공간이 부족합니다.', COLLECTOR_RECOVERY_BUSY:'보존 자료 복구가 진행 중입니다.' };
+      const known = { COLLECTOR_PROVIDER_BLOCKED:'접근 제한 보호 상태로 수집하지 않았습니다.', COLLECTOR_HALTED:'수집기가 보호 상태라 수집하지 않았습니다.', COLLECTOR_WORKER_RETIRED:'선택된 수집기가 인사이트 서버로 전환되어 접수하지 않았습니다. 관리자 연결 설정을 확인해 주세요.', COLLECTOR_OFFLINE:'수집기 연결을 확인하지 못했습니다.', COLLECTOR_NOT_CONFIGURED:'수집기 연결 설정이 필요합니다.', COLLECTOR_DISK_LOW:'자료 저장공간이 부족합니다.', COLLECTOR_RECOVERY_BUSY:'보존 자료 복구가 진행 중입니다.' };
       store.updatePreparationJob(job.jobId, error.code==='COLLECTOR_PROVIDER_BLOCKED'?'blocked':'needs_review',known[error.code] || '작업 접수 여부를 확인해야 합니다. 자동으로 다시 실행하지 않습니다.',{errorCode:/^[A-Z0-9_]{1,80}$/.test(error.code||'')?error.code:'DISPATCH_UNCONFIRMED'});
     }
     finally { running.delete(job.jobId); }
@@ -51,4 +60,4 @@ function createInsightPreparation({ store, catalog, collectorRequests, verifySto
   }
   return { dispatch,refresh };
 }
-module.exports = { createInsightPreparation };
+module.exports = { createInsightPreparation, insightCollectionWorkerKey };

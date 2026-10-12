@@ -463,6 +463,7 @@ function createKeywordWorkerScheduler(options = {}) {
       // collection. Current connectivity, dates and config cannot invalidate it.
       if (accepted) return { created: false, entry: accepted };
     }
+    if (typeof options.beforeNewImmediateRun === "function") await options.beforeNewImmediateRun();
     if (stopped || persistenceFailed) throw fault(lastError || "KEYWORD_SCHEDULE_STOPPED", 503);
     if (overrides.collection !== undefined && !object(overrides.collection)) throw fault("KEYWORD_SCHEDULE_COLLECTION_INVALID");
     const existing = await readConfig();

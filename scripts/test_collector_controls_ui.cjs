@@ -41,7 +41,7 @@ class Element {
 const descendants = element => [element, ...element.children.flatMap(descendants)];
 const text = element => descendants(element).map(item => item.textContent).filter(Boolean).join(" ");
 async function until(predicate) { for (let i = 0; i < 120; i++) { if (predicate()) return; await new Promise(resolve => setImmediate(resolve)); } throw new Error("ui_condition_not_reached"); }
-async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}, drafts = {}, failedSchedules = [], failRequests = false, uncertainSubmit = false, outsideCollection = false, diagnostics = {}, diagnosticStatus = 200, diagnosticRunId } = {}) {
+async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}, drafts = {}, failedSchedules = [], failRequests = false, failStatus = false, uncertainSubmit = false, outsideCollection = false, diagnostics = {}, diagnosticStatus = 200, diagnosticRunId } = {}) {
   const nodes = new Map();
   for (const match of html.matchAll(/<([\w-]+)\b[^>]*\bid="([^"]+)"[^>]*>/g)) { const el = new Element(match[1], nodes); el.id = match[2]; }
   const body = new Element("body", nodes); body.className = "role-admin";
@@ -53,7 +53,7 @@ async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}
   const window = { localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) }, addEventListener(name, callback) { (windowListeners[name] ||= []).push(callback); }, dispatchEvent(event) { events.push(event); if (event.type === "collector:submit-card") { submissions.push(clone(event.detail.input)); event.detail.resolve({ status: "pending", submissionUncertain: uncertainSubmit }); } for (const fn of windowListeners[event.type] || []) fn(event); } };
   const fetch = async (url, options) => {
     const payload = options.body ? JSON.parse(options.body) : undefined; calls.push({ url, method: options.method, payload }); let result;
-    if (url === "/api/collector-status") result = { workers: workers || keys.map(workerKey => ({ workerKey, configured: true, connected: true, ready: true, workerLastSeenAt: new Date().toISOString(), queued: 0 })) };
+    if (url === "/api/collector-status") { if (typeof failStatus === "function" ? failStatus() : failStatus) throw Error("status_unavailable"); result = { workers: workers || keys.map(workerKey => ({ workerKey, configured: true, connected: true, ready: true, workerLastSeenAt: new Date().toISOString(), queued: 0 })) }; }
     else if (url === "/api/crawl-requests") { if (failRequests) throw Error("requests_unavailable"); result = { requests }; }
     else if (/^\/api\/runs\/[^/]+\/diagnostics$/.test(url)) {
       const runId = decodeURIComponent(url.split("/")[3]);
@@ -87,6 +87,78 @@ test("drafts default to day-use presence check and inclusive lodging dates", () 
   assert.equal(collectionDates({ period: "7" }, Date.parse("2026-09-24T06:00:00Z")).checkOut, "2026-09-30");
   assert.throws(() => collectionDates({ period: "custom", checkIn: "2026-02-30", checkOut: "2026-03-02" }));
   assert.equal(defaultDraft(Date.parse("2026-09-24T06:00:00Z")).firstDate, "2026-09-25");
+});
+
+test("server conversion has a neutral disabled card while historical AWS results remain readable", async () => {
+  const now = Date.now(), retirementReason = "인사이트 서버로 전환되어 신규 수집과 예약을 받지 않습니다.";
+  const workers = keys.map(workerKey => ({ workerKey, configured: workerKey !== "scheduled", connected: true, ready: true, workerLastSeenAt: new Date(now).toISOString(), halted: workerKey === "scheduled", retired: workerKey === "scheduled", retirementReason }));
+  const retiredWorker = workers[2];
+  assert.equal(workerState(retiredWorker, now), "인사이트 서버로 전환", "conversion must outrank stale connection and old protection flags");
+  assert.equal(workerAvailability({ workers }, "scheduled", now).retired, true);
+  assert.equal(workerAvailability({ workers }, "scheduled", now).ready, false);
+  assert.equal(workerAvailability({ workers }, "scheduled", now).reason, retirementReason);
+  assert.match(errorMessage("COLLECTOR_WORKER_RETIRED"), /이전 수집 결과/);
+  const ui = await mockUi({ workers, configs: { scheduled: { ...clone(config), enabled: true, keywords: ["포천글램핑"] } },
+    schedulePatch: { scheduled: { retired: true, retirementReason, enabled: false, storedEnabled: true, nextRunAt: null } },
+    requests: [{ workerKey: "scheduled", keyword: "이전 포천글램핑", status: "complete", createdAt: "2026-09-24T05:00:00Z", result: { runId: "previous_aws_result" } },
+      { workerKey: "scheduled", keyword: "종료된 접근제한", status: "failed", errorCode: "COLLECTOR_PROVIDER_BLOCKED", createdAt: new Date(now).toISOString() }] });
+  const card = ui.card("scheduled"), status = descendants(card).find(el => el.className === "collector-card-status");
+  assert.equal(card.dataset.state, "retired"); assert.equal(card.dataset.retired, "true");
+  assert.match(text(status), /인사이트 서버로 전환/); assert.doesNotMatch(text(status), /연결 확인|보호 중|예약 켜짐|대기 0건/);
+  assert.equal(descendants(card).find(el => el.className === "state-badge").textContent, "전환됨");
+  for (const name of Object.keys(defaultDraft())) assert.equal(ui.input("scheduled", name).disabled, true);
+  assert.equal(descendants(card).find(el => el.className === "collector-common-fields").hidden, true);
+  assert.equal(descendants(card).find(el => el.className === "collector-card-actions").hidden, true);
+  assert.equal(descendants(card).find(el => el.className === "collector-reservation").hidden, true);
+  assert.equal(descendants(card).find(el => el.className === "collector-live-progress").hidden, true, "old blocked receipt is not a current conversion error");
+  await ui.form("scheduled").event("submit");
+  assert.equal(ui.submissions.length, 0); assert.ok(ui.calls.every(call => call.method === "GET"));
+  for (const key of ["web", "manual"]) assert.equal(ui.button(key, "지금 수집").disabled, false, "conversion does not affect remaining workers");
+  await ui.button("scheduled", "수집 이력 보기").event("click");
+  assert.equal(ui.nodes.get("collectorHistoryWorker").value, "scheduled");
+  assert.match(text(ui.nodes.get("collectorUnifiedHistory")), /이전 포천글램핑.*AWS worker/s);
+  const lastResult = descendants(card).find(el => el.className === "collector-last-result");
+  await descendants(lastResult).find(el => el.textContent === "결과 보기").event("click");
+  assert.equal(ui.events.at(-1).type, "collector:open-result"); assert.equal(ui.events.at(-1).detail.runId, "previous_aws_result");
+  assert.ok(ui.calls.every(call => call.method === "GET"));
+  const css = fs.readFileSync(path.join(__dirname, "../web/collector-controls.css"), "utf8");
+  assert.match(css, /\[data-retired="true"\] \.state-badge \{ color: var\(--text-secondary\); background: var\(--surface-control\)/);
+  assert.match(css, /\.collector-retired-history \{[^}]*min-height: 44px/);
+});
+
+test("schedule retirement also blocks active drafts and survives a later status read failure", async () => {
+  let unreadable = false;
+  const workers = keys.map(workerKey => ({ workerKey, configured: true, connected: true, ready: true, workerLastSeenAt: new Date().toISOString() }));
+  const ui = await mockUi({ workers, failStatus: () => unreadable,
+    schedulePatch: { scheduled: { retired: true, retirementReason: "인사이트 서버로 전환", enabled: false, nextRunAt: null } },
+    drafts: { scheduled: { ...defaultDraft(), keywords: "경남글램핑", execution: "schedule" } } });
+  assert.equal(descendants(ui.card("scheduled")).find(el => el.type === "submit").disabled, true);
+  assert.equal(ui.button("scheduled", "예약 조건 저장").disabled, true);
+  await ui.form("scheduled").event("submit");
+  await ui.button("scheduled", "예약 조건 저장").event("click");
+  assert.ok(ui.calls.every(call => call.method === "GET")); assert.equal(ui.submissions.length, 0);
+  unreadable = true;
+  const initialAvailabilityEvents = ui.events.filter(event => event.type === "collector:worker-availability").length;
+  await ui.nodes.get("collectorRefresh").event("click");
+  await until(() => ui.events.filter(event => event.type === "collector:worker-availability").length > initialAvailabilityEvents);
+  assert.equal(ui.card("scheduled").dataset.state, "retired");
+  ui.nodes.get("crawlWorkerKey").value = "scheduled"; await ui.nodes.get("crawlWorkerKey").event("change");
+  assert.equal(ui.events.at(-1).detail.retired, true); assert.equal(ui.events.at(-1).detail.ready, false);
+  assert.match(ui.nodes.get("crawlWorkerHint").textContent, /인사이트 서버로 전환/);
+  assert.ok(ui.calls.every(call => call.method === "GET"));
+});
+
+test("last known worker conversion remains neutral when both status and schedule are unreadable", async () => {
+  let unreadable = false;
+  const workers = keys.map(workerKey => ({ workerKey, configured: true, connected: true, ready: true, workerLastSeenAt: new Date().toISOString(), retired: workerKey === "scheduled" }));
+  const ui = await mockUi({ workers, failStatus: () => unreadable, failedSchedules: ["scheduled"] });
+  assert.equal(ui.card("scheduled").dataset.state, "retired");
+  unreadable = true; await ui.nodes.get("collectorRefresh").event("click");
+  assert.equal(ui.card("scheduled").dataset.state, "retired");
+  assert.equal(descendants(ui.card("scheduled")).find(el => el.className === "collector-control-status").hidden, true, "retirement is not rendered as a red missing-connection error");
+  assert.equal(descendants(ui.card("scheduled")).find(el => el.type === "submit").disabled, true);
+  await ui.form("scheduled").event("submit");
+  assert.equal(ui.submissions.length, 0); assert.ok(ui.calls.every(call => call.method === "GET"));
 });
 
 test("past one-time reservations show an explanation and cannot activate", async () => {

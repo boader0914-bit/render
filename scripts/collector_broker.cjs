@@ -536,6 +536,9 @@ function createCollectorBroker(options = {}) {
       workerIdentity(body.workerId);
       if (body.workerKey !== undefined && body.workerKey !== workerKey) throw problem("COLLECTOR_WRONG_WORKER", 403);
       if (body.protocolVersion !== 1) throw problem("COLLECTOR_PROTOCOL_MISMATCH", 400);
+      // Retirement stops new leases only. Existing lease heartbeats, uploads,
+      // completion and explicit retained-result recovery remain usable.
+      if (typeof options.canClaim === "function" && !(await options.canClaim())) return { job: null, retired: true };
       await expireLeases();
       state.workerLastSeenAt = iso();
       if (state.halted || state.jobs.some(ownsLease)) {
