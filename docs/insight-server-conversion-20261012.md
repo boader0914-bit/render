@@ -101,3 +101,11 @@ DNS/TLS 확인 전에는 대표 주소를 Render 주소로, `https://insight.sab
 2026-10-13T01:50:16.130Z 실제 런타임은 Node v24.21.0, `INSIGHT_PUBLIC_ORIGIN=https://insight.sabun.co.kr`, `INSIGHT_PUBLIC_ORIGINS=https://sa-labs-datalab-v4-preview.onrender.com`, 수집 실행 비활성, 연결키 설정 있음, 디스크 여유 약 886.887MiB였다. 두 허용 Host는 200, 미등록 Host는 403이었다. 연결키 값은 출력·저장하지 않았다. 배포 직후 일시적인 502가 있었으나 10:50:01 KST에는 양쪽 공개 주소의 health·고객 config API가 HTTP 200으로 회복했다.
 
 무료 `sabun-insight-preview`(`srv-dathlifavr4c73dj3jt0`)는 Render에서 `Suspended`·`Suspended by you`·`Resume Web Service` 표시를 확인해 일시중지를 완료했다. 서비스 삭제나 자료 이동은 하지 않았다. 새 서버는 중앙 고객 저장소와 업체 DB를 직접 조회하며 무료 주소를 경유하지 않는다. 기존 예약은 비활성, Codex 일일 점검은 PAUSED 상태를 유지했다. 문서만 갱신한 후에는 별도 서버 배포가 필요하지 않다.
+
+## 2026-10-13 업체·숙박월 조회 화면 개선 배포
+
+인사이트에 커밋 `613a962fc4b073c972f67071b4e5cdfdf127ccb9`을 배포했다. 배포 `dep-db6q1uuk1f9s73b3nfp0`은 12:09:47 KST 시작, 12:12:36 KST Live(169초)이며, 배포 브랜치는 `codex/insight-company-view-cache-20261013`이다. 신규 변경은 인사이트 화면 파일 2개와 회귀 테스트다. 데이터랩 운영 서버·수집워커·DB 계산·예약 설정에는 변경을 적용하지 않았다.
+
+업체·숙박월별 정상 응답을 현재 로그인 화면의 메모리에 보관한다(최대 24개 키, 30분). 메뉴 재진입·이미 조회한 월 선택은 먼저 받은 자료를 즉시 표시하고 최신 자료를 다시 조회한다. 로그아웃·계정 변경·권한 만료에는 보관 자료를 제거한다. 작성 중인 수정폼과 그 기준 버전은 배경 응답으로 바꾸지 않는다. 브라우저 새로고침 후에는 다시 조회하며, 서버의 집계 속도나 외부 수집 방식을 바꾸는 기능은 아니다.
+
+로컬 검증 30개 및 PC·모바일 양 테마 검수를 통과했다. 운영 브라우저에서 월명글램핑의 검수 16실·A/B/C/D·선택월 2026-10을 확인했고, 메뉴 재진입 즉시 표시와 뒤쪽 조회 완료를 확인했다. 실제 배포된 화면 파일 2개의 정규화한 SHA-256이 검증 소스와 일치했다. Node v24.21.0, 수집 실행 비활성, 서버 내부 health HTTP 200·빌드 `613a962fc4b0`·connected 상태를 확인했다. 외부 명령줄의 공개 health 요청에는 Cloudflare 확인 HTML이 반환되어 공개 health 200으로 기록하지 않는다. 실제 로그인 브라우저의 화면·설정·업체 조회 API는 HTTP 200이었다. 신규 수집·정보 수정은 실행하지 않았다. 증빙은 `C:/Users/User/.codex/visualizations/2026/10/13/insight-company-cache/production-release.json`과 운영 화면 이미지에 저장했다. 이 문서 추가만으로 서버를 재배포하지 않는다.
