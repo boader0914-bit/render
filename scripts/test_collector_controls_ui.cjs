@@ -40,6 +40,7 @@ class Element {
 }
 const descendants = element => [element, ...element.children.flatMap(descendants)];
 const text = element => descendants(element).map(item => item.textContent).filter(Boolean).join(" ");
+const visibleText = element => element.hidden ? "" : [element.textContent, ...element.children.map(visibleText)].filter(Boolean).join(" ");
 async function until(predicate) { for (let i = 0; i < 120; i++) { if (predicate()) return; await new Promise(resolve => setImmediate(resolve)); } throw new Error("ui_condition_not_reached"); }
 async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}, drafts = {}, failedSchedules = [], failRequests = false, failStatus = false, uncertainSubmit = false, outsideCollection = false, diagnostics = {}, diagnosticStatus = 200, diagnosticRunId } = {}) {
   const nodes = new Map();
@@ -72,13 +73,14 @@ async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}
   };
   class UiEvent { constructor(type, options = {}) { this.type = type; Object.assign(this, options); } }
   vm.runInNewContext(source, { document, fetch, window, console, setInterval() {}, MutationObserver: class { observe() {} disconnect() {} }, Event: UiEvent, CustomEvent: UiEvent, Date, Intl, Number, String, Object, Array, Set, Map, JSON, Promise, Error, Math });
+  const initial = { hiddenCards:nodes.get("collectorWorkerStates").children.map(card => card.hidden), executionChoices:nodes.get("crawlWorkerKey").children.map(option => option.value) };
   await until(() => events.some(event => event.type === "collector:worker-availability"));
   const card = key => nodes.get("collectorWorkerStates").children.find(node => node.dataset.workerKey === key);
   const form = key => descendants(card(key)).find(el => el.tagName === "FORM");
   const input = (key, name) => nodes.get(`collector-${key}-${name}`);
   const button = (key, label) => descendants(card(key)).find(el => el.tagName === "BUTTON" && el.textContent === label);
   async function set(key, name, value) { if (typeof value === "boolean") input(key, name).checked = value; else input(key, name).value = value; await form(key).event("change"); }
-  return { nodes, calls, submissions, saved, events, window, storage, card, form, input, button, set, navigation };
+  return { nodes, calls, submissions, saved, events, window, storage, card, form, input, button, set, navigation, initial };
 }
 
 test("drafts default to day-use presence check and inclusive lodging dates", () => {
@@ -89,7 +91,7 @@ test("drafts default to day-use presence check and inclusive lodging dates", () 
   assert.equal(defaultDraft(Date.parse("2026-09-24T06:00:00Z")).firstDate, "2026-09-25");
 });
 
-test("server conversion has a neutral disabled card while historical AWS results remain readable", async () => {
+test("converted worker is absent from execution cards and choices while historical AWS results remain readable", async () => {
   const now = Date.now(), retirementReason = "인사이트 서버로 전환되어 신규 수집과 예약을 받지 않습니다.";
   const workers = keys.map(workerKey => ({ workerKey, configured: workerKey !== "scheduled", connected: true, ready: true, workerLastSeenAt: new Date(now).toISOString(), halted: workerKey === "scheduled", retired: workerKey === "scheduled", retirementReason }));
   const retiredWorker = workers[2];
@@ -103,6 +105,12 @@ test("server conversion has a neutral disabled card while historical AWS results
     requests: [{ workerKey: "scheduled", keyword: "이전 포천글램핑", status: "complete", createdAt: "2026-09-24T05:00:00Z", result: { runId: "previous_aws_result" } },
       { workerKey: "scheduled", keyword: "종료된 접근제한", status: "failed", errorCode: "COLLECTOR_PROVIDER_BLOCKED", createdAt: new Date(now).toISOString() }] });
   const card = ui.card("scheduled"), status = descendants(card).find(el => el.className === "collector-card-status");
+  assert.ok(ui.initial.hiddenCards.every(Boolean), "no execution card flashes before server identity is confirmed"); assert.deepEqual(ui.initial.executionChoices, []);
+  assert.equal(card.hidden,true); assert.equal(ui.nodes.get("collectorWorkerStates").dataset.workerCount,"2");
+  assert.doesNotMatch(visibleText(ui.nodes.get("collectorWorkerStates")), /AWS worker|인사이트 서버로 전환|전환됨/);
+  assert.deepEqual(ui.nodes.get("crawlWorkerKey").children.map(option => option.value), ["manual","web"]);
+  assert.doesNotMatch(/<select id="crawlWorkerKey"[\s\S]*?<\/select>/.exec(html)[0], /scheduled|AWS worker/);
+  assert.match(/<select id="collectorHistoryWorker"[\s\S]*?<\/select>/.exec(html)[0], /scheduled.*AWS worker/);
   assert.equal(card.dataset.state, "retired"); assert.equal(card.dataset.retired, "true");
   assert.match(text(status), /인사이트 서버로 전환/); assert.doesNotMatch(text(status), /연결 확인|보호 중|예약 켜짐|대기 0건/);
   assert.equal(descendants(card).find(el => el.className === "state-badge").textContent, "전환됨");
@@ -114,16 +122,17 @@ test("server conversion has a neutral disabled card while historical AWS results
   await ui.form("scheduled").event("submit");
   assert.equal(ui.submissions.length, 0); assert.ok(ui.calls.every(call => call.method === "GET"));
   for (const key of ["web", "manual"]) assert.equal(ui.button(key, "지금 수집").disabled, false, "conversion does not affect remaining workers");
-  await ui.button("scheduled", "수집 이력 보기").event("click");
+  ui.nodes.get("collectorHistoryWorker").value = "scheduled"; await ui.nodes.get("collectorHistoryWorker").event("change");
   assert.equal(ui.nodes.get("collectorHistoryWorker").value, "scheduled");
   assert.match(text(ui.nodes.get("collectorUnifiedHistory")), /이전 포천글램핑.*AWS worker/s);
-  const lastResult = descendants(card).find(el => el.className === "collector-last-result");
-  await descendants(lastResult).find(el => el.textContent === "결과 보기").event("click");
+  await descendants(ui.nodes.get("collectorUnifiedHistory")).find(el => el.textContent === "결과 보기").event("click");
   assert.equal(ui.events.at(-1).type, "collector:open-result"); assert.equal(ui.events.at(-1).detail.runId, "previous_aws_result");
   assert.ok(ui.calls.every(call => call.method === "GET"));
   const css = fs.readFileSync(path.join(__dirname, "../web/collector-controls.css"), "utf8");
-  assert.match(css, /\[data-retired="true"\] \.state-badge \{ color: var\(--text-secondary\); background: var\(--surface-control\)/);
-  assert.match(css, /\.collector-retired-history \{[^}]*min-height: 44px/);
+  assert.match(css, /\.collector-worker-card\[hidden\] \{ display: none !important/);
+  assert.match(css, /\.collector-worker-grid\[data-worker-count="2"\] \{ grid-template-columns: repeat\(2/);
+  assert.match(css, /@media \(max-width: 1200px\) \{ \.collector-worker-grid, \.collector-worker-grid\[data-worker-count\] \{ grid-template-columns: minmax\(0, 1fr\)/);
+  assert.doesNotMatch(css, /collector-retired-history/);
 });
 
 test("schedule retirement also blocks active drafts and survives a later status read failure", async () => {
@@ -143,22 +152,70 @@ test("schedule retirement also blocks active drafts and survives a later status 
   await until(() => ui.events.filter(event => event.type === "collector:worker-availability").length > initialAvailabilityEvents);
   assert.equal(ui.card("scheduled").dataset.state, "retired");
   ui.nodes.get("crawlWorkerKey").value = "scheduled"; await ui.nodes.get("crawlWorkerKey").event("change");
-  assert.equal(ui.events.at(-1).detail.retired, true); assert.equal(ui.events.at(-1).detail.ready, false);
-  assert.match(ui.nodes.get("crawlWorkerHint").textContent, /인사이트 서버로 전환/);
+  assert.equal(ui.card("scheduled").hidden,true);
+  assert.equal(ui.nodes.get("crawlWorkerKey").value,"manual"); assert.equal(ui.events.at(-1).detail.workerKey,"manual"); assert.equal(ui.events.at(-1).detail.ready, false);
+  assert.doesNotMatch(ui.nodes.get("crawlWorkerHint").textContent, /AWS worker|인사이트 서버로 전환/);
   assert.ok(ui.calls.every(call => call.method === "GET"));
 });
 
-test("last known worker conversion remains neutral when both status and schedule are unreadable", async () => {
+test("last known worker conversion remains hidden when both status and schedule are unreadable", async () => {
   let unreadable = false;
   const workers = keys.map(workerKey => ({ workerKey, configured: true, connected: true, ready: true, workerLastSeenAt: new Date().toISOString(), retired: workerKey === "scheduled" }));
   const ui = await mockUi({ workers, failStatus: () => unreadable, failedSchedules: ["scheduled"] });
   assert.equal(ui.card("scheduled").dataset.state, "retired");
+  assert.equal(ui.card("scheduled").hidden,true);
   unreadable = true; await ui.nodes.get("collectorRefresh").event("click");
   assert.equal(ui.card("scheduled").dataset.state, "retired");
   assert.equal(descendants(ui.card("scheduled")).find(el => el.className === "collector-control-status").hidden, true, "retirement is not rendered as a red missing-connection error");
   assert.equal(descendants(ui.card("scheduled")).find(el => el.type === "submit").disabled, true);
   await ui.form("scheduled").event("submit");
   assert.equal(ui.submissions.length, 0); assert.ok(ui.calls.every(call => call.method === "GET"));
+});
+
+test("a retired lane cannot return from old drafts, DB preparation or incomplete later metadata", async () => {
+  let unreadable = false;
+  const workers=keys.map(workerKey=>({workerKey,configured:true,connected:true,ready:true,workerLastSeenAt:new Date().toISOString()}));
+  const schedulePatch={scheduled:{retired:true,retirementReason:"인사이트 서버로 전환",enabled:false,nextRunAt:null}};
+  const ui=await mockUi({workers,failStatus:()=>unreadable,schedulePatch,drafts:{scheduled:{...defaultDraft(),keywords:"이전 예약업체",execution:"schedule"}}});
+  const draftBefore=ui.storage.get("staydatalab:collector-drafts:v2"),retired=ui.card("scheduled");retired.open=false;
+  ui.window.dispatchEvent({type:"collector:prepare-card",detail:{workerKey:"scheduled",keyword:"새 업체",checkIn:"2026-10-13",checkOut:"2026-10-14",bookingRangeDays:1}});
+  assert.equal(retired.hidden,true);assert.equal(retired.open,false);assert.equal(ui.input("scheduled","keywords").value,"이전 예약업체");assert.equal(ui.storage.get("staydatalab:collector-drafts:v2"),draftBefore);
+  unreadable=true;delete schedulePatch.scheduled;await ui.nodes.get("collectorRefresh").event("click");
+  assert.equal(retired.hidden,true,"known retirement survives a legacy metadata response");
+  assert.deepEqual(ui.nodes.get("crawlWorkerKey").children.map(option=>option.value),["manual","web"]);
+  assert.equal(ui.submissions.length,0);assert.ok(ui.calls.every(call=>call.method==="GET"));
+});
+
+test("retired stale active reports never appear in current progress or compact task guidance", async () => {
+  const workers=keys.map(workerKey=>({workerKey,configured:true,connected:true,ready:true,workerLastSeenAt:new Date().toISOString(),...(workerKey==="scheduled"?{retired:true,activeJobId:"previous_job",crawl:{active:true,activeJob:{keyword:"이전 작업"}}}:{})}));
+  const ui=await mockUi({workers,outsideCollection:true,requests:[{workerKey:"scheduled",keyword:"이전 작업",status:"pending",createdAt:new Date().toISOString()}]});
+  assert.equal(ui.card("scheduled").hidden,true);assert.equal(descendants(ui.card("scheduled")).find(el=>el.className==="collector-live-progress").hidden,true);
+  assert.equal(ui.nodes.get("collectorCompactProgress").hidden,true);assert.match(text(ui.nodes.get("collectorUnifiedHistory")),/이전 작업.*AWS worker/s);
+  assert.equal(ui.submissions.length,0);assert.ok(ui.calls.every(call=>call.method==="GET"));
+});
+
+test("no selectable worker fails closed even when only schedule metadata records retirement", async () => {
+  const workers=keys.map(workerKey=>({workerKey,configured:true,connected:true,ready:true,workerLastSeenAt:new Date().toISOString()}));
+  const schedulePatch=Object.fromEntries(keys.map(key=>[key,{retired:true,enabled:false,nextRunAt:null}]));
+  const ui=await mockUi({workers,schedulePatch});
+  assert.ok(keys.every(key=>ui.card(key).hidden));assert.equal(ui.nodes.get("collectorWorkerStates").dataset.workerCount,"0");
+  assert.deepEqual(ui.nodes.get("crawlWorkerKey").children,[]);assert.equal(ui.nodes.get("crawlWorkerKey").value,"");
+  assert.equal(ui.events.at(-1).detail.ready,false);assert.equal(ui.nodes.get("crawlWorkerHint").dataset.ready,"false");
+  assert.match(ui.nodes.get("crawlWorkerHint").textContent,/실행 가능한 수집기/);assert.doesNotMatch(ui.nodes.get("crawlWorkerHint").textContent,/BG worker|AWS worker|2Gweb_worker/);
+  ui.nodes.get("crawlWorkerKey").value="manual";await ui.nodes.get("crawlWorkerKey").event("change");
+  assert.equal(ui.nodes.get("crawlWorkerKey").value,"");assert.equal(ui.events.at(-1).detail.ready,false);
+  assert.equal(ui.submissions.length,0);assert.ok(ui.calls.every(call=>call.method==="GET"));
+});
+
+test("surviving web and BG cards still keep independent drafts and submit their own worker", async () => {
+  const workers=keys.map(workerKey=>({workerKey,configured:true,connected:true,ready:true,workerLastSeenAt:new Date().toISOString(),retired:workerKey==="scheduled"}));
+  const ui=await mockUi({workers});
+  await ui.set("web","keywords","웹 검수 키워드");await ui.set("manual","keywords","BG 검수 키워드");
+  await ui.form("web").event("submit");await until(()=>ui.submissions.length===1);
+  await ui.form("manual").event("submit");await until(()=>ui.submissions.length===2);
+  assert.deepEqual(ui.submissions.map(row=>[row.workerKey,row.keyword]),[["web","웹 검수 키워드"],["manual","BG 검수 키워드"]]);
+  assert.equal(ui.input("web","keywords").value,"웹 검수 키워드");assert.equal(ui.input("manual","keywords").value,"BG 검수 키워드");assert.equal(ui.card("scheduled").hidden,true);
+  assert.ok(ui.calls.every(call=>call.method==="GET"));
 });
 
 test("past one-time reservations show an explanation and cannot activate", async () => {

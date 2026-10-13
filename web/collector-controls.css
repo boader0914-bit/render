@@ -11,16 +11,15 @@
 .collector-destination div > span { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 4px; line-height: 1.5; }
 .collector-destination-tag { margin-left: auto; color: var(--accent-strong); font-size: 11px; white-space: nowrap; }
 .collector-worker-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
+.collector-worker-grid[data-worker-count="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.collector-worker-grid[data-worker-count="1"] { grid-template-columns: minmax(0, 1fr); }
 .collector-worker-card { min-width: 0; border: 1px solid var(--border-subtle); border-radius: var(--ui-radius-card); background: var(--surface-card); box-shadow: var(--theme-card-shadow); overflow: clip; }
+.collector-worker-card[hidden] { display: none !important; }
 .collector-worker-card[open] { display: flex; flex-direction: column; }
 .collector-worker-card[open]::details-content { display: flex; flex-direction: column; flex: 1; }
 .collector-worker-card:not([open]) { align-self: start; }
 .collector-worker-card[data-state="running"] { border-color: var(--accent); }
 .collector-worker-card[data-state="alert"] { border-color: var(--warning-strong); }
-.collector-worker-card[data-retired="true"] { align-self: start; border-color: var(--border-subtle); }
-.collector-worker-card[data-retired="true"] .state-badge { color: var(--text-secondary); background: var(--surface-control); border-color: var(--border-subtle); }
-.collector-worker-card[data-retired="true"] .collector-card-status small { color: var(--text-secondary); }
-.collector-retired-history { justify-self: start; min-height: 44px; padding: 10px 12px; font-size: 12px; }
 .collector-worker-summary { display: flex; align-items: center; gap: 8px; padding: 20px 18px; min-height: 94px; box-sizing: border-box; flex-shrink: 0; color: var(--text-primary); cursor: pointer; list-style: none; }
 .collector-worker-summary::-webkit-details-marker { display: none; }
 .collector-worker-identity { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
@@ -108,7 +107,7 @@
 .collector-controls-card [hidden] { display: none !important; }
 .collector-controls-card button:disabled { cursor: not-allowed; opacity: .55; }
 .collector-controls-card :is(button, select, input, textarea, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-@media (max-width: 1200px) { .collector-worker-grid { grid-template-columns: minmax(0, 1fr); } .collector-common-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } .collector-common-fields > .collector-execution-field { grid-column: 1 / -1; } .collector-common-fields > .field textarea { min-height: 134px; } .collector-card-actions { min-height: 0; } .collector-worker-identity small { max-width: 550px; } }
+@media (max-width: 1200px) { .collector-worker-grid, .collector-worker-grid[data-worker-count] { grid-template-columns: minmax(0, 1fr); } .collector-common-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } .collector-common-fields > .collector-execution-field { grid-column: 1 / -1; } .collector-common-fields > .field textarea { min-height: 134px; } .collector-card-actions { min-height: 0; } .collector-worker-identity small { max-width: 550px; } }
 @media (max-width: 720px) { .collector-common-fields { grid-template-columns: minmax(0, 1fr); } .collector-common-fields > .field textarea { min-height: 76px; } .collector-page-head { align-items: flex-start; gap: 10px; } .collector-page-head h3 { font-size: 23px; } .collector-page-head > button { font-size: 11px; min-height: 40px; } .collector-destination { padding: 13px; } .collector-destination-tag { display: none; } .collector-worker-summary { padding: 17px 15px; } .collector-worker-form { padding: 0 15px 16px; } .collector-history-panel { padding: 16px; } .collector-history-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } .collector-controls-card .field :is(input, select, textarea) { font-size: 16px; min-height: 44px; } .collector-card-actions > button, .collector-result-button { min-height: 44px; } .collector-history-row { grid-template-columns: minmax(0, 1fr) auto; } .collector-history-row > button { grid-column: 1 / -1; justify-self: start; } }
 @media (max-width: 420px) { .collector-custom-dates, .collector-reservation .collector-settings-grid { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 360px) { .collector-common-fields .collector-settings-grid, .collector-history-filters { grid-template-columns: minmax(0, 1fr); } }
