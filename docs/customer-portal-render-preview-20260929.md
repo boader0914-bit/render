@@ -1,6 +1,6 @@
 # SABUN Insight 무료 실물 페이지 배포
 
-> 2026-10-13 기존 0923 웹서비스를 유료 `SABUN Insight` 서버로 전환했다. 이 무료 프리뷰는 대체 대상이며 새 고객 주소 검수 후 일시중지한다. 새 서버는 무료 서버를 경유하지 않고 중앙 DB를 조회한다. 현재 호스팅·도메인·수집 연결 구성은 [인사이트 서버 전환 안내](insight-server-conversion-20261012.md)를 따른다. 아래는 초기 무료 배포 기록이다.
+> 2026-10-13 기존 0923 웹서비스를 유료 `SABUN Insight` 서버로 전환하고 `https://insight.sabun.co.kr`의 HTTPS·로그인·등록 자료를 확인했다. 기존 무료 `sabun-insight-preview`(`srv-dathlifavr4c73dj3jt0`)는 Render의 `Suspended`·`Suspended by you` 및 `Resume Web Service` 표시로 일시중지를 확인했다. 서비스나 자료를 삭제하지 않았다. 새 서버는 무료 서버를 경유하지 않고 중앙 DB를 조회한다. 현재 호스팅·도메인·수집 연결 구성은 [인사이트 서버 전환 안내](insight-server-conversion-20261012.md)를 따른다. 아래는 초기 무료 배포 기록이며 현재 상태나 재적용할 설정이 아니다.
 
 ## 2026-10-02 실제 연결 모드 배포 완료
 

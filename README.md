@@ -6,7 +6,7 @@
 
 중앙 STAYDATALAB은 업체 DB·수집 결과·분석 및 고객 계정 저장소를 유지한다. BG는 인사이트의 수집 요청을 처리하며, 2Gweb_worker도 별도 수집기로 유지한다. 기존 0923 웹서비스는 `SABUN Insight` 화면·중계 서버로 전환했고 신규 수집·예약 배정은 차단했다.
 
-새 인사이트 서버는 `https://sa-labs-datalab-v4-preview.onrender.com`, 고객 도메인은 `insight.sabun.co.kr`이다. 기존 무료 `sabun-insight-preview`는 대체 대상이며, 새 로그인·자료 화면과 고객 도메인 연결 검수 후 일시중지한다. 새 서버는 무료 서버를 경유하지 않는다. 도메인은 사용자가 작업한 닷네임 설정을 먼저 확인하며, 기존 다른 도메인의 네임서버나 레코드는 일괄 변경하지 않는다.
+인사이트 고객 대표 주소는 `https://insight.sabun.co.kr`이며 `https://sa-labs-datalab-v4-preview.onrender.com`도 허용 별칭으로 유지한다. 2026-10-13 닷네임 CNAME·정상 인증서의 HTTPS·기존 계정과 등록 자료 조회를 확인한 뒤 기존 무료 `sabun-insight-preview`를 일시중지했다. 서비스나 자료를 삭제하지 않았고 새 서버는 무료 서버를 경유하지 않는다. 기존 `ops`·`www` 연결과 전체 네임서버는 보존했다. 추가 Render 도메인 비용 월 $0.25는 사용자가 승인했다.
 
 전환 내역, 운영 검증과 남은 작업은 [인사이트 서버 전환 안내](docs/insight-server-conversion-20261012.md)를 따른다. 이 안내는 새 수집 실행이나 예약 활성화를 승인하지 않는다.
 

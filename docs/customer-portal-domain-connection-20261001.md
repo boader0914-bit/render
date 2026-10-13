@@ -1,10 +1,10 @@
-# insight.sabun.co.kr 연결 준비 상태
+# insight.sabun.co.kr 연결 기록
 
-> 현재 연결 계획과 상태는 2026-10-13 [인사이트 서버 전환 안내](insight-server-conversion-20261012.md)가 우선한다. 새 Render 대상은 `sa-labs-datalab-v4-preview.onrender.com`이다. 사용자가 닷네임에서 작업한 설정을 먼저 확인하며, 아래 10월 1일 DNS 조회 기록만으로 Cloudflare 로그인을 필수로 요구하지 않는다. 아직 새 도메인의 DNS·HTTPS 연결 완료로 보고하지 않는다.
+> 2026-10-13 고객 대표 주소 `https://insight.sabun.co.kr`의 연결과 로그인·등록 자료 조회를 확인했다. 사용자가 Render 추가 도메인 비용 월 $0.25를 승인했고, 닷네임에서 `insight` CNAME을 `sa-labs-datalab-v4-preview.onrender.com`으로 저장했다. 공개 DNS와 정상 인증서 검증 HTTPS, 양쪽 주소의 health·고객 config API HTTP 200을 확인했다. 기존 `ops`·`www`와 전체 네임서버는 보존했다. 무료 프리뷰는 일시중지했으며 현재 설정·배포·검수 근거는 [인사이트 서버 전환 안내](insight-server-conversion-20261012.md)를 따른다. 아래는 10월 1일의 초기 준비 기록으로, 별도 Cloudflare 로그인이 필요한 현재 지침이나 재적용할 설정이 아니다.
 
 2026-10-01 사용자 요청: `insight.sabun.co.kr` 하위 도메인 생성.
 
-## 현재 확인
+## 2026-10-01 당시 확인
 
 - Cloudflare 권한 DNS와 공개 DNS 조회에서 `insight.sabun.co.kr`은 이름 없음으로 응답했다. 아직 생성됐다고 보고할 수 없다.
 - `sabun.co.kr`의 권한 DNS는 `miles.ns.cloudflare.com`, `jasmine.ns.cloudflare.com`이다.
@@ -12,7 +12,7 @@
 - 기록상의 Render 대상은 `sabun-insight-preview`, `srv-dathlifavr4c73dj3jt0`. 현재 서비스 설정/사용자 도메인 목록은 관리자 화면에 접근하지 못해 재검증하지 못했다.
 - 현재 이 작업에서 브라우저가 연결되지 않아 DNS 및 Render 설정을 저장하지 않았다. 사용자가 PC에서 이 작업을 열고 Cloudflare·Render 로그인 완료를 알려주면 이어서 처리한다.
 
-## 저장할 설정과 순서
+## 2026-10-01 당시 계획 (현재 재적용하지 않음)
 
 1. Render 대상 서비스와 현재 URL을 확인하고 Custom Domains에 `insight.sabun.co.kr`을 등록한다.
 2. Cloudflare의 `sabun.co.kr` DNS에 다음 레코드를 추가한다. 같은 이름이 이미 생겼다면 중복 추가하지 않고 기존 내용을 먼저 확인한다.
