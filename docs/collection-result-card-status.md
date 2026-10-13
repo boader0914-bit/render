@@ -21,3 +21,17 @@
 - 검수 화면과 JSON은 `C:/Users/User/.codex/visualizations/2026/10/13/collection-result-card-review`에 보관했다. 이 화면의 업체·수치는 검수용 합성 자료이며 실제 운영 수집 결과가 아니다.
 
 운영 미배포. 이번 개발은 서버·워커·Insight·수집 일정·원본 저장·DB 값 변경과 실제 수집 실행을 포함하지 않는다.
+
+## 운영 배포 · 2026-10-13
+
+후속 사용자 승인으로 데이터랩 웹 `srv-da9q6don74is738t7id0`, `https://staydatalab.kr`에 커밋 `1612c8ce85e347c6b93664b0b88d71d6734a355f`를 지정 배포했다. 위 운영 미배포 문구는 개발 완료 시점의 기록이다.
+
+- Render 배포 `dep-db71u9bbc2fs73f14l4g`, 한국시간 21:08:05 시작, 57초 후 `Deploy succeeded|Live` 확인.
+- 공개 health HTTP 200, `ok:true`, `buildCommit:1612c8ce85e3`. 서버 Git 커밋과 `web/app.js`, `web/styles.css`의 정규화 SHA-256은 검증한 코드와 일치했다.
+- 배포 전후 예약 관측 이력·업체 원본·일일 및 워커별 예약 설정 파일의 SHA-256이 동일했다. 모든 수집기의 실행·대기 작업 0건, 디스크 여유 7,960MiB를 확인했다.
+- 웹·BG의 기존 예약 활성 여부와 다음 실행 시각은 유지됐다. 기존 일일 자동수집 및 인사이트로 전환한 수집기는 비활성 상태를 유지한다. 스케줄러의 `active`는 순간 실행 상태이며 설정 변경이나 실제 수집 진행과 구분한다.
+- BG 및 Insight는 배포하지 않았다. 신규 수집·예약 변경·보호 해제·원본 수정은 수행하지 않았다.
+- GitHub Actions와 commit status 실행은 0건이다. 기존 로컬 회귀 검사 및 Render 빌드 성공을 GitHub CI 통과라고 표현하지 않는다.
+- 관리자 세션이 만료되어 재로그인을 요청했다. 실제 운영 카드의 최종 UI 검수는 재로그인 후 진행한다.
+
+운영 증빙은 검수 폴더의 `production-before.json`, `production-after.json`, `production-health.json`, `production-expected-source.json`, `production-release.json`, `production-render-live.png`에 보관했다. 이 배포 기록 추가를 이유로 서버를 재배포하지 않는다.
