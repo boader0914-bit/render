@@ -1946,7 +1946,11 @@ const adminDbNativeLinkBlock = app.slice(
   app.indexOf("function setAdminDbCompanyRoute(", app.indexOf("function adminDbCompanyUseNativeLink("))
 );
 const adminDbBindEventsBlock = app.slice(app.indexOf("function bindEvents()"));
-const adminDbExplorerCssBlock = styles.slice(styles.indexOf("/* Company DB explorer v1:"));
+const adminDbExplorerCssStart = styles.indexOf("/* Company DB explorer v1:");
+const adminDbExplorerCssEnd = styles.indexOf("/* Collection results retain long-period values", adminDbExplorerCssStart);
+assert(adminDbExplorerCssStart >= 0 && adminDbExplorerCssEnd > adminDbExplorerCssStart,
+  "company explorer contrast checks require bounded component markers", failures);
+const adminDbExplorerCssBlock = styles.slice(adminDbExplorerCssStart, adminDbExplorerCssEnd);
 const adminDbDetailBlock = app.slice(
   app.indexOf("function adminDbSelectedDetailPanel("),
   app.indexOf("function adminDbCompanyRow(", app.indexOf("function adminDbSelectedDetailPanel("))
@@ -3027,7 +3031,8 @@ assert((reviewProductList.match(/role="row"/g) || []).length === 6 && /class="ad
   && /1개 더보기/.test(reviewProductList), "six-product review must preserve every row with an accessible more disclosure", failures);
 const reviewWarning = reviewShellContext.roomCapacityReviewHtml({ reviewRequired: true,
   reviewReasons: [{ severity: "warning", message: "중복 상품 수량 확인 필요" }] });
-assert(reviewWarning.includes("is-warning") && reviewWarning.includes("객실 수 확인 필요") && reviewWarning.includes("중복 상품 수량 확인 필요"),
+assert(reviewWarning.includes("is-warning") && reviewWarning.includes("객실 수 검토 필요") && reviewWarning.includes("중복 상품 수량 확인 필요")
+  && reviewWarning.includes("collection-capacity-notes") && !/<details[^>]*\sopen(?:\s|>)/.test(reviewWarning),
   "room evidence warnings must remain explicit when review cards share a theme", failures);
 
 const reviewThemeStart = themeStyles.indexOf("Company DB review surfaces v2");

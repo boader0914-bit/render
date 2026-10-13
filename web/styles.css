@@ -46761,6 +46761,83 @@ html[data-theme-resolved] body .company-card-compact .company-title strong {
 .company-card-evidence .sheet-disclosure-body { padding: 10px 0 0; }
 .company-card-evidence .company-price-platform { justify-items: start; }
 .collection-overview-disclosure { margin-bottom: 8px; }
+
+/* Collection-result cards keep short states visible and explanations folded. */
+.company-compact-metrics.has-no-day-use { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+html[data-theme-resolved] body .room-capacity-composition-notice {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 2px;
+  color: var(--text-secondary) !important;
+  font-size: 11px !important;
+  font-weight: 500;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+html[data-theme-resolved] body .collection-data-status {
+  display: block;
+  color: var(--text-secondary) !important;
+  font-size: 11px !important;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+html[data-theme-resolved] body :is(.company-card-compact, .sheet-inventory-summary) .collection-dayuse-status:not([data-state="observed"]) > strong {
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.5;
+}
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.company-card-compact, .sheet-inventory-summary, .sheet-calculation-list) .collection-data-status[data-tone="warning"] {
+  color: var(--warning-strong) !important;
+}
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.company-card-compact, .sheet-inventory-summary, .sheet-calculation-list) .collection-data-status[data-tone="danger"] {
+  color: var(--danger-strong) !important;
+}
+html[data-theme-resolved] body details.collection-capacity-notes {
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+html[data-theme-resolved] body .collection-capacity-notes > summary.room-capacity-review-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 44px;
+  padding: 9px 12px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.collection-capacity-notes > summary::-webkit-details-marker { display: none; }
+.collection-capacity-notes > summary > strong { min-width: 0; font-size: inherit; overflow-wrap: anywhere; }
+.collection-capacity-notes > summary > small {
+  margin-left: auto;
+  max-width: 42%;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  text-align: right;
+}
+.collection-capacity-notes > summary::after {
+  content: "+";
+  flex: 0 0 14px;
+  margin-left: auto;
+  font-size: 17px;
+  text-align: center;
+}
+.collection-capacity-notes[open] > summary::after { content: "−"; }
+.collection-capacity-notes > summary:focus-visible,
+.collection-calculation-disclosure > summary:focus-visible {
+  outline: 2px solid var(--theme-accent);
+  outline-offset: 2px;
+}
+.collection-capacity-notes[open] > summary { border-bottom: 1px solid var(--border-subtle); }
+.collection-capacity-notes .room-capacity-review-body { padding: 0 12px 12px; }
+.collection-calculation-disclosure > summary { min-height: 44px; }
+.company-card-evidence .collection-calculation-disclosure > .sheet-disclosure-body { padding: 12px; }
+.company-card-evidence > summary { min-height: 44px; }
 .collection-overview-disclosure .validation-board { margin: 0; }
 
 .booking-sheet-compact { display: grid; gap: 10px; min-width: 0; }
@@ -46807,6 +46884,8 @@ html[data-theme-resolved] body .booking-sheet-compact .sheet-section {
     grid-template-areas: "main" "metrics" "note" "action" "evidence";
   }
   .company-compact-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 8px; }
+  .company-compact-metrics.has-no-day-use { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .company-compact-metrics.has-no-day-use > div:last-child { grid-column: 1 / -1; }
   .company-compact-metrics strong { font-size: 18px; }
   .booking-sheet-compact .revenue-summary-grid { grid-template-columns: 1fr; gap: 10px; }
   .booking-sheet-compact .revenue-summary-grid > div { grid-template-columns: 1fr auto; }

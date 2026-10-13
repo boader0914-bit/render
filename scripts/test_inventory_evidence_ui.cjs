@@ -8,6 +8,7 @@ const mint = applyInventoryEvidence(require("./fixtures/mint_20260920.cjs"));
 const source = fs.readFileSync(path.join(__dirname,"../web/app.js"),"utf8");
 const names = ["inventoryAssessment","roomCapacityPresentation","roomCapacityReviewPresentation","roomCapacityWarningBadgeHtml","roomCapacityWarningNoteHtml","roomCapacityValueHtml","roomCapacityReviewHtml","adminDbRoomCapacityPresentation","adminDbSelectedMetricCard","manualCorrectionRoomSegments","cleanManualCorrectionSegment","manualCorrectionSegmentHasValue","sheetInventorySummary","sheetBookingQuantityBasis","sheetCollectionStatusPanel","inventorySourceHtml","sheetDisclosure","escapeHtml","fmtNumber","fmtWon","fmtRate","weeklyRows","salesStats","bookingGraphRows","bookingQuantityBreakdown","bookingEvidenceLegend","bookingEvidenceSplit","bookingEvidenceChips","sheetBookingRevenueBreakdown","sheetRowsForBooking","dateRow","miniBars","itemRevenueStats","projectedRevenueFields","finiteNumber","optionalNumber","parseDate","monthDay","isoAddDays","normalizeMonthDayLabel","bookingRangeLabels","bookingDays"];
 const context = vm.createContext({state:{data:{run:{checkIn:"2026-09-20",checkOut:"2026-10-20",bookingRangeDays:31}}},DEFAULT_BOOKING_DAYS:31,B2B_MY_LODGE_SEGMENT_LIMIT:8,isAdminRole:()=>true});
+names.push("roomCapacityCompositionNoticeHtml", "collectionProductKind", "dayUseCollectionPresentation", "collectionLodgingPresentation");
 for (const name of names) {
   const declaration = source.match(new RegExp(`^function ${name}\\([^]*?^}`,"m"))?.[0];
   assert.ok(declaration, name);
@@ -74,8 +75,8 @@ assert.equal(operating.sourceLabel,"DB 보정");
 const exampleHtml = context.sheetInventorySummary(example);
 assert.match(exampleHtml,/<span>객실 총량<\/span><strong>8실<\/strong>/);
 assert.match(exampleHtml,/최대 관측\(추정\)/);
-assert.match(exampleHtml,/<strong>68박<\/strong>/);
-assert.match(exampleHtml,/31일 집계 · 예약 비율 28%/);
+assert.match(exampleHtml,/<span>31일 예약 합계<\/span><strong>68객실<\/strong>/);
+assert.match(exampleHtml,/숙박 31\/31일 조회 · 예약 비율 28%/);
 assert.equal(context.salesStats(example).rate,68/246,"The room estimate must not change the period booking-rate denominator");
 assert.doesNotMatch(exampleHtml,/<strong>68 \/ 246<\/strong>/);
 assert.match(exampleHtml,/246은 날짜별 공개 수량의 합계/);
@@ -146,7 +147,7 @@ const reviewNeeded = withLodgingRows([{rawTotal:52,total:52}],{
   capacityReview:{required:true,threshold:40,message:"글램핑 객실 총량 40실 초과"}
 });
 assert.equal(context.roomCapacityPresentation(reviewNeeded).count,52,"Review flags must never cap the displayed total");
-assert.match(context.sheetInventorySummary(reviewNeeded),/객실 수 확인 필요/);
+assert.match(context.sheetInventorySummary(reviewNeeded),/객실 수 검토 필요/);
 assert.match(context.sheetInventorySummary(reviewNeeded),/글램핑 객실 총량 40실 초과/);
 assert.equal(context.roomCapacityPresentation(withLodgingRows([{rawTotal:52,total:52}])).reviewRequired,false,"The UI does not infer glamping classification from a large total");
 const maliciousReview = withLodgingRows([{rawTotal:52,total:52}],{capacityReview:{required:true,message:'<img src=x onerror=alert(1)>'}});
@@ -161,9 +162,9 @@ const uncertainReview = {
 const uncertainItem = withLodgingRows([{rawTotal:52,total:52}],{capacityReview:uncertainReview});
 const uncertainHtml = context.sheetInventorySummary(uncertainItem);
 assert.match(uncertainHtml,/<strong>52실<\/strong><span class="room-capacity-warning"/);
-assert.match(uncertainHtml,/aria-hidden="true">!<\/span>객실 수 확인 필요/);
+assert.match(uncertainHtml,/aria-hidden="true">!<\/span>객실 수 검토 필요/);
 assert.match(uncertainHtml,/같은 객실 이름의 상품이 겹칩니다/);
-assert.match(uncertainHtml,/외 1가지/);
+assert.doesNotMatch(uncertainHtml,/room-capacity-warning-note/, "Long room-composition reasons stay in the folded detail only");
 assert.match(uncertainHtml,/<li>일부 상품의 수량을 확인하지 못했습니다\.<\/li>/);
 assert.match(uncertainHtml,/수집 완료 여부와는 별도 검토/);
 assert.equal(context.roomCapacityPresentation({...uncertainItem,companyManualCorrection:{lodgingBasisTotal:31}}).count,31);
@@ -178,7 +179,7 @@ assert.equal(dbReviewCapacity.reviewRequired,false);
 const dbReviewHtml = context.adminDbSelectedMetricCard({label:"현재 객실 기준",value:"31실",capacity:dbReviewCapacity,note:"관리자 보정값 우선"});
 assert.match(dbReviewHtml,/<strong>31실<\/strong><span class="room-capacity-warning"/);
 assert.match(dbReviewHtml,/수집 수량 확인/);
-assert.doesNotMatch(dbReviewHtml,/객실 수 확인 필요/);
+assert.doesNotMatch(dbReviewHtml,/객실 수 검토 필요/);
 assert.match(context.roomCapacityReviewHtml(dbReviewCapacity),/DB 검수 객실 수는 그대로 적용/);
 assert.match(context.roomCapacityReviewHtml(dbReviewCapacity),/동일 객실 상품을 참고/);
 const infoReview = context.roomCapacityReviewPresentation({reviewed:true,required:false,capacityUncertain:false,reasons:conflictReview.reasons.slice(1)});
@@ -205,7 +206,7 @@ assert.ok(Number.isNaN(smallerDbRow.rate));
 assert.match(context.sheetInventorySummary(smallerDbCapacity),/<strong>5실<\/strong>/);
 assert.match(context.sheetInventorySummary(smallerDbCapacity),/<small>DB 보정/);
 assert.match(context.sheetInventorySummary(smallerDbCapacity),/수집 수량 확인/);
-assert.doesNotMatch(context.sheetInventorySummary(smallerDbCapacity),/객실 수 확인 필요/);
+assert.doesNotMatch(context.sheetInventorySummary(smallerDbCapacity),/객실 수 검토 필요/);
 assert.match(context.dateRow(smallerDbRow),/DB 보정과 수집 수량 충돌/);
 assert.match(context.dateRow(smallerDbRow),/예약 비율 확인 필요/);
 assert.doesNotMatch(context.sheetInventorySummary(smallerDbCapacity),/180%/);
@@ -244,11 +245,11 @@ assert.doesNotMatch(seasonDateHtml,/과거 추정|예약 관측 10/);
 assert.match(context.miniBars(season),/네이버 3실 · 전화예약 추정 7실/);
 const seasonSummary = context.sheetInventorySummary(season);
 assert.match(seasonSummary,/최대 관측\(추정\) · 날짜별 고정/);
-assert.match(seasonSummary,/네이버 3박 · 전화예약 추정 7박/);
-assert.match(seasonSummary,/10박 ÷ 20객실·박 = 50%/);
+assert.match(seasonSummary,/네이버 3객실 · 전화예약 추정 7객실/);
+assert.match(seasonSummary,/10객실 ÷ 기간 공급 합계 20객실 = 50%/);
 assert.match(seasonSummary,/예약 가능한 객실의 예약 수량이 0인 경우는 전화예약으로 더하지 않습니다/);
 const seasonCollectionStatus = context.sheetCollectionStatusPanel(season);
-assert.match(seasonCollectionStatus,/예약 추정 보류 0박/);
+assert.match(seasonCollectionStatus,/예약 추정 보류 0객실/);
 assert.doesNotMatch(seasonCollectionStatus,/판매 중지·기타 이용 불가 0건/);
 assert.match(context.sheetCollectionStatusPanel(example),/판매 중지·기타 이용 불가 0건/,"The v2 label keeps its original meaning");
 
@@ -268,8 +269,8 @@ assert.equal(context.salesStats(sharedSeason,"day").sold,2);
 assert.match(context.dateRow(sharedRows[1]),/당일 이용 차단 제외 2객실/);
 const sharedSummary = context.sheetInventorySummary(sharedSeason);
 assert.match(sharedSummary,/객실 공유 가정/);
-assert.match(sharedSummary,/전화예약 추정 5박 · 당일 이용 차단 제외 2박/);
-assert.match(sharedSummary,/당일 이용 차단 2박은 숙박 예약 추정에서 제외/);
+assert.match(sharedSummary,/전화예약 추정 5객실 · 당일 이용 차단 제외 2객실/);
+assert.match(sharedSummary,/당일 이용 차단 2객실은 숙박 예약 추정에서 제외/);
 
 const closedSeason = applyInventoryEvidence({weeklyDays:2,weeklyProductDetails:[
   {date:"2026-09-20",bizItemId:"season",saleType:"숙박",stock:10,bookingCount:0,price:100000},
@@ -325,10 +326,10 @@ const revenueSplit = context.sheetBookingRevenueBreakdown(revenuePart, true);
 assert.match(revenueSplit, /공개예약 추정매출<\/span><strong>26만원/);
 assert.match(revenueSplit, /방막기 추정매출<\/span><strong>104만원/);
 assert.match(revenueSplit, /데이유즈 미확인 · 정상 관측 방막기 포함/);
-assert.match(revenueSplit, /다른 날짜 가격 참고 2객실·박 · 52만원 포함/);
+assert.match(revenueSplit, /다른 날짜 가격 참고 2객실 · 52만원 포함/);
 const unpricedSplit = context.sheetBookingRevenueBreakdown({...revenuePart, phoneRevenue: null, phoneMissingPriceBookings: 4, missingPriceSoldOut: 4}, true);
 assert.match(unpricedSplit, /방막기 추정매출<\/span><strong>가격 미확인/);
-assert.match(unpricedSplit, /4객실·박 · 수량에는 포함/);
+assert.match(unpricedSplit, /4객실 · 수량에는 포함/);
 assert.match(context.sheetBookingRevenueBreakdown(revenuePart, false), /수집 미확인/);
 assert.match(context.bookingEvidenceLegend(), /공개예약/);
 assert.match(context.bookingEvidenceLegend(), /방막기 추정/);
@@ -346,7 +347,7 @@ const partialRevenuePart = {...revenuePart, status: "partial", complete: false, 
 const partialRevenueHtml = context.sheetRevenuePanel({inventoryEvidence: {version: 4, lodging: partialRevenuePart}});
 assert.match(partialRevenueHtml, /<span>전체<\/span><strong>130만원/);
 assert.match(partialRevenueHtml, /방막기 추정매출<\/span><strong>104만원/);
-assert.match(partialRevenueHtml, /일부 자료 미확인/);
+assert.match(partialRevenueHtml, /데이유즈 유무 미확인/);
 assert.match(partialRevenueHtml, /데이유즈 미확인/);
 const whollyUnpricedHtml = context.sheetRevenuePanel({inventoryEvidence: {version: 4, lodging: {
   ...partialRevenuePart, pricedSoldOut: 0, missingPriceSoldOut: 5, phoneMissingPriceBookings: 4, publicRevenue: 0, phoneRevenue: 0, revenue: 0
@@ -358,3 +359,73 @@ assert.match(historyHtml, /방막기 4객실 · 104만원 · 데이유즈 미확
 const archiveHtml = context.adminDbReferenceArchiveMetricsHtml({...revenuePart, observedDays: 1, estimatedRevenue: 1295000});
 assert.match(archiveHtml, /방막기 4객실·박 · 104만원/);
 console.log("inventory UI: public/block colors, partial day-use blocks, price references, missing-price counts and response-zero distinction passed");
+
+// Presentation-only regressions: metadata describes the requested scope, while
+// actual responses determine whether zero is a normal observed quantity.
+context.state.data.run = {checkIn:"2026-09-20",checkOut:"2026-10-03",bookingRangeDays:14,collectionPurpose:"revenue_detail"};
+const dateAt = (index) => new Date(Date.UTC(2026,8,20+index)).toISOString().slice(0,10);
+const lodgingProducts = Array.from({length:14},(_,index)=>({date:dateAt(index),bizItemId:"room",name:"숙박 객실",saleType:"숙박",stock:16,bookingCount:index===0?5:index===1?6:3,price:100000}));
+const inspected = applyInventoryEvidence({name:"기간 합계 검수",weeklyDays:14,dayUsePresence:"present",dayUseScheduleStatus:"not_requested",weeklyProductDetails:lodgingProducts});
+const beforeInspected = JSON.stringify(inspected), statsInspected = JSON.stringify(context.salesStats(inspected)), revenueInspected = context.itemRevenueStats(inspected).adjustedRevenue;
+const inspectedView = context.collectionLodgingPresentation(inspected), inspectedDay = context.dayUseCollectionPresentation(inspected), inspectedHtml = context.sheetInventorySummary(inspected);
+assert.equal(inspectedView.collected,14); assert.equal(inspectedView.missing,0); assert.equal(inspectedView.shared,14);
+assert.match(inspectedView.note,/숙박 14\/14일 조회 · 데이유즈 보정 근거 부족 14일/);
+assert.equal(inspectedDay.state,"not_requested"); assert.equal(inspectedDay.observed,false); assert.match(inspectedDay.label,/데이유즈 있음 · 예약수량 미수집/);
+assert.match(inspectedHtml,/<span>14일 예약 합계<\/span><strong>47객실<\/strong>/);
+assert.doesNotMatch(inspectedHtml,/객실·박|47박|일부 미확인|숙박 14일 미수집/);
+assert.equal(JSON.stringify(inspected),beforeInspected); assert.equal(JSON.stringify(context.salesStats(inspected)),statsInspected); assert.equal(context.itemRevenueStats(inspected).adjustedRevenue,revenueInspected);
+assert.ok(Number.isNaN(context.salesStats(inspected).rate),"Presentation must not change the existing shared-day-use booking-rate policy");
+const inspectedBasic = context.dayUseCollectionPresentation({...inspected,dayUseScheduleStatus:"not_requested_basic"}); assert.match(inspectedBasic.note,/기본정보 수집/);
+const excludedDay = context.dayUseCollectionPresentation({...inspected,dayUseScheduleStatus:"excluded"}); assert.equal(excludedDay.state,"excluded"); assert.match(excludedDay.label,/수집 제외/); assert.equal(excludedDay.tone,"info");
+
+const absent = {...inspected,dayUsePresence:"absent",dayUseScheduleStatus:"not_requested",inventoryEvidence:{...inspected.inventoryEvidence,dayUse:null}};
+assert.equal(context.dayUseCollectionPresentation(absent).visible,false); assert.match(context.sheetInventorySummary(absent),/has-no-day-use/); assert.doesNotMatch(context.sheetInventorySummary(absent),/class="collection-dayuse-status"/);
+assert.equal(context.dayUseCollectionPresentation({...absent,collectionProductCoverage:{productListComplete:false}}).state,"unknown","An incomplete actual product-list record cannot confirm absence");
+assert.equal(context.dayUseCollectionPresentation({...absent,dayUseWeeklyProductDetails:[{date:dateAt(0),collectionFailed:true,stock:0,bookingCount:0}]}).state,"unknown","Explicit day-use rows contradict absence even when the response failed");
+assert.equal(context.dayUseCollectionPresentation({...absent,itemDetails:[{saleType:"데이유즈",stock:0,bookingCount:0}]}).state,"unknown");
+assert.equal(context.dayUseCollectionPresentation({...absent,itemDetails:[{saleType:"숙박",name:"데이유즈 이용 안내가 있는 숙박",stock:16,bookingCount:0}]}).state,"absent","Provider lodging type takes precedence over promotional names");
+assert.equal(context.collectionProductKind({bizItemSubType:"ACCOMMODATION_NIGHT",name:"캠프닉 안내"}),"lodging");
+assert.equal(context.collectionProductKind({name:"데이유즈"}),"dayUse");
+
+const normalDayProducts = Array.from({length:14},(_,index)=>({date:dateAt(index),bizItemId:"day",saleType:"데이유즈",stock:3,bookingCount:0,price:50000,collectionFailed:false}));
+const observedZero = applyInventoryEvidence({...inspected,inventoryEvidence:undefined,dayUseScheduleStatus:"requested",weeklyProductDetails:[...lodgingProducts,...normalDayProducts]});
+const observedZeroView = context.dayUseCollectionPresentation(observedZero), observedZeroHtml = context.sheetInventorySummary(observedZero);
+assert.equal(observedZeroView.observed,true); assert.equal(observedZeroView.responseConfirmed,true); assert.match(observedZeroView.note,/정상 0회 포함/); assert.match(observedZeroHtml,/<span>데이유즈 예약 수량<\/span><strong>0회<\/strong>/);
+const failedZero = applyInventoryEvidence({...inspected,inventoryEvidence:undefined,dayUseScheduleStatus:"requested",weeklyProductDetails:[...lodgingProducts,...normalDayProducts.map(row=>({...row,collectionFailed:true,collectionErrorCode:"HTTP_429"}))]});
+const failedZeroView = context.dayUseCollectionPresentation(failedZero); assert.equal(failedZeroView.state,"unavailable"); assert.equal(failedZeroView.observed,false); assert.equal(failedZeroView.tone,"warning"); assert.doesNotMatch(context.sheetInventorySummary(failedZero),/<span>데이유즈 예약 수량<\/span><strong>0회<\/strong>/);
+assert.equal(context.dayUseCollectionPresentation({...inspected,dayUseScheduleStatus:"requested",inventoryEvidence:{...inspected.inventoryEvidence,dayUse:null}}).state,"unavailable","Requested alone is not a successful zero response");
+const legacyUnknownDay = context.dayUseCollectionPresentation({dayUsePresence:"present",dayUseScheduleStatus:"requested",inventoryEvidence:{version:4,dayUse:{status:"unknown",rows:[{date:dateAt(0),sold:0,total:0}]}}});
+assert.equal(legacyUnknownDay.responseConfirmed,false); assert.match(legacyUnknownDay.note,/응답 상태 기록 미확인/); assert.doesNotMatch(legacyUnknownDay.note,/정상 0회/);
+const legacyPartialDay = context.dayUseCollectionPresentation({dayUsePresence:"present",dayUseScheduleStatus:"requested",inventoryEvidence:{version:4,dayUse:{status:"partial",complete:false,rows:[{date:dateAt(0),sold:0,total:0}]}}}); assert.equal(legacyPartialDay.partial,true); assert.equal(legacyPartialDay.tone,"warning");
+const skipped = context.dayUseCollectionPresentation({dayUsePresence:"unknown",dayUseScheduleStatus:"unavailable",bookingStatus:"미수집(빠른 순위 모드)",queryAttempted:false}); assert.equal(skipped.state,"not_requested"); assert.equal(skipped.tone,"info"); assert.doesNotMatch(skipped.label,/자료 미확보/);
+
+const basicObserved = {...absent,collectionPurpose:"basic_db",collectionProfileFlags:{collectWeeklyRange:false},inventoryEvidence:{...absent.inventoryEvidence,lodging:{...absent.inventoryEvidence.lodging,rows:absent.inventoryEvidence.lodging.rows.slice(0,1)}}};
+const baselineView = context.collectionLodgingPresentation(basicObserved); assert.equal(baselineView.expected,1); assert.equal(baselineView.missing,0); assert.equal(baselineView.label,"기준일 예약 수량"); assert.match(baselineView.note,/기간 상세 미수집 조건/);
+const actualBasic = applyInventoryEvidence({bookingRangeDays:7,checkIn:"2026-10-13",collectionPurpose:"basic_db",collectionProfileFlags:{collectWeeklyRange:false},dayUsePresence:"absent",weeklyProductDetails:[{date:"2026-10-13",bizItemId:"actual-basic",saleType:"숙박",stock:16,bookingCount:2,price:100000}]});
+assert.equal(actualBasic.inventoryEvidence.lodging.rows.length,7,"Use the real generated evidence with six future placeholders");
+assert.equal(actualBasic.inventoryEvidence.lodging.missingDays,6);
+const actualBasicBefore = JSON.stringify(actualBasic), actualBasicStats = JSON.stringify(context.salesStats(actualBasic)), actualBasicView = context.collectionLodgingPresentation(actualBasic);
+assert.equal(actualBasicView.expected,1); assert.equal(actualBasicView.collected,1); assert.equal(actualBasicView.missing,0); assert.equal(actualBasicView.label,"기준일 예약 수량"); assert.doesNotMatch(actualBasicView.note,/6일 미수집|범위 검토|7일/);
+assert.equal(JSON.stringify(actualBasic),actualBasicBefore); assert.equal(JSON.stringify(context.salesStats(actualBasic)),actualBasicStats,"Baseline wording does not alter supply, bookings or the existing rate policy");
+const failedBasic = applyInventoryEvidence({bookingRangeDays:7,checkIn:"2026-10-13",collectionPurpose:"basic_db",collectionProfileFlags:{collectWeeklyRange:false},dayUsePresence:"unknown",weeklyProductDetails:[{date:"2026-10-13",bizItemId:"actual-basic",saleType:"숙박",stock:0,bookingCount:0,collectionFailed:true}]});
+const failedBasicView = context.collectionLodgingPresentation(failedBasic); assert.equal(failedBasicView.expected,1); assert.equal(failedBasicView.collected,0); assert.equal(failedBasicView.missing,1,"A failed actual check-in response stays missing without counting unrequested future dates");
+const scopedItem = {...absent,bookingRangeDays:14,checkIn:"2026-09-20"}; context.state.data.run.bookingRangeDays = 31; const ownScopeView = context.collectionLodgingPresentation(scopedItem); assert.equal(ownScopeView.expected,14); assert.equal(ownScopeView.missing,0,"The company's own collected period must precede another run's 31-day window"); context.state.data.run.bookingRangeDays = 3; const widerObservation = context.collectionLodgingPresentation(absent); assert.equal(widerObservation.expected,14); assert.match(widerObservation.note,/요청 3일·관측 14일 범위 검토/); context.state.data.run.bookingRangeDays = 14;
+const missingAndShared = applyInventoryEvidence({weeklyDays:2,dayUsePresence:"present",dayUseScheduleStatus:"not_requested",weeklyProductDetails:[{...lodgingProducts[0],bizItemId:"A"},{...lodgingProducts[0],bizItemId:"B"},{...lodgingProducts[1],bizItemId:"A"}]});
+const overlapStatus = context.collectionLodgingPresentation(missingAndShared); assert.equal(overlapStatus.productMissing,1); assert.equal(overlapStatus.shared,2); assert.match(overlapStatus.note,/일부 숙박 상품 미확보 1일/);
+
+const mixedOnly = {required:true,capacityUncertain:true,reasons:[{code:"glamping_mixed_facility_types",severity:"warning",scope:"composition",message:"글램핑 집계에 펜션과 방갈로 등 여러 시설 상품이 포함돼 있습니다."}]};
+const mixedCapacity = context.roomCapacityReviewPresentation(mixedOnly); assert.equal(mixedCapacity.reviewRequired,false); assert.equal(mixedCapacity.observationReviewRequired,false); assert.match(context.roomCapacityCompositionNoticeHtml(mixedCapacity),/여러 시설·객실 유형 포함/); assert.equal(context.roomCapacityWarningBadgeHtml(mixedCapacity),"");
+const mixedDetails = context.roomCapacityReviewHtml(mixedCapacity); assert.match(mixedDetails,/<details class="room-capacity-review collection-capacity-notes is-info">/); assert.doesNotMatch(mixedDetails,/<details[^>]*\sopen(?:\s|>)/); assert.match(mixedDetails,/펜션과 방갈로/);
+const mixedConflict = context.roomCapacityReviewPresentation({...mixedOnly,reasons:[...mixedOnly.reasons,{code:"stock_booking_conflict",severity:"warning",scope:"capacity",message:"공개 재고와 예약 수량이 서로 맞지 않습니다."}]}); assert.equal(mixedConflict.reviewRequired,true); assert.match(context.roomCapacityWarningBadgeHtml(mixedConflict),/객실 수 검토 필요/);
+assert.match(inspectedHtml,/<details class="sheet-disclosure collection-calculation-disclosure"><summary><span>객실 수·예약 계산 기준<\/span>/); assert.doesNotMatch(inspectedHtml,/<details[^>]*\sopen(?:\s|>)/);
+
+// Exercise the actual result renderer with lightweight surrounding services.
+vm.runInContext(source.match(/^function renderCompanies\([^]*?^}/m)[0],context);
+context.els = {rankCount:{textContent:""},companyList:{innerHTML:""}};
+let displayed = {...absent,rank:1,availabilityIndex:0};
+context.rankedCompanyItems = ()=>[displayed]; context.inventoryLinked = ()=>true; context.companyRankInsight = ()=>({tone:"neutral"}); context.categoryText = ()=>"글램핑"; context.itemLocationLine = ()=>"검수 지역"; context.placeRankChangeForItem = ()=>null; context.companyEditShortcutHtml = ()=>""; context.companyBadges = ()=>""; context.priceBlock = ()=>""; context.platformChips = ()=>""; context.renderValidationBoard = ()=>"";
+context.state.data.availability = {items:[displayed]}; context.renderCompanies();
+let cardHtml = context.els.companyList.innerHTML; assert.match(cardHtml,/<span>14일 예약 합계<\/span><strong>47객실<\/strong>/); assert.match(cardHtml,/has-no-day-use/); assert.doesNotMatch(cardHtml,/class="collection-dayuse-status"|객실·박|47박/);
+assert.ok(cardHtml.indexOf('class="mini-bars"') < cardHtml.indexOf("객실 수·예약 계산 기준"),"The graph appears before the separately folded calculation basis"); assert.doesNotMatch(cardHtml,/<details[^>]*\sopen(?:\s|>)/);
+displayed = {...inspected,rank:1,availabilityIndex:0}; context.renderCompanies(); cardHtml = context.els.companyList.innerHTML; assert.match(cardHtml,/데이유즈 있음 · 예약수량 미수집/); assert.doesNotMatch(cardHtml,/일부 자료 미확인|客室|[\u3040-\u30ff]/);
+console.log("inventory UI: scope-aware lodging coverage, day-use presence/request/response states, compact mixed facilities, nested disclosures and immutable figures passed");
