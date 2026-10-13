@@ -29,9 +29,25 @@
     }).join('')}${points.filter((_,i)=>i%step===0||i===points.length-1).map(p=>`<text x="${x(p.date)}" y="206" text-anchor="middle">${esc(p.date.slice(5).replace('-','/'))}</text>`).join('')}</svg></div><div class="collection-legend">${cfg.series.map(([,name,tone])=>`<span class="flow-label-${tone}">● ${esc(name)}</span>`).join('')}<span>단위 ${esc(cfg.unit)} · 미확인은 선을 끊어 표시</span></div>`;
   }
   const metricSelect=(value,id)=>`<label class="field"><span>표시 지표</span><select data-flow-metric aria-label="${id} 표시 지표">${Object.entries(choices).map(([k,v])=>`<option value="${k}" ${k===value?'selected':''}>${v}</option>`).join('')}</select></label>`;
-  function daily(rows,metric='bookings') {
-    const cfg=config(metric),points=fillDays(rows).map(d=>({...d,...Object.fromEntries(cfg.series.map(([key])=>[key,quality(d)&&!(metric==='revenue'&&d.revenuePartial)&&numeric(d[key])?d[key]:null]))}));
-    return `<div class="company-flow"><div class="company-flow-heading"><div><h3>숙박일별 흐름</h3><p class="muted">${esc(points[0]?.date||'')} ~ ${esc(points.at(-1)?.date||'')} · 날짜별 최신 저장 자료</p></div>${metricSelect(metric,'숙박일별')}</div>${chart(points,cfg,'숙박일별 '+choices[metric])}<p class="muted">숙박일에 예약·추정매출이 얼마나 집중되는지 보여줍니다. 상품 수가 아닌 객실 수 기준입니다.</p></div>`;
+  function daily(rows) {
+    const points=fillDays(rows);
+    if(!points.length)return '<p class="empty-note">표시할 예약 관측 자료가 없습니다.</p>';
+    const valid=d=>!d.missing&&!d.inventoryConflict&&numeric(d.publicBookings)&&numeric(d.phoneBookings);
+    // These are the existing companyDB quantities, not a new inventory estimate.
+    const totals=points.filter(valid).map(d=>d.publicBookings+d.phoneBookings);
+    const max=Math.max(2,Math.ceil(Math.max(0,...totals)/2)*2),left=50,right=658,top=28,bottom=190,width=right-left,step=width/points.length;
+    const barWidth=Math.min(28,step*.65),x=i=>left+step*(i+.5),height=value=>value/max*(bottom-top);
+    const labelStep=Math.max(1,Math.ceil(points.length/8));
+    const showDateLabel=i=>i===0||i===points.length-1||i%labelStep===0&&i<=points.length-1-labelStep;
+    const bars=points.map((d,i)=>{
+      const cx=x(i),dateLabel=esc(d.date);
+      if(!valid(d))return `<g class="flow-missing"><line x1="${cx-3}" x2="${cx+3}" y1="${bottom-8}" y2="${bottom-2}"/><line x1="${cx-3}" x2="${cx+3}" y1="${bottom-2}" y2="${bottom-8}"/><title>${dateLabel} · 미확인${d.inventoryConflict?' · 객실 수 검토 필요':''}</title></g>`;
+      const publicHeight=height(d.publicBookings),blockedHeight=height(d.phoneBookings),total=d.publicBookings+d.phoneBookings;
+      const warning=d.partial?' · 일부 확인 필요':'';
+      const title=`${d.date} · 공개 예약 ${n(d.publicBookings)}실 + 방막기 ${n(d.phoneBookings)}실 · 합계 ${n(total)}실${warning}`;
+      return `<g aria-label="${esc(title)}"><title>${esc(title)}</title>${d.publicBookings>0?`<rect class="flow-public" x="${cx-barWidth/2}" y="${bottom-publicHeight}" width="${barWidth}" height="${publicHeight}"/>`:''}${d.phoneBookings>0?`<rect class="flow-estimate" x="${cx-barWidth/2}" y="${bottom-publicHeight-blockedHeight}" width="${barWidth}" height="${blockedHeight}"/>`:''}${total===0?`<circle class="flow-zero" cx="${cx}" cy="${bottom}" r="2"><title>${dateLabel} · ${d.partial?'확인된 예약 0실 · 일부 확인 필요':'정상 응답 · 예약 0실'}</title></circle>`:''}${d.partial?`<text class="flow-partial" x="${cx}" y="${bottom-publicHeight-blockedHeight-5}" text-anchor="middle">!</text>`:''}</g>`;
+    }).join('');
+    return `<div class="company-flow"><h3>예약 수량</h3><div class="company-flow-chart company-booking-chart"><svg viewBox="0 0 688 236" role="img" aria-label="날짜별 추정 예약 막대그래프. 공개 예약과 방막기를 합산하며, 단위는 객실 수입니다. 미확인은 0실과 구분합니다."><title>공개 예약과 방막기의 날짜별 합계</title><text x="8" y="16">객실 수</text>${[0,.5,1].map(ratio=>{const value=max*ratio,y=bottom-height(value);return `<line class="flow-grid" x1="${left}" x2="${right}" y1="${y}" y2="${y}"/><text x="8" y="${y+4}">${n(value)}</text>`;}).join('')}${bars}${points.filter((_,i)=>showDateLabel(i)).map(d=>`<text x="${x(points.indexOf(d))}" y="218" text-anchor="middle">${esc(d.date.slice(5).replace('-','/'))}</text>`).join('')}</svg></div><div class="collection-legend"><span class="flow-label-public">● 공개 예약</span><span class="flow-label-estimate">● 방막기</span><span>× 미확인 · ● 정상 0실</span>${points.some(d=>d.partial)?'<span>! 일부 확인 필요</span>':''}</div></div>`;
   }
   function history(flow,options={}) {
     const periods=flow?.periods||[],thisMonth=new Date(Date.now()+9*3600000).toISOString().slice(0,7);

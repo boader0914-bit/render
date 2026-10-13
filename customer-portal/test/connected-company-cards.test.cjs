@@ -53,8 +53,7 @@ for (const adminView of [false, true]) {
       ui.navigate(`#company=${company.companyId}`);
       assert.match(ui.html(), new RegExp(`${company.name} 자료 수집`));
       assert.equal(ui.mounted.at(-1), company.companyId);
-      assert.match(ui.html(), /href="#competitors"/);
-      assert.doesNotMatch(ui.html(), /href="#company=/, 'result-page edit card must not link back to itself');
+      assert.doesNotMatch(ui.html(), /등록 업체로 돌아가기|collection-company-edit|업체 정보 수정|href="#company=/, 'detail must contain only the company data panel');
       ui.navigate('#competitors');
       assert.equal((ui.html().match(/업체 자료 보기/g) || []).length, 3);
     }
