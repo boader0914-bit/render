@@ -7,6 +7,49 @@
   const statuses = {dispatching:'접수 확인',queued:'수집 대기',collecting:'수집 대기·진행 중',ready:'완료',partial:'일부 완료',blocked:'접근 제한',failed:'실패',needs_review:'확인 필요'};
   const active = r => ['dispatching','queued','collecting'].includes(r?.status);
   let api, companyId, view = null, serial = 0, timer, renderedVersion, loadOrder=0, selectedMonth='';
+  // Private result payloads stay in this signed-in page's memory only.
+  const cache = new Map(), inFlight = new Map(), lastMonths = new Map(), companyEpochs = new Map();
+  const CACHE_LIMIT=24, CACHE_MAX_AGE=30*60*1000;
+  let cacheScope='default', allowedCompanies=null, cacheGeneration=0, onSessionExpired=null;
+  const cacheKey=(id,month)=>JSON.stringify([cacheScope,id,month]);
+  const permitted=id=>Boolean(cacheScope)&&(!allowedCompanies||allowedCompanies.has(id));
+  const resultVersion=data=>JSON.stringify([data.result?.version,data.previousResult,data.companyDetail]);
+  const companyEpoch=id=>companyEpochs.get(id)||0;
+  function clearCache(){cacheGeneration++;cache.clear();inFlight.clear();lastMonths.clear();companyEpochs.clear();}
+  function invalidate(id){
+    companyEpochs.set(id,companyEpoch(id)+1);
+    for(const [key,pending] of inFlight)if(pending.companyId===id)inFlight.delete(key);
+    for(const [key,entry] of cache)if(entry.companyId===id)cache.delete(key);
+  }
+  function cached(id,month){
+    if(!permitted(id))return null;
+    const key=cacheKey(id,month),entry=cache.get(key);
+    if(!entry)return null;
+    if(Date.now()-entry.checkedAt>CACHE_MAX_AGE){cache.delete(key);return null;}
+    cache.delete(key);cache.set(key,entry);return entry;
+  }
+  function remember(id,month,data){
+    const entry={companyId:id,data,version:resultVersion(data),checkedAt:Date.now()};
+    const resolved=data.companyDetail?.integrated?.selectedMonth;
+    for(const value of new Set([month,...(!month&&resolved?[resolved]:[])])){
+      const key=cacheKey(id,value);cache.delete(key);cache.set(key,entry);
+    }
+    while(cache.size>CACHE_LIMIT)cache.delete(cache.keys().next().value);
+    return entry;
+  }
+  function freshness(message,entry){
+    const target=document.querySelector('#collection-freshness');if(!target)return;
+    const checked=entry?.checkedAt?new Date(entry.checkedAt).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit'}):'';
+    target.textContent=(checked?'마지막 확인 '+checked+' · ':'')+message;
+  }
+  function disableCollection(message){const submit=document.querySelector('[data-collect] button[type=submit]');if(submit)submit.disabled=true;const note=document.querySelector('#collection-allowance');if(note&&message)note.textContent=message;}
+  function showCached(){
+    const entry=cached(companyId,selectedMonth);
+    if(entry){view=entry.data;renderedVersion=entry.version;document.querySelector('#collection-result').innerHTML=renderResult(entry.data);}
+    else{view=null;renderedVersion=null;document.querySelector('#collection-result').innerHTML='<p role="status">저장된 결과를 불러옵니다.</p>';}
+    disableCollection('수집 가능 여부를 서버에서 확인하고 있습니다.');freshness(entry?'이전 조회 자료 표시 · 최신 자료 확인 중':'최신 자료 확인 중',entry);
+    return entry;
+  }
   const date = () => new Date(Date.now()+9*3600000).toISOString().slice(0,10);
   let allowance=null,display={mode:'default',metric:'bookings',month:''};
   function savedMode(){try{const mode=localStorage.getItem('insight-company-view');return ['default','graph','calendar','table'].includes(mode)?mode:'default';}catch{return 'default';}}
@@ -20,7 +63,7 @@
         if(progress)progress.innerHTML='<p class="collection-warning">작성 중인 수정 요청을 유지했습니다. 내용을 정리한 뒤 숙박월을 바꿔 주세요.</p>';
         return;
       }
-      selectedMonth=event.target.value;display.month=selectedMonth;load(true);
+      selectedMonth=event.target.value;display.month=selectedMonth;lastMonths.set(companyId,selectedMonth);showCached();load();
     }else if(event.target.matches?.('[data-flow-metric]')){display.metric=event.target.value;refreshDisplay();}
     else if(event.target.matches?.('[data-flow-month]')){display.month=event.target.value;refreshDisplay();}
   });
@@ -32,7 +75,7 @@
   function panel(company, enabled, request, quota, openCollection=false) {
     allowance=quota||null;
     const intent=request?.intent || {}, start=intent.checkIn>=date()?intent.checkIn:date(), mode=intent.dayUseMode || 'inspect';
-    return '<section class="card company-data-heading"><span class="eyebrow">COMPANY DATABASE</span><h1>'+esc(company.name)+' 업체 자료</h1><p class="muted">데이터랩 업체DB의 기본정보·예약 채널·최근 관측·누적 이력을 확인합니다.</p><div class="connected-actions"><button type="button" class="button primary" data-open-collection aria-controls="collection-settings" aria-expanded="'+openCollection+'">30일 예약·추정매출 수집</button><button type="button" class="button" data-action="refresh-collection">저장 자료 다시 보기</button></div><p class="muted">업체 자료는 DB에서 불러옵니다. 수집은 별도로 실행할 때만 시작됩니다.</p></section><section id="collection-settings" class="card collection-setup" '+(openCollection?'':'hidden')+'><h2>새로운 예약·추정매출 수집</h2><form data-collect="'+esc(company.companyId)+'"><div class="form-grid collection-fields"><label class="field"><span>숙박 시작일</span><input name="checkIn" type="date" min="'+date()+'" value="'+esc(start)+'" required></label><label class="field"><span>수집 기간</span><input value="시작일 포함 30일" readonly><input type="hidden" name="bookingRangeDays" value="30"></label><label class="field"><span>데이유즈</span><select name="dayUseMode">'+Object.entries({inspect:'유무 확인',lodging_only:'숙박만',detail:'상세 수집'}).map(([v,n])=>'<option value="'+v+'" '+(mode===v?'selected':'')+'>'+n+'</option>').join('')+'</select></label></div><p class="muted">30일의 날짜별 예약 수량과 숙박 객실 판매금액을 확인합니다. 데이유즈의 날짜별 수량은 상세 수집을 선택하세요.</p><p class="collection-allowance" id="collection-allowance" role="status">'+esc(allowanceText(allowance))+'</p><button class="button primary" type="submit" data-ready="'+enabled+'" '+(!enabled||!allowance?.canRequest?'disabled':'')+'>수집 시작</button><p class="muted">저장 자료 조회·정보 수정 요청은 횟수 제한 없이 이용할 수 있습니다. 접수 후 실패·차단된 요청은 관리자 확인이 필요합니다.</p>'+(!enabled?'<p class="muted">수집기 연결을 준비 중입니다.</p>':'')+'</form></section><section id="collection-progress" class="collection-progress" aria-live="polite"></section><section id="collection-result" aria-label="업체DB 수집 결과"><p role="status">저장된 결과를 불러옵니다.</p></section>';
+    return '<section class="card company-data-heading"><span class="eyebrow">COMPANY DATABASE</span><h1>'+esc(company.name)+' 업체 자료</h1><p class="muted">데이터랩 업체DB의 기본정보·예약 채널·최근 관측·누적 이력을 확인합니다.</p><div class="connected-actions"><button type="button" class="button primary" data-open-collection aria-controls="collection-settings" aria-expanded="'+openCollection+'">30일 예약·추정매출 수집</button><button type="button" class="button" data-action="refresh-collection">저장 자료 다시 보기</button></div><p class="muted">업체 자료는 DB에서 불러옵니다. 수집은 별도로 실행할 때만 시작됩니다.</p><p id="collection-freshness" class="muted collection-freshness" role="status"></p></section><section id="collection-settings" class="card collection-setup" '+(openCollection?'':'hidden')+'><h2>새로운 예약·추정매출 수집</h2><form data-collect="'+esc(company.companyId)+'"><div class="form-grid collection-fields"><label class="field"><span>숙박 시작일</span><input name="checkIn" type="date" min="'+date()+'" value="'+esc(start)+'" required></label><label class="field"><span>수집 기간</span><input value="시작일 포함 30일" readonly><input type="hidden" name="bookingRangeDays" value="30"></label><label class="field"><span>데이유즈</span><select name="dayUseMode">'+Object.entries({inspect:'유무 확인',lodging_only:'숙박만',detail:'상세 수집'}).map(([v,n])=>'<option value="'+v+'" '+(mode===v?'selected':'')+'>'+n+'</option>').join('')+'</select></label></div><p class="muted">30일의 날짜별 예약 수량과 숙박 객실 판매금액을 확인합니다. 데이유즈의 날짜별 수량은 상세 수집을 선택하세요.</p><p class="collection-allowance" id="collection-allowance" role="status">'+esc(allowanceText(allowance))+'</p><button class="button primary" type="submit" data-ready="'+enabled+'" '+(!enabled||!allowance?.canRequest?'disabled':'')+'>수집 시작</button><p class="muted">저장 자료 조회·정보 수정 요청은 횟수 제한 없이 이용할 수 있습니다. 접수 후 실패·차단된 요청은 관리자 확인이 필요합니다.</p>'+(!enabled?'<p class="muted">수집기 연결을 준비 중입니다.</p>':'')+'</form></section><section id="collection-progress" class="collection-progress" aria-live="polite"></section><section id="collection-result" aria-label="업체DB 수집 결과"><p role="status">저장된 결과를 불러옵니다.</p></section>';
   }
   function progress(data) {
     const r=data?.request;
@@ -50,20 +93,68 @@
     return `<details class="collection-product"><summary><span>${esc(p.name)}</span><span class="status-pill">${esc(types[p.productType])}</span><small>${p.days.length}일 관측</small></summary><p class="muted">최대 공개 재고 ${quantities.length?count(Math.max(...quantities)):'확인 전'} · ${prices.length?money(Math.min(...prices)):'가격 확인 전'}${prices.length&&Math.max(...prices)!==Math.min(...prices)?` ~ ${money(Math.max(...prices))}`:''}</p><details class="product-days"><summary>날짜별 수량·판매금액 보기</summary><div class="collection-table-wrap"><table><thead><tr><th>숙박일</th><th>응답</th><th>공개 재고</th><th>예약 가능</th><th>공개 예약</th><th>${p.productType==='lodging'?'숙박 객실 판매금액':'상품 판매금액'}</th></tr></thead><tbody>${p.days.map(d=>`<tr><th>${esc(d.date||'날짜 확인 전')}</th><td>${esc({observed:'정상 응답',error:'오류·차단',missing:'자료 누락',not_requested:'유무만 확인'}[d.status])}${d.errorCode?`<small>${esc(d.errorCode)}</small>`:''}${d.saleStatus==='closure_unconfirmed'?'<small>판매중지 미확정</small>':''}</td><td>${count(d.total)}${p.original.find(o=>o.date===d.date)?.total!=null&&p.original.find(o=>o.date===d.date).total!==d.total?`<small>수집값 ${count(p.original.find(o=>o.date===d.date).total)} · DB 검수 적용</small>`:''}</td><td>${count(d.available)}</td><td class="public-value">${count(d.publicBookings)}</td><td>${money(d.price)}</td></tr>`).join('')}</tbody></table></div></details><details class="product-edit"><summary>이 상품 정보 수정 요청</summary><form data-product-correction="${index}"><p class="muted">요청은 검수 후 반영합니다. 전체 객실 수는 아래 ‘업체 정보 수정’에서 수정하세요.</p><div class="form-grid"><label class="field"><span>적용할 숙박일</span><select name="date" required>${p.days.filter(d=>d.date).map(d=>`<option value="${esc(d.date)}">${esc(d.date)} · ${count(d.total)} (${esc(d.status==='observed'?'정상':'수량 보정 불가')})</option>`).join('')}</select></label><label class="field"><span>객실 수 보정 제안</span><input type="number" name="total" min="1" max="10000" step="1" placeholder="변경할 때만 입력"></label><label class="field"><span>상품 구분</span><select name="productType">${Object.entries(types).map(([v,n])=>`<option value="${v}" ${v===p.productType?'selected':''}>${n}</option>`).join('')}</select></label></div><label class="field"><span>변경 근거</span><textarea name="reason" required maxlength="1000" placeholder="객실 구성, 공식 안내, 확인 날짜 등을 적어 주세요."></textarea></label><button class="button" type="submit">상품 검수 요청 보내기</button></form></details></details>`;
   }
   async function load(force=false) {
-    const mine=serial, id=companyId, order=++loadOrder;
+    const mine=serial, id=companyId, month=selectedMonth, order=++loadOrder, generation=cacheGeneration, epoch=companyEpoch(companyId), scope=cacheScope;
+    const contextCurrent=()=>generation===cacheGeneration&&epoch===companyEpoch(id)&&scope===cacheScope;
+    const current=()=>mine===serial&&order===loadOrder&&contextCurrent()&&id===companyId&&month===selectedMonth&&document.querySelector('#collection-result');
     clearTimeout(timer);
+    if(!permitted(id)){disableCollection();return;}
+    freshness(view?'이전 조회 자료 표시 · 최신 자료 확인 중':'최신 자료 확인 중',cached(id,month));
     try {
-      const data=await api(`/companies/${encodeURIComponent(id)}/collection${selectedMonth?'?month='+encodeURIComponent(selectedMonth):''}`);
-      if(mine!==serial || order!==loadOrder || !document.querySelector('#collection-result'))return;
+      const key=cacheKey(id,month);
+      let pending=inFlight.get(key);
+      if(!pending){
+        const promise=Promise.resolve(api(`/companies/${encodeURIComponent(id)}/collection${month?'?month='+encodeURIComponent(month):''}`));
+        pending={promise,companyId:id};inFlight.set(key,pending);
+        const cleanup=()=>{if(inFlight.get(key)===pending)inFlight.delete(key);};promise.then(cleanup,cleanup);
+      }
+      const data=await pending.promise;
+      if(!contextCurrent()||!permitted(id))return;
+      if(month&&data.companyDetail?.integrated?.selectedMonth&&data.companyDetail.integrated.selectedMonth!==month)throw new Error('선택한 숙박월의 자료를 확인하지 못했습니다. 다시 확인해 주세요.');
+      const entry=remember(id,month,data);
+      if(!current())return;
       progress(data);
-      const version=JSON.stringify([data.result?.version,data.previousResult,data.companyDetail]);
+      const version=entry.version;
       if(force || renderedVersion!==version) {
-        if(!force && document.querySelector('#collection-result form:focus-within, #collection-result form[data-dirty]')) { const note=document.createElement('p'); note.className='muted';note.textContent='새 결과가 있습니다. 작성 중인 내용을 유지했습니다. 새로고침하면 최신 결과를 표시합니다.';document.querySelector('#collection-progress').append(note); if(active(data.request))timer=setTimeout(()=>load(),10000); return; }
+        if(!force && document.querySelector('#collection-result form:focus-within, #collection-result form[data-dirty]')) { freshness('새 결과가 있습니다. 작성 중인 내용을 유지했습니다. 저장 자료 다시 보기로 반영하세요.',entry); if(active(data.request))timer=setTimeout(()=>load(),10000); return; }
         view=data;renderedVersion=version;document.querySelector('#collection-result').innerHTML=renderResult(data);
       }
+      freshness('최신 자료 확인 완료',entry);
       if(active(data.request)||['pending','updating'].includes(data.companyDetail?.integrated?.status)&&!data.companyDetail?.legacyObservationView)timer=setTimeout(()=>{if(!document.hidden)load();else timer=setTimeout(()=>load(),10000);},10000);
-    } catch(error) { if(mine===serial && document.querySelector('#collection-progress'))document.querySelector('#collection-progress').innerHTML=`<p class="collection-warning">${esc(error.message)} <button class="button small" data-action="refresh-collection">다시 확인</button></p>`; }
+    } catch(error) {
+      if(!contextCurrent())return;
+      if(error.status===401){
+        clearCache();serial++;clearTimeout(timer);view=null;renderedVersion=null;disableCollection();
+        const target=document.querySelector('#collection-result');if(target)target.innerHTML='<p class="collection-warning">로그인이 만료되었습니다. 다시 로그인해 주세요.</p>';
+        freshness('자료 조회 권한 확인 필요');
+        if(onSessionExpired)onSessionExpired();
+        return;
+      }
+      const denied=[403,404].includes(error.status);
+      const apply=denied?id===companyId&&document.querySelector('#collection-result'):current();
+      if(denied)invalidate(id);
+      if(!apply)return;
+      disableCollection('수집 가능 여부를 다시 확인해 주세요.');
+      if([403,404].includes(error.status)){
+        serial++;clearTimeout(timer);view=null;renderedVersion=null;disableCollection();
+        document.querySelector('#collection-result').innerHTML='<p class="collection-warning">업체 등록과 조회 권한을 다시 확인해 주세요.</p>';
+        freshness('자료 조회 권한 확인 필요');
+      }else{
+        freshness(view?'최신 확인 실패 · 이전 조회 자료 유지':'최신 자료 확인 실패',cached(id,month));
+        if(!view)document.querySelector('#collection-result').innerHTML='<p class="muted">업체 자료를 확인하지 못했습니다.</p>';
+      }
+      const message=error.status?error.message:'최신 자료를 확인하지 못했습니다. 잠시 후 다시 확인해 주세요.';
+      const target=document.querySelector('#collection-progress');if(target)target.innerHTML=`<p class="collection-warning">${esc(message)} <button class="button small" data-action="refresh-collection">다시 확인</button></p>`;
+    }
   }
-  window.InsightCollection={panel, mount(id,request){display={mode:savedMode(),metric:'bookings',month:''};selectedMonth='';serial++;clearTimeout(timer);companyId=id;api=request;view=null;renderedVersion=null;load();},stop(){serial++;clearTimeout(timer);},refresh:()=>load(true),
+  window.InsightCollection={panel,
+    setContext(scope,ids,sessionExpired){
+      if(scope!==cacheScope){clearCache();cacheScope=scope;}
+      const next=Array.isArray(ids)?new Set(ids):null;
+      if(allowedCompanies&&next)for(const id of allowedCompanies)if(!next.has(id))invalidate(id);
+      allowedCompanies=next;onSessionExpired=typeof sessionExpired==='function'?sessionExpired:null;
+      for(const [key,entry] of cache)if(!permitted(entry.companyId))cache.delete(key);
+      for(const id of lastMonths.keys())if(!permitted(id))lastMonths.delete(id);
+    },clearCache,invalidate,
+    mount(id,request){display={mode:savedMode(),metric:'bookings',month:''};selectedMonth=lastMonths.get(id)||'';display.month=selectedMonth;serial++;clearTimeout(timer);companyId=id;api=request;view=null;renderedVersion=null;showCached();load();},stop(){serial++;clearTimeout(timer);},refresh:()=>load(true),
     correction(index,p){const r=view?.result, product=r?.products[Number(index)];if(!product)throw Error('수집 결과를 다시 열어 주세요.');const proposed={};if(p.total!=='')proposed.total=Number(p.total);if(p.productType!==product.productType)proposed.productType=p.productType;return {companyId,baseVersion:r.version,target:{runId:r.runId,productKey:product.key,date:p.date},proposed,reason:p.reason};}};
 })();

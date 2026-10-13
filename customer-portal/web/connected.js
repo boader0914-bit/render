@@ -21,7 +21,9 @@
     return value;
   }
   async function command(action, payload) {
+    const affectedCompany=payload.companyId || state.customer.relations.find(row=>row.relationId===payload.relationId)?.companyId || state.corrections.find(row=>row.requestId===payload.requestId)?.companyId;
     state = await api('/commands', { revision:state.customer.revision, requestKey:crypto.randomUUID(), action, payload });
+    if(affectedCompany)window.InsightCollection?.invalidate?.(affectedCompany);
     if(action==='add-company'&&location.hash!=='#company='+encodeURIComponent(payload.companyId))location.hash='company='+encodeURIComponent(payload.companyId);else render(); toast(action==='collect'?'수집 요청 상태를 확인했습니다.':action.includes('correction')?'검수 요청을 저장했습니다.':'저장했습니다.');
   }
   const field = (label, name, value = '', type = 'text', extra = '') => `<label class="field"><span>${esc(label)}</span><input name="${name}" type="${type}" value="${esc(value)}" ${extra}></label>`;
@@ -47,6 +49,7 @@
   function search(kind) { return `<section class="card search-box"><h2>${kind==='region'?'관심지역 추가':kind==='own'?'내 매장 등록':'경쟁업체 추가'}</h2><form id="search-form" data-kind="${kind}"><label class="field"><span>${kind==='region'?'시군구 이름':'업체명·주소·플레이스 번호'}</span><input name="q" required minlength="2" maxlength="120" placeholder="두 글자 이상 입력하세요."></label><button class="button" type="submit">저장된 업체·지역 검색</button></form><div id="search-results" class="search-results" aria-live="polite"></div></section>`; }
   function render() {
     searchSequence++; window.InsightAnalysis?.stop(); window.InsightCollection?.stop?.();
+    window.InsightCollection?.setContext?.(state?.customer.customerId?`${adminView?'admin':'customer'}:${state.customer.customerId}`:'',state?.customer.relations.filter(row=>['active','pending'].includes(row.status)).map(row=>row.companyId)||[],()=>{state=null;adminCsrf='';render();});
     $('#logout').hidden = !state;
     $('#admin-view-banner').hidden = !adminView || !state;
     $('#navigation').innerHTML = state ? menus.map(([key,label])=>`<a href="#${key}" class="nav-link ${menuRoute()===key?'active':''}">${label}</a>`).join(''):'';
@@ -116,7 +119,7 @@
     busy=true;button.disabled=true;
     try{
       if(action==='check-username'){const input=$('[name=username]'), slot=$('#username-status');if(!input.reportValidity())return;const requested=input.value.trim(), value=await api(`/auth/username?username=${encodeURIComponent(requested)}`);if(!slot.isConnected||input.value.trim()!==requested)return;slot.textContent=value.message;slot.dataset.available=String(value.available);}
-      else if(action==='logout'){await api('/auth/logout',{});state=null;adminCsrf='';if(adminView){location.assign('/admin');return;}location.hash='login';render();}
+      else if(action==='logout'){await api('/auth/logout',{});window.InsightCollection?.clearCache?.();state=null;adminCsrf='';if(adminView){location.assign('/admin');return;}location.hash='login';render();}
       else if(action==='add')await command(button.dataset.kind==='region'?'add-region':'add-company',button.dataset.kind==='region'?{regionKey:button.dataset.id}:{kind:button.dataset.kind,companyId:button.dataset.id});
       else if(action==='archive')await command('archive-company',{relationId:button.dataset.relation});
       else if(action==='archive-region')await command('archive-region',{relationId:button.dataset.relation});
