@@ -6,6 +6,7 @@ const vm = require("node:vm");
 const { test } = require("node:test");
 const helpers = require("../web/collector_controls.js");
 const { workerLabel, workerState, workerAvailability, scheduleConfig, keywordSchedule, collectionDates, defaultDraft, historyEntries, filterHistory, keywordLines, errorMessage, progressModel, etaRange, qualityReason, diagnosticMetrics, diagnosticDates } = helpers;
+const { normalizeQuery, normalizedRow } = require("./lib/collection_history.cjs");
 const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8");
 const source = fs.readFileSync(path.join(__dirname, "../web/collector_controls.js"), "utf8");
 const app = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8");
@@ -35,6 +36,7 @@ class Element {
   dispatchEvent(event) { for (const callback of this.listeners[event.type] || []) callback({ ...event, target: this }); return true; }
   closest() { return this.section || null; }
   scrollIntoView() {}
+  focus() { this.registry.focused = this; }
   reportValidity() { return true; }
   async event(type) { if (type === "click" && this.disabled) return; await Promise.all((this.listeners[type] || []).map(callback => callback({ preventDefault() {}, target: this }))); }
 }
@@ -42,7 +44,22 @@ const descendants = element => [element, ...element.children.flatMap(descendants
 const text = element => descendants(element).map(item => item.textContent).filter(Boolean).join(" ");
 const visibleText = element => element.hidden ? "" : [element.textContent, ...element.children.map(visibleText)].filter(Boolean).join(" ");
 async function until(predicate) { for (let i = 0; i < 120; i++) { if (predicate()) return; await new Promise(resolve => setImmediate(resolve)); } throw new Error("ui_condition_not_reached"); }
-async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}, drafts = {}, failedSchedules = [], failRequests = false, failStatus = false, uncertainSubmit = false, outsideCollection = false, diagnostics = {}, diagnosticStatus = 200, diagnosticRunId } = {}) {
+function historyFixture(queryString, records) {
+  const q = normalizeQuery(new URLSearchParams(queryString), Date.now()), counts = { pending: 0, complete: 0, failed: 0, partial: 0, review: 0 }, groups = new Map();
+  const filtered = records.filter(row => row.date && row.date >= q.from && row.date <= q.to && (q.worker === "all" || row.workerKey === q.worker) && (!q.keyword || row.keyword.toLowerCase().includes(q.keyword.toLowerCase())) && (q.state === "all" || row.state === q.state || q.state === "attention" && ["failed", "partial", "review"].includes(row.state))).sort((a, b) => b.stamp.localeCompare(a.stamp));
+  function grouping(date) {
+    let key = date, startDate = date, endDate = date, label = date;
+    if (q.groupBy === "year") { key = date.slice(0, 4); startDate = `${key}-01-01`; endDate = `${key}-12-31`; label = `${key}년`; }
+    if (q.groupBy === "month") { key = date.slice(0, 7); startDate = `${key}-01`; endDate = new Date(Date.UTC(Number(key.slice(0, 4)), Number(key.slice(5)), 0)).toISOString().slice(0, 10); label = `${key.slice(0, 4)}년 ${Number(key.slice(5))}월`; }
+    if (q.groupBy === "week") { const d = new Date(`${date}T00:00:00Z`); d.setUTCDate(d.getUTCDate() - (d.getUTCDay() + 6) % 7); key = startDate = d.toISOString().slice(0, 10); d.setUTCDate(d.getUTCDate() + 6); endDate = d.toISOString().slice(0, 10); label = `${startDate} ~ ${endDate}`; }
+    return { key, label, startDate: startDate < q.from ? q.from : startDate, endDate: endDate > q.to ? q.to : endDate };
+  }
+  for (const row of filtered) { counts[row.state]++; const g = grouping(row.date); if (!groups.has(g.key)) groups.set(g.key, { ...g, count: 0, counts: { pending: 0, complete: 0, failed: 0, partial: 0, review: 0 }, latest: row }); const group = groups.get(g.key); group.count++; group.counts[row.state]++; }
+  const result = { from: q.from, to: q.to, groupBy: q.groupBy, timezone: "Asia/Seoul", summary: { total: filtered.length, counts, latest: filtered[0] || null, latestTerminal: filtered.find(row => row.state !== "pending") || null, unknownDateCount: records.filter(row => !row.date).length }, groups: [...groups.values()].sort((a, b) => b.key.localeCompare(a.key)), warnings: [], sources: {}, updatedAt: new Date().toISOString() };
+  if (q.groupKey) { const rows = filtered.filter(row => grouping(row.date).key === q.groupKey); Object.assign(result, { groupKey: q.groupKey, rows: rows.slice(q.offset, q.offset + q.limit), totalRows: rows.length, offset: q.offset, limit: q.limit, hasMore: q.offset + q.limit < rows.length, nextOffset: q.offset + q.limit < rows.length ? q.offset + q.limit : null }); }
+  return result;
+}
+async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}, drafts = {}, failedSchedules = [], failRequests = false, failStatus = false, failHistory = false, historyFetch, historyRecords, historyPreferences, expandHistory = true, uncertainSubmit = false, outsideCollection = false, diagnostics = {}, diagnosticStatus = 200, diagnosticRunId } = {}) {
   const nodes = new Map();
   for (const match of html.matchAll(/<([\w-]+)\b[^>]*\bid="([^"]+)"[^>]*>/g)) { const el = new Element(match[1], nodes); el.id = match[2]; }
   const body = new Element("body", nodes); body.className = "role-admin";
@@ -50,12 +67,17 @@ async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}
   const navigation = { clicks: 0, click() { this.clicks++; section.className = "active"; } };
   const document = { body, hidden: false, getElementById: id => nodes.get(id), createElement: tag => new Element(tag, nodes), querySelector: () => navigation, addEventListener() {} };
   const saved = Object.fromEntries(keys.map(key => [key, clone(configs[key] || config)])); const calls = [], submissions = [], events = [], windowListeners = {};
-  const storage = new Map([["staydatalab:collector-drafts:v2", JSON.stringify(drafts)]]);
+  const records = historyRecords || historyEntries(requests.map(row => ({ createdAt: new Date().toISOString(), ...row })), schedulePatch).map((row, index) => normalizedRow(row, { id: `record_${index}`, source: "requests", workerKey: row.workerKey, trigger: row.trigger }));
+  // Existing worker/diagnostic tests start with explicit expanded preferences.
+  // Dedicated period tests opt out and verify the product's folded defaults.
+  const expanded = expandHistory ? [...new Set(records.filter(row => row.date).map(row => `month:${row.date.slice(0, 7)}`))].map(key => [key, true]) : [];
+  const storage = new Map([["staydatalab:collector-drafts:v2", JSON.stringify(drafts)], ["staydatalab:collector-history-periods:v1", JSON.stringify(historyPreferences || { expanded })]]);
   const window = { localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) }, addEventListener(name, callback) { (windowListeners[name] ||= []).push(callback); }, dispatchEvent(event) { events.push(event); if (event.type === "collector:submit-card") { submissions.push(clone(event.detail.input)); event.detail.resolve({ status: "pending", submissionUncertain: uncertainSubmit }); } for (const fn of windowListeners[event.type] || []) fn(event); } };
   const fetch = async (url, options) => {
     const payload = options.body ? JSON.parse(options.body) : undefined; calls.push({ url, method: options.method, payload }); let result;
     if (url === "/api/collector-status") { if (typeof failStatus === "function" ? failStatus() : failStatus) throw Error("status_unavailable"); result = { workers: workers || keys.map(workerKey => ({ workerKey, configured: true, connected: true, ready: true, workerLastSeenAt: new Date().toISOString(), queued: 0 })) }; }
     else if (url === "/api/crawl-requests") { if (failRequests) throw Error("requests_unavailable"); result = { requests }; }
+    else if (url.startsWith("/api/collection-history?")) { assert.equal(options.method, "GET"); if (typeof failHistory === "function" ? failHistory(url) : failHistory) throw Error("history_unavailable"); result = historyFetch ? await historyFetch(url, records) : historyFixture(url.split("?")[1], records); }
     else if (/^\/api\/runs\/[^/]+\/diagnostics$/.test(url)) {
       const runId = decodeURIComponent(url.split("/")[3]);
       assert.equal(options.method, "GET");
@@ -72,15 +94,19 @@ async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}
     return { ok: true, status: 200, json: async () => result };
   };
   class UiEvent { constructor(type, options = {}) { this.type = type; Object.assign(this, options); } }
-  vm.runInNewContext(source, { document, fetch, window, console, setInterval() {}, MutationObserver: class { observe() {} disconnect() {} }, Event: UiEvent, CustomEvent: UiEvent, Date, Intl, Number, String, Object, Array, Set, Map, JSON, Promise, Error, Math });
+  const observers = [];
+  vm.runInNewContext(source, { document, fetch, window, console, setInterval() {}, MutationObserver: class { constructor(callback) { observers.push(callback); } observe() {} disconnect() {} }, Event: UiEvent, CustomEvent: UiEvent, Date, Intl, Number, String, Object, Array, Set, Map, JSON, Promise, Error, Math, URLSearchParams });
   const initial = { hiddenCards:nodes.get("collectorWorkerStates").children.map(card => card.hidden), executionChoices:nodes.get("crawlWorkerKey").children.map(option => option.value) };
   await until(() => events.some(event => event.type === "collector:worker-availability"));
+  await until(() => nodes.get("collectorHistoryFilteredCount").textContent || nodes.get("collectorHistoryReadError").textContent);
+  if (expandHistory && records.length) await until(() => descendants(nodes.get("collectorUnifiedHistory")).filter(el => el.className === "collector-history-row").length >= Math.min(records.filter(row => row.date).length, 50));
   const card = key => nodes.get("collectorWorkerStates").children.find(node => node.dataset.workerKey === key);
   const form = key => descendants(card(key)).find(el => el.tagName === "FORM");
   const input = (key, name) => nodes.get(`collector-${key}-${name}`);
   const button = (key, label) => descendants(card(key)).find(el => el.tagName === "BUTTON" && el.textContent === label);
   async function set(key, name, value) { if (typeof value === "boolean") input(key, name).checked = value; else input(key, name).value = value; await form(key).event("change"); }
-  return { nodes, calls, submissions, saved, events, window, storage, card, form, input, button, set, navigation, initial };
+  const searchHistory = async () => { await nodes.get("collectorHistoryForm").event("submit"); await until(() => nodes.get("collectorHistoryQueryNotice").hidden || nodes.get("collectorHistoryQueryNotice").dataset.tone === "warning"); await until(() => !descendants(nodes.get("collectorUnifiedHistory")).some(el => el.className.includes("collector-history-more") && el.disabled)); };
+  return { nodes, calls, submissions, saved, events, window, storage, card, form, input, button, set, navigation, initial, records, searchHistory, observers, body };
 }
 
 test("drafts default to day-use presence check and inclusive lodging dates", () => {
@@ -122,7 +148,7 @@ test("converted worker is absent from execution cards and choices while historic
   await ui.form("scheduled").event("submit");
   assert.equal(ui.submissions.length, 0); assert.ok(ui.calls.every(call => call.method === "GET"));
   for (const key of ["web", "manual"]) assert.equal(ui.button(key, "지금 수집").disabled, false, "conversion does not affect remaining workers");
-  ui.nodes.get("collectorHistoryWorker").value = "scheduled"; await ui.nodes.get("collectorHistoryWorker").event("change");
+  ui.nodes.get("collectorHistoryWorker").value = "scheduled"; await ui.searchHistory();
   assert.equal(ui.nodes.get("collectorHistoryWorker").value, "scheduled");
   assert.match(text(ui.nodes.get("collectorUnifiedHistory")), /이전 포천글램핑.*AWS worker/s);
   await descendants(ui.nodes.get("collectorUnifiedHistory")).find(el => el.textContent === "결과 보기").event("click");
@@ -398,7 +424,7 @@ test("same-day review rejection is unexecuted, not a provider block or zero coll
   const history = ui.nodes.get("collectorUnifiedHistory");
   assert.equal(descendants(history).find(el => el.className === "state-badge").textContent, "재수집 검토 필요 · 미실행");
   assert.match(text(history), /당일 동일 키워드.*네이버 요청 전에/);
-  assert.doesNotMatch(text(history), /접근 제한|예약 일정 성공 0|정상 응답 0|실패/);
+  assert.doesNotMatch(text(history), /접근 제한|예약 일정 성공 0|정상 응답 0|실패·중단 [1-9]/);
   assert.equal(descendants(history).filter(el => el.className === "collection-diagnostics").length, 0, "known preflight rejection needs no missing-result diagnosis");
   assert.equal(ui.calls.filter(call => call.url.endsWith("/diagnostics")).length, 0);
   const progress = progressModel({ workerKey: "web", configured: true, connected: true }, request);
@@ -421,13 +447,13 @@ test("schedule read failure leaves immediate ready, and preserved old configs re
 test("unified history filters preserve outcomes and open retained results without collection", async () => {
   const rows = [{ workerKey: "manual", keyword: "경남글램핑", status: "complete", createdAt: "2026-09-24T05:00:00Z", result: { runId: "kept_result" } }, { workerKey: "web", keyword: "포천글램핑", status: "blocked", createdAt: "2026-09-24T06:00:00Z", errorCode: "COLLECTOR_PROVIDER_BLOCKED" }];
   const ui = await mockUi({ requests: rows }); assert.match(text(ui.nodes.get("collectorUnifiedHistory")), /경남글램핑.*BG worker/s); assert.match(text(ui.nodes.get("collectorUnifiedHistory")), /접근 제한/);
-  ui.nodes.get("collectorHistoryWorker").value = "manual"; await ui.nodes.get("collectorHistoryWorker").event("change"); assert.doesNotMatch(text(ui.nodes.get("collectorUnifiedHistory")), /포천글램핑/);
+  ui.nodes.get("collectorHistoryWorker").value = "manual"; await ui.searchHistory(); assert.doesNotMatch(text(ui.nodes.get("collectorUnifiedHistory")), /포천글램핑/);
   await descendants(ui.nodes.get("collectorUnifiedHistory")).find(el => el.textContent === "결과 보기").event("click"); assert.equal(ui.events.at(-1).detail.runId, "kept_result"); assert.ok(ui.calls.every(call => call.method === "GET"));
   assert.equal(filterHistory(historyEntries(rows), { worker: "all", keyword: "", date: "2026-09-24", state: "attention" }).length, 1);
 });
 
 test("read errors, freshness and broker failures remain distinguishable", async () => {
-  const ui = await mockUi({ failRequests: true }); assert.match(text(ui.nodes.get("collectorUnifiedHistory")), /읽지 못했습니다/); assert.equal(ui.button("manual", "지금 수집").disabled, false);
+  const ui = await mockUi({ failRequests: true, failHistory: true, expandHistory: false }); assert.match(text(ui.nodes.get("collectorUnifiedHistory")), /읽지 못했습니다/); assert.equal(ui.button("manual", "지금 수집").disabled, false);
   assert.equal(workerState({ workerKey: "web", configured: true, connected: true, ready: false }), "실행 확인 필요");
   assert.equal(workerAvailability({ workers: [{ workerKey: "manual", configured: true, workerLastSeenAt: "2000-01-01T00:00:00Z" }] }, "manual").ready, false);
   assert.match(errorMessage("COLLECTOR_DUPLICATE_PATH"), /상세 파일 목록/); assert.deepEqual(keywordLines("Ａ\nA\n포천 글램핑\n포천글램핑"), ["A", "포천 글램핑", "포천글램핑"]);
@@ -474,7 +500,7 @@ test("history diagnostics load only on expansion, preserve safe detail and reuse
   assert.doesNotMatch(text(card), /SECRET_TOKEN|T01:00:00Z|HTTP|차단 감지/);
   assert.equal(descendants(card).filter(el => el.textContent === diagnostic.issues[0].label).length, 1);
   card.open = false; await card.event("toggle"); card.open = true; await card.event("toggle");
-  await ui.nodes.get("collectorHistoryWorker").event("change");
+  await ui.searchHistory();
   card = descendants(history).find(el => el.className === "collection-diagnostics");
   await until(() => text(card).includes("미조회 22개"));
   assert.equal(card.open, true);
@@ -502,7 +528,7 @@ test("diagnostic read errors require explicit retry and mismatched runs never di
   const history = ui.nodes.get("collectorUnifiedHistory");
   let card = descendants(history).find(el => el.className === "collection-diagnostics"); card.open = true; await card.event("toggle");
   assert.match(text(card), /관리자 로그인을 확인/);
-  await ui.nodes.get("collectorHistoryWorker").event("change");
+  await ui.searchHistory();
   card = descendants(history).find(el => el.className === "collection-diagnostics"); await until(() => text(card).includes("다시 확인"));
   assert.equal(ui.calls.filter(call => call.url.endsWith("/diagnostics")).length, 1);
   await descendants(card).find(el => el.textContent === "다시 확인").event("click");
@@ -626,4 +652,130 @@ test("app submission keeps company mode instead of silently changing it to keywo
   assert.equal(submitted,"company");
   await submit({keyword:"조천 숙소",searchMode:"keyword",workerKey:"web",checkIn:"2026-09-30",checkOut:"2026-10-01"});
   assert.equal(submitted,"keyword");
+});
+
+function periodNode(ui, key) { return descendants(ui.nodes.get("collectorUnifiedHistory")).find(el => el.className === "collector-history-period" && el.dataset.groupKey === key); }
+async function expandPeriod(ui, key) { const period = periodNode(ui, key); assert.ok(period); period.open = true; await period.event("toggle"); return period; }
+const historyCalls = ui => ui.calls.filter(call => call.url.startsWith("/api/collection-history?"));
+const defer = () => { let resolve, reject; const promise = new Promise((ok, fail) => { resolve = ok; reject = fail; }); return { promise, resolve, reject }; };
+
+test("history defaults to folded months, reads only summaries and applies draft filters on Search", async () => {
+  const ui = await mockUi({ expandHistory: false, requests: [{ keyword: "경남글램핑", workerKey: "manual", status: "complete", result: { runId: "kept" } }] });
+  const initial = historyCalls(ui), params = new URLSearchParams(initial[0].url.split("?")[1]);
+  assert.equal(params.get("groupBy"), "month"); assert.equal(params.get("from"), `${helpers.defaultHistoryQuery().to.slice(0, 4)}-01-01`); assert.equal(params.get("to"), helpers.defaultHistoryQuery().to);
+  assert.equal(ui.nodes.get("collectorHistoryContent").hidden, true); assert.equal(initial.length, 1); assert.equal(params.has("groupKey"), false);
+  assert.ok(descendants(ui.nodes.get("collectorUnifiedHistory")).filter(el => el.className === "collector-history-period").every(el => !el.open));
+  ui.nodes.get("collectorHistoryKeyword").value = "경남"; await ui.nodes.get("collectorHistoryKeyword").event("input"); ui.nodes.get("collectorHistoryWorker").value = "manual"; await ui.nodes.get("collectorHistoryWorker").event("change");
+  assert.equal(historyCalls(ui).length, 1, "editing a keyword/date/filter never queries intermediate drafts");
+  await ui.searchHistory(); assert.equal(new URLSearchParams(historyCalls(ui).at(-1).url.split("?")[1]).get("keyword"), "경남");
+  assert.equal(ui.submissions.length, 0); assert.ok(ui.calls.every(call => call.method === "GET"));
+});
+
+test("invalid date drafts preserve the last visible periods and make no request", async () => {
+  const ui = await mockUi({ expandHistory: false, requests: [{ keyword: "보존 자료", status: "failed", workerKey: "web" }] });
+  const container = ui.nodes.get("collectorUnifiedHistory"), period = container.children[0], before = historyCalls(ui).length;
+  for (const [from, to] of [["2026-02-30", "2026-03-01"], ["2026-10-20", "2026-10-01"], ["", "2026-10-01"]]) {
+    ui.nodes.get("collectorHistoryFrom").value = from; ui.nodes.get("collectorHistoryTo").value = to; await ui.searchHistory();
+    assert.equal(historyCalls(ui).length, before); assert.equal(container.children[0], period); assert.match(ui.nodes.get("collectorHistoryQueryNotice").textContent, /이전 조회 결과를 유지/);
+  }
+  assert.throws(() => helpers.historyQuery({ from: "2000-01-01", to: "2011-01-01" }));
+});
+
+test("weekly view displays Monday to Sunday expansion across a year boundary without overwriting drafts", async () => {
+  const request = { keyword: "연도 경계", workerKey: "manual", status: "complete", result: { runId: "year_boundary" }, createdAt: "2025-12-31T16:00:00Z" };
+  const ui = await mockUi({ expandHistory: false, requests: [request] });
+  ui.nodes.get("collectorHistoryFrom").value = "2026-01-01"; ui.nodes.get("collectorHistoryTo").value = "2026-01-02"; ui.nodes.get("collectorHistoryGroupBy").value = "week";
+  await ui.nodes.get("collectorHistoryGroupBy").event("change");
+  assert.match(ui.nodes.get("collectorHistoryFilteredCount").textContent, /2025-12-29 ~ 2026-01-04.*주간.*확장/);
+  assert.equal(ui.nodes.get("collectorHistoryFrom").value, "2026-01-01"); assert.ok(periodNode(ui, "2025-12-29"));
+  for (const [unit, key] of [["year", "2026"], ["month", "2026-01"], ["day", "2026-01-01"]]) { ui.nodes.get("collectorHistoryGroupBy").value = unit; await ui.nodes.get("collectorHistoryGroupBy").event("change"); assert.ok(periodNode(ui, key)); }
+});
+
+test("period records load on expansion with server pagination and only UI choices persist", async () => {
+  const requests = Array.from({ length: 73 }, (_, i) => ({ requestId: `page_${i}`, keyword: `페이지 ${i}`, workerKey: "manual", createdAt: "2026-09-25T05:00:00Z", status: "complete", result: { runId: `result_${i}` } }));
+  const ui = await mockUi({ requests, expandHistory: false }); assert.equal(historyCalls(ui).length, 1);
+  let period = await expandPeriod(ui, "2026-09"); assert.equal(descendants(period).filter(el => el.className === "collector-history-row").length, 50);
+  const more = descendants(period).find(el => el.className.includes("collector-history-more")); await more.event("click");
+  assert.equal(descendants(period).filter(el => el.className === "collector-history-row").length, 73);
+  assert.deepEqual(historyCalls(ui).filter(call => call.url.includes("groupKey")).map(call => Number(new URLSearchParams(call.url.split("?")[1]).get("offset"))), [0, 50]);
+  period.open = false; await period.event("toggle"); period.open = true; await period.event("toggle"); assert.equal(historyCalls(ui).length, 3);
+  const stored = JSON.parse(ui.storage.get("staydatalab:collector-history-periods:v1"));
+  assert.deepEqual(Object.keys(stored.query).sort(), ["from", "groupBy", "to"]); assert.ok(stored.expanded.some(([key, open]) => key === "month:2026-09" && open)); assert.doesNotMatch(JSON.stringify(stored), /페이지|result_|rows|manual/);
+  const restored = await mockUi({ requests, expandHistory: false, historyPreferences: stored }); await until(() => text(restored.nodes.get("collectorUnifiedHistory")).includes("페이지")); assert.equal(periodNode(restored, "2026-09").open, true);
+  assert.ok(ui.calls.every(call => call.method === "GET")); assert.equal(ui.submissions.length, 0);
+});
+
+test("history read failure preserves exact last-good period nodes and never disables a worker", async () => {
+  let broken = false;
+  const ui = await mockUi({ requests: [{ keyword: "정상 자료", workerKey: "manual", status: "complete", result: { runId: "good" } }], failHistory: () => broken });
+  const period = ui.nodes.get("collectorUnifiedHistory").children[0], row = descendants(period).find(el => el.className === "collector-history-row"); broken = true;
+  await ui.searchHistory(); assert.equal(ui.nodes.get("collectorUnifiedHistory").children[0], period); assert.equal(descendants(period).find(el => el.className === "collector-history-row"), row); assert.match(ui.nodes.get("collectorHistoryReadError").textContent, /마지막 정상 조회 결과/); assert.equal(ui.button("manual", "지금 수집").disabled, false);
+  broken = false; await ui.searchHistory(); assert.equal(ui.nodes.get("collectorHistoryReadError").hidden, true); assert.equal(ui.nodes.get("collectorUnifiedHistory").children[0], period, "unchanged revalidation must keep keyboard and details identity");
+});
+
+test("failed next page preserves earlier rows and explicit retry appends once", async () => {
+  let broken = true;
+  const requests = Array.from({ length: 61 }, (_, i) => ({ keyword: `보존 ${i}`, workerKey: "manual", status: "complete", result: { runId: `saved_${i}` } }));
+  const ui = await mockUi({ requests, expandHistory: false, failHistory: url => broken && new URLSearchParams(url.split("?")[1]).get("offset") === "50" });
+  const period = await expandPeriod(ui, helpers.defaultHistoryQuery().to.slice(0, 7)); await descendants(period).find(el => el.className.includes("collector-history-more")).event("click");
+  assert.equal(descendants(period).filter(el => el.className === "collector-history-row").length, 50); assert.match(text(period), /마지막 조회 결과를 유지/);
+  broken = false; await descendants(period).find(el => el.textContent === "다시 확인").event("click"); assert.equal(descendants(period).filter(el => el.className === "collector-history-row").length, 61);
+});
+
+test("header warning selects the current range, opens the failed period and issues GET only", async () => {
+  const ui = await mockUi({ expandHistory: false, requests: [{ keyword: "실패 키워드", workerKey: "manual", status: "failed", errorCode: "NAVER_SEARCH_STATE_MISSING", createdAt: "2026-09-24T05:00:00Z" }] });
+  await ui.nodes.get("collectorHistoryFailed").event("click"); await until(() => text(ui.nodes.get("collectorUnifiedHistory")).includes("실패 키워드"));
+  assert.equal(ui.nodes.get("collectorHistoryContent").hidden, false); assert.equal(ui.nodes.get("collectorHistoryState").value, "failed"); assert.equal(periodNode(ui, "2026-09").open, true); assert.equal(ui.nodes.get("collectorHistoryFrom").value, `${helpers.defaultHistoryQuery().to.slice(0, 4)}-01-01`);
+  assert.ok(ui.calls.every(call => call.method === "GET")); assert.equal(ui.submissions.length, 0);
+});
+
+test("unknown source/date and historical unexecuted reservations never become BG or live progress", async () => {
+  const now = new Date().toISOString(), day = helpers.defaultHistoryQuery().to;
+  const historyRecords = [
+    { id: "saved", keyword: "보관함 전용", workerKey: "unknown", source: "outputs", trigger: "unknown", status: "complete", state: "complete", runId: "saved_only", stamp: now, date: day, dateBasis: "saved", dateBasisLabel: "저장일" },
+    { id: "pending", keyword: "옛 예약", workerKey: "manual", trigger: "scheduled", status: "pending", state: "pending", stamp: now, date: day, dateBasis: "scheduled", dateBasisLabel: "예정일" },
+    { id: "unknown", keyword: "시각 없음", workerKey: "unknown", status: "unknown", state: "review", stamp: null, date: null, dateBasis: "unknown" }
+  ];
+  const ui = await mockUi({ historyRecords, expandHistory: false, historyFetch: (url, records) => ({ ...historyFixture(url.split("?")[1], records), warnings: [{ code: "source_unreadable", label: "일부 저장소 확인 불가", count: 7 }] }) });
+  const period = await expandPeriod(ui, day.slice(0, 7)); assert.match(text(period), /보관함 전용.*수집기 미확인 · 저장 결과 · 저장일/s); assert.match(text(period), /미실행 · 예약 기록/); assert.doesNotMatch(ui.nodes.get("collectorHistoryLatest").textContent, /옛 예약/);
+  assert.match(ui.nodes.get("collectorHistoryReadError").textContent, /저장 기록 확인.*7건/); assert.equal(ui.nodes.get("collectorHistoryFailed").hidden, true); assert.match(ui.nodes.get("collectorHistorySources").textContent, /시각 미확인 1건.*제외/);
+  assert.equal(helpers.historyOutcomeLabel({ status: "complete", state: "failed", collectionQuality: { status: "failed" } }), "실패 · 결과 검증 확인"); assert.match(helpers.historyOutcomeLabel({ status: "failed", state: "review", errorCode: "COLLECTION_SCOPE_REVIEW" }), /검토 필요 · 미실행/);
+});
+
+test("A to B to A shares pending GET but applies the latest A response only", async () => {
+  const pending = new Map(), requests = [{ keyword: "Alpha", workerKey: "manual", status: "complete", result: { runId: "alpha" } }, { keyword: "Beta", workerKey: "web", status: "complete", result: { runId: "beta" } }];
+  const ui = await mockUi({ requests, expandHistory: false, historyFetch: (url, records) => { const q = new URLSearchParams(url.split("?")[1]); if (!q.get("keyword")) return historyFixture(q.toString(), records); if (!pending.has(q.get("keyword"))) pending.set(q.get("keyword"), { ...defer(), result: historyFixture(q.toString(), records) }); return pending.get(q.get("keyword")).promise; } });
+  ui.nodes.get("collectorHistoryKeyword").value = "Alpha"; const a1 = ui.nodes.get("collectorHistoryForm").event("submit"); await until(() => pending.has("Alpha"));
+  ui.nodes.get("collectorHistoryKeyword").value = "Beta"; const b = ui.nodes.get("collectorHistoryForm").event("submit"); await until(() => pending.has("Beta"));
+  ui.nodes.get("collectorHistoryKeyword").value = "Alpha"; const a2 = ui.nodes.get("collectorHistoryForm").event("submit");
+  pending.get("Beta").resolve(pending.get("Beta").result); await b; assert.doesNotMatch(ui.nodes.get("collectorHistoryLatest").textContent, /Beta/);
+  pending.get("Alpha").resolve(pending.get("Alpha").result); await Promise.all([a1, a2]); assert.match(ui.nodes.get("collectorHistoryLatest").textContent, /Alpha/);
+  assert.equal(historyCalls(ui).filter(call => new URLSearchParams(call.url.split("?")[1]).get("keyword") === "Alpha").length, 1);
+});
+
+test("late period rows cannot overwrite a different search, and duplicate toggles share one GET", async () => {
+  const hold = defer(), requests = [{ keyword: "Alpha", workerKey: "manual", status: "complete", result: { runId: "alpha" } }, { keyword: "Beta", workerKey: "web", status: "complete", result: { runId: "beta" } }];
+  const ui = await mockUi({ requests, expandHistory: false, historyFetch: (url, records) => { const q = new URLSearchParams(url.split("?")[1]); return q.has("groupKey") && !q.get("keyword") ? hold.promise : historyFixture(q.toString(), records); } });
+  const period = periodNode(ui, helpers.defaultHistoryQuery().to.slice(0, 7)); period.open = true; const first = period.event("toggle"), second = period.event("toggle"); await until(() => historyCalls(ui).some(call => call.url.includes("groupKey")));
+  ui.nodes.get("collectorHistoryKeyword").value = "Beta"; await ui.searchHistory(); await until(() => text(ui.nodes.get("collectorUnifiedHistory")).includes("Beta"));
+  const oldCall = historyCalls(ui).find(call => call.url.includes("groupKey") && !new URLSearchParams(call.url.split("?")[1]).get("keyword")); hold.resolve(historyFixture(oldCall.url.split("?")[1], ui.records)); await Promise.all([first, second]);
+  assert.doesNotMatch(text(ui.nodes.get("collectorUnifiedHistory")), /Alpha/); assert.equal(historyCalls(ui).filter(call => call.url === oldCall.url).length, 1);
+});
+
+test("a changed summary starts a new period generation and discards its earlier late rows", async () => {
+  const old = defer(); let groupCalls = 0, refreshed = false;
+  const requests = [{ keyword: "최신 자료", workerKey: "manual", status: "complete", result: { runId: "latest" } }];
+  const ui = await mockUi({ requests, expandHistory: false, historyFetch: (url, records) => { const result = historyFixture(url.split("?")[1], records); if (url.includes("groupKey")) { if (++groupCalls === 1) return old.promise; return result; } if (refreshed) result.summary.unknownDateCount = 1; return result; } });
+  const firstPeriod = periodNode(ui, helpers.defaultHistoryQuery().to.slice(0, 7)); firstPeriod.open = true; const first = firstPeriod.event("toggle"); await until(() => groupCalls === 1); refreshed = true; await ui.nodes.get("collectorRefresh").event("click"); await until(() => groupCalls === 2 && text(ui.nodes.get("collectorUnifiedHistory")).includes("최신 자료"));
+  const call = historyCalls(ui).find(item => item.url.includes("groupKey")), stale = historyFixture(call.url.split("?")[1], ui.records); stale.rows[0].keyword = "이전 응답"; old.resolve(stale); await first;
+  assert.doesNotMatch(text(ui.nodes.get("collectorUnifiedHistory")), /이전 응답/); assert.match(text(ui.nodes.get("collectorUnifiedHistory")), /최신 자료/);
+});
+
+test("logout clears retained rows and rejects a late history response", async () => {
+  const hold = defer(); let delayed = false;
+  const ui = await mockUi({ requests: [{ keyword: "관리자 전용", workerKey: "manual", status: "complete", result: { runId: "private" } }], historyFetch: (url, records) => delayed ? hold.promise : historyFixture(url.split("?")[1], records) });
+  delayed = true; const task = ui.nodes.get("collectorHistoryForm").event("submit"); const call = historyCalls(ui).at(-1);
+  ui.body.className = ""; for (const observer of ui.observers) observer();
+  hold.resolve(historyFixture(call.url.split("?")[1], ui.records)); await task;
+  assert.doesNotMatch(text(ui.nodes.get("collectorUnifiedHistory")), /관리자 전용/); assert.equal(ui.nodes.get("collectorHistoryCount").textContent, "기간 기록 확인 전");
 });

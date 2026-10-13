@@ -39,6 +39,7 @@ const { createDemandStrengthBackfillScheduler } = require("./tourism_demand_stre
 const { createDailyKeywordCollectionScheduler, validateRequestPacing, effectiveRequestPacing } = require("./daily_keyword_collection_scheduler.cjs");
 const { inspectResult: inspectDailyCollectionResult, allowsDerivedUpdates } = require("./daily_collection_quality.cjs");
 const { readCollectionDiagnostics } = require("./lib/collection_diagnostics.cjs");
+const { createCollectionHistory } = require("./lib/collection_history.cjs");
 const { createMasterDbDualWriteQueue } = require("./master_db_dual_write.cjs");
 const { createCollectorBroker } = require("./collector_broker.cjs");
 const { dispatchCollector, createHistoricalBookingContext } = require("./collector_dispatch.cjs");
@@ -93,6 +94,7 @@ const LOCATION_SCORE_OVERRIDES_FILE = path.join(CONFIG_DIR, "location_score_over
 const LEGACY_B2B_MEMBERS_FILE = path.join(CONFIG_DIR, "b2b_members.json");
 const B2B_MEMBERS_FILE = path.join(CUSTOMER_DB_DIR, "b2b_members.json");
 const HISTORY_DIR = path.join(DATA_DIR, "history");
+const collectionHistory = createCollectionHistory({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR });
 const HISTORY_OBSERVATIONS_FILE = path.join(HISTORY_DIR, "observations.jsonl");
 const HISTORY_EVIDENCE_DIR = path.join(HISTORY_DIR, "evidence");
 const HISTORY_DATALAB_TRENDS_FILE = path.join(HISTORY_DIR, "datalab_trends.json");
@@ -18635,6 +18637,12 @@ async function route(req, res) {
       const disk=await fsp.statfs(DATA_DIR);
       if(Number(disk.bavail)*Number(disk.bsize)<=200*1024*1024) {web.ready=false;web.errorCode ||= "COLLECTOR_DISK_LOW";}
       return send(res, 200, { executionMode: COLLECTOR_EXECUTION_MODE, ...workers[0],workers });
+    }
+
+    if (reqUrl.pathname === "/api/collection-history") {
+      if (!requireAdminSession(session, req, res)) return;
+      if (req.method !== "GET") return send(res, 405, { error: "Method not allowed" });
+      return send(res, 200, await collectionHistory.query(reqUrl.searchParams));
     }
 
     if (req.method === "GET" && (reqUrl.pathname === "/api/crawl-requests" || reqUrl.pathname.startsWith("/api/crawl-requests/"))) {

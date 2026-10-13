@@ -95,7 +95,33 @@
 .collector-history-alert:hover { box-shadow: inset 0 0 0 1px currentColor; }
 .collector-history-read-error { flex-basis: 100%; color: var(--warning-strong); font-size: 12px; line-height: 1.6; margin: 0; overflow-wrap: anywhere; }
 .collector-history-filtered-count { margin: 12px 0 0; color: var(--text-secondary); font-size: 11px; }
-.collector-history-filters { display: grid; grid-template-columns: 1fr 1.6fr 1fr 1fr; gap: 10px; margin: 18px 0 8px; }
+.collector-history-query { margin-top: 18px; min-width: 0; }
+.collector-history-period-toolbar { display: grid; grid-template-columns: minmax(110px, .7fr) repeat(2, minmax(140px, 1fr)) auto; gap: 10px; align-items: end; }
+.collector-history-period-toolbar > button { min-height: 44px; white-space: nowrap; }
+.collector-history-quick-periods { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 9px; margin-top: 9px; }
+.collector-history-quick-periods > button { min-height: 36px; padding: 5px 10px; font-size: 11px; }
+.collector-history-quick-periods > span { margin-left: auto; color: var(--text-secondary); font-size: 11px; line-height: 1.6; }
+.collector-history-filters { display: grid; grid-template-columns: 1fr 1.6fr 1fr; gap: 10px; margin: 14px 0 8px; }
+.collector-history-query-notice { padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: 8px; color: var(--text-secondary); background: var(--surface-soft); font-size: 12px; line-height: 1.6; }
+.collector-history-query-notice[data-tone="warning"] { color: var(--warning-strong); border-color: color-mix(in srgb, var(--warning) 40%, var(--border-subtle)); }
+.collector-history-period { margin-top: 12px; min-width: 0; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--surface-card); }
+.collector-history-period-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto 16px; align-items: center; gap: 5px 12px; padding: 16px; min-height: 72px; list-style: none; cursor: pointer; }
+.collector-history-period-summary::-webkit-details-marker { display: none; }
+.collector-history-period-summary::after { content: "+"; grid-column: 3; grid-row: 1; font-size: 18px; color: var(--text-secondary); text-align: center; }
+.collector-history-period[open] > .collector-history-period-summary::after { content: "−"; }
+.collector-history-period-title { display: grid; gap: 4px; min-width: 0; }
+.collector-history-period-title strong { color: var(--text-primary); font-size: 14px; }
+.collector-history-period-title small, .collector-history-period-counts { color: var(--text-secondary); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.collector-history-period-total { color: var(--text-primary); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.collector-history-period-counts { grid-column: 1 / -1; }
+.collector-history-period-alerts { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 10px; }
+.collector-history-period-body { border-top: 1px solid var(--border-subtle); padding: 0 16px 16px; min-width: 0; }
+.collector-history-period-body > .hint { margin: 14px 0; }
+.collector-history-page-count { display: block; margin-top: 12px; color: var(--text-secondary); font-size: 11px; }
+.collector-history-more { min-height: 44px; margin-top: 10px; font-size: 12px; }
+.collector-history-page-error { color: var(--warning-strong); font-size: 12px; line-height: 1.7; }
+.collector-history-source-note { margin: 13px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+@media (max-width: 720px) { .collector-history-period-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } .collector-history-period-toolbar > :first-child { grid-column: 1 / -1; } .collector-history-period-toolbar > button { grid-column: 1 / -1; } .collector-history-quick-periods > span { flex-basis: 100%; margin-left: 0; } .collector-history-period-summary { padding: 13px; } .collector-history-period-alerts { padding: 0 13px 10px; } .collector-history-period-body { padding: 0 13px 13px; } .collector-history-filters > :nth-child(2) { grid-column: 1 / -1; grid-row: 2; } }
 .collector-history-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px 14px; padding: 15px 0; border-bottom: 1px solid var(--border-subtle); }
 .collector-history-row:last-child { border-bottom: 0; }
 .collector-history-row strong { color: var(--text-primary); font-size: 13px; }

@@ -150,6 +150,30 @@
     return "review";
   }
   function filterHistory(rows, filters) { return rows.filter(row => { const stamp = Date.parse(row.stamp) || Number(row.stamp), group = historyGroup(row); return (filters.worker === "all" || row.workerKey === filters.worker) && (!filters.keyword || String(row.keyword || "").toLowerCase().includes(filters.keyword.toLowerCase())) && (!filters.date || Number.isFinite(stamp) && todayKst(stamp) === filters.date) && (filters.state === "all" || (filters.state === "attention" ? ["failed", "partial", "review"].includes(group) : group === filters.state)); }); }
+  function defaultHistoryQuery(now = Date.now()) { const today = todayKst(now); return { from: `${today.slice(0, 4)}-01-01`, to: today, groupBy: "month", worker: "all", keyword: "", state: "all" }; }
+  function historyQuery(values, now = Date.now()) {
+    const query = { ...defaultHistoryQuery(now), ...values };
+    if (!validDay(query.from) || !validDay(query.to) || query.from < "2000-01-01" || query.to > "2099-12-31" || query.from > query.to) throw new Error("조회 시작일과 종료일을 2000~2099년의 올바른 날짜로 입력하세요. 시작일은 종료일보다 늦을 수 없습니다.");
+    if ((Date.parse(query.to) - Date.parse(query.from)) / 86400000 > 3660) throw new Error("한 번에 조회할 기간은 3,660일 이내로 선택하세요.");
+    if (!["year", "month", "week", "day"].includes(query.groupBy) || !["all", "web", "manual", "scheduled"].includes(query.worker) || !["all", "pending", "complete", "failed", "partial", "review", "attention"].includes(query.state)) throw new Error("기간 보기와 검색 조건을 다시 선택하세요.");
+    query.keyword = String(query.keyword || "").normalize("NFKC").trim();
+    if (query.keyword.length > 160 || /[\x00-\x1f\x7f]/.test(query.keyword)) throw new Error("검색어는 160자 이내로 입력하세요.");
+    return query;
+  }
+  function historyQueryKey(query) { return JSON.stringify([query.from, query.to, query.groupBy, query.worker, query.keyword, query.state]); }
+  function historyOutcomeLabel(entry) {
+    const state = entry.state || historyGroup(entry);
+    if (state === "pending") return entry.dateBasis === "scheduled" && !entry.startedAt ? "미실행 · 예약 기록" : "기록상 진행·대기";
+    if (state === "review") return reviewRequired(entry) || entry.errorCode === "COLLECTION_SCOPE_REVIEW" && !entry.runId ? "재수집 검토 필요 · 미실행" : "검토 필요";
+    if (state === "partial") return "일부 완료";
+    if (state === "failed" && !["failed", "blocked", "interrupted", "missed", "cancelled", "canceled"].includes(entry.status)) return "실패 · 결과 검증 확인";
+    return entry.recovery && entry.status === "complete" ? "복구 완료" : outcomeLabel(entry);
+  }
+  function historyUrl(query, groupKey, offset = 0) {
+    const params = new URLSearchParams(query);
+    if (groupKey !== undefined) { params.set("groupKey", groupKey); params.set("offset", String(offset)); params.set("limit", "50"); }
+    return `/api/collection-history?${params.toString()}`;
+  }
   function etaRange(seconds) {
     if (!Number.isFinite(seconds) || seconds <= 0) return "응답 확인 중";
     if (seconds < 60) { const low = Math.max(10, Math.floor(seconds * .8 / 10) * 10), high = Math.max(low, Math.ceil(seconds * 1.2 / 10) * 10); return low === high ? `약 ${low}초` : `약 ${low}~${high}초`; }
@@ -232,7 +256,7 @@
     if (dates.length > 2 && dates.every((date, index) => index === 0 || Date.parse(date) - Date.parse(dates[index - 1]) === 86400000)) return `${dates[0]} ~ ${dates.at(-1)} (${dates.length}일)`;
     return dates.join(", ");
   }
-  if (typeof module !== "undefined" && module.exports) module.exports = { workerKey, workerLabel, keywordLines, duplicateKeywordCount, scheduleConfig, keywordSchedule, formatTime, workerState, workerQueueCount, workerAvailability, durationLabel, errorMessage, STATUS_LABELS, normalizeDayUse, collectionDates, defaultDraft, reservationSummary, historyEntries, filterHistory, etaRange, progressModel, qualityReason, diagnosticMetrics, diagnosticDates };
+  if (typeof module !== "undefined" && module.exports) module.exports = { workerKey, workerLabel, keywordLines, duplicateKeywordCount, scheduleConfig, keywordSchedule, formatTime, workerState, workerQueueCount, workerAvailability, durationLabel, errorMessage, STATUS_LABELS, normalizeDayUse, collectionDates, defaultDraft, reservationSummary, historyEntries, filterHistory, defaultHistoryQuery, historyQuery, historyQueryKey, historyUrl, historyOutcomeLabel, etaRange, progressModel, qualityReason, diagnosticMetrics, diagnosticDates };
   if (typeof document === "undefined") return;
   // Reuse the same stored-only diagnosis in history and the archive. Opening it never starts collection.
   const diagnosticCache = new Map(), diagnosticOpen = new Map();
@@ -328,6 +352,26 @@
   try { drafts = JSON.parse(window.localStorage.getItem(storageKey) || "{}"); } catch { /* Drafts remain in memory when local storage is unavailable. */ }
   if (!drafts || typeof drafts !== "object" || Array.isArray(drafts)) drafts = {};
   const historyOpenKey = "staydatalab:collector-history-open:v1";
+  const historyViewKey = "staydatalab:collector-history-periods:v1";
+  const historyChoices = new Map(), historyPages = new Map(), historyPending = new Map(), historyGroupNodes = new Map();
+  let historyApplied = defaultHistoryQuery(), historyData = null, historyDataQuery = null, historySequence = 0, historyDataVersion = 0, historyError = "";
+  try {
+    const savedView = JSON.parse(window.localStorage.getItem(historyViewKey) || "null");
+    if (savedView && typeof savedView === "object" && !Array.isArray(savedView)) {
+      historyApplied = historyQuery(savedView.query || {});
+      if (Array.isArray(savedView.expanded)) for (const [key, open] of savedView.expanded.slice(-200)) if (typeof key === "string" && key.length < 250 && typeof open === "boolean") historyChoices.set(key, open);
+    }
+  } catch { /* Invalid or unavailable preferences start with this year's monthly view. */ }
+  function persistHistoryView() {
+    while (historyChoices.size > 200) historyChoices.delete(historyChoices.keys().next().value);
+    const query = historyDataQuery || historyApplied;
+    try { window.localStorage.setItem(historyViewKey, JSON.stringify({ query: { from: query.from, to: query.to, groupBy: query.groupBy }, expanded: [...historyChoices] })); } catch { /* Display choices remain in memory. No raw records are written to browser storage. */ }
+  }
+  const historyFieldIds = { from: "collectorHistoryFrom", to: "collectorHistoryTo", groupBy: "collectorHistoryGroupBy", worker: "collectorHistoryWorker", keyword: "collectorHistoryKeyword", state: "collectorHistoryState" };
+  function fillHistoryQuery(query) { for (const [name, id] of Object.entries(historyFieldIds)) byId(id).value = query[name]; }
+  function readHistoryQuery() { return historyQuery(Object.fromEntries(Object.entries(historyFieldIds).map(([name, id]) => [name, byId(id).value]))); }
+  function historyNotice(message, tone = "") { const note = byId("collectorHistoryQueryNotice"); note.hidden = !message; note.textContent = message || ""; note.dataset.tone = tone; }
+  fillHistoryQuery(historyApplied);
   const historyContent = byId("collectorHistoryContent"), historyToggle = byId("collectorHistoryToggle");
   function setHistoryOpen(open, remember = true) {
     historyContent.hidden = !open;
@@ -340,12 +384,13 @@
   try { historyInitiallyOpen = window.localStorage.getItem(historyOpenKey) === "true"; } catch { /* Start folded when browser storage is unavailable. */ }
   setHistoryOpen(historyInitiallyOpen, false);
   historyToggle.addEventListener("click", () => setHistoryOpen(historyContent.hidden));
-  function showHistoryGroup(group) {
-    byId("collectorHistoryWorker").value = "all";
-    byId("collectorHistoryKeyword").value = "";
-    byId("collectorHistoryDate").value = "";
-    byId("collectorHistoryState").value = group;
-    setHistoryOpen(true); renderHistory(); byId("collectorHistoryState").focus();
+  async function showHistoryGroup(state) {
+    fillHistoryQuery({ ...historyApplied, worker: "all", keyword: "", state });
+    setHistoryOpen(true);
+    if (!await applyHistoryQuery()) return;
+    const group = historyData?.groups?.find(item => item.counts?.[state] > 0);
+    if (group) openHistoryPeriod(group.key);
+    byId("collectorHistoryState").focus?.();
   }
   for (const [id, group] of [["collectorHistoryFailed", "failed"], ["collectorHistoryPartial", "partial"], ["collectorHistoryReview", "review"]]) byId(id).addEventListener("click", () => showHistoryGroup(group));
   function node(tag, text = "", className = "") { const el = document.createElement(tag); el.textContent = text; if (className) el.className = className; return el; }
@@ -603,39 +648,153 @@
     saveDraft(card); await refresh();
   }
   async function action(card, operation) { if (card.busy || !admin()) return; if (retirement(card).retired) { notice(card, retirement(card).reason); return; } card.busy = true; syncCard(card); try { await operation(); } catch (error) { notice(card, error.message, "error"); } finally { card.busy = false; syncCard(card); } }
-  function renderHistory() {
-    const rows = historyEntries(requests, schedules), filters = { worker: byId("collectorHistoryWorker").value || "all", keyword: byId("collectorHistoryKeyword").value.trim(), date: byId("collectorHistoryDate").value, state: byId("collectorHistoryState").value || "all" };
-    const filtered = filterHistory(rows, filters), container = byId("collectorUnifiedHistory"); container.replaceChildren();
-    byId("collectorHistoryCount").textContent = `최근 기록 ${rows.length}건`;
-    byId("collectorHistoryFilteredCount").textContent = filtered.length > 50 ? `검색 결과 ${filtered.length}건 · 최근 50건 표시` : `검색 결과 ${filtered.length}건`;
-    const latest = rows.find(row => historyGroup(row) !== "pending"), latestLabel = latest && historyGroup(latest) === "partial" ? "일부 완료" : latest ? outcomeLabel(latest) : "";
-    byId("collectorHistoryLatest").textContent = latest ? `최근 결과 · ${latest.keyword || "키워드 미확인"} · ${latestLabel} · ${formatTime(latest.finishedAt || latest.stamp)}` : rows.length ? "진행 중인 작업은 워커 카드에서 확인하세요." : "표시할 수집 기록이 없습니다.";
-    for (const [id, group, label] of [["collectorHistoryFailed", "failed", "실패·중단"], ["collectorHistoryPartial", "partial", "일부 완료"], ["collectorHistoryReview", "review", "검토 필요"]]) {
-      const badge = byId(id), count = rows.filter(row => historyGroup(row) === group).length;
-      badge.hidden = count === 0; badge.textContent = `${label} ${count}건`;
-      badge.setAttribute("aria-label", `${label} ${count}건 수집 기록 펼쳐 보기`);
-    }
-    const readError = byId("collectorHistoryReadError"); readError.hidden = !requestsReadError && !scheduleReadErrors.length;
-    readError.textContent = readError.hidden ? "" : "일부 기록 확인 불가 · 마지막 조회 자료가 포함될 수 있습니다. 상태를 새로고침하세요.";
-    if (requestsReadError) container.append(node("p", "일부 즉시수집 기록을 읽지 못했습니다. 상태를 새로고침하세요.", "collector-control-status"));
-    if (!filtered.length) container.append(node("p", "조건에 맞는 수집 기록이 없습니다.", "hint"));
-    for (const entry of filtered.slice(0, 50)) {
+  function renderHistoryRow(entry) {
       const row = node("article", "", "collector-history-row"), info = node("div");
-      info.append(node("strong", entry.keyword || "키워드 확인 중"), node("small", `${workerLabel(entry.workerKey)} · ${entry.trigger === "scheduled" ? "예약" : "즉시"} · ${formatTime(entry.stamp)}${durationLabel(entry) ? ` · ${durationLabel(entry)}` : ""}`));
+      const workerName = WORKER_KEYS.includes(entry.workerKey) ? workerLabel(entry.workerKey) : "수집기 미확인";
+      const source = entry.source === "outputs" || entry.trigger === "saved_result" ? "저장 결과" : entry.trigger === "scheduled" ? "예약" : entry.trigger === "manual" ? "즉시" : "수집 기록";
+      const basis = entry.dateBasisLabel || { execution: "실행일", received: "접수일", scheduled: "예정일", saved: "저장일", unknown: "시각 미확인" }[entry.dateBasis] || "기록일";
+      const stamp = entry.dateBasis === "unknown" ? "시각 미확인" : `${basis} ${formatTime(entry.stamp)}`;
+      const label = historyOutcomeLabel(entry);
+      const elapsed = entry.durationMs != null || entry.startedAt && entry.finishedAt ? durationLabel(entry) : "";
+      info.append(node("strong", entry.keyword || "키워드 확인 중"), node("small", `${workerName} · ${source} · ${stamp}${elapsed ? ` · ${elapsed}` : ""}`));
+      const conditions = entry.conditions || {};
+      if (conditions.checkIn) info.append(node("small", `조회 숙박일 ${conditions.checkIn}${conditions.checkOut && conditions.checkOut !== conditions.checkIn ? ` ~ ${conditions.checkOut}` : ""}${conditions.bookingRangeDays || conditions.bookingDays ? ` · ${conditions.bookingRangeDays || conditions.bookingDays}일` : ""}`));
       const reason = qualityReason(entry.collectionQuality);
       if (reason) info.append(node("small", reason, "collector-worker-alert"));
       if (entry.errorCode) info.append(node("small", errorMessage(entry.brokerErrorCode || entry.errorCode), "collector-worker-alert"));
       if (entry.recovery) info.append(node("small", "보존 자료 복구 완료 · 업체 DB 반영"));
-      row.append(info, node("span", entry.recovery && entry.status === "complete" ? "복구 완료" : historyGroup(entry) === "partial" ? "일부 완료" : outcomeLabel(entry), "state-badge"));
+      row.append(info, node("span", label, "state-badge"));
       if (entry.runId) row.append(resultButton(entry.runId));
       if (!reviewRequired(entry) && (entry.runId || ["partial", "failed", "blocked", "interrupted"].includes(entry.status))) row.append(diagnosticCard(entry.runId || "", entry.collectionQuality || { status: entry.status }, `history:${entry.requestId || entry.keyword}`));
-      container.append(row);
-    }
+      return row;
+  }
+  function renderWorkerLastResults() {
+    const rows = historyEntries(requests, schedules);
     for (const card of cards.values()) {
       card.lastResult.replaceChildren(); const last = rows.find(row => row.workerKey === card.key && row.runId);
       if (last) { const label = node("small", `최근 결과 · ${last.keyword}`); label.title = last.keyword || ""; card.lastResult.append(label, resultButton(last.runId)); }
       else card.lastResult.append(node("small", requestsReadError ? "최근 결과를 확인하지 못했습니다." : "아직 표시할 수집 결과가 없습니다."));
     }
+  }
+  function periodChoiceKey(query, key) { return `${query.groupBy}:${key}`; }
+  function periodPageKey(query, key) { return `${historyQueryKey(query)}:${key}`; }
+  function historyRead(url, generation = "") {
+    const key = generation ? `${url}#${generation}` : url;
+    if (historyPending.has(key)) return historyPending.get(key);
+    const pending = api(url).finally(() => { if (historyPending.get(key) === pending) historyPending.delete(key); });
+    historyPending.set(key, pending); return pending;
+  }
+  function periodCounts(counts = {}) {
+    return [["complete", "완료"], ["partial", "일부 완료"], ["failed", "실패·중단"], ["review", "검토"], ["pending", "진행·대기 기록"]].map(([key, label]) => `${label} ${Number(counts[key]) || 0}건`).join(" · ");
+  }
+  function renderPeriodRows(group, target, query) {
+    const page = historyPages.get(periodPageKey(query, group.key)); target.replaceChildren();
+    if (page?.rows) for (const entry of page.rows) target.append(renderHistoryRow(entry));
+    if (page?.error) target.append(node("p", page.rows ? "기간 기록을 갱신하지 못했습니다. 마지막 조회 결과를 유지합니다." : page.error, "collector-history-page-error"));
+    if (page?.loading && !page.rows) target.append(node("p", "기간 기록을 불러오고 있습니다.", "hint"));
+    if (!page) target.append(node("p", "펼치면 이 기간의 기록을 불러옵니다.", "hint"));
+    if (page?.rows && !page.rows.length) target.append(node("p", "조건에 맞는 수집 기록이 없습니다.", "hint"));
+    if (page?.rows) target.append(node("small", `${page.rows.length} / ${page.totalRows}건 표시`, "collector-history-page-count"));
+    if (page?.error || page?.hasMore || page?.loading) {
+      const action = node("button", page.loading ? "기록 확인 중" : page.error ? "다시 확인" : "더 보기 · 50건씩", "secondary-button collector-history-more"); action.type = "button"; action.disabled = Boolean(page.loading);
+      action.addEventListener("click", () => loadHistoryPeriod(group, query, page.error ? page.failedOffset || 0 : page.nextOffset || 0)); target.append(action);
+    }
+  }
+  async function loadHistoryPeriod(group, query, offset = 0) {
+    if (!admin()) return;
+    const key = periodPageKey(query, group.key), current = historyPages.get(key), version = historyDataVersion;
+    if (current?.loading && current.loadingVersion === version) return current.pending;
+    const page = current?.loading ? { rows: current.rows, totalRows: current.totalRows, hasMore: current.hasMore, nextOffset: current.nextOffset } : current || {};
+    page.loading = true; page.loadingVersion = version; page.error = ""; historyPages.set(key, page);
+    const mounted = historyGroupNodes.get(group.key); if (mounted && historyQueryKey(query) === historyQueryKey(historyDataQuery)) renderPeriodRows(group, mounted.body, query);
+    const pending = (async () => {
+      try {
+        const result = await historyRead(historyUrl(query, group.key, offset), `period:${version}`);
+        if (!admin() || version !== historyDataVersion || !historyDataQuery || historyQueryKey(query) !== historyQueryKey(historyDataQuery)) return;
+        if (!Array.isArray(result.rows) || result.offset !== offset || result.groupBy !== query.groupBy) throw new Error("기간 기록의 조회 조건이 일치하지 않습니다.");
+        page.rows = offset === 0 ? result.rows : [...(page.rows || []), ...result.rows];
+        page.totalRows = result.totalRows; page.hasMore = result.hasMore === true; page.nextOffset = result.nextOffset; page.version = version; page.error = "";
+      } catch (error) {
+        if (admin() && version === historyDataVersion && historyDataQuery && historyQueryKey(query) === historyQueryKey(historyDataQuery)) { page.error = "기간 기록을 불러오지 못했습니다. 다시 확인해 주세요."; page.failedOffset = offset; }
+      } finally {
+        page.loading = false; page.pending = null;
+        const active = historyGroupNodes.get(group.key); if (admin() && version === historyDataVersion && active && historyDataQuery && historyQueryKey(query) === historyQueryKey(historyDataQuery)) renderPeriodRows(group, active.body, query);
+      }
+    })(); page.pending = pending; return pending;
+  }
+  function openHistoryPeriod(key) {
+    const mounted = historyGroupNodes.get(key); if (!mounted || !historyDataQuery) return;
+    mounted.details.open = true; mounted.summary.setAttribute("aria-expanded", "true");
+    historyChoices.set(periodChoiceKey(historyDataQuery, key), true); persistHistoryView();
+    mounted.details.scrollIntoView?.({ block: "nearest", behavior: "smooth" }); return loadHistoryPeriod(mounted.group, historyDataQuery);
+  }
+  function renderHistoryStatus() {
+    const readError = byId("collectorHistoryReadError");
+    const warnings = historyData?.warnings || [];
+    readError.hidden = !historyError && !warnings.length;
+    readError.textContent = historyError || (warnings.length ? `저장 기록 확인 · ${warnings.map(item => `${item.label}${Number(item.count) > 0 ? ` (${item.count}건)` : ""}`).join(" · ")}` : "");
+  }
+  function renderHistory() {
+    renderHistoryStatus();
+    if (!historyData || !historyDataQuery) {
+      if (historyError) byId("collectorUnifiedHistory").replaceChildren(node("p", "수집 기록을 읽지 못했습니다. 상태를 새로고침하거나 다시 검색하세요.", "hint"));
+      return;
+    }
+    const data = historyData, query = historyDataQuery, container = byId("collectorUnifiedHistory"), latest = data.summary.latestTerminal;
+    byId("collectorHistoryCount").textContent = `기간 기록 ${data.summary.total}건`;
+    byId("collectorHistoryLatest").textContent = latest ? `최근 결과 · ${latest.keyword || "키워드 미확인"} · ${historyOutcomeLabel(latest)} · ${latest.finishedAt ? "종료" : latest.dateBasisLabel || "기록일"} ${formatTime(latest.finishedAt || latest.stamp)}` : data.summary.total ? "종료 결과 없음 · 현재 진행 여부는 워커 카드에서 확인하세요." : "이 기간에는 표시할 수집 기록이 없습니다.";
+    for (const [id, state, label] of [["collectorHistoryFailed", "failed", "실패·중단"], ["collectorHistoryPartial", "partial", "일부 완료"], ["collectorHistoryReview", "review", "검토 필요"]]) {
+      const badge = byId(id), count = Number(data.summary.counts?.[state]) || 0; badge.hidden = count === 0; badge.textContent = `${label} ${count}건`; badge.setAttribute("aria-label", `${label} ${count}건 수집 기록 펼쳐 보기`);
+    }
+    const unit = { year: "연도", month: "월간", week: "주간", day: "일간" }[query.groupBy];
+    byId("collectorHistoryFilteredCount").textContent = `${data.from} ~ ${data.to} · ${unit} · ${data.groups.length}개 기간 · 검색 결과 ${data.summary.total}건${data.from !== query.from || data.to !== query.to ? " · 주간은 월요일~일요일로 확장" : ""}`;
+    byId("collectorHistorySources").textContent = `즉시·예약 실행 기록과 저장 결과를 함께 조회합니다. 저장일만 확인되는 기록은 따로 표시합니다.${Number(data.summary.unknownDateCount) > 0 ? ` 시각 미확인 ${data.summary.unknownDateCount}건은 기간 집계에서 제외되었습니다.` : ""}`;
+    container.replaceChildren(); historyGroupNodes.clear();
+    if (!data.groups.length) container.append(node("p", "조건에 맞는 수집 기록이 없습니다.", "hint"));
+    for (const group of data.groups) {
+      const details = node("details", "", "collector-history-period"), summary = node("summary", "", "collector-history-period-summary"), title = node("span", "", "collector-history-period-title"), body = node("div", "", "collector-history-period-body");
+      details.dataset.groupKey = group.key; title.append(node("strong", group.label), node("small", `${group.startDate} ~ ${group.endDate}`));
+      summary.append(title, node("b", `${group.count}건`, "collector-history-period-total"), node("small", periodCounts(group.counts), "collector-history-period-counts"));
+      const open = historyChoices.get(periodChoiceKey(query, group.key)) === true; details.open = open; summary.setAttribute("aria-expanded", String(open)); details.append(summary);
+      const alerts = node("div", "", "collector-history-period-alerts");
+      for (const [state, label, tone] of [["failed", "실패·중단", "danger"], ["partial", "일부 완료", "warning"], ["review", "검토 필요", "review"]]) if (Number(group.counts?.[state]) > 0) {
+        const action = node("button", `${label} ${group.counts[state]}건 보기`, "collector-history-alert"); action.type = "button"; action.dataset.tone = tone;
+        action.addEventListener("click", async () => { fillHistoryQuery({ ...query, state }); historyChoices.set(periodChoiceKey(query, group.key), true); if (await applyHistoryQuery()) openHistoryPeriod(group.key); }); alerts.append(action);
+      }
+      if (alerts.children.length) details.append(alerts); details.append(body); container.append(details); historyGroupNodes.set(group.key, { details, summary, body, group });
+      renderPeriodRows(group, body, query);
+      details.addEventListener("toggle", () => {
+        if (!admin() || historyGroupNodes.get(group.key)?.details !== details || !historyDataQuery || historyQueryKey(query) !== historyQueryKey(historyDataQuery)) return;
+        summary.setAttribute("aria-expanded", String(details.open)); historyChoices.set(periodChoiceKey(query, group.key), details.open); persistHistoryView();
+        if (details.open) { const page = historyPages.get(periodPageKey(query, group.key)); if (!page?.rows || page.version !== historyDataVersion) return loadHistoryPeriod(group, query); }
+      });
+      if (open) { const page = historyPages.get(periodPageKey(query, group.key)); if (!page?.rows || page.version !== historyDataVersion) loadHistoryPeriod(group, query); }
+    }
+  }
+  async function loadHistory(query = historyApplied) {
+    if (!admin()) return;
+    const url = historyUrl(query);
+    const sequence = ++historySequence; historyNotice("기간 기록을 확인하고 있습니다.");
+    try {
+      const result = await historyRead(url);
+      if (!admin() || sequence !== historySequence || historyQueryKey(query) !== historyQueryKey(historyApplied)) return false;
+      if (!Array.isArray(result.groups) || !result.summary || result.groupBy !== query.groupBy) throw new Error("기간 기록의 조회 조건이 일치하지 않습니다.");
+      const queryChanged = !historyDataQuery || historyQueryKey(query) !== historyQueryKey(historyDataQuery);
+      const changed = queryChanged || JSON.stringify([historyData?.summary, historyData?.groups, historyData?.warnings]) !== JSON.stringify([result.summary, result.groups, result.warnings]);
+      historyData = result; historyDataQuery = { ...query }; historyError = ""; persistHistoryView();
+      if (queryChanged) for (const key of historyPages.keys()) if (!key.startsWith(`${historyQueryKey(query)}:`)) historyPages.delete(key);
+      if (changed) { historyDataVersion++; renderHistory(); } else renderHistoryStatus();
+      historyNotice(""); return true;
+    } catch (error) {
+      if (!admin() || sequence !== historySequence) return false;
+      historyError = "기간 기록을 불러오지 못했습니다. 마지막 정상 조회 결과를 유지합니다. 다시 검색해 주세요.";
+      if (!historyData) renderHistory(); else renderHistoryStatus(); historyNotice(historyError, "warning"); return false;
+    }
+  }
+  async function applyHistoryQuery() {
+    if (!admin()) return;
+    let query; try { query = readHistoryQuery(); } catch (error) { historyNotice(`${error.message} 이전 조회 결과를 유지합니다.`, "warning"); return false; }
+    historyApplied = query; return loadHistory(query);
   }
   async function refresh() {
     if (!admin()) return; if (refreshInFlight) return refreshInFlight;
@@ -655,12 +814,16 @@
           card.loaded = true;
         } else { scheduleReadErrors.push(key); schedules[key] = null; notice(card, "예약 상태를 읽지 못했습니다. 즉시수집과 연결 상태는 별도로 확인합니다.", "error"); }
       }
-      loaded = true; renderWorkers(); renderHistory();
+      loaded = true; renderWorkers(); renderWorkerLastResults(); await loadHistory();
     })().finally(() => { refreshInFlight = null; }); return refreshInFlight;
   }
   byId("collectorWorkerStates").replaceChildren(...WORKER_KEYS.map(makeCard));
   syncLegacyAvailability(false);
-  for (const id of ["collectorHistoryWorker", "collectorHistoryKeyword", "collectorHistoryDate", "collectorHistoryState"]) byId(id).addEventListener(id === "collectorHistoryKeyword" ? "input" : "change", renderHistory);
+  byId("collectorHistoryForm").addEventListener("submit", event => { event.preventDefault(); return applyHistoryQuery(); });
+  byId("collectorHistoryGroupBy").addEventListener("change", () => applyHistoryQuery());
+  for (const [id, month] of [["collectorHistoryThisYear", false], ["collectorHistoryThisMonth", true]]) byId(id).addEventListener("click", () => {
+    const today = todayKst(); byId("collectorHistoryFrom").value = month ? `${today.slice(0, 7)}-01` : `${today.slice(0, 4)}-01-01`; byId("collectorHistoryTo").value = today; return applyHistoryQuery();
+  });
   byId("collectorRefresh").addEventListener("click", () => refresh());
   byId("crawlWorkerKey")?.addEventListener("change", syncLegacyAvailability);
   byId("crawlAllowRepeat")?.addEventListener("change", event => { byId("crawlRepeatReason").disabled = !event.target.checked; byId("crawlRepeatReason").required = event.target.checked; });
@@ -671,7 +834,17 @@
     fill(card, { keywords: input.keyword || "", searchMode: input.searchMode === "company" ? "company" : "keyword", period: "custom", checkIn: input.checkIn, checkOut: input.bookingRangeDays === 1 ? input.checkIn : input.checkOut, purpose: input.collectionPurpose || "revenue_detail", ranks: input.detailRankRanges || "1-20", dayUseMode: input.dayUseMode || "inspect", execution: "now" });
     card.root.open = true; card.root.scrollIntoView({ block: "start", behavior: "smooth" }); saveDraft(card);
   });
-  const observer = new MutationObserver(() => { renderProgress(); if (admin() && !loaded) refresh(); }); observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+  let wasAdmin = admin();
+  const observer = new MutationObserver(() => {
+    const isAdmin = admin();
+    if (wasAdmin && !isAdmin) {
+      historySequence++; historyDataVersion++; historyData = null; historyDataQuery = null; historyPages.clear(); historyGroupNodes.clear(); historyPending.clear(); loaded = false;
+      byId("collectorUnifiedHistory").replaceChildren(); byId("collectorHistoryLatest").textContent = "관리자 연결을 확인하세요."; byId("collectorHistoryCount").textContent = "기간 기록 확인 전";
+      byId("collectorHistoryFilteredCount").textContent = ""; byId("collectorHistorySources").textContent = ""; byId("collectorHistoryReadError").hidden = true; historyNotice("");
+      for (const id of ["collectorHistoryFailed", "collectorHistoryPartial", "collectorHistoryReview"]) byId(id).hidden = true;
+    }
+    wasAdmin = isAdmin; renderProgress(); if (isAdmin && !loaded) refresh();
+  }); observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
   const section = panel.closest("[data-admin-section-panel]"); if (section) observer.observe(section, { attributes: true, attributeFilter: ["class"] });
   document.addEventListener("visibilitychange", () => { if (admin() && !document.hidden) refresh(); });
   window.addEventListener("pagehide", () => observer.disconnect(), { once: true });
