@@ -48,4 +48,18 @@
 
 실제 로컬 서버에서 PC 1280px·모바일 390px, 라이트·다크를 확인했다. 전환 카드의 사용 가능한 입력은 0개, 이력 버튼은 44px이며 문서 가로 넘침이 없다. ‘수집 이력 보기’는 과거 scheduled 이력 필터로 이동한다. 로컬 서버는 실제 수집·외부 통신을 차단한 모의 자료를 사용했다.
 
-증빙은 `C:/Users/User/.codex/visualizations/2026/10/12/staydatalab-insight-server-conversion/`의 `production-before.json`, `candidate-before.json`, `local-ui-checks.json`, 화면 이미지다. 새 0923 서버의 인사이트 인증키 설정과 실제 운영 배포·중앙 인증 검수는 다음 단계이며, 확인된 결과를 별도로 기록한다.
+증빙은 `C:/Users/User/.codex/visualizations/2026/10/12/staydatalab-insight-server-conversion/`에 저장한다.
+
+## 2026-10-13 운영 전환
+
+중앙 웹은 검증 커밋 `07386220a260f5d63924101808eb8afdd78a8220`을 배포했다. 배포 `dep-db6nns6k1f9s73aqhkb0`은 한국시간 09:32:51 Live이며 Node 24.21.0이다. 배포 후 원본·업체 DB·예약 설정 파일 해시는 이전과 같고, 세 수집기 진행·대기는 0이며 예약은 모두 비활성이다. `manual`과 `web`은 유지, `scheduled`만 전환 상태다. 운영 카드의 라이트·다크와 과거 결과 표시를 확인했다.
+
+0923은 같은 커밋의 `dep-db6nqad9fdbs73dkgt40`을 09:38:27 Live로 전환했다. 시작 명령은 `node customer-portal/connected-server.cjs`, health 경로는 `/api/health`다. `https://sa-labs-datalab-v4-preview.onrender.com/api/health`의 connected 상태와 고객 config API 200으로 중앙 연결키를 검증했다. 계정과 자료는 중앙 저장소를 그대로 사용한다. 기존 무료 인사이트와 BG 실행 서비스는 배포하지 않았다.
+
+첫 인사이트 배포에는 이전 서비스의 `NODE_VERSION=26.5.0` 설정이 남아 있었다. 해당 비밀이 아닌 설정을 제거했으며, 다음 인사이트 배포에서는 package engines에 맞는 Node 24 계열을 확인해야 한다.
+
+### 공개 주소 별칭
+
+인사이트에만 `INSIGHT_PUBLIC_ORIGINS`를 추가한다. 쉼표 또는 줄바꿈으로 명시한 공개 주소만 대표 주소와 함께 허용하며, 접속 Host와 POST Origin은 각각 정확히 일치해야 한다. 서로 다른 허용 주소 간 POST도 거절한다. HTTPS 쿠키의 Secure·HttpOnly·SameSite 및 Host 범위는 유지한다. 관련 실제 HTTP·연결 검증 29개가 통과했다.
+
+DNS/TLS 확인 전 대표 주소는 Render 주소로 유지한다. 별칭은 `https://insight.sabun.co.kr`이며, 주소 기능 변경은 인사이트 서버에만 배포한다. 중앙 웹은 다시 배포하지 않는다. Render 포함 도메인 2개를 모두 사용 중이므로 새 도메인은 월 $0.25 추가 요금 승인 후 등록한다. 고객 화면 로그인 검수와 Cloudflare DNS/TLS는 사용자 로그인 및 비용 승인 뒤 완료한다. 실제 네이버 수집은 이 전환 검수에서 실행하지 않는다.

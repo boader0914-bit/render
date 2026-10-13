@@ -4,17 +4,33 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { body, json } = require('../scripts/lib/insight_http.cjs');
 const { fault } = require('../scripts/lib/insight_store.cjs');
+function validatedOrigin(value) {
+  const u = new URL(value);
+  if (u.username || u.password || u.pathname !== '/' || u.search || u.hash || /[?#]/.test(String(value)) || (u.protocol !== 'https:' && !(u.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(u.hostname)))) throw new Error('Insight origins require HTTPS or local development addresses');
+  return u;
+}
+function publicOrigins(origin, aliases = []) {
+  const canonical = validatedOrigin(origin);
+  const values = typeof aliases === 'string' ? aliases.split(/[,\r\n]+/).map(value => value.trim()).filter(Boolean) : aliases;
+  if (!Array.isArray(values)) throw new Error('Invalid Insight public origins');
+  return [...new Set([canonical.origin, ...values.map(value => {
+    const alias = validatedOrigin(value);
+    if (alias.protocol !== canonical.protocol) throw new Error('Insight public origins must use the canonical protocol');
+    return alias.origin;
+  })])];
+}
 function configuration(env = process.env) {
-  const origin = new URL(env.INSIGHT_PUBLIC_ORIGIN || 'http://127.0.0.1:57951');
-  const backend = new URL(env.INSIGHT_DATALAB_ORIGIN || 'http://127.0.0.1:57950');
-  for (const u of [origin, backend]) if (u.username || u.password || u.pathname !== '/' || u.search || u.hash || (u.protocol !== 'https:' && !(u.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(u.hostname)))) throw new Error('Insight origins require HTTPS or local development addresses');
+  const origin = validatedOrigin(env.INSIGHT_PUBLIC_ORIGIN || 'http://127.0.0.1:57951');
+  const backend = validatedOrigin(env.INSIGHT_DATALAB_ORIGIN || 'http://127.0.0.1:57950');
+  const origins = publicOrigins(origin.origin, env.INSIGHT_PUBLIC_ORIGINS || []);
   const serviceToken = env.INSIGHT_SERVICE_TOKEN;
   if (!serviceToken || serviceToken.length < 32) throw new Error('INSIGHT_SERVICE_TOKEN must be configured');
   const port = Number(env.PORT || origin.port || 57951);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid port');
-  return { origin: origin.origin, backend: backend.origin, serviceToken, port, host: env.RENDER ? '0.0.0.0' : '127.0.0.1' };
+  return { origin: origin.origin, origins, backend: backend.origin, serviceToken, port, host: env.RENDER ? '0.0.0.0' : '127.0.0.1' };
 }
-function createConnectedServer({ origin, backend, serviceToken, fetchImpl = fetch }) {
+function createConnectedServer({ origin, origins = [], backend, serviceToken, fetchImpl = fetch }) {
+  const trustedOrigins = new Map(publicOrigins(origin, origins).map(value => [new URL(value).host, value]));
   // Historical source recalculation can take longer than a login or command.
   // Extend only these read endpoints; collection dispatch retains its timeout.
   const readTimeout = (method, route) => method === 'GET' && /\/(?:companies\/[a-zA-Z0-9_-]+\/collection|reports\/briefing)$/.test(route) ? 180000 : 20000;
@@ -29,8 +45,10 @@ function createConnectedServer({ origin, backend, serviceToken, fetchImpl = fetc
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     res.setHeader('Referrer-Policy', 'no-referrer'); res.setHeader('X-Robots-Tag', 'noindex, nofollow');
     try {
-      const url = new URL(req.url, origin);
-      if (req.headers.host !== new URL(origin).host || url.origin !== origin) throw fault('INVALID_HOST', '올바른 인사이트 주소로 접속해 주세요.', 403);
+      const requestOrigin = trustedOrigins.get(req.headers.host);
+      if (!requestOrigin) throw fault('INVALID_HOST', '올바른 인사이트 주소로 접속해 주세요.', 403);
+      const url = new URL(req.url, requestOrigin);
+      if (url.origin !== requestOrigin) throw fault('INVALID_HOST', '올바른 인사이트 주소로 접속해 주세요.', 403);
       if (req.method === 'GET' && url.pathname === '/api/health') { json(res, 200, { status: 'ok', mode: 'connected', buildCommit: process.env.RENDER_GIT_COMMIT?.slice(0, 12) || null }); return; }
       if (url.pathname.startsWith('/api/insight-admin/v1/')) {
         const route = url.pathname.slice('/api/insight-admin/v1'.length);
@@ -38,7 +56,7 @@ function createConnectedServer({ origin, backend, serviceToken, fetchImpl = fetc
         const match = /^\/customers\/cus_[a-zA-Z0-9-]+(\/commands)?$/.exec(route);
         const regionalPreparation=/^\/customer-view\/regions\/[a-zA-Z0-9_-]+\/preparation$/.test(route)&&['GET','POST'].includes(req.method);
         if (!regionalPreparation && (methods[route] || (/^\/customer-view\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|reports\/briefing)$/.test(route) ? 'GET' : '') || (match ? (match[1] ? 'POST' : 'GET') : '')) !== req.method) throw fault('NOT_FOUND', '지원하지 않는 관리자 기능입니다.', 404);
-        if (req.method === 'POST' && req.headers.origin !== origin) throw fault('INVALID_ORIGIN', '현재 관리자 화면에서 요청해 주세요.', 403);
+        if (req.method === 'POST' && req.headers.origin !== requestOrigin) throw fault('INVALID_ORIGIN', '현재 관리자 화면에서 요청해 주세요.', 403);
         const session = String(req.headers.cookie || '').split(';').map(s => s.trim().split('=')).find(([name]) => name === adminCookieName)?.[1] || '';
         const headers = { Authorization: `Bearer ${serviceToken}`, Accept: 'application/json', 'X-Insight-Admin-Session': session, 'X-CSRF-Token': req.headers['x-csrf-token'] || '' };
         let payload;
@@ -57,7 +75,7 @@ function createConnectedServer({ origin, backend, serviceToken, fetchImpl = fetc
         const allowed = { '/config': 'GET', '/me': 'GET', '/auth/username': 'GET', '/policies/terms': 'GET', '/policies/privacy': 'GET', '/auth/login': 'POST', '/auth/signup': 'POST', '/auth/logout': 'POST', '/commands': 'POST', '/catalog/companies': 'GET', '/catalog/regions': 'GET' };
         const regionalPreparation=/^\/regions\/[a-zA-Z0-9_-]+\/preparation$/.test(route)&&['GET','POST'].includes(req.method);
         if (!regionalPreparation && (allowed[route] || (/^\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|reports\/briefing)$/.test(route) ? 'GET' : '')) !== req.method) throw fault('NOT_FOUND', '요청한 기능을 찾을 수 없습니다.', 404);
-        if (req.method === 'POST' && req.headers.origin !== origin) throw fault('INVALID_ORIGIN', '현재 인사이트 화면에서 요청해 주세요.', 403);
+        if (req.method === 'POST' && req.headers.origin !== requestOrigin) throw fault('INVALID_ORIGIN', '현재 인사이트 화면에서 요청해 주세요.', 403);
         const cookies = String(req.headers.cookie || '').split(';').map(s => s.trim().split('='));
         const session = cookies.find(([name]) => name === cookieName)?.[1] || '';
         const headers = { Authorization: `Bearer ${serviceToken}`, Accept: 'application/json', 'X-Insight-Session': session, 'X-CSRF-Token': req.headers['x-csrf-token'] || '' };
