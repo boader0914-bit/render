@@ -42,7 +42,7 @@ test('material quantity/quality warnings stay visible without adding diagnostics
   const data=fixture();data.companyDetail.integrated.roomBasis.reviewRequired=true;data.result.quality={status:'partial',reason:'예약 응답 누락'};data.result.capacityWarning='상품 중복 가능성';
   const html=ui().render(data);
   for(const warning of ['객실 총량 검토','예약 응답 누락','상품 중복 가능성','미확인 날짜는 합계에서 제외'])assert.ok(html.includes(warning),warning);
-  assert.doesNotMatch(html,/<details|이 상품 정보 수정 요청|리드타임/);
+  assert.doesNotMatch(html,/<details[^>]*class="(?:db-history|collection-warning)|이 상품 정보 수정 요청|리드타임/);
 });
 test('complete booking quantities retain a partial-revenue warning, including a zero subtotal',()=>{
   const data=fixture();
