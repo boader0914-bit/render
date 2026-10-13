@@ -81,9 +81,12 @@ test('weekly totals default closed and expanding keeps the original public and b
   const html=w.InsightCompanyView.currentView(data),details=[...html.matchAll(/<details class="company-week-group[^>]*>/g)];
   assert.equal(details.length,3);assert.ok(details.every(match=>!(/\bopen(?:\s|=|>)/).test(match[0])));
   assert.match(html,/주간 추정 예약·매출/);assert.match(html,/숙박일별 수량 합산/);
-  assert.match(html,/week-chevron" aria-hidden="true"/);assert.match(html,/<th>공개 예약<\/th><th>방막기<\/th>/);
+  assert.match(html,/week-toggle" aria-hidden="true"><span class="week-toggle-open">\+<\/span><span class="week-toggle-close">−<\/span>/);assert.match(html,/<th>공개 예약<\/th><th>방막기<\/th>/);
   assert.match(html,/class="public-value">2실/);assert.match(html,/class="estimated-value">1실/);
-  assert.ok(html.startsWith(w.InsightCompanyFlow.daily(rows)),'the existing daily stacked bar chart is retained without changes');
+  const chart=w.InsightCompanyFlow.daily(rows);
+  assert.ok(html.includes(chart),'the existing daily stacked bar chart is retained without changes');
+  assert.ok(html.indexOf('company-month-summary')<html.indexOf(chart),'monthly totals precede the daily chart');
+  assert.ok(html.indexOf(chart)<html.indexOf('company-week-list'),'weekly details follow the daily chart');
 });
 
 test('year boundaries and leap dates retain the proper week and immutable source values',()=>{
@@ -103,4 +106,73 @@ test('currency is summed from stored values before display and missing booking c
   assert.equal(group.quantityPartial,true);
   const summary=w.InsightCompanyView.currentView(company(rows)).match(/<summary class="company-week-summary">(.*?)<\/summary>/)[1];
   assert.match(summary,/302,468원/);assert.match(summary,/일부 자료 · 예약 1\/2일 · 매출 2\/2일/);
+});
+
+test('monthly totals match deduplicated weekly totals and exclude dates outside the target month',()=>{
+  const w=ui(),range={rangeStart:'2026-10-01',rangeEnd:'2026-10-31'};
+  const rows=dates('2026-09-28','2026-11-02').map(date=>row(date));
+  rows.push(row('2026-10-03',{publicBookings:5,phoneBookings:2,estimatedRevenue:700000,publicRevenue:500000,phoneRevenue:200000}));
+  const groups=w.InsightCompanyView.weeklyGroups(rows,range),total=w.InsightCompanyView.monthTotals(rows,range);
+  assert.equal(total.wholeMonth,true);assert.equal(total.start,range.rangeStart);assert.equal(total.end,range.rangeEnd);
+  assert.equal(total.expectedDays,31);assert.equal(total.observedDays,31);assert.equal(total.priceCompleteDays,31);
+  assert.equal(total.bookings,97);assert.equal(total.publicBookings,65);assert.equal(total.phoneBookings,32);
+  assert.equal(total.estimatedRevenue,9700000);assert.equal(total.publicRevenue,6500000);assert.equal(total.phoneRevenue,3200000);
+  assert.equal(total.bookings,groups.reduce((sum,group)=>sum+group.bookings,0));
+  assert.equal(total.estimatedRevenue,groups.reduce((sum,group)=>sum+group.estimatedRevenue,0));
+  const html=w.InsightCompanyView.currentView(company(rows,range)),month=html.slice(0,html.indexOf('<div class="company-flow">'));
+  assert.match(month,/월간 추정 예약·매출/);assert.match(month,/월 예약 합계/);assert.match(month,/월 매출 합계/);
+  assert.match(month,/>97실<\/strong>/);assert.match(month,/>9,700,000원<\/strong>/);
+  assert.match(month,/현재 관측 합계/);assert.match(month,/공개 예약 \+ 방막기/);
+  assert.doesNotMatch(month,/공개 65실|방막기 32실|6,500,000원|3,200,000원|확정|마감/);
+});
+
+test('monthly quantity and price coverage are separate when the final dates have no price',()=>{
+  const w=ui(),range={rangeStart:'2026-10-01',rangeEnd:'2026-10-31'};
+  const rows=dates(range.rangeStart,range.rangeEnd).map(date=>row(date,{publicBookings:0,phoneBookings:0,estimatedRevenue:0,publicRevenue:0,phoneRevenue:0}));
+  Object.assign(rows[0],{publicBookings:1,estimatedRevenue:179000,publicRevenue:179000});
+  Object.assign(rows[29],{publicBookings:1,phoneBookings:1,estimatedRevenue:null,publicRevenue:null,phoneRevenue:null,partial:true,revenuePartial:false});
+  Object.assign(rows[30],{publicBookings:7,phoneBookings:9,estimatedRevenue:null,publicRevenue:null,phoneRevenue:null,partial:true,revenuePartial:false});
+  const total=w.InsightCompanyView.monthTotals(rows,range);
+  assert.equal(total.bookings,19);assert.equal(total.publicBookings,9);assert.equal(total.phoneBookings,10);
+  assert.equal(total.observedDays,31);assert.equal(total.revenueObservedDays,29);assert.equal(total.priceCompleteDays,29);
+  assert.equal(total.estimatedRevenue,179000);assert.equal(total.revenuePartial,true);
+  const html=w.InsightCompanyView.currentView(company(rows,range)),month=html.slice(0,html.indexOf('<div class="company-flow">'));
+  assert.match(month,/>19실<\/strong>/);assert.match(month,/>179,000원<\/strong>/);
+  assert.match(month,/예약 관측 31\/31일/);assert.match(month,/가격 확인 29\/31일/);
+  assert.match(month,/month-partial">일부 금액/);assert.match(month,/확인된 금액만 합산/);
+});
+
+test('monthly display distinguishes an observed zero from unavailable and conflicting values',()=>{
+  const w=ui(),range={rangeStart:'2026-10-01',rangeEnd:'2026-10-04'};
+  const rows=[row('2026-10-01',{publicBookings:0,phoneBookings:0,estimatedRevenue:0,publicRevenue:0,phoneRevenue:0}),row('2026-10-02',{missing:true,publicBookings:0,phoneBookings:0,estimatedRevenue:0}),row('2026-10-03',{inventoryConflict:true,publicBookings:99,phoneBookings:99,estimatedRevenue:9999999})];
+  const total=w.InsightCompanyView.monthTotals(rows,range);
+  assert.equal(total.bookings,0);assert.equal(total.estimatedRevenue,0);assert.equal(total.expectedDays,4);assert.equal(total.observedDays,1);assert.equal(total.priceCompleteDays,1);
+  const month=w.InsightCompanyView.currentView(company(rows,range)).split('<div class="company-flow">')[0];
+  assert.match(month,/>0실<\/strong>/);assert.match(month,/>0원<\/strong>/);assert.match(month,/가격 확인 1\/4일/);
+  const unknown=[row('2026-10-01',{missing:true,publicBookings:0,phoneBookings:0,estimatedRevenue:0})];
+  const unknownTotal=w.InsightCompanyView.monthTotals(unknown,range);
+  assert.equal(unknownTotal.bookings,null);assert.equal(unknownTotal.estimatedRevenue,null);
+  const unknownMonth=w.InsightCompanyView.currentView(company(unknown,range)).split('<div class="company-flow">')[0];
+  assert.equal((unknownMonth.match(/<strong>미확인<\/strong>/g)||[]).length,2);
+  assert.doesNotMatch(unknownMonth,/>0실<|>0원</);
+});
+
+test('a partial price subtotal is included but does not count as a fully available price day',()=>{
+  const w=ui(),rows=[row('2026-10-01',{estimatedRevenue:200000,revenuePartial:true}),row('2026-10-02')];
+  const total=w.InsightCompanyView.monthTotals(rows);
+  assert.equal(total.bookings,6);assert.equal(total.estimatedRevenue,500000);assert.equal(total.revenueObservedDays,2);assert.equal(total.priceCompleteDays,1);
+  const month=w.InsightCompanyView.currentView(company(rows)).split('<div class="company-flow">')[0];
+  assert.match(month,/>500,000원<\/strong>/);assert.match(month,/가격 확인 1\/2일/);assert.match(month,/일부 금액/);
+});
+
+test('short or cross-month target ranges are labelled as periods rather than whole monthly totals',()=>{
+  const w=ui(),cases=[['2026-10-10','2026-10-23'],['2026-12-28','2027-01-03']];
+  for(const [start,end] of cases){
+    const rows=dates(start,end).map(date=>row(date)),range={rangeStart:start,rangeEnd:end},total=w.InsightCompanyView.monthTotals(rows,range);
+    assert.equal(total.wholeMonth,false);
+    const month=w.InsightCompanyView.currentView(company(rows,range)).split('<div class="company-flow">')[0];
+    assert.match(month,/기간 추정 예약·매출/);assert.match(month,/기간 예약 합계/);assert.match(month,/기간 매출 합계/);
+    assert.ok(month.includes(`숙박일 ${start} ~ ${end}`));assert.match(month,/현재 관측 합계/);
+    assert.doesNotMatch(month,/월 예약 합계|월 매출 합계|월 전체|확정|마감|기간간/);
+  }
 });

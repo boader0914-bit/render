@@ -88,6 +88,33 @@
         revenuePartial:revenueObservedDays<expectedDays||revenueRows.some(row=>row.revenuePartial||row.partial)};
     });
   }
+  function monthTotals(rows=[],range={}) {
+    const groups=weeklyGroups(rows,range);
+    if(!groups.length)return null;
+    const sum=key=>{
+      const known=groups.filter(group=>numeric(group[key]));
+      return known.length?known.reduce((total,group)=>total+group[key],0):null;
+    };
+    const days=groups.flatMap(group=>group.rows),revenueRows=days.filter(row=>!row.missing&&!row.inventoryConflict&&numeric(row.estimatedRevenue));
+    const channelRevenue=key=>{
+      const known=revenueRows.filter(row=>numeric(row[key]));
+      return known.length?known.reduce((total,row)=>total+row[key],0):null;
+    };
+    const start=groups[0].start,end=groups.at(-1).end,sameMonth=start.slice(0,7)===end.slice(0,7);
+    const lastDay=new Date(Date.UTC(Number(start.slice(0,4)),Number(start.slice(5,7)),0)).toISOString().slice(0,10);
+    const wholeMonth=sameMonth&&start.endsWith('-01')&&end===lastDay;
+    return {start,end,wholeMonth,bookings:sum('bookings'),publicBookings:sum('publicBookings'),phoneBookings:sum('phoneBookings'),
+      estimatedRevenue:sum('estimatedRevenue'),publicRevenue:channelRevenue('publicRevenue'),phoneRevenue:channelRevenue('phoneRevenue'),
+      expectedDays:groups.reduce((total,group)=>total+group.expectedDays,0),observedDays:groups.reduce((total,group)=>total+group.observedDays,0),
+      revenueObservedDays:revenueRows.length,priceCompleteDays:revenueRows.filter(row=>!row.partial&&!row.revenuePartial).length,
+      quantityPartial:groups.some(group=>group.quantityPartial),revenuePartial:groups.some(group=>group.revenuePartial)};
+  }
+  function monthSummary(rows,range) {
+    const total=monthTotals(rows,range);
+    if(!total)return '';
+    const prefix=total.wholeMonth?'월':'기간',title=total.wholeMonth?'월간':'기간',month=total.start.slice(0,7)===total.end.slice(0,7)?`${Number(total.start.slice(0,4))}년 ${Number(total.start.slice(5,7))}월 · `:'';
+    return `<section class="company-month-summary"><div class="month-summary-heading"><div><h3>${title} 추정 예약·매출</h3><p>${month}현재 관측 합계</p></div><p class="month-note">숙박일 ${esc(total.start)} ~ ${esc(total.end)}</p></div><div class="month-summary-metrics"><article class="month-bookings"><span>${prefix} 예약 합계</span><strong>${observedRooms(total.bookings)}</strong><p>공개 예약 + 방막기</p></article><article class="month-revenue"><span>${prefix} 매출 합계</span><strong>${won(total.estimatedRevenue)}</strong><p>${numeric(total.estimatedRevenue)&&total.revenuePartial?'<span class="month-partial">일부 금액</span> · ':''}가격 확인 ${total.priceCompleteDays}/${total.expectedDays}일</p></article></div><p class="month-note">예약 관측 ${total.observedDays}/${total.expectedDays}일 · 숙박일별 수량 합산${total.revenuePartial?' · 매출은 확인된 금액만 합산':''}</p></section>`;
+  }
   const shortDay=value=>`${Number(value.slice(5,7))}. ${Number(value.slice(8,10))}.`;
   function weeklyTable(rows,range) {
     const groups=weeklyGroups(rows,range);
@@ -96,12 +123,12 @@
       const coverage=group.observedDays===group.revenueObservedDays?`관측 ${group.observedDays}/${group.expectedDays}일`:`예약 ${group.observedDays}/${group.expectedDays}일 · 매출 ${group.revenueObservedDays}/${group.expectedDays}일`;
       const partial=group.quantityPartial||group.revenuePartial;
       const status=!group.observedDays&&!group.revenueObservedDays?'미확인':`${group.quantityPartial?'일부 자료 · ':''}${coverage}`;
-      return `<details class="company-week-group${partial?' is-partial':''}"><summary class="company-week-summary"><span class="week-period">${shortDay(group.start)} ~ ${shortDay(group.end)}</span><span class="week-bookings"><small>예약 합계</small><strong>${observedRooms(group.bookings)}</strong></span><span class="week-revenue"><small>매출 합계</small><strong>${won(group.estimatedRevenue)}</strong>${numeric(group.estimatedRevenue)&&group.revenuePartial?'<small>일부 금액</small>':''}</span><span class="week-state">${esc(status)}</span><span class="week-chevron" aria-hidden="true">⌄</span></summary><div class="week-label-row"><h4 class="week-table-title">${shortDay(group.start)} ~ ${shortDay(group.end)} · 날짜별 내역</h4><p class="company-mobile-hint">표를 좌우로 밀어 매출을 확인하세요.</p></div>${dailyTable(group.rows)}</details>`;
+      return `<details class="company-week-group${partial?' is-partial':''}"><summary class="company-week-summary"><span class="week-period">${shortDay(group.start)} ~ ${shortDay(group.end)}</span><span class="week-bookings"><small>예약 합계</small><strong>${observedRooms(group.bookings)}</strong></span><span class="week-revenue"><small>매출 합계</small><strong>${won(group.estimatedRevenue)}</strong>${numeric(group.estimatedRevenue)&&group.revenuePartial?'<small>일부 금액</small>':''}</span><span class="week-state">${esc(status)}</span><span class="week-toggle" aria-hidden="true"><span class="week-toggle-open">+</span><span class="week-toggle-close">−</span></span></summary><div class="week-label-row"><h4 class="week-table-title">${shortDay(group.start)} ~ ${shortDay(group.end)} · 날짜별 내역</h4><p class="company-mobile-hint">표를 좌우로 밀어 매출을 확인하세요.</p></div>${dailyTable(group.rows)}</details>`;
     }).join('')}</div>`;
   }
   function currentView(data) {
     const observation=current(data),rows=observation.daily||[];
-    return (window.InsightCompanyFlow?.daily(rows)||'')+weeklyTable(rows,observation.summary||{});
+    return monthSummary(rows,observation.summary||{})+(window.InsightCompanyFlow?.daily(rows)||'')+weeklyTable(rows,observation.summary||{});
   }
   // Keep the module interface for older callers; the company page shows only current observations.
   function flowView(data,options={}) {
@@ -117,5 +144,5 @@
     const observationNote=[quantityNote(s),s?.revenuePartial?'일부 가격 미확인 · 매출은 확인된 금액만 표시':''].filter(Boolean).join(' · ');
     return `${data.previousResult?'<p class="collection-warning">최근 저장 자료입니다. 이번 수집 요청의 완료 결과는 아닙니다.</p>':''}<div class="db-reference-grid"><section class="card db-basics">${heading('A','업체 기본정보')}<h3>${esc(b.name||'등록 업체')}</h3>${b.address||b.lodgingTypes?.length?`<p class="muted">${esc(b.address)} ${esc((b.lodgingTypes||[]).join(' · '))}</p>`:''}<div class="collection-summary company-basic-summary">${metric('객실 총량',rooms(roomCount),esc(roomSource(db)))}${metric('상품 종류',(numeric(productCount)?`${n(productCount)}개`:'확인 전'))}</div>${b.facilities?`<p class="muted">${esc(b.facilities)}</p>`:''}${r?.dayUse?`<p class="muted">데이유즈 ${r.dayUse.presence==='present'?'상품 있음':r.dayUse.presence==='absent'?'상품 없음':'확인 전'}${['shared','confirmed','separate','confirmed_separate'].includes(r.dayUse.sharing)?` · ${esc({shared:'숙박과 객실 공유',confirmed:'숙박과 객실 공유',separate:'별도 객실',confirmed_separate:'별도 객실'}[r.dayUse.sharing])}`:''}</p>`:''}${basisWarning}${r?.capacityWarning?`<p class="collection-warning capacity-warning">${esc(r.capacityWarning)}</p>`:''}${qualityWarning}${r?.truncated?'<p class="collection-warning">일부 상품 자료가 남아 있지 않습니다.</p>':''}${productTable(products)}</section><section class="card db-channels">${heading('B','예약채널')}<div class="db-channel-list">${(db?.channels||[]).map(ch=>`<article><div><strong>${esc(ch.label)}</strong>${ch.statusLabel?`<small>${esc(ch.statusLabel)}</small>`:''}</div>${ch.url?`<a class="button small" href="${esc(ch.url)}" target="_blank" rel="noreferrer">열기</a>`:''}</article>`).join('')||'<p class="muted">예약채널 확인 전</p>'}</div></section>${hasObservation(data)?`<section class="card db-current"><div class="db-current-heading">${heading('C','통합관측')}<p class="muted">${esc(start)} ~ ${esc(end)}</p></div>${observationNote?`<p class="muted">${esc(observationNote)}</p>`:''}<div id="company-current-view">${currentView(data)}</div></section>`:''}</div>`;
   }
-  window.InsightCompanyView={render,currentView,flowView,weeklyGroups};
+  window.InsightCompanyView={render,currentView,flowView,weeklyGroups,monthTotals};
 })();
