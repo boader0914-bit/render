@@ -9,6 +9,17 @@ function ui() {
   return {window,elements};
 }
 const quota=allowed=>({limit:1,canRequest:allowed,resetsAt:'2026-10-02T15:00:00Z'});
+
+test('basic information remains visible with one animated connection indicator until stored reference data arrives',()=>{
+  const {window:w}=ui();
+  const pending={referenceLoading:true,result:null,companyDetail:{basics:{name:'기본정보 연결 업체',rooms:16},channels:[],current:{daily:[],summary:null}}};
+  const html=w.InsightCompanyView.render(pending);
+  assert.match(html,/기본정보 연결 업체/);assert.match(html,/16실/);
+  assert.equal((html.match(/class="connection-spinner"/g)||[]).length,1);
+  assert.match(html,/data-reference-status="products"/);assert.match(html,/저장된 예약채널 연결 중/);
+  const failed=w.InsightCompanyView.render({...pending,referenceLoading:false,referenceError:true});
+  assert.doesNotMatch(failed,/connection-spinner|0실/);assert.match(failed,/예약채널 연결 확인 필요/);
+});
 test('company detail has no collection tools; separate collection route retains range and quota checks',async()=>{
   const {window:w,elements}=ui(),company={companyId:'a',name:'가상 업체'};
   const detail=w.InsightCollection.panel(company,true,null,quota(true));

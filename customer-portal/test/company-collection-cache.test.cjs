@@ -5,19 +5,19 @@ const flush=async()=>{await new Promise(resolve=>setImmediate(resolve));await ne
 
 function harness() {
   let now=Date.parse('2026-10-13T02:00:00Z'),protectedForm=null,present=true;
-  const calls=[],events={},renders=[],storage=new Map(),timers=new Map();let nextTimer=0;
+  const calls=[],events={},renders=[],renderData=[],storage=new Map(),timers=new Map();let nextTimer=0;
   const elements=new Map();
   for(const key of ['#collection-result','#collection-progress','#collection-freshness','#collection-allowance','#company-current-view','#company-history-flow','#company-flow-details','#collection-settings','[data-collect] button[type=submit]'])elements.set(key,{innerHTML:'',textContent:'',disabled:true,dataset:{ready:'true'},children:[],append(node){this.children.push(node);},setAttribute(key,value){this[key]=value;}});
-  const window={InsightCompanyView:{render(data){const value=[data.companyDetail?.basics?.companyId,data.companyDetail?.integrated?.selectedMonth,data.result?.version].join('|');renders.push(value);return value;},currentView:()=>'',flowView:()=>''}};
+  const window={InsightCompanyView:{render(data,options){const value=[data.companyDetail?.basics?.companyId,data.companyDetail?.integrated?.selectedMonth,data.result?.version].join('|');renders.push(value);renderData.push({data,options});return value;},currentView:()=>'',flowView:()=>''}};
   class ClockDate extends Date {constructor(...args){super(...(args.length?args:[now]));}static now(){return now;}}
   const document={hidden:false,addEventListener:(type,fn)=>events[type]=fn,querySelector(selector){if(!present&&selector.startsWith('#collection-'))return null;if(selector.includes('form'))return selector.includes(':focus-within')||protectedForm?.dataset.dirty?protectedForm:null;return elements.get(selector)||null;},querySelectorAll:()=>[],createElement:()=>({textContent:'',className:''}),get activeElement(){return protectedForm?{closest:()=>protectedForm}:null;}};
   vm.runInContext(source,vm.createContext({window,document,Date:ClockDate,localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},setTimeout(fn,ms){timers.set(++nextTimer,{fn,ms});return nextTimer;},clearTimeout:id=>timers.delete(id)}));
   const api=path=>new Promise((resolve,reject)=>calls.push({path,resolve,reject}));
   const result=()=>elements.get('#collection-result').innerHTML;
   const freshness=()=>elements.get('#collection-freshness').textContent+' '+elements.get('#collection-freshness').innerHTML;
-  return {collection:window.InsightCollection,calls,renders,elements,timers,result,freshness,
+  return {collection:window.InsightCollection,calls,renders,renderData,elements,timers,result,freshness,
     context(scope='customer-one',ids=['a','b']){window.InsightCollection.setContext(scope,ids);},
-    mount(id='a'){present=true;elements.get('#collection-result').innerHTML='loading';elements.get('#collection-progress').innerHTML='';elements.get('#collection-freshness').textContent='';window.InsightCollection.mount(id,api);},
+    mount(id='a',options){present=true;elements.get('#collection-result').innerHTML='loading';elements.get('#collection-progress').innerHTML='';elements.get('#collection-freshness').textContent='';window.InsightCollection.mount(id,api,options);},
     leave(){window.InsightCollection.stop();present=false;},
     month(value){const target={value,matches:selector=>selector==='[data-company-month]'};events.change({target});return target;},
     protect(value=true){protectedForm=value?{dataset:value==='focused'?{}:{dirty:'true'},matches:()=>true}:null;},
@@ -153,4 +153,95 @@ test('expired data is not rendered as a cached result and the cache evicts the l
   for(const month of months.slice(0,24)){h.month(month);await h.resolve(h.calls.length-1,data('a',month));}
   h.month(months[0]);assert.equal(h.result(),'a|'+months[0]+'|v1');await h.resolve(h.calls.length-1,data('a',months[0]));
   h.month(months[24]);await h.resolve(h.calls.length-1,data('a',months[24]));h.month(months[1]);assert.doesNotMatch(h.result(),new RegExp('a\\|'+months[1]+'\\|v1'),'an older unused result must yield to recently used entries');
+});
+
+test('login prefetch warms permitted companies serially and shares its request with a mounted seeded view',async()=>{
+  const h=harness();h.context('customer-one',['a','b']);
+  const companies=[{companyId:'a',name:'저장된 업체 A',rooms:16},{companyId:'b',name:'저장된 업체 B',rooms:8},{companyId:'private',name:'미등록 업체'}];
+  const request=path=>new Promise((resolve,reject)=>h.calls.push({path,resolve,reject}));
+  const batch=h.collection.prefetch(companies,request);
+  assert.equal(h.calls.length,1,'only one registered-company read begins at a time');
+  h.mount('a', {company:companies[0],editHtml:'<form>업체 수정</form>'});
+  assert.equal(h.result(),'a||','basic catalog data renders before historical calculation returns');
+  assert.equal(h.calls.length,1,'mount must share login prefetch, not duplicate the expensive read');
+  await h.resolve(0,data('a','2026-10','prefetched-a'));
+  assert.equal(h.result(),'a|2026-10|prefetched-a');assert.equal(h.calls.length,2);
+  const current=h.result();await h.resolve(1,data('b','2026-10','prefetched-b'));await batch;
+  assert.equal(h.result(),current,'offscreen prefetch never overwrites the mounted company');
+  h.leave();h.mount('b');assert.equal(h.result(),'b|2026-10|prefetched-b');
+  assert.ok(h.calls.every(call=>!call.path.includes('private')&&call.path.startsWith('/companies/')&&call.path.endsWith('/collection')),'reads only: no crawler or unregistered-company request');
+});
+
+test('prefetch seed preserves unknown room counts and renders editing HTML through mount options',async()=>{
+  const h=harness();h.context();h.mount('a',{company:{companyId:'a',name:'방 정보 대기',rooms:null},editHtml:'<form>수정 도구</form>'});
+  assert.equal(h.result(),'a||');
+  assert.equal(h.renderData.at(-1).data.referenceLoading,true);
+  assert.equal(h.renderData.at(-1).data.companyDetail.basics.rooms,null);
+  assert.equal(h.renderData.at(-1).options.editHtml,'<form>수정 도구</form>');
+  await h.reject(0,503,'연결 지연');
+  assert.equal(h.result(),'a||','a failed historical lookup does not erase authorized catalog basics');
+  assert.equal(h.renderData.at(-1).data.referenceLoading,false);assert.equal(h.renderData.at(-1).data.referenceError,true);
+});
+
+test('repeated prefetch shares a queued login batch and never replaces a complete cached result with seed data',async()=>{
+  const h=harness();h.context();const companies=[{companyId:'a',name:'저장 A',rooms:16},{companyId:'b',name:'저장 B',rooms:8}];
+  const request=path=>new Promise((resolve,reject)=>h.calls.push({path,resolve,reject}));
+  const first=h.collection.prefetch(companies,request),second=h.collection.prefetch(companies,request);
+  assert.equal(h.calls.length,1);await h.resolve(0,data());assert.equal(h.calls.length,2);await h.resolve(1,data('b','2026-10','b1'));await Promise.all([first,second]);
+  h.mount('a',{company:companies[0]});assert.equal(h.result(),'a|2026-10|v1');
+  h.collection.prefetch(companies,request);assert.equal(h.calls.length,3,'only mounted revalidation, no redundant warm reads');
+});
+
+test('account changes and registration removal reject prefetched private data and queued reads',async()=>{
+  const h=harness();h.context('customer-one',['a','b']);const request=path=>new Promise((resolve,reject)=>h.calls.push({path,resolve,reject}));
+  const former=h.collection.prefetch([{companyId:'a',name:'이전 비공개 A'},{companyId:'b',name:'이전 비공개 B'}],request);
+  h.context('customer-two',['a']);h.mount('a',{company:{companyId:'a',name:'현재 A'}});await h.resolve(0,data('a','2026-10','private-former'));await former;
+  assert.equal(h.calls.length,2,'former account queued B must not run');assert.doesNotMatch(h.result(),/private-former/);
+  await h.resolve(1,data('a','2026-10','private-current'));assert.match(h.result(),/private-current/);
+  h.leave();const removing=h.collection.prefetch([{companyId:'a',name:'현재 A'}],request);await removing;
+  h.collection.invalidate('a');const pending=h.collection.prefetch([{companyId:'a',name:'현재 A'}],request);h.context('customer-two',[]);await h.resolve(2,data('a','2026-10','removed'));await pending;
+  h.context('customer-two',['a']);h.mount('a');assert.doesNotMatch(h.result(),/removed|현재 A/);
+});
+
+for(const status of [401,403,404])test(`prefetch ${status} clears protected data without restoring denied catalog seeds`,async()=>{
+  const h=harness();h.context();const request=path=>new Promise((resolve,reject)=>h.calls.push({path,resolve,reject}));
+  const prefetch=h.collection.prefetch([{companyId:'a',name:'권한 대상 A',rooms:16}],request);
+  h.mount('a',{company:{companyId:'a',name:'권한 대상 A',rooms:16}});assert.equal(h.result(),'a||');
+  await h.reject(0,status,'조회 권한 없음');await prefetch;
+  assert.doesNotMatch(h.result(),/^a\|/);h.leave();h.mount('a',{company:{companyId:'a',name:'권한 대상 A',rooms:16}});
+  if(status!==401)assert.match(h.result(),/불러옵|loading/,'denied catalog data must not reappear before successful permission check');
+  assert.doesNotMatch(h.result(),/v1/);
+});
+
+test('prefetch is limited to the first four registered companies and leaves the rest for explicit opening',async()=>{
+  const h=harness(),ids=['a','b','c','d','e','f'];h.context('customer-one',ids);
+  const request=path=>new Promise((resolve,reject)=>h.calls.push({path,resolve,reject}));
+  const batch=h.collection.prefetch(ids.map(companyId=>({companyId,name:companyId})),request);
+  for(let index=0;index<4;index++){assert.equal(h.calls.length,index+1,'serial prefetch');await h.resolve(index,data(ids[index]));}
+  await batch;assert.equal(h.calls.length,4);assert.ok(h.calls.every(call=>!/^\/companies\/[ef]\//.test(call.path)));
+  h.mount('e',{company:{companyId:'e',name:'추가업체 E'}});assert.equal(h.result(),'e||');assert.equal(h.calls.length,5);
+});
+
+test('a queued company opened and completed before its prefetch turn is not requested again',async()=>{
+  const h=harness();h.context();const request=path=>new Promise((resolve,reject)=>h.calls.push({path,resolve,reject}));
+  const batch=h.collection.prefetch([{companyId:'a',name:'A'},{companyId:'b',name:'B'}],request);
+  h.mount('b',{company:{companyId:'b',name:'B'}});assert.equal(h.calls.length,2);
+  await h.resolve(1,data('b','2026-10','clicked-b'));await h.resolve(0,data('a','2026-10','prefetched-a'));await batch;
+  assert.equal(h.calls.length,2,'the queued prefetch reuses the already completed current-account cache');assert.equal(h.result(),'b|2026-10|clicked-b');
+});
+
+test('invalidated prefetch responses cannot refill the cache and a mounted dirty seed remains intact',async()=>{
+  const h=harness();h.context();const request=path=>new Promise((resolve,reject)=>h.calls.push({path,resolve,reject}));
+  const batch=h.collection.prefetch([{companyId:'a',name:'A'}],request);h.mount('a',{company:{companyId:'a',name:'A'},editHtml:'작성 중 수정'});h.protect();
+  await h.resolve(0,data('a','2026-10','fresh-completed'));await batch;assert.equal(h.result(),'a||');assert.match(h.freshness(),/작성 중/);
+  h.protect(false);h.leave();h.mount('a');assert.equal(h.result(),'a|2026-10|fresh-completed');
+  h.collection.invalidate('a');h.leave();const former=h.collection.prefetch([{companyId:'a',name:'A'}],request);h.collection.invalidate('a');await h.resolve(2,data('a','2026-10','invalidated-private'));await former;
+  h.mount('a');assert.doesNotMatch(h.result(),/invalidated-private/);
+});
+
+test('a failed first observation read does not erase edits already begun in the basic-data seed',async()=>{
+  const h=harness();h.context();h.mount('a',{company:{companyId:'a',name:'A'},editHtml:'수정 도구'});h.protect();
+  const rendered=h.renders.length,before=h.result();await h.reject(0,503,'관측 연결 지연');
+  assert.equal(h.result(),before);assert.equal(h.renders.length,rendered,'network failure must not recreate the initial editing form');
+  assert.match(h.elements.get('#collection-progress').innerHTML,/다시 확인/);
 });

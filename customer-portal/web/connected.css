@@ -132,6 +132,19 @@ html[data-theme=dark] .connected-app input[type=month]{color-scheme:dark}
 @media(max-width:760px){.connected-app .company-month-summary{padding:18px 16px}.connected-app .month-summary-heading{flex-wrap:wrap;gap:8px}.connected-app .month-summary-heading>.month-note{text-align:left}.connected-app .month-summary-metrics{grid-template-columns:minmax(0,1fr);gap:16px}.connected-app .month-summary-metrics article+article{border-left:0;border-top:1px solid var(--line);padding:16px 0 0}.connected-app .month-summary-metrics strong{font-size:28px}}
 
 /* Compact company overview: preserve type sizes and align shared weekly columns. */
+.connected-app .registration-note{font-size:12px;line-height:1.6;color:var(--muted);margin:8px 0}
+.connected-app .registered-management{margin-top:14px}
+.connected-app .registered-management>.connected-list{margin:14px 0}
+.connected-app .company-edit{margin:0 0 12px;padding:0;border:0}
+.connected-app .company-edit>summary{display:inline-block;padding:5px 10px;border:1px solid var(--line);border-radius:6px;list-style:none;font-size:12px;line-height:1.5;color:var(--text);background:var(--surface-soft);cursor:pointer}
+.connected-app .company-edit>summary::-webkit-details-marker{display:none}
+.connected-app .company-edit>summary:focus-visible{outline:2px solid var(--green-mid);outline-offset:3px}
+.connected-app .company-edit[open]>summary{margin-bottom:10px}
+.connected-app .company-edit form{border:1px solid var(--line);border-radius:8px;padding:14px;display:grid;gap:12px;background:var(--surface-soft)}
+.connected-app .company-edit form>p{margin:0;font-size:12px}
+.connected-app .company-edit .history-list{margin-top:12px}
+.connected-app .reference-pending{display:flex;align-items:center;gap:8px}
+.connected-app .reference-pending>.connection-spinner{width:14px;height:14px;border-width:2px}
 .connected-app .db-reference-grid{align-items:start;gap:14px}
 .connected-app .db-reference-grid>.card{padding:18px}
 .connected-app .db-reference-grid .db-section-heading{margin-bottom:12px}

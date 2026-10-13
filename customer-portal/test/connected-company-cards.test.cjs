@@ -47,7 +47,8 @@ for (const adminView of [false, true]) {
     assert.equal(cards.length, 3);
     for (const [index, company] of ui.companies.entries()) {
       assert.match(cards[index][1], new RegExp(`href="#company=${company.companyId}"`));
-      assert.match(cards[index][1], /업체 자료 보기/);assert.match(cards[index][1],new RegExp(`href="#collect=${company.companyId}"`));
+      assert.match(cards[index][1], /업체 자료 보기/);
+      assert.doesNotMatch(cards[index][1], /href="#collect=|등록 해제|data-correction=/,'list cards focus on viewing; actions belong in settings and A');
     }
     for (const company of ui.companies) {
       ui.navigate(`#company=${company.companyId}`);
