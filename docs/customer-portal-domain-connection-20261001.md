@@ -1,5 +1,7 @@
 # insight.sabun.co.kr 연결 준비 상태
 
+> 현재 연결 계획과 상태는 2026-10-13 [인사이트 서버 전환 안내](insight-server-conversion-20261012.md)가 우선한다. 새 Render 대상은 `sa-labs-datalab-v4-preview.onrender.com`이다. 사용자가 닷네임에서 작업한 설정을 먼저 확인하며, 아래 10월 1일 DNS 조회 기록만으로 Cloudflare 로그인을 필수로 요구하지 않는다. 아직 새 도메인의 DNS·HTTPS 연결 완료로 보고하지 않는다.
+
 2026-10-01 사용자 요청: `insight.sabun.co.kr` 하위 도메인 생성.
 
 ## 현재 확인
