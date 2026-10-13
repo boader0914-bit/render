@@ -141,7 +141,15 @@
       seen.add(identity); return true;
     });
   }
-  function filterHistory(rows, filters) { return rows.filter(row => { const stamp = Date.parse(row.stamp) || Number(row.stamp); return (filters.worker === "all" || row.workerKey === filters.worker) && (!filters.keyword || String(row.keyword || "").toLowerCase().includes(filters.keyword.toLowerCase())) && (!filters.date || Number.isFinite(stamp) && todayKst(stamp) === filters.date) && (filters.state === "all" || (filters.state === "pending" ? ["pending", "queued", "running"].includes(row.status) : filters.state === "complete" ? ["complete", "completed", "reused"].includes(row.status) : !["pending", "queued", "running", "complete", "completed", "reused"].includes(row.status))); }); }
+  function historyGroup(row) {
+    if (reviewRequired(row)) return "review";
+    if (["pending", "queued", "running"].includes(row.status)) return "pending";
+    if (["failed", "blocked", "interrupted", "missed", "cancelled"].includes(row.status)) return "failed";
+    if (row.status === "partial" || row.collectionQuality?.status === "partial") return "partial";
+    if (["complete", "completed", "reused"].includes(row.status) && !reviewRequired(row)) return "complete";
+    return "review";
+  }
+  function filterHistory(rows, filters) { return rows.filter(row => { const stamp = Date.parse(row.stamp) || Number(row.stamp), group = historyGroup(row); return (filters.worker === "all" || row.workerKey === filters.worker) && (!filters.keyword || String(row.keyword || "").toLowerCase().includes(filters.keyword.toLowerCase())) && (!filters.date || Number.isFinite(stamp) && todayKst(stamp) === filters.date) && (filters.state === "all" || (filters.state === "attention" ? ["failed", "partial", "review"].includes(group) : group === filters.state)); }); }
   function etaRange(seconds) {
     if (!Number.isFinite(seconds) || seconds <= 0) return "응답 확인 중";
     if (seconds < 60) { const low = Math.max(10, Math.floor(seconds * .8 / 10) * 10), high = Math.max(low, Math.ceil(seconds * 1.2 / 10) * 10); return low === high ? `약 ${low}초` : `약 ${low}~${high}초`; }
@@ -312,13 +320,34 @@
   const cards = new Map();
   const schedules = {};
   const retiredWorkers = new Set();
-  let workerData = null, lastWorkerData = null, requests = [], refreshInFlight = null, loaded = false, requestsReadError = false, statusReceivedAt = 0, lastRefreshAt = 0;
+  let workerData = null, lastWorkerData = null, requests = [], refreshInFlight = null, loaded = false, requestsReadError = false, scheduleReadErrors = [], statusReceivedAt = 0, lastRefreshAt = 0;
   const admin = () => document.body.classList.contains("role-admin") && !document.body.classList.contains("admin-user-view");
   const visible = () => admin() && !document.hidden && Boolean(panel.closest("[data-admin-section-panel]")?.classList.contains("active"));
   const storageKey = "staydatalab:collector-drafts:v2";
   let drafts = {};
   try { drafts = JSON.parse(window.localStorage.getItem(storageKey) || "{}"); } catch { /* Drafts remain in memory when local storage is unavailable. */ }
   if (!drafts || typeof drafts !== "object" || Array.isArray(drafts)) drafts = {};
+  const historyOpenKey = "staydatalab:collector-history-open:v1";
+  const historyContent = byId("collectorHistoryContent"), historyToggle = byId("collectorHistoryToggle");
+  function setHistoryOpen(open, remember = true) {
+    historyContent.hidden = !open;
+    historyToggle.setAttribute("aria-expanded", String(open));
+    historyToggle.setAttribute("aria-label", `수집 기록 ${open ? "접기" : "펼치기"}`);
+    byId("collectorHistoryToggleLabel").textContent = open ? "접기" : "펼치기";
+    if (remember) try { window.localStorage.setItem(historyOpenKey, String(open)); } catch { /* The current page still keeps its display choice. */ }
+  }
+  let historyInitiallyOpen = false;
+  try { historyInitiallyOpen = window.localStorage.getItem(historyOpenKey) === "true"; } catch { /* Start folded when browser storage is unavailable. */ }
+  setHistoryOpen(historyInitiallyOpen, false);
+  historyToggle.addEventListener("click", () => setHistoryOpen(historyContent.hidden));
+  function showHistoryGroup(group) {
+    byId("collectorHistoryWorker").value = "all";
+    byId("collectorHistoryKeyword").value = "";
+    byId("collectorHistoryDate").value = "";
+    byId("collectorHistoryState").value = group;
+    setHistoryOpen(true); renderHistory(); byId("collectorHistoryState").focus();
+  }
+  for (const [id, group] of [["collectorHistoryFailed", "failed"], ["collectorHistoryPartial", "partial"], ["collectorHistoryReview", "review"]]) byId(id).addEventListener("click", () => showHistoryGroup(group));
   function node(tag, text = "", className = "") { const el = document.createElement(tag); el.textContent = text; if (className) el.className = className; return el; }
   function saveDraft(card) { drafts[card.key] = values(card); try { window.localStorage.setItem(storageKey, JSON.stringify(drafts)); } catch { /* No collection is issued to repair draft storage. */ } }
   function values(card) { return Object.fromEntries(Object.entries(card.inputs).map(([name, input]) => [name, input.type === "checkbox" ? input.checked : input.value])); }
@@ -576,7 +605,18 @@
   async function action(card, operation) { if (card.busy || !admin()) return; if (retirement(card).retired) { notice(card, retirement(card).reason); return; } card.busy = true; syncCard(card); try { await operation(); } catch (error) { notice(card, error.message, "error"); } finally { card.busy = false; syncCard(card); } }
   function renderHistory() {
     const rows = historyEntries(requests, schedules), filters = { worker: byId("collectorHistoryWorker").value || "all", keyword: byId("collectorHistoryKeyword").value.trim(), date: byId("collectorHistoryDate").value, state: byId("collectorHistoryState").value || "all" };
-    const filtered = filterHistory(rows, filters), container = byId("collectorUnifiedHistory"); container.replaceChildren(); byId("collectorHistoryCount").textContent = `${filtered.length}건`;
+    const filtered = filterHistory(rows, filters), container = byId("collectorUnifiedHistory"); container.replaceChildren();
+    byId("collectorHistoryCount").textContent = `최근 기록 ${rows.length}건`;
+    byId("collectorHistoryFilteredCount").textContent = filtered.length > 50 ? `검색 결과 ${filtered.length}건 · 최근 50건 표시` : `검색 결과 ${filtered.length}건`;
+    const latest = rows.find(row => historyGroup(row) !== "pending"), latestLabel = latest && historyGroup(latest) === "partial" ? "일부 완료" : latest ? outcomeLabel(latest) : "";
+    byId("collectorHistoryLatest").textContent = latest ? `최근 결과 · ${latest.keyword || "키워드 미확인"} · ${latestLabel} · ${formatTime(latest.finishedAt || latest.stamp)}` : rows.length ? "진행 중인 작업은 워커 카드에서 확인하세요." : "표시할 수집 기록이 없습니다.";
+    for (const [id, group, label] of [["collectorHistoryFailed", "failed", "실패·중단"], ["collectorHistoryPartial", "partial", "일부 완료"], ["collectorHistoryReview", "review", "검토 필요"]]) {
+      const badge = byId(id), count = rows.filter(row => historyGroup(row) === group).length;
+      badge.hidden = count === 0; badge.textContent = `${label} ${count}건`;
+      badge.setAttribute("aria-label", `${label} ${count}건 수집 기록 펼쳐 보기`);
+    }
+    const readError = byId("collectorHistoryReadError"); readError.hidden = !requestsReadError && !scheduleReadErrors.length;
+    readError.textContent = readError.hidden ? "" : "일부 기록 확인 불가 · 마지막 조회 자료가 포함될 수 있습니다. 상태를 새로고침하세요.";
     if (requestsReadError) container.append(node("p", "일부 즉시수집 기록을 읽지 못했습니다. 상태를 새로고침하세요.", "collector-control-status"));
     if (!filtered.length) container.append(node("p", "조건에 맞는 수집 기록이 없습니다.", "hint"));
     for (const entry of filtered.slice(0, 50)) {
@@ -586,7 +626,7 @@
       if (reason) info.append(node("small", reason, "collector-worker-alert"));
       if (entry.errorCode) info.append(node("small", errorMessage(entry.brokerErrorCode || entry.errorCode), "collector-worker-alert"));
       if (entry.recovery) info.append(node("small", "보존 자료 복구 완료 · 업체 DB 반영"));
-      row.append(info, node("span", entry.recovery && entry.status === "complete" ? "복구 완료" : outcomeLabel(entry), "state-badge"));
+      row.append(info, node("span", entry.recovery && entry.status === "complete" ? "복구 완료" : historyGroup(entry) === "partial" ? "일부 완료" : outcomeLabel(entry), "state-badge"));
       if (entry.runId) row.append(resultButton(entry.runId));
       if (!reviewRequired(entry) && (entry.runId || ["partial", "failed", "blocked", "interrupted"].includes(entry.status))) row.append(diagnosticCard(entry.runId || "", entry.collectionQuality || { status: entry.status }, `history:${entry.requestId || entry.keyword}`));
       container.append(row);
@@ -605,13 +645,15 @@
       if (workerData) { lastWorkerData = workerData; statusReceivedAt = Date.now(); } else statusReceivedAt = 0;
       lastRefreshAt = Date.now();
       requestsReadError = results[1].status !== "fulfilled"; if (!requestsReadError) requests = results[1].value.requests || [];
+      scheduleReadErrors = [];
       for (let i = 0; i < WORKER_KEYS.length; i += 1) {
         const key = WORKER_KEYS[i], result = results[i + 2], card = cards.get(key);
         if (result.status === "fulfilled") {
           schedules[key] = result.value; const config = result.value.config;
+          if (!config && !result.value.retired) scheduleReadErrors.push(key);
           if (!card.loaded && !drafts[key] && config?.keywords?.length) fill(card, { keywords: config.keywords.join("\n"), searchMode: config.collection.searchMode || "keyword", period: config.collection.dateMode === "fixed" ? "custom" : String(config.collection.bookingDays), checkIn: config.collection.checkIn || todayKst(), checkOut: config.collection.checkOut || todayKst(), purpose: config.collection.collectionPurpose, ranks: config.collection.detailRankRanges, dayUseMode: config.collection.dayUseMode || "detail", firstDate: config.firstDate, time: config.time, repeat: config.repeat, keywordIntervalMinutes: config.keywordIntervalMinutes ?? 0, execution: config.enabled ? "schedule" : "now" });
           card.loaded = true;
-        } else { schedules[key] = null; notice(card, "예약 상태를 읽지 못했습니다. 즉시수집과 연결 상태는 별도로 확인합니다.", "error"); }
+        } else { scheduleReadErrors.push(key); schedules[key] = null; notice(card, "예약 상태를 읽지 못했습니다. 즉시수집과 연결 상태는 별도로 확인합니다.", "error"); }
       }
       loaded = true; renderWorkers(); renderHistory();
     })().finally(() => { refreshInFlight = null; }); return refreshInFlight;
