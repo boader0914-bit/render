@@ -56,10 +56,16 @@
 
 0923은 같은 커밋의 `dep-db6nqad9fdbs73dkgt40`을 09:38:27 Live로 전환했다. 시작 명령은 `node customer-portal/connected-server.cjs`, health 경로는 `/api/health`다. `https://sa-labs-datalab-v4-preview.onrender.com/api/health`의 connected 상태와 고객 config API 200으로 중앙 연결키를 검증했다. 계정과 자료는 중앙 저장소를 그대로 사용한다. 기존 무료 인사이트와 BG 실행 서비스는 배포하지 않았다.
 
-첫 인사이트 배포에는 이전 서비스의 `NODE_VERSION=26.5.0` 설정이 남아 있었다. 해당 비밀이 아닌 설정을 제거했으며, 다음 인사이트 배포에서는 package engines에 맞는 Node 24 계열을 확인해야 한다.
+첫 인사이트 배포에는 이전 서비스의 `NODE_VERSION=26.5.0` 설정이 남아 있었다. 해당 비밀이 아닌 설정을 제거했고, 최종 인사이트 배포에서 package engines에 맞는 Node 24.21.0을 확인했다.
 
 ### 공개 주소 별칭
 
 인사이트에만 `INSIGHT_PUBLIC_ORIGINS`를 추가한다. 쉼표 또는 줄바꿈으로 명시한 공개 주소만 대표 주소와 함께 허용하며, 접속 Host와 POST Origin은 각각 정확히 일치해야 한다. 서로 다른 허용 주소 간 POST도 거절한다. HTTPS 쿠키의 Secure·HttpOnly·SameSite 및 Host 범위는 유지한다. 관련 실제 HTTP·연결 검증 29개가 통과했다.
 
 DNS/TLS 확인 전 대표 주소는 Render 주소로 유지한다. 별칭은 `https://insight.sabun.co.kr`이며, 주소 기능 변경은 인사이트 서버에만 배포한다. 중앙 웹은 다시 배포하지 않는다. Render 포함 도메인 2개를 모두 사용 중이므로 새 도메인은 월 $0.25 추가 요금 승인 후 등록한다. 고객 화면 로그인 검수와 Cloudflare DNS/TLS는 사용자 로그인 및 비용 승인 뒤 완료한다. 실제 네이버 수집은 이 전환 검수에서 실행하지 않는다.
+
+최종 인사이트 커밋은 `5451ab93d6ff8d75bff140c42280b0ea054452d3`, 배포는 `dep-db6o0gl9fdbs73dl9670`이며 2026-10-13 09:50:54 KST Live다. Render 서비스명은 `SABUN Insight`로 변경했다. 공개 health의 빌드가 해당 커밋이고 고객 config API가 HTTP 200이다. 중앙 운영 UI에서 PC 1280px와 모바일 390px, 라이트·다크의 전환 상태 및 과거 결과를 확인했다. 신규 입력은 없으며 이력 버튼 높이는 44px, 가로 넘침은 없다. `production-deploy-after-20261013.json`, `insight-public-after-5451ab9.json`, 최종 Live 및 운영 화면 이미지를 증빙으로 저장했다. 인증된 인사이트 고객 화면과 사용자 도메인 DNS/TLS 검수는 아직 완료로 기록하지 않는다.
+
+최종 검증은 직접 Node로 실행한 전환 묶음 83개와 중앙 HTTP·인사이트 실제 앱 검증 각 1개, 총 85개 통과다. 외부 예약 요청은 없었다. 인사이트 내부 HTTP 검수에서 Render Host와 지정한 insight Host는 200, 미등록 Host는 403이었다. 이는 DNS/TLS 연결 완료를 뜻하지 않는다. 실행 프로세스는 Node v24.21.0이며 디스크 여유는 약 887MiB다.
+
+기존 수집 실행 환경 플래그는 `COLLECTOR_WORKER_ENABLED=0`으로 저장해 같은 `5451ab9`에 설정 배포했다. `dep-db6o1vqj9qps739qukd0`은 2026-10-13 09:54:28 KST Live다. 실제 시작 명령은 인사이트 연결 서버이며, 재시작 뒤 공개 health와 config도 HTTP 200이다. 이 기록만 추가한 문서 커밋은 별도 운영 배포하지 않는다.
