@@ -17722,6 +17722,9 @@ function openHistoryOpsCompanyDb(event = null, link = null) {
   event?.stopPropagation();
   // Keep the history entry and its independent selection alive before pushing
   // the company route, so one browser Back returns without reloading the app.
+  // The history tab may still carry a previous company URL; clear it before
+  // saving the return entry so reopening that same company also pushes a route.
+  clearAdminDbCompanyHash();
   syncAppHistoryState(false);
   setActiveTab("admin", { fromHistory: true });
   setAdminPanelSection("database");

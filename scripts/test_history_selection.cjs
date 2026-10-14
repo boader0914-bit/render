@@ -12,7 +12,7 @@ const names = [
   "historyOpsCompanyId", "historyOpsSavedCompanyRows", "historyOpsSavedResultHtml", "openHistoryOpsCompanyDb", "bindHistoryOpsEvents", "historyOpsCard",
   "historyOpsTimeline", "historyOpsKeywordRows", "historyOpsComparison", "historyOpsCompanyTrends", "renderHistoryOps",
   "companyKey", "collectionArchiveDay", "collectionArchiveDate", "collectionArchiveWorker", "collectionArchiveQuality",
-  "activeKeyword", "adminDbCompanyHash", "adminDbCompanyDetailUrl", "adminDbCompanyUseNativeLink", "effectiveDetailRankRange"
+  "activeKeyword", "adminDbCompanyHash", "adminDbCompanyDetailUrl", "adminDbCompanyUseNativeLink", "clearAdminDbCompanyHash", "effectiveDetailRankRange"
 ];
 const declarations = names.map(name => {
   const fn = source.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^}`, "m"))?.[0];
@@ -50,7 +50,8 @@ function fixture({ runs, role = "admin", fetcher } = {}) {
   const els = { historyOpsDashboard: element(), historyOpsState: element(), keywordInput: element() };
   const calls = [];
   const navigationCalls = [];
-  const context = vm.createContext({ state, els, document: { activeElement: null }, console, Date, Map, Set, Intl, encodeURIComponent,
+  const context = vm.createContext({ state, els, document: { activeElement: null }, console, Date, Map, Set, Intl, URL, encodeURIComponent,
+    window: { location: { href: "http://offline/admin" }, history: { replaceState() { throw new Error("Unexpected route mutation in basic fixtures"); } } },
     historyOpsSelectionRequestSequence: 0, historyOpsCatalogRequestSequence: 0,
     isAdminRole: () => state.session.role === "admin", fetchJson: async url => {
       calls.push(url);
@@ -248,6 +249,58 @@ async function runTests() {
   assert.equal(linked.state.activeRunId, "global-current");
   assert.equal(linked.state.adminDbSelectedCompanyId, "cmp_place_244049");
   assert.equal(linked.api.openHistoryOpsCompanyDb({ button: 0 }, { tagName: "A", getAttribute: () => "" }), false, "Unlinked cards cannot open an arbitrary company");
+  const sameCompany = fixture();
+  await sameCompany.api.ensureHistoryOpsSelection();
+  await sameCompany.api.applyHistoryOpsFilters({ query: "부산", startDate: "2026-09-01", endDate: "2026-09-30" });
+  const savedSelection = JSON.stringify(sameCompany.state.historyOpsSelection), savedGlobalData = sameCompany.state.data;
+  const browserWindow = { location: new URL("http://offline/admin?adminCompany=cmp_place_244049#admin-db-company=cmp_place_244049") };
+  const entries = [{ state: { app: "lodging-datalab", tab: "historyOps" }, url: browserWindow.location.href }];
+  let position = 0, pushes = 0;
+  browserWindow.history = {
+    get state() { return entries[position].state; },
+    replaceState(value, _, url) {
+      browserWindow.location = new URL(url, browserWindow.location.href);
+      entries[position] = { state: value, url: browserWindow.location.href };
+    },
+    pushState(value, _, url) {
+      browserWindow.location = new URL(url, browserWindow.location.href);
+      entries.splice(position + 1);
+      entries.push({ state: value, url: browserWindow.location.href });
+      position += 1;
+      pushes += 1;
+    },
+    back() {
+      assert.ok(position > 0, "A return entry must exist");
+      position -= 1;
+      browserWindow.location = new URL(entries[position].url);
+      return entries[position].state;
+    }
+  };
+  sameCompany.context.window = browserWindow;
+  sameCompany.context.REGION_ANALYSIS_TABS = new Set(["dictionary", "map", "demand", "regionCompare", "regionSources"]);
+  sameCompany.context.loadRunRequestSequence = 0;
+  sameCompany.context.roleAllowsTab = () => true;
+  sameCompany.context.openAdminDbCompanyReview = companyId => { sameCompany.state.adminDbSelectedCompanyId = companyId; return true; };
+  sameCompany.context.loadAdminDbCompanyDetail = async companyId => ({ companyId });
+  const routeFunctions = ["syncAppHistoryState", "setAdminDbCompanyRoute", "activateAdminDbCompanyDetail", "restoreAppHistoryState"].map(name => {
+    const declaration = source.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^}`, "m"))?.[0];
+    assert.ok(declaration, `Missing real route helper ${name}`);
+    return declaration;
+  }).join("\n");
+  vm.runInContext(routeFunctions, sameCompany.context);
+  assert.equal(sameCompany.api.openHistoryOpsCompanyDb({ button: 0, preventDefault() {}, stopPropagation() {} }, link), true);
+  assert.equal(pushes, 1, "Reopening the same company from a lingering DB URL creates exactly one new route");
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].url, "http://offline/admin", "The history return entry has no stale company ID or hash");
+  assert.equal(entries[0].state.tab, "historyOps");
+  assert.equal(entries[0].state.activeRunId, "global-current");
+  assert.equal(browserWindow.location.search, "?adminCompany=cmp_place_244049");
+  await sameCompany.context.restoreAppHistoryState(browserWindow.history.back());
+  assert.equal(sameCompany.state.activeTab, "historyOps", "One Back restores the history tab through the actual app-history helper");
+  assert.equal(JSON.stringify(sameCompany.state.historyOpsSelection), savedSelection);
+  assert.equal(sameCompany.state.data, savedGlobalData);
+  assert.equal(sameCompany.state.activeRunId, "global-current");
+  assert.equal(browserWindow.location.href, "http://offline/admin");
   console.log("History selection: all keywords, distinct saved runs, KST/date filters, readonly isolation, error/zero distinction, stale response protection and typing focus passed");
 }
 
