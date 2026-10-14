@@ -17,7 +17,10 @@ function publicRow(row){
 function safeFailure(error){
  const code=/^[A-Z][A-Z0-9_]{1,100}$/.test(error?.code||'')?error.code:'COLLECTION_FAILED';
  const status=/BLOCK|CAPTCHA/.test(code)?'blocked':/CANCEL|INTERRUPT|SHUTDOWN|PAUSED/.test(code)?'interrupted':'failed';
- const known={COLLECTION_SCOPE_BUSY:'같은 키워드의 수집이 진행 중입니다. 완료 후 범위를 확인하세요.',COLLECTION_SCOPE_REVIEW:'오늘 자료와 요청 범위가 다릅니다. 재수집 사유를 확인하세요.',COLLECTION_REVIEW_REQUIRED:'오늘 미완료 기록이 있습니다. 기록과 재수집 사유를 확인하세요.'};
+ const known={COLLECTION_SCOPE_BUSY:'같은 키워드의 수집이 진행 중입니다. 완료 후 범위를 확인하세요.',COLLECTION_SCOPE_REVIEW:'오늘 자료와 요청 범위가 다릅니다. 재수집 사유를 확인하세요.',COLLECTION_REVIEW_REQUIRED:'오늘 미완료 기록이 있습니다. 기록과 재수집 사유를 확인하세요.',
+  COLLECTOR_ROLE_MISMATCH:'수집기 역할과 실행 조건이 맞지 않아 시작하지 못했습니다. 수집기 실행 설정을 확인하세요.',
+  COLLECTOR_RUN_TOKEN_INVALID:'수집 실행 식별값 형식이 잘못되어 시작하지 못했습니다. 실행 설정을 확인하세요.',
+  COLLECTOR_CRAWL_FAILED:'수집 프로세스가 정상 종료하지 못해 결과를 확보하지 못했습니다. 실행 기록을 확인하세요.'};
  const diagnostics={};
  if(['file_upload','final_validation'].includes(error?.failurePhase)) diagnostics.failurePhase=error.failurePhase;
  if(require('./collector_worker.cjs').BROKER_FAILURE_CODES.has(error?.brokerErrorCode)) diagnostics.brokerErrorCode=error.brokerErrorCode;

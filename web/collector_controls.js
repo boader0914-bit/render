@@ -69,6 +69,9 @@
     if (text === "COLLECTOR_SCOPE_MISMATCH") return "요청한 검색 조건과 결과의 조건이 달라 등록하지 못했습니다. 보존 자료와 수집 조건을 확인하세요.";
     if (text === "COLLECTOR_DUPLICATE_PATH") return "상세 파일 목록이 중복되어 최종 저장 검증에 실패했습니다. 보존 자료 복구가 필요합니다.";
     if (text === "COLLECTOR_UPLOAD_FAILED") return "수집 결과의 전송 또는 최종 저장 확인에 실패했습니다.";
+    if (text === "COLLECTOR_ROLE_MISMATCH") return "수집기 역할과 실행 조건이 맞지 않아 시작하지 못했습니다. 수집기 실행 설정을 확인하세요.";
+    if (text === "COLLECTOR_RUN_TOKEN_INVALID") return "수집 실행 식별값 형식이 잘못되어 시작하지 못했습니다. 실행 설정을 확인하세요.";
+    if (text === "COLLECTOR_CRAWL_FAILED") return "수집 프로세스가 정상 종료하지 못해 결과를 확보하지 못했습니다. 실행 기록을 확인하세요.";
     if (/PROVIDER_(?:BLOCKED|ACCESS)|NAVER.*BLOCK|CAPTCHA|TOO_MANY|BookingAPITooManyRequests|HTTP_(403|429)/i.test(text)) return "네이버 접근 제한이 감지되어 수집을 멈췄습니다. 운영 점검이 필요합니다.";
     if (/REPEAT|SCOPE_REVIEW|SAME_DAY|DUPLICATE/.test(text)) return "당일 수집 기록 또는 조건이 다른 자료가 있습니다. 기존 결과와 수집 범위를 확인하세요.";
     if (/PERSISTENCE|STATE_INVALID|STATE_UNREADABLE/.test(text)) return "저장된 작업 기록을 확인하지 못했습니다. 기록 점검 후 실행할 수 있습니다.";

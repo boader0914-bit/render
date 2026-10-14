@@ -15,7 +15,9 @@ const productCoverage = createProductCoverage();
 const SCHEDULED_COLLECTION = process.env.SCHEDULED_COLLECTION === "1";
 const WORKER_COLLECTION = process.env.COLLECTOR_WORKER_RUNTIME === "1";
 const WEB_COLLECTION = process.env.COLLECTOR_WEB_RUNTIME === "1";
-if (WEB_COLLECTION && (WORKER_COLLECTION || SCHEDULED_COLLECTION)) throw new Error("COLLECTOR_ROLE_MISMATCH");
+// The execution host (web/worker) and the scheduling trigger are independent.
+// Web collection supports both manual and scheduled jobs, never worker identity.
+if (WEB_COLLECTION && WORKER_COLLECTION) throw new Error("COLLECTOR_ROLE_MISMATCH");
 const GUARDED_COLLECTION = SCHEDULED_COLLECTION || WORKER_COLLECTION || WEB_COLLECTION;
 const NAVER_REQUEST_PACING_ENABLED = GUARDED_COLLECTION && process.env.NAVER_REQUEST_PACING_ENABLED === "1";
 // Managed collection always observes blocks and records requests. Only an explicit
@@ -805,7 +807,8 @@ if (COLLECTOR_RUN_TOKEN && !/^[a-p]{24}$/.test(COLLECTOR_RUN_TOKEN)) throw new E
 const COLLECTOR_WORKER_KEY = process.env.COLLECTOR_WORKER_KEY || (WEB_COLLECTION ? "web" : "manual");
 const COLLECTOR_TRIGGER = process.env.COLLECTOR_TRIGGER || (SCHEDULED_COLLECTION ? "scheduled" : "manual");
 if (!["manual", "scheduled", "web"].includes(COLLECTOR_WORKER_KEY) || !["manual", "scheduled"].includes(COLLECTOR_TRIGGER)
-  || (COLLECTOR_WORKER_KEY === "web") !== WEB_COLLECTION || (WEB_COLLECTION && COLLECTOR_TRIGGER !== "manual")) throw new Error("COLLECTOR_ROLE_MISMATCH");
+  || (COLLECTOR_WORKER_KEY === "web") !== WEB_COLLECTION
+  || (WEB_COLLECTION && (COLLECTOR_TRIGGER === "scheduled") !== SCHEDULED_COLLECTION)) throw new Error("COLLECTOR_ROLE_MISMATCH");
 const COLLECTOR_ENGINE = process.env.COLLECTOR_ENGINE || (WEB_COLLECTION ? "operating-web-v2" : "current-manual-v2");
 if (WEB_COLLECTION && COLLECTOR_ENGINE !== "operating-web-v2") throw new Error("COLLECTOR_ROLE_MISMATCH");
 const RUN_PREFIX = COLLECTOR_RUN_TOKEN ? `${province.slug}_${COLLECTOR_WORKER_KEY}_${COLLECTOR_RUN_TOKEN}` : province.slug;

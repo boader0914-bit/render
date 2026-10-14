@@ -80,6 +80,26 @@ test("errors are recorded without tokens, raw logs or request secrets", async t 
   assert.equal(Object.hasOwn(row, "fingerprint"), false);
 });
 
+test("known startup failure receipts retain safe causes without stderr or fake results", async t => {
+  for (const [code, label] of [
+    ["COLLECTOR_ROLE_MISMATCH", /수집기 역할과 실행 조건/],
+    ["COLLECTOR_RUN_TOKEN_INVALID", /수집 실행 식별값 형식/],
+    ["COLLECTOR_CRAWL_FAILED", /프로세스.*결과를 확보하지 못/],
+  ]) {
+    const { api, dataDir } = await fixture(t, { run: async () => {
+      throw Object.assign(new Error("PRIVATE_STDERR cookie=secret https://private.invalid/local-path"), { code });
+    } });
+    await api.submit({ ...payload(), workerKey: "web" });
+    const row = await terminal(api);
+    assert.equal(row.status, "failed");
+    assert.equal(row.errorCode, code);
+    assert.match(row.message, label);
+    assert.equal(row.result, null);
+    const saved = await fs.readFile(path.join(dataDir, "history/collector-requests/request-test-0001.json"), "utf8");
+    assert.doesNotMatch(JSON.stringify(row) + saved, /PRIVATE_STDERR|cookie=secret|private\.invalid|local-path/);
+  }
+});
+
 test("partial reason and counts survive request receipt and restart without raw diagnostics", async t => {
   const quality = { status: "partial", reason: "product_targets_truncated", counts: { naverScheduleSucceeded: 560, naverScheduleFailed: 0, secret: "SECRET" }, token: "TOKEN" };
   const { api, dataDir } = await fixture(t, { run: async () => result("partial", { collectionQuality: quality }) });

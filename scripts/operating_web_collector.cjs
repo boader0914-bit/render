@@ -15,9 +15,44 @@ const SPEED_KEYS = /^(?:NAVER_REQUEST_|NAVER_BOOKING_DETAIL_CONCURRENCY$|NAVER_S
 const PROGRESS = /^(?:Collecting Naver main\.\.\.|Collecting Naver regional clusters\.\.\.|Collecting NOL\.\.\.|Checking Yeogi\.\.\.|Collecting DDNayo\.\.\.|Observing external reservation links on Naver Place\.\.\.|Checking Naver booking stock\.\.\.|Writing outputs\.\.\.)$/;
 const ID = /^[a-zA-Z0-9_-]{1,160}$/;
 const SAFE_CODE = /^[A-Z][A-Z0-9_]{1,100}$/;
+const STARTUP_FAILURE_CODES = new Set(["COLLECTOR_ROLE_MISMATCH", "COLLECTOR_RUN_TOKEN_INVALID"]);
 function fault(code, statusCode = 409) { return Object.assign(new Error(code), { code, statusCode, cancelled: code === "CRAWL_CANCELLED" }); }
 function safeCode(value, fallback = "COLLECTOR_WEB_FAILED") { return SAFE_CODE.test(value || "") ? value : fallback; }
 function compact(value) { return String(value ?? "").normalize("NFKC").replace(/\s+/g, "").toLowerCase(); }
+
+function startupFailureReader() {
+  const decoder = new StringDecoder("utf8");
+  let line = "", oversized = false, code = null, ambiguous = false;
+  const finishLine = () => {
+    if (!oversized) {
+      const match = /^Error: ([A-Z][A-Z0-9_]+)\r?$/.exec(line);
+      if (match && STARTUP_FAILURE_CODES.has(match[1])) {
+        if (code && code !== match[1]) ambiguous = true;
+        code = match[1];
+      }
+    }
+    line = ""; oversized = false;
+  };
+  const consume = value => {
+    for (const character of value) {
+      if (character === "\n") finishLine();
+      else if (!oversized) {
+        if (line.length >= 128) { line = ""; oversized = true; }
+        else line += character;
+      }
+    }
+  };
+  return {
+    write(chunk) {
+      // Never retain or forward stderr text. Decode bounded pieces and discard
+      // oversized lines entirely, so a truncated secret/body cannot become code.
+      for (let offset = 0; offset < chunk.length; offset += 1024) {
+        consume(typeof chunk === "string" ? chunk.slice(offset, offset + 1024) : decoder.write(chunk.subarray(offset, offset + 1024)));
+      }
+    },
+    finish() { consume(decoder.end()); finishLine(); return ambiguous ? null : code; }
+  };
+}
 
 function createOperatingWebCollector({ dataDir, outputsDir, root, spawnImpl = spawn, onProviderBlocked = async () => {}, onProgress = () => {}, now = Date.now }) {
   const base = path.resolve(dataDir, "collector-web"), stateFile = path.join(base, "state.json");
@@ -239,7 +274,8 @@ function createOperatingWebCollector({ dataDir, outputsDir, root, spawnImpl = sp
           }
         }
       });
-      child.stderr?.resume();
+      const startupFailure = startupFailureReader();
+      child.stderr?.on("data", chunk => startupFailure.write(chunk));
       onChild(child);
       cancellationTimer = setInterval(() => { if (isCancelled()) runtime.stop("CRAWL_CANCELLED"); }, 200);
       timeoutTimer = setTimeout(() => runtime.stop("COLLECTOR_WEB_TIMEOUT"), 12 * 60 * 60 * 1000);
@@ -252,6 +288,17 @@ function createOperatingWebCollector({ dataDir, outputsDir, root, spawnImpl = sp
       };
       assertCanFinish();
       if (outcome.signal) throw fault("COLLECTOR_CRAWL_FAILED");
+      const startupCode = startupFailure.finish();
+      if (outcome.code !== 0) {
+        const outputs = await fs.readdir(locations.outputs).catch(error => {
+          if (error.code === "ENOENT") return [];
+          throw error;
+        });
+        // An early process failure has no manifest to validate. Only explicit
+        // startup codes may replace the generic failure; stderr never approves
+        // a result or overrides a nonempty receipt's strict validation.
+        if (!outputs.length) throw fault(startupCode || "COLLECTOR_CRAWL_FAILED");
+      }
       try { onProgress("Verifying collected outputs...\n"); } catch {}
       const result = await verify(locations.outputs, keyword, env, payload, jobId, token, outcome.code, assertCanFinish);
       assertCanFinish();

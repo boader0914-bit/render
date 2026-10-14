@@ -249,9 +249,12 @@ test("job-derived alphabetic prefixes preserve the legacy suffix and real collec
   assert.throws(() => harness({ env: { COLLECTOR_RUN_TOKEN: "20260101" } }), /COLLECTOR_RUN_TOKEN_INVALID/);
 });
 
-test("operating web collection preserves basic speed, role identity and complete quality evidence", async () => {
+test("operating web manual and scheduled collection initialize the real crawler and preserve basic speed and complete evidence", async () => {
   const token = "abcdefghijklmnopabcdefgh";
+  for (const trigger of ["manual", "scheduled"]) {
   const crawler = harness({ env: { COLLECTOR_WEB_RUNTIME: "1", NAVER_REQUEST_PACING_ENABLED: "0",
+    COLLECTOR_WORKER_RUNTIME: "0", COLLECTOR_WORKER_KEY: "web", COLLECTOR_TRIGGER: trigger,
+    SCHEDULED_COLLECTION: trigger === "scheduled" ? "1" : "0",
     COLLECTOR_RUN_TOKEN: token, COLLECTOR_JOB_ID: "collector_web_fixture", RENDER_SERVICE_ID: "srv-web-fixture" },
     fetchImpl: async () => new Response(JSON.stringify({ data: { schedule: { bizItemSchedule: { daily: { date: { "2026-09-22": { stock: 0 } } } } } } })),
   });
@@ -265,11 +268,11 @@ test("operating web collection preserves basic speed, role identity and complete
   crawler.addCollectionDiagnostics(manifest);
   assert.equal(manifest.webCollection, true);
   assert.equal(manifest.workerCollection, undefined);
-  assert.equal(manifest.scheduledCollection, undefined);
+  assert.equal(manifest.scheduledCollection, trigger === "scheduled" ? true : undefined);
   assert.equal(manifest.executionHost.role, "operating_web");
   assert.equal(manifest.executionHost.serviceId, "srv-web-fixture");
   assert.equal(manifest.workerKey, "web");
-  assert.equal(manifest.trigger, "manual");
+  assert.equal(manifest.trigger, trigger);
   assert.equal(manifest.collectorRunToken, token);
   assert.equal(manifest.jobId, "collector_web_fixture");
   assert.equal(manifest.collectorEngine, "operating-web-v2");
@@ -281,17 +284,121 @@ test("operating web collection preserves basic speed, role identity and complete
   assert.equal(manifest.requestPacing.maxConcurrentRequests, null);
   assert.equal(manifest.collectionQuality.status, "complete");
   assert.equal(allowsDerivedUpdates(manifest), true);
+  }
 });
 
 test("web role rejects worker, schedule and engine identity mismatches before any request", () => {
+  let requests = 0;
   for (const env of [
     { COLLECTOR_WEB_RUNTIME: "1", COLLECTOR_WORKER_RUNTIME: "1" },
-    { COLLECTOR_WEB_RUNTIME: "1", SCHEDULED_COLLECTION: "1" },
+    { COLLECTOR_WEB_RUNTIME: "1", COLLECTOR_WORKER_RUNTIME: "1", SCHEDULED_COLLECTION: "1", COLLECTOR_TRIGGER: "scheduled" },
+    { COLLECTOR_WEB_RUNTIME: "1", SCHEDULED_COLLECTION: "1", COLLECTOR_TRIGGER: "manual" },
     { COLLECTOR_WEB_RUNTIME: "1", COLLECTOR_WORKER_KEY: "manual" },
     { COLLECTOR_WEB_RUNTIME: "1", COLLECTOR_TRIGGER: "scheduled" },
+    { COLLECTOR_WEB_RUNTIME: "1", SCHEDULED_COLLECTION: "0", COLLECTOR_TRIGGER: "scheduled" },
+    { COLLECTOR_WEB_RUNTIME: "1", COLLECTOR_WORKER_KEY: "scheduled", SCHEDULED_COLLECTION: "1", COLLECTOR_TRIGGER: "scheduled" },
+    { COLLECTOR_WEB_RUNTIME: "1", COLLECTOR_TRIGGER: "invalid" },
     { COLLECTOR_WEB_RUNTIME: "1", COLLECTOR_ENGINE: "archive-keyword-adapted-v2" },
     { COLLECTOR_WORKER_KEY: "web" },
-  ]) assert.throws(() => harness({ env }), /COLLECTOR_ROLE_MISMATCH/);
+  ]) assert.throws(() => harness({ env, fetchImpl: async () => { requests++; throw new Error("unexpected_request"); } }), /COLLECTOR_ROLE_MISMATCH/);
+  assert.equal(requests, 0);
+});
+
+const webScheduledEnv = {
+  COLLECTOR_WEB_RUNTIME: "1", COLLECTOR_WORKER_RUNTIME: "0", COLLECTOR_WORKER_KEY: "web",
+  COLLECTOR_TRIGGER: "scheduled", SCHEDULED_COLLECTION: "1", COLLECTOR_ENGINE: "operating-web-v2",
+  NAVER_REQUEST_PACING_ENABLED: "0", CHECK_IN: "2026-10-14", CHECK_OUT: "2026-11-13",
+  BOOKING_RANGE_DAYS: "31", DETAIL_RANK_RANGES: "1-10", DAY_USE_MODE: "inspect",
+  SEARCH_MODE: "keyword", SEARCH_INTENT: "keyword", SEARCH_REGION: "", SEARCH_SCOPE: "keyword",
+  COLLECTION_MODE: "precision", COLLECTION_PURPOSE: "revenue_detail", PRODUCT_MODE: "all",
+  SOURCE_ROLE: "admin", COLLECTION_SOURCE: "admin_search", COLLECTOR_JOB_ID: "web-scheduled-fixture",
+};
+
+test("full web scheduled crawler entry preserves its failure receipt and scope on a first-search error", async () => {
+  let calls = 0;
+  const crawler = harness({ runMainFailure: true, keyword: "부산글램핑", env: webScheduledEnv,
+    readdir: async () => [], fetchImpl: async () => { calls++; return new Response("fixture-sensitive-body", {status: 503}); } });
+  await crawler.completion;
+  assert.equal(calls, 1);
+  assert.equal(crawler.process.exitCode, 1);
+  const json = [...crawler.writes.entries()].find(([file]) => path.basename(file) === "manifest.json")?.[1];
+  assert.ok(json, "actual main().catch must save a receipt after full initialization");
+  const manifest = JSON.parse(json);
+  assert.equal(manifest.webCollection, true);
+  assert.equal(manifest.workerCollection, undefined);
+  assert.equal(manifest.scheduledCollection, true);
+  assert.equal(manifest.workerKey, "web");
+  assert.equal(manifest.trigger, "scheduled");
+  assert.equal(manifest.collectorEngine, "operating-web-v2");
+  assert.equal(manifest.collectionFailed, true);
+  assert.equal(manifest.collectionQuality.status, "failed");
+  assert.equal(manifest.collectionQuality.failure.code, "NAVER_SEARCH_HTTP_ERROR");
+  for (const [field, value] of Object.entries({keyword: "부산글램핑", checkIn: "2026-10-14", checkOut: "2026-11-13",
+    bookingRangeDays: 31, detailRankRanges: "1-10", dayUseMode: "inspect", searchRegion: "", productMode: "all"})) {
+    assert.equal(manifest[field], value, field);
+  }
+  assert.equal(manifest.requestPacing.guardEnabled, true);
+  assert.equal(manifest.requestPacing.pacingEnabled, false);
+  assert.equal(manifest.requestPacing.minIntervalMs, 0);
+  assert.equal(manifest.requestPacing.maxConcurrentRequests, null);
+  assert.equal(manifest.requestPacing.stopped, false);
+  assert.doesNotMatch(json + crawler.logs.join(" "), /fixture-sensitive-body/);
+});
+
+test("scheduled web HTTP 403, 429 and HTTP 200 rate-limit or captcha stop new requests and retain blocked receipts", async () => {
+  for (const [status, body, blockedCode] of [
+    [403, "fixture-sensitive-body", null],
+    [429, "fixture-sensitive-body", null],
+    [200, JSON.stringify({errors: [{message: "fixture-sensitive-body", extensions: {code: "BookingAPITooManyRequests"}}]}), "BookingAPITooManyRequests"],
+    [200, '<html><body><div id="wtm-captcha-root"></div></body></html>', "NAVER_CAPTCHA"],
+  ]) {
+    // Execute the complete crawler setup and actual main entry, with only fetch
+    // and filesystem mocked. The parent collector does not fabricate this receipt.
+    let calls = 0;
+    const crawler = harness({runMainFailure: true, keyword: "부산글램핑", env: webScheduledEnv, readdir: async () => [],
+      fetchImpl: async () => { calls++; return new Response(body, {status}); }});
+    await crawler.completion;
+    assert.equal(calls, 1, `${status}/${blockedCode} main fallback must not issue another request`);
+    assert.equal(crawler.process.exitCode, 1);
+    const json = [...crawler.writes.entries()].find(([file]) => path.basename(file) === "manifest.json")?.[1];
+    assert.ok(json);
+    const manifest = JSON.parse(json);
+    assert.equal(manifest.webCollection, true);
+    assert.equal(manifest.scheduledCollection, true);
+    assert.equal(manifest.workerCollection, undefined);
+    assert.equal(manifest.collectionQuality.status, "blocked");
+    assert.equal(manifest.requestPacing.guardEnabled, true);
+    assert.equal(manifest.requestPacing.pacingEnabled, false);
+    assert.equal(manifest.requestPacing.stopped, true);
+    assert.equal(manifest.requestPacing.blockedStatus, status);
+    assert.equal(manifest.requestPacing.blockedCode, blockedCode);
+    assert.equal(allowsDerivedUpdates(manifest), false);
+    assert.doesNotMatch(json + crawler.logs.join(" "), /fixture-sensitive-body|wtm-captcha-root/);
+
+    // Separately exercise the real booking path after the guard has latched.
+    let bookingCalls = 0;
+    const booking = harness({env: webScheduledEnv, fetchImpl: async () => { bookingCalls++; return new Response(body, {status}); }});
+    if (blockedCode === "NAVER_CAPTCHA") {
+      // The existing schedule parser returns no schedule for HTML. The shared
+      // request guard still stops the next attempt before reaching fetch.
+      const first = await booking.getNaverDailySchedule("123", "456");
+      assert.equal(first.day, null);
+    } else {
+      await assert.rejects(booking.getNaverDailySchedule("123", "456"), /NAVER_SCHEDULE_BLOCKED/);
+    }
+    await assert.rejects(booking.getNaverDailySchedule("123", "789", "2026-10-15"), /NAVER_(?:SCHEDULE|REQUEST)_BLOCKED/);
+    assert.equal(bookingCalls, 1, "later products and dates must not restart requests");
+    const bookingManifest = manifestFixture(); delete bookingManifest.workerCollection;
+    booking.addCollectionDiagnostics(bookingManifest);
+    assert.equal(bookingManifest.scheduledCollection, true);
+    if (blockedCode !== "NAVER_CAPTCHA") {
+      assert.equal(bookingManifest.counts.naverScheduleRequested, 1);
+      assert.equal(bookingManifest.counts.naverScheduleFailed, 1);
+      assert.equal(bookingManifest.counts.naverScheduleBlocked, 1);
+    }
+    assert.equal(bookingManifest.requestPacing.stopped, true);
+    assert.equal(bookingManifest.collectionQuality.status, "blocked");
+  }
 });
 
 test("web main-stage standalone captcha preserves a blocked receipt without a worker or scheduled marker", async () => {
@@ -389,7 +496,7 @@ test("compact schedule diagnostics accept only the diagnostic vocabulary and rea
   assert.equal(legacy.collectionErrorCode, "", "old unrecorded failures must not acquire a guessed cause");
 });
 
-test("all three runtimes retain all lodging and day-use products beyond former limits on every date", async () => {
+test("all runtimes including scheduled web retain all lodging and day-use products beyond former limits on every date", async () => {
   const products = [
     ...Array.from({ length: 68 }, (_, i) => ({ bizItemId: `night-${i}`, name: `숙박 ${i}`, bizItemSubType: "ACCOMMODATION_NIGHT" })),
     ...Array.from({ length: 85 }, (_, i) => ({ bizItemId: `day-${i}`, name: `데이유즈 ${i}`, bizItemSubType: "ACCOMMODATION_DAY_USE" })),
@@ -397,6 +504,7 @@ test("all three runtimes retain all lodging and day-use products beyond former l
   const dates = ["2026-09-22", "2026-09-23", "2026-09-24"];
   for (const runtime of [
     { COLLECTOR_WEB_RUNTIME: "1", COLLECTOR_WORKER_KEY: "web" },
+    { COLLECTOR_WEB_RUNTIME: "1", COLLECTOR_WORKER_KEY: "web", COLLECTOR_TRIGGER: "scheduled", SCHEDULED_COLLECTION: "1" },
     { COLLECTOR_WORKER_RUNTIME: "1", COLLECTOR_WORKER_KEY: "manual" },
     { COLLECTOR_WORKER_RUNTIME: "1", COLLECTOR_WORKER_KEY: "scheduled", COLLECTOR_TRIGGER: "scheduled", SCHEDULED_COLLECTION: "1" },
   ]) {
@@ -580,7 +688,7 @@ test("main-stage block writes a safe failure manifest before worker exit", async
 });
 
 test("explicit empty regions remain empty in every collector while legacy CLI inference is preserved", () => {
-  for (const runtime of [{COLLECTOR_WEB_RUNTIME:"1"}, {COLLECTOR_WORKER_RUNTIME:"1"}, {COLLECTOR_WORKER_RUNTIME:"1",COLLECTOR_WORKER_KEY:"scheduled",SCHEDULED_COLLECTION:"1"}]) {
+  for (const runtime of [{COLLECTOR_WEB_RUNTIME:"1"}, {COLLECTOR_WEB_RUNTIME:"1",COLLECTOR_TRIGGER:"scheduled",SCHEDULED_COLLECTION:"1"}, {COLLECTOR_WORKER_RUNTIME:"1"}, {COLLECTOR_WORKER_RUNTIME:"1",COLLECTOR_WORKER_KEY:"scheduled",SCHEDULED_COLLECTION:"1"}]) {
     for (const keyword of ["조천 숙소", "함덕펜션", "제주바블"]) {
       const crawler = harness({ keyword, env: {...runtime, SEARCH_MODE:"keyword",SEARCH_REGION:""} });
       assert.equal(crawler.searchRegion, "", keyword);

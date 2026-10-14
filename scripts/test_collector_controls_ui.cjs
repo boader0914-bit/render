@@ -12,6 +12,15 @@ const source = fs.readFileSync(path.join(__dirname, "../web/collector_controls.j
 const app = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8");
 const clone = value => JSON.parse(JSON.stringify(value));
 const keys = ["web", "manual", "scheduled"];
+test("startup failure labels distinguish execution identity from connection and artifact errors", () => {
+  assert.match(errorMessage("COLLECTOR_ROLE_MISMATCH"), /수집기 역할과 실행 조건.*시작하지 못/);
+  assert.match(errorMessage("COLLECTOR_RUN_TOKEN_INVALID"), /수집 실행 식별값 형식/);
+  assert.doesNotMatch(errorMessage("COLLECTOR_RUN_TOKEN_INVALID"), /연결 설정/);
+  assert.match(errorMessage("COLLECTOR_CRAWL_FAILED"), /프로세스.*결과를 확보하지 못/);
+  assert.doesNotMatch(errorMessage("COLLECTOR_ROLE_MISMATCH"), /네이버 접근 제한|결과 검증/);
+  assert.match(errorMessage("COLLECTOR_PROVIDER_BLOCKED"), /네이버 접근 제한/);
+  assert.match(errorMessage("COLLECTOR_ARTIFACT_INVALID"), /결과 검증/);
+});
 test("review and provider protection affect only their own worker", () => {
   const now=Date.now(), workers=keys.map(workerKey=>({workerKey,configured:true,connected:true,workerLastSeenAt:new Date(now).toISOString(),halted:workerKey==="manual",errorCode:workerKey==="manual"?"COLLECTOR_REVIEW_HOLD":""}));
   assert.equal(workerAvailability({workers},"manual",now).ready,false);

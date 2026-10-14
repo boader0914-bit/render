@@ -75,6 +75,104 @@ test("one-time hourly keywords expose their timetable and execute serially exact
   } finally { await f.close(); }
 });
 
+test("web scheduled startup mismatch preserves its safe cause and stops the remaining hourly batch without replay", async () => {
+  let clock = Date.parse("2026-10-13T21:00:00Z");
+  const calls = [], sleeps = [];
+  const secrets = "password-fixture cookie-fixture https://private-fixture.invalid/?token=fixture";
+  let f, restarted;
+  f = await fixture({ workerKey: "web", sleep: async milliseconds => {
+    sleeps.push(milliseconds); clock += milliseconds; f.setTime(clock);
+  }, runCrawler: async payload => {
+    calls.push(payload);
+    // The running receipt must exist before the scheduler submits a job.
+    const saved = JSON.parse(await fs.readFile(path.join(f.receiptDir, "scheduled_2026-10-14.json"), "utf8"));
+    assert.equal(saved.items[0].status, "running");
+    assert.ok(saved.items.slice(1).every(item => item.status === "queued"));
+    clock += 4000; f.setTime(clock);
+    throw Object.assign(new Error(`COLLECTOR_ROLE_MISMATCH ${secrets}`), { code: "COLLECTOR_ROLE_MISMATCH" });
+  } });
+  try {
+    f.setTime(clock);
+    await f.prepare({ repeat: "once", firstDate: "2026-10-14", time: "06:00", keywordIntervalMinutes: 60,
+      keywords: ["부산글램핑", "태안글램핑", "제천글램핑", "경주글램핑"] });
+    await f.scheduler.setEnabled(true);
+    const result = await f.scheduler.tick();
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].workerKey, "web"); assert.equal(calls[0].trigger, "scheduled");
+    assert.equal(result.status, "interrupted");
+    assert.equal(result.errorCode, "COLLECTOR_ROLE_MISMATCH");
+    assert.ok(result.items.every(item => item.status === "interrupted" && item.errorCode === "COLLECTOR_ROLE_MISMATCH" && item.runId === null));
+    assert.equal(result.items[0].durationMs, 4000);
+    assert.ok(result.items.slice(1).every(item => !item.startedAt && !item.executionStartedAt && !Object.hasOwn(item, "durationMs")));
+    assert.deepEqual(sleeps, [], "a startup mismatch must not wait to submit another keyword");
+    const file = path.join(f.receiptDir, `${result.id}.json`);
+    const saved = await fs.readFile(file, "utf8");
+    assert.doesNotMatch(saved, /password-fixture|cookie-fixture|private-fixture|\?token=fixture/);
+    assert.equal(JSON.parse(saved).items[0].errorCode, "COLLECTOR_ROLE_MISMATCH");
+    assert.doesNotMatch(JSON.stringify(await f.scheduler.status()), /password-fixture|cookie-fixture|private-fixture/);
+    await f.scheduler.tick();
+    f.scheduler.stop();
+    restarted = createKeywordWorkerScheduler(f.options);
+    await restarted.tick();
+    assert.equal(calls.length, 1, "an existing interrupted occurrence must never be resubmitted");
+    assert.equal(await fs.readFile(file, "utf8"), saved, "duplicate lookups preserve the original receipt");
+    assert.equal((await restarted.status()).latest.length, 1);
+  } finally { restarted?.stop(); await f.close(); }
+});
+
+test("web hourly reservation keeps the same observation date, 31-day scope and once-only serial receipts", async () => {
+  const firstStart = Date.parse("2026-10-13T21:00:00Z");
+  let clock = firstStart, active = 0;
+  const calls = [], starts = [], sleeps = [];
+  let f, restarted;
+  f = await fixture({ workerKey: "web", sleep: async milliseconds => {
+    sleeps.push(milliseconds); clock += milliseconds; f.setTime(clock);
+  }, runCrawler: async payload => {
+    assert.equal(++active, 1, "hourly keywords must not overlap");
+    starts.push(clock); calls.push(payload);
+    clock += 10000; f.setTime(clock); active--;
+    return { runId: `web_hourly_${calls.length}`, collectionQuality: { status: "complete" } };
+  } });
+  try {
+    f.setTime(clock);
+    const keywords = ["부산글램핑", "태안글램핑", "제천글램핑", "경주글램핑"];
+    await f.prepare({ repeat: "once", firstDate: "2026-10-14", time: "06:00", keywordIntervalMinutes: 60, keywords,
+      collection: { dateMode: "rolling", bookingDays: 31, detailRankRanges: "1-10", dayUseMode: "inspect" } });
+    await f.scheduler.setEnabled(true);
+    const timetable = (await f.scheduler.status()).upcomingItems;
+    const result = await f.scheduler.tick();
+    assert.equal(result.status, "complete"); assert.equal(active, 0);
+    assert.deepEqual(starts, keywords.map((_, index) => firstStart + index * 3600000));
+    assert.deepEqual(calls.map(payload => payload.keyword), keywords);
+    assert.deepEqual(result.items.map(item => item.scheduledAt), timetable.map(item => item.scheduledAt));
+    for (const [index, payload] of calls.entries()) {
+      assert.deepEqual({ workerKey: payload.workerKey, trigger: payload.trigger, scheduledCollection: payload.scheduledCollection,
+        checkIn: payload.checkIn, checkOut: payload.checkOut, bookingRangeDays: payload.bookingRangeDays,
+        detailRankRanges: payload.detailRankRanges, bookingRangePlaceLimit: payload.bookingRangePlaceLimit, dayUseMode: payload.dayUseMode,
+        adults: payload.adults, searchMode: payload.searchMode, collectionMode: payload.collectionMode,
+        collectionPurpose: payload.collectionPurpose, productMode: payload.productMode }, {
+        workerKey: "web", trigger: "scheduled", scheduledCollection: true, checkIn: "2026-10-14", checkOut: "2026-11-13",
+        bookingRangeDays: 31, detailRankRanges: "1-10", bookingRangePlaceLimit: 10, dayUseMode: "inspect", adults: 2,
+        searchMode: "keyword", collectionMode: "precision", collectionPurpose: "revenue_detail", productMode: "all" });
+      assert.equal(payload.clientRequestId, `web_scheduled_2026-10-14_${index + 1}`);
+      assert.equal(payload.scheduleOccurrenceId, "web_scheduled_2026-10-14");
+      assert.equal(result.items[index].runId, `web_hourly_${index + 1}`);
+      assert.equal(result.items[index].durationMs, 10000);
+    }
+    assert.equal(new Set(calls.map(payload => payload.clientRequestId)).size, 4);
+    assert.ok(sleeps.length > 0 && sleeps.every(value => value > 0 && value <= 15000));
+    const file = path.join(f.receiptDir, `${result.id}.json`);
+    const saved = await fs.readFile(file, "utf8");
+    await f.scheduler.tick();
+    f.scheduler.stop(); restarted = createKeywordWorkerScheduler(f.options);
+    await restarted.tick();
+    assert.equal(calls.length, 4);
+    assert.equal(await fs.readFile(file, "utf8"), saved);
+    assert.equal((await restarted.status()).nextRunAt, null);
+    assert.equal((await restarted.status()).latest.length, 1);
+  } finally { restarted?.stop(); await f.close(); }
+});
+
 test("late and long hourly work delays later starts without overlap or catch-up bursts", async () => {
   let clock = Date.parse("2026-09-23T05:03:00Z");
   const starts = [];

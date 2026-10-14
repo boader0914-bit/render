@@ -162,6 +162,7 @@ test("block marker promptly persists protection and reports once while retaining
   let notices = 0, sawPersistent = false;
   const f = await fixture(t, { onProviderBlocked: async () => { notices++; sawPersistent = (await f.api.status()).halted; },
     execute: async ({ child, args, config, close }) => {
+      child.stderr.write("Error: COLLECTOR_ROLE_MISMATCH\n");
       child.stdout.write("COLLECTOR_PROVIDER_"); child.stdout.write("BLOCKED\nCOLLECTOR_PROVIDER_BLOCKED\n");
       for (let i = 0; i < 50 && !notices; i++) await delay(5);
       assert.equal(notices, 1); await artifacts(config.env, args[1], { blocked: true }); close(1);
@@ -194,6 +195,101 @@ test("restarting with an unfinished durable receipt requires review and never re
 test("stdout success cannot replace a missing on-disk receipt", async t => {
   const f = await fixture(t, { execute: async ({ child, close }) => { child.stdout.write('{"collectionQuality":{"status":"complete"}}\n'); close(); } });
   await assert.rejects(f.run(), { code: "COLLECTOR_ARTIFACT_INVALID" });
+});
+
+async function assertNoRetainedText(directory, secret) {
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    const file = path.join(directory, entry.name);
+    if (entry.isDirectory()) await assertNoRetainedText(file, secret);
+    else assert.equal((await fs.readFile(file, "utf8")).includes(secret), false, entry.name);
+  }
+}
+
+test("empty failed startup relays only exact allowlisted codes across UTF-8 chunks", async t => {
+  for (const code of ["COLLECTOR_ROLE_MISMATCH", "COLLECTOR_RUN_TOKEN_INVALID"]) {
+    const progress = [], secret = "PRIVATE_인증키_credential_value";
+    const f = await fixture(t, { onProgress: value => progress.push(value), execute: async ({ child, close }) => {
+      const stderr = Buffer.from(`private path: /config/${secret}\nthrow new Error("${code}");\nError: ${code}\r\n    at /private/${secret}:18:1\n`);
+      // Single-byte chunks split both the Korean text and the recognized code.
+      for (const byte of stderr) child.stderr.write(Buffer.from([byte]));
+      child.stdout.write('{"collectionQuality":{"status":"complete"}}\n'); close(1);
+    } });
+    await assert.rejects(f.run(), error => { assert.equal(error.code, code); assert.equal(error.message, code); return true; });
+    assert.deepEqual(progress, []); assert.deepEqual(f.errors, []);
+    assert.equal((await f.api.status()).halted, false);
+    assert.deepEqual(await fs.readdir(f.outputsDir).catch(() => []), []);
+    await assertNoRetainedText(f.dataDir, secret);
+  }
+});
+
+test("unknown, embedded, oversized and conflicting stderr codes remain generic failures", async t => {
+  const secret = "PRIVATE_credentials_should_not_be_retained";
+  for (const stderr of [
+    `Error: COLLECTOR_JOB_ID_INVALID\n${secret}\n`,
+    `source contains Error: COLLECTOR_ROLE_MISMATCH\n${secret}\n`,
+    `throw new Error("COLLECTOR_ROLE_MISMATCH");\n${secret}\n`,
+    `Error: COLLECTOR_ROLE_MISMATCH ${secret}\n`,
+    `${secret.repeat(4000)}Error: COLLECTOR_ROLE_MISMATCH\n`,
+    `Error: COLLECTOR_ROLE_MISMATCH\nError: COLLECTOR_RUN_TOKEN_INVALID\n${secret}\n`,
+    `COLLECTOR_ROLE_MISMATCH\n${secret}\n`
+  ]) {
+    const progress = [];
+    const f = await fixture(t, { onProgress: value => progress.push(value), execute: async ({ child, close }) => {
+      child.stderr.write(stderr); close(1);
+    } });
+    await assert.rejects(f.run(), { code: "COLLECTOR_CRAWL_FAILED", message: "COLLECTOR_CRAWL_FAILED" });
+    assert.deepEqual(progress, []); await assertNoRetainedText(f.dataDir, secret);
+  }
+  const stdoutOnly = await fixture(t, { execute: async ({ child, close }) => {
+    child.stdout.write("Error: COLLECTOR_ROLE_MISMATCH\n"); close(1);
+  } });
+  await assert.rejects(stdoutOnly.run(), { code: "COLLECTOR_CRAWL_FAILED" });
+});
+
+test("startup diagnostics never approve exit-zero results or override receipt validation", async t => {
+  const good = await fixture(t, { execute: async ({ child, args, config, close }) => {
+    child.stderr.write("Error: COLLECTOR_ROLE_MISMATCH\n"); await artifacts(config.env, args[1]); close();
+  } });
+  assert.equal((await good.run()).collectionQuality.status, "complete");
+  const empty = await fixture(t, { execute: async ({ child, close }) => {
+    child.stderr.write("Error: COLLECTOR_ROLE_MISMATCH\n"); close();
+  } });
+  await assert.rejects(empty.run(), { code: "COLLECTOR_ARTIFACT_INVALID" });
+  for (const exitCode of [0, 1]) {
+    const invalid = await fixture(t, { execute: async ({ child, args, config, close }) => {
+      child.stderr.write("Error: COLLECTOR_ROLE_MISMATCH\n");
+      await artifacts(config.env, args[1], { mutate: manifest => {
+        manifest.checkOut = "2026-10-01"; manifest.collectionFailed = true;
+      } }); close(exitCode);
+    } });
+    await assert.rejects(invalid.run(), { code: "COLLECTOR_SCOPE_MISMATCH" });
+    assert.deepEqual(await fs.readdir(invalid.outputsDir).catch(() => []), []);
+  }
+  const failed = await fixture(t, { execute: async ({ child, args, config, close }) => {
+    child.stderr.write("Error: COLLECTOR_ROLE_MISMATCH\n"); await artifacts(config.env, args[1]); close(1);
+  } });
+  await assert.rejects(failed.run(), { code: "COLLECTOR_CRAWL_FAILED" });
+});
+
+test("a failed child without an outputs directory is still a startup failure", async t => {
+  for (const code of ["COLLECTOR_RUN_TOKEN_INVALID", null]) {
+    const f = await fixture(t, { execute: async ({ child, config, close }) => {
+      // The fixture removes only the empty directory it owns, never recursively.
+      await fs.rmdir(config.env.OUTPUTS_DIR);
+      if (code) child.stderr.write(`Error: ${code}`); close(1);
+    } });
+    await assert.rejects(f.run(), { code: code || "COLLECTOR_CRAWL_FAILED" });
+  }
+});
+
+test("provider blocking remains first priority over empty startup diagnostics", async t => {
+  let notices = 0;
+  const f = await fixture(t, { onProviderBlocked: async () => { notices++; }, execute: async ({ child, close }) => {
+    child.stderr.write("Error: COLLECTOR_ROLE_MISMATCH\n");
+    child.stdout.write("COLLECTOR_PROVIDER_BLOCKED\n"); close(1);
+  } });
+  await assert.rejects(f.run(), { code: "COLLECTOR_PROVIDER_BLOCKED" });
+  assert.equal(notices, 1); assert.equal((await f.api.status()).errorCode, "COLLECTOR_PROVIDER_BLOCKED");
 });
 
 test("scope mismatches, escaped files and unguarded receipts never publish", async t => {
@@ -271,7 +367,8 @@ test("empty-region keyword results publish but changed regions are still rejecte
 
 test("failed first search preserves its diagnosis in the published failure receipt", async t => {
   const failure={code:"NAVER_SEARCH_STATE_MISSING",phase:"naver_main",httpStatus:200};
-  const f=await fixture(t,{execute:async({args,config,close})=>{
+  const f=await fixture(t,{execute:async({child,args,config,close})=>{
+    child.stderr.write("Error: COLLECTOR_ROLE_MISMATCH\n");
     await artifacts(config.env,args[1],{mutate:m=>{m.collectionFailed=true;m.collectionFailure=failure;}});close(1);
   }});
   const result=await f.run({keyword:"제주바블",env:{...requestEnv,SEARCH_REGION:""}});
