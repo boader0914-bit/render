@@ -2244,6 +2244,241 @@ html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(.collection-q
   align-content: start;
 }
 
+/* History browsing has independent keyword/date/run controls and saved-result evidence. */
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(.history-ops-filter-form, .history-ops-select-row) {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) repeat(2, minmax(0, 1fr)) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-select-row {
+  grid-template-columns: minmax(0, .75fr) minmax(0, 1.5fr) auto;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-browser label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-browser :is(input, select) {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 42px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--ui-radius-control);
+  background: var(--surface-control);
+  color: var(--text-primary);
+  font: inherit;
+  line-height: 1.4;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(.history-ops-filter-actions button, .history-ops-select-row > button, [data-history-ops-retry]) {
+  min-height: 42px;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--ui-radius-control);
+  background: var(--surface-control);
+  color: var(--text-primary);
+  box-shadow: none;
+  cursor: pointer;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-filter-actions button[type="submit"] {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+  color: var(--accent-contrast);
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(button, input, select, summary, a):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-keyword-list {
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 2px;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-keyword-list button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  padding: 13px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--ui-radius-control);
+  text-align: left;
+  white-space: normal;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  box-shadow: none;
+  cursor: pointer;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-keyword-list button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--surface-selected);
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-keyword-list button > span {
+  font-size: 18px;
+  font-weight: 650;
+  line-height: 1.4;
+  color: var(--accent-strong);
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(.history-ops-saved-source, .history-ops-saved-company) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-saved-source {
+  justify-content: start;
+  color: var(--text-secondary);
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-status {
+  padding: 4px 9px;
+  border-radius: 6px;
+  background: var(--surface-selected);
+  color: var(--accent-strong);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-status:is(.failed, .blocked, .interrupted) {
+  color: var(--danger-strong);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface-card));
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-status:is(.partial, .unknown) {
+  color: var(--warning-strong);
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface-card));
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-source-details {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(.history-ops-source-details div, .history-ops-saved-company > div) {
+  min-width: 0;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-source-details :is(dt, dd) {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(.history-ops-source-details dt, .history-ops-cumulative-note) {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-saved-company {
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--ui-radius-control);
+  background: var(--surface-control);
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-saved-company :is(strong, small) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-saved-company > :is(a, span) {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-saved-company > a {
+  color: var(--accent-strong);
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-saved-company > span {
+  color: var(--text-secondary);
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-saved-companies summary {
+  margin-bottom: 10px;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(.history-ops-loading, .history-ops-saved-quality, .history-ops-saved-quality ul) {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-saved-quality strong {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-saved-quality ul {
+  padding: 8px 0 0 20px;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-error {
+  margin: 0;
+  color: var(--danger-strong);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.6;
+}
+
+@media (max-width: 1100px) {
+  html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(.history-ops-filter-form, .history-ops-select-row) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-select-row > button {
+    justify-self: start;
+  }
+}
+
+@media (max-width: 720px) {
+  html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(.history-ops-filter-form, .history-ops-select-row, .history-ops-source-details) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-keyword-list button > span {
+    font-size: 16px;
+  }
+}
+
 /* Collection history keeps readable detail text without oversized legacy headings. */
 html[data-theme-resolved] body.role-admin #historyOpsDashboard {
   font-size: 13px;

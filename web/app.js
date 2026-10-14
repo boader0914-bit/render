@@ -44,6 +44,10 @@ const state = {
   locationCardRequests: null,
   locationScoreOverrides: null,
   historyOps: null,
+  historyOpsSelection: null,
+  historyOpsFilterDraft: null,
+  historyOpsCatalogLoading: false,
+  historyOpsCatalogError: "",
   companyMaster: null,
   companyMasterFilters: {
     query: "",
@@ -17439,6 +17443,301 @@ function historyOpsSource() {
   return state.historyOps || {};
 }
 
+function historyOpsSelectionState() {
+  if (!state.historyOpsSelection) state.historyOpsSelection = {
+    initialized: false, keywordKey: "", query: "", startDate: "", endDate: "",
+    runId: "", data: null, loading: false, error: "", filterError: "", companiesOpen: false
+  };
+  return state.historyOpsSelection;
+}
+
+function historyOpsRunKeyword(run = {}) {
+  return String(run.keyword || run.searchKeyword || run.naverKeyword || String(run.label || "").split("·")[0] || "").trim();
+}
+
+function historyOpsBrowseModel() {
+  const selection = historyOpsSelectionState();
+  const keywordMap = new Map();
+  for (const row of historyOpsSource().keywords || []) {
+    const key = companyKey(row.keyword || row.keywordKey);
+    if (key) keywordMap.set(key, { ...row, keywordKey: key });
+  }
+  for (const run of state.runs || []) {
+    const keyword = historyOpsRunKeyword(run), key = companyKey(keyword);
+    if (key && !keywordMap.has(key)) keywordMap.set(key, { keyword, keywordKey: key, runCount: null, observations: null, companyCount: null, timeline: [], companyTrends: [] });
+  }
+  const keywords = [...keywordMap.values()];
+  const queryKey = companyKey(selection.query);
+  const visibleKeywords = keywords.filter(row => !queryKey || companyKey(row.keyword).includes(queryKey));
+  const selectedKeyword = keywordMap.get(selection.keywordKey) || null;
+  const runs = (state.runs || []).filter(run => run?.id && selection.keywordKey
+    && companyKey(historyOpsRunKeyword(run)) === selection.keywordKey)
+    .filter(run => {
+      if (!selection.startDate && !selection.endDate) return true;
+      if (run.collectedAtSource === "filesystem") return false;
+      const day = collectionArchiveDay(run.collectedAt);
+      return day && (!selection.startDate || day >= selection.startDate) && (!selection.endDate || day <= selection.endDate);
+    }).sort((a, b) => (Date.parse(b.collectedAt || "") || 0) - (Date.parse(a.collectedAt || "") || 0)
+      || String(b.id).localeCompare(String(a.id)));
+  return { selection, keywords, visibleKeywords, selectedKeyword, runs,
+    selectedRun: runs.find(run => run.id === selection.runId) || null };
+}
+
+function historyOpsRunTime(run = {}) {
+  if (run.collectedAtSource === "filesystem") return "수집시각 미확인";
+  const value = Date.parse(String(run.collectedAt || ""));
+  return Number.isFinite(value) ? new Date(value + 9 * 3600000).toISOString().replace("T", " ").slice(0, 16) : "수집시각 미확인";
+}
+
+function historyOpsRunOptionLabel(run = {}) {
+  return [historyOpsRunTime(run), collectionArchiveWorker(run).label, collectionArchiveQuality(run).label, String(run.id || "").slice(-10)].join(" · ");
+}
+
+let historyOpsSelectionRequestSequence = 0;
+let historyOpsCatalogRequestSequence = 0;
+
+async function selectHistoryOpsRun(runId = "") {
+  if (!isAdminRole()) return null;
+  const selection = historyOpsSelectionState();
+  const model = historyOpsBrowseModel();
+  const id = String(runId || "");
+  const requestSequence = ++historyOpsSelectionRequestSequence;
+  if (selection.runId !== id) selection.companiesOpen = false;
+  selection.runId = id;
+  selection.data = null;
+  selection.loading = false;
+  selection.error = "";
+  if (!id || !model.runs.some(run => run.id === id)) {
+    selection.runId = "";
+    renderHistoryOps();
+    return null;
+  }
+  selection.loading = true;
+  renderHistoryOps();
+  try {
+    const data = await fetchJson(`/api/history/runs/${encodeURIComponent(id)}`);
+    if (!isAdminRole() || requestSequence !== historyOpsSelectionRequestSequence || selection !== state.historyOpsSelection || selection.runId !== id) return null;
+    if (data?.run?.id !== id || data?.historyView?.sourceRunId !== id || data?.historyView?.readOnly !== true) {
+      throw new Error("선택한 저장 결과와 응답이 일치하지 않습니다.");
+    }
+    selection.data = data;
+    return data;
+  } catch (error) {
+    if (requestSequence === historyOpsSelectionRequestSequence && selection === state.historyOpsSelection && selection.runId === id) {
+      selection.error = error.message || "저장 자료를 불러오지 못했습니다.";
+    }
+    return null;
+  } finally {
+    if (requestSequence === historyOpsSelectionRequestSequence && selection === state.historyOpsSelection && selection.runId === id) {
+      selection.loading = false;
+      if (state.activeTab === "historyOps") renderHistoryOps();
+    }
+  }
+}
+
+async function ensureHistoryOpsSelection() {
+  if (!isAdminRole()) return;
+  const selection = historyOpsSelectionState();
+  let model = historyOpsBrowseModel();
+  if (!selection.initialized && model.keywords.length) {
+    selection.initialized = true;
+    const currentKey = companyKey(activeKeyword());
+    selection.keywordKey = model.keywords.find(row => row.keywordKey === currentKey)?.keywordKey || model.keywords[0]?.keywordKey || "";
+    model = historyOpsBrowseModel();
+  }
+  if (selection.loading) return;
+  if (selection.runId && !model.selectedRun) {
+    ++historyOpsSelectionRequestSequence;
+    selection.data = null;
+    selection.error = "선택한 수집 결과가 현재 목록에 없습니다. 다른 결과를 선택하세요.";
+    renderHistoryOps();
+    return;
+  }
+  if (selection.runId && model.selectedRun && (selection.data || selection.error)) return;
+  await selectHistoryOpsRun(model.selectedRun?.id || model.runs[0]?.id || "");
+}
+
+function historyOpsReadFilterForm() {
+  const selection = historyOpsSelectionState();
+  const form = els.historyOpsDashboard?.querySelector("[data-history-ops-filter-form]");
+  if (!form) return { query: selection.query, startDate: selection.startDate, endDate: selection.endDate };
+  const field = name => String(form.elements.namedItem(name)?.value || "");
+  return { query: field("query"), startDate: field("startDate"), endDate: field("endDate") };
+}
+
+async function applyHistoryOpsFilters(filters = {}) {
+  const selection = historyOpsSelectionState();
+  const draft = { query: "", startDate: "", endDate: "", ...filters };
+  state.historyOpsFilterDraft = draft;
+  if ([draft.startDate, draft.endDate].some(value => value && !collectionArchiveDate(value))
+    || (draft.startDate && draft.endDate && draft.startDate > draft.endDate)) {
+    selection.filterError = "수집일 범위를 올바르게 입력하세요.";
+    renderHistoryOps();
+    return;
+  }
+  ++historyOpsSelectionRequestSequence;
+  Object.assign(selection, draft, { initialized: true, runId: "", data: null, loading: false, error: "", filterError: "" });
+  const model = historyOpsBrowseModel();
+  if (!model.visibleKeywords.some(row => row.keywordKey === selection.keywordKey)) selection.keywordKey = model.visibleKeywords[0]?.keywordKey || "";
+  await selectHistoryOpsRun(historyOpsBrowseModel().runs[0]?.id || "");
+}
+
+async function selectHistoryOpsKeyword(keywordKey = "") {
+  const selection = historyOpsSelectionState();
+  const key = companyKey(keywordKey);
+  if (!historyOpsBrowseModel().keywords.some(row => row.keywordKey === key)) return;
+  ++historyOpsSelectionRequestSequence;
+  Object.assign(selection, { initialized: true, keywordKey: key, runId: "", data: null, loading: false, error: "" });
+  await selectHistoryOpsRun(historyOpsBrowseModel().runs[0]?.id || "");
+}
+
+async function refreshHistoryOpsCatalog() {
+  if (!isAdminRole()) return;
+  const requestSequence = ++historyOpsCatalogRequestSequence;
+  state.historyOpsCatalogLoading = true;
+  state.historyOpsCatalogError = "";
+  renderHistoryOps();
+  try {
+    const [catalog, summary] = await Promise.all([fetchJson("/api/runs"), fetchJson("/api/history/summary")]);
+    if (!isAdminRole() || requestSequence !== historyOpsCatalogRequestSequence) return;
+    state.runs = catalog.runs || [];
+    state.historyOps = summary;
+    await ensureHistoryOpsSelection();
+  } catch (error) {
+    if (requestSequence === historyOpsCatalogRequestSequence) state.historyOpsCatalogError = error.message || "수집 이력을 갱신하지 못했습니다.";
+  } finally {
+    if (requestSequence === historyOpsCatalogRequestSequence) {
+      state.historyOpsCatalogLoading = false;
+      if (state.activeTab === "historyOps") renderHistoryOps();
+    }
+  }
+}
+
+function historyOpsFilterControls(model) {
+  const selection = model.selection;
+  const draft = state.historyOpsFilterDraft || selection;
+  return `
+    <section class="history-ops-browser history-ops-card" aria-label="수집 이력 선택">
+      <form class="history-ops-filter-form" data-history-ops-filter-form>
+        <label><span>키워드 검색</span><input type="search" name="query" value="${escapeHtml(draft.query || "")}" placeholder="경남글램핑 등" autocomplete="off"></label>
+        <label><span>수집 시작일</span><input type="date" name="startDate" value="${escapeHtml(draft.startDate || "")}"></label>
+        <label><span>수집 종료일</span><input type="date" name="endDate" value="${escapeHtml(draft.endDate || "")}"></label>
+        <div class="history-ops-filter-actions"><button type="submit">찾기</button><button type="button" data-history-ops-reset>초기화</button></div>
+      </form>
+      <div class="history-ops-select-row">
+        <label><span>키워드 선택 <small>${fmtNumber(model.visibleKeywords.length)}개</small></span>
+          <select data-history-ops-keyword-select ${model.visibleKeywords.length ? "" : "disabled"}>
+            ${model.visibleKeywords.length && !model.visibleKeywords.some(row => row.keywordKey === selection.keywordKey) ? `<option value="" selected>키워드를 선택하세요</option>` : ""}${model.visibleKeywords.length ? model.visibleKeywords.map(row => `<option value="${escapeHtml(row.keywordKey)}" ${row.keywordKey === selection.keywordKey ? "selected" : ""}>${escapeHtml(row.keyword)}</option>`).join("") : `<option value="">검색한 키워드 없음</option>`}
+          </select>
+        </label>
+        <label><span>저장된 수집 결과 <small>${fmtNumber(model.runs.length)}건 · 수집일 기준</small></span>
+          <select data-history-ops-run-select ${model.runs.length ? "" : "disabled"}>
+            ${!model.selectedRun && model.runs.length ? `<option value="" selected>수집 결과를 다시 선택하세요</option>` : ""}${model.runs.length ? model.runs.map(run => `<option value="${escapeHtml(run.id)}" ${run.id === selection.runId ? "selected" : ""}>${escapeHtml(historyOpsRunOptionLabel(run))}</option>`).join("") : `<option value="">선택한 조건의 저장 결과 없음</option>`}
+          </select>
+        </label>
+        <button type="button" data-history-ops-refresh ${state.historyOpsCatalogLoading ? "disabled" : ""}>${state.historyOpsCatalogLoading ? "목록 갱신 중" : "목록 새로고침"}</button>
+      </div>
+      ${[selection.filterError, state.historyOpsCatalogError, selection.error, historyOpsSource().error ? `누적 자료 조회 실패: ${historyOpsSource().error}` : ""].filter(Boolean).map(message => `<p class="history-ops-error" role="alert">${escapeHtml(message)}</p>`).join("")}
+    </section>`;
+}
+
+function historyOpsCountText(value) {
+  return value === null || value === undefined || value === "" || !Number.isFinite(Number(value)) ? "미확인" : fmtNumber(Number(value));
+}
+
+function historyOpsRateText(value) {
+  return value === null || value === undefined || value === "" || !Number.isFinite(Number(value)) ? "미확인" : fmtRate(Number(value));
+}
+
+function historyOpsCompanyId(item = {}) {
+  return String(item.companyId || item.companyProfile?.companyId || item.inventoryCapacityBaseline?.companyId || "");
+}
+
+function historyOpsSavedCompanyRows(data = {}) {
+  const rows = [], known = new Set();
+  for (const item of [...(data.availability?.items || []), ...(data.ranking?.items || [])]) {
+    const id = historyOpsCompanyId(item);
+    const aliases = [id ? `company:${id}` : "", item.placeId || item.place_id ? `place:${item.placeId || item.place_id}` : "",
+      item.bookingBusinessId ? `booking:${item.bookingBusinessId}` : ""].filter(Boolean);
+    const identity = `${companyKey(item.name)}|${companyKey(item.address || item.region)}`;
+    const duplicate = aliases.length ? aliases.some(key => known.has(key))
+      : rows.some(row => `${companyKey(row.name)}|${companyKey(row.address || row.region)}` === identity);
+    if (duplicate) continue;
+    aliases.forEach(key => known.add(key));
+    rows.push(item);
+  }
+  return rows;
+}
+
+function historyOpsSavedResultHtml(model) {
+  const selection = model.selection;
+  const metadata = model.selectedRun;
+  if (!metadata) return `<section class="history-ops-card history-ops-selected-result"><div class="history-card-head"><strong>선택한 수집 결과</strong></div><p class="history-empty-inline">${selection.runId ? "선택한 결과가 현재 목록에 없습니다. 다른 결과를 선택하세요." : "선택한 키워드·수집일의 저장 결과가 없습니다."}</p></section>`;
+  const heading = `<div class="history-card-head"><strong>선택한 수집 결과</strong><small>${escapeHtml(historyOpsRunTime(metadata))} · ${escapeHtml(collectionArchiveWorker(metadata).label)}</small></div>`;
+  if (selection.loading) return `<section class="history-ops-card history-ops-selected-result" aria-busy="true">${heading}<p class="history-ops-loading" role="status">선택한 저장 자료를 불러오는 중입니다.</p></section>`;
+  if (selection.error || !selection.data) return `<section class="history-ops-card history-ops-selected-result">${heading}<p class="history-empty-inline">${escapeHtml(collectionArchiveQuality(metadata).label)} · 상세 자료 미확인. 다른 수집 결과로 대신 표시하지 않습니다.</p><button type="button" data-history-ops-retry>다시 조회</button></section>`;
+  const data = selection.data, run = data.run || {}, diagnostics = data.collectionDiagnostics || {};
+  const status = collectionArchiveQuality({ ...metadata, ...run });
+  const counts = { ...(run.counts || {}), ...(run.collectionQuality?.counts || {}), ...(diagnostics.counts || {}) };
+  const issues = Array.isArray(diagnostics.issues) ? diagnostics.issues : [];
+  const companies = historyOpsSavedCompanyRows(data);
+  const reviewNote = data.historyView?.companyReviewApplied ? " · 현재 DB 검수값 적용" : "";
+  return `
+    <section class="history-ops-card history-ops-selected-result" aria-label="선택한 수집 결과">
+      ${heading}
+      <div class="history-ops-saved-source"><strong class="history-ops-status ${escapeHtml(status.key)}">${escapeHtml(status.label)}</strong><span>${escapeHtml(run.keyword || metadata.keyword || "")} · 저장 수집 자료${reviewNote}</span></div>
+      <dl class="history-ops-source-details">
+        <div><dt>결과 번호</dt><dd>${escapeHtml(selection.runId)}</dd></div>
+        <div><dt>예약 조회기간</dt><dd>${escapeHtml(dateRangeLabel(run))}</dd></div>
+        <div><dt>상세 범위</dt><dd>${escapeHtml(run.collectionMode === "fast" ? "상세 생략" : run.detailRankRanges ? effectiveDetailRankRange(run) : "상세 범위 미확인")}</dd></div>
+      </dl>
+      <div class="history-ops-comparison">
+        ${historyOpsCard("저장된 업체", fmtNumber(companies.length), `예약 상세 ${fmtNumber(data.availability?.items?.length || 0)}곳 · 순위 ${fmtNumber(data.ranking?.items?.length || 0)}곳`)}
+        ${historyOpsCard("예약 일정 응답", `${historyOpsCountText(counts.naverScheduleSucceeded)} / ${historyOpsCountText(counts.naverScheduleRequested)}`, `오류 ${historyOpsCountText(counts.naverScheduleFailed)} · 차단 ${historyOpsCountText(counts.naverScheduleBlocked)}`)}
+      </div>
+      <div class="history-ops-saved-quality" aria-label="선택한 수집 품질">
+        <strong>${escapeHtml(diagnostics.reasonLabel || diagnostics.summary || (status.key === "complete" ? "저장 결과 완료" : "상세 원인 기록 미확인"))}</strong>
+        ${issues.length ? `<ul>${issues.slice(0, 12).map(issue => `<li>${escapeHtml([issue.companyName, issue.productName, issue.label || issue.code, Array.isArray(issue.dates) ? issue.dates.join(", ") : "", issue.httpStatus ? `HTTP ${issue.httpStatus}` : ""].filter(Boolean).join(" · "))}</li>`).join("")}</ul>${issues.length > 12 ? `<small>추가 ${fmtNumber(issues.length - 12)}건의 기록이 있습니다.</small>` : ""}` : ""}
+      </div>
+      <details class="history-ops-saved-companies" data-history-ops-companies ${selection.companiesOpen ? "open" : ""}><summary>이 수집에 포함된 업체 ${fmtNumber(companies.length)}곳</summary>
+        <div class="history-ops-company-list">${companies.length ? companies.map(item => {
+          const companyId = historyOpsCompanyId(item);
+          const rank = Number(item.rank || item.placeRank);
+          const title = `${Number.isFinite(rank) && rank > 0 ? `${fmtNumber(rank)}위 · ` : ""}${item.name || "업체명 미확인"}`;
+          const note = [item.region || item.address, item.bookingStatus || item.naverBookingStockStatus || item.productTypeSummary].filter(Boolean).join(" · ");
+          return `<article class="history-ops-saved-company"><div><strong>${escapeHtml(title)}</strong>${note ? `<small>${escapeHtml(note)}</small>` : ""}</div>${companyId ? `<a href="${escapeHtml(adminDbCompanyDetailUrl(companyId))}">업체 DB</a>` : `<span>DB 미연결</span>`}</article>`;
+        }).join("") : `<p class="history-empty-inline">저장된 업체 상세가 없습니다. 정상 0건으로 단정할 수 없습니다.</p>`}</div>
+      </details>
+    </section>`;
+}
+
+function bindHistoryOpsEvents() {
+  const dashboard = els.historyOpsDashboard;
+  if (!dashboard) return;
+  dashboard.addEventListener("input", event => {
+    if (event.target.closest("[data-history-ops-filter-form]")) state.historyOpsFilterDraft = historyOpsReadFilterForm();
+  });
+  dashboard.addEventListener("toggle", event => {
+    if (event.target.matches("[data-history-ops-companies]")) historyOpsSelectionState().companiesOpen = Boolean(event.target.open);
+  }, true);
+  dashboard.addEventListener("submit", event => {
+    if (!event.target.matches("[data-history-ops-filter-form]")) return;
+    event.preventDefault();
+    void applyHistoryOpsFilters(historyOpsReadFilterForm());
+  });
+  dashboard.addEventListener("change", event => {
+    if (event.target.matches("[data-history-ops-keyword-select]")) void selectHistoryOpsKeyword(event.target.value);
+    if (event.target.matches("[data-history-ops-run-select]")) void selectHistoryOpsRun(event.target.value);
+  });
+  dashboard.addEventListener("click", event => {
+    const keyword = event.target.closest("[data-history-ops-keyword]");
+    if (keyword) { void selectHistoryOpsKeyword(keyword.dataset.historyOpsKeyword); return; }
+    if (event.target.closest("[data-history-ops-reset]")) { void applyHistoryOpsFilters(); return; }
+    if (event.target.closest("[data-history-ops-refresh]")) { void refreshHistoryOpsCatalog(); return; }
+    if (event.target.closest("[data-history-ops-retry]")) void selectHistoryOpsRun(historyOpsSelectionState().runId);
+  });
+}
+
 function activeHistoryKeywordSummary() {
   const keywordKey = companyKey(activeKeyword());
   const labelKey = companyKey(state.data?.run?.keyword || state.data?.run?.label || "");
@@ -17463,15 +17762,15 @@ function historyOpsCard(label, value, note = "") {
 function historyOpsTimeline(rows = []) {
   const items = [...rows].slice(-10);
   if (!items.length) return `<div class="history-empty-inline">수집 회차 데이터가 아직 없습니다.</div>`;
-  const maxRate = Math.max(0.01, ...items.map((row) => Number(row.saleRate || 0)));
+  const maxRate = Math.max(0.01, ...items.map((row) => Number(row.saleRate)).filter(Number.isFinite));
   return `
-    <div class="history-ops-timeline" aria-label="수집 이력 회차 변화">
+    <div class="history-ops-timeline" aria-label="최근 10개 관측일의 누적 판매율">
       ${items.map((row) => {
-        const rate = Number(row.saleRate);
+        const rate = row.saleRate === null || row.saleRate === undefined ? NaN : Number(row.saleRate);
         const height = Number.isFinite(rate) ? Math.max(5, Math.min(100, (rate / maxRate) * 100)) : 0;
         return `
-          <div title="${escapeHtml(`${row.collectedDate} · ${historyRateText(rate)} · ${fmtNumber(row.companyCount)}업체`)}">
-            <b>${historyRateText(rate)}</b>
+          <div title="${escapeHtml(`${row.collectedDate} · ${historyOpsRateText(rate)} · ${fmtNumber(row.companyCount)}업체 · ${fmtNumber(row.runCount)}회 수집 합계`)}">
+            <b>${historyOpsRateText(rate)}</b>
             <span><i style="height:${height}%"></i></span>
             <em>${escapeHtml(String(row.collectedDate || "").slice(5).replace("-", "/"))}</em>
           </div>
@@ -17482,20 +17781,20 @@ function historyOpsTimeline(rows = []) {
 }
 
 function historyOpsKeywordRows(activeKeywordRow) {
-  const keywords = (historyOpsSource().keywords || []).slice(0, 8);
-  if (!keywords.length) return `<div class="empty">저장된 키워드가 아직 없습니다.</div>`;
+  const keywords = historyOpsBrowseModel().visibleKeywords;
+  if (!keywords.length) return `<div class="empty">${historyOpsSelectionState().query ? "검색에 맞는 키워드가 없습니다." : "저장된 키워드가 아직 없습니다."}</div>`;
   return `
     <div class="history-ops-keyword-list">
       ${keywords.map((row) => {
         const active = activeKeywordRow && row.keywordKey === activeKeywordRow.keywordKey ? "active" : "";
         return `
-          <article class="${active}">
+          <button type="button" class="${active}" data-history-ops-keyword="${escapeHtml(row.keywordKey)}" aria-pressed="${active ? "true" : "false"}">
             <div>
               <strong>${escapeHtml(row.keyword || "키워드 확인")}</strong>
-              <small>최근 ${escapeHtml(row.latestCollectedDate || "대기")} · ${fmtNumber(row.runCount)}회 수집 · ${fmtNumber(row.companyCount)}업체</small>
+              <small>${row.latestCollectedDate ? `최근 ${escapeHtml(row.latestCollectedDate)} · ${fmtNumber(row.runCount)}회 수집 · ${fmtNumber(row.companyCount)}업체` : "원본 결과 있음 · 예약 관측 누적 자료 없음"}</small>
             </div>
-            <span>${historyRateText(row.saleRate)}</span>
-          </article>
+            <span>${historyOpsRateText(row.saleRate)}</span>
+          </button>
         `;
       }).join("")}
     </div>
@@ -17506,10 +17805,10 @@ function historyOpsComparison(row) {
   if (!row) return `<div class="empty">비교할 활성 키워드가 없습니다.</div>`;
   const comparison = row.comparison;
   const cells = [
-    ["누적 판매율", historyRateText(row.saleRate), `${fmtNumber(row.sold)}/${fmtNumber(row.supply)}개`],
-    ["수집 회차", `${fmtNumber(row.runCount)}회`, `${escapeHtml(row.firstCollectedDate || "-")}~${escapeHtml(row.latestCollectedDate || "-")}`],
-    ["업체 범위", `${fmtNumber(row.companyCount)}업체`, `${fmtNumber(row.observations)}건 관측`],
-    ["직전 대비", comparison ? formatSignedRate(comparison.saleRateDelta) : "대기", comparison ? `${comparison.previousDate}→${comparison.latestDate}` : "2회 이상 필요"]
+    ["누적 판매율", historyOpsRateText(row.saleRate), `${historyOpsCountText(row.sold)}/${historyOpsCountText(row.supply)}객실`],
+    ["수집 회차", `${historyOpsCountText(row.runCount)}회`, `${escapeHtml(row.firstCollectedDate || "-")}~${escapeHtml(row.latestCollectedDate || "-")}`],
+    ["업체 범위", `${historyOpsCountText(row.companyCount)}업체`, `${historyOpsCountText(row.observations)}건 관측`],
+    ["직전 관측일 대비", comparison ? formatSignedRate(comparison.saleRateDelta) : "대기", comparison ? `${comparison.previousDate}→${comparison.latestDate}` : "2개 관측일 이상 필요"]
   ];
   return `
     <div class="history-ops-comparison">
@@ -17551,28 +17850,30 @@ function historyOpsAuditLog() {
 function historyOpsCompanyTrends(activeKeywordRow) {
   const trends = activeKeywordRow?.companyTrends || [];
   if (!trends.length) return `<div class="empty">업체별 누적 추이가 아직 부족합니다.</div>`;
-  const currentItems = state.data?.availability?.items || [];
+  const masterCompanies = state.companyMaster?.companies || [];
   return `
     <div class="history-ops-company-list">
       ${trends.slice(0, 6).map((trend) => {
-        const itemIndex = currentItems.findIndex((item) => companyKey(item.name) === trend.companyKey);
-        const buttonAttrs = itemIndex >= 0 ? `type="button" data-open-company="${itemIndex}"` : `type="button" disabled`;
+        const matches = masterCompanies.filter(company => companyKey(company.primaryName) === companyKey(trend.companyName));
+        const exactCompany = masterCompanies.find(company => company.companyId === trend.companyKey);
+        const companyId = trend.companyId || exactCompany?.companyId || (matches.length === 1 ? matches[0].companyId : "");
         const spark = trend.byDate || [];
         return `
-          <button ${buttonAttrs}>
+          <article class="history-ops-saved-company history-ops-trend-company">
             <div>
               <strong>${escapeHtml(trend.companyName || "업체명 확인")}</strong>
-              <small>${fmtNumber(trend.runCount)}회 · ${fmtNumber(trend.observations)}건 · 변동폭 ${historyRateText(trend.volatility)}</small>
+              <small>${fmtNumber(trend.runCount)}회 · ${fmtNumber(trend.observations)}건 · 변동폭 ${historyOpsRateText(trend.volatility)}</small>
             </div>
             <div class="history-ops-spark" aria-label="${escapeHtml(`${trend.companyName || ""} 누적 추이`)}">
               ${spark.map((row) => {
-                const rate = Number(row.saleRate);
+                const rate = row.saleRate === null || row.saleRate === undefined ? NaN : Number(row.saleRate);
                 const height = Number.isFinite(rate) ? Math.max(4, Math.min(30, rate * 30)) : 0;
-                return `<span title="${escapeHtml(`${row.collectedDate} · ${historyRateText(rate)}`)}" style="height:${height}px"></span>`;
+                return `<span title="${escapeHtml(`${row.collectedDate} · ${historyOpsRateText(rate)}`)}" style="height:${height}px"></span>`;
               }).join("")}
             </div>
-            <em>${historyRateText(trend.latest?.saleRate ?? trend.saleRate)}</em>
-          </button>
+            <em>${historyOpsRateText(trend.latest ? trend.latest.saleRate : trend.saleRate)}</em>
+            ${companyId ? `<a href="${escapeHtml(adminDbCompanyDetailUrl(companyId))}">업체 DB</a>` : ""}
+          </article>
         `;
       }).join("")}
     </div>
@@ -30010,75 +30311,66 @@ function renderHistoryOps() {
   if (!els.historyOpsDashboard) return;
   const ops = historyOpsSource();
   const overall = ops.overall || {};
-  const activeKeywordRow = activeHistoryKeywordSummary();
-  if (!ops.keywords?.length) {
-    if (els.historyOpsState) els.historyOpsState.textContent = "이력 대기";
-    els.historyOpsDashboard.innerHTML = `
-      <section class="history-ops-empty">
-        <strong>수집 이력이 아직 비어 있습니다.</strong>
-        <p>같은 키워드를 반복 수집하면 키워드별 이력, 회차 비교, 업체별 추이가 자동으로 쌓입니다.</p>
-      </section>
-      ${collectionQualityMonitorHtml()}
-    `;
-    return;
-  }
-  if (els.historyOpsState) els.historyOpsState.textContent = `${fmtNumber(overall.keywordCount)} 키워드`;
+  const model = historyOpsBrowseModel();
+  const activeKeywordRow = model.selectedKeyword;
+  const focused = document.activeElement;
+  const draftField = focused?.closest?.("[data-history-ops-filter-form]") && els.historyOpsDashboard.contains(focused) ? focused.name : "";
+  const selectionStart = draftField && typeof focused.selectionStart === "number" ? focused.selectionStart : null;
+  const selectionEnd = draftField && typeof focused.selectionEnd === "number" ? focused.selectionEnd : null;
+  if (els.historyOpsState) els.historyOpsState.textContent = `${fmtNumber(model.keywords.length)} 키워드`;
   els.historyOpsDashboard.innerHTML = `
     <section class="history-ops-hero">
       <div>
         <p class="eyebrow">수집 이력</p>
-        <h3>${escapeHtml(activeKeywordRow?.keyword || activeKeyword())}</h3>
+        <h3>${escapeHtml(activeKeywordRow?.keyword || "저장된 수집 이력")}</h3>
       </div>
-      <span>${escapeHtml(activeKeywordRow?.latestCollectedDate || overall.latestCollectedAt?.slice(0, 10) || "대기")}</span>
+      <span>${escapeHtml(model.selectedRun ? historyOpsRunTime(model.selectedRun) : "키워드·수집 결과 선택")}</span>
     </section>
-
+    ${historyOpsFilterControls(model)}
+    ${historyOpsSavedResultHtml(model)}
     <section class="history-ops-metrics">
-      ${historyOpsCard("누적 키워드", fmtNumber(overall.keywordCount), `${fmtNumber(overall.runCount)}회 수집`)}
-      ${historyOpsCard("누적 관측", fmtNumber(overall.observationCount), `${fmtNumber(overall.companyCount)}업체`)}
-      ${historyOpsCard("활성 키워드", fmtNumber(activeKeywordRow?.observations || 0), `${fmtNumber(activeKeywordRow?.companyCount || 0)}업체`)}
-      ${historyOpsCard("활성 판매율", historyRateText(activeKeywordRow?.saleRate), `${fmtNumber(activeKeywordRow?.sold || 0)}/${fmtNumber(activeKeywordRow?.supply || 0)}개`)}
+      ${historyOpsCard("전체 누적 키워드", historyOpsCountText(overall.keywordCount), `${historyOpsCountText(overall.runCount)}회 수집`)}
+      ${historyOpsCard("전체 누적 관측", historyOpsCountText(overall.observationCount), `${historyOpsCountText(overall.companyCount)}업체`)}
+      ${historyOpsCard("선택 키워드 누적 관측", historyOpsCountText(activeKeywordRow?.observations), `${historyOpsCountText(activeKeywordRow?.companyCount)}업체`)}
+      ${historyOpsCard("선택 키워드 누적 판매율", historyOpsRateText(activeKeywordRow?.saleRate), `${historyOpsCountText(activeKeywordRow?.sold)}/${historyOpsCountText(activeKeywordRow?.supply)}객실`)}
     </section>
-
-    ${collectionQualityMonitorHtml()}
-
+    <p class="history-ops-cumulative-note">아래는 키워드 전체 누적 자료입니다. 수집일 필터는 위의 저장 결과 목록에 적용됩니다.</p>
     <section class="history-ops-layout">
       <article class="history-ops-card wide">
         <div class="history-card-head">
           <strong>키워드별 누적 수집 이력</strong>
-          <small>최근 수집순</small>
+          <small>${fmtNumber(model.visibleKeywords.length)}개 · 선택 가능</small>
         </div>
         ${historyOpsKeywordRows(activeKeywordRow)}
       </article>
       <article class="history-ops-card">
         <div class="history-card-head">
-          <strong>수집 회차 비교</strong>
-          <small>활성 키워드</small>
+          <strong>키워드 누적·최근 관측일 비교</strong>
+          <small>${escapeHtml(activeKeywordRow?.keyword || "키워드 선택")}</small>
         </div>
         ${historyOpsComparison(activeKeywordRow)}
       </article>
       <article class="history-ops-card">
         <div class="history-card-head">
-          <strong>회차별 판매율 추이</strong>
-          <small>${escapeHtml(activeKeywordRow?.keyword || "")}</small>
+          <strong>관측일별 누적 판매율 추이</strong>
+          <small>최근 10개 관측일 · 같은 날의 여러 수집 합계</small>
         </div>
         ${historyOpsTimeline(activeKeywordRow?.timeline || [])}
-      </article>
-      <article class="history-ops-card">
-        <div class="history-card-head">
-          <strong>데이터 신뢰도 로그</strong>
-          <small>현재 실행 기준</small>
-        </div>
-        ${historyOpsAuditLog()}
       </article>
       <article class="history-ops-card wide">
         <div class="history-card-head">
           <strong>업체별 누적 추이</strong>
-          <small>변동폭 높은 순</small>
+          <small>변동폭 높은 6곳 · 전체 누적 기준</small>
         </div>
         ${historyOpsCompanyTrends(activeKeywordRow)}
       </article>
     </section>
   `;
+  if (draftField) {
+    const replacement = els.historyOpsDashboard.querySelector("[data-history-ops-filter-form]")?.elements.namedItem(draftField);
+    replacement?.focus();
+    if (selectionStart !== null && typeof replacement?.setSelectionRange === "function" && replacement.type === "search") replacement.setSelectionRange(selectionStart, selectionEnd);
+  }
 }
 
 const REGION_ANALYSIS_TABS = new Set(["dictionary", "map", "demand", "regionCompare", "regionSources"]);
@@ -36752,7 +37044,7 @@ function renderHeader() {
   } else if (state.activeTab === "decisionQueue") {
     els.pageSubtitle.textContent = `${title} · 컨택 전 사람 확인 · OTA/수량/공백/보정 재검토`;
   } else if (state.activeTab === "historyOps") {
-    els.pageSubtitle.textContent = `${title} · 반복 수집 이력 · 회차 비교 · 업체별 추이`;
+    els.pageSubtitle.textContent = "저장된 키워드·수집일·수집 결과 선택 · 키워드별 누적 추이";
   } else if (state.activeTab === "demand") {
     els.pageSubtitle.textContent = isAdminRole()
       ? `${title} · 시즌 수요 · 네이버 트렌드`
@@ -36886,6 +37178,11 @@ function setActiveTab(tab, options = {}) {
   }
   if (isAdminRole() && state.activeTab === "monthlyReports") {
     void window.MonthlyReports?.show(document.getElementById("monthlyReportsDashboard"), options.monthlyReportContext);
+    return;
+  }
+  if (isAdminRole() && state.activeTab === "historyOps") {
+    renderHistoryOps();
+    void ensureHistoryOpsSelection();
     return;
   }
   if (!state.data) {
@@ -38669,6 +38966,9 @@ function bindPwaLifecycleEvents() {
 async function loadHistoryOps() {
   if (!isAdminRole()) {
     state.historyOps = null;
+    state.historyOpsSelection = null;
+    state.historyOpsFilterDraft = null;
+    ++historyOpsSelectionRequestSequence;
     return;
   }
   try {
@@ -43143,6 +43443,7 @@ function bindEvents() {
     }
   });
   bindCollectionArchiveEvents();
+  bindHistoryOpsEvents();
   els.runSelect?.addEventListener("change", (event) => loadRun(event.target.value).catch((error) => {
     setStatus("오류");
     els.companyList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;

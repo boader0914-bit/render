@@ -17338,6 +17338,47 @@ async function loadRunCollectionDiagnostics(runId) {
   }
 }
 
+async function loadHistoryRun(runId) {
+  if (!/^[A-Za-z0-9_-]{1,220}$/.test(String(runId || ""))) return null;
+  const dirPath = resolveRunDir(runId);
+  if (!dirPath) return null;
+  try {
+    const [base, directory] = await Promise.all([fsp.realpath(OUTPUTS_DIR), fsp.realpath(dirPath)]);
+    if (path.relative(base, directory) !== runId || !(await fsp.stat(directory)).isDirectory()) return null;
+    // Saved CSV rows may reference nested JSON files. Reject links throughout
+    // the run tree so a stored reference cannot read another run or local file.
+    const entries = await fsp.readdir(directory, { withFileTypes: true, recursive: true });
+    if (entries.some((entry) => entry.isSymbolicLink())) return null;
+    const data = await loadRun(runId, {
+      skipCompanyMaster: true,
+      skipHistory: true,
+      skipTraffic: true,
+      skipTourismVisitors: true,
+      skipTourismVisitorHistory: true,
+      skipTourismDemandStrengthHistory: true,
+      skipTourismResourceDemandHistory: true,
+      skipTourismDiversityHistory: true
+    });
+    if (!data) return null;
+    const items = data.availability?.items || [];
+    data.historyView = {
+      readOnly: true,
+      scope: "saved_run",
+      source: "stored_outputs",
+      sourceRunId: runId,
+      companyDbMatched: items.some((item) => Boolean(item.inventoryCapacityBaseline?.companyId)),
+      companyReviewApplied: items.some((item) => item.inventoryEvidence?.lodging?.capacitySource === "db_correction"
+        || item.inventoryEvidence?.dayUse?.capacitySource === "db_correction"
+        || (item.inventoryEvidence?.normalizationEvidence || []).some((entry) => entry.reason === "db_reviewed_product_stock_correction")),
+      roomBasis: "stored_observations_with_current_db_review"
+    };
+    return data;
+  } catch (error) {
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") return null;
+    throw Object.assign(new Error("저장된 수집 이력을 읽지 못했습니다."), { statusCode: 500 });
+  }
+}
+
 async function loadRun(runId, options = {}) {
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return null;
@@ -18849,6 +18890,16 @@ async function route(req, res) {
         });
       }
       return send(res, 200, await publicCrawlEstimateForSession(payload, timingStore, session));
+    }
+
+    if (reqUrl.pathname.startsWith("/api/history/runs/")) {
+      if (!requireAdminSession(session, req, res)) return;
+      if (req.method !== "GET") return send(res, 405, { error: "Method not allowed" });
+      let runId;
+      try { runId = decodeURIComponent(reqUrl.pathname.slice("/api/history/runs/".length)); }
+      catch { return notFound(res); }
+      const data = await loadHistoryRun(runId);
+      return data ? send(res, 200, publicRunForRole(data, session.role)) : notFound(res);
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/history/summary") {
