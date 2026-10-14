@@ -17705,10 +17705,28 @@ function historyOpsSavedResultHtml(model) {
           const rank = Number(item.rank || item.placeRank);
           const title = `${Number.isFinite(rank) && rank > 0 ? `${fmtNumber(rank)}위 · ` : ""}${item.name || "업체명 미확인"}`;
           const note = [item.region || item.address, item.bookingStatus || item.naverBookingStockStatus || item.productTypeSummary].filter(Boolean).join(" · ");
-          return `<article class="history-ops-saved-company"><div><strong>${escapeHtml(title)}</strong>${note ? `<small>${escapeHtml(note)}</small>` : ""}</div>${companyId ? `<a href="${escapeHtml(adminDbCompanyDetailUrl(companyId))}">업체 DB</a>` : `<span>DB 미연결</span>`}</article>`;
+          return `<article class="history-ops-saved-company"><div><strong>${escapeHtml(title)}</strong>${note ? `<small>${escapeHtml(note)}</small>` : ""}</div>${companyId ? `<a href="${escapeHtml(adminDbCompanyDetailUrl(companyId))}" data-history-ops-company-db="${escapeHtml(companyId)}">업체 DB</a>` : `<span>DB 미연결</span>`}</article>`;
         }).join("") : `<p class="history-empty-inline">저장된 업체 상세가 없습니다. 정상 0건으로 단정할 수 없습니다.</p>`}</div>
       </details>
     </section>`;
+}
+
+function openHistoryOpsCompanyDb(event = null, link = null) {
+  if (!isAdminRole() || !link || link.tagName !== "A" || adminDbCompanyUseNativeLink(event, link)
+    || (event?.button !== undefined && event.button !== 0)) return false;
+  const target = String(link.getAttribute("target") || "").toLowerCase();
+  if (target && target !== "_self") return false;
+  const companyId = String(link.getAttribute("data-history-ops-company-db") || "").trim();
+  if (!companyId) return false;
+  event?.preventDefault();
+  event?.stopPropagation();
+  // Keep the history entry and its independent selection alive before pushing
+  // the company route, so one browser Back returns without reloading the app.
+  syncAppHistoryState(false);
+  setActiveTab("admin", { fromHistory: true });
+  setAdminPanelSection("database");
+  activateAdminDbCompanyDetail(companyId);
+  return true;
 }
 
 function bindHistoryOpsEvents() {
@@ -17730,6 +17748,8 @@ function bindHistoryOpsEvents() {
     if (event.target.matches("[data-history-ops-run-select]")) void selectHistoryOpsRun(event.target.value);
   });
   dashboard.addEventListener("click", event => {
+    const companyLink = event.target.closest("[data-history-ops-company-db]");
+    if (companyLink) { openHistoryOpsCompanyDb(event, companyLink); return; }
     const keyword = event.target.closest("[data-history-ops-keyword]");
     if (keyword) { void selectHistoryOpsKeyword(keyword.dataset.historyOpsKeyword); return; }
     if (event.target.closest("[data-history-ops-reset]")) { void applyHistoryOpsFilters(); return; }
@@ -17872,7 +17892,7 @@ function historyOpsCompanyTrends(activeKeywordRow) {
               }).join("")}
             </div>
             <em>${historyOpsRateText(trend.latest ? trend.latest.saleRate : trend.saleRate)}</em>
-            ${companyId ? `<a href="${escapeHtml(adminDbCompanyDetailUrl(companyId))}">업체 DB</a>` : ""}
+            ${companyId ? `<a href="${escapeHtml(adminDbCompanyDetailUrl(companyId))}" data-history-ops-company-db="${escapeHtml(companyId)}">업체 DB</a>` : ""}
           </article>
         `;
       }).join("")}

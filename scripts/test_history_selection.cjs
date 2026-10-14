@@ -9,10 +9,10 @@ const names = [
   "historyOpsSource", "historyOpsSelectionState", "historyOpsRunKeyword", "historyOpsBrowseModel", "historyOpsRunTime",
   "historyOpsRunOptionLabel", "selectHistoryOpsRun", "ensureHistoryOpsSelection", "historyOpsReadFilterForm", "applyHistoryOpsFilters",
   "selectHistoryOpsKeyword", "refreshHistoryOpsCatalog", "historyOpsFilterControls", "historyOpsCountText", "historyOpsRateText",
-  "historyOpsCompanyId", "historyOpsSavedCompanyRows", "historyOpsSavedResultHtml", "bindHistoryOpsEvents", "historyOpsCard",
+  "historyOpsCompanyId", "historyOpsSavedCompanyRows", "historyOpsSavedResultHtml", "openHistoryOpsCompanyDb", "bindHistoryOpsEvents", "historyOpsCard",
   "historyOpsTimeline", "historyOpsKeywordRows", "historyOpsComparison", "historyOpsCompanyTrends", "renderHistoryOps",
   "companyKey", "collectionArchiveDay", "collectionArchiveDate", "collectionArchiveWorker", "collectionArchiveQuality",
-  "activeKeyword", "adminDbCompanyHash", "adminDbCompanyDetailUrl", "effectiveDetailRankRange"
+  "activeKeyword", "adminDbCompanyHash", "adminDbCompanyDetailUrl", "adminDbCompanyUseNativeLink", "effectiveDetailRankRange"
 ];
 const declarations = names.map(name => {
   const fn = source.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^}`, "m"))?.[0];
@@ -49,6 +49,7 @@ function fixture({ runs, role = "admin", fetcher } = {}) {
     companyMaster: { companies: [] }, historyOpsSelection: null, historyOpsFilterDraft: null, historyOpsCatalogLoading: false, historyOpsCatalogError: "" };
   const els = { historyOpsDashboard: element(), historyOpsState: element(), keywordInput: element() };
   const calls = [];
+  const navigationCalls = [];
   const context = vm.createContext({ state, els, document: { activeElement: null }, console, Date, Map, Set, Intl, encodeURIComponent,
     historyOpsSelectionRequestSequence: 0, historyOpsCatalogRequestSequence: 0,
     isAdminRole: () => state.session.role === "admin", fetchJson: async url => {
@@ -61,13 +62,17 @@ function fixture({ runs, role = "admin", fetcher } = {}) {
       assert.ok(run);
       return samplePayload(run);
     }, loadRun() { throw new Error("Global result loading is forbidden while browsing history"); },
+    syncAppHistoryState(push) { navigationCalls.push(["save-current", push]); },
+    setActiveTab(tab, options) { navigationCalls.push(["tab", tab, options]); state.activeTab = tab; },
+    setAdminPanelSection(section) { navigationCalls.push(["section", section]); state.adminPanelSection = section; },
+    activateAdminDbCompanyDetail(companyId) { navigationCalls.push(["company", companyId]); state.adminDbSelectedCompanyId = companyId; return true; },
     escapeHtml: value => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;"),
     fmtNumber: value => Number(value).toLocaleString("ko-KR"), fmtRate: value => `${Math.round(value * 100)}%`,
     formatSignedRate: value => `${value >= 0 ? "+" : ""}${Math.round(value * 100)}%p`,
     dateRangeLabel: run => `${run.checkIn || "미확인"} · ${run.bookingRangeDays || "미확인"}일`
   });
   const api = vm.runInContext(`${declarations}\n({ ${names.join(", ")} })`, context);
-  return { state, els, calls, context, api, originalData };
+  return { state, els, calls, navigationCalls, context, api, originalData };
 }
 
 function deferred() { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
@@ -216,6 +221,33 @@ async function runTests() {
   const denied = fixture({ role: "member" });
   await denied.api.selectHistoryOpsRun("busan-2");
   assert.equal(denied.calls.length, 0);
+  const linked = fixture();
+  await linked.api.ensureHistoryOpsSelection();
+  await linked.api.applyHistoryOpsFilters({ query: "부산", startDate: "2026-09-01", endDate: "2026-09-30" });
+  const selectedHistory = linked.state.historyOpsSelection;
+  const retainedSelection = JSON.stringify(selectedHistory);
+  const retainedData = linked.state.data;
+  const link = { tagName: "A", getAttribute(name) { return name === "data-history-ops-company-db" ? "cmp_place_244049" : ""; } };
+  assert.match(linked.els.historyOpsDashboard.innerHTML, /data-history-ops-company-db=/, "Saved company links carry stable DB IDs");
+  const nativeEvents = [{ button: 0, ctrlKey: true }, { button: 0, metaKey: true }, { button: 0, shiftKey: true },
+    { button: 0, altKey: true }, { button: 1 }, { button: 2 }, { button: 0, defaultPrevented: true }];
+  for (const flags of nativeEvents) {
+    assert.equal(linked.api.openHistoryOpsCompanyDb({ ...flags, preventDefault() { assert.fail("Native links must retain their default action"); } }, link), false);
+  }
+  const newTabLink = { tagName: "A", getAttribute(name) { return name === "target" ? "_blank" : "cmp_place_244049"; } };
+  assert.equal(linked.api.openHistoryOpsCompanyDb({ button: 0, preventDefault() { assert.fail("Explicit new tab links stay native"); } }, newTabLink), false);
+  assert.equal(linked.navigationCalls.length, 0);
+  let prevented = false, stopped = false;
+  assert.equal(linked.api.openHistoryOpsCompanyDb({ button: 0, preventDefault() { prevented = true; }, stopPropagation() { stopped = true; } }, link), true);
+  assert.equal(prevented, true);
+  assert.equal(stopped, true);
+  assert.equal(JSON.stringify(linked.navigationCalls), JSON.stringify([["save-current", false], ["tab", "admin", { fromHistory: true }], ["section", "database"], ["company", "cmp_place_244049"]]), "Existing navigation helper receives the exact stable ID and preserves one Back entry");
+  assert.equal(linked.state.historyOpsSelection, selectedHistory);
+  assert.equal(JSON.stringify(linked.state.historyOpsSelection), retainedSelection, "Company navigation preserves selected keyword, dates, saved run and detail");
+  assert.equal(linked.state.data, retainedData);
+  assert.equal(linked.state.activeRunId, "global-current");
+  assert.equal(linked.state.adminDbSelectedCompanyId, "cmp_place_244049");
+  assert.equal(linked.api.openHistoryOpsCompanyDb({ button: 0 }, { tagName: "A", getAttribute: () => "" }), false, "Unlinked cards cannot open an arbitrary company");
   console.log("History selection: all keywords, distinct saved runs, KST/date filters, readonly isolation, error/zero distinction, stale response protection and typing focus passed");
 }
 
