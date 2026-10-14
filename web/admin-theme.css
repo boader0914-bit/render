@@ -2244,6 +2244,148 @@ html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(.collection-q
   align-content: start;
 }
 
+/* Collection history keeps readable detail text without oversized legacy headings. */
+html[data-theme-resolved] body.role-admin #historyOpsDashboard {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.6;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(.history-ops-hero, .collection-quality-head) > div {
+  min-width: 0;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-hero h3 {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .collection-quality-head h3 {
+  font-size: 22px;
+  font-weight: 650;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(
+  .history-ops-metrics strong, .history-ops-comparison strong, .collection-quality-metrics strong
+) {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(
+  .history-card-head strong, .history-ops-keyword-list strong, .history-ops-company-list strong,
+  .history-ops-log strong, .collection-quality-alerts b,
+  .collection-quality-recrawl strong, .collection-quality-feedback strong
+) {
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(
+  .history-ops-hero p:not(.eyebrow), .history-ops-empty p,
+  .collection-quality-head p:not(.eyebrow), .history-card-head small,
+  .history-empty-inline, .history-ops-metrics span, .history-ops-metrics small,
+  .history-ops-comparison span, .history-ops-comparison small,
+  .history-ops-keyword-list small, .history-ops-company-list small, .history-ops-log span,
+  .collection-quality-metrics span, .collection-quality-metrics small,
+  .collection-quality-alerts small, .collection-quality-recrawl small,
+  .collection-quality-recrawl p, .collection-quality-feedback span,
+  .collection-quality-feedback small, .empty
+) {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(
+  .history-ops-keyword-list small, .history-ops-company-list small
+) {
+  display: block;
+  margin-top: 3px;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .eyebrow {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-hero > span {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-keyword-list article > span {
+  font-size: 18px;
+  font-weight: 650;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-company-list em {
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(.history-ops-timeline b, .history-ops-timeline em) {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(
+  .collection-quality-alerts span, .collection-quality-recrawl mark,
+  .collection-quality-head button, .collection-quality-recrawl button,
+  .collection-quality-feedback button
+) {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(
+  .collection-quality-head button, .collection-quality-recrawl button,
+  .collection-quality-feedback button
+) {
+  white-space: normal;
+}
+
+html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-empty strong {
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+@media (max-width: 720px) {
+  html[data-theme-resolved] body.role-admin #historyOpsDashboard .history-ops-hero h3 {
+    font-size: 22px;
+  }
+
+  html[data-theme-resolved] body.role-admin #historyOpsDashboard .collection-quality-head h3 {
+    font-size: 20px;
+  }
+
+  html[data-theme-resolved] body.role-admin #historyOpsDashboard :is(
+    .history-ops-metrics strong, .history-ops-comparison strong, .collection-quality-metrics strong
+  ) {
+    font-size: 22px;
+  }
+}
+
 html[data-theme-resolved] body.role-admin .collection-archive {
   min-width: 0;
   width: 100%;
