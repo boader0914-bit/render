@@ -496,6 +496,11 @@ const handleRegionalOutlook = createRegionalAnalysisHttpHandler({
   requireAdmin: requireAdminSession, parseJsonBody, send,
   rateLimit: (req, session) => assertRequestRateLimit(req, "adminRegionalOutlookRefresh", { limit: 12, windowMs: 60 * 60 * 1000 }, session.username || "")
 });
+const handleRegionalOutlookValidation = createRegionalAnalysisHttpHandler({
+  basePath: "/api/regional-outlook/validation", allowPolicy: false, cacheOnly: true, service: regionalOutlookService.validation,
+  requireAdmin: requireAdminSession, parseJsonBody, send,
+  rateLimit: (req, session) => assertRequestRateLimit(req, "adminRegionalOutlookValidation", { limit: 12, windowMs: 60 * 60 * 1000 }, session.username || "")
+});
 const readMonthlyRegionContext = createMonthlyReportContext({ kosisService, tourismCollector, searchTrendService: regionalSearchTrendService });
 const readInsightRegionContext = require('./lib/insight_region_history.cjs').createInsightRegionHistory({
   readMonthlyContext:readMonthlyRegionContext,tourismCollector,searchTrendService:regionalSearchTrendService
@@ -18797,6 +18802,7 @@ async function route(req, res) {
     if (await handleRegionalReportPreparation(req, res, reqUrl, session)) return;
     if (await handleRegionalAnalysis(req, res, reqUrl, session)) return;
     if (await handleRegionalOutlook(req, res, reqUrl, session)) return;
+    if (await handleRegionalOutlookValidation(req, res, reqUrl, session)) return;
 
     if (req.method === "POST" && reqUrl.pathname === "/api/b2b-search") {
       if (normalizeUserRole(session.role) !== USER_ROLES.b2b) {

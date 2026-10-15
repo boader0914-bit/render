@@ -71,3 +71,21 @@ test("outlook namespace keeps administrator and origin checks without adding a p
   assert.equal(await invoke("/api/regional-outlook/policy", { ...req, method: "POST" }), false);
   assert.equal(await invoke("/api/regional-analysis?regionKey=pocheon"), false);
 });
+
+test("validation routes inherit admin/origin/JSON checks and categorically reject provider refresh", async () => {
+  let calls = 0, status, data;
+  const handle = createRegionalAnalysisHttpHandler({ basePath: "/api/regional-outlook/validation", cacheOnly: true, allowPolicy: false,
+    service: { get: async () => { calls++; return { snapshot: null }; }, request: async (input, options) => { calls++; assert.equal(options.collectMissing, false); return { job: { status: "queued" } }; } },
+    requireAdmin: (session, req, res) => { if (session?.role === "admin") return true; status = 403; return false; },
+    parseJsonBody: async req => req.payload, send: (res, code, body) => { status = code; data = body; } });
+  const route = "/api/regional-outlook/validation", req = { method: "POST", headers: { host: "localhost", "content-type": "application/json" }, payload: { regionKey: "sancheong" } };
+  const invoke = (suffix, request = req, session = { role: "admin" }) => handle(request, {}, new URL(route + suffix, "http://localhost"), session);
+  await invoke("/refresh", req, { role: "b2b" }); assert.equal(status, 403);
+  await invoke("/refresh", { ...req, headers: { ...req.headers, origin: "https://evil.invalid" } }); assert.equal(status, 403);
+  await invoke("/refresh", { ...req, headers: { ...req.headers, "content-type": "text/plain" } }); assert.equal(status, 415);
+  await invoke("/refresh", { ...req, payload: { ...req.payload, collectMissing: true } }); assert.equal(status, 400); assert.equal(calls, 0);
+  await invoke("?regionKey=sancheong&regionKey=other", { ...req, method: "GET" }); assert.equal(status, 400); assert.equal(calls, 0);
+  await invoke("?regionKey=sancheong", { ...req, method: "GET" }); assert.equal(status, 200); assert.equal(data.snapshot, null);
+  await invoke("/refresh"); assert.equal(status, 202); assert.equal(calls, 2);
+  assert.equal(await invoke("/policy"), false);
+});

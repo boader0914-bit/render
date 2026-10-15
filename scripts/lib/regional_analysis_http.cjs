@@ -1,7 +1,8 @@
 "use strict";
 
-function createRegionalAnalysisHttpHandler({ service, requireAdmin, parseJsonBody, send, rateLimit = () => {}, basePath = "/api/regional-analysis", allowPolicy = true }) {
-  if (!["/api/regional-analysis", "/api/regional-outlook"].includes(basePath)) throw new TypeError("Invalid regional API path");
+function createRegionalAnalysisHttpHandler({ service, requireAdmin, parseJsonBody, send, rateLimit = () => {}, basePath = "/api/regional-analysis", allowPolicy = true, cacheOnly = false }) {
+  if (!["/api/regional-analysis", "/api/regional-outlook", "/api/regional-outlook/validation"].includes(basePath)) throw new TypeError("Invalid regional API path");
+  if (basePath.endsWith("/validation") && (!cacheOnly || allowPolicy)) throw new TypeError("Validation must remain cache-only without provider policies");
   const routes = new Set([basePath, `${basePath}/refresh`, ...(allowPolicy ? [`${basePath}/policy`] : [])]);
   return async function handle(req, res, url, session) {
     if (!routes.has(url.pathname)) return false;
@@ -35,7 +36,8 @@ function createRegionalAnalysisHttpHandler({ service, requireAdmin, parseJsonBod
       const isPolicy = url.pathname.endsWith("/policy");
       const allowed = isPolicy ? ["regionKey", "month", "months", "enabled", "hour", "minute", "intervalHours"] : ["regionKey", "month", "months", "collectMissing"];
       if (!payload || typeof payload !== "object" || Array.isArray(payload) || Object.keys(payload).some(key => !allowed.includes(key)) || !payload.regionKey
-        || !isPolicy && payload.collectMissing !== undefined && typeof payload.collectMissing !== "boolean") {
+        || !isPolicy && payload.collectMissing !== undefined && typeof payload.collectMissing !== "boolean"
+        || cacheOnly && payload.collectMissing === true) {
         send(res, 400, { error: "지역과 갱신 조건을 확인해 주세요.", code: "REGIONAL_INVALID_REQUEST" }); return true;
       }
       rateLimit(req, session);

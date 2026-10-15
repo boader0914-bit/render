@@ -13,6 +13,17 @@ const { seedMonthlyReportFixture } = require("./fixtures/monthly_report_fixture.
 async function main() {
   const root = path.resolve(__dirname, ".."), directory = await fs.mkdtemp(path.join(os.tmpdir(), "regional-analysis-api-"));
   await seedMonthlyReportFixture(directory);
+  // A prior-month saved issue is compared with later official observations.
+  // The isolated clock and all provider values are synthetic.
+  const { createRegionalAnalysisStore } = require("./lib/regional_analysis_store.cjs");
+  const { buildRegionalOutlook, shiftMonth } = require("./lib/regional_outlook.cjs");
+  const fixtureMonth = new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 7), issueMonth = shiftMonth(fixtureMonth, -1), sourceMonth = shiftMonth(issueMonth, -1);
+  const receivedAt = `${fixtureMonth}-01T00:00:00Z`;
+  const issued = createRegionalAnalysisStore({ dataDir: directory, autoStart: false, now: () => new Date(`${issueMonth}-02T00:00:00Z`),
+    resolveRegion: async key => ({ regionKey: key, label: "경기도 포천시" }), directoryName: "regional_outlook", calculationVersion: "regional-outlook-storage-v1",
+    buildSnapshot: scope => ({ ...buildRegionalOutlook({ asOfDate: `${issueMonth}-02`, calendar: { months: [] }, snapshot: { scope, groups: [{ key: "visitors", category: "tourism", label: "지역 방문자", provider: "한국관광공사", status: "ready", periodType: "M", metrics: [{ key: "averageDailyVisitors", label: "일평균 방문자", unit: "명",
+      rows: Array.from({ length: 13 }, (_, index) => ({ period: shiftMonth(sourceMonth, index - 12), value: 45000 + index, status: "observed" })) }] }] } }), sourceScope: { ...scope, month: sourceMonth } }) });
+  await issued.request({ regionKey: "kr_gyeonggi_pocheon", months: 13, month: issueMonth }); await issued.waitForIdle(); await issued.close();
   const listener = net.createServer().listen(0, "127.0.0.1"); await once(listener, "listening");
   const port = listener.address().port; await new Promise(resolve => listener.close(resolve));
   const base = `http://127.0.0.1:${port}`, auditFile = path.join(directory, "audit.json"), preload = path.join(directory, "providers.cjs"), qualityPreview = path.join(directory, "management-preview.flag");
@@ -36,7 +47,7 @@ async function main() {
           record(method + (input.collectMissing ? ':refresh' : ':cache'));
           const end = input.endYearMonth.slice(0,4)+'-'+input.endYearMonth.slice(4);
           const series = Array.from({length:input.months},(_,j)=>({yearMonth:shift(end,j+1-input.months).replace('-',''),status:'complete',
-            collectedAt:'2026-10-01T00:00:00Z',averageDailyVisitors:45048+j,visitorDays:1351440+j,stayOverall:75.2,spendOverall:60,
+            collectedAt:${JSON.stringify(receivedAt)},averageDailyVisitors:45048+j,visitorDays:1351440+j,stayOverall:75.2,spendOverall:60,
             values:{service:30,culture:40,visitor:50,spend:60,international:70}}));
           if(fs.existsSync(${JSON.stringify(qualityPreview)})) {
             if(i===0) series.at(-1).status='publication_pending';
@@ -102,7 +113,11 @@ async function main() {
     let latest;
     for (let i = 0; i < 240; i++) {
       latest = await request(outlookQuery, cookie);
-      if (latest.data.snapshot && latest.data.job && !["queued", "running"].includes(latest.data.job.status)) {
+      if (latest.data.snapshot && latest.data.job && !["queued", "running"].includes(latest.data.job.status)
+        && latest.data.validation?.snapshot && !["queued", "running"].includes(latest.data.validation?.job?.status)) {
+        if (latest.data.validation.publicationPending || !latest.data.job.unchanged && latest.data.validation.job?.finishedAt < latest.data.job.finishedAt) {
+          await new Promise(resolve => setTimeout(resolve, 30)); continue;
+        }
         assert.equal(latest.data.job.status, "completed", JSON.stringify(latest.data));
         return latest;
       }
@@ -114,11 +129,15 @@ async function main() {
     await start();
     assert.equal((await request(query)).status, 401);
     assert.equal((await request(outlookQuery)).status, 401);
+    assert.equal((await request("/api/regional-outlook/validation?regionKey=" + scope.regionKey)).status, 401);
+    assert.equal((await request("/api/regional-outlook/validation/refresh", "", outlookScope)).status, 401);
     assert.equal((await request("/api/regional-outlook/refresh", "", outlookScope)).status, 401);
     let cookie = await login();
     assert.equal((await request(query, cookie)).data.snapshot, null);
     assert.equal((await request(query, cookie)).data.management.refresh.lastProvider.status, "never");
     assert.equal((await request(outlookQuery, cookie)).data.snapshot, null);
+    assert.equal((await request("/api/regional-outlook/validation?regionKey=" + scope.regionKey, cookie)).data.snapshot, null);
+    assert.equal((await request("/api/regional-outlook/validation/refresh", cookie, { ...outlookScope, collectMissing: true })).status, 400);
     assert.deepEqual(JSON.parse(await fs.readFile(auditFile)), []);
     const started = await request("/api/regional-analysis/refresh", cookie, { ...scope, collectMissing: false });
     assert.equal(started.status, 202);
@@ -144,6 +163,19 @@ async function main() {
     assert.ok(outlook.data.snapshot.metrics.length > 0);
     assert.equal(outlook.data.snapshot.calendar.source.operation, "getRestDeInfo");
     assert.equal(outlook.data.snapshot.calendar.cacheOnly, true);
+    assert.ok(outlook.data.validation.snapshot.summaryCounts.total > 0);
+    assert.equal(outlook.data.validation.job.status, "completed", JSON.stringify(outlook.data.validation));
+    assert.ok(outlook.data.validation.snapshot.rows.some(row => row.issueMonth === issueMonth && row.status === "compared"), JSON.stringify(outlook.data.validation.snapshot));
+    assert.ok(outlook.data.validation.snapshot.rows.some(row => row.status === "pending"));
+    assert.equal(outlook.data.validation.snapshot.cacheOnly, true);
+    const validationResultId = outlook.data.validation.snapshot.resultId;
+    const validationStarted = await request("/api/regional-outlook/validation/refresh", cookie, outlookScope);
+    assert.equal(validationStarted.status, 202);
+    assert.equal(validationStarted.data.scope.regionKey, scope.regionKey);
+    assert.equal(validationStarted.data.snapshot.resultId, validationResultId);
+    outlook = await waitOutlook(cookie);
+    assert.equal(outlook.data.validation.snapshot.resultId, validationResultId, "Unchanged evaluation data reuses the saved result");
+    assert.equal(outlook.data.validation.job.unchanged, true);
     let outlookResultId = outlook.data.snapshot.resultId;
     let resultId = result.data.snapshot.resultId;
     const before = JSON.parse(await fs.readFile(auditFile));
@@ -196,14 +228,19 @@ async function main() {
     assert.deepEqual(JSON.parse(await fs.readFile(auditFile)), [], "restart and GET do not rebuild sources");
     if (process.argv.includes("--preview")) {
       // Prepare the default completed-month view entirely from fixtures.
-      await fs.writeFile(qualityPreview, "synthetic quality states only");
+      if (!process.argv.includes("--evaluation-preview")) await fs.writeFile(qualityPreview, "synthetic quality states only");
       await request("/api/regional-analysis/refresh", cookie, { regionKey: scope.regionKey, months: 13, collectMissing: false });
       await waitOutlook(cookie);
       await request("/api/regional-outlook/refresh", cookie, { ...outlookScope, collectMissing: false });
       await waitOutlook(cookie);
       console.log(`LOCAL_PREVIEW_URL=${base}/admin`);
       console.log("Synthetic local account: regional-local-admin / regional-fixture-only");
-      await new Promise(resolve => setTimeout(resolve, 900000));
+      await new Promise(resolve => {
+        const finish = () => { clearTimeout(timeout); process.stdin.removeListener("data", quit); process.stdin.pause(); resolve(); };
+        const quit = input => { if (String(input).trim() === "q") finish(); };
+        const timeout = setTimeout(finish, 900000);
+        process.stdin.on("data", quit); process.stdin.resume();
+      });
     }
     console.log("regional analysis and outlook real-server API checks passed (synthetic providers/calendars; external fetches forbidden)");
   } finally {

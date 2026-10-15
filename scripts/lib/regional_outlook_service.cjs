@@ -4,6 +4,7 @@ const { createRegionalAnalysisStore } = require("./regional_analysis_store.cjs")
 const { buildRegionalOutlook } = require("./regional_outlook.cjs");
 const { loadRegionalOutlookCalendar, requiredRegionalOutlookYears } = require("./regional_outlook_calendar.cjs");
 const { shiftMonth } = require("./regional_analysis_snapshot.cjs");
+const { createRegionalOutlookEvaluationService } = require("./regional_outlook_evaluation_service.cjs");
 
 const STORAGE_VERSION = "regional-outlook-storage-v1";
 const currentKstMonth = value => new Date(new Date(value).getTime() + 9 * 3600000).toISOString().slice(0, 7);
@@ -62,19 +63,38 @@ function createRegionalOutlookService({ dataDir, resolveRegion, readIndicators, 
       networkAttempted: collectMissing ? attempts.some(item => item.networkAttempted === true) ? true : attempts.some(item => item.networkAttempted === null) ? null : false : false,
       refreshDiagnostics, preparation: preparation ? { id: preparation.id, status: preparation.status, finishedAt: preparation.finishedAt, steps, calendars: calendarAttempts } : null };
   }
+  const validation = createRegionalOutlookEvaluationService({ dataDir, resolveRegion, readIndicators, now, autoStart });
+  const publishing = new Set();
   const store = createRegionalAnalysisStore({ dataDir, resolveRegion, buildSnapshot, now, autoStart,
     directoryName: "regional_outlook", calculationVersion: STORAGE_VERSION, defaultMonth: currentKstMonth,
-    retainFailedGroups: false, rollForward: true, isMutableScope: scope => scope.month === currentKstMonth(now()) });
+    retainFailedGroups: false, rollForward: true, isMutableScope: scope => scope.month === currentKstMonth(now()),
+    onResultSaved: async snapshot => {
+      publishing.add(snapshot.scope.regionKey);
+      try { await validation.recordPublication(snapshot); }
+      finally { publishing.delete(snapshot.scope.regionKey); }
+    } });
   function assertCurrent(input) {
     if (input?.month && input.month !== currentKstMonth(now())) throw Object.assign(new Error("Past outlook is read only"), { code: "REGIONAL_PAST_OUTLOOK_READ_ONLY", statusCode: 400 });
   }
   async function request(input, options) { assertCurrent(input); return store.request(input, options); }
-  async function sourceChanged(event) { return store.sourceChanged(event); }
+  async function sourceChanged(event) {
+    const result = await store.sourceChanged(event);
+    await validation.sourceChanged(event);
+    return result;
+  }
   async function calendarChanged(sourceVersion, year = "all") {
     const sourceKey = `specialDays:${/^20\d{2}$/.test(String(year)) ? year : "all"}`;
     for (const regionKey of await store.trackedRegions()) await sourceChanged({ regionKey, sourceKey, sourceVersion });
   }
-  return { ...store, request, sourceChanged, calendarChanged };
+  async function get(input) {
+    const result = await store.get(input);
+    const evaluation = await validation.get({ regionKey: result.scope.regionKey, months: 13 });
+    return { ...result, validation: { ...evaluation, publicationPending: publishing.has(result.scope.regionKey) } };
+  }
+  async function tick() { const result = await store.tick(); await validation.tick(); return result; }
+  async function waitForIdle() { await store.waitForIdle(); await validation.waitForIdle(); }
+  async function close() { await store.close(); await validation.close(); }
+  return { ...store, get, request, sourceChanged, calendarChanged, tick, waitForIdle, close, validation };
 }
 
 module.exports = { createRegionalOutlookService, currentKstMonth, STORAGE_VERSION };

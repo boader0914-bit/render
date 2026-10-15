@@ -147,7 +147,7 @@ test("source changes arriving during a build cannot publish the older generation
   release.resolve(); await pending;
   const result = await service.get(INPUT);
   assert.equal(result.snapshot.metrics[0].forecasts[0].value, 200);
-  const files = await tree(dataDir), resultFiles = Object.keys(files).filter(file => file.includes(`${path.sep}results${path.sep}`));
+  const files = await tree(dataDir), resultFiles = Object.keys(files).filter(file => file.startsWith(`regional_outlook${path.sep}results${path.sep}`));
   assert.equal(resultFiles.length, 1, "Superseded generation should not have an immutable published result");
 });
 
