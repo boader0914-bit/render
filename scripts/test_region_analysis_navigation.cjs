@@ -18,7 +18,7 @@ const names = [
   "locationProfileAlias", "locationProfileSubjectForRegion", "locationProfileKeywordKey", "activeKeyword",
   "analysisRegionForKey", "selectedAnalysisRegion", "analysisRegionLabel", "analysisRegionStorageKey", "analysisRunRegion",
   "analysisRunMatchesRegion", "applyAnalysisRegionToDictionary", "setAnalysisRegion", "reconcileAnalysisRegionSelection",
-  "renderRegionAnalysisShell", "syncSavedRegionalAnalysis", "renderActiveRegionAnalysis", "regionAnalysisEmptyHtml", "analysisMatchingRunButton",
+  "renderRegionAnalysisShell", "syncSavedRegionalAnalysis", "syncSavedRegionalOutlook", "renderActiveRegionAnalysis", "regionAnalysisEmptyHtml", "analysisMatchingRunButton",
   "dictionaryDemandContext", "demandRegionContextMatchesRun", "renderDemandRegionPending", "openDictionaryDemand",
   "renderDemand", "renderMap", "renderRegionComparison", "setActiveTab", "syncAppHistoryState", "restoreAppHistoryState",
   "selectDictionaryRegion", "selectDictionaryProvince", "loadRun", "loadLocationDictionary", "ensureLocationProfile", "locationProfileEntry",

@@ -76,3 +76,68 @@ test("failed KOSIS refresh preserves stale normal values with their real annual 
   assert.equal(group.metrics[0].latestValue, 0); assert.equal(group.stale, true); assert.equal(group.errorCode, "QUOTA_EXCEEDED");
   assert.equal(group.datasets.find(item => item.periodType === "Y").period, "2024");
 });
+
+function searchResponse(input, series, errorCode = "") {
+  return { ...input, keyword: "포천글램핑", partialMonth: false, startDate: shiftMonth(input.month, 1 - input.months) + "-01",
+    endDate: shiftMonth(input.month, 1) + "-01", series, errorCode };
+}
+const searchRows = (count, end = scope.month, value = 50) => Array.from({ length: count }, (_, i) => ({
+  period: shiftMonth(end, i + 1 - count) + "-01", status: "observed", value
+}));
+
+test("extended history picks usable13 over a partial24 response without stitching relative batches", async () => {
+  const f = fixture(); f.options.includeHistory = true;
+  f.options.searchTrendService.get = async input => searchResponse(input,
+    input.months === 24 ? searchRows(1, "2025-09", 99) : input.months === 13 ? searchRows(13, scope.month, 40) : searchRows(12, scope.month, 20));
+  const result = await createRegionalAnalysisSnapshotBuilder(f.options)(scope), search = result.groups.find(group => group.key === "searchTrend");
+  assert.equal(search.latestPeriod, "2026-09"); assert.equal(search.availableMonths, 13); assert.equal(search.errorCode, "");
+  assert.equal(search.normalizationPeriod, "2025-09-01 ~ 2026-10-01");
+  assert.ok(search.metrics[0].historyRows.every(row => row.value === 40));
+  assert.equal(search.metrics[0].historyRows.length, 13);
+});
+
+test("extended history ranks two supported targets, then freshness, then normal count, preserving a single batch", async () => {
+  const f = fixture(); f.options.includeHistory = true;
+  f.options.searchTrendService.get = async input => searchResponse(input,
+    input.months === 24 ? searchRows(24, "2026-08", 24) : input.months === 13 ? searchRows(13, scope.month, 13) : searchRows(12, scope.month, 12));
+  let search = (await createRegionalAnalysisSnapshotBuilder(f.options)(scope)).groups.find(group => group.key === "searchTrend");
+  assert.equal(search.metrics[0].latestValue, 13, "Fresher normal month wins when both windows support both targets");
+  f.options.searchTrendService.get = async input => searchResponse(input, searchRows(input.months, scope.month, input.months));
+  search = (await createRegionalAnalysisSnapshotBuilder(f.options)(scope)).groups.find(group => group.key === "searchTrend");
+  assert.equal(search.metrics[0].latestValue, 24, "More normal history wins at equal freshness and target support");
+  assert.equal(search.metrics[0].historyRows.length, 24);
+  f.options.searchTrendService.get = async input => searchResponse(input,
+    input.months === 24 ? searchRows(5, scope.month, 24) : input.months === 13 ? searchRows(13, "2026-08", 13) : []);
+  search = (await createRegionalAnalysisSnapshotBuilder(f.options)(scope)).groups.find(group => group.key === "searchTrend");
+  assert.equal(search.metrics[0].latestValue, 13, "Five newer values must not displace six or more usable normal months");
+});
+
+test("extended history does not carry rejected24 cache errors into a normal13 response", async () => {
+  const f = fixture(); f.options.includeHistory = true;
+  f.options.searchTrendService.get = async input => {
+    if (input.months === 24) throw Object.assign(new Error("bad-cache"), { code: "CACHE_READ_ERROR" });
+    return searchResponse(input, searchRows(input.months, scope.month, input.months));
+  };
+  const search = (await createRegionalAnalysisSnapshotBuilder(f.options)(scope)).groups.find(group => group.key === "searchTrend");
+  assert.equal(search.status, "ready"); assert.equal(search.errorCode, ""); assert.equal(search.metrics[0].latestValue, 13);
+});
+
+test("extended history rejects duplicate months and failed zeros in candidate ranking", async () => {
+  const f = fixture(); f.options.includeHistory = true;
+  f.options.searchTrendService.get = async input => searchResponse(input, input.months === 24
+    ? [...searchRows(24), ...searchRows(1)] : input.months === 13 ? searchRows(13, scope.month, 0)
+      : searchRows(12).map(row => ({ ...row, status: "failed", value: 0 })));
+  const search = (await createRegionalAnalysisSnapshotBuilder(f.options)(scope)).groups.find(group => group.key === "searchTrend");
+  assert.equal(search.status, "ready"); assert.equal(search.errorCode, ""); assert.equal(search.metrics[0].latestValue, 0);
+  assert.equal(search.availableMonths, 13);
+});
+
+test("extended24 display scope may reuse a whole valid13 response when24 cache is not forecastable", async () => {
+  const f = fixture(); f.options.includeHistory = true;
+  f.options.searchTrendService.get = async input => searchResponse(input,
+    input.months === 24 ? searchRows(1, "2025-09", 99) : input.months === 13 ? searchRows(13, scope.month, 40) : []);
+  const search = (await createRegionalAnalysisSnapshotBuilder(f.options)({ ...scope, months: 24 })).groups.find(group => group.key === "searchTrend");
+  assert.equal(search.metrics[0].historyRows.length, 13); assert.equal(search.metrics[0].rows.length, 24);
+  assert.equal(search.metrics[0].latestValue, 40); assert.equal(search.availableMonths, 13);
+  assert.ok(search.metrics[0].historyRows.every(row => row.value === 40));
+});

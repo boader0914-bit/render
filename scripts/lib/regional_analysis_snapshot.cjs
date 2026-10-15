@@ -37,14 +37,14 @@ function delta(current, previous, unit) {
   if (["지수", "상대지수"].includes(unit)) return { value: current - previous, kind: "index_difference" };
   return previous === 0 ? { value: null, kind: "zero_baseline" } : { value: (current - previous) / previous * 100, kind: "percent" };
 }
-function metricWindow(key, label, unit, points, end, count) {
+function metricWindow(key, label, unit, points, end, count, includeHistory = false) {
   // A delayed source ends at its own latest normal month, never a fabricated
   // common month. Retain missing months inside that window.
   const latest = points.filter(p => p.status === "observed" && numeric(p.value) && p.period <= end).at(-1);
   const targetEnd = latest?.period || end;
   const rows = monthsEnding(targetEnd, count).map(period => points.find(p => p.period === period) || { period, status: "missing", value: null, retrievedAt: "" });
   const valueAt = period => rows.find(row => row.period === period && row.status === "observed")?.value ?? null;
-  return { key, label, unit, rows, latestPeriod: latest?.period || "", latestValue: latest?.value ?? null,
+  return { key, label, unit, rows, ...(includeHistory ? { historyRows: points.filter(point => MONTH.test(point.period) && point.period <= end).slice(-36) } : {}), latestPeriod: latest?.period || "", latestValue: latest?.value ?? null,
     availableMonths: rows.filter(row => row.status === "observed").length, expectedMonths: count,
     mom: delta(latest?.value, valueAt(shiftMonth(targetEnd, -1)), unit),
     yoy: delta(latest?.value, valueAt(shiftMonth(targetEnd, -12)), unit) };
@@ -59,7 +59,7 @@ function finishGroup(group, metrics, end, count) {
     errorCode: group.errorCode || (availableMonths === count ? "" : hasData ? "PARTIAL_DATA" : "NO_DATA") };
 }
 
-function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService, searchTrendService, prepare, now = () => new Date() }) {
+function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService, searchTrendService, prepare, now = () => new Date(), includeHistory = false }) {
   return async function buildSnapshot(scope, { collectMissing = false } = {}) {
     let preparation = null;
     if (collectMissing) {
@@ -69,7 +69,7 @@ function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService,
     const groups = [], end = scope.month, count = scope.months;
     // Extra stored history lets a publication-delayed source supply 13 normal
     // months. This is a cache-only read in a background build, never a UI GET.
-    const readCount = Math.min(36, count + 12);
+    const readCount = includeHistory ? 36 : Math.min(36, count + 12);
     const input = { regionKey: scope.regionKey, regionKeys: [scope.regionKey], endYearMonth: end.replace("-", ""), months: readCount,
       analysisMonths: readCount, collectMissing: false, refresh: false, force: false, maxPagesPerOperation: 1, concurrency: 1 };
     const diagnostics = key => preparation?.steps?.find(step => step.key === key);
@@ -95,7 +95,7 @@ function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService,
         const status = errorCode || matches.length > 1 ? "error" : stateOf(point);
         return { period, value: status === "observed" && numeric(value) ? value : null,
           status: status === "observed" && !numeric(value) ? "missing" : status, retrievedAt: stamp(point?.collectedAt) };
-      }), end, count));
+      }), end, count, includeHistory));
       const step = diagnostics(key);
       groups.push(finishGroup({ key, label, category: "tourism", provider: "한국관광공사", periodType: "M", errorCode: errorCode || (step?.errorCode ? safeCode(step.errorCode) : ""),
         diagnostics: step?.diagnostics || {}, latestRequestedPeriod: step?.latestRequestedPeriod || "",
@@ -131,19 +131,44 @@ function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService,
       stale: kosis?.status === "stale" || datasets.some(dataset => (kosis?.datasets || []).find(item => item.key === dataset.key)?.status === "stale"),
       errorCode: kosisError || (kosis?.error?.code ? safeCode(kosis.error.code) : diagnostics("kosis")?.errorCode ? safeCode(diagnostics("kosis").errorCode) : kosisObserved === kosisMetrics.length ? "" : "MISSING_VALUES") });
     let trend = null, trendError = "";
-    for (const months of [...new Set([count, 24, 12])]) {
+    const trendCandidates = [];
+    for (const months of [...new Set(includeHistory ? [24, count, 13, 12] : [count, 24, 12])]) {
       try {
         const candidate = await searchTrendService.get({ regionKey: scope.regionKey, month: end, months }); assertCache(candidate);
         if (candidate?.regionKey !== scope.regionKey || candidate.month !== end) throw { code: "REGION_MISMATCH" };
         if (candidate.partialMonth) throw { code: "PERIOD_MISMATCH" };
+        if (includeHistory) {
+          const points = (candidate.series || []).map(point => ({ ...point, period: String(point.period || "").slice(0, 7) }))
+            .filter(point => MONTH.test(point.period) && point.period <= end);
+          if (new Set(points.map(point => point.period)).size !== points.length) throw { code: "INVALID_RESPONSE" };
+          const observed = points.filter(point => point.status === "observed" && numeric(point.value) && point.value <= 100);
+          const periods = new Set(observed.map(point => point.period)), latest = [...periods].sort().at(-1) || "";
+          const recentCount = latest ? [0, -1, -2].filter(offset => periods.has(shiftMonth(latest, offset))).length : 0;
+          // Prefer a whole response that can support both forecast targets,
+          // then the freshest normal month, then more normal history. Never
+          // join separately normalised responses to fill another one's gaps.
+          const forecastTargets = observed.length < 6 || !latest ? 0 : [1, 2].filter(offset => {
+            const target = shiftMonth(end, offset);
+            return latest >= shiftMonth(target, -3) && (recentCount >= 2 || periods.has(shiftMonth(target, -12)));
+          }).length;
+          trendCandidates.push({ candidate, observedCount: observed.length, latest, forecastTargets, window: months });
+          continue;
+        }
         if ((candidate.series || []).some(point => point.status === "observed" && numeric(point.value))) { trend = candidate; break; }
         if (!trend) trend = candidate;
       } catch (error) { if (error.code === "REGIONAL_CACHE_ONLY_VIOLATION") throw error; trendError = safeCode(error.code); }
     }
+    if (includeHistory && trendCandidates.length) {
+      trendCandidates.sort((a, b) => b.forecastTargets - a.forecastTargets || b.latest.localeCompare(a.latest)
+        || b.observedCount - a.observedCount || b.window - a.window);
+      const selected = trendCandidates[0]; trend = selected.candidate;
+      // A failed larger cache does not taint a different, valid response.
+      if (selected.observedCount) trendError = "";
+    }
     const trendRows = (trend?.series || []).map(point => ({ period: String(point.period || "").slice(0, 7), status: point.status === "observed" && numeric(point.value) && point.value <= 100 ? "observed" : "missing",
       value: point.status === "observed" && numeric(point.value) && point.value <= 100 ? point.value : null, retrievedAt: stamp(trend?.retrievedAt) })).filter(point => MONTH.test(point.period));
     if (new Set(trendRows.map(row => row.period)).size !== trendRows.length) { trendRows.length = 0; trendError = "INVALID_RESPONSE"; }
-    const metric = metricWindow("interest", "검색 관심도", "상대지수", trendRows, end, count);
+    const metric = metricWindow("interest", "검색 관심도", "상대지수", trendRows, end, count, includeHistory);
     groups.push(finishGroup({ key: "searchTrend", label: "검색 트렌드", category: "search", provider: "네이버 데이터랩", periodType: "M", keyword: String(trend?.keyword || ""),
       normalizationPeriod: trend?.startDate && trend?.endDate ? `${trend.startDate} ~ ${trend.endDate}` : "",
       sourceBatchId: trend ? crypto.createHash("sha256").update(JSON.stringify([trend.regionKey, trend.keyword, trend.startDate, trend.endDate])).digest("hex") : "",

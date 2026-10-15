@@ -1,12 +1,13 @@
 "use strict";
 
-function createRegionalAnalysisHttpHandler({ service, requireAdmin, parseJsonBody, send, rateLimit = () => {} }) {
-  const routes = new Set(["/api/regional-analysis", "/api/regional-analysis/refresh", "/api/regional-analysis/policy"]);
+function createRegionalAnalysisHttpHandler({ service, requireAdmin, parseJsonBody, send, rateLimit = () => {}, basePath = "/api/regional-analysis", allowPolicy = true }) {
+  if (!["/api/regional-analysis", "/api/regional-outlook"].includes(basePath)) throw new TypeError("Invalid regional API path");
+  const routes = new Set([basePath, `${basePath}/refresh`, ...(allowPolicy ? [`${basePath}/policy`] : [])]);
   return async function handle(req, res, url, session) {
     if (!routes.has(url.pathname)) return false;
     if (!requireAdmin(session, req, res)) return true;
     try {
-      if (req.method === "GET" && url.pathname === "/api/regional-analysis") {
+      if (req.method === "GET" && url.pathname === basePath) {
         const keys = [...url.searchParams.keys()];
         if (keys.some(key => !["regionKey", "month", "months"].includes(key)) || new Set(keys).size !== keys.length || !url.searchParams.get("regionKey")) {
           send(res, 400, { error: "조회할 지역과 기간을 확인해 주세요.", code: "REGIONAL_INVALID_REQUEST" }); return true;
@@ -16,7 +17,7 @@ function createRegionalAnalysisHttpHandler({ service, requireAdmin, parseJsonBod
         if (url.searchParams.has("months")) input.months = Number(url.searchParams.get("months"));
         send(res, 200, await service.get(input)); return true;
       }
-      if (req.method !== "POST" || url.pathname === "/api/regional-analysis") {
+      if (req.method !== "POST" || url.pathname === basePath) {
         send(res, 405, { error: "지원하지 않는 요청입니다." }); return true;
       }
       if (url.searchParams.size) { send(res, 400, { error: "조건은 요청 본문으로 입력해 주세요." }); return true; }

@@ -53,3 +53,21 @@ test("malformed JSON is a client error and cannot create work", async () => {
   await handle({ method: "POST", headers: { host: "localhost", "content-type": "application/json" } }, {}, new URL("http://localhost/api/regional-analysis/refresh"), {});
   assert.equal(status, 400); assert.equal(requests, 0);
 });
+
+test("outlook namespace keeps administrator and origin checks without adding a policy endpoint", async () => {
+  const calls = [], replies = [];
+  const handle = createRegionalAnalysisHttpHandler({ basePath: "/api/regional-outlook", allowPolicy: false,
+    service: { get: async input => { calls.push(["get", input]); return { snapshot: null }; }, request: async (...args) => { calls.push(["request", ...args]); return { job: { status: "queued" } }; } },
+    requireAdmin: (session, req, res) => { if (session?.role === "admin") return true; replies.push(403); return false; },
+    parseJsonBody: async req => req.payload, send: (res, status) => replies.push(status) });
+  const req = { method: "GET", headers: { host: "localhost", "content-type": "application/json" }, payload: { regionKey: "pocheon", collectMissing: false } };
+  const invoke = (route, request = req, session = { role: "admin" }) => handle(request, {}, new URL(route, "http://localhost"), session);
+  await invoke("/api/regional-outlook?regionKey=pocheon"); assert.deepEqual(calls[0], ["get", { regionKey: "pocheon" }]);
+  await invoke("/api/regional-outlook?regionKey=pocheon", req, { role: "b2b" }); assert.equal(replies.at(-1), 403);
+  await invoke("/api/regional-outlook/refresh", { ...req, method: "POST", headers: { ...req.headers, origin: "https://foreign.invalid" } }); assert.equal(replies.at(-1), 403);
+  assert.equal(calls.length, 1);
+  await invoke("/api/regional-outlook/refresh", { ...req, method: "POST" }); assert.equal(replies.at(-1), 202);
+  assert.deepEqual(calls[1], ["request", { regionKey: "pocheon" }, { collectMissing: false, reason: "manual" }]);
+  assert.equal(await invoke("/api/regional-outlook/policy", { ...req, method: "POST" }), false);
+  assert.equal(await invoke("/api/regional-analysis?regionKey=pocheon"), false);
+});

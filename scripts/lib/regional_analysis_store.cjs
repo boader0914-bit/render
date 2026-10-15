@@ -50,13 +50,17 @@ async function atomicJson(file, value) {
   }
 }
 
-function createRegionalAnalysisStore({ dataDir, resolveRegion, buildSnapshot, now = () => new Date(), autoStart = true }) {
+function createRegionalAnalysisStore({ dataDir, resolveRegion, buildSnapshot, now = () => new Date(), autoStart = true,
+  directoryName = "regional_analysis", calculationVersion = CALCULATION_VERSION, defaultMonth = latestCompletedMonth,
+  retainFailedGroups = true, rollForward = false, isMutableScope = () => true, onResultSaved = null }) {
   if (!dataDir || typeof resolveRegion !== "function" || typeof buildSnapshot !== "function") throw new TypeError("dataDir, resolveRegion and buildSnapshot are required");
-  const directory = path.resolve(dataDir, "regional_analysis"), stateFile = path.join(directory, "queue.json");
+  if (!/^[a-z][a-z0-9_]{1,60}$/.test(directoryName) || !/^[a-z0-9-]{1,100}$/.test(calculationVersion)
+    || typeof defaultMonth !== "function" || typeof isMutableScope !== "function") throw new TypeError("Invalid regional storage options");
+  const directory = path.resolve(dataDir, directoryName), stateFile = path.join(directory, "queue.json");
   const empty = () => ({ schemaVersion: SCHEMA_VERSION, sequence: 0, jobs: {}, policies: {}, results: {}, sourceRevisions: {}, sourceVersions: {}, dirtyScopes: {} });
   let state = empty(), initialized, serial = Promise.resolve(), worker = null, closed = false, storeError = null, recoveryDirty = false;
   const timestamp = () => at(now());
-  const keyFor = scope => hash([CALCULATION_VERSION, scope.regionKey, scope.months, scope.month]);
+  const keyFor = scope => hash([calculationVersion, scope.regionKey, scope.months, scope.month]);
   const policyKeyFor = (scope, rolling) => hash([scope.regionKey, scope.months, rolling ? "latest" : scope.month]);
   const pointerFile = key => path.join(directory, "latest", `${key}.json`);
   const resultFile = (key, resultId) => path.join(directory, "results", key, `${resultId}.json`);
@@ -78,6 +82,10 @@ function createRegionalAnalysisStore({ dataDir, resolveRegion, buildSnapshot, no
           || keyFor(job.scope) !== job.scopeKey || ![13, 24].includes(job.scope.months) || !Number.isSafeInteger(job.sequence)
           || !Number.isFinite(Date.parse(job.queuedAt))) throw fault("REGIONAL_STORE_INVALID");
         if (ACTIVE.has(job.status) || job.status === "processing" || job.status === "interrupted" && !job.collectMissing) {
+          if (!isMutableScope(job.scope, now())) {
+            job.status = "superseded"; job.errorCode = "REGIONAL_SCOPE_CLOSED"; job.finishedAt = timestamp();
+            recoveryDirty = true; continue;
+          }
           // Provider work may have happened before a lost acknowledgement. It
           // is never replayed automatically. Pure local work is safe to resume.
           job.status = job.collectMissing ? "interrupted" : "queued";
@@ -101,6 +109,7 @@ function createRegionalAnalysisStore({ dataDir, resolveRegion, buildSnapshot, no
       state = stored;
       for (const [key, dirty] of Object.entries(state.dirtyScopes)) {
         if (!validId(key) || !dirty?.scope || keyFor(dirty.scope) !== key || !Number.isSafeInteger(dirty.revision)) throw fault("REGIONAL_STORE_INVALID");
+        if (!isMutableScope(dirty.scope, now())) { delete state.dirtyScopes[key]; recoveryDirty = true; continue; }
         const job = latestJob(key);
         if (!job || !ACTIVE.has(job.status)) { enqueue(dirty.scope, { collectMissing: false, reason: "source_changed" }); recoveryDirty = true; }
       }
@@ -116,7 +125,7 @@ function createRegionalAnalysisStore({ dataDir, resolveRegion, buildSnapshot, no
   async function normalize(input = {}) {
     if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some(key => !["regionKey", "months", "month"].includes(key))) throw fault("INVALID_REGIONAL_SCOPE", 400);
     const months = input.months === undefined ? 13 : Number(input.months);
-    const month = input.month === undefined || input.month === "" ? latestCompletedMonth(now()) : input.month;
+    const month = input.month === undefined || input.month === "" ? defaultMonth(now()) : input.month;
     const currentMonth = new Date(new Date(now()).getTime() + 9 * 3600000).toISOString().slice(0, 7);
     if (![13, 24].includes(months) || !validMonth(month) || month > currentMonth || typeof input.regionKey !== "string" || !input.regionKey.trim()
       || input.regionKey.length > 120) throw fault("INVALID_REGIONAL_SCOPE", 400);
@@ -143,7 +152,7 @@ function createRegionalAnalysisStore({ dataDir, resolveRegion, buildSnapshot, no
     for (const resultId of candidates) {
       try {
         const snapshot = await readJson(resultFile(key, resultId));
-        if (!snapshot || snapshot.schemaVersion !== SCHEMA_VERSION || snapshot.calculationVersion !== CALCULATION_VERSION
+        if (!snapshot || snapshot.schemaVersion !== SCHEMA_VERSION || snapshot.calculationVersion !== calculationVersion
           || snapshot.resultId !== resultId || keyFor(snapshot.scope || {}) !== key || !["ready", "partial", "missing"].includes(snapshot.status)
           || !Array.isArray(snapshot.groups)) throw fault("REGIONAL_RESULT_INVALID");
         return { snapshot, errorCode };
@@ -194,7 +203,8 @@ function createRegionalAnalysisStore({ dataDir, resolveRegion, buildSnapshot, no
       for (const value of [...Object.values(state.results), ...Object.values(state.jobs), ...Object.values(state.policies)]) {
         const scope = value?.scope;
         if (scope?.regionKey === regionKey) {
-          const current = value.rollingMonth ? { ...scope, month: latestCompletedMonth(now()) } : scope;
+          const current = value.rollingMonth ? { ...scope, month: defaultMonth(now()) } : scope;
+          if (!isMutableScope(current, now())) continue;
           scopes.set(keyFor(current), current);
         }
       }
@@ -246,9 +256,24 @@ function createRegionalAnalysisStore({ dataDir, resolveRegion, buildSnapshot, no
     const response = await locked(async () => {
       writable(); let changed = recoveryDirty, queued = 0;
       const current = new Date(now()).getTime();
+      if (rollForward) {
+        // A known region gets a new monthly local calculation without a page
+        // view or an automatic provider request. Published past forecasts stay
+        // immutable and are never rebuilt with later observations.
+        const latest = defaultMonth(now()), candidates = new Map();
+        for (const value of [...Object.values(state.results), ...Object.values(state.jobs)]) {
+          const scope = value?.scope;
+          if (scope && scope.month < latest) candidates.set(`${scope.regionKey}:${scope.months}`, { ...scope, month: latest });
+        }
+        for (const scope of candidates.values()) {
+          const key = keyFor(scope);
+          if (!state.results[key] && !latestJob(key)) { enqueue(scope, { collectMissing: false, reason: "initial" }); queued++; changed = true; }
+        }
+      }
       for (const policy of Object.values(state.policies)) {
         if (!policy.enabled || !policy.nextRunAt || Date.parse(policy.nextRunAt) > current) continue;
-        const scope = policy.rollingMonth ? { ...policy.scope, month: latestCompletedMonth(now()) } : policy.scope;
+        const scope = policy.rollingMonth ? { ...policy.scope, month: defaultMonth(now()) } : policy.scope;
+        if (!isMutableScope(scope, now())) { policy.enabled = false; policy.nextRunAt = null; changed = true; continue; }
         const result = enqueue(scope, { collectMissing: true, reason: "scheduled" });
         if (!result.reused) queued++;
         const due = Date.parse(policy.nextRunAt), step = policy.intervalHours * 3600000;
@@ -266,6 +291,12 @@ function createRegionalAnalysisStore({ dataDir, resolveRegion, buildSnapshot, no
     while (!closed && !storeError) {
       const selected = await locked(async () => {
         if (closed || storeError) return null;
+        let retired = false;
+        for (const candidate of Object.values(state.jobs)) if (candidate.status === "queued" && !isMutableScope(candidate.scope, now())) {
+          candidate.status = "superseded"; candidate.errorCode = "REGIONAL_SCOPE_CLOSED"; candidate.finishedAt = timestamp();
+          delete state.dirtyScopes[candidate.scopeKey]; retired = true;
+        }
+        if (retired) await save();
         const job = Object.values(state.jobs).filter(value => value.status === "queued").sort((a, b) => a.sequence - b.sequence)[0];
         if (!job) return null;
         job.status = "running"; job.startedAt = timestamp(); await save(); return copy(job);
@@ -279,12 +310,19 @@ function createRegionalAnalysisStore({ dataDir, resolveRegion, buildSnapshot, no
         // An explicit all-failed source bundle is not a new normal snapshot.
         if (result.groups.length && result.groups.every(group => ["failed", "error", "blocked"].includes(group?.status))) throw fault("REGIONAL_SOURCE_UNAVAILABLE");
       } catch (error) { errorCode = safeError(error); }
+      let published = null;
       await locked(async () => {
         const job = state.jobs[selected.id];
         if (closed || !job || job.status !== "running") return;
+        if (result?.refreshDiagnostics) job.refreshDiagnostics = copy(result.refreshDiagnostics);
+        if (!isMutableScope(selected.scope, now())) {
+          job.status = "superseded"; job.finishedAt = timestamp(); job.errorCode = "REGIONAL_SCOPE_CLOSED";
+          delete state.dirtyScopes[selected.scopeKey]; await save(); return;
+        }
         if ((selected.sourceRevision || 0) !== (state.sourceRevisions[selected.scope.regionKey] || 0)) {
           job.status = "superseded"; job.finishedAt = timestamp(); job.errorCode = null;
-          enqueue(selected.scope, { collectMissing: false, reason: "source_changed" });
+          const followup = enqueue(selected.scope, { collectMissing: false, reason: "source_changed" });
+          if (job.refreshDiagnostics) state.jobs[followup.job.id].refreshDiagnostics = copy(job.refreshDiagnostics);
           await save(); return;
         }
         if (errorCode) {
@@ -298,6 +336,7 @@ function createRegionalAnalysisStore({ dataDir, resolveRegion, buildSnapshot, no
         let retained = false;
         const priorGroups = new Map((priorSnapshot?.groups || []).filter(group => group?.key).map(group => [group.key, group]));
         const groups = result.groups.map(group => {
+          if (!retainFailedGroups) return copy(group);
           const previousGroup = priorGroups.get(group?.key);
           if (!previousGroup || !NORMAL_GROUP.has(previousGroup.status) || !hasObserved(previousGroup)
             || (!UNAVAILABLE_GROUP.has(group?.status) && !(group.status === "partial" && !hasObserved(group)))) return copy(group);
@@ -306,17 +345,19 @@ function createRegionalAnalysisStore({ dataDir, resolveRegion, buildSnapshot, no
             errorCode: SAFE_ERRORS.has(group.errorCode) ? group.errorCode : "REGIONAL_SOURCE_UNAVAILABLE", attemptedAt: timestamp() },
           lastRefreshErrorCode: SAFE_ERRORS.has(group.errorCode) ? group.errorCode : "REGIONAL_SOURCE_UNAVAILABLE" };
         });
-        const snapshot = { ...copy(result), schemaVersion: SCHEMA_VERSION, calculationVersion: CALCULATION_VERSION,
+        const snapshot = { ...copy(result), schemaVersion: SCHEMA_VERSION, calculationVersion,
           resultId, generatedAt: timestamp(), scope: copy(selected.scope), groups, status: retained ? "partial" : result.status };
         snapshot.summary = { ...snapshot.summary, total: groups.length, ready: groups.filter(group => ["ready", "complete", "completed"].includes(group.status)).length,
           partial: groups.filter(group => group.status === "partial").length, failed: groups.filter(group => ["failed", "error", "blocked"].includes(group.status)).length,
           missing: groups.filter(group => ["missing", "publication_pending", "unavailable"].includes(group.status)).length, stale: groups.filter(group => group.stale).length };
         if (retained) { snapshot.inputFingerprint = result.sourceFingerprint || null; snapshot.sourceFingerprint = hash([selected.scope, result.calculationVersion || CALCULATION_VERSION, groups]); }
         job.hasObservedData = groups.some(hasObserved);
+        if (Array.isArray(snapshot.metrics)) job.hasForecastData = snapshot.metrics.some(metric => (metric.forecasts || [])
+          .some(row => row.status === "forecast" && typeof row.value === "number" && Number.isFinite(row.value)));
         if (typeof snapshot.sourceFingerprint === "string" && snapshot.sourceFingerprint && priorSnapshot?.sourceFingerprint === snapshot.sourceFingerprint) {
           job.status = "completed"; job.resultStatus = priorSnapshot.status; job.resultId = priorSnapshot.resultId;
           job.unchanged = true; job.finishedAt = timestamp(); job.errorCode = null;
-          delete state.dirtyScopes[key]; await save(); return;
+          delete state.dirtyScopes[key]; await save(); published = copy(priorSnapshot); return;
         }
         const previous = state.results[key];
         const revisions = [...new Set([previous?.resultId, ...(previous?.revisions || [])].filter(validResultId))].slice(0, MAX_REVISIONS);
@@ -324,16 +365,22 @@ function createRegionalAnalysisStore({ dataDir, resolveRegion, buildSnapshot, no
           // Immutable results are fully durable before publication. A lost
           // acknowledgement can orphan one result, never corrupt the old one.
           await atomicJson(resultFile(key, resultId), snapshot);
+          if (!isMutableScope(selected.scope, now())) {
+            job.status = "superseded"; job.finishedAt = timestamp(); job.errorCode = "REGIONAL_SCOPE_CLOSED";
+            delete state.dirtyScopes[key]; await save(); return;
+          }
           await atomicJson(pointerFile(key), { schemaVersion: SCHEMA_VERSION, scopeKey: key, resultId, revisions });
           state.results[key] = { resultId, revisions, scope: copy(selected.scope) };
           job.status = "completed"; job.resultStatus = snapshot.status; job.resultId = resultId; job.finishedAt = timestamp(); job.errorCode = null;
           delete state.dirtyScopes[key];
           await save();
+          published = copy(snapshot);
         } catch (_) {
           job.status = "failed"; job.errorCode = "REGIONAL_STORE_UNAVAILABLE"; job.finishedAt = timestamp();
           storeError = "REGIONAL_STORE_UNAVAILABLE";
         }
       });
+      if (published && typeof onResultSaved === "function") await Promise.resolve().then(() => onResultSaved(published)).catch(() => {});
     }
   }
   function kick() {
@@ -362,7 +409,12 @@ function createRegionalAnalysisStore({ dataDir, resolveRegion, buildSnapshot, no
   }
   const timer = autoStart ? setInterval(() => { tick().catch(() => {}); }, 30000) : null;
   timer?.unref?.();
-  return { get, request, updatePolicy, sourceChanged, tick, waitForIdle, close };
+  async function trackedRegions() {
+    await init();
+    return locked(() => [...new Set([...Object.values(state.results), ...Object.values(state.jobs), ...Object.values(state.policies)]
+      .map(value => value?.scope?.regionKey).filter(Boolean))]);
+  }
+  return { get, request, updatePolicy, sourceChanged, tick, waitForIdle, close, trackedRegions };
 }
 
 module.exports = { createRegionalAnalysisStore, SCHEMA_VERSION, CALCULATION_VERSION, latestCompletedMonth };

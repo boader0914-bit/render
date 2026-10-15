@@ -28139,6 +28139,18 @@ function syncSavedRegionalAnalysis(region = null, mode = "summary", host = null)
   });
 }
 
+function syncSavedRegionalOutlook() {
+  const slot = document.getElementById("regionalOutlookDashboard");
+  if (!slot) return;
+  const visible = () => isAdminRole() && state.activeTab === "demand";
+  if (!visible()) { window.RegionalOutlook?.stop(slot); return; }
+  const selected = selectedAnalysisRegion();
+  void window.RegionalOutlook?.mount(slot, {
+    regionKey: selected?.regionKey || "", regionLabel: selected ? analysisRegionLabel(selected) : "지역 미선택",
+    fetchJson, accountKey: state.session?.username || "admin", isVisible: visible
+  });
+}
+
 function adminSelectedRegion(master = {}) {
   const regions = master.adminRegionalOperations?.regions || [];
   if (!regions.length) return null;
@@ -30569,6 +30581,7 @@ function renderRegionAnalysisShell() {
   });
   syncSavedRegionalAnalysis(null, "summary");
   syncSavedRegionalAnalysis(null, "sources");
+  syncSavedRegionalOutlook();
 }
 
 function renderActiveRegionAnalysis() {
@@ -37191,6 +37204,7 @@ function setActiveTab(tab, options = {}) {
   state.analysisNavigationSequence = (state.analysisNavigationSequence || 0) + 1;
   state.activeTab = roleAllowsTab(tab) ? tab : firstRoleTab();
   window.RegionalAnalysis?.stop();
+  window.RegionalOutlook?.stop();
   if (state.activeTab !== "industryHome") window.StayIndustryAnalysis?.pause(els.industryHomeDashboard);
   if (state.activeTab !== "admin") window.RegionalReportPreparation?.pause();
   if (window.CompanyIntegrated) syncCompanyIntegratedPanel();
@@ -41905,6 +41919,7 @@ async function loadTrafficState() {
 
 async function logout() {
   window.RegionalAnalysis?.clear();
+  window.RegionalOutlook?.clear();
   stopTourismDemandStrengthBackfillPolling({ render: false });
   try {
     await fetchJson("/api/logout", { method: "POST" });

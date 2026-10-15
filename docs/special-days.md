@@ -26,6 +26,7 @@ const specialDays = createSpecialDaysService({
 
 await specialDays.status();          // 키 설정 여부와 저장 현황, 외부 요청 없음
 await specialDays.status(2026);      // 위 정보 + yearStatus, 외부 요청 없음
+await specialDays.getCachedYear(2026); // 키 조회·외부 요청·쓰기 없는 저장자료 전용 읽기
 await specialDays.getYear(2026);     // 없거나 24시간 지난 분류만 갱신
 await specialDays.getYear();         // 한국 시간의 현재 연도
 await specialDays.getYear(2026, { refresh: true });
@@ -68,6 +69,12 @@ await specialDays.verify(2026);      // 공휴일 1페이지, 1행 요청으로 
 분류 상태는 `ready`, `stale`, `error`, `missing_key`다. 성공한 빈 목록은 `ready`이고 성공 시각이 있다. 미수집 또는 실패는 성공 시각이 없는 상태이므로, 빈 배열만 보고 공휴일이 없다고 판단하면 안 된다. 키가 제거되어도 아직 유효한 기존 자료는 `ready`로 읽을 수 있으며 `configured:false`로 구분한다.
 
 `status()`는 `{configured, source, cacheTtlHours, retryCooldownSeconds, supportedYears, categories, cachedYears, lastVerification}`를 반환한다. 연도 인수가 있으면 네트워크를 사용하지 않는 `yearStatus`를 추가한다. `lastVerification`은 현재 프로세스에서 마지막으로 수행한 확인 결과이며 재시작 시 초기화된다.
+
+지역 전망의 `getCachedYear()`는 저장 파일만 읽고 인증키도 조회하지 않는다. 이때 `configured:null`, `cacheOnly:true`, `networkAttempted:false`이며, 저장되지 않은 분류는 `missing`으로 표시한다. 오래된 정상 자료는 성공 시각과 `stale`을 보존한다. 공휴일 분류의 정상 저장 시각이 없는 빈 배열은 공휴일 0일로 사용하지 않는다. 기존 `getYear()`의 수집·갱신 동작은 그대로 유지한다.
+
+`scripts/lib/regional_outlook_calendar.cjs`는 이 저장자료로 월별 달력을 가공한다. `loadRegionalOutlookCalendar({ specialDays, periods })`는 `getCachedYear()`만 사용하며, 월 목록은 `YYYY-MM` 문자열 배열이다. `requiredRegionalOutlookYears(periods)`는 1월·12월에 연도 경계를 확인할 앞뒤 연도도 포함한다. `buildRegionalOutlookCalendar({ periods, years })`는 파일·네트워크 접근 없는 순수 계산 함수다.
+
+공휴일과 토·일요일이 연속 3일 이상이면 연휴로 묶고, 시작·종료일과 해당 월에 걸친 날짜 수를 저장한다. 휴일 사이 평일은 `bridgeCandidateDates`에 **징검다리 후보**로만 분리하고 공휴일 수에 더하지 않는다. `holidayEveDates`는 공식 공휴일 전날이다. 성공 저장 연도가 없으면 `holidayDays:null`이며 실제 정상 응답의 0일과 구분한다. 연도 경계가 미확인이면 해당 연휴 수치도 미확인으로 남긴다. 재수신 시각만 바뀌고 공휴일 내용과 확보 상태가 같다면 `sourceFingerprint`는 유지된다.
 
 ## 저장과 실패 처리
 

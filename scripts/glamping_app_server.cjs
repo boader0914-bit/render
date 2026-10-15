@@ -35,6 +35,7 @@ const { createRegionalReportPreparationHttpHandler } = require("./lib/regional_r
 const { createRegionalAnalysisStore } = require("./lib/regional_analysis_store.cjs");
 const { createRegionalAnalysisSnapshotBuilder } = require("./lib/regional_analysis_snapshot.cjs");
 const { createRegionalAnalysisHttpHandler } = require("./lib/regional_analysis_http.cjs");
+const { createRegionalOutlookService } = require("./lib/regional_outlook_service.cjs");
 const { renderMonthlyReportPdf } = require("./lib/monthly_report_pdf.cjs");
 const { createTourismForecastService } = require("./lib/tourism_forecast.cjs");
 const { createMonthlyVisitorScheduler } = require("./tourism_visitor_monthly_scheduler.cjs");
@@ -206,6 +207,7 @@ const tourismForecastService = createTourismForecastService({
     || ""
 });
 let regionalAnalysisStore = null;
+let regionalOutlookService = null;
 const tourismCollector = createTourismCollector({
   rootDir: ROOT,
   webDir: WEB_DIR,
@@ -412,9 +414,7 @@ const handleRegionalReportPreparation = createRegionalReportPreparationHttpHandl
 // A single persisted queue serves both manual and opt-in scheduled preparation.
 // The existing provider locks and daily call budget above remain authoritative.
 const regionalAnalysisPreparers = new Map();
-const buildRegionalAnalysisSnapshot = createRegionalAnalysisSnapshotBuilder({
-  tourismCollector, kosisService, searchTrendService: regionalSearchTrendService,
-  prepare: async scope => {
+async function prepareRegionalAnalysisSources(scope) {
     if (!regionalAnalysisPreparers.has(scope.months)) regionalAnalysisPreparers.set(scope.months, createRegionalReportPreparation({
       dataDir: path.join(DATA_DIR, "regional_analysis", "source_preparation", String(scope.months)),
       historyMonths: scope.months, alignLatestObserved: true, reuseFinishedMs: 60000,
@@ -427,10 +427,25 @@ const buildRegionalAnalysisSnapshot = createRegionalAnalysisSnapshotBuilder({
     await preparer.start(request);
     await preparer.awaitIdle();
     return preparer.get(request);
-  }
+}
+const buildRegionalAnalysisSnapshot = createRegionalAnalysisSnapshotBuilder({
+  tourismCollector, kosisService, searchTrendService: regionalSearchTrendService, prepare: prepareRegionalAnalysisSources
 });
 regionalAnalysisStore = createRegionalAnalysisStore({
   dataDir: DATA_DIR, buildSnapshot: buildRegionalAnalysisSnapshot,
+  onResultSaved: async snapshot => {
+    if (regionalOutlookService) await regionalOutlookService.request({ regionKey: snapshot.scope.regionKey, months: 13 }, { collectMissing: false, reason: "source_changed" });
+  },
+  resolveRegion: async key => {
+    const region = await resolveRegionalReportRegion(key);
+    return region?.level === "local" && region.active && region.selectable
+      ? { ...region, label: region.fullName || region.name || region.regionKey } : null;
+  }
+});
+regionalOutlookService = createRegionalOutlookService({
+  dataDir: DATA_DIR, specialDays: specialDaysService,
+  readIndicators: createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService, searchTrendService: regionalSearchTrendService, includeHistory: true }),
+  prepareIndicators: prepareRegionalAnalysisSources,
   resolveRegion: async key => {
     const region = await resolveRegionalReportRegion(key);
     return region?.level === "local" && region.active && region.selectable
@@ -444,7 +459,18 @@ function regionalSourceVersion(value) {
 async function notifyRegionalSourceChange(event) {
   try { await regionalAnalysisStore.sourceChanged(event); }
   catch (error) { console.error("regional_analysis_invalidation_failed", /^REGIONAL_[A-Z0-9_]+$/.test(error.code || "") ? error.code : "REGIONAL_STORE_UNAVAILABLE"); }
+  try { if (regionalOutlookService) await regionalOutlookService.sourceChanged(event); }
+  catch (_) { console.error("regional_outlook_invalidation_failed", "REGIONAL_STORE_UNAVAILABLE"); }
 }
+const getSpecialDaysYear = specialDaysService.getYear.bind(specialDaysService);
+specialDaysService.getYear = async (...args) => {
+  const result = await getSpecialDaysYear(...args);
+  if (result?.networkAttempted && result?.categories?.holidays?.updatedAt && regionalOutlookService) {
+    const holiday = result.categories.holidays;
+    await regionalOutlookService.calendarChanged(regionalSourceVersion({ year: result.year, items: holiday.items, status: holiday.status }), result.year).catch(() => {});
+  }
+  return result;
+};
 const refreshKosisRegion = kosisService.refreshRegion.bind(kosisService);
 kosisService.refreshRegion = async regionKey => {
   const result = await refreshKosisRegion(regionKey);
@@ -464,6 +490,11 @@ regionalSearchTrendService.refresh = async input => {
 const handleRegionalAnalysis = createRegionalAnalysisHttpHandler({
   service: regionalAnalysisStore, requireAdmin: requireAdminSession, parseJsonBody, send,
   rateLimit: (req, session) => assertRequestRateLimit(req, "adminRegionalAnalysisRefresh", { limit: 12, windowMs: 60 * 60 * 1000 }, session.username || "")
+});
+const handleRegionalOutlook = createRegionalAnalysisHttpHandler({
+  basePath: "/api/regional-outlook", allowPolicy: false, service: regionalOutlookService,
+  requireAdmin: requireAdminSession, parseJsonBody, send,
+  rateLimit: (req, session) => assertRequestRateLimit(req, "adminRegionalOutlookRefresh", { limit: 12, windowMs: 60 * 60 * 1000 }, session.username || "")
 });
 const readMonthlyRegionContext = createMonthlyReportContext({ kosisService, tourismCollector, searchTrendService: regionalSearchTrendService });
 const readInsightRegionContext = require('./lib/insight_region_history.cjs').createInsightRegionHistory({
@@ -18765,6 +18796,7 @@ async function route(req, res) {
     if (await handleIndustryAnalysis(req, res, reqUrl, session)) return;
     if (await handleRegionalReportPreparation(req, res, reqUrl, session)) return;
     if (await handleRegionalAnalysis(req, res, reqUrl, session)) return;
+    if (await handleRegionalOutlook(req, res, reqUrl, session)) return;
 
     if (req.method === "POST" && reqUrl.pathname === "/api/b2b-search") {
       if (normalizeUserRole(session.role) !== USER_ROLES.b2b) {

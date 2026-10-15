@@ -25,7 +25,8 @@ test("zero, errors and unpublished months remain distinct; annual KOSIS has no 1
   assert.match(html, /2026-05<\/th><td>—<\/td><td>일부 자료/);
   assert.doesNotMatch(html, /1\/13개월 확보/);
   assert.match(html, /월간·연간 기준기간 확인/);
-  assert.match(html, /예측 수치로 표시하지 않습니다/);
+  assert.match(html, /이 화면의 수치는 공식 관측자료이며 예상값과 구별됩니다/);
+  assert.match(html, /지역분석의 수요 전망에서 확인/);
 });
 
 test("untrusted group values are escaped and details start folded", () => {

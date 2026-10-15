@@ -271,6 +271,18 @@ function createSpecialDaysService({ dataDir, readServiceKey, fetchImpl = globalT
     inFlight.set(year, pending);
     try { return await pending; } finally { inFlight.delete(year); }
   }
+  async function getCachedYear(value = new Date(at() + 9 * 60 * 60 * 1000).getUTCFullYear()) {
+    const year = validateYear(value);
+    const cache = await readCache(year);
+    // Forecast reads must never resolve credentials or turn an expired cache
+    // into a provider request. A missing stored category is unknown, not zero.
+    const result = resultFor(cache, true, false);
+    for (const category of Object.values(result.categories)) {
+      if (!category.updatedAt && !cache.readError && category.error?.code === "NOT_COLLECTED") category.status = "missing";
+    }
+    return { ...result, configured: null, cacheOnly: true,
+      status: result.updatedAt ? result.status : cache.readError || result.errors.some(error => error.code !== "NOT_COLLECTED") ? "error" : "missing" };
+  }
   async function verify(value = new Date(at() + 9 * 60 * 60 * 1000).getUTCFullYear()) {
     const year = validateYear(value);
     const serviceKey = await key();
@@ -299,7 +311,7 @@ function createSpecialDaysService({ dataDir, readServiceKey, fetchImpl = globalT
     }
     return { configured, source: { ...SOURCE }, cacheTtlHours: 24, retryCooldownSeconds: 300, supportedYears: { min: 2000, max: 2100 }, categories: CATEGORIES.map(category => ({ ...category })), cachedYears: cachedYears.sort((a, b) => a.year - b.year), lastVerification: lastVerification ? { ...lastVerification } : null, ...(year === null ? {} : { yearStatus: resultFor(await readCache(year), configured) }) };
   }
-  return { status, getYear, verify };
+  return { status, getYear, getCachedYear, verify };
 }
 
 module.exports = { createSpecialDaysService, validateYear, parseResponse, SOURCE, CATEGORIES };
