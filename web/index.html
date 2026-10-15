@@ -22,6 +22,7 @@
   <link rel="stylesheet" href="/monthly-reports.css">
   <link rel="stylesheet" href="/company-integrated.css">
   <link rel="stylesheet" href="/regional-report-preparation.css">
+  <link rel="stylesheet" href="/regional-analysis.css">
   <link rel="stylesheet" href="/industry-analysis.css">
   <link rel="stylesheet" href="/insight-customers.css">
 </head>
@@ -179,6 +180,7 @@
           <p class="hint" id="dictionarySearchStatus">실시간 검색이 아니라 저장된 지역 판단 사전을 호출합니다.</p>
         </section>
 
+        <div id="regionalAnalysisSummary"></div>
         <section class="location-dictionary-workspace" data-location-workspace>
           <aside class="location-region-browser" aria-label="시군구 목록">
             <div class="location-region-browser-head">
@@ -258,6 +260,7 @@
       <section class="tab-panel" id="regionSourcesPanel" data-panel="regionSources" aria-label="자료·출처">
         <div class="section-title"><div><h2>자료·출처</h2><p>선택 지역 자료의 관측 기간, 출처와 확인 상태</p></div></div>
         <div id="regionSourcesDashboard"></div>
+        <div id="regionalAnalysisSources"></div>
       </section>
 
       <section class="tab-panel" id="accountPanel" data-panel="account" aria-label="계정">
@@ -594,6 +597,7 @@
   <script src="/monthly-reports.js"></script>
   <script src="/company-integrated.js"></script>
   <script src="/regional-report-preparation.js"></script>
+  <script src="/regional-analysis.js"></script>
   <script src="/industry-analysis.js"></script>
   <script src="/app.js"></script>
   <script src="/collector_controls.js"></script>

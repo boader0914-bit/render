@@ -874,11 +874,11 @@ async function main() {
       dailyCallBudget: 24
     });
     await assert.rejects(
-      () => manualScheduler.beginManualReservation({ months: 13, maxPagesPerOperation: 1 }),
+      () => manualScheduler.beginManualReservation({ months: 25, maxPagesPerOperation: 1 }),
       (error) => error?.statusCode === 400 && error?.code === "tourism_demand_strength_manual_months_invalid"
     );
     await assert.rejects(
-      () => manualScheduler.beginManualReservation({ requestedCalls: 26, maxPagesPerOperation: 1 }),
+      () => manualScheduler.beginManualReservation({ requestedCalls: 50, maxPagesPerOperation: 1 }),
       (error) => error?.statusCode === 400 && error?.code === "tourism_demand_strength_manual_months_invalid"
     );
     const manualReservation = await manualScheduler.beginManualReservation({ months: 12, maxPagesPerOperation: 1 });

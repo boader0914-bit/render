@@ -18,7 +18,7 @@ const names = [
   "locationProfileAlias", "locationProfileSubjectForRegion", "locationProfileKeywordKey", "activeKeyword",
   "analysisRegionForKey", "selectedAnalysisRegion", "analysisRegionLabel", "analysisRegionStorageKey", "analysisRunRegion",
   "analysisRunMatchesRegion", "applyAnalysisRegionToDictionary", "setAnalysisRegion", "reconcileAnalysisRegionSelection",
-  "renderRegionAnalysisShell", "renderActiveRegionAnalysis", "regionAnalysisEmptyHtml", "analysisMatchingRunButton",
+  "renderRegionAnalysisShell", "syncSavedRegionalAnalysis", "renderActiveRegionAnalysis", "regionAnalysisEmptyHtml", "analysisMatchingRunButton",
   "dictionaryDemandContext", "demandRegionContextMatchesRun", "renderDemandRegionPending", "openDictionaryDemand",
   "renderDemand", "renderMap", "renderRegionComparison", "setActiveTab", "syncAppHistoryState", "restoreAppHistoryState",
   "selectDictionaryRegion", "selectDictionaryProvince", "loadRun", "loadLocationDictionary", "ensureLocationProfile", "locationProfileEntry",
@@ -63,7 +63,7 @@ function fixture({ keyword = "포천글램핑", role = "admin", storage = new Ma
     window: { history, location: { href: "http://offline/admin" }, localStorage: {
       getItem: (key) => storage.get(key), setItem: (key, value) => storage.set(key, value)
     } },
-    document: { querySelectorAll: () => [], querySelector: () => null },
+    document: { querySelectorAll: () => [], querySelector: () => null, getElementById: () => null },
     fetch() { throw new Error("No external I/O permitted in navigation tests"); },
     fetchJson: async (url) => {
       calls.fetch.push(url);

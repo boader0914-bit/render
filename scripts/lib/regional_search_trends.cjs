@@ -14,6 +14,10 @@ const ERRORS = new Set(["INVALID_REQUEST", "INVALID_REGION", "INVALID_MONTH", "M
 const clone = (value) => value == null ? value : JSON.parse(JSON.stringify(value));
 function problem(code, statusCode = 503) { return Object.assign(new Error("검색 관심도 자료의 연결 또는 조회 조건을 확인해 주세요."), { code, statusCode }); }
 function safeCode(error, fallback = "NETWORK_ERROR") { return ERRORS.has(error?.code) ? error.code : fallback; }
+function diagnostics(value) {
+  const httpStatus = value?.httpStatus;
+  return Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? { httpStatus } : {};
+}
 function stamp(value) { return typeof value === "string" && /^\d{4}-\d{2}-\d{2}T[\d:.+-]+Z?$/.test(value) && Number.isFinite(Date.parse(value)) ? value : ""; }
 function shiftMonth(month, offset) {
   const [year, value] = month.split("-").map(Number);
@@ -47,7 +51,7 @@ function createRegionalSearchTrendService({ dataDir, readTrafficKeys, resolveReg
     if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some((key) => !["regionKey", "month", "months"].includes(key))) throw problem("INVALID_REQUEST", 400);
     const { regionKey, month } = input;
     const months = input.months === undefined ? 12 : input.months;
-    if (![12, 24].includes(months)) throw problem("INVALID_REQUEST", 400);
+    if (![12, 13, 24].includes(months)) throw problem("INVALID_REQUEST", 400);
     if (typeof regionKey !== "string" || !/^[A-Za-z0-9_:-]{1,120}$/.test(regionKey)) throw problem("INVALID_REGION", 400);
     const today = kstToday();
     if (typeof month !== "string" || !/^20\d{2}-(0[1-9]|1[0-2])$/.test(month) || month < "2016-01" || month > today.slice(0, 7)) throw problem("INVALID_MONTH", 400);
@@ -99,7 +103,8 @@ function createRegionalSearchTrendService({ dataDir, readTrafficKeys, resolveReg
       || !["ready", "partial", "missing", "failed", "publication_pending"].includes(stored.lastAttempt.status)
       || stored.lastAttempt.errorCode && !ERRORS.has(stored.lastAttempt.errorCode)) throw problem("CACHE_READ_ERROR");
     return { snapshot: stored.snapshot ? validateSnapshot(stored.snapshot, info) : null,
-      lastAttempt: { at: stored.lastAttempt.at, status: stored.lastAttempt.status, errorCode: stored.lastAttempt.errorCode || "" } };
+      lastAttempt: { at: stored.lastAttempt.at, status: stored.lastAttempt.status, errorCode: stored.lastAttempt.errorCode || "",
+        diagnostics: diagnostics(stored.lastAttempt.diagnostics) } };
   }
   async function atomic(file, data) {
     const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
@@ -114,7 +119,8 @@ function createRegionalSearchTrendService({ dataDir, readTrafficKeys, resolveReg
       const stored = JSON.parse(await fs.readFile(statusFile, "utf8"));
       if (stored.version !== 1 || stored.lastCheckedAt && !stamp(stored.lastCheckedAt) || stored.lastSuccessAt && !stamp(stored.lastSuccessAt)
         || stored.errorCode && !ERRORS.has(stored.errorCode)) throw problem("CACHE_READ_ERROR");
-      return { lastCheckedAt: stored.lastCheckedAt || "", lastSuccessAt: stored.lastSuccessAt || "", errorCode: stored.errorCode || "" };
+      return { lastCheckedAt: stored.lastCheckedAt || "", lastSuccessAt: stored.lastSuccessAt || "", errorCode: stored.errorCode || "",
+        diagnostics: diagnostics(stored.diagnostics) };
     } catch (error) {
       if (error.code === "ENOENT") return { lastCheckedAt: "", lastSuccessAt: "", errorCode: "" };
       throw problem("CACHE_READ_ERROR");
@@ -124,17 +130,18 @@ function createRegionalSearchTrendService({ dataDir, readTrafficKeys, resolveReg
     const task = statusLock.then(async () => {
       const previous = await readStatus();
       const successful = completePoints(result) && !["failed", "missing", "publication_pending"].includes(result.status) && !result.errorCode;
-      await atomic(statusFile, { version: 1, lastCheckedAt: iso(), lastSuccessAt: successful ? result.retrievedAt : previous.lastSuccessAt, errorCode: result.errorCode || "" });
+      await atomic(statusFile, { version: 1, lastCheckedAt: iso(), lastSuccessAt: successful ? result.retrievedAt : previous.lastSuccessAt,
+        errorCode: result.errorCode || "", diagnostics: diagnostics(result.diagnostics) });
     });
     statusLock = task.catch(() => {});
     return task;
   }
   function presentCache(info, configured, cached) {
     if (!cached.snapshot) return { ...base(info, configured), status: cached.lastAttempt?.status || base(info, configured).status,
-      errorCode: cached.lastAttempt?.errorCode || base(info, configured).errorCode };
+      errorCode: cached.lastAttempt?.errorCode || base(info, configured).errorCode, diagnostics: diagnostics(cached.lastAttempt?.diagnostics) };
     const lastError = cached.lastAttempt?.errorCode || "";
     return { ...cached.snapshot, configured, cacheReused: true, networkAttempted: false,
-      status: lastError ? "partial" : cached.snapshot.status, errorCode: lastError };
+      status: lastError ? "partial" : cached.snapshot.status, errorCode: lastError, diagnostics: diagnostics(cached.lastAttempt?.diagnostics) };
   }
   function normalizeResponse(payload, info, configured) {
     const value = info.value;
@@ -162,14 +169,15 @@ function createRegionalSearchTrendService({ dataDir, readTrafficKeys, resolveReg
   async function request(info, credentials) {
     if (typeof fetchImpl !== "function") throw problem("NETWORK_ERROR");
     const controller = new AbortController();
-    let timer;
+    let timer, responseHttpStatus;
     const timeout = new Promise((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(problem("TIMEOUT")); }, timeoutMs); });
     const operation = (async () => {
       const response = await fetchImpl(ENDPOINT, { method: "POST", redirect: "error", signal: controller.signal, headers: {
         "Content-Type": "application/json", "X-Naver-Client-Id": credentials.naverClientId, "X-Naver-Client-Secret": credentials.naverClientSecret
       }, body: JSON.stringify({ startDate: info.value.startDate, endDate: info.value.endDate, timeUnit: "month",
         keywordGroups: [{ groupName: info.value.keyword, keywords: [info.value.keyword] }] }) });
-      if (!response?.ok) throw problem(response?.status === 429 ? "QUOTA_EXCEEDED" : [401, 403].includes(response?.status) ? "AUTH_ERROR" : "PROVIDER_FAILED");
+      responseHttpStatus = response?.status;
+      if (!response?.ok) throw Object.assign(problem(response?.status === 429 ? "QUOTA_EXCEEDED" : [401, 403].includes(response?.status) ? "AUTH_ERROR" : "PROVIDER_FAILED"), diagnostics({ httpStatus: response?.status }));
       if (Number(response.headers?.get?.("content-length") || 0) > MAX_BODY) throw problem("RESPONSE_TOO_LARGE");
       let text;
       if (response.body?.getReader) {
@@ -191,10 +199,10 @@ function createRegionalSearchTrendService({ dataDir, readTrafficKeys, resolveReg
       }
       let payload;
       try { payload = JSON.parse(text); } catch { throw problem("INVALID_RESPONSE"); }
-      return normalizeResponse(payload, info, credentials.configured);
+      return { ...normalizeResponse(payload, info, credentials.configured), diagnostics: diagnostics({ httpStatus: response.status }) };
     })();
     try { return await Promise.race([operation, timeout]); }
-    catch (error) { throw problem(safeCode(error)); }
+    catch (error) { throw Object.assign(problem(safeCode(error)), diagnostics({ httpStatus: responseHttpStatus }), diagnostics(error)); }
     finally { clearTimeout(timer); controller.abort(); }
   }
   async function get(input) {
@@ -217,17 +225,18 @@ function createRegionalSearchTrendService({ dataDir, readTrafficKeys, resolveReg
       if (!credentials.configured) result = { ...base(info, false), status: "failed", errorCode: "MISSING_KEY" };
       else result = await request(info, credentials);
     } catch (error) {
-      result = { ...base(info, Boolean(credentials?.configured)), status: "failed", errorCode: safeCode(error), networkAttempted: Boolean(credentials?.configured) && !["CACHE_READ_ERROR", "CONFIG_READ_ERROR"].includes(safeCode(error)) };
+      result = { ...base(info, Boolean(credentials?.configured)), status: "failed", errorCode: safeCode(error), diagnostics: diagnostics(error),
+        networkAttempted: Boolean(credentials?.configured) && !["CACHE_READ_ERROR", "CONFIG_READ_ERROR"].includes(safeCode(error)) };
       if (["CACHE_READ_ERROR", "CONFIG_READ_ERROR"].includes(result.errorCode)) return result;
     }
     const incoming = observedCount(result) > 0 ? result : null;
     const snapshot = !cached.snapshot || incoming && observedCount(incoming) >= observedCount(cached.snapshot) ? incoming : cached.snapshot;
     const output = snapshot && (!incoming || snapshot !== incoming)
       ? { ...snapshot, configured: Boolean(credentials?.configured), status: "partial", cacheReused: true,
-        networkAttempted: result.networkAttempted, errorCode: result.errorCode || "MISSING_VALUES" } : result;
+        networkAttempted: result.networkAttempted, errorCode: result.errorCode || "MISSING_VALUES", diagnostics: diagnostics(result.diagnostics) } : result;
     try {
       await atomic(path.join(cacheDir, `${info.hash}.json`), { version: 1, identity: info.hash, snapshot,
-        lastAttempt: { at: iso(), status: result.status, errorCode: result.errorCode || "" } });
+        lastAttempt: { at: iso(), status: result.status, errorCode: result.errorCode || "", diagnostics: diagnostics(result.diagnostics) } });
       await rememberStatus(result);
       return clone(output);
     } catch {

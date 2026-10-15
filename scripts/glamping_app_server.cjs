@@ -32,6 +32,9 @@ const { createMonthlyReportHttpHandler } = require("./lib/monthly_report_http.cj
 const { createRegionalReportPreparation } = require("./lib/regional_report_preparation.cjs");
 const { createRegionalSearchTrendService } = require("./lib/regional_search_trends.cjs");
 const { createRegionalReportPreparationHttpHandler } = require("./lib/regional_report_preparation_http.cjs");
+const { createRegionalAnalysisStore } = require("./lib/regional_analysis_store.cjs");
+const { createRegionalAnalysisSnapshotBuilder } = require("./lib/regional_analysis_snapshot.cjs");
+const { createRegionalAnalysisHttpHandler } = require("./lib/regional_analysis_http.cjs");
 const { renderMonthlyReportPdf } = require("./lib/monthly_report_pdf.cjs");
 const { createTourismForecastService } = require("./lib/tourism_forecast.cjs");
 const { createMonthlyVisitorScheduler } = require("./tourism_visitor_monthly_scheduler.cjs");
@@ -202,13 +205,21 @@ const tourismForecastService = createTourismForecastService({
     || process.env.KTO_TOURISM_SERVICE_KEY
     || ""
 });
+let regionalAnalysisStore = null;
 const tourismCollector = createTourismCollector({
   rootDir: ROOT,
   webDir: WEB_DIR,
   dataDir: DATA_DIR,
   tourismDataDir: TOURISM_DATA_DIR,
-  onSnapshotStored: masterDbDualWriteQueue.mode === "shadow"
-    ? ({ sourceKey, filePath, evidencePath, sha256, adapter, yearMonth, regionKey }) => masterDbDualWriteQueue.enqueue({
+  onCacheCommitted: async ({ sourceKey, yearMonth, snapshot }) => {
+    if (!regionalAnalysisStore) return;
+    const regionKeys = snapshot?.region?.regionKey ? [snapshot.region.regionKey]
+      : [...new Set((snapshot?.allRegions || snapshot?.regions || []).map(region => region.regionKey).filter(Boolean))];
+    for (const regionKey of regionKeys) await notifyRegionalSourceChange({ regionKey, sourceKey: `${sourceKey}:${yearMonth}`.slice(0, 100), sourceVersion: regionalSourceVersion(snapshot) });
+  },
+  onSnapshotStored: ({ sourceKey, filePath, evidencePath, sha256, adapter, yearMonth, regionKey }) => {
+    const work = [];
+    if (masterDbDualWriteQueue.mode === "shadow") work.push(masterDbDualWriteQueue.enqueue({
       type: "tourism_snapshot",
       sourceKey,
       filePath,
@@ -217,8 +228,9 @@ const tourismCollector = createTourismCollector({
       adapter,
       yearMonth,
       regionKey
-    })
-    : null
+    }));
+    return Promise.allSettled(work);
+  }
 });
 const TOURISM_VISITOR_MONTHLY_SYNC_ENABLED = process.env.TOURISM_VISITOR_MONTHLY_SYNC_ENABLED === undefined
   ? HAS_RENDER_DISK
@@ -396,6 +408,62 @@ const regionalReportPreparation = createRegionalReportPreparation({
 const handleRegionalReportPreparation = createRegionalReportPreparationHttpHandler({
   service: regionalReportPreparation, requireAdmin: requireAdminSession, parseJsonBody, send,
   rateLimit: (req, session) => assertRequestRateLimit(req, "adminRegionalPreparation", { limit: 6, windowMs: 60 * 60 * 1000 }, session.username || "")
+});
+// A single persisted queue serves both manual and opt-in scheduled preparation.
+// The existing provider locks and daily call budget above remain authoritative.
+const regionalAnalysisPreparers = new Map();
+const buildRegionalAnalysisSnapshot = createRegionalAnalysisSnapshotBuilder({
+  tourismCollector, kosisService, searchTrendService: regionalSearchTrendService,
+  prepare: async scope => {
+    if (!regionalAnalysisPreparers.has(scope.months)) regionalAnalysisPreparers.set(scope.months, createRegionalReportPreparation({
+      dataDir: path.join(DATA_DIR, "regional_analysis", "source_preparation", String(scope.months)),
+      historyMonths: scope.months, alignLatestObserved: true, reuseFinishedMs: 60000,
+      kosisService, searchTrendService: regionalSearchTrendService, resolveRegion: resolveRegionalReportRegion,
+      tourismCollector: Object.fromEntries(["collectVisitorHistory", "collectDemandStrengthHistory", "collectResourceDemandHistory", "collectDiversityHistory"]
+        .map(method => [method, input => prepareRegionalTourismHistory(method, input)]))
+    }));
+    const preparer = regionalAnalysisPreparers.get(scope.months);
+    const request = { regionKey: scope.regionKey, month: scope.month, cutoffDate: new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10) };
+    await preparer.start(request);
+    await preparer.awaitIdle();
+    return preparer.get(request);
+  }
+});
+regionalAnalysisStore = createRegionalAnalysisStore({
+  dataDir: DATA_DIR, buildSnapshot: buildRegionalAnalysisSnapshot,
+  resolveRegion: async key => {
+    const region = await resolveRegionalReportRegion(key);
+    return region?.level === "local" && region.active && region.selectable
+      ? { ...region, label: region.fullName || region.name || region.regionKey } : null;
+  }
+});
+function regionalSourceVersion(value) {
+  return crypto.createHash("sha256").update(JSON.stringify(value, (key, item) =>
+    ["retrievedAt", "collectedAt", "updatedAt", "lastCheckedAt", "lastSuccessAt", "networkAttempted", "cacheReused", "stale"].includes(key) ? undefined : item)).digest("hex");
+}
+async function notifyRegionalSourceChange(event) {
+  try { await regionalAnalysisStore.sourceChanged(event); }
+  catch (error) { console.error("regional_analysis_invalidation_failed", /^REGIONAL_[A-Z0-9_]+$/.test(error.code || "") ? error.code : "REGIONAL_STORE_UNAVAILABLE"); }
+}
+const refreshKosisRegion = kosisService.refreshRegion.bind(kosisService);
+kosisService.refreshRegion = async regionKey => {
+  const result = await refreshKosisRegion(regionKey);
+  if (result?.region?.regionKey === regionKey && ["ready", "partial"].includes(result.status)) {
+    await notifyRegionalSourceChange({ regionKey, sourceKey: "kosis", sourceVersion: regionalSourceVersion(result) });
+  }
+  return result;
+};
+const refreshRegionalSearchTrend = regionalSearchTrendService.refresh.bind(regionalSearchTrendService);
+regionalSearchTrendService.refresh = async input => {
+  const result = await refreshRegionalSearchTrend(input);
+  if (result?.regionKey === input.regionKey && ["ready", "partial"].includes(result.status)) {
+    await notifyRegionalSourceChange({ regionKey: input.regionKey, sourceKey: "searchTrend", sourceVersion: regionalSourceVersion(result) });
+  }
+  return result;
+};
+const handleRegionalAnalysis = createRegionalAnalysisHttpHandler({
+  service: regionalAnalysisStore, requireAdmin: requireAdminSession, parseJsonBody, send,
+  rateLimit: (req, session) => assertRequestRateLimit(req, "adminRegionalAnalysisRefresh", { limit: 12, windowMs: 60 * 60 * 1000 }, session.username || "")
 });
 const readMonthlyRegionContext = createMonthlyReportContext({ kosisService, tourismCollector, searchTrendService: regionalSearchTrendService });
 const readInsightRegionContext = require('./lib/insight_region_history.cjs').createInsightRegionHistory({
@@ -18696,6 +18764,7 @@ async function route(req, res) {
     if (await handleMonthlyReport(req, res, reqUrl, session)) return;
     if (await handleIndustryAnalysis(req, res, reqUrl, session)) return;
     if (await handleRegionalReportPreparation(req, res, reqUrl, session)) return;
+    if (await handleRegionalAnalysis(req, res, reqUrl, session)) return;
 
     if (req.method === "POST" && reqUrl.pathname === "/api/b2b-search") {
       if (normalizeUserRole(session.role) !== USER_ROLES.b2b) {

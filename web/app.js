@@ -28124,6 +28124,21 @@ function syncRegionalReportPreparation(region = null) {
   } });
 }
 
+function syncSavedRegionalAnalysis(region = null, mode = "summary", host = null) {
+  const isManagement = mode === "manage";
+  const visible = () => isAdminRole() && (isManagement
+    ? state.activeTab === "admin" && state.adminPanelSection === "database" && state.adminDbViewMode === "region" && !String(state.adminDbFilters?.query || "").trim()
+    : state.activeTab === (mode === "sources" ? "regionSources" : "dictionary"));
+  const slot = host || document.getElementById(mode === "sources" ? "regionalAnalysisSources" : "regionalAnalysisSummary");
+  if (!slot) return;
+  if (!visible()) { window.RegionalAnalysis?.stop(slot); return; }
+  const selected = isManagement ? adminReportPreparationRegion(region) : selectedAnalysisRegion();
+  void window.RegionalAnalysis?.mount(slot, {
+    regionKey: selected?.regionKey || "", regionLabel: selected ? analysisRegionLabel(selected) : "지역 미선택",
+    mode, fetchJson, accountKey: state.session?.username || "admin", isVisible: visible
+  });
+}
+
 function adminSelectedRegion(master = {}) {
   const regions = master.adminRegionalOperations?.regions || [];
   if (!regions.length) return null;
@@ -30133,7 +30148,12 @@ function renderAdminRegionAnalysisDashboard(master = adminConsoleMasterSource())
   const container = document.getElementById("regionDataManagement");
   if (container) container.hidden = !visible;
   els.adminRegionAnalysisDashboard.hidden = !visible;
-  if (!visible) { window.RegionalReportPreparation?.pause(); return; }
+  if (!visible) {
+    window.RegionalReportPreparation?.pause();
+    const savedAnalysisSlot = els.adminRegionAnalysisDashboard.querySelector("[data-regional-analysis-manage]");
+    if (savedAnalysisSlot) window.RegionalAnalysis?.stop(savedAnalysisSlot);
+    return;
+  }
   const previous = state.regionManagementReturnContext;
   const returnButton = container?.querySelector("[data-return-region-analysis]");
   if (returnButton) {
@@ -30146,8 +30166,11 @@ function renderAdminRegionAnalysisDashboard(master = adminConsoleMasterSource())
   const missingLabel = selectedAdministrativeRegion?.fullName
     || ([previous?.regionKey, previous?.managementRegionKey].includes(state.adminSelectedRegionKey) ? previous?.label : "") || "선택 지역";
   const mappingPending = previous?.managementRegionKey === state.adminSelectedRegionKey && previous?.mappingPending;
-  els.adminRegionAnalysisDashboard.innerHTML = `${missingSelected ? `<p class="empty" role="status">${escapeHtml(missingLabel)}의 ${mappingPending ? "관리 분류 연결을 확인해야 합니다" : "관리 자료가 아직 없습니다"}. 다른 지역 자료로 대체하지 않습니다.</p><div data-regional-report-preparation></div>` : ""}${adminRegionalAnalysisPanel(master)}`;
+  const retainedAnalysisSlot = els.adminRegionAnalysisDashboard.querySelector("[data-regional-analysis-manage]");
+  els.adminRegionAnalysisDashboard.innerHTML = `<div data-regional-analysis-manage></div>${missingSelected ? `<p class="empty" role="status">${escapeHtml(missingLabel)}의 ${mappingPending ? "관리 분류 연결을 확인해야 합니다" : "관리 자료가 아직 없습니다"}. 다른 지역 자료로 대체하지 않습니다.</p><div data-regional-report-preparation></div>` : ""}${adminRegionalAnalysisPanel(master)}`;
+  if (retainedAnalysisSlot) els.adminRegionAnalysisDashboard.querySelector("[data-regional-analysis-manage]")?.replaceWith(retainedAnalysisSlot);
   syncRegionalReportPreparation(region);
+  syncSavedRegionalAnalysis(region, "manage", els.adminRegionAnalysisDashboard.querySelector("[data-regional-analysis-manage]"));
   if (els.dictionaryRequestQueue) els.dictionaryRequestQueue.innerHTML = renderLocationCardRequestQueue() || `<p class="hint">현재 대기 중인 지역 자료 요청이 없습니다.</p>`;
 }
 
@@ -30544,6 +30567,8 @@ function renderRegionAnalysisShell() {
     button.classList.toggle("active", tab === state.activeTab);
     button.setAttribute("aria-pressed", tab === state.activeTab ? "true" : "false");
   });
+  syncSavedRegionalAnalysis(null, "summary");
+  syncSavedRegionalAnalysis(null, "sources");
 }
 
 function renderActiveRegionAnalysis() {
@@ -37165,6 +37190,7 @@ function setActiveTab(tab, options = {}) {
   const previousTab = state.activeTab;
   state.analysisNavigationSequence = (state.analysisNavigationSequence || 0) + 1;
   state.activeTab = roleAllowsTab(tab) ? tab : firstRoleTab();
+  window.RegionalAnalysis?.stop();
   if (state.activeTab !== "industryHome") window.StayIndustryAnalysis?.pause(els.industryHomeDashboard);
   if (state.activeTab !== "admin") window.RegionalReportPreparation?.pause();
   if (window.CompanyIntegrated) syncCompanyIntegratedPanel();
@@ -41878,6 +41904,7 @@ async function loadTrafficState() {
 }
 
 async function logout() {
+  window.RegionalAnalysis?.clear();
   stopTourismDemandStrengthBackfillPolling({ render: false });
   try {
     await fetchJson("/api/logout", { method: "POST" });

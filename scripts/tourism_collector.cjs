@@ -448,6 +448,7 @@ function createCollector(options = {}) {
   const demandStrengthSnapshotWrites = new Map();
   const regionalIndexSnapshotWrites = new Map();
   const onSnapshotStored = typeof options.onSnapshotStored === "function" ? options.onSnapshotStored : null;
+  const onCacheCommitted = typeof options.onCacheCommitted === "function" ? options.onCacheCommitted : null;
 
   function notifySnapshotStored(payload = {}) {
     if (!onSnapshotStored) return;
@@ -518,6 +519,11 @@ function createCollector(options = {}) {
   }
 
   async function publishCommittedSnapshot({ sourceKey = "", filePath = "", snapshot = {}, adapter = "" } = {}) {
+    // Derived analysis does not depend on optional shadow Evidence creation.
+    if (onCacheCommitted) {
+      try { await onCacheCommitted({ sourceKey, adapter: String(snapshot.adapter || adapter || ""), yearMonth: String(snapshot.yearMonth || ""), snapshot }); }
+      catch { /* A derived-store failure must not invalidate a committed source cache. */ }
+    }
     if (!onSnapshotStored) return;
     try {
       const evidence = await createImmutableCacheSnapshotEvidence(sourceKey, filePath);

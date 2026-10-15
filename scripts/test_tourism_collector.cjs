@@ -289,6 +289,7 @@ async function main() {
       { code: "48860", name: "산청군", values: { "1": 900, "2": 180, "3": 9 } }
     ]).filter((row) => row.baseYmd !== "20260531");
     const storedVisitorSnapshots = [];
+    const committedVisitorCaches = [];
     const visitorCollector = createCollector({
       rootDir: tmp,
       webDir,
@@ -299,6 +300,10 @@ async function main() {
         KTO_TOURISM_VISITOR_PAGE_SIZE: "100"
       },
       now: () => new Date("2026-07-15T00:00:00.000Z"),
+      onCacheCommitted: payload => {
+        committedVisitorCaches.push(payload);
+        throw new Error("fixture derived analysis writer failure");
+      },
       onSnapshotStored: (payload) => {
         storedVisitorSnapshots.push(payload);
         throw new Error("fixture shadow writer failure");
@@ -358,6 +363,9 @@ async function main() {
     });
     assert.equal(visitorSnapshot.ok, true);
     assert.equal(visitorSnapshot.status, "ok");
+    assert.equal(committedVisitorCaches.length, 1, "committed source notifies derived analysis even if optional writers fail");
+    assert.equal(committedVisitorCaches[0].sourceKey, "visitors");
+    assert.ok(committedVisitorCaches[0].snapshot.allRegions.some(region => region.regionKey === "kr_gyeongnam_sancheong"));
     assert.equal(storedVisitorSnapshots.length, 1, "완전한 방문자 월 캐시는 저장 직후 Shadow hook을 한 번 호출해야 합니다.");
     assert.equal(storedVisitorSnapshots[0].sourceKey, "visitors");
     assert.equal(fs.existsSync(storedVisitorSnapshots[0].filePath), true);

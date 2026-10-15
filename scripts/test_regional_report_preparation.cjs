@@ -46,6 +46,47 @@ test("24-month preparation fills gaps in sequence, queries one search window, an
   const reused=await reloaded.start(request);
   assert.equal(reused.id,first.id);assert.equal(reused.reused,true);assert.equal(calls.length,count);
 });
+test("13-month preparation propagates one complete window and persists month coverage and real zero counts", async t => {
+  const f = await fixture(t, { historyMonths: 13, reuseFinishedMs: 3600000 });
+  const { monthsEnding } = require('./lib/insight_region_history.cjs');
+  const months = monthsEnding(request.month, 13), calls = [];
+  methods.forEach((method, index) => { f.options.tourismCollector[method] = async input => {
+    calls.push({ method, input: structuredClone(input) });
+    const result = tourismResult(index, input), target = index === 0 ? result.regions[0] : result, point = target.series[0];
+    target.series = (input.collectMissing ? months : months.slice(1)).map(month => ({ ...point, yearMonth: month.replace('-', '') }));
+    return result;
+  }; });
+  f.options.searchTrendService.refresh = async input => {
+    calls.push({ method: 'search', input });
+    return { regionKey: input.regionKey, keyword: '산청글램핑', status: 'ready', startDate: '2025-08-01', endDate: '2026-08-31',
+      retrievedAt: stamp, configured: true, networkAttempted: true, diagnostics: { httpStatus: 200 },
+      series: months.map(month => ({ period: month + '-01', value: 0, status: 'observed' })) };
+  };
+  const started = await f.service.start(request); await f.service.awaitIdle();
+  const job = await f.service.get(request);
+  assert.equal(job.historyMonths, 13); assert.equal(job.status, 'complete');
+  for (const step of job.steps.slice(0, 4)) {
+    assert.equal(step.observedMonths, 13); assert.equal(step.expectedMonths, 13);
+    assert.equal(step.period, '202508 ~ 202608'); assert.equal(step.periods.length, 13);
+    assert.equal(step.periods.every(period => period.status === 'ready'), true);
+    assert.equal(step.zeroValuesObserved, step.expectedValueCount); assert.equal(step.missingMonths, 0);
+  }
+  for (const { input } of calls.filter(call => call.method !== 'search')) {
+    assert.equal(input.months, 13); assert.equal(input.analysisMonths, 13); assert.equal(input.concurrency, 1);
+  }
+  assert.deepEqual(calls.at(-1).input, { regionKey: 'sancheong', month: '2026-08', months: 13 });
+  assert.deepEqual(job.steps[5].diagnostics, { httpStatus: 200 });
+  const count = calls.length, reloaded = createRegionalReportPreparation(f.options);
+  assert.equal((await reloaded.start(request)).id, started.id); assert.equal(calls.length, count);
+});
+
+test("changing from single-month preparation to 13 months cannot reuse a finished single-month job", async t => {
+  const f = await fixture(t, { reuseFinishedMs: 3600000 });
+  const first = await f.service.start(request); await f.service.awaitIdle();
+  const extended = createRegionalReportPreparation({ ...f.options, historyMonths: 13 });
+  const second = await extended.start(request); await extended.awaitIdle();
+  assert.notEqual(first.id, second.id); assert.equal(second.historyMonths, 13); assert.equal(second.reused, undefined);
+});
 function tourismResult(index, input, status = "complete", value = 0) {
   const point = { yearMonth: input.endYearMonth, status, collectedAt: stamp, averageDailyVisitors: value, visitorDays: value,
     stayOverall: value, spendOverall: value, values: { service: value, culture: value, visitor: value, spend: value, international: value } };
@@ -332,4 +373,124 @@ test("current-month trend is collected independently of tourism publication dela
   assert.equal(calls,1); assert.equal(job.steps[5].dataAvailable,true); assert.equal(job.steps[5].partialMonth,true);
   assert.equal(job.steps[0].status,'publication_pending');
   await f.service.get(current); assert.equal(calls,1,'status polling never collects');
+});
+
+test("normal no-observation responses, publication delay and provider failures retain distinct safe diagnostics", async t => {
+  const f = await fixture(t);
+  const cases = [
+    { reason: 'empty_verified', httpStatus: 200, apiCode: '03', status: 'missing', code: 'NO_DATA' },
+    { reason: 'no_observation', httpStatus: 200, apiCode: '03', status: 'missing', code: 'NO_DATA' },
+    { reason: 'period_not_closed', httpStatus: 200, apiCode: '00', status: 'publication_pending', code: 'PUBLICATION_PENDING' },
+    { reason: 'api_error', httpStatus: 200, apiCode: '22', status: 'failed', code: 'QUOTA_EXCEEDED' },
+    { reason: 'api_error', httpStatus: 200, apiCode: '30', status: 'failed', code: 'AUTH_ERROR' },
+    { reason: 'no_observation', httpStatus: 503, apiCode: '03', status: 'failed', code: 'PROVIDER_FAILED' },
+    { reason: 'timeout', httpStatus: null, apiCode: '', status: 'failed', code: 'TIMEOUT' },
+    { reason: 'request_failed', httpStatus: null, apiCode: '', status: 'failed', code: 'NETWORK_ERROR' },
+    { reason: 'no_observation', httpStatus: 200, apiCode: 'serviceKey=PRIVATE', status: 'missing', code: 'NO_DATA' }
+  ];
+  for (const item of cases) {
+    f.options.tourismCollector[methods[1]] = async input => {
+      const result = tourismResult(1, input, 'missing', null);
+      const point = result.series[0]; point.reason = item.reason;
+      point.quality = { httpStatus: item.httpStatus, apiCode: item.apiCode, message: 'serviceKey=PRIVATE', endpoint: 'https://private/' };
+      result.collection.networkFailedMonths = input.collectMissing ? 1 : 0;
+      return result;
+    };
+    await f.service.start(request); await f.service.awaitIdle();
+    const step = (await f.service.get(request)).steps[1];
+    assert.equal(step.status, item.status, item.reason); assert.equal(step.errorCode, item.code, item.reason);
+    assert.equal(step.dataAvailable, false); assert.equal(step.zeroValuesObserved, 0);
+    assert.deepEqual(step.diagnostics, { ...(item.httpStatus ? { httpStatus: item.httpStatus } : {}), ...(/^\d{2,3}$/.test(item.apiCode) ? { providerCode: item.apiCode } : {}) });
+  }
+  assert.equal(/PRIVATE|serviceKey|https:\/\/private/.test(await fs.readFile(path.join(f.dataDir, 'jobs.json'), 'utf8')), false);
+});
+
+test("a failed month does not mark other complete months as failed or discard their observed zeros", async t => {
+  const f = await fixture(t, { historyMonths: 13 });
+  const { monthsEnding } = require('./lib/insight_region_history.cjs');
+  f.options.tourismCollector[methods[1]] = async input => {
+    const result = tourismResult(1, input), point = result.series[0];
+    result.series = monthsEnding(request.month, 13).map(month => ({ ...point, yearMonth: month.replace('-', '') }));
+    result.series.at(-1).status = 'missing'; result.series.at(-1).stayOverall = null; result.series.at(-1).spendOverall = null;
+    result.series.at(-1).reason = 'timeout';
+    result.collection.networkFailedMonths = 1;
+    result.collection.refreshErrors = [{ yearMonth: '202608', reason: 'timeout' }];
+    return result;
+  };
+  await f.service.start(request); await f.service.awaitIdle();
+  const step = (await f.service.get(request)).steps[1];
+  assert.equal(step.status, 'partial'); assert.equal(step.errorCode, 'TIMEOUT');
+  assert.equal(step.observedMonths, 12); assert.equal(step.failedMonths, 1); assert.equal(step.zeroValuesObserved, 24);
+  assert.equal(step.periods.slice(0, -1).every(period => period.status === 'ready' && period.errorCode === ''), true);
+  assert.equal(step.periods.at(-1).errorCode, 'TIMEOUT');
+});
+
+test("opt-in latest-month alignment checks new publication then fills the oldest month once per source", async t => {
+  const f = await fixture(t, { historyMonths: 13, alignLatestObserved: true, now: () => new Date('2026-10-15T01:00:00.000Z') });
+  const { monthsEnding } = require('./lib/insight_region_history.cjs');
+  const calls = [], target = { ...request, month: '2026-09', cutoffDate: '2026-10-14' };
+  methods.forEach((method, index) => { f.options.tourismCollector[method] = async input => {
+    calls.push({ method, input: structuredClone(input) });
+    const result = tourismResult(index, input), location = index === 0 ? result.regions[0] : result, example = location.series[0];
+    result.period.months = input.months;
+    location.series = monthsEnding(input.endYearMonth.slice(0, 4) + '-' + input.endYearMonth.slice(4), input.months).map(month => ({ ...example,
+      yearMonth: month.replace('-', ''), ...(month === '2026-09' ? { status: 'missing', averageDailyVisitors: null, visitorDays: null,
+        stayOverall: null, spendOverall: null, values: {}, reason: 'no_observation', quality: { httpStatus: 200, apiCode: '03' } } : {}) }));
+    return result;
+  }; });
+  await f.service.start(target); await f.service.awaitIdle();
+  const job = await f.service.get(target);
+  for (const [index, step] of job.steps.slice(0, 4).entries()) {
+    assert.equal(step.status, 'ready'); assert.equal(step.period, '202508 ~ 202608');
+    assert.equal(step.requestedPeriod, '202609'); assert.equal(step.windowEndPeriod, '202608');
+    assert.equal(step.observedMonths, 13); assert.equal(step.expectedMonths, 13); assert.equal(step.missingMonths, 0);
+    assert.equal(step.alignedToLatestObserved, true); assert.equal(step.latestObservedPeriod, '202608');
+    assert.equal(step.latestRequestedStatus, 'missing'); assert.equal(step.latestRequestedErrorCode, 'NO_DATA');
+    assert.deepEqual(step.latestRequestedDiagnostics, { httpStatus: 200, providerCode: '03' });
+    const inputs = calls.filter(call => call.method === methods[index]).map(call => call.input);
+    assert.deepEqual(inputs.map(input => [input.endYearMonth, input.months, input.collectMissing]), [
+      ['202609', index < 2 ? 25 : 24, false], ['202609', 13, true], ['202608', 13, true]
+    ]);
+    assert.equal(inputs.every(input => input.force === false && input.concurrency === 1), true);
+    assert.equal(step.collectionPasses, 2);
+  }
+});
+
+test("opt-in alignment never requests the ongoing tourism month and retains its publication-pending status separately", async t => {
+  const f = await fixture(t, { historyMonths: 13, alignLatestObserved: true });
+  const { monthsEnding } = require('./lib/insight_region_history.cjs'), calls = [];
+  methods.forEach((method, index) => { f.options.tourismCollector[method] = async input => {
+    calls.push(input); const result = tourismResult(index, input), location = index === 0 ? result.regions[0] : result;
+    location.series = monthsEnding('2026-08', input.months).map(month => ({ ...location.series[0], yearMonth: month.replace('-', '') }));
+    return result;
+  }; });
+  const target = { ...request, month: '2026-09' };
+  await f.service.start(target); await f.service.awaitIdle();
+  for (const step of (await f.service.get(target)).steps.slice(0, 4)) {
+    assert.equal(step.status, 'ready'); assert.equal(step.observedMonths, 13); assert.equal(step.collectionPasses, 0);
+    assert.equal(step.windowEndPeriod, '202608'); assert.equal(step.latestRequestedErrorCode, 'PUBLICATION_PENDING');
+    assert.equal(step.latestRequestedStatus, 'publication_pending');
+  }
+  assert.equal(calls.every(input => input.endYearMonth === '202608' && input.collectMissing === false), true);
+});
+
+test("latest-month alignment stops on quota failure and keeps the last complete 13-month window", async t => {
+  const f = await fixture(t, { historyMonths: 13, alignLatestObserved: true, now: () => new Date('2026-10-15T01:00:00.000Z') });
+  const { monthsEnding } = require('./lib/insight_region_history.cjs'), calls = [];
+  f.options.tourismCollector[methods[1]] = async input => {
+    calls.push(input); const result = tourismResult(1, input), example = result.series[0];
+    result.period.months = input.months;
+    result.series = monthsEnding(input.endYearMonth.slice(0, 4) + '-' + input.endYearMonth.slice(4), input.months).map(month => ({ ...example,
+      yearMonth: month.replace('-', ''), ...(month === '2026-09' ? { status: 'missing', stayOverall: null, spendOverall: null,
+        reason: input.collectMissing ? 'api_error' : 'no_observation', quality: { httpStatus: 200, apiCode: input.collectMissing ? '22' : '03' } } : {}) }));
+    return result;
+  };
+  const target = { ...request, month: '2026-09', cutoffDate: '2026-10-14' };
+  await f.service.start(target); await f.service.awaitIdle();
+  const step = (await f.service.get(target)).steps[1];
+  assert.equal(step.status, 'partial'); assert.equal(step.errorCode, 'QUOTA_EXCEEDED');
+  assert.equal(step.windowEndPeriod, '202608'); assert.equal(step.observedMonths, 13); assert.equal(step.cacheReused, true);
+  assert.equal(step.latestRequestedErrorCode, 'QUOTA_EXCEEDED'); assert.equal(step.collectionPasses, 1);
+  assert.equal(calls.length, 2, 'one cache read and one refresh; quota failure prevents supplemental collection');
+  assert.deepEqual(step.diagnostics, { httpStatus: 200, providerCode: '22' });
 });

@@ -6,7 +6,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const source = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8").replace(/\r\n/g, "\n");
 const constants = ["ROLE_TABS", "TAB_LABELS", "B2B_TAB_LABELS", "ADMIN_MOBILE_SECTIONS", "ADMIN_COMPACT_SECTIONS", "ADMIN_PANEL_MOBILE_TARGETS", "REGION_ANALYSIS_TABS"];
-const functions = ["roleTabs", "roleAllowsTab", "firstRoleTab", "tabLabel", "adminPanelMobileTarget", "adminPrimarySectionForTab", "adminMobileSectionForTab", "activateAdminPrimaryNav", "activateAdminMobileNav", "setActiveTab", "syncAppHistoryState", "restoreAppHistoryState", "renderRegionAnalysisShell", "adminHeaderView", "renderHeader", "renderAll", "loadRuns", "loadRun", "openAdminHomeRoute"];
+const functions = ["roleTabs", "roleAllowsTab", "firstRoleTab", "tabLabel", "adminPanelMobileTarget", "adminPrimarySectionForTab", "adminMobileSectionForTab", "activateAdminPrimaryNav", "activateAdminMobileNav", "setActiveTab", "syncAppHistoryState", "restoreAppHistoryState", "renderRegionAnalysisShell", "syncSavedRegionalAnalysis", "adminHeaderView", "renderHeader", "renderAll", "loadRuns", "loadRun", "openAdminHomeRoute"];
 const declarations = constants.map((name) => {
   const declaration = source.match(new RegExp(`^const ${name} = [^\\n]*;$`, "m"))?.[0]
     || source.match(new RegExp(`^const ${name} = \\{[^]*?^\\};`, "m"))?.[0];

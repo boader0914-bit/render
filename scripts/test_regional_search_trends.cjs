@@ -19,7 +19,22 @@ test("24-month comparisons use one normalization window and cannot overwrite the
   assert.deepEqual((await f.service.get(query)).series,original.series);
   assert.deepEqual((await f.service.get({...query,months:24})).series,extended.series);
   assert.equal(f.calls.length,2);
-  await assert.rejects(f.service.refresh({...query,months:13}),e=>e.statusCode===400);
+  await assert.rejects(f.service.refresh({...query,months:14}),e=>e.statusCode===400);
+});
+test("13-month history includes the latest month and remains a single independent normalization window", async t => {
+  const f = await fixture(t);
+  const old = await f.service.refresh(query);
+  const extended = await f.service.refresh({ ...query, months: 13 });
+  assert.equal(extended.startDate, "2025-08-01"); assert.equal(extended.endDate, "2026-08-31");
+  assert.equal(extended.series.length, 13); assert.equal(extended.series[0].period, "2025-08-01");
+  assert.equal(extended.series.at(-1).period, "2026-08-01");
+  assert.equal(extended.series.every(point => point.status === "observed" && point.value === 0), true);
+  assert.deepEqual(extended.diagnostics, { httpStatus: 200 });
+  assert.equal(f.calls.length, 2, "one request per normalization window");
+  assert.deepEqual((await f.service.get(query)).series, old.series);
+  const reloaded = createRegionalSearchTrendService(f.options);
+  assert.deepEqual((await reloaded.get({ ...query, months: 13 })).series, extended.series);
+  assert.equal(f.calls.length, 2, "GET and restart do not request external data");
 });
 function payload(body, value = 0) {
   const rows = [];
@@ -227,8 +242,10 @@ test("429 never retries and preserves the previous valid cache and its real time
   assert.equal(failed.cacheReused, true); assert.equal(failed.retrievedAt, old.retrievedAt); assert.deepEqual(failed.series, old.series);
   const cached = await f.service.get(query);
   assert.equal(cached.errorCode, "QUOTA_EXCEEDED"); assert.equal(cached.retrievedAt, old.retrievedAt); assert.equal(cached.networkAttempted, false);
+  assert.deepEqual(failed.diagnostics, { httpStatus: 429 }); assert.deepEqual(cached.diagnostics, { httpStatus: 429 });
   const status = await f.service.status();
   assert.equal(status.lastSuccessAt, old.retrievedAt); assert.equal(status.lastCheckedAt, "2026-09-29T01:00:00.000Z"); assert.equal(status.errorCode, "QUOTA_EXCEEDED");
+  assert.deepEqual(status.diagnostics, { httpStatus: 429 });
 });
 
 test("a partial refresh cannot replace an older complete normalization window", async (t) => {

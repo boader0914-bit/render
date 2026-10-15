@@ -6,6 +6,10 @@ const STATE_VERSION = "tourism-demand-strength-backfill-v1";
 const DEFAULT_DAILY_CALL_BUDGET = 800;
 const CALLS_PER_WORK_ITEM = 2;
 const INITIAL_BACKFILL_MONTHS = 12;
+// Regional analysis and Insight can prepare 13/24 months. This is a request
+// ceiling only; the persisted shared daily budget and automatic backfill scope
+// remain unchanged.
+const MAX_MANUAL_HISTORY_MONTHS = 24;
 const MAX_DISTINCT_DAY_ATTEMPTS = 3;
 const DEFAULT_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_STARTUP_DELAY_MS = 120 * 1000;
@@ -695,8 +699,8 @@ function reservationInput(input = {}) {
     throw error;
   }
   const months = input.months === undefined ? null : Number(input.months);
-  if (months !== null && (!Number.isInteger(months) || months <= 0 || months > INITIAL_BACKFILL_MONTHS)) {
-    const error = new Error(`수동 수집 개월 수는 1부터 ${INITIAL_BACKFILL_MONTHS}까지의 정수여야 합니다.`);
+  if (months !== null && (!Number.isInteger(months) || months <= 0 || months > MAX_MANUAL_HISTORY_MONTHS)) {
+    const error = new Error(`수동 수집 개월 수는 1부터 ${MAX_MANUAL_HISTORY_MONTHS}까지의 정수여야 합니다.`);
     error.statusCode = 400;
     error.code = "tourism_demand_strength_manual_months_invalid";
     throw error;
@@ -710,8 +714,8 @@ function reservationInput(input = {}) {
     error.code = "tourism_demand_strength_manual_requested_calls_invalid";
     throw error;
   }
-  if (requestedCalls > INITIAL_BACKFILL_MONTHS * CALLS_PER_WORK_ITEM) {
-    const error = new Error(`수동 수집 예약은 최근 ${INITIAL_BACKFILL_MONTHS}개월 범위를 초과할 수 없습니다.`);
+  if (requestedCalls > MAX_MANUAL_HISTORY_MONTHS * CALLS_PER_WORK_ITEM) {
+    const error = new Error(`수동 수집 예약은 최근 ${MAX_MANUAL_HISTORY_MONTHS}개월 범위를 초과할 수 없습니다.`);
     error.statusCode = 400;
     error.code = "tourism_demand_strength_manual_months_invalid";
     throw error;
