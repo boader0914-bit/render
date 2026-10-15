@@ -33,7 +33,7 @@ function workerError(code, cancelled = false) {
 
 // This is dispatch only: an unavailable worker must never fall back to local crawling.
 async function dispatchCollector({ broker, keyword, env, payload, context, onJob = () => {}, isCancelled = () => false,
-  shouldCancelQueued = () => false, pollMs = 500, queuedTimeoutMs = Infinity, queueDeadline = null, timeoutMs = 12 * 60 * 60 * 1000, now = Date.now, sleep = delay }) {
+  shouldCancelQueued = () => false, preserveUnclaimedPause = false, pollMs = 500, queuedTimeoutMs = Infinity, queueDeadline = null, timeoutMs = 12 * 60 * 60 * 1000, now = Date.now, sleep = delay }) {
   if (queueDeadline !== null && (!Number.isSafeInteger(queueDeadline) || queueDeadline <= 0)) throw workerError("COLLECTOR_QUEUE_DEADLINE_INVALID");
   let job;
   try { job = await broker.submit({ keyword, env: collectionEnv(env), payload, context, ...(queueDeadline === null ? {} : { queueDeadline }) }); }
@@ -55,6 +55,8 @@ async function dispatchCollector({ broker, keyword, env, payload, context, onJob
       // active one. Preserve that cause before generic cancellation handling.
       if (job.errorCode === "COLLECTOR_PROVIDER_BLOCKED") throw workerError("COLLECTOR_PROVIDER_BLOCKED");
       if (job.errorCode === "COLLECTOR_QUEUE_DEADLINE") throw workerError("COLLECTOR_QUEUE_DEADLINE");
+      if (preserveUnclaimedPause && job.status === "cancelled" && job.errorCode === "COLLECTOR_SCHEDULE_PAUSED" && !job.startedAt)
+        throw workerError("COLLECTOR_SCHEDULE_PAUSED",true);
       if (job.status === "completed" && !isCancelled()) return job;
       const cancelled = job.status === "cancelled" || isCancelled();
       const failure = workerError(cancelled ? "CRAWL_CANCELLED" : safeWorkerCode(job.errorCode, "COLLECTOR_WORKER_INTERRUPTED"), cancelled);

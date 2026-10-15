@@ -184,3 +184,20 @@ test("an undated original receipt retains its referenced result's authoritative 
   assert.equal(value.rows[0].requestId, "undated_0001"); assert.equal(value.rows[0].dateBasis, "saved"); assert.equal(value.rows[0].date, "2026-09-21");
   assert.equal(value.rows[0].conditions.bookingRangeDays, 14);
 });
+
+test("rotation records retain waiting and uncertain gaps without duplicating stored successful runs", async t => {
+  const {dataDir,write}=await fixture(t);
+  const base={day:"2026-09-21",workerKey:"web",keyword:"경남글램핑",scheduledAt:"2026-09-21T00:00:00Z",
+    conditions:{checkIn:"2026-09-21",checkOut:"2026-10-21",bookingRangeDays:31,searchMode:"keyword"}};
+  const items=[{...base,id:"rotation_2026-09-21_1",status:"complete",runId:"rotation_done",startedAt:base.scheduledAt,collectionQuality:{status:"complete"}},
+    {...base,id:"rotation_2026-09-21_2",status:"waiting",workerKey:"manual"},
+    {...base,id:"rotation_2026-09-21_3",status:"uncertain",errorCode:"ROTATION_RESTART_EXECUTION_UNCERTAIN"}];
+  await write("outputs/rotation_done/manifest.json",{keyword:base.keyword,workerKey:"web",startedAt:base.scheduledAt,collectionQuality:{status:"complete"}});
+  const before=await inventory(dataDir);
+  const service=createCollectionHistory({dataDir,now:at,cacheTtlMs:0,readRotationHistory:async()=>items});
+  const value=await service.query({from:"2026-09-01",to:"2026-09-30",groupKey:"2026-09"});
+  assert.equal(value.summary.total,3);
+  assert.deepEqual(value.summary.counts,{pending:1,complete:1,failed:0,partial:0,review:1});
+  assert.ok(value.rows.every(row=>row.source==="rotation" && row.trigger==="scheduled" && row.conditions.bookingRangeDays===31));
+  assert.deepEqual(await inventory(dataDir),before,"History reads preserve raw results and existing receipts");
+});

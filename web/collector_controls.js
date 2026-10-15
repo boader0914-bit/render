@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const STATUS_LABELS = { pending: "접수 · 처리 중", queued: "대기", running: "처리 중", complete: "완료", completed: "완료", reused: "기존 자료 사용", partial: "일부 완료", failed: "실패", blocked: "접근 제한", interrupted: "중단", missed: "실행 시각 지남" };
+  const STATUS_LABELS = { pending: "접수 · 처리 중", queued: "대기", waiting:"대기", running: "처리 중", complete: "완료", completed: "완료", reused: "기존 자료 사용", partial: "일부 완료", failed: "실패", blocked: "접근 제한", interrupted: "중단", missed: "실행 시각 지남", paused:"보류", uncertain:"결과 확인 필요" };
   const WORKER_FRESH_MS = 90000;
   const WORKER_LABELS = { manual: "BG worker", web: "2Gweb_worker", scheduled: "AWS worker" };
   function workerKey(value) { return Object.hasOwn(WORKER_LABELS, value) ? value : "manual"; }

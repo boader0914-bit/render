@@ -45,6 +45,7 @@ const { createCollectorBroker } = require("./collector_broker.cjs");
 const { dispatchCollector, createHistoricalBookingContext } = require("./collector_dispatch.cjs");
 const { createCollectionReuse, serialExecutor } = require("./collection_reuse.cjs");
 const { createKeywordWorkerScheduler } = require("./keyword_worker_scheduler.cjs");
+const { createCollectionRotationScheduler } = require("./collection_rotation_scheduler.cjs");
 const { createCollectorRequests } = require("./collector_requests.cjs");
 const { createCollectorRetirementPolicy } = require("./lib/collector_retirement.cjs");
 const { createOperatingWebCollector } = require("./operating_web_collector.cjs");
@@ -94,7 +95,17 @@ const LOCATION_SCORE_OVERRIDES_FILE = path.join(CONFIG_DIR, "location_score_over
 const LEGACY_B2B_MEMBERS_FILE = path.join(CONFIG_DIR, "b2b_members.json");
 const B2B_MEMBERS_FILE = path.join(CUSTOMER_DB_DIR, "b2b_members.json");
 const HISTORY_DIR = path.join(DATA_DIR, "history");
-const collectionHistory = createCollectionHistory({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR });
+const collectionHistory = createCollectionHistory({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR,
+  readRotationHistory: () => {
+    const items=[];
+    let page;
+    do {
+      page=collectionRotationScheduler.history({limit:1000,offset:items.length});
+      items.push(...page.items);
+    } while(page.hasMore && items.length<100000);
+    if(page.hasMore) throw Object.assign(new Error("Rotation history exceeds bounded scan"),{code:"ROTATION_HISTORY_SCAN_LIMIT"});
+    return items;
+  } });
 const HISTORY_OBSERVATIONS_FILE = path.join(HISTORY_DIR, "observations.jsonl");
 const HISTORY_EVIDENCE_DIR = path.join(HISTORY_DIR, "evidence");
 const HISTORY_DATALAB_TRENDS_FILE = path.join(HISTORY_DIR, "datalab_trends.json");
@@ -488,6 +499,32 @@ const keywordWorkerSchedulers = Object.fromEntries(["web", "manual", "scheduled"
   cancelPendingScheduled: options => cancelPendingScheduledCollections({...options,workerKey}),
   inspectResult: (result,payload) => result?.collectionQuality || inspectDailyCollectionResult(result,payload)
 }))]));
+const scheduleMutation = serialExecutor();
+const collectionRotationScheduler = createCollectionRotationScheduler({
+  dataDir: DATA_DIR,
+  executeSlot: payload => runCrawler({...payload, sourceRole:USER_ROLES.admin, collectionSource:"admin_search", rotationCollection:true}),
+  getWorkerState: async workerKey => {
+    try {
+      await assertCollectorReady(workerKey,true);
+      const status=await collectorControllers()[workerKey].status();
+      return {...status, ready:true, retired:collectorRetirement.isRetired(workerKey),
+        active:Boolean(status.activeJobId || status.queued || crawlLanes[workerKey].activeCrawlJob)};
+    } catch(error) { return {ready:false, halted:true, errorCode:error.code || "COLLECTOR_STATE_UNKNOWN"}; }
+  },
+  conflictCheck: async (config,{phase}={}) => {
+    if((await dailyKeywordCollectionScheduler.status()).enabled) return {code:"COLLECTION_ROTATION_LEGACY_ACTIVE"};
+    for(const worker of config.workers) if((await keywordWorkerSchedulers[worker.workerKey].status()).enabled)
+      return {code:"COLLECTION_ROTATION_INDIVIDUAL_ACTIVE",workerKey:worker.workerKey};
+    if(collectionRecoveryActive || collectorProtectionReviewWorkers.size) return {code:"COLLECTOR_RECOVERY_BUSY"};
+    await collectorBrokerReady;
+    const controllerStates=await Promise.all(Object.values(collectorControllers()).map(controller=>controller.status()));
+    if(controllerStates.some(status=>/RESTART_INTERRUPTED|STATE_LOST|STATE_UNKNOWN|WORKER_TIMEOUT/.test(status.errorCode||"")))
+      return {code:"COLLECTION_ROTATION_EXECUTION_UNKNOWN"};
+    const busy=Object.values(crawlLanes).some(lane=>lane.activeCrawlJob || lane.activeCrawlPromise || lane.crawlQueue.length)
+      || controllerStates.some(status=>status.activeJobId || status.queued);
+    return busy ? {code:"COLLECTION_ROTATION_BUSY",wait:phase!=="enable"} : null;
+  }
+});
 const collectorRequests = createCollectorRequests({dataDir:DATA_DIR,run:runCrawler,preflight:payload=>assertCollectorReady(payload.workerKey,true)});
 const insightIntegration = require('./lib/insight_integration.cjs').createInsightIntegration({
   dataDir: DATA_DIR, readCatalog: monthlyReportSources.catalog, readMembers: readB2BMemberStore,
@@ -1736,7 +1773,41 @@ function attachCrawlJobClient(job, payload = {}) {
   addB2BSubscriberToJob(job, payload);
 }
 
+let rotationPump = null;
+function rotationControlsExecution() {
+  return collectionRotationScheduler.isEnabled() || Object.values(crawlLanes).some(lane =>
+    lane.activeCrawlJob?.payload.rotationCollection || lane.crawlQueue.some(job=>job.payload.rotationCollection));
+}
+function pumpRotationCrawls() {
+  if(rotationPump) return rotationPump;
+  rotationPump=(async()=>{
+    for(const lane of Object.values(crawlLanes)) for(const job of [...lane.crawlQueue]) {
+      if(!job.payload.rotationCollection) continue;
+      const paused=!collectionRotationScheduler.isEnabled();
+      const expired=Number.isFinite(job.payload.queueDeadline) && Date.now()>=job.payload.queueDeadline;
+      if(!paused && !expired) continue;
+      lane.crawlQueue.splice(lane.crawlQueue.indexOf(job),1);
+      job.reject(Object.assign(new Error(paused ? "공동 순환예약이 일시정지되었습니다." : "예약 관측일이 지났습니다."),
+        {code:paused ? "COLLECTOR_SCHEDULE_PAUSED" : "COLLECTOR_QUEUE_DEADLINE",statusCode:409}));
+    }
+    await collectorBrokerReady;
+    if(Object.values(crawlLanes).some(lane=>lane.activeCrawlJob || lane.activeCrawlPromise)) return;
+    const statuses=await Promise.all(Object.values(collectorControllers()).map(controller=>controller.status()));
+    if(statuses.some(status=>status.activeJobId || status.queued || /RESTART_INTERRUPTED|STATE_LOST|STATE_UNKNOWN|WORKER_TIMEOUT/.test(status.errorCode||""))) return;
+    // No await between the final ownership check and synchronous lane admission.
+    if(Object.values(crawlLanes).some(lane=>lane.activeCrawlJob || lane.activeCrawlPromise)) return;
+    const candidates=Object.values(crawlLanes).flatMap(lane=>lane.crawlQueue.map(job=>({lane,job})))
+      .sort((a,b)=>Number(b.job.payload.trigger==="scheduled")-Number(a.job.payload.trigger==="scheduled") || a.job.queuedAt-b.job.queuedAt);
+    const next=candidates[0];
+    if(!next) return;
+    next.lane.crawlQueue.splice(next.lane.crawlQueue.indexOf(next.job),1);
+    withCrawlLane(next.lane.key,()=>startCrawlJob(next.job));
+  })().catch(error=>console.error("collection_rotation_gate_failed",error.code || "STATE_UNKNOWN"))
+    .finally(()=>{rotationPump=null;});
+  return rotationPump;
+}
 function startNextCrawlJob() {
+  if(rotationControlsExecution()) { pumpRotationCrawls(); return; }
   if (crawlLane().activeCrawlPromise || crawlLane().activeCrawlJob) return;
   crawlLane().crawlQueue.sort((a,b) => Number(b.payload.trigger === "scheduled") - Number(a.payload.trigger === "scheduled") || a.queuedAt - b.queuedAt);
   const job = crawlLane().crawlQueue.shift();
@@ -1831,7 +1902,7 @@ function startCrawlJob(job) {
     job.status = failure ? "failed" : "completed";
     if (failure) job.reject(failure);
     else job.resolve(resolveCrawlJob(result, job, job.waiterCount > 1 ? "shared" : "completed"));
-    startNextCrawlJob();
+    for(const key of Object.keys(crawlLanes)) withCrawlLane(key,startNextCrawlJob);
   })();
 }
 
@@ -17944,7 +18015,7 @@ async function runCrawler(payload) {
   const request = {...payload,workerKey,trigger:payload.trigger === "scheduled" ? "scheduled" : "manual"};
   if(workerKey==="web") request.requestPacing=null;
   request.scheduledCollection = request.trigger === "scheduled";
-  const occurrenceDay = /^(?:(?:web|manual)_)?scheduled_(\d{4}-\d{2}-\d{2})$/.exec(String(payload.scheduleOccurrenceId || ""))?.[1]
+  const occurrenceDay = /^(?:(?:(?:web|manual)_)?scheduled_|rotation_)(\d{4}-\d{2}-\d{2})(?:_\d+)?$/.exec(String(payload.scheduleOccurrenceId || ""))?.[1]
     || new Date(Date.now() + 9 * 3600000).toISOString().slice(0,10);
   request.queueDeadline = request.scheduledCollection ? Date.parse(`${occurrenceDay}T23:59:59.999+09:00`) : null;
   return withCrawlLane(workerKey, async () => {
@@ -18148,6 +18219,10 @@ function scheduledCrawlerPacingEnv(payload = {}, checkIn = "") {
 }
 
 async function runCrawlerInternal(payload) {
+  if(payload.rotationCollection) {
+    if(!collectionRotationScheduler.isEnabled()) throw Object.assign(new Error("공동 순환예약이 일시정지되었습니다."),{code:"COLLECTION_ROTATION_PAUSED",statusCode:409});
+    await assertCollectorReady(payload.workerKey,true);
+  }
   if (payload.scheduledCollection && Number.isFinite(payload.queueDeadline) && Date.now() >= payload.queueDeadline) {
     throw Object.assign(new Error("예약 실행일이 지나 대기 작업을 중단했습니다."), {code:"COLLECTOR_QUEUE_DEADLINE",statusCode:409});
   }
@@ -18217,8 +18292,9 @@ async function runCrawlerInternal(payload) {
     };
     const completed = await dispatchCollector({
       broker: collectorBrokerForLane(), keyword, env, payload: expected,
+      ...(payload.rotationCollection ? {queuedTimeoutMs:120000,preserveUnclaimedPause:true} : {}),
       queueDeadline: payload.queueDeadline,
-      shouldCancelQueued: () => payload.trigger==="scheduled" && pausedScheduleOccurrences.has(payload.scheduleOccurrenceId) && (crawlLane().activeCrawlJob?.waiterCount||1)<=1,
+      shouldCancelQueued: () => payload.trigger==="scheduled" && (pausedScheduleOccurrences.has(payload.scheduleOccurrenceId) || (payload.rotationCollection && !collectionRotationScheduler.isEnabled())) && (crawlLane().activeCrawlJob?.waiterCount||1)<=1,
       context: await historicalBookingContext(),
       onJob: id => { crawlLane().activeCollectorJobId = id; },
       isCancelled: () => crawlLane().activeCrawlCancelRequested
@@ -18692,6 +18768,38 @@ async function route(req, res) {
       return send(res,200,await collectorRequests.get(reqUrl.pathname.slice("/api/crawl-requests/".length)));
     }
 
+    if (reqUrl.pathname === "/api/collection-rotation" || reqUrl.pathname.startsWith("/api/collection-rotation/")) {
+      if(!requireAdminSession(session,req,res)) return;
+      if(req.method==="GET" && reqUrl.pathname==="/api/collection-rotation") return send(res,200,await collectionRotationScheduler.status());
+      if(req.method==="GET" && reqUrl.pathname==="/api/collection-rotation/history")
+        return send(res,200,await collectionRotationScheduler.history(Object.fromEntries(reqUrl.searchParams)));
+      if(!["POST","PUT"].includes(req.method)) return send(res,405,{error:"Method not allowed"});
+      if(!/^application\/json(?:\s*;|$)/i.test(String(req.headers["content-type"]||""))) return send(res,415,{error:"JSON 형식으로 요청해 주세요."});
+      if(req.headers.origin) {
+        let origin; try {origin=new URL(req.headers.origin);} catch {}
+        if(!origin || origin.host!==req.headers.host) return send(res,403,{error:"현재 데이터랩 화면에서 요청해 주세요."});
+      }
+      const payload=await parseJsonBody(req);
+      if(req.method==="POST" && reqUrl.pathname==="/api/collection-rotation/preview")
+        return send(res,200,await collectionRotationScheduler.preview(payload.config,{days:payload.days??7,...(payload.startKeyword ? {startKeyword:payload.startKeyword} : {})}));
+      if(req.method==="PUT" && reqUrl.pathname==="/api/collection-rotation")
+        return send(res,200,await scheduleMutation(()=>collectionRotationScheduler.updateConfig(payload.config || payload,{...(payload.startKeyword ? {startKeyword:payload.startKeyword} : {})})));
+      if(req.method==="POST" && reqUrl.pathname==="/api/collection-rotation/enabled") {
+        if(!payload || typeof payload.enabled!=="boolean" || Object.keys(payload).some(key=>key!=="enabled")) return send(res,400,{error:"예약 활성화 여부를 확인해 주세요."});
+        return send(res,200,await scheduleMutation(async()=>{
+          const previous=payload.enabled ? null : await collectionRotationScheduler.status();
+          const status=await collectionRotationScheduler.setEnabled(payload.enabled);
+          if(previous?.activeSlotId) {
+            const slot=previous.todayItems.find(item=>item.id===previous.activeSlotId) || previous.latest.find(item=>item.id===previous.activeSlotId);
+            if(slot) await cancelPendingScheduledCollections({occurrenceIds:[slot.id],workerKey:slot.workerKey});
+          }
+          for(const key of Object.keys(crawlLanes)) withCrawlLane(key,startNextCrawlJob);
+          return status;
+        }));
+      }
+      return notFound(res);
+    }
+
     if (reqUrl.pathname === "/api/worker-schedule" || reqUrl.pathname.startsWith("/api/worker-schedule/")) {
       if (!requireAdminSession(session, req, res)) return;
       const scheduleWorkerKey=selectedWorkerKey(reqUrl.searchParams.get("workerKey") || "scheduled");
@@ -18707,11 +18815,15 @@ async function route(req, res) {
       if (req.method === "PUT" && reqUrl.pathname === "/api/worker-schedule") return send(res,200,await keywordWorkerScheduler.updateConfig(payload));
       if (req.method === "POST" && reqUrl.pathname === "/api/worker-schedule/enabled") {
         if (typeof payload.enabled!=="boolean") return send(res,400,{error:"예약 활성화 여부를 확인해 주세요."});
+        return send(res,200,await scheduleMutation(async()=>{
         if (payload.enabled) {
           await assertCollectorReady(scheduleWorkerKey,true);
-          if ((await dailyKeywordCollectionScheduler.status()).enabled) return send(res,409,{error:"기존 일일 수집을 비활성화한 뒤 새 예약을 켜 주세요."});
+          if(collectionRotationScheduler.isEnabled() && (await collectionRotationScheduler.status()).config.workers.some(worker=>worker.workerKey===scheduleWorkerKey))
+            throw Object.assign(new Error("공동 순환예약을 일시정지한 뒤 개별 예약을 켜 주세요."),{code:"COLLECTION_ROTATION_ACTIVE",statusCode:409});
+          if ((await dailyKeywordCollectionScheduler.status()).enabled) throw Object.assign(new Error("기존 일일 수집을 비활성화한 뒤 새 예약을 켜 주세요."),{statusCode:409});
         }
-        return send(res,200,await keywordWorkerScheduler.setEnabled(payload.enabled));
+        return keywordWorkerScheduler.setEnabled(payload.enabled);
+        }));
       }
       if (req.method === "POST" && reqUrl.pathname === "/api/worker-schedule/run-now") {
         assertRequestRateLimit(req,"adminCrawl",RATE_LIMIT_POLICIES.adminCrawl,session.username||"");
@@ -19554,7 +19666,10 @@ seedOutputsFromRepo()
   .catch((error) => {
     console.warn(`Could not seed outputs from repo: ${error.message || error}`);
   })
-  .finally(() => {
+  .finally(async () => {
+    // Restore persisted coordination before any existing scheduler can dispatch.
+    await collectorBrokerReady;
+    await collectionRotationScheduler.status();
     server.listen(PORT, HOST, () => {
       const primaryUrl = HOST === "0.0.0.0" ? `http://127.0.0.1:${PORT}` : `http://${HOST}:${PORT}`;
       console.log(`Lodging datalab beta app running at ${primaryUrl}`);
@@ -19569,6 +19684,9 @@ seedOutputsFromRepo()
         console.error(`Daily keyword collection scheduler unavailable: ${error.message || error}`);
       });
       for (const [workerKey,scheduler] of Object.entries(keywordWorkerSchedulers)) scheduler.start().catch(error => console.error(`Keyword worker scheduler ${workerKey} unavailable:`, error.code || error.message));
+      Promise.resolve().then(()=>collectionRotationScheduler.start()).catch(error=>console.error("Collection rotation scheduler unavailable:",error.code || error.message));
+      const rotationWake=setInterval(()=>{if(rotationControlsExecution()) pumpRotationCrawls();},5000);
+      rotationWake.unref();
       const monthlySync = tourismVisitorMonthlyScheduler.start();
       if (monthlySync.enabled) {
         console.log(`Tourism visitor monthly sync check scheduled at ${monthlySync.nextCheckAt}`);

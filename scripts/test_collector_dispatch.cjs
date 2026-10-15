@@ -101,6 +101,14 @@ test("schedule pause cancels only an unclaimed job and reports cancellation with
   assert.equal(withdrawals, 1);
 });
 
+test("rotation distinguishes a proved unclaimed pause from uncertain cancellation", async () => {
+  for (const startedAt of [undefined,"2026-10-15T00:00:00.000Z"]) {
+    const broker={submit:async()=>({id:"rotation-paused"}),getJob:async()=>({id:"rotation-paused",status:"cancelled",errorCode:"COLLECTOR_SCHEDULE_PAUSED",startedAt})};
+    await assert.rejects(dispatchCollector({broker,keyword:"fixture",env:{},payload:{},preserveUnclaimedPause:true}),
+      {code:startedAt ? "CRAWL_CANCELLED" : "COLLECTOR_SCHEDULE_PAUSED",cancelled:true});
+  }
+});
+
 test("pause preserves work claimed before atomic withdrawal, including claim between submit and poll", async () => {
   let state = "queued", withdrawals = 0, polls = 0;
   const broker = {

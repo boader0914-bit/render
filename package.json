@@ -4,6 +4,7 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
+    "test:collection-rotation": "node --test scripts/test_collection_rotation_scheduler.cjs scripts/test_collection_rotation_ui.cjs scripts/test_collector_dispatch.cjs && node scripts/test_collection_rotation_api.cjs",
     "test:collection-history": "node --test scripts/test_collection_history.cjs scripts/test_collection_history_api.cjs scripts/test_collector_controls_ui.cjs scripts/test_history_run_api.cjs scripts/test_history_selection.cjs",
     "test:insight-server-conversion": "node --test scripts/test_insight_collection_routing.cjs scripts/test_insight_collection.cjs scripts/test_insight_connection.cjs scripts/test_insight_public_origins.cjs scripts/test_insight_daily_limit.cjs scripts/test_collector_retirement.cjs scripts/test_collector_controls_ui.cjs && node scripts/test_collector_retirement_integration.cjs && node scripts/test_insight_app_integration.cjs",
     "test:industry-analysis": "node --test scripts/test_industry_analysis.cjs scripts/test_industry_analysis_store.cjs scripts/test_industry_source_revision.cjs scripts/test_industry_analysis_ui.cjs && node scripts/test_industry_analysis_api.cjs",

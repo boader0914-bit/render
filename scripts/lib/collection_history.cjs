@@ -12,7 +12,7 @@ const GROUPS = new Set(["year", "month", "week", "day"]);
 const WORKERS = new Set(["all", "web", "manual", "scheduled"]);
 const FILTER_STATES = new Set(["all", ...STATES, "attention"]);
 const DATE_BASIS = { execution: "실행일", received: "접수일", scheduled: "예정일", saved: "저장일", unknown: "시각 미확인" };
-const SOURCE_LABELS = { requests: "즉시수집 기록", scheduled: "예약워커 기록", web: "운영웹 예약 기록", manual: "BG 예약 기록", daily: "기존 일일수집 기록", outputs: "보관함 결과 기록" };
+const SOURCE_LABELS = { requests: "즉시수집 기록", scheduled: "예약워커 기록", web: "운영웹 예약 기록", manual: "BG 예약 기록", daily: "기존 일일수집 기록", rotation:"공동 순환예약 기록", outputs: "보관함 결과 기록" };
 const WARNING_LABELS = {
   source_missing: "일부 기록 저장소가 없어 해당 출처를 확인하지 못했습니다.",
   source_unreadable: "일부 기록 저장소를 읽지 못했습니다.",
@@ -95,7 +95,7 @@ function stateFor(status, quality, errorCode) {
   if (["failed", "blocked", "interrupted", "missed", "cancelled", "canceled"].includes(status)) return "failed";
   if (["failed", "blocked", "interrupted"].includes(quality?.status)) return "failed";
   if (status === "partial" || quality?.status === "partial") return "partial";
-  if (["pending", "queued", "running"].includes(status)) return "pending";
+  if (["pending", "queued", "waiting", "running"].includes(status)) return "pending";
   if (["complete", "completed", "reused"].includes(status) || ["complete", "reused"].includes(quality?.status)) return "complete";
   return "review";
 }
@@ -120,7 +120,7 @@ function compactStoredValue(input) {
 function normalizedRow(value, context) {
   const result = object(value.result) ? value.result : {};
   const collectionQuality = sanitizeCollectionQuality(value.collectionQuality || value.quality || result.collectionQuality);
-  let status = ["pending", "queued", "running", "complete", "completed", "reused", "partial", "failed", "blocked", "interrupted", "missed", "cancelled", "canceled"].includes(value.status) ? value.status : collectionQuality?.status || "unknown";
+  let status = ["pending", "queued", "waiting", "running", "complete", "completed", "reused", "partial", "failed", "blocked", "interrupted", "missed", "paused", "uncertain", "cancelled", "canceled"].includes(value.status) ? value.status : collectionQuality?.status || "unknown";
   const recordedStatus = status;
   const errorCode = code(value.errorCode);
   const runId = identifier(value.runId || result.runId), requestId = identifier(value.requestId || context.requestId);
@@ -156,7 +156,7 @@ function groupFor(day, by, query) {
   else { key = startDate = endDate = day; label = `${day.slice(0, 4)}년 ${Number(day.slice(5, 7))}월 ${Number(day.slice(8))}일`; }
   return { key, label, startDate: startDate < query.from ? query.from : startDate, endDate: endDate > query.to ? query.to : endDate };
 }
-function createCollectionHistory({ dataDir, outputsDir = path.join(dataDir, "outputs"), now = () => new Date(), cacheTtlMs = 5000, maxRecords = 100000 } = {}) {
+function createCollectionHistory({ dataDir, outputsDir = path.join(dataDir, "outputs"), now = () => new Date(), cacheTtlMs = 5000, maxRecords = 100000, readRotationHistory } = {}) {
   if (typeof dataDir !== "string") throw new Error("collection_history_data_dir_required");
   dataDir = path.resolve(dataDir); outputsDir = path.resolve(outputsDir);
   let cached, loading, lastLoaded = 0;
@@ -241,6 +241,13 @@ function createCollectionHistory({ dataDir, outputsDir = path.join(dataDir, "out
           });
         }
       });
+    }
+    if(readRotationHistory) {
+      sources.rotation={label:SOURCE_LABELS.rotation,status:"available",files:0,rows:0};
+      try {
+        const stored=await readRotationHistory();
+        for(const item of stored) add(normalizedRow(item,{id:`rotation_${item.id}`,source:"rotation",workerKey:item.workerKey,trigger:"scheduled",conditions:item.conditions}),"rotation");
+      } catch {sources.rotation.status="unreadable";warn("source_unreadable");}
     }
     sources.daily = { label: SOURCE_LABELS.daily, status: "available", files: 0, rows: 0 };
     const dailyPath = path.join(dataDir, "history", "daily_keyword_collection_state.json");
