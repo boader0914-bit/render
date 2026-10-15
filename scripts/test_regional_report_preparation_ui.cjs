@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const ui = require("../web/regional-report-preparation.js");
-const makeContainer = () => ({ innerHTML: "", isConnected: true, addEventListener() {} });
+const makeContainer = () => ({ innerHTML: "", isConnected: true, listeners: {}, addEventListener(name, handler) { this.listeners[name] = handler; } });
 const region = { regionKey: "kto_36_10", regionLabel: "경상남도 산청군", level: "local" };
 const keys = ["visitors", "demandStrength", "resourceDemand", "diversity", "kosis", "searchTrend"];
 const job = (state, status = "running", extra = {}) => ({ id: "prep-1", regionKey: state.regionKey, month: state.month, cutoffDate: state.cutoffDate,
@@ -37,8 +37,8 @@ test("opening, polling, remounting and returning only read state; collection nee
   assert.equal(f.calls.filter(call => call.method === "POST").length, 1, "returning resumes GET checks only");
   done = true; await f.tick();
   assert.equal(f.controller.state.job.status, "complete"); assert.equal(f.timers.size, 0, "terminal jobs do not poll");
-  assert.match(f.controller.state.message, /6개 지표 준비/);
-  assert.match(ui.renderCard(f.controller.state), /6\/6 항목 처리/);
+  assert.match(f.controller.state.message, /당시 보고월 자료 준비를 마쳤습니다/);
+  assert.match(ui.renderCard(f.controller.state), /처리 종료 6\/6개 분야/);
   assert.equal(f.controller.send(), true);
   assert.deepEqual(f.sent[0], { type: "region", targetId: region.regionKey, month: f.controller.state.month, cutoffDate: f.controller.state.cutoffDate });
   assert.equal(f.calls.filter(call => call.method === "POST").length, 1, "sending a report never starts collection or publication");
@@ -102,7 +102,7 @@ test("current-month publication wait is a neutral partial result and keeps KOSIS
   }) }));
   await f.controller.mount(f.container, region);
   assert.equal(f.controller.state.error, ""); assert.equal(f.controller.send(), true);
-  assert.match(f.container.innerHTML, /일부 자료 준비/);
+  assert.match(f.container.innerHTML, /당시 일부 자료 확보/);
   assert.match(f.container.innerHTML, /공표 대기/);
   assert.match(f.container.innerHTML, /기준 2026\.08 · 2024/);
   assert.match(f.container.innerHTML, /<details class="rrp-period-details"><summary>지표별 기준기간/);
@@ -167,7 +167,7 @@ test("search step keeps the server criterion and actual partial range, never an 
 
 test("missing and failed search evidence keep an explicit cause and cannot become usable zero data", () => {
   const state = { ...region, month: "2026-08", cutoffDate: "2026-08-31", expanded: true };
-  for (const [status, errorCode, reason] of [["missing", "NO_DATA", "해당 검색어·기간의 자료가 없습니다"], ["failed", "QUOTA_EXCEEDED", "요청 한도에 도달"], ["failed", "MISSING_KEY", "연결 키를 설정"]]) {
+  for (const [status, errorCode, reason] of [["missing", "NO_DATA", "당시 해당 검색어·기간의 자료 없음"], ["failed", "QUOTA_EXCEEDED", "당시 제공처 요청 한도 도달"], ["failed", "MISSING_KEY", "당시 연결 키 미설정"]]) {
     const renderedState = { ...state, job: job(state, "partial", { steps: [{ key: "searchTrend", status, errorCode, dataAvailable: false, keyword: '<img src=x onerror="bad">' }] }) };
     const html = ui.renderCard(renderedState);
     assert.match(html, new RegExp(reason));
@@ -232,4 +232,113 @@ test("region DB maps its own selected region exactly, independent from the analy
   assert.match(source, /monthlyReportShortcut\.dataset\.monthlyReportTarget \|\| \(type === "region"/);
   const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8");
   assert.ok(html.indexOf("/regional-report-preparation.js") < html.indexOf("/app.js"));
+});
+
+test("a finished failed preparation stays folded and describes that report-month attempt, not a live connection failure", async () => {
+  const f = fixture((query, method, body, state) => ({ job: job(state, "failed", {
+    finishedAt: "2026-10-15T11:17:00Z",
+    steps: keys.map(key => ({ key, status: "failed", errorCode: "NETWORK_ERROR", dataAvailable: false }))
+  }) }));
+  await f.controller.mount(f.container, region);
+  const summary = f.container.innerHTML.split("</summary>")[0];
+  assert.match(summary, /^<details class="rrp-card"><summary>/, "old terminal work must not expand over the current management board");
+  assert.match(summary, new RegExp(`보고월 ${f.controller.state.month}`));
+  assert.match(summary, /보고월별 리포트 준비 이력/);
+  assert.match(summary, /당시 확인 실패/);
+  assert.match(summary, /처리 종료 6\/6/);
+  assert.match(summary, /2026-10-15 20:17 KST/);
+  assert.match(f.container.innerHTML, /실패·자료 없음·공표 대기도 처리 종료 수에 포함/);
+  assert.match(f.container.innerHTML, /당시 실패는 현재 연결 상태를 뜻하지 않습니다/);
+  const steps = f.container.innerHTML.split('<ul class="rrp-steps">')[1].split("</ul>")[0];
+  assert.equal((steps.match(/당시 제공처 연결 실패/g) || []).length, 6);
+  assert.doesNotMatch(steps, /연결 상태를 확인해 주세요|재수집|다시 수집/);
+  assert.equal(f.controller.send(), false, "six ended attempts without data do not make a usable report");
+  assert.equal(f.calls.filter(call => call.method === "POST").length, 0);
+  assert.equal(f.timers.size, 0);
+});
+
+test("reading preparation history preserves manual folding, while discovered or explicitly started work is shown", async () => {
+  let status = "partial";
+  const f = fixture((query, method, body, state) => ({ job: job(state, status) }));
+  await f.controller.mount(f.container, region);
+  assert.equal(f.controller.state.expanded, false);
+  const disclosure = open => f.container.listeners.toggle({ target: { matches: selector => selector === "details.rrp-card", open } });
+  disclosure(true);
+  await f.controller.refresh();
+  assert.match(f.container.innerHTML, /^<details class="rrp-card" open>/);
+  disclosure(false);
+  await f.controller.refresh();
+  assert.match(f.container.innerHTML, /^<details class="rrp-card">/);
+  status = "running";
+  await f.controller.refresh();
+  assert.match(f.container.innerHTML, /^<details class="rrp-card" open>/);
+  assert.match(f.container.innerHTML, /보고월 리포트 자료 준비 중/);
+  assert.match(f.container.innerHTML, /<b>처리 1\/6<\/b>/);
+  assert.doesNotMatch(f.container.innerHTML, /<b>처리 종료 1\/6/);
+  assert.equal(f.timers.size, 1);
+  status = "complete";
+  await f.tick();
+  assert.match(f.container.innerHTML, /^<details class="rrp-card" open>/, "a newly finished user-visible job remains reviewable");
+  assert.equal(f.timers.size, 0);
+  disclosure(false);
+  await f.controller.start();
+  assert.match(f.container.innerHTML, /^<details class="rrp-card" open>/);
+  assert.equal(f.calls.filter(call => call.method === "POST").length, 1);
+});
+
+test("changing region clears the old open failure history before the next saved response arrives", async () => {
+  let finishNext;
+  const f = fixture((query, method, body, state) => query.includes(region.regionKey)
+    ? { job: job(state, "failed", { finishedAt: "2026-09-01T00:00:00Z", steps: [{ key: "visitors", status: "failed", errorCode: "AUTH_ERROR" }] }) }
+    : new Promise(resolve => { finishNext = resolve; }));
+  await f.controller.mount(f.container, region);
+  f.controller.state.expanded = true;
+  const pending = f.controller.mount(makeContainer(), { ...region, regionKey: "kto_31_1", regionLabel: "가평군" });
+  assert.equal(f.controller.state.job, null);
+  assert.equal(f.controller.state.expanded, false);
+  const waiting = ui.renderCard(f.controller.state);
+  assert.match(waiting, /가평군/);
+  assert.doesNotMatch(waiting, /산청|당시 확인 실패|인증·이용 권한 확인 실패|2026-09-01/);
+  finishNext({ job: null }); await pending;
+  assert.equal(f.controller.send(), false);
+  assert.match(ui.renderCard(f.controller.state), /준비 기록 없음/);
+  assert.equal(f.calls.filter(call => call.method === "POST").length, 0);
+});
+
+test("an earlier report-month response cannot replace the selected month or send its old report conditions", async () => {
+  let finishEarlier, oldRequestMonth;
+  const f = fixture((query, method, body, state) => {
+    if (!oldRequestMonth) { oldRequestMonth = state.month; return new Promise(resolve => { finishEarlier = resolve; }); }
+    return { job: job(state, "partial") };
+  });
+  const initial = f.controller.mount(f.container, region);
+  const oldState = { ...f.controller.state };
+  // Changing scope after an in-flight read is supported through the controller's normal input guard;
+  // stop the view first so that the old pending read no longer owns the loading state.
+  f.controller.pause();
+  f.controller.input("month", "2026-08");
+  await f.controller.mount(makeContainer(), region);
+  finishEarlier({ job: job(oldState, "failed") }); await initial;
+  assert.equal(f.controller.state.month, "2026-08");
+  assert.equal(f.controller.state.job.month, "2026-08");
+  assert.doesNotMatch(ui.renderCard(f.controller.state), /당시 확인 실패/);
+  assert.equal(f.controller.send(), true);
+  assert.deepEqual(f.sent[0], { type: "region", targetId: region.regionKey, month: "2026-08", cutoffDate: "2026-08-31" });
+  assert.equal(f.calls.filter(call => call.method === "POST").length, 0);
+});
+
+test("attempt end time and original cutoff stay distinct from source receipts and a changed form cutoff", async () => {
+  const f = fixture((query, method, body, state) => ({ job: job(state, "partial", {
+    cutoffDate: "2026-08-31", finishedAt: "2026-10-15T11:17:00Z",
+    steps: [{ key: "visitors", status: "partial", dataAvailable: true, period: "202608", retrievedAt: "2026-09-01T00:00:00Z" }]
+  }) }));
+  await f.controller.mount(f.container, region);
+  f.controller.input("cutoffDate", "2026-10-01");
+  const html = f.container.innerHTML;
+  assert.match(html, /처리 종료 2026-10-15 20:17 KST/);
+  assert.match(html, /이 기록의 관측 마감일 <strong>2026-08-31<\/strong>/);
+  assert.match(html, /data-rrp-field="cutoffDate" value="2026-10-01"/);
+  assert.match(html, /원자료 확인<\/small><time datetime="2026-09-01T00:00:00Z">2026-09-01 09:00 KST/);
+  assert.match(html, /원자료 확인<\/small><time>미기록<\/time>/);
+  assert.equal(f.calls.filter(call => call.method === "POST").length, 0);
 });

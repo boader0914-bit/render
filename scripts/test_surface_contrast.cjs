@@ -253,6 +253,52 @@ function assert(condition, message, failures) {
 
 const failures = [];
 
+// The same outside-region list is reused by the home and regional DB panels.
+// Its chips must carry their own surface contract instead of relying on one
+// dashboard ancestor to cover a legacy white background.
+const outsideRegionSource = app.slice(app.indexOf("function adminRunRegionalOpsHtml("), app.indexOf("function adminRegionalDatabasePanel("));
+const outsideRegionSandbox = {
+  escapeHtml: value => String(value ?? "").replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character])),
+  fmtNumber: value => String(value)
+};
+vm.runInNewContext(`${outsideRegionSource}\nthis.renderOutsideRegion = adminRunRegionalOpsHtml;`, outsideRegionSandbox);
+const outsideRegionHtml = outsideRegionSandbox.renderOutsideRegion({ summary: { outsideExposureCount: 1 }, search: { keyword: "천안글램핑" },
+  outsideExposureItems: [{ name: "다온숲 <확인>", searchRegion: "천안", addressRegion: "세종" }] });
+const outsideRegionPaint = styles.match(/\.admin-outside-region-list \.admin-outside-region-chip\s*\{([^}]+)\}/)?.[1] || "";
+assert(outsideRegionHtml.includes('class="admin-outside-region-chip" data-ui-surface="chip"')
+  && outsideRegionHtml.includes("다온숲 &lt;확인&gt; · 천안 → 세종")
+  && !outsideRegionSandbox.renderOutsideRegion({ summary: {}, outsideExposureItems: [] }).includes('class="admin-outside-region-chip"')
+  && /background:\s*var\(--surface-control\)/.test(outsideRegionPaint)
+  && /color:\s*var\(--text-secondary\)/.test(outsideRegionPaint)
+  && /border:\s*1px solid var\(--border-subtle\)/.test(outsideRegionPaint)
+  && !/(?:#[0-9a-f]{3,8}|rgba?\()/i.test(outsideRegionPaint)
+  && themeStyles.includes('.admin-outside-region-list > .admin-outside-region-chip[data-ui-surface="chip"]'),
+  "outside-region chips must reuse escaped shared markup and token paint in every dashboard", failures);
+const outsideRegionCascade = reviewCssLeafRules(themeStyles).flatMap(rule => splitReviewSelectorList(rule.selector).map(selector => ({
+  selector, order: rule.order, specificity: reviewSelectorSpecificity(selector),
+  paint: Object.fromEntries(Array.from(rule.body.matchAll(/([\w-]+)\s*:\s*([^;]+);/g), declaration => [declaration[1], {
+    value: declaration[2].replace(/\s*!important\s*$/, "").trim(), important: /!important\s*$/.test(declaration[2])
+  }]))
+}))).filter(rule => rule.selector.includes(".admin-outside-region-chip")
+  || rule.selector.includes('[data-ui-surface="chip"]')
+  || rule.selector.includes("[data-ui-surface]") && (rule.selector.includes(":not(.tab-panel, .admin-section-panel)")
+    || /:is\(p,\s*small,\s*span,/.test(rule.selector)));
+assert(outsideRegionCascade.some(rule => rule.selector.includes(":not(.tab-panel, .admin-section-panel)")),
+  "outside-region cascade checks must include the actual broad card reset and its :not specificity", failures);
+for (const [property, token] of [["background", "var(--surface-control)"], ["color", "var(--text-secondary)"], ["border-color", "var(--border-subtle)"]]) {
+  const winner = outsideRegionCascade.filter(rule => rule.paint[property]).sort((a, b) => Number(a.paint[property].important) - Number(b.paint[property].important)
+    || compareReviewSpecificity(a.specificity, b.specificity) || a.order - b.order).at(-1);
+  assert(winner?.selector.includes(".admin-outside-region-chip") && winner.paint[property].value === token,
+    `outside-region chip ${property} must win the real shared card/chip/text cascade with its intended token`, failures);
+}
+for (const mode of ["light", "dark"]) {
+  const tokens = themeStyles.match(new RegExp(`html\\[data-theme-resolved="${mode}"\\]\\s*\\{([^}]+)\\}`))?.[1] || "";
+  const foreground = tokens.match(/--text-secondary:\s*(#[0-9a-f]{6})/i)?.[1];
+  const background = tokens.match(/--surface-control:\s*(#[0-9a-f]{6})/i)?.[1];
+  assert(contrastRatio(foreground, background) >= 4.5,
+    `${mode} outside-region chip text must retain normal-text contrast on its active theme surface`, failures);
+}
+
 for (const marker of requiredMarkers) {
   assert(styles.includes(marker), `missing style marker: ${marker}`, failures);
 }

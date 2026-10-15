@@ -29272,7 +29272,7 @@ function adminRunRegionalOpsHtml(runOps = null) {
         <div class="admin-outside-region-list">
           <strong>지역 밖 노출</strong>
           ${outsideItems.map((item) => `
-            <span>${escapeHtml(item.name || "업체명 확인")} · ${escapeHtml(item.searchRegion || "검색권")} → ${escapeHtml(item.addressRegion || "소재지")}</span>
+            <span class="admin-outside-region-chip" data-ui-surface="chip">${escapeHtml(item.name || "업체명 확인")} · ${escapeHtml(item.searchRegion || "검색권")} → ${escapeHtml(item.addressRegion || "소재지")}</span>
           `).join("")}
         </div>
       ` : `<p>현재 선택 결과에서 지역 밖 노출은 크게 보이지 않습니다.</p>`}

@@ -9048,10 +9048,11 @@ a {
   gap: 6px;
 }
 
-.admin-outside-region-list span {
-  border: 1px solid #e5edf7;
+.admin-outside-region-list .admin-outside-region-chip {
+  border: 1px solid var(--border-subtle);
   border-radius: 10px;
-  background: #fff;
+  background: var(--surface-control);
+  color: var(--text-secondary);
   padding: 8px;
 }
 

@@ -760,6 +760,15 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][
   box-shadow: none !important;
 }
 
+/* This shared chip also matches the higher-specificity legacy card reset. */
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .admin-run-region-panel .admin-outside-region-list > .admin-outside-region-chip[data-ui-surface="chip"] {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-control) !important;
+  background-image: none !important;
+  color: var(--text-secondary) !important;
+  box-shadow: none !important;
+}
+
 /* Small information carriers are never white in dark mode or blue in light mode. */
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   .flow-chip-row > span,
