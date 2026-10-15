@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { createController, createCache, renderCard, jobHtml, number } = require("../web/regional-analysis.js");
+const { buildRegionalIndicatorManagement } = require("./lib/regional_indicator_management.cjs");
 const host = () => ({ innerHTML: "", isConnected: true, listeners: new Map(), addEventListener(name, listener) { this.listeners.set(name, listener); } });
 const response = (key = "sancheong", extra = {}) => ({ status: "ready", snapshot: { resultId: `${key}-1`, scope: { regionKey: key, months: 13 }, generatedAt: "2026-10-15T06:00:00Z", groups: [] }, job: null, policy: { enabled: false, hour: 9, minute: 0, intervalHours: 24 }, ...extra });
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -21,7 +22,7 @@ test("zero, errors and unpublished months remain distinct; annual KOSIS has no 1
   assert.match(html, /<strong>0<small>명/);
   assert.match(html, /2026-09<\/th><td>—<\/td><td>공표 대기/);
   assert.match(html, /2026-07<\/th><td>—<\/td><td>확인 실패/);
-  assert.match(html, /2026-06<\/th><td>—<\/td><td>확인 필요/);
+  assert.match(html, /2026-06<\/th><td>—<\/td><td>접근 제한/);
   assert.match(html, /2026-05<\/th><td>—<\/td><td>일부 자료/);
   assert.doesNotMatch(html, /1\/13개월 확보/);
   assert.match(html, /월간·연간 기준기간 확인/);
@@ -202,4 +203,154 @@ test("existing five regional menus stay intact and saved UI hooks are loaded", (
   assert.deepEqual([...nav.matchAll(/data-region-analysis-tab="([^"]+)"/g)].map(match => match[1]), ["dictionary", "map", "demand", "regionCompare", "regionSources"]);
   assert.match(app, /data-regional-analysis-manage/); assert.match(app, /window\.RegionalAnalysis\?\.mount/);
   assert.match(app, /window\.RegionalAnalysis\?\.clear\(\)/);
+});
+
+function managedFixture() {
+  const scope = { regionKey: "sancheong", month: "2026-09", months: 13 };
+  const series = (end, value) => Array.from({ length: 13 }, (_, index) => ({
+    period: new Date(Date.UTC(Number(end.slice(0, 4)), Number(end.slice(5)) - 13 + index, 1)).toISOString().slice(0, 7),
+    value, status: "observed", retrievedAt: "2026-10-14T00:00:00Z"
+  }));
+  const payload = response();
+  payload.scope = scope;
+  payload.snapshot.scope = scope;
+  payload.snapshot.generatedAt = "2026-10-16T00:00:00Z";
+  payload.snapshot.groups = [
+    { key: "visitors", label: "지역 방문자", category: "tourism", periodType: "M", status: "ready", provider: "한국관광공사",
+      latestPeriod: "2026-08", latestRequestedPeriod: "2026-09", latestRequestedStatus: "publication_pending", latestRequestedErrorCode: "PUBLICATION_PENDING",
+      metrics: [{ key: "daily", label: "일평균 방문자", unit: "명", rows: series("2026-08", 0) }] },
+    { key: "searchTrend", label: "검색 트렌드", category: "search", periodType: "M", status: "partial", provider: "네이버 데이터랩",
+      metrics: [{ key: "interest", label: "검색 관심도", unit: "상대지수", rows: series("2026-09", 20).map(row => row.period === "2026-07" ? { ...row, status: "failed", value: 0, errorCode: "TIMEOUT" } : row) }] },
+    { key: "kosis", label: "인구·산업 통계", category: "background", periodType: "mixed", status: "partial", latestPeriod: "2024", provider: "KOSIS",
+      metrics: [{ key: "businesses", label: "사업체", periodType: "Y", unit: "개", rows: [{ period: "2024", value: 0, status: "observed", retrievedAt: "2026-10-12T00:00:00Z" }] },
+        { key: "employees", label: "종사자", periodType: "Y", unit: "명", rows: [{ period: "2024", value: 0, status: "missing" }] }] }
+  ];
+  payload.policy = { enabled: true, hour: 9, minute: 0, intervalHours: 24, nextRunAt: "2026-10-17T00:00:00Z", lastRunAt: "2026-10-15T01:00:00Z" };
+  const provider = { id: "provider-1", sequence: 1, scope, collectMissing: true, status: "failed", startedAt: "2026-10-15T03:00:00Z", finishedAt: "2026-10-15T03:05:00Z", networkAttempted: true, errorCode: "QUOTA_EXCEEDED" };
+  payload.job = { id: "local-2", sequence: 2, scope, collectMissing: false, status: "completed", startedAt: "2026-10-16T00:00:00Z", finishedAt: "2026-10-16T00:00:01Z" };
+  payload.management = buildRegionalIndicatorManagement({ ...payload, refreshHistory: [provider], now: new Date("2026-10-16T00:00:00Z") });
+  return payload;
+}
+function managementHtml(payload, extra = {}) {
+  return renderCard({ ...payload, regionKey: "sancheong", regionLabel: "산청군", mode: "manage", openGroups: new Set(), openDetails: new Set(), nowMs: Date.parse("2026-10-16T00:00:00Z"), ...extra });
+}
+
+test("management separates full latest-normal windows from a missing requested month and annual background", () => {
+  const payload = managedFixture(), html = managementHtml(payload);
+  assert.match(html, /최근 13개월 확보<\/span><strong>1<small>\/2개 지표/);
+  assert.match(html, /확인 필요<\/span><strong>2<small>개 지표/);
+  assert.match(html, /13\/13개월/);
+  assert.match(html, /2026-09 자료 미확보/);
+  assert.match(html, /아직 공표되지 않은 자료/);
+  assert.match(html, /PUBLICATION_PENDING/);
+  assert.match(html, /지역 기초자료/);
+  const kosis = html.slice(html.indexOf('data-ra-group="kosis"'));
+  assert.match(kosis, /1\/2개 항목/);
+  assert.doesNotMatch(kosis.slice(0, kosis.indexOf('<details class="ra-method"')), /13개월|\/13/);
+  assert.match(html, /<td>0<\/td><td>정상 자료/);
+  assert.match(html, /2026-07<\/th><td>—<\/td><td>확인 실패<\/td><td>제공처 응답 지연/);
+});
+
+test("last provider failure stays visible after a later local rebuild; times have separate meanings", () => {
+  const html = managementHtml(managedFixture());
+  assert.match(html, /지역 자료 관리 갱신 시도/);
+  assert.match(html, /is-failed">확인 실패<\/span>2026-10-15 12:00 KST/);
+  assert.match(html, /외부 자료 요청 있음/);
+  assert.match(html, /원자료 최근 확인<\/dt><dd>2026-10-14 09:00 KST/);
+  assert.match(html, /결과 정리<\/dt><dd>2026-10-16 09:00 KST/);
+  assert.match(html, /다음 예약 · 한국시간<\/dt><dd>2026-10-17 09:00 KST/);
+  assert.doesNotMatch(html, /2026-10-15 10:00 KST|지표별 예약/);
+});
+
+test("management omits completed rebuild totals while retaining failures and other mode job summaries", () => {
+  const payload = managedFixture();
+  for (const status of ["completed", "unchanged", "superseded"]) {
+    payload.job = { ...payload.job, status };
+    assert.doesNotMatch(managementHtml(payload), /class="ra-job"/);
+  }
+  payload.job = { ...payload.job, status: "failed", errorCode: "NETWORK_ERROR" };
+  assert.match(managementHtml(payload), /class="ra-job"/);
+  payload.job = { ...payload.job, status: "completed" };
+  assert.match(renderCard({ ...payload, regionKey: "sancheong", regionLabel: "산청군", mode: "summary" }), /class="ra-job"/);
+});
+
+test("validation gaps override a normal-looking raw value and duplicate periods appear once", () => {
+  const payload = managedFixture(), metric = payload.snapshot.groups[1].metrics[0];
+  metric.rows.push({ ...metric.rows.find(row => row.period === "2026-09"), value: 99 });
+  payload.management = buildRegionalIndicatorManagement({ ...payload, now: new Date("2026-10-16T00:00:00Z") });
+  const html = managementHtml(payload);
+  assert.match(html, /2026-09<\/th><td>—<\/td><td>확인 실패<\/td><td>응답 형식 확인 필요/);
+  assert.doesNotMatch(html, /<td>99<\/td>/);
+  const search = html.slice(html.indexOf('data-ra-group="searchTrend"'), html.indexOf('data-ra-group="kosis"'));
+  assert.equal((search.match(/2026-09<\/th>/g) || []).length, 1);
+});
+
+test("unrecorded missing reasons are not described as publication pending or normal zero", () => {
+  const payload = managedFixture();
+  payload.snapshot.groups[0].latestRequestedStatus = "missing";
+  payload.snapshot.groups[0].latestRequestedErrorCode = "";
+  payload.management = buildRegionalIndicatorManagement({ ...payload, now: new Date("2026-10-16T00:00:00Z") });
+  const html = managementHtml(payload);
+  const visitors = html.slice(html.indexOf('data-ra-group="visitors"'), html.indexOf('data-ra-group="searchTrend"'));
+  assert.match(visitors, /미확보 사유 미확인/);
+  assert.doesNotMatch(visitors, /아직 공표되지 않은 자료/);
+});
+
+test("management gaps absent from raw rows still appear in the monthly detail table", () => {
+  const payload = managedFixture(), metric = payload.snapshot.groups[1].metrics[0];
+  metric.rows = metric.rows.filter(row => row.period !== "2026-06");
+  payload.management = buildRegionalIndicatorManagement({ ...payload, now: new Date("2026-10-16T00:00:00Z") });
+  const html = managementHtml(payload);
+  const search = html.slice(html.indexOf('data-ra-group="searchTrend"'), html.indexOf('data-ra-group="kosis"'));
+  assert.match(search, /2026-06<\/th><td>—<\/td><td>자료 없음<\/td><td>미확보 사유 미확인/);
+});
+
+test("past reservation, no previous attempt, and cached provider checks remain distinct", () => {
+  const payload = managedFixture();
+  payload.management.refresh.schedule.status = "due";
+  payload.management.refresh.schedule.nextRunAt = "2026-10-15T00:00:00Z";
+  payload.management.refresh.lastProvider = { status: "never", startedAt: null, finishedAt: null, networkAttempted: null };
+  let html = managementHtml(payload);
+  assert.match(html, /예정 시각 지남 · 상태 확인 필요/);
+  assert.match(html, /실행 기록 없음/);
+  assert.doesNotMatch(html, /외부 요청 여부 미기록/);
+  payload.management.refresh.lastProvider = { status: "completed", startedAt: "2026-10-16T00:00:00Z", networkAttempted: false };
+  html = managementHtml(payload);
+  assert.match(html, /외부 요청 없이 저장자료 사용/);
+  assert.doesNotMatch(html, /외부 자료 요청 있음/);
+});
+
+test("old responses keep the controls and visible limitations without inventing refresh attempts", () => {
+  const payload = managedFixture(); delete payload.management;
+  payload.job = { status: "completed", collectMissing: false, startedAt: "2026-10-16T00:00:00Z" };
+  const html = managementHtml(payload);
+  assert.match(html, /관리 상세 정보가 없는 이전 저장자료/);
+  assert.match(html, /실행 기록 없음/);
+  assert.match(html, /data-ra-action="build"/);
+  assert.match(html, /data-ra-action="refresh"/);
+  assert.match(html, /data-ra-policy-form/);
+  assert.match(html, /data-ra-detail="policy"><summary>/);
+});
+
+test("management scope is validated and disclosure state survives read-only status checks", async () => {
+  let payload = managedFixture();
+  const controller = createController({ cache: createCache(), fetchJson: async () => payload }), element = host();
+  await controller.mount(element, { regionKey: "sancheong", mode: "manage" });
+  element.listeners.get("toggle")({ target: { dataset: { raDetail: "policy" }, open: true } });
+  element.listeners.get("toggle")({ target: { dataset: { raDetail: "metric:visitors:daily" }, open: true } });
+  await controller.refresh(true);
+  assert.match(element.innerHTML, /data-ra-detail="policy" open/);
+  assert.match(element.innerHTML, /data-ra-detail="metric:visitors:daily" open/);
+  payload = { ...payload, management: { ...payload.management, scope: { ...payload.scope, regionKey: "foreign" } } };
+  assert.equal(await controller.refresh(true), false);
+  assert.match(element.innerHTML, /선택 지역과 다른 관리 정보/);
+  assert.equal(controller.state.management.scope.regionKey, "sancheong");
+});
+
+test("a stale flag alone does not claim a failed provider refresh", () => {
+  const payload = managedFixture();
+  payload.snapshot.groups[0].stale = true;
+  const html = renderCard({ snapshot: payload.snapshot, mode: "summary", regionKey: "sancheong" });
+  assert.match(html, /최신 자료인지 확인이 필요합니다/);
+  assert.doesNotMatch(html, /최근 갱신을 완료하지 못해/);
 });

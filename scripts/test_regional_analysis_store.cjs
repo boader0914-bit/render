@@ -38,9 +38,57 @@ test("GET is provider-free, calculation-free and write-free, including the first
   const before = await fileTree(dataDir);
   const result = await store.get(INPUT);
   assert.equal(result.status, "missing"); assert.equal(result.snapshot, null); assert.equal(result.job, null); assert.equal(result.policy.enabled, false);
+  assert.equal(result.management.schemaVersion, 1);
+  assert.equal(result.management.refresh.schedule.enabled, false);
+  assert.equal(result.management.refresh.lastProvider.status, "never");
+  assert.equal(result.management.refresh.lastProvider.jobId, null);
   await Promise.all(Array.from({ length: 10 }, () => store.get(INPUT)));
   assert.equal(calls, 0); assert.deepEqual(await fileTree(dataDir), before);
   await store.close(); assert.deepEqual(await fileTree(dataDir), before);
+});
+
+test("management keeps provider attempts visible after local rebuilds, failed refreshes and month rollover", async t => {
+  const dataDir = await directory(t);
+  let clock = new Date("2026-10-15T01:00:00Z"), fail = false, builds = 0;
+  const createOptions = { now: () => clock, buildSnapshot: async (scope, options) => {
+    builds++;
+    if (fail && options.collectMissing) throw Object.assign(Error("private provider failure"), { code: "NETWORK_ERROR" });
+    return { status: "ready", sourceFingerprint: "same-source", groups: [{ key: "visitors", label: "지역 방문자", periodType: "M", status: "ready",
+      requestedThrough: scope.month, metrics: [{ key: "averageDailyVisitors", label: "일평균 방문자", unit: "명", latestPeriod: scope.month, latestValue: 0,
+        rows: [{ period: scope.month, status: "observed", value: 0, retrievedAt: "2026-10-01T00:00:00Z" }], availableMonths: 1, expectedMonths: 13 }] }],
+      ...(options.collectMissing ? { refreshDiagnostics: { status: "completed", steps: [{ key: "visitors", status: "complete", networkAttempted: true }] } } : {}) };
+  } };
+  let store = create(dataDir, createOptions);
+  const provider = await store.request(INPUT, { collectMissing: true }); await store.waitForIdle();
+  const first = await store.get(INPUT), resultId = first.snapshot.resultId;
+  const providerFinishedAt = first.job.finishedAt;
+  clock = new Date("2026-10-15T02:00:00Z");
+  await store.request(INPUT, { collectMissing: false }); await store.waitForIdle();
+  let state = await store.get(INPUT);
+  assert.equal(state.snapshot.resultId, resultId);
+  assert.equal(state.management.refresh.current.kind, "local");
+  assert.equal(state.management.refresh.lastProvider.jobId, provider.job.id);
+  assert.equal(state.management.refresh.lastProvider.finishedAt, providerFinishedAt);
+  assert.equal(state.management.refresh.lastSuccessAt, providerFinishedAt);
+  assert.notEqual(state.job.finishedAt, providerFinishedAt);
+  fail = true; clock = new Date("2026-10-15T03:00:00Z");
+  const failed = await store.request(INPUT, { collectMissing: true }); await store.waitForIdle();
+  clock = new Date("2026-10-15T04:00:00Z");
+  await store.request(INPUT); await store.waitForIdle(); state = await store.get(INPUT);
+  assert.equal(state.management.refresh.lastProvider.jobId, failed.job.id);
+  assert.equal(state.management.refresh.lastProvider.status, "failed");
+  assert.equal(state.management.refresh.lastProvider.errorCode, "NETWORK_ERROR");
+  assert.equal(state.management.refresh.lastSuccessAt, providerFinishedAt);
+  assert.equal(state.snapshot.resultId, resultId);
+  const before = await fileTree(dataDir), buildCount = builds;
+  await store.get(INPUT); assert.deepEqual(await fileTree(dataDir), before); assert.equal(builds, buildCount);
+  await store.close();
+  clock = new Date("2026-11-01T00:00:00Z"); store = create(dataDir, createOptions);
+  state = await store.get(INPUT);
+  assert.equal(state.snapshot, null, "New rolling month does not pretend the previous snapshot is current");
+  assert.equal(state.management.refresh.lastProvider.jobId, failed.job.id, "Previous month's real attempt remains visible");
+  assert.equal((await store.get({ regionKey: "pocheon" })).management.refresh.lastProvider.status, "never", "No other region's refresh leaks into this region");
+  assert.equal(builds, buildCount); await store.close();
 });
 
 test("normal zero, 13-month defaults and distinct scopes survive restart without rebuilding", async t => {

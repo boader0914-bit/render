@@ -5,6 +5,7 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { buildRegionalIndicatorManagement } = require("./regional_indicator_management.cjs");
 
 const SCHEMA_VERSION = 1;
 const CALCULATION_VERSION = "regional-analysis-v1";
@@ -164,8 +165,18 @@ function createRegionalAnalysisStore({ dataDir, resolveRegion, buildSnapshot, no
     const scope = await normalize(input); await init();
     return locked(async () => {
       const { snapshot, errorCode } = await savedResult(keyFor(scope));
-      return { status: snapshot?.status || "missing", scope: copy(scope), snapshot: copy(snapshot), job: copy(latestJob(keyFor(scope))),
-        policy: copy(policyFor(scope, input)), storage: { errorCode: storeError || errorCode } };
+      const job = copy(latestJob(keyFor(scope))), policy = copy(policyFor(scope, input));
+      // Refresh attempts belong to the region, including the prior month's
+      // rolling scope. A later cache-only rebuild must not hide their outcome.
+      // Jobs are bounded in queue.json; this read never scans provider files.
+      const refreshHistory = directoryName === "regional_analysis" ? Object.values(state.jobs)
+        .filter(value => value.collectMissing === true && value.scope?.regionKey === scope.regionKey && value.scope?.months === scope.months)
+        .sort((a, b) => b.sequence - a.sequence).slice(0, 30).map(copy) : [];
+      const management = directoryName === "regional_analysis"
+        ? buildRegionalIndicatorManagement({ snapshot, scope, job, policy, refreshHistory, now: now() }) : null;
+      if (management?.result) management.result.storageErrorCode = storeError || errorCode;
+      return { status: snapshot?.status || "missing", scope: copy(scope), snapshot: copy(snapshot), job,
+        policy, storage: { errorCode: storeError || errorCode }, ...(management ? { management } : {}) };
     });
   }
   function prune() {

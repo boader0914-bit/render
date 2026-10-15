@@ -15,7 +15,7 @@ async function main() {
   await seedMonthlyReportFixture(directory);
   const listener = net.createServer().listen(0, "127.0.0.1"); await once(listener, "listening");
   const port = listener.address().port; await new Promise(resolve => listener.close(resolve));
-  const base = `http://127.0.0.1:${port}`, auditFile = path.join(directory, "audit.json"), preload = path.join(directory, "providers.cjs");
+  const base = `http://127.0.0.1:${port}`, auditFile = path.join(directory, "audit.json"), preload = path.join(directory, "providers.cjs"), qualityPreview = path.join(directory, "management-preview.flag");
   await fs.writeFile(preload, `
     const fs = require('node:fs'), calls = [];
     const record = key => { calls.push(key); fs.writeFileSync(${JSON.stringify(auditFile)}, JSON.stringify(calls)); };
@@ -38,6 +38,12 @@ async function main() {
           const series = Array.from({length:input.months},(_,j)=>({yearMonth:shift(end,j+1-input.months).replace('-',''),status:'complete',
             collectedAt:'2026-10-01T00:00:00Z',averageDailyVisitors:45048+j,visitorDays:1351440+j,stayOverall:75.2,spendOverall:60,
             values:{service:30,culture:40,visitor:50,spend:60,international:70}}));
+          if(fs.existsSync(${JSON.stringify(qualityPreview)})) {
+            if(i===0) series.at(-1).status='publication_pending';
+            if(i===1) Object.assign(series.at(-4),{status:'error',errorCode:'NETWORK_ERROR'});
+            if(i===2) Object.assign(series.at(-1),{status:'error',errorCode:'AUTH_ERROR'});
+            if(i===3) series.at(-6).values.international=null;
+          }
           return {period:{endYearMonth:input.endYearMonth},...(i===0?{regions:[{regionKey:input.regionKey,series}]}:{region:{regionKey:input.regionKey},series}),
             collection:{networkAttemptedMonths:input.collectMissing?1:0,operationCallsAttempted:input.collectMissing?2:0}};
         };
@@ -111,6 +117,7 @@ async function main() {
     assert.equal((await request("/api/regional-outlook/refresh", "", outlookScope)).status, 401);
     let cookie = await login();
     assert.equal((await request(query, cookie)).data.snapshot, null);
+    assert.equal((await request(query, cookie)).data.management.refresh.lastProvider.status, "never");
     assert.equal((await request(outlookQuery, cookie)).data.snapshot, null);
     assert.deepEqual(JSON.parse(await fs.readFile(auditFile)), []);
     const started = await request("/api/regional-analysis/refresh", cookie, { ...scope, collectMissing: false });
@@ -123,6 +130,11 @@ async function main() {
     }
     assert.equal(result.data.snapshot.status, "ready", JSON.stringify(result.data));
     assert.equal(result.data.snapshot.groups.length, 6); assert.equal(result.data.policy.enabled, false);
+    assert.equal(result.data.management.schemaVersion, 1);
+    assert.equal(result.data.management.groups.length, 6);
+    assert.equal(result.data.management.refresh.current.kind, "local");
+    assert.equal(result.data.management.refresh.lastProvider.status, "never");
+    assert.equal(result.data.management.refresh.schedule.enabled, false);
     // Saving regional indicators schedules a local outlook build. Wait for
     // that independent queue before asserting that foreground GETs do nothing.
     let outlook = await waitOutlook(cookie);
@@ -158,6 +170,9 @@ async function main() {
     }
     assert.equal(result.data.job.status, "completed", JSON.stringify(result.data));
     assert.equal(result.data.snapshot.status, "ready");
+    assert.equal(result.data.management.refresh.lastProvider.jobId, refreshed.data.job.id, "A source-change follow-up cannot hide the original provider attempt");
+    assert.equal(result.data.management.refresh.lastProvider.kind, "provider");
+    assert.equal(result.data.management.refresh.current.kind, result.data.job.collectMissing ? "provider" : "local");
     await waitOutlook(cookie);
     const afterRefresh = JSON.parse(await fs.readFile(auditFile));
     assert.ok(afterRefresh.includes("search:refresh"), "only explicit refresh invokes source preparation");
@@ -181,6 +196,7 @@ async function main() {
     assert.deepEqual(JSON.parse(await fs.readFile(auditFile)), [], "restart and GET do not rebuild sources");
     if (process.argv.includes("--preview")) {
       // Prepare the default completed-month view entirely from fixtures.
+      await fs.writeFile(qualityPreview, "synthetic quality states only");
       await request("/api/regional-analysis/refresh", cookie, { regionKey: scope.regionKey, months: 13, collectMissing: false });
       await waitOutlook(cookie);
       await request("/api/regional-outlook/refresh", cookie, { ...outlookScope, collectMissing: false });

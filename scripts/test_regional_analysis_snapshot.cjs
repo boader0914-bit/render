@@ -141,3 +141,98 @@ test("extended24 display scope may reuse a whole valid13 response when24 cache i
   assert.equal(search.metrics[0].latestValue, 40); assert.equal(search.availableMonths, 13);
   assert.ok(search.metrics[0].historyRows.every(row => row.value === 40));
 });
+
+test("requested-month evidence survives a latest-normal-ended13-month display window", async () => {
+  const f = fixture(), original = f.options.tourismCollector.collectVisitorHistory;
+  f.options.tourismCollector.collectVisitorHistory = async input => {
+    const result = await original(input);
+    result.regions[0].series.at(-1).reason = "period_not_closed";
+    return result;
+  };
+  const group = (await createRegionalAnalysisSnapshotBuilder(f.options)(scope)).groups[0], metric = group.metrics[0];
+  assert.equal(metric.rows.length, 13); assert.equal(metric.rows.at(-1).period, "2026-08");
+  assert.equal(metric.requestedPoint.period, "2026-09"); assert.equal(metric.requestedPoint.status, "publication_pending");
+  assert.equal(metric.requestedPoint.reasonCode, "PUBLICATION_PENDING"); assert.equal(group.latestRequestedStatus, "publication_pending");
+  assert.equal(group.latestRequestedPeriod, "202609");
+  assert.equal(metric.rows[0].value, 0); assert.equal(metric.rows[0].reasonCode, "");
+});
+
+test("known cache, HTTP and unknown reasons remain distinct without copying provider text", async () => {
+  const f = fixture(), original = f.options.tourismCollector.collectVisitorHistory;
+  f.options.tourismCollector.collectVisitorHistory = async input => {
+    const result = await original(input), list = result.regions[0].series;
+    Object.assign(list.at(-1), { status: "missing", value: 0, diagnostics: { httpStatus: 401, apiCode: "30", secret: "DO_NOT_COPY" } });
+    Object.assign(list.at(-2), { status: "missing", reason: "monthly_cache_missing" });
+    Object.assign(list.at(-3), { status: "missing", reason: "https://private.invalid/?key=DO_NOT_COPY" });
+    return result;
+  };
+  const result = await createRegionalAnalysisSnapshotBuilder(f.options)(scope), metric = result.groups[0].metrics[0];
+  assert.equal(metric.requestedPoint.status, "error"); assert.equal(metric.requestedPoint.reasonCode, "AUTH_ERROR");
+  assert.deepEqual(metric.requestedPoint.diagnostics, { httpStatus: 401, providerCode: "30" });
+  assert.doesNotMatch(JSON.stringify(result), /DO_NOT_COPY|private\.invalid/);
+  // Inspect retained extended history because the normal display ends before
+  // the missing tail, rather than pretending these months were successful.
+  f.options.includeHistory = true;
+  const history = (await createRegionalAnalysisSnapshotBuilder(f.options)(scope)).groups[0].metrics[0].historyRows;
+  assert.equal(history.find(row => row.period === "2026-08").reasonCode, "NOT_COLLECTED");
+  assert.equal(history.find(row => row.period === "2026-07").reasonCode, "UNRECORDED_REASON");
+});
+
+test("search authentication and thrown read failures are preserved on unavailable requested data", async () => {
+  const f = fixture();
+  f.options.searchTrendService.get = async input => ({ ...searchResponse(input, searchRows(input.months).map(row => ({ ...row, status: "missing", value: null })), "MISSING_KEY") });
+  let search = (await createRegionalAnalysisSnapshotBuilder(f.options)(scope)).groups.find(group => group.key === "searchTrend");
+  assert.equal(search.metrics[0].requestedPoint.reasonCode, "MISSING_KEY"); assert.equal(search.metrics[0].requestedPoint.status, "error");
+  f.options.searchTrendService.get = async () => { throw Object.assign(new Error("unsafe"), { code: "NETWORK_ERROR" }); };
+  search = (await createRegionalAnalysisSnapshotBuilder(f.options)(scope)).groups.find(group => group.key === "searchTrend");
+  assert.equal(search.metrics[0].requestedPoint.reasonCode, "NETWORK_ERROR"); assert.equal(search.metrics[0].requestedPoint.status, "error");
+});
+
+test("safe refresh diagnostics retain real attempts while receive timestamps do not cause new input fingerprints", async () => {
+  const f = fixture(); let finishedAt = "2026-10-15T01:00:00Z";
+  f.options.prepare = async () => ({ id: "prep", status: "partial", finishedAt, steps: [
+    { key: "visitors", status: "partial", networkAttempted: true, finishedAt, diagnostics: { httpStatus: 401, secret: "DO_NOT_COPY" },
+      periods: [{ requestedPeriod: "202609", status: "failed", errorCode: "AUTH_ERROR", finishedAt, secret: "DO_NOT_COPY" }] },
+    { key: "searchTrend", status: "failed", errorCode: "RAW_SECRET_DO_NOT_COPY", networkAttempted: false },
+    { key: "RAW_SECRET_DO_NOT_COPY", status: "failed" }
+  ] });
+  const build = createRegionalAnalysisSnapshotBuilder(f.options), first = await build(scope, { collectMissing: true });
+  assert.equal(first.refreshDiagnostics.steps.length, 2); assert.equal(first.refreshDiagnostics.steps[0].periods[0].errorCode, "AUTH_ERROR");
+  assert.equal(first.refreshDiagnostics.steps[1].errorCode, "PROVIDER_FAILED");
+  assert.doesNotMatch(JSON.stringify(first), /DO_NOT_COPY/);
+  finishedAt = "2026-10-15T02:00:00Z";
+  assert.equal((await build(scope, { collectMissing: true })).sourceFingerprint, first.sourceFingerprint);
+});
+
+test("a partial stay/spend bundle preserves explicitly normal individual metrics including real zero", async () => {
+  const f = fixture(), original = f.options.tourismCollector.collectDemandStrengthHistory;
+  f.options.tourismCollector.collectDemandStrengthHistory = async input => {
+    const result = await original(input);
+    Object.assign(result.series.at(-1), { status: "partial", stayStatus: "ok", stayOverall: 0, spendStatus: "error", spendOverall: null, spendReason: "timeout" });
+    return result;
+  };
+  const group = (await createRegionalAnalysisSnapshotBuilder(f.options)(scope)).groups.find(item => item.key === "demandStrength");
+  const stay = group.metrics.find(metric => metric.key === "stayOverall"), spend = group.metrics.find(metric => metric.key === "spendOverall");
+  assert.equal(stay.latestPeriod, "2026-09"); assert.equal(stay.latestValue, 0); assert.equal(stay.requestedPoint.status, "observed");
+  assert.equal(spend.requestedPoint.status, "error"); assert.equal(spend.requestedPoint.reasonCode, "TIMEOUT"); assert.equal(spend.requestedPoint.value, null);
+  assert.equal(group.latestRequestedStatus, "partial");
+});
+
+test("regional index operation evidence preserves valid overall values without accepting conflicting quality", async () => {
+  const f = fixture(), original = f.options.tourismCollector.collectResourceDemandHistory;
+  let conflict = false;
+  f.options.tourismCollector.collectResourceDemandHistory = async input => {
+    const result = await original(input);
+    Object.assign(result.series.at(-1), { status: "partial", values: { service: 0, culture: null }, operations: {
+      service: { status: "partial", overallCode: "ALL", overallValue: 0, metrics: [{ code: "ALL", value: 0 }], quality: { overallComplete: true, conflictCount: conflict ? 1 : 0 } },
+      culture: { status: "error", reason: "request_failed" }
+    } }); return result;
+  };
+  let group = (await createRegionalAnalysisSnapshotBuilder(f.options)(scope)).groups.find(item => item.key === "resourceDemand");
+  assert.equal(group.metrics[0].requestedPoint.status, "observed"); assert.equal(group.metrics[0].latestValue, 0);
+  assert.equal(group.metrics[1].requestedPoint.status, "error"); assert.equal(group.metrics[1].requestedPoint.reasonCode, "NETWORK_ERROR");
+  conflict = true;
+  group = (await createRegionalAnalysisSnapshotBuilder(f.options)(scope)).groups.find(item => item.key === "resourceDemand");
+  assert.equal(group.metrics[0].requestedPoint.status, "error"); assert.equal(group.metrics[0].requestedPoint.value, null);
+  assert.equal(group.metrics[0].requestedPoint.reasonCode, "INVALID_RESPONSE");
+});
