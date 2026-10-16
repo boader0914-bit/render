@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { buildIndustryAnalysis, createIndustryAnalysisService, compactIndustrySources } = require("./lib/industry_analysis.cjs");
+const { buildIndustryAnalysis, createIndustryAnalysisService, compactIndustrySources, industryCompanyReference } = require("./lib/industry_analysis.cjs");
 const { createIndustryAnalysisHttpHandler } = require("./lib/industry_analysis_http.cjs");
 const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs");
 const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
@@ -460,6 +460,26 @@ test("service resolves actual addresses, ignores search-region tags, includes Sa
   assert.equal(sacheon.context.sources[0].key, "visitors");
   const invalid = createIndustryAnalysisService({ sources, now: () => NOW, readContext: async () => ({ networkAttempted: true }) });
   await assert.rejects(invalid.analyze({ ...REQUEST, region: "kr_gyeongnam_sacheon" }), { code: "INDUSTRY_CONTEXT_MUST_BE_CACHE_ONLY" });
+});
+
+test("inactive region corrections cannot redirect report references or industry membership away from the actual address", async () => {
+  const inactive = { companyId: "inactive", primaryName: "모의 글램핑", lodgingTypes: ["글램핑"],
+    addresses: ["경기도 포천시 모의 주소"], manualCorrection: { active: false, regionOverride: "kr_gyeongnam_sacheon" } };
+  const active = { ...inactive, companyId: "active", manualCorrection: { active: true, regionOverride: "kr_gyeongnam_sacheon" } };
+  assert.equal(industryCompanyReference(inactive, REGIONS).industryRegionKey, "pocheon");
+  assert.equal(industryCompanyReference(active, REGIONS).industryRegionKey, "kr_gyeongnam_sacheon");
+  const fixture = source({ companies: [company("inactive"), company("active")], rankObservations: [rank("inactive"), rank("active")],
+    observations: [observation("inactive"), observation("active")] });
+  const rawCompanies = new Map([["inactive", inactive], ["active", active]]);
+  const sources = { options: async () => ({ regions: REGIONS, months: ["2026-08"], defaultMonth: "2026-08" }),
+    catalog: async () => ({ rawCompanies, regions: REGIONS }), loadSources: async () => structuredClone(fixture) };
+  const service = createIndustryAnalysisService({ sources, now: () => NOW });
+  const pocheon = await service.analyze({ ...REQUEST, region: "pocheon" });
+  const sacheon = await service.analyze({ ...REQUEST, region: "kr_gyeongnam_sacheon" });
+  assert.deepEqual(pocheon.companies.map(row => row.companyId), ["inactive"]);
+  assert.deepEqual(sacheon.companies.map(row => row.companyId), ["active"]);
+  assert.equal(pocheon.sources.regionPolicyVersion, "active-manual-region-v2");
+  await service.stop();
 });
 
 test("invalid input, cutoff, rank timestamp and capacity conflicts fail closed", () => {

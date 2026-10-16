@@ -66,7 +66,10 @@ function requestInput(input, now) {
   const cutoffDate = input.cutoffDate === undefined || input.cutoffDate === "" ? [kstDate(now), period.end].sort()[0] : dateKey(input.cutoffDate);
   if (!cutoffDate) throw fail("invalid_cutoff", "관측 기준일은 YYYY-MM-DD 형식의 유효한 날짜여야 합니다.");
   if (cutoffDate > kstDate(now)) throw fail("future_cutoff", "관측 기준일은 오늘 이후로 지정할 수 없습니다.");
-  return { type: input.type, month: input.month, targetId, cutoffDate };
+  if (input.industry !== undefined && (input.type !== "region" || !["glamping", "campground", "caravan", "pension", "poolVilla", "privateStay", "hotelResort", "motel"].includes(input.industry))) {
+    throw fail("invalid_industry_reference", "업종 참고 조건을 확인해 주세요.");
+  }
+  return { type: input.type, month: input.month, targetId, cutoffDate, ...(input.industry ? { industry: input.industry } : {}) };
 }
 function textInput(value, field, limit) {
   if (typeof value !== "string" || value.length > limit) throw fail(`invalid_${field}`, `${field === "title" ? "제목" : "메모"} 형식이나 길이를 확인해 주세요.`);
@@ -499,7 +502,7 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}) 
 }
 
 function createMonthlyReportService({ dataDir, loadSources, readSourceRevision = null, readReportContext = null,
-  readOutlookEvaluations = null, calculationVersion = "monthly-base-v1", now = () => new Date() } = {}) {
+  readOutlookEvaluations = null, readIndustryContext = null, calculationVersion = "monthly-base-v1", now = () => new Date() } = {}) {
   if (typeof dataDir !== "string" || !dataDir || typeof loadSources !== "function") throw new TypeError("dataDir and loadSources are required");
   const directory = path.resolve(dataDir);
   const previews = new Map();
@@ -587,7 +590,10 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
       // Regional background is refreshed from local saved data below on every
       // preview. It must not pin freshness labels to a materialized lodging sum.
       if (typeof readReportContext === "function") snapshot.context = null;
-      return { snapshot, regions: clone(source?.regions || []), timings };
+      const selectedIds = new Set(snapshot.companies.map(company => company.companyId));
+      const industryCompanies = (source?.companies || []).filter(company => selectedIds.has(company.companyId))
+        .map(({ companyId, industryIds, industryRegionKey }) => ({ companyId, industryIds: clone(industryIds || []), industryRegionKey: industryRegionKey || "" }));
+      return { snapshot, regions: clone(source?.regions || []), industryCompanies, timings };
     });
     buildQueue = task.then(() => undefined, () => undefined);
     return task;
@@ -628,6 +634,16 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
         snapshot.context = { ...(snapshot.context || { sources: [], warnings: [], networkAttempted: false }), outlookEvaluations: clone(evaluation) };
         snapshot.definitions.regionalOutlookEvaluation = "리포트 대상월을 예측한 발행 전망만 작성 시점에 저장된 사후 검증과 연결합니다. 검증자료 확인 시점은 예약 관측 마감일과 별도이며, 지역별 결과를 합산하거나 미확인을 0으로 바꾸지 않습니다. 발행 후에는 수정본에서만 새 검증을 반영합니다.";
         timings.evaluationMs = performance.now() - phase;
+      }
+      if (typeof readIndustryContext === "function") {
+        const phase = performance.now();
+        const industryRoster = new Map((result.value.industryCompanies || []).map(company => [company.companyId, company]));
+        const industryContextRoster = { ...roster, companies: roster.companies.map(company => ({ ...company, ...(industryRoster.get(company.companyId) || {}) })) };
+        const context = await readIndustryContext(clone(request), clone(industryContextRoster), { asOfAt: generatedAt });
+        if (context?.networkAttempted !== false) throw fail("MONTHLY_INDUSTRY_MUST_BE_SAVED_ONLY", "업종 참고 집계는 저장된 결과만 사용할 수 있습니다.", 503);
+        snapshot.industryBenchmarks = clone(context);
+        snapshot.definitions.industryBenchmarks = "같은 숙박월·유효 관측 마감일의 저장 업종 표본 집계를 별도로 연결합니다. 본문과 표본·예약률 평균 방식이 다르며 수량·매출에 더하지 않습니다. 미리보기 승인 후 고정하며 발행본을 자동 변경하지 않습니다.";
+        timings.industryContextMs = performance.now() - phase;
       }
       timings.totalMs = performance.now() - started;
       return { snapshot, generation: { cacheStatus: result.status, storage: result.storage, calculatedAt: result.calculatedAt,

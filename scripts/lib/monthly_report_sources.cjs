@@ -6,6 +6,7 @@ const path = require("node:path");
 const readline = require("node:readline");
 const { performance } = require("node:perf_hooks");
 const { monthlyReportKeywordMembership } = require("./monthly_reports.cjs");
+const { industryCompanyReference } = require("./industry_analysis.cjs");
 const { createSourceReadScheduler } = require("./source_read_scheduler.cjs");
 const { createMonthlyReportMaterializedCache } = require("./monthly_report_materialized_cache.cjs");
 
@@ -30,6 +31,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     if (!master.companies || typeof master.companies !== "object" || Array.isArray(master.companies)) throw sourceError();
     if (prepareCapacity && prepareCompanies) master.companies = await prepareCompanies(master.companies, { runs });
     const units = (regionMaster.units || []).filter(unit => unit.active && unit.selectable && ["local", "broad"].includes(unit.level));
+    const industryRegions = units.map(unit => ({ id: unit.regionKey, label: unit.fullName || unit.name, level: unit.level, aliases: unit.aliases }));
     const idIndex = new Map(units.flatMap(unit => [unit.regionKey, unit.regionId].filter(Boolean).map(key => [key, unit])));
     const aliases = units.flatMap(unit => [...new Set([unit.fullName, unit.name, ...(unit.aliases || [])].map(token).filter(Boolean))].map(alias => ({ alias, unit })));
     function exactRegion(value, address = false) {
@@ -61,6 +63,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
         }
       }
       return { companyId: company.companyId, primaryName: company.primaryName || company.companyId,
+        ...industryCompanyReference(company, industryRegions),
         regionKey: region?.regionKey || "", regionKeys: [...new Set([region?.regionKey, region?.provinceRegionKey].filter(Boolean))],
         regionLabel: region?.fullName || "지역 확인 전", keywords: Object.values(company.keywords || {}).map(item => item.keyword).filter(Boolean),
         placeIds: [...new Set((company.placeIds || []).map(value => String(value).trim()).filter(Boolean))],

@@ -41150,7 +41150,12 @@ function renderIndustryHome() {
       legacyHtml,
       accountKey,
       isVisible: () => state.activeTab === "industryHome",
-      isAuthorized: () => isAdminRole() && (state.session?.username || "admin") === accountKey
+      isAuthorized: () => isAdminRole() && (state.session?.username || "admin") === accountKey,
+      onSend: context => {
+        if (!isAdminRole() || state.activeTab !== "industryHome" || (state.session?.username || "admin") !== accountKey) return;
+        closeSheet();
+        setActiveTab("monthlyReports", { monthlyReportContext: context });
+      }
     });
   } else {
     els.industryHomeDashboard.innerHTML = legacyHtml;

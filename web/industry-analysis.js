@@ -18,6 +18,21 @@
   const timeLabel = value => value && Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", dateStyle: "short", timeStyle: "short" }).format(new Date(value)) : "확인 전";
   const companyDbUrl = companyId => typeof companyId === "string" && companyId.trim() ? `/admin?adminCompany=${encodeURIComponent(companyId.trim())}#admin-db-company=${encodeURIComponent(companyId.trim())}` : "";
   const companyDbLink = row => companyDbUrl(row.companyId) ? `<a class="ia-text-button ia-company-link" href="${escapeHtml(companyDbUrl(row.companyId))}" aria-label="${escapeHtml(row.primaryName || "업체")} 업체 DB 열기">업체 DB 열기 ↗</a>` : '<span class="ia-note">업체 DB 연결 정보 없음</span>';
+  function industryReportContext(state) {
+    const request = state.data?.request, storage = state.storage || state.data?.storage;
+    if (state.loading || state.rebuilding || state.error || !state.data?.summary || storage?.status !== "ready"
+      || storage.stale || !request || request.region === "all" || !request.region
+      || !/^\d{4}-\d{2}-\d{2}$/.test(request.cutoffDate || "")
+      || ["industry", "month", "region"].some(key => request[key] !== state.selection?.[key])) return null;
+    return { type: "region", targetId: request.region, month: request.month, cutoffDate: request.cutoffDate, industry: request.industry };
+  }
+  function reportLink(state) {
+    const context = industryReportContext(state);
+    const detail = state.selection?.region === "all" ? "지역을 선택하면 월간 리포트에 업종 참고 집계를 연결할 수 있습니다."
+      : context ? "선택한 업종·지역·월·관측 기준일을 가져옵니다. 지역 리포트 본문과 업종 표본은 별도로 표시합니다."
+        : "현재 조건의 정상 저장 집계가 준비되면 연결할 수 있습니다.";
+    return `<section class="ia-card ia-report-link"><div class="ia-section-head"><div><h3>월간 리포트 연결</h3><p class="ia-note">${detail}</p></div><button type="button" class="ia-refresh" data-ia-action="monthly-report"${context ? "" : " disabled"}>월간 리포트에 연결 ↗</button></div></section>`;
+  }
   function capacityLabel(row) {
     const basis = row.capacityBasis || {}, source = basis.source || row.capacitySource;
     return (typeof basis.label === "string" ? basis.label : "") || { manual: "관리자 검수값", verified: "관리자 검수값", db_review: "관리자 검수값", observed_max: "최대 관측값 · 미검수", observed_locked: "최대 관측값 고정 · 미검수", observed_max_locked: "최대 관측값 고정 · 미검수", unverified: "미검수", unknown: "객실 기준 확인 필요" }[source]
@@ -35,7 +50,8 @@
       : status === "failed" ? hasSnapshot ? "새 집계에 실패하여 마지막 정상 집계를 표시합니다." : "사용할 정상 집계가 아직 없습니다. 저장 자료로 다시 준비할 수 있습니다."
         : hasSnapshot ? "새 집계를 준비하는 동안 마지막 정상 집계를 표시합니다." : "저장된 자료를 준비하고 있습니다. 첫 집계는 몇 분 걸릴 수 있습니다.";
     const cutoff = state.data?.request?.cutoffDate || state.storageRequest?.cutoffDate;
-    return `<section class="ia-storage-status${status === "failed" ? " ia-storage-failed" : ""}" aria-label="저장 집계 상태"><div class="ia-storage-heading"><strong role="status">${escapeHtml(labels[status] || "상태 확인 필요")}</strong>${state.loading ? '<span>상태 확인 중</span>' : ""}</div><p>${escapeHtml(description)}</p><div class="ia-storage-times">${hasSnapshot ? `<span>마지막 정상 집계 <b>${escapeHtml(timeLabel(storage.calculatedAt))}</b></span>` : ""}${cutoff ? `<span>관측 기준일 <b>${escapeHtml(dateLabel(cutoff))}</b></span>` : ""}</div>${status === "failed" ? `<div class="ia-storage-actions">${state.rebuildNeedsCheck ? '<span>요청 결과를 확인하지 못했습니다. 위의 상태 확인 후 다시 준비해 주세요.</span>' : `<button type="button" data-ia-action="rebuild"${state.loading || state.rebuilding ? " disabled" : ""}>${state.rebuilding ? "집계 준비 요청 중" : "저장 자료로 집계 다시 준비"}</button>`}<small>저장된 자료만 다시 계산합니다. 새로운 외부 수집은 시작하지 않습니다.</small></div>` : ""}</section>`;
+    const evidence = hasSnapshot ? `<details class="ia-disclosure ia-storage-evidence"><summary>저장 집계 근거</summary><div class="ia-method"><p>저장 집계 번호 <b>${escapeHtml(storage.key || "확인 전")}</b></p><p>결과 버전 <b>${escapeHtml(String(storage.resultVersion ?? storage.resultRevision ?? "확인 전"))}</b> · 계산 버전 <b>${escapeHtml(storage.calculationVersion || "확인 전")}</b></p><p>원본 버전 <b>${escapeHtml(storage.sourceRevision || "확인 전")}</b></p></div></details>` : "";
+    return `<section class="ia-storage-status${status === "failed" ? " ia-storage-failed" : ""}" aria-label="저장 집계 상태"><div class="ia-storage-heading"><strong role="status">${escapeHtml(labels[status] || "상태 확인 필요")}</strong>${state.loading ? '<span>상태 확인 중</span>' : ""}</div><p>${escapeHtml(description)}</p><div class="ia-storage-times">${hasSnapshot ? `<span>마지막 정상 집계 <b>${escapeHtml(timeLabel(storage.calculatedAt))}</b></span>` : ""}${cutoff ? `<span>관측 기준일 <b>${escapeHtml(dateLabel(cutoff))}</b></span>` : ""}</div>${evidence}${status === "failed" ? `<div class="ia-storage-actions">${state.rebuildNeedsCheck ? '<span>요청 결과를 확인하지 못했습니다. 위의 상태 확인 후 다시 준비해 주세요.</span>' : `<button type="button" data-ia-action="rebuild"${state.loading || state.rebuilding ? " disabled" : ""}>${state.rebuilding ? "집계 준비 요청 중" : "저장 자료로 집계 다시 준비"}</button>`}<small>저장된 자료만 다시 계산합니다. 새로운 외부 수집은 시작하지 않습니다.</small></div>` : ""}</section>`;
   }
 
   function empty(title, detail, retry = false) {
@@ -207,7 +223,7 @@
     if (sourceWarnings.length) body += `<details class="ia-disclosure ia-source-warnings"><summary>저장 자료 전체 참고 <span>${sourceWarnings.length}건</span></summary><p class="ia-note">전체 저장 자료에서 확인한 경고입니다. 현재 선택한 업종·지역의 표본 밖에 있는 자료도 포함할 수 있습니다.</p><ul>${sourceWarnings.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul></details>`;
     const candidateLabels = regions.filter(row => row.indicatorCandidate).map(row => row.label);
     const metricDefinitions = [["reservationRate", "추정예약률"], ["averageBookedPrice", "예약 단위당 추정금액"], ["revenuePerAvailableUnitDay", "보유 단위당 하루 추정매출"], ["cohort", "순위 표본"]].filter(([key]) => data?.definitions?.[key]).map(([key, label]) => `<p><b>${label}:</b> ${escapeHtml(data.definitions[key])}</p>`).join("");
-    return `<div class="industry-analysis"><header class="ia-header"><div><span class="ia-kicker">INDUSTRY OBSERVATORY</span><h2>업종별 숙박 흐름</h2><p>지역의 차이부터 예약의 흐름까지, 저장된 관측 자료로 살펴보세요.</p></div><span class="ia-cohort">네이버 플레이스 <strong>1~20위</strong></span></header><form class="ia-filters" aria-label="업종분석 조건"><label>업종<select data-ia-filter="industry">${optionsHtml(industries, selection.industry)}</select></label><label>숙박월<select data-ia-filter="month">${months.length ? optionsHtml(months.map(id => ({ id, label: monthLabel(id) })), selection.month) : '<option value="">저장된 기간 없음</option>'}</select></label><label>지역<select data-ia-filter="region">${optionsHtml([{ id: "all", label: "전체 관측 지역" }, ...regions.filter(row => row.id !== "all")], selection.region)}</select></label><button type="button" class="ia-refresh" data-ia-action="retry" aria-label="저장 자료 다시 조회"${state.loading ? " disabled" : ""}>${state.loading ? "조회 중" : "상태 확인"} <span aria-hidden="true">↻</span></button></form><div class="ia-scope"><span><b>${escapeHtml(industryName)}</b> · ${escapeHtml(selectedRegion)} · ${escapeHtml(monthLabel(selection.month))}</span><span>기간 중 1~20위 관측 업체 · 전체 시장 대표 아님</span></div>${storageStatus(state)}<nav class="ia-tabs" aria-label="업종분석 보기">${TABS.map(([id, label]) => `<button type="button" data-ia-tab="${id}" aria-pressed="${state.tab === id}">${label}</button>`).join("")}</nav><div class="ia-content" aria-busy="${Boolean(state.loading)}">${body}</div>${warnings.length ? `<details class="ia-disclosure"><summary>자료 해석 시 확인할 점 <span>${warnings.length}건</span></summary><ul>${warnings.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul></details>` : ""}<details class="ia-disclosure"><summary>지표 기준과 수집 구상</summary><div class="ia-method">${metricDefinitions}<p><b>대상:</b> 검색 시점의 네이버 플레이스 1~20위 업체. 여러 검색어의 동일 업체는 중복을 제거합니다.</p><p><b>지역:</b> 업체의 실제 주소지를 사용합니다. 복합시설은 해당하는 각 업종에 포함될 수 있습니다.</p><p><b>결측:</b> 미관측 값은 ‘—’로 표시합니다. 공개예약은 초록색, 타채널 추정은 보라색입니다.</p><p><b>규모와 성과등급:</b> 현재 구분을 보류합니다. 규모구간은 추후 업종별로 정의합니다.</p>${candidateLabels.length ? `<p><b>지역 지표 후보:</b> ${escapeHtml(candidateLabels.join(" · "))}. 후보 등록은 자료 확보를 뜻하지 않습니다.</p>` : ""}<p>정기수집 구성은 계획으로 보관하며, 이 화면은 저장 자료만 조회합니다.</p></div></details>${state.legacyHtml ? `<details class="ia-disclosure ia-legacy"${state.legacyOpen ? " open" : ""}><summary>기존 키워드별 저장 분석 열기</summary><div class="ia-legacy-content">${state.legacyHtml}</div></details>` : ""}</div>`;
+    return `<div class="industry-analysis"><header class="ia-header"><div><span class="ia-kicker">INDUSTRY OBSERVATORY</span><h2>업종별 숙박 흐름</h2><p>지역의 차이부터 예약의 흐름까지, 저장된 관측 자료로 살펴보세요.</p></div><span class="ia-cohort">네이버 플레이스 <strong>1~20위</strong></span></header><form class="ia-filters" aria-label="업종분석 조건"><label>업종<select data-ia-filter="industry">${optionsHtml(industries, selection.industry)}</select></label><label>숙박월<select data-ia-filter="month">${months.length ? optionsHtml(months.map(id => ({ id, label: monthLabel(id) })), selection.month) : '<option value="">저장된 기간 없음</option>'}</select></label><label>지역<select data-ia-filter="region">${optionsHtml([{ id: "all", label: "전체 관측 지역" }, ...regions.filter(row => row.id !== "all")], selection.region)}</select></label><button type="button" class="ia-refresh" data-ia-action="retry" aria-label="저장 자료 다시 조회"${state.loading ? " disabled" : ""}>${state.loading ? "조회 중" : "상태 확인"} <span aria-hidden="true">↻</span></button></form><div class="ia-scope"><span><b>${escapeHtml(industryName)}</b> · ${escapeHtml(selectedRegion)} · ${escapeHtml(monthLabel(selection.month))}</span><span>기간 중 1~20위 관측 업체 · 전체 시장 대표 아님</span></div>${storageStatus(state)}${reportLink(state)}<nav class="ia-tabs" aria-label="업종분석 보기">${TABS.map(([id, label]) => `<button type="button" data-ia-tab="${id}" aria-pressed="${state.tab === id}">${label}</button>`).join("")}</nav><div class="ia-content" aria-busy="${Boolean(state.loading)}">${body}</div>${warnings.length ? `<details class="ia-disclosure"><summary>자료 해석 시 확인할 점 <span>${warnings.length}건</span></summary><ul>${warnings.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul></details>` : ""}<details class="ia-disclosure"><summary>지표 기준과 수집 구상</summary><div class="ia-method">${metricDefinitions}<p><b>대상:</b> 검색 시점의 네이버 플레이스 1~20위 업체. 여러 검색어의 동일 업체는 중복을 제거합니다.</p><p><b>지역:</b> 업체의 실제 주소지를 사용합니다. 복합시설은 해당하는 각 업종에 포함될 수 있습니다.</p><p><b>결측:</b> 미관측 값은 ‘—’로 표시합니다. 공개예약은 초록색, 타채널 추정은 보라색입니다.</p><p><b>규모와 성과등급:</b> 현재 구분을 보류합니다. 규모구간은 추후 업종별로 정의합니다.</p>${candidateLabels.length ? `<p><b>지역 지표 후보:</b> ${escapeHtml(candidateLabels.join(" · "))}. 후보 등록은 자료 확보를 뜻하지 않습니다.</p>` : ""}<p>정기수집 구성은 계획으로 보관하며, 이 화면은 저장 자료만 조회합니다.</p></div></details>${state.legacyHtml ? `<details class="ia-disclosure ia-legacy"${state.legacyOpen ? " open" : ""}><summary>기존 키워드별 저장 분석 열기</summary><div class="ia-legacy-content">${state.legacyHtml}</div></details>` : ""}</div>`;
   }
 
   async function requestJson(url, options = {}) {
@@ -228,7 +244,7 @@
       selection: { industry: "glamping", month: "", region: "all" }, tab: "overview", loading: false,
       rebuilding: false, rebuildNeedsCheck: false, error: "", legacyHtml: "", legacyOpen: false,
       reviewFilters: { company: "", issue: "all", date: "" }, reviewPage: 0, reviewOpen: {}, reviewDateOpen: {} };
-    let container, revision = 0, destroyed = false, paused = false, timer = null, activeDataKey = "", dataTask = null, reviewComposing = false, deferredRender = false;
+    let container, revision = 0, destroyed = false, paused = false, timer = null, activeDataKey = "", dataTask = null, reviewComposing = false, deferredRender = false, sendReport = null;
     const pendingData = new Map(), pendingRebuilds = new Set();
     const authorized = () => !destroyed && isAuthorized();
     const visible = () => authorized() && !paused && isVisible() && container?.isConnected !== false && !container?.closest?.("[hidden]");
@@ -359,6 +375,10 @@
       if (!action || action.disabled || !visible()) return;
       if (action.dataset.iaAction === "retry") void (state.catalog ? loadData() : loadCatalog());
       if (action.dataset.iaAction === "rebuild") void rebuild();
+      if (action.dataset.iaAction === "monthly-report") {
+        const context = industryReportContext(state);
+        if (context && sendReport) sendReport(context);
+      }
       if (action.dataset.iaTab) { selectTab(action.dataset.iaTab); container.querySelector?.(`[data-ia-tab="${state.tab}"]`)?.focus({ preventScroll: true }); }
       if (action.dataset.iaRegion) { state.tab = "overview"; void input("region", action.dataset.iaRegion); }
       if (action.dataset.iaReviewDate !== undefined) {
@@ -387,6 +407,7 @@
     function mount(element, context = {}) {
       const first = !container, resume = paused;
       container = element; paused = false; state.legacyHtml = context.legacyHtml || "";
+      sendReport = typeof context.onSend === "function" ? context.onSend : null;
       if (first) { container.addEventListener("click", click); container.addEventListener("change", change); container.addEventListener("input", reviewTextInput); container.addEventListener("compositionstart", reviewCompositionStart); container.addEventListener("compositionend", reviewCompositionEnd); container.addEventListener("toggle", toggle, true); container.addEventListener("submit", submit); }
       render();
       if (first || !state.catalog) return loadCatalog();
@@ -397,7 +418,7 @@
   }
 
   const mounted = new WeakMap();
-  const exported = { createController, renderDashboard, dailyChart, percent, money, count,
+  const exported = { createController, renderDashboard, dailyChart, percent, money, count, industryReportContext,
     mount(element, context = {}) {
       let record = mounted.get(element);
       if (record && record.accountKey !== context.accountKey) { record.controller.destroy(); record = null; }

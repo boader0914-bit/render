@@ -32,6 +32,7 @@ const { aggregateFields: companyBootstrapAggregateFields, compactCompanyInventor
 const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
 const { createMonthlyReportContext } = require("./lib/monthly_report_context.cjs");
 const { createMonthlyReportOutlookEvaluation } = require("./lib/monthly_report_outlook_evaluation.cjs");
+const { createMonthlyReportIndustryContext } = require("./lib/monthly_report_industry_context.cjs");
 const { createMonthlyReportHttpHandler } = require("./lib/monthly_report_http.cjs");
 const { createRegionalReportPreparation } = require("./lib/regional_report_preparation.cjs");
 const { createRegionalSearchTrendService } = require("./lib/regional_search_trends.cjs");
@@ -587,7 +588,8 @@ const monthlyReportService = createMonthlyReportService({
   calculationVersion: crypto.createHash("sha256").update(["glamping_app_server.cjs", "inventory_estimation.cjs",
     ...fs.readdirSync(path.join(__dirname, "lib")).filter(name => name.endsWith(".cjs")).sort().map(name => `lib/${name}`)]
     .map(name => `${name}:${crypto.createHash("sha256").update(fs.readFileSync(path.join(__dirname, name))).digest("hex")}`).join("\n")).digest("hex"),
-  readOutlookEvaluations: createMonthlyReportOutlookEvaluation({ evaluationService: regionalOutlookService.validation })
+  readOutlookEvaluations: createMonthlyReportOutlookEvaluation({ evaluationService: regionalOutlookService.validation }),
+  readIndustryContext: createMonthlyReportIndustryContext({ industryService: industryAnalysisService })
 });
 const handleMonthlyReport = createMonthlyReportHttpHandler({
   service: monthlyReportService, sources: monthlyReportSources, renderPdf: renderMonthlyReportPdf,

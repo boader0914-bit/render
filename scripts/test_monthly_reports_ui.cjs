@@ -747,3 +747,82 @@ test("outlook source strings and reason labels are escaped and do not introduce 
   assert.doesNotMatch(outlook, /<img|onerror="bad|data-mr-action="(?:collect|validate|refresh|build)"/);
   assert.match(outlook, /&lt;img/);
 });
+
+function industryBenchmarkFixture() {
+  return { schemaVersion: 1, month: "2026-08", cutoffDate: "2026-08-31", asOfAt: "2026-10-17T01:00:00Z", networkAttempted: false, status: "partial", warnings: [], entries: [
+    { request: { industry: "glamping", region: "sancheong", month: "2026-08", cutoffDate: "2026-08-31" }, industry: { id: "glamping", label: "글램핑" }, regionLabel: "경남 산청군", status: "ready", summary: { companyCount: 2, observedCompanies: 1, coveredCompanyDays: 1, expectedCompanyDays: 62, coverageRate: 1 / 62, reservationRate: 0, publicBookings: 0, phoneBookings: 0, publicRevenue: 0, phoneRevenue: 0, estimatedRevenue: 0, revenuePartial: true }, storage: { key: "saved-key", resultVersion: "result-v2", calculationVersion: "industry-v1", sourceRevision: "source-7", resultRevision: 2, calculatedAt: "2026-10-16T01:00:00Z" }, cohort: { label: "기간 중 네이버 플레이스 1~20위 관측 업체" }, capacityBasis: { policy: "관리자 검수값 우선, 없으면 고정 최대 관측값", reviewedCompanyCount: 1, unreviewedCompanyCount: 1, missingCapacityCompanyCount: 0 }, definitions: { reservationRate: "업체와 날짜 동일 비중" }, warnings: [] },
+    { request: { industry: "pension", region: "sancheong", month: "2026-08", cutoffDate: "2026-08-31" }, industry: { id: "pension", label: "펜션" }, regionLabel: "경남 산청군", status: "queued", reasonCode: "INDUSTRY_SNAPSHOT_PENDING", summary: null, storage: {}, warnings: [] }
+  ] };
+}
+
+test("industry benchmarks are a folded separate sample with equal-weight rates and saved provenance", () => {
+  const benchmarks = industryBenchmarkFixture();
+  const markup = ui.renderSnapshot({ ...snapshot, industryBenchmarks: benchmarks });
+  assert.match(markup, /<details class="mr-fold mr-report-section" data-mr-section="industry-benchmarks"><summary>업종 참고 집계/);
+  for (const text of ["동일 비중 평균 예약률", "본문 예약률은 예약 수량 ÷ 공급 수량", "대상 업체가 다르므로 매출을 더하거나", "2026-08-31", "result-v2", "industry-v1", "source-7", "saved-key", "1~20위", "관측 추정매출 소계"]) assert.ok(markup.includes(text), text);
+  const cards = markup.match(/<section class="mr-context-source mr-industry-benchmark">[^]*?<\/section>/g);
+  assert.match(cards[0], />0%<|>0객실<|>0원</);
+  assert.match(cards[1], /집계 대기/);
+  assert.match(cards[1], /INDUSTRY_SNAPSHOT_PENDING/);
+  assert.match(cards[0], /객실 기준: 관리자 검수값 우선[^]*?검수 1 \/ 미검수 1 \/ 객실 수 미확인 0곳/);
+  assert.doesNotMatch(cards[1], />0(?:%|원|객실|곳)</);
+  assert.doesNotMatch(ui.renderSnapshot(snapshot), /data-mr-section="industry-benchmarks"/, "old snapshots retain their original body");
+  benchmarks.entries[0].status = "failed"; benchmarks.entries[0].storage.stale = true;
+  assert.match(ui.renderSnapshot({ industryBenchmarks: benchmarks }), /최근 집계 실패[^]*?마지막 정상 저장본/);
+});
+
+test("industry benchmark strings are escaped and no external collect or rebuild controls are added", () => {
+  const benchmarks = industryBenchmarkFixture(), bad = '<img src=x onerror="bad()">';
+  const row = benchmarks.entries[0]; row.regionLabel = bad; row.storage.sourceRevision = bad; row.industry.label = bad; row.reasonCode = bad; row.warnings = [bad]; row.definitions = { rate: bad };
+  const markup = ui.renderSnapshot({ industryBenchmarks: benchmarks });
+  const section = markup.slice(markup.indexOf('data-mr-section="industry-benchmarks"'));
+  assert.match(section, /&lt;img/);
+  assert.doesNotMatch(section, /<img|onerror="bad|data-mr-action="(?:collect|rebuild|refresh)"/);
+});
+
+test("industry handoff retains optional industry only while its report conditions stay the same", async () => {
+  const f = fixture(), context = { type: "region", targetId: "kr_gyeongnam_sancheong", month: "2026-08", cutoffDate: "2026-08-26", industry: "glamping" };
+  await f.controller.open(context);
+  assert.deepEqual(f.controller.state.form, context);
+  assert.match(f.container.innerHTML, /data-mr-industry-selection>참고 업종: 글램핑/);
+  f.controller.input("cutoffDate", context.cutoffDate);
+  f.controller.input("month", context.month); f.controller.input("type", context.type); f.controller.input("targetId", context.targetId);
+  assert.equal(f.controller.state.form.industry, "glamping");
+  assert.equal(f.controller.state.form.cutoffDate, context.cutoffDate);
+  await f.controller.action("preview");
+  assert.deepEqual(f.calls.find(call => call.url === "/preview").body, context);
+  for (const [name, value] of [["cutoffDate", "2026-08-25"], ["month", "2026-07"], ["targetId", "other"], ["type", "company"]]) {
+    await f.controller.open(context);
+    f.controller.input(name, value);
+    assert.equal(f.controller.state.form.industry, undefined, name);
+  }
+  await f.controller.open(context);
+  const plain = { ...context }; delete plain.industry;
+  await f.controller.open(plain);
+  assert.equal(f.controller.state.form.industry, undefined, "a plain new handoff clears an earlier industry");
+  await f.controller.open({ ...context, industry: "unknown" });
+  assert.match(f.controller.state.error, /参考|참고 업종/);
+  assert.equal(f.controller.state.form.industry, undefined);
+  assert.equal(f.controller.state.preview, null);
+});
+
+test("latest industry handoff waits for a pending preview and keeps the newest industry's conditions", async () => {
+  const response = deferred(), calls = [];
+  const container = { innerHTML: "", addEventListener() {}, querySelector() { return null; } };
+  const c = ui.createController(container, async (url, method, body) => {
+    calls.push({ url, body });
+    if (url === "/options") return { companies: [{ id: "c1", label: "테스트 숙소" }], regions: [{ id: "sancheong", label: "산청" }, { id: "pocheon", label: "포천" }], months: ["2026-08"], defaultMonth: "2026-08" };
+    if (url === "") return { reports: [] };
+    if (url === "/preview") return response.promise;
+  });
+  await c.open({ type: "company", targetId: "c1" });
+  const preview = c.action("preview");
+  const first = c.open({ type: "region", targetId: "sancheong", month: "2026-08", cutoffDate: "2026-08-25", industry: "glamping" });
+  const latest = { type: "region", targetId: "pocheon", month: "2026-08", cutoffDate: "2026-08-26", industry: "pension" };
+  const last = c.open(latest);
+  response.resolve(structuredClone(snapshot)); await Promise.all([preview, first, last]);
+  assert.deepEqual(c.state.form, latest);
+  assert.equal(c.state.preview, null);
+  assert.equal(c.state.previewToken, null);
+  assert.equal(c.state.busy, "");
+});

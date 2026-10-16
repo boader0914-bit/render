@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createController, renderDashboard, dailyChart, percent, money, count } = require("../web/industry-analysis.js");
+const { createController, renderDashboard, dailyChart, percent, money, count, industryReportContext } = require("../web/industry-analysis.js");
 
 const catalog = { industries: [{ id: "glamping", label: "글램핑", unitLabel: "객실/동" }, { id: "poolVilla", label: "풀빌라", unitLabel: "독채/객실" }], months: ["2026-10", "2026-09"], defaultMonth: "2026-10", defaultIndustry: "glamping", regions: [{ id: "sacheon", label: "경남 사천시", indicatorCandidate: true }] };
 const summary = { companyCount: 2, observedCompanies: 1, coveredCompanyDays: 1, expectedCompanyDays: 62, coverageRate: 1 / 62, reservationRate: 0, averageBookedPrice: null, revenuePerAvailableUnitDay: 0, estimatedRevenue: 0, publicRevenue: 0, phoneRevenue: 0, publicBookings: 0, phoneBookings: 0 };
@@ -44,7 +44,7 @@ test("top twenty, regional candidates and deferred dimensions have no inactive c
   assert.match(html, /네이버 플레이스 <strong>1~20위/);
   assert.match(html, /경남 사천시/);
   assert.match(html, /규모구간은 추후 업종별로 정의/);
-  assert.doesNotMatch(html, /data-ia-filter="(?:scale|tier|performance)"|<option[^>]*>상위|disabled/);
+  assert.doesNotMatch(html.match(/<form class="ia-filters"[^]*?<\/form>/)[0], /data-ia-filter="(?:scale|tier|performance)"|<option[^>]*>상위|disabled/);
   assert.equal((html.match(/data-ia-filter=/g) || []).length, 3);
 });
 
@@ -521,4 +521,46 @@ test("mismatched stored snapshot conditions cannot replace a valid selected snap
   assert.equal(controller.state.data.request.month, "2026-10");
   assert.match(element.innerHTML, /마지막 정상 집계를 표시합니다/);
   controller.destroy();
+});
+
+test("industry report handoff requires a matching ready saved regional snapshot", () => {
+  const ready = stored("ready", { region: "sacheon", stale: false });
+  const view = state({ data: ready, storage: ready.storage, selection: { industry: "glamping", month: "2026-10", region: "sacheon" } });
+  assert.deepEqual(industryReportContext(view), { type: "region", targetId: "sacheon", month: "2026-10", cutoffDate: "2026-10-11", industry: "glamping" });
+  assert.match(renderDashboard(view), /data-ia-action="monthly-report">월간 리포트에 연결/);
+  for (const change of [{ loading: true }, { rebuilding: true }, { error: "조회 실패" }, { data: null }, { selection: { ...view.selection, region: "all" } }, { storage: { ...ready.storage, stale: true } }, { storage: { ...ready.storage, status: "failed" } }]) {
+    const blocked = { ...view, ...change };
+    assert.equal(industryReportContext(blocked), null);
+    assert.match(renderDashboard(blocked), /data-ia-action="monthly-report" disabled/);
+  }
+  assert.match(renderDashboard(state()), /지역을 선택하면 월간 리포트/);
+});
+
+test("industry report click preserves all conditions and cannot send after pause or role revocation", async () => {
+  let authorized = true;
+  const sent = [], element = host();
+  const c = createController({ isAuthorized: () => authorized, request: async url => url.endsWith("/options") ? catalog : stored("ready", { region: new URL(url, "http://local").searchParams.get("region"), stale: false }) });
+  await c.mount(element, { onSend: context => sent.push(context) });
+  await c.input("region", "sacheon");
+  const click = () => element.listeners.get("click")({ target: { closest: () => ({ dataset: { iaAction: "monthly-report" }, disabled: false }) } });
+  click();
+  assert.deepEqual(sent, [{ type: "region", targetId: "sacheon", month: "2026-10", cutoffDate: "2026-10-11", industry: "glamping" }]);
+  c.pause(); click(); assert.equal(sent.length, 1);
+  await c.mount(element, { onSend: context => sent.push(context) });
+  authorized = false; click(); assert.equal(sent.length, 1);
+  c.destroy();
+});
+
+test("saved industry identity is folded and matches report evidence without inventing missing identifiers", () => {
+  const saved = stored("ready", { key: "industry-key-123", resultVersion: "saved-result-7", calculationVersion: "industry-analysis-v1", sourceRevision: "source-rev-4", stale: false });
+  const html = renderDashboard(state({ data: saved, storage: saved.storage }));
+  assert.match(html, /<details class="ia-disclosure ia-storage-evidence"><summary>저장 집계 근거/);
+  for (const text of ["저장 집계 번호", "industry-key-123", "결과 버전", "saved-result-7", "계산 버전", "industry-analysis-v1", "source-rev-4"]) assert.ok(html.includes(text), text);
+  saved.storage.key = '<img src=x onerror="bad()">';
+  delete saved.storage.resultVersion; delete saved.storage.resultRevision; delete saved.storage.calculationVersion;
+  const unknown = renderDashboard(state({ data: saved, storage: saved.storage }));
+  assert.match(unknown, /결과 버전 <b>확인 전<\/b> · 계산 버전 <b>확인 전<\/b>/);
+  assert.match(unknown, /&lt;img/); assert.doesNotMatch(unknown, /<img|onerror="bad/);
+  const pending = stored("queued", { hasSnapshot: false });
+  assert.doesNotMatch(renderDashboard(state({ data: null, storage: pending.storage })), /ia-storage-evidence/);
 });

@@ -670,6 +670,62 @@ function drawOutlookEvaluations(layout, evaluations) {
   }
 }
 
+function drawIndustryBenchmarks(layout, benchmarks) {
+  if (!benchmarks || benchmarks.schemaVersion !== 1) return;
+  const section = "부록 D · 업종 참고 집계 · 계속";
+  const statuses = { ready: "저장 집계 준비", stale: "갱신 필요", queued: "집계 갱신 대기", processing: "집계 갱신 중", failed: "최근 집계 갱신 실패", missing: "저장 집계 없음", unavailable: "저장 집계 확인 불가" };
+  const warningText = warning => clean(typeof warning === "string" ? warning : warning?.message || warning?.label || warning?.code);
+  layout.page("부록 D · 업종 참고 집계");
+  layout.heading("업종 참고 집계", `숙박월 ${clean(benchmarks.month) || "미확인"} · 발행 시 복사한 저장 집계`);
+  layout.paragraph(`관측 마감 ${dateText(benchmarks.cutoffDate)}${benchmarks.reportCutoffDate && benchmarks.reportCutoffDate !== benchmarks.cutoffDate ? ` / 본문 입력 마감 ${dateText(benchmarks.reportCutoffDate)}` : ""} / 저장 집계 확인 ${dateText(benchmarks.asOfAt, true)}. 이 부록은 발행 시 저장한 사본으로 고정되며, 다운로드 중 원본 조회나 외부 수집을 하지 않습니다.`, { size: 8.5, color: COLORS.muted, section });
+  layout.paragraph("기간 중 네이버 플레이스 1~20위에서 관측된 업체 표본입니다. 지역 전체 시장 통계가 아닙니다. 본문은 선택 대상의 수량을 합산하지만, 업종 예약률은 날짜별 업체 예약률을 동일 비중으로 평균한 뒤 관측 날짜끼리 동일 비중으로 평균합니다. 두 예약률의 산식과 대상이 다르며 이 부록의 예약·매출을 본문 합계에 더하지 않습니다.", { size: 8.5, color: COLORS.muted, section });
+  array(benchmarks.warnings).map(warningText).filter(Boolean).forEach(warning => layout.paragraph(warning, { size: 8, color: COLORS.muted, section }));
+  const entries = array(benchmarks.entries);
+  if (!entries.length) layout.paragraph("연결할 업종 저장 집계가 없습니다. 미확보 값을 예약·매출 0으로 표시하지 않습니다.", { size: 9, section });
+  for (const entry of entries) {
+    const request = entry.request || {}, storage = entry.storage || {}, industry = entry.industry || {}, cohort = entry.cohort || {}, capacity = entry.capacityBasis || {};
+    const summary = entry.summary && typeof entry.summary === "object" ? entry.summary : null;
+    const hasObservations = summary && summary.availability !== "missing" && known(summary.coveredCompanyDays) && summary.coveredCompanyDays > 0;
+    const status = statuses[entry.status] || "저장 집계 상태 미확인";
+    const stale = entry.status === "stale" || storage.stale === true;
+    const retained = summary && (stale || ["queued", "processing", "failed", "unavailable"].includes(entry.status));
+    layout.ensure(135, section);
+    layout.smallHeading(`${clean(industry.label) || clean(request.industry) || "업종 미확인"} · ${clean(entry.regionLabel) || clean(request.region) || "지역 미확인"}`);
+    layout.paragraph(`실제 소재지 기준 지역 / 숙박월 ${clean(request.month || benchmarks.month) || "미확인"} / 관측 마감 ${dateText(request.cutoffDate || benchmarks.cutoffDate)}\n${status}${retained ? " / 마지막 정상 저장본 참고" : ""}${stale && entry.status !== "stale" ? " / 갱신 필요" : ""}${entry.reasonLabel || entry.reasonCode ? ` / 사유 ${clean(entry.reasonLabel) || clean(entry.reasonCode)}${entry.reasonLabel && entry.reasonCode ? ` (${clean(entry.reasonCode)})` : ""}` : ""}\n표본 ${known(cohort.minRank) ? amount(cohort.minRank) : "미확인"}~${known(cohort.maxRank) ? amount(cohort.maxRank) : "미확인"}위${cohort.label ? ` / ${clean(cohort.label)}` : ""}`, { size: 8.5, section, after: 8 });
+    if (Object.keys(capacity).length) layout.paragraph(`객실 총량 기준: ${clean(capacity.policy) || "미확인"}\n대상 ${amount(capacity.companyCount, "개 업체")} / 관리자 검수 ${amount(capacity.reviewedCompanyCount, "개")} / 검수 전 ${amount(capacity.unreviewedCompanyCount, "개")} / 객실 기준 미확보 ${amount(capacity.missingCapacityCompanyCount, "개")}`, { size: 8, color: COLORS.muted, section });
+    if (summary) {
+      layout.table([
+        { label: "표본·확보 지표", width: 0.6, value: row => row[0] },
+        { label: "저장 값", width: 0.4, align: "right", value: row => row[1] }
+      ], [
+        ["대상 업체 수 / 관측 업체 수", `${amount(summary.companyCount, "개")} / ${amount(summary.observedCompanies, "개")}`],
+        ["확보 관측 / 대상 업체·일", `${amount(summary.coveredCompanyDays)} / ${amount(summary.expectedCompanyDays)}`],
+        ["자료 확보율", rate(summary.coverageRate)],
+        ["업종 예약률 · 업체 동일 비중", hasObservations ? rate(summary.reservationRate) : UNKNOWN]
+      ], { section, size: 8.5 });
+      if (hasObservations) {
+        layout.table([
+          { label: "예약 구분", width: 0.38, value: row => row[0] },
+          { label: `예약 수량${industry.unitLabel ? ` (${clean(industry.unitLabel)})` : ""}`, width: 0.26, align: "right", value: row => row[1] },
+          { label: "추정 매출 (원)", width: 0.36, align: "right", value: row => row[2] }
+        ], [
+          ["공개 예약", amount(summary.publicBookings), amount(summary.publicRevenue)],
+          ["타채널 예약 · 방막기 추정", amount(summary.phoneBookings), amount(summary.phoneRevenue)],
+          ["합계", amount(summary.sold), amount(summary.estimatedRevenue)]
+        ], { section, size: 8.5 });
+        layout.paragraph(`추정 매출은 가격 근거가 있는 관측의 소계이며 월 전체 매출이 아닙니다. 금액 근거 확보 ${amount(summary.revenueCoveredCompanyDays, " 업체·일")}${summary.revenuePartial === true ? " / 일부 금액 근거 미확보" : ""}. 타채널 예약은 방막기에서 추정하며 실제 결제·정산 내역과 다를 수 있습니다.`, { size: 8, color: COLORS.muted, section });
+      } else layout.paragraph("유효한 예약·매출 관측이 없습니다. 미확보 값을 예약·매출 0으로 표시하지 않습니다.", { size: 8.5, color: COLORS.muted, section });
+    } else layout.paragraph("연결할 저장 집계가 없습니다. 예약 수량·매출·확보율은 미확인으로 남깁니다.", { size: 8.5, color: COLORS.muted, section });
+    layout.paragraph(`저장 키 ${clean(storage.key) || "미확인"}\n결과 버전 ${clean(storage.resultVersion) || "미확인"} / 계산 버전 ${clean(storage.calculationVersion) || "미확인"}\n원본 변경 번호 ${clean(storage.sourceRevision) || "미확인"}\n결과 변경 번호 ${clean(storage.resultRevision) || "미확인"}\n산출 시각 ${dateText(storage.calculatedAt, true)}${storage.errorCode ? `\n저장 확인 오류 ${clean(storage.errorCode)}` : ""}`, { size: 7.5, color: COLORS.muted, section });
+    array(entry.warnings).map(warningText).filter(Boolean).forEach(warning => layout.paragraph(warning, { size: 8, color: COLORS.muted, section }));
+    const definitions = entry.definitions && typeof entry.definitions === "object" ? Object.entries(entry.definitions).filter(([, value]) => typeof value === "string" && value.trim()) : [];
+    if (definitions.length) {
+      layout.smallHeading("저장된 집계 정의");
+      definitions.forEach(([, value]) => layout.paragraph(clean(value), { size: 7.5, color: COLORS.muted, section, after: 6 }));
+    }
+  }
+}
+
 function drawSources(layout, report, snapshot) {
   const sources = snapshot.sources || {}; const quality = snapshot.quality || {};
   layout.page("부록 B · 근거와 산식");
@@ -726,6 +782,7 @@ async function renderMonthlyReportPdf(report, options = {}) {
     drawDaily(layout, report.snapshot);
     drawSources(layout, report, report.snapshot);
     drawOutlookEvaluations(layout, report.snapshot.context?.outlookEvaluations);
+    drawIndustryBenchmarks(layout, report.snapshot.industryBenchmarks);
     layout.footers();
     doc.end();
   } catch (error) { doc.destroy(error); }

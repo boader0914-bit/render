@@ -21,6 +21,7 @@ const CANDIDATES = ["포천시", "가평군", "홍천군", "양양군", "태안�
 const COHORT = { minRank: 1, maxRank: 20, label: "기간 중 네이버 플레이스 1~20위 관측 업체", basis: "month_keyword_rank_union", representative: false };
 const FEATURES = { scaleGroups: false, performanceTiers: false };
 const DEFERRED_SCALE = { status: "deferred", basis: "industry_specific", description: "규모 구간은 업종별로 정의하며 구간 분류와 성과 등급은 보류합니다." };
+const REGION_POLICY_VERSION = "active-manual-region-v2";
 const idOf = value => String(value?.companyId || value?.companyKey || value?.id || "");
 const norm = value => String(value || "").normalize("NFKC").replace(/\s+/g, "");
 const qualityOf = run => String(typeof run?.collectionQuality === "string" ? run.collectionQuality : run?.collectionQuality?.status || "unknown").toLowerCase();
@@ -87,7 +88,7 @@ function regionAliases(region) {
   return [...new Set([text, short, ...(region.aliases || [])].map(norm).filter(Boolean))];
 }
 function actualRegion(raw, regions) {
-  const override = raw.manualCorrection?.regionOverride;
+  const override = raw.manualCorrection?.active === false ? null : raw.manualCorrection?.regionOverride;
   const explicit = override || raw.regionKey || raw.regionId || "";
   if (explicit) {
     const matches = regions.filter(region => {
@@ -112,6 +113,10 @@ function catalogRegions(regions = []) {
     indicatorCandidate: CANDIDATES.some(name => String(region.label).endsWith(name)),
     ...(region.id === "kr_gyeongnam_sacheon" ? { coast: "남해안", indicatorCandidate: true } : {})
   }));
+}
+function industryCompanyReference(raw = {}, regions = []) {
+  const region = actualRegion(raw, catalogRegions(regions));
+  return { industryIds: industryIds(raw), industryRegionKey: region?.id || "", industryRegionLabel: region?.label || "지역 확인 전" };
 }
 function rankCohort(source, request, companies) {
   const runs = new Map((source.runs || []).map(run => [String(run.id || run.runId), run]));
@@ -388,7 +393,7 @@ function buildIndustryAnalysis(source = {}, input = {}, { now = new Date() } = {
     quality: { warnings: [...new Set(warnings)], scope: "selected_industry_region_top20", sourceWarnings: source.warnings || [], sourceWarningsScope: "saved_dataset",
       rankExcludedByReason: scopedRank.excluded, rankExclusionScope: "selected_industry_region_candidates", unknownRegionCompanies: unknownRegionCount, unclassifiedCompanies: unclassified,
       discardedByReason: diagnostics.discardedByReason, excludedCompanies: rankCandidates.size - scopedRank.members.size, status: rows.length ? "partial" : "missing" },
-    sources: { runIds: snapshot.sources.runIds, runIdsScope: "selected_region_all_industries_for_comparison", observationPolicy: snapshot.sources.observationPolicy, rankPolicy: "valid_keyword_rank_1_to_20_observed_within_month_before_cutoff" },
+    sources: { runIds: snapshot.sources.runIds, runIdsScope: "selected_region_all_industries_for_comparison", observationPolicy: snapshot.sources.observationPolicy, rankPolicy: "valid_keyword_rank_1_to_20_observed_within_month_before_cutoff", regionPolicyVersion: REGION_POLICY_VERSION },
     context: { sources: [], warnings: [], networkAttempted: false },
     definitions: { cohort: "선택 월(한국시간)에 유효하게 관측된 검색어별 1~20위 업체의 합집합입니다. 같은 업체는 검색어·회차가 달라도 한 번만 계산합니다. 업체명 검색의 순위와 순위 미확인 자료는 제외합니다.",
       reservationRate: "날짜별로 업체의 예약 추정 수량/공급 수량을 동일 비중 평균한 뒤 관측 날짜끼리 동일 비중으로 평균합니다.",
@@ -513,6 +518,11 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     return result;
   }
   if (!dataDir) return { options: calculateOptions, analyze: calculate, rebuild: calculate,
+    classifyCompanyIndustryIds: company => industryIds(company || {}),
+    readSaved: async input => ({ request: normalizeRequest(input, now()), storage: {
+      status: "pending", hasSnapshot: false, stale: false, resultVersion: null, sourceRevisionMatches: false,
+      errorCode: "INDUSTRY_PERSISTENT_STORE_DISABLED"
+    } }),
     invalidate: async () => clearSources(), notifySourceChanged: async () => clearSources(), bootstrap: async () => {}, drain: async () => {},
     stop: async () => { serviceStopped = true; clearSources(); } };
   const defaultSourceRevision = async () => JSON.stringify(await Promise.all([
@@ -525,7 +535,7 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     normalizeStoredRequest: request => normalizeRequest(request, now()),
     readSourceRevision: typeof readSourceRevision?.periodRevisions === "function" ? () => readSourceRevision.periodRevisions()
       : async () => JSON.stringify([await defaultSourceRevision(), readSourceRevision ? await readSourceRevision() : null]), onInvalidate: clearSources,
-    needsResultRefresh: result => result.review?.schemaVersion !== 1 });
+    needsResultRefresh: result => result.review?.schemaVersion !== 1 || result.sources?.regionPolicyVersion !== REGION_POLICY_VERSION });
   async function options() {
     const saved = await store.readOptions(), revision = await store.optionsRevision();
     const today = new Date(new Date(now()).getTime() + 9 * 3600000).toISOString().slice(0, 10);
@@ -600,6 +610,10 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     optionsRefreshTimer.unref();
   }
   return { options, analyze, bootstrap, invalidate, notifySourceChanged,
+    // Unlike analyze, attachment reads never validate through options() or
+    // prepare a missing result. The stored request itself must match exactly.
+    readSaved: (input, options) => store.readSaved(normalizeRequest(input, now()), options),
+    classifyCompanyIndustryIds: company => industryIds(company || {}),
     rebuild: async input => store.rebuild(await validatedRequest(input)),
     drain: async () => { if (optionsRefreshTimer) await refreshOptionsNow(); await backgroundOptions; if (optionsTask) await optionsTask; return store.drain(); },
     stop: async () => { serviceStopped = true; clearSources(); if (optionsRefreshTimer) clearTimeout(optionsRefreshTimer); if (finishOptionsRefresh) finishOptionsRefresh();
@@ -607,4 +621,4 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
 }
 
 module.exports = { buildIndustryAnalysis, createIndustryAnalysisService, compactIndustrySources,
-  normalizeIndustryAnalysisRequest: normalizeRequest, industryAnalysisIndustries: INDUSTRIES.map(publicIndustry) };
+  normalizeIndustryAnalysisRequest: normalizeRequest, industryAnalysisIndustries: INDUSTRIES.map(publicIndustry), industryCompanyReference };

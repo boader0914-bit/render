@@ -35,6 +35,9 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
   let state = emptyState();
   let initialization, bootstrapped, serial = Promise.resolve(), worker = null, stopped = false, storeError = null;
   let tokenTask = null, lastTokenCheck = -Infinity, settleTimer = null;
+  const resultVersionCache = new Map(), resultVersionSymbol = Symbol("industryResultVersion");
+  const savedProbeGroups = new WeakMap();
+  let savedProbeTask = null;
   const timestamp = () => new Date(now()).toISOString();
   const revisionFor = month => `${state.epoch || "initial"}:${state.revision}.${state.monthRevisions[month] || 0}`;
   const optionsToken = () => `${state.epoch || "initial"}:${state.optionsRevision}`;
@@ -166,11 +169,108 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
     return status();
   }
   async function readResult(key, request) {
-    const stored = await readJson(resultFile(key));
-    if (stored && (stored.schemaVersion !== SCHEMA_VERSION || stored.calculationVersion !== calculationVersion
+    let handle, stored, fingerprint;
+    const fileIdentity = stat => [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String).join(":");
+    try {
+      handle = await fs.open(resultFile(key), "r");
+      const before = fileIdentity(await handle.stat({ bigint: true }));
+      stored = JSON.parse(await handle.readFile("utf8"));
+      const after = fileIdentity(await handle.stat({ bigint: true }));
+      if (before === after) fingerprint = before;
+    } catch (error) {
+      if (error.code === "ENOENT") return null;
+      throw fault("INDUSTRY_STORE_UNAVAILABLE");
+    } finally { if (handle) await handle.close(); }
+    if (!stored || typeof stored !== "object" || Array.isArray(stored)
+      || stored.schemaVersion !== SCHEMA_VERSION || stored.calculationVersion !== calculationVersion
       || keyFor(stored.request || {}) !== key || !stored.result || !stored.result.summary || Array.isArray(stored.result.summary)
-      || typeof stored.result.summary !== "object" || keyFor(stored.result.request || {}) !== key)) throw fault("INDUSTRY_RESULT_INVALID");
+      || typeof stored.result.summary !== "object" || keyFor(stored.result.request || {}) !== key) throw fault("INDUSTRY_RESULT_INVALID");
+    if (stored) {
+      const cached = resultVersionCache.get(key);
+      const version = fingerprint && cached?.fingerprint === fingerprint ? cached.version
+        : crypto.createHash("sha256").update(JSON.stringify([
+          stored.schemaVersion, stored.calculationVersion, stored.request, stored.sourceRevision, stored.calculatedAt, stored.result
+        ])).digest("hex");
+      if (fingerprint && cached?.fingerprint !== fingerprint) {
+        resultVersionCache.delete(key); resultVersionCache.set(key, { fingerprint, version });
+        while (resultVersionCache.size > 128) resultVersionCache.delete(resultVersionCache.keys().next().value);
+      }
+      Object.defineProperty(stored, resultVersionSymbol, { value: version });
+    }
     return stored;
+  }
+  function savedSourceProbe(group) {
+    const grouped = group && typeof group === "object";
+    if (grouped && savedProbeGroups.has(group)) return savedProbeGroups.get(group);
+    if (!savedProbeTask) {
+      const task = Promise.resolve().then(() => readSourceRevision());
+      savedProbeTask = task;
+      const release = () => setImmediate(() => { if (savedProbeTask === task) savedProbeTask = null; });
+      task.then(release, release);
+    }
+    if (grouped) savedProbeGroups.set(group, savedProbeTask);
+    return savedProbeTask;
+  }
+  // Report attachments inspect existing derived files only. Do not use init,
+  // bootstrap, checkSource or get here: those paths recover/enqueue jobs and may
+  // start the worker. A report must never create a missing industry aggregate.
+  async function readSaved(request, { sourceCheckGroup } = {}) {
+    let normalized, key;
+    const unavailable = error => ({ request: clone(normalized || request || {}), storage: {
+      key: key || null, status: "unavailable", hasSnapshot: false, stale: false,
+      calculationVersion, cutoffDate: normalized?.cutoffDate || null,
+      resultVersion: null, resultRevision: null, sourceRevision: null,
+      sourceRevisionMatches: false, errorCode: safeCode(error)
+    } });
+    try {
+      normalized = normalizeStoredRequest(clone(request));
+      if (!normalized || ["industry", "region", "month", "cutoffDate"].some(field => typeof normalized[field] !== "string" || !normalized[field]
+        || normalized[field] !== request?.[field]) || !/^\d{4}-(0[1-9]|1[0-2])$/.test(normalized.month)
+        || !/^\d{4}-\d{2}-\d{2}$/.test(normalized.cutoffDate)) throw fault("INDUSTRY_REQUEST_INVALID");
+      key = keyFor(normalized);
+      const queue = await readJson(stateFile);
+      if (queue && (queue.schemaVersion !== SCHEMA_VERSION || !queue.jobs || Array.isArray(queue.jobs)
+        || !Number.isSafeInteger(queue.revision) || !queue.monthRevisions || Array.isArray(queue.monthRevisions)
+        || typeof queue.monthRevisions !== "object")) throw fault("INDUSTRY_STORE_INVALID");
+      const job = queue?.jobs[key];
+      if (job && (job.calculationVersion !== calculationVersion || keyFor(job.request || {}) !== key
+        || keyFor(normalizeStoredRequest(job.request)) !== key || !Number.isSafeInteger(job.generation)
+        || !["queued", "processing", "ready", "failed"].includes(job.status))) throw fault("INDUSTRY_JOB_INVALID");
+      const saved = await readResult(key, normalized);
+      if (saved && (!queue || typeof saved.sourceRevision !== "string" || !saved.calculatedAt
+        || !Number.isFinite(Date.parse(saved.calculatedAt)))) throw fault("INDUSTRY_RESULT_INVALID");
+      const revision = queue ? `${queue.epoch || "initial"}:${queue.revision}.${queue.monthRevisions[normalized.month] || 0}` : null;
+      let sourceTokenMatches = null, sourceError = null;
+      if (queue && typeof readSourceRevision === "function") {
+        try {
+          const value = await savedSourceProbe(sourceCheckGroup);
+          if (value && typeof value === "object") {
+            if (Array.isArray(value) || typeof value.globalToken !== "string" || !value.months || Array.isArray(value.months)
+              || typeof value.months !== "object" || Object.entries(value.months).some(([month, token]) => !/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || typeof token !== "string")) throw fault("INDUSTRY_SOURCE_REVISION_INVALID");
+            sourceTokenMatches = queue.sourceSnapshot?.globalToken === value.globalToken
+              && queue.sourceSnapshot?.months?.[normalized.month] === value.months[normalized.month];
+          } else sourceTokenMatches = queue.sourceToken === String(value);
+        } catch (error) { sourceError = safeCode(error); }
+      }
+      const today = new Date(new Date(now()).getTime() + 9 * 3600000).toISOString().slice(0, 10);
+      const [year, month] = normalized.month.split("-").map(Number);
+      const monthClosed = today > new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+      const current = Boolean(saved && saved.sourceRevision === revision && !queue?.sourceCheckPending
+        && sourceTokenMatches !== false && !sourceError && !needsResultRefresh(saved.result)
+        && saved.result.period?.monthClosed === monthClosed);
+      const status = sourceError ? "failed" : ["queued", "processing", "failed"].includes(job?.status) ? job.status
+        : !saved ? "pending" : current ? "ready" : "stale";
+      const resultVersion = saved?.[resultVersionSymbol] || null;
+      return { ...(saved ? clone(saved.result) : {}), request: clone(normalized), storage: {
+        key, status, hasSnapshot: Boolean(saved), stale: Boolean(saved && (!current || status !== "ready")),
+        calculatedAt: saved?.calculatedAt || null, calculationVersion, cutoffDate: normalized.cutoffDate,
+        sourceRevision: revision, resultRevision: saved?.sourceRevision || null, resultVersion,
+        sourceRevisionMatches: current, sourceTokenMatches, sourceCheckPending: Boolean(queue?.sourceCheckPending),
+        monthClosed, reusePolicy: monthClosed ? "closed_month" : "live_month",
+        queuedAt: job?.queuedAt || null, startedAt: job?.startedAt || null, failedAt: job?.failedAt || null,
+        errorCode: sourceError || job?.errorCode || null
+      } };
+    } catch (error) { return unavailable(error); }
   }
   async function get(request, { rebuild = false } = {}) {
     await bootstrap();
@@ -205,6 +305,7 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
       const status = storeError || (resultError && !active) ? "failed" : state.sourceCheckPending ? "queued"
         : ["queued", "processing", "failed"].includes(jobStatus) ? jobStatus : saved ? "ready" : "queued";
       return { ...(saved ? saved.result : {}), request: clone(request), storage: {
+        key, resultVersion: saved?.[resultVersionSymbol] || null,
         status, hasSnapshot: Boolean(saved), stale: Boolean(saved && (!current || status !== "ready")),
         calculatedAt: saved?.calculatedAt || null, sourceRevision: revision, resultRevision: saved?.sourceRevision || null,
         calculationVersion, cutoffDate: request.cutoffDate, queuedAt: job?.queuedAt || null,
@@ -308,6 +409,6 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
       await writeJson(path.join(directory, "options.json"), { revision, calculatedAt: timestamp(), value }); return true;
     });
   }
-  return { bootstrap, get, rebuild: request => get(request, { rebuild: true }), invalidate, notifySourceChanged, status, drain, stop, readOptions, writeOptions, optionsRevision };
+  return { bootstrap, get, readSaved, rebuild: request => get(request, { rebuild: true }), invalidate, notifySourceChanged, status, drain, stop, readOptions, writeOptions, optionsRevision };
 }
 module.exports = { createIndustryAnalysisStore, INDUSTRY_ANALYSIS_CALCULATION_VERSION: CALCULATION_VERSION };

@@ -1,6 +1,7 @@
 (function (root) {
   "use strict";
   const TYPES = { company: "업체별", keyword: "키워드별", region: "지역별" };
+  const INDUSTRIES = { glamping: "글램핑", campground: "캠핑장", caravan: "카라반", pension: "펜션", poolVilla: "풀빌라", privateStay: "독채숙소", hotelResort: "호텔/리조트", motel: "모텔" };
   const STATUSES = { draft: "초안", review: "검토 중", published: "발행됨" };
   const instances = new WeakMap();
   const numberFormatter = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 1 });
@@ -175,6 +176,16 @@
     if (!overview) return "";
     return `<dl class="mr-insight-stats mr-overview-metrics"><div><dt>중복 제거 업체</dt><dd>${count(overview.companyCount, "곳")}</dd></div><div><dt>객실 기준 총량</dt><dd>${count(overview.totalRooms, "실")}</dd><small>기준값 있는 업체 ${number(overview.knownCapacityCompanyCount)} / ${number(overview.companyCount)}곳${overview.capacityComplete === false ? " · 일부 업체 소계" : ""}</small></div><div><dt title="숙박월 이전 관측 포함">분석에 사용한 수집일</dt><dd>${count(overview.collectionDateCount, "일")}</dd><small>숙박월 이전 관측 포함 · 같은 날짜는 하루로 계산</small></div><div class="mr-public"><dt>공개 예약 비중</dt><dd>${percent(overview.publicBookingShare)}</dd></div><div class="mr-phone"><dt>방막기 추정 비중</dt><dd>${percent(overview.blockedBookingShare)}</dd></div></dl><p class="mr-method-note">객실 기준 총량은 업체별 DB 보정값을 우선하고, 없으면 최대 관측 추정값을 중복 없이 합합니다. 월간 실·박과 다릅니다. 예약 비중은 숙박 예약 추정 수량 안의 비중입니다.</p>`;
   }
+  function renderIndustryBenchmarks(benchmarks) {
+    if (!benchmarks || benchmarks.schemaVersion !== 1) return "";
+    const entries = Array.isArray(benchmarks.entries) ? benchmarks.entries : [];
+    const statusLabel = status => ({ ready: "정상 저장 집계", stale: "이전 정상 저장 집계", queued: "집계 대기", processing: "집계 중", failed: "최근 집계 실패", missing: "저장 집계 없음", unavailable: "저장 집계 확인 불가" })[status] || "상태 확인 필요";
+    return `<details class="mr-fold mr-report-section" data-mr-section="industry-benchmarks"><summary>업종 참고 집계 <span>${number(entries.length)}개 조건 · ${escapeHtml(benchmarks.month || "기간 미확인")}</span></summary><div class="mr-fold-content"><p>기간 중 네이버 플레이스 1~20위에서 관측된 업체 표본입니다. 본문과 대상 업체가 다르므로 매출을 더하거나 두 예약률을 같은 기준으로 비교하지 않습니다.</p><p class="mr-method-note">본문 예약률은 예약 수량 ÷ 공급 수량으로 계산합니다. 업종 예약률은 날짜 안에서 업체를 동일 비중으로 평균한 뒤 관측 날짜끼리 동일 비중으로 평균합니다. 객실 수가 많은 업체의 비중을 높이지 않습니다. 수량·매출은 관측된 날짜의 합계이며 실제 정산 매출과 다를 수 있습니다.</p><p class="mr-outlook-meta">대상월 ${escapeHtml(benchmarks.month || "미확인")} · 관측 마감 ${escapeHtml(benchmarks.cutoffDate || "미확인")} · 저장 집계 확인 ${escapeHtml(timeLabel(benchmarks.asOfAt))} (한국시간)</p>${warningList(benchmarks.warnings)}${entries.length ? entries.map(entry => {
+      const request = entry.request || {}, storage = entry.storage || {}, capacity = entry.capacityBasis || {}, summary = entry.summary && typeof entry.summary === "object" ? entry.summary : null;
+      const previous = summary && (entry.status !== "ready" || storage.stale);
+      return `<section class="mr-context-source mr-industry-benchmark"><h4>${escapeHtml(entry.industry?.label || INDUSTRIES[request.industry] || "업종 미확인")} · ${escapeHtml(entry.regionLabel || request.region || "지역 미확인")}</h4><p><span class="mr-status${entry.status === "ready" ? " mr-status-published" : " mr-status-review"}">${escapeHtml(statusLabel(entry.status))}</span>${previous ? " · 마지막 정상 저장본을 표시합니다." : ""}</p><p>대상월 ${escapeHtml(request.month || "미확인")} · 관측 마감 ${escapeHtml(request.cutoffDate || "미확인")} · ${escapeHtml(entry.cohort?.label || "네이버 플레이스 1~20위 관측 업체")}</p>${summary ? `<dl class="mr-insight-stats"><div><dt>표본 업체</dt><dd>${count(summary.companyCount, "곳")}</dd><small>실제 관측 ${count(summary.observedCompanies, "곳")}</small></div><div><dt>자료 확보율</dt><dd>${percent(summary.coverageRate)}</dd><small>${number(summary.coveredCompanyDays)} / ${number(summary.expectedCompanyDays)} 업체·숙박일</small></div><div><dt>동일 비중 평균 예약률</dt><dd>${percent(summary.reservationRate)}</dd></div><div class="mr-public"><dt>공개 예약 수량</dt><dd>${count(summary.publicBookings, "객실")}</dd><small>관측 매출 ${won(summary.publicRevenue)}</small></div><div class="mr-phone"><dt>타채널 추정 수량</dt><dd>${count(summary.phoneBookings, "객실")}</dd><small>관측 매출 ${won(summary.phoneRevenue)}</small></div><div><dt>관측 추정매출 소계</dt><dd>${won(summary.estimatedRevenue)}</dd><small>${summary.revenuePartial ? "일부 자료의 소계" : "가격 근거가 있는 관측분"}</small></div></dl>` : '<p class="mr-empty">사용할 정상 저장 집계가 없습니다. 미준비·조회 실패를 업체 0개나 매출 0원으로 계산하지 않습니다.</p>'}${entry.reasonCode || entry.reasonLabel ? `<p class="mr-method-note">${escapeHtml(entry.reasonLabel || (summary ? "최신 집계를 사용할 수 없어 저장본 기준을 확인해야 합니다." : "집계 대기·실패 또는 저장 자료 부족으로 참고 수치를 표시하지 못했습니다."))}${entry.reasonCode ? ` · 사유: ${escapeHtml(entry.reasonCode)}` : ""}</p>` : ""}${warningList(entry.warnings)}<details class="mr-fold"><summary>저장 집계 근거</summary><div class="mr-fold-content">${entry.capacityBasis ? `<p>객실 기준: ${escapeHtml(capacity.policy || "기준 미확인")} · 검수 ${number(capacity.reviewedCompanyCount)} / 미검수 ${number(capacity.unreviewedCompanyCount)} / 객실 수 미확인 ${number(capacity.missingCapacityCompanyCount)}곳</p>` : ""}<p>산출 ${escapeHtml(timeLabel(storage.calculatedAt))} (한국시간) · 결과 버전 ${escapeHtml(String(storage.resultVersion ?? storage.resultRevision ?? "미확인"))} · 계산 버전 ${escapeHtml(String(storage.calculationVersion ?? "미확인"))}</p><p>저장 키 ${escapeHtml(storage.key || "미확인")} · 원본 버전 ${escapeHtml(storage.sourceRevision || "미확인")}</p>${entry.definitions && typeof entry.definitions === "object" ? `<ul>${Object.values(entry.definitions).map(value => `<li>${escapeHtml(textValue(value))}</li>`).join("")}</ul>` : ""}</div></details></section>`;
+    }).join("") : '<p class="mr-empty">이 리포트에 연결할 업종 저장 집계가 없습니다. 미확인을 0으로 대체하지 않습니다.</p>'}</div></details>`;
+  }
   function renderSnapshot(snapshot = {}) {
     const quality = snapshot.quality || {};
     const warnings = Array.isArray(quality.warnings) ? quality.warnings : [];
@@ -203,6 +214,7 @@
       ${renderTiming(snapshot)}
       ${renderPricing(snapshot.insights)}
       ${renderContext(snapshot.context, snapshot.insights?.geography)}
+      ${renderIndustryBenchmarks(snapshot.industryBenchmarks)}
       ${renderOutlookEvaluations(snapshot.context?.outlookEvaluations)}
       <details class="mr-fold"><summary>출처와 산식 <span>저장된 근거 확인</span></summary><div class="mr-fold-content"><p>자료 수집시각과 숙박 대상일을 구분해 확인하세요. 아래 내용은 이 리포트를 만들 때 저장된 기준입니다.</p>${runs.length ? `<ul class="mr-source-list">${runs.map((run) => `<li><strong>${escapeHtml(run.keyword || run.label || run.runId || run.id)}</strong><span>수집 ${escapeHtml(timeLabel(run.collectedAt || run.finishedAt || run.createdAt))} (한국시간) · ${escapeHtml(run.runId || run.id || "")}</span><span>반영 ${number(run.selectedObservationCount)} / ${number(run.observationCount)}건${run.collectionQuality?.status === "partial" ? " · 일부 자료" : ""}</span></li>`).join("")}</ul>` : `<p>참조 수집 기록: ${escapeHtml((snapshot.sources?.runIds || []).join(", ") || "없음")}</p>`}${definitionsMarkup.length ? `<ul>${definitionsMarkup.map((definition) => `<li>${escapeHtml(definition)}</li>`).join("")}</ul>` : ""}${globalWarningsMarkup}</div></details>
     </div>`;
@@ -280,7 +292,7 @@
       const editable = report && ["draft", "review"].includes(report.status);
       container.innerHTML = `<div class="monthly-reports" aria-busy="${Boolean(state.busy)}"><header class="mr-intro"><div><p class="mr-eyebrow">MONTHLY REPORTS</p><h2>자료를 확인하고, 월간 리포트로 남기세요</h2><p>업체·키워드·지역별 예약 흐름과 추정 매출을 저장된 자료로 정리합니다.</p></div><span class="mr-private-label">관리자 전용</span></header>
         <div class="mr-notice${state.busy ? " mr-notice-busy" : ""}" role="status" aria-live="polite">${state.busy ? `<span class="mr-loading" aria-hidden="true"></span><span data-mr-progress-text>${escapeHtml(busyText())}</span>` : escapeHtml(state.message)}</div>${state.error ? `<div class="mr-error" role="alert">${escapeHtml(state.error)}</div>` : ""}
-        <section class="mr-card mr-create" aria-label="월간 리포트 생성 조건"><div class="mr-section-title"><h3>새 리포트</h3><span class="mr-muted">① 조건 선택 → ② 미리보기 → ③ 초안 저장</span></div><form data-mr-form><div class="mr-form-grid"><label>대상 월<input type="month" name="month" value="${escapeHtml(state.form.month)}" max="${today().slice(0, 7)}" required${busy}></label><label>유형<select name="type"${busy}>${Object.entries(TYPES).map(([key, label]) => `<option value="${key}"${key === state.form.type ? " selected" : ""}>${label}</option>`).join("")}</select></label><label class="mr-target">대상<select name="targetId" required${busy}>${targetOptions()}</select></label><label>관측 마감일<input type="date" name="cutoffDate" value="${escapeHtml(state.form.cutoffDate)}" max="${today()}"${busy}><small>비우면 해당 월 말일, 진행 중인 달은 오늘</small></label></div><div class="mr-form-actions"><label class="mr-search-label"><span class="mr-sr-only">대상 검색</span><input type="search" name="targetSearch" value="${escapeHtml(state.search)}" placeholder="업체명·키워드·지역 검색" autocomplete="off"${busy}></label><button class="primary-button" type="submit"${busy || !state.optionsVerified ? " disabled" : ""}>미리보기 만들기</button></div></form>${selectorNote()}</section>
+        <section class="mr-card mr-create" aria-label="월간 리포트 생성 조건"><div class="mr-section-title"><h3>새 리포트</h3><span class="mr-muted">① 조건 선택 → ② 미리보기 → ③ 초안 저장</span></div><form data-mr-form><div class="mr-form-grid"><label>대상 월<input type="month" name="month" value="${escapeHtml(state.form.month)}" max="${today().slice(0, 7)}" required${busy}></label><label>유형<select name="type"${busy}>${Object.entries(TYPES).map(([key, label]) => `<option value="${key}"${key === state.form.type ? " selected" : ""}>${label}</option>`).join("")}</select></label><label class="mr-target">대상<select name="targetId" required${busy}>${targetOptions()}</select></label><label>관측 마감일<input type="date" name="cutoffDate" value="${escapeHtml(state.form.cutoffDate)}" max="${today()}"${busy}><small>비우면 해당 월 말일, 진행 중인 달은 오늘</small></label></div><div class="mr-form-actions"><label class="mr-search-label"><span class="mr-sr-only">대상 검색</span><input type="search" name="targetSearch" value="${escapeHtml(state.search)}" placeholder="업체명·키워드·지역 검색" autocomplete="off"${busy}></label><button class="primary-button" type="submit"${busy || !state.optionsVerified ? " disabled" : ""}>미리보기 만들기</button></div></form>${state.form.industry ? `<p class="mr-method-note" data-mr-industry-selection>참고 업종: ${escapeHtml(INDUSTRIES[state.form.industry] || state.form.industry)} · 본문 지역 집계와 별도로 표시합니다. 대상·월·관측 마감일을 바꾸면 선택을 해제합니다.</p>` : ""}${selectorNote()}</section>
         <div class="mr-workspace"><aside class="mr-card mr-library" aria-label="저장 리포트"><div class="mr-section-title"><h3>저장 리포트 <span>${number(state.reports.length)}</span></h3><button type="button" class="mr-text-button" data-mr-action="refresh"${busy}>새로고침</button></div><div class="mr-filters" role="group" aria-label="발행 상태 필터">${Object.entries({ all: "전체", ...STATUSES }).map(([key, label]) => `<button type="button" data-mr-action="filter" data-filter="${key}" aria-pressed="${state.filter === key}"${busy}>${label}</button>`).join("")}</div>${renderList(state.reports, state.filter, report?.id)}</aside>
         <section class="mr-card mr-detail" aria-label="리포트 미리보기와 상세">${snapshot ? `<div class="mr-detail-heading"><div><p class="mr-eyebrow">${report ? `VERSION ${number(report.version || 1)} · 수정 ${number(report.revision)}` : "PREVIEW · 아직 저장하지 않았습니다"}</p><h3>${escapeHtml(report?.title || reportTitle(state.previewRequest || snapshot.request, snapshot.target))}</h3><p>${escapeHtml(snapshot.target?.label || report?.targetId)} · ${escapeHtml(TYPES[report?.type || snapshot.request?.type] || "")}</p></div>${report ? statusTag(report.status) : '<span class="mr-status">미리보기</span>'}</div>
         ${report ? `<p class="mr-dates">작성 ${escapeHtml(timeLabel(report.createdAt))} · 수정 ${escapeHtml(timeLabel(report.updatedAt))}${report.publishedAt ? ` · 발행 ${escapeHtml(timeLabel(report.publishedAt))}` : ""} (한국시간)</p>` : generationNote()}
@@ -350,8 +362,9 @@
           state.form.month = data.defaultMonth || data.months?.[0] || today().slice(0, 7);
         }
         const targetRemoved = Boolean(state.form.targetId && !optionsForType().some(item => item.id === state.form.targetId));
-        if (targetRemoved) { state.form.targetId = ""; invalidatePreview(); }
+        if (targetRemoved) { state.form.targetId = ""; delete state.form.industry; invalidatePreview(); }
         if (context.type && Object.hasOwn(TYPES, context.type)) {
+          delete state.form.industry;
           state.form.type = context.type; state.form.targetId = context.targetId || ""; state.search = ""; invalidatePreview();
           state.report = null; state.title = ""; state.notes = "";
           if (Object.hasOwn(context, "month")) {
@@ -375,9 +388,15 @@
             state.form.targetId = "";
             throw new Error("전달된 지역을 리포트 목록에서 찾지 못했습니다. 지역 DB에서 다시 선택해 주세요.");
           }
+          if (Object.hasOwn(context, "industry")) {
+            if (context.type !== "region" || typeof context.industry !== "string" || !Object.hasOwn(INDUSTRIES, context.industry)) throw new Error("전달된 참고 업종을 확인해 주세요.");
+            state.form.industry = context.industry;
+          }
         }
         if (reportsResult.status === "rejected") throw reportsResult.reason;
-        state.message = context.type === "region" && context.month
+        state.message = state.form.industry
+          ? `${INDUSTRIES[state.form.industry]} 업종 참고 집계의 지역·월·관측 마감일을 가져왔습니다. 지역 리포트 본문과 별도로 연결합니다.`
+          : context.type === "region" && context.month
           ? "지역 DB에서 선택한 지역·대상 월·관측 마감일을 가져왔습니다. 저장 자료로 미리보기를 만들 수 있습니다."
           : targetRemoved && !context.type ? "선택했던 대상이 목록에서 변경되었습니다. 대상을 다시 선택해 주세요." : "조건을 선택해 미리보기를 만들 수 있습니다.";
       }, "mrEntry", startedAt);
@@ -435,9 +454,11 @@
       if (name === "title" || name === "notes") { state[name] = value; return; }
       if (name === "targetSearch") { state.search = value; const select = container.querySelector('[name="targetId"]'); if (select) select.innerHTML = targetOptions(); return; }
       if (Object.hasOwn(state.form, name)) {
+        const changed = state.form[name] !== value;
+        if (["type", "targetId", "month", "cutoffDate"].includes(name) && changed) delete state.form.industry;
         state.form[name] = value; invalidatePreview();
-        if (name === "type") { state.form.targetId = ""; state.search = ""; }
-        if (name === "month") state.form.cutoffDate = "";
+        if (name === "type" && changed) { state.form.targetId = ""; state.search = ""; }
+        if (name === "month" && changed) state.form.cutoffDate = "";
         render();
       }
     }
