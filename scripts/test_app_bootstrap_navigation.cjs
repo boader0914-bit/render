@@ -282,7 +282,7 @@ test("late bootstrap state updates home alone and keeps hidden views pending unt
   assert.ok(calls.includes("renderSummary") && calls.includes("renderCompanies"), "a later legacy view still receives the deferred state");
 });
 
-function runFixture({ activeTab = "admin", realMetadata = false } = {}) {
+function runFixture({ activeTab = "rank", realMetadata = false } = {}) {
   const state = { session: { role: "admin" }, activeTab, analysisNavigationSequence: 0, adminPanelSection: "overview",
     adminMobileSection: "summary", runs: [{ id: "latest" }, { id: "manual" }, { id: "restored" }], activeRunId: "latest",
     data: { run: { id: "previous-good" } }, historyOps: { marker: "previous-history" }, companyMaster: { totalCompanies: 12 },
@@ -302,7 +302,7 @@ function runFixture({ activeTab = "admin", realMetadata = false } = {}) {
       if (hooks.fetch) return hooks.fetch(url);
       if (url === "/api/runs") return { runs: state.runs };
       if (url === "/api/history/summary") return { marker: "new-history" };
-      if (url === "/api/company-master/summary") return { totalCompanies: 18 };
+      if (url === "/api/company-master/bootstrap") return { totalCompanies: 18 };
       return { run: { id: decodeURIComponent(url.split("/").at(-1)) } };
     },
     loadHistoryOps: async options => { calls.push("history"); return hooks.history ? hooks.history(options) : true; },
@@ -335,7 +335,10 @@ test("monthly bootstrap reads only the catalog and resumes saved result metadata
   assert.equal(f.state.adminBootstrapRunPending, "latest");
   assert.equal(f.state.data.run.id, "previous-good");
   f.api.setActiveTab("admin");
-  assert.equal(f.state.adminBootstrapRunPending, null, "pending admission is cleared before the resumed fetch starts");
+  assert.equal(f.state.adminBootstrapRunPending, "latest", "home retains the result without downloading its company histories");
+  assert.deepEqual(f.requests, ["/api/runs"]);
+  f.api.setActiveTab("rank");
+  assert.equal(f.state.adminBootstrapRunPending, null, "result entry admits the deferred request");
   await f.state.adminBootstrapResumeTask;
   assert.deepEqual(f.requests, ["/api/runs", "/api/runs/latest"]);
   assert.deepEqual(f.calls.filter(name => ["history", "summary", "members", "account-delete", "security"].includes(name)), ["history", "summary"]);
@@ -397,7 +400,7 @@ test("a manual selection during an old history await cannot recreate the old pen
 });
 
 test("late metadata responses from a cancelled startup cannot overwrite a later manual result", async () => {
-  for (const heldPath of ["/api/history/summary", "/api/company-master/summary"]) {
+  for (const heldPath of ["/api/history/summary", "/api/company-master/bootstrap"]) {
     const f = runFixture({ realMetadata: true }), metadata = deferred(), entered = deferred();
     let held = false;
     f.hooks.fetch = async url => {
@@ -422,15 +425,32 @@ test("returning to reports while a pending run resumes pauses it again without d
     if (++detailReads === 1) { entered.resolve(); await detail.promise; }
     return { run: { id: url.split("/").at(-1) } };
   };
-  f.api.setActiveTab("admin"); const task = f.state.adminBootstrapResumeTask; await entered.promise;
+  f.api.setActiveTab("rank"); const task = f.state.adminBootstrapResumeTask; await entered.promise;
   assert.equal(f.api.resumeAdminBootstrapReads(), task);
   f.api.setActiveTab("monthlyReports"); detail.resolve(); await task;
   assert.equal(f.state.adminBootstrapRunPending, "latest");
   assert.equal(f.calls.filter(name => name === "history").length, 0);
-  f.api.setActiveTab("admin"); await f.state.adminBootstrapResumeTask;
+  f.api.setActiveTab("rank"); await f.state.adminBootstrapResumeTask;
   assert.equal(detailReads, 2);
   assert.equal(f.state.adminBootstrapRunPending, null);
   assert.equal(f.calls.filter(name => name === "history").length, 1);
+});
+
+test("home and company DB bootstrap keep full saved results lazy until a result screen is entered", async () => {
+  for (const section of ["overview", "database"]) {
+    const f = runFixture({ activeTab: "admin" });
+    f.state.adminPanelSection = section;
+    await f.api.loadRuns(true, { bootstrap: true });
+    assert.deepEqual(f.requests, ["/api/runs"]);
+    assert.equal(f.state.adminBootstrapRunPending, "latest");
+    assert.equal(f.state.data.run.id, "previous-good");
+    await f.api.resumeAdminBootstrapReads();
+    assert.deepEqual(f.requests, ["/api/runs"], "home/DB cannot admit the large saved result after the compact list");
+    f.api.setActiveTab("rank");
+    await f.state.adminBootstrapResumeTask;
+    assert.deepEqual(f.requests, ["/api/runs", "/api/runs/latest"]);
+    assert.equal(f.state.data.run.id, "latest");
+  }
 });
 
 test("an empty-run startup defers and separately resumes the missing company summary", async () => {
@@ -444,7 +464,7 @@ test("an empty-run startup defers and separately resumes the missing company sum
   f.state.companyMaster = null;
   f.state.adminBootstrapSummaryPending = true;
   f.api.setActiveTab("admin"); await f.state.adminBootstrapResumeTask;
-  assert.deepEqual(f.requests, ["/api/company-master/summary"]);
+  assert.deepEqual(f.requests, ["/api/company-master/bootstrap"]);
   assert.equal(f.state.companyMaster.totalCompanies, 18);
   assert.equal(f.state.adminBootstrapSummaryPending, false);
 });

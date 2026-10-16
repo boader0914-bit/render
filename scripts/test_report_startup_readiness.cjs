@@ -15,8 +15,9 @@ function gate() {
   return { promise, resolve, reject };
 }
 
-function fixture({ seedError = false } = {}) {
-  const coordination = gate(), selectors = gate(), entered = gate();
+function fixture({ seedError = false, companyPending = false, companyError = false } = {}) {
+  const coordination = gate(), selectors = gate(), entered = gate(), company = gate(), companyEntered = gate();
+  if (!companyPending) company.resolve({ cacheStatus: "saved", data: { totalCompanies: 535 }, json: Buffer.alloc(1), gzip: Buffer.alloc(1) });
   const calls = [], warnings = [];
   let listener;
   const context = {
@@ -24,6 +25,12 @@ function fixture({ seedError = false } = {}) {
     process: { env: {} }, console: { log() {}, error() {}, warn: (...args) => warnings.push(args) },
     seedOutputsFromRepo: async () => { calls.push("seed"); if (seedError) throw new Error("seed unavailable"); },
     collectorBrokerReady: coordination.promise,
+    companyBootstrapStore: { get: async () => {
+      calls.push("company-list");
+      companyEntered.resolve();
+      if (companyError) throw Object.assign(new Error("private company content"), { code: "COMPANY_BOOTSTRAP_INVALID_SOURCE" });
+      return company.promise;
+    } },
     collectionRotationScheduler: {
       status: async () => calls.push("coordination"),
       start: async () => calls.push("rotation")
@@ -42,7 +49,7 @@ function fixture({ seedError = false } = {}) {
     setInterval: () => ({ unref() {} })
   };
   const ready = vm.runInNewContext(startup, context);
-  return { calls, warnings, ready, coordination, selectors, entered, listen: () => listener() };
+  return { calls, warnings, ready, coordination, selectors, entered, company, companyEntered, listen: () => listener() };
 }
 
 test("readiness prepares persisted selectors after coordination and before aggregate bootstraps", async () => {
@@ -50,7 +57,7 @@ test("readiness prepares persisted selectors after coordination and before aggre
   await Promise.resolve();
   assert.deepEqual(f.calls, ["seed"]);
   f.coordination.resolve(); await f.entered.promise;
-  assert.deepEqual(JSON.parse(JSON.stringify(f.calls)), ["seed", "coordination", ["selectors", { priority: "foreground" }]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(f.calls)), ["seed", "coordination", "company-list", ["selectors", { priority: "foreground" }]]);
   f.selectors.resolve({ selectorCache: { storage: "saved" } }); await f.ready;
   assert.equal(f.calls.at(-1), "listen");
   assert.ok(!f.calls.includes("companies") && !f.calls.includes("industry"));
@@ -74,4 +81,21 @@ test("seed fallback still prepares selectors and runs both existing aggregate bo
   f.selectors.resolve({ selectorCache: { storage: "failed" } }); await f.ready; f.listen();
   assert.ok(f.calls.includes("companies") && f.calls.includes("industry"));
   assert.equal(f.warnings.length, 1);
+});
+
+test("company list preparation finishes before selector reads and large aggregate bootstraps", async () => {
+  const f = fixture({ companyPending: true }); f.coordination.resolve(); await f.companyEntered.promise;
+  assert.deepEqual(f.calls, ["seed", "coordination", "company-list"]);
+  assert.ok(!f.calls.includes("listen") && !f.calls.includes("companies") && !f.calls.includes("industry"));
+  f.company.resolve({ cacheStatus: "calculated", data: { totalCompanies: 535 }, json: Buffer.alloc(20), gzip: Buffer.alloc(5) });
+  await f.entered.promise;
+  f.selectors.resolve({ selectorCache: { storage: "saved" } }); await f.ready;
+  assert.equal(f.calls.at(-1), "listen");
+});
+
+test("company preparation failure remains a safe diagnostic while normal API errors remain available", async () => {
+  const f = fixture({ companyError: true }); f.coordination.resolve(); await f.entered.promise;
+  f.selectors.resolve({ selectorCache: { storage: "saved" } }); await f.ready; f.listen(); await Promise.resolve();
+  assert.ok(f.calls.includes("listen") && f.calls.includes("companies"));
+  assert.deepEqual(f.warnings, [["company_bootstrap_prepare_failed", "COMPANY_BOOTSTRAP_INVALID_SOURCE"]]);
 });

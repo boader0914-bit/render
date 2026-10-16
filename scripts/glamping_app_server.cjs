@@ -28,6 +28,7 @@ const { createIndustrySourceRevision } = require("./lib/industry_source_revision
 const { createCompanyIntegratedDb } = require("./lib/company_integrated_db.cjs");
 const { createCompanyIntegratedTargets } = require("./lib/company_integrated_targets.cjs");
 const { createCompanyCapacityRegistry } = require("./lib/company_capacity_registry.cjs");
+const { aggregateFields: companyBootstrapAggregateFields, compactCompanyInventory, createCompanyBootstrapStore, acceptsGzip } = require("./lib/company_bootstrap.cjs");
 const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
 const { createMonthlyReportContext } = require("./lib/monthly_report_context.cjs");
 const { createMonthlyReportOutlookEvaluation } = require("./lib/monthly_report_outlook_evaluation.cjs");
@@ -123,6 +124,14 @@ const B2B_INTEREST_LODGES_FILE = path.join(CUSTOMER_DB_DIR, "b2b_interest_lodges
 const ACCOUNT_DELETE_REQUESTS_FILE = path.join(CUSTOMER_DB_DIR, "account_delete_requests.json");
 const COMPANY_MASTER_DIR = path.join(DATA_DIR, "company_master");
 const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
+const companyBootstrapStore = createCompanyBootstrapStore({
+  sourceFile: COMPANY_MASTER_FILE,
+  cacheFile: path.join(COMPANY_MASTER_DIR, "bootstrap_read_model.json"),
+  projectionVersion: crypto.createHash("sha256")
+    .update(fs.readFileSync(__filename)).update(fs.readFileSync(path.join(__dirname, "lib", "company_bootstrap.cjs"))).digest("hex"),
+  project: summarizeCompanyMasterBootstrapFromMaster,
+  emptyMaster: emptyCompanyMaster
+});
 const TOURISM_DATA_DIR = path.join(DATA_DIR, "tourism_data");
 const LEGAL_POLICY_VERSION = "2026-09-20";
 const TERMS_VERSION = LEGAL_POLICY_VERSION;
@@ -10542,6 +10551,7 @@ async function writeCompanyMaster(master) {
   const tempPath = `${COMPANY_MASTER_FILE}.${process.pid}.tmp`;
   await fsp.writeFile(tempPath, JSON.stringify(next, null, 2), "utf8");
   await fsp.rename(tempPath, COMPANY_MASTER_FILE);
+  companyBootstrapStore.invalidate();
   // Deletion, merging and changes to actual regions affect past cohorts too.
   await invalidateIndustryAnalysis("company_saved");
   const changed = [];
@@ -11199,12 +11209,16 @@ function companyInventorySnapshotWithCurrentCapacity(snapshot, company = {}) {
   };
 }
 
-function companyInventoryWithManualCorrection(company = {}) {
+function companyInventoryWithManualCorrection(company = {}, { bootstrap = false } = {}) {
   const storedInventory = company.inventory || {};
+  const previousLatest = bootstrap
+    ? storedInventory.previousLatest || (storedInventory.snapshots || []).find(row =>
+      (row?.runId || row?.collectedAt) !== (storedInventory.latest?.runId || storedInventory.latest?.collectedAt))
+    : storedInventory.previousLatest;
   const project = (snapshot) => companyInventorySnapshotWithCurrentCapacity(snapshot, company);
   const inventory = {
-    ...storedInventory, latest: project(storedInventory.latest), previousLatest: project(storedInventory.previousLatest),
-    snapshots: (storedInventory.snapshots || []).map(project)
+    ...storedInventory, latest: project(storedInventory.latest), previousLatest: project(previousLatest),
+    snapshots: bootstrap ? [] : (storedInventory.snapshots || []).map(project)
   };
   const correction = company.manualCorrection;
   if (!manualCorrectionHasBasis(correction)) return inventory;
@@ -11418,8 +11432,9 @@ function companyKeywordRecentRuns(keyword = {}, limit = 12, observedTimesByRunId
     }));
 }
 
-function companyRecordSummary(company = {}, activeKeywordKey = "") {
-  const inventory = companyInventorySummaryView(companyInventoryWithManualCorrection(company), company);
+function companyRecordSummary(company = {}, activeKeywordKey = "", { bootstrap = false } = {}) {
+  const projectedInventory = companyInventorySummaryView(companyInventoryWithManualCorrection(company, { bootstrap }), company);
+  const inventory = bootstrap ? compactCompanyInventory(projectedInventory) : projectedInventory;
   const manualCorrection = manualCorrectionHasValue(company.manualCorrection) ? company.manualCorrection : null;
   const regions = companyRegionsWithManualCorrection(company);
   const keywords = Object.values(company.keywords || {})
@@ -11439,7 +11454,7 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
         searchScope: row.searchScope || "",
         searchScopeLabel: row.searchScopeLabel || "",
         detailRankRanges: row.detailRankRanges || "",
-        recentRuns: companyKeywordRecentRuns(row),
+        ...(bootstrap ? {} : { recentRuns: companyKeywordRecentRuns(row) }),
         layer
       };
     });
@@ -11465,7 +11480,7 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     collectionRouteStats: Object.values(company.collectionRouteStats || {})
       .sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))
       .slice(0, 8),
-    collectionRouteHistory: (company.collectionRouteHistory || []).slice(0, 8),
+    ...(bootstrap ? {} : { collectionRouteHistory: (company.collectionRouteHistory || []).slice(0, 8) }),
     sourceStats: Object.values(company.sourceStats || {})
       .sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))
       .slice(0, 8),
@@ -11477,25 +11492,26 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     activeKeyword,
     exposureLayer,
     inventory,
-    demandSignals: company.demandSignals || null,
+    demandSignals: bootstrap ? companyBootstrapAggregateFields(company.demandSignals || null) : company.demandSignals || null,
     naverChannelObservation: sanitizeNaverChannelObservation(company.naverChannelObservation || {}),
-    naverChannelObservationHistory: (company.naverChannelObservationHistory || [])
+    ...(bootstrap ? {} : { naverChannelObservationHistory: (company.naverChannelObservationHistory || [])
       .map((row) => sanitizeNaverChannelObservation(row))
       .filter(Boolean)
-      .slice(-8),
+      .slice(-8) }),
     channelExposures: publicCompanyChannelExposures(company.channelExposures || company.channelExposure || {}),
-    channelExposureHistory: (company.channelExposureHistory || []).slice(-12),
+    ...(bootstrap ? {} : { channelExposureHistory: (company.channelExposureHistory || []).slice(-12) }),
     adminProfile: company.adminProfile || null,
-    adminProfileHistory: (company.adminProfileHistory || []).slice(-8),
+    ...(bootstrap ? {} : { adminProfileHistory: (company.adminProfileHistory || []).slice(-8) }),
     correctionStatus: companyCorrectionStatus(company, inventory),
     manualCorrection,
-    manualCorrectionHistory: (company.manualCorrectionHistory || []).slice(-8),
+    ...(bootstrap ? {} : { manualCorrectionHistory: (company.manualCorrectionHistory || []).slice(-8) }),
     manualCorrectionRevision: company.manualCorrectionRevision || 0,
     adminReview: company.adminReview || null,
-    adminReviewHistory: (company.adminReviewHistory || []).slice(-8),
+    ...(bootstrap ? {} : { adminReviewHistory: (company.adminReviewHistory || []).slice(-8) }),
     salesContact: company.salesContact || null,
-    salesContactHistory: (company.salesContactHistory || []).slice(-12),
-    identityConfidence: companyIdentityConfidence(company)
+    ...(bootstrap ? {} : { salesContactHistory: (company.salesContactHistory || []).slice(-12) }),
+    identityConfidence: companyIdentityConfidence(company),
+    ...(bootstrap ? { detailLoaded: false } : {})
   };
 }
 
@@ -11519,7 +11535,7 @@ function shouldSuppressDuplicateCandidate(companies = []) {
     || companiesHaveDistinctStrongIds(companies, "bookingBusinessIds");
 }
 
-function findCompanyDuplicateCandidates(master) {
+function findCompanyDuplicateCandidates(master, summarize = companyRecordSummary) {
   const buckets = new Map();
   for (const company of Object.values(master.companies || {})) {
     const loose = company.looseNameKey || normalizeCompanyLooseName(company.primaryName);
@@ -11536,13 +11552,13 @@ function findCompanyDuplicateCandidates(master) {
     .map(([candidateKey, companies]) => ({
       candidateKey,
       reason: "유사 업체명 + 지역",
-      companies: companies.map((company) => companyRecordSummary(company)).slice(0, 6)
+      companies: companies.map((company) => summarize(company)).slice(0, 6)
     }))
     .slice(0, 20);
 }
 
-function summarizeCompanyCrossKeyword(master) {
-  const companies = Object.values(master.companies || {}).map((company) => companyRecordSummary(company));
+function summarizeCompanyCrossKeyword(master, summarizedCompanies = null) {
+  const companies = summarizedCompanies || Object.values(master.companies || {}).map((company) => companyRecordSummary(company));
   const byLayer = (type) => companies.filter((company) => company.exposureLayer?.type === type);
   const regionalLocalCompanies = byLayer("regional_local")
     .sort((a, b) => (a.bestRank || 9999) - (b.bestRank || 9999) || (b.keywordCount || 0) - (a.keywordCount || 0));
@@ -13710,6 +13726,35 @@ function summarizeCompanyCollectionRoutes(companies = []) {
       runCount: routeCounts[key] || 0,
       latestCompanyCount: latestRouteCounts[key] || 0
     })).sort((a, b) => (b.latestCompanyCount || 0) - (a.latestCompanyCount || 0) || (b.runCount || 0) - (a.runCount || 0))
+  };
+}
+
+function summarizeCompanyMasterBootstrapFromMaster(master = {}) {
+  const rawCompanies = Object.values(master.companies || {});
+  const companies = rawCompanies.map(company => companySalesTargetProfile(companyRecordSummary(company, "", { bootstrap: true })))
+    .sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")));
+  const byId = new Map(companies.map(company => [company.companyId, company]));
+  const duplicateCandidates = findCompanyDuplicateCandidates(master, company => byId.get(company.companyId));
+  const collectionSourceCounts = companies.reduce((acc, company) => {
+    const sources = company.collectionSources?.length ? company.collectionSources : ["admin_search"];
+    for (const source of sources) acc[source] = (acc[source] || 0) + 1;
+    return acc;
+  }, {});
+  return {
+    file: "company_master/companies.json",
+    totalCompanies: companies.length,
+    sourceKeyCount: Object.keys(master.sourceIndex || {}).length,
+    duplicateCandidateCount: duplicateCandidates.length,
+    duplicateCandidates,
+    collectionSourceCounts,
+    collectionRoutes: summarizeCompanyCollectionRoutes(rawCompanies),
+    b2bSearchCompanyCount: collectionSourceCounts.b2b_search || 0,
+    crossKeyword: summarizeCompanyCrossKeyword(master, companies),
+    salesTargets: summarizeCompanySalesTargets(companies),
+    adminRegionalOperations: summarizeCompanyMasterRegionalOperations(companies, master),
+    updatedAt: master.updatedAt || "",
+    principle: "네이버 place_id/예약ID 우선, 그 다음 업체명+주소/지역으로 동일 업체를 병합",
+    companies
   };
 }
 
@@ -19145,6 +19190,28 @@ async function route(req, res) {
       return send(res, 200, await summarizeHistoryOperations());
     }
 
+    if (req.method === "GET" && reqUrl.pathname === "/api/company-master/bootstrap") {
+      if (!requireAdminSession(session, req, res)) return;
+      let result;
+      try { result = await companyBootstrapStore.get(); }
+      catch (cause) {
+        const error = new Error(cause?.code === "COMPANY_BOOTSTRAP_SOURCE_CHANGED"
+          ? "업체 기본자료가 변경되고 있습니다. 다시 조회해 주세요."
+          : "업체 기본자료를 불러오지 못했습니다. 연결 상태를 확인한 뒤 다시 조회해 주세요.");
+        error.statusCode = cause?.statusCode === 503 ? 503 : 500;
+        error.code = cause?.code || "COMPANY_BOOTSTRAP_UNAVAILABLE";
+        throw error;
+      }
+      const gzip = acceptsGzip(req.headers["accept-encoding"]);
+      const bytes = gzip ? result.gzip : result.json;
+      return send(res, 200, bytes, "application/json; charset=utf-8", {
+        ...(gzip ? { "Content-Encoding": "gzip" } : {}),
+        "Content-Length": bytes.length,
+        "Vary": "Accept-Encoding",
+        "X-Company-Bootstrap-Cache": result.cacheStatus
+      });
+    }
+
     if (req.method === "GET" && reqUrl.pathname === "/api/company-master/summary") {
       if (!requireAdminSession(session, req, res)) return;
       return send(res, 200, await summarizeCompanyMaster());
@@ -19796,6 +19863,17 @@ seedOutputsFromRepo()
     // Restore persisted coordination before any existing scheduler can dispatch.
     await collectorBrokerReady;
     await collectionRotationScheduler.status();
+    // Build/reopen the compact saved-company read model before readiness and
+    // before the large history/aggregate bootstraps can compete for memory.
+    // This reads saved data only; failures remain explicit API errors, not zero.
+    try {
+      const started = Date.now();
+      const prepared = await companyBootstrapStore.get();
+      console.log("company_bootstrap_prepared", JSON.stringify({ status: prepared.cacheStatus,
+        companyCount: prepared.data.totalCompanies, jsonBytes: prepared.json.length,
+        gzipBytes: prepared.gzip.length, elapsedMs: Date.now() - started }));
+    }
+    catch (error) { console.warn("company_bootstrap_prepare_failed", error.code || "unavailable"); }
     // Prepare the small persisted selector catalog before background aggregate
     // bootstraps occupy the shared source reader. Green readiness then includes
     // a usable first report selection; failures still allow normal error reads.

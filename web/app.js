@@ -2830,6 +2830,8 @@ function setAdminPanelSection(sectionKey = "overview", options = {}) {
     updateCrawlSpeedPreview();
     ensureLatestCollectionResult();
   }
+  if (isAdminRole() && state.activeTab === "admin" && !["overview", "database"].includes(sectionKey)
+    && (state.adminBootstrapRunPending || state.adminBootstrapSummaryPending)) void resumeAdminBootstrapReads();
   if (options.scroll) {
     window.setTimeout(() => {
       document.querySelector(`[data-admin-section-panel="${sectionKey}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -19266,7 +19268,13 @@ function companyCheckVisibleEntries(master = companyMasterSource()) {
 }
 
 function companyDecisionQueueEntries(master = {}) {
-  return (master.companies || [])
+  const companies = master.companies || [];
+  const cache = state.companyDecisionQueueCache;
+  // A detail merge replaces a row in place. Compare row references as well as
+  // the array and selected result; a newer correction must never reuse it.
+  if (cache?.companies === companies && cache.runData === state.data
+    && cache.rows.length === companies.length && cache.rows.every((row, index) => row === companies[index])) return cache.entries;
+  const entries = companies
     .map((company) => {
       const decision = companyDecisionQueueProfile(company);
       const profile = companyNeedsCorrection(company);
@@ -19294,6 +19302,8 @@ function companyDecisionQueueEntries(master = {}) {
         || (b.company.salesTarget?.score || 0) - (a.company.salesTarget?.score || 0)
         || (a.company.bestRank || 9999) - (b.company.bestRank || 9999);
     });
+  state.companyDecisionQueueCache = { companies, runData: state.data, rows: companies.slice(), entries };
+  return entries;
 }
 
 function companyDecisionEvidenceHtml(decision = {}) {
@@ -21144,6 +21154,8 @@ function adminDbFeatureProfile(company = {}, metrics = {}) {
     latest.facilities,
     latest.rooms,
     latest.products,
+    company._bootstrapFeatureText,
+    latest._bootstrapFeatureText,
     latest.salesSignal?.productTypeSummary
   ]));
   return {
@@ -21277,7 +21289,11 @@ function adminDbCompanyProfile(company = {}, classification = {}) {
 
 function adminDbRows(master = {}) {
   const regions = master.adminRegionalOperations?.regions || [];
-  return (master.companies || []).map((company) => {
+  const companies = master.companies || [];
+  const cache = state.adminDbRowsCache;
+  if (cache?.companies === companies && cache.regions === regions && cache.runData === state.data
+    && cache.sources.length === companies.length && cache.sources.every((row, index) => row === companies[index])) return cache.rows.slice();
+  const rows = companies.map((company) => {
     const classification = adminDbClassifyCompany(company, regions);
     const metrics = adminDbCompanyProfile(company, classification);
     const searchText = compactSearchText(adminDbFlattenText([
@@ -21296,6 +21312,8 @@ function adminDbRows(master = {}) {
     ]));
     return { company, metrics, ...classification, searchText };
   });
+  state.adminDbRowsCache = { companies, regions, runData: state.data, sources: companies.slice(), rows };
+  return rows.slice();
 }
 
 const ADMIN_DB_PROVINCE_ORDER = [
@@ -26730,6 +26748,16 @@ function adminDbSelectedDetailPanel(rows = []) {
     `;
   }
   const company = row.company || {};
+  const detailId = company.companyId || "";
+  const detailState = state.adminDbCompanyDetails?.[detailId];
+  if (company.detailLoaded === false || state.adminDbCompanyDetailLoading?.[detailId] || detailState?.error) {
+    state.adminDbSelectedCompanyId = detailId;
+    return `<section class="admin-db-selected-panel admin-db-loading-detail" data-admin-db-selected-company="${escapeHtml(detailId)}" role="status">
+      <strong>${escapeHtml(company.primaryName || "선택 업체")}</strong>
+      <p>${escapeHtml(detailState?.error || "선택한 업체의 상세 이력과 검수 자료를 불러오고 있습니다.")}</p>
+      ${detailState?.error ? `<button type="button" data-admin-db-company-select="${escapeHtml(detailId)}">다시 불러오기</button>` : ""}
+    </section>`;
+  }
   const metrics = row.metrics || {};
   const workType = metrics.workType || { label: "확인 필요", tone: "watch" };
   const requiredChannels = adminDbRequiredCheckChannels(row);
@@ -27276,6 +27304,17 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
     </section>
   `;
   bindAdminDbCompanySelectButtons();
+  // A review opened without an explicit company selects the first applicable
+  // row. Hydrate that row only after the loading surface has reached the DOM.
+  const pendingDetailId = viewMode === "review" ? state.adminDbSelectedCompanyId : "";
+  const pendingCompany = pendingDetailId && (master.companies || []).find((company) => company.companyId === pendingDetailId);
+  if (pendingCompany?.detailLoaded === false && !state.adminDbCompanyDetailLoading?.[pendingDetailId]
+    && !state.adminDbCompanyDetails?.[pendingDetailId]?.error) {
+    Promise.resolve().then(() => {
+      if (isAdminRole() && state.activeTab === "admin" && state.adminPanelSection === "database"
+        && state.adminDbSelectedCompanyId === pendingDetailId) void loadAdminDbCompanyDetail(pendingDetailId);
+    });
+  }
   if (window.CompanyIntegrated) syncCompanyIntegratedPanel();
   applyPendingCompanyEdit();
   if (viewMode === "region") renderAdminRegionAnalysisDashboard(master);
@@ -27283,7 +27322,8 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   if (window.AdminTransitionTiming) {
     const detailId = viewMode === "review" ? state.adminDbSelectedCompanyId : "";
     const detailError = detailId && state.adminDbCompanyDetails?.[detailId]?.error;
-    const waiting = !Array.isArray(master.companies) || Boolean(detailId && state.adminDbCompanyDetailLoading?.[detailId]);
+    const waiting = !Array.isArray(master.companies) || Boolean(detailId && (state.adminDbCompanyDetailLoading?.[detailId]
+      || (master.companies || []).find((company) => company.companyId === detailId)?.detailLoaded === false));
     finishAdminScreenTransition(detailError ? "error" : waiting ? "waiting" : "ready");
   }
 }
@@ -37456,13 +37496,16 @@ async function restoreAppHistoryState(historyState = {}, options = {}) {
 }
 
 function resumeAdminBootstrapReads() {
-  if (!isAdminRole() || state.activeTab === "monthlyReports") return Promise.resolve();
+  if (!isAdminRole() || state.activeTab === "monthlyReports"
+    || (!state.adminBootstrapSummaryPending && state.activeTab === "admin" && ["overview", "database"].includes(state.adminPanelSection))) return Promise.resolve();
   if (state.adminBootstrapResumeTask) return state.adminBootstrapResumeTask;
-  const runId = state.adminBootstrapRunPending, summaryPending = state.adminBootstrapSummaryPending;
+  const basicView = state.activeTab === "admin" && ["overview", "database"].includes(state.adminPanelSection);
+  const runId = basicView ? null : state.adminBootstrapRunPending, summaryPending = state.adminBootstrapSummaryPending;
   if (!runId && !summaryPending) return Promise.resolve();
   // Clear admission before starting I/O. A direct result selection can cancel
   // any remainder without a late startup response putting that old ID back.
-  state.adminBootstrapRunPending = null; state.adminBootstrapSummaryPending = false;
+  if (!basicView) state.adminBootstrapRunPending = null;
+  state.adminBootstrapSummaryPending = false;
   let failed = false;
   const task = (async () => {
     let sequence = loadRunRequestSequence;
@@ -37498,6 +37541,7 @@ function resumeAdminBootstrapReads() {
   })().finally(() => {
     if (state.adminBootstrapResumeTask === task) state.adminBootstrapResumeTask = null;
     if (!failed && isAdminRole() && state.activeTab !== "monthlyReports"
+      && !(state.activeTab === "admin" && ["overview", "database"].includes(state.adminPanelSection))
       && (state.adminBootstrapRunPending || state.adminBootstrapSummaryPending)) void resumeAdminBootstrapReads();
   });
   state.adminBootstrapResumeTask = task;
@@ -39329,7 +39373,9 @@ async function loadCompanyMasterSummary(options = {}) {
     const sequence = state.companyMasterSummarySequence = (state.companyMasterSummarySequence || 0) + 1;
     read = { session, sequence, master: state.companyMaster, companies: [...(state.companyMaster?.companies || [])], applied: false };
     // Share transport only. Each caller still checks its own navigation guard.
-    read.promise = fetchJson("/api/company-master/summary").then(data => ({ data }), error => ({ error })).finally(() => {
+    // Lists and home need saved aggregates only. Never silently download all
+    // company histories when this smaller read fails; keep the error visible.
+    read.promise = fetchJson("/api/company-master/bootstrap").then(data => ({ data }), error => ({ error })).finally(() => {
       if (state.companyMasterSummaryRead === read) state.companyMasterSummaryRead = null;
     });
     state.companyMasterSummaryRead = read;
@@ -39368,33 +39414,58 @@ async function loadCompanyMasterSummary(options = {}) {
 
 async function loadAdminDbCompanyDetail(companyId = "", options = {}) {
   const selectedCompanyId = String(companyId || "").trim();
-  if (!isAdminRole() || !selectedCompanyId) return null;
+  if (!isAdminRole() || state.session?.authenticated === false || !selectedCompanyId) return null;
   state.adminDbCompanyDetails = state.adminDbCompanyDetails || {};
   state.adminDbCompanyDetailLoading = state.adminDbCompanyDetailLoading || {};
-  if (!options.force && state.adminDbCompanyDetails[selectedCompanyId]) {
-    return state.adminDbCompanyDetails[selectedCompanyId];
-  }
-  if (state.adminDbCompanyDetailLoading[selectedCompanyId]) return null;
+  state.adminDbCompanyDetailReads = state.adminDbCompanyDetailReads || {};
+  state.adminDbCompanyDetailContexts = state.adminDbCompanyDetailContexts || {};
+  const session = state.session;
+  const master = state.companyMaster;
+  const company = (master?.companies || []).find((row) => row.companyId === selectedCompanyId);
+  const cached = state.adminDbCompanyDetails[selectedCompanyId];
+  const cachedContext = state.adminDbCompanyDetailContexts[selectedCompanyId];
+  if (!options.force && cached && !cached.error && cachedContext?.session === session
+    && cachedContext.company === company) return cached;
+  const existing = state.adminDbCompanyDetailReads[selectedCompanyId];
+  if (!options.force && existing?.session === session && existing.master === master && existing.company === company) return existing.promise;
+  const read = { session, master, company, revision: master?.sourceRevision,
+    correction: company?.manualCorrection, review: company?.adminReview, profile: company?.adminProfile, updatedAt: company?.updatedAt };
+  const current = () => isAdminRole() && state.session?.authenticated !== false && state.session === session
+    && state.companyMaster === master && state.adminDbCompanyDetailReads[selectedCompanyId] === read
+    && master?.sourceRevision === read.revision && company?.manualCorrection === read.correction
+    && company?.adminReview === read.review && company?.adminProfile === read.profile && company?.updatedAt === read.updatedAt
+    && (state.companyMaster?.companies || []).find((row) => row.companyId === selectedCompanyId) === company;
+  state.adminDbCompanyDetailReads[selectedCompanyId] = read;
   state.adminDbCompanyDetailLoading[selectedCompanyId] = true;
+  delete state.adminDbCompanyDetails[selectedCompanyId];
   if (state.adminDbSelectedCompanyId === selectedCompanyId) renderAdminDatabaseDashboard();
-  try {
-    const detail = await fetchJson(`/api/company-master/detail?companyId=${encodeURIComponent(selectedCompanyId)}`);
-    state.adminDbCompanyDetails[selectedCompanyId] = detail;
-    const companyIndex = (state.companyMaster?.companies || []).findIndex((company) => company.companyId === selectedCompanyId);
-    if (companyIndex >= 0 && detail?.company) {
-      state.companyMaster.companies[companyIndex] = {
-        ...state.companyMaster.companies[companyIndex],
-        ...detail.company
-      };
+  read.promise = (async () => {
+    try {
+      const detail = await fetchJson(`/api/company-master/detail?companyId=${encodeURIComponent(selectedCompanyId)}`);
+      if (!current()) return null;
+      if (!detail?.company || String(detail.company.companyId || "") !== selectedCompanyId) throw new Error("요청한 업체와 상세 자료가 일치하지 않습니다.");
+      const companyIndex = (master?.companies || []).indexOf(company);
+      let hydrated = company;
+      if (companyIndex >= 0) {
+        hydrated = { ...company, ...detail.company, detailLoaded: true };
+        delete hydrated._bootstrapFeatureText;
+        master.companies[companyIndex] = hydrated;
+      }
+      state.adminDbCompanyDetails[selectedCompanyId] = detail;
+      state.adminDbCompanyDetailContexts[selectedCompanyId] = { session, company: hydrated };
+      return detail;
+    } catch (error) {
+      if (current()) state.adminDbCompanyDetails[selectedCompanyId] = { error: error.message || "상세 데이터를 불러오지 못했습니다." };
+      return null;
+    } finally {
+      if (state.adminDbCompanyDetailReads[selectedCompanyId] === read) {
+        delete state.adminDbCompanyDetailReads[selectedCompanyId];
+        delete state.adminDbCompanyDetailLoading[selectedCompanyId];
+        if (isAdminRole() && state.session === session && state.adminDbSelectedCompanyId === selectedCompanyId) renderAdminDatabaseDashboard();
+      }
     }
-    return detail;
-  } catch (error) {
-    state.adminDbCompanyDetails[selectedCompanyId] = { error: error.message || "상세 데이터를 불러오지 못했습니다." };
-    return null;
-  } finally {
-    delete state.adminDbCompanyDetailLoading[selectedCompanyId];
-    if (state.adminDbSelectedCompanyId === selectedCompanyId) renderAdminDatabaseDashboard();
-  }
+  })();
+  return read.promise;
 }
 
 async function resolveCompanyDuplicate(button) {
@@ -40458,13 +40529,27 @@ function exportRecrawlAutomationCsv() {
   setStatus(`재수집 자동화 리포트 ${fmtNumber(profile.needsExecution.length + profile.transitions.length)}개 내보내기`);
 }
 
-function exportAdminReviewAuditCsv() {
-  const rows = adminReviewAuditRows(companyMasterSource());
+async function exportAdminReviewAuditCsv() {
+  const session = state.session;
+  let master = companyMasterSource();
+  if (master.representation === "bootstrap") {
+    setStatus("검수 이력 내보내기 자료 확인 중");
+    try {
+      // Export is an explicit request for every saved review, unlike entering
+      // home or DB. Keep this rich response local to the export operation.
+      master = await fetchJson("/api/company-master/summary");
+      if (!isAdminRole() || state.session !== session || state.session?.authenticated === false) return;
+    } catch (error) {
+      setStatus(`검수 이력 조회 실패: ${error.message}`);
+      return;
+    }
+  }
+  const rows = adminReviewAuditRows(master);
   if (!rows.length) {
     setStatus("내보낼 검수 이력이 없음");
     return;
   }
-  const csv = adminReviewAuditCsv(companyMasterSource());
+  const csv = adminReviewAuditCsv(master);
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const date = new Date().toISOString().slice(0, 10);
@@ -41004,7 +41089,8 @@ async function loadRuns(selectLatest = false, options = {}) {
   }
   if (els.runSelect) els.runSelect.value = state.activeRunId;
   renderB2BSearchPanel();
-  if (options.bootstrap && state.activeTab === "monthlyReports") {
+  if (options.bootstrap && (state.activeTab === "monthlyReports"
+    || (state.activeTab === "admin" && ["overview", "database"].includes(state.adminPanelSection)))) {
     state.adminBootstrapRunPending = state.activeRunId;
     state.adminViewsDeferred = true;
     return;
@@ -41956,7 +42042,8 @@ async function loadRun(runId, options = {}) {
   }
   const current = () => requestSequence === loadRunRequestSequence && (!options.bootstrap || isAdminRole());
   const deferBootstrap = () => {
-    if (!options.bootstrap || !current() || state.activeTab !== "monthlyReports") return false;
+    if (!options.bootstrap || !current() || !(state.activeTab === "monthlyReports"
+      || (state.activeTab === "admin" && ["overview", "database"].includes(state.adminPanelSection)))) return false;
     state.adminBootstrapRunPending = runId; state.adminViewsDeferred = true;
     return true;
   };

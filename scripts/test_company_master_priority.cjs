@@ -39,7 +39,7 @@ function fixture({ initial = null, tab = "admin", section = "overview", role = "
     state, console, Promise, Array, Number, Date, Object, Map, Set,
     isAdminRole: () => state.session?.role === "admin" && !state.adminUserViewMode,
     fetchJson: async url => {
-      assert.equal(url, "/api/company-master/summary", "priority preparation only reads saved company data");
+      assert.equal(url, "/api/company-master/bootstrap", "priority preparation only reads saved company data");
       requests.push(url);
       return hooks.fetch ? hooks.fetch(url) : master();
     },
