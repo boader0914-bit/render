@@ -220,11 +220,18 @@
   function createController(container, api = request) {
     const state = { options: null, optionsVerified: false, reports: [], filter: "all", form: { month: "", type: "company", targetId: "", cutoffDate: "" }, search: "", preview: null, previewRequest: null, previewToken: null, generation: null, report: null, title: "", notes: "", acknowledged: false, busy: "", busyStartedAt: 0, message: "", error: "" };
     let openRevision = 0;
+    let displayTimingRevision = 0;
     let snapshotMarkupCache = null, targetOptionsCache = null;
     const idleWaiters = [];
     const optionsForType = () => state.options?.[{ company: "companies", keyword: "keywords", region: "regions" }[state.form.type]] || [];
-    const setReport = (report) => { snapshotMarkupCache = null; state.report = report; state.preview = null; state.previewRequest = null; state.previewToken = null; state.generation = null; state.title = report.title || ""; state.notes = report.notes || ""; state.acknowledged = false; };
-    const invalidatePreview = () => { snapshotMarkupCache = null; state.preview = null; state.previewRequest = null; state.previewToken = null; state.generation = null; };
+    const clearPreviewTiming = () => {
+      if (!state.busy) ++displayTimingRevision;
+      if (!container.dataset) return;
+      delete container.dataset.mrPreviewMs; delete container.dataset.mrPreviewSequence;
+      container.dataset.mrPreviewStatus = "invalidated";
+    };
+    const setReport = (report) => { clearPreviewTiming(); snapshotMarkupCache = null; state.report = report; state.preview = null; state.previewRequest = null; state.previewToken = null; state.generation = null; state.title = report.title || ""; state.notes = report.notes || ""; state.acknowledged = false; };
+    const invalidatePreview = () => { clearPreviewTiming(); snapshotMarkupCache = null; state.preview = null; state.previewRequest = null; state.previewToken = null; state.generation = null; };
     const busyText = () => {
       const seconds = Math.max(0, Math.floor((Date.now() - state.busyStartedAt) / 1000));
       return `${state.busy}${seconds ? ` · ${seconds}초 경과` : ""}${seconds >= 10 ? " · 처음 계산하거나 자료가 바뀐 경우 더 걸릴 수 있습니다. 중복 요청 없이 기다려 주세요." : ""}`;
@@ -283,18 +290,43 @@
     async function readOptions() { return api("/options"); }
     async function readList() { const data = await api(""); return Array.isArray(data) ? data : data.reports || []; }
     async function loadList() { state.reports = await readList(); }
-    async function execute(label, operation) {
+    async function execute(label, operation, timingKey = "", startedAt = Date.now()) {
       if (state.busy) return false;
+      const timingRevision = ++displayTimingRevision;
+      if (timingKey && container.dataset) {
+        delete container.dataset[`${timingKey}Ms`];
+        container.dataset[`${timingKey}Status`] = "pending";
+      }
       state.busy = label; state.busyStartedAt = Date.now(); state.error = ""; state.message = ""; render();
       const ticker = typeof root.setInterval === "function" ? root.setInterval(() => {
         const notice = container.querySelector?.("[data-mr-progress-text]");
         if (notice && state.busy) notice.textContent = busyText();
       }, 1000) : null;
       try { await operation(); return true; } catch (error) { state.error = String(error.message || "리포트를 처리하지 못했습니다."); return false; }
-      finally { if (ticker !== null) root.clearInterval(ticker); state.busy = ""; state.busyStartedAt = 0; render(); for (const resolve of idleWaiters.splice(0)) resolve(); }
+      finally {
+        if (ticker !== null) root.clearInterval(ticker);
+        state.busy = ""; state.busyStartedAt = 0; render();
+        // QA reads these DOM diagnostics rather than treating automation input
+        // overhead or an old aria-busy=false node as the new result's duration.
+        if (timingKey && container.dataset) {
+          const status = state.error ? "error" : "ready";
+          const record = () => {
+            if (timingRevision !== displayTimingRevision) return;
+            container.dataset[`${timingKey}Ms`] = String(Math.max(0, Date.now() - startedAt));
+            container.dataset[`${timingKey}Status`] = status;
+            container.dataset[`${timingKey}Sequence`] = String(timingRevision);
+          };
+          if (typeof root.requestAnimationFrame === "function") root.requestAnimationFrame(() => root.requestAnimationFrame(record));
+          else record();
+        }
+        for (const resolve of idleWaiters.splice(0)) resolve();
+      }
     }
     async function open(context = {}) {
       const revision = ++openRevision;
+      const entryStart = Number(container.dataset?.mrEntryStartedAt);
+      const startedAt = Number.isFinite(entryStart) && entryStart > 0 && entryStart <= Date.now() ? entryStart : Date.now();
+      if (container.dataset) delete container.dataset.mrEntryStartedAt;
       // A previous preview/save can finish while the user is in the region DB.
       // Apply the latest destination after it finishes; never drop that handoff.
       while (state.busy) await new Promise(resolve => idleWaiters.push(resolve));
@@ -348,7 +380,7 @@
         state.message = context.type === "region" && context.month
           ? "지역 DB에서 선택한 지역·대상 월·관측 마감일을 가져왔습니다. 저장 자료로 미리보기를 만들 수 있습니다."
           : targetRemoved && !context.type ? "선택했던 대상이 목록에서 변경되었습니다. 대상을 다시 선택해 주세요." : "조건을 선택해 미리보기를 만들 수 있습니다.";
-      });
+      }, "mrEntry", startedAt);
     }
     async function action(name, value) {
       if (state.busy) return;
@@ -395,7 +427,7 @@
           state.message = name === "rebuild" ? "최신 저장 자료로 다시 집계했습니다. 초안의 수치와 품질을 다시 검토해 주세요." : name === "publish" ? "발행했습니다. PDF를 다운로드할 수 있습니다." : name === "revise" ? "기존 발행본을 보존하고 새 수정본을 만들었습니다." : name === "review" ? "검토 단계로 이동했습니다. 자료 품질을 확인해 주세요." : "변경 내용을 저장했습니다.";
         }
         await loadList();
-      });
+      }, name === "preview" ? "mrPreview" : "");
     }
     function input(name, value) {
       if (state.busy) return;

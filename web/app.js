@@ -30,6 +30,10 @@ const state = {
   industryHomeOpenSequence: 0,
   activeTab: "report",
   analysisNavigationSequence: 0,
+  adminBootstrapRunPending: null,
+  adminBootstrapSummaryPending: false,
+  adminBootstrapResumeTask: null,
+  adminBootstrapReadError: "",
   themeMode: "system",
   adminMobileSection: "summary",
   adminMobileAnchor: "",
@@ -37224,6 +37228,10 @@ function syncAppHistoryState(push = false) {
 }
 
 function setActiveTab(tab, options = {}) {
+  if (tab === "monthlyReports" && isAdminRole()) {
+    const reportRoot = document.getElementById("monthlyReportsDashboard");
+    if (reportRoot?.dataset) reportRoot.dataset.mrEntryStartedAt = String(Date.now());
+  }
   const previousTab = state.activeTab;
   state.analysisNavigationSequence = (state.analysisNavigationSequence || 0) + 1;
   state.activeTab = roleAllowsTab(tab) ? tab : firstRoleTab();
@@ -37257,6 +37265,8 @@ function setActiveTab(tab, options = {}) {
     state.adminViewsDeferred = false;
     renderAll();
   }
+  if (isAdminRole() && state.activeTab !== "monthlyReports" && !options.fromHistory
+    && (state.adminBootstrapRunPending || state.adminBootstrapSummaryPending)) void resumeAdminBootstrapReads();
   if (state.activeTab === "rank") renderPlaceRankReplayNotice();
   closeDrawer();
   if (isAdminRole() && state.activeTab === "industryHome") renderIndustryHome();
@@ -37297,7 +37307,7 @@ function setActiveTab(tab, options = {}) {
   if (state.activeTab === "regionSources") renderRegionSources();
 }
 
-async function restoreAppHistoryState(historyState = {}) {
+async function restoreAppHistoryState(historyState = {}, options = {}) {
   if (!historyState.tab || !roleAllowsTab(historyState.tab)) return;
   // Even when the target run is already on screen, invalidate an older pending
   // history request so its late response cannot replace the newly restored view.
@@ -37314,7 +37324,60 @@ async function restoreAppHistoryState(historyState = {}) {
         managementRegionKey: String(returnContext.managementRegionKey || ""), provinceKey: String(returnContext.provinceKey || ""), mappingPending: Boolean(returnContext.mappingPending) } : null;
   }
   setActiveTab(historyState.tab, { fromHistory: true, analysisRegionSelection: historyState.analysisRegionSelection || null });
-  if (historyState.activeRunId && historyState.activeRunId !== state.activeRunId) await loadRun(historyState.activeRunId);
+  if (historyState.activeRunId && (historyState.activeRunId !== state.activeRunId
+    || (state.adminBootstrapRunPending === historyState.activeRunId && state.activeTab !== "monthlyReports"))) {
+    await loadRun(historyState.activeRunId, options);
+  } else if (isAdminRole() && state.activeTab !== "monthlyReports"
+    && (state.adminBootstrapRunPending || state.adminBootstrapSummaryPending)) await resumeAdminBootstrapReads();
+}
+
+function resumeAdminBootstrapReads() {
+  if (!isAdminRole() || state.activeTab === "monthlyReports") return Promise.resolve();
+  if (state.adminBootstrapResumeTask) return state.adminBootstrapResumeTask;
+  const runId = state.adminBootstrapRunPending, summaryPending = state.adminBootstrapSummaryPending;
+  if (!runId && !summaryPending) return Promise.resolve();
+  // Clear admission before starting I/O. A direct result selection can cancel
+  // any remainder without a late startup response putting that old ID back.
+  state.adminBootstrapRunPending = null; state.adminBootstrapSummaryPending = false;
+  let failed = false;
+  const task = (async () => {
+    let sequence = loadRunRequestSequence;
+    try {
+      if (runId) {
+        const pending = loadRun(runId, { bootstrap: true });
+        sequence = loadRunRequestSequence;
+        await pending;
+      }
+      if (!isAdminRole() || sequence !== loadRunRequestSequence) return;
+      if (state.activeTab === "monthlyReports") {
+        if (summaryPending) state.adminBootstrapSummaryPending = true;
+        return;
+      }
+      if (summaryPending && !runId) {
+        const current = () => isAdminRole() && sequence === loadRunRequestSequence;
+        const loaded = await loadCompanyMasterSummary({ preserveOnError: true, isCurrent: current, bootstrap: true });
+        if (!current()) return;
+        if (loaded === false) {
+          state.adminBootstrapReadError = "업체 기본자료를 확인하지 못했습니다. 다시 조회해 주세요.";
+          setStatus("초기 자료 일부 미확인 · 다시 조회해 주세요");
+        }
+        renderAll();
+      }
+    } catch (error) {
+      failed = true;
+      if (isAdminRole() && sequence === loadRunRequestSequence) {
+        state.adminBootstrapReadError = String(error.message || "초기 자료를 확인하지 못했습니다.");
+        state.adminViewsDeferred = true;
+        setStatus("초기 자료 확인 실패 · 다시 조회해 주세요");
+      }
+    }
+  })().finally(() => {
+    if (state.adminBootstrapResumeTask === task) state.adminBootstrapResumeTask = null;
+    if (!failed && isAdminRole() && state.activeTab !== "monthlyReports"
+      && (state.adminBootstrapRunPending || state.adminBootstrapSummaryPending)) void resumeAdminBootstrapReads();
+  });
+  state.adminBootstrapResumeTask = task;
+  return task;
 }
 
 function sheetDisclosure(title, count, content, className = "") {
@@ -39051,7 +39114,7 @@ function bindPwaLifecycleEvents() {
   });
 }
 
-async function loadHistoryOps() {
+async function loadHistoryOps(options = {}) {
   if (!isAdminRole()) {
     state.historyOps = null;
     state.historyOpsSelection = null;
@@ -39060,25 +39123,37 @@ async function loadHistoryOps() {
     return;
   }
   try {
-    state.historyOps = await fetchJson("/api/history/summary");
+    const data = await fetchJson("/api/history/summary");
+    if (typeof options.isCurrent === "function" && !options.isCurrent()) return false;
+    state.historyOps = data;
+    return true;
   } catch (error) {
-    state.historyOps = { error: error.message, keywords: [], overall: {} };
+    if (typeof options.isCurrent === "function" && !options.isCurrent()) return false;
+    if (!options.preserveOnError || !state.historyOps) state.historyOps = { error: error.message, keywords: [], overall: {} };
     if (els.historyOpsState) els.historyOpsState.textContent = "오류";
+    return false;
   }
 }
 
-async function loadCompanyMasterSummary() {
+async function loadCompanyMasterSummary(options = {}) {
   if (!isAdminRole()) {
     state.companyMaster = null;
     state.crawlEtaByKey = {};
     return;
   }
   try {
-    state.companyMaster = await fetchJson("/api/company-master/summary");
-    await loadRecrawlEtaEstimates(state.companyMaster);
+    const data = await fetchJson("/api/company-master/summary");
+    if (typeof options.isCurrent === "function" && !options.isCurrent()) return false;
+    state.companyMaster = data;
+    if (!(options.bootstrap && state.activeTab === "monthlyReports")) await loadRecrawlEtaEstimates(state.companyMaster);
+    return true;
   } catch (error) {
-    state.companyMaster = { error: error.message, totalCompanies: 0, duplicateCandidates: [] };
-    state.crawlEtaByKey = {};
+    if (typeof options.isCurrent === "function" && !options.isCurrent()) return false;
+    if (!options.preserveOnError || !state.companyMaster) {
+      state.companyMaster = { error: error.message, totalCompanies: 0, duplicateCandidates: [] };
+      state.crawlEtaByKey = {};
+    }
+    return false;
   }
 }
 
@@ -40680,11 +40755,21 @@ async function loadRuns(selectLatest = false, options = {}) {
     setStatus("검색 대기");
     return;
   }
+  if (!options.bootstrap) {
+    loadRunRequestSequence++;
+    state.adminBootstrapRunPending = null; state.adminBootstrapSummaryPending = false;
+  }
+  const initialRunSequence = loadRunRequestSequence;
   setStatus("결과 로딩");
   const data = await fetchJson("/api/runs");
+  if (!isAdminRole()) return;
   state.runs = data.runs || [];
   if (els.runSelect) {
     els.runSelect.innerHTML = state.runs.map((run) => `<option value="${escapeHtml(run.id)}">${escapeHtml(run.label || run.id)}</option>`).join("");
+  }
+  if (options.bootstrap && initialRunSequence !== loadRunRequestSequence) {
+    if (els.runSelect) els.runSelect.value = state.activeRunId || "";
+    return;
   }
   if (!state.runs.length) {
     state.data = null;
@@ -40710,6 +40795,11 @@ async function loadRuns(selectLatest = false, options = {}) {
   }
   if (els.runSelect) els.runSelect.value = state.activeRunId;
   renderB2BSearchPanel();
+  if (options.bootstrap && state.activeTab === "monthlyReports") {
+    state.adminBootstrapRunPending = state.activeRunId;
+    state.adminViewsDeferred = true;
+    return;
+  }
   await loadRun(state.activeRunId, options);
 }
 
@@ -41651,16 +41741,36 @@ async function refreshTourismDemandStrengthHistory() {
 async function loadRun(runId, options = {}) {
   if (!runId) return;
   const requestSequence = ++loadRunRequestSequence;
+  state.adminBootstrapRunPending = null;
+  if (!options.bootstrap) {
+    state.adminBootstrapSummaryPending = false;
+  }
+  const current = () => requestSequence === loadRunRequestSequence && (!options.bootstrap || isAdminRole());
+  const deferBootstrap = () => {
+    if (!options.bootstrap || !current() || state.activeTab !== "monthlyReports") return false;
+    state.adminBootstrapRunPending = runId; state.adminViewsDeferred = true;
+    return true;
+  };
+  if (options.bootstrap && (!current() || deferBootstrap())) return null;
+  state.adminBootstrapReadError = "";
   setStatus("데이터 로딩");
   const data = await fetchJson(`/api/runs/${encodeURIComponent(runId)}`);
-  if (requestSequence !== loadRunRequestSequence) return null;
+  if (!current()) return null;
   state.data = data;
   state.activeRunId = runId;
   reconcileAnalysisRegionSelection();
   if (state.placeRankReplayRunId && state.placeRankReplayRunId !== runId) state.placeRankReplayRunId = null;
   if (isAdminRole()) {
-    await loadHistoryOps();
-    await loadCompanyMasterSummary();
+    if (deferBootstrap()) return null;
+    const historyLoaded = await loadHistoryOps(options.bootstrap ? { preserveOnError: true, isCurrent: current } : {});
+    if (!current()) return null;
+    if (options.bootstrap && historyLoaded === false) state.adminBootstrapReadError = "수집 이력을 확인하지 못했습니다. 다시 조회해 주세요.";
+    if (deferBootstrap()) return null;
+    const summaryLoaded = await loadCompanyMasterSummary(options.bootstrap ? { preserveOnError: true, isCurrent: current, bootstrap: true } : {});
+    if (!current()) return null;
+    if (options.bootstrap && summaryLoaded === false) state.adminBootstrapReadError = "업체 기본자료를 확인하지 못했습니다. 다시 조회해 주세요.";
+    if (options.bootstrap && summaryLoaded !== false) state.adminBootstrapSummaryPending = false;
+    if (deferBootstrap()) return null;
     // init already awaits these same independent account reads. Normal result
     // selection still refreshes them, without duplicating the startup batch.
     if (!options.bootstrap) {
@@ -41676,11 +41786,11 @@ async function loadRun(runId, options = {}) {
     state.accountDeleteAdmin = null;
     state.securityHardeningAdmin = null;
   }
-  if (requestSequence !== loadRunRequestSequence) return null;
+  if (!current()) return null;
   if (els.runSelect) els.runSelect.value = runId;
   renderAll();
   if (isAdminRole() && adminDbCompanyIdFromRoute()) handleAdminDbCompanyHash();
-  setStatus("준비");
+  setStatus(options.bootstrap && state.adminBootstrapReadError ? "초기 자료 일부 미확인 · 다시 조회해 주세요" : "준비");
   return data;
 }
 
@@ -43933,7 +44043,8 @@ async function init() {
     if (isAdminRole()) {
       await Promise.all([loadRuns(true, { bootstrap: true }), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadLocationScoreOverrides(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview(), loadTourismDataStatus({ render: false }), loadSpecialDaysStatus(), loadTourismForecastStatus(), loadKosisStatus()]);
       if (!state.companyMaster || !((state.companyMaster.companies || []).length || state.companyMaster.totalCompanies || state.companyMaster.error)) {
-        await loadCompanyMasterSummary();
+        if (state.activeTab === "monthlyReports") state.adminBootstrapSummaryPending = true;
+        else await loadCompanyMasterSummary();
       }
       renderAdminConsoleDashboard();
       if (state.activeTab === "demand") renderDemand();
@@ -43953,7 +44064,7 @@ async function init() {
     // Events are available before startup reads finish. A user's newer route
     // (including popstate) always takes precedence over the initial history.
     if (initialHistory?.role === state.session?.role && !adminDbCompanyIdFromRoute()
-      && (state.analysisNavigationSequence || 0) === initialNavigationSequence) await restoreAppHistoryState(initialHistory);
+      && (state.analysisNavigationSequence || 0) === initialNavigationSequence) await restoreAppHistoryState(initialHistory, { bootstrap: true });
     syncAppHistoryState(false);
     renderB2BSearchPanel();
     if (isAdminRole()) {

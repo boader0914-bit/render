@@ -36,6 +36,63 @@ function deferred() {
   const promise = new Promise((done, fail) => { resolve = done; reject = fail; });
   return { promise, resolve, reject };
 }
+
+test("DOM timing identifies each completed preview, never a pending or failed request as ready", async () => {
+  const f = fixture(); f.container.dataset = { mrEntryStartedAt: String(Date.now() - 20) };
+  await f.controller.open();
+  assert.equal(f.container.dataset.mrEntryStatus, "ready");
+  assert.ok(Number(f.container.dataset.mrEntryMs) >= 20);
+  assert.equal(f.container.dataset.mrEntryStartedAt, undefined);
+  f.controller.input("targetId", "c1");
+  await f.controller.action("preview");
+  const previous = Number(f.container.dataset.mrPreviewSequence);
+  assert.equal(f.container.dataset.mrPreviewStatus, "ready");
+  assert.ok(Number.isFinite(Number(f.container.dataset.mrPreviewMs)));
+  f.fail(new Error("response unavailable"));
+  await f.controller.action("preview");
+  assert.equal(f.container.dataset.mrPreviewStatus, "error");
+  assert.ok(Number(f.container.dataset.mrPreviewSequence) > previous);
+  assert.deepEqual(f.calls.filter(row => row.url === "/preview").map(row => row.body), [snapshot.request, snapshot.request]);
+});
+
+test("paint timing waits two frames and an older completion cannot replace newer diagnostics", async () => {
+  const frames = [], context = vm.createContext({ module: { exports: {} }, requestAnimationFrame: callback => frames.push(callback) });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "../web/monthly-reports.js"), "utf8"), context);
+  const container = { innerHTML: "", dataset: {}, addEventListener() {}, querySelector() { return null; } };
+  const next = deferred(); let calls = 0;
+  const controller = context.module.exports.createController(container, async url => {
+    if (url === "/options") return { companies: [{ id: "c1", label: "test" }], defaultMonth: "2026-08" };
+    if (url === "/preview") return snapshot;
+    if (++calls === 2) return next.promise;
+    return { reports: [] };
+  });
+  await controller.open();
+  assert.equal(container.dataset.mrEntryStatus, "pending");
+  assert.equal(container.dataset.mrEntryMs, undefined);
+  frames.shift()();
+  assert.equal(container.dataset.mrEntryStatus, "pending");
+  frames.shift()();
+  assert.equal(container.dataset.mrEntryStatus, "ready");
+  const previous = container.dataset.mrEntrySequence;
+  const opening = controller.open();
+  assert.equal(container.dataset.mrEntryStatus, "pending");
+  next.resolve({ reports: [] }); await opening;
+  const oldFrame = frames.shift();
+  controller.input("targetId", "c1"); await controller.action("preview");
+  oldFrame(); frames.shift()(); frames.shift()();
+  assert.equal(container.dataset.mrEntryStatus, "pending", "old entry callback is not a new completed measurement");
+  assert.equal(container.dataset.mrEntrySequence, previous);
+  frames.shift()();
+  assert.equal(container.dataset.mrPreviewStatus, "ready");
+  assert.ok(Number(container.dataset.mrPreviewSequence) > Number(previous));
+  await controller.action("preview");
+  controller.input("month", "2026-07");
+  while (frames.length) frames.shift()();
+  assert.equal(controller.state.preview, null);
+  assert.equal(container.dataset.mrPreviewStatus, "invalidated", "a changed condition cannot inherit the old preview's paint completion");
+  assert.equal(container.dataset.mrPreviewSequence, undefined);
+  assert.equal(container.dataset.mrPreviewMs, undefined);
+});
 test("monthly reports have independent admin-only desktop and mobile navigation", () => {
   const constants = ["ROLE_TABS", "ADMIN_MOBILE_SECTIONS", "ADMIN_COMPACT_SECTIONS", "ADMIN_PANEL_MOBILE_TARGETS", "TAB_LABELS"];
   const names = ["roleTabs", "roleAllowsTab", "adminPrimarySectionForTab", "adminMobileSectionForTab", "adminPanelMobileTarget"];
