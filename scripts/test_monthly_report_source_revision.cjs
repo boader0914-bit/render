@@ -89,6 +89,26 @@ test("new files are detected in existing directories and temporary writes are no
   await write("outputs/run/new-source.csv", "a,b\n1,2"); assert.notEqual(await revision(), before);
 });
 
+test("legacy run visibility artifacts change the revision without reading spreadsheet, page or image bodies", async t => {
+  const { write, options } = await fixture(t);
+  await write("outputs/legacy-run/uncommitted.tmp");
+  const revision = createMonthlyReportSourceRevision({ ...options, fileSystem: { ...fs,
+    readFile: async () => { throw new Error("artifact bodies must not be read"); }
+  } });
+  const before = await revision();
+  for (const name of ["search.xlsx", "report.html", "preview.png", "places.csv", "summary.md"]) {
+    const artifact = await write(`outputs/legacy-run/${name}`, "saved artifact");
+    const added = await revision();
+    assert.notEqual(added, before, `new ${name} can change legacy run membership`);
+    await fs.unlink(artifact);
+    assert.equal(await revision(), before, `removed ${name} cannot remain visible in a reused revision`);
+  }
+  const artifact = await write("outputs/legacy-run/report.xlsx", "saved artifact");
+  const asFile = await revision();
+  await fs.unlink(artifact); await fs.mkdir(artifact);
+  assert.notEqual(await revision(), asFile, "an artifact name with a different entry kind is not the same inventory");
+});
+
 test("metadata errors or unsafe symlinks do not certify that cached values are current", async t => {
   const { write, options } = await fixture(t);
   await write("company_master/companies.json");
@@ -126,7 +146,7 @@ test("filesystem metadata work is bounded and directory mutation during inspecti
     error => error.code === "MONTHLY_SOURCE_REVISION_UNAVAILABLE");
 });
 
-test("reuses unchanged directory inventories while checking every source file and directory again", async t => {
+test("lists unchanged directories afresh while checking every source file and directory again", async t => {
   const { write, options } = await fixture(t);
   const stock = await write("outputs/run/details/stock.json", '{"stock":1}');
   const company = await write("company_master/companies.json");
@@ -137,16 +157,17 @@ test("reuses unchanged directory inventories while checking every source file an
   const before = await revision(); assert.ok(listings >= 3);
   listings = 0; checked.length = 0;
   assert.equal(await revision({ month: "2026-09" }), before);
-  assert.equal(listings, 0, "cached path lists remove repeated readdir operations");
+  assert.ok(listings >= 3, "unchanged directory stat is not evidence of an unchanged inventory");
   assert.equal(checked.filter(file => file === stock).length, 1, "file metadata is never cached");
   assert.equal(checked.filter(file => file === company).length, 1);
   assert.equal(checked.filter(file => file === path.dirname(stock)).length, 2, "directory is checked before and after its entries");
   await fs.writeFile(stock, '{"stock":2}');
-  assert.notEqual(await revision(), before, "same-size body edits inside an unchanged cached directory are detected");
-  assert.equal(listings, 0, "file edits do not require re-listing the directory");
+  listings = 0;
+  assert.notEqual(await revision(), before, "same-size body edits inside an unchanged directory are detected");
+  assert.ok(listings >= 3, "file and directory metadata never bypass a fresh inventory");
 });
 
-test("cached inventories re-list changed directories for added, deleted, replaced and temporary entries", async t => {
+test("fresh inventories detect added, deleted and replaced sources while ignoring temporary source rows", async t => {
   const { root, write, options } = await fixture(t);
   await write("outputs/run/manifest.json");
   let listings = 0;
@@ -155,7 +176,7 @@ test("cached inventories re-list changed directories for added, deleted, replace
   const before = await revision(); listings = 0;
   await write("outputs/run/snapshot.json.tmp");
   assert.equal(await revision(), before); assert.ok(listings > 0, "temporary files still cause a safe inventory refresh");
-  listings = 0; assert.equal(await revision(), before); assert.equal(listings, 0);
+  listings = 0; assert.equal(await revision(), before); assert.ok(listings > 0);
   const newFile = await write("outputs/run/new-deep/product/stock.csv", "stock\n1");
   const added = await revision(); assert.notEqual(added, before);
   await fs.unlink(newFile);
@@ -165,21 +186,21 @@ test("cached inventories re-list changed directories for added, deleted, replace
   assert.notEqual(await revision(), deleted);
 });
 
-test("restoring a cached directory's mtime does not hide a new source or a directory replacement", async t => {
+test("restoring a directory's mtime does not hide a new source or a directory replacement", async t => {
   const { root, write, options } = await fixture(t);
   const source = await write("outputs/run/stock.json");
   const directory = path.dirname(source), initial = await fs.stat(directory);
   const revision = createMonthlyReportSourceRevision(options), before = await revision();
   await write("outputs/run/extra.json", '{"stock":2}');
   await fs.utimes(directory, initial.atime, initial.mtime);
-  const added = await revision(); assert.notEqual(added, before, "directory ctime still requires re-enumeration");
+  const added = await revision(); assert.notEqual(added, before, "all directory entries are re-enumerated");
   await fs.rename(directory, path.join(root, "outputs/moved-run"));
   await write("outputs/run/stock.json", '{"replacement":true}');
   await fs.utimes(directory, initial.atime, initial.mtime);
   assert.notEqual(await revision(), added, "new directory identity does not inherit the old name's entries");
 });
 
-test("cached inventories do not bypass metadata failures, unsafe replacements or changed directory permissions", async t => {
+test("fresh inventories do not bypass metadata failures, unsafe replacements or changed directory permissions", async t => {
   const { write, options } = await fixture(t);
   const source = await write("outputs/run/stock.json");
   const directory = path.dirname(source);
@@ -188,8 +209,8 @@ test("cached inventories do not bypass metadata failures, unsafe replacements or
     if (file === source && failFile) throw Object.assign(new Error("permission"), { code: "EACCES" });
     const value = await fs.lstat(file, input);
     if (file === source && linkedFile) return { ...value, isFile: () => false, isSymbolicLink: () => true };
-    // A permission change updates directory metadata before readdir becomes
-    // unavailable; matching only its name or mtime would incorrectly reuse it.
+    // Directory permissions cannot bypass a fresh listing even after a prior
+    // successful inspection.
     if (file === directory && denyDirectory) return Object.assign(Object.create(value), { mode: value.mode ^ 1n });
     return value;
   }, readdir: async (file, input) => {
@@ -202,7 +223,7 @@ test("cached inventories do not bypass metadata failures, unsafe replacements or
   failFile = true;
   await assert.rejects(revision(), error => error.code === "MONTHLY_SOURCE_REVISION_UNAVAILABLE");
   failFile = false; listings = 0;
-  assert.equal(await revision(), before); assert.ok(listings > 0, "failure discards inventories before recovery");
+  assert.equal(await revision(), before); assert.ok(listings > 0, "recovery checks fresh inventories");
   linkedFile = true;
   await assert.rejects(revision(), error => error.code === "MONTHLY_SOURCE_REVISION_UNAVAILABLE");
   linkedFile = false; assert.equal(await revision(), before);
@@ -210,7 +231,7 @@ test("cached inventories do not bypass metadata failures, unsafe replacements or
   await assert.rejects(revision(), error => error.code === "MONTHLY_SOURCE_REVISION_UNAVAILABLE");
 });
 
-test("directory inventory cache is bounded and can be disabled without changing revisions", async t => {
+test("legacy inventory cache limits remain accepted without bypassing fresh directory reads", async t => {
   const { write, options } = await fixture(t);
   await write("outputs/run/details/stock.json");
   const expected = await createMonthlyReportSourceRevision({ ...options, maxCachedDirectories: 0 })();
@@ -219,13 +240,35 @@ test("directory inventory cache is bounded and can be disabled without changing 
     const revision = createMonthlyReportSourceRevision({ ...options, ...limits,
       fileSystem: { ...fs, readdir: async (...args) => { listings++; return fs.readdir(...args); } } });
     assert.equal(await revision(), expected); listings = 0;
-    assert.equal(await revision(), expected); assert.ok(listings > 0, "bounded or disabled cache falls back to fresh listings");
+    assert.equal(await revision(), expected); assert.ok(listings > 0, "legacy cache settings cannot disable fresh listings");
   }
   assert.throws(() => createMonthlyReportSourceRevision({ ...options, maxCachedDirectories: -1 }), TypeError);
   assert.throws(() => createMonthlyReportSourceRevision({ ...options, maxCachedEntries: 0.5 }), TypeError);
 });
 
-test("a directory mutation during a warm inventory scan is rejected without trusting cached entries", async t => {
+test("new runs and nested files are detected even if every parent directory stat field stays identical", async t => {
+  const { write, options } = await fixture(t);
+  await write("outputs/run/manifest.json");
+  const directories = new Map();
+  const fileSystem = { ...fs, lstat: async (file, input) => {
+    const value = await fs.lstat(file, input);
+    if (!value.isDirectory()) return value;
+    if (!directories.has(file)) directories.set(file, value);
+    return directories.get(file);
+  } };
+  const revision = createMonthlyReportSourceRevision({ ...options, fileSystem });
+  const before = await revision();
+  await write("outputs/new-run/manifest.json", '{"keyword":"산청글램핑"}');
+  const addedRun = await revision();
+  assert.notEqual(addedRun, before, "same size, mtime, ctime, inode and device must not hide a new child run");
+  const source = await write("outputs/run/new-source.json", '{"stock":2}');
+  const addedFile = await revision();
+  assert.notEqual(addedFile, addedRun, "a nested new source is also discovered without parent metadata changes");
+  await fs.unlink(source);
+  assert.notEqual(await revision(), addedFile, "a deleted child cannot survive in a previously enumerated inventory");
+});
+
+test("a directory mutation during a repeated inventory scan is rejected without trusting old entries", async t => {
   const { write, options } = await fixture(t);
   const source = await write("outputs/run/stock.json");
   const directory = path.dirname(source);
@@ -242,7 +285,7 @@ test("a directory mutation during a warm inventory scan is rejected without trus
   const before = await revision(); listings = 0;
   mutate = true;
   await assert.rejects(revision(), error => error.code === "MONTHLY_SOURCE_REVISION_UNAVAILABLE");
-  assert.equal(listings, 0, "the post-scan metadata check detects mutation even when no readdir was needed");
+  assert.ok(listings > 0, "the new call still lists directories before its post-scan metadata check");
   assert.notEqual(await revision(), before, "retry enumerates the new source and returns its changed revision");
 });
 

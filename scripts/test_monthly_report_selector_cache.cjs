@@ -6,7 +6,7 @@ const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs");
-const { createMonthlyReportSourceRevision } = require("./lib/monthly_report_source_revision.cjs");
+const { createMonthlyReportSelectorRevision } = require("./lib/monthly_report_selector_revision.cjs");
 const { createCompanyCapacityRegistry } = require("./lib/company_capacity_registry.cjs");
 
 function deferred() {
@@ -42,9 +42,9 @@ async function fixture(t) {
   await write("company_master/companies.json", master);
   await write("regions.json", regions);
   await write("history/observations.jsonl", JSON.stringify({ companyKey: "alpha", stayDate: "2026-09-12" }) + "\n");
-  await write("outputs/run-one/manifest.json", { id: "run-one", keyword: "모의글램핑", searchMode: "keyword", checkIn: "2026-09-12", checkOut: "2026-09-13" });
+  await write("outputs/one_glamping_20260912_090000/manifest.json", { id: "run-one", keyword: "모의글램핑", searchMode: "keyword", checkIn: "2026-09-12", checkOut: "2026-09-13" });
   const regionMasterFile = path.join(root, "regions.json");
-  const readRevision = createMonthlyReportSourceRevision({ dataDir: root, regionMasterFile, includeContext: false });
+  const readRevision = createMonthlyReportSelectorRevision({ dataDir: root, regionMasterFile });
   const calls = { runs: 0, capacityPreparation: 0, capacityProjection: 0 };
   async function listRuns() {
     calls.runs++;
@@ -214,18 +214,18 @@ test("history months, keyword-run additions or edits and region references inval
   let value = await adapter.options();
   assert.equal(value.selectorCache.status, "calculated");
   assert.ok(value.months.includes("2026-08"), "discovering a month must not depend on treating a missing quantity as zero");
-  await f.write("outputs/run-two/manifest.json", { id: "run-two", keyword: "새키워드", searchMode: "keyword", checkIn: "2026-11-01", checkOut: "2026-11-02" });
+  await f.write("outputs/two_glamping_20260912_100000/manifest.json", { id: "run-two", keyword: "새키워드", searchMode: "keyword", checkIn: "2026-11-01", checkOut: "2026-11-02" });
   value = await adapter.options();
   assert.ok(value.months.includes("2026-11"));
   assert.ok(value.keywords.some(row => row.id === "새키워드"));
-  await f.write("outputs/run-two/manifest.json", { id: "run-two", keyword: "업체명", searchMode: "company", checkIn: "2026-11-01", checkOut: "2026-11-02" });
+  await f.write("outputs/two_glamping_20260912_100000/manifest.json", { id: "run-two", keyword: "업체명", searchMode: "company", checkIn: "2026-11-01", checkOut: "2026-11-02" });
   value = await adapter.options();
   assert.equal(value.keywords.some(row => row.id === "새키워드" || row.id === "업체명"), false);
   f.regions.units[0].fullName = "새로운 모의군";
   await f.write("regions.json", f.regions);
   value = await adapter.options();
   assert.equal(value.regions.find(row => row.id === "region_one").label, "새로운 모의군");
-  await fs.unlink(path.join(f.root, "outputs/run-one/manifest.json"));
+  await fs.unlink(path.join(f.root, "outputs/one_glamping_20260912_090000/manifest.json"));
   value = await adapter.options();
   assert.deepEqual(value.keywords, [], "removed run evidence must not pin a stale keyword in the menu");
 });

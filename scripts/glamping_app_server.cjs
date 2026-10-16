@@ -21,6 +21,7 @@ const { createKosisService } = require("./lib/kosis.cjs");
 const { createMonthlyReportService } = require("./lib/monthly_reports.cjs");
 const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs");
 const { createMonthlyReportSourceRevision } = require("./lib/monthly_report_source_revision.cjs");
+const { createMonthlyReportSelectorRevision } = require("./lib/monthly_report_selector_revision.cjs");
 const { createIndustryAnalysisService } = require("./lib/industry_analysis.cjs");
 const { createIndustryAnalysisHttpHandler } = require("./lib/industry_analysis_http.cjs");
 const { createIndustrySourceRevision } = require("./lib/industry_source_revision.cjs");
@@ -524,9 +525,13 @@ const monthlyReportSources = createMonthlyReportSources({
   dataDir: DATA_DIR,
   regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
   readRevision: readMonthlyReportRevision,
-  readOptionsRevision: readMonthlyReportRevision,
+  // Selector inputs are names, regions, months and run-list metadata. Keep
+  // their fresh inspections independent of the full booking-evidence scanner.
+  readOptionsRevision: createMonthlyReportSelectorRevision({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR,
+    regionMasterFile: path.join(WEB_DIR, "data", "region_master.json") }),
   selectorCacheVersion: crypto.createHash("sha256").update(fs.readFileSync(__filename))
-    .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_report_sources.cjs"))).digest("hex"),
+    .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_report_sources.cjs")))
+    .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_report_selector_revision.cjs"))).digest("hex"),
   listRuns,
   prepareCompanies: companyCapacityRegistry.prepareCompanies,
   projectObservation: (row, company) => {

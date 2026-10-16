@@ -25,8 +25,9 @@ function boundedIo(limit) {
 
 // This is a change detector, not an observation reader. Every relevant saved
 // file is checked on every call, including edits inside an unchanged run folder.
-// Only directory entry lists are reused, after checking their identity and full
-// metadata again. File revisions never use a TTL or only parent timestamps.
+// Directory entries are listed afresh too: on some filesystems a newly created
+// child does not immediately change any directory stat field. Reusing entries
+// from matching parent metadata could therefore hide a new saved run.
 function createMonthlyReportSourceRevision({ dataDir, outputsDir, regionMasterFile, tourismRegionMapFile,
   includeContext = true, metadataConcurrency = 16, extraFiles = [], extraDirectories = [], fileSystem = fs,
   maxCachedDirectories = 4096, maxCachedEntries = 100000 } = {}) {
@@ -34,9 +35,10 @@ function createMonthlyReportSourceRevision({ dataDir, outputsDir, regionMasterFi
   if (!Number.isSafeInteger(metadataConcurrency) || metadataConcurrency < 1 || metadataConcurrency > 32) throw new TypeError("Invalid metadata concurrency");
   if (!Number.isSafeInteger(maxCachedDirectories) || maxCachedDirectories < 0 ||
     !Number.isSafeInteger(maxCachedEntries) || maxCachedEntries < 0) throw new TypeError("Invalid directory inventory cache limit");
+  // Keep validating these former cache options for constructor compatibility.
+  // Directory inventories are intentionally no longer reused.
   const root = path.resolve(dataDir), metadata = boundedIo(metadataConcurrency);
-  const directoryCache = new Map();
-  let cachedEntries = 0, scanRunning = false;
+  let scanRunning = false;
   const pendingReaders = [];
   const files = [
     ["company-master", path.join(root, "company_master", "companies.json")],
@@ -62,25 +64,12 @@ function createMonthlyReportSourceRevision({ dataDir, outputsDir, regionMasterFi
     const failed = completed.find(value => value.status === "rejected");
     if (failed) throw failed.reason;
   }
-  function clearDirectoryCache() { directoryCache.clear(); cachedEntries = 0; }
-  function rememberDirectory(directory, value) {
-    const previous = directoryCache.get(directory);
-    if (previous) { cachedEntries -= previous.entries.length; directoryCache.delete(directory); }
-    if (!maxCachedDirectories || !maxCachedEntries || value.entries.length > maxCachedEntries) return;
-    while (directoryCache.size >= maxCachedDirectories || cachedEntries + value.entries.length > maxCachedEntries) {
-      const oldest = directoryCache.keys().next().value;
-      if (oldest === undefined) break;
-      cachedEntries -= directoryCache.get(oldest).entries.length; directoryCache.delete(oldest);
-    }
-    directoryCache.set(directory, value); cachedEntries += value.entries.length;
-  }
   async function stat(file) {
     try { return await metadata(() => fileSystem.lstat(file, { bigint: true })); }
     catch (error) { if (error.code === "ENOENT") return null; throw unavailable(); }
   }
   async function scan() {
     const rows = ["monthly-report-source-revision-v1", `context:${Boolean(includeContext)}`];
-    const checkedDirectories = new Map();
     let entriesSeen = 0;
     async function fileRevision(label, file) {
       const value = await stat(file);
@@ -93,15 +82,12 @@ function createMonthlyReportSourceRevision({ dataDir, outputsDir, regionMasterFi
       if (!before) { rows.push(`${label}:missing`); return; }
       if (!before.isDirectory() || before.isSymbolicLink() || depth > 16) throw unavailable();
       let entries;
-      const beforeSignature = directorySignature(before), cached = directoryCache.get(directory);
-      if (cached && cached.signature === beforeSignature) entries = cached.entries;
-      else {
-        try {
-          const listed = await metadata(() => fileSystem.readdir(directory, { withFileTypes: true }));
-          entries = listed.map(entry => ({ name: entry.name, kind: entry.isSymbolicLink() ? "link"
-            : entry.isDirectory() ? "directory" : entry.isFile() ? "file" : "other" }));
-        } catch { throw unavailable(); }
-      }
+      const beforeSignature = directorySignature(before);
+      try {
+        const listed = await metadata(() => fileSystem.readdir(directory, { withFileTypes: true }));
+        entries = listed.map(entry => ({ name: entry.name, kind: entry.isSymbolicLink() ? "link"
+          : entry.isDirectory() ? "directory" : entry.isFile() ? "file" : "other" }));
+      } catch { throw unavailable(); }
       entriesSeen += entries.length;
       if (entriesSeen > 100000) throw unavailable();
       // Empty/missing trees are distinct. File rows, not directory mtime, form
@@ -110,6 +96,9 @@ function createMonthlyReportSourceRevision({ dataDir, outputsDir, regionMasterFi
       await inspectAll(entries.map(async entry => {
         if (entry.name.endsWith(".tmp")) return;
         const next = path.join(directory, entry.name), nextLabel = `${label}/${entry.name}`;
+        // Legacy runs can become visible/incomplete from these artifact names
+        // even without a manifest. Track membership without reading their bodies.
+        if (/\.(?:csv|xlsx|md|html|png)$/i.test(entry.name)) rows.push(`${nextLabel}:entry:${entry.kind}`);
         if (entry.kind === "link") throw unavailable();
         if (entry.kind === "directory") return tree(nextLabel, next, depth + 1);
         if (entry.kind === "file" && /\.(?:json|jsonl|csv|md)$/i.test(entry.name)) return fileRevision(nextLabel, next);
@@ -118,18 +107,11 @@ function createMonthlyReportSourceRevision({ dataDir, outputsDir, regionMasterFi
       // inventory. The caller can retry; never certify an uncertain revision.
       const after = await stat(directory);
       if (!after || !after.isDirectory() || after.isSymbolicLink() || beforeSignature !== directorySignature(after)) throw unavailable();
-      checkedDirectories.set(directory, { signature: beforeSignature, entries });
     }
     await inspectAll([
       ...files.map(([label, file]) => fileRevision(label, file)),
       ...directories.map(([label, directory]) => tree(label, directory))
     ]);
-    // A failed scan must not seed a new inventory. Delete stale directories and
-    // update bounded entry lists only after the entire inspection succeeded.
-    for (const [directory, value] of directoryCache) {
-      if (!checkedDirectories.has(directory)) { cachedEntries -= value.entries.length; directoryCache.delete(directory); }
-    }
-    for (const [directory, value] of checkedDirectories) rememberDirectory(directory, value);
     return crypto.createHash("sha256").update(rows.sort().join("\n")).digest("hex");
   }
   function drainReaders() {
@@ -142,7 +124,6 @@ function createMonthlyReportSourceRevision({ dataDir, outputsDir, regionMasterFi
     Promise.resolve().then(scan).then(
       value => { for (const reader of batch) reader.resolve(value); },
       error => {
-        clearDirectoryCache();
         const failure = error.code === "MONTHLY_SOURCE_REVISION_UNAVAILABLE" ? error : unavailable();
         for (const reader of batch) reader.reject(failure);
       }

@@ -262,7 +262,9 @@
         ${editable || !report ? `<div class="mr-editor"><label>리포트 제목<input name="title" value="${escapeHtml(state.title)}" maxlength="200"${busy}></label><label>검토 메모<textarea name="notes" rows="3" maxlength="10000" placeholder="자료의 해석과 확인할 내용을 남기세요."${busy}>${escapeHtml(state.notes)}</textarea></label></div>` : report.notes ? `<p class="mr-notes">${escapeHtml(report.notes)}</p>` : ""}
         <div class="mr-lifecycle">${!report ? `<button class="primary-button" type="button" data-mr-action="save"${busy}>초안으로 저장</button><p>저장된 수치와 근거는 고정되며, 발행은 검토 단계에서 진행합니다.</p>` : editable ? `<div class="mr-button-row"><button class="secondary-button" type="button" data-mr-action="update"${busy}>제목·메모 저장</button><button class="secondary-button" type="button" data-mr-action="rebuild"${busy}>저장 자료로 다시 집계</button>${report.status === "draft" ? `<button class="primary-button" type="button" data-mr-action="review"${busy}>검토 단계로 이동</button>` : `<button class="secondary-button" type="button" data-mr-action="draft"${busy}>초안으로 돌리기</button>`}</div>${report.status === "review" ? `<div class="mr-publish"><label><input type="checkbox" name="qualityAck"${state.acknowledged ? " checked" : ""}${busy}>자료 충족률, 누락·제외 경고와 추정 매출 기준을 확인했습니다.</label><button class="primary-button" type="button" data-mr-action="publish"${busy || !canPublish(report, state.acknowledged) ? " disabled" : ""}>리포트 발행</button><small>현재 제목·메모와 저장된 수치를 발행합니다. 외부에 자동 전송되지 않습니다.</small></div>` : '<p>수치와 근거는 저장 당시 기준입니다. 다시 집계하면 초안 상태에서 최신 저장 자료를 검토하게 됩니다. 기존 발행본은 보존됩니다.</p>'}` : `<div class="mr-button-row"><a class="primary-button" href="/api/monthly-reports/${encodeURIComponent(report.id)}/pdf" download>PDF 다운로드</a><button class="secondary-button" type="button" data-mr-action="revise"${busy}>새 수정본 만들기</button></div><p>발행본은 수정할 수 없습니다. 새 수정본을 만들면 기존 발행본이 보존됩니다.</p>`}</div>${renderSnapshot(snapshot)}` : `<div class="mr-detail-empty"><span aria-hidden="true">▤</span><h3>한 달의 관측을 하나의 기록으로</h3><p>위에서 조건을 선택해 미리보기를 만들거나<br>왼쪽에서 저장한 리포트를 열어 보세요.</p><div class="mr-empty-legend"><span class="mr-public">● 공개 예약</span><span class="mr-phone">● 방막기 추정</span></div></div>`}</section></div></div>`;
     }
-    async function loadList() { const data = await api(""); state.reports = Array.isArray(data) ? data : data.reports || []; }
+    async function readOptions() { return api("/options"); }
+    async function readList() { const data = await api(""); return Array.isArray(data) ? data : data.reports || []; }
+    async function loadList() { state.reports = await readList(); }
     async function execute(label, operation) {
       if (state.busy) return false;
       state.busy = label; state.busyStartedAt = Date.now(); state.error = ""; state.message = ""; render();
@@ -281,8 +283,19 @@
       if (revision !== openRevision) return false;
       state.optionsVerified = false;
       await execute("저장된 리포트와 선택 항목을 불러오는 중입니다.", async () => {
+        // These reads are independent. Drain both before releasing busy, and do
+        // not let an older destination apply after a newer open was requested.
+        const [optionsResult, reportsResult] = await Promise.allSettled([readOptions(), readList()]);
+        if (revision !== openRevision) return;
+        if (reportsResult.status === "fulfilled") state.reports = reportsResult.value;
+        if (optionsResult.status === "rejected") {
+          if (reportsResult.status === "rejected") {
+            throw new Error(`${optionsResult.reason?.message || "선택 목록을 확인하지 못했습니다."} / ${reportsResult.reason?.message || "저장 리포트 목록을 확인하지 못했습니다."}`);
+          }
+          throw optionsResult.reason;
+        }
         const firstLoad = !state.options;
-        const data = await api("/options"); state.options = data; state.optionsVerified = true;
+        const data = optionsResult.value; state.options = data; state.optionsVerified = true;
         if (firstLoad) {
           state.form.month = data.defaultMonth || data.months?.[0] || today().slice(0, 7);
         }
@@ -313,7 +326,8 @@
             throw new Error("전달된 지역을 리포트 목록에서 찾지 못했습니다. 지역 DB에서 다시 선택해 주세요.");
           }
         }
-        await loadList(); state.message = context.type === "region" && context.month
+        if (reportsResult.status === "rejected") throw reportsResult.reason;
+        state.message = context.type === "region" && context.month
           ? "지역 DB에서 선택한 지역·대상 월·관측 마감일을 가져왔습니다. 저장 자료로 미리보기를 만들 수 있습니다."
           : targetRemoved && !context.type ? "선택했던 대상이 목록에서 변경되었습니다. 대상을 다시 선택해 주세요." : "조건을 선택해 미리보기를 만들 수 있습니다.";
       });

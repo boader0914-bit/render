@@ -94,6 +94,9 @@ async function main() {
   const root = path.resolve(__dirname, "..");
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "monthly-api-"));
   const fixture = await seedMonthlyReportFixture(dataDir, { includePreviousMonth: true });
+  const selectorIndependentEvidence = path.join(dataDir, "outputs", fixture.runIds[0], "details", "selector-independent-stock.json");
+  await fs.mkdir(path.dirname(selectorIndependentEvidence), { recursive: true });
+  await fs.writeFile(selectorIndependentEvidence, JSON.stringify({ observedStock: 1 }));
   const socket = net.createServer().listen(0, "127.0.0.1"); await once(socket, "listening");
   const port = socket.address().port; await new Promise(resolve => socket.close(resolve));
   const base = `http://127.0.0.1:${port}`;
@@ -228,6 +231,22 @@ async function main() {
     assert.equal(list.data.reports.length, 2);
     assert.equal((await request(endpoint + "/not-an-id", admin)).status, 400);
     assert.equal((await request(reportUrl + "/pdf", member)).status, 403);
+    await fs.writeFile(selectorIndependentEvidence, JSON.stringify({ observedStock: 2 }));
+    const unchangedSelectors = await request(endpoint + "/options", admin);
+    assert.equal(unchangedSelectors.status, 200);
+    assert.equal(unchangedSelectors.data.selectorCache.status, "reused", "booking-body edits do not change selector labels or membership");
+    const refreshedEvidence = await request(endpoint + "/preview", admin, "POST", condition);
+    assert.equal(refreshedEvidence.status, 200);
+    assert.equal(refreshedEvidence.data.generation.cacheStatus, "calculated", "the report still checks all raw booking evidence and invalidates its full base");
+    assert.deepEqual(refreshedEvidence.data.summary, freshEvaluationPreview.data.summary);
+    const changedManifestFile = path.join(dataDir, "outputs", fixture.runIds[0], "manifest.json");
+    const changedManifest = JSON.parse(await fs.readFile(changedManifestFile, "utf8"));
+    changedManifest.keyword = "[모의] 변경된 선택 키워드";
+    await fs.writeFile(changedManifestFile, JSON.stringify(changedManifest));
+    const refreshedSelectors = await request(endpoint + "/options", admin);
+    assert.equal(refreshedSelectors.status, 200);
+    assert.equal(refreshedSelectors.data.selectorCache.status, "calculated", "a manifest keyword edit remains a selector dependency");
+    assert.ok(refreshedSelectors.data.keywords.some(row => row.id === changedManifest.keyword));
     assert.equal(await fs.stat(networkMarker).then(() => true, error => { if (error.code === "ENOENT") return false; throw error; }), false, "monthly-report creation, evaluation read and PDF rendering never attempted a provider fetch");
     console.log("Monthly reports API: authorization, materialized reuse, fresh saved evaluation, true zero versus pending, preview/draft/review/publication, conflicts, unchanged sources and immutable PDF passed");
     console.log("SYNTHETIC_REPORT_TIMING=" + JSON.stringify({ synthetic: true, firstMs: missingEvaluation.data.generation.timings.totalMs,

@@ -31,6 +31,11 @@ function fixture({ generation, options } = {}) {
   const controller = ui.createController(container, api);
   return { controller, container, calls, fail(error) { nextFailure = error; } };
 }
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
 test("monthly reports have independent admin-only desktop and mobile navigation", () => {
   const constants = ["ROLE_TABS", "ADMIN_MOBILE_SECTIONS", "ADMIN_COMPACT_SECTIONS", "ADMIN_PANEL_MOBILE_TARGETS", "TAB_LABELS"];
   const names = ["roleTabs", "roleAllowsTab", "adminPrimarySectionForTab", "adminMobileSectionForTab", "adminPanelMobileTarget"];
@@ -136,6 +141,121 @@ test("failed options verification does not certify an old cached list or permit 
   assert.match(container.innerHTML, /저장 선택 목록 재사용/);
 });
 
+test("opening starts independent selector and report-list reads together and applies only their settled results", async () => {
+  const container = { innerHTML: "", addEventListener() {} };
+  const options = deferred(), reports = deferred(), calls = [];
+  const c = ui.createController(container, url => {
+    calls.push(url);
+    return url === "/options" ? options.promise : reports.promise;
+  });
+  const pending = c.open({ type: "company", targetId: "c1" });
+  assert.deepEqual(calls, ["/options", ""], "the list must not wait for selector verification");
+  reports.resolve({ reports: [{ id: "mr_parallel", title: "저장 리포트", status: "draft" }] });
+  await Promise.resolve();
+  assert.equal(c.state.optionsVerified, false);
+  assert.deepEqual(c.state.reports, [], "one response must not partially update an unfinished open");
+  assert.ok(c.state.busy);
+  options.resolve({ defaultMonth: "2026-08", companies: [{ id: "c1", label: "테스트 숙소" }] });
+  await pending;
+  assert.equal(c.state.optionsVerified, true);
+  assert.equal(c.state.reports[0].id, "mr_parallel");
+  assert.equal(c.state.form.targetId, "c1");
+  assert.equal(c.state.error, "");
+  assert.equal(c.state.busy, "");
+});
+
+test("a selector failure drains the report read before releasing busy and never verifies stale options", async () => {
+  const container = { innerHTML: "", addEventListener() {} };
+  const options = deferred(), reports = deferred();
+  let gated = false, previews = 0;
+  const c = ui.createController(container, async url => {
+    if (url === "/options") return gated ? options.promise : { defaultMonth: "2026-08", companies: [{ id: "c1", label: "이전 숙소" }] };
+    if (url === "/preview") { previews++; return structuredClone(snapshot); }
+    return gated ? reports.promise : { reports: [{ id: "mr_old", title: "이전 리포트" }] };
+  });
+  await c.open({ type: "company", targetId: "c1" });
+  gated = true;
+  const pending = c.open();
+  options.reject(new Error("선택 목록 확인 실패"));
+  await Promise.resolve();
+  assert.ok(c.state.busy, "the unfinished list read must keep the operation busy");
+  await c.action("preview");
+  assert.equal(previews, 0);
+  assert.equal(c.state.reports[0].id, "mr_old");
+  reports.resolve({ reports: [{ id: "mr_new", title: "확인된 리포트" }] });
+  await pending;
+  assert.equal(c.state.busy, "");
+  assert.equal(c.state.reports[0].id, "mr_new");
+  assert.equal(c.state.optionsVerified, false);
+  assert.equal(c.state.form.targetId, "c1", "failed verification is not evidence of target removal");
+  assert.match(c.state.error, /선택 목록 확인 실패/);
+  assert.match(container.innerHTML, /선택 목록을 확인하지 못했습니다/);
+  await c.action("preview");
+  assert.equal(previews, 0);
+});
+
+test("a report-list failure retains the previous list while applying successfully verified selector changes", async () => {
+  const container = { innerHTML: "", addEventListener() {} };
+  let failList = false;
+  const c = ui.createController(container, async url => {
+    if (url === "/options") return { defaultMonth: "2026-08", companies: [{ id: "c1", label: failList ? "수정된 숙소" : "기존 숙소" }] };
+    if (failList) throw new Error("저장 리포트 목록 확인 실패");
+    return { reports: [{ id: "mr_existing", title: "이전 확인 리포트" }] };
+  });
+  await c.open({ type: "company", targetId: "c1" });
+  c.input("month", "2026-07");
+  failList = true;
+  await c.open();
+  assert.equal(c.state.optionsVerified, true);
+  assert.equal(c.state.options.companies[0].label, "수정된 숙소");
+  assert.equal(c.state.form.month, "2026-07");
+  assert.equal(c.state.reports[0].id, "mr_existing", "failure cannot turn an existing list into an empty list");
+  assert.match(c.state.error, /저장 리포트 목록 확인 실패/);
+  assert.equal(c.state.message, "");
+  assert.equal(c.state.busy, "");
+});
+
+test("both failed open reads are observed and reported without inventing empty saved data", async () => {
+  const container = { innerHTML: "", addEventListener() {} };
+  const c = ui.createController(container, url => {
+    throw new Error(url === "/options" ? "선택 목록 오류" : "저장 목록 오류");
+  });
+  await c.open();
+  assert.match(c.state.error, /선택 목록 오류.*저장 목록 오류/);
+  assert.equal(c.state.optionsVerified, false);
+  assert.equal(c.state.busy, "");
+});
+
+test("a new handoff waits for both old reads and cannot be overwritten by their later responses", async () => {
+  const container = { innerHTML: "", addEventListener() {} };
+  const options = deferred(), reports = deferred(), calls = [];
+  let latest = false;
+  const c = ui.createController(container, url => {
+    calls.push(url);
+    if (!latest) return url === "/options" ? options.promise : reports.promise;
+    return Promise.resolve(url === "/options"
+      ? { defaultMonth: "2026-08", regions: [{ id: "pocheon", label: "포천시" }] }
+      : { reports: [{ id: "mr_latest", title: "최신 목록" }] });
+  });
+  const oldOpen = c.open({ type: "company", targetId: "removed" });
+  const context = { type: "region", targetId: "pocheon", month: "2026-08", cutoffDate: "2026-08-26" };
+  const newOpen = c.open(context);
+  options.reject(new Error("이전 화면 선택 목록 오류"));
+  await Promise.resolve();
+  assert.equal(calls.length, 2, "new work cannot race an unfinished old list response");
+  assert.ok(c.state.busy);
+  latest = true;
+  reports.resolve({ reports: [{ id: "mr_stale", title: "이전 화면 목록" }] });
+  await Promise.all([oldOpen, newOpen]);
+  assert.deepEqual(calls, ["/options", "", "/options", ""]);
+  assert.deepEqual(c.state.form, context);
+  assert.equal(c.state.reports[0].id, "mr_latest");
+  assert.equal(c.state.optionsVerified, true);
+  assert.equal(c.state.error, "");
+  assert.equal(c.state.preview, null);
+  assert.equal(c.state.busy, "");
+});
+
 test("pending work shows a live indicator and disables duplicate requests without inventing progress", async () => {
   const container = { innerHTML: "", addEventListener() {}, querySelector() { return null; } };
   let release, calls = 0;
@@ -150,7 +270,7 @@ test("pending work shows a live indicator and disables duplicate requests withou
   assert.match(container.innerHTML, /mr-loading/);
   assert.doesNotMatch(container.innerHTML, /남은 시간|진행률/);
   await c.action("preview");
-  assert.equal(calls, 1, "another action cannot submit while the first is pending");
+  assert.equal(calls, 2, "another action cannot submit while the two independent reads are pending");
   release(); await pending;
   assert.equal(c.state.busyStartedAt, 0);
   assert.doesNotMatch(container.innerHTML, /class="mr-loading"/);
