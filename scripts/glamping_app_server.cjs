@@ -28,6 +28,7 @@ const { createCompanyIntegratedTargets } = require("./lib/company_integrated_tar
 const { createCompanyCapacityRegistry } = require("./lib/company_capacity_registry.cjs");
 const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
 const { createMonthlyReportContext } = require("./lib/monthly_report_context.cjs");
+const { createMonthlyReportOutlookEvaluation } = require("./lib/monthly_report_outlook_evaluation.cjs");
 const { createMonthlyReportHttpHandler } = require("./lib/monthly_report_http.cjs");
 const { createRegionalReportPreparation } = require("./lib/regional_report_preparation.cjs");
 const { createRegionalSearchTrendService } = require("./lib/regional_search_trends.cjs");
@@ -559,7 +560,8 @@ async function queueIntegratedCompanies(companyIds, reason) {
   catch (error) { console.error("company_integration_queue_failed", error.code || "unavailable"); }
 }
 const monthlyReportService = createMonthlyReportService({
-  dataDir: path.join(DATA_DIR, "monthly_reports"), loadSources: monthlyReportSources.loadSources
+  dataDir: path.join(DATA_DIR, "monthly_reports"), loadSources: monthlyReportSources.loadSources,
+  readOutlookEvaluations: createMonthlyReportOutlookEvaluation({ evaluationService: regionalOutlookService.validation })
 });
 const handleMonthlyReport = createMonthlyReportHttpHandler({
   service: monthlyReportService, sources: monthlyReportSources, renderPdf: renderMonthlyReportPdf,

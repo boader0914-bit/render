@@ -625,6 +625,51 @@ function drawContext(layout, context) {
   });
 }
 
+function drawOutlookEvaluations(layout, evaluations) {
+  if (!evaluations || evaluations.schemaVersion !== 1) return;
+  const section = "부록 C · 지역 전망 검증 · 계속";
+  const regions = array(evaluations.regions);
+  layout.page("부록 C · 지역 전망 검증");
+  layout.heading("지역 전망 검증", `대상월 ${clean(evaluations.reportMonth) || "미확인"} · 작성 시점에 저장된 사후 검증`);
+  layout.paragraph(`예약 관측 마감 ${clean(evaluations.cutoffDate) || "미확인"} / 사후 검증 자료 확인 ${dateText(evaluations.asOfAt, true)}. 예약 관측 마감과 별도입니다. 보고 대상월의 전망을 후속 공식자료와 비교하며, 과거 자료 모의검증과 구분합니다.`, { size: 8.5, color: COLORS.muted, section });
+  layout.paragraph("이 발행본의 저장 결과는 고정됩니다. 공식값이 확인된 항목만 오차를 표시하며, 서로 다른 지역·지표의 오차를 합쳐 정확도로 표시하지 않습니다. 미확인을 0으로 바꾸지 않고 실제값 0의 오차율은 계산하지 않습니다.", { size: 8.5, color: COLORS.muted, section });
+  array(evaluations.warnings).forEach(warning => layout.paragraph(clean(typeof warning === "string" ? warning : warning.message || warning.label), { size: 8, color: COLORS.muted, section }));
+  if (!regions.length) layout.paragraph("연결할 지역 전망 검증 자료가 없습니다.", { size: 9, section });
+  for (const region of regions) {
+    const counts = region.summaryCounts || {}, source = region.source || {}, rows = array(region.rows);
+    layout.ensure(125, section);
+    layout.smallHeading(clean(region.regionLabel) || clean(region.regionKey) || "지역 미확인");
+    layout.paragraph(`비교 완료 ${amount(counts.compared, "건")} / 공식자료 대기 ${amount(counts.pending, "건")} / 비교 제외 ${amount(counts.excluded, "건")}`, { size: 9, section });
+    if (region.reasonLabel) layout.paragraph(clean(region.reasonLabel), { size: 8.5, color: COLORS.muted, section });
+    if (source.resultId) layout.paragraph(`검증 결과 번호 ${clean(source.resultId)}\n검증 기준 ${dateText(source.evaluatedThrough, true)} / 산출 ${dateText(source.generatedAt, true)}`, { size: 8, color: COLORS.muted, section });
+    const jobLabel = ({ queued: "검증 갱신 대기", running: "검증 갱신 중", processing: "검증 갱신 중", completed: "최근 검증 완료", failed: "최근 검증 갱신 실패", interrupted: "최근 검증 갱신 중단", superseded: "최근 검증 갱신 교체" })[source.jobStatus] || "";
+    if (jobLabel || source.storageErrorCode) layout.paragraph(`${jobLabel || "검증 결과 저장 상태 확인 필요"}${source.resultId && (["failed", "interrupted", "queued", "running", "processing"].includes(source.jobStatus) || source.storageErrorCode) ? " / 마지막 정상 저장본 표시" : ""}${source.jobErrorCode || source.storageErrorCode ? ` / ${clean(source.jobErrorCode || source.storageErrorCode)}` : ""}`, { size: 8, color: COLORS.muted, section });
+    if (source.selectionPolicy === "earliest_retained_publication") layout.paragraph("보존된 발행본 중 첫 전망을 기준으로 비교합니다.", { size: 8, color: COLORS.muted, section });
+    array(region.reasonCounts).forEach(reason => layout.paragraph(`${clean(reason.label) || "비교 조건 확인 필요"} · ${amount(reason.count, "건")}`, { size: 8.5, color: COLORS.muted, section }));
+    if (!rows.length && !region.reasonLabel) layout.paragraph("보고 대상월에 연결할 수 있는 저장된 전망 검증 자료가 없습니다.", { size: 8.5, color: COLORS.muted, section });
+    if (rows.length) {
+      const evidence = [], evidenceKeys = new Map();
+      const display = rows.map(row => {
+        const prediction = row.predictionRef || {}, actual = row.actualRef || {};
+        const compared = row.status === "compared" && known(row.actualValue);
+        const proof = prediction.coverage === "legacy_reference" ? "기존에 보존된 참조" : prediction.proof === "journal" ? "발행 기록 보존" : "보존 근거 미확인";
+        const evidenceText = `전망 번호 ${clean(prediction.resultId) || "미확인"} / 발행 ${dateText(prediction.publishedAt, true)} / 생성 ${dateText(prediction.generatedAt, true)}\n${proof} / 제공기관 ${clean(row.provider) || "미확인"} / 모델 ${clean(row.modelVersion) || "미확인"}\n공식자료 대상월 ${clean(actual.period || row.targetPeriod) || "미확인"} / 확인 ${compared ? dateText(actual.receivedAt, true) : "미확인"}${compared && actual.receiptEvidence === "snapshot_timestamp" ? " (저장 결과 확인시각 기준)" : ""}${compared && actual.sourceFingerprint ? ` / 저장 근거 ${clean(actual.sourceFingerprint)}` : ""}${compared && actual.normalizationPeriod ? `\n검색지수 정규화 기간 ${clean(actual.normalizationPeriod)} / 묶음 ${clean(actual.sourceBatchId) || "미확인"}` : ""}`;
+        if (!evidenceKeys.has(evidenceText)) { evidence.push(evidenceText); evidenceKeys.set(evidenceText, evidence.length); }
+        return { row, compared, evidenceNumber: evidenceKeys.get(evidenceText) };
+      });
+      layout.table([
+        { label: "지표 · 상태", width: 0.25, value: ({ row, evidenceNumber }) => `${clean(row.label || row.metricKey) || "지표 미확인"}\n${({ compared: "비교 완료", pending: "공식자료 대기", excluded: "비교 제외" })[row.status] || "검증 상태 확인 필요"}\n근거 ${evidenceNumber}` },
+        { label: "대상월 · 발행월", width: 0.23, value: ({ row }) => `대상 ${clean(row.targetPeriod) || "미확인"}\n발행 ${clean(row.issueMonth) || "미확인"}\n${row.kind === "next" ? "당시 다음 달 전망" : row.kind === "current" ? "당시 이번 달 예상" : "예상기간 미확인"}` },
+        { label: "당시 전망 · 공식값", width: 0.24, value: ({ row, compared }) => `전망 ${row.status === "excluded" ? "비교 제외" : amount(row.forecastValue, clean(row.unit))}\n공식 ${compared ? amount(row.actualValue, clean(row.unit)) : "미확인"}` },
+        { label: "오차 · 대기/제외 사유", width: 0.28, value: ({ row, compared }) => compared ? `차이(실제−전망) ${signedAmount(row.difference, clean(row.unit))}\n절대오차 ${amount(row.absoluteError, clean(row.unit))}\n오차율 ${row.actualValue === 0 ? "산출 안 함 · 실제값 0" : known(row.errorPct) && row.errorPct >= 0 ? amount(row.errorPct, "%") : "미확인"}` : clean(row.reasonLabel) || "비교에 필요한 자료나 조건을 확인해야 합니다." }
+      ], display, { size: 8, section });
+      layout.smallHeading("발행·공식자료 근거");
+      evidence.forEach((text, index) => layout.paragraph(`근거 ${index + 1}. ${text}`, { size: 7.5, color: COLORS.muted, after: 9, section }));
+    }
+    if (region.truncated) layout.paragraph("일부 행만 이 리포트에 저장돼 있습니다. 전체 결과는 지역분석의 저장 자료에서 확인해 주세요.", { size: 8, color: COLORS.muted, section });
+  }
+}
+
 function drawSources(layout, report, snapshot) {
   const sources = snapshot.sources || {}; const quality = snapshot.quality || {};
   layout.page("부록 B · 근거와 산식");
@@ -680,6 +725,7 @@ async function renderMonthlyReportPdf(report, options = {}) {
     drawMonthlyInsights(layout, report.snapshot);
     drawDaily(layout, report.snapshot);
     drawSources(layout, report, report.snapshot);
+    drawOutlookEvaluations(layout, report.snapshot.context?.outlookEvaluations);
     layout.footers();
     doc.end();
   } catch (error) { doc.destroy(error); }

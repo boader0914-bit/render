@@ -314,3 +314,64 @@ test("keyword preview titles use search market language and unsupported dates ca
   assert.equal(f.calls.filter((call) => call.url === "" && call.method === "POST").length, 0);
   assert.ok(f.calls.every((call) => !/collect|crawl|provider/.test(call.url)));
 });
+
+function outlookEvaluationFixture() {
+  const row = { label: "지역 방문자", metricKey: "visitors", provider: "한국관광공사", unit: "명", targetPeriod: "2026-08", issueMonth: "2026-07", kind: "next", modelVersion: "model-v1", forecastValue: 100,
+    status: "compared", reasonCode: "", reasonLabel: "", actualValue: 0, difference: -100, absoluteError: 100, errorPct: null,
+    predictionRef: { resultId: "published-forecast-1", generatedAt: "2026-07-01T01:00:00Z", publishedAt: "2026-07-01T02:00:00Z", proof: "journal", coverage: "recorded" },
+    actualRef: { period: "2026-08", receivedAt: "2026-10-01T01:00:00Z", sourceFingerprint: "official-observation-1", receiptEvidence: "source_timestamp" } };
+  return { schemaVersion: 1, reportMonth: "2026-08", cutoffDate: "2026-08-31", asOfAt: "2026-10-16T00:00:00Z", selectionBasis: "target_month", temporalBasis: "saved_evaluation_at_report_creation", networkAttempted: false,
+    regions: [{ regionKey: "test-region", regionLabel: "테스트군", status: "ready", summaryCounts: { total: 2, compared: 1, pending: 1, excluded: 0 }, reasonCounts: [{ code: "OFFICIAL_PUBLICATION_PENDING", label: "공식자료 공표를 기다리고 있습니다.", count: 1 }],
+      source: { resultId: "evaluation-1", generatedAt: "2026-10-15T01:00:00Z", evaluatedThrough: "2026-10-15T01:00:00Z" },
+      rows: [row, { ...row, label: "소비 지수", status: "pending", reasonCode: "OFFICIAL_PUBLICATION_PENDING", reasonLabel: "공식자료 공표를 기다리고 있습니다.", actualValue: null, difference: null, absoluteError: null, errorPct: null, actualRef: null }] }], warnings: [] };
+}
+
+test("stored outlook evaluation is folded, target-month scoped and independent from reservation cutoff", () => {
+  const evaluations = outlookEvaluationFixture();
+  const before = JSON.stringify(evaluations);
+  const markup = ui.renderSnapshot({ ...snapshot, context: { outlookEvaluations: evaluations } });
+  assert.match(markup, /<details class="mr-fold mr-report-section" data-mr-section="outlook-evaluations"><summary>지역 전망 검증/);
+  assert.match(markup, /작성 시점에 저장된 사후 검증 · 예약 관측 마감과 별도/);
+  assert.match(markup, /예약 관측 마감 2026-08-31 · 사후 검증 자료 확인/);
+  assert.match(markup, /대상월 2026-08 · 발행월 2026-07 · 당시 다음 달 전망/);
+  assert.match(markup, /비교 완료 <strong>1<\/strong>/);
+  assert.match(markup, /공식자료 대기 <strong>1<\/strong>/);
+  assert.match(markup, /공식자료 공표를 기다리고 있습니다\./);
+  assert.match(markup, /evaluation-1/);
+  assert.match(markup, /published-forecast-1/);
+  assert.match(markup, /official-observation-1/);
+  assert.match(markup, /한국관광공사/);
+  assert.match(markup, /과거 자료 모의검증과 구분/);
+  assert.match(markup, /발행본은 새 자료가 생겨도 바뀌지 않습니다/);
+  assert.equal(JSON.stringify(evaluations), before);
+  assert.doesNotMatch(ui.renderSnapshot(snapshot), /data-mr-section="outlook-evaluations"/, "legacy snapshots retain their original sections");
+});
+
+test("outlook pending and missing never render fake zero actuals or errors, while observed zero stays valid", () => {
+  const evaluations = outlookEvaluationFixture();
+  Object.assign(evaluations.regions[0].rows[1], { actualValue: 0, absoluteError: 0, errorPct: 0 });
+  const markup = ui.renderSnapshot({ context: { outlookEvaluations: evaluations } });
+  const compared = markup.match(/<article class="mr-outlook-row">[^]*?<\/article>/)[0];
+  assert.match(compared, /후속 공식값<\/dt><dd>0명/);
+  assert.match(compared, /산출 안 함 · 실제값 0/);
+  const pending = markup.match(/<article class="mr-outlook-row">[^]*?<\/article>/g)[1];
+  assert.match(pending, /후속 공식값<\/dt><dd>미확인/);
+  assert.doesNotMatch(pending, /절대오차|<dd>0명|0%/);
+  evaluations.regions = [{ regionKey: "absent", regionLabel: "누락 지역", status: "missing", summaryCounts: null, rows: [], reasonLabel: "저장된 검증 결과가 없습니다." }];
+  const absent = ui.renderSnapshot({ context: { outlookEvaluations: evaluations } });
+  assert.match(absent, /비교 완료 <strong>확인 불가/);
+  assert.doesNotMatch(absent, /비교 완료 <strong>0|정확도 <strong>100/);
+  assert.match(absent, /저장된 검증 결과가 없습니다/);
+});
+
+test("outlook source strings and reason labels are escaped and do not introduce live actions", () => {
+  const evaluations = outlookEvaluationFixture(), dangerous = '<img src=x onerror="bad()">';
+  const region = evaluations.regions[0];
+  region.regionLabel = dangerous; region.reasonLabel = dangerous; region.reasonCounts[0].label = dangerous;
+  region.rows[0].predictionRef.resultId = dangerous; region.rows[0].actualRef.sourceFingerprint = dangerous;
+  region.rows[0].provider = dangerous; region.rows[1].reasonLabel = dangerous;
+  const markup = ui.renderSnapshot({ context: { outlookEvaluations: evaluations } });
+  const outlook = markup.slice(markup.indexOf('data-mr-section="outlook-evaluations"'));
+  assert.doesNotMatch(outlook, /<img|onerror="bad|data-mr-action="(?:collect|validate|refresh|build)"/);
+  assert.match(outlook, /&lt;img/);
+});

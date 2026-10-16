@@ -302,6 +302,47 @@ if (require.main === module) {
     assert.match(unknown, /0개 업체의 중앙값 확인 불가/);
     assert.doesNotMatch(unknown, /중앙값 0원|undefined|NaN/);
   });
+
+  test("stored outlook verification PDF separates target and issue months, pending data and observed zero", async () => {
+    const report = createPdfFixture();
+    const predictionRef = { resultId: "issued-outlook-1", generatedAt: "2026-07-01T01:00:00Z", publishedAt: "2026-07-01T02:00:00Z", proof: "journal", coverage: "recorded" };
+    const compared = { label: "지역 방문자", provider: "한국관광공사", unit: "명", modelVersion: "model-v1", kind: "next", issueMonth: "2026-07", targetPeriod: "2026-08", status: "compared", forecastValue: 100, actualValue: 0, difference: -100, absoluteError: 100, errorPct: null, predictionRef, actualRef: { period: "2026-08", receivedAt: "2026-10-01T01:00:00Z", sourceFingerprint: "official-evidence-1" } };
+    report.snapshot.context.outlookEvaluations = { schemaVersion: 1, reportMonth: "2026-08", cutoffDate: "2026-08-31", asOfAt: "2026-10-16T00:00:00Z", selectionBasis: "target_month", temporalBasis: "saved_evaluation_at_report_creation", networkAttempted: false,
+      regions: [{ regionKey: "r1", regionLabel: "검증 지역", summaryCounts: { total: 2, compared: 1, pending: 1, excluded: 0 }, source: { resultId: "evaluation-1", generatedAt: "2026-10-15T01:00:00Z", evaluatedThrough: "2026-10-15T01:00:00Z" },
+        reasonCounts: [{ code: "OFFICIAL_PUBLICATION_PENDING", label: "공식자료 공표를 기다리고 있습니다.", count: 1 }], rows: [compared, { ...compared, label: "소비 지수", status: "pending", actualValue: null, difference: null, absoluteError: null, errorPct: null, actualRef: null, reasonLabel: "공식자료 공표를 기다리고 있습니다." }] }], warnings: [] };
+    const original = JSON.stringify(report);
+    const text = extractText(await renderMonthlyReportPdf(report));
+    assert.equal(JSON.stringify(report), original, "PDF must use the frozen snapshot without modifying it");
+    assert.match(text, /지역 전망 검증/);
+    assert.match(text, /작성 시점에 저장된 사후 검증/);
+    assert.match(text, /예약 관측 마감과 별도/);
+    assert.match(text, /과거 자료 모의검증과 구분/);
+    assert.match(text, /비교 완료 1건 \/ 공식자료 대기 1건 \/ 비교 제외 0건/);
+    assert.match(text, /대상 2026-08\n발행 2026-07\n당시 다음 달 전망/);
+    assert.match(text, /전망 100명\n공식 0명/);
+    assert.match(text, /전망 100명\n공식 미확인/);
+    assert.match(text, /산출 안 함 · 실제값 0/);
+    assert.match(text, /공식자료 공표를 기다리고 있습니다/);
+    assert.match(text, /issued-outlook-1/);
+    assert.match(text, /official-evidence-1/);
+    assert.match(text, /evaluation-1/);
+    assert.doesNotMatch(text, /NaN|undefined|정확도 100%/);
+  });
+
+  test("missing verification evidence prints unknown counts and pending rows suppress stray error numbers", async () => {
+    const report = createPdfFixture();
+    report.snapshot.context.outlookEvaluations = { schemaVersion: 1, reportMonth: "2026-08", cutoffDate: "2026-08-31", asOfAt: "2026-10-16T00:00:00Z", regions: [
+      { regionKey: "r1", regionLabel: "미확보 지역", summaryCounts: null, rows: [], reasonLabel: "저장된 검증 결과가 없습니다." },
+      { regionKey: "r2", regionLabel: "대기 지역", summaryCounts: { compared: 0, pending: 1, excluded: 0 }, rows: [{ label: "대기 지표", status: "pending", forecastValue: 12, actualValue: 0, absoluteError: 987654, errorPct: 12345, unit: "명", reasonLabel: "대상월이 아직 끝나지 않았습니다." }] }
+    ] };
+    const text = extractText(await renderMonthlyReportPdf(report));
+    assert.match(text, /비교 완료 확인 불가 \/ 공식자료 대기 확인 불가 \/ 비교 제외 확인 불가/);
+    assert.match(text, /저장된 검증 결과가 없습니다/);
+    assert.match(text, /대상월이 아직 끝나지 않았습니다/);
+    assert.doesNotMatch(text, /987,654|12,345%|공식 0명/);
+    delete report.snapshot.context.outlookEvaluations;
+    assert.doesNotMatch(extractText(await renderMonthlyReportPdf(report)), /지역 전망 검증/, "legacy published PDFs do not invent verification results");
+  });
 }
 
 module.exports = { createPdfFixture, createPdfInsightsFixture };

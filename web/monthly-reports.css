@@ -139,6 +139,29 @@ html[data-theme-resolved="dark"] .monthly-reports { --mr-public: #92d4aa; --mr-p
 .mr-context-source dt { font-size: 11px; color: var(--text-secondary, #5e6975); }
 .mr-context-source dd { font-size: 13px; margin: 4px 0 0; }
 .mr-context-source a { color: var(--accent-strong, #275747); font-size: 11px; }
+.mr-outlook-regions { display: grid; gap: 14px; margin-top: 14px; }
+.mr-outlook-region { min-width: 0; border: 1px solid var(--border-subtle, #dce4df); border-radius: 10px; padding: 14px; }
+.mr-outlook-region > header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 14px; }
+.mr-outlook-region h4 { font-size: 13px; overflow-wrap: anywhere; }
+.mr-outlook-counts { display: flex; flex-wrap: wrap; gap: 6px 13px; margin: 12px 0; color: var(--text-secondary, #5e6975); font-size: 11px; }
+.mr-outlook-counts strong { color: var(--text-primary, #172235); }
+.mr-outlook-meta, .mr-outlook-empty, .mr-outlook-evidence { color: var(--text-secondary, #5e6975); font-size: 10px; line-height: 1.8; overflow-wrap: anywhere; }
+.mr-outlook-empty { padding: 12px 0 4px; }
+.mr-outlook-rows { display: grid; gap: 10px; margin-top: 12px; }
+.mr-outlook-row { min-width: 0; border-top: 1px solid var(--border-subtle, #dce4df); padding-top: 12px; }
+.mr-outlook-row > header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 7px 12px; }
+.mr-outlook-row > header strong { font-size: 12px; }
+.mr-outlook-row > p { color: var(--text-secondary, #5e6975); font-size: 11px; margin-top: 5px; }
+.mr-outlook-values { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 10px 0 0; }
+.mr-outlook-values > div { min-width: 0; background: var(--surface-control, #f3f6f3); border-radius: 7px; padding: 9px 10px; }
+.mr-outlook-values dt { color: var(--text-secondary, #5e6975); font-size: 10px; }
+.mr-outlook-values dd { font-size: 12px; font-weight: 650; margin: 4px 0 0; overflow-wrap: anywhere; }
+.mr-outlook-evidence { margin-top: 10px; }
+.mr-outlook-evidence > summary { cursor: pointer; font-weight: 600; }
+.mr-outlook-evidence dl { display: grid; gap: 7px; margin: 9px 0; }
+.mr-outlook-evidence dt { font-weight: 600; }
+.mr-outlook-evidence dd { margin: 0; }
+.mr-outlook-evidence a { color: var(--accent-strong, #275747); }
 .mr-entry-actions { display: flex; justify-content: flex-end; margin-bottom: 12px; }
 .mr-fold { border: 1px solid var(--border-subtle, #dce4df); border-radius: 10px; overflow: hidden; }
 .mr-fold > summary { padding: 14px; font-size: 12px; font-weight: 650; cursor: pointer; background: var(--surface-control, #f3f6f3); }
