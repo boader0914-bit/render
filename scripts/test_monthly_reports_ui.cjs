@@ -61,6 +61,101 @@ test("cutoff defaults use the month end, capped at the current Korea day", () =>
   assert.equal(ui.defaultCutoff("2024-02", "2026-09-26"), "2024-02-29");
 });
 
+test("number and Korea date formatters are reused without changing unknown, zero or rendered values", () => {
+  const constructors = { number: 0, date: 0 };
+  const context = vm.createContext({ module: { exports: {} }, Intl: {
+    NumberFormat: function (...args) { constructors.number++; return new Intl.NumberFormat(...args); },
+    DateTimeFormat: function (...args) { constructors.date++; return new Intl.DateTimeFormat(...args); }
+  } });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "../web/monthly-reports.js"), "utf8"), context);
+  const formatted = context.module.exports;
+  const data = { ...structuredClone(snapshot), summary: { lodging: { ...metric, estimatedRevenue: null, publicRevenue: 0, phoneRevenue: 1234567.89 }, dayuse: { ...metric, estimatedRevenue: 0 } } };
+  assert.equal(formatted.renderSnapshot(data), ui.renderSnapshot(data));
+  assert.equal(formatted.renderSnapshot(data), ui.renderSnapshot(data));
+  assert.equal(formatted.defaultCutoff("2024-02", "2026-09-26"), "2024-02-29");
+  formatted.createController({ innerHTML: "", addEventListener() {} }, async () => ({}));
+  assert.deepEqual(constructors, { number: 1, date: 2 }, "rendering must not construct Intl formatters per value or repeated render");
+});
+
+test("busy and list-only renders reuse one snapshot body but accepted API snapshots are rendered again", async () => {
+  const container = { innerHTML: "", addEventListener() {}, querySelector() { return null; } };
+  let qualityReads = 0, currentQuality = structuredClone(snapshot.quality);
+  const savedSnapshot = { ...structuredClone(snapshot), get quality() { qualityReads++; return currentQuality; } };
+  const report = { id: "mr_fixed", title: "발행본", status: "published", snapshot: savedSnapshot };
+  const c = ui.createController(container, async url => {
+    if (url === "/options") return { defaultMonth: "2026-08", companies: [{ id: "c1", label: "테스트 숙소" }] };
+    if (url === "/preview") return { snapshot: savedSnapshot, previewToken: "fixed" };
+    if (url === "/mr_fixed") return report;
+    return { reports: [] };
+  });
+  await c.open({ type: "company", targetId: "c1" });
+  await c.action("preview");
+  assert.equal(qualityReads, 1);
+  const before = container.innerHTML.match(/<div class="mr-snapshot">[^]*<\/section><\/div><\/div>$/)?.[0];
+  assert.ok(before, "the comparison must contain the rendered snapshot body");
+  await c.action("refresh");
+  await c.action("filter", "draft");
+  assert.equal(qualityReads, 1, "busy start/end and list filters must not regenerate the unchanged snapshot");
+  assert.equal(container.innerHTML.match(/<div class="mr-snapshot">[^]*<\/section><\/div><\/div>$/)?.[0], before);
+  currentQuality = { ...currentQuality, missingCompanyDays: 77 };
+  await c.action("preview");
+  assert.equal(qualityReads, 2, "a new API response invalidates the memo even if an adapter reuses its object reference");
+  assert.match(container.innerHTML, /미확인 77 업체·숙박일/);
+  await c.action("open", "mr_fixed");
+  assert.equal(qualityReads, 3);
+  await c.action("refresh");
+  assert.equal(qualityReads, 3, "published snapshot display also reuses its unchanged body");
+  assert.equal(report.status, "published");
+  assert.equal(c.state.report.snapshot, savedSnapshot, "memoization must not replace or modify saved data");
+  assert.doesNotMatch(container.innerHTML, /name="notes"/);
+});
+
+test("selector markup reuse preserves selection and invalidates on search, type, target or verified options", async () => {
+  const select = { innerHTML: "" };
+  const container = { innerHTML: "", addEventListener() {}, querySelector() { return select; } };
+  let labelReads = 0, label = "처음 업체";
+  const option = { id: "c1", get label() { labelReads++; return label; } };
+  const options = { defaultMonth: "2026-08", companies: [option], keywords: [{ id: "keyword", label: "경남글램핑" }] };
+  const c = ui.createController(container, async url => url === "/options" ? options : { reports: [] });
+  await c.open({ type: "company", targetId: "c1" });
+  assert.equal(labelReads, 1);
+  await c.action("refresh"); await c.action("filter", "draft");
+  assert.equal(labelReads, 1, "unchanged busy/list renders reuse the selector markup");
+  c.input("targetSearch", "NO MATCH");
+  assert.match(select.innerHTML, /value="c1" selected>처음 업체/);
+  assert.equal(labelReads, 2, "selected target remains visible even if it does not match search");
+  c.input("targetSearch", "no match");
+  assert.equal(labelReads, 2, "equivalent normalized searches have identical selector semantics");
+  c.input("targetId", "missing");
+  assert.equal(labelReads, 3);
+  assert.doesNotMatch(container.innerHTML, /value="c1"/);
+  c.input("type", "keyword");
+  assert.match(container.innerHTML, /value="keyword">경남글램핑/);
+  c.input("type", "company"); c.input("targetId", "c1");
+  label = "API에서 수정된 업체";
+  const previousReads = labelReads;
+  await c.open();
+  assert.ok(labelReads > previousReads, "every successfully verified response refreshes options even if the adapter reuses its object");
+  assert.match(container.innerHTML, /value="c1" selected>API에서 수정된 업체/);
+  assert.equal(c.state.form.targetId, "c1");
+  assert.equal(c.state.options.companies[0], option, "selector caching leaves source options unchanged");
+});
+
+test("oversized snapshot markup is rendered accurately without retaining a large memo entry", async () => {
+  const container = { innerHTML: "", addEventListener() {} };
+  let reads = 0;
+  const largeQuality = { warnings: ["검토 근거 ".repeat(200000)] };
+  const large = { ...structuredClone(snapshot), get quality() { reads++; return largeQuality; } };
+  const c = ui.createController(container, async url => url === "/options"
+    ? { defaultMonth: "2026-08", companies: [{ id: "c1", label: "업체" }] }
+    : url === "/preview" ? { snapshot: large } : { reports: [] });
+  await c.open({ type: "company", targetId: "c1" }); await c.action("preview");
+  assert.equal(reads, 1);
+  await c.action("filter", "draft");
+  assert.equal(reads, 2, "an oversized snapshot cannot remain in the controller's markup cache");
+  assert.match(container.innerHTML, /검토 근거/);
+});
+
 test("a reused calculation is identified without changing the approval payload or published view", async () => {
   const { controller: c, container, calls } = fixture({ generation: { cacheStatus: "reused", storage: "saved", calculatedAt: "2026-10-16T01:00:00Z", timings: { totalMs: 125 } } });
   await c.open({ type: "company", targetId: "c1" });

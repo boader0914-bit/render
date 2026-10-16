@@ -20,12 +20,13 @@ function createMonthlyReportMaterializedCache({ directory, maxEntries = 64, maxB
     if (typeof value !== "string" || !value || value.length > 512) throw Object.assign(new Error("저장 자료의 변경 여부를 확인하지 못했습니다."), { code: "MONTHLY_SOURCE_REVISION_UNAVAILABLE", statusCode: 503 });
     return value;
   }
-  async function read(file, key, sourceRevision) {
+  async function read(file, key) {
     try {
       const stat = await fs.lstat(file);
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxEntryBytes) return null;
       const entry = JSON.parse(await fs.readFile(file, "utf8"));
-      if (entry.schemaVersion !== 1 || entry.key !== key || entry.sourceRevision !== sourceRevision
+      if (entry.schemaVersion !== 1 || entry.key !== key
+        || typeof entry.sourceRevision !== "string" || !entry.sourceRevision || entry.sourceRevision.length > 512
         || !entry.value || entry.valueHash !== digest(JSON.stringify(entry.value))) return null;
       return entry;
     } catch { return null; } // An invalid derived file is a miss, never a zero.
@@ -64,17 +65,22 @@ function createMonthlyReportMaterializedCache({ directory, maxEntries = 64, maxB
       if (await revision(readRevision) !== result.sourceRevision) throw changed();
       return { ...result, value: copy(result.value), status: "coalesced", timings: { sharedWaitMs: performance.now() - started } };
     }
-    // Include the revision scan and disk lookup in the flight. Otherwise a slow
+    // Include the disk lookup and revision scan in the flight. Otherwise a slow
     // miss can resume just after a fast build failed and accidentally start it
     // again, even though both callers requested the same work concurrently.
     const work = (async () => {
-      const sourceRevision = await revision(readRevision), revisionCheckMs = performance.now() - started;
-      const reading = performance.now(), saved = await read(file, key, sourceRevision);
+      const reading = performance.now(), saved = await read(file, key);
       const cacheReadMs = performance.now() - reading;
-      if (saved) {
-        if (await revision(readRevision) !== sourceRevision) throw changed();
+      // A saved value is independent of the current source read: first validate
+      // its complete payload, then inspect sources afresh. Matching that saved
+      // revision is enough to reuse it; no pre-read scan can add freshness to
+      // the required scan after the payload was read. A miss still uses this
+      // revision as the build's precondition and verifies it again afterward.
+      const checking = performance.now(), sourceRevision = await revision(readRevision);
+      const revisionCheckMs = performance.now() - checking;
+      if (saved?.sourceRevision === sourceRevision) {
         await fs.utimes(file, new Date(), new Date()).catch(() => {});
-        return { value: copy(saved.value), sourceRevision, status: "reused", calculatedAt: saved.calculatedAt,
+        return { value: saved.value, sourceRevision, status: "reused", calculatedAt: saved.calculatedAt,
           storage: "saved", timings: { revisionCheckMs, cacheReadMs } };
       }
       const value = await build();
@@ -82,7 +88,9 @@ function createMonthlyReportMaterializedCache({ directory, maxEntries = 64, maxB
       const calculatedAt = new Date().toISOString();
       const entry = { schemaVersion: 1, key, sourceRevision, calculatedAt, value: copy(value), valueHash: digest(JSON.stringify(value)) };
       const writing = performance.now(), storage = await write(file, entry);
-      return { value: copy(entry.value), sourceRevision, status: "calculated", calculatedAt, storage,
+      // The shared flight owns this value. Copy only at the caller boundary,
+      // so a leader cannot mutate it while followers verify their own revision.
+      return { value: entry.value, sourceRevision, status: "calculated", calculatedAt, storage,
         timings: { revisionCheckMs, cacheReadMs, cacheWriteMs: performance.now() - writing } };
     })();
     inFlight.set(keyHash, work);

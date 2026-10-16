@@ -279,28 +279,34 @@ test("a broken source rejects rather than serving stale selectors, preserves the
 
 test("source-revision failures and changes during a saved lookup cannot certify old selectors as current", async t => {
   const f = await fixture(t);
-  let failRevision = false, mutateAfterRead = false;
+  let failRevision = false;
   const adapter = f.adapter({ readOptionsRevision: async () => {
     if (failRevision) throw Object.assign(new Error("fixture metadata failure"), { code: "MONTHLY_SOURCE_REVISION_UNAVAILABLE" });
-    const revision = await f.readRevision();
-    if (mutateAfterRead) {
-      mutateAfterRead = false;
-      f.master.companies.alpha.primaryName = "읽는 동안 변경됨";
-      await f.write("company_master/companies.json", f.master);
-    }
-    return revision;
+    return f.readRevision();
   } });
   await adapter.options();
   const [file] = await f.cacheFiles(), preserved = await fs.readFile(file, "utf8");
   failRevision = true;
   await assert.rejects(adapter.options(), error => error.code === "MONTHLY_SOURCE_REVISION_UNAVAILABLE");
   assert.equal(await fs.readFile(file, "utf8"), preserved);
-  failRevision = false; mutateAfterRead = true;
-  await assert.rejects(adapter.options(), error => error.code === "MONTHLY_SOURCE_CHANGED");
-  assert.equal(await fs.readFile(file, "utf8"), preserved);
-  const refreshed = await adapter.options();
+  failRevision = false;
+  const readFile = fs.readFile;
+  let mutateDuringCacheRead = true, refreshed;
+  try {
+    fs.readFile = async (target, ...args) => {
+      const bytes = await readFile(target, ...args);
+      if (target === file && mutateDuringCacheRead) {
+        mutateDuringCacheRead = false;
+        f.master.companies.alpha.primaryName = "읽는 동안 변경됨";
+        await f.write("company_master/companies.json", f.master);
+      }
+      return bytes;
+    };
+    refreshed = await adapter.options();
+  } finally { fs.readFile = readFile; }
   assert.equal(refreshed.selectorCache.status, "calculated");
   assert.match(refreshed.companies[0].label, /읽는 동안 변경됨/);
+  assert.equal(mutateDuringCacheRead, false, "the real saved-file read is the source-change boundary");
 });
 
 test("selector cache version changes rebuild derived menus without touching raw source files", async t => {

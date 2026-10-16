@@ -3,12 +3,15 @@
   const TYPES = { company: "업체별", keyword: "키워드별", region: "지역별" };
   const STATUSES = { draft: "초안", review: "검토 중", published: "발행됨" };
   const instances = new WeakMap();
+  const numberFormatter = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 1 });
+  const dayFormatter = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Seoul" });
+  const timeFormatter = new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", dateStyle: "medium", timeStyle: "short" });
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
-  const number = (value) => value == null || !Number.isFinite(Number(value)) ? "확인 불가" : Number(value).toLocaleString("ko-KR", { maximumFractionDigits: 1 });
+  const number = (value) => value == null || !Number.isFinite(Number(value)) ? "확인 불가" : numberFormatter.format(Number(value));
   const percent = (value) => value == null || !Number.isFinite(Number(value)) ? "확인 불가" : `${number(Number(value) * 100)}%`;
   const won = (value) => value == null ? "확인 불가" : `${number(value)}원`;
   const count = (value, unit = "건") => value == null ? "확인 불가" : `${number(value)}${unit}`;
-  const today = () => new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Seoul" }).format(new Date());
+  const today = () => dayFormatter.format(new Date());
   const defaultCutoff = (month, currentDay = today()) => {
     if (!/^\d{4}-\d{2}$/.test(month)) return currentDay;
     const [year, part] = month.split("-").map(Number);
@@ -21,7 +24,7 @@
   const timeLabel = (value) => {
     if (!value) return "기록 없음";
     const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? String(value) : new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", dateStyle: "medium", timeStyle: "short" }).format(date);
+    return Number.isNaN(date.getTime()) ? String(value) : timeFormatter.format(date);
   };
   const monthLabel = (month) => /^\d{4}-\d{2}$/.test(month || "") ? `${Number(month.slice(0, 4))}년 ${Number(month.slice(5))}월` : String(month || "대상 월 미확인");
   const reportTitle = (request = {}, target = {}) => `${monthLabel(request.month)} ${target.label || request.targetId || ""} ${request.type === "keyword" ? "검색시장 리포트" : "월간 리포트"}`;
@@ -217,10 +220,11 @@
   function createController(container, api = request) {
     const state = { options: null, optionsVerified: false, reports: [], filter: "all", form: { month: "", type: "company", targetId: "", cutoffDate: "" }, search: "", preview: null, previewRequest: null, previewToken: null, generation: null, report: null, title: "", notes: "", acknowledged: false, busy: "", busyStartedAt: 0, message: "", error: "" };
     let openRevision = 0;
+    let snapshotMarkupCache = null, targetOptionsCache = null;
     const idleWaiters = [];
     const optionsForType = () => state.options?.[{ company: "companies", keyword: "keywords", region: "regions" }[state.form.type]] || [];
-    const setReport = (report) => { state.report = report; state.preview = null; state.previewRequest = null; state.previewToken = null; state.generation = null; state.title = report.title || ""; state.notes = report.notes || ""; state.acknowledged = false; };
-    const invalidatePreview = () => { state.preview = null; state.previewRequest = null; state.previewToken = null; state.generation = null; };
+    const setReport = (report) => { snapshotMarkupCache = null; state.report = report; state.preview = null; state.previewRequest = null; state.previewToken = null; state.generation = null; state.title = report.title || ""; state.notes = report.notes || ""; state.acknowledged = false; };
+    const invalidatePreview = () => { snapshotMarkupCache = null; state.preview = null; state.previewRequest = null; state.previewToken = null; state.generation = null; };
     const busyText = () => {
       const seconds = Math.max(0, Math.floor((Date.now() - state.busyStartedAt) / 1000));
       return `${state.busy}${seconds ? ` · ${seconds}초 경과` : ""}${seconds >= 10 ? " · 처음 계산하거나 자료가 바뀐 경우 더 걸릴 수 있습니다. 중복 요청 없이 기다려 주세요." : ""}`;
@@ -246,7 +250,21 @@
     }
     function targetOptions() {
       const query = state.search.toLocaleLowerCase();
-      return '<option value="">대상을 선택하세요</option>' + optionsForType().filter((option) => option.id === state.form.targetId || !query || `${option.label} ${option.id}`.toLocaleLowerCase().includes(query)).map((option) => `<option value="${escapeHtml(option.id)}"${option.id === state.form.targetId ? " selected" : ""}>${escapeHtml(option.label)}</option>`).join("");
+      const cached = targetOptionsCache;
+      if (cached && cached.options === state.options && cached.type === state.form.type && cached.query === query && cached.targetId === state.form.targetId) return cached.markup;
+      const markup = '<option value="">대상을 선택하세요</option>' + optionsForType().filter((option) => option.id === state.form.targetId || !query || `${option.label} ${option.id}`.toLocaleLowerCase().includes(query)).map((option) => `<option value="${escapeHtml(option.id)}"${option.id === state.form.targetId ? " selected" : ""}>${escapeHtml(option.label)}</option>`).join("");
+      // One bounded entry per controller, never a list of previous accounts or searches.
+      targetOptionsCache = markup.length <= 1000000 ? { options: state.options, type: state.form.type, query, targetId: state.form.targetId, markup } : null;
+      return markup;
+    }
+    function snapshotMarkup(snapshot) {
+      if (!snapshot) { snapshotMarkupCache = null; return ""; }
+      // The body depends only on the saved snapshot, not busy/title/notes or
+      // generation diagnostics. Every accepted API snapshot clears this entry.
+      if (snapshotMarkupCache?.snapshot === snapshot) return snapshotMarkupCache.markup;
+      const markup = renderSnapshot(snapshot);
+      snapshotMarkupCache = markup.length <= 1000000 ? { snapshot, markup } : null;
+      return markup;
     }
     function render() {
       const report = state.report;
@@ -260,7 +278,7 @@
         <section class="mr-card mr-detail" aria-label="리포트 미리보기와 상세">${snapshot ? `<div class="mr-detail-heading"><div><p class="mr-eyebrow">${report ? `VERSION ${number(report.version || 1)} · 수정 ${number(report.revision)}` : "PREVIEW · 아직 저장하지 않았습니다"}</p><h3>${escapeHtml(report?.title || reportTitle(state.previewRequest || snapshot.request, snapshot.target))}</h3><p>${escapeHtml(snapshot.target?.label || report?.targetId)} · ${escapeHtml(TYPES[report?.type || snapshot.request?.type] || "")}</p></div>${report ? statusTag(report.status) : '<span class="mr-status">미리보기</span>'}</div>
         ${report ? `<p class="mr-dates">작성 ${escapeHtml(timeLabel(report.createdAt))} · 수정 ${escapeHtml(timeLabel(report.updatedAt))}${report.publishedAt ? ` · 발행 ${escapeHtml(timeLabel(report.publishedAt))}` : ""} (한국시간)</p>` : generationNote()}
         ${editable || !report ? `<div class="mr-editor"><label>리포트 제목<input name="title" value="${escapeHtml(state.title)}" maxlength="200"${busy}></label><label>검토 메모<textarea name="notes" rows="3" maxlength="10000" placeholder="자료의 해석과 확인할 내용을 남기세요."${busy}>${escapeHtml(state.notes)}</textarea></label></div>` : report.notes ? `<p class="mr-notes">${escapeHtml(report.notes)}</p>` : ""}
-        <div class="mr-lifecycle">${!report ? `<button class="primary-button" type="button" data-mr-action="save"${busy}>초안으로 저장</button><p>저장된 수치와 근거는 고정되며, 발행은 검토 단계에서 진행합니다.</p>` : editable ? `<div class="mr-button-row"><button class="secondary-button" type="button" data-mr-action="update"${busy}>제목·메모 저장</button><button class="secondary-button" type="button" data-mr-action="rebuild"${busy}>저장 자료로 다시 집계</button>${report.status === "draft" ? `<button class="primary-button" type="button" data-mr-action="review"${busy}>검토 단계로 이동</button>` : `<button class="secondary-button" type="button" data-mr-action="draft"${busy}>초안으로 돌리기</button>`}</div>${report.status === "review" ? `<div class="mr-publish"><label><input type="checkbox" name="qualityAck"${state.acknowledged ? " checked" : ""}${busy}>자료 충족률, 누락·제외 경고와 추정 매출 기준을 확인했습니다.</label><button class="primary-button" type="button" data-mr-action="publish"${busy || !canPublish(report, state.acknowledged) ? " disabled" : ""}>리포트 발행</button><small>현재 제목·메모와 저장된 수치를 발행합니다. 외부에 자동 전송되지 않습니다.</small></div>` : '<p>수치와 근거는 저장 당시 기준입니다. 다시 집계하면 초안 상태에서 최신 저장 자료를 검토하게 됩니다. 기존 발행본은 보존됩니다.</p>'}` : `<div class="mr-button-row"><a class="primary-button" href="/api/monthly-reports/${encodeURIComponent(report.id)}/pdf" download>PDF 다운로드</a><button class="secondary-button" type="button" data-mr-action="revise"${busy}>새 수정본 만들기</button></div><p>발행본은 수정할 수 없습니다. 새 수정본을 만들면 기존 발행본이 보존됩니다.</p>`}</div>${renderSnapshot(snapshot)}` : `<div class="mr-detail-empty"><span aria-hidden="true">▤</span><h3>한 달의 관측을 하나의 기록으로</h3><p>위에서 조건을 선택해 미리보기를 만들거나<br>왼쪽에서 저장한 리포트를 열어 보세요.</p><div class="mr-empty-legend"><span class="mr-public">● 공개 예약</span><span class="mr-phone">● 방막기 추정</span></div></div>`}</section></div></div>`;
+        <div class="mr-lifecycle">${!report ? `<button class="primary-button" type="button" data-mr-action="save"${busy}>초안으로 저장</button><p>저장된 수치와 근거는 고정되며, 발행은 검토 단계에서 진행합니다.</p>` : editable ? `<div class="mr-button-row"><button class="secondary-button" type="button" data-mr-action="update"${busy}>제목·메모 저장</button><button class="secondary-button" type="button" data-mr-action="rebuild"${busy}>저장 자료로 다시 집계</button>${report.status === "draft" ? `<button class="primary-button" type="button" data-mr-action="review"${busy}>검토 단계로 이동</button>` : `<button class="secondary-button" type="button" data-mr-action="draft"${busy}>초안으로 돌리기</button>`}</div>${report.status === "review" ? `<div class="mr-publish"><label><input type="checkbox" name="qualityAck"${state.acknowledged ? " checked" : ""}${busy}>자료 충족률, 누락·제외 경고와 추정 매출 기준을 확인했습니다.</label><button class="primary-button" type="button" data-mr-action="publish"${busy || !canPublish(report, state.acknowledged) ? " disabled" : ""}>리포트 발행</button><small>현재 제목·메모와 저장된 수치를 발행합니다. 외부에 자동 전송되지 않습니다.</small></div>` : '<p>수치와 근거는 저장 당시 기준입니다. 다시 집계하면 초안 상태에서 최신 저장 자료를 검토하게 됩니다. 기존 발행본은 보존됩니다.</p>'}` : `<div class="mr-button-row"><a class="primary-button" href="/api/monthly-reports/${encodeURIComponent(report.id)}/pdf" download>PDF 다운로드</a><button class="secondary-button" type="button" data-mr-action="revise"${busy}>새 수정본 만들기</button></div><p>발행본은 수정할 수 없습니다. 새 수정본을 만들면 기존 발행본이 보존됩니다.</p>`}</div>${snapshotMarkup(snapshot)}` : `<div class="mr-detail-empty"><span aria-hidden="true">▤</span><h3>한 달의 관측을 하나의 기록으로</h3><p>위에서 조건을 선택해 미리보기를 만들거나<br>왼쪽에서 저장한 리포트를 열어 보세요.</p><div class="mr-empty-legend"><span class="mr-public">● 공개 예약</span><span class="mr-phone">● 방막기 추정</span></div></div>`}</section></div></div>`;
     }
     async function readOptions() { return api("/options"); }
     async function readList() { const data = await api(""); return Array.isArray(data) ? data : data.reports || []; }
@@ -295,7 +313,7 @@
           throw optionsResult.reason;
         }
         const firstLoad = !state.options;
-        const data = optionsResult.value; state.options = data; state.optionsVerified = true;
+        const data = optionsResult.value; targetOptionsCache = null; state.options = data; state.optionsVerified = true;
         if (firstLoad) {
           state.form.month = data.defaultMonth || data.months?.[0] || today().slice(0, 7);
         }
@@ -343,6 +361,7 @@
           if (!state.form.month || !state.form.targetId) throw new Error("대상 월과 대상을 선택해 주세요.");
           const body = { ...state.form, cutoffDate: state.form.cutoffDate || defaultCutoff(state.form.month) };
           const data = await api("/preview", "POST", body);
+          snapshotMarkupCache = null;
           state.report = null; state.preview = data.snapshot || data; state.previewRequest = body; state.previewToken = data.previewToken || null;
           state.generation = data.generation || null;
           state.title = reportTitle(body, state.preview.target); state.notes = ""; state.acknowledged = false;

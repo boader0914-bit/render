@@ -30559,6 +30559,14 @@ function reconcileAnalysisRegionSelection() {
 function renderRegionAnalysisShell() {
   const visible = isAdminRole() && REGION_ANALYSIS_TABS.has(state.activeTab) && roleAllowsTab(state.activeTab);
   if (els.regionAnalysisShell) els.regionAnalysisShell.hidden = !visible;
+  // Inactive regional views still stop their saved-data polling, but need no
+  // region option markup or status calculation during unrelated navigation.
+  if (!visible) {
+    syncSavedRegionalAnalysis(null, "summary");
+    syncSavedRegionalAnalysis(null, "sources");
+    syncSavedRegionalOutlook();
+    return;
+  }
   const region = selectedAnalysisRegion();
   if (els.analysisRegionSelect) {
     const options = administrativeProvinceEntries().map((province) => {
@@ -37229,12 +37237,9 @@ function setActiveTab(tab, options = {}) {
     }
   }
   if (!options.fromHistory) syncAppHistoryState(Boolean(options.pushHistory ?? true));
+  // applyRoleUi synchronizes allowed panels and both navigation surfaces.
+  // Repeating those DOM writes here delays the destination's own first read.
   applyRoleUi();
-  document.querySelectorAll(".tab-panel").forEach((panel) => {
-    panel.classList.toggle("active", panel.dataset.panel === state.activeTab && roleAllowsTab(panel.dataset.panel));
-  });
-  syncPrimaryNavButtons();
-  syncB2BRegionSecondaryNav();
   renderRegionAnalysisShell();
   renderHeader();
   if (state.activeTab === "rank") renderPlaceRankReplayNotice();

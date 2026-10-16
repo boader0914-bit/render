@@ -26,14 +26,17 @@ async function fixture(t, options = {}) {
 
 test("durable monthly aggregates survive a new cache instance without reading calculation sources", async t => {
   const { cache, directory } = await fixture(t);
-  let builds = 0;
-  const request = { key: "region|sancheong|2026-09|2026-09-30", readRevision: async () => "source-v1", build: async () => { builds++; return value(0); } };
+  let builds = 0, checks = 0;
+  const request = { key: "region|sancheong|2026-09|2026-09-30", readRevision: async () => { checks++; return "source-v1"; }, build: async () => { builds++; return value(0); } };
   const first = await cache.getOrBuild(request);
   assert.equal(first.status, "calculated"); assert.equal(first.storage, "saved");
+  assert.equal(checks, 2, "new calculations retain fresh source validation before and after building");
+  checks = 0;
   const restarted = createMonthlyReportMaterializedCache({ directory });
   const saved = await restarted.getOrBuild({ ...request, build: async () => { throw Error("saved calculation must bypass source reconstruction"); } });
   assert.equal(saved.status, "reused"); assert.equal(saved.calculatedAt, first.calculatedAt);
   assert.deepEqual(saved.value, value(0)); assert.equal(builds, 1);
+  assert.equal(checks, 1, "a saved independent payload needs one fresh source inspection after it is read");
 });
 
 test("source revision failure cannot serve a previously saved aggregate as current", async t => {
@@ -54,7 +57,8 @@ test("malformed or hash-mismatched derived files are misses and preserve genuine
   await cache.getOrBuild(request); const file = keyFile(directory, key);
   const original = JSON.parse(await fs.readFile(file, "utf8"));
   for (const damaged of ["not JSON", JSON.stringify({ ...original, schemaVersion: 99 }),
-    JSON.stringify({ ...original, key: "wrong" }), JSON.stringify({ ...original, value: value(99) })]) {
+    JSON.stringify({ ...original, key: "wrong" }), JSON.stringify({ ...original, value: value(99) }),
+    ...[null, "", {}, "x".repeat(513)].map(sourceRevision => JSON.stringify({ ...original, sourceRevision }))]) {
     await fs.writeFile(file, damaged);
     const fresh = await cache.getOrBuild(request);
     assert.equal(fresh.status, "calculated"); assert.equal(fresh.value.snapshot.summary.lodging.sold, null);
@@ -141,13 +145,72 @@ test("a coalesced caller rechecks the source version instead of returning an old
   assert.equal((await first).value.snapshot.summary.lodging.sold, 6); await rejected; assert.equal(builds, 1);
 });
 
-test("a source change after reading a saved file fails closed", async t => {
-  const { cache, directory } = await fixture(t), key = "changed-after-read";
-  const request = { key, readRevision: async () => "r1", build: async () => value(7) };
-  await cache.getOrBuild(request); const original = await fs.readFile(keyFile(directory, key), "utf8");
-  let checks = 0;
-  await assert.rejects(cache.getOrBuild({ ...request, readRevision: async () => ++checks === 1 ? "r1" : "r2" }), error => error.code === "MONTHLY_SOURCE_CHANGED" && error.statusCode === 409);
-  assert.equal(await fs.readFile(keyFile(directory, key), "utf8"), original);
+test("a source edit during the actual saved-file read cannot return the old cached value", async t => {
+  const { cache, root, directory } = await fixture(t), key = "changed-during-saved-read";
+  const source = path.join(root, "source-version.json"), file = keyFile(directory, key);
+  await fs.writeFile(source, "r1");
+  const readRevision = async () => fs.readFile(source, "utf8");
+  await cache.getOrBuild({ key, readRevision, build: async () => value(7) });
+  const originalReadFile = fs.readFile;
+  let readFinished = false, changedWhileReading = false, checks = 0, builds = 0;
+  try {
+    fs.readFile = async (...args) => {
+      const result = await originalReadFile(...args);
+      if (args[0] === file) {
+        await fs.writeFile(source, "r2");
+        changedWhileReading = true; readFinished = true;
+      }
+      return result;
+    };
+    const fresh = await cache.getOrBuild({ key, readRevision: async () => {
+      assert.equal(readFinished, true, "source validation must begin after the candidate payload read has completed");
+      checks++; return readRevision();
+    }, build: async () => { builds++; return value(8); } });
+    assert.equal(changedWhileReading, true); assert.equal(checks, 2);
+    assert.equal(builds, 1); assert.equal(fresh.status, "calculated");
+    assert.equal(fresh.sourceRevision, "r2"); assert.deepEqual(fresh.value, value(8));
+    const saved = JSON.parse(await originalReadFile(file, "utf8"));
+    assert.equal(saved.sourceRevision, "r2"); assert.deepEqual(saved.value, value(8));
+  } finally { fs.readFile = originalReadFile; }
+});
+
+test("a source failure after a saved payload is read preserves the last complete cache", async t => {
+  const { cache, directory } = await fixture(t), key = "failed-after-saved-read", file = keyFile(directory, key);
+  await cache.getOrBuild({ key, readRevision: async () => "r1", build: async () => value(7) });
+  const originalReadFile = fs.readFile, original = await fs.readFile(file, "utf8");
+  let readFinished = false;
+  try {
+    fs.readFile = async (...args) => { const result = await originalReadFile(...args); if (args[0] === file) readFinished = true; return result; };
+    await assert.rejects(cache.getOrBuild({ key, readRevision: async () => {
+      assert.equal(readFinished, true);
+      throw Object.assign(new Error("source metadata unavailable"), { code: "MONTHLY_SOURCE_REVISION_UNAVAILABLE", statusCode: 503 });
+    }, build: async () => { throw Error("a failed source check cannot start a replacement"); } }),
+    error => error.code === "MONTHLY_SOURCE_REVISION_UNAVAILABLE" && error.statusCode === 503);
+    assert.equal(await originalReadFile(file, "utf8"), original);
+  } finally { fs.readFile = originalReadFile; }
+});
+
+test("a later caller cannot inherit a saved-cache source inspection already in progress", async t => {
+  const { cache, root } = await fixture(t), key = "late-saved-reader", source = path.join(root, "source-version.json");
+  await fs.writeFile(source, "r1");
+  const readRevision = async () => fs.readFile(source, "utf8");
+  await cache.getOrBuild({ key, readRevision, build: async () => value(7) });
+  const entered = gate(), release = gate();
+  let leader, follower;
+  try {
+    leader = cache.getOrBuild({ key, readRevision: async () => {
+      const seen = await readRevision(); entered.release(); await release.promise; return seen;
+    }, build: async () => { throw Error("saved value must reuse"); } });
+    await entered.promise;
+    await fs.writeFile(source, "r2");
+    let followerChecks = 0;
+    follower = cache.getOrBuild({ key, readRevision: async () => { followerChecks++; return readRevision(); },
+      build: async () => { throw Error("a follower must not start a concurrent replacement"); } });
+    const rejected = assert.rejects(follower, error => error.code === "MONTHLY_SOURCE_CHANGED" && error.statusCode === 409);
+    release.release();
+    assert.equal((await leader).status, "reused"); await rejected;
+    assert.equal(followerChecks, 1, "the later caller requires its own fresh validation after joining the shared result");
+  } finally { release.release(); await Promise.allSettled([leader, follower].filter(Boolean)); }
 });
 
 test("a source change during build cannot replace the previous complete file", async t => {

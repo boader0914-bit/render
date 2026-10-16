@@ -115,6 +115,25 @@ function fixture({ keyword = "포천글램핑", role = "admin", storage = new Ma
 }
 
 async function runTests() {
+  const inactive = fixture();
+  inactive.api.reconcileAnalysisRegionSelection();
+  const selectedBeforeHidden = inactive.api.selectedAnalysisRegion().regionKey;
+  const stopped = [];
+  inactive.state.activeTab = "monthlyReports";
+  inactive.context.administrativeProvinceEntries = () => { throw Error("Hidden regional selectors must not be rebuilt"); };
+  inactive.context.syncSavedRegionalAnalysis = (_, mode) => stopped.push(mode);
+  inactive.context.syncSavedRegionalOutlook = () => stopped.push("outlook");
+  inactive.api.renderRegionAnalysisShell();
+  assert.equal(inactive.els.regionAnalysisShell.hidden, true);
+  assert.deepEqual(stopped, ["summary", "sources", "outlook"], "hidden regional views still stop every polling surface");
+  assert.equal(inactive.api.selectedAnalysisRegion().regionKey, selectedBeforeHidden, "skipping hidden markup never changes the shared selection");
+  const visible = fixture();
+  visible.api.reconcileAnalysisRegionSelection();
+  visible.state.activeTab = "dictionary";
+  visible.api.renderRegionAnalysisShell();
+  assert.equal(visible.els.regionAnalysisShell.hidden, false);
+  assert.match(visible.els.analysisRegionSelect.innerHTML, /포천시/);
+
   const initial = fixture({ keyword: null });
   initial.api.reconcileAnalysisRegionSelection();
   assert.equal(initial.api.selectedAnalysisRegion(), null, "No run means no arbitrary Sancheong default");
