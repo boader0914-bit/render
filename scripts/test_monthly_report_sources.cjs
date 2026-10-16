@@ -79,6 +79,117 @@ test("shared monthly source queue serializes bootstrap and industry reads and re
   assert.equal(Object.hasOwn(ordinary, "rawCompanies"), false);
 });
 
+test("public catalogs and selectors cannot rebuild a second master beside an active source read", { timeout: 3000 }, async t => {
+  const sourceStarted = deferred(), sourceRelease = deferred();
+  let active = 0, maximum = 0, preparations = 0;
+  const enter = () => { active++; maximum = Math.max(maximum, active); };
+  const leave = () => { active--; };
+  const adapter = await sourceFixture(t, {
+    prepareCompanies: async companies => {
+      enter(); preparations++;
+      try { return companies; } finally { leave(); }
+    },
+    recalculateCompanyObservations: async () => {
+      enter(); sourceStarted.resolve();
+      try { await sourceRelease.promise; return []; } finally { leave(); }
+    }
+  });
+  const request = { month: "2026-08", cutoffDate: "2026-08-31", type: "company", targetId: "a" };
+  const source = adapter.loadSources(request, { priority: "background" });
+  await sourceStarted.promise;
+  const catalog = adapter.catalog(), selectors = adapter.options();
+  assert.equal(preparations, 1, "public catalog/option calls must not start preparing full masters while raw evidence is retained");
+  assert.deepEqual(adapter.sourceReadStatus(), { active: true, queuedForeground: 2, queuedBackground: 0 });
+  sourceRelease.resolve();
+  const [observed, metadata, options] = await Promise.all([source, catalog, selectors]);
+  assert.equal(maximum, 1);
+  assert.equal(preparations, 3, "each independent settled read still checks current saved metadata");
+  assert.equal(observed.companies[0].companyId, "a");
+  assert.equal(metadata.rawCompanies.get("a").companyId, "a");
+  assert.equal(options.companies[0].id, "a");
+});
+
+test("an active selector lookup and queued raw/catalog reads complete without nested scheduler deadlock", { timeout: 3000 }, async t => {
+  const selectorStarted = deferred(), selectorRelease = deferred();
+  let preparations = 0;
+  const order = [];
+  const adapter = await sourceFixture(t, {
+    prepareCompanies: async companies => {
+      const index = preparations++;
+      order.push(`catalog-${index}`);
+      if (index === 0) { selectorStarted.resolve(); await selectorRelease.promise; }
+      return companies;
+    },
+    recalculateCompanyObservations: async () => { order.push("raw-evidence"); return []; }
+  });
+  const selectors = adapter.options();
+  await selectorStarted.promise;
+  const source = adapter.loadSources({ month: "2026-08", cutoffDate: "2026-08-31", type: "company", targetId: "a" });
+  const catalog = adapter.catalog();
+  assert.equal(preparations, 1);
+  selectorRelease.resolve();
+  const [options, observed, metadata] = await Promise.all([selectors, source, catalog]);
+  assert.deepEqual(order, ["catalog-0", "catalog-1", "raw-evidence", "catalog-2"]);
+  assert.equal(options.companies[0].id, observed.companies[0].companyId);
+  assert.equal(metadata.rawCompanies.get("a").companyId, "a");
+});
+
+test("simultaneous selectors coalesce, failures release their slot, and later lookups refresh rather than pin a master", { timeout: 3000 }, async t => {
+  const firstStarted = deferred(), firstRelease = deferred();
+  let preparations = 0, shouldFail = false;
+  const adapter = await sourceFixture(t, {
+    listRuns: async () => [{ id: "r1", keyword: "포천글램핑", checkIn: "2026-08-01", checkOut: "2026-08-02" }],
+    prepareCompanies: async companies => {
+      const version = ++preparations;
+      if (version === 1) { firstStarted.resolve(); await firstRelease.promise; }
+      if (shouldFail) throw new Error("mock selector preparation failure");
+      companies.a.primaryName = `목록 버전 ${version}`;
+      return companies;
+    }
+  });
+  const first = adapter.options(), same = adapter.options();
+  await firstStarted.promise;
+  assert.equal(preparations, 1);
+  firstRelease.resolve();
+  const [a, b] = await Promise.all([first, same]);
+  assert.equal(a, b);
+  assert.match(a.companies[0].label, /목록 버전 1/);
+  assert.equal(Object.hasOwn(a, "rawCompanies"), false);
+  assert.equal(Object.hasOwn(a, "runs"), false);
+  assert.equal(Object.hasOwn(a, "runMonths"), false);
+  shouldFail = true;
+  await assert.rejects(adapter.options(), /mock selector preparation failure/);
+  shouldFail = false;
+  const refreshed = await adapter.options();
+  assert.match(refreshed.companies[0].label, /목록 버전 3/);
+  assert.notEqual(refreshed, a);
+  assert.equal(preparations, 3);
+  assert.ok(refreshed.months.includes("2026-08"), "saved run months remain discoverable without retaining full run payloads");
+});
+
+test("a failed source read releases queued public metadata work and later source reads", { timeout: 3000 }, async t => {
+  const started = deferred(), release = deferred();
+  let failures = 1;
+  const adapter = await sourceFixture(t, {
+    recalculateCompanyObservations: async () => {
+      if (!failures) return [];
+      failures--; started.resolve(); await release.promise;
+      throw new Error("mock failed retained source");
+    }
+  });
+  const request = { month: "2026-08", cutoffDate: "2026-08-31", type: "company", targetId: "a" };
+  const failed = adapter.loadSources(request);
+  const failure = assert.rejects(failed, error => error.code === "MONTHLY_SOURCE_UNAVAILABLE");
+  await started.promise;
+  const metadata = adapter.catalog(), options = adapter.options(), source = adapter.loadSources(request);
+  release.resolve();
+  await failure;
+  const [catalog, selectors, observed] = await Promise.all([metadata, options, source]);
+  assert.equal(catalog.rawCompanies.get("a").companyId, "a");
+  assert.equal(selectors.companies[0].id, "a");
+  assert.equal(observed.companies[0].companyId, "a");
+});
+
 test("source adapter forwards foreground priority and exposes the configured source revision", async t => {
   const firstStarted = deferred(), firstGate = deferred(), order = [];
   const readRevision = async request => `revision-${request.month}`;

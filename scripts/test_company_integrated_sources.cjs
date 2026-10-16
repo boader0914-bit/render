@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const os = require("node:os");
+const { spawnSync } = require("node:child_process");
 const { createCompanyCapacityRegistry } = require("./lib/company_capacity_registry.cjs");
 const { createCompanyIntegratedTargets } = require("./lib/company_integrated_targets.cjs");
 
@@ -62,6 +63,121 @@ test("target discovery includes all history, merged IDs, future spans, with no d
     { companyId: "b", months: ["2026-11"] }
   ]);
   assert.deepEqual(await list({ runId: "new", companyIds: ["a"] }), [{ companyId: "a", months: ["2026-09", "2026-10"] }]);
+});
+
+test("compact target discovery preserves snapshot run provenance, duplicate-place holds and active identity scope", async t => {
+  const dataDir = await temporary(t);
+  await fs.mkdir(path.join(dataDir, "history"));
+  const historyFile = path.join(dataDir, "history", "observations.jsonl");
+  const records = [
+    { companyKey: "former-a", runId: "history", stayDate: "2025-07-01" },
+    { companyKey: "a", runId: "history", date: "2025-08-01" },
+    { placeId: "shared", runId: "history", stayDate: "2025-09-01" },
+    { placeId: "unique", runId: "history", stayDate: "2025-10-01" },
+    { companyKey: "deleted", runId: "history", stayDate: "2025-11-01" },
+    { companyKey: "merged", runId: "history", stayDate: "2025-12-01" },
+    { companyKey: "same name", runId: "history", stayDate: "2024-01-01" }
+  ];
+  const historyText = records.map(JSON.stringify).join("\n");
+  await fs.writeFile(historyFile, historyText);
+  const rawCompanies = new Map([
+    ["a", { companyId: "a", primaryName: "same name", placeIds: ["shared", "unique"], duplicateNotes: [{ mergedCompanyId: "former-a" }],
+      keywords: { search: { runs: [{ runId: "span" }] } }, inventory: {
+        latest: { runId: "wrapper", productSnapshot: { daily: [
+          { stayDate: "2026-02-01", runId: "daily", arbitraryProduct: { preserved: true } },
+          { date: "2026-03-01" }
+        ] } },
+        previousLatest: { runId: "prior", productSnapshot: { daily: [{ stayDate: "2026-04-01" }] } },
+        snapshots: [{ runId: "snapshot", productSnapshot: { daily: [{ stayDate: "2026-05-01" }] } }]
+      } }],
+    ["b", { companyId: "b", primaryName: "same name", placeIds: ["shared"], runIds: ["legacy"] }],
+    ["deleted", { companyId: "deleted", deletedAt: "2026-01-01", runIds: ["span"] }],
+    ["merged", { companyId: "merged", mergedIntoCompanyId: "a", runIds: ["span"] }]
+  ]);
+  const data = { rawCompanies, runs: [
+    { id: "span", checkIn: "2026-12-29", bookingRangeDays: 12, arbitraryPayload: { preserve: true } },
+    { runId: "legacy", checkIn: "2026-06-30", arbitraryPayload: { preserve: true } }
+  ] };
+  const before = JSON.stringify([...rawCompanies]);
+  const runsBefore = JSON.stringify(data.runs);
+  const list = createCompanyIntegratedTargets({ dataDir, catalog: async () => data });
+  assert.deepEqual(await list(), [
+    { companyId: "a", months: ["2025-07", "2025-08", "2025-10", "2026-02", "2026-03", "2026-04", "2026-05", "2026-12", "2027-01"] },
+    { companyId: "b", months: ["2026-06"] }
+  ]);
+  assert.deepEqual(await list({ runId: "daily", companyIds: ["a"] }), [{ companyId: "a", months: ["2026-02"] }]);
+  assert.deepEqual(await list({ runId: "wrapper", companyIds: ["a"] }), [{ companyId: "a", months: ["2026-03"] }]);
+  assert.deepEqual(await list({ companyIds: ["deleted", "merged"] }), []);
+  assert.equal(JSON.stringify([...rawCompanies]), before);
+  assert.equal(JSON.stringify(data.runs), runsBefore);
+  assert.equal(await fs.readFile(historyFile, "utf8"), historyText);
+});
+
+async function targetRetentionChild(moduleFile, root, control) {
+  const assert = require("node:assert/strict"), nativeFs = require("node:fs"), fs = require("node:fs/promises"), path = require("node:path");
+  const { PassThrough } = require("node:stream");
+  let createTargets = require(moduleFile).createCompanyIntegratedTargets;
+  if (control) {
+    const Module = require("node:module"), text = await fs.readFile(moduleFile, "utf8");
+    const retained = text.replace("return { activeIds, companies,", "return { activeIds, companies, _retainedCatalog: data,");
+    assert.notEqual(retained, text, "retention control must retain the original full catalog");
+    const compiled = new Module(moduleFile, module); compiled.filename = moduleFile;
+    compiled.paths = Module._nodeModulePaths(path.dirname(moduleFile)); compiled._compile(retained, moduleFile);
+    createTargets = compiled.exports.createCompanyIntegratedTargets;
+  }
+  await fs.mkdir(path.join(root, "history"), { recursive: true });
+  const historyFile = path.join(root, "history", "observations.jsonl");
+  await fs.writeFile(historyFile, "");
+  const references = [];
+  const catalog = () => {
+    const payload = { largeUnused: Array.from({ length: 128 }, (_, index) => ({ index, text: Buffer.alloc(4000, index + 1).toString("base64") })) };
+    const daily = { stayDate: "2026-09-02", runId: "daily", unusedProducts: payload };
+    const snapshot = { runId: "snapshot", productSnapshot: { daily: [daily], rawProducts: payload } };
+    const raw = { companyId: "a", placeIds: ["123"], duplicateNotes: [{ mergedCompanyId: "old-a" }], inventory: { latest: snapshot }, runIds: ["span"] };
+    const run = { id: "span", checkIn: "2026-12-30", bookingRangeDays: 4, rawProducts: payload };
+    const data = { rawCompanies: new Map([["a", raw]]), runs: [run] };
+    for (const [name, object] of Object.entries({ catalog: data, rawCompanies: data.rawCompanies, raw, snapshot, daily, payload, run })) references.push({ name, weak: new WeakRef(object) });
+    return data;
+  };
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const blocked = new PassThrough();
+  const originalReadStream = nativeFs.createReadStream;
+  nativeFs.createReadStream = (filename, ...options) => {
+    if (path.resolve(filename) !== path.resolve(historyFile)) return originalReadStream(filename, ...options);
+    entered(); return blocked;
+  };
+  let running;
+  try {
+    running = createTargets({ dataDir: root, catalog: async () => catalog() })();
+    await started;
+    await new Promise(resolve => setImmediate(resolve)); global.gc();
+    const retained = references.filter(reference => reference.weak.deref() !== undefined).map(reference => reference.name);
+    if (control) assert.equal(retained.length, references.length);
+    else assert.deepEqual(retained, [], "target history scan must not retain full catalog or inventory payloads");
+    blocked.end(JSON.stringify({ companyKey: "old-a", runId: "history", stayDate: "2026-08-01" }) + "\n");
+    const result = await running;
+    console.log(JSON.stringify({ result, retained }));
+  } finally {
+    blocked.end(); nativeFs.createReadStream = originalReadStream;
+    if (running) await running;
+  }
+}
+
+test("target discovery releases full catalogs before awaiting history while preserving the complete discovery result", async t => {
+  const dataDir = await temporary(t);
+  const moduleFile = path.join(__dirname, "lib/company_integrated_targets.cjs");
+  const script = `(${targetRetentionChild.toString()})(process.argv[1], process.argv[2], process.argv[3] === 'control').catch(error => { console.error(error); process.exitCode = 1; });`;
+  const results = ["control", "compact"].map(mode => {
+    const child = spawnSync(process.execPath, ["--expose-gc", "-e", script, moduleFile, path.join(dataDir, mode), mode],
+      { encoding: "utf8", windowsHide: true, timeout: 10000, maxBuffer: 1024 * 1024 });
+    assert.equal(child.status, 0, child.stderr || child.error?.message);
+    return JSON.parse(child.stdout.trim());
+  });
+  assert.deepEqual(results[0].result, [{ companyId: "a", months: ["2026-08", "2026-09", "2026-12", "2027-01"] }]);
+  assert.deepEqual(results[1].result, results[0].result);
+  assert.equal(results[0].retained.length, 7);
+  assert.deepEqual(results[1].retained, []);
 });
 test("initial room basis uses uncapped full-history raw maxima, never corrected totals or failed zeros", async t => {
   const dataDir = await temporary(t);

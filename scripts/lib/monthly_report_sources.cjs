@@ -17,7 +17,7 @@ async function readJson(file, fallback) {
 function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepareCompanies = null, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null }) {
   const companyFile = path.join(dataDir, "company_master", "companies.json");
   const historyFile = path.join(dataDir, "history", "observations.jsonl");
-  let catalogInFlight = null;
+  let catalogInFlight = null, optionsInFlight = null;
   const sourceReadScheduler = createSourceReadScheduler();
   async function readCatalog() {
     const [master, regionMaster, runs] = await Promise.all([readJson(companyFile, { companies: {} }), readJson(regionMasterFile, { units: [] }), listRuns()]);
@@ -63,9 +63,12 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     });
     return { companies, rawCompanies, runs, regions: units.map(unit => ({ id: unit.regionKey, label: unit.fullName || unit.name, level: unit.level })) };
   }
-  async function catalog() {
+  async function catalog(options = {}) {
     if (catalogInFlight) return catalogInFlight;
-    const task = readCatalog();
+    // A public metadata lookup reconstructs the same complete master as a
+    // source read. Admit it through the shared scheduler too. Internal readers
+    // use readCatalog directly while they already own the scheduler slot.
+    const task = sourceReadScheduler.run(readCatalog, options);
     catalogInFlight = task;
     try { return await task; }
     finally { if (catalogInFlight === task) catalogInFlight = null; }
@@ -85,23 +88,42 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     } catch { throw sourceError(); }
     return malformed;
   }
-  async function options() {
-    const data = await catalog();
+  async function optionCatalog() {
+    const data = await readCatalog();
+    // Only these compact selector fields may survive the history scan below.
+    // Do not retain a complete rawCompanies inventory merely to list months.
+    return {
+      companies: data.companies.map(company => ({ id: company.companyId, label: `${company.primaryName} · ${company.regionLabel}`, regionKey: company.regionKey })),
+      keywords: [...new Set(data.runs.filter(run => run.searchMode !== "company").map(run => run.keyword).filter(Boolean))].sort().map(keyword => ({ id: keyword, label: keyword })),
+      regions: data.regions,
+      runMonths: data.runs.flatMap(run => [run.checkIn, run.checkOut]).map(value => String(value || "").slice(0, 7))
+    };
+  }
+  async function readOptions() {
+    const data = await optionCatalog();
     const months = new Set();
     const addMonth = value => { const month = String(value || "").slice(0, 7); if (/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) months.add(month); };
     await readHistory(row => addMonth(row.stayDate || row.date));
-    for (const run of data.runs) { addMonth(run.checkIn); addMonth(run.checkOut); }
+    for (const month of data.runMonths) addMonth(month);
     const today = new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10);
     const current = today.slice(0, 7);
     const previous = new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)) - 2, 1)).toISOString().slice(0, 7);
     months.add(current);
     const available = [...months].sort().reverse();
-    return { companies: data.companies.map(company => ({ id: company.companyId, label: `${company.primaryName} · ${company.regionLabel}`, regionKey: company.regionKey })),
-      keywords: [...new Set(data.runs.filter(run => run.searchMode !== "company").map(run => run.keyword).filter(Boolean))].sort().map(keyword => ({ id: keyword, label: keyword })),
+    return { companies: data.companies, keywords: data.keywords,
       regions: data.regions, months: available, defaultMonth: months.has(previous) ? previous : current, today };
   }
+  async function options(scheduling = {}) {
+    if (optionsInFlight) return optionsInFlight;
+    // Coalesce simultaneous selector requests without retaining a stale result
+    // or placing a second raw master beside an active source reconstruction.
+    const task = sourceReadScheduler.run(readOptions, scheduling);
+    optionsInFlight = task;
+    try { return await task; }
+    finally { if (optionsInFlight === task) optionsInFlight = null; }
+  }
   async function readSources(request, includeCatalog, { includeContext = true } = {}) {
-    const data = await catalog();
+    const data = await readCatalog();
     const byId = new Map(data.companies.map(company => [company.companyId, company]));
     const ids = new Map(data.companies.map(company => [token(company.companyId), company.companyId]));
     const places = new Map(), conflictingCompanyIds = new Set();

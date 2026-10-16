@@ -671,14 +671,27 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
     await write(report);
     return clone(report);
   };
-  const list = async () => {
+  const readListMetadata = async id => {
+    const { snapshot, ...metadata } = await read(id);
+    return { ...metadata, summary: snapshot.summary, quality: snapshot.quality, target: snapshot.target };
+  };
+  const readList = async () => {
     let entries;
     try { entries = await fs.readdir(directory); } catch (error) { if (error.code === "ENOENT") return []; throw error; }
-    const reports = await Promise.all(entries.filter(name => name.endsWith(".json") && ID_PATTERN.test(name.slice(0, -5))).map(name => read(name.slice(0, -5))));
-    return reports.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id)).map(report => {
-      const { snapshot, ...metadata } = report;
-      return { ...metadata, summary: snapshot.summary, quality: snapshot.quality, target: snapshot.target };
-    });
+    const reports = [];
+    // Saved evidence can be large. Validate and project each report before
+    // reading the next, so the list never retains every full snapshot at once.
+    for (const name of entries) {
+      if (name.endsWith(".json") && ID_PATTERN.test(name.slice(0, -5))) reports.push(await readListMetadata(name.slice(0, -5)));
+    }
+    return reports.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
+  };
+  let listInFlight = null;
+  const list = () => {
+    // Coalesce overlapping list calls without caching across later requests;
+    // each caller receives independent metadata and later reads revalidate disk.
+    if (!listInFlight) listInFlight = readList().finally(() => { listInFlight = null; });
+    return listInFlight.then(clone);
   };
   const update = async (id, input = {}) => locked(id, async () => {
     const report = await read(id);

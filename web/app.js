@@ -2884,15 +2884,20 @@ async function fetchJson(url, options) {
   const response = await fetch(url, options);
   const text = await response.text();
   let data = {};
+  let invalidJson = false;
   try {
-    data = text ? JSON.parse(text) : {};
+    data = text.trim() ? JSON.parse(text) : {};
   } catch {
-    data = { error: text };
+    invalidJson = true;
   }
-  if (!response.ok) {
-    const error = new Error(data.error || `요청 실패: ${response.status}`);
+  if (!response.ok || invalidJson) {
+    const serverMessage = !invalidJson && typeof data?.error === "string" ? data.error.trim() : "";
+    const fallbackMessage = response.ok
+      ? `서버 응답 형식이 올바르지 않습니다. (HTTP ${response.status})`
+      : `서버 요청에 실패했습니다. (HTTP ${response.status})`;
+    const error = new Error(serverMessage || fallbackMessage);
     error.status = response.status;
-    error.code = data.errorCode || data.code || "";
+    error.code = invalidJson ? "INVALID_JSON_RESPONSE" : data?.errorCode || data?.code || "";
     if (response.status === 401 && !url.includes("/api/logout")) {
       location.replace("/login");
     } else if (response.status === 403) {

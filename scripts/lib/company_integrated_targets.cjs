@@ -8,14 +8,42 @@ const monthOf = value => /^\d{4}-(0[1-9]|1[0-2])-\d{2}$/.test(String(value || ""
 // This index discovers scopes only. The monthly engine independently checks
 // identity, timestamps, source quality, counts and prices before accepting data.
 function createCompanyIntegratedTargets({ dataDir, catalog }) {
-  return async function listTargets({ runId = null, companyIds = null } = {}) {
+  async function readCatalogMetadata() {
     const data = await catalog();
-    const active = data.rawCompanies;
+    const activeIds = new Set(), companies = [];
+    for (const [key, company] of data.rawCompanies) {
+      if (!company || company.deletedAt || company.mergedIntoCompanyId) continue;
+      activeIds.add(key);
+      const knownRunIds = new Set([...(company.runIds || []), company.firstRunId, company.lastRunId]);
+      for (const exposure of Object.values(company.keywords || {})) for (const row of exposure.runs || []) knownRunIds.add(row.runId);
+      const snapshotDates = [];
+      for (const snapshot of [company.inventory?.latest, company.inventory?.previousLatest, ...(company.inventory?.snapshots || [])].filter(Boolean)) {
+        knownRunIds.add(snapshot.runId);
+        for (const row of snapshot.productSnapshot?.daily || []) snapshotDates.push({
+          date: String(row.stayDate || row.date || ""), runId: row.runId || snapshot.runId
+        });
+      }
+      companies.push({ companyId: company.companyId,
+        mergedIds: (company.duplicateNotes || []).filter(prior => prior.mergedCompanyId).map(prior => prior.mergedCompanyId),
+        placeIds: (company.placeIds || []).map(String), snapshotDates,
+        knownRunIds: [...knownRunIds].filter(value => value === null || typeof value !== "object") });
+    }
+    // Target discovery only needs identities and calendar scope. In particular,
+    // do not retain complete companies, product snapshots, daily rows or raw
+    // run payloads while the asynchronous history stream is being consumed.
+    return { activeIds, companies,
+      runs: new Map(data.runs.map(run => [String(run.id || run.runId), {
+        checkIn: String(run.checkIn || ""), bookingRangeDays: Number(run.bookingRangeDays)
+      }])) };
+  }
+  return async function listTargets({ runId = null, companyIds = null } = {}) {
+    const data = await readCatalogMetadata();
+    const active = data.activeIds;
     const ids = new Map(), places = new Map(), byCompany = new Map();
-    for (const company of active.values()) {
+    for (const company of data.companies) {
       ids.set(company.companyId, company.companyId);
-      for (const prior of company.duplicateNotes || []) if (prior.mergedCompanyId) ids.set(prior.mergedCompanyId, company.companyId);
-      for (const place of company.placeIds || []) places.set(String(place), places.has(String(place)) && places.get(String(place)) !== company.companyId ? null : company.companyId);
+      for (const mergedId of company.mergedIds) ids.set(mergedId, company.companyId);
+      for (const place of company.placeIds) places.set(place, places.has(place) && places.get(place) !== company.companyId ? null : company.companyId);
     }
     const requested = companyIds ? new Set(companyIds.map(String)) : null;
     function add(id, date, sourceRunId) {
@@ -37,16 +65,10 @@ function createCompanyIntegratedTargets({ dataDir, catalog }) {
         add(id, row.stayDate || row.date, row.runId);
       }
     } catch (error) { if (error.code !== "ENOENT") throw error; }
-    const runs = new Map(data.runs.map(run => [String(run.id || run.runId), run]));
-    for (const company of active.values()) {
-      const knownRunIds = new Set([...(company.runIds || []), company.firstRunId, company.lastRunId]);
-      for (const exposure of Object.values(company.keywords || {})) for (const row of exposure.runs || []) knownRunIds.add(row.runId);
-      for (const snapshot of [company.inventory?.latest, company.inventory?.previousLatest, ...(company.inventory?.snapshots || [])].filter(Boolean)) {
-        knownRunIds.add(snapshot.runId);
-        for (const row of snapshot.productSnapshot?.daily || []) add(company.companyId, row.stayDate || row.date, row.runId || snapshot.runId);
-      }
-      for (const id of knownRunIds) {
-        const run = runs.get(id); if (!run || (runId && runId !== id)) continue;
+    for (const company of data.companies) {
+      for (const row of company.snapshotDates) add(company.companyId, row.date, row.runId);
+      for (const id of company.knownRunIds) {
+        const run = data.runs.get(id); if (!run || (runId && runId !== id)) continue;
         const start = String(run.checkIn || "");
         if (!monthOf(start)) continue;
         const time = Date.parse(`${start}T00:00:00Z`);

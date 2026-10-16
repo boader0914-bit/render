@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { createMonthlyReportService, monthlyReportKeywordMembership } = require("./lib/monthly_reports.cjs");
 
 const COMPANY_A = { companyId: "company-a", primaryName: "같은 이름", regionKey: "local-a", regionKeys: ["local-a", "broad"], keywords: ["키워드", "다른키워드"] };
@@ -20,6 +21,85 @@ const row = (overrides = {}) => ({
   partial: false, missing: false, unknownUnavailable: 0, ...overrides
 });
 const request = { month: "2026-09", type: "region", targetId: "broad", cutoffDate: "2026-09-30" };
+
+async function verifyBoundedReportList(directory, seed) {
+  const service = createMonthlyReportService({ dataDir: directory, loadSources: async () => { throw new Error("Listing must not rebuild sources"); } });
+  assert.deepEqual(await service.list(), [], "an absent report directory has an empty list");
+  await fs.mkdir(directory);
+  const expected = [];
+  for (let index = 0; index < 8; index++) {
+    const report = { ...seed, id: `mr_${crypto.randomUUID()}`,
+      updatedAt: index < 4 ? "2026-10-01T03:00:00.000Z" : "2026-10-02T03:00:00.000Z",
+      snapshot: { ...seed.snapshot, sources: { ...seed.snapshot.sources, largeSavedEvidence: "e".repeat(2 * 1024 * 1024) } } };
+    report.snapshotHash = crypto.createHash("sha256").update(JSON.stringify(report.snapshot)).digest("hex");
+    const text = JSON.stringify(report);
+    assert.ok(Buffer.byteLength(text) > 2 * 1024 * 1024, "exercise real large published files, not a mocked report shape");
+    await fs.writeFile(path.join(directory, `${report.id}.json`), text, "utf8");
+    expected.push({ id: report.id, updatedAt: report.updatedAt,
+      digest: crypto.createHash("sha256").update(text).digest("hex") });
+  }
+  await fs.writeFile(path.join(directory, "not-a-report.json"), "not JSON", "utf8");
+  await fs.writeFile(path.join(directory, `${expected[0].id}.json.tmp`), "incomplete write", "utf8");
+  const originalReadFile = fs.readFile;
+  let activeReads = 0, maxActiveReads = 0, reportReads = 0;
+  fs.readFile = async (file, ...options) => {
+    if (path.dirname(String(file)) !== directory || !String(file).endsWith(".json")) return originalReadFile(file, ...options);
+    activeReads++; reportReads++; maxActiveReads = Math.max(maxActiveReads, activeReads);
+    try {
+      // Keep reads pending long enough to reveal an unbounded Promise.all.
+      await new Promise(resolve => setTimeout(resolve, 5));
+      return await originalReadFile(file, ...options);
+    } finally { activeReads--; }
+  };
+  let listed, overlapping;
+  try { [listed, ...overlapping] = await Promise.all([service.list(), service.list(), service.list()]); }
+  finally { fs.readFile = originalReadFile; }
+  assert.equal(reportReads, expected.length, "overlapping callers share one list read");
+  assert.equal(maxActiveReads, 1, "full saved snapshots must be read one at a time, including overlapping list requests");
+  assert.deepEqual(listed.map(report => report.id), expected.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id)).map(report => report.id));
+  for (const metadata of listed) {
+    assert.equal(metadata.snapshot, undefined, "the completed list retains metadata, not full evidence");
+    assert.deepEqual(metadata.summary, seed.snapshot.summary);
+    assert.deepEqual(metadata.quality, seed.snapshot.quality);
+    assert.deepEqual(metadata.target, seed.snapshot.target);
+    assert.equal(metadata.status, "published");
+    assert.ok(Buffer.byteLength(JSON.stringify(metadata)) < 64 * 1024);
+  }
+  listed[0].summary.lodging.sold = -999;
+  listed[0].notes = "caller-only edit";
+  for (const other of overlapping) {
+    assert.notEqual(other, listed);
+    assert.deepEqual(other[0].summary, seed.snapshot.summary, "shared reads return independent nested metadata for every caller");
+    assert.equal(other[0].notes, seed.notes);
+  }
+  for (const report of expected) {
+    const content = await fs.readFile(path.join(directory, `${report.id}.json`), "utf8");
+    assert.equal(crypto.createHash("sha256").update(content).digest("hex"), report.digest, "list validation preserves published bytes");
+  }
+  const added = { ...seed, id: `mr_${crypto.randomUUID()}`, title: "newly saved report" };
+  await fs.writeFile(path.join(directory, `${added.id}.json`), JSON.stringify(added), "utf8");
+  const refreshed = await service.list();
+  assert.equal(refreshed.length, expected.length + 1, "a later request revalidates disk instead of keeping a completed list cached");
+  assert.equal(refreshed.find(report => report.id === added.id).title, "newly saved report");
+  const firstFile = path.join(directory, `${expected[0].id}.json`);
+  const firstContent = await fs.readFile(firstFile, "utf8");
+  const corrupt = JSON.parse(firstContent);
+  corrupt.snapshot.summary = { tampered: true };
+  await fs.writeFile(firstFile, JSON.stringify(corrupt), "utf8");
+  await assert.rejects(service.list(), error => error.code === "corrupt_report", "listing still rejects an altered published snapshot");
+  assert.equal(await fs.readFile(firstFile, "utf8"), JSON.stringify(corrupt), "failed list validation never rewrites its source");
+  await fs.writeFile(firstFile, firstContent, "utf8");
+  const permissionDenied = Object.assign(new Error("Permission denied"), { code: "EACCES" });
+  let rejectedReads = 0;
+  fs.readFile = async () => { rejectedReads++; await new Promise(resolve => setTimeout(resolve, 5)); throw permissionDenied; };
+  try {
+    const failed = await Promise.allSettled([service.list(), service.list(), service.list()]);
+    assert.equal(rejectedReads, 1, "overlapping failed list calls also share one disk attempt");
+    assert.ok(failed.every(result => result.status === "rejected" && result.reason === permissionDenied), "file access failures must remain errors, not an empty list");
+  }
+  finally { fs.readFile = originalReadFile; }
+  assert.equal((await service.list()).length, expected.length + 1, "a failed shared read clears its slot and permits a verified retry");
+}
 
 async function main() {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "monthly-reports-test-"));
@@ -288,6 +368,7 @@ async function main() {
 
     const remainingFiles = await fs.readdir(temporary);
     assert.ok(remainingFiles.every(value => value.endsWith(".json")), "atomic writes and locks leave no temporary files");
+    await verifyBoundedReportList(path.join(temporary, "list-memory"), published);
     console.log("Monthly reports: canonical company/date dedupe, KST cutoff, evidence quality, partial subtotals, preview consistency, immutable publication and concurrent revisions passed");
   } finally {
     // Only remove the unique directory created by this test under the OS temp root.
