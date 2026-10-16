@@ -10,7 +10,7 @@ const foldKeys = ["profile", "correction", "channel", "collect", "review"];
 const names = [
   "escapeHtml", "adminDbSelectedDetailTabs", "adminDbSelectedFoldBlock", "adminDbCompanyMaintenanceHtml",
   "syncAdminDbReviewNavigation", "openAdminDbReviewFold", "handleAdminDbReviewToggle",
-  "renderAdminDatabaseDashboard", "loadAdminDbCompanyDetail"
+  "renderAdminDatabaseDashboard", "hideAdminRegionManagement", "loadAdminDbCompanyDetail"
 ];
 const declarations = names.map((name) => {
   const declaration = source.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^}`, "m"))?.[0];
@@ -131,6 +131,7 @@ function fixture() {
     state, Array, Object, URLSearchParams,
     window: { requestAnimationFrame: (callback) => callback() },
     document: {
+      getElementById: () => null,
       querySelectorAll: (selector) => documentRoot.querySelectorAll(selector),
       querySelector: (selector) => documentRoot.querySelector(selector)
     },

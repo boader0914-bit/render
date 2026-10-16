@@ -1905,7 +1905,7 @@ assert(
     && app.includes('els.keywordInput.defaultValue = "";')
     && adminPanelSectionBlock.includes('sectionKey === "collect" && options.freshEntry === true')
     && app.includes('setAdminPanelSection("collect", { freshEntry: true });')
-    && app.includes('{ scroll: true, freshEntry: section === "collect" }'),
+    && /\{\s*scroll:\s*true,\s*freshEntry:\s*section\s*===\s*"collect"(?:,|\s*\})/.test(app),
   "fresh collection navigation must clear the keyword while programmatic recrawl navigation can preserve its assigned keyword",
   failures
 );
@@ -3034,7 +3034,7 @@ assert(reviewShellDeclarations.every(Boolean), "review surface shell functions m
 const reviewShellDashboard = { innerHTML: "" };
 const reviewShellRow = { company: { companyId: "review-surface-fixture" }, metrics: {} };
 const reviewShellContext = vm.createContext({
-  state: { adminDbSelectedCompanyId: reviewShellRow.company.companyId, adminDbViewMode: "review" },
+  state: { activeTab: "admin", adminPanelSection: "database", adminDbSelectedCompanyId: reviewShellRow.company.companyId, adminDbViewMode: "review" },
   els: { adminDatabaseDashboard: reviewShellDashboard }, window: {},
   isAdminRole: () => true, adminConsoleMasterSource: () => ({}),
   adminDbFilterState: () => ({ rows: [reviewShellRow], filteredRows: [reviewShellRow], filters: { query: "" } }),
@@ -3042,7 +3042,7 @@ const reviewShellContext = vm.createContext({
   adminDbMetricCard: () => "", fmtNumber: String, fmtWon: String,
   adminDbCompanySearchShellHtml: () => "", adminDbUserViewBridgeHtml: () => "", adminDbSelectedRow: () => reviewShellRow,
   adminDbAuditBoard: () => "", adminDbWorkPanel: () => "", adminDbCollectionPanel: () => "",
-  bindAdminDbCompanySelectButtons() {}, applyPendingCompanyEdit() {}, renderAdminRegionAnalysisDashboard() {},
+  bindAdminDbCompanySelectButtons() {}, applyPendingCompanyEdit() {}, renderAdminRegionAnalysisDashboard() {}, hideAdminRegionManagement() {},
   adminDbCumulativeDashboardModel: () => ({}),
   adminDbReferenceBasicsCard: () => '<section class="admin-reference-card admin-reference-basics"></section>',
   adminDbReferenceChannelsCard: () => '<section class="admin-reference-card admin-reference-channels"></section>',

@@ -208,7 +208,7 @@ test("late bootstrap state updates home alone and keeps hidden views pending unt
     ADMIN_COMPACT_SECTIONS: { summary: { anchor: "" } },
     adminMobileSectionForTab: () => "summary", adminConsoleMasterSource: () => state.companyMaster,
     renderHeader: () => calls.push("header"),
-    renderAdminDatabaseDashboard: master => renderedMasters.push(master)
+    renderAdminDatabaseDashboard: (master = state.companyMaster) => renderedMasters.push(master)
   };
   const stubs = ["reconcileAnalysisRegionSelection", "applyRoleUi", "renderRegionAnalysisShell", "renderIndustryHome", "renderRegionHome",
     "renderB2BSearchPanel", "renderB2BAccountPanel", "renderRunResultApplySummary", "renderCollectionArchive", "renderPlaceRankReplayNotice",
@@ -238,13 +238,16 @@ test("late bootstrap state updates home alone and keeps hidden views pending unt
   assert.ok(!calls.includes("renderSummary") && !calls.includes("renderCompanies"));
   state.adminPanelSection = "database";
   api.setActiveTab("admin");
-  assert.equal(state.adminViewsDeferred, false);
+  assert.equal(state.adminViewsDeferred, true, "DB does not certify unrelated hidden panels as current");
   assert.equal(renderedMasters.length, 1);
   assert.equal(renderedMasters[0], latestMaster, "entering DB uses the latest state, not the first deferred response");
-  assert.ok(calls.includes("renderSummary"));
-  assert.ok(calls.includes("renderCompanies"));
+  assert.ok(!calls.includes("renderSummary") && !calls.includes("renderCompanies"));
   api.setActiveTab("admin");
-  assert.equal(renderedMasters.length, 1, "the deferred full refresh is consumed only once");
+  assert.equal(renderedMasters.length, 2, "each real DB entry performs only its own current render");
+  state.adminPanelSection = "members";
+  api.setActiveTab("admin");
+  assert.equal(state.adminViewsDeferred, false);
+  assert.ok(calls.includes("renderSummary") && calls.includes("renderCompanies"), "a later legacy view still receives the deferred state");
 });
 
 function runFixture({ activeTab = "admin", realMetadata = false } = {}) {

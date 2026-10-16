@@ -2685,7 +2685,31 @@ function syncAdminMobileNav() {
   syncPrimaryNavButtons();
 }
 
-function activateAdminMobileNav(sectionKey, tab = "", anchor = "", adminPanelSection = "") {
+function beginAdminScreenTransition(source = "tab", inputTimeStamp) {
+  const timing = window.AdminTransitionTiming;
+  if (!timing) return;
+  state.adminScreenTransition = null;
+  if (!isAdminRole() || state.activeTab !== "admin" || !["overview", "database"].includes(state.adminPanelSection)) {
+    timing.invalidate();
+    return;
+  }
+  const token = timing.begin({ tab: state.activeTab, section: state.adminPanelSection, source, inputTimeStamp });
+  if (token) state.adminScreenTransition = { token, section: state.adminPanelSection, sequence: state.analysisNavigationSequence };
+}
+
+function finishAdminScreenTransition(status = "ready") {
+  const transition = state.adminScreenTransition;
+  if (!transition || !window.AdminTransitionTiming) return;
+  const target = transition.section === "database" ? els.adminDatabaseDashboard : els.adminConsoleDashboard;
+  window.AdminTransitionTiming.rendered(transition.token, {
+    status,
+    isCurrent: () => state.adminScreenTransition === transition && isAdminRole() && state.activeTab === "admin"
+      && state.adminPanelSection === transition.section && state.analysisNavigationSequence === transition.sequence,
+    isVisible: () => Boolean(target?.isConnected && target.getClientRects().length)
+  });
+}
+
+function activateAdminMobileNav(sectionKey, tab = "", anchor = "", adminPanelSection = "", options = {}) {
   if (!isAdminRole()) return;
   const section = ADMIN_COMPACT_SECTIONS[sectionKey] || ADMIN_COMPACT_SECTIONS.summary;
   const nextTab = roleAllowsTab(tab) ? tab : section.target;
@@ -2696,17 +2720,17 @@ function activateAdminMobileNav(sectionKey, tab = "", anchor = "", adminPanelSec
     state.adminPanelSection = adminPanelSection || section.adminPanelSection || "overview";
   }
   if (nextTab === "admin" && state.adminPanelSection === "collect") resetCollectionKeywordForFreshEntry();
-  setActiveTab(nextTab, { adminMobileSection: sectionKey });
+  setActiveTab(nextTab, { adminMobileSection: sectionKey, inputTimeStamp: options.inputTimeStamp, navigationSource: "mobile" });
   scrollAdminMobileAnchor(requestedAnchor);
 }
 
-function activateAdminPrimaryNav(sectionKey = "summary") {
+function activateAdminPrimaryNav(sectionKey = "summary", options = {}) {
   if (!isAdminRole()) return;
   const section = ADMIN_MOBILE_SECTIONS[sectionKey] || ADMIN_MOBILE_SECTIONS.summary;
   const nextTab = roleAllowsTab(section.target) ? section.target : "admin";
   if (nextTab === "admin") state.adminPanelSection = section.adminPanelSection || "overview";
   state.adminMobileAnchor = section.anchor || "";
-  setActiveTab(nextTab, { adminMobileSection: adminMobileSectionForTab(nextTab) });
+  setActiveTab(nextTab, { adminMobileSection: adminMobileSectionForTab(nextTab), inputTimeStamp: options.inputTimeStamp, navigationSource: "primary" });
   if (nextTab === "admin") setAdminPanelSection(state.adminPanelSection, { freshEntry: sectionKey === "collect" });
   if (section.anchor) {
     window.requestAnimationFrame(() => document.querySelector(section.anchor)?.scrollIntoView({ behavior: "smooth", block: "start" }));
@@ -2775,6 +2799,7 @@ function setAdminPanelSection(sectionKey = "overview", options = {}) {
   if (!ADMIN_PANEL_SECTIONS[sectionKey]) sectionKey = "overview";
   if (sectionKey === "collect" && options.freshEntry === true) resetCollectionKeywordForFreshEntry();
   state.adminPanelSection = sectionKey;
+  if (previousSection !== sectionKey && window.AdminTransitionTiming) beginAdminScreenTransition("section", options.inputTimeStamp);
   if (isAdminRole() && state.activeTab === "admin") {
     const panelTarget = adminPanelMobileTarget(sectionKey);
     const compactSection = ADMIN_COMPACT_SECTIONS[panelTarget.section] || ADMIN_COMPACT_SECTIONS.summary;
@@ -2790,6 +2815,8 @@ function setAdminPanelSection(sectionKey = "overview", options = {}) {
     renderHeader();
     if (sectionKey === "overview") {
       if (previousSection !== "overview") renderAdminConsoleDashboard();
+    } else if (sectionKey === "database") {
+      if (previousSection !== "database") renderAdminDatabaseDashboard();
     } else if (state.adminViewsDeferred) {
       state.adminViewsDeferred = false;
       renderAll();
@@ -2805,8 +2832,12 @@ function setAdminPanelSection(sectionKey = "overview", options = {}) {
       document.querySelector(`[data-admin-section-panel="${sectionKey}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 80);
   }
-  syncRegionalReportPreparation();
-  if (window.CompanyIntegrated) syncCompanyIntegratedPanel();
+  // DB rendering owns its regional/observation mounts. Reopening them here
+  // would abort and restart the same saved-data request after each navigation.
+  if (sectionKey !== "database") {
+    syncRegionalReportPreparation();
+    if (window.CompanyIntegrated) syncCompanyIntegratedPanel();
+  }
 }
 
 function syncAdminSectionPanels() {
@@ -2854,6 +2885,7 @@ function releaseAppBoot() {
 }
 
 function applyRoleUi() {
+  if (!isAdminRole() && window.AdminTransitionTiming) beginAdminScreenTransition("role");
   const allowedTabs = new Set(roleTabs());
   if (!allowedTabs.has(state.activeTab)) state.activeTab = firstRoleTab();
   document.body.classList.toggle("role-b2b", !isAdminRole());
@@ -27122,9 +27154,16 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
     renderAdminConsoleDashboard(master);
     return;
   }
+  if (state.activeTab !== "admin" || state.adminPanelSection !== "database") {
+    state.adminViewsDeferred = true;
+    return;
+  }
+  state.adminViewsDeferred = true;
   window.CompanyIntegrated?.disposeWithin(els.adminDatabaseDashboard);
   if (master.error) {
+    hideAdminRegionManagement();
     els.adminDatabaseDashboard.innerHTML = `<div class="admin-console-empty">업체 관리 로딩 실패: ${escapeHtml(master.error)}</div>`;
+    if (window.AdminTransitionTiming) finishAdminScreenTransition("error");
     return;
   }
   const { rows, filteredRows, filters, provinceOptions, regionOptions, categoryOptions, statusOptions, confidenceOptions, sourceOptions } = adminDbFilterState(master);
@@ -27132,6 +27171,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   const allGrouped = adminDbGroupedRows(rows);
   const routeCompanyId = adminDbCompanyIdFromRoute() || state.adminDbRouteCompanyId || "";
   if (routeCompanyId && !adminDbMasterHasRows(master) && !rows.length) {
+    hideAdminRegionManagement();
     ensureAdminDbMasterLoadedForRoute(routeCompanyId);
     els.adminDatabaseDashboard.innerHTML = `
       <div class="admin-console-empty admin-db-loading-detail">
@@ -27139,6 +27179,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
         <p>마스터 DB를 확인한 뒤 업체 상세 화면을 다시 엽니다.</p>
       </div>
     `;
+    if (window.AdminTransitionTiming) finishAdminScreenTransition("waiting");
     return;
   }
   if (routeCompanyId) {
@@ -27222,7 +27263,14 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   bindAdminDbCompanySelectButtons();
   if (window.CompanyIntegrated) syncCompanyIntegratedPanel();
   applyPendingCompanyEdit();
-  renderAdminRegionAnalysisDashboard(master);
+  if (viewMode === "region") renderAdminRegionAnalysisDashboard(master);
+  else hideAdminRegionManagement();
+  if (window.AdminTransitionTiming) {
+    const detailId = viewMode === "review" ? state.adminDbSelectedCompanyId : "";
+    const detailError = detailId && state.adminDbCompanyDetails?.[detailId]?.error;
+    const waiting = !Array.isArray(master.companies) || Boolean(detailId && state.adminDbCompanyDetailLoading?.[detailId]);
+    finishAdminScreenTransition(detailError ? "error" : waiting ? "waiting" : "ready");
+  }
 }
 
 function adminConsoleKpis(master = {}, entries = []) {
@@ -28209,9 +28257,9 @@ function openAnalysisRegionManagement() {
   state.adminDbFilters = { ...state.adminDbFilters, query: "", province: management.provinceKey,
     region: region.level === "local" ? management.regionKey : "all", category: "all", status: "all", confidence: "all", source: "all", ota: "all", feature: "all", quality: "all" };
   state.adminDbViewMode = "region";
+  state.adminPanelSection = "database";
   setActiveTab("admin");
   setAdminPanelSection("database");
-  renderAdminDatabaseDashboard();
   syncAppHistoryState(false);
   window.requestAnimationFrame(() => document.getElementById("regionDataManagement")?.scrollIntoView({ behavior: "smooth", block: "start" }));
 }
@@ -30174,6 +30222,18 @@ function adminHomeRecentRows(master = {}) {
   }).join("");
 }
 
+function hideAdminRegionManagement() {
+  const board = els.adminRegionAnalysisDashboard;
+  const overview = board?.querySelector(".region-management-overview");
+  if (overview) state.adminRegionOverviewOpen = overview.open;
+  const container = document.getElementById("regionDataManagement");
+  if (container) container.hidden = true;
+  if (board) board.hidden = true;
+  window.RegionalReportPreparation?.pause();
+  const slot = board?.querySelector("[data-regional-analysis-manage]");
+  if (slot) window.RegionalAnalysis?.stop(slot);
+}
+
 function renderAdminRegionAnalysisDashboard(master = adminConsoleMasterSource()) {
   if (!els.adminRegionAnalysisDashboard) return;
   const overview = els.adminRegionAnalysisDashboard.querySelector(".region-management-overview");
@@ -30183,9 +30243,7 @@ function renderAdminRegionAnalysisDashboard(master = adminConsoleMasterSource())
   if (container) container.hidden = !visible;
   els.adminRegionAnalysisDashboard.hidden = !visible;
   if (!visible) {
-    window.RegionalReportPreparation?.pause();
-    const savedAnalysisSlot = els.adminRegionAnalysisDashboard.querySelector("[data-regional-analysis-manage]");
-    if (savedAnalysisSlot) window.RegionalAnalysis?.stop(savedAnalysisSlot);
+    hideAdminRegionManagement();
     return;
   }
   const previous = state.regionManagementReturnContext;
@@ -30238,6 +30296,11 @@ function renderAdminSecurityDashboard() {
 
 function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
   if (!isAdminRole()) return;
+  if (state.activeTab === "admin" && state.adminPanelSection === "database") {
+    state.adminViewsDeferred = true;
+    renderAdminDatabaseDashboard(master);
+    return;
+  }
   if (state.activeTab === "monthlyReports") {
     state.adminViewsDeferred = true;
     return;
@@ -30248,7 +30311,6 @@ function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
     state.adminViewsDeferred = true;
   } else {
     renderAdminMemberRequestDashboard();
-    renderAdminDatabaseDashboard(master);
     renderAdminRegionAnalysisDashboard(master);
     renderAdminIntegrationRegistry();
     renderSpecialDaysAdminCard();
@@ -30259,6 +30321,7 @@ function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
   if (!els.adminConsoleDashboard) return;
   if (master.error) {
     els.adminConsoleDashboard.innerHTML = `<div class="admin-console-empty">관리자 콘솔 로딩 실패: ${escapeHtml(master.error)}</div>`;
+    if (window.AdminTransitionTiming) finishAdminScreenTransition("error");
     return;
   }
   const entries = companyDecisionQueueEntries(master);
@@ -30297,6 +30360,7 @@ function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
       </section>
     </section>
   `;
+  if (window.AdminTransitionTiming) finishAdminScreenTransition(Array.isArray(master.companies) || Number.isFinite(master.totalCompanies) ? "ready" : "waiting");
 }
 
 function renderAdminMemberRequestDashboard() {
@@ -30369,7 +30433,7 @@ function renderCompanyMasterPanel() {
   renderAdminConsoleDashboard(master);
   // A late DB-save response can arrive after returning home. Its saved state
   // updates the summary, without recreating the hidden legacy company tools.
-  if (isAdminRole() && state.activeTab === "admin" && state.adminPanelSection === "overview") return;
+  if (isAdminRole() && state.activeTab === "admin" && ["overview", "database"].includes(state.adminPanelSection)) return;
   if (els.companyMasterState) {
     els.companyMasterState.textContent = master.error ? "오류" : master.totalCompanies ? `${fmtNumber(master.totalCompanies)} 업체` : "대기";
   }
@@ -37186,6 +37250,12 @@ function renderAll() {
     renderAdminConsoleDashboard();
     return;
   }
+  if (isAdminRole() && state.activeTab === "admin" && state.adminPanelSection === "database") {
+    state.adminViewsDeferred = true;
+    renderHeader();
+    renderAdminDatabaseDashboard();
+    return;
+  }
   if (isAdminRole() && state.activeTab === "industryHome") renderIndustryHome();
   if (isAdminRole() && state.activeTab === "regionHome") renderRegionHome();
   renderB2BSearchPanel();
@@ -37263,11 +37333,12 @@ function setActiveTab(tab, options = {}) {
   const previousTab = state.activeTab;
   state.analysisNavigationSequence = (state.analysisNavigationSequence || 0) + 1;
   state.activeTab = roleAllowsTab(tab) ? tab : firstRoleTab();
+  if (window.AdminTransitionTiming) beginAdminScreenTransition(options.navigationSource || "tab", options.inputTimeStamp);
   window.RegionalAnalysis?.stop();
   window.RegionalOutlook?.stop();
   if (state.activeTab !== "industryHome") window.StayIndustryAnalysis?.pause(els.industryHomeDashboard);
   if (state.activeTab !== "admin") window.RegionalReportPreparation?.pause();
-  if (window.CompanyIntegrated) syncCompanyIntegratedPanel();
+  if (window.CompanyIntegrated && !(isAdminRole() && state.activeTab === "admin" && state.adminPanelSection === "database")) syncCompanyIntegratedPanel();
   if (options.analysisRegionSelection !== undefined) {
     const selection = options.analysisRegionSelection;
     setAnalysisRegion(selection?.regionKey || "", {
@@ -37290,7 +37361,8 @@ function setActiveTab(tab, options = {}) {
   renderRegionAnalysisShell();
   renderHeader();
   const adminHome = isAdminRole() && state.activeTab === "admin" && state.adminPanelSection === "overview";
-  if (state.adminViewsDeferred && state.activeTab !== "monthlyReports" && !adminHome) {
+  const adminDatabase = isAdminRole() && state.activeTab === "admin" && state.adminPanelSection === "database";
+  if (state.adminViewsDeferred && state.activeTab !== "monthlyReports" && !adminHome && !adminDatabase) {
     state.adminViewsDeferred = false;
     renderAll();
   }
@@ -37309,6 +37381,10 @@ function setActiveTab(tab, options = {}) {
   }
   if (adminHome) {
     renderAdminConsoleDashboard();
+    return;
+  }
+  if (adminDatabase) {
+    renderAdminDatabaseDashboard();
     return;
   }
   if (isAdminRole() && state.activeTab === "historyOps") {
@@ -42403,31 +42479,31 @@ function handleAdminDbCompanyHash() {
   return true;
 }
 
-function openAdminHomeRoute(route = "summary") {
+function openAdminHomeRoute(route = "summary", options = {}) {
   if (!isAdminRole()) return;
   if (route === "company-review") {
     state.adminDbFilters = { ...(state.adminDbFilters || {}), status: "needs_work" };
     state.adminDbViewMode = "list";
     state.adminDbOpsOpen = true;
-    setActiveTab("admin");
+    state.adminPanelSection = "database";
+    setActiveTab("admin", { inputTimeStamp: options.inputTimeStamp, navigationSource: "home-card" });
     setAdminPanelSection("database");
-    renderAdminDatabaseDashboard();
     return;
   }
   if (route === "database" || route === "region-db") {
     state.adminDbViewMode = route === "region-db" ? "region" : "list";
-    setActiveTab("admin");
+    state.adminPanelSection = "database";
+    setActiveTab("admin", { inputTimeStamp: options.inputTimeStamp, navigationSource: "home-card" });
     setAdminPanelSection("database");
-    renderAdminDatabaseDashboard();
     return;
   }
   if (route === "region-review") {
     clearAdminDbCompanyHash();
     state.adminDbViewMode = "region";
     state.adminDbFilters = { ...state.adminDbFilters, query: "" };
-    setActiveTab("admin");
+    state.adminPanelSection = "database";
+    setActiveTab("admin", { inputTimeStamp: options.inputTimeStamp, navigationSource: "home-card" });
     setAdminPanelSection("database");
-    renderAdminDatabaseDashboard();
     window.requestAnimationFrame(() => document.getElementById("regionDataManagement")?.scrollIntoView({ behavior: "smooth", block: "start" }));
     return;
   }
@@ -42563,13 +42639,13 @@ function bindEvents() {
     button.addEventListener("click", () => applyThemeMode(button.dataset.themeMode || "system"));
   });
   document.querySelectorAll(".bottom-nav button").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", (event) => {
       const adminPrimary = button.dataset.adminPrimary || "";
       if (adminPrimary && isAdminRole()) {
-        activateAdminPrimaryNav(adminPrimary);
+        activateAdminPrimaryNav(adminPrimary, { inputTimeStamp: event.timeStamp });
         return;
       }
-      if (button.dataset.tab) setActiveTab(button.dataset.tab);
+      if (button.dataset.tab) setActiveTab(button.dataset.tab, { inputTimeStamp: event.timeStamp });
     });
   });
   document.addEventListener("pointerup", (event) => {
@@ -42656,7 +42732,7 @@ function bindEvents() {
     }
     const adminHomeRoute = event.target.closest("[data-admin-home-route]");
     if (adminHomeRoute) {
-      openAdminHomeRoute(adminHomeRoute.dataset.adminHomeRoute || "summary");
+      openAdminHomeRoute(adminHomeRoute.dataset.adminHomeRoute || "summary", { inputTimeStamp: event.timeStamp });
       return;
     }
     const archiveRun = event.target.closest("[data-archive-run-id]");
@@ -42691,8 +42767,9 @@ function bindEvents() {
     const adminWorkspaceSection = event.target.closest("[data-admin-workspace-section]");
     if (adminWorkspaceSection) {
       const section = adminWorkspaceSection.dataset.adminWorkspaceSection || "overview";
-      setActiveTab("admin");
-      setAdminPanelSection(section, { scroll: true, freshEntry: section === "collect" });
+      if (section === "database") state.adminPanelSection = section;
+      setActiveTab("admin", { inputTimeStamp: event.timeStamp, navigationSource: "workspace" });
+      setAdminPanelSection(section, { scroll: true, freshEntry: section === "collect", inputTimeStamp: event.timeStamp });
       return;
     }
     const adminMobileSection = event.target.closest("[data-admin-mobile-section]");
@@ -42705,7 +42782,7 @@ function bindEvents() {
         state.adminDbViewMode = "list";
         state.adminDbOpsOpen = true;
       }
-      activateAdminMobileNav(sectionKey, section.target, section.anchor || "", section.adminPanelSection || "");
+      activateAdminMobileNav(sectionKey, section.target, section.anchor || "", section.adminPanelSection || "", { inputTimeStamp: event.timeStamp });
       return;
     }
     const adminMobileTab = event.target.closest("[data-admin-mobile-tab]");
@@ -42722,7 +42799,8 @@ function bindEvents() {
         adminMobileTab.dataset.adminMobileSectionKey || state.adminMobileSection || "summary",
         adminMobileTab.dataset.adminMobileTab || "",
         adminMobileTab.dataset.adminMobileAnchor || "",
-        adminMobileTab.dataset.adminPanelSectionKey || ""
+        adminMobileTab.dataset.adminPanelSectionKey || "",
+        { inputTimeStamp: event.timeStamp }
       );
       return;
     }
@@ -42735,9 +42813,8 @@ function bindEvents() {
       const anchor = adminDesktopTab.dataset.adminDesktopAnchor || "";
       if (tab === "admin" && panel) state.adminPanelSection = panel;
       state.adminMobileAnchor = anchor;
-      setActiveTab(tab, { adminMobileSection: adminMobileSectionForTab(tab) });
+      setActiveTab(tab, { adminMobileSection: adminMobileSectionForTab(tab), inputTimeStamp: event.timeStamp, navigationSource: "desktop" });
       if (tab === "admin" && panel) setAdminPanelSection(panel, { freshEntry: panel === "collect" });
-      if (panel === "database") renderAdminDatabaseDashboard();
       if (anchor) {
         window.requestAnimationFrame(() => {
           const target = document.querySelector(anchor);
@@ -42750,7 +42827,7 @@ function bindEvents() {
     const adminSectionButton = event.target.closest("[data-admin-section]");
     if (adminSectionButton) {
       const section = adminSectionButton.dataset.adminSection || "overview";
-      setAdminPanelSection(section, { scroll: true, freshEntry: section === "collect" });
+      setAdminPanelSection(section, { scroll: true, freshEntry: section === "collect", inputTimeStamp: event.timeStamp });
       return;
     }
     const adminUserViewOpen = event.target.closest("[data-admin-user-view-open]");

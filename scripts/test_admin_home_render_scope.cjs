@@ -177,7 +177,10 @@ test("a later company DB selection in the same admin tab receives the newest def
   f.api.setAdminPanelSection("database");
   assert.equal(f.state.activeTab, "admin"); assert.equal(f.state.adminPanelSection, "database");
   assert.equal(f.dom.renderAdminDatabaseDashboard?.innerHTML, "db-new|run-db-new");
-  assert.equal(f.state.adminViewsDeferred, false, "the non-home legacy refresh may now consume the pending work");
+  assert.equal(f.state.adminViewsDeferred, true, "DB refreshes itself while unrelated hidden views remain pending");
+  assert.equal(f.count("renderAdminDatabaseDashboard"), 1);
+  assert.equal(f.count("renderCompanies"), 0);
+  assert.equal(f.count("renderAdminMemberRequestDashboard"), 0);
 });
 
 test("leaving home for a result or region view never exposes the old hidden surface", () => {

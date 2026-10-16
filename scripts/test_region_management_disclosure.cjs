@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const source = fs.readFileSync(path.join(__dirname, "..", "web", "app.js"), "utf8").replace(/\r\n/g, "\n");
-const names = ["adminRegionalAnalysisPanel", "syncSavedRegionalAnalysis", "renderAdminRegionAnalysisDashboard"];
+const names = ["adminRegionalAnalysisPanel", "syncSavedRegionalAnalysis", "hideAdminRegionManagement", "renderAdminRegionAnalysisDashboard"];
 const declarations = names.map(name => {
   const declaration = source.match(new RegExp(`^function ${name}\\([^]*?^}`, "m"))?.[0];
   assert.ok(declaration, name);

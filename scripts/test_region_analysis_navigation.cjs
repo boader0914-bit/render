@@ -84,7 +84,7 @@ function fixture({ keyword = "포천글램핑", role = "admin", storage = new Ma
     renderHeader() { calls.headers++; }, renderB2BEmptyPanels() {}, renderReport() {}, renderPlaceRankReplayNotice() {},
     renderLocationDictionary() { calls.dictionary.push(state.analysisRegionSelection?.regionKey || ""); },
     renderRegionSources() { calls.sources.push(state.analysisRegionSelection?.regionKey || ""); },
-    renderAdminConsoleDashboard() {}, renderB2BSearchPanel() {}, renderCompanyMasterPanel() {}, renderDownloads() {}, syncYeogiManualInterface() {},
+    renderAdminConsoleDashboard() {}, renderAdminDatabaseDashboard() {}, renderB2BSearchPanel() {}, renderCompanyMasterPanel() {}, renderDownloads() {}, syncYeogiManualInterface() {},
     syncTourismForecastToAnalysisRegion(region) { calls.forecast.push(region?.regionKey || ""); },
     renderAll() { context.reconcileAnalysisRegionSelection(); context.renderActiveRegionAnalysis(); },
     loadHistoryOps: async () => {}, loadCompanyMasterSummary: async () => {}, loadB2BMemberAdminOverview: async () => {},
