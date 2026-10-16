@@ -19796,6 +19796,16 @@ seedOutputsFromRepo()
     // Restore persisted coordination before any existing scheduler can dispatch.
     await collectorBrokerReady;
     await collectionRotationScheduler.status();
+    // Prepare the small persisted selector catalog before background aggregate
+    // bootstraps occupy the shared source reader. Green readiness then includes
+    // a usable first report selection; failures still allow normal error reads.
+    try {
+      const started = Date.now();
+      const prepared = await monthlyReportSources.options({ priority: "foreground" });
+      console.log("monthly_selector_prepared", JSON.stringify({ status: prepared.selectorCache?.status,
+        storage: prepared.selectorCache?.storage, elapsedMs: Date.now() - started }));
+    }
+    catch (error) { console.warn("monthly_selector_prepare_failed", error.code || "unavailable"); }
     server.listen(PORT, HOST, () => {
       const primaryUrl = HOST === "0.0.0.0" ? `http://127.0.0.1:${PORT}` : `http://${HOST}:${PORT}`;
       console.log(`Lodging datalab beta app running at ${primaryUrl}`);

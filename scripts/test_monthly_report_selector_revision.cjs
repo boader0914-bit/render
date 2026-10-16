@@ -22,7 +22,7 @@ async function fixture(t) {
   return { root, write, options: { dataDir: root, regionMasterFile: path.join(root, "regions.json") } };
 }
 
-test("selector checks never read bodies, stat booking files or descend into unrelated output directories", async t => {
+test("selector checks never read raw bodies, stat booking files or descend into unrelated output directories", async t => {
   const { root, write, options } = await fixture(t);
   const master = await write("company_master/companies.json", '{"companies":{}}');
   await write("history/observations.jsonl", '{"stayDate":"2026-09-01","sold":0}\n{bad\n');
@@ -53,7 +53,7 @@ test("selector checks never read bodies, stat booking files or descend into unre
   assert.equal(await revision(), before, "same-name booking replacement does not invalidate selector data");
 });
 
-test("company corrections, history months and region references invalidate selectors without parsing their contents", async t => {
+test("company corrections, history months and reference content changes invalidate selectors without parsing JSON", async t => {
   const { write, options } = await fixture(t);
   const revision = createMonthlyReportSelectorRevision(options);
   let before = await revision();
@@ -65,6 +65,83 @@ test("company corrections, history months and region references invalidate selec
     await fs.unlink(file);
     const removed = await revision(); assert.notEqual(removed, before, "removed " + name); before = removed;
   }
+});
+
+test("identical reference deployments reuse selectors, but every fresh read rejects errors and replacement races", async t => {
+  const { write, options } = await fixture(t);
+  const reference = await write("regions.json", '{"region":1}');
+  let fault = "", altered = false, opens = 0, checks = 0;
+  const handles = [];
+  const fileSystem = { ...fs,
+    lstat: async (...args) => {
+      if (args[0] === reference) checks++;
+      const value = await fs.lstat(...args);
+      return args[0] === reference && (fault === "link" || (fault === "post-link" && altered))
+        ? { ...value, isFile: () => false, isSymbolicLink: () => true } : value;
+    },
+    open: async (...args) => {
+      opens++;
+      if (fault === "open") throw Object.assign(new Error("denied"), { code: "EACCES" });
+      if (fault === "replace-before-open") {
+        await fs.writeFile(reference + ".replacement", '{"region":1}');
+        await fs.rename(reference + ".replacement", reference);
+      }
+      const handle = await fs.open(...args);
+      const record = { closes: 0 }; handles.push(record);
+      return { stat: (...input) => {
+        if (fault === "handle-stat") throw new Error("stat denied");
+        return handle.stat(...input);
+      }, close: async () => {
+        record.closes++; await handle.close();
+        if (fault === "close") throw new Error("close denied");
+      }, read: async (...input) => {
+        if (fault === "read") throw Object.assign(new Error("read denied"), { code: "EACCES" });
+        const result = await handle.read(...input);
+        if (fault === "change" && !altered) { altered = true; await fs.writeFile(reference, '{"region":9}'); }
+        if (fault === "unlink" && !altered) { altered = true; await fs.unlink(reference); }
+        if (fault === "post-link") altered = true;
+        return result;
+      } };
+    }
+  };
+  const revision = createMonthlyReportSelectorRevision({ ...options, fileSystem }), before = await revision();
+  opens = 0; checks = 0; assert.equal(await revision(), before);
+  assert.equal(opens, 1); assert.equal(checks, 2, "each lookup reads content between fresh path checks");
+  await fs.utimes(reference, new Date("2020-01-01Z"), new Date("2020-01-01Z"));
+  assert.equal(await revision(), before, "touching an unchanged deployment reference does not expire the list");
+  await fs.writeFile(reference + ".replacement", '{"region":1}');
+  await fs.rename(reference + ".replacement", reference);
+  assert.equal(await revision(), before, "a new inode with identical content retains the version");
+  for (const mode of ["link", "open", "read", "handle-stat", "replace-before-open", "change", "unlink", "post-link", "close"]) {
+    fault = mode; altered = false; await assert.rejects(revision(), isUnavailable, mode);
+    assert.ok(handles.every(handle => handle.closes === 1), "each opened handle is closed exactly once on " + mode);
+    fault = ""; await fs.writeFile(reference, '{"region":1}');
+    assert.equal(await revision(), before, "errors do not preserve an unchecked reference result");
+  }
+  await fs.writeFile(reference, '{"region":7}');
+  const edited = await revision(); assert.notEqual(edited, before);
+  await fs.unlink(reference); assert.notEqual(await revision(), edited);
+});
+
+test("reference byte limits apply before opening and while reading a growing file", async t => {
+  const { write, options } = await fixture(t);
+  const reference = await write("regions.json", "{}");
+  const maximum = 4 * 1024 * 1024;
+  let growing = false, bytes = 0, opens = 0;
+  const fileSystem = { ...fs, open: async (...args) => {
+    opens++; const handle = await fs.open(...args);
+    return { stat: (...input) => handle.stat(...input), close: () => handle.close(), read: async (buffer, offset, length, position) => {
+      if (growing) { bytes += length; return { bytesRead: length, buffer }; }
+      return handle.read(buffer, offset, length, position);
+    } };
+  } };
+  const revision = createMonthlyReportSelectorRevision({ ...options, fileSystem });
+  await revision(); growing = true;
+  await assert.rejects(revision(), isUnavailable);
+  assert.equal(bytes, maximum + 1, "a replacement cannot turn the reference hash into an unbounded read");
+  growing = false; opens = 0;
+  await fs.writeFile(reference, Buffer.alloc(maximum + 1));
+  await assert.rejects(revision(), isUnavailable); assert.equal(opens, 0);
 });
 
 test("manifest edits under an unchanged parent, atomic replacements, removals and late additions are detected", async t => {

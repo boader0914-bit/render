@@ -1,6 +1,7 @@
 "use strict";
 
 const fs = require("node:fs/promises");
+const { constants } = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 
@@ -44,9 +45,10 @@ function createMonthlyReportSourceRevision({ dataDir, outputsDir, regionMasterFi
     ["company-master", path.join(root, "company_master", "companies.json")],
     ["observation-history", path.join(root, "history", "observations.jsonl")],
     ["capacity-bases", path.join(root, "company_integrated", "capacity-bases.json")],
-    ...[regionMasterFile, tourismRegionMapFile].filter(Boolean).map((file, index) => [`region-reference-${index}`, path.resolve(file)]),
     ...extraFiles.map((file, index) => [`extra-file-${index}`, path.resolve(file)])
   ];
+  const references = [regionMasterFile, tourismRegionMapFile].filter(Boolean)
+    .map((file, index) => [`region-reference-${index}`, path.resolve(file)]);
   const directories = [
     ["saved-runs", path.resolve(outputsDir || path.join(root, "outputs"))],
     ["special-days", path.join(root, "history", "special_days")],
@@ -59,6 +61,7 @@ function createMonthlyReportSourceRevision({ dataDir, outputsDir, regionMasterFi
   ];
   const signature = stat => `${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.ino}:${stat.dev}`;
   const directorySignature = stat => `${signature(stat)}:${stat.mode}`;
+  const maxReferenceBytes = 4 * 1024 * 1024;
   async function inspectAll(operations) {
     const completed = await Promise.allSettled(operations);
     const failed = completed.find(value => value.status === "rejected");
@@ -76,6 +79,40 @@ function createMonthlyReportSourceRevision({ dataDir, outputsDir, regionMasterFi
       if (!value) { rows.push(`${label}:missing`); return; }
       if (!value.isFile() || value.isSymbolicLink()) throw unavailable();
       rows.push(`${label}:${signature(value)}`);
+    }
+    async function referenceRevision(label, file) {
+      const before = await stat(file);
+      if (!before) { rows.push(`${label}:missing`); return; }
+      if (!before.isFile() || before.isSymbolicLink() || before.size > BigInt(maxReferenceBytes)) throw unavailable();
+      let handle;
+      try {
+        // Deployment paths can acquire new timestamps/inodes with identical
+        // reference content. Hash only bounded bytes, but freshly validate the
+        // path and opened identity on every scan, including after the read.
+        handle = await metadata(() => fileSystem.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW || 0)));
+        const opened = await metadata(() => handle.stat({ bigint: true }));
+        if (!opened.isFile() || directorySignature(opened) !== directorySignature(before)) throw unavailable();
+        const hash = crypto.createHash("sha256"), buffer = Buffer.alloc(64 * 1024);
+        let bytes = 0;
+        while (true) {
+          const { bytesRead } = await metadata(() => handle.read(buffer, 0, Math.min(buffer.length, maxReferenceBytes + 1 - bytes), null));
+          if (!bytesRead) break;
+          bytes += bytesRead;
+          if (bytes > maxReferenceBytes) throw unavailable();
+          hash.update(buffer.subarray(0, bytesRead));
+        }
+        const completed = await metadata(() => handle.stat({ bigint: true })), after = await stat(file);
+        if (!after || !after.isFile() || after.isSymbolicLink() || BigInt(bytes) !== before.size
+          || directorySignature(completed) !== directorySignature(before)
+          || directorySignature(after) !== directorySignature(before)) throw unavailable();
+        rows.push(`${label}:sha256:${hash.digest("hex")}`);
+      } catch { throw unavailable(); }
+      finally {
+        if (handle) {
+          try { await metadata(() => handle.close()); }
+          catch { throw unavailable(); }
+        }
+      }
     }
     async function tree(label, directory, depth = 0) {
       const before = await stat(directory);
@@ -110,6 +147,7 @@ function createMonthlyReportSourceRevision({ dataDir, outputsDir, regionMasterFi
     }
     await inspectAll([
       ...files.map(([label, file]) => fileRevision(label, file)),
+      ...references.map(([label, file]) => referenceRevision(label, file)),
       ...directories.map(([label, directory]) => tree(label, directory))
     ]);
     return crypto.createHash("sha256").update(rows.sort().join("\n")).digest("hex");

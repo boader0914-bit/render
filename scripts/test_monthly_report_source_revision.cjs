@@ -49,6 +49,93 @@ test("DB review, history, capacity bases and reference edits invalidate saved ag
   }
 });
 
+test("reference content survives identical redeployment while fresh reads detect edits, removals and unsafe races", async t => {
+  const { write, options } = await fixture(t);
+  const references = [await write("region-master.json", '{"region":1}'), await write("tourism-map.json", '{"region":2}')];
+  const opened = [], checked = [], handles = [];
+  let fault = "", changed = false;
+  const fileSystem = { ...fs,
+    lstat: async (...args) => {
+      checked.push(args[0]);
+      const value = await fs.lstat(...args);
+      if ((fault === "link" || (fault === "post-link" && changed)) && args[0] === references[0]) return { ...value, isFile: () => false, isSymbolicLink: () => true };
+      return value;
+    },
+    open: async (...args) => {
+      opened.push(args[0]);
+      if (fault === "open" && args[0] === references[0]) throw Object.assign(new Error("denied"), { code: "EACCES" });
+      if (fault === "replace-before-open" && args[0] === references[0]) {
+        await fs.writeFile(references[0] + ".replacement", '{"region":1}');
+        await fs.rename(references[0] + ".replacement", references[0]);
+      }
+      const handle = await fs.open(...args);
+      const record = { closes: 0 }; handles.push(record);
+      return { stat: (...input) => {
+        if (args[0] === references[0] && fault === "handle-stat") throw new Error("stat denied");
+        return handle.stat(...input);
+      }, close: async () => {
+        record.closes++; await handle.close();
+        if (args[0] === references[0] && fault === "close") throw new Error("close denied");
+      }, read: async (...input) => {
+        if (args[0] === references[0] && fault === "read") throw Object.assign(new Error("read denied"), { code: "EACCES" });
+        const result = await handle.read(...input);
+        if (args[0] === references[0] && fault === "change" && !changed) {
+          changed = true; await fs.writeFile(references[0], '{"region":9}');
+        }
+        if (args[0] === references[0] && fault === "unlink" && !changed) { changed = true; await fs.unlink(references[0]); }
+        if (args[0] === references[0] && fault === "post-link") changed = true;
+        return result;
+      } };
+    }
+  };
+  const revision = createMonthlyReportSourceRevision({ ...options, fileSystem }), before = await revision();
+  opened.length = 0; checked.length = 0;
+  assert.equal(await revision(), before);
+  assert.deepEqual(opened.sort(), [...references].sort(), "both small references are read afresh on every lookup");
+  for (const reference of references) assert.equal(checked.filter(file => file === reference).length, 2, "path checked before and after reading");
+  for (const [index, reference] of references.entries()) {
+    await fs.utimes(reference, new Date("2020-01-01Z"), new Date("2020-01-01Z"));
+    assert.equal(await revision(), before, "timestamp-only checkout changes do not expire an aggregate");
+    await fs.writeFile(reference + ".replacement", '{"region":' + (index + 1) + '}');
+    await fs.rename(reference + ".replacement", reference);
+    assert.equal(await revision(), before, "same content on a new inode keeps the reference version");
+  }
+  for (const mode of ["link", "open", "read", "handle-stat", "replace-before-open", "change", "unlink", "post-link", "close"]) {
+    fault = mode; changed = false;
+    await assert.rejects(revision(), error => error.code === "MONTHLY_SOURCE_REVISION_UNAVAILABLE" && error.statusCode === 503, mode);
+    assert.ok(handles.every(handle => handle.closes === 1), "every opened reference handle is closed exactly once on " + mode);
+    fault = ""; await fs.writeFile(references[0], '{"region":1}');
+    assert.equal(await revision(), before, "failure does not retain an unchecked reference hash");
+  }
+  await fs.writeFile(references[0], '{"region":8}');
+  const edited = await revision(); assert.notEqual(edited, before);
+  await fs.unlink(references[0]); assert.notEqual(await revision(), edited);
+});
+
+test("reference reads reject oversized and growing files without reading past the bounded allowance", async t => {
+  const { write, options } = await fixture(t);
+  const reference = await write("region-master.json", "{}");
+  const maximum = 4 * 1024 * 1024;
+  let growing = false, reads = 0, bytes = 0, opens = 0;
+  const fileSystem = { ...fs, open: async (...args) => {
+    opens++; const handle = await fs.open(...args);
+    return { stat: (...input) => handle.stat(...input), close: () => handle.close(), read: async (buffer, offset, length, position) => {
+      reads++;
+      if (growing) { bytes += length; return { bytesRead: length, buffer }; }
+      return handle.read(buffer, offset, length, position);
+    } };
+  } };
+  const revision = createMonthlyReportSourceRevision({ ...options, fileSystem });
+  await revision(); assert.ok(reads > 0);
+  growing = true;
+  await assert.rejects(revision(), error => error.code === "MONTHLY_SOURCE_REVISION_UNAVAILABLE");
+  assert.equal(bytes, maximum + 1, "growth is detected with at most one byte beyond the limit");
+  growing = false; opens = 0;
+  await fs.writeFile(reference, Buffer.alloc(maximum + 1));
+  await assert.rejects(revision(), error => error.code === "MONTHLY_SOURCE_REVISION_UNAVAILABLE");
+  assert.equal(opens, 0, "known oversized references are rejected before opening");
+});
+
 test("checks edited run body inside an unchanged parent folder, replacements and deletions", async t => {
   const { root, write, options } = await fixture(t);
   const file = await write("outputs/legacy-run/details/stock.json", '{"stock":1}');
