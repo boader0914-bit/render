@@ -195,7 +195,7 @@ test("bootstrap run loading skips only duplicate account reads while normal sele
   assert.equal(state.data, null);
 });
 
-test("late bootstrap state defers hidden dashboards and flushes the newest data once on leaving reports", () => {
+test("late bootstrap state updates home alone and keeps hidden views pending until their own entry", () => {
   const state = { session: { role: "admin" }, activeTab: "monthlyReports", analysisNavigationSequence: 1,
     adminPanelSection: "overview", adminMobileSection: "summary", data: { run: { id: "new-result" } },
     companyMaster: { totalCompanies: 9 } };
@@ -233,9 +233,14 @@ test("late bootstrap state defers hidden dashboards and flushes the newest data 
   calls.length = 0;
   api.setActiveTab("admin");
   assert.equal(state.activeTab, "admin");
+  assert.equal(state.adminViewsDeferred, true, "home does not consume hidden-view freshness");
+  assert.deepEqual(renderedMasters, [], "home must not build the hidden DB");
+  assert.ok(!calls.includes("renderSummary") && !calls.includes("renderCompanies"));
+  state.adminPanelSection = "database";
+  api.setActiveTab("admin");
   assert.equal(state.adminViewsDeferred, false);
   assert.equal(renderedMasters.length, 1);
-  assert.equal(renderedMasters[0], latestMaster, "leaving reports uses the latest state, not the first deferred response");
+  assert.equal(renderedMasters[0], latestMaster, "entering DB uses the latest state, not the first deferred response");
   assert.ok(calls.includes("renderSummary"));
   assert.ok(calls.includes("renderCompanies"));
   api.setActiveTab("admin");
@@ -276,7 +281,7 @@ function runFixture({ activeTab = "admin", realMetadata = false } = {}) {
   for (const name of ["reconcileAnalysisRegionSelection", "renderB2BSearchPanel", "renderB2BEmptyPanels", "applyRoleUi", "renderRegionAnalysisShell",
     "renderHeader", "applyAnalysisRegionToDictionary", "syncAppHistoryState", "closeDrawer", "renderIndustryHome", "renderRegionHome",
     "renderPlaceRankReplayNotice", "renderHistoryOps", "ensureHistoryOpsSelection", "renderReport", "renderDecisionQueue", "renderMap", "renderDemand",
-    "renderCompanyMasterPanel", "renderDownloads", "syncYeogiManualInterface", "renderLocationDictionary", "renderRegionComparison", "renderRegionSources", "setAnalysisRegion"]) context[name] = () => {};
+    "renderAdminConsoleDashboard", "renderCompanyMasterPanel", "renderDownloads", "syncYeogiManualInterface", "renderLocationDictionary", "renderRegionComparison", "renderRegionSources", "setAnalysisRegion"]) context[name] = () => {};
   vm.createContext(context);
   const names = ["loadRuns", "loadRun", "resumeAdminBootstrapReads", "setActiveTab", "restoreAppHistoryState"];
   if (realMetadata) names.push("loadHistoryOps", "loadCompanyMasterSummary");

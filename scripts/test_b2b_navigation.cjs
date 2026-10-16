@@ -109,7 +109,7 @@ function fixture({ data = false, running = false, role = "b2b" } = {}) {
     renderB2BEmptyPanels: noOp, renderLocationDictionary: noOp, renderReport: noOp,
     renderIndustryHome: noOp, renderRegionHome: noOp,
     renderDecisionQueue: noOp, renderMap: noOp, renderDemand: noOp, renderHistoryOps: noOp,
-    renderCompanyMasterPanel: noOp, renderDownloads: noOp, syncYeogiManualInterface: noOp,
+    renderAdminConsoleDashboard: noOp, renderCompanyMasterPanel: noOp, renderDownloads: noOp, syncYeogiManualInterface: noOp,
     renderB2BSearchPanel() { throw new Error("Tab navigation must not rebuild the search form or progress UI"); }
   };
   // Expensive body renderers are outside this test; actual role/menu/panel updates run.

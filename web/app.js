@@ -2771,6 +2771,7 @@ function ensureLatestCollectionResult(options = {}) {
 }
 
 function setAdminPanelSection(sectionKey = "overview", options = {}) {
+  const previousSection = state.adminPanelSection;
   if (!ADMIN_PANEL_SECTIONS[sectionKey]) sectionKey = "overview";
   if (sectionKey === "collect" && options.freshEntry === true) resetCollectionKeywordForFreshEntry();
   state.adminPanelSection = sectionKey;
@@ -2785,7 +2786,15 @@ function setAdminPanelSection(sectionKey = "overview", options = {}) {
   syncAdminSectionPanels();
   syncAdminMobileNav();
   syncAdminDesktopSecondaryNav();
-  if (isAdminRole() && state.activeTab === "admin") renderHeader();
+  if (isAdminRole() && state.activeTab === "admin") {
+    renderHeader();
+    if (sectionKey === "overview") {
+      if (previousSection !== "overview") renderAdminConsoleDashboard();
+    } else if (state.adminViewsDeferred) {
+      state.adminViewsDeferred = false;
+      renderAll();
+    }
+  }
   if (sectionKey === "collect") {
     ensureCrawlControls();
     updateCrawlSpeedPreview();
@@ -27109,6 +27118,10 @@ function syncCompanyIntegratedPanel() {
 
 function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   if (!isAdminRole() || !els.adminDatabaseDashboard) return;
+  if (state.activeTab === "admin" && state.adminPanelSection === "overview") {
+    renderAdminConsoleDashboard(master);
+    return;
+  }
   window.CompanyIntegrated?.disposeWithin(els.adminDatabaseDashboard);
   if (master.error) {
     els.adminDatabaseDashboard.innerHTML = `<div class="admin-console-empty">업체 관리 로딩 실패: ${escapeHtml(master.error)}</div>`;
@@ -30229,14 +30242,20 @@ function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
     state.adminViewsDeferred = true;
     return;
   }
-  renderAdminMemberRequestDashboard();
-  renderAdminDatabaseDashboard(master);
-  renderAdminRegionAnalysisDashboard(master);
-  renderAdminIntegrationRegistry();
-  renderSpecialDaysAdminCard();
-  renderKosisAdminCard();
-  renderTourismForecastAdminCard();
-  renderAdminSecurityDashboard();
+  if (state.activeTab === "admin" && state.adminPanelSection === "overview") {
+    // Home only needs its summary. Keep the hidden views dirty so their next
+    // real entry still rebuilds from the latest saved state.
+    state.adminViewsDeferred = true;
+  } else {
+    renderAdminMemberRequestDashboard();
+    renderAdminDatabaseDashboard(master);
+    renderAdminRegionAnalysisDashboard(master);
+    renderAdminIntegrationRegistry();
+    renderSpecialDaysAdminCard();
+    renderKosisAdminCard();
+    renderTourismForecastAdminCard();
+    renderAdminSecurityDashboard();
+  }
   if (!els.adminConsoleDashboard) return;
   if (master.error) {
     els.adminConsoleDashboard.innerHTML = `<div class="admin-console-empty">관리자 콘솔 로딩 실패: ${escapeHtml(master.error)}</div>`;
@@ -30348,6 +30367,9 @@ function renderCompanyMasterPanel() {
   if (!els.companyMasterPanel) return;
   const master = { ...(state.data?.companyMaster || {}), ...(state.companyMaster || {}) };
   renderAdminConsoleDashboard(master);
+  // A late DB-save response can arrive after returning home. Its saved state
+  // updates the summary, without recreating the hidden legacy company tools.
+  if (isAdminRole() && state.activeTab === "admin" && state.adminPanelSection === "overview") return;
   if (els.companyMasterState) {
     els.companyMasterState.textContent = master.error ? "오류" : master.totalCompanies ? `${fmtNumber(master.totalCompanies)} 업체` : "대기";
   }
@@ -37158,6 +37180,12 @@ function renderAll() {
   reconcileAnalysisRegionSelection();
   applyRoleUi();
   renderRegionAnalysisShell();
+  if (isAdminRole() && state.activeTab === "admin" && state.adminPanelSection === "overview") {
+    state.adminViewsDeferred = true;
+    renderHeader();
+    renderAdminConsoleDashboard();
+    return;
+  }
   if (isAdminRole() && state.activeTab === "industryHome") renderIndustryHome();
   if (isAdminRole() && state.activeTab === "regionHome") renderRegionHome();
   renderB2BSearchPanel();
@@ -37261,7 +37289,8 @@ function setActiveTab(tab, options = {}) {
   applyRoleUi();
   renderRegionAnalysisShell();
   renderHeader();
-  if (state.adminViewsDeferred && state.activeTab !== "monthlyReports") {
+  const adminHome = isAdminRole() && state.activeTab === "admin" && state.adminPanelSection === "overview";
+  if (state.adminViewsDeferred && state.activeTab !== "monthlyReports" && !adminHome) {
     state.adminViewsDeferred = false;
     renderAll();
   }
@@ -37276,6 +37305,10 @@ function setActiveTab(tab, options = {}) {
   }
   if (isAdminRole() && state.activeTab === "monthlyReports") {
     void window.MonthlyReports?.show(document.getElementById("monthlyReportsDashboard"), options.monthlyReportContext);
+    return;
+  }
+  if (adminHome) {
+    renderAdminConsoleDashboard();
     return;
   }
   if (isAdminRole() && state.activeTab === "historyOps") {
