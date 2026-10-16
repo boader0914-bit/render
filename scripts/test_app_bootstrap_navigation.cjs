@@ -207,7 +207,8 @@ test("bootstrap run loading skips only duplicate account reads while normal sele
     loadAccountDeleteAdminOverview: async () => { calls.push("account-delete"); },
     loadSecurityHardeningOverview: async () => { calls.push("security"); },
     reconcileAnalysisRegionSelection() {}, renderB2BSearchPanel() {}, renderAll() { calls.push("render"); },
-    adminDbCompanyIdFromRoute: () => "", handleAdminDbCompanyHash() {}, renderB2BEmptyPanels() {}
+    adminDbCompanyIdFromRoute: () => "", handleAdminDbCompanyHash() {}, renderB2BEmptyPanels() {},
+    renderAdminStartupReadiness() {}
   };
   vm.createContext(context);
   const api = vm.runInContext(`${functionDeclaration("loadRuns")}\n${functionDeclaration("loadRun")}\n({loadRuns,loadRun})`, context);
@@ -311,7 +312,8 @@ function runFixture({ activeTab = "rank", realMetadata = false } = {}) {
     loadB2BMemberAdminOverview: async () => { calls.push("members"); },
     loadAccountDeleteAdminOverview: async () => { calls.push("account-delete"); },
     loadSecurityHardeningOverview: async () => { calls.push("security"); },
-    renderAll: () => { calls.push("render"); }
+    renderAll: () => { calls.push("render"); },
+    renderAdminStartupReadiness() {} // Tested with its actual DOM implementation separately.
   };
   for (const name of ["reconcileAnalysisRegionSelection", "renderB2BSearchPanel", "renderB2BEmptyPanels", "applyRoleUi", "renderRegionAnalysisShell",
     "renderHeader", "applyAnalysisRegionToDictionary", "syncAppHistoryState", "closeDrawer", "renderIndustryHome", "renderRegionHome",

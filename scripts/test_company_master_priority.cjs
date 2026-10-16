@@ -45,6 +45,7 @@ function fixture({ initial = null, tab = "admin", section = "overview", role = "
     },
     loadRecrawlEtaEstimates: async value => { calls.push({ name: "eta", master: value }); return hooks.eta?.(value); },
     scheduleCompanyMasterEta: value => { scheduled.push(value); record("eta-scheduled"); },
+    renderAdminStartupReadiness() {}, // The real metadata-only DOM sync has its own startup-label tests.
     renderAdminConsoleDashboard: () => record("home"),
     renderAdminDatabaseDashboard: () => record("database"),
     adminConsoleMasterSource: () => state.companyMaster || {},

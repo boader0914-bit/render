@@ -210,6 +210,7 @@ function actualDbFixture(mode = "list", options = {}) {
   c.adminDbGroupedRows = () => []; c.adminDbCompanyIdFromRoute = () => ""; c.adminDbMasterHasRows = () => true;
   c.ensureAdminDbMasterLoadedForRoute = () => assert.fail("saved master exists"); c.fmtWon = value => String(value);
   c.adminDbMetricCard = () => "metric"; c.adminDbSelectedRow = () => rows[0];
+  c.captureAdminDbSearchInput = () => null; c.restoreAdminDbSearchInput = () => {};
   c.adminDbCompanyExplorerHtml = () => `company-list:${f.state.companyMaster.revision}`;
   c.adminDbRegionWorkspaceHtml = () => `region-list:${f.state.companyMaster.revision}`;
   c.adminDbSelectedDetailPanel = () => `detail:${f.state.companyMaster.revision}`;

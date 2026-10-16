@@ -14,7 +14,7 @@ const source = fs.readFileSync(args[1] === "-" ? 0 : args[1] || path.join(__dirn
 const constants = ["ROLE_TABS", "ADMIN_MOBILE_SECTIONS", "ADMIN_COMPACT_SECTIONS", "ADMIN_PANEL_SECTIONS", "ADMIN_PANEL_MOBILE_TARGETS", "REGION_ANALYSIS_TABS"];
 const names = ["isAdminUserViewMode", "currentRole", "isAdminRole", "roleTabs", "roleAllowsTab", "firstRoleTab",
   "adminPanelMobileTarget", "adminSectionAllowsAnchor", "adminAnchorAllowedForState", "adminPrimarySectionForTab",
-  "adminMobileSectionForTab", "activateAdminPrimaryNav", "renderAll", "renderAdminConsoleDashboard", "setActiveTab", "setAdminPanelSection"];
+  "adminMobileSectionForTab", "activateAdminPrimaryNav", "renderAll", "renderAdminConsoleDashboard", "setActiveTab", "setAdminPanelSection", "adminHomeReadiness"];
 // The previous release must fail on hidden DOM work, not on a missing helper.
 if (source.includes("function isAdminHomeOverview(")) names.push("isAdminHomeOverview");
 const declarations = [

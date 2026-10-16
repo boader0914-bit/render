@@ -4,7 +4,7 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "test:company-bootstrap": "node --test scripts/test_company_bootstrap_store.cjs scripts/test_company_bootstrap_client.cjs scripts/test_company_bootstrap_view_parity.cjs && node scripts/test_company_bootstrap_api.cjs",
+    "test:company-bootstrap": "node --test scripts/test_company_bootstrap_store.cjs scripts/test_company_bootstrap_client.cjs scripts/test_company_bootstrap_view_parity.cjs scripts/test_admin_db_search_draft.cjs scripts/test_admin_startup_readiness_labels.cjs && node scripts/test_company_bootstrap_api.cjs",
     "test:api-responses": "node --test scripts/test_app_fetch_json.cjs",
     "test:collection-rotation": "node --test scripts/test_collection_rotation_scheduler.cjs scripts/test_collection_rotation_ui.cjs scripts/test_collector_dispatch.cjs && node scripts/test_collection_rotation_api.cjs",
     "test:collection-history": "node --test scripts/test_collection_history.cjs scripts/test_collection_history_api.cjs scripts/test_collector_controls_ui.cjs scripts/test_history_run_api.cjs scripts/test_history_selection.cjs",

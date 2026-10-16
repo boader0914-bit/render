@@ -14,6 +14,7 @@ const state = {
     roleLabel: "관리자"
   },
   runs: [],
+  adminRunCatalogReadiness: null,
   data: null,
   activeRunId: null,
   collectionArchiveFilters: { keyword: "", startDate: "", endDate: "", worker: "all", quality: "all", dateMode: "all" },
@@ -54,6 +55,7 @@ const state = {
   historyOpsCatalogError: "",
   companyMaster: null,
   companyMasterSummaryRead: null,
+  companyMasterSummaryStatus: null,
   companyMasterBootstrapSummary: null,
   companyMasterEtaScheduled: null,
   companyMasterFilters: {
@@ -103,6 +105,9 @@ const state = {
   adminDbMasterEnsureRequested: false,
   adminDbAuditRegionKey: "",
   adminDbQueryComposing: false,
+  adminDbSearchDraft: null,
+  adminDbSearchRenderRevision: 0,
+  adminDbSearchDeferredRender: null,
   adminRegionCompanyQueryComposing: false,
   adminRegionCompanyQueryRenderTimer: null,
   adminUserViewMode: false,
@@ -21638,12 +21643,12 @@ function adminDbAutocompleteSuggestions(rows = [], rawQuery = "", limit = 8) {
     .map((entry) => entry.row);
 }
 
-function adminDbCompanyAutocompleteHtml(rows = [], query = "") {
+function adminDbCompanyAutocompleteHtml(rows = [], query = "", options = {}) {
   const normalizedQuery = compactSearchText(query || "");
   if (!normalizedQuery) return "";
   const suggestions = adminDbAutocompleteSuggestions(rows, query, 8);
   return `
-    <div class="admin-db-autocomplete" id="adminDbAutocomplete" role="listbox" aria-label="유사 업체 자동완성">
+    <div class="admin-db-autocomplete" id="adminDbAutocomplete" role="listbox" aria-label="유사 업체 자동완성"${options.closed ? " hidden" : ""}>
       ${suggestions.length ? suggestions.map((row) => {
         const company = row.company || {};
         return `
@@ -21823,7 +21828,8 @@ function adminDbCompanySearchShellHtml(context = {}, options = {}) {
   const filters = context.filters || {};
   const rows = context.rows || [];
   const compact = Boolean(options.compact);
-  const queryValue = options.queryValue === undefined ? (filters.query || "") : String(options.queryValue || "");
+  const draft = adminDbSearchDraft(options.queryValue === undefined ? (filters.query || "") : String(options.queryValue || ""));
+  const queryValue = draft.value;
   const headingId = compact ? "adminDbCompanySearchHeadingReview" : "adminDbCompanySearchHeading";
   const heading = compact ? "다른 업체 검색" : "업체명을 입력하세요";
   const description = compact
@@ -21839,8 +21845,8 @@ function adminDbCompanySearchShellHtml(context = {}, options = {}) {
       </div>
       <div class="admin-db-company-query-row">
         <div class="admin-db-company-query-wrap">
-          <input type="search" data-admin-db-query value="${escapeHtml(queryValue)}" placeholder="예: 월, 월명글램핑" role="combobox" aria-autocomplete="list" aria-controls="adminDbAutocomplete" aria-expanded="${queryActive ? "true" : "false"}" autocomplete="off">
-          ${adminDbCompanyAutocompleteHtml(rows, queryValue)}
+          <input type="search" data-admin-db-query data-admin-db-search-context="${escapeHtml(draft.context)}" data-admin-db-search-generation="${draft.generation}" value="${escapeHtml(queryValue)}" placeholder="예: 월, 월명글램핑" role="combobox" aria-autocomplete="list" aria-controls="adminDbAutocomplete" aria-expanded="${queryActive && !draft.closed ? "true" : "false"}" autocomplete="off">
+          ${adminDbCompanyAutocompleteHtml(rows, queryValue, { closed: draft.closed })}
         </div>
         <button type="button" class="primary-button" data-admin-db-query-commit>검색</button>
         ${compact ? "" : adminDbCompanyExplorerFiltersHtml(context)}
@@ -21934,6 +21940,7 @@ function restoreAdminDbInlineSearchViewport(position = null, options = {}) {
 function activateAdminDbCompanyDetail(companyId = "", options = {}) {
   const selectedCompanyId = String(companyId || "").trim();
   if (!selectedCompanyId) return false;
+  resetAdminDbSearchDraft();
   const preservedScroll = options.scroll === false && options.preserveScroll !== false
     ? (state.adminDbInlineSearchScroll || { left: window.scrollX || 0, top: window.scrollY || 0 })
     : null;
@@ -21972,6 +21979,7 @@ function adminDbCompanyIdFromHash(hash = window.location.hash) {
 }
 
 function clearAdminDbCompanyHash() {
+  resetAdminDbSearchDraft();
   const url = new URL(window.location.href);
   const hadRoute = url.searchParams.has("adminCompany") || url.hash.startsWith("#admin-db-company=");
   state.adminDbRouteCompanyId = "";
@@ -27089,11 +27097,112 @@ function adminDbClassificationAuditStrip(rows = [], filteredRows = [], filters =
   `;
 }
 
+function adminDbSearchContext() {
+  const filters = state.adminDbFilters || {};
+  const mode = adminDbViewMode();
+  return JSON.stringify([mode, mode === "review" ? state.adminDbSelectedCompanyId || "" : "",
+    filters.query || "", filters.province || "all", filters.region || "all"]);
+}
+
+function resetAdminDbSearchDraft() {
+  state.adminDbSearchDraft = null;
+  state.adminDbQueryComposing = false;
+  state.adminDbSearchCompositionInput = null;
+  state.adminDbSearchDeferredRender = null;
+  state.adminDbSearchPendingRestore = null;
+  state.adminDbSearchRenderRevision = Number(state.adminDbSearchRenderRevision || 0) + 1;
+}
+
+function adminDbSearchDraft(initialValue = undefined) {
+  const context = adminDbSearchContext();
+  if (state.adminDbSearchDraft?.session !== state.session || state.adminDbSearchDraft?.context !== context) {
+    resetAdminDbSearchDraft();
+    state.adminDbSearchDraft = { session: state.session, context, generation: state.adminDbSearchRenderRevision,
+      value: initialValue === undefined ? (adminDbViewMode() === "review" ? "" : state.adminDbFilters?.query || "") : String(initialValue), closed: false };
+  }
+  return state.adminDbSearchDraft;
+}
+
+function saveAdminDbSearchDraft(input, options = {}) {
+  if (!input || input.isConnected === false || !isAdminRole() || state.activeTab !== "admin" || state.adminPanelSection !== "database") return null;
+  const draft = adminDbSearchDraft();
+  if (input.dataset?.adminDbSearchContext !== draft.context || Number(input.dataset?.adminDbSearchGeneration) !== draft.generation) return null;
+  state.adminDbSearchDraft = { ...draft, value: input.value || "", ...(options.reopen ? { closed: false } : {}) };
+  return state.adminDbSearchDraft;
+}
+
+function captureAdminDbSearchInput() {
+  const input = els.adminDatabaseDashboard?.querySelector("[data-admin-db-query]");
+  const pending = state.adminDbSearchPendingRestore;
+  const previousDraft = state.adminDbSearchDraft;
+  const draft = saveAdminDbSearchDraft(input);
+  if (!draft) return null;
+  const active = document.activeElement;
+  const option = active?.closest?.("[data-admin-db-autocomplete-option]");
+  // Several saved-data responses can repaint before the first restoration frame.
+  // Carry its caret forward instead of treating the replacement's body focus as
+  // a deliberate blur. A newer input/control/session still takes precedence.
+  if (active === document.body && pending?.focused && pending.session === state.session && pending.context === draft.context
+    && pending.draft === previousDraft && pending.draft.value === draft.value && pending.revision === state.adminDbSearchRenderRevision) {
+    return { ...pending, draft };
+  }
+  return { session: state.session, context: draft.context, draft,
+    focused: active === input || Boolean(option && input.closest(".admin-db-company-search-shell")?.contains(option)),
+    optionId: option?.getAttribute("data-admin-db-company-select") || "",
+    selectionStart: input.selectionStart, selectionEnd: input.selectionEnd, selectionDirection: input.selectionDirection,
+    inputScrollLeft: input.scrollLeft || 0, left: window.scrollX || 0, top: window.scrollY || 0 };
+}
+
+function adminDbSearchRestoreIsCurrent(snapshot) {
+  return Boolean(snapshot && isAdminRole() && state.session === snapshot.session && state.activeTab === "admin"
+    && state.adminPanelSection === "database" && adminDbSearchContext() === snapshot.context
+    && state.adminDbSearchDraft === snapshot.draft && state.adminDbSearchRenderRevision === snapshot.revision);
+}
+
+function restoreAdminDbSearchInput(snapshot) {
+  state.adminDbSearchPendingRestore = snapshot?.focused ? snapshot : null;
+  if (!snapshot?.focused) return;
+  window.requestAnimationFrame(() => {
+    const clearPending = () => { if (state.adminDbSearchPendingRestore === snapshot) state.adminDbSearchPendingRestore = null; };
+    if (!adminDbSearchRestoreIsCurrent(snapshot)) { clearPending(); return; }
+    const input = els.adminDatabaseDashboard?.querySelector("[data-admin-db-query]");
+    if (!input || input.dataset?.adminDbSearchContext !== snapshot.context || input.value !== snapshot.draft.value) { clearPending(); return; }
+    // Another control focused after this render takes precedence over this old restoration.
+    const active = document.activeElement;
+    if (active && active !== document.body && active !== input && active.isConnected !== false) { clearPending(); return; }
+    state.adminDbSearchRestoring = true;
+    try {
+      const option = snapshot.optionId && Array.from(input.closest(".admin-db-company-search-shell")?.querySelectorAll("[data-admin-db-autocomplete-option]") || [])
+        .find((node) => node.getAttribute("data-admin-db-company-select") === snapshot.optionId);
+      (option || input).focus({ preventScroll: true });
+      if (!option) {
+        const start = Number.isFinite(snapshot.selectionStart) ? Math.min(snapshot.selectionStart, input.value.length) : input.value.length;
+        const end = Number.isFinite(snapshot.selectionEnd) ? Math.min(snapshot.selectionEnd, input.value.length) : start;
+        input.setSelectionRange?.(start, end, snapshot.selectionDirection || "none");
+        input.scrollLeft = snapshot.inputScrollLeft;
+      }
+      window.scrollTo({ left: snapshot.left, top: snapshot.top, behavior: "auto" });
+    } finally {
+      state.adminDbSearchRestoring = false;
+      clearPending();
+    }
+  });
+}
+
 function restoreAdminSearchInput(selector = "", value = "", selectionStart = null, selectionEnd = null) {
   if (!selector) return;
+  const session = state.session;
+  const tab = state.activeTab;
+  const section = state.adminPanelSection;
+  const dbDraft = selector === "[data-admin-db-query]" ? adminDbSearchDraft(value) : null;
+  const revision = state.adminDbSearchRenderRevision;
   window.requestAnimationFrame(() => {
+    if (state.session !== session || state.activeTab !== tab || state.adminPanelSection !== section) return;
+    if (dbDraft && (!isAdminRole() || adminDbSearchContext() !== dbDraft.context || state.adminDbSearchDraft !== dbDraft
+      || state.adminDbSearchRenderRevision !== revision)) return;
     const input = document.querySelector(selector);
     if (!input) return;
+    if (dbDraft && input.value !== value) return;
     input.focus();
     if (input.value !== value) input.value = value;
     const safeStart = Number.isFinite(selectionStart) ? Math.min(selectionStart, input.value.length) : input.value.length;
@@ -27118,6 +27227,7 @@ function commitAdminDbQueryRender(value = "", selectionStart = null, selectionEn
 
 function refreshAdminDbAutocomplete(input) {
   if (!input) return;
+  if (!saveAdminDbSearchDraft(input, { reopen: true })) return;
   const wrapper = input.closest(".admin-db-company-query-wrap");
   if (!wrapper) return;
   wrapper.querySelector("#adminDbAutocomplete")?.remove();
@@ -27132,6 +27242,8 @@ function closeAdminDbAutocomplete() {
     list.setAttribute("hidden", "");
   });
   document.querySelectorAll("[data-admin-db-query]").forEach((input) => {
+    const draft = saveAdminDbSearchDraft(input);
+    if (draft) state.adminDbSearchDraft = { ...draft, closed: true };
     input.setAttribute("aria-expanded", "false");
   });
 }
@@ -27195,6 +27307,14 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
     state.adminViewsDeferred = true;
     return;
   }
+  const searchRestore = captureAdminDbSearchInput();
+  if (state.adminDbQueryComposing && state.adminDbSearchCompositionInput?.isConnected !== false && searchRestore) {
+    state.adminDbSearchDeferredRender = { session: state.session, context: searchRestore.context };
+    return;
+  }
+  state.adminDbSearchDeferredRender = null;
+  state.adminDbSearchRenderRevision = Number(state.adminDbSearchRenderRevision || 0) + 1;
+  if (searchRestore) searchRestore.revision = state.adminDbSearchRenderRevision;
   state.adminViewsDeferred = true;
   window.CompanyIntegrated?.disposeWithin(els.adminDatabaseDashboard);
   if (!Array.isArray(master.companies) && !Number.isFinite(master.totalCompanies) && state.companyMasterSummaryRead) {
@@ -27326,6 +27446,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
       || (master.companies || []).find((company) => company.companyId === detailId)?.detailLoaded === false));
     finishAdminScreenTransition(detailError ? "error" : waiting ? "waiting" : "ready");
   }
+  restoreAdminDbSearchInput(searchRestore);
 }
 
 function adminConsoleKpis(master = {}, entries = []) {
@@ -30147,29 +30268,50 @@ function adminIntegrationSummaryLabel(summary = {}) {
 
 function adminHomeSourceTimestamp(value = "") {
   const timestamp = value ? Date.parse(value) : 0;
-  return Number.isFinite(timestamp) ? timestamp : 0;
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : 0;
 }
 
 function adminHomeLatestRun() {
   return (state.runs || []).find(Boolean) || state.data?.run || {};
 }
 
+function adminHomeReadiness(master = {}) {
+  master = master || {};
+  const selected = state.data?.run;
+  const hasSelectedResult = Boolean(selected?.id && (!state.activeRunId || selected.id === state.activeRunId));
+  const companyReady = !master.error && (Array.isArray(master.companies) || Number.isFinite(master.totalCompanies));
+  const companyStatus = state.companyMasterSummaryStatus;
+  const currentCompanyStatus = companyStatus?.session === state.session && companyStatus.master === state.companyMaster ? companyStatus : null;
+  const catalog = state.adminRunCatalogReadiness?.session === state.session ? state.adminRunCatalogReadiness : null;
+  const hasStoredRuns = (state.runs || []).some(Boolean);
+  const hasSavedData = companyReady || hasStoredRuns || hasSelectedResult;
+  const loading = currentCompanyStatus?.status === "loading" || catalog?.status === "loading";
+  const failed = Boolean(master.error || currentCompanyStatus?.status === "error" || catalog?.status === "error");
+  const empty = companyReady && Number(master.totalCompanies ?? master.companies?.length ?? 0) === 0
+    && catalog?.status === "ready" && !hasStoredRuns && !hasSelectedResult;
+  return { companyReady, hasSelectedResult, hasStoredRuns, hasSavedData, loading, failed, empty,
+    catalogReady: catalog?.status === "ready" };
+}
+
 function adminHomeBasis(master = {}) {
-  const latestRun = adminHomeLatestRun();
+  master = master || {};
+  const readiness = adminHomeReadiness(master);
+  const selected = readiness.hasSelectedResult ? state.data.run : null;
+  const latestRun = selected || adminHomeLatestRun();
   const regional = master.adminRegionalOperations || {};
-  const candidates = [
-    latestRun.completedAt,
-    latestRun.collectedAt,
-    latestRun.updatedAt,
-    latestRun.createdAt,
-    regional.generatedAt,
-    master.updatedAt,
-    master.generatedAt
-  ].filter(Boolean);
-  const latest = candidates
-    .map((value) => ({ value, timestamp: adminHomeSourceTimestamp(value) }))
-    .sort((a, b) => b.timestamp - a.timestamp)[0];
-  return latest?.timestamp ? `기준 ${compactDateTime(latest.value)}` : "데이터 수집 전";
+  // Observation, DB update, and aggregate preparation times describe different
+  // events. Never relabel a newly prepared aggregate as a new observation.
+  const observedAt = [latestRun.completedAt, latestRun.collectedAt, latestRun.updatedAt, latestRun.createdAt]
+    .find(value => adminHomeSourceTimestamp(value));
+  const basis = observedAt ? `${selected ? "선택 결과" : "최근 수집"} 기준 ${compactDateTime(observedAt)}`
+    : adminHomeSourceTimestamp(master.updatedAt) ? `업체 DB 갱신 ${compactDateTime(master.updatedAt)}`
+      : adminHomeSourceTimestamp(regional.generatedAt) ? `지역 집계 작성 ${compactDateTime(regional.generatedAt)}`
+        : adminHomeSourceTimestamp(master.generatedAt) ? `기본자료 작성 ${compactDateTime(master.generatedAt)}` : "";
+  if (basis) return `${basis}${readiness.failed ? " · 최신 상태 미확인" : readiness.loading ? " · 갱신 중" : ""}`;
+  if (readiness.failed) return readiness.hasSavedData ? "저장자료 사용 · 최신 상태 미확인" : "저장 자료 확인 실패";
+  if (readiness.empty) return "저장 자료 없음";
+  if (readiness.hasSavedData) return readiness.loading ? "저장자료 사용 · 갱신 중" : "저장자료 준비 · 기준시각 미기록";
+  return "저장 자료 확인 중";
 }
 
 function adminHomeTasks(master = {}, entries = []) {
@@ -30244,13 +30386,24 @@ function adminHomeMetricCards(master = {}, entries = []) {
 }
 
 function adminHomeFreshness(master = {}) {
+  master = master || {};
   const latestRun = adminHomeLatestRun();
   const regional = master.adminRegionalOperations || {};
+  const readiness = adminHomeReadiness(master);
+  const regionalAt = adminHomeSourceTimestamp(regional.generatedAt) ? regional.generatedAt : "";
+  const marketAt = [latestRun.completedAt, latestRun.collectedAt, latestRun.updatedAt, latestRun.createdAt]
+    .find(value => adminHomeSourceTimestamp(value));
+  const marketLabel = marketAt ? `${compactDateTime(marketAt)}${readiness.failed ? " · 최신 상태 미확인" : ""}`
+    : readiness.failed ? "수집 기록 확인 실패" : readiness.catalogReady ? readiness.hasStoredRuns ? "기준시각 미기록" : "저장 결과 없음" : "수집 기록 확인 중";
+  const decisionLabel = readiness.failed ? readiness.hasSavedData ? "저장자료 사용 · 갱신 실패" : "자료 확인 실패"
+    : readiness.loading ? readiness.hasSavedData ? "저장자료 사용 · 갱신 중" : "저장 자료 확인 중"
+      : readiness.hasSelectedResult ? "선택 결과 준비" : readiness.hasStoredRuns ? "저장 결과 준비"
+        : readiness.empty ? "저장 자료 없음" : readiness.companyReady ? "기본자료 준비" : "저장 자료 확인 중";
   const rows = [
-    ["REGION CORE", regional.generatedAt ? compactDateTime(regional.generatedAt) : "수집 전", "공공·지역 공통 자료", regional.generatedAt ? "positive" : "neutral"],
-    ["MARKET LIVE", latestRun.completedAt || latestRun.collectedAt || latestRun.createdAt ? compactDateTime(latestRun.completedAt || latestRun.collectedAt || latestRun.createdAt) : "수집 전", "네이버·OTA 시장 관측", latestRun.id || latestRun.completedAt ? "positive" : "neutral"],
+    ["REGION CORE", regionalAt ? compactDateTime(regionalAt) : readiness.companyReady ? master.adminRegionalOperations ? "기준시각 미기록" : "저장 집계 없음" : "저장 자료 확인 중", "공공·지역 집계 작성 시각", regionalAt ? "positive" : "neutral"],
+    ["MARKET LIVE", marketLabel, "네이버·OTA 최근 수집 기준", readiness.failed ? "warning" : marketAt ? "positive" : "neutral"],
     ["BUSINESS ACTUAL", "연결 예정", "매출·예약·광고비 비공개 저장", "neutral"],
-    ["DECISION ENGINE", state.data ? "분석 가능" : "데이터 대기", "가격·광고·상품·채널 제안", state.data ? "positive" : "neutral"]
+    ["DECISION ENGINE", decisionLabel, readiness.hasSelectedResult ? "현재 선택 결과의 상세 분석" : "결과 선택 후 상세 이력·분석 준비", readiness.failed ? "warning" : readiness.hasSavedData && !readiness.loading && !readiness.empty ? "positive" : "neutral"]
   ];
   return rows.map(([label, value, note, tone]) => `
     <div class="admin-home-freshness-row" data-ui-surface="control">
@@ -30260,10 +30413,36 @@ function adminHomeFreshness(master = {}) {
   `).join("");
 }
 
+function renderAdminStartupReadiness() {
+  // Only update labels already on this administrator screen. A late bootstrap
+  // response must not reset another tab's title, DB search, or selected detail.
+  if (!isAdminRole() || state.activeTab !== "admin") return;
+  renderHeader();
+  if (state.adminPanelSection !== "overview" || !els.adminConsoleDashboard) return;
+  const master = adminConsoleMasterSource();
+  const basis = els.adminConsoleDashboard.querySelector(".admin-home-basis strong");
+  if (basis) basis.textContent = adminHomeBasis(master);
+  const label = els.adminConsoleDashboard.querySelector(".admin-home-basis small");
+  const latestRun = adminHomeLatestRun();
+  if (label) label.textContent = latestRun.label || latestRun.keyword || latestRun.id
+    || (adminHomeReadiness(master).catalogReady ? "저장된 실행 기록 없음" : "수집 기록 확인 중");
+  const freshness = els.adminConsoleDashboard.querySelector(".admin-home-freshness-list");
+  if (freshness) freshness.innerHTML = adminHomeFreshness(master);
+  const recent = els.adminConsoleDashboard.querySelector(".admin-home-log-list");
+  if (recent) recent.innerHTML = adminHomeRecentRows(master);
+  const recentCount = els.adminConsoleDashboard.querySelector("#adminHomeRecentTitle")?.closest(".admin-home-section-head")?.querySelector("small");
+  if (recentCount) recentCount.textContent = `최근 ${fmtNumber(Math.min(4, (state.runs || []).length))}건`;
+}
+
 function adminHomeRecentRows(master = {}) {
   const runs = (state.runs || []).filter(Boolean).slice(0, 4);
   if (!runs.length) {
-    return `<div class="admin-home-empty" data-ui-surface="soft"><strong>최근 운영 기록이 없습니다.</strong><span>첫 수집이 완료되면 실행 시각과 결과가 기록됩니다.</span></div>`;
+    const readiness = adminHomeReadiness(master);
+    const message = readiness.failed ? "수집 기록을 확인하지 못했습니다."
+      : readiness.catalogReady ? "최근 운영 기록이 없습니다." : "저장된 수집 기록을 확인하고 있습니다.";
+    const note = readiness.failed ? "자료가 없는 상태와 구별하여 다시 확인해 주세요."
+      : readiness.catalogReady ? "첫 수집이 완료되면 실행 시각과 결과가 기록됩니다." : "기록 준비가 끝나면 최근 결과를 표시합니다.";
+    return `<div class="admin-home-empty" data-ui-surface="soft"><strong>${escapeHtml(message)}</strong><span>${escapeHtml(note)}</span></div>`;
   }
   return runs.map((run) => {
     const at = run.completedAt || run.collectedAt || run.updatedAt || run.createdAt || "";
@@ -30382,7 +30561,8 @@ function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
   const entries = companyDecisionQueueEntries(master);
   const tasks = adminHomeTasks(master, entries);
   const latestRun = adminHomeLatestRun();
-  const latestRunLabel = latestRun.label || latestRun.keyword || latestRun.id || "아직 실행 기록 없음";
+  const latestRunLabel = latestRun.label || latestRun.keyword || latestRun.id
+    || (adminHomeReadiness(master).catalogReady ? "저장된 실행 기록 없음" : "수집 기록 확인 중");
   els.adminConsoleDashboard.innerHTML = `
     <section class="admin-home-intro" data-ui-surface="soft">
       <div>
@@ -39312,6 +39492,7 @@ function companyMasterReadIsCurrent(read) {
 
 function renderCompanyMasterPriorityView() {
   if (!isAdminRole()) return;
+  renderAdminStartupReadiness();
   state.adminViewsDeferred = true;
   if (state.activeTab !== "admin") return;
   if (state.adminPanelSection === "overview") renderAdminConsoleDashboard();
@@ -39357,6 +39538,7 @@ async function loadCompanyMasterSummary(options = {}) {
     state.companyMaster = null;
     state.crawlEtaByKey = {};
     state.companyMasterBootstrapSummary = null;
+    state.companyMasterSummaryStatus = null;
     return false;
   }
   const session = state.session;
@@ -39379,6 +39561,8 @@ async function loadCompanyMasterSummary(options = {}) {
       if (state.companyMasterSummaryRead === read) state.companyMasterSummaryRead = null;
     });
     state.companyMasterSummaryRead = read;
+    state.companyMasterSummaryStatus = { session, sequence, master: state.companyMaster, status: "loading" };
+    renderAdminStartupReadiness();
   }
   const { data, error } = await read.promise;
   if (!current()) return false;
@@ -39392,12 +39576,16 @@ async function loadCompanyMasterSummary(options = {}) {
         state.companyMaster = { error: error.message, totalCompanies: 0, duplicateCandidates: [] };
         state.crawlEtaByKey = {};
       }
+      state.companyMasterSummaryStatus = { session, sequence: read.sequence, master: state.companyMaster, status: "error" };
+      renderAdminStartupReadiness();
       if (options.bootstrap) renderCompanyMasterPriorityView();
       return false;
     }
     state.companyMaster = data;
     read.applied = true;
   }
+  state.companyMasterSummaryStatus = { session, sequence: read.sequence, master: data, status: "ready" };
+  renderAdminStartupReadiness();
   if (options.bootstrap) {
     if (!read.priorityRendered) {
       renderCompanyMasterPriorityView();
@@ -41041,6 +41229,7 @@ async function backfillCompanyMaster(button) {
 async function loadRuns(selectLatest = false, options = {}) {
   if (!isAdminRole()) {
     state.runs = [];
+    state.adminRunCatalogReadiness = null;
     state.activeRunId = null;
     state.data = null;
     if (els.runSelect) els.runSelect.innerHTML = "";
@@ -41054,10 +41243,27 @@ async function loadRuns(selectLatest = false, options = {}) {
     state.adminBootstrapRunPending = null; state.adminBootstrapSummaryPending = false;
   }
   const initialRunSequence = loadRunRequestSequence;
+  const catalogRead = { session: state.session, status: "loading" };
+  const catalogIsCurrent = () => isAdminRole() && state.session === catalogRead.session
+    && state.adminRunCatalogReadiness === catalogRead;
+  state.adminRunCatalogReadiness = catalogRead;
+  renderAdminStartupReadiness();
   setStatus("결과 로딩");
-  const data = await fetchJson("/api/runs");
-  if (!isAdminRole()) return;
-  state.runs = data.runs || [];
+  let data;
+  try {
+    data = await fetchJson("/api/runs");
+    if (!Array.isArray(data?.runs)) throw new Error("저장된 수집 기록 응답을 확인하지 못했습니다.");
+  } catch (error) {
+    if (catalogIsCurrent()) {
+      catalogRead.status = "error";
+      renderAdminStartupReadiness();
+    }
+    throw error;
+  }
+  if (!catalogIsCurrent()) return;
+  state.runs = data.runs;
+  catalogRead.status = "ready";
+  renderAdminStartupReadiness();
   if (els.runSelect) {
     els.runSelect.innerHTML = state.runs.map((run) => `<option value="${escapeHtml(run.id)}">${escapeHtml(run.label || run.id)}</option>`).join("");
   }
@@ -41081,6 +41287,7 @@ async function loadRuns(selectLatest = false, options = {}) {
     els.companyList.innerHTML = `<div class="empty">${escapeHtml(emptyText)}</div>`;
     if (els.decisionQueueCount) els.decisionQueueCount.textContent = "0 대기";
     if (els.decisionQueueList) els.decisionQueueList.innerHTML = `<div class="empty">실행 결과가 없습니다. 수집 후 확인 대상이 생성됩니다.</div>`;
+    renderAdminStartupReadiness();
     setStatus("결과 없음");
     return;
   }
@@ -42353,6 +42560,7 @@ async function loadTrafficState() {
 }
 
 async function logout() {
+  resetAdminDbSearchDraft();
   window.RegionalAnalysis?.clear();
   window.RegionalOutlook?.clear();
   stopTourismDemandStrengthBackfillPolling({ render: false });
@@ -42771,6 +42979,7 @@ function bindEvents() {
   document.addEventListener("focusin", (event) => {
     const input = event.target.closest?.("[data-admin-db-query]");
     if (input) {
+      if (state.adminDbSearchRestoring) return;
       if (compactSearchText(input.value || "") && input.getAttribute("aria-expanded") === "false") {
         refreshAdminDbAutocomplete(input);
       }
@@ -43033,6 +43242,7 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-admin-db-clear]")) {
+      resetAdminDbSearchDraft();
       const resetViewMode = state.adminDbViewMode === "region" ? "region" : "list";
       state.adminDbFilters = {
         query: "",
@@ -43067,6 +43277,7 @@ function bindEvents() {
     }
     const adminDbCompanyProvince = event.target.closest("[data-admin-db-company-province]");
     if (adminDbCompanyProvince) {
+      resetAdminDbSearchDraft();
       state.adminDbFilters = state.adminDbFilters || {};
       state.adminDbFilters.query = "";
       state.adminDbFilters.province = adminDbCompanyProvince.dataset.adminDbCompanyProvince || "all";
@@ -43081,6 +43292,7 @@ function bindEvents() {
     }
     const adminDbCompanyRegion = event.target.closest("[data-admin-db-company-region]");
     if (adminDbCompanyRegion) {
+      resetAdminDbSearchDraft();
       state.adminDbFilters = state.adminDbFilters || {};
       state.adminDbFilters.query = "";
       state.adminDbFilters.province = adminDbCompanyRegion.dataset.adminDbCompanyRegionProvince || state.adminDbFilters.province || "all";
@@ -43095,6 +43307,7 @@ function bindEvents() {
     }
     const adminDbQualityFilter = event.target.closest("[data-admin-db-quality-filter]");
     if (adminDbQualityFilter) {
+      resetAdminDbSearchDraft();
       const key = adminDbQualityFilter.dataset.adminDbQualityFilter || "";
       state.adminDbFilters = {
         ...(state.adminDbFilters || {}),
@@ -43149,6 +43362,7 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-admin-db-clear-selection]")) {
+      resetAdminDbSearchDraft();
       state.adminDbSelectedCompanyId = "";
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => {
@@ -43168,6 +43382,7 @@ function bindEvents() {
     }
     const adminDbProvinceCard = event.target.closest("[data-admin-db-province-card]");
     if (adminDbProvinceCard) {
+      resetAdminDbSearchDraft();
       const province = adminDbProvinceCard.dataset.adminDbProvinceCard || "all";
       state.adminDbFilters = state.adminDbFilters || {};
       state.adminDbFilters.query = "";
@@ -43182,6 +43397,7 @@ function bindEvents() {
     }
     const adminDbRegionCard = event.target.closest("[data-admin-db-region-card]");
     if (adminDbRegionCard) {
+      resetAdminDbSearchDraft();
       const province = adminDbRegionCard.dataset.adminDbRegionCardProvince || state.adminDbFilters?.province || "all";
       const region = adminDbRegionCard.dataset.adminDbRegionCard || "all";
       state.adminDbFilters = state.adminDbFilters || {};
@@ -43678,8 +43894,11 @@ function bindEvents() {
     }
   });
   document.addEventListener("compositionstart", (event) => {
-    if (event.target.closest("[data-admin-db-query]")) {
+    const adminDbQuery = event.target.closest("[data-admin-db-query]");
+    if (adminDbQuery) {
+      if (!saveAdminDbSearchDraft(adminDbQuery, { reopen: true })) return;
       state.adminDbQueryComposing = true;
+      state.adminDbSearchCompositionInput = adminDbQuery;
       return;
     }
     if (event.target.closest("[data-admin-region-company-search]")) {
@@ -43690,8 +43909,14 @@ function bindEvents() {
   document.addEventListener("compositionend", (event) => {
     const adminDbQuery = event.target.closest("[data-admin-db-query]");
     if (adminDbQuery) {
+      if (state.adminDbSearchCompositionInput && state.adminDbSearchCompositionInput !== adminDbQuery) return;
+      const pending = state.adminDbSearchDeferredRender;
       state.adminDbQueryComposing = false;
+      state.adminDbSearchCompositionInput = null;
+      state.adminDbSearchDeferredRender = null;
+      if (!saveAdminDbSearchDraft(adminDbQuery, { reopen: true })) return;
       refreshAdminDbAutocomplete(adminDbQuery);
+      if (pending?.session === state.session && pending.context === adminDbSearchContext()) renderAdminDatabaseDashboard();
       return;
     }
     const regionCompanySearch = event.target.closest("[data-admin-region-company-search]");
@@ -43732,10 +43957,11 @@ function bindEvents() {
     }
     const adminDbQuery = event.target.closest("[data-admin-db-query]");
     if (adminDbQuery) {
+      if (!saveAdminDbSearchDraft(adminDbQuery, { reopen: true })) return;
       if (adminDbQueryUsesInlineAutocomplete(adminDbQuery)) {
         state.adminDbInlineSearchScroll = { left: window.scrollX || 0, top: window.scrollY || 0 };
       }
-      refreshAdminDbAutocomplete(adminDbQuery);
+      if (!event.isComposing && !state.adminDbQueryComposing) refreshAdminDbAutocomplete(adminDbQuery);
       return;
     }
     const search = event.target.closest("[data-company-master-search]");
@@ -43901,6 +44127,7 @@ function bindEvents() {
     if (handleAppOverlayKeydown(event)) return;
     const adminDbQuery = event.target.closest?.("[data-admin-db-query]");
     const autocompleteOption = event.target.closest?.("[data-admin-db-autocomplete-option]");
+    if ((adminDbQuery || autocompleteOption) && (event.isComposing || state.adminDbQueryComposing || event.keyCode === 229)) return;
     if (adminDbQuery && event.key === "Enter") {
       event.preventDefault();
       if (adminDbQueryUsesInlineAutocomplete(adminDbQuery)) {
@@ -43933,7 +44160,8 @@ function bindEvents() {
       event.preventDefault();
       closeAdminDbAutocomplete();
       const input = document.querySelector("[data-admin-db-query]");
-      input?.focus();
+      state.adminDbSearchRestoring = true;
+      try { input?.focus(); } finally { state.adminDbSearchRestoring = false; }
       return;
     }
     const mapCompany = event.target.closest?.(".company-map-marker[data-open-company]");

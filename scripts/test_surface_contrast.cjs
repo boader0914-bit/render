@@ -3036,6 +3036,7 @@ const reviewShellRow = { company: { companyId: "review-surface-fixture" }, metri
 const reviewShellContext = vm.createContext({
   state: { activeTab: "admin", adminPanelSection: "database", adminDbSelectedCompanyId: reviewShellRow.company.companyId, adminDbViewMode: "review" },
   els: { adminDatabaseDashboard: reviewShellDashboard }, window: {},
+  captureAdminDbSearchInput: () => null, restoreAdminDbSearchInput() {},
   isAdminRole: () => true, adminConsoleMasterSource: () => ({}),
   adminDbFilterState: () => ({ rows: [reviewShellRow], filteredRows: [reviewShellRow], filters: { query: "" } }),
   adminDbGroupedRows: () => [], adminDbCompanyIdFromRoute: () => "", adminDbViewMode: () => "review",

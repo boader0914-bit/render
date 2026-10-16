@@ -143,6 +143,7 @@ function fixture() {
     adminDbCompanyIdFromRoute: () => state.adminDbSelectedCompanyId,
     adminDbMasterHasRows: () => true,
     adminDbViewMode: () => state.adminDbViewMode,
+    captureAdminDbSearchInput: () => null, restoreAdminDbSearchInput() {},
     adminDbMetricCard: () => "", fmtNumber: String, fmtWon: String,
     adminDbCompanySearchShellHtml: () => "", adminDbUserViewBridgeHtml: () => "", adminDbSelectedRow: row,
     adminDbAuditBoard: () => "", adminDbWorkPanel: () => "", adminDbCollectionPanel: () => "",
