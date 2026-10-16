@@ -132,6 +132,13 @@ async function main() {
     const admin = await login("monthly-admin");
     const opts = await request(endpoint + "/options", admin);
     assert.equal(opts.status, 200); assert.ok(opts.data.months.includes("2026-08"));
+    assert.equal(opts.data.selectorCache.storage, "saved");
+    const reusedOptions = await request(endpoint + "/options", admin);
+    assert.equal(reusedOptions.status, 200);
+    assert.equal(reusedOptions.data.selectorCache.status, "reused");
+    assert.deepEqual(reusedOptions.data.companies, opts.data.companies);
+    assert.deepEqual(reusedOptions.data.months, opts.data.months);
+    assert.ok(Number.isFinite(reusedOptions.data.selectorCache.timings.totalMs));
     const regionKey = opts.data.companies.find(company => company.id === fixture.companyId)?.regionKey;
     assert.ok(regionKey, "fixture company must resolve to an actual catalog region");
     const condition = { type: "company", targetId: fixture.companyId, month: "2026-08", cutoffDate: "2026-08-31" };

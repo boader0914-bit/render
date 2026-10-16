@@ -9,7 +9,7 @@ const appSource = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8")
 const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8");
 const metric = { supply: 10, sold: 3, publicBookings: 2, phoneBookings: 1, estimatedRevenue: 300000, publicRevenue: 200000, phoneRevenue: 100000, reservationRate: .3, coverageRate: .5, partial: true, revenuePartial: true, knownPartialRevenue: 25000 };
 const snapshot = { request: { type: "company", month: "2026-08", targetId: "c1", cutoffDate: "2026-08-31" }, target: { id: "c1", label: "테스트 숙소", type: "company" }, period: { start: "2026-08-01", end: "2026-08-31", cutoffDate: "2026-08-31" }, summary: { lodging: metric, dayuse: { ...metric, estimatedRevenue: 40000 } }, daily: [{ date: "2026-08-01", lodging: metric, dayuse: metric }], companies: [], quality: { coverageRate: .5, coveredCompanyDays: 1, expectedCompanyDays: 2, missingCompanyDays: 1, discardedObservationCount: 1, warnings: ["일부 날짜 자료가 없습니다."] }, sources: { runs: [{ id: "run-1", keyword: "가평펜션", collectedAt: "2026-08-31T01:00:00Z", selectedObservationCount: 1, observationCount: 2 }] }, definitions: { estimatedRevenue: "객실별 수량과 관측 가격의 곱" }, previewToken: "preview-fixed-token" };
-function fixture({ generation } = {}) {
+function fixture({ generation, options } = {}) {
   const container = { innerHTML: "", addEventListener() {}, querySelector() { return null; } };
   const calls = [];
   let saved;
@@ -17,7 +17,7 @@ function fixture({ generation } = {}) {
   const api = async (url, method = "GET", body) => {
     calls.push({ url, method, body: structuredClone(body) });
     if (nextFailure) { const error = nextFailure; nextFailure = null; throw error; }
-    if (url === "/options") return { companies: [{ id: "c1", label: "테스트 숙소" }], keywords: [], regions: [{ id: "kr_gyeongnam_sancheong", label: "경상남도 산청군" }], months: ["2026-08"], defaultMonth: "2026-08" };
+    if (url === "/options") return structuredClone(typeof options === "function" ? options() : options || { companies: [{ id: "c1", label: "테스트 숙소" }], keywords: [], regions: [{ id: "kr_gyeongnam_sancheong", label: "경상남도 산청군" }], months: ["2026-08"], defaultMonth: "2026-08" });
     if (url === "/preview") return structuredClone(generation ? { ...snapshot, generation } : snapshot);
     if (url === "" && method === "GET") return { reports: saved ? [structuredClone(saved)] : [] };
     if (url === "" && method === "POST") { saved = { id: "mr_1", revision: 1, version: 1, status: "draft", ...body, snapshot: structuredClone(snapshot) }; return structuredClone(saved); }
@@ -67,6 +67,73 @@ test("a reused calculation is identified without changing the approval payload o
   assert.doesNotMatch(container.innerHTML, /mr-generation/);
   c.input("targetId", "another-company");
   assert.equal(c.state.generation, null);
+});
+
+test("selector cache status is shown by the conditions without claiming failed storage was reused", async () => {
+  const options = { companies: [{ id: "c1", label: "테스트 숙소" }], keywords: [], regions: [], months: ["2026-08"], defaultMonth: "2026-08", selectorCache: { status: "reused", storage: "saved", calculatedAt: "2026-10-16T01:00:00Z", checkedAt: "2026-10-16T01:10:00Z", timings: { totalMs: 125 } } };
+  const { controller: c, container } = fixture({ options: () => options });
+  await c.open();
+  assert.match(container.innerHTML, /<p class="mr-generation mr-selector-note">저장 선택 목록 재사용 · 확인 0\.1초<\/p><\/section>/);
+  assert.ok(container.innerHTML.indexOf("mr-selector-note") < container.innerHTML.indexOf("mr-workspace"));
+  options.selectorCache = { status: "reused", storage: "failed", timings: { totalMs: 1 } };
+  await c.open();
+  assert.match(container.innerHTML, /선택 목록 확인 · 목록 저장 안 됨 · 확인 0\.1초 미만/);
+  assert.doesNotMatch(container.innerHTML, /저장 선택 목록 재사용/);
+  options.selectorCache = { status: "calculated", storage: "saved", timings: { totalMs: null } };
+  await c.open();
+  assert.match(container.innerHTML, /mr-selector-note">선택 목록 갱신<\/p>/);
+  assert.doesNotMatch(container.innerHTML, /확인 0(?:\.0)?초/);
+});
+
+test("reopening checks saved options while retaining selections and clears only a removed target's preview", async () => {
+  const options = { companies: [{ id: "c1", label: "테스트 숙소" }], keywords: [], regions: [], months: ["2026-08"], defaultMonth: "2026-08" };
+  const { controller: c, container, calls } = fixture({ options: () => options });
+  await c.open({ type: "company", targetId: "c1" });
+  c.input("month", "2026-07"); c.input("cutoffDate", "2026-07-26"); c.input("targetSearch", "테스트");
+  await c.action("preview");
+  const previousForm = { ...c.state.form }, previousPreview = c.state.preview;
+  options.companies[0].label = "수정한 테스트 숙소";
+  options.companies.push({ id: "c2", label: "새 업체" });
+  options.months.unshift("2026-09"); options.defaultMonth = "2026-09";
+  await c.open();
+  assert.deepEqual(c.state.form, previousForm, "new server defaults must not replace a user's selected period");
+  assert.equal(c.state.search, "테스트");
+  assert.equal(c.state.preview, previousPreview);
+  assert.equal(c.state.previewToken, snapshot.previewToken);
+  assert.equal(c.state.options.companies.length, 2);
+  assert.equal(c.state.options.months[0], "2026-09");
+  assert.match(container.innerHTML, /수정한 테스트 숙소/);
+  options.companies = [{ id: "c2", label: "병합된 업체" }];
+  await c.open();
+  assert.equal(calls.filter(call => call.url === "/options").length, 3);
+  assert.deepEqual(c.state.form, { ...previousForm, targetId: "" });
+  assert.equal(c.state.search, "테스트");
+  assert.equal(c.state.preview, null);
+  assert.equal(c.state.previewRequest, null);
+  assert.equal(c.state.previewToken, null);
+  assert.match(container.innerHTML, /선택했던 대상이 목록에서 변경되었습니다/);
+  const saves = calls.filter(call => call.method === "POST").length;
+  await c.action("save");
+  assert.equal(calls.filter(call => call.method === "POST").length, saves, "a removed target cannot save its previous preview");
+});
+
+test("failed options verification does not certify an old cached list or permit a new preview", async () => {
+  const options = { companies: [{ id: "c1", label: "테스트 숙소" }], months: ["2026-08"], defaultMonth: "2026-08", selectorCache: { status: "reused", storage: "saved", timings: { totalMs: 10 } } };
+  const { controller: c, container, calls, fail } = fixture({ options });
+  await c.open({ type: "company", targetId: "c1" });
+  fail(new Error("선택 목록 변경 확인 실패"));
+  await c.open();
+  assert.equal(c.state.optionsVerified, false);
+  assert.equal(c.state.form.targetId, "c1", "failed verification must not invent deletion");
+  assert.match(container.innerHTML, /role="alert"[^>]*>선택 목록 변경 확인 실패/);
+  assert.match(container.innerHTML, /선택 목록을 확인하지 못했습니다/);
+  assert.doesNotMatch(container.innerHTML, /저장 선택 목록 재사용/);
+  assert.match(container.innerHTML, /type="submit" disabled>미리보기 만들기/);
+  await c.action("preview");
+  assert.equal(calls.filter(call => call.url === "/preview").length, 0);
+  await c.open();
+  assert.equal(c.state.optionsVerified, true);
+  assert.match(container.innerHTML, /저장 선택 목록 재사용/);
 });
 
 test("pending work shows a live indicator and disables duplicate requests without inventing progress", async () => {

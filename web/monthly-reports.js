@@ -215,7 +215,7 @@
     return data;
   }
   function createController(container, api = request) {
-    const state = { options: null, reports: [], filter: "all", form: { month: "", type: "company", targetId: "", cutoffDate: "" }, search: "", preview: null, previewRequest: null, previewToken: null, generation: null, report: null, title: "", notes: "", acknowledged: false, busy: "", busyStartedAt: 0, message: "", error: "" };
+    const state = { options: null, optionsVerified: false, reports: [], filter: "all", form: { month: "", type: "company", targetId: "", cutoffDate: "" }, search: "", preview: null, previewRequest: null, previewToken: null, generation: null, report: null, title: "", notes: "", acknowledged: false, busy: "", busyStartedAt: 0, message: "", error: "" };
     let openRevision = 0;
     const idleWaiters = [];
     const optionsForType = () => state.options?.[{ company: "companies", keyword: "keywords", region: "regions" }[state.form.type]] || [];
@@ -232,6 +232,18 @@
       const seconds = Number(g.timings?.totalMs) / 1000;
       return `<p class="mr-generation">${escapeHtml(label)}${Number.isFinite(seconds) ? ` · 자료 확인 ${seconds < .1 ? "0.1초 미만" : `${seconds.toFixed(1)}초`}` : ""}${g.calculatedAt ? ` · 집계 ${escapeHtml(timeLabel(g.calculatedAt))} (한국시간)` : ""}${g.storage === "failed" || g.storage === "too_large" ? " · 재사용용 저장이 되지 않아 다음 요청은 다시 계산합니다." : ""}</p>`;
     }
+    function selectorNote() {
+      if (!state.options) return "";
+      if (!state.optionsVerified) return state.busy ? "" : '<p class="mr-generation mr-selector-note">선택 목록을 확인하지 못했습니다. 다시 열어 확인해 주세요.</p>';
+      const cache = state.options.selectorCache;
+      if (!cache) return "";
+      const unsaved = cache.storage === "failed" || cache.storage === "too_large";
+      const label = unsaved ? "선택 목록 확인 · 목록 저장 안 됨" : { reused: "저장 선택 목록 재사용", calculated: "선택 목록 갱신", coalesced: "확인된 선택 목록 사용" }[cache.status];
+      if (!label) return "";
+      const milliseconds = cache.timings?.totalMs;
+      const seconds = typeof milliseconds === "number" && Number.isFinite(milliseconds) && milliseconds >= 0 ? milliseconds / 1000 : null;
+      return `<p class="mr-generation mr-selector-note">${escapeHtml(label)}${seconds === null ? "" : ` · 확인 ${seconds < .1 ? "0.1초 미만" : `${seconds.toFixed(1)}초`}`}${unsaved ? " · 다음 조회 때 다시 준비합니다." : ""}</p>`;
+    }
     function targetOptions() {
       const query = state.search.toLocaleLowerCase();
       return '<option value="">대상을 선택하세요</option>' + optionsForType().filter((option) => option.id === state.form.targetId || !query || `${option.label} ${option.id}`.toLocaleLowerCase().includes(query)).map((option) => `<option value="${escapeHtml(option.id)}"${option.id === state.form.targetId ? " selected" : ""}>${escapeHtml(option.label)}</option>`).join("");
@@ -243,7 +255,7 @@
       const editable = report && ["draft", "review"].includes(report.status);
       container.innerHTML = `<div class="monthly-reports" aria-busy="${Boolean(state.busy)}"><header class="mr-intro"><div><p class="mr-eyebrow">MONTHLY REPORTS</p><h2>자료를 확인하고, 월간 리포트로 남기세요</h2><p>업체·키워드·지역별 예약 흐름과 추정 매출을 저장된 자료로 정리합니다.</p></div><span class="mr-private-label">관리자 전용</span></header>
         <div class="mr-notice${state.busy ? " mr-notice-busy" : ""}" role="status" aria-live="polite">${state.busy ? `<span class="mr-loading" aria-hidden="true"></span><span data-mr-progress-text>${escapeHtml(busyText())}</span>` : escapeHtml(state.message)}</div>${state.error ? `<div class="mr-error" role="alert">${escapeHtml(state.error)}</div>` : ""}
-        <section class="mr-card mr-create" aria-label="월간 리포트 생성 조건"><div class="mr-section-title"><h3>새 리포트</h3><span class="mr-muted">① 조건 선택 → ② 미리보기 → ③ 초안 저장</span></div><form data-mr-form><div class="mr-form-grid"><label>대상 월<input type="month" name="month" value="${escapeHtml(state.form.month)}" max="${today().slice(0, 7)}" required${busy}></label><label>유형<select name="type"${busy}>${Object.entries(TYPES).map(([key, label]) => `<option value="${key}"${key === state.form.type ? " selected" : ""}>${label}</option>`).join("")}</select></label><label class="mr-target">대상<select name="targetId" required${busy}>${targetOptions()}</select></label><label>관측 마감일<input type="date" name="cutoffDate" value="${escapeHtml(state.form.cutoffDate)}" max="${today()}"${busy}><small>비우면 해당 월 말일, 진행 중인 달은 오늘</small></label></div><div class="mr-form-actions"><label class="mr-search-label"><span class="mr-sr-only">대상 검색</span><input type="search" name="targetSearch" value="${escapeHtml(state.search)}" placeholder="업체명·키워드·지역 검색" autocomplete="off"${busy}></label><button class="primary-button" type="submit"${busy || !state.options ? " disabled" : ""}>미리보기 만들기</button></div></form></section>
+        <section class="mr-card mr-create" aria-label="월간 리포트 생성 조건"><div class="mr-section-title"><h3>새 리포트</h3><span class="mr-muted">① 조건 선택 → ② 미리보기 → ③ 초안 저장</span></div><form data-mr-form><div class="mr-form-grid"><label>대상 월<input type="month" name="month" value="${escapeHtml(state.form.month)}" max="${today().slice(0, 7)}" required${busy}></label><label>유형<select name="type"${busy}>${Object.entries(TYPES).map(([key, label]) => `<option value="${key}"${key === state.form.type ? " selected" : ""}>${label}</option>`).join("")}</select></label><label class="mr-target">대상<select name="targetId" required${busy}>${targetOptions()}</select></label><label>관측 마감일<input type="date" name="cutoffDate" value="${escapeHtml(state.form.cutoffDate)}" max="${today()}"${busy}><small>비우면 해당 월 말일, 진행 중인 달은 오늘</small></label></div><div class="mr-form-actions"><label class="mr-search-label"><span class="mr-sr-only">대상 검색</span><input type="search" name="targetSearch" value="${escapeHtml(state.search)}" placeholder="업체명·키워드·지역 검색" autocomplete="off"${busy}></label><button class="primary-button" type="submit"${busy || !state.optionsVerified ? " disabled" : ""}>미리보기 만들기</button></div></form>${selectorNote()}</section>
         <div class="mr-workspace"><aside class="mr-card mr-library" aria-label="저장 리포트"><div class="mr-section-title"><h3>저장 리포트 <span>${number(state.reports.length)}</span></h3><button type="button" class="mr-text-button" data-mr-action="refresh"${busy}>새로고침</button></div><div class="mr-filters" role="group" aria-label="발행 상태 필터">${Object.entries({ all: "전체", ...STATUSES }).map(([key, label]) => `<button type="button" data-mr-action="filter" data-filter="${key}" aria-pressed="${state.filter === key}"${busy}>${label}</button>`).join("")}</div>${renderList(state.reports, state.filter, report?.id)}</aside>
         <section class="mr-card mr-detail" aria-label="리포트 미리보기와 상세">${snapshot ? `<div class="mr-detail-heading"><div><p class="mr-eyebrow">${report ? `VERSION ${number(report.version || 1)} · 수정 ${number(report.revision)}` : "PREVIEW · 아직 저장하지 않았습니다"}</p><h3>${escapeHtml(report?.title || reportTitle(state.previewRequest || snapshot.request, snapshot.target))}</h3><p>${escapeHtml(snapshot.target?.label || report?.targetId)} · ${escapeHtml(TYPES[report?.type || snapshot.request?.type] || "")}</p></div>${report ? statusTag(report.status) : '<span class="mr-status">미리보기</span>'}</div>
         ${report ? `<p class="mr-dates">작성 ${escapeHtml(timeLabel(report.createdAt))} · 수정 ${escapeHtml(timeLabel(report.updatedAt))}${report.publishedAt ? ` · 발행 ${escapeHtml(timeLabel(report.publishedAt))}` : ""} (한국시간)</p>` : generationNote()}
@@ -267,11 +279,15 @@
       // Apply the latest destination after it finishes; never drop that handoff.
       while (state.busy) await new Promise(resolve => idleWaiters.push(resolve));
       if (revision !== openRevision) return false;
+      state.optionsVerified = false;
       await execute("저장된 리포트와 선택 항목을 불러오는 중입니다.", async () => {
-        if (!state.options) {
-          const data = await api("/options"); state.options = data;
+        const firstLoad = !state.options;
+        const data = await api("/options"); state.options = data; state.optionsVerified = true;
+        if (firstLoad) {
           state.form.month = data.defaultMonth || data.months?.[0] || today().slice(0, 7);
         }
+        const targetRemoved = Boolean(state.form.targetId && !optionsForType().some(item => item.id === state.form.targetId));
+        if (targetRemoved) { state.form.targetId = ""; invalidatePreview(); }
         if (context.type && Object.hasOwn(TYPES, context.type)) {
           state.form.type = context.type; state.form.targetId = context.targetId || ""; state.search = ""; invalidatePreview();
           state.report = null; state.title = ""; state.notes = "";
@@ -299,7 +315,7 @@
         }
         await loadList(); state.message = context.type === "region" && context.month
           ? "지역 DB에서 선택한 지역·대상 월·관측 마감일을 가져왔습니다. 저장 자료로 미리보기를 만들 수 있습니다."
-          : "조건을 선택해 미리보기를 만들 수 있습니다.";
+          : targetRemoved && !context.type ? "선택했던 대상이 목록에서 변경되었습니다. 대상을 다시 선택해 주세요." : "조건을 선택해 미리보기를 만들 수 있습니다.";
       });
     }
     async function action(name, value) {
@@ -309,6 +325,7 @@
         if (name === "refresh") { await loadList(); state.message = "목록을 새로고침했습니다."; return; }
         if (name === "open") { const data = await api(`/${encodeURIComponent(value)}`); setReport(data.report || data); state.message = "저장된 리포트를 열었습니다."; return; }
         if (name === "preview") {
+          if (!state.optionsVerified) throw new Error("선택 목록을 다시 확인한 뒤 미리보기를 만들어 주세요.");
           if (!state.form.month || !state.form.targetId) throw new Error("대상 월과 대상을 선택해 주세요.");
           const body = { ...state.form, cutoffDate: state.form.cutoffDate || defaultCutoff(state.form.month) };
           const data = await api("/preview", "POST", body);

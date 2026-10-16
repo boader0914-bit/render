@@ -103,7 +103,7 @@ test("public catalogs and selectors cannot rebuild a second master beside an act
   sourceRelease.resolve();
   const [observed, metadata, options] = await Promise.all([source, catalog, selectors]);
   assert.equal(maximum, 1);
-  assert.equal(preparations, 3, "each independent settled read still checks current saved metadata");
+  assert.equal(preparations, 2, "selectors read current names and regions without preparing room quantities");
   assert.equal(observed.companies[0].companyId, "a");
   assert.equal(metadata.rawCompanies.get("a").companyId, "a");
   assert.equal(options.companies[0].id, "a");
@@ -111,59 +111,60 @@ test("public catalogs and selectors cannot rebuild a second master beside an act
 
 test("an active selector lookup and queued raw/catalog reads complete without nested scheduler deadlock", { timeout: 3000 }, async t => {
   const selectorStarted = deferred(), selectorRelease = deferred();
-  let preparations = 0;
+  let preparations = 0, catalogReads = 0;
   const order = [];
   const adapter = await sourceFixture(t, {
-    prepareCompanies: async companies => {
-      const index = preparations++;
+    listRuns: async () => {
+      const index = catalogReads++;
       order.push(`catalog-${index}`);
       if (index === 0) { selectorStarted.resolve(); await selectorRelease.promise; }
-      return companies;
+      return [];
     },
+    prepareCompanies: async companies => { preparations++; return companies; },
     recalculateCompanyObservations: async () => { order.push("raw-evidence"); return []; }
   });
   const selectors = adapter.options();
   await selectorStarted.promise;
   const source = adapter.loadSources({ month: "2026-08", cutoffDate: "2026-08-31", type: "company", targetId: "a" });
   const catalog = adapter.catalog();
-  assert.equal(preparations, 1);
+  assert.equal(preparations, 0, "a selector read does not prepare room capacities");
   selectorRelease.resolve();
   const [options, observed, metadata] = await Promise.all([selectors, source, catalog]);
   assert.deepEqual(order, ["catalog-0", "catalog-1", "raw-evidence", "catalog-2"]);
+  assert.equal(preparations, 2);
   assert.equal(options.companies[0].id, observed.companies[0].companyId);
   assert.equal(metadata.rawCompanies.get("a").companyId, "a");
 });
 
 test("simultaneous selectors coalesce, failures release their slot, and later lookups refresh rather than pin a master", { timeout: 3000 }, async t => {
   const firstStarted = deferred(), firstRelease = deferred();
-  let preparations = 0, shouldFail = false;
+  let lookups = 0, shouldFail = false;
   const adapter = await sourceFixture(t, {
-    listRuns: async () => [{ id: "r1", keyword: "포천글램핑", checkIn: "2026-08-01", checkOut: "2026-08-02" }],
-    prepareCompanies: async companies => {
-      const version = ++preparations;
+    listRuns: async () => {
+      const version = ++lookups;
       if (version === 1) { firstStarted.resolve(); await firstRelease.promise; }
-      if (shouldFail) throw new Error("mock selector preparation failure");
-      companies.a.primaryName = `목록 버전 ${version}`;
-      return companies;
-    }
+      if (shouldFail) throw new Error("mock selector lookup failure");
+      return [{ id: "r1", keyword: `목록 버전 ${version}`, checkIn: "2026-08-01", checkOut: "2026-08-02" }];
+    },
+    prepareCompanies: () => assert.fail("selector lookup must not prepare room capacities")
   });
   const first = adapter.options(), same = adapter.options();
   await firstStarted.promise;
-  assert.equal(preparations, 1);
+  assert.equal(lookups, 1);
   firstRelease.resolve();
   const [a, b] = await Promise.all([first, same]);
   assert.equal(a, b);
-  assert.match(a.companies[0].label, /목록 버전 1/);
+  assert.match(a.keywords[0].label, /목록 버전 1/);
   assert.equal(Object.hasOwn(a, "rawCompanies"), false);
   assert.equal(Object.hasOwn(a, "runs"), false);
   assert.equal(Object.hasOwn(a, "runMonths"), false);
   shouldFail = true;
-  await assert.rejects(adapter.options(), /mock selector preparation failure/);
+  await assert.rejects(adapter.options(), /mock selector lookup failure/);
   shouldFail = false;
   const refreshed = await adapter.options();
-  assert.match(refreshed.companies[0].label, /목록 버전 3/);
+  assert.match(refreshed.keywords[0].label, /목록 버전 3/);
   assert.notEqual(refreshed, a);
-  assert.equal(preparations, 3);
+  assert.equal(lookups, 3);
   assert.ok(refreshed.months.includes("2026-08"), "saved run months remain discoverable without retaining full run payloads");
 });
 

@@ -517,12 +517,16 @@ const companyCapacityRegistry = createCompanyCapacityRegistry({
   dataDir: DATA_DIR, observedCapacity: companyMaximumRoomCapacity,
   reviewedCapacity: company => company.manualCorrection?.active === false ? null : manualCorrectionLodgingBasisTotal(company.manualCorrection)
 });
+const readMonthlyReportRevision = createMonthlyReportSourceRevision({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR,
+    regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
+    tourismRegionMapFile: path.join(WEB_DIR, "data", "tourism_region_map.json"), includeContext: false });
 const monthlyReportSources = createMonthlyReportSources({
   dataDir: DATA_DIR,
   regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
-  readRevision: createMonthlyReportSourceRevision({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR,
-    regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
-    tourismRegionMapFile: path.join(WEB_DIR, "data", "tourism_region_map.json"), includeContext: false }),
+  readRevision: readMonthlyReportRevision,
+  readOptionsRevision: readMonthlyReportRevision,
+  selectorCacheVersion: crypto.createHash("sha256").update(fs.readFileSync(__filename))
+    .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_report_sources.cjs"))).digest("hex"),
   listRuns,
   prepareCompanies: companyCapacityRegistry.prepareCompanies,
   projectObservation: (row, company) => {

@@ -4,8 +4,10 @@ const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const path = require("node:path");
 const readline = require("node:readline");
+const { performance } = require("node:perf_hooks");
 const { monthlyReportKeywordMembership } = require("./monthly_reports.cjs");
 const { createSourceReadScheduler } = require("./source_read_scheduler.cjs");
+const { createMonthlyReportMaterializedCache } = require("./monthly_report_materialized_cache.cjs");
 
 const token = value => String(value || "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
 function sourceError() { return Object.assign(new Error("월간 집계에 필요한 저장자료를 읽지 못했습니다. 원본 상태를 확인해 주세요."), { statusCode: 503, code: "MONTHLY_SOURCE_UNAVAILABLE" }); }
@@ -14,15 +16,19 @@ async function readJson(file, fallback) {
   catch (error) { if (error.code === "ENOENT") return fallback; throw sourceError(); }
 }
 
-function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepareCompanies = null, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null }) {
+function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepareCompanies = null, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", now = () => new Date() }) {
   const companyFile = path.join(dataDir, "company_master", "companies.json");
   const historyFile = path.join(dataDir, "history", "observations.jsonl");
   let catalogInFlight = null, optionsInFlight = null;
   const sourceReadScheduler = createSourceReadScheduler();
-  async function readCatalog() {
+  const selectorCache = typeof readOptionsRevision === "function" ? createMonthlyReportMaterializedCache({
+    directory: path.join(dataDir, "monthly_reports", "selector_cache"), maxEntries: 1,
+    maxBytes: 8 * 1024 * 1024, maxEntryBytes: 8 * 1024 * 1024
+  }) : null;
+  async function readCatalog({ prepareCapacity = true } = {}) {
     const [master, regionMaster, runs] = await Promise.all([readJson(companyFile, { companies: {} }), readJson(regionMasterFile, { units: [] }), listRuns()]);
     if (!master.companies || typeof master.companies !== "object" || Array.isArray(master.companies)) throw sourceError();
-    if (prepareCompanies) master.companies = await prepareCompanies(master.companies, { runs });
+    if (prepareCapacity && prepareCompanies) master.companies = await prepareCompanies(master.companies, { runs });
     const units = (regionMaster.units || []).filter(unit => unit.active && unit.selectable && ["local", "broad"].includes(unit.level));
     const idIndex = new Map(units.flatMap(unit => [unit.regionKey, unit.regionId].filter(Boolean).map(key => [key, unit])));
     const aliases = units.flatMap(unit => [...new Set([unit.fullName, unit.name, ...(unit.aliases || [])].map(token).filter(Boolean))].map(alias => ({ alias, unit })));
@@ -41,7 +47,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     const rawCompanies = new Map();
     const companies = Object.values(master.companies).filter(company => company && company.companyId && !company.mergedIntoCompanyId && !company.deletedAt).map(company => {
       rawCompanies.set(company.companyId, company);
-      const override = company.manualCorrection?.regionOverride;
+      const override = company.manualCorrection?.active === false ? null : company.manualCorrection?.regionOverride;
       let region = override ? exactRegion(override) : null;
       if (!override) {
         for (const address of company.addresses || []) { region = exactRegion(typeof address === "string" ? address : address.address, true); if (region) break; }
@@ -58,7 +64,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
         regionKey: region?.regionKey || "", regionKeys: [...new Set([region?.regionKey, region?.provinceRegionKey].filter(Boolean))],
         regionLabel: region?.fullName || "지역 확인 전", keywords: Object.values(company.keywords || {}).map(item => item.keyword).filter(Boolean),
         placeIds: [...new Set((company.placeIds || []).map(value => String(value).trim()).filter(Boolean))],
-        capacity: capacityForCompany(company), capacityBasis: company._integratedCapacity || null,
+        capacity: prepareCapacity ? capacityForCompany(company) : null, capacityBasis: prepareCapacity ? company._integratedCapacity || null : null,
         capacitySource: company._integratedCapacity?.label || (company.manualCorrection ? "DB 검토값 우선 · 저장 관측 기준" : "최대 관측 객실 수") };
     });
     return { companies, rawCompanies, runs, regions: units.map(unit => ({ id: unit.regionKey, label: unit.fullName || unit.name, level: unit.level })) };
@@ -68,7 +74,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     // A public metadata lookup reconstructs the same complete master as a
     // source read. Admit it through the shared scheduler too. Internal readers
     // use readCatalog directly while they already own the scheduler slot.
-    const task = sourceReadScheduler.run(readCatalog, options);
+    const task = sourceReadScheduler.run(() => readCatalog(), options);
     catalogInFlight = task;
     try { return await task; }
     finally { if (catalogInFlight === task) catalogInFlight = null; }
@@ -89,7 +95,9 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     return malformed;
   }
   async function optionCatalog() {
-    const data = await readCatalog();
+    // Selectors do not need capacity preparation, a second history pass or a
+    // cloned full inventory. Only cold builds enter the shared raw-read queue.
+    const data = await readCatalog({ prepareCapacity: false });
     // Only these compact selector fields may survive the history scan below.
     // Do not retain a complete rawCompanies inventory merely to list months.
     return {
@@ -99,25 +107,42 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
       runMonths: data.runs.flatMap(run => [run.checkIn, run.checkOut]).map(value => String(value || "").slice(0, 7))
     };
   }
-  async function readOptions() {
+  async function readOptionData() {
     const data = await optionCatalog();
     const months = new Set();
     const addMonth = value => { const month = String(value || "").slice(0, 7); if (/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) months.add(month); };
     await readHistory(row => addMonth(row.stayDate || row.date));
     for (const month of data.runMonths) addMonth(month);
-    const today = new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10);
+    return { companies: data.companies, keywords: data.keywords, regions: data.regions, observedMonths: [...months].sort().reverse() };
+  }
+  function datedOptions(data, selectorMetadata = null) {
+    // Today and the synthetic current month are response fields, not saved
+    // evidence. A restart-free KST day/month rollover must update them too.
+    const today = new Date(new Date(now()).getTime() + 9 * 3600000).toISOString().slice(0, 10);
     const current = today.slice(0, 7);
     const previous = new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)) - 2, 1)).toISOString().slice(0, 7);
-    months.add(current);
+    const months = new Set([...data.observedMonths, current]);
     const available = [...months].sort().reverse();
     return { companies: data.companies, keywords: data.keywords,
-      regions: data.regions, months: available, defaultMonth: months.has(previous) ? previous : current, today };
+      regions: data.regions, months: available, defaultMonth: months.has(previous) ? previous : current, today,
+      ...(selectorMetadata ? { selectorCache: selectorMetadata } : {}) };
   }
   async function options(scheduling = {}) {
+    if (selectorCache) {
+      const started = performance.now();
+      // Reuse bypasses the expensive source queue. Cache misses still serialize
+      // with raw readers, and the persistent cache validates before/after reads
+      // and builds, so concurrent source edits never publish a stale list.
+      const result = await selectorCache.getOrBuild({ key: String(selectorCacheVersion),
+        readRevision: readOptionsRevision, build: () => sourceReadScheduler.run(readOptionData, scheduling) });
+      return datedOptions(result.value, { status: result.status, storage: result.storage,
+        calculatedAt: result.calculatedAt, checkedAt: new Date(now()).toISOString(),
+        timings: { ...result.timings, totalMs: performance.now() - started } });
+    }
     if (optionsInFlight) return optionsInFlight;
     // Coalesce simultaneous selector requests without retaining a stale result
     // or placing a second raw master beside an active source reconstruction.
-    const task = sourceReadScheduler.run(readOptions, scheduling);
+    const task = sourceReadScheduler.run(async () => datedOptions(await readOptionData()), scheduling);
     optionsInFlight = task;
     try { return await task; }
     finally { if (optionsInFlight === task) optionsInFlight = null; }
