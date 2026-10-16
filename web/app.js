@@ -30221,6 +30221,10 @@ function renderAdminSecurityDashboard() {
 
 function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
   if (!isAdminRole()) return;
+  if (state.activeTab === "monthlyReports") {
+    state.adminViewsDeferred = true;
+    return;
+  }
   renderAdminMemberRequestDashboard();
   renderAdminDatabaseDashboard(master);
   renderAdminRegionAnalysisDashboard(master);
@@ -37140,6 +37144,13 @@ function renderHeader() {
 }
 
 function renderAll() {
+  // Late startup responses must not rebuild hidden result/DB screens while the
+  // user is reading a monthly report. Their current state is rendered on exit.
+  if (isAdminRole() && state.activeTab === "monthlyReports") {
+    state.adminViewsDeferred = true;
+    renderHeader();
+    return;
+  }
   reconcileAnalysisRegionSelection();
   applyRoleUi();
   renderRegionAnalysisShell();
@@ -37242,6 +37253,10 @@ function setActiveTab(tab, options = {}) {
   applyRoleUi();
   renderRegionAnalysisShell();
   renderHeader();
+  if (state.adminViewsDeferred && state.activeTab !== "monthlyReports") {
+    state.adminViewsDeferred = false;
+    renderAll();
+  }
   if (state.activeTab === "rank") renderPlaceRankReplayNotice();
   closeDrawer();
   if (isAdminRole() && state.activeTab === "industryHome") renderIndustryHome();
@@ -40654,7 +40669,7 @@ async function backfillCompanyMaster(button) {
   }
 }
 
-async function loadRuns(selectLatest = false) {
+async function loadRuns(selectLatest = false, options = {}) {
   if (!isAdminRole()) {
     state.runs = [];
     state.activeRunId = null;
@@ -40695,7 +40710,7 @@ async function loadRuns(selectLatest = false) {
   }
   if (els.runSelect) els.runSelect.value = state.activeRunId;
   renderB2BSearchPanel();
-  await loadRun(state.activeRunId);
+  await loadRun(state.activeRunId, options);
 }
 
 let loadRunRequestSequence = 0;
@@ -41633,7 +41648,7 @@ async function refreshTourismDemandStrengthHistory() {
   }
 }
 
-async function loadRun(runId) {
+async function loadRun(runId, options = {}) {
   if (!runId) return;
   const requestSequence = ++loadRunRequestSequence;
   setStatus("데이터 로딩");
@@ -41646,9 +41661,13 @@ async function loadRun(runId) {
   if (isAdminRole()) {
     await loadHistoryOps();
     await loadCompanyMasterSummary();
-    await loadB2BMemberAdminOverview();
-    await loadAccountDeleteAdminOverview();
-    await loadSecurityHardeningOverview();
+    // init already awaits these same independent account reads. Normal result
+    // selection still refreshes them, without duplicating the startup batch.
+    if (!options.bootstrap) {
+      await loadB2BMemberAdminOverview();
+      await loadAccountDeleteAdminOverview();
+      await loadSecurityHardeningOverview();
+    }
   } else {
     state.historyOps = null;
     state.companyMaster = null;
@@ -43905,13 +43924,14 @@ async function init() {
   bindPwaLifecycleEvents();
   try {
     await loadSession();
+    const initialNavigationSequence = state.analysisNavigationSequence || 0;
     if (initialHistory?.role === state.session?.role) state.analysisRegionSelection = initialHistory.analysisRegionSelection || null;
     syncCollectionModeInputs();
     bindEvents();
     setDefaultDates();
     syncAppHistoryState(false);
     if (isAdminRole()) {
-      await Promise.all([loadRuns(true), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadLocationScoreOverrides(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview(), loadTourismDataStatus({ render: false }), loadSpecialDaysStatus(), loadTourismForecastStatus(), loadKosisStatus()]);
+      await Promise.all([loadRuns(true, { bootstrap: true }), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadLocationScoreOverrides(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview(), loadTourismDataStatus({ render: false }), loadSpecialDaysStatus(), loadTourismForecastStatus(), loadKosisStatus()]);
       if (!state.companyMaster || !((state.companyMaster.companies || []).length || state.companyMaster.totalCompanies || state.companyMaster.error)) {
         await loadCompanyMasterSummary();
       }
@@ -43930,7 +43950,10 @@ async function init() {
         if (!latestLoaded) renderB2BEmptyPanels();
       }
     }
-    if (initialHistory?.role === state.session?.role && !adminDbCompanyIdFromRoute()) await restoreAppHistoryState(initialHistory);
+    // Events are available before startup reads finish. A user's newer route
+    // (including popstate) always takes precedence over the initial history.
+    if (initialHistory?.role === state.session?.role && !adminDbCompanyIdFromRoute()
+      && (state.analysisNavigationSequence || 0) === initialNavigationSequence) await restoreAppHistoryState(initialHistory);
     syncAppHistoryState(false);
     renderB2BSearchPanel();
     if (isAdminRole()) {
