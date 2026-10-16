@@ -53,6 +53,9 @@ const state = {
   historyOpsCatalogLoading: false,
   historyOpsCatalogError: "",
   companyMaster: null,
+  companyMasterSummaryRead: null,
+  companyMasterBootstrapSummary: null,
+  companyMasterEtaScheduled: null,
   companyMasterFilters: {
     query: "",
     layer: "all",
@@ -19863,6 +19866,11 @@ function recrawlAutomationBatches(rows = []) {
 }
 
 async function loadRecrawlEtaEstimates(master = state.companyMaster) {
+  const snapshot = { session: state.session, master, companies: [...(master?.companies || [])] };
+  const runData = state.data;
+  const sequence = state.crawlEtaReadSequence = (state.crawlEtaReadSequence || 0) + 1;
+  const current = () => companyMasterReadIsCurrent(snapshot) && state.data === runData && state.crawlEtaReadSequence === sequence;
+  if (!current()) return;
   const entries = companyDecisionQueueEntries(master || {});
   const profile = recrawlAutomationProfile(entries);
   const rows = profile.needsExecution.slice(0, 16);
@@ -19873,7 +19881,7 @@ async function loadRecrawlEtaEstimates(master = state.companyMaster) {
     if (!unique.has(key)) unique.set(key, { ...payload, clientKey: key });
   }
   if (!unique.size) {
-    state.crawlEtaByKey = {};
+    if (current()) state.crawlEtaByKey = {};
     return;
   }
   try {
@@ -19882,13 +19890,14 @@ async function loadRecrawlEtaEstimates(master = state.companyMaster) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ items: [...unique.values()] })
     });
+    if (!current()) return;
     const next = {};
     for (const row of data.items || []) {
       if (row.clientKey && row.estimate) next[row.clientKey] = row.estimate;
     }
     state.crawlEtaByKey = next;
   } catch {
-    state.crawlEtaByKey = {};
+    if (current()) state.crawlEtaByKey = {};
   }
 }
 
@@ -27160,6 +27169,12 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   }
   state.adminViewsDeferred = true;
   window.CompanyIntegrated?.disposeWithin(els.adminDatabaseDashboard);
+  if (!Array.isArray(master.companies) && !Number.isFinite(master.totalCompanies) && state.companyMasterSummaryRead) {
+    hideAdminRegionManagement();
+    els.adminDatabaseDashboard.innerHTML = `<div class="admin-console-empty" role="status">업체 기본자료를 불러오고 있습니다.</div>`;
+    if (window.AdminTransitionTiming) finishAdminScreenTransition("waiting");
+    return;
+  }
   if (master.error) {
     hideAdminRegionManagement();
     els.adminDatabaseDashboard.innerHTML = `<div class="admin-console-empty">업체 관리 로딩 실패: ${escapeHtml(master.error)}</div>`;
@@ -39244,26 +39259,111 @@ async function loadHistoryOps(options = {}) {
   }
 }
 
+function companyMasterReadIsCurrent(read) {
+  return isAdminRole() && state.session?.authenticated !== false && state.session === read.session && state.companyMaster === read.master
+    && (read.sequence === undefined || state.companyMasterSummarySequence === read.sequence)
+    && (read.master?.companies || []).length === read.companies.length
+    && read.companies.every((company, index) => read.master.companies[index] === company);
+}
+
+function renderCompanyMasterPriorityView() {
+  if (!isAdminRole()) return;
+  state.adminViewsDeferred = true;
+  if (state.activeTab !== "admin") return;
+  if (state.adminPanelSection === "overview") renderAdminConsoleDashboard();
+  else if (state.adminPanelSection === "database") renderAdminDatabaseDashboard();
+}
+
+function waitForCompanyMasterPaint() {
+  if (typeof window.requestAnimationFrame !== "function" || document.hidden) return Promise.resolve();
+  // Let the real summary reach the screen before parsing a large saved result.
+  // The timeout also lets startup continue if frames stop in a background tab.
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(resolve, 100);
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      window.clearTimeout(timer);
+      resolve();
+    }));
+  });
+}
+
+function scheduleCompanyMasterEta(master) {
+  if (!isAdminRole() || !master || master.error) return;
+  const previous = state.companyMasterEtaScheduled;
+  if (previous?.master === master && previous.session === state.session) return;
+  const scheduled = { session: state.session, master, companies: [...(master.companies || [])] };
+  state.companyMasterEtaScheduled = scheduled;
+  void waitForCompanyMasterPaint().then(async () => {
+    if (state.companyMasterEtaScheduled !== scheduled) return;
+    state.companyMasterEtaScheduled = null;
+    if (!companyMasterReadIsCurrent(scheduled) || !state.data || state.activeTab === "monthlyReports") return;
+    // Estimating a future collection is local analysis, not a collection request.
+    const runData = state.data;
+    await loadRecrawlEtaEstimates(master);
+    if (!companyMasterReadIsCurrent(scheduled) || state.data !== runData) return;
+    // Only views displaying estimates need another paint; home and DB list do not.
+    if (state.activeTab === "decisionQueue") renderDecisionQueue();
+    else if (state.activeTab === "admin" && state.adminPanelSection === "database" && state.adminDbViewMode === "review") renderAdminDatabaseDashboard();
+    else if (state.activeTab === "admin" && !["overview", "database"].includes(state.adminPanelSection)) renderCompanyMasterPanel();
+  }).catch(() => {});
+}
+
 async function loadCompanyMasterSummary(options = {}) {
-  if (!isAdminRole()) {
+  if (!isAdminRole() || state.session?.authenticated === false) {
     state.companyMaster = null;
     state.crawlEtaByKey = {};
-    return;
-  }
-  try {
-    const data = await fetchJson("/api/company-master/summary");
-    if (typeof options.isCurrent === "function" && !options.isCurrent()) return false;
-    state.companyMaster = data;
-    if (!(options.bootstrap && state.activeTab === "monthlyReports")) await loadRecrawlEtaEstimates(state.companyMaster);
-    return true;
-  } catch (error) {
-    if (typeof options.isCurrent === "function" && !options.isCurrent()) return false;
-    if (!options.preserveOnError || !state.companyMaster) {
-      state.companyMaster = { error: error.message, totalCompanies: 0, duplicateCandidates: [] };
-      state.crawlEtaByKey = {};
-    }
+    state.companyMasterBootstrapSummary = null;
     return false;
   }
+  const session = state.session;
+  const current = () => isAdminRole() && state.session?.authenticated !== false && state.session === session
+    && (typeof options.isCurrent !== "function" || options.isCurrent());
+  const cached = state.companyMasterBootstrapSummary;
+  if (options.bootstrap && cached?.session === session && cached.data === state.companyMaster && !cached.data.error) {
+    if (!current()) return false;
+    scheduleCompanyMasterEta(cached.data);
+    return true;
+  }
+  let read = state.companyMasterSummaryRead;
+  if (!read || read.session !== session || options.force) {
+    const sequence = state.companyMasterSummarySequence = (state.companyMasterSummarySequence || 0) + 1;
+    read = { session, sequence, master: state.companyMaster, companies: [...(state.companyMaster?.companies || [])], applied: false };
+    // Share transport only. Each caller still checks its own navigation guard.
+    read.promise = fetchJson("/api/company-master/summary").then(data => ({ data }), error => ({ error })).finally(() => {
+      if (state.companyMasterSummaryRead === read) state.companyMasterSummaryRead = null;
+    });
+    state.companyMasterSummaryRead = read;
+  }
+  const { data, error } = await read.promise;
+  if (!current()) return false;
+  if (read.applied) {
+    if (state.companyMaster !== data) return false;
+  } else {
+    // A correction or a detail merge received after this GET takes precedence.
+    if (!companyMasterReadIsCurrent(read)) return false;
+    if (error) {
+      if (!options.preserveOnError || !state.companyMaster) {
+        state.companyMaster = { error: error.message, totalCompanies: 0, duplicateCandidates: [] };
+        state.crawlEtaByKey = {};
+      }
+      if (options.bootstrap) renderCompanyMasterPriorityView();
+      return false;
+    }
+    state.companyMaster = data;
+    read.applied = true;
+  }
+  if (options.bootstrap) {
+    if (!read.priorityRendered) {
+      renderCompanyMasterPriorityView();
+      read.priorityRendered = true;
+    }
+    state.companyMasterBootstrapSummary = { session, data };
+    state.adminBootstrapSummaryPending = false;
+    scheduleCompanyMasterEta(data);
+  } else {
+    await loadRecrawlEtaEstimates(data);
+  }
+  return current();
 }
 
 async function loadAdminDbCompanyDetail(companyId = "", options = {}) {
@@ -41875,7 +41975,7 @@ async function loadRun(runId, options = {}) {
     if (!current()) return null;
     if (options.bootstrap && historyLoaded === false) state.adminBootstrapReadError = "수집 이력을 확인하지 못했습니다. 다시 조회해 주세요.";
     if (deferBootstrap()) return null;
-    const summaryLoaded = await loadCompanyMasterSummary(options.bootstrap ? { preserveOnError: true, isCurrent: current, bootstrap: true } : {});
+    const summaryLoaded = await loadCompanyMasterSummary(options.bootstrap ? { preserveOnError: true, isCurrent: current, bootstrap: true } : { force: true, isCurrent: current });
     if (!current()) return null;
     if (options.bootstrap && summaryLoaded === false) state.adminBootstrapReadError = "업체 기본자료를 확인하지 못했습니다. 다시 조회해 주세요.";
     if (options.bootstrap && summaryLoaded !== false) state.adminBootstrapSummaryPending = false;
@@ -44144,6 +44244,7 @@ async function init() {
   bindPwaLifecycleEvents();
   try {
     await loadSession();
+    const initialSession = state.session;
     const initialNavigationSequence = state.analysisNavigationSequence || 0;
     if (initialHistory?.role === state.session?.role) state.analysisRegionSelection = initialHistory.analysisRegionSelection || null;
     syncCollectionModeInputs();
@@ -44151,10 +44252,18 @@ async function init() {
     setDefaultDates();
     syncAppHistoryState(false);
     if (isAdminRole()) {
+      // The DB is independent of the latest run, history and ETA. Read it before
+      // the larger startup batch, and paint it without waiting for those reads.
+      if (state.activeTab === "monthlyReports") state.adminBootstrapSummaryPending = true;
+      else {
+        await loadCompanyMasterSummary({ bootstrap: true, preserveOnError: true });
+        await waitForCompanyMasterPaint();
+      }
+      if (!isAdminRole() || state.session !== initialSession || state.session?.authenticated === false) return;
       await Promise.all([loadRuns(true, { bootstrap: true }), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadLocationScoreOverrides(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview(), loadTourismDataStatus({ render: false }), loadSpecialDaysStatus(), loadTourismForecastStatus(), loadKosisStatus()]);
-      if (!state.companyMaster || !((state.companyMaster.companies || []).length || state.companyMaster.totalCompanies || state.companyMaster.error)) {
+      if (!state.companyMaster) {
         if (state.activeTab === "monthlyReports") state.adminBootstrapSummaryPending = true;
-        else await loadCompanyMasterSummary();
+        else await loadCompanyMasterSummary({ bootstrap: true, preserveOnError: true });
       }
       renderAdminConsoleDashboard();
       if (state.activeTab === "demand") renderDemand();

@@ -61,6 +61,7 @@ function fixture({ role = "admin", historyRole = role, historyTab = "demand", ad
     },
     loadRun: async runId => { calls.loaders.push(`loadRun:${runId}`); state.activeRunId = runId; }
   };
+  context.waitForCompanyMasterPaint = async () => {};
   const loaders = ["loadRuns", "loadLocationDictionary", "loadTrafficState", "loadLocationCardRequests", "loadLocationScoreOverrides",
     "loadB2BMemberAdminOverview", "loadAccountDeleteAdminOverview", "loadSecurityHardeningOverview", "loadTourismDataStatus",
     "loadSpecialDaysStatus", "loadTourismForecastStatus", "loadKosisStatus", "loadCompanyMasterSummary", "loadMemberSearchHistory", "loadB2BInterestLodgesFromServer"];
@@ -98,6 +99,37 @@ test("late initial history cannot replace a user's monthly report navigation or 
   assert.ok(!f.calls.loaders.includes("loadRun:prior-run"), "old history must not trigger its unrelated run fetch");
   assert.equal(f.calls.historyWrites.at(-1).tab, "monthlyReports");
   assert.deepEqual(f.calls.status, []);
+});
+
+test("login publishes priority company data and yields a frame before the slow startup batch begins", async () => {
+  const f = fixture({ companyMaster: null, historyTab: "admin" });
+  const summary = deferred(), summaryEntered = deferred(), painted = deferred(), paintEntered = deferred();
+  const saved = { totalCompanies: 535, companies: [{ companyId: "saved-company" }] };
+  f.context.loadCompanyMasterSummary = async options => {
+    assert.equal(options.bootstrap, true); assert.equal(options.preserveOnError, true);
+    summaryEntered.resolve(); await summary.promise;
+    f.state.companyMaster = saved;
+    return true;
+  };
+  f.context.waitForCompanyMasterPaint = async () => { paintEntered.resolve(); await painted.promise; };
+  const pending = f.api.init(); await summaryEntered.promise;
+  assert.ok(!f.calls.loaders.includes("loadRuns"), "saved-result loading cannot delay the first company summary");
+  summary.resolve(); await paintEntered.promise;
+  assert.equal(f.state.companyMaster, saved);
+  assert.ok(!f.calls.loaders.includes("loadRuns"), "large result parsing waits for the priority summary's display opportunity");
+  painted.resolve(); await f.entered.promise;
+  assert.equal(f.state.companyMaster.totalCompanies, 535);
+  f.gate.resolve(); await pending;
+});
+
+test("switching away from the administrator during the priority read cannot admit administrator startup reads", async () => {
+  const f = fixture({ companyMaster: null }), gate = deferred(), entered = deferred();
+  f.context.loadCompanyMasterSummary = async () => { entered.resolve(); await gate.promise; return false; };
+  const pending = f.api.init(); await entered.promise;
+  f.state.session = { role: "b2b" }; f.state.activeTab = "report";
+  gate.resolve(); await pending;
+  assert.ok(!f.calls.loaders.includes("loadRuns"));
+  assert.ok(!f.calls.loaders.includes("loadLocationDictionary"));
 });
 
 test("unchanged startup still restores the valid saved view, region and run", async () => {
@@ -287,7 +319,10 @@ function runFixture({ activeTab = "admin", realMetadata = false } = {}) {
     "renderAdminConsoleDashboard", "renderCompanyMasterPanel", "renderDownloads", "syncYeogiManualInterface", "renderLocationDictionary", "renderRegionComparison", "renderRegionSources", "setAnalysisRegion"]) context[name] = () => {};
   vm.createContext(context);
   const names = ["loadRuns", "loadRun", "resumeAdminBootstrapReads", "setActiveTab", "restoreAppHistoryState"];
-  if (realMetadata) names.push("loadHistoryOps", "loadCompanyMasterSummary");
+  if (realMetadata) {
+    names.push("loadHistoryOps", "loadCompanyMasterSummary", "companyMasterReadIsCurrent", "renderCompanyMasterPriorityView");
+    context.scheduleCompanyMasterEta = () => { calls.push("eta-scheduled"); };
+  }
   const api = vm.runInContext(names.map(functionDeclaration).join("\n") + `\n({${names.join(",")}})`, context);
   return { state, requests, calls, statuses, hooks, context, api };
 }
@@ -403,7 +438,8 @@ test("an empty-run startup defers and separately resumes the missing company sum
   const pending = init.api.init(); await init.entered.promise;
   init.context.setActiveTab("monthlyReports"); init.gate.resolve(); await pending;
   assert.equal(init.state.adminBootstrapSummaryPending, true);
-  assert.ok(!init.calls.loaders.includes("loadCompanyMasterSummary"));
+  assert.equal(init.calls.loaders.filter(name => name === "loadCompanyMasterSummary").length, 1,
+    "the priority summary was already admitted before entering reports; the post-batch fallback must stay deferred");
   const f = runFixture({ activeTab: "monthlyReports", realMetadata: true });
   f.state.companyMaster = null;
   f.state.adminBootstrapSummaryPending = true;
