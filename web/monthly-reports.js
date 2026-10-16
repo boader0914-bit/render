@@ -215,12 +215,23 @@
     return data;
   }
   function createController(container, api = request) {
-    const state = { options: null, reports: [], filter: "all", form: { month: "", type: "company", targetId: "", cutoffDate: "" }, search: "", preview: null, previewRequest: null, previewToken: null, report: null, title: "", notes: "", acknowledged: false, busy: "", message: "", error: "" };
+    const state = { options: null, reports: [], filter: "all", form: { month: "", type: "company", targetId: "", cutoffDate: "" }, search: "", preview: null, previewRequest: null, previewToken: null, generation: null, report: null, title: "", notes: "", acknowledged: false, busy: "", busyStartedAt: 0, message: "", error: "" };
     let openRevision = 0;
     const idleWaiters = [];
     const optionsForType = () => state.options?.[{ company: "companies", keyword: "keywords", region: "regions" }[state.form.type]] || [];
-    const setReport = (report) => { state.report = report; state.preview = null; state.previewRequest = null; state.previewToken = null; state.title = report.title || ""; state.notes = report.notes || ""; state.acknowledged = false; };
-    const invalidatePreview = () => { state.preview = null; state.previewRequest = null; state.previewToken = null; };
+    const setReport = (report) => { state.report = report; state.preview = null; state.previewRequest = null; state.previewToken = null; state.generation = null; state.title = report.title || ""; state.notes = report.notes || ""; state.acknowledged = false; };
+    const invalidatePreview = () => { state.preview = null; state.previewRequest = null; state.previewToken = null; state.generation = null; };
+    const busyText = () => {
+      const seconds = Math.max(0, Math.floor((Date.now() - state.busyStartedAt) / 1000));
+      return `${state.busy}${seconds ? ` · ${seconds}초 경과` : ""}${seconds >= 10 ? " · 처음 계산하거나 자료가 바뀐 경우 더 걸릴 수 있습니다. 중복 요청 없이 기다려 주세요." : ""}`;
+    };
+    function generationNote() {
+      if (!state.generation || state.report || !state.preview) return "";
+      const g = state.generation, label = { reused: "저장 집계 재사용", coalesced: "같은 조건 집계 사용", calculated: "저장 자료로 새 집계" }[g.cacheStatus];
+      if (!label) return "";
+      const seconds = Number(g.timings?.totalMs) / 1000;
+      return `<p class="mr-generation">${escapeHtml(label)}${Number.isFinite(seconds) ? ` · 자료 확인 ${seconds < .1 ? "0.1초 미만" : `${seconds.toFixed(1)}초`}` : ""}${g.calculatedAt ? ` · 집계 ${escapeHtml(timeLabel(g.calculatedAt))} (한국시간)` : ""}${g.storage === "failed" || g.storage === "too_large" ? " · 재사용용 저장이 되지 않아 다음 요청은 다시 계산합니다." : ""}</p>`;
+    }
     function targetOptions() {
       const query = state.search.toLocaleLowerCase();
       return '<option value="">대상을 선택하세요</option>' + optionsForType().filter((option) => option.id === state.form.targetId || !query || `${option.label} ${option.id}`.toLocaleLowerCase().includes(query)).map((option) => `<option value="${escapeHtml(option.id)}"${option.id === state.form.targetId ? " selected" : ""}>${escapeHtml(option.label)}</option>`).join("");
@@ -231,20 +242,24 @@
       const busy = state.busy ? " disabled" : "";
       const editable = report && ["draft", "review"].includes(report.status);
       container.innerHTML = `<div class="monthly-reports" aria-busy="${Boolean(state.busy)}"><header class="mr-intro"><div><p class="mr-eyebrow">MONTHLY REPORTS</p><h2>자료를 확인하고, 월간 리포트로 남기세요</h2><p>업체·키워드·지역별 예약 흐름과 추정 매출을 저장된 자료로 정리합니다.</p></div><span class="mr-private-label">관리자 전용</span></header>
-        <div class="mr-notice" role="status" aria-live="polite">${escapeHtml(state.busy || state.message)}</div>${state.error ? `<div class="mr-error" role="alert">${escapeHtml(state.error)}</div>` : ""}
+        <div class="mr-notice${state.busy ? " mr-notice-busy" : ""}" role="status" aria-live="polite">${state.busy ? `<span class="mr-loading" aria-hidden="true"></span><span data-mr-progress-text>${escapeHtml(busyText())}</span>` : escapeHtml(state.message)}</div>${state.error ? `<div class="mr-error" role="alert">${escapeHtml(state.error)}</div>` : ""}
         <section class="mr-card mr-create" aria-label="월간 리포트 생성 조건"><div class="mr-section-title"><h3>새 리포트</h3><span class="mr-muted">① 조건 선택 → ② 미리보기 → ③ 초안 저장</span></div><form data-mr-form><div class="mr-form-grid"><label>대상 월<input type="month" name="month" value="${escapeHtml(state.form.month)}" max="${today().slice(0, 7)}" required${busy}></label><label>유형<select name="type"${busy}>${Object.entries(TYPES).map(([key, label]) => `<option value="${key}"${key === state.form.type ? " selected" : ""}>${label}</option>`).join("")}</select></label><label class="mr-target">대상<select name="targetId" required${busy}>${targetOptions()}</select></label><label>관측 마감일<input type="date" name="cutoffDate" value="${escapeHtml(state.form.cutoffDate)}" max="${today()}"${busy}><small>비우면 해당 월 말일, 진행 중인 달은 오늘</small></label></div><div class="mr-form-actions"><label class="mr-search-label"><span class="mr-sr-only">대상 검색</span><input type="search" name="targetSearch" value="${escapeHtml(state.search)}" placeholder="업체명·키워드·지역 검색" autocomplete="off"${busy}></label><button class="primary-button" type="submit"${busy || !state.options ? " disabled" : ""}>미리보기 만들기</button></div></form></section>
         <div class="mr-workspace"><aside class="mr-card mr-library" aria-label="저장 리포트"><div class="mr-section-title"><h3>저장 리포트 <span>${number(state.reports.length)}</span></h3><button type="button" class="mr-text-button" data-mr-action="refresh"${busy}>새로고침</button></div><div class="mr-filters" role="group" aria-label="발행 상태 필터">${Object.entries({ all: "전체", ...STATUSES }).map(([key, label]) => `<button type="button" data-mr-action="filter" data-filter="${key}" aria-pressed="${state.filter === key}"${busy}>${label}</button>`).join("")}</div>${renderList(state.reports, state.filter, report?.id)}</aside>
         <section class="mr-card mr-detail" aria-label="리포트 미리보기와 상세">${snapshot ? `<div class="mr-detail-heading"><div><p class="mr-eyebrow">${report ? `VERSION ${number(report.version || 1)} · 수정 ${number(report.revision)}` : "PREVIEW · 아직 저장하지 않았습니다"}</p><h3>${escapeHtml(report?.title || reportTitle(state.previewRequest || snapshot.request, snapshot.target))}</h3><p>${escapeHtml(snapshot.target?.label || report?.targetId)} · ${escapeHtml(TYPES[report?.type || snapshot.request?.type] || "")}</p></div>${report ? statusTag(report.status) : '<span class="mr-status">미리보기</span>'}</div>
-        ${report ? `<p class="mr-dates">작성 ${escapeHtml(timeLabel(report.createdAt))} · 수정 ${escapeHtml(timeLabel(report.updatedAt))}${report.publishedAt ? ` · 발행 ${escapeHtml(timeLabel(report.publishedAt))}` : ""} (한국시간)</p>` : ""}
+        ${report ? `<p class="mr-dates">작성 ${escapeHtml(timeLabel(report.createdAt))} · 수정 ${escapeHtml(timeLabel(report.updatedAt))}${report.publishedAt ? ` · 발행 ${escapeHtml(timeLabel(report.publishedAt))}` : ""} (한국시간)</p>` : generationNote()}
         ${editable || !report ? `<div class="mr-editor"><label>리포트 제목<input name="title" value="${escapeHtml(state.title)}" maxlength="200"${busy}></label><label>검토 메모<textarea name="notes" rows="3" maxlength="10000" placeholder="자료의 해석과 확인할 내용을 남기세요."${busy}>${escapeHtml(state.notes)}</textarea></label></div>` : report.notes ? `<p class="mr-notes">${escapeHtml(report.notes)}</p>` : ""}
         <div class="mr-lifecycle">${!report ? `<button class="primary-button" type="button" data-mr-action="save"${busy}>초안으로 저장</button><p>저장된 수치와 근거는 고정되며, 발행은 검토 단계에서 진행합니다.</p>` : editable ? `<div class="mr-button-row"><button class="secondary-button" type="button" data-mr-action="update"${busy}>제목·메모 저장</button><button class="secondary-button" type="button" data-mr-action="rebuild"${busy}>저장 자료로 다시 집계</button>${report.status === "draft" ? `<button class="primary-button" type="button" data-mr-action="review"${busy}>검토 단계로 이동</button>` : `<button class="secondary-button" type="button" data-mr-action="draft"${busy}>초안으로 돌리기</button>`}</div>${report.status === "review" ? `<div class="mr-publish"><label><input type="checkbox" name="qualityAck"${state.acknowledged ? " checked" : ""}${busy}>자료 충족률, 누락·제외 경고와 추정 매출 기준을 확인했습니다.</label><button class="primary-button" type="button" data-mr-action="publish"${busy || !canPublish(report, state.acknowledged) ? " disabled" : ""}>리포트 발행</button><small>현재 제목·메모와 저장된 수치를 발행합니다. 외부에 자동 전송되지 않습니다.</small></div>` : '<p>수치와 근거는 저장 당시 기준입니다. 다시 집계하면 초안 상태에서 최신 저장 자료를 검토하게 됩니다. 기존 발행본은 보존됩니다.</p>'}` : `<div class="mr-button-row"><a class="primary-button" href="/api/monthly-reports/${encodeURIComponent(report.id)}/pdf" download>PDF 다운로드</a><button class="secondary-button" type="button" data-mr-action="revise"${busy}>새 수정본 만들기</button></div><p>발행본은 수정할 수 없습니다. 새 수정본을 만들면 기존 발행본이 보존됩니다.</p>`}</div>${renderSnapshot(snapshot)}` : `<div class="mr-detail-empty"><span aria-hidden="true">▤</span><h3>한 달의 관측을 하나의 기록으로</h3><p>위에서 조건을 선택해 미리보기를 만들거나<br>왼쪽에서 저장한 리포트를 열어 보세요.</p><div class="mr-empty-legend"><span class="mr-public">● 공개 예약</span><span class="mr-phone">● 방막기 추정</span></div></div>`}</section></div></div>`;
     }
     async function loadList() { const data = await api(""); state.reports = Array.isArray(data) ? data : data.reports || []; }
     async function execute(label, operation) {
       if (state.busy) return false;
-      state.busy = label; state.error = ""; state.message = ""; render();
+      state.busy = label; state.busyStartedAt = Date.now(); state.error = ""; state.message = ""; render();
+      const ticker = typeof root.setInterval === "function" ? root.setInterval(() => {
+        const notice = container.querySelector?.("[data-mr-progress-text]");
+        if (notice && state.busy) notice.textContent = busyText();
+      }, 1000) : null;
       try { await operation(); return true; } catch (error) { state.error = String(error.message || "리포트를 처리하지 못했습니다."); return false; }
-      finally { state.busy = ""; render(); for (const resolve of idleWaiters.splice(0)) resolve(); }
+      finally { if (ticker !== null) root.clearInterval(ticker); state.busy = ""; state.busyStartedAt = 0; render(); for (const resolve of idleWaiters.splice(0)) resolve(); }
     }
     async function open(context = {}) {
       const revision = ++openRevision;
@@ -298,6 +313,7 @@
           const body = { ...state.form, cutoffDate: state.form.cutoffDate || defaultCutoff(state.form.month) };
           const data = await api("/preview", "POST", body);
           state.report = null; state.preview = data.snapshot || data; state.previewRequest = body; state.previewToken = data.previewToken || null;
+          state.generation = data.generation || null;
           state.title = reportTitle(body, state.preview.target); state.notes = ""; state.acknowledged = false;
           state.message = "미리보기를 만들었습니다. 수치와 자료 품질을 확인한 뒤 초안으로 저장하세요."; return;
         }

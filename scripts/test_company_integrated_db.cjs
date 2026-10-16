@@ -172,6 +172,23 @@ async function testReadPriority(root) {
   } finally { release(); await service.stop(); }
 }
 
+async function testSourceReadPriority(root) {
+  const reads = [], company = { companyId: ID, primaryName: "모의 업체", capacity: 16 };
+  const service = createCompanyIntegratedDb({ dataDir: path.join(root, "source-read-priority"), autoStart: false,
+    now: () => new Date("2026-10-10T00:00:00Z"),
+    catalog: async () => ({ companies: [company], runs: [] }), listTargets: async () => [{ companyId: ID, months: ["2026-09"] }],
+    loadSources: async (request, options) => { reads.push({ month: request.month, priority: options.priority }); return { companies: [company], observations: [], runs: [] }; }
+  });
+  try {
+    await service.queueCompany(ID, { months: ["2026-09"], reason: "bootstrap" }); await service.drain();
+    assert.deepEqual(reads, [{ month: "2026-09", priority: "background" }, { month: "2026-08", priority: "background" }], "durable materialization marks both current and comparison source reads as maintenance");
+    reads.length = 0;
+    const view = await service.get(ID, { month: "2026-09", cutoffDate: "2026-09-01" });
+    assert.deepEqual(reads, [{ month: "2026-09", priority: "foreground" }, { month: "2026-08", priority: "foreground" }], "a requested custom cutoff does not wait behind queued maintenance");
+    assert.equal(view.snapshot.summary.lodging.sold, null, "source scheduling cannot replace missing observations with zero");
+  } finally { await service.stop(); }
+}
+
 async function main() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "company-integrated-db-"));
   const companyDirectory = path.join(root, "company_integrated", crypto.createHash("sha256").update(ID).digest("hex"));
@@ -341,6 +358,7 @@ async function main() {
     assert.equal((await currentRestricted.get(ID, { month: "2026-10", knownMonthsOnly: true })).status, "refreshing", "newly registered company can initialize current month without observations");
     await currentRestricted.drain(); await currentRestricted.stop();
     await testReadPriority(root);
+    await testSourceReadPriority(root);
     testMetadataRetention(root);
     console.log(`company integrated DB tests passed (${reads} source reads)`);
   } finally {

@@ -5,6 +5,8 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { buildMonthlyReportInsights } = require("./monthly_report_insights.cjs");
 const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./monthly_report_comparison.cjs");
+const { performance } = require("node:perf_hooks");
+const { createMonthlyReportMaterializedCache } = require("./monthly_report_materialized_cache.cjs");
 
 const SCHEMA_VERSION = 1;
 const PREVIEW_TTL_MS = 15 * 60 * 1000;
@@ -496,12 +498,15 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}) 
   };
 }
 
-function createMonthlyReportService({ dataDir, loadSources, readOutlookEvaluations = null, now = () => new Date() } = {}) {
+function createMonthlyReportService({ dataDir, loadSources, readSourceRevision = null, readReportContext = null,
+  readOutlookEvaluations = null, calculationVersion = "monthly-base-v1", now = () => new Date() } = {}) {
   if (typeof dataDir !== "string" || !dataDir || typeof loadSources !== "function") throw new TypeError("dataDir and loadSources are required");
   const directory = path.resolve(dataDir);
   const previews = new Map();
   let previewBytes = 0;
   let buildQueue = Promise.resolve();
+  const materialized = typeof readSourceRevision === "function"
+    ? createMonthlyReportMaterializedCache({ directory: path.join(directory, "calculations") }) : null;
   const current = () => {
     const value = typeof now === "function" ? now() : now;
     const date = value instanceof Date ? value : new Date(value);
@@ -562,30 +567,71 @@ function createMonthlyReportService({ dataDir, loadSources, readOutlookEvaluatio
     if (!Number.isInteger(revision) || revision < 1) throw fail("revision_required", "저장된 보고서의 revision이 필요합니다.");
     if (report.revision !== revision) throw fail("revision_conflict", "다른 변경이 먼저 저장되었습니다. 보고서를 다시 열어 주세요.", 409);
   };
-  const build = (request, generatedAt) => {
+  const buildBase = (request, generatedAt) => {
+    const queuedAt = performance.now();
     const task = buildQueue.then(async () => {
-      const source = await loadSources(clone(request));
+      const timings = { buildQueueWaitMs: performance.now() - queuedAt };
+      let phase = performance.now();
+      const source = await loadSources(clone(request), { priority: "foreground", includeContext: typeof readReportContext !== "function" });
+      timings.currentSourceMs = performance.now() - phase; phase = performance.now();
       const snapshot = buildSnapshot(request, source, generatedAt);
+      timings.currentAggregateMs = performance.now() - phase;
+      const previousRequest = previousMonthlyReportRequest(request);
+      phase = performance.now();
+      const previousSource = await loadSources(clone(previousRequest), { priority: "foreground", includeContext: typeof readReportContext !== "function" });
+      timings.previousSourceMs = performance.now() - phase; phase = performance.now();
+      const previous = buildSnapshot(previousRequest, previousSource, generatedAt);
+      timings.previousAggregateMs = performance.now() - phase; phase = performance.now();
+      snapshot.comparison = buildMonthlyComparison(snapshot, previous);
+      timings.comparisonMs = performance.now() - phase;
+      // Regional background is refreshed from local saved data below on every
+      // preview. It must not pin freshness labels to a materialized lodging sum.
+      if (typeof readReportContext === "function") snapshot.context = null;
+      return { snapshot, regions: clone(source?.regions || []), timings };
+    });
+    buildQueue = task.then(() => undefined, () => undefined);
+    return task;
+  };
+  const build = async (request, generatedAt) => {
+      const started = performance.now(), previousRequest = previousMonthlyReportRequest(request);
+      const key = JSON.stringify({ calculationVersion, request, previousRequest,
+        monthClosed: kstDate(generatedAt) > calendar(request.month).end,
+        previousMonthClosed: kstDate(generatedAt) > calendar(previousRequest.month).end });
+      const result = materialized ? await materialized.getOrBuild({ key,
+        readRevision: () => readSourceRevision(clone(request)), build: () => buildBase(request, generatedAt) })
+        : { value: await buildBase(request, generatedAt), status: "uncached", storage: "disabled", calculatedAt: generatedAt, timings: {} };
+      const snapshot = result.value.snapshot;
+      snapshot.generatedAt = generatedAt;
+      const roster = { companies: snapshot.companies.map(({ companyId, regionKey, regionLabel }) => ({ companyId, regionKey, regionLabel })),
+        regions: clone(result.value.regions) };
+      const timings = { ...result.timings, ...(result.status === "calculated" || result.status === "uncached" ? result.value.timings : {}) };
+      if (typeof readReportContext === "function") {
+        const phase = performance.now();
+        try {
+          const context = await readReportContext(clone(request), clone(roster));
+          if (context?.networkAttempted !== false) throw fail("MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY", "리포트 지역 배경은 저장된 자료만 사용할 수 있습니다.", 503);
+          snapshot.context = clone(context);
+        } catch (error) {
+          if (error.code === "MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY" || error.message === "MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY") throw error;
+          snapshot.context = { sources: [], warnings: ["저장된 지역 보조지표를 불러오지 못했습니다."], networkAttempted: false };
+        }
+        timings.contextMs = performance.now() - phase;
+      }
       // Attach follow-up evaluation only to a report being built, never to the
       // shared source/context readers used by industry, company DB or Insight.
       // The selected report roster, rather than lifetime keyword membership,
       // determines which actual company locations can supply regional context.
       if (typeof readOutlookEvaluations === "function") {
-        const evaluation = await readOutlookEvaluations(clone(request), {
-          companies: snapshot.companies.map(({ companyId, regionKey, regionLabel }) => ({ companyId, regionKey, regionLabel })),
-          regions: clone(source?.regions || [])
-        }, { asOfAt: generatedAt });
+        const phase = performance.now();
+        const evaluation = await readOutlookEvaluations(clone(request), clone(roster), { asOfAt: generatedAt });
         if (evaluation?.networkAttempted !== false) throw fail("MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY", "리포트의 전망 검증은 저장된 자료만 사용할 수 있습니다.", 503);
         snapshot.context = { ...(snapshot.context || { sources: [], warnings: [], networkAttempted: false }), outlookEvaluations: clone(evaluation) };
         snapshot.definitions.regionalOutlookEvaluation = "리포트 대상월을 예측한 발행 전망만 작성 시점에 저장된 사후 검증과 연결합니다. 검증자료 확인 시점은 예약 관측 마감일과 별도이며, 지역별 결과를 합산하거나 미확인을 0으로 바꾸지 않습니다. 발행 후에는 수정본에서만 새 검증을 반영합니다.";
+        timings.evaluationMs = performance.now() - phase;
       }
-      const previousRequest = previousMonthlyReportRequest(request);
-      const previous = buildSnapshot(previousRequest, await loadSources(clone(previousRequest)), generatedAt);
-      snapshot.comparison = buildMonthlyComparison(snapshot, previous);
-      return snapshot;
-    });
-    buildQueue = task.then(() => undefined, () => undefined);
-    return task;
+      timings.totalMs = performance.now() - started;
+      return { snapshot, generation: { cacheStatus: result.status, storage: result.storage, calculatedAt: result.calculatedAt,
+        timings: Object.fromEntries(Object.entries(timings).map(([name, value]) => [name, Math.round(value * 10) / 10])) } };
   };
   const removePreview = token => {
     const entry = previews.get(token);
@@ -595,7 +641,7 @@ function createMonthlyReportService({ dataDir, loadSources, readOutlookEvaluatio
   const preview = async input => {
     const date = current();
     const request = requestInput(input, date);
-    const snapshot = await build(request, date.toISOString());
+    const { snapshot, generation } = await build(request, date.toISOString());
     const previewToken = crypto.randomUUID();
     for (const [token, entry] of previews) if (entry.expires <= date.getTime()) removePreview(token);
     const serialized = JSON.stringify(snapshot);
@@ -605,7 +651,7 @@ function createMonthlyReportService({ dataDir, loadSources, readOutlookEvaluatio
     while (previews.size && (previews.size >= 10 || previewBytes + bytes > PREVIEW_CACHE_BYTES)) removePreview(previews.keys().next().value);
     previews.set(previewToken, { expires: current().getTime() + PREVIEW_TTL_MS, request: JSON.stringify(request), serialized, bytes });
     previewBytes += bytes;
-    return { ...snapshot, previewToken };
+    return { ...snapshot, previewToken, generation };
   };
   const create = async input => {
     const date = current();
@@ -616,7 +662,7 @@ function createMonthlyReportService({ dataDir, loadSources, readOutlookEvaluatio
       if (!entry || entry.expires <= date.getTime()) throw fail("preview_expired", "미리보기가 만료되었습니다. 다시 확인한 뒤 초안을 저장해 주세요.", 409);
       if (entry.request !== JSON.stringify(request)) throw fail("preview_mismatch", "미리보기 조건과 저장 조건이 다릅니다. 다시 미리보기해 주세요.", 409);
       snapshot = JSON.parse(entry.serialized);
-    } else snapshot = await build(request, date.toISOString());
+    } else snapshot = (await build(request, date.toISOString())).snapshot;
     const id = `mr_${crypto.randomUUID()}`;
     const report = { schemaVersion: SCHEMA_VERSION, id, revision: 1, status: "draft", ...request,
       title: input.title === undefined ? `${request.month.slice(0, 4)}년 ${Number(request.month.slice(5))}월 ${snapshot.target.label} ${request.type === "keyword" ? "검색시장 리포트" : "월간 보고서"}` : textInput(input.title, "title", 200),
@@ -691,7 +737,7 @@ function createMonthlyReportService({ dataDir, loadSources, readOutlookEvaluatio
     if (report.status === "published") throw fail("published_immutable", "발행된 보고서는 재집계할 수 없습니다. 수정본을 생성해 주세요.", 409);
     const date = current();
     const request = requestInput(report, date);
-    report.snapshot = await build(request, date.toISOString());
+    report.snapshot = (await build(request, date.toISOString())).snapshot;
     report.status = "draft";
     report.revision += 1;
     report.updatedAt = date.toISOString();

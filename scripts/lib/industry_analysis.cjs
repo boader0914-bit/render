@@ -453,12 +453,12 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
       if (typeof sources.loadSourcesWithCatalog === "function") {
         // The adapter shares the exact prepared catalog used for correction,
         // avoiding a second master parse/clone retained during a long read.
-        const pair = await sources.loadSourcesWithCatalog(sourceRequest);
+        const pair = await sources.loadSourcesWithCatalog(sourceRequest, { priority: "background" });
         value = compactIndustrySources(pair.source, pair.catalog);
       } else {
         // Compatibility for adapters without the paired reader. Wait for both
         // readers before releasing a failed pending key.
-        const results = await Promise.allSettled([sources.loadSources(sourceRequest), sources.catalog()]);
+        const results = await Promise.allSettled([sources.loadSources(sourceRequest, { priority: "background" }), sources.catalog()]);
         const failed = results.find(result => result.status === "rejected");
         if (failed) throw failed.reason;
         value = compactIndustrySources(results[0].value, results[1].value);

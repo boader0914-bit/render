@@ -215,12 +215,12 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     if (autoStart) kick();
     return { queued: grouped.size };
   }
-  async function materialize(companyId, month, metadata, cutoffDate, persist = true) {
+  async function materialize(companyId, month, metadata, cutoffDate, persist = true, priority = "background") {
     const generatedAt = current().toISOString();
     const request = { type: "company", targetId: companyId, month, cutoffDate: cutoffDate || cutoffFor(month, generatedAt) };
-    const source = scopedSources(await loadSources(clone(request)), companyId);
+    const source = scopedSources(await loadSources(clone(request), { priority }), companyId);
     const previousRequest = previousMonthlyReportRequest(request);
-    const previousSource = scopedSources(await loadSources(clone(previousRequest)), companyId);
+    const previousSource = scopedSources(await loadSources(clone(previousRequest), { priority }), companyId);
     const capacityMarker = metadata.raw?._integratedCapacity || metadata.company.capacityBasis || null;
     const capacityWarnings = Array.isArray(capacityMarker?.warnings) ? capacityMarker.warnings.filter(value => typeof value === "string") : [];
     if (capacityWarnings.length) source.warnings = [...new Set([...(source.warnings || []), ...capacityWarnings])];
@@ -322,7 +322,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
       if (!discovered.includes(selectedMonth)) throw fault("MONTH_NOT_OBSERVED", 400);
     }
     let selected = await readJson(monthPath(companyId, selectedMonth), null);
-    if (cutoffDate !== undefined && (!selected || selected.cutoffDate !== cutoffDate)) selected = (await materialize(companyId, selectedMonth, metadata, cutoffDate, false)).value;
+    if (cutoffDate !== undefined && (!selected || selected.cutoffDate !== cutoffDate)) selected = (await materialize(companyId, selectedMonth, metadata, cutoffDate, false, "foreground")).value;
     const job = state.jobs[companyId];
     const needsRefresh = !selected || selected.calculationVersion !== calculationVersion || (cutoffDate === undefined &&
       (selected.cutoffDate !== cutoffFor(selectedMonth, current()) || selected.snapshot.period.monthClosed !== (kstDay(current()) > monthEnd(selectedMonth))));

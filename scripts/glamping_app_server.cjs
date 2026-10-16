@@ -20,6 +20,7 @@ const { createSpecialDaysService } = require("./lib/special_days.cjs");
 const { createKosisService } = require("./lib/kosis.cjs");
 const { createMonthlyReportService } = require("./lib/monthly_reports.cjs");
 const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs");
+const { createMonthlyReportSourceRevision } = require("./lib/monthly_report_source_revision.cjs");
 const { createIndustryAnalysisService } = require("./lib/industry_analysis.cjs");
 const { createIndustryAnalysisHttpHandler } = require("./lib/industry_analysis_http.cjs");
 const { createIndustrySourceRevision } = require("./lib/industry_source_revision.cjs");
@@ -519,6 +520,9 @@ const companyCapacityRegistry = createCompanyCapacityRegistry({
 const monthlyReportSources = createMonthlyReportSources({
   dataDir: DATA_DIR,
   regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
+  readRevision: createMonthlyReportSourceRevision({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR,
+    regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
+    tourismRegionMapFile: path.join(WEB_DIR, "data", "tourism_region_map.json"), includeContext: false }),
   listRuns,
   prepareCompanies: companyCapacityRegistry.prepareCompanies,
   projectObservation: (row, company) => {
@@ -561,6 +565,10 @@ async function queueIntegratedCompanies(companyIds, reason) {
 }
 const monthlyReportService = createMonthlyReportService({
   dataDir: path.join(DATA_DIR, "monthly_reports"), loadSources: monthlyReportSources.loadSources,
+  readSourceRevision: monthlyReportSources.readRevision, readReportContext: readMonthlyRegionContext,
+  calculationVersion: crypto.createHash("sha256").update(["glamping_app_server.cjs", "inventory_estimation.cjs",
+    ...fs.readdirSync(path.join(__dirname, "lib")).filter(name => name.endsWith(".cjs")).sort().map(name => `lib/${name}`)]
+    .map(name => `${name}:${crypto.createHash("sha256").update(fs.readFileSync(path.join(__dirname, name))).digest("hex")}`).join("\n")).digest("hex"),
   readOutlookEvaluations: createMonthlyReportOutlookEvaluation({ evaluationService: regionalOutlookService.validation })
 });
 const handleMonthlyReport = createMonthlyReportHttpHandler({

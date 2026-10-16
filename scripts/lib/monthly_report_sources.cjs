@@ -5,6 +5,7 @@ const fsp = require("node:fs/promises");
 const path = require("node:path");
 const readline = require("node:readline");
 const { monthlyReportKeywordMembership } = require("./monthly_reports.cjs");
+const { createSourceReadScheduler } = require("./source_read_scheduler.cjs");
 
 const token = value => String(value || "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
 function sourceError() { return Object.assign(new Error("월간 집계에 필요한 저장자료를 읽지 못했습니다. 원본 상태를 확인해 주세요."), { statusCode: 503, code: "MONTHLY_SOURCE_UNAVAILABLE" }); }
@@ -13,10 +14,11 @@ async function readJson(file, fallback) {
   catch (error) { if (error.code === "ENOENT") return fallback; throw sourceError(); }
 }
 
-function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepareCompanies = null, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null }) {
+function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepareCompanies = null, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null }) {
   const companyFile = path.join(dataDir, "company_master", "companies.json");
   const historyFile = path.join(dataDir, "history", "observations.jsonl");
-  let catalogInFlight = null, sourceReadQueue = Promise.resolve();
+  let catalogInFlight = null;
+  const sourceReadScheduler = createSourceReadScheduler();
   async function readCatalog() {
     const [master, regionMaster, runs] = await Promise.all([readJson(companyFile, { companies: {} }), readJson(regionMasterFile, { units: [] }), listRuns()]);
     if (!master.companies || typeof master.companies !== "object" || Array.isArray(master.companies)) throw sourceError();
@@ -98,7 +100,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
       keywords: [...new Set(data.runs.filter(run => run.searchMode !== "company").map(run => run.keyword).filter(Boolean))].sort().map(keyword => ({ id: keyword, label: keyword })),
       regions: data.regions, months: available, defaultMonth: months.has(previous) ? previous : current, today };
   }
-  async function readSources(request, includeCatalog) {
+  async function readSources(request, includeCatalog, { includeContext = true } = {}) {
     const data = await catalog();
     const byId = new Map(data.companies.map(company => [company.companyId, company]));
     const ids = new Map(data.companies.map(company => [token(company.companyId), company.companyId]));
@@ -194,11 +196,13 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     if (globalUnmatchedCompanyRows) globalWarnings.push(`전체 DB 참고: 대상 밖이거나 관련성을 확정할 수 없는 업체 미식별 관측 ${globalUnmatchedCompanyRows}건이 있습니다.`);
     if (globalDuplicatePlaceCompanies) globalWarnings.push(`전체 DB 참고: 이 리포트 대상 밖에 플레이스 번호가 중복 연결된 업체 ${globalDuplicatePlaceCompanies}개가 있습니다.`);
     if (request.type === "region" && unmappedRegionCompanies) globalWarnings.push(`전체 DB 참고: 소재지가 미확정인 업체 ${unmappedRegionCompanies}개는 선택 지역에 포함되는지 알 수 없어 이 리포트의 품질 평가와 분리했습니다.`);
-    let context;
-    try { context = await readContext(request, { ...data, companies: data.companies.filter(company => scopeIds.has(company.companyId) && !conflictingCompanyIds.has(company.companyId)) }); }
-    catch (error) {
-      if (error.message === "MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY") throw error;
-      context = { sources: [], networkAttempted: false, warnings: ["저장된 지역 보조지표를 불러오지 못했습니다."] };
+    let context = null;
+    if (includeContext) {
+      try { context = await readContext(request, { ...data, companies: data.companies.filter(company => scopeIds.has(company.companyId) && !conflictingCompanyIds.has(company.companyId)) }); }
+      catch (error) {
+        if (error.message === "MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY") throw error;
+        context = { sources: [], networkAttempted: false, warnings: ["저장된 지역 보조지표를 불러오지 못했습니다."] };
+      }
     }
     const year = Number(request.month.slice(0, 4));
     const holidayYears = [...new Set([year, request.month.endsWith("-12") ? year + 1 : year])];
@@ -222,15 +226,14 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
         ...(request.type === "region" ? { unmappedRegionCompanies } : {}) }, context };
     return includeCatalog ? { source, catalog: data } : source;
   }
-  function queueSourceRead(request, includeCatalog = false) {
+  function queueSourceRead(request, includeCatalog = false, options = {}) {
     // All consumers (including background company materialization) share this
     // queue. Separate UI/service queues cannot protect the shared heap alone.
-    const task = sourceReadQueue.then(() => readSources(request, includeCatalog));
-    sourceReadQueue = task.then(() => undefined, () => undefined);
-    return task;
+    return sourceReadScheduler.run(() => readSources(request, includeCatalog, options), options);
   }
-  return { options, loadSources: request => queueSourceRead(request), catalog,
-    loadSourcesWithCatalog: request => queueSourceRead(request, true) };
+  return { options, loadSources: (request, options) => queueSourceRead(request, false, options), catalog,
+    loadSourcesWithCatalog: (request, options) => queueSourceRead(request, true, options),
+    ...(typeof readRevision === "function" ? { readRevision } : {}), sourceReadStatus: sourceReadScheduler.status };
 }
 
 module.exports = { createMonthlyReportSources };

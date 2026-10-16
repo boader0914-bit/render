@@ -140,6 +140,7 @@ async function main() {
     assert.equal((await request(endpoint + "/preview", admin, "POST", { ...condition, month: "2026-13" })).status, 400);
     const missingEvaluation = await request(endpoint + "/preview", admin, "POST", condition);
     assert.equal(missingEvaluation.status, 200);
+    assert.equal(missingEvaluation.data.generation.cacheStatus, "calculated");
     assert.equal(missingEvaluation.data.context.outlookEvaluations.regions[0].summaryCounts, null, "a missing saved evaluation is not zero evaluated forecasts");
     assert.ok(missingEvaluation.data.context.outlookEvaluations.regions[0].reasonLabel);
     const savedEvaluation = await seedMonthlyReportOutlookEvaluation(dataDir, regionKey);
@@ -150,6 +151,13 @@ async function main() {
     assert.equal(preview.data.summary.lodging.coveredCompanyDays, 31, JSON.stringify(preview.data.quality));
     assert.equal(preview.data.summary.lodging.supply, 310);
     assert.ok(preview.data.previewToken);
+    assert.equal(preview.data.generation.cacheStatus, "reused", "a new saved evaluation is attached without replacing the lodging calculation");
+    assert.equal(preview.data.generation.storage, "saved");
+    const reusedPreview = await request(endpoint + "/preview", admin, "POST", condition);
+    assert.equal(reusedPreview.status, 200, JSON.stringify(reusedPreview.data));
+    assert.equal(reusedPreview.data.generation.cacheStatus, "reused", "the real HTTP route reuses a materialized report without replaying its sources");
+    assert.deepEqual(reusedPreview.data.summary, preview.data.summary);
+    assert.notEqual(reusedPreview.data.previewToken, preview.data.previewToken);
     assert.equal(preview.data.comparison.previousMonth, "2026-07");
     assert.equal(preview.data.comparison.common.companyCount, 1);
     assert.equal(preview.data.comparison.common.matched.deltas.sold, 31);
@@ -196,6 +204,10 @@ async function main() {
     assert.deepEqual((await request(reportUrl + "/pdf", admin)).data, pdf.data, "issued PDF bytes stay fixed");
     const correctedEvaluation = await seedMonthlyReportOutlookEvaluation(dataDir, regionKey, { actualValue: 120 });
     assert.notEqual(correctedEvaluation.resultId, savedEvaluation.resultId);
+    const freshEvaluationPreview = await request(endpoint + "/preview", admin, "POST", condition);
+    assert.equal(freshEvaluationPreview.status, 200);
+    assert.equal(freshEvaluationPreview.data.generation.cacheStatus, "reused", "new evaluation evidence does not force expensive lodging reconstruction");
+    assertEvaluation(freshEvaluationPreview.data.context.outlookEvaluations, correctedEvaluation, 120);
     assert.deepEqual((await request(reportUrl, admin)).data.snapshot, published.data.snapshot, "new official evaluation evidence never mutates an issued report");
     assert.deepEqual((await request(reportUrl + "/pdf", admin)).data, pdf.data, "source changes never regenerate an issued PDF");
     const revision = await request(reportUrl + "/revise", admin, "POST", { revision: published.data.revision });
@@ -210,7 +222,9 @@ async function main() {
     assert.equal((await request(endpoint + "/not-an-id", admin)).status, 400);
     assert.equal((await request(reportUrl + "/pdf", member)).status, 403);
     assert.equal(await fs.stat(networkMarker).then(() => true, error => { if (error.code === "ENOENT") return false; throw error; }), false, "monthly-report creation, evaluation read and PDF rendering never attempted a provider fetch");
-    console.log("Monthly reports API: authorization, source adapter, saved target-month evaluations, true zero versus pending, preview/draft/review/publication, conflicts, unchanged source files, immutable PDF and updated revised draft passed");
+    console.log("Monthly reports API: authorization, materialized reuse, fresh saved evaluation, true zero versus pending, preview/draft/review/publication, conflicts, unchanged sources and immutable PDF passed");
+    console.log("SYNTHETIC_REPORT_TIMING=" + JSON.stringify({ synthetic: true, firstMs: missingEvaluation.data.generation.timings.totalMs,
+      reusedMs: reusedPreview.data.generation.timings.totalMs, first: missingEvaluation.data.generation, reused: reusedPreview.data.generation }));
     if (options.artifactDir) {
       await fs.mkdir(options.artifactDir, { recursive: true });
       await fs.writeFile(path.join(options.artifactDir, "monthly-report-evaluation.json"), JSON.stringify({

@@ -9,7 +9,7 @@ const appSource = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8")
 const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8");
 const metric = { supply: 10, sold: 3, publicBookings: 2, phoneBookings: 1, estimatedRevenue: 300000, publicRevenue: 200000, phoneRevenue: 100000, reservationRate: .3, coverageRate: .5, partial: true, revenuePartial: true, knownPartialRevenue: 25000 };
 const snapshot = { request: { type: "company", month: "2026-08", targetId: "c1", cutoffDate: "2026-08-31" }, target: { id: "c1", label: "테스트 숙소", type: "company" }, period: { start: "2026-08-01", end: "2026-08-31", cutoffDate: "2026-08-31" }, summary: { lodging: metric, dayuse: { ...metric, estimatedRevenue: 40000 } }, daily: [{ date: "2026-08-01", lodging: metric, dayuse: metric }], companies: [], quality: { coverageRate: .5, coveredCompanyDays: 1, expectedCompanyDays: 2, missingCompanyDays: 1, discardedObservationCount: 1, warnings: ["일부 날짜 자료가 없습니다."] }, sources: { runs: [{ id: "run-1", keyword: "가평펜션", collectedAt: "2026-08-31T01:00:00Z", selectedObservationCount: 1, observationCount: 2 }] }, definitions: { estimatedRevenue: "객실별 수량과 관측 가격의 곱" }, previewToken: "preview-fixed-token" };
-function fixture() {
+function fixture({ generation } = {}) {
   const container = { innerHTML: "", addEventListener() {}, querySelector() { return null; } };
   const calls = [];
   let saved;
@@ -18,7 +18,7 @@ function fixture() {
     calls.push({ url, method, body: structuredClone(body) });
     if (nextFailure) { const error = nextFailure; nextFailure = null; throw error; }
     if (url === "/options") return { companies: [{ id: "c1", label: "테스트 숙소" }], keywords: [], regions: [{ id: "kr_gyeongnam_sancheong", label: "경상남도 산청군" }], months: ["2026-08"], defaultMonth: "2026-08" };
-    if (url === "/preview") return structuredClone(snapshot);
+    if (url === "/preview") return structuredClone(generation ? { ...snapshot, generation } : snapshot);
     if (url === "" && method === "GET") return { reports: saved ? [structuredClone(saved)] : [] };
     if (url === "" && method === "POST") { saved = { id: "mr_1", revision: 1, version: 1, status: "draft", ...body, snapshot: structuredClone(snapshot) }; return structuredClone(saved); }
     if (method === "PATCH") { assert.equal(body.revision, saved.revision); saved = { ...saved, ...body, revision: saved.revision + 1 }; return structuredClone(saved); }
@@ -54,6 +54,39 @@ test("cutoff defaults use the month end, capped at the current Korea day", () =>
   assert.equal(ui.defaultCutoff("2026-08", "2026-09-26"), "2026-08-31");
   assert.equal(ui.defaultCutoff("2026-09", "2026-09-26"), "2026-09-26");
   assert.equal(ui.defaultCutoff("2024-02", "2026-09-26"), "2024-02-29");
+});
+
+test("a reused calculation is identified without changing the approval payload or published view", async () => {
+  const { controller: c, container, calls } = fixture({ generation: { cacheStatus: "reused", storage: "saved", calculatedAt: "2026-10-16T01:00:00Z", timings: { totalMs: 125 } } });
+  await c.open({ type: "company", targetId: "c1" });
+  await c.action("preview");
+  assert.match(container.innerHTML, /저장 집계 재사용/);
+  assert.match(container.innerHTML, /자료 확인 0\.1초/);
+  await c.action("save");
+  assert.equal(calls.find(call => call.url === "" && call.method === "POST").body.generation, undefined);
+  assert.doesNotMatch(container.innerHTML, /mr-generation/);
+  c.input("targetId", "another-company");
+  assert.equal(c.state.generation, null);
+});
+
+test("pending work shows a live indicator and disables duplicate requests without inventing progress", async () => {
+  const container = { innerHTML: "", addEventListener() {}, querySelector() { return null; } };
+  let release, calls = 0;
+  const waiting = new Promise(resolve => { release = resolve; });
+  const c = ui.createController(container, async url => {
+    calls++;
+    if (url === "/options") { await waiting; return { companies: [], months: ["2026-09"] }; }
+    return { reports: [] };
+  });
+  const pending = c.open();
+  assert.match(container.innerHTML, /aria-busy="true"/);
+  assert.match(container.innerHTML, /mr-loading/);
+  assert.doesNotMatch(container.innerHTML, /남은 시간|진행률/);
+  await c.action("preview");
+  assert.equal(calls, 1, "another action cannot submit while the first is pending");
+  release(); await pending;
+  assert.equal(c.state.busyStartedAt, 0);
+  assert.doesNotMatch(container.innerHTML, /class="mr-loading"/);
 });
 
 test("region DB handoff preserves the explicit month and cutoff and invalidates other previews", async () => {

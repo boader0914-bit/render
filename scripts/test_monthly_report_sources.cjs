@@ -79,6 +79,40 @@ test("shared monthly source queue serializes bootstrap and industry reads and re
   assert.equal(Object.hasOwn(ordinary, "rawCompanies"), false);
 });
 
+test("source adapter forwards foreground priority and exposes the configured source revision", async t => {
+  const firstStarted = deferred(), firstGate = deferred(), order = [];
+  const readRevision = async request => `revision-${request.month}`;
+  const adapter = await sourceFixture(t, { readRevision,
+    recalculateCompanyObservations: async request => {
+      order.push(request.targetId);
+      if (order.length === 1) { firstStarted.resolve(); await firstGate.promise; }
+      return [];
+    }
+  });
+  const request = { month: "2026-08", cutoffDate: "2026-08-31", type: "company" };
+  const active = adapter.loadSources({ ...request, targetId: "active" }, { priority: "background" });
+  await firstStarted.promise;
+  const maintenance = adapter.loadSourcesWithCatalog({ ...request, targetId: "maintenance" }, { priority: "background" });
+  const user = adapter.loadSources({ ...request, targetId: "user" });
+  assert.deepEqual(adapter.sourceReadStatus(), { active: true, queuedForeground: 1, queuedBackground: 1 });
+  firstGate.resolve(); await Promise.all([active, maintenance, user]);
+  assert.deepEqual(order, ["active", "user", "maintenance"]);
+  assert.equal(await adapter.readRevision(request), "revision-2026-08");
+});
+
+test("a report base source can skip context so current saved indicators attach separately", async t => {
+  let contextCalls = 0;
+  const adapter = await sourceFixture(t, { readContext: async () => {
+    contextCalls++; return { sources: [{ value: 0 }], networkAttempted: false };
+  } });
+  const request = { month: "2026-08", cutoffDate: "2026-08-31", type: "company", targetId: "a" };
+  assert.equal((await adapter.loadSources(request, { includeContext: false })).context, null);
+  assert.equal((await adapter.loadSourcesWithCatalog(request, { priority: "background", includeContext: false })).source.context, null);
+  assert.equal(contextCalls, 0);
+  assert.deepEqual((await adapter.loadSources(request)).context.sources, [{ value: 0 }]);
+  assert.equal(contextCalls, 1, "other consumers keep their original context behavior");
+});
+
 test("canonical IDs, merged IDs, ambiguous names, exact regions and strict source errors", async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "monthly-sources-"));
   t.after(async () => { assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep)); await fs.rm(root, { recursive: true, force: true }); });

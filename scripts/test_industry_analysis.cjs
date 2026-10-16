@@ -166,7 +166,7 @@ test("industry service consumes the paired source catalog once and retains only 
   let pairedReads = 0, contextReads = 0;
   const catalog = { regions: REGIONS, rawCompanies: new Map([["a", { industryIds: ["glamping"], addresses: ["경기도 포천시 모의로"], inventory: { payload: "unused" } }]]) };
   const service = createIndustryAnalysisService({ now: () => NOW, sources: {
-    loadSourcesWithCatalog: async request => { pairedReads++; assert.equal(request.type, "industry"); return { source: full, catalog }; },
+    loadSourcesWithCatalog: async (request, options) => { pairedReads++; assert.equal(request.type, "industry"); assert.equal(options.priority, "background", "industry materialization cannot jump ahead of a requested report"); return { source: full, catalog }; },
     loadSources: async () => { throw Error("paired reader must replace the duplicate source call"); },
     catalog: async () => { throw Error("paired reader must replace the duplicate catalog call"); }
   }, readContext: async (request, data) => {
