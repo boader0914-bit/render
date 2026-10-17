@@ -18,7 +18,7 @@ const TOURISM = [
   ["resourceDemand", "관광자원 수요 지수", "collectResourceDemandHistory", [["service", "서비스 수요", "지수"], ["culture", "문화 수요", "지수"]]],
   ["diversity", "관광 다양성 지수", "collectDiversityHistory", [["visitor", "관광객 다양성", "지수"], ["spend", "소비 다양성", "지수"], ["international", "국제 관광 다양성", "지수"]]]
 ];
-const SAFE = new Set(["NO_DATA", "NOT_COLLECTED", "PUBLICATION_PENDING", "PARTIAL_DATA", "MISSING_VALUES", "AUTH_ERROR", "MISSING_KEY", "QUOTA_EXCEEDED", "TIMEOUT", "NETWORK_ERROR", "CACHE_READ_ERROR", "CACHE_WRITE_ERROR", "INVALID_RESPONSE", "REGION_MISMATCH", "PERIOD_MISMATCH", "COOLDOWN", "PROVIDER_FAILED", "PROVIDER_UNAVAILABLE", "REGIONAL_SOURCE_BUSY", "MAPPING_MISSING"]);
+const SAFE = new Set(["NO_DATA", "NOT_COLLECTED", "PUBLICATION_PENDING", "PARTIAL_DATA", "MISSING_VALUES", "AUTH_ERROR", "MISSING_KEY", "QUOTA_EXCEEDED", "TIMEOUT", "NETWORK_ERROR", "CACHE_READ_ERROR", "CACHE_WRITE_ERROR", "EVIDENCE_WRITE_ERROR", "INVALID_RESPONSE", "REGION_MISMATCH", "PERIOD_MISMATCH", "COOLDOWN", "PROVIDER_FAILED", "PROVIDER_UNAVAILABLE", "REGIONAL_SOURCE_BUSY", "MAPPING_MISSING"]);
 const safeCode = (value, fallback = "PROVIDER_FAILED") => SAFE.has(value) ? value : fallback;
 const stamp = value => typeof value === "string" && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : "";
 function safeDiagnostics(value) {
@@ -72,18 +72,20 @@ function pointProvenance(point, status, { errorCode = "", duplicate = false, fie
     requested_region_not_matched: "REGION_MISMATCH", region_not_matched: "REGION_MISMATCH", region_code_verify_required: "MAPPING_MISSING",
     schema_error: "INVALID_RESPONSE", invalid_response: "INVALID_RESPONSE", page_number_mismatch: "INVALID_RESPONSE", total_count_changed: "INVALID_RESPONSE",
     incomplete_pagination: "PARTIAL_DATA", page_limit_exceeded: "PARTIAL_DATA", gateway_error: "PROVIDER_FAILED", api_error: "PROVIDER_FAILED", http_error: "PROVIDER_FAILED",
-    timeout: "TIMEOUT", request_failed: "NETWORK_ERROR", evidence_write_failed: "CACHE_WRITE_ERROR", no_observation: "NO_DATA", empty_verified: "NO_DATA" };
-  const reasons = [operation?.reason, field === "stayOverall" ? point?.stayReason : field === "spendOverall" ? point?.spendReason : "", point?.reason];
+    timeout: "TIMEOUT", request_failed: "NETWORK_ERROR", evidence_write_failed: "CACHE_WRITE_ERROR", response_evidence_storage_failed: "EVIDENCE_WRITE_ERROR", no_observation: "NO_DATA", empty_verified: "NO_DATA" };
+  const storageFailed = (operation?.quality?.responseEvidenceStorage
+    || (field === "stayOverall" ? point?.stayResponseEvidenceStorage : field === "spendOverall" ? point?.spendResponseEvidenceStorage : null))?.status === "failed";
+  const reasons = [operation?.reason, field === "stayOverall" ? point?.stayReason : field === "spendOverall" ? point?.spendReason : "", point?.reason, point?.refreshReason];
   const invalidQuality = ["conflicting_rows", "region_or_period_mismatch", "invalid_rows"].includes(operation?.quality?.status)
     || [operation?.quality?.invalidRowCount, operation?.quality?.mismatchedRowCount, operation?.quality?.conflictCount].some(count => Number(count) > 0);
   const diagnosed = httpStatus === 429 || providerCode === "22" ? "QUOTA_EXCEEDED"
     : [401, 403].includes(httpStatus) || ["20", "21", "30", "31", "32"].includes(providerCode) ? "AUTH_ERROR"
       : httpStatus >= 400 ? "PROVIDER_FAILED" : invalidQuality ? "INVALID_RESPONSE"
-        : evidence.map(item => item.errorCode).find(code => SAFE.has(code)) || reasons.map(reason => mappings[reason]).find(Boolean) || (providerCode === "03" ? "NO_DATA" : "");
+        : evidence.map(item => item.errorCode).find(code => SAFE.has(code)) || reasons.map(reason => mappings[reason]).find(Boolean) || (storageFailed ? "EVIDENCE_WRITE_ERROR" : "") || (providerCode === "03" ? "NO_DATA" : "");
   const reasonCode = status === "observed" ? "" : duplicate ? "INVALID_RESPONSE" : errorCode || diagnosed
     || (status === "publication_pending" ? "PUBLICATION_PENDING" : "UNRECORDED_REASON");
   return { reasonCode, reasonEvidence: reasonCode === "UNRECORDED_REASON" ? "unknown" : "recorded", diagnostics,
-    ...(point?.refreshFailed ? { refreshErrorCode: diagnosed && !["NO_DATA", "PUBLICATION_PENDING"].includes(diagnosed) ? diagnosed : "PROVIDER_FAILED" } : {}) };
+    ...(point?.refreshFailed || storageFailed ? { refreshErrorCode: diagnosed && !["NO_DATA", "PUBLICATION_PENDING"].includes(diagnosed) ? diagnosed : "PROVIDER_FAILED" } : {}) };
 }
 function preparationDiagnostics(preparation) {
   const allowed = new Set(["visitors", "demandStrength", "resourceDemand", "diversity", "kosis", "searchTrend"]);
@@ -129,12 +131,14 @@ function finishGroup(group, metrics, end, count) {
 }
 function storedVerificationOf(value) {
   if (!value || !["restored", "already_verified", "pending", "rejected"].includes(value.status)) return null;
-  return { status: value.status, reasonCode: /^[A-Z0-9_]{1,100}$/.test(value.reasonCode || "") ? value.reasonCode : "STORED_EVIDENCE_UNVERIFIED" };
+  return { status: value.status, reasonCode: /^[A-Z0-9_]{1,100}$/.test(value.reasonCode || "") ? value.reasonCode
+    : ["restored", "already_verified"].includes(value.status) ? "" : "STORED_EVIDENCE_UNVERIFIED" };
 }
-function periodEvidence(evidence, period) {
+function periodEvidence(evidence, period, periodType = "M") {
   if (!evidence?.storedProvenance) return evidence;
   const provenance = storedProvenanceOf(evidence.storedProvenance);
-  return provenance?.period === period ? evidence : { ...evidence, verified: false, reasonCode: "INVALID_RESPONSE" };
+  return provenance?.period === period && (provenance.periodType || "M") === periodType
+    ? evidence : { ...evidence, verified: false, reasonCode: "INVALID_RESPONSE" };
 }
 
 function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService, searchTrendService, resolveRegion, prepare, now = () => new Date(), includeHistory = false }) {
@@ -190,7 +194,8 @@ function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService,
         const storedEvidenceVerification = evidence?.storedProvenance && resolvedEvidence !== evidence
           ? { status: "rejected", reasonCode: "STORED_EVIDENCE_PERIOD_OR_REFERENCE_MISMATCH" } : storedVerificationOf(key === "demandStrength"
           ? point?.[field === "stayOverall" ? "stayStoredEvidenceVerification" : "spendStoredEvidenceVerification"] || point?.storedEvidenceVerification
-          : point?.operations?.[field]?.quality?.storedEvidenceVerification || point?.storedEvidenceVerification || point?.quality?.storedEvidenceVerification);
+          : point?.operations?.[field]?.quality?.storedEvidenceVerification || point?.storedEvidenceVerification || point?.quality?.storedEvidenceVerification)
+            || (provenance.refreshErrorCode === "EVIDENCE_WRITE_ERROR" ? { status: "pending", reasonCode: "EVIDENCE_WRITE_ERROR" } : null);
         const rejectedScope = ["response_mismatch", "mapping_pending", "mapping_missing"].includes(spatialContract.status);
         if (rejectedScope) {
           actualStatus = "error";
@@ -231,8 +236,10 @@ function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService,
       const validPeriod = definition.periodType === "Y" ? /^20\d{2}$/.test(dataset?.period || "") : /^20\d{2}(0[1-9]|1[0-2])$/.test(dataset?.period || "");
       const period = validPeriod ? definition.periodType === "Y" ? dataset.period : `${dataset.period.slice(0, 4)}-${dataset.period.slice(4)}` : "";
       const expected = definition.metrics.flatMap(metric => (definition.breakdowns || [null]).map(breakdown => ({ key: breakdown?.key || metric.key, label: breakdown?.label || metric.label, unit: metric.unit })));
-      const spatialContract = createSpatialContract({ region, provider: "KOSIS", sourceRegion: { ...kosis?.region, regionCode: dataset?.mapping?.code }, evidence: dataset?.spatialEvidence });
-      const storedEvidenceVerification = storedVerificationOf(dataset?.storedEvidenceVerification);
+      const resolvedEvidence = periodEvidence(dataset?.spatialEvidence, period, definition.periodType);
+      const spatialContract = createSpatialContract({ region, provider: "KOSIS", sourceRegion: { ...kosis?.region, regionCode: dataset?.mapping?.code }, evidence: resolvedEvidence });
+      const storedEvidenceVerification = dataset?.spatialEvidence?.storedProvenance && resolvedEvidence !== dataset.spatialEvidence
+        ? { status: "rejected", reasonCode: "STORED_EVIDENCE_PERIOD_OR_REFERENCE_MISMATCH" } : storedVerificationOf(dataset?.storedEvidenceVerification);
       return { key: definition.key, label: definition.label, periodType: definition.periodType, period, spatialContract,
         ...(storedEvidenceVerification ? { storedEvidenceVerification } : {}),
         temporalPolicy: temporalPolicy({ month: end, months: count, periodType: definition.periodType }),

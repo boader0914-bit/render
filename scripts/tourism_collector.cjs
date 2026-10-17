@@ -2,7 +2,8 @@ const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { createStoredTourismEvidenceRestorer, markUnstoredOperations } = require("./lib/tourism_stored_spatial_evidence.cjs");
+const { createStoredTourismEvidenceRestorer, operationIdentity, OPERATION_KIND } = require("./lib/tourism_stored_spatial_evidence.cjs");
+const { createRegionalResponseEvidenceStore } = require("./lib/regional_response_evidence.cjs");
 
 const DEFAULT_SOURCE_DEFS = [
   {
@@ -469,7 +470,32 @@ function createCollector(options = {}) {
   const regionalIndexSnapshotWrites = new Map();
   const onSnapshotStored = typeof options.onSnapshotStored === "function" ? options.onSnapshotStored : null;
   const onCacheCommitted = typeof options.onCacheCommitted === "function" ? options.onCacheCommitted : null;
-  const storedEvidenceRestorer = createStoredTourismEvidenceRestorer({ tourismDataDir, now });
+  const responseEvidenceStore = options.responseEvidenceStore || createRegionalResponseEvidenceStore({ directory: tourismDataDir, now });
+  const storedEvidenceRestorer = createStoredTourismEvidenceRestorer({ tourismDataDir, now, responseEvidenceStore });
+
+  function operationEvidencePage(page = {}, requestedPageNo, requestedPageSize) {
+    return { requestedPageNo, requestedPageSize, pageNo: page.pageNo ?? null, numOfRows: page.numOfRows ?? null,
+      totalCount: page.totalCount ?? null, receivedRowCount: Array.isArray(page.rows) ? page.rows.length : 0,
+      httpStatus: Number.isInteger(page.httpStatus) ? page.httpStatus : null, apiCode: String(page.resultCode || page.code || "").slice(0, 32),
+      rows: Array.isArray(page.rows) ? page.rows : [] };
+  }
+  async function preserveOperationResponse({ sourceKey, adapter, definition, region, yearMonth, operation, queries, serviceKey }) {
+    try {
+      const rawResponseEvidence = await responseEvidenceStore.write({ kind: OPERATION_KIND,
+        identity: operationIdentity({ sourceKey, adapter, yearMonth, region, operation: definition.operation }),
+        response: { schemaVersion: 1, queries }, secretValues: serviceKey ? [serviceKey] : [] });
+      return { ...operation, rawResponseEvidence, quality: { ...operation.quality, responseEvidenceStorage: { status: "stored", reasonCode: "" } } };
+    } catch (error) {
+      const code = /^[A-Z0-9_]{1,100}$/.test(error?.code || "") ? error.code : "EVIDENCE_WRITE_ERROR";
+      return { ...operation, rawResponseEvidence: { status: "not_stored", reasonCode: code },
+        quality: { ...operation.quality, responseEvidenceStorage: { status: "failed", reasonCode: code } } };
+    }
+  }
+  async function restoreOperationCache(cached, sourceKey, adapter, regionMap, region, operationDefs, normalizeRows, input = {}) {
+    if (input.restoreStoredEvidence !== true || !cached.hit) return;
+    cached.data = await storedEvidenceRestorer.restoreOperationSnapshot({ snapshot: cached.data, sourceKey, adapter,
+      regionMap, region, operationDefs, normalizeRows });
+  }
 
   function notifySnapshotStored(payload = {}) {
     if (!onSnapshotStored) return;
@@ -2417,12 +2443,15 @@ function createCollector(options = {}) {
     ))));
     const maxPages = demandStrengthMaxPages(input);
     const rows = [];
+    const pages = [];
+    const finish = operation => preserveOperationResponse({ sourceKey: "demandStrength", adapter: DEMAND_STRENGTH_ADAPTER_VERSION,
+      definition: operationDef, region, yearMonth, operation, queries: [{ metricCode: operationDef.overallCode, pages }], serviceKey });
     let totalCount = null;
     let pageCount = 0;
     let requestCount = 0;
     const failedOperation = (status, reason, quality = {}) => {
       const empty = emptyDemandOperation(operationDef, status, reason);
-      return {
+      return finish({
         ...empty,
         requestedAt,
         requestCount,
@@ -2437,11 +2466,12 @@ function createCollector(options = {}) {
             reasonCode: status === "no_observation" ? "NO_DATA" : "MAPPING_MISSING"
           })
         }
-      };
+      });
     };
     for (let pageNo = 1; pageNo <= maxPages; pageNo += 1) {
       requestCount += 1;
       const page = await requestDemandStrengthPage(config, operationDef, region, yearMonth, pageNo, pageSize, serviceKey);
+      pages.push(operationEvidencePage(page, pageNo, pageSize));
       if (!page.ok) {
         const status = page.reason === "no_observation" ? "no_observation" : "error";
         return failedOperation(status, page.reason, {
@@ -2476,7 +2506,7 @@ function createCollector(options = {}) {
       });
     }
     const normalized = normalizeDemandStrengthRows(rows.slice(0, totalCount), operationDef, region, yearMonth);
-    return {
+    return finish({
       ...normalized,
       requestedAt,
       requestCount,
@@ -2488,7 +2518,7 @@ function createCollector(options = {}) {
         totalCount,
         receivedRows: rows.length
       }
-    };
+    });
   }
 
   function publicDemandStrengthSnapshot(snapshot = {}, input = {}, cache = {}) {
@@ -2595,6 +2625,8 @@ function createCollector(options = {}) {
       signguCd: String(region.ktoSggCd || "")
     };
     const cached = await readDemandStrengthCache(region.regionKey, yearMonth);
+    await restoreOperationCache(cached, "demandStrength", DEMAND_STRENGTH_ADAPTER_VERSION, regionMap, region,
+      DEMAND_STRENGTH_OPERATIONS, normalizeDemandStrengthRows, input);
     const compatibleCache = demandStrengthCacheCompatible(cached, regionMap, region, yearMonth);
     const closedYearMonth = latestClosedYearMonth(currentDate());
     if (!force && compatibleCache && (yearMonth <= closedYearMonth || cacheFresh(cached.data, ttlHours))) {
@@ -2654,6 +2686,7 @@ function createCollector(options = {}) {
       requestDemandStrengthOperation(config, operationDef, region, yearMonth, serviceKey, input)
     )));
     const operations = Object.fromEntries(operationEntries.map(([key], index) => [key, operationResults[index]]));
+    const evidenceStorageFailed = operationResults.some(operation => operation.quality?.responseEvidenceStorage?.status === "failed");
     const operationCallsAttempted = operationResults.reduce(
       (sum, operation) => sum + Number(operation.requestCount || 0),
       0
@@ -2709,6 +2742,10 @@ function createCollector(options = {}) {
       }
     };
     if (status === "ok") {
+      if (compatibleCache && evidenceStorageFailed) return publicDemandStrengthSnapshot(cached.data, input, {
+        hit: true, ttlHours, mode: "cache", operationCallsAttempted, maxPagesPerOperation,
+        refreshFailed: true, refreshReason: "response_evidence_storage_failed"
+      });
       const filePath = await writeDemandStrengthSnapshot(snapshot);
       return publicDemandStrengthSnapshot(snapshot, input, { hit: false, ttlHours, filePath });
     }
@@ -2750,11 +2787,14 @@ function createCollector(options = {}) {
       ...(snapshot?.spend?.quality?.spatialEvidence ? { spendSpatialEvidence: snapshot.spend.quality.spatialEvidence } : {}),
       ...(snapshot?.stay?.quality?.storedEvidenceVerification ? { stayStoredEvidenceVerification: snapshot.stay.quality.storedEvidenceVerification } : {}),
       ...(snapshot?.spend?.quality?.storedEvidenceVerification ? { spendStoredEvidenceVerification: snapshot.spend.quality.storedEvidenceVerification } : {}),
+      ...(snapshot?.stay?.quality?.responseEvidenceStorage ? { stayResponseEvidenceStorage: snapshot.stay.quality.responseEvidenceStorage } : {}),
+      ...(snapshot?.spend?.quality?.responseEvidenceStorage ? { spendResponseEvidenceStorage: snapshot.spend.quality.responseEvidenceStorage } : {}),
       stayOverall,
       spendOverall,
       collectedAt: snapshot.collectedAt || "",
       cacheHit: access === "cache",
-      refreshFailed: Boolean(snapshot.cache?.refreshFailed)
+      refreshFailed: Boolean(snapshot.cache?.refreshFailed),
+      refreshReason: String(snapshot.cache?.refreshReason || "")
     };
   }
 
@@ -2944,7 +2984,8 @@ function createCollector(options = {}) {
         cursor += 1;
         const yearMonth = months[index];
         const cached = await readDemandStrengthCache(region.regionKey, yearMonth);
-        if (input.restoreStoredEvidence === true && cached.hit) cached.data = markUnstoredOperations(cached.data);
+        await restoreOperationCache(cached, "demandStrength", DEMAND_STRENGTH_ADAPTER_VERSION, match.regionMap, region,
+          DEMAND_STRENGTH_OPERATIONS, normalizeDemandStrengthRows, input);
         const compatible = demandStrengthCacheCompatible(cached, match.regionMap, region, yearMonth);
         if (compatible && !force) {
           monthResults[index] = {
@@ -3453,6 +3494,7 @@ function createCollector(options = {}) {
   async function requestRegionalIndexMetric(config = {}, operationDef = {}, region = {}, yearMonth = "", serviceKey = "", metricCode = "", pageSize = REGIONAL_INDEX_PAGE_SIZE, maxPages = REGIONAL_INDEX_MAX_PAGES) {
     const requestedAt = currentDate().toISOString();
     const rows = [];
+    const pages = [];
     let totalCount = null;
     let pageCount = 0;
     let requestCount = 0;
@@ -3469,6 +3511,7 @@ function createCollector(options = {}) {
       maxPages,
       totalCount,
       receivedRows: rows.length,
+      _evidenceQuery: { metricCode, pages },
       ...quality
     });
     for (let pageNo = 1; pageNo <= maxPages; pageNo += 1) {
@@ -3483,6 +3526,7 @@ function createCollector(options = {}) {
         serviceKey,
         metricCode
       );
+      pages.push(operationEvidencePage(page, pageNo, pageSize));
       if (!page.ok) {
         return failedMetric(page.reason === "no_observation" ? "no_observation" : "error", page.reason, {
           httpStatus: page.httpStatus || null,
@@ -3519,7 +3563,8 @@ function createCollector(options = {}) {
       requestCount,
       maxPages,
       totalCount,
-      receivedRows: rows.length
+      receivedRows: rows.length,
+      _evidenceQuery: { metricCode, pages }
     };
   }
 
@@ -3547,6 +3592,8 @@ function createCollector(options = {}) {
       ));
     }
     const requestCount = metricResults.reduce((sum, result) => sum + Number(result.requestCount || 0), 0);
+    const finish = operation => preserveOperationResponse({ sourceKey, adapter: regionalIndexSpec(sourceKey).adapter,
+      definition: operationDef, region, yearMonth, operation, queries: metricResults.map(result => result._evidenceQuery), serviceKey });
     const pageCount = metricResults.reduce((sum, result) => sum + Number(result.pageCount || 0), 0);
     const successfulResults = metricResults.filter((result) => result.status === "ok");
     const noObservationResults = metricResults.filter((result) => result.status === "no_observation");
@@ -3582,7 +3629,7 @@ function createCollector(options = {}) {
       const status = allNoObservation ? "no_observation" : "error";
       const reason = allNoObservation ? "no_observation" : "metric_queries_failed";
       const empty = emptyDemandOperation(operationDef, status, reason);
-      return {
+      return finish({
         ...empty,
         requestedAt,
         requestCount,
@@ -3595,7 +3642,7 @@ function createCollector(options = {}) {
             reasonCode: allNoObservation ? "NO_DATA" : "MAPPING_MISSING"
           })
         }
-      };
+      });
     }
     const rows = successfulResults.flatMap((result) => result.rows);
     const normalized = normalizeRegionalIndexRows(rows, operationDef, region, yearMonth);
@@ -3616,7 +3663,7 @@ function createCollector(options = {}) {
       operation.reason = "metric_query_incomplete";
       operation.quality.status = "partial";
     }
-    return operation;
+    return finish(operation);
   }
 
   function publicRegionalIndexSnapshot(sourceKey = "", snapshot = {}, input = {}, cache = {}) {
@@ -3753,6 +3800,7 @@ function createCollector(options = {}) {
       signguCd: String(region.ktoSggCd || "")
     };
     const cached = await readRegionalIndexCache(sourceKey, region.regionKey, yearMonth);
+    await restoreOperationCache(cached, sourceKey, spec.adapter, match.regionMap, region, spec.operations, normalizeRegionalIndexRows, input);
     const compatibleCache = regionalIndexCacheCompatible(sourceKey, cached, match.regionMap, region, yearMonth);
     const closedYearMonth = latestClosedYearMonth(currentDate());
     if (!force && compatibleCache && (yearMonth <= closedYearMonth || cacheFresh(cached.data, ttlHours))) {
@@ -3819,6 +3867,7 @@ function createCollector(options = {}) {
       requestRegionalIndexOperation(sourceKey, config, operationDef, region, yearMonth, serviceKey, input)
     )));
     const operations = Object.fromEntries(operationEntries.map(([key], index) => [key, operationResults[index]]));
+    const evidenceStorageFailed = operationResults.some(operation => operation.quality?.responseEvidenceStorage?.status === "failed");
     const operationCallsAttempted = operationResults.reduce((sum, operation) => sum + Number(operation.requestCount || 0), 0);
     const maxPagesPerOperation = regionalIndexMaxPages(sourceKey, input);
     const metricQueriesPerMonth = regionalIndexMetricCount(spec);
@@ -3898,6 +3947,11 @@ function createCollector(options = {}) {
       }
     };
     if (status === "ok") {
+      if (compatibleCache && evidenceStorageFailed) return publicRegionalIndexSnapshot(sourceKey, cached.data, input, {
+        hit: true, ttlHours, mode: "cache", filePath: cached.filePath, operationCallsAttempted,
+        maxPagesPerMetric: maxPagesPerOperation, maxPagesPerOperation, maximumOperationCalls,
+        refreshFailed: true, refreshReason: "response_evidence_storage_failed"
+      });
       const filePath = await writeRegionalIndexSnapshot(sourceKey, snapshot);
       return publicRegionalIndexSnapshot(sourceKey, snapshot, input, { hit: false, ttlHours, filePath });
     }
@@ -3951,6 +4005,8 @@ function createCollector(options = {}) {
         quality: snapshot?.operations?.[key]?.quality || {}
       }])),
       access,
+      refreshFailed: Boolean(snapshot.cache?.refreshFailed),
+      refreshReason: String(snapshot.cache?.refreshReason || ""),
       collectedAt: snapshot.collectedAt || ""
     };
   }
@@ -4013,7 +4069,7 @@ function createCollector(options = {}) {
         cursor += 1;
         const yearMonth = months[index];
         const cached = await readRegionalIndexCache(sourceKey, region.regionKey, yearMonth);
-        if (input.restoreStoredEvidence === true && cached.hit) cached.data = markUnstoredOperations(cached.data);
+        await restoreOperationCache(cached, sourceKey, spec.adapter, match.regionMap, region, spec.operations, normalizeRegionalIndexRows, input);
         const compatible = regionalIndexCacheCompatible(sourceKey, cached, match.regionMap, region, yearMonth);
         if (compatible && !force) {
           monthResults[index] = {

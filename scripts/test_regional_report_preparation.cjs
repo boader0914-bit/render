@@ -100,6 +100,53 @@ function kosisResult(regionKey, { status = "ready", networkAttempted = false, va
     rows: definition.metrics.flatMap((metric) => (definition.breakdowns || [null]).map((breakdown) => ({ key: breakdown?.key || metric.key, unit: metric.unit,
       status: value === null ? "missing" : "observed", value }))) })) };
 }
+
+for (const [index, source, storage] of [
+  [1, "demandStrength", point => { point.stayResponseEvidenceStorage = { status: "failed", reasonCode: "EVIDENCE_WRITE_ERROR" }; }],
+  [2, "resourceDemand", point => { point.operations = { service: { quality: { responseEvidenceStorage: { status: "failed", reasonCode: "EVIDENCE_WRITE_ERROR" } } } }; }],
+  [3, "diversity", point => { point.operations = { visitor: { quality: { responseEvidenceStorage: { status: "failed", reasonCode: "EVIDENCE_WRITE_ERROR" } } } }; }]
+]) test(`preparation persists ${source} archive failure while retaining normal zero and never retrying`, async t => {
+  const f = await fixture(t); let refreshes = 0;
+  f.options.tourismCollector[methods[index]] = async input => {
+    if (!input.collectMissing) return tourismResult(index, input, "missing", null);
+    refreshes++;
+    const result = tourismResult(index, input), point = result.series[0]; storage(point);
+    return result;
+  };
+  await f.service.start(request); await f.service.awaitIdle();
+  const job = await f.service.get(request), step = job.steps.find(item => item.key === source);
+  assert.equal(step.status, "partial"); assert.equal(step.errorCode, "EVIDENCE_WRITE_ERROR");
+  assert.equal(step.dataAvailable, true); assert.equal(step.zeroValuesObserved, step.expectedValueCount);
+  assert.equal(refreshes, 1);
+  const reloaded = createRegionalReportPreparation(f.options), restored = await reloaded.get(request);
+  assert.equal(restored.steps.find(item => item.key === source).errorCode, "EVIDENCE_WRITE_ERROR");
+  assert.equal(refreshes, 1, "Reading a saved preparation cannot repeat provider work");
+  assert.doesNotMatch(await fs.readFile(path.join(f.dataDir, "jobs.json"), "utf8"), /secret|https:\/\//);
+});
+
+test("the safe tourism archive fallback reason is distinct from a provider response failure", async t => {
+  const f = await fixture(t);
+  f.options.tourismCollector[methods[1]] = async input => {
+    const result = tourismResult(1, input), point = result.series[0];
+    point.refreshFailed = true; point.refreshReason = "response_evidence_storage_failed";
+    return result;
+  };
+  await f.service.start(request); await f.service.awaitIdle();
+  const step = (await f.service.get(request)).steps.find(item => item.key === "demandStrength");
+  assert.equal(step.status, "partial"); assert.equal(step.errorCode, "EVIDENCE_WRITE_ERROR");
+  assert.equal(step.zeroValuesObserved, 2); assert.equal(step.dataAvailable, true);
+});
+
+test("KOSIS archive failure remains an actionable preparation code with previous zero values retained", async t => {
+  const f = await fixture(t, { kosisCacheTtlMs: 0 });
+  f.options.kosisService.refreshRegion = async key => ({ ...kosisResult(key, { status: "stale", networkAttempted: true }),
+    status: "partial", error: { code: "EVIDENCE_WRITE_ERROR", message: "Never copy private provider text" } });
+  await f.service.start(request); await f.service.awaitIdle();
+  const step = (await f.service.get(request)).steps.find(item => item.key === "kosis");
+  assert.equal(step.status, "partial"); assert.equal(step.errorCode, "EVIDENCE_WRITE_ERROR");
+  assert.equal(step.dataAvailable, true); assert.ok(step.zeroValuesObserved > 0);
+  assert.doesNotMatch(await fs.readFile(path.join(f.dataDir, "jobs.json"), "utf8"), /private provider text/);
+});
 async function fixture(t, overrides = {}) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "regional-report-preparation-"));
   const allowed = path.resolve(os.tmpdir()) + path.sep;

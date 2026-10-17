@@ -18,6 +18,27 @@ const providerJob = (sequence, overrides = {}) => ({ id: `provider-${sequence}`,
     { key: "visitors", status: "ready", networkAttempted: true, errorCode: "" }, { key: "searchTrend", status: "ready", networkAttempted: true, errorCode: "" }] }, ...overrides });
 const build = options => buildRegionalIndicatorManagement({ snapshot: snapshot(), scope, now: new Date("2026-10-16T00:00:00Z"), ...options });
 
+test("archive failure keeps observed coverage and zero while remaining a recorded review reason", () => {
+  const input = snapshot(), row = input.groups[0].metrics[0].rows[0];
+  row.refreshErrorCode = "EVIDENCE_WRITE_ERROR";
+  const before = JSON.stringify(input), projected = build({ snapshot: input }), group = projected.groups[0];
+  assert.equal(group.metrics[0].coverage.observed, 13); assert.equal(group.metrics[0].observedZeroMonths, 1);
+  assert.equal(group.metrics[0].refreshErrorCode, "EVIDENCE_WRITE_ERROR"); assert.equal(group.metrics[0].needsReview, true);
+  assert.equal(group.errorCode, "EVIDENCE_WRITE_ERROR"); assert.equal(group.status, "partial");
+  assert.deepEqual(group.metrics[0].gaps, []); assert.equal(JSON.stringify(input), before);
+});
+
+test("only the known legacy archive reason maps to a safe error and cannot establish provider success", () => {
+  const input = snapshot(); input.groups[0].errorCode = "response_evidence_storage_failed";
+  const provider = providerJob(12, { refreshDiagnostics: { status: "partial", steps: [
+    { key: "visitors", status: "partial", networkAttempted: true, errorCode: "EVIDENCE_WRITE_ERROR" }
+  ] } });
+  const result = build({ snapshot: input, refreshHistory: [provider] });
+  assert.equal(result.groups[0].errorCode, "EVIDENCE_WRITE_ERROR");
+  assert.equal(result.groups[0].refresh.errorCode, "EVIDENCE_WRITE_ERROR");
+  assert.equal(result.refresh.lastSuccessAt, null); assert.equal(result.groups[0].refresh.lastSuccessAt, null);
+});
+
 test("projects saved monthly coverage, normal zeros and source timestamps without mutating inputs", () => {
   const input = snapshot(), before = JSON.stringify(input), result = build({ snapshot: input });
   const metric = result.groups[0].metrics[0];

@@ -3,6 +3,10 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { createRegionalResponseEvidenceStore } = require("./regional_response_evidence.cjs");
+const KOSIS_RESPONSE_KIND = "kosis-statistics-response-pair";
+const KOSIS_EVIDENCE_VERSION = "stored-kosis-spatial-evidence-v1";
+const KOSIS_DEFINITION_VERSION = "kosis-statistics-definition-v1";
 
 // Verified against KOSIS statisticsData.do getMeta/ITM. Each table has its own
 // region classification: population and industry codes are NOT interchangeable.
@@ -53,6 +57,7 @@ const MESSAGES = Object.freeze({
   NETWORK_ERROR: "KOSIS에서 정상 응답을 받지 못했습니다.",
   CACHE_READ_ERROR: "저장된 KOSIS 자료를 읽지 못했습니다.",
   CACHE_WRITE_ERROR: "KOSIS 자료 저장에 실패하여 이전 자료를 유지합니다.",
+  EVIDENCE_WRITE_ERROR: "KOSIS 응답 원본을 보관하지 못해 이전 정상 자료를 유지합니다.",
   COOLDOWN: "최근 갱신을 수행했습니다. 잠시 후 다시 갱신해 주세요.",
   REFRESH_INCOMPLETE: "이전 갱신의 종료를 확인하지 못했습니다. 저장 자료를 유지합니다.",
   NO_DATA: "KOSIS에 해당 지역·항목의 조회 결과가 없습니다.",
@@ -154,6 +159,7 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
   let lastError = null;
   const at = () => Number(now());
   const iso = () => new Date(at()).toISOString();
+  const responseEvidenceStore = createRegionalResponseEvidenceStore({ directory, now: () => new Date(at()) });
   const budgetLimit = Number.isSafeInteger(dailyBudget) && dailyBudget > 0 ? Math.min(dailyBudget, 1000) : 100;
   const interval = Math.max(1000, Number(minIntervalMs) || 1000);
   const cacheFile = region => path.join(directory, `${crypto.createHash("sha256").update(region.regionId).digest("hex").slice(0, 24)}.json`);
@@ -194,7 +200,12 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
             || item.mapping.basis !== "kosis-table-metadata-name-and-ancestry") throw problem("CACHE_READ_ERROR");
           normalized.spatialEvidence = { verified: true, regionKey: region.canonicalRegionKey || region.regionKey, regionCode: evidence.regionCode, level: evidence.level,
             mappingStatus: "mapped", observedRegionCodes: [evidence.regionCode], reasonCode: "" };
+          // Compact provenance is copied without reading the original response.
+          // An explicit saved-result reconstruction reopens and verifies it.
+          if (validStoredProvenance(evidence.storedProvenance, item)) normalized.spatialEvidence.storedProvenance = { ...evidence.storedProvenance,
+            checks: [...evidence.storedProvenance.checks] };
         }
+        if (item.responseEvidence !== undefined) normalized.responseEvidence = publicEvidenceReference(item.responseEvidence) || { status: "invalid" };
         datasets[definition.key] = normalized;
       }
       return { version: 1, regionId: region.regionId, datasets };
@@ -311,19 +322,65 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
     const status = error ? datasets.some(dataset => dataset.rows.length) ? "partial" : datasets.every(dataset => dataset.status === "mapping_missing") ? "mapping_missing" : "error" : result.status;
     return { ...result, datasets, status, error: error || result.error, lastAttemptAt: attempt.startedAt, lastAttemptFinishedAt: attempt.finishedAt };
   }
-  function storedEvidenceVerification(dataset) {
-    // Version 1 KOSIS cache/history retains only normalized rows and a mapping.
-    // Those rows are reconstructed with mapping.code during cache validation;
-    // that synthetic C1 is not a retained provider response. Neither the stored
-    // mapping basis nor a matching value can restore missing response evidence.
-    // Keep this diagnostic opt-in for explicit saved-result reconstruction.
+  function responseIdentity(dataset, region) {
+    return { provider: "KOSIS", definitionVersion: KOSIS_DEFINITION_VERSION, regionId: region.regionId,
+      regionCode: dataset.mapping.code, orgId: dataset.orgId, tableId: dataset.tableId,
+      periodType: dataset.periodType, period: dataset.period };
+  }
+  function publicEvidenceReference(reference) {
+    if (!reference || typeof reference !== "object" || Array.isArray(reference)) return null;
+    return Object.fromEntries(["status", "version", "kind", "evidenceId", "sha256", "relativePath", "bytes"].filter(key =>
+      typeof reference[key] === "string" && reference[key].length <= 240 || ["version", "bytes"].includes(key) && Number.isSafeInteger(reference[key]))
+      .map(key => [key, reference[key]]));
+  }
+  function displayPeriod(dataset) { return dataset.periodType === "M" ? `${dataset.period.slice(0, 4)}-${dataset.period.slice(4)}` : dataset.period; }
+  function validStoredProvenance(provenance, dataset) {
+    const reference = dataset.responseEvidence;
+    return provenance?.version === KOSIS_EVIDENCE_VERSION && provenance.sourceKind === "stored_raw_response"
+      && provenance.periodType === dataset.periodType && provenance.period === displayPeriod(dataset)
+      && provenance.evidenceId === reference?.evidenceId && provenance.sha256 === reference?.sha256
+      && /^[a-f0-9]{64}$/.test(provenance.sha256 || "") && /^[a-zA-Z0-9_-]{1,120}$/.test(provenance.evidenceId || "")
+      && Number.isFinite(Date.parse(provenance.verifiedAt)) && Array.isArray(provenance.checks)
+      && provenance.checks.length <= 16 && provenance.checks.every(check => /^[a-zA-Z0-9_-]{1,80}$/.test(check));
+  }
+  function sameNormalizedValues(left, right) {
+    const fields = dataset => ({ key: dataset.key, orgId: dataset.orgId, tableId: dataset.tableId,
+      periodType: dataset.periodType, period: dataset.period, retrievedAt: dataset.retrievedAt,
+      sourceUpdatedAt: dataset.sourceUpdatedAt, mapping: dataset.mapping, rows: dataset.rows });
+    return JSON.stringify(fields(left)) === JSON.stringify(fields(right));
+  }
+  function inspection(dataset, status, reasonCode, extra = {}) {
+    return { ...dataset, storedEvidenceVerification: { status, reasonCode, version: KOSIS_EVIDENCE_VERSION,
+      provider: "KOSIS", tableId: dataset.tableId, period: dataset.period, evidenceReferences: [], ...extra } };
+  }
+  async function restoreDatasetEvidence(dataset, region) {
+    // Old cache/history files retain only normalized rows and a mapping. The C1
+    // synthesized during cache validation above is never original-response proof.
     const alreadyVerified = dataset.spatialEvidence?.verified === true;
-    return { ...dataset, storedEvidenceVerification: {
-      status: alreadyVerified ? "already_verified" : "pending",
-      reasonCode: alreadyVerified ? "RESPONSE_EVIDENCE_ALREADY_VERIFIED" : "RAW_RESPONSE_NOT_RETAINED",
-      provider: "KOSIS", tableId: dataset.tableId, period: dataset.period,
-      evidenceReferences: []
-    } };
+    if (!dataset.responseEvidence) return inspection(dataset, alreadyVerified ? "already_verified" : "pending",
+      alreadyVerified ? "RESPONSE_EVIDENCE_ALREADY_VERIFIED" : "RAW_RESPONSE_NOT_RETAINED");
+    try {
+      const original = await responseEvidenceStore.read(dataset.responseEvidence, { kind: KOSIS_RESPONSE_KIND, identity: responseIdentity(dataset, region) });
+      const definition = DEFINITIONS.find(item => item.key === dataset.key);
+      const mapping = mapRegion(original.payload.response.metadata, definition, region);
+      const normalized = normalizeData(original.payload.response.data, definition, mapping, dataset.retrievedAt, region);
+      if (!sameNormalizedValues(normalized, dataset)) throw Object.assign(new Error("KOSIS_STORED_VALUES_MISMATCH"), { reasonCode: "KOSIS_STORED_VALUES_MISMATCH" });
+      const reference = original.reference;
+      const spatialEvidence = { ...normalized.spatialEvidence, storedProvenance: { version: KOSIS_EVIDENCE_VERSION,
+        sourceKind: "stored_raw_response", evidenceId: reference.evidenceId, sha256: reference.sha256,
+        period: displayPeriod(dataset), periodType: dataset.periodType, verifiedAt: original.verifiedAt,
+        checks: ["safe_original_path", "original_sha256", "source_table_and_period", "metadata_region_ancestry", "raw_region_code",
+          "metric_unit_and_period", "stored_metric_values"] } };
+      return inspection({ ...dataset, spatialEvidence }, "restored", "", { evidenceReferences: [publicEvidenceReference(reference)] });
+    } catch (error) {
+      const reasonCode = error?.code === "ENOENT" ? "KOSIS_ORIGINAL_RESPONSE_NOT_FOUND"
+        : /^[A-Z0-9_]{1,100}$/.test(error?.reasonCode || "") ? error.reasonCode
+        : /^EVIDENCE_[A-Z0-9_]{1,90}$/.test(error?.code || "") ? error.code
+        : ["MAPPING_MISSING", "INVALID_RESPONSE", "PERIOD_MISMATCH"].includes(error?.code) ? `KOSIS_ORIGINAL_${error.code}` : "KOSIS_ORIGINAL_RESPONSE_UNREADABLE";
+      // A rejected original must not remain comparable through an old flag.
+      const { spatialEvidence, ...value } = dataset;
+      return inspection(value, /NOT_FOUND|NOT_RETAINED/.test(reasonCode) ? "pending" : "rejected", reasonCode);
+    }
   }
   async function getRegion(regionKey, { restoreStoredEvidence = false } = {}) {
     const configured = Boolean(await key());
@@ -331,7 +388,9 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
       const region = await regionFor(regionKey);
       const result = withAttempt(present(region, await readCache(region), configured), await readAttempt(region));
       if (restoreStoredEvidence !== true) return result;
-      return { ...result, datasets: result.datasets.map(dataset => dataset.rows.length ? storedEvidenceVerification(dataset) : dataset) };
+      const datasets = [];
+      for (const dataset of result.datasets) datasets.push(dataset.rows.length ? await restoreDatasetEvidence(dataset, region) : dataset);
+      return { ...result, datasets };
     }
     catch (error) { return { configured, status: "mapping_missing", region: { regionKey }, datasets: DEFINITIONS.map(emptyDataset), networkAttempted: false, error: publicError(error) }; }
   }
@@ -367,6 +426,10 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
           const mapping = mapRegion(meta, definition, region);
           const data = await request({ method: "getList", orgId: definition.orgId, tblId: definition.tableId, itmId: definition.metrics.map(metric => metric.id).join("+") + "+", objL1: mapping.code, ...(definition.breakdowns ? { objL2: definition.breakdowns.map(item => item.id).join("+") + "+" } : {}), prdSe: definition.periodType, newEstPrdCnt: 1, smblChk: "Y" }, apiKey, () => { networkAttempted = true; });
           const dataset = normalizeData(data, definition, mapping, iso(), region);
+          try {
+            dataset.responseEvidence = await responseEvidenceStore.write({ kind: KOSIS_RESPONSE_KIND, identity: responseIdentity(dataset, region),
+              response: { metadata: meta, data }, secretValues: [apiKey] });
+          } catch { throw problem("EVIDENCE_WRITE_ERROR"); }
           if (dataset.status !== "ready") {
             const error = publicError(problem("MISSING_VALUES"));
             // Keep a first partial observation for audit and display, including
@@ -384,7 +447,7 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
           changed = true;
         } catch (error) {
           const safe = publicError(error);
-          if (["AUTH_ERROR", "QUOTA_EXCEEDED", "TIMEOUT", "NETWORK_ERROR"].includes(safe.code)) stopError = problem(safe.code);
+          if (["AUTH_ERROR", "QUOTA_EXCEEDED", "TIMEOUT", "NETWORK_ERROR", "EVIDENCE_WRITE_ERROR"].includes(safe.code)) stopError = problem(safe.code);
           outcomes.push({ ...(cache.datasets[definition.key] || emptyDataset(definition)), status: cache.datasets[definition.key] ? "stale" : safe.code === "MAPPING_MISSING" ? "mapping_missing" : "error", error: safe });
         }
       }

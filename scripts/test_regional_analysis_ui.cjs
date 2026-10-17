@@ -13,6 +13,22 @@ function scheduled() {
   return { pending, schedule(fn, ms) { assert.equal(ms, 3000); const id = ++sequence; pending.set(id, fn); return id; }, cancel(id) { pending.delete(id); } };
 }
 
+test("stored indicator management explains archive failure without replacing a real zero", () => {
+  const data = response().snapshot;
+  data.groups = [{ key: "visitors", label: "지역 방문자", category: "tourism", periodType: "M", status: "ready", metrics: [
+    { key: "count", label: "일평균 방문자", unit: "명", rows: [{ period: data.scope.month, status: "observed", value: 0,
+      refreshErrorCode: "EVIDENCE_WRITE_ERROR" }] }
+  ] }];
+  const management = buildRegionalIndicatorManagement({ snapshot: data, scope: data.scope });
+  for (const mode of ["manage", "sources", "summary"]) {
+    const html = renderCard({ regionKey: data.scope.regionKey, regionLabel: "산청군", mode, snapshot: data, management });
+    assert.match(html, /응답 원본 보관 실패 · 저장된 지표 유지/);
+    assert.doesNotMatch(html, /제공처 응답 확인 필요|확인 코드 EVIDENCE_WRITE_ERROR/);
+  }
+  assert.equal(management.groups[0].metrics[0].latestValue, 0); assert.equal(data.groups[0].metrics[0].rows[0].status, "observed");
+  assert.match(jobHtml({ status: "partial", errorCode: "EVIDENCE_WRITE_ERROR" }), /응답 원본 보관 실패/);
+});
+
 test("zero, errors and unpublished months remain distinct; annual KOSIS has no 13 month denominator", () => {
   assert.equal(number(0), "0"); assert.equal(number(null), "—");
   const data = response().snapshot;

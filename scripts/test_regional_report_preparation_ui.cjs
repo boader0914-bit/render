@@ -18,6 +18,17 @@ function fixture(api) {
   return { controller, calls, sent, timers, container: makeContainer(), async tick() { const [key, callback] = timers.entries().next().value; timers.delete(key); callback(); await new Promise(resolve => setImmediate(resolve)); } };
 }
 
+test("preparation distinguishes an archive write failure from an API failure and keeps the report usable", async () => {
+  const f = fixture((query, method, body, state) => ({ job: job(state, "partial", {
+    steps: [{ key: "kosis", label: "인구·산업 통계", status: "partial", dataAvailable: true,
+      errorCode: "EVIDENCE_WRITE_ERROR", period: "2024", cacheReused: true }]
+  }) }));
+  await f.controller.mount(f.container, region);
+  assert.match(f.container.innerHTML, /응답 원본 보관 실패 · 저장된 지표 유지/);
+  assert.doesNotMatch(f.container.innerHTML, /세부 원인 미분류|제공처 응답 확인 실패/);
+  assert.equal(f.controller.send(), true); assert.equal(f.calls.filter(call => call.method === "POST").length, 0);
+});
+
 test("opening, polling, remounting and returning only read state; collection needs an explicit start", async () => {
   let started = false, done = false;
   const f = fixture((query, method, body, state) => {

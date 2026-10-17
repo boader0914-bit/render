@@ -79,6 +79,69 @@ test("provider input echoes never turn legacy stored values into verified region
   assert.equal(result.groups.find(group => group.key === "searchTrend").spatialContract.scopeKind, "keyword");
 });
 
+test("KOSIS original proof binds to the actual monthly or annual dataset without copying its period", async () => {
+  const f = withSpatialEvidence(fixture()), original = f.options.kosisService.getRegion;
+  let altered = false;
+  f.options.kosisService.getRegion = async regionKey => {
+    const result = await original(regionKey); result.region.level = "local";
+    for (const dataset of result.datasets) {
+      dataset.mapping = { code: "41650" };
+      dataset.spatialEvidence = { verified: true, regionKey, regionCode: "41650", level: "sigungu",
+        storedProvenance: { version: "regional-response-evidence-v1", sourceKind: "stored_raw_response", evidenceId: "fixture-original",
+          sha256: "a".repeat(64), period: altered ? dataset.periodType === "Y" ? "2023" : "2026-07" : dataset.periodType === "Y" ? "2024" : "2026-08",
+          periodType: dataset.periodType, verifiedAt: "2026-10-17T00:00:00Z", checks: ["hash", "period", "values", "metadata_region_ancestry"] } };
+      dataset.storedEvidenceVerification = { status: "restored", reasonCode: "" };
+    }
+    return result;
+  };
+  const build = createRegionalAnalysisSnapshotBuilder(f.options), before = await build(scope);
+  const datasets = before.groups.find(group => group.key === "kosis").datasets;
+  assert.ok(datasets.every(dataset => dataset.spatialContract.status === "matched" && dataset.storedEvidenceVerification.reasonCode === ""));
+  assert.equal(datasets.find(dataset => dataset.periodType === "Y").spatialContract.storedProvenance.period, "2024");
+  assert.equal(datasets.find(dataset => dataset.periodType === "M").spatialContract.storedProvenance.period, "2026-08");
+  altered = true;
+  const after = await build(scope), rejected = after.groups.find(group => group.key === "kosis").datasets;
+  assert.ok(rejected.every(dataset => dataset.spatialContract.status === "scope_unverified" && !dataset.spatialContract.storedProvenance));
+  assert.ok(rejected.every(dataset => dataset.storedEvidenceVerification.status === "rejected"
+    && dataset.storedEvidenceVerification.reasonCode === "STORED_EVIDENCE_PERIOD_OR_REFERENCE_MISMATCH"));
+  assert.ok(rejected.every(dataset => dataset.rows.every(row => row.value === 0 && row.status === "observed")), "unverified period never erases a legitimate zero");
+  assert.notEqual(before.sourceFingerprint, after.sourceFingerprint);
+});
+
+test("tourism original storage failure stays separate from source success and keeps valid observed values", async () => {
+  const f = fixture();
+  f.options.tourismCollector.collectDemandStrengthHistory = async input => ({ region: { regionKey: input.regionKey }, period: { endYearMonth: input.endYearMonth }, networkAttempted: false,
+    series: [{ yearMonth: "202609", status: "complete", stayStatus: "ok", spendStatus: "ok", stayOverall: 0, spendOverall: 7,
+      stayResponseEvidenceStorage: { status: "failed", reasonCode: "EVIDENCE_PATH_INVALID" }, spendResponseEvidenceStorage: { status: "stored", reasonCode: "" } }] });
+  f.options.tourismCollector.collectResourceDemandHistory = async input => ({ region: { regionKey: input.regionKey }, period: { endYearMonth: input.endYearMonth }, networkAttempted: false,
+    series: [{ yearMonth: "202609", status: "complete", values: { service: 0, culture: 8 }, operations: {
+      service: { status: "ok", quality: { responseEvidenceStorage: { status: "failed", reasonCode: "EVIDENCE_WRITE_ERROR" } } }, culture: { status: "ok" } } }] });
+  const result = await createRegionalAnalysisSnapshotBuilder(f.options)(scope);
+  for (const key of ["demandStrength", "resourceDemand"]) {
+    const group = result.groups.find(group => group.key === key), row = group.metrics[0].rows.at(-1);
+    assert.equal(row.value, 0); assert.equal(row.status, "observed"); assert.equal(row.reasonCode, "");
+    assert.equal(row.refreshErrorCode, "EVIDENCE_WRITE_ERROR");
+    assert.deepEqual(row.storedEvidenceVerification, { status: "pending", reasonCode: "EVIDENCE_WRITE_ERROR" });
+    assert.equal(group.metrics[1].rows.at(-1).refreshErrorCode, undefined);
+  }
+});
+
+test("retained tourism values and KOSIS refresh diagnostics preserve the original-storage error code", async () => {
+  const f = fixture(), original = f.options.kosisService.getRegion;
+  f.options.kosisService.getRegion = async regionKey => ({ ...await original(regionKey), error: { code: "EVIDENCE_WRITE_ERROR" }, status: "stale" });
+  f.options.tourismCollector.collectDemandStrengthHistory = async input => ({ region: { regionKey: input.regionKey }, period: { endYearMonth: input.endYearMonth }, networkAttempted: false,
+    series: [{ yearMonth: "202609", status: "complete", stayStatus: "ok", spendStatus: "ok", stayOverall: 0, spendOverall: 7,
+      refreshFailed: true, refreshReason: "response_evidence_storage_failed" }] });
+  f.options.prepare = async () => ({ status: "partial", steps: [{ key: "kosis", status: "stale", errorCode: "EVIDENCE_WRITE_ERROR" },
+    { key: "demandStrength", status: "partial", errorCode: "EVIDENCE_WRITE_ERROR", periods: [{ period: "202609", status: "partial", errorCode: "EVIDENCE_WRITE_ERROR" }] }] });
+  const result = await createRegionalAnalysisSnapshotBuilder(f.options)(scope, { collectMissing: true });
+  assert.equal(result.groups.find(group => group.key === "kosis").errorCode, "EVIDENCE_WRITE_ERROR");
+  const group = result.groups.find(group => group.key === "demandStrength");
+  assert.equal(group.errorCode, "EVIDENCE_WRITE_ERROR"); assert.equal(group.metrics[0].rows.at(-1).refreshErrorCode, "EVIDENCE_WRITE_ERROR");
+  assert.ok(result.refreshDiagnostics.steps.every(step => step.errorCode === "EVIDENCE_WRITE_ERROR"));
+  assert.equal(result.refreshDiagnostics.steps[1].periods[0].errorCode, "EVIDENCE_WRITE_ERROR");
+});
+
 test("regional evidence mismatch survives snapshots and changes their fingerprint", async () => {
   const f = withSpatialEvidence(fixture());
   const build = createRegionalAnalysisSnapshotBuilder(f.options), verified = await build(scope);

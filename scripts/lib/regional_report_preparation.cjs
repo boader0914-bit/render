@@ -15,7 +15,7 @@ const STEP_DEFINITIONS = [...TOURISM, { key: "kosis", label: "인구·산업 통
 const ACTIVE = new Set(["queued", "running"]);
 const SAFE_CODES = new Set(["INVALID_REQUEST", "INVALID_REGION", "INVALID_MONTH", "INVALID_CUTOFF_DATE", "PREPARATION_STORAGE_ERROR", "PREPARATION_INTERRUPTED",
   "PROVIDER_UNAVAILABLE", "PROVIDER_FAILED", "CACHE_ONLY_VIOLATION", "REGION_MISMATCH", "PERIOD_MISMATCH", "INVALID_RESPONSE", "MISSING_KEY", "AUTH_ERROR",
-  "QUOTA_EXCEEDED", "TIMEOUT", "NETWORK_ERROR", "CACHE_READ_ERROR", "CACHE_WRITE_ERROR", "COOLDOWN", "REFRESH_INCOMPLETE", "NO_DATA", "MISSING_VALUES",
+  "QUOTA_EXCEEDED", "TIMEOUT", "NETWORK_ERROR", "CACHE_READ_ERROR", "CACHE_WRITE_ERROR", "EVIDENCE_WRITE_ERROR", "COOLDOWN", "REFRESH_INCOMPLETE", "NO_DATA", "MISSING_VALUES",
   "MAPPING_MISSING", "AMBIGUOUS_REGION", "PARTIAL_DATA", "PUBLICATION_PENDING", "REGIONAL_SOURCE_BUSY", "CONFIG_READ_ERROR", "KEYWORD_MISMATCH", "RESPONSE_TOO_LARGE"]);
 const clone = (value) => value == null ? value : JSON.parse(JSON.stringify(value));
 function problem(code, statusCode = 503) {
@@ -24,7 +24,7 @@ function problem(code, statusCode = 503) {
 function safeCode(error, fallback = "PROVIDER_FAILED") {
   const aliases = { tourism_visitor_history_busy: "REGIONAL_SOURCE_BUSY", tourism_demand_strength_daily_quota_exceeded: "QUOTA_EXCEEDED", tourism_demand_strength_scheduler_active: "REGIONAL_SOURCE_BUSY",
     tourism_demand_strength_manual_active: "REGIONAL_SOURCE_BUSY", tourism_demand_strength_backfill_busy: "REGIONAL_SOURCE_BUSY",
-    tourism_demand_strength_state_unavailable: "CACHE_READ_ERROR" };
+    tourism_demand_strength_state_unavailable: "CACHE_READ_ERROR", response_evidence_storage_failed: "EVIDENCE_WRITE_ERROR" };
   return SAFE_CODES.has(error?.code) ? error.code : aliases[error?.code]
     || (error?.httpStatus === 429 ? "QUOTA_EXCEEDED" : [401, 403].includes(error?.httpStatus) ? "AUTH_ERROR" : fallback);
 }
@@ -39,7 +39,9 @@ function networkAttempted(result) {
 }
 function tourismEvidence(result, point, requestedPeriod) {
   const refreshErrors = (result?.collection?.refreshErrors || []).filter((row) => !row.yearMonth || row.yearMonth === requestedPeriod);
-  return [point, point?.quality, point?.diagnostics, ...refreshErrors,
+  const storage = [point?.stayResponseEvidenceStorage, point?.spendResponseEvidenceStorage, point?.quality?.responseEvidenceStorage,
+    ...Object.values(point?.operations || {}).map(operation => operation?.quality?.responseEvidenceStorage)];
+  return [point, point?.quality, point?.diagnostics, ...storage.filter(item => item?.status === "failed").map(() => ({ errorCode: "EVIDENCE_WRITE_ERROR" })), ...refreshErrors,
     ...(result?.period?.months > 1 ? [] : [result, result?.quality, result?.diagnostics])].filter(Boolean);
 }
 function safeDiagnostics(values) {
@@ -54,7 +56,8 @@ function errorFromTourism(result, point, requestedPeriod) {
   if (diagnostics.httpStatus === 429 || diagnostics.providerCode === "22") return "QUOTA_EXCEEDED";
   if ([401, 403].includes(diagnostics.httpStatus) || ["20", "21", "30", "31", "32"].includes(diagnostics.providerCode)) return "AUTH_ERROR";
   if (diagnostics.httpStatus >= 400) return "PROVIDER_FAILED";
-  const reasons = [point?.reason, point?.stayReason, point?.spendReason, ...evidence.map((row) => row.reason), result?.reason];
+  const reasons = [point?.reason, point?.stayReason, point?.spendReason, point?.refreshReason,
+    ...evidence.flatMap(row => [row.reason, row.refreshReason]), result?.reason, result?.cache?.refreshReason];
   const mappings = { missing_service_key: "MISSING_KEY", disabled: "PROVIDER_UNAVAILABLE", missing_endpoint: "PROVIDER_UNAVAILABLE",
     invalid_endpoint: "PROVIDER_UNAVAILABLE", untrusted_endpoint: "PROVIDER_UNAVAILABLE", fetch_unavailable: "PROVIDER_UNAVAILABLE",
     requested_region_not_matched: "REGION_MISMATCH", region_not_matched: "REGION_MISMATCH", region_code_verify_required: "MAPPING_MISSING",
@@ -62,6 +65,7 @@ function errorFromTourism(result, point, requestedPeriod) {
     schema_error: "INVALID_RESPONSE", invalid_response: "INVALID_RESPONSE", page_number_mismatch: "INVALID_RESPONSE", total_count_changed: "INVALID_RESPONSE",
     incomplete_pagination: "PARTIAL_DATA", page_limit_exceeded: "PARTIAL_DATA", gateway_error: "PROVIDER_FAILED", api_error: "PROVIDER_FAILED",
     http_error: "PROVIDER_FAILED", timeout: "TIMEOUT", request_failed: "NETWORK_ERROR", evidence_write_failed: "CACHE_WRITE_ERROR",
+    response_evidence_storage_failed: "EVIDENCE_WRITE_ERROR",
     no_observation: "NO_DATA", empty_verified: "NO_DATA" };
   const codes = [...evidence.map((row) => row.errorCode).filter((code) => SAFE_CODES.has(code)), ...reasons.map((reason) => mappings[reason])].filter(Boolean);
   const failure = codes.find((code) => !["NO_DATA", "PUBLICATION_PENDING"].includes(code));

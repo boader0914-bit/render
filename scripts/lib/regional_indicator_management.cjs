@@ -5,7 +5,7 @@
 const MONTH = /^20\d{2}-(0[1-9]|1[0-2])$/;
 const YEAR = /^20\d{2}$/;
 const REASONS = new Set(["NO_DATA", "NOT_COLLECTED", "PUBLICATION_PENDING", "PARTIAL_DATA", "MISSING_VALUES", "AUTH_ERROR", "MISSING_KEY",
-  "QUOTA_EXCEEDED", "TIMEOUT", "NETWORK_ERROR", "CACHE_READ_ERROR", "CACHE_WRITE_ERROR", "INVALID_RESPONSE", "REGION_MISMATCH", "PERIOD_MISMATCH",
+  "QUOTA_EXCEEDED", "TIMEOUT", "NETWORK_ERROR", "CACHE_READ_ERROR", "CACHE_WRITE_ERROR", "EVIDENCE_WRITE_ERROR", "INVALID_RESPONSE", "REGION_MISMATCH", "PERIOD_MISMATCH",
   "COOLDOWN", "PROVIDER_FAILED", "PROVIDER_UNAVAILABLE", "REGIONAL_SOURCE_BUSY", "MAPPING_MISSING", "REGIONAL_SOURCE_UNAVAILABLE",
   "REGIONAL_BUILD_FAILED", "REGIONAL_NO_DATA", "REGIONAL_REFRESH_INTERRUPTED", "PREPARATION_INTERRUPTED", "REGIONAL_STORE_UNAVAILABLE", "REGIONAL_SCOPE_CLOSED"]);
 const ACTIVE = new Set(["queued", "running", "processing"]);
@@ -15,7 +15,7 @@ const numeric = value => typeof value === "number" && Number.isFinite(value) && 
 const text = value => typeof value === "string" ? value.slice(0, 300) : "";
 const stamp = value => typeof value === "string" && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
 const period = value => typeof value === "string" && MONTH.test(value) ? value : typeof value === "string" && /^20\d{2}(0[1-9]|1[0-2])$/.test(value) ? `${value.slice(0, 4)}-${value.slice(4)}` : "";
-const safeReason = value => REASONS.has(value) ? value : "";
+const safeReason = value => value === "response_evidence_storage_failed" ? "EVIDENCE_WRITE_ERROR" : REASONS.has(value) ? value : "";
 const shift = (value, offset) => new Date(Date.UTC(Number(value.slice(0, 4)), Number(value.slice(5)) - 1 + offset, 1)).toISOString().slice(0, 7);
 const distance = (from, to) => (Number(to.slice(0, 4)) - Number(from.slice(0, 4))) * 12 + Number(to.slice(5)) - Number(from.slice(5));
 const maxStamp = values => values.map(stamp).filter(Boolean).sort().at(-1) || null;
@@ -162,7 +162,7 @@ function buildRegionalIndicatorManagement({ snapshot = null, scope = {}, job = n
       requested: monthly ? { period: requestedThrough, status: requestedStatus, reasonCode: requestedStatus === "observed" ? "" : requestedIssue?.reasonCode || "UNRECORDED_REASON",
         reasonEvidence: requestedStatus === "observed" ? "recorded" : requestedIssue?.reasonEvidence || "unknown" } : null,
       sourceRetrievedAt: maxStamp(metrics.map(metric => metric.sourceRetrievedAt)), stale: group.stale === true,
-      errorCode: safeReason(group.lastRefreshErrorCode) || safeReason(group.errorCode), needsReview,
+      errorCode: safeReason(group.lastRefreshErrorCode) || safeReason(group.errorCode) || metrics.map(metric => metric.refreshErrorCode).find(Boolean) || "", needsReview,
       metrics, refresh: { ...refreshView(groupJob, group.key), lastSuccessAt: successAt(jobs, group.key) } };
   });
   const monthlyMetrics = groups.flatMap(group => group.metrics).filter(metric => metric.coverage.kind === "months");

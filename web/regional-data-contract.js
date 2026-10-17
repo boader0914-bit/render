@@ -20,11 +20,16 @@
   // Only bounded, non-secret audit fields may travel with a saved observation.
   // This describes a verifier's result; it never verifies a raw file itself.
   function storedProvenanceOf(value) {
+    // Legacy monthly proof predates periodType. Annual evidence must declare
+    // its frequency explicitly, so a year cannot be mistaken for a month.
+    const periodType = value?.periodType === undefined ? "M" : periodTypeOf(value.periodType);
     if (!value || value.sourceKind !== "stored_raw_response" || !/^[a-f0-9]{64}$/.test(value.sha256 || "")
-      || !/^[a-zA-Z0-9_-]{1,120}$/.test(value.evidenceId || "") || !MONTH.test(value.period || "")
+      || !/^[a-zA-Z0-9_-]{1,120}$/.test(value.evidenceId || "")
+      || !(periodType === "M" ? MONTH.test(value.period || "") : periodType === "Y" && /^20\d{2}$/.test(value.period || ""))
       || !/^[a-z0-9-]{1,100}$/.test(value.version || "")) return null;
     return { version: value.version, sourceKind: "stored_raw_response", evidenceId: value.evidenceId, sha256: value.sha256,
-      period: value.period, verifiedAt: Number.isFinite(Date.parse(value.verifiedAt)) ? new Date(value.verifiedAt).toISOString() : "",
+      period: value.period, ...(value.periodType !== undefined ? { periodType } : {}),
+      verifiedAt: Number.isFinite(Date.parse(value.verifiedAt)) ? new Date(value.verifiedAt).toISOString() : "",
       checks: unique((Array.isArray(value.checks) ? value.checks : []).filter(check => typeof check === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(check))).slice(0, 16) };
   }
   function storedEvidenceSummary(contract, verification) {
@@ -32,7 +37,8 @@
     if (provenance) return { label: "보관 원본 재검증", reason: "지역·기간·수량 일치 확인", ...provenance };
     if (!verification || !["pending", "rejected"].includes(verification.status)) return null;
     return { label: verification.status === "rejected" ? "보관 원본 검증 불일치" : "보관 근거 미확인",
-      reason: /NOT_(STORED|RETAINED)|MISSING|NOT_FOUND/.test(verification.reasonCode || "") ? "응답 원본이 없어 범위를 확인할 수 없습니다."
+      reason: /EVIDENCE_WRITE_ERROR|EVIDENCE_STORAGE_FAILED/.test(verification.reasonCode || "") ? "응답 원본을 보관하지 못했습니다."
+        : /NOT_(STORED|RETAINED)|MISSING|NOT_FOUND/.test(verification.reasonCode || "") ? "응답 원본이 없어 범위를 확인할 수 없습니다."
         : "보관 근거로 지역·기간·수량의 일치를 확인하지 못했습니다." };
   }
   function createSpatialContract({ region = {}, provider = "", sourceRegion = null, evidence = null, scopeKind = "administrative" } = {}) {

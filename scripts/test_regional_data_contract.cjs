@@ -55,6 +55,21 @@ test("a canonical echo cannot verify geography, while response evidence preserve
   assert.equal(createSpatialContract({ ...input, sourceRegion: { regionKey: input.region.regionKey, ktoSggCd: "48860", unit: "기초지자체" } }).status, "matched");
 });
 
+test("annual stored proof requires its own frequency and never impersonates a monthly reference", () => {
+  const monthly = { version: "regional-response-evidence-v1", sourceKind: "stored_raw_response", evidenceId: "kosis-response-fixture",
+    sha256: "b".repeat(64), period: "2026-08", verifiedAt: "2026-10-17T00:00:00Z", checks: ["hash", "metadata_region_ancestry", "values"] };
+  assert.equal(storedProvenanceOf(monthly).period, "2026-08", "legacy monthly evidence remains compatible");
+  const annual = storedProvenanceOf({ ...monthly, period: "2024", periodType: "Y" });
+  assert.equal(annual.period, "2024"); assert.equal(annual.periodType, "Y");
+  for (const patch of [{ period: "2024" }, { period: "2024", periodType: "M" }, { periodType: "Y" }, { periodType: "unknown" }, { period: "2026-13" }]) {
+    assert.equal(storedProvenanceOf({ ...monthly, ...patch }), null);
+  }
+  const input = verified();
+  const contract = createSpatialContract({ ...input, evidence: { ...input.evidence, storedProvenance: { ...monthly, period: "2024", periodType: "Y" } } });
+  assert.equal(contract.status, "matched"); assert.equal(storedEvidenceSummary(contract).period, "2024");
+  assert.equal(storedEvidenceSummary(null, { status: "pending", reasonCode: "EVIDENCE_WRITE_ERROR" }).reason, "응답 원본을 보관하지 못했습니다.");
+});
+
 test("missing verification fields never graduate into a matched response", () => {
   const input = verified();
   for (const field of ["verified", "regionKey", "regionCode", "level"]) {
