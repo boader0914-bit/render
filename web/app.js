@@ -28379,6 +28379,12 @@ function syncSavedRegionalAnalysis(region = null, mode = "summary", host = null)
   if (!slot) return;
   if (!visible()) { window.RegionalAnalysis?.stop(slot); return; }
   const selected = isManagement ? adminReportPreparationRegion(region) : selectedAnalysisRegion();
+  if (selected?.level === "broad") {
+    window.RegionalAnalysis?.stop(slot);
+    slot.innerHTML = `<section class="regional-analysis"><h3>${escapeHtml(analysisRegionLabel(selected))}</h3><p class="ra-muted">지역 흐름 지표는 시·군·구별 저장 자료를 사용합니다. 상단에서 시·군·구를 선택해 주세요.</p></section>`;
+    if (slot.dataset) { slot.dataset.raDisplayStatus = "unsupported"; delete slot.dataset.raDisplayMs; delete slot.dataset.raDisplaySequence; slot.dataset.raVerifiedStatus = "unchecked"; }
+    return;
+  }
   void window.RegionalAnalysis?.mount(slot, {
     regionKey: selected?.regionKey || "", regionLabel: selected ? analysisRegionLabel(selected) : "지역 미선택",
     mode, fetchJson, accountKey: state.session?.username || "admin", isVisible: visible
@@ -30844,6 +30850,10 @@ function applyAnalysisRegionToDictionary(region = selectedAnalysisRegion()) {
 function setAnalysisRegion(regionKey = "", options = {}) {
   const region = analysisRegionForKey(regionKey);
   if (regionKey && !region) return false;
+  if (isAdminRole() && options.render !== false && state.analysisRegionSelection?.regionKey !== (region?.regionKey || "")) {
+    const host = document.getElementById(state.activeTab === "dictionary" ? "regionalAnalysisSummary" : state.activeTab === "regionCompare" ? "regionCompareDashboard" : "");
+    if (host?.dataset) host.dataset[state.activeTab === "dictionary" ? "raEntryStartedAt" : "rcEntryStartedAt"] = String(Date.now());
+  }
   state.analysisRegionSelection = {
     regionKey: region?.regionKey || "",
     explicit: options.explicit !== false,
@@ -31198,6 +31208,23 @@ function renderDemand() {
 
 function renderRegionComparison() {
   if (!els.regionCompareDashboard) return;
+  if (isAdminRole()) {
+    const visible = () => isAdminRole() && state.activeTab === "regionCompare";
+    if (!visible()) { window.RegionComparison?.stop(els.regionCompareDashboard); return; }
+    const selected = selectedAnalysisRegion();
+    if (selected?.level === "broad") {
+      window.RegionComparison?.stop(els.regionCompareDashboard);
+      els.regionCompareDashboard.innerHTML = `<section class="regional-comparison"><h3>${escapeHtml(analysisRegionLabel(selected))} · 지역 비교</h3><p class="rc-note">지역 비교는 시·군·구별 저장 지표를 사용합니다. 상단에서 기준 시·군·구를 선택해 주세요.</p></section>`;
+      if (els.regionCompareDashboard.dataset) { els.regionCompareDashboard.dataset.rcDisplayStatus = "unsupported"; delete els.regionCompareDashboard.dataset.rcDisplayMs; delete els.regionCompareDashboard.dataset.rcDisplaySequence; }
+      return;
+    }
+    void window.RegionComparison?.mount(els.regionCompareDashboard, {
+      regionKey: selected?.regionKey || "", regionLabel: selected ? analysisRegionLabel(selected) : "지역 미선택",
+      regions: regionMasterUnits().filter(region => region.active && region.selectable && region.level === "local").map(region => ({ regionKey: region.regionKey, label: analysisRegionLabel(region) })),
+      fetchJson, accountKey: state.session?.username || "admin", isVisible: visible
+    });
+    return;
+  }
   if (!analysisRunMatchesRegion()) {
     els.regionCompareDashboard.innerHTML = regionAnalysisEmptyHtml("비교");
     return;
@@ -31227,7 +31254,8 @@ function renderRegionSources() {
   const alias = locationProfileAlias(card, region);
   const provider = region.providerMappings?.kto || {};
   const providerCodePending = Boolean(provider.status && provider.status !== "ready");
-  if (region.level === "local" && provider.ktoSggCd && !providerCodePending) void ensureLocationProfile(card);
+  // Official flow sources are already in the shared saved snapshot. The
+  // legacy crawl-evidence profile is read only by its explicit refresh button.
   const entry = locationProfileEntry(card);
   const profile = locationProfilePayload(entry);
   const runtime = analysisRunMatchesRegion(region) ? locationRuntimeStats(card, alias) : {};
@@ -36029,7 +36057,9 @@ function renderObservedLocationProfile(card, alias, tourismMatch, clusters, inde
   );
   const providerCode = region.ktoSggCd || providerMapping.ktoSggCd || "";
   const exactRegion = Boolean(providerCode && !providerCodePending);
-  if (exactRegion) void ensureLocationProfile(card);
+  // The first basic view uses saved regional flow. Reconstructing every crawl
+  // belongs to an explicitly opened legacy detail tab, not regional entry.
+  if (exactRegion && (!isAdminRole() || locationProfileActiveTab() !== "basic")) void ensureLocationProfile(card);
   const entry = locationProfileEntry(card);
   const profile = locationProfilePayload(entry);
   const evidence = {
@@ -36053,7 +36083,7 @@ function renderObservedLocationProfile(card, alias, tourismMatch, clusters, inde
         ? "프로필 연동 대기 · 현재 수집자료 우선"
         : entry?.status === "error"
           ? "프로필 연결 실패 · 현재 수집자료 우선"
-          : "프로필 연결 대기 · 현재 수집자료 우선";
+          : isAdminRole() ? "저장 흐름 우선 · 상세 탭에서 관측 이력 조회" : "프로필 연결 대기 · 현재 수집자료 우선";
   const sido = administrativeRegion?.sidoFull
     || profileRegion.sidoFull
     || administrativeRegion?.sido
@@ -37479,6 +37509,15 @@ function renderAll() {
   reconcileAnalysisRegionSelection();
   applyRoleUi();
   renderRegionAnalysisShell();
+  // Saved regional views do not depend on the last lodging crawl. A late
+  // bootstrap response updates state without rebuilding unrelated result/DB
+  // panels or displacing the region comparison controls and open details.
+  if (isAdminRole() && ["dictionary", "regionCompare", "regionSources", "demand"].includes(state.activeTab)) {
+    state.adminViewsDeferred = true;
+    renderHeader();
+    renderActiveRegionAnalysis();
+    return;
+  }
   if (isAdminRole() && state.activeTab === "admin" && state.adminPanelSection === "overview") {
     state.adminViewsDeferred = true;
     renderHeader();
@@ -37561,6 +37600,10 @@ function syncAppHistoryState(push = false) {
 }
 
 function setActiveTab(tab, options = {}) {
+  if (isAdminRole() && ["dictionary", "regionCompare"].includes(tab)) {
+    const host = document.getElementById(tab === "dictionary" ? "regionalAnalysisSummary" : "regionCompareDashboard");
+    if (host?.dataset) host.dataset[tab === "dictionary" ? "raEntryStartedAt" : "rcEntryStartedAt"] = String(Date.now());
+  }
   if (tab === "monthlyReports" && isAdminRole()) {
     const reportRoot = document.getElementById("monthlyReportsDashboard");
     if (reportRoot?.dataset) reportRoot.dataset.mrEntryStartedAt = String(Date.now());
@@ -37570,6 +37613,7 @@ function setActiveTab(tab, options = {}) {
   state.activeTab = roleAllowsTab(tab) ? tab : firstRoleTab();
   if (window.AdminTransitionTiming) beginAdminScreenTransition(options.navigationSource || "tab", options.inputTimeStamp);
   window.RegionalAnalysis?.stop();
+  window.RegionComparison?.stop();
   window.RegionalOutlook?.stop();
   if (state.activeTab !== "industryHome") window.StayIndustryAnalysis?.pause(els.industryHomeDashboard);
   if (state.activeTab !== "admin") window.RegionalReportPreparation?.pause();
@@ -37597,11 +37641,12 @@ function setActiveTab(tab, options = {}) {
   renderHeader();
   const adminHome = isAdminRole() && state.activeTab === "admin" && state.adminPanelSection === "overview";
   const adminDatabase = isAdminRole() && state.activeTab === "admin" && state.adminPanelSection === "database";
-  if (state.adminViewsDeferred && state.activeTab !== "monthlyReports" && !adminHome && !adminDatabase) {
+  const savedRegionalView = isAdminRole() && ["dictionary", "regionCompare", "regionSources", "demand"].includes(state.activeTab);
+  if (state.adminViewsDeferred && state.activeTab !== "monthlyReports" && !adminHome && !adminDatabase && !savedRegionalView) {
     state.adminViewsDeferred = false;
     renderAll();
   }
-  if (isAdminRole() && state.activeTab !== "monthlyReports" && !options.fromHistory
+  if (isAdminRole() && state.activeTab !== "monthlyReports" && !savedRegionalView && !options.fromHistory
     && (state.adminBootstrapRunPending || state.adminBootstrapSummaryPending)) void resumeAdminBootstrapReads();
   if (state.activeTab === "rank") renderPlaceRankReplayNotice();
   closeDrawer();
@@ -37620,6 +37665,10 @@ function setActiveTab(tab, options = {}) {
   }
   if (adminDatabase) {
     renderAdminDatabaseDashboard();
+    return;
+  }
+  if (savedRegionalView) {
+    renderActiveRegionAnalysis();
     return;
   }
   if (isAdminRole() && state.activeTab === "historyOps") {
@@ -37677,6 +37726,7 @@ async function restoreAppHistoryState(historyState = {}, options = {}) {
 
 function resumeAdminBootstrapReads() {
   if (!isAdminRole() || state.activeTab === "monthlyReports"
+    || ["dictionary", "regionCompare", "regionSources", "demand"].includes(state.activeTab)
     || (!state.adminBootstrapSummaryPending && state.activeTab === "admin" && ["overview", "database"].includes(state.adminPanelSection))) return Promise.resolve();
   if (state.adminBootstrapResumeTask) return state.adminBootstrapResumeTask;
   const basicView = state.activeTab === "admin" && ["overview", "database"].includes(state.adminPanelSection);
@@ -37696,7 +37746,7 @@ function resumeAdminBootstrapReads() {
         await pending;
       }
       if (!isAdminRole() || sequence !== loadRunRequestSequence) return;
-      if (state.activeTab === "monthlyReports") {
+      if (state.activeTab === "monthlyReports" || ["dictionary", "regionCompare", "regionSources", "demand"].includes(state.activeTab)) {
         if (summaryPending) state.adminBootstrapSummaryPending = true;
         return;
       }
@@ -37721,6 +37771,7 @@ function resumeAdminBootstrapReads() {
   })().finally(() => {
     if (state.adminBootstrapResumeTask === task) state.adminBootstrapResumeTask = null;
     if (!failed && isAdminRole() && state.activeTab !== "monthlyReports"
+      && !["dictionary", "regionCompare", "regionSources", "demand"].includes(state.activeTab)
       && !(state.activeTab === "admin" && ["overview", "database"].includes(state.adminPanelSection))
       && (state.adminBootstrapRunPending || state.adminBootstrapSummaryPending)) void resumeAdminBootstrapReads();
   });
@@ -41302,6 +41353,7 @@ async function loadRuns(selectLatest = false, options = {}) {
   if (els.runSelect) els.runSelect.value = state.activeRunId;
   renderB2BSearchPanel();
   if (options.bootstrap && (state.activeTab === "monthlyReports"
+    || ["dictionary", "regionCompare", "regionSources", "demand"].includes(state.activeTab)
     || (state.activeTab === "admin" && ["overview", "database"].includes(state.adminPanelSection)))) {
     state.adminBootstrapRunPending = state.activeRunId;
     state.adminViewsDeferred = true;
@@ -42255,6 +42307,7 @@ async function loadRun(runId, options = {}) {
   const current = () => requestSequence === loadRunRequestSequence && (!options.bootstrap || isAdminRole());
   const deferBootstrap = () => {
     if (!options.bootstrap || !current() || !(state.activeTab === "monthlyReports"
+      || ["dictionary", "regionCompare", "regionSources", "demand"].includes(state.activeTab)
       || (state.activeTab === "admin" && ["overview", "database"].includes(state.adminPanelSection)))) return false;
     state.adminBootstrapRunPending = runId; state.adminViewsDeferred = true;
     return true;
@@ -42567,6 +42620,7 @@ async function loadTrafficState() {
 async function logout() {
   resetAdminDbSearchDraft();
   window.RegionalAnalysis?.clear();
+  window.RegionComparison?.clear();
   window.RegionalOutlook?.clear();
   stopTourismDemandStrengthBackfillPolling({ render: false });
   try {

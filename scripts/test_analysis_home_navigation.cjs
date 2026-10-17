@@ -7,6 +7,7 @@ const vm = require("node:vm");
 const source = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8").replace(/\r\n/g, "\n");
 const constants = ["ROLE_TABS", "TAB_LABELS", "B2B_TAB_LABELS", "ADMIN_MOBILE_SECTIONS", "ADMIN_COMPACT_SECTIONS", "ADMIN_PANEL_MOBILE_TARGETS", "REGION_ANALYSIS_TABS"];
 const functions = ["roleTabs", "roleAllowsTab", "firstRoleTab", "tabLabel", "adminPanelMobileTarget", "adminPrimarySectionForTab", "adminMobileSectionForTab", "activateAdminPrimaryNav", "activateAdminMobileNav", "setActiveTab", "syncAppHistoryState", "restoreAppHistoryState", "renderRegionAnalysisShell", "syncSavedRegionalAnalysis", "syncSavedRegionalOutlook", "adminHeaderView", "renderHeader", "renderAll", "loadRuns", "loadRun", "openAdminHomeRoute"];
+functions.push("renderActiveRegionAnalysis");
 const declarations = constants.map((name) => {
   const declaration = source.match(new RegExp(`^const ${name} = [^\\n]*;$`, "m"))?.[0]
     || source.match(new RegExp(`^const ${name} = \\{[^]*?^\\};`, "m"))?.[0];
@@ -19,7 +20,7 @@ const declarations = constants.map((name) => {
 })).join("\n");
 
 function fixture(role = "admin") {
-  const calls = { industry: 0, region: 0, report: 0, scrollTop: 0, requests: [] };
+  const calls = { industry: 0, region: 0, report: 0, scrollTop: 0, requests: [], startupReadiness: [] };
   const region = { regionKey: "kr_gyeonggi_pocheon", name: "포천시", fullName: "경기도 포천시" };
   const state = {
     session: { role, username: "navigation-fixture" }, activeTab: "admin", adminPanelSection: "overview",
@@ -51,6 +52,10 @@ function fixture(role = "admin") {
     adminHomeBasis: () => "현재 운영 기준", adminConsoleMasterSource: () => ({}),
     activeKeyword: () => "포천글램핑", dateRangeLabel: () => "수집 기간",
     renderIndustryHome() { calls.industry++; }, renderRegionHome() { calls.region++; }, renderReport() { calls.report++; },
+    // Run-list startup now reports its own loading/ready state independently
+    // of the selected analysis screen. Keep this dependency observable without
+    // importing the unrelated full administrator dashboard into the fixture.
+    renderAdminStartupReadiness() { calls.startupReadiness.push(state.adminRunCatalogReadiness?.status || "missing"); },
     adminDbCompanyIdFromRoute: () => "", handleAdminDbCompanyHash() {},
     escapeHtml: (value) => String(value ?? "")
   };
@@ -122,6 +127,7 @@ async function main() {
   assert.ok(f.state.analysisNavigationSequence > sequence, "Re-entering the same home invalidates pending detail navigation");
   release({ run: f.state.runs[0] });
   await pending;
+  assert.deepEqual(f.calls.startupReadiness, ["loading", "ready"], "Startup readiness can update without choosing an old analysis result");
   assert.equal(f.state.activeTab, "industryHome");
   assert.equal(f.state.activeRunId, "new");
   assert.equal(f.els.pageTitle.textContent, "업종분석");

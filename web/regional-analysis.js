@@ -144,16 +144,24 @@
     const time = `${String(draft.hour ?? 9).padStart(2, "0")}:${String(draft.minute ?? 0).padStart(2, "0")}`;
     return `<div class="ra-management"><div class="ra-actions"><button type="button" data-ra-action="build"${blocked || !state.regionKey ? " disabled" : ""}>저장자료 정리</button><button class="ra-primary" type="button" data-ra-action="refresh"${blocked || !state.regionKey ? " disabled" : ""}>즉시 갱신</button></div><p class="ra-muted">저장자료 정리는 외부 요청 없이 계산합니다. 즉시 갱신은 필요한 원자료를 확인합니다.</p><details class="ra-policy-disclosure" data-ra-detail="policy"${state.openDetails?.has("policy") ? " open" : ""}><summary>자동 갱신 설정 <span>${state.policy?.enabled === true ? "사용 중" : "꺼짐"}</span></summary><form class="ra-policy" data-ra-policy-form><label class="ra-check"><input type="checkbox" data-ra-field="enabled"${draft.enabled ? " checked" : ""}${busy ? " disabled" : ""}>자동 갱신 사용</label><label>갱신 시각 · 한국시간<input type="time" data-ra-field="time" value="${escapeHtml(time)}" required${busy ? " disabled" : ""}></label><label>확인 간격<select data-ra-field="intervalHours"${busy ? " disabled" : ""}>${[6, 12, 24, 168].map(hours => `<option value="${hours}"${Number(draft.intervalHours) === hours ? " selected" : ""}>${hours === 168 ? "일주일" : `${hours}시간`}</option>`).join("")}</select></label><button type="submit"${busy || !state.regionKey ? " disabled" : ""}>갱신 설정 저장</button></form><p class="ra-muted">선택 지역의 자료 묶음을 함께 확인합니다. 설정 저장 전에는 변경되지 않습니다.</p></details></div>`;
   }
-  function renderCard(state) {
+  function renderState(state) {
     if (state.storageError && !state.error) state = { ...state, error: `저장 자료 확인 필요 · ${errorLabel(state.storageError)}` };
     if (state.snapshot?.scope?.month && state.targetMonth && state.snapshot.scope.month !== state.targetMonth && !state.error) state = { ...state, error: `이전 기간 저장자료 · 기준 ${state.snapshot.scope.month}` };
+    return state;
+  }
+  function statusHtml(input) {
+    const state = renderState(input), snapshot = state.snapshot;
+    return `${state.error ? `<p class="ra-warning">${escapeHtml(state.error)}${snapshot ? " 마지막 정상 저장 결과를 표시합니다." : ""}</p>` : state.message ? `<p>${escapeHtml(state.message)}</p>` : ""}${snapshot ? `<p>결과 저장 <time datetime="${escapeHtml(snapshot.generatedAt || "")}">${escapeHtml(timeLabel(snapshot.generatedAt))}</time>${state.loading ? " · 변경 여부 확인 중" : ""}</p>` : `<p>${!state.regionKey ? "분석할 지역을 선택해 주세요." : state.loading ? "저장된 결과를 확인하고 있습니다." : "저장된 분석이 없습니다. 지역 자료 관리에서 저장자료를 정리하거나 갱신해 주세요."}</p>`}${state.checkedAt ? `<p class="ra-muted" data-ra-read-meta>${state.readSource === "cache" ? "화면 저장 결과 재사용" : "서버 저장 결과 확인"} · 확인 <time datetime="${escapeHtml(state.checkedAt)}">${escapeHtml(timeLabel(state.checkedAt))}</time></p>` : ""}`;
+  }
+  function renderCard(input) {
+    const state = renderState(input);
     const snapshot = state.snapshot, groups = Array.isArray(snapshot?.groups) ? snapshot.groups : [];
     if (state.mode === "manage") {
       const model = managementModel(state);
       const showJob = state.job && !["completed", "unchanged", "superseded"].includes(state.job.status);
-      return `<section class="regional-analysis" aria-label="지역 자료 갱신 관리"><header class="ra-header"><div><span class="ra-eyebrow">지역 자료 갱신 관리</span><h3>${escapeHtml(state.regionLabel || "지역 미선택")}</h3></div><button type="button" data-ra-action="status"${state.loading || !state.regionKey ? " disabled" : ""}>${state.loading ? "확인 중…" : "상태 확인"}</button></header><div class="ra-status" role="status" aria-live="polite">${state.error ? `<p class="ra-warning">${escapeHtml(state.error)}${snapshot ? " 마지막 정상 저장 결과를 표시합니다." : ""}</p>` : state.message ? `<p>${escapeHtml(state.message)}</p>` : ""}${!state.regionKey ? '<p>분석할 지역을 선택해 주세요.</p>' : !snapshot && !model.groups.length ? `<p>${state.loading ? "저장된 자료를 확인하고 있습니다." : "저장된 분석이 없습니다. 저장자료 정리 또는 즉시 갱신을 이용해 주세요."}</p>` : ""}</div>${managementOverviewHtml(state, model)}${showJob ? jobHtml(state.job, snapshot) : ""}${managementHtml(state)}${managementGroupsHtml(state, model)}<details class="ra-method" data-ra-detail="method"${state.openDetails?.has("method") ? " open" : ""}><summary>확보·갱신 기준</summary><p>13개월 확보율은 지표별 최신 정상월에서 계산합니다. 직전 완료월 자료가 아직 없으면 별도로 표시합니다. 인구·산업 기초자료에는 월간 확보율을 적용하지 않습니다.</p><p>원자료 확인, 제공기관 갱신 시도, 결과 정리는 서로 다른 시각입니다. 화면 조회는 외부 자료를 요청하지 않습니다. 오류·누락은 정상 0과 구별합니다.</p>${model.result?.resultId ? `<small>결과 번호 ${escapeHtml(model.result.resultId)}</small>` : ""}</details></section>`;
+      return `<section class="regional-analysis" aria-label="지역 자료 갱신 관리"><header class="ra-header"><div><span class="ra-eyebrow">지역 자료 갱신 관리</span><h3>${escapeHtml(state.regionLabel || "지역 미선택")}</h3></div><button type="button" data-ra-action="status"${state.loading || !state.regionKey ? " disabled" : ""}>${state.loading ? "확인 중…" : "상태 확인"}</button></header><div class="ra-status" role="status" aria-live="polite">${statusHtml(state)}</div>${managementOverviewHtml(state, model)}${showJob ? jobHtml(state.job, snapshot) : ""}${managementHtml(state)}${managementGroupsHtml(state, model)}<details class="ra-method" data-ra-detail="method"${state.openDetails?.has("method") ? " open" : ""}><summary>확보·갱신 기준</summary><p>13개월 확보율은 지표별 최신 정상월에서 계산합니다. 직전 완료월 자료가 아직 없으면 별도로 표시합니다. 인구·산업 기초자료에는 월간 확보율을 적용하지 않습니다.</p><p>원자료 확인, 제공기관 갱신 시도, 결과 정리는 서로 다른 시각입니다. 화면 조회는 외부 자료를 요청하지 않습니다. 오류·누락은 정상 0과 구별합니다.</p>${model.result?.resultId ? `<small>결과 번호 ${escapeHtml(model.result.resultId)}</small>` : ""}</details></section>`;
     }
-    return `<section class="regional-analysis" aria-label="저장된 지역 분석"><header class="ra-header"><div><span class="ra-eyebrow">${state.mode === "manage" ? "지역 자료 갱신 관리" : state.mode === "sources" ? "저장 자료·계산 기준" : "전체 지표 · 저장된 분석"}</span><h3>${escapeHtml(state.regionLabel || "지역 미선택")}</h3><p>각 지표에서 최근 확보한 월을 포함한 13개월 · 인구·산업은 실제 기준기간 적용</p></div><button type="button" data-ra-action="status"${state.loading || !state.regionKey ? " disabled" : ""}>${state.loading ? "확인 중…" : "상태 확인"}</button></header><div class="ra-status" role="status" aria-live="polite">${state.error ? `<p class="ra-warning">${escapeHtml(state.error)}${snapshot ? " 마지막 정상 저장 결과를 표시합니다." : ""}</p>` : state.message ? `<p>${escapeHtml(state.message)}</p>` : ""}${snapshot ? `<p>결과 저장 <time datetime="${escapeHtml(snapshot.generatedAt || "")}">${escapeHtml(timeLabel(snapshot.generatedAt))}</time>${state.loading ? " · 변경 여부 확인 중" : ""}</p>` : `<p>${!state.regionKey ? "분석할 지역을 선택해 주세요." : state.loading ? "저장된 결과를 확인하고 있습니다." : "저장된 분석이 없습니다. 지역 자료 관리에서 저장자료를 정리하거나 갱신해 주세요."}</p>`}</div>${jobHtml(state.job, snapshot)}${state.mode === "manage" ? managementHtml(state) : ""}${groups.length ? `<div class="ra-groups">${groups.map(group => groupHtml(group, state)).join("")}</div>` : ""}<details class="ra-method"><summary>계산·표시 기준</summary><p>조회는 저장된 결과를 사용합니다. 정상 응답의 0은 표시하고, 오류·누락·공표 대기는 0으로 바꾸지 않습니다. 지표별 기준월이 다르면 각 기준월을 유지합니다.</p><p>네이버 검색 트렌드는 같은 검색어·조회기간 안의 상대 관심도입니다. 다른 조회 구간의 지수를 단순 합산하지 않습니다.</p><p>이번 달 예상·다음 달 전망은 지역분석의 수요 전망에서 확인합니다. 이 화면의 수치는 공식 관측자료이며 예상값과 구별됩니다. 반경별 배후시장 분석은 별도 연결 예정입니다.</p>${snapshot?.resultId ? `<small>결과 번호 ${escapeHtml(snapshot.resultId)}</small>` : ""}</details></section>`;
+    return `<section class="regional-analysis" aria-label="저장된 지역 분석"><header class="ra-header"><div><span class="ra-eyebrow">${state.mode === "manage" ? "지역 자료 갱신 관리" : state.mode === "sources" ? "저장 자료·계산 기준" : "전체 지표 · 저장된 분석"}</span><h3>${escapeHtml(state.regionLabel || "지역 미선택")}</h3><p>각 지표에서 최근 확보한 월을 포함한 13개월 · 인구·산업은 실제 기준기간 적용</p></div><button type="button" data-ra-action="status"${state.loading || !state.regionKey ? " disabled" : ""}>${state.loading ? "확인 중…" : "상태 확인"}</button></header><div class="ra-status" role="status" aria-live="polite">${statusHtml(state)}</div><div data-ra-job>${jobHtml(state.job, snapshot)}</div>${state.mode === "manage" ? managementHtml(state) : ""}${groups.length ? `<div class="ra-groups">${groups.map(group => groupHtml(group, state)).join("")}</div>` : ""}<details class="ra-method"><summary>계산·표시 기준</summary><p>조회는 저장된 결과를 사용합니다. 정상 응답의 0은 표시하고, 오류·누락·공표 대기는 0으로 바꾸지 않습니다. 지표별 기준월이 다르면 각 기준월을 유지합니다.</p><p>네이버 검색 트렌드는 같은 검색어·조회기간 안의 상대 관심도입니다. 다른 조회 구간의 지수를 단순 합산하지 않습니다.</p><p>이번 달 예상·다음 달 전망은 지역분석의 수요 전망에서 확인합니다. 이 화면의 수치는 공식 관측자료이며 예상값과 구별됩니다. 반경별 배후시장 분석은 별도 연결 예정입니다.</p>${snapshot?.resultId ? `<small>결과 번호 ${escapeHtml(snapshot.resultId)}</small>` : ""}</details></section>`;
   }
   async function defaultFetch(url, options = {}) {
     const response = await root.fetch(url, { credentials: "same-origin", ...options });
@@ -164,33 +172,133 @@
   function createCache({ now = () => Date.now(), ttl = 60000, maxEntries = 80 } = {}) {
     const entries = new Map(), flights = new Map();
     let generation = 0;
-    function remember(key, data) { entries.delete(key); entries.set(key, { data, at: now() }); while (entries.size > maxEntries) entries.delete(entries.keys().next().value); }
+    function remember(key, data, checked = false) { const checkedAt = checked ? now() : entries.get(key)?.checkedAt || null; entries.delete(key); entries.set(key, { data, at: now(), checkedAt }); while (entries.size > maxEntries) entries.delete(entries.keys().next().value); }
     return {
       read(key) { return entries.get(key)?.data || null; },
+      info(key) { const item = entries.get(key); return item ? { checkedAt: item.checkedAt } : null; },
       fresh(key) { const item = entries.get(key); return Boolean(item && now() - item.at < ttl); },
       async get(key, fetcher, force = false) {
         if (flights.has(key)) return flights.get(key);
         if (!force && this.fresh(key)) return this.read(key);
         const token = generation;
-        const promise = Promise.resolve().then(fetcher).then(data => { if (token === generation) remember(key, data); return data; }).finally(() => { if (flights.get(key) === promise) flights.delete(key); });
+        const promise = Promise.resolve().then(fetcher).then(data => { if (token === generation && flights.get(key) === promise) remember(key, data, true); return data; }).finally(() => { if (flights.get(key) === promise) flights.delete(key); });
         flights.set(key, promise); return promise;
       },
       set(key, data) { remember(key, data); },
-      invalidate(key) { const item = entries.get(key); if (item) item.at = -Infinity; },
+      invalidate(key) { const item = entries.get(key); if (item) item.at = -Infinity; flights.delete(key); },
       clear() { generation++; entries.clear(); flights.clear(); }
     };
   }
   const sharedCache = createCache();
-  function createController({ cache = sharedCache, fetchJson = defaultFetch, schedule = (fn, ms) => root.setTimeout(fn, ms), cancel = id => root.clearTimeout(id), isVisible = () => true, now = () => Date.now() } = {}) {
-    const state = { regionKey: "", regionLabel: "", mode: "summary", accountKey: "", targetMonth: "", scopeMonth: "", snapshot: null, management: null, job: null, policy: null, policyDraft: null, loading: false, starting: false, saving: false, needsStatusCheck: false, error: "", storageError: "", message: "", openGroups: new Set(), openDetails: new Set() };
+  const validMonth = value => /^20\d{2}-(0[1-9]|1[0-2])$/.test(value || "");
+  function savedScope(input = {}, now = () => Date.now()) {
+    const accountKey = input.accountKey === undefined ? "" : input.accountKey;
+    const month = input.month === undefined ? latestCompletedMonth(now()) : input.month;
+    if (typeof accountKey !== "string" || accountKey.length > 300 || accountKey.includes("\u0000")
+      || typeof input.regionKey !== "string" || !input.regionKey.trim() || input.regionKey !== input.regionKey.trim()
+      || input.regionKey.length > 120 || input.regionKey.includes("\u0000") || !validMonth(month)
+      || input.months !== undefined && input.months !== 13) throw new Error("조회할 지역과 13개월 기준기간을 확인해 주세요.");
+    return { accountKey, regionKey: input.regionKey, month, months: 13 };
+  }
+  const savedKey = scope => `${scope.accountKey}\u0000${scope.regionKey}\u0000${scope.month}\u000013`;
+  function validateSavedResult(result, scope) {
+    if (!result || typeof result !== "object" || !Object.hasOwn(result, "snapshot") || !result.scope) throw new Error("저장 결과 응답을 확인하지 못했습니다.");
+    const validateScope = (value, label, required = false) => {
+      if (!value) { if (required) throw new Error("저장 결과의 조회 조건을 확인하지 못했습니다."); return; }
+      if (value.regionKey !== scope.regionKey) throw new Error(`선택 지역과 다른 ${label}입니다.`);
+      if (value.month !== scope.month || value.months !== 13) throw new Error(`조회 기간과 다른 ${label}입니다.`);
+    };
+    validateScope(result.scope, "조회 조건", true);
+    if (result.snapshot !== null) {
+      if (typeof result.snapshot !== "object" || !Array.isArray(result.snapshot.groups)) throw new Error("저장 결과 응답을 확인하지 못했습니다.");
+      validateScope(result.snapshot.scope, "저장 결과", true);
+    }
+    if (result.management?.scope) validateScope(result.management.scope, "관리 정보");
+    if (result.job?.scope) validateScope(result.job.scope, "작업 결과");
+    else if (result.job?.regionKey && result.job.regionKey !== scope.regionKey) throw new Error("선택 지역과 다른 작업 결과입니다.");
+    return result;
+  }
+  function createSavedResults({ cache = sharedCache, now = () => Date.now() } = {}) {
+    return {
+      read(input) { const scope = savedScope(input, now), data = cache.read(savedKey(scope)); if (!data) return null; try { return validateSavedResult(data, scope); } catch { cache.invalidate(savedKey(scope)); return null; } },
+      get(input) { const scope = savedScope(input, now), fetchJson = input.fetchJson || defaultFetch;
+        const query = new URLSearchParams({ regionKey: scope.regionKey, month: scope.month, months: "13" });
+        return cache.get(savedKey(scope), async () => {
+          const result = validateSavedResult(await fetchJson(`${ENDPOINT}?${query}`), scope);
+          if (result.storage?.errorCode && !result.snapshot && cache.read(savedKey(scope))?.snapshot) throw new Error("저장 자료 확인 실패 · 마지막 정상 결과를 유지합니다.");
+          return result;
+        }, input.force === true).then(result => validateSavedResult(result, scope));
+      },
+      fresh(input) { const scope = savedScope(input, now); return cache.fresh(savedKey(scope)); },
+      info(input) { const scope = savedScope(input, now); return cache.info?.(savedKey(scope)) || null; },
+      invalidate(input) { cache.invalidate(savedKey(savedScope(input, now))); },
+      clear() { cache.clear(); }
+    };
+  }
+  const savedResults = createSavedResults();
+  function createController({ cache = sharedCache, fetchJson = defaultFetch, schedule = (fn, ms) => root.setTimeout(fn, ms), cancel = id => root.clearTimeout(id), isVisible = () => true, now = () => Date.now(), afterPaint = callback => typeof root.requestAnimationFrame === "function" ? root.requestAnimationFrame(() => root.requestAnimationFrame(callback)) : queueMicrotask(callback) } = {}) {
+    const reader = createSavedResults({ cache, now });
+    const state = { regionKey: "", regionLabel: "", mode: "summary", accountKey: "", targetMonth: "", scopeMonth: "", snapshot: null, management: null, job: null, policy: null, policyDraft: null, loading: false, starting: false, saving: false, needsStatusCheck: false, error: "", storageError: "", message: "", checkedAt: null, readSource: "", openGroups: new Set(), openDetails: new Set() };
     let host = null, revision = 0, timer = null, paused = true, contextVisible = () => true;
+    let displayRevision = 0, displaySequence = 0, renderedHost = null, renderedBody = null;
     const bound = new WeakSet();
     const visible = () => !paused && host?.isConnected !== false && !root.document?.hidden && isVisible() && contextVisible();
-    const cacheKey = () => `${state.accountKey}\u0000${state.regionKey}\u0000${latestCompletedMonth(now())}\u000013`;
-    const query = () => `${ENDPOINT}?regionKey=${encodeURIComponent(state.regionKey)}&months=13`;
+    const scope = () => ({ accountKey: state.accountKey, regionKey: state.regionKey, month: state.targetMonth || latestCompletedMonth(now()), months: 13 });
+    const cacheKey = () => savedKey(savedScope(scope(), now));
     function clearTimer() { if (timer !== null) cancel(timer); timer = null; }
-    function render() { if (host) host.innerHTML = renderCard({ ...state, nowMs: now() }); }
+    function render() {
+      if (!host) return;
+      const view = { ...state, nowMs: now() };
+      const body = state.snapshot?.resultId ? JSON.stringify([state.accountKey, state.regionKey, state.regionLabel, state.targetMonth, state.mode,
+        state.snapshot.resultId, state.snapshot.sourceFingerprint || "", state.snapshot.generatedAt || ""]) : null;
+      const status = host.querySelector?.(".ra-status"), button = host.querySelector?.('[data-ra-action="status"]'), job = host.querySelector?.("[data-ra-job]");
+      // An immutable result keeps its disclosure/metric DOM. Only live status
+      // and job state change during a cache confirmation or polling response.
+      if (state.mode !== "manage" && body && body === renderedBody && host === renderedHost && status && button && job) {
+        const markup = statusHtml(view); if (status.innerHTML !== markup) status.innerHTML = markup;
+        button.disabled = state.loading || !state.regionKey; button.textContent = state.loading ? "확인 중…" : "상태 확인";
+        const jobMarkup = jobHtml(state.job, state.snapshot); if (job.innerHTML !== jobMarkup) job.innerHTML = jobMarkup;
+      } else { host.innerHTML = renderCard(view); renderedHost = host; renderedBody = body; }
+    }
+    function entryStart(element) {
+      const value = Number(element?.dataset?.raEntryStartedAt);
+      if (element?.dataset) delete element.dataset.raEntryStartedAt;
+      return Number.isFinite(value) && value > 0 && value <= now() && now() - value <= 60000 ? value : now();
+    }
+    function beginDisplay(startedAt = now()) {
+      const entry = { revision: ++displayRevision, sequence: ++displaySequence, startedAt, recorded: false, verifying: false };
+      if (host?.dataset) {
+        host.dataset.raDisplayStatus = "loading";
+        for (const key of ["raDisplayMs", "raDisplaySequence", "raVerifiedMs", "raVerifiedSequence", "raVerifiedAt"]) delete host.dataset[key];
+        host.dataset.raVerifiedStatus = "unchecked";
+      }
+      return entry;
+    }
+    function completeDisplay(entry, { cached = false, verified = false, failed = false } = {}) {
+      const element = host;
+      afterPaint(() => {
+        if (!entry || entry.revision !== displayRevision || element !== host || !visible() || !element?.dataset) return;
+        // If the GET completed before the cached frame could paint, only its
+        // completed-response callback can identify the first visible result.
+        if (cached && entry.responseCompleted && !entry.recorded) return;
+        const elapsed = Math.max(0, Math.round((now() - entry.startedAt) * 10) / 10);
+        if (!entry.recorded) {
+          entry.recorded = true; element.dataset.raDisplayMs = String(elapsed); element.dataset.raDisplaySequence = String(entry.sequence);
+          element.dataset.raDisplaySource = cached ? "cache" : "server";
+        }
+        element.dataset.raDisplayStatus = failed ? "error" : "ready";
+        element.dataset.raDisplayResultStatus = state.snapshot?.status || "missing";
+        element.dataset.raDisplayResultId = state.snapshot?.resultId || "";
+        element.dataset.raDisplayCheckedAt = state.checkedAt || "";
+        element.dataset.raDisplayStorageError = state.storageError || "";
+        if (verified) {
+          entry.verifying = false; element.dataset.raVerifiedMs = String(elapsed); element.dataset.raVerifiedSequence = String(entry.sequence);
+          element.dataset.raVerifiedStatus = "ready"; element.dataset.raVerifiedAt = state.checkedAt || "";
+        } else element.dataset.raVerifiedStatus = failed ? "error" : entry.verifying ? "checking" : "cached";
+      });
+    }
     function accept(result, { preserveDraft = false } = {}) {
+      validateSavedResult(result, scope());
       if (!result || !Object.hasOwn(result, "snapshot")) throw new Error("저장 결과 응답을 확인하지 못했습니다.");
       const scopeKey = result.snapshot?.scope?.regionKey || result.snapshot?.regionKey;
       if (result.snapshot && scopeKey !== state.regionKey) throw new Error("선택 지역과 다른 저장 결과입니다.");
@@ -202,8 +310,7 @@
       const month = result.scope?.month || result.snapshot?.scope?.month || result.job?.scope?.month;
       if (month && state.scopeMonth && month !== state.scopeMonth) state.snapshot = null;
       if (month) state.scopeMonth = month;
-      state.targetMonth = latestCompletedMonth(now());
-      if (result.snapshot) state.snapshot = result.snapshot;
+      state.snapshot = result.snapshot;
       state.management = result.management || null;
       state.job = result.job || null;
       state.storageError = safeCode(result.storage?.errorCode);
@@ -211,15 +318,19 @@
       if (Object.hasOwn(result, "policy")) { state.policy = result.policy || null; if (!preserveDraft || !state.policyDraft) state.policyDraft = { enabled: state.policy?.enabled === true, hour: state.policy?.hour ?? 9, minute: state.policy?.minute ?? 0, intervalHours: state.policy?.intervalHours ?? 24 }; }
     }
     function poll() { clearTimer(); if (active(state.job) && visible()) timer = schedule(() => { timer = null; if (visible()) void refresh(true); }, 3000); }
-    async function refresh(force = false) {
+    async function refresh(force = false, entry = null) {
       if (!state.regionKey || !visible() || state.loading || state.starting || state.saving) return false;
-      clearTimer(); const token = revision, key = cacheKey(), url = query(); state.loading = true; state.error = ""; render();
+      clearTimer(); const token = revision, key = cacheKey(), input = scope(), cached = !force && reader.fresh(input);
+      entry ||= beginDisplay(); entry.verifying = !cached;
+      if (host?.dataset) host.dataset.raVerifiedStatus = cached ? "cached" : "checking";
+      state.loading = true; state.error = ""; render();
       try {
-        const result = await cache.get(key, () => fetchJson(url), force);
+        const result = await reader.get({ ...input, fetchJson, force });
         if (token !== revision || !visible()) return false;
-        accept(result, { preserveDraft: true }); return true;
+        accept(result, { preserveDraft: true }); state.readSource = cached ? "cache" : "server";
+        const checkedAt = reader.info(input)?.checkedAt; state.checkedAt = Number.isFinite(checkedAt) ? new Date(checkedAt).toISOString() : null; return true;
       } catch (error) { cache.invalidate(key); if (token === revision && visible()) state.error = error.message || "저장 결과 확인 실패"; return false; }
-      finally { if (token === revision) { state.loading = false; render(); if (!state.error) poll(); } }
+      finally { if (token === revision) { entry.responseCompleted = true; state.loading = false; render(); completeDisplay(entry, { cached, verified: !cached && !state.error && !state.storageError, failed: Boolean(state.error || state.storageError) }); if (!state.error) poll(); } }
     }
     async function start(collectMissing = false) {
       if (!visible() || !state.regionKey || state.loading || state.starting || state.saving || state.needsStatusCheck || active(state.job)) return false;
@@ -231,7 +342,7 @@
         const jobRegionKey = result.job.scope?.regionKey || result.job.regionKey;
         if (jobRegionKey && jobRegionKey !== state.regionKey) throw new Error("선택 지역과 다른 작업입니다.");
         state.job = result.job; state.message = result.reused ? "이미 진행 중인 작업을 확인합니다." : "서버에 작업을 등록했습니다.";
-        cache.set(cacheKey(), { snapshot: state.snapshot, management: state.management, job: state.job, policy: state.policy });
+        cache.set(cacheKey(), { status: state.snapshot?.status || "missing", scope: { regionKey: state.regionKey, month: state.targetMonth, months: 13 }, snapshot: state.snapshot, management: state.management, job: state.job, policy: state.policy });
         return true;
       } catch (error) { if (token === revision && visible()) { state.needsStatusCheck = true; state.error = `${error.message || "작업 접수 확인 실패"} 상태 확인으로 실행 여부를 확인해 주세요.`; } return false; }
       finally { if (token === revision) { state.starting = false; render(); if (!state.error) { if (active(state.job)) poll(); else void refresh(true); } } }
@@ -254,13 +365,13 @@
       } catch (error) { if (token === revision && visible()) state.error = error.message || "갱신 설정 저장 실패"; return false; }
       finally { if (token === revision) { state.saving = false; render(); if (!state.error) void refresh(true); } }
     }
-    function stop() { clearTimer(); paused = true; revision++; if (state.starting) state.needsStatusCheck = true; state.loading = false; state.starting = false; state.saving = false; }
+    function stop() { clearTimer(); paused = true; revision++; displayRevision++; if (host?.dataset) host.dataset.raDisplayStatus = "paused"; if (state.starting) state.needsStatusCheck = true; state.loading = false; state.starting = false; state.saving = false; }
     function onVisibility() { if (root.document?.hidden) clearTimer(); else if (visible() && active(state.job)) void refresh(true); }
     async function mount(element, context = {}) {
-      const targetMonth = latestCompletedMonth(now());
+      const startedAt = entryStart(element), targetMonth = context.month || latestCompletedMonth(now());
       const changed = state.regionKey !== (context.regionKey || "") || state.accountKey !== (context.accountKey || "") || state.targetMonth !== targetMonth;
       const workInFlight = !changed && (state.loading || state.starting || state.saving);
-      if (changed) { clearTimer(); revision++; state.snapshot = null; state.management = null; state.job = null; state.policy = null; state.policyDraft = null; state.error = ""; state.storageError = ""; state.message = ""; state.loading = false; state.starting = false; state.saving = false; state.needsStatusCheck = false; state.openGroups = new Set(); state.openDetails = new Set(); }
+      if (changed) { clearTimer(); revision++; displayRevision++; state.snapshot = null; state.management = null; state.job = null; state.policy = null; state.policyDraft = null; state.error = ""; state.storageError = ""; state.message = ""; state.checkedAt = null; state.readSource = ""; state.scopeMonth = ""; state.loading = false; state.starting = false; state.saving = false; state.needsStatusCheck = false; state.openGroups = new Set(); state.openDetails = new Set(); }
       state.regionKey = context.regionKey || ""; state.regionLabel = context.regionLabel || "지역 미선택"; state.mode = ["summary", "sources", "manage"].includes(context.mode) ? context.mode : "summary"; state.accountKey = context.accountKey || "";
       state.targetMonth = targetMonth;
       contextVisible = context.isVisible || (() => true); if (context.fetchJson) fetchJson = context.fetchJson;
@@ -272,17 +383,23 @@
         host.addEventListener("submit", event => { if (!event.target.matches?.("[data-ra-policy-form]")) return; event.preventDefault(); void savePolicy(); });
         host.addEventListener("toggle", event => { const key = event.target.dataset?.raGroup, detail = event.target.dataset?.raDetail; if (key) { if (event.target.open) state.openGroups.add(key); else state.openGroups.delete(key); } if (detail) { if (event.target.open) state.openDetails.add(detail); else state.openDetails.delete(detail); } }, true);
       }
-      const cached = cache.read(cacheKey()); if (cached && !workInFlight && !state.needsStatusCheck) { try { accept(cached, { preserveDraft: true }); } catch { cache.invalidate(cacheKey()); } }
+      const entry = !workInFlight && state.regionKey ? beginDisplay(startedAt) : null;
+      const cached = state.regionKey && !state.needsStatusCheck ? reader.read(scope()) : null;
+      if (cached && !workInFlight) {
+        accept(cached, { preserveDraft: true }); state.readSource = "cache";
+        const checkedAt = reader.info(scope())?.checkedAt; state.checkedAt = Number.isFinite(checkedAt) ? new Date(checkedAt).toISOString() : null;
+      }
       render();
       if (!state.regionKey || !visible()) return false;
       if (workInFlight) return true;
-      if (!cached || !cache.fresh(cacheKey()) || active(state.job)) return refresh(Boolean(active(state.job)));
+      if (cached) completeDisplay(entry, { cached: true });
+      if (!cached || !reader.fresh(scope()) || active(state.job)) return refresh(Boolean(active(state.job)), entry);
       poll(); return true;
     }
     return { state, mount, refresh, start, savePolicy, updateDraft, stop, render, onVisibility };
   }
   const controllers = new Map();
-  const exported = { createController, createCache, renderCard, metricHtml, jobHtml, number, timeLabel,
+  const exported = { createController, createCache, createSavedResults, savedResults, latestCompletedMonth, renderCard, metricHtml, jobHtml, number, timeLabel,
     mount(host, context) { if (!host) return false; for (const [element, controller] of controllers) if (element.isConnected === false) { controller.stop(); controllers.delete(element); } let controller = controllers.get(host); if (!controller) { controller = createController(); controllers.set(host, controller); } return controller.mount(host, context); },
     stop(host) { if (host) controllers.get(host)?.stop(); else for (const controller of controllers.values()) controller.stop(); },
     clear() { for (const controller of controllers.values()) controller.stop(); controllers.clear(); sharedCache.clear(); }

@@ -3,10 +3,10 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { createController, createCache, renderCard, jobHtml, number } = require("../web/regional-analysis.js");
+const { createController, createCache, createSavedResults, savedResults, latestCompletedMonth, renderCard, jobHtml, number } = require("../web/regional-analysis.js");
 const { buildRegionalIndicatorManagement } = require("./lib/regional_indicator_management.cjs");
 const host = () => ({ innerHTML: "", isConnected: true, listeners: new Map(), addEventListener(name, listener) { this.listeners.set(name, listener); } });
-const response = (key = "sancheong", extra = {}) => ({ status: "ready", snapshot: { resultId: `${key}-1`, scope: { regionKey: key, months: 13 }, generatedAt: "2026-10-15T06:00:00Z", groups: [] }, job: null, policy: { enabled: false, hour: 9, minute: 0, intervalHours: 24 }, ...extra });
+const response = (key = "sancheong", extra = {}) => ({ status: "ready", scope: { regionKey: key, month: latestCompletedMonth(), months: 13 }, snapshot: { resultId: `${key}-1`, scope: { regionKey: key, month: latestCompletedMonth(), months: 13 }, generatedAt: "2026-10-15T06:00:00Z", groups: [] }, job: null, policy: { enabled: false, hour: 9, minute: 0, intervalHours: 24 }, ...extra });
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function scheduled() {
   let sequence = 0; const pending = new Map();
@@ -82,7 +82,7 @@ test("failed or foreign refresh preserves last good snapshot", async () => {
   assert.match(element.innerHTML, /마지막 정상 저장 결과/);
   mode = "foreign"; assert.equal(await controller.refresh(true), false);
   assert.equal(controller.state.snapshot.resultId, "sancheong-1");
-  assert.match(element.innerHTML, /선택 지역과 다른 저장 결과/);
+  assert.match(element.innerHTML, /선택 지역과 다른 (저장 결과|조회 조건)/);
 });
 
 test("source refresh failures and storage errors remain visible beside retained normal data", async () => {
@@ -103,8 +103,8 @@ test("source refresh failures and storage errors remain visible beside retained 
 
 test("Korea month rollover partitions cache and clears an explicitly empty new-period result", async () => {
   let clock = Date.parse("2026-10-31T14:59:00Z"), gets = 0;
-  const october = response(); october.scope = { regionKey: "sancheong", month: "2026-09" }; october.snapshot.scope.month = "2026-09";
-  const november = response("sancheong", { scope: { regionKey: "sancheong", month: "2026-10" }, snapshot: null });
+  const october = response(); october.scope = { regionKey: "sancheong", month: "2026-09", months: 13 }; october.snapshot.scope.month = "2026-09";
+  const november = response("sancheong", { scope: { regionKey: "sancheong", month: "2026-10", months: 13 }, snapshot: null });
   const controller = createController({ now: () => clock, cache: createCache(), fetchJson: async () => { gets++; return gets === 1 ? october : november; } });
   const element = host(); await controller.mount(element, { regionKey: "sancheong" });
   assert.equal(controller.state.snapshot.scope.month, "2026-09");

@@ -455,6 +455,35 @@ test("home and company DB bootstrap keep full saved results lazy until a result 
   }
 });
 
+test("saved regional screens leave full crawl admission pending until a result view actually needs it", async () => {
+  for (const tab of ["dictionary", "regionCompare", "regionSources", "demand"]) {
+    const f = runFixture({ activeTab: tab });
+    await f.api.loadRuns(true, { bootstrap: true });
+    assert.deepEqual(f.requests, ["/api/runs"]);
+    assert.equal(f.state.adminBootstrapRunPending, "latest");
+    assert.equal(f.state.data.run.id, "previous-good");
+    await f.api.resumeAdminBootstrapReads();
+    assert.deepEqual(f.requests, ["/api/runs"], `${tab} must not read an unrelated full crawl`);
+    f.api.setActiveTab("rank");
+    await f.state.adminBootstrapResumeTask;
+    assert.deepEqual(f.requests, ["/api/runs", "/api/runs/latest"]);
+    assert.equal(f.state.data.run.id, "latest");
+  }
+});
+
+test("a region selected during a sent crawl read prevents later history and company source reads", async () => {
+  for (const tab of ["dictionary", "regionCompare", "regionSources", "demand"]) {
+    const f = runFixture(), detail = deferred(), entered = deferred();
+    f.hooks.fetch = async url => { entered.resolve(); await detail.promise; return { run: { id: url.split("/").at(-1) } }; };
+    const startup = f.api.loadRun("latest", { bootstrap: true }); await entered.promise;
+    f.state.activeTab = tab; detail.resolve(); await startup;
+    assert.deepEqual(f.requests, ["/api/runs/latest"]);
+    assert.deepEqual(f.calls, []);
+    assert.equal(f.state.adminBootstrapRunPending, "latest");
+    assert.equal(f.state.data.run.id, "latest", "an already received saved result stays available without extra source work");
+  }
+});
+
 test("an empty-run startup defers and separately resumes the missing company summary", async () => {
   const init = fixture({ companyMaster: null });
   const pending = init.api.init(); await init.entered.promise;

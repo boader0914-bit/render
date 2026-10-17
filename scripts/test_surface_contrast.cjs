@@ -1330,7 +1330,7 @@ assert(
     && renderObservedLocationProfileBlock.includes("잘못된 값 저장 안 함")
     && renderObservedLocationProfileBlock.includes("providerMappingStatus !== \"ready\"")
     && renderObservedLocationProfileBlock.includes("const exactRegion = Boolean(providerCode && !providerCodePending)")
-    && renderObservedLocationProfileBlock.includes("if (exactRegion) void ensureLocationProfile(card)")
+    && renderObservedLocationProfileBlock.includes("if (exactRegion && (!isAdminRole() || locationProfileActiveTab() !== \"basic\")) void ensureLocationProfile(card)")
     && !renderObservedLocationProfileBlock.includes("const forecastReady = exactRegion && evidence.visitor.observed && evidence.strength.observed"),
   "provider-code-pending regions must be labelled and blocked from being treated as callable observations",
   failures

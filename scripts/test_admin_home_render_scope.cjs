@@ -14,7 +14,7 @@ const source = fs.readFileSync(args[1] === "-" ? 0 : args[1] || path.join(__dirn
 const constants = ["ROLE_TABS", "ADMIN_MOBILE_SECTIONS", "ADMIN_COMPACT_SECTIONS", "ADMIN_PANEL_SECTIONS", "ADMIN_PANEL_MOBILE_TARGETS", "REGION_ANALYSIS_TABS"];
 const names = ["isAdminUserViewMode", "currentRole", "isAdminRole", "roleTabs", "roleAllowsTab", "firstRoleTab",
   "adminPanelMobileTarget", "adminSectionAllowsAnchor", "adminAnchorAllowedForState", "adminPrimarySectionForTab",
-  "adminMobileSectionForTab", "activateAdminPrimaryNav", "renderAll", "renderAdminConsoleDashboard", "setActiveTab", "setAdminPanelSection", "adminHomeReadiness"];
+  "adminMobileSectionForTab", "activateAdminPrimaryNav", "renderAll", "renderAdminConsoleDashboard", "setActiveTab", "setAdminPanelSection", "adminHomeReadiness", "renderActiveRegionAnalysis"];
 // The previous release must fail on hidden DOM work, not on a missing helper.
 if (source.includes("function isAdminHomeOverview(")) names.push("isAdminHomeOverview");
 const declarations = [
@@ -204,6 +204,26 @@ test("empty and failed saved state stays distinguishable on home without touchin
     assert.equal(f.state.data, null); assert.equal(f.state.companyMaster, master);
     assert.match(f.els.adminConsoleDashboard.innerHTML, error ? /saved summary unavailable/ : /metrics:empty\|no-run/);
     f.assertNoHidden(); assert.equal(f.state.adminViewsDeferred, true);
+  }
+});
+
+test("saved regional entry and late startup updates never rebuild unrelated crawl or DB surfaces", () => {
+  const destinations = { dictionary: "renderLocationDictionary", regionCompare: "renderRegionComparison", regionSources: "renderRegionSources", demand: "renderDemand" };
+  for (const [tab, activeRenderer] of Object.entries(destinations)) {
+    const f = fixture(); f.state.adminBootstrapRunPending = "unrelated-latest-run"; f.state.adminBootstrapSummaryPending = true;
+    const saved = f.latest("regional-source", "a-different-region-run");
+    f.api.setActiveTab(tab);
+    assert.equal(f.count("resume"), 0, `${tab} must not resume unrelated full crawl reads`);
+    assert.equal(f.state.adminBootstrapRunPending, "unrelated-latest-run");
+    assert.equal(f.state.adminBootstrapSummaryPending, true);
+    assert.equal(f.state.adminViewsDeferred, true);
+    assert.deepEqual(f.calls.filter(call => hiddenRenderers.includes(call.name)).map(call => call.name), [activeRenderer]);
+    assert.equal(f.state.data, saved.data);
+    f.calls.length = 0; f.latest("arrived-in-background", "another-unrelated-run");
+    f.api.renderAll();
+    assert.deepEqual(f.calls.filter(call => hiddenRenderers.includes(call.name)).map(call => call.name), [activeRenderer], "a late startup response renders only the selected regional surface");
+    assert.equal(f.count("resume"), 0);
+    assert.equal(f.state.adminViewsDeferred, true);
   }
 });
 

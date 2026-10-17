@@ -110,11 +110,31 @@ function fixture({ keyword = "포천글램핑", role = "admin", storage = new Ma
     regionBounds: () => ({}), b2bRegionMapModel: () => ({}), regionCoordinate: () => null, companyMapPointRows: () => [],
     renderRegions() {}, regionPrimary: () => "확인", CORE_COLORS: {}, project: () => [0, 0]
   });
+  context.window.RegionComparison = {
+    mount(host, selection) { host.innerHTML = `저장 지역 비교 · ${selection.regionLabel}`; calls.comparison = selection; },
+    stop() {}
+  };
   const api = vm.runInContext(`${declarations}\n({ ${names.join(", ")} })`, context);
   return { state, els, history, calls, api, context, storage };
 }
 
 async function runTests() {
+  {
+  const broad = fixture();
+  const broadRegion = master.units.find(region => region.level === "broad" && region.active && region.selectable);
+  assert.ok(broadRegion);
+  broad.api.setAnalysisRegion(broadRegion.regionKey);
+  broad.api.setActiveTab("regionCompare");
+  assert.equal(broad.api.selectedAnalysisRegion().regionKey, broadRegion.regionKey, "a broad selection is never silently replaced with a local area");
+  assert.match(broad.els.regionCompareDashboard.innerHTML, /시·군·구별 저장 지표/);
+  assert.equal(broad.calls.comparison, undefined, "a broad region must not call the local-only saved-result reader");
+  const broadFlow = { innerHTML: "", dataset: {} };
+  broad.context.document.getElementById = id => id === "regionalAnalysisSummary" ? broadFlow : null;
+  broad.state.activeTab = "dictionary";
+  broad.api.syncSavedRegionalAnalysis();
+  assert.match(broadFlow.innerHTML, /시·군·구별 저장 자료/);
+  assert.equal(broadFlow.dataset.raDisplayStatus, "unsupported");
+  }
   const inactive = fixture();
   inactive.api.reconcileAnalysisRegionSelection();
   const selectedBeforeHidden = inactive.api.selectedAnalysisRegion().regionKey;
@@ -166,7 +186,8 @@ async function runTests() {
   f.api.setActiveTab("map");
   assert.match(f.els.regionList.innerHTML, /산청군.*지도 자료 없음/);
   f.api.setActiveTab("regionCompare");
-  assert.match(f.els.regionCompareDashboard.innerHTML, /산청군.*비교 자료 없음/);
+  assert.match(f.els.regionCompareDashboard.innerHTML, /저장 지역 비교.*산청군/);
+  assert.equal(f.calls.comparison.regionKey, SANCHEONG, "comparison reads the selected saved region even while another keyword run is active");
   assert.equal(f.calls.metrics, beforeMismatch);
   assert.equal(f.api.selectedAnalysisRegion().regionKey, SANCHEONG, "Comparison cannot change the baseline");
 

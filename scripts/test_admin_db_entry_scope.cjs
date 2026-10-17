@@ -14,7 +14,7 @@ const source = fs.readFileSync(args[1] === "-" ? 0 : args[1] || path.join(__dirn
 const constantNames = ["ROLE_TABS", "ADMIN_MOBILE_SECTIONS", "ADMIN_COMPACT_SECTIONS", "ADMIN_PANEL_SECTIONS", "ADMIN_PANEL_MOBILE_TARGETS", "REGION_ANALYSIS_TABS"];
 const functionNames = ["isAdminUserViewMode", "currentRole", "isAdminRole", "roleTabs", "roleAllowsTab", "firstRoleTab",
   "adminPanelMobileTarget", "adminSectionAllowsAnchor", "adminAnchorAllowedForState", "adminPrimarySectionForTab", "adminMobileSectionForTab",
-  "activateAdminPrimaryNav", "renderAll", "renderAdminConsoleDashboard", "setActiveTab", "setAdminPanelSection"];
+  "activateAdminPrimaryNav", "renderAll", "renderAdminConsoleDashboard", "setActiveTab", "setAdminPanelSection", "renderActiveRegionAnalysis"];
 for (const name of ["isAdminHomeOverview", "isAdminDatabaseView", "isAdminDatabaseSection"]) {
   if (source.includes(`function ${name}(`)) functionNames.push(name);
 }
@@ -153,7 +153,7 @@ test("a later non-DB result or region entry receives the latest state rather tha
     const f = fixture(); f.api.activateAdminPrimaryNav("database"); f.calls.length = 0; f.latest("after-db", "run-after-db");
     f.api.setActiveTab(tab);
     assert.equal(f.state.activeTab, tab); assert.equal(f.dom[renderer]?.innerHTML, "after-db|run-after-db", tab);
-    assert.equal(f.state.adminViewsDeferred, false, `${tab} may now complete the deferred legacy refresh`);
+    assert.equal(f.state.adminViewsDeferred, ["dictionary", "regionCompare", "regionSources", "demand"].includes(tab), `${tab} refreshes only its own saved surface when independent of the selected crawl`);
   }
 });
 
