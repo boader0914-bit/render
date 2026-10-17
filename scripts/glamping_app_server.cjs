@@ -442,7 +442,7 @@ async function prepareRegionalAnalysisSources(scope) {
     return preparer.get(request);
 }
 const buildRegionalAnalysisSnapshot = createRegionalAnalysisSnapshotBuilder({
-  tourismCollector, kosisService, searchTrendService: regionalSearchTrendService, prepare: prepareRegionalAnalysisSources
+  tourismCollector, kosisService, searchTrendService: regionalSearchTrendService, resolveRegion: resolveRegionalReportRegion, prepare: prepareRegionalAnalysisSources
 });
 regionalAnalysisStore = createRegionalAnalysisStore({
   dataDir: DATA_DIR, buildSnapshot: buildRegionalAnalysisSnapshot,
@@ -457,7 +457,7 @@ regionalAnalysisStore = createRegionalAnalysisStore({
 });
 regionalOutlookService = createRegionalOutlookService({
   dataDir: DATA_DIR, specialDays: specialDaysService,
-  readIndicators: createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService, searchTrendService: regionalSearchTrendService, includeHistory: true }),
+  readIndicators: createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService, searchTrendService: regionalSearchTrendService, resolveRegion: resolveRegionalReportRegion, includeHistory: true }),
   prepareIndicators: prepareRegionalAnalysisSources,
   resolveRegion: async key => {
     const region = await resolveRegionalReportRegion(key);

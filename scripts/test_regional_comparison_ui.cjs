@@ -10,9 +10,13 @@ const context = extra => ({ accountKey: "admin", regionKey: "a", regionLabel: "�
 const host = () => ({ innerHTML: "", dataset: {}, isConnected: true, listeners: new Map(), addEventListener(name, callback) { this.listeners.set(name, callback); }, querySelector() { return null; } });
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
+const matchedScope = (regionKey, provider = "한국관광공사", extra = {}) => ({ version: "regional-data-contract-v1", provider, requestedRegionKey: regionKey,
+  officialCode: ({ a: "48860", b: "48240", c: "41650", d: "41820", e: "46130" })[regionKey] || "48860",
+  requestedLevel: "sigungu", requestedUnitType: "county", providerRegionCode: ({ a: "48860", b: "48240", c: "41650", d: "41820", e: "46130" })[regionKey] || "48860",
+  providedLevel: "sigungu", scopeKind: "administrative", status: "matched", evidence: "response", aggregation: "none", reasonCode: "", ...extra });
 function response(regionKey = "a", month = "2026-09", { value = 0, rows, unit = "명", provider = "한국관광공사", groups } = {}) {
   return { scope: { regionKey, month, months: 13 }, snapshot: { scope: { regionKey, month, months: 13 }, resultId: `${regionKey}-${month}`, generatedAt: "2026-10-16T00:00:00Z", groups: groups || [
-    { key: "visitors", label: "지역 방문자", category: "tourism", provider, periodType: "M", metrics: [{ key: "visitors", label: "일평균 방문자", unit, rows: rows || [{ period: month, status: "observed", value }] }] }
+    { key: "visitors", label: "지역 방문자", category: "tourism", provider, periodType: "M", spatialContract: matchedScope(regionKey, provider), metrics: [{ key: "visitors", label: "일평균 방문자", unit, rows: rows || [{ period: month, status: "observed", value }] }] }
   ] }, job: null };
 }
 function readerFixture(initial = [], fetcher = input => response(input.regionKey, input.month)) {
@@ -131,12 +135,13 @@ test("different periods, units and sources cannot manufacture comparable values"
 
 test("annual background data and search normalization are separated from comparable monthly tourism", async () => {
   const groups = [
-    { key: "kosis", label: "인구·산업", category: "background", provider: "KOSIS", metrics: [{ key: "workers", label: "종사자", periodType: "Y", unit: "명", rows: [{ period: "2024", value: 100, status: "observed" }] }] },
+    { key: "kosis", label: "인구·산업", category: "background", provider: "KOSIS", spatialContract: matchedScope("a", "KOSIS"), metrics: [{ key: "workers", label: "종사자", periodType: "Y", unit: "명", rows: [{ period: "2024", value: 100, status: "observed" }] }] },
     { key: "searchTrend", label: "검색 트렌드", category: "search", provider: "네이버 데이터랩", keyword: "산청글램핑", sourceBatchId: "batch-a", normalizationPeriod: "2025-09-01 ~ 2026-09-30", metrics: [{ key: "interest", label: "상대 관심도", unit: "상대지수", rows: [{ period: "2026-09", value: 0, status: "observed" }, { period: "2026-08", value: 0, status: "missing" }] }] }
   ];
   const reader = readerFixture([], input => response(input.regionKey, input.month, { groups })), c = createController({ reader, now: () => NOW }), element = host();
   await c.mount(element, context());
   assert.equal(comparisonModel([{ label: "A", data: response("a", "2026-09", { groups }) }]).length, 0);
+  assert.equal(comparisonModel([{ label: "A", data: response("a", "2026-09", { groups }) }], "search")[0].reasonCode, "KEYWORD_SCOPE");
   assert.equal(comparisonModel([{ label: "A", data: response("a", "2026-09", { groups }) }], "background")[0].commonPeriod, "2024");
   assert.match(element.innerHTML, /인구·산업 기초자료/); assert.match(element.innerHTML, /연간 값을 월별로 나누거나/);
   assert.match(element.innerHTML, /정규화 기간 2025-09-01 ~ 2026-09-30/); assert.match(element.innerHTML, /자료 묶음 batch-a/);
@@ -389,4 +394,82 @@ test("cache reuse and failed saved checks never invent an unknown actual server 
   fail = true; clock += 1000; await c.refresh();
   assert.equal(element.dataset.rcCheckStatus, "error"); assert.equal(c.state.records.a.checkedAt, "");
   assert.equal(element.dataset.rcCheckAt, undefined); assert.ok(c.state.records.a.data.snapshot);
+});
+
+test("legacy spatial scope preserves normal values as references without manufacturing directly comparable zeros", async () => {
+  const a = response("a"), b = response("b", "2026-09", { value: 19 });
+  delete a.snapshot.groups[0].spatialContract; delete b.snapshot.groups[0].spatialContract;
+  const [row] = comparisonModel([{ data: a }, { data: b }]);
+  assert.equal(row.commonPeriod, ""); assert.equal(row.reasonCode, "SCOPE_UNVERIFIED");
+  assert.deepEqual(row.cells.map(cell => cell.value), [null, null]); assert.deepEqual(row.cells.map(cell => cell.latestValue), [0, 19]);
+  const c = createController({ reader: readerFixture([], () => a), now: () => NOW }), element = host();
+  await c.mount(element, context());
+  assert.match(element.innerHTML, /지역 범위 확인 필요/);
+  assert.match(element.innerHTML, /<strong>미확인<\/strong>/); assert.match(element.innerHTML, /범위 미확인 참고값 <b>0<\/b>/);
+  assert.equal(c.state.records.a.data, a); assert.equal(a.snapshot.groups[0].metrics[0].rows[0].value, 0);
+});
+
+test("spatial mismatch, unverified evidence and unsupported contracts block direct comparison", () => {
+  for (const change of [
+    { status: "mapping_pending" }, { status: "mapping_missing" }, { status: "response_mismatch" }, { status: "scope_unverified" },
+    { requestedRegionKey: "other" }, { version: "unsupported" }, { evidence: "unverified" }, { aggregation: "sum" },
+    { providedLevel: "sido" }, { requestedUnitType: "general_district" }
+  ]) {
+    const a = response("a"), b = response("b", "2026-09", { value: 20 });
+    Object.assign(b.snapshot.groups[0].spatialContract, change);
+    const [row] = comparisonModel([{ data: a }, { data: b }]);
+    assert.equal(row.commonPeriod, "", JSON.stringify(change)); assert.deepEqual(row.cells.map(cell => cell.value), [null, null]);
+    assert.deepEqual(row.cells.map(cell => cell.latestValue), [0, 20]);
+  }
+  const a = response("a"), b = response("b");
+  Object.assign(b.snapshot.groups[0].spatialContract, { requestedLevel: "sido", providedLevel: "sido" });
+  assert.equal(comparisonModel([{ data: a }, { data: b }])[0].reasonCode, "LEVEL_MISMATCH");
+  Object.assign(b.snapshot.groups[0].spatialContract, matchedScope("b", "한국관광공사", { providerRegionCode: "48860" }));
+  assert.equal(comparisonModel([{ data: a }, { data: b }])[0].commonPeriod, "", "different region keys cannot certify the same provider area as two local markets");
+});
+
+test("common period selection validates each row's contract before falling back to an older verified month", () => {
+  const data = ["a", "b"].map(key => response(key, "2026-09", { rows: [
+    { period: "2026-08", value: key === "a" ? 0 : 12, status: "observed", spatialContract: matchedScope(key) },
+    { period: "2026-09", value: 90, status: "observed", spatialContract: matchedScope(key, "한국관광공사", { status: "scope_unverified", evidence: "unverified" }) }
+  ] }));
+  let [row] = comparisonModel(data.map(data => ({ data })));
+  assert.equal(row.commonPeriod, "2026-08"); assert.equal(row.newerPeriodExcluded, true); assert.deepEqual(row.cells.map(cell => cell.value), [0, 12]);
+  assert.equal(row.excludedPeriod, "2026-09"); assert.equal(row.excludedReason, "지역 범위 확인 필요");
+  for (const value of data) value.snapshot.groups[0].metrics[0].rows[0].spatialContract = {};
+  [row] = comparisonModel(data.map(data => ({ data })));
+  assert.equal(row.commonPeriod, ""); assert.deepEqual(row.cells.map(cell => cell.latestValue), [90, 90]);
+  assert.equal(row.reasonCode, "SCOPE_UNVERIFIED", "explicit legacy row contracts cannot inherit a matched metric or group contract");
+});
+
+test("annual and monthly contracts remain separate and a period's format must agree with its declared frequency", () => {
+  const groups = key => [{ key: "kosis", provider: "KOSIS", category: "background", spatialContract: matchedScope(key, "KOSIS"), metrics: [
+    { key: "population", label: "인구", periodType: "M", unit: "명", rows: [{ period: "2026-08", status: "observed", value: 0 }] },
+    { key: "workers", label: "종사자", periodType: "Y", unit: "명", rows: [{ period: "2024", status: "observed", value: 5 }] }
+  ] }];
+  const data = ["a", "b"].map(key => response(key, "2026-09", { groups: groups(key) }));
+  let rows = comparisonModel(data.map(data => ({ data })), "background");
+  assert.deepEqual(rows.map(row => [row.periodType, row.commonPeriod]), [["M", "2026-08"], ["Y", "2024"]]);
+  const html = renderDashboard({ regionKey: "a", regionLabel: "A", month: "2026-09", maxMonth: "2026-09", regions, targets: ["b"], records: { a: { data: data[0] }, b: { data: data[1] } }, open: new Set(), query: "", candidate: "" });
+  assert.match(html, /인구·산업 월간 기초자료 · 공통 기준월/); assert.match(html, /인구·산업 연간 기초자료 · 공통 기준연도/);
+  data[1].snapshot.groups[0].metrics[1].periodType = "M";
+  rows = comparisonModel(data.map(data => ({ data })), "background");
+  assert.equal(rows[1].commonPeriod, ""); assert.equal(rows[1].reasonCode, "PERIOD_TYPE_MISMATCH");
+  data[0].snapshot.groups[0].metrics[1].periodType = "M";
+  assert.equal(comparisonModel(data.map(data => ({ data })), "background")[1].commonPeriod, "", "a year-shaped row cannot become a monthly observation");
+});
+
+test("comparison evidence keeps disclosure state and loads shared rules before either regional screen", async () => {
+  const c = createController({ reader: readerFixture(), now: () => NOW }), element = host();
+  await c.mount(element, context());
+  const key = element.innerHTML.match(/class="rc-evidence rc-contract" data-rc-detail="([^"]+)"/)[1];
+  assert.doesNotMatch(element.innerHTML, new RegExp(`data-rc-detail="${key}" open`));
+  element.listeners.get("toggle")({ currentTarget: element, target: { dataset: { rcDetail: key }, open: true } });
+  await c.refresh(); assert.ok(element.innerHTML.includes(`data-rc-detail="${key}" open`));
+  for (const label of ["공통 기준 확인", "실제 범위", "수집 상태", "제공 지역 코드", "제공 응답에서 확인"]) assert.ok(element.innerHTML.includes(label));
+  const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8");
+  assert.ok(html.indexOf('/regional-data-contract.js') < html.indexOf('/regional-analysis.js'));
+  assert.ok(html.indexOf('/regional-analysis.js') < html.indexOf('/regional-comparison.js'));
+  const css = fs.readFileSync(path.join(__dirname, "../web/regional-comparison.css"), "utf8");
+  assert.match(css, /\.rc-contract :is\(dt,dd\)[^}]*overflow-wrap:anywhere/);
 });

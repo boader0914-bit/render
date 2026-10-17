@@ -17,6 +17,37 @@
   }
   function periodLabel(value) { return String(value || "미확인").replace(/^(\d{4})(\d{2})$/, "$1-$2"); }
   function known(row) { return ["observed", "ready", "complete", "available"].includes(row?.status) && number(row?.value) !== "—"; }
+  let sharedContract;
+  function contractApi() {
+    if (root.RegionalDataContract) return root.RegionalDataContract;
+    if (!sharedContract && typeof module !== "undefined" && module.exports && typeof require === "function") {
+      try { sharedContract = require("./regional-data-contract.js"); } catch { /* Legacy data remain visible without claiming a verified region scope. */ }
+    }
+    return sharedContract;
+  }
+  const levelLabel = value => ({ sigungu: "시·군·구", sido: "시·도" })[value] || "범위 미확인";
+  function contractRows(group, state) {
+    const regionKey = state.snapshot?.scope?.regionKey || state.regionKey || "";
+    return (group.metrics?.length ? group.metrics : [{}]).map(metric => {
+      const rows = (metric.rows || []).slice().sort((a, b) => periodLabel(a.period).localeCompare(periodLabel(b.period))), latest = rows.filter(known).at(-1) || rows.at(-1);
+      const spatial = latest && Object.hasOwn(latest, "spatialContract") ? latest.spatialContract || {}
+        : Object.hasOwn(metric, "spatialContract") ? metric.spatialContract || {} : group.spatialContract;
+      const check = contractApi()?.comparisonEligibility?.([{ regionKey, group, metric: { ...metric, unit: "scope", periodType: "M", spatialContract: spatial } }]);
+      const keyword = spatial?.scopeKind === "keyword" || group.key === "searchTrend" || group.category === "search";
+      return { metric, latest, spatial, keyword, matched: check?.comparable === true,
+        label: keyword ? "키워드 기준 · 지역 직접 비교 제외" : check?.comparable ? `${levelLabel(spatial?.providedLevel)} 기준 · 범위 일치` : check?.reason || "지역 범위 확인 필요" };
+    });
+  }
+  function contractSummary(group, state) {
+    const rows = contractRows(group, state);
+    return rows.some(row => row.keyword) ? "키워드 기준 · 지역 직접 비교 제외" : rows.every(row => row.matched)
+      && new Set(rows.map(row => row.spatial?.providedLevel)).size === 1 ? `${levelLabel(rows[0].spatial?.providedLevel)} 기준 · 범위 일치`
+      : rows.some(row => row.matched) ? "일부 지역 범위 확인 필요" : rows[0].label;
+  }
+  function contractDetailsHtml(group, state) {
+    const rows = contractRows(group, state), detailKey = `scope:${group.key}`;
+    return `<details class="ra-contract" data-ra-detail="${escapeHtml(detailKey)}"${state.openDetails?.has(detailKey) ? " open" : ""}><summary>공통 기준 · 출처·지역 범위</summary><p class="ra-muted">같은 출처·단위·기준주기와 확인된 행정 범위만 직접 비교합니다. 범위 미확인 자료는 참고값이며, 검색 관심도는 키워드별 추이로만 봅니다.</p><div class="ra-table-wrap"><table><caption>${escapeHtml(group.label || group.key)} 비교 기준</caption><thead><tr><th scope="col">지표·출처</th><th scope="col">실제 범위</th><th scope="col">기준기간</th><th scope="col">수집 상태</th></tr></thead><tbody>${rows.map(row => `<tr><th scope="row">${escapeHtml(row.metric.label || row.metric.key || group.label || group.key)}<small>${escapeHtml(group.provider || "출처 미확인")} · ${escapeHtml(row.metric.unit || "단위 미확인")}</small></th><td>${escapeHtml(row.label)}${row.spatial?.providerRegionCode ? `<small>제공 지역 ${escapeHtml(row.spatial.providerRegionCode)}</small>` : ""}<small>${row.spatial?.evidence === "response" ? "제공 응답에서 확인" : row.keyword ? "키워드 검색 범위" : "범위 확인 필요"}</small></td><td>${escapeHtml(periodLabel(row.latest?.period || row.metric.latestPeriod))}<small>${row.metric.periodType === "Y" || group.periodType === "Y" ? "연간 자료" : row.metric.periodType === "M" || group.periodType === "M" ? "월간 자료" : "주기 확인 필요"}</small></td><td>${escapeHtml(statusLabel(row.latest?.status || row.metric.status || group.status || "missing"))}</td></tr>`).join("")}</tbody></table></div></details>`;
+  }
   function safeCode(value) { return String(value || "").replace(/[^A-Z0-9_.:-]/gi, "").slice(0, 100); }
   function errorLabel(code) {
     return ({ MISSING_KEY: "연결 키 설정 필요", AUTH_ERROR: "이용 권한 확인 필요", QUOTA_EXCEEDED: "제공처 요청 한도", TIMEOUT: "제공처 응답 지연", NETWORK_ERROR: "제공처 연결 실패", NO_DATA: "해당 기간 자료 없음", PUBLICATION_PENDING: "아직 공표되지 않은 자료", PARTIAL_DATA: "일부 항목 미확보", MISSING_VALUES: "필요한 값 미확보", PROVIDER_FAILED: "제공처 응답 확인 필요", PROVIDER_UNAVAILABLE: "제공처 연결 준비 필요", COOLDOWN: "다음 조회 가능 시각 대기", SOURCE_FAILED: "원자료 준비 실패", CACHE_READ_ERROR: "저장자료 읽기 실패", CACHE_WRITE_ERROR: "저장자료 저장 실패", INVALID_RESPONSE: "응답 형식 확인 필요", MAPPING_MISSING: "지역 연결 확인 필요", REGION_MISMATCH: "응답 지역 불일치", PERIOD_MISMATCH: "응답 기간 불일치", REGIONAL_SOURCE_BUSY: "다른 자료 갱신 처리 중", PREPARATION_INTERRUPTED: "자료 갱신 중단" })[code] || (code ? `확인 코드 ${safeCode(code)}` : "");
@@ -99,11 +130,12 @@
   }
   function managementGroupHtml(group, state) {
     const background = isBackground(group), raw = state.snapshot?.groups?.find(item => item.key === group.key);
+    const contracted = raw ? { ...group, ...raw } : group;
     const refresh = group.refresh || {}, errorCode = safeCode(refresh.errorCode || group.lastRefreshErrorCode || group.errorCode);
     const failedRefresh = Boolean(errorCode && !["NO_DATA", "PUBLICATION_PENDING", "PARTIAL_DATA", "MISSING_VALUES"].includes(errorCode));
     const old = group.stale || refresh.stale;
     const requested = group.requested && !completeStatus(group.requested.status) ? group.requested : null;
-    return `<details class="ra-group ra-management-group" data-ra-group="${escapeHtml(group.key)}"${state.openGroups?.has(group.key) ? " open" : ""}><summary><span class="ra-group-title"><strong>${escapeHtml(group.label || group.key)}</strong><small>${escapeHtml(group.provider || raw?.provider || "")}</small></span><span class="ra-management-period"><small>최근 자료</small>${escapeHtml(periodLabel(group.latestPeriod))}</span><span class="ra-group-coverage">${escapeHtml(coverageLabel(group.coverage, true))}</span><span class="ra-badge is-${statusClass(old ? "stale" : group.status)}">${old ? "최신 확인 필요" : escapeHtml(statusLabel(group.status))}</span></summary><div class="ra-group-body">${old ? `<p class="ra-warning">${failedRefresh ? "최근 갱신을 완료하지 못해 이전 정상 자료를 표시합니다." : "저장자료를 표시합니다. 최신 자료인지 확인이 필요합니다."}</p>` : ""}${errorCode ? `<p class="ra-muted">${escapeHtml(errorLabel(errorCode))}</p>` : ""}<dl class="ra-source-meta"><div><dt>원자료 확인</dt><dd>${escapeHtml(shownTime(group.sourceRetrievedAt))}</dd></div>${refresh.startedAt || refresh.finishedAt ? `<div><dt>이 묶음의 최근 처리</dt><dd>${escapeHtml(shownTime(refresh.finishedAt || refresh.startedAt))}${refresh.kind ? ` · ${refresh.kind === "local" ? "저장자료 정리" : "갱신 확인"}` : ""}</dd></div>` : ""}</dl>${requested ? `<p class="ra-requested"><strong>${escapeHtml(periodLabel(requested.period))} 자료 미확보</strong><span>${reasonHtml(requested)}</span></p>` : ""}${(group.metrics || []).map(metric => managementMetricHtml(metric, raw?.metrics?.find(item => item.key === metric.key), state, group.key)).join("") || '<p class="ra-muted">확보된 세부 지표가 없습니다.</p>'}</div></details>`;
+    return `<details class="ra-group ra-management-group" data-ra-group="${escapeHtml(group.key)}"${state.openGroups?.has(group.key) ? " open" : ""}><summary><span class="ra-group-title"><strong>${escapeHtml(group.label || group.key)}</strong><small>${escapeHtml(group.provider || raw?.provider || "")}</small><small class="ra-contract-label">${escapeHtml(contractSummary(contracted, state))}</small></span><span class="ra-management-period"><small>최근 자료</small>${escapeHtml(periodLabel(group.latestPeriod))}</span><span class="ra-group-coverage">${escapeHtml(coverageLabel(group.coverage, true))}</span><span class="ra-badge is-${statusClass(old ? "stale" : group.status)}">${old ? "최신 확인 필요" : escapeHtml(statusLabel(group.status))}</span></summary><div class="ra-group-body">${old ? `<p class="ra-warning">${failedRefresh ? "최근 갱신을 완료하지 못해 이전 정상 자료를 표시합니다." : "저장자료를 표시합니다. 최신 자료인지 확인이 필요합니다."}</p>` : ""}${errorCode ? `<p class="ra-muted">${escapeHtml(errorLabel(errorCode))}</p>` : ""}<dl class="ra-source-meta"><div><dt>원자료 확인</dt><dd>${escapeHtml(shownTime(group.sourceRetrievedAt))}</dd></div>${refresh.startedAt || refresh.finishedAt ? `<div><dt>이 묶음의 최근 처리</dt><dd>${escapeHtml(shownTime(refresh.finishedAt || refresh.startedAt))}${refresh.kind ? ` · ${refresh.kind === "local" ? "저장자료 정리" : "갱신 확인"}` : ""}</dd></div>` : ""}</dl>${requested ? `<p class="ra-requested"><strong>${escapeHtml(periodLabel(requested.period))} 자료 미확보</strong><span>${reasonHtml(requested)}</span></p>` : ""}${contractDetailsHtml(contracted, state)}${(group.metrics || []).map(metric => managementMetricHtml(metric, raw?.metrics?.find(item => item.key === metric.key), state, group.key)).join("") || '<p class="ra-muted">확보된 세부 지표가 없습니다.</p>'}</div></details>`;
   }
   function managementGroupsHtml(state, model) {
     const monthly = model.groups.filter(group => !isBackground(group)), background = model.groups.filter(isBackground);
@@ -123,7 +155,7 @@
     const code = safeCode(group.refresh?.errorCode || group.lastRefreshErrorCode || group.errorCode);
     const shownStatus = group.stale ? "stale" : group.status;
     const failedRefresh = code && !["NO_DATA", "PUBLICATION_PENDING", "PARTIAL_DATA", "MISSING_VALUES"].includes(code);
-    return `<details class="ra-group" data-ra-group="${escapeHtml(group.key)}"${state.openGroups?.has(group.key) ? " open" : ""}><summary><span class="ra-group-title"><strong>${escapeHtml(group.label || group.key)}</strong><small>${group.latestPeriod ? `최근 기준 ${escapeHtml(periodLabel(group.latestPeriod))}` : "기준기간 미확인"}</small></span><span class="ra-group-coverage">${escapeHtml(coverage)}</span><span class="ra-badge is-${statusClass(shownStatus)}">${group.stale ? "이전 자료 표시" : escapeHtml(statusLabel(group.status))}</span></summary><div class="ra-group-body">${group.stale ? `<p class="ra-warning">${failedRefresh ? "최근 갱신을 완료하지 못해 이전 정상 자료를 표시합니다." : "저장자료를 표시합니다. 최신 자료인지 확인이 필요합니다."}</p>` : ""}${code ? `<p class="ra-warning">${escapeHtml(errorLabel(code))}</p>` : ""}${state.mode === "sources" ? `<dl class="ra-source-meta"><div><dt>자료 묶음</dt><dd>${escapeHtml(group.label || group.key)}</dd></div><div><dt>기준기간</dt><dd>${escapeHtml(periodLabel(group.latestPeriod))}</dd></div>${group.provider ? `<div><dt>제공처</dt><dd>${escapeHtml(group.provider)}</dd></div>` : ""}${group.updatedAt || group.retrievedAt ? `<div><dt>마지막 자료 확인</dt><dd>${escapeHtml(timeLabel(group.updatedAt || group.retrievedAt))}</dd></div>` : ""}</dl>` : ""}${metrics.length ? metrics.map(metricHtml).join("") : '<p class="ra-muted">확보된 세부 지표가 없습니다. 미확보 자료를 0으로 계산하지 않습니다.</p>'}</div></details>`;
+    return `<details class="ra-group" data-ra-group="${escapeHtml(group.key)}"${state.openGroups?.has(group.key) ? " open" : ""}><summary><span class="ra-group-title"><strong>${escapeHtml(group.label || group.key)}</strong><small>${group.latestPeriod ? `최근 기준 ${escapeHtml(periodLabel(group.latestPeriod))}` : "기준기간 미확인"}</small><small class="ra-contract-label">${escapeHtml(contractSummary(group, state))}</small></span><span class="ra-group-coverage">${escapeHtml(coverage)}</span><span class="ra-badge is-${statusClass(shownStatus)}">${group.stale ? "이전 자료 표시" : escapeHtml(statusLabel(group.status))}</span></summary><div class="ra-group-body">${group.stale ? `<p class="ra-warning">${failedRefresh ? "최근 갱신을 완료하지 못해 이전 정상 자료를 표시합니다." : "저장자료를 표시합니다. 최신 자료인지 확인이 필요합니다."}</p>` : ""}${code ? `<p class="ra-warning">${escapeHtml(errorLabel(code))}</p>` : ""}${state.mode === "sources" ? `<dl class="ra-source-meta"><div><dt>자료 묶음</dt><dd>${escapeHtml(group.label || group.key)}</dd></div><div><dt>기준기간</dt><dd>${escapeHtml(periodLabel(group.latestPeriod))}</dd></div>${group.provider ? `<div><dt>제공처</dt><dd>${escapeHtml(group.provider)}</dd></div>` : ""}${group.updatedAt || group.retrievedAt ? `<div><dt>마지막 자료 확인</dt><dd>${escapeHtml(timeLabel(group.updatedAt || group.retrievedAt))}</dd></div>` : ""}</dl>` : ""}${contractDetailsHtml(group, state)}${metrics.length ? metrics.map(metricHtml).join("") : '<p class="ra-muted">확보된 세부 지표가 없습니다. 미확보 자료를 0으로 계산하지 않습니다.</p>'}</div></details>`;
   }
   function jobHtml(job, snapshot = null) {
     if (!job) return "";

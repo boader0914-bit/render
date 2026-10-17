@@ -55,6 +55,13 @@
 .ra-source-meta>div { display:grid; gap:1px; }
 .ra-source-meta dt { color:var(--ra-muted); }
 .ra-source-meta dd { margin:0; overflow-wrap:anywhere; }
+.ra-contract { border:1px solid var(--ra-border); border-radius:8px; padding:10px 12px; margin:0 0 12px; min-width:0; font-size:12px; }
+.ra-contract>summary { cursor:pointer; color:var(--ra-text); font-weight:600; }
+.ra-contract>p { margin-top:7px; }
+.ra-contract table { min-width:420px; }
+.ra-contract :is(th,td) { overflow-wrap:anywhere; white-space:normal; }
+.ra-contract small { display:block; color:var(--ra-muted); font-size:10px; font-weight:400; overflow-wrap:anywhere; }
+.ra-group-title .ra-contract-label { color:var(--ra-muted); font-size:10px; overflow-wrap:anywhere; }
 .ra-method { border-top:1px solid var(--ra-border); padding-top:10px; }
 .ra-method summary { cursor:pointer; font-weight:600; color:var(--ra-text); }
 .ra-method p { margin-top:7px; }

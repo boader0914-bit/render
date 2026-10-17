@@ -110,7 +110,7 @@ function mapRegion(metadata, definition, region) {
   if (matches.length !== 1 || !validCode(String(matches[0]?.ITM_ID ?? ""))) throw problem("MAPPING_MISSING");
   return { code: String(matches[0].ITM_ID), basis: "kosis-table-metadata-name-and-ancestry", tableId: definition.tableId };
 }
-function normalizeData(payload, definition, mapping, retrievedAt) {
+function normalizeData(payload, definition, mapping, retrievedAt, region) {
   if (!Array.isArray(payload) || !payload.length || payload.length > 100) throw problem("INVALID_RESPONSE");
   const found = new Map();
   const periods = new Set();
@@ -138,7 +138,10 @@ function normalizeData(payload, definition, mapping, retrievedAt) {
   if (periods.size !== 1) throw problem("PERIOD_MISMATCH");
   const period = [...periods][0];
   const rows = definition.metrics.flatMap(metric => (definition.breakdowns || [null]).map(breakdown => found.get(`${metric.id}:${breakdown?.id || ""}`) || { key: breakdown?.key || metric.key, label: breakdown?.label || metric.label, value: null, unit: metric.unit, period, itemId: metric.id, ...(breakdown ? { classId: breakdown.id } : {}), status: "missing" }));
-  return { ...publicDefinition(definition), status: rows.every(row => row.status === "observed") ? "ready" : "partial", period, updatedAt: retrievedAt, retrievedAt, sourceUpdatedAt: updated.length ? updated.sort().at(-1) : null, mapping, rows };
+  return { ...publicDefinition(definition), status: rows.every(row => row.status === "observed") ? "ready" : "partial", period, updatedAt: retrievedAt, retrievedAt, sourceUpdatedAt: updated.length ? updated.sort().at(-1) : null, mapping, rows,
+    ...(region?.regionKey && ["local", "broad"].includes(region.level) && mapping?.basis === "kosis-table-metadata-name-and-ancestry"
+      ? { spatialEvidence: { verified: true, regionKey: region.canonicalRegionKey || region.regionKey, regionCode: mapping.code, level: region.level === "local" ? "sigungu" : "sido",
+        mappingStatus: "mapped", observedRegionCodes: [...new Set(payload.map(item => String(item.C1)))], reasonCode: "" } } : {}) };
 }
 
 function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl = globalThis.fetch, now = () => Date.now(), timeoutMs = 12000, cooldownMs = 300000, dailyBudget = 100, minIntervalMs = 1000, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
@@ -166,7 +169,7 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
     const unit = matches[0];
     if (!unit || !["local", "broad"].includes(unit.level) || typeof unit.regionId !== "string") throw problem("INVALID_REGION");
     const province = master.units.find(candidate => candidate.regionId === unit.provinceRegionId && candidate.active === true);
-    return { regionKey, regionId: unit.regionId, name: unit.name, fullName: unit.fullName || unit.name, level: unit.level, sidoFull: unit.sidoFull || null, provinceName: province?.name || unit.sidoFull || null };
+    return { regionKey, canonicalRegionKey: unit.regionKey, regionId: unit.regionId, name: unit.name, fullName: unit.fullName || unit.name, level: unit.level, sidoFull: unit.sidoFull || null, provinceName: province?.name || unit.sidoFull || null };
   }
   async function readCache(region) {
     try {
@@ -183,6 +186,15 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
         // Rebuild cached values using the same strict parser as upstream input.
         const normalized = normalizeData(item.rows.map(row => ({ TBL_ID: item.tableId, ITM_ID: row.itemId, C1: item.mapping.code, ...(row.classId !== undefined ? { C2: row.classId } : {}), PRD_SE: item.periodType, PRD_DE: row.period, UNIT_NM: row.unit, DT: row.status === "suppressed" ? "..." : row.value, LST_CHN_DE: item.sourceUpdatedAt })), definition, item.mapping, item.retrievedAt);
         if (normalized.status !== item.status) throw problem("CACHE_READ_ERROR");
+        if (item.spatialEvidence !== undefined) {
+          const evidence = item.spatialEvidence;
+          if (evidence?.verified !== true || evidence.regionKey !== (region.canonicalRegionKey || region.regionKey) || evidence.regionCode !== item.mapping.code
+            || evidence.level !== (region.level === "local" ? "sigungu" : "sido") || evidence.mappingStatus !== "mapped"
+            || !Array.isArray(evidence.observedRegionCodes) || evidence.observedRegionCodes.length !== 1 || evidence.observedRegionCodes[0] !== item.mapping.code
+            || item.mapping.basis !== "kosis-table-metadata-name-and-ancestry") throw problem("CACHE_READ_ERROR");
+          normalized.spatialEvidence = { verified: true, regionKey: region.canonicalRegionKey || region.regionKey, regionCode: evidence.regionCode, level: evidence.level,
+            mappingStatus: "mapped", observedRegionCodes: [evidence.regionCode], reasonCode: "" };
+        }
         datasets[definition.key] = normalized;
       }
       return { version: 1, regionId: region.regionId, datasets };
@@ -335,7 +347,7 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
           const meta = await request({ method: "getMeta", type: "ITM", orgId: definition.orgId, tblId: definition.tableId }, apiKey, () => { networkAttempted = true; });
           const mapping = mapRegion(meta, definition, region);
           const data = await request({ method: "getList", orgId: definition.orgId, tblId: definition.tableId, itmId: definition.metrics.map(metric => metric.id).join("+") + "+", objL1: mapping.code, ...(definition.breakdowns ? { objL2: definition.breakdowns.map(item => item.id).join("+") + "+" } : {}), prdSe: definition.periodType, newEstPrdCnt: 1, smblChk: "Y" }, apiKey, () => { networkAttempted = true; });
-          const dataset = normalizeData(data, definition, mapping, iso());
+          const dataset = normalizeData(data, definition, mapping, iso(), region);
           if (dataset.status !== "ready") {
             const error = publicError(problem("MISSING_VALUES"));
             // Keep a first partial observation for audit and display, including
@@ -388,11 +400,18 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
     let files = [];
     try { files = await fs.readdir(directory); } catch (error) { if (error.code !== "ENOENT") readError = publicError(problem("CACHE_READ_ERROR")); }
     const stems = [...new Set(files.filter(name => /^[a-f0-9]{24}(?:-attempt)?\.json$/.test(name)).map(name => name.slice(0, 24)))];
+    let masterUnits = [];
+    if (stems.length) {
+      try { masterUnits = JSON.parse(await fs.readFile(regionMasterFile, "utf8")).units || []; }
+      catch { readError = publicError(problem("CACHE_READ_ERROR")); }
+    }
     for (const stem of stems) {
       try {
         const file = files.includes(`${stem}.json`) ? `${stem}.json` : `${stem}-attempt.json`;
         const raw = JSON.parse(await fs.readFile(path.join(directory, file), "utf8"));
-        const cache = await readCache({ regionId: raw.regionId });
+        const units = masterUnits.filter(unit => unit.regionId === raw.regionId && unit.active === true);
+        const identity = units.length === 1 ? { regionId: raw.regionId, regionKey: units[0].regionKey, level: units[0].level } : { regionId: raw.regionId };
+        const cache = await readCache(identity);
         const successes = Object.values(cache.datasets);
         if (successes.length) cachedRegionCount++;
         const view = withAttempt(present({ regionId: raw.regionId }, cache, configured), await readAttempt({ regionId: raw.regionId }));

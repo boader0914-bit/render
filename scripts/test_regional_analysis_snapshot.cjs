@@ -34,6 +34,67 @@ test("each tourism indicator uses latest normal month inclusive13; normal zero s
   assert.equal(result.networkAttempted, false); assert.ok(f.calls.filter(c => c.method !== "search").every(c => c.collectMissing === false && c.force === false));
   assert.equal(result.capabilities.monthlyForecast, false);
 });
+
+function withSpatialEvidence(f, regionKey = scope.regionKey, unitType = "city", officialCode = "4165000000") {
+  f.options.resolveRegion = async key => ({ regionKey: key, level: "local", unitType, officialCode, active: true, selectable: true });
+  for (const [index, method] of ["collectVisitorHistory", "collectDemandStrengthHistory", "collectResourceDemandHistory", "collectDiversityHistory"].entries()) {
+    const original = f.options.tourismCollector[method];
+    f.options.tourismCollector[method] = async input => {
+      const result = await original(input);
+      const points = index === 0 ? result.regions[0].series : result.series;
+      const evidence = { verified: true, regionKey, regionCode: officialCode.slice(0, 5), level: "sigungu", mappingStatus: "mapped", observedRegionCodes: [officialCode.slice(0, 5)] };
+      for (const point of points) Object.assign(point, { spatialEvidence: evidence, staySpatialEvidence: evidence, spendSpatialEvidence: evidence });
+      return result;
+    };
+  }
+  return f;
+}
+
+test("new administrative regions use identical rules without named-region exceptions", async () => {
+  for (const [key, type, code] of [["new_county", "county", "1111100000"], ["new_city", "city", "2222200000"], ["new_district", "autonomous_district", "3333300000"]]) {
+    const f = withSpatialEvidence(fixture(), key, type, code);
+    const result = await createRegionalAnalysisSnapshotBuilder(f.options)({ ...scope, regionKey: key });
+    assert.equal(result.contractVersion, "regional-data-contract-v1");
+    assert.equal(result.regionIdentity.officialCode, code);
+    for (const group of result.groups.filter(group => group.category === "tourism")) for (const metric of group.metrics) {
+      assert.equal(metric.spatialContract.status, "matched");
+      assert.equal(metric.spatialContract.requestedRegionKey, key);
+      assert.equal(metric.temporalPolicy.expectedMonths, 13);
+      assert.equal(metric.rows[0].period, "2025-08");
+      assert.equal(metric.rows.at(-1).availability.observed, true);
+      assert.equal(metric.rows.at(-1).value, 0);
+    }
+    assert.equal(result.comparisonRules.aggregateAdministrativeUnits, false);
+  }
+});
+
+test("provider input echoes never turn legacy stored values into verified regional evidence", async () => {
+  const f = fixture();
+  f.options.resolveRegion = async regionKey => ({ regionKey, level: "local", officialCode: "4165000000", unitType: "city" });
+  const result = await createRegionalAnalysisSnapshotBuilder(f.options)(scope);
+  assert.equal(result.groups[0].metrics[0].latestValue, 0);
+  assert.equal(result.groups[0].metrics[0].spatialContract.status, "scope_unverified");
+  assert.equal(result.groups[0].metrics[0].rows.at(-1).spatialContract.status, "scope_unverified");
+  assert.equal(result.groups.find(group => group.key === "kosis").metrics.find(metric => metric.periodType === "Y").temporalPolicy.expectedMonths, null);
+  assert.equal(result.groups.find(group => group.key === "searchTrend").spatialContract.scopeKind, "keyword");
+});
+
+test("regional evidence mismatch survives snapshots and changes their fingerprint", async () => {
+  const f = withSpatialEvidence(fixture());
+  const build = createRegionalAnalysisSnapshotBuilder(f.options), verified = await build(scope);
+  const original = f.options.tourismCollector.collectVisitorHistory;
+  f.options.tourismCollector.collectVisitorHistory = async input => {
+    const result = await original(input);
+    for (const row of result.regions[0].series) row.spatialEvidence = { ...row.spatialEvidence, regionKey: "another_city" };
+    return result;
+  };
+  const mismatched = await build(scope);
+  assert.equal(mismatched.groups[0].metrics[0].latestValue, null, "a confirmed wrong area cannot feed comparisons or forecasts");
+  assert.equal(mismatched.groups[0].metrics[0].rows.find(row => row.period === verified.groups[0].metrics[0].latestPeriod).referenceValue,
+    verified.groups[0].metrics[0].latestValue, "source value is preserved separately for review");
+  assert.equal(mismatched.groups[0].metrics[0].spatialContract.status, "response_mismatch");
+  assert.notEqual(mismatched.sourceFingerprint, verified.sourceFingerprint);
+});
 test("failed/missing zero is not an observed value and wrong regions are rejected", async () => {
   const f = fixture();
   f.options.tourismCollector.collectVisitorHistory = async () => ({ regions: [{ regionKey: "other", series: [{ yearMonth: "202609", status: "complete", averageDailyVisitors: 0 }] }] });

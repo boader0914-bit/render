@@ -2,8 +2,9 @@
 
 const crypto = require("node:crypto");
 const { DEFINITIONS } = require("./kosis.cjs");
+const { VERSION: CONTRACT_VERSION, createSpatialContract, availabilityOf, temporalPolicy } = require("../../web/regional-data-contract.js");
 
-const VERSION = "regional-observations-v1";
+const VERSION = "regional-observations-v2";
 const MONTH = /^20\d{2}-(0[1-9]|1[0-2])$/;
 const numeric = value => typeof value === "number" && Number.isFinite(value) && value >= 0;
 const shiftMonth = (month, offset) => {
@@ -127,8 +128,12 @@ function finishGroup(group, metrics, end, count) {
     errorCode: group.errorCode || (availableMonths === count ? "" : hasData ? "PARTIAL_DATA" : "NO_DATA") };
 }
 
-function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService, searchTrendService, prepare, now = () => new Date(), includeHistory = false }) {
+function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService, searchTrendService, resolveRegion, prepare, now = () => new Date(), includeHistory = false }) {
   return async function buildSnapshot(scope, { collectMissing = false } = {}) {
+    // Resolve identity independently of a provider's echo of the request.
+    // Background builds only; reading a saved result never performs this work.
+    const resolved = typeof resolveRegion === "function" ? await resolveRegion(scope.regionKey) : null;
+    const region = resolved?.regionKey === scope.regionKey ? resolved : { regionKey: scope.regionKey };
     let preparation = null;
     if (collectMissing) {
       if (typeof prepare !== "function") throw Object.assign(new Error("Preparation unavailable"), { code: "REGIONAL_PREPARATION_UNAVAILABLE" });
@@ -154,6 +159,8 @@ function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService,
       const validRegion = !result || (key === "visitors" ? matching.length === 1 : result.region?.regionKey === scope.regionKey);
       if (!validRegion) errorCode = "REGION_MISMATCH";
       if (result?.period?.endYearMonth && result.period.endYearMonth !== input.endYearMonth) errorCode = "PERIOD_MISMATCH";
+      const sourceRegion = key === "visitors" ? matching[0] : result?.region;
+      const spatial = evidence => createSpatialContract({ region, provider: "한국관광공사", sourceRegion, evidence });
       const raw = errorCode ? [] : key === "visitors" ? matching[0]?.series || [] : result?.series || [];
       const periods = monthsEnding(end, readCount);
       const metrics = fields.map(([field, name, unit]) => metricWindow(field, name, unit, periods.map(period => {
@@ -166,14 +173,33 @@ function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService,
           duplicate: matches.length > 1, field, result, requestedPeriod: period.replace("-", "") });
         if (actualStatus === "missing" && provenance.reasonCode === "PUBLICATION_PENDING") actualStatus = "publication_pending";
         else if (actualStatus === "missing" && SAFE.has(provenance.reasonCode) && !["NO_DATA", "NOT_COLLECTED", "MISSING_VALUES", "PARTIAL_DATA"].includes(provenance.reasonCode)) actualStatus = "error";
-        return { period, value: actualStatus === "observed" ? value : null, status: actualStatus, retrievedAt: stamp(point?.collectedAt), ...provenance };
+        const evidence = key === "demandStrength" ? point?.[field === "stayOverall" ? "staySpatialEvidence" : "spendSpatialEvidence"]
+          : point?.operations?.[field]?.quality?.spatialEvidence || point?.spatialEvidence || point?.quality?.spatialEvidence;
+        const spatialContract = spatial(evidence);
+        const rejectedScope = ["response_mismatch", "mapping_pending", "mapping_missing"].includes(spatialContract.status);
+        if (rejectedScope) {
+          actualStatus = "error";
+          provenance.reasonCode = spatialContract.status === "response_mismatch" ? "REGION_MISMATCH" : "MAPPING_MISSING";
+          provenance.reasonEvidence = "recorded";
+        }
+        return { period, value: actualStatus === "observed" ? value : null, status: actualStatus, retrievedAt: stamp(point?.collectedAt), ...provenance,
+          ...(rejectedScope && numeric(value) ? { referenceValue: value, referenceStatus: status } : {}),
+          spatialContract, availability: availabilityOf({ status: actualStatus, value: actualStatus === "observed" ? value : null, ...provenance }) };
       }), end, count, includeHistory));
+      for (const metric of metrics) {
+        metric.spatialContract = metric.rows.find(row => row.period === metric.latestPeriod)?.spatialContract || metric.requestedPoint?.spatialContract || spatial();
+        metric.temporalPolicy = temporalPolicy({ month: end, months: count, periodType: "M" });
+      }
       const step = diagnostics(key);
       const requested = metrics.map(metric => metric.requestedPoint);
       const latestRequestedStatus = requested.every(point => point.status === "observed") ? "ready" : requested.some(point => point.status === "observed") ? "partial"
         : requested.some(point => point.status === "error") ? "failed" : requested.some(point => point.status === "publication_pending") ? "publication_pending"
           : requested.some(point => point.status === "partial") ? "partial" : "missing";
-      groups.push(finishGroup({ key, label, category: "tourism", provider: "한국관광공사", periodType: "M", errorCode: errorCode || (step?.errorCode ? safeCode(step.errorCode) : ""),
+      const contracts = metrics.map(metric => metric.spatialContract);
+      const groupContract = contracts.every(contract => JSON.stringify(contract) === JSON.stringify(contracts[0])) ? contracts[0] : spatial();
+      const scopeError = contracts.find(contract => ["response_mismatch", "mapping_pending", "mapping_missing"].includes(contract.status));
+      groups.push(finishGroup({ key, label, category: "tourism", provider: "한국관광공사", periodType: "M", spatialContract: groupContract,
+        temporalPolicy: temporalPolicy({ month: end, months: count, periodType: "M" }), errorCode: errorCode || (scopeError ? scopeError.status === "response_mismatch" ? "REGION_MISMATCH" : "MAPPING_MISSING" : step?.errorCode ? safeCode(step.errorCode) : ""),
         diagnostics: safeDiagnostics(step?.diagnostics), latestRequestedPeriod: step?.latestRequestedPeriod || end.replace("-", ""),
         latestRequestedStatus: step?.latestRequestedStatus || latestRequestedStatus, latestRequestedErrorCode: step?.latestRequestedErrorCode ? safeCode(step.latestRequestedErrorCode)
           : requested.find(point => SAFE.has(point.reasonCode))?.reasonCode || "",
@@ -189,22 +215,31 @@ function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService,
       const validPeriod = definition.periodType === "Y" ? /^20\d{2}$/.test(dataset?.period || "") : /^20\d{2}(0[1-9]|1[0-2])$/.test(dataset?.period || "");
       const period = validPeriod ? definition.periodType === "Y" ? dataset.period : `${dataset.period.slice(0, 4)}-${dataset.period.slice(4)}` : "";
       const expected = definition.metrics.flatMap(metric => (definition.breakdowns || [null]).map(breakdown => ({ key: breakdown?.key || metric.key, label: breakdown?.label || metric.label, unit: metric.unit })));
-      return { key: definition.key, label: definition.label, periodType: definition.periodType, period,
+      const spatialContract = createSpatialContract({ region, provider: "KOSIS", sourceRegion: { ...kosis?.region, regionCode: dataset?.mapping?.code }, evidence: dataset?.spatialEvidence });
+      return { key: definition.key, label: definition.label, periodType: definition.periodType, period, spatialContract,
+        temporalPolicy: temporalPolicy({ month: end, months: count, periodType: definition.periodType }),
         retrievedAt: stamp(dataset?.retrievedAt), rows: expected.map(field => {
           const rows = (dataset?.rows || []).filter(row => row.key === field.key && row.unit === field.unit);
           const row = rows.length === 1 ? rows[0] : null;
-          const observed = validPeriod && dataset?.periodType === definition.periodType && ["ready", "partial", "stale"].includes(dataset?.status) && row?.status === "observed" && numeric(row.value);
-          const reasonCode = observed ? "" : kosisError || (SAFE.has(dataset?.errorCode) ? dataset.errorCode : SAFE.has(dataset?.error?.code) ? dataset.error.code : "")
+          const rejectedScope = ["response_mismatch", "mapping_pending", "mapping_missing"].includes(spatialContract.status);
+          const observed = !rejectedScope && validPeriod && dataset?.periodType === definition.periodType && ["ready", "partial", "stale"].includes(dataset?.status) && row?.status === "observed" && numeric(row.value);
+          const reasonCode = observed ? "" : rejectedScope ? spatialContract.status === "response_mismatch" ? "REGION_MISMATCH" : "MAPPING_MISSING" : kosisError || (SAFE.has(dataset?.errorCode) ? dataset.errorCode : SAFE.has(dataset?.error?.code) ? dataset.error.code : "")
             || (dataset && validPeriod ? "MISSING_VALUES" : "UNRECORDED_REASON");
-          return { ...field, value: observed ? row.value : null, status: observed ? "observed" : "missing", reasonCode,
+          return { ...field, value: observed ? row.value : null, status: observed ? "observed" : rejectedScope ? "error" : "missing", reasonCode,
+            ...(rejectedScope && numeric(row?.value) ? { referenceValue: row.value, referenceStatus: row.status } : {}),
             reasonEvidence: reasonCode === "UNRECORDED_REASON" ? "unknown" : "recorded" };
         }) };
     });
     const kosisMetrics = datasets.flatMap(dataset => dataset.rows.map(row => ({ ...row, key: `${dataset.key}:${row.key}`, label: `${dataset.label} · ${row.label}`, periodType: dataset.periodType,
+      spatialContract: dataset.spatialContract, temporalPolicy: dataset.temporalPolicy,
       latestPeriod: row.status === "observed" ? dataset.period : "", latestValue: row.value,
-      rows: [{ period: dataset.period, status: row.status, value: row.value, retrievedAt: dataset.retrievedAt, reasonCode: row.reasonCode, reasonEvidence: row.reasonEvidence }] })));
+      rows: [{ period: dataset.period, status: row.status, value: row.value, retrievedAt: dataset.retrievedAt, reasonCode: row.reasonCode, reasonEvidence: row.reasonEvidence,
+        spatialContract: dataset.spatialContract, availability: availabilityOf(row) }] })));
     const kosisObserved = kosisMetrics.filter(metric => metric.latestValue !== null).length;
-    groups.push({ key: "kosis", label: "인구·산업 통계", category: "background", provider: "KOSIS", periodType: "mixed", datasets, metrics: kosisMetrics,
+    const kosisContracts = kosisMetrics.map(metric => metric.spatialContract);
+    const kosisContract = kosisContracts.length && kosisContracts.every(contract => JSON.stringify(contract) === JSON.stringify(kosisContracts[0])) ? kosisContracts[0]
+      : createSpatialContract({ region, provider: "KOSIS", sourceRegion: kosis?.region });
+    groups.push({ key: "kosis", label: "인구·산업 통계", category: "background", provider: "KOSIS", periodType: "mixed", datasets, metrics: kosisMetrics, spatialContract: kosisContract,
       status: kosisObserved === kosisMetrics.length ? "ready" : kosisObserved ? "partial" : kosisError ? "failed" : "missing",
       latestPeriod: [...new Set(kosisMetrics.map(metric => metric.latestPeriod).filter(Boolean))].sort().join(" · "),
       availableMonths: null, expectedMonths: null, observedItems: kosisObserved, expectedItems: kosisMetrics.length,
@@ -249,22 +284,32 @@ function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService,
       || (diagnostics("searchTrend")?.errorCode ? safeCode(diagnostics("searchTrend").errorCode) : "");
     const unavailableTrendState = sourceTrendReason === "PUBLICATION_PENDING" ? "publication_pending"
       : sourceTrendReason && !["NO_DATA", "MISSING_VALUES", "PARTIAL_DATA"].includes(sourceTrendReason) ? "error" : "missing";
+    const searchContract = createSpatialContract({ region, provider: "네이버 데이터랩", sourceRegion: { regionKey: trend?.regionKey }, scopeKind: "keyword",
+      evidence: { verified: Boolean(trend && trend.regionKey === scope.regionKey && trend.month === end && !trend.partialMonth && !trendError), regionKey: trend?.regionKey, keywordVerified: Boolean(trend?.keyword) } });
     const trendRows = (trend?.series || []).map(point => {
       const observed = point.status === "observed" && numeric(point.value) && point.value <= 100;
       return { period: String(point.period || "").slice(0, 7), status: observed ? "observed" : unavailableTrendState, value: observed ? point.value : null,
-        retrievedAt: stamp(trend?.retrievedAt), reasonCode: observed ? "" : sourceTrendReason || "MISSING_VALUES", reasonEvidence: "recorded" };
+        retrievedAt: stamp(trend?.retrievedAt), reasonCode: observed ? "" : sourceTrendReason || "MISSING_VALUES", reasonEvidence: "recorded", spatialContract: searchContract,
+        availability: availabilityOf({ status: observed ? "observed" : unavailableTrendState, value: observed ? point.value : null, reasonCode: observed ? "" : sourceTrendReason || "MISSING_VALUES" }) };
     }).filter(point => MONTH.test(point.period));
     if (new Set(trendRows.map(row => row.period)).size !== trendRows.length) { trendRows.length = 0; trendError = "INVALID_RESPONSE"; }
     const metric = metricWindow("interest", "검색 관심도", "상대지수", trendRows, end, count, includeHistory);
+    metric.spatialContract = searchContract;
+    metric.temporalPolicy = temporalPolicy({ month: end, months: count, periodType: "M", scopeKind: "keyword" });
     if (metric.requestedPoint.reasonCode === "UNRECORDED_REASON" && sourceTrendReason) metric.requestedPoint = {
       period: end, status: unavailableTrendState, value: null, retrievedAt: "", reasonCode: sourceTrendReason, reasonEvidence: "recorded"
     };
-    groups.push(finishGroup({ key: "searchTrend", label: "검색 트렌드", category: "search", provider: "네이버 데이터랩", periodType: "M", keyword: String(trend?.keyword || ""),
+    groups.push(finishGroup({ key: "searchTrend", label: "검색 트렌드", category: "search", provider: "네이버 데이터랩", periodType: "M", keyword: String(trend?.keyword || ""), spatialContract: searchContract,
+      temporalPolicy: metric.temporalPolicy,
       normalizationPeriod: trend?.startDate && trend?.endDate ? `${trend.startDate} ~ ${trend.endDate}` : "",
       sourceBatchId: trend ? crypto.createHash("sha256").update(JSON.stringify([trend.regionKey, trend.keyword, trend.startDate, trend.endDate])).digest("hex") : "",
       errorCode: trendError || (diagnostics("searchTrend")?.errorCode ? safeCode(diagnostics("searchTrend").errorCode) : trend?.errorCode ? safeCode(trend.errorCode) : "") }, [metric], end, count));
     const hasData = groups.some(group => group.metrics.some(metric => metric.rows.some(row => row.status === "observed")));
-    const payload = { calculationVersion: VERSION, indicatorVersion: VERSION, status: groups.every(group => group.status === "ready") ? "ready" : hasData ? "partial" : "missing", groups,
+    const payload = { calculationVersion: VERSION, indicatorVersion: VERSION, contractVersion: CONTRACT_VERSION,
+      regionIdentity: { regionKey: scope.regionKey, officialCode: String(region.officialCode || ""), level: region.level || "unknown", unitType: region.unitType || "unknown" },
+      comparisonRules: { version: CONTRACT_VERSION, sameProvider: true, sameUnit: true, samePeriodType: true, sameAdministrativeLevel: true,
+        requireResponseEvidence: true, periodSelection: "latest_common_verified_observation", aggregateAdministrativeUnits: false, compareIndependentSearchBatches: false },
+      status: groups.every(group => group.status === "ready") ? "ready" : hasData ? "partial" : "missing", groups,
       builtAt: new Date(now()).toISOString(), scope: { ...scope }, networkAttempted: false,
       refreshRequested: collectMissing, preparation: preparation ? { id: preparation.id, status: preparation.status, finishedAt: preparation.finishedAt } : null,
       refreshDiagnostics: preparationDiagnostics(preparation),

@@ -40,14 +40,19 @@ async function main() {
     integrated.createCompanyIntegratedDb = options => { const service = originalIntegrated({...options,autoStart:false}); service.bootstrap = async () => {}; return service; };
     const tourism = require(${JSON.stringify(path.join(root, "scripts/tourism_collector.cjs"))}), original = tourism.createCollector;
     const shift = (m,n) => { const [y,x]=m.split('-').map(Number); return new Date(Date.UTC(y,x-1+n,1)).toISOString().slice(0,7); };
+    const regionUnits = require(${JSON.stringify(path.join(root, "web/data/region_master.json"))}).units;
+    const spatial = (regionKey, code) => ({verified:true,regionKey,regionCode:code,level:'sigungu',mappingStatus:'mapped',observedRegionCodes:[code],reasonCode:''});
     tourism.createCollector = options => {
       const collector = original(options);
       ['collectVisitorHistory','collectDemandStrengthHistory','collectResourceDemandHistory','collectDiversityHistory'].forEach((method,i)=>{
         collector[method] = async input => {
           record(method + (input.collectMissing ? ':refresh' : ':cache'));
           const end = input.endYearMonth.slice(0,4)+'-'+input.endYearMonth.slice(4);
+          const identity = regionUnits.find(region=>region.regionKey===input.regionKey);
+          const evidence = spatial(input.regionKey,identity.officialCode.slice(0,5));
           const series = Array.from({length:input.months},(_,j)=>({yearMonth:shift(end,j+1-input.months).replace('-',''),status:'complete',
             collectedAt:${JSON.stringify(receivedAt)},averageDailyVisitors:45048+j,visitorDays:1351440+j,stayOverall:75.2,spendOverall:60,
+            spatialEvidence:evidence,staySpatialEvidence:evidence,spendSpatialEvidence:evidence,
             values:{service:30,culture:40,visitor:50,spend:60,international:70}}));
           if(fs.existsSync(${JSON.stringify(qualityPreview)})) {
             if(i===0) series.at(-1).status='publication_pending';
@@ -63,6 +68,7 @@ async function main() {
     };
     const kosis = require(${JSON.stringify(path.join(root, "scripts/lib/kosis.cjs"))});
     const regional = regionKey => ({region:{regionKey},status:'ready',datasets:kosis.DEFINITIONS.map(d=>({key:d.key,label:d.label,periodType:d.periodType,
+      mapping:{code:'fixture_'+regionKey+'_'+d.key,basis:'synthetic-table-mapping'},spatialEvidence:spatial(regionKey,'fixture_'+regionKey+'_'+d.key),
       period:d.periodType==='Y'?'2024':'202608',status:'ready',retrievedAt:'2026-10-01T00:00:00Z',rows:d.metrics.flatMap(m=>(d.breakdowns||[null]).map(b=>({key:b?.key||m.key,label:b?.label||m.label,unit:m.unit,value:100,status:'observed'})))}))});
     kosis.createKosisService = () => ({getRegion:async key=>{record('kosis:cache');return regional(key);},refreshRegion:async key=>{record('kosis:refresh');return regional(key);},status:async()=>({configured:false})});
     const trends = require(${JSON.stringify(path.join(root, "scripts/lib/regional_search_trends.cjs"))});
@@ -149,6 +155,17 @@ async function main() {
     }
     assert.equal(result.data.snapshot.status, "ready", JSON.stringify(result.data));
     assert.equal(result.data.snapshot.groups.length, 6); assert.equal(result.data.policy.enabled, false);
+    assert.equal(result.data.snapshot.contractVersion, "regional-data-contract-v1");
+    assert.equal(result.data.snapshot.regionIdentity.regionKey, scope.regionKey);
+    assert.equal(result.data.snapshot.comparisonRules.requireResponseEvidence, true);
+    for (const group of result.data.snapshot.groups) for (const metric of group.metrics) {
+      assert.equal(metric.spatialContract.status, "matched");
+      assert.equal(metric.spatialContract.requestedRegionKey, scope.regionKey);
+      assert.ok(metric.rows.filter(row => row.status === "observed").every(row => row.spatialContract?.status === "matched"));
+    }
+    const sharedContractAsset = await fetch(base + "/regional-data-contract.js", { headers: { Cookie: cookie } });
+    assert.equal(sharedContractAsset.status, 200);
+    assert.match(await sharedContractAsset.text(), /regional-data-contract-v1/);
     assert.equal(result.data.management.schemaVersion, 1);
     assert.equal(result.data.management.groups.length, 6);
     assert.equal(result.data.management.refresh.current.kind, "local");

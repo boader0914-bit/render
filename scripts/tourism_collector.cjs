@@ -432,6 +432,25 @@ function sourceStatus(config, serviceKey) {
   return "ready";
 }
 
+// This evidence is emitted only at raw-response validation boundaries. A
+// requested region, cached metric or echoed publicRegion is not proof of scope.
+function responseSpatialEvidence(region = {}, codes = [], { valid = false, reasonCode = "MAPPING_MISSING" } = {}) {
+  const observedRegionCodes = [...new Set(codes.map(code => String(code || "").trim())
+    .filter(code => /^\d{5}$/.test(code)))].sort().slice(0, 16);
+  const expectedCode = String(region.ktoSggCd || "");
+  const verified = Boolean(valid && !region.codeStatus && /^\d{5}$/.test(expectedCode)
+    && observedRegionCodes.length === 1 && observedRegionCodes[0] === expectedCode);
+  return {
+    verified,
+    regionKey: String(region.regionKey || ""),
+    regionCode: verified ? observedRegionCodes[0] : "",
+    level: "sigungu",
+    mappingStatus: region.codeStatus ? "pending" : "mapped",
+    observedRegionCodes,
+    reasonCode: verified ? "" : reasonCode
+  };
+}
+
 function createCollector(options = {}) {
   const env = options.env || process.env;
   const fetchImpl = options.fetchImpl || globalThis.fetch;
@@ -763,6 +782,8 @@ function createCollector(options = {}) {
       const candidateComplete = candidateRegion?.quality?.status === "complete";
       if (currentComplete && !candidateComplete) return false;
       if (currentComplete && candidateComplete) {
+        if (currentRegion?.quality?.spatialEvidence?.verified !== true
+          && candidateRegion?.quality?.spatialEvidence?.verified === true) improved = true;
         const currentCategoriesStored = currentRegion?.categoryVisitorDays
           && [...VISITOR_CATEGORY_CODES].every((category) => Number.isFinite(Number(currentRegion.categoryVisitorDays[category])));
         const candidateCategoriesStored = candidateRegion?.categoryVisitorDays
@@ -1007,7 +1028,11 @@ function createCollector(options = {}) {
     }
 
     const dailyByRegion = new Map();
+    const spatialCodesByRegion = new Map();
     for (const row of byGrain.values()) {
+      const codes = spatialCodesByRegion.get(row.signguCode) || new Set();
+      codes.add(row.signguCode);
+      spatialCodesByRegion.set(row.signguCode, codes);
       if (conflictRegionCodes.has(row.signguCode) || nameMismatchRegionCodes.has(row.signguCode)) continue;
       const regionDays = dailyByRegion.get(row.signguCode) || new Map();
       const day = regionDays.get(row.baseYmd) || { baseYmd: row.baseYmd, categories: {} };
@@ -1066,7 +1091,14 @@ function createCollector(options = {}) {
         categoryDailyAverages: qualityStatus === "complete"
           ? Object.fromEntries(Object.entries(categoryTotals).map(([category, total]) => [category, Math.round(total / observedDays)]))
           : {},
-        quality: { status: qualityStatus, reason }
+        quality: {
+          status: qualityStatus, reason,
+          spatialEvidence: responseSpatialEvidence(region, [...(spatialCodesByRegion.get(code) || [])], {
+            valid: !conflictRegionCodes.has(code) && !nameMismatchRegionCodes.has(code),
+            reasonCode: region.codeStatus ? "MAPPING_MISSING" : nameMismatchRegionCodes.has(code) ? "REGION_MISMATCH"
+              : conflictRegionCodes.has(code) ? "INVALID_RESPONSE" : "NO_DATA"
+          })
+        }
       };
     });
 
@@ -1442,6 +1474,9 @@ function createCollector(options = {}) {
       status: complete ? "complete" : partial ? "partial" : "missing",
       reason,
       qualityStatus: rowQualityStatus || (snapshot.status === "ok" ? "no_observation" : snapshot.status || "unavailable"),
+      ...(row?.quality?.spatialEvidence ? { spatialEvidence: row.quality.spatialEvidence }
+        : monthResult.access === "network" && snapshot.status === "no_observation"
+          ? { spatialEvidence: responseSpatialEvidence(region, [], { reasonCode: "NO_DATA" }) } : {}),
       averageDailyVisitors: complete ? Number(row.averageDailyVisitors) : null,
       visitorDays: complete && Number.isFinite(row.visitorDays) ? Number(row.visitorDays) : null,
       categoryVisitorDays: complete
@@ -2245,11 +2280,14 @@ function createCollector(options = {}) {
     let mismatchedRowCount = 0;
     let duplicateRowCount = 0;
     let conflictCount = 0;
+    const observedRegionCodes = new Set();
+    let missingRegionCodeCount = 0;
     for (const raw of rows) {
       const rowYearMonth = String(raw?.baseYm || "").replace(/\D/g, "").slice(0, 6);
       const areaCd = String(raw?.areaCd || "").trim();
       const areaNm = String(raw?.areaNm || "").trim();
       const signguCd = String(raw?.signguCd || "").trim();
+      if (/^\d{5}$/.test(signguCd)) observedRegionCodes.add(signguCd);
       const signguNm = String(raw?.signguNm || "").trim();
       const code = String(raw?.[operationDef.codeField] || "").trim();
       const sourceName = String(raw?.[operationDef.nameField] || "").trim();
@@ -2277,6 +2315,7 @@ function createCollector(options = {}) {
         continue;
       }
       if (!expectedCodes.has(code)) unexpectedCodes.add(code);
+      if (!signguCd) missingRegionCodeCount += 1;
       const normalized = { code, sourceName, value };
       const current = byCode.get(code);
       if (!current) {
@@ -2334,7 +2373,12 @@ function createCollector(options = {}) {
         invalidRowCount,
         mismatchedRowCount,
         duplicateRowCount,
-        conflictCount
+        conflictCount,
+        spatialEvidence: responseSpatialEvidence(region, [...observedRegionCodes], {
+          valid: byCode.size > 0 && !invalidRowCount && !mismatchedRowCount && !conflictCount && !missingRegionCodeCount,
+          reasonCode: mismatchedRowCount ? "REGION_MISMATCH" : invalidRowCount || conflictCount ? "INVALID_RESPONSE"
+            : missingRegionCodeCount ? "MAPPING_MISSING" : "NO_DATA"
+        })
       }
     };
   }
@@ -2378,7 +2422,10 @@ function createCollector(options = {}) {
           pageCount,
           requestCount,
           maxPages,
-          ...quality
+          ...quality,
+          spatialEvidence: responseSpatialEvidence(region, rows.map(row => row?.signguCd), {
+            reasonCode: status === "no_observation" ? "NO_DATA" : "MAPPING_MISSING"
+          })
         }
       };
     };
@@ -2689,6 +2736,8 @@ function createCollector(options = {}) {
       stayReason: snapshot?.stay?.reason || "",
       spendStatus: snapshot?.spend?.status || "unavailable",
       spendReason: snapshot?.spend?.reason || "",
+      ...(snapshot?.stay?.quality?.spatialEvidence ? { staySpatialEvidence: snapshot.stay.quality.spatialEvidence } : {}),
+      ...(snapshot?.spend?.quality?.spatialEvidence ? { spendSpatialEvidence: snapshot.spend.quality.spatialEvidence } : {}),
       stayOverall,
       spendOverall,
       collectedAt: snapshot.collectedAt || "",
@@ -3273,11 +3322,13 @@ function createCollector(options = {}) {
     let mismatchedRowCount = 0;
     let duplicateRowCount = 0;
     let conflictCount = 0;
+    const observedRegionCodes = new Set();
     for (const raw of rows) {
       const rowYearMonth = String(raw?.baseYm || "").trim();
       const areaCd = String(raw?.areaCd || "").trim();
       const areaNm = String(raw?.areaNm || "").trim();
       const signguCd = String(raw?.signguCd || "").trim();
+      if (/^\d{5}$/.test(signguCd)) observedRegionCodes.add(signguCd);
       const signguNm = String(raw?.signguNm || "").trim();
       const code = String(raw?.[operationDef.codeField] || "").trim();
       const sourceName = String(raw?.[operationDef.nameField] || "").trim();
@@ -3361,7 +3412,11 @@ function createCollector(options = {}) {
         invalidRowCount,
         mismatchedRowCount,
         duplicateRowCount,
-        conflictCount
+        conflictCount,
+        spatialEvidence: responseSpatialEvidence(region, [...observedRegionCodes], {
+          valid: byCode.size > 0 && !invalidRowCount && !mismatchedRowCount && !conflictCount,
+          reasonCode: mismatchedRowCount ? "REGION_MISMATCH" : invalidRowCount || conflictCount ? "INVALID_RESPONSE" : "NO_DATA"
+        })
       }
     };
   }
@@ -3522,7 +3577,10 @@ function createCollector(options = {}) {
         quality: {
           ...empty.quality,
           ...aggregateQuality,
-          status
+          status,
+          spatialEvidence: responseSpatialEvidence(region, [], {
+            reasonCode: allNoObservation ? "NO_DATA" : "MAPPING_MISSING"
+          })
         }
       };
     }

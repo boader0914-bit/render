@@ -354,3 +354,49 @@ test("a stale flag alone does not claim a failed provider refresh", () => {
   assert.match(html, /최신 자료인지 확인이 필요합니다/);
   assert.doesNotMatch(html, /최근 갱신을 완료하지 못해/);
 });
+
+test("legacy regional values stay visible with a folded scope warning instead of claiming verified administrative coverage", () => {
+  const snapshot = response().snapshot;
+  snapshot.groups = [{ key: "visitors", label: "지역 방문자", provider: "한국관광공사", periodType: "M", status: "ready",
+    metrics: [{ key: "count", label: "방문자", unit: "명", rows: [{ period: "2026-08", status: "observed", value: 0 }] }] }];
+  const html = renderCard({ regionKey: "sancheong", regionLabel: "산청군", mode: "summary", snapshot });
+  assert.match(html, /지역 범위 확인 필요/); assert.match(html, /<strong>0<small>명/);
+  assert.match(html, /class="ra-contract" data-ra-detail="scope:visitors">/);
+  assert.doesNotMatch(html, /data-ra-detail="scope:visitors" open/);
+  for (const label of ["공통 기준 · 출처·지역 범위", "실제 범위", "기준기간", "수집 상태"]) assert.ok(html.includes(label));
+  assert.equal(snapshot.groups[0].metrics[0].rows[0].value, 0);
+});
+
+test("region scope evidence honors row overrides and remains visible in management without copied contracts", () => {
+  const snapshot = response().snapshot;
+  const contract = { version: "regional-data-contract-v1", provider: "한국관광공사", requestedRegionKey: "sancheong", officialCode: "4886000000",
+    requestedLevel: "sigungu", requestedUnitType: "county", providerRegionCode: "48860", providedLevel: "sigungu", scopeKind: "administrative", status: "matched", evidence: "response", aggregation: "none" };
+  snapshot.groups = [{ key: "visitors", label: "지역 방문자", provider: "한국관광공사", periodType: "M", status: "ready", spatialContract: contract,
+    metrics: [{ key: "count", label: "방문자", unit: "명", rows: [{ period: "2026-08", status: "observed", value: 0, spatialContract: { ...contract, status: "scope_unverified", evidence: "unverified" } }] }] }];
+  const state = { regionKey: "sancheong", regionLabel: "산청군", mode: "summary", snapshot, openDetails: new Set(["scope:visitors"]) };
+  let html = renderCard(state);
+  assert.match(html, /지역 범위 확인 필요/); assert.doesNotMatch(html, /시·군·구 기준 · 범위 일치/);
+  assert.match(html, /data-ra-detail="scope:visitors" open/);
+  snapshot.groups[0].metrics[0].rows[0].spatialContract = { ...contract };
+  state.mode = "manage";
+  state.management = { schemaVersion: 1, groups: [{ key: "visitors", label: "지역 방문자", status: "ready", metrics: [] }], refresh: {}, result: {} };
+  html = renderCard(state);
+  assert.match(html, /시·군·구 기준 · 범위 일치/); assert.match(html, /제공 지역 48860/);
+  assert.match(html, /제공 응답에서 확인/); assert.match(html, /data-ra-detail="scope:visitors" open/);
+  snapshot.groups[0].metrics[0].rows[0].spatialContract = { ...contract, status: "response_mismatch", reasonCode: "RESPONSE_REGION_MISMATCH" };
+  html = renderCard(state); assert.match(html, /요청 지역과 응답 범위 다름/);
+});
+
+test("keyword scope, annual periods and untrusted provenance remain distinct in regional evidence", () => {
+  const snapshot = response().snapshot;
+  const bad = '<img src=x onerror="bad()">';
+  snapshot.groups = [
+    { key: "searchTrend", label: "검색 관심도", provider: "네이버 데이터랩", category: "search", periodType: "M", metrics: [{ key: "interest", unit: "상대지수", rows: [{ period: "2026-09", status: "observed", value: 0 }] }] },
+    { key: "kosis", label: "산업", provider: "KOSIS", category: "background", metrics: [{ key: "workers", label: bad, unit: "명", periodType: "Y", rows: [{ period: "2024", status: "observed", value: 9 }] }] }
+  ];
+  const html = renderCard({ regionKey: "sancheong", regionLabel: "산청군", snapshot });
+  assert.match(html, /키워드 기준 · 지역 직접 비교 제외/); assert.match(html, /키워드 검색 범위/);
+  assert.match(html, /2024<small>연간 자료/); assert.doesNotMatch(html, /<img|onerror="bad/); assert.match(html, /&lt;img/);
+  const fs = require("node:fs"), path = require("node:path"), css = fs.readFileSync(path.join(__dirname, "../web/regional-analysis.css"), "utf8");
+  assert.match(css, /\.ra-contract[^}]*var\(--ra-border\)/); assert.match(css, /\.ra-contract small[^}]*overflow-wrap:anywhere/);
+});

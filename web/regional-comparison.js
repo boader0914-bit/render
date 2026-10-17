@@ -5,6 +5,30 @@
   const numeric = value => typeof value === "number" && Number.isFinite(value);
   const number = value => numeric(value) ? value.toLocaleString("ko-KR", { maximumFractionDigits: 2 }) : "미확인";
   const observed = row => ["observed", "ready", "complete", "available"].includes(row?.status) && numeric(row?.value);
+  let sharedContract;
+  function contractApi() {
+    if (root.RegionalDataContract) return root.RegionalDataContract;
+    if (!sharedContract && typeof module !== "undefined" && module.exports && typeof require === "function") {
+      try { sharedContract = require("./regional-data-contract.js"); } catch { /* Missing contract support must keep direct comparison disabled. */ }
+    }
+    return sharedContract;
+  }
+  const regionOf = record => record.key || record.regionKey || record.data?.scope?.regionKey || record.data?.snapshot?.scope?.regionKey || "";
+  const levelLabel = value => ({ sigungu: "시·군·구", sido: "시·도", keyword: "키워드" })[value] || "범위 미확인";
+  function effectiveCell(record, cell, row) {
+    const spatialContract = row && Object.hasOwn(row, "spatialContract") ? row.spatialContract || {}
+      : cell?.metric && Object.hasOwn(cell.metric, "spatialContract") ? cell.metric.spatialContract || {} : cell?.group?.spatialContract;
+    return { regionKey: regionOf(record), group: { ...cell?.group }, metric: { ...cell?.metric, spatialContract } };
+  }
+  function eligibility(cells) {
+    return contractApi()?.comparisonEligibility?.(cells) || { comparable: false, reasonCode: "SCOPE_UNVERIFIED", reason: "지역 범위 확인 필요", periodType: "", providedLevel: "unknown" };
+  }
+  function spatialView(cell) {
+    const spatial = cell.metric?.spatialContract || cell.group?.spatialContract, check = eligibility([{ ...cell, metric: { ...cell.metric, unit: "scope", periodType: "M" } }]);
+    const keyword = spatial?.scopeKind === "keyword" || search(cell.group);
+    return { contract: spatial, keyword, matched: check.comparable, reason: check.reason,
+      label: keyword ? "검색어 기준 · 지역 간 직접 비교 불가" : check.comparable ? `${levelLabel(spatial?.providedLevel)} 기준 · 범위 일치` : check.reason || "지역 범위 확인 필요" };
+  }
   const period = value => String(value || "").replace(/^(20\d{2})(\d{2})$/, "$1-$2");
   const background = group => group?.key === "kosis" || group?.category === "background";
   const search = group => group?.key === "searchTrend" || group?.category === "search";
@@ -48,30 +72,50 @@
   function comparisonModel(records, kind = "flow") {
     const indexes = records.map(record => metricIndex(record, kind)), keys = new Set(indexes.flatMap(index => [...index.keys()]));
     return [...keys].map(key => {
-      const cells = indexes.map(index => index.get(key)), first = cells.find(Boolean), units = new Set(cells.filter(Boolean).map(cell => cell.metric.unit || "")), providers = new Set(cells.filter(Boolean).map(cell => cell.group.provider || ""));
+      const cells = indexes.map(index => index.get(key)), first = cells.find(Boolean);
       const rows = cells.map((cell, index) => normalRows(cell?.metric).filter(row => row.period <= (records[index].data?.scope?.month || records[index].data?.snapshot?.scope?.month || "")));
-      const common = rows.length && rows.every(items => items.length) && units.size === 1 && !units.has("") && providers.size === 1 && !providers.has("")
-        ? rows[0].map(row => row.period).filter(value => rows.every(items => items.some(row => row.period === value))) : [];
-      const commonPeriod = common.at(-1) || "";
+      const common = rows.length && rows.every(items => items.length) ? rows[0].map(row => row.period).filter(value => rows.every(items => items.some(row => row.period === value))) : [];
+      const candidates = common.slice().reverse().map(value => {
+        const check = eligibility(cells.map((cell, index) => effectiveCell(records[index], cell, rows[index].find(row => row.period === value))));
+        if (check.comparable && (check.periodType === "M" ? !/^20\d{2}-\d{2}$/.test(value) : !/^20\d{2}$/.test(value))) return { period: value, check: { ...check, comparable: false, reasonCode: "PERIOD_TYPE_MISMATCH", reason: "공표 주기와 저장 기준기간 다름" } };
+        return { period: value, check };
+      });
+      const chosen = candidates.find(candidate => candidate.check.comparable), commonPeriod = chosen?.period || "";
+      const check = chosen?.check || candidates[0]?.check || eligibility(cells.map((cell, index) => effectiveCell(records[index], cell, rows[index].at(-1))));
+      const reason = !rows.every(items => items.length) || check.comparable ? "공통 기간 미확인 · 기간 다름 또는 자료 부족" : check.reason || "지역 범위 확인 필요";
       return { key, label: first.metric.label || first.metric.key, groupLabel: first.group.label || first.group.key,
-        provider: first.group.provider || "출처 미확인", unit: first.metric.unit || "단위 미확인", commonPeriod,
-        reason: units.has("") ? "단위 미확인" : units.size > 1 ? "단위 다름" : providers.has("") ? "자료 출처 미확인" : providers.size > 1 ? "자료 출처 다름" : "공통 기간 미확인 · 기간 다름 또는 자료 부족",
-        cells: cells.map((cell, index) => ({ provider: cell?.group.provider || "출처 미확인", unit: cell?.metric.unit || "단위 미확인",
-          latestPeriod: rows[index].at(-1)?.period || "", latestValue: rows[index].at(-1)?.value ?? null, warning: sourceWarning(cell?.group, cell?.metric),
-          value: commonPeriod ? rows[index].find(row => row.period === commonPeriod)?.value ?? null : null })) };
+        provider: first.group.provider || "출처 미확인", unit: first.metric.unit || "단위 미확인", commonPeriod, periodType: check.periodType || first.metric.periodType || first.group.periodType || "unknown", reason,
+        reasonCode: commonPeriod ? "" : check.reasonCode || "NO_COMMON_PERIOD", newerPeriodExcluded: Boolean(commonPeriod && candidates[0].period !== commonPeriod), excludedPeriod: candidates[0]?.period || "", excludedReason: candidates[0]?.check.reason || "",
+        cells: cells.map((cell, index) => {
+          const latest = rows[index].at(-1), shown = commonPeriod ? rows[index].find(row => row.period === commonPeriod) : latest;
+          const scope = spatialView(effectiveCell(records[index], cell, shown));
+          return { regionKey: regionOf(records[index]), provider: cell?.group.provider || "출처 미확인", unit: cell?.metric.unit || "단위 미확인",
+            latestPeriod: latest?.period || "", latestValue: latest?.value ?? null, warning: sourceWarning(cell?.group, cell?.metric), scope,
+            sourceStatus: shown?.status || "missing", referenceLabel: !latest || scope.matched ? "지역 최근값" : scope.contract?.status === "response_mismatch" ? "범위가 다른 원자료 참고값" : "범위 미확인 참고값",
+            value: commonPeriod ? shown?.value ?? null : null };
+        }) };
     });
   }
-  function tableHtml(records, kind) {
+  function contractDetailsHtml(cell, row, state) {
+    const spatial = cell.scope.contract, key = `contract:${encodeURIComponent(row.key)}:${encodeURIComponent(cell.regionKey)}`;
+    return `<details class="rc-evidence rc-contract" data-rc-detail="${escapeHtml(key)}"${state?.open?.has(key) ? " open" : ""}><summary>공통 기준 확인</summary><dl><div><dt>출처</dt><dd>${escapeHtml(cell.provider)} · ${escapeHtml(cell.unit)}</dd></div><div><dt>실제 범위</dt><dd>${escapeHtml(cell.scope.label)}</dd></div><div><dt>기준기간</dt><dd>${escapeHtml(row.commonPeriod || cell.latestPeriod || "미확인")} · ${row.periodType === "Y" ? "연간" : row.periodType === "M" ? "월간" : "주기 확인 필요"}</dd></div><div><dt>수집 상태</dt><dd>${["observed", "ready", "complete", "available"].includes(cell.sourceStatus) ? "정상 자료" : "미확인"}</dd></div>${spatial?.providerRegionCode ? `<div><dt>제공 지역 코드</dt><dd>${escapeHtml(spatial.providerRegionCode)}</dd></div>` : ""}<div><dt>범위 근거</dt><dd>${spatial?.evidence === "response" ? "제공 응답에서 확인" : "범위 확인 필요"}</dd></div></dl></details>`;
+  }
+  function tableHtml(records, kind, state) {
     const rows = comparisonModel(records, kind);
     if (!rows.length) return '<p class="rc-empty">연결할 저장 지표가 없습니다. 미확인을 0으로 바꾸지 않습니다.</p>';
-    return `<div class="rc-table-wrap"><table><caption>${kind === "background" ? "인구·산업 기초자료 · 같은 공표기간의 값" : "관광 흐름 · 지표별 공통 정상월의 값"}</caption><thead><tr><th scope="col">지표 · 기준기간</th>${records.map(record => `<th scope="col">${escapeHtml(record.label)}</th>`).join("")}</tr></thead><tbody>${rows.map(row => `<tr><th scope="row"><strong>${escapeHtml(row.label)}</strong><small>${escapeHtml(row.groupLabel)} · ${escapeHtml(row.commonPeriod || row.reason)}</small><small>${escapeHtml(row.provider)} · ${escapeHtml(row.unit)}</small></th>${row.cells.map(cell => `<td><strong>${number(cell.value)}</strong><small>${escapeHtml(cell.unit)}</small>${!row.commonPeriod ? `<small class="rc-latest-reference">공통월 직접비교 불가 · 지역 최근값 <b>${number(cell.latestValue)}</b> ${escapeHtml(cell.unit)}<br>기준 ${escapeHtml(cell.latestPeriod || "미확인")}</small>` : ""}${cell.warning ? `<small class="rc-warning">${escapeHtml(cell.warning)}</small>` : ""}<small>${escapeHtml(cell.provider)}</small></td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+    const table = (items, label) => `<div class="rc-table-wrap"><table><caption>${escapeHtml(label)}</caption><thead><tr><th scope="col">지표 · 기준기간</th>${records.map(record => `<th scope="col">${escapeHtml(record.label)}</th>`).join("")}</tr></thead><tbody>${items.map(row => `<tr><th scope="row"><strong>${escapeHtml(row.label)}</strong><small>${escapeHtml(row.groupLabel)} · ${escapeHtml(row.commonPeriod || row.reason)}</small><small>${escapeHtml(row.provider)} · ${escapeHtml(row.unit)}</small>${row.newerPeriodExcluded ? `<small class="rc-warning">${escapeHtml(row.excludedPeriod)} 비교 제외 · ${escapeHtml(row.excludedReason)}</small>` : ""}</th>${row.cells.map(cell => `<td><strong>${number(cell.value)}</strong><small>${escapeHtml(cell.unit)}</small><small class="${cell.scope.matched ? "" : "rc-warning"}">${escapeHtml(cell.scope.label)}</small>${!row.commonPeriod ? `<small class="rc-latest-reference">${row.periodType === "Y" ? "공통연도" : "공통월"} 직접비교 불가 · ${escapeHtml(cell.referenceLabel)} <b>${number(cell.latestValue)}</b> ${escapeHtml(cell.unit)}<br>기준 ${escapeHtml(cell.latestPeriod || "미확인")}</small>` : ""}${cell.warning ? `<small class="rc-warning">${escapeHtml(cell.warning)}</small>` : ""}<small>${escapeHtml(cell.provider)}</small>${contractDetailsHtml(cell, row, state)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+    if (kind !== "background") return table(rows, "관광 흐름 · 같은 공간 범위·주기의 공통 정상월");
+    return [["M", "인구·산업 월간 기초자료 · 공통 기준월"], ["Y", "인구·산업 연간 기초자료 · 공통 기준연도"], ["unknown", "기초자료 · 기준주기 확인 필요"]].map(([type, label]) => {
+      const items = rows.filter(row => type === "unknown" ? !["M", "Y"].includes(row.periodType) : row.periodType === type);
+      return items.length ? table(items, label) : "";
+    }).join("");
   }
   function searchHtml(records) {
     const cards = records.map(record => {
       const entries = [...metricIndex(record, "search").values()];
       return `<article class="rc-search-region"><h4>${escapeHtml(record.label)}</h4>${entries.length ? entries.map(({ group, metric }) => {
         const rows = (metric.rows || []).slice().sort((a, b) => String(a.period).localeCompare(String(b.period)));
-        return `<p>${escapeHtml(group.provider || "출처 미확인")} · ${escapeHtml(group.keyword || "기준 검색어 미확인")}</p><p>정규화 기간 ${escapeHtml(group.normalizationPeriod || "미확인")}</p>${sourceWarning(group, metric) ? `<p class="rc-warning">${escapeHtml(sourceWarning(group, metric))}</p>` : ""}<details class="rc-evidence"><summary>개별 지역 추이 · ${escapeHtml(metric.label || metric.key)}</summary><div class="rc-search-points">${rows.map(row => `<span><small>${escapeHtml(period(row.period) || "기간 미확인")}</small><b>${observed(row) ? number(row.value) : "미확인"}</b><small>${escapeHtml(metric.unit || "상대지수")}</small></span>`).join("") || "저장 추이 없음"}</div><p>자료 묶음 ${escapeHtml(group.sourceBatchId || "미확인")}</p></details>`;
+        return `<p>${escapeHtml(group.provider || "출처 미확인")} · ${escapeHtml(group.keyword || "기준 검색어 미확인")}</p><p>정규화 기간 ${escapeHtml(group.normalizationPeriod || "미확인")}</p><p class="rc-contract-label">키워드 검색 범위 · 행정구역 전체의 절대 수요가 아닙니다.</p>${sourceWarning(group, metric) ? `<p class="rc-warning">${escapeHtml(sourceWarning(group, metric))}</p>` : ""}<details class="rc-evidence"><summary>개별 지역 추이 · ${escapeHtml(metric.label || metric.key)}</summary><div class="rc-search-points">${rows.map(row => `<span><small>${escapeHtml(period(row.period) || "기간 미확인")}</small><b>${observed(row) ? number(row.value) : "미확인"}</b><small>${escapeHtml(metric.unit || "상대지수")}</small></span>`).join("") || "저장 추이 없음"}</div><p>자료 묶음 ${escapeHtml(group.sourceBatchId || "미확인")}</p></details>`;
       }).join("") : '<p class="rc-empty">저장 검색 자료가 없습니다.</p>'}</article>`;
     }).join("");
     return `<p class="rc-note">검색 관심도는 검색어·정규화 기간·자료 묶음 안의 상대지수입니다. 서로 다른 묶음의 지역별 고저 순위나 증감 비교는 하지 않으며, 각 지역 안의 추이만 참고합니다.</p><div class="rc-search-grid">${cards}</div>`;
@@ -87,7 +131,7 @@
   function renderDashboard(state) {
     const records = selectedRecords(state), confirmationFailed = records.some(record => record.error);
     const confirmationLabel = state.checkSource === "cache" ? "캐시 재사용 · 새 서버 확인 없음" : state.checkSource === "mixed" ? "일부 지역 서버 확인 · 나머지 캐시 재사용" : state.checkSource === "server" ? "서버 저장 결과 확인" : "";
-    return `<section class="regional-comparison" aria-label="저장자료 지역 비교"><header class="rc-header"><div><span class="rc-eyebrow">지역 비교 · 저장 결과</span><h3>${escapeHtml(state.regionLabel || "지역 미선택")}</h3><p>기준지역과 최대 3개 지역의 저장 지표를 비교합니다. ${escapeHtml(state.month)} 기준 13개월 · 지표마다 공통 정상월을 따로 확인합니다.</p></div><button type="button" data-rc-action="check"${!state.regionKey || state.loading ? " disabled" : ""}>${state.loading ? "변경 확인 중" : "저장 결과 다시 확인"}</button></header><div class="rc-toolbar"><label>자료 기준월<input type="month" data-rc-month value="${escapeHtml(state.month)}" max="${escapeHtml(state.maxMonth)}"></label><label>지역 검색<input type="search" data-rc-search value="${escapeHtml(state.query)}" placeholder="지역명 검색" autocomplete="off"></label><label>비교 대상<select data-rc-candidate>${regionOptions(state)}</select></label><button type="button" data-rc-action="add"${state.targets.length >= MAX_TARGETS || !state.candidate ? " disabled" : ""}>지역 추가</button></div><div class="rc-selected" aria-label="선택 지역"><span class="rc-base">기준 ${escapeHtml(state.regionLabel)}</span>${state.targets.map(key => `<button type="button" data-rc-remove="${escapeHtml(key)}">${escapeHtml(state.regions.find(region => region.regionKey === key)?.label || key)} <span aria-hidden="true">×</span><span class="rc-sr-only"> 비교 제외</span></button>`).join("")}</div><div class="rc-status" role="status" aria-live="polite">${state.error ? `<p class="rc-warning">${escapeHtml(state.error)}</p>` : ""}${!state.regionKey ? '<p>상단에서 기준지역을 선택해 주세요.</p>' : !state.targets.length ? '<p>비교할 지역을 추가하세요. 기준지역의 저장 자료를 먼저 표시합니다.</p>' : ""}${state.loading ? '<p>화면에 있는 저장 자료를 유지하며 변경 여부를 확인합니다.</p>' : confirmationLabel ? `<p>${escapeHtml(confirmationLabel)}${confirmationFailed ? " · 일부 확인 실패" : ""}</p>` : ""}</div>${records.length ? `<div class="rc-source-status">${records.map(record => `<article><strong>${escapeHtml(record.label)}</strong><span>${record.error ? "확인 실패" : record.loading ? record.data?.snapshot ? "저장본 표시 · 변경 확인 중" : "저장 자료 확인 중" : record.data?.snapshot ? record.source === "cache" ? "캐시 재사용" : "서버에서 읽은 저장 결과" : "자료 미확보"}</span>${record.error ? `<p class="rc-warning">${escapeHtml(record.error)}${record.data?.snapshot ? " · 이전 저장 결과를 표시합니다. 최신 상태 미확인" : ""}</p>` : ""}<small>결과 정리 ${escapeHtml(time(record.data?.snapshot?.generatedAt))}</small><small>최근 서버 확인 ${escapeHtml(time(record.checkedAt))}</small>${record.data?.snapshot?.resultId ? `<details class="rc-evidence"><summary>결과 근거</summary><p>${escapeHtml(record.data.snapshot.resultId)}</p></details>` : ""}</article>`).join("")}</div><details class="rc-group" data-rc-detail="flow"${state.open.has("flow") ? " open" : ""}><summary>관광 흐름 <span>지표별 공통 정상월 · 단위 유지</span></summary>${tableHtml(records, "flow")}</details><details class="rc-group" data-rc-detail="search"${state.open.has("search") ? " open" : ""}><summary>검색 관심도 <span>개별 지역 안의 추이</span></summary>${searchHtml(records)}</details><details class="rc-group" data-rc-detail="background"${state.open.has("background") ? " open" : ""}><summary>인구·산업 기초자료 <span>실제 공표월·연도</span></summary><p class="rc-note">인구·산업은 지역의 운영 기반을 보여주는 기초자료입니다. 연간 값을 월별로 나누거나 관광 수요의 증감으로 해석하지 않습니다.</p>${tableHtml(records, "background")}</details>` : ""}<p class="rc-note">화면 조회는 저장 결과만 읽습니다. 새 수집·외부 API 갱신을 시작하지 않으며, 저장 자료가 없는 지역이나 날짜는 미확인으로 남깁니다.</p></section>`;
+    return `<section class="regional-comparison" aria-label="저장자료 지역 비교"><header class="rc-header"><div><span class="rc-eyebrow">지역 비교 · 저장 결과</span><h3>${escapeHtml(state.regionLabel || "지역 미선택")}</h3><p>기준지역과 최대 3개 지역의 저장 지표를 비교합니다. ${escapeHtml(state.month)} 기준 13개월 · 같은 행정 범위·출처·단위·주기의 공통 정상기간을 확인합니다.</p></div><button type="button" data-rc-action="check"${!state.regionKey || state.loading ? " disabled" : ""}>${state.loading ? "변경 확인 중" : "저장 결과 다시 확인"}</button></header><div class="rc-toolbar"><label>자료 기준월<input type="month" data-rc-month value="${escapeHtml(state.month)}" max="${escapeHtml(state.maxMonth)}"></label><label>지역 검색<input type="search" data-rc-search value="${escapeHtml(state.query)}" placeholder="지역명 검색" autocomplete="off"></label><label>비교 대상<select data-rc-candidate>${regionOptions(state)}</select></label><button type="button" data-rc-action="add"${state.targets.length >= MAX_TARGETS || !state.candidate ? " disabled" : ""}>지역 추가</button></div><div class="rc-selected" aria-label="선택 지역"><span class="rc-base">기준 ${escapeHtml(state.regionLabel)}</span>${state.targets.map(key => `<button type="button" data-rc-remove="${escapeHtml(key)}">${escapeHtml(state.regions.find(region => region.regionKey === key)?.label || key)} <span aria-hidden="true">×</span><span class="rc-sr-only"> 비교 제외</span></button>`).join("")}</div><div class="rc-status" role="status" aria-live="polite">${state.error ? `<p class="rc-warning">${escapeHtml(state.error)}</p>` : ""}${!state.regionKey ? '<p>상단에서 기준지역을 선택해 주세요.</p>' : !state.targets.length ? '<p>비교할 지역을 추가하세요. 기준지역의 저장 자료를 먼저 표시합니다.</p>' : ""}${state.loading ? '<p>화면에 있는 저장 자료를 유지하며 변경 여부를 확인합니다.</p>' : confirmationLabel ? `<p>${escapeHtml(confirmationLabel)}${confirmationFailed ? " · 일부 확인 실패" : ""}</p>` : ""}</div>${records.length ? `<div class="rc-source-status">${records.map(record => `<article><strong>${escapeHtml(record.label)}</strong><span>${record.error ? "확인 실패" : record.loading ? record.data?.snapshot ? "저장본 표시 · 변경 확인 중" : "저장 자료 확인 중" : record.data?.snapshot ? record.source === "cache" ? "캐시 재사용" : "서버에서 읽은 저장 결과" : "자료 미확보"}</span>${record.error ? `<p class="rc-warning">${escapeHtml(record.error)}${record.data?.snapshot ? " · 이전 저장 결과를 표시합니다. 최신 상태 미확인" : ""}</p>` : ""}<small>결과 정리 ${escapeHtml(time(record.data?.snapshot?.generatedAt))}</small><small>최근 서버 확인 ${escapeHtml(time(record.checkedAt))}</small>${record.data?.snapshot?.resultId ? `<details class="rc-evidence"><summary>결과 근거</summary><p>${escapeHtml(record.data.snapshot.resultId)}</p></details>` : ""}</article>`).join("")}</div><details class="rc-group" data-rc-detail="flow"${state.open.has("flow") ? " open" : ""}><summary>관광 흐름 <span>지표별 공통 정상월 · 단위 유지</span></summary>${tableHtml(records, "flow", state)}</details><details class="rc-group" data-rc-detail="search"${state.open.has("search") ? " open" : ""}><summary>검색 관심도 <span>개별 지역 안의 추이</span></summary>${searchHtml(records)}</details><details class="rc-group" data-rc-detail="background"${state.open.has("background") ? " open" : ""}><summary>인구·산업 기초자료 <span>실제 공표월·연도</span></summary><p class="rc-note">인구·산업은 지역의 운영 기반을 보여주는 기초자료입니다. 연간 값을 월별로 나누거나 관광 수요의 증감으로 해석하지 않습니다.</p>${tableHtml(records, "background", state)}</details>` : ""}<p class="rc-note">화면 조회는 저장 결과만 읽습니다. 새 수집·외부 API 갱신을 시작하지 않으며, 저장 자료가 없는 지역이나 날짜는 미확인으로 남깁니다.</p></section>`;
   }
   function createController({ reader = null, now = () => Date.now(), requestFrame = callback => typeof root.requestAnimationFrame === "function" ? root.requestAnimationFrame(callback) : root.setTimeout(callback, 0) } = {}) {
     const state = { accountKey: "", regionKey: "", regionLabel: "", month: "", monthExplicit: false, maxMonth: "", regions: [], targets: [], records: {}, query: "", candidate: "", open: new Set(["flow"]), loading: false, error: "", checkedAt: "", checkSource: "" };

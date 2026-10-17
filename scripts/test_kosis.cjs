@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
-const { createKosisService, DEFINITIONS, parseValue } = require("./lib/kosis.cjs");
+const { createKosisService, DEFINITIONS, parseValue, normalizeData } = require("./lib/kosis.cjs");
 
 const REGION = "kr_gyeonggi_pocheon";
 const units = [
@@ -58,6 +58,51 @@ test("cache-only reads and missing-key refresh never contact KOSIS", async t => 
   assert.equal(result.error.code, "MISSING_KEY");
   assert.equal(result.networkAttempted, false);
   assert.equal(f.calls.length, 0);
+});
+
+test("response-verified table geography persists across cache-only restart reads", async t => {
+  const f = await fixture(t);
+  const fresh = await f.service.refreshRegion(REGION);
+  for (const dataset of fresh.datasets) {
+    assert.equal(dataset.spatialEvidence.verified, true);
+    assert.equal(dataset.spatialEvidence.regionKey, REGION);
+    assert.equal(dataset.spatialEvidence.regionCode, dataset.mapping.code);
+  }
+  const before = f.calls.length, cached = await f.service.getRegion(REGION);
+  assert.deepEqual(cached.datasets.map(dataset => dataset.spatialEvidence), fresh.datasets.map(dataset => dataset.spatialEvidence));
+  assert.equal(f.calls.length, before);
+  assert.equal(cached.networkAttempted, false);
+});
+
+test("canonical region and existing regionId aliases share geography evidence without losing cached values", async t => {
+  const f = await fixture(t), alias = "kr_admin_4165000000";
+  await f.service.refreshRegion(REGION);
+  const throughAlias = await f.service.getRegion(alias);
+  assert.equal(throughAlias.status, "ready");
+  assert.equal(throughAlias.region.regionKey, alias, "retain the public request alias contract");
+  assert.equal(throughAlias.datasets[0].spatialEvidence.regionKey, REGION);
+  f.advance(300001);
+  assert.equal((await f.service.refreshRegion(alias)).status, "ready");
+  const canonical = await f.service.getRegion(REGION);
+  assert.equal(canonical.status, "ready");
+  assert.equal(canonical.datasets[0].spatialEvidence.regionKey, REGION);
+  assert.equal((await f.service.status()).cachedRegionCount, 1);
+});
+
+test("legacy KOSIS values are not assigned new response geography during a cache read", async t => {
+  const f = await fixture(t);
+  await f.service.refreshRegion(REGION);
+  const file = (await fs.readdir(f.dataDir)).find(name => /^[a-f0-9]{24}\.json$/.test(name));
+  const saved = JSON.parse(await fs.readFile(path.join(f.dataDir, file), "utf8"));
+  for (const dataset of Object.values(saved.datasets)) delete dataset.spatialEvidence;
+  await fs.writeFile(path.join(f.dataDir, file), JSON.stringify(saved));
+  const cached = await f.service.getRegion(REGION);
+  assert.ok(cached.datasets.every(dataset => dataset.status === "ready" && dataset.spatialEvidence === undefined));
+});
+
+test("KOSIS observed geography cannot be created when actual C1 differs from the table mapping", () => {
+  const definition = DEFINITIONS[0], mapping = { code: code(definition), basis: "kosis-table-metadata-name-and-ancestry", tableId: definition.tableId };
+  assert.throws(() => normalizeData(rows(definition, { C1: "wrong" }), definition, mapping, "2026-09-26T00:00:00Z", { regionKey: REGION, level: "local" }), error => error.code === "INVALID_RESPONSE");
 });
 
 test("official metadata resolves independent table codes and cache preserves source period and units", async t => {

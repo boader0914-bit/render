@@ -42,6 +42,12 @@
 .rc-evidence { min-width:0; max-width:100%; font-size:11px; color:var(--rc-muted); }
 .rc-evidence summary { cursor:pointer; }
 .rc-evidence p { overflow-wrap:anywhere; white-space:normal; }
+.rc-contract { margin-top:8px; }
+.rc-contract dl { display:grid; gap:6px; margin:8px 0 0; }
+.rc-contract dl>div { min-width:0; }
+.rc-contract :is(dt,dd) { margin:0; overflow-wrap:anywhere; white-space:normal; }
+.rc-contract dt { color:var(--rc-muted); }
+.rc-contract dd { color:var(--rc-text); }
 .rc-search-points { display:grid; grid-template-columns:repeat(auto-fit,minmax(70px,1fr)); gap:6px; margin:10px 0; }
 .rc-search-points>span { display:grid; padding:6px; border:1px solid var(--rc-border); border-radius:5px; }
 .rc-search-points small { font-size:10px; color:var(--rc-muted); }
