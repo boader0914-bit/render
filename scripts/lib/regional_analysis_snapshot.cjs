@@ -3,6 +3,7 @@
 const crypto = require("node:crypto");
 const { DEFINITIONS } = require("./kosis.cjs");
 const { VERSION: CONTRACT_VERSION, createSpatialContract, availabilityOf, temporalPolicy, storedProvenanceOf } = require("../../web/regional-data-contract.js");
+const { VERSION: EVIDENCE_REVIEW_VERSION, ENCODING: EVIDENCE_REVIEW_ENCODING, INPUT_VERSION: EVIDENCE_REVIEW_INPUT_VERSION, build: buildEvidenceReview, pack: packEvidenceReview } = require("../../web/regional-evidence-review.js");
 
 const VERSION = "regional-observations-v2";
 const MONTH = /^20\d{2}-(0[1-9]|1[0-2])$/;
@@ -248,9 +249,10 @@ function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService,
           const row = rows.length === 1 ? rows[0] : null;
           const rejectedScope = ["response_mismatch", "mapping_pending", "mapping_missing"].includes(spatialContract.status);
           const observed = !rejectedScope && validPeriod && dataset?.periodType === definition.periodType && ["ready", "partial", "stale"].includes(dataset?.status) && row?.status === "observed" && numeric(row.value);
-          const reasonCode = observed ? "" : rejectedScope ? spatialContract.status === "response_mismatch" ? "REGION_MISMATCH" : "MAPPING_MISSING" : kosisError || (SAFE.has(dataset?.errorCode) ? dataset.errorCode : SAFE.has(dataset?.error?.code) ? dataset.error.code : "")
+          const suppressed = !rejectedScope && validPeriod && row?.status === "suppressed";
+          const reasonCode = observed ? "" : rejectedScope ? spatialContract.status === "response_mismatch" ? "REGION_MISMATCH" : "MAPPING_MISSING" : suppressed ? "SUPPRESSED" : kosisError || (SAFE.has(dataset?.errorCode) ? dataset.errorCode : SAFE.has(dataset?.error?.code) ? dataset.error.code : "")
             || (dataset && validPeriod ? "MISSING_VALUES" : "UNRECORDED_REASON");
-          return { ...field, value: observed ? row.value : null, status: observed ? "observed" : rejectedScope ? "error" : "missing", reasonCode,
+          return { ...field, value: observed ? row.value : null, status: observed ? "observed" : rejectedScope ? "error" : suppressed ? "suppressed" : "missing", reasonCode,
             ...(rejectedScope && numeric(row?.value) ? { referenceValue: row.value, referenceStatus: row.status } : {}),
             reasonEvidence: reasonCode === "UNRECORDED_REASON" ? "unknown" : "recorded" };
         }) };
@@ -352,7 +354,8 @@ function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService,
         "검색 관심도는 표시된 조회기간 안의 상대지수입니다. 서로 다른 조회 결과를 이어 붙이거나 합산하지 않습니다."] };
     // A repeated response with identical values is not a new calculation
     // version merely because its receive time changed.
-    const fingerprintInput = JSON.parse(JSON.stringify({ scope, calculationVersion: VERSION, groups }, (key, value) => ["retrievedAt", "refreshedStatus", "verifiedAt"].includes(key) ? undefined : value));
+    payload.evidenceReview = packEvidenceReview(buildEvidenceReview(payload));
+    const fingerprintInput = JSON.parse(JSON.stringify({ scope, calculationVersion: VERSION, evidenceReviewVersion: EVIDENCE_REVIEW_VERSION, evidenceReviewEncoding: EVIDENCE_REVIEW_ENCODING, evidenceReviewInputVersion: EVIDENCE_REVIEW_INPUT_VERSION, groups }, (key, value) => ["retrievedAt", "refreshedStatus", "verifiedAt"].includes(key) ? undefined : value));
     payload.sourceFingerprint = crypto.createHash("sha256").update(JSON.stringify(fingerprintInput)).digest("hex");
     return payload;
   };

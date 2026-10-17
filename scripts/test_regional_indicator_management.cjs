@@ -83,6 +83,36 @@ test("failed, partial, missing and publication-pending zeros never count as norm
   assert.equal(metric.coverage.failed, 1); assert.equal(metric.coverage.partial, 1); assert.equal(metric.coverage.missing, 1); assert.equal(metric.coverage.publicationPending, 1);
 });
 
+test("suppressed monthly observations retain their reason and stay distinct from missing data and a genuine zero", () => {
+  const input = snapshot(), metric = input.groups[0].metrics[0];
+  metric.rows[5] = { ...metric.rows[5], status: "suppressed", value: null, reasonCode: "SUPPRESSED" };
+  const projected = build({ snapshot: input }).groups[0].metrics[0];
+  assert.equal(projected.coverage.observed, 12); assert.equal(projected.observedZeroMonths, 1);
+  assert.equal(projected.coverage.suppressed, 1); assert.equal(projected.coverage.missing, 0);
+  assert.equal(projected.gaps.length, 1); assert.equal(projected.gaps[0].status, "suppressed");
+  assert.equal(projected.gaps[0].reasonCode, "SUPPRESSED"); assert.equal(projected.gaps[0].reasonEvidence, "recorded");
+  const delayed = snapshot("2026-08"); delayed.groups[0].metrics[0].requestedPoint = {
+    period: "2026-09", status: "suppressed", value: null, reasonCode: "SUPPRESSED"
+  };
+  const group = build({ snapshot: delayed }).groups[0];
+  assert.equal(group.metrics[0].requested.status, "suppressed"); assert.equal(group.requested.status, "suppressed");
+  assert.equal(group.requested.reasonCode, "SUPPRESSED");
+});
+
+test("suppressed KOSIS items preserve their actual annual or monthly period without creating monthly zero values", () => {
+  const input = snapshot(); input.groups.push({ key: "kosis", label: "인구·산업", category: "background", periodType: "mixed", status: "partial", metrics: [
+    { key: "observed", label: "정상", unit: "명", periodType: "M", rows: [{ period: "2026-09", value: 0, status: "observed" }] },
+    { key: "withheld", label: "비공개", unit: "개", periodType: "Y", latestPeriod: "2024", latestValue: 0,
+      rows: [{ period: "2024", value: null, status: "suppressed", reasonCode: "SUPPRESSED" }] }
+  ] });
+  const projected = build({ snapshot: input }).groups[1];
+  assert.equal(projected.coverage.observed, 1); assert.equal(projected.coverage.expected, 2);
+  assert.equal(projected.metrics[0].latestValue, 0);
+  const withheld = projected.metrics[1]; assert.equal(withheld.latestValue, null); assert.equal(withheld.coverage.observed, 0);
+  assert.equal(withheld.coverage.suppressed, 1); assert.equal(withheld.requested, null);
+  assert.deepEqual(withheld.gaps, [{ period: "2024", status: "suppressed", reasonCode: "SUPPRESSED", reasonEvidence: "recorded" }]);
+});
+
 test("unknown errors and unsafe source strings are not exposed as monthly diagnostic evidence", () => {
   const input = snapshot(); input.groups[0].metrics[0].rows[2] = { period: "2025-11", status: "failed", value: 0, reasonCode: "SECRET=https://unsafe.invalid/key", errorCode: "RAW_TOKEN" };
   input.groups[0].errorCode = "RAW_TOKEN";

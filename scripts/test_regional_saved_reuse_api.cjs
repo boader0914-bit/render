@@ -175,7 +175,12 @@ http.createServer = function(...args) {
     const formRead = await request(queryFor(firstScope), formCookie);
     assert.equal(formRead.status, 200); assert.deepEqual(formRead.data.snapshot, payload.regions[0].response.snapshot);
     const adminPage = await fetch(base + "/admin", { headers: { Cookie: formCookie }, redirect: "manual" });
-    assert.equal(adminPage.status, 200); assert.match(adminPage.headers.get("content-type"), /text\/html/); await adminPage.text();
+    assert.equal(adminPage.status, 200); assert.match(adminPage.headers.get("content-type"), /text\/html/);
+    const adminHtml = await adminPage.text();
+    assert.match(adminHtml, /src="\/regional-evidence-review\.js"/);
+    const reviewAsset = await fetch(base + "/regional-evidence-review.js", { headers: { Cookie: formCookie } });
+    assert.equal(reviewAsset.status, 200); assert.match(reviewAsset.headers.get("content-type"), /javascript/);
+    assert.match(await reviewAsset.text(), /regional-evidence-review-v1/);
     assert.equal((await request("/api/logout", formCookie, {})).status, 200);
     assert.equal((await request(queryFor(firstScope), formCookie)).status, 401, "The real logout endpoint invalidates only the form session");
     const login = await request("/api/login", "", { username: adminUser, password: adminPassword });

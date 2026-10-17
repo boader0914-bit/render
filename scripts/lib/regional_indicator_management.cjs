@@ -4,7 +4,7 @@
 // recalculation of indicators belong in this module.
 const MONTH = /^20\d{2}-(0[1-9]|1[0-2])$/;
 const YEAR = /^20\d{2}$/;
-const REASONS = new Set(["NO_DATA", "NOT_COLLECTED", "PUBLICATION_PENDING", "PARTIAL_DATA", "MISSING_VALUES", "AUTH_ERROR", "MISSING_KEY",
+const REASONS = new Set(["NO_DATA", "NOT_COLLECTED", "PUBLICATION_PENDING", "PARTIAL_DATA", "MISSING_VALUES", "SUPPRESSED", "AUTH_ERROR", "MISSING_KEY",
   "QUOTA_EXCEEDED", "TIMEOUT", "NETWORK_ERROR", "CACHE_READ_ERROR", "CACHE_WRITE_ERROR", "EVIDENCE_WRITE_ERROR", "INVALID_RESPONSE", "REGION_MISMATCH", "PERIOD_MISMATCH",
   "COOLDOWN", "PROVIDER_FAILED", "PROVIDER_UNAVAILABLE", "REGIONAL_SOURCE_BUSY", "MAPPING_MISSING", "REGIONAL_SOURCE_UNAVAILABLE",
   "REGIONAL_BUILD_FAILED", "REGIONAL_NO_DATA", "REGIONAL_REFRESH_INTERRUPTED", "PREPARATION_INTERRUPTED", "REGIONAL_STORE_UNAVAILABLE", "REGIONAL_SCOPE_CLOSED"]);
@@ -22,13 +22,14 @@ const maxStamp = values => values.map(stamp).filter(Boolean).sort().at(-1) || nu
 const normal = row => GOOD.has(row?.status) && numeric(row?.value);
 function state(row) {
   if (normal(row)) return "observed";
+  if (row?.status === "suppressed") return "suppressed";
   if (row?.status === "publication_pending") return "publication_pending";
   if (row?.status === "partial") return "partial";
   if (FAILED.has(row?.status)) return "failed";
   return "missing";
 }
 function issue(row) {
-  const code = safeReason(row?.reasonCode) || safeReason(row?.errorCode);
+  const code = row?.status === "suppressed" ? "SUPPRESSED" : safeReason(row?.reasonCode) || safeReason(row?.errorCode);
   return { reasonCode: code || "UNRECORDED_REASON", reasonEvidence: code ? "recorded" : "unknown" };
 }
 function safePoint(row, fallbackPeriod) {
@@ -95,7 +96,7 @@ function buildRegionalIndicatorManagement({ snapshot = null, scope = {}, job = n
         .sort((a, b) => String(a.period).localeCompare(String(b.period))).at(-1);
       const explicitLatest = monthly ? period(metric.latestPeriod) : period(metric.latestPeriod) || (YEAR.test(metric.latestPeriod || "") ? metric.latestPeriod : "");
       const canUseLegacy = !rawRows.length && explicitLatest && (!monthly || !requestedThrough || explicitLatest <= requestedThrough)
-        && numeric(metric.latestValue) && !FAILED.has(metric.status) && !["missing", "publication_pending"].includes(metric.status);
+        && numeric(metric.latestValue) && !FAILED.has(metric.status) && !["missing", "publication_pending", "suppressed"].includes(metric.status);
       const latestPeriod = latestRow ? monthly ? period(latestRow.period) : latestRow.period : canUseLegacy ? explicitLatest : "";
       const latestValue = latestRow ? latestRow.value : canUseLegacy ? metric.latestValue : null;
       const sourceRetrievedAt = maxStamp(observedRows.map(row => row.retrievedAt));
@@ -113,7 +114,8 @@ function buildRegionalIndicatorManagement({ snapshot = null, scope = {}, job = n
         coverage = { kind: "months", observed, expected: count, ratioPct: Math.round(observed / count * 1000) / 10,
           startPeriod: wanted[0] || null, endPeriod: end || null, partial: rows.filter(row => row.status === "partial").length,
           failed: rows.filter(row => row.status === "failed").length, missing: rows.filter(row => row.status === "missing").length,
-          publicationPending: rows.filter(row => row.status === "publication_pending").length };
+          publicationPending: rows.filter(row => row.status === "publication_pending").length,
+          suppressed: rows.filter(row => row.status === "suppressed").length };
         const requestRows = rawRows.filter(row => period(row.period) === requestedThrough);
         const requestPoint = requestRows.length > 1 ? { period: requestedThrough, status: "failed", reasonCode: "INVALID_RESPONSE" }
           : metric.requestedPoint && period(metric.requestedPoint.period) === requestedThrough ? metric.requestedPoint
@@ -127,7 +129,11 @@ function buildRegionalIndicatorManagement({ snapshot = null, scope = {}, job = n
         }
       } else {
         const observed = numeric(latestValue) ? 1 : 0;
-        coverage = { kind: "items", observed, expected: 1, ratioPct: observed * 100, startPeriod: null, endPeriod: latestPeriod || null };
+        const suppressed = rawRows.filter(row => row?.status === "suppressed");
+        coverage = { kind: "items", observed, expected: 1, ratioPct: observed * 100, startPeriod: null, endPeriod: latestPeriod || null,
+          suppressed: suppressed.length };
+        gaps = suppressed.map(row => ({ period: period(row.period) || (YEAR.test(row.period || "") ? row.period : ""),
+          status: "suppressed", reasonCode: "SUPPRESSED", reasonEvidence: "recorded" }));
         requested = null;
       }
       const lagMonths = monthly && latestPeriod && requestedThrough ? Math.max(0, distance(latestPeriod, requestedThrough)) : null;
@@ -148,7 +154,8 @@ function buildRegionalIndicatorManagement({ snapshot = null, scope = {}, job = n
     const requests = monthlyMetrics.map(metric => metric.requested);
     const requestedStatus = requests.length && requests.every(item => item?.status === "observed") ? "observed"
       : requests.some(item => item?.status === "observed") ? "partial" : requests.some(item => item?.status === "failed") ? "failed"
-        : requests.some(item => item?.status === "publication_pending") ? "publication_pending" : "missing";
+        : requests.some(item => item?.status === "publication_pending") ? "publication_pending"
+          : requests.length && requests.every(item => item?.status === "suppressed") ? "suppressed" : "missing";
     const requestedIssue = requests.find(item => item?.reasonEvidence === "recorded" && item.reasonCode) || requests.find(item => item?.reasonCode);
     const needsReview = metrics.some(metric => metric.needsReview) || Boolean(group.stale || group.refresh || safeReason(group.errorCode));
     const status = !hasData ? FAILED.has(group.status) ? "failed" : "missing" : needsReview ? "partial" : "ready";

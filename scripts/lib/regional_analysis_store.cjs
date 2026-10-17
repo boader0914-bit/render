@@ -6,6 +6,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { buildRegionalIndicatorManagement } = require("./regional_indicator_management.cjs");
+const { build: buildEvidenceReview, pack: packEvidenceReview, INPUT_VERSION: EVIDENCE_REVIEW_INPUT_VERSION } = require("../../web/regional-evidence-review.js");
 
 const SCHEMA_VERSION = 1;
 const CALCULATION_VERSION = "regional-analysis-v1";
@@ -370,10 +371,13 @@ function createRegionalAnalysisStore({ dataDir, resolveRegion, buildSnapshot, no
             pending: rows.filter(row => row.storedEvidenceVerification?.status === "pending").length,
             rejected: rows.filter(row => row.storedEvidenceVerification?.status === "rejected").length };
         }
+        if (snapshot.evidenceReview) snapshot.evidenceReview = packEvidenceReview(buildEvidenceReview(snapshot));
         snapshot.summary = { ...snapshot.summary, total: groups.length, ready: groups.filter(group => ["ready", "complete", "completed"].includes(group.status)).length,
           partial: groups.filter(group => group.status === "partial").length, failed: groups.filter(group => ["failed", "error", "blocked"].includes(group.status)).length,
           missing: groups.filter(group => ["missing", "publication_pending", "unavailable"].includes(group.status)).length, stale: groups.filter(group => group.stale).length };
-        if (retained) { snapshot.inputFingerprint = result.sourceFingerprint || null; snapshot.sourceFingerprint = hash([selected.scope, result.calculationVersion || CALCULATION_VERSION, groups]); }
+        if (retained) { snapshot.inputFingerprint = result.sourceFingerprint || null;
+          snapshot.sourceFingerprint = hash([selected.scope, result.calculationVersion || CALCULATION_VERSION, groups,
+            ...(snapshot.evidenceReview ? [snapshot.evidenceReview.version, snapshot.evidenceReview.encoding, EVIDENCE_REVIEW_INPUT_VERSION] : [])]); }
         job.hasObservedData = groups.some(hasObserved);
         if (Array.isArray(snapshot.metrics)) job.hasForecastData = snapshot.metrics.some(metric => (metric.forecasts || [])
           .some(row => row.status === "forecast" && typeof row.value === "number" && Number.isFinite(row.value)));
