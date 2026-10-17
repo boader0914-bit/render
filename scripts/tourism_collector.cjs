@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { createStoredTourismEvidenceRestorer, markUnstoredOperations } = require("./lib/tourism_stored_spatial_evidence.cjs");
 
 const DEFAULT_SOURCE_DEFS = [
   {
@@ -468,6 +469,7 @@ function createCollector(options = {}) {
   const regionalIndexSnapshotWrites = new Map();
   const onSnapshotStored = typeof options.onSnapshotStored === "function" ? options.onSnapshotStored : null;
   const onCacheCommitted = typeof options.onCacheCommitted === "function" ? options.onCacheCommitted : null;
+  const storedEvidenceRestorer = createStoredTourismEvidenceRestorer({ tourismDataDir, now });
 
   function notifySnapshotStored(payload = {}) {
     if (!onSnapshotStored) return;
@@ -1210,6 +1212,9 @@ function createCollector(options = {}) {
     const cacheOnly = Boolean(input.cacheOnly);
     const regionMap = await readRegionMap();
     const cached = await readVisitorCache(range.yearMonth);
+    if (input.restoreStoredEvidence === true && cached.hit) cached.data = await storedEvidenceRestorer.restoreVisitorSnapshot({
+      snapshot: cached.data, regionMap, range, adapter: VISITOR_ADAPTER_VERSION
+    });
     const compatibleCache = visitorCacheCompatible(cached, regionMap);
     if (cacheOnly) {
       if (compatibleCache) {
@@ -1399,6 +1404,9 @@ function createCollector(options = {}) {
 
   async function visitorMonthForHistory(yearMonth, regionMap, input = {}) {
     const cached = await readVisitorCache(yearMonth);
+    if (input.restoreStoredEvidence === true && cached.hit) cached.data = await storedEvidenceRestorer.restoreVisitorSnapshot({
+      snapshot: cached.data, regionMap, range: monthDateRange(yearMonth), adapter: VISITOR_ADAPTER_VERSION
+    });
     const compatible = visitorCacheCompatible(cached, regionMap);
     const cachedRegions = new Map((cached.data?.allRegions || []).map((region) => [region.regionKey, region]));
     const retryCachedIncomplete = Boolean(
@@ -1474,6 +1482,7 @@ function createCollector(options = {}) {
       status: complete ? "complete" : partial ? "partial" : "missing",
       reason,
       qualityStatus: rowQualityStatus || (snapshot.status === "ok" ? "no_observation" : snapshot.status || "unavailable"),
+      ...(row?.quality?.storedEvidenceVerification ? { storedEvidenceVerification: row.quality.storedEvidenceVerification } : {}),
       ...(row?.quality?.spatialEvidence ? { spatialEvidence: row.quality.spatialEvidence }
         : monthResult.access === "network" && snapshot.status === "no_observation"
           ? { spatialEvidence: responseSpatialEvidence(region, [], { reasonCode: "NO_DATA" }) } : {}),
@@ -1901,6 +1910,7 @@ function createCollector(options = {}) {
           retryIncomplete: requestedMonth && retryIncomplete,
           regionKeys: hasSelector ? selectedRegions.map((region) => region.regionKey) : [],
           force: requestedMonth && force,
+          restoreStoredEvidence: input.restoreStoredEvidence === true,
           ttlHours
         });
       }
@@ -2738,6 +2748,8 @@ function createCollector(options = {}) {
       spendReason: snapshot?.spend?.reason || "",
       ...(snapshot?.stay?.quality?.spatialEvidence ? { staySpatialEvidence: snapshot.stay.quality.spatialEvidence } : {}),
       ...(snapshot?.spend?.quality?.spatialEvidence ? { spendSpatialEvidence: snapshot.spend.quality.spatialEvidence } : {}),
+      ...(snapshot?.stay?.quality?.storedEvidenceVerification ? { stayStoredEvidenceVerification: snapshot.stay.quality.storedEvidenceVerification } : {}),
+      ...(snapshot?.spend?.quality?.storedEvidenceVerification ? { spendStoredEvidenceVerification: snapshot.spend.quality.storedEvidenceVerification } : {}),
       stayOverall,
       spendOverall,
       collectedAt: snapshot.collectedAt || "",
@@ -2932,6 +2944,7 @@ function createCollector(options = {}) {
         cursor += 1;
         const yearMonth = months[index];
         const cached = await readDemandStrengthCache(region.regionKey, yearMonth);
+        if (input.restoreStoredEvidence === true && cached.hit) cached.data = markUnstoredOperations(cached.data);
         const compatible = demandStrengthCacheCompatible(cached, match.regionMap, region, yearMonth);
         if (compatible && !force) {
           monthResults[index] = {
@@ -4000,6 +4013,7 @@ function createCollector(options = {}) {
         cursor += 1;
         const yearMonth = months[index];
         const cached = await readRegionalIndexCache(sourceKey, region.regionKey, yearMonth);
+        if (input.restoreStoredEvidence === true && cached.hit) cached.data = markUnstoredOperations(cached.data);
         const compatible = regionalIndexCacheCompatible(sourceKey, cached, match.regionMap, region, yearMonth);
         if (compatible && !force) {
           monthResults[index] = {

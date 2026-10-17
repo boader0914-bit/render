@@ -367,6 +367,23 @@ test("legacy regional values stay visible with a folded scope warning instead of
   assert.equal(snapshot.groups[0].metrics[0].rows[0].value, 0);
 });
 
+test("stored original evidence and unavailable-original reasons appear only inside existing criteria", () => {
+  const snapshot = response().snapshot;
+  const spatialContract = { version: "regional-data-contract-v1", provider: "한국관광공사", requestedRegionKey: "sancheong", officialCode: "4886000000",
+    requestedLevel: "sigungu", requestedUnitType: "county", providerRegionCode: "48860", providedLevel: "sigungu", scopeKind: "administrative", status: "matched", evidence: "response", aggregation: "none",
+    storedProvenance: { version: "stored-tourism-spatial-evidence-v1", sourceKind: "stored_raw_response", evidenceId: "visitor-202608-abcdef0123456789", sha256: "a".repeat(64), period: "2026-08", verifiedAt: "2026-10-17T08:00:00Z", checks: ["hash", "region"] } };
+  const point = { period: "2026-08", status: "observed", value: 0, spatialContract };
+  snapshot.groups = [{ key: "visitors", label: "지역 방문자", provider: "한국관광공사", periodType: "M", status: "ready", spatialContract,
+    metrics: [{ key: "count", label: "방문자", unit: "명", rows: [point] }] }];
+  let html = renderCard({ regionKey: "sancheong", snapshot });
+  assert.match(html, /보관 원본 재검증/); assert.match(html, /visitor-202608-abcdef0123456789/);
+  assert.doesNotMatch(html, /data-ra-detail="scope:visitors" open/);
+  point.spatialContract = { ...spatialContract, status: "scope_unverified", evidence: "unverified" };
+  point.storedEvidenceVerification = { status: "pending", reasonCode: "RAW_RESPONSE_NOT_RETAINED", secret: "do-not-render" };
+  html = renderCard({ regionKey: "sancheong", snapshot });
+  assert.match(html, /보관 근거 미확인/); assert.match(html, /응답 원본이 없어/); assert.doesNotMatch(html, /do-not-render|보관 원본 재검증/);
+});
+
 test("region scope evidence honors row overrides and remains visible in management without copied contracts", () => {
   const snapshot = response().snapshot;
   const contract = { version: "regional-data-contract-v1", provider: "한국관광공사", requestedRegionKey: "sancheong", officialCode: "4886000000",

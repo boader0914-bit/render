@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
-const { VERSION, createSpatialContract, comparisonEligibility, availabilityOf, temporalPolicy } = require("../web/regional-data-contract.js");
+const { VERSION, createSpatialContract, comparisonEligibility, availabilityOf, temporalPolicy, storedProvenanceOf, storedEvidenceSummary } = require("../web/regional-data-contract.js");
 
 const local = (officialCode = "4886000000") => ({ regionKey: `kr_admin_${officialCode}`, officialCode, level: "local", unitType: "county", active: true, selectable: true });
 function verified(region = local(), extra = {}) {
@@ -24,8 +24,24 @@ test("one contract policy is available in Node and a browser without I/O", () =>
   const sandbox = {};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../web/regional-data-contract.js"), "utf8"), sandbox);
   assert.equal(sandbox.RegionalDataContract.VERSION, "regional-data-contract-v1");
-  assert.deepEqual(Object.keys(sandbox.RegionalDataContract).sort(), ["VERSION", "availabilityOf", "comparisonEligibility", "createSpatialContract", "temporalPolicy"].sort());
+  assert.deepEqual(Object.keys(sandbox.RegionalDataContract).sort(), ["VERSION", "availabilityOf", "comparisonEligibility", "createSpatialContract", "temporalPolicy", "storedProvenanceOf", "storedEvidenceSummary"].sort());
   assert.equal(VERSION, "regional-data-contract-v1");
+});
+
+test("stored response provenance is bounded and cannot itself verify an echoed region", () => {
+  const input = verified(), proof = { version: "stored-tourism-spatial-evidence-v1", sourceKind: "stored_raw_response", evidenceId: "visitor-202608-abcdef0123456789",
+    sha256: "a".repeat(64), period: "2026-08", verifiedAt: "2026-10-17T08:00:00Z", checks: ["hash", "region", "period", "values", "bad/secret", "hash"],
+    relativePath: "arbitrary-path", url: "private", token: "secret" };
+  const contract = createSpatialContract({ ...input, evidence: { ...input.evidence, storedProvenance: proof } });
+  assert.equal(contract.status, "matched"); assert.deepEqual(contract.storedProvenance.checks, ["hash", "region", "period", "values"]);
+  for (const field of ["relativePath", "url", "token"]) assert.equal(Object.hasOwn(contract.storedProvenance, field), false);
+  assert.equal(storedEvidenceSummary(contract).label, "보관 원본 재검증");
+  const echoed = createSpatialContract({ ...input, evidence: { storedProvenance: proof } });
+  assert.equal(echoed.status, "scope_unverified"); assert.equal(echoed.storedProvenance, undefined);
+  assert.equal(storedProvenanceOf({ ...proof, evidenceId: "<script>" }), null);
+  assert.equal(storedProvenanceOf({ ...proof, sha256: "invalid" }), null);
+  assert.equal(createSpatialContract({ ...input, evidence: { ...input.evidence, storedProvenance: { ...proof, sha256: "invalid" } } }).status, "scope_unverified");
+  assert.equal(storedEvidenceSummary(echoed, { status: "pending", reasonCode: "RAW_RESPONSE_NOT_RETAINED" }).label, "보관 근거 미확인");
 });
 
 test("a canonical echo cannot verify geography, while response evidence preserves the exact administrative unit", () => {

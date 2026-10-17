@@ -473,3 +473,16 @@ test("comparison evidence keeps disclosure state and loads shared rules before e
   const css = fs.readFileSync(path.join(__dirname, "../web/regional-comparison.css"), "utf8");
   assert.match(css, /\.rc-contract :is\(dt,dd\)[^}]*overflow-wrap:anywhere/);
 });
+
+test("comparison shows the chosen month's original reference rather than the latest month's proof", () => {
+  const data = ["a", "b"].map(key => response(key, "2026-09", { rows: [
+    { period: "2026-08", status: "observed", value: 0, spatialContract: { ...matchedScope(key), storedProvenance: {
+      version: "stored-tourism-spatial-evidence-v1", sourceKind: "stored_raw_response", evidenceId: "visitor-202608-abcdef0123456789", sha256: "a".repeat(64), period: "2026-08", verifiedAt: "2026-10-17T08:00:00Z", checks: ["hash", "values"] } } },
+    { period: "2026-09", status: "observed", value: 3, spatialContract: { ...matchedScope(key), status: "scope_unverified", evidence: "unverified" }, storedEvidenceVerification: { status: "pending", reasonCode: "RAW_RESPONSE_NOT_RETAINED" } }
+  ] }));
+  const row = comparisonModel(data.map(data => ({ data })))[0];
+  assert.equal(row.commonPeriod, "2026-08"); assert.deepEqual(row.cells.map(c => c.value), [0, 0]);
+  const html = renderDashboard({ regionKey: "a", regionLabel: "A", month: "2026-09", maxMonth: "2026-09", regions, targets: ["b"], records: { a: { data: data[0] }, b: { data: data[1] } }, open: new Set(), query: "", candidate: "" });
+  assert.match(html, /보관 원본 재검증/); assert.match(html, /visitor-202608-abcdef0123456789/);
+  assert.match(html, /원본 번호·기간/); assert.doesNotMatch(html, /보관 근거 미확인/);
+});

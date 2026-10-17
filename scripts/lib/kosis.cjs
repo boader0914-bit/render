@@ -311,9 +311,28 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
     const status = error ? datasets.some(dataset => dataset.rows.length) ? "partial" : datasets.every(dataset => dataset.status === "mapping_missing") ? "mapping_missing" : "error" : result.status;
     return { ...result, datasets, status, error: error || result.error, lastAttemptAt: attempt.startedAt, lastAttemptFinishedAt: attempt.finishedAt };
   }
-  async function getRegion(regionKey) {
+  function storedEvidenceVerification(dataset) {
+    // Version 1 KOSIS cache/history retains only normalized rows and a mapping.
+    // Those rows are reconstructed with mapping.code during cache validation;
+    // that synthetic C1 is not a retained provider response. Neither the stored
+    // mapping basis nor a matching value can restore missing response evidence.
+    // Keep this diagnostic opt-in for explicit saved-result reconstruction.
+    const alreadyVerified = dataset.spatialEvidence?.verified === true;
+    return { ...dataset, storedEvidenceVerification: {
+      status: alreadyVerified ? "already_verified" : "pending",
+      reasonCode: alreadyVerified ? "RESPONSE_EVIDENCE_ALREADY_VERIFIED" : "RAW_RESPONSE_NOT_RETAINED",
+      provider: "KOSIS", tableId: dataset.tableId, period: dataset.period,
+      evidenceReferences: []
+    } };
+  }
+  async function getRegion(regionKey, { restoreStoredEvidence = false } = {}) {
     const configured = Boolean(await key());
-    try { const region = await regionFor(regionKey); return withAttempt(present(region, await readCache(region), configured), await readAttempt(region)); }
+    try {
+      const region = await regionFor(regionKey);
+      const result = withAttempt(present(region, await readCache(region), configured), await readAttempt(region));
+      if (restoreStoredEvidence !== true) return result;
+      return { ...result, datasets: result.datasets.map(dataset => dataset.rows.length ? storedEvidenceVerification(dataset) : dataset) };
+    }
     catch (error) { return { configured, status: "mapping_missing", region: { regionKey }, datasets: DEFINITIONS.map(emptyDataset), networkAttempted: false, error: publicError(error) }; }
   }
   async function refreshRegion(regionKey) {

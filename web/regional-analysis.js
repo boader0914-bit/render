@@ -35,6 +35,7 @@
       const check = contractApi()?.comparisonEligibility?.([{ regionKey, group, metric: { ...metric, unit: "scope", periodType: "M", spatialContract: spatial } }]);
       const keyword = spatial?.scopeKind === "keyword" || group.key === "searchTrend" || group.category === "search";
       return { metric, latest, spatial, keyword, matched: check?.comparable === true,
+        verification: latest?.storedEvidenceVerification || metric.storedEvidenceVerification,
         label: keyword ? "키워드 기준 · 지역 직접 비교 제외" : check?.comparable ? `${levelLabel(spatial?.providedLevel)} 기준 · 범위 일치` : check?.reason || "지역 범위 확인 필요" };
     });
   }
@@ -46,7 +47,12 @@
   }
   function contractDetailsHtml(group, state) {
     const rows = contractRows(group, state), detailKey = `scope:${group.key}`;
-    return `<details class="ra-contract" data-ra-detail="${escapeHtml(detailKey)}"${state.openDetails?.has(detailKey) ? " open" : ""}><summary>공통 기준 · 출처·지역 범위</summary><p class="ra-muted">같은 출처·단위·기준주기와 확인된 행정 범위만 직접 비교합니다. 범위 미확인 자료는 참고값이며, 검색 관심도는 키워드별 추이로만 봅니다.</p><div class="ra-table-wrap"><table><caption>${escapeHtml(group.label || group.key)} 비교 기준</caption><thead><tr><th scope="col">지표·출처</th><th scope="col">실제 범위</th><th scope="col">기준기간</th><th scope="col">수집 상태</th></tr></thead><tbody>${rows.map(row => `<tr><th scope="row">${escapeHtml(row.metric.label || row.metric.key || group.label || group.key)}<small>${escapeHtml(group.provider || "출처 미확인")} · ${escapeHtml(row.metric.unit || "단위 미확인")}</small></th><td>${escapeHtml(row.label)}${row.spatial?.providerRegionCode ? `<small>제공 지역 ${escapeHtml(row.spatial.providerRegionCode)}</small>` : ""}<small>${row.spatial?.evidence === "response" ? "제공 응답에서 확인" : row.keyword ? "키워드 검색 범위" : "범위 확인 필요"}</small></td><td>${escapeHtml(periodLabel(row.latest?.period || row.metric.latestPeriod))}<small>${row.metric.periodType === "Y" || group.periodType === "Y" ? "연간 자료" : row.metric.periodType === "M" || group.periodType === "M" ? "월간 자료" : "주기 확인 필요"}</small></td><td>${escapeHtml(statusLabel(row.latest?.status || row.metric.status || group.status || "missing"))}</td></tr>`).join("")}</tbody></table></div></details>`;
+    return `<details class="ra-contract" data-ra-detail="${escapeHtml(detailKey)}"${state.openDetails?.has(detailKey) ? " open" : ""}><summary>공통 기준 · 출처·지역 범위</summary><p class="ra-muted">같은 출처·단위·기준주기와 확인된 행정 범위만 직접 비교합니다. 범위 미확인 자료는 참고값이며, 검색 관심도는 키워드별 추이로만 봅니다.</p><div class="ra-table-wrap"><table><caption>${escapeHtml(group.label || group.key)} 비교 기준</caption><thead><tr><th scope="col">지표·출처</th><th scope="col">실제 범위</th><th scope="col">기준기간</th><th scope="col">수집 상태</th></tr></thead><tbody>${rows.map(row => `<tr><th scope="row">${escapeHtml(row.metric.label || row.metric.key || group.label || group.key)}<small>${escapeHtml(group.provider || "출처 미확인")} · ${escapeHtml(row.metric.unit || "단위 미확인")}</small></th><td>${escapeHtml(row.label)}${row.spatial?.providerRegionCode ? `<small>제공 지역 ${escapeHtml(row.spatial.providerRegionCode)}</small>` : ""}<small>${row.spatial?.evidence === "response" ? "제공 응답에서 확인" : row.keyword ? "키워드 검색 범위" : "범위 확인 필요"}</small>${storedEvidenceHtml(row)}</td><td>${escapeHtml(periodLabel(row.latest?.period || row.metric.latestPeriod))}<small>${row.metric.periodType === "Y" || group.periodType === "Y" ? "연간 자료" : row.metric.periodType === "M" || group.periodType === "M" ? "월간 자료" : "주기 확인 필요"}</small></td><td>${escapeHtml(statusLabel(row.latest?.status || row.metric.status || group.status || "missing"))}</td></tr>`).join("")}</tbody></table></div></details>`;
+  }
+  function storedEvidenceHtml(row) {
+    const proof = contractApi()?.storedEvidenceSummary?.(row.spatial, row.verification);
+    if (!proof) return "";
+    return `<small>${escapeHtml(proof.label)} · ${escapeHtml(proof.reason)}</small>${proof.evidenceId ? `<small>원본 ${escapeHtml(proof.evidenceId)} · ${escapeHtml(proof.period)}</small><small>해시 ${escapeHtml(proof.sha256.slice(0, 12))} · 검증 ${escapeHtml(timeLabel(proof.verifiedAt))}</small>` : ""}`;
   }
   function safeCode(value) { return String(value || "").replace(/[^A-Z0-9_.:-]/gi, "").slice(0, 100); }
   function errorLabel(code) {

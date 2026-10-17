@@ -100,6 +100,99 @@ test("legacy KOSIS values are not assigned new response geography during a cache
   assert.ok(cached.datasets.every(dataset => dataset.status === "ready" && dataset.spatialEvidence === undefined));
 });
 
+test("explicit stored-evidence inspection leaves legacy KOSIS rows unverified without fetching or replacing source files", async t => {
+  const f = await fixture(t);
+  await f.service.refreshRegion(REGION);
+  const name = (await fs.readdir(f.dataDir)).find(value => /^[a-f0-9]{24}\.json$/.test(value));
+  const file = path.join(f.dataDir, name);
+  const saved = JSON.parse(await fs.readFile(file, "utf8"));
+  for (const dataset of Object.values(saved.datasets)) delete dataset.spatialEvidence;
+  await fs.writeFile(file, JSON.stringify(saved));
+  const beforeBytes = await fs.readFile(file);
+  const beforeFiles = (await fs.readdir(f.dataDir)).sort();
+  const beforeHistory = (await fs.readdir(path.join(f.dataDir, "history"))).sort();
+  const beforeCalls = f.calls.length;
+  const plain = await f.service.getRegion(REGION);
+  assert.ok(plain.datasets.every(dataset => dataset.storedEvidenceVerification === undefined));
+  const result = await f.service.getRegion(REGION, { restoreStoredEvidence: true });
+  assert.equal(result.status, plain.status);
+  assert.equal(result.networkAttempted, false);
+  for (const [index, dataset] of result.datasets.entries()) {
+    const { storedEvidenceVerification: verification, ...value } = dataset;
+    assert.deepEqual(value, plain.datasets[index]);
+    assert.equal(verification.status, "pending");
+    assert.equal(verification.reasonCode, "RAW_RESPONSE_NOT_RETAINED");
+    assert.equal(verification.tableId, dataset.tableId);
+    assert.equal(verification.period, dataset.period);
+    assert.deepEqual(verification.evidenceReferences, []);
+    assert.equal(dataset.spatialEvidence, undefined);
+  }
+  assert.equal(f.calls.length, beforeCalls);
+  assert.deepEqual(await fs.readFile(file), beforeBytes);
+  assert.deepEqual((await fs.readdir(f.dataDir)).sort(), beforeFiles);
+  assert.deepEqual((await fs.readdir(path.join(f.dataDir, "history"))).sort(), beforeHistory);
+  assert.ok((await f.service.getRegion(REGION, { restoreStoredEvidence: "true" })).datasets.every(dataset => dataset.storedEvidenceVerification === undefined));
+});
+
+test("mapping codes and normalized rows cannot be promoted to actual response proof during explicit KOSIS reconstruction", async t => {
+  const f = await fixture(t);
+  await f.service.refreshRegion(REGION);
+  const name = (await fs.readdir(f.dataDir)).find(value => /^[a-f0-9]{24}\.json$/.test(value));
+  const file = path.join(f.dataDir, name), saved = JSON.parse(await fs.readFile(file, "utf8"));
+  for (const definition of DEFINITIONS) {
+    const dataset = saved.datasets[definition.key];
+    delete dataset.spatialEvidence;
+    // These unrecognized fields have no retained-response provenance and cannot
+    // establish proof, even if the reconstructed C1/name/ancestry looks right.
+    dataset.rawRows = rows(definition);
+    dataset.metadata = metadata(definition);
+  }
+  await fs.writeFile(file, JSON.stringify(saved));
+  const beforeCalls = f.calls.length;
+  const alias = await f.service.getRegion("kr_admin_4165000000", { restoreStoredEvidence: true });
+  assert.equal(alias.status, "ready");
+  assert.equal(alias.region.canonicalRegionKey, REGION);
+  for (const dataset of alias.datasets) {
+    assert.equal(dataset.rows[0].value, 123);
+    assert.equal(dataset.mapping.basis, "kosis-table-metadata-name-and-ancestry");
+    assert.equal(dataset.storedEvidenceVerification.status, "pending");
+    assert.equal(dataset.storedEvidenceVerification.reasonCode, "RAW_RESPONSE_NOT_RETAINED");
+    assert.equal(dataset.spatialEvidence, undefined);
+  }
+  assert.equal(f.calls.length, beforeCalls);
+});
+
+test("explicit KOSIS evidence inspection keeps existing verified evidence and does not claim new raw verification", async t => {
+  const f = await fixture(t);
+  const fresh = await f.service.refreshRegion(REGION), beforeCalls = f.calls.length;
+  const result = await f.service.getRegion(REGION, { restoreStoredEvidence: true });
+  for (const [index, dataset] of result.datasets.entries()) {
+    assert.deepEqual(dataset.spatialEvidence, fresh.datasets[index].spatialEvidence);
+    assert.equal(dataset.storedEvidenceVerification.status, "already_verified");
+    assert.equal(dataset.storedEvidenceVerification.reasonCode, "RESPONSE_EVIDENCE_ALREADY_VERIFIED");
+    assert.deepEqual(dataset.storedEvidenceVerification.evidenceReferences, []);
+  }
+  assert.equal(f.calls.length, beforeCalls);
+});
+
+test("KOSIS legacy evidence inspection preserves actual zero, suppressed values and partial status", async t => {
+  const f = await fixture(t, { provider: (url, definition) => reply(url.searchParams.get("method") === "getMeta" ? metadata(definition) : rows(definition, { DT: definition.key === "population" ? "0" : "..." })) });
+  await f.service.refreshRegion(REGION);
+  const name = (await fs.readdir(f.dataDir)).find(value => /^[a-f0-9]{24}\.json$/.test(value));
+  const file = path.join(f.dataDir, name), saved = JSON.parse(await fs.readFile(file, "utf8"));
+  for (const dataset of Object.values(saved.datasets)) delete dataset.spatialEvidence;
+  await fs.writeFile(file, JSON.stringify(saved));
+  const plain = await f.service.getRegion(REGION), beforeCalls = f.calls.length;
+  const result = await f.service.getRegion(REGION, { restoreStoredEvidence: true });
+  assert.equal(result.status, plain.status);
+  assert.deepEqual(result.datasets.map(dataset => dataset.rows), plain.datasets.map(dataset => dataset.rows));
+  assert.ok(result.datasets[0].rows.every(row => row.value === 0 && row.status === "observed"));
+  assert.ok(result.datasets[1].rows.every(row => row.value === null && row.status === "suppressed"));
+  assert.equal(result.datasets[1].status, "partial");
+  assert.ok(result.datasets.every(dataset => dataset.storedEvidenceVerification.status === "pending" && dataset.spatialEvidence === undefined));
+  assert.equal(f.calls.length, beforeCalls);
+});
+
 test("KOSIS observed geography cannot be created when actual C1 differs from the table mapping", () => {
   const definition = DEFINITIONS[0], mapping = { code: code(definition), basis: "kosis-table-metadata-name-and-ancestry", tableId: definition.tableId };
   assert.throws(() => normalizeData(rows(definition, { C1: "wrong" }), definition, mapping, "2026-09-26T00:00:00Z", { regionKey: REGION, level: "local" }), error => error.code === "INVALID_RESPONSE");

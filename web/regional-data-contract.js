@@ -17,6 +17,24 @@
     return code(value?.providerRegionCode) || code(value?.regionCode) || code(value?.areaCode)
       || (level === "sido" ? code(value?.ktoSidoCd) : code(value?.signguCode) || code(value?.signguCd) || code(value?.ktoSggCd));
   }
+  // Only bounded, non-secret audit fields may travel with a saved observation.
+  // This describes a verifier's result; it never verifies a raw file itself.
+  function storedProvenanceOf(value) {
+    if (!value || value.sourceKind !== "stored_raw_response" || !/^[a-f0-9]{64}$/.test(value.sha256 || "")
+      || !/^[a-zA-Z0-9_-]{1,120}$/.test(value.evidenceId || "") || !MONTH.test(value.period || "")
+      || !/^[a-z0-9-]{1,100}$/.test(value.version || "")) return null;
+    return { version: value.version, sourceKind: "stored_raw_response", evidenceId: value.evidenceId, sha256: value.sha256,
+      period: value.period, verifiedAt: Number.isFinite(Date.parse(value.verifiedAt)) ? new Date(value.verifiedAt).toISOString() : "",
+      checks: unique((Array.isArray(value.checks) ? value.checks : []).filter(check => typeof check === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(check))).slice(0, 16) };
+  }
+  function storedEvidenceSummary(contract, verification) {
+    const provenance = contract?.status === "matched" && contract.evidence === "response" ? storedProvenanceOf(contract.storedProvenance) : null;
+    if (provenance) return { label: "보관 원본 재검증", reason: "지역·기간·수량 일치 확인", ...provenance };
+    if (!verification || !["pending", "rejected"].includes(verification.status)) return null;
+    return { label: verification.status === "rejected" ? "보관 원본 검증 불일치" : "보관 근거 미확인",
+      reason: /NOT_(STORED|RETAINED)|MISSING|NOT_FOUND/.test(verification.reasonCode || "") ? "응답 원본이 없어 범위를 확인할 수 없습니다."
+        : "보관 근거로 지역·기간·수량의 일치를 확인하지 못했습니다." };
+  }
   function createSpatialContract({ region = {}, provider = "", sourceRegion = null, evidence = null, scopeKind = "administrative" } = {}) {
     const requestedRegionKey = text(region.regionKey) || text(region.regionId);
     const requestedLevel = levelOf(region.level || region.unit);
@@ -54,7 +72,7 @@
       || evidence?.reasonCode === "REGION_MISMATCH"
       || providerRegionCode && observedRegionCodes.some(observed => observed !== providerRegionCode);
     if (conflict) return { ...finish("response_mismatch", "RESPONSE_REGION_MISMATCH"), evidence: evidence?.verified === true ? "response" : "unverified" };
-    if (evidence?.reasonCode === "INVALID_RESPONSE") return finish("scope_unverified", "INVALID_RESPONSE");
+    if (evidence?.reasonCode === "INVALID_RESPONSE" || evidence?.storedProvenance && !storedProvenanceOf(evidence.storedProvenance)) return finish("scope_unverified", "INVALID_RESPONSE");
     // Collector diagnostics historically used "pending" for an unverified
     // response. Only explicit mapping metadata can establish a mapping state;
     // absent response codes and empty results leave scope unverified.
@@ -63,7 +81,8 @@
     if (mappingStates.some(value => ["missing", "mapping_missing", "unmapped", "not_found"].includes(value))) return finish("mapping_missing", "MAPPING_MISSING");
     if (providerRegionCode && evidence?.verified === true && evidence.regionKey === requestedRegionKey && code(evidence.regionCode) === providerRegionCode
       && requestedLevel !== "unknown" && levelOf(evidence.level) === requestedLevel && providedLevel === requestedLevel && officialCode) {
-      return { ...finish("matched", "SCOPE_MATCHED"), evidence: "response" };
+      const storedProvenance = storedProvenanceOf(evidence.storedProvenance);
+      return { ...finish("matched", "SCOPE_MATCHED"), evidence: "response", ...(storedProvenance ? { storedProvenance } : {}) };
     }
     return result;
   }
@@ -138,7 +157,7 @@
       anchor: normalizedPeriod === "M" ? "latest_observed" : "actual_publication", annualSlicing: false };
   }
 
-  const api = { VERSION, createSpatialContract, comparisonEligibility, availabilityOf, temporalPolicy };
+  const api = { VERSION, createSpatialContract, comparisonEligibility, availabilityOf, temporalPolicy, storedProvenanceOf, storedEvidenceSummary };
   if (typeof module === "object" && module.exports) module.exports = api;
   root.RegionalDataContract = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

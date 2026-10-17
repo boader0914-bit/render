@@ -29,6 +29,8 @@ const at = value => new Date(value).toISOString();
 const hasObserved = group => Array.isArray(group?.metrics)
   ? group.metrics.some(metric => (metric.rows || []).some(row => ["observed", "complete"].includes(row?.status) && typeof row.value === "number" && Number.isFinite(row.value)))
   : NORMAL_GROUP.has(group?.status) && (group.status !== "partial" || typeof group.value === "number");
+const hasScopeMismatch = group => group?.errorCode === "REGION_MISMATCH" || (group?.metrics || []).some(metric =>
+  metric.spatialContract?.status === "response_mismatch" || (metric.rows || []).some(row => row.spatialContract?.status === "response_mismatch"));
 function latestCompletedMonth(value) {
   const kst = new Date(new Date(value).getTime() + 9 * 3600000);
   return new Date(Date.UTC(kst.getUTCFullYear(), kst.getUTCMonth() - 1, 1)).toISOString().slice(0, 7);
@@ -319,7 +321,8 @@ function createRegionalAnalysisStore({ dataDir, resolveRegion, buildSnapshot, no
         if (!result || !["ready", "partial", "missing"].includes(result.status) || !Array.isArray(result.groups)
           || result.failed === true || result.success === false) throw fault("REGIONAL_RESULT_INVALID");
         // An explicit all-failed source bundle is not a new normal snapshot.
-        if (result.groups.length && result.groups.every(group => ["failed", "error", "blocked"].includes(group?.status))) throw fault("REGIONAL_SOURCE_UNAVAILABLE");
+        if (result.groups.length && result.groups.every(group => ["failed", "error", "blocked"].includes(group?.status))
+          && !result.groups.some(hasScopeMismatch)) throw fault("REGIONAL_SOURCE_UNAVAILABLE");
       } catch (error) { errorCode = safeError(error); }
       let published = null;
       await locked(async () => {
@@ -347,7 +350,9 @@ function createRegionalAnalysisStore({ dataDir, resolveRegion, buildSnapshot, no
         let retained = false;
         const priorGroups = new Map((priorSnapshot?.groups || []).filter(group => group?.key).map(group => [group.key, group]));
         const groups = result.groups.map(group => {
-          if (!retainFailedGroups) return copy(group);
+          // A confirmed wrong region must stay excluded. A provider outage may
+          // reuse its last good data, but must not undo new geographic evidence.
+          if (!retainFailedGroups || hasScopeMismatch(group)) return copy(group);
           const previousGroup = priorGroups.get(group?.key);
           if (!previousGroup || !NORMAL_GROUP.has(previousGroup.status) || !hasObserved(previousGroup)
             || (!UNAVAILABLE_GROUP.has(group?.status) && !(group.status === "partial" && !hasObserved(group)))) return copy(group);
@@ -358,6 +363,13 @@ function createRegionalAnalysisStore({ dataDir, resolveRegion, buildSnapshot, no
         });
         const snapshot = { ...copy(result), schemaVersion: SCHEMA_VERSION, calculationVersion,
           resultId, generatedAt: timestamp(), scope: copy(selected.scope), groups, status: retained ? "partial" : result.status };
+        if (snapshot.storedEvidence) {
+          const rows = groups.filter(group => group.category !== "search").flatMap(group => (group.metrics || []).flatMap(metric => metric.rows || []));
+          snapshot.storedEvidence = { ...snapshot.storedEvidence,
+            restored: rows.filter(row => row.spatialContract?.storedProvenance && row.spatialContract.status === "matched").length,
+            pending: rows.filter(row => row.storedEvidenceVerification?.status === "pending").length,
+            rejected: rows.filter(row => row.storedEvidenceVerification?.status === "rejected").length };
+        }
         snapshot.summary = { ...snapshot.summary, total: groups.length, ready: groups.filter(group => ["ready", "complete", "completed"].includes(group.status)).length,
           partial: groups.filter(group => group.status === "partial").length, failed: groups.filter(group => ["failed", "error", "blocked"].includes(group.status)).length,
           missing: groups.filter(group => ["missing", "publication_pending", "unavailable"].includes(group.status)).length, stale: groups.filter(group => group.stale).length };

@@ -2,7 +2,7 @@
 
 const crypto = require("node:crypto");
 const { DEFINITIONS } = require("./kosis.cjs");
-const { VERSION: CONTRACT_VERSION, createSpatialContract, availabilityOf, temporalPolicy } = require("../../web/regional-data-contract.js");
+const { VERSION: CONTRACT_VERSION, createSpatialContract, availabilityOf, temporalPolicy, storedProvenanceOf } = require("../../web/regional-data-contract.js");
 
 const VERSION = "regional-observations-v2";
 const MONTH = /^20\d{2}-(0[1-9]|1[0-2])$/;
@@ -127,9 +127,18 @@ function finishGroup(group, metrics, end, count) {
     requestedThrough: end, publicationLagMonths: latestPeriods.length ? (Number(end.slice(0, 4)) - Number(latestPeriods.at(-1).slice(0, 4))) * 12 + Number(end.slice(5)) - Number(latestPeriods.at(-1).slice(5)) : null,
     errorCode: group.errorCode || (availableMonths === count ? "" : hasData ? "PARTIAL_DATA" : "NO_DATA") };
 }
+function storedVerificationOf(value) {
+  if (!value || !["restored", "already_verified", "pending", "rejected"].includes(value.status)) return null;
+  return { status: value.status, reasonCode: /^[A-Z0-9_]{1,100}$/.test(value.reasonCode || "") ? value.reasonCode : "STORED_EVIDENCE_UNVERIFIED" };
+}
+function periodEvidence(evidence, period) {
+  if (!evidence?.storedProvenance) return evidence;
+  const provenance = storedProvenanceOf(evidence.storedProvenance);
+  return provenance?.period === period ? evidence : { ...evidence, verified: false, reasonCode: "INVALID_RESPONSE" };
+}
 
 function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService, searchTrendService, resolveRegion, prepare, now = () => new Date(), includeHistory = false }) {
-  return async function buildSnapshot(scope, { collectMissing = false } = {}) {
+  return async function buildSnapshot(scope, { collectMissing = false, restoreStoredEvidence = true } = {}) {
     // Resolve identity independently of a provider's echo of the request.
     // Background builds only; reading a saved result never performs this work.
     const resolved = typeof resolveRegion === "function" ? await resolveRegion(scope.regionKey) : null;
@@ -144,7 +153,8 @@ function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService,
     // months. This is a cache-only read in a background build, never a UI GET.
     const readCount = includeHistory ? 36 : Math.min(36, count + 12);
     const input = { regionKey: scope.regionKey, regionKeys: [scope.regionKey], endYearMonth: end.replace("-", ""), months: readCount,
-      analysisMonths: readCount, collectMissing: false, refresh: false, force: false, maxPagesPerOperation: 1, concurrency: 1 };
+      analysisMonths: readCount, collectMissing: false, refresh: false, force: false, restoreStoredEvidence: restoreStoredEvidence === true,
+      maxPagesPerOperation: 1, concurrency: 1 };
     const diagnostics = key => preparation?.steps?.find(step => step.key === key);
     for (const [key, label, method, fields] of TOURISM) {
       let result, errorCode = "";
@@ -175,7 +185,12 @@ function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService,
         else if (actualStatus === "missing" && SAFE.has(provenance.reasonCode) && !["NO_DATA", "NOT_COLLECTED", "MISSING_VALUES", "PARTIAL_DATA"].includes(provenance.reasonCode)) actualStatus = "error";
         const evidence = key === "demandStrength" ? point?.[field === "stayOverall" ? "staySpatialEvidence" : "spendSpatialEvidence"]
           : point?.operations?.[field]?.quality?.spatialEvidence || point?.spatialEvidence || point?.quality?.spatialEvidence;
-        const spatialContract = spatial(evidence);
+        const resolvedEvidence = periodEvidence(evidence, period);
+        const spatialContract = spatial(resolvedEvidence);
+        const storedEvidenceVerification = evidence?.storedProvenance && resolvedEvidence !== evidence
+          ? { status: "rejected", reasonCode: "STORED_EVIDENCE_PERIOD_OR_REFERENCE_MISMATCH" } : storedVerificationOf(key === "demandStrength"
+          ? point?.[field === "stayOverall" ? "stayStoredEvidenceVerification" : "spendStoredEvidenceVerification"] || point?.storedEvidenceVerification
+          : point?.operations?.[field]?.quality?.storedEvidenceVerification || point?.storedEvidenceVerification || point?.quality?.storedEvidenceVerification);
         const rejectedScope = ["response_mismatch", "mapping_pending", "mapping_missing"].includes(spatialContract.status);
         if (rejectedScope) {
           actualStatus = "error";
@@ -184,7 +199,8 @@ function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService,
         }
         return { period, value: actualStatus === "observed" ? value : null, status: actualStatus, retrievedAt: stamp(point?.collectedAt), ...provenance,
           ...(rejectedScope && numeric(value) ? { referenceValue: value, referenceStatus: status } : {}),
-          spatialContract, availability: availabilityOf({ status: actualStatus, value: actualStatus === "observed" ? value : null, ...provenance }) };
+          spatialContract, ...(storedEvidenceVerification ? { storedEvidenceVerification } : {}),
+          availability: availabilityOf({ status: actualStatus, value: actualStatus === "observed" ? value : null, ...provenance }) };
       }), end, count, includeHistory));
       for (const metric of metrics) {
         metric.spatialContract = metric.rows.find(row => row.period === metric.latestPeriod)?.spatialContract || metric.requestedPoint?.spatialContract || spatial();
@@ -206,7 +222,7 @@ function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService,
         refreshedStatus: step?.status || "", retrievedAt: metrics.flatMap(metric => metric.rows.map(row => row.retrievedAt)).filter(Boolean).sort().at(-1) || "" }, metrics, end, count));
     }
     let kosis = null, kosisError = "";
-    try { kosis = await kosisService.getRegion(scope.regionKey); assertCache(kosis); }
+    try { kosis = await kosisService.getRegion(scope.regionKey, { restoreStoredEvidence: restoreStoredEvidence === true }); assertCache(kosis); }
     catch (error) { if (error.code === "REGIONAL_CACHE_ONLY_VIOLATION") throw error; kosisError = safeCode(error.code); }
     if (kosis && kosis.region?.regionKey !== scope.regionKey) { kosis = null; kosisError = "REGION_MISMATCH"; }
     const datasets = DEFINITIONS.map(definition => {
@@ -216,7 +232,9 @@ function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService,
       const period = validPeriod ? definition.periodType === "Y" ? dataset.period : `${dataset.period.slice(0, 4)}-${dataset.period.slice(4)}` : "";
       const expected = definition.metrics.flatMap(metric => (definition.breakdowns || [null]).map(breakdown => ({ key: breakdown?.key || metric.key, label: breakdown?.label || metric.label, unit: metric.unit })));
       const spatialContract = createSpatialContract({ region, provider: "KOSIS", sourceRegion: { ...kosis?.region, regionCode: dataset?.mapping?.code }, evidence: dataset?.spatialEvidence });
+      const storedEvidenceVerification = storedVerificationOf(dataset?.storedEvidenceVerification);
       return { key: definition.key, label: definition.label, periodType: definition.periodType, period, spatialContract,
+        ...(storedEvidenceVerification ? { storedEvidenceVerification } : {}),
         temporalPolicy: temporalPolicy({ month: end, months: count, periodType: definition.periodType }),
         retrievedAt: stamp(dataset?.retrievedAt), rows: expected.map(field => {
           const rows = (dataset?.rows || []).filter(row => row.key === field.key && row.unit === field.unit);
@@ -232,9 +250,11 @@ function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService,
     });
     const kosisMetrics = datasets.flatMap(dataset => dataset.rows.map(row => ({ ...row, key: `${dataset.key}:${row.key}`, label: `${dataset.label} · ${row.label}`, periodType: dataset.periodType,
       spatialContract: dataset.spatialContract, temporalPolicy: dataset.temporalPolicy,
+      ...(dataset.storedEvidenceVerification ? { storedEvidenceVerification: dataset.storedEvidenceVerification } : {}),
       latestPeriod: row.status === "observed" ? dataset.period : "", latestValue: row.value,
       rows: [{ period: dataset.period, status: row.status, value: row.value, retrievedAt: dataset.retrievedAt, reasonCode: row.reasonCode, reasonEvidence: row.reasonEvidence,
-        spatialContract: dataset.spatialContract, availability: availabilityOf(row) }] })));
+        spatialContract: dataset.spatialContract, ...(dataset.storedEvidenceVerification ? { storedEvidenceVerification: dataset.storedEvidenceVerification } : {}),
+        availability: availabilityOf(row) }] })));
     const kosisObserved = kosisMetrics.filter(metric => metric.latestValue !== null).length;
     const kosisContracts = kosisMetrics.map(metric => metric.spatialContract);
     const kosisContract = kosisContracts.length && kosisContracts.every(contract => JSON.stringify(contract) === JSON.stringify(kosisContracts[0])) ? kosisContracts[0]
@@ -305,7 +325,12 @@ function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService,
       sourceBatchId: trend ? crypto.createHash("sha256").update(JSON.stringify([trend.regionKey, trend.keyword, trend.startDate, trend.endDate])).digest("hex") : "",
       errorCode: trendError || (diagnostics("searchTrend")?.errorCode ? safeCode(diagnostics("searchTrend").errorCode) : trend?.errorCode ? safeCode(trend.errorCode) : "") }, [metric], end, count));
     const hasData = groups.some(group => group.metrics.some(metric => metric.rows.some(row => row.status === "observed")));
+    const verificationRows = groups.filter(group => group.category !== "search").flatMap(group => group.metrics.flatMap(metric => metric.rows));
     const payload = { calculationVersion: VERSION, indicatorVersion: VERSION, contractVersion: CONTRACT_VERSION,
+      storedEvidence: { version: "regional-stored-evidence-v1", requested: restoreStoredEvidence === true,
+        restored: verificationRows.filter(row => row.spatialContract?.storedProvenance && row.spatialContract.status === "matched").length,
+        pending: verificationRows.filter(row => row.storedEvidenceVerification?.status === "pending").length,
+        rejected: verificationRows.filter(row => row.storedEvidenceVerification?.status === "rejected").length },
       regionIdentity: { regionKey: scope.regionKey, officialCode: String(region.officialCode || ""), level: region.level || "unknown", unitType: region.unitType || "unknown" },
       comparisonRules: { version: CONTRACT_VERSION, sameProvider: true, sameUnit: true, samePeriodType: true, sameAdministrativeLevel: true,
         requireResponseEvidence: true, periodSelection: "latest_common_verified_observation", aggregateAdministrativeUnits: false, compareIndependentSearchBatches: false },
@@ -320,7 +345,7 @@ function createRegionalAnalysisSnapshotBuilder({ tourismCollector, kosisService,
         "검색 관심도는 표시된 조회기간 안의 상대지수입니다. 서로 다른 조회 결과를 이어 붙이거나 합산하지 않습니다."] };
     // A repeated response with identical values is not a new calculation
     // version merely because its receive time changed.
-    const fingerprintInput = JSON.parse(JSON.stringify({ scope, calculationVersion: VERSION, groups }, (key, value) => ["retrievedAt", "refreshedStatus"].includes(key) ? undefined : value));
+    const fingerprintInput = JSON.parse(JSON.stringify({ scope, calculationVersion: VERSION, groups }, (key, value) => ["retrievedAt", "refreshedStatus", "verifiedAt"].includes(key) ? undefined : value));
     payload.sourceFingerprint = crypto.createHash("sha256").update(JSON.stringify(fingerprintInput)).digest("hex");
     return payload;
   };

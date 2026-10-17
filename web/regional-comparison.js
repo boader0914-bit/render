@@ -90,6 +90,7 @@
           const latest = rows[index].at(-1), shown = commonPeriod ? rows[index].find(row => row.period === commonPeriod) : latest;
           const scope = spatialView(effectiveCell(records[index], cell, shown));
           return { regionKey: regionOf(records[index]), provider: cell?.group.provider || "출처 미확인", unit: cell?.metric.unit || "단위 미확인",
+            storedEvidenceVerification: shown?.storedEvidenceVerification || cell?.metric.storedEvidenceVerification,
             latestPeriod: latest?.period || "", latestValue: latest?.value ?? null, warning: sourceWarning(cell?.group, cell?.metric), scope,
             sourceStatus: shown?.status || "missing", referenceLabel: !latest || scope.matched ? "지역 최근값" : scope.contract?.status === "response_mismatch" ? "범위가 다른 원자료 참고값" : "범위 미확인 참고값",
             value: commonPeriod ? shown?.value ?? null : null };
@@ -98,7 +99,12 @@
   }
   function contractDetailsHtml(cell, row, state) {
     const spatial = cell.scope.contract, key = `contract:${encodeURIComponent(row.key)}:${encodeURIComponent(cell.regionKey)}`;
-    return `<details class="rc-evidence rc-contract" data-rc-detail="${escapeHtml(key)}"${state?.open?.has(key) ? " open" : ""}><summary>공통 기준 확인</summary><dl><div><dt>출처</dt><dd>${escapeHtml(cell.provider)} · ${escapeHtml(cell.unit)}</dd></div><div><dt>실제 범위</dt><dd>${escapeHtml(cell.scope.label)}</dd></div><div><dt>기준기간</dt><dd>${escapeHtml(row.commonPeriod || cell.latestPeriod || "미확인")} · ${row.periodType === "Y" ? "연간" : row.periodType === "M" ? "월간" : "주기 확인 필요"}</dd></div><div><dt>수집 상태</dt><dd>${["observed", "ready", "complete", "available"].includes(cell.sourceStatus) ? "정상 자료" : "미확인"}</dd></div>${spatial?.providerRegionCode ? `<div><dt>제공 지역 코드</dt><dd>${escapeHtml(spatial.providerRegionCode)}</dd></div>` : ""}<div><dt>범위 근거</dt><dd>${spatial?.evidence === "response" ? "제공 응답에서 확인" : "범위 확인 필요"}</dd></div></dl></details>`;
+    return `<details class="rc-evidence rc-contract" data-rc-detail="${escapeHtml(key)}"${state?.open?.has(key) ? " open" : ""}><summary>공통 기준 확인</summary><dl><div><dt>출처</dt><dd>${escapeHtml(cell.provider)} · ${escapeHtml(cell.unit)}</dd></div><div><dt>실제 범위</dt><dd>${escapeHtml(cell.scope.label)}</dd></div><div><dt>기준기간</dt><dd>${escapeHtml(row.commonPeriod || cell.latestPeriod || "미확인")} · ${row.periodType === "Y" ? "연간" : row.periodType === "M" ? "월간" : "주기 확인 필요"}</dd></div><div><dt>수집 상태</dt><dd>${["observed", "ready", "complete", "available"].includes(cell.sourceStatus) ? "정상 자료" : "미확인"}</dd></div>${spatial?.providerRegionCode ? `<div><dt>제공 지역 코드</dt><dd>${escapeHtml(spatial.providerRegionCode)}</dd></div>` : ""}<div><dt>범위 근거</dt><dd>${spatial?.evidence === "response" ? "제공 응답에서 확인" : "범위 확인 필요"}</dd></div>${storedEvidenceHtml(cell)}</dl></details>`;
+  }
+  function storedEvidenceHtml(cell) {
+    const proof = contractApi()?.storedEvidenceSummary?.(cell.scope.contract, cell.storedEvidenceVerification);
+    if (!proof) return "";
+    return `<div><dt>보관 근거</dt><dd>${escapeHtml(proof.label)} · ${escapeHtml(proof.reason)}</dd></div>${proof.evidenceId ? `<div><dt>원본 번호·기간</dt><dd>${escapeHtml(proof.evidenceId)} · ${escapeHtml(proof.period)}</dd></div><div><dt>검증 기록</dt><dd>해시 ${escapeHtml(proof.sha256.slice(0, 12))} · ${escapeHtml(time(proof.verifiedAt))}</dd></div>` : ""}`;
   }
   function tableHtml(records, kind, state) {
     const rows = comparisonModel(records, kind);
