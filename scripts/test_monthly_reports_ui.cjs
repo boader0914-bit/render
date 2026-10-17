@@ -826,3 +826,55 @@ test("latest industry handoff waits for a pending preview and keeps the newest i
   assert.equal(c.state.previewToken, null);
   assert.equal(c.state.busy, "");
 });
+
+test("unobserved industry summaries never render zero reservations or revenue, while coverage and observed zero remain truthful", () => {
+  for (const overrides of [{ coveredCompanyDays: 0, availability: "missing" }, { coveredCompanyDays: 0, availability: "partial" }, { coveredCompanyDays: 1, availability: "missing" }]) {
+    const benchmarks = industryBenchmarkFixture();
+    benchmarks.entries = [benchmarks.entries[0]];
+    Object.assign(benchmarks.entries[0].summary, { observedCompanies: 0, coverageRate: 0, reservationRate: 0, ...overrides });
+    const before = JSON.stringify(benchmarks);
+    const markup = ui.renderSnapshot({ industryBenchmarks: benchmarks });
+    assert.match(markup, /표본 업체<\/dt><dd>2곳<\/dd><small>실제 관측 0곳/);
+    assert.match(markup, /자료 확보율<\/dt><dd>0%/);
+    for (const label of ["동일 비중 평균 예약률", "공개 예약 수량", "타채널 추정 수량", "관측 추정매출 소계"]) assert.ok(markup.includes(`<dt>${label}</dt><dd>미확인</dd>`), label);
+    assert.equal((markup.match(/<small>관측 매출 미확인<\/small>/g) || []).length, 2);
+    assert.match(markup, /data-mr-industry-observation="missing">유효한 예약·매출 관측이 없습니다/);
+    assert.doesNotMatch(markup, /<dd>0(?:객실|원)<\/dd>|관측 매출 0원/);
+    assert.equal(JSON.stringify(benchmarks), before, "display rules must not alter stored observations");
+  }
+  const benchmarks = industryBenchmarkFixture();
+  benchmarks.entries = [benchmarks.entries[0]];
+  benchmarks.entries[0].summary.availability = "partial";
+  const observed = ui.renderSnapshot({ industryBenchmarks: benchmarks });
+  assert.match(observed, /동일 비중 평균 예약률<\/dt><dd>0%/);
+  assert.match(observed, /공개 예약 수량<\/dt><dd>0객실/);
+  assert.match(observed, /타채널 추정 수량<\/dt><dd>0객실/);
+  assert.match(observed, /관측 추정매출 소계<\/dt><dd>0원/);
+  assert.equal((observed.match(/<small>관측 매출 0원<\/small>/g) || []).length, 2);
+  assert.doesNotMatch(observed, /data-mr-industry-observation="missing"/);
+});
+
+test("long industry provenance stays complete and its evidence can wrap within narrow layouts", () => {
+  const benchmarks = industryBenchmarkFixture(), entry = benchmarks.entries[0];
+  entry.storage.key = "a".repeat(64); entry.storage.resultVersion = "b".repeat(64); entry.storage.sourceRevision = "c".repeat(128);
+  const markup = ui.renderSnapshot({ industryBenchmarks: benchmarks });
+  assert.match(markup, /<details class="mr-fold mr-industry-evidence"><summary>저장 집계 근거/);
+  for (const value of [entry.storage.key, entry.storage.resultVersion, entry.storage.sourceRevision]) assert.ok(markup.includes(value), "full identifier remains available for comparison");
+  const css = fs.readFileSync(path.join(__dirname, "../web/monthly-reports.css"), "utf8");
+  const sizing = css.match(/\.mr-industry-benchmark,\s*\.mr-industry-evidence,\s*\.mr-industry-evidence \.mr-fold-content\s*\{([^}]+)\}/)?.[1] || "";
+  const wrapping = css.match(/\.mr-industry-evidence :is\(p,b,li\)\s*\{([^}]+)\}/)?.[1] || "";
+  assert.match(sizing, /min-width:\s*0/); assert.match(sizing, /max-width:\s*100%/);
+  assert.match(wrapping, /overflow-wrap:\s*anywhere/); assert.match(wrapping, /white-space:\s*normal/);
+  assert.doesNotMatch(sizing + wrapping, /overflow:\s*hidden|text-overflow:\s*ellipsis|white-space:\s*nowrap/, "identifiers wrap rather than being clipped");
+});
+
+test("preview generation timing is distinct from selection-list reuse diagnostics", async () => {
+  const f = fixture({ generation: { cacheStatus: "reused", storage: "saved", timings: { totalMs: 125 } }, options: { companies: [{ id: "c1", label: "테스트 숙소" }], keywords: [], regions: [], months: ["2026-08"], defaultMonth: "2026-08", selectorCache: { status: "reused", storage: "saved", timings: { totalMs: 25 } } } });
+  await f.controller.open({ type: "company", targetId: "c1" });
+  assert.match(f.container.innerHTML, /mr-selector-note/);
+  assert.doesNotMatch(f.container.innerHTML, /data-mr-generation="preview"/);
+  await f.controller.action("preview");
+  assert.equal((f.container.innerHTML.match(/data-mr-generation="preview"/g) || []).length, 1);
+  assert.match(f.container.innerHTML, /data-mr-generation="preview">저장 집계 재사용 · 자료 확인 0\.1초/);
+  assert.match(f.container.innerHTML, /mr-selector-note">저장 선택 목록 재사용 · 확인 0\.1초 미만/);
+});

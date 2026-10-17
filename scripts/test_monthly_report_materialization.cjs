@@ -87,6 +87,26 @@ async function calculationFiles(directory) {
   })));
 }
 
+test("saved attachment readers overlap and receive only freshly inspected source revision", async t => {
+  const f = await fixture(t), contextStarted = deferred(), releaseContext = deferred();
+  const evaluationStarted = deferred(), industryStarted = deferred(), seen = [];
+  const service = f.make({
+    readReportContext: async () => { contextStarted.resolve(); await releaseContext.promise; return { sources: [], warnings: [], networkAttempted: false }; },
+    readOutlookEvaluations: async () => { evaluationStarted.resolve(); return { networkAttempted: false }; },
+    readIndustryContext: async (input, roster, options) => { seen.push(options); industryStarted.resolve(); return { networkAttempted: false, entries: [] }; }
+  });
+  const preview = service.preview({ ...request, sourceRevision: "browser-forged-revision" });
+  await contextStarted.promise;
+  // A sequential implementation cannot reach these readers until released.
+  await Promise.all([evaluationStarted.promise, industryStarted.promise]);
+  assert.equal(seen[0].sourceRevision, f.state.revision);
+  releaseContext.resolve();
+  const value = await preview;
+  assert.equal(value.context.networkAttempted, false);
+  assert.ok(value.generation.timings.previewTotalMs >= value.generation.timings.snapshotSerializationMs);
+  assert.ok(value.generation.snapshotBytes > 0);
+});
+
 test("same conditions reuse saved monthly calculations across service recreation with detached results", async t => {
   const { directory, state, service, make } = await fixture(t);
   const first = await service.preview(request);

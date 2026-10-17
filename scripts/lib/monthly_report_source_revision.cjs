@@ -4,6 +4,7 @@ const fs = require("node:fs/promises");
 const { constants } = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { savedIndustryRevisionScope } = require("./saved_source_revision_scope.cjs");
 
 function unavailable() {
   return Object.assign(new Error("월간 집계 원본의 변경 여부를 확인하지 못했습니다. 저장자료 상태를 확인해 주세요."), {
@@ -167,11 +168,15 @@ function createMonthlyReportSourceRevision({ dataDir, outputsDir, regionMasterFi
       }
     ).finally(() => { scanRunning = false; if (pendingReaders.length) queueMicrotask(drainReaders); });
   }
-  return function readMonthlyReportSourceRevision() {
+  const readMonthlyReportSourceRevision = function () {
     return new Promise((resolve, reject) => {
       pendingReaders.push({ resolve, reject }); queueMicrotask(drainReaders);
     });
   };
+  readMonthlyReportSourceRevision.industrySourceScope = fileSystem === fs ? savedIndustryRevisionScope({
+    dataDir, outputsDir, regionMasterFile, tourismRegionMapFile
+  }) : null;
+  return readMonthlyReportSourceRevision;
 }
 
 module.exports = { createMonthlyReportSourceRevision };

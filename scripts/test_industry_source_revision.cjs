@@ -85,6 +85,52 @@ async function revisionFixture(runSpecs = [{ id: "pocheon_glamping_20260901_0900
 }
 const monthToken = (revision, month) => `${revision.globalToken}:${revision.months[month] || ""}`;
 
+test("fresh period proofs wait for an older in-flight scan and share only the scan started after their request", async () => {
+  const f = await revisionFixture(), originalStat = fs.stat;
+  let enter, release, masterStats = 0;
+  const entered = new Promise(resolve => { enter = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  try {
+    fs.stat = async function(file, ...rest) {
+      const stat = await originalStat.call(this, file, ...rest);
+      if (file === f.masterFile && ++masterStats === 2) { enter(); await gate; }
+      return stat;
+    };
+    const older = f.revision.periodRevisions();
+    await entered;
+    f.master.companies.cmp_place_101.manualCorrection = { active: true, lodgingBasisTotal: 7 };
+    await f.writeMaster();
+    const firstFresh = f.revision.periodRevisions({ fresh: true }), secondFresh = f.revision.periodRevisions({ fresh: true });
+    assert.equal(f.revision.periodRevisions(), older, "ordinary readers keep the existing in-flight sharing contract");
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(masterStats, 2, "fresh readers do not overlap the older inspection");
+    release();
+    const before = await older, [first, second] = await Promise.all([firstFresh, secondFresh]);
+    assert.notEqual(monthToken(first, "2026-09"), monthToken(before, "2026-09"));
+    assert.deepEqual(first, second); assert.equal(masterStats, 4, "the two fresh readers share one subsequent scan");
+  } finally { release(); fs.stat = originalStat; await f.dispose(); }
+});
+
+test("fresh period proofs recover after the preceding in-flight inspection fails", async () => {
+  const f = await revisionFixture(), originalStat = fs.stat;
+  let enter, release, fail = true;
+  const entered = new Promise(resolve => { enter = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  try {
+    fs.stat = async function(file, ...rest) {
+      if (file === f.masterFile && fail) {
+        fail = false; enter(); await gate;
+        throw Object.assign(new Error("previous inspection denied"), { code: "EACCES" });
+      }
+      return originalStat.call(this, file, ...rest);
+    };
+    const older = f.revision.periodRevisions(), observedFailure = older.then(() => null, error => error);
+    await entered;
+    const fresh = f.revision.periodRevisions({ fresh: true }); release();
+    assert.equal((await observedFailure).code, "EACCES");
+    const recovered = await fresh;
+    assert.ok(recovered.globalToken); assert.ok(recovered.months["2026-09"]);
+  } finally { release(); fs.stat = originalStat; await f.dispose(); }
+});
+
 test("October collections, history, keyword exposures and new companies preserve the September revision", async () => {
   const f = await revisionFixture();
   try {

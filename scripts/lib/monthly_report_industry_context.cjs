@@ -29,7 +29,7 @@ function summaryProjection(value) {
   result.metricBasis = text(value.metricBasis);
   return result;
 }
-function createMonthlyReportIndustryContext({ industryService, now = () => new Date() } = {}) {
+function createMonthlyReportIndustryContext({ industryService, verifiedSourceRevisionScope = null, now = () => new Date() } = {}) {
   return async function readIndustryContext(request, roster = {}, options = {}) {
     const month = request.month, end = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5)), 0)).toISOString().slice(0, 10);
     const cutoffDate = request.cutoffDate < end ? request.cutoffDate : end;
@@ -62,7 +62,10 @@ function createMonthlyReportIndustryContext({ industryService, now = () => new D
         cohort: { minRank: 1, maxRank: 20, label: "기간 중 네이버 플레이스 1~20위 관측 업체" }, definitions: {}, warnings: [] };
       try {
         if (typeof industryService?.readSaved !== "function") throw Object.assign(new Error(), { code: "INDUSTRY_SERVICE_UNAVAILABLE" });
-        const result = await industryService.readSaved(condition, { sourceCheckGroup });
+        const result = await industryService.readSaved(condition, { sourceCheckGroup,
+          ...(verifiedSourceRevisionScope && typeof options.sourceRevision === "string" ? {
+            verifiedSourceRevision: { scope: verifiedSourceRevisionScope, revision: options.sourceRevision }
+          } : {}) });
         if (result?.networkAttempted === true) throw Object.assign(new Error(), { code: "MONTHLY_INDUSTRY_MUST_BE_SAVED_ONLY" });
         const storage = result?.storage || {};
         const same = result?.request && Object.keys(condition).every(k => result.request[k] === condition[k]);

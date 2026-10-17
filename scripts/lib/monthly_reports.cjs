@@ -611,39 +611,58 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
       const roster = { companies: snapshot.companies.map(({ companyId, regionKey, regionLabel }) => ({ companyId, regionKey, regionLabel })),
         regions: clone(result.value.regions) };
       const timings = { ...result.timings, ...(result.status === "calculated" || result.status === "uncached" ? result.value.timings : {}) };
-      if (typeof readReportContext === "function") {
-        const phase = performance.now();
-        try {
-          const context = await readReportContext(clone(request), clone(roster));
-          if (context?.networkAttempted !== false) throw fail("MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY", "리포트 지역 배경은 저장된 자료만 사용할 수 있습니다.", 503);
-          snapshot.context = clone(context);
-        } catch (error) {
-          if (error.code === "MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY" || error.message === "MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY") throw error;
-          snapshot.context = { sources: [], warnings: ["저장된 지역 보조지표를 불러오지 못했습니다."], networkAttempted: false };
-        }
-        timings.contextMs = performance.now() - phase;
-      }
-      // Attach follow-up evaluation only to a report being built, never to the
-      // shared source/context readers used by industry, company DB or Insight.
-      // The selected report roster, rather than lifetime keyword membership,
-      // determines which actual company locations can supply regional context.
-      if (typeof readOutlookEvaluations === "function") {
-        const phase = performance.now();
-        const evaluation = await readOutlookEvaluations(clone(request), clone(roster), { asOfAt: generatedAt });
-        if (evaluation?.networkAttempted !== false) throw fail("MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY", "리포트의 전망 검증은 저장된 자료만 사용할 수 있습니다.", 503);
-        snapshot.context = { ...(snapshot.context || { sources: [], warnings: [], networkAttempted: false }), outlookEvaluations: clone(evaluation) };
+      // Saved context readers are independent. Await every one before freezing
+      // the preview, without making a later reader wait behind another scan.
+      const attachments = await Promise.allSettled([
+        (async () => {
+          if (typeof readReportContext !== "function") return;
+          const phase = performance.now();
+          try {
+            const context = await readReportContext(clone(request), clone(roster));
+            if (context?.networkAttempted !== false) throw fail("MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY", "리포트 지역 배경은 저장된 자료만 사용할 수 있습니다.", 503);
+            return clone(context);
+          } catch (error) {
+            if (error.code === "MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY" || error.message === "MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY") throw error;
+            return { sources: [], warnings: ["저장된 지역 보조지표를 불러오지 못했습니다."], networkAttempted: false };
+          }
+          finally { timings.contextMs = performance.now() - phase; }
+        })(),
+        // Attach follow-up evaluation only to a report being built, never to the
+        // shared source/context readers used by industry, company DB or Insight.
+        // The selected report roster, rather than lifetime keyword membership,
+        // determines which actual company locations can supply regional context.
+        (async () => {
+          if (typeof readOutlookEvaluations !== "function") return;
+          const phase = performance.now();
+          const evaluation = await readOutlookEvaluations(clone(request), clone(roster), { asOfAt: generatedAt });
+          if (evaluation?.networkAttempted !== false) throw fail("MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY", "리포트의 전망 검증은 저장된 자료만 사용할 수 있습니다.", 503);
+          timings.evaluationMs = performance.now() - phase;
+          return clone(evaluation);
+        })(),
+        (async () => {
+          if (typeof readIndustryContext !== "function") return;
+          const phase = performance.now();
+          const industryRoster = new Map((result.value.industryCompanies || []).map(company => [company.companyId, company]));
+          const industryContextRoster = { ...roster, companies: roster.companies.map(company => ({ ...company, ...(industryRoster.get(company.companyId) || {}) })) };
+          const context = await readIndustryContext(clone(request), clone(industryContextRoster), {
+            asOfAt: generatedAt, sourceRevision: result.sourceRevision
+          });
+          if (context?.networkAttempted !== false) throw fail("MONTHLY_INDUSTRY_MUST_BE_SAVED_ONLY", "업종 참고 집계는 저장된 결과만 사용할 수 있습니다.", 503);
+          timings.industryContextMs = performance.now() - phase;
+          return clone(context);
+        })()
+      ]);
+      const failedAttachment = attachments.find(value => value.status === "rejected");
+      if (failedAttachment) throw failedAttachment.reason;
+      const [context, evaluation, industryContext] = attachments.map(value => value.value);
+      if (context) snapshot.context = context;
+      if (evaluation) {
+        snapshot.context = { ...(snapshot.context || { sources: [], warnings: [], networkAttempted: false }), outlookEvaluations: evaluation };
         snapshot.definitions.regionalOutlookEvaluation = "리포트 대상월을 예측한 발행 전망만 작성 시점에 저장된 사후 검증과 연결합니다. 검증자료 확인 시점은 예약 관측 마감일과 별도이며, 지역별 결과를 합산하거나 미확인을 0으로 바꾸지 않습니다. 발행 후에는 수정본에서만 새 검증을 반영합니다.";
-        timings.evaluationMs = performance.now() - phase;
       }
-      if (typeof readIndustryContext === "function") {
-        const phase = performance.now();
-        const industryRoster = new Map((result.value.industryCompanies || []).map(company => [company.companyId, company]));
-        const industryContextRoster = { ...roster, companies: roster.companies.map(company => ({ ...company, ...(industryRoster.get(company.companyId) || {}) })) };
-        const context = await readIndustryContext(clone(request), clone(industryContextRoster), { asOfAt: generatedAt });
-        if (context?.networkAttempted !== false) throw fail("MONTHLY_INDUSTRY_MUST_BE_SAVED_ONLY", "업종 참고 집계는 저장된 결과만 사용할 수 있습니다.", 503);
-        snapshot.industryBenchmarks = clone(context);
+      if (industryContext) {
+        snapshot.industryBenchmarks = industryContext;
         snapshot.definitions.industryBenchmarks = "같은 숙박월·유효 관측 마감일의 저장 업종 표본 집계를 별도로 연결합니다. 본문과 표본·예약률 평균 방식이 다르며 수량·매출에 더하지 않습니다. 미리보기 승인 후 고정하며 발행본을 자동 변경하지 않습니다.";
-        timings.industryContextMs = performance.now() - phase;
       }
       timings.totalMs = performance.now() - started;
       return { snapshot, generation: { cacheStatus: result.status, storage: result.storage, calculatedAt: result.calculatedAt,
@@ -655,11 +674,13 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
     previews.delete(token);
   };
   const preview = async input => {
+    const started = performance.now();
     const date = current();
     const request = requestInput(input, date);
     const { snapshot, generation } = await build(request, date.toISOString());
     const previewToken = crypto.randomUUID();
     for (const [token, entry] of previews) if (entry.expires <= date.getTime()) removePreview(token);
+    const serializationStarted = performance.now();
     const serialized = JSON.stringify(snapshot);
     const bytes = Buffer.byteLength(serialized, "utf8");
     if (bytes > PREVIEW_CACHE_BYTES) throw fail("report_too_large", "보고서 근거가 너무 큽니다. 업체 또는 더 작은 지역 단위로 나누어 주세요.", 413);
@@ -667,6 +688,9 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
     while (previews.size && (previews.size >= 10 || previewBytes + bytes > PREVIEW_CACHE_BYTES)) removePreview(previews.keys().next().value);
     previews.set(previewToken, { expires: current().getTime() + PREVIEW_TTL_MS, request: JSON.stringify(request), serialized, bytes });
     previewBytes += bytes;
+    generation.timings.snapshotSerializationMs = Math.round((performance.now() - serializationStarted) * 10) / 10;
+    generation.timings.previewTotalMs = Math.round((performance.now() - started) * 10) / 10;
+    generation.snapshotBytes = bytes;
     return { ...snapshot, previewToken, generation };
   };
   const create = async input => {

@@ -406,7 +406,7 @@ function buildIndustryAnalysis(source = {}, input = {}, { now = new Date() } = {
 }
 
 function createIndustryAnalysisService({ sources, readContext = async () => ({ sources: [], warnings: [], networkAttempted: false }), now = () => new Date(),
-  dataDir = null, calculationVersion, autoStart = true, readSourceRevision = null }) {
+  dataDir = null, calculationVersion, autoStart = true, readSourceRevision = null, savedReferenceRevisionScope = null }) {
   const sourceCache = new Map();
   const pendingSources = new Map();
   let sourceReadQueue = Promise.resolve(), sourceEpoch = 0, optionsTask = null, backgroundOptions = Promise.resolve();
@@ -531,9 +531,9 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     try { const stat = await fs.stat(path.join(dataDir, filename), { bigint: true }); return [filename, String(stat.size), String(stat.mtimeNs), String(stat.ctimeNs)]; }
     catch (error) { if (error.code === "ENOENT") return [filename, null]; throw error; }
   })));
-  const store = createIndustryAnalysisStore({ dataDir, calculate, calculationVersion, now, autoStart,
+  const store = createIndustryAnalysisStore({ dataDir, calculate, calculationVersion, now, autoStart, savedReferenceRevisionScope,
     normalizeStoredRequest: request => normalizeRequest(request, now()),
-    readSourceRevision: typeof readSourceRevision?.periodRevisions === "function" ? () => readSourceRevision.periodRevisions()
+    readSourceRevision: typeof readSourceRevision?.periodRevisions === "function" ? options => readSourceRevision.periodRevisions(options)
       : async () => JSON.stringify([await defaultSourceRevision(), readSourceRevision ? await readSourceRevision() : null]), onInvalidate: clearSources,
     needsResultRefresh: result => result.review?.schemaVersion !== 1 || result.sources?.regionPolicyVersion !== REGION_POLICY_VERSION });
   async function options() {

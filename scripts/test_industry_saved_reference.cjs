@@ -106,6 +106,79 @@ test("one report shares its source probe across sequential saved references and 
   await store.stop();
 });
 
+test("a trusted verified input revision shares one probe across reports while revision and Korea-day changes inspect afresh", async t => {
+  const fixture = await seed(t, { readSourceRevision: async () => "v1" }); let checks = 0, date = NOW;
+  const store = storeAt(fixture.dataDir, { now: () => date, savedReferenceRevisionScope: "full-monthly-inputs-v1",
+    readSourceRevision: async () => { checks++; return "v1"; } });
+  const options = revision => ({ sourceCheckGroup: {}, verifiedSourceRevision: { scope: "full-monthly-inputs-v1", revision } });
+  await store.readSaved(REQUEST, options("source-a"));
+  await new Promise(resolve => setImmediate(resolve));
+  await store.readSaved(REQUEST, options("source-a"));
+  assert.equal(checks, 1, "a newly verified identical input revision reuses the known period revision, without a TTL");
+  const sameReport = {};
+  await store.readSaved(REQUEST, { ...options("source-b"), sourceCheckGroup: sameReport });
+  await store.readSaved(REQUEST, { ...options("source-c"), sourceCheckGroup: sameReport });
+  assert.equal(checks, 3, "a changed revision cannot reuse either the preceding tick or the report group");
+  date = new Date(NOW.getTime() + 86400000);
+  await store.readSaved(REQUEST, options("source-a"));
+  assert.equal(checks, 4, "the next Korea day starts a new proof scope");
+  await store.stop();
+});
+
+test("missing, mismatched or malformed verified scope falls back to the existing fresh-probe contract", async t => {
+  const fixture = await seed(t, { readSourceRevision: async () => "v1" }); let checks = 0;
+  const store = storeAt(fixture.dataDir, { savedReferenceRevisionScope: "trusted", readSourceRevision: async () => { checks++; return "v1"; } });
+  const invalid = [undefined, { scope: "other", revision: "a" }, { scope: "trusted", revision: "" },
+    { scope: "trusted", revision: "  " }, { scope: "trusted", revision: 1 }, { scope: "trusted", revision: "a\nb" },
+    { scope: "trusted", revision: "a".repeat(513) }, ["trusted", "a"]];
+  for (const verifiedSourceRevision of invalid) {
+    await new Promise(resolve => setImmediate(resolve));
+    await store.readSaved(REQUEST, { sourceCheckGroup: {}, verifiedSourceRevision });
+  }
+  assert.equal(checks, invalid.length);
+  await store.stop();
+  const unscoped = storeAt(fixture.dataDir, { readSourceRevision: async () => { checks++; return "v1"; } });
+  await unscoped.readSaved(REQUEST, { verifiedSourceRevision: { scope: "trusted", revision: "a" } });
+  await new Promise(resolve => setImmediate(resolve));
+  await unscoped.readSaved(REQUEST, { verifiedSourceRevision: { scope: "trusted", revision: "a" } });
+  assert.equal(checks, invalid.length + 2, "a caller cannot opt an unconfigured store into proof reuse");
+  await unscoped.stop();
+});
+
+test("failed verified probes are evicted and retry in a later report preserves the normal snapshot", async t => {
+  const fixture = await seed(t, { readSourceRevision: async () => "v1" }); let checks = 0, fail = true;
+  const store = storeAt(fixture.dataDir, { savedReferenceRevisionScope: "trusted", readSourceRevision: async () => {
+    checks++; if (fail) throw Object.assign(Error("unavailable"), { code: "SOURCE_UNAVAILABLE" }); return "v1";
+  } });
+  const options = () => ({ sourceCheckGroup: {}, verifiedSourceRevision: { scope: "trusted", revision: "a" } });
+  const failed = await store.readSaved(REQUEST, options());
+  assert.equal(failed.storage.status, "failed"); assert.equal(failed.summary.sold, 0);
+  fail = false;
+  const ready = await store.readSaved(REQUEST, options());
+  assert.equal(checks, 2); assert.equal(ready.storage.status, "ready");
+  await store.stop();
+});
+
+test("verified proof reuse never caches queue state or result content and remains bounded to sixteen proofs", async t => {
+  const fixture = await seed(t, { readSourceRevision: async () => "v1" }); let checks = 0;
+  const store = storeAt(fixture.dataDir, { savedReferenceRevisionScope: "trusted", readSourceRevision: async () => { checks++; return "v1"; } });
+  const options = revision => ({ sourceCheckGroup: {}, verifiedSourceRevision: { scope: "trusted", revision } });
+  const first = await store.readSaved(REQUEST, options("a"));
+  const saved = JSON.parse(await fs.readFile(fixture.resultFile, "utf8")); saved.result.summary.sold = 1;
+  await fs.writeFile(fixture.resultFile, JSON.stringify(saved));
+  const changed = await store.readSaved(REQUEST, options("a"));
+  assert.equal(checks, 1); assert.equal(changed.summary.sold, 1); assert.notEqual(changed.storage.resultVersion, first.storage.resultVersion);
+  fixture.queue.jobs[fixture.key].status = "failed"; fixture.queue.jobs[fixture.key].errorCode = "LATEST_BUILD_FAILED";
+  await fs.writeFile(fixture.queueFile, JSON.stringify(fixture.queue));
+  const failed = await store.readSaved(REQUEST, options("a"));
+  assert.equal(checks, 1); assert.equal(failed.storage.status, "failed"); assert.equal(failed.storage.errorCode, "LATEST_BUILD_FAILED");
+  for (let index = 0; index < 16; index++) await store.readSaved(REQUEST, options(`new-${index}`));
+  assert.equal(checks, 17);
+  await store.readSaved(REQUEST, options("a"));
+  assert.equal(checks, 18, "the oldest proof is evicted after sixteen newer input revisions");
+  await store.stop();
+});
+
 test("corrupt saved metadata, wrong conditions and calculation versions cannot expose metrics", async t => {
   const fixture = await seed(t), original = JSON.parse(await fs.readFile(fixture.resultFile, "utf8"));
   for (const mutate of [value => { value.request.cutoffDate = "2026-09-20"; }, value => { value.calculationVersion = "old-version"; },

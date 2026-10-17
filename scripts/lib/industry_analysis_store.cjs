@@ -28,7 +28,7 @@ async function atomicJson(file, value) {
 }
 function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(), calculationVersion = CALCULATION_VERSION,
   autoStart = true, onInvalidate = () => {}, readSourceRevision = null, normalizeStoredRequest = request => request,
-  needsResultRefresh = () => false, writeJson = atomicJson }) {
+  needsResultRefresh = () => false, writeJson = atomicJson, savedReferenceRevisionScope = null }) {
   if (!dataDir || typeof calculate !== "function") throw new TypeError("dataDir and calculate are required");
   const directory = path.resolve(dataDir, "industry_analysis"), stateFile = path.join(directory, "queue.json");
   const emptyState = () => ({ schemaVersion: SCHEMA_VERSION, epoch: crypto.randomUUID(), revision: 0, monthRevisions: {}, optionsRevision: 0, sequence: 0, jobs: {} });
@@ -36,7 +36,9 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
   let initialization, bootstrapped, serial = Promise.resolve(), worker = null, stopped = false, storeError = null;
   let tokenTask = null, lastTokenCheck = -Infinity, settleTimer = null;
   const resultVersionCache = new Map(), resultVersionSymbol = Symbol("industryResultVersion");
-  const savedProbeGroups = new WeakMap();
+  const savedProbeGroups = new WeakMap(), verifiedSavedProbes = new Map();
+  const validRevision = value => typeof value === "string" && value.trim().length > 0 && value.length <= 512 && !/[\x00-\x1f\x7f]/.test(value);
+  const savedProbeScope = validRevision(savedReferenceRevisionScope) ? savedReferenceRevisionScope : null;
   let savedProbeTask = null;
   const timestamp = () => new Date(now()).toISOString();
   const revisionFor = month => `${state.epoch || "initial"}:${state.revision}.${state.monthRevisions[month] || 0}`;
@@ -199,22 +201,40 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
     }
     return stored;
   }
-  function savedSourceProbe(group) {
+  function savedSourceProbe(group, verifiedSourceRevision) {
     const grouped = group && typeof group === "object";
-    if (grouped && savedProbeGroups.has(group)) return savedProbeGroups.get(group);
+    const trusted = savedProbeScope && verifiedSourceRevision && !Array.isArray(verifiedSourceRevision)
+      && typeof verifiedSourceRevision === "object" && verifiedSourceRevision.scope === savedProbeScope
+      && validRevision(verifiedSourceRevision.revision);
+    const verifiedKey = trusted ? JSON.stringify([savedProbeScope, verifiedSourceRevision.revision,
+      new Date(new Date(now()).getTime() + 9 * 3600000).toISOString().slice(0, 10)]) : null;
+    if (verifiedKey && verifiedSavedProbes.has(verifiedKey)) return verifiedSavedProbes.get(verifiedKey);
+    const groupedProbe = grouped ? savedProbeGroups.get(group) : null;
+    if (groupedProbe?.key === verifiedKey) return groupedProbe.task;
+    if (verifiedKey) {
+      // Only a fresh, server-verified superset input revision authorizes reuse
+      // across reports. A new revision must not inherit a preceding tick's
+      // probe; time alone never certifies that the inputs are unchanged.
+      const task = Promise.resolve().then(() => readSourceRevision({ fresh: true }));
+      verifiedSavedProbes.set(verifiedKey, task);
+      while (verifiedSavedProbes.size > 16) verifiedSavedProbes.delete(verifiedSavedProbes.keys().next().value);
+      task.catch(() => { if (verifiedSavedProbes.get(verifiedKey) === task) verifiedSavedProbes.delete(verifiedKey); });
+      if (grouped) savedProbeGroups.set(group, { key: verifiedKey, task });
+      return task;
+    }
     if (!savedProbeTask) {
       const task = Promise.resolve().then(() => readSourceRevision());
       savedProbeTask = task;
       const release = () => setImmediate(() => { if (savedProbeTask === task) savedProbeTask = null; });
       task.then(release, release);
     }
-    if (grouped) savedProbeGroups.set(group, savedProbeTask);
+    if (grouped) savedProbeGroups.set(group, { key: null, task: savedProbeTask });
     return savedProbeTask;
   }
   // Report attachments inspect existing derived files only. Do not use init,
   // bootstrap, checkSource or get here: those paths recover/enqueue jobs and may
   // start the worker. A report must never create a missing industry aggregate.
-  async function readSaved(request, { sourceCheckGroup } = {}) {
+  async function readSaved(request, { sourceCheckGroup, verifiedSourceRevision } = {}) {
     let normalized, key;
     const unavailable = error => ({ request: clone(normalized || request || {}), storage: {
       key: key || null, status: "unavailable", hasSnapshot: false, stale: false,
@@ -243,7 +263,7 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
       let sourceTokenMatches = null, sourceError = null;
       if (queue && typeof readSourceRevision === "function") {
         try {
-          const value = await savedSourceProbe(sourceCheckGroup);
+          const value = await savedSourceProbe(sourceCheckGroup, verifiedSourceRevision);
           if (value && typeof value === "object") {
             if (Array.isArray(value) || typeof value.globalToken !== "string" || !value.months || Array.isArray(value.months)
               || typeof value.months !== "object" || Object.entries(value.months).some(([month, token]) => !/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || typeof token !== "string")) throw fault("INDUSTRY_SOURCE_REVISION_INVALID");

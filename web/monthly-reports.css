@@ -139,6 +139,8 @@ html[data-theme-resolved="dark"] .monthly-reports { --mr-public: #92d4aa; --mr-p
 .mr-context-source dt { font-size: 11px; color: var(--text-secondary, #5e6975); }
 .mr-context-source dd { font-size: 13px; margin: 4px 0 0; }
 .mr-context-source a { color: var(--accent-strong, #275747); font-size: 11px; }
+.mr-industry-benchmark, .mr-industry-evidence, .mr-industry-evidence .mr-fold-content { min-width: 0; max-width: 100%; }
+.mr-industry-evidence :is(p,b,li) { overflow-wrap: anywhere; white-space: normal; word-break: normal; }
 .mr-outlook-regions { display: grid; gap: 14px; margin-top: 14px; }
 .mr-outlook-region { min-width: 0; border: 1px solid var(--border-subtle, #dce4df); border-radius: 10px; padding: 14px; }
 .mr-outlook-region > header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 14px; }

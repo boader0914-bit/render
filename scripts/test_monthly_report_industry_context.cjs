@@ -14,6 +14,15 @@ function saved(condition,overrides={}){return {request:{...condition},cohort:{mi
   storage:{hasSnapshot:true,status:"ready",key:"key-one",resultVersion:"result-one",calculationVersion:"industry-analysis-v1",sourceRevision:"v1",resultRevision:"v1",calculatedAt:"2026-10-16T02:00:00Z"},...overrides};}
 function reader(callback){const calls=[];const read=createMonthlyReportIndustryContext({now:()=>NOW,industryService:{readSaved:async condition=>{calls.push(condition);return callback?callback(condition):saved(condition);},
   analyze(){assert.fail("report must not calculate");},rebuild(){assert.fail("report must not enqueue");}}});return {read,calls};}
+
+test("only constructor-approved scope forwards a freshly supplied internal source revision",async()=>{
+  const calls=[];
+  const industryService={readSaved:async(c,options)=>{calls.push(options);return saved(c);}};
+  await createMonthlyReportIndustryContext({industryService,now:()=>NOW})(request,roster,{sourceRevision:"r1"});
+  assert.equal(calls[0].verifiedSourceRevision,undefined);
+  await createMonthlyReportIndustryContext({industryService,now:()=>NOW,verifiedSourceRevisionScope:"same-inputs"})(request,roster,{sourceRevision:"r2"});
+  assert.deepEqual(calls[1].verifiedSourceRevision,{scope:"same-inputs",revision:"r2"});
+});
 test("company uses saved industry and actual location, preserving exact industry values and references",async()=>{
   const f=reader(),value=await f.read(request,roster);assert.equal(f.calls.length,1);assert.deepEqual(f.calls[0],{industry:"glamping",region:REGION,month:"2026-09",cutoffDate:"2026-09-30"});
   const entry=value.entries[0];assert.equal(value.networkAttempted,false);assert.equal(entry.summary.reservationRate,.25);assert.equal(entry.summary.publicBookings,0);assert.equal(entry.summary.phoneRevenue,300000);

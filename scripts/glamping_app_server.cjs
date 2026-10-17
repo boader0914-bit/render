@@ -558,11 +558,15 @@ const monthlyReportSources = createMonthlyReportSources({
   readSpecialDays: async year => (await specialDaysService.status(year)).yearStatus
 });
 const listCompanyIntegratedTargets = createCompanyIntegratedTargets({ dataDir: DATA_DIR, catalog: monthlyReportSources.catalog });
+const readIndustryRevision = createIndustrySourceRevision({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR,
+    regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
+    tourismRegionMapFile: path.join(WEB_DIR, "data", "tourism_region_map.json") });
+const savedIndustryRevisionScope = readMonthlyReportRevision.industrySourceScope
+  && readMonthlyReportRevision.industrySourceScope === readIndustryRevision.industrySourceScope
+    ? readMonthlyReportRevision.industrySourceScope : null;
 const industryAnalysisService = createIndustryAnalysisService({
   dataDir: DATA_DIR, sources: monthlyReportSources, readContext: readMonthlyRegionContext,
-  readSourceRevision: createIndustrySourceRevision({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR,
-    regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
-    tourismRegionMapFile: path.join(WEB_DIR, "data", "tourism_region_map.json") })
+  readSourceRevision: readIndustryRevision, savedReferenceRevisionScope: savedIndustryRevisionScope
 });
 const handleIndustryAnalysis = createIndustryAnalysisHttpHandler({
   service: industryAnalysisService, requireAdmin: requireAdminSession, send, parseJsonBody,
@@ -589,7 +593,8 @@ const monthlyReportService = createMonthlyReportService({
     ...fs.readdirSync(path.join(__dirname, "lib")).filter(name => name.endsWith(".cjs")).sort().map(name => `lib/${name}`)]
     .map(name => `${name}:${crypto.createHash("sha256").update(fs.readFileSync(path.join(__dirname, name))).digest("hex")}`).join("\n")).digest("hex"),
   readOutlookEvaluations: createMonthlyReportOutlookEvaluation({ evaluationService: regionalOutlookService.validation }),
-  readIndustryContext: createMonthlyReportIndustryContext({ industryService: industryAnalysisService })
+  readIndustryContext: createMonthlyReportIndustryContext({ industryService: industryAnalysisService,
+    verifiedSourceRevisionScope: savedIndustryRevisionScope })
 });
 const handleMonthlyReport = createMonthlyReportHttpHandler({
   service: monthlyReportService, sources: monthlyReportSources, renderPdf: renderMonthlyReportPdf,

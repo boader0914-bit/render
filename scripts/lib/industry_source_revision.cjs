@@ -5,6 +5,7 @@ const nativeFs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const readline = require("node:readline");
+const { savedIndustryRevisionScope } = require("./saved_source_revision_scope.cjs");
 
 const hash = value => crypto.createHash("sha256").update(value).digest("hex");
 const object = value => value && typeof value === "object" && !Array.isArray(value);
@@ -348,7 +349,7 @@ function createIndustrySourceRevision({ dataDir, outputsDir, regionMasterFile, t
     finalCache = { fingerprint, value: structuredClone(value) };
     return value;
   }
-  readIndustrySourceRevision.periodRevisions = function periodRevisions() {
+  function startPeriodScan() {
     if (inFlight) return inFlight;
     const task = (async () => {
       // Atomic file replacement during collection is normal. Retry a changed
@@ -360,7 +361,16 @@ function createIndustrySourceRevision({ dataDir, outputsDir, regionMasterFile, t
     })(); inFlight = task;
     task.then(() => { if (inFlight === task) inFlight = null; }, () => { if (inFlight === task) inFlight = null; });
     return task;
+  }
+  readIndustrySourceRevision.periodRevisions = function periodRevisions({ fresh = false } = {}) {
+    // A report may have independently verified a newer complete input revision
+    // while a preceding period scan is still completing. Do not pin that older
+    // scan under the new proof. Readers already waiting here can share the one
+    // scan that starts after their request, including after a failed predecessor.
+    if (fresh === true && inFlight) return inFlight.catch(() => {}).then(startPeriodScan);
+    return startPeriodScan();
   };
+  readIndustrySourceRevision.industrySourceScope = savedIndustryRevisionScope({ dataDir, outputsDir, regionMasterFile, tourismRegionMapFile });
   return readIndustrySourceRevision;
 }
 
