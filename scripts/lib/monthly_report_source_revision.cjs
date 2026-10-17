@@ -4,6 +4,7 @@ const fs = require("node:fs/promises");
 const { constants } = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { performance } = require("node:perf_hooks");
 const { savedIndustryRevisionScope } = require("./saved_source_revision_scope.cjs");
 
 function unavailable() {
@@ -74,11 +75,13 @@ function createMonthlyReportSourceRevision({ dataDir, outputsDir, regionMasterFi
   }
   async function scan() {
     const rows = ["monthly-report-source-revision-v1", `context:${Boolean(includeContext)}`];
+    const counts = { files: 0, directories: 0, entries: 0 };
     let entriesSeen = 0;
     async function fileRevision(label, file) {
       const value = await stat(file);
       if (!value) { rows.push(`${label}:missing`); return; }
       if (!value.isFile() || value.isSymbolicLink()) throw unavailable();
+      counts.files++;
       rows.push(`${label}:${signature(value)}`);
     }
     async function referenceRevision(label, file) {
@@ -107,6 +110,7 @@ function createMonthlyReportSourceRevision({ dataDir, outputsDir, regionMasterFi
           || directorySignature(completed) !== directorySignature(before)
           || directorySignature(after) !== directorySignature(before)) throw unavailable();
         rows.push(`${label}:sha256:${hash.digest("hex")}`);
+        counts.files++;
       } catch { throw unavailable(); }
       finally {
         if (handle) {
@@ -127,6 +131,7 @@ function createMonthlyReportSourceRevision({ dataDir, outputsDir, regionMasterFi
           : entry.isDirectory() ? "directory" : entry.isFile() ? "file" : "other" }));
       } catch { throw unavailable(); }
       entriesSeen += entries.length;
+      counts.entries += entries.length;
       if (entriesSeen > 100000) throw unavailable();
       // Empty/missing trees are distinct. File rows, not directory mtime, form
       // the revision so creating an unrelated temporary file does not expire it.
@@ -145,13 +150,14 @@ function createMonthlyReportSourceRevision({ dataDir, outputsDir, regionMasterFi
       // inventory. The caller can retry; never certify an uncertain revision.
       const after = await stat(directory);
       if (!after || !after.isDirectory() || after.isSymbolicLink() || beforeSignature !== directorySignature(after)) throw unavailable();
+      counts.directories++;
     }
     await inspectAll([
       ...files.map(([label, file]) => fileRevision(label, file)),
       ...references.map(([label, file]) => referenceRevision(label, file)),
       ...directories.map(([label, directory]) => tree(label, directory))
     ]);
-    return crypto.createHash("sha256").update(rows.sort().join("\n")).digest("hex");
+    return { revision: crypto.createHash("sha256").update(rows.sort().join("\n")).digest("hex"), counts };
   }
   function drainReaders() {
     if (scanRunning || !pendingReaders.length) return;
@@ -160,19 +166,34 @@ function createMonthlyReportSourceRevision({ dataDir, outputsDir, regionMasterFi
     // arrives during the scan gets a subsequent scan, never metadata observed
     // before its request. This also bounds overlapping filesystem inventories.
     const batch = pendingReaders.splice(0);
+    const startedAt = performance.now();
     Promise.resolve().then(scan).then(
-      value => { for (const reader of batch) reader.resolve(value); },
+      value => {
+        const scanMs = Math.max(0, performance.now() - startedAt);
+        for (const reader of batch) reader.resolve(reader.inspect ? {
+          revision: value.revision,
+          timings: { queueWaitMs: Math.max(0, startedAt - reader.queuedAt), scanMs },
+          counts: { ...value.counts }
+        } : value.revision);
+      },
       error => {
         const failure = error.code === "MONTHLY_SOURCE_REVISION_UNAVAILABLE" ? error : unavailable();
         for (const reader of batch) reader.reject(failure);
       }
     ).finally(() => { scanRunning = false; if (pendingReaders.length) queueMicrotask(drainReaders); });
   }
-  const readMonthlyReportSourceRevision = function () {
+  function enqueue(inspect) {
     return new Promise((resolve, reject) => {
-      pendingReaders.push({ resolve, reject }); queueMicrotask(drainReaders);
+      pendingReaders.push({ resolve, reject, inspect, queuedAt: performance.now() }); queueMicrotask(drainReaders);
     });
-  };
+  }
+  const readMonthlyReportSourceRevision = function () { return enqueue(false); };
+  // Inspection is the same fresh check as read(), with bounded, path-free
+  // diagnostics. Only callers queued before a scan starts share its work;
+  // queue wait belongs to the caller, while scan duration and counts belong to
+  // the inspection. Counts include existing validated target/reference files,
+  // validated directories, and every freshly enumerated entry (including .tmp).
+  readMonthlyReportSourceRevision.inspect = function () { return enqueue(true); };
   readMonthlyReportSourceRevision.industrySourceScope = fileSystem === fs ? savedIndustryRevisionScope({
     dataDir, outputsDir, regionMasterFile, tourismRegionMapFile
   }) : null;

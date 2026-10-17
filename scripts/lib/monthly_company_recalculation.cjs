@@ -71,7 +71,7 @@ function inScope(request, company, catalogCompany, runs) {
 
 function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrection, companyProductAvailabilityMatch, buildHistoryObservations }) {
   if ([loadRun, applyCompanyManualCorrection, companyProductAvailabilityMatch, buildHistoryObservations].some(fn => typeof fn !== "function")) throw new TypeError("Monthly recalculation dependencies are required");
-  return async function recalculateCompanyObservations(request, data) {
+  return async function recalculateCompanyObservations(request, data, { checkpoint = async () => {} } = {}) {
     const monthStart = dayKey(`${request.month}-01`), cutoff = dayKey(request.cutoffDate);
     if (!monthStart || !cutoff || !(data.rawCompanies instanceof Map)) throw unavailable();
     const nextMonth = new Date(`${monthStart}T00:00:00Z`);
@@ -86,6 +86,7 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
     const catalogCompanies = new Map((data.companies || []).map(company => [company.companyId, company]));
     const targetsByRun = new Map();
     for (const company of data.rawCompanies.values()) {
+      await checkpoint();
       if (!company?.companyId || company.deletedAt || company.mergedIntoCompanyId || !hasInventoryCorrection(company)
         || !inScope(request, company, catalogCompanies.get(company.companyId), eligibleRuns)) continue;
       for (const id of companyRunIds(company)) {
@@ -97,6 +98,7 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
     }
     const result = [];
     for (const [id, companies] of targetsByRun) {
+      await checkpoint();
       const originalRun = eligibleRuns.get(id);
       let stored;
       try { stored = await loadRun(id, { ...READ_ONLY_RUN_OPTIONS }); } catch { throw unavailable(); }
@@ -108,6 +110,7 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
         keyword: originalRun.keyword || stored.run.keyword || "", collectionQuality: originalRun.collectionQuality };
       const day = observedDay(run.collectedAt);
       for (const company of companies) {
+        await checkpoint();
         const matches = stored.availability.items.filter(item => companyProductAvailabilityMatch(company, item));
         if (matches.length > 1) throw unavailable();
         // Ranking-only and legacy summaries may not contain reconstructable

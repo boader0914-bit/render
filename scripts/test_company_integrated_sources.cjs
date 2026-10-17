@@ -257,3 +257,70 @@ test("snapshot callback receives only trusted complete raw dates, including its 
   const c = await registry.prepareCompanies({ c: { companyId: "c", inventory: { latest: merged } } }, { runs });
   assert.equal(c.c._integratedCapacity.capacity, 17, "retained daily evidence uses its own successful run provenance");
 });
+
+test("capacity checkpoints defer a large company preparation while preserving the registry chain and locked quantities", async t => {
+  const dataDir = await temporary(t), companies = Object.fromEntries(Array.from({ length: 33 }, (_, index) => [`company-${index}`, { companyId: `company-${index}`, observed: 16 }]));
+  const original = JSON.stringify(companies);
+  let observedCalls = 0, checkpoints = 0, release, entered, secondFinished = false;
+  const waiting = new Promise(resolve => { entered = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  const registry = createCompanyCapacityRegistry({ dataDir, observedCapacity: company => { observedCalls++; return company.observed; }, reviewedCapacity: () => null });
+  const first = registry.prepareCompanies(companies, { checkpoint: async () => {
+    if (++checkpoints === 2) { entered(); await gate; }
+  } });
+  await waiting;
+  assert.ok(observedCalls > 0 && observedCalls < 33, "the checkpoint is between bounded company clones");
+  const pausedCalls = observedCalls;
+  const second = registry.prepareCompanies({ "company-0": { companyId: "company-0", observed: 70 } }).then(value => { secondFinished = true; return value; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(observedCalls, pausedCalls, "paused work remains paused until its callback resumes");
+  assert.equal(secondFinished, false, "a second preparation cannot enter the held registry chain");
+  release();
+  const prepared = await first, next = await second;
+  assert.ok(checkpoints >= 4, "entry, company batches and persistence have cooperative boundaries");
+  assert.equal(Object.keys(prepared).length, 33);
+  for (const company of Object.values(prepared)) assert.equal(company._integratedCapacity.capacity, 16);
+  assert.equal(next["company-0"]._integratedCapacity.capacity, 16, "a later larger observation does not silently replace the fixed basis");
+  assert.equal(next["company-0"]._integratedCapacity.source, "observed_locked");
+  assert.equal(next["company-0"]._integratedCapacity.warnings.length, 1);
+  assert.equal(JSON.stringify(companies), original, "source companies are never mutated while paused or resumed");
+});
+
+test("history checkpoints occur on bounded rows and failures release the chain without publishing a partial maximum", async t => {
+  const dataDir = await temporary(t), historyFile = path.join(dataDir, "history", "observations.jsonl");
+  await fs.mkdir(path.dirname(historyFile), { recursive: true });
+  const rows = Array.from({ length: 600 }, (_, index) => ({ companyId: "a", productType: "lodging", runId: "run", inventoryEvidenceVersion: 4, rawTotal: index === 599 ? 80 : 16 }));
+  await fs.writeFile(historyFile, rows.map(JSON.stringify).join("\n"));
+  const historyBefore = await fs.readFile(historyFile), companies = { a: { companyId: "a" } }, original = JSON.stringify(companies);
+  let calls = 0;
+  const failure = Object.assign(new Error("cooperative checkpoint rejected"), { code: "TEST_CHECKPOINT_FAILURE" });
+  const registry = createCompanyCapacityRegistry({ dataDir, observedCapacity: () => null, reviewedCapacity: () => null });
+  const runs = [{ id: "run", collectionQuality: { status: "complete" } }];
+  await assert.rejects(registry.prepareCompanies(companies, { runs, checkpoint: async () => {
+    if (++calls === 3) throw failure;
+  } }), error => error === failure);
+  assert.equal(calls, 3, "entry and cache-key checkpoints precede the first 256-row boundary");
+  await assert.rejects(fs.readFile(path.join(dataDir, "company_integrated", "capacity-bases.json")), { code: "ENOENT" });
+  let resumedCalls = 0;
+  const result = await registry.prepareCompanies(companies, { runs, checkpoint: async () => { resumedCalls++; } });
+  assert.ok(resumedCalls >= 5, "both 256-row boundaries and persistence are reached on the successful retry");
+  assert.equal(result.a._integratedCapacity.capacity, 80, "failed scans do not cache the partial 16-room maximum");
+  assert.equal(result.a._integratedCapacity.observedMaximum, 80);
+  assert.deepEqual(await fs.readFile(historyFile), historyBefore);
+  assert.equal(JSON.stringify(companies), original);
+});
+
+test("the saved-basis parse checkpoint propagates its own error and the next preparation can recover", async t => {
+  const dataDir = await temporary(t), companies = { a: { companyId: "a", observed: 16 } };
+  const registry = createCompanyCapacityRegistry({ dataDir, observedCapacity: company => company.observed, reviewedCapacity: () => null });
+  const first = await registry.prepareCompanies(companies), file = path.join(dataDir, "company_integrated", "capacity-bases.json"), saved = await fs.readFile(file);
+  await fs.writeFile(file, "{invalid basis");
+  let calls = 0;
+  const failure = Object.assign(new Error("pause rejected before parse"), { code: "TEST_BEFORE_PARSE" });
+  await assert.rejects(registry.prepareCompanies(companies, { checkpoint: async () => { if (++calls === 2) throw failure; } }), error => error === failure);
+  assert.equal(calls, 2, "the callback runs after reading but before parsing the saved basis");
+  await assert.rejects(registry.prepareCompanies(companies), { code: "CAPACITY_BASIS_UNAVAILABLE" });
+  await fs.writeFile(file, saved);
+  const recovered = await registry.prepareCompanies(companies, { checkpoint: false });
+  assert.deepEqual(recovered, first, "no callback retains the original idempotent results and source basis");
+  assert.deepEqual(await fs.readFile(file), saved);
+});

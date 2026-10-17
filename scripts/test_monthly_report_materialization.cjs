@@ -107,6 +107,35 @@ test("saved attachment readers overlap and receive only freshly inspected source
   assert.ok(value.generation.snapshotBytes > 0);
 });
 
+test("interactive preview holds its lease through fresh inspection and attachment failures release it", async t => {
+  const f = await fixture(t); let held = false, leases = 0, inspections = 0, failInspection = false;
+  const revision = async () => assert.fail("diagnostic inspection should provide the fresh revision in the same scan");
+  revision.inspect = async () => {
+    assert.equal(held, true); inspections++;
+    if (failInspection) throw Object.assign(new Error("inspection failed"), { code: "MONTHLY_SOURCE_REVISION_UNAVAILABLE" });
+    return { revision: f.state.revision, timings: { queueWaitMs: 2, scanMs: 3 }, counts: { files: 4, directories: 5, entries: 6 } };
+  };
+  const service = f.make({ readSourceRevision: revision,
+    runInteractiveRead: async operation => { assert.equal(held, false); held = true; leases++; try { return await operation(); } finally { held = false; } },
+    readIndustryContext: async () => { assert.equal(held, true); return { entries: [], networkAttempted: false }; }
+  });
+  await service.preview(request);
+  const before = inspections, value = await service.preview(request);
+  assert.equal(value.generation.cacheStatus, "reused"); assert.equal(inspections, before + 1);
+  assert.equal(value.generation.sourceInspection.checks, 1);
+  assert.deepEqual(value.generation.sourceInspection.counts, { files: 4, directories: 5, entries: 6 });
+  assert.equal(value.generation.timings.sourceInspectionQueueWaitMs, 2);
+  assert.equal(value.generation.timings.sourceInspectionMs, 3);
+  assert.ok(Number.isFinite(value.generation.runtime.eventLoopActiveMs));
+  assert.equal(held, false); assert.equal(leases, 2);
+  const savedBefore = await calculationFiles(f.directory);
+  failInspection = true;
+  await assert.rejects(service.preview(request), error => error.code === "MONTHLY_SOURCE_REVISION_UNAVAILABLE");
+  assert.equal(held, false); assert.equal(leases, 3);
+  const savedAfter = await calculationFiles(f.directory);
+  assert.deepEqual(savedAfter, savedBefore, "a failed fresh inspection never replaces the last valid materialized result");
+});
+
 test("same conditions reuse saved monthly calculations across service recreation with detached results", async t => {
   const { directory, state, service, make } = await fixture(t);
   const first = await service.preview(request);

@@ -12,8 +12,12 @@ const { createMonthlyReportMaterializedCache } = require("./monthly_report_mater
 
 const token = value => String(value || "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
 function sourceError() { return Object.assign(new Error("월간 집계에 필요한 저장자료를 읽지 못했습니다. 원본 상태를 확인해 주세요."), { statusCode: 503, code: "MONTHLY_SOURCE_UNAVAILABLE" }); }
-async function readJson(file, fallback) {
-  try { return JSON.parse((await fsp.readFile(file, "utf8")).replace(/^\uFEFF/, "")); }
+async function readJson(file, fallback, checkpoint = async () => {}) {
+  try {
+    const text = await fsp.readFile(file, "utf8");
+    await checkpoint();
+    return JSON.parse(text.replace(/^\uFEFF/, ""));
+  }
   catch (error) { if (error.code === "ENOENT") return fallback; throw sourceError(); }
 }
 
@@ -26,10 +30,14 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     directory: path.join(dataDir, "monthly_reports", "selector_cache"), maxEntries: 1,
     maxBytes: 8 * 1024 * 1024, maxEntryBytes: 8 * 1024 * 1024
   }) : null;
-  async function readCatalog({ prepareCapacity = true } = {}) {
-    const [master, regionMaster, runs] = await Promise.all([readJson(companyFile, { companies: {} }), readJson(regionMasterFile, { units: [] }), listRuns()]);
+  const checkpointFor = ({ priority } = {}) => priority === "background"
+    ? () => sourceReadScheduler.checkpoint({ priority: "background" }) : async () => {};
+  async function readCatalog({ prepareCapacity = true, checkpoint = async () => {} } = {}) {
+    await checkpoint();
+    const [master, regionMaster, runs] = await Promise.all([readJson(companyFile, { companies: {} }, checkpoint), readJson(regionMasterFile, { units: [] }, checkpoint), listRuns()]);
     if (!master.companies || typeof master.companies !== "object" || Array.isArray(master.companies)) throw sourceError();
-    if (prepareCapacity && prepareCompanies) master.companies = await prepareCompanies(master.companies, { runs });
+    await checkpoint();
+    if (prepareCapacity && prepareCompanies) master.companies = await prepareCompanies(master.companies, { runs, checkpoint });
     const units = (regionMaster.units || []).filter(unit => unit.active && unit.selectable && ["local", "broad"].includes(unit.level));
     const industryRegions = units.map(unit => ({ id: unit.regionKey, label: unit.fullName || unit.name, level: unit.level, aliases: unit.aliases }));
     const idIndex = new Map(units.flatMap(unit => [unit.regionKey, unit.regionId].filter(Boolean).map(key => [key, unit])));
@@ -47,7 +55,10 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
       return unique.length === 1 ? unique[0] : null;
     }
     const rawCompanies = new Map();
-    const companies = Object.values(master.companies).filter(company => company && company.companyId && !company.mergedIntoCompanyId && !company.deletedAt).map(company => {
+    const companies = []; let companyIndex = 0;
+    for (const company of Object.values(master.companies)) {
+      if (!company || !company.companyId || company.mergedIntoCompanyId || company.deletedAt) continue;
+      if (companyIndex++ % 16 === 0) await checkpoint();
       rawCompanies.set(company.companyId, company);
       const override = company.manualCorrection?.active === false ? null : company.manualCorrection?.regionOverride;
       let region = override ? exactRegion(override) : null;
@@ -62,14 +73,14 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
           }
         }
       }
-      return { companyId: company.companyId, primaryName: company.primaryName || company.companyId,
+      companies.push({ companyId: company.companyId, primaryName: company.primaryName || company.companyId,
         ...industryCompanyReference(company, industryRegions),
         regionKey: region?.regionKey || "", regionKeys: [...new Set([region?.regionKey, region?.provinceRegionKey].filter(Boolean))],
         regionLabel: region?.fullName || "지역 확인 전", keywords: Object.values(company.keywords || {}).map(item => item.keyword).filter(Boolean),
         placeIds: [...new Set((company.placeIds || []).map(value => String(value).trim()).filter(Boolean))],
         capacity: prepareCapacity ? capacityForCompany(company) : null, capacityBasis: prepareCapacity ? company._integratedCapacity || null : null,
-        capacitySource: company._integratedCapacity?.label || (company.manualCorrection ? "DB 검토값 우선 · 저장 관측 기준" : "최대 관측 객실 수") };
-    });
+        capacitySource: company._integratedCapacity?.label || (company.manualCorrection ? "DB 검토값 우선 · 저장 관측 기준" : "최대 관측 객실 수") });
+    }
     return { companies, rawCompanies, runs, regions: units.map(unit => ({ id: unit.regionKey, label: unit.fullName || unit.name, level: unit.level })) };
   }
   async function catalog(options = {}) {
@@ -77,30 +88,35 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     // A public metadata lookup reconstructs the same complete master as a
     // source read. Admit it through the shared scheduler too. Internal readers
     // use readCatalog directly while they already own the scheduler slot.
-    const task = sourceReadScheduler.run(() => readCatalog(), options);
+    const task = sourceReadScheduler.run(() => readCatalog({ checkpoint: checkpointFor(options) }), options);
     catalogInFlight = task;
     try { return await task; }
     finally { if (catalogInFlight === task) catalogInFlight = null; }
   }
-  async function readHistory(consume) {
+  async function readHistory(consume, checkpoint = async () => {}) {
     try { await fsp.access(historyFile); } catch (error) { if (error.code === "ENOENT") return 0; throw sourceError(); }
     let malformed = 0;
     try {
-      const input = readline.createInterface({ input: fs.createReadStream(historyFile, { encoding: "utf8" }), crlfDelay: Infinity });
+      const stream = fs.createReadStream(historyFile, { encoding: "utf8" });
+      const input = readline.createInterface({ input: stream, crlfDelay: Infinity });
+      let lines = 0;
+      try {
       for await (const line of input) {
+        if (lines++ % 256 === 0) await checkpoint();
         if (!line.trim()) continue;
         let row;
         try { row = JSON.parse(line.replace(/^\uFEFF/, "")); } catch { malformed++; continue; }
         if (row && typeof row === "object" && !Array.isArray(row)) consume(row);
         else malformed++;
       }
+      } finally { input.close(); stream.destroy(); }
     } catch { throw sourceError(); }
     return malformed;
   }
-  async function optionCatalog() {
+  async function optionCatalog(checkpoint) {
     // Selectors do not need capacity preparation, a second history pass or a
     // cloned full inventory. Only cold builds enter the shared raw-read queue.
-    const data = await readCatalog({ prepareCapacity: false });
+    const data = await readCatalog({ prepareCapacity: false, checkpoint });
     // Only these compact selector fields may survive the history scan below.
     // Do not retain a complete rawCompanies inventory merely to list months.
     return {
@@ -110,11 +126,12 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
       runMonths: data.runs.flatMap(run => [run.checkIn, run.checkOut]).map(value => String(value || "").slice(0, 7))
     };
   }
-  async function readOptionData() {
-    const data = await optionCatalog();
+  async function readOptionData(scheduling = {}) {
+    const checkpoint = checkpointFor(scheduling);
+    const data = await optionCatalog(checkpoint);
     const months = new Set();
     const addMonth = value => { const month = String(value || "").slice(0, 7); if (/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) months.add(month); };
-    await readHistory(row => addMonth(row.stayDate || row.date));
+    await readHistory(row => addMonth(row.stayDate || row.date), checkpoint);
     for (const month of data.runMonths) addMonth(month);
     return { companies: data.companies, keywords: data.keywords, regions: data.regions, observedMonths: [...months].sort().reverse() };
   }
@@ -130,14 +147,14 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
       regions: data.regions, months: available, defaultMonth: months.has(previous) ? previous : current, today,
       ...(selectorMetadata ? { selectorCache: selectorMetadata } : {}) };
   }
-  async function options(scheduling = {}) {
+  async function readOptions(scheduling = {}) {
     if (selectorCache) {
       const started = performance.now();
       // Reuse bypasses the expensive source queue. Cache misses still serialize
       // with raw readers, and the persistent cache validates before/after reads
       // and builds, so concurrent source edits never publish a stale list.
       const result = await selectorCache.getOrBuild({ key: String(selectorCacheVersion),
-        readRevision: readOptionsRevision, build: () => sourceReadScheduler.run(readOptionData, scheduling) });
+        readRevision: readOptionsRevision, build: () => sourceReadScheduler.run(() => readOptionData(scheduling), scheduling) });
       return datedOptions(result.value, { status: result.status, storage: result.storage,
         calculatedAt: result.calculatedAt, checkedAt: new Date(now()).toISOString(),
         timings: { ...result.timings, totalMs: performance.now() - started } });
@@ -145,13 +162,15 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     if (optionsInFlight) return optionsInFlight;
     // Coalesce simultaneous selector requests without retaining a stale result
     // or placing a second raw master beside an active source reconstruction.
-    const task = sourceReadScheduler.run(async () => datedOptions(await readOptionData()), scheduling);
+    const task = sourceReadScheduler.run(async () => datedOptions(await readOptionData(scheduling)), scheduling);
     optionsInFlight = task;
     try { return await task; }
     finally { if (optionsInFlight === task) optionsInFlight = null; }
   }
-  async function readSources(request, includeCatalog, { includeContext = true } = {}) {
-    const data = await readCatalog();
+  const options = readOptions;
+  async function readSources(request, includeCatalog, options = {}) {
+    const { includeContext = true } = options, checkpoint = checkpointFor(options);
+    const data = await readCatalog({ checkpoint });
     const byId = new Map(data.companies.map(company => [company.companyId, company]));
     const ids = new Map(data.companies.map(company => [token(company.companyId), company.companyId]));
     const places = new Map(), conflictingCompanyIds = new Set();
@@ -200,9 +219,11 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
       observations.set(key, { ...normalized, companyKey: id, companyId: id, companyName: company.primaryName,
         regionKey: company.regionKey, regionKeys: company.regionKeys, stayDate: row.stayDate || row.date });
     }
-    const malformedHistoryLines = await readHistory(row => addRow(row));
+    const malformedHistoryLines = await readHistory(row => addRow(row), checkpoint);
     const rankObservations = [], diagnosticRankRows = [];
+    let companyIndex = 0;
     for (const [id, company] of data.rawCompanies) {
+      if (companyIndex++ % 16 === 0) await checkpoint();
       for (const exposure of Object.values(company.keywords || {})) {
         for (const run of exposure.runs || []) {
           const row = { ...run, companyKey: id, companyId: id, companyName: company.primaryName, keyword: exposure.keyword };
@@ -225,9 +246,13 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     // company/run/product/date row, while report quality and time gates remain.
     if (recalculateCompanyObservations !== null) {
       try {
-        const recalculated = await recalculateCompanyObservations(request, data);
+        await checkpoint();
+        const recalculated = await recalculateCompanyObservations(request, data, { checkpoint });
         if (!Array.isArray(recalculated) || recalculated.some(row => !row || typeof row !== "object" || Array.isArray(row))) throw sourceError();
-        for (const row of recalculated) addRow(row);
+        for (let index = 0; index < recalculated.length; index++) {
+          if (index % 256 === 0) await checkpoint();
+          addRow(recalculated[index]);
+        }
       } catch { throw sourceError(); }
     }
     const scopeIds = request.type === "keyword"
@@ -283,7 +308,9 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
   }
   return { options, loadSources: (request, options) => queueSourceRead(request, false, options), catalog,
     loadSourcesWithCatalog: (request, options) => queueSourceRead(request, true, options),
-    ...(typeof readRevision === "function" ? { readRevision } : {}), sourceReadStatus: sourceReadScheduler.status };
+    ...(typeof readRevision === "function" ? { readRevision } : {}),
+    runInteractiveRead: sourceReadScheduler.runInteractive,
+    sourceReadStatus: sourceReadScheduler.status };
 }
 
 module.exports = { createMonthlyReportSources };

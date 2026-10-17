@@ -26,6 +26,19 @@ function source(extra = {}) { return { companies: [company("a")], rankObservatio
 function build(input, request = {}) { return buildIndustryAnalysis(input, { ...REQUEST, ...request }, { now: NOW }); }
 const flushTasks = () => new Promise(resolve => setImmediate(resolve));
 
+test("industry selector and fallback catalog maintenance use background source priority", async () => {
+  const calls = [], fixture = source();
+  const service = createIndustryAnalysisService({ now: () => NOW, sources: {
+    options: async options => { calls.push(["options", options]); return { regions: REGIONS, months: ["2026-08"], defaultMonth: "2026-08" }; },
+    catalog: async options => { calls.push(["catalog", options]); return { rawCompanies: new Map([["a", company("a")]]), runs: fixture.runs, regions: REGIONS }; },
+    loadSources: async (input, options) => { calls.push(["sources", options]); return fixture; }
+  } });
+  await service.options(); await service.analyze(REQUEST);
+  assert.ok(calls.some(([kind]) => kind === "options"));
+  assert.ok(calls.some(([kind]) => kind === "sources"));
+  assert.ok(calls.every(([, options]) => options.priority === "background"));
+});
+
 test("review keeps observed zero, retained valid inventory and detailed gaps within selected industry and actual region", () => {
   const a = { ...company("a"), capacityBasis: { source: "db_review", revision: 4, count: 10, warnings: ["확인 필요"], unused: "private metadata" } };
   const fixture = source({ companies: [a, company("pension", "pension"), company("sacheon", "glamping", "kr_gyeongnam_sacheon"), company("outside")],

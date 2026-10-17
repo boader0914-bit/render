@@ -463,7 +463,7 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
       } else {
         // Compatibility for adapters without the paired reader. Wait for both
         // readers before releasing a failed pending key.
-        const results = await Promise.allSettled([sources.loadSources(sourceRequest, { priority: "background" }), sources.catalog()]);
+        const results = await Promise.allSettled([sources.loadSources(sourceRequest, { priority: "background" }), sources.catalog({ priority: "background" })]);
         const failed = results.find(result => result.status === "rejected");
         if (failed) throw failed.reason;
         value = compactIndustrySources(results[0].value, results[1].value);
@@ -485,7 +485,7 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     }
   }
   async function calculateOptions() {
-    const [options, catalog] = await Promise.all([sources.options(), sources.catalog()]);
+    const [options, catalog] = await Promise.all([sources.options({ priority: "background" }), sources.catalog({ priority: "background" })]);
     const runMap = new Map((catalog.runs || []).map(run => [String(run.id || run.runId), run]));
     const today = options.today || new Date(new Date(now()).getTime() + 9 * 3600000).toISOString().slice(0, 10);
     const evidenceMonths = new Set();

@@ -50,42 +50,61 @@ function trustedSnapshotCompany(company, runMap) {
 function createCompanyCapacityRegistry({ dataDir, observedCapacity, reviewedCapacity, now = () => new Date() }) {
   const file = path.join(dataDir, "company_integrated", "capacity-bases.json");
   let chain = Promise.resolve(), historyCache = null;
-  async function historicalMaxima(companies, runs) {
+  async function historicalMaxima(companies, runs, checkpoint) {
     const filename = path.join(dataDir, "history", "observations.jsonl");
     let stat; try { stat = await fs.stat(filename); } catch (error) { if (error.code === "ENOENT") return new Map(); throw error; }
     const runMap = new Map(runs.map(run => [String(run.id || run.runId || ""), String(typeof run.collectionQuality === "string" ? run.collectionQuality : run.collectionQuality?.status || "unknown")]));
     const identities = new Map();
+    let companyCount = 0;
     for (const company of Object.values(companies)) {
+      if (checkpoint && ++companyCount % 16 === 0) await checkpoint();
       if (!company?.companyId || company.deletedAt || company.mergedIntoCompanyId) continue;
       identities.set(company.companyId, company.companyId);
       for (const prior of company.duplicateNotes || []) if (prior.mergedCompanyId) identities.set(prior.mergedCompanyId, company.companyId);
     }
+    if (checkpoint) await checkpoint();
     const key = crypto.createHash("sha256").update(JSON.stringify([stat.size, stat.mtimeMs, [...runMap], [...identities]])).digest("hex");
     if (historyCache?.key === key) return historyCache.values;
     const values = new Map();
-    const input = readline.createInterface({ input: require("node:fs").createReadStream(filename, { encoding: "utf8" }), crlfDelay: Infinity });
-    for await (const line of input) {
-      let row; try { row = JSON.parse(line.replace(/^\uFEFF/, "")); } catch { continue; }
-      if (!row || typeof row !== "object" || Array.isArray(row)) continue;
-      const id = identities.get(String(row.companyId || row.companyKey || ""));
-      if (!id || row.productType !== "lodging" || !["complete", "reused", "partial"].includes(runMap.get(String(row.runId || "")))
-        || !trustedRawQuantity(row)) continue;
-      // supply/total can contain prior inferred capacity and must not seed a baseline.
-      const count = positive(row.rawTotal);
-      if (count) values.set(id, Math.max(values.get(id) || 0, count));
-    }
+    const stream = require("node:fs").createReadStream(filename, { encoding: "utf8" });
+    const input = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    let lineCount = 0;
+    try {
+      for await (const line of input) {
+        // Keep the registry chain held. This only yields CPU/event-loop work;
+        // starting a second capacity preparation here would duplicate its heap.
+        if (checkpoint && ++lineCount % 256 === 0) await checkpoint();
+        let row; try { row = JSON.parse(line.replace(/^\uFEFF/, "")); } catch { continue; }
+        if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+        const id = identities.get(String(row.companyId || row.companyKey || ""));
+        if (!id || row.productType !== "lodging" || !["complete", "reused", "partial"].includes(runMap.get(String(row.runId || "")))
+          || !trustedRawQuantity(row)) continue;
+        // supply/total can contain prior inferred capacity and must not seed a baseline.
+        const count = positive(row.rawTotal);
+        if (count) values.set(id, Math.max(values.get(id) || 0, count));
+      }
+    } finally { input.close(); stream.destroy(); }
     historyCache = { key, values }; return values;
   }
-  async function prepare(companies, { runs = [] } = {}) {
-    const historical = await historicalMaxima(companies, runs);
+  async function prepare(companies, { runs = [], checkpoint: suppliedCheckpoint = null } = {}) {
+    const checkpoint = typeof suppliedCheckpoint === "function" ? suppliedCheckpoint : null;
+    if (checkpoint) await checkpoint();
+    const historical = await historicalMaxima(companies, runs, checkpoint);
     const runMap = new Map(runs.map(run => [String(run.id || run.runId || ""), String(typeof run.collectionQuality === "string" ? run.collectionQuality : run.collectionQuality?.status || "unknown")]));
-    let store;
-    try { store = JSON.parse(await fs.readFile(file, "utf8")); }
+    let store, storedText;
+    try { storedText = await fs.readFile(file, "utf8"); }
     catch (error) { if (error.code !== "ENOENT") throw Object.assign(new Error("객실 기준 기록을 읽지 못했습니다."), { code: "CAPACITY_BASIS_UNAVAILABLE" }); store = { schemaVersion: 1, companies: {} }; }
+    if (storedText !== undefined) {
+      if (checkpoint) await checkpoint();
+      try { store = JSON.parse(storedText); }
+      catch { throw Object.assign(new Error("객실 기준 기록을 읽지 못했습니다."), { code: "CAPACITY_BASIS_UNAVAILABLE" }); }
+    }
     if (store.schemaVersion !== 1 || !store.companies || Array.isArray(store.companies)) throw new Error("CAPACITY_BASIS_UNAVAILABLE");
     let dirty = false;
     const result = {};
+    let companyCount = 0;
     for (const [id, original] of Object.entries(companies)) {
+      if (checkpoint && ++companyCount % 16 === 0) await checkpoint();
       if (!original || original.deletedAt || original.mergedIntoCompanyId) { result[id] = original; continue; }
       const observed = positive(Math.max(positive(observedCapacity(trustedSnapshotCompany(original, runMap))) || 0, historical.get(id) || 0));
       const reviewed = positive(reviewedCapacity(original));
@@ -108,6 +127,7 @@ function createCompanyCapacityRegistry({ dataDir, observedCapacity, reviewedCapa
       result[id] = company;
     }
     if (dirty) {
+      if (checkpoint) await checkpoint();
       await fs.mkdir(path.dirname(file), { recursive: true });
       const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
       try { await fs.writeFile(temp, JSON.stringify(store), "utf8"); await fs.rename(temp, file); }

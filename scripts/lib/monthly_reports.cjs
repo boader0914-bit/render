@@ -5,7 +5,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { buildMonthlyReportInsights } = require("./monthly_report_insights.cjs");
 const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./monthly_report_comparison.cjs");
-const { performance } = require("node:perf_hooks");
+const { performance, monitorEventLoopDelay } = require("node:perf_hooks");
 const { createMonthlyReportMaterializedCache } = require("./monthly_report_materialized_cache.cjs");
 
 const SCHEMA_VERSION = 1;
@@ -502,7 +502,8 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}) 
 }
 
 function createMonthlyReportService({ dataDir, loadSources, readSourceRevision = null, readReportContext = null,
-  readOutlookEvaluations = null, readIndustryContext = null, calculationVersion = "monthly-base-v1", now = () => new Date() } = {}) {
+  readOutlookEvaluations = null, readIndustryContext = null, runInteractiveRead = operation => operation(),
+  calculationVersion = "monthly-base-v1", now = () => new Date() } = {}) {
   if (typeof dataDir !== "string" || !dataDir || typeof loadSources !== "function") throw new TypeError("dataDir and loadSources are required");
   const directory = path.resolve(dataDir);
   const previews = new Map();
@@ -600,17 +601,28 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
   };
   const build = async (request, generatedAt) => {
       const started = performance.now(), previousRequest = previousMonthlyReportRequest(request);
+      const sourceInspections = [];
+      const inspectRevision = async () => {
+        if (typeof readSourceRevision.inspect !== "function") return readSourceRevision(clone(request));
+        const inspection = await readSourceRevision.inspect(clone(request));
+        sourceInspections.push(inspection);
+        return inspection?.revision;
+      };
       const key = JSON.stringify({ calculationVersion, request, previousRequest,
         monthClosed: kstDate(generatedAt) > calendar(request.month).end,
         previousMonthClosed: kstDate(generatedAt) > calendar(previousRequest.month).end });
       const result = materialized ? await materialized.getOrBuild({ key,
-        readRevision: () => readSourceRevision(clone(request)), build: () => buildBase(request, generatedAt) })
+        readRevision: inspectRevision, build: () => buildBase(request, generatedAt) })
         : { value: await buildBase(request, generatedAt), status: "uncached", storage: "disabled", calculatedAt: generatedAt, timings: {} };
       const snapshot = result.value.snapshot;
       snapshot.generatedAt = generatedAt;
       const roster = { companies: snapshot.companies.map(({ companyId, regionKey, regionLabel }) => ({ companyId, regionKey, regionLabel })),
         regions: clone(result.value.regions) };
       const timings = { ...result.timings, ...(result.status === "calculated" || result.status === "uncached" ? result.value.timings : {}) };
+      if (sourceInspections.length) {
+        timings.sourceInspectionQueueWaitMs = sourceInspections.reduce((sum, row) => sum + (row.timings?.queueWaitMs || 0), 0);
+        timings.sourceInspectionMs = sourceInspections.reduce((sum, row) => sum + (row.timings?.scanMs || 0), 0);
+      }
       // Saved context readers are independent. Await every one before freezing
       // the preview, without making a later reader wait behind another scan.
       const attachments = await Promise.allSettled([
@@ -666,6 +678,7 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
       }
       timings.totalMs = performance.now() - started;
       return { snapshot, generation: { cacheStatus: result.status, storage: result.storage, calculatedAt: result.calculatedAt,
+        ...(sourceInspections.length ? { sourceInspection: { checks: sourceInspections.length, counts: clone(sourceInspections.at(-1).counts) } } : {}),
         timings: Object.fromEntries(Object.entries(timings).map(([name, value]) => [name, Math.round(value * 10) / 10])) } };
   };
   const removePreview = token => {
@@ -673,26 +686,34 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
     if (entry) previewBytes -= entry.bytes;
     previews.delete(token);
   };
-  const preview = async input => {
+  const preview = input => runInteractiveRead(async () => {
     const started = performance.now();
-    const date = current();
-    const request = requestInput(input, date);
-    const { snapshot, generation } = await build(request, date.toISOString());
-    const previewToken = crypto.randomUUID();
-    for (const [token, entry] of previews) if (entry.expires <= date.getTime()) removePreview(token);
-    const serializationStarted = performance.now();
-    const serialized = JSON.stringify(snapshot);
-    const bytes = Buffer.byteLength(serialized, "utf8");
-    if (bytes > PREVIEW_CACHE_BYTES) throw fail("report_too_large", "보고서 근거가 너무 큽니다. 업체 또는 더 작은 지역 단위로 나누어 주세요.", 413);
-    // Bound session memory without ever accepting a browser supplied snapshot.
-    while (previews.size && (previews.size >= 10 || previewBytes + bytes > PREVIEW_CACHE_BYTES)) removePreview(previews.keys().next().value);
-    previews.set(previewToken, { expires: current().getTime() + PREVIEW_TTL_MS, request: JSON.stringify(request), serialized, bytes });
-    previewBytes += bytes;
-    generation.timings.snapshotSerializationMs = Math.round((performance.now() - serializationStarted) * 10) / 10;
-    generation.timings.previewTotalMs = Math.round((performance.now() - started) * 10) / 10;
-    generation.snapshotBytes = bytes;
-    return { ...snapshot, previewToken, generation };
-  };
+    const eventLoop = monitorEventLoopDelay({ resolution: 20 }), utilizationStart = performance.eventLoopUtilization();
+    eventLoop.enable();
+    try {
+      const date = current();
+      const request = requestInput(input, date);
+      const { snapshot, generation } = await build(request, date.toISOString());
+      const previewToken = crypto.randomUUID();
+      for (const [token, entry] of previews) if (entry.expires <= date.getTime()) removePreview(token);
+      const serializationStarted = performance.now();
+      const serialized = JSON.stringify(snapshot);
+      const bytes = Buffer.byteLength(serialized, "utf8");
+      if (bytes > PREVIEW_CACHE_BYTES) throw fail("report_too_large", "보고서 근거가 너무 큽니다. 업체 또는 더 작은 지역 단위로 나누어 주세요.", 413);
+      // Bound session memory without ever accepting a browser supplied snapshot.
+      while (previews.size && (previews.size >= 10 || previewBytes + bytes > PREVIEW_CACHE_BYTES)) removePreview(previews.keys().next().value);
+      previews.set(previewToken, { expires: current().getTime() + PREVIEW_TTL_MS, request: JSON.stringify(request), serialized, bytes });
+      previewBytes += bytes;
+      generation.timings.snapshotSerializationMs = Math.round((performance.now() - serializationStarted) * 10) / 10;
+      generation.timings.previewTotalMs = Math.round((performance.now() - started) * 10) / 10;
+      generation.snapshotBytes = bytes;
+      const utilization = performance.eventLoopUtilization(utilizationStart);
+      generation.runtime = { eventLoopActiveMs: Math.round(utilization.active * 10) / 10,
+        eventLoopIdleMs: Math.round(utilization.idle * 10) / 10,
+        eventLoopMaxDelayMs: eventLoop.count ? Math.round(eventLoop.max / 100000) / 10 : null };
+      return { ...snapshot, previewToken, generation };
+    } finally { eventLoop.disable(); }
+  });
   const create = async input => {
     const date = current();
     const request = requestInput(input, date);

@@ -405,6 +405,102 @@ test("same-batch readers share an inspection but callers arriving during it rece
   assert.equal(inspected, 2);
 });
 
+test("inspect exposes bounded path-free diagnostics while sharing the read batch and preserving its string contract", async t => {
+  const { root, write, options } = await fixture(t);
+  await write("company_master/companies.json");
+  await write("history/observations.jsonl", '{"publicBookings":0}\n');
+  await write("region-master.json"); await write("tourism-map.json");
+  await write("outputs/run/manifest.json"); await write("outputs/run/details/stock.json");
+  await write("outputs/run/uncommitted.json.tmp"); await write("outputs/run/preview.png", "image");
+  let listings = 0;
+  const revision = createMonthlyReportSourceRevision({ ...options, includeContext: false,
+    fileSystem: { ...fs, readdir: async (...args) => { listings++; return fs.readdir(...args); } } });
+  const [plain, first, second] = await Promise.all([revision(), revision.inspect(), revision.inspect({ month: "2026-09" })]);
+  assert.match(plain, /^[a-f0-9]{64}$/);
+  assert.equal(first.revision, plain); assert.equal(second.revision, plain);
+  assert.equal(listings, 3, "ordinary and diagnostic readers share one real filesystem inspection");
+  assert.deepEqual(first.counts, { files: 6, directories: 3, entries: 6 });
+  assert.deepEqual(second.counts, first.counts);
+  assert.equal(first.timings.scanMs, second.timings.scanMs);
+  for (const result of [first, second]) {
+    assert.deepEqual(Object.keys(result).sort(), ["counts", "revision", "timings"]);
+    assert.deepEqual(Object.keys(result.timings).sort(), ["queueWaitMs", "scanMs"]);
+    assert.ok(Number.isFinite(result.timings.queueWaitMs) && result.timings.queueWaitMs >= 0);
+    assert.ok(Number.isFinite(result.timings.scanMs) && result.timings.scanMs >= 0);
+    assert.equal(JSON.stringify(result).includes(root), false, "diagnostics contain counts, never raw paths");
+  }
+  first.counts.files = -1; first.timings.scanMs = -1;
+  assert.equal(second.counts.files, 6, "diagnostic results cannot mutate another caller's values");
+  assert.ok(second.timings.scanMs >= 0);
+  listings = 0; assert.equal(await revision(), plain); assert.equal(listings, 3, "diagnostic mode does not introduce a cached inventory");
+  assert.equal(revision.industrySourceScope, null, "custom filesystem retains its existing untrusted scope");
+  const trusted = createMonthlyReportSourceRevision({ ...options, outputsDir: path.join(root, "outputs") });
+  assert.equal(typeof trusted.industrySourceScope, "string");
+  assert.equal((await trusted.inspect()).revision, await trusted());
+});
+
+test("diagnostic readers arriving during a scan receive a fresh inspection with caller-specific queue waits", async t => {
+  const { write, options } = await fixture(t);
+  const source = await write("outputs/run/stock.json", '{"stock":1}');
+  let hold = false, entered, release, inspections = 0;
+  const atSource = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const revision = createMonthlyReportSourceRevision({ ...options, fileSystem: { ...fs,
+    lstat: async (...args) => {
+      const value = await fs.lstat(...args);
+      if (args[0] === source) {
+        inspections++;
+        if (hold) { hold = false; entered(); await gate; }
+      }
+      return value;
+    } } });
+  const before = await revision(); inspections = 0; hold = true;
+  const early = revision.inspect(); await atSource;
+  await fs.writeFile(source, '{"stock":22}');
+  const lateFirst = revision.inspect();
+  await new Promise(resolve => setImmediate(resolve));
+  const lateSecond = revision.inspect(), latePlain = revision();
+  release();
+  const [old, first, second, plain] = await Promise.all([early, lateFirst, lateSecond, latePlain]);
+  assert.equal(old.revision, before, "the first inspection keeps metadata obtained before the change");
+  assert.notEqual(first.revision, before, "late inspection never reuses metadata from before its call");
+  assert.equal(second.revision, first.revision); assert.equal(plain, first.revision);
+  assert.equal(inspections, 2, "both later diagnostic readers and the string reader share the subsequent inspection");
+  assert.equal(first.timings.scanMs, second.timings.scanMs);
+  assert.ok(first.timings.queueWaitMs > second.timings.queueWaitMs,
+    "readers in one batch retain their own queue wait instead of receiving a common duration");
+  assert.ok(second.timings.queueWaitMs >= 0);
+  assert.deepEqual(first.counts, second.counts);
+});
+
+test("inspect preserves safe rejection and performs a fresh check after a failed inspection", async t => {
+  const { root, write, options } = await fixture(t);
+  const source = await write("outputs/run/stock.json");
+  let fail = true, inspected = 0;
+  const revision = createMonthlyReportSourceRevision({ ...options, fileSystem: { ...fs,
+    lstat: async (...args) => {
+      if (args[0] === source) {
+        inspected++;
+        if (fail) throw Object.assign(new Error("denied " + source), { code: "EACCES" });
+      }
+      return fs.lstat(...args);
+    } } });
+  const first = revision.inspect(), second = revision();
+  const rejected = await Promise.allSettled([first, second]);
+  assert.equal(inspected, 1, "mixed readers share the failed inspection as well");
+  for (const result of rejected) {
+    assert.equal(result.status, "rejected");
+    assert.equal(result.reason.code, "MONTHLY_SOURCE_REVISION_UNAVAILABLE");
+    assert.equal(result.reason.statusCode, 503);
+    assert.equal(result.reason.message.includes(root), false, "filesystem error paths remain private");
+  }
+  fail = false;
+  const recovered = await revision.inspect();
+  assert.match(recovered.revision, /^[a-f0-9]{64}$/);
+  assert.equal(inspected, 2, "a failed inspection never certifies or retains a revision");
+  assert.deepEqual(recovered.counts, { files: 1, directories: 2, entries: 2 });
+});
+
 test("failed inspections drain pending metadata before a new reader starts and recover without stale lists", async t => {
   const { write, options } = await fixture(t);
   const first = await write("outputs/first/stock.json");

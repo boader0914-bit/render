@@ -589,6 +589,7 @@ async function queueIntegratedCompanies(companyIds, reason) {
 const monthlyReportService = createMonthlyReportService({
   dataDir: path.join(DATA_DIR, "monthly_reports"), loadSources: monthlyReportSources.loadSources,
   readSourceRevision: monthlyReportSources.readRevision, readReportContext: readMonthlyRegionContext,
+  runInteractiveRead: monthlyReportSources.runInteractiveRead,
   calculationVersion: crypto.createHash("sha256").update(["glamping_app_server.cjs", "inventory_estimation.cjs",
     ...fs.readdirSync(path.join(__dirname, "lib")).filter(name => name.endsWith(".cjs")).sort().map(name => `lib/${name}`)]
     .map(name => `${name}:${crypto.createHash("sha256").update(fs.readFileSync(path.join(__dirname, name))).digest("hex")}`).join("\n")).digest("hex"),
