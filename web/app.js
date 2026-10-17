@@ -30919,7 +30919,7 @@ function renderRegionAnalysisShell() {
   }
   if (els.analysisRegionStatus) els.analysisRegionStatus.textContent = !region
     ? "지역을 선택하면 모든 지역분석 화면에 함께 적용됩니다."
-    : `${analysisRegionLabel(region)} · ${state.analysisRegionSelection?.explicit ? "직접 선택" : "수집지역에서 연결"} · ${analysisRunMatchesRegion(region) ? "같은 지역 수집자료 연결" : "이 지역의 수집자료 없음"}`;
+    : `${analysisRegionLabel(region)} · ${state.analysisRegionSelection?.explicit ? "직접 선택" : "수집지역에서 연결"} · ${analysisRunMatchesRegion(region) ? "같은 지역 숙박 수집자료 연결" : "선택 회차에 해당 지역 숙박자료 없음"}`;
   if (els.analysisRegionManageButton) {
     els.analysisRegionManageButton.hidden = !isAdminRole();
     els.analysisRegionManageButton.disabled = !region;
@@ -36583,6 +36583,7 @@ async function loadLocationDictionary() {
     state.regionMaster = regionMaster;
     state.tourismRegionMap = tourismRegionMap;
     reconcileAnalysisRegionSelection();
+    if (isAdminRole() && REGION_ANALYSIS_TABS.has(state.activeTab)) renderHeader();
     renderLocationDictionary();
     renderActiveRegionAnalysis();
     if (isAdminRole() && state.activeTab === "regionHome") renderRegionHome();

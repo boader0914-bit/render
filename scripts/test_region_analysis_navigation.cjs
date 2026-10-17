@@ -120,6 +120,45 @@ function fixture({ keyword = "포천글램핑", role = "admin", storage = new Ma
 
 async function runTests() {
   {
+    const late = fixture({ keyword: null, withMaster: false });
+    late.state.activeTab = "regionCompare";
+    late.storage.set(late.api.analysisRegionStorageKey(), JSON.stringify({ regionKey: SANCHEONG, explicit: true, source: "user" }));
+    late.els.pageTitle = element(); late.els.pageSubtitle = element(); late.context.APP_BRAND_NAME = "STAYDATALAB";
+    const headers = ["adminHeaderView", "renderHeader"].map(name => {
+      const declaration = source.match(new RegExp(`^function ${name}\\([^]*?^}`, "m"))?.[0];
+      assert.ok(declaration, `Late metadata regression must execute actual ${name}`); return declaration;
+    });
+    vm.runInContext(headers.join("\n"), late.context);
+    const renderActualHeader = late.context.renderHeader;
+    late.context.renderHeader = () => { late.calls.headers++; renderActualHeader(); };
+    late.context.renderHeader();
+    assert.match(late.els.pageSubtitle.textContent, /^지역 미선택/);
+    let resolveMaster;
+    const masterReady = new Promise(resolve => { resolveMaster = resolve; });
+    const fetchFixture = late.context.fetchJson;
+    late.context.fetchJson = url => url === "master" ? (late.calls.fetch.push(url), masterReady) : fetchFixture(url);
+    const loading = late.api.loadLocationDictionary();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.match(late.els.pageSubtitle.textContent, /^지역 미선택/, "No region is invented before the metadata arrives");
+    resolveMaster(master); await loading;
+    assert.match(late.els.pageSubtitle.textContent, /산청군 · 기준지역을 유지/);
+    assert.doesNotMatch(late.els.pageSubtitle.textContent, /지역 미선택/);
+    assert.equal(late.api.selectedAnalysisRegion().regionKey, SANCHEONG);
+    assert.equal(late.els.analysisRegionSelect.value, SANCHEONG);
+    assert.equal(late.calls.comparison.regionKey, SANCHEONG);
+    assert.equal(late.calls.headers, 2, "Metadata completion updates only the header once, without another full-screen render");
+    assert.equal(late.state.data, null, "The correction does not load an unrelated lodging run");
+    assert.deepEqual(late.calls.fetch.sort(), ["dictionary", "master", "tourism-map"]);
+    assert.match(late.els.analysisRegionStatus.textContent, /선택 회차에 해당 지역 숙박자료 없음/);
+    assert.doesNotMatch(late.els.analysisRegionStatus.textContent, /이 지역의 수집자료 없음/);
+    for (const role of ["admin", "b2b"]) {
+      const unrelated = fixture({ keyword: null, withMaster: false, role });
+      unrelated.state.activeTab = "report";
+      await unrelated.api.loadLocationDictionary();
+      assert.equal(unrelated.calls.headers, 0, `${role} metadata must not refresh an unrelated header`);
+    }
+  }
+  {
   const broad = fixture();
   const broadRegion = master.units.find(region => region.level === "broad" && region.active && region.selectable);
   assert.ok(broadRegion);
@@ -194,6 +233,7 @@ async function runTests() {
   f.api.setActiveTab("demand");
   await f.api.loadRun("run-sancheong");
   assert.match(f.els.demandDashboard.innerHTML, /own-run-demand/);
+  assert.match(f.els.analysisRegionStatus.textContent, /같은 지역 숙박 수집자료 연결/);
   f.api.setAnalysisRegion(POCHEON);
   const pocheonHistory = structuredClone(f.history.state);
   await f.api.restoreAppHistoryState(sancheongHistory);
