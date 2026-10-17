@@ -100,10 +100,11 @@ function latestAttempts(source, snapshot, request) {
   return [...attempts.values()].sort((a, b) => a.date.localeCompare(b.date) || a.productType.localeCompare(b.productType));
 }
 
-function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets, now = () => new Date(), calculationVersion = CALCULATION_VERSION, autoStart = true } = {}) {
+function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets, readRevision, now = () => new Date(), calculationVersion = CALCULATION_VERSION, autoStart = true } = {}) {
   if (!dataDir || typeof loadSources !== "function" || typeof catalog !== "function" || typeof listTargets !== "function") throw new TypeError("dataDir, loadSources, catalog and listTargets are required");
+  if (readRevision !== undefined && typeof readRevision !== "function") throw new TypeError("readRevision must be a function");
   const directory = path.resolve(dataDir, "company_integrated"), stateFile = path.join(directory, "queue.json");
-  let state = { schemaVersion: SCHEMA_VERSION, jobs: {} }, initPromise, workerPromise = null, serial = Promise.resolve(), stopped = false, storeError = null;
+  let state = { schemaVersion: SCHEMA_VERSION, jobs: {} }, initPromise, workerPromise = null, serial = Promise.resolve(), stopped = false, storeError = null, bootstrapPromise = null, bootstrapPlanning = false;
   const current = () => {
     const value = typeof now === "function" ? now() : now, result = value instanceof Date ? value : new Date(value);
     if (!Number.isFinite(result.getTime())) throw fault("invalid_clock", 500);
@@ -123,6 +124,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
       if (stored) {
         if (stored.schemaVersion !== SCHEMA_VERSION || !stored.jobs || typeof stored.jobs !== "object" || Array.isArray(stored.jobs)) throw fault("COMPANY_INTEGRATION_STATE_INVALID");
         state = stored;
+        const original = JSON.stringify(state);
         state.queueSequence = Math.max(Number(state.queueSequence) || 0, ...Object.values(state.jobs).map(job => Number(job.queueOrder) || 0));
         state.readPrioritySequence = Math.max(Number(state.readPrioritySequence) || 0, ...Object.values(state.jobs).map(job => Number(job.readPriorityOrder) || 0));
         for (const [id, job] of Object.entries(state.jobs)) {
@@ -130,10 +132,59 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
           if (!job.queueOrder) job.queueOrder = ++state.queueSequence;
           if (["processing", "queued", "failed"].includes(job.status)) { job.status = "queued"; job.recoveredAt = current().toISOString(); }
         }
-        await saveState();
+        if (JSON.stringify(state) !== original) await saveState();
       }
     })();
     return initPromise;
+  }
+  const metadataRevision = metadata => digest({ correction: metadata.raw?.manualCorrection || null,
+    capacity: metadata.company.capacity, capacitySource: metadata.company.capacitySource,
+    capacityMarker: metadata.raw?._integratedCapacity || metadata.company.capacityBasis || null });
+  async function readMetadataRevisions() {
+    const data = await catalog(), revisions = new Map();
+    for (const company of data.companies || []) {
+      const id = identity(company), raw = data.rawCompanies instanceof Map ? data.rawCompanies.get(id) : data.rawCompanies?.[id];
+      if (!id || company.deletedAt || company.mergedIntoCompanyId || raw?.deletedAt || raw?.mergedIntoCompanyId) continue;
+      revisions.set(id, metadataRevision({ company, raw }));
+    }
+    // Only digests survive this await boundary; full inventories are released.
+    return revisions;
+  }
+  async function prepareRevision() {
+    if (!readRevision?.prepare || !readRevision?.forScope) return null;
+    try { return await readRevision.prepare(); }
+    catch { throw fault("COMPANY_INTEGRATION_REVISION_UNAVAILABLE"); }
+  }
+  async function revisionFor(companyId, month, cutoffDate, prepared = null) {
+    if (!readRevision) return null;
+    try {
+      const scope = { companyId, month, cutoffDate, calculationVersion };
+      const value = prepared && typeof readRevision.forScope === "function"
+        ? await readRevision.forScope(prepared, scope) : await readRevision(scope);
+      if (typeof value !== "string" || !value.trim() || value.length > 256) throw new Error("invalid revision");
+      return value;
+    } catch { throw fault("COMPANY_INTEGRATION_REVISION_UNAVAILABLE"); }
+  }
+  function validStored(value, companyId, month) {
+    const snapshot = value?.snapshot, request = snapshot?.request;
+    if (!(value?.schemaVersion === SCHEMA_VERSION && value.companyId === companyId && value.month === month
+      && snapshot?.schemaVersion === SCHEMA_VERSION && request?.type === "company" && request.targetId === companyId
+      && request.month === month && request.cutoffDate === value.cutoffDate && snapshot.period
+      && snapshot.quality && typeof snapshot.quality.status === "string" && snapshot.summary?.lodging
+      && Array.isArray(snapshot.daily) && Array.isArray(snapshot.companies) && snapshot.sources
+      && Array.isArray(value.latestAttempts) && Array.isArray(value.failedAttempts))) return false;
+    if (value.sourceRevision) {
+      const { cacheDigest, ...content } = value;
+      // Integrity check for a derived file, not authentication of its source.
+      if (!cacheDigest || cacheDigest !== digest(content)) return false;
+    }
+    return true;
+  }
+  function reusable(value, companyId, month, cutoffDate, revision, metadata) {
+    return Boolean(revision && validStored(value, companyId, month)
+      && value.calculationVersion === calculationVersion && value.sourceRevision === revision
+      && value.cutoffDate === cutoffDate && value.snapshot?.period?.monthClosed === (kstDay(current()) > monthEnd(month))
+      && (!metadata || value.metadataRevision === (typeof metadata === "string" ? metadata : metadataRevision(metadata))));
   }
   async function activeCompany(companyId) {
     const data = await catalog();
@@ -177,7 +228,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
         reason: String(reason).slice(0, 160), queuedAt: timestamp, updatedAt: timestamp, errorCode: null };
       await saveState(); return clone(job);
     });
-    if (autoStart) kick();
+    if (autoStart && !bootstrapPlanning) kick();
     return result;
   }
   async function prioritizeQueuedRead(companyId) {
@@ -203,21 +254,72 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     for (const [id, targetMonths] of grouped) jobs.push(await queueCompany(id, { months: targetMonths, reason }));
     return { queued: jobs.length, companyIds: jobs.map(job => job.companyId) };
   }
-  async function bootstrap() {
-    await init();
-    const targets = await listTargets({});
-    const grouped = new Map();
-    for (const target of targets) {
-      const id = validId(target.companyId);
-      grouped.set(id, monthsOf([...(grouped.get(id) || []), ...(target.months || [])]));
-    }
-    for (const [id, months] of grouped) await queueCompany(id, { months, reason: "bootstrap" });
-    if (autoStart) kick();
-    return { queued: grouped.size };
+  function bootstrap() {
+    if (bootstrapPromise) return bootstrapPromise;
+    bootstrapPromise = (async () => {
+      await init(); bootstrapPlanning = true;
+      try {
+        // Inspect inputs once, then project only small company/month tokens.
+        // No loadSources calls are needed to prove an unchanged saved month.
+        // Target discovery can prepare the fixed-capacity registry. Inspect
+        // revisions after that preparation, never certify its previous state.
+        const targets = await listTargets({}), metadata = readRevision ? await readMetadataRevisions() : null,
+          prepared = await prepareRevision(), grouped = new Map();
+        for (const target of targets) {
+          const id = validId(target.companyId);
+          grouped.set(id, monthsOf([...(grouped.get(id) || []), ...(target.months || [])]));
+        }
+        // An active company's final observation can be removed or repaired.
+        // Its existing months must still be inspected even if discovery now
+        // returns no observations; never keep the old revenue silently ready.
+        if (metadata) for (const id of metadata.keys()) if (!grouped.has(id)) {
+          const index = await readJson(indexPath(id), null), job = state.jobs[id];
+          if (index || job) grouped.set(id, monthsOf([...(index?.months || []), ...(job?.months || [])]));
+        }
+        let queued = 0, reused = 0, refreshedMonths = 0, recovered = 0;
+        for (const [id, observedMonths] of grouped) {
+          const index = await readJson(indexPath(id), null);
+          const months = monthsOf([...observedMonths, ...(index?.months || [])]);
+          const pending = state.jobs[id], recovering = ["queued", "processing"].includes(pending?.status);
+          if (recovering) recovered++;
+          const changed = [];
+          for (const month of months) {
+            const cutoffDate = cutoffFor(month, current());
+            const revision = await revisionFor(id, month, cutoffDate, prepared);
+            const stored = await readJson(monthPath(id, month), null);
+            if (readRevision && !metadata.has(id)) throw fault("company_not_found", 404);
+            if (reusable(stored, id, month, cutoffDate, revision, metadata?.get(id))) reused++;
+            else changed.push(month);
+          }
+          // Recovery keeps its generation and work already in progress. Only
+          // genuinely additional scopes are merged into that pending work.
+          const additional = recovering ? changed.filter(month => !pending.allMonths && !(pending.months || []).includes(month)) : changed;
+          if (additional.length) {
+            await queueCompany(id, { months: additional, reason: "bootstrap" }); queued++; refreshedMonths += additional.length;
+          }
+        }
+        if (prepared) {
+          const checked = await prepareRevision();
+          if (!checked || checked.revision !== prepared.revision) throw fault("COMPANY_INTEGRATION_SOURCE_CHANGED");
+        }
+        const result = { queued, reused, refreshedMonths, recovered };
+        await locked(async () => { state.bootstrap = { ...result, status: "checked", checkedAt: current().toISOString(), errorCode: null,
+          failureGeneration: state.bootstrap?.failureGeneration || 0 }; await saveState(); });
+        return result;
+      } catch (error) {
+        await locked(async () => { state.bootstrap = { status: "failed", checkedAt: current().toISOString(), errorCode: safeCode(error),
+          failureGeneration: (state.bootstrap?.failureGeneration || 0) + 1 }; await saveState(); });
+        throw error;
+      } finally { bootstrapPlanning = false; if (autoStart) kick(); }
+    })().finally(() => { bootstrapPromise = null; });
+    return bootstrapPromise;
   }
-  async function materialize(companyId, month, metadata, cutoffDate, persist = true, priority = "background") {
+  async function materialize(companyId, month, metadata, cutoffDate, persist = true, priority = "background", prepared = null) {
     const generatedAt = current().toISOString();
     const request = { type: "company", targetId: companyId, month, cutoffDate: cutoffDate || cutoffFor(month, generatedAt) };
+    const sourceRevision = await revisionFor(companyId, month, request.cutoffDate, prepared);
+    const previous = persist ? await readJson(monthPath(companyId, month), null) : null;
+    if (reusable(previous, companyId, month, request.cutoffDate, sourceRevision, metadata)) return { value: previous, changed: false, sourceRevision };
     const source = scopedSources(await loadSources(clone(request), { priority }), companyId);
     const previousRequest = previousMonthlyReportRequest(request);
     const previousSource = scopedSources(await loadSources(clone(previousRequest), { priority }), companyId);
@@ -227,8 +329,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     const sourceDigest = digest({ version: calculationVersion, request, monthClosed: kstDay(generatedAt) > monthEnd(month),
       source, previousSource, correction: metadata.raw?.manualCorrection || null, capacity: metadata.company.capacity,
       capacitySource: metadata.company.capacitySource, capacityMarker });
-    const previous = persist ? await readJson(monthPath(companyId, month), null) : null;
-    if (previous?.sourceDigest === sourceDigest && previous.calculationVersion === calculationVersion) return { value: previous, changed: false };
+    if (!readRevision && previous?.sourceDigest === sourceDigest && previous.calculationVersion === calculationVersion) return { value: previous, changed: false };
     const snapshot = buildMonthlyReportSnapshot(request, source, generatedAt);
     snapshot.comparison = buildMonthlyComparison(snapshot, buildMonthlyReportSnapshot(previousRequest, previousSource, generatedAt));
     const attempts = latestAttempts(source, snapshot, request);
@@ -237,15 +338,26 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
       label: capacityMarker?.label || metadata.company.capacitySource || "객실 기준 확인 필요",
       revision: capacityMarker?.revision || null, updatedAt: capacityMarker?.updatedAt || null,
       observedMaximum: capacityMarker?.observedMaximum ?? null, warnings: capacityWarnings };
-    return { changed: true, value: { schemaVersion: SCHEMA_VERSION, calculationVersion, companyId, month, sourceDigest, calculatedAt: generatedAt,
+    const value = { schemaVersion: SCHEMA_VERSION, calculationVersion, companyId, month, sourceDigest,
+      ...(sourceRevision ? { sourceRevision, metadataRevision: metadataRevision(metadata) } : {}), calculatedAt: generatedAt,
       cutoffDate: request.cutoffDate, roomBasis, snapshot, latestAttempts: attempts,
-      failedAttempts: attempts.filter(attempt => ["missing_response", "run_failed", "run_blocked", "run_interrupted", "run_cancelled", "run_canceled", "run_error"].includes(attempt.reason)) } };
+      failedAttempts: attempts.filter(attempt => ["missing_response", "run_failed", "run_blocked", "run_interrupted", "run_cancelled", "run_canceled", "run_error"].includes(attempt.reason)) };
+    if (sourceRevision) value.cacheDigest = digest(value);
+    return { changed: true, sourceRevision, value };
   }
   async function processJob(job) {
+    const verifiedBootstrapFailure = state.bootstrap?.failureGeneration || 0;
     const metadata = await activeCompany(job.companyId);
     const months = job.allMonths ? await targetsFor(job.companyId, job.months) : monthsOf(job.months);
+    const prepared = await prepareRevision();
     for (const month of months) {
-      const calculated = await materialize(job.companyId, month, metadata);
+      const calculated = await materialize(job.companyId, month, metadata, undefined, true, "background", prepared);
+      // Revalidate before publishing. A mid-read change must never be marked
+      // current, and a failed inspection leaves the last normal result intact.
+      if (readRevision) {
+        const latest = await revisionFor(job.companyId, month, calculated.value.cutoffDate);
+        if (latest !== calculated.sourceRevision) throw fault("COMPANY_INTEGRATION_SOURCE_CHANGED");
+      }
       const published = await locked(async () => {
         if (state.jobs[job.companyId]?.generation !== job.generation) return false;
         if (calculated.changed) await atomicJson(monthPath(job.companyId, month), calculated.value);
@@ -258,7 +370,8 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     }
     await locked(async () => {
       if (state.jobs[job.companyId]?.generation !== job.generation) return;
-      state.jobs[job.companyId] = { ...state.jobs[job.companyId], status: "idle", months: [], allMonths: false, finishedAt: current().toISOString(), errorCode: null };
+      state.jobs[job.companyId] = { ...state.jobs[job.companyId], status: "idle", months: [], allMonths: false, finishedAt: current().toISOString(), errorCode: null,
+        ...(readRevision ? { verifiedBootstrapFailure, verifiedMonths: months } : {}) };
       await saveState();
     });
   }
@@ -289,7 +402,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     }
   }
   function kick() {
-    if (workerPromise || stopped) return;
+    if (workerPromise || stopped || bootstrapPlanning) return;
     workerPromise = runQueue().catch(error => { storeError = safeCode(error); }).finally(() => {
       workerPromise = null;
       if (!storeError && !stopped && Object.values(state.jobs).some(job => job.status === "queued")) kick();
@@ -297,13 +410,15 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
   }
   async function drain() {
     await init();
+    if (bootstrapPromise) await bootstrapPromise;
     do { kick(); if (workerPromise) await workerPromise; await serial; }
     while (!storeError && !stopped && (workerPromise || Object.values(state.jobs).some(job => job.status === "queued")));
     return status();
   }
   async function status() {
     await init();
-    return { schemaVersion: SCHEMA_VERSION, calculationVersion, active: Boolean(workerPromise), errorCode: storeError,
+    return { schemaVersion: SCHEMA_VERSION, calculationVersion, active: Boolean(workerPromise), errorCode: storeError || state.bootstrap?.errorCode || null,
+      bootstrap: state.bootstrap ? clone(state.bootstrap) : null,
       counts: Object.values(state.jobs).reduce((counts, job) => { counts[job.status] = (counts[job.status] || 0) + 1; return counts; }, {}),
       jobs: Object.values(state.jobs).map(job => ({ companyId: job.companyId, status: job.status, generation: job.generation,
         months: job.months, errorCode: job.errorCode, updatedAt: job.updatedAt, startedAt: job.startedAt, finishedAt: job.finishedAt })) };
@@ -322,6 +437,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
       if (!discovered.includes(selectedMonth)) throw fault("MONTH_NOT_OBSERVED", 400);
     }
     let selected = await readJson(monthPath(companyId, selectedMonth), null);
+    if (selected && !validStored(selected, companyId, selectedMonth)) selected = null;
     if (cutoffDate !== undefined && (!selected || selected.cutoffDate !== cutoffDate)) selected = (await materialize(companyId, selectedMonth, metadata, cutoffDate, false, "foreground")).value;
     const job = state.jobs[companyId];
     const needsRefresh = !selected || selected.calculationVersion !== calculationVersion || (cutoffDate === undefined &&
@@ -337,7 +453,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     const rows = [];
     for (const value of [...new Set([...monthList, ...(selected ? [selectedMonth] : [])])].sort().reverse()) {
       const entry = value === selectedMonth ? selected : await readJson(monthPath(companyId, value), null);
-      if (entry) rows.push({ month: value, calculatedAt: entry.calculatedAt, cutoffDate: entry.cutoffDate,
+      if (entry && validStored(entry, companyId, value)) rows.push({ month: value, calculatedAt: entry.calculatedAt, cutoffDate: entry.cutoffDate,
         status: entry.snapshot.quality.status, quality: entry.snapshot.quality, summary: entry.snapshot.summary });
     }
     const runMap = new Map((metadata.data.runs || []).map(run => [String(run.id || run.runId || ""), run]));
@@ -348,18 +464,24 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     const basis = selected?.snapshot.companies?.[0];
     const selectedRoomBasis = selected?.roomBasis || metadata.raw?._integratedCapacity;
     const stateJob = state.jobs[companyId];
+    // A repaired company/month can recover after an explicit retry without
+    // certifying other scopes that failed the startup inspection.
+    const recoveredRevision = Boolean(state.bootstrap?.errorCode && readRevision
+      && stateJob?.verifiedBootstrapFailure === state.bootstrap.failureGeneration && stateJob.verifiedMonths?.includes(selectedMonth));
+    const bootstrapError = recoveredRevision ? null : state.bootstrap?.errorCode;
     return { schemaVersion: SCHEMA_VERSION, companyId, calculationVersion, calculatedAt: selected?.calculatedAt || null,
-      status: stateJob?.status === "failed" || storeError ? "failed" : ["queued", "processing"].includes(stateJob?.status) ? "refreshing" : selected ? "ready" : "pending",
-      errorCode: storeError || stateJob?.errorCode || null, selectedMonth, months: rows, snapshot: selected?.snapshot || null,
+      status: stateJob?.status === "failed" || storeError || bootstrapError ? "failed" : ["queued", "processing"].includes(stateJob?.status) ? "refreshing" : selected ? "ready" : "pending",
+      errorCode: storeError || stateJob?.errorCode || bootstrapError || null, selectedMonth, months: rows, snapshot: selected?.snapshot || null,
       keywords, roomBasis: { ...selectedRoomBasis, capacity: selectedRoomBasis?.capacity ?? selectedRoomBasis?.count ?? basis?.capacity ?? metadata.company.capacity ?? null,
         source: selectedRoomBasis?.source || basis?.capacitySource || metadata.company.capacitySource || "unknown",
         label: selectedRoomBasis?.label || basis?.capacitySource || metadata.company.capacitySource || "객실 기준 확인 필요",
         warnings: [...new Set([...(selectedRoomBasis?.warnings || []), ...(selected?.snapshot.quality?.warnings || []).filter(warning => /객실|재고|총량|수량/.test(warning))])] },
       latestAttempts: selected?.latestAttempts || [], failedAttempts: selected?.failedAttempts || [],
-      freshness: { lastCalculatedAt: selected?.calculatedAt || null, refreshStatus: stateJob?.status || "idle", lastRefreshError: stateJob?.errorCode || null },
+      freshness: { lastCalculatedAt: selected?.calculatedAt || null, refreshStatus: stateJob?.status || "idle", lastRefreshError: stateJob?.errorCode || bootstrapError || null,
+        revisionCheckStatus: recoveredRevision ? "verified" : state.bootstrap?.status || "not_checked", revisionCheckedAt: recoveredRevision ? stateJob.finishedAt : state.bootstrap?.checkedAt || null },
       sourcePolicy: "원본 보존 · 업체 고유번호 통합 · 최신 유효 관측 · 미관측은 결측 · 월간 리포트 공통 계산" };
   }
-  async function stop() { stopped = true; if (workerPromise) await workerPromise; await serial; }
+  async function stop() { stopped = true; if (bootstrapPromise) await bootstrapPromise.catch(() => {}); if (workerPromise) await workerPromise; await serial; }
   return { bootstrap, queueCompany, queueRun, get, status, drain, stop };
 }
 

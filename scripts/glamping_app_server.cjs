@@ -21,6 +21,7 @@ const { createKosisService } = require("./lib/kosis.cjs");
 const { createMonthlyReportService } = require("./lib/monthly_reports.cjs");
 const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs");
 const { createMonthlyReportSourceRevision } = require("./lib/monthly_report_source_revision.cjs");
+const { createCompanyIntegratedSourceRevision } = require("./lib/company_integrated_source_revision.cjs");
 const { createMonthlyReportSelectorRevision } = require("./lib/monthly_report_selector_revision.cjs");
 const { createIndustryAnalysisService } = require("./lib/industry_analysis.cjs");
 const { createIndustryAnalysisHttpHandler } = require("./lib/industry_analysis_http.cjs");
@@ -576,11 +577,42 @@ async function invalidateIndustryAnalysis(reason) {
   try { await industryAnalysisService.notifySourceChanged({ reason }); }
   catch (error) { console.error("industry_analysis_invalidation_failed", error.code || "unavailable"); }
 }
+// This reader includes the saved regional context used by integrated results;
+// monthly selectors and industry references retain their independent scopes.
+function companyIntegratedCalculationFingerprint() {
+  // Explicit projection/correction dependencies only. These are hoisted
+  // function declarations; this does not execute them or hash unrelated UI.
+  // Extend this manifest (or bump its version) when adding a transitive helper
+  // or changing a calculation constant not represented by a listed file.
+  const callbacks = [companyHistoryObservationWithCurrentCapacity, manualCorrectionLodgingBasisTotal,
+    companyMaximumRoomCapacity, applyCompanyManualCorrection, companyProductAvailabilityMatch, buildHistoryObservations,
+    productSnapshotNumber, companyInventorySnapshotWithCurrentCapacity, withCompanyInventoryCapacityRecord,
+    manualCorrectionHasValue, manualCorrectionHasBasis, manualCorrectionMetaHasValue, sanitizeManualCorrectionMeta,
+    manualCorrectionRoomSegmentTotal, manualCorrectionRoomSegments, sanitizeManualCorrectionRoomSegments,
+    sanitizeB2BInterestLodgeSegment, b2bInterestLodgeSegmentHasInput, sanitizeInterestLodgeNumberText, sanitizeMemberText,
+    maxPositiveNumber, stockBasisRule, parseBasisTotalFromRule, extractNaverPlaceId, extractBookingBusinessId,
+    historySeriesForItem, inventoryEstimateBreakdown, applyOfflineReservationBasis, hasActiveManualCorrection,
+    parseAvailabilityDetail, parseReservationRateDetail, singleAvailabilityRow, normalizeObservationNumber,
+    dateFromMonthDay, dateDiffDays, kstDayKeyFromValue, kstDate, runDateFromId,
+    runCollectionDbRoute, collectionDbRouteProfile, normalizeCollectionPurpose, compactKeyword, boundedUnique, uniqueTexts, stableHash];
+  return crypto.createHash("sha256").update("company-integrated-app-calculation-v1\n")
+    .update(callbacks.map(callback => `${callback.name}:${Function.prototype.toString.call(callback)}`).join("\n")).digest("hex");
+}
+const readCompanyIntegratedRevision = createCompanyIntegratedSourceRevision({
+  dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR,
+  regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
+  tourismRegionMapFile: path.join(WEB_DIR, "data", "tourism_region_map.json"), includeContext: true,
+  calculationFiles: ["company_integrated_db.cjs", "monthly_reports.cjs", "monthly_report_comparison.cjs",
+    "monthly_report_sources.cjs", "monthly_report_context.cjs", "monthly_company_recalculation.cjs",
+    "company_capacity_registry.cjs", "monthly_report_insights.cjs", "industry_analysis.cjs",
+    "inventory_manual_corrections.cjs"].map(name => path.join(__dirname, "lib", name))
+    .concat([path.join(__dirname, "inventory_estimation.cjs"), path.join(__dirname, "verified_room_inventory.json")]),
+  calculationFingerprint: companyIntegratedCalculationFingerprint()
+});
 const companyIntegratedDb = createCompanyIntegratedDb({
   dataDir: DATA_DIR, loadSources: monthlyReportSources.loadSources, catalog: monthlyReportSources.catalog,
-  listTargets: listCompanyIntegratedTargets
+  listTargets: listCompanyIntegratedTargets, readRevision: readCompanyIntegratedRevision
 });
-const integratedCompanySignatures = new Map();
 async function queueIntegratedCompanies(companyIds, reason) {
   if (!companyIds.length) return;
   try { await companyIntegratedDb.queueRun({ companyIds, reason }); }
@@ -10552,7 +10584,25 @@ async function readCompanyMaster() {
   }
 }
 
+async function readStoredCompanyIntegrationSignatures() {
+  let stored;
+  try {
+    stored = JSON.parse((await fsp.readFile(COMPANY_MASTER_FILE, "utf8")).replace(/^\uFEFF/, ""));
+  } catch (error) {
+    if (error.code === "ENOENT") return new Map();
+    throw Object.assign(new Error("저장된 업체 자료의 변경 여부를 확인하지 못했습니다."), { code: "COMPANY_INTEGRATION_SOURCE_UNAVAILABLE" });
+  }
+  if (!stored?.companies || typeof stored.companies !== "object" || Array.isArray(stored.companies)) {
+    throw Object.assign(new Error("저장된 업체 자료의 변경 여부를 확인하지 못했습니다."), { code: "COMPANY_INTEGRATION_SOURCE_UNAVAILABLE" });
+  }
+  // Compare the durable before/after values. A process-local signature map is
+  // empty after every restart and would enqueue every company on its first save.
+  return new Map(Object.values(stored.companies).filter(company => company?.companyId && !company.deletedAt && !company.mergedIntoCompanyId)
+    .map(company => [company.companyId, crypto.createHash("sha256").update(stableJson(company)).digest("hex")]));
+}
+
 async function writeCompanyMaster(master) {
+  const previousSignatures = await readStoredCompanyIntegrationSignatures();
   await fsp.mkdir(COMPANY_MASTER_DIR, { recursive: true });
   const next = { ...master, updatedAt: new Date().toISOString() };
   master.updatedAt = next.updatedAt;
@@ -10565,9 +10615,8 @@ async function writeCompanyMaster(master) {
   const changed = [];
   for (const company of Object.values(next.companies || {})) {
     if (!company?.companyId || company.deletedAt || company.mergedIntoCompanyId) continue;
-    const signature = stableHash(JSON.stringify(company));
-    if (integratedCompanySignatures.get(company.companyId) !== signature) changed.push(company.companyId);
-    integratedCompanySignatures.set(company.companyId, signature);
+    const signature = crypto.createHash("sha256").update(stableJson(company)).digest("hex");
+    if (previousSignatures.get(company.companyId) !== signature) changed.push(company.companyId);
   }
   await queueIntegratedCompanies(changed, "company_saved");
 }
