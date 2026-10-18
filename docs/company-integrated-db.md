@@ -140,6 +140,7 @@
 | `queue.json` | 업체별 가공 작업 상태·세대 번호·안전한 오류 코드 |
 | `capacity-bases.json` | 고정 객실 기준과 수정 이력 |
 | `revision-index.json` | 재사용 판정용 원본 변경 색인·업체 및 월별 지문. 수집 원본이 아닌 재구축 가능한 파생 자료 |
+| `catalog.json` | 업체 월 조회용 경량 메타데이터. 정규화된 객실 기준·검수 보정·키워드 순위 이력·회차 품질만 보관하는 재구축 가능한 캐시 |
 | `<companyId 해시>/index.json` | 업체별 가공된 숙박월 목록 |
 | `<companyId 해시>/YYYY-MM.json` | 날짜별 채택값·월간 스냅샷·출처·실패 시도·계산 버전 |
 
@@ -154,6 +155,18 @@ GET /api/company-master/integrated?companyId=cmp_place_35644668&month=2026-09
 관리자 인증이 필요하다. 선택적 `cutoffDate=YYYY-MM-DD`는 미래가 아닌 유효 날짜만 허용한다. 기본 월 캐시와 다른 마감일의 조회는 해당 조건으로 계산하며 기본 월별 캐시를 덮어쓰지 않는다.
 
 조회 메서드는 GET이지만 **캐시가 없거나 오래됐으면 가공 큐와 파생 캐시를 기록할 수 있다.** 외부 수집은 실행하지 않지만, 파일 변경까지 금지한 엄격한 읽기 전용 운영 점검에서는 이 점을 고려해야 한다.
+
+### 최초 업체 조회의 불필요한 전체 자료 읽기 방지
+
+업체 월 조회는 `catalog.json`의 검증된 경량 정보를 사용한다. 정상 캐시 조회는 전체 업체 원본의 파싱·복제, 객실 기준 준비, 관측 이력 읽기를 다시 수행하거나 배경 원본 읽기 대기열에 합류하지 않는다. 응답의 예약·매출·자료 품질은 기존 월 파일과 공통 계산 엔진을 그대로 사용한다.
+
+서버는 요청을 받기 전에 경량 정보의 저장본을 확인하거나 최초 생성한다. 이 최초 준비 시간과 준비 후 첫 업체 조회 시간을 분리해 기록한다. 준비 실패는 `company_integrated_catalog_prepare_failed`에 안전한 오류 코드로 남으며, 기존 정상값을 최신으로 인증하거나 자료 없음·0으로 바꾸지 않는다.
+
+매 조회마다 업체 원본·관측 이력·객실 기준 파일의 변경 정보, 저장 회차 목록·manifest, 지역 기준을 확인한다. 검수 수정·새 수집·회차 품질 변경·삭제·병합 등이 있으면 원래의 정규화 과정을 거쳐 경량 저장본만 갱신한다. 오류나 연속 변경 중에는 마지막 저장본을 보존하고 조회 실패를 명시한다. 전체 업체 재구성 결과는 메모리에 보관하지 않으며 캐시 크기는 8MiB로 제한한다.
+
+진행 중인 전체 업체 조회를 공유할 때도 그 조회가 시작되기 전부터 원본 변경을 확인한다. 수정 전 시작된 느린 조회가 수정 후 완료되면 재검증·재시도하며, 수정 전 정보를 새 변경 지문으로 저장하지 않는다. 반복해서 원본이 바뀌면 재시도를 끝내고 실패를 표시한다.
+
+이 조회 최적화만으로 월별 계산 지문을 바꾸지 않는다. `company_integrated_db.cjs`와 계산 의존 파일은 그대로 두고, 경량 캐시는 별도 투영 버전으로 관리한다. 운영 검수에서는 최초 GET·재조회 시간과 전체 업체/객실 준비/이력 추가 읽기 횟수, 마감월 값·계산시각·파일 수정시각 보존을 함께 확인한다. 로컬 모의자료의 2초 통과를 운영 자료나 브라우저 표시 2초 통과로 표현하지 않는다.
 
 주요 응답 필드:
 
@@ -195,6 +208,8 @@ GET /api/insight/v1/companies/{companyId}/collection?month=YYYY-MM
 ```text
 scripts/test_company_integrated_db.cjs
 scripts/test_company_integrated_sources.cjs
+scripts/test_company_integrated_catalog.cjs
+scripts/test_company_integrated_catalog_api.cjs
 scripts/test_company_integrated_api.cjs
 scripts/test_company_integrated_ui.cjs
 scripts/test_monthly_reports_ui.cjs

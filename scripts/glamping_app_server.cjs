@@ -27,6 +27,7 @@ const { createIndustryAnalysisService } = require("./lib/industry_analysis.cjs")
 const { createIndustryAnalysisHttpHandler } = require("./lib/industry_analysis_http.cjs");
 const { createIndustrySourceRevision } = require("./lib/industry_source_revision.cjs");
 const { createCompanyIntegratedDb } = require("./lib/company_integrated_db.cjs");
+const { createCompanyIntegratedCatalog, createCompanyIntegratedCatalogRevision, createRevisionCheckedCompanyCatalog } = require("./lib/company_integrated_catalog.cjs");
 const { createCompanyIntegratedTargets } = require("./lib/company_integrated_targets.cjs");
 const { createCompanyCapacityRegistry } = require("./lib/company_capacity_registry.cjs");
 const { aggregateFields: companyBootstrapAggregateFields, compactCompanyInventory, createCompanyBootstrapStore, acceptsGzip } = require("./lib/company_bootstrap.cjs");
@@ -558,6 +559,28 @@ const monthlyReportSources = createMonthlyReportSources({
   readContext: readMonthlyRegionContext,
   readSpecialDays: async year => (await specialDaysService.status(year)).yearStatus
 });
+// Saved company-month reads need only normalized capacity, keyword ranks and
+// run quality. Keep that compact view separate from full booking reconstruction.
+const readCompanyCatalogRevision = createCompanyIntegratedCatalogRevision({
+  dataDir: DATA_DIR,
+  readSelectorRevision: createMonthlyReportSelectorRevision({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR,
+    regionMasterFile: path.join(WEB_DIR, "data", "region_master.json") })
+});
+// Guard the entire lifetime of shared full-catalog flights, before any public
+// consumer captures this function. A late pre-edit flight must never be
+// certified against a post-edit revision by the compact store.
+monthlyReportSources.catalog = createRevisionCheckedCompanyCatalog({
+  catalog: monthlyReportSources.catalog, readRevision: readCompanyCatalogRevision
+});
+const companyIntegratedCatalog = createCompanyIntegratedCatalog({
+  dataDir: DATA_DIR, catalog: monthlyReportSources.catalog,
+  readRevision: readCompanyCatalogRevision,
+  version: crypto.createHash("sha256").update("company-integrated-catalog-projection-v1\n")
+    .update(fs.readFileSync(path.join(__dirname, "lib", "company_integrated_catalog.cjs")))
+    .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_report_sources.cjs")))
+    .update(fs.readFileSync(path.join(__dirname, "lib", "company_capacity_registry.cjs")))
+    .update(companyIntegratedCalculationFingerprint()).digest("hex")
+});
 const listCompanyIntegratedTargets = createCompanyIntegratedTargets({ dataDir: DATA_DIR, catalog: monthlyReportSources.catalog });
 const readIndustryRevision = createIndustrySourceRevision({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR,
     regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
@@ -610,7 +633,7 @@ const readCompanyIntegratedRevision = createCompanyIntegratedSourceRevision({
   calculationFingerprint: companyIntegratedCalculationFingerprint()
 });
 const companyIntegratedDb = createCompanyIntegratedDb({
-  dataDir: DATA_DIR, loadSources: monthlyReportSources.loadSources, catalog: monthlyReportSources.catalog,
+  dataDir: DATA_DIR, loadSources: monthlyReportSources.loadSources, catalog: companyIntegratedCatalog.catalog,
   listTargets: listCompanyIntegratedTargets, readRevision: readCompanyIntegratedRevision
 });
 async function queueIntegratedCompanies(companyIds, reason) {
@@ -19941,6 +19964,16 @@ seedOutputsFromRepo()
         storage: prepared.selectorCache?.storage, elapsedMs: Date.now() - started }));
     }
     catch (error) { console.warn("monthly_selector_prepare_failed", error.code || "unavailable"); }
+    // The first company request must not discover a cold capacity/history scan
+    // behind background analysis. Reopen/prepare its compact metadata first.
+    try {
+      const started = Date.now();
+      await companyIntegratedCatalog.prepare();
+      console.log("company_integrated_catalog_prepared", JSON.stringify({
+        ...companyIntegratedCatalog.status(), elapsedMs: Date.now() - started
+      }));
+    }
+    catch (error) { console.warn("company_integrated_catalog_prepare_failed", error.code || "unavailable"); }
     server.listen(PORT, HOST, () => {
       const primaryUrl = HOST === "0.0.0.0" ? `http://127.0.0.1:${PORT}` : `http://${HOST}:${PORT}`;
       console.log(`Lodging datalab beta app running at ${primaryUrl}`);

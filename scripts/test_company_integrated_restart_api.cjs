@@ -20,7 +20,6 @@ async function main() {
   const historyFile = path.join(dataDir, "history", "observations.jsonl"), masterFile = path.join(dataDir, "company_master", "companies.json");
   const originalHistory = await fs.readFile(historyFile), originalMaster = await fs.readFile(masterFile);
   const monthFile = path.join(dataDir, "company_integrated", crypto.createHash("sha256").update(fixture.companyId).digest("hex"), "2026-08.json");
-  const queueFile = path.join(dataDir, "company_integrated", "queue.json");
   let activeChild;
 
   async function run(ordinal) {
@@ -30,7 +29,13 @@ async function main() {
     await fs.writeFile(preload, `
       const fs = require('node:fs');
       const audit = { companySourceReads: 0, externalRequests: 0, bootstrapCompleted: false, bootstrapErrorCode: null };
-      const save = () => fs.writeFileSync(${JSON.stringify(auditFile)}, JSON.stringify(audit));
+      const auditPath = ${JSON.stringify(auditFile)};
+      let auditSequence = 0;
+      const save = () => {
+        const target = auditPath + '.' + String(++auditSequence).padStart(6, '0'), temporary = target + '.tmp';
+        fs.writeFileSync(temporary, JSON.stringify(audit));
+        fs.renameSync(temporary, target);
+      };
       save();
       global.fetch = async () => { audit.externalRequests++; save(); throw new Error('External requests forbidden'); };
       const sourceModule = require(${JSON.stringify(path.join(root, "scripts/lib/monthly_report_sources.cjs"))});
@@ -48,7 +53,9 @@ async function main() {
       integrated.createCompanyIntegratedDb = options => {
         const service = originalIntegrated(options), originalBootstrap = service.bootstrap;
         service.bootstrap = async () => {
-          try { const result = await originalBootstrap(); audit.bootstrapCompleted = true; save(); return result; }
+          const snapshot = async () => { audit.coreStatus = await service.status(); save(); };
+          const ticker = setInterval(() => snapshot().catch(() => {}), 25); ticker.unref();
+          try { const result = await originalBootstrap(); audit.bootstrapCompleted = true; await snapshot(); return result; }
           catch (error) { audit.bootstrapErrorCode = /^[A-Z0-9_]+$/.test(error.code || '') ? error.code : 'BOOTSTRAP_FAILED'; save(); throw error; }
         };
         return service;
@@ -81,10 +88,15 @@ async function main() {
     }
     assert.equal(ready, true, `local readiness timed out during run ${ordinal}`);
     let state, bootstrapAudit;
+    const readAudit = async () => {
+      const prefix = path.basename(auditFile) + ".";
+      const latest = (await fs.readdir(dataDir)).filter(name => name.startsWith(prefix)
+        && /^\d{6}$/.test(name.slice(prefix.length))).sort().at(-1);
+      return latest ? JSON.parse(await fs.readFile(path.join(dataDir, latest), "utf8")) : null;
+    };
     for (let i = 0; i < 400; i++) {
       assertRunning();
-      try { state = JSON.parse(await fs.readFile(queueFile, "utf8")); } catch {}
-      try { bootstrapAudit = JSON.parse(await fs.readFile(auditFile, "utf8")); } catch {}
+      try { bootstrapAudit = await readAudit(); state = bootstrapAudit?.coreStatus; } catch {}
       assert.equal(bootstrapAudit?.bootstrapErrorCode || null, null, bootstrapAudit?.bootstrapErrorCode || "local bootstrap failed");
       assert.notEqual(state?.bootstrap?.status, "failed", state?.bootstrap?.errorCode || "local bootstrap failed");
       const jobs = Object.values(state?.jobs || {});
@@ -94,7 +106,10 @@ async function main() {
     }
     assert.equal(state?.bootstrap?.status, "checked");
     assert.equal(bootstrapAudit?.bootstrapCompleted, true, "this process must complete its own fresh bootstrap inspection");
-    assert.ok(Object.values(state.jobs).every(job => job.status === "idle"), "company bootstrap did not finish");
+    assert.ok(Object.values(state.jobs).every(job => job.status === "idle"),
+      "company bootstrap did not finish: " + JSON.stringify({ bootstrap: state.bootstrap, jobs: Object.values(state.jobs).map(job => ({
+        companyId: job.companyId, status: job.status, errorCode: job.errorCode, months: job.months
+      })), audit: bootstrapAudit }));
     const login = await fetch(base + "/api/login", { method: "POST", headers: { "Content-Type": "application/json", Origin: base },
       body: JSON.stringify({ username: "restart-test-admin", password: "restart-test-password" }) });
     assert.equal(login.status, 200);
@@ -104,7 +119,7 @@ async function main() {
     const view = await response.json();
     assert.equal(view.status, "ready");
     assert.equal(view.roomBasis.capacity, 10);
-    const audit = JSON.parse(await fs.readFile(auditFile, "utf8"));
+    const audit = await readAudit();
     assert.equal(audit.externalRequests, 0);
     child.kill(); if (child.exitCode === null) await once(child, "exit"); activeChild = null;
     return { bootstrap: state.bootstrap, audit, view };

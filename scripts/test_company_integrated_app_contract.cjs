@@ -64,6 +64,7 @@ test("the app supplies a dedicated scoped context revision reader and retains it
     DATA_DIR: path.join(os.tmpdir(), "unused-contract-data"), OUTPUTS_DIR: path.join(os.tmpdir(), "unused-contract-outputs"),
     WEB_DIR: path.join(os.tmpdir(), "unused-contract-web"),
     monthlyReportSources: { loadSources() {}, catalog() {} }, listCompanyIntegratedTargets() {},
+    companyIntegratedCatalog: { catalog() {} },
     createCompanyIntegratedSourceRevision: options => { revisionOptions = options; return revision; },
     createCompanyIntegratedDb: options => { dbOptions = options; return {}; }
   };
@@ -83,10 +84,14 @@ test("the app supplies a dedicated scoped context revision reader and retains it
   assert.ok(revisionOptions.calculationFiles.includes(path.join(__dirname, "lib", "monthly_report_insights.cjs")));
   assert.ok(!revisionOptions.calculationFiles.includes(path.join(__dirname, "glamping_app_server.cjs")),
     "unrelated server/UI changes must not invalidate every integrated month");
+  assert.ok(!revisionOptions.calculationFiles.includes(path.join(__dirname, "lib", "company_integrated_catalog.cjs")),
+    "metadata read caching uses its own projection version rather than invalidating all monthly calculations");
   assert.equal(dbOptions.readRevision, revision);
   assert.equal(dbOptions.readRevision.prepare, revision.prepare);
   assert.equal(dbOptions.readRevision.forScope, revision.forScope);
   assert.equal(dbOptions.loadSources, context.monthlyReportSources.loadSources);
+  assert.equal(dbOptions.catalog, context.companyIntegratedCatalog.catalog,
+    "saved company reads bypass full booking catalog preparation");
   assert.equal(await dbOptions.readRevision({ companyId: "a", month: "2026-09" }), "company:a:2026-09");
   const originalFingerprint = revisionOptions.calculationFingerprint;
   assert.match(originalFingerprint, /^[a-f0-9]{64}$/);

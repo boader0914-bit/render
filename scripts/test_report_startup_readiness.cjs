@@ -15,9 +15,11 @@ function gate() {
   return { promise, resolve, reject };
 }
 
-function fixture({ seedError = false, companyPending = false, companyError = false } = {}) {
+function fixture({ seedError = false, companyPending = false, companyError = false, catalogPending = false, catalogError = false } = {}) {
   const coordination = gate(), selectors = gate(), entered = gate(), company = gate(), companyEntered = gate();
+  const catalog = gate(), catalogEntered = gate();
   if (!companyPending) company.resolve({ cacheStatus: "saved", data: { totalCompanies: 535 }, json: Buffer.alloc(1), gzip: Buffer.alloc(1) });
+  if (!catalogPending) catalog.resolve();
   const calls = [], warnings = [];
   let listener;
   const context = {
@@ -38,6 +40,11 @@ function fixture({ seedError = false, companyPending = false, companyError = fal
     monthlyReportSources: { options: async options => {
       calls.push(["selectors", options]); entered.resolve(); return selectors.promise;
     } },
+    companyIntegratedCatalog: { prepare: async () => {
+      calls.push("company-catalog"); catalogEntered.resolve();
+      if (catalogError) throw Object.assign(new Error("private catalog content"), { code: "COMPANY_CATALOG_SOURCE_UNAVAILABLE" });
+      return catalog.promise;
+    }, status: () => ({ status: "reused", storage: "saved", companyCount: 535 }) },
     server: { listen: (port, host, callback) => { assert.equal(port, 10000); assert.equal(host, "127.0.0.1"); calls.push("listen"); listener = callback; } },
     companyIntegratedDb: { bootstrap: async () => calls.push("companies") },
     industryAnalysisService: { bootstrap: async () => calls.push("industry") },
@@ -49,7 +56,7 @@ function fixture({ seedError = false, companyPending = false, companyError = fal
     setInterval: () => ({ unref() {} })
   };
   const ready = vm.runInNewContext(startup, context);
-  return { calls, warnings, ready, coordination, selectors, entered, company, companyEntered, listen: () => listener() };
+  return { calls, warnings, ready, coordination, selectors, entered, company, companyEntered, catalog, catalogEntered, listen: () => listener() };
 }
 
 test("readiness prepares persisted selectors after coordination and before aggregate bootstraps", async () => {
@@ -98,4 +105,22 @@ test("company preparation failure remains a safe diagnostic while normal API err
   f.selectors.resolve({ selectorCache: { storage: "saved" } }); await f.ready; f.listen(); await Promise.resolve();
   assert.ok(f.calls.includes("listen") && f.calls.includes("companies"));
   assert.deepEqual(f.warnings, [["company_bootstrap_prepare_failed", "COMPANY_BOOTSTRAP_INVALID_SOURCE"]]);
+});
+
+test("compact company metadata finishes before readiness and background source reconstruction", async () => {
+  const f = fixture({ catalogPending: true }); f.coordination.resolve(); await f.entered.promise;
+  f.selectors.resolve({ selectorCache: { storage: "saved" } }); await f.catalogEntered.promise;
+  assert.equal(f.calls.at(-1), "company-catalog");
+  assert.ok(!f.calls.includes("listen") && !f.calls.includes("companies") && !f.calls.includes("industry"));
+  f.catalog.resolve(); await f.ready; f.listen(); await Promise.resolve();
+  assert.ok(f.calls.indexOf("company-catalog") < f.calls.indexOf("listen"));
+  assert.ok(f.calls.indexOf("listen") < f.calls.indexOf("companies"));
+  assert.deepEqual(f.warnings, []);
+});
+
+test("failed compact metadata preparation exposes a safe diagnostic without disabling other APIs", async () => {
+  const f = fixture({ catalogError: true }); f.coordination.resolve(); await f.entered.promise;
+  f.selectors.resolve({ selectorCache: { storage: "saved" } }); await f.ready; f.listen();
+  assert.ok(f.calls.includes("listen") && f.calls.includes("companies"));
+  assert.deepEqual(f.warnings, [["company_integrated_catalog_prepare_failed", "COMPANY_CATALOG_SOURCE_UNAVAILABLE"]]);
 });
