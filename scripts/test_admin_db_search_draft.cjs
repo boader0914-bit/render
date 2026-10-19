@@ -12,7 +12,7 @@ const source = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8").re
 const names = ["adminDbSearchContext", "resetAdminDbSearchDraft", "adminDbSearchDraft", "saveAdminDbSearchDraft",
   "captureAdminDbSearchInput", "adminDbSearchRestoreIsCurrent", "restoreAdminDbSearchInput", "restoreAdminSearchInput",
   "adminDbCompanySearchShellHtml", "adminDbCompanyAutocompleteHtml", "refreshAdminDbAutocomplete", "closeAdminDbAutocomplete",
-  "commitAdminDbQueryRender", "renderAdminDatabaseDashboard", "adminDbQueryUsesInlineAutocomplete"];
+  "commitAdminDbQueryRender", "adminDbIntegratedContextCurrent", "adminDbReplaceBoardHtml", "renderAdminDatabaseDashboard", "adminDbQueryUsesInlineAutocomplete"];
 function declaration(name) {
   const found = source.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^}`, "m"))?.[0];
   assert.ok(found, `Missing production function ${name}`);

@@ -114,7 +114,9 @@ function activationFixture() {
     loadAdminDbCompanyDetail: () => detailRequest,
     restoreAdminDbInlineSearchViewport(position, options) { restores.push({ ...position, clear: options?.clear }); }
   });
-  vm.runInContext(declaration, context);
+  const resetDraft = source.match(/^function resetAdminDbSearchDraft\([^]*?^}/m)?.[0];
+  assert.ok(resetDraft, "Real search draft reset function");
+  vm.runInContext(resetDraft + "\n" + declaration, context);
   return {
     context, restores, opens,
     async finishLoading() {

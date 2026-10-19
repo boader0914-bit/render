@@ -216,7 +216,7 @@ function actualDbFixture(mode = "list", options = {}) {
   c.adminDbSelectedDetailPanel = () => `detail:${f.state.companyMaster.revision}`;
   for (const name of ["adminDbCompanySearchShellHtml", "adminDbUserViewBridgeHtml", "adminDbAuditBoard", "adminDbWorkPanel", "adminDbCollectionPanel", "adminRegionalDatabasePanel"]) c[name] = () => name;
   for (const name of ["bindAdminDbCompanySelectButtons", "applyPendingCompanyEdit"]) c[name] = () => f.calls.push({ name });
-  vm.runInContext(`${declaration("adminDbViewMode")}\n${declaration("renderAdminDatabaseDashboard")}`, c);
+  vm.runInContext(["adminDbViewMode", "adminDbIntegratedContextCurrent", "adminDbReplaceBoardHtml", "renderAdminDatabaseDashboard"].map(declaration).join("\n"), c);
   return { ...f, actualRender: () => vm.runInContext("renderAdminDatabaseDashboard();", c), disposed: () => disposed };
 }
 

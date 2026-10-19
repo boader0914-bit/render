@@ -41,6 +41,16 @@ function container() {
     querySelector(selector) { return { focus: () => { this.focused = selector; } }; }, closest() { return this.hidden ? {} : null; } };
 }
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
+function animationFrames() {
+  let id = 0;
+  const callbacks = new Map();
+  return {
+    requestAnimationFrame(fn) { callbacks.set(++id, fn); return id; },
+    cancelAnimationFrame(key) { callbacks.delete(key); },
+    frame() { const batch = [...callbacks.values()]; callbacks.clear(); for (const fn of batch) fn(); },
+    get size() { return callbacks.size; }
+  };
+}
 
 test("actual monthly calculation retains fixed capacity and valid latest values across keywords and later failure", () => {
   const payload = envelope(), before = JSON.stringify(payload), model = ui.buildViewModel(payload);
@@ -148,4 +158,189 @@ test("authentication failure preserves previously loaded values without converti
   await controller.open({ companyId: envelope().companyId }); fail = true; await controller.load();
   assert.match(c.innerHTML, /관리자 로그인이 필요/); assert.match(c.innerHTML, /기존 저장 자료/);
   assert.equal(ui.buildViewModel(controller.state.envelope).summary.sold, 5); controller.dispose();
+});
+
+test("same-context open coalesces an in-flight and completed response while explicit load still refreshes", async () => {
+  const c = container(), first = deferred(), calls = [], frames = animationFrames();
+  const controller = ui.createController(c, { ...frames, fetchData(id, month, signal) { calls.push({ id, month, signal }); return calls.length === 1 ? first.promise : Promise.resolve(envelope()); } });
+  const context = { companyId: envelope().companyId };
+  const a = controller.open(context), b = controller.open(context);
+  assert.equal(a, b); assert.equal(calls.length, 1); assert.equal(calls[0].signal.aborted, false);
+  first.resolve(envelope()); await a;
+  const html = c.innerHTML, displayed = controller.whenDisplayed();
+  frames.frame(); frames.frame(); assert.equal((await displayed).status, "displayed");
+  await controller.open(context);
+  assert.equal(calls.length, 1, "the canonical selected month must not cause a second default-month request");
+  assert.equal(c.innerHTML, html, "a completed coalesced response must not replace its DOM");
+  assert.equal(controller.whenDisplayed(), displayed);
+  await controller.load(); assert.equal(calls.length, 2, "manual refresh remains a fresh request"); controller.dispose();
+});
+
+test("display completion waits for the final data DOM and two animation frames", async () => {
+  const c = container(), answer = deferred(), frames = animationFrames();
+  const controller = ui.createController(c, { ...frames, fetchData: () => answer.promise });
+  const opening = controller.open({ companyId: envelope().companyId, month: "2026-09" });
+  let settled = false; const displayed = controller.whenDisplayed().then(value => { settled = true; return value; });
+  assert.equal(frames.size, 0, "the loading placeholder is not the completed data card");
+  frames.frame(); await Promise.resolve(); assert.equal(settled, false);
+  answer.resolve(envelope()); await opening;
+  assert.match(c.innerHTML, /100만원/); assert.equal(settled, false);
+  frames.frame(); await Promise.resolve(); assert.equal(settled, false);
+  frames.frame();
+  assert.deepEqual(await displayed, { status: "displayed", companyId: envelope().companyId, month: "2026-09", loadStatus: "ready" });
+  controller.dispose();
+});
+
+test("pending, refreshing, failed and request errors all finish display without pretending the data is ready", async () => {
+  for (const status of ["pending", "refreshing", "updating", "failed", "error"]) {
+    const c = container(), frames = animationFrames();
+    const controller = ui.createController(c, { ...frames, setTimeout() { return 1; }, clearTimeout() {}, fetchData: async () => { if (status === "error") throw new Error("관리자 로그인이 필요합니다."); return { ...envelope(), status }; } });
+    await controller.open({ companyId: envelope().companyId });
+    const displayed = controller.whenDisplayed(); frames.frame(); frames.frame();
+    const result = await displayed;
+    assert.equal(result.status, "displayed"); assert.equal(result.loadStatus, status === "updating" ? "refreshing" : status);
+    if (status === "error") { assert.match(c.innerHTML, /관리자 로그인이 필요/); assert.doesNotMatch(c.innerHTML, /100만원/); }
+    controller.dispose();
+  }
+});
+
+test("company/month changes settle previous display tickets immediately and ignore stale draws", async () => {
+  const c = container(), calls = [], frames = animationFrames();
+  const controller = ui.createController(c, { ...frames, fetchData(id, month, signal) { const pending = deferred(); calls.push({ id, month, signal, ...pending }); return pending.promise; } });
+  const a = controller.open({ companyId: "switch-a", month: "2026-09" }), aDisplay = controller.whenDisplayed();
+  const b = controller.load("2026-08"), bDisplay = controller.whenDisplayed();
+  assert.equal((await aDisplay).status, "superseded"); assert.equal(calls[0].signal.aborted, true);
+  const d = controller.open({ companyId: "switch-b", month: "2026-07" }), dDisplay = controller.whenDisplayed();
+  assert.equal((await bDisplay).status, "superseded"); assert.equal(calls[1].signal.aborted, true);
+  calls[2].resolve({ ...envelope(), companyId: "switch-b", selectedMonth: "2026-07" }); await d;
+  calls[0].resolve({ ...envelope(), companyId: "switch-a" }); calls[1].resolve({ ...envelope(), companyId: "switch-a", selectedMonth: "2026-08" }); await Promise.all([a, b]);
+  frames.frame(); frames.frame();
+  assert.deepEqual(await dDisplay, { status: "displayed", companyId: "switch-b", month: "2026-07", loadStatus: "ready" });
+  const loading = controller.load("2026-06"), disposed = controller.whenDisplayed(); controller.dispose();
+  assert.equal((await disposed).status, "disposed"); assert.equal((await controller.whenDisplayed()).status, "disposed");
+  calls[3].resolve({ ...envelope(), companyId: "switch-b", selectedMonth: "2026-06" }); await loading;
+});
+
+test("hidden response tickets finish and become visible again without fetching the same data", async () => {
+  const c = container(), answer = deferred(), frames = animationFrames(); let count = 0;
+  const controller = ui.createController(c, { ...frames, fetchData: () => { count += 1; return answer.promise; } });
+  const context = { companyId: envelope().companyId, month: "2026-09" };
+  const loading = controller.open(context), firstDisplay = controller.whenDisplayed();
+  c.hidden = true; assert.equal(controller.whenDisplayed(), firstDisplay);
+  assert.equal((await firstDisplay).status, "hidden");
+  answer.resolve(envelope()); await loading; assert.equal(frames.size, 0);
+  c.hidden = false; await controller.open(context);
+  const visibleDisplay = controller.whenDisplayed(); assert.notEqual(visibleDisplay, firstDisplay);
+  frames.frame(); frames.frame(); assert.equal((await visibleDisplay).status, "displayed");
+  assert.equal(count, 1); controller.dispose();
+});
+
+test("a DOM redraw during display restarts the two-frame barrier without settling a stale DOM generation", async () => {
+  const c = container(), frames = animationFrames();
+  const controller = ui.createController(c, { ...frames, fetchData: async () => envelope() });
+  await controller.open({ companyId: envelope().companyId }); let settled = false;
+  const displayed = controller.whenDisplayed().then(value => { settled = true; return value; });
+  frames.frame(); controller.selectTab("review"); frames.frame(); await Promise.resolve();
+  assert.equal(settled, false); assert.match(c.innerHTML, /합산에서 제외한 자료/);
+  frames.frame(); assert.equal((await displayed).status, "displayed"); controller.dispose();
+});
+
+test("a past displayed result cannot authorize work while that same card is hidden", async () => {
+  const c = container(), frames = animationFrames(); let calls = 0;
+  const controller = ui.createController(c, { ...frames, fetchData: async () => { calls += 1; return envelope(); } });
+  const context = { companyId: envelope().companyId };
+  await controller.open(context); const displayed = controller.whenDisplayed(); frames.frame(); frames.frame();
+  assert.equal((await displayed).status, "displayed");
+  c.hidden = true; const hidden = controller.whenDisplayed(); assert.notEqual(hidden, displayed); assert.equal((await hidden).status, "hidden");
+  c.hidden = false; await controller.open(context); const returned = controller.whenDisplayed();
+  frames.frame(); frames.frame(); assert.equal((await returned).status, "displayed"); assert.equal(calls, 1); controller.dispose();
+});
+
+test("a later local DOM redraw gets its own two-frame display result without another API call", async () => {
+  const c = container(), frames = animationFrames(); let calls = 0;
+  const controller = ui.createController(c, { ...frames, fetchData: async () => { calls += 1; return envelope(); } });
+  await controller.open({ companyId: envelope().companyId });
+  const before = controller.whenDisplayed(); frames.frame(); frames.frame(); await before;
+  controller.selectTab("analysis"); const after = controller.whenDisplayed(); assert.notEqual(after, before);
+  let settled = false; after.then(() => { settled = true; }); frames.frame(); await Promise.resolve(); assert.equal(settled, false);
+  frames.frame(); assert.equal((await after).status, "displayed"); assert.equal(calls, 1); controller.dispose();
+});
+
+test("visibility and removal observers release a display waiter even before the network completes", async () => {
+  const previousDocument = globalThis.document, events = new Map(), answer = deferred(), frames = animationFrames(); let notify, disconnected = false;
+  globalThis.document = { documentElement: {}, visibilityState: "visible", addEventListener(type, fn) { events.set(type, fn); }, removeEventListener(type) { events.delete(type); } };
+  const c = container();
+  class Observer { constructor(callback) { notify = callback; } observe() {} disconnect() { disconnected = true; } }
+  const controller = ui.createController(c, { ...frames, MutationObserver: Observer, fetchData: () => answer.promise });
+  try {
+    const loading = controller.open({ companyId: envelope().companyId }), displayed = controller.whenDisplayed();
+    c.isConnected = false; notify(); assert.equal((await displayed).status, "hidden");
+    c.isConnected = true; const reopened = controller.open({ companyId: envelope().companyId }), reopenedDisplay = controller.whenDisplayed();
+    globalThis.document.visibilityState = "hidden"; events.get("visibilitychange")();
+    assert.equal((await reopenedDisplay).status, "hidden");
+    answer.resolve(envelope()); await Promise.all([loading, reopened]);
+  } finally { answer.resolve(envelope()); controller.dispose(); globalThis.document = previousDocument; }
+  assert.equal(disconnected, true); assert.equal(events.size, 0);
+});
+
+test("animation scheduling failures fall back to asynchronous turns and do not leave display pending", async () => {
+  const c = container();
+  const controller = ui.createController(c, { requestAnimationFrame() { throw new Error("surface unavailable"); }, fetchData: async () => envelope() });
+  await controller.open({ companyId: envelope().companyId });
+  const result = await controller.whenDisplayed(); assert.equal(result.status, "displayed"); controller.dispose();
+});
+
+test("a polling timer paused in a hidden document resumes once on return without an immediate refetch", async () => {
+  const previousDocument = globalThis.document, events = new Map(), timers = new Map(), frames = animationFrames();
+  let nextTimer = 0, calls = 0, notify;
+  globalThis.document = { documentElement: {}, visibilityState: "visible", addEventListener(type, fn) { events.set(type, fn); }, removeEventListener(type) { events.delete(type); } };
+  class Observer { constructor(callback) { notify = callback; } observe() {} disconnect() {} }
+  const c = container(), context = { companyId: envelope().companyId };
+  const controller = ui.createController(c, { ...frames, MutationObserver: Observer,
+    fetchData: async () => { calls += 1; return { ...envelope(), status: calls === 1 ? "updating" : "ready" }; },
+    setTimeout(fn, ms) { assert.equal(ms, 3000); timers.set(++nextTimer, fn); return nextTimer; }, clearTimeout: key => timers.delete(key) });
+  try {
+    await controller.open(context); assert.equal(calls, 1); assert.equal(timers.size, 1);
+    globalThis.document.visibilityState = "hidden"; events.get("visibilitychange")();
+    const [timerId, callback] = [...timers][0]; timers.delete(timerId); callback();
+    assert.equal(calls, 1); assert.equal(timers.size, 0, "hidden timer must not retry or reschedule");
+    globalThis.document.visibilityState = "visible"; events.get("visibilitychange")(); notify();
+    await controller.open(context); controller.whenDisplayed();
+    assert.equal(calls, 1, "returning/showing coalesced data must not refetch immediately");
+    assert.equal(timers.size, 1, "visibility, DOM observer and repeated show share one poll timer");
+    const [resumedId, resumed] = [...timers][0]; timers.delete(resumedId); resumed();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls, 2); assert.equal(timers.size, 0, "ready response stops polling");
+  } finally { controller.dispose(); globalThis.document = previousDocument; }
+});
+
+test("an in-progress response arriving hidden starts one delayed poll when its card becomes visible", async () => {
+  for (const status of ["refreshing", "updating", "pending", "ready", "failed"]) {
+    const c = container(), timers = new Map(), frames = animationFrames(), answer = deferred(); let count = 0, nextTimer = 0;
+    c.hidden = true;
+    const context = { companyId: envelope().companyId };
+    const controller = ui.createController(c, { ...frames, fetchData: () => { count += 1; return answer.promise; },
+      setTimeout(fn, ms) { assert.equal(ms, 3000); timers.set(++nextTimer, fn); return nextTimer; }, clearTimeout: key => timers.delete(key) });
+    try {
+      const opening = controller.open(context); answer.resolve({ ...envelope(), status }); await opening;
+      assert.equal(timers.size, 0, status + " must not poll while hidden");
+      c.hidden = false; await controller.open(context); controller.whenDisplayed(); await controller.open(context);
+      assert.equal(count, 1, "show must reuse the response that arrived hidden");
+      assert.equal(timers.size, ["refreshing", "updating"].includes(status) ? 1 : 0, "only actual in-progress work resumes");
+    } finally { controller.dispose(); }
+  }
+});
+
+test("a failed refresh does not restart polling its previous in-progress envelope on visibility checks", async () => {
+  const c = container(), timers = new Map(), frames = animationFrames(); let calls = 0, nextTimer = 0;
+  const context = { companyId: envelope().companyId };
+  const controller = ui.createController(c, { ...frames, fetchData: async () => { calls += 1; if (calls > 1) throw new Error("관리자 로그인이 필요합니다."); return { ...envelope(), status: "refreshing" }; },
+    setTimeout(fn, ms) { assert.equal(ms, 3000); timers.set(++nextTimer, fn); return nextTimer; }, clearTimeout: key => timers.delete(key) });
+  try {
+    await controller.open(context); assert.equal(timers.size, 1);
+    const [id, poll] = [...timers][0]; timers.delete(id); poll(); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls, 2); assert.equal(timers.size, 0); assert.match(controller.state.error, /로그인/);
+    c.hidden = true; controller.whenDisplayed(); c.hidden = false; await controller.open(context); controller.whenDisplayed();
+    assert.equal(calls, 2); assert.equal(timers.size, 0, "an error must not become an automatic retry loop");
+  } finally { controller.dispose(); }
 });

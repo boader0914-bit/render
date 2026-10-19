@@ -166,38 +166,122 @@
   function createController(container, options = {}) {
     const fetchData = options.fetchData || request, schedule = options.setTimeout || root.setTimeout.bind(root), cancel = options.clearTimeout || root.clearTimeout.bind(root);
     const state = { context: {}, tab: "settlement", view: "calendar", selectedDate: "", loading: false, error: "", envelope: {}, month: "" };
-    let timer = null, sequence = 0, aborted = null, disposed = false;
+    const requestFrame = options.requestAnimationFrame || (root.requestAnimationFrame ? root.requestAnimationFrame.bind(root) : callback => root.setTimeout(callback, 0));
+    const cancelFrame = options.cancelAnimationFrame || (root.cancelAnimationFrame ? root.cancelAnimationFrame.bind(root) : root.clearTimeout.bind(root));
+    let timer = null, sequence = 0, aborted = null, disposed = false, activeLoad = null, hasOpened = false;
+    let displayTicket = null, drawRevision = 0, frameVersion = 0, frames = [];
     function clearTimer() { if (timer !== null) cancel(timer); timer = null; }
+    function visible() {
+      return container.isConnected !== false && !container.closest?.("[hidden]") && root.document?.visibilityState !== "hidden" && (!container.getClientRects || container.getClientRects().length > 0);
+    }
+    function schedulePolling() {
+      if (disposed || timer !== null || state.loading || state.error || !visible()
+        || !["updating", "refreshing"].includes(state.envelope.status)) return;
+      timer = schedule(() => { timer = null; if (visible()) void load(); }, 3000);
+    }
+    function clearFrames() { frameVersion += 1; for (const frame of frames) { try { cancelFrame(frame); } catch {} } frames = []; }
+    function settleDisplay(ticket, status) {
+      if (!ticket || ticket.settled) return;
+      if (ticket === displayTicket) clearFrames();
+      ticket.settled = status;
+      const loadStatus = state.error ? "error" : ["updating", "refreshing"].includes(state.envelope.status) ? "refreshing" : ["ready", "pending", "failed"].includes(state.envelope.status) ? state.envelope.status : "pending";
+      ticket.resolve({ status, companyId: ticket.companyId, month: ticket.month, loadStatus });
+    }
+    function beginDisplay() {
+      settleDisplay(displayTicket, "superseded");
+      let resolve;
+      displayTicket = { companyId: state.context.companyId || "", month: state.month, sequence, settled: "", promise: new Promise(done => { resolve = done; }), resolve: value => resolve(value) };
+      return displayTicket;
+    }
+    function displayAfterDraw() {
+      const ticket = displayTicket;
+      if (!ticket || ticket.settled || disposed) return;
+      clearFrames();
+      if (!visible()) { settleDisplay(ticket, "hidden"); return; }
+      if (state.loading) return;
+      ticket.month = state.month;
+      const revision = drawRevision, version = frameVersion;
+      const current = () => ticket === displayTicket && !ticket.settled && !disposed && ticket.sequence === sequence && revision === drawRevision && version === frameVersion;
+      const frame = callback => {
+        // A host's animation-frame callback may be unavailable during a surface transition.
+        // Use an independent turn in that case, without changing the collection polling timer.
+        try { frames.push(requestFrame(callback)); } catch { frames.push(root.setTimeout(callback, 0)); }
+      };
+      frame(() => {
+        if (!current()) return;
+        if (!visible()) { settleDisplay(ticket, "hidden"); return; }
+        frame(() => { if (!current()) return; settleDisplay(ticket, visible() ? "displayed" : "hidden"); });
+      });
+    }
+    function checkVisibility() {
+      if (disposed) return;
+      if (visible()) { schedulePolling(); return; }
+      // A completed paint is not proof that the same surface is still visible.
+      // Give hidden callers a fresh terminal ticket instead of a past displayed result.
+      if (displayTicket?.settled && displayTicket.settled !== "hidden") beginDisplay();
+      settleDisplay(displayTicket, "hidden");
+    }
+    const Observer = options.MutationObserver || root.MutationObserver;
+    let observer = null;
+    if (Observer && root.document?.documentElement) {
+      try { observer = new Observer(checkVisibility); observer.observe(root.document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden", "class", "style"] }); } catch { observer?.disconnect(); observer = null; }
+    }
+    root.document?.addEventListener?.("visibilitychange", checkVisibility);
     function draw() {
       if (disposed) return;
       const active = root.document?.activeElement;
       const focused = active && container.contains?.(active);
       const selector = focused && active.matches?.("[data-ci-month]") ? "[data-ci-month]" : focused && active.matches?.("[data-ci-refresh]") ? "[data-ci-refresh]" : null;
       container.innerHTML = render(buildViewModel(state.envelope, { ...state.context, month: state.month }), state);
-      if (selector) container.querySelector(selector)?.focus();
+      drawRevision += 1;
+      if (displayTicket?.settled === "displayed") beginDisplay();
+      try { if (selector) container.querySelector(selector)?.focus(); } finally { displayAfterDraw(); }
     }
     function remember() { if (state.context.companyId) { remembered.set(state.context.companyId, { tab: state.tab, view: state.view, month: state.month }); if (remembered.size > 100) remembered.delete(remembered.keys().next().value); } }
-    async function load(month = state.month) {
-      if (disposed || !state.context.companyId) return;
+    function load(month = state.month) {
+      if (disposed || !state.context.companyId) return Promise.resolve();
       clearTimer(); aborted?.abort(); aborted = new AbortController(); const current = ++sequence;
       if (month !== state.month) { state.envelope = {}; state.selectedDate = ""; }
-      state.month = month; state.loading = true; state.error = ""; draw();
-      try {
-        const envelope = await fetchData(state.context.companyId, month, aborted.signal);
-        if (disposed || current !== sequence) return;
-        if (envelope.companyId && envelope.companyId !== state.context.companyId) throw new Error("요청한 업체와 자료의 업체가 일치하지 않습니다.");
-        if (validMonth(month) && envelope.selectedMonth && envelope.selectedMonth !== month) throw new Error("선택한 월과 자료의 월이 일치하지 않습니다.");
-        state.envelope = envelope; state.month = envelope.selectedMonth || envelope.snapshot?.request?.month || month;
-        // Pending means queued but not running. Poll only actual in-progress work.
-        if (["updating", "refreshing"].includes(envelope.status)) timer = schedule(() => { timer = null; if (container.isConnected === false || container.closest?.("[hidden]")) return; void load(); }, 3000);
-      } catch (error) { if (!disposed && current === sequence && error.name !== "AbortError") state.error = error.message || "통합 자료를 불러오지 못했습니다."; }
-      finally { if (!disposed && current === sequence) { state.loading = false; remember(); draw(); } }
+      const signal = aborted.signal;
+      state.month = month; state.loading = true; state.error = ""; hasOpened = true; beginDisplay(); draw();
+      const promise = (async () => {
+        try {
+          const envelope = await fetchData(state.context.companyId, month, signal);
+          if (disposed || current !== sequence) return;
+          if (envelope.companyId && envelope.companyId !== state.context.companyId) throw new Error("요청한 업체와 자료의 업체가 일치하지 않습니다.");
+          if (validMonth(month) && envelope.selectedMonth && envelope.selectedMonth !== month) throw new Error("선택한 월과 자료의 월이 일치하지 않습니다.");
+          state.envelope = envelope; state.month = envelope.selectedMonth || envelope.snapshot?.request?.month || month;
+        } catch (error) { if (!disposed && current === sequence && error?.name !== "AbortError") state.error = error?.message || "통합 자료를 불러오지 못했습니다."; }
+        finally {
+          if (!disposed && current === sequence) {
+            state.loading = false; remember(); draw();
+            // Pending is only queued. Resume polling actual in-progress work
+            // after a hidden response or a paused polling timer becomes visible.
+            schedulePolling();
+          }
+        }
+      })();
+      activeLoad = { promise, companyId: state.context.companyId };
+      return promise;
     }
-    async function open(context) {
+    function open(context) {
+      if (disposed) return Promise.resolve();
       const changed = state.context.companyId !== context.companyId;
       state.context = { ...context };
       if (changed) { const previous = remembered.get(context.companyId) || {}; state.tab = previous.tab || "settlement"; state.view = previous.view || "calendar"; state.month = context.month || previous.month || ""; state.envelope = {}; state.selectedDate = ""; }
-      await load(context.month || state.month);
+      const month = context.month || state.month;
+      if (!changed && hasOpened && month === state.month && activeLoad?.companyId === context.companyId) {
+        if (displayTicket?.settled === "hidden" && visible()) { beginDisplay(); displayAfterDraw(); }
+        checkVisibility();
+        return activeLoad.promise;
+      }
+      return load(month);
+    }
+    function whenDisplayed() {
+      if (disposed) return Promise.resolve({ status: "disposed", companyId: state.context.companyId || "", month: state.month });
+      if (!displayTicket || displayTicket.settled === "hidden" && visible()) { beginDisplay(); displayAfterDraw(); }
+      checkVisibility();
+      return displayTicket.promise;
     }
     function selectTab(tab) { if (!Object.hasOwn(TABS, tab)) return; state.tab = tab; state.selectedDate = ""; remember(); draw(); container.querySelector(`[data-ci-tab="${tab}"]`)?.focus(); }
     const click = event => {
@@ -214,8 +298,8 @@
       selectTab(event.key === "Home" ? keys[0] : event.key === "End" ? keys.at(-1) : keys[(index + (event.key === "ArrowRight" ? 1 : keys.length - 1)) % keys.length]);
     };
     container.addEventListener("click", click); container.addEventListener("change", change); container.addEventListener("keydown", keydown);
-    function dispose() { disposed = true; sequence += 1; aborted?.abort(); clearTimer(); container.removeEventListener("click", click); container.removeEventListener("change", change); container.removeEventListener("keydown", keydown); instances.delete(container); }
-    draw(); return { state, open, load, selectTab, dispose };
+    function dispose() { settleDisplay(displayTicket, "disposed"); disposed = true; sequence += 1; aborted?.abort(); clearTimer(); clearFrames(); observer?.disconnect(); root.document?.removeEventListener?.("visibilitychange", checkVisibility); container.removeEventListener("click", click); container.removeEventListener("change", change); container.removeEventListener("keydown", keydown); instances.delete(container); }
+    draw(); return { state, open, load, whenDisplayed, selectTab, dispose };
   }
   const api = { buildViewModel, render, createController, show(container, context) { if (!container) return; let controller = instances.get(container); if (!controller) { controller = createController(container); instances.set(container, controller); } void controller.open(context); return controller; }, disposeWithin(parent) { if (!parent) return; for (const container of parent.querySelectorAll("[data-company-integrated]")) instances.get(container)?.dispose(); } };
   root.CompanyIntegrated = api;

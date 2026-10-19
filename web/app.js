@@ -21940,6 +21940,7 @@ function restoreAdminDbInlineSearchViewport(position = null, options = {}) {
 function activateAdminDbCompanyDetail(companyId = "", options = {}) {
   const selectedCompanyId = String(companyId || "").trim();
   if (!selectedCompanyId) return false;
+  if (window.AdminTransitionTiming) beginAdminScreenTransition("company", options.inputTimeStamp);
   resetAdminDbSearchDraft();
   const preservedScroll = options.scroll === false && options.preserveScroll !== false
     ? (state.adminDbInlineSearchScroll || { left: window.scrollX || 0, top: window.scrollY || 0 })
@@ -25639,15 +25640,20 @@ function adminDbReferenceRecentSection(model = {}) {
   `;
 }
 
+function adminDbIntegratedContainerHtml(company = {}) {
+  return '<div data-company-integrated data-company-id="' + escapeHtml(company?.companyId || "")
+    + '" data-company-name="' + escapeHtml(company?.primaryName || "") + '"></div>';
+}
+
 function adminDbCompanyReferenceDashboardHtml(row = {}, detail = {}, maintenanceHtml = "") {
   const model = adminDbCumulativeDashboardModel(row, detail);
   return `
     <div class="admin-reference-dashboard" data-layout-contract="company-db-reference-v2">
+      ${adminDbIntegratedContainerHtml(row.company)}
       <div class="admin-reference-top-grid" data-layout-slot="basics-channels">
         ${adminDbReferenceBasicsCard(row, detail, model)}
         ${adminDbReferenceChannelsCard(row)}
       </div>
-      <div data-company-integrated data-company-id="${escapeHtml(row.company?.companyId || "")}" data-company-name="${escapeHtml(row.company?.primaryName || "")}"></div>
       ${adminDbReferenceCurrentSection(row, model)}
       ${adminDbReferenceHistorySection(row, detail, model, maintenanceHtml)}
     </div>
@@ -26760,10 +26766,14 @@ function adminDbSelectedDetailPanel(rows = []) {
   const detailState = state.adminDbCompanyDetails?.[detailId];
   if (company.detailLoaded === false || state.adminDbCompanyDetailLoading?.[detailId] || detailState?.error) {
     state.adminDbSelectedCompanyId = detailId;
-    return `<section class="admin-db-selected-panel admin-db-loading-detail" data-admin-db-selected-company="${escapeHtml(detailId)}" role="status">
-      <strong>${escapeHtml(company.primaryName || "선택 업체")}</strong>
-      <p>${escapeHtml(detailState?.error || "선택한 업체의 상세 이력과 검수 자료를 불러오고 있습니다.")}</p>
-      ${detailState?.error ? `<button type="button" data-admin-db-company-select="${escapeHtml(detailId)}">다시 불러오기</button>` : ""}
+    return `<section class="admin-db-selected-panel admin-db-selected-panel-cumulative" data-admin-db-selected-company="${escapeHtml(detailId)}">
+      <div class="admin-company-detail-header admin-company-reference-header"><div class="admin-company-reference-title-block"><nav aria-label="현재 위치"><span>업체 DB</span><i aria-hidden="true">/</i><strong>${escapeHtml(company.primaryName || "선택 업체")}</strong></nav><h2>${escapeHtml(company.primaryName || "선택 업체")}</h2></div></div>
+      ${adminDbIntegratedContainerHtml(company)}
+      <div class="admin-db-loading-detail" role="${detailState?.error ? "alert" : "status"}" aria-live="polite" aria-busy="${detailState?.error ? "false" : "true"}">
+        <strong>${detailState?.error ? "상품·상세이력 확인 필요" : "상품·상세이력 준비 중"}</strong>
+        <p>${escapeHtml(detailState?.error || "월별 통합 자료를 먼저 표시한 뒤 상품과 상세이력을 불러옵니다.")}</p>
+        ${detailState?.error ? `<button type="button" data-admin-db-company-select="${escapeHtml(detailId)}">다시 불러오기</button>` : ""}
+      </div>
     </section>`;
   }
   const metrics = row.metrics || {};
@@ -27284,17 +27294,83 @@ function scheduleAdminRegionCompanyQueryRender(input, delay = 120) {
   }, delay);
 }
 
+function adminDbIntegratedContextCurrent(context, companyId = "") {
+  const company = (state.companyMaster?.companies || []).find(row => row.companyId === companyId);
+  return Boolean(context && companyId && context.container?.dataset.companyId === companyId
+    && context.session === state.session && context.master === state.companyMaster
+    && context.sourceRevision === state.companyMaster?.sourceRevision
+    && context.correctionRevision === Number(company?.manualCorrectionRevision || 0));
+}
+
+function adminDbReplaceBoardHtml(html, keepCompanyId = "") {
+  const board = els.adminDatabaseDashboard;
+  if (!board) return;
+  const previous = state.adminDbIntegratedPanelContext;
+  const keep = adminDbIntegratedContextCurrent(previous, keepCompanyId)
+    && previous.container.isConnected !== false && board.contains(previous.container);
+  const focused = keep && typeof document !== "undefined" && previous.container.contains(document.activeElement)
+    ? document.activeElement : null;
+  // Preserve the live controller, month and focus while the other sections
+  // hydrate. The detach/replace happens within this one synchronous DOM turn.
+  if (keep) previous.container.remove();
+  window.CompanyIntegrated?.disposeWithin?.(board);
+  board.innerHTML = html;
+  if (keep) {
+    const placeholder = Array.from(board.querySelectorAll("[data-company-integrated]"))
+      .find(container => container.dataset.companyId === keepCompanyId);
+    if (placeholder) {
+      placeholder.replaceWith(previous.container);
+      if (focused?.isConnected !== false) focused?.focus?.({ preventScroll: true });
+      return;
+    }
+    previous.controller?.dispose();
+  }
+  state.adminDbIntegratedPanelContext = null;
+}
+
 function syncCompanyIntegratedPanel() {
   const board = els.adminDatabaseDashboard;
   if (!board) return;
   if (!isAdminRole() || state.activeTab !== "admin" || state.adminPanelSection !== "database") {
-    window.CompanyIntegrated?.disposeWithin(board);
+    window.CompanyIntegrated?.disposeWithin?.(board);
+    state.adminDbIntegratedPanelContext = null;
     return;
   }
   for (const container of board.querySelectorAll("[data-company-integrated]")) {
     const companyId = container.dataset.companyId;
-    if (companyId) window.CompanyIntegrated?.show(container, { companyId, companyName: container.dataset.companyName });
+    if (companyId) {
+      const controller = window.CompanyIntegrated?.show(container, { companyId, companyName: container.dataset.companyName });
+      const company = (state.companyMaster?.companies || []).find(row => row.companyId === companyId);
+      state.adminDbIntegratedPanelContext = { container, controller, session: state.session,
+        master: state.companyMaster, sourceRevision: state.companyMaster?.sourceRevision,
+        correctionRevision: Number(company?.manualCorrectionRevision || 0) };
+    }
   }
+}
+
+function adminDbIntegratedDisplayForDetail(companyId = "") {
+  if (!isAdminRole() || state.session?.authenticated === false || state.activeTab !== "admin"
+    || state.adminPanelSection !== "database" || state.adminDbSelectedCompanyId !== companyId) return null;
+  let context = state.adminDbIntegratedPanelContext;
+  if (!adminDbIntegratedContextCurrent(context, companyId)) {
+    syncCompanyIntegratedPanel();
+    context = state.adminDbIntegratedPanelContext;
+  }
+  if (!adminDbIntegratedContextCurrent(context, companyId) || context.container.isConnected === false) {
+    return Promise.resolve({ status: "unavailable" });
+  }
+  return adminDbIntegratedContextCurrent(context, companyId)
+    && context.container.isConnected !== false && typeof context.controller?.whenDisplayed === "function"
+    ? context.controller.whenDisplayed() : null;
+}
+
+function resumeAdminDbCompanyDetailAfterReturn() {
+  if (!isAdminRole() || state.session?.authenticated === false || document.visibilityState !== "visible"
+    || state.activeTab !== "admin" || state.adminPanelSection !== "database") return;
+  const id = state.adminDbSelectedCompanyId;
+  const company = (state.companyMaster?.companies || []).find(row => row.companyId === id);
+  if (company?.detailLoaded === false && !state.adminDbCompanyDetailLoading?.[id]
+    && !state.adminDbCompanyDetails?.[id]?.error) renderAdminDatabaseDashboard();
 }
 
 function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
@@ -27316,16 +27392,15 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   state.adminDbSearchRenderRevision = Number(state.adminDbSearchRenderRevision || 0) + 1;
   if (searchRestore) searchRestore.revision = state.adminDbSearchRenderRevision;
   state.adminViewsDeferred = true;
-  window.CompanyIntegrated?.disposeWithin(els.adminDatabaseDashboard);
   if (!Array.isArray(master.companies) && !Number.isFinite(master.totalCompanies) && state.companyMasterSummaryRead) {
     hideAdminRegionManagement();
-    els.adminDatabaseDashboard.innerHTML = `<div class="admin-console-empty" role="status">업체 기본자료를 불러오고 있습니다.</div>`;
+    adminDbReplaceBoardHtml(`<div class="admin-console-empty" role="status">업체 기본자료를 불러오고 있습니다.</div>`);
     if (window.AdminTransitionTiming) finishAdminScreenTransition("waiting");
     return;
   }
   if (master.error) {
     hideAdminRegionManagement();
-    els.adminDatabaseDashboard.innerHTML = `<div class="admin-console-empty">업체 관리 로딩 실패: ${escapeHtml(master.error)}</div>`;
+    adminDbReplaceBoardHtml(`<div class="admin-console-empty">업체 관리 로딩 실패: ${escapeHtml(master.error)}</div>`);
     if (window.AdminTransitionTiming) finishAdminScreenTransition("error");
     return;
   }
@@ -27336,12 +27411,12 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   if (routeCompanyId && !adminDbMasterHasRows(master) && !rows.length) {
     hideAdminRegionManagement();
     ensureAdminDbMasterLoadedForRoute(routeCompanyId);
-    els.adminDatabaseDashboard.innerHTML = `
+    adminDbReplaceBoardHtml(`
       <div class="admin-console-empty admin-db-loading-detail">
         <strong>상세 데이터를 불러오는 중입니다.</strong>
         <p>마스터 DB를 확인한 뒤 업체 상세 화면을 다시 엽니다.</p>
       </div>
-    `;
+    `);
     if (window.AdminTransitionTiming) finishAdminScreenTransition("waiting");
     return;
   }
@@ -27407,7 +27482,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   const heroProfile = viewMode === "region"
     ? { eyebrow: "DB / 지역 DB", title: "지역 DB", note: "광역과 시·군별 수집 상태를 별도 화면에서 관리합니다.", count: `${fmtNumber(allGrouped.length)}개 광역` }
     : { eyebrow: "DB / 업체 DB", title: "업체 DB", note: "업체명을 검색하거나 광역과 시·군을 차례로 선택하세요.", count: `${fmtNumber(rows.length)}개 업체` };
-  els.adminDatabaseDashboard.innerHTML = `
+  adminDbReplaceBoardHtml(`
     <section class="admin-db-board" id="adminDatabaseBoard">
       <div class="admin-db-hero">
         <div>
@@ -27422,7 +27497,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
         ${viewMode === "region" ? adminRegionalDatabasePanel(master) : ""}
       </section>
     </section>
-  `;
+  `, viewMode === "review" ? state.adminDbSelectedCompanyId : "");
   bindAdminDbCompanySelectButtons();
   // A review opened without an explicit company selects the first applicable
   // row. Hydrate that row only after the loading surface has reached the DOM.
@@ -39497,6 +39572,7 @@ function bindPwaLifecycleEvents() {
   window.addEventListener("pagehide", persistB2BActiveSearchBeforeLeave);
   window.addEventListener("pagehide", () => stopTourismDemandStrengthBackfillPolling({ render: false }));
   window.addEventListener("pageshow", (event) => {
+    if (event.persisted) resumeAdminDbCompanyDetailAfterReturn();
     if (event.persisted) resumeB2BSearchAfterReturn("pageshow").catch(() => {});
     if (event.persisted) resumeTourismDemandStrengthBackfillPolling().catch(() => {});
   });
@@ -39505,6 +39581,7 @@ function bindPwaLifecycleEvents() {
       stopTourismDemandStrengthBackfillPolling({ render: false });
       return;
     }
+    resumeAdminDbCompanyDetailAfterReturn();
     resumeB2BSearchAfterReturn("visible").catch(() => {});
     resumeTourismDemandStrengthBackfillPolling().catch(() => {});
   });
@@ -39681,6 +39758,34 @@ async function loadAdminDbCompanyDetail(companyId = "", options = {}) {
   if (state.adminDbSelectedCompanyId === selectedCompanyId) renderAdminDatabaseDashboard();
   read.promise = (async () => {
     try {
+      // The detail endpoint reconstructs a much larger history. Do not let it
+      // occupy the server until the small saved month card has reached the
+      // screen. Every entry point (route, selection and retry) shares this gate.
+      const visibleSelection = state.activeTab === "admin" && state.adminPanelSection === "database"
+        && state.adminDbSelectedCompanyId === selectedCompanyId;
+      const firstDisplay = visibleSelection && typeof window !== "undefined"
+        && typeof window.CompanyIntegrated?.show === "function"
+        ? adminDbIntegratedDisplayForDetail(selectedCompanyId) : null;
+      if (firstDisplay) {
+        let displayed = await firstDisplay;
+        // A month change can supersede the first paint without changing the
+        // selected company. Follow that controller's latest display ticket.
+        while (displayed?.status === "superseded" && current()
+          && state.activeTab === "admin" && state.adminPanelSection === "database"
+          && state.adminDbSelectedCompanyId === selectedCompanyId) {
+          const latestDisplay = adminDbIntegratedDisplayForDetail(selectedCompanyId);
+          if (!latestDisplay) break;
+          displayed = await latestDisplay;
+        }
+        if (!current() || displayed?.status !== "displayed" || state.activeTab !== "admin"
+          || state.adminPanelSection !== "database" || state.adminDbSelectedCompanyId !== selectedCompanyId) {
+          read.displayDeferred = true;
+          return null;
+        }
+        if (window.AdminTransitionTiming) finishAdminScreenTransition(
+          ["error", "failed"].includes(displayed.loadStatus) ? "error" : "ready");
+      }
+      if (!current()) return null;
       const detail = await fetchJson(`/api/company-master/detail?companyId=${encodeURIComponent(selectedCompanyId)}`);
       if (!current()) return null;
       if (!detail?.company || String(detail.company.companyId || "") !== selectedCompanyId) throw new Error("요청한 업체와 상세 자료가 일치하지 않습니다.");
@@ -39701,7 +39806,8 @@ async function loadAdminDbCompanyDetail(companyId = "", options = {}) {
       if (state.adminDbCompanyDetailReads[selectedCompanyId] === read) {
         delete state.adminDbCompanyDetailReads[selectedCompanyId];
         delete state.adminDbCompanyDetailLoading[selectedCompanyId];
-        if (isAdminRole() && state.session === session && state.adminDbSelectedCompanyId === selectedCompanyId) renderAdminDatabaseDashboard();
+        if (!read.displayDeferred && isAdminRole() && state.session === session
+          && state.adminDbSelectedCompanyId === selectedCompanyId) renderAdminDatabaseDashboard();
       }
     }
   })();

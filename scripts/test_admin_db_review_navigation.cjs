@@ -10,7 +10,7 @@ const foldKeys = ["profile", "correction", "channel", "collect", "review"];
 const names = [
   "escapeHtml", "adminDbSelectedDetailTabs", "adminDbSelectedFoldBlock", "adminDbCompanyMaintenanceHtml",
   "syncAdminDbReviewNavigation", "openAdminDbReviewFold", "handleAdminDbReviewToggle",
-  "renderAdminDatabaseDashboard", "hideAdminRegionManagement", "loadAdminDbCompanyDetail"
+  "adminDbIntegratedContextCurrent", "adminDbReplaceBoardHtml", "renderAdminDatabaseDashboard", "hideAdminRegionManagement", "loadAdminDbCompanyDetail"
 ];
 const declarations = names.map((name) => {
   const declaration = source.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^}`, "m"))?.[0];

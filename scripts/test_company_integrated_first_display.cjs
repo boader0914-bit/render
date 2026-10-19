@@ -1,0 +1,330 @@
+"use strict";
+
+// Execute the actual application render/hydration functions and the actual
+// integrated-view controller. The small replace-on-write DOM below models node
+// identity, detach/replace, visibility and events; it does not claim browser
+// paint timing. No provider, crawler, real HTTP request or saved data is used.
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+const { test } = require("node:test");
+const { buildMonthlyReportSnapshot } = require("./lib/monthly_reports.cjs");
+
+const appSource = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8").replace(/\r\n/g, "\n");
+const integratedSource = fs.readFileSync(path.join(__dirname, "../web/company-integrated.js"), "utf8");
+const appFunctions = ["adminDbIntegratedContainerHtml", "adminDbIntegratedContextCurrent", "adminDbReplaceBoardHtml", "adminDbIntegratedDisplayForDetail", "syncCompanyIntegratedPanel",
+  "renderAdminDatabaseDashboard", "adminDbSelectedDetailPanel", "loadAdminDbCompanyDetail",
+  "activateAdminDbCompanyDetail", "openAdminDbCompanyReview", "resumeAdminDbCompanyDetailAfterReturn"];
+const declaration = name => {
+  const found = appSource.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^}`, "m"))?.[0];
+  assert.ok(found, `Missing actual application function ${name}`);
+  return found;
+};
+const deferred = () => {
+  let resolve, reject;
+  const promise = new Promise((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+};
+const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+const escape = value => String(value ?? "").replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
+const decode = value => String(value).replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+
+class Element {
+  constructor(tag = "div", attrs = {}, doc = null, text = "") {
+    this.tagName = tag.toUpperCase(); this.attrs = { ...attrs }; this.ownerDocument = doc;
+    this.children = []; this.parentNode = null; this.listeners = new Map(); this.rawText = text;
+    this.dataset = new Proxy({}, {
+      get: (_, name) => this.attrs["data-" + String(name).replace(/[A-Z]/g, letter => "-" + letter.toLowerCase())],
+      set: (_, name, value) => { this.attrs["data-" + String(name).replace(/[A-Z]/g, letter => "-" + letter.toLowerCase())] = String(value); return true; }
+    });
+    this.classList = { contains: value => (this.attrs.class || "").split(/\s+/).includes(value),
+      add: value => { this.attrs.class = [...new Set((this.attrs.class || "").split(/\s+/).filter(Boolean).concat(value))].join(" "); },
+      remove: value => { this.attrs.class = (this.attrs.class || "").split(/\s+/).filter(name => name !== value).join(" "); } };
+  }
+  get isConnected() { return this === this.ownerDocument?.body || Boolean(this.parentNode?.isConnected); }
+  get parentElement() { return this.parentNode; }
+  get hidden() { return Object.hasOwn(this.attrs, "hidden"); }
+  set hidden(value) { if (value) this.attrs.hidden = ""; else delete this.attrs.hidden; }
+  get value() { return this._value ?? this.attrs.value ?? ""; }
+  set value(value) { this._value = String(value); }
+  get innerHTML() { return this.children.map(child => child.outerHTML).join(""); }
+  set innerHTML(html) {
+    if (this.contains(this.ownerDocument?.activeElement)) this.ownerDocument.activeElement = this.ownerDocument.body;
+    for (const child of this.children) child.parentNode = null;
+    this.children = [];
+    const stack = [this], voidTags = new Set(["input", "br", "hr", "img", "meta", "link", "area", "source", "wbr"]);
+    for (const token of String(html).match(/<!--[\s\S]*?-->|<[^>]*>|[^<]+/g) || []) {
+      if (token.startsWith("<!--")) continue;
+      if (token.startsWith("</")) { if (stack.length > 1) stack.pop(); continue; }
+      if (!token.startsWith("<")) { stack.at(-1).appendChild(new Element("#text", {}, this.ownerDocument, token)); continue; }
+      const tag = token.match(/^<([\w-]+)/)?.[1]; if (!tag) continue;
+      const attrs = {};
+      for (const match of token.slice(tag.length + 1, -1).matchAll(/([\w:-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g)) attrs[match[1]] = decode(match[2] ?? match[3] ?? match[4] ?? "");
+      const node = new Element(tag, attrs, this.ownerDocument); stack.at(-1).appendChild(node);
+      if (!voidTags.has(tag) && !/\/>$/.test(token)) stack.push(node);
+    }
+  }
+  get outerHTML() {
+    if (this.tagName === "#TEXT") return this.rawText;
+    return `<${this.tagName.toLowerCase()}${Object.entries(this.attrs).map(([key, value]) => ` ${key}="${escape(value)}"`).join("")}>${this.innerHTML}</${this.tagName.toLowerCase()}>`;
+  }
+  get textContent() { return this.tagName === "#TEXT" ? decode(this.rawText) : this.children.map(child => child.textContent).join(""); }
+  appendChild(node) { node.remove(); node.parentNode = this; this.children.push(node); return node; }
+  remove() { if (!this.parentNode) return; if (this.contains(this.ownerDocument?.activeElement)) this.ownerDocument.activeElement = this.ownerDocument.body; const siblings = this.parentNode.children, index = siblings.indexOf(this); if (index >= 0) siblings.splice(index, 1); this.parentNode = null; }
+  replaceWith(node) { const parent = this.parentNode; if (!parent) return; node.remove(); const index = parent.children.indexOf(this); parent.children.splice(index, 1, node); node.parentNode = parent; this.parentNode = null; }
+  replaceChild(node, previous) { previous.replaceWith(node); return previous; }
+  contains(node) { return node === this || this.children.some(child => child.contains(node)); }
+  getAttribute(name) { return this.attrs[name] ?? null; }
+  setAttribute(name, value) { this.attrs[name] = String(value); }
+  removeAttribute(name) { delete this.attrs[name]; }
+  matches(selector) {
+    if (selector.includes(",")) return selector.split(",").some(part => this.matches(part.trim()));
+    const tag = selector.match(/^[\w-]+/)?.[0]; if (tag && this.tagName !== tag.toUpperCase()) return false;
+    for (const match of selector.matchAll(/\[([\w-]+)(?:=["']?([^\]"']*)["']?)?\]/g)) {
+      if (!Object.hasOwn(this.attrs, match[1]) || (match[2] !== undefined && this.attrs[match[1]] !== match[2])) return false;
+    }
+    for (const match of selector.matchAll(/\.([\w-]+)/g)) if (!this.classList.contains(match[1])) return false;
+    const id = selector.match(/#([\w-]+)/)?.[1]; if (id && this.attrs.id !== id) return false;
+    return this.tagName !== "#TEXT";
+  }
+  querySelectorAll(selector) { const result = []; for (const child of this.children) { if (child.matches(selector)) result.push(child); result.push(...child.querySelectorAll(selector)); } return result; }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+  closest(selector) { for (let node = this; node; node = node.parentNode) if (node.matches(selector)) return node; return null; }
+  getClientRects() { return this.isConnected && !this.closest("[hidden]") ? [{}] : []; }
+  getBoundingClientRect() { return { width: this.getClientRects().length ? 100 : 0, height: this.getClientRects().length ? 100 : 0 }; }
+  addEventListener(type, callback) { if (!this.listeners.has(type)) this.listeners.set(type, new Set()); this.listeners.get(type).add(callback); }
+  removeEventListener(type, callback) { this.listeners.get(type)?.delete(callback); }
+  focus(options) { this.ownerDocument.activeElement = this; this.lastFocusOptions = options; }
+  scrollIntoView() {}
+}
+
+function integratedEnvelope(id, month = "2026-09") {
+  const date = month + "-03", run = { id: `${id}-${month}`, keyword: "[모의] 지역글램핑", collectedAt: `${month}-01T08:00:00Z`, collectionQuality: { status: "complete" } };
+  const snapshot = buildMonthlyReportSnapshot({ type: "company", targetId: id, month, cutoffDate: month + "-30" }, {
+    companies: [{ companyId: id, primaryName: `[모의] ${id}`, capacity: 16 }], runs: [run], observations: [{
+      companyKey: id, runId: run.id, collectedAt: run.collectedAt, stayDate: date, productType: "lodging", inventoryEvidenceVersion: 4,
+      supply: 16, sold: 5, publicBookings: 3, phoneBookings: 2, publicRevenue: 600000, phoneRevenue: 400000, estimatedRevenue: 1000000,
+      phonePricedBookings: 2, phoneMissingPriceBookings: 0, sharedDayUseExcluded: 0, partial: false, missing: false, unknownUnavailable: 0
+    }]
+  }, "2026-10-01T00:00:00Z");
+  return { companyId: id, status: "ready", selectedMonth: month, calculatedAt: "2026-10-01T00:00:00Z", snapshot,
+    roomBasis: { capacity: 16, source: "db_review", label: "관리자 검수값", warnings: [] },
+    months: [{ month: "2026-09" }, { month: "2026-08" }], failedAttempts: [], keywords: [] };
+}
+
+function fixture() {
+  const companies = ["a", "b"].map(companyId => ({ companyId, primaryName: `[모의] ${companyId}`, detailLoaded: false }));
+  const state = { session: { authenticated: true, role: "admin" }, activeTab: "admin", adminPanelSection: "database",
+    adminDbViewMode: "review", adminDbSelectedCompanyId: "a", adminDbFilters: {}, companyMaster: { sourceRevision: "fixture-v1", representation: "bootstrap", companies } };
+  const document = { visibilityState: "visible", hidden: false, createElement: tag => new Element(tag, {}, document) };
+  document.body = new Element("body", {}, document); document.activeElement = document.body;
+  const board = new Element("div", { id: "adminDatabaseDashboard" }, document); document.body.appendChild(board);
+  document.querySelector = selector => document.body.querySelector(selector); document.querySelectorAll = selector => document.body.querySelectorAll(selector);
+  const frames = new Map(), timers = new Map(), integratedRequests = [], detailRequests = [], controllers = [], transition = [];
+  let nextFrame = 0, nextTimer = 0;
+  const window = { document, URLSearchParams, AbortController, Promise, console, scrollX: 0, scrollY: 0,
+    requestAnimationFrame(callback) { const id = ++nextFrame; frames.set(id, callback); return id; }, cancelAnimationFrame: id => frames.delete(id),
+    setTimeout(callback) { const id = ++nextTimer; timers.set(id, callback); return id; }, clearTimeout: id => timers.delete(id),
+    getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+    AdminTransitionTiming: {}, scrollTo() {}, location: { pathname: "/admin", search: "", hash: "" } };
+  const context = { window, document, state, els: { adminDatabaseDashboard: board }, console, URLSearchParams, AbortController, Promise,
+    getComputedStyle: window.getComputedStyle, isAdminRole: () => state.session?.authenticated !== false && state.session?.role === "admin" && !state.adminUserViewMode,
+    adminConsoleMasterSource: () => state.companyMaster, adminDbViewMode: () => state.adminDbViewMode,
+    adminDbFilterState: master => { const rows = master.companies.map(company => ({ company, metrics: {} })); return { rows, filteredRows: rows, filters: {} }; },
+    adminDbGroupedRows: () => [], adminDbCompanyIdFromRoute: () => "", adminDbMasterHasRows: () => true,
+    captureAdminDbSearchInput: () => null, restoreAdminDbSearchInput() {}, escapeHtml: escape, fmtNumber: String, fmtWon: String,
+    adminDbMetricCard: () => "", adminDbCompanySearchShellHtml: () => "", adminDbUserViewBridgeHtml: () => "",
+    adminDbSelectedRow: rows => rows.find(row => row.company.companyId === state.adminDbSelectedCompanyId) || rows[0],
+    adminDbAuditBoard: () => "", adminDbWorkPanel: () => "", adminDbCollectionPanel: () => "",
+    bindAdminDbCompanySelectButtons() {}, applyPendingCompanyEdit() {}, hideAdminRegionManagement() {},
+    beginAdminScreenTransition() { return {}; }, finishAdminScreenTransition: status => transition.push(status),
+    resetAdminDbSearchDraft() {}, setAdminDbCompanyRoute() {}, restoreAdminDbInlineSearchViewport() {},
+    adminDbRequiredCheckChannels: () => [], adminDbDetailPayload: id => state.adminDbCompanyDetails?.[id] || {},
+    adminDbCompanyFixedProfile: company => ({ primaryName: company.primaryName }), adminDbCumulativeDashboardModel: () => ({}),
+    adminDbAdminProfilePanel: () => "", adminDbQuickCorrectionPanel: () => "", adminDbChannelExposurePanel: () => "",
+    adminDbConfirmCollectPlanHtml: () => "", adminDbRecheckOutcomeHtml: () => "", adminDbSelectedNextAction: () => ({}),
+    companyReviewActionsHtml: () => "", adminDbCompanyMaintenanceHtml: () => "", adminDbInlineCollectionHtml: () => "",
+    adminDbSelectedOverviewCardsHtml: row => `<div data-company-integrated data-company-id="${escape(row.company.companyId)}" data-company-name="${escape(row.company.primaryName)}"></div><div data-loaded-detail>검수 자료</div>`,
+    compactDateTime: String,
+    fetchJson(url) { assert.match(url, /^\/api\/company-master\/detail\?/); const request = { url, ...deferred() }; detailRequests.push(request); return request.promise; }
+  };
+  window.fetch = async (url, options) => {
+    assert.match(url, /^\/api\/company-master\/integrated\?/);
+    const params = new URLSearchParams(url.split("?")[1]);
+    const request = { url, companyId: params.get("companyId"), month: params.get("month") || "2026-09", signal: options.signal, ...deferred() };
+    integratedRequests.push(request);
+    const body = await request.promise; return { ok: true, status: 200, json: async () => body };
+  };
+  vm.createContext(context); vm.runInContext(integratedSource, context);
+  const actualShow = window.CompanyIntegrated.show;
+  window.CompanyIntegrated.show = (container, input) => { const controller = actualShow(container, input); controllers.push(controller); return controller; };
+  vm.runInContext(appFunctions.map(declaration).join("\n"), context);
+  context.renderAdminConsoleDashboard = () => context.renderAdminDatabaseDashboard();
+  const api = {
+    state, context, document, board, frames, timers, integratedRequests, detailRequests, controllers, transition,
+    render: () => context.renderAdminDatabaseDashboard(), selected: () => board.querySelector("[data-company-integrated]"),
+    async frame() { const batch = [...frames]; frames.clear(); for (const [, callback] of batch) callback(nextFrame * 16); await settle(); },
+    async respondIntegrated(index = integratedRequests.length - 1) { const request = integratedRequests[index]; request.resolve(integratedEnvelope(request.companyId, request.month)); await settle(); },
+    async respondDetail(index = detailRequests.length - 1, extra = {}) { const request = detailRequests[index]; const id = new URLSearchParams(request.url.split("?")[1]).get("companyId"); request.resolve({ company: { companyId: id, primaryName: `[모의] ${id}`, ...extra } }); await settle(); },
+    choose(id) { state.adminDbRouteCompanyId = id; state.adminDbSelectedCompanyId = id; this.render(); },
+    async shown() { await this.respondIntegrated(); await this.frame(); await this.frame(); await settle(); }
+  };
+  return api;
+}
+
+test("an observed integrated card is displayed before the selected company starts its heavy detail GET", async () => {
+  const f = fixture(); f.render(); await settle();
+  assert.equal(f.integratedRequests.length, 1);
+  assert.equal(f.detailRequests.length, 0, "detail must not compete with the saved integrated result");
+  await f.respondIntegrated();
+  assert.match(f.selected().textContent, /예약/); assert.match(f.selected().textContent, /매출/);
+  assert.equal(f.detailRequests.length, 0, "DOM update alone does not prove first display");
+  await f.frame(); assert.equal(f.detailRequests.length, 0, "one animation frame is insufficient");
+  await f.frame(); assert.equal(f.detailRequests.length, 1);
+  assert.equal(f.transition.at(-1), "ready", "first-card readiness does not wait for the larger detail endpoint");
+  assert.match(f.selected().textContent, /100만원/);
+  assert.equal(f.state.companyMaster.companies[0].detailLoaded, false);
+  assert.match(f.selected().textContent, /예약/); assert.match(f.selected().textContent, /매출/);
+});
+
+test("detail hydration preserves the integrated DOM, controller, selected month and successful request", async () => {
+  const f = fixture(); f.render(); await settle(); await f.shown();
+  const node = f.selected(), controller = f.controllers.at(-1);
+  const august = controller.load("2026-08"); await f.respondIntegrated(); await august;
+  await f.frame(); await f.frame();
+  const requestsBefore = f.integratedRequests.length;
+  const monthInput = node.querySelector("[data-ci-month]"); monthInput.focus();
+  await f.respondDetail();
+  assert.equal(f.state.companyMaster.companies[0].detailLoaded, true);
+  assert.equal(f.selected(), node, "the saved integrated card is moved, not recreated");
+  assert.equal(f.state.adminDbIntegratedPanelContext.controller, controller);
+  assert.equal(controller.state.month, "2026-08");
+  assert.equal(f.integratedRequests.length, requestsBefore, "hydration does not reload the same integrated data");
+  assert.equal(f.document.activeElement, monthInput, "the previously focused month input is restored after detach/replace");
+  assert.equal(monthInput.lastFocusOptions?.preventScroll, true);
+  assert.match(node.textContent, /100만원/);
+  f.render(); await settle();
+  assert.equal(f.selected(), node); assert.equal(f.integratedRequests.length, requestsBefore);
+});
+
+test("changing the month during first load or first paint follows the newest display and starts detail exactly once", async () => {
+  for (const phase of ["before-response", "between-frames"]) {
+    const f = fixture(); f.render(); await settle();
+    const controller = f.state.adminDbIntegratedPanelContext.controller;
+    if (phase === "between-frames") { await f.respondIntegrated(0); await f.frame(); }
+    const august = controller.load("2026-08"); await settle();
+    assert.equal(f.integratedRequests.length, 2); assert.equal(f.detailRequests.length, 0);
+    assert.equal(f.integratedRequests[0].signal.aborted, true);
+    if (phase === "before-response") await f.respondIntegrated(0);
+    assert.equal(f.detailRequests.length, 0, "the superseded September result cannot unlock detail");
+    await f.respondIntegrated(1); await august;
+    await f.frame(); assert.equal(f.detailRequests.length, 0, phase);
+    await f.frame(); assert.equal(f.detailRequests.length, 1, phase);
+    assert.equal(controller.state.month, "2026-08");
+    assert.equal(controller.state.envelope.selectedMonth, "2026-08");
+    await f.respondDetail();
+    assert.equal(f.integratedRequests.length, 2); assert.equal(f.detailRequests.length, 1);
+    assert.equal(f.state.adminDbIntegratedPanelContext.controller, controller);
+  }
+});
+
+test("both direct selection entry points use the integrated first-display barrier", async () => {
+  for (const method of ["activateAdminDbCompanyDetail", "openAdminDbCompanyReview"]) {
+    const f = fixture(); f.context[method]("a", { scroll: false, updateRoute: false }); await settle();
+    assert.equal(f.detailRequests.length, 0, method);
+    assert.equal(f.integratedRequests.length, 1, method);
+    await f.respondIntegrated(); await f.frame(); assert.equal(f.detailRequests.length, 0, method);
+    await f.frame(); assert.equal(f.detailRequests.length, 1, method);
+  }
+});
+
+test("a company switch before first display cannot start or hydrate the abandoned company", async () => {
+  const f = fixture(); f.render(); await settle(); const abandoned = f.selected();
+  f.choose("b"); await settle();
+  assert.equal(abandoned.isConnected, false); assert.equal(f.integratedRequests[0].signal.aborted, true);
+  assert.equal(f.integratedRequests.length, 2); assert.equal(f.detailRequests.length, 0);
+  await f.respondIntegrated(0); await f.frame(); await f.frame();
+  assert.equal(f.detailRequests.length, 0, "late company A cannot unlock company B's detail");
+  await f.respondIntegrated(1); await f.frame(); await f.frame();
+  assert.deepEqual(f.detailRequests.map(row => row.url), ["/api/company-master/detail?companyId=b"]);
+  await f.respondDetail(); assert.equal(f.state.companyMaster.companies[0].detailLoaded, false);
+  assert.equal(f.state.companyMaster.companies[1].detailLoaded, true);
+});
+
+test("hidden or replaced sessions cannot unlock a pending detail or retain a previous controller", async () => {
+  for (const change of [f => { f.document.visibilityState = "hidden"; }, f => { f.board.hidden = true; },
+    f => { f.state.session = { authenticated: true, role: "admin", marker: "new-session" }; },
+    f => { f.state.activeTab = "home"; f.context.syncCompanyIntegratedPanel(); }]) {
+    const f = fixture(); f.render(); await settle(); await f.respondIntegrated(); await f.frame();
+    change(f); await f.frame(); await settle();
+    assert.equal(f.detailRequests.length, 0);
+    assert.equal(f.state.companyMaster.companies[0].detailLoaded, false);
+  }
+});
+
+test("a temporarily hidden document defers detail once and resumes from the retained integrated card on return", async () => {
+  const f = fixture(); f.render(); await settle(); await f.respondIntegrated(); await f.frame();
+  const node = f.selected(); f.document.visibilityState = "hidden";
+  await f.frame(); await settle();
+  assert.equal(f.detailRequests.length, 0); assert.equal(f.state.adminDbCompanyDetailLoading.a, undefined);
+  assert.equal(f.integratedRequests.length, 1, "hiding never starts an automatic retry loop");
+  f.document.visibilityState = "visible"; f.context.resumeAdminDbCompanyDetailAfterReturn(); await settle();
+  await f.frame(); await f.frame();
+  assert.equal(f.selected(), node); assert.equal(f.integratedRequests.length, 1);
+  assert.equal(f.detailRequests.length, 1);
+});
+
+test("a previously displayed card cannot unlock a forced detail GET after the document becomes hidden", async () => {
+  const f = fixture(); f.render(); await settle(); await f.shown();
+  assert.equal(f.detailRequests.length, 1);
+  f.document.visibilityState = "hidden";
+  void f.context.loadAdminDbCompanyDetail("a", { force: true }); await settle();
+  assert.equal(f.detailRequests.length, 1, "the old successful display ticket is no longer evidence that the card is visible");
+});
+
+test("an integrated error can display honestly and a later hidden detail error cannot overwrite another selection", async () => {
+  const f = fixture(); f.render(); await settle();
+  f.integratedRequests[0].reject(new Error("저장 통합자료 읽기 오류")); await settle();
+  assert.match(f.selected().textContent, /저장 통합자료 읽기 오류/);
+  await f.frame(); await f.frame();
+  assert.equal(f.detailRequests.length, 1, "displayed error releases the barrier without fabricating a zero result");
+  f.choose("b"); await settle(); const currentNode = f.selected();
+  f.detailRequests[0].reject(new Error("late company A detail failure")); await settle();
+  assert.equal(f.selected(), currentNode); assert.equal(f.state.adminDbSelectedCompanyId, "b");
+  assert.doesNotMatch(f.board.textContent, /late company A/);
+});
+
+test("a correction or source revision arriving during detail load wins and invalidates the old saved card context", async () => {
+  for (const correction of [false, true]) {
+    const f = fixture(); f.render(); await settle(); await f.shown();
+    const original = f.state.companyMaster.companies[0], oldNode = f.selected();
+    if (correction) original.manualCorrection = { lodgingBasisTotal: 16 };
+    else f.state.companyMaster.sourceRevision = "fixture-v2";
+    await f.respondDetail(0, { manualCorrection: { lodgingBasisTotal: 17 } });
+    assert.equal(f.state.companyMaster.companies[0], original);
+    assert.equal(f.state.companyMaster.companies[0].detailLoaded, false);
+    if (correction) assert.equal(original.manualCorrection.lodgingBasisTotal, 16);
+    assert.equal(f.state.adminDbCompanyDetails?.a, undefined);
+    if (!correction) assert.notEqual(f.selected(), oldNode, "a changed source must not retain a previous revision's integrated view");
+  }
+});
+
+test("a forced correction refresh disposes the old card and waits for the corrected saved result before its new detail GET", async () => {
+  const f = fixture(); f.render(); await settle(); await f.shown();
+  const oldNode = f.selected(), oldController = f.state.adminDbIntegratedPanelContext.controller;
+  const company = f.state.companyMaster.companies[0];
+  company.manualCorrection = { lodgingBasisTotal: 16 }; company.manualCorrectionRevision = 2;
+  const refreshed = f.context.loadAdminDbCompanyDetail("a", { force: true }); await settle();
+  assert.notEqual(f.selected(), oldNode); assert.equal(oldNode.isConnected, false);
+  assert.notEqual(f.state.adminDbIntegratedPanelContext.controller, oldController);
+  assert.equal(f.integratedRequests.length, 2); assert.equal(f.detailRequests.length, 1);
+  await f.respondDetail(0, { manualCorrection: { lodgingBasisTotal: 17 } });
+  assert.equal(f.state.companyMaster.companies[0], company);
+  assert.equal(company.manualCorrection.lodgingBasisTotal, 16);
+  await f.respondIntegrated(1); await f.frame(); assert.equal(f.detailRequests.length, 1);
+  await f.frame(); assert.equal(f.detailRequests.length, 2);
+  await f.respondDetail(1, { manualCorrection: { lodgingBasisTotal: 16 }, manualCorrectionRevision: 2 }); await refreshed;
+  assert.equal(f.state.companyMaster.companies[0].manualCorrection.lodgingBasisTotal, 16);
+  assert.equal(f.state.companyMaster.companies[0].detailLoaded, true);
+});

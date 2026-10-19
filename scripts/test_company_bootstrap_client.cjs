@@ -133,10 +133,11 @@ test("unhydrated detail and failures render an honest loading or retry surface w
   const state = { adminDbCompanyDetails: {}, adminDbSelectedCompanyId: "one", adminDbCompanyDetailLoading: {} };
   const context = { state, adminDbSelectedRow: rows => rows[0], escapeHtml: value => String(value) };
   vm.createContext(context);
-  const render = vm.runInContext(declaration("adminDbSelectedDetailPanel") + "\nadminDbSelectedDetailPanel", context);
+  const render = vm.runInContext(declaration("adminDbIntegratedContainerHtml") + "\n" + declaration("adminDbSelectedDetailPanel") + "\nadminDbSelectedDetailPanel", context);
   const row = { company: company() };
   const waiting = render([row]);
-  assert.match(waiting, /상세 이력과 검수 자료/);
+  assert.match(waiting, /상품·상세이력 준비 중/);
+  assert.match(waiting, /data-company-integrated/);
   assert.doesNotMatch(waiting, /<input|<form|0객실/);
   state.adminDbCompanyDetails.one = { error: "자료 연결 오류" };
   const failed = render([row]);

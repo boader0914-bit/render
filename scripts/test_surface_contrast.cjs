@@ -3027,7 +3027,8 @@ assert(
 // The support panel is a sibling of the selected detail, and the integrated
 // panel is mounted asynchronously inside its reference dashboard. Exercise the
 // production shells so a narrower theme scope cannot silently miss either.
-const reviewShellNames = ["escapeHtml", "adminDbFoldedItemsHtml", "roomCapacityReviewHtml",
+const reviewShellNames = ["escapeHtml", "adminDbFoldedItemsHtml", "roomCapacityReviewHtml", "adminDbIntegratedContainerHtml",
+  "adminDbIntegratedContextCurrent", "adminDbReplaceBoardHtml",
   "adminDbReferenceHistorySection", "adminDbCompanyReferenceDashboardHtml", "renderAdminDatabaseDashboard"];
 const reviewShellDeclarations = reviewShellNames.map(name => app.match(new RegExp(`^function ${name}\\([^]*?^}`, "m"))?.[0]);
 assert(reviewShellDeclarations.every(Boolean), "review surface shell functions must remain available", failures);
