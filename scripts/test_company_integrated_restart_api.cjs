@@ -1,6 +1,7 @@
 "use strict";
 
-// Two real local application processes reuse the same synthetic saved data.
+// Real local application processes reuse the same synthetic saved data even
+// when a deployment replaces identical source files with new filesystem IDs.
 // Neither a production file nor an outbound provider endpoint is accessible.
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
@@ -20,6 +21,33 @@ async function main() {
   const historyFile = path.join(dataDir, "history", "observations.jsonl"), masterFile = path.join(dataDir, "company_master", "companies.json");
   const originalHistory = await fs.readFile(historyFile), originalMaster = await fs.readFile(masterFile);
   const monthFile = path.join(dataDir, "company_integrated", crypto.createHash("sha256").update(fixture.companyId).digest("hex"), "2026-08.json");
+  const savedMonth = (companyId, month) => path.join(dataDir, "company_integrated", crypto.createHash("sha256").update(companyId).digest("hex"), month + ".json");
+  const region = JSON.parse(await fs.readFile(path.join(root, "web/data/region_master.json"), "utf8")).units
+    .find(unit => unit.name === "포천시" && unit.active && unit.selectable && unit.level === "local");
+  assert.ok(region?.regionKey && region?.regionId, "fixture uses an actual registered region identity");
+  const savedContextFiles = [];
+  async function writeContext(relative, value) {
+    const filename = path.join(dataDir, relative);
+    await fs.mkdir(path.dirname(filename), { recursive: true });
+    await fs.writeFile(filename, JSON.stringify(value)); savedContextFiles.push(filename);
+  }
+  // Calendar and KOSIS use real cache envelopes. The tourism context sentinel
+  // exercises the conservative saved-response dependency index; it does not
+  // manufacture a published tourism metric or make an outbound provider call.
+  await writeContext("history/special_days/special-days-2026.json", { version: 1, year: 2026, categories: {} });
+  await writeContext("history/kosis/" + crypto.createHash("sha256").update(region.regionId).digest("hex").slice(0, 24) + ".json",
+    { version: 1, regionId: region.regionId, datasets: {} });
+  await writeContext("tourism_data/cache/restart-context-202608.json", { snapshot: { regionKey: region.regionKey, yearMonth: "202608" } });
+  const searchIdentity = { version: "region_glamping_exact_v1", regionKey: region.regionKey, month: "2026-08", keyword: "포천글램핑",
+    startDate: "2025-09-01", endDate: "2026-08-31", timeUnit: "month", partialMonth: false };
+  const searchHash = crypto.createHash("sha256").update(JSON.stringify(searchIdentity)).digest("hex"), searchStamp = "2026-09-01T00:00:00.000Z";
+  const searchSeries = Array.from({ length: 12 }, (_, index) => ({ period: new Date(Date.UTC(2025, 8 + index, 1)).toISOString().slice(0, 10),
+    ratio: 20 + index, value: 20 + index, status: "observed" }));
+  await writeContext("regional_search_trends/cache/" + searchHash + ".json", { version: 1, identity: searchHash,
+    snapshot: { ...searchIdentity, status: "ready", retrievedAt: searchStamp, series: searchSeries },
+    lastAttempt: { at: searchStamp, status: "ready", errorCode: "" } });
+  const sourceFiles = [masterFile, historyFile, ...fixture.runIds.map(id => path.join(dataDir, "outputs", id, "manifest.json")), ...savedContextFiles];
+  const sourceBytes = new Map(await Promise.all(sourceFiles.map(async filename => [filename, await fs.readFile(filename)])));
   let activeChild;
 
   async function run(ordinal) {
@@ -28,7 +56,7 @@ async function main() {
     const base = `http://127.0.0.1:${port}`, preload = path.join(dataDir, `local-preload-${ordinal}.cjs`), auditFile = path.join(dataDir, `local-audit-${ordinal}.json`);
     await fs.writeFile(preload, `
       const fs = require('node:fs');
-      const audit = { companySourceReads: 0, externalRequests: 0, bootstrapCompleted: false, bootstrapErrorCode: null };
+      const audit = { companySourceReads: 0, companyRequests: [], externalRequests: 0, bootstrapCompleted: false, bootstrapErrorCode: null };
       const auditPath = ${JSON.stringify(auditFile)};
       let auditSequence = 0;
       const save = () => {
@@ -43,7 +71,7 @@ async function main() {
       sourceModule.createMonthlyReportSources = options => {
         const service = originalSources(options), original = service.loadSources;
         service.loadSources = (request, options) => {
-          if (request.type === 'company') { audit.companySourceReads++; save(); }
+          if (request.type === 'company') { audit.companySourceReads++; audit.companyRequests.push({ companyId: request.targetId, month: request.month }); save(); }
           return original(request, options);
         };
         return service;
@@ -129,6 +157,22 @@ async function main() {
     const first = await run(1);
     assert.ok(first.audit.companySourceReads > 0, "first startup must materialize actual saved observations");
     const before = await fs.readFile(monthFile), beforeStat = await fs.stat(monthFile, { bigint: true });
+    const untouchedScopes = [[fixture.companyId, "2026-07"], ["cmp_place_monthly_b", "2026-08"]];
+    const untouched = new Map(await Promise.all(untouchedScopes.map(async ([id, month]) => {
+      const filename = savedMonth(id, month); return [filename, { bytes: await fs.readFile(filename), stat: await fs.stat(filename, { bigint: true }) }];
+    })));
+    // Materialize a new physical file for each identical input. Keeping the old
+    // monthly files in place proves that reuse is based on source content,
+    // rather than simply reusing unchanged inode/ctime metadata in one process.
+    for (const filename of sourceFiles) {
+      const previous = await fs.stat(filename, { bigint: true }), temporary = filename + ".same-bytes.tmp";
+      await fs.writeFile(temporary, sourceBytes.get(filename), { flag: "wx" });
+      await fs.rename(temporary, filename);
+      const replaced = await fs.stat(filename, { bigint: true });
+      assert.deepEqual(await fs.readFile(filename), sourceBytes.get(filename), "deployment replacement preserves source bytes");
+      assert.ok(replaced.ino !== previous.ino || replaced.ctimeNs !== previous.ctimeNs,
+        "fixture must actually replace source identity or creation metadata: " + path.relative(dataDir, filename));
+    }
     const second = await run(2);
     const afterStat = await fs.stat(monthFile, { bigint: true });
     assert.equal(second.bootstrap.queued, 0, "unchanged companies are not requeued at restart");
@@ -138,9 +182,44 @@ async function main() {
     assert.deepEqual([afterStat.ino, afterStat.mtimeNs], [beforeStat.ino, beforeStat.mtimeNs], "reused monthly file is neither rewritten nor touched");
     assert.equal(second.view.calculatedAt, first.view.calculatedAt);
     assert.deepEqual(second.view.snapshot.summary, first.view.snapshot.summary);
+    for (const [filename, value] of untouched) {
+      const current = await fs.stat(filename, { bigint: true });
+      assert.deepEqual(await fs.readFile(filename), value.bytes);
+      assert.deepEqual([current.ino, current.mtimeNs], [value.stat.ino, value.stat.mtimeNs]);
+    }
     assert.deepEqual(await fs.readFile(historyFile), originalHistory);
     assert.deepEqual(await fs.readFile(masterFile), originalMaster);
-    console.log("Company restart API: real process restart, closed-month reuse, zero heavy source rereads, unchanged bytes/mtime and zero external requests passed");
+    // A true source edit still has to invalidate the affected company/month.
+    // Update all equally recent copies of one day so canonical selection does
+    // not depend on which same-time keyword observation wins the tie.
+    let editedRows = 0;
+    const changedHistory = originalHistory.toString("utf8").trimEnd().split("\n").map(line => {
+      const row = JSON.parse(line);
+      if (row.companyKey === fixture.companyId && row.stayDate === "2026-08-20" && row.collectedAt === "2026-08-15T00:00:00.000Z") {
+        const price = row.publicRevenue / row.publicBookings;
+        row.publicBookings++; row.sold++; row.available--; row.publicRevenue += price; row.estimatedRevenue += price; editedRows++;
+      }
+      return JSON.stringify(row);
+    }).join("\n") + "\n";
+    assert.ok(editedRows > 0, "fixture edits a real latest company observation");
+    await fs.writeFile(historyFile, changedHistory);
+    const third = await run(3);
+    assert.equal(third.bootstrap.queued, 1, "only the company with changed observations is queued");
+    assert.equal(third.bootstrap.refreshedMonths, 1, "only the affected observed month is recalculated");
+    assert.deepEqual(third.audit.companyRequests, [
+      { companyId: fixture.companyId, month: "2026-08" }, { companyId: fixture.companyId, month: "2026-07" }
+    ], "heavy reads are limited to the changed month and its actual comparison source");
+    assert.notDeepEqual(third.view.snapshot.summary, second.view.snapshot.summary, "the changed booking evidence reaches the saved result");
+    for (const [filename, value] of untouched) {
+      const current = await fs.stat(filename, { bigint: true });
+      assert.deepEqual(await fs.readFile(filename), value.bytes, "unaffected saved month remains identical");
+      assert.deepEqual([current.ino, current.mtimeNs], [value.stat.ino, value.stat.mtimeNs], "unaffected saved month is not rewritten");
+    }
+    for (const [filename, bytes] of sourceBytes) {
+      assert.deepEqual(await fs.readFile(filename), filename === historyFile ? Buffer.from(changedHistory) : bytes,
+        "application preserves every source except the explicit fixture edit");
+    }
+    console.log("Company restart API: identical-byte source replacement reuses all closed months with zero heavy reads; a real edit refreshes only its company/month; source bytes and unaffected monthly files preserved; zero external requests passed");
   } finally {
     if (activeChild) { activeChild.kill(); if (activeChild.exitCode === null) await once(activeChild, "exit"); }
     assert.ok(path.resolve(dataDir).startsWith(path.resolve(os.tmpdir()) + path.sep));

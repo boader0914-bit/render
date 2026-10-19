@@ -1,6 +1,6 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs/promises"), native = require("node:fs"), path = require("node:path"), os = require("node:os"), crypto = require("node:crypto");
-const { createCompanyIntegratedSourceRevision } = require("./lib/company_integrated_source_revision.cjs");
+const { createCompanyIntegratedSourceRevision, VERSION } = require("./lib/company_integrated_source_revision.cjs");
 const A = "cmp_place_100", B = "cmp_place_200";
 const digest = value => crypto.createHash("sha256").update(value).digest("hex");
 async function fixture(t) {
@@ -87,4 +87,121 @@ test("region/month context, annual calendars, global diagnostics and corrupt ind
   await assert.rejects(createCompanyIntegratedSourceRevision(f.options).prepare(), { code: "COMPANY_SOURCE_REVISION_INDEX_INVALID" });
   // The module has no fetch/provider dependency; the only writes above are the
   // explicit fixture edits and its owned derived revision-index.json.
+});
+
+async function contextFixture(f) {
+  await f.write("tourism_data/cache/fixture-202609.json", { regionKey: "region_100", yearMonth: "202609", value: 10 });
+  await f.write("regional_search_trends/cache/fixture.json", { regionKey: "region_100", month: "2026-09", value: 20 });
+  await f.write("tourism_data/cache/unknown.json", { value: null, status: "missing" });
+  await f.write("history/special_days/2026.json", { holidays: [{ date: "2026-09-25" }] });
+  for (const value of [100, 200]) {
+    const key = digest("KR" + value).slice(0, 24);
+    await f.write("history/kosis/" + key + ".json", { population: value });
+    await f.write("history/kosis/" + key + "-attempt.json", { status: "complete" });
+    await f.write("outputs/run_" + value + "/availability.json", { status: "observed", sold: 0 });
+  }
+}
+const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object"
+  ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+async function rewriteIndex(file, change) {
+  const value = JSON.parse(await fs.readFile(file, "utf8")); change(value); delete value.checksum;
+  await fs.writeFile(file, JSON.stringify({ ...value, checksum: digest(JSON.stringify(canonical(value))) }));
+}
+
+test("remount identity/timestamps and directory order changes preserve all content-based scope tokens without reparsing company/history", async t => {
+  const f = await fixture(t); await contextFixture(f);
+  let epoch = 0n, reverse = false, historyReads = 0, masterReads = 0, contentReads = 0;
+  const overlay = value => new Proxy(value, { get(target, key) {
+    return ["dev", "ino", "mtimeNs", "ctimeNs"].includes(key) ? target[key] + epoch : Reflect.get(target, key);
+  } });
+  const fileSystem = Object.create(fs);
+  fileSystem.lstat = async (...args) => overlay(await fs.lstat(...args));
+  fileSystem.readdir = async (...args) => { const values = await fs.readdir(...args); return reverse ? values.reverse() : values; };
+  fileSystem.readFile = async (file, ...args) => { if (String(file).endsWith(path.join("company_master", "companies.json"))) masterReads++; return fs.readFile(file, ...args); };
+  fileSystem.open = async (file, mode, ...args) => {
+    if (mode === "r") contentReads++;
+    const handle = await fs.open(file, mode, ...args);
+    return new Proxy(handle, { get(target, key) { if (key === "stat") return async (...args) => overlay(await target.stat(...args));
+      const value = Reflect.get(target, key); return typeof value === "function" ? value.bind(target) : value; } });
+  };
+  const options = { ...f.options, fileSystem, historyStream: file => { historyReads++; return native.createReadStream(file, { encoding: "utf8" }); } };
+  let reader = createCompanyIntegratedSourceRevision(options), prepared = await reader.prepare();
+  const before = structuredClone(prepared), index = path.join(f.root, "company_integrated/revision-index.json"), beforeBytes = await fs.readFile(index);
+  const count = contentReads; assert.equal(masterReads, 1); assert.equal(historyReads, 1);
+  epoch = 987654n; reverse = true;
+  reader = createCompanyIntegratedSourceRevision(options); prepared = await reader.prepare();
+  assert.deepEqual(prepared, before, "A metadata-only remount must not alter any dependency token, including shared unknown context and calendars");
+  assert.equal(masterReads, 1); assert.equal(historyReads, 1, "Byte-equal history is hashed in bounded chunks but is not parsed again");
+  assert.ok(contentReads > count, "Changed stat metadata requires verifying actual content once");
+  assert.notDeepEqual(await fs.readFile(index), beforeBytes, "Only the derived stat bookkeeping changes");
+  const afterBytes = await fs.readFile(index), afterReads = contentReads;
+  reader = createCompanyIntegratedSourceRevision(options); assert.deepEqual(await reader.prepare(), before);
+  assert.equal(contentReads, afterReads, "The next unchanged restart reuses persisted content hashes without reopening sources");
+  assert.deepEqual(await fs.readFile(index), afterBytes);
+});
+
+test("byte changes and removals invalidate only linked source scopes, including following-month comparisons", async t => {
+  const f = await fixture(t); await contextFixture(f);
+  const reader = createCompanyIntegratedSourceRevision(f.options);
+  const values = async () => { const prepared = await reader.prepare(); return Object.fromEntries([A, B].flatMap(id => ["2026-08", "2026-09", "2026-10"].map(month => [id + month, reader.forScope(prepared, scope(id, month))]))); };
+  let before = await values();
+  for (const name of ["tourism_data/cache/fixture-202609.json", "regional_search_trends/cache/fixture.json", "outputs/run_100/availability.json"]) {
+    const original = await fs.readFile(path.join(f.root, name), "utf8"), value = JSON.parse(original); value.changed = true; await f.write(name, value);
+    const after = await values();
+    for (const id of [A, B]) for (const month of ["2026-08", "2026-09", "2026-10"]) {
+      assert.equal(after[id + month] !== before[id + month], id === A && (month !== "2026-08" || name.startsWith("outputs/")), name + ": " + id + month);
+    }
+    before = after;
+  }
+  await fs.unlink(path.join(f.root, "tourism_data/cache/fixture-202609.json")); let after = await values();
+  assert.notEqual(after[A + "2026-09"], before[A + "2026-09"]); assert.equal(after[B + "2026-09"], before[B + "2026-09"]); before = after;
+  await f.write("history/kosis/" + digest("KR100").slice(0, 24) + "-attempt.json", { status: "failed" }); after = await values();
+  for (const month of ["2026-08", "2026-09", "2026-10"]) { assert.notEqual(after[A + month], before[A + month]); assert.equal(after[B + month], before[B + month]); }
+  before = after; await f.write("history/special_days/2026.json", { holidays: [] }); after = await values();
+  for (const key of Object.keys(before)) assert.notEqual(after[key], before[key], "A real shared annual calendar edit is a dependency of both companies");
+  const stored = JSON.parse(await fs.readFile(path.join(f.root, "company_integrated/revision-index.json"), "utf8"));
+  assert.ok(!("tourism/fixture-202609.json" in stored.contentDigests)); assert.ok(!("tourism/fixture-202609.json" in stored.parts.contextFiles));
+});
+
+test("checksum-valid legacy indexes migrate once; missing digest entries and corrupt legacy checksums cannot certify reuse", async t => {
+  const f = await fixture(t); await contextFixture(f);
+  const index = path.join(f.root, "company_integrated/revision-index.json");
+  let reader = createCompanyIntegratedSourceRevision(f.options), prepared = await reader.prepare();
+  const expected = structuredClone(prepared);
+  await rewriteIndex(index, value => {
+    value.version = value.prepared.version = "company-integrated-source-revision-v1"; delete value.contentDigests;
+    value.prepared.revision = "legacy-stat-only-token"; value.parts.contextFiles["tourism/fixture-202609.json"].digest = "old-metadata";
+  });
+  reader = createCompanyIntegratedSourceRevision(f.options); prepared = await reader.prepare();
+  assert.equal(prepared.version, VERSION); assert.deepEqual(prepared, expected, "Migration rebuilds from actual files rather than trusting legacy prepared tokens");
+  const bytes = await fs.readFile(index); assert.deepEqual(await createCompanyIntegratedSourceRevision(f.options).prepare(), expected);
+  assert.deepEqual(await fs.readFile(index), bytes, "Migration does not repeat on the next restart");
+  await rewriteIndex(index, value => { delete value.contentDigests.history; });
+  const invalid = await fs.readFile(index);
+  await assert.rejects(createCompanyIntegratedSourceRevision(f.options).prepare(), { code: "COMPANY_SOURCE_REVISION_INDEX_INVALID" });
+  assert.deepEqual(await fs.readFile(index), invalid);
+  await fs.writeFile(index, bytes); await rewriteIndex(index, value => { value.version = "company-integrated-source-revision-v1"; });
+  const corrupt = JSON.parse(await fs.readFile(index)); corrupt.prepared.revision = "tampered"; await fs.writeFile(index, JSON.stringify(corrupt));
+  await assert.rejects(createCompanyIntegratedSourceRevision(f.options).prepare(), { code: "COMPANY_SOURCE_REVISION_INDEX_INVALID" });
+});
+
+test("a changing or unreadable source during hashing fails closed and preserves the last verified index", async t => {
+  const f = await fixture(t); await contextFixture(f);
+  const baselineReader = createCompanyIntegratedSourceRevision(f.options); await baselineReader.prepare();
+  const index = path.join(f.root, "company_integrated/revision-index.json"), before = await fs.readFile(index);
+  await f.write("outputs/run_100/availability.json", { status: "missing", sold: null });
+  for (const mode of ["unreadable", "racing"]) {
+    const fileSystem = Object.create(fs);
+    fileSystem.open = async (file, flags, ...args) => {
+      if (flags !== "r" || !String(file).endsWith("availability.json")) return fs.open(file, flags, ...args);
+      if (mode === "unreadable") throw Object.assign(new Error("private path must not leak"), { code: "EACCES" });
+      const handle = await fs.open(file, flags, ...args); let changed = false;
+      return new Proxy(handle, { get(target, key) {
+        if (key === "read") return async (...args) => { const result = await target.read(...args); if (!changed) { changed = true; await fs.appendFile(file, " "); } return result; };
+        const value = Reflect.get(target, key); return typeof value === "function" ? value.bind(target) : value;
+      } });
+    };
+    await assert.rejects(createCompanyIntegratedSourceRevision({ ...f.options, fileSystem }).prepare(), { code: "COMPANY_SOURCE_REVISION_UNAVAILABLE", message: "COMPANY_SOURCE_REVISION_UNAVAILABLE" });
+    assert.deepEqual(await fs.readFile(index), before, "Failed verification cannot replace the prior derived index");
+  }
 });

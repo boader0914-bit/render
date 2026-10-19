@@ -4,7 +4,8 @@
 // closed so they cannot certify reuse of an old company aggregate.
 const fs = require("node:fs/promises"), native = require("node:fs"), path = require("node:path"), crypto = require("node:crypto"), readline = require("node:readline");
 const { industryCompanyReference } = require("./industry_analysis.cjs");
-const VERSION = "company-integrated-source-revision-v1";
+const VERSION = "company-integrated-source-revision-v2";
+const LEGACY_VERSION = "company-integrated-source-revision-v1";
 const monthValid = value => /^\d{4}-(0[1-9]|1[0-2])$/.test(value || "");
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
 const hash = value => crypto.createHash("sha256").update(JSON.stringify(stable(value))).digest("hex");
@@ -32,7 +33,11 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
     requireValid(current.isFile() && current.size < 32n * 1024n * 1024n);
     let value; try { value = JSON.parse(await fileSystem.readFile(indexFile, "utf8")); } catch { throw fault("COMPANY_SOURCE_REVISION_INDEX_INVALID"); }
     const { checksum, ...body } = value;
-    if (value.version !== VERSION || !value.metadata || !value.parts || !value.prepared || checksum !== hash(body)) throw fault("COMPANY_SOURCE_REVISION_INDEX_INVALID");
+    if (![VERSION, LEGACY_VERSION].includes(value.version) || !value.metadata || !value.parts || !value.prepared || checksum !== hash(body)) throw fault("COMPANY_SOURCE_REVISION_INDEX_INVALID");
+    if (value.version === VERSION && (!value.contentDigests || value.prepared.version !== VERSION
+      || Object.keys(value.contentDigests).length !== Object.keys(value.metadata).length
+      || Object.entries(value.metadata).some(([label, metadata]) => metadata === null
+        ? value.contentDigests[label] !== null : !/^[a-f0-9]{64}$/.test(value.contentDigests[label] || "")))) throw fault("COMPANY_SOURCE_REVISION_INDEX_INVALID");
     cached = value; initialized = true; cachedIndexStat = sig; return cached;
   }
   async function inventory() {
@@ -70,6 +75,21 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
     let result; try { result = JSON.parse((await fileSystem.readFile(current.paths[label], "utf8")).replace(/^\uFEFF/, "")); } catch { throw fault("COMPANY_SOURCE_REVISION_UNAVAILABLE"); }
     requireValid(signature(await stat(current.paths[label])) === current.metadata[label]); return result;
   }
+  async function contentDigest(label, current) {
+    if (current.metadata[label] === null) return null;
+    // Stat identity only decides when to reread. Durable dependency tokens use
+    // file bytes, so a remount/atomic replacement cannot invalidate every month.
+    // Stream even large history/results; never retain whole files for hashing.
+    const handle = await fileSystem.open(current.paths[label], "r");
+    try {
+      const before = await handle.stat({ bigint: true }); requireValid(before.isFile() && signature(before) === current.metadata[label]);
+      const digest = crypto.createHash("sha256"), buffer = Buffer.allocUnsafe(64 * 1024); let size = 0n;
+      while (true) { const { bytesRead } = await handle.read(buffer, 0, buffer.length, null); if (!bytesRead) break; digest.update(buffer.subarray(0, bytesRead)); size += BigInt(bytesRead); }
+      requireValid(size === before.size && signature(await handle.stat({ bigint: true })) === current.metadata[label]
+        && signature(await stat(current.paths[label])) === current.metadata[label]);
+      return digest.digest("hex");
+    } finally { await handle.close(); }
+  }
   async function atomic(value) {
     await fileSystem.mkdir(path.dirname(indexFile), { recursive: true }); const temporary = indexFile + "." + crypto.randomUUID() + ".tmp";
     const encoded = JSON.stringify(value); requireValid(Buffer.byteLength(encoded) < 32 * 1024 * 1024); let handle;
@@ -95,8 +115,16 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
   }
   async function scan() {
     const old = await loadIndex(), current = await inventory();
-    if (old && old.configuration === configuration && hash(current.metadata) === hash(old.metadata)) return structuredClone(old.prepared);
-    const parts = structuredClone(old?.parts || {}), changed = label => !old || old.metadata[label] !== current.metadata[label];
+    const compatible = old?.version === VERSION;
+    if (compatible && old.configuration === configuration && hash(current.metadata) === hash(old.metadata)) return structuredClone(old.prepared);
+    const contentDigests = {};
+    for (const label of Object.keys(current.metadata).sort()) contentDigests[label] = compatible && old.metadata[label] === current.metadata[label]
+      ? old.contentDigests[label] : await contentDigest(label, current);
+    // v1 stored stat-only dependencies. They cannot prove byte equality, so
+    // migrate once by rebuilding the derived index; old monthly snapshots stay
+    // visible until the existing queue verifies their replacement normally.
+    const parts = structuredClone(compatible ? old.parts : {}), changed = label => !compatible || old.contentDigests[label] !== contentDigests[label];
+    for (const label of Object.keys(parts)) if (label.startsWith("engine/") && !(label in current.metadata)) delete parts[label];
     for (const label of ["regions", "tourism-map", ...Object.keys(current.metadata).filter(key => key.startsWith("engine/"))]) {
       if (changed(label)) { const bytes = current.metadata[label] ? await fileSystem.readFile(current.paths[label]) : null; parts[label] = { digest: hash(bytes?.toString("base64") || null),
         ...(label === "regions" ? { value: await json(label, current, { units: [] }) } : {}) }; }
@@ -166,19 +194,20 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
       const value = await json(label, current, {}), snapshot = value.snapshot || value, rawMonth = snapshot.yearMonth || snapshot.month || label.match(/(\d{4})(\d{2})[.]json$/)?.slice(1).join("-") || "";
       const month = /^\d{4}(0[1-9]|1[0-2])$/.test(rawMonth) ? rawMonth.slice(0, 4) + "-" + rawMonth.slice(4) : rawMonth;
       const regions = [...new Set([snapshot.regionKey, snapshot.region?.regionKey, ...(snapshot.allRegions || snapshot.regions || []).map(region => region.regionKey)].filter(Boolean))];
-      parts.contextFiles[label] = { month: monthValid(month) ? month : "", regions, digest: current.metadata[label] };
+      parts.contextFiles[label] = { month: monthValid(month) ? month : "", regions, digest: contentDigests[label] };
     }
     for (const label of Object.keys(parts.contextFiles)) if (!contextLabels.includes(label)) delete parts.contextFiles[label];
     const engines = Object.keys(parts).filter(key => key.startsWith("engine/")).sort().map(key => parts[key].digest);
     const common = hash([VERSION, engines, calculationFingerprint, parts.regions?.digest, parts["tourism-map"]?.digest, parts.master.identity, parts.history.malformed]);
     const context = { monthly: {}, years: {}, unknown: [] };
-    for (const entry of Object.values(parts.contextFiles)) {
+    for (const label of Object.keys(parts.contextFiles).sort()) {
+      const entry = parts.contextFiles[label];
       if (!entry.month || !entry.regions.length) { context.unknown.push(entry.digest); continue; }
       for (const regionKey of entry.regions) (((context.monthly[regionKey] ||= {})[entry.month] ||= [])).push(entry.digest);
     }
-    for (const [label, value] of Object.entries(current.metadata)) if (label.startsWith("calendar/")) { const year = label.match(/\d{4}/)?.[0]; if (year) (context.years[year] ||= []).push([label, value]); else context.unknown.push([label, value]); }
+    for (const [label, value] of Object.entries(contentDigests)) if (label.startsWith("calendar/")) { const year = label.match(/\d{4}/)?.[0]; if (year) (context.years[year] ||= []).push([label, value]); else context.unknown.push([label, value]); }
     const companies = {}, runMetadataById = {};
-    for (const [label, value] of Object.entries(current.metadata)) if (label.startsWith("runs/")) (runMetadataById[label.split("/")[1]] ||= []).push([label, value]);
+    for (const [label, value] of Object.entries(contentDigests)) if (label.startsWith("runs/")) (runMetadataById[label.split("/")[1]] ||= []).push([label, value]);
     parts.runCatalog ||= {};
     const knownRuns = [...new Set(Object.values(parts.master.companies).flatMap(company => company.knownRuns))];
     for (const id of knownRuns) {
@@ -192,7 +221,7 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
     for (const id of Object.keys(parts.runCatalog)) if (!knownRuns.includes(id)) delete parts.runCatalog[id];
     for (const [id, company] of Object.entries(parts.master.companies)) {
       const kosis = company.regionId ? crypto.createHash("sha256").update(company.regionId).digest("hex").slice(0, 24) : "";
-      const revision = hash([common, company.meta, parts.capacity[id] || null, context.unknown, includeContext && kosis ? [current.metadata["kosis/" + kosis + ".json"], current.metadata["kosis/" + kosis + "-attempt.json"]] : null]);
+      const revision = hash([common, company.meta, parts.capacity[id] || null, context.unknown, includeContext && kosis ? [contentDigests["kosis/" + kosis + ".json"], contentDigests["kosis/" + kosis + "-attempt.json"]] : null]);
       const months = {}, allMonths = [...new Set([...Object.keys(company.months), ...Object.keys(parts.history.rows[id] || {})])];
       for (const month of allMonths) { const runIds = [...new Set([...(company.runs[month] || []), ...(parts.history.runRefs[id]?.[month] || [])])].sort();
         const runMetadata = runIds.flatMap(runId => runMetadataById[runId] || []).sort();
@@ -204,7 +233,7 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
     // A second fresh metadata scan prevents a partial inventory/history from
     // certifying a source that changed while the index was being rebuilt.
     requireValid(hash((await inventory()).metadata) === hash(current.metadata));
-    const body = { version: VERSION, configuration, metadata: current.metadata, parts, prepared }; await atomic({ ...body, checksum: hash(body) }); return structuredClone(prepared);
+    const body = { version: VERSION, configuration, metadata: current.metadata, contentDigests, parts, prepared }; await atomic({ ...body, checksum: hash(body) }); return structuredClone(prepared);
   }
   function forScope(prepared, { companyId, month, cutoffDate = "", calculationVersion = "" } = {}) {
     requireValid(prepared?.version === VERSION && prepared.companies && monthValid(month) && typeof companyId === "string");
