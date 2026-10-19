@@ -67,14 +67,15 @@ function createCompanyDetailSourceIndex({ dataDir, projectionVersion = VERSION, 
       || value.checksum !== jsonHash({ ...value, checksum: undefined })) return false;
     return Object.entries(value.companies).every(([id, record]) => recordValid(record, hash(id) + ".json"));
   }
-  async function checkedJson(owner, record) {
+  async function checkedJson(owner, record, withSignature = false) {
     await safeDirectory(cacheDir); const directory = generationDir(owner.generation); await safeDirectory(directory);
     need(recordValid(record, record.file) && /^[a-z0-9_]+\.json$/.test(record.file));
     const file = path.resolve(directory, record.file); need(file.startsWith(directory + path.sep));
     const before = await regular(file, "COMPANY_DETAIL_SOURCE_INDEX_INVALID");
     const bytes = await fileSystem.readFile(file);
     need(stamp(before) === stamp(await regular(file, "COMPANY_DETAIL_SOURCE_INDEX_INVALID")) && bytes.length === record.bytes && hash(bytes) === record.sha256);
-    try { return JSON.parse(bytes.toString("utf8")); } catch { throw fault("COMPANY_DETAIL_SOURCE_INDEX_INVALID"); }
+    try { const data = JSON.parse(bytes.toString("utf8")); return withSignature ? { data, signature: stamp(before) } : data; }
+    catch { throw fault("COMPANY_DETAIL_SOURCE_INDEX_INVALID"); }
   }
   async function writeJson(directory, filename, value) {
     const bytes = Buffer.from(JSON.stringify(value));
@@ -101,9 +102,12 @@ function createCompanyDetailSourceIndex({ dataDir, projectionVersion = VERSION, 
       if (!bytes.toString("utf8").trim()) return;
       let row; try { row = JSON.parse(bytes.toString("utf8")); } catch { return; }
       if (!row?.observationId) return; // Tolerate partial history lines as before.
-      const identity = historyIdentity(row);
-      need(object(identity) && jsonHash(identity.observationId) === jsonHash(row.observationId), "COMPANY_DETAIL_SOURCE_INDEX_PROJECTOR_INVALID");
-      const identityHash = jsonHash(identity), previous = latest.get(row.observationId);
+      const projected = historyIdentity(row);
+      need(object(projected) && jsonHash(projected.observationId) === jsonHash(row.observationId), "COMPANY_DETAIL_SOURCE_INDEX_PROJECTOR_INVALID");
+      // The just-built private cache must have the same JSON representation as
+      // a saved/restarted index, including absent rather than undefined fields.
+      const encodedIdentity = JSON.stringify(projected), identity = JSON.parse(encodedIdentity);
+      const identityHash = hash(encodedIdentity), previous = latest.get(row.observationId);
       if (previous?.identityHash === identityHash) {
         previous.event.offset = start; previous.event.length = bytes.length;
       } else {
@@ -140,6 +144,7 @@ function createCompanyDetailSourceIndex({ dataDir, projectionVersion = VERSION, 
     for (const row of Object.values(peers.companies)) need(object(row) && Object.keys(row).every(key => key === "keywords"));
     const peersRecord = await writeJson(directory, "peers.json", peers);
     const history = await historyOffsets(), historyRecord = await writeJson(directory, "history.json", history);
+    const historySignature = stamp(await regular(path.join(directory, historyRecord.file), "COMPANY_DETAIL_SOURCE_INDEX_INVALID"));
     need(same(before, await source()), "COMPANY_DETAIL_SOURCE_INDEX_SOURCE_CHANGED");
     const body = { version: VERSION, projectionVersion, generation, previousGeneration: previous?.generation || null,
       source: before, preparedAt: new Date().toISOString(),
@@ -151,7 +156,7 @@ function createCompanyDetailSourceIndex({ dataDir, projectionVersion = VERSION, 
       need(same(before, await source()), "COMPANY_DETAIL_SOURCE_INDEX_SOURCE_CHANGED");
       await fileSystem.rename(temporary, currentFile);
     } catch (error) { await fileSystem.unlink(temporary).catch(() => {}); throw error; }
-    return next;
+    return { manifest: next, events: history.events, historySignature };
   }
   async function cleanupGenerations(owner) {
     const report = { checkedAt: new Date().toISOString(), deleted: [], skipped: [], warningCount: 0, errorCode: null };
@@ -224,10 +229,15 @@ function createCompanyDetailSourceIndex({ dataDir, projectionVersion = VERSION, 
       const previous = valid(manifest) ? manifest : await persisted();
       let saved = !force && same(previous?.source, before) ? previous : null;
       const reused = Boolean(saved);
-      if (!saved) saved = await build(before, previous);
+      let built = null;
+      if (!saved) { built = await build(before, previous); saved = built.manifest; }
       need(same(before, await source()), "COMPANY_DETAIL_SOURCE_INDEX_SOURCE_CHANGED");
       if (manifest?.generation !== saved.generation) { peersMemory = null; historyMemory = null; }
       manifest = saved;
+      // No second read/parse of the history index is needed after its initial
+      // build. Publish this private generation cache only after source checks;
+      // persisted-index reuse still verifies and loads its own saved metadata.
+      if (built) historyMemory = { generation: saved.generation, events: built.events, signature: built.historySignature };
       failedSource = null;
       state = { ready: true, phase: "ready", startedAt: state.startedAt, finishedAt: new Date().toISOString(), elapsedMs: Date.now() - started,
         errorCode: null, cacheStatus: reused ? "reused" : "built", companyCount: saved.companyCount, historyRowCount: saved.historyRowCount,
@@ -286,9 +296,11 @@ function createCompanyDetailSourceIndex({ dataDir, projectionVersion = VERSION, 
     need(path.resolve(file) === historyFile && typeof matches === "function", "COMPANY_DETAIL_SOURCE_INDEX_PATH_INVALID");
     const owner = await current(true);
     try {
-      if (!historyMemory || historyMemory.generation !== owner.generation) {
-        const value = await checkedJson(owner, owner.history); need(Array.isArray(value?.events));
-        historyMemory = { generation: owner.generation, events: value.events };
+      await safeDirectory(cacheDir); const historyDirectory = generationDir(owner.generation); await safeDirectory(historyDirectory);
+      const historySignature = stamp(await regular(path.join(historyDirectory, owner.history.file), "COMPANY_DETAIL_SOURCE_INDEX_INVALID"));
+      if (!historyMemory || historyMemory.generation !== owner.generation || historyMemory.signature !== historySignature) {
+        const value = await checkedJson(owner, owner.history, true); need(Array.isArray(value.data?.events));
+        historyMemory = { generation: owner.generation, events: value.data.events, signature: value.signature };
       }
       const selectedById = new Map();
       for (const entry of historyMemory.events) {

@@ -6246,6 +6246,38 @@ function parseCsv(text) {
   return rows.map((values) => Object.fromEntries(headers.map((header, index) => [header, values[index] || ""])));
 }
 
+// Detail recovery keeps the legacy CSV grammar exactly, but copies spans at
+// quotes/delimiters instead of allocating one character at a time for large
+// embedded product JSON fields. Ordinary result/monthly readers are unchanged.
+function parseCompanyDetailCsv(text) {
+  const rows = [];
+  let row = [], parts = [], start = 0, quoted = false;
+  const field = end => {
+    if (end > start) parts.push(text.slice(start, end));
+    const value = parts.join(""); parts = []; return value;
+  };
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i], next = text[i + 1];
+    if (char === '"') {
+      if (i > start) parts.push(text.slice(start, i));
+      if (quoted && next === '"') { parts.push('"'); i++; }
+      else quoted = !quoted;
+      start = i + 1; continue;
+    }
+    if (char === "," && !quoted) { row.push(field(i)); start = i + 1; continue; }
+    if ((char === "\n" || char === "\r") && !quoted) {
+      row.push(field(i));
+      if (char === "\r" && next === "\n") i++;
+      if (row.some(value => value.length > 0)) rows.push(row);
+      row = []; start = i + 1;
+    }
+  }
+  const last = field(text.length);
+  if (last.length > 0 || row.length > 0) { row.push(last); rows.push(row); }
+  const headers = rows.shift() || [];
+  return rows.map(values => Object.fromEntries(headers.map((header, index) => [header, values[index] || ""])));
+}
+
 function csvEscape(value) {
   if (value === null || value === undefined) return "";
   const text = String(value);
@@ -14935,8 +14967,10 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
     String(run?.collectedAt || run?.updatedAt || "").trim()
   ]));
   const storedTimes = companyProductStoredRunTimeMap(company);
-  const loadedCandidates = [];
-  for (const runId of companyProductRecoveryRunIds(company, observations, listedRunTimes)) {
+  const candidateRunIds = companyProductRecoveryRunIds(company, observations, listedRunTimes);
+  const loadedByIndex = new Array(candidateRunIds.length);
+  async function loadCandidate(index) {
+    const runId = candidateRunIds[index];
     const data = await measureAsync("recoveryRunLoadMs", () => loadRun(runId, {
       skipCompanyMaster: true,
       skipHistory: true,
@@ -14948,21 +14982,36 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
       skipTourismDiversityHistory: true,
       ...(scoped ? { capacityCompanies: [company], companyDetailCompany: company } : {})
     })).catch(() => null);
-    if (!data) continue;
+    if (!data) return;
     const sourceItem = (data.availability?.items || []).find((candidate) => companyProductAvailabilityMatch(company, candidate));
-    if (!sourceItem) continue;
+    if (!sourceItem) return;
     const item = measureSync("recoveryManualCorrectionMs", () => applyCompanyManualCorrection(sourceItem, company));
     const actualObservedAt = companyProductRunObservedAt(company, observations, runId);
     const runObservedAt = String(data.run?.collectedAt || data.run?.updatedAt || "").trim();
-    loadedCandidates.push({
+    loadedByIndex[index] = {
       runId,
       data,
       item,
       identityMatch: companyProductAvailabilityMatch(company, item),
       observedAt: actualObservedAt || runObservedAt || storedTimes.get(runId) || "",
       insertionOrder: company.runIds?.indexOf(runId) ?? -1
-    });
+    };
   }
+  await measureAsync("recoveryRunWallMs", async () => {
+    let cursor = 0, failure = null;
+    async function worker() {
+      while (!failure && cursor < candidateRunIds.length) {
+        const index = cursor++;
+        try { await loadCandidate(index); } catch (error) { failure = failure || error; }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(scoped ? 4 : 1, candidateRunIds.length) }, worker));
+    if (failure) throw failure;
+  });
+  // Completion order never chooses the winner. Preserve the original candidate
+  // order before applying the existing actual-observation sorting and common
+  // capacity maximum over every one of the selected candidates.
+  const loadedCandidates = loadedByIndex.filter(Boolean);
   loadedCandidates.sort((left, right) =>
     String(right.observedAt || "").localeCompare(String(left.observedAt || ""))
     || (Number.isInteger(right.insertionOrder) ? right.insertionOrder : -1)
@@ -17875,8 +17924,11 @@ async function loadRun(runId, options = {}) {
     && options.skipTourismDemandStrengthHistory === true && options.skipTourismResourceDemandHistory === true
     && options.skipTourismDiversityHistory === true && !options.applyCompanyMaster && !options.includeRankComparison;
   if (companyDetailReadOnly) {
-    const readRows = async filename => filename
-      ? parseCsv((await fsp.readFile(path.join(dirPath, filename), "utf8")).replace(/^\uFEFF/, "")) : [];
+    const readRows = async filename => {
+      if (!filename) return [];
+      const text = await measureCompanyDetailPhase("recoveryCsvReadWaitMs", () => fsp.readFile(path.join(dirPath, filename), "utf8"));
+      return measureCompanyDetailSyncPhase("recoveryCsvParseMs", () => parseCompanyDetailCsv(text.replace(/^\uFEFF/, "")));
+    };
     const [regionalRows, overallRows, adRows, platformRows, manualRows] = await measureCompanyDetailPhase("recoveryCsvReadMs", () =>
       Promise.all([regionalFile, overallFile, adFile, platformFile, yeogiManualFile].map(readRows)));
     const yeogiRows = normalizeYeogiManualRows(manualRows);

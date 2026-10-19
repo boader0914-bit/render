@@ -416,3 +416,36 @@ test("a genuinely changed source may prepare again after a previous source faile
   await assert.rejects(index.readMaster(f.masterFile, "one"), { code: "COMPANY_DETAIL_SOURCE_INDEX_PREPARING" });
   await index.prepare(); assert.equal((await index.readMaster(f.masterFile, "one")).companies.one.capacity, 17);
 });
+
+test("a freshly built verified history index reuses its events without a second full metadata read", async t => {
+  const f = await fixture(t), fileSystem = Object.create(fs); let metadataReads = 0;
+  fileSystem.readFile = async (file, ...args) => { if (path.basename(String(file)) === "history.json") metadataReads++; return fs.readFile(file, ...args); };
+  const index = createCompanyDetailSourceIndex({ ...f.options, fileSystem }); await index.prepare();
+  assert.equal(metadataReads, 0);
+  const actual = await index.readHistory(f.historyFile, f.company, matches);
+  assert.deepEqual(actual, await readScopedCompanyHistory(f.historyFile, f.company, matches));
+  assert.equal(metadataReads, 0, "the same source-verified generation retains its just-built private events");
+  const restart = createCompanyDetailSourceIndex({ ...f.options, fileSystem }); await restart.prepare();
+  await restart.readHistory(f.historyFile, f.company, matches); assert.equal(metadataReads, 1, "persisted reuse still verifies saved metadata bytes");
+  await restart.readHistory(f.historyFile, f.company, matches); assert.equal(metadataReads, 1);
+});
+
+test("modifying metadata after build invalidates the primed private events before first history lookup", async t => {
+  const f = await fixture(t), index = createCompanyDetailSourceIndex(f.options); await index.prepare();
+  const pointer = await f.readPointer(), meta = path.join(f.directory, pointer.generation, pointer.history.file);
+  const value = JSON.parse(await fs.readFile(meta, "utf8")); value.events[0].offset += 1;
+  await fs.writeFile(meta, JSON.stringify(value));
+  await assert.rejects(index.readHistory(f.historyFile, f.company, matches), { code: "COMPANY_DETAIL_SOURCE_INDEX_PREPARING" });
+  await index.prepare();
+  assert.deepEqual(await index.readHistory(f.historyFile, f.company, matches), await readScopedCompanyHistory(f.historyFile, f.company, matches));
+});
+
+test("fresh private events have exactly the same absent-field JSON semantics as a saved restart", async t => {
+  const history = [{ observationId: "absent-name", companyKey: "one", sold: 0 },
+    { observationId: "null-name", companyKey: "one", companyName: null, sold: 2 }];
+  const f = await fixture(t, { history }), index = createCompanyDetailSourceIndex(f.options); await index.prepare();
+  const byPresence = (row, company) => row.companyKey === company.companyId && Object.hasOwn(row, "companyName");
+  assert.deepEqual(await index.readHistory(f.historyFile, f.company, byPresence), [history[1]]);
+  const restart = createCompanyDetailSourceIndex(f.options); await restart.prepare();
+  assert.deepEqual(await restart.readHistory(f.historyFile, f.company, byPresence), [history[1]]);
+});
