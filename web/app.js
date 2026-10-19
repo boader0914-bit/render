@@ -39830,9 +39830,25 @@ async function loadAdminDbCompanyDetail(companyId = "", options = {}) {
       return null;
     } finally {
       if (state.adminDbCompanyDetailReads[selectedCompanyId] === read) {
+        const replacementMaster = state.companyMaster;
+        const replacementCompany = (replacementMaster?.companies || []).find(row => row.companyId === selectedCompanyId);
+        const retryAfterMasterRefresh = replacementMaster !== master
+          && isAdminRole() && state.session === session && state.session?.authenticated !== false
+          && state.activeTab === "admin" && state.adminPanelSection === "database" && state.adminDbViewMode === "review"
+          && state.adminDbSelectedCompanyId === selectedCompanyId && replacementCompany?.detailLoaded === false
+          && !state.adminDbCompanyDetails[selectedCompanyId]?.error;
         delete state.adminDbCompanyDetailReads[selectedCompanyId];
         delete state.adminDbCompanyDetailLoading[selectedCompanyId];
-        if (!read.displayDeferred && isAdminRole() && state.session === session
+        // A bootstrap refresh may replace the lightweight master while this
+        // detail GET is running. Reject that old context, then give the newest
+        // selected row one fresh read instead of leaving its loading panel stuck.
+        // Repeated replacements need an explicit retry, not an automatic loop.
+        if (retryAfterMasterRefresh && options.masterRefreshRetry) {
+          state.adminDbCompanyDetails[selectedCompanyId] = { error: "업체 기본자료가 다시 갱신되었습니다. 상세 자료를 다시 불러와 주세요." };
+        }
+        if (retryAfterMasterRefresh && !options.masterRefreshRetry) {
+          void loadAdminDbCompanyDetail(selectedCompanyId, { masterRefreshRetry: true });
+        } else if ((!read.displayDeferred || retryAfterMasterRefresh) && isAdminRole() && state.session === session
           && state.adminDbSelectedCompanyId === selectedCompanyId
           && !adminDbRefreshSelectedDetail(selectedCompanyId)) renderAdminDatabaseDashboard();
       }

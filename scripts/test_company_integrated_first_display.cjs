@@ -464,3 +464,147 @@ test("a forced detail refresh keeps the surrounding UI during both loading and h
   assert.equal(f.document.activeElement, search);
   assert.equal(f.filterCalls.length, filterCount);
 });
+
+test("a replaced bootstrap master retries stale detail once while preserving the newest selected month and figures", async () => {
+  const f = fixture(); f.render(); await settle(); await f.shown();
+  const oldCompany = f.state.companyMaster.companies[0];
+  const august = f.state.adminDbIntegratedPanelContext.controller.load("2026-08");
+  await f.respondIntegrated(1); await august; await f.frame(); await f.frame();
+  const oldMaster = f.state.companyMaster;
+  f.state.companyMaster = { ...oldMaster, companies: oldMaster.companies.map(row => ({ ...row })) };
+  f.render(); await settle();
+  await f.respondIntegrated(2, { sold: 7, publicBookings: 5, phoneBookings: 2,
+    publicRevenue: 1000000, phoneRevenue: 400000, estimatedRevenue: 1400000 });
+  await f.frame(); await f.frame();
+  const company = f.state.companyMaster.companies[0], node = f.selected();
+  const controller = f.state.adminDbIntegratedPanelContext.controller;
+  const before = node.innerHTML, snapshot = JSON.stringify(controller.state.envelope.snapshot);
+  assert.notEqual(company, oldCompany);
+  assert.equal(f.detailRequests.length, 1, "a master refresh shares the original in-flight GET until it drains");
+  await f.respondDetail(0, { marker: "old-context", manualCorrection: { lodgingBasisTotal: 99 } });
+  assert.equal(f.detailRequests.length, 2, "the stale response schedules exactly one fresh context GET");
+  assert.equal(f.state.companyMaster.companies[0], company);
+  assert.equal(company.detailLoaded, false);
+  assert.equal(company.manualCorrection, undefined);
+  assert.equal(f.selected(), node); assert.equal(node.innerHTML, before);
+  assert.equal(f.state.adminDbIntegratedPanelContext.controller, controller);
+  assert.equal(controller.state.month, "2026-08");
+  assert.equal(JSON.stringify(controller.state.envelope.snapshot), snapshot);
+  assert.equal(f.integratedRequests.length, 3, "detail retry reuses the already displayed month");
+  await f.respondDetail(1, { marker: "fresh-context" });
+  assert.equal(f.state.companyMaster.companies[0].detailLoaded, true);
+  assert.equal(f.state.companyMaster.companies[0].marker, "fresh-context");
+  assert.equal(f.selected(), node); assert.equal(node.innerHTML, before);
+  assert.equal(controller.state.month, "2026-08");
+  assert.equal(JSON.stringify(controller.state.envelope.snapshot), snapshot);
+  assert.equal(f.detailRequests.length, 2);
+});
+
+test("consecutive master replacements stop after one automatic detail retry and show an explicit retry action", async () => {
+  const f = fixture(); f.render(); await settle(); await f.shown();
+  const replace = () => { const old = f.state.companyMaster;
+    f.state.companyMaster = { ...old, companies: old.companies.map(row => ({ ...row })) }; f.render(); };
+  replace(); await settle(); await f.respondIntegrated(); await f.frame(); await f.frame();
+  await f.respondDetail(0, { marker: "first-stale" });
+  assert.equal(f.detailRequests.length, 2);
+  replace(); await settle(); await f.respondIntegrated(); await f.frame(); await f.frame();
+  const node = f.selected(), controller = f.state.adminDbIntegratedPanelContext.controller;
+  const snapshot = JSON.stringify(controller.state.envelope.snapshot);
+  await f.respondDetail(1, { marker: "second-stale" });
+  assert.equal(f.detailRequests.length, 2, "repeated source replacement cannot create an automatic request loop");
+  assert.equal(f.state.companyMaster.companies[0].detailLoaded, false);
+  assert.equal(f.state.companyMaster.companies[0].marker, undefined);
+  assert.match(f.state.adminDbCompanyDetails.a.error, /다시 갱신/);
+  assert.match(f.board.textContent, /다시 불러오기/);
+  assert.equal(f.selected(), node);
+  assert.equal(JSON.stringify(controller.state.envelope.snapshot), snapshot);
+});
+
+test("a stale detail cannot retry after selection, session, role or app view boundaries change", async () => {
+  for (const leave of [f => { f.state.adminDbSelectedCompanyId = "b"; },
+    f => { f.state.session = { ...f.state.session, marker: "new-session" }; },
+    f => { f.state.session.authenticated = false; }, f => { f.state.session.role = "b2b"; },
+    f => { f.state.activeTab = "home"; }, f => { f.state.adminPanelSection = "overview"; },
+    f => { f.state.adminDbViewMode = "list"; }]) {
+    const f = fixture(); f.render(); await settle(); await f.shown();
+    const old = f.state.companyMaster;
+    f.state.companyMaster = { ...old, companies: old.companies.map(row => ({ ...row })) };
+    f.context.renderAdminConsoleDashboard = () => {};
+    f.context.adminDbCompanyExplorerHtml = () => "";
+    leave(f);
+    await f.respondDetail(0, { marker: "stale-context" });
+    await f.frame(); await f.frame(); await settle();
+    assert.equal(f.detailRequests.length, 1);
+    assert.equal(f.state.companyMaster.companies[0].detailLoaded, false);
+    assert.equal(f.state.companyMaster.companies[0].marker, undefined);
+    assert.equal(f.state.adminDbCompanyDetails?.a, undefined);
+  }
+});
+
+test("a master refresh in a background browser tab resumes one fresh detail after the retained card becomes visible", async () => {
+  const f = fixture(); f.render(); await settle(); await f.shown();
+  const old = f.state.companyMaster;
+  f.state.companyMaster = { ...old, companies: old.companies.map(row => ({ ...row })) };
+  f.render(); await settle(); await f.respondIntegrated(); await f.frame(); await f.frame();
+  const node = f.selected(), controller = f.state.adminDbIntegratedPanelContext.controller;
+  const snapshot = JSON.stringify(controller.state.envelope.snapshot);
+  f.document.visibilityState = "hidden";
+  await f.respondDetail(0, { marker: "stale-context" });
+  assert.equal(f.detailRequests.length, 1, "background hydration continues to respect the visible-card barrier");
+  assert.equal(f.state.adminDbCompanyDetailLoading.a, undefined);
+  assert.equal(f.state.adminDbCompanyDetails?.a, undefined);
+  f.document.visibilityState = "visible";
+  f.context.resumeAdminDbCompanyDetailAfterReturn(); await settle(); await f.frame(); await f.frame();
+  assert.equal(f.detailRequests.length, 2, "returning to the tab resumes the latest company's detail once");
+  assert.equal(f.selected(), node);
+  assert.equal(f.state.adminDbIntegratedPanelContext.controller, controller);
+  assert.equal(JSON.stringify(controller.state.envelope.snapshot), snapshot);
+  await f.respondDetail(1, { marker: "fresh-context" });
+  assert.equal(f.state.companyMaster.companies[0].detailLoaded, true);
+  assert.equal(f.state.companyMaster.companies[0].marker, "fresh-context");
+  assert.equal(f.detailRequests.length, 2);
+});
+
+test("a master refresh before first card display follows the current display and sends only one detail GET", async () => {
+  const f = fixture(); f.render(); await settle();
+  assert.equal(f.integratedRequests.length, 1); assert.equal(f.detailRequests.length, 0);
+  const old = f.state.companyMaster;
+  f.state.companyMaster = { ...old, companies: old.companies.map(row => ({ ...row })) };
+  f.render(); await settle();
+  assert.equal(f.integratedRequests.length, 2);
+  assert.equal(f.integratedRequests[0].signal.aborted, true);
+  assert.equal(f.detailRequests.length, 0);
+  await f.respondIntegrated(0); await f.frame(); await f.frame();
+  assert.equal(f.detailRequests.length, 0, "the abandoned card cannot release a heavy detail read");
+  await f.respondIntegrated(1); await f.frame(); await f.frame();
+  assert.equal(f.detailRequests.length, 1);
+  const node = f.selected(), controller = f.state.adminDbIntegratedPanelContext.controller;
+  const before = node.innerHTML;
+  await f.respondDetail(0, { marker: "fresh-context" });
+  assert.equal(f.state.companyMaster.companies[0].detailLoaded, true);
+  assert.equal(f.state.companyMaster.companies[0].marker, "fresh-context");
+  assert.equal(f.selected(), node); assert.equal(node.innerHTML, before);
+  assert.equal(f.state.adminDbIntegratedPanelContext.controller, controller);
+  assert.equal(f.detailRequests.length, 1);
+});
+
+test("a second master replacement before the retry's first display renders its explicit retry error", async () => {
+  const f = fixture(); f.render(); await settle();
+  const replace = () => { const old = f.state.companyMaster;
+    f.state.companyMaster = { ...old, companies: old.companies.map(row => ({ ...row })) }; f.render(); };
+  replace(); await settle();
+  assert.equal(f.integratedRequests.length, 2);
+  assert.equal(f.detailRequests.length, 0);
+  assert.equal(f.state.adminDbCompanyDetailLoading.a, true);
+  replace(); await settle();
+  assert.equal(f.integratedRequests.length, 3);
+  assert.equal(f.detailRequests.length, 0);
+  assert.equal(f.state.adminDbCompanyDetailLoading.a, undefined);
+  assert.match(f.state.adminDbCompanyDetails.a.error, /다시 갱신/);
+  assert.match(f.board.textContent, /다시 갱신/);
+  assert.match(f.board.textContent, /다시 불러오기/);
+  assert.doesNotMatch(f.board.textContent, /상품·상세이력 준비 중/);
+  await f.respondIntegrated(2); await f.frame(); await f.frame();
+  assert.equal(f.detailRequests.length, 0, "the retry action is explicit after the single automatic attempt is spent");
+  assert.match(f.board.textContent, /다시 불러오기/);
+});
