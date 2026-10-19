@@ -138,6 +138,7 @@ const companyBootstrapStore = createCompanyBootstrapStore({
   emptyMaster: emptyCompanyMaster
 });
 const companyDetailSourceIndex = createCompanyDetailSourceIndex({ dataDir: DATA_DIR });
+const companyDetailReadDiagnostics = new AsyncLocalStorage();
 const companyDetailStore = createCompanyDetailStore({
   dataDir: DATA_DIR,
   outputsDir: OUTPUTS_DIR,
@@ -150,11 +151,12 @@ const companyDetailStore = createCompanyDetailStore({
     .update(fs.readFileSync(path.join(__dirname, "verified_room_inventory.json"))).digest("hex"),
   dayKey: () => kstDate(0),
   masterReader: (file, companyId) => companyDetailSourceIndex.readMaster(file, companyId),
-  historyReader: (file, company, matches) => companyDetailSourceIndex.readHistory(file, company, matches),
+  historyReader: (file, company) => companyDetailSourceIndex.readHistory(file, company, createCompanyDetailObservationMatcher(company)),
   matchesObservation: (row, company) => historyObservationMatchesCompany(row, company)
     || historyDailyObservationMatchesCompany(row, companyHistoryDailyIdentity(company)),
   runIdsForCompany: companyProductSourceRunIds,
-  build: (companyId, detailSources) => summarizeCompanyMasterDetail(companyId, { detailSources })
+  build: (companyId, detailSources) => companyDetailReadDiagnostics.run(detailSources.diagnostics || {},
+    () => summarizeCompanyMasterDetail(companyId, { detailSources }))
 });
 const TOURISM_DATA_DIR = path.join(DATA_DIR, "tourism_data");
 const LEGAL_POLICY_VERSION = "2026-09-20";
@@ -14834,6 +14836,28 @@ function companyProductStoredRunTimeMap(company = {}) {
   return byRunId;
 }
 
+function createCompanyDetailObservationMatcher(company) {
+  const keys = companyHistoryKeys(company), daily = companyHistoryDailyIdentity(company);
+  return row => historyObservationMatchesCompany(row, company, keys)
+    || historyDailyObservationMatchesCompany(row, daily);
+}
+
+async function measureCompanyDetailPhase(key, action) {
+  const diagnostics = companyDetailReadDiagnostics.getStore();
+  if (!diagnostics) return action();
+  const started = performance.now();
+  try { return await action(); }
+  finally { diagnostics[key] = (diagnostics[key] || 0) + performance.now() - started; }
+}
+
+function measureCompanyDetailSyncPhase(key, action) {
+  const diagnostics = companyDetailReadDiagnostics.getStore();
+  if (!diagnostics) return action();
+  const started = performance.now();
+  try { return action(); }
+  finally { diagnostics[key] = (diagnostics[key] || 0) + performance.now() - started; }
+}
+
 function companyProductSourceRunIds(company = {}) {
   return boundedUnique([
     ...(company.runIds || []),
@@ -14892,10 +14916,12 @@ function companyProductAvailabilityMatch(company = {}, item = {}) {
 }
 
 async function recoverCompanyProductSourceFromRuns(company = {}, observations = [], { scoped = false } = {}) {
+  const measureAsync = scoped ? measureCompanyDetailPhase : (_key, action) => action();
+  const measureSync = scoped ? measureCompanyDetailSyncPhase : (_key, action) => action();
   // A selected company's candidate set is already bounded by its own stored
   // references. Listing unrelated output directories supplies no extra candidate
   // ids and used to repeat this global scan for every detail request.
-  const listedRuns = scoped ? (await Promise.all(companyProductSourceRunIds(company).map(async id => {
+  const listedRuns = await measureAsync("recoveryMetadataMs", async () => scoped ? (await Promise.all(companyProductSourceRunIds(company).map(async id => {
     const dir = resolveRunDir(id);
     if (!dir) return null;
     try {
@@ -14903,7 +14929,7 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
       if (isIncompleteRunDirectory(manifest, files) || manifest && /^\?+$/.test(String(manifest.keyword || "").trim())) return null;
       return { id, collectedAt: runCollectedAt(id, manifest || {}, stat), updatedAt: stat.mtime.toISOString() };
     } catch { return null; }
-  }))).filter(Boolean) : await listRuns().catch(() => []);
+  }))).filter(Boolean) : await listRuns().catch(() => []));
   const listedRunTimes = new Map(listedRuns.map((run) => [
     String(run?.id || "").trim(),
     String(run?.collectedAt || run?.updatedAt || "").trim()
@@ -14911,7 +14937,7 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
   const storedTimes = companyProductStoredRunTimeMap(company);
   const loadedCandidates = [];
   for (const runId of companyProductRecoveryRunIds(company, observations, listedRunTimes)) {
-    const data = await loadRun(runId, {
+    const data = await measureAsync("recoveryRunLoadMs", () => loadRun(runId, {
       skipCompanyMaster: true,
       skipHistory: true,
       skipTraffic: true,
@@ -14921,11 +14947,11 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
       skipTourismResourceDemandHistory: true,
       skipTourismDiversityHistory: true,
       ...(scoped ? { capacityCompanies: [company], companyDetailCompany: company } : {})
-    }).catch(() => null);
+    })).catch(() => null);
     if (!data) continue;
     const sourceItem = (data.availability?.items || []).find((candidate) => companyProductAvailabilityMatch(company, candidate));
     if (!sourceItem) continue;
-    const item = applyCompanyManualCorrection(sourceItem, company);
+    const item = measureSync("recoveryManualCorrectionMs", () => applyCompanyManualCorrection(sourceItem, company));
     const actualObservedAt = companyProductRunObservedAt(company, observations, runId);
     const runObservedAt = String(data.run?.collectedAt || data.run?.updatedAt || "").trim();
     loadedCandidates.push({
@@ -14945,38 +14971,42 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
 
   // Historical summary snapshots may have discarded their raw daily stock.
   // Recover every run's observed maximum before applying one shared capacity.
-  const recoveredMaximum = Math.max(companyMaximumRoomCapacity(company), ...loadedCandidates.map(({ item }) =>
-    Number(item.inventoryEvidence?.capacityBasis?.currentObservedMaximum || item.inventoryEvidence?.lodging?.observedMaximum || 0)
-  ));
-  for (const candidate of loadedCandidates) candidate.item = applyInventoryEvidence({
-    ...candidate.item,
-    inventoryCapacityBaseline: { ...(candidate.item.inventoryCapacityBaseline || {}), lodging: recoveredMaximum }
+  measureSync("recoveryCapacityMs", () => {
+    const recoveredMaximum = Math.max(companyMaximumRoomCapacity(company), ...loadedCandidates.map(({ item }) =>
+      Number(item.inventoryEvidence?.capacityBasis?.currentObservedMaximum || item.inventoryEvidence?.lodging?.observedMaximum || 0)
+    ));
+    for (const candidate of loadedCandidates) candidate.item = applyInventoryEvidence({
+      ...candidate.item,
+      inventoryCapacityBaseline: { ...(candidate.item.inventoryCapacityBaseline || {}), lodging: recoveredMaximum }
+    });
   });
-  const evidenceProjections = loadedCandidates
+  const evidenceProjections = measureSync("recoveryEvidenceMs", () => loadedCandidates
     .filter((candidate) => candidate.item.inventoryEvidence?.version >= 2)
-    .map(({ data, item, runId, observedAt }) => ({
-      runId,
-      snapshot: {
+    .map((candidate) => {
+      const { data, item, runId, observedAt } = candidate;
+      const productSnapshot = compactCompanyProductSnapshot(item, data.run || {}, observedAt);
+      candidate.recoveredProductSnapshot = productSnapshot;
+      return {
         runId,
-        collectedAt: observedAt,
-        inventoryEvidenceVersion: item.inventoryEvidence.version,
-        readOnlyRecalculated: true,
-        salesSignal: companySalesSignalFromItem(item, data.run || {}),
-        revenue: companyRevenueSnapshotFromItem(item),
-        productSnapshot: {
-          ...compactCompanyProductSnapshot(item, data.run || {}, observedAt),
-          readOnlyRecalculated: true
-        }
-      },
-      observations: buildHistoryObservations({
-        run: data.run,
-        availability: { items: [{ ...item, companyId: company.companyId }] }
-      }, observedAt)
+        snapshot: {
+          runId,
+          collectedAt: observedAt,
+          inventoryEvidenceVersion: item.inventoryEvidence.version,
+          readOnlyRecalculated: true,
+          salesSignal: companySalesSignalFromItem(item, data.run || {}),
+          revenue: companyRevenueSnapshotFromItem(item),
+          productSnapshot: { ...productSnapshot, readOnlyRecalculated: true }
+        },
+        observations: buildHistoryObservations({
+          run: data.run,
+          availability: { items: [{ ...item, companyId: company.companyId }] }
+        }, observedAt)
+      };
     }));
   let legacyProductPreview = null;
   for (const candidate of loadedCandidates) {
     const { data, item, identityMatch, observedAt } = candidate;
-    const recoveredSnapshot = compactCompanyProductSnapshot(item, data.run || {}, observedAt);
+    const recoveredSnapshot = candidate.recoveredProductSnapshot || compactCompanyProductSnapshot(item, data.run || {}, observedAt);
     if (Array.isArray(recoveredSnapshot?.products) && recoveredSnapshot.products.length) {
       return {
         productSnapshot: recoveredSnapshot,
@@ -15089,14 +15119,14 @@ async function summarizeCompanyMasterDetail(companyId = "", { strictIdentity = f
   if (!rawCompany) return null;
   const ids = companyHistoryDailyIdentity(rawCompany).companyIds;
   const observations = strictIdentity ? allObservations.filter(row => ids.has(String(row.companyKey || row.companyId || '').trim().toLowerCase())) : allObservations;
-  const needsEvidenceRecovery = companyInventoryNeedsEvidenceRecovery(rawCompany);
+  const needsEvidenceRecovery = measureCompanyDetailSyncPhase("detailEligibilityMs", () => companyInventoryNeedsEvidenceRecovery(rawCompany));
   const recoveredProductSource = needsEvidenceRecovery
     ? await recoverCompanyProductSourceFromRuns(rawCompany, observations, { scoped: Boolean(detailSources) })
     : { productSnapshot: null, legacyProductPreview: null, recoveredFromRun: false, evidenceProjections: [] };
-  const readView = companyInventoryEvidenceReadView(rawCompany, observations, recoveredProductSource.evidenceProjections || []);
-  const viewCompany = { ...readView.company, inventory: companyInventoryWithManualCorrection(readView.company) };
+  const readView = measureCompanyDetailSyncPhase("detailReadViewMs", () => companyInventoryEvidenceReadView(rawCompany, observations, recoveredProductSource.evidenceProjections || []));
+  const viewCompany = { ...readView.company, inventory: measureCompanyDetailSyncPhase("detailInventoryViewMs", () => companyInventoryWithManualCorrection(readView.company)) };
   const viewObservations = readView.observations;
-  const company = companyRecordSummary(viewCompany);
+  const company = measureCompanyDetailSyncPhase("detailCompanySummaryMs", () => companyRecordSummary(viewCompany));
   const productSnapshotCandidates = [
     viewCompany.inventory?.latest,
     viewCompany.inventory?.previousLatest,
@@ -15117,8 +15147,8 @@ async function summarizeCompanyMasterDetail(companyId = "", { strictIdentity = f
   const dailySnapshot = productSnapshotCandidates.find((snapshot) => Array.isArray(snapshot.daily) && snapshot.daily.length)
     || recoveredDaily || latestSnapshot;
   const snapshotDaily = Array.isArray(dailySnapshot?.daily) ? dailySnapshot.daily : [];
-  const historyDailyFallback = snapshotDaily.length ? null : companyHistoryDailyFallback(viewCompany, viewObservations);
-  const historySalesArchive = historyDailyFallback || companyHistoryDailyFallback(viewCompany, viewObservations);
+  const historyDailyFallback = snapshotDaily.length ? null : measureCompanyDetailSyncPhase("detailHistoryArchiveMs", () => companyHistoryDailyFallback(viewCompany, viewObservations));
+  const historySalesArchive = historyDailyFallback || measureCompanyDetailSyncPhase("detailHistoryArchiveMs", () => companyHistoryDailyFallback(viewCompany, viewObservations));
   const daily = snapshotDaily.length ? snapshotDaily : historyDailyFallback.daily;
   const observationBasis = {
     latest: {
@@ -15154,13 +15184,13 @@ async function summarizeCompanyMasterDetail(companyId = "", { strictIdentity = f
       rowCount: Number(historySalesArchive?.archiveDaily?.length || 0),
       actualObservation: true
     },
-    salesHistory: companySalesHistorySummary(
+    salesHistory: measureCompanyDetailSyncPhase("detailSalesHistoryMs", () => companySalesHistorySummary(
       Array.isArray(historySalesArchive?.archiveDaily) ? historySalesArchive.archiveDaily : [],
       snapshotDaily.map(row => ({...row,
         collectedAt: row.collectedAt || (!row.collectedDate ? dailySnapshot?.dailyCollectedAt || dailySnapshot?.collectedAt : "") || "",
         runId: row.runId || dailySnapshot?.dailyRunId || dailySnapshot?.runId || ""
       }))
-    ),
+    )),
     priceGroups: Array.isArray(productSnapshot?.priceGroups) ? productSnapshot.priceGroups : [],
     productSummary: productSnapshot?.summary || latestSnapshot?.summary || null,
     capacityBasis: dailySnapshot?.capacityBasis || viewCompany.inventory?.latest?.capacityBasis || null,
@@ -15172,8 +15202,8 @@ async function summarizeCompanyMasterDetail(companyId = "", { strictIdentity = f
       excludedNonRoomProductCount: Number(dailySnapshot?.excludedNonRoomProductCount || 0)
     },
     observationBasis,
-    rankTrend: companyRankTrend(rawCompany, master, observations),
-    performanceTrend: companyPerformanceTrend(viewCompany, viewObservations),
+    rankTrend: measureCompanyDetailSyncPhase("detailRankTrendMs", () => companyRankTrend(rawCompany, master, observations)),
+    performanceTrend: measureCompanyDetailSyncPhase("detailPerformanceMs", () => companyPerformanceTrend(viewCompany, viewObservations)),
     ...(includeObservationFlow ? { observationFlow: require('./lib/insight_observation_flow.cjs').buildObservationFlow(
       viewObservations.filter(row => ids.has(String(row.companyKey || row.companyId || '').trim().toLowerCase())),
       rows => {
@@ -15182,7 +15212,7 @@ async function summarizeCompanyMasterDetail(companyId = "", { strictIdentity = f
         return [...history.current.daily,...history.past.years.flatMap(y=>y.months.flatMap(m=>m.weeks.flatMap(w=>w.daily)))];
       }
     ) } : {}),
-    leadTime: companyLeadTimeSummary(viewCompany, viewObservations),
+    leadTime: measureCompanyDetailSyncPhase("detailLeadTimeMs", () => companyLeadTimeSummary(viewCompany, viewObservations)),
     definitions: {
       estimatedRevenue: dailySnapshot?.inventoryEvidenceVersion >= 3
         ? "공개 예약과 방막기(전화·타채널 예약 추정)를 포함한 예상액. 당일 가격이 없는 전화예약은 같은 상품의 다른 관측일 가격으로 보완하고 근거 날짜를 표시함. 확인된 데이유즈 공유 수량은 제외하며 미조회 공유 수량은 확인 필요. 실제 결제 매출이 아님"
@@ -17751,6 +17781,70 @@ async function loadHistoryRun(runId) {
   }
 }
 
+function companyDetailSavedRunMetadata({ runId, manifest, conditions, collectedAt, collectedAtSource, provinceKey, province, files, regionalFile, overallFile, adFile, platformFile, yeogiManualFile, reportFile }) {
+  return {
+    id: runId,
+    label: displayNameForRun(runId, manifest),
+    keyword: manifest?.keyword || conditions.keyword || "",
+    searchKeyword: manifest?.searchKeyword || "",
+    naverKeyword: manifest?.naverKeyword || "",
+    keywordType: manifest?.keywordType || "province",
+    searchMode: manifest?.searchMode || (manifest?.keywordType === "company" ? "company" : "keyword"),
+    searchModeLabel: SEARCH_MODES[manifest?.searchMode] || (manifest?.keywordType === "company" ? SEARCH_MODES.company : SEARCH_MODES.keyword),
+    searchIntent: manifest?.searchIntent || "",
+    searchRegion: manifest?.searchRegion || "",
+    searchScope: manifest?.searchScope || "",
+    searchScopeLabel: manifest?.searchScopeLabel || "",
+    collectionMode: manifest?.collectionMode || "precision",
+    collectionModeLabel: manifest?.collectionModeLabel || COLLECTION_MODES[manifest?.collectionMode] || COLLECTION_MODES.precision,
+    collectionPurpose: manifest?.collectionPurpose || "revenue_detail",
+    collectionPurposeLabel: manifest?.collectionPurposeLabel || COLLECTION_PURPOSES[manifest?.collectionPurpose] || COLLECTION_PURPOSES.revenue_detail,
+    collectionProfile: manifest?.collectionProfile || collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").key,
+    dayUseMode: manifest?.dayUseMode || "detail",
+    collectionProfileLabel: manifest?.collectionProfileLabel || collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").label,
+    collectionProfileNote: manifest?.collectionProfileNote || collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").note,
+    collectionProfileFlags: manifest?.collectionProfileFlags || {
+      collectRegional: collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").collectRegional,
+      collectOta: collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").collectOta,
+      collectBookingStock: collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").collectBookingStock,
+      collectWeeklyRange: collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").collectWeeklyRange
+    },
+    collectionDbRoute: collectionDbRouteProfile(
+      manifest?.collectionPurpose || "revenue_detail",
+      manifest?.collectionProfile || collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").key
+    ),
+    detailRankRanges: manifest?.detailRankRanges || "",
+    province: provinceKey,
+    provinceLabel: province.label,
+    mapBounds: province.mapBounds,
+    checkIn: conditions.checkIn,
+    checkOut: conditions.checkOut,
+    adults: conditions.adults,
+    productMode: conditions.productMode,
+    productModeLabel: PRODUCT_MODES[conditions.productMode] || PRODUCT_MODES.all,
+    bookingRangeDays: manifest?.bookingRangeDays || 1,
+    bookingRangePlaceLimit: manifest?.bookingRangePlaceLimit || 0,
+    collectedAt,
+    collectedAtSource,
+    updatedAt: collectedAt,
+    counts: manifest?.counts || {},
+    scheduledCollection: manifest?.scheduledCollection === true,
+    workerKey: manifest?.workerKey || null,
+    trigger: manifest?.trigger || null,
+    collectorEngine: manifest?.collectorEngine || null,
+    collectionQuality: manifest?.collectionQuality || null,
+    files: {
+      regional: regionalFile,
+      overall: overallFile,
+      ads: adFile,
+      platform: platformFile,
+      yeogiManual: yeogiManualFile,
+      report: reportFile,
+      all: files
+    }
+  };
+}
+
 async function loadRun(runId, options = {}) {
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return null;
@@ -17771,6 +17865,31 @@ async function loadRun(runId, options = {}) {
   const yeogiManualFile = manifestFile(manifest, "yeogiManual", files, (file) => file.endsWith("_yeogi_manual_import.csv"));
   const reportFile = manifestFile(manifest, "report", files, (file) => file.endsWith("_glamping_crawl_test_report.md"));
   const conditions = await readRunConditions(dirPath, manifest, reportFile);
+
+  // Selected-company recovery consumes run metadata and availability only.
+  // Require every read-only flag rather than letting this narrower return
+  // affect saved-result pages, history views, writes or provider enrichment.
+  const companyDetailReadOnly = options.companyDetailCompany && Array.isArray(options.capacityCompanies)
+    && options.skipCompanyMaster === true && options.skipHistory === true && options.skipTraffic === true
+    && options.skipTourismVisitors === true && options.skipTourismVisitorHistory === true
+    && options.skipTourismDemandStrengthHistory === true && options.skipTourismResourceDemandHistory === true
+    && options.skipTourismDiversityHistory === true && !options.applyCompanyMaster && !options.includeRankComparison;
+  if (companyDetailReadOnly) {
+    const readRows = async filename => filename
+      ? parseCsv((await fsp.readFile(path.join(dirPath, filename), "utf8")).replace(/^\uFEFF/, "")) : [];
+    const [regionalRows, overallRows, adRows, platformRows, manualRows] = await measureCompanyDetailPhase("recoveryCsvReadMs", () =>
+      Promise.all([regionalFile, overallFile, adFile, platformFile, yeogiManualFile].map(readRows)));
+    const yeogiRows = normalizeYeogiManualRows(manualRows);
+    const displayPlatformRows = yeogiRows.length
+      ? [...platformRows.filter(row => String(row.channel || row["플랫폼"] || "") !== "여기어때"), ...yeogiRows] : platformRows;
+    const availabilityRows = companyDetailAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows], options.companyDetailCompany);
+    const availability = measureCompanyDetailSyncPhase("recoveryAvailabilityMs", () => summarizeAvailabilityRows(availabilityRows, dirPath, options.capacityCompanies, {
+      keyword: manifest?.keyword || conditions.keyword || "", checkIn: manifest?.checkIn || conditions.checkIn || runDateFromId(runId),
+      bookingRangeDays: manifest?.bookingRangeDays || 1, productCoverage: manifest?.productCoverage || null
+    }));
+    return { run: companyDetailSavedRunMetadata({ runId, manifest, conditions, collectedAt, collectedAtSource, provinceKey, province, files,
+      regionalFile, overallFile, adFile, platformFile, yeogiManualFile, reportFile }), availability };
+  }
 
   const regionalRows = regionalFile
     ? parseCsv((await fsp.readFile(path.join(dirPath, regionalFile), "utf8")).replace(/^\uFEFF/, ""))
@@ -17942,67 +18061,7 @@ async function loadRun(runId, options = {}) {
   });
 
   const result = {
-    run: {
-      id: runId,
-      label: displayNameForRun(runId, manifest),
-      keyword: manifest?.keyword || conditions.keyword || "",
-      searchKeyword: manifest?.searchKeyword || "",
-      naverKeyword: manifest?.naverKeyword || "",
-      keywordType: manifest?.keywordType || "province",
-      searchMode: manifest?.searchMode || (manifest?.keywordType === "company" ? "company" : "keyword"),
-      searchModeLabel: SEARCH_MODES[manifest?.searchMode] || (manifest?.keywordType === "company" ? SEARCH_MODES.company : SEARCH_MODES.keyword),
-      searchIntent: manifest?.searchIntent || "",
-      searchRegion: manifest?.searchRegion || "",
-      searchScope: manifest?.searchScope || "",
-      searchScopeLabel: manifest?.searchScopeLabel || "",
-      collectionMode: manifest?.collectionMode || "precision",
-      collectionModeLabel: manifest?.collectionModeLabel || COLLECTION_MODES[manifest?.collectionMode] || COLLECTION_MODES.precision,
-      collectionPurpose: manifest?.collectionPurpose || "revenue_detail",
-      collectionPurposeLabel: manifest?.collectionPurposeLabel || COLLECTION_PURPOSES[manifest?.collectionPurpose] || COLLECTION_PURPOSES.revenue_detail,
-      collectionProfile: manifest?.collectionProfile || collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").key,
-      dayUseMode: manifest?.dayUseMode || "detail",
-      collectionProfileLabel: manifest?.collectionProfileLabel || collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").label,
-      collectionProfileNote: manifest?.collectionProfileNote || collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").note,
-      collectionProfileFlags: manifest?.collectionProfileFlags || {
-        collectRegional: collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").collectRegional,
-        collectOta: collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").collectOta,
-        collectBookingStock: collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").collectBookingStock,
-        collectWeeklyRange: collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").collectWeeklyRange
-      },
-      collectionDbRoute: collectionDbRouteProfile(
-        manifest?.collectionPurpose || "revenue_detail",
-        manifest?.collectionProfile || collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").key
-      ),
-      detailRankRanges: manifest?.detailRankRanges || "",
-      province: provinceKey,
-      provinceLabel: province.label,
-      mapBounds: province.mapBounds,
-      checkIn: conditions.checkIn,
-      checkOut: conditions.checkOut,
-      adults: conditions.adults,
-      productMode: conditions.productMode,
-      productModeLabel: PRODUCT_MODES[conditions.productMode] || PRODUCT_MODES.all,
-      bookingRangeDays: manifest?.bookingRangeDays || 1,
-      bookingRangePlaceLimit: manifest?.bookingRangePlaceLimit || 0,
-      collectedAt,
-      collectedAtSource,
-      updatedAt: collectedAt,
-      counts: manifest?.counts || {},
-      scheduledCollection: manifest?.scheduledCollection === true,
-      workerKey: manifest?.workerKey || null,
-      trigger: manifest?.trigger || null,
-      collectorEngine: manifest?.collectorEngine || null,
-      collectionQuality: manifest?.collectionQuality || null,
-      files: {
-        regional: regionalFile,
-        overall: overallFile,
-        ads: adFile,
-        platform: platformFile,
-        yeogiManual: yeogiManualFile,
-        report: reportFile,
-        all: files
-      }
-    },
+    run: companyDetailSavedRunMetadata({ runId, manifest, conditions, collectedAt, collectedAtSource, provinceKey, province, files, regionalFile, overallFile, adFile, platformFile, yeogiManualFile, reportFile }),
     stats,
     collectionDiagnostics: await readCollectionDiagnostics({ runDir: dirPath, parseCsv }),
     datalabTrend,

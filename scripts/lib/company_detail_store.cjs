@@ -290,7 +290,11 @@ function createCompanyDetailStore({ dataDir, outputsDir, projectionVersion, buil
       const source = await checked(runIds);
       if (hash(before) !== hash({ master: source.master, history: source.history })) continue;
       const observations = before.history ? await measured(timings, "historyReadMs", () => historyReader(historyFile, company, matchesObservation)) : [];
-      const data = await measured(timings, "buildMs", () => build(id, { master, observations }));
+      const diagnostics = {};
+      const data = await measured(timings, "buildMs", () => build(id, { master, observations, diagnostics }));
+      for (const [key, value] of Object.entries(diagnostics)) {
+        if (/^[a-zA-Z][a-zA-Z0-9]*Ms$/.test(key) && Number.isFinite(value) && value >= 0) timings[key] = (timings[key] || 0) + value;
+      }
       const body = { version: VERSION, projectionVersion, companyId: id, runIds, source, preparedAt: new Date().toISOString(), data };
       const next = { ...body, checksum: hash(body) };
       const temporary = cacheFile + "." + process.pid + "." + crypto.randomBytes(5).toString("hex") + ".tmp";
