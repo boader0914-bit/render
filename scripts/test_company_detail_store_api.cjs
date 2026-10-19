@@ -43,14 +43,22 @@ async function main() {
     await fs.writeFile(preload, `
       const fs = require('node:fs'), fsp = require('node:fs/promises'), http = require('node:http');
       const { AsyncLocalStorage } = require('node:async_hooks'), scope = new AsyncLocalStorage();
-      const audit = { requests: [], external: 0 }, destination = ${JSON.stringify(auditFile)};
+      const audit = { requests: [], external: 0, runSourceReads: 0, runMetadataReads: 0 }, destination = ${JSON.stringify(auditFile)};
+      const countRunRead = name => { if(name.startsWith(${JSON.stringify(runDir + path.sep)})) {
+        if(name === ${JSON.stringify(manifestFile)}) audit.runMetadataReads++; else audit.runSourceReads++;
+      } };
       const save = () => fs.writeFileSync(destination, JSON.stringify(audit)); save();
       global.fetch = async () => { audit.external++; save(); throw new Error('External requests forbidden'); };
       const read = fsp.readFile; fsp.readFile = async function(file, ...args) {
         const row = scope.getStore(), name = String(file);
         if(row && name === ${JSON.stringify(masterFile)}) row.masterReadFile++;
         if(row && name === ${JSON.stringify(historyFile)}) row.historyReadFile++;
+        if(row) countRunRead(name);
         return read.call(this, file, ...args);
+      };
+      const readSync = fs.readFileSync; fs.readFileSync = function(file, ...args) {
+        if(scope.getStore()) countRunRead(String(file));
+        return readSync.call(this, file, ...args);
       };
       const stream = fs.createReadStream; fs.createReadStream = function(file, ...args) {
         const row = scope.getStore(), name = String(file);
@@ -98,8 +106,12 @@ async function main() {
     await start(1);
     assert.equal((await app.request(url)).status, 401);
     assert.equal((await app.request("/api/company-master/detail-index-status")).status, 401);
+    assert.equal((await app.request("/api/analysis-work-status")).status, 401);
     assert.equal((await app.request(url, { cookie: await app.login("detail-member") })).status, 403);
     const cookie = await app.login(), preparationStarted = performance.now();
+    const admissionStatus = await app.request("/api/analysis-work-status", { cookie });
+    assert.equal(admissionStatus.status, 200); assert.equal(admissionStatus.data.limits.slots, 1);
+    assert.equal(admissionStatus.data.limits.admissionIsEstimate, true);
     let first, firstMs;
     for (let attempt = 0; attempt < 300; attempt++) {
       const started = performance.now(); first = await app.request(url, { cookie }); firstMs = performance.now() - started;
@@ -127,10 +139,31 @@ async function main() {
     const restartAudit = JSON.parse(await fs.readFile(app.auditFile, "utf8"));
     assert.deepEqual(restartAudit.requests[0], { masterReadFile: 0, historyReadFile: 0, masterStreams: 0, historyStreams: 0, globalRunLists: 0, status: 200 });
     assert.equal(restartAudit.external, 0);
+    // A missing final detail does not require re-reading CSV/product payloads
+    // after a restart: the independently verified company/run projection stays.
+    await stop();
+    const finalDetailDirectory = path.join(directory, "company_master", "detail_read_models");
+    for (const name of await fs.readdir(finalDetailDirectory)) if (name.endsWith(".json")) await fs.unlink(path.join(finalDetailDirectory, name));
+    await start(3); const projectionCookie = await app.login(), projectionStarted = performance.now(); let projected;
+    for (let attempt = 0; attempt < 300; attempt++) {
+      projected = await app.request(url, { cookie: projectionCookie });
+      if (projected.status !== 503 || projected.data.errorCode !== "COMPANY_DETAIL_SOURCE_INDEX_PREPARING") break;
+      await nodeSleep(25);
+    }
+    const projectionMs = performance.now() - projectionStarted;
+    assert.equal(projected.status, 200, JSON.stringify(projected.data)); assert.equal(projected.headers.get("x-company-detail-cache"), "calculated");
+    const comparable = data => { const value = JSON.parse(JSON.stringify(data)); if (value.salesHistory) delete value.salesHistory.generatedAt; return value; };
+    assert.deepEqual(comparable(projected.data), comparable(first.data));
+    const projectionAudit = JSON.parse(await fs.readFile(app.auditFile, "utf8"));
+    assert.equal(originalAudit.runSourceReads > 0, true, "the initial fixture really exercised raw saved-run recovery");
+    assert.equal(projectionAudit.runSourceReads, 0, "rebuilding a final detail reuses saved company/run projections without raw run-body reads");
+    assert.equal(projectionAudit.external, 0);
     for (const [file, bytes] of inputs) assert.deepEqual(await fs.readFile(file), bytes, "selected detail reads preserve original " + path.basename(file));
     console.log(JSON.stringify({ check: "company_detail_saved_reuse_api", preparationAndFirstMs: +preparationAndFirstMs.toFixed(2), firstMs: +firstMs.toFixed(2), memoryMs: +memoryMs.toFixed(2), restartSavedMs: +restartMs.toFixed(2),
       rawProductRecovery: true, rankBenchmarkParity: true, globalMasterReadFiles: 0, globalHistoryReadFiles: 0, globalOutputListings: 0,
-      restartRawBodyReads: 0, originalsPreserved: inputs.size, externalRequests: 0 }));
+      restartRawBodyReads: 0, runProjectionRebuildMs: +projectionMs.toFixed(2), runProjectionRawBodyReads: projectionAudit.runSourceReads,
+      runProjectionMetadataReads: projectionAudit.runMetadataReads,
+      runProjectionSemanticParity: true, originalsPreserved: inputs.size, externalRequests: 0 }));
   } finally { await stop(); assert.ok(path.resolve(directory).startsWith(path.resolve(os.tmpdir()) + path.sep)); await fs.rm(directory, { recursive: true, force: true }); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

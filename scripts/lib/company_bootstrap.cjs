@@ -90,7 +90,8 @@ function acceptsGzip(header = "") {
 
 function dataHash(data) { return crypto.createHash("sha256").update(JSON.stringify(data)).digest("hex"); }
 
-function createCompanyBootstrapStore({ sourceFile, cacheFile, projectionVersion, project, emptyMaster, fileSystem = fs }) {
+function createCompanyBootstrapStore({ sourceFile, cacheFile, projectionVersion, project, emptyMaster, fileSystem = fs,
+  executeBuild = action => action() }) {
   let memory = null;
   let inFlight = null;
   let epoch = 0;
@@ -109,6 +110,34 @@ function createCompanyBootstrapStore({ sourceFile, cacheFile, projectionVersion,
   function encoded(data, sourceSignature) {
     const json = Buffer.from(JSON.stringify(data));
     return { data, sourceSignature, json, gzip: zlib.gzipSync(json, { level: 4 }) };
+  }
+  async function rebuild(startedEpoch, sourceSignature) {
+    // Queue admission can take time. Revalidate before reading a large master,
+    // then retain the same change checks before publishing the derived view.
+    if (startedEpoch !== epoch || await signature() !== sourceSignature) return null;
+    const master = sourceSignature === "missing" ? emptyMaster() : JSON.parse((await fileSystem.readFile(sourceFile, "utf8")).replace(/^\uFEFF/, ""));
+    if (!master || typeof master !== "object" || Array.isArray(master)
+      || !master.companies || typeof master.companies !== "object" || Array.isArray(master.companies)) {
+      const error = new Error("업체 기본자료를 읽지 못했습니다.");
+      error.code = "COMPANY_BOOTSTRAP_INVALID_SOURCE";
+      throw error;
+    }
+    const projected = await project(master);
+    const data = { ...projected, representation: "bootstrap", sourceRevision: sourceSignature };
+    if (startedEpoch !== epoch || await signature() !== sourceSignature) return null;
+    const next = encoded(data, sourceSignature);
+    const temp = `${cacheFile}.${process.pid}.${crypto.randomBytes(5).toString("hex")}.tmp`;
+    try {
+      await fileSystem.mkdir(path.dirname(cacheFile), { recursive: true });
+      await fileSystem.writeFile(temp, JSON.stringify({ projectionVersion, sourceSignature, dataHash: dataHash(data), data }), { mode: 0o600, flag: "wx" });
+      if (startedEpoch !== epoch || await signature() !== sourceSignature) { await fileSystem.unlink(temp); return null; }
+      await fileSystem.rename(temp, cacheFile);
+    } catch {
+      await fileSystem.unlink(temp).catch(() => {});
+    }
+    if (startedEpoch !== epoch || await signature() !== sourceSignature) return null;
+    memory = next;
+    return { ...next, cacheStatus: "calculated" };
   }
   async function load() {
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -132,31 +161,8 @@ function createCompanyBootstrapStore({ sourceFile, cacheFile, projectionVersion,
           return { ...memory, cacheStatus: "saved" };
         }
       }
-      const master = sourceSignature === "missing" ? emptyMaster() : JSON.parse((await fileSystem.readFile(sourceFile, "utf8")).replace(/^\uFEFF/, ""));
-      if (!master || typeof master !== "object" || Array.isArray(master)
-        || !master.companies || typeof master.companies !== "object" || Array.isArray(master.companies)) {
-        const error = new Error("업체 기본자료를 읽지 못했습니다.");
-        error.code = "COMPANY_BOOTSTRAP_INVALID_SOURCE";
-        throw error;
-      }
-      const projected = await project(master);
-      const data = { ...projected, representation: "bootstrap", sourceRevision: sourceSignature };
-      if (startedEpoch !== epoch || await signature() !== sourceSignature) continue;
-      const next = encoded(data, sourceSignature);
-      const temp = `${cacheFile}.${process.pid}.${crypto.randomBytes(5).toString("hex")}.tmp`;
-      try {
-        await fileSystem.mkdir(path.dirname(cacheFile), { recursive: true });
-        await fileSystem.writeFile(temp, JSON.stringify({ projectionVersion, sourceSignature, dataHash: dataHash(data), data }), { mode: 0o600, flag: "wx" });
-        if (startedEpoch !== epoch || await signature() !== sourceSignature) { await fileSystem.unlink(temp); continue; }
-        await fileSystem.rename(temp, cacheFile);
-      } catch {
-        // A full/read-only cache volume still allows the correctly calculated
-        // response. The source is never rewritten or removed here.
-        await fileSystem.unlink(temp).catch(() => {});
-      }
-      if (startedEpoch !== epoch || await signature() !== sourceSignature) continue;
-      memory = next;
-      return { ...next, cacheStatus: "calculated" };
+      const built = await executeBuild(() => rebuild(startedEpoch, sourceSignature));
+      if (built) return built;
     }
     throw sourceChangedError();
   }

@@ -1,17 +1,31 @@
 "use strict";
 
+// The app installs its shared analytical-work admission before constructing
+// source readers. Standalone consumers/tests retain the existing local queue.
+let defaultHeavyWork = action => action();
+let defaultExternalForegroundWaiting = () => false;
+function configureSourceReadHeavyWork(runHeavy, { hasExternalForegroundWaiting = () => false } = {}) {
+  if (typeof runHeavy !== "function") throw new TypeError("Heavy work admission is required");
+  if (typeof hasExternalForegroundWaiting !== "function") throw new TypeError("Foreground inspection is required");
+  defaultHeavyWork = runHeavy;
+  defaultExternalForegroundWaiting = hasExternalForegroundWaiting;
+}
+
 // Source reconstruction is deliberately single-file: overlapping it multiplies
 // the complete history/catalog heap. Prefer a user's pending read without
 // interrupting the active reader or starving saved-view maintenance forever.
-function createSourceReadScheduler({ foregroundBurst = 4, maxInteractiveHoldMs = 2500 } = {}) {
+function createSourceReadScheduler({ foregroundBurst = 4, maxInteractiveHoldMs = 2500, runHeavy = defaultHeavyWork,
+  hasExternalForegroundWaiting = defaultExternalForegroundWaiting } = {}) {
   if (!Number.isSafeInteger(foregroundBurst) || foregroundBurst < 1) throw new TypeError("foregroundBurst must be a positive integer");
   if (!Number.isSafeInteger(maxInteractiveHoldMs) || maxInteractiveHoldMs < 1) throw new TypeError("maxInteractiveHoldMs must be a positive integer");
+  if (typeof runHeavy !== "function" || typeof hasExternalForegroundWaiting !== "function") throw new TypeError("Invalid shared scheduling options");
   const foreground = [], background = [];
   const checkpointWaiters = [];
   let active = false, activePriority = null, consecutiveForeground = 0;
   let interactiveLeases = 0, interactiveExpired = false, interactiveTimer = null;
   const holdingBackground = () => interactiveLeases > 0 && !interactiveExpired;
-  const shouldPauseBackground = () => activePriority === "background" && holdingBackground() && foreground.length === 0;
+  const shouldPauseBackground = () => activePriority === "background" && holdingBackground() && foreground.length === 0
+    && !hasExternalForegroundWaiting();
   function wakeCheckpoints() {
     if (!shouldPauseBackground()) for (const resolve of checkpointWaiters.splice(0)) resolve();
   }
@@ -32,17 +46,20 @@ function createSourceReadScheduler({ foregroundBurst = 4, maxInteractiveHoldMs =
     });
   }
 
-  function run(operation, { priority = "foreground" } = {}) {
-    if (typeof operation !== "function") return Promise.reject(new TypeError("Source read operation is required"));
-    if (!["foreground", "background"].includes(priority)) return Promise.reject(new TypeError("Invalid source read priority"));
+  function enqueue(operation, priority) {
     return new Promise((resolve, reject) => {
       (priority === "background" ? background : foreground).push({ operation, resolve, reject, priority });
-      // A cache miss can need a foreground source read while an active
-      // background reader is paused. Let that reader finish before the queued
-      // foreground read, instead of waiting on its own interactive lease.
       wakeCheckpoints();
       next();
     });
+  }
+
+  function run(operation, { priority = "foreground" } = {}) {
+    if (typeof operation !== "function") return Promise.reject(new TypeError("Source read operation is required"));
+    if (!["foreground", "background"].includes(priority)) return Promise.reject(new TypeError("Invalid source read priority"));
+    // Always acquire the shared heavy slot before the local source slot. The
+    // opposite order deadlocks when detail recovery needs a source reader.
+    return runHeavy(() => enqueue(operation, priority), { label: "analysis_source_read", priority });
   }
 
   async function runInteractive(operation) {
@@ -72,7 +89,19 @@ function createSourceReadScheduler({ foregroundBurst = 4, maxInteractiveHoldMs =
     // request can acquire it. The active source slot and its heap stay owned by
     // this background reader throughout the cooperative pause.
     await new Promise(resolve => setImmediate(resolve));
-    while (shouldPauseBackground()) await new Promise(resolve => checkpointWaiters.push(resolve));
+    while (shouldPauseBackground()) await new Promise(resolve => {
+      // A cold detail can wait outside this local queue at shared admission.
+      // Observe that foreground demand promptly instead of holding its owner
+      // for the full interactive lease. The timer and waiter clean each other.
+      const wake = () => {
+        clearTimeout(timer);
+        const index = checkpointWaiters.indexOf(wake);
+        if (index >= 0) checkpointWaiters.splice(index, 1);
+        resolve();
+      };
+      const timer = setTimeout(wake, 25);
+      checkpointWaiters.push(wake);
+    });
   }
 
   return { run, runInteractive, checkpoint,
@@ -80,4 +109,4 @@ function createSourceReadScheduler({ foregroundBurst = 4, maxInteractiveHoldMs =
     interactiveStatus: () => ({ activeLeases: interactiveLeases, holdingBackground: holdingBackground(), pausedBackground: checkpointWaiters.length > 0 }) };
 }
 
-module.exports = { createSourceReadScheduler };
+module.exports = { createSourceReadScheduler, configureSourceReadHeavyWork };

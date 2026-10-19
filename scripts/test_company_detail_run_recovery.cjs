@@ -4,6 +4,7 @@ const { test } = require("node:test");
 const source = fs.readFileSync(path.join(__dirname, "glamping_app_server.cjs"), "utf8").replace(/\r\n/g, "\n");
 const declaration = name => { const text = source.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^}`, "m"))?.[0]; assert.ok(text, name); return text; };
 const copy = value => JSON.parse(JSON.stringify(value));
+const runImplementation = /^(?:async )?function loadRunUnscheduled\(/m.test(source) ? "loadRunUnscheduled" : "loadRun";
 
 function runHarness() {
   const company = { companyId: "selected", placeIds: ["1"] }, calls = [];
@@ -15,7 +16,7 @@ function runHarness() {
     "e_yeogi_manual_import.csv": [{ name: "manual", selected: true, channel: "여기어때" }]
   };
   const manifest = { keyword: "경남글램핑", checkIn: "2026-10-01", collectionPurpose: "revenue_detail", collectionMode: "precision", bookingRangeDays: 21, productCoverage: { known: true } };
-  const context = vm.createContext({ URL, performance, companyDetailReadDiagnostics: { getStore: () => null }, fs: { existsSync: () => true }, path,
+  const context = vm.createContext({ URL, performance, analyticalWork: { run: action => action() }, companyDetailReadDiagnostics: { getStore: () => null }, fs: { existsSync: () => true }, path,
     fsp: { stat: async () => ({ mtime: new Date("2026-10-01T00:00:00.000Z") }), readdir: async () => [...files],
       readFile: async filename => { calls.push("read:" + path.basename(filename)); return JSON.stringify(rows[path.basename(filename)]); } },
     resolveRunDir: () => "/mock/run", readManifest: async () => manifest, isIncompleteRunDirectory: () => false, allowsDerivedUpdates: () => true,
@@ -33,7 +34,7 @@ function runHarness() {
     SEARCH_MODES: {}, COLLECTION_MODES: {}, COLLECTION_PURPOSES: {}, PRODUCT_MODES: {}, collectionExecutionProfile: () => ({ key: "revenue_detail", label: "same", note: "same", collectRegional: true }),
     collectionDbRouteProfile: () => ({ key: "revenue_detail" }), runDateFromId: () => "2026-10-01"
   });
-  vm.runInContext(["measureCompanyDetailPhase", "measureCompanyDetailSyncPhase", "companyDetailSavedRunMetadata", "loadRun"].map(declaration).join("\n"), context);
+  vm.runInContext(["measureCompanyDetailPhase", "measureCompanyDetailSyncPhase", "companyDetailSavedRunMetadata", ...(runImplementation === "loadRun" ? ["loadRun"] : ["loadRunUnscheduled", "loadRun"])].map(declaration).join("\n"), context);
   const options = { companyDetailCompany: company, capacityCompanies: [company], skipCompanyMaster: true, skipHistory: true, skipTraffic: true,
     skipTourismVisitors: true, skipTourismVisitorHistory: true, skipTourismDemandStrengthHistory: true, skipTourismResourceDemandHistory: true, skipTourismDiversityHistory: true };
   return { context, options, calls, rows, files };
@@ -56,7 +57,7 @@ test("missing any read-only protection flag keeps the complete legacy result pat
   for (const flag of ["skipCompanyMaster", "skipHistory", "skipTraffic", "skipTourismVisitors", "skipTourismVisitorHistory", "skipTourismDemandStrengthHistory", "skipTourismResourceDemandHistory", "skipTourismDiversityHistory"]) {
     // Static branch guard assertion avoids invoking provider/write paths merely
     // to test that a deliberately unprotected option is excluded.
-    const condition = declaration("loadRun").match(/const companyDetailReadOnly = ([^]*?);\n  if \(companyDetailReadOnly\)/)?.[1];
+    const condition = declaration(runImplementation).match(/const companyDetailReadOnly = ([^]*?);\n  if \(companyDetailReadOnly\)/)?.[1];
     assert.ok(condition);
     assert.equal(vm.runInNewContext(condition, { options: { ...f.options, [flag]: false }, Array }), false, flag);
   }
@@ -69,6 +70,7 @@ test("all 20 selected candidates contribute their common maximum and final obser
   const manifestAt = id => "2026-10-" + id.slice(-2) + "T00:00:00.000Z";
   const actualAt = id => id === "run_22" ? "2026-10-01T00:00:00.000Z" : id === "run_21" ? "2026-10-28T00:00:00.000Z" : manifestAt(id);
   const context = vm.createContext({ performance, companyDetailReadDiagnostics: { getStore: () => null },
+    companyDetailRunProjectionStore: { get: async ({ build }) => ({ data: await build() }) },
     boundedUnique: (values, n) => [...new Set(values)].slice(0, n), companyRankObservationTimeMap: () => new Map(), companyProductStoredRunTimeMap: () => new Map(),
     resolveRunDir: id => id, readManifest: async id => ({ keyword: "test", id }), fsp: { stat: async id => ({ mtime: new Date(manifestAt(id)) }), readdir: async () => ["manifest.json"] },
     isIncompleteRunDirectory: () => false, runCollectedAt: id => manifestAt(id),

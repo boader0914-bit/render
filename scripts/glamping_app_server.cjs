@@ -33,6 +33,9 @@ const { createCompanyCapacityRegistry } = require("./lib/company_capacity_regist
 const { aggregateFields: companyBootstrapAggregateFields, compactCompanyInventory, createCompanyBootstrapStore, acceptsGzip } = require("./lib/company_bootstrap.cjs");
 const { createCompanyDetailStore } = require("./lib/company_detail_store.cjs");
 const { createCompanyDetailSourceIndex } = require("./lib/company_detail_source_index.cjs");
+const { createHeavyWorkScheduler } = require("./lib/heavy_work_scheduler.cjs");
+const { configureSourceReadHeavyWork } = require("./lib/source_read_scheduler.cjs");
+const { createCompanyDetailRunProjectionStore } = require("./lib/company_detail_run_projection.cjs");
 const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
 const { createMonthlyReportContext } = require("./lib/monthly_report_context.cjs");
 const { createMonthlyReportOutlookEvaluation } = require("./lib/monthly_report_outlook_evaluation.cjs");
@@ -129,23 +132,43 @@ const B2B_INTEREST_LODGES_FILE = path.join(CUSTOMER_DB_DIR, "b2b_interest_lodges
 const ACCOUNT_DELETE_REQUESTS_FILE = path.join(CUSTOMER_DB_DIR, "account_delete_requests.json");
 const COMPANY_MASTER_DIR = path.join(DATA_DIR, "company_master");
 const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
+const analyticalWork = createHeavyWorkScheduler({ dataDir: DATA_DIR, logger: console });
+configureSourceReadHeavyWork((action, options) => analyticalWork.run(action, {
+  estimatedBytes: 512 * 1024 * 1024, ...options
+}), { hasExternalForegroundWaiting: () => analyticalWork.status().queuedForeground > 0 });
 const companyBootstrapStore = createCompanyBootstrapStore({
   sourceFile: COMPANY_MASTER_FILE,
   cacheFile: path.join(COMPANY_MASTER_DIR, "bootstrap_read_model.json"),
   projectionVersion: crypto.createHash("sha256")
     .update(fs.readFileSync(__filename)).update(fs.readFileSync(path.join(__dirname, "lib", "company_bootstrap.cjs"))).digest("hex"),
   project: summarizeCompanyMasterBootstrapFromMaster,
-  emptyMaster: emptyCompanyMaster
+  emptyMaster: emptyCompanyMaster,
+  executeBuild: action => analyticalWork.run(action, { label: "company_bootstrap", priority: "foreground" })
 });
-const companyDetailSourceIndex = createCompanyDetailSourceIndex({ dataDir: DATA_DIR });
+const companyDetailSourceIndex = createCompanyDetailSourceIndex({ dataDir: DATA_DIR, runHeavy: analyticalWork.run });
 const companyDetailReadDiagnostics = new AsyncLocalStorage();
+const companyDetailRunProjectionStore = createCompanyDetailRunProjectionStore({
+  dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR,
+  executeBuild: (action, source) => analyticalWork.run(action, {
+    label: "company_run_projection", priority: "foreground", estimatedBytes: source.sourceBytes
+  }),
+  // Include every current server-side dependency conservatively. The projection
+  // is disposable and must never reuse a pre-change normalization calculation.
+  projectionVersion: crypto.createHash("sha256").update(fs.readFileSync(__filename))
+    .update(fs.readFileSync(path.join(__dirname, "lib", "company_detail_run_projection.cjs")))
+    .update(fs.readFileSync(path.join(__dirname, "inventory_estimation.cjs")))
+    .update(fs.readFileSync(path.join(__dirname, "lib", "inventory_manual_corrections.cjs")))
+    .update(fs.readFileSync(path.join(__dirname, "verified_room_inventory.json"))).digest("hex")
+});
 const companyDetailStore = createCompanyDetailStore({
   dataDir: DATA_DIR,
   outputsDir: OUTPUTS_DIR,
+  runHeavy: analyticalWork.run,
   // A detail presentation change invalidates only this derived detail view;
   // it is deliberately absent from the integrated-month engine fingerprint.
   projectionVersion: crypto.createHash("sha256").update(fs.readFileSync(__filename))
     .update(fs.readFileSync(path.join(__dirname, "lib", "company_detail_store.cjs")))
+    .update(fs.readFileSync(path.join(__dirname, "lib", "company_detail_run_projection.cjs")))
     .update(fs.readFileSync(path.join(__dirname, "inventory_estimation.cjs")))
     .update(fs.readFileSync(path.join(__dirname, "lib", "inventory_manual_corrections.cjs")))
     .update(fs.readFileSync(path.join(__dirname, "verified_room_inventory.json"))).digest("hex"),
@@ -747,8 +770,12 @@ const collectorRequests = createCollectorRequests({dataDir:DATA_DIR,run:runCrawl
 const insightIntegration = require('./lib/insight_integration.cjs').createInsightIntegration({
   dataDir: DATA_DIR, readCatalog: monthlyReportSources.catalog, readMembers: readB2BMemberStore,
   authenticateMember: authenticateB2BMember, registerMember: (payload, insightConsent) => registerB2BMember(payload, { insightConsent }), checkUsername: checkSignupUsernameAvailability, policyContext: publicPageContext(), requireAdmin: requireAdminSession, collectorRequests,
-  readEvidence: readInsightCompanyEvidence,
-  readCompanyDetail: companyId => summarizeCompanyMasterDetail(companyId, { strictIdentity:true, includeObservationFlow:true }),
+  readEvidence: (...args) => analyticalWork.run(() => readInsightCompanyEvidence(...args), {
+    label: "company_evidence_read", priority: "foreground", estimatedBytes: 512 * 1024 * 1024
+  }),
+  readCompanyDetail: companyId => analyticalWork.run(() => summarizeCompanyMasterDetail(companyId, { strictIdentity:true, includeObservationFlow:true }), {
+    label: "company_detail_legacy_read", priority: "foreground", estimatedBytes: 512 * 1024 * 1024
+  }),
   readIntegrated: (companyId, options = {}) => companyIntegratedDb.get(companyId, options),
   readRegionContext: readInsightRegionContext,
   regionPreparation:insightRegionPreparation,
@@ -14971,7 +14998,7 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
   const loadedByIndex = new Array(candidateRunIds.length);
   async function loadCandidate(index) {
     const runId = candidateRunIds[index];
-    const data = await measureAsync("recoveryRunLoadMs", () => loadRun(runId, {
+    const loadOptions = {
       skipCompanyMaster: true,
       skipHistory: true,
       skipTraffic: true,
@@ -14981,7 +15008,14 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
       skipTourismResourceDemandHistory: true,
       skipTourismDiversityHistory: true,
       ...(scoped ? { capacityCompanies: [company], companyDetailCompany: company } : {})
-    })).catch(() => null);
+    };
+    const data = await measureAsync("recoveryRunLoadMs", async () => {
+      if (!scoped) return loadRun(runId, loadOptions).catch(() => null);
+      const result = await measureAsync("recoveryProjectionLookupMs", () => companyDetailRunProjectionStore.get({
+        runId, company, build: () => loadRun(runId, loadOptions)
+      }));
+      return result.data;
+    });
     if (!data) return;
     const sourceItem = (data.availability?.items || []).find((candidate) => companyProductAvailabilityMatch(company, candidate));
     if (!sourceItem) return;
@@ -17895,6 +17929,15 @@ function companyDetailSavedRunMetadata({ runId, manifest, conditions, collectedA
 }
 
 async function loadRun(runId, options = {}) {
+  // Legacy result pages still reconstruct a full master/history. They share
+  // admission with detail recovery and background analysis so those heaps do
+  // not overlap. Reentrant detail/projection calls retain the same owner.
+  return analyticalWork.run(() => loadRunUnscheduled(runId, options), {
+    label: "saved_run_read", priority: options.priority === "background" ? "background" : "foreground"
+  });
+}
+
+async function loadRunUnscheduled(runId, options = {}) {
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return null;
 
@@ -19435,7 +19478,9 @@ async function route(req, res) {
 
     if (req.method === "GET" && reqUrl.pathname === "/api/history/summary") {
       if (!requireAdminSession(session, req, res)) return;
-      return send(res, 200, await summarizeHistoryOperations());
+      return send(res, 200, await analyticalWork.run(() => summarizeHistoryOperations(), {
+        label: "history_summary", priority: "foreground", estimatedBytes: 512 * 1024 * 1024
+      }));
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/company-master/bootstrap") {
@@ -19462,12 +19507,19 @@ async function route(req, res) {
 
     if (req.method === "GET" && reqUrl.pathname === "/api/company-master/summary") {
       if (!requireAdminSession(session, req, res)) return;
-      return send(res, 200, await summarizeCompanyMaster());
+      return send(res, 200, await analyticalWork.run(() => summarizeCompanyMaster(), {
+        label: "company_master_summary", priority: "foreground", estimatedBytes: 512 * 1024 * 1024
+      }));
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/company-master/detail-index-status") {
       if (!requireAdminSession(session, req, res)) return;
       return send(res, 200, companyDetailSourceIndex.status());
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/analysis-work-status") {
+      if (!requireAdminSession(session, req, res)) return;
+      return send(res, 200, analyticalWork.status());
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/company-master/detail") {
@@ -20169,8 +20221,10 @@ seedOutputsFromRepo()
       console.log(`Lodging datalab beta app running at ${primaryUrl}`);
       companyDetailSourceIndex.prepare().then(status => console.log("company_detail_source_index_prepared", JSON.stringify(status)))
         .catch(error => console.error("company_detail_source_index_failed", error.code || "unavailable"));
-      companyIntegratedDb.bootstrap().catch(error => console.error("company_integration_bootstrap_failed", error.code || "unavailable"));
-      industryAnalysisService.bootstrap().catch(error => console.error("industry_analysis_bootstrap_failed", error.code || "unavailable"));
+      analyticalWork.run(() => companyIntegratedDb.bootstrap(), { label: "company_month_bootstrap", priority: "background", estimatedBytes: 512 * 1024 * 1024 })
+        .catch(error => console.error("company_integration_bootstrap_failed", error.code || "unavailable"));
+      analyticalWork.run(() => industryAnalysisService.bootstrap(), { label: "industry_bootstrap", priority: "background", estimatedBytes: 512 * 1024 * 1024 })
+        .catch(error => console.error("industry_analysis_bootstrap_failed", error.code || "unavailable"));
       if (HOST === "0.0.0.0") {
         for (const url of localNetworkUrls()) console.log(`Mobile/LAN URL: ${url}`);
       }

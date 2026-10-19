@@ -163,10 +163,12 @@ async function readScopedCompanyHistory(file, company, matches, { stream = filen
   return [...rows.values()];
 }
 
+const { getCurrentHeavyWorkOwner } = require("./heavy_work_scheduler.cjs");
+
 function createCompanyDetailStore({ dataDir, outputsDir, projectionVersion, build, matchesObservation, runIdsForCompany,
   dayKey = () => new Date(Date.now() + 32400000).toISOString().slice(0, 10), fileSystem = fs,
   masterReader = readScopedCompanyMaster, historyReader = readScopedCompanyHistory, maxMemoryBytes = 16 * 1024 * 1024,
-  metadataConcurrency = 8 } = {}) {
+  metadataConcurrency = 8, runHeavy = null } = {}) {
   need(dataDir && projectionVersion && typeof build === "function" && typeof matchesObservation === "function" && typeof runIdsForCompany === "function");
   const masterFile = path.join(dataDir, "company_master", "companies.json");
   const historyFile = path.join(dataDir, "history", "observations.jsonl");
@@ -256,7 +258,7 @@ function createCompanyDetailStore({ dataDir, outputsDir, projectionVersion, buil
   const valid = (entry, id) => entry && entry.version === VERSION && entry.projectionVersion === projectionVersion && entry.source
     && entry.companyId === id && Array.isArray(entry.runIds) && entry.runIds.length <= 120
     && entry.data?.company?.companyId === id && entry.checksum === hash({ ...entry, checksum: undefined });
-  async function load(id) {
+  async function load(id, task) {
     const started = performance.now();
     const timings = { cacheReadMs: 0, sourceCheckMs: 0, masterReadMs: 0, historyReadMs: 0, buildMs: 0, cacheWriteMs: 0, totalMs: 0 };
     const metrics = { lstatCalls: 0, readdirCalls: 0, sharedMetadataReads: 0, maxMetadataInFlight: 0, runScans: 0, directoryReuses: 0, filesChecked: 0 };
@@ -267,7 +269,8 @@ function createCompanyDetailStore({ dataDir, outputsDir, projectionVersion, buil
       timings: Object.fromEntries(Object.entries({ ...timings, totalMs: performance.now() - started }).map(([key, value]) => [key, +value.toFixed(3)])), metrics });
     need(id && id.length <= 300 && !/[\x00-\x1f\x7f]/.test(id), "COMPANY_DETAIL_ID_INVALID");
     const cacheFile = path.join(cacheDir, hash(id) + ".json");
-    let saved = memory.get(id)?.entry, cacheStatus = "memory";
+    async function cached(forceDisk = false) {
+    let saved = forceDisk ? null : memory.get(id)?.entry, cacheStatus = "memory";
     await measured(timings, "cacheReadMs", async () => {
       if (!saved) { try { saved = JSON.parse(await fileSystem.readFile(cacheFile, "utf8")); cacheStatus = "saved"; } catch { saved = null; } }
     });
@@ -279,6 +282,12 @@ function createCompanyDetailStore({ dataDir, outputsDir, projectionVersion, buil
         if (hash(current) === hash(saved.source)) { remember(id, saved); return result(saved.data, cacheStatus, saved.preparedAt); }
       }
     }
+    return null;
+    }
+    const hit = await cached(); if (hit) return hit;
+    const calculate = async () => {
+    // Capture the source after heavy-work admission and around each bounded
+    // read. Waiting for another calculation must not certify an old revision.
     // Capture the source before and after each bounded read. A racing save can
     // never turn an older detail response into a certified latest result.
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -332,12 +341,34 @@ function createCompanyDetailStore({ dataDir, outputsDir, projectionVersion, buil
       return result(data, "calculated", next.preparedAt);
     }
     throw fault("COMPANY_DETAIL_SOURCE_CHANGED");
+    };
+    if (typeof runHeavy !== "function") return calculate();
+    const queuedAt = performance.now();
+    task.phase = "waiting";
+    return runHeavy(async () => {
+      task.phase = "running"; task.owner = getCurrentHeavyWorkOwner();
+      timings.heavyWaitMs = performance.now() - queuedAt;
+      try {
+        // An owner may have completed this company while this request was
+        // queued. Recheck after admission to avoid a duplicate cold build.
+        const prepared = await cached(true); if (prepared) return prepared;
+        return await calculate();
+      } finally { task.phase = "finished"; }
+    }, { label: "company-detail-build", priority: "foreground", estimatedBytes: 256 * 1024 * 1024 });
   }
   return { async get(companyId) {
     const id = String(companyId || "").trim();
-    if (active.has(id)) return active.get(id);
-    const pending = load(id); active.set(id, pending);
-    try { return await pending; } finally { if (active.get(id) === pending) active.delete(id); }
+    const existing = active.get(id), owner = getCurrentHeavyWorkOwner();
+    if (existing) {
+      if (typeof runHeavy === "function" && owner && existing.owner === owner && existing.phase === "running") throw fault("COMPANY_DETAIL_REENTRANT_READ");
+      // A queued singleflight may be waiting behind this very owner. Joining
+      // it would invert the global gate. Ordinary external callers still join.
+      if (typeof runHeavy !== "function" || !owner || !["initializing", "waiting"].includes(existing.phase)) return existing.pending;
+    }
+    const task = { phase: "initializing", owner: null, pending: null };
+    const pending = load(id, task); task.pending = pending;
+    if (!existing) active.set(id, task);
+    try { return await pending; } finally { if (active.get(id) === task) active.delete(id); }
   } };
 }
 

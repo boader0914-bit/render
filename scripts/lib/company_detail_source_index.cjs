@@ -7,6 +7,7 @@ const native = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { readScopedCompanyMaster } = require("./company_detail_store.cjs");
+const { getCurrentHeavyWorkOwner } = require("./heavy_work_scheduler.cjs");
 const VERSION = "company-detail-source-index-v3";
 const hash = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
 const jsonHash = value => hash(JSON.stringify(value));
@@ -24,7 +25,8 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function createCompanyDetailSourceIndex({ dataDir, projectionVersion = VERSION, masterReader = readScopedCompanyMaster,
   historyIdentity = defaultHistoryIdentity, fileSystem = fs, createReadStream = filename => native.createReadStream(filename, { highWaterMark: 64 * 1024 }),
-  yieldControl = tick, maxRecordBytes = 128 * 1024 * 1024, historyReadConcurrency = 8, maxHistoryReadBytes = 32 * 1024 * 1024 } = {}) {
+  yieldControl = tick, maxRecordBytes = 128 * 1024 * 1024, historyReadConcurrency = 8, maxHistoryReadBytes = 32 * 1024 * 1024,
+  runHeavy = null } = {}) {
   need(dataDir && typeof masterReader === "function" && typeof historyIdentity === "function");
   need(Number.isInteger(historyReadConcurrency) && historyReadConcurrency > 0 && historyReadConcurrency <= 8
     && Number.isSafeInteger(maxHistoryReadBytes) && maxHistoryReadBytes > 0);
@@ -33,6 +35,7 @@ function createCompanyDetailSourceIndex({ dataDir, projectionVersion = VERSION, 
   const cacheDir = path.join(root, "company_master", "detail_source_index"), currentFile = path.join(cacheDir, "current.json");
   let manifest = null, active = null, peersMemory = null, historyMemory = null, cleanupActive = null, cleanupRequested = false, failedSource = null;
   const pins = new Map(), deferredCleanup = new Set();
+  const preparations = new Set();
   let state = { ready: false, phase: "pending", startedAt: null, finishedAt: null, elapsedMs: null, errorCode: null };
 
   async function regular(file, missingCode = "COMPANY_DETAIL_SOURCE_INDEX_SOURCE_MISSING") {
@@ -209,7 +212,10 @@ function createCompanyDetailSourceIndex({ dataDir, projectionVersion = VERSION, 
   }
   function cleanup(owner = manifest) {
     if (!owner || cleanupActive) return cleanupActive || Promise.resolve(null);
-    const pending = cleanupGenerations(owner); cleanupActive = pending;
+    const pending = typeof runHeavy === "function"
+      ? runHeavy(() => cleanupGenerations(owner), { label: "company-detail-index-cleanup", priority: "background", estimatedBytes: 128 * 1024 * 1024 })
+      : cleanupGenerations(owner);
+    cleanupActive = pending;
     pending.finally(() => { if (cleanupActive === pending) cleanupActive = null; maybeCleanup(); }).catch(() => {});
     return pending;
   }
@@ -221,7 +227,7 @@ function createCompanyDetailSourceIndex({ dataDir, projectionVersion = VERSION, 
     if (count > 1) pins.set(owner.generation, count - 1); else pins.delete(owner.generation);
     if (!pins.has(owner.generation) && deferredCleanup.delete(owner.generation)) { cleanupRequested = true; maybeCleanup(); }
   }
-  async function prepareWork(force) {
+  async function prepareWork(force, task) {
     const started = Date.now(); state = { ...state, ready: false, phase: "preparing", startedAt: new Date(started).toISOString(), finishedAt: null, elapsedMs: null, errorCode: null };
     let before = null;
     try {
@@ -230,32 +236,58 @@ function createCompanyDetailSourceIndex({ dataDir, projectionVersion = VERSION, 
       let saved = !force && same(previous?.source, before) ? previous : null;
       const reused = Boolean(saved);
       let built = null;
-      if (!saved) { built = await build(before, previous); saved = built.manifest; }
+      if (!saved) {
+        const work = async () => {
+          task.phase = "running"; task.owner = getCurrentHeavyWorkOwner();
+          state = { ...state, phase: "preparing" };
+          // Inputs may have changed while another analytical task owned the
+          // slot. Start the build from a fresh revision after admission.
+          before = await source();
+          const latest = valid(manifest) ? manifest : await persisted();
+          if (!force && same(latest?.source, before)) return { manifest: latest, reused: true };
+          return build(before, latest);
+        };
+        if (typeof runHeavy === "function") { task.phase = "waiting"; state = { ...state, phase: "waiting", waitReason: "heavy_work_admission" }; }
+        built = typeof runHeavy === "function"
+          ? await runHeavy(work, { label: "company-detail-index-build", priority: "background", estimatedBytes: 512 * 1024 * 1024 })
+          : await work();
+        saved = built.manifest;
+      }
       need(same(before, await source()), "COMPANY_DETAIL_SOURCE_INDEX_SOURCE_CHANGED");
       if (manifest?.generation !== saved.generation) { peersMemory = null; historyMemory = null; }
       manifest = saved;
       // No second read/parse of the history index is needed after its initial
       // build. Publish this private generation cache only after source checks;
       // persisted-index reuse still verifies and loads its own saved metadata.
-      if (built) historyMemory = { generation: saved.generation, events: built.events, signature: built.historySignature };
+      if (built && !built.reused) historyMemory = { generation: saved.generation, events: built.events, signature: built.historySignature };
       failedSource = null;
       state = { ready: true, phase: "ready", startedAt: state.startedAt, finishedAt: new Date().toISOString(), elapsedMs: Date.now() - started,
-        errorCode: null, cacheStatus: reused ? "reused" : "built", companyCount: saved.companyCount, historyRowCount: saved.historyRowCount,
+        errorCode: null, cacheStatus: reused || built?.reused ? "reused" : "built", companyCount: saved.companyCount, historyRowCount: saved.historyRowCount,
         historyEventCount: saved.historyEventCount, preparedAt: saved.preparedAt };
-      await cleanup(saved);
+      // A persisted index is a cheap reuse path. Do not make it wait for a
+      // separate queued proof/GC pass when the shared gate is configured.
+      if (typeof runHeavy === "function") void cleanup(saved).catch(() => {});
+      else await cleanup(saved);
       state = { ...state, finishedAt: new Date().toISOString(), elapsedMs: Date.now() - started };
       return { ...state };
     } catch (error) {
-      failedSource = before;
-      state = { ...state, ready: false, phase: "failed", finishedAt: new Date().toISOString(), elapsedMs: Date.now() - started,
-        errorCode: error.code?.startsWith("COMPANY_DETAIL_") ? error.code : "COMPANY_DETAIL_SOURCE_INDEX_PREPARE_FAILED" };
-      throw error.code?.startsWith("COMPANY_DETAIL_") ? error : fault(state.errorCode);
+      const admissionFailure = error.code?.startsWith("HEAVY_WORK_");
+      failedSource = admissionFailure ? null : before;
+      state = { ...state, ready: false, phase: admissionFailure ? "waiting" : "failed", finishedAt: new Date().toISOString(), elapsedMs: Date.now() - started,
+        errorCode: error.code?.startsWith("COMPANY_DETAIL_") || error.code?.startsWith("HEAVY_WORK_") ? error.code : "COMPANY_DETAIL_SOURCE_INDEX_PREPARE_FAILED" };
+      throw error.code?.startsWith("COMPANY_DETAIL_") || error.code?.startsWith("HEAVY_WORK_") ? error : fault(state.errorCode);
     }
   }
   function prepare(options = {}) {
-    if (active) return active;
-    const pending = prepareWork(Boolean(options.force)); active = pending;
-    pending.finally(() => { if (active === pending) active = null; maybeCleanup(); }).catch(() => {});
+    const owner = getCurrentHeavyWorkOwner();
+    if (active) {
+      if (typeof runHeavy === "function" && owner && active.owner === owner && active.phase === "running") return Promise.reject(fault("COMPANY_DETAIL_SOURCE_INDEX_REENTRANT_PREPARE"));
+      if (typeof runHeavy !== "function" || !owner || !["initializing", "waiting"].includes(active.phase)) return active.pending;
+    }
+    const task = { phase: "initializing", owner: null, pending: null };
+    const pending = prepareWork(Boolean(options.force), task); task.pending = pending;
+    preparations.add(task); if (!active) active = task;
+    pending.finally(() => { preparations.delete(task); if (active === task) active = preparations.values().next().value || null; maybeCleanup(); }).catch(() => {});
     return pending;
   }
   const schedule = force => { void prepare({ force }).catch(() => {}); };
@@ -345,7 +377,7 @@ function createCompanyDetailSourceIndex({ dataDir, projectionVersion = VERSION, 
     } catch (error) { return derivedFailure(error); } finally { unpin(owner); }
   }
   return { prepare, readMaster, readHistory, status: () => ({ ...state, source: manifest ? { ...manifest.source } : null,
-    ...(state.phase === "preparing" && state.startedAt ? { elapsedMs: Date.now() - Date.parse(state.startedAt) } : {}) }) };
+    ...(["preparing", "waiting"].includes(state.phase) && state.startedAt ? { elapsedMs: Date.now() - Date.parse(state.startedAt) } : {}) }) };
 }
 
 module.exports = { createCompanyDetailSourceIndex, defaultHistoryIdentity, VERSION };
