@@ -13,7 +13,7 @@ const { buildMonthlyReportSnapshot } = require("./lib/monthly_reports.cjs");
 
 const appSource = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8").replace(/\r\n/g, "\n");
 const integratedSource = fs.readFileSync(path.join(__dirname, "../web/company-integrated.js"), "utf8");
-const appFunctions = ["adminDbIntegratedContainerHtml", "adminDbIntegratedContextCurrent", "adminDbReplaceBoardHtml", "adminDbIntegratedDisplayForDetail", "syncCompanyIntegratedPanel",
+const appFunctions = ["adminDbIntegratedContainerHtml", "adminDbIntegratedContextCurrent", "adminDbReplaceBoardHtml", "adminDbRefreshSelectedDetail", "adminDbIntegratedDisplayForDetail", "syncCompanyIntegratedPanel",
   "renderAdminDatabaseDashboard", "adminDbSelectedDetailPanel", "loadAdminDbCompanyDetail",
   "activateAdminDbCompanyDetail", "openAdminDbCompanyReview", "resumeAdminDbCompanyDetailAfterReturn"];
 const declaration = name => {
@@ -99,13 +99,14 @@ class Element {
   scrollIntoView() {}
 }
 
-function integratedEnvelope(id, month = "2026-09") {
+function integratedEnvelope(id, month = "2026-09", observation = {}) {
   const date = month + "-03", run = { id: `${id}-${month}`, keyword: "[모의] 지역글램핑", collectedAt: `${month}-01T08:00:00Z`, collectionQuality: { status: "complete" } };
   const snapshot = buildMonthlyReportSnapshot({ type: "company", targetId: id, month, cutoffDate: month + "-30" }, {
     companies: [{ companyId: id, primaryName: `[모의] ${id}`, capacity: 16 }], runs: [run], observations: [{
       companyKey: id, runId: run.id, collectedAt: run.collectedAt, stayDate: date, productType: "lodging", inventoryEvidenceVersion: 4,
       supply: 16, sold: 5, publicBookings: 3, phoneBookings: 2, publicRevenue: 600000, phoneRevenue: 400000, estimatedRevenue: 1000000,
-      phonePricedBookings: 2, phoneMissingPriceBookings: 0, sharedDayUseExcluded: 0, partial: false, missing: false, unknownUnavailable: 0
+      phonePricedBookings: 2, phoneMissingPriceBookings: 0, sharedDayUseExcluded: 0, partial: false, missing: false, unknownUnavailable: 0,
+      ...observation
     }]
   }, "2026-10-01T00:00:00Z");
   return { companyId: id, status: "ready", selectedMonth: month, calculatedAt: "2026-10-01T00:00:00Z", snapshot,
@@ -121,7 +122,7 @@ function fixture() {
   document.body = new Element("body", {}, document); document.activeElement = document.body;
   const board = new Element("div", { id: "adminDatabaseDashboard" }, document); document.body.appendChild(board);
   document.querySelector = selector => document.body.querySelector(selector); document.querySelectorAll = selector => document.body.querySelectorAll(selector);
-  const frames = new Map(), timers = new Map(), integratedRequests = [], detailRequests = [], controllers = [], transition = [];
+  const frames = new Map(), timers = new Map(), integratedRequests = [], detailRequests = [], controllers = [], transition = [], filterCalls = [];
   let nextFrame = 0, nextTimer = 0;
   const window = { document, URLSearchParams, AbortController, Promise, console, scrollX: 0, scrollY: 0,
     requestAnimationFrame(callback) { const id = ++nextFrame; frames.set(id, callback); return id; }, cancelAnimationFrame: id => frames.delete(id),
@@ -131,7 +132,8 @@ function fixture() {
   const context = { window, document, state, els: { adminDatabaseDashboard: board }, console, URLSearchParams, AbortController, Promise,
     getComputedStyle: window.getComputedStyle, isAdminRole: () => state.session?.authenticated !== false && state.session?.role === "admin" && !state.adminUserViewMode,
     adminConsoleMasterSource: () => state.companyMaster, adminDbViewMode: () => state.adminDbViewMode,
-    adminDbFilterState: master => { const rows = master.companies.map(company => ({ company, metrics: {} })); return { rows, filteredRows: rows, filters: {} }; },
+    adminDbFilterState: master => { filterCalls.push(master); const rows = master.companies.map(company => ({ company, metrics: {} })); return { rows, filteredRows: rows, filters: {} }; },
+    adminDbClassifyCompany: () => ({}), adminDbCompanyProfile: () => ({}),
     adminDbGroupedRows: () => [], adminDbCompanyIdFromRoute: () => "", adminDbMasterHasRows: () => true,
     captureAdminDbSearchInput: () => null, restoreAdminDbSearchInput() {}, escapeHtml: escape, fmtNumber: String, fmtWon: String,
     adminDbMetricCard: () => "", adminDbCompanySearchShellHtml: () => "", adminDbUserViewBridgeHtml: () => "",
@@ -162,10 +164,10 @@ function fixture() {
   vm.runInContext(appFunctions.map(declaration).join("\n"), context);
   context.renderAdminConsoleDashboard = () => context.renderAdminDatabaseDashboard();
   const api = {
-    state, context, document, board, frames, timers, integratedRequests, detailRequests, controllers, transition,
+    state, context, document, board, frames, timers, integratedRequests, detailRequests, controllers, transition, filterCalls,
     render: () => context.renderAdminDatabaseDashboard(), selected: () => board.querySelector("[data-company-integrated]"),
     async frame() { const batch = [...frames]; frames.clear(); for (const [, callback] of batch) callback(nextFrame * 16); await settle(); },
-    async respondIntegrated(index = integratedRequests.length - 1) { const request = integratedRequests[index]; request.resolve(integratedEnvelope(request.companyId, request.month)); await settle(); },
+    async respondIntegrated(index = integratedRequests.length - 1, observation = {}) { const request = integratedRequests[index]; request.resolve(integratedEnvelope(request.companyId, request.month, observation)); await settle(); },
     async respondDetail(index = detailRequests.length - 1, extra = {}) { const request = detailRequests[index]; const id = new URLSearchParams(request.url.split("?")[1]).get("companyId"); request.resolve({ company: { companyId: id, primaryName: `[모의] ${id}`, ...extra } }); await settle(); },
     choose(id) { state.adminDbRouteCompanyId = id; state.adminDbSelectedCompanyId = id; this.render(); },
     async shown() { await this.respondIntegrated(); await this.frame(); await this.frame(); await settle(); }
@@ -327,4 +329,138 @@ test("a forced correction refresh disposes the old card and waits for the correc
   await f.respondDetail(1, { manualCorrection: { lodgingBasisTotal: 16 }, manualCorrectionRevision: 2 }); await refreshed;
   assert.equal(f.state.companyMaster.companies[0].manualCorrection.lodgingBasisTotal, 16);
   assert.equal(f.state.companyMaster.companies[0].detailLoaded, true);
+});
+
+test("a detail response arriving during a different month request preserves that request and its eventual numbers", async () => {
+  const f = fixture(); f.render(); await settle(); await f.shown();
+  const node = f.selected(), controller = f.controllers.at(-1);
+  const august = controller.load("2026-08"); await settle();
+  assert.equal(controller.state.month, "2026-08");
+  assert.equal(controller.state.loading, true);
+  assert.equal(f.detailRequests.length, 1);
+  await f.respondDetail(0, { products: [{ id: "not-a-monthly-total", capacity: 99 }] });
+  assert.equal(f.selected(), node, "detail hydration cannot replace the month controller while its GET is in flight");
+  assert.equal(f.state.adminDbIntegratedPanelContext.controller, controller);
+  assert.equal(controller.state.month, "2026-08");
+  assert.equal(controller.state.loading, true);
+  assert.equal(f.integratedRequests.length, 2);
+  assert.equal(f.integratedRequests[1].signal.aborted, false, "detail hydration does not abort the selected month's request");
+  await f.respondIntegrated(1, { sold: 7, publicBookings: 5, phoneBookings: 2,
+    publicRevenue: 1000000, phoneRevenue: 400000, estimatedRevenue: 1400000 }); await august;
+  const snapshot = JSON.stringify(controller.state.envelope.snapshot);
+  assert.equal(controller.state.envelope.snapshot.summary.lodging.sold, 7);
+  assert.equal(controller.state.envelope.snapshot.summary.lodging.estimatedRevenue, 1400000);
+  assert.match(node.textContent, /140만원/);
+  f.render(); await settle();
+  assert.equal(f.selected(), node);
+  assert.equal(controller.state.month, "2026-08");
+  assert.equal(JSON.stringify(controller.state.envelope.snapshot), snapshot);
+  assert.equal(f.integratedRequests.length, 2, "product fields cannot trigger another integrated GET");
+});
+
+test("detail success cannot reset the month, tab, table view, selected date or rendered integrated figures", async () => {
+  const f = fixture(); f.render(); await settle(); await f.shown();
+  const node = f.selected(), controller = f.controllers.at(-1);
+  const august = controller.load("2026-08");
+  await f.respondIntegrated(1, { sold: 9, publicBookings: 6, phoneBookings: 3, phonePricedBookings: 3,
+    publicRevenue: 1200000, phoneRevenue: 600000, estimatedRevenue: 1800000 }); await august;
+  controller.selectTab("analysis");
+  controller.state.view = "table";
+  for (const listener of node.listeners.get("click") || []) listener({ target: new Element("button", { "data-ci-date": "2026-08-03" }, f.document) });
+  const before = node.innerHTML, snapshot = JSON.stringify(controller.state.envelope.snapshot);
+  assert.match(before, /180만원/);
+  await f.respondDetail(0, { products: [{ id: "room", quantity: 99 }], recentObservations: [{ sold: 999 }] });
+  assert.equal(f.selected(), node);
+  assert.equal(f.state.adminDbIntegratedPanelContext.controller, controller);
+  assert.equal(controller.state.month, "2026-08");
+  assert.equal(controller.state.tab, "analysis");
+  assert.equal(controller.state.view, "table");
+  assert.equal(controller.state.selectedDate, "2026-08-03");
+  assert.equal(JSON.stringify(controller.state.envelope.snapshot), snapshot);
+  assert.equal(node.innerHTML, before, "company fields cannot replace the server's saved integrated figures");
+});
+
+test("a detail failure retains a selected month's last successful card and never fabricates zeroes", async () => {
+  const f = fixture(); f.render(); await settle(); await f.shown();
+  const node = f.selected(), controller = f.controllers.at(-1);
+  const snapshot = JSON.stringify(controller.state.envelope.snapshot), before = node.innerHTML;
+  f.detailRequests[0].reject(new Error("상품·상세이력 조회 지연")); await settle();
+  assert.equal(f.selected(), node);
+  assert.equal(f.state.adminDbIntegratedPanelContext.controller, controller);
+  assert.equal(controller.state.month, "2026-09");
+  assert.equal(JSON.stringify(controller.state.envelope.snapshot), snapshot);
+  assert.equal(node.innerHTML, before);
+  assert.equal(controller.state.envelope.snapshot.summary.lodging.sold, 5);
+  assert.equal(controller.state.envelope.snapshot.summary.lodging.estimatedRevenue, 1000000);
+  assert.match(f.state.adminDbCompanyDetails.a.error, /상품·상세이력 조회 지연/);
+  assert.equal(f.integratedRequests.length, 1);
+});
+
+test("a late detail success for a previously selected company cannot hydrate or redraw another company's card", async () => {
+  const f = fixture(); f.render(); await settle(); await f.shown();
+  f.choose("b"); await settle();
+  await f.respondIntegrated(1, { sold: 8, publicBookings: 6, phoneBookings: 2,
+    publicRevenue: 1200000, phoneRevenue: 400000, estimatedRevenue: 1600000 });
+  await f.frame(); await f.frame();
+  const node = f.selected(), controller = f.state.adminDbIntegratedPanelContext.controller;
+  const before = node.innerHTML;
+  assert.equal(f.detailRequests.length, 2);
+  await f.respondDetail(0, { products: [{ id: "old-company-room", quantity: 99 }] });
+  assert.equal(f.state.adminDbSelectedCompanyId, "b");
+  assert.equal(f.selected(), node);
+  assert.equal(f.state.adminDbIntegratedPanelContext.controller, controller);
+  assert.equal(node.innerHTML, before);
+  assert.equal(controller.state.envelope.companyId, "b");
+  assert.equal(controller.state.envelope.snapshot.summary.lodging.sold, 8);
+  assert.equal(f.state.companyMaster.companies[1].detailLoaded, false);
+  assert.equal(f.state.adminDbCompanyDetails?.b, undefined);
+});
+
+test("detail arrival updates only the selected panel and preserves search, sibling nodes and the integrated card", async () => {
+  for (const fails of [false, true]) {
+    const f = fixture(); f.render(); await settle(); await f.shown();
+    const panel = f.board.querySelector("[data-admin-db-selected-company]"), node = f.selected();
+    const controller = f.state.adminDbIntegratedPanelContext.controller;
+    const search = new Element("input", { id: "outside-detail-search" }, f.document);
+    search.value = "월명 글램핑"; search.selectionStart = 2; search.selectionEnd = 4; search.focus();
+    const sibling = new Element("aside", { "data-unrelated-summary": "" }, f.document);
+    sibling.innerHTML = "선택 패널 밖의 기존 요약";
+    f.board.appendChild(search); f.board.appendChild(sibling);
+    search.focus();
+    const integratedHtml = node.innerHTML, snapshot = JSON.stringify(controller.state.envelope.snapshot);
+    const filterCount = f.filterCalls.length;
+    if (fails) { f.detailRequests[0].reject(new Error("상세 자료 읽기 지연")); await settle(); }
+    else await f.respondDetail(0, { products: [{ id: "room", quantity: 99 }] });
+    assert.equal(f.board.querySelector("[data-admin-db-selected-company]"), panel, "the selected section itself retains identity");
+    assert.equal(f.board.querySelector("#outside-detail-search"), search);
+    assert.equal(f.board.querySelector("[data-unrelated-summary]"), sibling);
+    assert.equal(search.value, "월명 글램핑");
+    assert.equal(search.selectionStart, 2); assert.equal(search.selectionEnd, 4);
+    assert.equal(f.document.activeElement, search, "a user searching outside the detail panel keeps focus");
+    assert.equal(f.filterCalls.length, filterCount, "detail hydration does not refilter every stored company");
+    assert.equal(f.selected(), node);
+    assert.equal(f.state.adminDbIntegratedPanelContext.controller, controller);
+    assert.equal(controller.state.month, "2026-09");
+    assert.equal(JSON.stringify(controller.state.envelope.snapshot), snapshot);
+    assert.equal(node.innerHTML, integratedHtml);
+  }
+});
+
+test("a forced detail refresh keeps the surrounding UI during both loading and hydration", async () => {
+  const f = fixture(); f.render(); await settle(); await f.shown(); await f.respondDetail();
+  const panel = f.board.querySelector("[data-admin-db-selected-company]"), node = f.selected();
+  const search = new Element("input", { id: "retained-search" }, f.document);
+  search.value = "선택 월 유지"; f.board.appendChild(search); search.focus();
+  const filterCount = f.filterCalls.length, before = node.innerHTML;
+  const refresh = f.context.loadAdminDbCompanyDetail("a", { force: true }); await settle();
+  assert.equal(f.board.querySelector("#retained-search"), search);
+  assert.equal(f.board.querySelector("[data-admin-db-selected-company]"), panel);
+  assert.equal(f.selected(), node); assert.equal(node.innerHTML, before);
+  assert.equal(f.document.activeElement, search);
+  assert.equal(f.filterCalls.length, filterCount);
+  await f.respondDetail(1); await refresh;
+  assert.equal(f.board.querySelector("#retained-search"), search);
+  assert.equal(f.selected(), node); assert.equal(node.innerHTML, before);
+  assert.equal(f.document.activeElement, search);
+  assert.equal(f.filterCalls.length, filterCount);
 });

@@ -31,6 +31,7 @@ const { createCompanyIntegratedCatalog, createCompanyIntegratedCatalogRevision, 
 const { createCompanyIntegratedTargets } = require("./lib/company_integrated_targets.cjs");
 const { createCompanyCapacityRegistry } = require("./lib/company_capacity_registry.cjs");
 const { aggregateFields: companyBootstrapAggregateFields, compactCompanyInventory, createCompanyBootstrapStore, acceptsGzip } = require("./lib/company_bootstrap.cjs");
+const { createCompanyDetailStore } = require("./lib/company_detail_store.cjs");
 const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
 const { createMonthlyReportContext } = require("./lib/monthly_report_context.cjs");
 const { createMonthlyReportOutlookEvaluation } = require("./lib/monthly_report_outlook_evaluation.cjs");
@@ -134,6 +135,22 @@ const companyBootstrapStore = createCompanyBootstrapStore({
     .update(fs.readFileSync(__filename)).update(fs.readFileSync(path.join(__dirname, "lib", "company_bootstrap.cjs"))).digest("hex"),
   project: summarizeCompanyMasterBootstrapFromMaster,
   emptyMaster: emptyCompanyMaster
+});
+const companyDetailStore = createCompanyDetailStore({
+  dataDir: DATA_DIR,
+  outputsDir: OUTPUTS_DIR,
+  // A detail presentation change invalidates only this derived detail view;
+  // it is deliberately absent from the integrated-month engine fingerprint.
+  projectionVersion: crypto.createHash("sha256").update(fs.readFileSync(__filename))
+    .update(fs.readFileSync(path.join(__dirname, "lib", "company_detail_store.cjs")))
+    .update(fs.readFileSync(path.join(__dirname, "inventory_estimation.cjs")))
+    .update(fs.readFileSync(path.join(__dirname, "lib", "inventory_manual_corrections.cjs")))
+    .update(fs.readFileSync(path.join(__dirname, "verified_room_inventory.json"))).digest("hex"),
+  dayKey: () => kstDate(0),
+  matchesObservation: (row, company) => historyObservationMatchesCompany(row, company)
+    || historyDailyObservationMatchesCompany(row, companyHistoryDailyIdentity(company)),
+  runIdsForCompany: companyProductSourceRunIds,
+  build: (companyId, detailSources) => summarizeCompanyMasterDetail(companyId, { detailSources })
 });
 const TOURISM_DATA_DIR = path.join(DATA_DIR, "tourism_data");
 const LEGAL_POLICY_VERSION = "2026-09-20";
@@ -14813,16 +14830,20 @@ function companyProductStoredRunTimeMap(company = {}) {
   return byRunId;
 }
 
-function companyProductRecoveryRunIds(company = {}, observations = [], runTimes = new Map()) {
-  const observedTimes = companyRankObservationTimeMap(company, observations);
-  const storedTimes = companyProductStoredRunTimeMap(company);
-  const runIds = boundedUnique([
+function companyProductSourceRunIds(company = {}) {
+  return boundedUnique([
     ...(company.runIds || []),
     ...(company.inventory?.runIds || []),
     ...Object.values(company.keywords || {}).flatMap((keyword) => (keyword.runs || []).map((row) => row.runId)),
     company.lastRunId,
     company.firstRunId
   ], 120);
+}
+
+function companyProductRecoveryRunIds(company = {}, observations = [], runTimes = new Map()) {
+  const observedTimes = companyRankObservationTimeMap(company, observations);
+  const storedTimes = companyProductStoredRunTimeMap(company);
+  const runIds = companyProductSourceRunIds(company);
   const insertionOrder = new Map(runIds.map((runId, index) => [runId, index]));
   return runIds
     .filter(Boolean)
@@ -14866,8 +14887,19 @@ function companyProductAvailabilityMatch(company = {}, item = {}) {
   return "";
 }
 
-async function recoverCompanyProductSourceFromRuns(company = {}, observations = []) {
-  const listedRuns = await listRuns().catch(() => []);
+async function recoverCompanyProductSourceFromRuns(company = {}, observations = [], { scoped = false } = {}) {
+  // A selected company's candidate set is already bounded by its own stored
+  // references. Listing unrelated output directories supplies no extra candidate
+  // ids and used to repeat this global scan for every detail request.
+  const listedRuns = scoped ? (await Promise.all(companyProductSourceRunIds(company).map(async id => {
+    const dir = resolveRunDir(id);
+    if (!dir) return null;
+    try {
+      const [manifest, stat, files] = await Promise.all([readManifest(dir), fsp.stat(dir), fsp.readdir(dir)]);
+      if (isIncompleteRunDirectory(manifest, files) || manifest && /^\?+$/.test(String(manifest.keyword || "").trim())) return null;
+      return { id, collectedAt: runCollectedAt(id, manifest || {}, stat), updatedAt: stat.mtime.toISOString() };
+    } catch { return null; }
+  }))).filter(Boolean) : await listRuns().catch(() => []);
   const listedRunTimes = new Map(listedRuns.map((run) => [
     String(run?.id || "").trim(),
     String(run?.collectedAt || run?.updatedAt || "").trim()
@@ -14883,7 +14915,8 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
       skipTourismVisitorHistory: true,
       skipTourismDemandStrengthHistory: true,
       skipTourismResourceDemandHistory: true,
-      skipTourismDiversityHistory: true
+      skipTourismDiversityHistory: true,
+      ...(scoped ? { capacityCompanies: [company] } : {})
     }).catch(() => null);
     if (!data) continue;
     const sourceItem = (data.availability?.items || []).find((candidate) => companyProductAvailabilityMatch(company, candidate));
@@ -15028,17 +15061,19 @@ function companyInventoryNeedsEvidenceRecovery(company = {}) {
   });
 }
 
-async function summarizeCompanyMasterDetail(companyId = "", { strictIdentity = false, includeObservationFlow = false } = {}) {
+async function summarizeCompanyMasterDetail(companyId = "", { strictIdentity = false, includeObservationFlow = false, detailSources = null } = {}) {
   const id = String(companyId || "").trim();
   if (!id) return null;
-  const [master, allObservations] = await Promise.all([readCompanyMaster(), readHistoryObservations()]);
+  const [master, allObservations] = detailSources
+    ? [detailSources.master, detailSources.observations]
+    : await Promise.all([readCompanyMaster(), readHistoryObservations()]);
   const rawCompany = master.companies?.[id];
   if (!rawCompany) return null;
   const ids = companyHistoryDailyIdentity(rawCompany).companyIds;
   const observations = strictIdentity ? allObservations.filter(row => ids.has(String(row.companyKey || row.companyId || '').trim().toLowerCase())) : allObservations;
   const needsEvidenceRecovery = companyInventoryNeedsEvidenceRecovery(rawCompany);
   const recoveredProductSource = needsEvidenceRecovery
-    ? await recoverCompanyProductSourceFromRuns(rawCompany, observations)
+    ? await recoverCompanyProductSourceFromRuns(rawCompany, observations, { scoped: Boolean(detailSources) })
     : { productSnapshot: null, legacyProductPreview: null, recoveredFromRun: false, evidenceProjections: [] };
   const readView = companyInventoryEvidenceReadView(rawCompany, observations, recoveredProductSource.evidenceProjections || []);
   const viewCompany = { ...readView.company, inventory: companyInventoryWithManualCorrection(readView.company) };
@@ -17867,8 +17902,9 @@ async function loadRun(runId, options = {}) {
   }
   const stats = summarizeStats(regions);
   if (datalabTrend) stats.datalabTrend = datalabTrend;
-  const capacityMaster = await readCompanyMaster();
-  const availability = summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows], dirPath, Object.values(capacityMaster.companies || {}), {
+  const capacityCompanies = Array.isArray(options.capacityCompanies)
+    ? options.capacityCompanies : Object.values((await readCompanyMaster()).companies || {});
+  const availability = summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows], dirPath, capacityCompanies, {
     keyword: manifest?.keyword || conditions.keyword || "",
     checkIn: manifest?.checkIn || conditions.checkIn || runDateFromId(runId),
     bookingRangeDays: manifest?.bookingRangeDays || 1,
@@ -19301,9 +19337,12 @@ async function route(req, res) {
       if (!requireAdminSession(session, req, res)) return;
       const companyId = String(reqUrl.searchParams.get("companyId") || "").trim();
       if (!companyId) return send(res, 400, { error: "companyId가 필요합니다." });
-      const detail = await summarizeCompanyMasterDetail(companyId);
-      if (!detail) return send(res, 404, { error: "업체를 찾을 수 없습니다." });
-      return send(res, 200, detail);
+      const detail = await companyDetailStore.get(companyId);
+      if (!detail.data) return send(res, 404, { error: "업체를 찾을 수 없습니다." });
+      return send(res, 200, detail.data, "application/json; charset=utf-8", {
+        "X-Company-Detail-Cache": detail.cacheStatus,
+        "X-Company-Detail-Prepared-At": detail.preparedAt
+      });
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/company-master/integrated") {

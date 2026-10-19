@@ -148,6 +148,7 @@ function fixture() {
     adminDbCompanySearchShellHtml: () => "", adminDbUserViewBridgeHtml: () => "", adminDbSelectedRow: row,
     adminDbAuditBoard: () => "", adminDbWorkPanel: () => "", adminDbCollectionPanel: () => "",
     adminDbReviewFlashHtml: () => "", bindAdminDbCompanySelectButtons() {}, applyPendingCompanyEdit() {},
+    adminDbRefreshSelectedDetail: () => false,
     renderAdminRegionAnalysisDashboard() {}, adminDbCompanyExplorerHtml: () => "", adminDbRegionWorkspaceHtml: () => "",
     adminRegionalDatabasePanel: () => "",
     fetchJson: () => new Promise((resolve, reject) => { pending.push({ resolve, reject }); })

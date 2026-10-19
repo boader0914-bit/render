@@ -24,6 +24,7 @@ function detailFixture() {
   const requests = [], renders = [], hooks = {};
   const context = { state, console, Promise, String, Error,
     isAdminRole: () => state.session.role === "admin" && !state.adminUserViewMode,
+    adminDbRefreshSelectedDetail: () => false,
     renderAdminDatabaseDashboard: () => renders.push(state.adminDbSelectedCompanyId),
     fetchJson: async url => { requests.push(url); return hooks.fetch ? hooks.fetch(url) : { company: { ...company(), inventory: { snapshots: [{ runId: "history-one" }] } } }; } };
   vm.createContext(context);

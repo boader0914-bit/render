@@ -27302,8 +27302,8 @@ function adminDbIntegratedContextCurrent(context, companyId = "") {
     && context.correctionRevision === Number(company?.manualCorrectionRevision || 0));
 }
 
-function adminDbReplaceBoardHtml(html, keepCompanyId = "") {
-  const board = els.adminDatabaseDashboard;
+function adminDbReplaceBoardHtml(html, keepCompanyId = "", target = els.adminDatabaseDashboard) {
+  const board = target;
   if (!board) return;
   const previous = state.adminDbIntegratedPanelContext;
   const keep = adminDbIntegratedContextCurrent(previous, keepCompanyId)
@@ -27326,6 +27326,31 @@ function adminDbReplaceBoardHtml(html, keepCompanyId = "") {
     previous.controller?.dispose();
   }
   state.adminDbIntegratedPanelContext = null;
+}
+
+function adminDbRefreshSelectedDetail(companyId = "") {
+  const board = els.adminDatabaseDashboard;
+  if (!board || !companyId || !isAdminRole() || state.session?.authenticated === false
+    || state.activeTab !== "admin" || state.adminPanelSection !== "database"
+    || adminDbViewMode() !== "review" || state.adminDbSelectedCompanyId !== companyId) return false;
+  const panel = Array.from(board.querySelectorAll("[data-admin-db-selected-company]"))
+    .find(element => element.dataset.adminDbSelectedCompany === companyId);
+  const master = state.companyMaster;
+  const company = (master?.companies || []).find(row => row.companyId === companyId);
+  if (!panel || !company) return false;
+  // Only the selected company's product/history surface changes. Avoid
+  // rebuilding filters, search drafts and every other company's review cards.
+  const classification = adminDbClassifyCompany(company, master.adminRegionalOperations?.regions || []);
+  const row = { company, ...classification, metrics: adminDbCompanyProfile(company, classification) };
+  const shell = document.createElement("div");
+  shell.innerHTML = adminDbSelectedDetailPanel([row]);
+  const replacement = shell.querySelector("[data-admin-db-selected-company]");
+  if (!replacement || replacement.dataset.adminDbSelectedCompany !== companyId) return false;
+  adminDbReplaceBoardHtml(replacement.innerHTML, companyId, panel);
+  syncCompanyIntegratedPanel();
+  bindAdminDbCompanySelectButtons();
+  applyPendingCompanyEdit();
+  return true;
 }
 
 function syncCompanyIntegratedPanel() {
@@ -39755,7 +39780,8 @@ async function loadAdminDbCompanyDetail(companyId = "", options = {}) {
   state.adminDbCompanyDetailReads[selectedCompanyId] = read;
   state.adminDbCompanyDetailLoading[selectedCompanyId] = true;
   delete state.adminDbCompanyDetails[selectedCompanyId];
-  if (state.adminDbSelectedCompanyId === selectedCompanyId) renderAdminDatabaseDashboard();
+  if (state.adminDbSelectedCompanyId === selectedCompanyId
+    && !adminDbRefreshSelectedDetail(selectedCompanyId)) renderAdminDatabaseDashboard();
   read.promise = (async () => {
     try {
       // The detail endpoint reconstructs a much larger history. Do not let it
@@ -39807,7 +39833,8 @@ async function loadAdminDbCompanyDetail(companyId = "", options = {}) {
         delete state.adminDbCompanyDetailReads[selectedCompanyId];
         delete state.adminDbCompanyDetailLoading[selectedCompanyId];
         if (!read.displayDeferred && isAdminRole() && state.session === session
-          && state.adminDbSelectedCompanyId === selectedCompanyId) renderAdminDatabaseDashboard();
+          && state.adminDbSelectedCompanyId === selectedCompanyId
+          && !adminDbRefreshSelectedDetail(selectedCompanyId)) renderAdminDatabaseDashboard();
       }
     }
   })();
