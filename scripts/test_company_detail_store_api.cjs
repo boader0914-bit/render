@@ -97,10 +97,19 @@ async function main() {
     const url = "/api/company-master/detail?companyId=" + selectedId;
     await start(1);
     assert.equal((await app.request(url)).status, 401);
+    assert.equal((await app.request("/api/company-master/detail-index-status")).status, 401);
     assert.equal((await app.request(url, { cookie: await app.login("detail-member") })).status, 403);
-    const cookie = await app.login(), firstStarted = performance.now();
-    const first = await app.request(url, { cookie }), firstMs = performance.now() - firstStarted;
+    const cookie = await app.login(), preparationStarted = performance.now();
+    let first, firstMs;
+    for (let attempt = 0; attempt < 300; attempt++) {
+      const started = performance.now(); first = await app.request(url, { cookie }); firstMs = performance.now() - started;
+      if (first.status !== 503 || first.data.errorCode !== "COMPANY_DETAIL_SOURCE_INDEX_PREPARING") break;
+      await nodeSleep(25);
+    }
+    const preparationAndFirstMs = performance.now() - preparationStarted;
     assert.equal(first.status, 200, JSON.stringify(first.data)); assert.equal(first.headers.get("x-company-detail-cache"), "calculated");
+    assert.equal((await app.request("/api/company-master/detail-index-status", { cookie })).data.ready, true);
+    assert.match(first.headers.get("server-timing"), /sourceCheck;dur=/);
     assert.equal(first.data.company.companyId, selectedId); assert.equal(first.data.products.length, 1);
     assert.equal(first.data.products[0].name, "검수 숙박 상품"); assert.equal(first.data.daily[0].total, 16);
     assert.equal(first.data.daily[0].publicBookings, 2); assert.equal(first.data.daily[0].estimatedRevenue, 200000);
@@ -109,7 +118,7 @@ async function main() {
     assert.equal(second.headers.get("x-company-detail-cache"), "memory"); assert.deepEqual(second.data, first.data);
     const originalAudit = JSON.parse(await fs.readFile(app.auditFile, "utf8"));
     const reads = originalAudit.requests.filter(row => row.status === 200);
-    assert.deepEqual(reads[0], { masterReadFile: 0, historyReadFile: 0, masterStreams: 1, historyStreams: 1, globalRunLists: 0, status: 200 });
+    assert.deepEqual(reads[0], { masterReadFile: 0, historyReadFile: 0, masterStreams: 0, historyStreams: 0, globalRunLists: 0, status: 200 });
     assert.deepEqual(reads[1], { masterReadFile: 0, historyReadFile: 0, masterStreams: 0, historyStreams: 0, globalRunLists: 0, status: 200 });
     assert.equal(originalAudit.external, 0); await stop();
     await start(2); const afterCookie = await app.login(), restartStarted = performance.now();
@@ -119,7 +128,7 @@ async function main() {
     assert.deepEqual(restartAudit.requests[0], { masterReadFile: 0, historyReadFile: 0, masterStreams: 0, historyStreams: 0, globalRunLists: 0, status: 200 });
     assert.equal(restartAudit.external, 0);
     for (const [file, bytes] of inputs) assert.deepEqual(await fs.readFile(file), bytes, "selected detail reads preserve original " + path.basename(file));
-    console.log(JSON.stringify({ check: "company_detail_saved_reuse_api", firstMs: +firstMs.toFixed(2), memoryMs: +memoryMs.toFixed(2), restartSavedMs: +restartMs.toFixed(2),
+    console.log(JSON.stringify({ check: "company_detail_saved_reuse_api", preparationAndFirstMs: +preparationAndFirstMs.toFixed(2), firstMs: +firstMs.toFixed(2), memoryMs: +memoryMs.toFixed(2), restartSavedMs: +restartMs.toFixed(2),
       rawProductRecovery: true, rankBenchmarkParity: true, globalMasterReadFiles: 0, globalHistoryReadFiles: 0, globalOutputListings: 0,
       restartRawBodyReads: 0, originalsPreserved: inputs.size, externalRequests: 0 }));
   } finally { await stop(); assert.ok(path.resolve(directory).startsWith(path.resolve(os.tmpdir()) + path.sep)); await fs.rm(directory, { recursive: true, force: true }); }

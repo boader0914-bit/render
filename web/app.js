@@ -26764,15 +26764,16 @@ function adminDbSelectedDetailPanel(rows = []) {
   const company = row.company || {};
   const detailId = company.companyId || "";
   const detailState = state.adminDbCompanyDetails?.[detailId];
+  const detailError = Boolean(detailState?.error && !detailState?.preparing);
   if (company.detailLoaded === false || state.adminDbCompanyDetailLoading?.[detailId] || detailState?.error) {
     state.adminDbSelectedCompanyId = detailId;
     return `<section class="admin-db-selected-panel admin-db-selected-panel-cumulative" data-admin-db-selected-company="${escapeHtml(detailId)}">
       <div class="admin-company-detail-header admin-company-reference-header"><div class="admin-company-reference-title-block"><nav aria-label="현재 위치"><span>업체 DB</span><i aria-hidden="true">/</i><strong>${escapeHtml(company.primaryName || "선택 업체")}</strong></nav><h2>${escapeHtml(company.primaryName || "선택 업체")}</h2></div></div>
       ${adminDbIntegratedContainerHtml(company)}
-      <div class="admin-db-loading-detail" role="${detailState?.error ? "alert" : "status"}" aria-live="polite" aria-busy="${detailState?.error ? "false" : "true"}">
-        <strong>${detailState?.error ? "상품·상세이력 확인 필요" : "상품·상세이력 준비 중"}</strong>
+      <div class="admin-db-loading-detail" role="${detailError ? "alert" : "status"}" aria-live="polite" aria-busy="${detailError ? "false" : "true"}">
+        <strong>${detailError ? "상품·상세이력 확인 필요" : "상품·상세이력 준비 중"}</strong>
         <p>${escapeHtml(detailState?.error || "월별 통합 자료를 먼저 표시한 뒤 상품과 상세이력을 불러옵니다.")}</p>
-        ${detailState?.error ? `<button type="button" data-admin-db-company-select="${escapeHtml(detailId)}">다시 불러오기</button>` : ""}
+        ${detailError ? `<button type="button" data-admin-db-company-select="${escapeHtml(detailId)}">다시 불러오기</button>` : ""}
       </div>
     </section>`;
   }
@@ -27394,6 +27395,11 @@ function resumeAdminDbCompanyDetailAfterReturn() {
     || state.activeTab !== "admin" || state.adminPanelSection !== "database") return;
   const id = state.adminDbSelectedCompanyId;
   const company = (state.companyMaster?.companies || []).find(row => row.companyId === id);
+  const detail = state.adminDbCompanyDetails?.[id];
+  if (company?.detailLoaded === false && detail?.preparing && !state.adminDbCompanyDetailLoading?.[id]) {
+    void loadAdminDbCompanyDetail(id, { indexPreparationRetry: detail.preparationRetry || 0 });
+    return;
+  }
   if (company?.detailLoaded === false && !state.adminDbCompanyDetailLoading?.[id]
     && !state.adminDbCompanyDetails?.[id]?.error) renderAdminDatabaseDashboard();
 }
@@ -39761,6 +39767,7 @@ async function loadAdminDbCompanyDetail(companyId = "", options = {}) {
   state.adminDbCompanyDetailLoading = state.adminDbCompanyDetailLoading || {};
   state.adminDbCompanyDetailReads = state.adminDbCompanyDetailReads || {};
   state.adminDbCompanyDetailContexts = state.adminDbCompanyDetailContexts || {};
+  state.adminDbDetailPreparationTimers = state.adminDbDetailPreparationTimers || {};
   const session = state.session;
   const master = state.companyMaster;
   const company = (master?.companies || []).find((row) => row.companyId === selectedCompanyId);
@@ -39778,6 +39785,10 @@ async function loadAdminDbCompanyDetail(companyId = "", options = {}) {
     && company?.adminReview === read.review && company?.adminProfile === read.profile && company?.updatedAt === read.updatedAt
     && (state.companyMaster?.companies || []).find((row) => row.companyId === selectedCompanyId) === company;
   state.adminDbCompanyDetailReads[selectedCompanyId] = read;
+  if (state.adminDbDetailPreparationTimers[selectedCompanyId]) {
+    window.clearTimeout(state.adminDbDetailPreparationTimers[selectedCompanyId]);
+    delete state.adminDbDetailPreparationTimers[selectedCompanyId];
+  }
   state.adminDbCompanyDetailLoading[selectedCompanyId] = true;
   delete state.adminDbCompanyDetails[selectedCompanyId];
   if (state.adminDbSelectedCompanyId === selectedCompanyId
@@ -39812,7 +39823,8 @@ async function loadAdminDbCompanyDetail(companyId = "", options = {}) {
           ["error", "failed"].includes(displayed.loadStatus) ? "error" : "ready");
       }
       if (!current()) return null;
-      const detail = await fetchJson(`/api/company-master/detail?companyId=${encodeURIComponent(selectedCompanyId)}`);
+      const retryIndex = options.force || cached?.error && !cached.preparing;
+      const detail = await fetchJson(`/api/company-master/detail?companyId=${encodeURIComponent(selectedCompanyId)}${retryIndex ? "&retryIndex=1" : ""}`);
       if (!current()) return null;
       if (!detail?.company || String(detail.company.companyId || "") !== selectedCompanyId) throw new Error("요청한 업체와 상세 자료가 일치하지 않습니다.");
       const companyIndex = (master?.companies || []).indexOf(company);
@@ -39826,7 +39838,16 @@ async function loadAdminDbCompanyDetail(companyId = "", options = {}) {
       state.adminDbCompanyDetailContexts[selectedCompanyId] = { session, company: hydrated };
       return detail;
     } catch (error) {
-      if (current()) state.adminDbCompanyDetails[selectedCompanyId] = { error: error.message || "상세 데이터를 불러오지 못했습니다." };
+      if (current()) {
+        const count = Math.max(0, Number(options.indexPreparationRetry) || 0);
+        read.indexPreparing = error.code === "COMPANY_DETAIL_SOURCE_INDEX_PREPARING" && count < 30;
+        state.adminDbCompanyDetails[selectedCompanyId] = {
+          error: error.code === "COMPANY_DETAIL_SOURCE_INDEX_PREPARING" && !read.indexPreparing
+            ? "업체 상세 색인 준비가 계속되고 있습니다. 잠시 후 다시 불러오기를 눌러 주세요."
+            : error.message || "상세 데이터를 불러오지 못했습니다.",
+          ...(read.indexPreparing ? { preparing: true, preparationRetry: count } : {})
+        };
+      }
       return null;
     } finally {
       if (state.adminDbCompanyDetailReads[selectedCompanyId] === read) {
@@ -39851,6 +39872,19 @@ async function loadAdminDbCompanyDetail(companyId = "", options = {}) {
         } else if ((!read.displayDeferred || retryAfterMasterRefresh) && isAdminRole() && state.session === session
           && state.adminDbSelectedCompanyId === selectedCompanyId
           && !adminDbRefreshSelectedDetail(selectedCompanyId)) renderAdminDatabaseDashboard();
+        if (read.indexPreparing && typeof window !== "undefined") {
+          const count = Math.max(0, Number(options.indexPreparationRetry) || 0);
+          state.adminDbDetailPreparationTimers[selectedCompanyId] = window.setTimeout(() => {
+            delete state.adminDbDetailPreparationTimers[selectedCompanyId];
+            const latest = (state.companyMaster?.companies || []).find(row => row.companyId === selectedCompanyId);
+            if (isAdminRole() && state.session === session && state.session?.authenticated !== false
+              && state.activeTab === "admin" && state.adminPanelSection === "database" && state.adminDbViewMode === "review"
+              && state.adminDbSelectedCompanyId === selectedCompanyId && latest?.detailLoaded === false
+              && state.adminDbCompanyDetails[selectedCompanyId]?.preparing && document.visibilityState === "visible") {
+              void loadAdminDbCompanyDetail(selectedCompanyId, { indexPreparationRetry: count + 1 });
+            }
+          }, 4000);
+        }
       }
     }
   })();

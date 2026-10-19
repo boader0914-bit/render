@@ -167,3 +167,94 @@ test("run references cannot escape the outputs directory even through dot path c
     await assert.rejects(() => store.get("one"), { code: "COMPANY_DETAIL_SOURCE_UNAVAILABLE" });
   }
 });
+
+test("cold requests use three fresh file checks but enumerate each unchanged directory only once", async t => {
+  const f = await fixture(t), store = createCompanyDetailStore(f.options);
+  await fs.mkdir(path.join(f.run, "products")); await fs.writeFile(path.join(f.run, "products", "one.json"), "[]");
+  const first = await store.get("one");
+  assert.equal(first.metrics.runScans, 3);
+  assert.equal(first.metrics.readdirCalls, 2, "both directories are listed once, not once per verification pass");
+  assert.equal(first.metrics.directoryReuses, 4);
+  assert.equal(first.metrics.filesChecked, 6, "all files are re-statted in every pass");
+  assert.ok(first.timings.sourceCheckMs > 0); assert.ok(first.timings.totalMs >= first.timings.sourceCheckMs);
+  const second = await store.get("one");
+  assert.equal(second.cacheStatus, "memory"); assert.equal(second.metrics.runScans, 1);
+  assert.equal(second.metrics.readdirCalls, 2, "a later request never trusts the previous request's old directory listing");
+  assert.equal(second.timings.masterReadMs, 0); assert.equal(second.timings.historyReadMs, 0); assert.equal(second.timings.buildMs, 0);
+});
+
+test("metadata work is globally bounded, independent guards never share samples, and fingerprint independent of completion order", async t => {
+  const f = await fixture(t), master = JSON.parse(await fs.readFile(f.masterFile, "utf8"));
+  master.companies.two.runIds = [...f.company.runIds]; await fs.writeFile(f.masterFile, JSON.stringify(master));
+  for (let i = 0; i < 24; i++) await fs.writeFile(path.join(f.run, "product-" + i + ".json"), "[]");
+  let inFlight = 0, maximum = 0, sequence = 0;
+  const fileSystem = Object.create(fs);
+  for (const method of ["lstat", "readdir"]) fileSystem[method] = async (...args) => {
+    inFlight++; maximum = Math.max(maximum, inFlight);
+    try { await new Promise(resolve => setTimeout(resolve, ++sequence % 3)); return await fs[method](...args); }
+    finally { inFlight--; }
+  };
+  const parallel = createCompanyDetailStore({ ...f.options, fileSystem, metadataConcurrency: 4 });
+  const [one, two] = await Promise.all([parallel.get("one"), parallel.get("two")]);
+  assert.ok(maximum > 1 && maximum <= 4, "bounded concurrent filesystem work observed: " + maximum);
+  assert.equal(one.metrics.sharedMetadataReads + two.metrics.sharedMetadataReads, 0, "different requests cannot share a sample taken before either final verification began");
+  assert.equal(one.data.company.companyId, "one"); assert.equal(two.data.company.companyId, "two");
+  const sequential = createCompanyDetailStore({ ...f.options, metadataConcurrency: 1 });
+  const reused = await sequential.get("one");
+  assert.equal(reused.cacheStatus, "saved", "different metadata completion order does not change its source fingerprint");
+  assert.deepEqual(reused.data, one.data);
+});
+
+test("a direct file edit or directory membership change during build cannot bypass the final fresh checks", async t => {
+  for (const edit of [async f => fs.writeFile(path.join(f.run, "manifest.json"), '{"new":true}'),
+    async f => fs.writeFile(path.join(f.run, "added.json"), "[]"), async f => fs.unlink(path.join(f.run, "manifest.json"))]) {
+    const f = await fixture(t); await createCompanyDetailStore(f.options).get("one");
+    const directory = path.join(f.dataDir, "company_master/detail_read_models"), cache = path.join(directory, (await fs.readdir(directory))[0]), before = await fs.readFile(cache);
+    await fs.appendFile(f.historyFile, JSON.stringify({ observationId: "changed", companyKey: "one" }) + "\n");
+    let edited = false;
+    const store = createCompanyDetailStore({ ...f.options, build: async (...args) => { const value = await f.options.build(...args); if (!edited) { edited = true; await edit(f); } return value; } });
+    const response = await store.get("one");
+    assert.equal(response.cacheStatus, "calculated"); assert.equal(edited, true);
+    assert.ok(f.calls.build >= 3, "the stale first calculation was discarded and rebuilt");
+    assert.notDeepEqual(await fs.readFile(cache), before);
+    assert.equal((await store.get("one")).cacheStatus, "memory");
+  }
+});
+
+test("post-publication races restore the previous normal cache exactly", async t => {
+  const f = await fixture(t); await createCompanyDetailStore(f.options).get("one");
+  const directory = path.join(f.dataDir, "company_master/detail_read_models"), cache = path.join(directory, (await fs.readdir(directory))[0]), before = await fs.readFile(cache);
+  await fs.appendFile(f.historyFile, JSON.stringify({ observationId: "changed", companyKey: "one" }) + "\n");
+  const fileSystem = Object.create(fs); let mutated = false;
+  fileSystem.rename = async (from, to) => {
+    await fs.rename(from, to);
+    if (!mutated && to === cache && !String(from).endsWith(".previous")) {
+      mutated = true; await fs.appendFile(f.historyFile, JSON.stringify({ observationId: "raced", companyKey: "one" }) + "\n");
+    }
+  };
+  await assert.rejects(() => createCompanyDetailStore({ ...f.options, fileSystem }).get("one"), { code: "COMPANY_DETAIL_SOURCE_CHANGED" });
+  assert.equal(mutated, true); assert.deepEqual(await fs.readFile(cache), before);
+  assert.deepEqual(await fs.readdir(directory), [path.basename(cache)], "temporary and backup links are cleaned after restoration");
+});
+
+test("strict streaming callbacks see complete company records without changing the retained projection", async t => {
+  const f = await fixture(t), visited = [];
+  const master = await readScopedCompanyMaster(f.masterFile, "", { onCompany: async (key, value) => {
+    await new Promise(resolve => setTimeout(resolve, 1)); visited.push([key, value]);
+  } });
+  assert.deepEqual(visited, [["one", f.company], ["two", f.other]]);
+  assert.deepEqual(master.companies.one, { keywords: f.company.keywords });
+  assert.equal(master.companies.one.inventory, undefined);
+});
+
+test("a checksum-valid older fingerprint format rebuilds instead of certifying legacy run ordering", async t => {
+  const f = await fixture(t); await createCompanyDetailStore(f.options).get("one");
+  const directory = path.join(f.dataDir, "company_master/detail_read_models"), cache = path.join(directory, (await fs.readdir(directory))[0]);
+  const saved = JSON.parse(await fs.readFile(cache, "utf8"));
+  saved.version = "company-detail-read-model-v1";
+  delete saved.checksum;
+  saved.checksum = require("node:crypto").createHash("sha256").update(JSON.stringify(saved)).digest("hex");
+  await fs.writeFile(cache, JSON.stringify(saved));
+  assert.equal((await createCompanyDetailStore(f.options).get("one")).cacheStatus, "calculated");
+  assert.equal(f.calls.build, 2);
+});

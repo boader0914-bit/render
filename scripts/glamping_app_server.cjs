@@ -32,6 +32,7 @@ const { createCompanyIntegratedTargets } = require("./lib/company_integrated_tar
 const { createCompanyCapacityRegistry } = require("./lib/company_capacity_registry.cjs");
 const { aggregateFields: companyBootstrapAggregateFields, compactCompanyInventory, createCompanyBootstrapStore, acceptsGzip } = require("./lib/company_bootstrap.cjs");
 const { createCompanyDetailStore } = require("./lib/company_detail_store.cjs");
+const { createCompanyDetailSourceIndex } = require("./lib/company_detail_source_index.cjs");
 const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
 const { createMonthlyReportContext } = require("./lib/monthly_report_context.cjs");
 const { createMonthlyReportOutlookEvaluation } = require("./lib/monthly_report_outlook_evaluation.cjs");
@@ -136,6 +137,7 @@ const companyBootstrapStore = createCompanyBootstrapStore({
   project: summarizeCompanyMasterBootstrapFromMaster,
   emptyMaster: emptyCompanyMaster
 });
+const companyDetailSourceIndex = createCompanyDetailSourceIndex({ dataDir: DATA_DIR });
 const companyDetailStore = createCompanyDetailStore({
   dataDir: DATA_DIR,
   outputsDir: OUTPUTS_DIR,
@@ -147,6 +149,8 @@ const companyDetailStore = createCompanyDetailStore({
     .update(fs.readFileSync(path.join(__dirname, "lib", "inventory_manual_corrections.cjs")))
     .update(fs.readFileSync(path.join(__dirname, "verified_room_inventory.json"))).digest("hex"),
   dayKey: () => kstDate(0),
+  masterReader: (file, companyId) => companyDetailSourceIndex.readMaster(file, companyId),
+  historyReader: (file, company, matches) => companyDetailSourceIndex.readHistory(file, company, matches),
   matchesObservation: (row, company) => historyObservationMatchesCompany(row, company)
     || historyDailyObservationMatchesCompany(row, companyHistoryDailyIdentity(company)),
   runIdsForCompany: companyProductSourceRunIds,
@@ -14916,7 +14920,7 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
       skipTourismDemandStrengthHistory: true,
       skipTourismResourceDemandHistory: true,
       skipTourismDiversityHistory: true,
-      ...(scoped ? { capacityCompanies: [company] } : {})
+      ...(scoped ? { capacityCompanies: [company], companyDetailCompany: company } : {})
     }).catch(() => null);
     if (!data) continue;
     const sourceItem = (data.availability?.items || []).find((candidate) => companyProductAvailabilityMatch(company, candidate));
@@ -15000,6 +15004,20 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
     recoveredFromRun: Boolean(legacyProductPreview),
     identityMatch: legacyProductPreview?.identityMatch || ""
   };
+}
+
+// Keep every row of a selected availability key so the ordinary projection's
+// duplicate/order rules remain authoritative. Unrelated companies' product JSON
+// does not need to be opened to reconstruct this company's saved evidence.
+function companyDetailAvailabilityRows(rows = [], company = {}) {
+  const keys = new Set(rows.filter(row => companyProductAvailabilityMatch(company, {
+    placeId: extractNaverPlaceId(row), bookingBusinessId: availabilityBookingBusinessId(row)
+  })).map(availabilityPlaceKey).filter(Boolean));
+  const selected = rows.filter(row => keys.has(availabilityPlaceKey(row)));
+  // Legacy rows may derive rank from the full projected list position. Keep
+  // that original path when no explicit selected rank certifies equivalence.
+  return selected.every(row => Number(numericField(row, ["overall_rank", "순위", "rank_or_order"])) > 0)
+    ? selected : rows;
 }
 
 function companyInventoryEvidenceReadView(company = {}, observations = [], projections = []) {
@@ -17904,7 +17922,10 @@ async function loadRun(runId, options = {}) {
   if (datalabTrend) stats.datalabTrend = datalabTrend;
   const capacityCompanies = Array.isArray(options.capacityCompanies)
     ? options.capacityCompanies : Object.values((await readCompanyMaster()).companies || {});
-  const availability = summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows], dirPath, capacityCompanies, {
+  const allAvailabilityRows = [...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows];
+  const availabilityRows = options.companyDetailCompany
+    ? companyDetailAvailabilityRows(allAvailabilityRows, options.companyDetailCompany) : allAvailabilityRows;
+  const availability = summarizeAvailabilityRows(availabilityRows, dirPath, capacityCompanies, {
     keyword: manifest?.keyword || conditions.keyword || "",
     checkIn: manifest?.checkIn || conditions.checkIn || runDateFromId(runId),
     bookingRangeDays: manifest?.bookingRangeDays || 1,
@@ -19333,15 +19354,34 @@ async function route(req, res) {
       return send(res, 200, await summarizeCompanyMaster());
     }
 
+    if (req.method === "GET" && reqUrl.pathname === "/api/company-master/detail-index-status") {
+      if (!requireAdminSession(session, req, res)) return;
+      return send(res, 200, companyDetailSourceIndex.status());
+    }
+
     if (req.method === "GET" && reqUrl.pathname === "/api/company-master/detail") {
       if (!requireAdminSession(session, req, res)) return;
       const companyId = String(reqUrl.searchParams.get("companyId") || "").trim();
       if (!companyId) return send(res, 400, { error: "companyId가 필요합니다." });
-      const detail = await companyDetailStore.get(companyId);
+      if (reqUrl.searchParams.get("retryIndex") === "1" && companyDetailSourceIndex.status().phase === "failed") {
+        void companyDetailSourceIndex.prepare().catch(error => console.error("company_detail_source_index_failed", error.code || "unavailable"));
+      }
+      let detail;
+      try { detail = await companyDetailStore.get(companyId); }
+      catch (error) {
+        if (/^COMPANY_DETAIL_[A-Z_]+$/.test(error.code || "")) return send(res, error.statusCode || 503, {
+          error: error.message, errorCode: error.code,
+          ...(error.code === "COMPANY_DETAIL_SOURCE_INDEX_PREPARING" ? { retryAfterSeconds: 4 } : {})
+        }, "application/json; charset=utf-8", error.code === "COMPANY_DETAIL_SOURCE_INDEX_PREPARING" ? { "Retry-After": "4" } : {});
+        throw error;
+      }
       if (!detail.data) return send(res, 404, { error: "업체를 찾을 수 없습니다." });
       return send(res, 200, detail.data, "application/json; charset=utf-8", {
         "X-Company-Detail-Cache": detail.cacheStatus,
-        "X-Company-Detail-Prepared-At": detail.preparedAt
+        "X-Company-Detail-Prepared-At": detail.preparedAt,
+        "X-Company-Detail-Index": companyDetailSourceIndex.status().phase,
+        "Server-Timing": Object.entries(detail.timings || {}).map(([key, value]) =>
+          `${key.replace(/Ms$/, "")};dur=${Math.max(0, Number(value) || 0).toFixed(3)}`).join(", ")
       });
     }
 
@@ -20016,6 +20056,8 @@ seedOutputsFromRepo()
     server.listen(PORT, HOST, () => {
       const primaryUrl = HOST === "0.0.0.0" ? `http://127.0.0.1:${PORT}` : `http://${HOST}:${PORT}`;
       console.log(`Lodging datalab beta app running at ${primaryUrl}`);
+      companyDetailSourceIndex.prepare().then(status => console.log("company_detail_source_index_prepared", JSON.stringify(status)))
+        .catch(error => console.error("company_detail_source_index_failed", error.code || "unavailable"));
       companyIntegratedDb.bootstrap().catch(error => console.error("company_integration_bootstrap_failed", error.code || "unavailable"));
       industryAnalysisService.bootstrap().catch(error => console.error("industry_analysis_bootstrap_failed", error.code || "unavailable"));
       if (HOST === "0.0.0.0") {

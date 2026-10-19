@@ -8,7 +8,7 @@ const native = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const readline = require("node:readline");
-const VERSION = "company-detail-read-model-v1";
+const VERSION = "company-detail-read-model-v2";
 const hash = value => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const fault = (code = "COMPANY_DETAIL_SOURCE_UNAVAILABLE") => Object.assign(
   new Error("업체 상세 자료를 확인하지 못했습니다. 잠시 후 다시 조회해 주세요."), { code, statusCode: 503 });
@@ -65,7 +65,7 @@ function jsonStructureValidator() {
 // complete company master. Structural characters inside escaped strings do not
 // affect the scanner. The retained master contains only selected-company data
 // and the small keyword/run fields required by the existing rank benchmark.
-async function readScopedCompanyMaster(file, companyId, { stream = filename => native.createReadStream(filename, { encoding: "utf8", highWaterMark: 64 * 1024 }) } = {}) {
+async function readScopedCompanyMaster(file, companyId, { stream = filename => native.createReadStream(filename, { encoding: "utf8", highWaterMark: 64 * 1024 }), onCompany } = {}) {
   const validator = jsonStructureValidator();
   const companies = Object.create(null);
   let depth = 0, quoted = false, escaped = false, token = "", stringDepth = 0;
@@ -122,6 +122,7 @@ async function readScopedCompanyMaster(file, companyId, { stream = filename => n
             record.push(chunk.slice(recordStart, index + 1));
             const value = JSON.parse(record.join(""));
             need(value && typeof value === "object" && !Array.isArray(value), "COMPANY_DETAIL_MASTER_INVALID");
+            if (onCompany) await onCompany(memberKey, value);
             companies[memberKey] = memberKey === companyId ? value : { keywords: value.keywords || {} };
             capturing = false; record = []; recordStart = -1; memberKey = "";
           } else if (inCompanies && depth === 1) { inCompanies = false; companiesDone = true; }
@@ -164,13 +165,37 @@ async function readScopedCompanyHistory(file, company, matches, { stream = filen
 
 function createCompanyDetailStore({ dataDir, outputsDir, projectionVersion, build, matchesObservation, runIdsForCompany,
   dayKey = () => new Date(Date.now() + 32400000).toISOString().slice(0, 10), fileSystem = fs,
-  masterReader = readScopedCompanyMaster, historyReader = readScopedCompanyHistory, maxMemoryBytes = 16 * 1024 * 1024 } = {}) {
+  masterReader = readScopedCompanyMaster, historyReader = readScopedCompanyHistory, maxMemoryBytes = 16 * 1024 * 1024,
+  metadataConcurrency = 8 } = {}) {
   need(dataDir && projectionVersion && typeof build === "function" && typeof matchesObservation === "function" && typeof runIdsForCompany === "function");
   const masterFile = path.join(dataDir, "company_master", "companies.json");
   const historyFile = path.join(dataDir, "history", "observations.jsonl");
   const cacheDir = path.join(dataDir, "company_master", "detail_read_models");
   const outputs = path.resolve(outputsDir || path.join(dataDir, "outputs"));
   const active = new Map(), memory = new Map(); let memoryBytes = 0;
+  const metadataLimit = Math.min(16, Math.max(1, Math.floor(Number(metadataConcurrency) || 8)));
+  const metadataPending = new Map(), metadataWaiting = []; let metadataActive = 0, metadataEpoch = 0;
+  // A promise may already contain a filesystem sample even while its delivery
+  // is delayed. Share only within one verification epoch: another request or
+  // a later final guard must never adopt a pre-change pending sample.
+  async function metadata(operation, filename, metrics, epoch) {
+    const key = epoch + ":" + operation + ":" + filename;
+    if (metadataPending.has(key)) { metrics.sharedMetadataReads++; return metadataPending.get(key); }
+    const pending = (async () => {
+      if (metadataActive >= metadataLimit) await new Promise(resolve => metadataWaiting.push(resolve));
+      else metadataActive++;
+      metrics.maxMetadataInFlight = Math.max(metrics.maxMetadataInFlight, metadataActive);
+      metrics[operation === "lstat" ? "lstatCalls" : "readdirCalls"]++;
+      try { return await fileSystem[operation](filename, operation === "lstat" ? { bigint: true } : { withFileTypes: true }); }
+      finally { const next = metadataWaiting.shift(); if (next) next(); else metadataActive--; }
+    })();
+    metadataPending.set(key, pending);
+    try { return await pending; } finally { if (metadataPending.get(key) === pending) metadataPending.delete(key); }
+  }
+  async function measured(timings, key, action) {
+    const start = performance.now();
+    try { return await action(); } finally { timings[key] += performance.now() - start; }
+  }
   function remember(id, entry) {
     if (memory.has(id)) { memoryBytes -= memory.get(id).bytes; memory.delete(id); }
     const bytes = Buffer.byteLength(JSON.stringify(entry));
@@ -178,88 +203,129 @@ function createCompanyDetailStore({ dataDir, outputsDir, projectionVersion, buil
     memory.set(id, { entry, bytes }); memoryBytes += bytes;
     while (memory.size > 8 || memoryBytes > maxMemoryBytes) { const key = memory.keys().next().value; memoryBytes -= memory.get(key).bytes; memory.delete(key); }
   }
-  async function stat(file, required = false) {
-    try { const value = await fileSystem.lstat(file, { bigint: true }); need(value.isFile() && !value.isSymbolicLink()); return stamp(value); }
+  async function stat(file, required = false, metrics, epoch) {
+    try { const value = await metadata("lstat", file, metrics, epoch); need(value.isFile() && !value.isSymbolicLink()); return stamp(value); }
     catch (error) { if (error.code === "ENOENT" && !required) return null; throw fault(); }
   }
-  async function baseRevision() { return { master: await stat(masterFile, true), history: await stat(historyFile) }; }
-  async function runRevision(runIds) {
-    const entries = [];
-    let count = 0;
+  async function baseRevision(metrics, epoch = ++metadataEpoch) {
+    const [master, history] = await Promise.all([stat(masterFile, true, metrics, epoch), stat(historyFile, false, metrics, epoch)]);
+    return { master, history };
+  }
+  async function runRevision(runIds, transaction, metrics, epoch) {
+    const entries = [], nextDirectories = new Map(); let count = 0;
+    metrics.runScans++;
     async function visit(directory, relative, depth = 0) {
       need(depth <= 8, "COMPANY_DETAIL_SOURCE_SCAN_LIMIT");
-      let dir;
+      let dir, before;
       try {
-        const directoryStat = await fileSystem.lstat(directory, { bigint: true });
+        const directoryStat = await metadata("lstat", directory, metrics, epoch);
         need(directoryStat.isDirectory() && !directoryStat.isSymbolicLink());
-        entries.push([relative + "/", stamp(directoryStat)]);
-        dir = await fileSystem.readdir(directory, { withFileTypes: true });
+        before = stamp(directoryStat);
+        entries.push([relative + "/", before]);
+        const previous = transaction.directories.get(directory);
+        if (previous?.signature === before) { dir = previous.entries; metrics.directoryReuses++; }
+        else dir = await metadata("readdir", directory, metrics, epoch);
       }
       catch (error) { if (error.code === "ENOENT") { entries.push([relative, null]); return; } throw fault(); }
-      for (const entry of dir.sort((a, b) => a.name.localeCompare(b.name))) {
+      nextDirectories.set(directory, { signature: before, entries: dir });
+      await Promise.all([...dir].sort((a, b) => a.name.localeCompare(b.name)).map(async entry => {
         need(++count <= 20000 && !entry.isSymbolicLink(), "COMPANY_DETAIL_SOURCE_SCAN_LIMIT");
         const nested = path.join(directory, entry.name), label = relative + "/" + entry.name;
         if (entry.isDirectory()) await visit(nested, label, depth + 1);
-        else if (entry.isFile()) entries.push([label, await stat(nested, true)]);
+        else if (entry.isFile()) { entries.push([label, await stat(nested, true, metrics, epoch)]); metrics.filesChecked++; }
         else throw fault();
-      }
+      }));
+      const after = await metadata("lstat", directory, metrics, epoch);
+      need(after.isDirectory() && !after.isSymbolicLink() && stamp(after) === before, "COMPANY_DETAIL_SOURCE_CHANGED");
     }
-    for (const id of runIds) {
+    await Promise.all(runIds.map(async id => {
       need(typeof id === "string" && id && id !== "." && id !== ".." && path.basename(id) === id && !/[\\/\x00-\x1f]/.test(id));
       const directory = path.resolve(outputs, id);
       need(directory.startsWith(outputs + path.sep));
       await visit(directory, id);
-    }
-    return hash(entries);
+    }));
+    transaction.directories = nextDirectories;
+    return hash(entries.sort((a, b) => a[0].localeCompare(b[0])));
   }
-  async function revision(runIds) {
-    const before = await baseRevision(), day = dayKey(), runs = await runRevision(runIds);
-    need(day === dayKey() && hash(before) === hash(await baseRevision()), "COMPANY_DETAIL_SOURCE_CHANGED");
+  async function revision(runIds, transaction, metrics) {
+    const epoch = ++metadataEpoch;
+    const before = await baseRevision(metrics, epoch), day = dayKey(), runs = await runRevision(runIds, transaction, metrics, epoch);
+    need(day === dayKey() && hash(before) === hash(await baseRevision(metrics, epoch)), "COMPANY_DETAIL_SOURCE_CHANGED");
     return { ...before, runs, day };
   }
   const valid = (entry, id) => entry && entry.version === VERSION && entry.projectionVersion === projectionVersion && entry.source
     && entry.companyId === id && Array.isArray(entry.runIds) && entry.runIds.length <= 120
     && entry.data?.company?.companyId === id && entry.checksum === hash({ ...entry, checksum: undefined });
   async function load(id) {
+    const started = performance.now();
+    const timings = { cacheReadMs: 0, sourceCheckMs: 0, masterReadMs: 0, historyReadMs: 0, buildMs: 0, cacheWriteMs: 0, totalMs: 0 };
+    const metrics = { lstatCalls: 0, readdirCalls: 0, sharedMetadataReads: 0, maxMetadataInFlight: 0, runScans: 0, directoryReuses: 0, filesChecked: 0 };
+    const transaction = { directories: new Map() };
+    const checked = (runIds) => measured(timings, "sourceCheckMs", () => revision(runIds, transaction, metrics));
+    const base = () => measured(timings, "sourceCheckMs", () => baseRevision(metrics));
+    const result = (data, cacheStatus, preparedAt) => ({ data, cacheStatus, preparedAt,
+      timings: Object.fromEntries(Object.entries({ ...timings, totalMs: performance.now() - started }).map(([key, value]) => [key, +value.toFixed(3)])), metrics });
     need(id && id.length <= 300 && !/[\x00-\x1f\x7f]/.test(id), "COMPANY_DETAIL_ID_INVALID");
     const cacheFile = path.join(cacheDir, hash(id) + ".json");
     let saved = memory.get(id)?.entry, cacheStatus = "memory";
-    if (!saved) {
-      try { saved = JSON.parse(await fileSystem.readFile(cacheFile, "utf8")); cacheStatus = "saved"; } catch { saved = null; }
-    }
+    await measured(timings, "cacheReadMs", async () => {
+      if (!saved) { try { saved = JSON.parse(await fileSystem.readFile(cacheFile, "utf8")); cacheStatus = "saved"; } catch { saved = null; } }
+    });
     if (valid(saved, id)) {
-      const current = await revision(saved.runIds);
-      if (saved.source.history && !current.history) throw fault();
-      if (hash(current) === hash(saved.source)) { remember(id, saved); return { data: saved.data, cacheStatus, preparedAt: saved.preparedAt }; }
+      const currentBase = await base();
+      if (saved.source.history && !currentBase.history) throw fault();
+      if (currentBase.master === saved.source.master && currentBase.history === saved.source.history && dayKey() === saved.source.day) {
+        const current = await checked(saved.runIds);
+        if (hash(current) === hash(saved.source)) { remember(id, saved); return result(saved.data, cacheStatus, saved.preparedAt); }
+      }
     }
     // Capture the source before and after each bounded read. A racing save can
     // never turn an older detail response into a certified latest result.
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const before = await baseRevision();
-      const master = await masterReader(masterFile, id);
+      const before = await base();
+      const master = await measured(timings, "masterReadMs", () => masterReader(masterFile, id));
       const company = master.companies?.[id];
-      if (!company) { if (hash(before) !== hash(await baseRevision())) continue; return { data: null, cacheStatus: "missing" }; }
+      if (!company) { if (hash(before) !== hash(await base())) continue; return result(null, "missing"); }
       const runIds = [...new Set(runIdsForCompany(company).map(String))].slice(0, 120);
-      const source = { ...before, runs: await runRevision(runIds), day: dayKey() };
-      const observations = before.history ? await historyReader(historyFile, company, matchesObservation) : [];
-      if (hash(source) !== hash(await revision(runIds))) continue;
-      const data = await build(id, { master, observations });
-      if (hash(source) !== hash(await revision(runIds))) continue;
+      const source = await checked(runIds);
+      if (hash(before) !== hash({ master: source.master, history: source.history })) continue;
+      const observations = before.history ? await measured(timings, "historyReadMs", () => historyReader(historyFile, company, matchesObservation)) : [];
+      const data = await measured(timings, "buildMs", () => build(id, { master, observations }));
       const body = { version: VERSION, projectionVersion, companyId: id, runIds, source, preparedAt: new Date().toISOString(), data };
       const next = { ...body, checksum: hash(body) };
       const temporary = cacheFile + "." + process.pid + "." + crypto.randomBytes(5).toString("hex") + ".tmp";
+      const backup = temporary + ".previous";
+      let backedUp = false, published = false;
       try {
-        await fileSystem.mkdir(cacheDir, { recursive: true });
-        await fileSystem.writeFile(temporary, JSON.stringify(next), { flag: "wx", mode: 0o600 });
-        if (hash(source) !== hash(await revision(runIds))) { await fileSystem.unlink(temporary); continue; }
-        await fileSystem.rename(temporary, cacheFile);
+        await measured(timings, "cacheWriteMs", async () => {
+          await fileSystem.mkdir(cacheDir, { recursive: true });
+          await fileSystem.writeFile(temporary, JSON.stringify(next), { flag: "wx", mode: 0o600 });
+          try { await fileSystem.link(cacheFile, backup); backedUp = true; }
+          catch (error) { if (error.code !== "ENOENT") throw error; }
+        });
+        if (hash(source) !== hash(await checked(runIds))) { await fileSystem.unlink(temporary); if (backedUp) await fileSystem.unlink(backup); continue; }
+        await measured(timings, "cacheWriteMs", () => fileSystem.rename(temporary, cacheFile));
+        published = true;
+        if (hash(source) !== hash(await checked(runIds))) throw fault("COMPANY_DETAIL_SOURCE_CHANGED");
       } catch (error) {
-        await fileSystem.unlink(temporary).catch(() => {});
+        if (published) {
+          // Keep the previous normal saved result when an input changes during
+          // atomic publication. The backup links the old inode, so restoration
+          // does not need free space for another copy of a large response.
+          try {
+            const current = JSON.parse(await fileSystem.readFile(cacheFile, "utf8"));
+            if (current.checksum === next.checksum) {
+              if (backedUp) { await fileSystem.rename(backup, cacheFile); backedUp = false; }
+              else await fileSystem.unlink(cacheFile);
+            }
+          } catch { throw fault("COMPANY_DETAIL_CACHE_ROLLBACK_FAILED"); }
+        }
+        await fileSystem.unlink(temporary).catch(() => {}); if (backedUp) await fileSystem.unlink(backup).catch(() => {});
         throw error.code?.startsWith("COMPANY_DETAIL_") ? error : fault("COMPANY_DETAIL_CACHE_WRITE_FAILED");
       }
-      if (hash(source) !== hash(await revision(runIds))) continue;
+      if (backedUp) await fileSystem.unlink(backup).catch(() => {});
       remember(id, next);
-      return { data, cacheStatus: "calculated", preparedAt: next.preparedAt };
+      return result(data, "calculated", next.preparedAt);
     }
     throw fault("COMPANY_DETAIL_SOURCE_CHANGED");
   }

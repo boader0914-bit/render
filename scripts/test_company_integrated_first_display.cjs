@@ -190,6 +190,71 @@ test("an observed integrated card is displayed before the selected company start
   assert.match(f.selected().textContent, /예약/); assert.match(f.selected().textContent, /매출/);
 });
 
+test("source index preparation retries only detail while retaining the chosen month and integrated card", async () => {
+  const f = fixture(); f.render(); await settle(); await f.shown();
+  const node = f.selected(), controller = f.state.adminDbIntegratedPanelContext.controller;
+  const month = controller.load("2026-08"); await f.respondIntegrated(1); await month; await f.frame(); await f.frame();
+  const before = node.innerHTML;
+  f.detailRequests[0].reject(Object.assign(new Error("원본 색인 준비 중"), { code: "COMPANY_DETAIL_SOURCE_INDEX_PREPARING" }));
+  await settle();
+  assert.equal(f.state.adminDbCompanyDetails.a.preparing, true);
+  assert.match(f.board.textContent, /상품·상세이력 준비 중/);
+  assert.doesNotMatch(f.board.textContent, /상품·상세이력 확인 필요/);
+  const retryId = f.state.adminDbDetailPreparationTimers.a;
+  assert.equal(typeof f.timers.get(retryId), "function");
+  const run = f.timers.get(retryId); f.timers.delete(retryId); run(); await settle(); await f.frame(); await f.frame();
+  assert.equal(f.detailRequests.length, 2);
+  assert.doesNotMatch(f.detailRequests[1].url, /retryIndex=/, "preparation polling is not an explicit failed-index rebuild");
+  await f.respondDetail(1);
+  assert.equal(f.selected(), node); assert.equal(node.innerHTML, before);
+  assert.equal(controller.state.month, "2026-08");
+  assert.equal(f.state.companyMaster.companies[0].detailLoaded, true);
+  assert.equal(f.integratedRequests.length, 2);
+});
+
+test("source index preparation timers cannot fetch after leaving the selected company or session", async () => {
+  for (const leave of [f => { f.state.adminDbSelectedCompanyId = "b"; }, f => { f.state.activeTab = "home"; },
+    f => { f.state.session = { ...f.state.session }; }, f => { f.document.visibilityState = "hidden"; }]) {
+    const f = fixture(); f.render(); await settle(); await f.shown();
+    f.detailRequests[0].reject(Object.assign(new Error("색인 준비 중"), { code: "COMPANY_DETAIL_SOURCE_INDEX_PREPARING" })); await settle();
+    const id = f.state.adminDbDetailPreparationTimers.a, run = f.timers.get(id); f.timers.delete(id); leave(f); run(); await settle();
+    assert.equal(f.detailRequests.length, 1);
+  }
+});
+
+test("source index preparation stops automatic polling at its bound and exposes a manual retry", async () => {
+  const f = fixture();
+  const pending = f.context.loadAdminDbCompanyDetail("a", { indexPreparationRetry: 30 }); await settle(); await f.shown();
+  f.detailRequests[0].reject(Object.assign(new Error("색인 준비 중"), { code: "COMPANY_DETAIL_SOURCE_INDEX_PREPARING" }));
+  await pending; await settle();
+  assert.equal(f.state.adminDbCompanyDetails.a.preparing, undefined);
+  assert.equal(f.state.adminDbDetailPreparationTimers.a, undefined);
+  assert.match(f.board.textContent, /다시 불러오기/);
+  assert.match(f.board.textContent, /상품·상세이력 확인 필요/);
+});
+
+test("returning from a hidden index preparation resumes without replacing the month card", async () => {
+  const f = fixture(); f.render(); await settle(); await f.shown();
+  const node = f.selected(), before = node.innerHTML;
+  f.detailRequests[0].reject(Object.assign(new Error("색인 준비 중"), { code: "COMPANY_DETAIL_SOURCE_INDEX_PREPARING" })); await settle();
+  const id = f.state.adminDbDetailPreparationTimers.a, run = f.timers.get(id); f.timers.delete(id);
+  f.document.visibilityState = "hidden"; run(); await settle(); assert.equal(f.detailRequests.length, 1);
+  f.document.visibilityState = "visible"; f.context.resumeAdminDbCompanyDetailAfterReturn(); await settle(); await f.frame(); await f.frame();
+  assert.equal(f.detailRequests.length, 2); await f.respondDetail(1);
+  assert.equal(f.selected(), node); assert.equal(node.innerHTML, before);
+});
+
+test("a failed source index stops polling and only a manual detail retry asks to prepare it again", async () => {
+  const f = fixture(); f.render(); await settle(); await f.shown();
+  f.detailRequests[0].reject(Object.assign(new Error("색인 저장 실패"), { code: "COMPANY_DETAIL_SOURCE_INDEX_WRITE_FAILED" })); await settle();
+  assert.equal(f.state.adminDbCompanyDetails.a.preparing, undefined);
+  assert.equal(f.state.adminDbDetailPreparationTimers.a, undefined);
+  assert.match(f.board.textContent, /다시 불러오기/);
+  const pending = f.context.loadAdminDbCompanyDetail("a"); await settle(); await f.frame(); await f.frame();
+  assert.equal(f.detailRequests.length, 2); assert.match(f.detailRequests[1].url, /&retryIndex=1$/);
+  await f.respondDetail(1); await pending;
+});
+
 test("detail hydration preserves the integrated DOM, controller, selected month and successful request", async () => {
   const f = fixture(); f.render(); await settle(); await f.shown();
   const node = f.selected(), controller = f.controllers.at(-1);
