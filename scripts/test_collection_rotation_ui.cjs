@@ -73,6 +73,67 @@ async function mockUi({ saved = true, previewGate, readFailure = false } = {}) {
   async function change(name, value) { const el = input(name); if (el.type === "checkbox") el.checked = value; else el.value = value; await el.event("input"); }
   return { nodes, body, parent, workers, panel, button, input, change, calls, events, observers, timers, get state() { return state; } };
 }
+const tableRows = ui => descendants(ui.panel).filter(el => el.tagName === "TR" && el.parentNode?.tagName === "TBODY");
+const postprocessNodes = row => descendants(row).filter(el => ["collector-postprocess-status", "collector-worker-alert"].includes(el.className));
+
+test("today's saved results show DB preparation separately beside future slots and prefer current duplicate records", async () => {
+  const ui = await mockUi(), states = ["held", "queued", "running", "complete", "failed", "unavailable"];
+  const expected = ["업체 DB 반영 대기", "업체 DB 반영 대기", "업체 DB 반영 중", "업체 DB 반영 완료", "업체 DB 반영 실패 · 수집 결과 보관됨", "업체 DB 반영 상태 확인 필요"];
+  ui.state.todayItems = states.map((state, index) => ({ id: `rotation_2026-10-15_${index + 1}`, day: "2026-10-15", workerKey: "manual", keyword: `DB시험${index}`,
+    scheduledAt: `2026-10-15T${String(index + 1).padStart(2, "0")}:00:00Z`, startedAt: "2026-10-15T01:01:00Z", status: "complete", runId: `db_result_${index}`,
+    postprocess: { state, attempts: 2, maxAttempts: 3, updatedAt: "2026-10-15T01:02:00Z", lastErrorCode: "COLLECTION_POSTPROCESS_HISTORY_FAILED" } }));
+  const future = { id: "rotation_2026-10-16_1", day: "2026-10-16", workerKey: "web", keyword: "미래배정", scheduledAt: "2026-10-16T00:00:00Z", status: "scheduled" };
+  ui.state.upcomingItems = [future, { ...clone(ui.state.todayItems[0]), status: "running", postprocess: { state: "running" } }];
+  const original = clone({ todayItems: ui.state.todayItems, upcomingItems: ui.state.upcomingItems }), before = ui.calls.length;
+  await ui.button("상태 새로고침").event("click");
+  const rows = tableRows(ui); assert.equal(rows.length, 7);
+  for (let index = 0; index < states.length; index++) {
+    assert.match(allText(rows[index]), new RegExp(`DB시험${index}`));
+    assert.equal(descendants(rows[index]).find(el => el.className === "rotation-row-state").textContent, "새 수집 완료");
+    const status = postprocessNodes(rows[index])[0]; assert.equal(status.textContent, expected[index]);
+    assert.equal(status.className, states[index] === "failed" ? "collector-worker-alert" : "collector-postprocess-status");
+    assert.match(status.title, /DB 반영 시도 2\/3/); assert.match(status.title, /COLLECTION_POSTPROCESS_HISTORY_FAILED/);
+    assert.ok(descendants(rows[index]).some(el => el.tagName === "BUTTON" && el.textContent === "결과 보기"));
+  }
+  assert.match(allText(rows[6]), /미래배정/); assert.equal(postprocessNodes(rows[6]).length, 0);
+  assert.equal(descendants(rows[6]).find(el => el.className === "rotation-row-state").textContent, "예정");
+  assert.deepEqual(clone({ todayItems: ui.state.todayItems, upcomingItems: ui.state.upcomingItems }), original);
+  assert.deepEqual(ui.calls.slice(before).map(call => call.method), ["GET"]);
+  await descendants(rows[4]).find(el => el.tagName === "BUTTON" && el.textContent === "결과 보기").event("click");
+  assert.equal(ui.events.at(-1).type, "collector:open-result"); assert.equal(ui.events.at(-1).detail.runId, "db_result_4");
+});
+
+test("legacy and unknown DB states remain distinct and stored text is assigned without HTML", async () => {
+  const ui = await mockUi(), unsafe = '<img src=x onerror="bad()">';
+  ui.state.upcomingItems = [];
+  ui.state.todayItems = [undefined, { state: "unknown", lastErrorCode: unsafe }, { state: "__proto__" }].map((postprocess, index) => ({
+    id: `legacy_${index}`, day: "2026-10-15", keyword: index === 1 ? unsafe : `기록${index}`, workerKey: "manual", status: index === 0 ? "partial" : "complete", postprocess
+  }));
+  await ui.button("상태 새로고침").event("click");
+  const rows = tableRows(ui); assert.equal(rows.length, 3); assert.equal(postprocessNodes(rows[0]).length, 0);
+  assert.equal(descendants(rows[0]).find(el => el.className === "rotation-row-state").textContent, "일부 완료");
+  for (const row of rows.slice(1)) assert.equal(postprocessNodes(row)[0].textContent, "업체 DB 반영 상태 확인 필요");
+  assert.equal(descendants(rows[1]).find(el => el.className === "rotation-keyword").textContent, unsafe);
+  assert.equal(postprocessNodes(rows[1])[0].title, unsafe); assert.equal(descendants(ui.panel).some(el => el.tagName === "IMG"), false);
+  assert.doesNotMatch(allText(ui.panel), /업체 DB 반영 완료/);
+});
+
+test("status refresh preserves an edited draft and selected start while previews exclude persisted results", async () => {
+  const ui = await mockUi();
+  ui.state.todayItems = [{ id: "rotation_2026-10-15_1", day: "2026-10-15", scheduledAt: "2026-10-15T01:00:00Z", keyword: "오늘완료자료", workerKey: "manual", status: "complete", postprocess: { state: "queued" } }];
+  await ui.change("bookingDays", "14"); await ui.change("startKeyword", "부산글램핑"); ui.panel.open = true;
+  const before = ui.calls.length, timers = ui.timers.length;
+  for (let index = 0; index < 3; index++) await ui.button("상태 새로고침").event("click");
+  assert.deepEqual(ui.calls.slice(before).map(call => call.method), ["GET", "GET", "GET"]); assert.equal(ui.timers.length, timers);
+  assert.equal(ui.input("bookingDays").value, "14"); assert.equal(ui.input("startKeyword").value, "부산글램핑");
+  assert.equal(ui.button("순환예약 시작").disabled, true); assert.equal(ui.panel.open, true); assert.match(allText(ui.panel), /오늘완료자료/);
+  await ui.button("배정표 미리보기").event("click");
+  assert.match(allText(ui.panel), /편집안 · 향후 7일 미리보기/); assert.doesNotMatch(allText(ui.panel), /오늘완료자료|업체 DB 반영 대기/);
+  assert.equal(ui.calls.at(-1).url, "/api/collection-rotation/preview"); assert.equal(ui.calls.at(-1).method, "POST");
+  assert.equal(ui.calls.at(-1).payload.config.collection.bookingDays, 14); assert.equal(ui.calls.at(-1).payload.startKeyword, "부산글램핑");
+  assert.equal(ui.state.enabled, false); assert.equal(ui.events.length, 0);
+});
+
 test("opening the card reads only, folds by default, and inserts before independent worker cards", async () => {
   const ui = await mockUi({ saved: false });
   assert.deepEqual(ui.calls.map(call => call.method), ["GET"]); assert.equal(ui.panel.open, false); assert.equal(ui.parent.children[0], ui.panel); assert.equal(ui.parent.children[1], ui.workers);

@@ -89,7 +89,17 @@
     const stamp = Date.parse(value || "");
     return Number.isFinite(stamp) ? new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", ...(date ? { month: "numeric", day: "numeric" } : {}), hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(stamp) : "—";
   }
-  const exported = { POLICY_KEYWORDS, configFromDraft, draftFromConfig, defaultDraft, keywordEntries, reasonText, planLabel, formatTime };
+  function savedTableRows(status = {}) {
+    const rows = [], seen = new Set();
+    for (const item of [...(status.todayItems || []), ...(status.upcomingItems || [])]) {
+      if (item.id && seen.has(item.id)) continue;
+      if (item.id) seen.add(item.id);
+      rows.push(item);
+    }
+    const stamp = item => { const value = Date.parse(item.scheduledAt || item.notBeforeAt || ""); return Number.isFinite(value) ? value : Infinity; };
+    return rows.sort((a, b) => stamp(a) - stamp(b));
+  }
+  const exported = { POLICY_KEYWORDS, configFromDraft, draftFromConfig, defaultDraft, keywordEntries, reasonText, planLabel, formatTime, savedTableRows };
   if (typeof module === "object" && module.exports) module.exports = exported;
   if (typeof document === "undefined" || typeof window === "undefined") return;
 
@@ -165,6 +175,16 @@
       view.draft.textContent = locked ? "실행 중인 조건입니다. 일시정지하고 진행 작업이 끝나면 변경할 수 있습니다." : dirty ? "편집안 · 변경한 조건은 아직 저장되지 않았습니다. 저장 후 시작하세요." : saved?.config?.keywords?.length ? `저장본${saved.revision ? ` · 개정 ${saved.revision}` : ""} · 조건 저장만으로 수집을 시작하지 않습니다.` : "조건 저장 전 · 미리보기와 저장은 수집을 시작하지 않습니다.";
       details.dataset.state = saved?.enabled ? "active" : saved?.reason || readError ? "attention" : "idle";
     }
+    function postprocessStatus(value) {
+      if (!value) return null;
+      const labels = { held: "업체 DB 반영 대기", queued: "업체 DB 반영 대기", running: "업체 DB 반영 중",
+        complete: "업체 DB 반영 완료", failed: "업체 DB 반영 실패 · 수집 결과 보관됨", unavailable: "업체 DB 반영 상태 확인 필요" };
+      const label = Object.hasOwn(labels, value.state) ? labels[value.state] : labels.unavailable;
+      const status = node("small", value.state === "failed" ? "collector-worker-alert" : "collector-postprocess-status", label);
+      status.title = [value.updatedAt ? `갱신 ${formatTime(value.updatedAt)}` : "", value.lastErrorCode || value.errorCode || "",
+        value.attempts ? `DB 반영 시도 ${value.attempts}/${value.maxAttempts || 3}` : ""].filter(Boolean).join(" · ");
+      return status;
+    }
     function renderRows(rows, config) {
       if (!rows?.length) { view.table.replaceChildren(node("p", "rotation-empty", "표시할 배정이 없습니다.")); return; }
       const table = node("table", "rotation-table"), caption = node("caption", "rotation-sr-only", view.tableTitle.textContent); table.append(caption);
@@ -178,6 +198,7 @@
         const range = node("td"); const days = item.bookingDays || item.collection?.bookingDays || config?.collection?.bookingDays;
         if (day && Number.isInteger(Number(days)) && Number(days) > 0) range.append(node("span", "", `${day.slice(5)} ~ ${todayKst(Date.parse(`${day}T00:00:00+09:00`) + (Number(days) - 1) * 86400000).slice(5)}`), node("small", "", `${days}일 · 관측일 포함`)); else range.textContent = "조회기간 확인 필요";
         const state = node("td"), stateText = node("span", "rotation-row-state", STATES[item.status] || "확인 필요"); stateText.dataset.state = item.status || "planned"; state.append(stateText);
+        const postprocess = postprocessStatus(item.postprocess); if (postprocess) state.append(postprocess);
         if (item.status === "reused" && item.observedAt) state.append(node("small", "", `원래 관측 ${formatTime(item.observedAt)}`));
         else if (item.startedAt) state.append(node("small", "", `실제 ${formatTime(item.startedAt)}`));
         else if (item.notBeforeAt && Date.parse(item.notBeforeAt) > Date.parse(item.scheduledAt || "")) state.append(node("small", "", `${formatTime(item.notBeforeAt)} 이후`));
@@ -195,7 +216,7 @@
       view.next.textContent = saved?.enabled ? `다음 배정 · ${next?.keyword || saved.nextKeyword || "배정 확인 중"}${next?.workerKey ? ` · ${WORKERS[next.workerKey] || next.workerKey}` : ""} · ${formatTime(next?.scheduledAt || saved.nextRunAt)} 이후` : saved?.nextKeyword ? `다음 순환 위치 · ${saved.nextKeyword}` : "순환 목록을 저장하면 다음 배정 위치를 표시합니다.";
       view.reason.textContent = saved?.reason ? reasonText(saved.reason) : ""; view.reason.hidden = !saved?.reason;
       view.freshness.textContent = readError ? "상태를 새로 확인하지 못했습니다. 아래 자료는 마지막 확인값입니다." : lastReadAt ? `상태 확인 ${formatTime(new Date(lastReadAt).toISOString())} · 예정 시각보다 늦게 시작될 수 있습니다.` : "";
-      if (!preview) { view.tableTitle.textContent = "저장된 배정표"; view.tableNote.textContent = "현재 저장된 배정과 향후 순환 순서입니다. 미래 항목은 실행 전 변경될 수 있습니다."; renderRows(saved?.upcomingItems?.length ? saved.upcomingItems : rows, saved?.config); }
+      if (!preview) { view.tableTitle.textContent = "저장된 배정표"; view.tableNote.textContent = "오늘 저장된 배정과 향후 순환 순서입니다. 미래 항목은 실행 전 변경될 수 있습니다."; renderRows(savedTableRows(saved || {}), saved?.config); }
       sync();
     }
     async function api(path, method = "GET", payload) {
