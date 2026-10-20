@@ -43,7 +43,7 @@ function normalizeCenter(input) {
     provenance: "administrator_confirmed", kind: "declared_reference_point" };
 }
 function normalizeDataset(input) {
-  keys(input, ["id", "provider", "sourceUrl", "sourceYear", "boundaryYear", "gridSizeM", "crs", "sourceSha256", "boundarySha256", "industryClassification", "coverageBBox", "completeFrame", "units", "cells", "disclosureMethod", "derivedGeometrySha256", "boundaryHashKind", "sourceHashKind", "sourceTransform", "mappingSha256"]);
+  keys(input, ["id", "provider", "sourceUrl", "sourceYear", "boundaryYear", "gridSizeM", "crs", "sourceSha256", "boundarySha256", "industryClassification", "coverageBBox", "completeFrame", "units", "cells", "disclosureMethod", "derivedGeometrySha256", "derivedCsvSha256", "boundaryHashKind", "sourceHashKind", "sourceTransform", "sourceEncoding", "mappingSha256"]);
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$/.test(input.id || "") || !text(input.provider, 100)
     || !Number.isInteger(input.sourceYear) || input.sourceYear < 2000 || input.sourceYear > 2100
     || !Number.isInteger(input.boundaryYear) || input.boundaryYear < 2000 || input.boundaryYear > 2100
@@ -52,9 +52,12 @@ function normalizeDataset(input) {
     || !text(input.industryClassification, 100) || typeof input.completeFrame !== "boolean"
     || !Array.isArray(input.cells) || !input.cells.length || input.cells.length > MAX_CELLS
     || input.derivedGeometrySha256 !== undefined && !/^[a-f0-9]{64}$/.test(input.derivedGeometrySha256)
+    || input.derivedCsvSha256 !== undefined && !/^[a-f0-9]{64}$/.test(input.derivedCsvSha256)
     || input.boundaryHashKind !== undefined && input.boundaryHashKind !== "original_file"
     || input.sourceHashKind !== undefined && input.sourceHashKind !== "input_csv"
     || input.sourceTransform !== undefined && !["none", "utf8_conversion"].includes(input.sourceTransform)
+    || input.sourceEncoding !== undefined && !["utf8", "cp949"].includes(input.sourceEncoding)
+    || input.sourceEncoding === "cp949" && input.sourceTransform === "utf8_conversion"
     || input.mappingSha256 !== undefined && !/^[a-f0-9]{64}$/.test(input.mappingSha256)) throw fault("CATCHMENT_INVALID_DATASET");
   keys(input.units, Object.keys(METRICS));
   if (Object.entries(METRICS).some(([key, unit]) => input.units[key] !== unit)) throw fault("CATCHMENT_UNIT_MISMATCH");
@@ -91,9 +94,10 @@ function normalizeDataset(input) {
     boundaryYear: input.boundaryYear, gridSizeM: input.gridSizeM, crs: "EPSG:4326", sourceSha256: input.sourceSha256,
     boundarySha256: input.boundarySha256, industryClassification: input.industryClassification.trim(), coverageBBox: [...bbox], completeFrame: input.completeFrame,
     units: { ...METRICS }, disclosureMethod: text(input.disclosureMethod, 300) || (isSgis ? "source_disclosure_protection" : "source_publication_rules"),
-    ...(input.derivedGeometrySha256 ? { derivedGeometrySha256: input.derivedGeometrySha256 } : {}),
+    ...(input.derivedGeometrySha256 ? { derivedGeometrySha256: input.derivedGeometrySha256 } : {}), ...(input.derivedCsvSha256 ? { derivedCsvSha256: input.derivedCsvSha256 } : {}),
     ...(input.boundaryHashKind ? { boundaryHashKind: input.boundaryHashKind } : {}), ...(input.sourceHashKind ? { sourceHashKind: input.sourceHashKind } : {}),
-    ...(input.sourceTransform ? { sourceTransform: input.sourceTransform } : {}), ...(input.mappingSha256 ? { mappingSha256: input.mappingSha256 } : {}), cells };
+    ...(input.sourceTransform ? { sourceTransform: input.sourceTransform } : {}), ...(input.sourceEncoding ? { sourceEncoding: input.sourceEncoding } : {}),
+    ...(input.mappingSha256 ? { mappingSha256: input.mappingSha256 } : {}), cells };
   return { ...dataset, fingerprint: hash(dataset) };
 }
 function datasetMetadata(dataset) {
@@ -149,7 +153,7 @@ function validateCatchmentResult(result, { regionKey, center, datasetFingerprint
     if (hash(point) !== hash(result.scope.center) || center && hash(point) !== hash(center)) throw new Error();
     const dataset = result.dataset;
     keys(dataset, ["id", "provider", "sourceUrl", "sourceYear", "boundaryYear", "gridSizeM", "crs", "sourceSha256", "boundarySha256", "industryClassification",
-      "coverageBBox", "completeFrame", "units", "disclosureMethod", "derivedGeometrySha256", "boundaryHashKind", "sourceHashKind", "sourceTransform", "mappingSha256",
+      "coverageBBox", "completeFrame", "units", "disclosureMethod", "derivedGeometrySha256", "derivedCsvSha256", "boundaryHashKind", "sourceHashKind", "sourceTransform", "sourceEncoding", "mappingSha256",
       "fingerprint", "cellCount", "provenance", "coverageDeclaration"]);
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$/.test(dataset.id || "") || !text(dataset.provider, 100) || dataset.crs !== "EPSG:4326"
       || ![100, 250, 500, 1000].includes(dataset.gridSizeM) || !Number.isSafeInteger(dataset.cellCount) || dataset.cellCount < 1 || dataset.cellCount > MAX_CELLS
@@ -159,9 +163,12 @@ function validateCatchmentResult(result, { regionKey, center, datasetFingerprint
       || dataset.coverageDeclaration !== "administrator_declared_not_independently_verified" || datasetFingerprint && dataset.fingerprint !== datasetFingerprint) throw new Error();
     sourceUrl(dataset.sourceUrl, true);
     if (dataset.derivedGeometrySha256 !== undefined && !/^[a-f0-9]{64}$/.test(dataset.derivedGeometrySha256)
+      || dataset.derivedCsvSha256 !== undefined && !/^[a-f0-9]{64}$/.test(dataset.derivedCsvSha256)
       || dataset.mappingSha256 !== undefined && !/^[a-f0-9]{64}$/.test(dataset.mappingSha256)
       || dataset.boundaryHashKind !== undefined && dataset.boundaryHashKind !== "original_file" || dataset.sourceHashKind !== undefined && dataset.sourceHashKind !== "input_csv"
-      || dataset.sourceTransform !== undefined && !["none", "utf8_conversion"].includes(dataset.sourceTransform)) throw new Error();
+      || dataset.sourceTransform !== undefined && !["none", "utf8_conversion"].includes(dataset.sourceTransform)
+      || dataset.sourceEncoding !== undefined && !["utf8", "cp949"].includes(dataset.sourceEncoding)
+      || dataset.sourceEncoding === "cp949" && dataset.sourceTransform === "utf8_conversion") throw new Error();
     if (!Array.isArray(dataset.coverageBBox) || dataset.coverageBBox.length !== 4) throw new Error();
     coordinate(dataset.coverageBBox[1], dataset.coverageBBox[0]); coordinate(dataset.coverageBBox[3], dataset.coverageBBox[2]);
     if (!(dataset.coverageBBox[0] < dataset.coverageBBox[2] && dataset.coverageBBox[1] < dataset.coverageBBox[3])) throw new Error();

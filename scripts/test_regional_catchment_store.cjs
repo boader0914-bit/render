@@ -57,7 +57,8 @@ test("concurrent requests share a single local job and immutable stored result",
 
 test("restart reuses result ID/calculation time without reopening the grid; saved GET is small and fast", async t => {
   const { service, dataDir } = await setup(t);
-  await configure(service); await service.request({ regionKey: "r1" }); await service.waitForIdle();
+  const source = fixture(); source.sourceEncoding = "cp949"; source.sourceTransform = "none";
+  await configure(service, source); await service.request({ regionKey: "r1" }); await service.waitForIdle();
   const first = await service.get({ regionKey: "r1" }); await service.close();
   await fs.rename(path.join(dataDir, "regional_catchment", "datasets"), path.join(dataDir, "held-source"));
   let calculations = 0;
@@ -66,6 +67,8 @@ test("restart reuses result ID/calculation time without reopening the grid; save
   const start = performance.now(), saved = await restarted.get({ regionKey: "r1" });
   assert.ok(performance.now() - start < 2000);
   assert.equal(saved.snapshot.resultId, first.snapshot.resultId); assert.equal(saved.snapshot.calculatedAt, first.snapshot.calculatedAt);
+  assert.equal(saved.snapshot.dataset.sourceEncoding, "cp949"); assert.equal(saved.datasets[0].sourceEncoding, "cp949");
+  assert.equal(saved.snapshot.dataset.sourceSha256, source.sourceSha256);
   assert.equal(calculations, 0); assert.equal(JSON.stringify(saved).includes('"cells":'), false);
 });
 

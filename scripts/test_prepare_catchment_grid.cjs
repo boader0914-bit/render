@@ -7,7 +7,7 @@ const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
-const { parseCSV, gridCenter, prepareDataset, parseArgs, MAX_CELLS, MAX_OUTPUT_BYTES } = require("./prepare_catchment_grid.cjs");
+const { parseCSV, decodeCSV, gridCenter, prepareDataset, parseArgs, MAX_CELLS, MAX_OUTPUT_BYTES } = require("./prepare_catchment_grid.cjs");
 const bytes = value => Buffer.from(typeof value === "string" ? value : JSON.stringify(value), "utf8");
 const digest = value => crypto.createHash("sha256").update(value).digest("hex");
 const point = (id, longitude = 127.1, latitude = 36.5) => ({ type: "Feature", properties: { grid_id: id }, geometry: { type: "Point", coordinates: [longitude, latitude] } });
@@ -104,7 +104,7 @@ test("holes, multipolygons, concave, self-crossing, unclosed and degenerate grid
 });
 
 test("explicit code mappings and headers are required, and no matching statistic is an error", () => {
-  const map = mapping(); delete map.csv.metricColumns.workers;
+  const map = mapping(); map.csv.metricColumns = {};
   expectedCode(() => prepareDataset(inputs({ map })), "PREPARE_INVALID_MAPPING");
   expectedCode(() => prepareDataset(inputs({ csv: "grid,year,people,firms,wrong\ngrid-a,2024,1,2,3\n" })), "PREPARE_MISSING_COLUMN");
   const long = mapping(); long.csv = { format: "long", idColumn: "grid", yearColumn: "year", metricColumn: "code", valueColumn: "value", metricCodes: { population: "p", establishments: "b", workers: "w" } };
@@ -116,6 +116,69 @@ test("explicit code mappings and headers are required, and no matching statistic
 test("unsupported legacy encoding cannot silently become replacement characters", () => {
   const input = inputs(); input.csvBytes = Buffer.from([0x67, 0x72, 0x69, 0x64, 0x2c, 0xbc, 0xad, 0xbf, 0xef]);
   expectedCode(() => prepareDataset(input), "PREPARE_NOT_UTF8");
+});
+
+test("explicit CP949 decoding supports a known extension that Node euc-kr can silently misdecode", () => {
+  assert.equal(decodeCSV(Buffer.from("8141b0a1", "hex"), "euc-kr").text, "갂가");
+  assert.equal(decodeCSV(Buffer.from("8141", "hex"), "euc-kr").sourceEncoding, "cp949");
+  for (const hex of ["81", "8120", "ffff", "ff", "80"]) expectedCode(() => decodeCSV(Buffer.from(hex, "hex"), "euc-kr"), "PREPARE_INVALID_CP949");
+});
+
+test("headerless CP949 four-column SGIS layout is mapped explicitly and retains raw and decoded hashes", () => {
+  const map = mapping();
+  map.dataset.industryClassification = "산업자료 미확보";
+  map.csv = { format: "long", encoding: "euc-kr", header: false, columns: ["BASE_YEAR", "GRID_CD", "STAT_CD", "VALUE"], idColumn: "GRID_CD", yearColumn: "BASE_YEAR", metricColumn: "STAT_CD", valueColumn: "VALUE", metricCodes: { population: "to_in_001" } };
+  // to_in_001 is confirmed in SGIS dataBook04; 8141 is the known CP949 encoding of 갂.
+  // Values 10 and 20 below are synthetic. Unavailable industry codes are not invented.
+  const rawCSV = Buffer.concat([Buffer.from("2024,"), Buffer.from("8141", "hex"), Buffer.from(",to_in_001,10\r\n2024,"), Buffer.from("b0a1", "hex"), Buffer.from(",to_in_001,20\r\n")]);
+  const input = inputs({ map, geojson: collection([point("갂"), point("가", 127.2, 36.6)]) }); input.csvBytes = rawCSV;
+  const { dataset, summary } = prepareDataset(input);
+  assert.equal(dataset.cells.find(cell => cell.id === "갂").population.value, 10);
+  assert.equal(dataset.cells.find(cell => cell.id === "가").population.value, 20);
+  assert.deepEqual(dataset.cells[0].establishments, { status: "not_acquired", value: null });
+  assert.equal(dataset.sourceSha256, digest(rawCSV)); assert.equal(dataset.sourceEncoding, "cp949"); assert.equal(dataset.sourceTransform, "none");
+  assert.equal(dataset.derivedCsvSha256, digest(Buffer.from("2024,갂,to_in_001,10\r\n2024,가,to_in_001,20\r\n", "utf8")));
+  assert.notEqual(dataset.sourceSha256, dataset.derivedCsvSha256); assert.equal(summary.statisticRows, 2);
+});
+
+test("a population-only mapping keeps unmapped business and worker metrics unknown rather than zero", () => {
+  const map = mapping(); map.dataset.industryClassification = "산업자료 미확보";
+  map.csv.metricColumns = { population: "people" };
+  const { dataset } = prepareDataset(inputs({ map, csv: "grid,year,people\ngrid-a,2024,10\ngrid-b,2024,0\n" }));
+  assert.equal(dataset.industryClassification, "산업자료 미확보");
+  for (const cell of dataset.cells) for (const metric of ["establishments", "workers"]) assert.deepEqual(cell[metric], { status: "not_acquired", value: null });
+  assert.deepEqual(dataset.cells[1].population, { status: "protected_zero", value: 0 });
+});
+
+test("one explicit long metric is sufficient; unused codes are counted and zero selected matches still fails", () => {
+  const map = mapping(); map.dataset.industryClassification = "산업자료 미확보";
+  map.csv = { format: "long", idColumn: "grid", yearColumn: "year", metricColumn: "code", valueColumn: "value", metricCodes: { population: "to_in_001" } };
+  const { dataset, summary } = prepareDataset(inputs({ map, csv: "grid,year,code,value\ngrid-a,2024,to_in_001,10\ngrid-a,2024,SYNTHETIC_UNSELECTED,9\n" }));
+  assert.equal(summary.selectedRows, 1); assert.equal(summary.unselectedRows, 1);
+  assert.deepEqual(dataset.cells[0].workers, { status: "not_acquired", value: null });
+  expectedCode(() => prepareDataset(inputs({ map, csv: "grid,year,code,value\ngrid-a,2024,SYNTHETIC_UNSELECTED,9\n" })), "PREPARE_NO_SELECTED_METRICS");
+  map.csv.metricCodes = {};
+  expectedCode(() => prepareDataset(inputs({ map })), "PREPARE_INVALID_MAPPING");
+});
+
+test("headerless UTF-8 requires ordered columns and neither layout nor encoding is guessed", () => {
+  const map = mapping(); map.csv.header = false; map.csv.columns = ["grid", "year", "people", "firms", "workers"];
+  const source = "grid-a,2024,10,2,3\ngrid-b,2024,20,4,6\n";
+  assert.equal(prepareDataset(inputs({ map, csv: source })).dataset.cells.length, 2);
+  expectedCode(() => prepareDataset(inputs({ csv: source })), "PREPARE_MISSING_COLUMN");
+  delete map.csv.columns;
+  expectedCode(() => prepareDataset(inputs({ map, csv: source })), "PREPARE_INVALID_MAPPING");
+  map.csv.columns = ["grid", "year", "people", "firms", "workers"]; map.csv.encoding = "cp949";
+  expectedCode(() => prepareDataset(inputs({ map, csv: source })), "PREPARE_INVALID_MAPPING");
+});
+
+test("headerless records keep duplicate, mixed-year and strict column-count protection", () => {
+  const map = mapping(); map.csv.header = false; map.csv.columns = ["grid", "year", "people", "firms", "workers"];
+  expectedCode(() => prepareDataset(inputs({ map, csv: "grid-a,2024,10,2,3\ngrid-a,2024,20,4,6\n" })), "PREPARE_DUPLICATE_STATISTIC");
+  expectedCode(() => prepareDataset(inputs({ map, csv: "grid-a,2023,10,2,3\n" })), "PREPARE_MIXED_YEAR");
+  expectedCode(() => prepareDataset(inputs({ map, csv: "grid-a,2024,10,2\n" })), "PREPARE_INVALID_CSV");
+  map.csv.encoding = "euc-kr"; map.dataset.sourceTransform = "utf8_conversion";
+  expectedCode(() => prepareDataset(inputs({ map, csv: "grid-a,2024,10,2,3\n" })), "PREPARE_INVALID_MAPPING");
 });
 
 test("complete coverage must be an explicit frame declaration and must contain all grid centers", () => {

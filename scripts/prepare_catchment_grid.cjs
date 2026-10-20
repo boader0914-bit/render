@@ -24,7 +24,22 @@ function decodeUTF8(bytes, label) {
 }
 function parseJSON(bytes, label) { try { return JSON.parse(decodeUTF8(bytes, label)); } catch (error) { if (error.code) throw error; fail("PREPARE_INVALID_JSON", label); } }
 
-function parseCSV(input, delimiter = ",") {
+function decodeCSV(bytes, encoding = "utf-8") {
+  if (encoding === "utf-8") return { sourceEncoding: "utf8", text: decodeUTF8(bytes, "CSV") };
+  if (encoding !== "euc-kr") fail("PREPARE_INVALID_MAPPING", "csv.encoding must be utf-8 or euc-kr (CP949)");
+  let cptable;
+  try { cptable = require("xlsx/dist/cpexcel.js"); }
+  catch { fail("PREPARE_CP949_DECODER_UNAVAILABLE", "Install the repository's existing xlsx dependency before reading CP949; no fallback decoder is used"); }
+  // Node/ICU TextDecoder('euc-kr') can silently misdecode CP949 extensions.
+  // Reuse the full codepage table already shipped with xlsx and reject lossy decoding.
+  let decoded, roundtrip;
+  try { decoded = cptable.utils.decode(949, bytes); roundtrip = Buffer.from(cptable.utils.encode(949, decoded)); }
+  catch { fail("PREPARE_INVALID_CP949", "CSV could not be decoded losslessly as CP949"); }
+  if (!roundtrip.equals(bytes) || /[\u0000\uFFFD]/.test(decoded)) fail("PREPARE_INVALID_CP949", "CSV contains invalid or non-roundtrippable CP949 bytes");
+  return { sourceEncoding: "cp949", text: decoded };
+}
+
+function parseCSV(input, delimiter = ",", options = {}) {
   if (typeof delimiter !== "string" || delimiter.length !== 1 || /["\r\n]/.test(delimiter)) fail("PREPARE_INVALID_MAPPING", "csv.delimiter must be one character");
   const source = input.replace(/^\uFEFF/, "");
   const rows = [], row = [];
@@ -51,11 +66,13 @@ function parseCSV(input, delimiter = ",") {
   }
   if (quoted) fail("PREPARE_INVALID_CSV", "Unterminated quoted field");
   if (value !== "" || row.length || fieldStarted || closed) finishRow();
-  if (!rows.length) fail("PREPARE_INVALID_CSV", "CSV has no header");
-  const headers = rows.shift();
+  if (!rows.length) fail("PREPARE_INVALID_CSV", "CSV is empty");
+  const hasHeader = options.header !== false;
+  const headers = hasHeader ? rows.shift() : options.columns;
+  if (!Array.isArray(headers) || !headers.length || headers.some(header => typeof header !== "string" || !header)) fail("PREPARE_INVALID_CSV", "Headerless CSV requires explicit non-empty column names");
   if (headers.some(header => !header) || new Set(headers).size !== headers.length) fail("PREPARE_INVALID_CSV", "Blank or duplicate headers");
   const records = rows.map((fields, index) => {
-    if (fields.length !== headers.length) fail("PREPARE_INVALID_CSV", `Row ${index + 2} has ${fields.length} fields; expected ${headers.length}`);
+    if (fields.length !== headers.length) fail("PREPARE_INVALID_CSV", `Record ${index + (hasHeader ? 2 : 1)} has ${fields.length} fields; expected ${headers.length}`);
     return Object.fromEntries(headers.map((header, column) => [header, fields[column]]));
   });
   return { headers, records };
@@ -119,20 +136,28 @@ function validateMapping(mapping) {
   text(geometry.gridIdField, "geometry.gridIdField");
   if (geometry.crs !== "EPSG:4326") fail("PREPARE_INVALID_CRS", "Reproject a separate copy to EPSG:4326 before preparation; changing its label is not a conversion");
   if (geometry.pointRole !== undefined && geometry.pointRole !== "grid_centroid") fail("PREPARE_INVALID_MAPPING", "pointRole must be grid_centroid");
-  ownKeys(csv, ["format", "idColumn", "yearColumn", "metricColumn", "valueColumn", "metricCodes", "metricColumns", "delimiter"], "csv");
+  ownKeys(csv, ["format", "idColumn", "yearColumn", "metricColumn", "valueColumn", "metricCodes", "metricColumns", "delimiter", "encoding", "header", "columns"], "csv");
+  if (csv.encoding !== undefined && !["utf-8", "euc-kr"].includes(csv.encoding)) fail("PREPARE_INVALID_MAPPING", "csv.encoding must be utf-8 or euc-kr (CP949)");
+  if (csv.header !== undefined && typeof csv.header !== "boolean") fail("PREPARE_INVALID_MAPPING", "csv.header must be boolean");
+  if (csv.header === false) {
+    if (!Array.isArray(csv.columns) || !csv.columns.length || csv.columns.some(column => typeof column !== "string" || !column.trim()) || new Set(csv.columns).size !== csv.columns.length) fail("PREPARE_INVALID_MAPPING", "header:false requires distinct, explicitly ordered csv.columns");
+  } else if (csv.columns !== undefined) fail("PREPARE_INVALID_MAPPING", "csv.columns is only valid with header:false");
+  if (csv.encoding === "euc-kr" && dataset.sourceTransform === "utf8_conversion") fail("PREPARE_INVALID_MAPPING", "CP949 original input must not be labelled as an existing UTF-8 conversion");
   text(csv.idColumn, "csv.idColumn"); text(csv.yearColumn, "csv.yearColumn");
   if (!["long", "wide"].includes(csv.format)) fail("PREPARE_INVALID_MAPPING", "csv.format must be long or wide");
   const columnNames = [csv.idColumn, csv.yearColumn];
   if (csv.format === "long") {
     text(csv.metricColumn, "csv.metricColumn"); text(csv.valueColumn, "csv.valueColumn");
     ownKeys(object(csv.metricCodes, "csv.metricCodes"), METRICS, "csv.metricCodes");
-    const codes = METRICS.map(metric => text(csv.metricCodes[metric], `csv.metricCodes.${metric}`));
-    if (new Set(codes).size !== METRICS.length) fail("PREPARE_INVALID_MAPPING", "Each metric code must be distinct");
+    const codes = Object.keys(csv.metricCodes).map(metric => text(csv.metricCodes[metric], `csv.metricCodes.${metric}`));
+    if (!codes.length || new Set(codes).size !== codes.length) fail("PREPARE_INVALID_MAPPING", "At least one explicit metric code is required and each code must be distinct");
     columnNames.push(csv.metricColumn, csv.valueColumn);
     if (csv.metricColumns !== undefined) fail("PREPARE_INVALID_MAPPING", "metricColumns is only valid for wide CSV");
   } else {
     ownKeys(object(csv.metricColumns, "csv.metricColumns"), METRICS, "csv.metricColumns");
-    METRICS.forEach(metric => columnNames.push(text(csv.metricColumns[metric], `csv.metricColumns.${metric}`)));
+    const selectedMetrics = Object.keys(csv.metricColumns);
+    if (!selectedMetrics.length) fail("PREPARE_INVALID_MAPPING", "At least one explicit metric column is required");
+    selectedMetrics.forEach(metric => columnNames.push(text(csv.metricColumns[metric], `csv.metricColumns.${metric}`)));
     for (const name of ["metricColumn", "valueColumn", "metricCodes"]) if (csv[name] !== undefined) fail("PREPARE_INVALID_MAPPING", `${name} is only valid for long CSV`);
   }
   if (new Set(columnNames).size !== columnNames.length) fail("PREPARE_INVALID_MAPPING", "Mapped CSV columns must be distinct");
@@ -171,14 +196,15 @@ function prepareDataset({ csvBytes, geojsonBytes, mappingBytes, boundarySourceBy
     for (const metric of METRICS) cell[metric] = { status: "not_acquired", value: null };
     cellsById.set(id, cell);
   }
-  const csv = parseCSV(decodeUTF8(csvBytes, "CSV"), mapping.csv.delimiter);
+  const decodedCSV = decodeCSV(csvBytes, mapping.csv.encoding);
+  const csv = parseCSV(decodedCSV.text, mapping.csv.delimiter, { header: mapping.csv.header, columns: mapping.csv.columns });
   const requiredColumns = [mapping.csv.idColumn, mapping.csv.yearColumn, ...(mapping.csv.format === "long" ? [mapping.csv.metricColumn, mapping.csv.valueColumn] : Object.values(mapping.csv.metricColumns))];
   for (const column of requiredColumns) if (!csv.headers.includes(column)) fail("PREPARE_MISSING_COLUMN", `CSV column not found: ${column}`);
   if (!csv.records.length) fail("PREPARE_INVALID_CSV", "CSV contains no statistic rows");
-  const seen = new Set(), codes = mapping.csv.format === "long" ? new Map(METRICS.map(metric => [mapping.csv.metricCodes[metric].trim(), metric])) : null;
+  const seen = new Set(), codes = mapping.csv.format === "long" ? new Map(Object.keys(mapping.csv.metricCodes).map(metric => [mapping.csv.metricCodes[metric].trim(), metric])) : null;
   let selectedRows = 0, unselectedRows = 0;
   csv.records.forEach((record, index) => {
-    const rowNumber = index + 2, id = record[mapping.csv.idColumn].trim();
+    const rowNumber = index + (mapping.csv.header === false ? 1 : 2), id = record[mapping.csv.idColumn].trim();
     if (!id || !cellsById.has(id)) fail("PREPARE_UNMATCHED_GRID", `Row ${rowNumber}: statistic grid has no geometry: ${id || "(empty)"}`);
     const year = record[mapping.csv.yearColumn].trim();
     if (year !== String(mapping.dataset.sourceYear)) fail("PREPARE_MIXED_YEAR", `Row ${rowNumber}: year ${year || "(empty)"} differs from ${mapping.dataset.sourceYear}`);
@@ -192,7 +218,7 @@ function prepareDataset({ csvBytes, geojsonBytes, mappingBytes, boundarySourceBy
       const metric = codes.get(record[mapping.csv.metricColumn].trim());
       if (!metric) { unselectedRows += 1; return; }
       assign(metric, record[mapping.csv.valueColumn]); selectedRows += 1;
-    } else { METRICS.forEach(metric => assign(metric, record[mapping.csv.metricColumns[metric]])); selectedRows += 1; }
+    } else { Object.keys(mapping.csv.metricColumns).forEach(metric => assign(metric, record[mapping.csv.metricColumns[metric]])); selectedRows += 1; }
   });
   if (!selectedRows) fail("PREPARE_NO_SELECTED_METRICS", "No CSV row matches the explicitly mapped metric codes");
   const coverageBBox = mapping.dataset.coverageBBox || [minLon, minLat, maxLon, maxLat];
@@ -204,7 +230,7 @@ function prepareDataset({ csvBytes, geojsonBytes, mappingBytes, boundarySourceBy
     id: mapping.dataset.id.trim(), provider: mapping.dataset.provider.trim(), sourceUrl: mapping.dataset.sourceUrl.trim(),
     sourceYear: mapping.dataset.sourceYear, boundaryYear: mapping.dataset.boundaryYear, gridSizeM: mapping.dataset.gridSizeM,
     crs: "EPSG:4326", sourceSha256: sha256(csvBytes), boundarySha256: sha256(boundarySourceBytes),
-    derivedGeometrySha256: sha256(geojsonBytes), mappingSha256: sha256(mappingBytes),
+    derivedGeometrySha256: sha256(geojsonBytes), mappingSha256: sha256(mappingBytes), derivedCsvSha256: sha256(Buffer.from(decodedCSV.text, "utf8")), sourceEncoding: decodedCSV.sourceEncoding,
     boundaryHashKind: "original_file", sourceHashKind: "input_csv", sourceTransform: mapping.dataset.sourceTransform || "none",
     industryClassification: mapping.dataset.industryClassification.trim(), coverageBBox, completeFrame: mapping.dataset.completeFrame === true,
     units: { population: "명", establishments: "개", workers: "명" },
@@ -216,7 +242,7 @@ function prepareDataset({ csvBytes, geojsonBytes, mappingBytes, boundarySourceBy
   const { fingerprint, ...dataset } = normalizeDataset(candidate);
   const json = JSON.stringify(dataset) + "\n";
   if (Buffer.byteLength(json) > MAX_OUTPUT_BYTES) fail("PREPARE_OUTPUT_TOO_LARGE", "Prepared bundle exceeds 8 MiB; split it into source frames without claiming complete coverage");
-  return { dataset, json, summary: { cells: dataset.cells.length, statisticRows: csv.records.length, selectedRows, unselectedRows, outputBytes: Buffer.byteLength(json), sourceSha256: dataset.sourceSha256, boundarySha256: dataset.boundarySha256, derivedGeometrySha256: dataset.derivedGeometrySha256, completeFrame: dataset.completeFrame, coverageDeclared: Boolean(mapping.dataset.coverageBBox) } };
+  return { dataset, json, summary: { cells: dataset.cells.length, statisticRows: csv.records.length, selectedRows, unselectedRows, outputBytes: Buffer.byteLength(json), sourceSha256: dataset.sourceSha256, sourceEncoding: dataset.sourceEncoding, derivedCsvSha256: dataset.derivedCsvSha256, boundarySha256: dataset.boundarySha256, derivedGeometrySha256: dataset.derivedGeometrySha256, completeFrame: dataset.completeFrame, coverageDeclared: Boolean(mapping.dataset.coverageBBox) } };
 }
 
 function parseArgs(argv) {
@@ -249,4 +275,4 @@ function main(argv = process.argv.slice(2)) {
   process.stdout.write(JSON.stringify({ output: args.out, ...result.summary }) + "\n");
 }
 if (require.main === module) { try { main(); } catch (error) { process.stderr.write(`${error.message}\n`); process.exitCode = 1; } }
-module.exports = { parseCSV, gridCenter, validateMapping, prepareDataset, parseArgs, main, MAX_CELLS, MAX_OUTPUT_BYTES };
+module.exports = { parseCSV, decodeCSV, gridCenter, validateMapping, prepareDataset, parseArgs, main, MAX_CELLS, MAX_OUTPUT_BYTES };

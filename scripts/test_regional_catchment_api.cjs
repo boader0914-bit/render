@@ -49,6 +49,7 @@ async function main() {
   const observed = value => ({ status: "observed_public", value });
   const dataset = { id: "synthetic-grid-2024-1km", provider: "[모의] SGIS 개발 검수 자료", sourceUrl: center.sourceUrl,
     sourceYear: 2024, boundaryYear: 2025, gridSizeM: 1000, crs: "EPSG:4326", sourceSha256: "a".repeat(64), boundarySha256: "b".repeat(64),
+    sourceEncoding: "cp949", sourceTransform: "none", derivedCsvSha256: "c".repeat(64),
     industryClassification: "[모의] KSIC11 전체산업", units: { population: "명", establishments: "개", workers: "명" },
     coverageBBox: [125, 33, 130, 38], completeFrame: true, cells: [
       { id: "synthetic-inner", latitude: 35.4, longitude: 127.8, population: observed(1000), establishments: observed(10), workers: observed(30) },
@@ -81,6 +82,9 @@ async function main() {
     let result;
     for (let n = 0; n < 160; n++) { result = (await request(query, cookie)).data; if (result.snapshot && !["queued", "running"].includes(result.job?.status)) break; await wait(25); }
     assert.ok(result.snapshot); assert.equal(result.snapshot.status, "partial");
+    assert.equal(result.snapshot.dataset.sourceEncoding, "cp949");
+    assert.equal(result.snapshot.dataset.sourceSha256, dataset.sourceSha256);
+    assert.equal(result.snapshot.dataset.derivedCsvSha256, dataset.derivedCsvSha256);
     const [inner, outer, total] = result.snapshot.rings;
     assert.equal(inner.metrics.population.value, null); assert.equal(inner.metrics.population.publishedSum, 1000);
     assert.equal(inner.metrics.population.protectedZeroCells, 1); assert.equal(outer.metrics.population.value, 2000);
@@ -96,6 +100,8 @@ async function main() {
     await stop(); await start(); cookie = await login();
     const restarted = await request(query, cookie); assert.equal(restarted.data.snapshot.resultId, original.resultId);
     assert.equal(restarted.data.snapshot.calculatedAt, original.calculatedAt);
+    assert.equal(restarted.data.snapshot.dataset.sourceEncoding, "cp949");
+    assert.equal(restarted.data.snapshot.dataset.derivedCsvSha256, dataset.derivedCsvSha256);
     assert.deepEqual(await inventory(), beforeReads, "Restarted read reuses the immutable result");
     assert.deepEqual(JSON.parse(await fs.readFile(audit, "utf8")), [], "No outbound provider calls");
     console.log(JSON.stringify({ status: "passed", environment: "isolated full app with clearly synthetic cells", protectedValuesPreserved: true,

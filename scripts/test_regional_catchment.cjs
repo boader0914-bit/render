@@ -99,6 +99,24 @@ test("canonical fingerprint ignores row ordering, changes with coordinates/sourc
   assert.notEqual(first.fingerprint, normalizeDataset(changed).fingerprint);
 });
 
+test("source byte encoding is explicit provenance, retained and fingerprinted without replacing source SHA", async () => {
+  const cp949 = fixture(); cp949.sourceEncoding = "cp949"; cp949.sourceTransform = "none"; cp949.derivedCsvSha256 = "c".repeat(64);
+  const normalized = normalizeDataset(cp949);
+  assert.equal(normalized.sourceSha256, cp949.sourceSha256); assert.equal(normalized.sourceEncoding, "cp949");
+  const utf8 = { ...cp949, sourceEncoding: "utf8", sourceTransform: "utf8_conversion" };
+  assert.notEqual(normalized.fingerprint, normalizeDataset(utf8).fingerprint);
+  const result = await calculate(cp949);
+  assert.equal(result.dataset.sourceEncoding, "cp949"); assert.equal(result.dataset.sourceTransform, "none");
+  assert.equal(result.dataset.derivedCsvSha256, "c".repeat(64));
+  assert.equal(validateCatchmentResult(result, { requireResultId: false }), result);
+  for (const sourceEncoding of ["euc-kr", "UTF-8", "unknown"]) assert.throws(() => normalizeDataset({ ...cp949, sourceEncoding }), { code: "CATCHMENT_INVALID_DATASET" });
+  assert.throws(() => normalizeDataset({ ...cp949, sourceTransform: "utf8_conversion" }), { code: "CATCHMENT_INVALID_DATASET" });
+  assert.throws(() => normalizeDataset({ ...cp949, derivedCsvSha256: "not-a-sha" }), { code: "CATCHMENT_INVALID_DATASET" });
+  assert.notEqual(normalized.fingerprint, normalizeDataset({ ...cp949, derivedCsvSha256: "d".repeat(64) }).fingerprint);
+  const malformed = structuredClone(result); malformed.dataset.sourceEncoding = "unverified";
+  assert.throws(() => validateCatchmentResult(malformed, { requireResultId: false }), { code: "CATCHMENT_RESULT_INVALID" });
+});
+
 test("calculation yields during grid scan and retains classification/provenance", async () => {
   const dataset = normalizeDataset(fixture()); let yielded = false;
   setImmediate(() => { yielded = true; });
