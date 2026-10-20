@@ -8,7 +8,7 @@ const http = require("node:http");
 const crypto = require("node:crypto");
 const { EventEmitter } = require("node:events");
 const { PassThrough } = require("node:stream");
-const { workerOptions, runWorker, runJob, stageReader } = require("./collector_worker.cjs");
+const { workerOptions, runWorker, runWorkerService, runJob, stageReader, claimRetryDelay } = require("./collector_worker.cjs");
 
 const cases = [];
 function test(name, run) { cases.push({ name, run }); }
@@ -528,6 +528,113 @@ test("insufficient workspace reserve prevents a child process and retains older 
     assert.equal(f.state.spawned.length, 0);
     assert.equal(await fs.readFile(existing, "utf8"), "{}");
   } finally { await f.close(); }
+});
+
+async function until(predicate) {
+  for (let attempt = 0; attempt < 500; attempt++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 2)); }
+  assert.fail("worker condition did not arrive");
+}
+
+test("idle claim 502 outages back off with one logical request ID then recover and spawn exactly once", async () => {
+  let attempts = 0; const ids = [], waits = [];
+  const f = await fixture({ route: ({ url, json, res }) => {
+    if (!url.pathname.endsWith("/claim")) return false;
+    ids.push(json.claimRequestId); if (++attempts <= 3) { reply(res, { error: "internal secret must not be logged" }, 502); return true; } return false;
+  }, options: { claimRetryBaseMs: 5, claimRetryMaxMs: 12, random: () => 0.5, sleepImpl: async ms => { waits.push(ms); } } });
+  try {
+    const result = await runWorker(f.options); assert.equal(result.jobs, 1); assert.equal(f.state.spawned.length, 1); assert.equal(attempts, 4);
+    assert.equal(new Set(ids).size, 1); assert.match(ids[0], /^[a-f0-9-]{36}$/); assert.deepEqual(waits, [5, 10, 12]);
+    assert.equal(f.state.events.filter(row => row.event === "collector_claim_retry").length, 3);
+    assert.equal(f.state.events.filter(row => row.event === "collector_claim_recovered").length, 1);
+    assert.equal(JSON.stringify(f.state.events).includes("secret"), false); assert.equal(JSON.stringify(f.state.events).includes(TOKEN), false);
+  } finally { await f.close(); }
+});
+
+test("network and request timeout during idle claim recover without a process restart or provider retry", async () => {
+  const f = await fixture({ options: { requestTimeoutMs: 20, claimRetryBaseMs: 1, claimRetryMaxMs: 2, sleepImpl: async () => {}, random: () => 0.5 } });
+  const normal = f.options.fetchImpl; let claims = 0;
+  f.options.fetchImpl = async (url, options) => {
+    if (url.endsWith("/claim")) {
+      claims++;
+      if (claims === 1) throw new Error("secret request URL and token must stay private");
+      if (claims === 2) return new Promise((resolve, reject) => options.signal.addEventListener("abort", () => reject(new Error("timeout")), { once: true }));
+    }
+    return normal(url, options);
+  };
+  try {
+    assert.equal((await runWorker(f.options)).jobs, 1); assert.equal(claims, 3); assert.equal(f.state.spawned.length, 1);
+    assert.equal(JSON.stringify(f.state.events).includes("secret request"), false);
+  } finally { await f.close(); }
+});
+
+test("a lost claim ACK retries the same nonce and never executes the accepted job twice", async () => {
+  let acceptedId = null, requests = 0;
+  const f = await fixture({ route: ({ url, json, req, res }) => {
+    if (!url.pathname.endsWith("/claim")) return false;
+    requests++; if (acceptedId === null) { acceptedId = json.claimRequestId; req.socket.destroy(); return true; }
+    assert.equal(json.claimRequestId, acceptedId); reply(res, { job: baseJob() }); return true;
+  }, options: { claimRetryBaseMs: 1, claimRetryMaxMs: 1, sleepImpl: async () => {} } });
+  try { assert.equal((await runWorker(f.options)).jobs, 1); assert.equal(requests, 2); assert.equal(f.state.spawned.length, 1); }
+  finally { await f.close(); }
+});
+
+test("shutdown aborts an idle backoff promptly and does not claim again", async () => {
+  const controller = new AbortController(); let waiting = false;
+  const f = await fixture({ route: ({ url, res }) => { if (!url.pathname.endsWith("/claim")) return false; reply(res, {}, 503); return true; },
+    options: { signal: controller.signal, sleepImpl: (_ms, signal) => new Promise((resolve, reject) => { waiting = true; signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true }); }) } });
+  try {
+    const run = runWorker(f.options); await until(() => waiting); controller.abort(); const result = await run;
+    assert.equal(result.stopped, true); assert.equal(f.state.requests.filter(row => row.path.endsWith("/claim")).length, 1); assert.equal(f.state.spawned.length, 0);
+  } finally { await f.close(); }
+});
+
+test("auth and malformed successful responses quarantine the service without repeated claims", async () => {
+  for (const type of ["auth", "malformed", "shape"]) {
+    const controller = new AbortController();
+    const f = await fixture({ route: ({ url, res }) => {
+      if (!url.pathname.endsWith("/claim")) return false;
+      if (type === "auth") reply(res, { error: "sensitive unauthorized body" }, 401);
+      else if (type === "malformed") { res.writeHead(200); res.end("sensitive invalid response"); }
+      else reply(res, { unexpected: true }); return true;
+    }, options: { signal: controller.signal, maxJobs: Infinity } });
+    try {
+      const running = runWorkerService(f.options); await until(() => f.state.events.some(row => row.event === "collector_worker_quarantined"));
+      await new Promise(resolve => setTimeout(resolve, 20));
+      assert.equal(f.state.requests.filter(row => row.path.endsWith("/claim")).length, 1); assert.equal(f.state.spawned.length, 0);
+      assert.equal(f.state.events.find(row => row.event === "collector_worker_quarantined").code, type === "auth" ? "COLLECTOR_CLAIM_AUTH_FAILED" : "COLLECTOR_RESPONSE_INVALID");
+      assert.equal(JSON.stringify(f.state.events).includes("sensitive"), false); controller.abort(); assert.equal((await running).quarantined, true);
+    } finally { controller.abort(); await f.close(); }
+  }
+});
+
+test("an unresolved terminal ACK quarantines a live service and never reclaims or discards retained artifacts", async () => {
+  const controller = new AbortController();
+  const f = await fixture({ options: { maxJobs: Infinity, signal: controller.signal, heartbeatTimeoutMs: 30 },
+    heartbeat: ({ res, state }) => { if (state.heartbeats === 1) reply(res, { cancelled: false }); }, fail: ({ res }) => reply(res, { ok: false }, 503), crawl: async () => {} });
+  try {
+    const running = runWorkerService(f.options); await until(() => f.state.events.some(row => row.event === "collector_worker_quarantined"));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(f.state.events.find(row => row.event === "collector_worker_quarantined").code, "COLLECTOR_TERMINAL_ACK_REQUIRED");
+    assert.equal(f.state.spawned.length, 1); assert.equal(f.state.claims, 1); assert.deepEqual(f.state.kills, ["SIGTERM"]);
+    assert.ok((await fs.readdir(f.options.workDir)).some(name => name.startsWith("job-")));
+    controller.abort(); await running;
+  } finally { controller.abort(); await f.close(); }
+});
+
+test("acknowledged provider protection stays alive in quarantine without running another job", async () => {
+  const controller = new AbortController(), events = []; let executions = 0;
+  const running = runWorkerService({ enabled: true, signal: controller.signal, logger: event => events.push(event) }, { runner: async () => {
+    executions++; return { halted: true, code: "COLLECTOR_PROVIDER_BLOCKED", jobs: 1 };
+  } });
+  await until(() => events.some(row => row.event === "collector_worker_quarantined")); await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(executions, 1); assert.equal(events[0].code, "COLLECTOR_PROVIDER_BLOCKED"); controller.abort(); assert.equal((await running).quarantined, true);
+});
+
+test("claim backoff jitter is capped and finite even after a long outage", async () => {
+  const options = { claimRetryBaseMs: 5000, claimRetryMaxMs: 60000, random: () => 1 };
+  assert.equal(claimRetryDelay(options, 1), 6000); assert.equal(claimRetryDelay(options, 100000), 60000);
+  assert.ok(claimRetryDelay({ ...options, random: () => 0 }, 1) >= 4000);
+  assert.ok(Number.isFinite(claimRetryDelay({ ...options, random: () => NaN }, 10)));
 });
 
 (async () => {

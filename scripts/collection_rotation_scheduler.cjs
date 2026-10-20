@@ -4,6 +4,7 @@
 // source observations, company records, or an existing individual worker schedule.
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
 const { sanitizeCollectionQuality } = require("./lib/collection_diagnostics.cjs");
 
@@ -33,6 +34,9 @@ function addDays(day, count) {
 }
 function scheduledAt(day, time) { return new Date(`${day}T${time}:00+09:00`).toISOString(); }
 function safeCode(value, fallback = "ROTATION_OPERATION_FAILED") { return typeof value === "string" && /^[A-Za-z][A-Za-z0-9_]{1,100}$/.test(value) ? value : fallback; }
+const reconciliationHash = value => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const RECONCILE_CONDITIONS = ["searchMode", "checkIn", "checkOut", "bookingRangeDays", "bookingRangePlaceLimit", "adults",
+  "collectionMode", "collectionPurpose", "productMode", "dayUseMode", "detailRankRanges"];
 function rankRange(value) {
   if (typeof value !== "string" || value.length > 150 || !/^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/.test(value)) throw fault("ROTATION_COLLECTION_INVALID");
   let max = 0;
@@ -194,6 +198,9 @@ function createCollectionRotationScheduler(options = {}) {
         worker_key TEXT NOT NULL, keyword TEXT NOT NULL, scheduled_at TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT, finished_at TEXT,
         error_code TEXT, result_json TEXT, receipt_json TEXT, UNIQUE(day,slot_index), UNIQUE(day,keyword));
       CREATE TABLE IF NOT EXISTS rotation_events (id INTEGER PRIMARY KEY, at TEXT NOT NULL, kind TEXT NOT NULL, code TEXT, item_id TEXT);`);
+    db.exec(`CREATE TABLE IF NOT EXISTS rotation_reconciliations (slot_id TEXT PRIMARY KEY REFERENCES rotation_slots(id), run_id TEXT NOT NULL,
+      expected_version TEXT NOT NULL, applied_version TEXT NOT NULL, manifest_sha256 TEXT NOT NULL, previous_row_json TEXT NOT NULL,
+      proof_json TEXT NOT NULL, reconciled_at TEXT NOT NULL);`);
     if (!state()) transaction(() => {
       const config = defaultConfig(instant());
       const at = instant().toISOString();
@@ -447,6 +454,135 @@ function createCollectionRotationScheduler(options = {}) {
     const rows = db.prepare("SELECT * FROM rotation_slots WHERE day>=? AND day<=? ORDER BY day DESC,slot_index LIMIT ? OFFSET ?").all(...bounds, limit, offset);
     return { items: rows.map(rowItem), limit, offset, total, hasMore: offset + rows.length < total, from: query.from || null, to: query.to || null };
   }
+  function reconciliationSlot(slotId) {
+    const row = db.prepare("SELECT * FROM rotation_slots WHERE id=?").get(slotId);
+    if (!row) throw fault("ROTATION_RECONCILE_SLOT_NOT_FOUND", 404);
+    const snapshot = db.prepare("SELECT config_json,revision FROM rotation_days WHERE day=?").get(row.day);
+    if (!snapshot) throw fault("ROTATION_RECONCILE_SNAPSHOT_MISSING", 409);
+    return { row, snapshot, version: reconciliationHash({ row, config: snapshot.config_json, revision: snapshot.revision }) };
+  }
+  function reconciliationIdle() {
+    if (activeId || ticking) throw fault("ROTATION_RECONCILE_EXECUTION_ACTIVE", 409);
+    if (configOf().enabled) throw fault("ROTATION_RECONCILE_PLAN_ACTIVE", 409);
+  }
+  async function reconcileCompleted(input = {}) {
+    initialize();
+    keysOnly(input, ["slotId", "runId", "dryRun", "expectedVersion", "reviewLegacy"], "ROTATION_RECONCILE_INPUT_INVALID");
+    const { slotId, runId, expectedVersion } = input, dryRun = input.dryRun === undefined ? true : input.dryRun, reviewLegacy = input.reviewLegacy === true;
+    if (typeof slotId !== "string" || !/^rotation_\d{4}-\d{2}-\d{2}_\d{1,3}$/.test(slotId)
+      || typeof runId !== "string" || !/^[A-Za-z0-9_-]{1,240}$/.test(runId) || typeof dryRun !== "boolean"
+      || input.reviewLegacy !== undefined && typeof input.reviewLegacy !== "boolean"
+      || expectedVersion !== undefined && (typeof expectedVersion !== "string" || !/^[a-f0-9]{64}$/.test(expectedVersion))) throw fault("ROTATION_RECONCILE_INPUT_INVALID");
+    reconciliationIdle();
+    const original = reconciliationSlot(slotId), { row, snapshot } = original;
+    const prior = db.prepare("SELECT * FROM rotation_reconciliations WHERE slot_id=?").get(slotId);
+    if (prior) {
+      if (prior.run_id !== runId || row.status !== "complete" || original.version !== prior.applied_version
+        || expectedVersion !== undefined && expectedVersion !== prior.expected_version && expectedVersion !== prior.applied_version) throw fault("ROTATION_RECONCILE_ALREADY_DIFFERENT", 409);
+      return { dryRun, applied: false, alreadyApplied: true, expectedVersion: prior.expected_version, evidenceRechecked: false,
+        verifiedAt: prior.reconciled_at, manifestSha256: prior.manifest_sha256, item: rowItem(row), planRemainsDisabled: true };
+    }
+    if (!["uncertain", "running"].includes(row.status)) throw fault("ROTATION_RECONCILE_STATUS_INELIGIBLE", 409);
+    if (!row.started_at || !Number.isFinite(Date.parse(row.started_at)) || dateKey(row.started_at) !== row.day) throw fault("ROTATION_RECONCILE_ACCEPTANCE_INVALID", 409);
+    let receipt = null;
+    try { receipt = row.receipt_json ? JSON.parse(row.receipt_json) : null; } catch { throw fault("ROTATION_RECONCILE_RECEIPT_INVALID", 409); }
+    if (!object(receipt) || receipt.id !== row.id || receipt.workerKey !== row.worker_key || receipt.keyword !== row.keyword || receipt.day !== row.day
+      || receipt.acceptedAt !== row.started_at) throw fault("ROTATION_RECONCILE_RECEIPT_INVALID", 409);
+    if (!dryRun && !expectedVersion) throw fault("ROTATION_RECONCILE_PREVIEW_REQUIRED", 409);
+    if (typeof options.verifyPersistedResult !== "function") throw fault("ROTATION_RECONCILE_VERIFIER_REQUIRED", 503);
+    const payload = payloadFor(JSON.parse(snapshot.config_json), rowItem(row));
+    const conditions = Object.fromEntries(RECONCILE_CONDITIONS.map(key => [key, payload[key]]));
+    const expected = { runId, slotId, workerKey: row.worker_key, keyword: row.keyword, day: row.day, trigger: "scheduled", acceptedAt: row.started_at,
+      receiptSha256: crypto.createHash("sha256").update(row.receipt_json).digest("hex"),
+      conditions, identities: { scheduleOccurrenceId: receipt.scheduleOccurrenceId || receipt.id,
+        ...(receipt.jobId ? { jobId: receipt.jobId } : {}),
+        ...(receipt.runTokenSha256 ? { runTokenSha256: receipt.runTokenSha256 } : receipt.runToken ? { runTokenSha256: crypto.createHash("sha256").update(receipt.runToken).digest("hex") } : {}) } };
+    // This dependency must read saved server-owned manifests/artifacts itself.
+    // An HTTP caller's claimed manifest/conditions are never accepted here.
+    const verified = await options.verifyPersistedResult({ runId, reviewLegacy, expected: clone(expected), slot: clone(rowItem(row)), receipt: clone(receipt) });
+    if (!object(verified) || verified.verified !== true || verified.runId !== runId || verified.workerKey !== row.worker_key
+      || verified.keyword !== row.keyword || verified.trigger !== "scheduled" || verified.nonEmpty !== true
+      || verified.collectionQuality?.status !== "complete" || verified.collectionQuality?.blockedReason || verified.collectionQuality?.failure
+      || verified.blocked === true || verified.partial === true || verified.reused === true || verified.reusedResult === true || verified.cacheHit === true
+      || verified.status !== undefined && verified.status !== "complete") throw fault("ROTATION_RECONCILE_RESULT_NOT_VERIFIED_COMPLETE", 409);
+    const quality = sanitizeCollectionQuality(verified.collectionQuality);
+    if (quality?.reason && quality.reason !== "manifest_checks_passed") throw fault("ROTATION_RECONCILE_RESULT_NOT_VERIFIED_COMPLETE", 409);
+    for (const key of ["naverOtaBlocked", "naverOtaFailed", "naverScheduleFailed", "naverScheduleBlocked"]) {
+      if (Number(quality?.counts?.[key]) > 0) throw fault("ROTATION_RECONCILE_RESULT_NOT_VERIFIED_COMPLETE", 409);
+    }
+    if (!object(verified.conditions) || RECONCILE_CONDITIONS.some(key => verified.conditions[key] !== conditions[key])) throw fault("ROTATION_RECONCILE_CONDITIONS_MISMATCH", 409);
+    const proof = verified.proof, bindings = [];
+    if (!object(proof) || typeof proof.manifestSha256 !== "string" || !/^[a-f0-9]{64}$/.test(proof.manifestSha256)) throw fault("ROTATION_RECONCILE_PROOF_MISSING", 409);
+    for (const key of ["scheduleOccurrenceId", "jobId", "runTokenSha256"]) {
+      const wanted = expected.identities[key], actual = proof[key];
+      if (actual !== undefined && actual !== null && actual !== "") {
+        if (typeof actual !== "string" || key === "jobId" && !/^[A-Za-z0-9_-]{1,240}$/.test(actual) || key === "runTokenSha256" && !/^[a-f0-9]{64}$/.test(actual)
+          || typeof wanted === "string" && actual !== wanted) throw fault("ROTATION_RECONCILE_IDENTITY_CONFLICT", 409);
+        if (typeof wanted === "string") bindings.push(key);
+      }
+    }
+    const began = Date.parse(verified.executionStartedAt), finished = Date.parse(verified.finishedAt);
+    if (typeof verified.executionStartedAt !== "string" || !verified.executionStartedAt.includes("T") || typeof verified.finishedAt !== "string" || !verified.finishedAt.includes("T")
+      || !Number.isFinite(began) || !Number.isFinite(finished) || began < Date.parse(row.started_at) || finished < began || finished > instant().getTime()
+      || dateKey(began) !== row.day) throw fault("ROTATION_RECONCILE_OBSERVATION_TIME_MISMATCH", 409);
+    let bindingMode = "persisted_execution_identity", legacyReview = null;
+    if (!bindings.length) {
+      const legacy = proof.legacyReview;
+      if (!reviewLegacy || !object(legacy) || legacy.slotId !== slotId || legacy.acceptedAt !== row.started_at
+        || legacy.receiptSha256 !== expected.receiptSha256 || legacy.uniqueCandidateCount !== 1 || legacy.method !== "administrator-reviewed-legacy-job"
+        || typeof proof.jobId !== "string" || !/^[A-Za-z0-9_-]{1,240}$/.test(proof.jobId)
+        || !/^[a-f0-9]{64}$/.test(proof.runTokenSha256 || "")
+        || began - Date.parse(row.started_at) > 5 * 60000) throw fault("ROTATION_RECONCILE_STRONG_ID_REQUIRED", 409);
+      bindingMode = "administrator_reviewed_legacy";
+      bindings.push("administrator-reviewed-legacy-job");
+      legacyReview = { method: legacy.method, slotId, acceptedAt: row.started_at, receiptSha256: expected.receiptSha256,
+        uniqueCandidateCount: 1, jobId: proof.jobId, runTokenSha256: proof.runTokenSha256,
+        manifestHadScheduleOccurrenceId: false };
+    }
+    const checked = reconciliationSlot(slotId);
+    reconciliationIdle();
+    if (checked.version !== original.version) throw fault("ROTATION_RECONCILE_STATE_CHANGED", 409);
+    const verifiedAt = instant().toISOString();
+    const artifactProof = {};
+    for (const key of ["jobReceiptSha256", "descriptorsSha256"]) {
+      if (proof[key] !== undefined) {
+        if (typeof proof[key] !== "string" || !/^[a-f0-9]{64}$/.test(proof[key])) throw fault("ROTATION_RECONCILE_PROOF_MISSING", 409);
+        artifactProof[key] = proof[key];
+      }
+    }
+    if (proof.verifiedFiles !== undefined) {
+      if (!Number.isSafeInteger(proof.verifiedFiles) || proof.verifiedFiles < 1 || proof.verifiedFiles > 50000) throw fault("ROTATION_RECONCILE_PROOF_MISSING", 409);
+      artifactProof.verifiedFiles = proof.verifiedFiles;
+    }
+    const proofBasis = { manifestSha256: proof.manifestSha256, ...artifactProof, bindings, bindingMode,
+      ...(proof.jobId ? { jobId: proof.jobId } : {}), ...(proof.runTokenSha256 ? { runTokenSha256: proof.runTokenSha256 } : {}),
+      ...(legacyReview ? { legacyReview } : {}), runId, workerKey: row.worker_key, keyword: row.keyword,
+      day: row.day, trigger: "scheduled", conditions, executionStartedAt: new Date(began).toISOString(), finishedAt: new Date(finished).toISOString() };
+    const previewVersion = reconciliationHash({ slotVersion: original.version, proof: proofBasis });
+    if (expectedVersion && expectedVersion !== previewVersion) throw fault("ROTATION_RECONCILE_PROOF_CHANGED", 409);
+    const proofRecord = { ...proofBasis, verifiedAt };
+    if (dryRun) return { dryRun: true, applied: false, alreadyApplied: false, expectedVersion: previewVersion, evidenceRechecked: true,
+      proof: proofRecord, item: rowItem(row), planRemainsDisabled: true };
+    const bytes = await getFreeBytes();
+    if (!Number.isFinite(bytes) || bytes <= MIN_FREE_BYTES) throw fault("ROTATION_DISK_SPACE_UNAVAILABLE", 409);
+    const result = { status: "complete", runId, collectionQuality: quality, errorCode: null, executionStartedAt: new Date(began).toISOString(),
+      observedAt: new Date(began).toISOString(), durationMs: finished - Date.parse(row.started_at), executionDurationMs: finished - began,
+      reconciliation: { verifiedAt, manifestSha256: proof.manifestSha256, bindings, bindingMode } };
+    transaction(() => {
+      reconciliationIdle();
+      if (reconciliationSlot(slotId).version !== original.version) throw fault("ROTATION_RECONCILE_STATE_CHANGED", 409);
+      const changed = db.prepare(`UPDATE rotation_slots SET status='complete',finished_at=?,error_code=NULL,result_json=?
+        WHERE id=? AND status=? AND started_at IS ? AND finished_at IS ? AND error_code IS ? AND result_json IS ? AND receipt_json IS ?`)
+        .run(new Date(finished).toISOString(), JSON.stringify(result), row.id, row.status, row.started_at, row.finished_at, row.error_code, row.result_json, row.receipt_json);
+      if (changed.changes !== 1) throw fault("ROTATION_RECONCILE_STATE_CHANGED", 409);
+      const appliedVersion = reconciliationSlot(slotId).version;
+      db.prepare("INSERT INTO rotation_reconciliations(slot_id,run_id,expected_version,applied_version,manifest_sha256,previous_row_json,proof_json,reconciled_at) VALUES(?,?,?,?,?,?,?,?)")
+        .run(slotId, runId, previewVersion, appliedVersion, proof.manifestSha256, JSON.stringify(row), JSON.stringify(proofRecord), verifiedAt);
+      event("reconciled_complete", "ROTATION_VERIFIED_PERSISTED_RESULT", slotId);
+    });
+    return { dryRun: false, applied: true, alreadyApplied: false, expectedVersion: previewVersion, evidenceRechecked: true,
+      verifiedAt, proof: proofRecord, item: rowItem(reconciliationSlot(slotId).row), planRemainsDisabled: true };
+  }
   function status() {
     initialize();
     const record = state();
@@ -474,7 +610,7 @@ function createCollectionRotationScheduler(options = {}) {
   function stop() { stopped = true; epoch += 1; if (timer) clearIntervalImpl(timer); timer = null; }
   function close() { stop(); if (activeId || ticking) throw fault("ROTATION_EXECUTION_ACTIVE", 409); if (db) { db.close(); db = null; } }
   function isEnabled() { initialize(); return configOf().enabled && !stopped; }
-  return { status, preview, updateConfig, setEnabled, tick, start, stop, history, close, isEnabled, storePath };
+  return { status, preview, updateConfig, setEnabled, tick, start, stop, history, close, isEnabled, reconcileCompleted, storePath };
 }
 
 module.exports = { createCollectionRotationScheduler, defaultConfig, validateConfig, planDays, payloadFor, resultFor, errorResult,

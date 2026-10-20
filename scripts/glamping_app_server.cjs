@@ -58,6 +58,7 @@ const { dispatchCollector, createHistoricalBookingContext } = require("./collect
 const { createCollectionReuse, serialExecutor } = require("./collection_reuse.cjs");
 const { createKeywordWorkerScheduler } = require("./keyword_worker_scheduler.cjs");
 const { createCollectionRotationScheduler } = require("./collection_rotation_scheduler.cjs");
+const { createRotationResultVerifier } = require("./lib/rotation_result_verifier.cjs");
 const { createCollectorRequests } = require("./collector_requests.cjs");
 const { createCollectorRetirementPolicy } = require("./lib/collector_retirement.cjs");
 const { createOperatingWebCollector } = require("./operating_web_collector.cjs");
@@ -714,6 +715,7 @@ const keywordWorkerSchedulers = Object.fromEntries(["web", "manual", "scheduled"
 const scheduleMutation = serialExecutor();
 const collectionRotationScheduler = createCollectionRotationScheduler({
   dataDir: DATA_DIR,
+  verifyPersistedResult: createRotationResultVerifier({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR }),
   executeSlot: payload => runCrawler({...payload, sourceRole:USER_ROLES.admin, collectionSource:"admin_search", rotationCollection:true}),
   getWorkerState: async workerKey => {
     try {
@@ -18572,7 +18574,9 @@ async function runCrawlerInternal(payload) {
       workerKey: payload.workerKey || "manual", trigger: payload.trigger || "manual",
       collectionMode: plan.collectionMode, collectionPurpose: plan.collectionPurpose,
       productMode: plan.productMode, dayUseMode:plan.dayUseMode, detailRankRanges: plan.detailRankRanges,
-      bookingRangeDays: plan.bookingRangeDays, scheduledCollection: payload.scheduledCollection === true
+      bookingRangeDays: plan.bookingRangeDays, scheduledCollection: payload.scheduledCollection === true,
+      ...(payload.scheduleOccurrenceId ? {scheduleOccurrenceId:payload.scheduleOccurrenceId} : {}),
+      ...(payload.clientRequestId ? {clientRequestId:payload.clientRequestId} : {})
     };
     const completed = await dispatchCollector({
       broker: collectorBrokerForLane(), keyword, env, payload: expected,
@@ -19067,6 +19071,19 @@ async function route(req, res) {
         if(!origin || origin.host!==req.headers.host) return send(res,403,{error:"현재 데이터랩 화면에서 요청해 주세요."});
       }
       const payload=await parseJsonBody(req);
+      if(req.method==="POST" && reqUrl.pathname==="/api/collection-rotation/reconcile") {
+        return send(res,200,await scheduleMutation(async()=>{
+          if(collectionRecoveryActive || collectorProtectionReviewWorkers.size) throw Object.assign(new Error("수집 기록을 검토 중입니다."),{code:"COLLECTOR_RECOVERY_BUSY",statusCode:409});
+          collectionRecoveryActive=true;
+          try {
+            await collectorBrokerReady;
+            const states=await Promise.all(Object.values(collectorControllers()).map(controller=>controller.status()));
+            if(states.some(status=>status.activeJobId || status.queued) || Object.values(crawlLanes).some(lane=>lane.activeCrawlJob || lane.activeCrawlPromise || lane.crawlQueue.length))
+              throw Object.assign(new Error("진행·대기 수집이 끝난 뒤 결과를 연결해 주세요."),{code:"ROTATION_COLLECTORS_BUSY",statusCode:409});
+            return await collectionRotationScheduler.reconcileCompleted(payload);
+          } finally { collectionRecoveryActive=false; }
+        }));
+      }
       if(req.method==="POST" && reqUrl.pathname==="/api/collection-rotation/preview")
         return send(res,200,await collectionRotationScheduler.preview(payload.config,{days:payload.days??7,...(payload.startKeyword ? {startKeyword:payload.startKeyword} : {})}));
       if(req.method==="PUT" && reqUrl.pathname==="/api/collection-rotation")

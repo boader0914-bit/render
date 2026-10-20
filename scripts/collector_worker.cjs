@@ -39,6 +39,9 @@ const BROKER_FAILURE_CODES = new Set([
   "COLLECTOR_UNSAFE_FILE", "COLLECTOR_UNSAFE_STORAGE", "COLLECTOR_PUBLICATION_FAILED", "COLLECTOR_PERSISTENCE_FAILED"
 ]);
 const FAILURE_PHASES = new Set(["file_upload", "final_validation"]);
+const SERVICE_CODES = new Set(["COLLECTOR_CONFIGURATION_INVALID", "COLLECTOR_WORKER_DISABLED", "COLLECTOR_CLAIM_AUTH_FAILED",
+  "COLLECTOR_CLAIM_REJECTED", "COLLECTOR_RESPONSE_INVALID", "COLLECTOR_TERMINAL_ACK_REQUIRED", "COLLECTOR_PROVIDER_BLOCKED",
+  "COLLECTOR_WORKER_HALTED", "COLLECTOR_WORKER_STOPPED", ...FAIL_CODES]);
 
 function failure(code, status = 0) { const error = new Error(code); error.code = code; error.status = status; return error; }
 function safeCode(error, fallback) { return FAIL_CODES.has(error?.code) ? error.code : fallback; }
@@ -80,6 +83,10 @@ function workerOptions(env = process.env, overrides = {}) {
     killTimeoutMs: bounded(overrides.killTimeoutMs, 2000, 10, 5000),
     uploadAttempts: bounded(overrides.uploadAttempts, 3, 1, 3),
     retryMs: bounded(overrides.retryMs, 1000, 1, 5000),
+    claimRetryBaseMs: bounded(overrides.claimRetryBaseMs ?? env.COLLECTOR_CLAIM_RETRY_BASE_MS, 5000, 1, 60000),
+    claimRetryMaxMs: bounded(overrides.claimRetryMaxMs ?? env.COLLECTOR_CLAIM_RETRY_MAX_MS, 60000, 1, 300000),
+    random: typeof overrides.random === "function" ? overrides.random : Math.random,
+    sleepImpl: typeof overrides.sleepImpl === "function" ? overrides.sleepImpl : sleep,
     maxFiles: bounded(overrides.maxFiles, 2048, 1, 2048),
     maxFileBytes: bounded(overrides.maxFileBytes, 64 * 1024 * 1024, 1, 64 * 1024 * 1024),
     maxTotalBytes: bounded(overrides.maxTotalBytes, 256 * 1024 * 1024, 1, 256 * 1024 * 1024),
@@ -99,6 +106,7 @@ function sleep(ms, signal) {
     function done() { signal?.removeEventListener("abort", abort); resolve(); }
     function abort() { clearTimeout(timer); signal?.removeEventListener("abort", abort); reject(failure("COLLECTOR_SHUTDOWN")); }
     signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
   });
 }
 
@@ -121,7 +129,7 @@ async function request(options, route, { method = "POST", body, file, headers = 
     const abort = () => controller.abort();
     signal?.addEventListener("abort", abort, { once: true });
     const timer = setTimeout(abort, timeoutMs);
-    let stream;
+    let stream, responseStatus = 0;
     try {
       stream = file ? fs.createReadStream(file) : null;
       const response = await options.fetchImpl(`${options.serverUrl}${options.apiBasePath || "/api/collector-worker"}${route}`, {
@@ -129,6 +137,7 @@ async function request(options, route, { method = "POST", body, file, headers = 
         headers: { Authorization: `Bearer ${options.token}`, Accept: "application/json", "Content-Type": file ? "application/octet-stream" : "application/json", ...headers },
         body: stream || JSON.stringify(body ?? {}), ...(stream ? { duplex: "half" } : {})
       });
+      responseStatus = response.status;
       if (!response.ok) {
         const error = failure("COLLECTOR_REQUEST_FAILED", response.status);
         // Never forward the response body: it can contain credentials, paths or
@@ -143,7 +152,7 @@ async function request(options, route, { method = "POST", body, file, headers = 
     } catch (error) {
       const retryable = !error.status || error.status === 408 || error.status === 429 || error.status >= 500;
       if (signal?.aborted || !retryable || attempt + 1 >= attempts) {
-        const safeError = failure("COLLECTOR_REQUEST_FAILED", error.status || 0);
+        const safeError = failure(error.code === "COLLECTOR_RESPONSE_INVALID" ? error.code : "COLLECTOR_REQUEST_FAILED", error.status || responseStatus || 0);
         if (BROKER_FAILURE_CODES.has(error?.brokerErrorCode)) safeError.brokerErrorCode = error.brokerErrorCode;
         throw safeError;
       }
@@ -442,13 +451,31 @@ async function runJob(job, options) {
 
 async function runWorker(options = workerOptions()) {
   if (!options.enabled) return { enabled: false, jobs: 0 };
-  let jobs = 0;
+  let jobs = 0, claimFailures = 0, claimRequestId = crypto.randomUUID();
   while (!options.signal?.aborted && jobs < options.maxJobs) {
     let reply;
     try { reply = await request(options, "/claim", { body: { workerId: options.workerId, protocolVersion: PROTOCOL_VERSION,
-      ...(options.workerKey ? { workerKey: options.workerKey } : {}) }, signal: options.signal }); }
-    catch { if (options.signal?.aborted) break; throw failure("COLLECTOR_CLAIM_FAILED"); }
+      claimRequestId, ...(options.workerKey ? { workerKey: options.workerKey } : {}) }, signal: options.signal }); }
+    catch (error) {
+      if (options.signal?.aborted) break;
+      const status = Number.isInteger(error.status) ? error.status : 0;
+      const transient = error.code === "COLLECTOR_REQUEST_FAILED" && (!status || [408, 429].includes(status) || status >= 500);
+      if (!transient) throw failure([401, 403].includes(status) ? "COLLECTOR_CLAIM_AUTH_FAILED"
+        : error.code === "COLLECTOR_RESPONSE_INVALID" ? error.code : "COLLECTOR_CLAIM_REJECTED", status);
+      claimFailures++;
+      const retryInMs = claimRetryDelay(options, claimFailures);
+      emitServiceEvent(options, { event: "collector_claim_retry", code: "COLLECTOR_CLAIM_TRANSIENT", status,
+        attempt: Math.min(claimFailures, Number.MAX_SAFE_INTEGER), retryInMs });
+      // Keep the same request ID until a valid ACK. The broker can safely
+      // replay a leased job when its first response was lost, without issuing
+      // another lease or starting the provider crawler twice.
+      try { await (options.sleepImpl || sleep)(retryInMs, options.signal); } catch { if (options.signal?.aborted) break; throw failure("COLLECTOR_WORKER_HALTED"); }
+      continue;
+    }
     if (!reply || !Object.hasOwn(reply, "job")) throw failure("COLLECTOR_RESPONSE_INVALID");
+    if (reply.job !== null && (typeof reply.job !== "object" || Array.isArray(reply.job))) throw failure("COLLECTOR_RESPONSE_INVALID");
+    if (claimFailures) emitServiceEvent(options, { event: "collector_claim_recovered", code: "COLLECTOR_CLAIM_RECOVERED", attempts: claimFailures });
+    claimFailures = 0; claimRequestId = crypto.randomUUID();
     if (reply.job === null) { try { await sleep(options.pollMs, options.signal); } catch { break; } continue; }
     const result = await runJob(reply.job, options);
     jobs++;
@@ -458,14 +485,58 @@ async function runWorker(options = workerOptions()) {
   return { enabled: true, jobs, stopped: Boolean(options.signal?.aborted) };
 }
 
+function emitServiceEvent(options, value) {
+  // These events are deliberately assembled from codes/numbers only. Never
+  // include exception text, URLs, response bodies, tokens or nonce values.
+  try { options.logger?.(value); } catch { /* A logger cannot break the worker. */ }
+}
+function claimRetryDelay(options, failures) {
+  const base = options.claimRetryBaseMs || 5000, maximum = options.claimRetryMaxMs || 60000;
+  let random = 0.5; try { const value = (options.random || Math.random)(); if (Number.isFinite(value)) random = Math.max(0, Math.min(1, value)); } catch {}
+  return Math.max(1, Math.min(maximum, Math.round(Math.min(maximum, base * 2 ** Math.min(16, Math.max(0, failures - 1))) * (0.8 + random * 0.4))));
+}
+async function quarantineWorker(options, error) {
+  const code = SERVICE_CODES.has(error?.code) ? error.code : "COLLECTOR_WORKER_HALTED";
+  const status = Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599 ? error.status : 0;
+  emitServiceEvent(options, { event: "collector_worker_quarantined", code, status, requiresOperator: true });
+  // A pending Promise alone does not keep Node alive. This abortable timer
+  // keeps an intentionally protected service up without claiming another job.
+  while (!options.signal?.aborted) {
+    try { await sleep(60000, options.signal); } catch { if (options.signal?.aborted) break; }
+  }
+  return { quarantined: true, code, stopped: true };
+}
+async function runWorkerService(options, { runner = runWorker } = {}) {
+  try {
+    const result = await runner(options);
+    if (options.signal?.aborted) return result;
+    return quarantineWorker(options, failure(!options.enabled ? "COLLECTOR_WORKER_DISABLED" : result.code || "COLLECTOR_WORKER_STOPPED"));
+  } catch (error) {
+    if (options.signal?.aborted) return { stopped: true };
+    return quarantineWorker(options, error);
+  }
+}
+
 async function main() {
   const controller = new AbortController();
   const shutdown = () => controller.abort();
   process.once("SIGINT", shutdown); process.once("SIGTERM", shutdown);
-  try { await runWorker(workerOptions(process.env, { signal: controller.signal,
-    logger: (event) => process.stdout.write(`${JSON.stringify(event)}\n`) })); }
+  const service = { signal: controller.signal, logger: event => process.stdout.write(`${JSON.stringify(event)}\n`) };
+  try {
+    let options;
+    try { options = workerOptions(process.env, service); }
+    catch (error) { await quarantineWorker(service, error); return; }
+    await runWorkerService({ ...options, ...service });
+  }
   finally { process.removeListener("SIGINT", shutdown); process.removeListener("SIGTERM", shutdown); }
 }
 
-if (require.main === module) main().catch(() => { process.stderr.write("collector_worker_stopped\n"); process.exitCode = 1; });
-module.exports = { PROTOCOL_VERSION, JOB_ENV_KEYS, BROKER_FAILURE_CODES, workerOptions, runWorker, runJob, artifactsFor, stageReader, validateJob };
+if (require.main === module) main().catch(error => {
+  // Even an unexpected service-level rejection remains fail-closed and alive;
+  // a supervisor restart must not turn an unverified terminal state into a job.
+  const controller = new AbortController(), shutdown = () => controller.abort();
+  process.once("SIGINT", shutdown); process.once("SIGTERM", shutdown);
+  void quarantineWorker({ signal: controller.signal, logger: event => process.stdout.write(`${JSON.stringify(event)}\n`) }, error)
+    .finally(() => { process.removeListener("SIGINT", shutdown); process.removeListener("SIGTERM", shutdown); });
+});
+module.exports = { PROTOCOL_VERSION, JOB_ENV_KEYS, BROKER_FAILURE_CODES, workerOptions, runWorker, runWorkerService, runJob, artifactsFor, stageReader, validateJob, claimRetryDelay };

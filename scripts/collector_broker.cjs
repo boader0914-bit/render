@@ -28,7 +28,7 @@ const PAYLOAD_KEYS = new Set([
   "keyword", "checkIn", "checkOut", "adults", "searchMode", "searchIntent", "searchRegion", "searchScope",
   "searchScopeLabel", "collectionMode", "collectionPurpose", "productMode", "dayUseMode", "detailRankRanges",
   "bookingRangeDays", "bookingRangePlaceLimit", "sourceRole", "collectionSource", "scheduledCollection",
-  "workerKey", "trigger", "collectionEngine",
+  "workerKey", "trigger", "collectionEngine", "scheduleOccurrenceId", "clientRequestId",
 ]);
 const STAGES = new Set(["rank_main", "rank_regional", "ota_nol", "ota_yeogi", "ota_ddnayo", "inventory", "save", "uploading", "completing"]);
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted"]);
@@ -140,6 +140,11 @@ function cleanPayload(input = {}) {
     output[key] = value;
   }
   if (output.dayUseMode !== undefined && !["inspect", "lodging_only", "detail"].includes(output.dayUseMode)) throw problem("COLLECTOR_INVALID_PAYLOAD", 400);
+  for (const key of ["scheduleOccurrenceId", "clientRequestId"]) {
+    if (output[key] !== undefined && (typeof output[key] !== "string" || !/^[a-z0-9][a-z0-9._:-]{0,119}$/i.test(output[key]))) {
+      throw problem("COLLECTOR_INVALID_PAYLOAD", 400);
+    }
+  }
   return output;
 }
 function cleanContext(input = {}) {
@@ -266,6 +271,7 @@ function createCollectorBroker(options = {}) {
   if (!["/api/collector-worker", "/api/collector-worker-scheduled"].includes(apiBasePath)) throw problem("COLLECTOR_INVALID_ROUTE", 400);
   const stagingDir = path.join(brokerDir, "staging");
   const receiptsDir = path.join(brokerDir, "receipts");
+  const claimsDir = path.join(brokerDir, "claims");
   const stateFile = path.join(brokerDir, "jobs.json");
   const token = typeof options.token === "string" ? options.token : "";
   const configured = token.length >= 32 && token.length <= 512 && !/\s/.test(token);
@@ -305,6 +311,51 @@ function createCollectorBroker(options = {}) {
     } catch { throw problem("COLLECTOR_STATE_INVALID", 503); }
   };
   const ownsLease = job => Boolean(job.leaseHash && !job.leaseReleasedAt);
+  const claimNonce = value => {
+    if (value === undefined) return null;
+    if (typeof value !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value)) {
+      throw problem("COLLECTOR_CLAIM_REQUEST_INVALID", 400);
+    }
+    return value.toLowerCase();
+  };
+  const claimFile = nonce => path.join(claimsDir, `${digest(nonce)}.json`);
+  const claimLease = (job, nonce) => crypto.createHmac("sha256", token)
+    .update(JSON.stringify(["collector-claim-v1", job.id, workerId, nonce])).digest("hex");
+  async function readClaim(nonce) {
+    const filename = claimFile(nonce);
+    if (!await exists(filename)) return null;
+    try {
+      const stat = await regularFile(filename);
+      if (stat.size > 2048) throw new Error();
+      const value = JSON.parse(await fsp.readFile(filename, "utf8"));
+      if (value.version !== 1 || value.claimRequestId !== nonce || typeof value.workerId !== "string"
+        || !/^collector_[a-f0-9-]{36}$/.test(value.jobId || "")) throw new Error();
+      return value;
+    } catch { throw problem("COLLECTOR_CLAIM_RECEIPT_INVALID", 503); }
+  }
+  async function reserveClaim(nonce, job) {
+    // Keep one tiny on-disk tombstone per accepted nonce after ledger archival.
+    // Never keep a plaintext lease secret or a growing in-memory nonce map.
+    // Reserve before publishing the lease: interruption may hold this nonce,
+    // but can never assign its retry to a different queued job.
+    const filename = claimFile(nonce);
+    let handle;
+    try {
+      await checkedDirectory(claimsDir);
+      handle = await fsp.open(filename, "wx", 0o600);
+      await handle.writeFile(JSON.stringify({ version: 1, claimRequestId: nonce, workerId, jobId: job.id, acceptedAt: iso() }));
+      await handle.sync();
+      return true;
+    } catch (error) {
+      if (error.code === "EEXIST") return false;
+      setHalt("COLLECTOR_PERSISTENCE_FAILED"); await persist().catch(() => {});
+      throw problem("COLLECTOR_PERSISTENCE_FAILED", 503);
+    } finally { await handle?.close().catch(() => {}); }
+  }
+  function leasedJob(job, leaseToken) {
+    return { id: job.id, keyword: job.keyword, env: clone(job.env), context: clone(job.context), leaseToken, leaseMs: LEASE_MS,
+      ...(job.workerKey ? { workerKey: job.workerKey, trigger: job.trigger } : {}) };
+  }
   function setHalt(code) {
     // A later cancellation/lease error must not obscure an observed provider block.
     if (state.halted?.code !== "COLLECTOR_PROVIDER_BLOCKED") state.halted = { code, at: iso() };
@@ -326,7 +377,7 @@ function createCollectorBroker(options = {}) {
   }
   function publicJob(job) {
     const output = { id: job.id, status: job.status, keyword: job.keyword, createdAt: job.createdAt, updatedAt: job.updatedAt };
-    for (const key of ["startedAt", "finishedAt", "errorCode", "stage", "workerKey", "trigger", "failurePhase", "brokerErrorCode", "recovery", "progress", "progressReceivedAt"]) if (job[key]) output[key] = clone(job[key]);
+    for (const key of ["startedAt", "finishedAt", "errorCode", "stage", "workerKey", "trigger", "failurePhase", "brokerErrorCode", "recovery", "progress", "progressReceivedAt", "scheduleOccurrenceId", "clientRequestId"]) if (job[key]) output[key] = clone(job[key]);
     if (job.status === "completed") Object.assign(output, { runId: job.runId, outputDir: job.outputDir, manifest: clone(job.manifest), collectionQuality: clone(job.collectionQuality) });
     return output;
   }
@@ -367,6 +418,7 @@ function createCollectorBroker(options = {}) {
       await checkedDirectory(brokerDir, true);
       await checkedDirectory(stagingDir, true);
       await checkedDirectory(receiptsDir, true);
+      await checkedDirectory(claimsDir, true);
       await checkedDirectory(outputsDir, true);
       if (await exists(stateFile)) {
         try {
@@ -422,6 +474,11 @@ function createCollectorBroker(options = {}) {
         if (trigger !== "scheduled" || !Number.isSafeInteger(input.queueDeadline) || input.queueDeadline <= 0) throw problem("COLLECTOR_QUEUE_DEADLINE_INVALID", 400);
         job.queueDeadline = input.queueDeadline;
       }
+      if (job.payload.scheduleOccurrenceId !== undefined) {
+        if (trigger !== "scheduled" || !target) throw problem("COLLECTOR_INVALID_PAYLOAD", 400);
+        job.scheduleOccurrenceId = job.payload.scheduleOccurrenceId;
+      }
+      if (job.payload.clientRequestId !== undefined) job.clientRequestId = job.payload.clientRequestId;
       if (target) {
         job.workerKey = target;
         job.trigger = trigger;
@@ -536,11 +593,28 @@ function createCollectorBroker(options = {}) {
       workerIdentity(body.workerId);
       if (body.workerKey !== undefined && body.workerKey !== workerKey) throw problem("COLLECTOR_WRONG_WORKER", 403);
       if (body.protocolVersion !== 1) throw problem("COLLECTOR_PROTOCOL_MISMATCH", 400);
+      const nonce = claimNonce(body.claimRequestId);
       // Retirement stops new leases only. Existing lease heartbeats, uploads,
       // completion and explicit retained-result recovery remain usable.
       if (typeof options.canClaim === "function" && !(await options.canClaim())) return { job: null, retired: true };
       await expireLeases();
       state.workerLastSeenAt = iso();
+      if (nonce) {
+        const prior = state.jobs.find(job => job.claimRequestId === nonce), receipt = await readClaim(nonce);
+        if (prior || receipt) {
+          const job = prior || state.jobs.find(value => value.id === receipt.jobId);
+          // Only the identical still-unacknowledged claim may replay. A nonce
+          // observed on an old/archived/terminal/restarted job is never new work.
+          if (state.halted || !job || job.status !== "leased" || !ownsLease(job) || job.claimAcknowledgedAt
+            || job.claimWorkerId !== body.workerId || job.claimRequestId !== nonce
+            || timestamp() >= job.leaseExpiresAt || Object.keys(job.uploads || {}).length
+            || [...uploading.values()].some(entry => entry.id === job.id)
+            || receipt && (receipt.workerId !== body.workerId || receipt.jobId !== job.id)) return { job: null };
+          const replayToken = claimLease(job, nonce);
+          if (!sameSecret(digest(replayToken), job.leaseHash)) return { job: null };
+          return { job: leasedJob(job, replayToken) };
+        }
+      }
       if (state.halted || state.jobs.some(ownsLease)) {
         if (timestamp() - lastSeenPersistedAt >= 60_000) await persist();
         return { job: null };
@@ -550,15 +624,16 @@ function createCollectorBroker(options = {}) {
         if (timestamp() - lastSeenPersistedAt >= 60_000) await persist();
         return { job: null };
       }
-      const leaseToken = crypto.randomBytes(32).toString("hex");
+      if (nonce && !await reserveClaim(nonce, job)) return { job: null };
+      const leaseToken = nonce ? claimLease(job, nonce) : crypto.randomBytes(32).toString("hex");
       job.leaseHash = digest(leaseToken);
+      if (nonce) { job.claimRequestId = nonce; job.claimWorkerId = body.workerId; }
       job.leaseExpiresAt = timestamp() + LEASE_MS;
       job.startedAt = job.updatedAt = iso();
       job.status = "leased";
       await checkedDirectory(path.join(stagingDir, job.id), true);
       await persist();
-      return { job: { id: job.id, keyword: job.keyword, env: clone(job.env), context: clone(job.context), leaseToken, leaseMs: LEASE_MS,
-        ...(job.workerKey ? { workerKey: job.workerKey, trigger: job.trigger } : {}) } };
+      return { job: leasedJob(job, leaseToken) };
     });
   }
   async function heartbeat(id, body) {
@@ -571,6 +646,7 @@ function createCollectorBroker(options = {}) {
       if (body.providerBlocked !== undefined && typeof body.providerBlocked !== "boolean") throw problem("COLLECTOR_INVALID_STAGE", 400);
       const progress = body.progress === undefined ? null : sanitizeCollectionProgress(body.progress);
       if (body.progress !== undefined && !progress) throw problem("COLLECTOR_INVALID_PROGRESS", 400);
+      if (job.claimRequestId) job.claimAcknowledgedAt ||= iso();
       job.leaseExpiresAt = timestamp() + LEASE_MS;
       state.workerLastSeenAt = job.updatedAt = iso();
       if (body.stage && job.stage !== body.stage) { job.stage = body.stage; event = { id, stage: body.stage }; }
@@ -704,6 +780,12 @@ function createCollectorBroker(options = {}) {
       if ((await fsp.readdir(outputsDir)).some(name => name.toLowerCase() === runId.toLowerCase())) throw problem("COLLECTOR_OUTPUT_EXISTS");
       const outputDir = path.join(outputsDir, runId);
       manifest.outputDir = outputDir;
+      // Worker-supplied metadata is never an authoritative schedule receipt.
+      delete manifest.schedulingReceipt;
+      if (job.scheduleOccurrenceId && job.trigger === "scheduled" && job.workerKey) {
+        manifest.schedulingReceipt = { version: 1, scheduleOccurrenceId: job.scheduleOccurrenceId,
+          jobId: job.id, workerKey: job.workerKey, trigger: job.trigger, acceptedAt: job.createdAt };
+      }
       const quality = inspectManifest(manifest);
       if (job.providerBlockedAt && quality.status !== "blocked") throw problem("COLLECTOR_BLOCK_RECEIPT_REQUIRED", 400);
       await atomicJson(manifestPath, manifest);
