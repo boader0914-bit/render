@@ -80,4 +80,4 @@ Insight의 순수 필드 투영은 13개 값과 미관측 19일이 일치했다.
 
 대조한 지역 저장 파일 21개(대기열 3·최신 포인터 9·파생 결과 9)와 업체 통합·업종·월간 리포트 각 1개, 총 24개의 SHA256·크기·수정시각이 유지됐다. 이는 선택한 저장 파일의 보존 검수이며 공급자 원본 전체 검증은 아니다. 수집 예약·보호·객실 검수·원본·인사이트는 변경하지 않았다.
 
-증빙: `C:/Users/User/.codex/visualizations/2026/10/20/staydatalab-regional-main-audit/`의 `inventory.json`, `snapshots.json`, `audit-input.json`, `audit-report.json`, `consistency.json`, `ui-measurements.json`, `final-summary.json`, `source-ui.json`, 실제 화면 PNG. 오프라인 검사기 회귀 7개 통과. 포터블 검수 보고서는 같은 폴더의 `report.html`이다.
+증빙: `C:/Users/User/.codex/visualizations/2026/10/20/staydatalab-regional-main-audit/`의 `inventory.json`, `snapshots.json`, `audit-input.json`, `audit-report.json`, `consistency.json`, `ui-measurements.json`, `final-summary.json`, `source-ui.json`, 실제 화면 PNG. 오프라인 검사기 회귀 7개 통과. 검수 결론의 기준 보고서는 이 문서다. 별도 HTML 내보내기는 구조 검사 단계의 초안이며 가로 넘침 수정의 시각 검증은 미완료다. 이 내보내기 상태와 위 운영 앱의 실제 표시 계측을 구분한다.
