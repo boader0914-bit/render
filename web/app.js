@@ -28472,6 +28472,67 @@ function syncRegionalReportPreparation(region = null) {
   } });
 }
 
+function renderRegionalCatchmentHost(region = {}) {
+  if (!isAdminRole() || !region.regionKey || region.level === "broad") return "";
+  return `<div data-regional-catchment data-region-key="${escapeHtml(region.regionKey)}"><section class="regional-catchment"><h4>지역 배후시장 · 50km·100km</h4><p role="status">저장 결과 조회 전 · 중심점과 공식 격자자료의 확보 상태를 확인합니다.</p></section></div>`;
+}
+
+let savedRegionalCatchmentHost = null;
+let savedRegionalCatchmentHostScope = null;
+let savedRegionalCatchmentLogoutPending = false;
+let savedRegionalCatchmentFocus = null;
+
+function rememberSavedRegionalCatchmentFocus() {
+  const field = document.activeElement;
+  if (savedRegionalCatchmentHost?.contains?.(field)) {
+    savedRegionalCatchmentFocus = { field, start: field.selectionStart, end: field.selectionEnd, direction: field.selectionDirection };
+  } else if (!(savedRegionalCatchmentHost?.isConnected === false && (!field || field === document.body))) savedRegionalCatchmentFocus = null;
+}
+
+function stopSavedRegionalCatchment({ clearAccount = false, logout = false } = {}) {
+  if (savedRegionalCatchmentHost) window.RegionalCatchment?.stop(savedRegionalCatchmentHost);
+  if (clearAccount && savedRegionalCatchmentHostScope?.accountKey) window.RegionalCatchment?.clear(savedRegionalCatchmentHostScope.accountKey);
+  savedRegionalCatchmentHost = null;
+  savedRegionalCatchmentHostScope = null;
+  savedRegionalCatchmentFocus = null;
+  if (logout) savedRegionalCatchmentLogoutPending = true;
+}
+
+function syncSavedRegionalCatchment() {
+  let slot = els.dictionaryResult?.querySelector?.("[data-regional-catchment]");
+  const selected = selectedAnalysisRegion();
+  const accountKey = state.session?.username || "admin";
+  const visible = () => !savedRegionalCatchmentLogoutPending && isAdminRole() && state.activeTab === "dictionary" && locationProfileActiveTab() === "basic"
+    && selectedAnalysisRegion()?.regionKey === selected?.regionKey && (state.session?.username || "admin") === accountKey;
+  const differentAccount = savedRegionalCatchmentHostScope && savedRegionalCatchmentHostScope.accountKey !== accountKey;
+  if (differentAccount) stopSavedRegionalCatchment({ clearAccount: true });
+  if (!slot || !visible() || !selected || slot.dataset.regionKey !== selected.regionKey) {
+    stopSavedRegionalCatchment();
+    return;
+  }
+  const sameScope = savedRegionalCatchmentHostScope?.accountKey === accountKey && savedRegionalCatchmentHostScope.regionKey === selected.regionKey;
+  if (sameScope && savedRegionalCatchmentHost && slot !== savedRegionalCatchmentHost) {
+    // The surrounding dictionary can redraw when unrelated startup data arrive.
+    // Reattach the live host so its form nodes, file selection, cursor, active
+    // controller and in-flight GET survive that redraw.
+    slot.replaceWith(savedRegionalCatchmentHost);
+    slot = savedRegionalCatchmentHost;
+    const focus = savedRegionalCatchmentFocus;
+    if (focus && slot.contains?.(focus.field) && (!document.activeElement || document.activeElement === document.body || document.activeElement === focus.field)) {
+      focus.field.focus?.({ preventScroll: true });
+      if (Number.isInteger(focus.start) && Number.isInteger(focus.end)) {
+        try { focus.field.setSelectionRange?.(focus.start, focus.end, focus.direction || "none"); } catch { /* Number/file fields do not support text selection. */ }
+      }
+    }
+  } else if (!sameScope && savedRegionalCatchmentHost) stopSavedRegionalCatchment();
+  savedRegionalCatchmentHost = slot;
+  savedRegionalCatchmentHostScope = { accountKey, regionKey: selected.regionKey };
+  void window.RegionalCatchment?.mount(slot, {
+    regionKey: selected.regionKey, regionLabel: analysisRegionLabel(selected),
+    accountKey, fetchJson, isVisible: visible
+  });
+}
+
 function syncSavedRegionalAnalysis(region = null, mode = "summary", host = null) {
   const isManagement = mode === "manage";
   const visible = () => isAdminRole() && (isManagement
@@ -31008,6 +31069,7 @@ function renderRegionAnalysisShell() {
     syncSavedRegionalAnalysis(null, "summary");
     syncSavedRegionalAnalysis(null, "sources");
     syncSavedRegionalOutlook();
+    syncSavedRegionalCatchment();
     return;
   }
   const region = selectedAnalysisRegion();
@@ -31038,6 +31100,7 @@ function renderRegionAnalysisShell() {
   syncSavedRegionalAnalysis(null, "summary");
   syncSavedRegionalAnalysis(null, "sources");
   syncSavedRegionalOutlook();
+  syncSavedRegionalCatchment();
 }
 
 function renderActiveRegionAnalysis() {
@@ -36443,6 +36506,7 @@ function renderObservedLocationProfile(card, alias, tourismMatch, clusters, inde
     || evidence.resourceDemand.period
     || "지표별 최신 기간";
   const basicPanel = `
+    ${renderRegionalCatchmentHost(administrativeRegion || { regionKey: card.regionKey })}
     ${renderKosisRegionPanel(administrativeRegion || { regionKey: card.regionKey, name: sigungu })}
     <div class="location-profile-definition-list">
       <div><span>행정구역</span><strong>${escapeHtml(`${sido} ${sigungu}`)}</strong><small>${administrativeRegion?.active ? "공식 원장" : "확인 중"}</small></div>
@@ -36588,7 +36652,7 @@ function renderAdministrativeProfile(region = {}, options = {}) {
         ${locationProfileTabButton("supply", "숙박 공급")}
         ${locationProfileTabButton("history", "과거 자료")}
       </nav>
-      ${locationProfileTabPanel("basic", `${renderKosisRegionPanel(region)}${administrativeProfileDefinitionRows(basicRows)}<div class="location-profile-actions"><button class="secondary-button" type="button" data-dictionary-navigate="analysis" disabled>업종 분석 연결 준비</button><button class="primary-button" type="button" data-dictionary-navigate="demand" disabled>수요전망 자료 대기</button></div><p class="location-profile-action-note">실제 관측이 확보되면 이 행정구역에 연결합니다.</p>`)}
+      ${locationProfileTabPanel("basic", `${renderRegionalCatchmentHost(region)}${renderKosisRegionPanel(region)}${administrativeProfileDefinitionRows(basicRows)}<div class="location-profile-actions"><button class="secondary-button" type="button" data-dictionary-navigate="analysis" disabled>업종 분석 연결 준비</button><button class="primary-button" type="button" data-dictionary-navigate="demand" disabled>수요전망 자료 대기</button></div><p class="location-profile-action-note">실제 관측이 확보되면 이 행정구역에 연결합니다.</p>`)}
       ${locationProfileTabPanel("tourism", tourismPanel)}
       ${locationProfileTabPanel("supply", supplyPanel)}
       ${locationProfileTabPanel("history", historyPanel)}
@@ -36620,6 +36684,8 @@ function renderAdministrativeRegionChoices(regions = [], query = "") {
 
 function renderLocationDictionary(match = null) {
   if (!els.dictionaryResult) return;
+  rememberSavedRegionalCatchmentFocus();
+  if (window.RegionalCatchment) queueMicrotask(syncSavedRegionalCatchment);
   const cards = state.dictionary?.cards || [];
   const groups = state.dictionary?.regionGroups || [];
   const provinceCount = administrativeProvinceEntries().length || dictionaryProvinceEntries().length;
@@ -42883,7 +42949,9 @@ async function loadTrafficState() {
 
 async function logout() {
   resetAdminDbSearchDraft();
+  stopSavedRegionalCatchment({ logout: true });
   window.RegionalAnalysis?.clear();
+  window.RegionalCatchment?.clear();
   window.RegionComparison?.clear();
   window.RegionalOutlook?.clear();
   stopTourismDemandStrengthBackfillPolling({ render: false });

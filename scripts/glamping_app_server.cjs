@@ -43,6 +43,8 @@ const { createRegionalReportPreparationHttpHandler } = require("./lib/regional_r
 const { createRegionalAnalysisStore } = require("./lib/regional_analysis_store.cjs");
 const { createRegionalAnalysisSnapshotBuilder } = require("./lib/regional_analysis_snapshot.cjs");
 const { createRegionalAnalysisHttpHandler } = require("./lib/regional_analysis_http.cjs");
+const { createRegionalCatchmentService } = require("./lib/regional_catchment_store.cjs");
+const { createRegionalCatchmentHttpHandler } = require("./lib/regional_catchment_http.cjs");
 const { createRegionalOutlookService } = require("./lib/regional_outlook_service.cjs");
 const { renderMonthlyReportPdf } = require("./lib/monthly_report_pdf.cjs");
 const { createTourismForecastService } = require("./lib/tourism_forecast.cjs");
@@ -438,6 +440,7 @@ const resolveRegionalReportRegion = async regionKey => {
   const searchTrendKeyword = `${ambiguous || /구$/.test(region.name) ? prefix : ""}${local}글램핑`.replace(/\s+/g, "");
   return { ...region, searchTrendKeyword };
 };
+const regionalCatchmentService = createRegionalCatchmentService({ dataDir: DATA_DIR, resolveRegion: resolveRegionalReportRegion });
 const regionalSearchTrendService = createRegionalSearchTrendService({
   dataDir: path.join(DATA_DIR, "regional_search_trends"), readTrafficKeys, resolveRegion: resolveRegionalReportRegion
 });
@@ -531,6 +534,10 @@ regionalSearchTrendService.refresh = async input => {
 const handleRegionalAnalysis = createRegionalAnalysisHttpHandler({
   service: regionalAnalysisStore, requireAdmin: requireAdminSession, parseJsonBody, send,
   rateLimit: (req, session) => assertRequestRateLimit(req, "adminRegionalAnalysisRefresh", { limit: 12, windowMs: 60 * 60 * 1000 }, session.username || "")
+});
+const handleRegionalCatchment = createRegionalCatchmentHttpHandler({
+  service: regionalCatchmentService, requireAdmin: requireAdminSession, parseJsonBody, send,
+  rateLimit: (req, session) => assertRequestRateLimit(req, "adminRegionalCatchmentWrite", { limit: 30, windowMs: 60 * 60 * 1000 }, session.username || "")
 });
 const handleRegionalOutlook = createRegionalAnalysisHttpHandler({
   basePath: "/api/regional-outlook", allowPolicy: false, service: regionalOutlookService,
@@ -19061,6 +19068,7 @@ async function route(req, res) {
     if (await handleIndustryAnalysis(req, res, reqUrl, session)) return;
     if (await handleRegionalReportPreparation(req, res, reqUrl, session)) return;
     if (await handleRegionalAnalysis(req, res, reqUrl, session)) return;
+    if (await handleRegionalCatchment(req, res, reqUrl, session)) return;
     if (await handleRegionalOutlook(req, res, reqUrl, session)) return;
     if (await handleRegionalOutlookValidation(req, res, reqUrl, session)) return;
 

@@ -18,7 +18,7 @@ const names = [
   "locationProfileAlias", "locationProfileSubjectForRegion", "locationProfileKeywordKey", "activeKeyword",
   "analysisRegionForKey", "selectedAnalysisRegion", "analysisRegionLabel", "analysisRegionStorageKey", "analysisRunRegion",
   "analysisRunMatchesRegion", "applyAnalysisRegionToDictionary", "setAnalysisRegion", "reconcileAnalysisRegionSelection",
-  "renderRegionAnalysisShell", "syncSavedRegionalAnalysis", "syncSavedRegionalOutlook", "renderActiveRegionAnalysis", "regionAnalysisEmptyHtml", "analysisMatchingRunButton",
+  "renderRegionAnalysisShell", "syncSavedRegionalAnalysis", "syncSavedRegionalOutlook", "syncSavedRegionalCatchment", "stopSavedRegionalCatchment", "rememberSavedRegionalCatchmentFocus", "renderActiveRegionAnalysis", "regionAnalysisEmptyHtml", "analysisMatchingRunButton",
   "dictionaryDemandContext", "demandRegionContextMatchesRun", "renderDemandRegionPending", "openDictionaryDemand",
   "renderDemand", "renderMap", "renderRegionComparison", "setActiveTab", "syncAppHistoryState", "restoreAppHistoryState",
   "selectDictionaryRegion", "selectDictionaryProvince", "loadRun", "loadLocationDictionary", "ensureLocationProfile", "locationProfileEntry",
@@ -58,6 +58,7 @@ function fixture({ keyword = "포천글램핑", role = "admin", storage = new Ma
     state, els, console, URL, encodeURIComponent,
     REGION_ANALYSIS_TABS: new Set(["dictionary", "map", "demand", "regionCompare", "regionSources"]),
     ANALYSIS_REGION_STORAGE_KEY: "lodging-datalab:analysis-region:v1", loadRunRequestSequence: 0,
+    savedRegionalCatchmentHost: null, savedRegionalCatchmentHostScope: null, savedRegionalCatchmentLogoutPending: false, savedRegionalCatchmentFocus: null,
     LOCATION_PROFILE_RETRY_INTERVAL_MS: 30000,
     LOCATION_DICTIONARY_URL: "dictionary", REGION_MASTER_URL: "master", TOURISM_REGION_MAP_URL: "tourism-map",
     window: { history, location: { href: "http://offline/admin" }, localStorage: {
