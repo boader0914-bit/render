@@ -130,6 +130,8 @@ const state = {
   },
   dictionaryPendingRegion: null,
   locationProfiles: {},
+  locationSavedRegionalView: null,
+  locationSavedRegionalDisplay: null,
   locationProfileLoading: {},
   locationTourismIndexRefresh: {},
   trafficKeyState: null,
@@ -28487,7 +28489,9 @@ function syncSavedRegionalAnalysis(region = null, mode = "summary", host = null)
   }
   void window.RegionalAnalysis?.mount(slot, {
     regionKey: selected?.regionKey || "", regionLabel: selected ? analysisRegionLabel(selected) : "지역 미선택",
-    mode, fetchJson, accountKey: state.session?.username || "admin", isVisible: visible
+    mode, fetchJson, accountKey: state.session?.username || "admin", isVisible: visible,
+    onStateChange: mode === "summary" ? syncLocationSavedRegionalSummary : null,
+    onDisplay: mode === "summary" ? markLocationSavedRegionalSummaryDisplay : null
   });
 }
 
@@ -36092,18 +36096,124 @@ function renderLocationProfileTourismDashboard(panels = {}) {
   `;
 }
 
+function locationProfileSavedRegionalModel(regionKey, currentView = null) {
+  const accountKey = state.session?.username || "admin";
+  const month = window.RegionalAnalysis?.latestCompletedMonth?.() || "";
+  const view = currentView || state.locationSavedRegionalView;
+  let result, loading = false, error = "";
+  if (view?.accountKey === accountKey && view.regionKey === regionKey && view.month === month) {
+    ({ result, loading, error } = view);
+  } else {
+    try { result = window.RegionalAnalysis?.savedResults?.read({ accountKey, regionKey, month, months: 13 }) || undefined; }
+    catch { error = "저장 결과의 조회 조건을 확인하지 못했습니다."; }
+  }
+  return window.RegionalLocationSummary?.build({ regionKey, month, result, loading, error }) || {
+    status: "unqueried", scope: { regionKey, month, months: 13 }, resultId: "", cards: []
+  };
+}
+
+function locationSavedRegionalPeriodLabel(model = {}) {
+  const periods = [...new Set((model.cards || []).flatMap(card => (card.items || []).map(item => item.period)).filter(Boolean))].sort();
+  return periods.length ? `최근 정상월 ${periods.join(" · ")} · 지표별 기준`
+    : ["unqueried", "loading"].includes(model.status) ? "기준월 확인 전" : "정상 관측 기준월 미확보";
+}
+
+function locationSavedRegionalEndpointLabel(model = {}) {
+  if (model.error) return model.resultId ? "저장 결과 확인 실패 · 이전 정상 수치 유지" : "저장 결과 확인 실패";
+  if (model.loading) return model.resultId ? "공통 저장 결과 표시 · 변경 여부 확인 중" : "공통 저장 결과 확인 중";
+  if (model.status === "unqueried") return "공통 저장 결과 확인 전";
+  if (model.status === "mismatch") return "선택 지역·기준기간과 다른 저장 결과 · 수치 표시 보류";
+  if (!model.resultId) return "공통 저장 결과 조회 완료 · 저장 자료 미확보";
+  return "공통 저장 결과 · 수치 확보와 원본 근거를 구분합니다.";
+}
+
+function locationSavedRegionalSummaryAttributes(model = {}) {
+  const display = state.locationSavedRegionalDisplay;
+  const same = display?.accountKey === (state.session?.username || "admin") && display.regionKey === model.scope.regionKey
+    && display.month === model.scope.month && display.resultId === model.resultId
+    && display.sequence === state.locationSavedRegionalView?.displaySequence;
+  return `data-location-saved-summary="${escapeHtml(model.scope.regionKey)}" data-location-saved-result-id="${escapeHtml(model.resultId || "")}" data-location-saved-month="${escapeHtml(model.scope.month)}" data-location-saved-status="${escapeHtml(model.status)}"${same ? ` data-location-saved-display-status="${escapeHtml(display.status)}" data-location-saved-display-ms="${display.milliseconds}" data-location-saved-display-source="${escapeHtml(display.source)}" data-location-saved-display-sequence="${display.sequence}"` : ' data-location-saved-display-status="pending"'}`;
+}
+
+function renderLocationSavedRegionalSummaryCards(model = {}) {
+  const labels = { unqueried: "미조회", loading: "확인 중", missing: "자료 미확보", error: "확인 실패", mismatch: "조건 확인 필요", ready: "자료 확보", partial: "일부 자료" };
+  return (model.cards || []).map(card => {
+    const observed = (card.items || []).filter(item => typeof item.value === "number" && Number.isFinite(item.value));
+    const latestProofPending = observed.some(item => !item.comparisonEligible || !item.originalVerified);
+    const proofLabel = !observed.length ? "" : latestProofPending ? "최신월 범위·원본 근거 확인 필요" : "최신월 범위·원본 근거 확인";
+    return renderLocationProfileSummaryCard({ ...card,
+      statusLabel: model.error && observed.length ? "이전 자료" : labels[card.status] || "확인 필요",
+      items: (card.items || []).map(item => ({ ...item, rawValue: item.value,
+        value: typeof item.value === "number" && Number.isFinite(item.value) ? item.valueLabel
+          : ["unqueried", "loading", "error", "mismatch"].includes(card.status) ? item.valueLabel : "—" })),
+      note: model.error ? model.resultId ? "변경 확인 실패 · 이전 정상 관측 표시" : "저장 결과 확인 실패" : card.note,
+      coverageLabel: "수치 확보", proofLabel,
+      coverageDetail: card.coverage ? "지표별 최신 정상월 기준 · 원본 근거 확보율과 별도" : "확보월수 확인 전"
+    });
+  }).join("");
+}
+
+function syncLocationSavedRegionalSummary(view) {
+  if (!isAdminRole() || state.activeTab !== "dictionary" || view.accountKey !== (state.session?.username || "admin")
+    || selectedAnalysisRegion()?.regionKey !== view.regionKey) return;
+  const prior = state.locationSavedRegionalView;
+  const newEntry = prior?.accountKey !== view.accountKey || prior?.regionKey !== view.regionKey || prior?.month !== view.month
+    || prior?.displaySequence !== view.displaySequence;
+  if (newEntry) state.locationSavedRegionalDisplay = null;
+  state.locationSavedRegionalView = view;
+  const model = locationProfileSavedRegionalModel(view.regionKey, view);
+  for (const grid of els.dictionaryResult?.querySelectorAll?.("[data-location-saved-summary]") || []) {
+    if (grid.dataset.locationSavedSummary !== view.regionKey) continue;
+    if (newEntry || grid.dataset.locationSavedResultId !== (model.resultId || "") || grid.dataset.locationSavedMonth !== model.scope.month) {
+      for (const key of ["locationSavedDisplayMs", "locationSavedDisplaySource", "locationSavedDisplaySequence"]) delete grid.dataset[key];
+    }
+    const markup = renderLocationSavedRegionalSummaryCards(model);
+    if (grid.innerHTML !== markup) grid.innerHTML = markup;
+    grid.dataset.locationSavedResultId = model.resultId || "";
+    grid.dataset.locationSavedStatus = model.status;
+    grid.dataset.locationSavedMonth = model.scope.month;
+    grid.dataset.locationSavedLoading = String(model.loading === true);
+    grid.dataset.locationSavedDisplayStatus = model.loading && !model.resultId ? "loading" : "pending";
+  }
+  for (const label of els.dictionaryResult?.querySelectorAll?.("[data-location-saved-period], [data-location-saved-endpoint]") || []) {
+    if (label.dataset.locationSavedPeriod === view.regionKey) label.textContent = locationSavedRegionalPeriodLabel(model);
+    if (label.dataset.locationSavedEndpoint === view.regionKey) label.textContent = locationSavedRegionalEndpointLabel(model);
+  }
+}
+
+function markLocationSavedRegionalSummaryDisplay(measurement) {
+  if (!isAdminRole() || state.activeTab !== "dictionary" || measurement.accountKey !== (state.session?.username || "admin")
+    || selectedAnalysisRegion()?.regionKey !== measurement.regionKey
+    || measurement.sequence !== state.locationSavedRegionalView?.displaySequence) return;
+  state.locationSavedRegionalDisplay = measurement;
+  for (const grid of els.dictionaryResult?.querySelectorAll?.("[data-location-saved-summary]") || []) {
+    if (grid.dataset.locationSavedSummary !== measurement.regionKey || grid.dataset.locationSavedMonth !== measurement.month
+      || grid.dataset.locationSavedResultId !== measurement.resultId) continue;
+    grid.dataset.locationSavedDisplayStatus = measurement.status;
+    grid.dataset.locationSavedDisplayMs = String(measurement.milliseconds);
+    grid.dataset.locationSavedDisplaySource = measurement.source;
+    grid.dataset.locationSavedDisplaySequence = String(measurement.sequence);
+  }
+}
+
 function renderLocationProfileSummaryCard(options = {}) {
   const items = Array.isArray(options.items) && options.items.length
     ? options.items
-    : [{ label: options.valueLabel || "최신값", value: options.value || "관측 없음" }];
+    : [{ label: options.valueLabel || "최신값", value: options.value ?? "관측 없음" }];
   return `
-    <article class="location-profile-summary-card ${escapeHtml(options.tone || "")}" data-location-summary-metric="${escapeHtml(options.key || "")}">
-      <div class="location-profile-summary-card-head"><span>${escapeHtml(options.title || "지표")}</span></div>
+    <article class="location-profile-summary-card ${escapeHtml(options.tone || "")}" data-location-summary-metric="${escapeHtml(options.key || "")}"${options.status ? ` data-location-summary-status="${escapeHtml(options.status)}"` : ""}>
+      <div class="location-profile-summary-card-head"><span>${escapeHtml(options.title || "지표")}</span>${options.statusLabel ? `<small class="location-profile-summary-state" role="status">${escapeHtml(options.statusLabel)}</small>` : ""}</div>
       <div class="location-profile-summary-values ${items.length === 1 ? "is-single" : items.length >= 3 ? "is-triple" : "is-double"}">
-        ${items.map((item) => `<div><span>${escapeHtml(item.label || "지표")}</span><strong>${escapeHtml(item.value || "관측 없음")}</strong></div>`).join("")}
+        ${items.map((item) => {
+          const numeric = typeof item.rawValue === "number" && Number.isFinite(item.rawValue);
+          const value = numeric ? `<span class="location-profile-summary-number">${escapeHtml(item.rawValue.toLocaleString("ko-KR", { maximumFractionDigits: 2 }))}</span>${item.unit ? ` <small class="location-profile-summary-unit">${escapeHtml(item.unit)}</small>` : ""}` : escapeHtml(item.value ?? "관측 없음");
+          return `<div${item.key ? ` data-location-metric-key="${escapeHtml(item.key)}" data-location-metric-period="${escapeHtml(item.period || "")}" data-location-metric-value="${numeric ? item.rawValue : ""}"` : ""}><span>${escapeHtml(item.label || "지표")}</span><strong>${value}</strong>${item.period ? `<small>${escapeHtml(item.period)}</small>` : ""}</div>`;
+        }).join("")}
       </div>
       ${options.note ? `<p class="location-profile-summary-note">${escapeHtml(options.note)}</p>` : ""}
       ${options.coverage ? renderLocationProfileCoverage(options.coverage, { label: options.coverageLabel || "자료 확보", detail: options.coverageDetail || "" }) : ""}
+      ${options.status && !options.coverage ? `<p class="location-profile-summary-pending">${escapeHtml(options.coverageDetail || "확보월수 확인 전")}</p>` : ""}
+      ${options.proofLabel ? `<p class="location-profile-summary-proof">${escapeHtml(options.proofLabel)}</p>` : ""}
     </article>
   `;
 }
@@ -36147,6 +36257,8 @@ function locationProfileStrengthSummaryModel(staySeries = [], spendSeries = []) 
 
 function renderObservedLocationProfile(card, alias, tourismMatch, clusters, indexes, runtime, scoreModel, topIndexes, options = {}) {
   const administrativeRegion = options.administrativeRegion || administrativeRegionForLocationCard(card);
+  const savedSummaryKey = administrativeRegion?.regionKey || card.regionKey;
+  const savedSummary = isAdminRole() ? locationProfileSavedRegionalModel(savedSummaryKey) : null;
   const hasStoredCard = options.hasStoredCard !== false && !card.administrativeOnly;
   const region = tourismMatch?.region || {};
   const providerMapping = administrativeRegion?.providerMappings?.kto || {};
@@ -36361,15 +36473,17 @@ function renderObservedLocationProfile(card, alias, tourismMatch, clusters, inde
           <h3>${escapeHtml(`${shortSido} ${sigungu}`)}</h3>
           <p>지역 단위의 공공자료와 실제 숙박 관측자료를 분리해 연결합니다.</p>
         </div>
-          <div class="location-profile-overview-status"><span class="location-profile-period-chip">방문자 기준 ${escapeHtml(tourismPeriodLabel)} · 지표별 기간 상이</span><span class="location-profile-api-state ${loading ? "is-loading" : exactRegion ? "is-ready" : "is-fallback"}" role="status" aria-live="polite">${escapeHtml(loading ? "저장 이력 확인 중" : exactRegion ? "행정구역·관광코드 확정" : providerCodePending ? "관광코드 확인 대기" : "관광코드 연결 대기")}</span></div>
+          <div class="location-profile-overview-status"><span class="location-profile-period-chip"${savedSummary ? ` data-location-saved-period="${escapeHtml(savedSummaryKey)}"` : ""}>${savedSummary ? escapeHtml(locationSavedRegionalPeriodLabel(savedSummary)) : `방문자 기준 ${escapeHtml(tourismPeriodLabel)} · 지표별 기간 상이`}</span><span class="location-profile-api-state ${loading ? "is-loading" : exactRegion ? "is-ready" : "is-fallback"}" role="status" aria-live="polite">${escapeHtml(loading ? "저장 이력 확인 중" : exactRegion ? "행정구역·관광코드 확정" : providerCodePending ? "관광코드 확인 대기" : "관광코드 연결 대기")}</span></div>
       </header>
-      <div class="location-profile-summary-grid location-profile-metric-grid">
+      <div class="location-profile-summary-grid location-profile-metric-grid"${savedSummary ? ` ${locationSavedRegionalSummaryAttributes(savedSummary)}` : ""}>
+        ${savedSummary ? renderLocationSavedRegionalSummaryCards(savedSummary) : `
         ${renderLocationProfileSummaryCard({ key: "visitor", title: "지역 방문자", tone: "is-visitor", items: [{ label: visitorValueLabel, value: visitorHeadline }], note: visitorNote, coverage: visitorCoverage, coverageLabel: visitorCoverageLabel, coverageDetail: visitorCoverageDetail })}
         ${renderLocationProfileSummaryCard({ key: "strength", title: "체류·소비", tone: "is-strength", items: [{ label: strengthSummary.stayLabel, value: strengthSummary.stayPoint ? tourismDemandStrengthNumberLabel(strengthSummary.stayPoint.value) : "관측 없음" }, { label: strengthSummary.spendLabel, value: strengthSummary.spendPoint ? tourismDemandStrengthNumberLabel(strengthSummary.spendPoint.value) : "관측 없음" }], note: loading ? "저장 자료 확인 중" : ["error", "unavailable"].includes(entry?.status) ? "저장 자료 조회 실패" : strengthSummary.note, coverage: strengthCoverage, coverageDetail: strengthCompleteMonths ? "두 계열 공통 완전월" : strengthSummary.stayPoint || strengthSummary.spendPoint ? "공통 완전월 없음 · 계열별 기준월" : "체류·소비 관측값 미확보" })}
         ${renderLocationProfileSummaryCard({ key: "resourceDemand", title: "관광자원 수요", tone: "is-resource", items: resourceDemandSummary.items, note: resourceDemandSummary.note, coverage: resourceDemandSummary.coverage, coverageDetail: "서비스·문화 계열별 실제 관측" })}
         ${renderLocationProfileSummaryCard({ key: "diversity", title: "관광 다양성", tone: "is-diversity", items: diversitySummary.items, note: diversitySummary.note, coverage: diversitySummary.coverage, coverageDetail: "관광객·소비·국제 계열별 실제 관측" })}
+        `}
       </div>
-      <p class="location-profile-endpoint-state">${escapeHtml(endpointLabel)}</p>
+      <p class="location-profile-endpoint-state"${savedSummary ? ` data-location-saved-endpoint="${escapeHtml(savedSummaryKey)}"` : ""}>${escapeHtml(savedSummary ? locationSavedRegionalEndpointLabel(savedSummary) : endpointLabel)}</p>
       <nav class="location-profile-tabs" role="tablist" aria-label="${escapeHtml(sigungu)} 지역 상세">
         ${locationProfileTabButton("basic", "기본 입지")}
         ${locationProfileTabButton("tourism", "관광 기반")}

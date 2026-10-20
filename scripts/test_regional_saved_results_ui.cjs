@@ -2,6 +2,7 @@
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), path = require("node:path"), vm = require("node:vm");
 const { createController, createCache, createSavedResults, savedResults } = require("../web/regional-analysis.js");
+const { build: buildLocationSummary } = require("../web/regional-location-summary.js");
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const scope = (extra = {}) => ({ accountKey: "admin-one", regionKey: "sancheong", month: "2026-09", months: 13, ...extra });
@@ -10,6 +11,18 @@ const payload = (input = scope(), resultId = "saved-1") => ({ status: "ready", s
     groups: [{ key: "visitors", status: "ready", metrics: [{ key: "daily", unit: "명", rows: [{ period: "2026-09", status: "observed", value: 0 }] }] }], },
   job: null, policy: { enabled: false } });
 const host = () => ({ innerHTML: "", dataset: {}, isConnected: true, listeners: new Map(), addEventListener(name, fn) { this.listeners.set(name, fn); } });
+const cardPayload = (input = scope(), resultId = "card-saved-1", daily = 45048) => {
+  const result = payload(input, resultId);
+  const months = Array.from({ length: 13 }, (_, index) => new Date(Date.UTC(2025, 7 + index, 1)).toISOString().slice(0, 7));
+  result.snapshot.groups = [{ key: "visitors", provider: "한국관광공사", periodType: "M", status: "ready", metrics: [
+    ["averageDailyVisitors", "명", daily], ["visitorDays", "인일", 1396483]
+  ].map(([key, unit, value]) => ({ key, unit, latestPeriod: "2026-08", latestValue: value, expectedMonths: 13, availableMonths: 13,
+    rows: months.map(period => ({ period, status: "observed", value })),
+    requestedPoint: { period: "2026-09", status: "partial", value: null,
+      storedEvidenceVerification: { status: "rejected", reasonCode: "VISITOR_RAW_INCOMPLETE_DAYS" } } })) }];
+  return result;
+};
+const visitorCard = model => model.cards.find(card => card.key === "visitor");
 
 test("shared saved reader and summary coalesce the exact account, region and explicit period GET", async () => {
   const cache = createCache(), reader = createSavedResults({ cache }), pending = deferred(), requests = [];
@@ -169,4 +182,121 @@ test("unchanged immutable summaries preserve metric DOM while job and failure st
   assert.equal(writes, before); assert.equal(details, original); assert.match(nodes.status.innerHTML, /마지막 정상 저장 결과/);
   next = payload(scope(), "new-result"); await controller.refresh(true);
   assert.equal(writes, before + 1); assert.notEqual(details, original); controller.stop();
+});
+
+test("adjacent cards consume unqueried, loading and the exact accepted saved scope through one shared GET", async () => {
+  const cache = createCache(), reader = createSavedResults({ cache }), next = deferred(), requests = [], states = [], frames = [];
+  const canonical = cardPayload(), element = host();
+  const fetchJson = (url, options) => {
+    assert.equal(url, "/api/regional-analysis?regionKey=sancheong&month=2026-09&months=13", "cards must not start a legacy/profile/provider read");
+    assert.equal(options, undefined, "a display must not start a mutation");
+    requests.push(url); return next.promise;
+  };
+  const controller = createController({ cache, fetchJson, afterPaint: callback => frames.push(callback) });
+  try {
+    const sharedRead = reader.get({ ...scope(), fetchJson });
+    const mounting = controller.mount(element, { ...scope(), onStateChange(value) { states.push({ value, model: buildLocationSummary(value) }); } });
+    await tick();
+    assert.equal(requests.length, 1);
+    assert.equal(states[0].value.result, undefined); assert.equal(states[0].model.status, "unqueried");
+    assert.equal(visitorCard(states[0].model).coverage, null, "an unchecked card must not invent 0/12 or 0/13 coverage");
+    const loading = states.find(item => item.value.loading);
+    assert.ok(loading); assert.equal(loading.value.result, undefined); assert.equal(loading.model.status, "loading");
+    next.resolve(canonical); await Promise.all([sharedRead, mounting]);
+    const accepted = states.at(-1), card = visitorCard(accepted.model);
+    assert.equal(accepted.value.loading, false); assert.equal(accepted.value.error, "");
+    assert.deepEqual(accepted.value.result.scope, canonical.scope);
+    assert.equal(accepted.value.result.snapshot, canonical.snapshot, "the consumer receives the accepted snapshot itself");
+    assert.equal(accepted.value.result.snapshot, reader.read(scope()).snapshot);
+    assert.equal(accepted.model.resultId, canonical.snapshot.resultId);
+    assert.deepEqual(card.metrics.map(metric => [metric.key, metric.value, metric.period]), [
+      ["averageDailyVisitors", 45048, "2026-08"], ["visitorDays", 1396483, "2026-08"]
+    ]);
+    assert.equal(card.coverage.completeMonths, 13); assert.equal(card.coverage.expectedMonths, 13);
+    assert.equal(card.metrics[0].requested.status, "partial");
+    assert.equal(requests.length, 1, "the adjacent consumer reuses the accepted envelope without another GET");
+  } finally { controller.stop(); }
+});
+
+test("failed confirmation callbacks preserve adjacent cards' last normal values and original checked time", async () => {
+  let clock = Date.parse("2026-10-20T00:00:00Z"), fail = false;
+  const frames = [], states = [], requests = [], cache = createCache({ now: () => clock }), canonical = cardPayload(), element = host();
+  const controller = createController({ cache, now: () => clock, afterPaint: callback => frames.push(callback), fetchJson: async url => {
+    requests.push(url); if (fail) throw Error("saved confirmation offline"); return canonical;
+  } });
+  try {
+    await controller.mount(element, { ...scope(), onStateChange(value) { states.push({ value, model: buildLocationSummary(value) }); } });
+    while (frames.length) frames.shift()();
+    const checkedAt = states.at(-1).value.checkedAt, before = states.length;
+    clock += 30; fail = true;
+    const confirmation = controller.refresh(true); await tick(); await confirmation;
+    const failed = states.at(-1), during = states.slice(before).find(item => item.value.loading);
+    assert.ok(during); assert.equal(during.value.result.snapshot, canonical.snapshot);
+    assert.equal(visitorCard(during.model).metrics[0].value, 45048);
+    assert.equal(failed.value.result.snapshot, canonical.snapshot); assert.equal(failed.value.checkedAt, checkedAt);
+    assert.equal(failed.value.error, "saved confirmation offline"); assert.equal(failed.value.loading, false);
+    assert.equal(failed.model.stale, true); assert.equal(failed.model.resultId, canonical.snapshot.resultId);
+    assert.deepEqual(visitorCard(failed.model).metrics.map(metric => metric.value), [45048, 1396483]);
+    assert.equal(visitorCard(failed.model).coverage.completeMonths, 13);
+    assert.equal(requests.length, 2); assert.ok(requests.every(url => url.startsWith("/api/regional-analysis?")));
+  } finally { controller.stop(); }
+});
+
+test("late old-region GET and paint callbacks cannot overwrite the newly selected card consumer", async () => {
+  const cache = createCache(), reader = createSavedResults({ cache }), oldRequest = deferred(), nextRequest = deferred();
+  const oldStates = [], newStates = [], oldDisplays = [], newDisplays = [], frames = [], requests = [], element = host();
+  const oldResult = cardPayload(), nextScope = scope({ regionKey: "pocheon" }), nextResult = cardPayload(nextScope, "pocheon-saved", 9876);
+  await reader.get({ ...scope(), fetchJson: async () => oldResult }); reader.invalidate(scope());
+  const controller = createController({ cache, afterPaint: callback => frames.push(callback), fetchJson: url => {
+    requests.push(url); return url.includes("regionKey=pocheon") ? nextRequest.promise : oldRequest.promise;
+  } });
+  try {
+    const oldMount = controller.mount(element, { ...scope(), onStateChange(value) { oldStates.push(value); }, onDisplay(value) { oldDisplays.push(value); } });
+    await tick(); const oldPaint = frames.shift(); assert.equal(typeof oldPaint, "function");
+    const nextMount = controller.mount(element, { ...nextScope, onStateChange(value) { newStates.push({ value, model: buildLocationSummary(value) }); }, onDisplay(value) { newDisplays.push(value); } });
+    await tick(); const oldStateCount = oldStates.length, newStateCount = newStates.length;
+    oldPaint();
+    oldRequest.resolve(cardPayload(scope(), "late-old-result", 999999)); await oldMount; await tick();
+    assert.equal(oldStates.length, oldStateCount); assert.equal(newStates.length, newStateCount);
+    assert.equal(oldDisplays.length, 0); assert.equal(newDisplays.length, 0, "an old paint cannot be reported through the new callback");
+    assert.equal(controller.state.regionKey, "pocheon"); assert.equal(controller.state.snapshot, null);
+    assert.equal(newStates.at(-1).value.result, undefined); assert.equal(newStates.at(-1).model.status, "loading");
+    nextRequest.resolve(nextResult); await nextMount;
+    while (frames.length) frames.shift()();
+    const accepted = newStates.at(-1);
+    assert.equal(accepted.value.result.snapshot, nextResult.snapshot); assert.equal(accepted.value.result.scope.regionKey, "pocheon");
+    assert.equal(visitorCard(accepted.model).metrics[0].value, 9876);
+    assert.ok(newStates.every(item => item.value.regionKey === "pocheon" && (!item.value.result || item.value.result.scope.regionKey === "pocheon")));
+    assert.equal(newDisplays.length, 1); assert.equal(newDisplays[0].regionKey, "pocheon"); assert.equal(newDisplays[0].resultId, "pocheon-saved");
+    assert.equal(requests.length, 2);
+  } finally { controller.stop(); }
+});
+
+test("adjacent card display callbacks keep the host's cached first-paint time through later server verification", async () => {
+  let clock = Date.parse("2026-10-20T00:00:00Z");
+  const cache = createCache({ now: () => clock }), reader = createSavedResults({ cache }), frames = [], next = deferred(), states = [], displays = [], element = host();
+  const cached = cardPayload(), confirmed = cardPayload(scope(), "confirmed-card-result", 46000);
+  await reader.get({ ...scope(), fetchJson: async () => cached }); reader.invalidate(scope());
+  const controller = createController({ cache, now: () => clock, afterPaint: callback => frames.push(callback), fetchJson: () => next.promise });
+  try {
+    const mounting = controller.mount(element, { ...scope(), onStateChange(value) { states.push(value); },
+      onDisplay(value) { displays.push({ value, dataset: { ...element.dataset } }); } });
+    await tick(); assert.equal(displays.length, 0, "a callback is not display evidence before the frame completes");
+    clock += 7; frames.shift()();
+    assert.equal(displays.length, 1); assert.equal(displays[0].value.milliseconds, 7); assert.equal(displays[0].value.source, "cache");
+    assert.equal(displays[0].value.resultId, cached.snapshot.resultId); assert.equal(displays[0].dataset.raVerifiedStatus, "checking");
+    clock += 80; next.resolve(confirmed); await mounting;
+    assert.equal(displays.length, 1, "server acceptance must also wait for its completed frame");
+    clock += 4; frames.shift()();
+    assert.equal(displays.length, 2); assert.equal(displays[1].value.resultId, confirmed.snapshot.resultId);
+    assert.equal(displays[1].value.milliseconds, 7, "server verification must not replace the first cached display duration");
+    assert.equal(displays[1].value.sequence, displays[0].value.sequence); assert.equal(displays[1].value.source, "cache");
+    for (const event of displays) {
+      assert.equal(event.value.milliseconds, Number(event.dataset.raDisplayMs));
+      assert.equal(event.value.resultId, event.dataset.raDisplayResultId); assert.equal(event.value.sequence, Number(event.dataset.raDisplaySequence));
+    }
+    assert.equal(element.dataset.raVerifiedMs, "91"); assert.equal(element.dataset.raVerifiedStatus, "ready");
+    assert.equal(states.at(-1).result.snapshot, confirmed.snapshot); assert.equal(states.at(-1).readSource, "server");
+    assert.equal(buildLocationSummary(states.at(-1)).cards[0].metrics[0].value, 46000);
+  } finally { controller.stop(); }
 });

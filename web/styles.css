@@ -46413,6 +46413,64 @@ body.role-admin .admin-db-company-explorer-list .admin-db-company.admin-db-compa
   overflow-wrap: anywhere;
 }
 
+.location-profile-metric-grid .location-profile-summary-state {
+  flex: 0 1 auto;
+  padding: 3px 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: var(--surface-card);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.location-profile-metric-grid [data-location-summary-status="loading"] .location-profile-summary-state {
+  color: var(--theme-accent-strong);
+}
+
+.location-profile-metric-grid :is([data-location-summary-status="error"], [data-location-summary-status="mismatch"]) .location-profile-summary-state {
+  color: var(--warning-strong);
+}
+
+.location-profile-metric-grid .location-profile-summary-values small,
+.location-profile-metric-grid .location-profile-summary-pending,
+.location-profile-metric-grid .location-profile-summary-proof {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.location-profile-metric-grid .location-profile-summary-proof {
+  padding-top: 7px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.location-profile-metric-grid [data-location-metric-key] > strong {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 3px 5px;
+}
+
+.location-profile-metric-grid [data-location-metric-key] .location-profile-summary-number {
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.location-profile-metric-grid .is-visitor [data-location-metric-key] > strong {
+  font-size: clamp(18px, 1.6vw, 22px);
+}
+
+.location-profile-metric-grid [data-location-metric-key] .location-profile-summary-unit {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .location-profile-metric-grid .location-profile-coverage {
   min-width: 0;
   align-self: end;

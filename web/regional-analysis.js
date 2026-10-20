@@ -342,6 +342,7 @@
     const reader = createSavedResults({ cache, now });
     const state = { regionKey: "", regionLabel: "", mode: "summary", accountKey: "", targetMonth: "", scopeMonth: "", snapshot: null, management: null, job: null, policy: null, policyDraft: null, loading: false, starting: false, saving: false, needsStatusCheck: false, error: "", storageError: "", message: "", checkedAt: null, readSource: "", openGroups: new Set(), openDetails: new Set(), reviewFilters: { status: "review", source: "", period: "" }, reviewLimit: 20 };
     let host = null, revision = 0, timer = null, paused = true, contextVisible = () => true;
+    let onStateChange = null, onDisplay = null;
     let displayRevision = 0, displaySequence = 0, renderedHost = null, renderedBody = null;
     const bound = new WeakSet();
     const visible = () => !paused && host?.isConnected !== false && !root.document?.hidden && isVisible() && contextVisible();
@@ -373,6 +374,12 @@
         const jobMarkup = jobHtml(state.job, state.snapshot); if (job.innerHTML !== jobMarkup) job.innerHTML = jobMarkup;
       } else { host.innerHTML = renderCard(view); renderedHost = host; renderedBody = body; }
       restoreReviewFocus(focused);
+      // Adjacent cards share this exact accepted result and GET lifecycle.
+      // They must not reconstruct a separate legacy profile or start a read.
+      onStateChange?.({ regionKey: state.regionKey, month: state.targetMonth, accountKey: state.accountKey, displaySequence,
+        result: state.scopeMonth ? { scope: { regionKey: state.regionKey, month: state.scopeMonth, months: 13 },
+          snapshot: state.snapshot, status: state.snapshot?.status || "missing", storage: { errorCode: state.storageError } } : undefined,
+        loading: state.loading, error: state.error, storageError: state.storageError, readSource: state.readSource, checkedAt: state.checkedAt });
     }
     function entryStart(element) {
       const value = Number(element?.dataset?.raEntryStartedAt);
@@ -409,6 +416,9 @@
           entry.verifying = false; element.dataset.raVerifiedMs = String(elapsed); element.dataset.raVerifiedSequence = String(entry.sequence);
           element.dataset.raVerifiedStatus = "ready"; element.dataset.raVerifiedAt = state.checkedAt || "";
         } else element.dataset.raVerifiedStatus = failed ? "error" : entry.verifying ? "checking" : "cached";
+        onDisplay?.({ regionKey: state.regionKey, month: state.targetMonth, accountKey: state.accountKey,
+          resultId: state.snapshot?.resultId || "", milliseconds: Number(element.dataset.raDisplayMs), sequence: entry.sequence,
+          source: element.dataset.raDisplaySource, status: failed ? "error" : "ready" });
       });
     }
     function accept(result, { preserveDraft = false } = {}) {
@@ -490,6 +500,8 @@
       state.regionKey = context.regionKey || ""; state.regionLabel = context.regionLabel || "지역 미선택"; state.mode = ["summary", "sources", "manage"].includes(context.mode) ? context.mode : "summary"; state.accountKey = context.accountKey || "";
       state.targetMonth = targetMonth;
       contextVisible = context.isVisible || (() => true); if (context.fetchJson) fetchJson = context.fetchJson;
+      onStateChange = typeof context.onStateChange === "function" ? context.onStateChange : null;
+      onDisplay = typeof context.onDisplay === "function" ? context.onDisplay : null;
       host = element; paused = false;
       if (!bound.has(host)) {
         bound.add(host);
