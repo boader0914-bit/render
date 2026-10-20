@@ -12,6 +12,22 @@ const source = fs.readFileSync(path.join(__dirname, "../web/collector_controls.j
 const app = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8");
 const clone = value => JSON.parse(JSON.stringify(value));
 const keys = ["web", "manual", "scheduled"];
+test("saved collection remains complete while DB preparation is queued, running, failed or unavailable", async () => {
+  const states = ["queued", "running", "complete", "failed", "unavailable"];
+  const records = states.map((state, index) => ({ ...normalizedRow({ keyword: `준비시험${index}`, workerKey: "manual", trigger: "scheduled",
+    status: "complete", runId: `preparation_result_${index}`, createdAt: new Date().toISOString(), collectionQuality: { status: "complete" } },
+    { id: `preparation_record_${index}`, source: "rotation" }), postprocess: { state, lastErrorCode: "COLLECTION_POSTPROCESS_HISTORY_FAILED" } }));
+  const ui = await mockUi({ historyRecords: records });
+  const rows = descendants(ui.nodes.get("collectorUnifiedHistory")).filter(el => el.className === "collector-history-row");
+  assert.equal(rows.length, states.length);
+  const expected = ["업체 DB 반영 대기", "업체 DB 반영 중", "업체 DB 반영 완료", "업체 DB 반영 실패 · 수집 결과 보관됨", "업체 DB 반영 상태 확인 필요"];
+  for (let index = 0; index < states.length; index++) {
+    const row = rows.find(item => text(item).includes(`준비시험${index}`));
+    assert.ok(text(row).includes(expected[index]));
+    assert.equal(descendants(row).find(item => item.className === "state-badge").textContent, "완료");
+    assert.ok(descendants(row).some(item => item.tagName === "BUTTON" && item.textContent === "결과 보기"));
+  }
+});
 test("startup failure labels distinguish execution identity from connection and artifact errors", () => {
   assert.match(errorMessage("COLLECTOR_ROLE_MISMATCH"), /수집기 역할과 실행 조건.*시작하지 못/);
   assert.match(errorMessage("COLLECTOR_RUN_TOKEN_INVALID"), /수집 실행 식별값 형식/);

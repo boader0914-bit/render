@@ -36,6 +36,21 @@ test("durable acceptance returns before work completes and same request runs onc
   assert.equal(count, 1);
 });
 
+test("collection completion preserves a separate safe DB preparation failure across restart", async t => {
+  const { api, dataDir } = await fixture(t, { run: async () => result("complete", {
+    postprocess: { state: "failed", errorCode: "COLLECTION_POSTPROCESS_PERSIST_FAILED", context: { token: "DO_NOT_PERSIST" } }
+  }) });
+  await api.submit(payload());
+  const saved = await terminal(api);
+  assert.equal(saved.status, "complete");
+  assert.equal(saved.result.collectionQuality.status, "complete");
+  assert.deepEqual(saved.result.postprocess, { state: "failed", errorCode: "COLLECTION_POSTPROCESS_PERSIST_FAILED" });
+  const fresh = createCollectorRequests({ dataDir, run: () => { throw Error("Must not recollect"); } });
+  assert.deepEqual(await fresh.get(saved.requestId), saved);
+  const bytes = await fs.readFile(path.join(dataDir, "history/collector-requests/request-test-0001.json"), "utf8");
+  assert.doesNotMatch(bytes, /DO_NOT_PERSIST|token/);
+});
+
 test("concurrent distinct requests are persisted while earlier collection is still running", async t => {
   let release;
   const hold = new Promise(resolve => { release = resolve; });

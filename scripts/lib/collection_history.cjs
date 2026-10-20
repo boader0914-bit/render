@@ -99,6 +99,10 @@ function stateFor(status, quality, errorCode) {
   if (["complete", "completed", "reused"].includes(status) || ["complete", "reused"].includes(quality?.status)) return "complete";
   return "review";
 }
+function safePostprocess(value) {
+  if (!object(value) || !["held", "queued", "running", "complete", "failed"].includes(value.state)) return null;
+  return { state: value.state, ...(code(value.errorCode) ? { errorCode: code(value.errorCode) } : {}) };
+}
 function compactStoredValue(input) {
   // The shared filesystem cache only needs receipt metadata, not product
   // observations, credentials or arbitrary historical config payloads.
@@ -108,6 +112,7 @@ function compactStoredValue(input) {
     if (typeof input[key] === "string") output[key] = input[key].slice(0, 500);
     else if (["number", "boolean"].includes(typeof input[key])) output[key] = input[key];
   output.collectionQuality = sanitizeCollectionQuality(input.collectionQuality || input.quality);
+  if (safePostprocess(input.postprocess)) output.postprocess = safePostprocess(input.postprocess);
   output.conditions = safeConditions(input.conditions || input);
   if (object(input.result)) output.result = compactStoredValue(input.result);
   if (object(input.recovery)) output.recovery = safeRecovery(input.recovery);
@@ -144,7 +149,8 @@ function normalizedRow(value, context) {
     stamp: stamp || null, date: stamp ? dateKey(stamp) : null, dateBasis, dateBasisLabel: DATE_BASIS[dateBasis], startedAt, receivedAt, scheduledAt, finishedAt,
     conditions: { ...safeConditions(context.conditions), ...safeConditions(value.conditions || value) }, errorCode, brokerErrorCode: code(value.brokerErrorCode),
     failurePhase: ["main_search", "booking_detail", "booking_schedule", "ota_observation", "file_upload", "final_validation"].includes(value.failurePhase) ? value.failurePhase : null,
-    recovery: safeRecovery(value.recovery), reused: status === "reused" || result.reused === true };
+    recovery: safeRecovery(value.recovery), reused: status === "reused" || result.reused === true,
+    ...(safePostprocess(value.postprocess || result.postprocess) ? { postprocess: safePostprocess(value.postprocess || result.postprocess) } : {}) };
   if (Number.isFinite(value.durationMs) && value.durationMs >= 0 && value.durationMs <= 1e12) row.durationMs = value.durationMs;
   return row;
 }
@@ -340,6 +346,6 @@ function createCollectionHistory({ dataDir, outputsDir = path.join(dataDir, "out
     }
     return result;
   }
-  return { query };
+  return { query, invalidate() { cached = null; lastLoaded = 0; } };
 }
 module.exports = { createCollectionHistory, normalizeQuery, normalizedRow, stateFor };

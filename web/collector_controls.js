@@ -336,10 +336,25 @@
     mount(root, runs) {
       for (const slot of root?.querySelectorAll?.("[data-collection-diagnostics]") || []) {
         const run = runs.find(item => item.id === slot.dataset.collectionDiagnostics);
-        if (run) slot.replaceChildren(diagnosticCard(run.id, run.collectionQuality, "archive"));
+        if (run) {
+          slot.replaceChildren(diagnosticCard(run.id, run.collectionQuality, "archive"));
+          const status = postprocessStatus(run.postprocess);
+          if (status) slot.prepend(status);
+        }
       }
     }
   };
+  function postprocessStatus(value) {
+    if (!value) return null;
+    const labels = { held: "업체 DB 반영 대기", queued: "업체 DB 반영 대기", running: "업체 DB 반영 중",
+      complete: "업체 DB 반영 완료", failed: "업체 DB 반영 실패 · 수집 결과 보관됨", unavailable: "업체 DB 반영 상태 확인 필요" };
+    const label = labels[value.state];
+    if (!label) return null;
+    const status = node("small", label, value.state === "failed" ? "collector-worker-alert" : "collector-postprocess-status");
+    status.title = [value.updatedAt ? `갱신 ${formatTime(value.updatedAt)}` : "", value.lastErrorCode || value.errorCode || "",
+      value.attempts ? `DB 반영 시도 ${value.attempts}/${value.maxAttempts || 3}` : ""].filter(Boolean).join(" · ");
+    return status;
+  }
   window.dispatchEvent(new CustomEvent("collector:diagnostics-ready"));
   const byId = id => document.getElementById(id);
   const panel = byId("collectorControlsCard");
@@ -666,6 +681,8 @@
       if (reason) info.append(node("small", reason, "collector-worker-alert"));
       if (entry.errorCode) info.append(node("small", errorMessage(entry.brokerErrorCode || entry.errorCode), "collector-worker-alert"));
       if (entry.recovery) info.append(node("small", "보존 자료 복구 완료 · 업체 DB 반영"));
+      const postprocess = postprocessStatus(entry.postprocess);
+      if (postprocess) info.append(postprocess);
       row.append(info, node("span", label, "state-badge"));
       if (entry.runId) row.append(resultButton(entry.runId));
       if (!reviewRequired(entry) && (entry.runId || ["partial", "failed", "blocked", "interrupted"].includes(entry.status))) row.append(diagnosticCard(entry.runId || "", entry.collectionQuality || { status: entry.status }, `history:${entry.requestId || entry.keyword}`));

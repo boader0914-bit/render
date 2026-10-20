@@ -129,6 +129,10 @@ function resultFor(value, quality) {
   const runId = typeof value?.runId === "string" && /^[A-Za-z0-9_-]{1,240}$/.test(value.runId) ? value.runId : null;
   const result = { status: ["complete", "partial", "failed", "blocked"].includes(status) ? status : "failed", runId,
     collectionQuality: sanitizeCollectionQuality(candidate), errorCode: ["complete", "partial", "failed", "blocked"].includes(status) ? null : "RESULT_QUALITY_UNKNOWN" };
+  if (["held", "queued", "running", "complete", "failed"].includes(value?.postprocess?.state)) {
+    result.postprocess = { state: value.postprocess.state };
+    if (/^[A-Z][A-Z0-9_]{1,99}$/.test(value.postprocess.errorCode || "")) result.postprocess.errorCode = value.postprocess.errorCode;
+  }
   if (result.status === "complete" && !runId) return { ...result, status: "failed", errorCode: "RESULT_RUN_ID_MISSING" };
   if (result.status === "complete" && (candidate?.counts?.mainCount === 0 || value?.output?.counts?.naverOverall === 0)) return { ...result, status: "failed", errorCode: "RESULT_EMPTY" };
   if (result.status === "complete" && (value?.reused === true || value?.reusedResult === true || value?.cacheHit === true)) result.status = "reused";
@@ -429,6 +433,12 @@ function createCollectionRotationScheduler(options = {}) {
         event("finished", result.errorCode, slot.id);
       });
       if (!["complete", "reused"].includes(result.status)) pause(result.errorCode || `ROTATION_RESULT_${result.status.toUpperCase()}`, result.status === "uncertain" ? "review" : "paused");
+      // The durable collection receipt is the boundary. Optional derived work
+      // may start only after this transaction; failure cannot undo completion.
+      if (options.onResultCommitted) {
+        try { await options.onResultCommitted(result, { ...slot, finishedAt }); }
+        catch { options.logger?.warn?.("COLLECTION_POSTPROCESS_RELEASE_PENDING"); }
+      }
       return rowItem(db.prepare("SELECT * FROM rotation_slots WHERE id=?").get(slot.id));
     } catch (error) {
       // A successful crawl without a durable completion receipt must not run again.

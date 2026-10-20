@@ -8,10 +8,14 @@ const ID=/^[a-zA-Z0-9_-]{8,120}$/;
 const STATES=new Set(['pending','complete','partial','blocked','failed','interrupted','reused']);
 function fault(code,message,statusCode=409){return Object.assign(new Error(message),{code,statusCode});}
 function canonical(value){if(Array.isArray(value))return value.map(canonical);if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])]));return value;}
+function postprocess(value){
+ if(!value||!['held','queued','running','complete','failed'].includes(value.state))return null;
+ return {state:value.state,...(/^[A-Z][A-Z0-9_]{1,99}$/.test(value.errorCode||'')?{errorCode:value.errorCode}:{})};
+}
 function publicRow(row){
  const {requestId,workerKey,trigger,keyword,status,createdAt,finishedAt,errorCode,message}=row;
  const source=row.result;
- const result=source?{runId:source.runId,collectionQuality:sanitizeCollectionQuality(source.collectionQuality),reused:source.reused===true,workerKey:source.workerKey,trigger:source.trigger}:null;
+ const result=source?{runId:source.runId,collectionQuality:sanitizeCollectionQuality(source.collectionQuality),reused:source.reused===true,workerKey:source.workerKey,trigger:source.trigger,...(postprocess(source.postprocess)?{postprocess:postprocess(source.postprocess)}:{})}:null;
  return {requestId,workerKey,trigger,keyword,status,createdAt,finishedAt,result,errorCode,message,...(row.conditions?{conditions:row.conditions}:{}),...(row.failurePhase?{failurePhase:row.failurePhase}:{}),...(row.brokerErrorCode?{brokerErrorCode:row.brokerErrorCode}:{}),...(row.recovery?{recovery:row.recovery}:{})};
 }
 function safeFailure(error){
@@ -47,7 +51,7 @@ function createCollectorRequests({dataDir,run,preflight=async()=>{},now=()=>new 
    const state=quality?.status;
    const runId=typeof value?.runId==='string'&&/^[a-zA-Z0-9_-]{1,220}$/.test(value.runId)?value.runId:null;
    const status=['complete','partial','blocked','failed'].includes(state)&&runId?(state==='complete'&&value.reused?'reused':state):'failed';
-   const result={runId,collectionQuality:sanitizeCollectionQuality(quality),reused:value?.reused===true,workerKey:value?.workerKey||row.workerKey,trigger:value?.trigger||'manual'};
+   const result={runId,collectionQuality:sanitizeCollectionQuality(quality),reused:value?.reused===true,workerKey:value?.workerKey||row.workerKey,trigger:value?.trigger||'manual',...(postprocess(value?.postprocess)?{postprocess:postprocess(value.postprocess)}:{})};
    const message={complete:'수집과 결과 검증을 완료했습니다.',reused:'조건에 맞는 당일 자료를 사용했습니다.',partial:'일부 자료가 누락되었습니다. 정상 자료로 반영하지 않았습니다.',blocked:'접근 제한으로 중단했습니다. 정상 자료로 반영하지 않았습니다.',failed:'수집을 완료하지 못했습니다. 결과와 워커 상태를 확인하세요.'}[status];
    await lock(()=>finish(row,{status,result,message,errorCode:status==='failed'&&!runId?'RESULT_RUN_ID_MISSING':null}));
   }catch(error){try{await lock(()=>finish(row,safeFailure(error)));}catch{Object.assign(row,{status:'interrupted',errorCode:'COLLECTOR_RECEIPT_WRITE_FAILED',message:'최종 상태 저장을 확인하지 못했습니다. 기존 결과를 확인하세요.',finishedAt:stamp()});}}

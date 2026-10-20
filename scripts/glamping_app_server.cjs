@@ -52,6 +52,7 @@ const { createDailyKeywordCollectionScheduler, validateRequestPacing, effectiveR
 const { inspectResult: inspectDailyCollectionResult, allowsDerivedUpdates } = require("./daily_collection_quality.cjs");
 const { readCollectionDiagnostics } = require("./lib/collection_diagnostics.cjs");
 const { createCollectionHistory } = require("./lib/collection_history.cjs");
+const { createCollectionPostprocessQueue } = require("./lib/collection_postprocess_queue.cjs");
 const { createMasterDbDualWriteQueue } = require("./master_db_dual_write.cjs");
 const { createCollectorBroker } = require("./collector_broker.cjs");
 const { dispatchCollector, createHistoricalBookingContext } = require("./collector_dispatch.cjs");
@@ -222,6 +223,13 @@ const masterDbDualWriteQueue = createMasterDbDualWriteQueue({
   databasePath: process.env.MASTER_DB_PATH || path.join(DATA_DIR, "master_db", "sabun_master.sqlite"),
   mode: process.env.MASTER_DB_WRITE_MODE,
   logger: console
+});
+// Publication/quality receipts must not wait for provider enrichment or derived DB work.
+const collectionPostprocessQueue = createCollectionPostprocessQueue({
+  dataDir: HISTORY_DIR,
+  processRun: processCollectionPostprocess,
+  canProcess: () => !Object.values(crawlLanes).some(lane => lane.activeCrawlJob || lane.activeCrawlPromise),
+  maxAttempts: 3, maxRetained: 1000
 });
 const specialDaysService = createSpecialDaysService({
   dataDir: path.join(DATA_DIR, "history", "special_days"),
@@ -715,6 +723,10 @@ const keywordWorkerSchedulers = Object.fromEntries(["web", "manual", "scheduled"
 const scheduleMutation = serialExecutor();
 const collectionRotationScheduler = createCollectionRotationScheduler({
   dataDir: DATA_DIR,
+  onResultCommitted: async result => {
+    collectionHistory.invalidate();
+    if (["complete", "reused"].includes(result.status) && result.runId) await collectionPostprocessQueue.release(result.runId);
+  },
   verifyPersistedResult: createRotationResultVerifier({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR }),
   executeSlot: payload => runCrawler({...payload, sourceRole:USER_ROLES.admin, collectionSource:"admin_search", rotationCollection:true}),
   getWorkerState: async workerKey => {
@@ -741,6 +753,7 @@ const collectionRotationScheduler = createCollectionRotationScheduler({
 });
 const collectorRequests = createCollectorRequests({dataDir:DATA_DIR,run:runCrawler,preflight:payload=>assertCollectorReady(payload.workerKey,true)});
 const insightIntegration = require('./lib/insight_integration.cjs').createInsightIntegration({
+  readPostprocess: runId => collectionPostprocessQueue.status({ runId }),
   dataDir: DATA_DIR, readCatalog: monthlyReportSources.catalog, readMembers: readB2BMemberStore,
   authenticateMember: authenticateB2BMember, registerMember: (payload, insightConsent) => registerB2BMember(payload, { insightConsent }), checkUsername: checkSignupUsernameAvailability, policyContext: publicPageContext(), requireAdmin: requireAdminSession, collectorRequests,
   readEvidence: readInsightCompanyEvidence,
@@ -2054,55 +2067,25 @@ function startCrawlJob(job) {
     finishOpenCrawlRuntimeStage(job, endedAt);
     const stageTimings = publicCrawlStageTimings(job);
     const estimate = crawlLane().activeCrawlEstimate;
-    await appendCrawlTimingEntry({
-      plan: estimate,
-      startedAt: crawlLane().activeCrawlStartedAt,
-      endedAt,
-      estimate,
-      result,
-      error: failure,
-      stageTimings
-    }).then((timing) => {
-      if (result && typeof result === "object") {
-        result.crawlTiming = timing;
-        result.recrawlContext = estimate?.recrawlContext || null;
-      }
-    }).catch((error) => {
-      console.warn(`Could not record crawl timing: ${error.message || error}`);
-    });
-    // A failed process can still have published a partial/blocked manifest.
-    if (result?.runId || failure) await invalidateIndustryAnalysis(failure ? "run_failed" : "run_saved");
-    if (!failure && result?.runId && allowsDerivedUpdates(result.output)
-      && (!(job.payload.scheduledCollection || result.output?.workerCollection || result.output?.webCollection) || result.collectionQuality?.status === "complete")) {
+    if (result?.collectionQuality?.status === "complete" && (!result.runId || !result.output || typeof result.output !== "object")) {
+      result.collectionQuality = { status: "failed", reason: "manifest_missing" };
+    }
+    // Keep completion on the small durable receipt path. In particular, do not
+    // acquire sharedWrite here: another analysis may hold it for minutes.
+    // Failed/partial originals still invalidate existing analytical views.
+    if (failure || result?.runId && result.collectionQuality?.status !== "complete") {
+      await invalidateIndustryAnalysis(failure ? "run_failed" : "run_saved");
+    }
+    if (!failure && result?.runId && result.collectionQuality?.status === "complete" && allowsDerivedUpdates(result.output)) {
+      result.postprocess = await enqueueCollectionPostprocess(job, result, { endedAt, stageTimings, estimate });
+      const pending = ["held", "queued", "running"].includes(result.postprocess.state);
+      result.history = { appended: result.postprocess.state === "complete" ? result.postprocess.result?.appended ?? null : null,
+        pending, state: result.postprocess.state };
+      result.crawlTiming = { recorded: false, pending,
+        durationSeconds: Math.max(1, Math.round((endedAt - job.startedAt) / 1000)), success: true };
+      result.recrawlContext = estimate?.recrawlContext || null;
       cleanupRecentCrawlResults();
       recentCrawlResults.set(job.signature, { createdAt: Date.now(), result });
-      await ensureB2BSearchHistoryForJob(job, result).catch((error) => {
-        console.warn(`Could not ensure B2B history for ${result.runId}: ${error.message || error}`);
-      });
-      if (masterDbDualWriteQueue.mode === "shadow") {
-        const runManifestPath = result.output?.outputDir
-          ? path.join(result.output.outputDir, "manifest.json")
-          : "";
-        const manifestSha256 = runManifestPath
-          ? await fsp.readFile(runManifestPath)
-            .then((buffer) => crypto.createHash("sha256").update(buffer).digest("hex"))
-            .catch(() => "")
-          : "";
-        result.masterDbSync = masterDbDualWriteQueue.enqueue({
-          type: "naver_run",
-          runId: result.runId,
-          runDir: result.output?.outputDir || "",
-          manifestSha256,
-          startedAt: job.startedAt?.toISOString?.() || "",
-          endedAt: endedAt.toISOString(),
-          collectionSource: job.collectionSource,
-          sourceRole: job.sourceRole,
-          plan: job.plan,
-          history: result.history || null,
-          crawlTiming: result.crawlTiming || null,
-          stageTimings
-        });
-      }
     }
     crawlLane().activeCrawlPromise = null;
     crawlLane().activeCrawlStartedAt = null;
@@ -2118,6 +2101,102 @@ function startCrawlJob(job) {
     else job.resolve(resolveCrawlJob(result, job, job.waiterCount > 1 ? "shared" : "completed"));
     for(const key of Object.keys(crawlLanes)) withCrawlLane(key,startNextCrawlJob);
   })();
+}
+
+async function enqueueCollectionPostprocess(job, result, { endedAt, stageTimings, estimate }) {
+  try {
+    if (!result.output || typeof result.output !== "object" || result.collectionQuality?.status !== "complete") {
+      return { state: "skipped", errorCode: "COLLECTION_QUALITY_NOT_COMPLETE" };
+    }
+    // Persist only the inputs needed for derived work, never the collector env,
+    // lease, session cookie, request body, or the large result object.
+    return await collectionPostprocessQueue.enqueue(result.runId, {
+      deferred: job.payload.rotationCollection === true,
+      context: JSON.parse(JSON.stringify({
+        plan: job.plan, estimate, startedAt: job.startedAt.toISOString(), endedAt: endedAt.toISOString(), stageTimings,
+        collectionSource: job.collectionSource, sourceRole: job.sourceRole,
+        workerKey: result.workerKey || job.payload.workerKey || "manual", trigger: result.trigger || job.payload.trigger || "manual",
+        historyPayload: Object.fromEntries(["keyword", "checkIn", "checkOut", "adults", "workerKey", "searchMode", "sourceRole", "collectionSource",
+          "productMode", "dayUseMode", "detailRankRanges", "collectionMode", "collectionPurpose", "bookingRangeDays", "bookingRangePlaceLimit",
+          "scheduledCollection", "recrawlContext"].filter(key => job.payload[key] !== undefined).map(key => [key, job.payload[key]])),
+        collectionFinishedAt: result.output.collectedAt || result.output.completedAt || null,
+        scheduleOccurrenceId: job.payload.rotationCollection ? job.payload.scheduleOccurrenceId : null,
+        manifestSha256: crypto.createHash("sha256").update(await fsp.readFile(path.join(resolveRunDir(result.runId), "manifest.json"))).digest("hex"),
+        b2bSubscribers: [...(job.b2bSubscribers?.values() || [])]
+      }))
+    });
+  } catch (error) {
+    console.error("collection_postprocess_receipt_failed", error.code || "COLLECTION_POSTPROCESS_PERSIST_FAILED");
+    // The published collection remains valid. A DB preparation failure must
+    // neither hide it nor trigger another provider collection.
+    return { state: "failed", errorCode: "COLLECTION_POSTPROCESS_PERSIST_FAILED" };
+  }
+}
+
+async function processCollectionPostprocess(runId, context) {
+  const stages = {}, began = Date.now();
+  const step = async (key, work) => {
+    const started = Date.now();
+    try { return await work(); }
+    finally {
+      stages[key] = Date.now() - started;
+      console.log("collection_postprocess_stage", JSON.stringify({ runId, stage: key, elapsedMs: stages[key] }));
+    }
+  };
+  const runDir = resolveRunDir(runId);
+  const manifestBytes = runDir && await fsp.readFile(path.join(runDir, "manifest.json"));
+  if (!runDir || !/^[a-f0-9]{64}$/.test(context.manifestSha256 || "")
+    || crypto.createHash("sha256").update(manifestBytes).digest("hex") !== context.manifestSha256) {
+    throw Object.assign(new Error("Stored collection evidence changed"), { code: "COLLECTION_POSTPROCESS_EVIDENCE_CHANGED", retryable: false });
+  }
+  const manifest = JSON.parse(manifestBytes.toString("utf8").replace(/^\uFEFF/, ""));
+  const collectionQuality = manifest && await step("validationMs", () => inspectDailyCollectionResult({ output: manifest, runId }, context.plan));
+  if (!manifest || collectionQuality?.status !== "complete" || !allowsDerivedUpdates(manifest)) {
+    throw Object.assign(new Error("Stored collection no longer satisfies completion checks"), { code: "COLLECTION_POSTPROCESS_QUALITY_HOLD", retryable: false });
+  }
+  const result = { runId, output: manifest, collectionQuality };
+  result.history = await step("historyMs", () => appendHistoryForRun(runId, { skipExternal: true }));
+  if (result.history?.companyMaster?.error || ["run_not_found", "scheduled_collection_quality_hold"].includes(result.history?.reason)) {
+    throw Object.assign(new Error("Company history could not be integrated"), { code: "COLLECTION_POSTPROCESS_HISTORY_FAILED" });
+  }
+  result.crawlTiming = await step("timingMs", () => appendCrawlTimingEntry({
+    plan: context.plan, estimate: context.estimate, startedAt: new Date(context.startedAt), endedAt: new Date(context.endedAt),
+    stageTimings: context.stageTimings, result
+  }));
+  await step("industryMs", () => invalidateIndustryAnalysis("run_saved"));
+  const job = { payload: context.historyPayload, b2bSubscribers: new Map((context.b2bSubscribers || []).map((row, index) => [index, row])) };
+  await step("memberHistoryMs", () => ensureB2BSearchHistoryForJob(job, result));
+  if (masterDbDualWriteQueue.mode === "shadow") {
+    const manifestSha256 = crypto.createHash("sha256").update(await fsp.readFile(path.join(runDir, "manifest.json"))).digest("hex");
+    masterDbDualWriteQueue.enqueue({ type: "naver_run", runId, runDir, manifestSha256,
+      startedAt: context.startedAt, endedAt: context.endedAt, collectionSource: context.collectionSource,
+      sourceRole: context.sourceRole, plan: context.plan, history: result.history, crawlTiming: result.crawlTiming, stageTimings: context.stageTimings });
+  }
+  console.log("collection_postprocess_complete", JSON.stringify({ runId, elapsedMs: Date.now() - began, stages }));
+  return { stages, elapsedMs: Date.now() - began, appended: result.history.appended || 0 };
+}
+
+async function releaseCommittedCollectionPostprocess() {
+  for (const row of (await collectionPostprocessQueue.held()).filter(item => item.scheduleOccurrenceId)) {
+    const day = /^rotation_(\d{4}-\d{2}-\d{2})_\d+$/.exec(row.scheduleOccurrenceId)?.[1];
+    if (!day) continue;
+    const record = collectionRotationScheduler.history({ from: day, to: day, limit: 1000 }).items
+      .find(item => item.id === row.scheduleOccurrenceId);
+    if (record?.runId === row.runId && ["complete", "reused"].includes(record.status)) {
+      await collectionPostprocessQueue.release(row.runId);
+    }
+  }
+}
+
+async function withCollectionPostprocess(rows, idField = "runId") {
+  try {
+    const snapshot = await collectionPostprocessQueue.status({ limit: 1000 });
+    const index = new Map(snapshot.items.map(item => [item.runId, item]));
+    return rows.map(row => index.has(row[idField]) ? { ...row, postprocess: index.get(row[idField]) }
+      : snapshot.errorCode ? { ...row, postprocess: { state: "unavailable", errorCode: snapshot.errorCode } } : row);
+  } catch {
+    return rows.map(row => ({ ...row, postprocess: { state: "unavailable", errorCode: "COLLECTION_POSTPROCESS_STATUS_UNAVAILABLE" } }));
+  }
 }
 
 const PROVINCES = {
@@ -4627,7 +4706,9 @@ const appendB2BSearchHistory = ensureB2BSearchHistory;
 
 async function ensureB2BSearchHistoryForJob(job = {}, result = {}) {
   if (!result?.runId || !job?.b2bSubscribers?.size) return;
-  const data = await loadRun(result.runId, { skipCompanyMaster: true, skipHistory: true, applyCompanyMaster: true });
+  const data = await loadRun(result.runId, { skipCompanyMaster: true, skipHistory: true, applyCompanyMaster: true,
+    skipTraffic: true, skipTourismVisitors: true, skipTourismVisitorHistory: true,
+    skipTourismResourceDemandHistory: true, skipTourismDiversityHistory: true, skipTourismDemandStrengthHistory: true });
   if (!data) return;
   for (const subscriber of job.b2bSubscribers.values()) {
     await ensureB2BSearchHistory({
@@ -18029,7 +18110,7 @@ async function loadRun(runId, options = {}) {
 
   if (!options.skipHistory) {
     let history = await summarizeHistoryForRun(result);
-    if (derivedUpdatesAllowed && !history.currentRunObservationCount && availability.items.length) {
+    if (derivedUpdatesAllowed && !options.skipHistoryBackfill && !history.currentRunObservationCount && availability.items.length) {
       await appendHistoryForRun(runId).catch((error) => {
         console.warn(`Could not backfill history for ${runId}: ${error.message || error}`);
       });
@@ -18218,6 +18299,11 @@ async function appendCrawlTimingEntryUnlocked({ plan, startedAt, endedAt, estima
   const success = !error && (!result?.collectionQuality || result.collectionQuality.status === "complete")
     && !result?.reused && !result?.crawlTiming?.reused;
   const store = await readCrawlTimingStore();
+  const existing = result?.runId && store.entries?.find(row => row.runId === result.runId
+    && row.startedAt === startedAt.toISOString() && row.endedAt === endedAt.toISOString());
+  if (existing) return { recorded: true, alreadyRecorded: true, durationSeconds: existing.durationSeconds,
+    success: existing.success, sampleCount: store.entries.length, stageTimings: existing.stageTimings,
+    file: "history/crawl_timings.json" };
   const entry = {
     id: crypto.randomUUID(),
     startedAt: startedAt.toISOString(),
@@ -18560,9 +18646,7 @@ async function runCrawlerInternal(payload) {
       isCancelled: () => crawlLane().activeCrawlCancelRequested
     });
     const output=completed.manifest, runId=completed.runId, collectionQuality=completed.collectionQuality;
-    const history=runId && collectionQuality?.status==="complete" && allowsDerivedUpdates(output)
-      ? await appendHistoryForRun(runId).catch(()=>({appended:0,error:"history_append_failed"})) : null;
-    return {output,runId,history,collectionQuality,workerKey:"web",trigger:payload.trigger||"manual"};
+    return {output,runId,history:null,collectionQuality,workerKey:"web",trigger:payload.trigger||"manual"};
   }
 
   if (COLLECTOR_EXECUTION_MODE === "worker") {
@@ -18593,10 +18677,7 @@ async function runCrawlerInternal(payload) {
     if (collectionQuality?.status === "blocked") {
       await stopCollectorLane(crawlLane().key);
     }
-    const history = runId && collectionQuality?.status === "complete" && allowsDerivedUpdates(output)
-      ? await appendHistoryForRun(runId).catch(() => ({ appended: 0, error: "history_append_failed" }))
-      : null;
-    return { output, runId, history, collectionQuality, workerKey:payload.workerKey || "manual", trigger:payload.trigger || "manual" };
+    return { output, runId, history:null, collectionQuality, workerKey:payload.workerKey || "manual", trigger:payload.trigger || "manual" };
   }
 
   return new Promise((resolve, reject) => {
@@ -18642,13 +18723,8 @@ async function runCrawlerInternal(payload) {
         const parsed = jsonStart >= 0 ? JSON.parse(trimmed.slice(jsonStart)) : null;
         const outputDir = parsed?.outputDir || "";
         const runId = outputDir ? path.basename(outputDir) : null;
-        const collectionQuality = payload.scheduledCollection === true
-          ? await inspectDailyCollectionResult({ output: parsed, runId }, payload)
-          : null;
-        const history = runId && (!payload.scheduledCollection || collectionQuality?.status === "complete")
-          ? await appendHistoryForRun(runId).catch((error) => ({ appended: 0, error: error.message || String(error) }))
-          : null;
-        resolve({ output: parsed, runId, history, collectionQuality });
+        const collectionQuality = await inspectDailyCollectionResult({ output: parsed, runId }, payload);
+        resolve({ output: parsed, runId, history:null, collectionQuality });
       } catch {
         resolve({ output: stdout, runId: null });
       }
@@ -18978,7 +19054,7 @@ async function route(req, res) {
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/runs") {
-      return send(res, 200, { runs: publicRunsForRole(await listRuns(), session.role) });
+      return send(res, 200, { runs: await withCollectionPostprocess(publicRunsForRole(await listRuns(), session.role), "id") });
     }
 
     if (await handleMonthlyReport(req, res, reqUrl, session)) return;
@@ -19050,7 +19126,16 @@ async function route(req, res) {
     if (reqUrl.pathname === "/api/collection-history") {
       if (!requireAdminSession(session, req, res)) return;
       if (req.method !== "GET") return send(res, 405, { error: "Method not allowed" });
-      return send(res, 200, await collectionHistory.query(reqUrl.searchParams));
+      const result = await collectionHistory.query(reqUrl.searchParams);
+      if (result.rows) result.rows = await withCollectionPostprocess(result.rows);
+      return send(res, 200, result);
+    }
+
+    if (reqUrl.pathname === "/api/collection-postprocess") {
+      if (!requireAdminSession(session, req, res)) return;
+      if (req.method !== "GET") return send(res, 405, { error: "Method not allowed" });
+      const runId = reqUrl.searchParams.get("runId");
+      return send(res, 200, await collectionPostprocessQueue.status(runId ? { runId } : { limit: 100 }));
     }
 
     if (req.method === "GET" && (reqUrl.pathname === "/api/crawl-requests" || reqUrl.pathname.startsWith("/api/crawl-requests/"))) {
@@ -19061,9 +19146,17 @@ async function route(req, res) {
 
     if (reqUrl.pathname === "/api/collection-rotation" || reqUrl.pathname.startsWith("/api/collection-rotation/")) {
       if(!requireAdminSession(session,req,res)) return;
-      if(req.method==="GET" && reqUrl.pathname==="/api/collection-rotation") return send(res,200,await collectionRotationScheduler.status());
-      if(req.method==="GET" && reqUrl.pathname==="/api/collection-rotation/history")
-        return send(res,200,await collectionRotationScheduler.history(Object.fromEntries(reqUrl.searchParams)));
+      if(req.method==="GET" && reqUrl.pathname==="/api/collection-rotation") {
+        const status = await collectionRotationScheduler.status();
+        status.todayItems = await withCollectionPostprocess(status.todayItems);
+        status.latest = await withCollectionPostprocess(status.latest);
+        return send(res,200,status);
+      }
+      if(req.method==="GET" && reqUrl.pathname==="/api/collection-rotation/history") {
+        const page = await collectionRotationScheduler.history(Object.fromEntries(reqUrl.searchParams));
+        page.items = await withCollectionPostprocess(page.items);
+        return send(res,200,page);
+      }
       if(!["POST","PUT"].includes(req.method)) return send(res,405,{error:"Method not allowed"});
       if(!/^application\/json(?:\s*;|$)/i.test(String(req.headers["content-type"]||""))) return send(res,415,{error:"JSON 형식으로 요청해 주세요."});
       if(req.headers.origin) {
@@ -19920,7 +20013,10 @@ async function route(req, res) {
         return sendForbidden(req, res, "저장 자료는 관리자만 볼 수 있습니다.");
       }
       const runId = decodeURIComponent(reqUrl.pathname.replace("/api/runs/", ""));
-      const data = await loadRun(runId, { includeRankComparison: true });
+      const postprocess = await collectionPostprocessQueue.status({ runId }).catch(() => ({ state: "unavailable" }));
+      const data = await loadRun(runId, { includeRankComparison: true,
+        ...(postprocess ? { skipTraffic: true, skipCompanyMaster: true, applyCompanyMaster: true, skipHistoryBackfill: true } : {}) });
+      if (data && postprocess) data.postprocess = postprocess;
       return data ? send(res, 200, publicRunForRole(data, session.role)) : notFound(res);
     }
 
@@ -20045,6 +20141,14 @@ seedOutputsFromRepo()
       });
       for (const [workerKey,scheduler] of Object.entries(keywordWorkerSchedulers)) scheduler.start().catch(error => console.error(`Keyword worker scheduler ${workerKey} unavailable:`, error.code || error.message));
       Promise.resolve().then(()=>collectionRotationScheduler.start()).catch(error=>console.error("Collection rotation scheduler unavailable:",error.code || error.message));
+      // Recover a crash between the rotation commit and release using exact
+      // stored slot/run identity. An unconfirmed slot remains held for review.
+      releaseCommittedCollectionPostprocess().then(() => collectionPostprocessQueue.start())
+        .catch(error => console.error("collection_postprocess_start_failed", error.code || "unavailable"));
+      const postprocessReleaseTimer = setInterval(() => {
+        releaseCommittedCollectionPostprocess().catch(error => console.error("collection_postprocess_release_failed", error.code || "unavailable"));
+      }, 5000);
+      postprocessReleaseTimer.unref();
       const rotationWake=setInterval(()=>{if(rotationControlsExecution()) pumpRotationCrawls();},5000);
       rotationWake.unref();
       const monthlySync = tourismVisitorMonthlyScheduler.start();

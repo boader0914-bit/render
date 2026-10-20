@@ -7,7 +7,7 @@ function insightCollectionWorkerKey(value) {
   return key;
 }
 function date(value) { return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0,10) === value; }
-function createInsightPreparation({ store, catalog, collectorRequests, verifyStored, findReusable = null, workerKey, now = () => Date.now() }) {
+function createInsightPreparation({ store, catalog, collectorRequests, verifyStored, readPostprocess = null, findReusable = null, workerKey, now = () => Date.now() }) {
   const configuredWorkerKey = insightCollectionWorkerKey(workerKey);
   const running = new Map();
   async function dispatch(customerId, payload, actor) {
@@ -45,9 +45,30 @@ function createInsightPreparation({ store, catalog, collectorRequests, verifySto
     catch { if (job.status === 'dispatching') store.updatePreparationJob(job.jobId,'needs_review','서버 재시작 후 접수 기록을 확인해야 합니다. 자동 재수집하지 않습니다.'); return; }
     if (receipt.status === 'pending') { store.updatePreparationJob(job.jobId,'collecting','수집 대기 또는 진행 중입니다. 결과 저장 확인 후 완료됩니다.'); return; }
     if (['complete','reused'].includes(receipt.status) && receipt.result?.collectionQuality?.status === 'complete' && receipt.result.runId) {
+      let postprocess;
+      try {
+        postprocess = typeof readPostprocess === 'function' ? await readPostprocess(receipt.result.runId) : receipt.result.postprocess;
+        // A failed admission may have no durable queue row. Keep that failure
+        // visible; an old queued snapshot must not outlive a completed/pruned row.
+        if (postprocess == null && receipt.result.postprocess?.state === 'failed') postprocess = receipt.result.postprocess;
+      } catch { postprocess = { state:'unavailable', errorCode:'COLLECTION_POSTPROCESS_STATUS_UNAVAILABLE' }; }
+      const state = postprocess?.state || postprocess?.status;
+      if (['held','queued','running'].includes(state)) {
+        store.updatePreparationJob(job.jobId,'collecting','수집 결과 보관 완료 · 업체 DB 반영 중입니다.',{runId:receipt.result.runId,errorCode:null});
+        return;
+      }
+      if (postprocess != null && !['complete'].includes(state)) {
+        const failed = state === 'failed', candidate = postprocess.errorCode || postprocess.lastErrorCode;
+        const errorCode = /^[A-Z][A-Z0-9_]{1,79}$/.test(candidate || '') ? candidate
+          : failed ? 'COLLECTION_POSTPROCESS_FAILED' : 'COLLECTION_POSTPROCESS_STATUS_UNAVAILABLE';
+        store.updatePreparationJob(job.jobId,'needs_review',failed
+          ? '수집 결과는 보관되었지만 업체 DB 반영을 완료하지 못했습니다. 관리자 확인이 필요합니다.'
+          : '수집 결과는 보관되었지만 업체 DB 반영 상태를 확인하지 못했습니다. 관리자 확인이 필요합니다.',{runId:receipt.result.runId,errorCode});
+        return;
+      }
       let verified = false;
       try { verified = await verifyStored(job,receipt.result.runId); } catch { /* Missing storage is a review state, never a successful customer result. */ }
-      store.updatePreparationJob(job.jobId,verified?'ready':'needs_review',verified?'요청 업체의 결과 저장과 DB 반영을 확인했습니다.':'수집 결과의 업체 또는 조회 범위가 일치하는지 확인이 필요합니다.',{runId:receipt.result.runId});
+      store.updatePreparationJob(job.jobId,verified?'ready':'needs_review',verified?'요청 업체의 결과 저장과 DB 반영을 확인했습니다.':'수집 결과의 업체 또는 조회 범위가 일치하는지 확인이 필요합니다.',{runId:receipt.result.runId,errorCode:null});
     } else {
       const status=['partial','blocked','failed'].includes(receipt.status)?receipt.status:'needs_review';
       const messages={partial:'일부 자료를 확보하지 못했습니다. 관리자 확인이 필요합니다.',blocked:'접근 제한으로 중단되었습니다. 다른 수집기로 자동 재시도하지 않습니다.',failed:'자료 준비를 완료하지 못했습니다. 실패 원인을 확인 중입니다.',needs_review:'실행 기록과 보존 자료를 확인해야 합니다.'};
