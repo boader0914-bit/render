@@ -10,7 +10,7 @@ const { serialExecutor } = require("./collection_reuse.cjs");
 const { allowsDerivedUpdates, inspectManifest } = require("./daily_collection_quality.cjs");
 
 const serverSource = fs.readFileSync(path.join(__dirname, "glamping_app_server.cjs"), "utf8");
-const start = serverSource.indexOf("async function appendHistoryForRun(...args)");
+const start = serverSource.indexOf("async function appendHistoryForRun(runId, options = {})");
 const end = serverSource.indexOf("\nfunction historyDayIndex(", start);
 assert.ok(start >= 0 && end > start, "extract the actual server history wrapper and implementation");
 const historySource = serverSource.slice(start, end);
@@ -30,7 +30,7 @@ function completeManifest() {
   };
 }
 
-function harness({ initial = [], manifest = completeManifest() } = {}) {
+function harness({ initial = [], manifest = completeManifest(), scanError = null, needsSeparator = false } = {}) {
   const rows = plain(initial);
   const evidence = [];
   const appends = [];
@@ -44,11 +44,14 @@ function harness({ initial = [], manifest = completeManifest() } = {}) {
   const sharedWrite = serialExecutor();
   const context = {
     sharedWrite,
+    companyIntegratedDb: { deferProcessing: work => work() },
+    Date, Set,
     fs: { existsSync: () => true },
     fsp: {
       mkdir: async () => { calls.mkdir++; },
       appendFile: async (_file, body, encoding) => {
         assert.equal(encoding, "utf8");
+        assert.equal(body.startsWith("\n"), needsSeparator, "new observations stay separate from an unterminated prior row");
         await nextTurn();
         const added = body.trim().split("\n").map(line => JSON.parse(line));
         appends.push(added);
@@ -72,11 +75,15 @@ function harness({ initial = [], manifest = completeManifest() } = {}) {
           assert.equal(lane.getStore(), loadCalls.at(-1).lane);
           await nextTurn();
         });
-        return { run: { runId, collectedAt: "2026-09-23T01:00:00.000Z" } };
+        return { run: { runId, collectedAt: "2026-09-23T01:00:00.000Z" }, companyMaster: { activeCompanyIds: ["room-a", "room-b"] } };
       } finally { calls.activeLoads--; }
     },
     runCollectionDbRoute: () => ({ appliesHistory: true }),
-    readHistoryObservations: async () => { await nextTurn(); return plain(rows); },
+    findExistingObservationIds: async ({observationIds}) => {
+      if (scanError) throw scanError;
+      await nextTurn(); return {existingIds: new Set(rows.filter(row=>observationIds.includes(row.observationId)).map(row=>row.observationId)), needsSeparator};
+    },
+    invalidateIndustryAnalysis: async () => {}, queueIntegratedCompanies: async () => {},
     buildHistoryObservations: () => plain(observations),
     masterDbDualWriteQueue: { mode: "shadow" },
     storeRunHistoryEvidence: async (runId, completeRows) => {
@@ -105,6 +112,33 @@ test("concurrent completion and GET repair append each observation once while pr
   assert.deepEqual(store.loadCalls.map(call => call.lane), ["manual", "scheduled", "get-repair"]);
   assert.deepEqual(store.evidence.map(call => call.lane), ["manual", "scheduled", "get-repair"]);
   for (const call of store.evidence) assert.deepEqual(call.observations, store.observations);
+});
+
+test("history scan errors cannot be interpreted as empty history and append duplicate observations", async () => {
+  const failure = Object.assign(new Error("unreadable history"), {code: "EACCES"});
+  const store = harness({scanError: failure});
+  await assert.rejects(store.append("fixture-run"), error => error === failure);
+  assert.equal(store.appends.length, 0);
+  assert.equal(store.evidence.length, 0);
+});
+
+test("an unterminated prior tail cannot swallow the first newly appended observation", async () => {
+  const store = harness({ needsSeparator: true });
+  const result = await store.append("fixture-run");
+  assert.equal(result.appended, 2);
+  assert.equal(store.rows.length, 2);
+  assert.deepEqual(store.appends[0], store.observations);
+});
+
+test("ingestion reports lock wait, load, ID scan, append and queue timings separately", async () => {
+  const store = harness(), stages = {};
+  const result = await store.append("fixture-run", {skipExternal: true, onStage: (key, ms) => { stages[key] = ms; }});
+  assert.equal(result.appended, 2);
+  for (const key of ["historyWriteWaitMs", "historyLoadMs", "historyIdScanMs", "historyAppendMs", "historyIntegrationQueueMs"]) {
+    assert.ok(Number.isFinite(stages[key]) && stages[key] >= 0, key);
+  }
+  assert.equal(store.loadCalls[0].options.reuseIngestionMaster, true);
+  assert.equal(store.loadCalls[0].options.skipTraffic, true);
 });
 
 test("partial prior JSONL append keeps full immutable evidence and reports new versus total observation counts", async () => {

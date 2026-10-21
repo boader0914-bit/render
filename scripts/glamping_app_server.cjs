@@ -55,6 +55,8 @@ const { inspectResult: inspectDailyCollectionResult, allowsDerivedUpdates } = re
 const { readCollectionDiagnostics } = require("./lib/collection_diagnostics.cjs");
 const { createCollectionHistory } = require("./lib/collection_history.cjs");
 const { createCollectionPostprocessQueue } = require("./lib/collection_postprocess_queue.cjs");
+const { findExistingObservationIds } = require("./lib/history_observation_append.cjs");
+const { createRunCatalog } = require("./lib/run_catalog.cjs");
 const { createMasterDbDualWriteQueue } = require("./master_db_dual_write.cjs");
 const { createCollectorBroker } = require("./collector_broker.cjs");
 const { dispatchCollector, createHistoricalBookingContext } = require("./collector_dispatch.cjs");
@@ -614,7 +616,11 @@ const companyIntegratedCatalog = createCompanyIntegratedCatalog({
     .update(fs.readFileSync(path.join(__dirname, "lib", "company_capacity_registry.cjs")))
     .update(companyIntegratedCalculationFingerprint()).digest("hex")
 });
-const listCompanyIntegratedTargets = createCompanyIntegratedTargets({ dataDir: DATA_DIR, catalog: monthlyReportSources.catalog });
+const listCompanyIntegratedTargets = createCompanyIntegratedTargets({
+  dataDir: DATA_DIR, catalog: monthlyReportSources.targetCatalog,
+  readRevision: createMonthlyReportSelectorRevision({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR,
+    regionMasterFile: path.join(WEB_DIR, "data", "region_master.json") })
+});
 const readIndustryRevision = createIndustrySourceRevision({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR,
     regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
     tourismRegionMapFile: path.join(WEB_DIR, "data", "tourism_region_map.json") });
@@ -671,7 +677,14 @@ const companyIntegratedDb = createCompanyIntegratedDb({
 });
 async function queueIntegratedCompanies(companyIds, reason) {
   if (!companyIds.length) return;
-  try { await companyIntegratedDb.queueRun({ companyIds, reason }); }
+  // Persist affected identities only. queueRun discovers every historical
+  // month through the full source catalog; doing that inside source ingestion
+  // repeats capacity preparation and a history scan before the append commits.
+  // An allMonths job discovers those months in the background, including saved
+  // comparison months. Its generation guard rejects a pre-append worker result.
+  try {
+    for (const companyId of new Set(companyIds)) await companyIntegratedDb.queueCompany(companyId, { reason });
+  }
   catch (error) { console.error("company_integration_queue_failed", error.code || "unavailable"); }
 }
 const monthlyReportService = createMonthlyReportService({
@@ -2162,7 +2175,9 @@ async function processCollectionPostprocess(runId, context) {
     throw Object.assign(new Error("Stored collection no longer satisfies completion checks"), { code: "COLLECTION_POSTPROCESS_QUALITY_HOLD", retryable: false });
   }
   const result = { runId, output: manifest, collectionQuality };
-  result.history = await step("historyMs", () => appendHistoryForRun(runId, { skipExternal: true }));
+  result.history = await step("historyMs", () => appendHistoryForRun(runId, {
+    skipExternal: true, onStage: (key, elapsedMs) => { stages[key] = elapsedMs; }
+  }));
   if (result.history?.companyMaster?.error || ["run_not_found", "scheduled_collection_quality_hold"].includes(result.history?.reason)) {
     throw Object.assign(new Error("Company history could not be integrated"), { code: "COLLECTION_POSTPROCESS_HISTORY_FAILED" });
   }
@@ -5728,68 +5743,63 @@ function runCollectedAt(runId = "", manifest = {}, stat = {}) {
   return fallbackTimes.length ? new Date(Math.min(...fallbackTimes)).toISOString() : "";
 }
 
+function runCatalogRow({ id, manifest, files, stat }) {
+  if (manifest && /^\?+$/.test(String(manifest.keyword || "").trim())) return null;
+  const provinceKey = provinceKeyForRun(id, manifest);
+  const collectedAt = runCollectedAt(id, manifest || {}, stat);
+  const collectedAtSource = runCollectedAtSource(manifest);
+
+  return {
+    id,
+    label: displayNameForRun(id, manifest),
+    keyword: manifest?.keyword || (PROVINCES[provinceKey] || PROVINCES.local).keyword || "",
+    searchKeyword: manifest?.searchKeyword || "",
+    naverKeyword: manifest?.naverKeyword || "",
+    searchIntent: manifest?.searchIntent || "",
+    searchRegion: manifest?.searchRegion || "",
+    searchScope: manifest?.searchScope || "",
+    searchScopeLabel: manifest?.searchScopeLabel || "",
+    keywordType: manifest?.keywordType || "province",
+    searchMode: manifest?.searchMode || (manifest?.keywordType === "company" ? "company" : "keyword"),
+    searchModeLabel: SEARCH_MODES[manifest?.searchMode] || (manifest?.keywordType === "company" ? SEARCH_MODES.company : SEARCH_MODES.keyword),
+    collectionMode: manifest?.collectionMode || "precision",
+    collectionModeLabel: manifest?.collectionModeLabel || COLLECTION_MODES[manifest?.collectionMode] || COLLECTION_MODES.precision,
+    sourceRole: sourceRoleForCollectionSource(manifest?.collectionSource, manifest?.sourceRole || USER_ROLES.admin),
+    collectionSource: normalizeCollectionSource(manifest?.collectionSource, manifest?.sourceRole || USER_ROLES.admin),
+    collectionSourceLabel: manifest?.collectionSourceLabel || collectionSourceLabel(normalizeCollectionSource(manifest?.collectionSource, manifest?.sourceRole || USER_ROLES.admin)),
+    collectionPurpose: manifest?.collectionPurpose || "revenue_detail",
+    dayUseMode: manifest?.dayUseMode || "detail",
+    collectionPurposeLabel: manifest?.collectionPurposeLabel || COLLECTION_PURPOSES[manifest?.collectionPurpose] || COLLECTION_PURPOSES.revenue_detail,
+    detailRankRanges: manifest?.detailRankRanges || "",
+    bookingRangeDays: manifest?.bookingRangeDays || 1,
+    bookingRangePlaceLimit: manifest?.bookingRangePlaceLimit || 0,
+    checkIn: manifest?.checkIn || "",
+    checkOut: manifest?.checkOut || "",
+    province: provinceKey,
+    provinceLabel: (PROVINCES[provinceKey] || PROVINCES.local).label,
+    collectedAt,
+    collectedAtSource,
+    updatedAt: stat.mtime.toISOString(),
+    counts: manifest?.counts || {},
+    workerKey: manifest?.workerKey || null,
+    trigger: manifest?.trigger || null,
+    collectorEngine: manifest?.collectorEngine || null,
+    collectionQuality: manifest?.collectionQuality || null,
+    files: manifest?.files || files
+  };
+}
+const runCatalog = createRunCatalog({
+  outputsDir: OUTPUTS_DIR, readManifest, isIncompleteRunDirectory, projectRun: runCatalogRow
+});
 async function listRuns() {
   await fsp.mkdir(OUTPUTS_DIR, { recursive: true });
-  const entries = await fsp.readdir(OUTPUTS_DIR, { withFileTypes: true });
-  const runs = [];
-
-  for (const entry of entries) {
-    if (!entry.isDirectory() || !/_glamping_\d{8}(?:_\d{6})?$/.test(entry.name)) continue;
-    const dirPath = path.join(OUTPUTS_DIR, entry.name);
-    const files = await fsp.readdir(dirPath).catch(() => []);
-    const manifest = await readManifest(dirPath);
-    if (!manifest && files.length === 0) continue;
-    if (isIncompleteRunDirectory(manifest, files)) continue;
-    if (manifest && /^\?+$/.test(String(manifest.keyword || "").trim())) continue;
-    const stat = await fsp.stat(dirPath);
-    const provinceKey = provinceKeyForRun(entry.name, manifest);
-    const collectedAt = runCollectedAt(entry.name, manifest || {}, stat);
-    const collectedAtSource = runCollectedAtSource(manifest);
-
-    runs.push({
-      id: entry.name,
-      label: displayNameForRun(entry.name, manifest),
-      keyword: manifest?.keyword || (PROVINCES[provinceKey] || PROVINCES.local).keyword || "",
-      searchKeyword: manifest?.searchKeyword || "",
-      naverKeyword: manifest?.naverKeyword || "",
-      searchIntent: manifest?.searchIntent || "",
-      searchRegion: manifest?.searchRegion || "",
-      searchScope: manifest?.searchScope || "",
-      searchScopeLabel: manifest?.searchScopeLabel || "",
-      keywordType: manifest?.keywordType || "province",
-      searchMode: manifest?.searchMode || (manifest?.keywordType === "company" ? "company" : "keyword"),
-      searchModeLabel: SEARCH_MODES[manifest?.searchMode] || (manifest?.keywordType === "company" ? SEARCH_MODES.company : SEARCH_MODES.keyword),
-      collectionMode: manifest?.collectionMode || "precision",
-      collectionModeLabel: manifest?.collectionModeLabel || COLLECTION_MODES[manifest?.collectionMode] || COLLECTION_MODES.precision,
-      sourceRole: sourceRoleForCollectionSource(manifest?.collectionSource, manifest?.sourceRole || USER_ROLES.admin),
-      collectionSource: normalizeCollectionSource(manifest?.collectionSource, manifest?.sourceRole || USER_ROLES.admin),
-      collectionSourceLabel: manifest?.collectionSourceLabel || collectionSourceLabel(normalizeCollectionSource(manifest?.collectionSource, manifest?.sourceRole || USER_ROLES.admin)),
-      collectionPurpose: manifest?.collectionPurpose || "revenue_detail",
-      dayUseMode: manifest?.dayUseMode || "detail",
-      collectionPurposeLabel: manifest?.collectionPurposeLabel || COLLECTION_PURPOSES[manifest?.collectionPurpose] || COLLECTION_PURPOSES.revenue_detail,
-      detailRankRanges: manifest?.detailRankRanges || "",
-      bookingRangeDays: manifest?.bookingRangeDays || 1,
-      bookingRangePlaceLimit: manifest?.bookingRangePlaceLimit || 0,
-      checkIn: manifest?.checkIn || "",
-      checkOut: manifest?.checkOut || "",
-      province: provinceKey,
-      provinceLabel: (PROVINCES[provinceKey] || PROVINCES.local).label,
-      collectedAt,
-      collectedAtSource,
-      updatedAt: stat.mtime.toISOString(),
-      counts: manifest?.counts || {},
-      workerKey: manifest?.workerKey || null,
-      trigger: manifest?.trigger || null,
-      collectorEngine: manifest?.collectorEngine || null,
-      collectionQuality: manifest?.collectionQuality || null,
-      files: manifest?.files || files
-    });
+  try { return await runCatalog.list(); }
+  catch (error) {
+    // Publication may atomically add a run while a read is in progress. Retry
+    // that changing snapshot once; never return an empty/stale success on error.
+    if (error.code !== "RUN_CATALOG_CHANGED_DURING_SCAN") throw error;
+    return runCatalog.list();
   }
-
-  return runs.sort((a, b) =>
-    String(b.collectedAt || "").localeCompare(String(a.collectedAt || ""))
-    || String(b.id || "").localeCompare(String(a.id || ""))
-  );
 }
 
 function placeRankComparisonScope(run = {}) {
@@ -13796,8 +13806,8 @@ async function upsertCompanyMasterForRun(...args) {
   return sharedWrite(() => upsertCompanyMasterForRunUnlocked(...args));
 }
 
-async function upsertCompanyMasterForRunUnlocked(data, collectedAt) {
-  const master = await readCompanyMaster();
+async function upsertCompanyMasterForRunUnlocked(data, collectedAt, options = {}) {
+  const master = options.master || await readCompanyMaster();
   const run = data?.run || {};
   const runDbRoute = runCollectionDbRoute(run);
   const keywordKey = compactKeyword(run.keyword || run.label || "").toLowerCase();
@@ -13833,11 +13843,13 @@ async function upsertCompanyMasterForRunUnlocked(data, collectedAt) {
   let touched = 0;
   let inventoryAppliedCompanies = 0;
   let demandSignalCompanies = 0;
+  const activeCompanyIds = new Set();
 
   for (let index = 0; index < items.length; index += 1) {
     const entity = companyEntityFromItem(items[index], run, collectedAt);
     if (!entity.nameKey || !entity.sourceKeys.length) continue;
     const company = upsertCompanyRecord(master, entity);
+    if (!company.deletedAt && !company.mergedIntoCompanyId) activeCompanyIds.add(company.companyId);
     const dbRoute = entity.collectionDbRoute || collectionDbRouteProfile(entity.collectionPurpose, entity.collectionProfile);
     touched += 1;
     if (dbRoute.appliesInventory && entity.hasInventoryEvidence !== false) inventoryAppliedCompanies += 1;
@@ -13871,6 +13883,7 @@ async function upsertCompanyMasterForRunUnlocked(data, collectedAt) {
     file: "company_master/companies.json",
     totalCompanies: Object.keys(master.companies || {}).length,
     currentRunCompanies: touched,
+    activeCompanyIds: [...activeCompanyIds],
     dbRoute: runDbRoute,
     inventoryAppliedCompanies,
     demandSignalCompanies,
@@ -15491,22 +15504,32 @@ async function storeRunHistoryEvidence(runId, observations = []) {
   };
 }
 
-async function appendHistoryForRun(...args) {
-  return sharedWrite(() => appendHistoryForRunUnlocked(...args));
+async function appendHistoryForRun(runId, options = {}) {
+  const waitingAt = Date.now();
+  return companyIntegratedDb.deferProcessing(() => sharedWrite(() => {
+    options.onStage?.("historyWriteWaitMs", Date.now() - waitingAt);
+    return appendHistoryForRunUnlocked(runId, options);
+  }));
 }
 
 async function appendHistoryForRunUnlocked(runId, options = {}) {
+  const step = async (name, work) => {
+    const began = Date.now();
+    try { return await work(); }
+    finally { options.onStage?.(name, Date.now() - began); }
+  };
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return { appended: 0, reason: "run_not_found" };
   if (!allowsDerivedUpdates(await readManifest(dirPath))) {
     return { appended: 0, reason: "scheduled_collection_quality_hold" };
   }
-  const data = await loadRun(runId, {
+  const data = await step("historyLoadMs", () => loadRun(runId, {
     skipHistory: true,
+    reuseIngestionMaster: true,
     skipTourismVisitors: true,
     skipTourismDemandStrengthHistory: true,
     ...(options.skipExternal ? {skipTraffic:true,skipTourismVisitorHistory:true,skipTourismResourceDemandHistory:true,skipTourismDiversityHistory:true} : {})
-  });
+  }));
   if (!data) return { appended: 0, reason: "run_not_found" };
   const collectedAt = data.run?.collectedAt || "";
   const dbRoute = runCollectionDbRoute(data?.run || {});
@@ -15517,28 +15540,37 @@ async function appendHistoryForRunUnlocked(runId, options = {}) {
       dbRoute
     };
   }
-  const knownObservations = new Set((await readHistoryObservations()).map(row => row.observationId));
   const observations = buildHistoryObservations(data, collectedAt);
   if (!observations.length) return { appended: 0, reason: "no_observations" };
+  const { existingIds: knownObservations, needsSeparator } = await step("historyIdScanMs", () => findExistingObservationIds({
+    file: HISTORY_OBSERVATIONS_FILE, observationIds: observations.map(row => row.observationId)
+  }));
   const evidence = masterDbDualWriteQueue.mode === "shadow"
     ? await storeRunHistoryEvidence(runId, observations).catch((error) => ({
       error: error.message || String(error),
       code: error.code || "history_evidence_write_failed"
     }))
     : null;
-  const missing = observations.filter(row => !knownObservations.has(row.observationId));
-  await fsp.mkdir(HISTORY_DIR, { recursive: true });
-  if (missing.length) await fsp.appendFile(
-    HISTORY_OBSERVATIONS_FILE,
-    `${missing.map((row) => JSON.stringify(row)).join("\n")}\n`,
-    "utf8"
-  );
+  const missing = observations.filter(row => {
+    if (knownObservations.has(row.observationId)) return false;
+    knownObservations.add(row.observationId); return true;
+  });
+  await step("historyAppendMs", async () => {
+    await fsp.mkdir(HISTORY_DIR, { recursive: true });
+    if (missing.length) await fsp.appendFile(
+      HISTORY_OBSERVATIONS_FILE,
+      `${needsSeparator ? "\n" : ""}${missing.map((row) => JSON.stringify(row)).join("\n")}\n`,
+      "utf8"
+    );
+  });
   const result = { appended: missing.length, observationCount: observations.length, file: "history/observations.jsonl", companyMaster: data.companyMaster || null };
   // Publish derived views only after durable source history. Run reads used by
   // the aggregation pass skip both company-master and history writes.
   if (missing.length) {
     await invalidateIndustryAnalysis("observations_saved");
-    await queueIntegratedCompanies([...new Set(observations.map(row => row.companyKey).filter(Boolean))], "observations_saved");
+    // Only identities resolved against the committed active master may enter
+    // the queue. Legacy observations can still use a company-name key.
+    await step("historyIntegrationQueueMs", () => queueIntegratedCompanies(data.companyMaster?.activeCompanyIds || [], "observations_saved"));
   }
   if (masterDbDualWriteQueue.mode === "shadow") result.evidence = evidence;
   return result;
@@ -16167,6 +16199,8 @@ function withCompanyInventoryCapacity(item = {}, companies = []) {
 function summarizeAvailabilityRows(rows, baseDir = "", capacityCompanies = [], collectionRange = {}) {
   const byPlace = new Map();
   for (const row of rows) {
+    const key = availabilityPlaceKey(row);
+    if (!key || byPlace.has(key)) continue;
     const availableRooms = numericField(row, ["숙박예약가능수", "예약가능객실수", "availableRooms"]);
     const totalRooms = numericField(row, ["숙박확인재고수", "확인객실수", "totalRooms"]);
     const rate = numericField(row, ["숙박예약가능률", "예약가능률", "availabilityRate"]);
@@ -16274,8 +16308,6 @@ function summarizeAvailabilityRows(rows, baseDir = "", capacityCompanies = [], c
     const naverCouponDetail = row["네이버쿠폰상세"] || row.naverCouponDetail || "";
     const naverOtaExposures = jsonArrayField(row, ["네이버OTA노출JSON", "naverOtaExposures"], baseDir);
     const naverChannelObservation = naverChannelObservationFromItem({ ...row, naverOtaExposures });
-    const key = availabilityPlaceKey(row);
-    if (!key || byPlace.has(key)) continue;
     const placeId = extractNaverPlaceId(row);
     const bookingBusinessId = availabilityBookingBusinessId(row);
     const searchRegion = rowSearchRegion(row);
@@ -17992,8 +18024,9 @@ async function loadRun(runId, options = {}) {
   }
   const stats = summarizeStats(regions);
   if (datalabTrend) stats.datalabTrend = datalabTrend;
+  const capacityMaster = Array.isArray(options.capacityCompanies) ? null : await readCompanyMaster();
   const capacityCompanies = Array.isArray(options.capacityCompanies)
-    ? options.capacityCompanies : Object.values((await readCompanyMaster()).companies || {});
+    ? options.capacityCompanies : Object.values(capacityMaster.companies || {});
   const availability = summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows], dirPath, capacityCompanies, {
     keyword: manifest?.keyword || conditions.keyword || "",
     checkIn: manifest?.checkIn || conditions.checkIn || runDateFromId(runId),
@@ -18100,7 +18133,8 @@ async function loadRun(runId, options = {}) {
   }
 
   if (!options.skipCompanyMaster && derivedUpdatesAllowed) {
-    result.companyMaster = await upsertCompanyMasterForRun(result, collectedAt).catch((error) => ({
+    result.companyMaster = await upsertCompanyMasterForRun(result, collectedAt,
+      options.reuseIngestionMaster && capacityMaster ? { master: capacityMaster } : {}).catch((error) => ({
       error: error.message || String(error),
       totalCompanies: 0,
       currentRunCompanies: 0,
@@ -19061,7 +19095,12 @@ async function route(req, res) {
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/runs") {
-      return send(res, 200, { runs: await withCollectionPostprocess(publicRunsForRole(await listRuns(), session.role), "id") });
+      const began = performance.now();
+      const rows = publicRunsForRole(await listRuns(), session.role), listedAt = performance.now();
+      const runs = await withCollectionPostprocess(rows, "id"), readyAt = performance.now();
+      return send(res, 200, { runs }, "application/json; charset=utf-8", {
+        "Server-Timing": `archive-list;dur=${(listedAt - began).toFixed(1)}, archive-state;dur=${(readyAt - listedAt).toFixed(1)}`
+      });
     }
 
     if (await handleMonthlyReport(req, res, reqUrl, session)) return;

@@ -105,6 +105,21 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
   if (readRevision !== undefined && typeof readRevision !== "function") throw new TypeError("readRevision must be a function");
   const directory = path.resolve(dataDir, "company_integrated"), stateFile = path.join(directory, "queue.json");
   let state = { schemaVersion: SCHEMA_VERSION, jobs: {} }, initPromise, workerPromise = null, serial = Promise.resolve(), stopped = false, storeError = null, bootstrapPromise = null, bootstrapPlanning = false;
+  let dispatchHolds = 0;
+  const dispatchWaiters = new Set();
+  function wakeDispatchWaiters() { for (const resolve of dispatchWaiters) resolve(); dispatchWaiters.clear(); }
+  // Writers may persist several company jobs and their source history as one
+  // ingestion phase. Defer only new dispatch; already-running generations keep
+  // their normal publication checks and durable jobs are never dropped.
+  async function deferProcessing(work) {
+    if (typeof work !== "function") throw new TypeError("work must be a function");
+    dispatchHolds++;
+    try { return await work(); }
+    finally {
+      dispatchHolds--;
+      if (!dispatchHolds) { wakeDispatchWaiters(); if (autoStart) kick(); }
+    }
+  }
   const current = () => {
     const value = typeof now === "function" ? now() : now, result = value instanceof Date ? value : new Date(value);
     if (!Number.isFinite(result.getTime())) throw fault("invalid_clock", 500);
@@ -377,8 +392,9 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
   }
   async function runQueue() {
     await init();
-    while (!stopped) {
+    while (!stopped && !dispatchHolds) {
       const job = await locked(async () => {
+        if (stopped || dispatchHolds || bootstrapPlanning) return null;
         const queued = Object.values(state.jobs).filter(value => value.status === "queued").sort((a, b) => a.queueOrder - b.queueOrder);
         // Alternate requested work with the oldest waiting job so background
         // bootstrap continues to advance even while many users are browsing.
@@ -402,7 +418,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     }
   }
   function kick() {
-    if (workerPromise || stopped || bootstrapPlanning) return;
+    if (workerPromise || stopped || bootstrapPlanning || dispatchHolds) return;
     workerPromise = runQueue().catch(error => { storeError = safeCode(error); }).finally(() => {
       workerPromise = null;
       if (!storeError && !stopped && Object.values(state.jobs).some(job => job.status === "queued")) kick();
@@ -411,7 +427,10 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
   async function drain() {
     await init();
     if (bootstrapPromise) await bootstrapPromise;
-    do { kick(); if (workerPromise) await workerPromise; await serial; }
+    do {
+      if (dispatchHolds && !stopped) await new Promise(resolve => dispatchWaiters.add(resolve));
+      kick(); if (workerPromise) await workerPromise; await serial;
+    }
     while (!storeError && !stopped && (workerPromise || Object.values(state.jobs).some(job => job.status === "queued")));
     return status();
   }
@@ -481,8 +500,8 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
         revisionCheckStatus: recoveredRevision ? "verified" : state.bootstrap?.status || "not_checked", revisionCheckedAt: recoveredRevision ? stateJob.finishedAt : state.bootstrap?.checkedAt || null },
       sourcePolicy: "원본 보존 · 업체 고유번호 통합 · 최신 유효 관측 · 미관측은 결측 · 월간 리포트 공통 계산" };
   }
-  async function stop() { stopped = true; if (bootstrapPromise) await bootstrapPromise.catch(() => {}); if (workerPromise) await workerPromise; await serial; }
-  return { bootstrap, queueCompany, queueRun, get, status, drain, stop };
+  async function stop() { stopped = true; wakeDispatchWaiters(); if (bootstrapPromise) await bootstrapPromise.catch(() => {}); if (workerPromise) await workerPromise; await serial; }
+  return { bootstrap, queueCompany, queueRun, deferProcessing, get, status, drain, stop };
 }
 
 module.exports = { createCompanyIntegratedDb, COMPANY_INTEGRATED_SCHEMA_VERSION: SCHEMA_VERSION, COMPANY_INTEGRATED_CALCULATION_VERSION: CALCULATION_VERSION };

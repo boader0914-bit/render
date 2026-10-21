@@ -43,6 +43,22 @@ async function fixture(t, initial = { companies: { a: company("a"), b: company("
 
 function queued(f) { return f.events.filter(event => event.type === "queue").map(event => event.companyIds); }
 
+test("source ingestion persists distinct affected companies without opening the full catalog or discovering months", async () => {
+  const start = source.indexOf("async function queueIntegratedCompanies("), end = source.indexOf("\nconst monthlyReportService", start);
+  const calls = [], ids = Array.from({length: 20}, (_, i) => `cmp_place_${i + 1000}`);
+  const context = { Set, console, companyIntegratedDb: {
+    queueRun: async () => { throw new Error("ingestion must not discover all source months"); },
+    queueCompany: async (id, options) => { calls.push({id, options}); }
+  } };
+  vm.runInNewContext(source.slice(start, end), context);
+  await context.queueIntegratedCompanies([...ids, ids[0]], "observations_saved");
+  assert.deepEqual(calls.map(call => call.id), ids);
+  for (const {options} of calls) {
+    assert.equal(options.reason, "observations_saved");
+    assert.equal(Object.hasOwn(options, "months"), false, "background worker discovers both old and new months");
+  }
+});
+
 test("the app supplies a dedicated scoped context revision reader and retains its prepared-index methods", async () => {
   const start = source.indexOf("function companyIntegratedCalculationFingerprint() {");
   const end = source.indexOf("\nasync function queueIntegratedCompanies(", start);

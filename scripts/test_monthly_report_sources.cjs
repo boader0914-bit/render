@@ -45,6 +45,28 @@ test("concurrent catalogs share one preparation, then refresh after success and 
   assert.equal(preparations, 3); assert.equal(runReads, 3);
 });
 
+test("target catalogs share metadata reads without capacity preparation and cannot replace a full analytical catalog", async t => {
+  const started = deferred(), gate = deferred(); let reads = 0, preparations = 0;
+  const adapter = await sourceFixture(t, {
+    listRuns: async () => { if (++reads === 1) { started.resolve(); await gate.promise; } return [{id: "r1", checkIn: "2026-08-31", bookingRangeDays: 21}]; },
+    prepareCompanies: async companies => { preparations++; return companies; },
+    capacityForCompany: () => 16
+  });
+  const first = adapter.targetCatalog(), second = adapter.targetCatalog();
+  await started.promise;
+  const full = adapter.catalog();
+  assert.equal(reads, 1); assert.equal(preparations, 0);
+  gate.resolve();
+  const [target, shared, analysis] = await Promise.all([first, second, full]);
+  assert.equal(target, shared);
+  assert.equal(target.companies[0].capacity, null);
+  assert.equal(target.rawCompanies.get("a").keywords.search.runs[0].runId, "r1");
+  assert.equal(target.runs[0].bookingRangeDays, 21);
+  assert.equal(analysis.companies[0].capacity, 16);
+  assert.notEqual(analysis, target);
+  assert.equal(preparations, 1); assert.equal(reads, 2);
+});
+
 test("shared monthly source queue serializes bootstrap and industry reads and recovers after failure", async t => {
   const starts = [deferred(), deferred(), deferred()], gates = starts.map(deferred);
   let active = 0, maxActive = 0, calls = 0, preparations = 0;

@@ -455,6 +455,19 @@ Object.assign(context, {
 const largeRow = { placeId: "no_glamping_name", name: "양주 르", totalRooms: 50, availableRooms: 49,
   weeklyProductDetails: [{ date: "2026-09-26", bizItemId: "room", name: "숙박", stock: 50, bookingCount: 1, price: 100000 }] };
 const keywordReview = context.summarizeAvailabilityRows([largeRow], "", [], { keyword: "검증글램핑" }).items[0];
+const originalJsonArrayField = context.jsonArrayField;
+let structuredReads = 0;
+context.jsonArrayField = (...args) => { structuredReads++; return originalJsonArrayField(...args); };
+const duplicateProjection = context.summarizeAvailabilityRows([largeRow, largeRow, largeRow], "", [], { keyword: "검증글램핑" });
+const duplicateReads = structuredReads;
+structuredReads = 0;
+const singleProjection = context.summarizeAvailabilityRows([largeRow], "", [], { keyword: "검증글램핑" });
+assert.deepEqual(JSON.parse(JSON.stringify(duplicateProjection)), JSON.parse(JSON.stringify(singleProjection)), "duplicate place rows keep the first valid source values");
+assert.equal(duplicateReads, structuredReads, "a retained place never rereads product JSON from subsequent ranking/platform rows");
+const invalidFirst = { ...largeRow, totalRooms: 0, availableRooms: 0, weeklyProductDetails: [] };
+const fallbackProjection = context.summarizeAvailabilityRows([invalidFirst, largeRow], "", [], { keyword: "검증글램핑" });
+assert.deepEqual(JSON.parse(JSON.stringify(fallbackProjection)), JSON.parse(JSON.stringify(singleProjection)), "a first row without valid inventory cannot suppress a later valid row");
+context.jsonArrayField = originalJsonArrayField;
 assert.equal(keywordReview.inventoryEvidence.lodging.operatingTotal, 50);
 assert.equal(keywordReview.inventoryEvidence.capacityReview.required, true, "collection keyword enables >40 review even when the name has no glamping text");
 const typeReview = context.applyCompanyManualCorrection({ ...sourceItem, name: "양주 르", weeklyProductDetails: largeRow.weeklyProductDetails }, {

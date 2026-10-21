@@ -12,7 +12,7 @@ const names = [
   "historyOpsCompanyId", "historyOpsSavedCompanyRows", "historyOpsSavedResultHtml", "openHistoryOpsCompanyDb", "bindHistoryOpsEvents", "historyOpsCard",
   "historyOpsTimeline", "historyOpsKeywordRows", "historyOpsComparison", "historyOpsCompanyTrends", "renderHistoryOps",
   "companyKey", "collectionArchiveDay", "collectionArchiveDate", "collectionArchiveWorker", "collectionArchiveQuality",
-  "activeKeyword", "adminDbCompanyHash", "adminDbCompanyDetailUrl", "adminDbCompanyUseNativeLink", "clearAdminDbCompanyHash", "effectiveDetailRankRange"
+  "activeKeyword", "adminDbCompanyHash", "adminDbCompanyDetailUrl", "adminDbCompanyUseNativeLink", "clearAdminDbCompanyHash", "resetAdminDbSearchDraft", "effectiveDetailRankRange"
 ];
 const declarations = names.map(name => {
   const fn = source.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^}`, "m"))?.[0];

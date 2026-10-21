@@ -96,6 +96,8 @@ async function scenario(temporary, corrupt) {
     }
     const archive = await request(base, "/api/runs", admin);
     assert.equal(archive.response.status, 200);
+    assert.match(archive.response.headers.get("server-timing"), /^archive-list;dur=\d+\.\d, archive-state;dur=\d+\.\d$/,
+      "operations can distinguish catalog reads from current postprocess-state attachment");
     const saved = archive.body.runs.find(row => row.id === artifact.runId); assert.ok(saved, "queue trouble never hides published source results");
     assert.equal(saved.postprocess.state, corrupt ? "unavailable" : "complete");
     if (!corrupt) {

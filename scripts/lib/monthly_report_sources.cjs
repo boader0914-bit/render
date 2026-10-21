@@ -24,7 +24,7 @@ async function readJson(file, fallback, checkpoint = async () => {}) {
 function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepareCompanies = null, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", now = () => new Date() }) {
   const companyFile = path.join(dataDir, "company_master", "companies.json");
   const historyFile = path.join(dataDir, "history", "observations.jsonl");
-  let catalogInFlight = null, optionsInFlight = null;
+  let catalogInFlight = null, targetCatalogInFlight = null, optionsInFlight = null;
   const sourceReadScheduler = createSourceReadScheduler();
   const selectorCache = typeof readOptionsRevision === "function" ? createMonthlyReportMaterializedCache({
     directory: path.join(dataDir, "monthly_reports", "selector_cache"), maxEntries: 1,
@@ -92,6 +92,16 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     catalogInFlight = task;
     try { return await task; }
     finally { if (catalogInFlight === task) catalogInFlight = null; }
+  }
+  async function targetCatalog(options = {}) {
+    if (targetCatalogInFlight) return targetCatalogInFlight;
+    // Month discovery needs identities, saved dates and run spans, never a
+    // capacity rebuild. Keep this flight distinct from full analytical reads
+    // while admitting both through the same memory/foreground scheduler.
+    const task = sourceReadScheduler.run(() => readCatalog({ prepareCapacity: false, checkpoint: checkpointFor(options) }), options);
+    targetCatalogInFlight = task;
+    try { return await task; }
+    finally { if (targetCatalogInFlight === task) targetCatalogInFlight = null; }
   }
   async function readHistory(consume, checkpoint = async () => {}) {
     try { await fsp.access(historyFile); } catch (error) { if (error.code === "ENOENT") return 0; throw sourceError(); }
@@ -306,7 +316,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     // queue. Separate UI/service queues cannot protect the shared heap alone.
     return sourceReadScheduler.run(() => readSources(request, includeCatalog, options), options);
   }
-  return { options, loadSources: (request, options) => queueSourceRead(request, false, options), catalog,
+  return { options, loadSources: (request, options) => queueSourceRead(request, false, options), catalog, targetCatalog,
     loadSourcesWithCatalog: (request, options) => queueSourceRead(request, true, options),
     ...(typeof readRevision === "function" ? { readRevision } : {}),
     runInteractiveRead: sourceReadScheduler.runInteractive,

@@ -17,6 +17,13 @@ const manifests = new Map([[recordedId, { keyword: "포천글램핑", completedA
 const stat = { birthtime: new Date(fallback), ctime: new Date("2026-09-20T01:00:00.000Z"), mtime: new Date("2026-09-21T01:00:00.000Z") };
 const context = vm.createContext({
   Date, path, OUTPUTS_DIR: "outputs",
+  // Projection parity is independent of FS caching, which is exercised against
+  // real files in test_run_catalog. This fixture preserves timestamp provenance.
+  runCatalog: { list: async () => {
+    const rows = [];
+    for (const [id, manifest] of manifests) rows.push(context.runCatalogRow({id, manifest, files: ["saved.csv"], stat}));
+    return rows.sort((a,b) => b.collectedAt.localeCompare(a.collectedAt) || b.id.localeCompare(a.id));
+  } },
   fsp: {
     mkdir: async () => {}, stat: async () => stat,
     readdir: async (_dir, options) => options?.withFileTypes
@@ -30,7 +37,7 @@ const context = vm.createContext({
   USER_ROLES: { admin: "admin" }, normalizeUserRole: (role) => role, COLLECTION_PURPOSES: { revenue_detail: "매출 상세" },
   sourceRoleForCollectionSource: () => "admin", normalizeCollectionSource: () => "admin", collectionSourceLabel: () => "관리자"
 });
-const api = vm.runInContext(`${["runCollectedAtSource", "runCollectedAt", "listRuns", "publicRunsForRole"].map(declaration).join("\n")}\n({runCollectedAtSource,runCollectedAt,listRuns,publicRunsForRole})`, context);
+const api = vm.runInContext(`${["runCollectedAtSource", "runCollectedAt", "runCatalogRow", "listRuns", "publicRunsForRole"].map(declaration).join("\n")}\n({runCollectedAtSource,runCollectedAt,listRuns,publicRunsForRole})`, context);
 
 async function main() {
   for (const key of ["completedAt", "finishedAt", "collectedAt", "startedAt", "createdAt"]) {
