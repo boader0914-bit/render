@@ -117,6 +117,22 @@ test("source byte encoding is explicit provenance, retained and fingerprinted wi
   assert.throws(() => validateCatchmentResult(malformed, { requireResultId: false }), { code: "CATCHMENT_RESULT_INVALID" });
 });
 
+test("archive merge provenance is complete, fingerprinted and preserved in calculated results", async () => {
+  const input = fixture(); Object.assign(input, { sourceHashKind: "original_archive", boundaryHashKind: "original_archive_set_manifest", sourceTransform: "filtered_merge",
+    sourceEncoding: "utf8", derivedCsvSha256: "c".repeat(64), derivedGeometrySha256: "d".repeat(64), mappingSha256: "e".repeat(64), preparationManifestSha256: "f".repeat(64) });
+  const normalized = normalizeDataset(input), result = await calculate(input);
+  assert.equal(result.dataset.sourceSha256, input.sourceSha256); assert.equal(result.dataset.preparationManifestSha256, input.preparationManifestSha256);
+  assert.equal(validateCatchmentResult(result, { requireResultId: false }), result);
+  assert.notEqual(normalized.fingerprint, normalizeDataset({ ...input, preparationManifestSha256: "1".repeat(64) }).fingerprint);
+  for (const field of ["sourceHashKind", "boundaryHashKind", "sourceTransform", "sourceEncoding", "derivedCsvSha256", "derivedGeometrySha256", "mappingSha256", "preparationManifestSha256"]) {
+    const broken = { ...input }; delete broken[field]; assert.throws(() => normalizeDataset(broken), { code: "CATCHMENT_INVALID_DATASET" });
+    const brokenResult = structuredClone(result); delete brokenResult.dataset[field]; assert.throws(() => validateCatchmentResult(brokenResult, { requireResultId: false }), { code: "CATCHMENT_RESULT_INVALID" });
+  }
+  for (const mutate of [value => { value.sourceEncoding = "cp949"; }, value => { value.preparationManifestSha256 = "invalid"; }, value => { value.sourceTransform = "none"; }]) {
+    const broken = { ...input }; mutate(broken); assert.throws(() => normalizeDataset(broken), { code: "CATCHMENT_INVALID_DATASET" });
+  }
+});
+
 test("calculation yields during grid scan and retains classification/provenance", async () => {
   const dataset = normalizeDataset(fixture()); let yielded = false;
   setImmediate(() => { yielded = true; });

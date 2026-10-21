@@ -56,9 +56,33 @@ test("dataset reader enforces byte size, content length, UTF8 and stream failure
   assert.equal(value.지역, "산청");
 });
 
-test("8MiB import guard responds 413 without calling service", async () => {
+test("16MiB import guard responds 413 without calling service", async () => {
+  assert.equal(MAX_IMPORT_BYTES, 16 * 1024 * 1024);
   const env = setup();
   const result = await env.invoke("/api/regional-catchment/datasets", { method: "POST", headers: { "content-length": String(MAX_IMPORT_BYTES + 1) } });
   assert.equal(result.reply.status, 413); assert.equal(env.calls.length, 0);
   assert.equal(result.reply.body.code, "CATCHMENT_IMPORT_TOO_LARGE");
+  assert.match(result.reply.body.error, /16MiB/);
+});
+
+test("a bounded body larger than the former 8MiB limit is accepted without truncation", async () => {
+  const value = "가".repeat(3 * 1024 * 1024), bytes = Buffer.from(JSON.stringify({ value }));
+  assert.ok(bytes.length > 8 * 1024 * 1024 && bytes.length < MAX_IMPORT_BYTES);
+  const parsed = await readBoundedJson(Object.assign(Readable.from([bytes.subarray(0, 1024), bytes.subarray(1024)]), { headers: { "content-length": String(bytes.length) } }));
+  assert.equal(parsed.value, value);
+});
+
+test("only one large import is retained while saved GET remains responsive and the gate is released", async () => {
+  let release, imports = 0;
+  const held = new Promise(resolve => { release = resolve; });
+  const replies = new Map(), service = { get: async () => ({ status: "ready" }), importDataset: async () => { imports++; await held; return {}; } };
+  const handle = createRegionalCatchmentHttpHandler({ service, requireAdmin: () => true, parseJsonBody: async () => ({}), send: (res, status, body) => { replies.set(res, { status, body }); } });
+  function req(method) { const stream = Readable.from([Buffer.from('{}')]); stream.method = method; stream.headers = { host: "localhost", "content-type": "application/json" }; return stream; }
+  const firstResponse = {}, first = handle(req("POST"), firstResponse, new URL("http://localhost/api/regional-catchment/datasets"), {});
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(imports, 1);
+  const secondResponse = {}; await handle(req("POST"), secondResponse, new URL("http://localhost/api/regional-catchment/datasets"), {});
+  assert.equal(replies.get(secondResponse).status, 429); assert.equal(replies.get(secondResponse).body.code, "CATCHMENT_IMPORT_BUSY"); assert.equal(imports, 1);
+  const readResponse = {}; await handle(req("GET"), readResponse, new URL("http://localhost/api/regional-catchment?regionKey=r1"), {}); assert.equal(replies.get(readResponse).status, 200);
+  release(); await first; assert.equal(replies.get(firstResponse).status, 201);
+  const afterResponse = {}; await handle(req("POST"), afterResponse, new URL("http://localhost/api/regional-catchment/datasets"), {}); assert.equal(replies.get(afterResponse).status, 201); assert.equal(imports, 2);
 });

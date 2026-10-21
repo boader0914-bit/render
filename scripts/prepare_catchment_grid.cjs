@@ -9,7 +9,7 @@ const { normalizeDataset } = require("./lib/regional_catchment.cjs");
 
 const METRICS = ["population", "establishments", "workers"];
 const MAX_CELLS = 50000;
-const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const MAX_INPUT_BYTES = 128 * 1024 * 1024;
 const KOREA_BOUNDS = [123, 32, 133, 40];
 
@@ -130,7 +130,7 @@ function validateMapping(mapping) {
   if (![100, 250, 500, 1000].includes(dataset.gridSizeM)) fail("PREPARE_INVALID_MAPPING", "gridSizeM must be 100, 250, 500 or 1000");
   if (dataset.completeFrame !== undefined && typeof dataset.completeFrame !== "boolean") fail("PREPARE_INVALID_MAPPING", "completeFrame must be boolean");
   if (dataset.completeFrame === true && !dataset.coverageBBox) fail("PREPARE_INVALID_MAPPING", "A complete frame requires an explicit coverageBBox declaration");
-  if (dataset.sourceTransform !== undefined && !["none", "utf8_conversion"].includes(dataset.sourceTransform)) fail("PREPARE_INVALID_MAPPING", "sourceTransform must be none or utf8_conversion");
+  if (dataset.sourceTransform !== undefined && !["none", "utf8_conversion", "filtered_merge"].includes(dataset.sourceTransform)) fail("PREPARE_INVALID_MAPPING", "sourceTransform must be none, utf8_conversion or filtered_merge");
   text(dataset.industryClassification, "dataset.industryClassification");
   ownKeys(geometry, ["gridIdField", "crs", "pointRole"], "geometry");
   text(geometry.gridIdField, "geometry.gridIdField");
@@ -174,12 +174,52 @@ function parseValue(raw, rowNumber, metric) {
   return { status: numeric === 0 ? "protected_zero" : "observed_public", value: numeric };
 }
 
-function prepareDataset({ csvBytes, geojsonBytes, mappingBytes, boundarySourceBytes }) {
+function archiveSetManifest(boundarySourceBytes) {
+  const manifest = object(parseJSON(boundarySourceBytes, "boundary archive set manifest"), "boundary archive set manifest");
+  ownKeys(manifest, ["version", "files"], "boundary archive set manifest");
+  if (manifest.version !== "catchment-boundary-archive-set-v1" || !Array.isArray(manifest.files) || !manifest.files.length || manifest.files.length > 1000) fail("PREPARE_INVALID_PROVENANCE", "Boundary archive set requires a non-empty bounded files list");
+  let previous = null;
+  for (const row of manifest.files) {
+    object(row, "boundary archive file"); ownKeys(row, ["name", "sha256"], "boundary archive file");
+    if (typeof row.name !== "string" || row.name.length > 255 || !/\.zip$/i.test(row.name) || /[\\/:*?"<>|\u0000-\u001f]/.test(row.name) || row.name === ".zip"
+      || !/^[a-f0-9]{64}$/.test(row.sha256 || "") || previous !== null && row.name <= previous) fail("PREPARE_INVALID_PROVENANCE", "Boundary archive names must be safe unique basenames sorted by name, with SHA256");
+    previous = row.name;
+  }
+  return manifest;
+}
+function verifyPreparationProvenance({ csvBytes, geojsonBytes, mappingBytes, boundarySourceBytes, sourceArchiveBytes, provenanceBytes, boundaryArchives }, mapping) {
+  const any = sourceArchiveBytes !== undefined || provenanceBytes !== undefined || boundaryArchives !== undefined || mapping.dataset.sourceTransform === "filtered_merge";
+  if (!any) return null;
+  for (const [name, value] of Object.entries({ sourceArchiveBytes, provenanceBytes })) if (!Buffer.isBuffer(value) || !value.length || value.length > MAX_INPUT_BYTES) fail("PREPARE_INVALID_PROVENANCE", `${name} must be non-empty and at most 128 MiB`);
+  if (mapping.dataset.sourceTransform !== "filtered_merge" || ![undefined, "utf-8"].includes(mapping.csv.encoding)) fail("PREPARE_INVALID_PROVENANCE", "Archive preparation must declare filtered_merge and use UTF-8 derived CSV");
+  const manifest = object(parseJSON(provenanceBytes, "preparation provenance"), "preparation provenance");
+  ownKeys(manifest, ["version", "inputs", "preparation"], "preparation provenance");
+  if (manifest.version !== "catchment-source-provenance-v1") fail("PREPARE_INVALID_PROVENANCE", "Unsupported preparation provenance version");
+  const required = { sourceArchiveSha256: sha256(sourceArchiveBytes), boundaryArchiveSetManifestSha256: sha256(boundarySourceBytes),
+    derivedCsvSha256: sha256(csvBytes), derivedGeometrySha256: sha256(geojsonBytes), mappingSha256: sha256(mappingBytes) };
+  object(manifest.inputs, "preparation provenance.inputs"); ownKeys(manifest.inputs, Object.keys(required), "preparation provenance.inputs");
+  if (Object.entries(required).some(([key, digest]) => manifest.inputs[key] !== digest)) fail("PREPARE_PROVENANCE_HASH_MISMATCH", "Preparation manifest does not match the exact original and derived input bytes");
+  if (manifest.preparation !== undefined) object(manifest.preparation, "preparation provenance.preparation");
+  const boundaries = archiveSetManifest(boundarySourceBytes);
+  if (!Array.isArray(boundaryArchives) || boundaryArchives.length !== boundaries.files.length) fail("PREPARE_INVALID_PROVENANCE", "Supply every original boundary archive in the manifest");
+  const supplied = new Map();
+  for (const archive of boundaryArchives) {
+    object(archive, "boundary archive"); ownKeys(archive, ["name", "bytes"], "boundary archive");
+    if (typeof archive.name !== "string" || supplied.has(archive.name) || !Buffer.isBuffer(archive.bytes) || !archive.bytes.length || archive.bytes.length > MAX_INPUT_BYTES) fail("PREPARE_INVALID_PROVENANCE", "Boundary archive inputs must be unique non-empty bounded buffers");
+    supplied.set(archive.name, archive.bytes);
+  }
+  for (const file of boundaries.files) if (!supplied.has(file.name) || sha256(supplied.get(file.name)) !== file.sha256) fail("PREPARE_PROVENANCE_HASH_MISMATCH", `Original boundary archive does not match manifest: ${file.name}`);
+  return { sourceSha256: required.sourceArchiveSha256, boundarySha256: required.boundaryArchiveSetManifestSha256,
+    derivedCsvSha256: required.derivedCsvSha256, preparationManifestSha256: sha256(provenanceBytes), boundaryHashKind: "original_archive_set_manifest", sourceHashKind: "original_archive", sourceTransform: "filtered_merge" };
+}
+
+function prepareDataset({ csvBytes, geojsonBytes, mappingBytes, boundarySourceBytes, sourceArchiveBytes, provenanceBytes, boundaryArchives }) {
   for (const [label, bytes] of Object.entries({ csvBytes, geojsonBytes, mappingBytes, boundarySourceBytes })) {
     if (!Buffer.isBuffer(bytes) || !bytes.length) fail("PREPARE_MISSING_INPUT", `${label} is required`);
     if (bytes.length > MAX_INPUT_BYTES) fail("PREPARE_INPUT_TOO_LARGE", `${label} exceeds 128 MiB`);
   }
   const mapping = validateMapping(parseJSON(mappingBytes, "mapping"));
+  const preparation = verifyPreparationProvenance({ csvBytes, geojsonBytes, mappingBytes, boundarySourceBytes, sourceArchiveBytes, provenanceBytes, boundaryArchives }, mapping);
   const geojson = object(parseJSON(geojsonBytes, "GeoJSON"), "GeoJSON");
   if (geojson.type !== "FeatureCollection" || !Array.isArray(geojson.features) || !geojson.features.length) fail("PREPARE_INVALID_GEOJSON", "A non-empty FeatureCollection is required");
   if (geojson.features.length > MAX_CELLS) fail("PREPARE_TOO_MANY_CELLS", "At most 50,000 cells are accepted per bundle");
@@ -232,6 +272,7 @@ function prepareDataset({ csvBytes, geojsonBytes, mappingBytes, boundarySourceBy
     crs: "EPSG:4326", sourceSha256: sha256(csvBytes), boundarySha256: sha256(boundarySourceBytes),
     derivedGeometrySha256: sha256(geojsonBytes), mappingSha256: sha256(mappingBytes), derivedCsvSha256: sha256(Buffer.from(decodedCSV.text, "utf8")), sourceEncoding: decodedCSV.sourceEncoding,
     boundaryHashKind: "original_file", sourceHashKind: "input_csv", sourceTransform: mapping.dataset.sourceTransform || "none",
+    ...(preparation || {}),
     industryClassification: mapping.dataset.industryClassification.trim(), coverageBBox, completeFrame: mapping.dataset.completeFrame === true,
     units: { population: "명", establishments: "개", workers: "명" },
     disclosureMethod: "SGIS published privacy-protected statistics; zero is protected_zero; N/A is suppressed",
@@ -241,12 +282,12 @@ function prepareDataset({ csvBytes, geojsonBytes, mappingBytes, boundarySourceBy
   // Its fingerprint belongs to the server's internal representation, not the import schema.
   const { fingerprint, ...dataset } = normalizeDataset(candidate);
   const json = JSON.stringify(dataset) + "\n";
-  if (Buffer.byteLength(json) > MAX_OUTPUT_BYTES) fail("PREPARE_OUTPUT_TOO_LARGE", "Prepared bundle exceeds 8 MiB; split it into source frames without claiming complete coverage");
-  return { dataset, json, summary: { cells: dataset.cells.length, statisticRows: csv.records.length, selectedRows, unselectedRows, outputBytes: Buffer.byteLength(json), sourceSha256: dataset.sourceSha256, sourceEncoding: dataset.sourceEncoding, derivedCsvSha256: dataset.derivedCsvSha256, boundarySha256: dataset.boundarySha256, derivedGeometrySha256: dataset.derivedGeometrySha256, completeFrame: dataset.completeFrame, coverageDeclared: Boolean(mapping.dataset.coverageBBox) } };
+  if (Buffer.byteLength(json) > MAX_OUTPUT_BYTES) fail("PREPARE_OUTPUT_TOO_LARGE", "Prepared bundle exceeds 16 MiB; split it into source frames without claiming complete coverage");
+  return { dataset, json, summary: { cells: dataset.cells.length, statisticRows: csv.records.length, selectedRows, unselectedRows, outputBytes: Buffer.byteLength(json), sourceSha256: dataset.sourceSha256, sourceEncoding: dataset.sourceEncoding, derivedCsvSha256: dataset.derivedCsvSha256, boundarySha256: dataset.boundarySha256, derivedGeometrySha256: dataset.derivedGeometrySha256, ...(dataset.preparationManifestSha256 ? { preparationManifestSha256: dataset.preparationManifestSha256 } : {}), completeFrame: dataset.completeFrame, coverageDeclared: Boolean(mapping.dataset.coverageBBox) } };
 }
 
 function parseArgs(argv) {
-  const names = { "--csv": "csv", "--geojson": "geojson", "--mapping": "mapping", "--boundary-source": "boundarySource", "--out": "out" };
+  const names = { "--csv": "csv", "--geojson": "geojson", "--mapping": "mapping", "--boundary-source": "boundarySource", "--out": "out", "--source-archive": "sourceArchive", "--provenance": "provenance", "--boundary-archives-dir": "boundaryArchivesDir" };
   const args = {};
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
@@ -257,7 +298,9 @@ function parseArgs(argv) {
     if (!value || value.startsWith("--")) fail("PREPARE_ARGUMENT", `Missing value for ${flag}`);
     args[names[flag]] = path.resolve(value);
   }
-  for (const name of Object.values(names)) if (!args[name]) fail("PREPARE_ARGUMENT", `Missing ${Object.keys(names).find(flag => names[flag] === name)}`);
+  for (const name of ["csv", "geojson", "mapping", "boundarySource", "out"]) if (!args[name]) fail("PREPARE_ARGUMENT", `Missing ${Object.keys(names).find(flag => names[flag] === name)}`);
+  const optional = ["sourceArchive", "provenance", "boundaryArchivesDir"];
+  if (optional.some(name => args[name]) && !optional.every(name => args[name])) fail("PREPARE_ARGUMENT", "Archive provenance requires --source-archive, --provenance and --boundary-archives-dir together");
   if (new Set(Object.values(args)).size !== Object.values(args).length) fail("PREPARE_ARGUMENT", "Input and output paths must be distinct");
   return args;
 }
@@ -268,8 +311,11 @@ function readBounded(file) {
 }
 function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
-  if (args.help) { process.stdout.write("Offline SGIS grid preparation\nnode scripts/prepare_catchment_grid.cjs --csv statistics-utf8.csv --geojson grids-wgs84.geojson --mapping mapping.json --boundary-source original-boundaries.zip --out prepared.json\nSee docs/regional-catchment-sources.md for the explicit mapping contract. No network requests; no source modifications; output never overwritten.\n"); return; }
-  const result = prepareDataset({ csvBytes: readBounded(args.csv), geojsonBytes: readBounded(args.geojson), mappingBytes: readBounded(args.mapping), boundarySourceBytes: readBounded(args.boundarySource) });
+  if (args.help) { process.stdout.write("Offline SGIS grid preparation\nnode scripts/prepare_catchment_grid.cjs --csv statistics-utf8.csv --geojson grids-wgs84.geojson --mapping mapping.json --boundary-source original-boundaries.zip --out prepared.json\nFor filtered_merge, --boundary-source is a catchment-boundary-archive-set-v1 JSON manifest; also supply --source-archive original-statistics.zip --provenance preparation.json --boundary-archives-dir original-zip-folder.\nSee docs/regional-catchment-sources.md for the explicit mapping contract. No network requests; no source modifications; output never overwritten.\n"); return; }
+  const boundarySourceBytes = readBounded(args.boundarySource);
+  const archiveInputs = args.provenance ? { sourceArchiveBytes: readBounded(args.sourceArchive), provenanceBytes: readBounded(args.provenance),
+    boundaryArchives: archiveSetManifest(boundarySourceBytes).files.map(file => ({ name: file.name, bytes: readBounded(path.join(args.boundaryArchivesDir, file.name)) })) } : {};
+  const result = prepareDataset({ csvBytes: readBounded(args.csv), geojsonBytes: readBounded(args.geojson), mappingBytes: readBounded(args.mapping), boundarySourceBytes, ...archiveInputs });
   // wx makes a lost response or an accidental rerun safe: inspect the existing file instead of overwriting it.
   fs.writeFileSync(args.out, result.json, { encoding: "utf8", flag: "wx" });
   process.stdout.write(JSON.stringify({ output: args.out, ...result.summary }) + "\n");

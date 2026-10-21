@@ -205,10 +205,10 @@ test("argument parser rejects unknown flags, duplicates, missing values and sour
   assert.deepEqual(parseArgs(["--help"]), { help: true });
 });
 
-test("50,001 features fail before normalization; bundle output is bounded to 8 MiB", () => {
-  assert.equal(MAX_CELLS, 50000); assert.equal(MAX_OUTPUT_BYTES, 8 * 1024 * 1024);
+test("50,001 features fail before normalization; bundle output is bounded to 16 MiB", () => {
+  assert.equal(MAX_CELLS, 50000); assert.equal(MAX_OUTPUT_BYTES, 16 * 1024 * 1024);
   expectedCode(() => prepareDataset(inputs({ geojson: collection(Array.from({ length: MAX_CELLS + 1 }, (_, index) => point(`grid-${index}`))) })), "PREPARE_TOO_MANY_CELLS");
-  const features = Array.from({ length: 35000 }, (_, index) => point(`synthetic-${index.toString().padStart(6, "0")}-${"x".repeat(65)}`, 126 + (index % 500) / 1000, 35 + Math.floor(index / 500) / 1000));
+  const features = Array.from({ length: 50000 }, (_, index) => point(`synthetic-${index.toString().padStart(6, "0")}-${"가".repeat(95)}`, 126 + (index % 500) / 1000, 35 + Math.floor(index / 500) / 1000));
   const csv = "grid,year,people,firms,workers\n" + features.map(feature => `${feature.properties.grid_id},2024,1,2,3`).join("\n");
   expectedCode(() => prepareDataset(inputs({ geojson: collection(features), csv })), "PREPARE_OUTPUT_TOO_LARGE");
 });
@@ -231,4 +231,67 @@ test("CLI creates one new bundle, refuses overwrite, and never changes its sourc
   const again = spawnSync(process.execPath, args, { encoding: "utf8", timeout: 10000 });
   assert.notEqual(again.status, 0); assert.match(again.stderr, /EEXIST/); assert.equal(digest(fs.readFileSync(output)), outputHash);
   for (const [key, name] of Object.entries(names)) assert.deepEqual(fs.readFileSync(path.join(folder, name)), input[key]);
+});
+
+function archiveInputs() {
+  const map = mapping(); map.dataset.sourceTransform = "filtered_merge"; map.csv.encoding = "utf-8";
+  const source = inputs({ map }); source.sourceArchiveBytes = bytes("SYNTHETIC ORIGINAL STATISTICS ZIP");
+  source.boundaryArchives = [{ name: "boundary-a.zip", bytes: bytes("SYNTHETIC BOUNDARY A") }, { name: "boundary-b.zip", bytes: bytes("SYNTHETIC BOUNDARY B") }];
+  source.boundarySourceBytes = bytes({ version: "catchment-boundary-archive-set-v1", files: source.boundaryArchives.map(row => ({ name: row.name, sha256: digest(row.bytes) })) });
+  source.provenanceBytes = bytes({ version: "catchment-source-provenance-v1", inputs: {
+    sourceArchiveSha256: digest(source.sourceArchiveBytes), boundaryArchiveSetManifestSha256: digest(source.boundarySourceBytes),
+    derivedCsvSha256: digest(source.csvBytes), derivedGeometrySha256: digest(source.geojsonBytes), mappingSha256: digest(source.mappingBytes)
+  }, preparation: { sourceMembers: [{ name: "synthetic.csv", rows: 2 }], metricCodes: ["synthetic-only"] } });
+  return source;
+}
+
+test("filtered merge binds original archive, archive-set manifest and all exact derived bytes", () => {
+  const source = archiveInputs(), before = digest(source.sourceArchiveBytes), prepared = prepareDataset(source);
+  assert.equal(prepared.dataset.sourceSha256, before); assert.notEqual(prepared.dataset.sourceSha256, digest(source.csvBytes));
+  assert.equal(prepared.dataset.boundarySha256, digest(source.boundarySourceBytes));
+  assert.equal(prepared.dataset.derivedCsvSha256, digest(source.csvBytes)); assert.equal(prepared.dataset.derivedGeometrySha256, digest(source.geojsonBytes));
+  assert.equal(prepared.dataset.preparationManifestSha256, digest(source.provenanceBytes));
+  assert.equal(prepared.dataset.sourceHashKind, "original_archive"); assert.equal(prepared.dataset.boundaryHashKind, "original_archive_set_manifest");
+  assert.equal(prepared.dataset.sourceTransform, "filtered_merge"); assert.equal(prepared.dataset.sourceEncoding, "utf8");
+  assert.equal(prepared.summary.preparationManifestSha256, digest(source.provenanceBytes));
+});
+
+test("filtered merge rejects substituted inputs and unverified original boundary archives", () => {
+  for (const field of ["sourceArchiveBytes", "csvBytes", "geojsonBytes", "mappingBytes", "boundarySourceBytes"]) {
+    const source = archiveInputs(); source[field] = Buffer.concat([source[field], bytes(" ")]);
+    expectedCode(() => prepareDataset(source), "PREPARE_PROVENANCE_HASH_MISMATCH");
+  }
+  const changedArchive = archiveInputs(); changedArchive.boundaryArchives[0].bytes = bytes("SUBSTITUTED");
+  expectedCode(() => prepareDataset(changedArchive), "PREPARE_PROVENANCE_HASH_MISMATCH");
+  const missingArchive = archiveInputs(); missingArchive.boundaryArchives.pop();
+  expectedCode(() => prepareDataset(missingArchive), "PREPARE_INVALID_PROVENANCE");
+});
+
+test("filtered merge cannot be enabled with one-sided provenance or unsafe archive names", () => {
+  for (const field of ["sourceArchiveBytes", "provenanceBytes", "boundaryArchives"]) {
+    const source = archiveInputs(); delete source[field]; expectedCode(() => prepareDataset(source), "PREPARE_INVALID_PROVENANCE");
+  }
+  const raw = inputs(); raw.sourceArchiveBytes = bytes("ORIGINAL"); expectedCode(() => prepareDataset(raw), "PREPARE_INVALID_PROVENANCE");
+  for (const names of [["b.zip", "a.zip"], ["same.zip", "same.zip"], ["../outside.zip", "b.zip"], ["a:alternate.zip", "b.zip"]]) {
+    const source = archiveInputs(), boundaries = JSON.parse(source.boundarySourceBytes); boundaries.files.forEach((row, i) => { row.name = names[i]; });
+    source.boundarySourceBytes = bytes(boundaries); const provenance = JSON.parse(source.provenanceBytes);
+    provenance.inputs.boundaryArchiveSetManifestSha256 = digest(source.boundarySourceBytes); source.provenanceBytes = bytes(provenance);
+    expectedCode(() => prepareDataset(source), "PREPARE_INVALID_PROVENANCE");
+  }
+});
+
+test("archive CLI verifies originals and refuses overwrite without changing any input", t => {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), "catchment-archive-fixture-"));
+  t.after(() => { assert.equal(path.dirname(folder), path.resolve(os.tmpdir())); assert.ok(path.basename(folder).startsWith("catchment-archive-fixture-")); fs.rmSync(folder, { recursive: true, force: true }); });
+  const source = archiveInputs(), files = { csvBytes: "statistics.csv", geojsonBytes: "grids.geojson", mappingBytes: "mapping.json", boundarySourceBytes: "boundaries.json", sourceArchiveBytes: "statistics.zip", provenanceBytes: "provenance.json" };
+  for (const [field, name] of Object.entries(files)) fs.writeFileSync(path.join(folder, name), source[field]);
+  const boundaryDir = path.join(folder, "original-boundaries"); fs.mkdirSync(boundaryDir);
+  for (const row of source.boundaryArchives) fs.writeFileSync(path.join(boundaryDir, row.name), row.bytes);
+  const output = path.join(folder, "prepared.json"), args = [path.join(__dirname, "prepare_catchment_grid.cjs"), "--csv", path.join(folder, files.csvBytes), "--geojson", path.join(folder, files.geojsonBytes), "--mapping", path.join(folder, files.mappingBytes), "--boundary-source", path.join(folder, files.boundarySourceBytes), "--source-archive", path.join(folder, files.sourceArchiveBytes), "--provenance", path.join(folder, files.provenanceBytes), "--boundary-archives-dir", boundaryDir, "--out", output];
+  const run = spawnSync(process.execPath, args, { encoding: "utf8", timeout: 10000 }); assert.equal(run.status, 0, run.stderr);
+  assert.equal(JSON.parse(fs.readFileSync(output)).sourceSha256, digest(source.sourceArchiveBytes));
+  const again = spawnSync(process.execPath, args, { encoding: "utf8", timeout: 10000 }); assert.notEqual(again.status, 0); assert.match(again.stderr, /EEXIST/);
+  for (const [field, name] of Object.entries(files)) assert.deepEqual(fs.readFileSync(path.join(folder, name)), source[field]);
+  for (const row of source.boundaryArchives) assert.deepEqual(fs.readFileSync(path.join(boundaryDir, row.name)), row.bytes);
+  for (const flag of ["--source-archive", "--provenance", "--boundary-archives-dir"]) expectedCode(() => parseArgs(args.slice(1).filter((value, index, all) => value !== flag && all[index - 1] !== flag)), "PREPARE_ARGUMENT");
 });

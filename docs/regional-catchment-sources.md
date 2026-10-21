@@ -184,9 +184,21 @@ node scripts/prepare_catchment_grid.cjs --csv "C:\data\sgis-statistics-utf8.csv"
 | `derivedGeometrySha256` | QGIS 등으로 변환한 GeoJSON 바이트. 공식 원본 경계 해시와 분리한다. |
 | `mappingSha256` | 코드집 확인 후 작성한 mapping JSON 바이트. |
 
-도구는 네트워크를 사용하지 않으며 입력 파일을 고치지 않는다. 출력은 `wx`로 생성해 **기존 파일을 덮어쓰지 않는다**. 출력이 이미 있으면 먼저 파일과 해시를 확인하고 새 버전 파일명으로 준비한다. 통계·경계·mapping은 각각128MiB 이하, 반입 묶음은 **50,000셀·8MiB 이하**다. 조용히 자르지 않는다. 큰 자료는 향후 스트리밍 색인/저장 확장 또는 명시된 여러 자료프레임 지원이 필요하다. CP949 입력에는 저장소에 이미 선언된 `xlsx` 패키지 설치가 필요하며 신규 인코딩 패키지를 추가하지 않는다.
+도구는 네트워크를 사용하지 않으며 입력 파일을 고치지 않는다. 출력은 `wx`로 생성해 **기존 파일을 덮어쓰지 않는다**. 출력이 이미 있으면 먼저 파일과 해시를 확인하고 새 버전 파일명으로 준비한다. 통계·경계·mapping은 각각128MiB 이하, 반입 묶음은 **50,000셀·16MiB 이하**다. 조용히 자르지 않는다. 실제 월명35,602개 격자 묶음이8,492,359바이트로 기존8MiB를103,751바이트 초과해 준비·HTTP·화면 상한을 함께 보완했다. 큰 자료는 향후 스트리밍 색인/저장 확장 또는 명시된 여러 자료프레임 지원이 필요하다. CP949 입력에는 저장소에 이미 선언된 `xlsx` 패키지 설치가 필요하며 신규 인코딩 패키지를 추가하지 않는다.
 
-현재 CLI는 CSV1개와 경계 원본1개를 받는다. 전국30타일·여러 통계 CSV를 병합하거나 지역 범위로 추출할 경우 **원본별 이름·해시·통계연도·항목·선택 범위·병합/추출 규칙의 별도 영수증**을 먼저 보존해야 한다. 현재 `sourceTransform`의 `none`/`utf8_conversion`만으로 다중 원본 병합 전체를 표현했다고 판단하지 않는다. 파생 CSV를 입력한 `sourceSha256`는 그 파생본의 해시다. 반입 전 다중 원본 추적 구조와 공간 프레임 완전성 검수를 보완하는 단계가 남아 있다.
+### 여러 원본의 필터·병합
+
+기존 단일 CSV·단일 경계 입력은 호환된다. 원본88CSV·경계30ZIP 같은 여러 파일을 필터·병합한 경우 `dataset.sourceTransform:"filtered_merge"`, 파생 CSV 인코딩 `utf-8`을 명시하고 다음3인자를 **함께** 추가한다.
+
+```powershell
+node scripts/prepare_catchment_grid.cjs --csv "C:\data\selected-totals.csv" --geojson "C:\data\selected-centroids.geojson" --mapping "C:\data\mapping.json" --boundary-source "C:\data\boundary-set.json" --source-archive "C:\data\official-statistics.zip" --provenance "C:\data\preparation.json" --boundary-archives-dir "C:\data\original-boundary-zips" --out "C:\data\prepared-v1.json"
+```
+
+`boundary-set.json`의 정확한 계약은 `{version:"catchment-boundary-archive-set-v1",files:[{name,sha256}]}`다. `name`은 경로 없는 원본 ZIP 파일명이며 문자열 오름차순·중복 없이 나열한다. 준비 도구가 해당 폴더의 각 실제 ZIP 바이트 SHA를 대조하며 누락/변조·경로 이탈은 거부한다.
+
+`preparation.json`은 `{version:"catchment-source-provenance-v1",inputs:{sourceArchiveSha256,boundaryArchiveSetManifestSha256,derivedCsvSha256,derivedGeometrySha256,mappingSha256},preparation:{...}}`다. `inputs`의5개 SHA는 원본 통계 ZIP·경계 묶음 manifest·파생 CSV·파생 GeoJSON·mapping의 **정확한 입력 바이트**와 일치해야 한다. `preparation`에 원본 member별 이름/해시/행 수, 원본 CP949/파생 UTF-8 구분, 코드 필터, 통계/경계연도, 공간 선택·변환·완전성 근거를 보존한다. 해시는 변환 규칙 자체가 타당함을 보증하지 않으므로 실제 행·좌표·공개보호 검수는 별도로 수행한다.
+
+이 모드에서 `sourceSha256`은 **통계 원본 ZIP**이고 `sourceHashKind:original_archive`다. `boundarySha256`은 **경계 ZIP묶음 manifest**이고 `boundaryHashKind:original_archive_set_manifest`다. `derivedCsvSha256`은 필터·병합한 UTF-8 CSV 바이트, `derivedGeometrySha256`은 파생 GeoJSON, `preparationManifestSha256`은 전체 준비 영수증 바이트 SHA다. 이들 모두 저장 fingerprint와 결과 메타데이터에 연결된다. `sourceEncoding:utf8`은 이 모드의 **파생 입력 CSV**를 뜻하며 원본 ZIP 내부 CP949 인코딩은 준비 영수증에 분리한다. 한쪽만 새 provenance로 바꾸는 불완전 조합은 거부한다.
 
 공식 예제는 완전한 격자 통계에서 존재하지 않는 대상의 행을 생성하지 않는 특성을 설명한다. **이 사실만으로 임의 파일의 누락 행을0으로 확정하지 않는다.** 대상 연도·지표·전체 공간범위가 확보되었고 해당 부재 규칙이 적용되는지 원본 근거로 확인하는 별도 절차가 마련되기 전에는 누락 행을 계속 `not_acquired`로 유지한다. 공개된 숫자0의 비밀보호 상태와도 별개다.
 
@@ -204,4 +216,4 @@ node scripts/prepare_catchment_grid.cjs --csv "C:\data\sgis-statistics-utf8.csv"
 4. 서버 재시작 후 저장 결과 재사용, 동일 입력의 재계산 방지, 새로운 자료에서 변경된 결과만 저장되는지 확인.
 5. 실제 운영 서버에서 저장 조회 및 화면 표시2초 목표 측정. 모의자료 단위시험이나 로컬 속도를 운영 실제자료 성능으로 보고하지 않는다.
 
-이 개발 단계에서는 **실제 반경 인구·산업 값이 확보됐다고 주장하지 않는다**. 현재 자료가 없는 화면은 준비 필요 상태이며, 임의의 시군구 합계나 모의값으로 채우지 않는다.
+2026-10-21 요청번호89375의 실제 원본과 월명 기준 공개합을 로컬에서 확보·대조했다. [실제 수치·품질·저장 재사용 결과](regional-catchment-acquisition-20261021.md)를 참조한다. 보호·누락과 기하 부재 때문에 반경 전체 총량은 미확정으로 유지했다. **운영 배포·운영2초 실측·월간 리포트 연결은 별도 단계**다. 임의의 시군구 합계나 모의값으로 실제 반경값을 채우지 않는다.

@@ -132,7 +132,7 @@ test("oversized and invalid import files cannot cause a POST or reading a huge f
   await control.mount(element, scope()); let textReads = 0;
   const submit = file => element.listeners.submit({ preventDefault() {}, target: { getAttribute: () => "import", reportValidity: () => true, querySelector: () => ({ files: [file] }) } });
   await submit({ size: MAX_IMPORT_BYTES + 1, text: async () => { textReads++; return "{}"; } });
-  assert.equal(textReads, 0); assert.match(control.state.actionMessage, /8MiB/);
+  assert.equal(textReads, 0); assert.match(control.state.actionMessage, /16MiB/);
   await submit({ size: 20, text: async () => "not-json" }); assert.match(control.state.actionMessage, /JSON/);
   await submit({ size: 4, text: async () => "null" }); assert.match(control.state.actionMessage, /JSON 객체/);
   assert.equal(calls.filter(item => item.options?.method === "POST").length, 0); control.stop();
