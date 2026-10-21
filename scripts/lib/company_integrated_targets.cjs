@@ -10,8 +10,9 @@ const MAX_CACHE_BYTES = 8 * 1024 * 1024;
 const targetFault = code => Object.assign(new Error("업체별 관측 월의 변경 여부를 확인하지 못했습니다."), { code, statusCode: 503 });
 // This index discovers scopes only. The monthly engine independently checks
 // identity, timestamps, source quality, counts and prices before accepting data.
-function createCompanyIntegratedTargets({ dataDir, catalog, readRevision, maxCacheBytes = MAX_CACHE_BYTES } = {}) {
+function createCompanyIntegratedTargets({ dataDir, catalog, readRevision, maxCacheBytes = MAX_CACHE_BYTES, observationIndex = null } = {}) {
   if (!dataDir || typeof catalog !== "function" || readRevision !== undefined && typeof readRevision !== "function") throw new TypeError("Target data directory, catalog and optional revision reader are required");
+  if (observationIndex !== null && typeof observationIndex.readRows !== "function") throw new TypeError("A verified observation index is required");
   if (!Number.isSafeInteger(maxCacheBytes) || maxCacheBytes < 0 || maxCacheBytes > MAX_CACHE_BYTES) throw new TypeError("Target cache byte limit must be between zero and 8 MiB");
   // Only serialized company/month projections survive a discovery. Source
   // catalogs, observations and inventory bodies never enter this cache.
@@ -84,7 +85,18 @@ function createCompanyIntegratedTargets({ dataDir, catalog, readRevision, maxCac
       byCompany.get(id).add(month);
     }
     const history = path.join(dataDir, "history", "observations.jsonl");
-    try {
+    function consume(row) {
+      // Keep discovery's historical companyId-first resolution. The shared
+      // index retains both raw references instead of silently canonicalizing.
+      const key = String(row.companyId || row.companyKey || "");
+      const id = ids.get(key) || places.get(String(row.placeId || key.match(/^cmp_place_(.+)$/)?.[1] || ""));
+      add(id, row.stayDate || row.date, row.runId);
+    }
+    if (observationIndex) {
+      const read = typeof observationIndex.readHeaders === "function" ? observationIndex.readHeaders : observationIndex.readRows;
+      await read.call(observationIndex, { parseMode: "monthly", ...(runId ? { runId } : {}) }, consume);
+    }
+    else try {
       await fsp.access(history);
       const stream = fs.createReadStream(history, { encoding: "utf8" });
       const input = readline.createInterface({ input: stream, crlfDelay: Infinity });
@@ -94,9 +106,7 @@ function createCompanyIntegratedTargets({ dataDir, catalog, readRevision, maxCac
         if (!line.trim()) continue;
         let row; try { row = JSON.parse(line.replace(/^\uFEFF/, "")); } catch { continue; }
         if (!row || typeof row !== "object" || Array.isArray(row)) continue;
-        const key = String(row.companyId || row.companyKey || "");
-        const id = ids.get(key) || places.get(String(row.placeId || key.match(/^cmp_place_(.+)$/)?.[1] || ""));
-        add(id, row.stayDate || row.date, row.runId);
+        consume(row);
       } } finally { input.close(); stream.destroy(); }
     } catch (error) { if (error.code !== "ENOENT") throw error; }
     for (const company of data.companies) {

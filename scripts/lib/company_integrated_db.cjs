@@ -127,6 +127,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
   };
   const indexPath = id => path.join(directory, digest(id), "index.json");
   const monthPath = (id, month) => path.join(directory, digest(id), `${month}.json`);
+  const reuseProofPath = (id, month) => path.join(directory, digest(id), `${month}.reuse-proof.json`);
   function locked(fn) {
     const result = serial.then(fn);
     serial = result.catch(() => {});
@@ -195,11 +196,50 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     }
     return true;
   }
-  function reusable(value, companyId, month, cutoffDate, revision, metadata) {
-    return Boolean(revision && validStored(value, companyId, month)
-      && value.calculationVersion === calculationVersion && value.sourceRevision === revision
+  function matchingStoredInputs(value, companyId, month, cutoffDate, metadata) {
+    return Boolean(validStored(value, companyId, month)
+      && value.calculationVersion === calculationVersion
       && value.cutoffDate === cutoffDate && value.snapshot?.period?.monthClosed === (kstDay(current()) > monthEnd(month))
       && (!metadata || value.metadataRevision === (typeof metadata === "string" ? metadata : metadataRevision(metadata))));
+  }
+  async function reusable(value, companyId, month, cutoffDate, revision, metadata) {
+    if (!revision || !matchingStoredInputs(value, companyId, month, cutoffDate, metadata)) return false;
+    if (value.sourceRevision === revision) return true;
+    // A revision format or index implementation may change without changing
+    // any calculation input. Keep that proof separate so the normal monthly
+    // result, including its original calculatedAt and file timestamps, survives.
+    // This is integrity for rebuildable derived data, not authentication.
+    if (!value.sourceRevision || !value.cacheDigest) return false;
+    let proof;
+    try { proof = await readJson(reuseProofPath(companyId, month), null); }
+    catch { return false; } // An unreadable/corrupt proof never certifies a cache.
+    if (!proof || typeof proof !== "object" || Array.isArray(proof)) return false;
+    const { proofDigest, ...content } = proof;
+    return Boolean(proofDigest && proofDigest === digest(content)
+      && proof.schemaVersion === SCHEMA_VERSION && proof.kind === "unchanged_company_month_inputs"
+      && proof.companyId === companyId && proof.month === month && proof.sourceRevision === revision
+      && proof.storedSourceRevision === value.sourceRevision && proof.cacheDigest === value.cacheDigest
+      && proof.sourceDigest === value.sourceDigest && proof.calculationVersion === calculationVersion
+      && proof.cutoffDate === cutoffDate && proof.monthClosed === value.snapshot.period.monthClosed
+      && proof.metadataRevision === value.metadataRevision);
+  }
+  function unchangedInputProof(value, companyId, month, cutoffDate, sourceRevision, metadata, sourceDigest, calculated) {
+    if (!sourceRevision || !value?.sourceRevision || !value.cacheDigest
+      || !matchingStoredInputs(value, companyId, month, cutoffDate, metadata)
+      || value.sourceDigest !== sourceDigest) return null;
+    // A source revision also binds calculation code. Matching raw inputs and
+    // the public calculation-version label alone cannot certify old math after
+    // an engine bug fix. Recalculate once and compare the complete result;
+    // normalize only the explicit publication markers that this proof bridges.
+    const { cacheDigest: previousDigest, ...previousContent } = value;
+    const { cacheDigest: calculatedDigest, ...calculatedContent } = calculated;
+    if (digest(previousContent) !== digest({ ...calculatedContent, sourceRevision: value.sourceRevision,
+      calculatedAt: value.calculatedAt, snapshot: { ...calculatedContent.snapshot, generatedAt: value.snapshot.generatedAt } })) return null;
+    const proof = { schemaVersion: SCHEMA_VERSION, kind: "unchanged_company_month_inputs", companyId, month,
+      sourceRevision, storedSourceRevision: value.sourceRevision, cacheDigest: value.cacheDigest, sourceDigest,
+      calculationVersion, cutoffDate, monthClosed: value.snapshot.period.monthClosed,
+      metadataRevision: value.metadataRevision, verifiedAt: current().toISOString() };
+    return { ...proof, proofDigest: digest(proof) };
   }
   async function activeCompany(companyId) {
     const data = await catalog();
@@ -303,7 +343,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
             const revision = await revisionFor(id, month, cutoffDate, prepared);
             const stored = await readJson(monthPath(id, month), null);
             if (readRevision && !metadata.has(id)) throw fault("company_not_found", 404);
-            if (reusable(stored, id, month, cutoffDate, revision, metadata?.get(id))) reused++;
+            if (await reusable(stored, id, month, cutoffDate, revision, metadata?.get(id))) reused++;
             else changed.push(month);
           }
           // Recovery keeps its generation and work already in progress. Only
@@ -334,7 +374,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     const request = { type: "company", targetId: companyId, month, cutoffDate: cutoffDate || cutoffFor(month, generatedAt) };
     const sourceRevision = await revisionFor(companyId, month, request.cutoffDate, prepared);
     const previous = persist ? await readJson(monthPath(companyId, month), null) : null;
-    if (reusable(previous, companyId, month, request.cutoffDate, sourceRevision, metadata)) return { value: previous, changed: false, sourceRevision };
+    if (await reusable(previous, companyId, month, request.cutoffDate, sourceRevision, metadata)) return { value: previous, changed: false, sourceRevision };
     const source = scopedSources(await loadSources(clone(request), { priority }), companyId);
     const previousRequest = previousMonthlyReportRequest(request);
     const previousSource = scopedSources(await loadSources(clone(previousRequest), { priority }), companyId);
@@ -358,6 +398,8 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
       cutoffDate: request.cutoffDate, roomBasis, snapshot, latestAttempts: attempts,
       failedAttempts: attempts.filter(attempt => ["missing_response", "run_failed", "run_blocked", "run_interrupted", "run_cancelled", "run_canceled", "run_error"].includes(attempt.reason)) };
     if (sourceRevision) value.cacheDigest = digest(value);
+    const reuseProof = persist ? unchangedInputProof(previous, companyId, month, request.cutoffDate, sourceRevision, metadata, sourceDigest, value) : null;
+    if (reuseProof) return { value: previous, changed: false, sourceRevision, reuseProof };
     return { changed: true, sourceRevision, value };
   }
   async function processJob(job) {
@@ -376,6 +418,15 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
       }
       const published = await locked(async () => {
         if (state.jobs[job.companyId]?.generation !== job.generation) return false;
+        // Only the generation that completed both source reads and the fresh
+        // revision inspection may publish this bounded, one-proof-per-month
+        // bridge. A superseded job cannot bless its earlier inputs.
+        if (calculated.reuseProof) {
+          const saved = await readJson(monthPath(job.companyId, month), null);
+          if (!validStored(saved, job.companyId, month) || saved.cacheDigest !== calculated.reuseProof.cacheDigest)
+            throw fault("COMPANY_INTEGRATION_CACHE_CHANGED");
+          await atomicJson(reuseProofPath(job.companyId, month), calculated.reuseProof);
+        }
         if (calculated.changed) await atomicJson(monthPath(job.companyId, month), calculated.value);
         const index = await readJson(indexPath(job.companyId), { schemaVersion: SCHEMA_VERSION, companyId: job.companyId, months: [] });
         if (!index.months.includes(month) || calculated.changed) await atomicJson(indexPath(job.companyId), {

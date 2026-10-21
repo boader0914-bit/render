@@ -57,7 +57,7 @@ const { inspectResult: inspectDailyCollectionResult, allowsDerivedUpdates } = re
 const { readCollectionDiagnostics } = require("./lib/collection_diagnostics.cjs");
 const { createCollectionHistory } = require("./lib/collection_history.cjs");
 const { createCollectionPostprocessQueue } = require("./lib/collection_postprocess_queue.cjs");
-const { findExistingObservationIds } = require("./lib/history_observation_append.cjs");
+const { createHistoryObservationIndex } = require("./lib/history_observation_index.cjs");
 const { createRunCatalog } = require("./lib/run_catalog.cjs");
 const { createMasterDbDualWriteQueue } = require("./master_db_dual_write.cjs");
 const { createCollectorBroker } = require("./collector_broker.cjs");
@@ -127,6 +127,10 @@ const collectionHistory = createCollectionHistory({ dataDir: DATA_DIR, outputsDi
     return items;
   } });
 const HISTORY_OBSERVATIONS_FILE = path.join(HISTORY_DIR, "observations.jsonl");
+// Rebuildable derived data only. The existing sharedWrite/analytical lease
+// remains the sole app writer for the original observation stream.
+const historyObservationIndex = createHistoryObservationIndex({ file: HISTORY_OBSERVATIONS_FILE,
+  indexFile: path.join(HISTORY_DIR, "indexes", "observations.sqlite") });
 const HISTORY_EVIDENCE_DIR = path.join(HISTORY_DIR, "evidence");
 const HISTORY_DATALAB_TRENDS_FILE = path.join(HISTORY_DIR, "datalab_trends.json");
 const HISTORY_CRAWL_TIMINGS_FILE = path.join(HISTORY_DIR, "crawl_timings.json");
@@ -565,7 +569,7 @@ const insightRegionPreparation=createRegionalReportPreparation({
     .map(method=>[method,input=>prepareRegionalTourismHistory(method,input)]))
 });
 const companyCapacityRegistry = createCompanyCapacityRegistry({
-  dataDir: DATA_DIR, observedCapacity: companyMaximumRoomCapacity,
+  dataDir: DATA_DIR, observationIndex: historyObservationIndex, observedCapacity: companyMaximumRoomCapacity,
   reviewedCapacity: company => company.manualCorrection?.active === false ? null : manualCorrectionLodgingBasisTotal(company.manualCorrection)
 });
 const readMonthlyReportRevision = createMonthlyReportSourceRevision({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR,
@@ -577,6 +581,7 @@ const runAnalyticalWork = (operation, options) => analyticalWork.run(operation, 
 const monthlyReportSources = createMonthlyReportSources({
   runWork: runAnalyticalWork,
   dataDir: DATA_DIR,
+  observationIndex: historyObservationIndex,
   regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
   readRevision: readMonthlyReportRevision,
   // Selector inputs are names, regions, months and run-list metadata. Keep
@@ -585,6 +590,7 @@ const monthlyReportSources = createMonthlyReportSources({
     regionMasterFile: path.join(WEB_DIR, "data", "region_master.json") }),
   selectorCacheVersion: crypto.createHash("sha256").update(fs.readFileSync(__filename))
     .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_report_sources.cjs")))
+    .update(fs.readFileSync(path.join(__dirname, "lib", "history_observation_index.cjs")))
     .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_report_selector_revision.cjs"))).digest("hex"),
   listRuns,
   prepareCompanies: companyCapacityRegistry.prepareCompanies,
@@ -625,6 +631,7 @@ const companyIntegratedCatalog = createCompanyIntegratedCatalog({
 });
 const listCompanyIntegratedTargets = createCompanyIntegratedTargets({
   dataDir: DATA_DIR, catalog: monthlyReportSources.targetCatalog,
+  observationIndex: historyObservationIndex,
   readRevision: createMonthlyReportSelectorRevision({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR,
     regionMasterFile: path.join(WEB_DIR, "data", "region_master.json") })
 });
@@ -671,12 +678,13 @@ function companyIntegratedCalculationFingerprint() {
 }
 const readCompanyIntegratedRevision = createCompanyIntegratedSourceRevision({
   dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR,
+  observationIndex: historyObservationIndex,
   regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
   tourismRegionMapFile: path.join(WEB_DIR, "data", "tourism_region_map.json"), includeContext: true,
   calculationFiles: ["company_integrated_db.cjs", "monthly_reports.cjs", "monthly_report_comparison.cjs",
     "monthly_report_sources.cjs", "monthly_report_context.cjs", "monthly_company_recalculation.cjs",
     "company_capacity_registry.cjs", "monthly_report_insights.cjs", "industry_analysis.cjs",
-    "inventory_manual_corrections.cjs", "company_master_stream.cjs"].map(name => path.join(__dirname, "lib", name))
+    "inventory_manual_corrections.cjs", "company_master_stream.cjs", "history_observation_index.cjs"].map(name => path.join(__dirname, "lib", name))
     .concat([path.join(__dirname, "inventory_estimation.cjs"), path.join(__dirname, "verified_room_inventory.json")]),
   calculationFingerprint: companyIntegratedCalculationFingerprint()
 });
@@ -15557,8 +15565,8 @@ async function appendHistoryForRunUnlocked(runId, options = {}) {
   }
   const observations = buildHistoryObservations(data, collectedAt);
   if (!observations.length) return { appended: 0, reason: "no_observations" };
-  const { existingIds: knownObservations, needsSeparator } = await step("historyIdScanMs", () => findExistingObservationIds({
-    file: HISTORY_OBSERVATIONS_FILE, observationIds: observations.map(row => row.observationId)
+  const { existingIds: knownObservations, needsSeparator } = await step("historyIdScanMs", () => historyObservationIndex.findObservationIds({
+    observationIds: observations.map(row => row.observationId)
   }));
   const evidence = masterDbDualWriteQueue.mode === "shadow"
     ? await storeRunHistoryEvidence(runId, observations).catch((error) => ({
@@ -15570,15 +15578,19 @@ async function appendHistoryForRunUnlocked(runId, options = {}) {
     if (knownObservations.has(row.observationId)) return false;
     knownObservations.add(row.observationId); return true;
   });
+  let indexUpdated = true;
   await step("historyAppendMs", async () => {
-    await fsp.mkdir(HISTORY_DIR, { recursive: true });
-    if (missing.length) await fsp.appendFile(
-      HISTORY_OBSERVATIONS_FILE,
-      `${needsSeparator ? "\n" : ""}${missing.map((row) => JSON.stringify(row)).join("\n")}\n`,
-      "utf8"
-    );
+    if (missing.length) {
+      const update = await historyObservationIndex.append(`${needsSeparator ? "\n" : ""}${missing.map(row => JSON.stringify(row)).join("\n")}\n`);
+      indexUpdated = update.indexed;
+      // An index publication failure cannot append the same source twice.
+      // The next verified reader rebuilds it from the successfully saved raw
+      // stream; pending aggregation still revalidates before publishing.
+      if (!indexUpdated) console.error("history_observation_index_update_pending");
+    }
   });
-  const result = { appended: missing.length, observationCount: observations.length, file: "history/observations.jsonl", companyMaster: data.companyMaster || null };
+  const result = { appended: missing.length, observationCount: observations.length, file: "history/observations.jsonl", companyMaster: data.companyMaster || null,
+    observationIndex: { updated: indexUpdated } };
   // Publish derived views only after durable source history. Run reads used by
   // the aggregation pass skip both company-master and history writes.
   if (missing.length) {
@@ -19196,7 +19208,13 @@ async function route(req, res) {
     if (reqUrl.pathname === "/api/analytical-work") {
       if (!requireAdminSession(session, req, res)) return;
       if (req.method !== "GET") return send(res, 405, { error: "Method not allowed" });
-      return send(res, 200, { work: analyticalWork.status(), memory: analyticalMemory.status() });
+      // Snapshot counters only: diagnostics must never build an index, scan
+      // originals or acquire the analytical work lease merely to report it.
+      const historyIndex = historyObservationIndex.describe();
+      return send(res, 200, { work: analyticalWork.status(), memory: analyticalMemory.status(),
+        observationIndex: { ready: Number.isSafeInteger(historyIndex.generation), generation: historyIndex.generation ?? null,
+          rows: historyIndex.rows ?? null, sourceBytes: historyIndex.source?.size ?? null, mode: historyIndex.mode || null,
+          stats: historyObservationIndex.stats() } });
     }
     if (reqUrl.pathname === "/api/collection-postprocess") {
       if (!requireAdminSession(session, req, res)) return;

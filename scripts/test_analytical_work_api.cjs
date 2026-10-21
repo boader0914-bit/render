@@ -59,7 +59,10 @@ async function main() {
     const beforeRotation = await request("/api/collection-rotation", { cookie: admin });
     const beforeCollector = await request("/api/collector-status", { cookie: admin });
     const diagnostics = await request(route, { cookie: admin });
-    assert.equal(diagnostics.status, 200); assert.deepEqual(Object.keys(diagnostics.data).sort(), ["memory", "work"]);
+    assert.equal(diagnostics.status, 200); assert.deepEqual(Object.keys(diagnostics.data).sort(), ["memory", "observationIndex", "work"]);
+    assert.equal(typeof diagnostics.data.observationIndex.ready, "boolean");
+    for (const value of Object.values(diagnostics.data.observationIndex.stats)) assert.ok(Number.isSafeInteger(value) && value >= 0);
+    assert.equal(diagnostics.data.observationIndex.source, undefined, "raw identity/path metadata is not exposed");
     assert.equal(typeof diagnostics.data.work.active, "boolean"); assert.equal(typeof diagnostics.data.work.closed, "boolean");
     for (const key of ["queuedForeground", "queuedBackground"]) assert.ok(Number.isSafeInteger(diagnostics.data.work[key]) && diagnostics.data.work[key] >= 0);
     assert.equal(diagnostics.data.work.memory.enabled, true);

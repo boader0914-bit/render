@@ -79,7 +79,7 @@ test("the app supplies a dedicated scoped context revision reader and retains it
     path, __dirname, crypto, ...callbacks,
     DATA_DIR: path.join(os.tmpdir(), "unused-contract-data"), OUTPUTS_DIR: path.join(os.tmpdir(), "unused-contract-outputs"),
     WEB_DIR: path.join(os.tmpdir(), "unused-contract-web"),
-    monthlyReportSources: { loadSources() {}, catalog() {} }, listCompanyIntegratedTargets() {},
+    monthlyReportSources: { loadSources() {}, catalog() {} }, listCompanyIntegratedTargets() {}, historyObservationIndex: {},
     companyIntegratedCatalog: { catalog() {} },
     runAnalyticalWork: operation => operation(),
     createCompanyIntegratedSourceRevision: options => { revisionOptions = options; return revision; },
@@ -91,7 +91,8 @@ test("the app supplies a dedicated scoped context revision reader and retains it
   assert.equal(revisionOptions.outputsDir, context.OUTPUTS_DIR);
   assert.equal(revisionOptions.regionMasterFile, path.join(context.WEB_DIR, "data", "region_master.json"));
   assert.equal(revisionOptions.tourismRegionMapFile, path.join(context.WEB_DIR, "data", "tourism_region_map.json"));
-  assert.equal(revisionOptions.calculationFiles.length, 13);
+  assert.equal(revisionOptions.calculationFiles.length, 14);
+  assert.ok(revisionOptions.calculationFiles.includes(path.join(__dirname, "lib", "history_observation_index.cjs")));
   assert.ok(revisionOptions.calculationFiles.includes(path.join(__dirname, "lib", "company_master_stream.cjs")));
   assert.ok(revisionOptions.calculationFiles.every(file => fs.statSync(file).isFile()));
   assert.ok(revisionOptions.calculationFiles.includes(path.join(__dirname, "lib", "company_integrated_db.cjs")));

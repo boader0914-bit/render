@@ -18,12 +18,14 @@ const previousMonth = month => new Date(Date.UTC(Number(month.slice(0, 4)), Numb
 const fault = code => Object.assign(new Error(code), { code, statusCode: 503 });
 const requireValid = value => { if (!value) throw fault("COMPANY_SOURCE_REVISION_UNAVAILABLE"); };
 function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMasterFile, tourismRegionMapFile, includeContext = true,
-  calculationFiles = [], calculationFingerprint = "", fileSystem = fs, historyStream = filename => native.createReadStream(filename, { encoding: "utf8" }) } = {}) {
+  calculationFiles = [], calculationFingerprint = "", fileSystem = fs, historyStream = filename => native.createReadStream(filename, { encoding: "utf8" }), observationIndex = null } = {}) {
   if (!dataDir || !regionMasterFile) throw new TypeError("Company source directory and region reference are required");
+  if (observationIndex !== null && (typeof observationIndex.ensure !== "function" || typeof observationIndex.readLines !== "function")) throw new TypeError("A verified observation index is required");
   if (calculationFingerprint !== "" && !/^[a-f0-9]{64}$/.test(calculationFingerprint)) throw new TypeError("Invalid calculation fingerprint");
   const root = path.resolve(dataDir), output = path.resolve(outputsDir || path.join(root, "outputs")), indexFile = path.join(root, "company_integrated", "revision-index.json");
   const codeFiles = [...new Set([__filename, ...calculationFiles.map(file => path.resolve(file))])];
-  const configuration = hash([includeContext, codeFiles, calculationFingerprint]);
+  const configuration = hash([includeContext, codeFiles, calculationFingerprint, observationIndex
+    ? typeof observationIndex.revisionPartitions === "function" ? "observation-partitions" : "observation-lines" : "legacy-history"]);
   let cached = null, cachedIndexStat = null, initialized = false, chain = Promise.resolve();
   const signature = stat => `${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.ino}:${stat.dev}`;
   async function stat(file) { try { const result = await fileSystem.lstat(file, { bigint: true }); requireValid(!result.isSymbolicLink()); return result; } catch (error) { if (error.code === "ENOENT") return null; throw error; } }
@@ -119,8 +121,22 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
     const compatible = old?.version === VERSION;
     if (compatible && old.configuration === configuration && hash(current.metadata) === hash(old.metadata)) return structuredClone(old.prepared);
     const contentDigests = {};
-    for (const label of Object.keys(current.metadata).sort()) contentDigests[label] = compatible && old.metadata[label] === current.metadata[label]
-      ? old.contentDigests[label] : await contentDigest(label, current);
+    let indexedHistory = null;
+    async function historyDescriptor() {
+      if (!indexedHistory) {
+        indexedHistory = await observationIndex.ensure();
+        requireValid(/^[a-f0-9]{64}$/.test(indexedHistory?.contentDigest || "")
+          && (indexedHistory.source?.signature || null) === current.metadata.history
+          && Number.isSafeInteger(indexedHistory.malformedLines) && indexedHistory.malformedLines >= 0);
+      }
+      return indexedHistory;
+    }
+    for (const label of Object.keys(current.metadata).sort()) contentDigests[label] = current.metadata[label] === null ? null : compatible && old.metadata[label] === current.metadata[label]
+      ? old.contentDigests[label] : label === "history" && observationIndex
+        // The index's ordered line token is a source-change detector, not an
+        // independent SHA of the original file. Scoped row digests below keep
+        // their original line bytes and order, including excluded evidence.
+        ? (await historyDescriptor()).contentDigest : await contentDigest(label, current);
     // v1 stored stat-only dependencies. They cannot prove byte equality, so
     // migrate once by rebuilding the derived index; old monthly snapshots stay
     // visible until the existing queue verifies their replacement normally.
@@ -131,7 +147,7 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
         ...(label === "regions" ? { value: await json(label, current, { units: [] }) } : {}) }; }
     }
     const units = (parts.regions?.value?.units || []).filter(unit => unit.active && unit.selectable && ["local", "broad"].includes(unit.level));
-    if (changed("master") || changed("regions")) {
+    if (changed("master") || changed("regions") || parts.master?.projectionVersion !== 2) {
       const companies = {};
       const consumeCompany = company => {
         if (!company?.companyId || company.deletedAt || company.mergedIntoCompanyId) return;
@@ -146,7 +162,9 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
         for (const exposure of Object.values(company.keywords || {})) for (const run of exposure.runs || []) add(collectedMonth(run.collectedAt), { rank: run, keyword: exposure.keyword }, run.runId || run.id);
         const regionKeys = [...new Set([region?.regionKey, region?.provinceRegionKey].filter(Boolean))];
         const meta = { companyId: id, primaryName: company.primaryName || id, ...industryCompanyReference(company, units.map(unit => ({ id: unit.regionKey, label: unit.fullName || unit.name, level: unit.level, aliases: unit.aliases }))),
-          regionKey: region?.regionKey || "", regionKeys, regionLabel: region?.fullName || "지역 확인 전", keywords: Object.values(company.keywords || {}).map(item => item.keyword).filter(Boolean),
+          // Keyword rank series already belong to their observed month. A new
+          // keyword label alone is not a dependency of every historical month.
+          regionKey: region?.regionKey || "", regionKeys, regionLabel: region?.fullName || "지역 확인 전",
           placeIds: [...new Set((company.placeIds || []).map(value => String(value).trim()).filter(Boolean))], manualCorrection: company.manualCorrection || null };
         const aliases = (company.duplicateNotes || []).map(item => item.mergedCompanyId).filter(Boolean).map(String);
         const inventory = company.inventory || {}, knownRuns = [...new Set([...(company.runIds || []), ...(inventory.runIds || []), company.firstRunId, company.lastRunId,
@@ -176,28 +194,70 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
       for (const id of conflictIds) for (const [month, count] of Object.entries(companies[id].fallbackCounts)) fallbackUnknown[month] = (fallbackUnknown[month] || 0) + count;
       const canonicalIds = new Map(Object.keys(companies).map(id => [token(id), id]));
       for (const [id, company] of Object.entries(companies)) for (const alias of company.aliases) canonicalIds.set(token(alias), id);
-      parts.master = { companies, identity: hash({ ids: [...canonicalIds].sort(), places: [...placeOwners].sort(), conflicts: [...conflictIds].sort() }), fallbackUnknown };
+      parts.master = { projectionVersion: 2, companies, identity: hash({ ids: [...canonicalIds].sort(), places: [...placeOwners].sort(), conflicts: [...conflictIds].sort() }), fallbackUnknown };
+    }
+    const ids = new Map(Object.keys(parts.master.companies).map(id => [token(id), id])), places = new Map(), conflicts = new Set();
+    for (const [id, company] of Object.entries(parts.master.companies)) {
+      for (const alias of company.aliases) ids.set(token(alias), id);
+      for (const place of company.places) {
+        if (places.has(place) && places.get(place) !== id) { if (places.get(place)) conflicts.add(places.get(place)); conflicts.add(id); places.set(place, null); }
+        else places.set(place, id);
+      }
+    }
+    for (const [id, company] of Object.entries(parts.master.companies)) {
+      // Include effective ownership, not merely this company's own list: a
+      // newly added company can make an existing place or alias ambiguous.
+      company.identity = hash({ keys: [...new Set([id, ...company.aliases].map(token))].sort().map(key => [key, ids.get(key) || null]),
+        places: [...new Set(company.places)].sort().map(place => [place, places.get(place) || null]), conflicted: conflicts.has(id) });
     }
     if (changed("capacity")) { const value = await json("capacity", current, { companies: {} }); requireValid(value.companies && !Array.isArray(value.companies)); parts.capacity = Object.fromEntries(Object.entries(value.companies).map(([id, entry]) => [id, hash(entry)])); }
-    if (changed("history") || parts.master.identity !== old?.parts?.master?.identity) {
-      const ids = new Map(Object.keys(parts.master.companies).map(id => [token(id), id])), places = new Map(), conflicts = new Set();
-      for (const [id, company] of Object.entries(parts.master.companies)) { for (const alias of company.aliases) ids.set(token(alias), id);
-        for (const place of company.places) { if (places.has(place) && places.get(place) !== id) { if (places.get(place)) conflicts.add(places.get(place)); conflicts.add(id); places.set(place, null); } else places.set(place, id); } }
+    const historyKind = typeof observationIndex?.revisionPartitions === "function" ? "canonical-raw-partitions-v1" : "ordered-canonical-lines-v1";
+    if (changed("history") || parts.master.identity !== old?.parts?.master?.identity || parts.history?.kind !== historyKind) {
       const rows = {}, runRefs = {}, unknown = {}, digests = new Map(); let malformed = 0;
+      function consume(line, row) {
+        const month = monthOf(row.stayDate || row.date); if (!month) return;
+        const key = token(row.companyKey || row.companyId), place = String(row.placeId || row.place_id || key.match(/^cmp_place_(.+)$/)?.[1] || (/^\d+$/.test(key) ? key : ""));
+        const candidate = ids.get(key) || places.get(place), id = candidate && !conflicts.has(candidate) ? candidate : null; if (!id) { unknown[month] = (unknown[month] || 0) + 1; if (!candidate) return; }
+        const sourceId = id || candidate, identity = JSON.stringify([sourceId, month]); if (!digests.has(identity)) digests.set(identity, crypto.createHash("sha256")); digests.get(identity).update(line + "\n");
+        if (row.runId) { ((runRefs[sourceId] ||= {})[month] ||= new Set()).add(String(row.runId)); }
+      }
       if (current.metadata.history) {
-        const input = readline.createInterface({ input: historyStream(current.paths.history), crlfDelay: Infinity });
-        try { for await (const line of input) { if (!line.trim()) continue; let row; try { row = JSON.parse(line.replace(/^\uFEFF/, "")); } catch { malformed++; continue; }
-          if (!row || typeof row !== "object" || Array.isArray(row)) { malformed++; continue; }
-          const month = monthOf(row.stayDate || row.date); if (!month) continue;
-          const key = token(row.companyKey || row.companyId), place = String(row.placeId || row.place_id || key.match(/^cmp_place_(.+)$/)?.[1] || (/^\d+$/.test(key) ? key : ""));
-          const candidate = ids.get(key) || places.get(place), id = candidate && !conflicts.has(candidate) ? candidate : null; if (!id) { unknown[month] = (unknown[month] || 0) + 1; if (!candidate) continue; }
-          const sourceId = id || candidate, identity = JSON.stringify([sourceId, month]); if (!digests.has(identity)) digests.set(identity, crypto.createHash("sha256")); digests.get(identity).update(line + "\n");
-          if (row.runId) { ((runRefs[sourceId] ||= {})[month] ||= new Set()).add(String(row.runId)); }
-        } } finally { input.close(); }
+        if (historyKind === "canonical-raw-partitions-v1") {
+          const indexed = await observationIndex.revisionPartitions();
+          requireValid((indexed?.source?.signature || null) === current.metadata.history && Array.isArray(indexed.partitions)
+            && Number.isSafeInteger(indexed.malformedLines) && indexed.malformedLines >= 0);
+          malformed = indexed.malformedLines;
+          const keys = new Set();
+          for (const partition of indexed.partitions) {
+            requireValid(partition && typeof partition.key === "string" && !keys.has(partition.key)
+              && /^[a-f0-9]{64}$/.test(partition.digest || "") && Number.isSafeInteger(partition.count) && partition.count > 0
+              && Array.isArray(partition.runIds) && partition.runIds.every(runId => typeof runId === "string"));
+            keys.add(partition.key);
+            const month = partition.month; if (!monthValid(month)) continue;
+            const key = token(partition.companyKey || partition.companyId), place = String(partition.placeId || partition.place_id || key.match(/^cmp_place_(.+)$/)?.[1] || (/^\d+$/.test(key) ? key : ""));
+            const candidate = ids.get(key) || places.get(place), id = candidate && !conflicts.has(candidate) ? candidate : null;
+            if (!id) { unknown[month] = (unknown[month] || 0) + partition.count; if (!candidate) continue; }
+            const sourceId = id || candidate, identity = JSON.stringify([sourceId, month]);
+            if (!digests.has(identity)) digests.set(identity, []);
+            digests.get(identity).push([partition.key, partition.digest, partition.count]);
+            for (const runId of partition.runIds) ((runRefs[sourceId] ||= {})[month] ||= new Set()).add(runId);
+          }
+        } else if (observationIndex) {
+          const descriptor = await historyDescriptor();
+          malformed = descriptor.malformedLines;
+          await observationIndex.readLines({ parseMode: "monthly" }, consume);
+        } else {
+          const input = readline.createInterface({ input: historyStream(current.paths.history), crlfDelay: Infinity });
+          try { for await (const line of input) { if (!line.trim()) continue; let row; try { row = JSON.parse(line.replace(/^\uFEFF/, "")); } catch { malformed++; continue; }
+            if (!row || typeof row !== "object" || Array.isArray(row)) { malformed++; continue; }
+            consume(line, row);
+          } } finally { input.close(); }
+        }
         requireValid(signature(await stat(current.paths.history)) === current.metadata.history);
       }
-      for (const [identity, digest] of digests) { const [id, month] = JSON.parse(identity); (rows[id] ||= {})[month] = digest.digest("hex"); }
-      parts.history = { rows, runRefs: Object.fromEntries(Object.entries(runRefs).map(([id, months]) => [id, Object.fromEntries(Object.entries(months).map(([month, ids]) => [month, [...ids].sort()]))])), unknown, malformed };
+      for (const [identity, digest] of digests) { const [id, month] = JSON.parse(identity); (rows[id] ||= {})[month] = Array.isArray(digest)
+        ? hash(digest.sort((a, b) => a[0].localeCompare(b[0]))) : digest.digest("hex"); }
+      parts.history = { kind: historyKind, rows, runRefs: Object.fromEntries(Object.entries(runRefs).map(([id, months]) => [id, Object.fromEntries(Object.entries(months).map(([month, ids]) => [month, [...ids].sort()]))])), unknown, malformed };
     }
     // Context is indexed by the saved response's own region/month. Unknown
     // cache identity stays a conservative shared dependency, never guessed.
@@ -211,7 +271,7 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
     }
     for (const label of Object.keys(parts.contextFiles)) if (!contextLabels.includes(label)) delete parts.contextFiles[label];
     const engines = Object.keys(parts).filter(key => key.startsWith("engine/")).sort().map(key => parts[key].digest);
-    const common = hash([VERSION, engines, calculationFingerprint, parts.regions?.digest, parts["tourism-map"]?.digest, parts.master.identity, parts.history.malformed]);
+    const common = hash([VERSION, engines, calculationFingerprint, parts.regions?.digest, parts["tourism-map"]?.digest, parts.history.malformed, conflicts.size]);
     const context = { monthly: {}, years: {}, unknown: [] };
     for (const label of Object.keys(parts.contextFiles).sort()) {
       const entry = parts.contextFiles[label];
@@ -234,7 +294,7 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
     for (const id of Object.keys(parts.runCatalog)) if (!knownRuns.includes(id)) delete parts.runCatalog[id];
     for (const [id, company] of Object.entries(parts.master.companies)) {
       const kosis = company.regionId ? crypto.createHash("sha256").update(company.regionId).digest("hex").slice(0, 24) : "";
-      const revision = hash([common, company.meta, parts.capacity[id] || null, context.unknown, includeContext && kosis ? [contentDigests["kosis/" + kosis + ".json"], contentDigests["kosis/" + kosis + "-attempt.json"]] : null]);
+      const revision = hash([common, company.meta, company.identity, parts.capacity[id] || null, context.unknown, includeContext && kosis ? [contentDigests["kosis/" + kosis + ".json"], contentDigests["kosis/" + kosis + "-attempt.json"]] : null]);
       const months = {}, allMonths = [...new Set([...Object.keys(company.months), ...Object.keys(parts.history.rows[id] || {})])];
       for (const month of allMonths) { const runIds = [...new Set([...(company.runs[month] || []), ...(parts.history.runRefs[id]?.[month] || [])])].sort();
         const runMetadata = runIds.flatMap(runId => runMetadataById[runId] || []).sort();

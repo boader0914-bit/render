@@ -205,3 +205,206 @@ test("a changing or unreadable source during hashing fails closed and preserves 
     assert.deepEqual(await fs.readFile(index), before, "Failed verification cannot replace the prior derived index");
   }
 });
+
+test("unrelated companies and future keyword series preserve closed scopes, while effective alias and place owners remain dependencies", async t => {
+  const f = await fixture(t), reader = createCompanyIntegratedSourceRevision(f.options);
+  let prepared = await reader.prepare();
+  const tokens = () => Object.fromEntries([A, B].flatMap(id => ["2026-08", "2026-09", "2026-10"].map(month => [id + month, reader.forScope(prepared, scope(id, month))])));
+  const before = tokens(), C = "cmp_place_300";
+  f.master.companies[C] = { companyId: C, primaryName: "새 키워드 신규 업체", placeIds: ["300"], addresses: ["시험도 지역200 주소"] };
+  await f.write("company_master/companies.json", f.master); prepared = await reader.prepare();
+  assert.deepEqual(tokens(), before, "An unrelated canonical identity is not an input of existing company months");
+  f.master.companies[A].keywords.future = { keyword: "새 검색 키워드", runs: [{ runId: "future-run", collectedAt: "2026-11-01T00:00:00Z", rank: 7 }] };
+  await f.write("outputs/future-run/manifest.json", { collectedAt: "2026-11-01T00:00:00Z", checkIn: "2026-11-01", bookingRangeDays: 21, status: "complete" });
+  await f.write("company_master/companies.json", f.master); prepared = await reader.prepare();
+  assert.deepEqual(tokens(), before, "A future keyword label/rank/run does not change an earlier company's month");
+  const future = reader.forScope(prepared, scope(A, "2026-11"));
+  f.master.companies[A].keywords.future.runs[0].rank = 4;
+  await f.write("company_master/companies.json", f.master); prepared = await reader.prepare();
+  assert.deepEqual(tokens(), before); assert.notEqual(reader.forScope(prepared, scope(A, "2026-11")), future);
+  f.master.companies[A].duplicateNotes = [{ mergedCompanyId: "old-company" }];
+  f.rows.push({ companyKey: "old-company", runId: "run_100", stayDate: "2026-09-02", sold: 1 });
+  await f.history(); await f.write("company_master/companies.json", f.master); prepared = await reader.prepare();
+  const beforeReassignment = tokens();
+  f.master.companies[C].duplicateNotes = [{ mergedCompanyId: "old-company" }];
+  await f.write("company_master/companies.json", f.master); prepared = await reader.prepare();
+  assert.notEqual(tokens()[A + "2026-09"], beforeReassignment[A + "2026-09"], "Actual alias ownership changes invalidate its previous owner");
+  assert.equal(tokens()[B + "2026-09"], beforeReassignment[B + "2026-09"], "Unrelated identity remains reusable");
+  const beforeConflict = tokens();
+  f.master.companies[C].placeIds.push("100");
+  await f.write("company_master/companies.json", f.master); prepared = await reader.prepare();
+  assert.notEqual(tokens()[A + "2026-08"], beforeConflict[A + "2026-08"], "A different company claiming the place changes A's effective resolution");
+  assert.notEqual(tokens()[B + "2026-09"], beforeConflict[B + "2026-09"], "The stored global duplicate-company diagnostic is still a real dependency");
+});
+
+test("verified observation index matches legacy scope digests without rereading the JSONL body, and index failures preserve last-good revisions", async t => {
+  const f = await fixture(t);
+  const rawLines = () => [...f.rows.map(JSON.stringify), "malformed", "\uFEFF" + JSON.stringify({ companyKey: A, stayDate: "2026-09-03", runId: "run_100", missing: true }),
+    JSON.stringify({ companyKey: "unknown-id", stayDate: "2026-09-04", runId: "unknown-run", sold: null }), "[]", ""];
+  await f.write("history/observations.jsonl", rawLines().join("\n") + "\n");
+  const legacy = createCompanyIntegratedSourceRevision(f.options), expected = await legacy.prepare();
+  const indexFile = path.join(f.root, "company_integrated/revision-index.json");
+  await fs.unlink(indexFile);
+  let bodyReads = 0, indexedReads = 0, unavailable = false;
+  const fileSystem = Object.create(fs);
+  fileSystem.open = async (file, ...args) => {
+    if (path.resolve(file) === path.join(f.root, "history/observations.jsonl")) { bodyReads++; throw new Error("The indexed revision must not rehash original history"); }
+    return fs.open(file, ...args);
+  };
+  const observationIndex = {
+    async ensure() {
+      if (unavailable) throw Object.assign(new Error("index unavailable"), { code: "HISTORY_OBSERVATION_INDEX_INVALID" });
+      const stat = await fs.lstat(path.join(f.root, "history/observations.jsonl"), { bigint: true });
+      return { source: { signature: `${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.ino}:${stat.dev}` },
+        contentDigest: digest(rawLines().join("\n")), malformedLines: 2 };
+    },
+    async readLines(query, consume) {
+      assert.equal(query.parseMode, "monthly"); indexedReads++;
+      for (const [ordinal, line] of rawLines().entries()) {
+        let row; try { row = JSON.parse(line.replace(/^\uFEFF/, "")); } catch { continue; }
+        if (row && typeof row === "object" && !Array.isArray(row)) await consume(line, row, ordinal + 1);
+      }
+    }
+  };
+  const options = { ...f.options, fileSystem, observationIndex, historyStream: () => { throw new Error("Raw history stream is forbidden"); } };
+  let reader = createCompanyIntegratedSourceRevision(options), prepared = await reader.prepare();
+  assert.deepEqual(prepared, expected, "Index retains order, raw line hashes, BOM parsing, unknowns and malformed diagnostics");
+  assert.equal(bodyReads, 0); assert.equal(indexedReads, 1);
+  reader = createCompanyIntegratedSourceRevision(options); assert.deepEqual(await reader.prepare(), expected);
+  assert.equal(indexedReads, 1, "Unchanged restart reuses the durable revision projection");
+  const saved = await fs.readFile(indexFile);
+  f.rows.push({ companyKey: A, runId: "run_100", stayDate: "2026-09-07", failed: true });
+  await f.write("history/observations.jsonl", rawLines().join("\n") + "\n");
+  unavailable = true;
+  await assert.rejects(reader.prepare(), { code: "COMPANY_SOURCE_REVISION_UNAVAILABLE" });
+  assert.deepEqual(await fs.readFile(indexFile), saved, "Failed verification never replaces the last-good index");
+  unavailable = false; prepared = await reader.prepare();
+  assert.notEqual(reader.forScope(prepared, scope(A, "2026-09")), legacy.forScope(expected, scope(A, "2026-09")));
+  assert.equal(reader.forScope(prepared, scope(B, "2026-09")), legacy.forScope(expected, scope(B, "2026-09")));
+  assert.equal(bodyReads, 0);
+  assert.throws(() => createCompanyIntegratedSourceRevision({ ...f.options, observationIndex: {} }), TypeError);
+});
+
+test("compact raw-identity partitions isolate changed months and reassign merged references without parsing stored observation payloads", async t => {
+  const f = await fixture(t), historyFile = path.join(f.root, "history/observations.jsonl"), indexFile = path.join(f.root, "company_integrated/revision-index.json");
+  const calls = { partitions: 0, lines: 0, body: 0 }; let corrupt = false;
+  async function descriptor() {
+    const stat = await fs.lstat(historyFile, { bigint: true });
+    return { source: { signature: `${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.ino}:${stat.dev}` },
+      contentDigest: digest(f.rows.map(JSON.stringify).join("\n")), malformedLines: 0 };
+  }
+  const observationIndex = {
+    ensure: descriptor,
+    async readLines() { calls.lines++; throw new Error("Revision checks must use compact partition digests"); },
+    async revisionPartitions() {
+      calls.partitions++;
+      const grouped = new Map();
+      for (const [offset, row] of f.rows.entries()) {
+        const { companyKey, companyId, placeId, place_id } = row, month = String(row.stayDate || row.date || "").match(/^(\d{4}-(?:0[1-9]|1[0-2]))-\d{2}/)?.[1] || "";
+        const refs = { companyKey, companyId, placeId, place_id }, key = JSON.stringify([refs, month]);
+        if (!grouped.has(key)) grouped.set(key, { key, ...refs, month, lines: [], count: 0, runIds: new Set() });
+        const part = grouped.get(key); part.lines.push(`${offset + 1}:${JSON.stringify(row)}\n`); part.count++;
+        if (row.runId) part.runIds.add(String(row.runId));
+      }
+      const partitions = [...grouped.values()].map(({ lines, runIds, ...part }) => ({ ...part, digest: digest(lines.join("")), runIds: [...runIds] }));
+      if (corrupt) partitions[0].count = -1;
+      return { ...await descriptor(), partitions };
+    }
+  };
+  const fileSystem = Object.create(fs);
+  fileSystem.open = async (file, ...args) => {
+    if (path.resolve(file) === historyFile) { calls.body++; throw new Error("Raw history reread is forbidden"); }
+    return fs.open(file, ...args);
+  };
+  const reader = createCompanyIntegratedSourceRevision({ ...f.options, fileSystem, observationIndex,
+    historyStream: () => { throw new Error("Raw history stream is forbidden"); } });
+  let prepared = await reader.prepare();
+  const tokens = () => Object.fromEntries([A, B].flatMap(id => ["2026-08", "2026-09", "2026-10"].map(month => [id + month, reader.forScope(prepared, scope(id, month))])));
+  const before = tokens();
+  assert.equal(calls.partitions, 1); assert.equal(calls.lines, 0); assert.equal(calls.body, 0);
+  f.rows.push({ companyId: A, runId: "run_100", stayDate: "2026-09-04", failed: true }); await f.history(); prepared = await reader.prepare();
+  assert.equal(tokens()[A + "2026-08"], before[A + "2026-08"]);
+  assert.notEqual(tokens()[A + "2026-09"], before[A + "2026-09"]);
+  assert.notEqual(tokens()[A + "2026-10"], before[A + "2026-10"], "Following-month comparison remains a real dependency");
+  assert.equal(tokens()[B + "2026-09"], before[B + "2026-09"]);
+  f.master.companies[A].duplicateNotes = [{ mergedCompanyId: "legacy-company" }];
+  f.rows.push({ companyKey: "legacy-company", runId: "run_100", stayDate: "2026-09-05", value: 4 });
+  await f.history(); await f.write("company_master/companies.json", f.master); prepared = await reader.prepare();
+  let saved = JSON.parse(await fs.readFile(indexFile));
+  assert.equal(saved.parts.history.kind, "canonical-raw-partitions-v1");
+  assert.deepEqual(saved.parts.history.runRefs[A]["2026-09"], ["run_100"]);
+  const beforeMerge = tokens();
+  f.master.companies[A].duplicateNotes = [];
+  f.master.companies[B].duplicateNotes = [{ mergedCompanyId: "legacy-company" }];
+  await f.write("company_master/companies.json", f.master); prepared = await reader.prepare();
+  assert.notEqual(tokens()[A + "2026-09"], beforeMerge[A + "2026-09"]);
+  assert.notEqual(tokens()[B + "2026-09"], beforeMerge[B + "2026-09"]);
+  saved = JSON.parse(await fs.readFile(indexFile));
+  assert.deepEqual(saved.parts.history.runRefs[B]["2026-09"], ["run_100", "run_200"]);
+  const lastGood = await fs.readFile(indexFile);
+  f.rows.push({ companyKey: A, runId: "run_100", stayDate: "2026-09-06", missing: true }); await f.history(); corrupt = true;
+  await assert.rejects(reader.prepare(), { code: "COMPANY_SOURCE_REVISION_UNAVAILABLE" });
+  assert.deepEqual(await fs.readFile(indexFile), lastGood);
+  assert.equal(calls.lines, 0); assert.equal(calls.body, 0);
+});
+
+test("actual SQLite observation index appends only the new bytes and serves restart revisions without original history or payload reads", async t => {
+  const { createHistoryObservationIndex } = require("./lib/history_observation_index.cjs");
+  const f = await fixture(t), file = path.join(f.root, "history/observations.jsonl"), indexFile = path.join(f.root, "history/observation-index.sqlite");
+  let observationIndex = createHistoryObservationIndex({ file, indexFile });
+  try {
+    let reader = createCompanyIntegratedSourceRevision({ ...f.options, observationIndex }), prepared = await reader.prepare();
+    const before = Object.fromEntries([A, B].flatMap(id => ["2026-08", "2026-09", "2026-10"].map(month => [id + month, reader.forScope(prepared, scope(id, month))])));
+    const initial = observationIndex.stats();
+    assert.equal(initial.sourceReads, 1); assert.equal(initial.rowsRead, 0);
+    const newRow = { observationId: "new-A-observation", companyKey: A, runId: "run_100", stayDate: "2026-09-04", failed: true };
+    const append = JSON.stringify(newRow) + "\n";
+    const receipt = await observationIndex.append(append);
+    assert.equal(receipt.indexed, true);
+    prepared = await reader.prepare();
+    assert.equal(reader.forScope(prepared, scope(A, "2026-08")), before[A + "2026-08"]);
+    assert.notEqual(reader.forScope(prepared, scope(A, "2026-09")), before[A + "2026-09"]);
+    assert.notEqual(reader.forScope(prepared, scope(A, "2026-10")), before[A + "2026-10"]);
+    assert.equal(reader.forScope(prepared, scope(B, "2026-09")), before[B + "2026-09"]);
+    assert.equal(observationIndex.stats().bytesReadOriginal - initial.bytesReadOriginal, Buffer.byteLength(append));
+    assert.equal(observationIndex.stats().rowsRead, 0, "Partition revision checks do not parse historical observation payloads");
+    const beforeKeyword = prepared;
+    f.master.companies[B].keywords.future = { keyword: "새로운 지역 검색어", runs: [{ runId: "future-B", collectedAt: "2026-11-01T00:00:00Z", rank: 2 }] };
+    await f.write("outputs/future-B/manifest.json", { collectedAt: "2026-11-01T00:00:00Z", checkIn: "2026-11-01", bookingRangeDays: 21, status: "complete" });
+    await f.write("company_master/companies.json", f.master);
+    assert.equal((await observationIndex.append(JSON.stringify({ observationId: "future-B-row", companyKey: B, keyword: "새로운 지역 검색어",
+      runId: "future-B", stayDate: "2026-11-04", missing: true }) + "\n")).indexed, true);
+    prepared = await reader.prepare();
+    for (const id of [A, B]) for (const month of ["2026-08", "2026-09", "2026-10"]) {
+      assert.equal(reader.forScope(prepared, scope(id, month)), reader.forScope(beforeKeyword, scope(id, month)), "A new future keyword/company row does not invalidate historical scopes");
+    }
+    await observationIndex.close();
+    observationIndex = createHistoryObservationIndex({ file, indexFile });
+    reader = createCompanyIntegratedSourceRevision({ ...f.options, observationIndex });
+    assert.deepEqual(await reader.prepare(), prepared);
+    assert.equal(observationIndex.stats().bytesReadOriginal, 0);
+    assert.equal(observationIndex.stats().rowsRead, 0);
+    f.master.companies.extra = { companyId: "unrelated-company", placeIds: ["444"], primaryName: "추가 업체" };
+    await f.write("company_master/companies.json", f.master);
+    const afterMaster = await reader.prepare();
+    assert.equal(reader.forScope(afterMaster, scope(B, "2026-09")), reader.forScope(prepared, scope(B, "2026-09")));
+    assert.equal(observationIndex.stats().bytesReadOriginal, 0);
+    assert.equal(observationIndex.stats().rowsRead, 0);
+  } finally { await observationIndex.close(); }
+});
+
+test("indexed revisions include invalid-date attempts retained by monthly quality accounting", async t => {
+  const { createHistoryObservationIndex } = require("./lib/history_observation_index.cjs");
+  const f = await fixture(t), file = path.join(f.root, "history/observations.jsonl");
+  const observationIndex = createHistoryObservationIndex({ file, indexFile: path.join(f.root, "history/observation-index.sqlite") });
+  try {
+    const reader = createCompanyIntegratedSourceRevision({ ...f.options, observationIndex });
+    const before = await reader.prepare();
+    assert.equal((await observationIndex.append(JSON.stringify({ companyKey: A, runId: "run_100", stayDate: "2026-09-xx", productType: "lodging", missing: true }) + "\n")).indexed, true);
+    const after = await reader.prepare();
+    assert.notEqual(reader.forScope(after, scope(A, "2026-09")), reader.forScope(before, scope(A, "2026-09")));
+    assert.notEqual(reader.forScope(after, scope(A, "2026-10")), reader.forScope(before, scope(A, "2026-10")));
+    assert.equal(reader.forScope(after, scope(B, "2026-09")), reader.forScope(before, scope(B, "2026-09")));
+    assert.equal(observationIndex.stats().rowsRead, 0);
+  } finally { await observationIndex.close(); }
+});

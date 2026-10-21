@@ -31,7 +31,7 @@ function completeManifest() {
   };
 }
 
-function harness({ initial = [], manifest = completeManifest(), scanError = null, needsSeparator = false } = {}) {
+function harness({ initial = [], manifest = completeManifest(), scanError = null, needsSeparator = false, indexPublicationFails = false } = {}) {
   const rows = plain(initial);
   const evidence = [];
   const appends = [];
@@ -48,7 +48,7 @@ function harness({ initial = [], manifest = completeManifest(), scanError = null
     sharedWrite,
     runAnalyticalWork: (operation, options) => { calls.analytical.push(plain(options)); return analyticalWork.run(operation, options); },
     companyIntegratedDb: { deferProcessing: work => work() },
-    Date, Set,
+    Date, Set, console: { error: () => {} },
     fs: { existsSync: () => true },
     fsp: {
       mkdir: async () => { calls.mkdir++; },
@@ -82,10 +82,10 @@ function harness({ initial = [], manifest = completeManifest(), scanError = null
       } finally { calls.activeLoads--; }
     },
     runCollectionDbRoute: () => ({ appliesHistory: true }),
-    findExistingObservationIds: async ({observationIds}) => {
+    historyObservationIndex: { findObservationIds: async ({observationIds}) => {
       if (scanError) throw scanError;
       await nextTurn(); return {existingIds: new Set(rows.filter(row=>observationIds.includes(row.observationId)).map(row=>row.observationId)), needsSeparator};
-    },
+    }, append: async body => { await context.fsp.appendFile(context.HISTORY_OBSERVATIONS_FILE, body, "utf8"); return { indexed: !indexPublicationFails }; } },
     invalidateIndustryAnalysis: async () => {}, queueIntegratedCompanies: async () => {},
     buildHistoryObservations: () => plain(observations),
     masterDbDualWriteQueue: { mode: "shadow" },
@@ -125,6 +125,15 @@ test("history scan errors cannot be interpreted as empty history and append dupl
   await assert.rejects(store.append("fixture-run"), error => error === failure);
   assert.equal(store.appends.length, 0);
   assert.equal(store.evidence.length, 0);
+});
+
+test("a derived index publication failure preserves the successful append and cannot duplicate it on a retry", async () => {
+  const store = harness({ indexPublicationFails: true });
+  const first = await store.append("fixture-run");
+  assert.equal(first.appended, 2); assert.equal(first.observationIndex.updated, false);
+  const retry = await store.append("fixture-run");
+  assert.equal(retry.appended, 0); assert.equal(store.appends.length, 1);
+  assert.deepEqual(store.rows, store.observations);
 });
 
 test("an unterminated prior tail cannot swallow the first newly appended observation", async () => {

@@ -22,7 +22,7 @@ async function readJson(file, fallback, checkpoint = async () => {}) {
   catch (error) { if (error.code === "ENOENT") return fallback; throw sourceError(); }
 }
 
-function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepareCompanies = null, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", now = () => new Date(), runWork = operation => operation() }) {
+function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, observationIndex = null, prepareCompanies = null, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", now = () => new Date(), runWork = operation => operation() }) {
   const companyFile = path.join(dataDir, "company_master", "companies.json");
   const historyFile = path.join(dataDir, "history", "observations.jsonl");
   let catalogInFlight = null, targetCatalogInFlight = null, optionsInFlight = null;
@@ -149,7 +149,9 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     const data = await optionCatalog(checkpoint);
     const months = new Set();
     const addMonth = value => { const month = String(value || "").slice(0, 7); if (/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) months.add(month); };
-    await readHistory(row => addMonth(row.stayDate || row.date), checkpoint);
+    if (observationIndex) {
+      for (const month of await observationIndex.listMonths()) addMonth(month);
+    } else await readHistory(row => addMonth(row.stayDate || row.date), checkpoint);
     for (const month of data.runMonths) addMonth(month);
     return { companies: data.companies, keywords: data.keywords, regions: data.regions, observedMonths: [...months].sort().reverse() };
   }
@@ -222,14 +224,14 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     // history payloads throughout saved-evidence recalculation.
     const needsMembershipEvidence = request.type === "keyword";
     const companyScope = request.type === "company" ? String(request.targetId) : null;
-    function addRow(row, fallback = false) {
+    function addRow(row, fallback = false, recordDiagnostics = true) {
       if (!String(row.stayDate || row.date || "").startsWith(request.month + "-")) return;
       const id = canonical(row);
       // Keep rejected identity evidence separate so a relevant duplicate can be
       // diagnosed without adding its quantities to the report.
       const candidateId = id || canonical(row, true) || `unresolved-report-row-${unmatchedRows.length}`;
       if (needsMembershipEvidence) diagnosticInventoryRows.push({ ...row, companyId: candidateId, companyKey: candidateId });
-      if (!id) { unmatchedRows.push({ candidateId }); return; }
+      if (!id) { if (recordDiagnostics) unmatchedRows.push({ candidateId }); return; }
       // Identity conflicts and global diagnostics are counted above. Retain
       // quantities only for the requested company, before correction/cloning.
       if (companyScope !== null && id !== companyScope) return;
@@ -241,7 +243,38 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
       observations.set(key, { ...normalized, companyKey: id, companyId: id, companyName: company.primaryName,
         regionKey: company.regionKey, regionKeys: company.regionKeys, stayDate: row.stayDate || row.date });
     }
-    const malformedHistoryLines = await readHistory(row => addRow(row), checkpoint);
+    let malformedHistoryLines;
+    if (!observationIndex) malformedHistoryLines = await readHistory(row => addRow(row), checkpoint);
+    else {
+      try {
+        // Raw identities are indexed, not permanently canonicalized. A reviewed
+        // merge or place conflict still uses the current master above. Retain
+        // global diagnostics without decoding unrelated companies' payloads.
+        const before = await observationIndex.ensure();
+        if (companyScope !== null) {
+          if (typeof observationIndex.revisionPartitions === "function") {
+            const diagnostics = await observationIndex.revisionPartitions();
+            if (!Array.isArray(diagnostics.partitions)) throw sourceError();
+            for (const part of diagnostics.partitions) {
+              if (part.month !== request.month) continue;
+              if (!Number.isSafeInteger(part.count) || part.count < 1) throw sourceError();
+              if (!canonical(part)) unmatchedRows.push({ candidateId: canonical(part, true) || `unresolved-report-row-${unmatchedRows.length}`, count: part.count });
+            }
+          } else await observationIndex.readHeaders({ month: request.month }, row => {
+              if (!canonical(row)) unmatchedRows.push({ candidateId: canonical(row, true) || `unresolved-report-row-${unmatchedRows.length}` });
+            });
+          const selected = data.rawCompanies.get(companyScope);
+          const refs = { companyKeys: [companyScope, ...(selected?.duplicateNotes || []).map(prior => prior.mergedCompanyId).filter(Boolean)],
+            companyIds: [companyScope, ...(selected?.duplicateNotes || []).map(prior => prior.mergedCompanyId).filter(Boolean)],
+            placeIds: (byId.get(companyScope)?.placeIds || []).flatMap(place => [place, `cmp_place_${place}`]) };
+          await observationIndex.readRows({ month: request.month, refs }, row => addRow(row, false, false));
+        } else await observationIndex.readRows({ month: request.month }, row => addRow(row));
+        const after = await observationIndex.ensure();
+        if (before.generation !== after.generation) throw sourceError();
+        malformedHistoryLines = after.malformedHistoryLines;
+        if (!Number.isSafeInteger(malformedHistoryLines) || malformedHistoryLines < 0) throw sourceError();
+      } catch { throw sourceError(); }
+    }
     const rankObservations = [], diagnosticRankRows = [];
     let companyIndex = 0;
     for (const [id, company] of data.rawCompanies) {
@@ -281,12 +314,12 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
       ? monthlyReportKeywordMembership(request, { observations: diagnosticInventoryRows, rankObservations: diagnosticRankRows, runs: data.runs }).members
       : new Set(data.companies.filter(company => request.type === "industry" || (request.type === "company" ? company.companyId === request.targetId
         : company.regionKey === request.targetId || company.regionKeys.includes(request.targetId))).map(company => company.companyId));
-    const unmatchedCompanyRows = unmatchedRows.filter(({ candidateId }) => scopeIds.has(candidateId)).length;
+    const unmatchedCompanyRows = unmatchedRows.reduce((count, row) => count + (scopeIds.has(row.candidateId) ? row.count || 1 : 0), 0);
     const duplicatePlaceCompanies = [...conflictingCompanyIds].filter(id => scopeIds.has(id)).length;
     const warnings = [], globalWarnings = [];
     if (unmatchedCompanyRows) warnings.push(`리포트 대상에서 업체 고유번호를 확정하지 못한 관측 ${unmatchedCompanyRows}건을 제외했습니다.`);
     if (duplicatePlaceCompanies) warnings.push(`리포트 대상 중 플레이스 번호가 중복 연결된 업체 DB ${duplicatePlaceCompanies}개는 합산에서 제외했습니다. DB 중복 검토가 필요합니다.`);
-    const globalUnmatchedCompanyRows = unmatchedRows.length - unmatchedCompanyRows;
+    const globalUnmatchedCompanyRows = unmatchedRows.reduce((count, row) => count + (row.count || 1), 0) - unmatchedCompanyRows;
     const globalDuplicatePlaceCompanies = conflictingCompanyIds.size - duplicatePlaceCompanies;
     const unmappedRegionCompanies = data.companies.filter(company => !company.regionKey).length;
     if (malformedHistoryLines) globalWarnings.push(`전체 DB 참고: 읽을 수 없는 수집 이력 ${malformedHistoryLines}줄은 대상 범위를 확인할 수 없어 이 리포트의 품질 평가와 분리했습니다.`);

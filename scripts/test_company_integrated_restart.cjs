@@ -110,6 +110,126 @@ test("a changed calculation version cannot reuse an otherwise unchanged persiste
   assert.equal(stored.calculationVersion, "company-integrated-restart-test-v2"); assert.ok(f.state.reads.length > 0);
 });
 
+test("an input-equivalent revision transition preserves monthly bytes and timestamps, then restarts without observation reads", async t => {
+  const f = await fixture(t, { ids: ["company_a"] }); let db = await f.seed();
+  const before = await f.capture("company_a"), original = await f.readMonth("company_a", "2026-09");
+  f.state.now = new Date("2026-10-18T00:00:00Z"); f.bump("company_a", "2026-09"); f.state.reads.length = 0;
+  await db.bootstrap(); await db.drain();
+  assert.deepEqual(f.state.reads.map(row => row.month), ["2026-09", "2026-08"], "equivalence requires both full source inputs to be read once");
+  assert.deepEqual(await f.capture("company_a"), before, "an equivalent input digest cannot rewrite the normal month or its index");
+  const proofFile = f.monthFile("company_a", "2026-09").replace(/\.json$/, ".reuse-proof.json");
+  const proof = JSON.parse(await fs.readFile(proofFile, "utf8"));
+  assert.equal(proof.cacheDigest, original.cacheDigest); assert.equal(proof.sourceDigest, original.sourceDigest);
+  assert.equal(proof.storedSourceRevision, original.sourceRevision); assert.notEqual(proof.sourceRevision, original.sourceRevision);
+  assert.equal(proof.kind, "unchanged_company_month_inputs"); assert.equal(typeof proof.proofDigest, "string");
+  const proofBytes = await fs.readFile(proofFile, "utf8"), proofStat = await fs.stat(proofFile, { bigint: true });
+  await db.stop(); f.state.reads.length = 0; db = f.make();
+  const result = await db.bootstrap(); await db.drain();
+  assert.equal(result.reused, 2); assert.equal(result.refreshedMonths, 0); assert.deepEqual(f.state.reads, []);
+  assert.deepEqual(await f.capture("company_a"), before);
+  assert.equal(await fs.readFile(proofFile, "utf8"), proofBytes); assert.equal((await fs.stat(proofFile, { bigint: true })).mtimeNs, proofStat.mtimeNs);
+  const view = await db.get("company_a", { month: "2026-09" });
+  assert.equal(view.status, "ready"); assert.equal(view.selectedMonth, "2026-09");
+  assert.equal(view.calculatedAt, original.calculatedAt); assert.equal(view.snapshot.summary.lodging.sold, 3);
+});
+
+for (const olderEngine of ["numeric", "quality", "comparison"]) test(`an ${olderEngine} calculation behavior change cannot borrow an unchanged-input proof at the same version label`, async t => {
+  const f = await fixture(t, { ids: ["company_a"] }); const db = await f.seed(), file = f.monthFile("company_a", "2026-09");
+  const older = await f.readMonth("company_a", "2026-09"), version = older.calculationVersion, inputDigest = older.sourceDigest;
+  // Simulate a previously valid result produced by an older engine. Its cache
+  // integrity is correct; the current source inputs and public version label
+  // are deliberately identical, so neither alone proves output compatibility.
+  if (olderEngine === "numeric") older.snapshot.summary.lodging.sold = 8;
+  else if (olderEngine === "quality") older.snapshot.quality.warnings.push("An older engine used a different quality rule");
+  else older.snapshot.comparison.all.previous.sold = 8;
+  delete older.cacheDigest;
+  const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === "object"
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
+  older.cacheDigest = digest(JSON.stringify(stable(older))); await fs.writeFile(file, JSON.stringify(older));
+  f.state.now = new Date("2026-10-18T00:00:00Z"); f.bump("company_a", "2026-09"); f.state.reads.length = 0;
+  await db.bootstrap(); await db.drain();
+  const actual = await f.readMonth("company_a", "2026-09");
+  assert.equal(actual.calculationVersion, version); assert.equal(actual.sourceDigest, inputDigest);
+  assert.equal(actual.snapshot.summary.lodging.sold, 3); assert.equal(actual.snapshot.comparison.all.previous.sold, 2);
+  assert.ok(!actual.snapshot.quality.warnings.includes("An older engine used a different quality rule"));
+  assert.notEqual(actual.cacheDigest, older.cacheDigest); assert.notEqual(actual.calculatedAt, older.calculatedAt);
+  assert.deepEqual(f.state.reads.map(row => row.month), ["2026-09", "2026-08"]);
+  await assert.rejects(fs.stat(file.replace(/\.json$/, ".reuse-proof.json")), error => error.code === "ENOENT");
+});
+
+test("an equivalence proof cannot hide changed source inputs or certify a later source revision", async t => {
+  const f = await fixture(t, { ids: ["company_a"] }); const db = await f.seed();
+  f.bump("company_a", "2026-09"); await db.bootstrap(); await db.drain();
+  const proofFile = f.monthFile("company_a", "2026-09").replace(/\.json$/, ".reuse-proof.json"), proof = await fs.readFile(proofFile, "utf8");
+  const before = await f.readMonth("company_a", "2026-09"); f.bump("company_a", "2026-09"); f.setSold("company_a", "2026-09", 9); f.state.reads.length = 0;
+  await db.bootstrap(); await db.drain();
+  const after = await f.readMonth("company_a", "2026-09");
+  assert.equal(after.snapshot.summary.lodging.sold, 9); assert.notEqual(after.sourceDigest, before.sourceDigest);
+  assert.notEqual(after.cacheDigest, before.cacheDigest); assert.deepEqual(f.state.reads.map(row => row.month), ["2026-09", "2026-08"]);
+  assert.equal(await fs.readFile(proofFile, "utf8"), proof, "an old proof is bounded and harmless; it does not modify the new result");
+  f.state.reads.length = 0; await db.bootstrap(); await db.drain(); assert.deepEqual(f.state.reads, []);
+});
+
+for (const damage of ["invalid_json", "checksum", "foreign_company"]) test(`a ${damage} reuse proof is ignored and inputs are independently checked again`, async t => {
+  const f = await fixture(t, { ids: ["company_a"] }); const db = await f.seed();
+  f.bump("company_a", "2026-09"); await db.bootstrap(); await db.drain();
+  const before = await f.capture("company_a"), proofFile = f.monthFile("company_a", "2026-09").replace(/\.json$/, ".reuse-proof.json");
+  const proof = JSON.parse(await fs.readFile(proofFile, "utf8"));
+  if (damage === "invalid_json") await fs.writeFile(proofFile, "{");
+  else {
+    if (damage === "checksum") proof.proofDigest = "broken";
+    else {
+      proof.companyId = "another_company"; delete proof.proofDigest;
+      const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === "object"
+        ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
+      proof.proofDigest = digest(JSON.stringify(stable(proof)));
+    }
+    await fs.writeFile(proofFile, JSON.stringify(proof));
+  }
+  f.state.reads.length = 0; await db.bootstrap(); await db.drain();
+  assert.deepEqual(f.state.reads.map(row => row.month), ["2026-09", "2026-08"]);
+  assert.deepEqual(await f.capture("company_a"), before); assert.equal((await db.get("company_a", { month: "2026-09" })).status, "ready");
+});
+
+test("a changed or corrupt cached result cannot borrow an existing proof's source certification", async t => {
+  const f = await fixture(t, { ids: ["company_a"] }); const db = await f.seed();
+  f.bump("company_a", "2026-09"); await db.bootstrap(); await db.drain();
+  const file = f.monthFile("company_a", "2026-09"), damaged = await f.readMonth("company_a", "2026-09");
+  damaged.snapshot.summary.lodging.sold = 999; await fs.writeFile(file, JSON.stringify(damaged));
+  f.state.reads.length = 0; await db.bootstrap(); await db.drain();
+  assert.deepEqual(f.state.reads.map(row => row.month), ["2026-09", "2026-08"]);
+  assert.equal((await db.get("company_a", { month: "2026-09" })).snapshot.summary.lodging.sold, 3);
+});
+
+test("a revision change after equivalent source reads cannot publish a reuse proof", async t => {
+  const f = await fixture(t, { ids: ["company_a"] }); const db = await f.seed(), before = await f.capture("company_a");
+  f.bump("company_a", "2026-09"); f.state.beforeReturn = async request => {
+    if (request.month === "2026-08") { f.state.beforeReturn = null; f.bump("company_a", "2026-09"); }
+  };
+  await db.queueCompany("company_a", { months: ["2026-09"], reason: "proof_source_race" }); await db.drain();
+  assert.equal((await db.get("company_a", { month: "2026-09" })).errorCode, "COMPANY_INTEGRATION_SOURCE_CHANGED");
+  assert.deepEqual(await f.capture("company_a"), before);
+  await assert.rejects(fs.stat(f.monthFile("company_a", "2026-09").replace(/\.json$/, ".reuse-proof.json")), error => error.code === "ENOENT");
+});
+
+test("a superseded generation cannot publish an equivalent-input reuse proof", async t => {
+  const f = await fixture(t, { ids: ["company_a"] }); const db = await f.seed(), before = await f.capture("company_a");
+  f.bump("company_a", "2026-09");
+  let entered, release, selectedReads = 0;
+  const started = new Promise(resolve => { entered = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  f.state.beforeReturn = async request => {
+    if (request.month !== "2026-09") return;
+    if (++selectedReads === 1) { entered(); await gate; }
+    else throw Object.assign(new Error("The newer generation is deliberately stopped before its source inspection completes"), { code: "TEST_NEW_GENERATION_STOPPED" });
+  };
+  await db.queueCompany("company_a", { months: ["2026-09"], reason: "old_generation" }); const running = db.drain();
+  try { await started; await db.queueCompany("company_a", { months: ["2026-09"], reason: "new_generation" }); }
+  finally { release(); await running; }
+  assert.equal((await db.get("company_a", { month: "2026-09" })).errorCode, "TEST_NEW_GENERATION_STOPPED");
+  assert.deepEqual(await f.capture("company_a"), before);
+  await assert.rejects(fs.stat(f.monthFile("company_a", "2026-09").replace(/\.json$/, ".reuse-proof.json")), error => error.code === "ENOENT");
+});
+
 test("KST day advancement invalidates only the open month and keeps completed months untouched", async t => {
   const f = await fixture(t, { ids: ["company_a"], months: ["2026-09", "2026-10"], now: "2026-10-17T14:59:59Z" });
   const old = await f.seed(), september = await fs.readFile(f.monthFile("company_a", "2026-09"), "utf8"); await old.stop();

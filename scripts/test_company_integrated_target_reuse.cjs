@@ -215,3 +215,38 @@ test("history stream errors are closed and rejected, and callers without a revis
   assert.equal(f.calls.catalog, before + 2);
   assert.throws(() => createCompanyIntegratedTargets({ ...f, readRevision: "not a function" }), TypeError);
 });
+
+test("indexed compact headers match legacy discovery without JSONL streaming and keep raw companyId priority", async t => {
+  const f = await fixture(t, 2);
+  const historyRows = [
+    { companyKey: "c0", runId: "run-a", stayDate: "2026-09-03", rawResponse: "must not enter the compact projection" },
+    { companyKey: "c0", runId: "run-b", stayDate: "2026-11-01" },
+    { companyKey: "c1", runId: "run-a", stayDate: "2025-08-01" }
+  ];
+  const mixed = { companyId: "c1", companyKey: "c0", runId: "mixed-run", stayDate: "2024-02-03" };
+  historyRows.push(mixed); await f.append([mixed]);
+  const legacy = createCompanyIntegratedTargets(f), expected = await legacy();
+  const streams = f.calls.history, calls = { headers: 0, rows: 0, query: null }; let unavailable = false;
+  const observationIndex = {
+    async readRows() { calls.rows++; throw new Error("Full observation payloads are unnecessary for target discovery"); },
+    async readHeaders(query, consume) {
+      if (unavailable) throw Object.assign(new Error("unavailable"), { code: "HISTORY_OBSERVATION_INDEX_INVALID" });
+      calls.headers++; calls.query = query;
+      for (const [ordinal, row] of historyRows.entries()) if (!query.runId || query.runId === row.runId) {
+        const { companyKey, companyId, placeId, place_id, runId, stayDate, date } = row;
+        await consume({ companyKey, companyId, placeId, place_id, runId, stayDate, date }, ordinal + 1);
+      }
+    }
+  };
+  const indexed = createCompanyIntegratedTargets({ ...f, observationIndex });
+  assert.deepEqual(await indexed(), expected);
+  assert.deepEqual(await indexed({ runId: "mixed-run" }), [{ companyId: "c1", months: ["2024-02"] }]);
+  assert.deepEqual(calls.query, { parseMode: "monthly", runId: "mixed-run" });
+  assert.equal(calls.rows, 0); assert.equal(f.calls.history, streams, "Indexed discovery never reopens the JSONL source");
+  const newRow = { companyKey: "c0", runId: "next-run", stayDate: "2023-01-01" };
+  historyRows.push(newRow); await f.append([newRow]); unavailable = true;
+  await assert.rejects(indexed(), { code: "COMPANY_TARGET_SOURCE_UNAVAILABLE" });
+  unavailable = false;
+  assert.deepEqual(await indexed(), await legacy());
+  assert.throws(() => createCompanyIntegratedTargets({ ...f, observationIndex: {} }), TypeError);
+});

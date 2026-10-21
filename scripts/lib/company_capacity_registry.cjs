@@ -3,6 +3,11 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const readline = require("node:readline");
+const HISTORY_CACHE_VERSION = 1, HISTORY_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === "object"
+  ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
+const digest = value => crypto.createHash("sha256").update(typeof value === "string" || Buffer.isBuffer(value) ? value : JSON.stringify(stable(value))).digest("hex");
+const historyFault = () => Object.assign(new Error("객실 기준의 관측 색인을 검증하지 못했습니다."), { code: "CAPACITY_HISTORY_INDEX_UNAVAILABLE", statusCode: 503 });
 const positive = value => ["number", "string"].includes(typeof value) && String(value).trim() !== ""
   && Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : null;
 function trustedRawQuantity(row) {
@@ -47,10 +52,118 @@ function trustedSnapshotCompany(company, runMap) {
     snapshots: (Array.isArray(inventory.snapshots) ? inventory.snapshots : []).map(filter).filter(Boolean) } };
 }
 // Derived, versioned capacity basis. Raw company records are never modified.
-function createCompanyCapacityRegistry({ dataDir, observedCapacity, reviewedCapacity, now = () => new Date() }) {
+function createCompanyCapacityRegistry({ dataDir, observedCapacity, reviewedCapacity, now = () => new Date(), observationIndex = null }) {
+  if (observationIndex !== null && ["ensure", "revisionPartitions", "readRows"].some(method => typeof observationIndex[method] !== "function")) throw new TypeError("A verified observation index is required");
   const file = path.join(dataDir, "company_integrated", "capacity-bases.json");
-  let chain = Promise.resolve(), historyCache = null;
-  async function historicalMaxima(companies, runs, checkpoint) {
+  const historyCacheFile = path.join(dataDir, "company_integrated", "capacity-history-index.json");
+  let chain = Promise.resolve(), historyCache = null, projectionCache = null, projectionStat = null, rulePromise = null;
+  const stamp = stat => `${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.ino}:${stat.dev}`;
+  async function readProjection() {
+    let before;
+    try { before = await fs.lstat(historyCacheFile, { bigint: true }); }
+    catch (error) { if (error.code === "ENOENT") { projectionCache = null; projectionStat = null; return null; } throw historyFault(); }
+    if (!before.isFile() || before.isSymbolicLink() || before.size > BigInt(HISTORY_CACHE_MAX_BYTES)) throw historyFault();
+    if (projectionCache && projectionStat === stamp(before)) return projectionCache;
+    let value;
+    try { value = JSON.parse(await fs.readFile(historyCacheFile, "utf8")); }
+    catch { throw historyFault(); }
+    const { checksum, ...body } = value || {};
+    if (body.schemaVersion !== HISTORY_CACHE_VERSION || !/^[a-f0-9]{64}$/.test(body.ruleVersion || "")
+      || !/^[a-f0-9]{64}$/.test(body.sourceDigest || "") || !Array.isArray(body.partitions) || checksum !== digest(body)) throw historyFault();
+    const keys = new Set();
+    for (const part of body.partitions) {
+      if (!part || typeof part.key !== "string" || keys.has(part.key) || !/^[a-f0-9]{64}$/.test(part.digest || "")
+        || typeof part.rawCompanyId !== "string" || !Array.isArray(part.runs)) throw historyFault();
+      keys.add(part.key);
+      const runs = new Set();
+      for (const item of part.runs) {
+        if (!Array.isArray(item) || item.length !== 2 || typeof item[0] !== "string" || runs.has(item[0]) || !positive(item[1])) throw historyFault();
+        runs.add(item[0]);
+      }
+    }
+    const after = await fs.lstat(historyCacheFile, { bigint: true }).catch(() => null);
+    if (!after || after.isSymbolicLink() || stamp(after) !== stamp(before)) throw historyFault();
+    projectionCache = body; projectionStat = stamp(after); return body;
+  }
+  function validDescriptor(value) {
+    return value && /^[a-f0-9]{64}$/.test(value.contentDigest || "") && Number.isSafeInteger(value.generation) && value.generation >= 0
+      && (!value.source || typeof value.source.signature === "string");
+  }
+  async function assertDescriptor(before) {
+    const after = await observationIndex.ensure();
+    if (!validDescriptor(after) || after.generation !== before.generation || after.contentDigest !== before.contentDigest
+      || (after.source?.signature || null) !== (before.source?.signature || null)) throw historyFault();
+  }
+  async function saveProjection(body, before) {
+    const encoded = JSON.stringify({ ...body, checksum: digest(body) });
+    if (Buffer.byteLength(encoded) > HISTORY_CACHE_MAX_BYTES) throw historyFault();
+    await fs.mkdir(path.dirname(historyCacheFile), { recursive: true });
+    const temporary = `${historyCacheFile}.${crypto.randomUUID()}.tmp`; let handle;
+    try {
+      handle = await fs.open(temporary, "wx", 0o600); await handle.writeFile(encoded); await handle.sync(); await handle.close(); handle = null;
+      // An interrupted index read cannot replace the last verified projection.
+      await assertDescriptor(before);
+      await fs.rename(temporary, historyCacheFile);
+      projectionCache = body; projectionStat = stamp(await fs.lstat(historyCacheFile, { bigint: true }));
+    } finally {
+      if (handle) await handle.close().catch(() => {});
+      await fs.unlink(temporary).catch(() => {});
+    }
+  }
+  async function indexedHistoricalMaxima(companies, runs, checkpoint) {
+    try {
+      const before = await observationIndex.ensure(); if (!validDescriptor(before)) throw historyFault();
+      const index = await observationIndex.revisionPartitions();
+      if (!index || index.contentDigest !== before.contentDigest || (index.source?.signature || null) !== (before.source?.signature || null)
+        || !Array.isArray(index.partitions)) throw historyFault();
+      // Raw trust rules are versioned separately from mutable run quality and
+      // canonical ownership. Those are applied afresh on every preparation.
+      if (!rulePromise) rulePromise = fs.readFile(__filename).then(bytes => digest(Buffer.concat([Buffer.from("capacity-raw-partition-v1\n"), bytes])));
+      const ruleVersion = await rulePromise, previous = await readProjection();
+      const reusable = new Map(previous?.ruleVersion === ruleVersion ? previous.partitions.map(part => [part.key, part]) : []);
+      const partitions = [], seen = new Set(); let count = 0;
+      for (const part of index.partitions) {
+        if (!part || typeof part.key !== "string" || seen.has(part.key) || !/^[a-f0-9]{64}$/.test(part.digest || "")
+          || !Number.isSafeInteger(part.count) || part.count < 1) throw historyFault();
+        seen.add(part.key);
+        const rawCompanyId = String(part.companyId || part.companyKey || ""), cached = reusable.get(part.key);
+        if (cached?.digest === part.digest && cached.rawCompanyId === rawCompanyId) partitions.push(cached);
+        else {
+          const maxima = new Map(); let rows = 0;
+          await observationIndex.readRows({ parseMode: "monthly", partitionKey: part.key }, row => {
+            rows++;
+            if (!row || typeof row !== "object" || Array.isArray(row) || String(row.companyId || row.companyKey || "") !== rawCompanyId) throw historyFault();
+            if (row.productType !== "lodging" || !trustedRawQuantity(row)) return;
+            const quantity = positive(row.rawTotal); if (!quantity) return;
+            const runId = String(row.runId || ""); maxima.set(runId, Math.max(maxima.get(runId) || 0, quantity));
+          });
+          if (rows !== part.count) throw historyFault();
+          partitions.push({ key: part.key, digest: part.digest, rawCompanyId, runs: [...maxima].sort((a, b) => a[0].localeCompare(b[0])) });
+        }
+        if (checkpoint && ++count % 64 === 0) await checkpoint();
+      }
+      partitions.sort((a, b) => a.key.localeCompare(b.key));
+      const body = { schemaVersion: HISTORY_CACHE_VERSION, ruleVersion, sourceDigest: before.contentDigest, partitions };
+      const identities = new Map(); count = 0;
+      for (const company of Object.values(companies)) {
+        if (checkpoint && ++count % 16 === 0) await checkpoint();
+        if (!company?.companyId || company.deletedAt || company.mergedIntoCompanyId) continue;
+        identities.set(company.companyId, company.companyId);
+        for (const prior of company.duplicateNotes || []) if (prior.mergedCompanyId) identities.set(prior.mergedCompanyId, company.companyId);
+      }
+      const runMap = new Map(runs.map(run => [String(run.id || run.runId || ""), String(typeof run.collectionQuality === "string" ? run.collectionQuality : run.collectionQuality?.status || "unknown")]));
+      const values = new Map(); count = 0;
+      for (const part of partitions) {
+        const id = identities.get(part.rawCompanyId);
+        if (id) for (const [runId, quantity] of part.runs) if (["complete", "reused", "partial"].includes(runMap.get(runId))) values.set(id, Math.max(values.get(id) || 0, quantity));
+        if (checkpoint && ++count % 128 === 0) await checkpoint();
+      }
+      await assertDescriptor(before);
+      if (!previous || digest(body) !== digest(previous)) await saveProjection(body, before);
+      return values;
+    } catch (error) { throw error?.code === "CAPACITY_HISTORY_INDEX_UNAVAILABLE" ? error : historyFault(); }
+  }
+  async function legacyHistoricalMaxima(companies, runs, checkpoint) {
     const filename = path.join(dataDir, "history", "observations.jsonl");
     let stat; try { stat = await fs.stat(filename); } catch (error) { if (error.code === "ENOENT") return new Map(); throw error; }
     const runMap = new Map(runs.map(run => [String(run.id || run.runId || ""), String(typeof run.collectionQuality === "string" ? run.collectionQuality : run.collectionQuality?.status || "unknown")]));
@@ -89,7 +202,7 @@ function createCompanyCapacityRegistry({ dataDir, observedCapacity, reviewedCapa
   async function prepare(companies, { runs = [], checkpoint: suppliedCheckpoint = null, shareReadOnlyInventory = false } = {}) {
     const checkpoint = typeof suppliedCheckpoint === "function" ? suppliedCheckpoint : null;
     if (checkpoint) await checkpoint();
-    const historical = await historicalMaxima(companies, runs, checkpoint);
+    const historical = await (observationIndex ? indexedHistoricalMaxima(companies, runs, checkpoint) : legacyHistoricalMaxima(companies, runs, checkpoint));
     const runMap = new Map(runs.map(run => [String(run.id || run.runId || ""), String(typeof run.collectionQuality === "string" ? run.collectionQuality : run.collectionQuality?.status || "unknown")]));
     let store, storedText;
     try { storedText = await fs.readFile(file, "utf8"); }
