@@ -86,7 +86,7 @@ function createCompanyCapacityRegistry({ dataDir, observedCapacity, reviewedCapa
     } finally { input.close(); stream.destroy(); }
     historyCache = { key, values }; return values;
   }
-  async function prepare(companies, { runs = [], checkpoint: suppliedCheckpoint = null } = {}) {
+  async function prepare(companies, { runs = [], checkpoint: suppliedCheckpoint = null, shareReadOnlyInventory = false } = {}) {
     const checkpoint = typeof suppliedCheckpoint === "function" ? suppliedCheckpoint : null;
     if (checkpoint) await checkpoint();
     const historical = await historicalMaxima(companies, runs, checkpoint);
@@ -120,7 +120,11 @@ function createCompanyCapacityRegistry({ dataDir, observedCapacity, reviewedCapa
       }
       const basis = store.companies[id];
       const warnings = !count ? ["객실 기준을 확인할 수 없습니다."] : !reviewed && observed > count ? [`관측 수량 ${observed}실이 고정 기준 ${count}실보다 큽니다. 관리자 검토가 필요합니다.`] : [];
-      const company = structuredClone(original);
+      // Monthly source reconstruction owns these freshly streamed records and
+      // only reads their inventory. Replace the two derived top-level fields
+      // without cloning every saved product a second time. Other callers keep
+      // the independent deep-copy contract by default.
+      const company = shareReadOnlyInventory ? { ...original } : structuredClone(original);
       company._integratedCapacity = { capacity: count, count, source, revision: basis.revision, updatedAt: basis.updatedAt, observedMaximum: observed, warnings,
         label: reviewed ? "관리자 검수값" : count ? "최대 관측 기준 고정 · 미검수" : "객실 기준 확인 필요" };
       if (count && !reviewed) company.manualCorrection = { ...(company.manualCorrection?.active === false ? {} : company.manualCorrection || {}), active: true, lodgingBasisTotal: count, source: "integrated_observed_basis" };

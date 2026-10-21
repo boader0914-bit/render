@@ -41,6 +41,18 @@ test("capacity baseline is locked, versioned, never marks an estimate reviewed, 
   await fs.writeFile(filename, "{bad");
   await assert.rejects(registry.prepareCompanies(original), /객실 기준/);
 });
+test("owned read-only source preparation shares frozen inventory without a second full product clone", async t => {
+  const dataDir = await temporary(t), inventory = Object.freeze({ latest: Object.freeze({ payload: Object.freeze(["saved product evidence"]) }) });
+  const original = Object.freeze({ companyId: "a", observed: 16, inventory });
+  const registry = createCompanyCapacityRegistry({ dataDir, observedCapacity: c => c.observed, reviewedCapacity: () => null });
+  const owned = await registry.prepareCompanies({ a: original }, { shareReadOnlyInventory: true });
+  assert.notEqual(owned.a, original); assert.equal(owned.a.inventory, inventory);
+  assert.equal(owned.a.manualCorrection.lodgingBasisTotal, 16);
+  assert.equal(original.manualCorrection, undefined); assert.equal(original._integratedCapacity, undefined);
+  const independent = await registry.prepareCompanies({ a: original });
+  assert.notEqual(independent.a.inventory, inventory);
+  assert.deepEqual(independent.a, owned.a);
+});
 test("target discovery includes all history, merged IDs, future spans, with no display-name identity merge", async t => {
   const dataDir = await temporary(t);
   await fs.mkdir(path.join(dataDir, "history"));

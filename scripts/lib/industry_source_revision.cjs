@@ -6,6 +6,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const readline = require("node:readline");
 const { savedIndustryRevisionScope } = require("./saved_source_revision_scope.cjs");
+const { readCompanyMasterProjection } = require("./company_master_stream.cjs");
 
 const hash = value => crypto.createHash("sha256").update(value).digest("hex");
 const object = value => value && typeof value === "object" && !Array.isArray(value);
@@ -151,6 +152,42 @@ function companySummary(master) {
   return result;
 }
 
+async function streamedCompanySummary(file) {
+  const result = buckets(); result.companies = [];
+  let callbackError = null;
+  try {
+    const { metadata } = await readCompanyMasterProjection(file, { projectCompany: null, includeRootMetadata: true,
+      checkpoint: () => new Promise(resolve => setImmediate(resolve)),
+      onCompany(company, recordId) {
+        try {
+          const one = companySummary({ companies: { [recordId]: company } });
+          for (const name of ["months", "runMonths", "companyMonths", "runRows"]) {
+            for (const [key, values] of one[name]) for (const value of values) add(result[name], key, value);
+          }
+          for (const value of one.unknown) result.unknown.add(value);
+          result.companies.push(...one.companies);
+        } catch (error) { callbackError = error; throw error; }
+      } });
+    result.rootToken = hash(stable(omit(metadata, ["companies", "updatedAt", "sourceIndex"])));
+    return result;
+  } catch (error) {
+    if (callbackError) throw callbackError;
+    if (error.code !== "COMPANY_MASTER_INVALID") throw error;
+    // Invalid documents remain a conservative global dependency, matching the
+    // prior malformed-JSON behavior without allocating the full UTF-8 text.
+    const digest = crypto.createHash("sha256"); let first = true;
+    const stream = nativeFs.createReadStream(file, { encoding: "utf8" });
+    try {
+      for await (let chunk of stream) {
+        if (first) { chunk = chunk.replace(/^\uFEFF/, ""); first = false; }
+        digest.update(chunk);
+      }
+    } finally { stream.destroy(); }
+    const value = digest.digest("hex"), unknown = buckets(); unknown.companies = []; unknown.rootToken = value;
+    unknown.unknown.add(`unparsed-master:${value}`); return unknown;
+  }
+}
+
 async function historySummary(file) {
   const result = buckets(), hashes = new Map(), unknown = crypto.createHash("sha256");
   let unknownCount = 0;
@@ -190,7 +227,9 @@ function runScope(manifest) {
   return { months, collection, known: Boolean(known) };
 }
 
-function createIndustrySourceRevision({ dataDir, outputsDir, regionMasterFile, tourismRegionMapFile, metadataConcurrency = 16 }) {
+function createIndustrySourceRevision({ dataDir, outputsDir, regionMasterFile, tourismRegionMapFile, metadataConcurrency = 16,
+  runWork = operation => operation() }) {
+  if (typeof runWork !== "function") throw new TypeError("Industry revision work runner must be a function");
   const calendarDir = path.join(dataDir, "history", "special_days");
   const singles = [regionMasterFile, tourismRegionMapFile].filter(Boolean);
   const cache = new Map();
@@ -237,7 +276,7 @@ function createIndustrySourceRevision({ dataDir, outputsDir, regionMasterFile, t
     }
     return hash(rows.map(row => `${row.label}:${row.revision}`).sort().join("\n"));
   }
-  async function periods() {
+  async function periodInventory() {
     const masterFile = path.join(dataDir, "company_master", "companies.json"), historyFile = path.join(dataDir, "history", "observations.jsonl");
     const [masterRevision, historyRevision, singleRevisions, outputRows, calendarRows] = await Promise.all([
       stamp(masterFile), stamp(historyFile), Promise.all(singles.map(stamp)),
@@ -248,6 +287,10 @@ function createIndustrySourceRevision({ dataDir, outputsDir, regionMasterFile, t
     const fingerprint = hash([`master:${masterRevision}`, `history:${historyRevision}`,
       ...singleRevisions.map((revision, index) => `file${index}:${revision}`),
       ...outputRows.map(row => `${row.label}:${row.revision}`), ...calendarRows.map(row => `${row.label}:${row.revision}`)].join("\n"));
+    return { masterFile, masterRevision, historyFile, historyRevision, singleRevisions, outputRows, calendarRows, fingerprint };
+  }
+  async function periods() {
+    const { masterFile, masterRevision, historyFile, historyRevision, singleRevisions, outputRows, calendarRows, fingerprint } = await periodInventory();
     if (finalCache?.fingerprint === fingerprint) return structuredClone(finalCache.value);
     const global = new Set(["industry-period-revisions-v1"]), months = new Map(), runMonths = new Map(), companyMonths = new Map();
     function merge(summary) {
@@ -257,15 +300,7 @@ function createIndustrySourceRevision({ dataDir, outputsDir, regionMasterFile, t
       for (const [id, values] of summary.runMonths) for (const value of values) add(runMonths, id, value);
       for (const [id, values] of summary.companyMonths) for (const value of values) add(companyMonths, id, value);
     }
-    const master = await cached(masterFile, masterRevision, async file => {
-      const text = (await fs.readFile(file, "utf8")).replace(/^\uFEFF/, "");
-      try { return companySummary(JSON.parse(text)); }
-      catch (error) {
-        if (!(error instanceof SyntaxError) && error.code !== "INDUSTRY_SOURCE_MASTER_INVALID") throw error;
-        const result = buckets(); result.companies = []; result.rootToken = hash(text);
-        result.unknown.add(`unparsed-master:${hash(text)}`); return result;
-      }
-    });
+    const master = await cached(masterFile, masterRevision, streamedCompanySummary);
     const history = await cached(historyFile, historyRevision, historySummary);
     if (master) global.add(`master-schema:${master.rootToken}`);
     merge(master); merge(history);
@@ -362,13 +397,27 @@ function createIndustrySourceRevision({ dataDir, outputsDir, regionMasterFile, t
     task.then(() => { if (inFlight === task) inFlight = null; }, () => { if (inFlight === task) inFlight = null; });
     return task;
   }
-  readIndustrySourceRevision.periodRevisions = function periodRevisions({ fresh = false } = {}) {
+  function periodRevisionsOwned({ fresh = false } = {}) {
     // A report may have independently verified a newer complete input revision
     // while a preceding period scan is still completing. Do not pin that older
     // scan under the new proof. Readers already waiting here can share the one
     // scan that starts after their request, including after a failed predecessor.
     if (fresh === true && inFlight) return inFlight.catch(() => {}).then(startPeriodScan);
     return startPeriodScan();
+  }
+  readIndustrySourceRevision.periodRevisions = function periodRevisions(options) {
+    // Acquire before creating/joining the shared scan. An external flight must
+    // never be queued behind a lease whose owner then waits for that flight.
+    // The legacy metadata-only string reader above intentionally stays outside.
+    const acquire = () => runWork(() => periodRevisionsOwned(options), { priority: "background", kind: "industry-source-revision" });
+    if (!finalCache || inFlight) return acquire();
+    // A completed semantic result needs no allocation lease when every saved
+    // input still has exactly the same freshly inspected identity. This probe
+    // stats all originals, including internal run files; it reads no bodies,
+    // makes no new summary and never certifies a different/uncertain inventory.
+    // Do not create a shared cold flight until after acquiring the lease above.
+    return periodInventory().then(({ fingerprint }) => finalCache?.fingerprint === fingerprint
+      ? structuredClone(finalCache.value) : acquire());
   };
   readIndustrySourceRevision.industrySourceScope = savedIndustryRevisionScope({ dataDir, outputsDir, regionMasterFile, tourismRegionMapFile });
   return readIndustrySourceRevision;

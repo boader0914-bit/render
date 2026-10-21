@@ -50,8 +50,8 @@ function asCatalog(value) {
   return { companies: copied.companies, rawCompanies: new Map(copied.rawCompanies), runs: copied.runs };
 }
 
-function createRevisionCheckedCompanyCatalog({ catalog, readRevision }) {
-  if (typeof catalog !== "function" || typeof readRevision !== "function") throw new TypeError("Catalog source verification inputs are required");
+function createRevisionCheckedCompanyCatalog({ catalog, readRevision, runWork = operation => operation() }) {
+  if (typeof catalog !== "function" || typeof readRevision !== "function" || typeof runWork !== "function") throw new TypeError("Catalog source verification inputs are required");
   let active = null;
   async function checkedRevision() {
     let value;
@@ -70,13 +70,17 @@ function createRevisionCheckedCompanyCatalog({ catalog, readRevision }) {
   }
   // Install before the original catalog is handed to any consumer. Otherwise
   // its own older in-flight read could predate our first revision inspection.
-  return function checkedCompanyCatalog(options) {
+  function checkedOwned(options) {
     if (active) return active;
     const task = read(options);
     active = task;
     task.finally(() => { if (active === task) active = null; }).catch(() => {});
     return task;
-  };
+  }
+  // An externally queued flight must not exist before it owns the heavy
+  // lease: a later lease owner could otherwise join it while it waits on that
+  // same owner. Nested reads reenter their owner's lease before sharing work.
+  return options => runWork(() => checkedOwned(options), { ...options, kind: "verified-company-catalog" });
 }
 
 function createCompanyIntegratedCatalogRevision({ dataDir, readSelectorRevision, fileSystem = fs }) {
@@ -104,9 +108,9 @@ function createCompanyIntegratedCatalogRevision({ dataDir, readSelectorRevision,
 }
 
 function createCompanyIntegratedCatalog({ dataDir, catalog, readRevision, version = "company-catalog-v1",
-  now = () => new Date(), fileSystem = fs, maxBytes = 8 * 1024 * 1024 } = {}) {
+  now = () => new Date(), fileSystem = fs, maxBytes = 8 * 1024 * 1024, runWork = operation => operation() } = {}) {
   if (!dataDir || typeof catalog !== "function" || typeof readRevision !== "function"
-    || !Number.isSafeInteger(maxBytes) || maxBytes < 128) throw new TypeError("Company metadata cache inputs are required");
+    || !Number.isSafeInteger(maxBytes) || maxBytes < 128 || typeof runWork !== "function") throw new TypeError("Company metadata cache inputs are required");
   const file = path.join(dataDir, "company_integrated", "catalog.json");
   let memory = null, building = null, epoch = 0, lastStatus = null;
   async function revision() {
@@ -142,7 +146,7 @@ function createCompanyIntegratedCatalog({ dataDir, catalog, readRevision, versio
       throw fault("COMPANY_CATALOG_CACHE_UNAVAILABLE");
     } finally { if (handle) await handle.close(); }
   }
-  async function rebuild() {
+  async function rebuild(options) {
     // Initial capacity preparation can create its own derived basis file.
     // A second stable pass is allowed; continuously changing input fails closed.
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -150,7 +154,7 @@ function createCompanyIntegratedCatalog({ dataDir, catalog, readRevision, versio
       // Drop the complete source catalog before any validation/write await.
       const value = await (async () => {
         let full;
-        try { full = await catalog(); } catch { throw fault(); }
+        try { full = await catalog(options); } catch { throw fault(); }
         return compactCompanyCatalog(full);
       })();
       const entry = { schemaVersion: 1, version, sourceRevision: before,
@@ -170,7 +174,20 @@ function createCompanyIntegratedCatalog({ dataDir, catalog, readRevision, versio
     }
     throw fault("COMPANY_CATALOG_SOURCE_CHANGED");
   }
-  async function readCatalogValue() {
+  function ensureBuilt(options) {
+    return runWork(async () => {
+      // Another lease can fill the compact store while this caller waits.
+      // Recheck before constructing any full source or shared build promise.
+      if (memory?.sourceRevision === await revision()) return;
+      if (!building) {
+        const task = rebuild(options);
+        building = task;
+        task.finally(() => { if (building === task) building = null; }).catch(() => {});
+      }
+      await building;
+    }, { ...options, kind: "company-catalog-build" });
+  }
+  async function readCatalogValue(options) {
     let builtThisRead = false;
     for (let attempt = 0; attempt < 3; attempt++) {
       const currentEpoch = epoch, currentRevision = await revision();
@@ -184,19 +201,14 @@ function createCompanyIntegratedCatalog({ dataDir, catalog, readRevision, versio
           calculatedAt: candidate.calculatedAt, bytes: Buffer.byteLength(JSON.stringify(candidate)) };
         return asCatalog(candidate.value);
       }
-      if (!building) {
-        const task = rebuild();
-        building = task;
-        task.finally(() => { if (building === task) building = null; }).catch(() => {});
-      }
-      await building;
+      await ensureBuilt(options);
       builtThisRead = true;
       // Always recheck a shared build against this caller's current source.
     }
     throw fault("COMPANY_CATALOG_SOURCE_CHANGED");
   }
-  async function readCatalog() {
-    try { return await readCatalogValue(); }
+  async function readCatalog(options) {
+    try { return await readCatalogValue(options); }
     catch (error) {
       const codes = ["COMPANY_CATALOG_SOURCE_UNAVAILABLE", "COMPANY_CATALOG_CACHE_UNAVAILABLE",
         "COMPANY_CATALOG_SOURCE_CHANGED", "COMPANY_CATALOG_TOO_LARGE", "COMPANY_CATALOG_INVALID"];

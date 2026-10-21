@@ -77,6 +77,11 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
     const nextMonth = new Date(`${monthStart}T00:00:00Z`);
     nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1);
     const monthEnd = new Date(nextMonth.getTime() - 86400000).toISOString().slice(0, 10);
+    // This catalog already owns the prepared capacity/correction inputs. Share
+    // its company references across saved-run reads instead of making each
+    // loadRun parse the complete company master again. Keep the entire catalog:
+    // narrowing it to report targets could change other items' capacity bases.
+    const capacityCompanies = [...data.rawCompanies.values()];
     const eligibleRuns = new Map((data.runs || []).filter(run => {
       const day = observedDay(run.collectedAt);
       return ["complete", "reused", "partial"].includes(quality(run)) && run.collectedAtSource !== "filesystem"
@@ -85,7 +90,7 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
     }).map(run => [String(run.id || run.runId || ""), run]));
     const catalogCompanies = new Map((data.companies || []).map(company => [company.companyId, company]));
     const targetsByRun = new Map();
-    for (const company of data.rawCompanies.values()) {
+    for (const company of capacityCompanies) {
       await checkpoint();
       if (!company?.companyId || company.deletedAt || company.mergedIntoCompanyId || !hasInventoryCorrection(company)
         || !inScope(request, company, catalogCompanies.get(company.companyId), eligibleRuns)) continue;
@@ -101,7 +106,7 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
       await checkpoint();
       const originalRun = eligibleRuns.get(id);
       let stored;
-      try { stored = await loadRun(id, { ...READ_ONLY_RUN_OPTIONS }); } catch { throw unavailable(); }
+      try { stored = await loadRun(id, { ...READ_ONLY_RUN_OPTIONS, capacityCompanies }); } catch { throw unavailable(); }
       if (!stored?.run || String(stored.run.id || stored.run.runId || "") !== id || !Array.isArray(stored.availability?.items)) throw unavailable();
       // A provider failure found in the loaded run cannot be promoted by the
       // correction. Missing legacy metadata is still gated by the run catalog.

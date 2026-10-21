@@ -101,7 +101,9 @@ async function child(mode) {
     return { source: { companies, observations, runs, rankObservations, regions: REGIONS },
       catalog: { companies, rawCompanies, runs, regions: REGIONS } };
   }
-  const service = createService({ now: () => clock, sources: {
+  // Keep the pre-existing TTL/eviction regression under an explicit allowance;
+  // the separate uncached mode verifies the smaller production-default budget.
+  const service = createService({ now: () => clock, ...(mode === "uncached" ? {} : { sourceCacheMaxBytes: 128 * 1024 * 1024 }), sources: {
     loadSourcesWithCatalog: async request => {
       // End the WeakRef keep-alive job before checking a previous allocation.
       await new Promise(resolve => setImmediate(resolve));
@@ -132,6 +134,19 @@ async function child(mode) {
   assert.ok(Math.abs(first.summary.reservationRate - .3) < Number.EPSILON);
   assert.equal(first.summary.estimatedRevenue, 5 * DAYS_PER_RUN * 300);
   const original = stableResult(first);
+  if (mode === "uncached") {
+    const latest = weakSources.at(-1);
+    assert.equal(digestRows(latest.rows.deref()), latest.digest, "the original retained evidence is not trimmed to fit the cache");
+    first = null;
+    await new Promise(resolve => setImmediate(resolve)); global.gc();
+    assert.ok(weakSources.every(source => source.rows.deref() === undefined), "the default 8 MiB budget must release an oversize completed source without waiting for TTL");
+    const reloaded = await service.analyze(query("2026-09", REGIONS[0].id));
+    assert.deepEqual(stableResult(reloaded), original, "not caching an oversize source cannot change any result value");
+    assert.deepEqual(reads, ["2026-09", "2026-09"]);
+    await service.stop();
+    console.log(JSON.stringify({ status: "passed", mode, observationsPerRead: RUN_COUNT * 20 * DAYS_PER_RUN,
+      peakRssMiB: Math.round(process.resourceUsage().maxRSS / 1024), samples })); return;
+  }
   unchangedSource(); memory("first-analysis");
   // The other regional condition uses the same unexpired source allocation.
   const otherRegion = await service.analyze(query("2026-09", REGIONS[1].id));
@@ -212,6 +227,8 @@ async function main() {
   assert.equal(current.status, 0, "current cache must pass bounded-heap and source-retention checks");
   const idle = runChild("idle");
   assert.equal(idle.status, 0, "idle expiry must release full sources before another engine allocates");
-  console.log("Industry memory fixture passed: regional reuse, idle and replacement release, unchanged hashes and exact outputs.");
+  const uncached = runChild("uncached");
+  assert.equal(uncached.status, 0, "the default byte budget must release an oversize source immediately and preserve recalculated values");
+  console.log("Industry memory fixture passed: bounded cache, regional reuse, idle and replacement release, unchanged hashes and exact outputs.");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

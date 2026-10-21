@@ -60,6 +60,51 @@ function compactIndustrySources(source, catalog) {
     runs: (source.runs || []).map(run => ({ ...pick(run, RUN_FIELDS), collectionQuality: { status: qualityOf(run) } })) };
   return { source: compact, catalog: { companies, regions: catalog.regions } };
 }
+function sourceCacheFits(value, maxBytes) {
+  // Bound retained source size without allocating its full JSON encoding. Walk
+  // one child at a time, account for UTF-8/UTF-16 strings, keys and containers,
+  // and stop at the budget. Shared observation/company references count once.
+  let bytes = 0;
+  const seen = new WeakSet(), stack = [{ kind: "value", value }];
+  const add = amount => { bytes += amount; return bytes <= maxBytes; };
+  const stringBytes = text => Math.max(text.length * 2, Buffer.byteLength(text, "utf8"));
+  function* ownKeys(object) { for (const key in object) if (Object.hasOwn(object, key)) yield key; }
+  while (stack.length) {
+    const frame = stack.pop();
+    if (frame.kind === "array") {
+      if (frame.index < frame.value.length) {
+        const child = frame.value[frame.index++]; stack.push(frame, { kind: "value", value: child });
+      }
+      continue;
+    }
+    if (frame.kind === "object") {
+      const next = frame.keys.next();
+      if (!next.done) {
+        if (!add(8 + stringBytes(next.value))) return false;
+        stack.push(frame, { kind: "value", value: frame.value[next.value] });
+      }
+      continue;
+    }
+    const item = frame.value;
+    if (typeof item === "string") { if (!add(stringBytes(item))) return false; continue; }
+    if (item === null || ["number", "boolean", "undefined"].includes(typeof item)) { if (!add(8)) return false; continue; }
+    if (typeof item !== "object") return false;
+    if (seen.has(item)) continue;
+    seen.add(item);
+    if (!add(32)) return false;
+    if (Array.isArray(item)) {
+      if (!add(item.length * 8)) return false;
+      stack.push({ kind: "array", value: item, index: 0 });
+    } else {
+      const prototype = Object.getPrototypeOf(item);
+      // Source adapters normally return plain saved JSON. Unknown containers
+      // have hidden retention costs and remain usable without completed caching.
+      if (prototype !== Object.prototype && prototype !== null) return false;
+      stack.push({ kind: "object", value: item, keys: ownKeys(item) });
+    }
+  }
+  return true;
+}
 function normalizeRequest(input = {}, now = new Date()) {
   const industry = ({ camping: "campground", poolvilla: "poolVilla" })[input.industry] || input.industry || "glamping";
   if (!INDUSTRIES.some(item => item.id === industry)) throw fail("invalid_industry", "업종을 확인해 주세요.");
@@ -406,7 +451,9 @@ function buildIndustryAnalysis(source = {}, input = {}, { now = new Date() } = {
 }
 
 function createIndustryAnalysisService({ sources, readContext = async () => ({ sources: [], warnings: [], networkAttempted: false }), now = () => new Date(),
-  dataDir = null, calculationVersion, autoStart = true, readSourceRevision = null, savedReferenceRevisionScope = null }) {
+  dataDir = null, calculationVersion, autoStart = true, readSourceRevision = null, savedReferenceRevisionScope = null,
+  runWork = operation => operation(), sourceCacheMaxBytes = 8 * 1024 * 1024 }) {
+  if (typeof runWork !== "function" || !Number.isSafeInteger(sourceCacheMaxBytes) || sourceCacheMaxBytes < 0) throw new TypeError("Invalid industry work/cache options");
   const sourceCache = new Map();
   const pendingSources = new Map();
   let sourceReadQueue = Promise.resolve(), sourceEpoch = 0, optionsTask = null, backgroundOptions = Promise.resolve();
@@ -470,7 +517,7 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
       }
       // Publish before the queue advances, so its next reader can evict this
       // source before allocating another month. Invalidation cannot repopulate it.
-      if (epoch === sourceEpoch && !serviceStopped) {
+      if (epoch === sourceEpoch && !serviceStopped && sourceCacheFits(value, sourceCacheMaxBytes)) {
         sourceCache.set(key, { value, expires: new Date(now()).getTime() + 30000 });
         scheduleSourceExpiry();
       }
@@ -485,7 +532,10 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     }
   }
   async function calculateOptions() {
-    const [options, catalog] = await Promise.all([sources.options({ priority: "background" }), sources.catalog({ priority: "background" })]);
+    // Options may have its own coalesced source flight. Do not own an outer
+    // analytical lease while awaiting it, and finish it before retaining catalog.
+    const options = await sources.options({ priority: "background" });
+    const catalog = await sources.catalog({ priority: "background" });
     const runMap = new Map((catalog.runs || []).map(run => [String(run.id || run.runId), run]));
     const today = options.today || new Date(new Date(now()).getTime() + 9 * 3600000).toISOString().slice(0, 10);
     const evidenceMonths = new Set();
@@ -507,15 +557,17 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
       defaultMonth, availableEvidenceMonths, defaultIndustry: "glamping", today, cohort: COHORT, features: FEATURES, scalePolicy: DEFERRED_SCALE };
   }
   async function calculate(input) {
-    const date = now(), request = normalizeRequest(input, date);
-    const { source, catalog } = await savedSource(request, date);
-    const result = buildIndustryAnalysis(source, request, { now: date });
-    if (request.region !== "all") {
-      const context = await readContext({ type: "region", targetId: request.region, month: request.month, cutoffDate: request.cutoffDate }, { ...catalog, companies: source.companies });
-      if (context?.networkAttempted) throw Object.assign(new Error("저장된 지역 지표만 사용할 수 있습니다."), { code: "INDUSTRY_CONTEXT_MUST_BE_CACHE_ONLY", statusCode: 503 });
-      result.context = context;
-    } else result.context.warnings = ["지역을 선택하면 저장된 방문·체류·소비 지표를 함께 확인할 수 있습니다. 사천은 남해안 지표 지역에 포함합니다."];
-    return result;
+    return runWork(async () => {
+      const date = now(), request = normalizeRequest(input, date);
+      const { source, catalog } = await savedSource(request, date);
+      const result = buildIndustryAnalysis(source, request, { now: date });
+      if (request.region !== "all") {
+        const context = await readContext({ type: "region", targetId: request.region, month: request.month, cutoffDate: request.cutoffDate }, { ...catalog, companies: source.companies });
+        if (context?.networkAttempted) throw Object.assign(new Error("저장된 지역 지표만 사용할 수 있습니다."), { code: "INDUSTRY_CONTEXT_MUST_BE_CACHE_ONLY", statusCode: 503 });
+        result.context = context;
+      } else result.context.warnings = ["지역을 선택하면 저장된 방문·체류·소비 지표를 함께 확인할 수 있습니다. 사천은 남해안 지표 지역에 포함합니다."];
+      return result;
+    }, { priority: "background", kind: "industry-build", detached: true });
   }
   if (!dataDir) return { options: calculateOptions, analyze: calculate, rebuild: calculate,
     classifyCompanyIndustryIds: company => industryIds(company || {}),

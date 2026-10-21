@@ -27,6 +27,8 @@ const { createIndustryAnalysisService } = require("./lib/industry_analysis.cjs")
 const { createIndustryAnalysisHttpHandler } = require("./lib/industry_analysis_http.cjs");
 const { createIndustrySourceRevision } = require("./lib/industry_source_revision.cjs");
 const { createCompanyIntegratedDb } = require("./lib/company_integrated_db.cjs");
+const { createAnalyticalWorkScheduler } = require("./lib/analytical_work_scheduler.cjs");
+const { createAnalyticalMemorySampler } = require("./lib/analytical_memory.cjs");
 const { createCompanyIntegratedCatalog, createCompanyIntegratedCatalogRevision, createRevisionCheckedCompanyCatalog } = require("./lib/company_integrated_catalog.cjs");
 const { createCompanyIntegratedTargets } = require("./lib/company_integrated_targets.cjs");
 const { createCompanyCapacityRegistry } = require("./lib/company_capacity_registry.cjs");
@@ -149,6 +151,7 @@ const companyDetailStore = createCompanyDetailStore({
   // it is deliberately absent from the integrated-month engine fingerprint.
   projectionVersion: crypto.createHash("sha256").update(fs.readFileSync(__filename))
     .update(fs.readFileSync(path.join(__dirname, "lib", "company_detail_store.cjs")))
+    .update(fs.readFileSync(path.join(__dirname, "lib", "company_master_stream.cjs")))
     .update(fs.readFileSync(path.join(__dirname, "inventory_estimation.cjs")))
     .update(fs.readFileSync(path.join(__dirname, "lib", "inventory_manual_corrections.cjs")))
     .update(fs.readFileSync(path.join(__dirname, "verified_room_inventory.json"))).digest("hex"),
@@ -568,7 +571,11 @@ const companyCapacityRegistry = createCompanyCapacityRegistry({
 const readMonthlyReportRevision = createMonthlyReportSourceRevision({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR,
     regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
     tourismRegionMapFile: path.join(WEB_DIR, "data", "tourism_region_map.json"), includeContext: false });
+const analyticalMemory = createAnalyticalMemorySampler();
+const analyticalWork = createAnalyticalWorkScheduler({ sampleMemory: analyticalMemory.sample, highWatermark: 0.65, lowWatermark: 0.55 });
+const runAnalyticalWork = (operation, options) => analyticalWork.run(operation, options);
 const monthlyReportSources = createMonthlyReportSources({
+  runWork: runAnalyticalWork,
   dataDir: DATA_DIR,
   regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
   readRevision: readMonthlyReportRevision,
@@ -605,10 +612,10 @@ const readCompanyCatalogRevision = createCompanyIntegratedCatalogRevision({
 // consumer captures this function. A late pre-edit flight must never be
 // certified against a post-edit revision by the compact store.
 monthlyReportSources.catalog = createRevisionCheckedCompanyCatalog({
-  catalog: monthlyReportSources.catalog, readRevision: readCompanyCatalogRevision
+  catalog: monthlyReportSources.catalog, readRevision: readCompanyCatalogRevision, runWork: runAnalyticalWork
 });
 const companyIntegratedCatalog = createCompanyIntegratedCatalog({
-  dataDir: DATA_DIR, catalog: monthlyReportSources.catalog,
+  dataDir: DATA_DIR, catalog: monthlyReportSources.catalog, runWork: runAnalyticalWork,
   readRevision: readCompanyCatalogRevision,
   version: crypto.createHash("sha256").update("company-integrated-catalog-projection-v1\n")
     .update(fs.readFileSync(path.join(__dirname, "lib", "company_integrated_catalog.cjs")))
@@ -622,12 +629,14 @@ const listCompanyIntegratedTargets = createCompanyIntegratedTargets({
     regionMasterFile: path.join(WEB_DIR, "data", "region_master.json") })
 });
 const readIndustryRevision = createIndustrySourceRevision({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR,
+    runWork: runAnalyticalWork,
     regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
     tourismRegionMapFile: path.join(WEB_DIR, "data", "tourism_region_map.json") });
 const savedIndustryRevisionScope = readMonthlyReportRevision.industrySourceScope
   && readMonthlyReportRevision.industrySourceScope === readIndustryRevision.industrySourceScope
     ? readMonthlyReportRevision.industrySourceScope : null;
 const industryAnalysisService = createIndustryAnalysisService({
+  runWork: runAnalyticalWork,
   dataDir: DATA_DIR, sources: monthlyReportSources, readContext: readMonthlyRegionContext,
   readSourceRevision: readIndustryRevision, savedReferenceRevisionScope: savedIndustryRevisionScope
 });
@@ -667,11 +676,12 @@ const readCompanyIntegratedRevision = createCompanyIntegratedSourceRevision({
   calculationFiles: ["company_integrated_db.cjs", "monthly_reports.cjs", "monthly_report_comparison.cjs",
     "monthly_report_sources.cjs", "monthly_report_context.cjs", "monthly_company_recalculation.cjs",
     "company_capacity_registry.cjs", "monthly_report_insights.cjs", "industry_analysis.cjs",
-    "inventory_manual_corrections.cjs"].map(name => path.join(__dirname, "lib", name))
+    "inventory_manual_corrections.cjs", "company_master_stream.cjs"].map(name => path.join(__dirname, "lib", name))
     .concat([path.join(__dirname, "inventory_estimation.cjs"), path.join(__dirname, "verified_room_inventory.json")]),
   calculationFingerprint: companyIntegratedCalculationFingerprint()
 });
 const companyIntegratedDb = createCompanyIntegratedDb({
+  runWork: runAnalyticalWork,
   dataDir: DATA_DIR, loadSources: monthlyReportSources.loadSources, catalog: companyIntegratedCatalog.catalog,
   listTargets: listCompanyIntegratedTargets, readRevision: readCompanyIntegratedRevision
 });
@@ -688,6 +698,7 @@ async function queueIntegratedCompanies(companyIds, reason) {
   catch (error) { console.error("company_integration_queue_failed", error.code || "unavailable"); }
 }
 const monthlyReportService = createMonthlyReportService({
+  runWork: runAnalyticalWork,
   dataDir: path.join(DATA_DIR, "monthly_reports"), loadSources: monthlyReportSources.loadSources,
   readSourceRevision: monthlyReportSources.readRevision, readReportContext: readMonthlyRegionContext,
   runInteractiveRead: monthlyReportSources.runInteractiveRead,
@@ -2154,7 +2165,11 @@ async function enqueueCollectionPostprocess(job, result, { endedAt, stageTimings
 }
 
 async function processCollectionPostprocess(runId, context) {
-  const stages = {}, began = Date.now();
+  const waitingAt = Date.now();
+  return runAnalyticalWork(() => processCollectionPostprocessOwned(runId, context, Date.now() - waitingAt), { priority: "foreground", kind: "collection-postprocess" });
+}
+async function processCollectionPostprocessOwned(runId, context, analyticalWaitMs = 0) {
+  const stages = { analyticalWaitMs }, began = Date.now();
   const step = async (key, work) => {
     const started = Date.now();
     try { return await work(); }
@@ -15506,10 +15521,10 @@ async function storeRunHistoryEvidence(runId, observations = []) {
 
 async function appendHistoryForRun(runId, options = {}) {
   const waitingAt = Date.now();
-  return companyIntegratedDb.deferProcessing(() => sharedWrite(() => {
+  return runAnalyticalWork(() => companyIntegratedDb.deferProcessing(() => sharedWrite(() => {
     options.onStage?.("historyWriteWaitMs", Date.now() - waitingAt);
     return appendHistoryForRunUnlocked(runId, options);
-  }));
+  })), { priority: "foreground", kind: "history-ingestion" });
 }
 
 async function appendHistoryForRunUnlocked(runId, options = {}) {
@@ -19178,6 +19193,11 @@ async function route(req, res) {
       return send(res, 200, result);
     }
 
+    if (reqUrl.pathname === "/api/analytical-work") {
+      if (!requireAdminSession(session, req, res)) return;
+      if (req.method !== "GET") return send(res, 405, { error: "Method not allowed" });
+      return send(res, 200, { work: analyticalWork.status(), memory: analyticalMemory.status() });
+    }
     if (reqUrl.pathname === "/api/collection-postprocess") {
       if (!requireAdminSession(session, req, res)) return;
       if (req.method !== "GET") return send(res, 405, { error: "Method not allowed" });

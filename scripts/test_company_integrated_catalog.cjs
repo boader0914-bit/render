@@ -8,6 +8,7 @@ const { createCompanyIntegratedCatalog, createCompanyIntegratedCatalogRevision, 
 const { createMonthlyReportSelectorRevision } = require("./lib/monthly_report_selector_revision.cjs");
 const { createCompanyIntegratedDb } = require("./lib/company_integrated_db.cjs");
 const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs");
+const { createAnalyticalWorkScheduler } = require("./lib/analytical_work_scheduler.cjs");
 const clone = value => JSON.parse(JSON.stringify(value));
 const copyCatalog = source => ({ ...clone({ ...source, rawCompanies: Object.fromEntries(source.rawCompanies) }),
   rawCompanies: new Map([...source.rawCompanies].map(([id, value]) => [id, clone(value)])) });
@@ -403,4 +404,59 @@ test("a real monthly catalog changing on both whole-flight attempts fails bounde
   await assert.rejects(cache.catalog());
   assert.equal(changingReads, 2, "the shared full catalog itself permits at most two verification attempts");
   assert.deepEqual(await fs.readFile(f.file), before, "an unstable full catalog must not certify or publish an old compact result");
+});
+
+async function until(check) {
+  for (let attempt = 0; attempt < 500; attempt++) {
+    if (check()) return;
+    await new Promise(resolve => setTimeout(resolve, 2));
+  }
+  assert.fail("expected scheduling barrier was not reached");
+}
+
+test("a verified catalog flight queued outside a heavy owner cannot deadlock that owner's nested catalog", { timeout: 5000 }, async t => {
+  const f = await revisionFixture(t), scheduler = createAnalyticalWorkScheduler(), entered = deferred(), release = deferred();
+  const runWork = (operation, options) => scheduler.run(operation, options);
+  const source = createMonthlyReportSources({ dataDir: f.root, regionMasterFile: f.regions, listRuns: async () => [],
+    capacityForCompany: company => company.manualCorrection.lodgingBasisTotal, runWork });
+  const checked = createRevisionCheckedCompanyCatalog({ catalog: source.catalog, readRevision: f.reader, runWork });
+  const blocker = runWork(async () => { entered.resolve(); await release.promise; }, { kind: "ingestion" }); await entered.promise;
+  const external = checked({ priority: "background" });
+  await until(() => scheduler.status().queuedBackground === 1);
+  const owner = runWork(() => checked(), { priority: "foreground", kind: "company-month" });
+  release.resolve(); const [, whole, nested] = await Promise.all([blocker, external, owner]);
+  assert.equal(whole.companies[0].companyId, f.id); assert.deepEqual(nested, whole);
+  await scheduler.close();
+});
+
+test("a cold compact rebuild flight is created after lease admission and a nested owner may pass its queued caller", { timeout: 5000 }, async t => {
+  const f = await fixture(t), scheduler = createAnalyticalWorkScheduler(), entered = deferred(), release = deferred();
+  const runWork = (operation, options) => scheduler.run(operation, options);
+  const cache = f.make({ runWork, catalog: options => runWork(() => f.options.catalog(), { ...options, kind: "full-source-catalog" }) });
+  const blocker = runWork(async () => { entered.resolve(); await release.promise; }, { kind: "ingestion" }); await entered.promise;
+  const external = cache.catalog({ priority: "background" });
+  await until(() => scheduler.status().queuedBackground === 1);
+  const owner = runWork(() => cache.catalog(), { priority: "foreground", kind: "company-month" });
+  release.resolve(); const [, compact, nested] = await Promise.all([blocker, external, owner]);
+  assert.equal(compact.companies[0].capacity, 16); assert.deepEqual(nested, compact);
+  assert.equal(f.state.builds, 1, "the queued builder rechecks the compact result after the nested owner fills it");
+  await scheduler.close();
+});
+
+test("memory and persisted compact hits bypass a busy heavy lease even while background work is memory-paused", { timeout: 5000 }, async t => {
+  const f = await fixture(t); let ratio = 0.1;
+  const scheduler = createAnalyticalWorkScheduler({ sampleMemory: async () => ({ ratio }) });
+  const runWork = (operation, options) => scheduler.run(operation, options);
+  const cache = f.make({ runWork }); await cache.prepare(); const before = await fs.readFile(f.file), beforeStat = await fs.stat(f.file, { bigint: true });
+  const entered = deferred(), release = deferred();
+  const blocker = runWork(async () => { entered.resolve(); await release.promise; }, { kind: "unrelated-heavy-work" }); await entered.promise;
+  ratio = 0.9; await scheduler.checkpointPressure();
+  let queuedRan = false; const pending = runWork(() => { queuedRan = true; }, { priority: "background" });
+  const rejected = assert.rejects(pending, { code: "ANALYTICAL_WORK_CLOSED" });
+  const memoryHit = await cache.catalog(), savedHit = await f.make({ runWork }).catalog();
+  assert.deepEqual(memoryHit, savedHit); assert.equal(f.state.builds, 1); assert.equal(queuedRan, false);
+  assert.equal(scheduler.status().activeKind, "unrelated-heavy-work"); assert.equal(scheduler.status().memory.paused, true);
+  assert.deepEqual(await fs.readFile(f.file), before);
+  const afterStat = await fs.stat(f.file, { bigint: true }); assert.deepEqual([afterStat.ino, afterStat.mtimeNs], [beforeStat.ino, beforeStat.mtimeNs]);
+  release.resolve(); await blocker; await scheduler.close(); await rejected;
 });

@@ -15,7 +15,7 @@ const { performance } = require("node:perf_hooks");
 const { seedMonthlyReportFixture } = require("./fixtures/monthly_report_fixture.cjs");
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-const COUNTERS = ["fullCatalogCalls", "capacityPrepareCalls", "historyStreams", "historyFileReads", "companySourceReads", "externalRequests"];
+const COUNTERS = ["fullCatalogCalls", "targetCatalogCalls", "capacityPrepareCalls", "historyStreams", "historyFileReads", "companySourceReads", "externalRequests"];
 
 async function main() {
   const deadline = Date.now() + 45000;
@@ -34,7 +34,7 @@ async function main() {
       releaseFile = path.join(dataDir, `catalog-release-${ordinal}.flag`), preloadFile = path.join(dataDir, `catalog-preload-${ordinal}.cjs`);
     await fs.writeFile(preloadFile, `
       const fs = require('node:fs'), fsp = require('node:fs/promises'), path = require('node:path');
-      const audit = { fullCatalogCalls:0, capacityPrepareCalls:0, historyStreams:0, historyFileReads:0,
+      const audit = { fullCatalogCalls:0, targetCatalogCalls:0, capacityPrepareCalls:0, historyStreams:0, historyFileReads:0,
         companySourceReads:0, externalRequests:0, catalogPrewarmLogs:0, bootstrapEntered:false, bootstrapCompleted:false, bootstrapErrorCode:null };
       const write = fs.writeFileSync.bind(fs), auditPath = ${JSON.stringify(auditFile)};
       let auditSequence = 0;
@@ -65,8 +65,9 @@ async function main() {
       const sources = require(${JSON.stringify(path.join(repo, "scripts/lib/monthly_report_sources.cjs"))});
       const originalSources = sources.createMonthlyReportSources;
       sources.createMonthlyReportSources = options => {
-        const service = originalSources(options), catalog = service.catalog, load = service.loadSources;
+        const service = originalSources(options), catalog = service.catalog, targets = service.targetCatalog, load = service.loadSources;
         service.catalog = (...args) => { audit.fullCatalogCalls++; save(); return catalog(...args); };
+        service.targetCatalog = (...args) => { audit.targetCatalogCalls++; save(); return targets(...args); };
         service.loadSources = (request,...args) => { if(request.type === 'company') { audit.companySourceReads++; save(); } return load(request,...args); };
         return service;
       };
@@ -188,7 +189,7 @@ async function main() {
     // Release the barrier and let the actual startup/core verify and resume.
     await second.release(); const state = await second.idle(), finalAudit = await second.audit();
     assert.equal(state.bootstrap.queued, 0); assert.ok(state.bootstrap.reused >= 3);
-    assert.ok(finalAudit.fullCatalogCalls > after.fullCatalogCalls, "real target discovery still runs after release");
+    assert.ok(finalAudit.targetCatalogCalls > after.targetCatalogCalls, "real lightweight target discovery still runs after release");
     assert.equal(finalAudit.companySourceReads, 0, "closed unchanged months remain reusable");
     assert.equal(finalAudit.externalRequests, 0);
     assert.deepEqual(await fs.readFile(monthFile), savedMonth);

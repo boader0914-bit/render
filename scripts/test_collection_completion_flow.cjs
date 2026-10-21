@@ -9,6 +9,7 @@ const { setTimeout: delay } = require("node:timers/promises");
 const { inspectManifest, inspectResult, allowsDerivedUpdates } = require("./daily_collection_quality.cjs");
 const { createCollectionRotationScheduler, defaultConfig } = require("./collection_rotation_scheduler.cjs");
 const { createCollectionPostprocessQueue } = require("./lib/collection_postprocess_queue.cjs");
+const { createAnalyticalWorkScheduler } = require("./lib/analytical_work_scheduler.cjs");
 const source = fs.readFileSync(path.join(__dirname, "glamping_app_server.cjs"), "utf8");
 const plain = value => JSON.parse(JSON.stringify(value));
 const sha = value => crypto.createHash("sha256").update(value).digest("hex");
@@ -56,7 +57,9 @@ async function fixture(t, options = {}) {
     ? { status: "failed", reason: "manifest_unreadable" } : inspectManifest(manifest);
   const contextStore = new AsyncLocalStorage(), lanes = Object.fromEntries(["manual", "scheduled", "web"].map(key => [key, {
     key, activeCrawlPromise: null, activeCrawlJob: null, activeCrawlChild: null, crawlQueue: [] }]));
-  const calls = { enqueue: [], release: [], heavy: [], ready: [], stop: [], next: [] }, rows = new Map();
+  const calls = { enqueue: [], release: [], heavy: [], ready: [], stop: [], next: [], analytical: [] }, rows = new Map();
+  const analyticalWork = createAnalyticalWorkScheduler();
+  cleanup.push(() => analyticalWork.close());
   const forbidHeavy = name => async () => { calls.heavy.push(name); throw Error(`${name} must not run before collection completion`); };
   const queue = { enqueue: async (id, config) => {
     calls.enqueue.push({ runId: id, options: plain(config || {}) });
@@ -78,6 +81,7 @@ async function fixture(t, options = {}) {
     COLLECTOR_EXECUTION_MODE: options.localChild ? "local" : "worker", USER_ROLES: { admin: "admin", b2b: "b2b" },
     crawlLanes: lanes, crawlLane: () => contextStore.getStore() || lanes.manual,
     withCrawlLane: (key, operation) => contextStore.run(lanes[key], operation), collectionPostprocessQueue: queue,
+    runAnalyticalWork: (operation, options) => { calls.analytical.push(plain(options)); return analyticalWork.run(operation, options); },
     collectionRotationScheduler: { isEnabled: () => true }, pausedScheduleOccurrences: new Set(), collectorBrokerReady: Promise.resolve(),
     crawlExecutionPlan: plan, normalizeCollectionSource: value => value || "admin_search", sourceRoleForCollectionSource: () => "admin",
     collectionSourceLabel: () => "관리자", normalizeSearchMode: value => value || "keyword", scheduledCrawlerPacingEnv: () => ({}),
@@ -95,7 +99,7 @@ async function fixture(t, options = {}) {
     spawn: () => { const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
       setImmediate(() => { child.stdout.emit("data", Buffer.from(JSON.stringify(output))); child.emit("close", 0); }); return child; },
     crawlCancelledError: () => Object.assign(Error("cancelled"), { cancelled: true }) });
-  for (const name of ["resolveCrawlJob", "enqueueCollectionPostprocess", "processCollectionPostprocess", "releaseCommittedCollectionPostprocess", "withCollectionPostprocess",
+  for (const name of ["resolveCrawlJob", "enqueueCollectionPostprocess", "processCollectionPostprocessOwned", "processCollectionPostprocess", "releaseCommittedCollectionPostprocess", "withCollectionPostprocess",
     "runCrawlerInternal", "startCrawlJob"]) vm.runInContext(extract(name), c);
   async function run(overrides = {}) {
     const workerKey = overrides.workerKey || options.workerKey || "manual";
@@ -107,7 +111,7 @@ async function fixture(t, options = {}) {
     contextStore.run(lanes[workerKey], () => c.startCrawlJob(job));
     return { job, result: await promptly(job.promise, "archive completion waited for derived processing") };
   }
-  return { c, calls, lanes, queue, rows, run, runId, outputDir, manifest, collectionQuality, temporary, cleanup,
+  return { c, calls, lanes, queue, rows, run, runId, outputDir, manifest, collectionQuality, temporary, cleanup, analyticalWork,
     rawHashes: async () => ({ manifest: options.missingManifest ? null : sha(await fsp.readFile(path.join(outputDir, "manifest.json"))),
       csv: sha(await fsp.readFile(path.join(outputDir, "rows.csv"))) }) };
 }
@@ -194,6 +198,26 @@ test("later derived-work failure cannot rewrite the already-completed collection
   await assert.rejects(f.c.processCollectionPostprocess(f.runId, context), /history must not run before collection completion/);
   assert.equal(result.collectionQuality.status, "complete"); assert.equal(f.lanes.manual.activeCrawlJob, null);
   assert.deepEqual(await f.rawHashes(), before); assert.deepEqual(f.calls.heavy, ["history"]);
+});
+
+test("postprocess waits for the analytical lease without holding the collection lane or touching published evidence", async t => {
+  const f = await fixture(t), { result } = await f.run(), before = await f.rawHashes();
+  let unblock, announce;
+  const entered = new Promise(resolve => { announce = resolve; });
+  const background = f.analyticalWork.run(async () => { announce(); await new Promise(resolve => { unblock = resolve; }); },
+    { priority: "background", kind: "fixture-existing-analysis" });
+  await promptly(entered, "background analytical fixture did not acquire its lease");
+  const processing = f.c.processCollectionPostprocess(f.runId, f.calls.enqueue[0].options.context).catch(error => error);
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(f.calls.heavy, [], "queued DB work must not allocate history before the shared lease");
+    assert.equal(f.lanes.manual.activeCrawlJob, null); assert.equal(result.collectionQuality.status, "complete");
+    assert.equal(f.analyticalWork.status().queuedForeground, 1);
+    assert.deepEqual(f.calls.analytical, [{ priority: "foreground", kind: "collection-postprocess" }]);
+    assert.deepEqual(await f.rawHashes(), before);
+  } finally { unblock(); await background; }
+  assert.match((await processing).message, /history must not run before collection completion/);
+  assert.deepEqual(await f.rawHashes(), before);
 });
 
 test("derived execution rechecks saved evidence and refuses an artifact changed after admission", async t => {

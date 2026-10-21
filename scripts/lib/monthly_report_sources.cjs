@@ -9,6 +9,7 @@ const { monthlyReportKeywordMembership } = require("./monthly_reports.cjs");
 const { industryCompanyReference } = require("./industry_analysis.cjs");
 const { createSourceReadScheduler } = require("./source_read_scheduler.cjs");
 const { createMonthlyReportMaterializedCache } = require("./monthly_report_materialized_cache.cjs");
+const { readCompanyMasterProjection } = require("./company_master_stream.cjs");
 
 const token = value => String(value || "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
 function sourceError() { return Object.assign(new Error("월간 집계에 필요한 저장자료를 읽지 못했습니다. 원본 상태를 확인해 주세요."), { statusCode: 503, code: "MONTHLY_SOURCE_UNAVAILABLE" }); }
@@ -21,7 +22,7 @@ async function readJson(file, fallback, checkpoint = async () => {}) {
   catch (error) { if (error.code === "ENOENT") return fallback; throw sourceError(); }
 }
 
-function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepareCompanies = null, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", now = () => new Date() }) {
+function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepareCompanies = null, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", now = () => new Date(), runWork = operation => operation() }) {
   const companyFile = path.join(dataDir, "company_master", "companies.json");
   const historyFile = path.join(dataDir, "history", "observations.jsonl");
   let catalogInFlight = null, targetCatalogInFlight = null, optionsInFlight = null;
@@ -34,10 +35,15 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     ? () => sourceReadScheduler.checkpoint({ priority: "background" }) : async () => {};
   async function readCatalog({ prepareCapacity = true, checkpoint = async () => {} } = {}) {
     await checkpoint();
-    const [master, regionMaster, runs] = await Promise.all([readJson(companyFile, { companies: {} }, checkpoint), readJson(regionMasterFile, { units: [] }, checkpoint), listRuns()]);
+    // Validate the complete document, retaining one parsed company at a time.
+    // A full UTF-8 master string must not coexist with its parsed inventories.
+    let master;
+    try { await fsp.access(companyFile); master = await readCompanyMasterProjection(companyFile, { checkpoint }); }
+    catch (error) { if (error.code === "ENOENT") master = { companies: {} }; else throw sourceError(); }
+    const [regionMaster, runs] = await Promise.all([readJson(regionMasterFile, { units: [] }, checkpoint), listRuns()]);
     if (!master.companies || typeof master.companies !== "object" || Array.isArray(master.companies)) throw sourceError();
     await checkpoint();
-    if (prepareCapacity && prepareCompanies) master.companies = await prepareCompanies(master.companies, { runs, checkpoint });
+    if (prepareCapacity && prepareCompanies) master.companies = await prepareCompanies(master.companies, { runs, checkpoint, shareReadOnlyInventory: true });
     const units = (regionMaster.units || []).filter(unit => unit.active && unit.selectable && ["local", "broad"].includes(unit.level));
     const industryRegions = units.map(unit => ({ id: unit.regionKey, label: unit.fullName || unit.name, level: unit.level, aliases: unit.aliases }));
     const idIndex = new Map(units.flatMap(unit => [unit.regionKey, unit.regionId].filter(Boolean).map(key => [key, unit])));
@@ -83,7 +89,8 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     }
     return { companies, rawCompanies, runs, regions: units.map(unit => ({ id: unit.regionKey, label: unit.fullName || unit.name, level: unit.level })) };
   }
-  async function catalog(options = {}) {
+  async function catalog(options = {}) { return runWork(() => catalogOwned(options), { ...options, kind: "source-catalog" }); }
+  async function catalogOwned(options = {}) {
     if (catalogInFlight) return catalogInFlight;
     // A public metadata lookup reconstructs the same complete master as a
     // source read. Admit it through the shared scheduler too. Internal readers
@@ -93,7 +100,8 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     try { return await task; }
     finally { if (catalogInFlight === task) catalogInFlight = null; }
   }
-  async function targetCatalog(options = {}) {
+  async function targetCatalog(options = {}) { return runWork(() => targetCatalogOwned(options), { ...options, kind: "source-targets" }); }
+  async function targetCatalogOwned(options = {}) {
     if (targetCatalogInFlight) return targetCatalogInFlight;
     // Month discovery needs identities, saved dates and run spans, never a
     // capacity rebuild. Keep this flight distinct from full analytical reads
@@ -164,7 +172,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
       // with raw readers, and the persistent cache validates before/after reads
       // and builds, so concurrent source edits never publish a stale list.
       const result = await selectorCache.getOrBuild({ key: String(selectorCacheVersion),
-        readRevision: readOptionsRevision, build: () => sourceReadScheduler.run(() => readOptionData(scheduling), scheduling) });
+        readRevision: readOptionsRevision, build: () => runWork(() => sourceReadScheduler.run(() => readOptionData(scheduling), scheduling), { ...scheduling, kind: "source-options" }) });
       return datedOptions(result.value, { status: result.status, storage: result.storage,
         calculatedAt: result.calculatedAt, checkedAt: new Date(now()).toISOString(),
         timings: { ...result.timings, totalMs: performance.now() - started } });
@@ -172,7 +180,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     if (optionsInFlight) return optionsInFlight;
     // Coalesce simultaneous selector requests without retaining a stale result
     // or placing a second raw master beside an active source reconstruction.
-    const task = sourceReadScheduler.run(async () => datedOptions(await readOptionData(scheduling)), scheduling);
+    const task = runWork(() => sourceReadScheduler.run(async () => datedOptions(await readOptionData(scheduling)), scheduling), { ...scheduling, kind: "source-options" });
     optionsInFlight = task;
     try { return await task; }
     finally { if (optionsInFlight === task) optionsInFlight = null; }
@@ -213,6 +221,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
     // industry sources need identity counts, so do not retain replaced raw
     // history payloads throughout saved-evidence recalculation.
     const needsMembershipEvidence = request.type === "keyword";
+    const companyScope = request.type === "company" ? String(request.targetId) : null;
     function addRow(row, fallback = false) {
       if (!String(row.stayDate || row.date || "").startsWith(request.month + "-")) return;
       const id = canonical(row);
@@ -221,6 +230,9 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
       const candidateId = id || canonical(row, true) || `unresolved-report-row-${unmatchedRows.length}`;
       if (needsMembershipEvidence) diagnosticInventoryRows.push({ ...row, companyId: candidateId, companyKey: candidateId });
       if (!id) { unmatchedRows.push({ candidateId }); return; }
+      // Identity conflicts and global diagnostics are counted above. Retain
+      // quantities only for the requested company, before correction/cloning.
+      if (companyScope !== null && id !== companyScope) return;
       const company = byId.get(id);
       const original = data.rawCompanies.get(id);
       const normalized = projectObservation({ ...row, companyKey: id }, original);
@@ -238,7 +250,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
         for (const run of exposure.runs || []) {
           const row = { ...run, companyKey: id, companyId: id, companyName: company.primaryName, keyword: exposure.keyword };
           if (needsMembershipEvidence) diagnosticRankRows.push(row);
-          if (!conflictingCompanyIds.has(id)) rankObservations.push(row);
+          if (!conflictingCompanyIds.has(id) && (companyScope === null || id === companyScope)) rankObservations.push(row);
         }
       }
       // Some recovered runs have only a persisted company snapshot. Their run
@@ -314,7 +326,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, prepa
   function queueSourceRead(request, includeCatalog = false, options = {}) {
     // All consumers (including background company materialization) share this
     // queue. Separate UI/service queues cannot protect the shared heap alone.
-    return sourceReadScheduler.run(() => readSources(request, includeCatalog, options), options);
+    return runWork(() => sourceReadScheduler.run(() => readSources(request, includeCatalog, options), options), { ...options, kind: "source-read" });
   }
   return { options, loadSources: (request, options) => queueSourceRead(request, false, options), catalog, targetCatalog,
     loadSourcesWithCatalog: (request, options) => queueSourceRead(request, true, options),

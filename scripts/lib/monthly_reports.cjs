@@ -503,7 +503,7 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}) 
 
 function createMonthlyReportService({ dataDir, loadSources, readSourceRevision = null, readReportContext = null,
   readOutlookEvaluations = null, readIndustryContext = null, runInteractiveRead = operation => operation(),
-  calculationVersion = "monthly-base-v1", now = () => new Date() } = {}) {
+  calculationVersion = "monthly-base-v1", now = () => new Date(), runWork = operation => operation() } = {}) {
   if (typeof dataDir !== "string" || !dataDir || typeof loadSources !== "function") throw new TypeError("dataDir and loadSources are required");
   const directory = path.resolve(dataDir);
   const previews = new Map();
@@ -573,7 +573,7 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
   };
   const buildBase = (request, generatedAt) => {
     const queuedAt = performance.now();
-    const task = buildQueue.then(async () => {
+    const task = buildQueue.then(() => runWork(async () => {
       const timings = { buildQueueWaitMs: performance.now() - queuedAt };
       let phase = performance.now();
       const source = await loadSources(clone(request), { priority: "foreground", includeContext: typeof readReportContext !== "function" });
@@ -595,7 +595,7 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
       const industryCompanies = (source?.companies || []).filter(company => selectedIds.has(company.companyId))
         .map(({ companyId, industryIds, industryRegionKey }) => ({ companyId, industryIds: clone(industryIds || []), industryRegionKey: industryRegionKey || "" }));
       return { snapshot, regions: clone(source?.regions || []), industryCompanies, timings };
-    });
+    }, { priority: "foreground", kind: "monthly-report-build" }));
     buildQueue = task.then(() => undefined, () => undefined);
     return task;
   };

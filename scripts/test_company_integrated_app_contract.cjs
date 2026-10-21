@@ -81,6 +81,7 @@ test("the app supplies a dedicated scoped context revision reader and retains it
     WEB_DIR: path.join(os.tmpdir(), "unused-contract-web"),
     monthlyReportSources: { loadSources() {}, catalog() {} }, listCompanyIntegratedTargets() {},
     companyIntegratedCatalog: { catalog() {} },
+    runAnalyticalWork: operation => operation(),
     createCompanyIntegratedSourceRevision: options => { revisionOptions = options; return revision; },
     createCompanyIntegratedDb: options => { dbOptions = options; return {}; }
   };
@@ -90,7 +91,8 @@ test("the app supplies a dedicated scoped context revision reader and retains it
   assert.equal(revisionOptions.outputsDir, context.OUTPUTS_DIR);
   assert.equal(revisionOptions.regionMasterFile, path.join(context.WEB_DIR, "data", "region_master.json"));
   assert.equal(revisionOptions.tourismRegionMapFile, path.join(context.WEB_DIR, "data", "tourism_region_map.json"));
-  assert.equal(revisionOptions.calculationFiles.length, 12);
+  assert.equal(revisionOptions.calculationFiles.length, 13);
+  assert.ok(revisionOptions.calculationFiles.includes(path.join(__dirname, "lib", "company_master_stream.cjs")));
   assert.ok(revisionOptions.calculationFiles.every(file => fs.statSync(file).isFile()));
   assert.ok(revisionOptions.calculationFiles.includes(path.join(__dirname, "lib", "company_integrated_db.cjs")));
   assert.ok(revisionOptions.calculationFiles.includes(path.join(__dirname, "inventory_estimation.cjs")));
@@ -103,6 +105,7 @@ test("the app supplies a dedicated scoped context revision reader and retains it
   assert.ok(!revisionOptions.calculationFiles.includes(path.join(__dirname, "lib", "company_integrated_catalog.cjs")),
     "metadata read caching uses its own projection version rather than invalidating all monthly calculations");
   assert.equal(dbOptions.readRevision, revision);
+  assert.equal(dbOptions.runWork, context.runAnalyticalWork);
   assert.equal(dbOptions.readRevision.prepare, revision.prepare);
   assert.equal(dbOptions.readRevision.forScope, revision.forScope);
   assert.equal(dbOptions.loadSources, context.monthlyReportSources.loadSources);
@@ -120,7 +123,7 @@ test("the app supplies a dedicated scoped context revision reader and retains it
     manualCorrectionRoomSegmentTotal: function manualCorrectionRoomSegmentTotal() { return "changed transitive correction"; } });
   assert.notEqual(revisionOptions.calculationFingerprint, originalFingerprint, "a transitive room-correction helper change also invalidates saved calculations");
   const monthlyStart = source.indexOf("const readMonthlyReportRevision = createMonthlyReportSourceRevision({");
-  const monthlyEnd = source.indexOf("\nconst monthlyReportSources =", monthlyStart);
+  const monthlyEnd = source.indexOf("\nconst analyticalMemory =", monthlyStart);
   let monthlyOptions;
   vm.runInNewContext(source.slice(monthlyStart, monthlyEnd), { ...context,
     createMonthlyReportSourceRevision: options => { monthlyOptions = options; return () => "monthly"; } });

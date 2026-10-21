@@ -8,6 +8,7 @@ const native = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const readline = require("node:readline");
+const { readCompanyMasterProjection } = require("./company_master_stream.cjs");
 const VERSION = "company-detail-read-model-v1";
 const hash = value => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const fault = (code = "COMPANY_DETAIL_SOURCE_UNAVAILABLE") => Object.assign(
@@ -15,132 +16,13 @@ const fault = (code = "COMPANY_DETAIL_SOURCE_UNAVAILABLE") => Object.assign(
 const need = (condition, code) => { if (!condition) throw fault(code); };
 const stamp = stat => [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String).join(":");
 
-function jsonStructureValidator() {
-  const stack = []; let root = "value", quoted = false, escape = false, unicode = 0, scalar = "", first = true;
-  const valid = value => need(value, "COMPANY_DETAIL_MASTER_INVALID");
-  const expectsValue = () => stack.length ? ["value", "valueOrEnd"].includes(stack.at(-1).state) : root === "value";
-  function complete() {
-    valid(expectsValue());
-    if (stack.length) stack.at(-1).state = "commaOrEnd"; else root = "end";
-  }
-  function scalarEnd() {
-    if (!scalar) return;
-    valid(/^(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)$/.test(scalar)); scalar = ""; complete();
-  }
-  function push(chunk) {
-    for (let index = 0; index < chunk.length; index++) {
-      const ch = chunk[index];
-      if (first) { first = false; if (ch === "\uFEFF") continue; }
-      if (quoted) {
-        if (unicode) { valid(/[0-9a-f]/i.test(ch)); unicode--; }
-        else if (escape) { valid('"\\/bfnrtu'.includes(ch)); escape = false; if (ch === "u") unicode = 4; }
-        else if (ch === "\\") escape = true;
-        else if (ch === '"') {
-          quoted = false;
-          const frame = stack.at(-1);
-          if (frame?.kind === "object" && ["keyOrEnd", "key"].includes(frame.state)) frame.state = "colon";
-          else complete();
-        } else valid(ch.charCodeAt(0) >= 0x20);
-        continue;
-      }
-      if (scalar) {
-        if (!/[\x20\x09\x0a\x0d,}\]]/.test(ch)) { scalar += ch; valid(scalar.length <= 1024); continue; }
-        scalarEnd();
-      }
-      if (/[\x20\x09\x0a\x0d]/.test(ch)) continue;
-      const frame = stack.at(-1);
-      if (ch === '"') { valid(expectsValue() || frame?.kind === "object" && ["keyOrEnd", "key"].includes(frame.state)); quoted = true; }
-      else if (ch === "{" || ch === "[") { valid(expectsValue()); stack.push({ kind: ch === "{" ? "object" : "array", state: ch === "{" ? "keyOrEnd" : "valueOrEnd" }); }
-      else if (ch === "}" || ch === "]") {
-        valid(frame && frame.kind === (ch === "}" ? "object" : "array") && ["keyOrEnd", "valueOrEnd", "commaOrEnd"].includes(frame.state)); stack.pop(); complete();
-      } else if (ch === ",") { valid(frame?.state === "commaOrEnd"); frame.state = frame.kind === "object" ? "key" : "value"; }
-      else if (ch === ":") { valid(frame?.kind === "object" && frame.state === "colon"); frame.state = "value"; }
-      else { valid(expectsValue() && /[-\dtnf]/.test(ch)); scalar = ch; }
-    }
-  }
-  return { push, end() { scalarEnd(); valid(root === "end" && stack.length === 0 && !quoted && !escape && !unicode); } };
-}
-
-// Parse one member of the companies map at a time instead of allocating the
-// complete company master. Structural characters inside escaped strings do not
-// affect the scanner. The retained master contains only selected-company data
-// and the small keyword/run fields required by the existing rank benchmark.
-async function readScopedCompanyMaster(file, companyId, { stream = filename => native.createReadStream(filename, { encoding: "utf8", highWaterMark: 64 * 1024 }) } = {}) {
-  const validator = jsonStructureValidator();
-  const companies = Object.create(null);
-  let depth = 0, quoted = false, escaped = false, token = "", stringDepth = 0;
-  let rootKey = "", memberKey = "", rootWantsKey = false, companyWantsKey = false;
-  let companiesDeclared = false;
-  const seenCompanyKeys = new Set();
-  let companiesSeen = false, inCompanies = false, companiesDone = false;
-  let capturing = false, record = [], recordStart = -1, rootEnded = false;
-  const input = stream(file);
+// Preserve the detail reader's selected-company/rank-peer projection while
+// sharing complete JSON validation with other low-memory saved-data readers.
+async function readScopedCompanyMaster(file, companyId, options = {}) {
   try {
-    for await (let chunk of input) {
-      chunk = String(chunk);
-      validator.push(chunk);
-      recordStart = capturing ? 0 : -1;
-      for (let index = 0; index < chunk.length; index += 1) {
-        const ch = chunk[index];
-        if (quoted) {
-          if (stringDepth <= 2 && !capturing) token += ch;
-          if (escaped) escaped = false;
-          else if (ch === "\\") escaped = true;
-          else if (ch === '"') {
-            quoted = false;
-            if (stringDepth === 1 && rootWantsKey) {
-              rootKey = JSON.parse(token); rootWantsKey = false;
-              if (rootKey === "companies") { need(!companiesDeclared, "COMPANY_DETAIL_MASTER_INVALID"); companiesDeclared = true; }
-            }
-            else if (inCompanies && stringDepth === 2 && companyWantsKey) {
-              memberKey = JSON.parse(token); companyWantsKey = false;
-              need(!seenCompanyKeys.has(memberKey), "COMPANY_DETAIL_MASTER_INVALID"); seenCompanyKeys.add(memberKey);
-            }
-            token = "";
-          }
-          continue;
-        }
-        if (ch === '"') {
-          need(!(inCompanies && depth === 2 && !companyWantsKey) && !(depth === 1 && rootKey === "companies" && !rootWantsKey), "COMPANY_DETAIL_MASTER_INVALID");
-          quoted = true; stringDepth = depth; token = '"'; continue;
-        }
-        if (ch === "{" || ch === "[") {
-          need(!rootEnded, "COMPANY_DETAIL_MASTER_INVALID");
-          if (depth === 0) { need(ch === "{"); rootWantsKey = true; }
-          else if (depth === 1 && rootKey === "companies") {
-            need(ch === "{" && !companiesSeen, "COMPANY_DETAIL_MASTER_INVALID");
-            companiesSeen = true; inCompanies = true; companyWantsKey = true;
-          } else if (inCompanies && depth === 2) {
-            need(ch === "{" && memberKey, "COMPANY_DETAIL_MASTER_INVALID");
-            capturing = true; recordStart = index; record = [];
-          }
-          depth += 1;
-        } else if (ch === "}" || ch === "]") {
-          depth -= 1;
-          need(depth >= 0, "COMPANY_DETAIL_MASTER_INVALID");
-          if (capturing && depth === 2) {
-            record.push(chunk.slice(recordStart, index + 1));
-            const value = JSON.parse(record.join(""));
-            need(value && typeof value === "object" && !Array.isArray(value), "COMPANY_DETAIL_MASTER_INVALID");
-            companies[memberKey] = memberKey === companyId ? value : { keywords: value.keywords || {} };
-            capturing = false; record = []; recordStart = -1; memberKey = "";
-          } else if (inCompanies && depth === 1) { inCompanies = false; companiesDone = true; }
-          else if (depth === 0) rootEnded = true;
-        } else if (ch === ",") {
-          if (depth === 1) { rootWantsKey = true; rootKey = ""; }
-          else if (inCompanies && depth === 2) companyWantsKey = true;
-        } else if ((rootEnded || inCompanies && depth === 2 && memberKey || depth === 1 && rootKey === "companies")
-          && !/[\x20\x09\x0a\x0d:]/.test(ch)) throw fault("COMPANY_DETAIL_MASTER_INVALID");
-      }
-      if (capturing && recordStart >= 0) record.push(chunk.slice(recordStart));
-    }
-  } catch (error) {
-    if (error.code?.startsWith("COMPANY_DETAIL_")) throw error;
-    throw fault("COMPANY_DETAIL_MASTER_INVALID");
-  } finally { input.destroy?.(); }
-  validator.end();
-  need(rootEnded && depth === 0 && !quoted && !capturing && companiesSeen && companiesDone, "COMPANY_DETAIL_MASTER_INVALID");
-  return { companies };
+    return await readCompanyMasterProjection(file, { ...options,
+      projectCompany: (value, key) => key === companyId ? value : { keywords: value.keywords || {} } });
+  } catch { throw fault("COMPANY_DETAIL_MASTER_INVALID"); }
 }
 
 async function readScopedCompanyHistory(file, company, matches, { stream = filename => native.createReadStream(filename, { encoding: "utf8", highWaterMark: 64 * 1024 }) } = {}) {

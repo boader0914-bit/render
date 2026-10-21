@@ -4,6 +4,7 @@
 // closed so they cannot certify reuse of an old company aggregate.
 const fs = require("node:fs/promises"), native = require("node:fs"), path = require("node:path"), crypto = require("node:crypto"), readline = require("node:readline");
 const { industryCompanyReference } = require("./industry_analysis.cjs");
+const { readCompanyMasterProjection } = require("./company_master_stream.cjs");
 const VERSION = "company-integrated-source-revision-v2";
 const LEGACY_VERSION = "company-integrated-source-revision-v1";
 const monthValid = value => /^\d{4}-(0[1-9]|1[0-2])$/.test(value || "");
@@ -131,10 +132,9 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
     }
     const units = (parts.regions?.value?.units || []).filter(unit => unit.active && unit.selectable && ["local", "broad"].includes(unit.level));
     if (changed("master") || changed("regions")) {
-      const master = await json("master", current, { companies: {} }); requireValid(master.companies && !Array.isArray(master.companies));
       const companies = {};
-      for (const company of Object.values(master.companies)) {
-        if (!company?.companyId || company.deletedAt || company.mergedIntoCompanyId) continue;
+      const consumeCompany = company => {
+        if (!company?.companyId || company.deletedAt || company.mergedIntoCompanyId) return;
         const id = String(company.companyId), region = resolveRegion(company, units), months = {}, runs = {}, fallbackCounts = {};
         const add = (month, value, runId) => { if (!monthValid(month)) return; (months[month] ||= []).push(value); if (runId) (runs[month] ||= []).push(String(runId)); };
         for (const snapshot of [company.inventory?.latest, company.inventory?.previousLatest, ...(company.inventory?.snapshots || [])].filter(Boolean)) {
@@ -155,6 +155,19 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
         companies[id] = { meta: hash(meta), regionKey: region?.regionKey || "", regionId: region?.regionId || region?.regionKey || "", aliases, places: meta.placeIds,
           months: Object.fromEntries(Object.entries(months).map(([month, values]) => [month, hash(values)])), fallbackCounts, knownRuns,
           runs: Object.fromEntries(Object.entries(runs).map(([month, values]) => [month, [...new Set(values)].sort()])) };
+      };
+      if (current.metadata.master) {
+        if (fileSystem === fs) {
+          const before = await stat(current.paths.master);
+          requireValid(before && before.size <= 256n * 1024n * 1024n && signature(before) === current.metadata.master);
+          await readCompanyMasterProjection(current.paths.master, { projectCompany: null, onCompany: consumeCompany,
+            checkpoint: () => new Promise(resolve => setImmediate(resolve)) });
+          requireValid(signature(await stat(current.paths.master)) === current.metadata.master);
+        } else {
+          // Preserve custom filesystem adapters; do not bypass their I/O policy.
+          const master = await json("master", current, { companies: {} }); requireValid(master.companies && !Array.isArray(master.companies));
+          for (const company of Object.values(master.companies)) consumeCompany(company);
+        }
       }
       const placeOwners = new Map(), conflictIds = new Set(), fallbackUnknown = {};
       for (const [id, company] of Object.entries(companies)) for (const place of company.places) {

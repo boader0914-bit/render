@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { buildIndustryAnalysis, createIndustryAnalysisService, compactIndustrySources, industryCompanyReference } = require("./lib/industry_analysis.cjs");
+const { buildIndustryAnalysis, createIndustryAnalysisService, compactIndustrySources, industryCompanyReference, normalizeIndustryAnalysisRequest } = require("./lib/industry_analysis.cjs");
 const { createIndustryAnalysisHttpHandler } = require("./lib/industry_analysis_http.cjs");
 const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs");
 const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
@@ -193,6 +193,72 @@ test("industry service consumes the paired source catalog once and retains only 
   const second = await service.analyze({ ...REQUEST, region: "pocheon" });
   assert.deepEqual(second, first); assert.equal(first.summary.companyCount, 1);
   assert.equal(pairedReads, 1); assert.equal(contextReads, 2);
+});
+
+test("industry build owns its background lease through source preparation, calculation and cached context", async t => {
+  const full = source(), original = JSON.stringify(full), calls = [];
+  const catalog = { rawCompanies: new Map([["a", company("a")]]), regions: REGIONS, runs: full.runs };
+  let active = false, release, reads = 0, contexts = 0;
+  const service = createIndustryAnalysisService({ now: () => NOW,
+    runWork: (operation, options) => {
+      calls.push(options);
+      return new Promise((resolve, reject) => { release = async () => { active = true; try { resolve(await operation()); } catch (error) { reject(error); } finally { active = false; } }; });
+    },
+    sources: { loadSourcesWithCatalog: async () => { assert.equal(active, true); reads++; return { source: full, catalog }; } },
+    readContext: async () => { assert.equal(active, true); contexts++; return { sources: [], networkAttempted: false }; }
+  });
+  t.after(() => service.stop());
+  const request = { ...REQUEST, region: "pocheon" }, pending = service.analyze(request);
+  await flushTasks(); assert.equal(reads, 0, "source allocations wait outside the shared lease");
+  await release(); const result = await pending;
+  assert.deepEqual(calls, [{ priority: "background", kind: "industry-build", detached: true }]);
+  assert.equal(reads, 1); assert.equal(contexts, 1); assert.equal(active, false);
+  assert.equal(result.summary.sold, build(compactIndustrySources(full, catalog).source, { region: "pocheon" }).summary.sold);
+  assert.equal(JSON.stringify(full), original);
+});
+
+test("industry selectors finish coalesced options before requesting catalog and do not own an outer lease", async t => {
+  const calls = []; let finishOptions, workCalls = 0;
+  const service = createIndustryAnalysisService({ now: () => NOW, runWork: operation => { workCalls++; return operation(); }, sources: {
+    options: async () => { calls.push("options-start"); await new Promise(resolve => { finishOptions = resolve; }); calls.push("options-finished"); return { regions: REGIONS, months: ["2026-08"], defaultMonth: "2026-08" }; },
+    catalog: async () => { calls.push("catalog"); return { regions: REGIONS, runs: [], rawCompanies: new Map() }; }
+  } });
+  t.after(() => service.stop());
+  const pending = service.options(); await flushTasks(); assert.deepEqual(calls, ["options-start"]);
+  finishOptions(); const result = await pending;
+  assert.deepEqual(calls, ["options-start", "options-finished", "catalog"]); assert.equal(workCalls, 0);
+  assert.equal(result.defaultMonth, "2026-08");
+});
+
+test("oversize industry sources share their running read but are reconstructed after completion without changing values", async t => {
+  const full = source(); full.observations[0].savedEvidenceDetail = "실제 형식을 따른 모의 원본 상세".repeat(1000);
+  const original = JSON.stringify(full), catalog = { rawCompanies: new Map([["a", company("a")]]), regions: REGIONS, runs: full.runs };
+  let reads = 0, finishFirst;
+  const service = createIndustryAnalysisService({ now: () => NOW, sourceCacheMaxBytes: 4096, sources: {
+    loadSourcesWithCatalog: async () => { if (++reads === 1) await new Promise(resolve => { finishFirst = resolve; }); return { source: full, catalog }; }
+  } });
+  t.after(() => service.stop());
+  const first = service.analyze(REQUEST), joined = service.analyze(REQUEST);
+  await flushTasks(); assert.equal(reads, 1); finishFirst();
+  const [a, b] = await Promise.all([first, joined]); assert.deepEqual(a, b);
+  const afterCompletion = await service.analyze(REQUEST);
+  assert.equal(reads, 2, "the oversize completed source cannot be retained for another call");
+  assert.deepEqual(afterCompletion, a);
+  const expected = buildIndustryAnalysis(compactIndustrySources(full, catalog).source, normalizeIndustryAnalysisRequest(REQUEST, NOW), { now: NOW });
+  expected.context.warnings = ["지역을 선택하면 저장된 방문·체류·소비 지표를 함께 확인할 수 있습니다. 사천은 남해안 지표 지역에 포함합니다."];
+  assert.deepEqual(a, expected);
+  assert.equal(JSON.stringify(full), original, "a cache budget cannot trim/hash-rewrite the saved observation");
+});
+
+test("small industry sources retain same-month reuse within the byte budget", async t => {
+  const full = source(), catalog = { rawCompanies: new Map([["a", company("a")]]), regions: REGIONS, runs: full.runs };
+  let reads = 0;
+  const service = createIndustryAnalysisService({ now: () => NOW, sourceCacheMaxBytes: 16 * 1024, sources: {
+    loadSourcesWithCatalog: async () => { reads++; return { source: full, catalog }; }
+  } });
+  t.after(() => service.stop());
+  const first = await service.analyze(REQUEST); await service.analyze({ ...REQUEST, region: "pocheon" });
+  assert.deepEqual(await service.analyze(REQUEST), first); assert.equal(reads, 1);
 });
 
 function pendingSourceFixture({ pendingCatalog = false } = {}) {

@@ -100,7 +100,7 @@ function latestAttempts(source, snapshot, request) {
   return [...attempts.values()].sort((a, b) => a.date.localeCompare(b.date) || a.productType.localeCompare(b.productType));
 }
 
-function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets, readRevision, now = () => new Date(), calculationVersion = CALCULATION_VERSION, autoStart = true } = {}) {
+function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets, readRevision, now = () => new Date(), calculationVersion = CALCULATION_VERSION, autoStart = true, runWork = operation => operation() } = {}) {
   if (!dataDir || typeof loadSources !== "function" || typeof catalog !== "function" || typeof listTargets !== "function") throw new TypeError("dataDir, loadSources, catalog and listTargets are required");
   if (readRevision !== undefined && typeof readRevision !== "function") throw new TypeError("readRevision must be a function");
   const directory = path.resolve(dataDir, "company_integrated"), stateFile = path.join(directory, "queue.json");
@@ -271,7 +271,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
   }
   function bootstrap() {
     if (bootstrapPromise) return bootstrapPromise;
-    bootstrapPromise = (async () => {
+    bootstrapPromise = runWork(async () => {
       await init(); bootstrapPlanning = true;
       try {
         // Inspect inputs once, then project only small company/month tokens.
@@ -326,7 +326,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
           failureGeneration: (state.bootstrap?.failureGeneration || 0) + 1 }; await saveState(); });
         throw error;
       } finally { bootstrapPlanning = false; if (autoStart) kick(); }
-    })().finally(() => { bootstrapPromise = null; });
+    }, { priority: "background", kind: "company-bootstrap", detached: true }).finally(() => { bootstrapPromise = null; });
     return bootstrapPromise;
   }
   async function materialize(companyId, month, metadata, cutoffDate, persist = true, priority = "background", prepared = null) {
@@ -362,10 +362,11 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
   }
   async function processJob(job) {
     const verifiedBootstrapFailure = state.bootstrap?.failureGeneration || 0;
-    const metadata = await activeCompany(job.companyId);
-    const months = job.allMonths ? await targetsFor(job.companyId, job.months) : monthsOf(job.months);
-    const prepared = await prepareRevision();
+    const { metadata, months, prepared } = await runWork(async () => ({ metadata: await activeCompany(job.companyId),
+      months: job.allMonths ? await targetsFor(job.companyId, job.months) : monthsOf(job.months), prepared: await prepareRevision() }),
+    { priority: "background", kind: "company-job-prepare", detached: true });
     for (const month of months) {
+      const completed = await runWork(async () => {
       const calculated = await materialize(job.companyId, month, metadata, undefined, true, "background", prepared);
       // Revalidate before publishing. A mid-read change must never be marked
       // current, and a failed inspection leaves the last normal result intact.
@@ -381,7 +382,9 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
           ...index, months: monthsOf([...index.months, month]), updatedAt: current().toISOString(), calculationVersion });
         return true;
       });
-      if (!published) return;
+      return published;
+      }, { priority: "background", kind: "company-month", detached: true });
+      if (!completed) return;
     }
     await locked(async () => {
       if (state.jobs[job.companyId]?.generation !== job.generation) return;
@@ -457,7 +460,8 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     }
     let selected = await readJson(monthPath(companyId, selectedMonth), null);
     if (selected && !validStored(selected, companyId, selectedMonth)) selected = null;
-    if (cutoffDate !== undefined && (!selected || selected.cutoffDate !== cutoffDate)) selected = (await materialize(companyId, selectedMonth, metadata, cutoffDate, false, "foreground")).value;
+    if (cutoffDate !== undefined && (!selected || selected.cutoffDate !== cutoffDate)) selected = (await runWork(
+      () => materialize(companyId, selectedMonth, metadata, cutoffDate, false, "foreground"), { priority: "foreground", kind: "company-cutoff" })).value;
     const job = state.jobs[companyId];
     const needsRefresh = !selected || selected.calculationVersion !== calculationVersion || (cutoffDate === undefined &&
       (selected.cutoffDate !== cutoffFor(selectedMonth, current()) || selected.snapshot.period.monthClosed !== (kstDay(current()) > monthEnd(selectedMonth))));

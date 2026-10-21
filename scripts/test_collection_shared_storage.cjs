@@ -8,6 +8,7 @@ const test = require("node:test");
 const { AsyncLocalStorage } = require("node:async_hooks");
 const { serialExecutor } = require("./collection_reuse.cjs");
 const { allowsDerivedUpdates, inspectManifest } = require("./daily_collection_quality.cjs");
+const { createAnalyticalWorkScheduler } = require("./lib/analytical_work_scheduler.cjs");
 
 const serverSource = fs.readFileSync(path.join(__dirname, "glamping_app_server.cjs"), "utf8");
 const start = serverSource.indexOf("async function appendHistoryForRun(runId, options = {})");
@@ -36,14 +37,16 @@ function harness({ initial = [], manifest = completeManifest(), scanError = null
   const appends = [];
   const loadCalls = [];
   const lane = new AsyncLocalStorage();
-  const calls = { mkdir: 0, activeLoads: 0, maximumActiveLoads: 0 };
+  const calls = { mkdir: 0, activeLoads: 0, maximumActiveLoads: 0, analytical: [] };
   const observations = [
     { observationId: "fixture-run:room-a:2026-09-23", runId: "fixture-run", companyId: "room-a", supply: 21, sold: 2 },
     { observationId: "fixture-run:room-b:2026-09-23", runId: "fixture-run", companyId: "room-b", supply: 7, sold: 0 }
   ];
   const sharedWrite = serialExecutor();
+  const analyticalWork = createAnalyticalWorkScheduler();
   const context = {
     sharedWrite,
+    runAnalyticalWork: (operation, options) => { calls.analytical.push(plain(options)); return analyticalWork.run(operation, options); },
     companyIntegratedDb: { deferProcessing: work => work() },
     Date, Set,
     fs: { existsSync: () => true },
@@ -93,7 +96,7 @@ function harness({ initial = [], manifest = completeManifest(), scanError = null
     }
   };
   const append = vm.runInNewContext(`${historySource}\nappendHistoryForRun;`, context);
-  return { append, lane, rows, observations, evidence, appends, calls, loadCalls };
+  return { append, lane, rows, observations, evidence, appends, calls, loadCalls, analyticalWork };
 }
 
 test("concurrent completion and GET repair append each observation once while preserving both lane contexts", async () => {
@@ -109,6 +112,8 @@ test("concurrent completion and GET repair append each observation once while pr
   assert.equal(store.rows.length, 2);
   assert.equal(new Set(store.rows.map(row => row.observationId)).size, 2);
   assert.equal(store.calls.maximumActiveLoads, 1);
+  assert.equal(store.calls.analytical.length, 3);
+  assert.ok(store.calls.analytical.every(options => options.priority === "foreground" && options.kind === "history-ingestion"));
   assert.deepEqual(store.loadCalls.map(call => call.lane), ["manual", "scheduled", "get-repair"]);
   assert.deepEqual(store.evidence.map(call => call.lane), ["manual", "scheduled", "get-repair"]);
   for (const call of store.evidence) assert.deepEqual(call.observations, store.observations);

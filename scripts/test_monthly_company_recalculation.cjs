@@ -42,11 +42,16 @@ test("recalculation spans every keyword run and preserves original observation t
   } });
   const data = catalog([company], runs), before = JSON.stringify([...data.rawCompanies]);
   const calls = [];
+  let sharedCapacityCompanies;
   const helper = createMonthlyCompanyRecalculation(dependencies(async (id, options) => {
     calls.push(id);
     for (const key of ["skipCompanyMaster", "skipHistory", "skipTraffic", "skipTourismVisitors", "skipTourismVisitorHistory",
       "skipTourismDemandStrengthHistory", "skipTourismResourceDemandHistory", "skipTourismDiversityHistory"]) assert.equal(options[key], true, key);
     assert.equal(options.applyCompanyMaster, false); assert.equal(options.includeRankComparison, false);
+    assert.deepEqual(options.capacityCompanies, [company]);
+    assert.equal(options.capacityCompanies[0], company, "prepared company references are shared without another inventory clone");
+    if (sharedCapacityCompanies) assert.equal(options.capacityCompanies, sharedCapacityCompanies, "all saved runs share one capacity array");
+    sharedCapacityCompanies = options.capacityCompanies;
     return { run: { id, collectedAt: "2026-09-27T00:00:00Z" }, availability: { items: [
       { placeId: "1001", dates: ["2026-08-31", "2026-09-02", "2026-09-26", "2026-10-01"] }
     ] } };
@@ -61,6 +66,69 @@ test("recalculation spans every keyword run and preserves original observation t
     assert.equal(row.supply, 16); assert.equal(row.inventoryEvidenceVersion, 4); assert.equal(row.readOnlyRecalculated, true);
   }
   assert.equal(JSON.stringify([...data.rawCompanies]), before);
+});
+
+test("prepared capacity reuse keeps the full catalog and preserves partial, unknown and corrected observation values", async () => {
+  const deepFreeze = value => {
+    if (value && typeof value === "object" && !Object.isFrozen(value)) {
+      for (const item of Object.values(value)) deepFreeze(item);
+      Object.freeze(value);
+    }
+    return value;
+  };
+  const runs = [makeRun("complete"), makeRun("partial", { collectionQuality: { status: "partial" } }), makeRun("unknown")];
+  const selected = deepFreeze(makeCompany("cmp_a", { runIds: runs.map(run => run.id),
+    _integratedCapacity: { capacity: 16, source: "db_review", revision: 3 },
+    inventory: { latest: { productSnapshot: { products: [{ id: "original-room", stock: 27 }] } } } }));
+  const outside = deepFreeze(makeCompany("cmp_b", { manualCorrection: { active: true, lodgingBasisTotal: 8 },
+    _integratedCapacity: { capacity: 8, source: "observed_locked", revision: 2 } }));
+  const data = catalog([selected, outside], runs);
+  data.companies[1].regionKey = "other"; data.companies[1].regionKeys = ["other"];
+  const storedById = deepFreeze({
+    complete: { run: { id: "complete", collectionQuality: { status: "complete" } }, availability: { items: [
+      { placeId: "1001", supply: 27, sold: 3, publicBookings: 1, phoneBookings: 2, estimatedRevenue: 900000, partial: false },
+      { placeId: "2002", supply: 8, sold: 0, publicBookings: 0, phoneBookings: 0, estimatedRevenue: 0 }
+    ] } },
+    partial: { run: { id: "partial", collectionQuality: { status: "partial" } }, availability: { items: [
+      { placeId: "1001", supply: 27, sold: 2, publicBookings: 1, phoneBookings: 1, estimatedRevenue: null, partial: true, missingPrice: true }
+    ] } },
+    unknown: { run: { id: "unknown", collectionQuality: { status: "complete" } }, availability: { items: [
+      { placeId: "1001", supply: 27, sold: null, publicBookings: null, phoneBookings: null, estimatedRevenue: null,
+        missing: true, queryAttempted: false, observationStatus: "unobserved" }
+    ] } }
+  });
+  const before = JSON.stringify({ companies: [...data.rawCompanies], runs, storedById });
+  const applyCompanyManualCorrection = (item, company) => ({ ...item, supply: company._integratedCapacity.capacity,
+    inventoryEvidence: { version: 4 } });
+  const buildHistoryObservations = stored => stored.availability.items.map(item => ({ ...item,
+    companyKey: item.companyId, stayDate: "2026-09-26", productType: "lodging", inventoryEvidenceVersion: 4 }));
+  let masterRereads = 0, calls = 0, reusedCapacity;
+  const loadSaved = async (id, options, legacy = false) => {
+    calls++;
+    const capacities = legacy ? (masterRereads++, [...data.rawCompanies.values()]) : options.capacityCompanies;
+    assert.ok(Array.isArray(capacities), "prepared array bypasses the loader's fallback master read");
+    assert.deepEqual(capacities.map(company => company.companyId), ["cmp_a", "cmp_b"], "out-of-scope capacity bases must not disappear");
+    assert.equal(capacities[0], selected); assert.equal(capacities[1], outside);
+    if (!legacy) {
+      if (reusedCapacity) assert.equal(capacities, reusedCapacity);
+      reusedCapacity = capacities;
+    }
+    // A saved-run load may consult any item's capacity before the report scope
+    // selects one company. Keep the saved evidence read-only in both paths.
+    return storedById[id];
+  };
+  const common = { applyCompanyManualCorrection, buildHistoryObservations };
+  const baseline = await createMonthlyCompanyRecalculation(dependencies((id, options) => loadSaved(id, options, true), common))(request, data);
+  assert.equal(masterRereads, 3);
+  masterRereads = 0; calls = 0;
+  const optimized = await createMonthlyCompanyRecalculation(dependencies(loadSaved, common))(request, data);
+  assert.equal(calls, 3); assert.equal(masterRereads, 0, "no saved run needs a second full master read");
+  assert.deepEqual(optimized, baseline, "capacity reuse alone changes no observation values or quality flags");
+  assert.equal(optimized[0].supply, 16); assert.equal(optimized[0].sold, 3); assert.equal(optimized[0].estimatedRevenue, 900000);
+  assert.equal(optimized[1].partial, true); assert.equal(optimized[1].missingPrice, true); assert.equal(optimized[1].estimatedRevenue, null);
+  assert.equal(optimized[2].sold, null); assert.equal(optimized[2].missing, true); assert.equal(optimized[2].queryAttempted, false);
+  assert.equal(optimized[2].observationStatus, "unobserved", "unobserved evidence is not converted to zero or successful data");
+  assert.equal(JSON.stringify({ companies: [...data.rawCompanies], runs, storedById }), before, "neither source companies nor saved product/run evidence is modified");
 });
 
 test("only inventory corrections and exact report scope trigger saved-run loading", async () => {

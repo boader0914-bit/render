@@ -351,24 +351,161 @@ test("unreadable JSON or unknown master shapes produce conservative global revis
 
 test("an atomic source replacement during reading is retried before returning a revision", async () => {
   const f = await revisionFixture();
-  const originalRead = fs.readFile;
+  const native = require("node:fs"), { Readable } = require("node:stream"), originalStream = native.createReadStream;
   let masterReads = 0;
   try {
     const before = await f.revision.periodRevisions();
     const revision = createIndustrySourceRevision({ dataDir: f.root, outputsDir: f.outputsDir });
-    fs.readFile = async function(file, ...rest) {
-      const content = await originalRead.call(this, file, ...rest);
-      if (file === f.masterFile && ++masterReads === 1) {
-        f.master.companies.cmp_place_101.manualCorrection = { active: true, lodgingBasisTotal: 7 };
-        await f.writeMaster();
-      }
-      return content;
+    native.createReadStream = function(file, ...rest) {
+      const stream = originalStream.call(this, file, ...rest);
+      if (file !== f.masterFile) return stream;
+      const replace = ++masterReads === 1;
+      return Readable.from((async function* () {
+        for await (const chunk of stream) yield chunk;
+        if (replace) { f.master.companies.cmp_place_101.manualCorrection = { active: true, lodgingBasisTotal: 7 }; await f.writeMaster(); }
+      })());
     };
     const after = await revision.periodRevisions();
     assert.equal(masterReads, 2, "changed input is reparsed on the second attempt");
     assert.notEqual(monthToken(after, "2026-09"), monthToken(before, "2026-09"));
     assert.equal(after.globalToken, before.globalToken);
-  } finally { fs.readFile = originalRead; await f.dispose(); }
+  } finally { native.createReadStream = originalStream; await f.dispose(); }
+});
+
+test("streamed company summaries match the complete semantic oracle without full master reads", async () => {
+  const f = await revisionFixture(), native = require("node:fs"), { Module, createRequire } = require("node:module");
+  const originalRead = fs.readFile, originalStream = native.createReadStream;
+  let wholeMasterReads = 0, masterStreams = 0;
+  try {
+    f.master.extraPolicy = { unknown: "must remain in the global token", booleans: [false, null, 0] };
+    f.master.companies.cmp_place_101.unknownReviewField = { required: true };
+    f.master.companies.cmp_place_101.inventory.previousLatest = structuredClone(f.snapshot);
+    f.master.companies.cmp_place_101.inventory.snapshots = [structuredClone(f.snapshot)];
+    f.master.companies.peer = { ...structuredClone(f.master.companies.cmp_place_101), companyId: "cmp_place_peer",
+      primaryName: "비교 업체", placeIds: ["202"], bookingBusinessIds: ["602"], duplicateNotes: [{ mergedCompanyId: "cmp_old_peer" }] };
+    await f.writeMaster();
+    const filename = require.resolve("./lib/industry_source_revision.cjs"), source = await originalRead(filename, "utf8");
+    const marker = "const master = await cached(masterFile, masterRevision, streamedCompanySummary);";
+    assert.ok(source.includes(marker));
+    const oracleSource = source.replace(marker,
+      'const master = await cached(masterFile, masterRevision, async file => companySummary(JSON.parse((await fs.readFile(file, "utf8")).replace(/^\\uFEFF/, ""))));');
+    const oracleModule = new Module(filename, module); oracleModule.filename = filename;
+    oracleModule.paths = Module._nodeModulePaths(path.dirname(filename)); oracleModule.require = createRequire(filename); oracleModule._compile(oracleSource, filename);
+    const oracle = oracleModule.exports.createIndustrySourceRevision({ dataDir: f.root, outputsDir: f.outputsDir });
+    const expected = await oracle.periodRevisions();
+    const beforeMaster = await originalRead(f.masterFile), beforeHistory = await originalRead(f.historyFile);
+    fs.readFile = function(file, ...rest) { if (file === f.masterFile) wholeMasterReads++; return originalRead.call(this, file, ...rest); };
+    native.createReadStream = function(file, ...rest) { if (file === f.masterFile) masterStreams++; return originalStream.call(this, file, ...rest); };
+    const actual = await f.revision.periodRevisions();
+    assert.deepEqual(actual, expected); assert.equal(wholeMasterReads, 0); assert.equal(masterStreams, 1);
+    assert.deepEqual(await f.revision.periodRevisions(), expected); assert.equal(masterStreams, 1, "unchanged summaries remain cached");
+    assert.deepEqual(await originalRead(f.masterFile), beforeMaster); assert.deepEqual(await originalRead(f.historyFile), beforeHistory);
+    f.master.extraPolicy.unknown = "changed policy"; await f.writeMaster();
+    assert.deepEqual(await f.revision.periodRevisions(), await oracle.periodRevisions(), "unknown root fields are not discarded by streaming");
+  } finally { fs.readFile = originalRead; native.createReadStream = originalStream; await f.dispose(); }
+});
+
+test("period scans acquire the shared allocation lease while metadata-only checks remain usable", async () => {
+  const f = await revisionFixture(), { createAnalyticalWorkScheduler } = require("./lib/analytical_work_scheduler.cjs");
+  const native = require("node:fs"), originalStream = native.createReadStream, scheduler = createAnalyticalWorkScheduler();
+  let enter, release, masterStreams = 0;
+  const entered = new Promise(resolve => { enter = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  try {
+    native.createReadStream = function(file, ...args) { if (file === f.masterFile) masterStreams++; return originalStream.call(this, file, ...args); };
+    const held = scheduler.run(async () => { enter(); await gate; }, { priority: "foreground", kind: "fixture-owner" });
+    await entered;
+    const revision = createIndustrySourceRevision({ dataDir: f.root, outputsDir: f.outputsDir, runWork: scheduler.run });
+    const pending = revision.periodRevisions();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(masterStreams, 0, "a full master scan cannot overlap an existing allocation owner");
+    assert.equal(typeof await revision(), "string", "small metadata reads bypass the allocation queue");
+    release(); await held; const result = await pending;
+    assert.ok(result.months["2026-09"]); assert.equal(masterStreams, 1);
+  } finally { release(); native.createReadStream = originalStream; await scheduler.close(); await f.dispose(); }
+});
+
+test("unchanged warm period revisions return during a held background lease using metadata only", async () => {
+  const f = await revisionFixture(), { createAnalyticalWorkScheduler } = require("./lib/analytical_work_scheduler.cjs");
+  const native = require("node:fs"), originalStream = native.createReadStream, originalRead = fs.readFile, scheduler = createAnalyticalWorkScheduler();
+  let enter, release, sourceReads = 0, sourceStreams = 0, admissions = 0;
+  const entered = new Promise(resolve => { enter = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  try {
+    const revision = createIndustrySourceRevision({ dataDir: f.root, outputsDir: f.outputsDir,
+      runWork: (...args) => { admissions++; return scheduler.run(...args); } });
+    const before = await revision.periodRevisions();
+    fs.readFile = function(file, ...args) { sourceReads++; return originalRead.call(this, file, ...args); };
+    native.createReadStream = function(file, ...args) { sourceStreams++; return originalStream.call(this, file, ...args); };
+    const held = scheduler.run(async () => { enter(); await gate; }, { priority: "background", kind: "company-month" });
+    await entered; const admissionsBefore = admissions;
+    let timer;
+    const warm = await Promise.race([revision.periodRevisions({ fresh: true }), new Promise((_, reject) => {
+      timer = setTimeout(() => reject(Error("unchanged period result waited for a background allocation lease")), 2000);
+    })]).finally(() => clearTimeout(timer));
+    assert.deepEqual(warm, before); assert.equal(scheduler.status().activeKind, "company-month");
+    assert.equal(admissions, admissionsBefore, "an exact warm fingerprint hit never creates a new analytical job");
+    assert.equal(sourceReads, 0, "only stat/readdir identities are inspected; JSON and source contents are not read");
+    assert.equal(sourceStreams, 0, "neither master nor history summaries are reconstructed");
+    warm.months["2026-09"] = "caller mutation";
+    assert.deepEqual(await revision.periodRevisions(), before, "warm results are independent copies of the verified semantic cache");
+    release(); await held;
+  } finally { release(); fs.readFile = originalRead; native.createReadStream = originalStream; await scheduler.close(); await f.dispose(); }
+});
+
+test("a changed warm fingerprint queues only the real scan and rechecks the admitted source", async () => {
+  const f = await revisionFixture(), { createAnalyticalWorkScheduler } = require("./lib/analytical_work_scheduler.cjs");
+  const native = require("node:fs"), originalStream = native.createReadStream, scheduler = createAnalyticalWorkScheduler();
+  let enter, release, masterStreams = 0;
+  const entered = new Promise(resolve => { enter = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  try {
+    const revision = createIndustrySourceRevision({ dataDir: f.root, outputsDir: f.outputsDir, runWork: scheduler.run });
+    const before = await revision.periodRevisions();
+    const held = scheduler.run(async () => { enter(); await gate; }, { priority: "background", kind: "company-month" });
+    await entered;
+    f.master.companies.cmp_place_101.manualCorrection = { active: true, lodgingBasisTotal: 7 }; await f.writeMaster();
+    native.createReadStream = function(file, ...args) { if (file === f.masterFile) masterStreams++; return originalStream.call(this, file, ...args); };
+    const pending = revision.periodRevisions();
+    const began = Date.now();
+    while (!scheduler.status().queuedBackground && Date.now() - began < 2000) await new Promise(resolve => setTimeout(resolve, 2));
+    assert.equal(scheduler.status().queuedBackground, 1); assert.equal(masterStreams, 0, "metadata miss does not parse source bodies outside the lease");
+    // Inputs can change again while waiting. The admitted scan must inspect
+    // current files, not publish a result for the earlier outside-lease probe.
+    f.master.companies.cmp_place_101.manualCorrection.lodgingBasisTotal = 8; await f.writeMaster();
+    release(); await held; const after = await pending;
+    assert.equal(masterStreams, 1); assert.notEqual(monthToken(after, "2026-09"), monthToken(before, "2026-09"));
+    assert.deepEqual(after, await createIndustrySourceRevision({ dataDir: f.root, outputsDir: f.outputsDir }).periodRevisions());
+  } finally { release(); native.createReadStream = originalStream; await scheduler.close(); await f.dispose(); }
+});
+
+test("a nested period read cannot join an external scan waiting behind its own allocation lease", async () => {
+  const f = await revisionFixture(), { createAnalyticalWorkScheduler } = require("./lib/analytical_work_scheduler.cjs");
+  const scheduler = createAnalyticalWorkScheduler(); let enter, proceed;
+  const entered = new Promise(resolve => { enter = resolve; }), gate = new Promise(resolve => { proceed = resolve; });
+  try {
+    const revision = createIndustrySourceRevision({ dataDir: f.root, outputsDir: f.outputsDir, runWork: scheduler.run });
+    const owner = scheduler.run(async () => { enter(); await gate; return revision.periodRevisions(); }, { kind: "fixture-owner" });
+    await entered; const external = revision.periodRevisions(); proceed();
+    let timer;
+    const [first, second] = await Promise.race([Promise.all([owner, external]), new Promise((_, reject) => {
+      timer = setTimeout(() => reject(Error("period scan lease cycle")), 5000);
+    })]).finally(() => clearTimeout(timer));
+    assert.deepEqual(first, second);
+  } finally { proceed(); await scheduler.close(); await f.dispose(); }
+});
+
+test("a failed master stream preserves the previous semantic summary and recovers on the next scan", async () => {
+  const f = await revisionFixture(), native = require("node:fs"), { Readable } = require("node:stream"), originalStream = native.createReadStream;
+  try {
+    const before = await f.revision.periodRevisions(), sourceBefore = await fs.readFile(f.masterFile);
+    const stat = await fs.stat(f.masterFile); await fs.utimes(f.masterFile, stat.atime, new Date(stat.mtimeMs + 5000));
+    native.createReadStream = function(file, ...args) {
+      if (file === f.masterFile) return Readable.from((async function* () { throw Object.assign(Error("master read denied"), { code: "EACCES" }); })());
+      return originalStream.call(this, file, ...args);
+    };
+    await assert.rejects(f.revision.periodRevisions(), { code: "EACCES" });
+    native.createReadStream = originalStream;
+    assert.deepEqual(await f.revision.periodRevisions(), before, "a failed inspection cannot replace the last reusable summary with empty data");
+    assert.deepEqual(await fs.readFile(f.masterFile), sourceBefore);
+  } finally { native.createReadStream = originalStream; await f.dispose(); }
 });
 
 test("large manifests are parsed one at a time and scope caching still detects payload edits", async () => {
