@@ -12,6 +12,10 @@ const {POLICY_VERSION}=require('./lib/insight_policy.cjs');
 async function port(){const s=net.createServer();await new Promise(r=>s.listen(0,'127.0.0.1',r));const p=s.address().port;await new Promise(r=>s.close(r));return p;}
 test('signup through customer server validates consent and duplicates, stores central profile, and logs in after restart',async t=>{
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'insight-signup-test-'));
+  // An empty catalog is valid; an absent authoritative source intentionally is
+  // not. Keep this signup fixture independent of missing-source recovery.
+  await fs.mkdir(path.join(dir,'company_master'),{recursive:true});
+  await fs.writeFile(path.join(dir,'company_master','companies.json'),JSON.stringify({companies:{}}));
   const backendPort=await port(),frontPort=await port();
   const backend=`http://127.0.0.1:${backendPort}`,origin=`http://127.0.0.1:${frontPort}`,serviceToken=randomBytes(32).toString('hex');
   const env={...Object.fromEntries(Object.entries(process.env).filter(([k])=>['PATH','SYSTEMROOT','WINDIR','TEMP','TMP'].includes(k.toUpperCase()))),PORT:String(backendPort),HOST:'127.0.0.1',DATA_DIR:dir,OUTPUTS_DIR:path.join(dir,'outputs'),CONFIG_DIR:path.join(dir,'config'),GLAMPING_ADMIN_USER:'fixture-admin',GLAMPING_ADMIN_PASSWORD:'FixtureAdmin2026!',GLAMPING_B2B_USER:'reserved-fixture',GLAMPING_B2B_PASSWORD:'FixtureReserved2026!',TOURISM_VISITOR_MONTHLY_SYNC_ENABLED:'0',TOURISM_DEMAND_STRENGTH_BACKFILL_ENABLED:'0',INSIGHT_CONNECTION_ENABLED:'1',INSIGHT_SERVICE_TOKEN:serviceToken,INSIGHT_SIGNUP_ENABLED:'1'};

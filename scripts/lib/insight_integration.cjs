@@ -8,6 +8,20 @@ const { createInsightAnalysis } = require('./insight_analysis.cjs');
 const { POLICY_VERSION, insightPolicies } = require('./insight_policy.cjs');
 const { createInsightAdminStore } = require('./insight_admin_store.cjs');
 const { createInsightAdminProvisioning } = require('./insight_admin_provisioning.cjs');
+const { createInsightCatalog } = require('./insight_catalog.cjs');
+// Match the existing reviewed-room convention without invoking capacity/history
+// preparation merely to authenticate or display a company's identity.
+function reviewedRooms(company) {
+  const correction=company?.manualCorrection;
+  if(!correction||correction.active===false)return null;
+  const explicit=Number(correction.lodgingBasisTotal);
+  if(Number.isFinite(explicit)&&explicit>0)return Math.round(explicit);
+  const count=(Array.isArray(correction.roomSegments)?correction.roomSegments:[]).reduce((sum,row)=>{
+    const value=Number(String(row?.count??row?.roomCount??'').replace(/,/g,'').replace(/[^\d.]/g,''));
+    return sum+(Number.isFinite(value)&&value>0?Math.round(value):0);
+  },0);
+  return count>0?count:null;
+}
 function createInsightIntegration({ dataDir, readCatalog, readMembers, authenticateMember, registerMember, checkUsername, policyContext = {}, requireAdmin, collectorRequests, verifyStored, readPostprocess, readEvidence, readCompanyDetail, readIntegrated, readRegionContext, readRegionLocation, regionPreparation, env = process.env }) {
   if (env.INSIGHT_CONNECTION_ENABLED !== '1') return null;
   const serviceToken = env.INSIGHT_SERVICE_TOKEN;
@@ -15,8 +29,15 @@ function createInsightIntegration({ dataDir, readCatalog, readMembers, authentic
   const workerKey = insightCollectionWorkerKey(env.INSIGHT_COLLECTION_WORKER_KEY);
   const store = createInsightStore({ file: path.join(dataDir, 'customer_insight', 'insight.sqlite') });
   const adminStore = createInsightAdminStore({ file: path.join(dataDir, 'customer_insight', 'admins.sqlite') });
+  // Deployed services use a separate, source-verified identity projection. It
+  // never joins the monthly analytical lease; injected development adapters
+  // retain their contract unless the fast reader is explicitly selected.
+  const metadataEnabled=env.INSIGHT_METADATA_READ_ENABLED!=='0'&&(env.INSIGHT_METADATA_READ_ENABLED==='1'||env.NODE_ENV==='production'||Boolean(env.RENDER||env.RENDER_SERVICE_ID||env.RENDER_GIT_COMMIT));
+  const metadataCatalog=metadataEnabled?createInsightCatalog({dataDir,
+    regionMasterFile:path.join(__dirname,'..','..','web','data','region_master.json'),reviewedCapacity:reviewedRooms}):null;
+  if(metadataCatalog)void metadataCatalog.prepare().catch(()=>{});
   async function catalog() {
-    const data = await readCatalog();
+    const data = await (metadataCatalog?metadataCatalog.catalog():readCatalog());
     return { regions: data.regions, companies: data.companies.map(row => {
       const raw = data.rawCompanies.get(row.companyId);
       const reviewedProfile = raw.adminProfile?.active === true ? raw.adminProfile : {};
@@ -34,6 +55,6 @@ function createInsightIntegration({ dataDir, readCatalog, readMembers, authentic
   const handlers = createInsightHttp({ store, serviceToken, catalog, authenticateMember, registerMember, checkUsername, requireAdmin, preparationBridge, collectionResults, analysis,
     memberActive: async memberId => (await readMembers()).members.some(row => row.memberId === memberId && row.status !== 'disabled' && row.role === 'b2b'),
     signup, policies: insightPolicies(policyContext), supportEmail: policyContext.contactEmail || '', adminStore });
-  return { ...handlers, store, adminStore, provision: createInsightAdminProvisioning({ adminStore, requireAdmin }) };
+  return { ...handlers, store, adminStore, metadataCatalog, provision: createInsightAdminProvisioning({ adminStore, requireAdmin }) };
 }
-module.exports = { createInsightIntegration };
+module.exports = { createInsightIntegration, reviewedRooms };

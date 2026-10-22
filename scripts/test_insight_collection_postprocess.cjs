@@ -126,5 +126,9 @@ test('the authenticated integration injects current postprocess state before che
   assert.ok(reads>0);assert.equal(verifications,0);assert.equal(submits,1);
   current={state:'complete'};
   const refreshed=await fetch(base+'/api/insight/v1/me',{headers,signal:AbortSignal.timeout(5000)});assert.equal(refreshed.status,200);
-  assert.equal((await refreshed.json()).preparations[0].status,'ready');assert.equal(verifications,1);assert.equal(submits,1);
+  assert.equal((await refreshed.json()).preparations[0].status,'collecting','bootstrap returns the last verified state before refreshing in the background');
+  const verified=await fetch(base+`/api/insight/v1/companies/${company.companyId}/collection`,{headers,signal:AbortSignal.timeout(5000)});assert.equal(verified.status,200);
+  assert.equal((await verified.json()).request.status,'ready');assert.equal(verifications,1);assert.equal(submits,1);
+  const latest=await fetch(base+'/api/insight/v1/me',{headers,signal:AbortSignal.timeout(5000)});assert.equal(latest.status,200);
+  assert.equal((await latest.json()).preparations[0].status,'ready');assert.equal(verifications,1);assert.equal(submits,1);
 });
