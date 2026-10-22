@@ -3,6 +3,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { performance } = require('node:perf_hooks');
 const { body, json } = require('../scripts/lib/insight_http.cjs');
 const { fault } = require('../scripts/lib/insight_store.cjs');
 const { createCompanyReadCache } = require('./company-read-cache.cjs');
@@ -38,20 +39,43 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   // Historical source recalculation can take longer than a login or command.
   // Extend only these read endpoints; collection dispatch retains its timeout.
   const readTimeout = (method, route) => method === 'GET' && /\/(?:companies\/[a-zA-Z0-9_-]+\/collection|reports\/briefing)$/.test(route) ? 180000 : 20000;
-  async function readUpstream(route, search, headers) {
-    const response = await fetchImpl(`${backend}/api/insight/v1${route}${search}`, { method:'GET', headers, redirect:'error', signal:AbortSignal.timeout(readTimeout('GET',route)) });
-    return {status:response.status,ok:response.ok,data:await response.json()};
+  const identityRoutes=new Set(['/me','/auth/login','/admin/me','/admin/auth/login','/admin/customer-view/me','/admin/customer-view/start']);
+  function timings(){
+    const started=performance.now(),values=new Map([['upstream_headers',0],['upstream_body',0],['snapshot',0]]);
+    const add=(name,duration)=>{if(Number.isFinite(duration)&&duration>=0)values.set(name,(values.get(name)||0)+duration);};
+    return {add,central(header){
+      if(typeof header!=='string'||header.length>8192)return;
+      for(const item of header.split(',')){
+        const [name,...parameters]=item.trim().split(';');if(!['state_catalog','state_total'].includes(name))continue;
+        const duration=parameters.map(value=>/^\s*dur\s*=\s*(\d+(?:\.\d+)?)\s*$/.exec(value)).find(Boolean);
+        if(duration&&Number(duration[1])<=3600000)add(name,Number(duration[1]));
+      }
+    },header(){return [...values,['total',performance.now()-started]].map(([name,duration])=>`${name};dur=${duration.toFixed(1)}`).join(', ');}};
   }
-  async function companyRead(requestOrigin, mode, session, headers, route, url, force) {
+  async function readUpstream(route, search, headers, {method='GET',body,stage=identityRoutes.has(route)?'identity':'source',timing}={}) {
+    const signal=AbortSignal.timeout(readTimeout(method,route));let phase='upstream_headers',started=performance.now();
+    try{
+      const response=await fetchImpl(`${backend}/api/insight/v1${route}${search}`,{method,headers,body,redirect:'error',signal});
+      timing?.add(phase,performance.now()-started);phase='upstream_body';started=performance.now();
+      timing?.central(response.headers?.get?.('server-timing'));
+      const data=await response.json();timing?.add(phase,performance.now()-started);phase=null;
+      return {status:response.status,ok:response.ok,data};
+    }catch(error){
+      if(phase)timing?.add(phase,performance.now()-started);
+      if(stage&&(error?.name==='TimeoutError'||signal.aborted&&signal.reason?.name==='TimeoutError'))return {status:504,ok:false,data:{error:{code:'UPSTREAM_TIMEOUT',stage,message:stage==='identity'?'로그인 확인이 지연되어 연결하지 못했습니다. 잠시 후 다시 열어 주세요.':'자료 조회가 지연되어 연결하지 못했습니다. 잠시 후 다시 열어 주세요.'}}};
+      throw error;
+    }
+  }
+  async function companyRead(requestOrigin, mode, session, headers, route, url, force, timing) {
     const match=/^\/(?:customer-view\/)?companies\/([a-zA-Z0-9_-]+)\/collection$/.exec(route);
     if(!match)return null;
     const prefix=mode==='admin'?'/admin':'', month=url.searchParams.get('month')||'';
     const valid=[...url.searchParams.keys()].every(key=>key==='month')&&url.searchParams.getAll('month').length<=1&&(!url.searchParams.has('month')||/^20\d{2}-(0[1-9]|1[0-2])$/.test(month));
     // Invalid input still follows the central authentication/validation path.
-    if(!session||!valid)return readUpstream(prefix+route,url.search,headers);
+    if(!session||!valid)return readUpstream(prefix+route,url.search,headers,{timing});
     return companyReads.read({scope:scopeFor(requestOrigin,mode,session),route:'/companies/'+match[1]+'/collection',companyId:match[1],month,force,
-      readIdentity:()=>readUpstream(prefix+(mode==='admin'?'/customer-view/me':'/me'),'',headers),
-      readSource:()=>readUpstream(prefix+route,url.search,headers)});
+      readIdentity:()=>readUpstream(prefix+(mode==='admin'?'/customer-view/me':'/me'),'',headers,{stage:'identity',timing}),
+      readSource:()=>readUpstream(prefix+route,url.search,headers,{stage:'source',timing})});
   }
   async function staticAsset(file) {
     const stat=await fs.promises.stat(file),previous=staticAssets.get(file);
@@ -66,6 +90,8 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   const adminCookie = (token, expire = false) => `${adminCookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${expire ? 0 : 28800}${secure ? '; Secure' : ''}`;
   const staticMap = { '/company-flow.js':['company-flow.js','text/javascript'], '/region-history.js':['region-history.js','text/javascript'], '/analysis.js':['analysis.js','text/javascript'], '/': ['connected.html', 'text/html'], '/app': ['connected.html', 'text/html'], '/login': ['connected.html', 'text/html'], '/signup': ['connected.html', 'text/html'], '/terms': ['connected.html', 'text/html'], '/privacy': ['connected.html', 'text/html'], '/company-view.js': ['company-view.js', 'text/javascript'], '/collection.js': ['collection.js', 'text/javascript'], '/connected.js': ['connected.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/connected.css': ['connected.css', 'text/css'], '/favicon.svg': ['favicon.svg', 'image/svg+xml'] };
   const server = http.createServer(async (req, res) => {
+    const timing=timings();let observed=false;
+    const respond=(status,value)=>{if(observed)res.setHeader('Server-Timing',timing.header());json(res,status,value);};
     res.setHeader('Cache-Control', 'private, no-store'); res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     res.setHeader('Referrer-Policy', 'no-referrer'); res.setHeader('X-Robots-Tag', 'noindex, nofollow');
@@ -74,9 +100,10 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
       if (!requestOrigin) throw fault('INVALID_HOST', '올바른 인사이트 주소로 접속해 주세요.', 403);
       const url = new URL(req.url, requestOrigin);
       if (url.origin !== requestOrigin) throw fault('INVALID_HOST', '올바른 인사이트 주소로 접속해 주세요.', 403);
-      if (req.method === 'GET' && url.pathname === '/api/health') { json(res, 200, { status: 'ok', mode: 'connected', buildCommit: process.env.RENDER_GIT_COMMIT?.slice(0, 12) || null }); return; }
+      if (req.method === 'GET' && url.pathname === '/api/health') { respond(200, { status: 'ok', mode: 'connected', buildCommit: process.env.RENDER_GIT_COMMIT?.slice(0, 12) || null }); return; }
       if (url.pathname.startsWith('/api/insight-admin/v1/')) {
         const route = url.pathname.slice('/api/insight-admin/v1'.length);
+        observed=identityRoutes.has('/admin'+route)||req.method==='GET'&&/^\/customer-view\/companies\/[a-zA-Z0-9_-]+\/collection$/.test(route);
         const methods = { '/me': 'GET', '/customers': 'GET', '/auth/login': 'POST', '/auth/logout': 'POST', '/customer-view/start': 'POST', '/customer-view/me': 'GET', '/customer-view/config': 'GET', '/customer-view/policies/terms': 'GET', '/customer-view/policies/privacy': 'GET', '/customer-view/commands': 'POST', '/customer-view/catalog/companies': 'GET', '/customer-view/catalog/regions': 'GET' };
         const match = /^\/customers\/cus_[a-zA-Z0-9-]+(\/commands)?$/.exec(route);
         const regionalPreparation=/^\/customer-view\/regions\/[a-zA-Z0-9_-]+\/preparation$/.test(route)&&['GET','POST'].includes(req.method);
@@ -88,22 +115,22 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
         if (req.method === 'POST') { payload = JSON.stringify(await body(req)); headers['Content-Type'] = 'application/json'; }
         if(req.method==='POST'&&route!=='/customer-view/start')companyReads.invalidate(scopeFor(requestOrigin,'admin',session));
         if(req.method==='GET') {
-          const saved=await companyRead(requestOrigin,'admin',session,headers,route,url,req.headers['x-insight-refresh']==='1');
-          if(saved){if(saved.status===401)res.setHeader('Set-Cookie',adminCookie('',true));json(res,saved.status,saved.data);return;}
+          const saved=await companyRead(requestOrigin,'admin',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing);
+          if(saved){if(saved.status===401)res.setHeader('Set-Cookie',adminCookie('',true));respond(saved.status,saved.data);return;}
         }
-        const response = await fetchImpl(`${backend}/api/insight/v1/admin${route}${url.search}`, { method: req.method, headers, body: payload, redirect: 'error', signal: AbortSignal.timeout(readTimeout(req.method,route)) });
-        const data = await response.json();
-        if(response.ok&&['/customer-view/me','/customer-view/start'].includes(route))data.companyViews=companyReads.snapshot({scope:scopeFor(requestOrigin,'admin',session),identity:data});
+        const response=await readUpstream('/admin'+route,url.search,headers,{method:req.method,body:payload,stage:identityRoutes.has('/admin'+route)?'identity':req.method==='GET'?'source':null,timing}),data=response.data;
+        if(response.ok&&['/customer-view/me','/customer-view/start'].includes(route)){const started=performance.now();data.companyViews=companyReads.snapshot({scope:scopeFor(requestOrigin,'admin',session),identity:data});timing.add('snapshot',performance.now()-started);}
         if(req.method==='POST'&&route!=='/customer-view/start'||[401,403].includes(response.status))companyReads.invalidate(scopeFor(requestOrigin,'admin',session));
         if (response.ok && route === '/auth/login') {
           if (!/^[A-Za-z0-9_-]{43}$/.test(data.token || '')) throw new Error('Missing administrator session');
           res.setHeader('Set-Cookie', adminCookie(data.token)); delete data.token;
         }
         if ((response.ok && route === '/auth/logout') || response.status === 401) res.setHeader('Set-Cookie', adminCookie('', true));
-        json(res, response.status, data); return;
+        respond(response.status, data); return;
       }
       if (url.pathname.startsWith('/api/customer/v1/')) {
         const route = url.pathname.slice('/api/customer/v1'.length);
+        observed=identityRoutes.has(route)||req.method==='GET'&&/^\/companies\/[a-zA-Z0-9_-]+\/collection$/.test(route);
         const allowed = { '/config': 'GET', '/me': 'GET', '/auth/username': 'GET', '/policies/terms': 'GET', '/policies/privacy': 'GET', '/auth/login': 'POST', '/auth/signup': 'POST', '/auth/logout': 'POST', '/commands': 'POST', '/catalog/companies': 'GET', '/catalog/regions': 'GET' };
         const regionalPreparation=/^\/regions\/[a-zA-Z0-9_-]+\/preparation$/.test(route)&&['GET','POST'].includes(req.method);
         if (!regionalPreparation && (allowed[route] || (/^\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|reports\/briefing)$/.test(route) ? 'GET' : '')) !== req.method) throw fault('NOT_FOUND', '요청한 기능을 찾을 수 없습니다.', 404);
@@ -115,19 +142,18 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
         if (req.method === 'POST') { payload = JSON.stringify(await body(req)); headers['Content-Type'] = 'application/json'; }
         if(req.method==='POST')companyReads.invalidate(scopeFor(requestOrigin,'customer',session));
         if(req.method==='GET') {
-          const saved=await companyRead(requestOrigin,'customer',session,headers,route,url,req.headers['x-insight-refresh']==='1');
-          if(saved){if(saved.status===401)res.setHeader('Set-Cookie',cookie('',true));json(res,saved.status,saved.data);return;}
+          const saved=await companyRead(requestOrigin,'customer',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing);
+          if(saved){if(saved.status===401)res.setHeader('Set-Cookie',cookie('',true));respond(saved.status,saved.data);return;}
         }
-        const response = await fetchImpl(`${backend}/api/insight/v1${route}${url.search}`, { method: req.method, headers, body: payload, redirect: 'error', signal: AbortSignal.timeout(readTimeout(req.method,route)) });
-        const data = await response.json();
-        if(response.ok&&req.method==='GET'&&route==='/me')data.companyViews=companyReads.snapshot({scope:scopeFor(requestOrigin,'customer',session),identity:data});
+        const response=await readUpstream(route,url.search,headers,{method:req.method,body:payload,stage:identityRoutes.has(route)?'identity':req.method==='GET'?'source':null,timing}),data=response.data;
+        if(response.ok&&req.method==='GET'&&route==='/me'){const started=performance.now();data.companyViews=companyReads.snapshot({scope:scopeFor(requestOrigin,'customer',session),identity:data});timing.add('snapshot',performance.now()-started);}
         if(req.method==='POST'||[401,403].includes(response.status))companyReads.invalidate(scopeFor(requestOrigin,'customer',session));
         if (response.ok && ['/auth/login', '/auth/signup'].includes(route)) {
           if (!/^[A-Za-z0-9_-]{43}$/.test(data.token || '')) throw new Error('Missing session');
           res.setHeader('Set-Cookie', cookie(data.token)); delete data.token;
         }
         if ((route === '/auth/logout' && response.ok) || response.status === 401) res.setHeader('Set-Cookie', cookie('', true));
-        json(res, response.status, data); return;
+        respond(response.status, data); return;
       }
       if (!['GET', 'HEAD'].includes(req.method)) throw fault('NOT_FOUND', '요청한 화면을 찾을 수 없습니다.', 404);
       const adminAssets = { '/admin': ['admin.html', 'text/html'], '/admin.js': ['admin.js', 'text/javascript'], '/admin.css': ['admin.css', 'text/css'] };
@@ -145,7 +171,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
       res.writeHead(200, { 'Content-Type': `${item[1]}; charset=utf-8`, 'Content-Length': data.length }); res.end(req.method === 'HEAD' ? undefined : data);
     } catch (error) {
       if (res.headersSent) { res.destroy(); return; }
-      json(res, error.statusCode || 503, { error: { code: error.code && error.statusCode ? error.code : 'CONNECTION_UNAVAILABLE', message: error.statusCode ? error.message : '데이터랩 연결을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.' } });
+      respond(error.statusCode || 503, { error: { code: error.code && error.statusCode ? error.code : 'CONNECTION_UNAVAILABLE', message: error.statusCode ? error.message : '데이터랩 연결을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.' } });
     }
   });
   server.requestTimeout = 30000; server.headersTimeout = 10000;
