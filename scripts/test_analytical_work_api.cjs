@@ -64,6 +64,9 @@ async function main() {
     for (const [key, value] of Object.entries(diagnostics.data.monthlySources)) {
       if (key === "companyCatalog") {
         for (const counter of Object.values(value)) assert.ok(Number.isSafeInteger(counter) && counter >= 0);
+      } else if (key === "preparedCatalogReadsByScope") {
+        assert.deepEqual(Object.keys(value).sort(), ["company", "industry", "keyword", "other", "region"]);
+        for (const counter of Object.values(value)) assert.ok(Number.isSafeInteger(counter) && counter >= 0);
       } else assert.ok(Number.isSafeInteger(value) && value >= 0, key);
     }
     assert.equal(typeof diagnostics.data.observationIndex.ready, "boolean");
@@ -73,8 +76,17 @@ async function main() {
     for (const key of ["queuedForeground", "queuedBackground"]) assert.ok(Number.isSafeInteger(diagnostics.data.work[key]) && diagnostics.data.work[key] >= 0);
     assert.equal(diagnostics.data.work.memory.enabled, true);
     if (diagnostics.data.memory !== null) {
-      assert.equal(diagnostics.data.memory.scope, "live-allocation-admission-estimate");
+      assert.equal(diagnostics.data.memory.scope, "live-allocation-and-v8-heap-admission-estimate");
       for (const key of ["rssBytes", "heapUsedBytes", "externalBytes", "estimatedLiveBytes", "limitBytes"]) assert.ok(Number.isFinite(diagnostics.data.memory[key]) && diagnostics.data.memory[key] >= 0, key);
+      assert.ok(Number.isFinite(diagnostics.data.memory.liveAllocationRatio) && diagnostics.data.memory.liveAllocationRatio >= 0);
+      if (diagnostics.data.memory.heapStatisticsStatus === "available") {
+        assert.ok(Number.isSafeInteger(diagnostics.data.memory.heapLimitBytes) && diagnostics.data.memory.heapLimitBytes > 0);
+        assert.equal(diagnostics.data.memory.heapRatio, diagnostics.data.memory.heapUsedBytes / diagnostics.data.memory.heapLimitBytes);
+        assert.equal(diagnostics.data.memory.ratio, Math.max(diagnostics.data.memory.liveAllocationRatio, diagnostics.data.memory.heapRatio));
+      } else {
+        assert.equal(diagnostics.data.memory.heapRatio, null); assert.equal(diagnostics.data.memory.heapLimitBytes, null);
+        assert.equal(diagnostics.data.memory.ratio, diagnostics.data.memory.liveAllocationRatio);
+      }
     }
     assert.equal(JSON.stringify(diagnostics.data).includes(password), false, "runtime diagnostics contain no credentials");
     for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {

@@ -252,6 +252,12 @@ function createCompanyCapacityRegistry({ dataDir, observedCapacity, reviewedCapa
     }
     return result;
   }
-  return { prepareCompanies(companies, context) { const task = chain.then(() => prepare(companies, context)); chain = task.catch(() => {}); return task; } };
+  return { prepareCompanies(companies, context) {
+    const task = chain.then(() => prepare(companies, context));
+    // Serialize future work without retaining the completed full inventory.
+    // The caller still owns the original result/error-bearing task.
+    chain = task.then(() => undefined, () => undefined);
+    return task;
+  } };
 }
 module.exports = { createCompanyCapacityRegistry };

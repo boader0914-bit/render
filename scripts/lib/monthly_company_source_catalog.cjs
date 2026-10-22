@@ -84,7 +84,8 @@ function createMonthlyCompanySourceCatalog({ dataDir, readRevision, loadFullCata
   const counters = { builds: 0, hits: 0, memoryHits: 0, savedHits: 0, revisionReads: 0, buildRetries: 0, fullCatalogReads: 0, companyBodyReads: 0,
     companyBodyBytes: 0, generationWrittenBytes: 0, compactBytes: 0, cleanupFailures: 0, retainedFullCompanies: 0, maximumSelectedCompanyBytes: 0,
     abandonedGenerationsRemoved: 0, abandonedCleanupFailures: 0, storageLimitStops: 0 };
-  const schedule = operation => { const pending = serial.then(operation); serial = pending.catch(() => {}); return pending; };
+  // Retain only queue completion, not the last returned full catalog clone.
+  const schedule = operation => { const pending = serial.then(operation); serial = pending.then(() => undefined, () => undefined); return pending; };
   async function revision() {
     counters.revisionReads++; let value;
     try { value = await readRevision(); } catch { fail("MONTHLY_COMPANY_SOURCE_REVISION_UNAVAILABLE"); }
