@@ -13,6 +13,16 @@ function regionIds(customer,catalog) {
   }
   return keys;
 }
+// Viewing stored context does not approve ownership or grant preparation rights.
+// Keep regionIds unchanged for preparation status and refresh requests.
+function readableRegionIds(customer,catalog) {
+  const keys=regionIds(customer,catalog);
+  for(const rel of customer.relations.filter(r=>r.kind==='own'&&r.status==='pending')) {
+    const key=catalog.companies.find(c=>c.companyId===rel.companyId)?.regionKey;
+    if(key&&catalog.regions.some(r=>r.id===key&&r.level==='local'))keys.add(key);
+  }
+  return keys;
+}
 function safeUrl(value){try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password?u.href:null;}catch{return null;}}
 function projectRegion(region,month,context,location) {
   if(context?.networkAttempted)throw fault('READ_ONLY_SOURCE_REQUIRED','저장된 지역 자료만 연결할 수 있습니다.',503);
@@ -75,11 +85,11 @@ function createInsightAnalysis({catalog,collectionResults,readRegionContext,regi
   async function region(customer,regionKey,month=previousMonth(),data) {
     data=data||await catalog();
     const item=data.regions.find(r=>r.id===regionKey&&r.level==='local');
-    if(!item||!regionIds(customer,data).has(regionKey))throw fault('NOT_FOUND','등록한 지역의 자료를 찾을 수 없습니다.',404);
+    if(!item||!readableRegionIds(customer,data).has(regionKey))throw fault('NOT_FOUND','등록한 지역의 자료를 찾을 수 없습니다.',404);
     if(!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month)||month>'2099-12'||month<'2017-12'||month>previousMonth())throw fault('INVALID_MONTH','마감된 월을 마지막 기준월로 선택해 주세요.');
     if(!readRegionContext)throw fault('REGION_NOT_READY','지역 자료 연결을 준비 중입니다.',503);
     const context=await readRegionContext({type:'region',targetId:regionKey,month},data);
-    return {...projectRegion(item,month,context,await readRegionLocation(regionKey)),refreshAvailable:Boolean(regionPreparation)};
+    return {...projectRegion(item,month,context,await readRegionLocation(regionKey)),refreshAvailable:Boolean(regionPreparation)&&regionIds(customer,data).has(regionKey)};
   }
   async function preparation(customer,regionKey,month=previousMonth(),start=false) {
     const data=await catalog();
@@ -125,4 +135,4 @@ function createInsightAnalysis({catalog,collectionResults,readRegionContext,regi
   }
   return {region,briefing,preparation};
 }
-module.exports={createInsightAnalysis,regionIds,projectRegion,buildBriefing};
+module.exports={createInsightAnalysis,regionIds,readableRegionIds,projectRegion,buildBriefing};

@@ -1,7 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
 const { fault, fields, hash, active } = require('./insight_store.cjs');
-const {regionIds}=require('./insight_analysis.cjs');
+const {readableRegionIds}=require('./insight_analysis.cjs');
 const csrf = token => crypto.createHmac('sha256', token).update('insight-csrf-v1').digest('base64url');
 const equal = (a, b) => crypto.timingSafeEqual(Buffer.from(hash(a || '')), Buffer.from(hash(b || '')));
 async function body(req) {
@@ -21,7 +21,7 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
     const data = await catalog();
     const allowed = new Set(customer.relations.filter(active).map(row => row.companyId));
     const companies = data.companies.filter(row => allowed.has(row.companyId));
-    const regionKeys = regionIds(customer,data);
+    const regionKeys = readableRegionIds(customer,data);
     const unlimited=customer.accountKind==='admin_preview';
     return { customer, companies, regions: data.regions.filter(row => regionKeys.has(row.id)), corrections: store.corrections(customer.customerId),
       registrationAllowance:{ownLimit:unlimited?null:1,competitorLimit:unlimited?null:customer.entitlements.competitorLimit,interestRegionLimit:unlimited?null:customer.entitlements.interestRegionLimit},
