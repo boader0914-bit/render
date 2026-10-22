@@ -566,12 +566,147 @@ context.companySalesSignalFromItem = (item) => ({ lodging: { maxTotal: item.week
 context.companyRevenueSnapshotFromItem = () => ({});
 context.compactCompanyProductSnapshot = (item) => ({ products: [{ key: "room" }], capacityBasis: item.inventoryEvidence.capacityBasis });
 context.buildHistoryObservations = () => [];
-context.recoverCompanyProductSourceFromRuns(recoveryCompany, []).then((recovered) => {
+
+// Run the real recovery function in an isolated VM without a server or saved
+// business inputs. The test-only tap inspects strong-reference reachability at
+// the candidate boundary; it does not claim a GC/RSS measurement.
+function recoveryFunctionSource(name) {
+  const asyncStart = source.indexOf(`async function ${name}(`);
+  const start = asyncStart >= 0 ? asyncStart : source.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `${name} source exists`);
+  const next = /\n(?:async )?function /.exec(source.slice(start + 1));
+  return source.slice(start, next ? start + 1 + next.index : source.length);
+}
+
+function objectReachable(value, target, seen = new Set()) {
+  if (value === target) return true;
+  if (!value || typeof value !== "object" || seen.has(value)) return false;
+  seen.add(value);
+  return Object.values(value).some((child) => objectReachable(child, target, seen));
+}
+
+async function recoveryCandidateRetentionFixture(config, historical) {
+  const ids = Array.from({ length: config.count ?? 4 }, (_, i) => `run_${String(i).padStart(2, "0")}`);
+  const company = { companyId: "retention_fixture", placeIds: config.bookingOnly ? [] : ["10"],
+    bookingBusinessIds: ["20"], runIds: ids, inventory: { snapshots: ids.map((runId) => ({ runId, collectedAt: "2026-08-01T00:00:00Z" })) } };
+  const calls = [], loaded = new Map(), selected = new Map(), captures = [];
+  const observed = (id) => config.sameTime ? "2026-09-01T00:00:00Z"
+    : config.observationOverride && id === ids[0] ? "2026-10-01T00:00:00Z" : "";
+  const timestamp = (id) => `2026-09-${String(ids.indexOf(id) + 1).padStart(2, "0")}T00:00:00Z`;
+  const rawInputs = () => JSON.stringify([...loaded.values()]);
+  let beforeInputs = "";
+  const sandbox = {
+    boundedUnique: (values, limit) => [...new Set(values)].slice(0, limit),
+    companyRankObservationTimeMap: () => new Map(),
+    companyProductRunObservedAt: (_company, observations, id) => { assert.equal(observations[0].fixture, true); return observed(id); },
+    extractNaverPlaceId: (item) => item.placeId || "",
+    extractBookingBusinessId: (item) => item.bookingBusinessId || "",
+    listRuns: async () => { calls.push(["listRuns"]); if (config.listFailure) throw Error("synthetic list failure"); return ids.map(id => ({ id, collectedAt: timestamp(id) })); },
+    resolveRunDir: (id) => config.scoped && id === ids[0] ? "" : `fixture/${id}`,
+    readManifest: async (dir) => ({ keyword: config.scoped && dir.endsWith(ids[1]) ? "???" : "fixture", collectedAt: timestamp(dir.split("/").at(-1)) }),
+    fsp: { stat: async () => ({ mtime: new Date("2026-09-01T00:00:00Z") }), readdir: async () => ["manifest.json"] },
+    isIncompleteRunDirectory: () => false,
+    runCollectedAt: (_id, manifest) => manifest.collectedAt,
+    loadRun: async (id, options) => {
+      calls.push(["loadRun", id, JSON.parse(JSON.stringify(options))]);
+      if (config.empty || config.skips && id === ids[0]) return null;
+      if (config.skips && id === ids[1]) throw Error("synthetic load failure");
+      const item = { fixtureId: id, placeId: config.bookingOnly ? "" : config.skips && id === ids[2] ? "wrong-place" : "10", bookingBusinessId: "20",
+        legacy: Boolean(config.legacy), products: config.legacy ? [] : [{ key: id, price: 100000 }],
+        inventoryEvidence: { capacityBasis: { currentObservedMaximum: ids.indexOf(id) + 10 } },
+        quality: { status: "partial", missingDays: 2 }, daily: [{ date: "2026-09-26", total: 10, sold: null }],
+        roomBasis: { source: "observed_maximum" }, selectedMetadata: { dayUseScheduleStatus: "not_requested" } };
+      const unrelated = { fixtureOtherCompany: id, unneededPayload: "synthetic-other-company".repeat(30) };
+      const run = config.noRun ? undefined : { id, collectedAt: config.sameTime ? "2026-09-01T00:00:00Z" : timestamp(id),
+        updatedAt: "2026-08-02T00:00:00Z", files: { overall: `${id}_overall.csv` }, collectionQuality: { status: "complete" }, extraRunMetadata: { preserved: true } };
+      const data = { ...(config.noRun ? {} : { run }), availability: { items: [item, unrelated] },
+        ranking: { unrelated }, platform: { unrelated }, wholeRunSentinel: { id, keepOutOfCandidates: true } };
+      loaded.set(id, data);
+      return data;
+    },
+    applyCompanyManualCorrection: (item, selectedCompany) => {
+      assert.equal(selectedCompany, company);
+      const corrected = { ...item, manualFixtureCorrection: Boolean(config.manual) };
+      selected.set(item.fixtureId, corrected); return corrected;
+    },
+    companyMaximumRoomCapacity: () => 6,
+    applyInventoryEvidence: (item) => ({ ...item, inventoryEvidence: { version: config.legacy ? 1 : 4,
+      capacityBasis: { count: item.inventoryCapacityBaseline.lodging, source: "observed_maximum" }, lodging: { observedMaximum: item.inventoryCapacityBaseline.lodging } } }),
+    companySalesSignalFromItem: (item, run) => ({ run, total: item.inventoryEvidence.capacityBasis.count, quality: item.quality, dayUse: null }),
+    companyRevenueSnapshotFromItem: (item) => ({ lodging: { revenue: item.manualFixtureCorrection ? 110000 : 100000 }, dayUse: { revenue: null, observed: false } }),
+    compactCompanyProductSnapshot: (item, run, at) => ({ run, observedAt: at, products: item.products,
+      capacityBasis: item.inventoryEvidence.capacityBasis, quality: item.quality, daily: item.daily, roomBasis: item.roomBasis, selectedMetadata: item.selectedMetadata }),
+    buildHistoryObservations: ({ run, availability }, at) => {
+      assert.equal(availability.items.length, 1); assert.equal(availability.items[0].companyId, company.companyId);
+      return [{ run, collectedAt: at, sold: null, quality: availability.items[0].quality, manual: availability.items[0].manualFixtureCorrection }];
+    },
+    legacyProductPreviewFromItem: (item, run, at) => item.legacy ? ({ run, observedAt: at, legacyProducts: [{ key: item.fixtureId }], quality: item.quality }) : null,
+    __candidateTap: (candidates) => {
+      beforeInputs = rawInputs();
+      for (const candidate of candidates) {
+        const original = loaded.get(candidate.runId);
+        assert.equal(candidate.data.run, original.run, "exact run metadata object is preserved");
+        assert.equal(candidate.item, selected.get(candidate.runId), "exact selected corrected item is preserved before capacity projection");
+        assert.equal(objectReachable(candidate, original), historical, "only the historical form retains the whole run root");
+        assert.equal(objectReachable(candidate, original.availability.items[1]), historical, "other-company item is absent from the improved candidate graph");
+        assert.equal(objectReachable(candidate, original.wholeRunSentinel), historical, "whole-run sentinel is not retained by the improved candidate");
+      }
+      captures.push(candidates.map(candidate => candidate.runId));
+    }
+  };
+  const isolated = vm.createContext(sandbox);
+  for (const name of ["companyProductStoredRunTimeMap", "companyProductSourceRunIds", "companyProductRecoveryRunIds", "companyProductAvailabilityMatch"]) {
+    vm.runInContext(recoveryFunctionSource(name), isolated);
+  }
+  let recovery = recoveryFunctionSource("recoverCompanyProductSourceFromRuns");
+  const compact = "data: { run: data.run },";
+  assert.equal(recovery.split(compact).length, 2, "the real source has the compact run metadata boundary exactly once");
+  if (historical) recovery = recovery.replace(compact, "data,");
+  assert.equal(recovery.split("  loadedCandidates.sort(").length, 2, "candidate observation boundary is unique");
+  recovery = recovery.replace("  loadedCandidates.sort(", "  globalThis.__candidateTap(loadedCandidates);\n  loadedCandidates.sort(");
+  vm.runInContext(recovery, isolated);
+  const value = await isolated.recoverCompanyProductSourceFromRuns(company, [{ fixture: true }], { scoped: Boolean(config.scoped) });
+  assert.equal(rawInputs(), beforeInputs, "recovery never modifies synthetic saved inputs");
+  return { value: JSON.parse(JSON.stringify(value)), calls, candidates: Array.from(captures[0]) };
+}
+
+async function verifyRecoveryCandidateRetention() {
+  const scenarios = [
+    { label: "full twenty-candidate bound", count: 25 },
+    { label: "observation time precedes run time", observationOverride: true },
+    { label: "equal-time insertion ordering", sameTime: true },
+    { label: "missing run metadata uses stored time", noRun: true, listFailure: true },
+    { label: "null, failed and conflicting identity skip", count: 6, skips: true },
+    { label: "legacy preview and source file", legacy: true },
+    { label: "no usable candidate", empty: true },
+    { label: "scoped directory lookup", scoped: true },
+    { label: "booking identity and manual correction", bookingOnly: true, manual: true }
+  ];
+  for (const scenario of scenarios) {
+    const old = await recoveryCandidateRetentionFixture(scenario, true);
+    const current = await recoveryCandidateRetentionFixture(scenario, false);
+    assert.deepEqual(current, old, `${scenario.label}: all output values, retained candidate order and exact load options stay equivalent`);
+    if (scenario.count === 25) {
+      assert.equal(current.candidates.length, 20, "the real recovery selector caps retained candidates at20");
+      assert.equal(current.candidates[0], "run_24"); assert.equal(current.candidates.at(-1), "run_05");
+    }
+    if (scenario.sameTime) assert.equal(current.value.productSnapshot.run.id, "run_03");
+    if (scenario.observationOverride) assert.equal(current.value.productSnapshot.run.id, "run_00");
+    if (scenario.legacy) {
+      assert.equal(current.value.productSnapshot, null); assert.equal(current.value.evidenceProjections.length, 0);
+      assert.equal(current.value.legacyProductPreview.sourceFile, "run_03_overall.csv");
+    }
+    if (scenario.empty) assert.deepEqual(current.value, { productSnapshot: null, evidenceProjections: [], legacyProductPreview: null, recoveredFromRun: false, identityMatch: "" });
+  }
+}
+
+context.recoverCompanyProductSourceFromRuns(recoveryCompany, []).then(async (recovered) => {
   assert.equal(recovered.evidenceProjections.length, 2);
   for (const projection of recovered.evidenceProjections) {
     assert.equal(projection.snapshot.salesSignal.lodging.maxTotal, 27, "all recovered runs share the maximum observed across their raw sources");
     assert.equal(projection.snapshot.productSnapshot.capacityBasis.observedMaximum, 27);
   }
+  await verifyRecoveryCandidateRetention();
   console.log("Inventory evidence server projection tests passed");
 }).catch((error) => {
   console.error(error);

@@ -15077,7 +15077,9 @@ async function recoverCompanyProductSourceFromRuns(company = {}, observations = 
     const runObservedAt = String(data.run?.collectedAt || data.run?.updatedAt || "").trim();
     loadedCandidates.push({
       runId,
-      data,
+      // Later recovery reads only run metadata and this company's selected
+      // item. Do not retain every other company's response across candidates.
+      data: { run: data.run },
       item,
       identityMatch: companyProductAvailabilityMatch(company, item),
       observedAt: actualObservedAt || runObservedAt || storedTimes.get(runId) || "",
