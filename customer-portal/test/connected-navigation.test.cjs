@@ -93,10 +93,9 @@ async function screen({adminView=false,accountKind=adminView?'admin_preview':'cu
 }
 
 for(const adminView of [false,true]){
-  test(`${adminView?'administrator preview':'customer'} initially prepares registered company views using read-only GETs`,async()=>{
+  test(`${adminView?'administrator preview':'customer'} initially prepares only the primary own company using one read-only GET`,async()=>{
     const ui=await screen({adminView}),queries=ui.calls.filter(call=>call.url.includes('/companies/'));
-    assert.equal(queries.length,2);assert.match(queries[0].url,/\/companies\/cmp_own\/collection$/);
-    assert.match(queries[1].url,/\/companies\/cmp_competitor\/collection$/);
+    assert.equal(queries.length,1);assert.match(queries[0].url,/\/companies\/cmp_own\/collection$/);
     assert.ok(queries.every(call=>call.method==='GET'&&call.body===null));
     assert.ok(ui.calls.every(call=>call.method==='GET'||adminView&&call.url.endsWith('/customer-view/start')));
     assert.ok(ui.calls.every(call=>!call.url.includes('/crawl')&&!call.url.endsWith('/commands')));
@@ -114,7 +113,7 @@ test('customer refresh starts configuration and session reads together without d
   assert.match(ui.html(),/내 매장 보기/);
   assert.equal(ui.calls.filter(row=>row.url===config).length,1);
   assert.equal(ui.calls.filter(row=>row.url===me).length,1);
-  assert.equal(ui.calls.filter(row=>row.url.includes('/companies/')).length,2);
+  assert.equal(ui.calls.filter(row=>row.url.includes('/companies/')).length,1);
   assert.ok(ui.calls.every(row=>row.method==='GET'));
 });
 
@@ -178,7 +177,7 @@ test('parallel configuration failure preserves the existing connection-error scr
   assert.equal(ui.calls.filter(row=>row.url.includes('/companies/')).length,0);
 });
 
-for(const adminView of [false,true])test(`${adminView?'administrator':'customer'} refresh prioritizes the visible competitor and shares its pending read before warming another company`,async()=>{
+for(const adminView of [false,true])test(`${adminView?'administrator':'customer'} refresh shares only the visible competitor read without warming another company`,async()=>{
   const ui=await screen({adminView,initialHash:'#company=cmp_competitor',deferRequests:[/\/companies\/[^/]+\/collection$/]});
   const first=ui.calls.filter(row=>row.url.includes('/companies/'));
   assert.equal(first.length,1,'background own-company reads must not compete with the visible company');
@@ -186,11 +185,55 @@ for(const adminView of [false,true])test(`${adminView?'administrator':'customer'
   assert.equal(ui.mounted.at(-1).id,'cmp_competitor');
   await ui.respond(first[0].url);
   const all=ui.calls.filter(row=>row.url.includes('/companies/'));
-  assert.equal(all.length,2);assert.match(all[1].url,/\/companies\/cmp_own\/collection$/);
+  assert.equal(all.length,1);
   assert.equal(all.filter(row=>row.url===first[0].url).length,1,'mount and warmup share the visible company request');
-  const visible=ui.result();
-  await ui.respond(all[1].url);
-  assert.equal(ui.result(),visible,'offscreen warming never replaces the selected competitor');
+  assert.ok(all.every(row=>!row.url.includes('/companies/cmp_own/')),'a viewed competitor does not trigger an offscreen own-company calculation');
+});
+
+for(const adminView of [false,true])test(`${adminView?'administrator':'customer'} direct collection routes read exactly the requested registered company`,async()=>{
+  for(const route of ['company','collection','collect']){
+    const ui=await screen({adminView,fixtureState:multipleOwnFixture(adminView?'admin_preview':'customer'),initialHash:'#'+route+'=cmp_own_second'});
+    const queries=ui.calls.filter(row=>row.url.includes('/companies/'));
+    assert.equal(queries.length,1);assert.match(queries[0].url,/\/companies\/cmp_own_second\/collection$/);
+    assert.equal(ui.mounted.at(-1).id,'cmp_own_second');
+    assert.ok(queries.every(row=>row.method==='GET'),'opening an explicit collection page must not start collection');
+  }
+});
+
+test('home and a multiple-property list warm only the first registered own company rather than catalog-order competitors',async()=>{
+  for(const initialHash of ['#home','#property']){
+    const ui=await screen({fixtureState:multipleOwnFixture(),initialHash}),queries=ui.calls.filter(row=>row.url.includes('/companies/'));
+    assert.equal(queries.length,1);assert.match(queries[0].url,/\/companies\/cmp_own\/collection$/);
+  }
+});
+
+for(const adminView of [false,true])test(`${adminView?'administrator':'customer'} regional, reporting, management and competitor lists never warm unopened company views`,async()=>{
+  for(const initialHash of ['#regions','#regions=region-interest','#reports','#settings','#competitors','#register-own','#welcome']){
+    const ui=await screen({adminView,fixtureState:multipleOwnFixture(adminView?'admin_preview':'customer'),initialHash});
+    assert.equal(ui.calls.filter(row=>row.url.includes('/companies/')).length,0,initialHash+' must not calculate an offscreen company');
+    assert.equal(ui.mounted.length,0);
+  }
+});
+
+test('an account without an own company or an unregistered explicit link does not fall back to warming competitors',async()=>{
+  const noOwn=fixture();noOwn.customer.relations=noOwn.customer.relations.filter(row=>row.kind!=='own');
+  for(const initialHash of ['#home','#property']){
+    const ui=await screen({fixtureState:noOwn,initialHash});assert.equal(ui.calls.filter(row=>row.url.includes('/companies/')).length,0);
+  }
+  const invalid=await screen({initialHash:'#company=not-registered'});
+  assert.match(invalid.html(),/등록한 업체를 찾을 수 없습니다/);assert.equal(invalid.calls.filter(row=>row.url.includes('/companies/')).length,0);
+});
+
+test('a competitor is loaded when opened and its visited view remains immediately reusable without offscreen warming',async()=>{
+  const ui=await screen({deferRequests:[/\/companies\/cmp_competitor\/collection$/]});
+  assert.equal(ui.calls.filter(row=>row.url.includes('/companies/cmp_competitor/')).length,0);
+  await ui.navigate('#company=cmp_competitor');
+  const first=ui.pending().find(url=>url.includes('/companies/cmp_competitor/'));assert.ok(first);await ui.respond(first);
+  const saved=ui.result();assert.match(saved,/비교 검수 풀빌라/);
+  await ui.navigate('#home');await ui.navigate('#company=cmp_competitor');
+  assert.equal(ui.result(),saved,'a visited company still renders its cached view before its permission recheck returns');
+  assert.equal(ui.calls.filter(row=>row.url.includes('/companies/cmp_competitor/')).length,2);
+  assert.equal(ui.calls.filter(row=>row.url.includes('/companies/cmp_own/')).length,1,'navigation does not restart the offscreen own-company warmup');
 });
 
 test('home cards contain a company view link without collection, unregister or correction controls',async()=>{
@@ -291,11 +334,11 @@ test('explicit region links are passed unchanged to the form and first read even
   }
 });
 
-test('a direct region entry and prefetch do not invent a selected own company',async()=>{
+test('a direct region entry neither reads offscreen companies nor invents a selected own company',async()=>{
   const ui=await screen({fixtureState:multipleOwnFixture(),initialHash:'#regions=region-interest'});
   const expected={mode:'regions',selectedRegion:'region-interest',selectedOwnId:null};
   assert.deepEqual(ui.analysisPanels.at(-1),expected);assert.deepEqual(ui.analysisMounts.at(-1),expected);
-  assert.ok(ui.calls.some(row=>row.url.includes('/companies/cmp_own/collection')),'background warming may run without changing the selected property');
+  assert.equal(ui.calls.filter(row=>row.url.includes('/companies/')).length,0,'regional entry must not calculate a company in the background');
 });
 
 test('logout clears the in-page own-property selection before another login',async()=>{

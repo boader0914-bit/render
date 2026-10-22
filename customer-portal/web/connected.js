@@ -54,11 +54,16 @@
   function prepareCompanies() {
     if(!state)return;
     const relations=state.customer.relations.filter(row=>['active','pending'].includes(row.status));
-    const ids=relations.filter(row=>row.kind==='own').concat(relations.filter(row=>row.kind!=='own')).map(row=>row.companyId);
-    const current=route(),selected=/^(company|collection|collect)=/.test(current)?decodeURIComponent(current.slice(current.indexOf('=')+1)):current==='property'&&relations.filter(row=>row.kind==='own').length===1?relations.find(row=>row.kind==='own').companyId:null;
-    const selectedIndex=ids.indexOf(selected);
-    if(selectedIndex>0)ids.unshift(ids.splice(selectedIndex,1)[0]);
-    window.InsightCollection?.prefetch?.(ids.map(id=>state.companies.find(row=>row.companyId===id)).filter(Boolean),api);
+    const current=route();let selected=null;
+    if(/^(company|collection|collect)=/.test(current)){
+      const id=decodeURIComponent(current.slice(current.indexOf('=')+1));
+      if(relations.some(row=>row.companyId===id))selected=id;
+    }else if(current==='home'||current==='property'){
+      const own=relations.filter(row=>row.kind==='own');
+      selected=(own.find(row=>row.companyId===selectedOwnId)||own[0])?.companyId;
+    }
+    const company=selected&&state.companies.find(row=>row.companyId===selected);
+    if(company)window.InsightCollection?.prefetch?.([company],api);
   }
   function openCompany(company,openCollection=false) {
     $('#main').innerHTML=window.InsightCollection.panel(company,state.features.directCollection,state.preparations.find(row=>row.companyId===company.companyId),state.collectionAllowance,openCollection);
