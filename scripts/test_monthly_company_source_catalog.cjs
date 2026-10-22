@@ -547,3 +547,116 @@ test("final fresh validation covers oversize fallback, no-target reads and recov
   await assert.rejects(adapter.loadSources(request), { code: "MONTHLY_SOURCE_UNAVAILABLE" });
   assert.equal(cancelledBoundary.isActive(), false, "callback failure cannot leave its boundary active");
 });
+
+function pairValues(pair) {
+  return json({ source: pair.source, catalog: { ...pair.catalog, rawCompanies: [...pair.catalog.rawCompanies] } });
+}
+function assertFrozenJson(value) {
+  const pending = [value];
+  while (pending.length) {
+    const item = pending.pop();
+    if (item === null || typeof item !== "object") continue;
+    assert.equal(Object.isFrozen(item), true);
+    for (const key of Object.keys(item)) pending.push(item[key]);
+  }
+}
+
+for (const indexed of [false, true]) test(`explicit frozen metadata sharing preserves all four complete source/catalog values (indexed=${indexed})`, async t => {
+  const f = await fixture(t, { indexed }), master = JSON.parse(await fs.readFile(f.companyFile));
+  master.companies.a.keywords.k.runs[0].unknownMetadata = { nested: [{ nullable: null, zero: 0, enabled: false }], warnings: ["saved-rank-metadata"] };
+  await fs.writeFile(f.companyFile, JSON.stringify(master));
+  const generic = f.make(true), shared = f.make(true, { shareFrozenCatalogMetadata: true });
+  for (const [type, targetId] of [["company", "a"], ["region", "pocheon"], ["keyword", "포천글램핑"], ["industry", "__industry_all__"]]) {
+    for (const month of ["2026-07", "2026-08", "2026-09"]) {
+      const request = { type, targetId, month, cutoffDate: "2026-09-30" };
+      const actual = await shared.loadSourcesWithCatalog(request), expected = await generic.loadSourcesWithCatalog(request);
+      assert.deepEqual(pairValues(actual), pairValues(expected), `${type}/${month}`);
+      if (type === "industry") assert.deepEqual(json(compactIndustrySources(actual.source, actual.catalog)), json(compactIndustrySources(expected.source, expected.catalog)));
+    }
+  }
+  const metrics = shared.sourceReadMetrics().companyCatalog;
+  assert.equal(metrics.sharedMetadataBuilds, 1, "one independent frozen tree per verified generation");
+  assert.equal(metrics.sharedMetadataReads, 12);
+  assert.equal(generic.sourceReadMetrics().companyCatalog.sharedMetadataBuilds, 0);
+  assert.match(source, /shareFrozenCatalogMetadata:\s*true/, "the actual application explicitly opts in");
+});
+
+test("frozen metadata shares values while each map and selected full company remain isolated", async t => {
+  const f = await fixture(t), adapter = f.make(true, { shareFrozenCatalogMetadata: true });
+  const broad = { type: "industry", targetId: "__industry_all__", month: "2026-08", cutoffDate: "2026-08-31" };
+  const first = await adapter.loadSourcesWithCatalog(broad), second = await adapter.loadSourcesWithCatalog(broad);
+  for (const key of ["companies", "regions", "runs"]) {
+    assert.strictEqual(first.catalog[key], second.catalog[key]); assertFrozenJson(first.catalog[key]);
+  }
+  assert.notStrictEqual(first.catalog.rawCompanies, second.catalog.rawCompanies);
+  assert.strictEqual(first.catalog.rawCompanies.get("b"), second.catalog.rawCompanies.get("b"));
+  assertFrozenJson(first.catalog.rawCompanies.get("b"));
+  assert.throws(() => { first.catalog.rawCompanies.get("b").manualCorrection.productStockCorrections.push({ count: 99 }); }, TypeError);
+  first.catalog.rawCompanies.clear(); assert.equal(second.catalog.rawCompanies.size, 4);
+  const selected = await adapter.loadSourcesWithCatalog({ ...broad, type: "company", targetId: "a" });
+  const originalName = selected.catalog.rawCompanies.get("a").primaryName;
+  assert.equal(Object.isFrozen(selected.catalog.rawCompanies.get("a")), false);
+  selected.catalog.rawCompanies.get("a").primaryName = "private selected mutation";
+  const body = await selected.catalog._companySource.readCompany("a"); body.primaryName = "another private mutation";
+  const again = await adapter.loadSourcesWithCatalog({ ...broad, type: "company", targetId: "a" });
+  assert.equal(again.catalog.rawCompanies.get("a").primaryName, originalName);
+  assert.equal(second.catalog.rawCompanies.get("a").primaryName, originalName);
+  assert.equal(adapter.sourceReadMetrics().companyCatalog.sharedMetadataBuilds, 1);
+  const full = await adapter.catalog();
+  assert.equal(Object.isFrozen(full.rawCompanies.get("a")), false);
+  assert.ok(full.rawCompanies.get("a").largeUnusedOriginalField, "public full catalog contract remains complete and mutable");
+});
+
+test("generic mutable copies and original full catalogs are never frozen by the sharing opt-in", async t => {
+  const f = await fixture(t), generic = f.make(true);
+  const request = { type: "industry", targetId: "__industry_all__", month: "2026-08", cutoffDate: "2026-08-31" };
+  const first = await generic.loadSourcesWithCatalog(request), original = pairValues(first);
+  first.catalog.companies[0].primaryName = "mutable generic value";
+  first.catalog.runs[0].collectionQuality.status = "mutable caller edit";
+  first.catalog.rawCompanies.get("b").manualCorrection.productStockCorrections.push({ productId: "private", count: 3 });
+  first.catalog.rawCompanies.delete("a");
+  assert.deepEqual(pairValues(await generic.loadSourcesWithCatalog(request)), original);
+  const originalFull = { companies: [{ companyId: "a", placeIds: ["10"] }], regions: [{ id: "pocheon" }], runs: json(runs), rawCompanies: new Map([["a", rawCompanies().a]]) };
+  const owned = createMonthlyCompanySourceCatalog({ dataDir: await temporary(t), readRevision: async () => "stable-source",
+    loadFullCatalog: async () => originalFull, projectCapacityCompany: compactMonthlyCapacityCompany, shareFrozenCatalogMetadata: true });
+  await owned.readCatalog();
+  assert.equal(Object.isFrozen(originalFull.companies), false);
+  assert.equal(Object.isFrozen(originalFull.companies[0].placeIds), false);
+  assert.equal(Object.isFrozen(originalFull.rawCompanies.get("a").manualCorrection), false);
+  originalFull.companies[0].placeIds.push("still-mutable-original");
+  originalFull.rawCompanies.get("a").manualCorrection.lodgingBasisTotal = 25;
+  assert.deepEqual((await owned.readCatalog()).companies[0].placeIds, ["10"], "shared tree owns a separate JSON copy");
+});
+
+test("frozen sharing reloads saved generations and rejects changed sources without reusing the old tree", async t => {
+  const f = await fixture(t), request = { type: "industry", targetId: "__industry_all__", month: "2026-08", cutoffDate: "2026-08-31" };
+  const adapter = f.make(true, { shareFrozenCatalogMetadata: true, useSourceReadValidationBoundary: true });
+  const before = await adapter.loadSourcesWithCatalog(request);
+  const restarted = f.make(true, { shareFrozenCatalogMetadata: true, useSourceReadValidationBoundary: true });
+  assert.deepEqual(pairValues(await restarted.loadSourcesWithCatalog(request)), pairValues(before));
+  assert.equal(restarted.sourceReadMetrics().catalogFullReads, 0);
+  assert.equal(restarted.sourceReadMetrics().companyCatalog.savedHits, 1);
+  let changed = false;
+  const changing = f.make(true, { shareFrozenCatalogMetadata: true, useSourceReadValidationBoundary: true,
+    readContext: async () => {
+      if (!changed) { changed = true; const master = JSON.parse(await fs.readFile(f.companyFile)); master.companies.a.placeIds = ["new-source-identity"]; await fs.writeFile(f.companyFile, JSON.stringify(master)); }
+      return { sources: [], networkAttempted: false };
+    } });
+  await assert.rejects(changing.loadSourcesWithCatalog(request), { code: "MONTHLY_SOURCE_UNAVAILABLE" });
+  const after = await changing.loadSourcesWithCatalog(request);
+  assert.deepEqual(after.catalog.companies.find(company => company.companyId === "a").placeIds, ["new-source-identity"]);
+  assert.notStrictEqual(after.catalog.companies, before.catalog.companies);
+  assert.equal(changing.sourceReadMetrics().companyCatalog.sharedMetadataBuilds, 2);
+  const absent = await changing.loadSourcesWithCatalog({ ...request, type: "company", targetId: "absent" });
+  assert.equal(absent.catalog.rawCompanies.has("absent"), false);
+  await assert.rejects(after.catalog._companySource.readCompany("absent"), { code: "MONTHLY_COMPANY_SOURCE_COMPANY_NOT_FOUND" });
+});
+
+test("frozen sharing is an independent explicit boolean opt-in", async t => {
+  const f = await fixture(t);
+  for (const invalid of [null, 0, 1, "true", {}]) {
+    assert.throws(() => f.make(true, { shareFrozenCatalogMetadata: invalid }), TypeError);
+    assert.throws(() => createMonthlyCompanySourceCatalog({ dataDir: f.root, readRevision: f.readRevision,
+      loadFullCatalog: async () => ({}), projectCapacityCompany: compactMonthlyCapacityCompany, shareFrozenCatalogMetadata: invalid }), TypeError);
+  }
+});

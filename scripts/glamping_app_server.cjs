@@ -615,6 +615,9 @@ const monthlyReportSources = createMonthlyReportSources({
   listRuns,
   projectCapacityCompany: compactMonthlyCapacityCompany,
   useSourceReadValidationBoundary: true,
+  // These internal consumers read compact metadata without mutating it. Share
+  // one independent frozen copy per verified generation; full bodies stay local.
+  shareFrozenCatalogMetadata: true,
   companySourceVersion: monthlyCompanySourceVersion,
   prepareCompanies: companyCapacityRegistry.prepareCompanies,
   projectObservation: (row, company) => {

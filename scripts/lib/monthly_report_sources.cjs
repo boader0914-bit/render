@@ -23,8 +23,9 @@ async function readJson(file, fallback, checkpoint = async () => {}) {
   catch (error) { if (error.code === "ENOENT") return fallback; throw sourceError(); }
 }
 
-function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, observationIndex = null, prepareCompanies = null, projectCapacityCompany = null, companySourceVersion = "monthly-company-source-v1", useSourceReadValidationBoundary = false, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", now = () => new Date(), runWork = operation => operation() }) {
+function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, observationIndex = null, prepareCompanies = null, projectCapacityCompany = null, companySourceVersion = "monthly-company-source-v1", useSourceReadValidationBoundary = false, shareFrozenCatalogMetadata = false, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", now = () => new Date(), runWork = operation => operation() }) {
   if (typeof useSourceReadValidationBoundary !== "boolean") throw new TypeError("Source-read validation opt-in must be boolean");
+  if (typeof shareFrozenCatalogMetadata !== "boolean") throw new TypeError("Frozen catalog sharing opt-in must be boolean");
   const companyFile = path.join(dataDir, "company_master", "companies.json");
   const historyFile = path.join(dataDir, "history", "observations.jsonl");
   let catalogInFlight = null, targetCatalogInFlight = null, optionsInFlight = null;
@@ -38,7 +39,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
   const checkpointFor = ({ priority } = {}) => priority === "background"
     ? () => sourceReadScheduler.checkpoint({ priority: "background" }) : async () => {};
   const companySourceCatalog = typeof readRevision === "function" && typeof projectCapacityCompany === "function"
-    ? createMonthlyCompanySourceCatalog({ dataDir, readRevision, projectCapacityCompany, useSourceReadValidationBoundary,
+    ? createMonthlyCompanySourceCatalog({ dataDir, readRevision, projectCapacityCompany, useSourceReadValidationBoundary, shareFrozenCatalogMetadata,
       version: require("node:crypto").createHash("sha256").update(String(companySourceVersion)).update(fs.readFileSync(__filename)).digest("hex"),
       loadFullCatalog: options => readCatalog({ checkpoint: options?.checkpoint }) }) : null;
   async function readCatalog({ prepareCapacity = true, checkpoint = async () => {} } = {}) {

@@ -6,6 +6,18 @@
 const fs = require("node:fs/promises"), native = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
 const sha = value => crypto.createHash("sha256").update(value).digest("hex");
 const clone = value => JSON.parse(JSON.stringify(value));
+function freezeJson(value) {
+  // This is only used on an independent saved-JSON copy, never a caller's full
+  // company catalog. Iteration also handles deeply nested future rank metadata.
+  const pending = [value];
+  while (pending.length) {
+    const item = pending.pop();
+    if (item === null || typeof item !== "object" || Object.isFrozen(item)) continue;
+    Object.freeze(item);
+    for (const key of Object.keys(item)) pending.push(item[key]);
+  }
+  return value;
+}
 const object = value => value && typeof value === "object" && !Array.isArray(value);
 const stamp = value => [value.size, value.mtimeNs, value.ctimeNs, value.ino, value.dev].map(String).join(":");
 const fail = code => { throw Object.assign(new Error(code), { code, statusCode: 503 }); };
@@ -72,18 +84,20 @@ function compactMonthlyCapacityCompany(company) {
 
 function createMonthlyCompanySourceCatalog({ dataDir, readRevision, loadFullCatalog, projectCapacityCompany,
   version = "monthly-company-source-v1", maxCatalogBytes = 24 * 1024 * 1024, maxCompanyBytes = 32 * 1024 * 1024,
-  maxGenerationBytes = 512 * 1024 * 1024, maxStoredGenerations = 6, maxStoredBytes = maxGenerationBytes * 6, useSourceReadValidationBoundary = false } = {}) {
+  maxGenerationBytes = 512 * 1024 * 1024, maxStoredGenerations = 6, maxStoredBytes = maxGenerationBytes * 6, useSourceReadValidationBoundary = false, shareFrozenCatalogMetadata = false } = {}) {
   if (!dataDir || [readRevision, loadFullCatalog, projectCapacityCompany].some(fn => typeof fn !== "function") || typeof version !== "string" || !version
     || [maxCatalogBytes, maxCompanyBytes, maxGenerationBytes, maxStoredBytes].some(value => !Number.isSafeInteger(value) || value < 128)
     || !Number.isSafeInteger(maxStoredGenerations) || maxStoredGenerations < 3 || maxStoredGenerations > 64) throw new TypeError("Verified company-source catalog inputs are required");
   if (typeof useSourceReadValidationBoundary !== "boolean") throw new TypeError("Source-read validation opt-in must be boolean");
+  if (typeof shareFrozenCatalogMetadata !== "boolean") throw new TypeError("Frozen catalog sharing opt-in must be boolean");
   const directory = path.join(path.resolve(dataDir), "monthly_reports", "company_sources"), pointerFile = path.join(directory, "current.json");
   const codeVersion = sha(native.readFileSync(__filename)), schemaVersion = 1;
   const calculationVersion = sha(JSON.stringify([version, codeVersion, Function.prototype.toString.call(projectCapacityCompany)]));
   let memory = null, serial = Promise.resolve();
+  const sharedMetadata = new WeakMap();
   const counters = { builds: 0, hits: 0, memoryHits: 0, savedHits: 0, revisionReads: 0, buildRetries: 0, fullCatalogReads: 0, companyBodyReads: 0,
     companyBodyBytes: 0, generationWrittenBytes: 0, compactBytes: 0, cleanupFailures: 0, retainedFullCompanies: 0, maximumSelectedCompanyBytes: 0,
-    abandonedGenerationsRemoved: 0, abandonedCleanupFailures: 0, storageLimitStops: 0 };
+    abandonedGenerationsRemoved: 0, abandonedCleanupFailures: 0, storageLimitStops: 0, sharedMetadataBuilds: 0, sharedMetadataReads: 0 };
   // Retain only queue completion, not the last returned full catalog clone.
   const schedule = operation => { const pending = serial.then(operation); serial = pending.then(() => undefined, () => undefined); return pending; };
   async function revision() {
@@ -245,7 +259,17 @@ function createMonthlyCompanySourceCatalog({ dataDir, readRevision, loadFullCata
     // fresh revision already precedes this lookup, so an extra scan here adds
     // no boundary. Keep the historical generic factory contract by default.
     if (!useSourceReadValidationBoundary) await assertCurrent();
-    const copied = clone({ companies: entry.value.companies, regions: entry.value.regions, runs: entry.value.runs, rawCompanies: entry.value.rawCompanies });
+    let copied;
+    if (shareFrozenCatalogMetadata) {
+      copied = sharedMetadata.get(entry);
+      if (!copied) {
+        copied = freezeJson(clone({ companies: entry.value.companies, regions: entry.value.regions, runs: entry.value.runs, rawCompanies: entry.value.rawCompanies }));
+        sharedMetadata.set(entry, copied); counters.sharedMetadataBuilds++;
+      }
+      counters.sharedMetadataReads++;
+    } else copied = clone({ companies: entry.value.companies, regions: entry.value.regions, runs: entry.value.runs, rawCompanies: entry.value.rawCompanies });
+    // Map membership belongs to this read. Only the explicitly opted-in app's
+    // compact JSON values are immutable/shared; selected full bodies stay fresh.
     const data = { companies: copied.companies, regions: copied.regions, runs: copied.runs, rawCompanies: new Map(copied.rawCompanies) };
     if (companyId !== null && entry.value.records[companyId]) data.rawCompanies.set(companyId, await readCompany(entry, companyId));
     await assertCurrent();
