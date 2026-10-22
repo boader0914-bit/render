@@ -12,7 +12,7 @@ function harness() {
   class ClockDate extends Date {constructor(...args){super(...(args.length?args:[now]));}static now(){return now;}}
   const document={hidden:false,addEventListener:(type,fn)=>events[type]=fn,querySelector(selector){if(!present&&selector.startsWith('#collection-'))return null;if(selector.includes('form'))return selector.includes(':focus-within')||protectedForm?.dataset.dirty?protectedForm:null;return elements.get(selector)||null;},querySelectorAll:()=>[],createElement:()=>({textContent:'',className:''}),get activeElement(){return protectedForm?{closest:()=>protectedForm}:null;}};
   vm.runInContext(source,vm.createContext({window,document,Date:ClockDate,localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},setTimeout(fn,ms){timers.set(++nextTimer,{fn,ms});return nextTimer;},clearTimeout:id=>timers.delete(id)}));
-  const api=path=>new Promise((resolve,reject)=>calls.push({path,resolve,reject}));
+  const api=(path,_data,options)=>new Promise((resolve,reject)=>calls.push({path,resolve,reject,options}));
   const result=()=>elements.get('#collection-result').innerHTML;
   const freshness=()=>elements.get('#collection-freshness').textContent+' '+elements.get('#collection-freshness').innerHTML;
   return {collection:window.InsightCollection,calls,renders,renderData,elements,timers,result,freshness,
@@ -30,6 +30,39 @@ function harness() {
 function data(id='a',month='2026-10',version='v1',canRequest=true) {
   return {collectionAllowance:{limit:1,canRequest,resetsAt:'2026-10-13T15:00:00Z'},request:null,result:{version,runId:'run-'+version,products:[{key:'room-'+version,name:'객실',productType:'lodging',days:[],original:[]}]},companyDetail:{basics:{companyId:id},integrated:{selectedMonth:month,status:'ready'}}};
 }
+
+test('server reuse displays saved data while waiting for a bounded background freshness check',async()=>{
+  const h=harness();h.context();h.mount();
+  await h.resolve(0,{...data(),responseCache:{state:'cached',refreshing:true,checkedAt:'2026-10-13T01:59:00Z'}});
+  assert.equal(h.result(),'a|2026-10|v1');assert.match(h.freshness(),/저장 자료 표시 · 최신 자료 확인 중/);assert.doesNotMatch(h.freshness(),/최신 자료 확인 완료/);
+  assert.equal([...h.timers.values()][0].ms,5000);
+  await h.poll();await h.resolve(1,{...data('a','2026-10','v2'),responseCache:{state:'fresh'}});
+  assert.equal(h.result(),'a|2026-10|v2');assert.match(h.freshness(),/최신 자료 확인 완료/);assert.equal(h.timers.size,0);
+});
+
+test('a failed server refresh retains saved quantities, reports uncertainty and does not retry in a loop',async()=>{
+  const h=harness();h.context();h.mount();
+  await h.resolve(0,{...data(),responseCache:{state:'cached',refreshing:false,refreshFailed:true}});
+  assert.equal(h.result(),'a|2026-10|v1');assert.match(h.freshness(),/최신 확인 실패/);
+  assert.match(h.elements.get('#collection-progress').innerHTML,/저장 자료를 표시/);assert.equal(h.timers.size,0);
+});
+
+test('a slow server refresh stops automatic checks after 24 polls and keeps the saved result',async()=>{
+  const h=harness();h.context();h.mount();
+  const saved={...data(),responseCache:{state:'cached',refreshing:true}};
+  await h.resolve(0,saved);
+  for(let index=1;index<=24;index++){await h.poll();await h.resolve(index,saved);}
+  assert.equal(h.calls.length,25);assert.equal(h.timers.size,0);assert.equal(h.result(),'a|2026-10|v1');
+  assert.match(h.elements.get('#collection-progress').innerHTML,/확인에 시간이 걸리고/);
+});
+
+test('explicit refresh bypasses an ordinary in-flight GET without letting its late response overwrite the new view',async()=>{
+  const h=harness();h.context();h.mount();
+  const pending=h.collection.refresh();assert.equal(h.calls.length,2);assert.equal(h.calls[1].options.refresh,true);
+  await h.resolve(1,data('a','2026-10','new'));await pending;
+  await h.resolve(0,data('a','2026-10','old'));assert.equal(h.result(),'a|2026-10|new');
+  h.leave();h.mount();assert.equal(h.result(),'a|2026-10|new');
+});
 
 test('returning to a company shows its saved view immediately, then checks current permission and fresh data',async()=>{
   const h=harness();h.context();h.mount();await h.resolve(0,data());assert.equal(h.result(),'a|2026-10|v1');

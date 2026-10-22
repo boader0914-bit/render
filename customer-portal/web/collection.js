@@ -3,7 +3,7 @@
   const esc = v => String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const statuses = {dispatching:'접수 확인',queued:'수집 대기',collecting:'수집 대기·진행 중',ready:'완료',partial:'일부 완료',blocked:'접근 제한',failed:'실패',needs_review:'확인 필요'};
   const active = r => ['dispatching','queued','collecting'].includes(r?.status);
-  let api, companyId, view = null, serial = 0, timer, renderedVersion, loadOrder=0, selectedMonth='', collectionSetup=false, mountOptions={};
+  let api, companyId, view = null, serial = 0, timer, renderedVersion, loadOrder=0, selectedMonth='', collectionSetup=false, mountOptions={}, refreshChecks=0;
   // Private result payloads stay in this signed-in page's memory only.
   const cache = new Map(), inFlight = new Map(), lastMonths = new Map(), companyEpochs = new Map(), references=new Map(), referenceDenied=new Set();
   const CACHE_LIMIT=24, CACHE_MAX_AGE=30*60*1000, PREFETCH_LIMIT=4;
@@ -57,10 +57,10 @@
     references.delete(id);references.set(id,{referenceLoading:true,result:null,companyDetail:{companyId:id,source:'company_db_catalog',basics,channels:[],current:{daily:[],summary:null}}});
     while(references.size>CACHE_LIMIT)references.delete(references.keys().next().value);
   }
-  function readPending(id,month,request){
-    const key=cacheKey(id,month);let pending=inFlight.get(key);
+  function readPending(id,month,request,force=false){
+    const key=cacheKey(id,month)+(force?':refresh':'');let pending=inFlight.get(key);
     if(!pending){
-      let promise;try{promise=Promise.resolve(request(`/companies/${encodeURIComponent(id)}/collection${month?'?month='+encodeURIComponent(month):''}`));}catch(error){promise=Promise.reject(error);}
+      let promise;try{promise=Promise.resolve(request(`/companies/${encodeURIComponent(id)}/collection${month?'?month='+encodeURIComponent(month):''}`,undefined,{refresh:force}));}catch(error){promise=Promise.reject(error);}
       pending={promise,companyId:id};inFlight.set(key,pending);
       const cleanup=()=>{if(inFlight.get(key)===pending)inFlight.delete(key);};promise.then(cleanup,cleanup);
     }
@@ -157,7 +157,7 @@
     if(!permitted(id)){disableCollection();return;}
     freshness(view?'이전 조회 자료 표시 · 최신 자료 확인 중':'최신 자료 확인 중',cached(id,month));
     try {
-      const data=await readPending(id,month,api);
+      const data=await readPending(id,month,api,force);
       if(!contextCurrent()||!permitted(id))return;
       if(month&&data.companyDetail?.integrated?.selectedMonth&&data.companyDetail.integrated.selectedMonth!==month)throw new Error('선택한 숙박월의 자료를 확인하지 못했습니다. 다시 확인해 주세요.');
       const entry=remember(id,month,data);
@@ -169,8 +169,14 @@
         if(!force && document.querySelector('#collection-result form:focus-within, #collection-result form[data-dirty]')) { freshness('새 결과가 있습니다. 작성 중인 내용을 유지했습니다.',entry); if(active(data.request))timer=setTimeout(()=>load(),10000); return; }
         view=data;renderedVersion=version;document.querySelector('#collection-result').innerHTML=renderResult(data);
       }
-      freshness('최신 자료 확인 완료',entry);
+      const saved=data.responseCache?.state==='cached',refreshing=saved&&data.responseCache.refreshing,refreshFailed=saved&&data.responseCache.refreshFailed;
+      freshness(refreshFailed?'최신 확인 실패 · 이전 조회 자료 유지':refreshing?'저장 자료 표시 · 최신 자료 확인 중':saved?'최근 확인한 저장 자료 표시':'최신 자료 확인 완료',entry);
       if(active(data.request)||['pending','updating'].includes(data.companyDetail?.integrated?.status)&&!data.companyDetail?.legacyObservationView)timer=setTimeout(()=>{if(!document.hidden)load();else timer=setTimeout(()=>load(),10000);},10000);
+      else if(refreshing&&refreshChecks++<24)timer=setTimeout(()=>{if(!document.hidden)load();else timer=setTimeout(()=>load(),10000);},5000);
+      if(refreshFailed||refreshing&&refreshChecks>24){
+        const target=document.querySelector('#collection-progress');
+        if(target)target.innerHTML='<p class="collection-warning">'+(refreshFailed?'최신 자료를 확인하지 못해 저장 자료를 표시합니다.':'저장 자료를 표시하고 있습니다. 최신 확인에 시간이 걸리고 있습니다.')+' <button class="button small" data-action="refresh-collection">다시 확인</button></p>';
+      }
     } catch(error) {
       if(!contextCurrent())return;
       if(error.status===401){
@@ -204,6 +210,6 @@
       for(const id of lastMonths.keys())if(!permitted(id))lastMonths.delete(id);
       for(const id of references.keys())if(!permitted(id))references.delete(id);
     },clearCache,invalidate,
-    mount(id,request,options={}){mountOptions=options;seed(options.company);display={mode:'stacked',metric:'bookings',month:''};selectedMonth=lastMonths.get(id)||'';display.month=selectedMonth;serial++;clearTimeout(timer);companyId=id;api=request;view=null;renderedVersion=null;showCached();load();},stop(){serial++;clearTimeout(timer);},refresh:()=>load(true),
+    mount(id,request,options={}){mountOptions=options;refreshChecks=0;seed(options.company);display={mode:'stacked',metric:'bookings',month:''};selectedMonth=lastMonths.get(id)||'';display.month=selectedMonth;serial++;clearTimeout(timer);companyId=id;api=request;view=null;renderedVersion=null;showCached();load();},stop(){serial++;clearTimeout(timer);},refresh:()=>{refreshChecks=0;invalidate(companyId);return load(true);},
     correction(index,p){const r=view?.result, product=r?.products[Number(index)];if(!product)throw Error('수집 결과를 다시 열어 주세요.');const proposed={};if(p.total!=='')proposed.total=Number(p.total);if(p.productType!==product.productType)proposed.productType=p.productType;return {companyId,baseVersion:r.version,target:{runId:r.runId,productKey:product.key,date:p.date},proposed,reason:p.reason};}};
 })();

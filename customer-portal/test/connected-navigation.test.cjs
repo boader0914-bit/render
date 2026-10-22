@@ -14,9 +14,9 @@ function fixture(accountKind='customer'){
 function collectionData(company){
   return {collectionAllowance:{limit:1,canRequest:true},request:null,result:{rooms:company.rooms,products:[],productCount:0,quality:{status:'complete'}},companyDetail:{companyId:company.companyId,basics:{...company},channels:[{label:'네이버',statusLabel:'저장 자료 연결',url:'https://booking.naver.com'}],integrated:{status:'ready',selectedMonth:'2026-10',snapshot:{},roomBasis:{count:company.rooms,label:'DB 검수값'}},current:{summary:{rangeStart:'2026-10-01',rangeEnd:'2026-10-02',calendarDays:2,observedDays:2,missingDays:0},daily:[{date:'2026-10-01',publicBookings:1,phoneBookings:0,estimatedRevenue:179000,publicRevenue:179000,phoneRevenue:0},{date:'2026-10-02',publicBookings:0,phoneBookings:0,estimatedRevenue:0,publicRevenue:0,phoneRevenue:0}]}}};
 }
-async function screen({adminView=false,accountKind=adminView?'admin_preview':'customer',initialHash='#home'}={}){
+async function screen({adminView=false,accountKind=adminView?'admin_preview':'customer',initialHash='#home',deferRequests=[]}={}){
   let currentState=fixture(accountKind),hash=initialHash,mainRevision=0;
-  const originalCompanies=clone(currentState.companies),elements=new Map(),documentEvents=new Map(),windowEvents=new Map(),calls=[],mounted=[],contexts=[],invalidated=[];
+  const originalCompanies=clone(currentState.companies),elements=new Map(),documentEvents=new Map(),windowEvents=new Map(),calls=[],pending=[],mounted=[],contexts=[],invalidated=[];
   let clearCalls=0;
   const element=selector=>{
     if(elements.has(selector))return elements.get(selector);
@@ -40,16 +40,17 @@ async function screen({adminView=false,accountKind=adminView?'admin_preview':'cu
   const location={pathname:adminView?'/customer-view':'/',get hash(){return hash;},set hash(value){hash=value.startsWith('#')?value:`#${value}`;},assign(value){this.assigned=value;}};
   class FormDataFixture{constructor(form){this.values=form.values;}*[Symbol.iterator](){yield* Object.entries(this.values);}}
   const window={addEventListener(name,handler){windowEvents.set(name,handler);},scrollTo(){},InsightAuth:{screen(){return '<section class="signed-out-fixture">로그인</section>';},welcome(){return '<p>가입 완료</p>';},policy(){return '<p>정책</p>';}},InsightAnalysis:{stop(){},panel(){return '<p>분석 검수 화면</p>';},mount(){}}};
-  const response=value=>({ok:true,status:200,json:async()=>clone(value)});
+  const response=(value,status=200)=>({ok:status>=200&&status<300,status,json:async()=>clone(value)});
+  const reply=(url,value)=>deferRequests.some(match=>typeof match==='string'?url===match:match.test(url))?new Promise(resolve=>pending.push({url,value,resolve})):response(value);
   const fetch=async(url,options={})=>{
     const body=options.body?JSON.parse(options.body):null;
-    calls.push({url,method:options.method||'GET',body});
-    if(url==='/api/insight-admin/v1/me')return response({csrfToken:'fixture-admin-csrf'});
-    if(url.endsWith('/config'))return response({signupEnabled:true});
-    if(url.endsWith('/me')||url.endsWith('/start'))return response(currentState);
+    calls.push({url,method:options.method||'GET',body,headers:{...options.headers}});
+    if(url==='/api/insight-admin/v1/me')return reply(url,{csrfToken:'fixture-admin-csrf'});
+    if(url.endsWith('/config'))return reply(url,{signupEnabled:true});
+    if(url.endsWith('/me')||url.endsWith('/start'))return reply(url,currentState);
     if(url.endsWith('/auth/logout'))return response({ok:true});
     const companyMatch=url.match(/\/companies\/([^/?]+)\/collection(?:\?.*)?$/);
-    if(companyMatch){const company=currentState.companies.find(row=>row.companyId===decodeURIComponent(companyMatch[1]));assert.ok(company,'only registered company fixtures are queried');return response(collectionData(company));}
+    if(companyMatch){const company=currentState.companies.find(row=>row.companyId===decodeURIComponent(companyMatch[1]));assert.ok(company,'only registered company fixtures are queried');return reply(url,collectionData(company));}
     if(url.endsWith('/commands')){
       assert.equal(body.action,'correction','this flow may submit a review request only');
       const company=currentState.companies.find(row=>row.companyId===body.payload.companyId);
@@ -61,13 +62,15 @@ async function screen({adminView=false,accountKind=adminView?'admin_preview':'cu
   const context=vm.createContext({window,document,location,fetch,FormData:FormDataFixture,crypto:{randomUUID(){return 'fixture-command-key';}},localStorage:{getItem(){return null;},setItem(){}},setTimeout(){return 1;},clearTimeout(){}});
   for(const file of ['company-flow.js','company-view.js','collection.js'])vm.runInContext(read(file),context);
   const collection=window.InsightCollection,originalMount=collection.mount,originalContext=collection.setContext,originalClear=collection.clearCache,originalInvalidate=collection.invalidate;
-  collection.mount=(id,api,options)=>{mounted.push({id,options});return originalMount(id,api,options);};
+  collection.mount=(id,api,options)=>{mounted.push({id,options,request:api});return originalMount(id,api,options);};
   collection.setContext=(scope,ids,callback)=>{contexts.push({scope,ids:Array.from(ids||[])});return originalContext(scope,ids,callback);};
   collection.clearCache=()=>{clearCalls++;return originalClear();};
   collection.invalidate=id=>{invalidated.push(id);return originalInvalidate(id);};
   vm.runInContext(read('connected.js'),context);await flush();
   async function dispatch(name,event){for(const callback of documentEvents.get(name)||[])await callback(event);await flush();}
   return {calls,mounted,contexts,invalidated,originalCompanies,location,
+    pending:()=>pending.map(row=>row.url),
+    async respond(url,{status=200,value}={}){const index=pending.findIndex(row=>row.url===url);assert.notEqual(index,-1,'expected a pending request: '+url);const request=pending.splice(index,1)[0];request.resolve(response(value===undefined?request.value:value,status));await flush();},
     html:()=>element('#main').innerHTML,result:()=>document.querySelector('#collection-result')?.innerHTML||'',navigation:()=>element('#navigation').innerHTML,
     state:()=>clone(currentState),clearCount:()=>clearCalls,revision:()=>mainRevision,
     async navigate(value){location.hash=value;windowEvents.get('hashchange')();await flush();},
@@ -85,6 +88,96 @@ for(const adminView of [false,true]){
     assert.ok(ui.calls.every(call=>!call.url.includes('/crawl')&&!call.url.endsWith('/commands')));
   });
 }
+
+test('customer refresh starts configuration and session reads together without duplicate bootstrap requests',async()=>{
+  const config='/api/customer/v1/config',me='/api/customer/v1/me';
+  const ui=await screen({deferRequests:[config,me]});
+  assert.deepEqual(ui.pending(),[config,me],'session lookup must begin while configuration is still pending');
+  assert.equal(ui.calls.filter(row=>row.url.includes('/companies/')).length,0);
+  await ui.respond(me);
+  assert.equal(ui.calls.filter(row=>row.url.includes('/companies/')).length,0,'company preparation waits for a complete authenticated bootstrap');
+  await ui.respond(config);
+  assert.match(ui.html(),/내 매장 보기/);
+  assert.equal(ui.calls.filter(row=>row.url===config).length,1);
+  assert.equal(ui.calls.filter(row=>row.url===me).length,1);
+  assert.equal(ui.calls.filter(row=>row.url.includes('/companies/')).length,2);
+  assert.ok(ui.calls.every(row=>row.method==='GET'));
+});
+
+test('customer session expiry during parallel bootstrap renders login without preparing private companies',async()=>{
+  const config='/api/customer/v1/config',me='/api/customer/v1/me';
+  const ui=await screen({deferRequests:[config,me]});
+  await ui.respond(me,{status:401,value:{error:{code:'UNAUTHORIZED',message:'로그인이 만료되었습니다.'}}});
+  await ui.respond(config);
+  assert.match(ui.html(),/signed-out-fixture/);
+  assert.equal(ui.calls.filter(row=>row.url.includes('/companies/')).length,0);
+  assert.equal(ui.contexts.at(-1).scope,'');
+});
+
+for(const adminView of [false,true])test(`${adminView?'administrator':'customer'} sends cache refresh intent only for an explicit GET option`,async()=>{
+  const ui=await screen({adminView,initialHash:'#property'});
+  const request=ui.mounted.at(-1).request;
+  assert.ok(ui.calls.filter(row=>row.method==='GET').every(row=>!('X-Insight-Refresh' in row.headers)));
+  await request('/companies/cmp_own/collection',undefined,{refresh:true});
+  const refresh=ui.calls.at(-1);
+  assert.equal(refresh.method,'GET');assert.equal(refresh.headers['X-Insight-Refresh'],'1');
+  assert.equal(refresh.headers.Accept,'application/json');assert.equal(refresh.body,null);
+  await request('/auth/logout',{}, {refresh:true});
+  const post=ui.calls.at(-1);
+  assert.equal(post.method,'POST');assert.equal(post.headers['Content-Type'],'application/json');
+  assert.ok(!('X-Insight-Refresh' in post.headers),'refresh must not alter command or collection POST headers');
+});
+
+test('administrator refresh overlaps identity and configuration but starts one preview with verified CSRF',async()=>{
+  const identity='/api/insight-admin/v1/me',config='/api/insight-admin/v1/customer-view/config',start='/api/insight-admin/v1/customer-view/start';
+  const ui=await screen({adminView:true,deferRequests:[identity,config]});
+  assert.deepEqual(ui.pending(),[identity,config]);
+  await ui.respond(config);
+  assert.equal(ui.calls.filter(row=>row.url===start).length,0,'configuration alone cannot authorize a preview start');
+  await ui.respond(identity);
+  const starts=ui.calls.filter(row=>row.url===start);
+  assert.equal(starts.length,1);assert.equal(starts[0].method,'POST');
+  assert.equal(starts[0].headers['X-CSRF-Token'],'fixture-admin-csrf');
+  assert.equal(ui.calls.filter(row=>row.url===identity).length,1);
+  assert.equal(ui.calls.filter(row=>row.url===config).length,1);
+  assert.match(ui.html(),/관리자 체험/);
+});
+
+test('administrator identity expiry takes precedence over a failed parallel configuration read',async()=>{
+  const identity='/api/insight-admin/v1/me',config='/api/insight-admin/v1/customer-view/config';
+  const ui=await screen({adminView:true,deferRequests:[identity,config]});
+  await ui.respond(config,{status:503,value:{error:{message:'설정 연결 실패'}}});
+  await ui.respond(identity,{status:401,value:{error:{message:'로그인 필요'}}});
+  assert.match(ui.html(),/관리자 로그인이 필요합니다/);
+  assert.doesNotMatch(ui.html(),/설정 연결 실패/);
+  assert.ok(ui.calls.every(row=>row.method==='GET'),'an expired administrator must not start a preview or prepare companies');
+  assert.equal(ui.calls.filter(row=>row.url.includes('/companies/')).length,0);
+});
+
+test('parallel configuration failure preserves the existing connection-error screen and prevents administrator preview creation',async()=>{
+  const identity='/api/insight-admin/v1/me',config='/api/insight-admin/v1/customer-view/config';
+  const ui=await screen({adminView:true,deferRequests:[identity,config]});
+  await ui.respond(identity);
+  await ui.respond(config,{status:503,value:{error:{message:'설정 연결 실패'}}});
+  assert.match(ui.html(),/자료 연결 확인이 필요합니다/);assert.match(ui.html(),/설정 연결 실패/);
+  assert.ok(ui.calls.every(row=>row.method==='GET'));
+  assert.equal(ui.calls.filter(row=>row.url.includes('/companies/')).length,0);
+});
+
+for(const adminView of [false,true])test(`${adminView?'administrator':'customer'} refresh prioritizes the visible competitor and shares its pending read before warming another company`,async()=>{
+  const ui=await screen({adminView,initialHash:'#company=cmp_competitor',deferRequests:[/\/companies\/[^/]+\/collection$/]});
+  const first=ui.calls.filter(row=>row.url.includes('/companies/'));
+  assert.equal(first.length,1,'background own-company reads must not compete with the visible company');
+  assert.match(first[0].url,/\/companies\/cmp_competitor\/collection$/);
+  assert.equal(ui.mounted.at(-1).id,'cmp_competitor');
+  await ui.respond(first[0].url);
+  const all=ui.calls.filter(row=>row.url.includes('/companies/'));
+  assert.equal(all.length,2);assert.match(all[1].url,/\/companies\/cmp_own\/collection$/);
+  assert.equal(all.filter(row=>row.url===first[0].url).length,1,'mount and warmup share the visible company request');
+  const visible=ui.result();
+  await ui.respond(all[1].url);
+  assert.equal(ui.result(),visible,'offscreen warming never replaces the selected competitor');
+});
 
 test('home cards contain a company view link without collection, unregister or correction controls',async()=>{
   const ui=await screen();

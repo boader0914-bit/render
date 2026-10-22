@@ -12,10 +12,10 @@
   const route = () => location.hash.slice(1) || ({'/signup':'signup','/login':'login','/terms':'terms','/privacy':'privacy'}[location.pathname]) || 'home';
   const menuRoute=()=>route()==='register-own'?'property':route().startsWith('regions=')?'regions':/^(company|collection|collect)=/.test(route())?(state?.customer.relations.find(row=>row.companyId===decodeURIComponent(route().split('=').slice(1).join('=')))?.kind==='own'?'property':'competitors'):route();
   const toast = message => { $('#toast').textContent = message; $('#toast').classList.add('visible'); setTimeout(() => $('#toast').classList.remove('visible'), 4500); };
-  async function api(url, data) {
+  async function api(url, data, options={}) {
     const base = adminView ? '/api/insight-admin/v1' : '/api/customer/v1';
     const target = adminView && url !== '/auth/logout' ? '/customer-view' + url : url;
-    const response = await fetch(`${base}${target}`, { method:data ? 'POST':'GET', headers:data ? { 'Content-Type':'application/json','X-CSRF-Token':state?.csrfToken || adminCsrf || '' }: { Accept:'application/json' }, ...(data ? { body:JSON.stringify(data) }: {}) });
+    const response = await fetch(`${base}${target}`, { method:data ? 'POST':'GET', headers:data ? { 'Content-Type':'application/json','X-CSRF-Token':state?.csrfToken || adminCsrf || '' }: { Accept:'application/json',...(options.refresh===true?{'X-Insight-Refresh':'1'}:{}) }, ...(data ? { body:JSON.stringify(data) }: {}) });
     const value = await response.json();
     if (!response.ok) { const error = new Error(value.error?.message || '요청을 처리하지 못했습니다.'); error.status = response.status; error.code = value.error?.code; throw error; }
     return value;
@@ -54,6 +54,9 @@
     if(!state)return;
     const relations=state.customer.relations.filter(row=>['active','pending'].includes(row.status));
     const ids=relations.filter(row=>row.kind==='own').concat(relations.filter(row=>row.kind!=='own')).map(row=>row.companyId);
+    const current=route(),selected=/^(company|collection|collect)=/.test(current)?decodeURIComponent(current.slice(current.indexOf('=')+1)):current==='property'&&relations.filter(row=>row.kind==='own').length===1?relations.find(row=>row.kind==='own').companyId:null;
+    const selectedIndex=ids.indexOf(selected);
+    if(selectedIndex>0)ids.unshift(ids.splice(selectedIndex,1)[0]);
     window.InsightCollection?.prefetch?.(ids.map(id=>state.companies.find(row=>row.companyId===id)).filter(Boolean),api);
   }
   function openCompany(company,openCollection=false) {
@@ -153,11 +156,16 @@
   try{document.documentElement.dataset.theme=localStorage.getItem('insight-theme')==='dark'?'dark':'light';}catch{}
   (async()=>{try{
     if(adminView){
-      const response=await fetch('/api/insight-admin/v1/me',{headers:{Accept:'application/json'}});
+      const [session,settings]=await Promise.allSettled([fetch('/api/insight-admin/v1/me',{headers:{Accept:'application/json'}}),api('/config')]);
+      if(session.status==='rejected')throw session.reason;
+      const response=session.value;
       if(response.status===401){render();return;}
       const identity=await response.json();if(!response.ok)throw new Error(identity.error?.message||'관리자 연결을 확인해 주세요.');
-      adminCsrf=identity.csrfToken;config=await api('/config');state=await api('/start',{});
-    }else{config=await api('/config');try{state=await api('/me');}catch(error){if(error.status!==401)throw error;}}
+      if(settings.status==='rejected')throw settings.reason;
+      adminCsrf=identity.csrfToken;config=settings.value;state=await api('/start',{});
+    }else{
+      [config,state]=await Promise.all([api('/config'),api('/me').catch(error=>{if(error.status!==401)throw error;return null;})]);
+    }
     render();prepareCompanies();
   }catch(error){if(adminView&&error.status===401){state=null;render();return;}$('#main').innerHTML=`<section class="card"><h1>자료 연결 확인이 필요합니다.</h1><p>${esc(error.message)}</p><a class="button" href="${adminView?'/customer-view':'/'}">다시 열기</a></section>`;}})();
 })();
