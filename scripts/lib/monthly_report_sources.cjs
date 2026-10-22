@@ -315,13 +315,14 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
       // A company report needs only its own rank rows. Keep broad membership
       // diagnostics complete without allocating rows that would be discarded.
       const needsRankRows = needsMembershipEvidence || (!conflictingCompanyIds.has(id) && (companyScope === null || id === companyScope));
-      if (needsRankRows) {
-        for (const exposure of Object.values(company.keywords || {})) {
-          for (const run of exposure.runs || []) {
-            const row = { ...run, companyKey: id, companyId: id, companyName: company.primaryName, keyword: exposure.keyword };
-            if (needsMembershipEvidence) diagnosticRankRows.push(row);
-            if (!conflictingCompanyIds.has(id) && (companyScope === null || id === companyScope)) rankObservations.push(row);
-          }
+      for (const exposure of Object.values(company.keywords || {})) {
+        for (const run of exposure.runs || []) {
+          // Still traverse saved metadata so malformed legacy run containers
+          // fail under the same rules as a broad read.
+          if (!needsRankRows) continue;
+          const row = { ...run, companyKey: id, companyId: id, companyName: company.primaryName, keyword: exposure.keyword };
+          if (needsMembershipEvidence) diagnosticRankRows.push(row);
+          if (!conflictingCompanyIds.has(id) && (companyScope === null || id === companyScope)) rankObservations.push(row);
         }
       }
       // Some recovered runs have only a persisted company snapshot. Their run
