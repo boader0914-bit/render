@@ -589,6 +589,10 @@ const monthlyCompanySourceVersion = crypto.createHash("sha256")
   .update(fs.readFileSync(path.join(__dirname, "verified_room_inventory.json"))).digest("hex");
 const recalculateMonthlyCompanyObservations = createMonthlyCompanyRecalculation({
   loadRun, applyCompanyManualCorrection, companyProductAvailabilityMatch, buildHistoryObservations,
+  // This application's correction callbacks need provider identities, the
+  // complete manual review and the exact maximum-capacity witness only.
+  projectCorrectionCompany: compactMonthlyCapacityCompany,
+  useSourceReadValidationBoundary: true,
   cacheDirectory: path.join(DATA_DIR, "company_integrated", "recalculated_run_rows"),
   cacheVersion: crypto.createHash("sha256").update(monthlyCompanySourceVersion)
     .update(fs.readFileSync(__filename)) // Includes saved-run/product parsing callbacks.
@@ -610,6 +614,7 @@ const monthlyReportSources = createMonthlyReportSources({
     .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_report_selector_revision.cjs"))).digest("hex"),
   listRuns,
   projectCapacityCompany: compactMonthlyCapacityCompany,
+  useSourceReadValidationBoundary: true,
   companySourceVersion: monthlyCompanySourceVersion,
   prepareCompanies: companyCapacityRegistry.prepareCompanies,
   projectObservation: (row, company) => {
@@ -681,6 +686,7 @@ function companyIntegratedCalculationFingerprint() {
   const callbacks = [companyHistoryObservationWithCurrentCapacity, manualCorrectionLodgingBasisTotal,
     companyMaximumRoomCapacity, applyCompanyManualCorrection, companyProductAvailabilityMatch, buildHistoryObservations,
     productSnapshotNumber, companyInventorySnapshotWithCurrentCapacity, withCompanyInventoryCapacityRecord,
+    withCompanyInventoryCapacity, createCompanyInventoryCapacityIndex, withIndexedCompanyInventoryCapacity, summarizeAvailabilityRows,
     manualCorrectionHasValue, manualCorrectionHasBasis, manualCorrectionMetaHasValue, sanitizeManualCorrectionMeta,
     manualCorrectionRoomSegmentTotal, manualCorrectionRoomSegments, sanitizeManualCorrectionRoomSegments,
     sanitizeB2BInterestLodgeSegment, b2bInterestLodgeSegmentHasInput, sanitizeInterestLodgeNumberText, sanitizeMemberText,
@@ -16239,6 +16245,40 @@ function withCompanyInventoryCapacity(item = {}, companies = []) {
   return matches.length === 1 ? withCompanyInventoryCapacityRecord(item, matches[0]) : item;
 }
 
+// One summary invocation owns this index. Keep array positions, including repeated
+// references to the same object: the original matcher treats those as ambiguous.
+function createCompanyInventoryCapacityIndex(companies = []) {
+  const byPlaceId = new Map();
+  const byBookingBusinessId = new Map();
+  companies.forEach((company, position) => {
+    const value = company === undefined ? {} : company;
+    const placeIds = new Set((value.placeIds || []).map((id) => String(id || "").trim()).filter(Boolean));
+    const bookingIds = new Set((value.bookingBusinessIds || []).map((id) => String(id || "").trim()).filter(Boolean));
+    for (const id of placeIds) {
+      if (!byPlaceId.has(id)) byPlaceId.set(id, []);
+      byPlaceId.get(id).push(position);
+    }
+    for (const id of bookingIds) {
+      if (!byBookingBusinessId.has(id)) byBookingBusinessId.set(id, []);
+      byBookingBusinessId.get(id).push(position);
+    }
+  });
+  return { companies, byPlaceId, byBookingBusinessId };
+}
+
+function withIndexedCompanyInventoryCapacity(item = {}, index) {
+  const placeId = String(extractNaverPlaceId(item) || "").trim();
+  const bookingId = String(extractBookingBusinessId(item) || "").trim();
+  // Union provider candidates, then repeat the unchanged full identity check.
+  // In particular, a matching id must not conceal a contradictory second id.
+  const positions = [...new Set([
+    ...(index.byPlaceId.get(placeId) || []),
+    ...(index.byBookingBusinessId.get(bookingId) || [])
+  ])].sort((a, b) => a - b);
+  const matches = positions.filter((position) => companyProductAvailabilityMatch(index.companies[position], item));
+  return matches.length === 1 ? withCompanyInventoryCapacityRecord(item, index.companies[matches[0]]) : item;
+}
+
 function summarizeAvailabilityRows(rows, baseDir = "", capacityCompanies = [], collectionRange = {}) {
   const byPlace = new Map();
   for (const row of rows) {
@@ -16494,14 +16534,16 @@ function summarizeAvailabilityRows(rows, baseDir = "", capacityCompanies = [], c
     });
   }
 
-  const items = [...byPlace.values()]
-    .map((item) => applyInventoryEvidence(withCompanyInventoryCapacity({
+  const availabilityItems = [...byPlace.values()];
+  const capacityIndex = availabilityItems.length ? createCompanyInventoryCapacityIndex(capacityCompanies) : null;
+  const items = availabilityItems
+    .map((item) => applyInventoryEvidence(withIndexedCompanyInventoryCapacity({
       ...item,
       ...(item.itemDetails.length || item.weeklyProductDetails.length ? {
         checkIn: collectionRange.checkIn || "",
         bookingRangeDays: Number(collectionRange.bookingRangeDays || 0)
       } : {})
-    }, capacityCompanies)))
+    }, capacityIndex)))
     .map((item) => {
       const confidence = evaluateInventoryConfidence({
         availableRooms: item.availableRooms,

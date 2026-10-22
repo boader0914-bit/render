@@ -72,12 +72,14 @@ function inScope(request, company, catalogCompany, runs) {
 }
 
 function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrection, companyProductAvailabilityMatch, buildHistoryObservations,
-  cacheDirectory = null, cacheVersion = "monthly-company-recalculation-v1", maxCachedRunBytes = 6 * 1024 * 1024 }) {
+  cacheDirectory = null, cacheVersion = "monthly-company-recalculation-v1", maxCachedRunBytes = 6 * 1024 * 1024, projectCorrectionCompany = null, useSourceReadValidationBoundary = false }) {
   if ([loadRun, applyCompanyManualCorrection, companyProductAvailabilityMatch, buildHistoryObservations].some(fn => typeof fn !== "function")) throw new TypeError("Monthly recalculation dependencies are required");
+  if (projectCorrectionCompany !== null && typeof projectCorrectionCompany !== "function") throw new TypeError("An optional correction-company projection must be a function");
+  if (typeof useSourceReadValidationBoundary !== "boolean") throw new TypeError("Source-read validation opt-in must be boolean");
   if (!Number.isSafeInteger(maxCachedRunBytes) || maxCachedRunBytes < 128 || maxCachedRunBytes > 6 * 1024 * 1024) throw new TypeError("Invalid compact run row budget");
   const cache = cacheDirectory ? createMonthlyReportMaterializedCache({ directory: cacheDirectory,
     maxEntries: 256, maxBytes: 64 * 1024 * 1024, maxEntryBytes: 8 * 1024 * 1024 }) : null;
-  const metrics = { savedRunLoads: 0, runRowBuilds: 0, runRowCacheHits: 0, companyProjectionsRead: 0, runRowOversizeFallbacks: 0, maximumCachedRunBytes: 0 };
+  const metrics = { savedRunLoads: 0, runRowBuilds: 0, runRowCacheHits: 0, companyProjectionsRead: 0, correctionCompanyProjections: 0, runRowOversizeFallbacks: 0, maximumCachedRunBytes: 0 };
   const oversized = new Set();
   async function loadStored(id, capacityCompanies) {
     metrics.savedRunLoads++;
@@ -85,6 +87,22 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
     try { stored = await loadRun(id, { ...READ_ONLY_RUN_OPTIONS, capacityCompanies }); } catch { throw unavailable(); }
     if (!stored?.run || String(stored.run.id || stored.run.runId || "") !== id || !Array.isArray(stored.availability?.items)) throw unavailable();
     return stored;
+  }
+  async function correctionCompany(reference, owner, cachedBuild = false) {
+    let company = reference;
+    if (projectCorrectionCompany) {
+      // Explicit application opt-in only. Generic correction callbacks retain
+      // their full-company contract; they may inspect fields unknown here.
+      try { company = await projectCorrectionCompany(reference); } catch { throw unavailable(); }
+      metrics.correctionCompanyProjections++;
+      if (hasInventoryCorrection(company) !== hasInventoryCorrection(reference)) throw unavailable();
+    } else if (cachedBuild || reference._monthlySourceCompact) {
+      if (typeof owner?.readCompany !== "function") throw unavailable();
+      company = await owner.readCompany(reference.companyId); metrics.companyProjectionsRead++;
+    }
+    if (!company || typeof company !== "object" || Array.isArray(company)
+      || typeof company.companyId !== "string" || !company.companyId || company.companyId !== reference.companyId) throw unavailable();
+    return company;
   }
   function correctedRows(stored, originalRun, company) {
     if (["blocked", "failed", "interrupted"].includes(quality(stored.run))) return [];
@@ -105,12 +123,18 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
     }).map(row => ({ ...row, companyId: company.companyId, companyKey: company.companyId, companyName: company.primaryName,
       runId: id, collectedAt: run.collectedAt, collectedDate: day, keyword: run.keyword, stayDate: dayKey(row.stayDate || row.date), readOnlyRecalculated: true }));
   }
-  async function cachedRunRows(id, originalRun, data, capacityCompanies, checkpoint) {
+  async function cachedRunRows(id, originalRun, data, capacityCompanies, checkpoint, sourceReadValidationBoundary) {
     const owner = data._companySource;
     const scopeKey = JSON.stringify([cacheVersion, owner.revision, id]);
     if (oversized.has(scopeKey)) return null;
     const readRevision = async () => {
-      await owner.assertCurrent();
+      if (sourceReadValidationBoundary) {
+        // Only an explicitly opted-in caller inside its still-active source
+        // read may defer repeated full scans to that caller's final assertion.
+        // Cache payload checks and the captured revision key remain unchanged.
+        if (sourceReadValidationBoundary.owner !== owner || sourceReadValidationBoundary.revision !== owner.revision
+          || !sourceReadValidationBoundary.isActive()) throw unavailable();
+      } else await owner.assertCurrent();
       if (typeof owner.revision !== "string" || !owner.revision) throw unavailable();
       return owner.revision;
     };
@@ -125,8 +149,7 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
         if (!reference?.companyId || reference.deletedAt || reference.mergedIntoCompanyId || !hasInventoryCorrection(reference)
           || !companyRunIds(reference).has(id)) continue;
         await checkpoint();
-        const company = await owner.readCompany(reference.companyId); metrics.companyProjectionsRead++;
-        if (!company || company.companyId !== reference.companyId) throw unavailable();
+        const company = await correctionCompany(reference, owner, true);
         let entry;
         try {
           entry = { companyId: company.companyId, rows: correctedRows(stored, originalRun, company) };
@@ -151,7 +174,10 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
     if (result.value.runId !== id || !Array.isArray(result.value.companies)) throw unavailable();
     return result.value;
   }
-  async function recalculateCompanyObservations(request, data, { checkpoint = async () => {} } = {}) {
+  async function recalculateCompanyObservations(request, data, { checkpoint = async () => {}, sourceReadValidationBoundary = null } = {}) {
+    const boundary = useSourceReadValidationBoundary ? sourceReadValidationBoundary : null;
+    if (boundary && (boundary.owner !== data._companySource || boundary.revision !== data._companySource?.revision
+      || typeof boundary.revision !== "string" || !boundary.revision || typeof boundary.isActive !== "function" || !boundary.isActive())) throw unavailable();
     const monthStart = dayKey(`${request.month}-01`), cutoff = dayKey(request.cutoffDate);
     if (!monthStart || !cutoff || !(data.rawCompanies instanceof Map)) throw unavailable();
     const nextMonth = new Date(`${monthStart}T00:00:00Z`);
@@ -185,15 +211,20 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
     for (const [id, companies] of targetsByRun) {
       await checkpoint();
       const originalRun = eligibleRuns.get(id);
-      const useCache = cache && typeof data._companySource?.assertCurrent === "function"
+      // Company jobs reuse bounded cross-company rows across adjacent company
+      // reads. A broad cold source already needs each run once; publishing all
+      // those rows can evict useful entries and repeat fsync/serialization.
+      const useCache = request.type === "company" && cache && typeof data._companySource?.assertCurrent === "function"
         && typeof data._companySource?.readCompany === "function" && typeof data._companySource.revision === "string";
-      const cached = useCache ? await cachedRunRows(id, originalRun, data, capacityCompanies, checkpoint) : null;
+      const cached = useCache ? await cachedRunRows(id, originalRun, data, capacityCompanies, checkpoint, boundary) : null;
       const stored = cached ? null : await loadStored(id, capacityCompanies);
       for (const company of companies) {
         await checkpoint();
         const entry = cached?.companies.find(value => value.companyId === company.companyId);
         if (cached && (!entry || entry.error || !Array.isArray(entry.rows))) throw unavailable();
-        const rows = cached ? entry.rows : correctedRows(stored, originalRun, company);
+        // The bounded-cache fallback must honor the same projection opt-in or
+        // full-company callback contract as a cold cache build.
+        const rows = cached ? entry.rows : correctedRows(stored, originalRun, await correctionCompany(company, data._companySource));
         for (const row of rows) {
           const stayDate = dayKey(row?.stayDate || row?.date);
           if (stayDate >= monthStart && stayDate <= monthEnd) result.push(row);

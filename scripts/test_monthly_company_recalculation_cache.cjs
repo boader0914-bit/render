@@ -2,6 +2,7 @@
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs/promises"), os = require("node:os"), path = require("node:path");
 const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
+const { compactMonthlyCapacityCompany } = require("./lib/monthly_company_source_catalog.cjs");
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "monthly-run-rows-"));
   t.after(async () => { assert.ok(root.startsWith(os.tmpdir()+path.sep)); await fs.rm(root,{recursive:true,force:true}); });
@@ -64,4 +65,78 @@ test("a fresh owner after a source or run-quality change rebuilds or excludes in
   assert.deepEqual(await helper(f.request("a"),f.data),[]);assert.equal(f.loads(),2);
   f.data.runs[0].collectionQuality.status="complete";
   assert.deepEqual(await helper({...f.request("a"),cutoffDate:"2026-09-19"},f.data),[]);
+});
+
+test("correction projection is explicit and validates its function, company identity and correction eligibility",async t=>{
+  const f=await fixture(t);
+  assert.throws(()=>createMonthlyCompanyRecalculation({...f.options,projectCorrectionCompany:42}),TypeError);
+  for(const projectCorrectionCompany of [()=>null,()=>({companyId:"other",manualCorrection:{lodgingBasisTotal:10}}),c=>({companyId:c.companyId,manualCorrection:null})]){
+    const helper=createMonthlyCompanyRecalculation({...f.options,projectCorrectionCompany});
+    await assert.rejects(helper(f.request("a"),f.data),error=>error.code==="MONTHLY_RECALCULATION_UNAVAILABLE");
+  }
+});
+
+test("generic callbacks retain their full-company contract for cold cache builds, broad reads and oversized fallbacks",async t=>{
+  const f=await fixture(t);let reads=0;
+  for(const c of f.companies)c.futureCallbackField={quantity:40+(c.companyId==="b"?1:0)};
+  f.data.rawCompanies=new Map(f.companies.map(c=>[c.companyId,compactMonthlyCapacityCompany(c)]));
+  f.data._companySource.readCompany=async id=>{reads++;return f.companies.find(c=>c.companyId===id);};
+  f.options.applyCompanyManualCorrection=(item,c)=>({...item,supply:c.futureCallbackField.quantity,inventoryEvidence:{version:4}});
+  const helper=createMonthlyCompanyRecalculation(f.options);
+  assert.equal((await helper(f.request("a"),f.data))[0].supply,40);assert.equal(reads,2);
+  const broad=await helper({...f.request("a"),type:"industry",targetId:"__industry_all__"},f.data);
+  assert.deepEqual(broad.map(row=>row.supply),[40,41]);assert.equal(reads,4);
+  const fallback=createMonthlyCompanyRecalculation({...f.options,cacheVersion:"oversize-generic",maxCachedRunBytes:128});
+  assert.equal((await fallback(f.request("a"),f.data))[0].supply,40);
+  assert.equal(fallback.stats().runRowOversizeFallbacks,1);
+});
+
+test("explicit compact correction companies avoid full-body reads while broad sources never build or write cold run caches",async t=>{
+  const f=await fixture(t), baseline=createMonthlyCompanyRecalculation({...f.options,cacheDirectory:null});
+  const request={...f.request("a"),type:"industry",targetId:"__industry_all__"};
+  const expected=await baseline(request,f.data);
+  f.data.rawCompanies=new Map(f.companies.map(c=>[c.companyId,compactMonthlyCapacityCompany(c)]));
+  f.data._companySource.readCompany=()=>assert.fail("explicit compact correction must not load full company inventories");
+  const helper=createMonthlyCompanyRecalculation({...f.options,projectCorrectionCompany:compactMonthlyCapacityCompany});
+  assert.deepEqual(await helper(request,f.data),expected);
+  assert.equal(helper.stats().runRowBuilds,0);assert.equal(helper.stats().companyProjectionsRead,0);
+  assert.equal(helper.stats().correctionCompanyProjections,2);assert.deepEqual(await fs.readdir(f.root),[]);
+  const fallback=createMonthlyCompanyRecalculation({...f.options,projectCorrectionCompany:compactMonthlyCapacityCompany,maxCachedRunBytes:128});
+  assert.equal((await fallback(f.request("a"),f.data))[0].supply,10);
+  assert.equal(fallback.stats().runRowOversizeFallbacks,1);assert.equal(fallback.stats().companyProjectionsRead,0);
+});
+
+test("explicit correction projections preserve disabled-review eligibility and skipped run quality",async t=>{
+  const f=await fixture(t);f.companies[0].manualCorrection.active=false;
+  f.data.rawCompanies=new Map(f.companies.map(c=>[c.companyId,compactMonthlyCapacityCompany(c)]));
+  f.data._companySource.readCompany=()=>assert.fail("opted-in projection must not read full company bodies");
+  const helper=createMonthlyCompanyRecalculation({...f.options,projectCorrectionCompany:compactMonthlyCapacityCompany});
+  const request={...f.request("a"),type:"industry",targetId:"__industry_all__"};
+  const rows=await helper(request,f.data);assert.equal(rows.length,1);assert.equal(rows[0].companyId,"b");
+  assert.equal(helper.stats().correctionCompanyProjections,1);
+  f.data.runs[0].collectionQuality.status="failed";assert.deepEqual(await helper(request,f.data),[]);
+  assert.equal(helper.stats().correctionCompanyProjections,1);
+});
+
+test("source-read validation is explicit, invocation-bound and never weakens default or direct callers", async t => {
+  const f = await fixture(t); let assertions = 0;
+  const owner = f.data._companySource, original = owner.assertCurrent;
+  owner.assertCurrent = async () => { assertions++; return original(); };
+  assert.throws(() => createMonthlyCompanyRecalculation({ ...f.options, useSourceReadValidationBoundary: "true" }), TypeError);
+  const generic = createMonthlyCompanyRecalculation(f.options);
+  const invalidBoundary = { owner: null, revision: "wrong", isActive: () => false };
+  await generic(f.request("a"), f.data, { sourceReadValidationBoundary: invalidBoundary });
+  assert.equal(assertions, 2, "default build still freshly validates before and after calculation");
+  await generic(f.request("a"), f.data, { sourceReadValidationBoundary: invalidBoundary });
+  assert.equal(assertions, 3, "default hit still freshly validates after reading its payload");
+  const optedIn = createMonthlyCompanyRecalculation({ ...f.options, useSourceReadValidationBoundary: true });
+  await optedIn(f.request("a"), f.data);
+  assert.equal(assertions, 4, "an opted-in direct caller without an active source boundary still freshly validates");
+  for (const boundary of [invalidBoundary,
+    { owner, revision: "wrong", isActive: () => true },
+    { owner, revision: owner.revision, isActive: () => false },
+    { owner, revision: owner.revision }]) {
+    await assert.rejects(optedIn(f.request("a"), f.data, { sourceReadValidationBoundary: boundary }),
+      error => error.code === "MONTHLY_RECALCULATION_UNAVAILABLE");
+  }
 });

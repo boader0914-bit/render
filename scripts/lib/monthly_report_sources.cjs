@@ -23,11 +23,13 @@ async function readJson(file, fallback, checkpoint = async () => {}) {
   catch (error) { if (error.code === "ENOENT") return fallback; throw sourceError(); }
 }
 
-function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, observationIndex = null, prepareCompanies = null, projectCapacityCompany = null, companySourceVersion = "monthly-company-source-v1", projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", now = () => new Date(), runWork = operation => operation() }) {
+function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, observationIndex = null, prepareCompanies = null, projectCapacityCompany = null, companySourceVersion = "monthly-company-source-v1", useSourceReadValidationBoundary = false, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", now = () => new Date(), runWork = operation => operation() }) {
+  if (typeof useSourceReadValidationBoundary !== "boolean") throw new TypeError("Source-read validation opt-in must be boolean");
   const companyFile = path.join(dataDir, "company_master", "companies.json");
   const historyFile = path.join(dataDir, "history", "observations.jsonl");
   let catalogInFlight = null, targetCatalogInFlight = null, optionsInFlight = null;
-  const sourceMetrics = { catalogFullReads: 0, catalogFullBytes: 0, capacityPreparations: 0, sourceReads: 0, companyProjectionReads: 0 };
+  const sourceMetrics = { catalogFullReads: 0, catalogFullBytes: 0, capacityPreparations: 0, sourceReads: 0, companyProjectionReads: 0,
+    preparedCatalogReads: 0, preparedCatalogReadsByScope: { company: 0, region: 0, keyword: 0, industry: 0, other: 0 } };
   const sourceReadScheduler = createSourceReadScheduler();
   const selectorCache = typeof readOptionsRevision === "function" ? createMonthlyReportMaterializedCache({
     directory: path.join(dataDir, "monthly_reports", "selector_cache"), maxEntries: 1,
@@ -36,7 +38,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
   const checkpointFor = ({ priority } = {}) => priority === "background"
     ? () => sourceReadScheduler.checkpoint({ priority: "background" }) : async () => {};
   const companySourceCatalog = typeof readRevision === "function" && typeof projectCapacityCompany === "function"
-    ? createMonthlyCompanySourceCatalog({ dataDir, readRevision, projectCapacityCompany,
+    ? createMonthlyCompanySourceCatalog({ dataDir, readRevision, projectCapacityCompany, useSourceReadValidationBoundary,
       version: require("node:crypto").createHash("sha256").update(String(companySourceVersion)).update(fs.readFileSync(__filename)).digest("hex"),
       loadFullCatalog: options => readCatalog({ checkpoint: options?.checkpoint }) }) : null;
   async function readCatalog({ prepareCapacity = true, checkpoint = async () => {} } = {}) {
@@ -200,10 +202,27 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     const { includeContext = true } = options, checkpoint = checkpointFor(options);
     sourceMetrics.sourceReads++;
     let data;
-    if (companySourceCatalog && request.type === "company" && !includeCatalog) {
-      try { data = await companySourceCatalog.readCompanyCatalog(request.targetId, { checkpoint }); sourceMetrics.companyProjectionReads++; }
+    if (companySourceCatalog) {
+      // Every analytical scope shares the same verified prepared generation.
+      // Broad scopes keep compact identities/capacity only; original fallback
+      // inventories are loaded one company at a time below, never reconstructed
+      // from the compact maximum-quantity witness.
+      try { data = request.type === "company"
+        ? await companySourceCatalog.readCompanyCatalog(request.targetId, { checkpoint })
+        : await companySourceCatalog.readCatalog({ checkpoint });
+        sourceMetrics.preparedCatalogReads++;
+        sourceMetrics.preparedCatalogReadsByScope[Object.hasOwn(sourceMetrics.preparedCatalogReadsByScope, request.type) ? request.type : "other"]++;
+        if (request.type === "company") sourceMetrics.companyProjectionReads++;
+      }
       catch { throw sourceError(); }
     } else data = await readCatalog({ checkpoint });
+    // This capability is private to one serial source read, not a timed or
+    // global freshness cache. The final fresh assert below is mandatory even
+    // after a cache hit, fallback, no-target read or recovered context error.
+    let sourceReadActive = true;
+    const sourceReadValidationBoundary = useSourceReadValidationBoundary && data._companySource
+      ? Object.freeze({ owner: data._companySource, revision: data._companySource.revision, isActive: () => sourceReadActive }) : null;
+    try {
     const byId = new Map(data.companies.map(company => [company.companyId, company]));
     const ids = new Map(data.companies.map(company => [token(company.companyId), company.companyId]));
     const places = new Map(), conflictingCompanyIds = new Set();
@@ -302,16 +321,22 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
       // Some recovered runs have only a persisted company snapshot. Their run
       // quality is still independently validated by the report aggregation.
       let fallbackCompany = company;
-      if (companyScope !== null && company._monthlySourceCompact) {
-        // Nonselected inventory cannot contribute quantities. Only a known
-        // duplicate-place owner contributes its original fallback-row count
-        // to global diagnostics; keep that count without retaining its body.
+      if (company._monthlySourceCompact) {
+        // Company-only reads can summarize unrelated fallback diagnostics.
+        // Broad scopes instead need the complete original fallback rows,
+        // including conflicts used by keyword membership diagnostics.
         const resolved = canonical({ companyKey: id });
-        if (resolved === companyScope) {
+        if (companyScope === null || resolved === companyScope) {
           // Preserve historical alias overwrite semantics and original company
           // iteration order. An active id can also be a reviewed merged alias;
           // its fallback then belongs to the selected canonical company.
-          fallbackCompany = await data._companySource.readCompany(id);
+          // Rank metadata was handled above. A source without fallback rows in
+          // this month has no daily evidence to load. Broad scopes must still
+          // read conflicting identities so keyword membership and global
+          // diagnostics preserve every original row and its iteration order.
+          if (!(company._monthlySourceFallbackMonths?.[request.month] > 0)) continue;
+          try { fallbackCompany = await data._companySource.readCompany(id); }
+          catch { throw sourceError(); }
         } else {
           const count = company._monthlySourceFallbackMonths?.[request.month] || 0;
           if (!resolved && count) unmatchedRows.push({ candidateId: canonical({ companyKey: id }, true) || `unresolved-report-row-${unmatchedRows.length}`, count });
@@ -332,7 +357,8 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     if (recalculateCompanyObservations !== null) {
       try {
         await checkpoint();
-        const recalculated = await recalculateCompanyObservations(request, data, { checkpoint });
+        const recalculated = await recalculateCompanyObservations(request, data, { checkpoint,
+          ...(sourceReadValidationBoundary ? { sourceReadValidationBoundary } : {}) });
         if (!Array.isArray(recalculated) || recalculated.some(row => !row || typeof row !== "object" || Array.isArray(row))) throw sourceError();
         for (let index = 0; index < recalculated.length; index++) {
           if (index % 256 === 0) await checkpoint();
@@ -386,6 +412,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
         ...(request.type === "region" ? { unmappedRegionCompanies } : {}) }, context };
     if (data._companySource) { try { await data._companySource.assertCurrent(); } catch { throw sourceError(); } }
     return includeCatalog ? { source, catalog: data } : source;
+    } finally { sourceReadActive = false; }
   }
   function queueSourceRead(request, includeCatalog = false, options = {}) {
     // All consumers (including background company materialization) share this
@@ -397,7 +424,8 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     ...(typeof readRevision === "function" ? { readRevision } : {}),
     runInteractiveRead: sourceReadScheduler.runInteractive,
     sourceReadStatus: sourceReadScheduler.status,
-    sourceReadMetrics: () => ({ ...sourceMetrics, companyCatalog: companySourceCatalog?.stats() || null }) };
+    sourceReadMetrics: () => ({ ...sourceMetrics, preparedCatalogReadsByScope: { ...sourceMetrics.preparedCatalogReadsByScope },
+      companyCatalog: companySourceCatalog?.stats() || null }) };
 }
 
 module.exports = { createMonthlyReportSources };

@@ -3,6 +3,8 @@ const test = require("node:test"), assert = require("node:assert/strict"), fs = 
 const { createMonthlyCompanySourceCatalog, compactMonthlyCapacityCompany } = require("./lib/monthly_company_source_catalog.cjs");
 const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs");
 const { createHistoryObservationIndex } = require("./lib/history_observation_index.cjs");
+const { compactIndustrySources } = require("./lib/industry_analysis.cjs");
+const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
 const sha = value => crypto.createHash("sha256").update(value).digest("hex"), json = value => JSON.parse(JSON.stringify(value));
 const source = native.readFileSync(path.join(__dirname, "glamping_app_server.cjs"), "utf8");
 function extracted(name, globals = {}) { const start = source.indexOf("function " + name + "("), following = /\r?\n(?:async )?function /.exec(source.slice(start + 1)), end = start + 1 + following.index; assert.ok(start >= 0 && end > start); return vm.runInNewContext("(" + source.slice(start, end).trim() + ")", globals); }
@@ -10,6 +12,17 @@ const productSnapshotNumber = extracted("productSnapshotNumber"), maximum = extr
 const capacityRecord = extracted("withCompanyInventoryCapacityRecord", { companyMaximumRoomCapacity: maximum, productSnapshotNumber,
   manualCorrectionLodgingBasisTotal: correction => correction?.active === false ? null : Number(correction?.lodgingBasisTotal) || null });
 const availabilityMatch = extracted("companyProductAvailabilityMatch", { extractNaverPlaceId: item => item.placeId, extractBookingBusinessId: item => item.bookingBusinessId });
+const correctionContext = vm.createContext({ B2B_INTEREST_LODGE_SEGMENT_LIMIT: 12,
+  applyInventoryEvidence: require("./inventory_estimation.cjs").applyInventoryEvidence,
+  sanitizeMemberText: (value, max) => String(value || "").trim().slice(0, max),
+  boundedUnique: (values, limit) => [...new Set(values)].slice(0, limit) });
+for (const name of ["productSnapshotNumber", "companyMaximumRoomCapacity", "withCompanyInventoryCapacityRecord", "applyCompanyManualCorrection",
+  "manualCorrectionLodgingBasisTotal", "manualCorrectionRoomSegmentTotal", "manualCorrectionRoomSegments", "sanitizeManualCorrectionRoomSegments",
+  "sanitizeB2BInterestLodgeSegment", "b2bInterestLodgeSegmentHasInput", "sanitizeInterestLodgeNumberText", "sanitizeManualCorrectionMeta",
+  "manualCorrectionHasValue", "manualCorrectionHasBasis", "manualCorrectionMetaHasValue", "maxPositiveNumber", "parseBasisTotalFromRule", "stockBasisRule"]) {
+  const start = source.indexOf("function " + name + "("), next = /\r?\n(?:async )?function /.exec(source.slice(start + 1));
+  assert.ok(start >= 0 && next, name); vm.runInContext(source.slice(start, start + 1 + next.index), correctionContext);
+}
 
 async function temporary(t, beforeCleanup = async () => {}) { const root = await fs.mkdtemp(path.join(os.tmpdir(), "monthly-company-source-")); t.after(async () => { await beforeCleanup(); assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep)); await fs.rm(root, { recursive: true, force: true }); }); return root; }
 function snapshot(runId, rows, extra = {}) { return { runId, collectedAt: "2026-08-01T00:00:00Z", inventoryEvidenceVersion: 4,
@@ -64,6 +77,49 @@ test("compact rank metadata tolerates null legacy run references without inventi
   assert.deepEqual(compactMonthlyCapacityCompany(company).keywords.k.runs, [{}, { runId: "actual", rank: 0 }]);
 });
 
+test("complete saved rank metadata survives compaction without restoring company product bodies", () => {
+  const company = rawCompanies().a;
+  const metadata = { collectedDate: "2026-08-01", regionalRank: 0, searchMode: "keyword", collectionSource: "admin_search",
+    unknownMetadata: { revision: 2, attempted: false, warnings: ["retained"], nullable: null }, futureRankField: [0, false, ""] };
+  Object.assign(company.keywords.k.runs[0], metadata);
+  const compact = compactMonthlyCapacityCompany(company);
+  assert.deepEqual(compact.keywords.k.runs, company.keywords.k.runs);
+  assert.ok(!JSON.stringify(compact).includes("saved-product-body"));
+  assert.ok(!JSON.stringify(compact).includes("do-not-retain-all-company-body"));
+  company.keywords.k.runs[0].unknownMetadata.warnings.push("later-original-edit");
+  assert.deepEqual(compact.keywords.k.runs[0].unknownMetadata.warnings, ["retained"], "returned metadata owns an independent saved-JSON copy");
+});
+
+test("the real application correction callbacks produce identical complete items from full companies and the explicit compact projection", () => {
+  const original = rawCompanies().a;
+  original.manualCorrection.productStockCorrections = [{ bizItemId: "p-a", stayDate: "2026-08-02", observedStock: 16, correctedStock: 14, reason: "actual callback fixture" }];
+  const cases = [json(original)];
+  const disabled = json(original); disabled.manualCorrection = { active: false, lodgingBasisTotal: 100, dayUseBasisTotal: 80 }; cases.push(disabled);
+  const cleared = json(original); delete cleared.manualCorrection; cases.push(cleared);
+  const metadata = json(original); metadata.manualCorrection = { active: true, lodgingBasisTotal: 13, dayUseBasisTotal: 2,
+    couponVisible: "visible", couponNames: "saved coupon", facilityTags: ["pool"], otaChannels: ["saved"], naverBookingStatus: "visible",
+    productStockCorrections: [{ bizItemId: "p-a", stayDate: "2026-08-02", observedStock: 16, correctedStock: 4, reason: "reviewed product count" }] }; cases.push(metadata);
+  const evidence = json(original); evidence.inventory.latest.productSnapshot.capacityBasis = { currentObservedMaximum: 27 }; cases.push(evidence);
+  const legacy = json(original); delete legacy.manualCorrection; legacy.inventory = { latest: { inventoryEvidenceVersion: 2, stockBasis: { lodgingMaxTotal: 88 },
+    productSnapshot: { inventoryEvidenceVersion: 2, daily: [{ productType: "lodging", rawTotal: null }] } } }; cases.push(legacy);
+  const excluded = json(original); excluded.inventory.latest.productSnapshot.daily.push({ productType: "lodging", missing: true, rawTotal: 999 }); cases.push(excluded);
+  const item = { placeId: "10", bookingBusinessId: "booking-a", name: "saved actual-function fixture", weeklyBasisTotal: 16,
+    weeklyProductDetails: [{ date: "2026-08-02", bizItemId: "p-a", name: "숙박", saleType: "숙박", stock: 16, available: 12,
+      bookingCount: 3, occupiedBookingCount: 4, price: 120000, inventoryObserved: true, queryAttempted: true, responseStatus: 200 }] };
+  for (const company of cases) {
+    const compact = compactMonthlyCapacityCompany(company), before = JSON.stringify(company);
+    assert.equal(correctionContext.manualCorrectionHasValue(company.manualCorrection), correctionContext.manualCorrectionHasValue(compact.manualCorrection));
+    assert.equal(correctionContext.companyMaximumRoomCapacity(company), correctionContext.companyMaximumRoomCapacity(compact));
+    for (const candidate of [item, { ...item, placeId: "conflicting-place" }, { ...item, bookingBusinessId: "conflicting-booking" }]) {
+      assert.equal(availabilityMatch(company, candidate), availabilityMatch(compact, candidate));
+      assert.deepEqual(json(correctionContext.applyCompanyManualCorrection(json(candidate), company)),
+        json(correctionContext.applyCompanyManualCorrection(json(candidate), compact)));
+    }
+    assert.equal(JSON.stringify(company), before); assert.ok(!JSON.stringify(compact).includes("saved-product-body"));
+  }
+  assert.match(source, /projectCorrectionCompany:\s*compactMonthlyCapacityCompany/, "only the actual app opts into its proven correction projection");
+});
+
 test("a derived-directory symlink cannot create files outside the configured data root", async t => {
   const root = await temporary(t), outside = await temporary(t);
   await fs.symlink(outside, path.join(root, "monthly_reports"), process.platform === "win32" ? "junction" : "dir");
@@ -111,15 +167,105 @@ test("a restart reuses the saved projection; original changes rebuild it without
   assert.equal(restarted.sourceReadMetrics().catalogFullReads, 1); assert.notDeepEqual(refreshed.companies, original.companies);
 });
 
-test("full-catalog company reads and keyword/region/industry behavior keep the existing path", async t => {
-  const f = await fixture(t), projected = f.make(true), direct = f.make(false);
-  for (const [type, targetId] of [["keyword", "포천글램핑"], ["region", "pocheon"], ["industry", "__industry_all__"]]) {
-    const request = { type, targetId, month: "2026-08", cutoffDate: "2026-08-31" }; assert.deepEqual(json(await projected.loadSources(request)), json(await direct.loadSources(request)));
+for (const indexed of [false, true]) test(`all four source scopes and paired industry metadata share a verified generation without losing actual fallback rows (indexed=${indexed})`, async t => {
+  const f = await fixture(t, { indexed }), master = JSON.parse(await fs.readFile(f.companyFile));
+  master.companies.a.industryIds = ["caravan"];
+  master.companies.a.regionKey = "pocheon"; master.companies.a.regions = ["경기도 포천시"];
+  master.companies.b.regionId = "pocheon";
+  master.companies.b.manualCorrection.regionOverride = "포천시";
+  for (const company of Object.values(master.companies)) Object.assign(company.keywords.k.runs[0], {
+    collectedDate: "2026-08-01", regionalRank: company.companyId === "a" ? 0 : 4, searchMode: "keyword", collectionSource: "admin_search",
+    unknownMetadata: { company: company.companyId, falseFlag: false, nullable: null, nested: { saved: ["metadata", 7] } }
+  });
+  // A real active ID can also be a merged alias. Preserve the complete old
+  // iteration/overwrite order, including quantities from its original body.
+  master.companies.b.duplicateNotes = [{ mergedCompanyId: "a" }, { mergedCompanyId: "c" }];
+  master.companies.a.inventory.latest.productSnapshot.daily[0].sold = 9;
+  master.companies.c.inventory.latest.productSnapshot.daily.push(daily("2026-08-05", 26, { sold: 11, rank: 3, keyword: "포천글램핑" }));
+  await fs.writeFile(f.companyFile, JSON.stringify(master));
+  const sourceFiles = [f.companyFile, f.historyFile, f.regionFile], before = await Promise.all(sourceFiles.map(async file => [await fs.readFile(file), await fs.stat(file, { bigint: true })]));
+  const projected = f.make(true), direct = f.make(false);
+  for (const [type, targetId] of [["company", "b"], ["keyword", "포천글램핑"], ["region", "pocheon"], ["industry", "__industry_all__"]]) for (const month of ["2026-08", "2026-09"]) {
+    const request = { type, targetId, month, cutoffDate: "2026-09-30" };
+    const expected = await direct.loadSourcesWithCatalog(request), pair = await projected.loadSourcesWithCatalog(request);
+    assert.deepEqual(json(pair.source), json(expected.source), type + "/" + month);
+    assert.deepEqual(json(compactIndustrySources(pair.source, pair.catalog)), json(compactIndustrySources(expected.source, expected.catalog)), "paired classification/location " + type + "/" + month);
+    assert.equal(typeof pair.catalog._companySource.assertCurrent, "function");
+    assert.equal(pair.source.companies, pair.catalog.companies);
+    assert.equal(pair.catalog.rawCompanies.get("d")._monthlySourceCompact, true);
+    if (type !== "company") assert.ok(!JSON.stringify(pair.catalog).includes("saved-product-body"), "broad paired catalogs retain no original product inventories");
   }
-  const pair = await projected.loadSourcesWithCatalog({ type: "company", targetId: "a", month: "2026-08", cutoffDate: "2026-08-31" });
-  assert.equal(pair.catalog.rawCompanies.get("b").inventory.latest.productSnapshot.daily.length, 4); assert.equal(pair.catalog._companySource, undefined);
-  assert.equal(projected.sourceReadMetrics().companyCatalog.builds, 0);
+  const metrics = projected.sourceReadMetrics();
+  assert.equal(metrics.catalogFullReads, 1); assert.equal(metrics.capacityPreparations, 1); assert.equal(metrics.companyCatalog.builds, 1);
+  assert.equal(metrics.preparedCatalogReads, 8); assert.deepEqual(metrics.preparedCatalogReadsByScope, { company: 2, keyword: 2, region: 2, industry: 2, other: 0 });
+  assert.equal(metrics.companyProjectionReads, 2, "the existing company-only counter keeps its meaning");
+  for (let index = 0; index < sourceFiles.length; index++) {
+    assert.deepEqual(await fs.readFile(sourceFiles[index]), before[index][0]); const after = await fs.stat(sourceFiles[index], { bigint: true });
+    for (const field of ["size", "mtimeNs", "ctimeNs", "ino", "dev"]) assert.equal(after[field], before[index][1][field], field);
+  }
 });
+
+test("nineteen broad paired reads reuse capacity preparation and no full company body remains in their catalog", async t => {
+  const f = await fixture(t), projected = f.make(true);
+  for (let index = 0; index < 19; index++) {
+    const pair = await projected.loadSourcesWithCatalog({ type: "industry", targetId: "__industry_all__", month: index % 2 ? "2026-09" : "2026-08", cutoffDate: "2026-09-30" });
+    assert.equal(pair.catalog.rawCompanies.get("a")._monthlySourceCompact, true);
+    assert.ok(pair.source.observations.length > 0);
+  }
+  const metrics = projected.sourceReadMetrics(); assert.equal(metrics.catalogFullReads, 1); assert.equal(metrics.capacityPreparations, 1);
+  assert.equal(metrics.companyCatalog.builds, 1); assert.equal(metrics.companyCatalog.hits, 18); assert.equal(metrics.preparedCatalogReadsByScope.industry, 19);
+  const restarted = f.make(true); await restarted.loadSourcesWithCatalog({ type: "region", targetId: "pocheon", month: "2026-08", cutoffDate: "2026-08-31" });
+  assert.equal(restarted.sourceReadMetrics().catalogFullReads, 0); assert.equal(restarted.sourceReadMetrics().capacityPreparations, 0);
+  assert.equal(restarted.sourceReadMetrics().companyCatalog.savedHits, 1);
+});
+
+test("broad scopes load each run once without publishing cold run caches while company scopes retain cache reuse and full capacity identities", async t => {
+  const f = await fixture(t); const loads = { direct: 0, projected: 0 };
+  const recalculation = mode => createMonthlyCompanyRecalculation({ cacheDirectory: path.join(f.root, "derived-row-cache-" + mode),
+    loadRun: async (id, options) => {
+      loads[mode]++; assert.deepEqual(options.capacityCompanies.map(row => row.companyId), ["a", "b", "c", "d"]);
+      assert.ok(options.capacityCompanies.every(row => maximum(row) === 19));
+      for (const field of ["skipCompanyMaster", "skipHistory", "skipTraffic"]) assert.equal(options[field], true);
+      assert.equal(options.applyCompanyMaster, false);
+      return { run: { id }, availability: { items: ["a", "b", "c", "d"].map(companyId => ({ companyId, inventoryEvidence: { version: 4 }, savedQuantity: 7 })) } };
+    },
+    companyProductAvailabilityMatch: (company, item) => company.companyId === item.companyId,
+    applyCompanyManualCorrection: (item, company) => ({ ...item, reviewedQuantity: company.manualCorrection.lodgingBasisTotal }),
+    buildHistoryObservations: data => [daily("2026-08-06", data.availability.items[0].reviewedQuantity,
+      { sold: data.availability.items[0].savedQuantity, runId: "run1" }), daily("2026-09-01", 16, { sold: 8, runId: "run1" })]
+  });
+  const direct = f.make(false, { recalculateCompanyObservations: recalculation("direct") });
+  const projected = f.make(true, { recalculateCompanyObservations: recalculation("projected") });
+  for (const [type, targetId] of [["industry", "__industry_all__"], ["keyword", "포천글램핑"], ["region", "pocheon"], ["company", "a"]]) {
+    const request = { type, targetId, month: "2026-08", cutoffDate: "2026-08-31" };
+    assert.deepEqual(json(await projected.loadSources(request)), json(await direct.loadSources(request)), type);
+  }
+  assert.equal(loads.direct, 4); assert.equal(loads.projected, 4, "three broad cold reads never construct persistent run-row entries");
+  const request = { type: "company", targetId: "b", month: "2026-08", cutoffDate: "2026-08-31" };
+  assert.deepEqual(json(await projected.loadSources(request)), json(await direct.loadSources(request)));
+  assert.equal(loads.direct, 5); assert.equal(loads.projected, 4, "the final company read reuses the company-built run rows");
+  assert.equal(projected.sourceReadMetrics().companyCatalog.builds, 1);
+});
+
+for (const [type, targetId] of [["keyword", "포천글램핑"], ["region", "pocheon"], ["industry", "__industry_all__"]]) {
+  test(`a damaged nonselected company body fails closed for ${type} without changing originals`, async t => {
+    const f = await fixture(t), projected = f.make(true), request = { type, targetId, month: "2026-08", cutoffDate: "2026-08-31" };
+    await projected.loadSources(request); const original = await fs.readFile(f.companyFile), base = path.join(f.root, "monthly_reports/company_sources"), pointer = JSON.parse(await fs.readFile(path.join(base, "current.json")));
+    await fs.writeFile(path.join(base, pointer.generation, sha("b") + ".json"), "damaged-derived-body");
+    await assert.rejects(projected.loadSourcesWithCatalog(request), { code: "MONTHLY_SOURCE_UNAVAILABLE" });
+    assert.deepEqual(await fs.readFile(f.companyFile), original);
+  });
+  test(`a mid-read original change rejects a mixed ${type} generation`, async t => {
+    const f = await fixture(t), request = { type, targetId, month: "2026-08", cutoffDate: "2026-08-31" };
+    await f.make(true).loadSources(request); const pointer = path.join(f.root, "monthly_reports/company_sources/current.json"), before = await fs.readFile(pointer);
+    const failing = f.make(true, { recalculateCompanyObservations: async () => {
+      const master = JSON.parse(await fs.readFile(f.companyFile)); master.companies.b.manualCorrection.lodgingBasisTotal = 23;
+      await fs.writeFile(f.companyFile, JSON.stringify(master)); return [];
+    } });
+    await assert.rejects(failing.loadSourcesWithCatalog(request), { code: "MONTHLY_SOURCE_UNAVAILABLE" });
+    assert.deepEqual(await fs.readFile(pointer), before, "failed reads do not replace the last verified generation");
+  });
+}
 
 test("recalculation sees all capacity identities but can lazily load a nonselected full company from the same verified generation", async t => {
   const f = await fixture(t); let calls = 0;
@@ -243,6 +389,17 @@ test("prebuild byte budget reserves the next generation without deleting preexis
   assert.equal(f.catalog.stats().fullCatalogReads, 0);
 });
 
+test("complete rank metadata cannot bypass the compact catalog byte bound", async t => {
+  const root = await temporary(t), company = rawCompanies().a;
+  company.keywords.k.runs[0].unknownMetadata = "rank-metadata-".repeat(200);
+  const catalog = createMonthlyCompanySourceCatalog({ dataDir: root, readRevision: async () => "unchanged-raw-source", maxCatalogBytes: 512,
+    projectCapacityCompany: compactMonthlyCapacityCompany, loadFullCatalog: async () => ({ companies: [{ companyId: "a" }],
+      rawCompanies: new Map([["a", company]]), regions: [], runs: [] }) });
+  await assert.rejects(catalog.readCatalog(), { code: "MONTHLY_COMPANY_SOURCE_TOO_LARGE" });
+  const files = await fs.readdir(path.join(root, "monthly_reports/company_sources"));
+  assert.deepEqual(files, [], "an oversized rank catalog publishes no pointer or partial generation");
+});
+
 test("an unverifiable fresh pointer preserves abandoned attempts instead of guessing what can be removed", async t => {
   const root = await temporary(t), directory = path.join(root, "monthly_reports/company_sources");
   let revision = 0;
@@ -258,4 +415,135 @@ test("an unverifiable fresh pointer preserves abandoned attempts instead of gues
   assert.equal(catalog.stats().abandonedCleanupFailures, 2);
   assert.equal(catalog.stats().abandonedGenerationsRemoved, 0);
   assert.equal(await fs.readFile(path.join(directory, "current.json"), "utf8"), "invalid-pointer-must-remain");
+});
+
+test("only explicit source-read opt-in removes the intermediate catalog assertion and retains both read boundaries", async t => {
+  const f = await fixture(t), request = { type: "company", targetId: "a", month: "2026-08", cutoffDate: "2026-08-31" };
+  const generic = f.make(true);
+  await generic.loadSources(request);
+  let before = generic.sourceReadMetrics().companyCatalog.revisionReads;
+  await generic.loadSources(request);
+  assert.equal(generic.sourceReadMetrics().companyCatalog.revisionReads - before, 4,
+    "default catalog has its original three assertions, plus the final source assertion");
+  const optedIn = f.make(true, { useSourceReadValidationBoundary: true });
+  await optedIn.loadSources(request);
+  before = optedIn.sourceReadMetrics().companyCatalog.revisionReads;
+  await optedIn.loadSources(request);
+  assert.equal(optedIn.sourceReadMetrics().companyCatalog.revisionReads - before, 3,
+    "opt-in retains initial revision, catalog-end revision and source-end revision");
+  assert.throws(() => f.make(true, { useSourceReadValidationBoundary: "true" }), TypeError);
+});
+
+async function validationBoundaryFixture(t, { maxCachedRunBytes } = {}) {
+  const f = await fixture(t); let loads = 0, mutation = null, trigger = "", lastBoundary = null, lastData = null;
+  const helper = createMonthlyCompanyRecalculation({ cacheDirectory: path.join(f.root, "boundary-run-cache"), cacheVersion: "boundary-fixture-v1",
+    ...(maxCachedRunBytes ? { maxCachedRunBytes } : {}), useSourceReadValidationBoundary: true,
+    projectCorrectionCompany: compactMonthlyCapacityCompany,
+    loadRun: async id => {
+      loads++;
+      if (trigger === "build" && mutation) { const fn = mutation; mutation = null; await fn(); }
+      return { run: { id, collectionQuality: { status: "complete" } }, availability: { items: [{ placeId: "10" }, { placeId: "20" }] } };
+    }, companyProductAvailabilityMatch: availabilityMatch,
+    applyCompanyManualCorrection: (item, company) => ({ ...item, supply: company.manualCorrection.lodgingBasisTotal, inventoryEvidence: { version: 4 } }),
+    buildHistoryObservations: ({ availability }) => availability.items.map(item => ({ ...item, stayDate: "2026-08-02", productType: "lodging", inventoryEvidenceVersion: 4 })) });
+  const adapter = f.make(true, { useSourceReadValidationBoundary: true, recalculateCompanyObservations: async (request, data, options) => {
+    lastData = data; lastBoundary = options.sourceReadValidationBoundary;
+    assert.equal(lastBoundary.owner, data._companySource); assert.equal(lastBoundary.revision, data._companySource.revision);
+    assert.equal(Object.isFrozen(lastBoundary), true); assert.equal(lastBoundary.isActive(), true);
+    const rows = await helper(request, data, options);
+    if (trigger === "hit" && mutation) { const fn = mutation; mutation = null; await fn(); }
+    return rows;
+  } });
+  return { ...f, adapter, helper, loads: () => loads, arm: (phase, fn) => { trigger = phase; mutation = fn; },
+    last: () => ({ boundary: lastBoundary, data: lastData }) };
+}
+
+test("one validated source boundary reduces repeated cache inspections while preserving complete paired results", async t => {
+  const f = await fixture(t);
+  const dependencies = { cacheDirectory: path.join(f.root, "boundary-parity-cache"), cacheVersion: "boundary-parity-v1",
+    projectCorrectionCompany: compactMonthlyCapacityCompany,
+    loadRun: async id => ({ run: { id, collectionQuality: { status: "complete" } }, availability: { items: [{ placeId: "10" }, { placeId: "20" }] } }),
+    companyProductAvailabilityMatch: availabilityMatch,
+    applyCompanyManualCorrection: (item, company) => ({ ...item, supply: company.manualCorrection.lodgingBasisTotal, inventoryEvidence: { version: 4 } }),
+    buildHistoryObservations: ({ availability }) => availability.items.map(item => ({ ...item, stayDate: "2026-08-02", productType: "lodging", inventoryEvidenceVersion: 4 })) };
+  const generic = f.make(true, { recalculateCompanyObservations: createMonthlyCompanyRecalculation(dependencies) });
+  const optedIn = f.make(true, { useSourceReadValidationBoundary: true,
+    recalculateCompanyObservations: createMonthlyCompanyRecalculation({ ...dependencies, useSourceReadValidationBoundary: true }) });
+  const request = { type: "company", targetId: "a", month: "2026-08", cutoffDate: "2026-08-31" };
+  await generic.loadSources(request); await optedIn.loadSources(request);
+  let before = generic.sourceReadMetrics().companyCatalog.revisionReads;
+  const expected = await generic.loadSourcesWithCatalog(request);
+  const genericChecks = generic.sourceReadMetrics().companyCatalog.revisionReads - before;
+  before = optedIn.sourceReadMetrics().companyCatalog.revisionReads;
+  const actual = await optedIn.loadSourcesWithCatalog(request);
+  const boundaryChecks = optedIn.sourceReadMetrics().companyCatalog.revisionReads - before;
+  assert.equal(genericChecks, 5, "three catalog assertions, one cache-hit assertion and one final source assertion");
+  assert.equal(boundaryChecks, 3, "one acquisition, one catalog-end and one final source inspection");
+  assert.deepEqual(json(actual), json(expected), "the complete source/catalog contract is unchanged");
+  for (const [type, targetId] of [["region", "pocheon"], ["keyword", "포천글램핑"], ["industry", "__industry_all__"]]) {
+    const scoped = { ...request, type, targetId };
+    assert.deepEqual(json(await optedIn.loadSourcesWithCatalog(scoped)), json(await generic.loadSourcesWithCatalog(scoped)), type);
+  }
+});
+
+for (const phase of ["build", "hit"]) for (const changed of ["source", "identity"]) {
+  test(`an opted-in ${phase} cannot return or issue a report after a mid-read ${changed} change`, async t => {
+    const f = await validationBoundaryFixture(t), request = { type: "company", targetId: "a", month: "2026-08", cutoffDate: "2026-08-31" };
+    if (phase === "hit") await f.adapter.loadSources(request);
+    const reportDirectory = path.join(f.root, "issued-reports"), protectedReport = path.join(reportDirectory, "existing-issued-report.json");
+    await fs.mkdir(reportDirectory); await fs.writeFile(protectedReport, "previous-issued-report-and-calculatedAt");
+    const beforeReport = await fs.readFile(protectedReport), beforeStat = await fs.stat(protectedReport, { bigint: true });
+    f.arm(phase, async () => {
+      if (changed === "source") await fs.appendFile(f.historyFile, JSON.stringify({ ...daily("2026-08-03", 19), companyKey: "a", runId: "run1" }) + "\n");
+      else {
+        const master = JSON.parse(await fs.readFile(f.companyFile)); master.companies.a.placeIds = ["new-provider-identity"];
+        await fs.writeFile(f.companyFile, JSON.stringify(master));
+      }
+    });
+    const service = require("./lib/monthly_reports.cjs").createMonthlyReportService({ dataDir: reportDirectory,
+      loadSources: f.adapter.loadSources, now: () => new Date("2026-10-22T00:00:00Z") });
+    await assert.rejects(service.preview(request), { code: "MONTHLY_SOURCE_UNAVAILABLE" });
+    assert.deepEqual(await fs.readdir(reportDirectory), [path.basename(protectedReport)], "no new report file or preview-derived publication");
+    assert.deepEqual(await fs.readFile(protectedReport), beforeReport);
+    const afterStat = await fs.stat(protectedReport, { bigint: true });
+    for (const key of ["size", "mtimeNs", "ctimeNs", "ino", "dev"]) assert.equal(afterStat[key], beforeStat[key], key);
+    const failed = f.last(); assert.equal(failed.boundary.isActive(), false, "failure always closes the private capability");
+    await assert.rejects(f.helper(request, failed.data, { sourceReadValidationBoundary: failed.boundary }),
+      error => error.code === "MONTHLY_RECALCULATION_UNAVAILABLE");
+    const oldRevision = failed.boundary.revision, loads = f.loads();
+    await f.adapter.loadSources(request);
+    assert.notEqual(f.last().boundary.revision, oldRevision);
+    assert.ok(f.loads() > loads, "next fresh source revision cannot reuse the previous revision's corrected run rows");
+    assert.equal(f.last().boundary.isActive(), false, "success also closes the capability");
+  });
+}
+
+test("final fresh validation covers oversize fallback, no-target reads and recovered context failures", async t => {
+  const request = { type: "company", targetId: "a", month: "2026-08", cutoffDate: "2026-08-31" };
+  const fallback = await validationBoundaryFixture(t, { maxCachedRunBytes: 128 });
+  fallback.arm("hit", async () => fs.appendFile(fallback.historyFile, "changed-source\n"));
+  await assert.rejects(fallback.adapter.loadSources(request), { code: "MONTHLY_SOURCE_UNAVAILABLE" });
+  assert.equal(fallback.helper.stats().runRowOversizeFallbacks, 1);
+  assert.equal(fallback.last().boundary.isActive(), false);
+  const noTarget = await validationBoundaryFixture(t);
+  noTarget.arm("hit", async () => fs.appendFile(noTarget.historyFile, "changed-with-no-target\n"));
+  await assert.rejects(noTarget.adapter.loadSources({ ...request, targetId: "not-in-catalog" }), { code: "MONTHLY_SOURCE_UNAVAILABLE" });
+  assert.equal(noTarget.loads(), 0, "no eligible target still reaches the final fresh assertion without loading a run");
+  assert.equal(noTarget.last().boundary.isActive(), false);
+  for (const empty of [false, true]) {
+    const f = await fixture(t);
+    const adapter = f.make(true, { useSourceReadValidationBoundary: true,
+      ...(empty ? { recalculateCompanyObservations: async (_request, _data, { sourceReadValidationBoundary }) => {
+        assert.equal(sourceReadValidationBoundary.isActive(), true); return [];
+      } } : {}),
+      readContext: async () => { await fs.appendFile(f.historyFile, "changed-during-context\n"); throw Error("recoverable local context failure"); } });
+    await assert.rejects(adapter.loadSources(request), { code: "MONTHLY_SOURCE_UNAVAILABLE" });
+  }
+  const cancelled = await fixture(t); let cancelledBoundary;
+  const adapter = cancelled.make(true, { useSourceReadValidationBoundary: true,
+    recalculateCompanyObservations: async (_request, _data, { sourceReadValidationBoundary }) => {
+      cancelledBoundary = sourceReadValidationBoundary; throw Error("cancelled source reconstruction");
+    } });
+  await assert.rejects(adapter.loadSources(request), { code: "MONTHLY_SOURCE_UNAVAILABLE" });
+  assert.equal(cancelledBoundary.isActive(), false, "callback failure cannot leave its boundary active");
 });

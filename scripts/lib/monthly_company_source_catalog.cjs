@@ -43,12 +43,18 @@ function compactCapacitySnapshot(snapshot) {
 }
 function compactMonthlyCapacityCompany(company) {
   need(object(company) && typeof company.companyId === "string");
-  const fields = ["companyId", "primaryName", "nameKey", "aliases", "placeIds", "bookingBusinessIds", "lodgingTypes", "manualCorrection", "manualCorrectionRevision", "_integratedCapacity",
+  const fields = ["companyId", "primaryName", "nameKey", "aliases", "placeIds", "bookingBusinessIds", "lodgingTypes", "industryIds",
+    "addresses", "regions", "regionKey", "regionId", "manualCorrection", "manualCorrectionRevision", "_integratedCapacity",
     "duplicateNotes", "runIds", "firstRunId", "lastRunId", "deletedAt", "mergedIntoCompanyId"];
   const compact = Object.fromEntries(fields.filter(key => Object.hasOwn(company, key)).map(key => [key, company[key]]));
   compact.keywords = Object.fromEntries(Object.entries(company.keywords || {}).map(([key, exposure]) => {
     need(!exposure?.runs || Array.isArray(exposure.runs));
-    return [key, { keyword: exposure?.keyword, runs: (exposure?.runs || []).map(run => Object.fromEntries(["runId", "id", "collectedAt", "rank", "overallRank"].filter(field => Object.hasOwn(run || {}, field)).map(field => [field, run[field]]))) }];
+    // readSources spreads each saved rank row verbatim. Keep its complete
+    // metadata (including future fields); a field allowlist would change the
+    // broad source's row identity/quality hashes. Product inventories live in
+    // company.inventory and remain compacted separately below. The complete
+    // catalog still has the same hard byte bound and checksum validation.
+    return [key, { keyword: exposure?.keyword, runs: (exposure?.runs || []).map(run => ({ ...run })) }];
   }));
   const inventory = company.inventory || {};
   compact.inventory = { ...(Object.hasOwn(inventory, "runIds") ? { runIds: inventory.runIds } : {}),
@@ -66,10 +72,11 @@ function compactMonthlyCapacityCompany(company) {
 
 function createMonthlyCompanySourceCatalog({ dataDir, readRevision, loadFullCatalog, projectCapacityCompany,
   version = "monthly-company-source-v1", maxCatalogBytes = 24 * 1024 * 1024, maxCompanyBytes = 32 * 1024 * 1024,
-  maxGenerationBytes = 512 * 1024 * 1024, maxStoredGenerations = 6, maxStoredBytes = maxGenerationBytes * 6 } = {}) {
+  maxGenerationBytes = 512 * 1024 * 1024, maxStoredGenerations = 6, maxStoredBytes = maxGenerationBytes * 6, useSourceReadValidationBoundary = false } = {}) {
   if (!dataDir || [readRevision, loadFullCatalog, projectCapacityCompany].some(fn => typeof fn !== "function") || typeof version !== "string" || !version
     || [maxCatalogBytes, maxCompanyBytes, maxGenerationBytes, maxStoredBytes].some(value => !Number.isSafeInteger(value) || value < 128)
     || !Number.isSafeInteger(maxStoredGenerations) || maxStoredGenerations < 3 || maxStoredGenerations > 64) throw new TypeError("Verified company-source catalog inputs are required");
+  if (typeof useSourceReadValidationBoundary !== "boolean") throw new TypeError("Source-read validation opt-in must be boolean");
   const directory = path.join(path.resolve(dataDir), "monthly_reports", "company_sources"), pointerFile = path.join(directory, "current.json");
   const codeVersion = sha(native.readFileSync(__filename)), schemaVersion = 1;
   const calculationVersion = sha(JSON.stringify([version, codeVersion, Function.prototype.toString.call(projectCapacityCompany)]));
@@ -232,16 +239,21 @@ function createMonthlyCompanySourceCatalog({ dataDir, readRevision, loadFullCata
     if (!entry || entry.pointer.sourceRevision !== current || entry.pointer.calculationVersion !== calculationVersion) entry = await build(options, entry);
     else counters.hits++;
     const assertCurrent = async () => { if (await revision() !== entry.pointer.sourceRevision) fail("MONTHLY_COMPANY_SOURCE_CHANGED"); };
-    await assertCurrent();
+    // The opted-in source adapter verifies the acquired generation at this
+    // method's end and again before returning the complete source. Its initial
+    // fresh revision already precedes this lookup, so an extra scan here adds
+    // no boundary. Keep the historical generic factory contract by default.
+    if (!useSourceReadValidationBoundary) await assertCurrent();
     const copied = clone({ companies: entry.value.companies, regions: entry.value.regions, runs: entry.value.runs, rawCompanies: entry.value.rawCompanies });
     const data = { companies: copied.companies, regions: copied.regions, runs: copied.runs, rawCompanies: new Map(copied.rawCompanies) };
-    if (entry.value.records[companyId]) data.rawCompanies.set(companyId, await readCompany(entry, companyId));
+    if (companyId !== null && entry.value.records[companyId]) data.rawCompanies.set(companyId, await readCompany(entry, companyId));
     await assertCurrent();
     Object.defineProperty(data, "_companySource", { enumerable: false, value: { revision: sha(JSON.stringify([calculationVersion, entry.pointer.sourceRevision])),
       readCompany: id => readCompany(entry, id), assertCurrent } });
     return data;
   }
-  return { readCompanyCatalog: (companyId, options = {}) => schedule(() => readOwned(String(companyId), options)), stats: () => ({ ...counters }),
+  return { readCompanyCatalog: (companyId, options = {}) => schedule(() => readOwned(String(companyId), options)),
+    readCatalog: (options = {}) => schedule(() => readOwned(null, options)), stats: () => ({ ...counters }),
     directory, calculationVersion };
 }
 

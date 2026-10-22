@@ -12,6 +12,7 @@ const names = [
   "productSnapshotNumber", "productSnapshotType", "productSnapshotDate",
   "productSnapshotObservation", "dayOfWeekFromDate", "toNullableRate", "inventoryEstimateBreakdown",
   "companyMaximumRoomCapacity", "withCompanyInventoryCapacity", "withCompanyInventoryCapacityRecord", "companyProductAvailabilityMatch",
+  "createCompanyInventoryCapacityIndex", "withIndexedCompanyInventoryCapacity",
   "companyInventoryNeedsEvidenceRecovery", "companyInventorySnapshotWithCurrentCapacity", "applyCompanyManualCorrection",
   "companySnapshotEstimatedRevenue", "snapshotNumber", "companyHistoryObservationWithCurrentCapacity",
   "companySalesSignalFromItem", "companyRevenueSnapshotFromItem", "companyRevenueSnapshotPart", "hasActiveManualCorrection",
