@@ -14,9 +14,18 @@ function fixture(accountKind='customer'){
 function collectionData(company){
   return {collectionAllowance:{limit:1,canRequest:true},request:null,result:{rooms:company.rooms,products:[],productCount:0,quality:{status:'complete'}},companyDetail:{companyId:company.companyId,basics:{...company},channels:[{label:'네이버',statusLabel:'저장 자료 연결',url:'https://booking.naver.com'}],integrated:{status:'ready',selectedMonth:'2026-10',snapshot:{},roomBasis:{count:company.rooms,label:'DB 검수값'}},current:{summary:{rangeStart:'2026-10-01',rangeEnd:'2026-10-02',calendarDays:2,observedDays:2,missingDays:0},daily:[{date:'2026-10-01',publicBookings:1,phoneBookings:0,estimatedRevenue:179000,publicRevenue:179000,phoneRevenue:0},{date:'2026-10-02',publicBookings:0,phoneBookings:0,estimatedRevenue:0,publicRevenue:0,phoneRevenue:0}]}}};
 }
-async function screen({adminView=false,accountKind=adminView?'admin_preview':'customer',initialHash='#home',deferRequests=[]}={}){
-  let currentState=fixture(accountKind),hash=initialHash,mainRevision=0;
-  const originalCompanies=clone(currentState.companies),elements=new Map(),documentEvents=new Map(),windowEvents=new Map(),calls=[],pending=[],mounted=[],contexts=[],invalidated=[];
+function multipleOwnFixture(accountKind='customer'){
+  const s=fixture(accountKind),own=s.companies.find(row=>row.companyId==='cmp_own');
+  own.regionKey='region-own';s.companies.find(row=>row.companyId==='cmp_competitor').regionKey='region-interest';
+  s.companies.unshift({...own,companyId:'cmp_own_second',name:'두번째 내 매장',regionKey:'region-second'});
+  s.customer.relations.push({companyId:'cmp_own_second',relationId:'rel_own_second',kind:'own',status:'active'});
+  s.customer.regions=[{relationId:'rel_region_interest',regionKey:'region-interest',status:'active'}];
+  s.regions=[{id:'region-interest',label:'관심지역'},{id:'region-own',label:'첫 매장 소재지'},{id:'region-second',label:'두번째 매장 소재지'}];
+  return s;
+}
+async function screen({adminView=false,accountKind=adminView?'admin_preview':'customer',initialHash='#home',deferRequests=[],fixtureState=null,regionSearchResults=[]}={}){
+  let currentState=fixtureState?clone(fixtureState):fixture(accountKind),hash=initialHash,mainRevision=0;
+  const originalCompanies=clone(currentState.companies),elements=new Map(),documentEvents=new Map(),windowEvents=new Map(),calls=[],pending=[],mounted=[],contexts=[],invalidated=[],analysisPanels=[],analysisMounts=[],restoredCalls=[];
   let clearCalls=0;
   const element=selector=>{
     if(elements.has(selector))return elements.get(selector);
@@ -39,7 +48,7 @@ async function screen({adminView=false,accountKind=adminView?'admin_preview':'cu
     }};
   const location={pathname:adminView?'/customer-view':'/',get hash(){return hash;},set hash(value){hash=value.startsWith('#')?value:`#${value}`;},assign(value){this.assigned=value;}};
   class FormDataFixture{constructor(form){this.values=form.values;}*[Symbol.iterator](){yield* Object.entries(this.values);}}
-  const window={addEventListener(name,handler){windowEvents.set(name,handler);},scrollTo(){},InsightAuth:{screen(){return '<section class="signed-out-fixture">로그인</section>';},welcome(){return '<p>가입 완료</p>';},policy(){return '<p>정책</p>';}},InsightAnalysis:{stop(){},panel(){return '<p>분석 검수 화면</p>';},mount(){}}};
+  const window={addEventListener(name,handler){windowEvents.set(name,handler);},scrollTo(){},InsightAuth:{screen(){return '<section class="signed-out-fixture">로그인</section>';},welcome(){return '<p>가입 완료</p>';},policy(){return '<p>정책</p>';}},InsightAnalysis:{stop(){},panel(mode,s,selectedRegion,selectedOwnId){analysisPanels.push({mode,selectedRegion,selectedOwnId});return '<p>분석 검수 화면</p>';},mount(mode,request,s,selectedRegion,selectedOwnId){analysisMounts.push({mode,selectedRegion,selectedOwnId});}}};
   const response=(value,status=200)=>({ok:status>=200&&status<300,status,json:async()=>clone(value)});
   const reply=(url,value)=>deferRequests.some(match=>typeof match==='string'?url===match:match.test(url))?new Promise(resolve=>pending.push({url,value,resolve})):response(value);
   const fetch=async(url,options={})=>{
@@ -48,7 +57,9 @@ async function screen({adminView=false,accountKind=adminView?'admin_preview':'cu
     if(url==='/api/insight-admin/v1/me')return reply(url,{csrfToken:'fixture-admin-csrf'});
     if(url.endsWith('/config'))return reply(url,{signupEnabled:true});
     if(url.endsWith('/me')||url.endsWith('/start'))return reply(url,currentState);
+    if(url.endsWith('/auth/login'))return response(currentState);
     if(url.endsWith('/auth/logout'))return response({ok:true});
+    if(url.includes('/catalog/regions?'))return response({results:regionSearchResults});
     const companyMatch=url.match(/\/companies\/([^/?]+)\/collection(?:\?.*)?$/);
     if(companyMatch){const company=currentState.companies.find(row=>row.companyId===decodeURIComponent(companyMatch[1]));assert.ok(company,'only registered company fixtures are queried');return reply(url,collectionData(company));}
     if(url.endsWith('/commands')){
@@ -61,20 +72,23 @@ async function screen({adminView=false,accountKind=adminView?'admin_preview':'cu
   };
   const context=vm.createContext({window,document,location,fetch,FormData:FormDataFixture,crypto:{randomUUID(){return 'fixture-command-key';}},localStorage:{getItem(){return null;},setItem(){}},setTimeout(){return 1;},clearTimeout(){}});
   for(const file of ['company-flow.js','company-view.js','collection.js'])vm.runInContext(read(file),context);
-  const collection=window.InsightCollection,originalMount=collection.mount,originalContext=collection.setContext,originalClear=collection.clearCache,originalInvalidate=collection.invalidate;
+  const collection=window.InsightCollection,originalMount=collection.mount,originalContext=collection.setContext,originalClear=collection.clearCache,originalInvalidate=collection.invalidate,originalRestore=collection.restore;
   collection.mount=(id,api,options)=>{mounted.push({id,options,request:api});return originalMount(id,api,options);};
   collection.setContext=(scope,ids,callback)=>{contexts.push({scope,ids:Array.from(ids||[])});return originalContext(scope,ids,callback);};
   collection.clearCache=()=>{clearCalls++;return originalClear();};
   collection.invalidate=id=>{invalidated.push(id);return originalInvalidate(id);};
+  collection.restore=(views,scope)=>{restoredCalls.push({views,scope});return originalRestore(views,scope);};
   vm.runInContext(read('connected.js'),context);await flush();
   async function dispatch(name,event){for(const callback of documentEvents.get(name)||[])await callback(event);await flush();}
-  return {calls,mounted,contexts,invalidated,originalCompanies,location,
+  return {calls,mounted,contexts,invalidated,originalCompanies,location,analysisPanels,analysisMounts,restoredCalls,
     pending:()=>pending.map(row=>row.url),
     async respond(url,{status=200,value}={}){const index=pending.findIndex(row=>row.url===url);assert.notEqual(index,-1,'expected a pending request: '+url);const request=pending.splice(index,1)[0];request.resolve(response(value===undefined?request.value:value,status));await flush();},
-    html:()=>element('#main').innerHTML,result:()=>document.querySelector('#collection-result')?.innerHTML||'',navigation:()=>element('#navigation').innerHTML,
+    html:()=>element('#main').innerHTML,result:()=>document.querySelector('#collection-result')?.innerHTML||'',navigation:()=>element('#navigation').innerHTML,searchResults:()=>element('#search-results').innerHTML,
     state:()=>clone(currentState),clearCount:()=>clearCalls,revision:()=>mainRevision,
     async navigate(value){location.hash=value;windowEvents.get('hashchange')();await flush();},
     async correct(companyId,values){const form={dataset:{correction:companyId},values,querySelectorAll(){return [{disabled:false}];},querySelector(){return null;}};await dispatch('submit',{preventDefault(){},target:form});},
+    async login(){const form={id:'auth-form',dataset:{},values:{username:'fixture-login',password:'fixture-password'},querySelectorAll(){return [{disabled:false}];},querySelector(){return null;}};await dispatch('submit',{preventDefault(){},target:form});},
+    async searchRegion(q){const form={id:'search-form',dataset:{kind:'region'},values:{q},querySelectorAll(){return [{disabled:false}];},querySelector(){return null;}};await dispatch('submit',{preventDefault(){},target:form});},
     async logout(){const button={dataset:{action:'logout'},disabled:false};await dispatch('click',{target:{closest(){return button;}}});}};
 }
 
@@ -255,4 +269,71 @@ test('the separate registration route still respects the ordinary customer own-c
   assert.doesNotMatch(ui.html(),/id="search-form"/);
   assert.match(ui.html(),/이미 내 매장이 등록되어 있습니다/);
   assert.match(ui.html(),/href="#settings"/);
+});
+
+for(const adminView of [false,true])test(`${adminView?'administrator':'customer'} region navigation preserves the selected own company through a competitor view`,async()=>{
+  const ui=await screen({adminView,fixtureState:multipleOwnFixture(adminView?'admin_preview':'customer')});
+  await ui.navigate('#company=cmp_own_second');await ui.navigate('#regions');
+  const expected={mode:'regions',selectedRegion:null,selectedOwnId:'cmp_own_second'};
+  assert.deepEqual(ui.analysisPanels.at(-1),expected);assert.deepEqual(ui.analysisMounts.at(-1),expected);
+  await ui.navigate('#company=cmp_competitor');await ui.navigate('#regions');
+  assert.deepEqual(ui.analysisPanels.at(-1),expected,'opening a competitor must not replace the selected own property');
+  assert.deepEqual(ui.analysisMounts.at(-1),expected,'the initial read and visible form receive identical defaults');
+});
+
+test('explicit region links are passed unchanged to the form and first read even after selecting another own property',async()=>{
+  const ui=await screen({fixtureState:multipleOwnFixture()});
+  await ui.navigate('#company=cmp_own_second');
+  for(const selectedRegion of ['region-interest','not-registered','']){
+    await ui.navigate('#regions='+encodeURIComponent(selectedRegion));
+    const expected={mode:'regions',selectedRegion,selectedOwnId:'cmp_own_second'};
+    assert.deepEqual(ui.analysisPanels.at(-1),expected);assert.deepEqual(ui.analysisMounts.at(-1),expected);
+  }
+});
+
+test('a direct region entry and prefetch do not invent a selected own company',async()=>{
+  const ui=await screen({fixtureState:multipleOwnFixture(),initialHash:'#regions=region-interest'});
+  const expected={mode:'regions',selectedRegion:'region-interest',selectedOwnId:null};
+  assert.deepEqual(ui.analysisPanels.at(-1),expected);assert.deepEqual(ui.analysisMounts.at(-1),expected);
+  assert.ok(ui.calls.some(row=>row.url.includes('/companies/cmp_own/collection')),'background warming may run without changing the selected property');
+});
+
+test('logout clears the in-page own-property selection before another login',async()=>{
+  const ui=await screen({fixtureState:multipleOwnFixture()});
+  await ui.navigate('#company=cmp_own_second');await ui.navigate('#regions');
+  assert.equal(ui.analysisMounts.at(-1).selectedOwnId,'cmp_own_second');
+  await ui.logout();await ui.login();await ui.navigate('#regions');
+  const expected={mode:'regions',selectedRegion:null,selectedOwnId:null};
+  assert.deepEqual(ui.analysisPanels.at(-1),expected);assert.deepEqual(ui.analysisMounts.at(-1),expected);
+});
+
+for(const adminView of [false,true])test(`${adminView?'administrator':'customer'} restores authenticated company snapshots once before opening the initial property`,async()=>{
+  const s=fixture(adminView?'admin_preview':'customer'),own=s.companies.find(row=>row.companyId==='cmp_own');
+  s.companyViews=[{companyId:own.companyId,month:'',data:{...collectionData(own),responseCache:{state:'cached',checkedAt:new Date(Date.now()-1000).toISOString(),refreshing:false}}}];
+  const ui=await screen({adminView,fixtureState:s,initialHash:'#property',deferRequests:[/\/companies\/[^/]+\/collection$/]});
+  assert.match(ui.result(),/업체 기본정보/);assert.match(ui.result(),/예약채널/);assert.match(ui.result(),/통합관측/);
+  assert.match(ui.result(),/href="https:\/\/booking.naver.com"/,'stored channel details render before the company GET completes');
+  assert.equal(ui.restoredCalls.length,1);assert.equal(ui.restoredCalls[0].scope,`${adminView?'admin':'customer'}:customer_navigation`);
+  assert.ok(ui.pending().some(url=>url.includes('/companies/cmp_own/collection')),'the normal permission recheck still starts in the background');
+  await ui.navigate('#home');await ui.navigate('#property');
+  assert.equal(ui.restoredCalls.length,1,'menu navigation must not replay bootstrap data from the same state object');
+  assert.match(ui.result(),/href="https:\/\/booking.naver.com"/);
+});
+
+test('a newly returned state may restore once while later renders of that state do not replay its snapshots',async()=>{
+  const ui=await screen({initialHash:'#property'});assert.equal(ui.restoredCalls.length,1);
+  await ui.correct('cmp_own',{name:'내 매장 검수 글램핑',address:'검수 주소 A',rooms:'17',dayUse:'unknown',facilities:'개별 BBQ',reason:'검수 예시 근거'});
+  assert.equal(ui.restoredCalls.length,2,'a successful command returns a distinct authenticated state');
+  await ui.navigate('#home');await ui.navigate('#property');assert.equal(ui.restoredCalls.length,2);
+});
+
+test('region search hides an already connected own-company region without consuming an interest-region slot',async()=>{
+  const s=fixture(),own=s.companies.find(row=>row.companyId==='cmp_own');own.regionKey='region-own';
+  s.regions=[{id:'region-own',label:'내 매장 소재지'}];
+  const ui=await screen({fixtureState:s,regionSearchResults:[{id:'region-own',label:'내 매장 소재지'},{id:'region-other',label:'다른 관심지역'}]});
+  await ui.navigate('#regions');await ui.searchRegion('지역');
+  assert.doesNotMatch(ui.searchResults(),/data-id="region-own"/);assert.match(ui.searchResults(),/data-id="region-other"/);
+  assert.match(ui.searchResults(),/이미 연결된 지역은 추가 등록이 필요 없습니다/);
+  assert.deepEqual(ui.state().customer.regions,[],'filtering a catalog must not create a region relation');
+  assert.ok(ui.calls.every(row=>row.method==='GET'),'searching does not request a command or collection');
 });

@@ -93,6 +93,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
         }
         const response = await fetchImpl(`${backend}/api/insight/v1/admin${route}${url.search}`, { method: req.method, headers, body: payload, redirect: 'error', signal: AbortSignal.timeout(readTimeout(req.method,route)) });
         const data = await response.json();
+        if(response.ok&&['/customer-view/me','/customer-view/start'].includes(route))data.companyViews=companyReads.snapshot({scope:scopeFor(requestOrigin,'admin',session),identity:data});
         if(req.method==='POST'&&route!=='/customer-view/start'||[401,403].includes(response.status))companyReads.invalidate(scopeFor(requestOrigin,'admin',session));
         if (response.ok && route === '/auth/login') {
           if (!/^[A-Za-z0-9_-]{43}$/.test(data.token || '')) throw new Error('Missing administrator session');
@@ -119,6 +120,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
         }
         const response = await fetchImpl(`${backend}/api/insight/v1${route}${url.search}`, { method: req.method, headers, body: payload, redirect: 'error', signal: AbortSignal.timeout(readTimeout(req.method,route)) });
         const data = await response.json();
+        if(response.ok&&req.method==='GET'&&route==='/me')data.companyViews=companyReads.snapshot({scope:scopeFor(requestOrigin,'customer',session),identity:data});
         if(req.method==='POST'||[401,403].includes(response.status))companyReads.invalidate(scopeFor(requestOrigin,'customer',session));
         if (response.ok && ['/auth/login', '/auth/signup'].includes(route)) {
           if (!/^[A-Za-z0-9_-]{43}$/.test(data.token || '')) throw new Error('Missing session');

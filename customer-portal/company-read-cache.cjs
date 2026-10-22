@@ -55,12 +55,12 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
     return state.identity;
   }
   function validatedIdentity(data,companyId) {
-    const customer=data.customer;
+    const customer=data?.customer;
     if(!customer||typeof customer.customerId!=='string'||!customer.customerId||customer.accountStatus!=='active'||!Array.isArray(customer.relations)||!Array.isArray(data.companies))return null;
-    const relation=customer.relations.find(row=>row.companyId===companyId&&['active','pending'].includes(row.status));
-    const company=data.companies.find(row=>row.companyId===companyId);
+    const relation=customer.relations.find(row=>row?.companyId===companyId&&['active','pending'].includes(row.status));
+    const company=data.companies.find(row=>row?.companyId===companyId);
     if(!relation||!company)return null;
-    const request=(Array.isArray(data.preparations)?data.preparations:[]).find(row=>row.companyId===companyId)||null;
+    const request=(Array.isArray(data.preparations)?data.preparations:[]).find(row=>row?.companyId===companyId)||null;
     return {data,customer,company,relation,request};
   }
   function fingerprint(identity) {
@@ -85,6 +85,52 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
   function compose(entry,identity,refreshing) {
     const core=JSON.parse(entry.core),request=clone(identity.request);
     return {status:200,ok:true,data:{...core,request,collectionAllowance:clone(identity.data.collectionAllowance),previousResult:Boolean(core.result&&request&&core.result.runId!==request.runId),responseCache:meta('cached',entry.checkedAt,refreshing,entry.refreshFailed)}};
+  }
+  function snapshot({scope,identity,maxViews=4}={}) {
+    // Only the BFF may call this while handling a successful, freshly verified
+    // central /me (or administrator /start) response. It is not a replacement
+    // for read(), never validates a browser-supplied identity, and never starts
+    // an identity/source request or permits later GETs to skip their guard.
+    if(typeof scope!=='string'||!scope||!identity||typeof identity!=='object')return [];
+    const state=states.get(scope),limit=Number.isFinite(maxViews)?Math.min(4,Math.max(0,Math.floor(maxViews))):4;
+    if(!state||state.revoked||!limit)return [];
+    const currentDefault=`default:${kst(clock()).slice(0,7)}`,candidates=[];
+    for(const [key,entry] of entries){
+      if(entry.scope!==scope)continue;
+      const age=clock()-entry.checkedAt;
+      if(age<0||age>=ttlMs){remove(key);continue;}
+      let parts;try{parts=JSON.parse(key);}catch{continue;}
+      const [storedScope,,companyId,period]=parts;
+      if(storedScope!==scope||typeof companyId!=='string'||typeof period!=='string')continue;
+      const isDefault=period.startsWith('default:'),month=isDefault?'':period;
+      if(isDefault&&period!==currentDefault||!isDefault&&!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month))continue;
+      const checked=validatedIdentity(identity,companyId),mark=checked?fingerprint(checked):null;
+      if(!checked||mark!==entry.fingerprint){
+        remove(key);
+        if(state.fingerprints.get(key)===entry.fingerprint)state.fingerprints.delete(key);
+        continue;
+      }
+      if(state.denied.has(key))continue;
+      const core=JSON.parse(entry.core);
+      if(!cacheable(core,checked)||!sourceScope(core,companyId,month))continue;
+      candidates.push({key,entry,checked,companyId,month,isDefault});
+    }
+    // Prefer a current default view. Otherwise return the newest explicit
+    // month, keeping that requested month so the client cannot mislabel it.
+    candidates.reverse();candidates.sort((a,b)=>Number(b.isDefault)-Number(a.isDefault)||b.entry.checkedAt-a.entry.checkedAt);
+    const views=[],selected=new Set();let payloadBytes=2;
+    for(const candidate of candidates){
+      const {key,entry,checked,companyId,month}=candidate;
+      if(selected.has(companyId))continue;
+      const pending=pendingSources.get(key),refreshing=Boolean(pending&&pending.state===state&&pending.epoch===state.epoch&&pending.mark===entry.fingerprint);
+      const view={companyId,month,data:compose(entry,checked,refreshing).data};
+      const size=Buffer.byteLength(JSON.stringify(view),'utf8')+(views.length?1:0);
+      if(payloadBytes+size>maxBytes)continue;
+      payloadBytes+=size;views.push(view);selected.add(companyId);
+      entries.delete(key);entries.set(key,entry);
+      if(views.length>=limit)break;
+    }
+    return views;
   }
   function sourceRead({key,state,epoch,mark,companyId,month,identity,readSource}) {
     const former=pendingSources.get(key);
@@ -144,6 +190,6 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
     if(!sourceScope(reply.data,companyId,month))return unavailable();
     return {...reply,data:{...clone(reply.data),responseCache:meta('fresh',clock())}};
   }
-  return {read,invalidate};
+  return {read,invalidate,snapshot};
 }
 module.exports={createCompanyReadCache};

@@ -34,6 +34,9 @@ test('same-session reload reuses company data only after a new central permissio
  assert.equal(second.data.result.version,'source-1');assert.equal(second.data.responseCache.state,'cached');
  assert.equal(second.data.collectionAllowance.canRequest,true,'quota is from the fresh permission response');
  assert.match(second.headers['cache-control'],/private, no-store/);assert.doesNotMatch(second.text,/fixture-session|fixture-service-token/);
+ const boot=await f.request('/api/customer/v1/me');
+ assert.equal(boot.data.companyViews.length,1);assert.equal(boot.data.companyViews[0].companyId,'cmp_one');assert.equal(boot.data.companyViews[0].data.result.version,'source-1');
+ assert.equal(f.sourceCalls(),1,'fresh authenticated bootstrap can include existing core without another expensive source read');
  f.state.allowed=false;const revoked=await f.request(customer);assert.equal(revoked.status,404);assert.equal(revoked.data.result,undefined);
  f.state.allowed=true;f.state.expired=true;const expired=await f.request(customer);assert.equal(expired.status,401);assert.equal(expired.data.result,undefined);assert.match(expired.headers['set-cookie'][0],/Max-Age=0/);
 });

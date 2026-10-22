@@ -15,7 +15,7 @@ function harness() {
   const api=(path,_data,options)=>new Promise((resolve,reject)=>calls.push({path,resolve,reject,options}));
   const result=()=>elements.get('#collection-result').innerHTML;
   const freshness=()=>elements.get('#collection-freshness').textContent+' '+elements.get('#collection-freshness').innerHTML;
-  return {collection:window.InsightCollection,calls,renders,renderData,elements,timers,result,freshness,
+  return {collection:window.InsightCollection,calls,renders,renderData,elements,timers,result,freshness,storedKeys:()=>[...storage.keys()],
     context(scope='customer-one',ids=['a','b']){window.InsightCollection.setContext(scope,ids);},
     mount(id='a',options){present=true;elements.get('#collection-result').innerHTML='loading';elements.get('#collection-progress').innerHTML='';elements.get('#collection-freshness').textContent='';window.InsightCollection.mount(id,api,options);},
     leave(){window.InsightCollection.stop();present=false;},
@@ -30,6 +30,72 @@ function harness() {
 function data(id='a',month='2026-10',version='v1',canRequest=true) {
   return {collectionAllowance:{limit:1,canRequest,resetsAt:'2026-10-13T15:00:00Z'},request:null,result:{version,runId:'run-'+version,products:[{key:'room-'+version,name:'객실',productType:'lodging',days:[],original:[]}]},companyDetail:{basics:{companyId:id},integrated:{selectedMonth:month,status:'ready'}}};
 }
+function restored(id='a',month='',version='bootstrap',checkedAt='2026-10-13T01:59:00Z'){
+  return {companyId:id,month,data:{...data(id,month||'2026-10',version),responseCache:{state:'cached',checkedAt,refreshing:false,refreshFailed:false}}};
+}
+
+test('fresh authenticated bootstrap restores the saved company immediately while a new permission read remains pending',async()=>{
+  const h=harness();h.context();const bootstrap=restored();
+  h.collection.restore([bootstrap],'customer-one');bootstrap.data.result.version='mutated-response';
+  h.mount();assert.equal(h.result(),'a|2026-10|bootstrap');assert.equal(h.calls.length,1);
+  assert.equal(h.elements.get('[data-collect] button[type=submit]').disabled,true,'a restored quota must not authorize collection');
+  assert.match(h.freshness(),/확인/);assert.deepEqual(h.storedKeys(),[],'private snapshots stay out of browser storage');
+  await h.resolve(0,data('a','2026-10','server-fresh'));
+  assert.equal(h.result(),'a|2026-10|server-fresh');
+  h.collection.restore([restored('a','','older-bootstrap')],'customer-one');h.leave();h.mount();
+  assert.equal(h.result(),'a|2026-10|server-fresh','a later restore cannot replace a view already checked in this page');
+});
+
+test('restoration orders server snapshots by check time and keeps a newer explicit month for the default alias',()=>{
+  const h=harness();h.context();
+  h.collection.restore([restored('a','','old-default','2026-10-13T01:58:00Z'),restored('a','2026-10','new-month','2026-10-13T01:59:00Z')],'customer-one');
+  h.mount();assert.equal(h.result(),'a|2026-10|new-month');
+});
+
+test('a late default snapshot cannot copy an already loaded different month into its explicit month alias',async()=>{
+  for(const [currentMonth,lateMonth] of [['2026-10','2026-09'],['2026-09','2026-10']]){
+    const h=harness();h.context();h.mount();await h.resolve(0,data('a',currentMonth,'current-view'));
+    const late=restored('a','','late-bootstrap');late.data.companyDetail.integrated.selectedMonth=lateMonth;
+    h.collection.restore([late],'customer-one');h.leave();h.mount();
+    assert.equal(h.result(),`a|${currentMonth}|current-view`,'the existing default entry must remain unchanged');
+    h.month(lateMonth);assert.equal(h.result(),`a|${lateMonth}|late-bootstrap`,'the new alias must contain the matching month from bootstrap');
+    assert.ok(h.calls.at(-1).path.endsWith('?month='+lateMonth));
+    h.month(currentMonth);assert.equal(h.result(),`a|${currentMonth}|current-view`,'the live month must also retain its original explicit alias');
+  }
+});
+
+test('an explicitly restored past month is not presented as the automatic default month',()=>{
+  const h=harness();h.context();h.collection.restore([restored('a','2026-09','september')],'customer-one');
+  h.mount();assert.match(h.result(),/불러옵|loading/);h.month('2026-09');assert.equal(h.result(),'a|2026-09|september');
+});
+
+test('restoration requires the current explicit account scope and a permitted company',()=>{
+  const h=harness();h.context();
+  h.collection.restore([restored()]);h.collection.restore([restored()],'other-account');h.collection.restore([restored('private')],'customer-one');
+  h.mount();assert.match(h.result(),/불러옵|loading/);
+  h.context('customer-two');h.collection.restore([restored()],'customer-one');h.leave();h.mount();
+  assert.match(h.result(),/불러옵|loading/,'a former account snapshot cannot enter the new account scope');
+});
+
+test('denied and removed registrations cannot be restored by replaying bootstrap data',async()=>{
+  const h=harness();h.context();h.mount();await h.reject(0,403);
+  h.collection.restore([restored()],'customer-one');h.leave();h.mount();assert.match(h.result(),/불러옵|loading/);
+  const removed=harness();removed.context();removed.collection.restore([restored()],'customer-one');
+  removed.context('customer-one',['b']);removed.context();removed.collection.restore([restored()],'customer-one');
+  removed.mount();assert.match(removed.result(),/불러옵|loading/,'registration removal invalidates the old bootstrap generation');
+});
+
+test('malformed, stale, mismatched and active snapshots do not restore apparent complete data',()=>{
+  const wrongCompany=restored();wrongCompany.data.companyDetail.basics.companyId='other-company';
+  const wrongMonth=restored('a','2026-09');wrongMonth.data.companyDetail.integrated.selectedMonth='2026-10';
+  const active=restored();active.data.request={status:'collecting'};
+  const pending=restored();pending.data.companyDetail.integrated.status='pending';
+  const missingStamp=restored();delete missingStamp.data.responseCache.checkedAt;
+  for(const snapshot of [null,{},wrongCompany,wrongMonth,active,pending,missingStamp,restored('a','2026-99'),restored('a','','expired','2026-10-13T01:00:00Z'),restored('a','','future','2026-10-13T02:02:00Z')]){
+    const h=harness();h.context();h.collection.restore([snapshot],'customer-one');h.mount();
+    assert.match(h.result(),/불러옵|loading/,'an unusable snapshot must remain unconfirmed');
+  }
+});
 
 test('server reuse displays saved data while waiting for a bounded background freshness check',async()=>{
   const h=harness();h.context();h.mount();
