@@ -35,6 +35,7 @@ const { createCompanyCapacityRegistry } = require("./lib/company_capacity_regist
 const { aggregateFields: companyBootstrapAggregateFields, compactCompanyInventory, createCompanyBootstrapStore, acceptsGzip } = require("./lib/company_bootstrap.cjs");
 const { createCompanyDetailStore } = require("./lib/company_detail_store.cjs");
 const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
+const { compactMonthlyCapacityCompany } = require("./lib/monthly_company_source_catalog.cjs");
 const { createMonthlyReportContext } = require("./lib/monthly_report_context.cjs");
 const { createMonthlyReportOutlookEvaluation } = require("./lib/monthly_report_outlook_evaluation.cjs");
 const { createMonthlyReportIndustryContext } = require("./lib/monthly_report_industry_context.cjs");
@@ -578,6 +579,21 @@ const readMonthlyReportRevision = createMonthlyReportSourceRevision({ dataDir: D
 const analyticalMemory = createAnalyticalMemorySampler();
 const analyticalWork = createAnalyticalWorkScheduler({ sampleMemory: analyticalMemory.sample, highWatermark: 0.65, lowWatermark: 0.55 });
 const runAnalyticalWork = (operation, options) => analyticalWork.run(operation, options);
+const monthlyCompanySourceVersion = crypto.createHash("sha256")
+  .update(companyIntegratedCalculationFingerprint())
+  .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_company_source_catalog.cjs")))
+  .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_report_sources.cjs")))
+  .update(fs.readFileSync(path.join(__dirname, "lib", "industry_analysis.cjs")))
+  .update(fs.readFileSync(path.join(__dirname, "lib", "company_capacity_registry.cjs")))
+  .update(fs.readFileSync(path.join(__dirname, "inventory_estimation.cjs")))
+  .update(fs.readFileSync(path.join(__dirname, "verified_room_inventory.json"))).digest("hex");
+const recalculateMonthlyCompanyObservations = createMonthlyCompanyRecalculation({
+  loadRun, applyCompanyManualCorrection, companyProductAvailabilityMatch, buildHistoryObservations,
+  cacheDirectory: path.join(DATA_DIR, "company_integrated", "recalculated_run_rows"),
+  cacheVersion: crypto.createHash("sha256").update(monthlyCompanySourceVersion)
+    .update(fs.readFileSync(__filename)) // Includes saved-run/product parsing callbacks.
+    .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_company_recalculation.cjs"))).digest("hex")
+});
 const monthlyReportSources = createMonthlyReportSources({
   runWork: runAnalyticalWork,
   dataDir: DATA_DIR,
@@ -593,6 +609,8 @@ const monthlyReportSources = createMonthlyReportSources({
     .update(fs.readFileSync(path.join(__dirname, "lib", "history_observation_index.cjs")))
     .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_report_selector_revision.cjs"))).digest("hex"),
   listRuns,
+  projectCapacityCompany: compactMonthlyCapacityCompany,
+  companySourceVersion: monthlyCompanySourceVersion,
   prepareCompanies: companyCapacityRegistry.prepareCompanies,
   projectObservation: (row, company) => {
     const value = companyHistoryObservationWithCurrentCapacity(row, company);
@@ -601,9 +619,7 @@ const monthlyReportSources = createMonthlyReportSources({
       source: company._integratedCapacity.source, revision: company._integratedCapacity.revision } };
   },
   capacityForCompany: company => manualCorrectionLodgingBasisTotal(company.manualCorrection) || companyMaximumRoomCapacity(company) || null,
-  recalculateCompanyObservations: createMonthlyCompanyRecalculation({
-    loadRun, applyCompanyManualCorrection, companyProductAvailabilityMatch, buildHistoryObservations
-  }),
+  recalculateCompanyObservations: recalculateMonthlyCompanyObservations,
   readContext: readMonthlyRegionContext,
   readSpecialDays: async year => (await specialDaysService.status(year)).yearStatus
 });
@@ -682,7 +698,7 @@ const readCompanyIntegratedRevision = createCompanyIntegratedSourceRevision({
   regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
   tourismRegionMapFile: path.join(WEB_DIR, "data", "tourism_region_map.json"), includeContext: true,
   calculationFiles: ["company_integrated_db.cjs", "monthly_reports.cjs", "monthly_report_comparison.cjs",
-    "monthly_report_sources.cjs", "monthly_report_context.cjs", "monthly_company_recalculation.cjs",
+    "monthly_report_sources.cjs", "monthly_report_context.cjs", "monthly_company_recalculation.cjs", "monthly_company_source_catalog.cjs",
     "company_capacity_registry.cjs", "monthly_report_insights.cjs", "industry_analysis.cjs",
     "inventory_manual_corrections.cjs", "company_master_stream.cjs", "history_observation_index.cjs"].map(name => path.join(__dirname, "lib", name))
     .concat([path.join(__dirname, "inventory_estimation.cjs"), path.join(__dirname, "verified_room_inventory.json")]),
@@ -19212,6 +19228,8 @@ async function route(req, res) {
       // originals or acquire the analytical work lease merely to report it.
       const historyIndex = historyObservationIndex.describe();
       return send(res, 200, { work: analyticalWork.status(), memory: analyticalMemory.status(),
+        monthlySources: typeof monthlyReportSources.sourceReadMetrics === "function" ? monthlyReportSources.sourceReadMetrics() : null,
+        monthlyRecalculation: recalculateMonthlyCompanyObservations.stats(),
         observationIndex: { ready: Number.isSafeInteger(historyIndex.generation), generation: historyIndex.generation ?? null,
           rows: historyIndex.rows ?? null, sourceBytes: historyIndex.source?.size ?? null, mode: historyIndex.mode || null,
           stats: historyObservationIndex.stats() } });

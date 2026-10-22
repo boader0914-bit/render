@@ -15,7 +15,7 @@ const { performance } = require("node:perf_hooks");
 const { seedMonthlyReportFixture } = require("./fixtures/monthly_report_fixture.cjs");
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-const COUNTERS = ["fullCatalogCalls", "targetCatalogCalls", "capacityPrepareCalls", "historyStreams", "historyFileReads", "companySourceReads", "externalRequests"];
+const COUNTERS = ["fullCatalogCalls", "targetCatalogCalls", "capacityPrepareCalls", "historyStreams", "historyFileReads", "historyFileHandleOpens", "companySourceReads", "externalRequests"];
 
 async function main() {
   const deadline = Date.now() + 45000;
@@ -25,7 +25,7 @@ async function main() {
   const originalMaster = await fs.readFile(masterFile), originalHistory = await fs.readFile(historyFile);
   const monthFile = path.join(dataDir, "company_integrated", crypto.createHash("sha256").update(fixture.companyId).digest("hex"), "2026-08.json");
   const queueFile = path.join(dataDir, "company_integrated", "queue.json");
-  let activeChild;
+  let activeChild, preserveFailure = false;
 
   async function start(ordinal, gateBootstrap) {
     const listener = net.createServer().listen(0, "127.0.0.1"); await once(listener, "listening");
@@ -34,7 +34,7 @@ async function main() {
       releaseFile = path.join(dataDir, `catalog-release-${ordinal}.flag`), preloadFile = path.join(dataDir, `catalog-preload-${ordinal}.cjs`);
     await fs.writeFile(preloadFile, `
       const fs = require('node:fs'), fsp = require('node:fs/promises'), path = require('node:path');
-      const audit = { fullCatalogCalls:0, targetCatalogCalls:0, capacityPrepareCalls:0, historyStreams:0, historyFileReads:0,
+      const audit = { fullCatalogCalls:0, targetCatalogCalls:0, capacityPrepareCalls:0, historyStreams:0, historyFileReads:0, historyFileHandleOpens:0,
         companySourceReads:0, externalRequests:0, catalogPrewarmLogs:0, bootstrapEntered:false, bootstrapCompleted:false, bootstrapErrorCode:null };
       const write = fs.writeFileSync.bind(fs), auditPath = ${JSON.stringify(auditFile)};
       let auditSequence = 0;
@@ -50,6 +50,8 @@ async function main() {
       fs.createReadStream = function(file,...args) { if(isHistory(file)) { audit.historyStreams++; save(); } return stream.call(this,file,...args); };
       const read = fsp.readFile;
       fsp.readFile = function(file,...args) { if(isHistory(file)) { audit.historyFileReads++; save(); } return read.call(this,file,...args); };
+      const open = fsp.open;
+      fsp.open = function(file,...args) { if(isHistory(file)) { audit.historyFileHandleOpens++; save(); } return open.call(this,file,...args); };
       const readSync = fs.readFileSync;
       fs.readFileSync = function(file,...args) { if(isHistory(file)) { audit.historyFileReads++; save(); } return readSync.call(this,file,...args); };
       global.fetch = async () => { audit.externalRequests++; save(); throw new Error('External requests forbidden'); };
@@ -75,6 +77,9 @@ async function main() {
       const originalIntegrated = integrated.createCompanyIntegratedDb;
       integrated.createCompanyIntegratedDb = options => {
         const service = originalIntegrated(options), bootstrap = service.bootstrap;
+        process.on('message', message => { if(message?.type === 'company-catalog-fixture-status') service.status()
+          .then(status => process.send?.({type:'company-catalog-fixture-status',status}))
+          .catch(error => process.send?.({type:'company-catalog-fixture-status',errorCode:error.code || 'STATUS_FAILED'})); });
         service.bootstrap = async () => {
           audit.bootstrapEntered = true; save();
           if(${JSON.stringify(gateBootstrap)}) while(!fs.existsSync(${JSON.stringify(releaseFile)})) await new Promise(resolve=>setTimeout(resolve,10));
@@ -92,13 +97,16 @@ async function main() {
       };
     `);
     const child = spawn(process.execPath, ["--require", preloadFile, path.join(repo, "scripts/glamping_app_server.cjs")], {
-      cwd: repo, windowsHide: true, stdio: ["ignore", "ignore", "ignore"], env: { ...process.env,
+      cwd: repo, windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"], env: { ...process.env,
         HOST: "127.0.0.1", PORT: String(port), DATA_DIR: dataDir, OUTPUTS_DIR: path.join(dataDir, "outputs"), CONFIG_DIR: path.join(dataDir, "config"),
         RENDER: "", RENDER_EXTERNAL_URL: "", SEED_OUTPUTS_FROM_REPO: "0", MASTER_DB_WRITE_MODE: "off", COLLECTOR_EXECUTION_MODE: "local",
         GLAMPING_ADMIN_USER: "catalog-fixture-admin", GLAMPING_ADMIN_PASSWORD: "catalog-fixture-password", GLAMPING_B2B_ENABLED: "0",
         TOURISM_VISITOR_MONTHLY_SYNC_ENABLED: "0", TOURISM_DEMAND_STRENGTH_BACKFILL_ENABLED: "0", KOSIS_API_KEY: ""
       }
     });
+    let childOutput = "";
+    const captureOutput = bytes => { childOutput = (childOutput + bytes.toString("utf8")).slice(-32768); };
+    child.stdout.on("data", captureOutput); child.stderr.on("data", captureOutput);
     activeChild = child;
     const running = () => {
       assert.ok(Date.now() < deadline, "compact-catalog API experiment exceeded its bounded deadline");
@@ -112,6 +120,11 @@ async function main() {
       assert.ok(latest, "the local audit must publish a complete immutable snapshot");
       return JSON.parse(await fs.readFile(path.join(dataDir, latest), "utf8"));
     };
+    const serviceStatus = () => new Promise(resolve => {
+      const listener = message => { if (message?.type === "company-catalog-fixture-status") { clearTimeout(timer); child.off("message", listener); resolve(message); } };
+      const timer = setTimeout(() => { child.off("message", listener); resolve({ diagnosticError: "STATUS_IPC_TIMEOUT" }); }, 1000);
+      child.on("message", listener); child.send({ type: "company-catalog-fixture-status" });
+    });
     async function ready() {
       for (let i = 0; i < 200; i++) {
         running();
@@ -121,19 +134,42 @@ async function main() {
       assert.fail(`readiness timed out in process ${ordinal}`);
     }
     async function idle() {
-      let state;
+      let state, lastStatus;
       for (let i = 0; i < 400; i++) {
         running();
         const counters = await audit(); assert.equal(counters.bootstrapErrorCode, null);
-        try { state = JSON.parse(await fs.readFile(queueFile, "utf8")); } catch {}
-        assert.notEqual(state?.bootstrap?.status, "failed", state?.bootstrap?.errorCode || "bootstrap failed");
-        assert.ok(!Object.values(state?.jobs || {}).some(job => job.status === "failed"),
-          "company job errors: " + JSON.stringify(Object.values(state?.jobs || {}).filter(job => job.status === "failed")
+        // Poll the real in-memory service over fixture-only IPC. Opening the
+        // destination queue file every 25ms can reject the app's atomic rename
+        // with EPERM on Windows, turning this observer into a write fault.
+        lastStatus = await serviceStatus(); const status = lastStatus.status;
+        assert.ok(status, "fixture service status unavailable: " + JSON.stringify(lastStatus));
+        assert.equal(status.errorCode, null); assert.notEqual(status.bootstrap?.status, "failed", status.bootstrap?.errorCode || "bootstrap failed");
+        assert.ok(!status.jobs.some(job => job.status === "failed"),
+          "company job errors: " + JSON.stringify(status.jobs.filter(job => job.status === "failed")
             .map(job => ({ companyId: job.companyId, errorCode: job.errorCode, months: job.months }))));
-        if (counters.bootstrapCompleted && state?.bootstrap?.status === "checked" && Object.values(state.jobs).every(job => job.status === "idle")) return state;
+        if (counters.bootstrapCompleted && !status.active && status.bootstrap?.status === "checked" && status.jobs.every(job => job.status === "idle")) {
+          // Independently inspect durable state only after every writer has
+          // finished. Do not replace the saved-file parity proof with IPC.
+          state = JSON.parse(await fs.readFile(queueFile, "utf8"));
+          assert.deepEqual(state.bootstrap, status.bootstrap);
+          assert.deepEqual(Object.values(state.jobs).map(job => [job.companyId, job.status, job.generation]).sort(), status.jobs.map(job => [job.companyId, job.status, job.generation]).sort());
+          return state;
+        }
         await pause(25);
       }
-      assert.fail(`company work did not finish in process ${ordinal}`);
+      preserveFailure = true;
+      let analytical = null;
+      try {
+        const cookie = await login(), response = await fetch(base + "/api/analytical-work", { headers: { Cookie: cookie }, signal: AbortSignal.timeout(2000) });
+        if (response.ok) analytical = await response.json();
+      } catch (error) { analytical = { diagnosticError: error.code || error.name || "unavailable" }; }
+      const integratedStatus = await serviceStatus();
+      try { state = JSON.parse(await fs.readFile(queueFile, "utf8")); } catch {}
+      const failure = { at: new Date().toISOString(), process: ordinal, state, audit: await audit(), analytical, integratedStatus, childOutput,
+        isolation: "Local synthetic fixture only; no production calls or real user credentials", dataDir };
+      await fs.writeFile(path.join(dataDir, "idle-timeout-diagnostics.json"), JSON.stringify(failure, null, 2), { flag: "wx" });
+      console.error("COMPANY_CATALOG_IDLE_DIAGNOSTICS=" + JSON.stringify(failure));
+      assert.fail(`company work did not finish in process ${ordinal}; isolated diagnostics retained at ${dataDir}`);
     }
     async function login() {
       running();
@@ -157,7 +193,9 @@ async function main() {
     // Setup is itself a real app boot, not a hand-built result or fake source.
     const first = await start(1, false); await first.ready(); await first.idle();
     const initialAudit = await first.audit();
-    assert.ok(initialAudit.fullCatalogCalls > 0 && initialAudit.capacityPrepareCalls > 0 && initialAudit.historyStreams > 0);
+    assert.ok(initialAudit.fullCatalogCalls > 0 && initialAudit.capacityPrepareCalls > 0
+      && initialAudit.historyStreams + initialAudit.historyFileReads + initialAudit.historyFileHandleOpens > 0,
+      "first build must inspect real original history through its stream or indexed file-handle path");
     assert.equal(initialAudit.catalogPrewarmLogs, 1, "catalog preparation must run before readiness");
     const baseline = await first.get(await first.login());
     assert.equal(baseline.view.status, "ready"); assert.equal(baseline.view.roomBasis.capacity, 10);
@@ -206,7 +244,7 @@ async function main() {
   } finally {
     if (activeChild) { activeChild.kill(); if (activeChild.exitCode === null) await once(activeChild, "exit"); }
     assert.equal(path.dirname(path.resolve(dataDir)), path.resolve(os.tmpdir()));
-    await fs.rm(dataDir, { recursive: true, force: true });
+    if (!preserveFailure) await fs.rm(dataDir, { recursive: true, force: true });
   }
 }
 

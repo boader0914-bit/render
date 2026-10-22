@@ -167,3 +167,89 @@ test("memory guard is optional and invalid options never enqueue work", async ()
   assert.equal(await scheduler.run(() => 18, { priority: "background" }), 18); assert.equal(scheduler.status().memory.enabled, false);
   await scheduler.close();
 });
+
+test("timings separate nested wall time from exclusive lease occupancy", async () => {
+  let instant = 1000; const records = [], perTask = [];
+  const scheduler = createAnalyticalWorkScheduler({ now: () => instant, onTaskTiming: row => records.push(row) });
+  let outerInfo, childInfo;
+  const value = await scheduler.run(async info => {
+    outerInfo = info.timing; instant += 10;
+    const nested = await scheduler.run(inner => { childInfo = inner.timing; instant += 7; return 17; },
+      { kind: "source-read", onTaskTiming: row => perTask.push(row) });
+    instant += 3; return nested;
+  }, { priority: "background", kind: "company-month" });
+  assert.equal(value, 17); assert.equal(records.length, 2); assert.equal(perTask.length, 1);
+  const inner = records.find(row => row.reentrant), outer = records.find(row => !row.reentrant);
+  assert.equal(inner.parentId, outer.id); assert.equal(inner.queueWaitMs, 0); assert.equal(inner.leaseMs, 7);
+  assert.equal(outer.leaseMs, 20); assert.equal(outer.priority, "background");
+  assert.equal(outerInfo.reentrant, false); assert.equal(childInfo.reentrant, true);
+  const totals = scheduler.status().timing;
+  assert.equal(totals.enqueued, 1); assert.equal(totals.started, 1); assert.equal(totals.completed, 1);
+  assert.equal(totals.leaseMs, 20); assert.equal(totals.reentrantLeaseMs, 7);
+  assert.equal(totals.reentrantStarted, 1); assert.equal(totals.reentrantCompleted, 1);
+  await scheduler.close();
+});
+
+test("queue timing distinguishes occupied ownership from idle memory admission waiting", async () => {
+  const time = clock(), hold = gate(), entered = gate(), records = []; let sample = 0;
+  const scheduler = createAnalyticalWorkScheduler({ ...time, sampleIntervalMs: 10, maxSampleAgeMs: 100,
+    onTaskTiming: row => records.push(row), sampleMemory: () => ({ ratio: ++sample === 1 ? 0.8 : 0.5, sampledAt: time.now() }) });
+  const first = scheduler.run(async () => { entered.resolve(); await hold.promise; }, { kind: "foreground-hold" });
+  await entered.promise;
+  const background = scheduler.run(async () => { await time.advance(5); return 9; }, { priority: "background", kind: "company-month" });
+  await time.advance(10); hold.resolve(); await first; await flush();
+  assert.equal(scheduler.status().memory.paused, true);
+  await time.advance(20); assert.equal(scheduler.status().memory.lowSamples, 1);
+  await time.advance(10); assert.equal(await background, 9);
+  const row = records.find(item => item.kind === "company-month");
+  assert.equal(row.queueWaitMs, 40); assert.equal(row.busyWaitMs, 10); assert.equal(row.memoryWaitMs, 30);
+  assert.equal(row.samplingWaitMs, 0); assert.equal(row.otherWaitMs, 0); assert.equal(row.leaseMs, 5);
+  assert.equal(row.queueWaitMs, row.busyWaitMs + row.memoryWaitMs + row.samplingWaitMs + row.otherWaitMs);
+  assert.equal(scheduler.status().timing.leaseMs, 15); await scheduler.close();
+});
+
+test("slow sampling wait is separate and diagnostic callbacks cannot fail work or leak exception content", async () => {
+  const time = clock(), sampling = gate(), records = [];
+  const scheduler = createAnalyticalWorkScheduler({ ...time, sampleIntervalMs: 10, maxSampleAgeMs: 100,
+    sampleMemory: () => sampling.promise,
+    onTaskTiming(row) { records.push(row); throw Error("private callback data"); } });
+  const value = scheduler.run(() => 42, { priority: "background", kind: "source-read",
+    onTaskTiming: async () => { throw Error("private rejected callback data"); } });
+  await flush(); await time.advance(15); sampling.resolve({ ratio: 0.1, sampledAt: time.now() });
+  assert.equal(await value, 42); await flush();
+  assert.equal(records[0].samplingWaitMs, 15); assert.equal(records[0].queueWaitMs, 15);
+  await assert.rejects(scheduler.run(() => { throw Object.assign(Error("secret booking name"), { code: "unsafe customer text" }); }),
+    error => error.message === "secret booking name");
+  await assert.rejects(scheduler.run(() => { throw null; }), error => error === null);
+  const hostile = Object.defineProperty({}, "code", { get() { throw Error("private error accessor"); } });
+  await assert.rejects(scheduler.run(() => { throw hostile; }), error => error === hostile);
+  const status = scheduler.status();
+  assert.equal(status.timing.callbackErrors, 5); assert.equal(status.timing.failed, 3);
+  assert.equal(status.timing.recent.at(-1).errorCode, "ANALYTICAL_WORK_FAILED");
+  assert.equal(JSON.stringify(status).includes("secret"), false); assert.equal(JSON.stringify(status).includes("private"), false);
+  await scheduler.close();
+});
+
+test("timing history is bounded and abort or close records have no lease duration", async () => {
+  let instant = 1000; const scheduler = createAnalyticalWorkScheduler({ now: () => instant, timingHistoryLimit: 2 });
+  const hold = gate(), entered = gate(), controller = new AbortController();
+  const first = scheduler.run(async () => { entered.resolve(); await hold.promise; }, { kind: "owner" }); await entered.promise;
+  const abortedJob = scheduler.run(() => assert.fail(), { signal: controller.signal });
+  const abortedResult = assert.rejects(abortedJob, { code: "ANALYTICAL_WORK_ABORTED" });
+  instant += 11; controller.abort(); await abortedResult;
+  const abortRecord = scheduler.status().timing.recent.at(-1);
+  assert.equal(abortRecord.startedAt, null); assert.equal(abortRecord.queueWaitMs, 11); assert.equal(abortRecord.leaseMs, 0);
+  const pending = scheduler.run(() => assert.fail(), { priority: "background" });
+  const pendingResult = assert.rejects(pending, { code: "ANALYTICAL_WORK_CLOSED" });
+  instant += 9; const closing = scheduler.close(); await pendingResult;
+  hold.resolve(); await Promise.all([first, closing]);
+  const status = scheduler.status(); assert.equal(status.timing.recent.length, 2);
+  assert.equal(status.timing.aborted, 1); assert.equal(status.timing.closed, 1); assert.equal(status.timing.completed, 1);
+  const closedRecord = status.timing.recent.find(row => row.outcome === "closed");
+  assert.equal(closedRecord.leaseMs, 0); assert.equal(closedRecord.queueWaitMs, 9);
+  status.timing.recent[0].kind = "mutated";
+  assert.notEqual(scheduler.status().timing.recent[0].kind, "mutated");
+  assert.throws(() => createAnalyticalWorkScheduler({ timingHistoryLimit: 129 }), TypeError);
+  assert.throws(() => createAnalyticalWorkScheduler({ onTaskTiming: true }), TypeError);
+  await assert.rejects(createAnalyticalWorkScheduler().run(() => 1, { onTaskTiming: true }), TypeError);
+});

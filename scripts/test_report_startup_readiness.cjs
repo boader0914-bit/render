@@ -50,6 +50,8 @@ function fixture({ seedError = false, companyPending = false, companyError = fal
     industryAnalysisService: { bootstrap: async () => calls.push("industry") },
     dailyKeywordCollectionScheduler: { start: async () => { calls.push("daily"); return { enabled: false }; } },
     keywordWorkerSchedulers: {},
+    releaseCommittedCollectionPostprocess: async () => {},
+    collectionPostprocessQueue: { start: async () => {} },
     tourismVisitorMonthlyScheduler: { start: () => { calls.push("tourism"); return { enabled: false }; } },
     tourismDemandStrengthBackfillScheduler: { start: () => { calls.push("backfill"); return { enabled: false }; } },
     masterDbDualWriteQueue: { mode: "off" },

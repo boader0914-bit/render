@@ -59,7 +59,13 @@ async function main() {
     const beforeRotation = await request("/api/collection-rotation", { cookie: admin });
     const beforeCollector = await request("/api/collector-status", { cookie: admin });
     const diagnostics = await request(route, { cookie: admin });
-    assert.equal(diagnostics.status, 200); assert.deepEqual(Object.keys(diagnostics.data).sort(), ["memory", "observationIndex", "work"]);
+    assert.equal(diagnostics.status, 200); assert.deepEqual(Object.keys(diagnostics.data).sort(), ["memory", "monthlyRecalculation", "monthlySources", "observationIndex", "work"]);
+    for (const [key, value] of Object.entries(diagnostics.data.monthlyRecalculation)) assert.ok(Number.isSafeInteger(value) && value >= 0, key);
+    for (const [key, value] of Object.entries(diagnostics.data.monthlySources)) {
+      if (key === "companyCatalog") {
+        for (const counter of Object.values(value)) assert.ok(Number.isSafeInteger(counter) && counter >= 0);
+      } else assert.ok(Number.isSafeInteger(value) && value >= 0, key);
+    }
     assert.equal(typeof diagnostics.data.observationIndex.ready, "boolean");
     for (const value of Object.values(diagnostics.data.observationIndex.stats)) assert.ok(Number.isSafeInteger(value) && value >= 0);
     assert.equal(diagnostics.data.observationIndex.source, undefined, "raw identity/path metadata is not exposed");

@@ -10,6 +10,7 @@ const { industryCompanyReference } = require("./industry_analysis.cjs");
 const { createSourceReadScheduler } = require("./source_read_scheduler.cjs");
 const { createMonthlyReportMaterializedCache } = require("./monthly_report_materialized_cache.cjs");
 const { readCompanyMasterProjection } = require("./company_master_stream.cjs");
+const { createMonthlyCompanySourceCatalog } = require("./monthly_company_source_catalog.cjs");
 
 const token = value => String(value || "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
 function sourceError() { return Object.assign(new Error("월간 집계에 필요한 저장자료를 읽지 못했습니다. 원본 상태를 확인해 주세요."), { statusCode: 503, code: "MONTHLY_SOURCE_UNAVAILABLE" }); }
@@ -22,10 +23,11 @@ async function readJson(file, fallback, checkpoint = async () => {}) {
   catch (error) { if (error.code === "ENOENT") return fallback; throw sourceError(); }
 }
 
-function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, observationIndex = null, prepareCompanies = null, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", now = () => new Date(), runWork = operation => operation() }) {
+function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, observationIndex = null, prepareCompanies = null, projectCapacityCompany = null, companySourceVersion = "monthly-company-source-v1", projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", now = () => new Date(), runWork = operation => operation() }) {
   const companyFile = path.join(dataDir, "company_master", "companies.json");
   const historyFile = path.join(dataDir, "history", "observations.jsonl");
   let catalogInFlight = null, targetCatalogInFlight = null, optionsInFlight = null;
+  const sourceMetrics = { catalogFullReads: 0, catalogFullBytes: 0, capacityPreparations: 0, sourceReads: 0, companyProjectionReads: 0 };
   const sourceReadScheduler = createSourceReadScheduler();
   const selectorCache = typeof readOptionsRevision === "function" ? createMonthlyReportMaterializedCache({
     directory: path.join(dataDir, "monthly_reports", "selector_cache"), maxEntries: 1,
@@ -33,17 +35,23 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
   }) : null;
   const checkpointFor = ({ priority } = {}) => priority === "background"
     ? () => sourceReadScheduler.checkpoint({ priority: "background" }) : async () => {};
+  const companySourceCatalog = typeof readRevision === "function" && typeof projectCapacityCompany === "function"
+    ? createMonthlyCompanySourceCatalog({ dataDir, readRevision, projectCapacityCompany,
+      version: require("node:crypto").createHash("sha256").update(String(companySourceVersion)).update(fs.readFileSync(__filename)).digest("hex"),
+      loadFullCatalog: options => readCatalog({ checkpoint: options?.checkpoint }) }) : null;
   async function readCatalog({ prepareCapacity = true, checkpoint = async () => {} } = {}) {
     await checkpoint();
     // Validate the complete document, retaining one parsed company at a time.
     // A full UTF-8 master string must not coexist with its parsed inventories.
     let master;
-    try { await fsp.access(companyFile); master = await readCompanyMasterProjection(companyFile, { checkpoint }); }
+    try { await fsp.access(companyFile); const size = (await fsp.stat(companyFile)).size;
+      sourceMetrics.catalogFullReads++; sourceMetrics.catalogFullBytes += size;
+      master = await readCompanyMasterProjection(companyFile, { checkpoint }); }
     catch (error) { if (error.code === "ENOENT") master = { companies: {} }; else throw sourceError(); }
     const [regionMaster, runs] = await Promise.all([readJson(regionMasterFile, { units: [] }, checkpoint), listRuns()]);
     if (!master.companies || typeof master.companies !== "object" || Array.isArray(master.companies)) throw sourceError();
     await checkpoint();
-    if (prepareCapacity && prepareCompanies) master.companies = await prepareCompanies(master.companies, { runs, checkpoint, shareReadOnlyInventory: true });
+    if (prepareCapacity && prepareCompanies) { sourceMetrics.capacityPreparations++; master.companies = await prepareCompanies(master.companies, { runs, checkpoint, shareReadOnlyInventory: true }); }
     const units = (regionMaster.units || []).filter(unit => unit.active && unit.selectable && ["local", "broad"].includes(unit.level));
     const industryRegions = units.map(unit => ({ id: unit.regionKey, label: unit.fullName || unit.name, level: unit.level, aliases: unit.aliases }));
     const idIndex = new Map(units.flatMap(unit => [unit.regionKey, unit.regionId].filter(Boolean).map(key => [key, unit])));
@@ -190,7 +198,12 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
   const options = readOptions;
   async function readSources(request, includeCatalog, options = {}) {
     const { includeContext = true } = options, checkpoint = checkpointFor(options);
-    const data = await readCatalog({ checkpoint });
+    sourceMetrics.sourceReads++;
+    let data;
+    if (companySourceCatalog && request.type === "company" && !includeCatalog) {
+      try { data = await companySourceCatalog.readCompanyCatalog(request.targetId, { checkpoint }); sourceMetrics.companyProjectionReads++; }
+      catch { throw sourceError(); }
+    } else data = await readCatalog({ checkpoint });
     const byId = new Map(data.companies.map(company => [company.companyId, company]));
     const ids = new Map(data.companies.map(company => [token(company.companyId), company.companyId]));
     const places = new Map(), conflictingCompanyIds = new Set();
@@ -288,7 +301,24 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
       }
       // Some recovered runs have only a persisted company snapshot. Their run
       // quality is still independently validated by the report aggregation.
-      for (const snapshot of [company.inventory?.latest, company.inventory?.previousLatest, ...(company.inventory?.snapshots || [])].filter(Boolean)) {
+      let fallbackCompany = company;
+      if (companyScope !== null && company._monthlySourceCompact) {
+        // Nonselected inventory cannot contribute quantities. Only a known
+        // duplicate-place owner contributes its original fallback-row count
+        // to global diagnostics; keep that count without retaining its body.
+        const resolved = canonical({ companyKey: id });
+        if (resolved === companyScope) {
+          // Preserve historical alias overwrite semantics and original company
+          // iteration order. An active id can also be a reviewed merged alias;
+          // its fallback then belongs to the selected canonical company.
+          fallbackCompany = await data._companySource.readCompany(id);
+        } else {
+          const count = company._monthlySourceFallbackMonths?.[request.month] || 0;
+          if (!resolved && count) unmatchedRows.push({ candidateId: canonical({ companyKey: id }, true) || `unresolved-report-row-${unmatchedRows.length}`, count });
+          continue;
+        }
+      }
+      for (const snapshot of [fallbackCompany.inventory?.latest, fallbackCompany.inventory?.previousLatest, ...(fallbackCompany.inventory?.snapshots || [])].filter(Boolean)) {
         for (const row of snapshot.productSnapshot?.daily || []) addRow({ ...row,
           inventoryEvidenceVersion: row.inventoryEvidenceVersion ?? snapshot.productSnapshot.inventoryEvidenceVersion ?? snapshot.inventoryEvidenceVersion,
           companyKey: id, companyName: company.primaryName, runId: row.runId || snapshot.runId || snapshot.productSnapshot.runId,
@@ -354,6 +384,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
       warnings, sourceDiagnostics: { unmatchedCompanyRows, duplicatePlaceCompanies },
       globalWarnings, globalDiagnostics: { malformedHistoryLines, unmatchedCompanyRows: globalUnmatchedCompanyRows, duplicatePlaceCompanies: globalDuplicatePlaceCompanies,
         ...(request.type === "region" ? { unmappedRegionCompanies } : {}) }, context };
+    if (data._companySource) { try { await data._companySource.assertCurrent(); } catch { throw sourceError(); } }
     return includeCatalog ? { source, catalog: data } : source;
   }
   function queueSourceRead(request, includeCatalog = false, options = {}) {
@@ -365,7 +396,8 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     loadSourcesWithCatalog: (request, options) => queueSourceRead(request, true, options),
     ...(typeof readRevision === "function" ? { readRevision } : {}),
     runInteractiveRead: sourceReadScheduler.runInteractive,
-    sourceReadStatus: sourceReadScheduler.status };
+    sourceReadStatus: sourceReadScheduler.status,
+    sourceReadMetrics: () => ({ ...sourceMetrics, companyCatalog: companySourceCatalog?.stats() || null }) };
 }
 
 module.exports = { createMonthlyReportSources };
