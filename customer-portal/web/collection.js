@@ -147,7 +147,7 @@
     const submit=document.querySelector('[data-collect] button[type=submit]'); if(submit)submit.disabled=active(r)||submit.dataset.ready!=='true'||!allowance?.canRequest;
   }
   function renderResult(data) {
-    return window.InsightCompanyView.render(data,{editHtml:mountOptions.editHtml||''});
+    return window.InsightCompanyView.render(data,{editHtml:mountOptions.editHtml||'',collapseProducts:mountOptions.relationKind==='competitor'});
   }
   async function load(force=false) {
     const mine=serial, id=companyId, month=selectedMonth, order=++loadOrder, generation=cacheGeneration, epoch=companyEpoch(companyId), scope=cacheScope;

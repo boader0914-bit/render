@@ -199,6 +199,15 @@ html[data-theme=dark] .connected-app input[type=month]{color-scheme:dark}
 .connected-app .db-reference-grid .db-product-table thead th{font-size:12px;font-weight:600;color:var(--muted)}
 .connected-app .db-product-table tbody th{font-weight:500}
 .connected-app .db-product-table td:last-child{white-space:normal;min-width:144px;font-variant-numeric:tabular-nums}
+.connected-app .company-products{margin-top:16px;padding:0;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.connected-app .company-products>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:44px;padding:11px 12px;cursor:pointer;list-style:none;background:var(--surface-soft);font-size:13px;line-height:1.5;font-weight:500}
+.connected-app .company-products>summary::-webkit-details-marker{display:none}
+.connected-app .company-products>summary:focus-visible{outline:2px solid var(--green);outline-offset:-3px}
+.connected-app .company-products .products-expand,.connected-app .company-products .products-collapse{flex-shrink:0;color:var(--muted);font-size:12px}
+.connected-app .company-products .products-collapse,.connected-app .company-products[open] .products-expand{display:none}
+.connected-app .company-products[open] .products-collapse{display:inline}
+.connected-app .company-products[open]>summary{border-bottom:1px solid var(--line)}
+.connected-app .db-reference-grid .company-products>.db-product-table{margin-top:0;border:0;border-radius:0}
 .connected-app .db-channels .db-channel-list{gap:8px;margin:0}
 .connected-app .db-channels .db-channel-list article{padding:12px;border:0;border-radius:8px;background:var(--surface-soft);gap:12px}
 .connected-app .db-channel-list article>div{min-width:0}
