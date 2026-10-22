@@ -171,3 +171,125 @@ html[data-theme=dark] .connected-app input[type=month]{color-scheme:dark}
 .connected-app .company-week-group>.collection-table-wrap{margin:10px 16px 16px;max-width:calc(100% - 32px)}
 @media(max-width:1000px){.connected-app .week-column-head{grid-template-columns:minmax(140px,1fr) minmax(90px,.7fr) minmax(140px,1fr) minmax(75px,.6fr) 28px;gap:10px}.connected-app .company-week-summary{gap:10px}}
 @media(max-width:760px){.connected-app .db-reference-grid>.card{padding:15px}.connected-app .company-month-summary{padding:14px}.connected-app .month-summary-metrics{gap:10px}.connected-app .month-summary-metrics article+article{padding:10px 0 0}.connected-app .week-column-head{display:none}.connected-app .company-week-summary{padding:12px 14px;gap:8px 10px}.connected-app .week-metric-label{position:static;width:auto;height:auto;clip-path:none;overflow:visible;white-space:normal}.connected-app .week-label-row{margin:8px 14px 0}.connected-app .company-week-group>.collection-table-wrap{margin:8px 14px 14px;max-width:calc(100% - 28px)}}
+
+/* Company cards: one type scale for references, observation totals and detail rows. */
+.connected-app .db-reference-grid{--company-heading:18px;--company-body:14px;--company-meta:12px;grid-template-columns:minmax(0,1.7fr) minmax(250px,1fr);gap:16px;font-size:var(--company-body);line-height:1.6}
+.connected-app .db-reference-grid>.card{padding:20px;border-radius:12px;border-color:var(--line);box-shadow:none;background:var(--surface)}
+.connected-app .db-reference-grid p{line-height:1.65}
+.connected-app .db-reference-grid .muted{font-size:13px;line-height:1.65}
+.connected-app .db-reference-grid .db-section-heading{gap:10px;margin-bottom:16px;min-height:32px}
+.connected-app .db-reference-grid .db-section-heading b{width:28px;height:28px;flex:0 0 28px;border-radius:8px;font-size:12px;line-height:1;font-weight:700}
+.connected-app .db-reference-grid .db-section-heading h2{font-size:var(--company-heading);line-height:1.4;letter-spacing:-.025em;font-weight:700}
+.connected-app .db-basics{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;row-gap:0}
+.connected-app .db-basics>*{grid-column:1/-1;min-width:0}
+.connected-app .db-basics>.db-section-heading{grid-column:1;grid-row:1}
+.connected-app .db-basics>.company-edit{grid-column:2;grid-row:1;justify-self:end;margin:0 0 16px}
+.connected-app .db-basics>.company-edit[open]{grid-column:1/-1;grid-row:2;justify-self:stretch}
+.connected-app .db-basics>.company-edit[open]>summary{display:table;margin-left:auto}
+.connected-app .db-basics .company-edit>summary{padding:7px 11px;min-height:34px;font-size:12px;line-height:1.5;background:var(--surface);border-color:var(--line-strong)}
+.connected-app .db-basics>h3{font-size:21px;line-height:1.45;font-weight:650;letter-spacing:-.035em;margin:0 0 5px}
+.connected-app .db-basics>.company-basic-summary{gap:12px;margin:16px 0}
+.connected-app .db-basics .company-basic-summary article{padding:13px 15px;gap:5px;border:0;background:var(--surface-soft);border-radius:9px}
+.connected-app .db-basics .company-basic-summary span{font-size:13px;line-height:1.5}
+.connected-app .db-basics .company-basic-summary strong{font-size:26px;line-height:1.3;font-weight:650;letter-spacing:-.035em;font-variant-numeric:tabular-nums}
+.connected-app .db-basics .company-basic-summary small{font-size:var(--company-meta);line-height:1.5}
+.connected-app .db-reference-grid .db-product-table{margin-top:16px;border-radius:8px}
+.connected-app .db-reference-grid .db-product-table table{font-size:13px;line-height:1.55}
+.connected-app .db-reference-grid .db-product-table th,.connected-app .db-reference-grid .db-product-table td{padding:11px 12px}
+.connected-app .db-reference-grid .db-product-table thead th{font-size:12px;font-weight:600;color:var(--muted)}
+.connected-app .db-product-table tbody th{font-weight:500}
+.connected-app .db-product-table td:last-child{white-space:normal;min-width:144px;font-variant-numeric:tabular-nums}
+.connected-app .db-channels .db-channel-list{gap:8px;margin:0}
+.connected-app .db-channels .db-channel-list article{padding:12px;border:0;border-radius:8px;background:var(--surface-soft);gap:12px}
+.connected-app .db-channel-list article>div{min-width:0}
+.connected-app .db-channel-list strong{font-size:15px;font-weight:600;line-height:1.5}
+.connected-app .db-channel-list small{font-size:12px;line-height:1.6;margin-top:4px;overflow-wrap:anywhere}
+.connected-app .db-channel-list .button{min-width:56px;min-height:40px;font-size:12px;padding:8px 12px}
+.connected-app .db-current .db-current-heading{gap:8px 16px;margin-bottom:12px}
+.connected-app .db-current-heading .db-section-heading{margin-bottom:0}
+.connected-app .db-current-heading>p{font-size:12px;font-variant-numeric:tabular-nums}
+.connected-app .db-current-heading+.muted{font-size:12px;padding:8px 10px;border-radius:6px;border-left:2px solid var(--line-strong);background:var(--surface-soft)}
+.connected-app .db-current .company-month-summary{margin:16px 0 0;padding:16px 18px;background:var(--green-soft);border:0;border-radius:10px}
+.connected-app .db-current .month-summary-heading{margin-bottom:12px;gap:8px}
+.connected-app .db-current .month-summary-heading h3{font-size:14px;font-weight:600;line-height:1.5;letter-spacing:-.015em}
+.connected-app .db-current .month-summary-heading p{font-size:12px;margin-top:3px}
+.connected-app .db-current .month-summary-heading>.month-note{display:none}
+.connected-app .db-current .month-summary-metrics{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px}
+.connected-app .db-current .month-summary-metrics article{gap:4px}
+.connected-app .db-current .month-summary-metrics article+article{border-left:1px solid var(--line-strong);padding-left:20px}
+.connected-app .db-current .month-summary-metrics article>span{font-size:13px;font-weight:500}
+.connected-app .db-current .month-summary-metrics strong{font-size:30px;line-height:1.3;font-weight:650;letter-spacing:-.035em;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.connected-app .db-current .month-summary-metrics article>p{font-size:12px;line-height:1.55}
+.connected-app .db-current .company-month-summary>.month-note{font-size:12px;line-height:1.65;margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
+.connected-app .db-current .company-flow{padding:18px 0 14px;border-bottom:1px solid var(--line);margin-bottom:16px}
+.connected-app .db-current .company-flow>h3{font-size:15px;font-weight:600;line-height:1.5;letter-spacing:-.02em;margin:0}
+.connected-app .db-current .flow-unit{font-size:12px;font-weight:400;margin-left:6px}
+.connected-app .db-current .company-booking-chart{margin-top:8px;padding:0;max-width:none;overflow:visible}
+.connected-app .db-current .company-booking-chart svg{width:100%;height:190px;min-width:0}
+.connected-app .db-current .company-booking-chart text{font-family:var(--font);font-size:12px;font-weight:400}
+.connected-app .db-current .company-booking-chart text.flow-partial{font-size:14px;font-weight:700}
+.connected-app .db-current .company-booking-chart .flow-date-mobile{display:none}
+.connected-app .db-current .company-flow>.collection-legend{gap:6px 14px;margin:0;font-size:12px;line-height:1.6}
+.connected-app .db-current .company-flow>.collection-legend span{padding:0;background:none}
+.connected-app .db-current .week-label-row{margin:0 0 10px;gap:6px 12px}
+.connected-app .db-current .week-table-title{font-size:15px;font-weight:600;line-height:1.5;letter-spacing:-.02em}
+.connected-app .db-current .week-label-row>.muted{font-size:12px}
+.connected-app .db-current .company-week-list{gap:6px;margin-top:0}
+.connected-app .db-current .week-column-head,.connected-app .db-current .company-week-summary{grid-template-columns:minmax(140px,1.2fr) minmax(88px,.8fr) minmax(150px,1.2fr) minmax(100px,1fr) 36px;column-gap:12px}
+.connected-app .db-current .week-column-head{padding:0 14px 4px;font-size:12px}
+.connected-app .db-current .company-week-group{border-radius:8px;background:var(--surface);padding-top:0}
+.connected-app .db-current .company-week-summary{padding:11px 14px;min-height:58px}
+.connected-app .db-current .week-period{font-size:14px;font-weight:500;line-height:1.5;letter-spacing:-.015em;font-variant-numeric:tabular-nums}
+.connected-app .db-current .week-bookings strong,.connected-app .db-current .week-revenue strong{font-size:18px;line-height:1.4;font-weight:600;letter-spacing:-.025em}
+.connected-app .db-current .week-state{font-size:12px;line-height:1.55}
+.connected-app .db-current .week-toggle{width:32px;height:32px;font-size:21px;background:var(--surface-soft);border:1px solid var(--line)}
+.connected-app .db-current .company-week-group[open]>.week-label-row{margin:12px 14px 0}
+.connected-app .db-current .company-observation-table table{font-size:13px;font-variant-numeric:tabular-nums}
+.connected-app .db-current .company-observation-table th,.connected-app .db-current .company-observation-table td{padding:11px 12px;line-height:1.55}
+.connected-app .db-current .company-observation-table thead th{font-size:12px;font-weight:600;color:var(--muted)}
+.connected-app .db-current .company-observation-table caption{font-size:13px;padding:12px;font-weight:600}
+.connected-app .db-current .company-observation-table small{font-size:12px;line-height:1.5}
+@media(max-width:1100px){.connected-app .db-reference-grid{grid-template-columns:minmax(0,1fr)}.connected-app .db-current .week-column-head,.connected-app .db-current .company-week-summary{column-gap:10px;grid-template-columns:minmax(125px,1fr) minmax(74px,.7fr) minmax(140px,1.1fr) minmax(95px,1fr) 32px}}
+@media(max-width:760px){
+ .connected-app .db-reference-grid{--company-heading:17px;gap:14px}
+ .connected-app .db-reference-grid>.card{padding:16px;border-radius:10px}
+ .connected-app .db-reference-grid .db-section-heading{margin-bottom:14px}
+ .connected-app .db-basics>.company-edit{margin-bottom:14px}
+ .connected-app .db-basics .company-edit>summary{min-height:40px;padding:9px 10px}
+ .connected-app .db-basics>h3{font-size:20px}
+ .connected-app .db-basics>.company-basic-summary{margin:14px 0;gap:10px}
+ .connected-app .db-basics .company-basic-summary article{padding:12px;gap:4px}
+ .connected-app .db-basics .company-basic-summary strong{font-size:24px}
+ .connected-app .db-reference-grid .db-product-table th,.connected-app .db-reference-grid .db-product-table td{padding:10px;font-size:13px}
+ .connected-app .db-reference-grid .db-product-table thead th{font-size:12px}
+ .connected-app .db-product-table td:last-child{min-width:122px}
+ .connected-app .db-current .db-current-heading{align-items:flex-start;gap:6px;margin-bottom:10px}
+ .connected-app .db-current-heading .db-section-heading{margin-bottom:0}
+ .connected-app .db-current-heading>p{flex-basis:100%;padding-left:38px}
+ .connected-app .db-current .company-month-summary{padding:14px;margin-top:14px}
+ .connected-app .db-current .month-summary-metrics{grid-template-columns:minmax(0,.7fr) minmax(0,1.3fr);gap:12px}
+ .connected-app .db-current .month-summary-metrics article+article{border-left:1px solid var(--line-strong);border-top:0;padding:0 0 0 12px}
+ .connected-app .db-current .month-summary-metrics strong{font-size:24px}
+ .connected-app .db-current .company-flow{padding-top:16px;margin-bottom:14px}
+ .connected-app .db-current .week-column-head{display:none}
+ .connected-app .db-current .company-week-summary{grid-template-columns:minmax(0,.8fr) minmax(0,1.3fr) 32px;gap:6px 8px;padding:12px}
+ .connected-app .db-current .week-period{grid-column:1/3;grid-row:1;font-size:14px}
+ .connected-app .db-current .week-toggle{grid-column:3;grid-row:1}
+ .connected-app .db-current .week-bookings{grid-column:1;grid-row:2}
+ .connected-app .db-current .week-revenue{grid-column:2/4;grid-row:2;text-align:right}
+ .connected-app .db-current .week-state{grid-column:1/-1;grid-row:3;text-align:left;font-size:12px}
+ .connected-app .db-current .week-metric-label{font-size:12px}
+ .connected-app .db-current .company-week-group>.collection-table-wrap{margin:8px 12px 12px;max-width:calc(100% - 24px)}
+}
+@media(max-width:480px){.connected-app .db-current .company-booking-chart .flow-date-desktop{display:none}.connected-app .db-current .company-booking-chart .flow-date-mobile{display:block}}
+@media(max-width:360px){.connected-app .db-current .month-summary-metrics{grid-template-columns:minmax(0,1fr)}.connected-app .db-current .month-summary-metrics article+article{border-left:0;border-top:1px solid var(--line-strong);padding:12px 0 0}.connected-app .db-current .month-summary-metrics strong{font-size:26px}}
+@media(min-width:761px) and (max-width:1000px){
+ .connected-app .db-current .week-column-head{display:none}
+ .connected-app .db-current .company-week-summary{grid-template-columns:minmax(0,.8fr) minmax(0,1.3fr) 32px;gap:6px 10px}
+ .connected-app .db-current .week-period{grid-column:1/3;grid-row:1}
+ .connected-app .db-current .week-toggle{grid-column:3;grid-row:1}
+ .connected-app .db-current .week-bookings{grid-column:1;grid-row:2}
+ .connected-app .db-current .week-revenue{grid-column:2/4;grid-row:2;text-align:right}
+ .connected-app .db-current .week-state{grid-column:1/-1;grid-row:3;text-align:left}
+ .connected-app .db-current .week-metric-label{position:static;width:auto;height:auto;clip-path:none;overflow:visible;white-space:normal;font-size:12px}
+}
