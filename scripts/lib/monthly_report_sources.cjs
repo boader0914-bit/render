@@ -312,11 +312,16 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     let companyIndex = 0;
     for (const [id, company] of data.rawCompanies) {
       if (companyIndex++ % 16 === 0) await checkpoint();
-      for (const exposure of Object.values(company.keywords || {})) {
-        for (const run of exposure.runs || []) {
-          const row = { ...run, companyKey: id, companyId: id, companyName: company.primaryName, keyword: exposure.keyword };
-          if (needsMembershipEvidence) diagnosticRankRows.push(row);
-          if (!conflictingCompanyIds.has(id) && (companyScope === null || id === companyScope)) rankObservations.push(row);
+      // A company report needs only its own rank rows. Keep broad membership
+      // diagnostics complete without allocating rows that would be discarded.
+      const needsRankRows = needsMembershipEvidence || (!conflictingCompanyIds.has(id) && (companyScope === null || id === companyScope));
+      if (needsRankRows) {
+        for (const exposure of Object.values(company.keywords || {})) {
+          for (const run of exposure.runs || []) {
+            const row = { ...run, companyKey: id, companyId: id, companyName: company.primaryName, keyword: exposure.keyword };
+            if (needsMembershipEvidence) diagnosticRankRows.push(row);
+            if (!conflictingCompanyIds.has(id) && (companyScope === null || id === companyScope)) rankObservations.push(row);
+          }
         }
       }
       // Some recovered runs have only a persisted company snapshot. Their run
