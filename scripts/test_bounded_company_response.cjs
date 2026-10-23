@@ -25,6 +25,68 @@ class Response extends EventEmitter {
 const options = extra => ({ maxResponseBytes: 1024, maxReservedBytes: 2048, chunkBytes: 16, timeoutMs: 500, ...extra });
 function noOwnedListeners(res) { for (const name of ["finish", "close", "error", "drain"]) assert.equal(res.listenerCount(name), 0, name); }
 
+function observeSenderRace(onFulfilled = () => {}) {
+  // Only this isolated VM substitutes Promise. Observe the real module's race
+  // participants/results without adding a runtime hook or asserting GC timing.
+  const fs = require("node:fs"), path = require("node:path"), vm = require("node:vm"), records = [];
+  class ObservedPromise extends Promise {
+    static race(iterable) {
+      const participants = Array.from(iterable), record = { fulfilled: [], rejected: [], settled: false };
+      for (const item of participants) Promise.resolve(item).then(value => record.fulfilled.push(value), error => record.rejected.push(error));
+      const raced = super.race(participants); records.push(record);
+      raced.then(value => { record.settled = true; record.value = value; onFulfilled(value); }, error => { record.settled = true; record.error = error; });
+      return raced;
+    }
+  }
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "lib/bounded_company_response.cjs"), "utf8"), {
+    module, exports: module.exports, require, Buffer, Promise: ObservedPromise, AbortController, setTimeout, clearTimeout
+  }, { filename: "bounded_company_response.race-fixture.cjs" });
+  return { create: module.exports.createBoundedCompanyResponse, records };
+}
+
+test("production and the completion race publish only primitives while a real body awaits drain", async () => {
+  const observed = observeSenderRace(), sender = observed.create(options()), res = new Response({ blocked: true });
+  const body = { value: "한글😀".repeat(12), nested: { nullable: null } }, descriptor = { status: 201, body, extraHeaders: { "X-Exact": "kept" } };
+  const sending = sender.send(res, () => descriptor); await tick();
+  assert.equal(res.chunks.length, 1); assert.equal(res.endCount, 0);
+  assert.equal(observed.records.length, 1); const race = observed.records[0];
+  assert.equal(race.settled, true); assert.equal(race.value, true);
+  assert.deepEqual(race.fulfilled, [true], "production's fulfilled result cannot be the descriptor/body graph");
+  assert.equal(sender.status().reservedBytes, 1024);
+  res.blocked = false; res.emit("drain"); assert.equal(await sending, true); await tick();
+  assert.deepEqual(race.fulfilled, [true, false], "the losing completion branch also fulfills with a primitive");
+  assert.deepEqual(res.body(), Buffer.from(JSON.stringify(body))); assert.equal(res.statusCode, 201); assert.equal(res.headers["X-Exact"], "kept");
+  assert.equal(sender.status().reservedBytes, 0); noOwnedListeners(res);
+});
+
+test("close immediately after publication clears the slot before descriptor access or encoding", async () => {
+  const res = new Response(), observed = observeSenderRace(value => { if (value === true) res.destroy(); });
+  const sender = observed.create(options()); let bodyReads = 0;
+  const sending = sender.send(res, () => ({ get body() { bodyReads++; return { mustNotEncode: true }; } }));
+  assert.equal(await sending, false); await tick();
+  assert.equal(observed.records[0].value, true); assert.equal(bodyReads, 0);
+  assert.equal(res.headCount, 0); assert.equal(res.chunks.length, 0); assert.equal(sender.status().reservedBytes, 0); noOwnedListeners(res);
+});
+
+test("a closed caller's late shared rejection stays shared and releases its retained admission once", async () => {
+  const shared = deferred(), sentinel = { sameLateError: true }, observed = observeSenderRace(), sender = observed.create(options()), res = new Response();
+  const other = shared.promise.then(() => assert.fail("must reject"), error => error);
+  const sending = sender.send(res, () => shared.promise); await tick(); res.destroy();
+  assert.equal(await sending, false); assert.equal(sender.status().reservedBytes, 1024);
+  shared.reject(sentinel); assert.equal(await other, sentinel); await tick();
+  assert.equal(observed.records[0].value, false); assert.deepEqual(observed.records[0].fulfilled, [false, false]);
+  assert.equal(sender.status().reservedBytes, 0); assert.equal(sender.status().activeResponses, 0); assert.equal(res.headCount, 0); noOwnedListeners(res);
+});
+
+test("an active asynchronous producer rejection preserves its original identity through the primitive race", async () => {
+  const shared = deferred(), sentinel = { originalAsyncError: true }, observed = observeSenderRace(), sender = observed.create(options()), res = new Response();
+  const sending = sender.send(res, () => shared.promise), rejected = assert.rejects(sending, error => error === sentinel);
+  shared.reject(sentinel); await rejected; await tick();
+  assert.equal(observed.records[0].error, sentinel); assert.deepEqual(observed.records[0].rejected, [sentinel]);
+  assert.equal(res.headCount, 0); assert.equal(sender.status().reservedBytes, 0); noOwnedListeners(res);
+});
+
 test("native JSON bytes preserve all escapes, unicode, undefined/holes and property order", () => {
   const value = { "2": 2, "10": 10, "": "empty key", 'a"\n': "\0\b\t\n\v\f\r\"\\/한글😀\ud800\udc00\ud800x\udc00\u2028", missing: undefined,
     noFunction() {}, noSymbol: Symbol("none"), values: [undefined, null, false, 0, -0, NaN, Infinity, , ""] };

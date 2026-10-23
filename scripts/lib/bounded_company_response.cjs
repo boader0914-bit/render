@@ -97,7 +97,7 @@ function createBoundedCompanyResponse({ maxResponseBytes = DEFAULT_RESPONSE_BYTE
     if (reservedBytes + maxResponseBytes > maxReservedBytes) throw fault("COMPANY_RESPONSE_BUSY", "자료 응답을 전달 중입니다. 잠시 후 다시 조회해 주세요.");
     reservedBytes += maxResponseBytes; activeResponses += 1;
     let released = false, stopped = false, completed = false, started = false;
-    let payload = null, preparationPending = true, producer = prepare;
+    let payload = null, preparedSlot = null, preparationPending = true, producer = prepare;
     prepare = null;
     let wake, wakeDrain;
     const done = new Promise(resolve => { wake = resolve; });
@@ -117,7 +117,7 @@ function createBoundedCompanyResponse({ maxResponseBytes = DEFAULT_RESPONSE_BYTE
       controller.abort();
       detach();
       wake(); wakeDrain?.(false); wakeDrain = null;
-      payload = null;
+      preparedSlot = null; payload = null;
     }
     function finish() { stop(true); }
     function close() { stop(); }
@@ -129,28 +129,33 @@ function createBoundedCompanyResponse({ maxResponseBytes = DEFAULT_RESPONSE_BYTE
     // A timed-out/closed caller must not retain a response or start encoding
     // when a shared read eventually finishes. Do not cancel that shared read.
     const production = Promise.resolve().then(() => {
-      if (stopped) return null;
+      if (stopped) return false;
       const invoke = producer; producer = null;
       return invoke();
     }).then(value => {
       preparationPending = false;
-      if (stopped) { release(); return null; }
-      return value;
+      if (stopped) { release(); return false; }
+      // Publish only into our clearable slot. Neither this promise nor the
+      // race below may fulfill with the descriptor/body graph: the pending
+      // completion branch can otherwise keep that fulfilled result reachable
+      // throughout a slow transmission even after a local is cleared.
+      preparedSlot = value;
+      return true;
     }, cause => {
       preparationPending = false;
-      if (stopped) { release(); return null; }
+      if (stopped) { release(); return false; }
       throw cause;
     });
     try {
-      let prepared = await Promise.race([production, done.then(() => null)]);
-      if (stopped) return false;
-      if (!prepared || unavailable(response)) return false;
-      if (Buffer.isBuffer(prepared.body)) payload = prepared.body;
-      else if (typeof prepared.body === "string") {
-        if (Buffer.byteLength(prepared.body) > maxResponseBytes) throw tooLarge();
-        payload = Buffer.from(prepared.body);
+      const produced = await Promise.race([production, done.then(() => false)]);
+      if (stopped || !produced) return false;
+      if (!preparedSlot || unavailable(response)) return false;
+      if (Buffer.isBuffer(preparedSlot.body)) payload = preparedSlot.body;
+      else if (typeof preparedSlot.body === "string") {
+        if (Buffer.byteLength(preparedSlot.body) > maxResponseBytes) throw tooLarge();
+        payload = Buffer.from(preparedSlot.body);
       } else {
-        const body = prepared.body;
+        const body = preparedSlot.body;
         // Only CPU/allocation preparation uses the shared analytical lease.
         // Network backpressure is awaited strictly after this promise settles.
         payload = await runWork(() => stopped ? null : boundedJsonBuffer(body, maxResponseBytes), {
@@ -159,10 +164,10 @@ function createBoundedCompanyResponse({ maxResponseBytes = DEFAULT_RESPONSE_BYTE
       }
       if (stopped || unavailable(response) || !payload) return false;
       if (payload.length > maxResponseBytes) throw tooLarge();
-      const statusCode = prepared.status ?? 200;
-      const responseHeaders = { ...headers(), "Content-Type": prepared.contentType || "application/json; charset=utf-8",
-        "Cache-Control": "no-store", ...prepared.extraHeaders };
-      prepared = null;
+      const statusCode = preparedSlot.status ?? 200;
+      const responseHeaders = { ...headers(), "Content-Type": preparedSlot.contentType || "application/json; charset=utf-8",
+        "Cache-Control": "no-store", ...preparedSlot.extraHeaders };
+      preparedSlot = null;
       response.writeHead(statusCode, responseHeaders); started = true;
       let offset = 0;
       while (!stopped && offset < payload.length) {
@@ -182,7 +187,7 @@ function createBoundedCompanyResponse({ maxResponseBytes = DEFAULT_RESPONSE_BYTE
       }
       throw cause;
     } finally {
-      stop(); detach(); producer = null; payload = null; response = null;
+      stop(); detach(); producer = null; preparedSlot = null; payload = null; response = null;
       // If the request closes during shared preparation, keep its admission
       // reserved until that producer settles. Otherwise disconnected callers
       // could repeatedly release/re-enter and accumulate unbounded live reads.
