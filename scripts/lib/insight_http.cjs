@@ -124,8 +124,8 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
       }
       else if(req.method==='GET' && tail==='/reports/briefing') {
         if(!analysis)throw fault('REPORT_NOT_READY','리포트 연결을 준비 중입니다.',503);
-        if([...url.searchParams.keys()].some(k=>k!=='ownId')||url.searchParams.getAll('ownId').length>1)throw fault('INVALID_FIELDS','등록한 내 매장만 선택해 주세요.');
-        json(res,200,await analysis.briefing(c,url.searchParams.get('ownId')||undefined));
+        if([...url.searchParams.keys()].some(k=>!['ownId','savedOnly'].includes(k))||url.searchParams.getAll('ownId').length>1||url.searchParams.getAll('savedOnly').length>1||url.searchParams.has('savedOnly')&&url.searchParams.get('savedOnly')!=='1')throw fault('INVALID_FIELDS','등록한 내 매장과 저장 자료 조회 방식만 선택해 주세요.');
+        json(res,200,await analysis.briefing(c,url.searchParams.get('ownId')||undefined,{savedOnly:url.searchParams.get('savedOnly')==='1'}));
       }
       else if (req.method === 'GET' && /^\/companies\/[a-zA-Z0-9_-]+\/collection$/.test(tail)) {
         if ([...url.searchParams.keys()].some(key => key !== 'month') || url.searchParams.getAll('month').length > 1) throw fault('INVALID_FIELDS','조회할 숙박월만 지정해 주세요.');

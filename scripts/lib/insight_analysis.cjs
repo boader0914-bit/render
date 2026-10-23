@@ -16,6 +16,9 @@ const sourceReasons={
   COMPANY_INTEGRATION_UPDATING:'해당 월의 통합 자료를 갱신하고 있어 이전 관측값을 표시합니다.',
   COMPANY_INTEGRATION_FAILED:'해당 월의 통합 자료 계산 또는 저장 확인에 실패했습니다.',
   COMPANY_OBSERVATION_INSUFFICIENT:'요청한 기간의 객실 수량을 확인할 수 있는 관측 자료가 없습니다.',
+  SAVED_COMPANY_SOURCE_INVALID:'저장된 월별 자료의 대상 또는 형식을 확인하지 못했습니다.',
+  SAVED_COMPANY_SOURCE_UNAVAILABLE:'저장된 월별 자료를 읽지 못했습니다.',
+  COMPANY_CAPACITY_REVIEW_CHANGED:'현재 객실 기준과 저장 자료가 일치하는지 확인할 수 없어 다시 계산해야 합니다.',
   COMPANY_DETAIL_SOURCE_CHANGED:'업체 자료가 변경되어 최신 결과를 다시 확인해야 합니다.',
   COMPANY_DETAIL_MASTER_INVALID:'저장된 업체 기본자료의 형식을 확인하지 못했습니다.',
   COMPANY_DETAIL_SOURCE_UNAVAILABLE:'업체 관측 자료를 읽지 못했습니다.',
@@ -149,7 +152,7 @@ function buildBriefing(companies,regions,{today,ownId}) {
     dataQuality:{status:[...companies,...regions].some(row=>row.sourceIssues?.length)?'partial':'complete',issues:[...companies,...regions].flatMap(row=>row.sourceIssues||[])},
     definitions:['저장 자료만 읽으며 새로운 수집을 실행하지 않습니다. 실제 결제 매출이 아닌 예약·방막기 관측 기반 추정입니다.','경쟁 비교는 같은 숙박일·같은 한국시간 관측일, 최근 7일 이내의 정상 수량만 사용합니다. 7일 미만 공통 표본은 행동 판단을 보류합니다.','내 매장과 경쟁업체의 매출을 합산하지 않습니다. 지역은 실제 소재지와 등록 관심지역을 구분합니다.','이 화면은 현재 상황 브리핑이며 발행된 주간·월간 보고서가 아닙니다.']};
 }
-function createInsightAnalysis({catalog,collectionResults,readRegionContext,regionPreparation=null,readRegionLocation=async()=>null,now=()=>Date.now()}) {
+function createInsightAnalysis({catalog,collectionResults,savedCollectionResults,readRegionContext,regionPreparation=null,readRegionLocation=async()=>null,now=()=>Date.now()}) {
   const today=()=>new Date(now()+9*3600000).toISOString().slice(0,10);
   const previousMonth=()=>new Date(Date.UTC(Number(today().slice(0,4)),Number(today().slice(5,7))-2,1)).toISOString().slice(0,7);
   async function region(customer,regionKey,month=previousMonth(),data) {
@@ -172,12 +175,12 @@ function createInsightAnalysis({catalog,collectionResults,readRegionContext,regi
     return {regionKey,month,job:job?{id:txt(job.id),status:txt(job.status),reused:job.reused===true,updatedAt:txt(job.updatedAt),finishedAt:txt(job.finishedAt),progress:{completed:Number(job.progress?.completed)||0,total:6},
       steps:(job.steps||[]).map(s=>({key:txt(s.key),label:txt(s.label),status:txt(s.status),errorCode:txt(s.errorCode),observedMonths:num(s.observedMonths),expectedMonths:num(s.expectedMonths)}))}:null};
   }
-  async function briefing(customer,ownId) {
+  async function briefing(customer,ownId,{savedOnly=false}={}) {
     const data=await catalog(),rels=customer.relations.filter(active),own=rels.filter(r=>r.kind==='own');
     const reportDay=today(),reportEnd=shift(reportDay,29),startMonth=reportDay.slice(0,7),endMonth=reportEnd.slice(0,7),regionMonth=previousMonth();
     ownId=ownId||own[0]?.companyId||null;
     if(ownId&&!own.some(r=>r.companyId===ownId))throw fault('NOT_FOUND','등록한 내 매장을 선택해 주세요.',404);
-    const companies=[];
+    const companies=[],sourceTimes=[],reader=savedOnly?savedCollectionResults:collectionResults;
     for(const rel of rels.filter(r=>r.kind==='competitor'||r.companyId===ownId)) {
       const c=data.companies.find(c=>c.companyId===rel.companyId);if(!c)continue;
       const sourceDays=[],sourceIssues=[];
@@ -185,8 +188,9 @@ function createInsightAnalysis({catalog,collectionResults,readRegionContext,regi
         const issue=code=>sourceIssues.push(sourceIssue({scope:'company',companyId:c.companyId,name:c.name,month,
           period:{start:[reportDay,month+'-01'].sort().at(-1),end:[reportEnd,monthEnd(month)].sort()[0]},code}));
         try {
-          const detail=await collectionResults?.companyDetail(c.companyId,{month});
+          const detail=await reader?.companyDetail(c.companyId,{month,...(savedOnly?{company:c}:{})});
           if(!detail){issue('COMPANY_DETAIL_NOT_FOUND');continue;}
+          if(savedOnly&&Number.isFinite(Date.parse(detail.integrated?.calculatedAt)))sourceTimes.push(detail.integrated.calculatedAt);
           const integrated=Boolean(detail.integrated&&!detail.legacyObservationView);
           const selectedDays=(detail.current?.daily||[]).filter(d=>d.date>=reportDay&&d.date<=reportEnd&&(!integrated||d.date.startsWith(month+'-')));
           sourceDays.push(...selectedDays);
@@ -213,7 +217,9 @@ function createInsightAnalysis({catalog,collectionResults,readRegionContext,regi
       catch(error){const r=data.regions.find(r=>r.id===key);if(r){const issue=sourceIssue({scope:'region',regionId:key,name:r.label,month:regionMonth,period:{start:regionMonth+'-01',end:monthEnd(regionMonth)},code:error?.code});
         regions.push({region:{id:r.id,label:r.label},month:regionMonth,source:'datalab_saved',networkAttempted:false,sources:[],availableSources:0,sourceStatus:'unavailable',sourceIssues:[issue],warnings:[issue.reason]});}}
     }
-    return buildBriefing(companies,regions,{today:reportDay,ownId});
+    const report=buildBriefing(companies,regions,{today:reportDay,ownId});
+    if(savedOnly){sourceTimes.sort();report.calculation={mode:'saved_only',status:'pending',oldestSourceCalculatedAt:sourceTimes[0]||null,latestSourceCalculatedAt:sourceTimes.at(-1)||null};}
+    return report;
   }
   return {region,briefing,preparation};
 }

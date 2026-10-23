@@ -112,6 +112,9 @@ test('real DataLab registration records the actual Insight consent, exposes cust
   assert.equal((await internal('/regions/kr_gyeonggi_gapyeong/analysis',null,customer.token)).status,404);
   const briefingReply=await internal('/reports/briefing',null,customer.token);assert.equal(briefingReply.status,200);
   const briefing=await briefingReply.json();assert.equal(briefing.published,false);assert.equal(briefing.regions[0].region.id,'kr_gyeongnam_sancheong');assert.ok(briefing.actions.some(a=>a.key==='register'));
+  const savedBriefingReply=await internal('/reports/briefing?savedOnly=1',null,customer.token);assert.equal(savedBriefingReply.status,200);
+  const savedBriefing=await savedBriefingReply.json();assert.deepEqual(savedBriefing.period,briefing.period);assert.equal(savedBriefing.calculation.mode,'saved_only');assert.equal(savedBriefing.calculation.status,'pending');
+  assert.equal(savedBriefing.companies[0].companyId,'cmp_test');assert.equal(savedBriefing.regions[0].networkAttempted,false);assert.equal(savedBriefing.published,false);
   const adminLogin=await fetch(`${origin}/api/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'fixture-admin',password:'FixtureAdmin2026!'})});
   assert.equal(adminLogin.status,200);
   const cookie=adminLogin.headers.get('set-cookie').split(';')[0];

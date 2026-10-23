@@ -5,6 +5,7 @@ const { createInsightHttp } = require('./insight_http.cjs');
 const { createInsightPreparation, insightCollectionWorkerKey } = require('./insight_preparation.cjs');
 const { createCollectionResults } = require('./insight_collection_results.cjs');
 const { createInsightAnalysis } = require('./insight_analysis.cjs');
+const { createInsightSavedReportSources } = require('./insight_saved_report_sources.cjs');
 const { POLICY_VERSION, insightPolicies } = require('./insight_policy.cjs');
 const { createInsightAdminStore } = require('./insight_admin_store.cjs');
 const { createInsightAdminProvisioning } = require('./insight_admin_provisioning.cjs');
@@ -49,7 +50,8 @@ function createInsightIntegration({ dataDir, readCatalog, readMembers, authentic
     }) };
   }
   const collectionResults = readEvidence ? createCollectionResults({catalog,readEvidence,readCompanyDetail,readIntegrated}) : null;
-  const analysis=createInsightAnalysis({catalog,collectionResults,readRegionContext,readRegionLocation,regionPreparation});
+  const savedCollectionResults=createInsightSavedReportSources({dataDir});
+  const analysis=createInsightAnalysis({catalog,collectionResults,savedCollectionResults,readRegionContext,readRegionLocation,regionPreparation});
   const preparationBridge = collectorRequests && verifyStored ? createInsightPreparation({store,catalog,collectorRequests,verifyStored,readPostprocess,findReusable:collectionResults?.reusable,workerKey}) : null;
   const signup = { enabled: env.INSIGHT_SIGNUP_ENABLED === '1', termsVersion: env.INSIGHT_TERMS_VERSION || POLICY_VERSION, privacyVersion: env.INSIGHT_PRIVACY_VERSION || POLICY_VERSION, termsUrl: env.INSIGHT_TERMS_URL || '/terms', privacyUrl: env.INSIGHT_PRIVACY_URL || '/privacy' };
   const handlers = createInsightHttp({ store, serviceToken, catalog, authenticateMember, registerMember, checkUsername, requireAdmin, preparationBridge, collectionResults, analysis,
