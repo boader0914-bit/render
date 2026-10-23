@@ -33,7 +33,7 @@ const { createCompanyIntegratedCatalog, createCompanyIntegratedCatalogRevision, 
 const { createCompanyIntegratedTargets } = require("./lib/company_integrated_targets.cjs");
 const { createCompanyCapacityRegistry } = require("./lib/company_capacity_registry.cjs");
 const { aggregateFields: companyBootstrapAggregateFields, compactCompanyInventory, createCompanyBootstrapStore, acceptsGzip } = require("./lib/company_bootstrap.cjs");
-const { createCompanyDetailStore } = require("./lib/company_detail_store.cjs");
+const { createCompanyDetailStore, readScopedCompanyMaster } = require("./lib/company_detail_store.cjs");
 const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
 const { compactMonthlyCapacityCompany } = require("./lib/monthly_company_source_catalog.cjs");
 const { createMonthlyReportContext } = require("./lib/monthly_report_context.cjs");
@@ -807,12 +807,25 @@ const collectionRotationScheduler = createCollectionRotationScheduler({
   }
 });
 const collectorRequests = createCollectorRequests({dataDir:DATA_DIR,run:runCrawler,preflight:payload=>assertCollectorReady(payload.workerKey,true)});
+const readInsightCompanyDetail = require('./lib/insight_company_detail_reader.cjs').createInsightCompanyDetailReader({
+  dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR, runWork: runAnalyticalWork,
+  projectionVersion: crypto.createHash("sha256").update(fs.readFileSync(__filename))
+    .update(fs.readFileSync(path.join(__dirname, "lib", "insight_company_detail_reader.cjs")))
+    .update(fs.readFileSync(path.join(__dirname, "lib", "company_detail_store.cjs")))
+    .update(fs.readFileSync(path.join(__dirname, "lib", "company_master_stream.cjs")))
+    .update(fs.readFileSync(path.join(__dirname, "inventory_estimation.cjs")))
+    .update(fs.readFileSync(path.join(__dirname, "lib", "inventory_manual_corrections.cjs")))
+    .update(fs.readFileSync(path.join(__dirname, "verified_room_inventory.json"))).digest("hex"),
+  dayKey: () => kstDate(0), identityForCompany: companyHistoryDailyIdentity,
+  runIdsForCompany: companyProductSourceRunIds, summarize: summarizeCompanyMasterDetail,
+  integrationConnected: true
+});
 const insightIntegration = require('./lib/insight_integration.cjs').createInsightIntegration({
   readPostprocess: runId => collectionPostprocessQueue.status({ runId }),
   dataDir: DATA_DIR, readCatalog: monthlyReportSources.catalog, readMembers: readB2BMemberStore,
   authenticateMember: authenticateB2BMember, registerMember: (payload, insightConsent) => registerB2BMember(payload, { insightConsent }), checkUsername: checkSignupUsernameAvailability, policyContext: publicPageContext(), requireAdmin: requireAdminSession, collectorRequests,
   readEvidence: readInsightCompanyEvidence,
-  readCompanyDetail: companyId => summarizeCompanyMasterDetail(companyId, { strictIdentity:true, includeObservationFlow:true }),
+  readCompanyDetail: readInsightCompanyDetail,
   readIntegrated: (companyId, options = {}) => companyIntegratedDb.get(companyId, options),
   readRegionContext: readInsightRegionContext,
   regionPreparation:insightRegionPreparation,
@@ -825,8 +838,8 @@ const insightIntegration = require('./lib/insight_integration.cjs').createInsigh
     const codes=String(card.primaryCluster||'').split('+').map(c=>c.trim());
     return {...card,regionKey,source:'데이터랩 입지 판단 사전 · 통계가 아닌 참고 해석',updatedAt:dictionary.generatedAt,clusters:(dictionary.clusters||[]).filter(c=>codes.includes(c.code))};
   },
-  verifyStored: async (job, runId) => {
-    const master = await readCompanyMaster();
+  verifyStored: (job, runId) => runAnalyticalWork(async () => {
+    const master = await readScopedCompanyMaster(COMPANY_MASTER_FILE, job.companyId);
     const company = master.companies?.[job.companyId];
     if (!company || !company.runIds?.includes(runId)) return false;
     const evidence = await readInsightCompanyEvidence(job.companyId,{runId});
@@ -835,10 +848,14 @@ const insightIntegration = require('./lib/insight_integration.cjs').createInsigh
     return manifest.keyword === job.keyword && manifest.searchMode === 'company' && manifest.checkIn === job.scope.checkIn
       && manifest.checkOut === job.scope.checkOut && Number(manifest.bookingRangeDays) >= job.scope.bookingRangeDays
       && manifest.dayUseMode === job.scope.dayUseMode && (company.placeIds || []).includes(job.placeIds[0]);
-  }
+  }, { priority: "foreground", kind: "insight-stored-receipt" })
 });
 async function readInsightCompanyEvidence(companyId, { runId = null, scope = null, observationDay = null } = {}) {
-  const company = (await readCompanyMaster()).companies?.[companyId];
+  return runAnalyticalWork(() => readInsightCompanyEvidenceOwned(companyId, { runId, scope, observationDay }),
+    { priority: "foreground", kind: "insight-company-evidence" });
+}
+async function readInsightCompanyEvidenceOwned(companyId, { runId = null, scope = null, observationDay = null } = {}) {
+  const company = (await readScopedCompanyMaster(COMPANY_MASTER_FILE, companyId)).companies?.[companyId];
   if (!company) return null;
   const runs = await listRuns();
   const candidates = runId ? [{ id: runId }] : runs.filter(run => company.runIds?.includes(run.id))
@@ -848,7 +865,7 @@ async function readInsightCompanyEvidence(companyId, { runId = null, scope = nul
     if (observationDay && (!Number.isFinite(observedAt) || new Date(observedAt + 9 * 3600000).toISOString().slice(0,10) !== observationDay)) continue;
     const data = await loadRun(candidate.id, { skipCompanyMaster:true, skipHistory:true, skipTraffic:true,
       skipTourismVisitors:true, skipTourismVisitorHistory:true, skipTourismDemandStrengthHistory:true,
-      skipTourismResourceDemandHistory:true, skipTourismDiversityHistory:true }).catch(() => null);
+      skipTourismResourceDemandHistory:true, skipTourismDiversityHistory:true, capacityCompanies:[company] }).catch(() => null);
     if (!data) continue;
     const matches = (data.availability?.items || []).filter(item => companyProductAvailabilityMatch(company, item));
     if (matches.length !== 1) continue;

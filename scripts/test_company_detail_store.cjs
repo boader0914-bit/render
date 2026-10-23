@@ -167,3 +167,18 @@ test("run references cannot escape the outputs directory even through dot path c
     await assert.rejects(() => store.get("one"), { code: "COMPANY_DETAIL_SOURCE_UNAVAILABLE" });
   }
 });
+
+test("a dedicated read-model namespace cannot overwrite the default admin cache or escape its directory", async t => {
+  const f = await fixture(t);
+  const admin = await createCompanyDetailStore(f.options).get("one");
+  const adminDirectory = path.join(f.dataDir, "company_master", "detail_read_models");
+  const adminFile = path.join(adminDirectory, (await fs.readdir(adminDirectory))[0]), before = await fs.readFile(adminFile);
+  const scoped = createCompanyDetailStore({ ...f.options, cacheNamespace: "insight_detail_read_models_v1_integrated",
+    build: async (id, sources) => ({ ...(await f.options.build(id, sources)), dedicated: true }) });
+  assert.equal((await scoped.get("one")).data.dedicated, true);
+  assert.deepEqual(await fs.readFile(adminFile), before);
+  assert.deepEqual((await createCompanyDetailStore(f.options).get("one")).data, admin.data);
+  for (const cacheNamespace of ["", ".", "..", "../other", "..\\other", "/absolute", "a/b", "a\\b", "a\u0000b", "a".repeat(81), null]) {
+    assert.throws(() => createCompanyDetailStore({ ...f.options, cacheNamespace }), { code: "COMPANY_DETAIL_CACHE_NAMESPACE_INVALID" });
+  }
+});

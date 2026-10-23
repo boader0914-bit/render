@@ -46,11 +46,13 @@ async function readScopedCompanyHistory(file, company, matches, { stream = filen
 
 function createCompanyDetailStore({ dataDir, outputsDir, projectionVersion, build, matchesObservation, runIdsForCompany,
   dayKey = () => new Date(Date.now() + 32400000).toISOString().slice(0, 10), fileSystem = fs,
-  masterReader = readScopedCompanyMaster, historyReader = readScopedCompanyHistory, maxMemoryBytes = 16 * 1024 * 1024 } = {}) {
+  masterReader = readScopedCompanyMaster, historyReader = readScopedCompanyHistory, maxMemoryBytes = 16 * 1024 * 1024,
+  cacheNamespace = "detail_read_models" } = {}) {
   need(dataDir && projectionVersion && typeof build === "function" && typeof matchesObservation === "function" && typeof runIdsForCompany === "function");
+  need(typeof cacheNamespace === "string" && /^[a-z][a-z0-9_-]{0,79}$/.test(cacheNamespace), "COMPANY_DETAIL_CACHE_NAMESPACE_INVALID");
   const masterFile = path.join(dataDir, "company_master", "companies.json");
   const historyFile = path.join(dataDir, "history", "observations.jsonl");
-  const cacheDir = path.join(dataDir, "company_master", "detail_read_models");
+  const cacheDir = path.join(dataDir, "company_master", cacheNamespace);
   const outputs = path.resolve(outputsDir || path.join(dataDir, "outputs"));
   const active = new Map(), memory = new Map(); let memoryBytes = 0;
   function remember(id, entry) {
