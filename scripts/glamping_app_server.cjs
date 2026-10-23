@@ -34,6 +34,7 @@ const { createCompanyIntegratedTargets } = require("./lib/company_integrated_tar
 const { createCompanyCapacityRegistry } = require("./lib/company_capacity_registry.cjs");
 const { aggregateFields: companyBootstrapAggregateFields, compactCompanyInventory, createCompanyBootstrapStore, acceptsGzip } = require("./lib/company_bootstrap.cjs");
 const { createCompanyDetailStore } = require("./lib/company_detail_store.cjs");
+const { createBoundedCompanyResponse, unavailable: responseUnavailable } = require("./lib/bounded_company_response.cjs");
 const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
 const { compactMonthlyCapacityCompany } = require("./lib/monthly_company_source_catalog.cjs");
 const { createMonthlyReportContext } = require("./lib/monthly_report_context.cjs");
@@ -5588,6 +5589,8 @@ function securityHeaders() {
 }
 
 function send(res, status, body, contentType = "application/json; charset=utf-8", extraHeaders = {}) {
+  // A disconnect or an error after a response began cannot start a second body.
+  if (responseUnavailable(res)) return;
   const payload = typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body);
   res.writeHead(status, {
     ...securityHeaders(),
@@ -5597,6 +5600,13 @@ function send(res, status, body, contentType = "application/json; charset=utf-8"
   });
   res.end(payload);
 }
+
+// The byte reservation covers preparation and network ownership separately
+// from analytical work. A slow client never holds the shared analysis lease.
+const companyResponse = createBoundedCompanyResponse({
+  runWork: (operation, options) => runAnalyticalWork(operation, options),
+  headers: securityHeaders
+});
 
 function sendHead(res, status, contentType = "application/json; charset=utf-8", extraHeaders = {}) {
   res.writeHead(status, {
@@ -19570,23 +19580,25 @@ async function route(req, res) {
 
     if (req.method === "GET" && reqUrl.pathname === "/api/company-master/bootstrap") {
       if (!requireAdminSession(session, req, res)) return;
-      let result;
-      try { result = await companyBootstrapStore.get(); }
-      catch (cause) {
-        const error = new Error(cause?.code === "COMPANY_BOOTSTRAP_SOURCE_CHANGED"
-          ? "업체 기본자료가 변경되고 있습니다. 다시 조회해 주세요."
-          : "업체 기본자료를 불러오지 못했습니다. 연결 상태를 확인한 뒤 다시 조회해 주세요.");
-        error.statusCode = cause?.statusCode === 503 ? 503 : 500;
-        error.code = cause?.code || "COMPANY_BOOTSTRAP_UNAVAILABLE";
-        throw error;
-      }
       const gzip = acceptsGzip(req.headers["accept-encoding"]);
-      const bytes = gzip ? result.gzip : result.json;
-      return send(res, 200, bytes, "application/json; charset=utf-8", {
-        ...(gzip ? { "Content-Encoding": "gzip" } : {}),
-        "Content-Length": bytes.length,
-        "Vary": "Accept-Encoding",
-        "X-Company-Bootstrap-Cache": result.cacheStatus
+      return await companyResponse.send(res, async () => {
+        let result;
+        try { result = await companyBootstrapStore.get(); }
+        catch (cause) {
+          const error = new Error(cause?.code === "COMPANY_BOOTSTRAP_SOURCE_CHANGED"
+            ? "업체 기본자료가 변경되고 있습니다. 다시 조회해 주세요."
+            : "업체 기본자료를 불러오지 못했습니다. 연결 상태를 확인한 뒤 다시 조회해 주세요.");
+          error.statusCode = cause?.statusCode === 503 ? 503 : 500;
+          error.code = cause?.code || "COMPANY_BOOTSTRAP_UNAVAILABLE";
+          throw error;
+        }
+        const bytes = gzip ? result.gzip : result.json;
+        return { status: 200, body: bytes, extraHeaders: {
+          ...(gzip ? { "Content-Encoding": "gzip" } : {}),
+          "Content-Length": bytes.length,
+          "Vary": "Accept-Encoding",
+          "X-Company-Bootstrap-Cache": result.cacheStatus
+        } };
       });
     }
 
@@ -19599,11 +19611,13 @@ async function route(req, res) {
       if (!requireAdminSession(session, req, res)) return;
       const companyId = String(reqUrl.searchParams.get("companyId") || "").trim();
       if (!companyId) return send(res, 400, { error: "companyId가 필요합니다." });
-      const detail = await companyDetailStore.get(companyId);
-      if (!detail.data) return send(res, 404, { error: "업체를 찾을 수 없습니다." });
-      return send(res, 200, detail.data, "application/json; charset=utf-8", {
-        "X-Company-Detail-Cache": detail.cacheStatus,
-        "X-Company-Detail-Prepared-At": detail.preparedAt
+      return await companyResponse.send(res, async () => {
+        const detail = await companyDetailStore.get(companyId);
+        if (!detail.data) return { status: 404, body: { error: "업체를 찾을 수 없습니다." } };
+        return { status: 200, body: detail.data, extraHeaders: {
+          "X-Company-Detail-Cache": detail.cacheStatus,
+          "X-Company-Detail-Prepared-At": detail.preparedAt
+        } };
       });
     }
 

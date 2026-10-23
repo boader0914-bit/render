@@ -267,6 +267,11 @@ function createMonthlyCompanySourceCatalog({ dataDir, readRevision, loadFullCata
       copied = sharedMetadata.get(entry);
       if (!copied) {
         copied = freezeJson(clone({ companies: entry.value.companies, regions: entry.value.regions, runs: entry.value.runs, rawCompanies: entry.value.rawCompanies }));
+        // Keep one retained metadata tree, not both the original prepared
+        // graph and its independent frozen JSON copy. Only this private
+        // catalog container changes: never freeze or mutate loadFullCatalog's
+        // arrays/objects, and keep the record checksums and saved bytes intact.
+        Object.assign(entry.value, copied);
         sharedMetadata.set(entry, copied); counters.sharedMetadataBuilds++;
       }
       counters.sharedMetadataReads++;
