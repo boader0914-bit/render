@@ -199,27 +199,12 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     finally { if (optionsInFlight === task) optionsInFlight = null; }
   }
   const options = readOptions;
-  async function readSources(request, includeCatalog, options = {}) {
+  async function readSourceData(request, includeCatalog, options, data, assertAtReturn = true) {
     const { includeContext = true } = options, checkpoint = checkpointFor(options);
-    sourceMetrics.sourceReads++;
-    let data;
-    if (companySourceCatalog) {
-      // Every analytical scope shares the same verified prepared generation.
-      // Broad scopes keep compact identities/capacity only; original fallback
-      // inventories are loaded one company at a time below, never reconstructed
-      // from the compact maximum-quantity witness.
-      try { data = request.type === "company"
-        ? await companySourceCatalog.readCompanyCatalog(request.targetId, { checkpoint })
-        : await companySourceCatalog.readCatalog({ checkpoint });
-        sourceMetrics.preparedCatalogReads++;
-        sourceMetrics.preparedCatalogReadsByScope[Object.hasOwn(sourceMetrics.preparedCatalogReadsByScope, request.type) ? request.type : "other"]++;
-        if (request.type === "company") sourceMetrics.companyProjectionReads++;
-      }
-      catch { throw sourceError(); }
-    } else data = await readCatalog({ checkpoint });
     // This capability is private to one serial source read, not a timed or
-    // global freshness cache. The final fresh assert below is mandatory even
-    // after a cache hit, fallback, no-target read or recovered context error.
+    // global freshness cache. The final fresh assert (here or in the owning
+    // catalog continuation) remains mandatory after a cache hit, fallback,
+    // no-target read or recovered context error.
     let sourceReadActive = true;
     const sourceReadValidationBoundary = useSourceReadValidationBoundary && data._companySource
       ? Object.freeze({ owner: data._companySource, revision: data._companySource.revision, isActive: () => sourceReadActive }) : null;
@@ -417,9 +402,49 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
       warnings, sourceDiagnostics: { unmatchedCompanyRows, duplicatePlaceCompanies },
       globalWarnings, globalDiagnostics: { malformedHistoryLines, unmatchedCompanyRows: globalUnmatchedCompanyRows, duplicatePlaceCompanies: globalDuplicatePlaceCompanies,
         ...(request.type === "region" ? { unmappedRegionCompanies } : {}) }, context };
-    if (data._companySource) { try { await data._companySource.assertCurrent(); } catch { throw sourceError(); } }
+    if (assertAtReturn && data._companySource) { try { await data._companySource.assertCurrent(); } catch { throw sourceError(); } }
     return includeCatalog ? { source, catalog: data } : source;
     } finally { sourceReadActive = false; }
+  }
+  async function readSources(request, includeCatalog, options = {}) {
+    const checkpoint = checkpointFor(options);
+    sourceMetrics.sourceReads++;
+    const acquired = () => {
+      sourceMetrics.preparedCatalogReads++;
+      sourceMetrics.preparedCatalogReadsByScope[Object.hasOwn(sourceMetrics.preparedCatalogReadsByScope, request.type) ? request.type : "other"]++;
+      if (request.type === "company") sourceMetrics.companyProjectionReads++;
+    };
+    if (companySourceCatalog && useSourceReadValidationBoundary) {
+      // The catalog owns both full freshness boundaries of this one read. Its
+      // private acquisition token cannot escape or suppress a later read's
+      // assertion. Only caller processing errors keep their original identity;
+      // acquisition/final validation failures retain the adapter's error shape.
+      let consumerFailed = false, consumerFailure;
+      const consume = async data => {
+        acquired();
+        try { return await readSourceData(request, includeCatalog, options, data, false); }
+        catch (error) { consumerFailed = true; consumerFailure = error; throw error; }
+      };
+      try {
+        return request.type === "company"
+          ? await companySourceCatalog.withCompanyCatalog(request.targetId, consume, { checkpoint })
+          : await companySourceCatalog.withCatalog(consume, { checkpoint });
+      } catch (error) {
+        if (consumerFailed) throw consumerFailure;
+        throw sourceError();
+      }
+    }
+    let data;
+    if (companySourceCatalog) {
+      // The generic path retains its historical immediate catalog assertion.
+      try {
+        data = request.type === "company"
+          ? await companySourceCatalog.readCompanyCatalog(request.targetId, { checkpoint })
+          : await companySourceCatalog.readCatalog({ checkpoint });
+        acquired();
+      } catch { throw sourceError(); }
+    } else data = await readCatalog({ checkpoint });
+    return readSourceData(request, includeCatalog, options, data);
   }
   function queueSourceRead(request, includeCatalog = false, options = {}) {
     // All consumers (including background company materialization) share this

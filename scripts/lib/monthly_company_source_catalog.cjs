@@ -94,6 +94,7 @@ function createMonthlyCompanySourceCatalog({ dataDir, readRevision, loadFullCata
   const codeVersion = sha(native.readFileSync(__filename)), schemaVersion = 1;
   const calculationVersion = sha(JSON.stringify([version, codeVersion, Function.prototype.toString.call(projectCapacityCompany)]));
   let memory = null, serial = Promise.resolve();
+  const continuationTokens = new WeakSet();
   const sharedMetadata = new WeakMap();
   const counters = { builds: 0, hits: 0, memoryHits: 0, savedHits: 0, revisionReads: 0, buildRetries: 0, fullCatalogReads: 0, companyBodyReads: 0,
     companyBodyBytes: 0, generationWrittenBytes: 0, compactBytes: 0, cleanupFailures: 0, retainedFullCompanies: 0, maximumSelectedCompanyBytes: 0,
@@ -249,15 +250,17 @@ function createMonthlyCompanySourceCatalog({ dataDir, readRevision, loadFullCata
     counters.maximumSelectedCompanyBytes = Math.max(counters.maximumSelectedCompanyBytes, content.bytes.length);
     return value.company;
   }
-  async function readOwned(companyId, options) {
+  async function readOwned(companyId, options, continuationToken = null) {
+    // Only withCatalogOwned can mint this one-use acquisition capability. It
+    // owns the later full assertion before publishing its continuation result.
+    const continued = continuationToken !== null;
+    if (continued) need(continuationTokens.delete(continuationToken), "MONTHLY_COMPANY_SOURCE_BOUNDARY_INVALID");
     const current = await revision(); let entry = await saved();
     if (!entry || entry.pointer.sourceRevision !== current || entry.pointer.calculationVersion !== calculationVersion) entry = await build(options, entry);
     else counters.hits++;
     const assertCurrent = async () => { if (await revision() !== entry.pointer.sourceRevision) fail("MONTHLY_COMPANY_SOURCE_CHANGED"); };
-    // The opted-in source adapter verifies the acquired generation at this
-    // method's end and again before returning the complete source. Its initial
-    // fresh revision already precedes this lookup, so an extra scan here adds
-    // no boundary. Keep the historical generic factory contract by default.
+    // The opted-in adapter owns the source-read boundaries. Keep this extra
+    // pre-copy assertion for the historical generic factory contract.
     if (!useSourceReadValidationBoundary) await assertCurrent();
     let copied;
     if (shareFrozenCatalogMetadata) {
@@ -272,13 +275,30 @@ function createMonthlyCompanySourceCatalog({ dataDir, readRevision, loadFullCata
     // compact JSON values are immutable/shared; selected full bodies stay fresh.
     const data = { companies: copied.companies, regions: copied.regions, runs: copied.runs, rawCompanies: new Map(copied.rawCompanies) };
     if (companyId !== null && entry.value.records[companyId]) data.rawCompanies.set(companyId, await readCompany(entry, companyId));
-    await assertCurrent();
     Object.defineProperty(data, "_companySource", { enumerable: false, value: { revision: sha(JSON.stringify([calculationVersion, entry.pointer.sourceRevision])),
       readCompany: id => readCompany(entry, id), assertCurrent } });
+    if (!continued) await assertCurrent();
     return data;
   }
+  async function withCatalogOwned(companyId, consume, options) {
+    if (typeof consume !== "function") throw new TypeError("A company-source continuation is required");
+    const token = Object.freeze({}); continuationTokens.add(token);
+    try {
+      // Release catalog serialization before invoking caller work. A nested
+      // catalog read must never wait behind a callback holding this same slot.
+      const data = await schedule(() => readOwned(companyId, options, token));
+      const assertCurrent = data._companySource.assertCurrent;
+      const value = await consume(data);
+      // Keep the actual entry validator private even if a generic callback
+      // replaces a public owner method while it consumes the acquired data.
+      await assertCurrent();
+      return value;
+    } finally { continuationTokens.delete(token); }
+  }
   return { readCompanyCatalog: (companyId, options = {}) => schedule(() => readOwned(String(companyId), options)),
-    readCatalog: (options = {}) => schedule(() => readOwned(null, options)), stats: () => ({ ...counters }),
+    readCatalog: (options = {}) => schedule(() => readOwned(null, options)),
+    withCompanyCatalog: (companyId, consume, options = {}) => withCatalogOwned(String(companyId), consume, options),
+    withCatalog: (consume, options = {}) => withCatalogOwned(null, consume, options), stats: () => ({ ...counters }),
     directory, calculationVersion };
 }
 

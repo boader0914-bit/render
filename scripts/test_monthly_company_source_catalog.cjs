@@ -429,8 +429,8 @@ test("only explicit source-read opt-in removes the intermediate catalog assertio
   await optedIn.loadSources(request);
   before = optedIn.sourceReadMetrics().companyCatalog.revisionReads;
   await optedIn.loadSources(request);
-  assert.equal(optedIn.sourceReadMetrics().companyCatalog.revisionReads - before, 3,
-    "opt-in retains initial revision, catalog-end revision and source-end revision");
+  assert.equal(optedIn.sourceReadMetrics().companyCatalog.revisionReads - before, 2,
+    "the owning continuation retains acquisition and final full source inspections");
   assert.throws(() => f.make(true, { useSourceReadValidationBoundary: "true" }), TypeError);
 });
 
@@ -478,7 +478,7 @@ test("one validated source boundary reduces repeated cache inspections while pre
   const actual = await optedIn.loadSourcesWithCatalog(request);
   const boundaryChecks = optedIn.sourceReadMetrics().companyCatalog.revisionReads - before;
   assert.equal(genericChecks, 5, "three catalog assertions, one cache-hit assertion and one final source assertion");
-  assert.equal(boundaryChecks, 3, "one acquisition, one catalog-end and one final source inspection");
+  assert.equal(boundaryChecks, 2, "one acquisition and one final owning-continuation inspection");
   assert.deepEqual(json(actual), json(expected), "the complete source/catalog contract is unchanged");
   for (const [type, targetId] of [["region", "pocheon"], ["keyword", "포천글램핑"], ["industry", "__industry_all__"]]) {
     const scoped = { ...request, type, targetId };
