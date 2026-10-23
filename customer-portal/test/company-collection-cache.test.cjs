@@ -426,8 +426,22 @@ test('a transient permission-read failure retains an unexpired persisted result 
 });
 
 test('a failed source refresh retains the persisted result without polling or manufacturing freshness',async()=>{
-  const h=harness(),saved=persisted();h.context();h.mount();saved.data.responseCache.refreshFailed=true;saved.data.responseCache.refreshing=true;
+  const h=harness(),saved=persisted();h.context();h.mount();saved.data.responseCache.refreshFailed=true;saved.data.responseCache.refreshing=false;
   await h.resolve(0,saved.data);assert.equal(h.result(),'a|2026-10|persisted');assert.match(h.freshness(),/최신 확인 실패.*마지막 확인/);assert.equal(h.timers.size,0);
+});
+
+test('a real company refresh takes precedence over its prior failure and replaces saved data automatically',async()=>{
+  const h=harness(),saved=persisted();saved.data.responseCache.refreshFailed=true;saved.data.responseCache.refreshing=true;h.context();h.mount();
+  await h.resolve(0,saved.data);assert.equal(h.result(),'a|2026-10|persisted');assert.match(h.freshness(),/최신 자료 확인 중.*마지막 확인/);assert.doesNotMatch(h.freshness(),/최신 확인 실패/);assert.equal([...h.timers.values()][0].ms,5000);
+  assert.doesNotMatch(h.elements.get('#collection-progress').innerHTML,/최신 자료를 확인하지 못해/);
+  await h.poll();await h.resolve(1,{...data('a','2026-10','recovered'),responseCache:{state:'fresh',checkedAt:'2026-10-13T02:00:00Z',refreshing:false,refreshFailed:false}});
+  assert.equal(h.result(),'a|2026-10|recovered');assert.match(h.freshness(),/최신 자료 확인 완료/);assert.equal(h.timers.size,0);
+});
+
+test('a company refresh that fails again stops checks despite persisted revalidation being required',async()=>{
+  const h=harness(),saved=persisted();saved.data.responseCache.refreshFailed=true;saved.data.responseCache.refreshing=true;h.context();h.mount();await h.resolve(0,saved.data);
+  await h.poll();await h.resolve(1,{...saved.data,responseCache:{...saved.data.responseCache,refreshing:false}});
+  assert.equal(h.calls.length,2);assert.equal(h.timers.size,0);assert.equal(h.result(),'a|2026-10|persisted');assert.match(h.freshness(),/최신 확인 실패.*마지막 확인/);
 });
 
 test('a persisted result expiring while a permission read is pending disappears after that read fails',async()=>{
@@ -442,7 +456,7 @@ for(const status of [401,403,404])test(`${status} removes persisted company data
 });
 
 test('persisted verification polls are bounded even when a saved response still requires revalidation',async()=>{
-  const h=harness(),saved=persisted();h.context();h.mount();await h.resolve(0,saved.data);
+  const h=harness(),saved=persisted();saved.data.responseCache.refreshFailed=true;saved.data.responseCache.refreshing=true;h.context();h.mount();await h.resolve(0,saved.data);
   for(let index=1;index<=24;index++){await h.poll();await h.resolve(index,saved.data);}
   assert.equal(h.calls.length,25);assert.equal(h.timers.size,0);assert.equal(h.result(),'a|2026-10|persisted');
   assert.match(h.freshness(),/마지막 확인/);assert.match(h.elements.get('#collection-progress').innerHTML,/시간이 걸리고/);

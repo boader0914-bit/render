@@ -61,6 +61,18 @@ test('a server refresh failure keeps the original saved report with a truthful n
  const h=harness(),data=saved();h.restore(data);h.mount();await h.resolve(0,{...data,responseCache:{...data.responseCache,refreshing:false,refreshFailed:true}});assert.match(h.html(),/내 매장 own/);assert.match(h.notice.textContent,/확인 지연/);assert.equal(h.timers.size,0);
 });
 
+test('a real report refresh overrides a historical failure and replaces the saved report automatically',async()=>{
+ const h=harness(),data=saved();data.responseCache.refreshFailed=true;data.responseCache.refreshing=true;h.restore(data);h.mount();await h.resolve(0,data);
+ assert.match(h.notice.textContent,/최신 자료 확인 중.*마지막 확인/);assert.doesNotMatch(h.notice.textContent,/확인 지연/);assert.equal(h.notice.dataset.state,'checking');assert.equal([...h.timers.values()][0].ms,2000);
+ await h.tick();await h.resolve(1,report('own',28));assert.match(h.html(),/28실/);assert.equal(h.notice.hidden,true);assert.equal(h.timers.size,0);
+});
+
+test('a report refresh that fails again stops checks without losing saved values or their original check date',async()=>{
+ const h=harness(),data=saved();data.responseCache.refreshFailed=true;data.responseCache.refreshing=true;h.restore(data);h.mount();await h.resolve(0,data);
+ await h.tick();await h.resolve(1,{...data,responseCache:{...data.responseCache,refreshing:false}});
+ assert.equal(h.calls.length,2);assert.equal(h.timers.size,0);assert.match(h.html(),/10실/);assert.match(h.notice.textContent,/확인 지연.*마지막 확인/);assert.equal(h.notice.dataset.state,'notice');
+});
+
 test('401 expires the session, clears report state and prevents old bootstrap resurrection',async()=>{
  const h=harness();h.restore();h.mount();await h.reject(0,401);assert.equal(h.expired(),1);assert.match(h.html(),/로그인이 만료/);h.restore();h.mount();assert.doesNotMatch(h.html(),/내 매장 own의 다음 판단/);
 });
@@ -113,7 +125,7 @@ test('a pending response crossing Korea midnight triggers the correct new-period
 });
 
 test('background report verification uses bounded GET polling and route departure clears its timers',async()=>{
- const h=harness(),data=saved();h.restore(data);h.mount();await h.resolve(0,data);
+ const h=harness(),data=saved();data.responseCache.refreshFailed=true;data.responseCache.refreshing=true;h.restore(data);h.mount();await h.resolve(0,data);
  for(const delay of [2000,4000,8000,16000,30000,45000,45000,45000]){assert.equal([...h.timers.values()][0].ms,delay);h.advance(delay);await h.tick();await h.resolve(h.calls.length-1,data);}
  assert.equal(h.calls.length,9);assert.equal(h.timers.size,0);assert.match(h.notice.textContent,/최신 확인에 시간이 걸려/);h.leave();h.mount();await h.resolve(9,data);assert.equal(h.timers.size,1);h.leave();assert.equal(h.timers.size,0);
 });

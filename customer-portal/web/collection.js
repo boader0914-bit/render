@@ -218,7 +218,9 @@
         if(!force && document.querySelector('#collection-result form:focus-within, #collection-result form[data-dirty]')) { freshness('새 결과가 있습니다. 작성 중인 내용을 유지했습니다.',entry); if(active(data.request))timer=setTimeout(()=>load(),10000); return; }
         view=data;renderedVersion=version;document.querySelector('#collection-result').innerHTML=renderResult(data);
       }
-      const saved=data.responseCache?.state==='cached',refreshFailed=saved&&data.responseCache.refreshFailed,refreshing=saved&&!refreshFailed&&(data.responseCache.refreshing||entry.persisted&&data.responseCache.revalidationRequired);
+      const saved=data.responseCache?.state==='cached',info=data.responseCache||{};
+      const refreshing=saved&&(info.refreshing===true||!info.refreshFailed&&entry.persisted&&info.revalidationRequired);
+      const refreshFailed=saved&&info.refreshFailed&&info.refreshing!==true;
       freshness(refreshFailed?'최신 확인 실패 · 이전 조회 자료 유지':refreshing?'저장 자료 표시 · 최신 자료 확인 중':saved?'최근 확인한 저장 자료 표시':'최신 자료 확인 완료',entry);
       if(active(data.request)||['pending','updating'].includes(data.companyDetail?.integrated?.status)&&!data.companyDetail?.legacyObservationView)timer=setTimeout(()=>{if(!document.hidden)load();else timer=setTimeout(()=>load(),10000);},10000);
       else if(refreshing&&refreshChecks++<24)timer=setTimeout(()=>{if(!document.hidden)load();else timer=setTimeout(()=>load(),10000);},5000);

@@ -225,6 +225,25 @@ test('failed persistent revalidation retains saved values with the original date
   assert.match(h.html(),/방문자<\/th><td>10/);assert.match(h.notice.textContent,/최신 자료 확인 지연.*마지막 확인/);assert.equal(h.timers.size,0);assert.equal(h.notice.dataset.state,'notice');
 });
 
+test('a real regional refresh overrides a historical failure and updates the visible result automatically',async()=>{
+  const h=harness(),saved=persisted();saved.responseCache.refreshFailed=true;saved.responseCache.refreshing=true;h.mount();await h.resolve(0,saved);
+  assert.match(h.notice.textContent,/최신 자료 확인 중.*마지막 확인/);assert.doesNotMatch(h.notice.textContent,/확인 지연/);assert.equal(h.notice.dataset.state,'checking');assert.equal([...h.timers.values()][0].ms,2000);
+  await h.tick();await h.resolve(1,{...data('a','2026-09',31),responseCache:{state:'fresh',checkedAt:'2026-10-23T00:00:00Z',refreshing:false,refreshFailed:false}});
+  assert.match(h.html(),/방문자<\/th><td>31/);assert.equal(h.notice.hidden,true);assert.equal(h.timers.size,0);
+});
+
+test('a regional refresh that fails again stops checks while preserving its last saved values and date',async()=>{
+  const h=harness(),saved=persisted();saved.responseCache.refreshFailed=true;saved.responseCache.refreshing=true;h.mount();await h.resolve(0,saved);
+  await h.tick();await h.resolve(1,{...saved,responseCache:{...saved.responseCache,refreshing:false}});
+  assert.equal(h.calls.length,2);assert.equal(h.timers.size,0);assert.match(h.html(),/방문자<\/th><td>10/);assert.match(h.notice.textContent,/확인 지연.*마지막 확인/);assert.equal(h.notice.dataset.state,'notice');
+});
+
+test('a regional refresh following a past failure still stops after the original four background checks',async()=>{
+  const h=harness(),saved=persisted();saved.responseCache.refreshFailed=true;saved.responseCache.refreshing=true;h.mount();await h.resolve(0,saved);
+  for(const delay of [2000,4000,8000,16000]){assert.equal([...h.timers.values()][0].ms,delay);await h.tick();await h.resolve(h.calls.length-1,saved);}
+  assert.equal(h.calls.length,5);assert.equal(h.timers.size,0);assert.match(h.notice.textContent,/최신 확인에 시간이 걸려.*마지막 확인/);assert.equal(h.notice.dataset.state,'notice');
+});
+
 test('fresh verification accepts a 400 ms server clock lead without changing its original checkedAt',async()=>{
   const h=harness(),saved={...data(),responseCache:{state:'fresh',checkedAt:'2026-10-23T00:00:00.400Z'}};h.mount();await h.resolve(0,saved);
   assert.match(h.html(),/방문자<\/th><td>10/);assert.equal(h.notice.hidden,true);
