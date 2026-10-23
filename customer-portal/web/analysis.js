@@ -12,12 +12,15 @@
   const cache=new Map(),inFlight=new Map(),regionEpochs=new Map(),deniedRegions=new Set();
   const CACHE_LIMIT=24,CACHE_MAX_AGE=30*60*1000,PERSISTED_MAX_AGE=7*24*60*60*1000,CLOCK_SKEW=60*1000;
   let cacheScope='default',allowedRegions=null,cacheGeneration=0,onSessionExpired=null;
+  const reports=new Map(),reportRequests=new Map(),deniedReports=new Set();
+  let reportScope='',reportPermission='',reportGeneration=0,reportOwnIds=[],reportCompanies=new Set(),reportRegions=new Set();
   const epoch=id=>regionEpochs.get(id)||0;
   const requestAllowed=id=>Boolean(cacheScope)&&(!allowedRegions||allowedRegions.has(id));
   const permitted=id=>requestAllowed(id)&&!deniedRegions.has(id);
   const cacheKey=(id,month)=>JSON.stringify([cacheScope,id,month]);
   const clone=value=>JSON.parse(JSON.stringify(value));
   const version=data=>{const {responseCache,generatedAt,...result}=data;return JSON.stringify(result);};
+  const reportVersion=data=>{const {responseCache,...result}=data;return JSON.stringify(result);};
   const validMonth=value=>typeof value==='string'&&/^20\d{2}-(0[1-9]|1[0-2])$/.test(value);
   const timestamp=value=>{
     if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value))return NaN;
@@ -43,7 +46,8 @@
     return entry?.persisted&&Date.now()-entry.checkedAt>CACHE_MAX_AGE?`${message} · 마지막 확인 ${time(new Date(entry.checkedAt).toISOString())}`:message;
   }
   function clearTimers(){if(pollTimer!==null)clearTimeout(pollTimer);if(refreshTimer!==null)clearTimeout(refreshTimer);pollTimer=refreshTimer=null;}
-  function clearCache(){cacheGeneration++;cache.clear();inFlight.clear();regionEpochs.clear();deniedRegions.clear();}
+  function clearReports(){reportGeneration++;reports.clear();reportRequests.clear();deniedReports.clear();}
+  function clearCache(){cacheGeneration++;cache.clear();inFlight.clear();regionEpochs.clear();deniedRegions.clear();clearReports();}
   function invalidate(id){
     regionEpochs.set(id,epoch(id)+1);
     for(const [key,entry] of cache)if(entry.regionKey===id)cache.delete(key);
@@ -84,6 +88,64 @@
       try{remember(id,month,data,at);}catch{}
     }
   }
+  const reportPeriod=()=>{const start=today();return {start,end:new Date(Date.parse(start+'T00:00:00Z')+29*86400000).toISOString().slice(0,10),days:30};};
+  const reportKey=(ownId,period)=>JSON.stringify([reportScope,reportPermission,ownId,period.start,period.end]);
+  const reportAllowed=ownId=>Boolean(reportScope)&&(ownId===''||reportOwnIds.includes(ownId));
+  function configureReports({scope='',ownIds=[],companyIds=[],regionKeys=[],permissionVersion='',onSessionExpired:expired=null}={}){
+    const next=typeof scope==='string'?scope:'',owns=Array.isArray(ownIds)?[...new Set(ownIds.filter(id=>typeof id==='string'&&id))]:[];
+    const companies=Array.isArray(companyIds)?companyIds.filter(id=>typeof id==='string'&&id):[],regions=Array.isArray(regionKeys)?regionKeys.filter(id=>typeof id==='string'&&id):[];
+    const permission=JSON.stringify([permissionVersion,owns,[...new Set(companies)].sort(),[...new Set(regions)].sort()]);
+    if(next!==reportScope||permission!==reportPermission){clearReports();if(kind==='reports'){seq++;renderedVersion=null;clearTimers();const slot=document.querySelector('#analysis-output');if(slot)slot.innerHTML='<p class="empty-note">등록 상태를 확인하고 있습니다.</p>';freshness('');}}
+    reportScope=next;reportPermission=permission;reportOwnIds=owns;reportCompanies=new Set(companies);reportRegions=new Set(regions);
+    if(typeof expired==='function')onSessionExpired=expired;
+  }
+  function reportScopeValid(data,ownId,period){
+    const expected=ownId||reportOwnIds[0]||null;
+    if(!reportAllowed(ownId)||!data||data.mode!=='current_briefing'||data.published!==false||data.ownId!==expected||data.period?.start!==period.start||data.period?.end!==period.end||data.period?.days!==30)return false;
+    const generated=timestamp(data.generatedAt);if(!Number.isFinite(generated)||generated>Date.now()+CLOCK_SKEW)return false;
+    if(!['companies','comparisons','regions','actions','definitions'].every(key=>Array.isArray(data[key])))return false;
+    if(data.companies.some(company=>!reportCompanies.has(company?.companyId)||!['own','competitor'].includes(company.kind)||!company.summary||typeof company.summary!=='object'))return false;
+    const own=data.companies.filter(company=>company.kind==='own');
+    if(expected?(own.length!==1||own[0].companyId!==expected):own.length!==0)return false;
+    if(new Set(data.companies.map(company=>company.companyId)).size!==data.companies.length)return false;
+    if(data.comparisons.some(company=>!reportCompanies.has(company?.companyId)||!company.own||!company.competitor))return false;
+    return !data.regions.some(region=>!reportRegions.has(region?.region?.id)||!Array.isArray(region.sources));
+  }
+  function reportCached(ownId,period){
+    const key=reportKey(ownId,period),entry=reports.get(key);
+    if(!entry||!reportAllowed(ownId)||deniedReports.has(ownId))return null;
+    if(Date.now()>=entry.validUntil||!reportScopeValid(entry.data,ownId,period)){reports.delete(key);return null;}
+    reports.delete(key);reports.set(key,entry);return entry;
+  }
+  function rememberReport(ownId,period,data){
+    if(!reportScopeValid(data,ownId,period))throw Error('선택한 내 매장·숙박기간과 리포트가 다릅니다.');
+    const saved=clone(data),checked=timestamp(saved.responseCache?.checkedAt||saved.generatedAt),age=lifetime(saved,checked);
+    if(!age)throw Error('저장 리포트의 확인 시각과 유효기간을 다시 확인해 주세요.');
+    const entry={ownId,period:{...period},data:saved,version:reportVersion(saved),...age},key=reportKey(ownId,period);
+    deniedReports.delete(ownId);reports.delete(key);reports.set(key,entry);while(reports.size>CACHE_LIMIT)reports.delete(reports.keys().next().value);return entry;
+  }
+  function restoreReports(views,scope){
+    if(!scope||scope!==reportScope||!Array.isArray(views))return;
+    const period=reportPeriod();
+    for(const row of views.slice(0,CACHE_LIMIT*2).sort((a,b)=>Date.parse(b?.data?.responseCache?.checkedAt)-Date.parse(a?.data?.responseCache?.checkedAt))){
+      const ownId=row?.ownId;
+      if(typeof ownId!=='string'||!reportAllowed(ownId)||deniedReports.has(ownId)||row.period?.start!==period.start||row.period?.end!==period.end||row.period?.days!==30||reportCached(ownId,period))continue;
+      if(reports.size>=CACHE_LIMIT)break;
+      try{rememberReport(ownId,period,row.data);}catch{}
+    }
+  }
+  function readReport(ownId,period,request,force){
+    const key=reportKey(ownId,period)+(force?':refresh':'');let pending=reportRequests.get(key);
+    if(!pending){
+      let promise;try{promise=Promise.resolve(request(`/reports/briefing${ownId?'?ownId='+encodeURIComponent(ownId):''}`,undefined,{refresh:force}));}catch(error){promise=Promise.reject(error);}
+      pending={promise};reportRequests.set(key,pending);const cleanup=()=>{if(reportRequests.get(key)===pending)reportRequests.delete(key);};promise.then(cleanup,cleanup);
+    }
+    return pending.promise;
+  }
+  function drawReport(slot,data,preserve=false){
+    const open=new Set(preserve?detailKeys(slot).filter(row=>row.detail.open).map(row=>row.key):[]);
+    slot.innerHTML=reportView(data);for(const row of detailKeys(slot))if(open.has(row.key))row.detail.open=true;
+  }
   function freshness(message,state='notice'){
     const target=document.querySelector('#analysis-freshness');if(!target)return;
     target.textContent=message;target.hidden=!message;target.dataset.state=state;
@@ -114,6 +176,7 @@
   }
   function expireSession(){
     clearCache();cacheScope='';allowedRegions=new Set();seq++;regionData=null;renderedVersion=null;clearTimers();
+    reportScope='';reportPermission='';reportOwnIds=[];reportCompanies.clear();reportRegions.clear();
     const slot=document.querySelector('#analysis-output');if(slot)slot.innerHTML='<p class="collection-warning">로그인이 만료되었습니다. 다시 로그인해 주세요.</p>';
     freshness('');if(onSessionExpired)onSessionExpired();
   }
@@ -205,7 +268,45 @@
     const params=Object.fromEntries(new FormData(document.querySelector('#analysis-form')));
     void checkPreparation(seq,params,true);
   });
+  async function loadReport({force=false,backgroundChecks=0}={}){
+    const id=++seq,slot=document.querySelector('#analysis-output'),form=document.querySelector('#analysis-form');if(!slot||!form)return;
+    if(refreshTimer!==null){clearTimeout(refreshTimer);refreshTimer=null;}
+    const params=Object.fromEntries(new FormData(form)),ownId=reportOwnIds.length?params.ownId||'':'',period=reportPeriod(),request=api;
+    const scope=reportScope,permission=reportPermission,generation=reportGeneration;
+    const authorized=()=>scope===reportScope&&permission===reportPermission&&generation===reportGeneration&&reportAllowed(ownId);
+    const visible=()=>id===seq&&slot.isConnected&&authorized();
+    const button=form.querySelector('button');
+    if(!reportAllowed(ownId)){renderedVersion=null;freshness('');button.disabled=true;slot.innerHTML='<p class="collection-warning">내 매장 등록과 리포트 조회 권한을 다시 확인해 주세요.</p>';return;}
+    const entry=reportCached(ownId,period);regionData=null;button.disabled=true;
+    if(entry){
+      if(renderedVersion!==entry.version){drawReport(slot,entry.data);renderedVersion=entry.version;}
+      freshness(previousNotice(entry,entry.persisted?'이전 저장 리포트 표시 · 최신 자료 확인 중':'이전 조회 리포트 표시 · 최신 자료 확인 중'),'checking');
+    }else{renderedVersion=null;freshness('');slot.innerHTML='<p class="empty-note" role="status">업체별 보존 이력을 계산하고 있습니다. 자료량에 따라 최대 3분 정도 걸릴 수 있습니다.</p>';}
+    try{
+      const data=await readReport(ownId,period,request,force||deniedReports.has(ownId));
+      if(!authorized())return;
+      if(period.start!==reportPeriod().start){if(visible())void loadReport();return;}
+      const fresh=rememberReport(ownId,period,data);if(!visible())return;
+      if(renderedVersion!==fresh.version){drawReport(slot,fresh.data,Boolean(entry));renderedVersion=fresh.version;}
+      const info=data.responseCache||{},pending=info.refreshing||info.revalidationRequired,checking=pending&&!info.refreshFailed&&backgroundChecks<4;
+      const message=info.refreshFailed?'최신 리포트 확인 지연 · 이전 저장 자료를 표시합니다.':checking?'이전 저장 리포트 표시 · 최신 자료 확인 중':pending?'최신 확인에 시간이 걸려 이전 리포트를 표시합니다.':'';
+      freshness(message?previousNotice(fresh,message):'',checking?'checking':'notice');
+      if(checking&&typeof setTimeout==='function')refreshTimer=setTimeout(()=>{refreshTimer=null;if(visible())void loadReport({backgroundChecks:backgroundChecks+1});},[2000,4000,8000,16000][backgroundChecks]);
+    }catch(error){
+      if(!authorized())return;
+      if(error.status===401){expireSession();return;}
+      if([403,404,409].includes(error.status)){
+        const show=visible();clearReports();deniedReports.add(ownId);
+        if(show){renderedVersion=null;freshness('');slot.innerHTML='<p class="collection-warning">업체·지역 등록과 리포트 조회 권한을 다시 확인해 주세요.</p>';}
+      }else if(visible()){
+        if(period.start!==reportPeriod().start){void loadReport();return;}
+        if(entry&&Date.now()<entry.validUntil)freshness(previousNotice(entry,'최신 리포트 확인 지연 · 이전 저장 자료를 표시합니다.'));
+        else{renderedVersion=null;freshness('');slot.innerHTML=`<p class="collection-warning">${esc(error.message)}</p>`;}
+      }
+    }finally{if(id===seq&&button.isConnected)button.disabled=false;}
+  }
   async function load({force=false,backgroundChecks=0}={}) {
+    if(kind==='reports')return loadReport({force,backgroundChecks});
     const id=++seq,slot=document.querySelector('#analysis-output'),form=document.querySelector('#analysis-form');if(!slot||!form)return;
     const mode=kind,request=api,params=Object.fromEntries(new FormData(form));
     if(refreshTimer!==null){clearTimeout(refreshTimer);refreshTimer=null;}
@@ -258,7 +359,11 @@
   }
   document.addEventListener('submit',e=>{if(e.target.id!=='analysis-form')return;e.preventDefault();e.stopImmediatePropagation();load();});
   document.addEventListener('change',e=>{if(e.target.matches?.('[data-history-metric]')&&regionData){const card=e.target.closest('[data-history-source]'),s=regionData.sources.find(s=>s.key===card.dataset.historySource);if(s)card.outerHTML=window.InsightRegionHistory.source(s,regionData.window,e.target.value);return;}if(e.target.closest?.('#analysis-form'))load();});
-  window.InsightAnalysis={panel,regionView,reportView,configureCache,restore,clearCache,invalidate,mount(mode,request,s,selectedRegion=null,selectedOwnId=null){kind=mode;api=request;renderedVersion=null;
+  window.InsightAnalysis={panel,regionView,reportView,configureCache,configureReports,restore,restoreReports,clearCache,invalidate,mount(mode,request,s,selectedRegion=null,selectedOwnId=null){kind=mode;api=request;renderedVersion=null;
+    if(mode==='reports'){
+      const select=document.querySelector('#analysis-form select');
+      if(select)select.value=reportOwnIds.includes(selectedOwnId)?selectedOwnId:reportOwnIds[0]||'';
+    }
     if(mode==='regions'){
       configureCache({scope:cacheScope,regionKeys:(s.regions||[]).map(row=>row.id),onSessionExpired});
       const selection=regionSelection(s,selectedRegion,selectedOwnId),select=document.querySelector('#analysis-form select');

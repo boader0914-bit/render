@@ -8,6 +8,7 @@ const { body, json } = require('../scripts/lib/insight_http.cjs');
 const { fault } = require('../scripts/lib/insight_store.cjs');
 const { createCompanyReadCache } = require('./company-read-cache.cjs');
 const { createRegionReadCache } = require('./region-read-cache.cjs');
+const { createReportReadCache } = require('./report-read-cache.cjs');
 function validatedOrigin(value) {
   const u = new URL(value);
   if (u.username || u.password || u.pathname !== '/' || u.search || u.hash || /[?#]/.test(String(value)) || (u.protocol !== 'https:' && !(u.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(u.hostname)))) throw new Error('Insight origins require HTTPS or local development addresses');
@@ -35,14 +36,17 @@ function configuration(env = process.env) {
   if(cacheDirectory&&(!path.isAbsolute(cacheDirectory)||path.resolve(cacheDirectory)===path.parse(path.resolve(cacheDirectory)).root))throw new Error('Insight regional cache requires an absolute, dedicated directory');
   const companyCacheDirectory=env.INSIGHT_COMPANY_CACHE_DIR || (env.DATA_DIR ? path.join(env.DATA_DIR,'insight-company-cache') : env.RENDER ? path.join('/var/data','insight-company-cache') : null);
   if(companyCacheDirectory&&(!path.isAbsolute(companyCacheDirectory)||path.resolve(companyCacheDirectory)===path.parse(path.resolve(companyCacheDirectory)).root))throw new Error('Insight company cache requires an absolute, dedicated directory');
-  return { origin: origin.origin, origins, backend: backend.origin, serviceToken, port, host: env.RENDER ? '0.0.0.0' : '127.0.0.1',regionCacheDirectory:cacheDirectory,companyCacheDirectory };
+  const reportCacheDirectory=env.INSIGHT_REPORT_CACHE_DIR || (env.DATA_DIR ? path.join(env.DATA_DIR,'insight-report-cache') : env.RENDER ? path.join('/var/data','insight-report-cache') : null);
+  if(reportCacheDirectory&&(!path.isAbsolute(reportCacheDirectory)||path.resolve(reportCacheDirectory)===path.parse(path.resolve(reportCacheDirectory)).root))throw new Error('Insight report cache requires an absolute, dedicated directory');
+  return { origin: origin.origin, origins, backend: backend.origin, serviceToken, port, host: env.RENDER ? '0.0.0.0' : '127.0.0.1',regionCacheDirectory:cacheDirectory,companyCacheDirectory,reportCacheDirectory };
 }
-function createConnectedServer({ origin, origins = [], backend, serviceToken, fetchImpl = fetch, regionCacheDirectory=null,companyCacheDirectory=null }) {
+function createConnectedServer({ origin, origins = [], backend, serviceToken, fetchImpl = fetch, regionCacheDirectory=null,companyCacheDirectory=null,reportCacheDirectory=null }) {
   const trustedOrigins = new Map(publicOrigins(origin, origins).map(value => [new URL(value).host, value]));
   const companyReads = createCompanyReadCache({persistenceDirectory:companyCacheDirectory,namespace:backend}), regionReads = createRegionReadCache({persistenceDirectory:regionCacheDirectory,namespace:backend}), scopeSecret = crypto.randomBytes(32), staticAssets = new Map();
+  const reportReads = createReportReadCache({persistenceDirectory:reportCacheDirectory,namespace:backend});
   const scopeFor = (requestOrigin, mode, session) => crypto.createHmac('sha256', scopeSecret).update(JSON.stringify([requestOrigin,mode,session])).digest('hex');
   const audienceFor = (requestOrigin,mode) => JSON.stringify([requestOrigin,mode]);
-  const invalidateReads = scope => { companyReads.invalidate(scope); regionReads.invalidate(scope); };
+  const invalidateReads = scope => { companyReads.invalidate(scope); regionReads.invalidate(scope); reportReads.invalidate(scope); };
   // Historical source recalculation can take longer than a login or command.
   // Extend only these read endpoints; collection dispatch retains its timeout.
   const readTimeout = (method, route) => method === 'GET' && /\/(?:companies\/[a-zA-Z0-9_-]+\/collection|reports\/briefing)$/.test(route) ? 180000 : 20000;
@@ -96,6 +100,15 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
       readIdentity:()=>readUpstream(prefix+(mode==='admin'?'/customer-view/me':'/me'),'',headers,{stage:'identity',timing}),
       readSource:()=>readUpstream(prefix+route,url.search,headers,{stage:'source',timing})});
   }
+  async function reportRead(requestOrigin,mode,session,headers,route,url,force,timing) {
+    if(!/^\/(?:customer-view\/)?reports\/briefing$/.test(route))return null;
+    const prefix=mode==='admin'?'/admin':'',ownId=url.searchParams.get('ownId')||'';
+    const valid=[...url.searchParams.keys()].every(key=>key==='ownId')&&url.searchParams.getAll('ownId').length<=1&&(!ownId||/^[a-zA-Z0-9_-]+$/.test(ownId));
+    if(!session||!valid)return readUpstream(prefix+route,url.search,headers,{timing});
+    return reportReads.read({scope:scopeFor(requestOrigin,mode,session),audience:audienceFor(requestOrigin,mode),ownId,force,
+      readIdentity:()=>readUpstream(prefix+(mode==='admin'?'/customer-view/me':'/me'),'',headers,{stage:'identity',timing}),
+      readSource:()=>readUpstream(prefix+route,url.search,headers,{stage:'source',timing})});
+  }
   async function staticAsset(file) {
     const stat=await fs.promises.stat(file),previous=staticAssets.get(file);
     if(previous?.mtimeMs===stat.mtimeMs&&previous.size===stat.size)return previous;
@@ -122,7 +135,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
       if (req.method === 'GET' && url.pathname === '/api/health') { respond(200, { status: 'ok', mode: 'connected', buildCommit: process.env.RENDER_GIT_COMMIT?.slice(0, 12) || null }); return; }
       if (url.pathname.startsWith('/api/insight-admin/v1/')) {
         const route = url.pathname.slice('/api/insight-admin/v1'.length);
-        observed=identityRoutes.has('/admin'+route)||req.method==='GET'&&/^\/customer-view\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis)$/.test(route);
+        observed=identityRoutes.has('/admin'+route)||req.method==='GET'&&/^\/customer-view\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|reports\/briefing)$/.test(route);
         const methods = { '/me': 'GET', '/customers': 'GET', '/auth/login': 'POST', '/auth/logout': 'POST', '/customer-view/start': 'POST', '/customer-view/me': 'GET', '/customer-view/config': 'GET', '/customer-view/policies/terms': 'GET', '/customer-view/policies/privacy': 'GET', '/customer-view/commands': 'POST', '/customer-view/catalog/companies': 'GET', '/customer-view/catalog/regions': 'GET' };
         const match = /^\/customers\/cus_[a-zA-Z0-9-]+(\/commands)?$/.exec(route);
         const regionalPreparation=/^\/customer-view\/regions\/[a-zA-Z0-9_-]+\/preparation$/.test(route)&&['GET','POST'].includes(req.method);
@@ -134,11 +147,11 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
         if (req.method === 'POST') { payload = JSON.stringify(await body(req)); headers['Content-Type'] = 'application/json'; }
         if(req.method==='POST'&&route!=='/customer-view/start')invalidateReads(scopeFor(requestOrigin,'admin',session));
         if(req.method==='GET') {
-          const saved=await companyRead(requestOrigin,'admin',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing)||await regionRead(requestOrigin,'admin',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing);
+          const saved=await companyRead(requestOrigin,'admin',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing)||await regionRead(requestOrigin,'admin',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing)||await reportRead(requestOrigin,'admin',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing);
           if(saved){if(saved.status===401)res.setHeader('Set-Cookie',adminCookie('',true));respond(saved.status,saved.data);return;}
         }
         const response=await readUpstream('/admin'+route,url.search,headers,{method:req.method,body:payload,stage:identityRoutes.has('/admin'+route)?'identity':req.method==='GET'?'source':null,timing}),data=response.data;
-        if(response.ok&&['/customer-view/me','/customer-view/start'].includes(route)){const started=performance.now(),scope=scopeFor(requestOrigin,'admin',session);[data.companyViews,data.regionViews]=await Promise.all([companyReads.snapshot({scope,audience:audienceFor(requestOrigin,'admin'),identity:data}),regionReads.snapshot({scope,identity:data})]);timing.add('snapshot',performance.now()-started);}
+        if(response.ok&&['/customer-view/me','/customer-view/start'].includes(route)){const started=performance.now(),scope=scopeFor(requestOrigin,'admin',session);[data.companyViews,data.regionViews,data.reportViews]=await Promise.all([companyReads.snapshot({scope,audience:audienceFor(requestOrigin,'admin'),identity:data}),regionReads.snapshot({scope,identity:data}),reportReads.snapshot({scope,audience:audienceFor(requestOrigin,'admin'),identity:data})]);timing.add('snapshot',performance.now()-started);}
         if(req.method==='POST'&&route!=='/customer-view/start'||[401,403].includes(response.status))invalidateReads(scopeFor(requestOrigin,'admin',session));
         if (response.ok && route === '/auth/login') {
           if (!/^[A-Za-z0-9_-]{43}$/.test(data.token || '')) throw new Error('Missing administrator session');
@@ -149,7 +162,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
       }
       if (url.pathname.startsWith('/api/customer/v1/')) {
         const route = url.pathname.slice('/api/customer/v1'.length);
-        observed=identityRoutes.has(route)||req.method==='GET'&&/^\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis)$/.test(route);
+        observed=identityRoutes.has(route)||req.method==='GET'&&/^\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|reports\/briefing)$/.test(route);
         const allowed = { '/config': 'GET', '/me': 'GET', '/auth/username': 'GET', '/policies/terms': 'GET', '/policies/privacy': 'GET', '/auth/login': 'POST', '/auth/signup': 'POST', '/auth/logout': 'POST', '/commands': 'POST', '/catalog/companies': 'GET', '/catalog/regions': 'GET' };
         const regionalPreparation=/^\/regions\/[a-zA-Z0-9_-]+\/preparation$/.test(route)&&['GET','POST'].includes(req.method);
         if (!regionalPreparation && (allowed[route] || (/^\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|reports\/briefing)$/.test(route) ? 'GET' : '')) !== req.method) throw fault('NOT_FOUND', '요청한 기능을 찾을 수 없습니다.', 404);
@@ -161,11 +174,11 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
         if (req.method === 'POST') { payload = JSON.stringify(await body(req)); headers['Content-Type'] = 'application/json'; }
         if(req.method==='POST')invalidateReads(scopeFor(requestOrigin,'customer',session));
         if(req.method==='GET') {
-          const saved=await companyRead(requestOrigin,'customer',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing)||await regionRead(requestOrigin,'customer',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing);
+          const saved=await companyRead(requestOrigin,'customer',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing)||await regionRead(requestOrigin,'customer',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing)||await reportRead(requestOrigin,'customer',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing);
           if(saved){if(saved.status===401)res.setHeader('Set-Cookie',cookie('',true));respond(saved.status,saved.data);return;}
         }
         const response=await readUpstream(route,url.search,headers,{method:req.method,body:payload,stage:identityRoutes.has(route)?'identity':req.method==='GET'?'source':null,timing}),data=response.data;
-        if(response.ok&&req.method==='GET'&&route==='/me'){const started=performance.now(),scope=scopeFor(requestOrigin,'customer',session);[data.companyViews,data.regionViews]=await Promise.all([companyReads.snapshot({scope,audience:audienceFor(requestOrigin,'customer'),identity:data}),regionReads.snapshot({scope,identity:data})]);timing.add('snapshot',performance.now()-started);}
+        if(response.ok&&req.method==='GET'&&route==='/me'){const started=performance.now(),scope=scopeFor(requestOrigin,'customer',session);[data.companyViews,data.regionViews,data.reportViews]=await Promise.all([companyReads.snapshot({scope,audience:audienceFor(requestOrigin,'customer'),identity:data}),regionReads.snapshot({scope,identity:data}),reportReads.snapshot({scope,audience:audienceFor(requestOrigin,'customer'),identity:data})]);timing.add('snapshot',performance.now()-started);}
         if(req.method==='POST'||[401,403].includes(response.status))invalidateReads(scopeFor(requestOrigin,'customer',session));
         if (response.ok && ['/auth/login', '/auth/signup'].includes(route)) {
           if (!/^[A-Za-z0-9_-]{43}$/.test(data.token || '')) throw new Error('Missing session');
@@ -198,11 +211,13 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   server.flushRegionSnapshots=()=>regionReads.flushPersistence();
   server.prepareCompanySnapshots=async()=>{await companyReads.ready();return companyReads.persistenceStatus();};
   server.flushCompanySnapshots=()=>companyReads.flushPersistence();
+  server.prepareReportSnapshots=async()=>{await reportReads.ready();return reportReads.persistenceStatus();};
+  server.flushReportSnapshots=()=>reportReads.flushPersistence();
   return server;
 }
 if (require.main === module) {
   (async()=>{
-    try { const c=configuration(),server=createConnectedServer(c);const [regionStatus,companyStatus]=await Promise.all([server.prepareRegionSnapshots(),server.prepareCompanySnapshots()]);console.log('regional_snapshot_cache_prepared',JSON.stringify(regionStatus));console.log('company_snapshot_cache_prepared',JSON.stringify(companyStatus));server.listen(c.port,c.host,()=>console.log(`SABUN INSIGHT 연결 서버: ${c.origin}`)); }
+    try { const c=configuration(),server=createConnectedServer(c);const [regionStatus,companyStatus,reportStatus]=await Promise.all([server.prepareRegionSnapshots(),server.prepareCompanySnapshots(),server.prepareReportSnapshots()]);console.log('regional_snapshot_cache_prepared',JSON.stringify(regionStatus));console.log('company_snapshot_cache_prepared',JSON.stringify(companyStatus));console.log('report_snapshot_cache_prepared',JSON.stringify(reportStatus));server.listen(c.port,c.host,()=>console.log(`SABUN INSIGHT 연결 서버: ${c.origin}`)); }
     catch(error){console.error(error.message);process.exitCode=1;}
   })();
 }

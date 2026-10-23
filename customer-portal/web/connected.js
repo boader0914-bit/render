@@ -10,6 +10,7 @@
   let adminCsrf = '';
   let state = null, config = {}, busy = false, searchSequence = 0, selectedOwnId = null;
   const restoredStates=new WeakSet();
+  const reportPermissionVersion=s=>s?JSON.stringify([s.customer.revision,s.customer.relations.filter(row=>['active','pending'].includes(row.status)),s.companies,s.regions,s.preparations]):'';
   const route = () => location.hash.slice(1) || ({'/signup':'signup','/login':'login','/terms':'terms','/privacy':'privacy'}[location.pathname]) || 'home';
   const menuRoute=()=>route()==='register-own'?'property':route().startsWith('regions=')?'regions':/^(company|collection|collect)=/.test(route())?(state?.customer.relations.find(row=>row.companyId===decodeURIComponent(route().split('=').slice(1).join('=')))?.kind==='own'?'property':'competitors'):route();
   const toast = message => { $('#toast').textContent = message; $('#toast').classList.add('visible'); setTimeout(() => $('#toast').classList.remove('visible'), 4500); };
@@ -78,7 +79,8 @@
     const sessionExpired=()=>{state=null;adminCsrf='';selectedOwnId=null;render();};
     window.InsightCollection?.setContext?.(scope,state?.customer.relations.filter(row=>['active','pending'].includes(row.status)).map(row=>row.companyId)||[],sessionExpired);
     window.InsightAnalysis?.configureCache?.({scope,regionKeys:state?.regions?.map(row=>row.id)||[],onSessionExpired:sessionExpired});
-    if(state&&!restoredStates.has(state)){restoredStates.add(state);window.InsightCollection?.restore?.(state.companyViews,scope);window.InsightAnalysis?.restore?.(state.regionViews,scope);}
+    window.InsightAnalysis?.configureReports?.({scope,ownIds:state?.customer.relations.filter(row=>row.kind==='own'&&['active','pending'].includes(row.status)).map(row=>row.companyId)||[],companyIds:state?.customer.relations.filter(row=>['active','pending'].includes(row.status)).map(row=>row.companyId)||[],regionKeys:state?.regions?.map(row=>row.id)||[],permissionVersion:reportPermissionVersion(state),onSessionExpired:sessionExpired});
+    if(state&&!restoredStates.has(state)){restoredStates.add(state);window.InsightCollection?.restore?.(state.companyViews,scope);window.InsightAnalysis?.restore?.(state.regionViews,scope);window.InsightAnalysis?.restoreReports?.(state.reportViews,scope);}
     $('#logout').hidden = !state;
     $('#admin-view-banner').hidden = !adminView || !state;
     $('#navigation').innerHTML = state ? menus.map(([key,label])=>`<a href="#${key}" class="nav-link ${menuRoute()===key?'active':''}">${label}</a>`).join(''):'';

@@ -25,7 +25,7 @@ function multipleOwnFixture(accountKind='customer'){
 }
 async function screen({adminView=false,accountKind=adminView?'admin_preview':'customer',initialHash='#home',deferRequests=[],fixtureState=null,regionSearchResults=[]}={}){
   let currentState=fixtureState?clone(fixtureState):fixture(accountKind),hash=initialHash,mainRevision=0;
-  const originalCompanies=clone(currentState.companies),elements=new Map(),documentEvents=new Map(),windowEvents=new Map(),calls=[],pending=[],mounted=[],contexts=[],invalidated=[],analysisPanels=[],analysisMounts=[],restoredCalls=[],analysisCacheContexts=[],analysisRestoredCalls=[],analysisLifecycle=[];
+  const originalCompanies=clone(currentState.companies),elements=new Map(),documentEvents=new Map(),windowEvents=new Map(),calls=[],pending=[],mounted=[],contexts=[],invalidated=[],analysisPanels=[],analysisMounts=[],restoredCalls=[],analysisCacheContexts=[],analysisRestoredCalls=[],analysisLifecycle=[],reportCacheContexts=[],reportRestoredCalls=[],reportLifecycle=[];
   let clearCalls=0;
   const element=selector=>{
     if(elements.has(selector))return elements.get(selector);
@@ -48,7 +48,7 @@ async function screen({adminView=false,accountKind=adminView?'admin_preview':'cu
     }};
   const location={pathname:adminView?'/customer-view':'/',get hash(){return hash;},set hash(value){hash=value.startsWith('#')?value:`#${value}`;},assign(value){this.assigned=value;}};
   class FormDataFixture{constructor(form){this.values=form.values;}*[Symbol.iterator](){yield* Object.entries(this.values);}}
-  const window={addEventListener(name,handler){windowEvents.set(name,handler);},scrollTo(){},InsightAuth:{screen(){return '<section class="signed-out-fixture">로그인</section>';},welcome(){return '<p>가입 완료</p>';},policy(){return '<p>정책</p>';}},InsightAnalysis:{stop(){},configureCache(options){analysisCacheContexts.push(options);analysisLifecycle.push('configure');},restore(views,scope){analysisRestoredCalls.push({views,scope});analysisLifecycle.push('restore');},panel(mode,s,selectedRegion,selectedOwnId){analysisPanels.push({mode,selectedRegion,selectedOwnId});return '<p>분석 검수 화면</p>';},mount(mode,request,s,selectedRegion,selectedOwnId){analysisMounts.push({mode,selectedRegion,selectedOwnId});analysisLifecycle.push('mount');}}};
+  const window={addEventListener(name,handler){windowEvents.set(name,handler);},scrollTo(){},InsightAuth:{screen(){return '<section class="signed-out-fixture">로그인</section>';},welcome(){return '<p>가입 완료</p>';},policy(){return '<p>정책</p>';}},InsightAnalysis:{stop(){},configureCache(options){analysisCacheContexts.push(options);analysisLifecycle.push('configure');},restore(views,scope){analysisRestoredCalls.push({views,scope});analysisLifecycle.push('restore');},configureReports(options){reportCacheContexts.push(options);reportLifecycle.push('configure');},restoreReports(views,scope){reportRestoredCalls.push({views,scope});reportLifecycle.push('restore');},panel(mode,s,selectedRegion,selectedOwnId){analysisPanels.push({mode,selectedRegion,selectedOwnId});return '<p>분석 검수 화면</p>';},mount(mode,request,s,selectedRegion,selectedOwnId){analysisMounts.push({mode,selectedRegion,selectedOwnId});analysisLifecycle.push('mount');if(mode==='reports')reportLifecycle.push('mount');}}};
   const response=(value,status=200)=>({ok:status>=200&&status<300,status,json:async()=>clone(value)});
   const reply=(url,value)=>deferRequests.some(match=>typeof match==='string'?url===match:match.test(url))?new Promise(resolve=>pending.push({url,value,resolve})):response(value);
   const fetch=async(url,options={})=>{
@@ -80,8 +80,9 @@ async function screen({adminView=false,accountKind=adminView?'admin_preview':'cu
   collection.restore=(views,scope)=>{restoredCalls.push({views,scope});return originalRestore(views,scope);};
   vm.runInContext(read('connected.js'),context);await flush();
   async function dispatch(name,event){for(const callback of documentEvents.get(name)||[])await callback(event);await flush();}
-  return {calls,mounted,contexts,invalidated,originalCompanies,location,analysisPanels,analysisMounts,restoredCalls,analysisCacheContexts,analysisRestoredCalls,analysisLifecycle,
+  return {calls,mounted,contexts,invalidated,originalCompanies,location,analysisPanels,analysisMounts,restoredCalls,analysisCacheContexts,analysisRestoredCalls,analysisLifecycle,reportCacheContexts,reportRestoredCalls,reportLifecycle,
     expireRegion(){analysisCacheContexts.at(-1).onSessionExpired();},
+    expireReport(){reportCacheContexts.at(-1).onSessionExpired();},
     pending:()=>pending.map(row=>row.url),
     async respond(url,{status=200,value}={}){const index=pending.findIndex(row=>row.url===url);assert.notEqual(index,-1,'expected a pending request: '+url);const request=pending.splice(index,1)[0];request.resolve(response(value===undefined?request.value:value,status));await flush();},
     html:()=>element('#main').innerHTML,result:()=>document.querySelector('#collection-result')?.innerHTML||'',navigation:()=>element('#navigation').innerHTML,searchResults:()=>element('#search-results').innerHTML,
@@ -393,4 +394,16 @@ for(const adminView of [false,true])test(`${adminView?'administrator':'customer'
   await ui.navigate('#home');await ui.navigate('#regions');assert.equal(ui.analysisRestoredCalls.length,1,'same bootstrap object must not replay an earlier snapshot');
   ui.expireRegion();assert.match(ui.html(),/로그인|관리자 로그인이 필요합니다/);assert.equal(ui.analysisCacheContexts.at(-1).scope,'');assert.deepEqual(Array.from(ui.analysisCacheContexts.at(-1).regionKeys),[]);
   assert.equal(ui.calls.filter(c=>c.url.includes('/crawl')||c.url.endsWith('/preparation')).length,0,'restoration never dispatches a collection or region refresh');
+});
+
+for(const adminView of [false,true])test(`${adminView?'administrator':'customer'} configures report scope and restores a fresh bootstrap before the report is mounted`,async()=>{
+  const s=multipleOwnFixture(adminView?'admin_preview':'customer');
+  s.reportViews=[{ownId:'cmp_own',period:{start:'2026-10-23',end:'2026-11-21',days:30},data:{mode:'current_briefing',published:false,ownId:'cmp_own',companies:[],regions:[]}}];
+  const ui=await screen({adminView,fixtureState:s,initialHash:'#reports'}),context=ui.reportCacheContexts.at(-1);
+  assert.equal(context.scope,`${adminView?'admin':'customer'}:customer_navigation`);assert.deepEqual(Array.from(context.ownIds),['cmp_own','cmp_own_second']);assert.deepEqual(Array.from(context.companyIds),s.customer.relations.map(r=>r.companyId));assert.deepEqual(Array.from(context.regionKeys),s.regions.map(r=>r.id));
+  assert.equal(typeof context.permissionVersion,'string');assert.match(context.permissionVersion,/cmp_own|region-own/);assert.doesNotMatch(context.permissionVersion,/csrf|password|token/);
+  assert.equal(ui.reportRestoredCalls.length,1);assert.equal(ui.reportRestoredCalls[0].scope,context.scope);assert.deepEqual(ui.reportRestoredCalls[0].views,s.reportViews);assert.deepEqual(ui.reportLifecycle.slice(0,3),['configure','restore','mount']);
+  await ui.navigate('#home');await ui.navigate('#reports');assert.equal(ui.reportRestoredCalls.length,1,'navigation cannot replay an older bootstrap');assert.equal(ui.reportCacheContexts.at(-1).permissionVersion,context.permissionVersion);
+  ui.expireReport();assert.match(ui.html(),/로그인|관리자 로그인이 필요합니다/);assert.equal(ui.reportCacheContexts.at(-1).scope,'');assert.deepEqual(Array.from(ui.reportCacheContexts.at(-1).ownIds),[]);assert.deepEqual(Array.from(ui.reportCacheContexts.at(-1).companyIds),[]);assert.deepEqual(Array.from(ui.reportCacheContexts.at(-1).regionKeys),[]);
+  assert.ok(ui.calls.every(c=>!c.url.includes('/crawl')&&!c.url.endsWith('/preparation')));
 });
