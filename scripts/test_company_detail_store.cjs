@@ -46,6 +46,9 @@ test("cache growth after stat reads at most the original size plus one and close
 test("same-size cache mutation and premature EOF are rejected and their FDs are closed", async t => {
   for (const mode of ["mutate", "eof"]) {
     const f = await cacheFixture(t, '{"value":"initial"}'); let first = true, closes = 0;
+    // Separate the initial stamp from a same-tick Windows write without sleeps.
+    // The mutation still goes through the real FD/filesystem and must be rejected.
+    await fs.utimes(f.file, new Date("2000-01-01T00:00:00Z"), new Date("2000-01-01T00:00:00Z"));
     const fileSystem = { ...fs, open: async (file, flags) => { const h = await fs.open(file, flags); return {
       stat: (...args) => h.stat(...args), read: async (buffer, offset, length, position) => {
         if (mode === "eof") return { bytesRead: 0, buffer };
@@ -328,4 +331,19 @@ test("different detail IDs and warm revision checks remain inside shared admissi
   let warmDone = false; const warm = store.get("one").then(value => { warmDone = true; return value; });
   assert.equal(scheduler.status().queuedForeground, 1); assert.equal(warmDone, false); release.resolve(); await owner;
   assert.equal((await warm).cacheStatus, "memory"); assert.equal(f.calls.master, 2); await scheduler.close();
+});
+
+test("a dedicated read-model namespace cannot overwrite the default admin cache or escape its directory", async t => {
+  const f = await fixture(t);
+  const admin = await createCompanyDetailStore(f.options).get("one");
+  const adminDirectory = path.join(f.dataDir, "company_master", "detail_read_models");
+  const adminFile = path.join(adminDirectory, (await fs.readdir(adminDirectory))[0]), before = await fs.readFile(adminFile);
+  const scoped = createCompanyDetailStore({ ...f.options, cacheNamespace: "insight_detail_read_models_v1_integrated",
+    build: async (id, sources) => ({ ...(await f.options.build(id, sources)), dedicated: true }) });
+  assert.equal((await scoped.get("one")).data.dedicated, true);
+  assert.deepEqual(await fs.readFile(adminFile), before);
+  assert.deepEqual((await createCompanyDetailStore(f.options).get("one")).data, admin.data);
+  for (const cacheNamespace of ["", ".", "..", "../other", "..\\other", "/absolute", "a/b", "a\\b", "a\u0000b", "a".repeat(81), null]) {
+    assert.throws(() => createCompanyDetailStore({ ...f.options, cacheNamespace }), { code: "COMPANY_DETAIL_CACHE_NAMESPACE_INVALID" });
+  }
 });

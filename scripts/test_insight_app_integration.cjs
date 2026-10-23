@@ -24,9 +24,37 @@ test('real DataLab registration records the actual Insight consent, exposes cust
   const origin=`http://127.0.0.1:${port}`, token=crypto.randomBytes(32).toString('hex');
   const inherited=Object.fromEntries(Object.entries(process.env).filter(([key])=>['PATH','SYSTEMROOT','WINDIR','TEMP','TMP'].includes(key.toUpperCase())));
   const env={...inherited,PORT:String(port),HOST:'127.0.0.1',DATA_DIR:dir,OUTPUTS_DIR:path.join(dir,'outputs'),CONFIG_DIR:path.join(dir,'config'),GLAMPING_ADMIN_USER:'fixture-admin',GLAMPING_ADMIN_PASSWORD:'FixtureAdmin2026!',GLAMPING_B2B_ENABLED:'1',GLAMPING_B2B_USER:'reserved-fixture',GLAMPING_B2B_PASSWORD:'FixtureReserved2026!',TOURISM_VISITOR_MONTHLY_SYNC_ENABLED:'0',TOURISM_DEMAND_STRENGTH_BACKFILL_ENABLED:'0',INSIGHT_CONNECTION_ENABLED:'1',INSIGHT_SERVICE_TOKEN:token,INSIGHT_SIGNUP_ENABLED:'1',INSIGHT_TERMS_VERSION:'insight-fixture-terms-v1',INSIGHT_PRIVACY_VERSION:'insight-fixture-privacy-v1',INSIGHT_TERMS_URL:'https://example.com/insight-terms',INSIGHT_PRIVACY_URL:'https://example.com/insight-privacy'};
+  env.INSIGHT_METADATA_READ_ENABLED='1';
+  const preload=path.join(dir,'saved-read-audit.cjs'),auditFile=path.join(dir,'saved-read-audit.json');
+  await fs.writeFile(preload,`
+    const fs=require('node:fs'),fsp=require('node:fs/promises'),http=require('node:http');
+    const {AsyncLocalStorage}=require('node:async_hooks'),scope=new AsyncLocalStorage();
+    const audit=fs.existsSync(${JSON.stringify(auditFile)})?JSON.parse(fs.readFileSync(${JSON.stringify(auditFile)},'utf8')):{requests:[],externalRequests:0};
+    const save=()=>fs.writeFileSync(${JSON.stringify(auditFile)},JSON.stringify(audit));save();
+    global.fetch=async()=>{audit.externalRequests++;save();throw Error('External requests forbidden');};
+    const read=fsp.readFile;fsp.readFile=async function(file,...args){
+      const row=scope.getStore(),name=String(file);
+      if(row&&name===${JSON.stringify(masterPath)})row.wholeMasterReads++;
+      if(row&&name===${JSON.stringify(path.join(dir,'history','observations.jsonl'))})row.wholeHistoryReads++;
+      return read.call(this,file,...args);
+    };
+    const stream=fs.createReadStream;fs.createReadStream=function(file,...args){
+      const row=scope.getStore();if(row&&String(file)===${JSON.stringify(masterPath)})row.masterStreams++;
+      return stream.call(this,file,...args);
+    };
+    const create=http.createServer;http.createServer=function(...args){
+      const index=args.findLastIndex(value=>typeof value==='function'),listener=args[index];
+      if(index>=0)args[index]=function(req,res){
+        if(!/^\\/api\\/insight\\/v1\\/(?:companies\\/cmp_test\\/collection|me|reports\\/briefing)(?:\\?|$)/.test(req.url))return listener.call(this,req,res);
+        const row={wholeMasterReads:0,wholeHistoryReads:0,masterStreams:0};
+        res.once('finish',()=>{row.status=res.statusCode;audit.requests.push(row);save();});
+        return scope.run(row,()=>listener.call(this,req,res));
+      };return create.apply(this,args);
+    };
+  `);
   let child;
   async function start(){
-    child=spawn(process.execPath,[path.join(__dirname,'glamping_app_server.cjs')],{cwd:path.resolve(__dirname,'..'),env,stdio:['ignore','pipe','pipe']});
+    child=spawn(process.execPath,['--require',preload,path.join(__dirname,'glamping_app_server.cjs')],{cwd:path.resolve(__dirname,'..'),env,stdio:['ignore','pipe','pipe']});
     await new Promise((resolve,reject)=>{
       const timeout=setTimeout(()=>reject(new Error('local app startup timed out')),15000);
       child.stdout.on('data',chunk=>{if(String(chunk).includes('Lodging datalab beta app running')){clearTimeout(timeout);resolve();}});
@@ -96,4 +124,11 @@ test('real DataLab registration records the actual Insight consent, exposes cust
   assert.equal(resumed.status,200);const resumedData=await resumed.json();assert.equal(resumedData.customer.entitlements.competitorLimit,5);assert.equal(resumedData.collectionAllowance.remaining,0);
   const noService=await fetch(`${origin}/api/insight/v1/me`);assert.equal(noService.status,401);
   const noAdmin=await fetch(`${origin}/api/admin/insight-customers`,{redirect:'manual'});assert.ok([302,401].includes(noAdmin.status));
+  const audit=JSON.parse(await fs.readFile(auditFile,'utf8'));
+  assert.equal(audit.externalRequests,0,'Insight saved-data reads never contact a provider');
+  assert.ok(audit.requests.some(row=>row.status===200));
+  assert.ok(audit.requests.some(row=>row.masterStreams>0),'the actual linked-company endpoint uses the streaming projection');
+  assert.equal(audit.requests.reduce((sum,row)=>sum+row.wholeMasterReads,0),0,'linked-company and receipt reads never reload the whole company master');
+  assert.equal(audit.requests.reduce((sum,row)=>sum+row.wholeHistoryReads,0),0,'linked-company and briefing reads never reload the whole observation history');
+  t.diagnostic(JSON.stringify({check:'insight_saved_reads_scoped',requests:audit.requests.length,wholeMasterReads:0,wholeHistoryReads:0,externalRequests:audit.externalRequests,rawProductCorrectionPreserved:true}));
 });

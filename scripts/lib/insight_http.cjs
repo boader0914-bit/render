@@ -1,7 +1,8 @@
 'use strict';
 const crypto = require('node:crypto');
+const { performance } = require('node:perf_hooks');
 const { fault, fields, hash, active } = require('./insight_store.cjs');
-const {regionIds}=require('./insight_analysis.cjs');
+const {readableRegionIds}=require('./insight_analysis.cjs');
 const csrf = token => crypto.createHmac('sha256', token).update('insight-csrf-v1').digest('base64url');
 const equal = (a, b) => crypto.timingSafeEqual(Buffer.from(hash(a || '')), Buffer.from(hash(b || '')));
 async function body(req) {
@@ -13,34 +14,95 @@ async function body(req) {
   return value;
 }
 function json(res, status, value) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(value)); }
-function createInsightHttp({ store, serviceToken, authenticateMember, memberActive, registerMember, checkUsername, catalog, requireAdmin, preparationBridge = null,
+function createInsightHttp({ store, serviceToken, authenticateMember, memberActive, registerMember, checkUsername, catalog, stateCatalog = catalog, requireAdmin, preparationBridge = null,
   signup = { enabled: false }, policies = {}, supportEmail = '', adminStore = null, collectionResults = null, analysis = null }) {
   if (typeof serviceToken !== 'string' || serviceToken.length < 32) throw new Error('Insight service credential must contain at least 32 characters');
-  async function state(customer) {
-    if (preparationBridge) await preparationBridge.refresh(customer.customerId);
-    const data = await catalog();
+  // Receipt verification reads saved results only. Bootstrap must not wait for
+  // it, and simultaneous bootstrap/poll requests must share the same refresh.
+  const preparationRefreshes = new Map();
+  function refreshPreparation(customerId, deferred = false) {
+    if (!preparationBridge) return Promise.resolve();
+    if (preparationRefreshes.has(customerId)) return preparationRefreshes.get(customerId);
+    const pending = new Promise((resolve, reject) => {
+      const start = () => Promise.resolve().then(() => preparationBridge.refresh(customerId)).then(resolve, reject);
+      if (deferred) setImmediate(start); else start();
+    });
+    preparationRefreshes.set(customerId, pending);
+    const clear = () => { if (preparationRefreshes.get(customerId) === pending) preparationRefreshes.delete(customerId); };
+    // Handle rejection even when only a background bootstrap is observing it;
+    // callers that explicitly await verification still receive that failure.
+    pending.then(clear, clear);
+    return pending;
+  }
+  function currentCustomer(token, customerId) {
+    const current = store.authenticate(token);
+    if (current.customerId !== customerId) throw fault('LOGIN_REQUIRED', '다시 로그인해 주세요.', 401);
+    return current;
+  }
+  function customerScope(token, customerId) {
+    let memberId;
+    return { async verify() {
+      memberId = currentCustomer(token, customerId).memberId;
+      if (!await memberActive(memberId)) {
+        store.logout(token);
+        throw fault('ACCOUNT_DISABLED', '이용자 계정이 중지되었습니다.', 403);
+      }
+    }, current() {
+      const current = currentCustomer(token, customerId);
+      if (current.memberId !== memberId) throw fault('LOGIN_REQUIRED', '다시 로그인해 주세요.', 401);
+      return current;
+    } };
+  }
+  function currentAdminCustomer(token, customerId, preview = false) {
+    const admin = adminStore.authenticate(token);
+    const customer = store.get(customerId);
+    if (preview && customer.memberId !== 'insight-admin:' + admin.adminId) throw fault('CUSTOMER_VIEW_REQUIRED', '고객 화면을 다시 열어 주세요.', 409);
+    if (preview && customer.accountStatus !== 'active') throw fault('ACCOUNT_DISABLED', '고객 체험 계정의 이용이 중지되었습니다.', 403);
+    return customer;
+  }
+  function state(customer, data) {
     const allowed = new Set(customer.relations.filter(active).map(row => row.companyId));
     const companies = data.companies.filter(row => allowed.has(row.companyId));
-    const regionKeys = regionIds(customer,data);
+    const regionKeys = readableRegionIds(customer,data);
     const unlimited=customer.accountKind==='admin_preview';
     return { customer, companies, regions: data.regions.filter(row => regionKeys.has(row.id)), corrections: store.corrections(customer.customerId),
       registrationAllowance:{ownLimit:unlimited?null:1,competitorLimit:unlimited?null:customer.entitlements.competitorLimit,interestRegionLimit:unlimited?null:customer.entitlements.interestRegionLimit},
       preparations: store.requests(customer.customerId), collectionAllowance:store.collectionAllowance(customer.customerId), features: { weeklyReports: false, reportDelivery: false, directCollection: Boolean(preparationBridge && collectionResults), dataPreparationRequests: true } };
+  }
+  async function sendState(res, customer, scope, extra = {}, { awaitPreparation = false } = {}) {
+    const started = performance.now();
+    // Mutations retain their existing verified receipt transition. Only state
+    // bootstrap reads are allowed to leave this work in the background.
+    if (awaitPreparation && preparationBridge) await refreshPreparation(customer.customerId);
+    const catalogStarted = performance.now();
+    const data = await stateCatalog();
+    const catalogDuration = performance.now() - catalogStarted;
+    if (scope?.verify) await scope.verify();
+    // There is deliberately no await between the final session/relationship
+    // read and JSON serialization, including after asynchronous member checks.
+    const current = scope?.current ? scope.current() : store.get(customer.customerId);
+    if (!current) return;
+    const value = state(current, data);
+    if (typeof res.setHeader === 'function') res.setHeader('Server-Timing', `state_catalog;dur=${Math.max(0, catalogDuration).toFixed(1)}, state_total;dur=${Math.max(0, performance.now() - started).toFixed(1)}`);
+    json(res, 200, { ...value, ...extra });
+    // Schedule after ending the response. No dispatch/retry is performed here,
+    // and the returned state retains the last genuinely verified job status.
+    if (!awaitPreparation) refreshPreparation(value.customer.customerId, true);
   }
   async function companyCollection(c, companyId, month) {
     if (!store.hasCompany(c,companyId) || !collectionResults) throw fault('NOT_FOUND','등록한 업체의 결과를 찾을 수 없습니다.',404);
     // Polling remains available (10-second interval), but changing an arbitrary
     // month cannot issue unbounded expensive source reads for a customer.
     store.throttle(`company-read:${c.customerId}`,240);
-    if (preparationBridge) await preparationBridge.refresh(c.customerId);
+    if (preparationBridge) await refreshPreparation(c.customerId);
     const request = store.requests(c.customerId).find(row => row.companyId===companyId) || null;
     // A customer's previous request must not pin the shared company DB to an old run.
     const companyDetail=await collectionResults.companyDetail?.(companyId, { month }) || null;
     const result = await collectionResults.read(companyId);
     return {request,result,companyDetail,collectionAllowance:store.collectionAllowance(c.customerId),previousResult:Boolean(result && request && result.runId!==request.runId)};
   }
-  async function customerRequest(req, res, url, tail, c, token, context = {}) {
-      if (req.method === 'GET' && tail === '/me') json(res, 200, { ...(await state(c)), csrfToken: csrf(token), ...context });
+  async function customerRequest(req, res, url, tail, c, token, context = {}, scope = customerScope(token, c.customerId)) {
+      if (req.method === 'GET' && tail === '/me') await sendState(res, c, scope, { csrfToken: csrf(token), ...context });
       else if(['GET','POST'].includes(req.method)&&/^\/regions\/[a-zA-Z0-9_-]+\/preparation$/.test(tail)) {
         if(!analysis)throw fault('REGION_NOT_READY','지역 자료 연결을 준비 중입니다.',503);
         let month;
@@ -106,7 +168,7 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
         else if (['correction', 'withdraw-correction'].includes(command.action)) result = store.correct(c.customerId, command, company);
         else if (command.action === 'prepare-data') result = store.preparation(c.customerId, command, company);
         else result = store.update(c.customerId, command, data);
-        json(res, 200, { ...(await state(result)), csrfToken: csrf(token), ...context });
+        await sendState(res, result, scope, { csrfToken: csrf(token), ...context }, { awaitPreparation: true });
       } else throw fault('NOT_FOUND', '요청한 기능을 찾을 수 없습니다.', 404);
   }
   const policyUrl = (value, kind) => {
@@ -150,8 +212,9 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
           } else customer = store.findMember(memberId);
           if (!customer) throw fault('CUSTOMER_VIEW_REQUIRED', '고객 화면을 다시 열어 주세요.', 409);
           if (customer.accountStatus !== 'active') throw fault('ACCOUNT_DISABLED', '고객 체험 계정의 이용이 중지되었습니다.', 403);
-          if (route === '/start' && req.method === 'POST') json(res, 200, { ...(await state(customer)), csrfToken: csrf(token), ...context });
-          else await customerRequest(req, res, url, route, customer, token, context);
+          const scope = { current: () => currentAdminCustomer(token, customer.customerId, true) };
+          if (route === '/start' && req.method === 'POST') await sendState(res, customer, scope, { csrfToken: csrf(token), ...context });
+          else await customerRequest(req, res, url, route, customer, token, context, scope);
           return true;
         }
         if (tail === '/admin/me' && req.method === 'GET') json(res, 200, { admin, csrfToken: csrf(token) });
@@ -160,11 +223,11 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
         else {
           const match = /^\/admin\/customers\/(cus_[a-zA-Z0-9-]+)(\/commands)?$/.exec(tail);
           if (!match) throw fault('NOT_FOUND', '지원하지 않는 관리자 기능입니다.', 404);
-          if (req.method === 'GET' && !match[2]) json(res, 200, { ...(await state(store.get(match[1]))), history: store.history(match[1]) });
+          if (req.method === 'GET' && !match[2]) await sendState(res, store.get(match[1]), { current: () => currentAdminCustomer(token, match[1]) }, { history: store.history(match[1]) });
           else if (req.method === 'POST' && match[2]) {
             store.throttle(`admin-changes:${admin.adminId}`, 120);
             store.adminUpdate(match[1], await body(req), admin.adminId, await catalog());
-            json(res, 200, await state(store.get(match[1])));
+            await sendState(res, store.get(match[1]), { current: () => currentAdminCustomer(token, match[1]) }, {}, { awaitPreparation: true });
           } else throw fault('NOT_FOUND', '지원하지 않는 관리자 기능입니다.', 404);
         }
         return true;
@@ -204,7 +267,7 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
         }
         if (c.accountStatus !== 'active') throw fault('ACCOUNT_DISABLED', '이용이 중지된 계정입니다.', 403);
         const token = store.session(c.customerId);
-        json(res, 200, { token, csrfToken: csrf(token), ...(await state(c)) }); return true;
+        await sendState(res, c, customerScope(token, c.customerId), { token, csrfToken: csrf(token) }); return true;
       }
       const token = req.headers['x-insight-session'];
       const c = store.authenticate(token);
@@ -221,7 +284,8 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
     try {
       const tail = url.pathname.slice(base.length).split('/').filter(Boolean);
       if (req.method === 'GET' && !tail.length) { json(res, 200, { customers: store.list().map(c => ({ customerId: c.customerId, memberId: c.memberId, username: c.username, accountKind: c.accountKind || 'customer', accountStatus: c.accountStatus, businessStatus: c.businessStatus, relations: c.relations.filter(active), entitlements: c.entitlements, revision: c.revision })) }); return true; }
-      if (req.method === 'GET' && tail.length === 1) { const c = store.get(tail[0]); json(res, 200, { ...(await state(c)), history: store.history(c.customerId) }); return true; }
+      const verify = customerId => { if (!requireAdmin(session, req, res)) return null; return store.get(customerId); };
+      if (req.method === 'GET' && tail.length === 1) { const c = store.get(tail[0]); await sendState(res, c, { current: () => verify(c.customerId) }, { history: store.history(c.customerId) }); return true; }
       if (req.method !== 'POST' || tail.length !== 2) throw fault('METHOD_NOT_ALLOWED', '지원하지 않는 요청입니다.', 405);
       let origin; try { origin = new URL(req.headers.origin); } catch {}
       if (!origin || origin.host !== req.headers.host) throw fault('ORIGIN_REQUIRED', '현재 데이터랩 화면에서 요청해 주세요.', 403);
@@ -236,7 +300,7 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
         const collection=correction.kind==='product' && collectionResults ? await collectionResults.read(correction.companyId,correction.target.runId) : null;
         store.reviewCorrection(p.requestId, p.decision, p.reason, actor, company, collection);
       } else throw fault('NOT_FOUND', '요청한 기능을 찾을 수 없습니다.', 404);
-      json(res, 200, await state(store.get(tail[0])));
+      await sendState(res, store.get(tail[0]), { current: () => verify(tail[0]) }, {}, { awaitPreparation: true });
     } catch (error) { json(res, error.statusCode || 503, { error: { code: error.code || 'SERVICE_UNAVAILABLE', message: error.statusCode ? error.message : '고객 자료 처리 상태를 확인해 주세요.' } }); }
     return true;
   }
