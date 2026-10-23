@@ -11,6 +11,9 @@
   // Reload restoration comes from the freshly authenticated /me response only.
   const cache=new Map(),inFlight=new Map(),regionEpochs=new Map(),deniedRegions=new Set();
   const CACHE_LIMIT=24,CACHE_MAX_AGE=30*60*1000,PERSISTED_MAX_AGE=7*24*60*60*1000,CLOCK_SKEW=60*1000;
+  // A preserved report may take the source's full three-minute budget to
+  // recalculate. Cover that window without keeping an endless polling loop.
+  const REPORT_CHECK_DELAYS=[2000,4000,8000,16000,30000,45000,45000,45000];
   let cacheScope='default',allowedRegions=null,cacheGeneration=0,onSessionExpired=null;
   const reports=new Map(),reportRequests=new Map(),deniedReports=new Set();
   let reportScope='',reportPermission='',reportGeneration=0,reportOwnIds=[],reportCompanies=new Set(),reportRegions=new Set();
@@ -288,10 +291,10 @@
       if(period.start!==reportPeriod().start){if(visible())void loadReport();return;}
       const fresh=rememberReport(ownId,period,data);if(!visible())return;
       if(renderedVersion!==fresh.version){drawReport(slot,fresh.data,Boolean(entry));renderedVersion=fresh.version;}
-      const info=data.responseCache||{},pending=info.refreshing||info.revalidationRequired,checking=pending&&!info.refreshFailed&&backgroundChecks<4;
+      const info=data.responseCache||{},pending=info.refreshing||info.revalidationRequired,checking=pending&&!info.refreshFailed&&backgroundChecks<REPORT_CHECK_DELAYS.length;
       const message=info.refreshFailed?'최신 리포트 확인 지연 · 이전 저장 자료를 표시합니다.':checking?'이전 저장 리포트 표시 · 최신 자료 확인 중':pending?'최신 확인에 시간이 걸려 이전 리포트를 표시합니다.':'';
       freshness(message?previousNotice(fresh,message):'',checking?'checking':'notice');
-      if(checking&&typeof setTimeout==='function')refreshTimer=setTimeout(()=>{refreshTimer=null;if(visible())void loadReport({backgroundChecks:backgroundChecks+1});},[2000,4000,8000,16000][backgroundChecks]);
+      if(checking&&typeof setTimeout==='function')refreshTimer=setTimeout(()=>{refreshTimer=null;if(visible())void loadReport({backgroundChecks:backgroundChecks+1});},REPORT_CHECK_DELAYS[backgroundChecks]);
     }catch(error){
       if(!authorized())return;
       if(error.status===401){expireSession();return;}

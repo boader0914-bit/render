@@ -114,8 +114,18 @@ test('a pending response crossing Korea midnight triggers the correct new-period
 
 test('background report verification uses bounded GET polling and route departure clears its timers',async()=>{
  const h=harness(),data=saved();h.restore(data);h.mount();await h.resolve(0,data);
- for(const delay of [2000,4000,8000,16000]){assert.equal([...h.timers.values()][0].ms,delay);await h.tick();await h.resolve(h.calls.length-1,data);}
- assert.equal(h.calls.length,5);assert.equal(h.timers.size,0);assert.match(h.notice.textContent,/최신 확인에 시간이 걸려/);h.leave();h.mount();await h.resolve(5,data);assert.equal(h.timers.size,1);h.leave();assert.equal(h.timers.size,0);
+ for(const delay of [2000,4000,8000,16000,30000,45000,45000,45000]){assert.equal([...h.timers.values()][0].ms,delay);h.advance(delay);await h.tick();await h.resolve(h.calls.length-1,data);}
+ assert.equal(h.calls.length,9);assert.equal(h.timers.size,0);assert.match(h.notice.textContent,/최신 확인에 시간이 걸려/);h.leave();h.mount();await h.resolve(9,data);assert.equal(h.timers.size,1);h.leave();assert.equal(h.timers.size,0);
+});
+
+test('a report finishing after ninety seconds replaces the saved result automatically without a page reload',async()=>{
+ const h=harness(),data=saved();h.restore(data);h.mount();await h.resolve(0,data);let elapsed=0;
+ for(const delay of [2000,4000,8000,16000,30000]){
+  h.advance(delay);elapsed+=delay;await h.tick();await h.resolve(h.calls.length-1,data);assert.match(h.html(),/10실/);assert.match(h.notice.textContent,/최신 자료 확인 중/);
+ }
+ assert.equal(elapsed,60000);assert.equal([...h.timers.values()][0].ms,45000,'the report remains eligible for a check after the former thirty-second tail');
+ h.advance(45000);await h.tick();const fresh=report('own',38,base+105000);await h.resolve(h.calls.length-1,fresh);
+ assert.match(h.html(),/38실/);assert.equal(h.notice.hidden,true);assert.equal(h.timers.size,0);assert.equal(h.calls.length,7);assert.ok(h.calls.every(call=>call.payload===undefined));
 });
 
 test('explicit cache clearing prevents a previously pending private report from reappearing',async()=>{
