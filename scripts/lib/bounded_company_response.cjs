@@ -35,7 +35,10 @@ function stringBytes(value, remaining) {
 function boundedJsonBuffer(value, maxBytes = DEFAULT_RESPONSE_BYTES) {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new TypeError("Invalid response byte limit");
   let bytes = 0, root = true;
-  const holders = new WeakMap();
+  // Native JSON visits children in preorder and passes their real holder as
+  // `this`. Reuse one state slot per depth, not one WeakMap entry per input
+  // container: a wide graph must not add a second graph of counting records.
+  const ancestors = []; let depth = 0;
   const add = count => { bytes += count; if (bytes > maxBytes) throw tooLarge(); };
   const json = JSON.stringify(value, function (key, original) {
     // Native JSON invokes toJSON/getters with their original receiver before
@@ -51,8 +54,9 @@ function boundedJsonBuffer(value, maxBytes = DEFAULT_RESPONSE_BYTES) {
     const omitted = item === undefined || typeof item === "function" || typeof item === "symbol";
     const isRoot = root; root = false;
     if (!isRoot) {
-      const state = holders.get(this);
-      // Every native container is registered when its own replacer runs.
+      while (depth && ancestors[depth - 1].holder !== this) ancestors[--depth].holder = null;
+      const state = depth ? ancestors[depth - 1] : null;
+      // Every current native ancestor was registered by its own replacer.
       if (!state) throw new TypeError("Missing JSON response holder");
       if (state.array || !omitted) {
         if (state.emitted++) add(1);
@@ -65,10 +69,15 @@ function boundedJsonBuffer(value, maxBytes = DEFAULT_RESPONSE_BYTES) {
     else if (typeof item === "number") add(JSON.stringify(item).length);
     else if (typeof item === "boolean") add(item ? 4 : 5);
     else if (typeof JSON.isRawJSON === "function" && JSON.isRawJSON(item)) add(Buffer.byteLength(item.rawJSON));
-    else if (typeof item === "object") { add(2); holders.set(item, { array: Array.isArray(item), emitted: 0 }); }
+    else if (typeof item === "object") {
+      add(2);
+      const state = ancestors[depth] || (ancestors[depth] = { holder: null, array: false, emitted: 0 });
+      state.holder = item; state.array = Array.isArray(item); state.emitted = 0; depth += 1;
+    }
     // BigInt follows native JSON.stringify's error path without coercing it.
     return item;
   });
+  for (const state of ancestors) state.holder = null;
   if (json === undefined) return Buffer.alloc(0); // Existing res.end(undefined).
   if (Buffer.byteLength(json) !== bytes || bytes > maxBytes) throw tooLarge();
   return Buffer.from(json);

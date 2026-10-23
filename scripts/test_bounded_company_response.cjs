@@ -56,6 +56,58 @@ test("shared object references are valid while omitted root yields the prior emp
   for (const v of [undefined, () => {}, Symbol("x")]) assert.equal(boundedJsonBuffer(v).length, 0);
 });
 
+test("wide empty and shared containers preserve exact bytes and the response limit", () => {
+  const shared = Object.freeze({ items: Object.freeze([]), keep: null }), value = {
+    empty: Array.from({ length: 12000 }, () => Object.freeze({})),
+    shared: Array.from({ length: 6000 }, () => shared), final: { zero: 0, missing: undefined }
+  };
+  const expected = Buffer.from(JSON.stringify(value));
+  assert.deepEqual(boundedJsonBuffer(value, expected.length), expected);
+  assert.throws(() => boundedJsonBuffer(value, expected.length - 1), { code: "COMPANY_RESPONSE_TOO_LARGE" });
+  assert.equal(value.shared[0], value.shared.at(-1)); assert.equal(Object.isFrozen(shared), true);
+});
+
+test("mixed ancestor depths and later shared revisits do not reuse a prior comma count", () => {
+  const shared = { empty: {}, array: [null, undefined, {}, []], value: "한글😀" };
+  let nested = shared;
+  for (let depth = 0; depth < 96; depth++) nested = depth % 2 ? { before: shared, child: nested, after: shared } : [shared, nested, shared];
+  const value = { nested, after: [shared, { shallow: true }, shared], last: shared }, expected = Buffer.from(JSON.stringify(value));
+  assert.deepEqual(boundedJsonBuffer(value, expected.length), expected);
+  assert.throws(() => boundedJsonBuffer(value, expected.length - 1), { code: "COMPANY_RESPONSE_TOO_LARGE" });
+});
+
+test("revisited toJSON containers, primitive returns and getter receivers match native traversal", () => {
+  function fixture() {
+    const events = [], shared = { toJSON(key) {
+      events.push(["toJSON", key, this === shared]);
+      if (key === "primitive") return 7;
+      const item = { get value() { events.push(["getter", key, this === item]); return key || "root"; }, empty: {}, omitted: undefined };
+      return key === "array" ? [item, item, undefined] : item;
+    } };
+    return { events, value: { first: shared, primitive: shared, array: shared, last: shared } };
+  }
+  const a = fixture(), b = fixture(); assert.equal(boundedJsonBuffer(a.value).toString(), JSON.stringify(b.value)); assert.deepEqual(a.events, b.events);
+});
+
+test("getter mutation and nested serialization keep native holder order", () => {
+  function fixture() {
+    const events = [], sibling = { retained: "same" }, value = { first: sibling,
+      get change() { events.push(this === value); delete this.later; this.addedAfterEnumeration = "ignored"; return { nested: boundedJsonBuffer([{}, sibling, {}]).toString() }; },
+      later: sibling, final: sibling };
+    return { value, events };
+  }
+  const a = fixture(), b = fixture(); assert.equal(boundedJsonBuffer(a.value).toString(), JSON.stringify(b.value)); assert.deepEqual(a.events, b.events);
+});
+
+test("native cycle and original getter errors survive ancestor unwinding", () => {
+  const root = { before: [{}, { sibling: [] }] }; root.after = { child: root };
+  const nativeCycle = (() => { try { JSON.stringify(root); } catch (error) { return error; } })();
+  assert.throws(() => boundedJsonBuffer(root), error => error instanceof TypeError && error.message === nativeCycle.message);
+  const sentinel = { sameError: true }, value = { before: [[], {}, { deep: [{}, {}] }], after: { get failing() { throw sentinel; } } };
+  assert.throws(() => boundedJsonBuffer(value), error => error === sentinel);
+  assert.equal(boundedJsonBuffer({ afterFailure: [{}, {}, []] }).toString(), JSON.stringify({ afterFailure: [{}, {}, []] }));
+});
+
 test("native raw JSON values keep their exact spelling and count their embedded bytes", { skip: typeof JSON.rawJSON !== "function" }, () => {
   const raw = JSON.rawJSON('"' + "x".repeat(80) + '"'), value = { raw, exponent: JSON.rawJSON("1e2") }, expected = JSON.stringify(value);
   assert.equal(boundedJsonBuffer(value, Buffer.byteLength(expected)).toString(), expected);
