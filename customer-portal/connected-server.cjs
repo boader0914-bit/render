@@ -9,6 +9,7 @@ const { fault } = require('../scripts/lib/insight_store.cjs');
 const { createCompanyReadCache } = require('./company-read-cache.cjs');
 const { createRegionReadCache } = require('./region-read-cache.cjs');
 const { createReportReadCache } = require('./report-read-cache.cjs');
+const { createUpstreamReader } = require('./upstream-request.cjs');
 function validatedOrigin(value) {
   const u = new URL(value);
   if (u.username || u.password || u.pathname !== '/' || u.search || u.hash || /[?#]/.test(String(value)) || (u.protocol !== 'https:' && !(u.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(u.hostname)))) throw new Error('Insight origins require HTTPS or local development addresses');
@@ -40,7 +41,7 @@ function configuration(env = process.env) {
   if(reportCacheDirectory&&(!path.isAbsolute(reportCacheDirectory)||path.resolve(reportCacheDirectory)===path.parse(path.resolve(reportCacheDirectory)).root))throw new Error('Insight report cache requires an absolute, dedicated directory');
   return { origin: origin.origin, origins, backend: backend.origin, serviceToken, port, host: env.RENDER ? '0.0.0.0' : '127.0.0.1',regionCacheDirectory:cacheDirectory,companyCacheDirectory,reportCacheDirectory };
 }
-function createConnectedServer({ origin, origins = [], backend, serviceToken, fetchImpl = fetch, regionCacheDirectory=null,companyCacheDirectory=null,reportCacheDirectory=null }) {
+function createConnectedServer({ origin, origins = [], backend, serviceToken, fetchImpl = fetch, regionCacheDirectory=null,companyCacheDirectory=null,reportCacheDirectory=null,diagnosticsLogger }) {
   const trustedOrigins = new Map(publicOrigins(origin, origins).map(value => [new URL(value).host, value]));
   const companyReads = createCompanyReadCache({persistenceDirectory:companyCacheDirectory,namespace:backend}), regionReads = createRegionReadCache({persistenceDirectory:regionCacheDirectory,namespace:backend}), scopeSecret = crypto.randomBytes(32), staticAssets = new Map();
   const reportReads = createReportReadCache({persistenceDirectory:reportCacheDirectory,namespace:backend});
@@ -54,7 +55,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   function timings(){
     const started=performance.now(),values=new Map([['upstream_headers',0],['upstream_body',0],['snapshot',0]]);
     const add=(name,duration)=>{if(Number.isFinite(duration)&&duration>=0)values.set(name,(values.get(name)||0)+duration);};
-    return {add,central(header){
+    return {requestId:crypto.randomUUID(),add,central(header){
       if(typeof header!=='string'||header.length>8192)return;
       for(const item of header.split(',')){
         const [name,...parameters]=item.trim().split(';');if(!['state_catalog','state_total'].includes(name))continue;
@@ -63,20 +64,8 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
       }
     },header(){return [...values,['total',performance.now()-started]].map(([name,duration])=>`${name};dur=${duration.toFixed(1)}`).join(', ');}};
   }
-  async function readUpstream(route, search, headers, {method='GET',body,stage=identityRoutes.has(route)?'identity':'source',timing}={}) {
-    const signal=AbortSignal.timeout(readTimeout(method,route));let phase='upstream_headers',started=performance.now();
-    try{
-      const response=await fetchImpl(`${backend}/api/insight/v1${route}${search}`,{method,headers,body,redirect:'error',signal});
-      timing?.add(phase,performance.now()-started);phase='upstream_body';started=performance.now();
-      timing?.central(response.headers?.get?.('server-timing'));
-      const data=await response.json();timing?.add(phase,performance.now()-started);phase=null;
-      return {status:response.status,ok:response.ok,data};
-    }catch(error){
-      if(phase)timing?.add(phase,performance.now()-started);
-      if(stage&&(error?.name==='TimeoutError'||signal.aborted&&signal.reason?.name==='TimeoutError'))return {status:504,ok:false,data:{error:{code:'UPSTREAM_TIMEOUT',stage,message:stage==='identity'?'로그인 확인이 지연되어 연결하지 못했습니다. 잠시 후 다시 열어 주세요.':'자료 조회가 지연되어 연결하지 못했습니다. 잠시 후 다시 열어 주세요.'}}};
-      throw error;
-    }
-  }
+  const upstreamReader=createUpstreamReader({backend,fetchImpl,readTimeout,...(diagnosticsLogger?{logger:diagnosticsLogger}:{})});
+  const readUpstream=(route,search,headers,options={})=>upstreamReader(route,search,headers,{stage:identityRoutes.has(route)?'identity':'source',...options});
   async function companyRead(requestOrigin, mode, session, headers, route, url, force, timing) {
     const match=/^\/(?:customer-view\/)?companies\/([a-zA-Z0-9_-]+)\/collection$/.exec(route);
     if(!match)return null;
@@ -121,9 +110,10 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   const adminCookieName = secure ? '__Host-sabun_insight_admin' : 'insight_local_admin';
   const adminCookie = (token, expire = false) => `${adminCookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${expire ? 0 : 28800}${secure ? '; Secure' : ''}`;
   const staticMap = { '/company-flow.js':['company-flow.js','text/javascript'], '/region-history.js':['region-history.js','text/javascript'], '/analysis.js':['analysis.js','text/javascript'], '/': ['connected.html', 'text/html'], '/app': ['connected.html', 'text/html'], '/login': ['connected.html', 'text/html'], '/signup': ['connected.html', 'text/html'], '/terms': ['connected.html', 'text/html'], '/privacy': ['connected.html', 'text/html'], '/company-view.js': ['company-view.js', 'text/javascript'], '/collection.js': ['collection.js', 'text/javascript'], '/connected.js': ['connected.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/connected.css': ['connected.css', 'text/css'], '/favicon.svg': ['favicon.svg', 'image/svg+xml'] };
+  staticMap['/bootstrap-read.js']=['bootstrap-read.js','text/javascript'];
   const server = http.createServer(async (req, res) => {
     const timing=timings();let observed=false;
-    const respond=(status,value)=>{if(observed)res.setHeader('Server-Timing',timing.header());json(res,status,value);};
+    const respond=(status,value)=>{if(observed)res.setHeader('Server-Timing',timing.header());res.setHeader('X-Insight-Request-Id',timing.requestId);json(res,status,value);};
     res.setHeader('Cache-Control', 'private, no-store'); res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     res.setHeader('Referrer-Policy', 'no-referrer'); res.setHeader('X-Robots-Tag', 'noindex, nofollow');
@@ -135,7 +125,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
       if (req.method === 'GET' && url.pathname === '/api/health') { respond(200, { status: 'ok', mode: 'connected', buildCommit: process.env.RENDER_GIT_COMMIT?.slice(0, 12) || null }); return; }
       if (url.pathname.startsWith('/api/insight-admin/v1/')) {
         const route = url.pathname.slice('/api/insight-admin/v1'.length);
-        observed=identityRoutes.has('/admin'+route)||req.method==='GET'&&/^\/customer-view\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|reports\/briefing)$/.test(route);
+        observed=identityRoutes.has('/admin'+route)||req.method==='GET'&&(route==='/customer-view/config'||/^\/customer-view\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|reports\/briefing)$/.test(route));
         const methods = { '/me': 'GET', '/customers': 'GET', '/auth/login': 'POST', '/auth/logout': 'POST', '/customer-view/start': 'POST', '/customer-view/me': 'GET', '/customer-view/config': 'GET', '/customer-view/policies/terms': 'GET', '/customer-view/policies/privacy': 'GET', '/customer-view/commands': 'POST', '/customer-view/catalog/companies': 'GET', '/customer-view/catalog/regions': 'GET' };
         const match = /^\/customers\/cus_[a-zA-Z0-9-]+(\/commands)?$/.exec(route);
         const regionalPreparation=/^\/customer-view\/regions\/[a-zA-Z0-9_-]+\/preparation$/.test(route)&&['GET','POST'].includes(req.method);
@@ -162,7 +152,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
       }
       if (url.pathname.startsWith('/api/customer/v1/')) {
         const route = url.pathname.slice('/api/customer/v1'.length);
-        observed=identityRoutes.has(route)||req.method==='GET'&&/^\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|reports\/briefing)$/.test(route);
+        observed=identityRoutes.has(route)||req.method==='GET'&&(route==='/config'||/^\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|reports\/briefing)$/.test(route));
         const allowed = { '/config': 'GET', '/me': 'GET', '/auth/username': 'GET', '/policies/terms': 'GET', '/policies/privacy': 'GET', '/auth/login': 'POST', '/auth/signup': 'POST', '/auth/logout': 'POST', '/commands': 'POST', '/catalog/companies': 'GET', '/catalog/regions': 'GET' };
         const regionalPreparation=/^\/regions\/[a-zA-Z0-9_-]+\/preparation$/.test(route)&&['GET','POST'].includes(req.method);
         if (!regionalPreparation && (allowed[route] || (/^\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|reports\/briefing)$/.test(route) ? 'GET' : '')) !== req.method) throw fault('NOT_FOUND', '요청한 기능을 찾을 수 없습니다.', 404);

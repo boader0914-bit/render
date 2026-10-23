@@ -9,18 +9,66 @@
   const adminView = location.pathname === '/customer-view';
   let adminCsrf = '';
   let state = null, config = {}, busy = false, searchSequence = 0, selectedOwnId = null;
+  let bootstrapStatus = 'loading', bootstrapError = null, bootstrapInFlight = false;
+  let configStatus = 'loading', configError = null, configRequest = null;
   const restoredStates=new WeakSet();
   const reportPermissionVersion=s=>s?JSON.stringify([s.customer.revision,s.customer.relations.filter(row=>['active','pending'].includes(row.status)),s.companies,s.regions,s.preparations]):'';
   const route = () => location.hash.slice(1) || ({'/signup':'signup','/login':'login','/terms':'terms','/privacy':'privacy'}[location.pathname]) || 'home';
   const menuRoute=()=>route()==='register-own'?'property':route().startsWith('regions=')?'regions':/^(company|collection|collect)=/.test(route())?(state?.customer.relations.find(row=>row.companyId===decodeURIComponent(route().split('=').slice(1).join('=')))?.kind==='own'?'property':'competitors'):route();
   const toast = message => { $('#toast').textContent = message; $('#toast').classList.add('visible'); setTimeout(() => $('#toast').classList.remove('visible'), 4500); };
+  async function responseValue(response) {
+    let value;
+    try { value = await response.json(); }
+    catch { const error = new Error('자료 연결 응답을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.'); error.status=response.status; error.code=response.ok?'INVALID_RESPONSE':`HTTP_${response.status}`; throw error; }
+    if (!response.ok) { const error = new Error(value?.error?.message || '요청을 처리하지 못했습니다.'); error.status = response.status; error.code = value?.error?.code; throw error; }
+    if(!value||typeof value!=='object'||Array.isArray(value)){const error=new Error('자료 연결 응답을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.');error.status=response.status;error.code='INVALID_RESPONSE';throw error;}
+    return value;
+  }
+  async function startupFetch(url,options) {
+    const early=window.InsightBootstrapReads?.take?.(url);
+    if(!early)return fetch(url,options);
+    const abort=()=>early.abort();
+    options.signal?.addEventListener('abort',abort,{once:true});
+    try { const result=await early.promise;if(result.error)throw result.error;return result.response; }
+    finally { options.signal?.removeEventListener('abort',abort); }
+  }
   async function api(url, data, options={}) {
     const base = adminView ? '/api/insight-admin/v1' : '/api/customer/v1';
     const target = adminView && url !== '/auth/logout' ? '/customer-view' + url : url;
-    const response = await fetch(`${base}${target}`, { method:data ? 'POST':'GET', headers:data ? { 'Content-Type':'application/json','X-CSRF-Token':state?.csrfToken || adminCsrf || '' }: { Accept:'application/json',...(options.refresh===true?{'X-Insight-Refresh':'1'}:{}) }, ...(data ? { body:JSON.stringify(data) }: {}) });
-    const value = await response.json();
-    if (!response.ok) { const error = new Error(value.error?.message || '요청을 처리하지 못했습니다.'); error.status = response.status; error.code = value.error?.code; throw error; }
-    return value;
+    const response = await (options.startup===true?startupFetch:fetch)(`${base}${target}`, { method:data ? 'POST':'GET', headers:data ? { 'Content-Type':'application/json','X-CSRF-Token':state?.csrfToken || adminCsrf || '' }: { Accept:'application/json',...(options.refresh===true?{'X-Insight-Refresh':'1'}:{}) }, ...(data ? { body:JSON.stringify(data) }: {}), ...(options.signal?{signal:options.signal}:{}) });
+    return responseValue(response);
+  }
+  const connectionLoading = message => `<section class="card" role="status" aria-live="polite"><div class="initial-loading"><span class="loading-ring" aria-hidden="true"></span><p>${esc(message)}</p></div></section>`;
+  const connectionFailure = (error,action) => `<section class="card"><h1>자료 연결 확인이 필요합니다.</h1><p>${esc(error?.message || '잠시 후 다시 시도해 주세요.')}</p><button type="button" class="button" data-action="${action}">다시 연결</button></section>`;
+  function configurationScreen() {
+    $('#main').innerHTML=configStatus==='failed'?connectionFailure(configError,'retry-config'):connectionLoading('회원가입·이용 안내 설정을 확인하고 있습니다.');
+  }
+  async function bootstrapRead(read) {
+    // Only startup GETs enter this retry path. Commands, login and /start remain single requests.
+    for(let attempt=0;attempt<2;attempt++) {
+      const controller=typeof AbortController==='function'?new AbortController():null;
+      let timer;
+      try {
+        const timeout=controller?new Promise((resolve,reject)=>{timer=setTimeout(()=>{controller.abort();const error=new Error('자료 연결 확인이 지연되고 있습니다. 잠시 후 다시 시도해 주세요.');error.code='BOOTSTRAP_TIMEOUT';reject(error);},8000);}):null;
+        return await (timeout?Promise.race([read(controller.signal),timeout]):read());
+      } catch(error) {
+        // The BFF alone retries upstream HTTP failures. A client timeout cannot prove
+        // that its upstream read stopped; only browser transport failures retry here.
+        const transient=error.name==='TypeError';
+        if(!transient||attempt===1)throw error;
+        if(bootstrapStatus==='loading'&&!state)$('#main').innerHTML=connectionLoading('연결이 잠시 지연되어 다시 확인하고 있습니다.');
+        await new Promise(resolve=>setTimeout(resolve,250));
+      } finally { if(timer!==undefined&&typeof clearTimeout==='function')clearTimeout(timer); }
+    }
+  }
+  function loadConfiguration() {
+    if(configRequest)return configRequest;
+    configStatus='loading';configError=null;
+    configRequest=bootstrapRead(signal=>api('/config',undefined,{signal,startup:true})).then(value=>{config=value;configStatus='ready';},error=>{configStatus='failed';configError=error;}).finally(()=>{
+      configRequest=null;
+      if(bootstrapStatus!=='loading'&&(route()==='signup'&&!state||['terms','privacy'].includes(route())))render();
+    });
+    return configRequest;
   }
   async function command(action, payload) {
     const affectedCompany=payload.companyId || state.customer.relations.find(row=>row.relationId===payload.relationId)?.companyId || state.corrections.find(row=>row.requestId===payload.requestId)?.companyId;
@@ -29,7 +77,7 @@
     if(action==='add-company'&&location.hash!=='#company='+encodeURIComponent(payload.companyId))location.hash='company='+encodeURIComponent(payload.companyId);else render(); toast(action==='collect'?'수집 요청 상태를 확인했습니다.':action.includes('correction')?'검수 요청을 저장했습니다.':'저장했습니다.');
   }
   const field = (label, name, value = '', type = 'text', extra = '') => `<label class="field"><span>${esc(label)}</span><input name="${name}" type="${type}" value="${esc(value)}" ${extra}></label>`;
-  function auth() { $('#main').innerHTML = adminView ? '<section class="card"><h1>관리자 로그인이 필요합니다.</h1><p>고객 화면을 이용하려면 관리자 계정으로 로그인해 주세요.</p><a class="button primary" href="/admin">관리자 로그인</a></section>' : window.InsightAuth.screen({ signup: route()==='signup', config }); }
+  function auth() { if(!adminView&&route()==='signup'&&configStatus!=='ready'){configurationScreen();return;} $('#main').innerHTML = adminView ? '<section class="card"><h1>관리자 로그인이 필요합니다.</h1><p>고객 화면을 이용하려면 관리자 계정으로 로그인해 주세요.</p><a class="button primary" href="/admin">관리자 로그인</a></section>' : window.InsightAuth.screen({ signup: route()==='signup', config }); }
   let policySequence = 0;
   async function policy(kind) {
     const serial = ++policySequence;
@@ -86,7 +134,9 @@
     $('#navigation').innerHTML = state ? menus.map(([key,label])=>`<a href="#${key}" class="nav-link ${menuRoute()===key?'active':''}">${label}</a>`).join(''):'';
     $('#customer-name').textContent = state ? state.customer.username : '사분 인사이트';
     document.body.classList.toggle('auth-view', !state);
-    if (['terms','privacy'].includes(route())) { policy(route()); return; }
+    if(bootstrapStatus==='loading'&&!state){$('#main').innerHTML=connectionLoading('로그인 상태를 확인하고 저장 자료를 연결하고 있습니다.');return;}
+    if(bootstrapStatus==='failed'&&!state){$('#main').innerHTML=connectionFailure(bootstrapError,'retry-connection');return;}
+    if (['terms','privacy'].includes(route())) { if(configStatus!=='ready'){configurationScreen();return;} policy(route()); return; }
     policySequence++;
     if (!state) { auth(); return; }
     if (route() === 'welcome') { $('#main').innerHTML=window.InsightAuth.welcome(state.customer); return; }
@@ -121,6 +171,7 @@
     try {
       if(form.id==='auth-form') {
         const signup=route()==='signup';
+        if(signup&&configStatus!=='ready')throw new Error('회원가입 설정을 확인한 뒤 다시 시도해 주세요.');
         if(signup&&!config.signupEnabled)throw new Error('현재 신규 가입을 받지 않습니다.');
         if(signup&&p.password!==p.passwordConfirm)throw new Error('비밀번호 확인이 일치하지 않습니다.');
         state=await api(signup?'/auth/signup':'/auth/login', {...p,...(signup?{agreeTerms:!!p.agreeTerms,agreePrivacy:!!p.agreePrivacy,confirmAge:!!p.confirmAge,termsVersion:config.termsVersion,privacyVersion:config.privacyVersion}:{})}); location.hash=signup?'welcome':'home'; render();prepareCompanies();
@@ -151,6 +202,8 @@
     const button=event.target.closest('[data-action]');if(!button||busy)return;
     const action=button.dataset.action;
     if(action==='theme'){const theme=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=theme;try{localStorage.setItem('insight-theme',theme);}catch{}return;}
+    if(action==='retry-connection'){await bootstrap();return;}
+    if(action==='retry-config'){loadConfiguration();configurationScreen();return;}
     busy=true;button.disabled=true;
     try{
       if(action==='check-username'){const input=$('[name=username]'), slot=$('#username-status');if(!input.reportValidity())return;const requested=input.value.trim(), value=await api(`/auth/username?username=${encodeURIComponent(requested)}`);if(!slot.isConnected||input.value.trim()!==requested)return;slot.textContent=value.message;slot.dataset.available=String(value.available);}
@@ -170,18 +223,23 @@
   document.addEventListener('input',event=>{const form=event.target.closest('[data-product-correction], [data-correction]');if(form)form.dataset.dirty='true';if(event.target.name==='username'&&$('#username-status'))$('#username-status').textContent='';});
   window.addEventListener('hashchange',()=>{render();$('#main').focus();window.scrollTo(0,0);});
   try{document.documentElement.dataset.theme=localStorage.getItem('insight-theme')==='dark'?'dark':'light';}catch{}
-  (async()=>{try{
-    if(adminView){
-      const [session,settings]=await Promise.allSettled([fetch('/api/insight-admin/v1/me',{headers:{Accept:'application/json'}}),api('/config')]);
-      if(session.status==='rejected')throw session.reason;
-      const response=session.value;
-      if(response.status===401){render();return;}
-      const identity=await response.json();if(!response.ok)throw new Error(identity.error?.message||'관리자 연결을 확인해 주세요.');
-      if(settings.status==='rejected')throw settings.reason;
-      adminCsrf=identity.csrfToken;config=settings.value;state=await api('/start',{});
-    }else{
-      [config,state]=await Promise.all([api('/config'),api('/me').catch(error=>{if(error.status!==401)throw error;return null;})]);
-    }
-    render();prepareCompanies();
-  }catch(error){if(adminView&&error.status===401){state=null;render();return;}$('#main').innerHTML=`<section class="card"><h1>자료 연결 확인이 필요합니다.</h1><p>${esc(error.message)}</p><a class="button" href="${adminView?'/customer-view':'/'}">다시 열기</a></section>`;}})();
+  async function bootstrap() {
+    if(bootstrapInFlight)return;
+    bootstrapInFlight=true;bootstrapStatus='loading';bootstrapError=null;
+    $('#main').innerHTML=connectionLoading('로그인 상태를 확인하고 저장 자료를 연결하고 있습니다.');
+    if(configStatus!=='ready')loadConfiguration();
+    try {
+      if(adminView){
+        const identity=await bootstrapRead(signal=>startupFetch('/api/insight-admin/v1/me',{headers:{Accept:'application/json'},...(signal?{signal}:{})}).then(responseValue));
+        adminCsrf=identity.csrfToken;
+        state=await api('/start',{});
+      }else state=await bootstrapRead(signal=>api('/me',undefined,{signal,startup:true}));
+      bootstrapStatus='ready';render();prepareCompanies();
+    }catch(error){
+      state=null;adminCsrf='';
+      if(error.status===401){bootstrapStatus='ready';render();}
+      else{bootstrapStatus='failed';bootstrapError=error;render();}
+    }finally{bootstrapInFlight=false;}
+  }
+  bootstrap();
 })();

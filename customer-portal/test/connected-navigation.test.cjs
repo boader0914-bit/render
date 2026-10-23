@@ -110,7 +110,8 @@ test('customer refresh starts configuration and session reads together without d
   assert.deepEqual(ui.pending(),[config,me],'session lookup must begin while configuration is still pending');
   assert.equal(ui.calls.filter(row=>row.url.includes('/companies/')).length,0);
   await ui.respond(me);
-  assert.equal(ui.calls.filter(row=>row.url.includes('/companies/')).length,0,'company preparation waits for a complete authenticated bootstrap');
+  assert.equal(ui.calls.filter(row=>row.url.includes('/companies/')).length,1,'fresh authorization can display saved company data while non-critical configuration is still pending');
+  assert.match(ui.html(),/내 매장 보기/);
   await ui.respond(config);
   assert.match(ui.html(),/내 매장 보기/);
   assert.equal(ui.calls.filter(row=>row.url===config).length,1);
@@ -146,7 +147,7 @@ for(const adminView of [false,true])test(`${adminView?'administrator':'customer'
 test('administrator refresh overlaps identity and configuration but starts one preview with verified CSRF',async()=>{
   const identity='/api/insight-admin/v1/me',config='/api/insight-admin/v1/customer-view/config',start='/api/insight-admin/v1/customer-view/start';
   const ui=await screen({adminView:true,deferRequests:[identity,config]});
-  assert.deepEqual(ui.pending(),[identity,config]);
+  assert.deepEqual(new Set(ui.pending()),new Set([identity,config]));
   await ui.respond(config);
   assert.equal(ui.calls.filter(row=>row.url===start).length,0,'configuration alone cannot authorize a preview start');
   await ui.respond(identity);
@@ -169,14 +170,15 @@ test('administrator identity expiry takes precedence over a failed parallel conf
   assert.equal(ui.calls.filter(row=>row.url.includes('/companies/')).length,0);
 });
 
-test('parallel configuration failure preserves the existing connection-error screen and prevents administrator preview creation',async()=>{
+test('parallel configuration failure does not block an administrator preview after fresh identity verification',async()=>{
   const identity='/api/insight-admin/v1/me',config='/api/insight-admin/v1/customer-view/config';
   const ui=await screen({adminView:true,deferRequests:[identity,config]});
   await ui.respond(identity);
   await ui.respond(config,{status:503,value:{error:{message:'설정 연결 실패'}}});
-  assert.match(ui.html(),/자료 연결 확인이 필요합니다/);assert.match(ui.html(),/설정 연결 실패/);
-  assert.ok(ui.calls.every(row=>row.method==='GET'));
-  assert.equal(ui.calls.filter(row=>row.url.includes('/companies/')).length,0);
+  assert.match(ui.html(),/관리자 체험/);assert.doesNotMatch(ui.html(),/설정 연결 실패/);
+  assert.equal(ui.calls.filter(row=>row.url.endsWith('/customer-view/start')).length,1);
+  assert.ok(ui.calls.every(row=>row.method==='GET'||row.url.endsWith('/customer-view/start')));
+  assert.equal(ui.calls.filter(row=>row.url.includes('/companies/')).length,1);
 });
 
 for(const adminView of [false,true])test(`${adminView?'administrator':'customer'} refresh shares only the visible competitor read without warming another company`,async()=>{
