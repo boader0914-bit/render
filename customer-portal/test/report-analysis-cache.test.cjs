@@ -8,6 +8,8 @@ function report(ownId='own',value=10,at=base){
  return {mode:'current_briefing',published:false,ownId,generatedAt:new Date(at).toISOString(),period:{start:'2026-10-23',end:'2026-11-21',days:30},companies:ownId?[{companyId:ownId,kind:'own',name:'내 매장 '+ownId,rooms:16,summary}]:[],comparisons:[],regions:[],actions:[{title:'행동 확인',reason:'자료 근거',next:'조건 확인',check:'확보율',source:'업체DB'}],definitions:['실제 결제 매출이 아닌 추정입니다.'],responseCache:{state:'fresh',checkedAt:new Date(at).toISOString(),refreshing:false,refreshFailed:false}};
 }
 function saved(ownId='own',value=10,at=base-2*3600000){return {...report(ownId,value,at),responseCache:{state:'cached',checkedAt:new Date(at).toISOString(),persisted:true,validUntil:new Date(at+7*DAY).toISOString(),revalidationRequired:true,refreshing:false,refreshFailed:false}};}
+function preview(ownId='own',value=10,at=base){return {...report(ownId,value,at),calculation:{mode:'saved_only',status:'pending',oldestSourceCalculatedAt:new Date(at-3600000).toISOString(),latestSourceCalculatedAt:new Date(at-1000).toISOString()},responseCache:{state:'preview',preview:true,checkedAt:new Date(at).toISOString(),refreshing:true,refreshFailed:false,calculationStatus:'pending'}};}
+function failedPreview(ownId='own',value=10,at=base){const data=preview(ownId,value,at),errorCode='REPORT_CALCULATION_TIMEOUT',errorMessage='최신 리포트 계산이 지연되고 있습니다. 저장 자료를 유지합니다. 다시 확인해 주세요.';return {...data,calculation:{...data.calculation,status:'failed',errorCode,errorMessage},responseCache:{...data.responseCache,refreshing:false,refreshFailed:true,calculationStatus:'failed',refreshErrorCode:errorCode,refreshErrorMessage:errorMessage}};}
 function harness(){
  let now=base,html='',writes=0,nextTimer=0,expired=0,scope='customer:one',permission='revision1',ownIds=['own','other'],companyIds=['own','other','competitor'],regionKeys=['region'];
  const window={},calls=[],handlers={},timers=new Map(),notice={textContent:'',hidden:true,dataset:{}},button={disabled:false,isConnected:true},select={value:'own'};
@@ -209,4 +211,80 @@ test('a calculating partial report stops after the bounded checks and keeps the 
  data.responseCache={...data.responseCache,state:'partial',partial:true};h.mount();await h.resolve(0,data);
  for(let i=0;i<8;i++){await h.tick();await h.resolve(i+1,data);}
  assert.equal(h.timers.size,0);assert.equal(h.calls.length,9);assert.match(h.notice.textContent,/일부 자료 표시.*시간이 걸리고/);assert.match(h.html(),/통합 자료를 갱신하고/);
+});
+
+test('a new report shows same-period saved values first and replaces its preview after a calculation exceeding twelve seconds',async()=>{
+ const h=harness(),data=preview('own',0);h.mount();await h.resolve(0,data);
+ assert.match(h.html(),/내 매장 own의 저장 자료/);assert.match(h.html(),/0실/);assert.match(h.html(),/산출 보류/);assert.doesNotMatch(h.html(),/다음 판단|<h3>행동 확인/);assert.match(h.notice.textContent,/저장 자료 먼저 표시 · 리포트 계산 중/);assert.equal(h.notice.dataset.state,'checking');
+ for(const delay of [2000,4000]){h.advance(delay);await h.tick();assert.match(h.html(),/내 매장 own의 저장 자료/,'polling must not replace the visible preview with a loading message');await h.resolve(h.calls.length-1,data);}
+ h.advance(8000);await h.tick();await h.resolve(h.calls.length-1,report('own',25,base+14000));assert.match(h.html(),/내 매장 own의 다음 판단/);assert.match(h.html(),/25실/);assert.match(h.html(),/<h3>행동 확인/);assert.equal(h.notice.hidden,true);assert.equal(h.timers.size,0);assert.ok(h.calls.every(call=>call.payload===undefined));
+});
+
+test('preview comparisons and action recommendations are held until calculation completes',async()=>{
+ const h=harness(),data=preview();data.comparisons=[{companyId:'competitor',name:'임시 경쟁 판단',commonDays:20,own:{reservationRate:.8},competitor:{reservationRate:.2},gapPp:60,status:'comparable'}];data.actions=[{title:'확정하면 안 되는 제안',reason:'예비 자료',next:'아직 실행하면 안 됨',check:'확인',source:'계산 전'}];
+ h.mount();await h.resolve(0,data);assert.doesNotMatch(h.html(),/임시 경쟁 판단|확정하면 안 되는 제안|아직 실행하면 안 됨|\+60%p/);assert.match(h.html(),/리포트 계산 후 같은 날짜 기준으로 비교/);assert.match(h.html(),/리포트 계산 후 다음 행동/);
+});
+
+test('a same-value completed response still replaces the preview status and starts the normal report cache',async()=>{
+ const h=harness(),data=preview();h.mount();await h.resolve(0,data);await h.tick();await h.resolve(1,report());assert.match(h.html(),/내 매장 own의 다음 판단/);assert.doesNotMatch(h.html(),/저장 자료 미리보기/);assert.equal(h.notice.hidden,true);
+ h.leave();h.mount();assert.match(h.html(),/내 매장 own의 다음 판단/);
+});
+
+test('a preview cannot replace an existing normal report in the completed report cache',async()=>{
+ const h=harness();h.mount();await h.resolve(0,report('own',12));h.leave();h.mount();await h.resolve(1,preview('own',999));assert.match(h.html(),/12실/);assert.doesNotMatch(h.html(),/999실/);assert.match(h.notice.textContent,/리포트 계산 중/);
+ h.leave();h.mount();assert.match(h.html(),/12실/);assert.match(h.html(),/다음 판단/);
+});
+
+test('a preview background failure keeps saved values and exposes the safe failure code without retrying in a loop',async()=>{
+ const h=harness(),data=preview();h.mount();await h.resolve(0,data);await h.tick();await h.resolve(1,failedPreview());
+ assert.match(h.html(),/10실/);assert.match(h.html(),/내 매장 own의 저장 자료/);assert.match(h.html(),/저장 자료 미리보기 · 계산 확인 필요/);assert.match(h.notice.textContent,/저장 자료 유지.*리포트 계산이 지연.*REPORT_CALCULATION_TIMEOUT.*다시 확인/);assert.equal(h.timers.size,0);assert.equal(h.button.disabled,false);
+});
+
+test('a restarted failed preview restores its saved values and safe failure without silently restarting calculation',async()=>{
+ const h=harness(),data=failedPreview('own',10,base-2*3600000);data.responseCache={...data.responseCache,persisted:true,validUntil:new Date(base+DAY).toISOString(),revalidationRequired:true};h.restore(data);h.mount();assert.match(h.html(),/내 매장 own의 저장 자료/);assert.match(h.html(),/계산 확인 필요/);
+ await h.resolve(0,data);assert.match(h.notice.textContent,/REPORT_CALCULATION_TIMEOUT.*다시 확인.*마지막 확인/);assert.equal(h.timers.size,0);assert.equal(h.calls.length,1);assert.match(h.html(),/10실/);assert.doesNotMatch(h.html(),/다음 판단|0원/);
+});
+
+test('failed preview core and metadata must agree and only controlled error messages may be restored',async()=>{
+ const original=failedPreview(),bad=[{...original,calculation:{...original.calculation,errorMessage:'PRIVATE provider payload'}},{...original,responseCache:{...original.responseCache,refreshing:true,calculationStatus:'pending'}},{...original,responseCache:{...original.responseCache,refreshErrorCode:'OTHER_CODE'}},{...original,calculation:{...original.calculation,status:'pending'}}];
+ for(const data of bad){const h=harness();h.restore(data);h.mount();assert.match(h.html(),/계산하고/);await h.resolve(0,data);assert.doesNotMatch(h.html(),/내 매장 own의 저장 자료|PRIVATE provider payload/);assert.equal(h.timers.size,0);}
+});
+
+test('an explicit calculation retry replaces both failed core and error metadata before polling resumes',async()=>{
+ const h=harness();h.mount();await h.resolve(0,failedPreview());assert.equal(h.timers.size,0);h.leave();h.mount();await h.resolve(1,preview());
+ assert.match(h.html(),/저장 자료 미리보기 · 계산 확인 중/);assert.doesNotMatch(h.html(),/계산 확인 필요/);assert.match(h.notice.textContent,/리포트 계산 중/);assert.doesNotMatch(h.notice.textContent,/REPORT_CALCULATION_TIMEOUT/);assert.equal(h.timers.size,1);
+ await h.tick();await h.resolve(2,report('own',25));assert.match(h.html(),/25실/);assert.match(h.html(),/다음 판단/);assert.equal(h.timers.size,0);
+});
+
+test('an HTTP failure after a preview preserves the displayed saved result and stops automatic polling',async()=>{
+ const h=harness();h.mount();await h.resolve(0,preview());await h.tick();await h.reject(1,503,'리포트 연결을 확인하지 못했습니다.');assert.match(h.html(),/내 매장 own의 저장 자료/);assert.match(h.html(),/10실/);assert.match(h.notice.textContent,/저장 자료 유지.*연결을 확인하지 못했습니다.*다시 확인/);assert.equal(h.timers.size,0);
+});
+
+test('partial preview reasons, genuine zero bookings and unknown revenue remain distinct',async()=>{
+ const h=harness(),data=preview('own',0);data.dataQuality={status:'partial',issues:[{scope:'company',companyId:'own',month:'2026-11',code:'MONTH_NOT_OBSERVED',reason:'11월 관측 자료가 없습니다.'}]};data.responseCache.partial=true;
+ h.mount();await h.resolve(0,data);assert.match(h.html(),/11월 관측 자료가 없습니다/);assert.match(h.html(),/0실/);assert.match(h.html(),/산출 보류/);assert.doesNotMatch(h.html(),/0원/);assert.match(h.notice.textContent,/리포트 계산 중/);
+});
+
+test('an authenticated persisted preview restores as a preview and keeps its original bounded lifetime',async()=>{
+ const h=harness(),data=preview('own',10,base-2*3600000);data.responseCache={...data.responseCache,persisted:true,validUntil:new Date(base+60000).toISOString(),revalidationRequired:true};h.restore(data);h.mount();assert.match(h.html(),/내 매장 own의 저장 자료/);assert.doesNotMatch(h.html(),/다음 판단/);assert.match(h.notice.textContent,/리포트 계산 확인 중.*마지막 확인/);
+ h.advance(60000);h.leave();h.mount();assert.match(h.html(),/계산하고/);
+});
+
+for(const status of [401,403,404])test(`${status} clears a saved preview and prevents its restoration after denial`,async()=>{
+ const h=harness(),data=preview();h.restore(data);h.mount();await h.reject(0,status);assert.doesNotMatch(h.html(),/내 매장 own의 저장 자료/);h.restore(data);h.leave();h.mount();assert.doesNotMatch(h.html(),/내 매장 own의 저장 자료/);assert.match(h.html(),/계산하고|조회 권한/);
+});
+
+test('wrong period, company, account or incomplete preview markers cannot enter a preview view',async()=>{
+ const candidates=[{...preview(),ownId:'other'},{...preview(),period:{start:'2026-10-22',end:'2026-11-20',days:30}},{...preview(),calculation:undefined},{...preview(),responseCache:{...preview().responseCache,preview:false}},{...preview(),responseCache:{...preview().responseCache,calculationStatus:undefined}}];
+ for(const data of candidates){const h=harness();h.restore(data);h.mount();assert.match(h.html(),/계산하고/);await h.resolve(0,data);assert.doesNotMatch(h.html(),/내 매장 own의 저장 자료/);assert.equal(h.timers.size,0);}
+ const changed=harness();changed.mount();changed.configure({scope:'customer:two'});changed.mount();await changed.resolve(0,preview('own',999));assert.doesNotMatch(changed.html(),/999실/);
+});
+
+test('changing registration scope clears prior previews and prevents a late former-scope result from returning',async()=>{
+ const h=harness();h.mount();await h.resolve(0,preview('own',10));h.leave();h.mount();h.configure({companyIds:['own']});h.mount();assert.match(h.html(),/계산하고/);await h.resolve(1,preview('own',999));assert.doesNotMatch(h.html(),/999실/);await h.resolve(2,preview('own',8));assert.match(h.html(),/8실/);
+});
+
+test('preview checks retain the original eight-check bound and disclose that calculation is still pending',async()=>{
+ const h=harness(),data=preview();h.mount();await h.resolve(0,data);for(const delay of [2000,4000,8000,16000,30000,45000,45000,45000]){assert.equal([...h.timers.values()][0].ms,delay);h.advance(delay);await h.tick();await h.resolve(h.calls.length-1,data);}
+ assert.equal(h.calls.length,9);assert.equal(h.timers.size,0);assert.match(h.html(),/내 매장 own의 저장 자료/);assert.match(h.notice.textContent,/저장 자료 유지.*계산에 시간이 걸리고/);assert.equal(h.notice.dataset.state,'notice');h.leave();assert.equal(h.timers.size,0);
 });

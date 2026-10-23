@@ -15,7 +15,7 @@
   // recalculate. Cover that window without keeping an endless polling loop.
   const REPORT_CHECK_DELAYS=[2000,4000,8000,16000,30000,45000,45000,45000];
   let cacheScope='default',allowedRegions=null,cacheGeneration=0,onSessionExpired=null;
-  const reports=new Map(),reportRequests=new Map(),deniedReports=new Set();
+  const reports=new Map(),reportPreviews=new Map(),reportRequests=new Map(),deniedReports=new Set();
   let reportScope='',reportPermission='',reportGeneration=0,reportOwnIds=[],reportCompanies=new Set(),reportRegions=new Set();
   const epoch=id=>regionEpochs.get(id)||0;
   const requestAllowed=id=>Boolean(cacheScope)&&(!allowedRegions||allowedRegions.has(id));
@@ -23,8 +23,18 @@
   const cacheKey=(id,month)=>JSON.stringify([cacheScope,id,month]);
   const clone=value=>JSON.parse(JSON.stringify(value));
   const version=data=>{const {responseCache,generatedAt,...result}=data;return JSON.stringify(result);};
-  const reportVersion=data=>{const {responseCache,...result}=data;return JSON.stringify(result);};
+  const reportVersion=data=>{const {responseCache,...result}=data;return JSON.stringify([result,isReportPreview(data)?[responseCache.calculationStatus,responseCache.refreshing===true,responseCache.refreshFailed===true]:null]);};
   const validMonth=value=>typeof value==='string'&&/^20\d{2}-(0[1-9]|1[0-2])$/.test(value);
+  const previewErrors={REPORT_CALCULATION_TIMEOUT:'최신 리포트 계산이 지연되고 있습니다. 저장 자료를 유지합니다. 다시 확인해 주세요.',REPORT_CALCULATION_FAILED:'최신 리포트 계산을 확인하지 못했습니다. 저장 자료를 유지합니다. 다시 확인해 주세요.'};
+  function isReportPreview(data){
+    const info=data?.responseCache,calculation=data?.calculation;
+    if(info?.state!=='preview'||info.preview!==true||calculation?.mode!=='saved_only')return false;
+    if(calculation.status==='pending')return info.calculationStatus==='pending'&&info.refreshFailed===false
+      &&calculation.errorCode===undefined&&calculation.errorMessage===undefined&&info.refreshErrorCode===undefined&&info.refreshErrorMessage===undefined;
+    return calculation.status==='failed'&&info.calculationStatus==='failed'&&info.refreshFailed===true&&info.refreshing===false
+      &&Object.hasOwn(previewErrors,calculation.errorCode)&&calculation.errorMessage===previewErrors[calculation.errorCode]
+      &&info.refreshErrorCode===calculation.errorCode&&info.refreshErrorMessage===calculation.errorMessage;
+  }
   const timestamp=value=>{
     if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value))return NaN;
     const parsed=Date.parse(value),canonical=value.replace(/(?:\.(\d{1,3}))?Z$/,(_,fraction)=>'.'+(fraction||'').padEnd(3,'0')+'Z');
@@ -41,7 +51,8 @@
       // persisted lifetime. Reading it again must never advance checkedAt.
       const until=timestamp(info.validUntil);
       const storedPartial=info.state==='partial'&&info.partial===true&&data.mode==='current_briefing'&&data.dataQuality?.status==='partial';
-      if(timestamp(info.checkedAt)!==stamp||info.state!=='cached'&&!storedPartial||info.revalidationRequired!==true||!Number.isFinite(until)||until<=now||until<=stamp||until>stamp+PERSISTED_MAX_AGE)return null;
+      const storedPreview=data.mode==='current_briefing'&&isReportPreview(data);
+      if(timestamp(info.checkedAt)!==stamp||info.state!=='cached'&&!storedPartial&&!storedPreview||info.revalidationRequired!==true||!Number.isFinite(until)||until<=now||until<=stamp||until>stamp+PERSISTED_MAX_AGE)return null;
       return {checkedAt:stamp,validUntil:until,persisted:true};
     }
     return now-stamp<=CACHE_MAX_AGE?{checkedAt:stamp,validUntil:stamp+CACHE_MAX_AGE,persisted:false}:null;
@@ -50,7 +61,7 @@
     return entry?.persisted&&Date.now()-entry.checkedAt>CACHE_MAX_AGE?`${message} · 마지막 확인 ${time(new Date(entry.checkedAt).toISOString())}`:message;
   }
   function clearTimers(){if(pollTimer!==null)clearTimeout(pollTimer);if(refreshTimer!==null)clearTimeout(refreshTimer);pollTimer=refreshTimer=null;}
-  function clearReports(){reportGeneration++;reports.clear();reportRequests.clear();deniedReports.clear();}
+  function clearReports(){reportGeneration++;reports.clear();reportPreviews.clear();reportRequests.clear();deniedReports.clear();}
   function clearCache(){cacheGeneration++;cache.clear();inFlight.clear();regionEpochs.clear();deniedRegions.clear();clearReports();}
   function invalidate(id){
     regionEpochs.set(id,epoch(id)+1);
@@ -115,18 +126,21 @@
     if(data.comparisons.some(company=>!reportCompanies.has(company?.companyId)||!company.own||!company.competitor))return false;
     return !data.regions.some(region=>!reportRegions.has(region?.region?.id)||!Array.isArray(region.sources));
   }
-  function reportCached(ownId,period){
-    const key=reportKey(ownId,period),entry=reports.get(key);
+  function reportCached(ownId,period,storage=reports){
+    const key=reportKey(ownId,period),entry=storage.get(key);
     if(!entry||!reportAllowed(ownId)||deniedReports.has(ownId))return null;
-    if(Date.now()>=entry.validUntil||!reportScopeValid(entry.data,ownId,period)){reports.delete(key);return null;}
-    reports.delete(key);reports.set(key,entry);return entry;
+    if(Date.now()>=entry.validUntil||!reportScopeValid(entry.data,ownId,period)){storage.delete(key);return null;}
+    storage.delete(key);storage.set(key,entry);return entry;
   }
   function rememberReport(ownId,period,data){
     if(!reportScopeValid(data,ownId,period))throw Error('선택한 내 매장·숙박기간과 리포트가 다릅니다.');
+    const preview=isReportPreview(data);
+    if((data.responseCache?.state==='preview'||data.responseCache?.preview===true||data.calculation?.mode==='saved_only')&&!preview)throw Error('저장 자료 미리보기의 계산 상태를 확인하지 못했습니다.');
     const saved=clone(data),checked=timestamp(saved.responseCache?.checkedAt||saved.generatedAt),age=lifetime(saved,checked);
     if(!age)throw Error('저장 리포트의 확인 시각과 유효기간을 다시 확인해 주세요.');
     const entry={ownId,period:{...period},data:saved,version:reportVersion(saved),...age},key=reportKey(ownId,period);
-    deniedReports.delete(ownId);reports.delete(key);reports.set(key,entry);while(reports.size>CACHE_LIMIT)reports.delete(reports.keys().next().value);return entry;
+    const storage=preview?reportPreviews:reports;
+    deniedReports.delete(ownId);storage.delete(key);storage.set(key,entry);while(storage.size>CACHE_LIMIT)storage.delete(storage.keys().next().value);if(!preview)reportPreviews.delete(key);return entry;
   }
   function restoreReports(views,scope){
     if(!scope||scope!==reportScope||!Array.isArray(views))return;
@@ -211,7 +225,7 @@
     const own=s.customer.relations.filter(r=>r.kind==='own'&&['active','pending'].includes(r.status)).map(r=>s.companies.find(c=>c.companyId===r.companyId)).filter(Boolean);
     const choices=mode==='regions'?s.regions:own;
     const selection=mode==='regions'?regionSelection(s,selectedRegion,selectedOwnId):null;
-    return `<section class="card analysis-intro"><span class="eyebrow">${mode==='regions'?'REGIONAL CONTEXT':'SITUATION → NEXT ACTION'}</span><h2>${mode==='regions'?'지역의 12개월 흐름':'현재 상황과 다음 행동'}</h2><p class="muted">${mode==='regions'?'등록한 관심지역과 매장 소재지의 방문·체류·소비·검색 관심 변화를 확인합니다.':'내 매장·등록 경쟁업체·지역 배경을 함께 확인합니다. 저장 자료로 보는 현재 상황 브리핑입니다.'}</p><form id="analysis-form" data-analysis-form><div class="form-grid"><label class="field"><span>${mode==='regions'?'분석 지역':'기준 내 매장'}</span><select name="${mode==='regions'?'regionKey':'ownId'}" ${!choices.length?'disabled':''}>${selection&&!selection.id?'<option value="" selected disabled>지역 연결 확인 필요</option>':''}${choices.map(c=>`<option value="${esc(c.id||c.companyId)}"${selection?.id===(c.id||c.companyId)?' selected':''}>${esc(c.label||c.name)}</option>`).join('')||'<option>등록 대기</option>'}</select></label>${mode==='regions'?`<label class="field"><span>마지막 기준월</span><input name="month" type="month" min="2017-12" max="${prior()}" value="${prior()}" required></label>`:'<p class="muted">예약 전망은 오늘 포함 향후 30일, 지역 배경은 최근 12개월 흐름과 각 통계의 실제 공표기간을 사용합니다.</p>'}</div><button class="button" type="submit" ${mode==='regions'&&!selection.id?'disabled':''}>저장 자료 확인</button></form></section><p id="analysis-freshness" class="muted" role="status" aria-live="polite" hidden></p><section id="analysis-output" aria-live="polite"><p class="empty-note">${esc(selection?.message||'저장 자료를 불러오고 있습니다.')}</p></section>`;
+    return `<section class="card analysis-intro"><span class="eyebrow">${mode==='regions'?'REGIONAL CONTEXT':'SITUATION → NEXT ACTION'}</span><h2>${mode==='regions'?'지역의 12개월 흐름':'현재 상황과 다음 행동'}</h2><p class="muted">${mode==='regions'?'등록한 관심지역과 매장 소재지의 방문·체류·소비·검색 관심 변화를 확인합니다.':'내 매장·등록 경쟁업체·지역 배경을 함께 확인합니다. 저장 자료로 보는 현재 상황 브리핑입니다.'}</p><form id="analysis-form" data-analysis-form><div class="form-grid"><label class="field"><span>${mode==='regions'?'분석 지역':'기준 내 매장'}</span><select name="${mode==='regions'?'regionKey':'ownId'}" ${!choices.length?'disabled':''}>${selection&&!selection.id?'<option value="" selected disabled>지역 연결 확인 필요</option>':''}${choices.map(c=>`<option value="${esc(c.id||c.companyId)}"${selection?.id===(c.id||c.companyId)?' selected':''}>${esc(c.label||c.name)}</option>`).join('')||'<option>등록 대기</option>'}</select></label>${mode==='regions'?`<label class="field"><span>마지막 기준월</span><input name="month" type="month" min="2017-12" max="${prior()}" value="${prior()}" required></label>`:'<p class="muted">예약 전망은 오늘 포함 향후 30일, 지역 배경은 최근 12개월 흐름과 각 통계의 실제 공표기간을 사용합니다.</p>'}</div><button class="button" type="submit" ${mode==='regions'&&!selection.id?'disabled':''}>저장 자료 확인</button></form></section><p id="analysis-freshness" class="muted connection-check" role="status" aria-live="polite" hidden></p><section id="analysis-output" aria-live="polite"><p class="empty-note">${esc(selection?.message||'저장 자료를 불러오고 있습니다.')}</p></section>`;
   }
   const status=s=>({ready:'저장 자료',complete:'정상 자료',partial:'일부 자료',missing:'자료 없음',publication_pending:'공표 대기',not_configured:'연결 준비',error:'확인 필요',pending:'대기'}[s]||'상태 확인');
   function sourceCard(s) {
@@ -247,8 +261,8 @@
     return `<section class="card report-source-issues" aria-label="자료 확인이 필요한 부분"><div class="analysis-card-top"><h2>자료 확인이 필요한 부분</h2><span class="status-pill pending">일부 자료</span></div><p class="muted">확인된 자료는 아래에 표시합니다. 미확인 값은 0으로 처리하지 않습니다.</p>${issues.length?`<div class="collection-table-wrap"><table><thead><tr><th>업체·지역</th><th>확인하지 못한 기간</th><th>사유</th></tr></thead><tbody>${issues.map(issue=>`<tr><th>${esc(issue.scope==='company'?companies.get(issue.companyId).name:regions.get(issue.regionId).region.label)}${issue.sourceName?`<br><small class="muted">${esc(issue.sourceName)}</small>`:''}</th><td>${esc(period(issue))}</td><td>${esc(issue.reason||'저장 자료를 확인하지 못했습니다.')}</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">일부 원자료를 확인하지 못했습니다. 확인된 업체·기간의 자료만 표시합니다.</p>'}</section>`;
   }
   function reportView(r) {
-    const own=r.companies.find(c=>c.kind==='own');
-    return `<section class="briefing-banner"><span class="eyebrow">현재 상황 브리핑 · 미발행</span><h2>${esc(own?.name||'사업 준비')}의 다음 판단</h2><p>숙박일 ${esc(r.period.start)} ~ ${esc(r.period.end)}</p><p class="muted">확인 시각 ${esc(time(r.generatedAt))}</p></section>${reportIssues(r)}<section class="card"><div class="db-section-heading"><b>1</b><h2>현재 상황</h2></div><div class="briefing-company-grid">${r.companies.map(c=>`<article><span class="status-pill">${c.kind==='own'?'내 매장':'경쟁업체'}</span>${c.sourceStatus&&c.sourceStatus!=='ready'?` <span class="status-pill pending">${c.sourceStatus==='partial'?'일부 기간 확인 필요':'자료 확인 필요'}</span>`:''}<h3>${esc(c.name)}</h3><p class="muted">객실 ${c.rooms==null?'미확인':n(c.rooms)+'실'} · 수량 유효 ${n(c.summary.days)}/30일<br>마지막 관측 ${esc(c.lastObservedAt?time(c.lastObservedAt):(c.lastObservedDay||'확인 전'))}</p><dl><div><dt>추정 예약률</dt><dd>${rate(c.summary.reservationRate)}</dd></div><div><dt>공개 예약</dt><dd class="public-value">${c.summary.publicBookings==null?'미확인':n(c.summary.publicBookings)+'실'}</dd></div><div><dt>방막기 추정</dt><dd class="estimated-value">${c.summary.phoneBookings==null?'미확인':n(c.summary.phoneBookings)+'실'}</dd></div><div><dt>추정매출</dt><dd>${c.summary.estimatedRevenue==null?'산출 보류':`${n(c.summary.estimatedRevenue)}원`}</dd></div></dl><p class="muted">${c.unavailable?'자료 연결 확인 필요':'위 수치는 업체별 확보 기간의 요약입니다. 업체 간 비교는 아래 공통 날짜 기준을 확인하세요.'}</p><a class="text-link" href="#collection=${encodeURIComponent(c.companyId)}">근거·수집 결과 확인</a></article>`).join('')||'<p class="empty-note">등록한 업체가 없습니다.</p>'}</div></section><section class="card"><div class="db-section-heading"><b>2</b><h2>경쟁업체와의 차이</h2></div><p class="muted">같은 숙박일과 같은 관측일이 겹치는 자료만 비교합니다. 가격·시설·연휴 등의 원인은 이 차이만으로 확정하지 않습니다.</p><div class="collection-table-wrap"><table><thead><tr><th>경쟁업체</th><th>공통 숙박일</th><th>내 매장 예약률</th><th>경쟁 예약률</th><th>차이</th><th>판단 상태</th></tr></thead><tbody>${r.comparisons.map(c=>`<tr><th>${esc(c.name)}</th><td>${c.commonDays}일</td><td>${rate(c.own.reservationRate)}</td><td>${rate(c.competitor.reservationRate)}</td><td>${c.gapPp===null?'비교 보류':`${c.gapPp>0?'+':''}${n(c.gapPp)}%p`}</td><td>${c.status==='comparable'?'비교 가능':'표본 부족'}</td></tr>`).join('')||'<tr><td colspan="6">내 매장과 경쟁업체 자료가 필요합니다.</td></tr>'}</tbody></table></div></section><section class="card"><div class="db-section-heading"><b>3</b><h2>지역 수요 배경</h2></div><div class="briefing-region-grid">${r.regions.map(g=>`<article><span class="status-pill">${g.region.id===own?.regionKey?'매장 소재지':'관심지역'}</span><h3>${esc(g.region.label)}</h3><p>${g.window?`최근 12개월 ${esc(g.window.start)} ~ ${esc(g.window.end)}`:`기준월 ${esc(g.month)}`} · 저장 지표 ${g.availableSources}종</p><p class="muted">${esc(g.location?.interpretation||'입지 해석 자료 확인 전')}</p>${trendBrief(g)}<a href="#regions=${encodeURIComponent(g.region.id)}" class="text-link">지역별 지표·출처 확인</a></article>`).join('')||'<p class="empty-note">매장 소재지 또는 관심지역을 연결해 주세요.</p>'}</div></section><section class="card"><div class="db-section-heading"><b>4</b><h2>다음 행동</h2></div><div class="briefing-actions">${r.actions.map((a,i)=>`<article><span class="action-number">${String(i+1).padStart(2,'0')}</span><div><h3>${esc(a.title)}</h3><p>${esc(a.reason)}</p><p class="action-step">${esc(a.next)}</p><p class="muted">실행 후 확인: ${esc(a.check)}</p><small class="muted">근거: ${esc(a.source)}</small></div></article>`).join('')}</div></section><details class="card analysis-notes"><summary>집계 범위와 판단 기준</summary><ul>${r.definitions.map(d=>`<li>${esc(d)}</li>`).join('')}</ul></details>`;
+    const own=r.companies.find(c=>c.kind==='own'),preview=isReportPreview(r),previewFailed=(r.responseCache?.refreshFailed||r.responseCache?.calculationStatus==='failed')&&r.responseCache?.refreshing!==true;
+    return `<section class="briefing-banner"><span class="eyebrow">${preview?(previewFailed?'저장 자료 미리보기 · 계산 확인 필요':'저장 자료 미리보기 · 계산 확인 중'):'현재 상황 브리핑 · 미발행'}</span><h2>${esc(own?.name||'사업 준비')}의 ${preview?'저장 자료':'다음 판단'}</h2><p>숙박일 ${esc(r.period.start)} ~ ${esc(r.period.end)}</p><p class="muted">${preview?'저장 자료 요약 시각':'확인 시각'} ${esc(time(r.generatedAt))}</p></section>${reportIssues(r)}<section class="card"><div class="db-section-heading"><b>1</b><h2>현재 상황</h2></div><div class="briefing-company-grid">${r.companies.map(c=>`<article><span class="status-pill">${c.kind==='own'?'내 매장':'경쟁업체'}</span>${c.sourceStatus&&c.sourceStatus!=='ready'?` <span class="status-pill pending">${c.sourceStatus==='partial'?'일부 기간 확인 필요':'자료 확인 필요'}</span>`:''}<h3>${esc(c.name)}</h3><p class="muted">객실 ${c.rooms==null?'미확인':n(c.rooms)+'실'} · 수량 유효 ${n(c.summary.days)}/30일<br>마지막 관측 ${esc(c.lastObservedAt?time(c.lastObservedAt):(c.lastObservedDay||'확인 전'))}</p><dl><div><dt>추정 예약률</dt><dd>${rate(c.summary.reservationRate)}</dd></div><div><dt>공개 예약</dt><dd class="public-value">${c.summary.publicBookings==null?'미확인':n(c.summary.publicBookings)+'실'}</dd></div><div><dt>방막기 추정</dt><dd class="estimated-value">${c.summary.phoneBookings==null?'미확인':n(c.summary.phoneBookings)+'실'}</dd></div><div><dt>추정매출</dt><dd>${c.summary.estimatedRevenue==null?'산출 보류':`${n(c.summary.estimatedRevenue)}원`}</dd></div></dl><p class="muted">${c.unavailable?'자료 연결 확인 필요':'위 수치는 업체별 확보 기간의 요약입니다. 업체 간 비교는 아래 공통 날짜 기준을 확인하세요.'}</p><a class="text-link" href="#collection=${encodeURIComponent(c.companyId)}">근거·수집 결과 확인</a></article>`).join('')||'<p class="empty-note">등록한 업체가 없습니다.</p>'}</div></section><section class="card"><div class="db-section-heading"><b>2</b><h2>경쟁업체와의 차이</h2></div><p class="muted">같은 숙박일과 같은 관측일이 겹치는 자료만 비교합니다. 가격·시설·연휴 등의 원인은 이 차이만으로 확정하지 않습니다.</p><div class="collection-table-wrap"><table><thead><tr><th>경쟁업체</th><th>공통 숙박일</th><th>내 매장 예약률</th><th>경쟁 예약률</th><th>차이</th><th>판단 상태</th></tr></thead><tbody>${preview?'<tr><td colspan="6">리포트 계산 후 같은 날짜 기준으로 비교합니다.</td></tr>':r.comparisons.map(c=>`<tr><th>${esc(c.name)}</th><td>${c.commonDays}일</td><td>${rate(c.own.reservationRate)}</td><td>${rate(c.competitor.reservationRate)}</td><td>${c.gapPp===null?'비교 보류':`${c.gapPp>0?'+':''}${n(c.gapPp)}%p`}</td><td>${c.status==='comparable'?'비교 가능':'표본 부족'}</td></tr>`).join('')||'<tr><td colspan="6">내 매장과 경쟁업체 자료가 필요합니다.</td></tr>'}</tbody></table></div></section><section class="card"><div class="db-section-heading"><b>3</b><h2>지역 수요 배경</h2></div><div class="briefing-region-grid">${r.regions.map(g=>`<article><span class="status-pill">${g.region.id===own?.regionKey?'매장 소재지':'관심지역'}</span><h3>${esc(g.region.label)}</h3><p>${g.window?`최근 12개월 ${esc(g.window.start)} ~ ${esc(g.window.end)}`:`기준월 ${esc(g.month)}`} · 저장 지표 ${g.availableSources}종</p><p class="muted">${esc(g.location?.interpretation||'입지 해석 자료 확인 전')}</p>${trendBrief(g)}<a href="#regions=${encodeURIComponent(g.region.id)}" class="text-link">지역별 지표·출처 확인</a></article>`).join('')||'<p class="empty-note">매장 소재지 또는 관심지역을 연결해 주세요.</p>'}</div></section><section class="card"><div class="db-section-heading"><b>4</b><h2>다음 행동</h2></div><div class="briefing-actions">${preview?'<p class="empty-note" role="status">리포트 계산 후 다음 행동을 확인할 수 있습니다.</p>':r.actions.map((a,i)=>`<article><span class="action-number">${String(i+1).padStart(2,'0')}</span><div><h3>${esc(a.title)}</h3><p>${esc(a.reason)}</p><p class="action-step">${esc(a.next)}</p><p class="muted">실행 후 확인: ${esc(a.check)}</p><small class="muted">근거: ${esc(a.source)}</small></div></article>`).join('')}</div></section><details class="card analysis-notes"><summary>집계 범위와 판단 기준</summary><ul>${r.definitions.map(d=>`<li>${esc(d)}</li>`).join('')}</ul></details>`;
   }
   const jobStatus=s=>({queued:'대기',running:'갱신 중',ready:'완료',complete:'완료',partial:'일부 자료',failed:'실패',missing:'자료 없음',interrupted:'중단',publication_pending:'공표 대기'}[s]||'확인 전');
   const jobError=code=>({MISSING_KEY:'인증키 설정 필요',AUTH_ERROR:'이용 권한 확인 필요',QUOTA_EXCEEDED:'제공기관 요청 한도 도달',TIMEOUT:'응답 시간 초과',NETWORK_ERROR:'연결 실패',REGIONAL_SOURCE_BUSY:'다른 지역 자료 갱신 중',MISSING_VALUES:'일부 월 자료 없음',NO_DATA:'제공 자료 없음',PUBLICATION_PENDING:'아직 공표되지 않음',CACHE_WRITE_ERROR:'자료 저장 실패'}[code]||'자료 연결 확인 필요');
@@ -297,22 +311,25 @@
     const visible=()=>id===seq&&slot.isConnected&&authorized();
     const button=form.querySelector('button');
     if(!reportAllowed(ownId)){renderedVersion=null;freshness('');button.disabled=true;slot.innerHTML='<p class="collection-warning">내 매장 등록과 리포트 조회 권한을 다시 확인해 주세요.</p>';return;}
-    const entry=reportCached(ownId,period);regionData=null;button.disabled=true;
+    const complete=reportCached(ownId,period),entry=complete||reportCached(ownId,period,reportPreviews);regionData=null;button.disabled=true;
     if(entry){
       if(renderedVersion!==entry.version){drawReport(slot,entry.data);renderedVersion=entry.version;}
-      freshness(previousNotice(entry,entry.persisted?'이전 저장 리포트 표시 · 최신 자료 확인 중':'이전 조회 리포트 표시 · 최신 자료 확인 중'),'checking');
+      freshness(previousNotice(entry,isReportPreview(entry.data)?'저장 자료 먼저 표시 · 리포트 계산 확인 중':entry.persisted?'이전 저장 리포트 표시 · 최신 자료 확인 중':'이전 조회 리포트 표시 · 최신 자료 확인 중'),'checking');
     }else{renderedVersion=null;freshness('');slot.innerHTML='<p class="empty-note" role="status">업체별 보존 이력을 계산하고 있습니다. 자료량에 따라 최대 3분 정도 걸릴 수 있습니다.</p>';}
     try{
       const data=await readReport(ownId,period,request,force||deniedReports.has(ownId));
       if(!authorized())return;
       if(period.start!==reportPeriod().start){if(visible())void loadReport();return;}
       const fresh=rememberReport(ownId,period,data);if(!visible())return;
-      if(renderedVersion!==fresh.version){drawReport(slot,fresh.data,Boolean(entry));renderedVersion=fresh.version;}
+      const preview=isReportPreview(data),shown=preview&&complete?complete:fresh;
+      if(renderedVersion!==shown.version){drawReport(slot,shown.data,Boolean(entry));renderedVersion=shown.version;}
       const info=data.responseCache||{},sourcePending=data.dataQuality?.issues?.some(issue=>['COMPANY_INTEGRATION_UPDATING','COMPANY_INTEGRATION_PENDING'].includes(issue.code));
-      const pending=info.refreshing===true||!info.refreshFailed&&(info.revalidationRequired||sourcePending),failed=info.refreshFailed&&info.refreshing!==true,checking=pending&&backgroundChecks<REPORT_CHECK_DELAYS.length;
+      const failed=(info.refreshFailed||info.calculationStatus==='failed')&&info.refreshing!==true,pending=info.refreshing===true||!failed&&(info.revalidationRequired||sourcePending||preview&&info.calculationStatus==='pending'),checking=pending&&backgroundChecks<REPORT_CHECK_DELAYS.length;
       const partial=info.partial===true||data.dataQuality?.status==='partial';
-      const message=failed?(partial?'일부 자료 표시 · 최신 리포트 확인에 실패했습니다.':'최신 리포트 확인 지연 · 이전 저장 자료를 표시합니다.'):partial?(checking?'일부 자료 표시 · 최신 자료 확인 중':pending?'일부 자료 표시 · 최신 확인에 시간이 걸리고 있습니다.':'일부 자료 확인 필요 · 정상 자료를 표시합니다.'):checking?'이전 저장 리포트 표시 · 최신 자료 확인 중':pending?'최신 확인에 시간이 걸려 이전 리포트를 표시합니다.':'';
-      freshness(message?previousNotice(fresh,message):'',checking?'checking':'notice');
+      const failureDetail=typeof info.refreshErrorMessage==='string'?info.refreshErrorMessage.slice(0,300):'리포트 계산을 완료하지 못했습니다.';
+      const failureCode=/^[A-Z][A-Z0-9_]{1,99}$/.test(info.refreshErrorCode||'')?` (${info.refreshErrorCode})`:'';
+      const message=preview?(failed?`저장 자료 유지 · ${failureDetail}${failureCode} ‘저장 자료 확인’으로 다시 확인해 주세요.`:checking?'저장 자료 먼저 표시 · 리포트 계산 중':'저장 자료 유지 · 리포트 계산에 시간이 걸리고 있습니다. ‘저장 자료 확인’으로 다시 확인할 수 있습니다.'):failed?(partial?'일부 자료 표시 · 최신 리포트 확인에 실패했습니다.':'최신 리포트 확인 지연 · 이전 저장 자료를 표시합니다.'):partial?(checking?'일부 자료 표시 · 최신 자료 확인 중':pending?'일부 자료 표시 · 최신 확인에 시간이 걸리고 있습니다.':'일부 자료 확인 필요 · 정상 자료를 표시합니다.'):checking?'이전 저장 리포트 표시 · 최신 자료 확인 중':pending?'최신 확인에 시간이 걸려 이전 리포트를 표시합니다.':'';
+      freshness(message?previousNotice(shown,message):'',checking?'checking':'notice');
       if(checking&&typeof setTimeout==='function')refreshTimer=setTimeout(()=>{refreshTimer=null;if(visible())void loadReport({backgroundChecks:backgroundChecks+1});},REPORT_CHECK_DELAYS[backgroundChecks]);
     }catch(error){
       if(!authorized())return;
@@ -322,7 +339,7 @@
         if(show){renderedVersion=null;freshness('');slot.innerHTML='<p class="collection-warning">업체·지역 등록과 리포트 조회 권한을 다시 확인해 주세요.</p>';}
       }else if(visible()){
         if(period.start!==reportPeriod().start){void loadReport();return;}
-        if(entry&&Date.now()<entry.validUntil)freshness(previousNotice(entry,'최신 리포트 확인 지연 · 이전 저장 자료를 표시합니다.'));
+        if(entry&&Date.now()<entry.validUntil)freshness(previousNotice(entry,isReportPreview(entry.data)?`저장 자료 유지 · ${error.message||'리포트 계산 연결을 확인하지 못했습니다.'} ‘저장 자료 확인’으로 다시 확인해 주세요.`:'최신 리포트 확인 지연 · 이전 저장 자료를 표시합니다.'));
         else{renderedVersion=null;freshness('');slot.innerHTML=`<p class="collection-warning">${esc(error.message)}</p>`;}
       }
     }finally{if(id===seq&&button.isConnected)button.disabled=false;}

@@ -2,8 +2,8 @@
 const {createHash}=require('node:crypto');
 // Read-only report projections. Authorization is obtained afresh before every
 // read/bootstrap; only account-isolated display data is written to disk.
-function createReportReadCache({now=Date.now,ttlMs=10*60000,refreshMs=30000,maxEntries=64,maxBytes=16*1024*1024,maxPerScope=8,maxScopes=maxEntries*2,persistenceDirectory,namespace,persistentStore,partialPersistentStore}={}) {
-  const entries=new Map(),states=new Map(),pendingSources=new Map(),invalidatedScopes=new Set();let bytes=0;
+function createReportReadCache({now=Date.now,ttlMs=10*60000,refreshMs=30000,maxEntries=64,maxBytes=16*1024*1024,maxPerScope=8,maxScopes=maxEntries*2,persistenceDirectory,namespace,persistentStore,partialPersistentStore,previewPersistentStore}={}) {
+  const entries=new Map(),states=new Map(),pendingSources=new Map(),pendingSaved=new Map(),invalidatedScopes=new Set();let bytes=0;
   const clock=()=>Number(now()),DAY=86400000;
   const clone=value=>value===undefined?undefined:JSON.parse(JSON.stringify(value));
   const stable=value=>value&&typeof value==='object'?Array.isArray(value)?value.map(stable):Object.fromEntries(Object.keys(value).sort().map(key=>[key,stable(value[key])])):value;
@@ -47,7 +47,9 @@ function createReportReadCache({now=Date.now,ttlMs=10*60000,refreshMs=30000,maxE
   const storeOptions={directory:persistenceDirectory,namespace,version:projectionVersion,now};
   const disk=persistentStore||(persistenceDirectory&&namespace?require('./report-snapshot-store.cjs').createReportSnapshotStore({...storeOptions,project:(value,options)=>{const core=projectedCore(value,options);return core&&cacheable(core)?core:null;}}):null);
   const partialDisk=partialPersistentStore||(persistenceDirectory&&namespace?require('./report-snapshot-store.cjs').createReportSnapshotStore({...storeOptions,quality:'partial',project:(value,options)=>{const core=projectedCore(value,options);return core&&core.dataQuality?.status==='partial'&&!cacheable(core)?core:null;}}):null);
-  const stores=[disk,partialDisk].filter(Boolean);
+  const previewVersion=hash([projectionVersion,'saved-report-preview-v1',previewCore.toString()]);
+  const previewDisk=previewPersistentStore||(persistenceDirectory&&namespace?require('./report-snapshot-store.cjs').createReportSnapshotStore({...storeOptions,version:previewVersion,quality:'preview',project:previewCore}):null);
+  const stores=[disk,partialDisk,previewDisk].filter(Boolean);
   const ready=async()=>{await Promise.all(stores.map(async store=>{try{await store.ready();}catch{}}));};
   function validatedIdentity(data,ownId){
     const customer=data?.customer;
@@ -100,32 +102,44 @@ function createReportReadCache({now=Date.now,ttlMs=10*60000,refreshMs=30000,maxE
     for(const row of core.regions)if((regionFailed(row)||row.sourceStatus&&row.sourceStatus!=='ready')&&!row.sourceIssues?.length)issues.push({scope:'region',regionId:row.region.id,name:row.region.label,month:row.month,code:'REGION_SOURCE_UNAVAILABLE',reason:'지역의 일부 저장 지표를 확인하지 못했습니다.'});
     return {...core,dataQuality:{status:'partial',issues:[...new Map(issues.map(issue=>[JSON.stringify(stable(issue)),issue])).values()]}};
   }
+  const calculationErrors={REPORT_CALCULATION_TIMEOUT:'최신 리포트 계산이 지연되고 있습니다. 저장 자료를 유지합니다. 다시 확인해 주세요.',REPORT_CALCULATION_FAILED:'최신 리포트 계산을 확인하지 못했습니다. 저장 자료를 유지합니다. 다시 확인해 주세요.'};
+  function previewCore(value,options={}){
+    const calculation=value?.calculation;
+    if(calculation?.mode!=='saved_only'||!['pending','failed'].includes(calculation.status))return null;
+    const core=projectedCore(value,options);if(!core)return null;
+    const time=value=>value===null||typeof value==='string'&&Number.isFinite(Date.parse(value));
+    if(!time(calculation.oldestSourceCalculatedAt)||!time(calculation.latestSourceCalculatedAt)||calculation.oldestSourceCalculatedAt&&calculation.latestSourceCalculatedAt&&Date.parse(calculation.oldestSourceCalculatedAt)>Date.parse(calculation.latestSourceCalculatedAt))return null;
+    if(calculation.status==='failed'&&(!Object.hasOwn(calculationErrors,calculation.errorCode)||calculation.errorMessage!==calculationErrors[calculation.errorCode]))return null;
+    return {...qualityCore(core),calculation:{mode:'saved_only',status:calculation.status,oldestSourceCalculatedAt:calculation.oldestSourceCalculatedAt,latestSourceCalculatedAt:calculation.latestSourceCalculatedAt,...(calculation.status==='failed'?{errorCode:calculation.errorCode,errorMessage:calculation.errorMessage}:{})}};
+  }
+  const displayCore=(value,options)=>value?.calculation?.mode==='saved_only'?previewCore(value,options):projectedCore(value,options);
   function remove(key){const previous=entries.get(key);if(previous){bytes-=previous.bytes;entries.delete(key);}}
   function clearEntries(scope){for(const [key,entry] of entries)if(entry.scope===scope)remove(key);}
-  function invalidate(scope){const state=states.get(scope);if(state)state.epoch++;clearEntries(scope);states.delete(scope);invalidatedScopes.add(scope);while(invalidatedScopes.size>maxScopes)invalidatedScopes.delete(invalidatedScopes.values().next().value);for(const [key,pending] of pendingSources)if(pending.scope===scope)pendingSources.delete(key);}
+  function invalidate(scope){const state=states.get(scope);if(state)state.epoch++;clearEntries(scope);states.delete(scope);invalidatedScopes.add(scope);while(invalidatedScopes.size>maxScopes)invalidatedScopes.delete(invalidatedScopes.values().next().value);for(const map of [pendingSources,pendingSaved])for(const [key,pending] of map)if(pending.scope===scope)map.delete(key);}
   function scopeState(scope){let state=states.get(scope);if(!state){state={scope,epoch:0,permissionVersion:0,identity:null,marks:new Map(),denied:new Map(),revoked:null};states.set(scope,state);}else{states.delete(scope);states.set(scope,state);}while(states.size>maxScopes)invalidate(states.keys().next().value);return state;}
   const current=(state,epoch,key,mark,binding,start)=>states.get(state.scope)===state&&state.epoch===epoch&&(!start||day()===start)&&(!key||state.marks.get(key)?.mark===mark&&(!binding||state.marks.get(key)===binding));
-  function syncIdentity(state,data){for(const [key,binding] of state.marks){const identity=validatedIdentity(data,binding.ownId);if(!identity||fingerprint(identity)!==binding.mark||binding.start!==day()){state.marks.delete(key);state.denied.delete(key);remove(key);pendingSources.delete(key);}}}
-  function revoke(state,reply){state.epoch++;state.revoked=reply;state.marks.clear();state.denied.clear();clearEntries(state.scope);for(const [key,pending] of pendingSources)if(pending.scope===state.scope)pendingSources.delete(key);}
+  function syncIdentity(state,data){for(const [key,binding] of state.marks){const identity=validatedIdentity(data,binding.ownId);if(!identity||fingerprint(identity)!==binding.mark||binding.start!==day()){state.marks.delete(key);state.denied.delete(key);remove(key);pendingSources.delete(key);pendingSaved.delete(key);}}}
+  function revoke(state,reply){state.epoch++;state.revoked=reply;state.marks.clear();state.denied.clear();clearEntries(state.scope);for(const map of [pendingSources,pendingSaved])for(const [key,pending] of map)if(pending.scope===state.scope)map.delete(key);}
   async function safeRead(read){try{const reply=await read();if(!reply||!Number.isInteger(reply.status)||!reply.data||typeof reply.data!=='object')return unavailable();return {status:reply.status,ok:reply.ok===true&&reply.status>=200&&reply.status<300,data:reply.data};}catch{return unavailable();}}
   function identityRead(state,read){if(!state.identity){const promise=safeRead(read);state.identity=promise;promise.finally(()=>{if(state.identity===promise)state.identity=null;});}return state.identity;}
   const expiry=entry=>entry.validUntil??entry.checkedAt+ttlMs;
   function remember(key,state,mark,core,{checkedAt=clock(),validUntil=checkedAt+ttlMs,persisted=false}={}){
     const text=JSON.stringify(core),size=Buffer.byteLength(text);if(size>maxBytes||maxEntries<1||maxPerScope<1)return;
-    remove(key);entries.set(key,{scope:state.scope,mark,core:text,bytes:size,partial:core.dataQuality?.status==='partial',checkedAt,validUntil,persisted,needsRevalidation:persisted,lastAttempt:checkedAt,refreshFailed:false});bytes+=size;
+    const preview=core.calculation?.mode==='saved_only',failed=preview&&core.calculation.status==='failed';
+    remove(key);entries.set(key,{scope:state.scope,mark,core:text,bytes:size,preview,partial:core.dataQuality?.status==='partial',checkedAt,validUntil,persisted,needsRevalidation:persisted&&!failed,lastAttempt:checkedAt,refreshFailed:failed,...(failed?{refreshErrorCode:core.calculation.errorCode,refreshErrorMessage:core.calculation.errorMessage}:{})});bytes+=size;
     let scoped=[...entries].filter(([,entry])=>entry.scope===state.scope);while(scoped.length>maxPerScope){remove(scoped[0][0]);scoped.shift();}while(entries.size>maxEntries||bytes>maxBytes)remove(entries.keys().next().value);
   }
-  function compose(entry,refreshing){return {status:200,ok:true,data:{...JSON.parse(entry.core),responseCache:{state:entry.partial?'partial':'cached',...(entry.partial?{partial:true}:{}),checkedAt:new Date(entry.checkedAt).toISOString(),refreshing,refreshFailed:entry.refreshFailed,...(entry.persisted?{persisted:true,validUntil:new Date(entry.validUntil).toISOString(),revalidationRequired:true}:{})}}};}
+  function compose(entry,refreshing){return {status:200,ok:true,data:{...JSON.parse(entry.core),responseCache:{state:entry.preview?'preview':entry.partial?'partial':'cached',...(entry.preview?{preview:true}:{}),...(entry.partial?{partial:true}:{}),checkedAt:new Date(entry.checkedAt).toISOString(),refreshing,refreshFailed:entry.refreshFailed,calculationStatus:entry.preview?(refreshing?'pending':entry.refreshFailed?'failed':'pending'):'complete',...(entry.refreshErrorCode?{refreshErrorCode:entry.refreshErrorCode,refreshErrorMessage:entry.refreshErrorMessage}:{}),...(entry.persisted?{persisted:true,validUntil:new Date(entry.validUntil).toISOString(),revalidationRequired:true}:{})}}};}
   function hydrate(key,state,mark,identity,start,audience){
     if(!stores.length||entries.has(key)||state.revoked||state.denied.has(key)||invalidatedScopes.has(state.scope))return;
     const slotKey=durableSlot(identity,audience);if(!slotKey)return;let saved;const candidates=[];for(const store of stores)try{const row=store.get(slotKey,start);if(row)candidates.push(row);}catch{}
-    candidates.sort((a,b)=>b.checkedAt-a.checkedAt||Number(a.core?.dataQuality?.status==='partial')-Number(b.core?.dataQuality?.status==='partial'));
-    saved=candidates.find(row=>{const core=projectedCore(row.core,{periodStart:start});return core&&sourceScope(core,identity,start)&&(cacheable(core)||core.dataQuality?.status==='partial');});
+    candidates.sort((a,b)=>Number(a.core?.calculation?.mode==='saved_only')-Number(b.core?.calculation?.mode==='saved_only')||b.checkedAt-a.checkedAt||Number(a.core?.dataQuality?.status==='partial')-Number(b.core?.dataQuality?.status==='partial'));
+    saved=candidates.find(row=>{const core=displayCore(row.core,{periodStart:start});return core&&sourceScope(core,identity,start)&&(cacheable(core)||core.dataQuality?.status==='partial');});
     if(!saved||saved.slotKey!==slotKey||saved.periodStart!==start||!Number.isFinite(saved.checkedAt)||saved.checkedAt>clock()||!Number.isFinite(saved.validUntil)||saved.validUntil<=clock()||saved.validUntil>saved.checkedAt+7*DAY)return;
-    const core=projectedCore(saved.core,{periodStart:start});if(!core||!sourceScope(core,identity,start))return;
+    const core=displayCore(saved.core,{periodStart:start});if(!core||!sourceScope(core,identity,start))return;
     remember(key,state,mark,core,{checkedAt:saved.checkedAt,validUntil:saved.validUntil,persisted:true});
   }
-  function bind(state,ownId,start,mark,audience){const key=keyFor(state.scope,ownId,start,audience),previous=state.marks.get(key);if(previous?.mark!==mark){remove(key);state.denied.delete(key);state.marks.delete(key);}const binding=state.marks.get(key)||{ownId,start,mark};state.marks.delete(key);state.marks.set(key,binding);while(state.marks.size>maxPerScope*2){const oldest=state.marks.keys().next().value;state.marks.delete(oldest);state.denied.delete(oldest);remove(oldest);pendingSources.delete(oldest);}return {key,binding};}
+  function bind(state,ownId,start,mark,audience){const key=keyFor(state.scope,ownId,start,audience),previous=state.marks.get(key);if(previous?.mark!==mark){remove(key);state.denied.delete(key);state.marks.delete(key);pendingSaved.delete(key);}const binding=state.marks.get(key)||{ownId,start,mark};state.marks.delete(key);state.marks.set(key,binding);while(state.marks.size>maxPerScope*2){const oldest=state.marks.keys().next().value;state.marks.delete(oldest);state.denied.delete(oldest);remove(oldest);pendingSources.delete(oldest);pendingSaved.delete(oldest);}return {key,binding};}
   async function snapshot({scope,audience,identity,maxViews=4}={}){
     if(typeof scope!=='string'||!scope||!identity||typeof identity!=='object')return [];
     const checked=validatedIdentity(identity,'');if(!checked)return [];
@@ -136,32 +150,59 @@ function createReportReadCache({now=Date.now,ttlMs=10*60000,refreshMs=30000,maxE
     for(const ownId of [...new Set(requests)]){
       const selected=validatedIdentity(identity,ownId);if(!selected)continue;const {key}=bind(state,ownId,start,mark,audience);hydrate(key,state,mark,selected,start,audience);const entry=entries.get(key);
       if(!entry||entry.mark!==mark||entry.checkedAt>clock()||clock()>=expiry(entry)||state.denied.has(key))continue;
-      const core=projectedCore(JSON.parse(entry.core),{periodStart:start});if(!core||!sourceScope(core,selected,start)||!cacheable(core)&&core.dataQuality?.status!=='partial'){remove(key);continue;}
+      const core=displayCore(JSON.parse(entry.core),{periodStart:start});if(!core||!sourceScope(core,selected,start)||!cacheable(core)&&core.dataQuality?.status!=='partial'){remove(key);continue;}
       const pending=pendingSources.get(key),refreshing=Boolean(pending&&pending.state===state&&pending.epoch===epoch&&pending.mark===mark),row={ownId,period:periodFor(start),data:compose(entry,refreshing).data};const size=Buffer.byteLength(JSON.stringify(row))+(views.length?1:0);
       if(payloadBytes+size>maxBytes)continue;payloadBytes+=size;views.push(row);if(views.length>=limit)break;
     }
     return views;
   }
+  const previewMarker=value=>value?.calculation?.mode==='saved_only'||value?.responseCache?.preview===true||value?.responseCache?.state==='preview';
+  function persistPreview({entry,state,epoch,key,mark,binding,identity,start,audience}){
+    const slotKey=durableSlot(identity,audience);if(!previewDisk||!slotKey||!entry?.preview)return;
+    try{void previewDisk.put({slotKey,periodStart:start,checkedAt:entry.checkedAt,core:JSON.parse(entry.core),ticket:previewDisk.begin(slotKey,start),guard:()=>current(state,epoch,key,mark,binding,start)&&entries.get(key)===entry}).catch(()=>{});}catch{}
+  }
+  function calculationFailure(context,reply){
+    const entry=entries.get(context.key);if(!entry||!current(context.state,context.epoch,context.key,context.mark,context.binding,context.start))return;
+    entry.refreshFailed=true;
+    if(entry.preview){
+      const code=reply?.status===504||/TIMEOUT/.test(reply?.data?.error?.code||'')?'REPORT_CALCULATION_TIMEOUT':'REPORT_CALCULATION_FAILED';
+      const core=JSON.parse(entry.core);core.calculation={...core.calculation,status:'failed',errorCode:code,errorMessage:calculationErrors[code]};entry.core=JSON.stringify(core);
+      bytes+=Buffer.byteLength(entry.core)-entry.bytes;entry.bytes=Buffer.byteLength(entry.core);entry.refreshErrorCode=code;entry.refreshErrorMessage=calculationErrors[code];persistPreview({...context,entry});
+    }
+  }
   function sourceRead({state,epoch,key,mark,binding,identity,start,audience,readSource}){
     const former=pendingSources.get(key);if(former&&former.state===state&&former.epoch===epoch&&former.mark===mark&&former.binding===binding)return former.promise;
-    const previous=entries.get(key);if(previous){previous.lastAttempt=clock();previous.needsRevalidation=false;}
+    const context={state,epoch,key,mark,binding,identity,start,audience},previous=entries.get(key);if(previous){previous.lastAttempt=clock();previous.needsRevalidation=false;if(previous.preview){const core=JSON.parse(previous.core);core.calculation={...core.calculation,status:'pending'};delete core.calculation.errorCode;delete core.calculation.errorMessage;previous.core=JSON.stringify(core);bytes+=Buffer.byteLength(previous.core)-previous.bytes;previous.bytes=Buffer.byteLength(previous.core);previous.refreshFailed=false;delete previous.refreshErrorCode;delete previous.refreshErrorMessage;}}
     const slotKey=durableSlot(identity,audience);let ticket,partialTicket;try{if(slotKey){ticket=disk?.begin(slotKey,start);partialTicket=partialDisk?.begin(slotKey,start);}}catch{}
     const pending={scope:state.scope,state,epoch,mark,binding,promise:null};
     const isCurrent=()=>current(state,epoch,key,mark,binding,start);
     pending.promise=safeRead(readSource).then(async reply=>{
       if(!isCurrent())return invalidated();
-      if(!reply.ok){if([401,403].includes(reply.status))revoke(state,reply);else if(reply.status===404){remove(key);state.denied.set(key,{reply,mark});}else{const entry=entries.get(key);if(entry)entry.refreshFailed=true;}return reply;}
-      let core=projectedCore(reply.data,{periodStart:start});
-      if(!core||!sourceScope(core,identity,start)){const entry=entries.get(key);if(entry)entry.refreshFailed=true;return unavailable();}
+      if(!reply.ok){if([401,403].includes(reply.status))revoke(state,reply);else if(reply.status===404){remove(key);state.denied.set(key,{reply,mark});}else calculationFailure(context,reply);return reply;}
+      let core=previewMarker(reply.data)?null:projectedCore(reply.data,{periodStart:start});
+      if(!core||!sourceScope(core,identity,start)){calculationFailure(context,unavailable());return unavailable();}
       core=qualityCore(core);const partial=core.dataQuality.status==='partial';
       state.revoked=null;state.denied.delete(key);const checkedAt=clock();
       const target=partial?partialDisk:disk;
       if(target&&slotKey)try{await target.put({slotKey,periodStart:start,checkedAt,core,ticket:partial?partialTicket:ticket,guard:isCurrent});}catch{}
       if(!isCurrent())return invalidated();invalidatedScopes.delete(state.scope);remember(key,state,mark,core,{checkedAt});return {status:200,ok:true,data:core,checkedAt,partial};
-    }).finally(()=>{if(pendingSources.get(key)===pending)pendingSources.delete(key);});
+    }).catch(()=>{calculationFailure(context,unavailable());return unavailable();}).finally(()=>{if(pendingSources.get(key)===pending)pendingSources.delete(key);});
     pendingSources.set(key,pending);return pending.promise;
   }
-  async function read({scope,audience,ownId='',readIdentity,readSource,force=false}={}){
+  function savedPreviewRead({state,epoch,key,mark,binding,identity,start,audience,readSavedSource}){
+    const former=pendingSaved.get(key);if(former&&former.state===state&&former.epoch===epoch&&former.mark===mark&&former.binding===binding)return former.promise;
+    const context={state,epoch,key,mark,binding,identity,start,audience},pending={scope:state.scope,state,epoch,mark,binding,promise:null};
+    pending.promise=safeRead(readSavedSource).then(reply=>{
+      if(!current(state,epoch,key,mark,binding,start))return invalidated();
+      if(!reply.ok){if([401,403].includes(reply.status))revoke(state,reply);if([400,404].includes(reply.status)&&['INVALID_FIELDS','NOT_FOUND','INVALID_QUERY','UNSUPPORTED'].includes(reply.data?.error?.code))return {unsupported:true};return reply;}
+      const core=reply.data?.calculation?.status==='pending'?previewCore(reply.data,{periodStart:start}):null;
+      if(!core||!sourceScope(core,identity,start))return unavailable();
+      const final=entries.get(key);if(final&&final.mark===mark&&!final.preview&&clock()<expiry(final))return {status:200,ok:true,entry:final};
+      state.revoked=null;state.denied.delete(key);invalidatedScopes.delete(state.scope);remember(key,state,mark,core,{checkedAt:clock()});const entry=entries.get(key);
+      if(!entry)return unavailable();persistPreview({...context,entry});return {status:200,ok:true,entry};
+    }).catch(()=>unavailable()).finally(()=>{if(pendingSaved.get(key)===pending)pendingSaved.delete(key);});pendingSaved.set(key,pending);return pending.promise;
+  }
+  async function read({scope,audience,ownId='',readIdentity,readSource,readSavedSource,force=false}={}){
     if(typeof scope!=='string'||!scope||typeof readIdentity!=='function'||typeof readSource!=='function')return unavailable();
     if(typeof ownId!=='string'||ownId&&!validId(ownId))return failure(400,'INVALID_REPORT_OWN','내 매장을 확인해 주세요.');
     const state=scopeState(scope),epoch=state.epoch,permissionVersion=state.permissionVersion,checked=await identityRead(state,readIdentity);
@@ -173,13 +214,14 @@ function createReportReadCache({now=Date.now,ttlMs=10*60000,refreshMs=30000,maxE
     if(state.revoked&&!force)return state.revoked;const denial=state.denied.get(key);if(denial&&denial.mark===mark&&!force)return denial.reply;
     await ready();if(!current(state,epoch,key,mark,binding,start)||state.permissionVersion!==permissionVersion)return invalidated();
     for(const [entryKey,entry] of entries)if(clock()<entry.checkedAt||clock()>=expiry(entry))remove(entryKey);
-    if(!force)hydrate(key,state,mark,identity,start,audience);const entry=entries.get(key);
-    if(entry&&entry.mark===mark&&!force){entries.delete(key);entries.set(key,entry);let refreshing=pendingSources.has(key);if(!refreshing&&(entry.needsRevalidation||clock()-entry.lastAttempt>=refreshMs)){sourceRead({state,epoch,key,mark,binding,identity,start,audience,readSource});refreshing=true;}return compose(entry,refreshing);}
+    const previewEnabled=typeof readSavedSource==='function';if(!force||previewEnabled)hydrate(key,state,mark,identity,start,audience);const entry=entries.get(key),context={state,epoch,key,mark,binding,identity,start,audience,readSource};
+    if(entry&&entry.mark===mark&&(!force||previewEnabled)){entries.delete(key);entries.set(key,entry);let refreshing=pendingSources.has(key);if(!refreshing&&(force||!(entry.preview&&entry.refreshFailed)&&(entry.needsRevalidation||entry.preview||clock()-entry.lastAttempt>=refreshMs))){void sourceRead(context);refreshing=true;}return compose(entry,refreshing);}
+    if(previewEnabled){const saved=await savedPreviewRead({...context,readSavedSource});if(!saved.ok&&!saved.unsupported)return saved;if(!current(state,epoch,key,mark,binding,start))return invalidated();if(!saved.unsupported){if(!saved.entry.preview)return compose(saved.entry,pendingSources.has(key));void sourceRead(context);return compose(saved.entry,true);}}
     const reply=await sourceRead({state,epoch,key,mark,binding,identity,start,audience,readSource});if(!reply.ok)return reply;if(!current(state,epoch,key,mark,binding,start))return invalidated();if(reply.preserved)return {status:reply.status,ok:reply.ok,data:reply.data};
-    return {status:200,ok:true,data:{...clone(reply.data),responseCache:{state:reply.partial?'partial':'fresh',...(reply.partial?{partial:true}:{}),checkedAt:new Date(reply.checkedAt).toISOString(),refreshing:false,refreshFailed:reply.refreshFailed===true}}};
+    return {status:200,ok:true,data:{...clone(reply.data),responseCache:{state:reply.partial?'partial':'fresh',...(reply.partial?{partial:true}:{}),checkedAt:new Date(reply.checkedAt).toISOString(),refreshing:false,refreshFailed:reply.refreshFailed===true,calculationStatus:'complete'}}};
   }
   const flushPersistence=()=>Promise.all(stores.map(store=>store.flush()));
-  const persistenceStatus=()=>{if(!stores.length)return {enabled:false};const normal=disk?.status()||{},partial=partialDisk?.status()||{};return {entries:(normal.entries||0)+(partial.entries||0),bytes:(normal.bytes||0)+(partial.bytes||0),readFailures:(normal.readFailures||0)+(partial.readFailures||0),writeFailures:(normal.writeFailures||0)+(partial.writeFailures||0),persistedWrites:(normal.persistedWrites||0)+(partial.persistedWrites||0),lastError:partial.lastError||normal.lastError||null,initialized:stores.every(store=>store.status().initialized),pendingInitialization:stores.some(store=>store.status().pendingInitialization),normalEntries:normal.entries||0,partialEntries:partial.entries||0};};
+  const persistenceStatus=()=>{if(!stores.length)return {enabled:false};const normal=disk?.status()||{},partial=partialDisk?.status()||{},preview=previewDisk?.status()||{},statuses=[normal,partial,preview],sum=key=>statuses.reduce((total,value)=>total+(value[key]||0),0);return {entries:sum('entries'),bytes:sum('bytes'),readFailures:sum('readFailures'),writeFailures:sum('writeFailures'),persistedWrites:sum('persistedWrites'),lastError:preview.lastError||partial.lastError||normal.lastError||null,initialized:stores.every(store=>store.status().initialized),pendingInitialization:stores.some(store=>store.status().pendingInitialization),normalEntries:normal.entries||0,partialEntries:partial.entries||0,previewEntries:preview.entries||0};};
   return {read,snapshot,invalidate,ready,flush:flushPersistence,flushPersistence,persistenceStatus};
 }
 module.exports={createReportReadCache};

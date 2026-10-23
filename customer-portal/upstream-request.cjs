@@ -25,8 +25,8 @@ function networkFailure(error){
 }
 function createUpstreamReader({backend,fetchImpl,readTimeout,logger=entry=>console.warn('insight_upstream',JSON.stringify(entry)),sleep=delay,now=()=>Date.now(),clock=()=>performance.now()}){
   const emit=entry=>{try{logger(entry);}catch{/* Diagnostics must not change the request result. */}};
-  return async function readUpstream(route,search,headers,{method='GET',body,stage='source',timing}={}){
-    const budget=readTimeout(method,route),signal=AbortSignal.timeout(budget),requestStarted=clock();
+  return async function readUpstream(route,search,headers,{method='GET',body,stage='source',timing,timeoutMs}={}){
+    const configuredBudget=readTimeout(method,route),budget=Number.isSafeInteger(timeoutMs)&&timeoutMs>0?Math.min(configuredBudget,timeoutMs):configuredBudget,signal=AbortSignal.timeout(budget),requestStarted=clock();
     const requestId=timing?.requestId||require('node:crypto').randomUUID();
     const base={requestId,route:routeLabel(route),method,stage:stage||'command'};
     let attempt=0;

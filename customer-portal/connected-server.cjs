@@ -95,8 +95,10 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
     const prefix=mode==='admin'?'/admin':'',ownId=url.searchParams.get('ownId')||'';
     const valid=[...url.searchParams.keys()].every(key=>key==='ownId')&&url.searchParams.getAll('ownId').length<=1&&(!ownId||/^[a-zA-Z0-9_-]+$/.test(ownId));
     if(!session||!valid)return readUpstream(prefix+route,url.search,headers,{timing});
+    const savedQuery=new URLSearchParams(url.search);savedQuery.set('savedOnly','1');
     return reportReads.read({scope:scopeFor(requestOrigin,mode,session),audience:audienceFor(requestOrigin,mode),ownId,force,
       readIdentity:()=>readUpstream(prefix+(mode==='admin'?'/customer-view/me':'/me'),'',headers,{stage:'identity',timing}),
+      readSavedSource:()=>readUpstream(prefix+route,'?'+savedQuery.toString(),headers,{stage:'saved_preview',timing,timeoutMs:3000}),
       readSource:()=>readUpstream(prefix+route,url.search,headers,{stage:'source',timing})});
   }
   async function staticAsset(file) {

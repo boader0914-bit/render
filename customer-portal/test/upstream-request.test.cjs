@@ -49,6 +49,12 @@ test('Retry-After is obeyed for a short pause and suppresses automatic retries f
 test('a retry that cannot fit within the original deadline is not started',async()=>{
   const f=reader([response({},503)],{budget:100});assert.equal((await f.read('/me','',headers)).status,503);assert.equal(f.calls.length,1);
 });
+
+test('a trusted saved-preview deadline can only shorten its request and retry shares that cap',async()=>{
+ const short=reader([response({},503)],{budget:180000});assert.equal((await short.read('/reports/briefing','?savedOnly=1',headers,{stage:'saved_preview',timeoutMs:100})).status,503);assert.equal(short.calls.length,1);
+ const capped=reader([response({},503)],{budget:100});assert.equal((await capped.read('/reports/briefing','',headers,{stage:'source',timeoutMs:180000})).status,503);assert.equal(capped.calls.length,1);
+ const recovering=reader([response({},503),response({ok:true})],{budget:180000});assert.equal((await recovering.read('/reports/briefing','?savedOnly=1',headers,{stage:'saved_preview',timeoutMs:3000})).status,200);assert.equal(recovering.calls[0].options.signal,recovering.calls[1].options.signal);assert.ok(recovering.logs.every(entry=>entry.stage==='saved_preview'));assert.doesNotMatch(JSON.stringify(recovering.logs),/savedOnly|token-secret|private-session/);
+});
 for(const phase of ['headers','body'])test(`identity timeout during ${phase} preserves the timeout distinction and does not retry`,async()=>{
   const timeout=Object.assign(new Error('private timeout details'),{name:'TimeoutError'}),result=phase==='headers'?()=>{throw timeout;}:({...response({}),json:async()=>{throw timeout;}}),f=reader([result]);
   const reply=await f.read('/me','',headers,{stage:'identity'});assert.equal(reply.status,504);assert.equal(reply.data.error.stage,'identity');assert.equal(f.calls.length,1);

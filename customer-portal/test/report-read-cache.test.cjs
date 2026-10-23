@@ -17,6 +17,55 @@ function fixture(options={}){
  return {cache,read,account,value:()=>source,source(value){source=value;},setIdentity(value){account=value;},advance(ms){time+=ms;},time(value){time=value;},now:()=>time,guards:()=>guards,reads:()=>reads};
 }
 async function durable(t){const directory=await fs.mkdtemp(path.join(os.tmpdir(),'insight-report-cache-'));t.after(async()=>{const resolved=path.resolve(directory);assert.equal(path.dirname(resolved),path.resolve(os.tmpdir()));assert.ok(path.basename(resolved).startsWith('insight-report-cache-'));await fs.rm(resolved,{recursive:true,force:true});});return {persistenceDirectory:directory,namespace:'https://central.example',directory};}
+const preview=(options={})=>({...report(options),calculation:{mode:'saved_only',status:'pending',oldestSourceCalculatedAt:'2026-10-22T00:00:00Z',latestSourceCalculatedAt:'2026-10-22T01:00:00Z'}});
+
+test('new report returns a saved-only projection before calculation and joins each pending read once',async()=>{
+ const f=fixture(),saved=deferred(),source=deferred();let savedCalls=0,sourceCalls=0;const options={readSavedSource:()=>{savedCalls++;return saved.promise;},readSource:()=>{sourceCalls++;return source.promise;}};
+ const first=f.read(options),second=f.read(options);await flush();assert.equal(savedCalls,1);assert.equal(sourceCalls,0);saved.resolve(ok(preview()));
+ const reply=await Promise.race([first,new Promise((_,reject)=>setTimeout(()=>reject(Error('preview blocked by source')),500))]);assert.equal(reply.data.responseCache.state,'preview');assert.equal(reply.data.responseCache.refreshing,true);assert.equal(reply.data.responseCache.calculationStatus,'pending');assert.equal(reply.data.calculation.status,'pending');assert.equal(reply.data.companies[0].summary.estimatedRevenue,null);assert.equal((await second).data.responseCache.state,'preview');assert.equal(sourceCalls,1);
+ source.resolve(ok(report()));await flush();const final=await f.read(options);assert.equal(final.data.responseCache.calculationStatus,'complete');assert.equal(final.data.responseCache.state,'cached');assert.equal(final.data.calculation,undefined);assert.equal(sourceCalls,1);
+});
+
+test('same partial calculation replaces preview without treating its source gaps as complete',async()=>{
+ const f=fixture(),source=deferred(),partial=report({sold:0});partial.companies[0].unavailable=true;
+ const result=await f.read({readSavedSource:async()=>ok({...partial,calculation:preview().calculation}),readSource:()=>source.promise});assert.equal(result.data.responseCache.state,'preview');assert.equal(result.data.responseCache.partial,true);source.resolve(ok(partial));await flush();const final=await f.read();assert.equal(final.data.responseCache.state,'partial');assert.equal(final.data.responseCache.calculationStatus,'complete');assert.equal(final.data.calculation,undefined);assert.equal(final.data.companies[0].summary.sold,0);
+});
+
+for(const [label,change] of [
+ ['wrong company',r=>{r.companies[0].companyId='other';}],['wrong own',r=>{r.ownId='comp_b';}],['yesterday',r=>{r.period=report({start:'2026-10-22'}).period;}],['external region',r=>{r.regions[0].networkAttempted=true;}],['invalid calculated clock',r=>{r.calculation.latestSourceCalculatedAt='invalid';}],['uncontrolled failure',r=>{r.calculation.status='failed';r.calculation.errorMessage='private stack';}]
+])test('saved-only '+label+' never displays or enters the final cache',async()=>{const f=fixture(),value=preview();change(value);let actual=0;const reply=await f.read({readSavedSource:async()=>ok(value),readSource:async()=>{actual++;return ok(report());}});assert.equal(reply.status,503);assert.equal(reply.data.companies,undefined);assert.equal(actual,0);assert.deepEqual(await f.cache.snapshot({scope:'host:customer:opaque',audience:'https://insight.example:customer',identity:identity()}),[]);});
+
+for(const status of [401,403,429])test('saved-only HTTP '+status+' never displays previous permissions or calculates',async()=>{const f=fixture();let actual=0;const reply=await f.read({readSavedSource:async()=>fail(status),readSource:async()=>{actual++;return ok(report());}});assert.equal(reply.status,status);assert.equal(actual,0);assert.equal(reply.data.companies,undefined);});
+
+test('failed calculation keeps preview clocks and safe reason, stops automatic retries, and permits explicit recovery',async t=>{
+ const config=await durable(t),f=fixture(config),source=deferred();let actual=0;const options={readSavedSource:async()=>ok(preview()),readSource:()=>{actual++;return source.promise;}};
+ const initial=await f.read(options);source.resolve({status:504,ok:false,data:{error:{code:'UPSTREAM_TIMEOUT',message:'PRIVATE-EXCEPTION'}}});await flush();await f.cache.flushPersistence();f.advance(60000);
+ const failed=await f.read(options);assert.equal(actual,1);assert.equal(failed.data.responseCache.refreshing,false);assert.equal(failed.data.responseCache.calculationStatus,'failed');assert.equal(failed.data.calculation.status,'failed');assert.equal(failed.data.responseCache.refreshErrorCode,'REPORT_CALCULATION_TIMEOUT');assert.equal(failed.data.responseCache.checkedAt,initial.data.responseCache.checkedAt);assert.doesNotMatch(JSON.stringify(failed),/PRIVATE-/);assert.equal(f.cache.persistenceStatus().normalEntries,0);assert.equal(f.cache.persistenceStatus().previewEntries,1);
+ const restarted=fixture(config);restarted.advance(61000);const restored=await restarted.read(options);assert.equal(actual,1);assert.equal(restored.data.responseCache.persisted,true);assert.equal(restored.data.responseCache.calculationStatus,'failed');assert.equal(restored.data.responseCache.checkedAt,initial.data.responseCache.checkedAt);
+ const recovery=deferred(),retry=await restarted.read({...options,force:true,readSource:()=>{actual++;return recovery.promise;}});assert.equal(retry.data.calculation.status,'pending');assert.equal(retry.data.responseCache.calculationStatus,'pending');assert.equal(retry.data.responseCache.refreshFailed,false);assert.equal(retry.data.responseCache.refreshErrorCode,undefined);recovery.resolve(ok(report({sold:9})));await flush();await restarted.cache.flushPersistence();const final=await restarted.read(options);assert.equal(final.data.responseCache.calculationStatus,'complete');assert.equal(final.data.companies[0].summary.sold,9);assert.equal(final.data.calculation,undefined);
+});
+
+for(const marker of [r=>{r.calculation=preview().calculation;},r=>{r.responseCache={state:'preview'};},r=>{r.responseCache={preview:true};}])test('normal source callback cannot promote a preview marker into a final report',async t=>{const config=await durable(t),f=fixture(config),value=report();marker(value);const result=await f.read({readSource:async()=>ok(value)});assert.equal(result.status,503);await f.cache.flushPersistence();assert.equal(f.cache.persistenceStatus().normalEntries,0);assert.equal(f.cache.persistenceStatus().partialEntries,0);});
+
+test('final saved reports always restore ahead of newer previews and force uses that final display first',async t=>{
+ const config=await durable(t),first=fixture(config);const complete=await first.read();await first.cache.flushPersistence();
+ const previewOnly=fixture({...config,persistentStore:{ready:async()=>{},get:()=>null,flush:async()=>{},status:()=>({initialized:true})}});previewOnly.advance(1000);const held=deferred();await previewOnly.read({readSavedSource:async()=>ok(preview({sold:2})),readSource:()=>held.promise});await previewOnly.cache.flushPersistence();assert.equal(previewOnly.cache.persistenceStatus().previewEntries,1);
+ const restarted=fixture(config);restarted.advance(2000);const pending=deferred();let savedCalls=0;const hit=await restarted.read({force:true,readSavedSource:async()=>{savedCalls++;return ok(preview());},readSource:()=>pending.promise});assert.equal(hit.data.responseCache.state,'cached');assert.equal(hit.data.responseCache.refreshing,true);assert.equal(hit.data.generatedAt,complete.data.generatedAt);assert.equal(hit.data.companies[0].summary.sold,5);assert.equal(hit.data.calculation,undefined);assert.equal(savedCalls,0);pending.resolve(ok(report()));held.resolve(fail(503));await flush();await Promise.all([restarted.cache.flushPersistence(),previewOnly.cache.flushPersistence()]);
+});
+
+test('saved-only late results cannot survive authorization change, invalidation or KST midnight',async()=>{
+ for(const scenario of ['invalidate','permission','midnight']){const f=fixture(),saved=deferred();let actual=0;const request=f.read({readSavedSource:()=>saved.promise,readSource:async()=>{actual++;return ok(report());}});await flush();if(scenario==='invalidate')f.cache.invalidate('host:customer:opaque');if(scenario==='permission'){const changed=identity();changed.customer.relations=[];f.setIdentity(changed);await f.read();}if(scenario==='midnight')f.time(Date.parse('2026-10-23T15:00:00Z'));saved.resolve(ok(preview()));assert.equal((await request).status,409);assert.equal(actual,0);}
+});
+
+test('complete and partial projection namespaces remain deployment-compatible',()=>{
+ const store=require('../report-snapshot-store.cjs'),original=store.createReportSnapshotStore,versions=[];try{store.createReportSnapshotStore=options=>{versions.push({quality:options.quality||'complete',version:options.version});return {};};createReportReadCache({persistenceDirectory:'C:/unused-no-file-read',namespace:'https://central.example'});}finally{store.createReportSnapshotStore=original;}
+ assert.deepEqual(versions.slice(0,2),['complete','partial'].map(quality=>({quality,version:'c04a6872173be08ca5da8ad0fdd840236efdad0c23190224df44380b98387db3'})));assert.equal(versions[2].quality,'preview');assert.notEqual(versions[2].version,versions[0].version);
+});
+
+test('a delayed preview never replaces an actual calculation completed while the old entry expired',async()=>{
+ const f=fixture({ttlMs:31000}),actual=deferred(),saved=deferred();await f.read();f.advance(30000);await f.read({readSource:()=>actual.promise});f.advance(1000);let recalculations=0;
+ const pending=f.read({readSavedSource:()=>saved.promise,readSource:async()=>{recalculations++;return ok(report({sold:99}));}});await flush();actual.resolve(ok(report({sold:9})));await flush();saved.resolve(ok(preview({sold:1})));const result=await pending;assert.equal(result.data.companies[0].summary.sold,9);assert.equal(result.data.responseCache.state,'cached');assert.equal(result.data.responseCache.calculationStatus,'complete');assert.equal(result.data.responseCache.refreshing,false);assert.equal(result.data.calculation,undefined);assert.equal(recalculations,0);
+});
 
 test('a runtime hit checks central permission each time and stores only report display fields',async()=>{
  const f=fixture(),value=report();value.csrfToken='PRIVATE-TOKEN';value.companies[0].contact='PRIVATE-CONTACT';value.regions[0].sources[0].token='PRIVATE-SOURCE';value.companies[0].summary.phoneBookings=0;f.source(value);
