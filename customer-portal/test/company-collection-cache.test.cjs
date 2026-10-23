@@ -33,6 +33,11 @@ function data(id='a',month='2026-10',version='v1',canRequest=true) {
 function restored(id='a',month='',version='bootstrap',checkedAt='2026-10-13T01:59:00Z'){
   return {companyId:id,month,data:{...data(id,month||'2026-10',version),responseCache:{state:'cached',checkedAt,refreshing:false,refreshFailed:false}}};
 }
+function persisted(id='a',month='',version='persisted',checkedAt='2026-10-13T00:00:00Z'){
+  const row=restored(id,month,version,checkedAt);
+  Object.assign(row.data.responseCache,{persisted:true,revalidationRequired:true,validUntil:new Date(Date.parse(checkedAt)+7*24*60*60*1000).toISOString()});
+  return row;
+}
 
 test('fresh authenticated bootstrap restores the saved company immediately while a new permission read remains pending',async()=>{
   const h=harness();h.context();const bootstrap=restored();
@@ -343,4 +348,109 @@ test('a failed first observation read does not erase edits already begun in the 
   const rendered=h.renders.length,before=h.result();await h.reject(0,503,'관측 연결 지연');
   assert.equal(h.result(),before);assert.equal(h.renders.length,rendered,'network failure must not recreate the initial editing form');
   assert.match(h.elements.get('#collection-progress').innerHTML,/다시 확인/);
+});
+
+test('freshly authorized persisted own and competitor company views restore synchronously before their guarded GETs',async()=>{
+  const h=harness();h.context();const own=persisted(),competitor=persisted('b','','competitor');
+  h.collection.restore([own,competitor],'customer-one');own.data.result.version='mutated-bootstrap';
+  h.mount('a');assert.equal(h.result(),'a|2026-10|persisted');assert.equal(h.calls.length,1);
+  assert.match(h.freshness(),/이전 조회 자료 표시 · 최신 자료 확인 중 · 마지막 확인/);
+  assert.equal(h.elements.get('[data-collect] button[type=submit]').disabled,true);
+  h.leave();h.mount('b',{relationKind:'competitor'});assert.equal(h.result(),'b|2026-10|competitor');assert.equal(h.calls.length,2);
+  assert.equal(h.renderData.at(-1).options.collapseProducts,true);assert.deepEqual(h.storedKeys(),[]);
+  await h.resolve(0,data('a','2026-10','fresh-own'));assert.equal(h.result(),'b|2026-10|competitor');
+  await h.resolve(1,data('b','2026-10','fresh-competitor'));assert.equal(h.result(),'b|2026-10|fresh-competitor');
+});
+
+test('persisted defaults remain separate from explicit past-month snapshots and mismatched company or account data',()=>{
+  const h=harness();h.context();
+  const wrong=persisted('a','','wrong');wrong.data.result.companyId='b';
+  h.collection.restore([persisted('a','2026-09','september')],'customer-one');h.mount();assert.match(h.result(),/불러옵|loading/);
+  h.month('2026-09');assert.equal(h.result(),'a|2026-09|september');
+  h.context('customer-two');h.collection.restore([persisted()],'customer-one');h.collection.restore([wrong],'customer-two');h.mount();
+  assert.match(h.result(),/불러옵|loading/);
+});
+
+test('repeated persisted GETs keep the original check date and fixed seven-day expiration',async()=>{
+  const h=harness(),saved=persisted();h.context();h.collection.restore([saved],'customer-one');h.mount();
+  const originalDate=h.freshness().split('마지막 확인 ')[1];await h.resolve(0,saved.data);assert.equal(h.freshness().split('마지막 확인 ')[1],originalDate);
+  assert.equal([...h.timers.values()][0].ms,5000,'an actual permission GET is followed by bounded freshness checks');
+  h.advance(60*60*1000);h.leave();h.mount();await h.resolve(1,saved.data);assert.equal(h.freshness().split('마지막 확인 ')[1],originalDate);
+  h.advance(6*24*60*60*1000+21*60*60*1000);h.leave();h.mount();assert.match(h.result(),/불러옵|loading/);
+  await h.resolve(2,saved.data);assert.doesNotMatch(h.result(),/\|persisted$/);assert.match(h.elements.get('#collection-progress').innerHTML,/확인하지 못했/);
+});
+
+test('fresh source data replaces a persisted view and returns to the ordinary thirty-minute lifetime',async()=>{
+  const h=harness(),saved=persisted();h.context();h.collection.restore([saved],'customer-one');h.mount();
+  await h.resolve(0,{...data('a','2026-10','fresh'),responseCache:{state:'fresh',checkedAt:'2026-10-13T02:00:00Z'}});
+  h.advance(29*60*1000);h.leave();h.mount();assert.equal(h.result(),'a|2026-10|fresh');
+  h.advance(60*1000);h.leave();h.mount();assert.match(h.result(),/불러옵|loading/);
+});
+
+test('ordinary cached responses also preserve the original check time across repeated GETs',async()=>{
+  const h=harness(),saved={...data(),responseCache:{state:'cached',checkedAt:'2026-10-13T02:00:00Z'}};h.context();h.mount();await h.resolve(0,saved);
+  h.advance(29*60*1000);h.leave();h.mount();await h.resolve(1,saved);
+  h.advance(60*1000);h.leave();h.mount();assert.match(h.result(),/불러옵|loading/);
+});
+
+for(const [label,metadata] of [
+  ['missing expiry',{validUntil:undefined}],
+  ['malformed expiry',{validUntil:'tomorrow'}],
+  ['extended expiry',{validUntil:'2026-10-20T00:00:00.001Z'}],
+  ['expired expiry',{validUntil:'2026-10-13T02:00:00Z'}],
+  ['future check beyond clock skew',{checkedAt:'2026-10-13T02:01:00.001Z'}],
+  ['invalid calendar date',{checkedAt:'2026-09-31T00:00:00Z'}],
+  ['missing check',{checkedAt:undefined}],
+  ['false revalidation',{revalidationRequired:false}],
+  ['fresh state',{state:'fresh'}]
+])test(`persisted company restoration rejects ${label} without renewing or displaying invalid data`,async()=>{
+  const h=harness(),saved=persisted();h.context();Object.assign(saved.data.responseCache,metadata);
+  h.collection.restore([saved],'customer-one');h.mount();assert.match(h.result(),/불러옵|loading/);
+  await h.resolve(0,saved.data);assert.doesNotMatch(h.result(),/\|persisted$/);assert.equal(h.timers.size,0);
+});
+
+test('persisted active collection and pending integration responses are never restored as completed observations',async()=>{
+  for(const state of ['collecting','pending','updating']){
+    const h=harness(),saved=persisted();h.context();
+    if(state==='collecting')saved.data.request={status:state};else saved.data.companyDetail.integrated.status=state;
+    h.collection.restore([saved],'customer-one');h.mount();assert.match(h.result(),/불러옵|loading/);
+    await h.resolve(0,saved.data);assert.doesNotMatch(h.result(),/\|persisted$/);assert.equal(h.timers.size,0);
+  }
+});
+
+test('a transient permission-read failure retains an unexpired persisted result and its original check date',async()=>{
+  const h=harness(),saved=persisted();h.context();h.collection.restore([saved],'customer-one');h.mount();await h.reject(0,503,'일시 연결 지연');
+  assert.equal(h.result(),'a|2026-10|persisted');assert.match(h.freshness(),/이전 조회 자료 유지 · 마지막 확인/);
+  assert.equal(h.elements.get('[data-collect] button[type=submit]').disabled,true);assert.equal(h.timers.size,0);
+  h.leave();h.mount();assert.equal(h.result(),'a|2026-10|persisted');
+});
+
+test('a failed source refresh retains the persisted result without polling or manufacturing freshness',async()=>{
+  const h=harness(),saved=persisted();h.context();h.mount();saved.data.responseCache.refreshFailed=true;saved.data.responseCache.refreshing=true;
+  await h.resolve(0,saved.data);assert.equal(h.result(),'a|2026-10|persisted');assert.match(h.freshness(),/최신 확인 실패.*마지막 확인/);assert.equal(h.timers.size,0);
+});
+
+test('a persisted result expiring while a permission read is pending disappears after that read fails',async()=>{
+  const h=harness(),saved=persisted('a','','near-expiry','2026-10-06T02:00:01Z');h.context();h.collection.restore([saved],'customer-one');h.mount();
+  assert.equal(h.result(),'a|2026-10|near-expiry');h.advance(1000);await h.reject(0,504);
+  assert.doesNotMatch(h.result(),/near-expiry/);assert.match(h.result(),/확인하지 못/);assert.equal(h.elements.get('[data-collect] button[type=submit]').disabled,true);
+});
+
+for(const status of [401,403,404])test(`${status} removes persisted company data and prevents bootstrap replay after denial`,async()=>{
+  const h=harness(),saved=persisted();h.context();h.collection.restore([saved],'customer-one');h.mount();await h.reject(0,status);
+  assert.doesNotMatch(h.result(),/\|persisted$/);h.collection.restore([saved],'customer-one');h.leave();h.mount();assert.match(h.result(),/불러옵|loading/);
+});
+
+test('persisted verification polls are bounded even when a saved response still requires revalidation',async()=>{
+  const h=harness(),saved=persisted();h.context();h.mount();await h.resolve(0,saved.data);
+  for(let index=1;index<=24;index++){await h.poll();await h.resolve(index,saved.data);}
+  assert.equal(h.calls.length,25);assert.equal(h.timers.size,0);assert.equal(h.result(),'a|2026-10|persisted');
+  assert.match(h.freshness(),/마지막 확인/);assert.match(h.elements.get('#collection-progress').innerHTML,/시간이 걸리고/);
+});
+
+test('small server clock lead preserves the original persisted expiration instead of rewriting checkedAt',async()=>{
+  const h=harness(),saved=persisted('a','','clock-skew','2026-10-13T02:00:00.400Z');h.context();h.collection.restore([saved],'customer-one');h.mount();
+  assert.equal(h.result(),'a|2026-10|clock-skew');await h.resolve(0,saved.data);
+  h.advance(7*24*60*60*1000+399);h.leave();h.mount();assert.equal(h.result(),'a|2026-10|clock-skew');
+  h.advance(1);h.leave();h.mount();assert.match(h.result(),/불러옵|loading/);
 });

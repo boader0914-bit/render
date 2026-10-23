@@ -3,8 +3,8 @@ const {createHash}=require('node:crypto');
 
 // This is an Insight-process cache, not a second source of company data. The
 // caller supplies an opaque host/mode/session scope and both central GETs.
-function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEntries=64,maxBytes=16*1024*1024,maxPerScope=8,maxScopes=maxEntries*2}={}) {
-  const entries=new Map(),states=new Map(),pendingSources=new Map();
+function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEntries=64,maxBytes=16*1024*1024,maxPerScope=8,maxScopes=maxEntries*2,persistenceDirectory,namespace,persistentStore}={}) {
+  const entries=new Map(),states=new Map(),pendingSources=new Map(),invalidatedScopes=new Set();
   let bytes=0;
   const clock=()=>Number(now());
   const clone=value=>value===undefined?undefined:JSON.parse(JSON.stringify(value));
@@ -16,26 +16,74 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
   const kst=value=>new Date(value+9*3600000).toISOString().slice(0,10);
   const stable=value=>value&&typeof value==='object'?Array.isArray(value)?value.map(stable):Object.fromEntries(Object.keys(value).sort().map(key=>[key,stable(value[key])])):value;
   const hash=value=>createHash('sha256').update(JSON.stringify(stable(value))).digest('hex');
-  const meta=(state,checkedAt,refreshing=false,refreshFailed=false)=>({state,checkedAt:new Date(checkedAt).toISOString(),refreshing,refreshFailed});
+  const meta=(state,checkedAt,refreshing=false,refreshFailed=false,entry)=>({state,checkedAt:new Date(checkedAt).toISOString(),refreshing,refreshFailed,...(entry?.persisted?{persisted:true,validUntil:new Date(entry.validUntil).toISOString(),revalidationRequired:true}:{})});
+  // Durable cores use an allow-list at every depth. Never persist current
+  // identity, quota, requests, account corrections, credentials or raw evidence.
+  const fields=keys=>Object.fromEntries(keys.split(' ').map(key=>[key,true]));
+  const metric=fields('supply sold publicBookings phoneBookings publicRevenue phoneRevenue estimatedRevenue reservationRate sharedDayUseExcluded coveredCompanyDays expectedCompanyDays missingCompanyDays revenueCoveredCompanyDays sameDayObservedCompanyDays staleDays maxObservationLeadTimeDays knownPartialRevenue partial revenuePartial containsPartialRun rangeStart rangeEnd calendarDays observedDays missingDays rateObservedDays revenueObservedDays quantityPartial');
+  const daily={...metric,...fields('date collectedAt collectedDate total missing inventoryConflict observationLeadTimeDays latestAttemptAt latestAttemptStatus collectionPartial')};
+  const productDay=fields('date status errorCode total available publicBookings price saleStatus');
+  const product={...fields('key bizItemId name productType'),days:[productDay],original:[productDay]};
+  const point=fields('observedDate status observedDays validDays freshDays calendarDays comparisonDays publicBookings phoneBookings publicRevenue phoneRevenue estimatedRevenue reservationRate');
+  const resultSchema={...fields('companyId runId collectedAt dayUseMode rooms roomCountSource capacityWarning originalRooms productCount truncated actualRevenueAvailable version'),range:fields('start days end'),dayUse:fields('presence sharing'),quality:fields('status reason'),products:[product],days:[fields('date productType status total available publicBookings estimatedBlocked publicRevenue estimatedRevenue sharedDayUseExcluded sharingStatus')],issues:[{...fields('code label productName'),dates:[true]}]};
+  const detailSchema={...fields('companyId source legacyObservationView'),basics:{...fields('companyId name address rooms roomCountSource facilities firstObservedAt lastObservedAt runCount'),lodgingTypes:[true]},channels:[fields('key label status statusLabel checkedAt url')],current:{summary:metric,daily:[daily]},history:{observationFlow:{...fields('basis reviewBasis'),periods:[{...fields('month start end calendarDays completeMonth'),comparisonDates:[true],points:[point]}]},months:[{month:true,summary:metric,daily:[daily]}],ranks:[{...fields('keyword keywordKey scope layer'),points:[fields('collectedAt rank delta')]}],performance:[fields('collectedAt checkIn observedDays reservationRate estimatedRevenue partial')],leadTime:fields('status label averageDays medianDays averageMinDays averageMaxDays pickupCount collectedDateCount actualBookingLeadTime')},integrated:{...fields('schemaVersion source companyId status calculatedAt calculationVersion selectedMonth'),months:[fields('month status')],roomBasis:fields('count source label reviewRequired'),snapshot:{period:fields('start end days cutoffDate monthClosed'),summary:metric,daily:[daily],analysis:{collectionDateCount:true,pickup:{...fields('increase decrease net comparableIntervals status actualBookingLeadTime'),leadTime:fields('averageDays medianDays averageMinDays averageMaxDays'),intervals:[fields('date previousCollectedAt collectedAt previousLeadDays currentLeadDays publicChange blockedChange netChange')]},weekdays:[{...metric,...fields('dayOfWeek label')}],pace:[{...metric,leadDays:true}],pricing:fields('estimatedPerSoldUnit estimatedPerSupplyUnit pricedCompanyDays priceCoverageRate')}}}};
+  function projectValue(value,schema){
+    if(value===null)return null;
+    if(schema===true)return typeof value==='string'||typeof value==='boolean'||typeof value==='number'&&Number.isFinite(value)?value:undefined;
+    if(Array.isArray(schema))return Array.isArray(value)?value.map(item=>projectValue(item,schema[0])).filter(item=>item!==undefined):undefined;
+    if(!value||typeof value!=='object'||Array.isArray(value))return undefined;
+    return Object.fromEntries(Object.keys(schema).filter(key=>Object.hasOwn(value,key)).map(key=>[key,projectValue(value[key],schema[key])]).filter(([,item])=>item!==undefined));
+  }
+  function projectedCore(data){
+    const core={result:projectValue(data?.result,resultSchema)??null,companyDetail:projectValue(data?.companyDetail,detailSchema)??null};
+    if(!core.result&&!core.companyDetail)return null;
+    if(['pending','updating','failed'].includes(core.companyDetail?.integrated?.status))return null;
+    const ids=[core.result?.companyId,core.companyDetail?.companyId,core.companyDetail?.basics?.companyId].filter(Boolean);
+    if(!ids.length||ids.some(id=>typeof id!=='string'||!/^[a-zA-Z0-9_-]+$/.test(id)||id!==ids[0]))return null;
+    return core;
+  }
+  const projectionVersion=hash([resultSchema,detailSchema,projectValue.toString(),projectedCore.toString()]);
+  const disk=persistentStore||(persistenceDirectory&&namespace?require('./company-snapshot-store.cjs').createCompanySnapshotStore({directory:persistenceDirectory,namespace,version:projectionVersion,now,project:projectedCore}):null);
+  const ready=async()=>{if(disk)try{await disk.ready();}catch{}};
+  const stableFingerprint=identity=>hash([identity.customer.customerId,identity.customer.revision,identity.relation,identity.company,identity.request]);
+  const durableSlot=(identity,audience,isDefault)=>typeof audience==='string'&&audience&&audience.length<4096?hash([namespace,audience,identity.customer.customerId,identity.customer.revision,identity.relation,identity.company,identity.request,isDefault]):null;
+  const keyFor=(scope,route,companyId,period)=>JSON.stringify([scope,route,companyId,period]);
+  const expiry=entry=>entry.validUntil??entry.checkedAt+ttlMs;
+  function syncIdentity(state,data){
+    for(const [key,mark] of state.fingerprints){
+      let parts;try{parts=JSON.parse(key);}catch{continue;}
+      const checked=validatedIdentity(data,parts[2]);
+      if(!checked||fingerprint(checked)!==mark){state.fingerprints.delete(key);state.bindings.delete(key);state.denied.delete(key);remove(key);pendingSources.delete(key);}
+    }
+    for(const [companyId,denial] of state.blockedCompanies){const checked=validatedIdentity(data,companyId);if(!checked||stableFingerprint(checked)!==denial.mark)state.blockedCompanies.delete(companyId);}
+  }
+  function hydrate(key,state,mark,identity,month,period,audience,stored){
+    if(!disk||entries.has(key)||state.revoked||state.blockedCompanies.has(identity.company.companyId)||invalidatedScopes.has(state.scope)||active(identity.request))return;
+    const slotKey=durableSlot(identity,audience,period.startsWith('default:'));if(!slotKey)return;
+    let saved;try{saved=stored||disk.get(slotKey,period.replace('default:',''));}catch{return;}
+    if(!saved||saved.slotKey!==slotKey||saved.month!==period.replace('default:','')||!Number.isFinite(saved.checkedAt)||saved.checkedAt>clock()||!Number.isFinite(saved.validUntil)||saved.validUntil<=clock()||saved.validUntil>saved.checkedAt+7*86400000)return;
+    const core=projectedCore(saved.core);if(!core||!sourceScope(core,identity.company.companyId,month)||!cacheable(core,identity))return;
+    remember(key,state,mark,core,{checkedAt:saved.checkedAt,validUntil:saved.validUntil,persisted:true});
+  }
   function remove(key) {const entry=entries.get(key);if(entry){bytes-=entry.bytes;entries.delete(key);}}
   function clearEntries(scope) {for(const [key,entry] of entries)if(entry.scope===scope)remove(key);}
   function invalidate(scope) {
     const state=states.get(scope);if(state)state.epoch++;
-    clearEntries(scope);states.delete(scope);
+    clearEntries(scope);states.delete(scope);invalidatedScopes.delete(scope);invalidatedScopes.add(scope);while(invalidatedScopes.size>maxScopes)invalidatedScopes.delete(invalidatedScopes.values().next().value);
     for(const [key,pending] of pendingSources)if(pending.scope===scope)pendingSources.delete(key);
   }
   function scopeState(scope) {
     let state=states.get(scope);
-    if(!state){state={scope,epoch:0,identity:null,fingerprints:new Map(),denied:new Map(),revoked:null};states.set(scope,state);}
+    if(!state){state={scope,epoch:0,permissionVersion:0,identity:null,fingerprints:new Map(),bindings:new Map(),blockedCompanies:new Map(),denied:new Map(),revoked:null};states.set(scope,state);}
     else{states.delete(scope);states.set(scope,state);}
     while(states.size>maxScopes)invalidate(states.keys().next().value);
     return state;
   }
-  function current(state,epoch,key,fingerprint) {
-    return states.get(state.scope)===state&&state.epoch===epoch&&(!key||state.fingerprints.get(key)===fingerprint);
+  function current(state,epoch,key,fingerprint,binding) {
+    return states.get(state.scope)===state&&state.epoch===epoch&&(!key||state.fingerprints.get(key)===fingerprint&&(!binding||state.bindings.get(key)===binding));
   }
   function revoke(state,reply) {
-    state.epoch++;state.revoked={reply,at:clock()};state.denied.clear();state.fingerprints.clear();clearEntries(state.scope);
+    state.epoch++;state.revoked={reply,at:clock()};state.denied.clear();state.fingerprints.clear();state.bindings.clear();state.blockedCompanies.clear();clearEntries(state.scope);
     for(const [key,pending] of pendingSources)if(pending.scope===state.scope)pendingSources.delete(key);
   }
   async function safeRead(read) {
@@ -68,37 +116,55 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
   }
   function sourceScope(data,companyId,month) {
     const selected=data.companyDetail?.integrated?.selectedMonth;
-    return (!data.result?.companyId||data.result.companyId===companyId)&&(!data.companyDetail?.companyId||data.companyDetail.companyId===companyId)&&(!month||!selected||selected===month);
+    return (!data.result?.companyId||data.result.companyId===companyId)&&(!data.companyDetail?.companyId||data.companyDetail.companyId===companyId)&&(!data.companyDetail?.basics?.companyId||data.companyDetail.basics.companyId===companyId)&&(!data.companyDetail?.integrated?.companyId||data.companyDetail.integrated.companyId===companyId)&&(!month||!selected||selected===month);
   }
   function cacheable(data,identity) {
     return Boolean(data.result||data.companyDetail)&&!active(identity.request)&&!active(data.request)&&!['pending','updating'].includes(data.companyDetail?.integrated?.status);
   }
-  function remember(key,state,mark,data) {
+  function remember(key,state,mark,data,{checkedAt=clock(),validUntil=checkedAt+ttlMs,persisted=false}={}) {
     let core;try{core=JSON.stringify({result:data.result??null,companyDetail:data.companyDetail??null});}catch{return;}
     const size=Buffer.byteLength(core,'utf8');if(size>maxBytes||maxEntries<1||maxPerScope<1)return;
     remove(key);
-    const at=clock();entries.set(key,{scope:state.scope,fingerprint:mark,core,bytes:size,checkedAt:at,lastAttempt:at,refreshFailed:false});bytes+=size;
+    entries.set(key,{scope:state.scope,fingerprint:mark,core,bytes:size,checkedAt,validUntil,persisted,needsRevalidation:persisted,lastAttempt:checkedAt,refreshFailed:false});bytes+=size;
     let scoped=[...entries].filter(([,entry])=>entry.scope===state.scope);
     while(scoped.length>maxPerScope){remove(scoped[0][0]);scoped.shift();}
     while(entries.size>maxEntries||bytes>maxBytes)remove(entries.keys().next().value);
   }
   function compose(entry,identity,refreshing) {
     const core=JSON.parse(entry.core),request=clone(identity.request);
-    return {status:200,ok:true,data:{...core,request,collectionAllowance:clone(identity.data.collectionAllowance),previousResult:Boolean(core.result&&request&&core.result.runId!==request.runId),responseCache:meta('cached',entry.checkedAt,refreshing,entry.refreshFailed)}};
+    return {status:200,ok:true,data:{...core,request,collectionAllowance:clone(identity.data.collectionAllowance),previousResult:Boolean(core.result&&request&&core.result.runId!==request.runId),responseCache:meta('cached',entry.checkedAt,refreshing,entry.refreshFailed,entry)}};
   }
-  function snapshot({scope,identity,maxViews=4}={}) {
+  async function snapshot({scope,identity,maxViews=4,audience}={}) {
     // Only the BFF may call this while handling a successful, freshly verified
     // central /me (or administrator /start) response. It is not a replacement
     // for read(), never validates a browser-supplied identity, and never starts
     // an identity/source request or permits later GETs to skip their guard.
     if(typeof scope!=='string'||!scope||!identity||typeof identity!=='object')return [];
-    const state=states.get(scope),limit=Number.isFinite(maxViews)?Math.min(4,Math.max(0,Math.floor(maxViews))):4;
-    if(!state||state.revoked||!limit)return [];
+    const state=states.get(scope)||(disk&&validatedIdentity(identity,identity.companies?.[0]?.companyId)?scopeState(scope):null),limit=Number.isFinite(maxViews)?Math.min(4,Math.max(0,Math.floor(maxViews))):4;
+    if(!state)return [];
+    state.permissionVersion++;state.identity=null;syncIdentity(state,identity);
+    if(state.revoked||!limit)return [];
+    const epoch=state.epoch,permissionVersion=state.permissionVersion;
+    await ready();if(!current(state,epoch)||state.permissionVersion!==permissionVersion)return [];
     const currentDefault=`default:${kst(clock()).slice(0,7)}`,candidates=[];
+    if(disk&&!invalidatedScopes.has(scope))for(const company of identity.companies||[]){
+      const checked=validatedIdentity(identity,company?.companyId);if(!checked||active(checked.request)||state.blockedCompanies.has(company.companyId))continue;
+      const defaultSlot=durableSlot(checked,audience,true),explicitSlot=durableSlot(checked,audience,false),slots=[defaultSlot,explicitSlot].filter(Boolean);let stored=[];
+      try{stored=disk.list(slots,{limit:maxPerScope,preferMonth:kst(clock()).slice(0,7)});}catch{}
+      for(const saved of stored){
+        const isDefault=saved.slotKey===defaultSlot,period=isDefault?'default:'+saved.month:saved.month;
+        if(isDefault&&period!==currentDefault)continue;
+        const key=keyFor(scope,'',company.companyId,period),mark=fingerprint(checked);
+        if(state.fingerprints.get(key)!==mark){state.fingerprints.set(key,mark);state.bindings.set(key,{});}
+        hydrate(key,state,mark,checked,isDefault?'':saved.month,period,audience,saved);
+      }
+    }
+    while(state.fingerprints.size>maxPerScope*2){const oldest=state.fingerprints.keys().next().value;state.fingerprints.delete(oldest);state.bindings.delete(oldest);remove(oldest);pendingSources.delete(oldest);}
+
     for(const [key,entry] of entries){
       if(entry.scope!==scope)continue;
       const age=clock()-entry.checkedAt;
-      if(age<0||age>=ttlMs){remove(key);continue;}
+      if(age<0||clock()>=expiry(entry)){remove(key);continue;}
       let parts;try{parts=JSON.parse(key);}catch{continue;}
       const [storedScope,,companyId,period]=parts;
       if(storedScope!==scope||typeof companyId!=='string'||typeof period!=='string')continue;
@@ -108,7 +174,7 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
       if(!checked||mark!==entry.fingerprint){
         remove(key);
         if(state.fingerprints.get(key)===entry.fingerprint)state.fingerprints.delete(key);
-        continue;
+        state.bindings.delete(key);pendingSources.delete(key);continue;
       }
       if(state.denied.has(key))continue;
       const core=JSON.parse(entry.core);
@@ -132,16 +198,18 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
     }
     return views;
   }
-  function sourceRead({key,state,epoch,mark,companyId,month,identity,readSource}) {
+  function sourceRead({key,state,epoch,mark,binding,companyId,month,period,audience,identity,readSource}) {
     const former=pendingSources.get(key);
-    if(former&&former.state===state&&former.epoch===epoch&&former.mark===mark)return former.promise;
-    const entry=entries.get(key);if(entry)entry.lastAttempt=clock();
-    const pending={scope:state.scope,state,epoch,mark,promise:null};
-    pending.promise=safeRead(readSource).then(reply=>{
-      if(!current(state,epoch,key,mark))return reply;
+    if(former&&former.state===state&&former.epoch===epoch&&former.mark===mark&&former.binding===binding)return former.promise;
+    const entry=entries.get(key);if(entry){entry.lastAttempt=clock();entry.needsRevalidation=false;}
+    const slotKey=durableSlot(identity,audience,period.startsWith('default:')),savedMonth=period.replace('default:','');
+    let ticket;try{if(slotKey)ticket=disk?.begin(slotKey,savedMonth);}catch{}
+    const pending={scope:state.scope,state,epoch,mark,binding,promise:null};
+    pending.promise=safeRead(readSource).then(async reply=>{
+      if(!current(state,epoch,key,mark,binding))return invalidated();
       if(!reply.ok){
         if([401,403].includes(reply.status))revoke(state,reply);
-        else if(reply.status===404){remove(key);state.denied.set(key,{reply,mark,at:clock()});}
+        else if(reply.status===404){for(const [storedKey] of state.fingerprints){if(JSON.parse(storedKey)[2]===companyId){remove(storedKey);state.bindings.delete(storedKey);}}state.blockedCompanies.set(companyId,{mark:stableFingerprint(identity),reply});state.denied.set(key,{reply,mark,at:clock()});}
         else{const previous=entries.get(key);if(previous&&previous.fingerprint===mark)previous.refreshFailed=true;}
         return reply;
       }
@@ -149,47 +217,58 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
         const previous=entries.get(key);if(previous)previous.refreshFailed=true;
         return unavailable();
       }
-      state.revoked=null;state.denied.delete(key);
-      if(cacheable(reply.data,identity))remember(key,state,mark,reply.data);else remove(key);
-      return reply;
+      state.revoked=null;state.denied.delete(key);state.blockedCompanies.delete(companyId);
+      const checkedAt=clock();
+      if(cacheable(reply.data,identity)){
+        const core=projectedCore(reply.data);
+        if(disk&&slotKey&&core)try{await disk.put({slotKey,month:savedMonth,checkedAt,core,ticket,guard:()=>current(state,epoch,key,mark,binding)});}catch{}
+        if(!current(state,epoch,key,mark,binding))return invalidated();
+        invalidatedScopes.delete(state.scope);remember(key,state,mark,reply.data,{checkedAt});
+      }else remove(key);
+      return {...reply,checkedAt};
     }).finally(()=>{if(pendingSources.get(key)===pending)pendingSources.delete(key);});
     pendingSources.set(key,pending);return pending.promise;
   }
-  async function read({scope,route='',companyId,month='',readIdentity,readSource,force=false}) {
+  async function read({scope,route='',companyId,month='',audience,readIdentity,readSource,force=false}) {
     if(typeof scope!=='string'||!scope||typeof readIdentity!=='function'||typeof readSource!=='function')return unavailable();
     if(!/^[a-zA-Z0-9_-]+$/.test(companyId||'')||typeof month!=='string'||month&&!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month))return failure(400,'INVALID_COMPANY_MONTH','업체와 숙박월을 확인해 주세요.');
-    const state=scopeState(scope),epoch=state.epoch;
+    const state=scopeState(scope),epoch=state.epoch,permissionVersion=state.permissionVersion;
     const checked=await identityRead(state,readIdentity);
-    if(!current(state,epoch))return invalidated();
+    if(!current(state,epoch)||state.permissionVersion!==permissionVersion)return invalidated();
     if(!checked.ok){if([401,403].includes(checked.status))revoke(state,checked);return checked;}
-    const identity=validatedIdentity(checked.data,companyId);
-    if(!identity){state.epoch++;state.fingerprints.clear();state.denied.clear();clearEntries(scope);return notFound();}
-    const day=kst(clock()),key=JSON.stringify([scope,route,companyId,month||`default:${day.slice(0,7)}`]),mark=fingerprint(identity);
+    syncIdentity(state,checked.data);const identity=validatedIdentity(checked.data,companyId);
+    if(!identity){state.epoch++;state.fingerprints.clear();state.bindings.clear();state.denied.clear();clearEntries(scope);return notFound();}
+    const day=kst(clock()),period=month||`default:${day.slice(0,7)}`,key=keyFor(scope,route,companyId,period),mark=fingerprint(identity);
     const previousMark=state.fingerprints.get(key);
-    if(previousMark&&previousMark!==mark){remove(key);state.denied.delete(key);}
+    if(previousMark&&previousMark!==mark){remove(key);state.bindings.delete(key);state.denied.delete(key);}
     state.fingerprints.delete(key);state.fingerprints.set(key,mark);
+    const binding=state.bindings.get(key)||{};state.bindings.set(key,binding);
     // Bound metadata as well as payloads; evicted in-flight reads may finish but
     // no longer have the matching fingerprint needed to insert an old result.
-    while(state.fingerprints.size>maxPerScope*2){const oldest=state.fingerprints.keys().next().value;state.fingerprints.delete(oldest);state.denied.delete(oldest);remove(oldest);}
-    if(state.revoked&&clock()-state.revoked.at>ttlMs)state.revoked=null;
+    while(state.fingerprints.size>maxPerScope*2){const oldest=state.fingerprints.keys().next().value;state.fingerprints.delete(oldest);state.bindings.delete(oldest);state.denied.delete(oldest);remove(oldest);}
+    if(!disk&&state.revoked&&clock()-state.revoked.at>ttlMs)state.revoked=null;
     if(state.revoked&&!force)return state.revoked.reply;
+    const blocked=state.blockedCompanies.get(companyId);if(blocked&&!force)return blocked.reply;
     const denied=state.denied.get(key);
-    if(denied&&(denied.mark!==mark||clock()-denied.at>ttlMs))state.denied.delete(key);
+    if(denied&&(denied.mark!==mark||!disk&&clock()-denied.at>ttlMs))state.denied.delete(key);
     else if(denied&&!force)return denied.reply;
-    for(const [entryKey,entry] of entries)if(clock()-entry.checkedAt>=ttlMs)remove(entryKey);
+    await ready();if(!current(state,epoch,key,mark,binding)||state.permissionVersion!==permissionVersion)return invalidated();
+    for(const [entryKey,entry] of entries)if(clock()<entry.checkedAt||clock()>=expiry(entry))remove(entryKey);
+    if(!force)hydrate(key,state,mark,identity,month,period,audience);
     const entry=entries.get(key);
     if(entry&&entry.fingerprint===mark&&!force&&!active(identity.request)){
       entries.delete(key);entries.set(key,entry);
       let refreshing=pendingSources.has(key);
-      if(!refreshing&&clock()-entry.lastAttempt>=refreshMs){sourceRead({key,state,epoch,mark,companyId,month,identity,readSource});refreshing=true;}
+      if(!refreshing&&(entry.needsRevalidation||clock()-entry.lastAttempt>=refreshMs)){sourceRead({key,state,epoch,mark,binding,companyId,month,period,audience,identity,readSource});refreshing=true;}
       return compose(entry,identity,refreshing);
     }
-    const reply=await sourceRead({key,state,epoch,mark,companyId,month,identity,readSource});
+    const reply=await sourceRead({key,state,epoch,mark,binding,companyId,month,period,audience,identity,readSource});
     if(!reply.ok)return reply;
-    if(!current(state,epoch,key,mark))return invalidated();
+    if(!current(state,epoch,key,mark,binding))return invalidated();
     if(!sourceScope(reply.data,companyId,month))return unavailable();
-    return {...reply,data:{...clone(reply.data),responseCache:meta('fresh',clock())}};
+    return {...reply,data:{...clone(reply.data),responseCache:meta('fresh',reply.checkedAt??clock())}};
   }
-  return {read,invalidate,snapshot};
+  const flushPersistence=()=>disk?disk.flush():Promise.resolve();
+  return {read,invalidate,snapshot,ready,flush:flushPersistence,flushPersistence,persistenceStatus:()=>disk?disk.status():{enabled:false}};
 }
 module.exports={createCompanyReadCache};

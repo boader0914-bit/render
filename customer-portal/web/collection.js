@@ -6,12 +6,32 @@
   let api, companyId, view = null, serial = 0, timer, renderedVersion, loadOrder=0, selectedMonth='', collectionSetup=false, mountOptions={}, refreshChecks=0;
   // Private result payloads stay in this signed-in page's memory only.
   const cache = new Map(), inFlight = new Map(), lastMonths = new Map(), companyEpochs = new Map(), references=new Map(), referenceDenied=new Set();
-  const CACHE_LIMIT=24, CACHE_MAX_AGE=30*60*1000, PREFETCH_LIMIT=4;
+  const CACHE_LIMIT=24, CACHE_MAX_AGE=30*60*1000, PERSISTED_MAX_AGE=7*24*60*60*1000, CLOCK_SKEW=60*1000, PREFETCH_LIMIT=4;
   let cacheScope='default', allowedCompanies=null, cacheGeneration=0, onSessionExpired=null;
   const cacheKey=(id,month)=>JSON.stringify([cacheScope,id,month]);
   const permitted=id=>Boolean(cacheScope)&&(!allowedCompanies||allowedCompanies.has(id));
   const resultVersion=data=>JSON.stringify([data.result?.version,data.previousResult,data.companyDetail]);
   const companyEpoch=id=>companyEpochs.get(id)||0;
+  const timestamp=value=>{
+    if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value))return NaN;
+    const parsed=Date.parse(value),canonical=value.replace(/(?:\.(\d{1,3}))?Z$/,(_,fraction)=>'.'+(fraction||'').padEnd(3,'0')+'Z');
+    return Number.isFinite(parsed)&&new Date(parsed).toISOString()===canonical?parsed:NaN;
+  };
+  function lifetime(data,checkedAt){
+    const info=data?.responseCache||{},now=Date.now();
+    const stamp=Number.isFinite(checkedAt)?checkedAt:info.checkedAt===undefined?now:timestamp(info.checkedAt);
+    if(!Number.isFinite(stamp)||stamp>now+CLOCK_SKEW)return null;
+    if(info.persisted===true){
+      const until=timestamp(info.validUntil);
+      if(timestamp(info.checkedAt)!==stamp||info.state!=='cached'||info.revalidationRequired!==true||!Number.isFinite(until)||until<=now||until<=stamp||until>stamp+PERSISTED_MAX_AGE)return null;
+      if(active(data.request)||['pending','updating'].includes(data.companyDetail?.integrated?.status))return null;
+      return {checkedAt:stamp,validUntil:until,persisted:true};
+    }
+    return now-stamp<CACHE_MAX_AGE?{checkedAt:stamp,validUntil:stamp+CACHE_MAX_AGE,persisted:false}:null;
+  }
+  function previousNotice(entry,message){
+    return entry?.persisted&&Date.now()-entry.checkedAt>CACHE_MAX_AGE?message+' · 마지막 확인 '+new Date(entry.checkedAt).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):message;
+  }
   let prefetchState={queue:[],keys:new Set(),running:false,promise:null};
   function clearCache(){cacheGeneration++;cache.clear();inFlight.clear();lastMonths.clear();companyEpochs.clear();references.clear();referenceDenied.clear();prefetchState={queue:[],keys:new Set(),running:false,promise:null};}
   function invalidate(id){
@@ -24,12 +44,16 @@
     if(!permitted(id))return null;
     const key=cacheKey(id,month),entry=cache.get(key);
     if(!entry)return null;
-    if(Date.now()-entry.checkedAt>CACHE_MAX_AGE){cache.delete(key);return null;}
+    if(Date.now()>=entry.validUntil){cache.delete(key);return null;}
     cache.delete(key);cache.set(key,entry);return entry;
   }
   function remember(id,month,data){
+    const age=lifetime(data);
+    if(!age)throw Error('저장 자료의 확인 시각과 유효기간을 다시 확인해 주세요.');
+    const identities=[data.result?.companyId,data.companyDetail?.companyId,data.companyDetail?.basics?.companyId].filter(Boolean);
+    if(identities.some(value=>value!==id))throw Error('선택한 업체와 응답이 다릅니다.');
     referenceDenied.delete(id);
-    const entry={companyId:id,data,version:resultVersion(data),checkedAt:Date.now()};
+    const entry={companyId:id,data,version:resultVersion(data),...age};
     const resolved=data.companyDetail?.integrated?.selectedMonth;
     for(const value of new Set([month,...(!month&&resolved?[resolved]:[])])){
       const key=cacheKey(id,value);cache.delete(key);cache.set(key,entry);
@@ -39,11 +63,11 @@
   }
   function restore(views,scope){
     if(!Array.isArray(views)||!scope||scope!==cacheScope||!allowedCompanies)return;
-    const now=Date.now(),rows=views.slice(0,CACHE_LIMIT*2).sort((a,b)=>Date.parse(b?.data?.responseCache?.checkedAt)-Date.parse(a?.data?.responseCache?.checkedAt));
+    const rows=views.slice(0,CACHE_LIMIT*2).sort((a,b)=>Date.parse(b?.data?.responseCache?.checkedAt)-Date.parse(a?.data?.responseCache?.checkedAt));
     for(const row of rows){
-      const id=row?.companyId,month=row?.month,data=row?.data,at=Date.parse(data?.responseCache?.checkedAt);
+      const id=row?.companyId,month=row?.month,data=row?.data,at=timestamp(data?.responseCache?.checkedAt),age=lifetime(data,at);
       if(!permitted(id)||!/^[a-zA-Z0-9_-]+$/.test(id||'')||referenceDenied.has(id)||companyEpoch(id)>0)continue;
-      if(typeof month!=='string'||month&&!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month)||!Number.isFinite(at)||now-at>CACHE_MAX_AGE||at-now>60000)continue;
+      if(typeof month!=='string'||month&&!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month)||!Number.isFinite(at)||!age)continue;
       if(!data||typeof data!=='object'||!data.result&&!data.companyDetail||active(data.request)||['pending','updating'].includes(data.companyDetail?.integrated?.status))continue;
       const identities=[data.result?.companyId,data.companyDetail?.companyId,data.companyDetail?.basics?.companyId].filter(Boolean);
       const resolved=data.companyDetail?.integrated?.selectedMonth;
@@ -53,7 +77,7 @@
       let entry=existing;
       if(!entry){
         let saved;try{saved=JSON.parse(JSON.stringify({result:data.result??null,companyDetail:data.companyDetail??null,request:data.request??null,collectionAllowance:data.collectionAllowance,previousResult:Boolean(data.previousResult),responseCache:data.responseCache}));}catch{continue;}
-        entry={companyId:id,data:saved,version:resultVersion(saved),checkedAt:Math.min(at,now)};
+        entry={companyId:id,data:saved,version:resultVersion(saved),...age};
       }
       for(const value of months){
         const key=cacheKey(id,value);
@@ -64,7 +88,7 @@
   }
   function freshness(message,entry){
     const target=document.querySelector('#collection-freshness');if(!target)return;
-    target.textContent=message;
+    target.textContent=previousNotice(entry,message);
     target.dataset.state=message.includes('확인 중')?'checking':message==='최신 자료 확인 완료'?'ready':'notice';
     target.hidden=Boolean(!view||target.dataset.state==='ready'||view.referenceLoading&&target.dataset.state==='checking');
   }
@@ -194,7 +218,7 @@
         if(!force && document.querySelector('#collection-result form:focus-within, #collection-result form[data-dirty]')) { freshness('새 결과가 있습니다. 작성 중인 내용을 유지했습니다.',entry); if(active(data.request))timer=setTimeout(()=>load(),10000); return; }
         view=data;renderedVersion=version;document.querySelector('#collection-result').innerHTML=renderResult(data);
       }
-      const saved=data.responseCache?.state==='cached',refreshing=saved&&data.responseCache.refreshing,refreshFailed=saved&&data.responseCache.refreshFailed;
+      const saved=data.responseCache?.state==='cached',refreshFailed=saved&&data.responseCache.refreshFailed,refreshing=saved&&!refreshFailed&&(data.responseCache.refreshing||entry.persisted&&data.responseCache.revalidationRequired);
       freshness(refreshFailed?'최신 확인 실패 · 이전 조회 자료 유지':refreshing?'저장 자료 표시 · 최신 자료 확인 중':saved?'최근 확인한 저장 자료 표시':'최신 자료 확인 완료',entry);
       if(active(data.request)||['pending','updating'].includes(data.companyDetail?.integrated?.status)&&!data.companyDetail?.legacyObservationView)timer=setTimeout(()=>{if(!document.hidden)load();else timer=setTimeout(()=>load(),10000);},10000);
       else if(refreshing&&refreshChecks++<24)timer=setTimeout(()=>{if(!document.hidden)load();else timer=setTimeout(()=>load(),10000);},5000);
@@ -212,6 +236,9 @@
       if(!current())return;
       connectionBusy(false);
       disableCollection('수집 가능 여부를 다시 확인해 주세요.');
+      const previous=cached(id,month);
+      // A failed GET cannot extend an expired result's display lifetime.
+      if(!previous&&view&&!view.referenceLoading){view=null;renderedVersion=null;}
       if(view?.referenceLoading){
         view={...view,referenceLoading:false,referenceError:true};
         if(!document.querySelector('#collection-result form:focus-within, #collection-result form[data-dirty]'))document.querySelector('#collection-result').innerHTML=renderResult(view);
@@ -219,7 +246,7 @@
           const status=document.querySelector(`#collection-result [data-reference-status="${part}"]`);if(status)status.textContent=message;
         }
       }
-      freshness(view?'최신 확인 실패 · 이전 조회 자료 유지':'최신 자료 확인 실패',cached(id,month));
+      freshness(view?'최신 확인 실패 · 이전 조회 자료 유지':'최신 자료 확인 실패',previous);
       if(!view)document.querySelector('#collection-result').innerHTML='<p class="muted">업체 자료를 확인하지 못했습니다.</p>';
       const message=error.status?error.message:'최신 자료를 확인하지 못했습니다. 잠시 후 다시 확인해 주세요.';
       const target=document.querySelector('#collection-progress');if(target)target.innerHTML=`<p class="collection-warning">${esc(message)} <button class="button small" data-action="refresh-collection">다시 확인</button></p>`;

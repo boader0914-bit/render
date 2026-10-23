@@ -154,79 +154,79 @@ test('a response for another stay month cannot populate the explicitly requested
 
 test('fresh-state snapshots reuse a permitted core without another identity or source read',async()=>{
   const f=fixture();await f.read();const checks=f.identityCalls(),reads=f.sourceCalls();
-  const views=f.cache.snapshot({scope:'host:customer:opaque-a',identity:identity()});
+  const views=await f.cache.snapshot({scope:'host:customer:opaque-a',identity:identity()});
   assert.equal(views.length,1);assert.equal(views[0].companyId,'a');assert.equal(views[0].month,'');
   assert.equal(views[0].data.result.version,'v1');assert.equal(views[0].data.responseCache.state,'cached');
   assert.equal(f.identityCalls(),checks);assert.equal(f.sourceCalls(),reads);
   views[0].data.result.rooms=999;
-  assert.equal(f.cache.snapshot({scope:'host:customer:opaque-a',identity:identity()})[0].data.result.rooms,16);
+  assert.equal((await f.cache.snapshot({scope:'host:customer:opaque-a',identity:identity()}))[0].data.result.rooms,16);
 });
 
 test('snapshots recompute current quota and previousResult but reject changed company or customer fingerprints',async()=>{
   const f=fixture(),account=identity();account.preparations=[{companyId:'a',status:'ready',runId:'older-run'}];f.setIdentity(ok(account));await f.read();
   account.collectionAllowance={limit:1,used:1,canRequest:false};
-  const fresh=f.cache.snapshot({scope:'host:customer:opaque-a',identity:account})[0].data;
+  const fresh=(await f.cache.snapshot({scope:'host:customer:opaque-a',identity:account}))[0].data;
   assert.equal(fresh.collectionAllowance.canRequest,false);assert.equal(fresh.previousResult,true);assert.equal(fresh.request.runId,'older-run');
   account.customer.revision++;
-  assert.deepEqual(f.cache.snapshot({scope:'host:customer:opaque-a',identity:account}),[]);
+  assert.deepEqual(await f.cache.snapshot({scope:'host:customer:opaque-a',identity:account}),[]);
   f.setIdentity(ok(account));await f.read();account.companies[0].rooms=17;
-  assert.deepEqual(f.cache.snapshot({scope:'host:customer:opaque-a',identity:account}),[]);
+  assert.deepEqual(await f.cache.snapshot({scope:'host:customer:opaque-a',identity:account}),[]);
 });
 
 test('snapshot scope, active registration, catalog membership and account status must all match',async()=>{
   const accounts=[identity([]),{...identity(),companies:[]},{...identity(),customer:{...identity().customer,accountStatus:'disabled'}},{...identity(),customer:{...identity().customer,customerId:'another-customer'}},null,{}];
   for(const account of accounts){
     const f=fixture();await f.read();
-    assert.deepEqual(f.cache.snapshot({scope:'host:customer:opaque-a',identity:account}),[]);
+    assert.deepEqual(await f.cache.snapshot({scope:'host:customer:opaque-a',identity:account}),[]);
   }
   const f=fixture();await f.read();
-  for(const scope of ['other-host:customer:opaque-a','host:admin:opaque-a','host:customer:opaque-b'])assert.deepEqual(f.cache.snapshot({scope,identity:identity()}),[]);
+  for(const scope of ['other-host:customer:opaque-a','host:admin:opaque-a','host:customer:opaque-b'])assert.deepEqual(await f.cache.snapshot({scope,identity:identity()}),[]);
   const pending=identity();pending.customer.relations[0].status='pending';f.setIdentity(ok(pending));await f.read();
-  assert.equal(f.cache.snapshot({scope:'host:customer:opaque-a',identity:pending}).length,1);
+  assert.equal((await f.cache.snapshot({scope:'host:customer:opaque-a',identity:pending})).length,1);
 });
 
 test('snapshots never restore revoked or denied views and do not start reads for missing cores',async()=>{
   for(const status of [401,403,404]){
     const f=fixture();await f.read();f.advance(30000);f.setSource(async()=>fail(status));await f.read();await flush();
-    const before=f.sourceCalls();assert.deepEqual(f.cache.snapshot({scope:'host:customer:opaque-a',identity:identity()}),[]);assert.equal(f.sourceCalls(),before);
+    const before=f.sourceCalls();assert.deepEqual(await f.cache.snapshot({scope:'host:customer:opaque-a',identity:identity()}),[]);assert.equal(f.sourceCalls(),before);
   }
   const f=fixture(),account=identity(['a','b']);f.setIdentity(ok(account));await f.read();
-  const before=f.sourceCalls(),views=f.cache.snapshot({scope:'host:customer:opaque-a',identity:account});
+  const before=f.sourceCalls(),views=await f.cache.snapshot({scope:'host:customer:opaque-a',identity:account});
   assert.deepEqual(views.map(view=>view.companyId),['a']);assert.equal(f.sourceCalls(),before);
 });
 
 test('snapshots choose one view per company, preferring the current default over a newer explicit month',async()=>{
   const f=fixture();await f.read();f.advance(1);await f.read({month:'2026-09'});
-  let views=f.cache.snapshot({scope:'host:customer:opaque-a',identity:identity()});
+  let views=await f.cache.snapshot({scope:'host:customer:opaque-a',identity:identity()});
   assert.equal(views.length,1);assert.equal(views[0].month,'');assert.equal(views[0].data.companyDetail.integrated.selectedMonth,'2026-10');
   f.cache.invalidate('host:customer:opaque-a');await f.read({month:'2026-09'});f.advance(1);await f.read({month:'2026-08'});
-  views=f.cache.snapshot({scope:'host:customer:opaque-a',identity:identity()});
+  views=await f.cache.snapshot({scope:'host:customer:opaque-a',identity:identity()});
   assert.equal(views.length,1);assert.equal(views[0].month,'2026-08');assert.equal(views[0].data.companyDetail.integrated.selectedMonth,'2026-08');
 });
 
 test('snapshots exclude expired entries, old default periods and in-progress identities',async()=>{
   const f=fixture({ttlMs:60000});await f.read();f.advance(60000);
-  assert.deepEqual(f.cache.snapshot({scope:'host:customer:opaque-a',identity:identity()}),[]);
+  assert.deepEqual(await f.cache.snapshot({scope:'host:customer:opaque-a',identity:identity()}),[]);
   f.time(Date.parse('2026-10-31T14:59:30Z'));await f.read();f.time(Date.parse('2026-10-31T15:00:00Z'));
-  assert.deepEqual(f.cache.snapshot({scope:'host:customer:opaque-a',identity:identity()}),[]);
+  assert.deepEqual(await f.cache.snapshot({scope:'host:customer:opaque-a',identity:identity()}),[]);
   const g=fixture();await g.read();const account=identity();account.preparations=[{companyId:'a',status:'collecting'}];
-  assert.deepEqual(g.cache.snapshot({scope:'host:customer:opaque-a',identity:account}),[]);
+  assert.deepEqual(await g.cache.snapshot({scope:'host:customer:opaque-a',identity:account}),[]);
 });
 
 test('snapshots are limited to four companies and serialized payloads stay within the configured byte bound',async()=>{
   const f=fixture(),account=identity(['a','b','c','d','e']);f.setIdentity(ok(account));
   for(const companyId of ['a','b','c','d','e'])await f.read({companyId});
-  const views=f.cache.snapshot({scope:'host:customer:opaque-a',identity:account,maxViews:999});assert.equal(views.length,4);
-  assert.equal(f.cache.snapshot({scope:'host:customer:opaque-a',identity:account,maxViews:1}).length,1);
-  assert.deepEqual(f.cache.snapshot({scope:'host:customer:opaque-a',identity:account,maxViews:0}),[]);
+  const views=await f.cache.snapshot({scope:'host:customer:opaque-a',identity:account,maxViews:999});assert.equal(views.length,4);
+  assert.equal((await f.cache.snapshot({scope:'host:customer:opaque-a',identity:account,maxViews:1})).length,1);
+  assert.deepEqual(await f.cache.snapshot({scope:'host:customer:opaque-a',identity:account,maxViews:0}),[]);
   const bound=800,g=fixture({maxBytes:bound}),two=identity(['a','b']);g.setIdentity(ok(two));await g.read();await g.read({companyId:'b'});
-  const limited=g.cache.snapshot({scope:'host:customer:opaque-a',identity:two});assert.equal(limited.length,1,'core payloads fit but adding both complete response wrappers would exceed the bound');assert.ok(Buffer.byteLength(JSON.stringify(limited),'utf8')<=bound);
+  const limited=await g.cache.snapshot({scope:'host:customer:opaque-a',identity:two});assert.equal(limited.length,1,'core payloads fit but adding both complete response wrappers would exceed the bound');assert.ok(Buffer.byteLength(JSON.stringify(limited),'utf8')<=bound);
 });
 
 test('a snapshot with removed registration invalidates older in-flight cores without issuing a source read',async()=>{
   const f=fixture(),pending=deferred();await f.read();f.advance(30000);f.setSource(()=>pending.promise);await f.read();
-  const checks=f.identityCalls(),reads=f.sourceCalls();assert.deepEqual(f.cache.snapshot({scope:'host:customer:opaque-a',identity:identity([])}),[]);
+  const checks=f.identityCalls(),reads=f.sourceCalls();assert.deepEqual(await f.cache.snapshot({scope:'host:customer:opaque-a',identity:identity([])}),[]);
   pending.resolve(ok(source('a','2026-10','old-private')));await flush();
   assert.equal(f.identityCalls(),checks);assert.equal(f.sourceCalls(),reads);
-  assert.deepEqual(f.cache.snapshot({scope:'host:customer:opaque-a',identity:identity()}),[]);
+  assert.deepEqual(await f.cache.snapshot({scope:'host:customer:opaque-a',identity:identity()}),[]);
 });
