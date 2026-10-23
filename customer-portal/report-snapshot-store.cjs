@@ -15,11 +15,11 @@ function canonicalNamespace(value){
   try{const u=new URL(value);if(u.username||u.password||u.pathname!=='/'||u.search||u.hash||u.protocol!=='https:'&&!(u.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(u.hostname)))throw Error();return u.origin;}
   catch{throw new TypeError('A canonical backend origin is required for report snapshots');}
 }
-function createReportSnapshotStore({directory,namespace,version='report-v1',now=Date.now,maxAgeMs=7*DAY,maxEntries=128,maxBytes=16*1024*1024,maxEntryBytes=2*1024*1024,minFreeBytes=32*1024*1024,project}={}){
-  if(typeof directory!=='string'||!directory||typeof project!=='function'||typeof now!=='function'||typeof version!=='string'||!/^[a-zA-Z0-9_.-]{1,80}$/.test(version))throw new TypeError('Invalid report snapshot configuration');
+function createReportSnapshotStore({directory,namespace,version='report-v1',quality='complete',now=Date.now,maxAgeMs=7*DAY,maxEntries=128,maxBytes=16*1024*1024,maxEntryBytes=2*1024*1024,minFreeBytes=32*1024*1024,project}={}){
+  if(typeof directory!=='string'||!directory||typeof project!=='function'||typeof now!=='function'||typeof version!=='string'||!/^[a-zA-Z0-9_.-]{1,80}$/.test(version)||!['complete','partial'].includes(quality))throw new TypeError('Invalid report snapshot configuration');
   for(const value of [maxAgeMs,maxEntries,maxBytes,maxEntryBytes,minFreeBytes])if(!Number.isSafeInteger(value)||value<0)throw new TypeError('Invalid report snapshot limit');
   namespace=canonicalNamespace(namespace);
-  const root=path.resolve(directory),prefix='report-'+hash([namespace,version]).slice(0,32)+'-',filePattern=new RegExp('^'+prefix+'[a-f0-9]{64}\\.json$');
+  const root=path.resolve(directory),prefix=(quality==='partial'?'report-partial-':'report-')+hash([namespace,version]).slice(0,32)+'-',filePattern=new RegExp('^'+prefix+'[a-f0-9]{64}\\.json$');
   const rows=new Map(),tickets=new Map(),knownFiles=new Set();let memoryBytes=0,sequence=0,initialization,initialized=false,serial=Promise.resolve(),readFailures=0,writeFailures=0,lastError=null,persistedWrites=0;
   const clock=()=>Number(now()),keyFor=(slotKey,periodStart)=>JSON.stringify([slotKey,periodStart]);
   const filename=(slotKey,periodStart)=>prefix+hash([slotKey,periodStart])+'.json';
@@ -33,8 +33,10 @@ function createReportSnapshotStore({directory,namespace,version='report-v1',now=
     while(rows.size>maxEntries||memoryBytes>maxBytes){let oldest;for(const entry of rows)if(!oldest||entry[1].checkedAt<oldest[1].checkedAt)oldest=entry;if(!oldest)break;discard(oldest[0]);}
   }
   function projected(slotKey,periodStart,core){
+    if(quality==='partial'?core?.dataQuality?.status!=='partial':core?.dataQuality?.status==='partial'||core?.responseCache?.partial===true)throw Error('CACHE_QUALITY_MISMATCH');
     const value=project(core,{slotKey,periodStart});
     if(!value||typeof value!=='object'||Array.isArray(value)||value.mode!=='current_briefing'||!value.period)throw Error('CACHE_INVALID_PROJECTION');
+    if(quality==='partial'?value.dataQuality?.status!=='partial':value.dataQuality?.status==='partial')throw Error('CACHE_QUALITY_MISMATCH');
     const text=JSON.stringify(value),bytes=Buffer.byteLength(text);if(bytes>maxEntryBytes||bytes>maxBytes)throw Error('CACHE_OVERSIZED');
     return {core:JSON.parse(text),bytes};
   }
@@ -62,7 +64,7 @@ function createReportSnapshotStore({directory,namespace,version='report-v1',now=
     }finally{await handle?.close().catch(()=>{});}
   }
   function decode(value,name){
-    if(!value||typeof value!=='object'||value.format!==FORMAT||value.namespace!==namespace||value.version!==version||typeof value.checksum!=='string'||!/^[a-f0-9]{64}$/.test(value.checksum))throw Error('CACHE_INVALID_ENVELOPE');
+    if(!value||typeof value!=='object'||value.format!==FORMAT||value.namespace!==namespace||value.version!==version||(value.quality||'complete')!==quality||typeof value.checksum!=='string'||!/^[a-f0-9]{64}$/.test(value.checksum))throw Error('CACHE_INVALID_ENVELOPE');
     const {checksum,...payload}=value;if(hash(payload)!==checksum)throw Error('CACHE_CHECKSUM');
     const {slotKey,periodStart,checkedAt,validUntil,core}=payload;
     if(!validSlot(slotKey)||!validPeriod(periodStart)||filename(slotKey,periodStart)!==name||!stampValid(checkedAt)||validUntil!==checkedAt+maxAgeMs)throw Error('CACHE_INVALID_RECORD');
@@ -102,7 +104,7 @@ function createReportSnapshotStore({directory,namespace,version='report-v1',now=
     const record={slotKey,periodStart,checkedAt,validUntil:checkedAt+maxAgeMs,...projection};
     const operation=async()=>{
       await ready();if(!current(ticket)||!stampValid(checkedAt)||!permitted())return false;
-      const payload={format:FORMAT,namespace,version,slotKey,periodStart,checkedAt,validUntil:record.validUntil,core:record.core},envelope={...payload,checksum:hash(payload)};
+      const payload={format:FORMAT,namespace,version,quality,slotKey,periodStart,checkedAt,validUntil:record.validUntil,core:record.core},envelope={...payload,checksum:hash(payload)};
       const name=filename(slotKey,periodStart),file=safePath(name);let temporary,handle;
       try{
         await safeDirectory(true);const space=await fs.statfs(root),free=Number(space.bavail)*Number(space.bsize);

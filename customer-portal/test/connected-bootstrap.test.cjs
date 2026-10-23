@@ -10,16 +10,16 @@ const flush=()=>new Promise(resolve=>setImmediate(resolve));
 const response=(data,status=200)=>({ok:status>=200&&status<300,status,json:async()=>data});
 const account=()=>({customer:{customerId:'fixture_customer',username:'fixture',revision:1,settings:{},regions:[],relations:[{companyId:'company_one',kind:'competitor',status:'active'}],entitlements:{competitorLimit:3,interestRegionLimit:1}},companies:[{companyId:'company_one',name:'경쟁업체 검수',rooms:30}],corrections:[],preparations:[],features:{directCollection:false},companyViews:[],regionViews:[],reportViews:[]});
 
-function harness({admin=false,hash='#company=company_one',early=false}={}) {
-  const elements=new Map(),events={},calls=[],timers=new Map(),restored=[],mounted=[];let sequence=0;
+function harness({admin=false,hash='#company=company_one',early=false,performanceFailure=false,legacyPerformance=false}={}) {
+  const elements=new Map(),events={},calls=[],timers=new Map(),restored=[],mounted=[],marks=[],documentAttributes={};let sequence=0;
   const element=selector=>{if(!elements.has(selector))elements.set(selector,{innerHTML:'',textContent:'',hidden:false,classList:{add(){},remove(){},toggle(){}},focus(){}});return elements.get(selector);};
   const location={pathname:admin?'/customer-view':'/',hash};
   const window={addEventListener(name,callback){events[name]=callback;},scrollTo(){},InsightAuth:auth,
     InsightCollection:{stop(){},setContext(){},restore(value,scope){restored.push({value,scope});},panel(company){return `<h1>${company.name}</h1>`;},mount(id){mounted.push(id);}},
     InsightAnalysis:{stop(){},configureCache(){},configureReports(){},restore(){},restoreReports(){}},
   };
-  const context=vm.createContext({location,window,AbortController,Promise,FormData:class{constructor(form){this.values=form.values;}*[Symbol.iterator](){yield*Object.entries(this.values);}},
-    document:{querySelector:element,body:element('body'),documentElement:{dataset:{}},addEventListener(name,callback){events[name]=callback;}},
+  const context=vm.createContext({location,window,AbortController,Promise,performance:{mark(name){if(performanceFailure)throw Error('unsupported');marks.push(name);return legacyPerformance?undefined:{startTime:marks.length*100.25};},now(){return 123.75;}},FormData:class{constructor(form){this.values=form.values;}*[Symbol.iterator](){yield*Object.entries(this.values);}},
+    document:{querySelector:element,body:element('body'),documentElement:{dataset:{},setAttribute(name,value){documentAttributes[name]=value;}},addEventListener(name,callback){events[name]=callback;}},
     localStorage:{getItem(){return null;}},crypto:{randomUUID(){return 'fixture';}},
     setTimeout(callback,delay){const id=++sequence;timers.set(id,{callback,delay});return id;},clearTimeout(id){timers.delete(id);},
     fetch(url,options={}){return new Promise((resolve,reject)=>{const call={url,options,resolve,reject};calls.push(call);options.signal?.addEventListener('abort',()=>{const error=new Error('aborted');error.name='AbortError';reject(error);},{once:true});});},
@@ -29,7 +29,7 @@ function harness({admin=false,hash='#company=company_one',early=false}={}) {
   vm.runInContext(script,context);
   const path=name=>admin?(name==='me'?'/api/insight-admin/v1/me':'/api/insight-admin/v1/customer-view/'+name):'/api/customer/v1/'+name;
   const matching=name=>calls.filter(call=>call.url===path(name));
-  return {window,context,calls,events,location,mounted,restored,earlyCalls,path,matching,html:()=>element('#main').innerHTML,
+  return {window,context,calls,events,location,mounted,restored,marks,documentAttributes,earlyCalls,path,matching,html:()=>element('#main').innerHTML,
     resolve(name,data,status=200,index=-1){matching(name).at(index).resolve(response(data,status));return flush();},
     reject(name,message='network',index=-1){const error=new Error(message);error.name='TypeError';matching(name).at(index).reject(error);return flush();},
     async tick(delay){for(const[id,timer]of[...timers])if(timer.delay===delay){timers.delete(id);timer.callback();}await flush();},
@@ -129,4 +129,28 @@ test('the early reader is page-scoped, once-only and runs before styles and defe
   const html=fs.readFileSync(require.resolve('../web/connected.html'),'utf8');assert.ok(html.indexOf('/bootstrap-read.js')<html.indexOf('/styles.css'));assert.ok(html.indexOf('/bootstrap-read.js')<html.indexOf('/connected.js'));assert.match(html,/<script src="\/bootstrap-read\.js"><\/script>/);
   const h=harness({early:true});assert.equal(h.earlyCalls,2);assert.equal(h.window.InsightBootstrapReads.take(h.path('me')),undefined,'connected.js already consumed the exact pending identity read');assert.equal(h.window.InsightBootstrapReads.take(h.path('config')),undefined);
   assert.doesNotMatch(earlyScript,/localStorage|sessionStorage|csrfToken|POST|INSIGHT_SERVICE_TOKEN/);
+});
+
+test('startup marks contain fixed names only and identity is recorded only after fresh authorization',async()=>{
+  const h=harness({early:true});assert.deepEqual(h.marks,['insight-bootstrap-start']);await h.resolve('config',{});assert.deepEqual(h.marks,['insight-bootstrap-start']);
+  await h.resolve('me',account());assert.deepEqual(h.marks,['insight-bootstrap-start','insight-identity-ready']);
+  for(let i=0;i<100;i++)h.window.InsightPerformance.markFirst('insight-identity-ready');
+  h.window.InsightPerformance.markFirst('private-company-123');h.window.InsightPerformance.markFirst('insight-company-data-ready');
+  for(let i=0;i<100;i++)h.window.InsightPerformance.markFirst('insight-company-data-ready');
+  assert.deepEqual(h.marks,['insight-bootstrap-start','insight-identity-ready','insight-company-data-ready']);assert.doesNotMatch(JSON.stringify(h.marks),/fixture_customer|company_one|csrf|30/);
+  assert.deepEqual(h.documentAttributes,{'data-insight-bootstrap-start-ms':'100.250','data-insight-identity-ready-ms':'200.500','data-insight-company-ready-ms':'300.750'});
+  assert.ok(Object.values(h.documentAttributes).every(value=>/^\d+\.\d{3}$/.test(value)));assert.equal(Object.keys(h.documentAttributes).length,3);
+  const next=harness({early:true});assert.deepEqual(next.marks,['insight-bootstrap-start'],'another document starts a new bounded measurement');assert.deepEqual(next.documentAttributes,{'data-insight-bootstrap-start-ms':'100.250'});
+});
+
+for(const status of [401,403,503])test(`HTTP ${status} cannot produce a successful identity performance mark`,async()=>{
+  const h=harness({early:true});await h.resolve('config',{});await h.resolve('me',{error:{message:'denied'}},status);assert.deepEqual(h.marks,['insight-bootstrap-start']);assert.equal(h.documentAttributes['data-insight-identity-ready-ms'],undefined);assert.equal(h.documentAttributes['data-insight-company-ready-ms'],undefined);
+});
+
+test('performance marker failure does not affect authorization or company rendering',async()=>{
+  const h=harness({early:true,performanceFailure:true});await h.resolve('config',{});await h.resolve('me',account());assert.match(h.html(),/경쟁업체 검수/);assert.deepEqual(h.marks,[]);assert.deepEqual(h.documentAttributes,{});assert.equal(h.matching('me').length,1);
+});
+
+test('older Performance.mark return conventions use a numeric performance.now DOM attribute',async()=>{
+  const h=harness({early:true,legacyPerformance:true});assert.equal(h.documentAttributes['data-insight-bootstrap-start-ms'],'123.750');await h.resolve('config',{});await h.resolve('me',account());assert.equal(h.documentAttributes['data-insight-identity-ready-ms'],'123.750');assert.match(h.html(),/경쟁업체 검수/);
 });

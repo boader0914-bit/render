@@ -302,3 +302,8 @@ html[data-theme=dark] .connected-app input[type=month]{color-scheme:dark}
  .connected-app .db-current .week-state{grid-column:1/-1;grid-row:3;text-align:left}
  .connected-app .db-current .week-metric-label{position:static;width:auto;height:auto;clip-path:none;overflow:visible;white-space:normal;font-size:12px}
 }
+.connected-app .report-source-issues{border-color:var(--amber)}
+.connected-app .report-source-issues h2{font-size:17px;line-height:1.6;margin:0}
+.connected-app .report-source-issues>p{font-size:13px;line-height:1.8;margin:12px 0}
+.connected-app .report-source-issues table td{white-space:normal;overflow-wrap:anywhere;line-height:1.7}
+.connected-app .report-source-issues table th{min-width:110px}

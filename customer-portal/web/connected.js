@@ -16,6 +16,7 @@
   const route = () => location.hash.slice(1) || ({'/signup':'signup','/login':'login','/terms':'terms','/privacy':'privacy'}[location.pathname]) || 'home';
   const menuRoute=()=>route()==='register-own'?'property':route().startsWith('regions=')?'regions':/^(company|collection|collect)=/.test(route())?(state?.customer.relations.find(row=>row.companyId===decodeURIComponent(route().split('=').slice(1).join('=')))?.kind==='own'?'property':'competitors'):route();
   const toast = message => { $('#toast').textContent = message; $('#toast').classList.add('visible'); setTimeout(() => $('#toast').classList.remove('visible'), 4500); };
+  const startupMark=name=>{try{window.InsightPerformance?.markFirst?.(name);}catch{}};
   async function responseValue(response) {
     let value;
     try { value = await response.json(); }
@@ -118,7 +119,13 @@
     $('#main').innerHTML=window.InsightCollection.panel(company,state.features.directCollection,state.preparations.find(row=>row.companyId===company.companyId),state.collectionAllowance,openCollection);
     const relation=state.customer.relations.find(row=>row.companyId===company.companyId&&['active','pending'].includes(row.status));
     if(relation?.kind==='own')selectedOwnId=company.companyId;
-    window.InsightCollection.mount(company.companyId,api,{company,relationKind:relation?.kind,editHtml:correctionEditor(company)});
+    const isCurrentView=()=>{
+      const current=route();
+      if(/^(company|collection|collect)=/.test(current))return decodeURIComponent(current.slice(current.indexOf('=')+1))===company.companyId;
+      const own=state?.customer.relations.filter(row=>row.kind==='own'&&['active','pending'].includes(row.status))||[];
+      return current==='property'&&own.length===1&&own[0].companyId===company.companyId;
+    };
+    window.InsightCollection.mount(company.companyId,api,{company,relationKind:relation?.kind,editHtml:correctionEditor(company),isCurrentView});
   }
   function search(kind) { return `<section class="card search-box"><h2>${kind==='region'?'관심지역 추가':kind==='own'?'내 매장 등록':'경쟁업체 추가'}</h2><form id="search-form" data-kind="${kind}"><label class="field"><span>${kind==='region'?'시군구 이름':'업체명·주소·플레이스 번호'}</span><input name="q" required minlength="2" maxlength="120" placeholder="두 글자 이상 입력하세요."></label><button class="button" type="submit">저장된 업체·지역 검색</button></form><div id="search-results" class="search-results" aria-live="polite"></div>${kind==='region'?'':'<div id="company-registration-progress"></div>'}</section>`; }
   function render() {
@@ -232,8 +239,9 @@
       if(adminView){
         const identity=await bootstrapRead(signal=>startupFetch('/api/insight-admin/v1/me',{headers:{Accept:'application/json'},...(signal?{signal}:{})}).then(responseValue));
         adminCsrf=identity.csrfToken;
+        if(adminCsrf)startupMark('insight-identity-ready');
         state=await api('/start',{});
-      }else state=await bootstrapRead(signal=>api('/me',undefined,{signal,startup:true}));
+      }else{state=await bootstrapRead(signal=>api('/me',undefined,{signal,startup:true}));if(state?.customer?.customerId)startupMark('insight-identity-ready');}
       bootstrapStatus='ready';render();prepareCompanies();
     }catch(error){
       state=null;adminCsrf='';

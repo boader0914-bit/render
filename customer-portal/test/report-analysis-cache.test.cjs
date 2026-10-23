@@ -155,3 +155,58 @@ test('default and explicitly selected own report keys are never silently aliased
 test('no browser storage or persistent authentication is used by report restoration',()=>{
  assert.doesNotMatch(source,/localStorage|sessionStorage|indexedDB|document\.cookie/);
 });
+
+test('partial reports show valid company values alongside the failed company period and reason',async()=>{
+ const h=harness(),data=report('own',0);
+ data.companies.push({companyId:'competitor',kind:'competitor',name:'경쟁 숙소',rooms:20,unavailable:true,sourceStatus:'partial',summary:{days:null,reservationRate:null,publicBookings:null,phoneBookings:null,estimatedRevenue:null}});
+ data.dataQuality={status:'partial',issues:[{scope:'company',companyId:'competitor',name:'경쟁 숙소',month:'2026-11',period:{start:'2026-11-01',end:'2026-11-21'},code:'MONTH_NOT_OBSERVED',reason:'이 달의 관측 자료가 없습니다.'}]};
+ data.responseCache={...data.responseCache,state:'partial',partial:true};
+ h.mount();await h.resolve(0,data);
+ assert.match(h.html(),/내 매장 own의 다음 판단/);assert.match(h.html(),/0실/);assert.match(h.html(),/미확인\/30일/);
+ assert.match(h.html(),/자료 확인이 필요한 부분/);assert.match(h.html(),/경쟁 숙소/);assert.match(h.html(),/2026-11-01 ~ 2026-11-21/);assert.match(h.html(),/이 달의 관측 자료가 없습니다/);
+ assert.match(h.html(),/산출 보류/);assert.match(h.notice.textContent,/일부 자료 확인 필요/);assert.doesNotMatch(h.notice.textContent,/확인 지연|이전 저장 자료/);assert.equal(h.timers.size,0);
+ h.leave();h.mount();assert.match(h.html(),/2026-11-01 ~ 2026-11-21/);assert.match(h.html(),/미확인 값은 0으로 처리하지 않습니다/);
+});
+
+test('issue details escape markup and never display an entity outside the registered report scope',async()=>{
+ const h=harness(),data=report();data.responseCache.partial=true;
+ data.dataQuality={status:'partial',issues:[{scope:'company',companyId:'own',name:'ignored label',month:'2026-11',reason:'<script>unsafe</script>'},{scope:'company',companyId:'secret',name:'비공개 숙소',reason:'비공개 사유'},{scope:'region',regionId:'secret',name:'비공개 지역',reason:'비공개 지역 사유'}]};
+ h.mount();await h.resolve(0,data);assert.match(h.html(),/&lt;script&gt;unsafe&lt;\/script&gt;/);assert.doesNotMatch(h.html(),/<script>|비공개 숙소|비공개 사유|비공개 지역/);
+});
+
+test('legacy unavailable company responses still explain the affected reporting period',async()=>{
+ const h=harness(),data=report();data.companies[0].unavailable=true;h.mount();await h.resolve(0,data);
+ assert.match(h.html(),/자료 확인이 필요한 부분/);assert.match(h.html(),/2026-10-23 ~ 2026-11-21/);assert.match(h.html(),/이 기간의 저장 자료를 확인하지 못했습니다/);
+});
+
+test('a separately persisted partial report restores its reasons without becoming a complete result',()=>{
+ const h=harness(),data=saved();data.responseCache={...data.responseCache,state:'partial',partial:true};
+ data.dataQuality={status:'partial',issues:[{scope:'company',companyId:'own',month:'2026-11',reason:'이 달의 관측 자료가 없습니다.'}]};
+ h.restore(data);h.mount();assert.match(h.html(),/내 매장 own의 다음 판단/);assert.match(h.html(),/이 달의 관측 자료가 없습니다/);
+ assert.match(h.notice.textContent,/마지막 확인/);assert.doesNotMatch(h.html(),/0원/);
+ const invalid=harness(),bad={...data,dataQuality:{status:'complete',issues:[]}};invalid.restore(bad);invalid.mount();assert.match(invalid.html(),/계산하고/);
+});
+
+test('a partial report never hides a later failed or active source check',async()=>{
+ for(const refreshing of [false,true]){
+  const h=harness(),data=report();data.dataQuality={status:'partial',issues:[]};
+  data.responseCache={...data.responseCache,state:'partial',partial:true,refreshFailed:true,refreshing};
+  h.mount();await h.resolve(0,data);assert.match(h.html(),/내 매장 own의 다음 판단/);
+  if(refreshing){assert.match(h.notice.textContent,/최신 자료 확인 중/);assert.equal(h.timers.size,1);}
+  else{assert.match(h.notice.textContent,/최신 리포트 확인에 실패/);assert.equal(h.timers.size,0);}
+ }
+});
+
+test('a cold partial report with a calculating month checks again and replaces itself when ready',async()=>{
+ const h=harness(),data=report();data.dataQuality={status:'partial',issues:[{scope:'company',companyId:'own',month:'2026-11',code:'COMPANY_INTEGRATION_UPDATING',reason:'통합 자료를 갱신하고 있습니다.'}]};
+ data.responseCache={...data.responseCache,state:'partial',partial:true};h.mount();await h.resolve(0,data);
+ assert.match(h.notice.textContent,/일부 자료 표시.*최신 자료 확인 중/);assert.equal(h.timers.size,1);
+ await h.tick();await h.resolve(1,report('own',18));assert.match(h.html(),/18실/);assert.doesNotMatch(h.html(),/통합 자료를 갱신하고/);assert.equal(h.notice.hidden,true);assert.equal(h.timers.size,0);
+});
+
+test('a calculating partial report stops after the bounded checks and keeps the delay visible',async()=>{
+ const h=harness(),data=report();data.dataQuality={status:'partial',issues:[{scope:'company',companyId:'own',month:'2026-11',code:'COMPANY_INTEGRATION_UPDATING',reason:'통합 자료를 갱신하고 있습니다.'}]};
+ data.responseCache={...data.responseCache,state:'partial',partial:true};h.mount();await h.resolve(0,data);
+ for(let i=0;i<8;i++){await h.tick();await h.resolve(i+1,data);}
+ assert.equal(h.timers.size,0);assert.equal(h.calls.length,9);assert.match(h.notice.textContent,/일부 자료 표시.*시간이 걸리고/);assert.match(h.html(),/통합 자료를 갱신하고/);
+});

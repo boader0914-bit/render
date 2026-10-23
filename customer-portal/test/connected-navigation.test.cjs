@@ -104,6 +104,13 @@ for(const adminView of [false,true]){
   });
 }
 
+for(const adminView of [false,true])test(`${adminView?'administrator':'customer'} company readiness marker is bound to the exact active property or company route`,async()=>{
+  const ui=await screen({adminView,initialHash:'#property'}),own=ui.mounted.at(-1).options.isCurrentView;
+  assert.equal(own(),true);await ui.navigate('#settings');assert.equal(own(),false);
+  await ui.navigate('#company=cmp_competitor');const competitor=ui.mounted.at(-1).options.isCurrentView;assert.equal(competitor(),true);assert.equal(own(),false);
+  await ui.navigate('#property');assert.equal(competitor(),false);assert.equal(ui.mounted.at(-1).options.isCurrentView(),true);
+});
+
 test('customer refresh starts configuration and session reads together without duplicate bootstrap requests',async()=>{
   const config='/api/customer/v1/config',me='/api/customer/v1/me';
   const ui=await screen({deferRequests:[config,me]});

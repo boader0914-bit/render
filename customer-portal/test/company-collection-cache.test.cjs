@@ -5,17 +5,17 @@ const flush=async()=>{await new Promise(resolve=>setImmediate(resolve));await ne
 
 function harness() {
   let now=Date.parse('2026-10-13T02:00:00Z'),protectedForm=null,present=true;
-  const calls=[],events={},renders=[],renderData=[],storage=new Map(),timers=new Map();let nextTimer=0;
+  const calls=[],events={},renders=[],renderData=[],marks=[],storage=new Map(),timers=new Map();let nextTimer=0;
   const elements=new Map();
   for(const key of ['#collection-result','#collection-progress','#collection-freshness','#collection-allowance','#company-current-view','#company-history-flow','#company-flow-details','#collection-settings','[data-collect] button[type=submit]'])elements.set(key,{innerHTML:'',textContent:'',disabled:true,dataset:{ready:'true'},children:[],append(node){this.children.push(node);},setAttribute(key,value){this[key]=value;}});
-  const window={InsightCompanyView:{render(data,options){const value=[data.companyDetail?.basics?.companyId,data.companyDetail?.integrated?.selectedMonth,data.result?.version].join('|');renders.push(value);renderData.push({data,options});return value;},currentView:()=>'',flowView:()=>''}};
+  const window={InsightPerformance:{markFirst(name){marks.push(name);}},InsightCompanyView:{render(data,options){const value=[data.companyDetail?.basics?.companyId,data.companyDetail?.integrated?.selectedMonth,data.result?.version].join('|');renders.push(value);renderData.push({data,options});return value;},currentView:()=>'',flowView:()=>''}};
   class ClockDate extends Date {constructor(...args){super(...(args.length?args:[now]));}static now(){return now;}}
   const document={hidden:false,addEventListener:(type,fn)=>events[type]=fn,querySelector(selector){if(!present&&selector.startsWith('#collection-'))return null;if(selector.includes('form'))return selector.includes(':focus-within')||protectedForm?.dataset.dirty?protectedForm:null;return elements.get(selector)||null;},querySelectorAll:()=>[],createElement:()=>({textContent:'',className:''}),get activeElement(){return protectedForm?{closest:()=>protectedForm}:null;}};
   vm.runInContext(source,vm.createContext({window,document,Date:ClockDate,localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},setTimeout(fn,ms){timers.set(++nextTimer,{fn,ms});return nextTimer;},clearTimeout:id=>timers.delete(id)}));
   const api=(path,_data,options)=>new Promise((resolve,reject)=>calls.push({path,resolve,reject,options}));
   const result=()=>elements.get('#collection-result').innerHTML;
   const freshness=()=>elements.get('#collection-freshness').textContent+' '+elements.get('#collection-freshness').innerHTML;
-  return {collection:window.InsightCollection,calls,renders,renderData,elements,timers,result,freshness,storedKeys:()=>[...storage.keys()],
+  return {collection:window.InsightCollection,calls,renders,renderData,marks,elements,timers,result,freshness,storedKeys:()=>[...storage.keys()],
     context(scope='customer-one',ids=['a','b']){window.InsightCollection.setContext(scope,ids);},
     mount(id='a',options){present=true;elements.get('#collection-result').innerHTML='loading';elements.get('#collection-progress').innerHTML='';elements.get('#collection-freshness').textContent='';window.InsightCollection.mount(id,api,options);},
     leave(){window.InsightCollection.stop();present=false;},
@@ -38,6 +38,22 @@ function persisted(id='a',month='',version='persisted',checkedAt='2026-10-13T00:
   Object.assign(row.data.responseCache,{persisted:true,revalidationRequired:true,validUntil:new Date(Date.parse(checkedAt)+7*24*60*60*1000).toISOString()});
   return row;
 }
+
+test('first-data performance marking excludes the basic catalog seed until real data is rendered on the current route',async()=>{
+  const h=harness();h.context();h.mount('a',{company:{companyId:'a',name:'temporary basic seed'},isCurrentView:()=>true});assert.deepEqual(h.marks,[]);
+  await h.resolve(0,data());assert.deepEqual(h.marks,['insight-company-data-ready']);assert.equal(h.result(),'a|2026-10|v1');
+});
+
+test('an authorized restored snapshot marks actual DOM readiness without waiting for its follow-up GET',()=>{
+  const h=harness();h.context();h.collection.restore([persisted()],'customer-one');h.mount('a',{isCurrentView:()=>true});
+  assert.equal(h.result(),'a|2026-10|persisted');assert.deepEqual(h.marks,['insight-company-data-ready']);assert.equal(h.calls.length,1);
+});
+
+test('off-route, rejected or late offscreen company responses never emit a visible-data performance mark',async()=>{
+  const offRoute=harness();offRoute.context();offRoute.mount('a',{isCurrentView:()=>false});await offRoute.resolve(0,data());assert.deepEqual(offRoute.marks,[]);
+  const denied=harness();denied.context();denied.mount('a',{isCurrentView:()=>true});await denied.reject(0,403);assert.deepEqual(denied.marks,[]);
+  const departed=harness();departed.context();departed.mount('a',{isCurrentView:()=>true});departed.leave();await departed.resolve(0,data());assert.deepEqual(departed.marks,[]);
+});
 
 test('fresh authenticated bootstrap restores the saved company immediately while a new permission read remains pending',async()=>{
   const h=harness();h.context();const bootstrap=restored();

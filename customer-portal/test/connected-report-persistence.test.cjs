@@ -66,9 +66,16 @@ test('an expired session or failed permission read never exposes a report from t
  f.state.identityStatus=504;const failed=await f.request(report);assert.equal(failed.status,504);assert.equal(failed.data.companies,undefined);assert.equal(f.sourceCalls(),1);
 });
 
-for(const failure of ['http','unavailable','regionFailed'])test('failed '+failure+' report updates never replace the durable last good report',async t=>{
+for(const failure of ['http','regionFailed'])test('failed '+failure+' report updates never replace the durable last good report',async t=>{
  const f=await fixture(t),first=await f.request(report);await f.close();await f.start();if(failure==='http')f.state.sourceStatus=503;else f.state[failure]=true;
  await f.request(report,{refresh:true});await f.close();await f.start();const boot=await f.request('/api/customer/v1/me');assert.equal(boot.data.reportViews.length,1);assert.equal(boot.data.reportViews[0].data.generatedAt,first.data.generatedAt);assert.equal(boot.data.reportViews[0].data.responseCache.checkedAt,first.data.responseCache.checkedAt);assert.equal(boot.data.reportViews[0].data.companies[0].unavailable,false);
+});
+
+test('partial report GETs and bootstrap stay visibly partial across restart and preserve the complete file',async t=>{
+ const f=await fixture(t);await f.request(report);await f.close();const normalName=(await fs.readdir(f.directory)).find(name=>name.endsWith('.json')),normalBefore=await fs.readFile(path.join(f.directory,normalName));await f.start();f.state.unavailable=true;f.state.version=2;
+ const partial=await f.request(report,{refresh:true});assert.equal(partial.status,200);assert.equal(partial.data.responseCache.state,'partial');assert.equal(partial.data.responseCache.partial,true);assert.equal(partial.data.responseCache.refreshFailed,false);assert.equal(partial.data.dataQuality.status,'partial');assert.ok(partial.data.dataQuality.issues.length);assert.equal(partial.data.companies[0].summary.sold,2);assert.equal(partial.data.companies[0].summary.estimatedRevenue,null);await f.close();assert.deepEqual(await fs.readFile(path.join(f.directory,normalName)),normalBefore);await f.start();
+ const boot=await f.request('/api/customer/v1/me');assert.equal(boot.data.reportViews.length,1);assert.equal(boot.data.reportViews[0].data.responseCache.state,'partial');assert.equal(boot.data.reportViews[0].data.responseCache.persisted,true);assert.equal(boot.data.reportViews[0].data.responseCache.checkedAt,partial.data.responseCache.checkedAt);assert.equal(boot.data.reportViews[0].data.companies[0].unavailable,true);
+ f.state.unavailable=false;f.state.version=3;const recovered=await f.request(report,{refresh:true});assert.equal(recovered.status,200);assert.equal(recovered.data.responseCache.state,'fresh');assert.equal(recovered.data.dataQuality.status,'complete');await f.close();await f.start();const recoveredBoot=await f.request('/api/customer/v1/me');assert.equal(recoveredBoot.data.reportViews[0].data.responseCache.state,'cached');assert.equal(recoveredBoot.data.reportViews[0].data.companies[0].summary.sold,3);assert.equal(recoveredBoot.data.reportViews[0].data.dataQuality.status,'complete');
 });
 
 test('a different rolling window and invalid input cannot be persisted as the requested current report',async t=>{

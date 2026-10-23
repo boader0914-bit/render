@@ -98,6 +98,10 @@
   function connectionBusy(value){
     const target=document.querySelector('#collection-result');target?.setAttribute?.('aria-busy',String(value));
   }
+  function markVisible(data){
+    if(!data||data.referenceLoading||!data.result&&!data.companyDetail)return;
+    try{if(mountOptions.isCurrentView?.()===true)window.InsightPerformance?.markFirst?.('insight-company-data-ready');}catch{}
+  }
   function disableCollection(message){const submit=document.querySelector('[data-collect] button[type=submit]');if(submit)submit.disabled=true;const note=document.querySelector('#collection-allowance');if(note&&message)note.textContent=message;}
   function seed(company){
     const id=company?.companyId;
@@ -156,7 +160,7 @@
   }
   function showCached(){
     const entry=cached(companyId,selectedMonth);
-    if(entry){view=entry.data;renderedVersion=entry.version;document.querySelector('#collection-result').innerHTML=renderResult(entry.data);}
+    if(entry){view=entry.data;renderedVersion=entry.version;document.querySelector('#collection-result').innerHTML=renderResult(entry.data);markVisible(entry.data);}
     else{view=permitted(companyId)&&!referenceDenied.has(companyId)?references.get(companyId)||null:null;renderedVersion=null;document.querySelector('#collection-result').innerHTML=view?renderResult(view):loading();}
     connectionBusy(!entry);
     disableCollection('수집 가능 여부를 서버에서 확인하고 있습니다.');freshness(entry?'이전 조회 자료 표시 · 최신 자료 확인 중':'최신 자료 확인 중',entry);
@@ -217,6 +221,7 @@
       if(force || renderedVersion!==version) {
         if(!force && document.querySelector('#collection-result form:focus-within, #collection-result form[data-dirty]')) { freshness('새 결과가 있습니다. 작성 중인 내용을 유지했습니다.',entry); if(active(data.request))timer=setTimeout(()=>load(),10000); return; }
         view=data;renderedVersion=version;document.querySelector('#collection-result').innerHTML=renderResult(data);
+        markVisible(data);
       }
       const saved=data.responseCache?.state==='cached',info=data.responseCache||{};
       const refreshing=saved&&(info.refreshing===true||!info.refreshFailed&&entry.persisted&&info.revalidationRequired);

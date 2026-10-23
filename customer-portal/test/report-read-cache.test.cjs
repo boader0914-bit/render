@@ -56,15 +56,17 @@ test('transient source failure retains original result and timestamp without fak
 
 for(const [label,change] of [
  ['company unavailable',r=>{r.companies[0].unavailable=true;}],
- ['region fallback',r=>{delete r.regions[0].networkAttempted;r.regions[0].sources=[];r.regions[0].warnings=['source failed'];}],
+ ['region fallback',r=>{r.regions[0].sourceStatus='unavailable';r.regions[0].sources=[];r.regions[0].warnings=['source failed'];}],
  ['source error',r=>{r.regions[0].sources[0].status='error';}],
  ['series error',r=>{r.regions[0].sources[0].series[0].status='error';}],
  ['row error',r=>{r.regions[0].sources[0].rows[0].status='failed';}]
-])test(`HTTP200 ${label} cannot overwrite prior normal report or be persisted cold`,async t=>{
- const config=await durable(t),f=fixture(config),first=await f.read(),broken=report({sold:0});change(broken);
- const preserved=await f.read({force:true,readSource:async()=>ok(broken)});assert.equal(preserved.status,200);assert.equal(preserved.data.responseCache.state,'cached');assert.equal(preserved.data.responseCache.refreshFailed,true);assert.equal(preserved.data.responseCache.checkedAt,first.data.responseCache.checkedAt);assert.equal(preserved.data.companies[0].summary.sold,5);
- const cold=fixture({...config,persistenceDirectory:path.join(config.directory,'cold')});assert.equal((await cold.read({readSource:async()=>ok(broken)})).status,503);assert.equal(cold.cache.persistenceStatus().entries,0);
- const restarted=fixture(config);const views=await restarted.cache.snapshot({scope:'new-session',audience:'https://insight.example:customer',identity:identity()});assert.equal(views[0].data.companies[0].summary.sold,5);
+])test(`HTTP200 ${label} displays validated partial data without overwriting the normal snapshot`,async t=>{
+ const config=await durable(t),f=fixture(config);await f.read();await f.cache.flushPersistence();const normalFile=(await fs.readdir(config.directory)).find(name=>name.endsWith('.json')),normalBefore=await fs.readFile(path.join(config.directory,normalFile));
+ const broken=report({sold:0});change(broken);f.advance(1);
+ const partial=await f.read({force:true,readSource:async()=>ok(broken)});assert.equal(partial.status,200);assert.equal(partial.data.responseCache.state,'partial');assert.equal(partial.data.responseCache.partial,true);assert.equal(partial.data.responseCache.refreshFailed,false);assert.equal(partial.data.dataQuality.status,'partial');assert.ok(partial.data.dataQuality.issues.length);assert.equal(partial.data.companies[0].summary.sold,0);assert.equal(partial.data.companies[0].summary.estimatedRevenue,null);
+ assert.deepEqual(await fs.readFile(path.join(config.directory,normalFile)),normalBefore);assert.equal(f.cache.persistenceStatus().normalEntries,1);assert.equal(f.cache.persistenceStatus().partialEntries,1);
+ const cold=fixture({...config,persistenceDirectory:path.join(config.directory,'cold')});const coldReply=await cold.read({readSource:async()=>ok(broken)});assert.equal(coldReply.status,200);assert.equal(coldReply.data.responseCache.state,'partial');assert.equal(cold.cache.persistenceStatus().normalEntries,0);assert.equal(cold.cache.persistenceStatus().partialEntries,1);
+ const restarted=fixture(config);restarted.advance(2);const views=await restarted.cache.snapshot({scope:'new-session',audience:'https://insight.example:customer',identity:identity()});assert.equal(views[0].data.companies[0].summary.sold,0);assert.equal(views[0].data.responseCache.state,'partial');assert.equal(views[0].data.responseCache.partial,true);assert.equal(views[0].data.responseCache.persisted,true);assert.equal(views[0].data.responseCache.checkedAt,partial.data.responseCache.checkedAt);assert.deepEqual(views[0].data.dataQuality.issues,partial.data.dataQuality.issues);
 });
 
 for(const [label,change] of [
@@ -110,3 +112,26 @@ for(const [label,change] of [
 test('empty business-planning report is supported without fabricating an own company',async()=>{const account=identity();account.customer.relations=[];account.customer.regions=[];account.companies=[];account.regions=[];const f=fixture();f.setIdentity(account);f.source(report({ownId:null,account}));const reply=await f.read({ownId:''});assert.equal(reply.status,200);assert.equal(reply.data.ownId,null);assert.deepEqual(reply.data.companies,[]);assert.equal((await f.read({ownId:''})).data.responseCache.state,'cached');});
 
 test('oversize memory results do not persist in runtime and no shared display objects escape',async()=>{const f=fixture({maxBytes:1});assert.equal((await f.read()).status,200);assert.equal((await f.read()).data.responseCache.state,'fresh');assert.equal(f.reads(),2);});
+
+function diagnosedPartial(){
+ const value=report(),company=value.companies[1],issue={scope:'company',companyId:company.companyId,name:company.name,month:'2026-11',period:{start:'2026-11-01',end:'2026-11-21'},code:'COMPANY_MONTH_NOT_OBSERVED',reason:'해당 숙박월의 저장 관측 자료가 없습니다.'};
+ company.unavailable=true;company.sourceStatus='partial';company.sourceIssues=[issue];company.summary={days:0,supply:null,sold:null,reservationRate:null,publicBookings:null,phoneBookings:null,estimatedRevenue:null};value.dataQuality={status:'partial',issues:[issue]};return value;
+}
+test('partial diagnostic fields, genuine zero and unknown amounts survive restart without storing private source details',async t=>{
+ const config=await durable(t),f=fixture(config),value=diagnosedPartial();value.dataQuality.issues[0].rawError='PRIVATE-EXCEPTION';value.companies[1].sourceIssues[0].stack='PRIVATE-STACK';value.companies[0].summary.publicBookings=0;
+ const first=await f.read({readSource:async()=>ok(value)});assert.equal(first.status,200);assert.equal(first.data.responseCache.partial,true);assert.equal(first.data.companies[0].summary.publicBookings,0);assert.equal(first.data.companies[1].summary.sold,null);assert.equal(first.data.companies[1].sourceIssues[0].month,'2026-11');assert.doesNotMatch(JSON.stringify(first),/PRIVATE-|rawError|stack/);await f.cache.flushPersistence();
+ const next=fixture(config),views=await next.cache.snapshot({scope:'new',audience:'https://insight.example:customer',identity:identity()});assert.equal(views.length,1);assert.equal(next.reads(),0);assert.equal(views[0].data.responseCache.state,'partial');assert.equal(views[0].data.responseCache.partial,true);assert.equal(views[0].data.responseCache.persisted,true);assert.equal(views[0].data.responseCache.checkedAt,first.data.responseCache.checkedAt);assert.deepEqual(views[0].data.dataQuality,first.data.dataQuality);assert.deepEqual(views[0].data.companies[1].sourceIssues,first.data.companies[1].sourceIssues);
+ const text=(await Promise.all((await fs.readdir(config.directory)).filter(name=>name.endsWith('.json')).map(name=>fs.readFile(path.join(config.directory,name),'utf8')))).join('');assert.doesNotMatch(text,/PRIVATE-|csrfToken|customerId|cust_a/);
+});
+test('a partial snapshot cannot cross account, permission, origin, selection or Korea-day boundaries',async t=>{
+ const config=await durable(t),first=fixture(config);await first.read({readSource:async()=>ok(diagnosedPartial())});
+ for(const mutate of [a=>{a.customer.customerId='other';},a=>{a.customer.relations.pop();},a=>{a.companies[0].rooms=11;}]){const next=fixture(config),account=identity();mutate(account);assert.deepEqual(await next.cache.snapshot({scope:'new',audience:'https://insight.example:customer',identity:account}),[]);}
+ const next=fixture(config);assert.deepEqual(await next.cache.snapshot({scope:'new',audience:'https://other.example:customer',identity:identity()}),[]);assert.equal((await next.read({readIdentity:async()=>fail(403)})).status,403);assert.equal(next.reads(),0);
+ next.advance(DAY);assert.deepEqual(await next.cache.snapshot({scope:'different',audience:'https://insight.example:customer',identity:identity()}),[]);
+});
+test('an HTTP failure after a partial result preserves its check date and cannot promote it to a complete report',async()=>{
+ const f=fixture(),first=await f.read({readSource:async()=>ok(diagnosedPartial())});f.advance(30000);await f.read({readSource:async()=>fail(503)});await flush();const kept=await f.read();assert.equal(kept.data.responseCache.state,'partial');assert.equal(kept.data.responseCache.partial,true);assert.equal(kept.data.responseCache.refreshFailed,true);assert.equal(kept.data.responseCache.checkedAt,first.data.responseCache.checkedAt);assert.equal(kept.data.dataQuality.status,'partial');assert.equal(kept.data.companies[1].summary.sold,null);
+});
+for(const [label,change] of [
+ ['external region request',r=>{r.regions[0].networkAttempted=true;}],['unverified region transport',r=>{delete r.regions[0].networkAttempted;}],['foreign diagnostic company',r=>{r.dataQuality.issues[0].companyId='foreign';}],['foreign row diagnostic',r=>{r.companies[1].sourceIssues=[{...r.companies[1].sourceIssues[0],companyId:'own_a'}];}],['diagnostic outside period',r=>{r.dataQuality.issues[0].month='2026-09';}],['malformed diagnostic array',r=>{r.companies[1].sourceIssues={code:'PRIVATE-INVALID'};}],['malformed companies',r=>{r.companies={};}]
+])test('partial data does not bypass '+label+' validation',async()=>{const f=fixture(),value=diagnosedPartial();change(value);const reply=await f.read({readSource:async()=>ok(value)});assert.equal(reply.status,503);assert.equal(reply.data.companies,undefined);});
