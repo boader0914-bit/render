@@ -10,6 +10,7 @@ const { createCompanyReadCache } = require('./company-read-cache.cjs');
 const { createRegionReadCache } = require('./region-read-cache.cjs');
 const { createReportReadCache } = require('./report-read-cache.cjs');
 const { createUpstreamReader } = require('./upstream-request.cjs');
+const { createPublicAssetVersions } = require('./public-asset-versions.cjs');
 function validatedOrigin(value) {
   const u = new URL(value);
   if (u.username || u.password || u.pathname !== '/' || u.search || u.hash || /[?#]/.test(String(value)) || (u.protocol !== 'https:' && !(u.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(u.hostname)))) throw new Error('Insight origins require HTTPS or local development addresses');
@@ -111,6 +112,10 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   const adminCookie = (token, expire = false) => `${adminCookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${expire ? 0 : 28800}${secure ? '; Secure' : ''}`;
   const staticMap = { '/company-flow.js':['company-flow.js','text/javascript'], '/region-history.js':['region-history.js','text/javascript'], '/analysis.js':['analysis.js','text/javascript'], '/': ['connected.html', 'text/html'], '/app': ['connected.html', 'text/html'], '/login': ['connected.html', 'text/html'], '/signup': ['connected.html', 'text/html'], '/terms': ['connected.html', 'text/html'], '/privacy': ['connected.html', 'text/html'], '/company-view.js': ['company-view.js', 'text/javascript'], '/collection.js': ['collection.js', 'text/javascript'], '/connected.js': ['connected.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/connected.css': ['connected.css', 'text/css'], '/favicon.svg': ['favicon.svg', 'image/svg+xml'] };
   staticMap['/bootstrap-read.js']=['bootstrap-read.js','text/javascript'];
+  const adminAssets = { '/admin': ['admin.html', 'text/html'], '/admin.js': ['admin.js', 'text/javascript'], '/admin.css': ['admin.css', 'text/css'] };
+  const publicAssets=new Map([...Object.entries({...staticMap,...adminAssets,'/auth.js':['auth.js','text/javascript']})].filter(([,item])=>item[1]!=='text/html').map(([url,item])=>[url,{file:path.join(__dirname,'web',item[0]),type:item[1]}]));
+  for(const name of ['Pretendard-Regular','Pretendard-Bold','MaruBuri-Regular'])publicAssets.set(`/fonts/${name}.otf`,{file:path.join(__dirname,'..','web','fonts',`${name}.otf`),type:'font/otf'});
+  const assetVersions=createPublicAssetVersions({assets:publicAssets,readAsset:staticAsset});
   const server = http.createServer(async (req, res) => {
     const timing=timings();let observed=false;
     const respond=(status,value)=>{if(observed)res.setHeader('Server-Timing',timing.header());res.setHeader('X-Insight-Request-Id',timing.requestId);json(res,status,value);};
@@ -178,14 +183,13 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
         respond(response.status, data); return;
       }
       if (!['GET', 'HEAD'].includes(req.method)) throw fault('NOT_FOUND', '요청한 화면을 찾을 수 없습니다.', 404);
-      const adminAssets = { '/admin': ['admin.html', 'text/html'], '/admin.js': ['admin.js', 'text/javascript'], '/admin.css': ['admin.css', 'text/css'] };
       let item = adminAssets[url.pathname] || (url.pathname === '/customer-view' ? staticMap['/app'] : url.pathname === '/auth.js' ? ['auth.js', 'text/javascript'] : staticMap[url.pathname]); let file;
       if (item) file = path.join(__dirname, 'web', item[0]);
       else if (/^\/fonts\/(Pretendard-Regular|Pretendard-Bold|MaruBuri-Regular)\.otf$/.test(url.pathname)) { file = path.join(__dirname, '..', 'web', 'fonts', path.basename(url.pathname)); item = ['', 'font/otf']; }
       else throw fault('NOT_FOUND', '요청한 화면을 찾을 수 없습니다.', 404);
-      const asset=await staticAsset(file),data=asset.data;
+      const asset=item[1]==='text/html'?await staticAsset(file):await assetVersions.get(url.pathname),data=item[1]==='text/html'?await assetVersions.html(asset.data):asset.data;
       if(item[1]!=='text/html'){
-        res.setHeader('Cache-Control','private, no-cache');res.setHeader('ETag',asset.etag);
+        res.setHeader('Cache-Control',assetVersions.immutable(url,asset)?'public, max-age=31536000, immutable':'private, no-cache');res.setHeader('ETag',asset.etag);
         if(String(req.headers['if-none-match']||'').split(',').some(value=>value.trim()==='*'||value.trim().replace(/^W\//,'')===asset.etag)){
           res.writeHead(304);res.end();return;
         }
