@@ -197,7 +197,7 @@ for(const [label,metadata] of [
   ['malformed expiry',{validUntil:'tomorrow'}],
   ['extended expiry',{validUntil:'2026-10-29T22:00:00.001Z'}],
   ['expired expiry',{validUntil:'2026-10-23T00:00:00Z'}],
-  ['future check',{checkedAt:'2026-10-23T00:00:00.001Z'}],
+  ['future check beyond permitted clock skew',{checkedAt:'2026-10-23T00:01:00.001Z'}],
   ['invalid calendar date',{checkedAt:'2026-09-31T22:00:00Z'}],
   ['missing check',{checkedAt:undefined}],
   ['false revalidation',{revalidationRequired:false}],
@@ -223,4 +223,23 @@ test('persisted results needing revalidation receive bounded GET checks even whe
 test('failed persistent revalidation retains saved values with the original date and a delay notice',async()=>{
   const h=harness(),saved=persisted();saved.responseCache.refreshFailed=true;h.mount();await h.resolve(0,saved);
   assert.match(h.html(),/방문자<\/th><td>10/);assert.match(h.notice.textContent,/최신 자료 확인 지연.*마지막 확인/);assert.equal(h.timers.size,0);assert.equal(h.notice.dataset.state,'notice');
+});
+
+test('fresh verification accepts a 400 ms server clock lead without changing its original checkedAt',async()=>{
+  const h=harness(),saved={...data(),responseCache:{state:'fresh',checkedAt:'2026-10-23T00:00:00.400Z'}};h.mount();await h.resolve(0,saved);
+  assert.match(h.html(),/방문자<\/th><td>10/);assert.equal(h.notice.hidden,true);
+  h.advance(30*60*1000+399);h.leave();h.mount();assert.match(h.html(),/방문자<\/th><td>10/);
+  h.advance(1);h.leave();h.mount();assert.match(h.html(),/연결하고/,'expires relative to the unchanged original server checkedAt');
+});
+
+test('persisted verification accepts a 400 ms server clock lead without extending its original seven-day expiry',async()=>{
+  const h=harness(),saved=persisted(10,'2026-10-23T00:00:00.400Z');h.view.restore([{regionKey:'a',month:'2026-09',data:saved}],'customer-one');h.mount();
+  assert.match(h.html(),/방문자<\/th><td>10/);await h.resolve(0,saved);assert.equal(h.timers.size,1);
+  h.advance(7*24*60*60*1000+399);h.leave();h.mount();assert.match(h.html(),/방문자<\/th><td>10/);
+  h.advance(1);h.leave();h.mount();assert.match(h.html(),/연결하고/,'keeps the source expiry instead of rewriting either clock');
+});
+
+test('fresh verification rejects a server clock lead beyond sixty seconds',async()=>{
+  const h=harness();h.mount();await h.resolve(0,{...data(),responseCache:{state:'fresh',checkedAt:'2026-10-23T00:01:00.001Z'}});
+  assert.doesNotMatch(h.html(),/방문자<\/th><td>10/);assert.match(h.html(),/유효기간/);assert.equal(h.timers.size,0);
 });

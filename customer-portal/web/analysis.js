@@ -10,7 +10,7 @@
   // Previously authorized regional results remain private to this signed-in page.
   // Reload restoration comes from the freshly authenticated /me response only.
   const cache=new Map(),inFlight=new Map(),regionEpochs=new Map(),deniedRegions=new Set();
-  const CACHE_LIMIT=24,CACHE_MAX_AGE=30*60*1000,PERSISTED_MAX_AGE=7*24*60*60*1000;
+  const CACHE_LIMIT=24,CACHE_MAX_AGE=30*60*1000,PERSISTED_MAX_AGE=7*24*60*60*1000,CLOCK_SKEW=60*1000;
   let cacheScope='default',allowedRegions=null,cacheGeneration=0,onSessionExpired=null;
   const epoch=id=>regionEpochs.get(id)||0;
   const requestAllowed=id=>Boolean(cacheScope)&&(!allowedRegions||allowedRegions.has(id));
@@ -27,7 +27,9 @@
   function lifetime(data,checkedAt){
     const info=data?.responseCache||{},now=Date.now();
     const stamp=Number.isFinite(checkedAt)?checkedAt:info.checkedAt===undefined?now:timestamp(info.checkedAt);
-    if(!Number.isFinite(stamp)||stamp>now)return null;
+    // Source servers and browsers can differ slightly. Keep the source's
+    // original clock; a small permitted skew must not manufacture a new one.
+    if(!Number.isFinite(stamp)||stamp>now+CLOCK_SKEW)return null;
     if(info.persisted===true){
       // Only the authenticated server can opt an older snapshot into its fixed
       // persisted lifetime. Reading it again must never advance checkedAt.
