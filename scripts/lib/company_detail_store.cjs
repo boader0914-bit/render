@@ -9,6 +9,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const readline = require("node:readline");
 const { readCompanyMasterProjection } = require("./company_master_stream.cjs");
+const { createScheduledSingleFlight } = require("./scheduled_single_flight.cjs");
 const VERSION = "company-detail-read-model-v1";
 const hash = value => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const fault = (code = "COMPANY_DETAIL_SOURCE_UNAVAILABLE") => Object.assign(
@@ -46,13 +47,15 @@ async function readScopedCompanyHistory(file, company, matches, { stream = filen
 
 function createCompanyDetailStore({ dataDir, outputsDir, projectionVersion, build, matchesObservation, runIdsForCompany,
   dayKey = () => new Date(Date.now() + 32400000).toISOString().slice(0, 10), fileSystem = fs,
-  masterReader = readScopedCompanyMaster, historyReader = readScopedCompanyHistory, maxMemoryBytes = 16 * 1024 * 1024 } = {}) {
+  masterReader = readScopedCompanyMaster, historyReader = readScopedCompanyHistory, maxMemoryBytes = 16 * 1024 * 1024,
+  runWork = operation => operation() } = {}) {
   need(dataDir && projectionVersion && typeof build === "function" && typeof matchesObservation === "function" && typeof runIdsForCompany === "function");
   const masterFile = path.join(dataDir, "company_master", "companies.json");
   const historyFile = path.join(dataDir, "history", "observations.jsonl");
   const cacheDir = path.join(dataDir, "company_master", "detail_read_models");
   const outputs = path.resolve(outputsDir || path.join(dataDir, "outputs"));
-  const active = new Map(), memory = new Map(); let memoryBytes = 0;
+  const flight = createScheduledSingleFlight({ runWork, kind: "company-detail" });
+  const memory = new Map(); let memoryBytes = 0;
   function remember(id, entry) {
     if (memory.has(id)) { memoryBytes -= memory.get(id).bytes; memory.delete(id); }
     const bytes = Buffer.byteLength(JSON.stringify(entry));
@@ -114,18 +117,20 @@ function createCompanyDetailStore({ dataDir, outputsDir, projectionVersion, buil
       if (saved.source.history && !current.history) throw fault();
       if (hash(current) === hash(saved.source)) { remember(id, saved); return { data: saved.data, cacheStatus, preparedAt: saved.preparedAt }; }
     }
+    saved = null;
     // Capture the source before and after each bounded read. A racing save can
     // never turn an older detail response into a certified latest result.
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const before = await baseRevision();
-      const master = await masterReader(masterFile, id);
-      const company = master.companies?.[id];
+      let master = await masterReader(masterFile, id);
+      let company = master.companies?.[id];
       if (!company) { if (hash(before) !== hash(await baseRevision())) continue; return { data: null, cacheStatus: "missing" }; }
       const runIds = [...new Set(runIdsForCompany(company).map(String))].slice(0, 120);
       const source = { ...before, runs: await runRevision(runIds), day: dayKey() };
-      const observations = before.history ? await historyReader(historyFile, company, matchesObservation) : [];
+      let observations = before.history ? await historyReader(historyFile, company, matchesObservation) : [];
       if (hash(source) !== hash(await revision(runIds))) continue;
       const data = await build(id, { master, observations });
+      master = null; company = null; observations = null;
       if (hash(source) !== hash(await revision(runIds))) continue;
       const body = { version: VERSION, projectionVersion, companyId: id, runIds, source, preparedAt: new Date().toISOString(), data };
       const next = { ...body, checksum: hash(body) };
@@ -147,9 +152,7 @@ function createCompanyDetailStore({ dataDir, outputsDir, projectionVersion, buil
   }
   return { async get(companyId) {
     const id = String(companyId || "").trim();
-    if (active.has(id)) return active.get(id);
-    const pending = load(id); active.set(id, pending);
-    try { return await pending; } finally { if (active.get(id) === pending) active.delete(id); }
+    return flight.run(id, () => load(id));
   } };
 }
 

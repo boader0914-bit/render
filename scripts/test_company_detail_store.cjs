@@ -3,6 +3,8 @@ const assert = require("node:assert/strict"), fs = require("node:fs/promises"), 
 const { Readable } = require("node:stream");
 const { test } = require("node:test");
 const { createCompanyDetailStore, readScopedCompanyMaster, readScopedCompanyHistory } = require("./lib/company_detail_store.cjs");
+const { createAnalyticalWorkScheduler } = require("./lib/analytical_work_scheduler.cjs");
+const gate = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 
 async function fixture(t) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "company-detail-store-"));
@@ -166,4 +168,38 @@ test("run references cannot escape the outputs directory even through dot path c
     const store = createCompanyDetailStore({ ...f.options, projectionVersion: "unsafe-" + id, runIdsForCompany: () => [id] });
     await assert.rejects(() => store.get("one"), { code: "COMPANY_DETAIL_SOURCE_UNAVAILABLE" });
   }
+});
+
+test("queued detail and nested same-ID readers coalesce after admission without self-deadlock", { timeout: 3000 }, async t => {
+  const f = await fixture(t), scheduler = createAnalyticalWorkScheduler(), entered = gate(), nested = gate();
+  let admissions = 0;
+  const store = createCompanyDetailStore({ ...f.options,
+    runWork: (operation, options) => { admissions++; return scheduler.run(operation, options); } });
+  assert.equal(admissions, 0);
+  const owner = scheduler.run(async () => { entered.resolve(); await nested.promise; return Promise.all([store.get("one"), store.get("one")]); });
+  await entered.promise; const queued = store.get(" one ");
+  assert.equal(f.calls.master, 0); assert.equal(scheduler.status().queuedForeground, 1); nested.resolve();
+  const values = await owner; assert.equal(values[0], values[1]); assert.equal(await queued, values[0]);
+  assert.deepEqual(f.calls, { master: 1, history: 1, build: 1 }); await scheduler.close();
+});
+
+test("different detail IDs and warm revision checks remain inside shared admission", { timeout: 3000 }, async t => {
+  const f = await fixture(t), scheduler = createAnalyticalWorkScheduler(), firstRead = gate(), releaseRead = gate();
+  let activeReads = 0, peakReads = 0, first = true;
+  const store = createCompanyDetailStore({ ...f.options,
+    runWork: (operation, options) => scheduler.run(operation, options), runIdsForCompany: company => company.runIds || [],
+    masterReader: async (...args) => {
+      peakReads = Math.max(peakReads, ++activeReads);
+      if (first) { first = false; firstRead.resolve(); await releaseRead.promise; }
+      try { return await f.options.masterReader(...args); } finally { activeReads--; }
+    } });
+  const one = store.get("one"); await firstRead.promise; const two = store.get("two");
+  assert.equal(scheduler.status().queuedForeground, 1); releaseRead.resolve();
+  const values = await Promise.all([one, two]); assert.equal(values[0].data.company.companyId, "one");
+  assert.equal(values[1].data.company.companyId, "two"); assert.equal(peakReads, 1);
+  const entered = gate(), release = gate();
+  const owner = scheduler.run(async () => { entered.resolve(); await release.promise; }); await entered.promise;
+  let warmDone = false; const warm = store.get("one").then(value => { warmDone = true; return value; });
+  assert.equal(scheduler.status().queuedForeground, 1); assert.equal(warmDone, false); release.resolve(); await owner;
+  assert.equal((await warm).cacheStatus, "memory"); assert.equal(f.calls.master, 2); await scheduler.close();
 });

@@ -6,6 +6,8 @@ const path = require("node:path");
 const zlib = require("node:zlib");
 const { test } = require("node:test");
 const { aggregateFields, compactCompanyInventory, createCompanyBootstrapStore, acceptsGzip } = require("./lib/company_bootstrap.cjs");
+const { createAnalyticalWorkScheduler } = require("./lib/analytical_work_scheduler.cjs");
+const gate = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "company-bootstrap-store-"));
@@ -143,4 +145,61 @@ test("cache storage failure still returns the current projection and preserves s
   const result = await createCompanyBootstrapStore({ ...f.options, fileSystem }).get();
   assert.equal(result.data.companies[0].amount, 16);
   assert.deepEqual(await fs.readFile(f.sourceFile), original);
+});
+
+test("queued bootstrap and owner reentry share one load without reversing the lease wait", { timeout: 3000 }, async t => {
+  const f = await fixture(t), scheduler = createAnalyticalWorkScheduler(), entered = gate(), nested = gate();
+  const store = createCompanyBootstrapStore({ ...f.options, runWork: (operation, options) => scheduler.run(operation, options) });
+  const owner = scheduler.run(async () => { entered.resolve(); await nested.promise; return store.get(); });
+  await entered.promise; const queued = store.get();
+  assert.equal(f.calls.length, 0); assert.equal(scheduler.status().queuedForeground, 1); nested.resolve();
+  const owned = await owner; assert.equal(await queued, owned); assert.equal(f.calls.length, 1);
+  await scheduler.close();
+});
+
+test("completed bootstrap groups do not certify a new call after invalidation while old callers wait", { timeout: 3000 }, async t => {
+  const f = await fixture(t), scheduler = createAnalyticalWorkScheduler(), entered = gate(), nested = gate(), built = gate(), release = gate();
+  const store = createCompanyBootstrapStore({ ...f.options, runWork: (operation, options) => scheduler.run(operation, options) });
+  const owner = scheduler.run(async () => {
+    entered.resolve(); await nested.promise; const value = await store.get(); built.resolve(value); await release.promise; return value;
+  });
+  await entered.promise; const oldQueued = store.get(); nested.resolve(); const old = await built.promise;
+  await f.write(27); store.invalidate(); const current = store.get();
+  assert.equal(scheduler.status().queuedForeground, 2); release.resolve();
+  assert.equal(await owner, old); assert.equal(await oldQueued, old);
+  assert.equal((await current).data.companies[0].amount, 27); assert.equal(f.calls.length, 2);
+  await scheduler.close();
+});
+
+test("a validated bootstrap memory hit stays fast but an epoch change during its stat rebuilds", { timeout: 3000 }, async t => {
+  const f = await fixture(t), scheduler = createAnalyticalWorkScheduler(), entered = gate(), release = gate(), statEntered = gate(), statRelease = gate();
+  let admissions = 0, pauseStat = false;
+  const fileSystem = { ...fs, stat: async (...args) => {
+    const value = await fs.stat(...args);
+    if (pauseStat) { pauseStat = false; statEntered.resolve(); await statRelease.promise; }
+    return value;
+  } };
+  const store = createCompanyBootstrapStore({ ...f.options, fileSystem,
+    runWork: (operation, options) => { admissions++; return scheduler.run(operation, options); } });
+  assert.equal(admissions, 0, "constructing the store must not invoke a late-bound scheduler");
+  await store.get();
+  const owner = scheduler.run(async () => { entered.resolve(); await release.promise; }); await entered.promise;
+  assert.equal((await store.get()).cacheStatus, "memory"); assert.equal(admissions, 1);
+  release.resolve(); await owner;
+  pauseStat = true; const racing = store.get(); await statEntered.promise;
+  await f.write(31); store.invalidate(); statRelease.resolve();
+  const current = await racing; assert.equal(current.cacheStatus, "calculated"); assert.equal(current.data.companies[0].amount, 31);
+  assert.equal(admissions, 2); assert.equal(f.calls.length, 2); await scheduler.close();
+});
+
+test("admitted bootstrap retains active invalidation retries and nested duplicate result identity", { timeout: 3000 }, async t => {
+  const f = await fixture(t), scheduler = createAnalyticalWorkScheduler(); let projects = 0;
+  const store = createCompanyBootstrapStore({ ...f.options, runWork: (operation, options) => scheduler.run(operation, options),
+    project: async master => {
+      if (++projects === 1) { await f.write(37); store.invalidate(); }
+      return f.options.project(master);
+    } });
+  const values = await scheduler.run(() => Promise.all([store.get(), store.get()]));
+  assert.equal(values[0], values[1]); assert.equal(values[0].data.companies[0].amount, 37); assert.equal(projects, 2);
+  await scheduler.close();
 });

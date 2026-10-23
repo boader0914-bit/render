@@ -4,6 +4,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const zlib = require("node:zlib");
+const { createScheduledSingleFlight } = require("./scheduled_single_flight.cjs");
 
 // These are evidence collections, not list-view aggregates. They remain in the
 // existing detail response and on disk; the read model never edits the source.
@@ -90,9 +91,11 @@ function acceptsGzip(header = "") {
 
 function dataHash(data) { return crypto.createHash("sha256").update(JSON.stringify(data)).digest("hex"); }
 
-function createCompanyBootstrapStore({ sourceFile, cacheFile, projectionVersion, project, emptyMaster, fileSystem = fs }) {
+function createCompanyBootstrapStore({ sourceFile, cacheFile, projectionVersion, project, emptyMaster, fileSystem = fs,
+  runWork = operation => operation() }) {
   let memory = null;
-  let inFlight = null;
+  const flight = createScheduledSingleFlight({ runWork, kind: "company-bootstrap" });
+  const flightKey = "bootstrap";
   let epoch = 0;
   let knownSource = false;
   const signature = async () => {
@@ -132,7 +135,8 @@ function createCompanyBootstrapStore({ sourceFile, cacheFile, projectionVersion,
           return { ...memory, cacheStatus: "saved" };
         }
       }
-      const master = sourceSignature === "missing" ? emptyMaster() : JSON.parse((await fileSystem.readFile(sourceFile, "utf8")).replace(/^\uFEFF/, ""));
+      saved = null;
+      let master = sourceSignature === "missing" ? emptyMaster() : JSON.parse((await fileSystem.readFile(sourceFile, "utf8")).replace(/^\uFEFF/, ""));
       if (!master || typeof master !== "object" || Array.isArray(master)
         || !master.companies || typeof master.companies !== "object" || Array.isArray(master.companies)) {
         const error = new Error("업체 기본자료를 읽지 못했습니다.");
@@ -140,6 +144,7 @@ function createCompanyBootstrapStore({ sourceFile, cacheFile, projectionVersion,
         throw error;
       }
       const projected = await project(master);
+      master = null;
       const data = { ...projected, representation: "bootstrap", sourceRevision: sourceSignature };
       if (startedEpoch !== epoch || await signature() !== sourceSignature) continue;
       const next = encoded(data, sourceSignature);
@@ -162,11 +167,15 @@ function createCompanyBootstrapStore({ sourceFile, cacheFile, projectionVersion,
   }
   return {
     async get() {
-      if (inFlight) return inFlight;
-      const pending = load();
-      inFlight = pending;
-      try { return await pending; }
-      finally { if (inFlight === pending) inFlight = null; }
+      // A genuine memory hit needs only the existing source stat. Saved-cache
+      // parsing and rebuilding always acquire the shared analytical lease.
+      if (memory && !flight.has(flightKey)) {
+        const cached = memory, startedEpoch = epoch;
+        const sourceSignature = await signature();
+        if (memory === cached && startedEpoch === epoch && !flight.has(flightKey)
+          && cached.sourceSignature === sourceSignature) return { ...cached, cacheStatus: "memory" };
+      }
+      return flight.run(flightKey, load);
     },
     invalidate() { epoch += 1; memory = null; }
   };

@@ -147,7 +147,8 @@ const companyBootstrapStore = createCompanyBootstrapStore({
   projectionVersion: crypto.createHash("sha256")
     .update(fs.readFileSync(__filename)).update(fs.readFileSync(path.join(__dirname, "lib", "company_bootstrap.cjs"))).digest("hex"),
   project: summarizeCompanyMasterBootstrapFromMaster,
-  emptyMaster: emptyCompanyMaster
+  emptyMaster: emptyCompanyMaster,
+  runWork: (operation, options) => runAnalyticalWork(operation, options)
 });
 const companyDetailStore = createCompanyDetailStore({
   dataDir: DATA_DIR,
@@ -164,7 +165,8 @@ const companyDetailStore = createCompanyDetailStore({
   matchesObservation: (row, company) => historyObservationMatchesCompany(row, company)
     || historyDailyObservationMatchesCompany(row, companyHistoryDailyIdentity(company)),
   runIdsForCompany: companyProductSourceRunIds,
-  build: (companyId, detailSources) => summarizeCompanyMasterDetail(companyId, { detailSources })
+  build: (companyId, detailSources) => summarizeCompanyMasterDetail(companyId, { detailSources }),
+  runWork: (operation, options) => runAnalyticalWork(operation, options)
 });
 const TOURISM_DATA_DIR = path.join(DATA_DIR, "tourism_data");
 const LEGAL_POLICY_VERSION = "2026-09-20";

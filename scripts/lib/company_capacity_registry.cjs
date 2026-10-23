@@ -4,6 +4,10 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const readline = require("node:readline");
 const HISTORY_CACHE_VERSION = 1, HISTORY_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+// This version covers the raw physical-row/monthly-reader contract and the
+// cached partition shape. Ownership, run quality and locked bases are applied
+// afresh below; changing their scheduling must not rescan unchanged raw rows.
+const RAW_PARTITION_SEMANTIC_VERSION = "capacity-raw-partition-v2:monthly-physical-objects:per-run-max";
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === "object"
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
 const digest = value => crypto.createHash("sha256").update(typeof value === "string" || Buffer.isBuffer(value) ? value : JSON.stringify(stable(value))).digest("hex");
@@ -22,6 +26,34 @@ function trustedRawQuantity(row) {
     .includes(String(row.observationStatus || row.status || "").toLowerCase())) return false;
   if (["inventoryObserved", "stockObserved", "scheduleObserved", "queryAttempted"].some(field => row[field] === false)) return false;
   return true;
+}
+function rawCompanyIdentity(row) { return String(row.companyId || row.companyKey || ""); }
+function checkRawCapacityPartition(part, seen) {
+  if (!part || typeof part.key !== "string" || seen.has(part.key) || !/^[a-f0-9]{64}$/.test(part.digest || "")
+    || !Number.isSafeInteger(part.count) || part.count < 1) throw historyFault();
+  seen.add(part.key);
+}
+async function readRawCapacityPartition(observationIndex, part) {
+  const rawCompanyId = rawCompanyIdentity(part), maxima = new Map(); let rows = 0;
+  await observationIndex.readRows({ parseMode: "monthly", partitionKey: part.key }, row => {
+    rows++;
+    if (!row || typeof row !== "object" || Array.isArray(row) || rawCompanyIdentity(row) !== rawCompanyId) throw historyFault();
+    if (row.productType !== "lodging" || !trustedRawQuantity(row)) return;
+    const quantity = positive(row.rawTotal); if (!quantity) return;
+    const runId = String(row.runId || ""); maxima.set(runId, Math.max(maxima.get(runId) || 0, quantity));
+  });
+  if (rows !== part.count) throw historyFault();
+  return { key: part.key, digest: part.digest, rawCompanyId, runs: [...maxima].sort((a, b) => a[0].localeCompare(b[0])) };
+}
+function rawCapacityRuleVersion() {
+  // Fingerprint every decision used to form a cached raw partition, rather
+  // than this module's unrelated lifecycle code. Source formatting changes
+  // inside these rules invalidate conservatively; LF/CRLF transport does not.
+  const source = operation => Function.prototype.toString.call(operation).replace(/\r\n?/g, "\n");
+  return digest({ semanticVersion: RAW_PARTITION_SEMANTIC_VERSION,
+    positive: source(positive), trustedRawQuantity: source(trustedRawQuantity),
+    rawCompanyIdentity: source(rawCompanyIdentity), checkRawCapacityPartition: source(checkRawCapacityPartition),
+    readRawCapacityPartition: source(readRawCapacityPartition) });
 }
 function trustedSnapshotCompany(company, runMap) {
   const filter = snapshot => {
@@ -54,9 +86,10 @@ function trustedSnapshotCompany(company, runMap) {
 // Derived, versioned capacity basis. Raw company records are never modified.
 function createCompanyCapacityRegistry({ dataDir, observedCapacity, reviewedCapacity, now = () => new Date(), observationIndex = null }) {
   if (observationIndex !== null && ["ensure", "revisionPartitions", "readRows"].some(method => typeof observationIndex[method] !== "function")) throw new TypeError("A verified observation index is required");
+  const ruleVersion = rawCapacityRuleVersion();
   const file = path.join(dataDir, "company_integrated", "capacity-bases.json");
   const historyCacheFile = path.join(dataDir, "company_integrated", "capacity-history-index.json");
-  let chain = Promise.resolve(), historyCache = null, projectionCache = null, projectionStat = null, rulePromise = null;
+  let chain = Promise.resolve(), historyCache = null, projectionCache = null, projectionStat = null;
   const stamp = stat => `${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.ino}:${stat.dev}`;
   async function readProjection() {
     let before;
@@ -118,28 +151,14 @@ function createCompanyCapacityRegistry({ dataDir, observedCapacity, reviewedCapa
         || !Array.isArray(index.partitions)) throw historyFault();
       // Raw trust rules are versioned separately from mutable run quality and
       // canonical ownership. Those are applied afresh on every preparation.
-      if (!rulePromise) rulePromise = fs.readFile(__filename).then(bytes => digest(Buffer.concat([Buffer.from("capacity-raw-partition-v1\n"), bytes])));
-      const ruleVersion = await rulePromise, previous = await readProjection();
+      const previous = await readProjection();
       const reusable = new Map(previous?.ruleVersion === ruleVersion ? previous.partitions.map(part => [part.key, part]) : []);
       const partitions = [], seen = new Set(); let count = 0;
       for (const part of index.partitions) {
-        if (!part || typeof part.key !== "string" || seen.has(part.key) || !/^[a-f0-9]{64}$/.test(part.digest || "")
-          || !Number.isSafeInteger(part.count) || part.count < 1) throw historyFault();
-        seen.add(part.key);
-        const rawCompanyId = String(part.companyId || part.companyKey || ""), cached = reusable.get(part.key);
+        checkRawCapacityPartition(part, seen);
+        const rawCompanyId = rawCompanyIdentity(part), cached = reusable.get(part.key);
         if (cached?.digest === part.digest && cached.rawCompanyId === rawCompanyId) partitions.push(cached);
-        else {
-          const maxima = new Map(); let rows = 0;
-          await observationIndex.readRows({ parseMode: "monthly", partitionKey: part.key }, row => {
-            rows++;
-            if (!row || typeof row !== "object" || Array.isArray(row) || String(row.companyId || row.companyKey || "") !== rawCompanyId) throw historyFault();
-            if (row.productType !== "lodging" || !trustedRawQuantity(row)) return;
-            const quantity = positive(row.rawTotal); if (!quantity) return;
-            const runId = String(row.runId || ""); maxima.set(runId, Math.max(maxima.get(runId) || 0, quantity));
-          });
-          if (rows !== part.count) throw historyFault();
-          partitions.push({ key: part.key, digest: part.digest, rawCompanyId, runs: [...maxima].sort((a, b) => a[0].localeCompare(b[0])) });
-        }
+        else partitions.push(await readRawCapacityPartition(observationIndex, part));
         if (checkpoint && ++count % 64 === 0) await checkpoint();
       }
       partitions.sort((a, b) => a.key.localeCompare(b.key));
