@@ -75,8 +75,10 @@
   function render() {
     searchSequence++; window.InsightAnalysis?.stop(); window.InsightCollection?.stop?.();
     const scope=state?.customer.customerId?`${adminView?'admin':'customer'}:${state.customer.customerId}`:'';
-    window.InsightCollection?.setContext?.(scope,state?.customer.relations.filter(row=>['active','pending'].includes(row.status)).map(row=>row.companyId)||[],()=>{state=null;adminCsrf='';selectedOwnId=null;render();});
-    if(state&&!restoredStates.has(state)){restoredStates.add(state);window.InsightCollection?.restore?.(state.companyViews,scope);}
+    const sessionExpired=()=>{state=null;adminCsrf='';selectedOwnId=null;render();};
+    window.InsightCollection?.setContext?.(scope,state?.customer.relations.filter(row=>['active','pending'].includes(row.status)).map(row=>row.companyId)||[],sessionExpired);
+    window.InsightAnalysis?.configureCache?.({scope,regionKeys:state?.regions?.map(row=>row.id)||[],onSessionExpired:sessionExpired});
+    if(state&&!restoredStates.has(state)){restoredStates.add(state);window.InsightCollection?.restore?.(state.companyViews,scope);window.InsightAnalysis?.restore?.(state.regionViews,scope);}
     $('#logout').hidden = !state;
     $('#admin-view-banner').hidden = !adminView || !state;
     $('#navigation').innerHTML = state ? menus.map(([key,label])=>`<a href="#${key}" class="nav-link ${menuRoute()===key?'active':''}">${label}</a>`).join(''):'';

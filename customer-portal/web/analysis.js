@@ -6,7 +6,102 @@
   const time=v=>Number.isFinite(Date.parse(v))?new Date(v).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):'확인 전';
   const today=()=>new Date(Date.now()+9*3600000).toISOString().slice(0,10);
   const prior=()=>{const d=today();return new Date(Date.UTC(+d.slice(0,4),+d.slice(5,7)-2,1)).toISOString().slice(0,7);};
-  let seq=0,api,kind,regionData=null,pollTimer=null;
+  let seq=0,api,kind,regionData=null,pollTimer=null,refreshTimer=null,renderedVersion=null;
+  // Previously authorized regional results remain private to this signed-in page.
+  // Reload restoration comes from the freshly authenticated /me response only.
+  const cache=new Map(),inFlight=new Map(),regionEpochs=new Map(),deniedRegions=new Set();
+  const CACHE_LIMIT=24,CACHE_MAX_AGE=30*60*1000;
+  let cacheScope='default',allowedRegions=null,cacheGeneration=0,onSessionExpired=null;
+  const epoch=id=>regionEpochs.get(id)||0;
+  const requestAllowed=id=>Boolean(cacheScope)&&(!allowedRegions||allowedRegions.has(id));
+  const permitted=id=>requestAllowed(id)&&!deniedRegions.has(id);
+  const cacheKey=(id,month)=>JSON.stringify([cacheScope,id,month]);
+  const clone=value=>JSON.parse(JSON.stringify(value));
+  const version=data=>{const {responseCache,generatedAt,...result}=data;return JSON.stringify(result);};
+  const validMonth=value=>typeof value==='string'&&/^20\d{2}-(0[1-9]|1[0-2])$/.test(value);
+  function clearTimers(){if(pollTimer!==null)clearTimeout(pollTimer);if(refreshTimer!==null)clearTimeout(refreshTimer);pollTimer=refreshTimer=null;}
+  function clearCache(){cacheGeneration++;cache.clear();inFlight.clear();regionEpochs.clear();deniedRegions.clear();}
+  function invalidate(id){
+    regionEpochs.set(id,epoch(id)+1);
+    for(const [key,entry] of cache)if(entry.regionKey===id)cache.delete(key);
+    for(const [key,entry] of inFlight)if(entry.regionKey===id)inFlight.delete(key);
+  }
+  function configureCache({scope='',regionKeys=[],onSessionExpired:expired=null}={}){
+    const next=typeof scope==='string'?scope:'';
+    if(next!==cacheScope){clearCache();seq++;regionData=null;renderedVersion=null;clearTimers();cacheScope=next;}
+    const allowed=new Set(Array.isArray(regionKeys)?regionKeys.filter(value=>typeof value==='string'):[]);
+    if(allowedRegions)for(const id of allowedRegions)if(!allowed.has(id)){invalidate(id);deniedRegions.add(id);}
+    for(const id of allowed)if(!allowedRegions?.has(id))deniedRegions.delete(id);
+    allowedRegions=allowed;onSessionExpired=typeof expired==='function'?expired:null;
+  }
+  function cached(id,month){
+    if(!permitted(id))return null;
+    const key=cacheKey(id,month),entry=cache.get(key);if(!entry)return null;
+    if(Date.now()-entry.checkedAt>CACHE_MAX_AGE){cache.delete(key);return null;}
+    cache.delete(key);cache.set(key,entry);return entry;
+  }
+  function remember(id,month,data,checkedAt){
+    if(!requestAllowed(id)||data?.region?.id!==id||data.month!==month)throw Error('선택한 지역·기간과 응답이 다릅니다.');
+    const saved=clone(data),stamp=Number.isFinite(checkedAt)?checkedAt:Date.parse(data.responseCache?.checkedAt);
+    const entry={regionKey:id,month,data:saved,version:version(saved),checkedAt:Number.isFinite(stamp)?Math.min(stamp,Date.now()):Date.now()};
+    deniedRegions.delete(id);
+    const key=cacheKey(id,month);cache.delete(key);cache.set(key,entry);
+    while(cache.size>CACHE_LIMIT)cache.delete(cache.keys().next().value);
+    return entry;
+  }
+  function restore(views,scope){
+    if(!scope||scope!==cacheScope||!allowedRegions||!Array.isArray(views))return;
+    const now=Date.now(),rows=views.slice(0,CACHE_LIMIT*2).sort((a,b)=>Date.parse(b?.data?.responseCache?.checkedAt)-Date.parse(a?.data?.responseCache?.checkedAt));
+    for(const row of rows){
+      const id=row?.regionKey,month=row?.month,data=row?.data,at=Date.parse(data?.responseCache?.checkedAt);
+      if(!permitted(id)||!validMonth(month)||!Number.isFinite(at)||now-at>CACHE_MAX_AGE||at-now>60000||epoch(id)>0)continue;
+      if(data?.region?.id!==id||data.month!==month||!Array.isArray(data.sources)||cached(id,month))continue;
+      if(cache.size>=CACHE_LIMIT)break;
+      try{remember(id,month,data,Math.min(at,now));}catch{}
+    }
+  }
+  function freshness(message,state='notice'){
+    const target=document.querySelector('#analysis-freshness');if(!target)return;
+    target.textContent=message;target.hidden=!message;target.dataset.state=state;
+  }
+  function detailKeys(slot){
+    const counts=new Map();return [...(slot.querySelectorAll?.('details')||[])].map(detail=>{
+      const source=detail.closest?.('[data-history-source]')?.dataset.historySource;
+      const base=source?'source:'+source:'note:'+(detail.querySelector?.('summary')?.textContent||'');
+      const index=counts.get(base)||0;counts.set(base,index+1);return {detail,key:base+':'+index};
+    });
+  }
+  function drawRegion(slot,data,preserve=false){
+    const metrics=preserve?[...(slot.querySelectorAll?.('[data-history-metric]')||[])].map(select=>({key:select.closest('[data-history-source]')?.dataset.historySource,value:select.value})):[];
+    const open=new Set(preserve?detailKeys(slot).filter(row=>row.detail.open).map(row=>row.key):[]);
+    const focused=preserve&&slot.contains?.(document.activeElement)?document.activeElement:null;
+    const focusMetric=focused?.matches?.('[data-history-metric]')?focused.closest('[data-history-source]')?.dataset.historySource:null;
+    const focusDetail=focused?.matches?.('summary')?detailKeys(slot).find(row=>row.detail===focused.closest('details'))?.key:null;
+    const focusRefresh=focused?.matches?.('[data-history-refresh]');
+    slot.innerHTML=regionView(data);
+    for(const metric of metrics){
+      const card=[...(slot.querySelectorAll?.('[data-history-source]')||[])].find(row=>row.dataset.historySource===metric.key);
+      const source=data.sources?.find(row=>row.key===metric.key);
+      if(card&&source?.metrics?.some(row=>row.key===metric.value)&&window.InsightRegionHistory)card.outerHTML=window.InsightRegionHistory.source(source,data.window,metric.value);
+    }
+    const details=detailKeys(slot);for(const row of details)if(open.has(row.key))row.detail.open=true;
+    const focus=focusMetric?[...(slot.querySelectorAll?.('[data-history-metric]')||[])].find(select=>select.closest('[data-history-source]')?.dataset.historySource===focusMetric):focusDetail?details.find(row=>row.key===focusDetail)?.detail.querySelector('summary'):focusRefresh?slot.querySelector?.('[data-history-refresh]'):null;
+    focus?.focus?.({preventScroll:true});
+  }
+  function expireSession(){
+    clearCache();cacheScope='';allowedRegions=new Set();seq++;regionData=null;renderedVersion=null;clearTimers();
+    const slot=document.querySelector('#analysis-output');if(slot)slot.innerHTML='<p class="collection-warning">로그인이 만료되었습니다. 다시 로그인해 주세요.</p>';
+    freshness('');if(onSessionExpired)onSessionExpired();
+  }
+  function readPending(id,month,request,force){
+    const key=cacheKey(id,month)+(force?':refresh':'');let pending=inFlight.get(key);
+    if(!pending){
+      let promise;try{promise=Promise.resolve(request(`/regions/${encodeURIComponent(id)}/analysis?month=${encodeURIComponent(month)}`,undefined,{refresh:force}));}catch(error){promise=Promise.reject(error);}
+      pending={promise,regionKey:id};inFlight.set(key,pending);
+      const cleanup=()=>{if(inFlight.get(key)===pending)inFlight.delete(key);};promise.then(cleanup,cleanup);
+    }
+    return pending.promise;
+  }
   function regionSelection(s,selectedRegion=null,selectedOwnId=null) {
     const regions=Array.isArray(s.regions)?s.regions:[];
     if(selectedRegion!==null&&selectedRegion!==undefined)return regions.some(r=>r.id===selectedRegion)?{id:selectedRegion}:{id:'',message:'등록한 지역의 자료를 찾을 수 없습니다. 분석 지역을 다시 선택해 주세요.'};
@@ -25,7 +120,7 @@
     const own=s.customer.relations.filter(r=>r.kind==='own'&&['active','pending'].includes(r.status)).map(r=>s.companies.find(c=>c.companyId===r.companyId)).filter(Boolean);
     const choices=mode==='regions'?s.regions:own;
     const selection=mode==='regions'?regionSelection(s,selectedRegion,selectedOwnId):null;
-    return `<section class="card analysis-intro"><span class="eyebrow">${mode==='regions'?'REGIONAL CONTEXT':'SITUATION → NEXT ACTION'}</span><h2>${mode==='regions'?'지역의 12개월 흐름':'현재 상황과 다음 행동'}</h2><p class="muted">${mode==='regions'?'등록한 관심지역과 매장 소재지의 방문·체류·소비·검색 관심 변화를 확인합니다.':'내 매장·등록 경쟁업체·지역 배경을 함께 확인합니다. 저장 자료로 보는 현재 상황 브리핑입니다.'}</p><form id="analysis-form" data-analysis-form><div class="form-grid"><label class="field"><span>${mode==='regions'?'분석 지역':'기준 내 매장'}</span><select name="${mode==='regions'?'regionKey':'ownId'}" ${!choices.length?'disabled':''}>${selection&&!selection.id?'<option value="" selected disabled>지역 연결 확인 필요</option>':''}${choices.map(c=>`<option value="${esc(c.id||c.companyId)}"${selection?.id===(c.id||c.companyId)?' selected':''}>${esc(c.label||c.name)}</option>`).join('')||'<option>등록 대기</option>'}</select></label>${mode==='regions'?`<label class="field"><span>마지막 기준월</span><input name="month" type="month" min="2017-12" max="${prior()}" value="${prior()}" required></label>`:'<p class="muted">예약 전망은 오늘 포함 향후 30일, 지역 배경은 최근 12개월 흐름과 각 통계의 실제 공표기간을 사용합니다.</p>'}</div><button class="button" type="submit" ${mode==='regions'&&!selection.id?'disabled':''}>저장 자료 확인</button></form></section><section id="analysis-output" aria-live="polite"><p class="empty-note">${esc(selection?.message||'저장 자료를 불러오고 있습니다.')}</p></section>`;
+    return `<section class="card analysis-intro"><span class="eyebrow">${mode==='regions'?'REGIONAL CONTEXT':'SITUATION → NEXT ACTION'}</span><h2>${mode==='regions'?'지역의 12개월 흐름':'현재 상황과 다음 행동'}</h2><p class="muted">${mode==='regions'?'등록한 관심지역과 매장 소재지의 방문·체류·소비·검색 관심 변화를 확인합니다.':'내 매장·등록 경쟁업체·지역 배경을 함께 확인합니다. 저장 자료로 보는 현재 상황 브리핑입니다.'}</p><form id="analysis-form" data-analysis-form><div class="form-grid"><label class="field"><span>${mode==='regions'?'분석 지역':'기준 내 매장'}</span><select name="${mode==='regions'?'regionKey':'ownId'}" ${!choices.length?'disabled':''}>${selection&&!selection.id?'<option value="" selected disabled>지역 연결 확인 필요</option>':''}${choices.map(c=>`<option value="${esc(c.id||c.companyId)}"${selection?.id===(c.id||c.companyId)?' selected':''}>${esc(c.label||c.name)}</option>`).join('')||'<option>등록 대기</option>'}</select></label>${mode==='regions'?`<label class="field"><span>마지막 기준월</span><input name="month" type="month" min="2017-12" max="${prior()}" value="${prior()}" required></label>`:'<p class="muted">예약 전망은 오늘 포함 향후 30일, 지역 배경은 최근 12개월 흐름과 각 통계의 실제 공표기간을 사용합니다.</p>'}</div><button class="button" type="submit" ${mode==='regions'&&!selection.id?'disabled':''}>저장 자료 확인</button></form></section><p id="analysis-freshness" class="muted" role="status" aria-live="polite" hidden></p><section id="analysis-output" aria-live="polite"><p class="empty-note">${esc(selection?.message||'저장 자료를 불러오고 있습니다.')}</p></section>`;
   }
   const status=s=>({ready:'저장 자료',complete:'정상 자료',partial:'일부 자료',missing:'자료 없음',publication_pending:'공표 대기',not_configured:'연결 준비',error:'확인 필요',pending:'대기'}[s]||'상태 확인');
   function sourceCard(s) {
@@ -52,7 +147,9 @@
   const jobError=code=>({MISSING_KEY:'인증키 설정 필요',AUTH_ERROR:'이용 권한 확인 필요',QUOTA_EXCEEDED:'제공기관 요청 한도 도달',TIMEOUT:'응답 시간 초과',NETWORK_ERROR:'연결 실패',REGIONAL_SOURCE_BUSY:'다른 지역 자료 갱신 중',MISSING_VALUES:'일부 월 자료 없음',NO_DATA:'제공 자료 없음',PUBLICATION_PENDING:'아직 공표되지 않음',CACHE_WRITE_ERROR:'자료 저장 실패'}[code]||'자료 연결 확인 필요');
   async function checkPreparation(id,params,start=false,wasActive=false) {
     const slot=document.querySelector('#history-progress'),button=document.querySelector('[data-history-refresh]');
-    if(!slot||id!==seq)return;
+    const scope=cacheScope,generation=cacheGeneration,regionEpoch=epoch(params.regionKey);
+    const current=()=>id===seq&&slot?.isConnected&&scope===cacheScope&&generation===cacheGeneration&&regionEpoch===epoch(params.regionKey)&&requestAllowed(params.regionKey);
+    if(!slot||!current())return;
     if(pollTimer!==null){clearTimeout(pollTimer);pollTimer=null;}
     if(button)button.disabled=true;
     if(start)slot.textContent='24개월 지역 자료 갱신을 요청하고 있습니다.';
@@ -60,42 +157,93 @@
     try {
       const base=`/regions/${encodeURIComponent(params.regionKey)}/preparation`;
       const result=await api(start?base:`${base}?month=${encodeURIComponent(params.month)}`,start?{month:params.month}:undefined);
-      if(id!==seq||!slot.isConnected)return;
+      if(!current())return;
       if(result.regionKey!==params.regionKey||result.month!==params.month)throw Error('선택한 지역·기간과 응답이 다릅니다.');
       const job=result.job;active=['queued','running'].includes(job?.status);
       slot.innerHTML=job?`<p>${job.reused?'방금 준비한 결과를 사용합니다. ':''}${jobStatus(job.status)} · ${job.progress.completed}/${job.progress.total} 항목</p><ul>${job.steps.map(s=>`<li>${esc(s.label)} · ${jobStatus(s.status)}${s.observedMonths!==null&&s.observedMonths!==undefined?` (${s.observedMonths}/${s.expectedMonths}개월)`:''}${s.errorCode?` · ${esc(jobError(s.errorCode))}`:''}</li>`).join('')}</ul>${active?'<p>화면을 이동해도 서버에서 준비를 계속합니다.</p>':'<p>같은 지역·기간은 공유하며 1시간 안의 반복 요청은 저장 결과를 사용합니다.</p>'}`:'';
       if(active)pollTimer=setTimeout(()=>{pollTimer=null;void checkPreparation(id,params,false,true);},3000);
-      else if(start||wasActive)await load();
-    } catch(e) {if(id===seq&&slot.isConnected)slot.textContent=e.message;}
-    finally {if(id===seq&&button?.isConnected)button.disabled=active;}
+      else if(start||wasActive){invalidate(params.regionKey);await load({force:true});}
+    } catch(e) {
+      if(current()){
+        if(e.status===401)expireSession();
+        else if([403,404].includes(e.status)){
+          invalidate(params.regionKey);deniedRegions.add(params.regionKey);regionData=null;renderedVersion=null;
+          document.querySelector('#analysis-output').innerHTML='<p class="collection-warning">지역 등록과 조회 권한을 다시 확인해 주세요.</p>';freshness('');
+        }else slot.textContent=e.message;
+      }
+    }
+    finally {if(current()&&button?.isConnected)button.disabled=active;}
   }
   document.addEventListener('click',e=>{
     const button=e.target.closest?.('[data-history-refresh]');if(!button||button.disabled||!regionData)return;
     e.preventDefault();e.stopImmediatePropagation();
+    if(refreshTimer!==null){clearTimeout(refreshTimer);refreshTimer=null;}
     const params=Object.fromEntries(new FormData(document.querySelector('#analysis-form')));
     void checkPreparation(seq,params,true);
   });
-  async function load() {
+  async function load({force=false,backgroundChecks=0}={}) {
     const id=++seq,slot=document.querySelector('#analysis-output'),form=document.querySelector('#analysis-form');if(!slot||!form)return;
-    const params=Object.fromEntries(new FormData(form));if(kind==='regions'&&!params.regionKey)return;
-    const button=form.querySelector('button');button.disabled=true;slot.innerHTML='<p class="empty-note" role="status">'+(kind==='reports'?'업체별 보존 이력을 계산하고 있습니다. 자료량에 따라 최대 3분 정도 걸릴 수 있습니다.':'저장 자료를 연결하고 있습니다.')+'</p>';
-    try {const data=await api(kind==='regions'?`/regions/${encodeURIComponent(params.regionKey)}/analysis?month=${encodeURIComponent(params.month)}`:`/reports/briefing${params.ownId?'?ownId='+encodeURIComponent(params.ownId):''}`);if(id===seq&&slot.isConnected){regionData=kind==='regions'?data:null;slot.innerHTML=kind==='regions'?regionView(data):reportView(data);if(kind==='regions'&&data.refreshAvailable)void checkPreparation(id,params);}}
-    catch(e){if(id===seq&&slot.isConnected)slot.innerHTML=`<p class="collection-warning">${esc(e.message)}</p>`;}
+    const mode=kind,request=api,params=Object.fromEntries(new FormData(form));
+    if(refreshTimer!==null){clearTimeout(refreshTimer);refreshTimer=null;}
+    if(mode==='regions'&&(!params.regionKey||!validMonth(params.month)||!requestAllowed(params.regionKey))){
+      regionData=null;renderedVersion=null;freshness('');form.querySelector('button').disabled=true;
+      slot.innerHTML='<p class="collection-warning">지역과 기준월의 조회 권한을 다시 확인해 주세요.</p>';return;
+    }
+    const scope=cacheScope,generation=cacheGeneration,regionEpoch=epoch(params.regionKey);
+    const authorized=()=>scope===cacheScope&&generation===cacheGeneration&&regionEpoch===epoch(params.regionKey)&&(mode!=='regions'||requestAllowed(params.regionKey));
+    const visible=()=>id===seq&&slot.isConnected&&authorized();
+    const button=form.querySelector('button'),entry=mode==='regions'?(cached(params.regionKey,params.month)||(force&&regionData?.region?.id===params.regionKey&&regionData.month===params.month?{data:regionData,version:version(regionData)}:null)):null;
+    button.disabled=true;
+    if(entry){
+      regionData=entry.data;
+      if(renderedVersion!==entry.version){drawRegion(slot,entry.data);renderedVersion=entry.version;}
+      freshness('이전 조회 자료 표시 · 최신 자료 확인 중','checking');
+    }else{
+      regionData=null;renderedVersion=null;freshness('');
+      slot.innerHTML='<p class="empty-note" role="status">'+(mode==='reports'?'업체별 보존 이력을 계산하고 있습니다. 자료량에 따라 최대 3분 정도 걸릴 수 있습니다.':'저장 자료를 연결하고 있습니다.')+'</p>';
+    }
+    try {
+      const data=await (mode==='regions'?readPending(params.regionKey,params.month,request,force||deniedRegions.has(params.regionKey)):request(`/reports/briefing${params.ownId?'?ownId='+encodeURIComponent(params.ownId):''}`));
+      if(!authorized())return;
+      const fresh=mode==='regions'?remember(params.regionKey,params.month,data):null;
+      if(!visible())return;
+      regionData=mode==='regions'?fresh.data:null;
+      if(mode==='regions'){
+        if(renderedVersion!==fresh.version){drawRegion(slot,fresh.data,Boolean(entry));renderedVersion=fresh.version;}
+        const info=data.responseCache||{};
+        const checking=info.refreshing&&backgroundChecks<4;
+        freshness(info.refreshFailed?'최신 자료 확인 지연 · 이전 조회 자료를 표시합니다.':checking?'저장 자료 표시 · 최신 자료 확인 중':info.refreshing?'최신 확인에 시간이 걸려 이전 조회 자료를 표시합니다.':'',checking?'checking':'notice');
+        if(checking&&typeof setTimeout==='function')refreshTimer=setTimeout(()=>{refreshTimer=null;if(visible())void load({backgroundChecks:backgroundChecks+1});},[2000,4000,8000,16000][backgroundChecks]);
+        if(data.refreshAvailable)void checkPreparation(id,params);
+      }else{slot.innerHTML=reportView(data);renderedVersion=null;}
+    }
+    catch(e){
+      if(!authorized())return;
+      if(e.status===401){expireSession();return;}
+      if(mode==='regions'&&[403,404].includes(e.status)){
+        invalidate(params.regionKey);deniedRegions.add(params.regionKey);
+        if(id===seq&&slot.isConnected){regionData=null;renderedVersion=null;slot.innerHTML='<p class="collection-warning">지역 등록과 조회 권한을 다시 확인해 주세요.</p>';freshness('');}
+      }else if(visible()){
+        if(entry)freshness('최신 자료 확인 지연 · 이전 조회 자료를 표시합니다.');
+        else slot.innerHTML=`<p class="collection-warning">${esc(e.message)}</p>`;
+      }
+    }
     finally{if(id===seq&&button.isConnected)button.disabled=false;}
   }
   document.addEventListener('submit',e=>{if(e.target.id!=='analysis-form')return;e.preventDefault();e.stopImmediatePropagation();load();});
   document.addEventListener('change',e=>{if(e.target.matches?.('[data-history-metric]')&&regionData){const card=e.target.closest('[data-history-source]'),s=regionData.sources.find(s=>s.key===card.dataset.historySource);if(s)card.outerHTML=window.InsightRegionHistory.source(s,regionData.window,e.target.value);return;}if(e.target.closest?.('#analysis-form'))load();});
-  window.InsightAnalysis={panel,regionView,reportView,mount(mode,request,s,selectedRegion=null,selectedOwnId=null){kind=mode;api=request;
+  window.InsightAnalysis={panel,regionView,reportView,configureCache,restore,clearCache,invalidate,mount(mode,request,s,selectedRegion=null,selectedOwnId=null){kind=mode;api=request;renderedVersion=null;
     if(mode==='regions'){
+      configureCache({scope:cacheScope,regionKeys:(s.regions||[]).map(row=>row.id),onSessionExpired});
       const selection=regionSelection(s,selectedRegion,selectedOwnId),select=document.querySelector('#analysis-form select');
       if(select)select.value=selection.id;
       if(!selection.id){
-        seq++;regionData=null;if(pollTimer!==null){clearTimeout(pollTimer);pollTimer=null;}
+        seq++;regionData=null;clearTimers();
         const slot=document.querySelector('#analysis-output'),button=document.querySelector('#analysis-form')?.querySelector('button');
         if(slot)slot.innerHTML=`<p class="collection-warning">${esc(selection.message)}</p>`;
         if(button)button.disabled=true;
         return;
       }
     }
-    load();},stop(){seq++;regionData=null;if(pollTimer!==null){clearTimeout(pollTimer);pollTimer=null;}}};
+    load();},stop(){seq++;regionData=null;renderedVersion=null;clearTimers();}};
 })();
