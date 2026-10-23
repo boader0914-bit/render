@@ -11,7 +11,7 @@ function persisted(value=10,checkedAt='2026-10-22T22:00:00Z'){
 function harness({history=false}={}){
   let now=Date.parse('2026-10-23T00:00:00Z'),html='',writes=0,active=null,cards=[],nextTimer=0,preparationDom=false;
   const handlers={},calls=[],timers=new Map(),window={},notice={textContent:'',hidden:true,dataset:{}},button={disabled:false,isConnected:true},select={value:'a'};
-  const form={params:{month:'2026-09'},querySelector:()=>button};
+  const form={id:'analysis-form',params:{month:'2026-09'},querySelector:()=>button};
   // A small DOM contract for the real region-history renderer: replacing a
   // region destroys its controls, and the view must restore their user state.
   const parseCard=(key,body)=>{
@@ -41,6 +41,7 @@ function harness({history=false}={}){
     mount(id='a',month='2026-09'){slot.isConnected=true;button.isConnected=true;slot.innerHTML='new page';form.params.month=month;view.mount('regions',request,state(),id);},
     leave(){view.stop();slot.isConnected=false;},
     change(id,month=form.params.month){select.value=id;form.params.month=month;handlers.change({target:{closest:()=>true}});},
+    submit(){const event={target:form,prevented:false,stopped:false,preventDefault(){this.prevented=true;},stopImmediatePropagation(){this.stopped=true;}};handlers.submit(event);return event;},
     advance(ms){now+=ms;},
     async resolve(index,value){calls[index].resolve(value);await flush();},
     async reject(index,status,message='조회 실패'){calls[index].reject(Object.assign(Error(message),{status}));await flush();},
@@ -124,6 +125,12 @@ test('expiration and the 24-entry bound prevent indefinite private-result retent
 test('a background server refresh is checked with bounded GETs and publishes changed data while staying on the page',async()=>{
   const h=harness();h.mount();const pending=data();pending.responseCache={refreshing:true};await h.resolve(0,pending);assert.equal(h.timers.size,1);assert.match(h.notice.textContent,/최신 자료 확인 중/);
   await h.tick();assert.match(h.html(),/방문자<\/th><td>10/);await h.resolve(1,data('a','2026-09',12));assert.match(h.html(),/방문자<\/th><td>12/);assert.equal(h.timers.size,0);assert.ok(h.calls.every(call=>!call.payload));
+});
+
+test('region form submission, mount, selection and polling retain ordinary saved-data GETs without starting preparation',async()=>{
+  const h=harness();h.mount();const pending=data();pending.responseCache={refreshing:true};await h.resolve(0,pending);
+  await h.tick();await h.resolve(1,data());const event=h.submit();assert.equal(event.prevented,true);assert.equal(event.stopped,true);await h.resolve(2,data());
+  h.change('b');await h.resolve(3,data('b'));assert.equal(h.calls.length,4);assert.ok(h.calls.every(call=>call.path.startsWith('/regions/')&&call.path.includes('/analysis?')&&call.payload===undefined&&call.options.refresh===false));
 });
 
 test('a repeated server-cache reply cannot extend the original 30-minute retention period',async()=>{

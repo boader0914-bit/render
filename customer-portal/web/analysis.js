@@ -396,7 +396,7 @@
     }
     finally{if(id===seq&&button.isConnected)button.disabled=false;}
   }
-  document.addEventListener('submit',e=>{if(e.target.id!=='analysis-form')return;e.preventDefault();e.stopImmediatePropagation();load();});
+  document.addEventListener('submit',e=>{if(e.target.id!=='analysis-form')return;e.preventDefault();e.stopImmediatePropagation();load({force:kind==='reports'});});
   document.addEventListener('change',e=>{if(e.target.matches?.('[data-history-metric]')&&regionData){const card=e.target.closest('[data-history-source]'),s=regionData.sources.find(s=>s.key===card.dataset.historySource);if(s)card.outerHTML=window.InsightRegionHistory.source(s,regionData.window,e.target.value);return;}if(e.target.closest?.('#analysis-form'))load();});
   window.InsightAnalysis={panel,regionView,reportView,configureCache,configureReports,restore,restoreReports,clearCache,invalidate,mount(mode,request,s,selectedRegion=null,selectedOwnId=null){kind=mode;api=request;renderedVersion=null;
     if(mode==='reports'){

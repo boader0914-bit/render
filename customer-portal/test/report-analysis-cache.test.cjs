@@ -13,7 +13,7 @@ function failedPreview(ownId='own',value=10,at=base){const data=preview(ownId,va
 function harness(){
  let now=base,html='',writes=0,nextTimer=0,expired=0,scope='customer:one',permission='revision1',ownIds=['own','other'],companyIds=['own','other','competitor'],regionKeys=['region'];
  const window={},calls=[],handlers={},timers=new Map(),notice={textContent:'',hidden:true,dataset:{}},button={disabled:false,isConnected:true},select={value:'own'};
- const form={querySelector:()=>button},slot={isConnected:true};Object.defineProperty(slot,'innerHTML',{get:()=>html,set(value){html=value;writes++;}});
+ const form={id:'analysis-form',querySelector:()=>button},slot={isConnected:true};Object.defineProperty(slot,'innerHTML',{get:()=>html,set(value){html=value;writes++;}});
  const document={addEventListener:(name,fn)=>handlers[name]=fn,querySelector:s=>({'#analysis-output':slot,'#analysis-form':form,'#analysis-form select':select,'#analysis-freshness':notice}[s]||null)};
  class Clock extends Date{constructor(...args){super(...(args.length?args:[now]));}static now(){return now;}}
  vm.runInContext(source,vm.createContext({window,document,Date:Clock,FormData:class{constructor(){return [['ownId',select.value]];}},setTimeout(fn,ms){timers.set(++nextTimer,{fn,ms});return nextTimer;},clearTimeout(id){timers.delete(id);}}));
@@ -23,6 +23,7 @@ function harness(){
  return {view,calls,notice,slot,button,select,handlers,timers,configure,html:()=>html,writes:()=>writes,expired:()=>expired,
  mount(ownId='own'){slot.isConnected=true;button.isConnected=true;slot.innerHTML='new page';view.mount('reports',request,{customer:{relations:[]},companies:[],regions:[]},null,ownId);},
  leave(){view.stop();slot.isConnected=false;},change(ownId){select.value=ownId;handlers.change({target:{closest:()=>true}});},advance(ms){now+=ms;},
+  submit(){const event={target:form,prevented:false,stopped:false,preventDefault(){this.prevented=true;},stopImmediatePropagation(){this.stopped=true;}};handlers.submit(event);return event;},
  restore(data=saved(),ownId='own',restoredScope=scope){view.restoreReports([{ownId,period:data.period,data}],restoredScope);},
  async resolve(index,data){calls[index].resolve(data);await flush();},async reject(index,status,message='조회 실패'){calls[index].reject(Object.assign(Error(message),{status}));await flush();},
  async tick(){const [id,timer]=timers.entries().next().value||[];if(!timer)return;timers.delete(id);timer.fn();await flush();}
@@ -53,6 +54,13 @@ test('own-company selection is isolated and late responses cannot overwrite the 
 
 test('a pending report GET is shared across route departure and return and never starts collection',async()=>{
  const h=harness();h.mount();h.leave();h.mount();assert.equal(h.calls.length,1);await h.resolve(0,report());assert.match(h.html(),/내 매장 own/);assert.ok(h.calls.every(call=>call.path.startsWith('/reports/briefing')&&call.payload===undefined));
+});
+
+test('report mount, selection changes and automatic checks keep ordinary GET refresh options',async()=>{
+ const h=harness();h.mount();assert.equal(h.calls[0].options.refresh,false);await h.resolve(0,report());
+ h.change('other');assert.equal(h.calls[1].options.refresh,false);await h.resolve(1,preview('other'));
+ await h.tick();assert.equal(h.calls[2].options.refresh,false);await h.resolve(2,report('other',18));
+ assert.match(h.html(),/18실/);assert.ok(h.calls.every(call=>call.payload===undefined&&call.options.refresh===false));
 });
 
 test('transient refresh failure retains the last good report, unknown revenue and genuine zero counts',async()=>{
@@ -250,10 +258,18 @@ test('failed preview core and metadata must agree and only controlled error mess
  for(const data of bad){const h=harness();h.restore(data);h.mount();assert.match(h.html(),/계산하고/);await h.resolve(0,data);assert.doesNotMatch(h.html(),/내 매장 own의 저장 자료|PRIVATE provider payload/);assert.equal(h.timers.size,0);}
 });
 
-test('an explicit calculation retry replaces both failed core and error metadata before polling resumes',async()=>{
- const h=harness();h.mount();await h.resolve(0,failedPreview());assert.equal(h.timers.size,0);h.leave();h.mount();await h.resolve(1,preview());
+test('submitting the report form retries a failed preview while retaining saved values until automatic completion',async()=>{
+ const h=harness();h.mount();await h.resolve(0,failedPreview());assert.equal(h.timers.size,0);
+ const event=h.submit();assert.equal(event.prevented,true);assert.equal(event.stopped,true);assert.equal(h.calls[1].options.refresh,true);assert.equal(h.calls[1].payload,undefined);
+ assert.match(h.html(),/10실/);assert.match(h.html(),/내 매장 own의 저장 자료/);assert.equal(h.button.disabled,true);await h.resolve(1,preview());
  assert.match(h.html(),/저장 자료 미리보기 · 계산 확인 중/);assert.doesNotMatch(h.html(),/계산 확인 필요/);assert.match(h.notice.textContent,/리포트 계산 중/);assert.doesNotMatch(h.notice.textContent,/REPORT_CALCULATION_TIMEOUT/);assert.equal(h.timers.size,1);
- await h.tick();await h.resolve(2,report('own',25));assert.match(h.html(),/25실/);assert.match(h.html(),/다음 판단/);assert.equal(h.timers.size,0);
+ await h.tick();assert.equal(h.calls[2].options.refresh,false);await h.resolve(2,report('own',25));assert.match(h.html(),/25실/);assert.match(h.html(),/다음 판단/);assert.equal(h.notice.hidden,true);assert.equal(h.timers.size,0);
+});
+
+test('consecutive report form submissions share one pending explicit retry GET',async()=>{
+ const h=harness();h.mount();await h.resolve(0,failedPreview());h.submit();h.submit();
+ assert.equal(h.calls.length,2);assert.equal(h.calls[1].options.refresh,true);assert.match(h.html(),/10실/);await h.resolve(1,preview());
+ assert.equal(h.timers.size,1);await h.tick();assert.equal(h.calls.length,3);assert.equal(h.calls[2].options.refresh,false);await h.resolve(2,report('own',25));assert.match(h.html(),/25실/);assert.equal(h.notice.hidden,true);
 });
 
 test('an HTTP failure after a preview preserves the displayed saved result and stops automatic polling',async()=>{
