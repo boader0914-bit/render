@@ -5,6 +5,9 @@ const historySource=fs.readFileSync(require.resolve('../web/region-history.js'),
 const flush=async()=>{await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));};
 function data(id='a',month='2026-09',value=10){return {region:{id,label:'지역 '+id},month,availableSources:1,sources:[{key:'visitors',label:'방문',provider:'공공자료',status:'ready',rows:[{label:'방문자',value,unit:'명'},{label:'미확인 자료',value:null,unit:'명'}]}],warnings:[]};}
 function historical(value=10){return {...data('a','2026-09',value),window:{start:'2025-10',end:'2026-09'},sources:[{key:'visitors',label:'방문',provider:'공공자료',status:'ready',metrics:['first','second'].map(key=>({key,label:key,unit:'명',observedMonths:1,latest:{month:'2026-09',value}})),series:[{month:'2026-09',status:'observed',rows:[{key:'first',value},{key:'second',value:value+1}]}]}],refreshAvailable:false};}
+function persisted(value=10,checkedAt='2026-10-22T22:00:00Z'){
+  return {...data('a','2026-09',value),responseCache:{state:'cached',checkedAt,persisted:true,validUntil:new Date(Date.parse(checkedAt)+7*24*60*60*1000).toISOString(),revalidationRequired:true,refreshing:false,refreshFailed:false}};
+}
 function harness({history=false}={}){
   let now=Date.parse('2026-10-23T00:00:00Z'),html='',writes=0,active=null,cards=[],nextTimer=0,preparationDom=false;
   const handlers={},calls=[],timers=new Map(),window={},notice={textContent:'',hidden:true,dataset:{}},button={disabled:false,isConnected:true},select={value:'a'};
@@ -56,7 +59,7 @@ test('returning to the same authorized region and exact month displays its resul
 test('an unchanged refresh keeps the same chart, chosen metric, open details and focus',async()=>{
   const h=harness({history:true});h.mount();await h.resolve(0,historical());h.leave();h.mount();
   const card=h.cards()[0];card.metric.value='second';card.detail.open=true;h.focusMetric();const writes=h.writes();
-  const same=historical();same.generatedAt='later';same.responseCache={checkedAt:new Date().toISOString(),state:'cached'};await h.resolve(1,same);
+  const same=historical();same.generatedAt='later';same.responseCache={checkedAt:'2026-10-23T00:00:00Z',state:'cached'};await h.resolve(1,same);
   assert.equal(h.writes(),writes);assert.equal(h.cards()[0],card);assert.equal(card.metric.value,'second');assert.equal(card.detail.open,true);assert.equal(h.active(),card.metric);
 });
 
@@ -159,4 +162,65 @@ test('explicit preparation completion bypasses the saved result without an autom
   await h.resolve(1,{regionKey:'a',month:'2026-09',job:{status:'ready',progress:{completed:6,total:6},steps:[]}});
   assert.equal(h.calls.length,3);assert.equal(h.calls[2].options.refresh,true);assert.equal(h.calls[2].payload,undefined);
   await h.resolve(2,data('a','2026-09',45));assert.match(h.html(),/방문자<\/th><td>45/);
+});
+
+test('a two-hour-old persisted bootstrap result appears before the first guarded analysis GET completes',async()=>{
+  const h=harness(),saved=persisted();h.view.restore([{regionKey:'a',month:'2026-09',data:saved}],'customer-one');h.mount();
+  assert.match(h.html(),/방문자<\/th><td>10/);assert.equal(h.calls.length,1);assert.equal(h.calls[0].payload,undefined);
+  assert.match(h.notice.textContent,/이전 저장 자료 표시 · 최신 자료 확인 중 · 마지막 확인/);assert.doesNotMatch(h.notice.textContent,/확인 전/);
+  await h.resolve(0,{...data('a','2026-09',20),responseCache:{state:'fresh',checkedAt:'2026-10-23T00:00:00Z'}});
+  assert.match(h.html(),/방문자<\/th><td>20/);assert.equal(h.notice.hidden,true);assert.equal(h.timers.size,0);
+});
+
+test('repeated persisted replies preserve the original checked date and cannot extend the fixed seven-day bound',async()=>{
+  const h=harness(),saved=persisted();h.view.restore([{regionKey:'a',month:'2026-09',data:saved}],'customer-one');h.mount();
+  const originalNotice=h.notice.textContent;await h.resolve(0,saved);assert.equal(h.notice.textContent,originalNotice);
+  h.advance(60*60*1000);h.leave();h.mount();await h.resolve(1,saved);assert.equal(h.notice.textContent,originalNotice);
+  h.advance(6*24*60*60*1000+21*60*60*1000);h.leave();h.mount();assert.match(h.html(),/연결하고/);
+  await h.resolve(2,saved);assert.doesNotMatch(h.html(),/방문자<\/th><td>10/);assert.match(h.html(),/유효기간/);
+});
+
+test('fresh data replaces persisted results and returns to the ordinary thirty-minute in-page lifetime',async()=>{
+  const h=harness(),saved=persisted();h.view.restore([{regionKey:'a',month:'2026-09',data:saved}],'customer-one');h.mount();
+  await h.resolve(0,{...data('a','2026-09',30),responseCache:{state:'fresh',checkedAt:'2026-10-23T00:00:00Z',refreshing:false}});
+  h.advance(29*60*1000);h.leave();h.mount();assert.match(h.html(),/방문자<\/th><td>30/);
+  h.advance(61*1000);h.leave();h.mount();assert.match(h.html(),/연결하고/);
+});
+
+test('a persisted result expiring while verification is pending is not retained after verification fails',async()=>{
+  const h=harness(),saved=persisted(10,'2026-10-16T00:00:01Z');h.view.restore([{regionKey:'a',month:'2026-09',data:saved}],'customer-one');h.mount();
+  assert.match(h.html(),/방문자<\/th><td>10/);h.advance(1000);await h.reject(0,504);assert.doesNotMatch(h.html(),/방문자<\/th><td>10/);assert.match(h.html(),/조회 실패/);
+});
+
+for(const [label,metadata] of [
+  ['missing expiry',{validUntil:undefined}],
+  ['malformed expiry',{validUntil:'tomorrow'}],
+  ['extended expiry',{validUntil:'2026-10-29T22:00:00.001Z'}],
+  ['expired expiry',{validUntil:'2026-10-23T00:00:00Z'}],
+  ['future check',{checkedAt:'2026-10-23T00:00:00.001Z'}],
+  ['invalid calendar date',{checkedAt:'2026-09-31T22:00:00Z'}],
+  ['missing check',{checkedAt:undefined}],
+  ['false revalidation',{revalidationRequired:false}],
+  ['fresh state',{state:'fresh'}]
+])test(`persisted restoration rejects ${label} without displaying or renewing its saved data`,async()=>{
+  const h=harness(),saved=persisted();Object.assign(saved.responseCache,metadata);
+  h.view.restore([{regionKey:'a',month:'2026-09',data:saved}],'customer-one');h.mount();assert.match(h.html(),/연결하고/);
+  await h.resolve(0,saved);assert.doesNotMatch(h.html(),/방문자<\/th><td>10/);assert.equal(h.timers.size,0);
+});
+
+for(const status of [401,403,404])test(`${status} removes a persisted restored result and prevents later bootstrap resurrection`,async()=>{
+  const h=harness(),saved=persisted();h.view.restore([{regionKey:'a',month:'2026-09',data:saved}],'customer-one');h.mount();await h.reject(0,status);
+  assert.doesNotMatch(h.html(),/방문자<\/th><td>10/);h.view.restore([{regionKey:'a',month:'2026-09',data:saved}],'customer-one');h.leave();h.mount();
+  assert.doesNotMatch(h.html(),/방문자<\/th><td>10/);assert.equal(h.expired(),status===401?1:0);
+});
+
+test('persisted results needing revalidation receive bounded GET checks even when no refresh is pending yet',async()=>{
+  const h=harness(),saved=persisted();h.mount();await h.resolve(0,saved);
+  for(const delay of [2000,4000,8000,16000]){assert.equal([...h.timers.values()][0].ms,delay);await h.tick();await h.resolve(h.calls.length-1,saved);}
+  assert.equal(h.calls.length,5);assert.equal(h.timers.size,0);assert.match(h.notice.textContent,/최신 확인에 시간이 걸려.*마지막 확인/);assert.equal(h.notice.dataset.state,'notice');
+});
+
+test('failed persistent revalidation retains saved values with the original date and a delay notice',async()=>{
+  const h=harness(),saved=persisted();saved.responseCache.refreshFailed=true;h.mount();await h.resolve(0,saved);
+  assert.match(h.html(),/방문자<\/th><td>10/);assert.match(h.notice.textContent,/최신 자료 확인 지연.*마지막 확인/);assert.equal(h.timers.size,0);assert.equal(h.notice.dataset.state,'notice');
 });

@@ -10,7 +10,7 @@
   // Previously authorized regional results remain private to this signed-in page.
   // Reload restoration comes from the freshly authenticated /me response only.
   const cache=new Map(),inFlight=new Map(),regionEpochs=new Map(),deniedRegions=new Set();
-  const CACHE_LIMIT=24,CACHE_MAX_AGE=30*60*1000;
+  const CACHE_LIMIT=24,CACHE_MAX_AGE=30*60*1000,PERSISTED_MAX_AGE=7*24*60*60*1000;
   let cacheScope='default',allowedRegions=null,cacheGeneration=0,onSessionExpired=null;
   const epoch=id=>regionEpochs.get(id)||0;
   const requestAllowed=id=>Boolean(cacheScope)&&(!allowedRegions||allowedRegions.has(id));
@@ -19,6 +19,27 @@
   const clone=value=>JSON.parse(JSON.stringify(value));
   const version=data=>{const {responseCache,generatedAt,...result}=data;return JSON.stringify(result);};
   const validMonth=value=>typeof value==='string'&&/^20\d{2}-(0[1-9]|1[0-2])$/.test(value);
+  const timestamp=value=>{
+    if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value))return NaN;
+    const parsed=Date.parse(value),canonical=value.replace(/(?:\.(\d{1,3}))?Z$/,(_,fraction)=>'.'+(fraction||'').padEnd(3,'0')+'Z');
+    return Number.isFinite(parsed)&&new Date(parsed).toISOString()===canonical?parsed:NaN;
+  };
+  function lifetime(data,checkedAt){
+    const info=data?.responseCache||{},now=Date.now();
+    const stamp=Number.isFinite(checkedAt)?checkedAt:info.checkedAt===undefined?now:timestamp(info.checkedAt);
+    if(!Number.isFinite(stamp)||stamp>now)return null;
+    if(info.persisted===true){
+      // Only the authenticated server can opt an older snapshot into its fixed
+      // persisted lifetime. Reading it again must never advance checkedAt.
+      const until=timestamp(info.validUntil);
+      if(timestamp(info.checkedAt)!==stamp||info.state!=='cached'||info.revalidationRequired!==true||!Number.isFinite(until)||until<=now||until<=stamp||until>stamp+PERSISTED_MAX_AGE)return null;
+      return {checkedAt:stamp,validUntil:until,persisted:true};
+    }
+    return now-stamp<=CACHE_MAX_AGE?{checkedAt:stamp,validUntil:stamp+CACHE_MAX_AGE,persisted:false}:null;
+  }
+  function previousNotice(entry,message='이전 저장 자료 표시 · 최신 자료 확인 중'){
+    return entry?.persisted&&Date.now()-entry.checkedAt>CACHE_MAX_AGE?`${message} · 마지막 확인 ${time(new Date(entry.checkedAt).toISOString())}`:message;
+  }
   function clearTimers(){if(pollTimer!==null)clearTimeout(pollTimer);if(refreshTimer!==null)clearTimeout(refreshTimer);pollTimer=refreshTimer=null;}
   function clearCache(){cacheGeneration++;cache.clear();inFlight.clear();regionEpochs.clear();deniedRegions.clear();}
   function invalidate(id){
@@ -37,13 +58,14 @@
   function cached(id,month){
     if(!permitted(id))return null;
     const key=cacheKey(id,month),entry=cache.get(key);if(!entry)return null;
-    if(Date.now()-entry.checkedAt>CACHE_MAX_AGE){cache.delete(key);return null;}
+    if(Date.now()>=entry.validUntil){cache.delete(key);return null;}
     cache.delete(key);cache.set(key,entry);return entry;
   }
   function remember(id,month,data,checkedAt){
     if(!requestAllowed(id)||data?.region?.id!==id||data.month!==month)throw Error('선택한 지역·기간과 응답이 다릅니다.');
-    const saved=clone(data),stamp=Number.isFinite(checkedAt)?checkedAt:Date.parse(data.responseCache?.checkedAt);
-    const entry={regionKey:id,month,data:saved,version:version(saved),checkedAt:Number.isFinite(stamp)?Math.min(stamp,Date.now()):Date.now()};
+    const saved=clone(data),age=lifetime(saved,checkedAt);
+    if(!age)throw Error('저장 자료의 확인 시각과 유효기간을 다시 확인해 주세요.');
+    const entry={regionKey:id,month,data:saved,version:version(saved),...age};
     deniedRegions.delete(id);
     const key=cacheKey(id,month);cache.delete(key);cache.set(key,entry);
     while(cache.size>CACHE_LIMIT)cache.delete(cache.keys().next().value);
@@ -51,13 +73,13 @@
   }
   function restore(views,scope){
     if(!scope||scope!==cacheScope||!allowedRegions||!Array.isArray(views))return;
-    const now=Date.now(),rows=views.slice(0,CACHE_LIMIT*2).sort((a,b)=>Date.parse(b?.data?.responseCache?.checkedAt)-Date.parse(a?.data?.responseCache?.checkedAt));
+    const rows=views.slice(0,CACHE_LIMIT*2).sort((a,b)=>Date.parse(b?.data?.responseCache?.checkedAt)-Date.parse(a?.data?.responseCache?.checkedAt));
     for(const row of rows){
-      const id=row?.regionKey,month=row?.month,data=row?.data,at=Date.parse(data?.responseCache?.checkedAt);
-      if(!permitted(id)||!validMonth(month)||!Number.isFinite(at)||now-at>CACHE_MAX_AGE||at-now>60000||epoch(id)>0)continue;
+      const id=row?.regionKey,month=row?.month,data=row?.data,at=timestamp(data?.responseCache?.checkedAt);
+      if(!permitted(id)||!validMonth(month)||!Number.isFinite(at)||!lifetime(data,at)||epoch(id)>0)continue;
       if(data?.region?.id!==id||data.month!==month||!Array.isArray(data.sources)||cached(id,month))continue;
       if(cache.size>=CACHE_LIMIT)break;
-      try{remember(id,month,data,Math.min(at,now));}catch{}
+      try{remember(id,month,data,at);}catch{}
     }
   }
   function freshness(message,state='notice'){
@@ -192,12 +214,13 @@
     const scope=cacheScope,generation=cacheGeneration,regionEpoch=epoch(params.regionKey);
     const authorized=()=>scope===cacheScope&&generation===cacheGeneration&&regionEpoch===epoch(params.regionKey)&&(mode!=='regions'||requestAllowed(params.regionKey));
     const visible=()=>id===seq&&slot.isConnected&&authorized();
-    const button=form.querySelector('button'),entry=mode==='regions'?(cached(params.regionKey,params.month)||(force&&regionData?.region?.id===params.regionKey&&regionData.month===params.month?{data:regionData,version:version(regionData)}:null)):null;
+    const retainedAge=mode==='regions'&&force&&regionData?.region?.id===params.regionKey&&regionData.month===params.month?lifetime(regionData):null;
+    const button=form.querySelector('button'),entry=mode==='regions'?(cached(params.regionKey,params.month)||(retainedAge?{data:regionData,version:version(regionData),...retainedAge}:null)):null;
     button.disabled=true;
     if(entry){
       regionData=entry.data;
       if(renderedVersion!==entry.version){drawRegion(slot,entry.data);renderedVersion=entry.version;}
-      freshness('이전 조회 자료 표시 · 최신 자료 확인 중','checking');
+      freshness(previousNotice(entry,entry.persisted?'이전 저장 자료 표시 · 최신 자료 확인 중':'이전 조회 자료 표시 · 최신 자료 확인 중'),'checking');
     }else{
       regionData=null;renderedVersion=null;freshness('');
       slot.innerHTML='<p class="empty-note" role="status">'+(mode==='reports'?'업체별 보존 이력을 계산하고 있습니다. 자료량에 따라 최대 3분 정도 걸릴 수 있습니다.':'저장 자료를 연결하고 있습니다.')+'</p>';
@@ -211,8 +234,9 @@
       if(mode==='regions'){
         if(renderedVersion!==fresh.version){drawRegion(slot,fresh.data,Boolean(entry));renderedVersion=fresh.version;}
         const info=data.responseCache||{};
-        const checking=info.refreshing&&backgroundChecks<4;
-        freshness(info.refreshFailed?'최신 자료 확인 지연 · 이전 조회 자료를 표시합니다.':checking?'저장 자료 표시 · 최신 자료 확인 중':info.refreshing?'최신 확인에 시간이 걸려 이전 조회 자료를 표시합니다.':'',checking?'checking':'notice');
+        const pending=info.refreshing||info.revalidationRequired,checking=pending&&!info.refreshFailed&&backgroundChecks<4;
+        const message=info.refreshFailed?'최신 자료 확인 지연 · 이전 저장 자료를 표시합니다.':checking?(fresh.persisted?'이전 저장 자료 표시 · 최신 자료 확인 중':'저장 자료 표시 · 최신 자료 확인 중'):pending?'최신 확인에 시간이 걸려 이전 저장 자료를 표시합니다.':'';
+        freshness(message?previousNotice(fresh,message):'',checking?'checking':'notice');
         if(checking&&typeof setTimeout==='function')refreshTimer=setTimeout(()=>{refreshTimer=null;if(visible())void load({backgroundChecks:backgroundChecks+1});},[2000,4000,8000,16000][backgroundChecks]);
         if(data.refreshAvailable)void checkPreparation(id,params);
       }else{slot.innerHTML=reportView(data);renderedVersion=null;}
@@ -224,8 +248,8 @@
         invalidate(params.regionKey);deniedRegions.add(params.regionKey);
         if(id===seq&&slot.isConnected){regionData=null;renderedVersion=null;slot.innerHTML='<p class="collection-warning">지역 등록과 조회 권한을 다시 확인해 주세요.</p>';freshness('');}
       }else if(visible()){
-        if(entry)freshness('최신 자료 확인 지연 · 이전 조회 자료를 표시합니다.');
-        else slot.innerHTML=`<p class="collection-warning">${esc(e.message)}</p>`;
+        if(entry&&Date.now()<entry.validUntil)freshness(previousNotice(entry,'최신 자료 확인 지연 · 이전 조회 자료를 표시합니다.'));
+        else {regionData=null;renderedVersion=null;freshness('');slot.innerHTML=`<p class="collection-warning">${esc(e.message)}</p>`;}
       }
     }
     finally{if(id===seq&&button.isConnected)button.disabled=false;}

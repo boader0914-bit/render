@@ -3,7 +3,7 @@ const {createHash}=require('node:crypto');
 
 // A session-scoped copy of the public, saved regional projection. Permission
 // results are never cached: each read must obtain a fresh central identity.
-function createRegionReadCache({now=Date.now,ttlMs=30*60000,refreshMs=30000,maxEntries=64,maxBytes=8*1024*1024,maxPerScope=24,maxScopes=maxEntries*2,maxSnapshotBytes=512*1024}={}) {
+function createRegionReadCache({now=Date.now,ttlMs=30*60000,refreshMs=30000,maxEntries=64,maxBytes=8*1024*1024,maxPerScope=24,maxScopes=maxEntries*2,maxSnapshotBytes=512*1024,persistenceDirectory,namespace,persistentStore}={}) {
   const entries=new Map(),states=new Map(),pendingSources=new Map();let bytes=0;
   const clock=()=>Number(now());
   const clone=value=>value===undefined?undefined:JSON.parse(JSON.stringify(value));
@@ -16,7 +16,8 @@ function createRegionReadCache({now=Date.now,ttlMs=30*60000,refreshMs=30000,maxE
   const keyFor=(scope,regionKey,month)=>JSON.stringify([scope,regionKey,month]);
   const validMonth=value=>typeof value==='string'&&/^20\d{2}-(0[1-9]|1[0-2])$/.test(value);
   const validRegion=value=>typeof value==='string'&&/^[a-zA-Z0-9_-]+$/.test(value);
-  const meta=(entry,refreshing=false)=>({state:'cached',checkedAt:new Date(entry.checkedAt).toISOString(),refreshing,refreshFailed:entry.refreshFailed});
+  const meta=(entry,refreshing=false)=>({state:'cached',checkedAt:new Date(entry.checkedAt).toISOString(),refreshing,refreshFailed:entry.refreshFailed,
+    ...(entry.persisted?{persisted:true,validUntil:new Date(entry.validUntil).toISOString(),revalidationRequired:true}:{})});
   const primitive=value=>value===null||typeof value==='string'||typeof value==='boolean'||typeof value==='number'&&Number.isFinite(value);
   const pick=(value,keys)=>!value||typeof value!=='object'||Array.isArray(value)?null:Object.fromEntries(keys.filter(key=>Object.hasOwn(value,key)&&primitive(value[key])).map(key=>[key,value[key]]));
   const row=value=>pick(value,['key','label','value','unit','status']);
@@ -49,6 +50,15 @@ function createRegionReadCache({now=Date.now,ttlMs=30*60000,refreshMs=30000,maxE
     return data?.region?.id===regionKey&&data.networkAttempted===false&&Array.isArray(data.sources)&&
       (!data.window?.end||data.window.end===month)&&(Object.hasOwn(data,'month')?data.month===month:data.window?.end===month);
   }
+  const project=(core,{regionKey,month})=>{
+    if(!sourceScope(core,regionKey,month))return null;
+    return {...publicCore(core),month};
+  };
+  // This file's public projection and strict scope check are part of the disk
+  // schema. Public snapshots carry no identity, permission, session or scope.
+  const projectionVersion=hash([publicCore.toString(),source.toString(),sourceScope.toString(),pick.toString(),row.toString(),point.toString(),delta.toString(),rows.toString(),primitive.toString()]);
+  const disk=persistentStore||(persistenceDirectory&&namespace?require('./region-snapshot-store.cjs').createRegionSnapshotStore({directory:persistenceDirectory,namespace,version:projectionVersion,now,project}):null);
+  const ready=async()=>{if(disk)try{await disk.ready();}catch{/* A failed disk read cannot authorize a stale result or prevent a normal source read. */}};
   function identityFor(data,regionKey) {
     const customer=data?.customer;
     if(!customer||typeof customer.customerId!=='string'||!customer.customerId||customer.accountStatus!=='active'||!Array.isArray(data.regions))return null;
@@ -96,22 +106,33 @@ function createRegionReadCache({now=Date.now,ttlMs=30*60000,refreshMs=30000,maxE
     if(!state.identity){const promise=safeRead(readIdentity);state.identity=promise;promise.finally(()=>{if(state.identity===promise)state.identity=null;});}
     return state.identity;
   }
-  function remember(key,state,mark,regionKey,month,core) {
+  function remember(key,state,mark,regionKey,month,core,{checkedAt=clock(),validUntil=checkedAt+ttlMs,persisted=false}={}) {
     let serialized;try{serialized=JSON.stringify(core);}catch{return;}
     const size=Buffer.byteLength(serialized,'utf8');if(size>maxBytes||maxEntries<1||maxPerScope<1)return;
-    remove(key);const at=clock();
-    entries.set(key,{scope:state.scope,mark,regionKey,month,core:serialized,bytes:size,checkedAt:at,lastAttempt:at,refreshFailed:false});bytes+=size;
+    remove(key);
+    entries.set(key,{scope:state.scope,mark,regionKey,month,core:serialized,bytes:size,checkedAt,validUntil,persisted,needsRevalidation:persisted,lastAttempt:checkedAt,refreshFailed:false});bytes+=size;
     let scoped=[...entries].filter(([,entry])=>entry.scope===state.scope);
     while(scoped.length>maxPerScope){remove(scoped[0][0]);scoped.shift();}
     while(entries.size>maxEntries||bytes>maxBytes)remove(entries.keys().next().value);
   }
+  function hydrate(key,state,mark,regionKey,month,stored) {
+    if(!disk||entries.has(key)||state.revoked||state.denied.has(regionKey))return;
+    let saved=stored;
+    try{saved=saved||disk.get(regionKey,month);}catch{return;}
+    if(!saved||saved.regionKey!==regionKey||saved.month!==month||!Number.isFinite(saved.checkedAt)||!Number.isFinite(saved.validUntil)||saved.checkedAt>clock()||saved.validUntil<=clock()||saved.validUntil>saved.checkedAt+7*86400000)return;
+    let core;try{core=project(saved.core,{regionKey,month});}catch{return;}
+    if(!core)return;
+    remember(key,state,mark,regionKey,month,core,{checkedAt:saved.checkedAt,validUntil:saved.validUntil,persisted:true});
+  }
+  function expire() {for(const [key,entry] of entries)if(clock()<entry.checkedAt||clock()>=entry.validUntil)remove(key);}
   const compose=(entry,refreshing=false)=>({status:200,ok:true,data:{...JSON.parse(entry.core),responseCache:meta(entry,refreshing)}});
   function sourceRead({key,state,epoch,mark,binding,regionKey,month,readSource}) {
     const former=pendingSources.get(key);
     if(former&&former.state===state&&former.epoch===epoch&&former.mark===mark&&former.binding===binding)return former.promise;
-    const entry=entries.get(key);if(entry)entry.lastAttempt=clock();
+    const entry=entries.get(key);if(entry){entry.lastAttempt=clock();entry.needsRevalidation=false;}
+    let ticket;try{ticket=disk?.begin(regionKey,month);}catch{}
     const pending={scope:state.scope,state,epoch,mark,binding,promise:null};
-    pending.promise=safeRead(readSource).then(reply=>{
+    pending.promise=safeRead(readSource).then(async reply=>{
       if(!current(state,epoch,key,mark,binding))return invalidated();
       if(!reply.ok){
         if(reply.status===401)revoke(state,reply);
@@ -121,8 +142,11 @@ function createRegionReadCache({now=Date.now,ttlMs=30*60000,refreshMs=30000,maxE
       }
       if(!sourceScope(reply.data,regionKey,month)){const prior=entries.get(key);if(prior)prior.refreshFailed=true;return unavailable();}
       let core;try{core=publicCore(reply.data);core.month=month;}catch{return unavailable();}
-      state.revoked=null;state.denied.delete(regionKey);remember(key,state,mark,regionKey,month,core);
-      return {...reply,data:core};
+      const checkedAt=clock();
+      if(disk)try{await disk.put({regionKey,month,checkedAt,core,ticket});}catch{/* Preserve successful source reads if the optional derived store is unavailable. */}
+      if(!current(state,epoch,key,mark,binding))return invalidated();
+      state.revoked=null;state.denied.delete(regionKey);remember(key,state,mark,regionKey,month,core,{checkedAt});
+      return {...reply,data:core,checkedAt};
     }).finally(()=>{if(pendingSources.get(key)===pending)pendingSources.delete(key);});
     pendingSources.set(key,pending);return pending.promise;
   }
@@ -138,43 +162,62 @@ function createRegionReadCache({now=Date.now,ttlMs=30*60000,refreshMs=30000,maxE
     const formerBinding=state.marks.get(key),binding=formerBinding?.mark===mark?formerBinding:{mark,regionKey,month};
     state.marks.delete(key);state.marks.set(key,binding);
     while(state.marks.size>maxPerScope*2){const oldest=state.marks.keys().next().value;state.marks.delete(oldest);remove(oldest);pendingSources.delete(oldest);}
-    if(state.revoked&&clock()-state.revoked.at>=ttlMs)state.revoked=null;
+    if(!disk&&state.revoked&&clock()-state.revoked.at>=ttlMs)state.revoked=null;
     if(state.revoked&&!force)return state.revoked.reply;
     const denied=state.denied.get(regionKey);
-    if(denied&&(denied.mark!==mark||clock()-denied.at>=ttlMs))state.denied.delete(regionKey);
+    if(denied&&(denied.mark!==mark||!disk&&clock()-denied.at>=ttlMs))state.denied.delete(regionKey);
     else if(denied&&!force)return denied.reply;
-    for(const [entryKey,entry] of entries)if(clock()-entry.checkedAt>=ttlMs||clock()<entry.checkedAt)remove(entryKey);
+    await ready();
+    if(!current(state,epoch,key,mark,binding)||permissionVersion!==state.permissionVersion)return invalidated();
+    expire();
+    if(!force)hydrate(key,state,mark,regionKey,month);
     const entry=entries.get(key);
     if(entry&&entry.mark===mark&&!force){
       entries.delete(key);entries.set(key,entry);
       let refreshing=pendingSources.has(key);
-      if(!refreshing&&clock()-entry.lastAttempt>=refreshMs){void sourceRead({key,state,epoch,mark,binding,regionKey,month,readSource});refreshing=true;}
+      if(!refreshing&&(entry.needsRevalidation||clock()-entry.lastAttempt>=refreshMs)){void sourceRead({key,state,epoch,mark,binding,regionKey,month,readSource});refreshing=true;}
       return compose(entry,refreshing);
     }
     const reply=await sourceRead({key,state,epoch,mark,binding,regionKey,month,readSource});
     if(!reply.ok)return reply;
     if(!current(state,epoch,key,mark,binding))return invalidated();
-    return {...reply,data:{...clone(reply.data),responseCache:{state:'fresh',checkedAt:new Date(clock()).toISOString(),refreshing:false,refreshFailed:false}}};
+    return {status:reply.status,ok:reply.ok,data:{...clone(reply.data),responseCache:{state:'fresh',checkedAt:new Date(reply.checkedAt??clock()).toISOString(),refreshing:false,refreshFailed:false}}};
   }
-  function snapshot({scope,identity,maxViews=8}={}) {
+  async function snapshot({scope,identity,maxViews=8,preferMonth}={}) {
     if(typeof scope!=='string'||!scope||!identity||typeof identity!=='object')return [];
-    const state=states.get(scope),limit=Number.isFinite(maxViews)?Math.min(8,Math.max(0,Math.floor(maxViews))):8;
+    const state=states.get(scope)||(disk&&identityFor(identity,identity.regions?.[0]?.id)?scopeState(scope):null),limit=Number.isFinite(maxViews)?Math.min(8,Math.max(0,Math.floor(maxViews))):8;
     if(!state)return [];
     // Fresh /me may revoke a region while an older refresh remains pending.
     // Prune its fingerprint as well as the saved payload before returning.
     state.permissionVersion++;state.identity=null;syncIdentity(state,identity);
-    if(state.revoked||!limit)return [];
+    if(state.revoked||!limit||!Array.isArray(identity.regions)||!identity.regions.some(region=>validRegion(region?.id))||!identity.customer||identity.customer.accountStatus!=='active'||typeof identity.customer.customerId!=='string'||!identity.customer.customerId)return [];
+    const epoch=state.epoch,permissionVersion=state.permissionVersion;
+    await ready();
+    if(!current(state,epoch)||state.permissionVersion!==permissionVersion||state.revoked)return [];
+    expire();
+    const koreaNow=new Date(clock()+9*3600000);
+    const endMonth=validMonth(preferMonth)?preferMonth:new Date(Date.UTC(koreaNow.getUTCFullYear(),koreaNow.getUTCMonth()-1,1)).toISOString().slice(0,7);
+    if(disk){
+      const allowed=identity.regions.filter(region=>identityFor(identity,region.id)&&!state.denied.has(region.id)).map(region=>region.id);
+      let stored=[];try{stored=disk.list(allowed,{limit:Math.max(limit,maxPerScope),preferMonth:endMonth});}catch{}
+      for(const saved of stored){
+        const checked=identityFor(identity,saved.regionKey);if(!checked)continue;
+        const key=keyFor(scope,saved.regionKey,saved.month),mark=fingerprint(checked),former=state.marks.get(key);
+        if(!former||former.mark!==mark)state.marks.set(key,{mark,regionKey:saved.regionKey,month:saved.month});
+        hydrate(key,state,mark,saved.regionKey,saved.month,saved);
+      }
+      while(state.marks.size>maxPerScope*2){const oldest=state.marks.keys().next().value;state.marks.delete(oldest);remove(oldest);pendingSources.delete(oldest);}
+    }
     const candidates=[];
     for(const [key,entry] of entries){
       if(entry.scope!==scope)continue;
-      const age=clock()-entry.checkedAt;
-      if(age<0||age>=ttlMs){remove(key);continue;}
+      if(clock()<entry.checkedAt||clock()>=entry.validUntil){remove(key);continue;}
       const checked=identityFor(identity,entry.regionKey);
       if(!checked||fingerprint(checked)!==entry.mark){remove(key);continue;}
       if(state.denied.has(entry.regionKey)||!validMonth(entry.month))continue;
       candidates.push({key,entry});
     }
-    candidates.sort((a,b)=>b.entry.checkedAt-a.entry.checkedAt);
+    candidates.sort((a,b)=>Number(b.entry.month===endMonth)-Number(a.entry.month===endMonth)||b.entry.checkedAt-a.entry.checkedAt);
     const views=[];let payloadBytes=2;
     for(const {key,entry} of candidates){
       const pending=pendingSources.get(key),refreshing=Boolean(pending&&current(state,pending.epoch,key,pending.mark,pending.binding));
@@ -186,6 +229,7 @@ function createRegionReadCache({now=Date.now,ttlMs=30*60000,refreshMs=30000,maxE
     }
     return views;
   }
-  return {read,snapshot,invalidate};
+  const flushPersistence=()=>disk?disk.flush():Promise.resolve();
+  return {read,snapshot,invalidate,ready,flush:flushPersistence,flushPersistence,persistenceStatus:()=>disk?disk.status():{enabled:false}};
 }
 module.exports={createRegionReadCache};

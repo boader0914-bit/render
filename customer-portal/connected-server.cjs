@@ -31,11 +31,13 @@ function configuration(env = process.env) {
   if (!serviceToken || serviceToken.length < 32) throw new Error('INSIGHT_SERVICE_TOKEN must be configured');
   const port = Number(env.PORT || origin.port || 57951);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid port');
-  return { origin: origin.origin, origins, backend: backend.origin, serviceToken, port, host: env.RENDER ? '0.0.0.0' : '127.0.0.1' };
+  const cacheDirectory=env.INSIGHT_REGION_CACHE_DIR || (env.DATA_DIR ? path.join(env.DATA_DIR,'insight-region-cache') : env.RENDER ? path.join('/var/data','insight-region-cache') : null);
+  if(cacheDirectory&&(!path.isAbsolute(cacheDirectory)||path.resolve(cacheDirectory)===path.parse(path.resolve(cacheDirectory)).root))throw new Error('Insight regional cache requires an absolute, dedicated directory');
+  return { origin: origin.origin, origins, backend: backend.origin, serviceToken, port, host: env.RENDER ? '0.0.0.0' : '127.0.0.1',regionCacheDirectory:cacheDirectory };
 }
-function createConnectedServer({ origin, origins = [], backend, serviceToken, fetchImpl = fetch }) {
+function createConnectedServer({ origin, origins = [], backend, serviceToken, fetchImpl = fetch, regionCacheDirectory=null }) {
   const trustedOrigins = new Map(publicOrigins(origin, origins).map(value => [new URL(value).host, value]));
-  const companyReads = createCompanyReadCache(), regionReads = createRegionReadCache(), scopeSecret = crypto.randomBytes(32), staticAssets = new Map();
+  const companyReads = createCompanyReadCache(), regionReads = createRegionReadCache({persistenceDirectory:regionCacheDirectory,namespace:backend}), scopeSecret = crypto.randomBytes(32), staticAssets = new Map();
   const scopeFor = (requestOrigin, mode, session) => crypto.createHmac('sha256', scopeSecret).update(JSON.stringify([requestOrigin,mode,session])).digest('hex');
   const invalidateReads = scope => { companyReads.invalidate(scope); regionReads.invalidate(scope); };
   // Historical source recalculation can take longer than a login or command.
@@ -133,7 +135,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
           if(saved){if(saved.status===401)res.setHeader('Set-Cookie',adminCookie('',true));respond(saved.status,saved.data);return;}
         }
         const response=await readUpstream('/admin'+route,url.search,headers,{method:req.method,body:payload,stage:identityRoutes.has('/admin'+route)?'identity':req.method==='GET'?'source':null,timing}),data=response.data;
-        if(response.ok&&['/customer-view/me','/customer-view/start'].includes(route)){const started=performance.now(),scope=scopeFor(requestOrigin,'admin',session);data.companyViews=companyReads.snapshot({scope,identity:data});data.regionViews=regionReads.snapshot({scope,identity:data});timing.add('snapshot',performance.now()-started);}
+        if(response.ok&&['/customer-view/me','/customer-view/start'].includes(route)){const started=performance.now(),scope=scopeFor(requestOrigin,'admin',session);data.companyViews=companyReads.snapshot({scope,identity:data});data.regionViews=await regionReads.snapshot({scope,identity:data});timing.add('snapshot',performance.now()-started);}
         if(req.method==='POST'&&route!=='/customer-view/start'||[401,403].includes(response.status))invalidateReads(scopeFor(requestOrigin,'admin',session));
         if (response.ok && route === '/auth/login') {
           if (!/^[A-Za-z0-9_-]{43}$/.test(data.token || '')) throw new Error('Missing administrator session');
@@ -160,7 +162,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
           if(saved){if(saved.status===401)res.setHeader('Set-Cookie',cookie('',true));respond(saved.status,saved.data);return;}
         }
         const response=await readUpstream(route,url.search,headers,{method:req.method,body:payload,stage:identityRoutes.has(route)?'identity':req.method==='GET'?'source':null,timing}),data=response.data;
-        if(response.ok&&req.method==='GET'&&route==='/me'){const started=performance.now(),scope=scopeFor(requestOrigin,'customer',session);data.companyViews=companyReads.snapshot({scope,identity:data});data.regionViews=regionReads.snapshot({scope,identity:data});timing.add('snapshot',performance.now()-started);}
+        if(response.ok&&req.method==='GET'&&route==='/me'){const started=performance.now(),scope=scopeFor(requestOrigin,'customer',session);data.companyViews=companyReads.snapshot({scope,identity:data});data.regionViews=await regionReads.snapshot({scope,identity:data});timing.add('snapshot',performance.now()-started);}
         if(req.method==='POST'||[401,403].includes(response.status))invalidateReads(scopeFor(requestOrigin,'customer',session));
         if (response.ok && ['/auth/login', '/auth/signup'].includes(route)) {
           if (!/^[A-Za-z0-9_-]{43}$/.test(data.token || '')) throw new Error('Missing session');
@@ -189,10 +191,14 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
     }
   });
   server.requestTimeout = 30000; server.headersTimeout = 10000;
+  server.prepareRegionSnapshots=async()=>{await regionReads.ready();return regionReads.persistenceStatus();};
+  server.flushRegionSnapshots=()=>regionReads.flushPersistence();
   return server;
 }
 if (require.main === module) {
-  try { const c = configuration(); createConnectedServer(c).listen(c.port, c.host, () => console.log(`SABUN INSIGHT 연결 서버: ${c.origin}`)); }
-  catch (error) { console.error(error.message); process.exitCode = 1; }
+  (async()=>{
+    try { const c=configuration(),server=createConnectedServer(c);const status=await server.prepareRegionSnapshots();console.log('regional_snapshot_cache_prepared',JSON.stringify(status));server.listen(c.port,c.host,()=>console.log(`SABUN INSIGHT 연결 서버: ${c.origin}`)); }
+    catch(error){console.error(error.message);process.exitCode=1;}
+  })();
 }
 module.exports = { configuration, createConnectedServer };
