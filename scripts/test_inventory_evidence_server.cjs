@@ -276,7 +276,7 @@ assert.equal(baseline.lodging, 10, "observed maximum remains separate from the D
 assert.equal(baseline.lodgingOverride.count, 6, "DB room segment counts provide the authoritative correction");
 assert.equal(baseline.lodgingOverride.source, "db_manual_correction");
 const corrected = context.applyCompanyManualCorrection(sourceItem, correctedCompany);
-assert.equal(corrected.inventoryEvidence.version, 4);
+assert.equal(corrected.inventoryEvidence.version, 5);
 assert.equal(corrected.inventoryEvidence.capacityBasis.source, "db_correction");
 assert.equal(corrected.inventoryEvidence.lodging.operatingTotal, 6, "lower DB correction wins over an observed maximum");
 assert.equal(corrected.weeklyBasisTotal, 6);
@@ -403,7 +403,8 @@ assert.equal(fallback.capacityReview.required, true);
 assert.equal(JSON.stringify(savedSnapshot), savedBefore, "snapshot-only fallback is a read projection");
 const freshSnapshot = {
   ...savedSnapshot,
-  productSnapshot: { ...savedSnapshot.productSnapshot, capacityBasis: { count: 6, source: "db_correction", observedMaximum: 10 },
+  inventoryEvidenceVersion: 5,
+  productSnapshot: { ...savedSnapshot.productSnapshot, inventoryEvidenceVersion: 5, capacityBasis: { count: 6, source: "db_correction", observedMaximum: 10 },
     daily: savedSnapshot.productSnapshot.daily.map((row) => ({ ...row, total: 6 })) },
   salesSignal: { lodging: { minTotal: 6, maxTotal: 6 } }
 };
@@ -418,7 +419,7 @@ const unpricedStoredSnapshot = { ...freshSnapshot, productSnapshot: { ...freshSn
 const unpricedStoredCompany = { ...snapshotCompany, inventory: { latest: unpricedStoredSnapshot } };
 assert.equal(context.companyInventoryNeedsEvidenceRecovery(unpricedStoredCompany), true, "current capacity does not skip the new same-product phone-price projection");
 const currentPricingCompany = { ...unpricedStoredCompany, inventory: { latest: { ...unpricedStoredSnapshot,
-  productSnapshot: { ...unpricedStoredSnapshot.productSnapshot, phoneValuationPolicy: "same_product_observed_price_v1" } } } };
+  productSnapshot: { ...unpricedStoredSnapshot.productSnapshot, phoneValuationPolicy: "proportional_product_shortfall_v2" } } } };
 assert.equal(context.companyInventoryNeedsEvidenceRecovery(currentPricingCompany), false, "a current pricing projection without any available price does not force repeated migration checks");
 const oldSharedUnknown = { ...snapshotCompany, inventory: { latest: { ...freshSnapshot,
   productSnapshot: { ...freshSnapshot.productSnapshot, daily: freshSnapshot.productSnapshot.daily.map(row => ({ ...row,

@@ -2,6 +2,7 @@
 
 // A saved-evidence overlay, never a collector or an edit of original history.
 const fs = require("node:fs/promises"), native = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
+const { observedProductCapacityEvidence, withProductCapacityBaseline } = require("./product_capacity_baseline.cjs");
 const KIND = "saved_product_recovery_v1", HEX = /^[a-f0-9]{64}$/;
 const object = value => value && typeof value === "object" && !Array.isArray(value);
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -239,7 +240,7 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
     return { manifest, row, ids, collectedAt, products: [...products.values()], sourceFiles: files, verifiedDates, exclusions,
       classificationNormalizations, start, days, nightCount, dayCount };
   }
-  function build(value, company, month, runId) {
+  function build(value, company, month, runId, productCapacityEvidence = []) {
     const item = { name: company.primaryName, placeId: value.ids.placeId, place_id: value.ids.placeId,
       bookingBusinessId: value.ids.bookingBusinessId, url: value.row.url || value.row["네이버예약URL"] || "", rank: count(value.row.overall_rank || value.row["순위"]),
       checkIn: value.start, bookingRangeDays: value.days, weeklyDays: value.days, itemDetails: [],
@@ -256,7 +257,7 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
       }),
       nightItemCount: value.nightCount, dayUseItemCount: value.dayCount, countedItemCount: value.nightCount,
       dayUseMode: "detail", dayUsePresence: value.dayCount ? "present" : "absent", dayUseScheduleStatus: value.dayCount ? "requested" : "no_day_use_product" };
-    const corrected = applyCompanyManualCorrection(item, clone(projectCompany(company)));
+    const corrected = applyCompanyManualCorrection(withProductCapacityBaseline(item, company, productCapacityEvidence, value.collectedAt), clone(projectCompany(company)));
     need(Number(corrected?.inventoryEvidence?.version) >= 4, "RECOVERY_CURRENT_EVIDENCE_UNAVAILABLE");
     const run = { ...value.manifest, id: runId, collectedAt: value.collectedAt, collectedAtSource: "recorded", collectionQuality: null };
     const generated = buildHistoryObservations({ run, availability: { items: [{ ...corrected, companyId: company.companyId }] } }, value.collectedAt);
@@ -319,10 +320,11 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
       && recoveryRowDigest(receiptCore(value)) === receiptId && instant(value.collectedAt), "RECOVERY_RECEIPT_INVALID");
     return value;
   }
-  async function read(request, data) {
-    const all = companies(data), observations = [], warnings = [];
+  async function walkVerified(request, data, consume, { companyIds = null } = {}) {
+    const all = companies(data), warnings = [];
     need(/^\d{4}-(?:0[1-9]|1[0-2])$/.test(request?.month), "RECOVERY_REQUEST_INVALID");
-    const targets = request.type === "company" ? all.filter(value => value.companyId === request.targetId) : all;
+    const targetIds = companyIds ? new Set(companyIds) : null;
+    const targets = all.filter(value => (!targetIds || targetIds.has(value.companyId)) && (request.type !== "company" || value.companyId === request.targetId));
     await checkCatalog(data);
     for (const company of targets) {
       const targetDirectory = path.join(directory, hash(company.companyId), request.month);
@@ -338,11 +340,9 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
           const run = data.runs.find(value => String(value.id || value.runId || "") === saved.runId);
           need(run && quality(run) === "unknown", "RECOVERY_RUN_NOT_LEGACY");
           await verifyFiles(saved.sourceFiles);
-          const value = await source(saved.runId, company, all, saved), rows = build(value, company, request.month, saved.runId);
+          const value = await source(saved.runId, company, all, saved);
           await verifyFiles(saved.sourceFiles);
-          for (const row of rows) observations.push({ row, certificate: { kind: KIND, companyId: company.companyId, runId: saved.runId,
-            date: row.stayDate, productType: row.productType, collectedAt: saved.collectedAt, originalRunQuality: "unknown", receiptId: saved.receiptId,
-            sourceDigest: recoveryRowDigest({ receiptId: saved.receiptId, sourceFiles: saved.sourceFiles }), rowDigest: recoveryRowDigest(row) } });
+          await consume({ saved, value, company });
         } catch (error) {
           // A previously certified input disappearing/changing is a failed
           // refresh, never an empty successful replacement of the last good
@@ -353,9 +353,43 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
         }
       }
     }
-    await checkCatalog(data); return { observations, warnings };
+    await checkCatalog(data); return { warnings };
   }
-  return { recover: (input, data) => schedule(() => recoverOwned(input, data)), read, directory };
+  function entryCapacityEvidence({ saved, value, company }) {
+    const products = value.products.map(product => {
+      const normalization = classificationNormalization(product);
+      return normalization ? { ...product, ...normalization.applied } : product;
+    });
+    return observedProductCapacityEvidence({ weeklyProductDetails: products }, company, { runId: saved.runId,
+      collectedAt: saved.collectedAt, verifiedDates: value.verifiedDates, source: "certified_saved_product_response" });
+  }
+  async function capacityEvidence(request, data, options = {}) {
+    const evidence = [], months = new Set([request.month]), ids = options.companyIds ? new Set(options.companyIds) : null;
+    for (const company of companies(data)) {
+      if (ids && !ids.has(company.companyId) || request.type === "company" && company.companyId !== request.targetId) continue;
+      const companyDirectory = path.join(directory, hash(company.companyId));
+      let entries;
+      try { entries = await fs.readdir(companyDirectory, { withFileTypes: true }); }
+      catch (error) { if (error.code === "ENOENT") continue; throw error; }
+      need(entries.length <= 1200, "RECOVERY_RECEIPTS_TOO_MANY");
+      for (const entry of entries) if (/^\d{4}-(?:0[1-9]|1[0-2])$/.test(entry.name) && entry.name <= request.month) {
+        need(entry.isDirectory() && !entry.isSymbolicLink(), "RECOVERY_RECEIPT_PATH_INVALID"); months.add(entry.name);
+      }
+    }
+    for (const month of [...months].sort()) await walkVerified({ ...request, month }, data, entry => { evidence.push(...entryCapacityEvidence(entry)); }, options);
+    return evidence;
+  }
+  async function read(request, data, { productCapacityEvidence = [] } = {}) {
+    const observations = [], evidence = [...productCapacityEvidence, ...await capacityEvidence(request, data)];
+    const verified = await walkVerified(request, data, ({ saved, value, company }) => {
+      const rows = build(value, company, request.month, saved.runId, evidence);
+      for (const row of rows) observations.push({ row, certificate: { kind: KIND, companyId: company.companyId, runId: saved.runId,
+        date: row.stayDate, productType: row.productType, collectedAt: saved.collectedAt, originalRunQuality: "unknown", receiptId: saved.receiptId,
+        sourceDigest: recoveryRowDigest({ receiptId: saved.receiptId, sourceFiles: saved.sourceFiles }), rowDigest: recoveryRowDigest(row) } });
+    });
+    await checkCatalog(data); return { observations, warnings: verified.warnings, productCapacityEvidence: evidence };
+  }
+  return { recover: (input, data) => schedule(() => recoverOwned(input, data)), read, capacityEvidence, directory };
 }
 
 module.exports = { createSavedProductRecovery, recoveryRowDigest };

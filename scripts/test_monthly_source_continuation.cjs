@@ -83,6 +83,21 @@ test("a continuation releases catalog serialization before nested generic and co
   });
   assert.deepEqual(result, ["a", "a"]); assert.equal(catalog.stats().revisionReads - before, 6);
 });
+test("product witness publication runs only after final source validation and never leaks its source owner into report payloads", async t => {
+  const f = await fixture(t), evidence = [{ companyId: "a", productId: "room", productType: "lodging", count: 10, collectedAt: "2026-08-01T00:00:00Z", runId: "run1" }];
+  let writes = 0, changeDuringRecalculation = false;
+  const sources = f.sources({ useSourceReadValidationBoundary: true, recalculateCompanyObservations: async () => {
+    if (changeDuringRecalculation) await f.inplace(f.mapFile, "Map A", "Map B");
+    const rows = []; Object.defineProperty(rows, "productCapacityEvidence", { value: evidence }); return rows;
+  }, publishProductCapacityEvidence: async (rows, context) => {
+    assert.deepEqual(rows, evidence); await context.assertCurrent(); writes++;
+  } });
+  const normal = await sources.loadSources(request);
+  assert.equal(writes, 1); assert.equal(Object.hasOwn(normal, "_productCapacityPublication"), false);
+  changeDuringRecalculation = true;
+  await assert.rejects(sources.loadSources(request), { code: "MONTHLY_SOURCE_UNAVAILABLE" });
+  assert.equal(writes, 1, "an invalidated read never invokes the witness publisher");
+});
 
 test("initial in-place source changes rebuild, and changes during consumption cannot publish a result", async t => {
   const f = await fixture(t), catalog = f.catalog({ useSourceReadValidationBoundary: true });

@@ -8,8 +8,10 @@ const nonnegative = (value) => Math.max(0, number(value) || 0);
 const shortDate = (date) => `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}`;
 const dayType = (date) => ["일요일", "평일", "평일", "평일", "평일", "금요일", "토요일"][new Date(`${date}T12:00:00+09:00`).getUTCDay()];
 const POLICY = "maximum_capacity_phone_estimate";
-const PHONE_VALUATION_POLICY = "same_product_observed_price_v1";
-const SUM_FIELDS = ["total", "rawTotal", "available", "sold", "publicBookings", "phoneBookings", "explicitBlockedBookings", "explicitBlockedRevenue", "sharedDayUseExcluded", "unknownUnavailable", "publicRevenue", "phoneRevenue", "phoneFallbackRevenue", "phoneFallbackBookings", "pricedSoldOut", "missingPriceSoldOut", "phonePricedBookings", "phoneMissingPriceBookings", "inventoryShortfall", "unverifiedOccupied", "unverifiedUnavailable"];
+const PHONE_VALUATION_POLICY = "proportional_product_shortfall_v2";
+const DAY_USE_SHARING_POLICY = "lunch_dinner_room_reuse_v1";
+const INVENTORY_VERSION = 5;
+const SUM_FIELDS = ["total", "rawTotal", "available", "sold", "publicBookings", "phoneBookings", "explicitBlockedBookings", "explicitBlockedRevenue", "sharedDayUseExcluded", "unknownUnavailable", "publicRevenue", "phoneRevenue", "phoneFallbackRevenue", "phoneFallbackBookings", "phoneAllocatedBookings", "phoneAllocatedRevenue", "phoneRevenueLow", "phoneRevenueHigh", "pricedSoldOut", "missingPriceSoldOut", "phonePricedBookings", "phoneMissingPriceBookings", "inventoryShortfall", "unverifiedOccupied", "unverifiedUnavailable"];
 const capacityNumber = (value) => nonnegative(value && typeof value === "object" ? value.count : value);
 const correctionCapacity = (value) => {
   const count = number(value && typeof value === "object" ? value.count : value);
@@ -93,8 +95,13 @@ function productEvidence(row) {
   const booked = number(row.bookingCount);
   const occupied = nonnegative(row.occupiedBookingCount);
   const open = row.open !== false && row.isBusinessDay !== false && row.isSaleDay !== false;
-  const stockObserved = !row.collectionFailed && stock !== null && stock >= 0;
-  const bookingObserved = !row.collectionFailed && booked !== null && booked >= 0;
+  const responseStatus = number(row.responseStatus ?? row.httpStatus ?? row.statusCode);
+  const failed = Boolean(row.collectionFailed || row.failed || row.collectionErrorCode || row.error || row.blocked || row.accessRestricted || row.rateLimited || row.captcha
+    || row.missing === true || row.queryAttempted === false || (responseStatus !== null && responseStatus >= 400)
+    || [row.status, row.collectionStatus, row.queryStatus].some((value) => /^(?:failed|failure|error|blocked|access_denied|rate_limited|captcha|missing|not_attempted)$/i.test(String(value || "")))
+    || (Array.isArray(row.errors) ? row.errors.length : row.errors));
+  const stockObserved = !failed && row.stockObserved !== false && stock !== null && stock >= 0;
+  const bookingObserved = !failed && row.bookingObserved !== false && booked !== null && booked >= 0;
   const observed = stockObserved && bookingObserved;
   const sold = bookingObserved ? booked : 0;
   const roomList = row.listType === "객실별 예약리스트";
@@ -104,7 +111,8 @@ function productEvidence(row) {
   const price = number(row.price);
   const priced = price > 0 ? sold : 0;
   return {
-    date: row.date, key: row.bizItemId || row.key || row.name, kind: productKind(row),
+    date: row.date, key: String(row.bizItemId || row.key || row.name || ""), name: row.name || "", kind: productKind(row),
+    sharedRoomGroupId: row.sharedRoomGroupId || row.sharedRoomsGroupId || row.roomPoolId || null,
     priceFallbackAllowed: !/(?:현장|전화)\s*예약/.test(row.name || ""),
     total, rawTotal, available, sold, publicBookings: sold, observed, stockObserved, bookingObserved,
     unverifiedOccupied: occupied,
@@ -114,6 +122,75 @@ function productEvidence(row) {
     missingPriceSoldOut: Math.max(0, sold - priced),
     closed: !open
   };
+}
+
+// Lunch and dinner are separate sessions sold from the same room pool. The
+// group stem deliberately retains room/zone names; unrelated day-use products
+// are never merged merely because they are sold by the same company.
+function dayUseRoomReuse(dateProducts) {
+  const groups = new Map(), warnings = [];
+  for (const product of dateProducts) {
+    if (!product.bookingObserved || product.inventoryConflict) continue;
+    const name = String(product.name || "").normalize("NFKC");
+    const lunch = /런치|점심|\blunch\b/i.test(name);
+    const dinner = /디너|다이닝|저녁|\bdinner\b|\bdining\b/i.test(name);
+    const band = lunch !== dinner ? (lunch ? "lunch" : "dinner") : null;
+    const stem = name.replace(/런치|점심|디너|다이닝|저녁|\blunch\b|\bdinner\b|\bdining\b/gi, "")
+      .replace(/(?:오전|오후)?\s*\d{1,2}(?::\d{2})?\s*(?:시)?\s*[~〜～\-–]\s*(?:오전|오후)?\s*\d{1,2}(?::\d{2})?\s*(?:시)?/g, "")
+      .replace(/[\s\p{P}\p{S}]/gu, "").toLowerCase();
+    const groupKey = band ? (product.sharedRoomGroupId ? `explicit:${product.sharedRoomGroupId}` : `name:${stem || "default"}`) : `product:${product.key}`;
+    if (lunch && dinner) warnings.push({ code: "ambiguous_lunch_dinner_product", productKey: product.key, message: "한 상품명에 런치·디너가 함께 있어 다른 상품과 재사용 수량을 합치지 않았습니다." });
+    if (!groups.has(groupKey)) groups.set(groupKey, { groupKey, classificationSource: product.sharedRoomGroupId && band ? "explicit_room_group" : band ? "lunch_dinner_name_stem" : "independent_day_use_product", lunchBookings: 0, dinnerBookings: 0, independentBookings: 0, productIds: [], timeBands: [] });
+    const group = groups.get(groupKey);
+    group.productIds.push(String(product.key));
+    if (band && !group.timeBands.includes(band)) group.timeBands.push(band);
+    if (band) group[`${band}Bookings`] += product.publicBookings;
+    else group.independentBookings += product.publicBookings;
+  }
+  const evidence = [...groups.values()].map((group) => {
+    const physicalRoomBookings = group.independentBookings + Math.max(group.lunchBookings, group.dinnerBookings);
+    return { ...group, physicalRoomBookings, reusedBookings: group.lunchBookings + group.dinnerBookings + group.independentBookings - physicalRoomBookings };
+  });
+  const allBands = new Set(evidence.flatMap((group) => group.timeBands));
+  if (allBands.has("lunch") && allBands.has("dinner")) for (const group of evidence.filter((entry) => entry.timeBands.length === 1)) {
+    warnings.push({ code: "unmatched_lunch_dinner_room_group", groupKey: group.groupKey, productIds: group.productIds,
+      message: "런치·디너 상품의 객실군 명칭이 달라 같은 객실 재사용으로 묶지 않았습니다. 공유 객실군 연결이 필요합니다." });
+  }
+  return { policy: DAY_USE_SHARING_POLICY, publicSessions: dateProducts.reduce((sum, product) => sum + product.publicBookings, 0),
+    physicalRoomBookings: evidence.reduce((sum, group) => sum + group.physicalRoomBookings, 0), groups: evidence, warnings };
+}
+
+function productCapacityInputs(original, baseline) {
+  const capacities = {}, evidence = [];
+  const add = (key, value, source) => {
+    const count = correctionCapacity(value && typeof value === "object" ? value.count ?? value.capacity : value);
+    if (!key || count === null) return;
+    key = String(key);
+    if (!capacities[key] || capacities[key].count < count) capacities[key] = { count, source,
+      ...Object.fromEntries(["sourceDate", "observedAt", "runId"].filter((field) => typeof value?.[field] === "string").map((field) => [field, value[field]])) };
+  };
+  for (const [key, value] of Object.entries(baseline.lodgingProducts || {})) add(key, value, "historical_product_maximum");
+  for (const row of Array.isArray(original.observedProductMaximums) ? original.observedProductMaximums : []) add(row.bizItemId || row.productId || row.id, row, "historical_product_maximum");
+  const fixed = {};
+  for (const product of baseline.lodgingOverride?.products || []) {
+    const count = correctionCapacity(product.count);
+    if (product.id && count !== null) fixed[String(product.id)] = count;
+  }
+  for (const [key, value] of Object.entries(capacities)) evidence.push({ productKey: key, ...value });
+  return { capacities: Object.fromEntries(Object.entries(capacities).map(([key, value]) => [key, value.count])), fixed, evidence };
+}
+
+// The historical index uses the same corrections/exclusions as valuation.
+// Returning a read model keeps the provider's original rows untouched.
+function observedProductCapacityEvidence(item = {}, baseline = item.inventoryCapacityBaseline || {}) {
+  const corrections = applyProductStockCorrections(evidenceProducts(item), baseline.productStockCorrections, (row) => productKind(row) === "lodging");
+  const reviewed = reviewedProductEvidence(corrections.rows, baseline);
+  return { products: reviewed.rows.map((row) => {
+    const evidence = productEvidence(row);
+    return { bizItemId: String(row.bizItemId || ""), productKey: evidence.key, date: evidence.date, kind: evidence.kind,
+      stock: evidence.rawTotal, observed: evidence.observed, stockObserved: evidence.stockObserved,
+      bookingObserved: evidence.bookingObserved, inventoryConflict: evidence.inventoryConflict };
+  }), exclusionEvidence: reviewed.exclusionEvidence, normalizationEvidence: [...corrections.normalizationEvidence, ...reviewed.normalizationEvidence] };
 }
 
 function emptyDate(date) {
@@ -136,12 +213,14 @@ function phonePriceEvidence(product, pricesByProduct) {
 }
 
 // Product maxima locate a shortage for pricing; their sum never increases the
-// company's capacity. Ambiguous quantities keep their price missing.
+// company's capacity. Sharing without room-level identity is a proportional
+// allocation estimate, separate from observed public sales and known blocks.
 function phoneValuation(dateProducts, capacities, capacity, phoneBookings, excluded, pricesByProduct) {
-  const result = { revenue: 0, priced: 0, explicitBookings: 0, explicitRevenue: 0, fallbackRevenue: 0, fallbackBookings: 0, estimates: [] };
+  const result = { revenue: 0, priced: 0, explicitBookings: 0, explicitRevenue: 0, fallbackRevenue: 0, fallbackBookings: 0,
+    allocatedBookings: 0, allocatedRevenue: 0, revenueLow: 0, revenueHigh: 0, estimates: [], allocationRanges: [], warnings: [] };
   if (!phoneBookings) return result;
   let remaining = phoneBookings;
-  const add = (product, quantity, explicit) => {
+  const add = (product, quantity, explicit, proportional = false) => {
     const amount = Math.min(remaining, quantity);
     remaining -= amount;
     const price = phonePriceEvidence(product, pricesByProduct);
@@ -151,11 +230,17 @@ function phoneValuation(dateProducts, capacities, capacity, phoneBookings, exclu
     result.priced += amount;
     result.revenue += revenue;
     if (explicit) result.explicitRevenue += revenue;
-    if (price.source !== "same_product_same_date") {
+    // Quantity allocations have their own integer subtotal. Keeping them out
+    // of the direct fallback counter avoids fractional "observed room" counts;
+    // the allocation's priceSource still preserves any fallback price proof.
+    if (price.source !== "same_product_same_date" && !proportional) {
       result.fallbackBookings += amount;
       result.fallbackRevenue += revenue;
     }
-    result.estimates.push({ productKey: product.key, quantity: amount, ...price, revenue, quantitySource: explicit ? "explicit_unavailable" : "capacity_shortfall" });
+    if (proportional) { result.allocatedBookings += amount; result.allocatedRevenue += revenue; }
+    result.estimates.push({ productKey: product.key, quantity: amount, ...price, revenue,
+      ...(proportional ? { allocationSource: "proportional_product_shortfall", priceSource: price.source, estimatedQuantity: true } : {}),
+      quantitySource: proportional ? "proportional_product_shortfall" : explicit ? "explicit_unavailable" : "capacity_shortfall" });
   };
   const explicitQuantity = (product) => product.observed && !product.inventoryConflict ? Math.max(0, product.rawTotal - product.available - product.publicBookings) : 0;
   const explicit = dateProducts.map((product) => ({ product, quantity: explicitQuantity(product) })).filter((candidate) => candidate.quantity > 0);
@@ -169,18 +254,55 @@ function phoneValuation(dateProducts, capacities, capacity, phoneBookings, exclu
     sharedRemaining -= deduction;
     add(product, quantity - deduction, true);
   }
+  result.revenueLow = result.revenueHigh = result.revenue;
   // The per-product maxima may overlap. They must never suppress direct,
-  // normally observed blocked inventory, but cannot price an ambiguous gap.
-  if (!remaining || [...capacities.values()].reduce((sum, value) => sum + value, 0) > capacity) return result;
-  const inferred = dateProducts.map((product) => ({ product,
+  // normally observed blocked inventory or silently enlarge the company total.
+  if (!remaining) return result;
+  const capacitySum = [...capacities.values()].reduce((sum, value) => sum + value, 0);
+  if (capacitySum > capacity) {
+    result.warnings.push({ code: "product_maxima_exceed_company_capacity", productCapacitySum: capacitySum, companyCapacity: capacity });
+    return result;
+  }
+  const inferred = dateProducts.filter((product) => product.observed && !product.inventoryConflict).map((product) => ({ product,
     quantity: Math.max(0, (capacities.get(product.key) || 0) - product.available - product.sold - explicitQuantity(product))
   })).filter((candidate) => candidate.quantity > 0);
-  if (sharedRemaining && inferred.length !== 1) return result;
+  if (sharedRemaining && inferred.length > 1) {
+    const shortage = inferred.reduce((sum, candidate) => sum + candidate.quantity, 0);
+    const target = Math.min(remaining, Math.max(0, shortage - sharedRemaining));
+    const fixedRevenue = result.revenue;
+    const hasEveryPrice = inferred.every(({ product }) => phonePriceEvidence(product, pricesByProduct));
+    // Never expose fractional unpriced room counts. If any candidate has no
+    // same-product price evidence, retain the whole residual as an integer
+    // unpriced quantity instead of redistributing it to another product.
+    if (!hasEveryPrice) {
+      result.warnings.push({ code: "proportional_price_evidence_incomplete", productKeys: inferred.filter(({ product }) => !phonePriceEvidence(product, pricesByProduct)).map(({ product }) => product.key) });
+      result.allocationRanges.push({ quantity: target, productShortfall: shortage, sharedDayUseDeducted: sharedRemaining,
+        lowRevenue: null, highRevenue: null, completePriceCoverage: false });
+      return result;
+    }
+    for (const candidate of inferred) add(candidate.product, target * candidate.quantity / shortage, false, true);
+    const extreme = (descending) => {
+      let slots = target, amount = 0;
+      const direction = descending ? -1 : 1;
+      for (const candidate of [...inferred].sort((a, b) => direction * ((phonePriceEvidence(a.product, pricesByProduct)?.unitPrice || 0) - (phonePriceEvidence(b.product, pricesByProduct)?.unitPrice || 0)) || String(a.product.key).localeCompare(String(b.product.key)))) {
+        const count = Math.min(slots, candidate.quantity); slots -= count;
+        amount += count * (phonePriceEvidence(candidate.product, pricesByProduct)?.unitPrice || 0);
+      }
+      return amount;
+    };
+    const lowRevenue = hasEveryPrice ? extreme(false) : null, highRevenue = hasEveryPrice ? extreme(true) : null;
+    result.allocationRanges.push({ quantity: target, productShortfall: shortage, sharedDayUseDeducted: sharedRemaining,
+      lowRevenue, highRevenue, completePriceCoverage: hasEveryPrice });
+    result.revenueLow = lowRevenue === null ? result.revenue : fixedRevenue + lowRevenue;
+    result.revenueHigh = highRevenue === null ? result.revenue : fixedRevenue + highRevenue;
+    return result;
+  }
   for (const { product, quantity } of inferred) {
     const deduction = Math.min(sharedRemaining, quantity);
     sharedRemaining -= deduction;
     add(product, quantity - deduction, false);
   }
+  result.revenueLow = result.revenueHigh = result.revenue;
   return result;
 }
 
@@ -194,14 +316,15 @@ function summarizeEvidence(products, kind, options = {}) {
     // when it happens to retain a numeric price from another parsing step.
     if (product.observed && !product.inventoryConflict && product.price > 0) pricesByProduct.get(product.key).push(product);
   }
-  const capacities = new Map([...productKeys].map((key) => [key, nonnegative(options.productCapacities?.[key])]));
+  const fixedCapacities = new Map(Object.entries(options.fixedProductCapacities || {}).map(([key, value]) => [key, correctionCapacity(value)]).filter(([, value]) => value !== null));
+  const capacities = new Map([...productKeys].map((key) => [key, fixedCapacities.get(String(key)) ?? nonnegative(options.productCapacities?.[key])]));
   const dates = new Map((options.dates || []).map((date) => [date, emptyDate(date)]));
   const byDate = new Map();
   for (const product of source) {
     if (!dates.has(product.date)) dates.set(product.date, emptyDate(product.date));
     if (!byDate.has(product.date)) byDate.set(product.date, []);
     byDate.get(product.date).push(product);
-    if (product.stockObserved) capacities.set(product.key, Math.max(capacities.get(product.key) || 0, product.rawTotal));
+    if (product.observed && !product.inventoryConflict && !fixedCapacities.has(String(product.key))) capacities.set(product.key, Math.max(capacities.get(product.key) || 0, product.rawTotal));
     const row = dates.get(product.date);
     for (const field of ["total", "rawTotal", "available", "sold", "publicBookings", "pricedSoldOut", "missingPriceSoldOut", "unverifiedOccupied"]) row[field] += product[field];
     row.publicRevenue += product.estimatedRevenue;
@@ -216,6 +339,7 @@ function summarizeEvidence(products, kind, options = {}) {
   const overrideCount = correctionCapacity(options.override);
   const operatingTotal = overrideCount ?? maximumObservedCapacity;
   for (const row of rows) {
+    if (kind === "dayUse") row.sharedRoomReuse = dayUseRoomReuse(byDate.get(row.date) || []);
     row.total = operatingTotal;
     // A reviewed DB count may be smaller than the channel observation. Keep
     // both pieces of evidence without forcing impossible quantities into sales.
@@ -230,24 +354,39 @@ function summarizeEvidence(products, kind, options = {}) {
     row.sharedDayUseIncomplete = kind === "lodging" && (options.dayUseUnverified || (options.shared && (!dayUse || dayUse.partial || dayUse.inventoryConflict)));
     row.partial ||= Boolean(row.sharedDayUseIncomplete);
     const canEstimate = !row.partial && !row.inventoryConflict;
+    if (kind === "lodging") {
+      row.phoneRevenueRangeComplete = canEstimate && !row.capacityConflict;
+      if (!row.phoneRevenueRangeComplete) row.phoneRevenueLow = row.phoneRevenueHigh = null;
+    }
     if (kind === "lodging" && !row.capacityConflict) {
-      row.sharedDayUseExcluded = options.shared && dayUse ? Math.min(unavailable, dayUse.publicBookings) : 0;
+      const sharedDayUseBookings = dayUse?.sharedRoomReuse?.physicalRoomBookings ?? dayUse?.publicBookings ?? 0;
+      row.sharedDayUseExcluded = options.shared && dayUse ? Math.min(unavailable, sharedDayUseBookings) : 0;
+      row.sharedDayUseEvidence = { ...(dayUse?.sharedRoomReuse || { policy: DAY_USE_SHARING_POLICY, publicSessions: 0, physicalRoomBookings: 0, groups: [], warnings: [] }),
+        sharedRooms: Boolean(options.shared), excludedBookings: row.sharedDayUseExcluded };
       const dateProducts = byDate.get(row.date) || [];
       const explicitUnavailable = dateProducts.filter((product) => product.observed && !product.inventoryConflict)
         .reduce((sum, product) => sum + Math.max(0, product.rawTotal - product.available - product.publicBookings), 0);
       const inferredUnavailable = canEstimate ? unavailable : Math.min(unavailable, explicitUnavailable);
       row.phoneBookings = Math.max(0, inferredUnavailable - row.sharedDayUseExcluded);
       const value = phoneValuation(byDate.get(row.date) || [], capacities, operatingTotal, row.phoneBookings, row.sharedDayUseExcluded, pricesByProduct);
-      row.phoneRevenue = value.revenue;
-      row.phonePricedBookings = value.priced;
+      row.phoneRevenue = Math.round(value.revenue);
+      row.phonePricedBookings = Math.min(row.phoneBookings, Math.round(value.priced * 1e9) / 1e9);
       row.explicitBlockedBookings = value.explicitBookings;
-      row.explicitBlockedRevenue = value.explicitRevenue;
+      row.explicitBlockedRevenue = Math.round(value.explicitRevenue);
       row.explicitBlockedDayUseUnverified = Boolean(row.sharedDayUseIncomplete && value.explicitBookings > 0);
-      row.phoneFallbackRevenue = value.fallbackRevenue;
+      row.phoneFallbackRevenue = Math.round(value.fallbackRevenue);
       row.phoneFallbackBookings = value.fallbackBookings;
+      row.phoneAllocatedBookings = Math.round(value.allocatedBookings * 1e9) / 1e9;
+      row.phoneAllocatedRevenue = Math.round(value.allocatedRevenue);
+      row.phoneRevenueRangeComplete = canEstimate && row.phonePricedBookings >= row.phoneBookings && value.allocationRanges.every((range) => range.completePriceCoverage);
+      row.phoneRevenueLow = row.phoneRevenueRangeComplete ? Math.round(value.revenueLow) : null;
+      row.phoneRevenueHigh = row.phoneRevenueRangeComplete ? Math.round(value.revenueHigh) : null;
       row.phonePriceEstimates = value.estimates;
-      row.phoneMissingPriceBookings = Math.max(0, row.phoneBookings - value.priced);
-      row.pricedSoldOut += value.priced;
+      row.phoneValuation = { policy: PHONE_VALUATION_POLICY, quantityPolicy: "residual_product_shortfall_proportional",
+        roundingPolicy: "round_each_stay_date_krw", unroundedRevenue: value.revenue, completePriceCoverage: row.phoneRevenueRangeComplete,
+        allocationRanges: value.allocationRanges, warnings: value.warnings };
+      row.phoneMissingPriceBookings = Math.max(0, row.phoneBookings - row.phonePricedBookings);
+      row.pricedSoldOut += row.phonePricedBookings;
       row.missingPriceSoldOut += row.phoneMissingPriceBookings;
     }
     row.sold = row.publicBookings + row.phoneBookings;
@@ -256,7 +395,17 @@ function summarizeEvidence(products, kind, options = {}) {
     row.estimatedRevenue = row.publicRevenue + row.phoneRevenue;
     row.rate = row.total > 0 && canEstimate ? row.sold / row.total : null;
   }
-  const result = { rows, operatingTotal, observedMaximum, maximumObservedCapacity, capacitySource: overrideCount !== null ? "db_correction" : "observed_maximum", ...Object.fromEntries(SUM_FIELDS.map((field) => [field, 0])), revenue: 0 };
+  const result = { rows, operatingTotal, observedMaximum, maximumObservedCapacity, capacitySource: overrideCount !== null ? "db_correction" : "observed_maximum",
+    productCapacityEvidence: [...capacities].map(([productKey, count]) => {
+      const fixed = fixedCapacities.has(String(productKey));
+      const historical = !fixed && nonnegative(options.productCapacities?.[productKey]) >= count;
+      const witness = historical ? (options.productCapacityEvidence || []).find((entry) => String(entry.productKey) === String(productKey)) : null;
+      const currentDate = !fixed && !historical ? source.find((product) => product.key === productKey && product.observed && !product.inventoryConflict && product.rawTotal === count)?.date : null;
+      return { ...(witness || {}), productKey: String(productKey), count,
+        source: fixed ? "db_product_correction" : historical ? "historical_product_maximum" : "current_run_product_maximum",
+        ...(currentDate ? { sourceDate: currentDate } : {}) };
+    }),
+    ...Object.fromEntries(SUM_FIELDS.map((field) => [field, 0])), revenue: 0 };
   for (const row of rows) {
     for (const field of SUM_FIELDS) result[field] += row[field];
     result.revenue += row.estimatedRevenue;
@@ -264,6 +413,8 @@ function summarizeEvidence(products, kind, options = {}) {
   result.missingDays = rows.filter((row) => row.missing).length;
   result.status = rows.every((row) => row.missing) ? "missing" : rows.some((row) => row.partial || row.inventoryConflict) ? "partial" : "observed";
   result.complete = result.status === "observed";
+  result.phoneRevenueRangeComplete = rows.every((row) => row.phoneRevenueRangeComplete !== false);
+  if (!result.phoneRevenueRangeComplete) result.phoneRevenueLow = result.phoneRevenueHigh = null;
   return result;
 }
 
@@ -278,7 +429,7 @@ function applyKindFields(item, summary, kind) {
   set("ObservedDays", rows.filter((row) => !row.missing).length);
   set("TotalStock", summary.total);
   set("TotalSoldOut", summary.sold);
-  for (const name of ["PublicBookings", "PhoneBookings", "ExplicitBlockedBookings", "ExplicitBlockedRevenue", "SharedDayUseExcluded", "UnknownUnavailable", "InventoryShortfall", "PublicRevenue", "PhoneRevenue", "PhoneFallbackRevenue", "PhoneFallbackBookings", "PhonePricedBookings", "PhoneMissingPriceBookings"]) set(name, summary[name[0].toLowerCase() + name.slice(1)]);
+  for (const name of ["PublicBookings", "PhoneBookings", "ExplicitBlockedBookings", "ExplicitBlockedRevenue", "SharedDayUseExcluded", "UnknownUnavailable", "InventoryShortfall", "PublicRevenue", "PhoneRevenue", "PhoneFallbackRevenue", "PhoneFallbackBookings", "PhoneAllocatedBookings", "PhoneAllocatedRevenue", "PhoneRevenueLow", "PhoneRevenueHigh", "PhonePricedBookings", "PhoneMissingPriceBookings"]) set(name, summary[name[0].toLowerCase() + name.slice(1)]);
   set("BasisTotal", totalMax);
   set("OperatingTotal", summary.operatingTotal);
   set("StructuralBlockedTotal", summary.sharedDayUseExcluded);
@@ -291,13 +442,15 @@ function applyKindFields(item, summary, kind) {
   set("MissingPriceEstimatedRevenue", 0);
   set("PricedSoldOut", summary.pricedSoldOut);
   set("MissingPriceSoldOut", summary.missingPriceSoldOut);
-  set("RevenuePrecisionRate", summary.sold ? (summary.pricedSoldOut - summary.phoneFallbackBookings) / summary.sold : null);
+  const directlyPriced = rows.reduce((sum, row) => sum + row.pricedSoldOut - row.phonePricedBookings
+    + row.phonePriceEstimates.filter((estimate) => estimate.source === "same_product_same_date" && !estimate.estimatedQuantity).reduce((count, estimate) => count + estimate.quantity, 0), 0);
+  set("RevenuePrecisionRate", summary.sold ? directlyPriced / summary.sold : null);
   set("AvgSoldUnitPrice", summary.pricedSoldOut ? Math.round(summary.revenue / summary.pricedSoldOut) : null);
   set("AvgReservationRate", summary.complete && summary.total ? summary.sold / summary.total : null);
   set("OfflineReservationDetail", rows.filter((row) => row.phoneBookings).map((row) => `${shortDate(row.date)} 전화·타채널 추정 ${row.phoneBookings}${unit}`).join(", "));
   const capacityLabel = summary.capacitySource === "db_correction" ? "DB 보정 수량" : "최대 관측 수량(추정)";
-  set("BasisRule", kind === "lodging" ? `${capacityLabel}을 매일 총량으로 유지합니다. 총량에서 예약 가능·공개 예약·당일 이용 공유 차단을 뺀 수량은 전화·타채널 예약으로 추정합니다. 당일 이용이나 일부 상품을 확인하지 못했으면 정상 응답에서 직접 확인한 방막기만 별도로 추정합니다. 확인된 당일 이용 공유 예약은 제외합니다. 방막기 가격은 같은 상품의 해당 날짜, 같은 요일, 가까운 날짜 순으로 적용하며 대체 근거를 보존합니다. 실패·누락 수량과 수량 충돌은 예약으로 추정하지 않습니다. 객실 안내는 참고값입니다.` : `${capacityLabel}을 매일 총량으로 유지하며, 당일 이용 예약은 공개 예약 수량만 사용합니다.`);
-  set("StockBasisType", "maximum_capacity_phone_estimate_v4");
+  set("BasisRule", kind === "lodging" ? `${capacityLabel}을 매일 총량으로 유지합니다. 총량에서 예약 가능·공개 예약·당일 이용 공유 차단을 뺀 수량은 전화·타채널 예약으로 추정합니다. 같은 객실군의 런치·디너는 재사용하므로 큰 판매수량만 한 번 제외합니다. 당일 이용이나 일부 상품을 확인하지 못했으면 정상 응답에서 직접 확인한 방막기만 별도로 추정합니다. 방막기 가격은 같은 상품의 해당 날짜, 같은 요일, 가까운 날짜 순으로 적용합니다. 상품별 누적 최대관측 부족수량에 비례해 남은 수량을 배분한 금액은 상품 배분 추정으로 구분하고 범위·근거를 보존합니다. DB 검수값이 우선이며 실패·누락 수량과 수량 충돌은 예약으로 추정하지 않습니다. 객실 안내는 참고값입니다.` : `${capacityLabel}을 매일 총량으로 유지하며, 당일 이용 예약은 공개 예약 수량만 사용합니다. 같은 객실군의 런치·디너는 매출은 각 시간대로 유지하고 숙박 차감 객실 수만 큰 수량 한 번을 사용합니다.`);
+  set("StockBasisType", "maximum_capacity_phone_estimate_v5");
   set("Detail", rows.filter((row) => !row.missing).map((row) => `${shortDate(row.date)} ${row.available}/${row.total}`).join(", "));
   set("ReservationRateDetail", rows.filter((row) => row.rate !== null).map((row) => `${shortDate(row.date)} ${Math.round(row.rate * 100)}%(${row.sold}/${row.total})`).join(", "));
   set("RawStockVariance", rows.map((row) => `${shortDate(row.date)} 수집 ${row.available}/${row.rawTotal}`).join(", "));
@@ -318,6 +471,7 @@ function applyKindFields(item, summary, kind) {
   item[basisPrefix + "PhoneRevenue"] = basis.phoneRevenue;
   item[basisPrefix + "PhoneFallbackRevenue"] = basis.phoneFallbackRevenue;
   item[basisPrefix + "PhoneFallbackBookings"] = basis.phoneFallbackBookings;
+  for (const name of ["PhoneAllocatedBookings", "PhoneAllocatedRevenue", "PhoneRevenueLow", "PhoneRevenueHigh"]) item[basisPrefix + name] = basis[name[0].toLowerCase() + name.slice(1)];
   item[basisPrefix + "MissingPriceEstimatedRevenue"] = 0;
   item[basisPrefix + "PricedSoldOut"] = basis.pricedSoldOut;
   item[basisPrefix + "MissingPriceSoldOut"] = basis.missingPriceSoldOut;
@@ -383,6 +537,15 @@ function buildCapacityReview(item = {}, context = {}) {
   const add = (code, message, scope = "capacity", evidence = {}, severity = reviewed ? "info" : "warning") => {
     reasons.push({ code, severity, scope, message, evidence });
   };
+  for (const warning of Array.isArray(baseline.productCapacityWarnings) ? baseline.productCapacityWarnings.slice(0, 20) : []) {
+    const code = typeof warning?.code === "string" && /^[A-Z][A-Z0-9_]{0,79}$/.test(warning.code) ? warning.code : "PRODUCT_CAPACITY_BASELINE_UNAVAILABLE";
+    if (reasons.some((reason) => reason.code === code)) continue;
+    const count = Number.isSafeInteger(warning?.count) && warning.count >= 0 ? warning.count : null;
+    // Store/IO errors can contain filesystem paths or credentials. Expose only
+    // a static explanation, an internal code and a bounded integer count.
+    add(code, "상품별 누적 최대관측 수량의 저장 근거를 확인하지 못했습니다. 현재 정상 관측값은 유지하며 객실 기준을 검토해야 합니다.",
+      "observation", count === null ? {} : { count }, "warning");
+  }
   const glamping = /글램핑|glamping/i.test([item.name, item.keyword, item.searchKeyword, item.category, item.businessType, item.lodgingType, item.accommodationMarketType, baseline.businessType].filter(Boolean).join(" "));
   if (glamping && !reviewed && observedMaximum > 40) add("glamping_observed_over_40", "글램핑 최대 관측 수량이 40실을 초과합니다. 실제 객실 수를 확인해 주세요.", "capacity", { observedMaximum, threshold: 40 });
 
@@ -471,6 +634,9 @@ function buildCapacityReview(item = {}, context = {}) {
     { reviewedCount, dates: [...new Set([...conflicts.map((row) => row.date), ...rawOverReviewed])].slice(0, 5) }, "warning");
   const bookingConflicts = validRows.filter((row) => productEvidence(row).inventoryConflict);
   if (bookingConflicts.length) add("stock_booking_conflict", "공개 예약 수가 해당 상품 재고보다 커 수량이 서로 맞지 않습니다.", reviewed ? "observation" : "capacity", { conflictingProductDates: bookingConflicts.length }, "warning");
+  const productCapacitySum = (lodging?.productCapacityEvidence || []).reduce((sum, product) => sum + nonnegative(product.count), 0);
+  const companyCapacity = nonnegative(lodging?.operatingTotal);
+  if (companyCapacity > 0 && productCapacitySum > companyCapacity) add("product_maxima_exceed_company_capacity", "상품별 최대관측 수량의 합계가 업체 객실 기준보다 큽니다. 총량은 늘리지 않고 겹치는 상품 여부를 확인해야 합니다.", "composition", { productCapacitySum, companyCapacity }, "warning");
   const warnings = reasons.filter((reason) => reason.severity === "warning");
   return { version: 2, required: warnings.length > 0, codes: warnings.map((reason) => reason.code), threshold: 40,
     message: warnings.map((reason) => reason.message).join(" "), level: warnings.length ? "warning" : reasons.length ? "info" : "none", basis, reviewed,
@@ -539,6 +705,7 @@ function applyInventoryEvidence(original) {
   const rawProducts = evidenceProducts(original);
   if (!rawProducts.some((row) => Object.hasOwn(row, "stock") && Object.hasOwn(row, "bookingCount"))) return original;
   const baseline = original.inventoryCapacityBaseline || {};
+  const historicalProducts = productCapacityInputs(original, baseline);
   const stockCorrections = applyProductStockCorrections(rawProducts, baseline.productStockCorrections, (row) => productKind(row) === "lodging");
   const reviewedProducts = reviewedProductEvidence(stockCorrections.rows, baseline);
   const products = reviewedProducts.rows.map(productEvidence);
@@ -557,7 +724,9 @@ function applyInventoryEvidence(original) {
   const roomGuideReference = { ...physicalRooms, label: "객실 안내 참고", role: "reference_only" };
   const lodging = summarizeEvidence(products, "lodging", {
     dates, capacity: baseline.lodging, override: baseline.lodgingOverride,
-    productCapacities: correctionCapacity(baseline.lodgingOverride) === null ? {} : Object.fromEntries((baseline.lodgingOverride.products || []).map((product) => [String(product.id), nonnegative(product.count)])),
+    productCapacities: historicalProducts.capacities,
+    fixedProductCapacities: historicalProducts.fixed,
+    productCapacityEvidence: historicalProducts.evidence,
     dayUse, shared: ["confirmed", "assumed_shared"].includes(sharedRooms.status),
     // An incomplete product list cannot establish that day use is absent. Do
     // not turn unmeasured sharing/stock into synthetic telephone reservations.
@@ -575,11 +744,11 @@ function applyInventoryEvidence(original) {
   const capacityReview = buildCapacityReview(item, { baseline, rows: reviewedProducts.rows, lodging, dates });
   const originalRevenue = nonnegative(item.weeklyAdjustedRevenue ?? item.weeklyEstimatedRevenue) + nonnegative(item.dayUseWeeklyAdjustedRevenue ?? item.dayUseWeeklyEstimatedRevenue);
   item.inventoryEvidence = {
-    version: 4, policy: POLICY, phoneValuationPolicy: PHONE_VALUATION_POLICY, lodging, dayUse, physicalRooms: roomGuideReference, roomGuideReference, sharedRooms, capacityBasis, capacityReview,
+    version: INVENTORY_VERSION, policy: POLICY, phoneValuationPolicy: PHONE_VALUATION_POLICY, dayUseSharingPolicy: DAY_USE_SHARING_POLICY, lodging, dayUse, physicalRooms: roomGuideReference, roomGuideReference, sharedRooms, capacityBasis, capacityReview,
     exclusionEvidence: reviewedProducts.exclusionEvidence,
     normalizationEvidence: [...stockCorrections.normalizationEvidence, ...reviewedProducts.normalizationEvidence],
     excludedNonRoomProductCount: reviewedProducts.excludedProductCount,
-    legacyExcluded: previous?.version === 4 && previous.policy === POLICY ? previous.legacyExcluded : {
+    legacyExcluded: previous?.version >= 4 && previous.policy === POLICY ? previous.legacyExcluded : {
       lodgingSold: lodging ? Math.max(0, nonnegative(original.weeklyTotalSoldOut) - lodging.sold) : 0,
       dayUseSold: dayUse ? Math.max(0, nonnegative(original.dayUseWeeklyTotalSoldOut) - dayUse.sold) : 0,
       revenue: Math.max(0, originalRevenue - (lodging?.revenue || 0) - (dayUse?.revenue || 0))
@@ -587,8 +756,8 @@ function applyInventoryEvidence(original) {
   };
   applyKindFields(item, lodging, "lodging");
   applyKindFields(item, dayUse, "dayUse");
-  if (previous?.version === 4 && JSON.stringify(previous) === JSON.stringify(item.inventoryEvidence) && Object.keys(item).every((key) => typeof item[key] === "object" || item[key] === original[key])) return original;
+  if (previous?.version === INVENTORY_VERSION && JSON.stringify(previous) === JSON.stringify(item.inventoryEvidence) && Object.keys(item).every((key) => typeof item[key] === "object" || item[key] === original[key])) return original;
   return item;
 }
 
-module.exports = { applyInventoryEvidence, productEvidence, summarizeEvidence, buildCapacityReview, buildStoredCapacityReview };
+module.exports = { applyInventoryEvidence, productEvidence, summarizeEvidence, buildCapacityReview, buildStoredCapacityReview, observedProductCapacityEvidence };

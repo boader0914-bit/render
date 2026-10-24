@@ -122,7 +122,10 @@ test("real server corrections and history recover only certified legacy company 
   assert.equal(JSON.stringify([...f.data.rawCompanies]), masterBefore);
   for (const [name, digest] of Object.entries(sourceBefore)) assert.equal(sha(await fsp.readFile(path.join(f.runDirectory, name))), digest);
   const afterRestart = await createSavedProductRecovery(f.dependencies).read(REQUEST, f.data);
-  assert.deepEqual(copy(afterRestart), copy({ observations: result.observations, warnings: result.warnings }));
+  assert.deepEqual(copy(afterRestart), copy({ observations: result.observations, warnings: result.warnings,
+    productCapacityEvidence: result.productCapacityEvidence }));
+  assert.equal(afterRestart.productCapacityEvidence.length, 2);
+  assert.ok(afterRestart.productCapacityEvidence.every(value => value.companyId === COMPANY_ID && value.runId === RUN_ID && value.count === 5));
   assert.equal((await f.service.recover({ month: "2026-09", companyIds: [COMPANY_ID] }, f.data)).receipts[0].created, false);
 });
 
@@ -209,6 +212,7 @@ test("latest valid company-date observations replace older recovered keyword res
   const later = { ...earlier, runId: "sancheong_glamping_20260902_090000", collectedAt: "2026-09-02T00:00:00.000Z",
     collectedDate: "2026-09-02", keyword: "산청글램핑", sold: 1, publicBookings: 1, phoneBookings: 0,
     publicRevenue: 100000, phoneRevenue: 0, estimatedRevenue: 100000, phonePriceEstimates: [],
+    phoneAllocatedBookings: 0, phoneAllocatedRevenue: 0, phoneRevenueLow: 0, phoneRevenueHigh: 0,
     explicitBlockedBookings: 0, explicitBlockedRevenue: 0, phonePricedBookings: 0 };
   const report = snapshot(f, { observations: [...result.observations, ...result.observations] }, {
     runs: [...f.data.runs, { id: later.runId, collectedAt: later.collectedAt, keyword: later.keyword, collectionQuality: { status: "complete" } }],

@@ -14,7 +14,8 @@ const PREVIEW_TTL_MS = 15 * 60 * 1000;
 const PREVIEW_CACHE_BYTES = 32 * 1024 * 1024;
 const PRODUCTS = ["lodging", "dayuse"];
 const METRICS = ["supply", "sold", "publicBookings", "phoneBookings", "sharedDayUseExcluded", "explicitBlockedBookings"];
-const REVENUE_METRICS = ["estimatedRevenue", "publicRevenue", "phoneRevenue", "phoneFallbackRevenue", "phoneFallbackBookings", "phoneMissingPriceBookings"];
+const REVENUE_METRICS = ["estimatedRevenue", "publicRevenue", "phoneRevenue", "phoneFallbackRevenue", "phoneFallbackBookings", "phoneMissingPriceBookings",
+  "phoneAllocatedBookings", "phoneAllocatedRevenue", "phoneRevenueLow", "phoneRevenueHigh"];
 const ID_PATTERN = /^mr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function fail(code, message, statusCode = 400) {
@@ -120,13 +121,21 @@ function priceEvidence(row, request) {
   // same response. A quote for tomorrow (or a later comparable stay date) can
   // therefore already be known before today's observation cutoff.
   const invalidPriceDate = estimates.some(value => !dateKey(value.sourceDate));
+  const allocatedBookings = number(row.phoneAllocatedBookings);
+  const allocatedRevenue = number(row.phoneAllocatedRevenue);
+  const revenueLow = number(row.phoneRevenueLow), revenueHigh = number(row.phoneRevenueHigh);
+  const hasAllocated = row.phoneAllocatedBookings != null || row.phoneAllocatedRevenue != null;
+  const hasRange = row.phoneRevenueLow != null || row.phoneRevenueHigh != null;
+  const invalidAllocation = (hasAllocated && (allocatedBookings === null || allocatedRevenue === null
+    || !Number.isInteger(allocatedBookings) || allocatedBookings > phoneBookings || allocatedRevenue > phoneRevenue))
+    || (hasRange && (revenueLow === null || revenueHigh === null || revenueLow > phoneRevenue || revenueHigh < phoneRevenue));
   const priceObservedDate = kstDate(row.collectedAt);
   const futurePrice = !priceObservedDate || priceObservedDate > request.cutoffDate || priceObservedDate > row.date;
   const missingPhonePrice = number(row.phoneMissingPriceBookings) || (phoneBookings > 0 && phoneRevenue === 0 ? phoneBookings : 0);
   const missingPublicPrice = number(row.missingPriceSoldOut) || (publicBookings > 0 && publicRevenue === 0 ? publicBookings : 0);
   const zeroWithoutPrice = publicBookings + phoneBookings > 0 && estimatedRevenue === 0;
-  const invalid = !valued || invalidPriceDate || futurePrice || zeroWithoutPrice;
-  const reason = futurePrice ? "price_after_cutoff" : !valued || invalidPriceDate ? "inconsistent_revenue" : invalid ? "unpriced_bookings" : "";
+  const invalid = !valued || invalidPriceDate || invalidAllocation || futurePrice || zeroWithoutPrice;
+  const reason = futurePrice ? "price_after_cutoff" : !valued || invalidPriceDate || invalidAllocation ? "inconsistent_revenue" : invalid ? "unpriced_bookings" : "";
   return {
     eligible: !invalid,
     reason,
@@ -135,9 +144,14 @@ function priceEvidence(row, request) {
     phoneRevenue: invalid ? null : phoneRevenue,
     phoneFallbackRevenue: invalid ? null : number(row.phoneFallbackRevenue) || 0,
     phoneFallbackBookings: invalid ? null : number(row.phoneFallbackBookings) || 0,
+    phoneAllocatedBookings: invalid ? null : allocatedBookings,
+    phoneAllocatedRevenue: invalid ? null : allocatedRevenue,
+    phoneRevenueLow: invalid ? null : revenueLow,
+    phoneRevenueHigh: invalid ? null : revenueHigh,
     phoneMissingPriceBookings: missingPhonePrice,
     revenuePartial: !invalid && (missingPhonePrice > 0 || missingPublicPrice > 0 || Boolean(row.explicitBlockedDayUseUnverified)),
-    priceEvidenceType: !invalid && number(row.phoneFallbackRevenue) > 0 ? "same_product_observed_fallback" : !invalid ? "stay_date_observed_price" : "none"
+    priceEvidenceType: !invalid && allocatedBookings > 0 ? "product_shortfall_allocated_price"
+      : !invalid && number(row.phoneFallbackRevenue) > 0 ? "same_product_observed_fallback" : !invalid ? "stay_date_observed_price" : "none"
   };
 }
 function knownPartialRevenue(row, request) {
@@ -395,7 +409,10 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}) 
       sharedDayUseExcluded: number(row.sharedDayUseExcluded) || 0, explicitBlockedBookings: number(row.explicitBlockedBookings) || 0,
       ...valuation, revenueEligible: valuation.eligible, revenueMissingReason: valuation.reason,
       phonePriceEstimates: Array.isArray(row.phonePriceEstimates) ? clone(row.phonePriceEstimates) : [],
+      ...(row.phoneValuation ? { phoneValuation: clone(row.phoneValuation) } : {}),
+      ...(row.sharedDayUseEvidence ? { sharedDayUseEvidence: clone(row.sharedDayUseEvidence) } : {}),
       capacityBasis: row.capacityBasis ? clone(row.capacityBasis) : null,
+      ...(Array.isArray(row.capacityWitnesses) ? { capacityWitnesses: clone(row.capacityWitnesses) } : {}),
       dayUseSharingStatus: String(row.dayUseSharingStatus || ""),
       phoneValuationPolicy: String(row.phoneValuationPolicy || "")
     };
@@ -520,6 +537,8 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}) 
       reservationRate: "유효하게 관측된 숙박 예약 추정 수량 ÷ 같은 관측의 숙박 공급 수량. 월 전체 점유율이나 실제 확정 예약률이 아닙니다.",
       estimatedRevenue: "공개 예약 금액과 전화·타채널 예약 추정 금액 중 가격 근거가 확인된 날짜의 원화 소계입니다. 실제 결제 매출이 아닙니다.",
       phoneBookings: "재고 근거에 따른 전화·타채널 예약 추정 수량입니다. 명시적 방막기는 이 수량의 일부이며 다시 더하지 않습니다.",
+      productAllocation: "같은 업체·상품의 관측 시점까지 확보한 최대수량과 해당 상품 가격을 적용합니다. 공유 데이유즈의 상품 연결이 불명확한 잔여분은 부족수량 비율로 배분한 추정이며 실제 상품별 예약 확정 수량이 아닙니다.",
+      sharedDayUse: "같은 공유객실군의 런치·디너는 시간대별 재사용으로 보고 큰 판매수량을 한 번 차감합니다. 일반 데이유즈와 서로 다른 객실군은 따로 계산합니다.",
       knownPartialRevenue: "부분 응답의 공개예약 금액과 명시적 방막기 금액만 별도 표시합니다. 정상 예상매출과 합산하지 않으며 설명되지 않은 재고 차이는 제외합니다.",
       dayuse: "당일 이용의 수량·매출은 숙박 객실박 수량·매출과 별도입니다. 미조회 당일 이용은 0으로 취급하지 않습니다.",
       changes: "동일 업체·숙박일·상품유형과 동일 공급 수량의 첫·마지막 유효 관측만 비교합니다. 변화량은 신규 예약 확정 건수가 아닙니다.",

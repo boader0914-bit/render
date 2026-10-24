@@ -14,6 +14,8 @@ const { buildPolicyDocument } = require("./public_policy_content.cjs");
 const { applyInventoryEvidence, buildCapacityReview, buildStoredCapacityReview } = require("./inventory_estimation.cjs");
 const { collectionCapacityCoverageForBusiness } = require("./lib/collection_capacity_coverage.cjs");
 const { sanitizeProductStockCorrections } = require("./lib/inventory_manual_corrections.cjs");
+const { observedProductCapacityEvidence, productCapacityBaselineAt, compactProductCapacityEvidence } = require("./lib/product_capacity_baseline.cjs");
+const { createProductCapacityStore, productCapacityCorrectionSignature } = require("./lib/product_capacity_store.cjs");
 const { otaProviderFromUrl } = require("./naver_place_ota_observation.cjs");
 const { createCollector: createTourismCollector } = require("./tourism_collector.cjs");
 const { createSpecialDaysService } = require("./lib/special_days.cjs");
@@ -577,6 +579,7 @@ const companyCapacityRegistry = createCompanyCapacityRegistry({
   dataDir: DATA_DIR, observationIndex: historyObservationIndex, observedCapacity: companyMaximumRoomCapacity,
   reviewedCapacity: company => company.manualCorrection?.active === false ? null : manualCorrectionLodgingBasisTotal(company.manualCorrection)
 });
+const productCapacityStore = createProductCapacityStore({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR });
 const readMonthlyReportRevision = createMonthlyReportSourceRevision({ dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR,
     regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
     tourismRegionMapFile: path.join(WEB_DIR, "data", "tourism_region_map.json"), includeContext: false });
@@ -590,10 +593,14 @@ const monthlyCompanySourceVersion = crypto.createHash("sha256")
   .update(fs.readFileSync(path.join(__dirname, "lib", "industry_analysis.cjs")))
   .update(fs.readFileSync(path.join(__dirname, "lib", "company_capacity_registry.cjs")))
   .update(fs.readFileSync(path.join(__dirname, "lib", "saved_product_recovery.cjs")))
+  .update(fs.readFileSync(path.join(__dirname, "lib", "product_capacity_baseline.cjs")))
+  .update(fs.readFileSync(path.join(__dirname, "lib", "product_capacity_store.cjs")))
   .update(fs.readFileSync(path.join(__dirname, "inventory_estimation.cjs")))
   .update(fs.readFileSync(path.join(__dirname, "verified_room_inventory.json"))).digest("hex");
 const recalculateMonthlyCompanyObservations = createMonthlyCompanyRecalculation({
   loadRun, applyCompanyManualCorrection, companyProductAvailabilityMatch, buildHistoryObservations,
+  recalculateAllInventory: true,
+  readProductCapacityEvidence: (request, data, options) => savedProductRecovery.capacityEvidence(request, data, options),
   // This application's correction callbacks need provider identities, the
   // complete manual review and the exact maximum-capacity witness only.
   projectCorrectionCompany: compactMonthlyCapacityCompany,
@@ -637,7 +644,8 @@ const monthlyReportSources = createMonthlyReportSources({
   },
   capacityForCompany: company => manualCorrectionLodgingBasisTotal(company.manualCorrection) || companyMaximumRoomCapacity(company) || null,
   recalculateCompanyObservations: recalculateMonthlyCompanyObservations,
-  readSavedProductRecoveries: (request, data) => savedProductRecovery.read(request, data),
+  readSavedProductRecoveries: (request, data, options) => savedProductRecovery.read(request, data, options),
+  publishProductCapacityEvidence: (evidence, context) => productCapacityStore.publish(evidence, context),
   readContext: readMonthlyRegionContext,
   readSpecialDays: async year => (await specialDaysService.status(year)).yearStatus
 });
@@ -719,7 +727,7 @@ const readCompanyIntegratedRevision = createCompanyIntegratedSourceRevision({
   calculationFiles: ["company_integrated_db.cjs", "monthly_reports.cjs", "monthly_report_comparison.cjs",
     "monthly_report_sources.cjs", "monthly_report_context.cjs", "monthly_company_recalculation.cjs", "monthly_company_source_catalog.cjs",
     "company_capacity_registry.cjs", "monthly_report_insights.cjs", "industry_analysis.cjs",
-    "inventory_manual_corrections.cjs", "company_master_stream.cjs", "history_observation_index.cjs", "saved_product_recovery.cjs"].map(name => path.join(__dirname, "lib", name))
+    "inventory_manual_corrections.cjs", "product_capacity_baseline.cjs", "product_capacity_store.cjs", "company_master_stream.cjs", "history_observation_index.cjs", "saved_product_recovery.cjs"].map(name => path.join(__dirname, "lib", name))
     .concat([path.join(__dirname, "inventory_estimation.cjs"), path.join(__dirname, "verified_room_inventory.json")]),
   calculationFingerprint: companyIntegratedCalculationFingerprint()
 });
@@ -9862,18 +9870,24 @@ function singleAvailabilityRow(stayDate, available, total) {
 }
 
 function inventoryEstimateBreakdown(row = {}) {
-  const fields = ["rawTotal", "publicBookings", "phoneBookings", "sharedDayUseExcluded", "unknownUnavailable", "publicRevenue", "phoneRevenue", "phonePricedBookings", "phoneMissingPriceBookings", "phoneFallbackRevenue", "phoneFallbackBookings", "explicitBlockedBookings", "explicitBlockedRevenue"];
+  const fields = ["rawTotal", "publicBookings", "phoneBookings", "sharedDayUseExcluded", "unknownUnavailable", "publicRevenue", "phoneRevenue", "phonePricedBookings", "phoneMissingPriceBookings", "phoneFallbackRevenue", "phoneFallbackBookings", "explicitBlockedBookings", "explicitBlockedRevenue", "phoneAllocatedBookings", "phoneAllocatedRevenue", "phoneRevenueLow", "phoneRevenueHigh"];
   return {
     ...Object.fromEntries(fields.filter((field) => Object.hasOwn(row, field)).map((field) => [field, productSnapshotNumber(row[field])])),
     ...(Array.isArray(row.phonePriceEstimates) ? { phonePriceEstimates: row.phonePriceEstimates.map(value => ({
       productKey: String(value?.productKey || "").slice(0, 160),
       quantity: productSnapshotNumber(value?.quantity), unitPrice: productSnapshotNumber(value?.unitPrice),
       revenue: productSnapshotNumber(value?.revenue), source: value?.source,
-      sourceDate: String(value?.sourceDate || "")
+      sourceDate: String(value?.sourceDate || ""),
+      ...(value?.quantitySource ? { quantitySource: value.quantitySource } : {}),
+      ...(value?.allocationSource ? { allocationSource: value.allocationSource } : {}),
+      ...(Object.hasOwn(value || {}, "estimatedQuantity") ? { estimatedQuantity: Boolean(value.estimatedQuantity) } : {})
     })).filter(value => value.quantity > 0 && value.unitPrice > 0 && value.revenue > 0
       && ["same_product_same_date", "same_product_same_weekday", "same_product_nearest_date"].includes(value.source)
       && /^\d{4}-\d{2}-\d{2}$/.test(value.sourceDate)) } : {}),
-    ...(row.phoneValuationPolicy === "same_product_observed_price_v1" ? { phoneValuationPolicy: row.phoneValuationPolicy } : {}),
+    ...(["same_product_observed_price_v1", "proportional_product_shortfall_v2"].includes(row.phoneValuationPolicy) ? { phoneValuationPolicy: row.phoneValuationPolicy } : {}),
+    ...(row.phoneValuation ? { phoneValuation: row.phoneValuation } : {}),
+    ...(row.sharedDayUseEvidence ? { sharedDayUseEvidence: row.sharedDayUseEvidence } : {}),
+    ...(Array.isArray(row.capacityWitnesses) ? { capacityWitnesses: row.capacityWitnesses } : {}),
     ...(Object.hasOwn(row, "explicitBlockedDayUseUnverified") ? { explicitBlockedDayUseUnverified: Boolean(row.explicitBlockedDayUseUnverified) } : {}),
     ...(Object.hasOwn(row, "capacityConflict") ? { capacityConflict: Boolean(row.capacityConflict) } : {}),
     ...(row.capacityBasis ? { capacityBasis: row.capacityBasis } : {}),
@@ -9893,6 +9907,7 @@ function historySeriesForItem(item, productType, checkIn) {
       offlineReserved: Number(row.phoneBookings || 0),
       capacityBasis: item.inventoryEvidence.capacityBasis || null,
       capacityReview: item.inventoryEvidence.capacityReview || null,
+      capacityWitnesses: evidence.productCapacityEvidence || [],
       phoneValuationPolicy: item.inventoryEvidence.phoneValuationPolicy || null,
       inventoryEvidenceVersion: item.inventoryEvidence.version
     }));
@@ -10695,6 +10710,10 @@ function compactCompanyProductSnapshot(item = {}, run = {}, collectedAt = "") {
     collectedAt: collectedAt || "",
     productsRunId: run.id || "",
     productsCollectedAt: collectedAt || "",
+    productCapacityCorrectionSignature: typeof productCapacityCorrectionSignature === "function" ? productCapacityCorrectionSignature({ manualCorrection: item.companyManualCorrection }) : "",
+    productCapacityEvidence: typeof observedProductCapacityEvidence === "function" ? observedProductCapacityEvidence(item,
+      { companyId: item.companyId || (item.placeId || item.place_id ? `cmp_place_${item.placeId || item.place_id}` : ""), manualCorrection: item.companyManualCorrection },
+      { runId: run.id || "", collectedAt }) : [],
     dailyRunId: run.id || "",
     dailyCollectedAt: collectedAt || "",
     dateRange: { start: dates[0] || "", end: dates.at(-1) || "" },
@@ -11581,6 +11600,9 @@ function mergeCompanyProductSnapshots(previous = null, incoming = null) {
     products: Array.isArray(productSource.products) ? productSource.products : [],
     priceGroups: Array.isArray(productSource.priceGroups) ? productSource.priceGroups : [],
     daily: Array.isArray(dailySource.daily) ? dailySource.daily : [],
+    productCapacityEvidence: typeof compactProductCapacityEvidence === "function" ? compactProductCapacityEvidence([
+      ...(previous.productCapacityCorrectionSignature === incoming.productCapacityCorrectionSignature ? previous.productCapacityEvidence || [] : []),
+      ...(incoming.productCapacityEvidence || [])]) : incoming.productCapacityEvidence || previous.productCapacityEvidence || [],
     phoneValuationPolicy: dailySource.phoneValuationPolicy || null,
     productsRunId: productSource.productsRunId || productSource.runId || "",
     productsCollectedAt: productSource.productsCollectedAt || productSource.collectedAt || "",
@@ -15231,8 +15253,8 @@ function companyInventoryNeedsEvidenceRecovery(company = {}) {
     const hasSignalView = Boolean(inventory.salesSignal?.lodging?.days || inventory.salesSignal?.dayUse?.days || inventory.revenue);
     if (!hasProductView && !hasSignalView) return false;
     const version = Number(inventory.inventoryEvidenceVersion ?? snapshot?.inventoryEvidenceVersion ?? 0);
-    if (version < 4 || (hasProductView && Number(snapshot.inventoryEvidenceVersion || 0) < 4)) return true;
-    if (snapshot?.phoneValuationPolicy !== "same_product_observed_price_v1"
+    if (version < 5 || (hasProductView && Number(snapshot.inventoryEvidenceVersion || 0) < 5)) return true;
+    if (snapshot?.phoneValuationPolicy !== "proportional_product_shortfall_v2"
       && (Number(inventory.revenue?.lodging?.phoneMissingPriceBookings || 0) > 0
         || inventory.salesSignal?.lodging?.partial
         || (snapshot?.daily || []).some(row => row.productType === "lodging"
@@ -16261,6 +16283,15 @@ function withCompanyInventoryCapacityRecord(item = {}, company = {}) {
     businessType: (company.lodgingTypes || []).join(" "),
     source: "same_company_saved_maximum"
   };
+  if (typeof productCapacityBaselineAt === "function") {
+    const signature = typeof productCapacityCorrectionSignature === "function" ? productCapacityCorrectionSignature(company) : "";
+    const evidence = [...(company._productCapacityEvidence || []), ...[company.inventory?.latest, company.inventory?.previousLatest, ...(company.inventory?.snapshots || [])]
+      .filter(snapshot => snapshot?.productSnapshot?.productCapacityCorrectionSignature === signature).flatMap(snapshot => snapshot.productSnapshot?.productCapacityEvidence || [])];
+    const products = productCapacityBaselineAt(evidence, company.companyId, item.inventoryObservedAt || "");
+    baseline.lodgingProducts = { ...products.lodgingProducts, ...(baseline.lodgingProducts || {}) };
+    baseline.dayUseProducts = { ...products.dayUseProducts, ...(baseline.dayUseProducts || {}) };
+    if (company._productCapacityWarnings?.length) baseline.productCapacityWarnings = company._productCapacityWarnings;
+  }
   // Always resolve against the current DB, including a reduced or cleared value.
   delete baseline.lodgingOverride;
   delete baseline.dayUseOverride;
@@ -16580,6 +16611,7 @@ function summarizeAvailabilityRows(rows, baseDir = "", capacityCompanies = [], c
   const items = availabilityItems
     .map((item) => applyInventoryEvidence(withIndexedCompanyInventoryCapacity({
       ...item,
+      inventoryObservedAt: collectionRange.collectedAt || "",
       ...(item.itemDetails.length || item.weeklyProductDetails.length ? {
         checkIn: collectionRange.checkIn || "",
         bookingRangeDays: Number(collectionRange.bookingRangeDays || 0)
@@ -18151,9 +18183,23 @@ async function loadRun(runId, options = {}) {
   const stats = summarizeStats(regions);
   if (datalabTrend) stats.datalabTrend = datalabTrend;
   const capacityMaster = Array.isArray(options.capacityCompanies) ? null : await readCompanyMaster();
-  const capacityCompanies = Array.isArray(options.capacityCompanies)
+  let capacityCompanies = Array.isArray(options.capacityCompanies)
     ? options.capacityCompanies : Object.values(capacityMaster.companies || {});
+  if (!options.skipProductCapacityStore) {
+    const sourceRows = [...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows];
+    const placeIds = new Set(sourceRows.map(extractNaverPlaceId).filter(Boolean).map(String));
+    const bookingIds = new Set(sourceRows.map(extractBookingBusinessId).filter(Boolean).map(String));
+    const projections = new Map(), descriptors = new Map();
+    for (const company of capacityCompanies) {
+      if (!(company?.placeIds || []).some(id => placeIds.has(String(id))) && !(company?.bookingBusinessIds || []).some(id => bookingIds.has(String(id)))) continue;
+      const saved = await productCapacityStore.read(company, descriptors);
+      if (saved.evidence.length || saved.warning) projections.set(company, { ...company, _productCapacityEvidence: saved.evidence,
+        _productCapacityWarnings: saved.warning ? [saved.warning] : [] });
+    }
+    if (projections.size) capacityCompanies = capacityCompanies.map(company => projections.get(company) || company);
+  }
   const availability = summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows], dirPath, capacityCompanies, {
+    collectedAt: runCollectedAt(runId, manifest || {}, stat),
     keyword: manifest?.keyword || conditions.keyword || "",
     checkIn: manifest?.checkIn || conditions.checkIn || runDateFromId(runId),
     bookingRangeDays: manifest?.bookingRangeDays || 1,

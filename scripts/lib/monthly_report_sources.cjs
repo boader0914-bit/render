@@ -23,7 +23,7 @@ async function readJson(file, fallback, checkpoint = async () => {}) {
   catch (error) { if (error.code === "ENOENT") return fallback; throw sourceError(); }
 }
 
-function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, observationIndex = null, prepareCompanies = null, projectCapacityCompany = null, companySourceVersion = "monthly-company-source-v1", useSourceReadValidationBoundary = false, shareFrozenCatalogMetadata = false, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readSavedProductRecoveries = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", now = () => new Date(), runWork = operation => operation() }) {
+function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, observationIndex = null, prepareCompanies = null, projectCapacityCompany = null, companySourceVersion = "monthly-company-source-v1", useSourceReadValidationBoundary = false, shareFrozenCatalogMetadata = false, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readSavedProductRecoveries = null, publishProductCapacityEvidence = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", now = () => new Date(), runWork = operation => operation() }) {
   if (typeof useSourceReadValidationBoundary !== "boolean") throw new TypeError("Source-read validation opt-in must be boolean");
   if (typeof shareFrozenCatalogMetadata !== "boolean") throw new TypeError("Frozen catalog sharing opt-in must be boolean");
   if (readSavedProductRecoveries !== null && typeof readSavedProductRecoveries !== "function") throw new TypeError("Saved recovery reader must be a function");
@@ -347,12 +347,14 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     // This optional hook must only read saved collection evidence: never collect
     // again or refresh an external API. Current calculations replace the same
     // company/run/product/date row, while report quality and time gates remain.
+    let productCapacityEvidence = [];
     if (recalculateCompanyObservations !== null) {
       try {
         await checkpoint();
         const recalculated = await recalculateCompanyObservations(request, data, { checkpoint,
           ...(sourceReadValidationBoundary ? { sourceReadValidationBoundary } : {}) });
         if (!Array.isArray(recalculated) || recalculated.some(row => !row || typeof row !== "object" || Array.isArray(row))) throw sourceError();
+        if (Array.isArray(recalculated.productCapacityEvidence)) productCapacityEvidence = recalculated.productCapacityEvidence;
         for (let index = 0; index < recalculated.length; index++) {
           if (index % 256 === 0) await checkpoint();
           addRow(recalculated[index]);
@@ -362,9 +364,10 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     let savedProductRecoveries = [], recoveryWarnings = [];
     if (readSavedProductRecoveries !== null && request.type !== "keyword") {
       try {
-        const recovered = await readSavedProductRecoveries(request, data, { checkpoint });
+        const recovered = await readSavedProductRecoveries(request, data, { checkpoint, productCapacityEvidence });
         if (!Array.isArray(recovered?.observations) || !Array.isArray(recovered?.warnings)) throw sourceError();
         savedProductRecoveries = recovered.observations;
+        if (Array.isArray(recovered.productCapacityEvidence)) productCapacityEvidence = recovered.productCapacityEvidence;
         recoveryWarnings = recovered.warnings.map(value => typeof value === "string" ? value : value?.message).filter(value => typeof value === "string");
       } catch { throw sourceError(); }
     }
@@ -412,6 +415,9 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
       warnings, sourceDiagnostics: { unmatchedCompanyRows, duplicatePlaceCompanies },
       globalWarnings, globalDiagnostics: { malformedHistoryLines, unmatchedCompanyRows: globalUnmatchedCompanyRows, duplicatePlaceCompanies: globalDuplicatePlaceCompanies,
         ...(request.type === "region" ? { unmappedRegionCompanies } : {}) }, context };
+    if (publishProductCapacityEvidence && data._companySource) Object.defineProperty(source, "_productCapacityPublication", {
+      value: { evidence: productCapacityEvidence, companies: data.rawCompanies, sourceRevision: data._companySource.revision,
+        assertCurrent: () => data._companySource.assertCurrent() }, configurable: true });
     if (assertAtReturn && data._companySource) { try { await data._companySource.assertCurrent(); } catch { throw sourceError(); } }
     return includeCatalog ? { source, catalog: data } : source;
     } finally { sourceReadActive = false; }
@@ -423,6 +429,20 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
       sourceMetrics.preparedCatalogReads++;
       sourceMetrics.preparedCatalogReadsByScope[Object.hasOwn(sourceMetrics.preparedCatalogReadsByScope, request.type) ? request.type : "other"]++;
       if (request.type === "company") sourceMetrics.companyProjectionReads++;
+    };
+    const finish = async result => {
+      const source = includeCatalog ? result.source : result, publication = source?._productCapacityPublication;
+      if (publication) {
+        delete source._productCapacityPublication;
+        try { await publishProductCapacityEvidence(publication.evidence, publication); }
+        catch (error) {
+          if (["MONTHLY_COMPANY_SOURCE_CHANGED", "MONTHLY_COMPANY_SOURCE_REVISION_UNAVAILABLE", "MONTHLY_SOURCE_UNAVAILABLE"].includes(error.code)) throw sourceError();
+          // A derived witness cache cannot turn a verified source read into
+          // missing or zero data. Its own later reader also validates/falls back.
+          source.warnings.push("상품별 최대관측 근거 저장을 완료하지 못했습니다. 현재 검증된 원본 계산은 유지됩니다.");
+        }
+      }
+      return result;
     };
     if (companySourceCatalog && useSourceReadValidationBoundary) {
       // The catalog owns both full freshness boundaries of this one read. Its
@@ -436,9 +456,10 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
         catch (error) { consumerFailed = true; consumerFailure = error; throw error; }
       };
       try {
-        return request.type === "company"
+        const result = request.type === "company"
           ? await companySourceCatalog.withCompanyCatalog(request.targetId, consume, { checkpoint })
           : await companySourceCatalog.withCatalog(consume, { checkpoint });
+        return await finish(result);
       } catch (error) {
         if (consumerFailed) throw consumerFailure;
         throw sourceError();
@@ -454,7 +475,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
         acquired();
       } catch { throw sourceError(); }
     } else data = await readCatalog({ checkpoint });
-    return readSourceData(request, includeCatalog, options, data);
+    return finish(await readSourceData(request, includeCatalog, options, data));
   }
   function queueSourceRead(request, includeCatalog = false, options = {}) {
     // All consumers (including background company materialization) share this

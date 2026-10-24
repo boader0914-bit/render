@@ -9,7 +9,7 @@ const { buildMonthlyReportSnapshot } = require("./monthly_reports.cjs");
 const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./monthly_report_comparison.cjs");
 
 const SCHEMA_VERSION = 1;
-const CALCULATION_VERSION = "company-integrated-v3-saved-product-recovery";
+const CALCULATION_VERSION = "company-integrated-v4-product-max-room-reuse";
 const clone = value => JSON.parse(JSON.stringify(value));
 const identity = row => String(row?.companyId || row?.companyKey || row?.id || "");
 const monthValid = value => /^\d{4}-(0[1-9]|1[0-2])$/.test(String(value || ""));
@@ -560,6 +560,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
       && stateJob?.verifiedBootstrapFailure === state.bootstrap.failureGeneration && stateJob.verifiedMonths?.includes(selectedMonth));
     const bootstrapError = recoveredRevision ? null : state.bootstrap?.errorCode;
     return { schemaVersion: SCHEMA_VERSION, companyId, calculationVersion, calculatedAt: selected?.calculatedAt || null,
+      sourceRevision: selected?.sourceRevision || null,
       status: stateJob?.status === "failed" || storeError || bootstrapError ? "failed" : ["queued", "processing"].includes(stateJob?.status) ? "refreshing" : selected ? "ready" : "pending",
       errorCode: storeError || stateJob?.errorCode || bootstrapError || null, selectedMonth, months: rows, snapshot: selected?.snapshot || null,
       keywords, roomBasis: { ...selectedRoomBasis, capacity: selectedRoomBasis?.capacity ?? selectedRoomBasis?.count ?? basis?.capacity ?? metadata.company.capacity ?? null,

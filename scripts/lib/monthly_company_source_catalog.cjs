@@ -47,7 +47,7 @@ function compactCapacitySnapshot(snapshot) {
       const count = capacityNumber(row.rawTotal);
       if (count !== null && count > maximum) { maximum = count; witness = row; }
     }
-    selected.productSnapshot = Object.fromEntries(["runId", "dailyRunId", "collectedAt", "inventoryEvidenceVersion", "capacityBasis"]
+    selected.productSnapshot = Object.fromEntries(["runId", "dailyRunId", "collectedAt", "inventoryEvidenceVersion", "capacityBasis", "productCapacityEvidence", "productCapacityCorrectionSignature"]
       .filter(key => Object.hasOwn(product, key)).map(key => [key, product[key]]));
     selected.productSnapshot.daily = witness ? [Object.fromEntries(["productType", "missing", "rawTotal"].filter(key => Object.hasOwn(witness, key)).map(key => [key, witness[key]]))] : [];
   }

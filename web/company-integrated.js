@@ -95,14 +95,16 @@
   function freshness(row) {
     if (!row.observed) return "미관측·미확인";
     if (row.lag === null) return "관측일 미확인";
-    return row.lag === 0 ? "숙박 당일 관측" : `${num(row.lag)}일 전 관측`;
+    return [row.lag === 0 ? "숙박 당일 관측" : `${num(row.lag)}일 전 관측`,
+      row.source?.phoneAllocatedBookings > 0 ? "상품 배분 추정" : "",
+      row.source?.sharedDayUseEvidence?.groups?.some(group => group.reusedBookings > 0) ? "런치·디너 재사용 반영" : ""].filter(Boolean).join(" · ");
   }
   function metrics(model) {
     const m = model.summary, q = model.quality;
     const revenue = revenueText(m), subtotal = revenue.startsWith("확인된 소계 ");
     return `<div class="ci-metrics"><section><span>객실 기준</span><strong>${num(model.capacity)}${model.capacity === null ? "" : "<small>실</small>"}</strong><small>${esc(model.roomBasis.label || model.roomBasis.source || "업체 DB 기준")}</small></section>
       <section><span>예약 합계</span><strong>${num(m.sold)}${numeric(m.sold) === null ? "" : "<small>실·박</small>"}</strong><small><b class="ci-public">네이버 ${num(m.publicBookings)}</b> · <b class="ci-other">타채널 추정 ${num(m.phoneBookings)}</b></small></section>
-      <section><span>추정 매출${subtotal ? " · 확인된 소계" : ""}</span><strong>${subtotal ? revenue.slice("확인된 소계 ".length) : revenue}</strong><small>네이버 ${revenueText(m, "public")}${numeric(m.phoneBookings) > 0 ? ` · 타채널 ${revenueText(m, "phone")}` : ""}</small></section>
+      <section><span>추정 매출${subtotal ? " · 확인된 소계" : ""}</span><strong>${subtotal ? revenue.slice("확인된 소계 ".length) : revenue}</strong><small>네이버 ${revenueText(m, "public")}${numeric(m.phoneBookings) > 0 ? ` · 타채널 ${revenueText(m, "phone")}` : ""}</small>${m.phoneAllocatedBookings > 0 ? `<small class="ci-other">상품 배분 추정 ${num(m.phoneAllocatedBookings)}실 포함</small>` : ""}</section>
       <section><span>관측 예약률</span><strong>${pct(m.reservationRate)}</strong><small>관측 공급 ${num(m.supply)}실·박 기준</small></section></div>
       <div class="ci-coverage"><span>숙박 당일 <b>${num(q.sameDayObservedCompanyDays ?? m.sameDayObservedCompanyDays)}</b>일</span><span>사전 관측 <b>${num(q.staleDays ?? m.staleDays)}</b>일</span><span>미관측·미확인 <b>${num(q.missingCompanyDays ?? m.missingCompanyDays)}</b>일</span><span>실·박은 날짜별 객실 수의 합계입니다.</span></div>`;
   }

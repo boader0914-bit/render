@@ -62,6 +62,30 @@ test("read survives restart and uses current DB correction while immutable origi
   assert.equal(before.observations[0].certificate.receiptId, after.observations[0].certificate.receiptId);
   assert.notEqual(before.observations[0].certificate.rowDigest, after.observations[0].certificate.rowDigest);
 });
+test("certified product maxima retain as-of provenance, accept earlier normal witnesses and never rewrite original receipts", async t => {
+  const f = await fixture(t), secondRun = "gyeongnam_glamping_20260902_100450";
+  const secondDir = path.join(f.root, "outputs", secondRun);
+  await fs.mkdir(path.join(secondDir, "details"), { recursive: true });
+  const secondManifest = { ...f.manifest, runId: secondRun, collectedAt: "2026-09-02T01:09:57.838Z" };
+  await fs.writeFile(path.join(secondDir, "manifest.json"), JSON.stringify(secondManifest));
+  await fs.writeFile(path.join(secondDir, CSV), csv(f.row));
+  await fs.writeFile(path.join(secondDir, "details", "123_weekly.json"), JSON.stringify(f.products.map(row => ({ ...row, stock: 15, available: 15 - row.bookingCount }))));
+  f.company.runIds.push(secondRun); f.data.runs.push({ ...secondManifest, id: secondRun, collectionQuality: null });
+  await f.helper.recover(f.input, f.data);
+  const names = await fs.readdir(path.join(f.helper.directory, require("node:crypto").createHash("sha256").update(f.company.companyId).digest("hex"), "2026-09"));
+  const files = await Promise.all(names.map(async name => { const file = path.join(f.helper.directory, require("node:crypto").createHash("sha256").update(f.company.companyId).digest("hex"), "2026-09", name); return [file, await fs.readFile(file)]; }));
+  const evidence = await f.helper.capacityEvidence(f.request, f.data);
+  assert.deepEqual(evidence.map(row => [row.runId, row.count]).sort(), [[RUN, 10], [secondRun, 15]].sort());
+  const seen = [];
+  const helper = createSavedProductRecovery({ ...f.options, applyCompanyManualCorrection: (item, current) => {
+    seen.push([item.inventoryObservedAt, item.inventoryCapacityBaseline.lodgingProducts.room1.count]);
+    return f.options.applyCompanyManualCorrection(item, current);
+  } });
+  const normalWitness = { companyId: f.company.companyId, productId: "room1", productType: "lodging", count: 12, runId: "normal-earlier", collectedAt: "2026-08-31T01:00:00Z" };
+  await helper.read(f.request, f.data, { productCapacityEvidence: [normalWitness] });
+  assert.deepEqual(seen.sort(), [[f.manifest.collectedAt, 12], [secondManifest.collectedAt, 15]].sort());
+  for (const [file, bytes] of files) assert.deepEqual(await fs.readFile(file), bytes);
+});
 test("a failed day is excluded without losing a different normal date or reusing the failed price", async t => {
   const f = await fixture(t); f.products[0].collectionFailed = true; f.products[1].price = null; await f.write();
   const recovered = await f.helper.recover(f.input, f.data); assert.equal(recovered.receipts[0].verifiedObservationCount, 1);

@@ -10,6 +10,30 @@ const day = value => /^\d{4}-\d{2}-\d{2}$/.test(value || '') ? value : null;
 const month = value => /^20\d{2}-(0[1-9]|1[0-2])$/.test(value || '') ? value : null;
 const stamp = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null;
 const reference = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,179}$/.test(value) ? value : null;
+function valuationEvidence(row) {
+  const value = row?.phoneValuation, shared = row?.sharedDayUseEvidence;
+  return {
+    ...(number(row?.inventoryEvidenceVersion) >= 5 ? { inventoryEvidenceVersion: row.inventoryEvidenceVersion } : {}),
+    ...(reference(row?.phoneValuationPolicy) ? { phoneValuationPolicy: row.phoneValuationPolicy } : {}),
+    ...(Array.isArray(row?.capacityWitnesses) ? { capacityWitnesses: row.capacityWitnesses.slice(0, 1000)
+      .filter(value => reference(value.productKey) && count(value.count) !== null)
+      .map(value => ({ productKey: value.productKey, count: value.count, source: reference(value.source),
+        ...(day(value.sourceDate) ? { sourceDate: value.sourceDate } : {}),
+        ...(stamp(value.observedAt) ? { observedAt: value.observedAt } : {}),
+        ...(reference(value.runId) ? { runId: value.runId } : {}) })) } : {}),
+    ...(value && reference(value.policy) ? { phoneValuation: { policy: value.policy,
+      quantityPolicy: reference(value.quantityPolicy), roundingPolicy: reference(value.roundingPolicy),
+      unroundedRevenue: nonnegative(value.unroundedRevenue),
+      ...(typeof value.completePriceCoverage === 'boolean' ? { completePriceCoverage: value.completePriceCoverage } : {}) } } : {}),
+    ...(shared && reference(shared.policy) ? { sharedDayUseEvidence: { policy: shared.policy,
+      publicSessions: count(shared.publicSessions), physicalRoomBookings: count(shared.physicalRoomBookings), excludedBookings: count(shared.excludedBookings),
+      groups: (Array.isArray(shared.groups) ? shared.groups : []).slice(0, 1000).map(group => ({
+        groupKey: text(group.groupKey), lunchBookings: count(group.lunchBookings), dinnerBookings: count(group.dinnerBookings),
+        physicalRoomBookings: count(group.physicalRoomBookings), reusedBookings: count(group.reusedBookings),
+        productIds: (Array.isArray(group.productIds) ? group.productIds : []).map(reference).filter(Boolean),
+        classificationSource: reference(group.classificationSource) })) } } : {})
+  };
+}
 function sourceRecovery(row) {
   const proof = row?.sourceRecovery;
   if (!proof || proof.kind !== 'saved_product_recovery_v1' || proof.originalRunQuality !== 'unknown'
@@ -21,11 +45,13 @@ function sourceRecovery(row) {
 }
 const sourceObservation = row => row && reference(row.companyId) && reference(row.runId) && day(row.date) && row.productType === 'lodging'
   ? { companyId: row.companyId, runId: row.runId, date: row.date, productType: 'lodging', collectedAt: stamp(row.collectedAt), collectedDate: day(row.collectedDate), runQuality: ['complete', 'reused', 'partial'].includes(row.runQuality) ? row.runQuality : 'unknown',
-    ...(sourceRecovery(row) ? { sourceRecovery: sourceRecovery(row) } : {}) } : null;
+    ...valuationEvidence(row), ...(sourceRecovery(row) ? { sourceRecovery: sourceRecovery(row) } : {}) } : null;
 const numbers = (source, keys) => Object.fromEntries(keys.map(key => [key, number(source?.[key])]));
 const metrics = source => ({ ...numbers(source, ['supply', 'sold', 'publicBookings', 'phoneBookings', 'publicRevenue', 'phoneRevenue', 'estimatedRevenue', 'reservationRate', 'sharedDayUseExcluded', 'coveredCompanyDays', 'expectedCompanyDays', 'missingCompanyDays', 'revenueCoveredCompanyDays', 'sameDayObservedCompanyDays', 'staleDays', 'maxObservationLeadTimeDays', 'knownPartialRevenue']),
   phoneMissingPriceBookings: count(source?.phoneMissingPriceBookings), phoneFallbackBookings: count(source?.phoneFallbackBookings),
   phoneFallbackRevenue: nonnegative(source?.phoneFallbackRevenue),
+  phoneAllocatedBookings: count(source?.phoneAllocatedBookings), phoneAllocatedRevenue: nonnegative(source?.phoneAllocatedRevenue),
+  phoneRevenueLow: nonnegative(source?.phoneRevenueLow), phoneRevenueHigh: nonnegative(source?.phoneRevenueHigh),
   partial: source?.partial === true, revenuePartial: source?.revenuePartial === true, containsPartialRun: source?.containsPartialRun === true });
 
 function projectIntegrated(companyId, value, requestedMonth) {
@@ -35,6 +61,7 @@ function projectIntegrated(companyId, value, requestedMonth) {
     schemaVersion: number(source?.schemaVersion), source: 'company_db_integrated', companyId,
     status: source?.status === 'refreshing' ? 'updating' : ['ready', 'updating', 'failed', 'pending'].includes(source?.status) ? source.status : 'pending',
     calculatedAt: stamp(source?.calculatedAt), calculationVersion: text(String(source?.calculationVersion || '')),
+    sourceRevision: reference(source?.sourceRevision),
     selectedMonth: month(requestedMonth) || month(source?.selectedMonth),
     months: (Array.isArray(source?.months) ? source.months : []).filter(row => month(row.month)).map(row => ({ month: row.month, status: text(row.status) })),
     roomBasis: source?.roomBasis ? { count: number(source.roomBasis.capacity ?? source.roomBasis.count), source: text(source.roomBasis.source), label: text(source.roomBasis.label), reviewRequired: source.roomBasis.reviewRequired === true || source.roomBasis.warnings?.length > 0 } : null,
@@ -70,6 +97,7 @@ function projectIntegrated(companyId, value, requestedMonth) {
       // is unknown, while keeping an observed zero authoritative. No quantity
       // or money is inferred or recalculated at this projection boundary.
       phoneMissingPriceBookings: m.phoneMissingPriceBookings ?? count(evidence?.phoneMissingPriceBookings),
+      ...valuationEvidence(evidence),
       missing: !(m.coveredCompanyDays > 0), collectedAt: stamp(evidence?.collectedAt), collectedDate: day(evidence?.collectedDate),
       observationLeadTimeDays: number(evidence?.observationLeadTimeDays),
       sourceObservation: sourceObservation(evidence),
@@ -81,7 +109,8 @@ function projectIntegrated(companyId, value, requestedMonth) {
   const pickup = snapshot.insights?.pickup?.lodging;
   const publicPickup = pickup?.public;
   result.snapshot = {
-    provenance: { source: 'company_db_integrated', companyId, calculationVersion: result.calculationVersion, linkageStatus: completeLinkage ? 'complete' : 'incomplete', runIds,
+    provenance: { source: 'company_db_integrated', companyId, calculationVersion: result.calculationVersion, sourceRevision: result.sourceRevision,
+      linkageStatus: completeLinkage ? 'complete' : 'incomplete', runIds,
       selectedRunIds: [...new Set(observations.map(row => row.runId))].sort(), observations,
       sourceDigest: /^[a-f0-9]{64}$/i.test(snapshot.sources?.digest || '') ? snapshot.sources.digest : null },
     period: { start: day(snapshot.period?.start), end: day(snapshot.period?.end), days: number(snapshot.period?.days), cutoffDate: day(snapshot.period?.cutoffDate), monthClosed: snapshot.period?.monthClosed === true },

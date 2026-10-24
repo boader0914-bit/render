@@ -7,7 +7,7 @@ const vm = require("node:vm");
 const crypto = require("node:crypto");
 const { test } = require("node:test");
 const inventory = require("./inventory_estimation.cjs");
-const source = fs.readFileSync(path.join(__dirname, "glamping_app_server.cjs"), "utf8");
+const source = fs.readFileSync(path.join(__dirname, "glamping_app_server.cjs"), "utf8").replace(/\r\n?/g, "\n");
 
 function functionSource(name) {
   const start = source.indexOf(`function ${name}(`);

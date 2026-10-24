@@ -8,7 +8,7 @@ const mint = applyInventoryEvidence(require("./fixtures/mint_20260920.cjs"));
 const source = fs.readFileSync(path.join(__dirname,"../web/app.js"),"utf8");
 const names = ["inventoryAssessment","roomCapacityPresentation","roomCapacityReviewPresentation","roomCapacityWarningBadgeHtml","roomCapacityWarningNoteHtml","roomCapacityValueHtml","roomCapacityReviewHtml","adminDbRoomCapacityPresentation","adminDbSelectedMetricCard","manualCorrectionRoomSegments","cleanManualCorrectionSegment","manualCorrectionSegmentHasValue","sheetInventorySummary","sheetBookingQuantityBasis","sheetCollectionStatusPanel","inventorySourceHtml","sheetDisclosure","escapeHtml","fmtNumber","fmtWon","fmtRate","weeklyRows","salesStats","bookingGraphRows","bookingQuantityBreakdown","bookingEvidenceLegend","bookingEvidenceSplit","bookingEvidenceChips","sheetBookingRevenueBreakdown","sheetRowsForBooking","dateRow","miniBars","itemRevenueStats","projectedRevenueFields","finiteNumber","optionalNumber","parseDate","monthDay","isoAddDays","normalizeMonthDayLabel","bookingRangeLabels","bookingDays"];
 const context = vm.createContext({state:{data:{run:{checkIn:"2026-09-20",checkOut:"2026-10-20",bookingRangeDays:31}}},DEFAULT_BOOKING_DAYS:31,B2B_MY_LODGE_SEGMENT_LIMIT:8,isAdminRole:()=>true});
-names.push("roomCapacityCompositionNoticeHtml", "collectionProductKind", "dayUseCollectionPresentation", "collectionLodgingPresentation");
+names.push("roomCapacityCompositionNoticeHtml", "collectionProductKind", "dayUseCollectionPresentation", "collectionLodgingPresentation", "offlineSoldForTotal", "activeManualCorrection", "manualCorrectionHasBasis");
 for (const name of names) {
   const declaration = source.match(new RegExp(`^function ${name}\\([^]*?^}`,"m"))?.[0];
   assert.ok(declaration, name);

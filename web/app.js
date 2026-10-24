@@ -4893,7 +4893,7 @@ function offlineSoldForTotal(basisTotal, rawTotal) {
 }
 
 function inventoryAssessment(item = {}) {
-  return [2, 3, 4].includes(item.inventoryEvidence?.version) ? item.inventoryEvidence : null;
+  return [2, 3, 4, 5].includes(item.inventoryEvidence?.version) ? item.inventoryEvidence : null;
 }
 
 function roomCapacityPresentation(item = {}) {
