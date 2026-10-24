@@ -42,7 +42,7 @@ async function fixture(t, { autoStart = false } = {}) {
     assert.ok(path.basename(root).startsWith("company-month-refresh-"));
     await fs.rm(root, { recursive: true, force: true });
   });
-  return { root, directory, monthFile, queue, state, sources, raw, reads, scheduling, service, options };
+  return { root, directory, monthFile, queue, state, sources, raw, reads, scheduling, scheduler, service, options };
 }
 
 test("explicit monthly refresh persists the selected month without consuming or rewriting pending jobs", async t => {
@@ -234,8 +234,8 @@ test("a generation changed while checking the certificate cannot receive the for
 
 test("normal ready idle reads keep their existing fast path without a new revision or inventory read", async t=>{
   const f=await fixture(t);await f.service.queueCompany(ID,{months:[MONTH]});await f.service.refreshMonth(ID,{month:MONTH});await f.service.drain();
-  const revisions=f.state.revisionCalls,reads=f.reads.length,view=await f.service.get(ID,{month:MONTH});assert.equal(view.status,"ready");
-  assert.equal(f.state.revisionCalls,revisions);assert.equal(f.reads.length,reads);assert.equal(view.freshness.selectedMonthVerified,false,"no certificate read is required for an ordinary completed company job");
+  const revisions=f.state.revisionCalls,reads=f.reads.length,schedules=f.scheduling.length,view=await f.service.get(ID,{month:MONTH});assert.equal(view.status,"ready");
+  assert.equal(f.state.revisionCalls,revisions);assert.equal(f.reads.length,reads);assert.equal(f.scheduling.length,schedules);assert.equal(view.freshness.selectedMonthVerified,false,"no certificate read is required for an ordinary completed company job");
 });
 
 test("without a scoped dependency revision a repair cannot certify the pending company's month", async t=>{
@@ -245,4 +245,32 @@ test("without a scoped dependency revision a repair cannot certify the pending c
     const view=await service.get(ID,{month:MONTH});assert.equal(view.status,"refreshing");assert.equal(view.freshness.selectedMonthVerified,false);
     await assert.rejects(fs.readFile(path.join(f.directory,`${MONTH}.refresh-proof.json`)),{code:"ENOENT"});
   }finally{await service.stop();}
+});
+
+test("certificate reads wait for another company's atomic capacity publication in the shared analytical slot", async t=>{
+  const f=await fixture(t);await f.service.queueCompany(ID,{months:[MONTH,"2026-10"]});await f.service.refreshMonth(ID,{month:MONTH});
+  const queue=await f.queue(),reads=f.reads.length,witness=path.join(f.root,"another-company-capacity.json"),temporary=witness+".tmp";
+  let enter,release,publishing=false;const entered=new Promise(resolve=>{enter=resolve;}),gate=new Promise(resolve=>{release=resolve;});
+  f.state.beforeRevision=async()=>{if(publishing)throw Object.assign(Error("atomic dependency inventory changed"),{code:"COMPANY_SOURCE_REVISION_UNAVAILABLE"});};
+  const writer=f.scheduler.run(async()=>{publishing=true;await fs.writeFile(temporary,JSON.stringify({companyId:OTHER,month:"2026-10",count:16}));enter();await gate;await fs.rename(temporary,witness);publishing=false;},
+    {priority:"background",kind:"fixture-other-month-capacity-publish"});
+  await entered;
+  // The exact provider check fails while a publisher owns an incomplete
+  // dependency inventory. The database GET must not execute that check there.
+  await assert.rejects(f.options.readRevision(),{code:"COMPANY_SOURCE_REVISION_UNAVAILABLE"});
+  const revisions=f.state.revisionCalls;let settled=false;const result=f.service.get(ID,{month:MONTH}).finally(()=>{settled=true;});
+  try{
+    for(let turns=0;turns<1000&&!f.scheduler.status().queuedForeground;turns++)await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(f.scheduler.status().queuedForeground,1);assert.equal(settled,false);assert.equal(f.state.revisionCalls,revisions,"the source revision check starts only after the publisher releases its lease");
+  }finally{release();await writer;}
+  const view=await result;assert.equal(view.status,"ready");assert.equal(view.errorCode,null);assert.equal(view.freshness.selectedMonthVerificationError,null);assert.equal(view.freshness.selectedMonthVerified,true);
+  assert.equal(f.reads.length,reads);assert.equal(await f.queue(),queue);assert.equal(JSON.parse(await fs.readFile(witness,"utf8")).companyId,OTHER);
+  assert.deepEqual(f.scheduling.at(-1),{priority:"foreground",kind:"company-month-proof-read"});
+});
+
+test("certificate verification is reentrant for a caller already holding the shared analytical slot", async t=>{
+  const f=await fixture(t);await f.service.queueCompany(ID,{months:[MONTH,"2026-10"]});await f.service.refreshMonth(ID,{month:MONTH});
+  const queue=await f.queue();const view=await f.scheduler.run(()=>f.service.get(ID,{month:MONTH}),{priority:"foreground",kind:"fixture-nested-company-read"});
+  assert.equal(view.status,"ready");assert.equal(view.freshness.selectedMonthVerified,true);assert.equal(await f.queue(),queue);
+  assert.ok(f.scheduler.status().timing.reentrantCompleted>0);
 });

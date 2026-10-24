@@ -611,7 +611,15 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     let refreshedProof = null, selectedVerificationError = null;
     if (selected && !needsRefresh && cutoffDate === undefined && !storeError
       && (["queued", "processing", "failed"].includes(stateJob?.status) || bootstrapError)) {
-      try { refreshedProof = await verifiedRefreshedMonth(selected, companyId, selectedMonth, metadata); }
+      try {
+        // Revision preparation snapshots shared dependency files. Keep it in
+        // the same analytical lease as capacity publication, so an atomic
+        // rename by another company/month cannot look like a corrupt source.
+        // This does not acquire the queue writer lock or consume queued work.
+        refreshedProof = await deferProcessing(() => runWork(
+          () => verifiedRefreshedMonth(selected, companyId, selectedMonth, metadata),
+          { priority: "foreground", kind: "company-month-proof-read" }));
+      }
       catch (error) { selectedVerificationError = safeCode(error); }
     }
     const selectedReady = Boolean(refreshedProof && !selectedVerificationError);

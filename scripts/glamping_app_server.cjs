@@ -19799,6 +19799,9 @@ async function route(req, res) {
         }).map(company => company.companyId));
       })();
       const results = [];
+      // Keep a bounded explicit batch together without consuming background
+      // jobs. Each refresh still owns the shared analytical slot separately.
+      await companyIntegratedDb.deferProcessing(async () => {
       for (const companyId of payload.companyIds) {
         try {
           if (!activeIds.has(companyId)) {
@@ -19815,6 +19818,7 @@ async function route(req, res) {
             errorCode: /^[A-Za-z0-9_:-]{1,100}$/.test(String(error?.code || "")) ? error.code : "COMPANY_INTEGRATION_FAILED" });
         }
       }
+      });
       return send(res, 200, { month: payload.month, collectionExecuted: false, results,
         counts: results.reduce((counts, result) => { counts[result.status] = (counts[result.status] || 0) + 1; return counts; }, {}) });
     }
