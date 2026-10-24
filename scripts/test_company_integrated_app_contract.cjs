@@ -91,7 +91,9 @@ test("the app supplies a dedicated scoped context revision reader and retains it
   assert.equal(revisionOptions.outputsDir, context.OUTPUTS_DIR);
   assert.equal(revisionOptions.regionMasterFile, path.join(context.WEB_DIR, "data", "region_master.json"));
   assert.equal(revisionOptions.tourismRegionMapFile, path.join(context.WEB_DIR, "data", "tourism_region_map.json"));
-  assert.equal(revisionOptions.calculationFiles.length, 15);
+  assert.equal(revisionOptions.calculationFiles.length, 16);
+  assert.ok(revisionOptions.calculationFiles.includes(path.join(__dirname, "lib", "saved_product_recovery.cjs")),
+    "saved-product validation changes must invalidate affected monthly calculations");
   assert.ok(revisionOptions.calculationFiles.includes(path.join(__dirname, "lib", "monthly_company_source_catalog.cjs")),
     "the selected-company projection participates in saved calculation invalidation");
   assert.ok(revisionOptions.calculationFiles.includes(path.join(__dirname, "lib", "history_observation_index.cjs")));

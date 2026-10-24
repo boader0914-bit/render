@@ -19675,6 +19675,54 @@ async function route(req, res) {
       return send(res, 200, { ...recovered, collectionExecuted: false });
     }
 
+    if (req.method === "POST" && reqUrl.pathname === "/api/company-master/refresh-saved-products") {
+      if (!requireAdminSession(session, req, res)) return;
+      if (req.headers.origin) {
+        let origin; try { origin = new URL(req.headers.origin); } catch {}
+        if (!origin || origin.host !== req.headers.host) return send(res, 403, { error: "현재 데이터랩 화면에서 요청해 주세요." });
+      }
+      const payload = await parseJsonBody(req);
+      if (payload.confirm !== "refresh-saved-products" || Object.keys(payload).some(key => !["confirm", "month", "companyIds"].includes(key))
+        || !/^20\d{2}-(0[1-9]|1[0-2])$/.test(payload.month || "") || !Array.isArray(payload.companyIds)
+        || payload.companyIds.length < 1 || payload.companyIds.length > 10 || new Set(payload.companyIds).size !== payload.companyIds.length
+        || payload.companyIds.some(id => typeof id !== "string" || !/^cmp_[a-zA-Z0-9_-]{1,150}$/.test(id))) {
+        return send(res, 400, { code: "SAVED_RECOVERY_INVALID_REQUEST", error: "반영할 업체와 숙박월을 확인해 주세요." });
+      }
+      // Release the full catalog before source reconstruction. Each month
+      // owns one foreground slot; never nest a slot around catalog or repair.
+      const activeIds = await (async () => {
+        const data = await monthlyReportSources.catalog();
+        return new Set(data.companies.filter(company => {
+          const raw = data.rawCompanies instanceof Map ? data.rawCompanies.get(company.companyId) : data.rawCompanies?.[company.companyId];
+          return !company.deletedAt && !company.mergedIntoCompanyId && !raw?.deletedAt && !raw?.mergedIntoCompanyId;
+        }).map(company => company.companyId));
+      })();
+      const results = [];
+      for (const companyId of payload.companyIds) {
+        try {
+          if (!activeIds.has(companyId)) {
+            results.push({ companyId, month: payload.month, status: "failed", errorCode: "company_not_found" }); continue;
+          }
+          const directory = path.join(savedProductRecovery.directory, crypto.createHash("sha256").update(companyId).digest("hex"), payload.month);
+          const names = await fsp.readdir(directory).catch(error => { if (error.code === "ENOENT") return []; throw error; });
+          if (!names.some(name => /^[a-f0-9]{64}\.json$/.test(name))) {
+            results.push({ companyId, month: payload.month, status: "skipped", errorCode: "SAVED_RECOVERY_NOT_FOUND" }); continue;
+          }
+          // Reconstruction invokes the normal saved-receipt reader, including
+          // original SHA verification and current room-review corrections.
+          const refreshed = await companyIntegratedDb.refreshMonth(companyId, { month: payload.month });
+          const { snapshot, ...result } = refreshed;
+          results.push({ ...result, quality: snapshot.quality, summary: snapshot.summary,
+            backgroundStatus: (await companyIntegratedDb.status()).jobs.find(job => job.companyId === companyId)?.status || "idle" });
+        } catch (error) {
+          results.push({ companyId, month: payload.month, status: "failed",
+            errorCode: /^[A-Za-z0-9_:-]{1,100}$/.test(String(error?.code || "")) ? error.code : "COMPANY_INTEGRATION_FAILED" });
+        }
+      }
+      return send(res, 200, { month: payload.month, collectionExecuted: false, results,
+        counts: results.reduce((counts, result) => { counts[result.status] = (counts[result.status] || 0) + 1; return counts; }, {}) });
+    }
+
     if (req.method === "GET" && reqUrl.pathname === "/api/location-card-requests") {
       if (!requireAdminSession(session, req, res)) return;
       return send(res, 200, publicLocationCardRequests(await readLocationCardRequests()));

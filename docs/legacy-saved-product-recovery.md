@@ -15,3 +15,13 @@
 회사·월별 변경 감지에 복구 영수증과 원본 회차를 연결한다. 인사이트에는 원본 경로나 상품 원문 대신 업체번호·회차번호·복구 영수증과 증거 해시만 전달하며, 발행본은 수정하지 않고 새 검수본·발행본을 추가한다.
 
 검증: `test_saved_product_recovery.cjs`, `test_saved_product_recovery_server.cjs`, `test_company_integrated_api.cjs` 및 월간 소스·변경 감지·인사이트 보관 회귀검증.
+
+## 복구한 월의 즉시 운영 반영
+
+대규모 과거 자료 복구가 기존 전체 월 재계산 대기열 뒤에 있는 경우, 관리자 `POST /api/company-master/refresh-saved-products`로 지정한 월만 먼저 영속 저장할 수 있다. 입력은 `confirm: refresh-saved-products`, `month: YYYY-MM`, 활성 `companyIds` 1~10개다. 해당 업체·월에 저장된 복구 영수증이 없으면 `skipped/SAVED_RECOVERY_NOT_FOUND`를 반환한다. 업체별 실패는 안전한 오류코드로 분리하고 나머지 업체를 계속 처리한다.
+
+각 업체의 자료를 공유 계산 스케줄러의 foreground 슬롯에서 순차적으로 읽고, 기존 복구 영수증·원본 SHA·현행 검수값·월간 산식으로 다시 검증한다. 결과가 재사용 가능한 경우에도 명시 반영에서는 원본 검증을 생략하지 않는다. 계산 전후 원본 revision 또는 대기열 generation이 바뀌면 게시하지 않는다. 저장 실패 시 이전 정상 월 집계를 유지한다. 외부 수집은 실행하지 않는다.
+
+성공한 개별 결과의 `status: ready`는 지정 월의 저장 완료를 뜻하며, `backgroundStatus`는 기존 전체 작업의 상태다. 기존 `queued/processing` 작업과 다른 월·순서·generation은 수정하거나 소비하지 않는다. 따라서 일반 통합 조회의 전체 작업 표시는 계속 갱신 중일 수 있으며, 지정 월 반영 여부는 이번 응답의 월·계산시각·sourceRevision·확보율과 저장 월 파일을 확인한다. 기존 전체 작업은 이후 동일 월을 검증하여 재사용하고 남은 월을 계속 처리한다.
+
+검증: `test_company_integrated_month_refresh.cjs`, 기존 DB·재시작 검증, 관리자 API 인증·same-origin·입력 제한·업체별 결과 분리 검증.

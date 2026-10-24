@@ -369,12 +369,12 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     }, { priority: "background", kind: "company-bootstrap", detached: true }).finally(() => { bootstrapPromise = null; });
     return bootstrapPromise;
   }
-  async function materialize(companyId, month, metadata, cutoffDate, persist = true, priority = "background", prepared = null) {
+  async function materialize(companyId, month, metadata, cutoffDate, persist = true, priority = "background", prepared = null, verifySources = false) {
     const generatedAt = current().toISOString();
     const request = { type: "company", targetId: companyId, month, cutoffDate: cutoffDate || cutoffFor(month, generatedAt) };
     const sourceRevision = await revisionFor(companyId, month, request.cutoffDate, prepared);
     const previous = persist ? await readJson(monthPath(companyId, month), null) : null;
-    if (await reusable(previous, companyId, month, request.cutoffDate, sourceRevision, metadata)) return { value: previous, changed: false, sourceRevision };
+    if (!verifySources && await reusable(previous, companyId, month, request.cutoffDate, sourceRevision, metadata)) return { value: previous, changed: false, sourceRevision };
     const source = scopedSources(await loadSources(clone(request), { priority }), companyId);
     const previousRequest = previousMonthlyReportRequest(request);
     const previousSource = scopedSources(await loadSources(clone(previousRequest), { priority }), companyId);
@@ -402,6 +402,45 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     if (reuseProof) return { value: previous, changed: false, sourceRevision, reuseProof };
     return { changed: true, sourceRevision, value };
   }
+  async function publishMonth(companyId, month, calculated, generation) {
+    // The scheduler serializes analytical readers, while the publication lock
+    // serializes queue writers. Recheck the generation inside that lock.
+    if (readRevision) {
+      const latest = await revisionFor(companyId, month, calculated.value.cutoffDate);
+      if (latest !== calculated.sourceRevision) throw fault("COMPANY_INTEGRATION_SOURCE_CHANGED");
+    }
+    return locked(async () => {
+      if ((state.jobs[companyId]?.generation ?? null) !== generation) return false;
+      if (calculated.reuseProof) {
+        const saved = await readJson(monthPath(companyId, month), null);
+        if (!validStored(saved, companyId, month) || saved.cacheDigest !== calculated.reuseProof.cacheDigest)
+          throw fault("COMPANY_INTEGRATION_CACHE_CHANGED");
+      }
+      const index = await readJson(indexPath(companyId), { schemaVersion: SCHEMA_VERSION, companyId, months: [] });
+      // Publish discoverability before replacing the valid result. A failed
+      // index/proof/month write can never destroy the previous month's bytes.
+      if (!index.months.includes(month) || calculated.changed) await atomicJson(indexPath(companyId), {
+        ...index, months: monthsOf([...index.months, month]), updatedAt: current().toISOString(), calculationVersion });
+      if (calculated.reuseProof) await atomicJson(reuseProofPath(companyId, month), calculated.reuseProof);
+      if (calculated.changed) await atomicJson(monthPath(companyId, month), calculated.value);
+      return true;
+    });
+  }
+  async function refreshMonth(companyId, { month } = {}) {
+    companyId = validId(companyId);
+    if (!monthValid(month)) throw fault("invalid_month", 400);
+    await init();
+    // This explicit repair does not drain, remove, reprioritize or complete any
+    // pending company job. Other months retain their exact generation/order.
+    return deferProcessing(() => runWork(async () => {
+      const generation = await locked(() => state.jobs[companyId]?.generation ?? null);
+      const metadata = await activeCompany(companyId), prepared = await prepareRevision();
+      const calculated = await materialize(companyId, month, metadata, undefined, true, "foreground", prepared, true);
+      if (!await publishMonth(companyId, month, calculated, generation)) throw fault("COMPANY_INTEGRATION_GENERATION_CHANGED");
+      return { companyId, month, status: "ready", changed: calculated.changed, calculatedAt: calculated.value.calculatedAt,
+        calculationVersion, sourceRevision: calculated.sourceRevision || null, snapshot: calculated.value.snapshot };
+    }, { priority: "foreground", kind: "company-month-repair" }));
+  }
   async function processJob(job) {
     const verifiedBootstrapFailure = state.bootstrap?.failureGeneration || 0;
     const { metadata, months, prepared } = await runWork(async () => ({ metadata: await activeCompany(job.companyId),
@@ -410,30 +449,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     for (const month of months) {
       const completed = await runWork(async () => {
       const calculated = await materialize(job.companyId, month, metadata, undefined, true, "background", prepared);
-      // Revalidate before publishing. A mid-read change must never be marked
-      // current, and a failed inspection leaves the last normal result intact.
-      if (readRevision) {
-        const latest = await revisionFor(job.companyId, month, calculated.value.cutoffDate);
-        if (latest !== calculated.sourceRevision) throw fault("COMPANY_INTEGRATION_SOURCE_CHANGED");
-      }
-      const published = await locked(async () => {
-        if (state.jobs[job.companyId]?.generation !== job.generation) return false;
-        // Only the generation that completed both source reads and the fresh
-        // revision inspection may publish this bounded, one-proof-per-month
-        // bridge. A superseded job cannot bless its earlier inputs.
-        if (calculated.reuseProof) {
-          const saved = await readJson(monthPath(job.companyId, month), null);
-          if (!validStored(saved, job.companyId, month) || saved.cacheDigest !== calculated.reuseProof.cacheDigest)
-            throw fault("COMPANY_INTEGRATION_CACHE_CHANGED");
-          await atomicJson(reuseProofPath(job.companyId, month), calculated.reuseProof);
-        }
-        if (calculated.changed) await atomicJson(monthPath(job.companyId, month), calculated.value);
-        const index = await readJson(indexPath(job.companyId), { schemaVersion: SCHEMA_VERSION, companyId: job.companyId, months: [] });
-        if (!index.months.includes(month) || calculated.changed) await atomicJson(indexPath(job.companyId), {
-          ...index, months: monthsOf([...index.months, month]), updatedAt: current().toISOString(), calculationVersion });
-        return true;
-      });
-      return published;
+      return publishMonth(job.companyId, month, calculated, job.generation);
       }, { priority: "background", kind: "company-month", detached: true });
       if (!completed) return;
     }
@@ -556,7 +572,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
       sourcePolicy: "원본 보존 · 업체 고유번호 통합 · 최신 유효 관측 · 미관측은 결측 · 월간 리포트 공통 계산" };
   }
   async function stop() { stopped = true; wakeDispatchWaiters(); if (bootstrapPromise) await bootstrapPromise.catch(() => {}); if (workerPromise) await workerPromise; await serial; }
-  return { bootstrap, queueCompany, queueRun, deferProcessing, get, status, drain, stop };
+  return { bootstrap, queueCompany, queueRun, deferProcessing, refreshMonth, get, status, drain, stop };
 }
 
 module.exports = { createCompanyIntegratedDb, COMPANY_INTEGRATED_SCHEMA_VERSION: SCHEMA_VERSION, COMPANY_INTEGRATED_CALCULATION_VERSION: CALCULATION_VERSION };

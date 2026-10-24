@@ -8,10 +8,40 @@ const { once } = require("node:events");
 const { spawn } = require("node:child_process");
 const { seedMonthlyReportFixture } = require("./fixtures/monthly_report_fixture.cjs");
 
+async function seedLegacyRecoveryFixture(dataDir) {
+  const companyId = "cmp_place_1104404759", runId = "gyeongnam_glamping_20260901_090000", collectedAt = "2026-09-01T00:10:00.000Z";
+  const directory = path.join(dataDir, "outputs", runId), details = "details/1104404759_weekly_product_details_fixture.json";
+  const product = (date, id, bookings, occupied = 0) => ({ date, key: `id:${id}`, bizItemId: id, name: `숙박 ${id}`,
+    saleType: "숙박", bizItemSubType: "ACCOMMODATION_NIGHT", listType: "객실 종류별 리스트", availabilityUnit: "재고수량",
+    total: 5, available: 5 - bookings - occupied, soldOut: bookings + occupied, stock: 5, bookingCount: bookings,
+    occupiedBookingCount: occupied, price: 100000, open: true });
+  const products = [product("2026-09-01", "room_a", 0), product("2026-09-01", "room_b", 0),
+    product("2026-09-02", "room_a", 2, 2), product("2026-09-02", "room_b", 1)];
+  const manifest = { id: runId, runId, keyword: "경남글램핑", collectedAt, checkIn: "2026-09-01", checkOut: "2026-09-02",
+    bookingRangeDays: 2, collectionPurpose: "revenue_detail", collectionQuality: null,
+    fileRoles: { overall: "경남글램핑_네이버전체순위.csv" }, detailJsonFiles: [{ field: "weekly_product_details", name: "시즌글램핑",
+      placeId: "1104404759", bookingBusinessId: "1040638", file: details, itemCount: products.length }] };
+  const row = { place_id: "1104404759", bookingBusinessId: "1040638", "업체명": "시즌글램핑", overall_rank: 1,
+    "네이버예약URL": "https://booking.naver.com/booking/3/bizes/1040638", "숙박상품수": 2, "데이유즈상품수": 0,
+    "예약계산대상상품수": 2, "네이버요일별상품상세JSON": `@json-file:${details}` };
+  const columns = Object.keys(row), cell = value => `"${String(value).replace(/"/g, '""')}"`;
+  await fs.mkdir(path.join(directory, "details"), { recursive: true });
+  await fs.writeFile(path.join(directory, "manifest.json"), JSON.stringify(manifest));
+  await fs.writeFile(path.join(directory, details), JSON.stringify(products));
+  await fs.writeFile(path.join(directory, manifest.fileRoles.overall), columns.map(cell).join(",") + "\r\n" + columns.map(key => cell(row[key])).join(",") + "\r\n");
+  const masterPath = path.join(dataDir, "company_master", "companies.json"), master = JSON.parse(await fs.readFile(masterPath, "utf8"));
+  master.companies[companyId] = { companyId, primaryName: "시즌글램핑", addresses: ["경상남도 산청군 모의 주소"], regions: ["산청"],
+    placeIds: ["1104404759"], bookingBusinessIds: ["1040638"], manualCorrection: { active: true, lodgingBasisTotal: 10 },
+    keywords: { "경남글램핑": { keyword: "경남글램핑", runs: [{ runId, collectedAt, rank: 1 }] } }, inventory: {} };
+  await fs.writeFile(masterPath, JSON.stringify(master));
+  return { companyId, runId, directory, details };
+}
+
 async function main() {
   const root = path.resolve(__dirname, "..");
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "company-integrated-api-"));
   const fixture = await seedMonthlyReportFixture(dataDir, { includePreviousMonth: true });
+  const legacy = await seedLegacyRecoveryFixture(dataDir);
   const originalHistory = await fs.readFile(path.join(dataDir, "history", "observations.jsonl"));
   const originalMaster = await fs.readFile(path.join(dataDir, "company_master", "companies.json"));
   const socket = net.createServer().listen(0, "127.0.0.1"); await once(socket, "listening");
@@ -53,6 +83,51 @@ async function main() {
     assert.equal(recovered.status, 200, JSON.stringify(recovered.data));
     assert.equal(recovered.data.collectionExecuted, false);
     assert.equal(recovered.data.receipts.length, 0, "complete and unverifiable legacy runs cannot be relabelled as recovered");
+    const refreshRoute = "/api/company-master/refresh-saved-products";
+    const refreshRequest = { ...recoveryRequest, confirm: "refresh-saved-products" };
+    assert.equal((await request(refreshRoute, "", "POST", refreshRequest)).status, 401);
+    assert.equal((await request(refreshRoute, await login("integrated-member"), "POST", refreshRequest)).status, 403);
+    for (const invalid of [{ ...refreshRequest, confirm: undefined }, { ...refreshRequest, month: "2026-13" },
+      { ...refreshRequest, rawRows: [] }, { ...refreshRequest, companyIds: [] },
+      { ...refreshRequest, companyIds: [fixture.companyId, fixture.companyId] },
+      { ...refreshRequest, companyIds: ["../escape"] },
+      { ...refreshRequest, companyIds: Array.from({ length: 11 }, (_, index) => `cmp_place_${index}`) }]) {
+      assert.equal((await request(refreshRoute, admin, "POST", invalid)).status, 400);
+    }
+    const originDenied = await fetch(base + refreshRoute, { method: "POST", headers: { Cookie: admin,
+      "Content-Type": "application/json", Origin: "https://foreign.invalid" }, body: JSON.stringify(refreshRequest) });
+    assert.equal(originDenied.status, 403, "the repair route retains same-origin write protection");
+    const skipped = await request(refreshRoute, admin, "POST", { ...refreshRequest, companyIds: [fixture.companyId, "cmp_place_not_active"] });
+    assert.equal(skipped.status, 200, JSON.stringify(skipped.data));
+    assert.equal(skipped.data.collectionExecuted, false);
+    assert.deepEqual(skipped.data.results.map(row => [row.companyId, row.status, row.errorCode]),
+      [[fixture.companyId, "skipped", "SAVED_RECOVERY_NOT_FOUND"], ["cmp_place_not_active", "failed", "company_not_found"]]);
+    assert.deepEqual(skipped.data.counts, { skipped: 1, failed: 1 }, "one failed company cannot suppress other scoped outcomes");
+    const legacySourceBefore = await fs.readFile(path.join(legacy.directory, legacy.details));
+    const legacyRecovery = await request(recoveryRoute, admin, "POST", { confirm: "recover-saved-products", month: "2026-09", companyIds: [legacy.companyId] });
+    assert.equal(legacyRecovery.status, 200, JSON.stringify(legacyRecovery.data));
+    assert.equal(legacyRecovery.data.receipts.length, 1, JSON.stringify(legacyRecovery.data));
+    const legacyRefresh = await request(refreshRoute, admin, "POST", { ...refreshRequest, month: "2026-09", companyIds: [legacy.companyId, fixture.companyId] });
+    assert.equal(legacyRefresh.status, 200, JSON.stringify(legacyRefresh.data));
+    const ready = legacyRefresh.data.results[0];
+    assert.equal(ready.status, "ready", JSON.stringify(ready)); assert.equal(ready.month, "2026-09");
+    assert.equal(ready.quality.recoveredCompanyDays, 2); assert.equal(ready.summary.lodging.coveredCompanyDays, 2);
+    assert.equal(ready.summary.lodging.sold, 5); assert.equal(ready.summary.lodging.estimatedRevenue, 500000);
+    assert.equal(legacyRefresh.data.results[1].status, "skipped");
+    assert.equal(typeof ready.sourceRevision, "string"); assert.ok(["queued", "processing", "idle"].includes(ready.backgroundStatus));
+    assert.deepEqual(await fs.readFile(path.join(legacy.directory, legacy.details)), legacySourceBefore, "successful real-receipt publication never changes source products");
+    const legacyMonthFile = path.join(dataDir, "company_integrated", require("node:crypto").createHash("sha256").update(legacy.companyId).digest("hex"), "2026-09.json");
+    const lastGood = await fs.readFile(legacyMonthFile);
+    const changedProducts = JSON.parse(legacySourceBefore); changedProducts[0].price += 1;
+    await fs.writeFile(path.join(legacy.directory, legacy.details), JSON.stringify(changedProducts));
+    try {
+      const held = await request(refreshRoute, admin, "POST", { ...refreshRequest, month: "2026-09", companyIds: [legacy.companyId, fixture.companyId] });
+      assert.equal(held.status, 200, JSON.stringify(held.data));
+      assert.equal(held.data.results[0].status, "failed");
+      assert.equal(held.data.results[0].errorCode, "MONTHLY_SOURCE_UNAVAILABLE", "the standard source adapter retains its safe public error boundary");
+      assert.equal(held.data.results[1].status, "skipped", "a corrupted company's source does not abort the remaining batch");
+      assert.deepEqual(await fs.readFile(legacyMonthFile), lastGood, "the API preserves the last valid persisted month on a source SHA failure");
+    } finally { await fs.writeFile(path.join(legacy.directory, legacy.details), legacySourceBefore); }
     let integrated;
     for (let i = 0; i < 120; i++) {
       integrated = await request(url, admin);
@@ -87,7 +162,7 @@ async function main() {
     assert.equal(updated.data.status, "ready");
     assert.notEqual(updated.data.calculatedAt, integrated.data.calculatedAt);
     assert.deepEqual(await fs.readFile(path.join(dataDir, "history", "observations.jsonl")), originalHistory, "recalculation leaves raw history untouched");
-    console.log("Company integration API: automatic historical build, scoped saved-product recovery auth/no-network, exact monthly parity, correction refresh and raw preservation passed");
+    console.log("Company integration API: automatic historical build, scoped saved-product recovery/refresh auth/same-origin/no-network, bounded mixed outcomes, exact monthly parity, correction refresh and raw preservation passed");
   } finally {
     child.kill(); if (child.exitCode === null) await once(child, "exit");
     assert.ok(path.resolve(dataDir).startsWith(path.resolve(os.tmpdir()) + path.sep));
