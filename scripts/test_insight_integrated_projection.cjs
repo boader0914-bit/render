@@ -31,9 +31,12 @@ test('the safe projection preserves actual missing-price and fallback fields wit
 });
 test('price-ineligible day retains the selected source missing-price count while a metric zero remains authoritative',()=>{
   const source=fixture(),metric=source.snapshot.daily.find(row=>row.date==='2026-09-06').lodging;
-  assert.equal(metric.phoneMissingPriceBookings,null);
+  assert.equal(metric.phoneMissingPriceBookings,4);
+  assert.equal(metric.estimatedRevenue,null);
   const row=projectIntegrated(ID,source).snapshot.daily.find(row=>row.date==='2026-09-06');
   assert.equal(row.estimatedRevenue,null);assert.equal(row.phoneRevenue,null);assert.equal(row.phoneMissingPriceBookings,4);
+  metric.phoneMissingPriceBookings=null;
+  assert.equal(projectIntegrated(ID,source).snapshot.daily.find(row=>row.date==='2026-09-06').phoneMissingPriceBookings,4,'older saved monetary-null aggregates still use the selected source diagnostic');
   const selected=source.snapshot.sources.observations.find(row=>row.date==='2026-09-04');
   source.snapshot.daily.find(row=>row.date==='2026-09-04').lodging.phoneMissingPriceBookings=0;
   assert.equal(selected.phoneMissingPriceBookings,4);

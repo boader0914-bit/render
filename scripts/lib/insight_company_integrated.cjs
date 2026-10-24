@@ -10,9 +10,33 @@ const day = value => /^\d{4}-\d{2}-\d{2}$/.test(value || '') ? value : null;
 const month = value => /^20\d{2}-(0[1-9]|1[0-2])$/.test(value || '') ? value : null;
 const stamp = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null;
 const reference = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,179}$/.test(value) ? value : null;
+const priceCauseCodes = new Set(['explicit_product_price_missing', 'inferred_product_price_missing', 'product_maxima_exceed_company_capacity',
+  'proportional_price_evidence_incomplete', 'company_capacity_unallocated_to_products', 'public_product_price_missing', 'dayuse_unverified', 'invalid_product_response']);
+function priceUnknownEvidence(row) {
+  const value = row?.priceUnknownCauses, coverage = row?.priceUnknownCauseCoverage;
+  if (!Array.isArray(value) || !value.every(cause => cause && priceCauseCodes.has(cause.code)
+    && ['public', 'other'].includes(cause.channel) && count(cause.quantity) > 0
+    && Array.isArray(cause.productKeys) && cause.productKeys.every(key => reference(key)))) return {};
+  return { priceUnknownCauses: value.map(cause => ({ code: cause.code, channel: cause.channel, quantity: cause.quantity,
+    productKeys: [...new Set(cause.productKeys)] })),
+  ...(count(coverage?.classifiedCompanyDays) !== null && count(coverage?.unclassifiedCompanyDays) !== null ? {
+    priceUnknownCauseCoverage: { classifiedCompanyDays: coverage.classifiedCompanyDays, unclassifiedCompanyDays: coverage.unclassifiedCompanyDays } } : {}) };
+}
 function valuationEvidence(row) {
   const value = row?.phoneValuation, shared = row?.sharedDayUseEvidence;
+  const recoveries = value?.recoveryPolicies;
+  const recoveryPolicies = Array.isArray(recoveries) && recoveries.every(item => item
+    && ['catalog_single_room_identity_v1', 'uniform_current_catalog_price_v1'].includes(item.policy)
+    && count(item.quantity) > 0 && count(item.revenue) > 0 && item.estimatedQuantity === true && typeof item.sourceDate === 'string' && /^20\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(item.sourceDate)
+    && new Date(item.sourceDate + 'T00:00:00Z').toISOString().slice(0, 10) === item.sourceDate
+    && Array.isArray(item.productKeys) && item.productKeys.length > 0 && item.productKeys.every(key => reference(key)) && new Set(item.productKeys).size === item.productKeys.length
+    && (item.unitPrice === undefined || nonnegative(item.unitPrice) > 0))
+    ? recoveries.map(item => ({ policy: item.policy, quantity: item.quantity, revenue: item.revenue,
+      productKeys: [...new Set(item.productKeys)], estimatedQuantity: true, sourceDate: item.sourceDate,
+      ...(nonnegative(item.unitPrice) > 0 ? { unitPrice: item.unitPrice } : {}) })) : null;
   return {
+    ...priceUnknownEvidence(row),
+    ...(row?.priceRecoveryPolicy === 'inventory_price_recovery_v1' ? { priceRecoveryPolicy: row.priceRecoveryPolicy } : {}),
     ...(number(row?.inventoryEvidenceVersion) >= 5 ? { inventoryEvidenceVersion: row.inventoryEvidenceVersion } : {}),
     ...(reference(row?.phoneValuationPolicy) ? { phoneValuationPolicy: row.phoneValuationPolicy } : {}),
     ...(Array.isArray(row?.capacityWitnesses) ? { capacityWitnesses: row.capacityWitnesses.slice(0, 1000)
@@ -24,6 +48,7 @@ function valuationEvidence(row) {
     ...(value && reference(value.policy) ? { phoneValuation: { policy: value.policy,
       quantityPolicy: reference(value.quantityPolicy), roundingPolicy: reference(value.roundingPolicy),
       unroundedRevenue: nonnegative(value.unroundedRevenue),
+      ...(recoveryPolicies !== null ? { recoveryPolicies } : {}),
       ...(typeof value.completePriceCoverage === 'boolean' ? { completePriceCoverage: value.completePriceCoverage } : {}) } } : {}),
     ...(shared && reference(shared.policy) ? { sharedDayUseEvidence: { policy: shared.policy,
       publicSessions: count(shared.publicSessions), physicalRoomBookings: count(shared.physicalRoomBookings), excludedBookings: count(shared.excludedBookings),
@@ -48,6 +73,7 @@ const sourceObservation = row => row && reference(row.companyId) && reference(ro
     ...valuationEvidence(row), ...(sourceRecovery(row) ? { sourceRecovery: sourceRecovery(row) } : {}) } : null;
 const numbers = (source, keys) => Object.fromEntries(keys.map(key => [key, number(source?.[key])]));
 const metrics = source => ({ ...numbers(source, ['supply', 'sold', 'publicBookings', 'phoneBookings', 'publicRevenue', 'phoneRevenue', 'estimatedRevenue', 'reservationRate', 'sharedDayUseExcluded', 'coveredCompanyDays', 'expectedCompanyDays', 'missingCompanyDays', 'revenueCoveredCompanyDays', 'sameDayObservedCompanyDays', 'staleDays', 'maxObservationLeadTimeDays', 'knownPartialRevenue']),
+  ...priceUnknownEvidence(source),
   phoneMissingPriceBookings: count(source?.phoneMissingPriceBookings), phoneFallbackBookings: count(source?.phoneFallbackBookings),
   phoneFallbackRevenue: nonnegative(source?.phoneFallbackRevenue),
   phoneAllocatedBookings: count(source?.phoneAllocatedBookings), phoneAllocatedRevenue: nonnegative(source?.phoneAllocatedRevenue),

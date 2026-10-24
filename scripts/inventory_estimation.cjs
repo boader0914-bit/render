@@ -10,6 +10,7 @@ const dayType = (date) => ["일요일", "평일", "평일", "평일", "평일", 
 const POLICY = "maximum_capacity_phone_estimate";
 const PHONE_VALUATION_POLICY = "proportional_product_shortfall_v2";
 const DAY_USE_SHARING_POLICY = "lunch_dinner_room_reuse_v1";
+const PRICE_RECOVERY_POLICY = "inventory_price_recovery_v1";
 const INVENTORY_VERSION = 5;
 const SUM_FIELDS = ["total", "rawTotal", "available", "sold", "publicBookings", "phoneBookings", "explicitBlockedBookings", "explicitBlockedRevenue", "sharedDayUseExcluded", "unknownUnavailable", "publicRevenue", "phoneRevenue", "phoneFallbackRevenue", "phoneFallbackBookings", "phoneAllocatedBookings", "phoneAllocatedRevenue", "phoneRevenueLow", "phoneRevenueHigh", "pricedSoldOut", "missingPriceSoldOut", "phonePricedBookings", "phoneMissingPriceBookings", "inventoryShortfall", "unverifiedOccupied", "unverifiedUnavailable"];
 const capacityNumber = (value) => nonnegative(value && typeof value === "object" ? value.count : value);
@@ -110,8 +111,17 @@ function productEvidence(row) {
   const available = observed && open ? Math.min(total, Math.max(0, rawTotal - sold - occupied)) : 0;
   const price = number(row.price);
   const priced = price > 0 ? sold : 0;
+  const observedOccupied = number(row.occupiedBookingCount);
+  const saleStates = ["open", "isBusinessDay", "isSaleDay"].filter(field => Object.hasOwn(row, field));
+  // This stricter gate is only for additional price recovery. The original
+  // inventory and its zero/missing semantics above remain unchanged.
+  const priceResponseComplete = observed && [stock, booked, observedOccupied].every(value => Number.isSafeInteger(value) && value >= 0)
+    && booked + observedOccupied <= rawTotal
+    && ![row.status, row.collectionStatus, row.queryStatus].some(value => /^(?:partial|incomplete|unknown)$/i.test(String(value || "")))
+    && saleStates.length > 0 && saleStates.every(field => typeof row[field] === "boolean");
   return {
     date: row.date, key: String(row.bizItemId || row.key || row.name || ""), name: row.name || "", kind: productKind(row),
+    stableProductId: Boolean(row.bizItemId), listType: String(row.listType || ""), observedStock: stock, priceResponseComplete,
     sharedRoomGroupId: row.sharedRoomGroupId || row.sharedRoomsGroupId || row.roomPoolId || null,
     priceFallbackAllowed: !/(?:현장|전화)\s*예약/.test(row.name || ""),
     total, rawTotal, available, sold, publicBookings: sold, observed, stockObserved, bookingObserved,
@@ -195,7 +205,19 @@ function observedProductCapacityEvidence(item = {}, baseline = item.inventoryCap
 
 function emptyDate(date) {
   return { date, ...Object.fromEntries(SUM_FIELDS.map((field) => [field, 0])), estimatedRevenue: 0,
-    phonePriceEstimates: [], inventoryConflict: false, observedProducts: 0, productCount: 0, closedProducts: 0 };
+    phonePriceEstimates: [], priceUnknownCauses: [], inventoryConflict: false, observedProducts: 0, productCount: 0, closedProducts: 0 };
+}
+
+function addPriceUnknownCause(causes, code, channel, quantity, productKeys = []) {
+  const rounded = Math.round(quantity);
+  if (!Number.isFinite(quantity) || !Number.isSafeInteger(rounded) || rounded <= 0 || Math.abs(quantity - rounded) > 1e-9) return;
+  quantity = rounded; // Only remove arithmetic noise from proportional sums.
+  const keys = [...new Set(productKeys.map(String).filter(key => /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,179}$/.test(key)))].sort();
+  const previous = causes.find(cause => cause.code === code && cause.channel === channel);
+  if (previous) {
+    previous.quantity += quantity;
+    previous.productKeys = [...new Set([...previous.productKeys, ...keys])].sort();
+  } else causes.push({ code, channel, quantity, productKeys: keys });
 }
 
 function phonePriceEvidence(product, pricesByProduct) {
@@ -217,7 +239,7 @@ function phonePriceEvidence(product, pricesByProduct) {
 // allocation estimate, separate from observed public sales and known blocks.
 function phoneValuation(dateProducts, capacities, capacity, phoneBookings, excluded, pricesByProduct) {
   const result = { revenue: 0, priced: 0, explicitBookings: 0, explicitRevenue: 0, fallbackRevenue: 0, fallbackBookings: 0,
-    allocatedBookings: 0, allocatedRevenue: 0, revenueLow: 0, revenueHigh: 0, estimates: [], allocationRanges: [], warnings: [] };
+    allocatedBookings: 0, allocatedRevenue: 0, revenueLow: 0, revenueHigh: 0, estimates: [], allocationRanges: [], warnings: [], priceUnknownCauses: [] };
   if (!phoneBookings) return result;
   let remaining = phoneBookings;
   const add = (product, quantity, explicit, proportional = false) => {
@@ -225,7 +247,11 @@ function phoneValuation(dateProducts, capacities, capacity, phoneBookings, exclu
     remaining -= amount;
     const price = phonePriceEvidence(product, pricesByProduct);
     if (explicit) result.explicitBookings += amount;
-    if (!amount || !price) return;
+    if (!amount) return;
+    if (!price) {
+      addPriceUnknownCause(result.priceUnknownCauses, explicit ? "explicit_product_price_missing" : "inferred_product_price_missing", "other", amount, [product.key]);
+      return;
+    }
     const revenue = amount * price.unitPrice;
     result.priced += amount;
     result.revenue += revenue;
@@ -261,6 +287,7 @@ function phoneValuation(dateProducts, capacities, capacity, phoneBookings, exclu
   const capacitySum = [...capacities.values()].reduce((sum, value) => sum + value, 0);
   if (capacitySum > capacity) {
     result.warnings.push({ code: "product_maxima_exceed_company_capacity", productCapacitySum: capacitySum, companyCapacity: capacity });
+    addPriceUnknownCause(result.priceUnknownCauses, "product_maxima_exceed_company_capacity", "other", remaining, dateProducts.map(product => product.key));
     return result;
   }
   const inferred = dateProducts.filter((product) => product.observed && !product.inventoryConflict).map((product) => ({ product,
@@ -276,6 +303,9 @@ function phoneValuation(dateProducts, capacities, capacity, phoneBookings, exclu
     // unpriced quantity instead of redistributing it to another product.
     if (!hasEveryPrice) {
       result.warnings.push({ code: "proportional_price_evidence_incomplete", productKeys: inferred.filter(({ product }) => !phonePriceEvidence(product, pricesByProduct)).map(({ product }) => product.key) });
+      addPriceUnknownCause(result.priceUnknownCauses, "proportional_price_evidence_incomplete", "other", target,
+        inferred.filter(({ product }) => !phonePriceEvidence(product, pricesByProduct)).map(({ product }) => product.key));
+      addPriceUnknownCause(result.priceUnknownCauses, "company_capacity_unallocated_to_products", "other", remaining - target, dateProducts.map(product => product.key));
       result.allocationRanges.push({ quantity: target, productShortfall: shortage, sharedDayUseDeducted: sharedRemaining,
         lowRevenue: null, highRevenue: null, completePriceCoverage: false });
       return result;
@@ -295,6 +325,7 @@ function phoneValuation(dateProducts, capacities, capacity, phoneBookings, exclu
       lowRevenue, highRevenue, completePriceCoverage: hasEveryPrice });
     result.revenueLow = lowRevenue === null ? result.revenue : fixedRevenue + lowRevenue;
     result.revenueHigh = highRevenue === null ? result.revenue : fixedRevenue + highRevenue;
+    addPriceUnknownCause(result.priceUnknownCauses, "company_capacity_unallocated_to_products", "other", remaining, dateProducts.map(product => product.key));
     return result;
   }
   for (const { product, quantity } of inferred) {
@@ -303,7 +334,117 @@ function phoneValuation(dateProducts, capacities, capacity, phoneBookings, exclu
     add(product, quantity - deduction, false);
   }
   result.revenueLow = result.revenueHigh = result.revenue;
+  addPriceUnknownCause(result.priceUnknownCauses, "company_capacity_unallocated_to_products", "other", remaining, dateProducts.map(product => product.key));
   return result;
+}
+
+// A complete declared catalog is a different fact from a maximum observed
+// stock. It may establish a pricing-only one-room prior, never raw inventory.
+function priceRecoveryCatalog(products, declared = {}) {
+  const integer = value => { const parsed = number(value); return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null; };
+  const byId = new Map(), normalizeName = name => String(name || "").normalize("NFKC").replace(/[\s\p{P}\p{S}]/gu, "").toLowerCase();
+  for (const product of products) {
+    if (!product.stableProductId || !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,179}$/.test(product.key)) return null;
+    const identity = product.kind + "|" + product.key;
+    if (!byId.has(identity)) byId.set(identity, []);
+    byId.get(identity).push(product);
+  }
+  const lodging = [...byId].filter(([, rows]) => rows[0].kind === "lodging"), dayUse = [...byId].filter(([, rows]) => rows[0].kind === "dayUse");
+  if (!lodging.length || new Set([...byId.values()].map(rows => rows[0].key)).size !== byId.size
+    || integer(declared.nightItemCount) !== lodging.length || integer(declared.countedItemCount) !== lodging.length
+    || integer(declared.dayUseItemCount) !== dayUse.length) return null;
+  const names = lodging.map(([, rows]) => new Set(rows.map(product => normalizeName(product.name))));
+  if (names.some(values => values.size !== 1 || values.has("")) || new Set(names.map(values => [...values][0])).size !== lodging.length) return null;
+  const coverage = declared.collectionProductCoverage;
+  if (coverage != null && (typeof coverage !== "object" || Array.isArray(coverage) || integer(coverage.truncated) !== 0
+    || coverage.productListComplete === false || integer(coverage.eligible) !== byId.size || integer(coverage.queried) !== byId.size)) return null;
+  const completeDate = date => {
+    for (const rows of byId.values()) {
+      const candidates = rows.filter(product => product.date === date);
+      if (candidates.length !== 1 || !candidates[0].priceResponseComplete || candidates[0].inventoryConflict) return false;
+    }
+    if (coverage != null) {
+      const days = Array.isArray(coverage.days) ? coverage.days.filter(day => day?.date === date) : [];
+      if (days.length !== 1 || integer(days[0].eligible) !== byId.size || integer(days[0].queried) !== byId.size
+        || integer(days[0].succeeded) !== byId.size || integer(days[0].failed) !== 0 || integer(days[0].truncated) !== 0) return false;
+    }
+    return true;
+  };
+  const singleRoomIdentity = lodging.every(([, rows]) => rows.every(product => product.listType === "객실별 예약리스트"
+    && (!product.observed || Number.isSafeInteger(product.observedStock) && product.observedStock >= 0 && product.observedStock <= 1)));
+  return { lodgingKeys: lodging.map(([, rows]) => rows[0].key), singleRoomIdentity, completeDate };
+}
+
+function recoverPhoneValuation(value, dateProducts, capacities, capacity, options) {
+  const catalog = options.catalog;
+  if (!catalog || !options.canEstimate || !catalog.completeDate(options.date)) return value;
+  const records = [], policy = "catalog_single_room_identity_v1";
+  const consumeCause = (code, quantity) => {
+    let remaining = quantity;
+    for (const cause of value.priceUnknownCauses) if (cause.channel === "other" && cause.code === code) {
+      const used = Math.min(remaining, cause.quantity); cause.quantity -= used; remaining -= used;
+    }
+    value.priceUnknownCauses = value.priceUnknownCauses.filter(cause => cause.quantity > 0);
+  };
+  const addRecovery = (recoveryPolicy, candidates, quantity, commonPrice = null) => {
+    if (!Number.isSafeInteger(quantity) || quantity <= 0 || !candidates.length) return false;
+    const previouslyRoundedRevenue = Math.round(value.revenue);
+    const recoveredRevenue = commonPrice !== null ? quantity * commonPrice
+      : candidates.reduce((sum, product) => sum + quantity / candidates.length * product.price, 0);
+    const roundedAddition = Math.round(value.revenue + recoveredRevenue) - previouslyRoundedRevenue;
+    if (!Number.isSafeInteger(roundedAddition) || roundedAddition <= 0) return false;
+    let revenue = 0;
+    if (commonPrice !== null) {
+      revenue = quantity * commonPrice;
+      value.estimates.push({ productKey: null, productKeys: candidates.map(product => product.key).sort(), quantity, unitPrice: commonPrice,
+        source: "same_product_same_date", sourceDate: options.date, revenue, quantitySource: recoveryPolicy,
+        recoveryPolicy, estimatedQuantity: true });
+    } else {
+      for (const product of candidates) {
+        const amount = quantity / candidates.length, productRevenue = amount * product.price;
+        revenue += productRevenue;
+        value.estimates.push({ productKey: product.key, quantity: amount, unitPrice: product.price, source: "same_product_same_date",
+          sourceDate: product.date, revenue: productRevenue, quantitySource: recoveryPolicy, recoveryPolicy, estimatedQuantity: true,
+          ...(amount !== 1 ? { allocationSource: "proportional_product_shortfall", priceSource: "same_product_same_date" } : {}) });
+      }
+    }
+    value.priced += quantity; value.revenue += revenue; value.allocatedBookings += quantity; value.allocatedRevenue += revenue;
+    const ordered = candidates.map(product => product.price).sort((a, b) => a - b);
+    const low = commonPrice !== null ? revenue : ordered.slice(0, quantity).reduce((sum, price) => sum + price, 0);
+    const high = commonPrice !== null ? revenue : ordered.slice(-quantity).reduce((sum, price) => sum + price, 0);
+    value.revenueLow += low; value.revenueHigh += high;
+    records.push({ policy: recoveryPolicy, quantity, revenue: Math.round(value.revenue) - previouslyRoundedRevenue, productKeys: candidates.map(product => product.key).sort(),
+      estimatedQuantity: true, sourceDate: options.date, ...(commonPrice !== null ? { unitPrice: commonPrice } : {}) });
+    return true;
+  };
+  const unallocated = value.priceUnknownCauses.filter(cause => cause.channel === "other" && cause.code === "company_capacity_unallocated_to_products")
+    .reduce((sum, cause) => sum + cause.quantity, 0);
+  if (unallocated && Number.isSafeInteger(capacity) && catalog.lodgingKeys.length === capacity && catalog.singleRoomIdentity
+    && [...capacities.values()].every(count => Number.isSafeInteger(count) && count >= 0 && count <= 1)) {
+    const candidates = dateProducts.filter(product => (capacities.get(product.key) || 0) === 0);
+    const target = Math.min(unallocated, candidates.length);
+    if (target) {
+      if (target === candidates.length) {
+        const priced = candidates.filter(product => product.price > 0), missing = candidates.filter(product => !(product.price > 0));
+        if (addRecovery(policy, priced, priced.length)) consumeCause("company_capacity_unallocated_to_products", priced.length);
+        consumeCause("company_capacity_unallocated_to_products", missing.length);
+        addPriceUnknownCause(value.priceUnknownCauses, "inferred_product_price_missing", "other", missing.length, missing.map(product => product.key));
+      } else if (candidates.every(product => product.price > 0)) {
+        if (addRecovery(policy, candidates, target)) consumeCause("company_capacity_unallocated_to_products", target);
+      } else {
+        consumeCause("company_capacity_unallocated_to_products", target);
+        addPriceUnknownCause(value.priceUnknownCauses, "proportional_price_evidence_incomplete", "other", target,
+          candidates.filter(product => !(product.price > 0)).map(product => product.key));
+      }
+    }
+  }
+  const overlap = value.priceUnknownCauses.filter(cause => cause.channel === "other" && cause.code === "product_maxima_exceed_company_capacity")
+    .reduce((sum, cause) => sum + cause.quantity, 0);
+  if (overlap && dateProducts.every(product => product.price > 0) && new Set(dateProducts.map(product => product.price)).size === 1) {
+    if (addRecovery("uniform_current_catalog_price_v1", dateProducts, overlap, dateProducts[0].price)) consumeCause("product_maxima_exceed_company_capacity", overlap);
+  }
+  if (records.length) value.recoveryPolicies = records;
+  return value;
 }
 
 function summarizeEvidence(products, kind, options = {}) {
@@ -328,6 +469,7 @@ function summarizeEvidence(products, kind, options = {}) {
     const row = dates.get(product.date);
     for (const field of ["total", "rawTotal", "available", "sold", "publicBookings", "pricedSoldOut", "missingPriceSoldOut", "unverifiedOccupied"]) row[field] += product[field];
     row.publicRevenue += product.estimatedRevenue;
+    addPriceUnknownCause(row.priceUnknownCauses, product.observed ? "public_product_price_missing" : "invalid_product_response", "public", product.missingPriceSoldOut, [product.key]);
     row.inventoryConflict ||= product.inventoryConflict;
     row.productCount++;
     row.observedProducts += Number(product.observed);
@@ -338,6 +480,7 @@ function summarizeEvidence(products, kind, options = {}) {
   const maximumObservedCapacity = Math.max(observedMaximum, capacityNumber(options.capacity));
   const overrideCount = correctionCapacity(options.override);
   const operatingTotal = overrideCount ?? maximumObservedCapacity;
+  const recoveryCatalog = kind === "lodging" ? priceRecoveryCatalog(products, options.recoveryDeclared) : null;
   for (const row of rows) {
     if (kind === "dayUse") row.sharedRoomReuse = dayUseRoomReuse(byDate.get(row.date) || []);
     row.total = operatingTotal;
@@ -368,7 +511,8 @@ function summarizeEvidence(products, kind, options = {}) {
         .reduce((sum, product) => sum + Math.max(0, product.rawTotal - product.available - product.publicBookings), 0);
       const inferredUnavailable = canEstimate ? unavailable : Math.min(unavailable, explicitUnavailable);
       row.phoneBookings = Math.max(0, inferredUnavailable - row.sharedDayUseExcluded);
-      const value = phoneValuation(byDate.get(row.date) || [], capacities, operatingTotal, row.phoneBookings, row.sharedDayUseExcluded, pricesByProduct);
+      const value = recoverPhoneValuation(phoneValuation(dateProducts, capacities, operatingTotal, row.phoneBookings, row.sharedDayUseExcluded, pricesByProduct),
+        dateProducts, capacities, operatingTotal, { catalog: recoveryCatalog, canEstimate, date: row.date });
       row.phoneRevenue = Math.round(value.revenue);
       row.phonePricedBookings = Math.min(row.phoneBookings, Math.round(value.priced * 1e9) / 1e9);
       row.explicitBlockedBookings = value.explicitBookings;
@@ -384,8 +528,11 @@ function summarizeEvidence(products, kind, options = {}) {
       row.phonePriceEstimates = value.estimates;
       row.phoneValuation = { policy: PHONE_VALUATION_POLICY, quantityPolicy: "residual_product_shortfall_proportional",
         roundingPolicy: "round_each_stay_date_krw", unroundedRevenue: value.revenue, completePriceCoverage: row.phoneRevenueRangeComplete,
-        allocationRanges: value.allocationRanges, warnings: value.warnings };
+        allocationRanges: value.allocationRanges, warnings: value.warnings,
+        ...(value.recoveryPolicies?.length ? { recoveryPolicies: value.recoveryPolicies } : {}) };
+      if (value.recoveryPolicies?.length) row.priceRecoveryPolicy = PRICE_RECOVERY_POLICY;
       row.phoneMissingPriceBookings = Math.max(0, row.phoneBookings - row.phonePricedBookings);
+      for (const cause of value.priceUnknownCauses) addPriceUnknownCause(row.priceUnknownCauses, cause.code, cause.channel, cause.quantity, cause.productKeys);
       row.pricedSoldOut += row.phonePricedBookings;
       row.missingPriceSoldOut += row.phoneMissingPriceBookings;
     }
@@ -727,6 +874,8 @@ function applyInventoryEvidence(original) {
     productCapacities: historicalProducts.capacities,
     fixedProductCapacities: historicalProducts.fixed,
     productCapacityEvidence: historicalProducts.evidence,
+    recoveryDeclared: { nightItemCount: original.nightItemCount, dayUseItemCount: original.dayUseItemCount,
+      countedItemCount: original.countedItemCount, collectionProductCoverage: original.collectionProductCoverage },
     dayUse, shared: ["confirmed", "assumed_shared"].includes(sharedRooms.status),
     // An incomplete product list cannot establish that day use is absent. Do
     // not turn unmeasured sharing/stock into synthetic telephone reservations.

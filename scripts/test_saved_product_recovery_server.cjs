@@ -129,6 +129,30 @@ test("real server corrections and history recover only certified legacy company 
   assert.equal((await f.service.recover({ month: "2026-09", companyIds: [COMPANY_ID] }, f.data)).receipts[0].created, false);
 });
 
+test("the shared price recovery reaches certified legacy history and monthly DB without rewriting raw products or observed maxima", async t => {
+  const products = Array.from({ length: 10 }, (_, index) => product("2026-09-01", `unit_${index + 1}`, index === 0 ? 1 : 0, 0, 0,
+    { listType: "객실별 예약리스트", price: 120000 }));
+  const f = await fixture(t, { products, days: 1, nightCount: 10 });
+  const originals = await Promise.all(["manifest.json", f.manifest.fileRoles.overall, f.manifest.detailJsonFiles[0].file]
+    .map(async name => [name, sha(await fsp.readFile(path.join(f.runDirectory, name)))]));
+  const result = await recoverAndRead(f), row = result.observations[0].row;
+  assert.equal(result.observations.length, 1);
+  assert.equal(row.supply, 10); assert.equal(row.publicBookings, 0); assert.equal(row.phoneBookings, 9);
+  assert.equal(row.phoneMissingPriceBookings, 0); assert.equal(row.phoneRevenue, 1080000);
+  assert.equal(row.priceRecoveryPolicy, "inventory_price_recovery_v1");
+  assert.equal(row.phoneValuation.recoveryPolicies[0].estimatedQuantity, true);
+  assert.equal(row.phoneValuation.recoveryPolicies[0].quantity, 9);
+  assert.ok(row.capacityWitnesses.filter(value => value.count > 0).every(value => value.productKey === "unit_1"), "a catalog prior cannot create a maximum witness for the nine zero-stock products");
+  const report = snapshot(f, result);
+  assert.equal(report.summary.lodging.phoneRevenue, 1080000);
+  assert.equal(report.summary.lodging.phoneBookings, 9);
+  assert.deepEqual(report.summary.lodging.priceUnknownCauses, []);
+  assert.equal(report.sources.observations[0].priceRecoveryPolicy, "inventory_price_recovery_v1");
+  const restarted = await createSavedProductRecovery(f.dependencies).read(REQUEST, f.data);
+  assert.equal(restarted.observations[0].row.phoneRevenue, row.phoneRevenue);
+  for (const [name, digest] of originals) assert.equal(sha(await fsp.readFile(path.join(f.runDirectory, name))), digest);
+});
+
 test("putting recovery-looking markers on raw observations does not bypass unknown legacy run quality", async t => {
   const f = await fixture(t), result = await recoverAndRead(f);
   const raw = result.observations.map(value => ({ ...value.row, savedProductRecovery: value.certificate, recoveryCertificate: value.certificate }));

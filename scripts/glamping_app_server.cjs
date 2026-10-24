@@ -9872,23 +9872,34 @@ function singleAvailabilityRow(stayDate, available, total) {
 
 function inventoryEstimateBreakdown(row = {}) {
   const fields = ["rawTotal", "publicBookings", "phoneBookings", "sharedDayUseExcluded", "unknownUnavailable", "publicRevenue", "phoneRevenue", "phonePricedBookings", "phoneMissingPriceBookings", "phoneFallbackRevenue", "phoneFallbackBookings", "explicitBlockedBookings", "explicitBlockedRevenue", "phoneAllocatedBookings", "phoneAllocatedRevenue", "phoneRevenueLow", "phoneRevenueHigh"];
+  const causeCodes = ["explicit_product_price_missing", "inferred_product_price_missing", "product_maxima_exceed_company_capacity",
+    "proportional_price_evidence_incomplete", "company_capacity_unallocated_to_products", "public_product_price_missing", "dayuse_unverified", "invalid_product_response"];
+  const causes = Array.isArray(row.priceUnknownCauses) && row.priceUnknownCauses.every(value => value && causeCodes.includes(value.code)
+    && ["public", "other"].includes(value.channel)
+    && Number.isSafeInteger(value.quantity) && value.quantity > 0 && Array.isArray(value.productKeys)
+    && value.productKeys.every(key => typeof key === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,179}$/.test(key)))
+    ? row.priceUnknownCauses.map(value => ({ code: value.code, channel: value.channel, quantity: value.quantity, productKeys: [...new Set(value.productKeys)] })) : null;
   return {
     ...Object.fromEntries(fields.filter((field) => Object.hasOwn(row, field)).map((field) => [field, productSnapshotNumber(row[field])])),
     ...(Array.isArray(row.phonePriceEstimates) ? { phonePriceEstimates: row.phonePriceEstimates.map(value => ({
-      productKey: String(value?.productKey || "").slice(0, 160),
+      productKey: value?.productKey === null && Array.isArray(value.productKeys) ? null : String(value?.productKey || "").slice(0, 160),
+      ...(Array.isArray(value?.productKeys) ? { productKeys: [...new Set(value.productKeys.filter(key => typeof key === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,179}$/.test(key)))] } : {}),
       quantity: productSnapshotNumber(value?.quantity), unitPrice: productSnapshotNumber(value?.unitPrice),
       revenue: productSnapshotNumber(value?.revenue), source: value?.source,
       sourceDate: String(value?.sourceDate || ""),
       ...(value?.quantitySource ? { quantitySource: value.quantitySource } : {}),
       ...(value?.allocationSource ? { allocationSource: value.allocationSource } : {}),
+      ...(typeof value?.recoveryPolicy === "string" && /^[a-z][a-z0-9_]{0,99}$/.test(value.recoveryPolicy) ? { recoveryPolicy: value.recoveryPolicy } : {}),
       ...(Object.hasOwn(value || {}, "estimatedQuantity") ? { estimatedQuantity: Boolean(value.estimatedQuantity) } : {})
     })).filter(value => value.quantity > 0 && value.unitPrice > 0 && value.revenue > 0
       && ["same_product_same_date", "same_product_same_weekday", "same_product_nearest_date"].includes(value.source)
       && /^\d{4}-\d{2}-\d{2}$/.test(value.sourceDate)) } : {}),
     ...(["same_product_observed_price_v1", "proportional_product_shortfall_v2"].includes(row.phoneValuationPolicy) ? { phoneValuationPolicy: row.phoneValuationPolicy } : {}),
     ...(row.phoneValuation ? { phoneValuation: row.phoneValuation } : {}),
+    ...(row.priceRecoveryPolicy === "inventory_price_recovery_v1" ? { priceRecoveryPolicy: row.priceRecoveryPolicy } : {}),
     ...(row.sharedDayUseEvidence ? { sharedDayUseEvidence: row.sharedDayUseEvidence } : {}),
     ...(Array.isArray(row.capacityWitnesses) ? { capacityWitnesses: row.capacityWitnesses } : {}),
+    ...(causes !== null ? { priceUnknownCauses: causes } : {}),
     ...(Object.hasOwn(row, "explicitBlockedDayUseUnverified") ? { explicitBlockedDayUseUnverified: Boolean(row.explicitBlockedDayUseUnverified) } : {}),
     ...(Object.hasOwn(row, "capacityConflict") ? { capacityConflict: Boolean(row.capacityConflict) } : {}),
     ...(row.capacityBasis ? { capacityBasis: row.capacityBasis } : {}),
@@ -14690,6 +14701,7 @@ function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today =
     const partial = Boolean(row.partial || row.sharedDayUseIncomplete);
     const inventoryConflict = Boolean(row.inventoryConflict);
     const counts = Object.fromEntries(estimateFields.map((field) => [field, productSnapshotNumber(row[field])]));
+    const estimateBreakdown = inventoryEstimateBreakdown(row);
     const unpricedPhoneOnly = fixedPolicy && counts.phoneBookings > 0 && !(counts.publicBookings > 0)
       && !(counts.phonePricedBookings > 0) && !(counts.phoneRevenue > 0);
     // Current evidence-derived history carries per-day valued public/phone
@@ -14713,7 +14725,10 @@ function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today =
       dayUseSharingStatus: row.dayUseSharingStatus,
       inventoryEvidenceVersion: evidenceVersion,
       ...counts,
-      ...(Array.isArray(row.phonePriceEstimates) ? { phonePriceEstimates: inventoryEstimateBreakdown(row).phonePriceEstimates } : {}),
+      ...(Array.isArray(row.phonePriceEstimates) ? { phonePriceEstimates: estimateBreakdown.phonePriceEstimates } : {}),
+      ...(Object.hasOwn(estimateBreakdown, "priceUnknownCauses") ? { priceUnknownCauses: estimateBreakdown.priceUnknownCauses } : {}),
+      ...(estimateBreakdown.priceRecoveryPolicy ? { priceRecoveryPolicy: estimateBreakdown.priceRecoveryPolicy } : {}),
+      ...(estimateBreakdown.phoneValuation ? { phoneValuation: estimateBreakdown.phoneValuation } : {}),
       phoneValuationPolicy: row.phoneValuationPolicy || null,
       explicitBlockedDayUseUnverified: Boolean(row.explicitBlockedDayUseUnverified),
       missing,
@@ -14778,6 +14793,9 @@ function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today =
       inventoryEvidenceVersion: fixedPolicy ? 3 : null,
       ...breakdown,
       phonePriceEstimates: quantityRows.flatMap(row => row.phonePriceEstimates || []),
+      ...(quantityRows.some(row => Array.isArray(row.priceUnknownCauses)) ? { priceUnknownCauses: quantityRows.flatMap(row => row.priceUnknownCauses || []) } : {}),
+      ...(quantityRows.length === 1 && quantityRows[0].priceRecoveryPolicy ? { priceRecoveryPolicy: quantityRows[0].priceRecoveryPolicy } : {}),
+      ...(quantityRows.length === 1 && quantityRows[0].phoneValuation ? { phoneValuation: quantityRows[0].phoneValuation } : {}),
       explicitBlockedDayUseUnverified: quantityRows.some(row => row.explicitBlockedDayUseUnverified),
       total,
       sold,

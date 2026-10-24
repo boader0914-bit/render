@@ -19,6 +19,8 @@ const METRICS = ["supply", "sold", "publicBookings", "phoneBookings", "sharedDay
 const REVENUE_METRICS = ["estimatedRevenue", "publicRevenue", "phoneRevenue", "phoneFallbackRevenue", "phoneFallbackBookings",
   "phoneAllocatedBookings", "phoneAllocatedRevenue", "phoneRevenueLow", "phoneRevenueHigh"];
 const ID_PATTERN = /^mr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const PRICE_UNKNOWN_CAUSE_CODES = new Set(["explicit_product_price_missing", "inferred_product_price_missing", "product_maxima_exceed_company_capacity",
+  "proportional_price_evidence_incomplete", "company_capacity_unallocated_to_products", "public_product_price_missing", "dayuse_unverified", "invalid_product_response"]);
 
 function fail(code, message, statusCode = 400) {
   const error = new Error(message);
@@ -33,6 +35,26 @@ function number(value) {
   if (value === null || value === undefined || value === "" || typeof value === "boolean") return null;
   const result = Number(value);
   return Number.isFinite(result) && result >= 0 ? result : null;
+}
+function priceUnknownCauses(value) {
+  // An absent/malformed legacy diagnosis is not an observed empty diagnosis.
+  if (!Array.isArray(value) || !value.every(cause => cause && typeof cause === "object"
+    && PRICE_UNKNOWN_CAUSE_CODES.has(cause.code)
+    && ["public", "other"].includes(cause.channel) && Number.isSafeInteger(cause.quantity) && cause.quantity > 0
+    && Array.isArray(cause.productKeys) && cause.productKeys.every(key => typeof key === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,179}$/.test(key)))) return null;
+  return value.map(cause => ({ code: cause.code, channel: cause.channel, quantity: cause.quantity, productKeys: [...new Set(cause.productKeys)] }));
+}
+function priceUnknownCauseSummary(rows) {
+  const classified = rows.map(row => priceUnknownCauses(row.priceUnknownCauses)).filter(value => value !== null);
+  if (!classified.length) return {};
+  const byCause = new Map();
+  for (const causes of classified) for (const cause of causes) {
+    const key = `${cause.channel}:${cause.code}`, previous = byCause.get(key);
+    if (previous) { previous.quantity += cause.quantity; previous.productKeys = [...new Set([...previous.productKeys, ...cause.productKeys])]; }
+    else byCause.set(key, { ...cause, productKeys: [...cause.productKeys] });
+  }
+  return { priceUnknownCauses: [...byCause.values()], priceUnknownCauseCoverage: {
+    classifiedCompanyDays: classified.length, unclassifiedCompanyDays: rows.length - classified.length } };
 }
 function ratio(numerator, denominator) { return denominator > 0 ? Number((numerator / denominator).toFixed(6)) : null; }
 function dateKey(value) {
@@ -182,6 +204,7 @@ function aggregate(rows, expectedCompanyDays, partialRows = []) {
   const staleDays = rows.filter(row => row.observationLeadTimeDays > 0).length;
   return {
     ...totals, ...revenue,
+    ...priceUnknownCauseSummary(rows),
     actualRevenue: null,
     reservationRate: totals.supply > 0 ? ratio(totals.sold, totals.supply) : null,
     rateDenominator: "covered_supply",
@@ -401,6 +424,7 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}) 
       continue;
     }
     const valuation = priceEvidence(row, request);
+    const unknownCauses = priceUnknownCauses(row.priceUnknownCauses);
     const normalized = {
       companyId, companyName: row.companyName, date, productType, runId, keyword, runQuality: quality,
       ...(recovery ? { sourceRecovery: clone(recovery) } : {}),
@@ -411,7 +435,9 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}) 
       sharedDayUseExcluded: number(row.sharedDayUseExcluded) || 0, explicitBlockedBookings: number(row.explicitBlockedBookings) || 0,
       ...valuation, revenueEligible: valuation.eligible, revenueMissingReason: valuation.reason,
       phonePriceEstimates: Array.isArray(row.phonePriceEstimates) ? clone(row.phonePriceEstimates) : [],
+      ...(unknownCauses !== null ? { priceUnknownCauses: unknownCauses } : {}),
       ...(row.phoneValuation ? { phoneValuation: clone(row.phoneValuation) } : {}),
+      ...(row.priceRecoveryPolicy === "inventory_price_recovery_v1" ? { priceRecoveryPolicy: row.priceRecoveryPolicy } : {}),
       ...(row.sharedDayUseEvidence ? { sharedDayUseEvidence: clone(row.sharedDayUseEvidence) } : {}),
       capacityBasis: row.capacityBasis ? clone(row.capacityBasis) : null,
       ...(Array.isArray(row.capacityWitnesses) ? { capacityWitnesses: clone(row.capacityWitnesses) } : {}),

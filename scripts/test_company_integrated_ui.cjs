@@ -70,6 +70,30 @@ test("actual monthly calculation retains fixed capacity and valid latest values 
   assert.equal(JSON.stringify(payload), before, "view model cannot mutate monthly report or original observations");
 });
 
+test("price cause tooltips are accessible beside partial money while zero and missing dates stay distinct", () => {
+  const payload = envelope(), source = payload.snapshot.sources.observations.find(row => row.date === "2026-09-01");
+  const causes = [{ code: "company_capacity_unallocated_to_products", channel: "other", quantity: 1, productKeys: ["p1"] }];
+  Object.assign(source, { phoneRevenue: 0, estimatedRevenue: 800000, phoneMissingPriceBookings: 1, revenuePartial: true, priceUnknownCauses: causes });
+  Object.assign(payload.snapshot.daily.find(row => row.date === "2026-09-01").lodging,
+    { phoneRevenue: 0, estimatedRevenue: 800000, phoneMissingPriceBookings: 1, revenuePartial: true, priceUnknownCauses: causes,
+      priceUnknownCauseCoverage: { classifiedCompanyDays: 1, unclassifiedCompanyDays: 0 } });
+  Object.assign(payload.snapshot.summary.lodging, { phoneRevenue: 0, estimatedRevenue: 800000, phoneMissingPriceBookings: 1,
+    priceUnknownCauses: causes, priceUnknownCauseCoverage: { classifiedCompanyDays: 1, unclassifiedCompanyDays: 1 } });
+  const model = ui.buildViewModel(payload), html = view(model, "settlement", { selectedDate: "2026-09-01" });
+  const button = date => html.match(new RegExp(`<button[^>]*data-ci-date="${date}"[^>]*>[^]*?<\\/button>`))?.[0] || "";
+  assert.match(button("2026-09-01"), /aria-label="[^"]*객실 일부의 상품 연결 부족/);
+  assert.match(button("2026-09-01"), /title="[^"]*타채널 추정 1실: 객실 일부의 상품 연결 부족/);
+  assert.match(html, /가격 원인 분류 1\/2 관측·일 · 미분류 1 관측·일/);
+  assert.match(html, /<details><summary>가격 미확인 사유/);
+  assert.doesNotMatch(html, /<details\s+open[^>]*><summary>가격 미확인 사유/);
+  assert.match(button("2026-09-02"), /0만원/); assert.doesNotMatch(button("2026-09-02"), /ⓘ|가격 미확인 사유/);
+  assert.match(button("2026-09-03"), /미확인/); assert.doesNotMatch(button("2026-09-03"), /0만원/);
+  assert.equal(model.summary.estimatedRevenue, 800000); assert.equal(model.rows[0].phoneBookings, 1);
+  const table = view(model, "settlement", { view: "table" });
+  assert.match(table, /title="[^"]*객실 일부의 상품 연결 부족/);
+  assert.match(table, /class="ci-public"/); assert.match(table, /class="ci-other"/);
+});
+
 test("calendar and graph expose one purple day, distinguish real zero, and show source and gap information", () => {
   const model = ui.buildViewModel(envelope()), markup = view(model);
   assert.equal((markup.match(/ci-day-other/g) || []).length, 1);
