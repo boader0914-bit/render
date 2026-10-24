@@ -170,13 +170,14 @@
   let allowance=null,display={mode:'default',metric:'bookings',month:''};
   document.addEventListener?.('change',event=>{
     if(event.target.matches?.('[data-company-month]')){
+      if(!/^20\d{2}-(0[1-9]|1[0-2])$/.test(event.target.value||''))return;
       if(document.querySelector('#collection-result form[data-dirty]')){
         event.target.value=view?.companyDetail?.integrated?.selectedMonth||selectedMonth;
         const progress=document.querySelector('#collection-progress');
         if(progress)progress.innerHTML='<p class="collection-warning">작성 중인 수정 요청을 유지했습니다. 내용을 정리한 뒤 숙박월을 바꿔 주세요.</p>';
         return;
       }
-      selectedMonth=event.target.value;display.month=selectedMonth;lastMonths.set(companyId,selectedMonth);showCached();load();
+      selectedMonth=event.target.value;display.month=selectedMonth;lastMonths.set(companyId,selectedMonth);refreshChecks=0;showCached();load();
     }
   });
   function allowanceText(q) {
@@ -200,7 +201,8 @@
     const submit=document.querySelector('[data-collect] button[type=submit]'); if(submit)submit.disabled=active(r)||submit.dataset.ready!=='true'||!allowance?.canRequest;
   }
   function renderResult(data) {
-    return window.InsightCompanyView.render(data,{editHtml:mountOptions.editHtml||'',collapseProducts:mountOptions.relationKind==='competitor'});
+    const months=data.companyDetail?.integrated?.months||[...cache.values()].reverse().find(entry=>entry.companyId===companyId&&Array.isArray(entry.data.companyDetail?.integrated?.months))?.data.companyDetail.integrated.months||[];
+    return window.InsightCompanyView.render(data,{editHtml:mountOptions.editHtml||'',collapseProducts:mountOptions.relationKind==='competitor',selectedMonth:selectedMonth||data.companyDetail?.integrated?.selectedMonth||'',months});
   }
   async function load(force=false) {
     const mine=serial, id=companyId, month=selectedMonth, order=++loadOrder, generation=cacheGeneration, epoch=companyEpoch(companyId), scope=cacheScope;

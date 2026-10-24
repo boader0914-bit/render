@@ -73,7 +73,7 @@ test('unavailable integrated results are not replaced by the latest raw run or s
   const {window:w}=ui();
   const data={result:{rooms:16,products:[],productCount:0,quality:{status:'partial',reason:'날짜 누락'}},companyDetail:{basics:{rooms:16},channels:[],legacyObservationView:false,integrated:{status:'pending',selectedMonth:'2026-09',snapshot:null,roomBasis:{count:16}},current:{daily:[{date:'2026-09-01',publicBookings:1,phoneBookings:2,estimatedRevenue:223456}],summary:{estimatedRevenue:223456}}}};
   const html=w.InsightCompanyView.render(data);
-  assert.doesNotMatch(html,/db-current|223,456|통합 중|숙박월|마지막 계산값|0실/);
+  assert.match(html,/db-current|통합관측 숙박월/);assert.doesNotMatch(html,/223,456|통합 중|마지막 계산값|0실/);
   assert.match(html,/업체 기본정보/);assert.match(html,/날짜 누락/);
   const missing=w.InsightCompanyView.render({companyDetail:{basics:{},channels:[],current:{daily:[{date:'2026-10-01',missing:true}],summary:null}}});
   assert.doesNotMatch(missing,/db-current|0실/);

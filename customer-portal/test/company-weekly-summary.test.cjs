@@ -41,7 +41,7 @@ test('missing and conflicting zero values are unknown while a normal zero remain
   assert.equal(group.bookings,0);assert.equal(group.estimatedRevenue,0);assert.equal(group.quantityPartial,true);assert.equal(group.revenuePartial,true);
   const html=w.InsightCompanyView.currentView(company(rows,{rangeStart:'2026-10-01',rangeEnd:'2026-10-04'}));
   const summary=html.match(/<summary class="company-week-summary">(.*?)<\/summary>/)[1];
-  assert.match(summary,/>0실</);assert.match(summary,/>0원</);assert.match(summary,/일부 자료 · 관측 1\/4일/);assert.match(summary,/일부 금액/);
+  assert.match(summary,/>0실</);assert.match(summary,/>0원</);assert.match(summary,/일부 자료 · 관측 1\/4일/);assert.match(summary,/확인된 소계/);
   const conflict=html.match(/<tr class="observation-unknown"><th>2026-10-03<\/th>(.*?)<\/tr>/)[1];
   assert.doesNotMatch(conflict,/999,999원|>16실<|>8실<|>0원</);
 });
@@ -63,7 +63,7 @@ test('known revenue subtotals stay numeric and marked partial without losing com
   assert.equal(group.bookings,12);assert.equal(group.observedDays,4);assert.equal(group.quantityPartial,false);
   assert.equal(group.estimatedRevenue,900000);assert.equal(group.revenueObservedDays,4);assert.equal(group.revenuePartial,true);
   const summary=w.InsightCompanyView.currentView(company(rows)).match(/<summary class="company-week-summary">(.*?)<\/summary>/)[1];
-  assert.match(summary,/900,000원/);assert.match(summary,/일부 금액/);assert.match(summary,/관측 4\/4일/);
+  assert.match(summary,/900,000원/);assert.match(summary,/확인된 소계/);assert.match(summary,/관측 4\/4일/);
   assert.doesNotMatch(summary,/일부 자료/);
 });
 
@@ -73,7 +73,7 @@ test('separate booking and price coverage is visible when available dates differ
   assert.equal(group.bookings,6);assert.equal(group.estimatedRevenue,300000);
   assert.equal(group.observedDays,2);assert.equal(group.revenueObservedDays,1);
   const summary=w.InsightCompanyView.currentView(company(rows)).match(/<summary class="company-week-summary">(.*?)<\/summary>/)[1];
-  assert.match(summary,/예약 2\/2일 · 매출 1\/2일/);assert.match(summary,/일부 금액/);
+  assert.match(summary,/예약 2\/2일 · 매출 1\/2일/);assert.match(summary,/확인된 소계/);
 });
 
 test('weekly totals default closed and expanding keeps the original public and blocked daily columns',()=>{
@@ -139,7 +139,7 @@ test('monthly quantity and price coverage are separate when the final dates have
   const html=w.InsightCompanyView.currentView(company(rows,range)),month=html.slice(0,html.indexOf('<div class="company-flow">'));
   assert.match(month,/>19실<\/strong>/);assert.match(month,/>179,000원<\/strong>/);
   assert.match(month,/예약 관측 31\/31일/);assert.match(month,/가격 확인 29\/31일/);
-  assert.match(month,/month-partial">일부 금액/);assert.match(month,/확인된 금액만 합산/);
+  assert.match(month,/month-partial">확인된 소계/);assert.match(month,/확인된 금액만 합산/);
 });
 
 test('monthly display distinguishes an observed zero from unavailable and conflicting values',()=>{
@@ -162,7 +162,7 @@ test('a partial price subtotal is included but does not count as a fully availab
   const total=w.InsightCompanyView.monthTotals(rows);
   assert.equal(total.bookings,6);assert.equal(total.estimatedRevenue,500000);assert.equal(total.revenueObservedDays,2);assert.equal(total.priceCompleteDays,1);
   const month=w.InsightCompanyView.currentView(company(rows)).split('<div class="company-flow">')[0];
-  assert.match(month,/>500,000원<\/strong>/);assert.match(month,/가격 확인 1\/2일/);assert.match(month,/일부 금액/);
+  assert.match(month,/>500,000원<\/strong>/);assert.match(month,/가격 확인 1\/2일/);assert.match(month,/확인된 소계/);
 });
 
 test('short or cross-month target ranges are labelled as periods rather than whole monthly totals',()=>{

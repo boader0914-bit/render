@@ -9,8 +9,11 @@ const validDay = value => typeof value === 'string' && /^20\d{2}-(0[1-9]|1[0-2])
   && Number.isFinite(Date.parse(value + 'T00:00:00Z')) && new Date(value + 'T00:00:00Z').toISOString().slice(0,10) === value;
 const validMonth = value => typeof value === 'string' && /^20\d{2}-(0[1-9]|1[0-2])$/.test(value);
 const stamp = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null;
-const numbers = (value, keys) => Object.fromEntries(keys.map(key => [key, numeric(value?.[key])]));
-const quantityKeys = ['supply','total','sold','publicBookings','phoneBookings','publicRevenue','phoneRevenue','estimatedRevenue','reservationRate','sharedDayUseExcluded','coveredCompanyDays','expectedCompanyDays','missingCompanyDays','revenueCoveredCompanyDays','sameDayObservedCompanyDays','staleDays','maxObservationLeadTimeDays','knownPartialRevenue'];
+const priceEvidence = (key, value) => value === null ? null : typeof value === 'number' && Number.isFinite(value) && value >= 0
+  && (key === 'phoneFallbackRevenue' || Number.isSafeInteger(value)) ? value : null;
+const priceEvidenceKeys = ['phoneMissingPriceBookings','phoneFallbackBookings','phoneFallbackRevenue'];
+const numbers = (value, keys) => Object.fromEntries(keys.map(key => [key, priceEvidenceKeys.includes(key) ? priceEvidence(key,value?.[key]) : numeric(value?.[key])]));
+const quantityKeys = ['supply','total','sold','publicBookings','phoneBookings','publicRevenue','phoneRevenue','estimatedRevenue','reservationRate','sharedDayUseExcluded','coveredCompanyDays','expectedCompanyDays','missingCompanyDays','revenueCoveredCompanyDays','sameDayObservedCompanyDays','staleDays','maxObservationLeadTimeDays','knownPartialRevenue',...priceEvidenceKeys];
 function savedRecovery(value) {
   const proof = value?.sourceRecovery;
   if (!proof || value.runQuality !== 'unknown' || proof.kind !== 'saved_product_recovery_v1' || proof.originalRunQuality !== 'unknown'

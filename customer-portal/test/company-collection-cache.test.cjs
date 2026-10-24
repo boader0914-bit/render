@@ -173,6 +173,21 @@ test('each company restores its selected stay month and shares the default respo
   h.leave();h.mount('b');assert.equal(h.result(),'b|2026-07|b2');assert.match(h.calls[6].path,/\?month=2026-07$/);
 });
 
+test('changing to an uncached month keeps only that company API month choices and restores per-month cached data',async()=>{
+  const h=harness();h.context();h.mount('a',{company:{companyId:'a',name:'내 매장'}});
+  const october=data('a','2026-10','october');october.companyDetail.integrated.months=[{month:'2026-10',status:'missing'},{month:'2026-09',status:'complete'}];await h.resolve(0,october);
+  h.month('2026-09');assert.match(h.calls[1].path,/\?month=2026-09$/);let options=h.renderData.at(-1).options;assert.equal(options.selectedMonth,'2026-09');assert.equal(options.months.map(row=>row.month).join(','),'2026-10,2026-09');
+  const september=data('a','2026-09','september');september.companyDetail.integrated.months=october.companyDetail.integrated.months;await h.resolve(1,september);
+  h.month('2026-10');assert.equal(h.result(),'a|2026-10|october');assert.match(h.freshness(),/이전 조회 자료.*확인 중/);h.month('2026-09');assert.equal(h.result(),'a|2026-09|september');
+  h.leave();h.mount('b',{company:{companyId:'b',name:'경쟁업체'},relationKind:'competitor'});assert.equal(h.renderData.at(-1).options.months.length,0,'another company must not inherit the first month catalog');
+  const other=data('b','2026-08','other');other.companyDetail.integrated.months=[{month:'2026-08',status:'complete'}];await h.resolve(4,other);h.month('2026-08');assert.equal(h.result(),'b|2026-08|other');assert.equal(h.renderData.at(-1).options.months[0].month,'2026-08');
+  await h.resolve(2,data('a','2026-10','late-october'));await h.resolve(3,september);assert.equal(h.result(),'b|2026-08|other');h.leave();h.mount('a',{company:{companyId:'a'}});assert.equal(h.result(),'a|2026-09|september');assert.match(h.calls.at(-1).path,/\?month=2026-09$/);
+});
+
+test('malformed month selection makes no request and cannot replace the remembered selected month',async()=>{
+  const h=harness();h.context();h.mount();await h.resolve(0,data());h.month('2026-13');h.month('../private');assert.equal(h.calls.length,1);h.leave();h.mount();assert.equal(h.calls[1].path,'/companies/a/collection');
+});
+
 test('reentering during one pending request shares the GET and delivers its result to the current view',async()=>{
   const h=harness();h.context();h.mount();h.leave();h.mount();assert.equal(h.calls.length,1);
   await h.resolve(0,data());assert.equal(h.result(),'a|2026-10|v1');

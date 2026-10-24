@@ -48,9 +48,47 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
   // deployed display contract. Preserve its fingerprint so existing safe
   // snapshots still render immediately; absence of evidence never authorizes
   // archival, which only receives newly verified source responses below.
+  // Keep optional evidence outside the deployed fingerprint. It does not
+  // change an old display snapshot into a newly verified source response.
+  const recoveryFields=fields('kind companyId runId date productType collectedAt originalRunQuality receiptId sourceDigest rowDigest');
+  sourceObservation.sourceRecovery=recoveryFields;
+  const priceEvidenceKeys=['phoneMissingPriceBookings','phoneFallbackBookings','phoneFallbackRevenue'];
+  for(const schema of [metric,daily,detailSchema.integrated.snapshot.analysis.weekdays[0],detailSchema.integrated.snapshot.analysis.pace[0]])Object.assign(schema,fields(priceEvidenceKeys.join(' ')));
   daily.sourceObservation=sourceObservation;
   detailSchema.integrated.snapshot.provenance={...fields('source companyId calculationVersion linkageStatus sourceDigest'),runIds:[true],selectedRunIds:[true],observations:[sourceObservation]};
-  const disk=persistentStore||(persistenceDirectory&&namespace?require('./company-snapshot-store.cjs').createCompanySnapshotStore({directory:persistenceDirectory,namespace,version:projectionVersion,now,project:projectedCore}):null);
+  const validDay=value=>typeof value==='string'&&/^20\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(value)&&Number.isFinite(Date.parse(value+'T00:00:00Z'))&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;
+  const reference=value=>typeof value==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,179}$/.test(value);
+  function sourceProof(row,companyId,month){
+    const proof=row?.sourceRecovery,at=typeof row?.collectedAt==='string'?Date.parse(row.collectedAt):NaN;
+    const dayAt=validDay(row?.collectedDate)?Date.parse(row.collectedDate+'T00:00:00Z')-9*3600000:NaN;
+    if(!proof||typeof companyId!=='string'||typeof month!=='string'||!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month)||row.companyId!==companyId||!reference(row.runId)||!validDay(row.date)||!row.date.startsWith(month+'-')||row.productType!=='lodging'
+      ||!Number.isFinite(at)||!Number.isFinite(dayAt)||at<dayAt||at>=dayAt+86400000||row.collectedDate>row.date||row.runQuality!=='unknown'
+      ||proof.kind!=='saved_product_recovery_v1'||proof.originalRunQuality!=='unknown'||proof.companyId!==row.companyId||proof.runId!==row.runId
+      ||proof.date!==row.date||proof.productType!==row.productType||proof.collectedAt!==row.collectedAt
+      ||![proof.receiptId,proof.sourceDigest,proof.rowDigest].every(value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value)))return null;
+    return projectValue(proof,recoveryFields);
+  }
+  function sanitizeEvidenceCore(data){
+    const core=clone(data),detail=core?.companyDetail,integrated=detail?.integrated,companyId=detail?.companyId,month=integrated?.selectedMonth;
+    const metricEvidence=row=>{
+      if(!row||typeof row!=='object'||Array.isArray(row))return;
+      for(const key of priceEvidenceKeys)if(Object.hasOwn(row,key)&&row[key]!==null&&!(typeof row[key]==='number'&&Number.isFinite(row[key])&&row[key]>=0&&(key==='phoneFallbackRevenue'||Number.isSafeInteger(row[key]))))delete row[key];
+    };
+    const observationEvidence=(row,selectedMonth)=>{
+      if(!row||typeof row!=='object'||Array.isArray(row))return;
+      const proof=sourceProof(row,companyId,selectedMonth);delete row.sourceRecovery;if(proof)row.sourceRecovery=proof;
+    };
+    const dailyEvidence=(rows,selectedMonth)=>{if(Array.isArray(rows))for(const row of rows){metricEvidence(row);observationEvidence(row?.sourceObservation,selectedMonth);}};
+    metricEvidence(detail?.current?.summary);dailyEvidence(detail?.current?.daily,month);
+    if(Array.isArray(detail?.history?.months))for(const value of detail.history.months){metricEvidence(value?.summary);dailyEvidence(value?.daily,value?.month);}
+    const snapshot=integrated?.snapshot;metricEvidence(snapshot?.summary);dailyEvidence(snapshot?.daily,month);
+    for(const rows of [snapshot?.analysis?.weekdays,snapshot?.analysis?.pace])if(Array.isArray(rows))for(const row of rows)metricEvidence(row);
+    const provenance=snapshot?.provenance,scopeValid=integrated?.companyId===companyId&&provenance?.companyId===companyId&&provenance?.calculationVersion===integrated?.calculationVersion;
+    if(Array.isArray(provenance?.observations))for(const row of provenance.observations)observationEvidence(row,scopeValid?month:null);
+    return core;
+  }
+  const projectedEvidenceCore=data=>{const core=projectedCore(data);return core?sanitizeEvidenceCore(core):null;};
+  const disk=persistentStore||(persistenceDirectory&&namespace?require('./company-snapshot-store.cjs').createCompanySnapshotStore({directory:persistenceDirectory,namespace,version:projectionVersion,now,project:projectedEvidenceCore}):null);
   const ready=async()=>{if(disk)try{await disk.ready();}catch{}};
   const stableFingerprint=identity=>hash([identity.customer.customerId,identity.customer.revision,identity.relation,identity.company,identity.request]);
   const durableSlot=(identity,audience,isDefault)=>typeof audience==='string'&&audience&&audience.length<4096?hash([namespace,audience,identity.customer.customerId,identity.customer.revision,identity.relation,identity.company,identity.request,isDefault]):null;
@@ -69,7 +107,7 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
     const slotKey=durableSlot(identity,audience,period.startsWith('default:'));if(!slotKey)return;
     let saved;try{saved=stored||disk.get(slotKey,period.replace('default:',''));}catch{return;}
     if(!saved||saved.slotKey!==slotKey||saved.month!==period.replace('default:','')||!Number.isFinite(saved.checkedAt)||saved.checkedAt>clock()||!Number.isFinite(saved.validUntil)||saved.validUntil<=clock()||saved.validUntil>saved.checkedAt+7*86400000)return;
-    const core=projectedCore(saved.core);if(!core||!sourceScope(core,identity.company.companyId,month)||!cacheable(core,identity))return;
+    const core=projectedEvidenceCore(saved.core);if(!core||!sourceScope(core,identity.company.companyId,month)||!cacheable(core,identity))return;
     remember(key,state,mark,core,{checkedAt:saved.checkedAt,validUntil:saved.validUntil,persisted:true});
   }
   function remove(key) {const entry=entries.get(key);if(entry){bytes-=entry.bytes;entries.delete(key);}}
@@ -224,10 +262,11 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
         const previous=entries.get(key);if(previous)previous.refreshFailed=true;
         return unavailable();
       }
+      reply={...reply,data:sanitizeEvidenceCore(reply.data)};
       state.revoked=null;state.denied.delete(key);state.blockedCompanies.delete(companyId);
       const checkedAt=clock();
       if(cacheable(reply.data,identity)){
-        const core=projectedCore(reply.data);
+        const core=projectedEvidenceCore(reply.data);
         if(disk&&slotKey&&core)try{await disk.put({slotKey,month:savedMonth,checkedAt,core,ticket,guard:()=>current(state,epoch,key,mark,binding)});}catch{}
         if(!current(state,epoch,key,mark,binding))return invalidated();
         if(core&&reply.data.responseCache?.state!=='preview'&&reply.data.responseCache?.preview!==true&&reply.data.calculation?.mode!=='saved_only'&&typeof onVerifiedSource==='function')try{await onVerifiedSource({identity:identity.data,audience,companyId,month:savedMonth,data:core,checkedAt});}catch{/* A failed archive never replaces the good read; its storage status records the failure. */}
