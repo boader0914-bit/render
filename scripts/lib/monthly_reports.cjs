@@ -13,8 +13,10 @@ const SCHEMA_VERSION = 1;
 const PREVIEW_TTL_MS = 15 * 60 * 1000;
 const PREVIEW_CACHE_BYTES = 32 * 1024 * 1024;
 const PRODUCTS = ["lodging", "dayuse"];
-const METRICS = ["supply", "sold", "publicBookings", "phoneBookings", "sharedDayUseExcluded", "explicitBlockedBookings"];
-const REVENUE_METRICS = ["estimatedRevenue", "publicRevenue", "phoneRevenue", "phoneFallbackRevenue", "phoneFallbackBookings", "phoneMissingPriceBookings",
+// Missing-price rooms are a diagnostic quantity of every selected valid
+// inventory row, including rows whose entire monetary value is unavailable.
+const METRICS = ["supply", "sold", "publicBookings", "phoneBookings", "sharedDayUseExcluded", "explicitBlockedBookings", "phoneMissingPriceBookings"];
+const REVENUE_METRICS = ["estimatedRevenue", "publicRevenue", "phoneRevenue", "phoneFallbackRevenue", "phoneFallbackBookings",
   "phoneAllocatedBookings", "phoneAllocatedRevenue", "phoneRevenueLow", "phoneRevenueHigh"];
 const ID_PATTERN = /^mr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 

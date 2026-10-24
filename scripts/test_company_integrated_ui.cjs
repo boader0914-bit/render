@@ -163,10 +163,13 @@ test("partially priced public revenue remains a subtotal without a public missin
 test("all-unpriced reservations use the source missing count when eligible daily monetary aggregates are null", () => {
   const payload = priceGapEnvelope({ publicRevenue: 0 }), model = ui.buildViewModel(payload);
   const metric = payload.snapshot.daily.find(row => row.date === "2026-09-04").lodging;
-  assert.equal(metric.phoneMissingPriceBookings, null);
+  assert.equal(metric.phoneMissingPriceBookings, 4, "diagnostic quantities remain available even when the complete monetary value is unknown");
+  assert.equal(metric.estimatedRevenue, null);
   assert.equal(model.rows.find(row => row.date === "2026-09-04").phoneMissingPriceBookings, 4);
   const day = calendarDay(view(model), "2026-09-04");
   assert.match(day, /금액 미확인/); assert.doesNotMatch(day, /0만원/);
+  metric.phoneMissingPriceBookings = null;
+  assert.equal(ui.buildViewModel(payload).rows.find(row => row.date === "2026-09-04").phoneMissingPriceBookings, 4, "the source fallback still supports preserved older monthly snapshots");
 });
 
 test("empty data cannot display synthetic revenue or timing averages, and source text is escaped", () => {
