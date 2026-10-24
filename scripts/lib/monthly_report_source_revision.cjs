@@ -53,6 +53,7 @@ function createMonthlyReportSourceRevision({ dataDir, outputsDir, regionMasterFi
     .map((file, index) => [`region-reference-${index}`, path.resolve(file)]);
   const directories = [
     ["saved-runs", path.resolve(outputsDir || path.join(root, "outputs"))],
+    ["saved-product-recoveries", path.join(root, "history", "saved_product_recoveries")],
     ["special-days", path.join(root, "history", "special_days")],
     ...(includeContext ? [
       ["kosis", path.join(root, "history", "kosis")],

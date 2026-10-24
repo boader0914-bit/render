@@ -64,6 +64,7 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
     if (tourismRegionMapFile) await file("tourism-map", path.resolve(tourismRegionMapFile));
     for (let index = 0; index < codeFiles.length; index++) await file("engine/" + index, codeFiles[index]);
     await tree("runs", output, label => /\.(?:json|jsonl|csv|xlsx|md|html|png)$/i.test(label));
+    await tree("recoveries", path.join(root, "history", "saved_product_recoveries"), label => label.endsWith(".json"));
     await tree("calendar", path.join(root, "history", "special_days"), label => label.endsWith(".json"));
     if (includeContext) {
       await tree("tourism", path.join(root, "tourism_data", "cache"), label => label.endsWith(".json"));
@@ -259,6 +260,42 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
         ? hash(digest.sort((a, b) => a[0].localeCompare(b[0]))) : digest.digest("hex"); }
       parts.history = { kind: historyKind, rows, runRefs: Object.fromEntries(Object.entries(runRefs).map(([id, months]) => [id, Object.fromEntries(Object.entries(months).map(([month, ids]) => [month, [...ids].sort()]))])), unknown, malformed };
     }
+    // Recovery receipts are derived evidence, not replacements for history.
+    // Bind each self-checksummed envelope to its exact company/month and keep
+    // its saved run as a dependency even when old master/history omit that run.
+    // Product/count/SHA eligibility is checked by the recovery reader; a changed
+    // original must invalidate this scope so that reader can reject it normally.
+    parts.recoveryFiles ||= {};
+    const recoveryLabels = Object.keys(current.metadata).filter(label => label.startsWith("recoveries/"));
+    for (const label of recoveryLabels) if (changed(label) || !parts.recoveryFiles[label]) {
+      const value = await json(label, current, null), match = label.match(/^recoveries\/([a-f0-9]{64})\/(\d{4}-(?:0[1-9]|1[0-2]))\/([a-f0-9]{64})[.]json$/);
+      requireValid(match && value && !Array.isArray(value) && value.kind === "saved_product_recovery_v1"
+        && typeof value.companyId === "string" && value.companyId.length > 0 && value.companyId.length <= 200
+        && !/[\x00-\x1f\x7f]/.test(value.companyId) && monthValid(value.month) && value.month === match[2]
+        && crypto.createHash("sha256").update(value.companyId).digest("hex") === match[1]
+        && typeof value.runId === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,199}$/.test(value.runId)
+        && typeof value.collectedAt === "string" && value.collectedAt.includes("T") && Number.isFinite(Date.parse(value.collectedAt))
+        && Array.isArray(value.sourceFiles) && value.sourceFiles.length > 0 && value.sourceFiles.length <= 10000);
+      const sourcePaths = new Set();
+      for (const source of value.sourceFiles) {
+        const relative = source?.path;
+        requireValid(typeof relative === "string" && relative.length <= 4096 && !/[:\\\x00-\x1f\x7f]/.test(relative)
+          && relative.split("/")[0] === value.runId && relative.split("/").length > 1
+          && relative.split("/").every(segment => segment && segment !== "." && segment !== "..")
+          && !sourcePaths.has(relative) && /^[a-f0-9]{64}$/.test(source?.sha256 || ""));
+        sourcePaths.add(relative);
+      }
+      const { checksum, ...body } = value;
+      const { receiptId, createdAt, ...identity } = body;
+      requireValid(receiptId === match[3] && receiptId === hash(identity) && checksum === hash(body));
+      parts.recoveryFiles[label] = { companyId: value.companyId, month: value.month, runId: value.runId, digest: contentDigests[label] };
+    }
+    for (const label of Object.keys(parts.recoveryFiles)) if (!recoveryLabels.includes(label)) delete parts.recoveryFiles[label];
+    const recoveries = {};
+    for (const label of recoveryLabels.sort()) {
+      const entry = parts.recoveryFiles[label]; requireValid(entry && parts.master.companies[entry.companyId]);
+      ((recoveries[entry.companyId] ||= {})[entry.month] ||= []).push(entry);
+    }
     // Context is indexed by the saved response's own region/month. Unknown
     // cache identity stays a conservative shared dependency, never guessed.
     parts.contextFiles ||= {};
@@ -295,10 +332,10 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
     for (const [id, company] of Object.entries(parts.master.companies)) {
       const kosis = company.regionId ? crypto.createHash("sha256").update(company.regionId).digest("hex").slice(0, 24) : "";
       const revision = hash([common, company.meta, company.identity, parts.capacity[id] || null, context.unknown, includeContext && kosis ? [contentDigests["kosis/" + kosis + ".json"], contentDigests["kosis/" + kosis + "-attempt.json"]] : null]);
-      const months = {}, allMonths = [...new Set([...Object.keys(company.months), ...Object.keys(parts.history.rows[id] || {})])];
-      for (const month of allMonths) { const runIds = [...new Set([...(company.runs[month] || []), ...(parts.history.runRefs[id]?.[month] || [])])].sort();
+      const months = {}, allMonths = [...new Set([...Object.keys(company.months), ...Object.keys(parts.history.rows[id] || {}), ...Object.keys(recoveries[id] || {})])];
+      for (const month of allMonths) { const recovered = recoveries[id]?.[month] || [], runIds = [...new Set([...(company.runs[month] || []), ...(parts.history.runRefs[id]?.[month] || []), ...recovered.map(entry => entry.runId)])].sort();
         const runMetadata = runIds.flatMap(runId => runMetadataById[runId] || []).sort();
-        months[month] = hash([company.months[month] || null, parts.history.rows[id]?.[month] || null, runMetadata]); }
+        months[month] = hash([company.months[month] || null, parts.history.rows[id]?.[month] || null, runMetadata, ...(recovered.length ? [recovered] : [])]); }
       companies[id] = { revision, months, regionKey: company.regionKey, runs: company.knownRuns.map(runId => parts.runCatalog[runId]) };
     }
     const unknownMonths = { ...parts.history.unknown }; for (const [month, count] of Object.entries(parts.master.fallbackUnknown || {})) unknownMonths[month] = (unknownMonths[month] || 0) + count;

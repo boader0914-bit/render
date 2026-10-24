@@ -43,6 +43,16 @@ async function main() {
     assert.equal((await request(url)).status, 401);
     assert.equal((await request(url, await login("integrated-member"))).status, 403);
     const admin = await login("integrated-admin");
+    const recoveryRoute = "/api/company-master/recover-saved-products";
+    const recoveryRequest = { confirm: "recover-saved-products", month: "2026-08", companyIds: [fixture.companyId] };
+    assert.equal((await request(recoveryRoute, "", "POST", recoveryRequest)).status, 401);
+    assert.equal((await request(recoveryRoute, await login("integrated-member"), "POST", recoveryRequest)).status, 403);
+    assert.equal((await request(recoveryRoute, admin, "POST", { ...recoveryRequest, confirm: undefined })).status, 400);
+    assert.equal((await request(recoveryRoute, admin, "POST", { ...recoveryRequest, rawRows: [] })).status, 400);
+    const recovered = await request(recoveryRoute, admin, "POST", recoveryRequest);
+    assert.equal(recovered.status, 200, JSON.stringify(recovered.data));
+    assert.equal(recovered.data.collectionExecuted, false);
+    assert.equal(recovered.data.receipts.length, 0, "complete and unverifiable legacy runs cannot be relabelled as recovered");
     let integrated;
     for (let i = 0; i < 120; i++) {
       integrated = await request(url, admin);
@@ -77,7 +87,7 @@ async function main() {
     assert.equal(updated.data.status, "ready");
     assert.notEqual(updated.data.calculatedAt, integrated.data.calculatedAt);
     assert.deepEqual(await fs.readFile(path.join(dataDir, "history", "observations.jsonl")), originalHistory, "recalculation leaves raw history untouched");
-    console.log("Company integration API: automatic historical build, auth, exact monthly parity, correction refresh and raw preservation passed");
+    console.log("Company integration API: automatic historical build, scoped saved-product recovery auth/no-network, exact monthly parity, correction refresh and raw preservation passed");
   } finally {
     child.kill(); if (child.exitCode === null) await once(child, "exit");
     assert.ok(path.resolve(dataDir).startsWith(path.resolve(os.tmpdir()) + path.sep));

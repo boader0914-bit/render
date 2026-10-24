@@ -7,6 +7,7 @@ const { buildMonthlyReportInsights } = require("./monthly_report_insights.cjs");
 const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./monthly_report_comparison.cjs");
 const { performance, monitorEventLoopDelay } = require("node:perf_hooks");
 const { createMonthlyReportMaterializedCache } = require("./monthly_report_materialized_cache.cjs");
+const { recoveryRowDigest } = require("./saved_product_recovery.cjs");
 
 const SCHEMA_VERSION = 1;
 const PREVIEW_TTL_MS = 15 * 60 * 1000;
@@ -296,11 +297,25 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}) 
   const { dates, ...period } = calendar(request.month);
   period.cutoffDate = request.cutoffDate;
   period.monthClosed = kstDate(generatedAt) > period.end;
-  const observations = Array.isArray(source?.observations) ? source.observations : [];
+  const rawObservations = Array.isArray(source?.observations) ? source.observations : [];
+  // Only the separately verified saved-product reader may supply recovery
+  // certificates. A marker embedded in an old history row is never authority.
+  const recoveryEntries = Array.isArray(source?.savedProductRecoveries) ? source.savedProductRecoveries : [];
+  const recoveryByRow = new Map();
+  for (const entry of recoveryEntries) {
+    const row = entry?.row, proof = entry?.certificate;
+    if (!row || !proof || proof.kind !== "saved_product_recovery_v1" || proof.originalRunQuality !== "unknown"
+      || proof.companyId !== observationIdentity(row) || proof.runId !== String(row.runId || "")
+      || proof.date !== (row.stayDate || row.date) || proof.productType !== row.productType || proof.collectedAt !== row.collectedAt
+      || ![proof.sourceDigest, proof.rowDigest, proof.receiptId].every(value => /^[a-f0-9]{64}$/.test(value || ""))
+      || proof.rowDigest !== recoveryRowDigest(row)) continue;
+    recoveryByRow.set(row, proof);
+  }
+  const observations = [...rawObservations, ...recoveryByRow.keys()];
   const rankObservations = Array.isArray(source?.rankObservations) ? source.rankObservations : [];
   const runs = Array.isArray(source?.runs) ? source.runs : [];
   const runMap = new Map(runs.map(run => [String(run.id || run.runId || ""), run]));
-  const membership = request.type === "keyword" ? keywordMembership(request, period, observations, rankObservations, runMap) : null;
+  const membership = request.type === "keyword" ? keywordMembership(request, period, rawObservations, rankObservations, runMap) : null;
   const companyMap = new Map();
   for (const value of Array.isArray(source?.companies) ? source.companies : []) {
     const companyId = companyIdentity(value);
@@ -339,7 +354,10 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}) 
     const productType = original.productType === "day-use" ? "dayuse" : original.productType;
     if (!PRODUCTS.includes(productType)) { discard("invalid_product_type", original); continue; }
     const quality = runStatus(run);
-    if (!run || !["complete", "reused", "partial"].includes(quality)) { discard(!run || quality === "unknown" ? "unknown_legacy_run_quality" : `run_${quality}`, original); continue; }
+    const certificate = recoveryByRow.get(original);
+    const recovery = certificate && run && quality === "unknown" && timestamp(run.collectedAt) !== null
+      && timestamp(run.collectedAt) === timestamp(certificate.collectedAt) ? certificate : null;
+    if (!run || !["complete", "reused", "partial"].includes(quality) && !recovery) { discard(!run || quality === "unknown" ? "unknown_legacy_run_quality" : `run_${quality}`, original); continue; }
     const collectedAt = String(original.collectedAt || run.collectedAt || "");
     if (!original.collectedAt && run.collectedAtSource === "filesystem") { discard("unverified_collection_time", original); continue; }
     const time = timestamp(collectedAt);
@@ -369,6 +387,7 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}) 
     const valuation = priceEvidence(row, request);
     const normalized = {
       companyId, companyName: row.companyName, date, productType, runId, keyword, runQuality: quality,
+      ...(recovery ? { sourceRecovery: clone(recovery) } : {}),
       collectedAt, collectedDate, time, tie: row.tie,
       observationLeadTimeDays: Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${collectedDate}T00:00:00Z`)) / 86400000),
       inventoryEvidenceVersion: number(original.inventoryEvidenceVersion ?? original.evidenceVersion),
@@ -411,7 +430,7 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}) 
   });
   const selectedCounts = new Map();
   for (const row of [...selected, ...partialRows]) selectedCounts.set(row.runId, (selectedCounts.get(row.runId) || 0) + 1);
-  const ranks = rankChanges([...rankObservations, ...observations], companyMap, runMap, request, period);
+  const ranks = rankChanges([...rankObservations, ...rawObservations], companyMap, runMap, request, period);
   const rankSourceCounts = new Map();
   for (const rank of ranks.rows) {
     for (const id of new Set([rank.firstRunId, rank.lastRunId])) {
@@ -422,7 +441,8 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}) 
   }
   const sourceRuns = [...scopedRuns.entries()].map(([id, count]) => {
     const run = runMap.get(id);
-    return { id, keyword: String(run.keyword || ""), collectedAt: String(run.collectedAt || ""), collectionQuality: { status: runStatus(run) }, observationCount: count, selectedObservationCount: selectedCounts.get(id) || 0, rankSeriesCount: rankSourceCounts.get(id) || 0 };
+    return { id, keyword: String(run.keyword || ""), collectedAt: String(run.collectedAt || ""), collectionQuality: { status: runStatus(run) }, observationCount: count, selectedObservationCount: selectedCounts.get(id) || 0, rankSeriesCount: rankSourceCounts.get(id) || 0,
+      recoveredObservationCount: selected.filter(row => row.runId === id && row.sourceRecovery).length };
   }).sort((a, b) => a.id.localeCompare(b.id));
   const discardedObservationCount = Object.values(discardedByReason).reduce((sum, value) => sum + value, 0);
   const revenueExcludedCompanyDays = selected.filter(row => row.productType === "lodging" && !row.revenueEligible).length;
@@ -434,6 +454,8 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}) 
   if (partialRows.length) warnings.push("부분 응답에서 근거가 확인된 금액은 별도 소계이며 정상 예상매출과 합산하지 않습니다.");
   if (revenueExcludedCompanyDays || summary.lodging.revenuePartial) warnings.push("가격 미확인 또는 미수집 날짜가 있어 예상매출은 확인된 날짜의 소계입니다.");
   if (discardedByReason.unknown_legacy_run_quality || discardedByReason.legacy_inventory_evidence) warnings.push("수집 품질 또는 재고 근거 버전을 확인할 수 없는 과거 자료를 제외했습니다.");
+  const recoveredCompanyDays = selected.filter(row => row.productType === "lodging" && row.sourceRecovery).length;
+  if (recoveredCompanyDays) warnings.push(`저장된 상품별 원문을 검증해 ${recoveredCompanyDays} 업체·일을 복구했습니다. 원 수집 회차의 전체 품질은 변경하지 않았습니다.`);
   if (!period.monthClosed) warnings.push("아직 종료되지 않은 달의 중간 집계입니다.");
   if (period.end > request.cutoffDate) warnings.push("월 종료 전 기준일 보고서입니다. 향후 숙박일의 예약 관측이 포함될 수 있습니다.");
   const sourceQualityLimited = Boolean(source?.warnings?.length) || Object.values(source?.sourceDiagnostics || {}).some(value => typeof value === "number" && value > 0);
@@ -448,14 +470,14 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}) 
     medianObservationLeadTimeDays: summary.lodging.medianObservationLeadTimeDays,
     revenueCoveredCompanyDays: summary.lodging.revenueCoveredCompanyDays, revenueExcludedCompanyDays,
     discardedObservationCount, discardedByReason, discardedSamples: discarded, partialRunObservationCount,
-    knownPartialCompanyDays: partialRows.filter(row => row.productType === "lodging").length, warnings,
+    knownPartialCompanyDays: partialRows.filter(row => row.productType === "lodging").length, recoveredCompanyDays, warnings,
     sourceDiagnostics: source?.sourceDiagnostics ? clone(source.sourceDiagnostics) : null,
     globalWarnings: (Array.isArray(source?.globalWarnings) ? source.globalWarnings : []).filter(value => typeof value === "string").map(value => value.slice(0, 1000)),
     globalDiagnostics: source?.globalDiagnostics ? clone(source.globalDiagnostics) : null
   };
   const cleanSelected = selected.map(({ time, tie, eligible, reason, ...row }) => row);
   const insights = buildMonthlyReportInsights({ request, period, companies: [...companyMap.values()],
-    observations: [...groups.values()].flat(), selected, rankObservations: [...rankObservations, ...observations], runs, specialDays: source?.specialDays });
+    observations: [...groups.values()].flat(), selected, rankObservations: [...rankObservations, ...rawObservations], runs, specialDays: source?.specialDays });
   // Timing/distribution uses intermediate observations as well as the selected
   // final values. Preserve those run references in the issued report's sources.
   const listedRunIds = new Set(sourceRuns.map(run => run.id));
@@ -480,7 +502,7 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}) 
         companyIds: [...companyMap.keys()].sort(),
         rankOnlyCompanyIds: [...companyMap.keys()].filter(id => membership.rankMembers.has(id) && !membership.inventoryMembers.has(id)).sort()
       } : { basis: request.type === "company" ? "canonical_company_id" : "current_company_region", companyIds: [...companyMap.keys()].sort() },
-      excludedRuns: sourceRuns.filter(run => !["complete", "reused", "partial"].includes(run.collectionQuality.status)).map(run => ({ id: run.id, status: run.collectionQuality.status, reason: "ineligible_run_quality" })),
+      excludedRuns: sourceRuns.filter(run => !["complete", "reused", "partial"].includes(run.collectionQuality.status) && !run.recoveredObservationCount).map(run => ({ id: run.id, status: run.collectionQuality.status, reason: "ineligible_run_quality" })),
       observations: cleanSelected,
       partialEvidence: [...partialGroups.entries()].map(([key, row]) => ({ companyId: row.companyId, date: row.date, productType: row.productType, runId: row.runId,
         collectedAt: row.collectedAt, knownPartialRevenue: row.knownPartialRevenue, knownPartialPublicRevenue: row.knownPartialPublicRevenue,

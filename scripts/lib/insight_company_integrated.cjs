@@ -8,8 +8,18 @@ const day = value => /^\d{4}-\d{2}-\d{2}$/.test(value || '') ? value : null;
 const month = value => /^20\d{2}-(0[1-9]|1[0-2])$/.test(value || '') ? value : null;
 const stamp = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null;
 const reference = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,179}$/.test(value) ? value : null;
+function sourceRecovery(row) {
+  const proof = row?.sourceRecovery;
+  if (!proof || proof.kind !== 'saved_product_recovery_v1' || proof.originalRunQuality !== 'unknown'
+    || row.runQuality !== 'unknown' || proof.companyId !== row.companyId || proof.runId !== row.runId
+    || proof.date !== row.date || proof.productType !== row.productType || proof.collectedAt !== row.collectedAt
+    || ![proof.receiptId, proof.sourceDigest, proof.rowDigest].every(value => /^[a-f0-9]{64}$/.test(value || ''))) return null;
+  return { kind: proof.kind, companyId: row.companyId, runId: row.runId, date: row.date, productType: row.productType,
+    collectedAt: row.collectedAt, originalRunQuality: 'unknown', receiptId: proof.receiptId, sourceDigest: proof.sourceDigest, rowDigest: proof.rowDigest };
+}
 const sourceObservation = row => row && reference(row.companyId) && reference(row.runId) && day(row.date) && row.productType === 'lodging'
-  ? { companyId: row.companyId, runId: row.runId, date: row.date, productType: 'lodging', collectedAt: stamp(row.collectedAt), collectedDate: day(row.collectedDate), runQuality: ['complete', 'reused', 'partial'].includes(row.runQuality) ? row.runQuality : 'unknown' } : null;
+  ? { companyId: row.companyId, runId: row.runId, date: row.date, productType: 'lodging', collectedAt: stamp(row.collectedAt), collectedDate: day(row.collectedDate), runQuality: ['complete', 'reused', 'partial'].includes(row.runQuality) ? row.runQuality : 'unknown',
+    ...(sourceRecovery(row) ? { sourceRecovery: sourceRecovery(row) } : {}) } : null;
 const numbers = (source, keys) => Object.fromEntries(keys.map(key => [key, number(source?.[key])]));
 const metrics = source => ({ ...numbers(source, ['supply', 'sold', 'publicBookings', 'phoneBookings', 'publicRevenue', 'phoneRevenue', 'estimatedRevenue', 'reservationRate', 'sharedDayUseExcluded', 'coveredCompanyDays', 'expectedCompanyDays', 'missingCompanyDays', 'revenueCoveredCompanyDays', 'sameDayObservedCompanyDays', 'staleDays', 'maxObservationLeadTimeDays', 'knownPartialRevenue']), partial: source?.partial === true, revenuePartial: source?.revenuePartial === true, containsPartialRun: source?.containsPartialRun === true });
 

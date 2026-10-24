@@ -49,6 +49,23 @@ test("DB review, history, capacity bases and reference edits invalidate saved ag
   }
 });
 
+test("saved product recovery folders, receipt edits, replacements and removals are fresh source dependencies", async t => {
+  const { root, write, options } = await fixture(t), revision = createMonthlyReportSourceRevision({ ...options, includeContext: false });
+  const before = await revision(), relative = `history/saved_product_recoveries/${"a".repeat(64)}/2026-09/${"b".repeat(64)}.json`;
+  const file = await write(relative, '{"kind":"saved_product_recovery_v1","count":1}');
+  const added = await revision(); assert.notEqual(added, before, "A new ledger is found without a master or observation edit");
+  const firstParent = await fs.stat(path.dirname(file)), firstFile = await fs.stat(file);
+  await fs.writeFile(file, '{"kind":"saved_product_recovery_v1","count":2}');
+  await fs.utimes(file, firstFile.atime, firstFile.mtime); await fs.utimes(path.dirname(file), firstParent.atime, firstParent.mtime);
+  const edited = await revision(); assert.notEqual(edited, added, "An edited receipt is checked even if directory and file mtime are restored");
+  await fs.writeFile(file + ".tmp", '{broken'); assert.equal(await revision(), edited, "Temporary incomplete recovery writes do not count as published evidence");
+  await fs.rename(file + ".tmp", file); const corrupted = await revision(); assert.notEqual(corrupted, edited, "Receipt corruption expires reuse; the trusted observation reader will fail closed");
+  await fs.unlink(file); const removed = await revision(); assert.notEqual(removed, corrupted);
+  await write(`history/saved_product_recoveries/${"c".repeat(64)}/2026-10/${"d".repeat(64)}.json`, "{}");
+  assert.notEqual(await revision(), removed, "A subsequent newly created company/month folder is listed afresh");
+  assert.ok(path.resolve(file).startsWith(path.resolve(root) + path.sep));
+});
+
 test("reference content survives identical redeployment while fresh reads detect edits, removals and unsafe races", async t => {
   const { write, options } = await fixture(t);
   const references = [await write("region-master.json", '{"region":1}'), await write("tourism-map.json", '{"region":2}')];

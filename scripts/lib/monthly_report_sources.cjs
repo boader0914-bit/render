@@ -23,9 +23,10 @@ async function readJson(file, fallback, checkpoint = async () => {}) {
   catch (error) { if (error.code === "ENOENT") return fallback; throw sourceError(); }
 }
 
-function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, observationIndex = null, prepareCompanies = null, projectCapacityCompany = null, companySourceVersion = "monthly-company-source-v1", useSourceReadValidationBoundary = false, shareFrozenCatalogMetadata = false, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", now = () => new Date(), runWork = operation => operation() }) {
+function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, observationIndex = null, prepareCompanies = null, projectCapacityCompany = null, companySourceVersion = "monthly-company-source-v1", useSourceReadValidationBoundary = false, shareFrozenCatalogMetadata = false, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readSavedProductRecoveries = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", now = () => new Date(), runWork = operation => operation() }) {
   if (typeof useSourceReadValidationBoundary !== "boolean") throw new TypeError("Source-read validation opt-in must be boolean");
   if (typeof shareFrozenCatalogMetadata !== "boolean") throw new TypeError("Frozen catalog sharing opt-in must be boolean");
+  if (readSavedProductRecoveries !== null && typeof readSavedProductRecoveries !== "function") throw new TypeError("Saved recovery reader must be a function");
   const companyFile = path.join(dataDir, "company_master", "companies.json");
   const historyFile = path.join(dataDir, "history", "observations.jsonl");
   let catalogInFlight = null, targetCatalogInFlight = null, optionsInFlight = null;
@@ -358,13 +359,22 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
         }
       } catch { throw sourceError(); }
     }
+    let savedProductRecoveries = [], recoveryWarnings = [];
+    if (readSavedProductRecoveries !== null && request.type !== "keyword") {
+      try {
+        const recovered = await readSavedProductRecoveries(request, data, { checkpoint });
+        if (!Array.isArray(recovered?.observations) || !Array.isArray(recovered?.warnings)) throw sourceError();
+        savedProductRecoveries = recovered.observations;
+        recoveryWarnings = recovered.warnings.map(value => typeof value === "string" ? value : value?.message).filter(value => typeof value === "string");
+      } catch { throw sourceError(); }
+    }
     const scopeIds = request.type === "keyword"
       ? monthlyReportKeywordMembership(request, { observations: diagnosticInventoryRows, rankObservations: diagnosticRankRows, runs: data.runs }).members
       : new Set(data.companies.filter(company => request.type === "industry" || (request.type === "company" ? company.companyId === request.targetId
         : company.regionKey === request.targetId || company.regionKeys.includes(request.targetId))).map(company => company.companyId));
     const unmatchedCompanyRows = unmatchedRows.reduce((count, row) => count + (scopeIds.has(row.candidateId) ? row.count || 1 : 0), 0);
     const duplicatePlaceCompanies = [...conflictingCompanyIds].filter(id => scopeIds.has(id)).length;
-    const warnings = [], globalWarnings = [];
+    const warnings = [...recoveryWarnings], globalWarnings = [];
     if (unmatchedCompanyRows) warnings.push(`리포트 대상에서 업체 고유번호를 확정하지 못한 관측 ${unmatchedCompanyRows}건을 제외했습니다.`);
     if (duplicatePlaceCompanies) warnings.push(`리포트 대상 중 플레이스 번호가 중복 연결된 업체 DB ${duplicatePlaceCompanies}개는 합산에서 제외했습니다. DB 중복 검토가 필요합니다.`);
     const globalUnmatchedCompanyRows = unmatchedRows.reduce((count, row) => count + (row.count || 1), 0) - unmatchedCompanyRows;
@@ -398,7 +408,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
         specialDays.years.push({ year: holidayYear, status: "missing", updatedAt: "", holidays: [] });
       }
     }
-    const source = { companies: data.companies, regions: data.regions, runs: data.runs, observations: [...observations.values()], rankObservations, specialDays,
+    const source = { companies: data.companies, regions: data.regions, runs: data.runs, observations: [...observations.values()], savedProductRecoveries, rankObservations, specialDays,
       warnings, sourceDiagnostics: { unmatchedCompanyRows, duplicatePlaceCompanies },
       globalWarnings, globalDiagnostics: { malformedHistoryLines, unmatchedCompanyRows: globalUnmatchedCompanyRows, duplicatePlaceCompanies: globalDuplicatePlaceCompanies,
         ...(request.type === "region" ? { unmappedRegionCompanies } : {}) }, context };

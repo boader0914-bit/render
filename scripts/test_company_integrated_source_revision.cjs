@@ -21,6 +21,62 @@ async function fixture(t) {
 }
 const scope = (companyId, month) => ({ companyId, month, cutoffDate: month + "-28", calculationVersion: "fixture-v1" });
 
+function recoveryEnvelope(companyId, month, runId, sourceFiles, extra = {}) {
+  const core = { kind: "saved_product_recovery_v1", validatorVersion: "fixture-v1", companyId, month, runId,
+    collectedAt: "2026-09-01T00:00:00.000Z", originalRunQuality: "unknown", sourceFiles,
+    providerIdentity: { placeId: companyId.replace("cmp_place_", "") }, verifiedDates: [], exclusions: [], ...extra };
+  const receiptId = digest(JSON.stringify(canonical(core))), body = { ...core, receiptId, createdAt: "2026-10-24T00:00:00.000Z" };
+  const value = { ...body, checksum: digest(JSON.stringify(canonical(body))) };
+  return { name: `history/saved_product_recoveries/${digest(companyId)}/${month}/${receiptId}.json`, value };
+}
+
+test("saved product receipts scope new recovery and original-run changes without any master/history run reference", async t => {
+  const f = await fixture(t), reader = createCompanyIntegratedSourceRevision(f.options);
+  let prepared = await reader.prepare();
+  const tokens = () => Object.fromEntries([A, B].flatMap(id => ["2026-08", "2026-09", "2026-10", "2026-11"].map(month => [id + month, reader.forScope(prepared, scope(id, month))])));
+  const initial = tokens(), runId = "legacy-only-recovery";
+  await f.write(`outputs/${runId}/manifest.json`, { collectedAt: "2026-09-01T00:00:00.000Z", checkIn: "2026-09-01", bookingRangeDays: 30 });
+  await f.write(`outputs/${runId}/products/product.json`, { total: 16, available: 15 });
+  prepared = await reader.prepare(); assert.deepEqual(tokens(), initial, "An unowned old run cannot expire unrelated company months");
+  const receipt = recoveryEnvelope(A, "2026-09", runId, [{ path: `${runId}/products/product.json`, sha256: digest(await fs.readFile(path.join(f.root, "outputs", runId, "products/product.json"))) }]);
+  await f.write(receipt.name, receipt.value); prepared = await reader.prepare();
+  const recovered = tokens();
+  for (const id of [A, B]) for (const month of ["2026-08", "2026-09", "2026-10", "2026-11"]) {
+    assert.equal(recovered[id + month] !== initial[id + month], id === A && ["2026-09", "2026-10"].includes(month), `${id} ${month}`);
+  }
+  assert.equal(await createCompanyIntegratedSourceRevision(f.options)(scope(A, "2026-09")), recovered[A + "2026-09"], "The scoped receipt projection survives restart");
+  await f.write(`outputs/${runId}/products/product.json`, { total: 16, available: 0 });
+  prepared = await reader.prepare(); const changed = tokens();
+  assert.notEqual(changed[A + "2026-09"], recovered[A + "2026-09"], "A source SHA mismatch expires this recovery; the observation reader decides whether to reject it");
+  assert.notEqual(changed[A + "2026-10"], recovered[A + "2026-10"]);
+  for (const key of [A + "2026-08", A + "2026-11", ...["2026-08", "2026-09", "2026-10", "2026-11"].map(month => B + month)]) assert.equal(changed[key], recovered[key]);
+  const before = await fs.readFile(path.join(f.root, "company_integrated/revision-index.json"));
+  await f.write(receipt.name, { ...receipt.value, verifiedDates: ["2026-09-01"] });
+  await assert.rejects(reader.prepare(), { code: "COMPANY_SOURCE_REVISION_UNAVAILABLE" });
+  assert.deepEqual(await fs.readFile(path.join(f.root, "company_integrated/revision-index.json")), before, "Corrupt receipts cannot certify or overwrite the last good source index");
+  await f.write(receipt.name, receipt.value); assert.deepEqual(await reader.prepare(), prepared);
+  await fs.unlink(path.join(f.root, receipt.name)); prepared = await reader.prepare(); assert.deepEqual(tokens(), initial, "Removing a receipt removes only its scoped dependency");
+});
+
+test("receipt source paths, company/month directories and content identity fail closed when malformed", async t => {
+  const f = await fixture(t), reader = createCompanyIntegratedSourceRevision(f.options);
+  await reader.prepare();
+  const runId = "legacy-recovery", original = recoveryEnvelope(A, "2026-09", runId, [{ path: `${runId}/manifest.json`, sha256: "a".repeat(64) }]);
+  for (const relative of ["../outside.json", `${runId}/../outside.json`, `${runId}\\product.json`, `${runId}/C:unsafe.json`, "other-run/product.json"]) {
+    const invalid = recoveryEnvelope(A, "2026-09", runId, [{ path: relative, sha256: "a".repeat(64) }]);
+    await f.write(invalid.name, invalid.value);
+    await assert.rejects(reader.prepare(), { code: "COMPANY_SOURCE_REVISION_UNAVAILABLE" });
+    await fs.unlink(path.join(f.root, invalid.name));
+  }
+  for (const name of [original.name.replace(digest(A), digest(B)), original.name.replace("2026-09", "2026-08"), original.name.replace(original.value.receiptId, "a".repeat(64))]) {
+    await f.write(name, original.value);
+    await assert.rejects(reader.prepare(), { code: "COMPANY_SOURCE_REVISION_UNAVAILABLE" });
+    await fs.unlink(path.join(f.root, name));
+  }
+  await f.write(original.name, "{broken");
+  await assert.rejects(reader.prepare(), { code: "COMPANY_SOURCE_REVISION_UNAVAILABLE" });
+});
+
 test("durable metadata index reuses unchanged inputs after restart and isolates company/month observation, rank, correction and saved-run changes", async t => {
   const f = await fixture(t); let streams = 0, masterReads = 0;
   const fileSystem = Object.create(fs); fileSystem.readFile = async (file, ...args) => { if (String(file).endsWith("company_master" + path.sep + "companies.json")) masterReads++; return fs.readFile(file, ...args); };

@@ -36,6 +36,7 @@ const { aggregateFields: companyBootstrapAggregateFields, compactCompanyInventor
 const { createCompanyDetailStore, readScopedCompanyMaster } = require("./lib/company_detail_store.cjs");
 const { createBoundedCompanyResponse, unavailable: responseUnavailable } = require("./lib/bounded_company_response.cjs");
 const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
+const { createSavedProductRecovery } = require("./lib/saved_product_recovery.cjs");
 const { compactMonthlyCapacityCompany } = require("./lib/monthly_company_source_catalog.cjs");
 const { createMonthlyReportContext } = require("./lib/monthly_report_context.cjs");
 const { createMonthlyReportOutlookEvaluation } = require("./lib/monthly_report_outlook_evaluation.cjs");
@@ -588,6 +589,7 @@ const monthlyCompanySourceVersion = crypto.createHash("sha256")
   .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_report_sources.cjs")))
   .update(fs.readFileSync(path.join(__dirname, "lib", "industry_analysis.cjs")))
   .update(fs.readFileSync(path.join(__dirname, "lib", "company_capacity_registry.cjs")))
+  .update(fs.readFileSync(path.join(__dirname, "lib", "saved_product_recovery.cjs")))
   .update(fs.readFileSync(path.join(__dirname, "inventory_estimation.cjs")))
   .update(fs.readFileSync(path.join(__dirname, "verified_room_inventory.json"))).digest("hex");
 const recalculateMonthlyCompanyObservations = createMonthlyCompanyRecalculation({
@@ -600,6 +602,10 @@ const recalculateMonthlyCompanyObservations = createMonthlyCompanyRecalculation(
   cacheVersion: crypto.createHash("sha256").update(monthlyCompanySourceVersion)
     .update(fs.readFileSync(__filename)) // Includes saved-run/product parsing callbacks.
     .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_company_recalculation.cjs"))).digest("hex")
+});
+const savedProductRecovery = createSavedProductRecovery({
+  dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR, projectCompany: compactMonthlyCapacityCompany,
+  applyCompanyManualCorrection, buildHistoryObservations
 });
 const monthlyReportSources = createMonthlyReportSources({
   runWork: runAnalyticalWork,
@@ -631,6 +637,7 @@ const monthlyReportSources = createMonthlyReportSources({
   },
   capacityForCompany: company => manualCorrectionLodgingBasisTotal(company.manualCorrection) || companyMaximumRoomCapacity(company) || null,
   recalculateCompanyObservations: recalculateMonthlyCompanyObservations,
+  readSavedProductRecoveries: (request, data) => savedProductRecovery.read(request, data),
   readContext: readMonthlyRegionContext,
   readSpecialDays: async year => (await specialDaysService.status(year)).yearStatus
 });
@@ -712,7 +719,7 @@ const readCompanyIntegratedRevision = createCompanyIntegratedSourceRevision({
   calculationFiles: ["company_integrated_db.cjs", "monthly_reports.cjs", "monthly_report_comparison.cjs",
     "monthly_report_sources.cjs", "monthly_report_context.cjs", "monthly_company_recalculation.cjs", "monthly_company_source_catalog.cjs",
     "company_capacity_registry.cjs", "monthly_report_insights.cjs", "industry_analysis.cjs",
-    "inventory_manual_corrections.cjs", "company_master_stream.cjs", "history_observation_index.cjs"].map(name => path.join(__dirname, "lib", name))
+    "inventory_manual_corrections.cjs", "company_master_stream.cjs", "history_observation_index.cjs", "saved_product_recovery.cjs"].map(name => path.join(__dirname, "lib", name))
     .concat([path.join(__dirname, "inventory_estimation.cjs"), path.join(__dirname, "verified_room_inventory.json")]),
   calculationFingerprint: companyIntegratedCalculationFingerprint()
 });
@@ -19646,6 +19653,26 @@ async function route(req, res) {
         ...(reqUrl.searchParams.has("cutoffDate") ? { cutoffDate: reqUrl.searchParams.get("cutoffDate") } : {}) };
       const result = await companyIntegratedDb.get(companyId, options);
       return send(res, 200, result);
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/company-master/recover-saved-products") {
+      if (!requireAdminSession(session, req, res)) return;
+      const payload = await parseJsonBody(req);
+      if (payload.confirm !== "recover-saved-products" || Object.keys(payload).some(key => !["confirm", "month", "companyIds"].includes(key))
+        || !/^20\d{2}-(0[1-9]|1[0-2])$/.test(payload.month || "") || !Array.isArray(payload.companyIds)
+        || payload.companyIds.length < 1 || payload.companyIds.length > 10 || new Set(payload.companyIds).size !== payload.companyIds.length
+        || payload.companyIds.some(id => typeof id !== "string" || !/^cmp_[a-zA-Z0-9_-]{1,150}$/.test(id))) {
+        return send(res, 400, { code: "SAVED_RECOVERY_INVALID_REQUEST", error: "복구할 업체와 숙박월을 확인해 주세요." });
+      }
+      // Catalog acquisition owns its own analytical slot. The saved-product
+      // pass then enters the same bounded scheduler, without nesting it.
+      const data = await monthlyReportSources.catalog();
+      const recovered = await runAnalyticalWork(() => savedProductRecovery.recover({ month: payload.month, companyIds: payload.companyIds }, data),
+        { priority: "foreground", kind: "saved-product-recovery" });
+      for (const companyId of payload.companyIds) {
+        await companyIntegratedDb.queueCompany(companyId, { months: [payload.month], reason: "saved_product_recovery" });
+      }
+      return send(res, 200, { ...recovered, collectionExecuted: false });
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/location-card-requests") {
