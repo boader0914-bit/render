@@ -9,7 +9,7 @@ const { buildMonthlyReportSnapshot } = require("./monthly_reports.cjs");
 const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./monthly_report_comparison.cjs");
 
 const SCHEMA_VERSION = 1;
-const CALCULATION_VERSION = "company-integrated-v1";
+const CALCULATION_VERSION = "company-integrated-v2-price-observation-time";
 const clone = value => JSON.parse(JSON.stringify(value));
 const identity = row => String(row?.companyId || row?.companyKey || row?.id || "");
 const monthValid = value => /^\d{4}-(0[1-9]|1[0-2])$/.test(String(value || ""));

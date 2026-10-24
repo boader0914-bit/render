@@ -5,7 +5,8 @@ const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { createMonthlyReportService, monthlyReportKeywordMembership } = require("./lib/monthly_reports.cjs");
+const { createMonthlyReportService, buildMonthlyReportSnapshot, monthlyReportKeywordMembership } = require("./lib/monthly_reports.cjs");
+const { applyInventoryEvidence } = require("./inventory_estimation.cjs");
 
 const COMPANY_A = { companyId: "company-a", primaryName: "같은 이름", regionKey: "local-a", regionKeys: ["local-a", "broad"], keywords: ["키워드", "다른키워드"] };
 const COMPANY_B = { companyId: "company-b", primaryName: "두 번째 숙소", regionKey: "local-b", regionKeys: ["local-b", "broad"], keywords: ["키워드"] };
@@ -21,6 +22,68 @@ const row = (overrides = {}) => ({
   partial: false, missing: false, unknownUnavailable: 0, ...overrides
 });
 const request = { month: "2026-09", type: "region", targetId: "broad", cutoffDate: "2026-09-30" };
+
+function verifyPriceObservationTime() {
+  const cutoff = "2026-10-24";
+  const collectedAt = "2026-10-22T02:03:19.000Z";
+  const product = (date, price, extras = {}) => ({ date, bizItemId: "room", name: "숙박 객실", stock: 10, bookingCount: 0, price, ...extras });
+  const evidence = products => applyInventoryEvidence({ inventoryCapacityBaseline: { lodging: 10 }, weeklyProductDetails: products }).inventoryEvidence.lodging.rows;
+  const snapshot = (entry, overrides = {}) => buildMonthlyReportSnapshot({ type: "company", targetId: COMPANY_A.companyId,
+    month: "2026-10", cutoffDate: cutoff }, { companies: [COMPANY_A], runs: [{ ...run("normal"), collectedAt }],
+    observations: [{ ...entry, companyKey: COMPANY_A.companyId, runId: "normal", productType: "lodging",
+      stayDate: entry.date, supply: entry.total, inventoryEvidenceVersion: 4, collectedAt, ...overrides }] }, "2026-10-24T03:00:00.000Z");
+  for (const date of ["2026-10-25", "2026-10-26", "2026-10-31"]) {
+    const entry = evidence([product(date, 100000, { open: false })])[0];
+    assert.equal(entry.phoneRevenue, 1000000);
+    assert.equal(entry.phonePriceEstimates[0].source, "same_product_same_date");
+    assert.equal(entry.phonePriceEstimates[0].sourceDate, date);
+    const result = snapshot(entry);
+    assert.equal(result.summary.lodging.estimatedRevenue, 1000000, "a later stay date's quote already observed before cutoff is eligible");
+    assert.equal(result.sources.observations[0].revenueEligible, true);
+    assert.equal(result.sources.observations[0].collectedAt, collectedAt, "the actual original observation time remains the provenance");
+    assert.equal(result.sources.observations[0].phonePriceEstimates[0].sourceDate, date);
+  }
+  const laterWeekday = evidence([
+    product("2026-10-25", 0, { stock: 0, open: false }),
+    product("2026-10-27", 120000), product("2026-11-01", 210000)
+  ]).find(entry => entry.date === "2026-10-25");
+  assert.equal(laterWeekday.phonePriceEstimates[0].source, "same_product_same_weekday");
+  assert.equal(laterWeekday.phonePriceEstimates[0].sourceDate, "2026-11-01");
+  assert.equal(snapshot(laterWeekday).summary.lodging.estimatedRevenue, 2100000,
+    "the same saved response can substantiate a later comparable stay-date quote, even across a month boundary");
+  const laterNearest = evidence([
+    product("2026-10-25", 0, { stock: 0, open: false }), product("2026-10-26", 130000)
+  ]).find(entry => entry.date === "2026-10-25");
+  assert.equal(laterNearest.phonePriceEstimates[0].source, "same_product_nearest_date");
+  assert.equal(snapshot(laterNearest).summary.lodging.estimatedRevenue, 1300000);
+  for (const invalidDate of ["", "2026-10-32", "2026-02-29", "not-a-date"]) {
+    const result = snapshot({ ...laterNearest, phonePriceEstimates: [{ ...laterNearest.phonePriceEstimates[0], sourceDate: invalidDate }] });
+    assert.equal(result.summary.lodging.estimatedRevenue, null, "malformed price provenance must never become a valued reservation");
+    assert.equal(result.sources.observations[0].revenueMissingReason, "inconsistent_revenue");
+  }
+  const beforeMidnight = snapshot(laterNearest, { collectedAt: "2026-10-24T14:59:59.999Z" });
+  assert.equal(beforeMidnight.summary.lodging.estimatedRevenue, 1300000, "cutoff uses Korea time");
+  for (const after of ["2026-10-24T15:00:00.000Z", "2026-10-25T00:00:00.000Z"]) {
+    const result = snapshot(laterNearest, { collectedAt: after });
+    assert.equal(result.summary.lodging.estimatedRevenue, null);
+    assert.equal(result.sources.observations.length, 0, "an actual observation after the cutoff remains excluded");
+    assert.equal(result.quality.discardedByReason.after_cutoff, 1);
+  }
+  const postStay = snapshot({ ...laterNearest, date: "2026-10-21" });
+  assert.equal(postStay.sources.observations.length, 0);
+  assert.equal(postStay.quality.discardedByReason.post_stay_observation, 1);
+  const realZero = snapshot(evidence([product("2026-10-25", 100000)])[0]);
+  assert.equal(realZero.summary.lodging.sold, 0);
+  assert.equal(realZero.summary.lodging.estimatedRevenue, 0, "a normal response with zero sales remains a real zero");
+  const separateRun = evidence([product("2026-10-25", 0, { stock: 0, open: false })])[0];
+  assert.equal(separateRun.phonePriceEstimates.length, 0, "the same product id cannot inherit a previous call's price pool");
+  assert.equal(snapshot(separateRun).summary.lodging.estimatedRevenue, null, "without a saved same-run quote the amount stays unknown");
+  const failedPrice = evidence([
+    product("2026-10-25", 0, { stock: 0, open: false }), product("2026-10-26", 330000, { collectionFailed: true })
+  ]).find(entry => entry.date === "2026-10-25");
+  assert.equal(failedPrice.phonePriceEstimates.length, 0, "a failed response cannot supply a fallback quote");
+  assert.equal(snapshot(failedPrice).summary.lodging.estimatedRevenue, null);
+}
 
 async function verifyBoundedReportList(directory, seed) {
   const service = createMonthlyReportService({ dataDir: directory, loadSources: async () => { throw new Error("Listing must not rebuild sources"); } });
@@ -102,6 +165,7 @@ async function verifyBoundedReportList(directory, seed) {
 }
 
 async function main() {
+  verifyPriceObservationTime();
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "monthly-reports-test-"));
   try {
     let now = new Date("2026-10-01T03:00:00.000Z");
@@ -125,7 +189,7 @@ async function main() {
         row({ stayDate: "2026-09-07", inventoryEvidenceVersion: 2 }),
         row({ stayDate: "2026-09-08", runId: "legacy" }),
         row({ stayDate: "2026-09-09", sold: 2, publicBookings: 0, phoneBookings: 2, publicRevenue: 0, phoneRevenue: 0, estimatedRevenue: 0, phonePricedBookings: 0, phoneMissingPriceBookings: 2 }),
-        row({ stayDate: "2026-09-10", phonePriceEstimates: [{ sourceDate: "2026-09-11", source: "same_product_nearest_date", quantity: 1, revenue: 100, unitPrice: 100 }] }),
+        row({ stayDate: "2026-09-10", phonePriceEstimates: [{ sourceDate: "2026-09-31", source: "same_product_nearest_date", quantity: 1, revenue: 100, unitPrice: 100 }] }),
         row({ stayDate: "2026-09-11", runId: "blocked" }),
         row({ stayDate: "2026-09-12", runId: "interrupted" }),
         row({ stayDate: "2026-09-13", collectedAt: "2026-10-01T00:00:00.000Z" }),
@@ -155,7 +219,7 @@ async function main() {
     assert.equal(lodging.coveredCompanyDays, 7);
     assert.equal(lodging.supply, 65, "each company/stay/product is counted once, never every snapshot");
     assert.equal(lodging.sold, 16);
-    assert.equal(lodging.estimatedRevenue, 1000, "unpriced/inconsistent/after-stay price evidence is unavailable");
+    assert.equal(lodging.estimatedRevenue, 1000, "unpriced/inconsistent/invalid-date price evidence is unavailable");
     assert.equal(lodging.revenueCoveredCompanyDays, 4);
     assert.equal(lodging.knownPartialRevenue, 400, "public plus explicit block subtotal excludes unexplained phone gaps");
     assert.equal(lodging.knownPartialPublicRevenue, 200);

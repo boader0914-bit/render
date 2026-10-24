@@ -113,12 +113,19 @@ function priceEvidence(row, request) {
     && Math.abs(estimatedRevenue - publicRevenue - phoneRevenue) < 1
     && !(publicBookings === 0 && publicRevenue > 0) && !(phoneBookings === 0 && phoneRevenue > 0);
   const estimates = Array.isArray(row.phonePriceEstimates) ? row.phonePriceEstimates : [];
-  const futurePrice = estimates.some(value => !dateKey(value.sourceDate) || value.sourceDate > row.date || value.sourceDate > request.cutoffDate);
+  // sourceDate is the stay date to which the quoted price applies, not the
+  // time that price was observed. inventory_estimation builds this pool from
+  // one saved run's product responses only, including other stay dates in the
+  // same response. A quote for tomorrow (or a later comparable stay date) can
+  // therefore already be known before today's observation cutoff.
+  const invalidPriceDate = estimates.some(value => !dateKey(value.sourceDate));
+  const priceObservedDate = kstDate(row.collectedAt);
+  const futurePrice = !priceObservedDate || priceObservedDate > request.cutoffDate || priceObservedDate > row.date;
   const missingPhonePrice = number(row.phoneMissingPriceBookings) || (phoneBookings > 0 && phoneRevenue === 0 ? phoneBookings : 0);
   const missingPublicPrice = number(row.missingPriceSoldOut) || (publicBookings > 0 && publicRevenue === 0 ? publicBookings : 0);
   const zeroWithoutPrice = publicBookings + phoneBookings > 0 && estimatedRevenue === 0;
-  const invalid = !valued || futurePrice || zeroWithoutPrice;
-  const reason = futurePrice ? "price_after_cutoff" : !valued ? "inconsistent_revenue" : invalid ? "unpriced_bookings" : "";
+  const invalid = !valued || invalidPriceDate || futurePrice || zeroWithoutPrice;
+  const reason = futurePrice ? "price_after_cutoff" : !valued || invalidPriceDate ? "inconsistent_revenue" : invalid ? "unpriced_bookings" : "";
   return {
     eligible: !invalid,
     reason,
