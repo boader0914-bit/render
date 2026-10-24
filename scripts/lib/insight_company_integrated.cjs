@@ -7,6 +7,9 @@ const text = value => typeof value === 'string' ? value.slice(0, 180) : '';
 const day = value => /^\d{4}-\d{2}-\d{2}$/.test(value || '') ? value : null;
 const month = value => /^20\d{2}-(0[1-9]|1[0-2])$/.test(value || '') ? value : null;
 const stamp = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null;
+const reference = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,179}$/.test(value) ? value : null;
+const sourceObservation = row => row && reference(row.companyId) && reference(row.runId) && day(row.date) && row.productType === 'lodging'
+  ? { companyId: row.companyId, runId: row.runId, date: row.date, productType: 'lodging', collectedAt: stamp(row.collectedAt), collectedDate: day(row.collectedDate), runQuality: ['complete', 'reused', 'partial'].includes(row.runQuality) ? row.runQuality : 'unknown' } : null;
 const numbers = (source, keys) => Object.fromEntries(keys.map(key => [key, number(source?.[key])]));
 const metrics = source => ({ ...numbers(source, ['supply', 'sold', 'publicBookings', 'phoneBookings', 'publicRevenue', 'phoneRevenue', 'estimatedRevenue', 'reservationRate', 'sharedDayUseExcluded', 'coveredCompanyDays', 'expectedCompanyDays', 'missingCompanyDays', 'revenueCoveredCompanyDays', 'sameDayObservedCompanyDays', 'staleDays', 'maxObservationLeadTimeDays', 'knownPartialRevenue']), partial: source?.partial === true, revenuePartial: source?.revenuePartial === true, containsPartialRun: source?.containsPartialRun === true });
 
@@ -30,15 +33,26 @@ function projectIntegrated(companyId, value, requestedMonth) {
     if (result.status === 'ready') result.status = snapshot ? 'failed' : 'pending';
     return result;
   }
-  const selected = (snapshot.sources?.observations || []).filter(row => row.companyId === companyId && row.productType === 'lodging');
-  const byDate = new Map(selected.map(row => [row.date, row]));
+  const selected = (snapshot.sources?.observations || []).filter(row => row.companyId === companyId && row.productType === 'lodging' && day(row.date) && row.date.startsWith(result.selectedMonth + '-'));
+  // The shared DB has already selected the observation. Do not independently
+  // choose a newer run here, or infer linkage from the most recent collection.
+  const byDate = new Map(), duplicateDates = new Set();
+  for (const row of selected) { if (byDate.has(row.date)) duplicateDates.add(row.date); else byDate.set(row.date, row); }
+  const observations = selected.map(sourceObservation).filter(Boolean);
+  const suppliedRunIds = Array.isArray(snapshot.sources?.runIds) ? snapshot.sources.runIds : [];
+  const runIds = [...new Set(suppliedRunIds.map(reference).filter(Boolean))].sort();
+  const linkedRunIds = new Set(runIds);
+  const completeLinkage = Boolean(reference(result.calculationVersion)) && selected.length > 0 && observations.length === selected.length
+    && duplicateDates.size === 0 && suppliedRunIds.length > 0 && suppliedRunIds.every(value => reference(value))
+    && observations.every(row => row.collectedAt && row.collectedDate && linkedRunIds.has(row.runId));
   const attempts = new Map((source.latestAttempts || []).filter(row => row.productType === 'lodging').map(row => [row.date, row]));
   const lodging = snapshot.summary?.lodging;
   const daily = (snapshot.daily || []).filter(row => day(row.date) && row.date.startsWith(result.selectedMonth + '-')).map(row => {
-    const m = metrics(row.lodging), evidence = byDate.get(row.date), attempt = attempts.get(row.date);
+    const m = metrics(row.lodging), evidence = duplicateDates.has(row.date) ? null : byDate.get(row.date), attempt = attempts.get(row.date);
     return { date: row.date, ...m, total: m.supply,
       missing: !(m.coveredCompanyDays > 0), collectedAt: stamp(evidence?.collectedAt), collectedDate: day(evidence?.collectedDate),
       observationLeadTimeDays: number(evidence?.observationLeadTimeDays),
+      sourceObservation: sourceObservation(evidence),
       latestAttemptAt: stamp(attempt?.collectedAt), latestAttemptStatus: ['selected','not_selected','excluded'].includes(attempt?.status) ? attempt.status : null,
       // Earlier valid observations are usable but explicitly dated, not errors.
       partial: m.coveredCompanyDays !== 1, collectionPartial: evidence?.runQuality === 'partial',
@@ -47,6 +61,9 @@ function projectIntegrated(companyId, value, requestedMonth) {
   const pickup = snapshot.insights?.pickup?.lodging;
   const publicPickup = pickup?.public;
   result.snapshot = {
+    provenance: { source: 'company_db_integrated', companyId, calculationVersion: result.calculationVersion, linkageStatus: completeLinkage ? 'complete' : 'incomplete', runIds,
+      selectedRunIds: [...new Set(observations.map(row => row.runId))].sort(), observations,
+      sourceDigest: /^[a-f0-9]{64}$/i.test(snapshot.sources?.digest || '') ? snapshot.sources.digest : null },
     period: { start: day(snapshot.period?.start), end: day(snapshot.period?.end), days: number(snapshot.period?.days), cutoffDate: day(snapshot.period?.cutoffDate), monthClosed: snapshot.period?.monthClosed === true },
     summary: { ...metrics(lodging), rangeStart: day(snapshot.period?.start), rangeEnd: day(snapshot.period?.end), calendarDays: number(snapshot.period?.days), observedDays: number(lodging?.coveredCompanyDays), missingDays: number(lodging?.missingCompanyDays), revenueObservedDays: number(lodging?.revenueCoveredCompanyDays), quantityPartial: daily.some(row=>row.missing||row.partial) },
     daily,

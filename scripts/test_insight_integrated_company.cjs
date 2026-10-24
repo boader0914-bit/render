@@ -48,7 +48,9 @@ test('a full month observed in advance is freshness-limited, not missing room qu
 test('the customer boundary rejects mismatched company/month and removes internal evidence', () => {
   const source=integration();source.internalToken='private-token';source.roomBasis.reviewedBy='private-admin';source.snapshot.sources.rawPath='/var/data/private';source.snapshot.sources.observations[0].secret='private-evidence';
   const output=projectIntegrated(company.companyId,source);
-  assert.doesNotMatch(JSON.stringify(output),/private-|\/var\/data|rawPath|sourceRunIds|reviewedBy|runId/);
+  assert.doesNotMatch(JSON.stringify(output),/private-|\/var\/data|rawPath|sourceRunIds|reviewedBy/);
+  assert.deepEqual(output.snapshot.provenance.runIds,['run']);
+  assert.equal(output.snapshot.daily[0].sourceObservation.runId,'run');
   assert.equal(projectIntegrated('cmp_other',source).snapshot,null);
   assert.equal(projectIntegrated(company.companyId,source,'2026-10').snapshot,null);
   source.snapshot.target.id='cmp_other';assert.equal(projectIntegrated(company.companyId,source).snapshot,null);
