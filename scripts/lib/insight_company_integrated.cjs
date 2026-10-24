@@ -3,6 +3,8 @@
 // This is a field projection only. All selection, revenue and pickup calculations
 // belong to the shared company DB. No raw paths, source payloads or admin notes.
 const number = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
+const count = value => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+const nonnegative = value => number(value) !== null && value >= 0 ? value : null;
 const text = value => typeof value === 'string' ? value.slice(0, 180) : '';
 const day = value => /^\d{4}-\d{2}-\d{2}$/.test(value || '') ? value : null;
 const month = value => /^20\d{2}-(0[1-9]|1[0-2])$/.test(value || '') ? value : null;
@@ -21,7 +23,10 @@ const sourceObservation = row => row && reference(row.companyId) && reference(ro
   ? { companyId: row.companyId, runId: row.runId, date: row.date, productType: 'lodging', collectedAt: stamp(row.collectedAt), collectedDate: day(row.collectedDate), runQuality: ['complete', 'reused', 'partial'].includes(row.runQuality) ? row.runQuality : 'unknown',
     ...(sourceRecovery(row) ? { sourceRecovery: sourceRecovery(row) } : {}) } : null;
 const numbers = (source, keys) => Object.fromEntries(keys.map(key => [key, number(source?.[key])]));
-const metrics = source => ({ ...numbers(source, ['supply', 'sold', 'publicBookings', 'phoneBookings', 'publicRevenue', 'phoneRevenue', 'estimatedRevenue', 'reservationRate', 'sharedDayUseExcluded', 'coveredCompanyDays', 'expectedCompanyDays', 'missingCompanyDays', 'revenueCoveredCompanyDays', 'sameDayObservedCompanyDays', 'staleDays', 'maxObservationLeadTimeDays', 'knownPartialRevenue']), partial: source?.partial === true, revenuePartial: source?.revenuePartial === true, containsPartialRun: source?.containsPartialRun === true });
+const metrics = source => ({ ...numbers(source, ['supply', 'sold', 'publicBookings', 'phoneBookings', 'publicRevenue', 'phoneRevenue', 'estimatedRevenue', 'reservationRate', 'sharedDayUseExcluded', 'coveredCompanyDays', 'expectedCompanyDays', 'missingCompanyDays', 'revenueCoveredCompanyDays', 'sameDayObservedCompanyDays', 'staleDays', 'maxObservationLeadTimeDays', 'knownPartialRevenue']),
+  phoneMissingPriceBookings: count(source?.phoneMissingPriceBookings), phoneFallbackBookings: count(source?.phoneFallbackBookings),
+  phoneFallbackRevenue: nonnegative(source?.phoneFallbackRevenue),
+  partial: source?.partial === true, revenuePartial: source?.revenuePartial === true, containsPartialRun: source?.containsPartialRun === true });
 
 function projectIntegrated(companyId, value, requestedMonth) {
   const valid = value?.companyId === companyId;
@@ -60,6 +65,11 @@ function projectIntegrated(companyId, value, requestedMonth) {
   const daily = (snapshot.daily || []).filter(row => day(row.date) && row.date.startsWith(result.selectedMonth + '-')).map(row => {
     const m = metrics(row.lodging), evidence = duplicateDates.has(row.date) ? null : byDate.get(row.date), attempt = attempts.get(row.date);
     return { date: row.date, ...m, total: m.supply,
+      // Monetary aggregates omit price-ineligible observations. Preserve the
+      // selected source's explicit missing-price quantity when that aggregate
+      // is unknown, while keeping an observed zero authoritative. No quantity
+      // or money is inferred or recalculated at this projection boundary.
+      phoneMissingPriceBookings: m.phoneMissingPriceBookings ?? count(evidence?.phoneMissingPriceBookings),
       missing: !(m.coveredCompanyDays > 0), collectedAt: stamp(evidence?.collectedAt), collectedDate: day(evidence?.collectedDate),
       observationLeadTimeDays: number(evidence?.observationLeadTimeDays),
       sourceObservation: sourceObservation(evidence),

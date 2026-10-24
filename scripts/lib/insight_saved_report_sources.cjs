@@ -10,6 +10,18 @@ const fault=code=>Object.assign(Error(code),{code,statusCode:503});
 const need=(condition,code='SAVED_COMPANY_SOURCE_INVALID')=>{if(!condition)throw fault(code);};
 const signature=stat=>[stat.dev,stat.ino,stat.size,stat.mtimeMs,stat.ctimeMs].join(':');
 const validDay=value=>typeof value==='string'&&/^20\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(value)&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;
+// Explicit saved formats, not an open-ended prefix match. These versions use
+// the same company/month envelope; newer calculations require an audited read
+// contract before they can become a customer preview.
+const SUPPORTED_CALCULATIONS=new Set(['company-integrated-v1','company-integrated-v2-price-observation-time','company-integrated-v3-saved-product-recovery']);
+function validQuantities(value) {
+  if(!value||typeof value!=='object'||Array.isArray(value))return false;
+  const known=value=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0;
+  const fields=['supply','sold','publicBookings','phoneBookings'];
+  if(fields.some(key=>value[key]!==undefined&&value[key]!==null&&!known(value[key])))return false;
+  if(known(value.supply)&&known(value.sold)&&value.sold>value.supply)return false;
+  return !['sold','publicBookings','phoneBookings'].every(key=>known(value[key]))||value.sold===value.publicBookings+value.phoneBookings;
+}
 function createInsightSavedReportSources({dataDir,fileSystem=fs,maxBytes=16*1024*1024,now=Date.now}={}) {
   if(typeof dataDir!=='string'||!dataDir||!Number.isSafeInteger(maxBytes)||maxBytes<1||maxBytes>32*1024*1024||typeof now!=='function')throw TypeError('Saved report sources require a data directory and bounded reads');
   const directory=path.resolve(dataDir,'company_integrated');
@@ -34,7 +46,7 @@ function createInsightSavedReportSources({dataDir,fileSystem=fs,maxBytes=16*1024
     need(typeof month==='string'&&/^20\d{2}-(0[1-9]|1[0-2])$/.test(month));
     const value=await readMonth(companyId,month),snapshot=value?.snapshot,request=snapshot?.request;
     const [year,number]=month.split('-').map(Number),lastDay=new Date(Date.UTC(year,number,0)).toISOString().slice(0,10),today=new Date(Number(now())+32400000).toISOString().slice(0,10);
-    need(value?.schemaVersion===1&&value.companyId===companyId&&value.month===month&&value.calculationVersion==='company-integrated-v1'
+    need(value?.schemaVersion===1&&value.companyId===companyId&&value.month===month&&SUPPORTED_CALCULATIONS.has(value.calculationVersion)
       &&snapshot?.schemaVersion===1&&snapshot.target?.type==='company'&&snapshot.target.id===companyId&&request?.type==='company'
       &&request.targetId===companyId&&request.month===month&&request.cutoffDate===value.cutoffDate&&validDay(value.cutoffDate)&&value.cutoffDate<=today&&value.cutoffDate<=lastDay
       &&snapshot.period?.start===month+'-01'&&snapshot.period.end===lastDay&&snapshot.period.cutoffDate===value.cutoffDate
@@ -42,7 +54,13 @@ function createInsightSavedReportSources({dataDir,fileSystem=fs,maxBytes=16*1024
       &&Array.isArray(snapshot.companies)&&Array.isArray(snapshot.sources?.observations)&&Array.isArray(value.latestAttempts)&&Array.isArray(value.failedAttempts)
       &&Number.isFinite(Date.parse(value.calculatedAt))&&Date.parse(value.calculatedAt)<=Number(now())+60000);
     need(snapshot.companies.every(row=>row.companyId===companyId)&&snapshot.sources.observations.every(row=>row.companyId===companyId)
-      &&snapshot.daily.every(row=>validDay(row.date)&&row.date.startsWith(month+'-')));
+      &&snapshot.daily.every(row=>validDay(row.date)&&row.date.startsWith(month+'-'))
+      &&validQuantities(snapshot.summary.lodging)&&snapshot.daily.every(row=>validQuantities(row.lodging))
+      &&snapshot.sources.observations.every(validQuantities));
+    // v1 may predate persisted revision markers. All supported later versions
+    // must carry both integrity markers; accepting the version never bypasses
+    // verification of the complete saved envelope.
+    if(value.calculationVersion!=='company-integrated-v1')need(/^[a-f0-9]{64}$/.test(value.sourceRevision||'')&&/^[a-f0-9]{64}$/.test(value.cacheDigest||''));
     if(value.sourceRevision||value.cacheDigest){const {cacheDigest,...content}=value;need(typeof cacheDigest==='string'&&cacheDigest===digest(content));}
     const integrated=projectIntegrated(companyId,{...value,status:'ready',selectedMonth:month},month);
     need(Boolean(integrated.snapshot));

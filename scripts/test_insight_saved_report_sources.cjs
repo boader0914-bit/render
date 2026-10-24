@@ -9,7 +9,7 @@ const {projectIntegrated}=require('./lib/insight_company_integrated.cjs');
 const stable=value=>Array.isArray(value)?value.map(stable):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,stable(value[key])])):value;
 const digest=value=>crypto.createHash('sha256').update(typeof value==='string'?value:JSON.stringify(stable(value))).digest('hex');
 const NOW=Date.parse('2026-10-24T01:00:00Z');
-async function fixture(t,{cleanup}={}){
+async function fixture(t,{cleanup,calculationVersion='company-integrated-v1'}={}){
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'insight-saved-report-'));
   const companies=[{companyId:'cmp_one',name:'내 매장',primaryName:'내 매장',rooms:16,capacity:16,roomCountSource:'db_review',regionKey:'region_one'},
     {companyId:'cmp_two',name:'경쟁 업체',primaryName:'경쟁 업체',rooms:10,capacity:10,roomCountSource:'db_review',regionKey:'region_one'}];
@@ -23,8 +23,8 @@ async function fixture(t,{cleanup}={}){
       partial:false,missing:false,unknownUnavailable:0,phoneMissingPriceBookings:0,sharedDayUseExcluded:0,capacityBasis:{count:c.rooms,source:'db_review'}};
     const snapshot=buildMonthlyReportSnapshot({type:'company',targetId:c.companyId,month,cutoffDate:'2026-10-23'},
       {companies:[c],observations:[observation],runs:[{id:'fixture_run',keyword:'모의 검색',collectionQuality:{status:'complete'}}]},'2026-10-23T02:00:00Z');
-    const body={schemaVersion:1,companyId:c.companyId,month,calculationVersion:'company-integrated-v1',calculatedAt:month==='2026-10'?'2026-10-23T02:00:00Z':'2026-10-23T03:00:00Z',
-      cutoffDate:'2026-10-23',sourceRevision:'fixture-source-version',roomBasis:{capacity:c.rooms,source:'db_review'},snapshot,latestAttempts:[],failedAttempts:[]};
+    const body={schemaVersion:1,companyId:c.companyId,month,calculationVersion,calculatedAt:month==='2026-10'?'2026-10-23T02:00:00Z':'2026-10-23T03:00:00Z',
+      cutoffDate:'2026-10-23',sourceRevision:calculationVersion==='company-integrated-v1'?'fixture-source-version':digest('fixture-source-version'),roomBasis:{capacity:c.rooms,source:'db_review'},snapshot,latestAttempts:[],failedAttempts:[]};
     const value={...body,cacheDigest:digest(body)};saved.set(c.companyId+'|'+month,value);
     await fs.mkdir(path.dirname(file(c.companyId,month)),{recursive:true});await fs.writeFile(file(c.companyId,month),JSON.stringify(value));
   }
@@ -65,6 +65,40 @@ test('missing saved periods remain unknown and a new report never substitutes an
   const missing=await analysis.briefing({...f.customer,relations:f.customer.relations.map(row=>({...row,status:'pending'}))},'cmp_one',{savedOnly:true});
   assert.equal(missing.companies[1].summary.sold,null);assert.equal(missing.companies[1].summary.estimatedRevenue,null);
   assert.equal(missing.calculation.mode,'saved_only');assert.equal(missing.dataQuality.status,'partial');
+});
+
+for(const calculationVersion of ['company-integrated-v2-price-observation-time','company-integrated-v3-saved-product-recovery'])test('saved-only preview accepts the verified '+calculationVersion+' format without modifying or recalculating it',async t=>{
+  const f=await fixture(t,{calculationVersion}),paths=[...f.saved.keys()].map(key=>f.file(...key.split('|'))),before=new Map(await Promise.all([...paths,f.queue].map(async file=>[file,await fs.readFile(file)])));
+  const analysis=createInsightAnalysis({catalog:async()=>f.catalog,savedCollectionResults:f.source,
+    collectionResults:{companyDetail:()=>assert.fail('saved preview must not recompute company history')},now:()=>NOW});
+  const report=await analysis.briefing(f.customer,'cmp_one',{savedOnly:true});
+  assert.equal(report.calculation.mode,'saved_only');assert.equal(report.companies[0].summary.sold,3);assert.equal(report.companies[1].summary.sold,4);
+  const detail=await f.source.companyDetail('cmp_one',{month:'2026-10',company:f.companies[0]});
+  assert.equal(detail.integrated.calculationVersion,calculationVersion);
+  assert.equal(detail.current.daily.find(row=>row.date==='2026-10-24').sold,0);
+  assert.equal(detail.current.daily.find(row=>row.date==='2026-10-25').sold,null);
+  for(const [file,bytes]of before)assert.deepEqual(await fs.readFile(file),bytes,'supported saved source remains byte-identical');
+});
+
+test('unreviewed future version labels cannot enter the saved-only projection even with a valid integrity hash',async t=>{
+  const f=await fixture(t,{calculationVersion:'company-integrated-v3-saved-product-recovery'}),file=f.file('cmp_one','2026-10'),original=f.saved.get('cmp_one|2026-10');
+  for(const calculationVersion of ['company-integrated-v4','company-integrated-v3-saved-product-recovery-extra','company-integrated-v2','v3',null]){
+    const value={...original,calculationVersion};delete value.cacheDigest;value.cacheDigest=digest(value);await fs.writeFile(file,JSON.stringify(value));
+    await assert.rejects(f.source.companyDetail('cmp_one',{month:'2026-10'}),{code:'SAVED_COMPANY_SOURCE_INVALID',statusCode:503});
+  }
+});
+
+test('current saved versions require source and cache hashes and reject impossible quantities without filling missing values',async t=>{
+  const f=await fixture(t,{calculationVersion:'company-integrated-v3-saved-product-recovery'}),file=f.file('cmp_one','2026-10'),original=f.saved.get('cmp_one|2026-10');
+  for(const change of [value=>{delete value.sourceRevision;},value=>{value.sourceRevision='unverified';},
+    value=>{delete value.cacheDigest;},value=>{value.snapshot.daily[23].lodging.sold=17;},
+    value=>{value.snapshot.sources.observations[0].publicBookings=1;},value=>{value.snapshot.summary.lodging.supply=-1;},
+    value=>{value.snapshot.daily[23].lodging.publicBookings='0';}]){
+    const value=JSON.parse(JSON.stringify(original));change(value);
+    if(Object.hasOwn(value,'cacheDigest')){delete value.cacheDigest;value.cacheDigest=digest(value);}
+    await fs.writeFile(file,JSON.stringify(value));
+    await assert.rejects(f.source.companyDetail('cmp_one',{month:'2026-10'}),{code:'SAVED_COMPANY_SOURCE_INVALID',statusCode:503});
+  }
 });
 
 test('corrupt, mismatched, oversized and unsafe saved source files are rejected instead of entering a preview',async t=>{
