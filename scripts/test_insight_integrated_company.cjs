@@ -48,7 +48,9 @@ test('a full month observed in advance is freshness-limited, not missing room qu
 test('the customer boundary rejects mismatched company/month and removes internal evidence', () => {
   const source=integration();source.internalToken='private-token';source.roomBasis.reviewedBy='private-admin';source.snapshot.sources.rawPath='/var/data/private';source.snapshot.sources.observations[0].secret='private-evidence';
   const output=projectIntegrated(company.companyId,source);
-  assert.doesNotMatch(JSON.stringify(output),/private-|\/var\/data|rawPath|sourceRunIds|reviewedBy|runId/);
+  assert.doesNotMatch(JSON.stringify(output),/private-|\/var\/data|rawPath|sourceRunIds|reviewedBy/);
+  assert.deepEqual(output.snapshot.provenance.runIds,['run']);
+  assert.equal(output.snapshot.daily[0].sourceObservation.runId,'run');
   assert.equal(projectIntegrated('cmp_other',source).snapshot,null);
   assert.equal(projectIntegrated(company.companyId,source,'2026-10').snapshot,null);
   source.snapshot.target.id='cmp_other';assert.equal(projectIntegrated(company.companyId,source).snapshot,null);
@@ -103,7 +105,7 @@ test('authenticated BFF enforces linked-company and tenant scope before integrat
   const back=http.createServer((req,res)=>handlers.internal(req,res,new URL(req.url,'http://local'))),backend=await listen(back);t.after(()=>{back.closeAllConnections();back.close();});
   const reserve=http.createServer(),origin=await listen(reserve);await new Promise(resolve=>reserve.close(resolve));
   const front=createConnectedServer({origin,backend,serviceToken});await new Promise(resolve=>front.listen(Number(new URL(origin).port),'127.0.0.1',resolve));t.after(()=>{front.closeAllConnections();front.close();});
-  const get=(tail,token=ownerToken)=>fetch(origin+'/api/customer/v1'+tail,{headers:{Cookie:'insight_local_session='+token}});
+  const get=(tail,token=ownerToken,refresh=false)=>fetch(origin+'/api/customer/v1'+tail,{headers:{Cookie:'insight_local_session='+token,...(refresh?{'X-Insight-Refresh':'1'}:{})}});
   assert.equal((await get('/companies/cmp_other/collection?month=2026-09')).status,404);
   assert.equal((await get('/companies/cmp_one/collection?month=2026-09',strangerToken)).status,404);
   assert.equal(reads,0);
@@ -112,7 +114,8 @@ test('authenticated BFF enforces linked-company and tenant scope before integrat
   const body=await response.json();assert.equal(body.companyDetail.current.summary.estimatedRevenue,220000);assert.equal(reads,1);
   assert.equal((await get('/companies/cmp_one/collection?month=2026-09','')).status,401);
   for(let index=1;index<240;index++)store.throttle(`company-read:${owner.customerId}`,240);
-  assert.equal((await get('/companies/cmp_one/collection?month=2026-09')).status,429,'excess customer polling stops before shared or evidence reads');
+  assert.equal((await get('/companies/cmp_one/collection?month=2026-09')).status,200,'an already authorized cached view does not consume another central source read');
+  assert.equal((await get('/companies/cmp_one/collection?month=2026-09',ownerToken,true)).status,429,'excess fresh source requests stop before shared or evidence reads');
   assert.equal(reads,1);
 });
 

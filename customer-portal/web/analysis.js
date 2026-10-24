@@ -193,6 +193,7 @@
     focus?.focus?.({preventScroll:true});
   }
   function expireSession(){
+    window.InsightArchives?.stop();
     clearCache();cacheScope='';allowedRegions=new Set();seq++;regionData=null;renderedVersion=null;clearTimers();
     reportScope='';reportPermission='';reportOwnIds=[];reportCompanies.clear();reportRegions.clear();
     const slot=document.querySelector('#analysis-output');if(slot)slot.innerHTML='<p class="collection-warning">로그인이 만료되었습니다. 다시 로그인해 주세요.</p>';
@@ -225,7 +226,7 @@
     const own=s.customer.relations.filter(r=>r.kind==='own'&&['active','pending'].includes(r.status)).map(r=>s.companies.find(c=>c.companyId===r.companyId)).filter(Boolean);
     const choices=mode==='regions'?s.regions:own;
     const selection=mode==='regions'?regionSelection(s,selectedRegion,selectedOwnId):null;
-    return `<section class="card analysis-intro"><span class="eyebrow">${mode==='regions'?'REGIONAL CONTEXT':'SITUATION → NEXT ACTION'}</span><h2>${mode==='regions'?'지역의 12개월 흐름':'현재 상황과 다음 행동'}</h2><p class="muted">${mode==='regions'?'등록한 관심지역과 매장 소재지의 방문·체류·소비·검색 관심 변화를 확인합니다.':'내 매장·등록 경쟁업체·지역 배경을 함께 확인합니다. 저장 자료로 보는 현재 상황 브리핑입니다.'}</p><form id="analysis-form" data-analysis-form><div class="form-grid"><label class="field"><span>${mode==='regions'?'분석 지역':'기준 내 매장'}</span><select name="${mode==='regions'?'regionKey':'ownId'}" ${!choices.length?'disabled':''}>${selection&&!selection.id?'<option value="" selected disabled>지역 연결 확인 필요</option>':''}${choices.map(c=>`<option value="${esc(c.id||c.companyId)}"${selection?.id===(c.id||c.companyId)?' selected':''}>${esc(c.label||c.name)}</option>`).join('')||'<option>등록 대기</option>'}</select></label>${mode==='regions'?`<label class="field"><span>마지막 기준월</span><input name="month" type="month" min="2017-12" max="${prior()}" value="${prior()}" required></label>`:'<p class="muted">예약 전망은 오늘 포함 향후 30일, 지역 배경은 최근 12개월 흐름과 각 통계의 실제 공표기간을 사용합니다.</p>'}</div><button class="button" type="submit" ${mode==='regions'&&!selection.id?'disabled':''}>저장 자료 확인</button></form></section><p id="analysis-freshness" class="muted connection-check" role="status" aria-live="polite" hidden></p><section id="analysis-output" aria-live="polite"><p class="empty-note">${esc(selection?.message||'저장 자료를 불러오고 있습니다.')}</p></section>`;
+    return `<section class="card analysis-intro"><span class="eyebrow">${mode==='regions'?'REGIONAL CONTEXT':'SITUATION → NEXT ACTION'}</span><h2>${mode==='regions'?'지역의 12개월 흐름':'현재 상황과 다음 행동'}</h2><p class="muted">${mode==='regions'?'등록한 관심지역과 매장 소재지의 방문·체류·소비·검색 관심 변화를 확인합니다.':'내 매장·등록 경쟁업체·지역 배경을 함께 확인합니다. 저장 자료로 보는 현재 상황 브리핑입니다.'}</p><form id="analysis-form" data-analysis-form><div class="form-grid"><label class="field"><span>${mode==='regions'?'분석 지역':'기준 내 매장'}</span><select name="${mode==='regions'?'regionKey':'ownId'}" ${!choices.length?'disabled':''}>${selection&&!selection.id?'<option value="" selected disabled>지역 연결 확인 필요</option>':''}${choices.map(c=>`<option value="${esc(c.id||c.companyId)}"${selection?.id===(c.id||c.companyId)?' selected':''}>${esc(c.label||c.name)}</option>`).join('')||'<option>등록 대기</option>'}</select></label>${mode==='regions'?`<label class="field"><span>마지막 기준월</span><input name="month" type="month" min="2017-12" max="${prior()}" value="${prior()}" required></label>`:'<p class="muted">예약 전망은 오늘 포함 향후 30일, 지역 배경은 최근 12개월 흐름과 각 통계의 실제 공표기간을 사용합니다.</p>'}</div><button class="button" type="submit" ${mode==='regions'&&!selection.id?'disabled':''}>저장 자료 확인</button></form></section><p id="analysis-freshness" class="muted connection-check" role="status" aria-live="polite" hidden></p><section id="analysis-output" aria-live="polite"><p class="empty-note">${esc(selection?.message||'저장 자료를 불러오고 있습니다.')}</p></section>${mode==='reports'&&window.InsightArchives?window.InsightArchives.panel(s,selectedOwnId):''}`;
   }
   const status=s=>({ready:'저장 자료',complete:'정상 자료',partial:'일부 자료',missing:'자료 없음',publication_pending:'공표 대기',not_configured:'연결 준비',error:'확인 필요',pending:'대기'}[s]||'상태 확인');
   function sourceCard(s) {
@@ -415,5 +416,6 @@
         return;
       }
     }
-    load();},stop(){seq++;regionData=null;renderedVersion=null;clearTimers();}};
+    if(mode==='reports')window.InsightArchives?.mount(request,{onSessionExpired:expireSession});
+    load();},stop(){window.InsightArchives?.stop();seq++;regionData=null;renderedVersion=null;clearTimers();}};
 })();

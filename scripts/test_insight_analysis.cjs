@@ -58,6 +58,7 @@ test('briefing includes only selected own location and explicit interests for mu
   assert.equal((await service.region(customer,'r1')).region.id,'r1','all registered own locations remain accessible in regional analysis');
 });
 test('authenticated BFF limits region and briefing reads to registered identities with no dispatch',async t=>{
+  t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-10-02T02:00:00Z')});
   const {store,customer,cmd}=setup(t);store.update(customer.customerId,cmd(customer,'add-region',{regionKey:'r0'}),catalog);store.update(customer.customerId,cmd(customer,'add-company',{kind:'own',companyId:'c0'}),catalog);
   let reads=0,prepared=0;
   const analysis=createInsightAnalysis({catalog:async()=>catalog,collectionResults:{companyDetail:async()=>({current:{daily:days(2)}})},now:()=>Date.parse('2026-10-02T02:00:00Z'),regionPreparation:{get:async()=>null,start:async input=>{prepared++;assert.equal(input.regionKey,'r0');return {id:'fixture-job',status:'queued',progress:{completed:0},steps:[]};}},readRegionContext:async(req)=>{reads++;assert.equal(req.targetId,'r0');return {sources:[{key:'test',label:'저장 지표',status:'ready',period:req.month,rows:[{status:'observed',value:100}]}],networkAttempted:false};}});

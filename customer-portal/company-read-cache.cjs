@@ -3,7 +3,7 @@ const {createHash}=require('node:crypto');
 
 // This is an Insight-process cache, not a second source of company data. The
 // caller supplies an opaque host/mode/session scope and both central GETs.
-function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEntries=64,maxBytes=16*1024*1024,maxPerScope=8,maxScopes=maxEntries*2,persistenceDirectory,namespace,persistentStore}={}) {
+function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEntries=64,maxBytes=16*1024*1024,maxPerScope=8,maxScopes=maxEntries*2,persistenceDirectory,namespace,persistentStore,onVerifiedSource}={}) {
   const entries=new Map(),states=new Map(),pendingSources=new Map(),invalidatedScopes=new Set();
   let bytes=0;
   const clock=()=>Number(now());
@@ -21,6 +21,7 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
   // identity, quota, requests, account corrections, credentials or raw evidence.
   const fields=keys=>Object.fromEntries(keys.split(' ').map(key=>[key,true]));
   const metric=fields('supply sold publicBookings phoneBookings publicRevenue phoneRevenue estimatedRevenue reservationRate sharedDayUseExcluded coveredCompanyDays expectedCompanyDays missingCompanyDays revenueCoveredCompanyDays sameDayObservedCompanyDays staleDays maxObservationLeadTimeDays knownPartialRevenue partial revenuePartial containsPartialRun rangeStart rangeEnd calendarDays observedDays missingDays rateObservedDays revenueObservedDays quantityPartial');
+  const sourceObservation=fields('companyId runId date productType collectedAt collectedDate runQuality');
   const daily={...metric,...fields('date collectedAt collectedDate total missing inventoryConflict observationLeadTimeDays latestAttemptAt latestAttemptStatus collectionPartial')};
   const productDay=fields('date status errorCode total available publicBookings price saleStatus');
   const product={...fields('key bizItemId name productType'),days:[productDay],original:[productDay]};
@@ -43,6 +44,12 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
     return core;
   }
   const projectionVersion=hash([resultSchema,detailSchema,projectValue.toString(),projectedCore.toString()]);
+  // Optional source evidence extends this projection without changing the
+  // deployed display contract. Preserve its fingerprint so existing safe
+  // snapshots still render immediately; absence of evidence never authorizes
+  // archival, which only receives newly verified source responses below.
+  daily.sourceObservation=sourceObservation;
+  detailSchema.integrated.snapshot.provenance={...fields('source companyId calculationVersion linkageStatus sourceDigest'),runIds:[true],selectedRunIds:[true],observations:[sourceObservation]};
   const disk=persistentStore||(persistenceDirectory&&namespace?require('./company-snapshot-store.cjs').createCompanySnapshotStore({directory:persistenceDirectory,namespace,version:projectionVersion,now,project:projectedCore}):null);
   const ready=async()=>{if(disk)try{await disk.ready();}catch{}};
   const stableFingerprint=identity=>hash([identity.customer.customerId,identity.customer.revision,identity.relation,identity.company,identity.request]);
@@ -222,6 +229,8 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
       if(cacheable(reply.data,identity)){
         const core=projectedCore(reply.data);
         if(disk&&slotKey&&core)try{await disk.put({slotKey,month:savedMonth,checkedAt,core,ticket,guard:()=>current(state,epoch,key,mark,binding)});}catch{}
+        if(!current(state,epoch,key,mark,binding))return invalidated();
+        if(core&&reply.data.responseCache?.state!=='preview'&&reply.data.responseCache?.preview!==true&&reply.data.calculation?.mode!=='saved_only'&&typeof onVerifiedSource==='function')try{await onVerifiedSource({identity:identity.data,audience,companyId,month:savedMonth,data:core,checkedAt});}catch{/* A failed archive never replaces the good read; its storage status records the failure. */}
         if(!current(state,epoch,key,mark,binding))return invalidated();
         invalidatedScopes.delete(state.scope);remember(key,state,mark,reply.data,{checkedAt});
       }else remove(key);
