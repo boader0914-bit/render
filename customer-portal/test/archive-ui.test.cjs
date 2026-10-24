@@ -49,6 +49,25 @@ test('record read displays a frozen table with real zeros distinct from missing 
   const unknown=h.detail.innerHTML.slice(h.detail.innerHTML.lastIndexOf('<tr>'));assert.doesNotMatch(unknown,/>0원</);
 });
 
+test('daily review summary derives verified subtotals and separate quantity and revenue coverage from archived days',()=>{
+  const h=harness(),record=daily();record.metadata.title='시즌글램핑';record.payload={...record.payload,kind:'daily_review',period:{start:'2026-10-01',end:'2026-10-03',days:3},review:{status:'partial',quantityReviewedDays:2,revenueReviewedDays:1,normalDays:1},summary:{partial:true,publicBookings:999,phoneBookings:888,estimatedRevenue:99999999},daily:[
+    {date:'2026-10-01',sold:3,publicBookings:1,phoneBookings:2,estimatedRevenue:300000,review:{quantityReviewed:true,revenueReviewed:true}},
+    {date:'2026-10-02',sold:0,publicBookings:0,phoneBookings:0,estimatedRevenue:77777777,review:{quantityReviewed:true,revenueReviewed:false,reason:'REVENUE_NOT_REVIEWABLE'}},
+    {date:'2026-10-03',missing:true,sold:0,publicBookings:0,phoneBookings:0,estimatedRevenue:0,review:{quantityReviewed:false,revenueReviewed:false,reason:'SOURCE_LINK_MISSING'}}
+  ]};
+  const html=h.view.detailView(record);assert.match(html,/<h4>시즌글램핑<\/h4>/);assert.match(html,/확인된 일부 자료: 예약 3실 · 매출 300,000원 · 수량 확보 2 \/ 3일 · 금액 확보 1 \/ 3일/);assert.match(html,/공개 예약 미확인실 · 방막기 미확인실 · 추정매출 미확인/);assert.doesNotMatch(html,/99,999,999|77,777,777|공개 예약 999실|방막기 888실|확보 미확인/);
+});
+
+test('a fully reviewed daily archive shows valid zero totals without using raw monthly totals or claiming missing data',()=>{
+  const h=harness(),record=daily();record.payload={...record.payload,kind:'daily_review',period:{start:'2026-10-01',end:'2026-10-02',days:2},review:{status:'reviewed',quantityReviewedDays:2,revenueReviewedDays:2,normalDays:2},summary:{partial:true,publicBookings:99,phoneBookings:99,estimatedRevenue:999999},daily:['2026-10-01','2026-10-02'].map(date=>({date,sold:0,publicBookings:0,phoneBookings:0,estimatedRevenue:0,review:{quantityReviewed:true,revenueReviewed:true}}))};
+  const html=h.view.detailView(record);assert.match(html,/공개 예약 0실 · 방막기 0실 · 추정매출 0원/);assert.doesNotMatch(html,/확인된 일부 자료|999,999|공개 예약 99실|추정매출 미확인/);
+});
+
+test('daily review can confirm quantities while every price remains unreviewed and never promotes raw revenue',()=>{
+  const h=harness(),record=daily();record.payload={...record.payload,kind:'daily_review',period:{start:'2026-10-01',end:'2026-10-01',days:1},review:{status:'partial',quantityReviewedDays:1,revenueReviewedDays:0,normalDays:0},summary:{estimatedRevenue:900000},daily:[{date:'2026-10-01',sold:3,publicBookings:2,phoneBookings:1,estimatedRevenue:900000,review:{quantityReviewed:true,revenueReviewed:false,reason:'REVENUE_NOT_REVIEWABLE'}}]};
+  const html=h.view.detailView(record);assert.match(html,/공개 예약 2실 · 방막기 1실 · 추정매출 미확인/);assert.match(html,/확인된 일부 자료: 예약 3실 · 매출 미확인 · 수량 확보 1 \/ 1일 · 금액 확보 0 \/ 1일/);assert.doesNotMatch(html,/900,000|매출 0원/);
+});
+
 test('two selected records cannot overwrite the latest selected detail out of order',async()=>{
   const h=harness();h.mount();await h.resolve(0,{enabled:true,records:[daily()]});h.open('one');h.open('two');await h.resolve(2,{record:{...daily(),metadata:{title:'두번째 결과'}}});await h.resolve(1,{record:{...daily(),metadata:{title:'과거 요청'}}});assert.match(h.detail.innerHTML,/두번째 결과/);assert.doesNotMatch(h.detail.innerHTML,/과거 요청/);
 });
