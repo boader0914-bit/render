@@ -58,7 +58,11 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
   Object.assign(daily,inventoryPolicySchemas);
   Object.assign(sourceObservation,inventoryPolicySchemas);
   detailSchema.integrated.sourceRevision=true;
-  for(const schema of [metric,detailSchema.integrated.snapshot.analysis.weekdays[0],detailSchema.integrated.snapshot.analysis.pace[0]])schema.productCapacityEvidence=inventoryPolicySchemas.productCapacityEvidence;
+  const priceDiagnosticKeys=['priceUnknownCauses','priceUnknownCauseCoverage'];
+  for(const schema of [metric,detailSchema.integrated.snapshot.analysis.weekdays[0],detailSchema.integrated.snapshot.analysis.pace[0]]){
+    schema.productCapacityEvidence=inventoryPolicySchemas.productCapacityEvidence;
+    for(const key of priceDiagnosticKeys)schema[key]=inventoryPolicySchemas[key];
+  }
   daily.sourceObservation=sourceObservation;
   detailSchema.integrated.snapshot.provenance={...fields('source companyId calculationVersion sourceRevision linkageStatus sourceDigest'),runIds:[true],selectedRunIds:[true],observations:[sourceObservation]};
   const validDay=value=>typeof value==='string'&&/^20\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(value)&&Number.isFinite(Date.parse(value+'T00:00:00Z'))&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;
@@ -78,7 +82,8 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
     const metricEvidence=row=>{
       if(!row||typeof row!=='object'||Array.isArray(row))return;
       for(const key of priceEvidenceKeys)if(Object.hasOwn(row,key)&&row[key]!==null&&!(typeof row[key]==='number'&&Number.isFinite(row[key])&&row[key]>=0&&(!key.endsWith('Bookings')||Number.isSafeInteger(row[key]))))delete row[key];
-      const products=policyEvidence(row).productCapacityEvidence;delete row.productCapacityEvidence;if(products)row.productCapacityEvidence=products;
+      const evidence=policyEvidence(row),products=evidence.productCapacityEvidence;delete row.productCapacityEvidence;if(products)row.productCapacityEvidence=products;
+      for(const key of priceDiagnosticKeys){delete row[key];if(Object.hasOwn(evidence,key))row[key]=evidence[key];}
     };
     const observationEvidence=(row,selectedMonth)=>{
       if(!row||typeof row!=='object'||Array.isArray(row))return;

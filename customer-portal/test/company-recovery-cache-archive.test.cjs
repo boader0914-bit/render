@@ -134,12 +134,16 @@ test('new allocation policy refreshes durable company data and adds a review wit
     inventoryEvidenceVersion:5,phoneValuationPolicy:'proportional_product_shortfall_v2',
     productCapacityEvidence:[{productKey:'lodging:101',count:16,source:'historical_product_maximum',sourceDate:'2026-09-01',runId:'run_saved_1',observedAt:'2026-09-01T01:00:00Z',raw:'must-not-persist'}]});
   target.capacityWitnesses=structuredClone(target.productCapacityEvidence);
+  Object.assign(target,{priceUnknownCauses:[],priceRecoveryPolicy:'inventory_price_recovery_v1'});
+  target.phoneValuation.recoveryPolicies=[{policy:'catalog_single_room_identity_v1',quantity:2,revenue:440000,estimatedQuantity:true,sourceDate:target.date,productKeys:['101','102']}];
   const sourceEvidence={inventoryEvidenceVersion:target.inventoryEvidenceVersion,phoneValuationPolicy:target.phoneValuationPolicy,phoneValuation:structuredClone(target.phoneValuation),sharedDayUseEvidence:structuredClone(target.sharedDayUseEvidence),capacityWitnesses:structuredClone(target.capacityWitnesses)};
+  Object.assign(sourceEvidence,{priceUnknownCauses:[],priceRecoveryPolicy:target.priceRecoveryPolicy});
   // The central customer projection intentionally omits the internal allocation
   // ranges while preserving the public policy and daily amount bounds.
   delete sourceEvidence.phoneValuation.allocationRanges;delete target.phoneValuation.allocationRanges;
   Object.assign(target.sourceObservation,sourceEvidence);Object.assign(snapshot.provenance.observations.find(row=>row.date===target.date),structuredClone(sourceEvidence));
   Object.assign(snapshot.summary,{sold:8,phoneBookings:5,phoneMissingPriceBookings:0,phoneAllocatedBookings:5,phoneAllocatedRevenue:1100000,phoneRevenueLow:1050000,phoneRevenueHigh:1150000,productCapacityEvidence:structuredClone(target.productCapacityEvidence)});
+  Object.assign(snapshot.summary,{priceUnknownCauses:[],priceUnknownCauseCoverage:{classifiedCompanyDays:1,unclassifiedCompanyDays:2}});
   for(const group of [changed.companyDetail.current,changed.companyDetail.history.months[0]]){group.daily=structuredClone(snapshot.daily);group.summary=structuredClone(snapshot.summary);}
   await f.restartArchive();const restarted=f.cache();await restarted.ready();
   const [restored]=await restarted.snapshot({scope:'new-session',audience:AUDIENCE,identity:identity()});
@@ -156,6 +160,9 @@ test('new allocation policy refreshes durable company data and adds a review wit
     const row=group.daily.find(row=>row.date==='2026-09-04');assert.equal(row.phoneAllocatedBookings,5);assert.equal(row.phoneMissingPriceBookings,0);assert.equal(row.estimatedRevenue,1379000);
     assert.equal(row.phoneValuation.policy,'proportional_product_shortfall_v2');assert.equal(row.sharedDayUseEvidence.groups[0].groupKey,'name:피크닉bbq포함');assert.equal(row.sharedDayUseEvidence.physicalRoomBookings,1);
     assert.equal(row.sourceObservation.inventoryEvidenceVersion,5);assert.equal(row.capacityWitnesses[0].count,16);assert.equal(row.sourceObservation.capacityWitnesses[0].runId,'run_saved_1');assert.equal(row.phoneValuation.allocationRanges,undefined);
+    assert.deepEqual(row.priceUnknownCauses,[]);assert.equal(row.priceRecoveryPolicy,'inventory_price_recovery_v1');
+    assert.equal(row.sourceObservation.phoneValuation.recoveryPolicies[0].revenue,440000);
+    assert.deepEqual(group.summary.priceUnknownCauseCoverage,{classifiedCompanyDays:1,unclassifiedCompanyDays:2});
     assert.equal(group.daily.find(row=>row.date==='2026-09-02').estimatedRevenue,0);assert.equal(group.daily.find(row=>row.date==='2026-09-03').estimatedRevenue,null);
   }
   const latest=(await f.archive().get({identity:identity(),audience:AUDIENCE,id:f.captures[1].recordId})).record;
@@ -163,6 +170,8 @@ test('new allocation policy refreshes durable company data and adds a review wit
   assert.equal(latest.identity.sourceRevision,integrated.sourceRevision);assert.equal(latest.payload.sourceRevision,integrated.sourceRevision);
   assert.equal(publicationSourceLinks([latest.payload])[0].sourceRevision,integrated.sourceRevision);
   const row=latest.payload.daily.find(row=>row.date==='2026-09-04');assert.equal(row.review.revenueReviewed,true);assert.equal(row.phoneAllocatedRevenue,1100000);assert.equal(row.phoneRevenueLow,1050000);assert.equal(row.sharedDayUseEvidence.groups[0].reusedBookings,1);
+  assert.equal(row.phoneValuation.recoveryPolicies[0].quantity,2);assert.deepEqual(row.priceUnknownCauses,[]);
+  assert.deepEqual(latest.payload.summary.priceUnknownCauseCoverage,{classifiedCompanyDays:1,unclassifiedCompanyDays:2});
   assert.equal((await f.archive().list({identity:identity(),audience:AUDIENCE,kind:'daily-review'})).total,2);
   assert.equal((await f.archive().list({identity:identity(),audience:AUDIENCE,kind:'published-report'})).total,1);
   assert.deepEqual(await fs.readFile(path.join(f.archiveDirectory,publishedFile)),originalPublication);
