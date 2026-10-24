@@ -36,7 +36,7 @@
       const known=row.missing!==true&&row.inventoryConflict!==true&&row.review?.quantityReviewed!==false,priced=known&&row.review?.revenueReviewed!==false,publicCount=known?row.publicBookings:null,blockedCount=known?row.phoneBookings:null;
       const total=typeof publicCount==='number'&&typeof blockedCount==='number'?publicCount+blockedCount:null;
       const reason={SOURCE_LINK_MISSING:'원본 연결 미확인',QUANTITY_NOT_REVIEWABLE:'수량 검토 필요',REVENUE_NOT_REVIEWABLE:'금액 검토 필요',ARCHIVE_OBSERVATION_MISSING:'관측 자료 없음'}[row.review?.reason];
-      const unresolved=reason||(!known?'미확인':!priced||row.partial||row.revenuePartial?'일부 확인 필요':'정상 관측');
+      const unresolved=reason||(!known?'미확인':!priced||row.partial||row.revenuePartial?'일부 확인 필요':row.sourceObservation?.sourceRecovery?'저장 원본 복구':'정상 관측');
       return `<tr><th>${esc(row.date)}</th><td class="public-value">${number(publicCount)}</td><td class="${typeof blockedCount==='number'&&blockedCount>0?'estimated-value':''}">${number(blockedCount)}</td><td>${number(total)}</td><td>${number(priced?row.estimatedRevenue:null)}${typeof row.estimatedRevenue==='number'&&priced?'원':''}</td><td>${esc(unresolved)}</td><td>${esc(row.sourceObservation?.runId||'연결 확인 필요')}</td></tr>`;
     }).join('')||'<tr><td colspan="7">보관된 날짜별 자료가 없습니다.</td></tr>'}</tbody></table></div>`;
   }

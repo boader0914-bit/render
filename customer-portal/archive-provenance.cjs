@@ -11,10 +11,22 @@ const validMonth = value => typeof value === 'string' && /^20\d{2}-(0[1-9]|1[0-2
 const stamp = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null;
 const numbers = (value, keys) => Object.fromEntries(keys.map(key => [key, numeric(value?.[key])]));
 const quantityKeys = ['supply','total','sold','publicBookings','phoneBookings','publicRevenue','phoneRevenue','estimatedRevenue','reservationRate','sharedDayUseExcluded','coveredCompanyDays','expectedCompanyDays','missingCompanyDays','revenueCoveredCompanyDays','sameDayObservedCompanyDays','staleDays','maxObservationLeadTimeDays','knownPartialRevenue'];
+function savedRecovery(value) {
+  const proof = value?.sourceRecovery;
+  if (!proof || value.runQuality !== 'unknown' || proof.kind !== 'saved_product_recovery_v1' || proof.originalRunQuality !== 'unknown'
+    || proof.companyId !== value.companyId || proof.runId !== value.runId || proof.date !== value.date
+    || proof.productType !== value.productType || proof.collectedAt !== value.collectedAt || !stamp(value.collectedAt)
+    || new Date(Date.parse(value.collectedAt)+9*3600000).toISOString().slice(0,10) !== value.collectedDate
+    || ![proof.receiptId,proof.sourceDigest,proof.rowDigest].every(value => /^[a-f0-9]{64}$/.test(value || ''))) return null;
+  return {kind:proof.kind,companyId:value.companyId,runId:value.runId,date:value.date,productType:value.productType,
+    collectedAt:value.collectedAt,originalRunQuality:'unknown',receiptId:proof.receiptId,sourceDigest:proof.sourceDigest,rowDigest:proof.rowDigest};
+}
+const reviewedSource = value => ['complete','reused'].includes(value?.runQuality) || Boolean(savedRecovery(value));
 const observation = (value, companyId, month) => value?.companyId === companyId && reference(value.runId) && validDay(value.date)
   && value.date.startsWith(month + '-') && value.productType === 'lodging' && stamp(value.collectedAt) && validDay(value.collectedDate)
-  && value.collectedDate <= value.date && ['complete','reused','partial'].includes(value.runQuality)
-  ? { companyId, runId: value.runId, date: value.date, productType: 'lodging', collectedAt: value.collectedAt, collectedDate: value.collectedDate, runQuality: value.runQuality } : null;
+  && value.collectedDate <= value.date && (['complete','reused','partial'].includes(value.runQuality) || savedRecovery(value))
+  ? { companyId, runId: value.runId, date: value.date, productType: 'lodging', collectedAt: value.collectedAt, collectedDate: value.collectedDate, runQuality: value.runQuality,
+    ...(savedRecovery(value) ? {sourceRecovery:savedRecovery(value)} : {}) } : null;
 const quantityValid = row => numeric(row.total) > 0 && numeric(row.sold) !== null && row.sold >= 0 && row.sold <= row.total
   && numeric(row.publicBookings) !== null && row.publicBookings >= 0 && numeric(row.phoneBookings) !== null && row.phoneBookings >= 0
   && Math.abs(row.publicBookings + row.phoneBookings - row.sold) < 0.001;
@@ -36,7 +48,7 @@ function projectDailyReview({ companyId, month, data, reviewedAt } = {}) {
   const observations = provenance.observations.map(row => observation(row, companyId, month)).filter(Boolean);
   // A response with no exact normal observation is not promoted to a reviewed
   // archive merely because its HTTP request or monthly calculation succeeded.
-  if (!observations.some(row => ['complete','reused'].includes(row.runQuality) && runSet.has(row.runId))) return null;
+  if (!observations.some(row => reviewedSource(row) && runSet.has(row.runId))) return null;
   const byDate = new Map(), duplicateDates = new Set();
   for (const row of observations) { if (byDate.has(row.date)) duplicateDates.add(row.date); else byDate.set(row.date, row); }
   const seenDays = new Set();
@@ -45,7 +57,7 @@ function projectDailyReview({ companyId, month, data, reviewedAt } = {}) {
     const candidate = observation(row.sourceObservation, companyId, month), exact = byDate.get(row.date);
     const linked = candidate && exact && !duplicateDates.has(row.date) && runSet.has(candidate.runId)
       && JSON.stringify(candidate) === JSON.stringify(exact) ? candidate : null;
-    const quantityReviewed = Boolean(linked && ['complete','reused'].includes(linked.runQuality) && quantityValid(row)
+    const quantityReviewed = Boolean(linked && reviewedSource(linked) && quantityValid(row)
       && row.missing !== true && row.partial !== true && row.collectionPartial !== true && row.inventoryConflict !== true);
     const revenueReviewed = quantityReviewed && row.revenuePartial !== true && numeric(row.estimatedRevenue) !== null;
     return { date: row.date, ...numbers(row, quantityKeys), missing: row.missing === true, partial: row.partial === true,
@@ -63,7 +75,8 @@ function projectDailyReview({ companyId, month, data, reviewedAt } = {}) {
   return { schemaVersion: 1, kind: 'daily_review', companyId, month, reviewedAt, calculatedAt: integrated.calculatedAt,
     calculationVersion: integrated.calculationVersion,
     review: { status: fullyReviewed ? 'reviewed' : 'partial', basis: 'automatic_validation', normalDays, unresolvedDays: daily.length - normalDays,
-      quantityReviewedDays: daily.filter(row => row.review.quantityReviewed).length, revenueReviewedDays: daily.filter(row => row.review.revenueReviewed).length },
+      quantityReviewedDays: daily.filter(row => row.review.quantityReviewed).length, revenueReviewedDays: daily.filter(row => row.review.revenueReviewed).length,
+      recoveredDays: daily.filter(row => row.review.quantityReviewed && row.sourceObservation?.sourceRecovery).length },
     roomBasis: { count: numeric(integrated.roomBasis?.count), source: reference(integrated.roomBasis?.source), reviewRequired: integrated.roomBasis?.reviewRequired === true },
     period: { start: validDay(snapshot.period?.start) ? snapshot.period.start : null, end: validDay(snapshot.period?.end) ? snapshot.period.end : null,
       days: numeric(snapshot.period?.days), cutoffDate: validDay(snapshot.period?.cutoffDate) ? snapshot.period.cutoffDate : null, monthClosed: snapshot.period?.monthClosed === true },

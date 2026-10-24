@@ -3,6 +3,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const {buildMonthlyReportSnapshot}=require('../../scripts/lib/monthly_reports.cjs');
 const {projectIntegrated}=require('../../scripts/lib/insight_company_integrated.cjs');
 const {createArchiveService,publicationPeriod}=require('../archive-service.cjs');
+const {projectDailyReview}=require('../archive-provenance.cjs');
 const DAY=86400000,OWN='cmp_place_123',COMP='cmp_place_456',AT=Date.parse('2026-10-24T01:00:00Z');
 const AUDIENCE=JSON.stringify({host:'insight.sabun.co.kr',type:'customer'}),ADMIN=JSON.stringify({host:'insight.sabun.co.kr',type:'admin-customer-view'});
 function identity({owner='cus_test',competitor=true,removeOwn=false}={}){return {customer:{customerId:owner,accountStatus:'active',relations:[...(!removeOwn?[{kind:'own',companyId:OWN,status:'active'}]:[]),...(competitor?[{kind:'competitor',companyId:COMP,status:'active'}]:[])]},companies:[{companyId:OWN,name:'검수 내 매장'},{companyId:COMP,name:'검수 경쟁업체'}]};}
@@ -30,6 +31,32 @@ async function fixture(t){const directory=await fs.mkdtemp(path.join(os.tmpdir()
   const read=async result=>(await service.get({identity:identity(),audience:AUDIENCE,id:result.record.id})).record;
   return {directory,service,capture,publish,read,advance:n=>clock+=n,clock:()=>clock,restart:()=>createArchiveService(options)};
 }
+
+test('saved-product recovery stays scoped to certified company, run, stay date and observation time',async t=>{
+  const f=await fixture(t), data=source({days:[1,2,3]}), integrated=data.companyDetail.integrated;
+  const proof=row=>({kind:'saved_product_recovery_v1',companyId:row.companyId,runId:row.runId,date:row.date,productType:row.productType,
+    collectedAt:row.collectedAt,originalRunQuality:'unknown',receiptId:'a'.repeat(64),sourceDigest:'b'.repeat(64),rowDigest:'c'.repeat(64)});
+  for(const row of integrated.snapshot.provenance.observations){row.runQuality='unknown';row.sourceRecovery=proof(row);}
+  for(const row of integrated.snapshot.daily)if(row.sourceObservation){row.sourceObservation.runQuality='unknown';row.sourceObservation.sourceRecovery=proof(row.sourceObservation);}
+  const saved=await f.read(await f.capture(data));
+  assert.equal(saved.payload.review.recoveredDays,3);
+  assert.equal(saved.payload.daily[2].sold,0,'normal zero remains zero after saved-product recovery');
+  assert.equal(saved.payload.daily[2].review.quantityReviewed,true);
+  assert.ok(saved.payload.provenance.observations.every(row=>row.runQuality==='unknown'),'the original collection run is not upgraded');
+  for(const [key,value] of [['companyId',COMP],['runId','other-run'],['date','2026-09-04'],['collectedAt','2026-09-02T01:00:00Z'],['sourceDigest','invalid']]){
+    const invalid=structuredClone(data);
+    for(const row of invalid.companyDetail.integrated.snapshot.provenance.observations)row.sourceRecovery[key]=value;
+    for(const row of invalid.companyDetail.integrated.snapshot.daily)if(row.sourceObservation)row.sourceObservation.sourceRecovery[key]=value;
+    assert.equal(projectDailyReview({companyId:OWN,month:'2026-09',data:invalid,reviewedAt:new Date(AT).toISOString()}),null,key);
+  }
+  const unproved=structuredClone(data);
+  for(const row of unproved.companyDetail.integrated.snapshot.provenance.observations)delete row.sourceRecovery;
+  assert.equal(projectDailyReview({companyId:OWN,month:'2026-09',data:unproved,reviewedAt:new Date(AT).toISOString()}),null);
+  const published=await f.read(await f.publish({requestKey:'recovered_monthly_00001'}));
+  assert.equal(published.payload.companies[0].summary.observedDays,3);
+  assert.equal(published.payload.companies[0].daily[2].estimatedRevenue,0);
+  assert.ok(published.payload.companies[0].provenance[0].observations.every(row=>row.sourceRecovery));
+});
 
 test('publication period uses complete Monday–Sunday weeks and calendar months',()=>{
   assert.deepEqual(publicationPeriod('weekly','2026-09-30'),{start:'2026-09-28',end:'2026-10-04',days:7});
