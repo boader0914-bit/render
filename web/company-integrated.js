@@ -21,6 +21,20 @@
   const numeric = value => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value)) ? Number(value) : null;
   const num = value => numeric(value) === null ? "미확인" : Number(value).toLocaleString("ko-KR", { maximumFractionDigits: 1 });
   const money = value => numeric(value) === null ? "미확인" : `${num(Number(value) / 10000)}만원`;
+  function revenueText(row, channel = "total") {
+    const field = channel === "public" ? "publicRevenue" : channel === "phone" ? "phoneRevenue" : "estimatedRevenue";
+    const bookings = numeric(row[channel === "public" ? "publicBookings" : channel === "phone" ? "phoneBookings" : "sold"]);
+    const amount = numeric(row[field]);
+    if (amount === null || amount === 0 && bookings > 0) return "금액 미확인";
+    const phoneMissing = numeric(row.phoneMissingPriceBookings ?? row.source?.phoneMissingPriceBookings);
+    const publicMissing = numeric(row.publicMissingPriceBookings ?? row.source?.publicMissingPriceBookings);
+    const missingPeriod = numeric(row.expectedCompanyDays) !== null && numeric(row.revenueCoveredCompanyDays) !== null
+      && Number(row.revenueCoveredCompanyDays) < Number(row.expectedCompanyDays);
+    const partial = channel === "total" ? row.revenuePartial || phoneMissing > 0 || publicMissing > 0
+      : missingPeriod || (channel === "phone" ? phoneMissing > 0 || row.revenuePartial && phoneMissing === null
+        : publicMissing > 0 || row.revenuePartial);
+    return `${partial ? "확인된 소계 " : ""}${money(amount)}`;
+  }
   const pct = value => numeric(value) === null ? "미확인" : `${num(Number(value) * 100)}%`;
   const signed = value => numeric(value) === null ? "미확인" : `${Number(value) > 0 ? "+" : ""}${num(value)}`;
   const reason = value => REASONS[value] || value || "사유 미확인";
@@ -63,7 +77,10 @@
         estimatedRevenue: observed ? numeric(metric.estimatedRevenue) : null,
         publicRevenue: observed ? numeric(metric.publicRevenue) : null, phoneRevenue: observed ? numeric(metric.phoneRevenue) : null,
         reservationRate: observed ? numeric(metric.reservationRate) : null,
-        revenuePartial: Boolean(metric.revenuePartial), knownPartialRevenue: numeric(metric.knownPartialRevenue) };
+        revenuePartial: Boolean(metric.revenuePartial || source?.revenuePartial),
+        phoneMissingPriceBookings: numeric(metric.phoneMissingPriceBookings ?? source?.phoneMissingPriceBookings),
+        publicMissingPriceBookings: numeric(metric.publicMissingPriceBookings ?? source?.publicMissingPriceBookings),
+        knownPartialRevenue: numeric(metric.knownPartialRevenue) };
     });
     let keywords = Array.isArray(envelope.keywords) ? envelope.keywords : [];
     if (!keywords.length) {
@@ -82,9 +99,10 @@
   }
   function metrics(model) {
     const m = model.summary, q = model.quality;
+    const revenue = revenueText(m), subtotal = revenue.startsWith("확인된 소계 ");
     return `<div class="ci-metrics"><section><span>객실 기준</span><strong>${num(model.capacity)}${model.capacity === null ? "" : "<small>실</small>"}</strong><small>${esc(model.roomBasis.label || model.roomBasis.source || "업체 DB 기준")}</small></section>
       <section><span>예약 합계</span><strong>${num(m.sold)}${numeric(m.sold) === null ? "" : "<small>실·박</small>"}</strong><small><b class="ci-public">네이버 ${num(m.publicBookings)}</b> · <b class="ci-other">타채널 추정 ${num(m.phoneBookings)}</b></small></section>
-      <section><span>추정 매출${m.revenuePartial ? " · 확인된 소계" : ""}</span><strong>${money(m.estimatedRevenue)}</strong><small>네이버 ${money(m.publicRevenue)}${numeric(m.phoneRevenue) > 0 ? ` · 타채널 ${money(m.phoneRevenue)}` : ""}</small></section>
+      <section><span>추정 매출${subtotal ? " · 확인된 소계" : ""}</span><strong>${subtotal ? revenue.slice("확인된 소계 ".length) : revenue}</strong><small>네이버 ${revenueText(m, "public")}${numeric(m.phoneBookings) > 0 ? ` · 타채널 ${revenueText(m, "phone")}` : ""}</small></section>
       <section><span>관측 예약률</span><strong>${pct(m.reservationRate)}</strong><small>관측 공급 ${num(m.supply)}실·박 기준</small></section></div>
       <div class="ci-coverage"><span>숙박 당일 <b>${num(q.sameDayObservedCompanyDays ?? m.sameDayObservedCompanyDays)}</b>일</span><span>사전 관측 <b>${num(q.staleDays ?? m.staleDays)}</b>일</span><span>미관측·미확인 <b>${num(q.missingCompanyDays ?? m.missingCompanyDays)}</b>일</span><span>실·박은 날짜별 객실 수의 합계입니다.</span></div>`;
   }
@@ -102,18 +120,18 @@
       <div class="ci-chart-scroll" tabindex="0" role="region" aria-label="날짜별 예약 수량 그래프"><svg class="ci-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(monthLabel(model.month))} 날짜별 예약 수량. 정확한 수량과 예약률은 아래 날짜별 표에서 확인할 수 있습니다." style="min-width:${width}px"><title>네이버 예약과 타채널 추정 예약</title>${[0, .5, 1].map(ratio => `<line x1="${left}" y1="${bottom - chartHeight * ratio}" x2="${width - 28}" y2="${bottom - chartHeight * ratio}" class="ci-chart-grid"/><text x="${left - 8}" y="${bottom - chartHeight * ratio + 4}" text-anchor="end">${num(max * ratio)}</text>`).join("")}${bars}${fixedBasis ? [0, .5, 1].map(ratio => `<text x="${width - 23}" y="${bottom - chartHeight * ratio + 4}" text-anchor="start">${num(max * ratio / model.capacity * 100)}%</text>`).join("") : ""}</svg></div></section>`;
   }
   function dailyTable(model) {
-    return table("날짜별 예약·추정 매출과 관측 기준", ["숙박일", "예약 / 공급", "예약률", "네이버", "타채널 추정", "추정 매출", "관측 기준", "근거"], model.rows.map(row => `<tr><th scope="row">${esc(row.date)}</th><td>${num(row.sold)} / ${num(row.supply)}</td><td>${pct(row.reservationRate)}</td><td class="ci-public">${num(row.publicBookings)}</td><td class="${row.phoneBookings > 0 ? "ci-other" : ""}">${row.phoneBookings === 0 ? "—" : num(row.phoneBookings)}</td><td>${money(row.estimatedRevenue)}${row.observed && row.revenuePartial ? " · 일부" : ""}</td><td>${esc(freshness(row))}${row.observedDay ? `<small>${esc(row.observedDay)}</small>` : ""}</td><td><button type="button" class="ci-link" data-ci-date="${esc(row.date)}">확인</button></td></tr>`));
+    return table("날짜별 예약·추정 매출과 관측 기준", ["숙박일", "예약 / 공급", "예약률", "네이버", "타채널 추정", "추정 매출", "관측 기준", "근거"], model.rows.map(row => `<tr><th scope="row">${esc(row.date)}</th><td>${num(row.sold)} / ${num(row.supply)}</td><td>${pct(row.reservationRate)}</td><td class="ci-public">${num(row.publicBookings)}${row.publicBookings > 0 ? `<small>${revenueText(row, "public")}</small>` : ""}</td><td class="${row.phoneBookings > 0 ? "ci-other" : ""}">${row.phoneBookings === 0 ? "—" : num(row.phoneBookings)}${row.phoneBookings > 0 ? `<small>${revenueText(row, "phone")}</small>` : ""}</td><td>${revenueText(row)}</td><td>${esc(freshness(row))}${row.observedDay ? `<small>${esc(row.observedDay)}</small>` : ""}</td><td><button type="button" class="ci-link" data-ci-date="${esc(row.date)}">확인</button></td></tr>`));
   }
   function calendar(model) {
     if (!model.rows.length) return '<p class="ci-empty">선택할 월별 자료가 없습니다.</p>';
     const offset = new Date(`${model.month}-01T00:00:00Z`).getUTCDay();
-    return `<div class="ci-calendar" aria-label="${esc(monthLabel(model.month))} 예약·매출 캘린더"><div class="ci-weekdays" aria-hidden="true">${["일", "월", "화", "수", "목", "금", "토"].map(day => `<span>${day}</span>`).join("")}</div><div class="ci-calendar-grid">${Array.from({ length: offset }, () => '<div class="ci-calendar-padding" aria-hidden="true"></div>').join("")}${model.rows.map(row => `<button type="button" data-ci-date="${row.date}" class="ci-day${row.observed ? "" : " ci-day-missing"}${row.phoneBookings > 0 ? " ci-day-other" : ""}" aria-label="${esc(`${row.date}, 예약 ${num(row.sold)}실, 매출 ${money(row.estimatedRevenue)}, ${freshness(row)}`)}"><span class="ci-day-number">${row.day}</span><strong>${row.observed ? `${num(row.sold)}실 · ${pct(row.reservationRate)}` : "미확인"}</strong><span>${money(row.estimatedRevenue)}</span>${row.phoneBookings > 0 ? `<span class="ci-other">타채널 ${num(row.phoneBookings)}실<br>${money(row.phoneRevenue)}</span>` : ""}<small>${row.lag > 0 ? `${num(row.lag)}일 전 관측` : row.observed && row.lag === 0 ? "당일 관측" : row.observed ? "관측일 미확인" : "관측 근거 없음"}</small></button>`).join("")}</div></div>`;
+    return `<div class="ci-calendar" aria-label="${esc(monthLabel(model.month))} 예약·매출 캘린더"><div class="ci-weekdays" aria-hidden="true">${["일", "월", "화", "수", "목", "금", "토"].map(day => `<span>${day}</span>`).join("")}</div><div class="ci-calendar-grid">${Array.from({ length: offset }, () => '<div class="ci-calendar-padding" aria-hidden="true"></div>').join("")}${model.rows.map(row => `<button type="button" data-ci-date="${row.date}" class="ci-day${row.observed ? "" : " ci-day-missing"}${row.phoneBookings > 0 ? " ci-day-other" : ""}" aria-label="${esc(`${row.date}, 예약 ${num(row.sold)}실, 매출 ${revenueText(row)}${row.phoneBookings > 0 ? `, 타채널 ${num(row.phoneBookings)}실 ${revenueText(row, "phone")}` : ""}, ${freshness(row)}`)}"><span class="ci-day-number">${row.day}</span><strong>${row.observed ? `${num(row.sold)}실 · ${pct(row.reservationRate)}` : "미확인"}</strong><span>${revenueText(row)}</span>${row.phoneBookings > 0 ? `<span class="ci-other">타채널 ${num(row.phoneBookings)}실<br>${revenueText(row, "phone")}</span>` : ""}<small>${row.lag > 0 ? `${num(row.lag)}일 전 관측` : row.observed && row.lag === 0 ? "당일 관측" : row.observed ? "관측일 미확인" : "관측 근거 없음"}</small></button>`).join("")}</div></div>`;
   }
   function dateDetail(model, selected) {
     const row = model.rows.find(item => item.date === selected);
     if (!row) return "";
     const excluded = (model.quality.discardedSamples || []).filter(item => item.date === selected);
-    return `<section class="ci-card ci-date-detail" tabindex="-1" data-ci-date-detail><div class="ci-section-head"><h4>${esc(selected)} 계산 근거</h4><button type="button" data-ci-close-date aria-label="날짜 근거 닫기">닫기</button></div><p>${row.observed ? `${esc(time(row.source?.collectedAt))}의 유효 관측을 채택했습니다. ${esc(freshness(row))}.` : "이 날짜에 채택할 유효 관측이 없습니다. 0실·0원으로 계산하지 않았습니다."}</p>${row.observed ? `<dl class="ci-facts"><div><dt>예약 / 공급</dt><dd>${num(row.sold)} / ${num(row.supply)}실</dd></div><div><dt>추정 매출</dt><dd>${money(row.estimatedRevenue)}</dd></div><div><dt>사용한 수집</dt><dd>${runButton(row.source?.runId)}</dd></div><div><dt>가격 근거</dt><dd>${esc(row.source?.revenueEligible === false ? "가격 근거 미확인" : row.source?.priceEvidenceType === "stay_date_observed_price" ? "해당 숙박일 관측 가격" : row.source?.priceEvidenceType === "same_product_observed_fallback" ? "동일 상품의 보완 가격 포함" : "저장된 상품별 가격 근거")}</dd></div></dl>` : ""}${excluded.length ? `<details><summary>제외된 관측 ${excluded.length}건 · 표시된 표본</summary>${table("이 날짜의 제외된 관측 표본", ["사유", "수집 원본"], excluded.map(item => `<tr><td>${esc(reason(item.reason))}</td><td>${runButton(item.runId)}</td></tr>`))}</details>` : ""}</section>`;
+    return `<section class="ci-card ci-date-detail" tabindex="-1" data-ci-date-detail><div class="ci-section-head"><h4>${esc(selected)} 계산 근거</h4><button type="button" data-ci-close-date aria-label="날짜 근거 닫기">닫기</button></div><p>${row.observed ? `${esc(time(row.source?.collectedAt))}의 유효 관측을 채택했습니다. ${esc(freshness(row))}.` : "이 날짜에 채택할 유효 관측이 없습니다. 0실·0원으로 계산하지 않았습니다."}</p>${row.observed ? `<dl class="ci-facts"><div><dt>예약 / 공급</dt><dd>${num(row.sold)} / ${num(row.supply)}실</dd></div><div><dt>추정 매출</dt><dd>${revenueText(row)}</dd></div><div><dt>네이버 예약·금액</dt><dd>${num(row.publicBookings)}실 · ${revenueText(row, "public")}</dd></div>${row.phoneBookings > 0 ? `<div><dt>타채널 추정</dt><dd>${num(row.phoneBookings)}실 · ${revenueText(row, "phone")}</dd></div>` : ""}<div><dt>사용한 수집</dt><dd>${runButton(row.source?.runId)}</dd></div><div><dt>가격 근거</dt><dd>${esc(row.source?.revenueEligible === false ? "가격 근거 미확인" : row.revenuePartial ? "일부 예약 금액 미확인 · 확인된 금액만 표시" : row.source?.priceEvidenceType === "stay_date_observed_price" ? "해당 숙박일 관측 가격" : row.source?.priceEvidenceType === "same_product_observed_fallback" ? "동일 상품의 보완 가격 포함" : "저장된 상품별 가격 근거")}</dd></div></dl>` : ""}${excluded.length ? `<details><summary>제외된 관측 ${excluded.length}건 · 표시된 표본</summary>${table("이 날짜의 제외된 관측 표본", ["사유", "수집 원본"], excluded.map(item => `<tr><td>${esc(reason(item.reason))}</td><td>${runButton(item.runId)}</td></tr>`))}</details>` : ""}</section>`;
   }
   function analysis(model) {
     const insights = model.insights, pickup = insights.pickup?.lodging || {}, publicPickup = pickup.public || {}, lead = publicPickup.leadTime || {};

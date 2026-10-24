@@ -86,6 +86,89 @@ test("calendar and graph expose one purple day, distinguish real zero, and show 
   assert.match(markup, /data-monthly-report-month="2026-09"/);
 });
 
+function priceGapEnvelope({ phoneRevenue = 0, phoneMissingPriceBookings = 4, publicRevenue = 279000, publicBookings = 1, missingPriceSoldOut = 0 } = {}) {
+  const payload = envelope(), companyId = payload.companyId, collectedAt = "2026-09-01T06:00:00Z";
+  const row = { companyKey: companyId, runId: "latest", collectedAt, stayDate: "2026-09-04", productType: "lodging",
+    inventoryEvidenceVersion: 4, supply: 16, sold: publicBookings + 4, publicBookings, phoneBookings: 4,
+    publicRevenue, phoneRevenue, estimatedRevenue: publicRevenue + phoneRevenue,
+    phoneMissingPriceBookings, missingPriceSoldOut, partial: false, missing: false, unknownUnavailable: 0 };
+  payload.snapshot = buildMonthlyReportSnapshot({ type: "company", targetId: companyId, month: "2026-09", cutoffDate: "2026-09-30" }, {
+    companies: [{ companyId, primaryName: "월명 표시 검증", capacity: 16 }],
+    runs: [{ id: "latest", collectedAt, collectionQuality: { status: "complete" } }], observations: [row,
+      { ...row, stayDate: "2026-09-02", sold: 0, publicBookings: 0, phoneBookings: 0,
+        publicRevenue: 0, phoneRevenue: 0, estimatedRevenue: 0, phoneMissingPriceBookings: 0, missingPriceSoldOut: 0 }]
+  }, "2026-10-01T00:00:00Z");
+  return payload;
+}
+const calendarDay = (markup, date) => markup.match(new RegExp(`<button[^>]*data-ci-date="${date}"[^>]*>[\\s\\S]*?<\\/button>`))?.[0] || "";
+const detailSection = markup => markup.match(/<section class="ci-card ci-date-detail"[\s\S]*?<\/section>/)?.[0] || "";
+
+test("the observed Wolmyeong price gap is unknown money rather than a zero across calendar, aria, table and date detail", () => {
+  const payload = priceGapEnvelope(), original = JSON.stringify(payload), model = ui.buildViewModel(payload);
+  const row = model.rows.find(row => row.date === "2026-09-04");
+  assert.equal(row.phoneBookings, 4); assert.equal(row.phoneRevenue, 0); assert.equal(row.phoneMissingPriceBookings, 4);
+  assert.equal(row.revenuePartial, true); assert.equal(row.estimatedRevenue, 279000);
+  const markup = view(model, "settlement", { selectedDate: row.date }), day = calendarDay(markup, row.date);
+  assert.match(day, /확인된 소계 27\.9만원/); assert.match(day, /타채널 4실<br>금액 미확인/);
+  assert.match(day, /aria-label="[^"]*확인된 소계 27\.9만원[^"]*타채널 4실 금액 미확인/);
+  assert.doesNotMatch(day, /0만원/);
+  const table = view(model, "settlement", { view: "table" }).match(/<tr><th scope="row">2026-09-04[\s\S]*?<\/tr>/)?.[0] || "";
+  assert.match(table, /4<small>금액 미확인<\/small>/); assert.match(table, /확인된 소계 27\.9만원/);
+  const detail = detailSection(markup);
+  assert.match(detail, /4실 · 금액 미확인/); assert.match(detail, /확인된 소계 27\.9만원/);
+  assert.match(detail, /일부 예약 금액 미확인/); assert.doesNotMatch(detail, /0만원/);
+  assert.match(markup, /추정 매출 · 확인된 소계<\/span><strong>27\.9만원<\/strong>/);
+  assert.equal(JSON.stringify(payload), original, "display repair never changes stored observations or monthly values");
+});
+
+test("positive partially priced channel revenue is labelled as a confirmed subtotal including accessible calendar text", () => {
+  const model = ui.buildViewModel(priceGapEnvelope({ phoneRevenue: 200000, phoneMissingPriceBookings: 2 }));
+  const markup = view(model, "settlement", { selectedDate: "2026-09-04" }), day = calendarDay(markup, "2026-09-04");
+  assert.match(day, /확인된 소계 47\.9만원/); assert.match(day, /타채널 4실<br>확인된 소계 20만원/);
+  assert.match(day, /aria-label="[^"]*타채널 4실 확인된 소계 20만원/);
+  const detail = detailSection(markup);
+  assert.match(detail, /4실 · 확인된 소계 20만원/);
+  assert.match(view(model, "settlement", { view: "table" }), /4<small>확인된 소계 20만원<\/small>/);
+});
+
+test("real zero revenue, absent observations and unpriced public reservations remain distinct", () => {
+  const model = ui.buildViewModel(priceGapEnvelope()), markup = view(model);
+  const zero = calendarDay(markup, "2026-09-02"), missing = calendarDay(markup, "2026-09-03");
+  assert.match(zero, /0실 · 0%/); assert.match(zero, /<span>0만원<\/span>/); assert.doesNotMatch(zero, /금액 미확인|확인된 소계/);
+  assert.match(missing, /ci-day-missing/); assert.match(missing, /금액 미확인/); assert.doesNotMatch(missing, /0만원/);
+  const publicGap = ui.buildViewModel(priceGapEnvelope({ publicRevenue: 0, phoneRevenue: 400000, phoneMissingPriceBookings: 0 }));
+  const detail = detailSection(view(publicGap, "settlement", { selectedDate: "2026-09-04" }));
+  assert.match(detail, /네이버 예약·금액<\/dt><dd>1실 · 금액 미확인/);
+  assert.match(detail, /확인된 소계 40만원/);
+});
+
+test("an explicit zero missing-price count does not fall back to an older source missing count", () => {
+  const payload = priceGapEnvelope({ phoneRevenue: 400000, phoneMissingPriceBookings: 0 });
+  payload.snapshot.sources.observations.find(row => row.date === "2026-09-04").phoneMissingPriceBookings = 4;
+  const model = ui.buildViewModel(payload), row = model.rows.find(row => row.date === "2026-09-04");
+  assert.equal(row.phoneMissingPriceBookings, 0);
+  assert.match(calendarDay(view(model), row.date), /타채널 4실<br>40만원/);
+});
+
+test("partially priced public revenue remains a subtotal without a public missing-price field in the API", () => {
+  const model = ui.buildViewModel(priceGapEnvelope({ phoneRevenue: 400000, phoneMissingPriceBookings: 0,
+    publicRevenue: 100000, publicBookings: 2, missingPriceSoldOut: 1 }));
+  const row = model.rows.find(row => row.date === "2026-09-04");
+  assert.equal(row.publicMissingPriceBookings, null); assert.equal(row.revenuePartial, true);
+  const detail = detailSection(view(model, "settlement", { selectedDate: row.date }));
+  assert.match(detail, /네이버 예약·금액<\/dt><dd>2실 · 확인된 소계 10만원/);
+  assert.match(detail, /확인된 소계 50만원/);
+});
+
+test("all-unpriced reservations use the source missing count when eligible daily monetary aggregates are null", () => {
+  const payload = priceGapEnvelope({ publicRevenue: 0 }), model = ui.buildViewModel(payload);
+  const metric = payload.snapshot.daily.find(row => row.date === "2026-09-04").lodging;
+  assert.equal(metric.phoneMissingPriceBookings, null);
+  assert.equal(model.rows.find(row => row.date === "2026-09-04").phoneMissingPriceBookings, 4);
+  const day = calendarDay(view(model), "2026-09-04");
+  assert.match(day, /금액 미확인/); assert.doesNotMatch(day, /0만원/);
+});
+
 test("empty data cannot display synthetic revenue or timing averages, and source text is escaped", () => {
   const model = ui.buildViewModel({ companyId: "a", selectedMonth: "2024-02", status: "ready", snapshot: { summary: { lodging: {} }, daily: [], insights: {} },
     keywords: [{ keyword: '<img src=x onerror="alert(1)">', runs: [{ id: 'bad" onclick="alert(1)', rank: 2 }] }] });
