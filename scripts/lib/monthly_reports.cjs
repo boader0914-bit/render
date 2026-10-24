@@ -50,10 +50,14 @@ function priceUnknownCauseSummary(rows) {
   const byCause = new Map();
   for (const causes of classified) for (const cause of causes) {
     const key = `${cause.channel}:${cause.code}`, previous = byCause.get(key);
-    if (previous) { previous.quantity += cause.quantity; previous.productKeys = [...new Set([...previous.productKeys, ...cause.productKeys])]; }
-    else byCause.set(key, { ...cause, productKeys: [...cause.productKeys] });
+    if (previous) {
+      previous.quantity += cause.quantity;
+      for (const productKey of cause.productKeys) previous.productKeys.add(productKey);
+    } else byCause.set(key, { ...cause, productKeys: new Set(cause.productKeys) });
   }
-  return { priceUnknownCauses: [...byCause.values()], priceUnknownCauseCoverage: {
+  // Keep first-seen order without copying a growing cross-company union for
+  // every company-day. Convert each accumulated set exactly once at the edge.
+  return { priceUnknownCauses: [...byCause.values()].map(cause => ({ ...cause, productKeys: [...cause.productKeys] })), priceUnknownCauseCoverage: {
     classifiedCompanyDays: classified.length, unclassifiedCompanyDays: rows.length - classified.length } };
 }
 function ratio(numerator, denominator) { return denominator > 0 ? Number((numerator / denominator).toFixed(6)) : null; }
