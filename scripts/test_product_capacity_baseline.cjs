@@ -1,7 +1,9 @@
 "use strict";
-const test = require("node:test"), assert = require("node:assert/strict");
-const { observedProductCapacityEvidence, productCapacityBaselineAt, compactProductCapacityEvidence } = require("./lib/product_capacity_baseline.cjs");
+const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs/promises"), path = require("node:path"), os = require("node:os");
+const { observedProductCapacityEvidence, productCapacityBaselineAt, compactProductCapacityEvidence, mergeProductCapacityBaselines } = require("./lib/product_capacity_baseline.cjs");
 const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
+const { createProductCapacityStore } = require("./lib/product_capacity_store.cjs");
+const { applyInventoryEvidence } = require("./inventory_estimation.cjs");
 const room = (id, stock, extra = {}) => ({ bizItemId: id, name: id, saleType: "숙박", date: "2026-09-20", stock, bookingCount: 0, occupiedBookingCount: 0, price: 100000, open: true, ...extra });
 const company = { companyId: "cmp_pika", placeIds: ["123"], bookingBusinessIds: ["456"], manualCorrection: null };
 test("only exact-company normal normalized product witnesses enter cumulative maxima and future observations cannot rewrite an earlier baseline", () => {
@@ -45,4 +47,73 @@ test("all-company reconstruction includes unreviewed firms, all keywords and pri
   assert.equal(rows.at(-1).count, 14); assert.ok(rows.every(row => row.companyId === current.companyId && row.readOnlyRecalculated));
   assert.equal(rows.productCapacityEvidence.length, 3);
   assert.equal(current.manualCorrection, null, "an unreviewed capacity is never converted to a manual DB review");
+});
+test("merging a smaller current maximum cannot replace an earlier larger same-product witness", () => {
+  const historical = { room: { count: 14, source: "normal_saved_product_response", runId: "old", observedAt: "2026-05-01T00:00:00Z" } };
+  assert.deepEqual(mergeProductCapacityBaselines(historical, { room: { count: 7, runId: "now" }, second: 2 }), { ...historical, second: 2 });
+  assert.equal(mergeProductCapacityBaselines({ room: 7 }, historical).room.count, 14);
+  assert.equal(historical.room.runId, "old");
+});
+function coreDependencies(loadRun) {
+  return { loadRun, companyProductAvailabilityMatch: (c, item) => c.placeIds.includes(item.placeId),
+    applyCompanyManualCorrection: (item, c) => applyInventoryEvidence({ ...item, dayUsePresence: "absent", inventoryCapacityBaseline: {
+      ...item.inventoryCapacityBaseline, lodging: 16, lodgingOverride: { count: c.manualCorrection.lodgingBasisTotal } } }),
+    buildHistoryObservations: value => value.availability.items.flatMap(item => item.inventoryEvidence.lodging.rows.map(row => ({ ...row,
+      stayDate: row.date, productType: "lodging", supply: row.total, inventoryEvidenceVersion: item.inventoryEvidence.version,
+      witnesses: item.inventoryEvidence.lodging.productCapacityEvidence }))) };
+}
+test("250 cross-keyword runs retain an older omitted maximum through verified persistent milestones and never borrow a future maximum", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "long-product-capacity-"));
+  t.after(async () => { assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir())); assert.ok(path.basename(root).startsWith("long-product-capacity-")); await fs.rm(root, { recursive: true, force: true }); });
+  const runs = Array.from({ length: 250 }, (_, i) => {
+    const collectedAt = new Date(Date.UTC(2026, 0, 1 + i)).toISOString();
+    return { id: "run_" + i, keyword: i % 2 ? "지역숙소" : "광역글램핑", collectedAt, checkIn: collectedAt.slice(0, 10), bookingRangeDays: 1,
+      collectedAtSource: "manifest", collectionQuality: { status: "complete" } };
+  });
+  const hidden = runs[130], future = { ...runs[249], id: "future", collectedAt: "2026-09-25T00:00:00.000Z", checkIn: "2026-09-25" };
+  for (const run of [hidden, future]) { const dir = path.join(root, "outputs", run.id); await fs.mkdir(dir, { recursive: true }); await fs.writeFile(path.join(dir, "manifest.json"), JSON.stringify(run)); }
+  const current = { ...company, runIds: runs.slice(0, 120).map(row => row.id), lastRunId: runs[249].id,
+    keywords: { local: { keyword: "지역숙소", runs: runs.slice(-80).filter(row => row.keyword === "지역숙소").map(row => ({ runId: row.id })) },
+      broad: { keyword: "광역글램핑", runs: runs.slice(-80).filter(row => row.keyword === "광역글램핑").map(row => ({ runId: row.id })) } },
+    manualCorrection: { lodgingBasisTotal: 16 } };
+  assert.ok(!current.runIds.includes(hidden.id)); assert.ok(Object.values(current.keywords).every(value => !value.runs.some(row => row.runId === hidden.id)));
+  const store = createProductCapacityStore({ dataDir: root }), evidence = [hidden, future].map(run => ({ companyId: current.companyId, productId: "room", productType: "lodging", count: run === hidden ? 14 : 18,
+    collectedAt: run.collectedAt, sourceDate: run.checkIn, runId: run.id, source: "normal_saved_product_response" }));
+  await store.publish(evidence, { companies: new Map([[current.companyId, current]]), sourceRevision: "verified-long-history", assertCurrent: async () => {} });
+  const loaded = [], helper = createMonthlyCompanyRecalculation({ ...coreDependencies(async id => {
+    loaded.push(id); const run = runs.find(row => row.id === id);
+    return { run: { id }, availability: { items: [{ placeId: "123", checkIn: run.checkIn, bookingRangeDays: 1,
+      weeklyProductDetails: [room("room", 7, { date: run.checkIn }), room("second", 2, { date: run.checkIn })] }] } };
+  }), recalculateAllInventory: true, readPersistedProductCapacityEvidence: companies => store.readForCompanies(companies) });
+  const data = { rawCompanies: new Map([[current.companyId, current]]), companies: [{ companyId: current.companyId }], runs: [...runs, future] };
+  const result = await helper({ type: "company", targetId: current.companyId, month: "2026-09", cutoffDate: "2026-09-30" }, data);
+  assert.ok(result.length > 0); assert.ok(!loaded.includes(hidden.id), "the old normal run really is outside bounded company references");
+  assert.ok(!loaded.includes(future.id));
+  for (const row of result) {
+    assert.equal(row.witnesses.find(product => product.productKey === "room").count, 14, "normal as-of persistent maximum survives 250 runs");
+    assert.equal(row.phoneBookings, 7); assert.equal(row.phoneRevenue, 700000); assert.equal(row.phoneMissingPriceBookings, 0);
+  }
+  assert.equal(result.productCapacityWarnings.length, 0);
+  assert.ok(result.productCapacityEvidence.some(row => row.runId === hidden.id && row.count === 14));
+});
+test("run-row cache binds as-of persistent maxima even when its original catalog revision is unchanged", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "product-capacity-run-cache-"));
+  t.after(async () => { assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep + "product-capacity-run-cache-")); await fs.rm(root, { recursive: true, force: true }); });
+  const current = { ...company, runIds: ["new"], manualCorrection: { lodgingBasisTotal: 16 } }, run = { id: "new", keyword: "지역숙소", collectedAt: "2026-09-07T00:00:00.000Z", checkIn: "2026-09-07", collectionQuality: { status: "complete" } };
+  const data = { rawCompanies: new Map([[current.companyId, current]]), companies: [{ companyId: current.companyId }], runs: [run],
+    _companySource: { revision: "unchanged-original-revision", assertCurrent: async () => {}, readCompany: async () => current } };
+  let evidence = [], warnings = [], loads = 0;
+  const helper = createMonthlyCompanyRecalculation({ ...coreDependencies(async id => { loads++; return { run: { id }, availability: { items: [{ placeId: "123", checkIn: run.checkIn, bookingRangeDays: 1,
+    weeklyProductDetails: [room("room", 7, { date: run.checkIn }), room("second", 2, { date: run.checkIn })] }] } }; }),
+    cacheDirectory: root, recalculateAllInventory: true, readPersistedProductCapacityEvidence: async () => ({ evidence, warnings }) });
+  const request = { type: "company", targetId: current.companyId, month: "2026-09", cutoffDate: "2026-09-30" };
+  assert.equal((await helper(request, data))[0].phoneMissingPriceBookings, 7); assert.equal(loads, 1);
+  evidence = [{ companyId: current.companyId, productId: "room", productType: "lodging", count: 14, collectedAt: "2026-05-01T00:00:00.000Z", runId: "old", source: "normal_saved_product_response" }];
+  assert.equal((await helper(request, data))[0].phoneRevenue, 700000); assert.equal(loads, 2, "a validated older maximum invalidates old run rows");
+  await helper(request, data); assert.equal(loads, 2, "unchanged effective maxima reuse the verified compact run rows");
+  evidence = [...evidence, { ...evidence[0], count: 18, collectedAt: "2026-09-25T00:00:00.000Z", runId: "future" }];
+  assert.equal((await helper(request, data))[0].phoneRevenue, 700000); assert.equal(loads, 2, "future maxima neither leak nor invalidate earlier as-of run rows");
+  evidence = []; warnings = [{ companyId: current.companyId, code: "PRODUCT_CAPACITY_CACHE_INVALID", message: "저장된 최대관측 근거 재검증 필요" }];
+  const fallback = await helper(request, data); assert.equal(loads, 3); assert.equal(fallback[0].phoneMissingPriceBookings, 7);
+  assert.equal(fallback[0].phoneRevenue, 0); assert.equal(fallback.productCapacityWarnings[0].code, "PRODUCT_CAPACITY_CACHE_INVALID", "an unpriced fallback is explicitly marked, never a confirmed zero");
 });

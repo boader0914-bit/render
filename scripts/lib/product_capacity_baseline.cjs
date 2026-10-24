@@ -3,6 +3,7 @@
 // Compact witnesses of normal product responses. No prices, inferred totals or
 // future observations become historical room-capacity evidence.
 const { observedProductCapacityEvidence: normalizedEvidence } = require("../inventory_estimation.cjs");
+const crypto = require("node:crypto");
 const instant = value => typeof value === "string" && /T.+(?:Z|[+-]\d{2}:\d{2})$/i.test(value) && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : "";
 function observedProductCapacityEvidence(item, company, { runId = "", collectedAt = "", verifiedDates = null, source = "normal_saved_product_response" } = {}) {
   const observedAt = instant(collectedAt);
@@ -50,8 +51,25 @@ function compactProductCapacityEvidence(evidence) {
   }
   return result;
 }
+function mergeProductCapacityBaselines(...inputs) {
+  const selected = new Map();
+  for (const input of inputs) for (const [id, value] of Object.entries(input || {})) {
+    const count = Number(value && typeof value === "object" ? value.count ?? value.capacity : value);
+    if (!id || !Number.isSafeInteger(count) || count <= 0) continue;
+    const prior = selected.get(id), priorCount = Number(prior && typeof prior === "object" ? prior.count ?? prior.capacity : prior);
+    if (!selected.has(id) || count > priorCount) selected.set(id, value && typeof value === "object" ? { ...value, count } : count);
+  }
+  return Object.fromEntries(selected);
+}
+function productCapacityEvidenceRevision(evidence, companyIds, asOf, warnings = []) {
+  const ids = [...new Set(companyIds || [])].sort();
+  const projected = ids.map(id => [id, productCapacityBaselineAt(evidence, id, asOf)]);
+  const relevantWarnings = warnings.filter(row => ids.includes(row.companyId)).map(row => [row.companyId, row.code]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  return crypto.createHash("sha256").update(JSON.stringify([projected, relevantWarnings])).digest("hex");
+}
 function withProductCapacityBaseline(item, company, evidence, asOf) {
   return { ...item, inventoryObservedAt: instant(asOf), inventoryCapacityBaseline: { ...(item.inventoryCapacityBaseline || {}),
     ...productCapacityBaselineAt(evidence, company.companyId, asOf) } };
 }
-module.exports = { observedProductCapacityEvidence, productCapacityBaselineAt, withProductCapacityBaseline, compactProductCapacityEvidence };
+module.exports = { observedProductCapacityEvidence, productCapacityBaselineAt, withProductCapacityBaseline, compactProductCapacityEvidence,
+  mergeProductCapacityBaselines, productCapacityEvidenceRevision };

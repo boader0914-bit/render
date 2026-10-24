@@ -5,6 +5,8 @@
 const fs = require("node:fs/promises"), native = require("node:fs"), path = require("node:path"), crypto = require("node:crypto"), readline = require("node:readline");
 const { industryCompanyReference } = require("./industry_analysis.cjs");
 const { readCompanyMasterProjection } = require("./company_master_stream.cjs");
+const { createProductCapacityStore, productCapacityCorrectionSignature } = require("./product_capacity_store.cjs");
+const { compactProductCapacityEvidence } = require("./product_capacity_baseline.cjs");
 const VERSION = "company-integrated-source-revision-v2";
 const LEGACY_VERSION = "company-integrated-source-revision-v1";
 const monthValid = value => /^\d{4}-(0[1-9]|1[0-2])$/.test(value || "");
@@ -23,6 +25,7 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
   if (observationIndex !== null && (typeof observationIndex.ensure !== "function" || typeof observationIndex.readLines !== "function")) throw new TypeError("A verified observation index is required");
   if (calculationFingerprint !== "" && !/^[a-f0-9]{64}$/.test(calculationFingerprint)) throw new TypeError("Invalid calculation fingerprint");
   const root = path.resolve(dataDir), output = path.resolve(outputsDir || path.join(root, "outputs")), indexFile = path.join(root, "company_integrated", "revision-index.json");
+  const productCapacityStore = createProductCapacityStore({ dataDir: root, outputsDir: output });
   const codeFiles = [...new Set([__filename, ...calculationFiles.map(file => path.resolve(file))])];
   const configuration = hash([includeContext, codeFiles, calculationFingerprint, observationIndex
     ? typeof observationIndex.revisionPartitions === "function" ? "observation-partitions" : "observation-lines" : "legacy-history"]);
@@ -65,6 +68,7 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
     for (let index = 0; index < codeFiles.length; index++) await file("engine/" + index, codeFiles[index]);
     await tree("runs", output, label => /\.(?:json|jsonl|csv|xlsx|md|html|png)$/i.test(label));
     await tree("recoveries", path.join(root, "history", "saved_product_recoveries"), label => label.endsWith(".json"));
+    await tree("product-capacity", productCapacityStore.directory, label => /^product-capacity\/[a-f0-9]{64}[.]json$/.test(label));
     await tree("calendar", path.join(root, "history", "special_days"), label => label.endsWith(".json"));
     if (includeContext) {
       await tree("tourism", path.join(root, "tourism_data", "cache"), label => label.endsWith(".json"));
@@ -148,7 +152,7 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
         ...(label === "regions" ? { value: await json(label, current, { units: [] }) } : {}) }; }
     }
     const units = (parts.regions?.value?.units || []).filter(unit => unit.active && unit.selectable && ["local", "broad"].includes(unit.level));
-    if (changed("master") || changed("regions") || parts.master?.projectionVersion !== 2) {
+    if (changed("master") || changed("regions") || parts.master?.projectionVersion !== 3) {
       const companies = {};
       const consumeCompany = company => {
         if (!company?.companyId || company.deletedAt || company.mergedIntoCompanyId) return;
@@ -172,6 +176,7 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
           inventory.latest?.runId, inventory.previousLatest?.runId, ...(inventory.snapshots || []).map(row => row?.runId),
           ...Object.values(company.keywords || {}).flatMap(exposure => (exposure.runs || []).map(row => row?.runId || row?.id))].filter(Boolean).map(String))].sort();
         companies[id] = { meta: hash(meta), regionKey: region?.regionKey || "", regionId: region?.regionId || region?.regionKey || "", aliases, places: meta.placeIds,
+          productCapacityCorrectionSignature: productCapacityCorrectionSignature(company),
           months: Object.fromEntries(Object.entries(months).map(([month, values]) => [month, hash(values)])), fallbackCounts, knownRuns,
           runs: Object.fromEntries(Object.entries(runs).map(([month, values]) => [month, [...new Set(values)].sort()])) };
       };
@@ -195,7 +200,7 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
       for (const id of conflictIds) for (const [month, count] of Object.entries(companies[id].fallbackCounts)) fallbackUnknown[month] = (fallbackUnknown[month] || 0) + count;
       const canonicalIds = new Map(Object.keys(companies).map(id => [token(id), id]));
       for (const [id, company] of Object.entries(companies)) for (const alias of company.aliases) canonicalIds.set(token(alias), id);
-      parts.master = { projectionVersion: 2, companies, identity: hash({ ids: [...canonicalIds].sort(), places: [...placeOwners].sort(), conflicts: [...conflictIds].sort() }), fallbackUnknown };
+      parts.master = { projectionVersion: 3, companies, identity: hash({ ids: [...canonicalIds].sort(), places: [...placeOwners].sort(), conflicts: [...conflictIds].sort() }), fallbackUnknown };
     }
     const ids = new Map(Object.keys(parts.master.companies).map(id => [token(id), id])), places = new Map(), conflicts = new Set();
     for (const [id, company] of Object.entries(parts.master.companies)) {
@@ -267,7 +272,7 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
     // original must invalidate this scope so that reader can reject it normally.
     parts.recoveryFiles ||= {};
     const recoveryLabels = Object.keys(current.metadata).filter(label => label.startsWith("recoveries/"));
-    for (const label of recoveryLabels) if (changed(label) || !parts.recoveryFiles[label]) {
+    for (const label of recoveryLabels) if (changed(label) || !parts.recoveryFiles[label]?.collectedAt) {
       const value = await json(label, current, null), match = label.match(/^recoveries\/([a-f0-9]{64})\/(\d{4}-(?:0[1-9]|1[0-2]))\/([a-f0-9]{64})[.]json$/);
       requireValid(match && value && !Array.isArray(value) && value.kind === "saved_product_recovery_v1"
         && typeof value.companyId === "string" && value.companyId.length > 0 && value.companyId.length <= 200
@@ -288,7 +293,8 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
       const { checksum, ...body } = value;
       const { receiptId, createdAt, ...identity } = body;
       requireValid(receiptId === match[3] && receiptId === hash(identity) && checksum === hash(body));
-      parts.recoveryFiles[label] = { companyId: value.companyId, month: value.month, runId: value.runId, digest: contentDigests[label] };
+      parts.recoveryFiles[label] = { companyId: value.companyId, month: value.month, runId: value.runId,
+        collectedAt: new Date(value.collectedAt).toISOString(), digest: contentDigests[label] };
     }
     for (const label of Object.keys(parts.recoveryFiles)) if (!recoveryLabels.includes(label)) delete parts.recoveryFiles[label];
     const recoveries = {};
@@ -316,17 +322,45 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
       for (const regionKey of entry.regions) (((context.monthly[regionKey] ||= {})[entry.month] ||= [])).push(entry.digest);
     }
     for (const [label, value] of Object.entries(contentDigests)) if (label.startsWith("calendar/")) { const year = label.match(/\d{4}/)?.[0]; if (year) (context.years[year] ||= []).push([label, value]); else context.unknown.push([label, value]); }
-    const companies = {}, runMetadataById = {};
+    const companies = {}, runMetadataById = {}, runStatMetadataById = {};
     for (const [label, value] of Object.entries(contentDigests)) if (label.startsWith("runs/")) (runMetadataById[label.split("/")[1]] ||= []).push([label, value]);
+    for (const [label, value] of Object.entries(current.metadata)) if (label.startsWith("runs/")) (runStatMetadataById[label.split("/")[1]] ||= []).push([label, value]);
+    parts.productCapacity ||= {};
+    const descriptors = new Map();
+    for (const [id, company] of Object.entries(parts.master.companies)) {
+      const label = "product-capacity/" + hash(id) + ".json";
+      if (!current.metadata[label]) { delete parts.productCapacity[id]; continue; }
+      let body;
+      try { const info = await stat(current.paths[label]); body = info && info.size <= 2n * 1024n * 1024n ? await json(label, current, null) : null; }
+      catch { body = null; }
+      const runIds = Array.isArray(body?.runs) ? [...new Set(body.runs.map(run => run?.id).filter(value => typeof value === "string"))].sort() : [];
+      const dependency = hash([contentDigests[label], company.productCapacityCorrectionSignature,
+        runIds.map(runId => [runId, (runStatMetadataById[runId] || []).sort()])]);
+      if (parts.productCapacity[id]?.dependency === dependency) continue;
+      const checked = await productCapacityStore.readWithSignature(id, company.productCapacityCorrectionSignature, descriptors);
+      // Only validated semantic evidence enters monthly revision tokens. The
+      // derived file's own sourceRevision/checksum/stat are deliberately not
+      // semantic inputs: writing an equivalent proof must not feed back into
+      // an endless recalculate/write/invalidate loop.
+      parts.productCapacity[id] = { dependency, correctionSignature: company.productCapacityCorrectionSignature,
+        evidence: compactProductCapacityEvidence(checked.evidence).map(row => ({ companyId: id, productId: row.productId,
+          productType: row.productType, count: row.count, collectedAt: row.collectedAt, sourceDate: row.sourceDate || "", runId: row.runId, source: row.source || "" })),
+        warning: checked.warning?.code || null };
+    }
+    for (const id of Object.keys(parts.productCapacity)) if (!parts.master.companies[id]) delete parts.productCapacity[id];
     parts.runCatalog ||= {};
     const knownRuns = [...new Set(Object.values(parts.master.companies).flatMap(company => company.knownRuns))];
     for (const id of knownRuns) {
       const metadata = (runMetadataById[id] || []).sort(), revision = hash(metadata);
-      if (parts.runCatalog[id]?.revision === revision) continue;
+      if (parts.runCatalog[id]?.revision === revision && Object.hasOwn(parts.runCatalog[id], "normalCapacityEligible")
+        && Object.hasOwn(parts.runCatalog[id], "collectedAt")) continue;
       const manifest = await json("runs/" + id + "/manifest.json", current, {}), start = monthOf(manifest.checkIn), observed = collectedMonth(manifest.collectedAt);
       const lower = [start, observed].filter(Boolean).sort().at(-1) || "", span = Number(manifest.bookingRangeDays);
       const last = start && Number.isSafeInteger(span) && span > 0 && span <= 366 ? new Date(Date.parse(manifest.checkIn + "T00:00:00Z") + (span - 1) * 86400000).toISOString().slice(0, 7) : "";
-      parts.runCatalog[id] = { revision, lower, upper: last, observed };
+      const quality = String(typeof manifest.collectionQuality === "string" ? manifest.collectionQuality : manifest.collectionQuality?.status || manifest.status || "unknown");
+      parts.runCatalog[id] = { id, revision, lower, upper: last, observed,
+        collectedAt: Number.isFinite(Date.parse(manifest.collectedAt)) ? new Date(manifest.collectedAt).toISOString() : "",
+        normalCapacityEligible: ["complete", "reused", "partial"].includes(quality) };
     }
     for (const id of Object.keys(parts.runCatalog)) if (!knownRuns.includes(id)) delete parts.runCatalog[id];
     for (const [id, company] of Object.entries(parts.master.companies)) {
@@ -336,7 +370,11 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
       for (const month of allMonths) { const recovered = recoveries[id]?.[month] || [], runIds = [...new Set([...(company.runs[month] || []), ...(parts.history.runRefs[id]?.[month] || []), ...recovered.map(entry => entry.runId)])].sort();
         const runMetadata = runIds.flatMap(runId => runMetadataById[runId] || []).sort();
         months[month] = hash([company.months[month] || null, parts.history.rows[id]?.[month] || null, runMetadata, ...(recovered.length ? [recovered] : [])]); }
-      companies[id] = { revision, months, regionKey: company.regionKey, runs: company.knownRuns.map(runId => parts.runCatalog[runId]) };
+      const capacityRecoveries = Object.values(recoveries[id] || {}).flat().map(entry => ({ runId: entry.runId, collectedAt: entry.collectedAt,
+        digest: entry.digest, runRevision: hash((runMetadataById[entry.runId] || []).sort()) }));
+      companies[id] = { revision, months, regionKey: company.regionKey, runs: company.knownRuns.map(runId => parts.runCatalog[runId]), capacityRecoveries,
+        productCapacity: parts.productCapacity[id] ? { correctionSignature: parts.productCapacity[id].correctionSignature,
+          evidence: parts.productCapacity[id].evidence, warning: parts.productCapacity[id].warning } : null };
     }
     const unknownMonths = { ...parts.history.unknown }; for (const [month, count] of Object.entries(parts.master.fallbackUnknown || {})) unknownMonths[month] = (unknownMonths[month] || 0) + count;
     const prepared = { version: VERSION, revision: hash([common, companies, context, unknownMonths]), companies, context, unknownMonths };
@@ -349,9 +387,21 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
     requireValid(prepared?.version === VERSION && prepared.companies && monthValid(month) && typeof companyId === "string");
     const company = prepared.companies[companyId]; requireValid(company && /^[a-f0-9]{64}$/.test(company.revision));
     const months = [month, previousMonth(month)], years = [...new Set(months.flatMap(value => [value.slice(0, 4), ...(value.endsWith("-12") ? [String(Number(value.slice(0, 4)) + 1)] : [])]))];
-    return hash([VERSION, calculationVersion, company.revision, months.map(value => [value, company.months[value] || null,
+    const monthEnd = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10);
+    const boundary = Date.parse(`${cutoffDate || monthEnd}T23:59:59.999+09:00`);
+    const priorCapacityRuns = company.runs.filter(run => run.normalCapacityEligible && run.collectedAt && Date.parse(run.collectedAt) <= boundary);
+    const priorCapacityRecoveries = (company.capacityRecoveries || []).filter(receipt => Date.parse(receipt.collectedAt) <= boundary);
+    const coveredCapacityRuns = new Set([...priorCapacityRuns.map(run => run.id), ...priorCapacityRecoveries.map(receipt => receipt.runId)]);
+    // A newly published cache is not a new observation. Raw inputs already
+    // covered above must not feed their own derived witnesses back into the
+    // source token and reject the first successful company calculation. Only
+    // retained witnesses outside bounded master/receipt references add a token.
+    const productEvidence = (company.productCapacity?.evidence || []).filter(row => Date.parse(row.collectedAt) <= boundary && !coveredCapacityRuns.has(row.runId));
+    const productCapacity = productEvidence.length || company.productCapacity?.warning ? [company.productCapacity.correctionSignature, productEvidence, company.productCapacity.warning] : null;
+    return hash([VERSION, calculationVersion, company.revision, priorCapacityRuns, priorCapacityRecoveries, productCapacity, months.map(value => [value, company.months[value] || null,
       prepared.unknownMonths[value] || 0, prepared.context.monthly[company.regionKey]?.[value] || null,
-      company.runs.filter(run => value === run.observed || (!run.lower || value >= run.lower) && (!run.upper || value <= run.upper))]), years.map(year => prepared.context.years[year] || null), cutoffDate]);
+      company.runs.filter(run => (!run.collectedAt || Date.parse(run.collectedAt) <= boundary)
+        && (value === run.observed || (!run.lower || value >= run.lower) && (!run.upper || value <= run.upper)))]), years.map(year => prepared.context.years[year] || null), cutoffDate]);
   }
   const prepare = () => { const task = chain.then(scan).catch(error => { throw error?.code?.startsWith("COMPANY_SOURCE_REVISION") ? error : fault("COMPANY_SOURCE_REVISION_UNAVAILABLE"); }); chain = task.catch(() => {}); return task; };
   const reader = async scope => forScope(await prepare(), scope); reader.prepare = prepare; reader.forScope = forScope; return reader;

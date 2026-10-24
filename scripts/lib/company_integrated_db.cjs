@@ -128,6 +128,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
   const indexPath = id => path.join(directory, digest(id), "index.json");
   const monthPath = (id, month) => path.join(directory, digest(id), `${month}.json`);
   const reuseProofPath = (id, month) => path.join(directory, digest(id), `${month}.reuse-proof.json`);
+  const refreshProofPath = (id, month) => path.join(directory, digest(id), `${month}.refresh-proof.json`);
   function locked(fn) {
     const result = serial.then(fn);
     serial = result.catch(() => {});
@@ -240,6 +241,45 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
       calculationVersion, cutoffDate, monthClosed: value.snapshot.period.monthClosed,
       metadataRevision: value.metadataRevision, verifiedAt: current().toISOString() };
     return { ...proof, proofDigest: digest(proof) };
+  }
+  function refreshedMonthProof(companyId, month, calculated, generation) {
+    const value = calculated.value;
+    // A source-revision provider is required to revalidate this limited scope
+    // cheaply. Without one the normal company-job state remains authoritative.
+    if (!readRevision || !calculated.sourceRevision || !value?.sourceRevision || !value.cacheDigest
+      || !validStored(value, companyId, month) || generation !== null && !Number.isSafeInteger(generation)) return null;
+    const proof = { schemaVersion: SCHEMA_VERSION, kind: "verified_company_month_refresh", companyId, month,
+      calculationVersion, sourceRevision: calculated.sourceRevision, storedSourceRevision: value.sourceRevision,
+      cacheDigest: value.cacheDigest, sourceDigest: value.sourceDigest, metadataRevision: value.metadataRevision,
+      cutoffDate: value.cutoffDate, monthClosed: value.snapshot.period.monthClosed, calculatedAt: value.calculatedAt,
+      generation, bootstrapFailureGeneration: state.bootstrap?.failureGeneration || 0, verifiedAt: current().toISOString() };
+    return { ...proof, proofDigest: digest(proof) };
+  }
+  async function verifiedRefreshedMonth(value, companyId, month, metadata) {
+    if (!readRevision || !value?.sourceRevision || !value.cacheDigest) return null;
+    let proof;
+    try { proof = await readJson(refreshProofPath(companyId, month), null); }
+    catch { return null; }
+    if (!proof || typeof proof !== "object" || Array.isArray(proof)) return null;
+    const { proofDigest, ...content } = proof;
+    const generation = state.jobs[companyId]?.generation ?? null;
+    if (!proofDigest || proofDigest !== digest(content) || proof.schemaVersion !== SCHEMA_VERSION
+      || proof.kind !== "verified_company_month_refresh" || proof.companyId !== companyId || proof.month !== month
+      || proof.calculationVersion !== calculationVersion || proof.generation !== generation
+      || proof.bootstrapFailureGeneration !== (state.bootstrap?.failureGeneration || 0)
+      || proof.storedSourceRevision !== value.sourceRevision || proof.cacheDigest !== value.cacheDigest
+      || proof.sourceDigest !== value.sourceDigest || proof.metadataRevision !== value.metadataRevision
+      || proof.cutoffDate !== value.cutoffDate || proof.monthClosed !== value.snapshot.period.monthClosed
+      || proof.calculatedAt !== value.calculatedAt || !Number.isFinite(Date.parse(proof.verifiedAt))
+      || Date.parse(proof.verifiedAt) > current().getTime()
+      || !matchingStoredInputs(value, companyId, month, cutoffFor(month, current()), metadata)) return null;
+    const revision = await revisionFor(companyId, month, value.cutoffDate);
+    if (revision !== proof.sourceRevision || !await reusable(value, companyId, month, value.cutoffDate, revision, metadata)) return null;
+    // Queueing new evidence, a new failed startup audit, or a failed shared
+    // store invalidates the certificate even while its source read is pending.
+    if ((state.jobs[companyId]?.generation ?? null) !== generation
+      || proof.bootstrapFailureGeneration !== (state.bootstrap?.failureGeneration || 0) || storeError) return null;
+    return proof;
   }
   async function activeCompany(companyId) {
     const data = await catalog();
@@ -402,7 +442,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     if (reuseProof) return { value: previous, changed: false, sourceRevision, reuseProof };
     return { changed: true, sourceRevision, value };
   }
-  async function publishMonth(companyId, month, calculated, generation) {
+  async function publishMonth(companyId, month, calculated, generation, certifyRefresh = false) {
     // The scheduler serializes analytical readers, while the publication lock
     // serializes queue writers. Recheck the generation inside that lock.
     if (readRevision) {
@@ -423,6 +463,12 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
         ...index, months: monthsOf([...index.months, month]), updatedAt: current().toISOString(), calculationVersion });
       if (calculated.reuseProof) await atomicJson(reuseProofPath(companyId, month), calculated.reuseProof);
       if (calculated.changed) await atomicJson(monthPath(companyId, month), calculated.value);
+      // Keep this selected-month success separate from the company's pending
+      // work. It cannot complete, reorder or remove any queue generation.
+      if (certifyRefresh) {
+        const proof = refreshedMonthProof(companyId, month, calculated, generation);
+        if (proof) await atomicJson(refreshProofPath(companyId, month), proof);
+      }
       return true;
     });
   }
@@ -436,7 +482,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
       const generation = await locked(() => state.jobs[companyId]?.generation ?? null);
       const metadata = await activeCompany(companyId), prepared = await prepareRevision();
       const calculated = await materialize(companyId, month, metadata, undefined, true, "foreground", prepared, true);
-      if (!await publishMonth(companyId, month, calculated, generation)) throw fault("COMPANY_INTEGRATION_GENERATION_CHANGED");
+      if (!await publishMonth(companyId, month, calculated, generation, true)) throw fault("COMPANY_INTEGRATION_GENERATION_CHANGED");
       return { companyId, month, status: "ready", changed: calculated.changed, calculatedAt: calculated.value.calculatedAt,
         calculationVersion, sourceRevision: calculated.sourceRevision || null, snapshot: calculated.value.snapshot };
     }, { priority: "foreground", kind: "company-month-repair" }));
@@ -559,17 +605,28 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     const recoveredRevision = Boolean(state.bootstrap?.errorCode && readRevision
       && stateJob?.verifiedBootstrapFailure === state.bootstrap.failureGeneration && stateJob.verifiedMonths?.includes(selectedMonth));
     const bootstrapError = recoveredRevision ? null : state.bootstrap?.errorCode;
+    // Only a freshly repaired, unchanged month may be ready while a different
+    // month is still pending/failed. Ordinary ready/idle reads add no revision
+    // request or raw-inventory read to their existing fast path.
+    let refreshedProof = null, selectedVerificationError = null;
+    if (selected && !needsRefresh && cutoffDate === undefined && !storeError
+      && (["queued", "processing", "failed"].includes(stateJob?.status) || bootstrapError)) {
+      try { refreshedProof = await verifiedRefreshedMonth(selected, companyId, selectedMonth, metadata); }
+      catch (error) { selectedVerificationError = safeCode(error); }
+    }
+    const selectedReady = Boolean(refreshedProof && !selectedVerificationError);
     return { schemaVersion: SCHEMA_VERSION, companyId, calculationVersion, calculatedAt: selected?.calculatedAt || null,
       sourceRevision: selected?.sourceRevision || null,
-      status: stateJob?.status === "failed" || storeError || bootstrapError ? "failed" : ["queued", "processing"].includes(stateJob?.status) ? "refreshing" : selected ? "ready" : "pending",
-      errorCode: storeError || stateJob?.errorCode || bootstrapError || null, selectedMonth, months: rows, snapshot: selected?.snapshot || null,
+      status: storeError || selectedVerificationError ? "failed" : selectedReady ? "ready" : stateJob?.status === "failed" || bootstrapError ? "failed" : ["queued", "processing"].includes(stateJob?.status) ? "refreshing" : selected ? "ready" : "pending",
+      errorCode: storeError || selectedVerificationError || (selectedReady ? null : stateJob?.errorCode || bootstrapError || null), selectedMonth, months: rows, snapshot: selected?.snapshot || null,
       keywords, roomBasis: { ...selectedRoomBasis, capacity: selectedRoomBasis?.capacity ?? selectedRoomBasis?.count ?? basis?.capacity ?? metadata.company.capacity ?? null,
         source: selectedRoomBasis?.source || basis?.capacitySource || metadata.company.capacitySource || "unknown",
         label: selectedRoomBasis?.label || basis?.capacitySource || metadata.company.capacitySource || "객실 기준 확인 필요",
         warnings: [...new Set([...(selectedRoomBasis?.warnings || []), ...(selected?.snapshot.quality?.warnings || []).filter(warning => /객실|재고|총량|수량/.test(warning))])] },
       latestAttempts: selected?.latestAttempts || [], failedAttempts: selected?.failedAttempts || [],
       freshness: { lastCalculatedAt: selected?.calculatedAt || null, refreshStatus: stateJob?.status || "idle", lastRefreshError: stateJob?.errorCode || bootstrapError || null,
-        revisionCheckStatus: recoveredRevision ? "verified" : state.bootstrap?.status || "not_checked", revisionCheckedAt: recoveredRevision ? stateJob.finishedAt : state.bootstrap?.checkedAt || null },
+        revisionCheckStatus: selectedReady || recoveredRevision ? "verified" : state.bootstrap?.status || "not_checked", revisionCheckedAt: selectedReady ? refreshedProof.verifiedAt : recoveredRevision ? stateJob.finishedAt : state.bootstrap?.checkedAt || null,
+        selectedMonthVerified: selectedReady, selectedMonthVerificationError: selectedVerificationError },
       sourcePolicy: "원본 보존 · 업체 고유번호 통합 · 최신 유효 관측 · 미관측은 결측 · 월간 리포트 공통 계산" };
   }
   async function stop() { stopped = true; wakeDispatchWaiters(); if (bootstrapPromise) await bootstrapPromise.catch(() => {}); if (workerPromise) await workerPromise; await serial; }

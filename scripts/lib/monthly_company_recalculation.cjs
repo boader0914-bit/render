@@ -1,7 +1,7 @@
 "use strict";
 
 const { createMonthlyReportMaterializedCache } = require("./monthly_report_materialized_cache.cjs");
-const { observedProductCapacityEvidence, withProductCapacityBaseline } = require("./product_capacity_baseline.cjs");
+const { observedProductCapacityEvidence, withProductCapacityBaseline, productCapacityEvidenceRevision } = require("./product_capacity_baseline.cjs");
 
 const READ_ONLY_RUN_OPTIONS = Object.freeze({
   skipCompanyMaster: true,
@@ -75,11 +75,12 @@ function inScope(request, company, catalogCompany, runs) {
 
 function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrection, companyProductAvailabilityMatch, buildHistoryObservations,
   cacheDirectory = null, cacheVersion = "monthly-company-recalculation-v1", maxCachedRunBytes = 6 * 1024 * 1024, projectCorrectionCompany = null, useSourceReadValidationBoundary = false,
-  recalculateAllInventory = false, readProductCapacityEvidence = null }) {
+  recalculateAllInventory = false, readProductCapacityEvidence = null, readPersistedProductCapacityEvidence = null }) {
   if ([loadRun, applyCompanyManualCorrection, companyProductAvailabilityMatch, buildHistoryObservations].some(fn => typeof fn !== "function")) throw new TypeError("Monthly recalculation dependencies are required");
   if (projectCorrectionCompany !== null && typeof projectCorrectionCompany !== "function") throw new TypeError("An optional correction-company projection must be a function");
   if (typeof useSourceReadValidationBoundary !== "boolean") throw new TypeError("Source-read validation opt-in must be boolean");
   if (typeof recalculateAllInventory !== "boolean" || readProductCapacityEvidence !== null && typeof readProductCapacityEvidence !== "function") throw new TypeError("Invalid product-capacity reconstruction options");
+  if (readPersistedProductCapacityEvidence !== null && typeof readPersistedProductCapacityEvidence !== "function") throw new TypeError("Invalid persisted product-capacity reader");
   if (!Number.isSafeInteger(maxCachedRunBytes) || maxCachedRunBytes < 128 || maxCachedRunBytes > 6 * 1024 * 1024) throw new TypeError("Invalid compact run row budget");
   const cache = cacheDirectory ? createMonthlyReportMaterializedCache({ directory: cacheDirectory,
     maxEntries: 256, maxBytes: 64 * 1024 * 1024, maxEntryBytes: 8 * 1024 * 1024 }) : null;
@@ -108,7 +109,7 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
       || typeof company.companyId !== "string" || !company.companyId || company.companyId !== reference.companyId) throw unavailable();
     return company;
   }
-  function correctedRows(stored, originalRun, company, productCapacityEvidence = []) {
+  function correctedRows(stored, originalRun, company, productCapacityEvidence = [], productCapacityWarnings = []) {
     if (["blocked", "failed", "interrupted"].includes(quality(stored.run))) return [];
     const id = String(originalRun.id || originalRun.runId || "");
     const run = { ...stored.run, id, collectedAt: originalRun.collectedAt,
@@ -118,8 +119,9 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
     if (matches.length > 1) throw unavailable();
     if (!matches.length) return [];
     const sourceItem = copy(matches[0]);
-    const item = applyCompanyManualCorrection(recalculateAllInventory
-      ? withProductCapacityBaseline(sourceItem, company, productCapacityEvidence, run.collectedAt) : sourceItem, copy(company));
+    const projected = recalculateAllInventory ? withProductCapacityBaseline(sourceItem, company, productCapacityEvidence, run.collectedAt) : sourceItem;
+    if (recalculateAllInventory && productCapacityWarnings.some(row => row.companyId === company.companyId)) projected.inventoryCapacityBaseline.productCapacityWarnings = productCapacityWarnings.filter(row => row.companyId === company.companyId);
+    const item = applyCompanyManualCorrection(projected, copy(company));
     if (!(Number(item?.inventoryEvidence?.version) >= 4)) return [];
     const rows = buildHistoryObservations({ run, availability: { items: [{ ...item, companyId: company.companyId }] } }, run.collectedAt);
     if (!Array.isArray(rows)) throw unavailable();
@@ -129,10 +131,11 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
     }).map(row => ({ ...row, companyId: company.companyId, companyKey: company.companyId, companyName: company.primaryName,
       runId: id, collectedAt: run.collectedAt, collectedDate: day, keyword: run.keyword, stayDate: dayKey(row.stayDate || row.date), readOnlyRecalculated: true }));
   }
-  async function cachedRunRows(id, originalRun, data, capacityCompanies, checkpoint, sourceReadValidationBoundary, productCapacityEvidence = [], targetCompanyIds = null) {
+  async function cachedRunRows(id, originalRun, data, capacityCompanies, checkpoint, sourceReadValidationBoundary, productCapacityEvidence = [], targetCompanyIds = null, productCapacityWarnings = []) {
     const owner = data._companySource;
     const targetKey = recalculateAllInventory ? [...targetCompanyIds].sort() : null;
-    const scopeKey = JSON.stringify([cacheVersion, owner.revision, id, targetKey]);
+    const capacityRevision = recalculateAllInventory ? productCapacityEvidenceRevision(productCapacityEvidence, targetKey, originalRun.collectedAt, productCapacityWarnings) : null;
+    const scopeKey = JSON.stringify([cacheVersion, owner.revision, id, targetKey, capacityRevision]);
     if (oversized.has(scopeKey)) return null;
     const readRevision = async () => {
       if (sourceReadValidationBoundary) {
@@ -146,7 +149,7 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
       return owner.revision;
     };
     let result;
-    try { result = await cache.getOrBuild({ key: JSON.stringify([cacheVersion, id, targetKey]), readRevision, build: async () => {
+    try { result = await cache.getOrBuild({ key: JSON.stringify([cacheVersion, id, targetKey, capacityRevision]), readRevision, build: async () => {
       metrics.runRowBuilds++;
       // A run contains several companies. Parse its saved product response only
       // once, publish bounded corrected observation rows, then release it. Never
@@ -162,7 +165,7 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
         try {
           const matches = stored.availability.items.filter(item => companyProductAvailabilityMatch(company, item));
           const evidence = recalculateAllInventory && matches.length === 1 ? observedProductCapacityEvidence(matches[0], company, { runId: id, collectedAt: originalRun.collectedAt }) : [];
-          entry = { companyId: company.companyId, rows: correctedRows(stored, originalRun, company, [...productCapacityEvidence, ...evidence]),
+          entry = { companyId: company.companyId, rows: correctedRows(stored, originalRun, company, [...productCapacityEvidence, ...evidence], productCapacityWarnings),
             ...(recalculateAllInventory ? { productCapacityEvidence: evidence } : {}) };
         } catch {
           // An unrelated ambiguous company's saved evidence must not fail a
@@ -206,11 +209,12 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
         && (recalculateAllInventory || !collectionEndsBeforeMonth(run, monthStart));
     }).map(run => [String(run.id || run.runId || ""), run]));
     const catalogCompanies = new Map((data.companies || []).map(company => [company.companyId, company]));
-    const targetsByRun = new Map();
+    const targetsByRun = new Map(), scopedCompanies = [];
     for (const company of capacityCompanies) {
       await checkpoint();
       if (!company?.companyId || company.deletedAt || company.mergedIntoCompanyId || (!recalculateAllInventory && !hasInventoryCorrection(company))
         || !inScope(request, company, catalogCompanies.get(company.companyId), eligibleRuns)) continue;
+      scopedCompanies.push(company);
       for (const id of companyRunIds(company)) {
         const run = eligibleRuns.get(id);
         if (!run || (!recalculateAllInventory && request.type === "keyword" && run.keyword !== request.targetId)) continue;
@@ -218,9 +222,14 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
         targetsByRun.get(id).push(company);
       }
     }
-    const scopedCompanyIds = [...new Set([...targetsByRun.values()].flatMap(companies => companies.map(company => company.companyId)))];
+    const scopedCompanyIds = scopedCompanies.map(company => company.companyId);
     const result = [], productCapacityEvidence = readProductCapacityEvidence ? await readProductCapacityEvidence(request, data, { companyIds: scopedCompanyIds }) : [];
     if (!Array.isArray(productCapacityEvidence)) throw unavailable();
+    const persisted = readPersistedProductCapacityEvidence ? await readPersistedProductCapacityEvidence(scopedCompanies) : { evidence: [], warnings: [] };
+    if (!Array.isArray(persisted?.evidence) || !Array.isArray(persisted?.warnings)
+      || persisted.evidence.some(row => !scopedCompanyIds.includes(row?.companyId)) || persisted.warnings.some(row => !scopedCompanyIds.includes(row?.companyId))) throw unavailable();
+    productCapacityEvidence.push(...persisted.evidence);
+    const productCapacityWarnings = persisted.warnings;
     const orderedTargets = recalculateAllInventory ? [...targetsByRun].sort(([a], [b]) => Date.parse(eligibleRuns.get(a).collectedAt) - Date.parse(eligibleRuns.get(b).collectedAt) || a.localeCompare(b)) : targetsByRun;
     for (const [id, companies] of orderedTargets) {
       await checkpoint();
@@ -230,7 +239,7 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
       // those rows can evict useful entries and repeat fsync/serialization.
       const useCache = request.type === "company" && cache && typeof data._companySource?.assertCurrent === "function"
         && typeof data._companySource?.readCompany === "function" && typeof data._companySource.revision === "string";
-      const cached = useCache ? await cachedRunRows(id, originalRun, data, capacityCompanies, checkpoint, boundary, productCapacityEvidence, new Set(companies.map(company => company.companyId))) : null;
+      const cached = useCache ? await cachedRunRows(id, originalRun, data, capacityCompanies, checkpoint, boundary, productCapacityEvidence, new Set(companies.map(company => company.companyId)), productCapacityWarnings) : null;
       const stored = cached ? null : await loadStored(id, capacityCompanies);
       for (const company of companies) {
         await checkpoint();
@@ -245,14 +254,19 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
           if (matches.length === 1) evidence = observedProductCapacityEvidence(matches[0], correctedCompany, { runId: id, collectedAt: originalRun.collectedAt });
         }
         productCapacityEvidence.push(...evidence);
-        const rows = cached ? entry.rows : correctedRows(stored, originalRun, correctedCompany, productCapacityEvidence);
+        const rows = cached ? entry.rows : correctedRows(stored, originalRun, correctedCompany, productCapacityEvidence, productCapacityWarnings);
         for (const row of rows) {
           const stayDate = dayKey(row?.stayDate || row?.date);
           if (stayDate >= monthStart && stayDate <= monthEnd && (request.type !== "keyword" || row.keyword === request.targetId)) result.push(row);
         }
       }
     }
-    if (recalculateAllInventory) Object.defineProperty(result, "productCapacityEvidence", { value: productCapacityEvidence, enumerable: false });
+    if (recalculateAllInventory) {
+      Object.defineProperty(result, "productCapacityEvidence", { value: productCapacityEvidence, enumerable: false });
+      Object.defineProperty(result, "productCapacityWarnings", { value: productCapacityWarnings, enumerable: false });
+      Object.defineProperty(result, "productCapacityEvidenceRevision", { value: productCapacityEvidenceRevision(productCapacityEvidence, scopedCompanyIds,
+        new Date(Date.parse(`${cutoff}T23:59:59.999+09:00`)).toISOString(), productCapacityWarnings), enumerable: false });
+    }
     return result;
   }
   recalculateCompanyObservations.stats = () => ({ ...metrics });

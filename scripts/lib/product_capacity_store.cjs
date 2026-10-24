@@ -38,19 +38,19 @@ function createProductCapacityStore({ dataDir, outputsDir = path.join(dataDir, "
     need(files.some(([name]) => name === "manifest.json"), "PRODUCT_CAPACITY_SOURCE_INVALID");
     return hash(files);
   }
-  async function read(company, descriptors = new Map()) {
+  async function readWithSignature(companyId, signature, descriptors = new Map()) {
     let cacheFound = false;
     try {
-      const file = filename(company.companyId), before = await fs.lstat(file, { bigint: true });
+      const file = filename(companyId), before = await fs.lstat(file, { bigint: true });
       cacheFound = true;
       need(before.isFile() && !before.isSymbolicLink() && before.size <= BigInt(maxBytes));
       const bytes = await fs.readFile(file), after = await fs.lstat(file, { bigint: true });
       need(stamp(before) === stamp(after));
       const value = JSON.parse(bytes), { checksum, ...body } = value;
-      need(body.schemaVersion === 1 && body.companyId === company.companyId && body.correctionSignature === correctionSignature(company)
+      need(body.schemaVersion === 1 && body.companyId === companyId && body.correctionSignature === signature
         && checksum === hash(body) && typeof body.sourceRevision === "string" && body.sourceRevision
         && Array.isArray(body.evidence) && body.evidence.length <= maxEvidence && Array.isArray(body.runs));
-      need(body.evidence.every(row => row.companyId === company.companyId && /^[A-Za-z0-9_-]{1,160}$/.test(row.productId || "")
+      need(body.evidence.every(row => row.companyId === companyId && /^[A-Za-z0-9_-]{1,160}$/.test(row.productId || "")
         && Number.isSafeInteger(row.count) && row.count > 0 && ["lodging", "dayuse"].includes(row.productType)
         && Number.isFinite(Date.parse(row.collectedAt)) && body.runs.some(run => run.id === row.runId)));
       for (const run of body.runs) {
@@ -62,6 +62,19 @@ function createProductCapacityStore({ dataDir, outputsDir = path.join(dataDir, "
       return { evidence: [], warning: error.code === "ENOENT" && !cacheFound ? null : { code: error.code === "ENOENT" ? "PRODUCT_CAPACITY_SOURCE_UNAVAILABLE" : error.code || "PRODUCT_CAPACITY_CACHE_INVALID",
         message: "저장된 상품별 최대관측 근거를 재검증하지 못해 이번 원본 응답으로 계산했습니다." } };
     }
+  }
+  const read = (company, descriptors = new Map()) => readWithSignature(company.companyId, correctionSignature(company), descriptors);
+  async function readForCompanies(companies) {
+    need(Array.isArray(companies));
+    const descriptors = new Map(), evidence = [], warnings = [];
+    const seen = new Set();
+    for (const company of companies) {
+      need(company?.companyId && !seen.has(company.companyId)); seen.add(company.companyId);
+      const saved = await read(company, descriptors);
+      evidence.push(...saved.evidence);
+      if (saved.warning) warnings.push({ companyId: company.companyId, ...saved.warning });
+    }
+    return { evidence, warnings, revision: hash([compactProductCapacityEvidence(evidence), warnings.map(row => [row.companyId, row.code])]) };
   }
   async function publishOwned(evidence, { companies, sourceRevision, assertCurrent } = {}) {
     need(companies instanceof Map && typeof sourceRevision === "string" && sourceRevision && typeof assertCurrent === "function");
@@ -101,7 +114,7 @@ function createProductCapacityStore({ dataDir, outputsDir = path.join(dataDir, "
     }
     return { companies: pending.length };
   }
-  return { read, publish(evidence, context) {
+  return { read, readForCompanies, readWithSignature, publish(evidence, context) {
     const task = serial.then(() => publishOwned(evidence, context));
     serial = task.then(() => undefined, () => undefined); return task;
   }, directory };

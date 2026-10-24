@@ -14,7 +14,7 @@ const { buildPolicyDocument } = require("./public_policy_content.cjs");
 const { applyInventoryEvidence, buildCapacityReview, buildStoredCapacityReview } = require("./inventory_estimation.cjs");
 const { collectionCapacityCoverageForBusiness } = require("./lib/collection_capacity_coverage.cjs");
 const { sanitizeProductStockCorrections } = require("./lib/inventory_manual_corrections.cjs");
-const { observedProductCapacityEvidence, productCapacityBaselineAt, compactProductCapacityEvidence } = require("./lib/product_capacity_baseline.cjs");
+const { observedProductCapacityEvidence, productCapacityBaselineAt, compactProductCapacityEvidence, mergeProductCapacityBaselines } = require("./lib/product_capacity_baseline.cjs");
 const { createProductCapacityStore, productCapacityCorrectionSignature } = require("./lib/product_capacity_store.cjs");
 const { otaProviderFromUrl } = require("./naver_place_ota_observation.cjs");
 const { createCollector: createTourismCollector } = require("./tourism_collector.cjs");
@@ -601,6 +601,7 @@ const recalculateMonthlyCompanyObservations = createMonthlyCompanyRecalculation(
   loadRun, applyCompanyManualCorrection, companyProductAvailabilityMatch, buildHistoryObservations,
   recalculateAllInventory: true,
   readProductCapacityEvidence: (request, data, options) => savedProductRecovery.capacityEvidence(request, data, options),
+  readPersistedProductCapacityEvidence: companies => productCapacityStore.readForCompanies(companies),
   // This application's correction callbacks need provider identities, the
   // complete manual review and the exact maximum-capacity witness only.
   projectCorrectionCompany: compactMonthlyCapacityCompany,
@@ -16288,8 +16289,8 @@ function withCompanyInventoryCapacityRecord(item = {}, company = {}) {
     const evidence = [...(company._productCapacityEvidence || []), ...[company.inventory?.latest, company.inventory?.previousLatest, ...(company.inventory?.snapshots || [])]
       .filter(snapshot => snapshot?.productSnapshot?.productCapacityCorrectionSignature === signature).flatMap(snapshot => snapshot.productSnapshot?.productCapacityEvidence || [])];
     const products = productCapacityBaselineAt(evidence, company.companyId, item.inventoryObservedAt || "");
-    baseline.lodgingProducts = { ...products.lodgingProducts, ...(baseline.lodgingProducts || {}) };
-    baseline.dayUseProducts = { ...products.dayUseProducts, ...(baseline.dayUseProducts || {}) };
+    baseline.lodgingProducts = mergeProductCapacityBaselines(products.lodgingProducts, baseline.lodgingProducts || {});
+    baseline.dayUseProducts = mergeProductCapacityBaselines(products.dayUseProducts, baseline.dayUseProducts || {});
     if (company._productCapacityWarnings?.length) baseline.productCapacityWarnings = company._productCapacityWarnings;
   }
   // Always resolve against the current DB, including a reduced or cleared value.
@@ -19756,6 +19757,55 @@ async function route(req, res) {
           }
           // Reconstruction invokes the normal saved-receipt reader, including
           // original SHA verification and current room-review corrections.
+          const refreshed = await companyIntegratedDb.refreshMonth(companyId, { month: payload.month });
+          const { snapshot, ...result } = refreshed;
+          results.push({ ...result, quality: snapshot.quality, summary: snapshot.summary,
+            backgroundStatus: (await companyIntegratedDb.status()).jobs.find(job => job.companyId === companyId)?.status || "idle" });
+        } catch (error) {
+          results.push({ companyId, month: payload.month, status: "failed",
+            errorCode: /^[A-Za-z0-9_:-]{1,100}$/.test(String(error?.code || "")) ? error.code : "COMPANY_INTEGRATION_FAILED" });
+        }
+      }
+      return send(res, 200, { month: payload.month, collectionExecuted: false, results,
+        counts: results.reduce((counts, result) => { counts[result.status] = (counts[result.status] || 0) + 1; return counts; }, {}) });
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/company-master/recalculate-saved-month") {
+      if (!requireAdminSession(session, req, res)) return;
+      let origin; try { origin = new URL(String(req.headers.origin || "")); } catch {}
+      const protocol = req.socket.encrypted || String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https" ? "https:" : "http:";
+      if (!origin || origin.host !== req.headers.host || origin.protocol !== protocol) {
+        return send(res, 403, { error: "현재 데이터랩 화면에서 요청해 주세요." });
+      }
+      if (!/^application\/json(?:\s*;|$)/i.test(req.headers["content-type"] || "")) return send(res, 415, { error: "JSON 형식으로 입력해 주세요." });
+      let payload;
+      try { payload = await parseJsonBody(req); }
+      catch { return send(res, 400, { code: "SAVED_MONTH_RECALCULATION_INVALID_REQUEST", error: "재계산할 업체와 숙박월을 확인해 주세요." }); }
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)
+        || payload.confirm !== "recalculate-saved-month" || Object.keys(payload).some(key => !["confirm", "month", "companyIds"].includes(key))
+        || !/^20\d{2}-(0[1-9]|1[0-2])$/.test(payload.month || "") || !Array.isArray(payload.companyIds)
+        || payload.companyIds.length < 1 || payload.companyIds.length > 10 || new Set(payload.companyIds).size !== payload.companyIds.length
+        || payload.companyIds.some(id => typeof id !== "string" || !/^cmp_[a-zA-Z0-9_-]{1,150}$/.test(id))) {
+        return send(res, 400, { code: "SAVED_MONTH_RECALCULATION_INVALID_REQUEST", error: "재계산할 업체와 숙박월을 확인해 주세요." });
+      }
+      // This derives one company/month from saved normal responses and any
+      // certified legacy sources. It never collects, creates recovery receipts,
+      // edits reviews, changes schedules or replaces an issued report.
+      const activeIds = await (async () => {
+        const data = await monthlyReportSources.catalog();
+        return new Set(data.companies.filter(company => {
+          const raw = data.rawCompanies instanceof Map ? data.rawCompanies.get(company.companyId) : data.rawCompanies?.[company.companyId];
+          return !company.deletedAt && !company.mergedIntoCompanyId && !raw?.deletedAt && !raw?.mergedIntoCompanyId;
+        }).map(company => company.companyId));
+      })();
+      const results = [];
+      for (const companyId of payload.companyIds) {
+        try {
+          if (!activeIds.has(companyId)) {
+            results.push({ companyId, month: payload.month, status: "failed", errorCode: "company_not_found" }); continue;
+          }
+          // Each foreground repair owns its scheduler slot. Do not wrap this
+          // batch in another analytical slot or mutate the background queue.
           const refreshed = await companyIntegratedDb.refreshMonth(companyId, { month: payload.month });
           const { snapshot, ...result } = refreshed;
           results.push({ ...result, quality: snapshot.quality, summary: snapshot.summary,

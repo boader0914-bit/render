@@ -347,7 +347,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     // This optional hook must only read saved collection evidence: never collect
     // again or refresh an external API. Current calculations replace the same
     // company/run/product/date row, while report quality and time gates remain.
-    let productCapacityEvidence = [];
+    let productCapacityEvidence = [], productCapacityWarnings = [], productCapacityEvidenceRevision = null;
     if (recalculateCompanyObservations !== null) {
       try {
         await checkpoint();
@@ -355,6 +355,8 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
           ...(sourceReadValidationBoundary ? { sourceReadValidationBoundary } : {}) });
         if (!Array.isArray(recalculated) || recalculated.some(row => !row || typeof row !== "object" || Array.isArray(row))) throw sourceError();
         if (Array.isArray(recalculated.productCapacityEvidence)) productCapacityEvidence = recalculated.productCapacityEvidence;
+        if (Array.isArray(recalculated.productCapacityWarnings)) productCapacityWarnings = recalculated.productCapacityWarnings;
+        if (/^[a-f0-9]{64}$/.test(recalculated.productCapacityEvidenceRevision || "")) productCapacityEvidenceRevision = recalculated.productCapacityEvidenceRevision;
         for (let index = 0; index < recalculated.length; index++) {
           if (index % 256 === 0) await checkpoint();
           addRow(recalculated[index]);
@@ -377,7 +379,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
         : company.regionKey === request.targetId || company.regionKeys.includes(request.targetId))).map(company => company.companyId));
     const unmatchedCompanyRows = unmatchedRows.reduce((count, row) => count + (scopeIds.has(row.candidateId) ? row.count || 1 : 0), 0);
     const duplicatePlaceCompanies = [...conflictingCompanyIds].filter(id => scopeIds.has(id)).length;
-    const warnings = [...recoveryWarnings], globalWarnings = [];
+    const warnings = [...recoveryWarnings, ...new Set(productCapacityWarnings.map(row => row.message).filter(value => typeof value === "string"))], globalWarnings = [];
     if (unmatchedCompanyRows) warnings.push(`리포트 대상에서 업체 고유번호를 확정하지 못한 관측 ${unmatchedCompanyRows}건을 제외했습니다.`);
     if (duplicatePlaceCompanies) warnings.push(`리포트 대상 중 플레이스 번호가 중복 연결된 업체 DB ${duplicatePlaceCompanies}개는 합산에서 제외했습니다. DB 중복 검토가 필요합니다.`);
     const globalUnmatchedCompanyRows = unmatchedRows.reduce((count, row) => count + (row.count || 1), 0) - unmatchedCompanyRows;
@@ -412,6 +414,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
       }
     }
     const source = { companies: data.companies, regions: data.regions, runs: data.runs, observations: [...observations.values()], savedProductRecoveries, rankObservations, specialDays,
+      ...(productCapacityEvidenceRevision ? { productCapacityEvidenceRevision } : {}),
       warnings, sourceDiagnostics: { unmatchedCompanyRows, duplicatePlaceCompanies },
       globalWarnings, globalDiagnostics: { malformedHistoryLines, unmatchedCompanyRows: globalUnmatchedCompanyRows, duplicatePlaceCompanies: globalDuplicatePlaceCompanies,
         ...(request.type === "region" ? { unmappedRegionCompanies } : {}) }, context };

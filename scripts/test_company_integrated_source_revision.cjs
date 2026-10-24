@@ -1,6 +1,7 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs/promises"), native = require("node:fs"), path = require("node:path"), os = require("node:os"), crypto = require("node:crypto");
 const { createCompanyIntegratedSourceRevision, VERSION } = require("./lib/company_integrated_source_revision.cjs");
+const { createProductCapacityStore } = require("./lib/product_capacity_store.cjs");
 const A = "cmp_place_100", B = "cmp_place_200";
 const digest = value => crypto.createHash("sha256").update(value).digest("hex");
 async function fixture(t) {
@@ -30,6 +31,75 @@ function recoveryEnvelope(companyId, month, runId, sourceFiles, extra = {}) {
   return { name: `history/saved_product_recoveries/${digest(companyId)}/${month}/${receiptId}.json`, value };
 }
 
+test("normal raw dependencies cover first witness publication without self-invalidation, while earlier raw changes expire every later capacity calculation", async t => {
+  const f = await fixture(t), reader = createCompanyIntegratedSourceRevision(f.options), company = f.master.companies[A];
+  company.runIds = ["earlier", "later"];
+  for (const [id, collectedAt] of [["earlier", "2026-05-01T00:00:00Z"], ["later", "2026-09-25T00:00:00Z"]]) {
+    await f.write(`outputs/${id}/manifest.json`, { id, collectedAt, checkIn: collectedAt.slice(0, 10), bookingRangeDays: 1, collectionQuality: { status: "complete" } });
+    await f.write(`outputs/${id}/products.json`, { count: id === "earlier" ? 14 : 18 });
+  }
+  await f.write("company_master/companies.json", f.master);
+  let prepared = await reader.prepare();
+  const scopes = [scope(A, "2026-04"), scope(A, "2026-05"), scope(A, "2026-09"), scope(B, "2026-09")];
+  const original = scopes.map(value => reader.forScope(prepared, value));
+  const store = createProductCapacityStore({ dataDir: f.root }), companies = new Map([[A, company]]);
+  const evidence = [{ companyId: A, productId: "room", productType: "lodging", count: 14, collectedAt: "2026-05-01T00:00:00.000Z", runId: "earlier" }];
+  await store.publish(evidence, { companies, sourceRevision: prepared.revision, assertCurrent: async () => {} });
+  prepared = await reader.prepare();
+  assert.deepEqual(scopes.map(value => reader.forScope(prepared, value)), original, "Deriving a witness from an already tracked normal original is not a new input");
+  await store.publish([...evidence, { ...evidence[0], count: 18, collectedAt: "2026-09-25T00:00:00.000Z", runId: "later" }], { companies, sourceRevision: "equivalent-proof", assertCurrent: async () => {} });
+  prepared = await reader.prepare();
+  assert.deepEqual(scopes.map(value => reader.forScope(prepared, value)), original, "The derived sourceRevision/file checksum cannot form a feedback dependency");
+  const earlySeptember = { ...scope(A, "2026-09"), cutoffDate: "2026-09-15" }, early = reader.forScope(prepared, earlySeptember);
+  await f.write("outputs/later/products.json", { count: 19 }); prepared = await reader.prepare();
+  assert.notEqual(reader.forScope(prepared, scope(A, "2026-09")), original[2]);
+  // Invalid cached proof is surfaced even if its bad source was later than the
+  // cutoff; after rebuilding the optional cache, the future raw input is absent.
+  await store.publish(evidence, { companies, sourceRevision: "verified-rebuild", assertCurrent: async () => {} }); prepared = await reader.prepare();
+  assert.equal(reader.forScope(prepared, earlySeptember), early, "A later observation never becomes an earlier capacity dependency");
+  await f.write("outputs/earlier/products.json", { count: 15 }); prepared = await reader.prepare();
+  assert.notEqual(reader.forScope(prepared, scope(A, "2026-09")), original[2]);
+  assert.equal(reader.forScope(prepared, scope(B, "2026-09")), original[3]);
+});
+
+test("retained witnesses outside bounded references invalidate only their company and as-of months, with corrupt and review changes falling back visibly", async t => {
+  const f = await fixture(t), reader = createCompanyIntegratedSourceRevision(f.options), company = f.master.companies[A];
+  await f.write("outputs/omitted/manifest.json", { collectedAt: "2026-05-01T00:00:00Z", status: "complete" });
+  await f.write("outputs/future/manifest.json", { collectedAt: "2026-09-25T00:00:00Z", status: "complete" });
+  let prepared = await reader.prepare();
+  const scopes = [scope(A, "2026-04"), scope(A, "2026-09"), scope(B, "2026-09")], initial = scopes.map(value => reader.forScope(prepared, value));
+  const store = createProductCapacityStore({ dataDir: f.root }), companies = new Map([[A, company]]);
+  const early = { companyId: A, productId: "room", productType: "lodging", count: 14, collectedAt: "2026-05-01T00:00:00.000Z", runId: "omitted" };
+  await store.publish([early], { companies, sourceRevision: "validated-older-source", assertCurrent: async () => {} }); prepared = await reader.prepare();
+  const selected = scopes.map(value => reader.forScope(prepared, value));
+  assert.equal(selected[0], initial[0]); assert.notEqual(selected[1], initial[1]); assert.equal(selected[2], initial[2]);
+  const earlySeptember = { ...scope(A, "2026-09"), cutoffDate: "2026-09-15" }, earlyToken = reader.forScope(prepared, earlySeptember);
+  await store.publish([{ ...early, count: 18, collectedAt: "2026-09-25T00:00:00.000Z", runId: "future" }], { companies, sourceRevision: "new-source", assertCurrent: async () => {} }); prepared = await reader.prepare();
+  assert.equal(reader.forScope(prepared, earlySeptember), earlyToken);
+  const valid = reader.forScope(prepared, scope(A, "2026-09")), cacheFile = path.join(store.directory, digest(JSON.stringify(A)) + ".json");
+  await fs.writeFile(cacheFile, "{broken"); prepared = await reader.prepare();
+  assert.equal(prepared.companies[A].productCapacity.evidence.length, 0); assert.ok(prepared.companies[A].productCapacity.warning);
+  assert.notEqual(reader.forScope(prepared, scope(A, "2026-09")), valid); assert.equal(reader.forScope(prepared, scope(B, "2026-09")), initial[2]);
+  await store.publish([early], { companies, sourceRevision: "verified-rebuild", assertCurrent: async () => {} });
+  company.manualCorrection = { lodgingBasisTotal: 12 }; await f.write("company_master/companies.json", f.master); prepared = await reader.prepare();
+  assert.equal(prepared.companies[A].productCapacity.warning, "PRODUCT_CAPACITY_CACHE_INVALID");
+  assert.deepEqual(prepared.companies[A].productCapacity.evidence, []);
+});
+
+test("an earlier certified recovery already covers first witness publication in later months and its original remains a scoped dependency", async t => {
+  const f = await fixture(t), reader = createCompanyIntegratedSourceRevision(f.options), runId = "old-receipt";
+  await f.write(`outputs/${runId}/manifest.json`, { collectedAt: "2026-05-01T00:00:00.000Z", checkIn: "2026-05-01" });
+  await f.write(`outputs/${runId}/product.json`, { stock: 14 });
+  const receipt = recoveryEnvelope(A, "2026-05", runId, [{ path: `${runId}/product.json`, sha256: digest(await fs.readFile(path.join(f.root, "outputs", runId, "product.json"))) }], { collectedAt: "2026-05-01T00:00:00.000Z" });
+  await f.write(receipt.name, receipt.value); let prepared = await reader.prepare();
+  const request = scope(A, "2026-09"), before = reader.forScope(prepared, request), other = reader.forScope(prepared, scope(B, "2026-09"));
+  const store = createProductCapacityStore({ dataDir: f.root }), companies = new Map([[A, f.master.companies[A]]]);
+  await store.publish([{ companyId: A, productId: "room", productType: "lodging", count: 14, collectedAt: receipt.value.collectedAt, runId, source: "verified_saved_product_recovery" }], { companies, sourceRevision: prepared.revision, assertCurrent: async () => {} });
+  prepared = await reader.prepare(); assert.equal(reader.forScope(prepared, request), before, "Writing receipt-derived evidence cannot reject its own first monthly publication");
+  await f.write(`outputs/${runId}/product.json`, { stock: 13 }); prepared = await reader.prepare();
+  assert.notEqual(reader.forScope(prepared, request), before); assert.equal(reader.forScope(prepared, scope(B, "2026-09")), other);
+});
+
 test("saved product receipts scope new recovery and original-run changes without any master/history run reference", async t => {
   const f = await fixture(t), reader = createCompanyIntegratedSourceRevision(f.options);
   let prepared = await reader.prepare();
@@ -42,14 +112,15 @@ test("saved product receipts scope new recovery and original-run changes without
   await f.write(receipt.name, receipt.value); prepared = await reader.prepare();
   const recovered = tokens();
   for (const id of [A, B]) for (const month of ["2026-08", "2026-09", "2026-10", "2026-11"]) {
-    assert.equal(recovered[id + month] !== initial[id + month], id === A && ["2026-09", "2026-10"].includes(month), `${id} ${month}`);
+    assert.equal(recovered[id + month] !== initial[id + month], id === A && month >= "2026-09", `${id} ${month}`);
   }
   assert.equal(await createCompanyIntegratedSourceRevision(f.options)(scope(A, "2026-09")), recovered[A + "2026-09"], "The scoped receipt projection survives restart");
   await f.write(`outputs/${runId}/products/product.json`, { total: 16, available: 0 });
   prepared = await reader.prepare(); const changed = tokens();
   assert.notEqual(changed[A + "2026-09"], recovered[A + "2026-09"], "A source SHA mismatch expires this recovery; the observation reader decides whether to reject it");
   assert.notEqual(changed[A + "2026-10"], recovered[A + "2026-10"]);
-  for (const key of [A + "2026-08", A + "2026-11", ...["2026-08", "2026-09", "2026-10", "2026-11"].map(month => B + month)]) assert.equal(changed[key], recovered[key]);
+  assert.notEqual(changed[A + "2026-11"], recovered[A + "2026-11"], "An older receipt is still a cumulative capacity input in later months");
+  for (const key of [A + "2026-08", ...["2026-08", "2026-09", "2026-10", "2026-11"].map(month => B + month)]) assert.equal(changed[key], recovered[key]);
   const before = await fs.readFile(path.join(f.root, "company_integrated/revision-index.json"));
   await f.write(receipt.name, { ...receipt.value, verifiedDates: ["2026-09-01"] });
   await assert.rejects(reader.prepare(), { code: "COMPANY_SOURCE_REVISION_UNAVAILABLE" });
