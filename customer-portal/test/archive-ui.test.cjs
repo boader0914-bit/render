@@ -148,3 +148,38 @@ test('an enabled but unavailable archive disables both writes and shows storage 
     const h=harness();h.mount();await h.resolve(0,{enabled:true,total:0,records:[],status:{available:false,lastError:code}});assert.equal(h.button.disabled,true);assert.equal(h.reviewButton.disabled,true);assert.match(h.list.innerHTML,/디스크/);assert.ok(h.list.innerHTML.includes(code));assert.doesNotMatch(h.list.innerHTML,/아직 보관한 자료가 없습니다/);h.submit();h.capture();assert.equal(h.calls.length,1);
   }
 });
+
+test('v2 publication separates quantity gaps, price gaps and verified partial-price subtotals without changing v1 figures',()=>{
+  const h=harness(),record={...daily(),kind:'published-report',payload:{calculationVersion:'insight-period-publication-v2-price-evidence',companies:[{companyId:'cmp_one',name:'피카푸',summary:{knownSold:425,knownEstimatedRevenue:51059000,knownRevenueSubtotal:76782000,partialPriceKnownRevenue:25723000,observedDays:29,revenueObservedDays:23,expectedDays:30},review:{status:'partial'},uncertainty:{quantityUnconfirmedDates:[{date:'2026-09-01',reason:'ARCHIVE_OBSERVATION_MISSING'}],priceUnconfirmedDates:[{date:'2026-09-04',reason:'REVENUE_NOT_REVIEWABLE',knownRevenueSubtotal:279000,phoneMissingPriceBookings:4,unconfirmedAmount:null}],unconfirmedAmount:null},daily:[
+    {date:'2026-09-01',missing:true,publicBookings:null,phoneBookings:null,estimatedRevenue:null,review:{quantityReviewed:false,revenueReviewed:false,reason:'ARCHIVE_OBSERVATION_MISSING'}},
+    {date:'2026-09-04',sold:5,publicBookings:1,phoneBookings:4,estimatedRevenue:279000,review:{quantityReviewed:true,revenueReviewed:false,reason:'REVENUE_NOT_REVIEWABLE'}},
+    {date:'2026-09-05',sold:0,publicBookings:0,phoneBookings:0,estimatedRevenue:0,review:{quantityReviewed:true,revenueReviewed:true}}
+  ]}],quality:{status:'partial'}}};
+  const html=h.view.detailView(record);
+  assert.match(html,/예약 합계 425실 · 확인된 매출 소계 76,782,000원/);assert.match(html,/예약·매출은 관측 자료에 기반한 추정값입니다/);assert.doesNotMatch(html,/확인된 예약/);assert.match(html,/금액 완전 확인일 51,059,000원 · 가격 일부 확인일의 소계 25,723,000원/);
+  assert.match(html,/관측 미확인 날짜<\/th><td>2026-09-01<\/td><td>미확인/);assert.match(html,/가격 미확인 날짜<\/th><td>2026-09-04<\/td><td>미확인/);assert.match(html,/미확인 금액: 산정 불가/);
+  assert.match(html,/279,000원 <span class="muted">확인된 소계 · 추가 금액 미확인/);assert.match(html,/>0원<\/td><td>정상 관측/);
+  const previous=structuredClone(record);previous.payload.calculationVersion='insight-period-publication-v1';previous.payload.companies[0].summary.partial=true;
+  const oldHtml=h.view.detailView(previous);assert.match(oldHtml,/매출 51,059,000원/);assert.doesNotMatch(oldHtml,/76,782,000|확인된 매출 소계|미확인 날짜와 금액/);
+});
+
+test('v2 unpriced or quantity-unreviewed zeros remain unknown while verified zero-price dates stay zero',()=>{
+  const h=harness(),record={...daily(),kind:'published-report',payload:{calculationVersion:'insight-period-publication-v2-price-evidence',companies:[{companyId:'cmp_one',summary:{knownSold:2,knownEstimatedRevenue:0,knownRevenueSubtotal:0,partialPriceKnownRevenue:0,observedDays:2,revenueObservedDays:1,expectedDays:3},uncertainty:{quantityUnconfirmedDates:[{date:'2026-09-01'}],priceUnconfirmedDates:[{date:'2026-09-02',knownRevenueSubtotal:0,unconfirmedAmount:null}],unconfirmedAmount:null},daily:[
+    {date:'2026-09-01',publicBookings:0,phoneBookings:0,estimatedRevenue:0,review:{quantityReviewed:false,revenueReviewed:false,reason:'SOURCE_LINK_MISSING'}},
+    {date:'2026-09-02',publicBookings:0,phoneBookings:2,estimatedRevenue:0,review:{quantityReviewed:true,revenueReviewed:false}},
+    {date:'2026-09-03',publicBookings:0,phoneBookings:0,estimatedRevenue:0,review:{quantityReviewed:true,revenueReviewed:true}}
+  ]}]}};
+  const html=h.view.detailView(record),rows=html.split('<tr>').filter(row=>row.startsWith('<th>2026-09-'));
+  assert.equal(rows.length,3);assert.doesNotMatch(rows[0],/>0원/);assert.doesNotMatch(rows[1],/>0원/);assert.match(rows[1],/>미확인<\/td>/);assert.match(rows[2],/>0원<\/td>/);assert.match(html,/미확인 금액: 산정 불가/);
+});
+
+test('v2 uncertainty labels are escaped and a complete zero month has no missing-amount warning',()=>{
+  const h=harness(),record={...daily(),kind:'published-report',payload:{calculationVersion:'insight-period-publication-v2-price-evidence',companies:[{companyId:'cmp_one',summary:{knownSold:0,knownEstimatedRevenue:0,knownRevenueSubtotal:0,partialPriceKnownRevenue:null,observedDays:30,revenueObservedDays:30,expectedDays:30},uncertainty:{quantityUnconfirmedDates:[],priceUnconfirmedDates:[],unconfirmedAmount:0},daily:[]}]}};
+  const html=h.view.detailView(record);assert.match(html,/확인된 매출 소계 0원/);assert.match(html,/미확인 금액: 없음/);assert.match(html,/가격 일부 확인일의 소계 해당 없음/);assert.doesNotMatch(html,/산정 불가|가격 일부 확인일의 소계 미확인/);
+  record.payload.companies[0].uncertainty.quantityUnconfirmedDates=[{date:'2026-09-05'}];
+  const quantityOnly=h.view.detailView(record);assert.match(quantityOnly,/미확인 금액: 산정 불가/);assert.match(quantityOnly,/가격 일부 확인일의 소계 해당 없음/);assert.doesNotMatch(quantityOnly,/가격 일부 확인일의 소계 미확인/);
+  record.payload.companies[0].uncertainty.quantityUnconfirmedDates=[{date:'<img onerror=evil>'}];
+  const unsafe=h.view.detailView(record);assert.match(unsafe,/&lt;img onerror=evil&gt;/);assert.doesNotMatch(unsafe,/<img/);
+  delete record.payload.companies[0].uncertainty;
+  const absent=h.view.detailView(record);assert.match(absent,/분류 자료를 확인하지 못했습니다/);assert.doesNotMatch(absent,/미확인 금액: 없음/);
+});

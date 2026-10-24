@@ -312,3 +312,10 @@ html[data-theme=dark] .connected-app input[type=month]{color-scheme:dark}
 .connected-app .report-source-issues>p{font-size:13px;line-height:1.8;margin:12px 0}
 .connected-app .report-source-issues table td{white-space:normal;overflow-wrap:anywhere;line-height:1.7}
 .connected-app .report-source-issues table th{min-width:110px}
+.connected-app .archive-uncertainty{margin:14px 0}
+.connected-app .archive-uncertainty table{table-layout:fixed;width:100%}
+.connected-app .archive-uncertainty thead th:first-child{width:160px}
+.connected-app .archive-uncertainty thead th:last-child{width:100px}
+.connected-app .archive-uncertainty td{white-space:normal;overflow-wrap:anywhere;line-height:1.7}
+.connected-app .archive-uncertainty>p{font-size:13px;line-height:1.7;margin:8px 0}
+@media(max-width:600px){.connected-app .archive-uncertainty thead th:first-child{width:115px}.connected-app .archive-uncertainty thead th:last-child{width:70px}}

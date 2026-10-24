@@ -7,6 +7,18 @@ const day=value=>typeof value==='string'&&/^20\d{2}-\d{2}-\d{2}$/.test(value)&&N
 const kst=value=>new Date(value+9*3600000).toISOString().slice(0,10);
 const reference=value=>typeof value==='string'&&/^[a-zA-Z0-9_-]{1,180}$/.test(value);
 const fault=(code,message,statusCode=400)=>Object.assign(new Error(message),{code,message,statusCode});
+const nonnegative=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0;
+// Price-incomplete days can retain their evidenced amount, but cannot turn an
+// unreviewed inventory row or an unpriced booking into confirmed revenue.
+function partialPriceSubtotal(row){
+  if(row.review?.quantityReviewed!==true||row.review?.revenueReviewed!==false||row.revenuePartial!==true
+    ||row.missing===true||row.inventoryConflict===true||row.partial===true||row.collectionPartial===true
+    ||![row.estimatedRevenue,row.publicRevenue,row.phoneRevenue].every(nonnegative)
+    ||Math.abs(row.estimatedRevenue-row.publicRevenue-row.phoneRevenue)>=1
+    ||(row.publicBookings===0&&row.publicRevenue>0)||(row.phoneBookings===0&&row.phoneRevenue>0)
+    ||(row.sold>0&&row.estimatedRevenue===0))return null;
+  return row.estimatedRevenue;
+}
 function fields(value,allowed){if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>!allowed.includes(key)))throw fault('ARCHIVE_INVALID_FIELDS','보관 요청 항목을 확인해 주세요.');}
 function access(identity,audience){
   const customer=identity?.customer;
@@ -83,18 +95,28 @@ function createArchiveService({directory=null,namespace,clock=Date.now,store=cre
           for(const value of saved.payload.daily)if(dates.includes(value.date))days.set(value.date,value);
         }
         const daily=dates.map(date=>days.get(date)||{date,missing:true,sold:null,publicBookings:null,phoneBookings:null,publicRevenue:null,phoneRevenue:null,estimatedRevenue:null,total:null,review:{status:'unresolved',quantityReviewed:false,revenueReviewed:false,reason:'ARCHIVE_OBSERVATION_MISSING'}});
-        const quantity=daily.filter(row=>row.review?.quantityReviewed),revenue=daily.filter(row=>row.review?.revenueReviewed),complete=quantity.length===dates.length,priced=revenue.length===dates.length;
+        const quantity=daily.filter(row=>row.review?.quantityReviewed===true),revenue=quantity.filter(row=>row.review?.revenueReviewed===true),complete=quantity.length===dates.length,priced=revenue.length===dates.length;
         const sum=(rows,key)=>rows.every(row=>typeof row[key]==='number'&&Number.isFinite(row[key]))?rows.reduce((total,row)=>total+row[key],0):null;
+        const partialPrices=quantity.map(row=>({row,amount:partialPriceSubtotal(row)})).filter(value=>value.amount!==null);
+        const knownAmounts=[...revenue.map(row=>row.estimatedRevenue),...partialPrices.map(value=>value.amount)];
+        const uncertainty={
+          quantityUnconfirmedDates:daily.filter(row=>row.review?.quantityReviewed!==true).map(row=>({date:row.date,reason:row.review?.reason||'QUANTITY_NOT_REVIEWABLE'})),
+          priceUnconfirmedDates:quantity.filter(row=>row.review?.revenueReviewed!==true).map(row=>({date:row.date,reason:row.review?.reason||'REVENUE_NOT_REVIEWABLE',
+            knownRevenueSubtotal:partialPriceSubtotal(row),phoneMissingPriceBookings:Number.isSafeInteger(row.phoneMissingPriceBookings)&&row.phoneMissingPriceBookings>=0?row.phoneMissingPriceBookings:null,unconfirmedAmount:null})),
+          unconfirmedAmount:complete&&priced?0:null
+        };
         const summary={expectedDays:dates.length,observedDays:quantity.length,revenueObservedDays:revenue.length,missingDays:dates.length-quantity.length,partial:!complete,revenuePartial:!priced,
           sold:complete?sum(quantity,'sold'):null,publicBookings:complete?sum(quantity,'publicBookings'):null,phoneBookings:complete?sum(quantity,'phoneBookings'):null,
           estimatedRevenue:priced?sum(revenue,'estimatedRevenue'):null,publicRevenue:priced?sum(revenue,'publicRevenue'):null,phoneRevenue:priced?sum(revenue,'phoneRevenue'):null,
-          knownSold:quantity.length?sum(quantity,'sold'):null,knownEstimatedRevenue:revenue.length?sum(revenue,'estimatedRevenue'):null};
-        companies.push({...company,summary,daily,provenance:links,review:{status:complete&&priced&&!reviewRequired?'reviewed':'partial',basis:'automatic_validation',roomOrSourceReviewRequired:reviewRequired}});
+          knownSold:quantity.length?sum(quantity,'sold'):null,knownEstimatedRevenue:revenue.length?sum(revenue,'estimatedRevenue'):null,
+          knownRevenueSubtotal:knownAmounts.length&&knownAmounts.every(nonnegative)?knownAmounts.reduce((total,value)=>total+value,0):null,
+          partialPriceKnownRevenue:partialPrices.length?partialPrices.reduce((total,value)=>total+value.amount,0):null};
+        companies.push({...company,summary,uncertainty,daily,provenance:links,review:{status:complete&&priced&&!reviewRequired?'reviewed':'partial',basis:'automatic_validation',roomOrSourceReviewRequired:reviewRequired}});
       }
       if(!sourceArchives.length||companies.every(row=>row.summary.observedDays===0))throw fault('ARCHIVE_SOURCES_NOT_READY','선택 기간의 업체 검수 자료를 먼저 보관해 주세요.',409);
       const quality={status:companies.every(row=>row.review.status==='reviewed')?'complete':'partial',missingCompanies:companies.filter(row=>!row.provenance.length).map(row=>row.companyId)};
       const generatedAt=new Date(clock()).toISOString(),payload={schemaVersion:1,mode:'archived_period_report',published:true,reportType:input.reportType,period,generatedAt,ownId:own,companies,quality,sourceArchives,
-        calculationVersion:'insight-period-publication-v1',definitions:['숙박일별 중앙 업체 DB의 검수 결과를 한 번씩 사용합니다. 수집 회차를 더하지 않습니다.','정상 0과 미확인 null을 구분합니다. 공개 예약과 타채널 추정은 분리합니다.','확인된 일부 수량·금액은 knownSold·knownEstimatedRevenue이며 전체 기간 합계가 아닙니다.','원본과 계산 기준이 바뀌어도 이 발행본은 변경하지 않습니다. 새 요청은 별도 발행본으로 보관합니다.']};
+        calculationVersion:'insight-period-publication-v2-price-evidence',definitions:['숙박일별 중앙 업체 DB의 검수 결과를 한 번씩 사용합니다. 수집 회차를 더하지 않습니다.','정상 0과 미확인 null을 구분합니다. 공개 예약과 타채널 추정은 분리합니다.','knownEstimatedRevenue는 가격이 완전히 확인된 날짜의 소계입니다. knownRevenueSubtotal은 여기에 수량 검수를 통과한 가격 일부 확인 날짜의 근거 있는 금액을 더한 소계이며, 월 전체 매출이나 실제 결제액이 아닙니다.','관측 미확인 날짜와 가격 미확인 날짜를 구분합니다. 미확인 금액은 산정하지 않으며 0원으로 합산하지 않습니다.','원본과 계산 기준이 바뀌어도 이 발행본은 변경하지 않습니다. 새 요청은 별도 발행본으로 보관합니다.']};
       const identityLinks={companyIds:selected.map(row=>row.companyId),sourceArchives,calculationVersion:payload.calculationVersion,sourceLinks:companies.flatMap(row=>row.provenance.map(link=>({companyId:row.companyId,month:link.month,calculationVersion:link.calculationVersion,runIds:link.runIds,sourceDigest:link.sourceDigest})))};
       return store.put({...context,kind:'published-report',period,identity:identityLinks,payload,metadata:{requestKeyHash,requestIntent:intent,reportType:input.reportType,title:(input.reportType==='weekly'?'주간':'월간')+' 리포트',reviewStatus:quality.status==='complete'?'reviewed':'partial',sourceVersion:hash(identityLinks)},idempotencyKey:'publish/'+requestKeyHash});
     })().finally(()=>pending.delete(lock));pending.set(lock,{intent,promise:operation});return operation;

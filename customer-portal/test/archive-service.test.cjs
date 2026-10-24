@@ -143,6 +143,56 @@ test('changed partial source keeps complete prior publication frozen and publish
   assert.equal((await f.read(old)).payload.companies[0].summary.sold,before.payload.companies[0].summary.sold);
 });
 
+test('v2 publication separates complete-day revenue, price-evidenced partial subtotals and unknown dates',async t=>{
+  const f=await fixture(t),data=source({missing:[4],priceMissing:[8,9]});
+  const byDay=date=>data.companyDetail.integrated.snapshot.daily.find(row=>row.date===`2026-09-${String(date).padStart(2,'0')}`);
+  Object.assign(byDay(5),{sold:6,publicBookings:2,phoneBookings:4,publicRevenue:200000,phoneRevenue:50000,estimatedRevenue:250000,revenuePartial:true,phoneMissingPriceBookings:3});
+  Object.assign(byDay(6),{partial:true,revenuePartial:true,publicRevenue:9000000,phoneRevenue:0,estimatedRevenue:9000000,phoneMissingPriceBookings:0});
+  byDay(8).phoneMissingPriceBookings=0;byDay(9).phoneMissingPriceBookings=null;
+  await f.capture(data);const record=await f.read(await f.publish({requestKey:'request_price_evidence_0001'})),own=record.payload.companies[0];
+  assert.equal(record.payload.calculationVersion,'insight-period-publication-v2-price-evidence');
+  assert.equal(own.summary.estimatedRevenue,null);assert.equal(own.summary.knownEstimatedRevenue,4800000);
+  assert.equal(own.summary.partialPriceKnownRevenue,250000);assert.equal(own.summary.knownRevenueSubtotal,5050000);
+  assert.deepEqual(own.uncertainty.quantityUnconfirmedDates.map(row=>row.date),['2026-09-04','2026-09-06']);
+  assert.deepEqual(own.uncertainty.priceUnconfirmedDates.map(row=>row.date),['2026-09-05','2026-09-08','2026-09-09']);
+  assert.deepEqual(own.uncertainty.priceUnconfirmedDates.map(row=>row.phoneMissingPriceBookings),[3,0,null]);
+  assert.deepEqual(own.uncertainty.priceUnconfirmedDates.map(row=>row.knownRevenueSubtotal),[250000,null,null]);
+  assert.ok(own.uncertainty.priceUnconfirmedDates.every(row=>row.unconfirmedAmount===null));assert.equal(own.uncertainty.unconfirmedAmount,null);
+  const zero=own.daily.find(row=>row.date==='2026-09-03');assert.equal(zero.estimatedRevenue,0);assert.equal(zero.review.revenueReviewed,true);
+  const absent=record.payload.companies[1];assert.equal(absent.summary.knownRevenueSubtotal,null);assert.equal(absent.summary.partialPriceKnownRevenue,null);
+  assert.equal(absent.uncertainty.quantityUnconfirmedDates.length,30);assert.equal(absent.uncertainty.unconfirmedAmount,null);
+});
+
+test('inconsistent and all-unpriced partial amounts never become known monetary subtotals',async t=>{
+  const f=await fixture(t),data=source({days:[1,2,3]});
+  const [bad,unpriced,zero]=data.companyDetail.integrated.snapshot.daily;
+  Object.assign(bad,{sold:3,publicBookings:2,phoneBookings:1,revenuePartial:true,publicRevenue:200000,phoneRevenue:50000,estimatedRevenue:999999});
+  Object.assign(unpriced,{revenuePartial:true,publicRevenue:0,phoneRevenue:0,estimatedRevenue:0,phoneMissingPriceBookings:2});
+  await f.capture(data);const own=(await f.read(await f.publish({requestKey:'request_reject_unsafe_price_01'}))).payload.companies[0];
+  assert.equal(zero.estimatedRevenue,0);assert.equal(own.summary.knownEstimatedRevenue,0);assert.equal(own.summary.knownRevenueSubtotal,0);
+  assert.equal(own.summary.partialPriceKnownRevenue,null);assert.ok(own.uncertainty.priceUnconfirmedDates.every(row=>row.knownRevenueSubtotal===null));
+});
+
+test('new price-evidence publication leaves an existing v1 publication byte-for-byte unchanged across restart',async t=>{
+  const {createArchiveStore}=require('../archive-store.cjs');
+  const f=await fixture(t);await f.capture();const seed=await f.read(await f.publish({requestKey:'price_evidence_seed_0001'}));
+  const payload=structuredClone(seed.payload);payload.calculationVersion='insight-period-publication-v1';
+  for(const company of payload.companies){delete company.uncertainty;delete company.summary.knownRevenueSubtotal;delete company.summary.partialPriceKnownRevenue;}
+  const store=createArchiveStore({directory:f.directory,namespace:'archive-service-fixture',clock:f.clock});await store.ready();
+  const legacy=await store.put({ownerId:'cus_test',audience:AUDIENCE,kind:'published-report',period:payload.period,
+    identity:{...seed.identity,calculationVersion:'insight-period-publication-v1'},payload,metadata:{reportType:'monthly',title:'기존 9월 발행본',reviewStatus:'partial'},idempotencyKey:'legacy-v1-monthly'});
+  await store.flush();const oldName=(await fs.readdir(f.directory)).find(name=>name.endsWith('-'+legacy.record.id+'.json'));
+  assert.ok(oldName);const oldFile=path.join(f.directory,oldName),original=await fs.readFile(oldFile);
+  f.advance(3000);const changed=source({version:2,priceMissing:[5]});
+  Object.assign(changed.companyDetail.integrated.snapshot.daily.find(row=>row.date==='2026-09-05'),{sold:3,publicBookings:2,phoneBookings:1,publicRevenue:200000,phoneRevenue:100000,estimatedRevenue:300000,revenuePartial:true,phoneMissingPriceBookings:1});
+  await f.capture(changed);const next=await f.read(await f.publish({requestKey:'price_evidence_latest_0002'}));
+  assert.notEqual(next.id,legacy.record.id);assert.equal(next.payload.companies[0].summary.partialPriceKnownRevenue,300000);
+  assert.equal(next.payload.calculationVersion,'insight-period-publication-v2-price-evidence');
+  const restarted=f.restart();await restarted.ready();const again=(await restarted.get({identity:identity(),audience:AUDIENCE,id:legacy.record.id})).record;
+  assert.equal(again.checksum,legacy.record.checksum);assert.equal(again.payload.calculationVersion,'insight-period-publication-v1');
+  assert.deepEqual(await fs.readFile(oldFile),original);await restarted.flush();
+});
+
 test('concurrent request-key reuse with a different publication intent is rejected',async t=>{
   const f=await fixture(t);await f.capture();
   const results=await Promise.allSettled([f.publish(),f.publish({reportType:'weekly'})]);
