@@ -56,6 +56,14 @@ function compactIndustrySources(source, catalog) {
     // original row to resolve equal-time observations and exact duplicates.
     // Large raw company inventories and unused run payloads are not retained.
     observations: source.observations || [],
+    // Preserve the separately verified input channel, never promote markers in
+    // ordinary unknown-quality history. The common engine still validates the
+    // certificate scope, timestamp and exact unchanged row digest. Do not retain
+    // the reader's raw-file/receipt payloads or copy product bodies again here.
+    savedProductRecoveries: (Array.isArray(source.savedProductRecoveries) ? source.savedProductRecoveries : []).map(entry => ({
+      row: entry?.row, certificate: entry?.certificate && pick(entry.certificate,
+        ["kind", "companyId", "runId", "date", "productType", "collectedAt", "originalRunQuality", "receiptId", "sourceDigest", "rowDigest"])
+    })),
     rankObservations: (source.rankObservations || []).map(row => pick(row, RANK_FIELDS)),
     runs: (source.runs || []).map(run => ({ ...pick(run, RUN_FIELDS), collectionQuality: { status: qualityOf(run) } })) };
   return { source: compact, catalog: { companies, regions: catalog.regions } };
