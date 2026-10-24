@@ -38,6 +38,8 @@
     if(row.partial)notes.push('일부 확인 필요');
     if(row.phoneMissingPriceBookings>0)notes.push('타채널 금액 미확인');
     else if(row.revenuePartial)notes.push('가격 일부 확인 필요');
+    if(row.phoneAllocatedBookings>0)notes.push('상품 배분 추정');
+    if(row.sharedDayUseEvidence?.groups?.some(group=>group.reusedBookings>0))notes.push('런치·디너 재사용 반영');
     return notes.join(' · ')||'정상 관측';
   }
   function productTable(products=[],collapse=false) {

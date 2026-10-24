@@ -2,7 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),os=require('node:os'),path=require('node:path'),crypto=require('node:crypto');
 const {createCompanyReadCache}=require('../company-read-cache.cjs');
 const {createArchiveService}=require('../archive-service.cjs');
-const {projectDailyReview}=require('../archive-provenance.cjs');
+const {projectDailyReview,publicationSourceLinks}=require('../archive-provenance.cjs');
 const {buildMonthlyReportSnapshot}=require('../../scripts/lib/monthly_reports.cjs');
 const {projectIntegrated}=require('../../scripts/lib/insight_company_integrated.cjs');
 const COMPANY='cmp_place_123',MONTH='2026-09',AT=Date.parse('2026-10-24T01:00:00Z'),DAY=86400000;
@@ -112,4 +112,68 @@ test('cache never promotes incomplete or mismatched saved-product proof to an ar
     assert.equal(reply.ok,true);assert.ok(captured.companyDetail.integrated.snapshot.summary.phoneMissingPriceBookings==null);
     assert.ok(captured.companyDetail.integrated.snapshot.daily.find(row=>row.date==='2026-09-04').phoneMissingPriceBookings==null);
   }
+});
+
+test('new allocation policy refreshes durable company data and adds a review without rewriting any issued report',async t=>{
+  const f=await fixture(t),old=source(),first=f.cache();await f.read(first,old);await first.flushPersistence();
+  const publishInput={reportType:'monthly',anchorDate:'2026-09-15',requestKey:'fixture_frozen_before_allocation'};
+  const published=await f.archive().publish({identity:identity(),audience:AUDIENCE,input:publishInput});
+  const files=await fs.readdir(f.archiveDirectory),publishedFile=files.find(name=>name.endsWith('-'+published.record.id+'.json'));
+  const originalPublication=await fs.readFile(path.join(f.archiveDirectory,publishedFile));
+  const changed=source(),integrated=changed.companyDetail.integrated,snapshot=integrated.snapshot;
+  integrated.calculationVersion='company-integrated-v5-product-maximum-lunch-dinner';
+  snapshot.provenance.calculationVersion=integrated.calculationVersion;
+  integrated.sourceRevision='new_product_policy_revision_v5';snapshot.provenance.sourceRevision=integrated.sourceRevision;
+  integrated.calculatedAt='2026-10-24T02:00:00Z';
+  const target=snapshot.daily.find(row=>row.date==='2026-09-04');
+  Object.assign(target,{sold:6,phoneBookings:5,phoneRevenue:1100000,estimatedRevenue:1379000,revenuePartial:false,phoneMissingPriceBookings:0,
+    phoneAllocatedBookings:5,phoneAllocatedRevenue:1100000,phoneRevenueLow:1050000,phoneRevenueHigh:1150000,
+    phoneValuation:{policy:'proportional_product_shortfall_v2',quantityPolicy:'residual_product_shortfall_proportional',roundingPolicy:'round_each_stay_date_krw',unroundedRevenue:1100000,allocationRanges:[{quantity:5,lowRevenue:1050000,highRevenue:1150000}],raw:'must-not-persist'},
+    sharedDayUseExcluded:1,sharedDayUseEvidence:{policy:'lunch_dinner_room_reuse_v1',publicSessions:2,physicalRoomBookings:1,excludedBookings:1,
+      groups:[{groupKey:'name:피크닉bbq포함',lunchBookings:1,dinnerBookings:1,physicalRoomBookings:1,reusedBookings:1,productIds:['101','102'],classificationSource:'lunch_dinner_name_stem',secret:'must-not-persist'}],warnings:[],token:'must-not-persist'},
+    inventoryEvidenceVersion:5,phoneValuationPolicy:'proportional_product_shortfall_v2',
+    productCapacityEvidence:[{productKey:'lodging:101',count:16,source:'historical_product_maximum',sourceDate:'2026-09-01',runId:'run_saved_1',observedAt:'2026-09-01T01:00:00Z',raw:'must-not-persist'}]});
+  target.capacityWitnesses=structuredClone(target.productCapacityEvidence);
+  const sourceEvidence={inventoryEvidenceVersion:target.inventoryEvidenceVersion,phoneValuationPolicy:target.phoneValuationPolicy,phoneValuation:structuredClone(target.phoneValuation),sharedDayUseEvidence:structuredClone(target.sharedDayUseEvidence),capacityWitnesses:structuredClone(target.capacityWitnesses)};
+  // The central customer projection intentionally omits the internal allocation
+  // ranges while preserving the public policy and daily amount bounds.
+  delete sourceEvidence.phoneValuation.allocationRanges;delete target.phoneValuation.allocationRanges;
+  Object.assign(target.sourceObservation,sourceEvidence);Object.assign(snapshot.provenance.observations.find(row=>row.date===target.date),structuredClone(sourceEvidence));
+  Object.assign(snapshot.summary,{sold:8,phoneBookings:5,phoneMissingPriceBookings:0,phoneAllocatedBookings:5,phoneAllocatedRevenue:1100000,phoneRevenueLow:1050000,phoneRevenueHigh:1150000,productCapacityEvidence:structuredClone(target.productCapacityEvidence)});
+  for(const group of [changed.companyDetail.current,changed.companyDetail.history.months[0]]){group.daily=structuredClone(snapshot.daily);group.summary=structuredClone(snapshot.summary);}
+  await f.restartArchive();const restarted=f.cache();await restarted.ready();
+  const [restored]=await restarted.snapshot({scope:'new-session',audience:AUDIENCE,identity:identity()});
+  assert.equal(restored.data.companyDetail.integrated.calculationVersion,old.companyDetail.integrated.calculationVersion);
+  let finish;const waiting=new Promise(resolve=>{finish=resolve;});
+  const stale=await restarted.read({scope:'new-session',audience:AUDIENCE,companyId:COMPANY,month:MONTH,readIdentity:async()=>ok(identity()),readSource:()=>waiting});
+  assert.equal(stale.data.responseCache.refreshing,true);assert.equal(stale.data.companyDetail.integrated.snapshot.daily.find(row=>row.date==='2026-09-04').phoneMissingPriceBookings,4);
+  finish(ok(changed));await f.waitCaptures(2);await restarted.flushPersistence();await f.archive().flush();
+  const afterRestart=f.cache();await afterRestart.ready();const [view]=await afterRestart.snapshot({scope:'updated-session',audience:AUDIENCE,identity:identity()});
+  assert.equal(view.data.companyDetail.integrated.calculationVersion,integrated.calculationVersion);
+  assert.equal(view.data.companyDetail.integrated.sourceRevision,integrated.sourceRevision);assert.equal(view.data.companyDetail.integrated.snapshot.provenance.sourceRevision,integrated.sourceRevision);
+  for(const group of [view.data.companyDetail.integrated.snapshot,view.data.companyDetail.current,view.data.companyDetail.history.months[0]]){
+    assert.equal(group.summary.phoneAllocatedRevenue,1100000);assert.equal(group.summary.productCapacityEvidence[0].count,16);
+    const row=group.daily.find(row=>row.date==='2026-09-04');assert.equal(row.phoneAllocatedBookings,5);assert.equal(row.phoneMissingPriceBookings,0);assert.equal(row.estimatedRevenue,1379000);
+    assert.equal(row.phoneValuation.policy,'proportional_product_shortfall_v2');assert.equal(row.sharedDayUseEvidence.groups[0].groupKey,'name:피크닉bbq포함');assert.equal(row.sharedDayUseEvidence.physicalRoomBookings,1);
+    assert.equal(row.sourceObservation.inventoryEvidenceVersion,5);assert.equal(row.capacityWitnesses[0].count,16);assert.equal(row.sourceObservation.capacityWitnesses[0].runId,'run_saved_1');assert.equal(row.phoneValuation.allocationRanges,undefined);
+    assert.equal(group.daily.find(row=>row.date==='2026-09-02').estimatedRevenue,0);assert.equal(group.daily.find(row=>row.date==='2026-09-03').estimatedRevenue,null);
+  }
+  const latest=(await f.archive().get({identity:identity(),audience:AUDIENCE,id:f.captures[1].recordId})).record;
+  assert.equal(latest.identity.calculationVersion,integrated.calculationVersion);assert.deepEqual(latest.identity.runIds,f.captures[0].record.identity.runIds);
+  assert.equal(latest.identity.sourceRevision,integrated.sourceRevision);assert.equal(latest.payload.sourceRevision,integrated.sourceRevision);
+  assert.equal(publicationSourceLinks([latest.payload])[0].sourceRevision,integrated.sourceRevision);
+  const row=latest.payload.daily.find(row=>row.date==='2026-09-04');assert.equal(row.review.revenueReviewed,true);assert.equal(row.phoneAllocatedRevenue,1100000);assert.equal(row.phoneRevenueLow,1050000);assert.equal(row.sharedDayUseEvidence.groups[0].reusedBookings,1);
+  assert.equal((await f.archive().list({identity:identity(),audience:AUDIENCE,kind:'daily-review'})).total,2);
+  assert.equal((await f.archive().list({identity:identity(),audience:AUDIENCE,kind:'published-report'})).total,1);
+  assert.deepEqual(await fs.readFile(path.join(f.archiveDirectory,publishedFile)),originalPublication);
+  assert.equal(JSON.stringify(latest).includes('must-not-persist'),false);
+  for(const folder of [f.cacheDirectory,f.archiveDirectory])for(const file of await fs.readdir(folder))if(file.endsWith('.json'))assert.equal((await fs.readFile(path.join(folder,file),'utf8')).includes('must-not-persist'),false);
+});
+
+test('archive refuses inconsistent central source revisions while accepting prior records without revisions',()=>{
+  const data=source();assert.ok(projectDailyReview({companyId:COMPANY,month:MONTH,data,reviewedAt:new Date(AT).toISOString()}));
+  data.companyDetail.integrated.sourceRevision='revision_a';data.companyDetail.integrated.snapshot.provenance.sourceRevision='revision_b';
+  assert.equal(projectDailyReview({companyId:COMPANY,month:MONTH,data,reviewedAt:new Date(AT).toISOString()}),null);
+  data.companyDetail.integrated.snapshot.provenance.sourceRevision='revision_a';
+  assert.equal(projectDailyReview({companyId:COMPANY,month:MONTH,data,reviewedAt:new Date(AT).toISOString()}).sourceRevision,'revision_a');
 });

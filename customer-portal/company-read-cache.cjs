@@ -1,5 +1,6 @@
 'use strict';
 const {createHash}=require('node:crypto');
+const {allocationKeys,schemas:inventoryPolicySchemas,policyEvidence}=require('./inventory-policy-evidence.cjs');
 
 // This is an Insight-process cache, not a second source of company data. The
 // caller supplies an opaque host/mode/session scope and both central GETs.
@@ -52,10 +53,14 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
   // change an old display snapshot into a newly verified source response.
   const recoveryFields=fields('kind companyId runId date productType collectedAt originalRunQuality receiptId sourceDigest rowDigest');
   sourceObservation.sourceRecovery=recoveryFields;
-  const priceEvidenceKeys=['phoneMissingPriceBookings','phoneFallbackBookings','phoneFallbackRevenue'];
+  const priceEvidenceKeys=['phoneMissingPriceBookings','phoneFallbackBookings','phoneFallbackRevenue',...allocationKeys];
   for(const schema of [metric,daily,detailSchema.integrated.snapshot.analysis.weekdays[0],detailSchema.integrated.snapshot.analysis.pace[0]])Object.assign(schema,fields(priceEvidenceKeys.join(' ')));
+  Object.assign(daily,inventoryPolicySchemas);
+  Object.assign(sourceObservation,inventoryPolicySchemas);
+  detailSchema.integrated.sourceRevision=true;
+  for(const schema of [metric,detailSchema.integrated.snapshot.analysis.weekdays[0],detailSchema.integrated.snapshot.analysis.pace[0]])schema.productCapacityEvidence=inventoryPolicySchemas.productCapacityEvidence;
   daily.sourceObservation=sourceObservation;
-  detailSchema.integrated.snapshot.provenance={...fields('source companyId calculationVersion linkageStatus sourceDigest'),runIds:[true],selectedRunIds:[true],observations:[sourceObservation]};
+  detailSchema.integrated.snapshot.provenance={...fields('source companyId calculationVersion sourceRevision linkageStatus sourceDigest'),runIds:[true],selectedRunIds:[true],observations:[sourceObservation]};
   const validDay=value=>typeof value==='string'&&/^20\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(value)&&Number.isFinite(Date.parse(value+'T00:00:00Z'))&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;
   const reference=value=>typeof value==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,179}$/.test(value);
   function sourceProof(row,companyId,month){
@@ -72,18 +77,21 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
     const core=clone(data),detail=core?.companyDetail,integrated=detail?.integrated,companyId=detail?.companyId,month=integrated?.selectedMonth;
     const metricEvidence=row=>{
       if(!row||typeof row!=='object'||Array.isArray(row))return;
-      for(const key of priceEvidenceKeys)if(Object.hasOwn(row,key)&&row[key]!==null&&!(typeof row[key]==='number'&&Number.isFinite(row[key])&&row[key]>=0&&(key==='phoneFallbackRevenue'||Number.isSafeInteger(row[key]))))delete row[key];
+      for(const key of priceEvidenceKeys)if(Object.hasOwn(row,key)&&row[key]!==null&&!(typeof row[key]==='number'&&Number.isFinite(row[key])&&row[key]>=0&&(!key.endsWith('Bookings')||Number.isSafeInteger(row[key]))))delete row[key];
+      const products=policyEvidence(row).productCapacityEvidence;delete row.productCapacityEvidence;if(products)row.productCapacityEvidence=products;
     };
     const observationEvidence=(row,selectedMonth)=>{
       if(!row||typeof row!=='object'||Array.isArray(row))return;
       const proof=sourceProof(row,companyId,selectedMonth);delete row.sourceRecovery;if(proof)row.sourceRecovery=proof;
+      const evidence=policyEvidence(row);for(const key of Object.keys(inventoryPolicySchemas))delete row[key];Object.assign(row,evidence);
     };
-    const dailyEvidence=(rows,selectedMonth)=>{if(Array.isArray(rows))for(const row of rows){metricEvidence(row);observationEvidence(row?.sourceObservation,selectedMonth);}};
+    const dailyEvidence=(rows,selectedMonth)=>{if(Array.isArray(rows))for(const row of rows){metricEvidence(row);const evidence=policyEvidence(row);for(const key of Object.keys(inventoryPolicySchemas))delete row[key];Object.assign(row,evidence);observationEvidence(row?.sourceObservation,selectedMonth);}};
     metricEvidence(detail?.current?.summary);dailyEvidence(detail?.current?.daily,month);
     if(Array.isArray(detail?.history?.months))for(const value of detail.history.months){metricEvidence(value?.summary);dailyEvidence(value?.daily,value?.month);}
     const snapshot=integrated?.snapshot;metricEvidence(snapshot?.summary);dailyEvidence(snapshot?.daily,month);
     for(const rows of [snapshot?.analysis?.weekdays,snapshot?.analysis?.pace])if(Array.isArray(rows))for(const row of rows)metricEvidence(row);
     const provenance=snapshot?.provenance,scopeValid=integrated?.companyId===companyId&&provenance?.companyId===companyId&&provenance?.calculationVersion===integrated?.calculationVersion;
+    for(const value of [integrated,provenance])if(value&&Object.hasOwn(value,'sourceRevision')&&!reference(value.sourceRevision))delete value.sourceRevision;
     if(Array.isArray(provenance?.observations))for(const row of provenance.observations)observationEvidence(row,scopeValid?month:null);
     return core;
   }

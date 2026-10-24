@@ -13,7 +13,8 @@ const hash=value=>crypto.createHash('sha256').update(JSON.stringify(stable(value
 const account=()=>({customer:{customerId:'customer-fixture',revision:1,accountStatus:'active',relations:[{companyId:'cmp_place_1',kind:'own',status:'active'}]},companies:[{companyId:'cmp_place_1',name:'Fixture',version:'v1'}],preparations:[],collectionAllowance:{limit:1,canRequest:true}});
 const ok=data=>({status:200,ok:true,data});
 function configuredVersion(source){
-  let version;const sandbox={module:{exports:{}},require:name=>name==='./company-snapshot-store.cjs'?{createCompanySnapshotStore:options=>{version=options.version;return {};}}:require(name)};
+  const sourceRequire=require('node:module').createRequire(require.resolve('../company-read-cache.cjs'));
+  let version;const sandbox={module:{exports:{}},require:name=>name==='./company-snapshot-store.cjs'?{createCompanySnapshotStore:options=>{version=options.version;return {};}}:sourceRequire(name)};
   vm.runInNewContext(source,sandbox,{filename:'company-read-cache.cjs'});
   sandbox.module.exports.createCompanyReadCache({persistenceDirectory:path.resolve(os.tmpdir(),'fixture-unused'),namespace:NAMESPACE});return version;
 }

@@ -78,3 +78,9 @@ test('unavailable integrated results are not replaced by the latest raw run or s
   const missing=w.InsightCompanyView.render({companyDetail:{basics:{},channels:[],current:{daily:[{date:'2026-10-01',missing:true}],summary:null}}});
   assert.doesNotMatch(missing,/db-current|0실/);
 });
+test('allocation and lunch dinner reuse are visible without treating them as measured sales',()=>{
+  const {window:w}=ui(),data={companyDetail:{basics:{name:'가상 업체'},current:{daily:[{date:'2026-09-04',total:16,publicBookings:1,phoneBookings:5,estimatedRevenue:1379000,publicRevenue:279000,phoneRevenue:1100000,phoneAllocatedBookings:5,
+    sharedDayUseEvidence:{groups:[{reusedBookings:1}]}}]}}};
+  const html=w.InsightCompanyView.render(data);assert.match(html,/상품 배분 추정/);assert.match(html,/런치·디너 재사용 반영/);assert.match(html,/1,379,000원/);
+  assert.doesNotMatch(html,/확정 매출|실제 매출/);
+});

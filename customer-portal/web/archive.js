@@ -37,7 +37,7 @@
       const known=row.missing!==true&&row.inventoryConflict!==true&&row.review?.quantityReviewed!==false,priced=known&&row.review?.revenueReviewed!==false,publicCount=known?row.publicBookings:null,blockedCount=known?row.phoneBookings:null;
       const total=typeof publicCount==='number'&&typeof blockedCount==='number'?publicCount+blockedCount:null;
       const reason={SOURCE_LINK_MISSING:'원본 연결 미확인',QUANTITY_NOT_REVIEWABLE:'수량 검토 필요',REVENUE_NOT_REVIEWABLE:'금액 검토 필요',ARCHIVE_OBSERVATION_MISSING:'관측 자료 없음'}[row.review?.reason];
-      const unresolved=reason||(!known?'미확인':!priced||row.partial||row.revenuePartial?'일부 확인 필요':row.sourceObservation?.sourceRecovery?'저장 원본 복구':'정상 관측');
+      const unresolved=[reason||(!known?'미확인':!priced||row.partial||row.revenuePartial?'일부 확인 필요':row.sourceObservation?.sourceRecovery?'저장 원본 복구':'정상 관측'),row.phoneAllocatedBookings>0?'상품 배분 추정':'',row.sharedDayUseEvidence?.groups?.some(group=>group.reusedBookings>0)?'런치·디너 재사용 반영':''].filter(Boolean).join(' · ');
       const partialPrice=known&&!priced?partialPrices.get(row.date):null,partialAmount=partialPrice?.knownRevenueSubtotal;
       const confirmedSubtotal=typeof partialAmount==='number'&&Number.isFinite(partialAmount)&&partialAmount>0;
       const amount=priced?row.estimatedRevenue:confirmedSubtotal?partialAmount:null;

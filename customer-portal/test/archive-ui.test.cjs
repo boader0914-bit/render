@@ -49,6 +49,13 @@ test('record read displays a frozen table with real zeros distinct from missing 
   const unknown=h.detail.innerHTML.slice(h.detail.innerHTML.lastIndexOf('<tr>'));assert.doesNotMatch(unknown,/>0원</);
 });
 
+test('new reviewed policy evidence is labeled as allocation and time-slot reuse without changing older rows',async()=>{
+  const h=harness(),record=daily();Object.assign(record.payload.daily[0],{publicBookings:1,phoneBookings:5,estimatedRevenue:1379000,phoneAllocatedBookings:5,sharedDayUseEvidence:{groups:[{reusedBookings:1}]}});
+  h.mount();await h.resolve(0,{enabled:true,records:[record]});h.open(record.id);await h.resolve(1,{record});
+  assert.match(h.detail.innerHTML,/상품 배분 추정/);assert.match(h.detail.innerHTML,/런치·디너 재사용 반영/);assert.match(h.detail.innerHTML,/1,379,000원/);
+  assert.doesNotMatch(h.detail.innerHTML,/확정 매출|실제 매출/);
+});
+
 test('daily review summary derives verified subtotals and separate quantity and revenue coverage from archived days',()=>{
   const h=harness(),record=daily();record.metadata.title='시즌글램핑';record.payload={...record.payload,kind:'daily_review',period:{start:'2026-10-01',end:'2026-10-03',days:3},review:{status:'partial',quantityReviewedDays:2,revenueReviewedDays:1,normalDays:1},summary:{partial:true,publicBookings:999,phoneBookings:888,estimatedRevenue:99999999},daily:[
     {date:'2026-10-01',sold:3,publicBookings:1,phoneBookings:2,estimatedRevenue:300000,review:{quantityReviewed:true,revenueReviewed:true}},

@@ -3,6 +3,7 @@
 // Durable archives consume only the safe, shared company-DB projection. This
 // module never reads raw collections, recalculates revenue, or claims a human
 // review. Unknown quantities and incomplete coverage remain explicit.
+const {allocationKeys,policyEvidence}=require('./inventory-policy-evidence.cjs');
 const numeric = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
 const reference = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,179}$/.test(value) ? value : null;
 const validDay = value => typeof value === 'string' && /^20\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(value)
@@ -10,8 +11,8 @@ const validDay = value => typeof value === 'string' && /^20\d{2}-(0[1-9]|1[0-2])
 const validMonth = value => typeof value === 'string' && /^20\d{2}-(0[1-9]|1[0-2])$/.test(value);
 const stamp = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null;
 const priceEvidence = (key, value) => value === null ? null : typeof value === 'number' && Number.isFinite(value) && value >= 0
-  && (key === 'phoneFallbackRevenue' || Number.isSafeInteger(value)) ? value : null;
-const priceEvidenceKeys = ['phoneMissingPriceBookings','phoneFallbackBookings','phoneFallbackRevenue'];
+  && (!key.endsWith('Bookings') || Number.isSafeInteger(value)) ? value : null;
+const priceEvidenceKeys = ['phoneMissingPriceBookings','phoneFallbackBookings','phoneFallbackRevenue',...allocationKeys];
 const numbers = (value, keys) => Object.fromEntries(keys.map(key => [key, priceEvidenceKeys.includes(key) ? priceEvidence(key,value?.[key]) : numeric(value?.[key])]));
 const quantityKeys = ['supply','total','sold','publicBookings','phoneBookings','publicRevenue','phoneRevenue','estimatedRevenue','reservationRate','sharedDayUseExcluded','coveredCompanyDays','expectedCompanyDays','missingCompanyDays','revenueCoveredCompanyDays','sameDayObservedCompanyDays','staleDays','maxObservationLeadTimeDays','knownPartialRevenue',...priceEvidenceKeys];
 function savedRecovery(value) {
@@ -29,6 +30,7 @@ const observation = (value, companyId, month) => value?.companyId === companyId 
   && value.date.startsWith(month + '-') && value.productType === 'lodging' && stamp(value.collectedAt) && validDay(value.collectedDate)
   && value.collectedDate <= value.date && (['complete','reused','partial'].includes(value.runQuality) || savedRecovery(value))
   ? { companyId, runId: value.runId, date: value.date, productType: 'lodging', collectedAt: value.collectedAt, collectedDate: value.collectedDate, runQuality: value.runQuality,
+    ...policyEvidence(value),
     ...(savedRecovery(value) ? {sourceRecovery:savedRecovery(value)} : {}) } : null;
 const quantityValid = row => numeric(row.total) > 0 && numeric(row.sold) !== null && row.sold >= 0 && row.sold <= row.total
   && numeric(row.publicBookings) !== null && row.publicBookings >= 0 && numeric(row.phoneBookings) !== null && row.phoneBookings >= 0
@@ -42,6 +44,7 @@ function projectDailyReview({ companyId, month, data, reviewedAt } = {}) {
     || integrated?.selectedMonth !== month || !stamp(integrated?.calculatedAt) || !reference(integrated?.calculationVersion)
     || data?.responseCache?.state === 'preview' || data?.responseCache?.preview === true || data?.calculation?.mode === 'saved_only' || !snapshot || !Array.isArray(snapshot.daily) || !snapshot.daily.length || snapshot.daily.length > 31
     || provenance?.source !== 'company_db_integrated' || provenance.companyId !== companyId || provenance.calculationVersion !== integrated.calculationVersion
+    || (integrated.sourceRevision!=null||provenance.sourceRevision!=null)&&(!reference(integrated.sourceRevision)||integrated.sourceRevision!==provenance.sourceRevision)
     || !['complete','incomplete'].includes(provenance.linkageStatus) || !Array.isArray(provenance.runIds) || provenance.runIds.length > 10000
     || !provenance.runIds.every(reference) || !Array.isArray(provenance.observations) || provenance.observations.length > 31) return null;
   const period=snapshot.period;
@@ -63,7 +66,7 @@ function projectDailyReview({ companyId, month, data, reviewedAt } = {}) {
     const quantityReviewed = Boolean(linked && reviewedSource(linked) && quantityValid(row)
       && row.missing !== true && row.partial !== true && row.collectionPartial !== true && row.inventoryConflict !== true);
     const revenueReviewed = quantityReviewed && row.revenuePartial !== true && numeric(row.estimatedRevenue) !== null;
-    return { date: row.date, ...numbers(row, quantityKeys), missing: row.missing === true, partial: row.partial === true,
+    return { date: row.date, ...numbers(row, quantityKeys), ...policyEvidence(row), missing: row.missing === true, partial: row.partial === true,
       revenuePartial: row.revenuePartial === true, collectionPartial: row.collectionPartial === true, inventoryConflict: row.inventoryConflict === true,
       collectedAt: stamp(row.collectedAt), collectedDate: validDay(row.collectedDate) ? row.collectedDate : null,
       observationLeadTimeDays: numeric(row.observationLeadTimeDays), sourceObservation: linked,
@@ -76,16 +79,16 @@ function projectDailyReview({ companyId, month, data, reviewedAt } = {}) {
   const fullyReviewed = provenanceComplete && normalDays === daily.length && snapshot.summary?.partial !== true
     && snapshot.summary?.revenuePartial !== true && snapshot.summary?.quantityPartial !== true && integrated.roomBasis?.reviewRequired !== true;
   return { schemaVersion: 1, kind: 'daily_review', companyId, month, reviewedAt, calculatedAt: integrated.calculatedAt,
-    calculationVersion: integrated.calculationVersion,
+    calculationVersion: integrated.calculationVersion,...(reference(integrated.sourceRevision)?{sourceRevision:integrated.sourceRevision}:{}),
     review: { status: fullyReviewed ? 'reviewed' : 'partial', basis: 'automatic_validation', normalDays, unresolvedDays: daily.length - normalDays,
       quantityReviewedDays: daily.filter(row => row.review.quantityReviewed).length, revenueReviewedDays: daily.filter(row => row.review.revenueReviewed).length,
       recoveredDays: daily.filter(row => row.review.quantityReviewed && row.sourceObservation?.sourceRecovery).length },
     roomBasis: { count: numeric(integrated.roomBasis?.count), source: reference(integrated.roomBasis?.source), reviewRequired: integrated.roomBasis?.reviewRequired === true },
     period: { start: validDay(snapshot.period?.start) ? snapshot.period.start : null, end: validDay(snapshot.period?.end) ? snapshot.period.end : null,
       days: numeric(snapshot.period?.days), cutoffDate: validDay(snapshot.period?.cutoffDate) ? snapshot.period.cutoffDate : null, monthClosed: snapshot.period?.monthClosed === true },
-    summary: { ...numbers(snapshot.summary, quantityKeys), partial: snapshot.summary?.partial === true, revenuePartial: snapshot.summary?.revenuePartial === true, quantityPartial: snapshot.summary?.quantityPartial === true },
+    summary: { ...numbers(snapshot.summary, quantityKeys), ...policyEvidence(snapshot.summary), partial: snapshot.summary?.partial === true, revenuePartial: snapshot.summary?.revenuePartial === true, quantityPartial: snapshot.summary?.quantityPartial === true },
     daily,
-    provenance: { source: 'company_db_integrated', companyId, calculationVersion: integrated.calculationVersion, linkageStatus: provenanceComplete ? 'complete' : 'incomplete', runIds,
+    provenance: { source: 'company_db_integrated', companyId, calculationVersion: integrated.calculationVersion,...(reference(integrated.sourceRevision)?{sourceRevision:integrated.sourceRevision}:{}), linkageStatus: provenanceComplete ? 'complete' : 'incomplete', runIds,
       selectedRunIds: [...new Set(observations.filter(row => runSet.has(row.runId)).map(row => row.runId))].sort(), observations,
       sourceDigest: /^[a-f0-9]{64}$/i.test(provenance.sourceDigest || '') ? provenance.sourceDigest : null } };
 }
@@ -98,7 +101,7 @@ function publicationSourceLinks(records) {
       || !reference(record.calculationVersion) || record.review?.basis !== 'automatic_validation' || !['reviewed','partial'].includes(record.review.status)) continue;
     const value = projectDailyReview({ companyId: record.companyId, month: record.month, reviewedAt: record.reviewedAt,
       data: { companyId: record.companyId, integrated: { companyId: record.companyId, source: 'company_db_integrated', status: 'ready', selectedMonth: record.month,
-        calculatedAt: record.calculatedAt, calculationVersion: record.calculationVersion, snapshot: { ...record, provenance: record.provenance } } } });
+        calculatedAt: record.calculatedAt, calculationVersion: record.calculationVersion,...(record.sourceRevision===undefined?{}:{sourceRevision:record.sourceRevision}), snapshot: { ...record, provenance: record.provenance } } } });
     if (!value) continue;
     const link = { companyId: value.companyId, month: value.month, calculationVersion: value.calculationVersion, calculatedAt: value.calculatedAt,
       reviewStatus: value.review.status, ...value.provenance };
