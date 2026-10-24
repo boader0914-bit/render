@@ -11486,6 +11486,11 @@ function companyInventorySnapshotWithCurrentCapacity(snapshot, company = {}) {
       ...row, total: count, sold: publicBookings, publicBookings, phoneBookings: 0, offlineReserved: 0,
       phoneRevenue: 0, phonePricedBookings: 0, phoneMissingPriceBookings: 0,
       phoneFallbackRevenue: 0, phoneFallbackBookings: 0, phonePriceEstimates: [],
+      // This basis cannot revalue phone estimates. Retire their allocation
+      // metadata too, or stale bounds reject an independently known public sum.
+      phoneAllocatedBookings: 0, phoneAllocatedRevenue: 0, phoneRevenueLow: null, phoneRevenueHigh: null,
+      phoneRevenueRangeComplete: false, phoneValuation: null, priceRecoveryPolicy: null,
+      ...(Array.isArray(row.priceUnknownCauses) ? { priceUnknownCauses: row.priceUnknownCauses.filter(cause => cause?.channel === "public") } : {}),
       explicitBlockedBookings: 0, explicitBlockedRevenue: 0, explicitBlockedDayUseUnverified: false,
       estimatedRevenue: publicRevenue, publicRevenue, reservationRate: null,
       pricedSoldOut: null, missingPriceSoldOut: null,
@@ -11514,6 +11519,9 @@ function companyInventorySnapshotWithCurrentCapacity(snapshot, company = {}) {
       ...(snapshot.revenue?.lodging || {}), revenue: null, adjustedRevenue: null,
       missingPriceEstimatedRevenue: null, offlineRevenue: null, phoneRevenue: null, precisionRate: null,
       phoneFallbackRevenue: null, phoneFallbackBookings: null, phonePriceEstimates: [],
+      phoneAllocatedBookings: null, phoneAllocatedRevenue: null, phoneRevenueLow: null, phoneRevenueHigh: null,
+      phoneRevenueRangeComplete: false, phoneValuation: null, priceRecoveryPolicy: null,
+      ...(Array.isArray(snapshot.revenue?.lodging?.priceUnknownCauses) ? { priceUnknownCauses: snapshot.revenue.lodging.priceUnknownCauses.filter(cause => cause?.channel === "public") } : {}),
       explicitBlockedBookings: null, explicitBlockedRevenue: null, explicitBlockedDayUseUnverified: false,
       pricedSoldOut: null, missingPriceSoldOut: null,
       recalculationUnavailable: true
