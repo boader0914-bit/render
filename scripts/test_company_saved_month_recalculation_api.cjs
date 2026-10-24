@@ -63,15 +63,30 @@ async function main() {
   const originalBytes = new Map(await Promise.all(preserved.map(async file => [file, await fs.readFile(file)])));
   const auditFile = path.join(dataDir, "local-audit.json"), preload = path.join(dataDir, "no-network.cjs");
   await fs.writeFile(preload, `
-    const fs = require('node:fs'), audit = { externalRequests: 0, childStarts: 0, recalculations: [] };
+    const fs = require('node:fs'), audit = { externalRequests: 0, childStarts: 0, recalculations: [], industryHolds: 0, companyHolds: 0, deferredBatches: 0 };
     const save = () => fs.writeFileSync(${JSON.stringify(auditFile)}, JSON.stringify(audit)); save();
     global.fetch = async () => { audit.externalRequests++; save(); throw new Error('External requests forbidden'); };
     require('node:child_process').spawn = () => { audit.childStarts++; save(); throw new Error('Child processes forbidden'); };
+    const industry = require(${JSON.stringify(path.join(root, "scripts/lib/industry_analysis.cjs"))});
+    const createIndustry = industry.createIndustryAnalysisService;
+    industry.createIndustryAnalysisService = options => {
+      const service = createIndustry(options), defer = service.deferProcessing;
+      service.deferProcessing = work => defer(async () => {
+        audit.industryHolds++; audit.deferredBatches++; save();
+        try { return await work(); } finally { audit.industryHolds--; save(); }
+      });
+      return service;
+    };
     const integrated = require(${JSON.stringify(path.join(root, "scripts/lib/company_integrated_db.cjs"))});
     const originalCreate = integrated.createCompanyIntegratedDb;
     integrated.createCompanyIntegratedDb = options => {
-      const service = originalCreate(options), refresh = service.refreshMonth;
+      const service = originalCreate(options), refresh = service.refreshMonth, defer = service.deferProcessing;
+      service.deferProcessing = work => defer(async () => {
+        audit.companyHolds++; save();
+        try { return await work(); } finally { audit.companyHolds--; save(); }
+      });
       service.refreshMonth = async (companyId, options) => {
+        if (!audit.industryHolds || !audit.companyHolds) throw Object.assign(Error('Bulk repair not deferred'), { code: 'TEST_REPAIR_DISPATCH_NOT_DEFERRED' });
         audit.recalculations.push({ companyId, month: options.month }); save();
         if (companyId === 'cmp_place_monthly_b') throw Object.assign(new Error('/private/path secret-token'), { code: 'TEST_RECALCULATION_FAILURE' });
         return refresh(companyId, options);
@@ -114,7 +129,7 @@ async function main() {
     const admin = await login("recalculation-admin");
     for (const invalid of [null, [], { ...valid, confirm: undefined }, { ...valid, month: "202609" }, { ...valid, month: "2026-13" },
       { ...valid, companyIds: [] }, { ...valid, companyIds: [normal.companyId, normal.companyId] }, { ...valid, companyIds: ["../escape"] },
-      { ...valid, companyIds: Array.from({ length: 11 }, (_, i) => `cmp_place_limit_${i}`) }, { ...valid, rawRows: [] }]) {
+      { ...valid, companyIds: Array.from({ length: 201 }, (_, i) => `cmp_place_limit_${i}`) }, { ...valid, rawRows: [] }]) {
       assert.equal((await request(route, admin, "POST", invalid)).status, 400);
     }
     for (const origin of ["https://foreign.invalid", "null", "malformed-origin", null, `https://127.0.0.1:${port}`]) {
@@ -123,6 +138,10 @@ async function main() {
     assert.equal((await fetch(base + route, { method: "POST", headers: { Cookie: admin, Origin: base, "Content-Type": "text/plain" }, body: JSON.stringify(valid) })).status, 415);
     assert.equal((await fetch(base + route, { method: "POST", headers: { Cookie: admin, Origin: base, "Content-Type": "application/json" }, body: "{" })).status, 400);
     assert.deepEqual(JSON.parse(await fs.readFile(auditFile, "utf8")).recalculations, [], "Unauthorized, invalid or cross-origin bodies cannot start a calculation");
+    const bounded = await request(route, admin, "POST", { ...valid, companyIds: Array.from({ length: 200 }, (_, i) => `cmp_place_limit_${i}`) });
+    assert.equal(bounded.status, 200); assert.equal(bounded.data.collectionExecuted, false);
+    assert.deepEqual(bounded.data.counts, { failed: 200 });
+    assert.ok(bounded.data.results.every(row => row.errorCode === "company_not_found"));
     const batch = [normal.companyId, "cmp_place_monthly_b", "cmp_place_not_active", "cmp_place_deleted_fixture", "cmp_place_merged_fixture", fixture.companyId];
     const result = await request(route, admin, "POST", { ...valid, companyIds: batch });
     assert.equal(result.status, 200, JSON.stringify(result.data));
@@ -150,6 +169,8 @@ async function main() {
     assert.equal(await fs.stat(receiptsDirectory).then(() => true, error => { if (error.code === "ENOENT") return false; throw error; }), false,
       "A complete normal source can be recalculated without any recovery receipt or relabeling");
     const audit = JSON.parse(await fs.readFile(auditFile, "utf8"));
+    assert.equal(audit.deferredBatches, 2); assert.equal(audit.industryHolds, 0); assert.equal(audit.companyHolds, 0,
+      "mixed company failures must release both background dispatch holds");
     assert.deepEqual(audit.recalculations, [normal.companyId, "cmp_place_monthly_b", fixture.companyId].map(companyId => ({ companyId, month: "2026-09" })));
     assert.equal(audit.externalRequests, 0); assert.equal(audit.childStarts, 0);
     for (const [file, bytes] of originalBytes) assert.deepEqual(await fs.readFile(file), bytes, "Saved source, manual review, raw history and published report bytes stay intact");

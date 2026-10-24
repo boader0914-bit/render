@@ -45,6 +45,20 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
   const emptyState = () => ({ schemaVersion: SCHEMA_VERSION, epoch: crypto.randomUUID(), revision: 0, monthRevisions: {}, optionsRevision: 0, sequence: 0, jobs: {} });
   let state = emptyState();
   let initialization, bootstrapped, serial = Promise.resolve(), worker = null, stopped = false, storeError = null;
+  let dispatchHolds = 0;
+  const dispatchWaiters = new Set();
+  function wakeDispatchWaiters() { for (const resolve of dispatchWaiters) resolve(); dispatchWaiters.clear(); }
+  // Explicit bounded repairs own no outer analytical lease. Defer only new
+  // industry dispatch; a claimed job finishes normally and durable jobs stay.
+  async function deferProcessing(work) {
+    if (typeof work !== "function") throw new TypeError("work must be a function");
+    dispatchHolds++;
+    try { return await work(); }
+    finally {
+      dispatchHolds--;
+      if (!dispatchHolds) { wakeDispatchWaiters(); if (autoStart) kick(); }
+    }
+  }
   let tokenTask = null, lastTokenCheck = -Infinity, settleTimer = null;
   const resultVersionCache = new Map(), resultVersionSymbol = Symbol("industryResultVersion");
   const savedProbeGroups = new WeakMap(), verifiedSavedProbes = new Map();
@@ -349,11 +363,12 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
     return response;
   }
   async function runQueue() {
-    while (!stopped && !settleTimer) {
+    while (!stopped && !settleTimer && !dispatchHolds) {
       await checkSource();
       if (storeError) return;
       if (state.sourceCheckPending) return;
       const job = await locked(async () => {
+        if (stopped || dispatchHolds) return null;
         const next = Object.entries(state.jobs).filter(([, item]) => item.status === "queued" && item.calculationVersion === calculationVersion)
           .sort((a, b) => a[1].queueOrder - b[1].queueOrder)[0];
         if (!next) return null;
@@ -395,7 +410,7 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
     }
   }
   function kick() {
-    if (worker || stopped || storeError || settleTimer) return;
+    if (worker || stopped || storeError || settleTimer || dispatchHolds) return;
     worker = runQueue().catch(error => { storeError = safeCode(error); }).finally(() => {
       worker = null;
       if (state.sourceCheckPending) { if (!stopped && !storeError && autoStart) scheduleKick(); return; }
@@ -417,13 +432,14 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
     await bootstrap();
     if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
     do {
+      if (dispatchHolds && !stopped) await new Promise(resolve => dispatchWaiters.add(resolve));
       if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
       kick(); if (worker) await worker; await serial;
     }
     while (!stopped && !storeError && !state.sourceCheckPending && (worker || Object.values(state.jobs).some(job => job.status === "queued" && job.calculationVersion === calculationVersion)));
     return status();
   }
-  async function stop() { stopped = true; if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; } if (worker) await worker; await serial; }
+  async function stop() { stopped = true; wakeDispatchWaiters(); if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; } if (worker) await worker; await serial; }
   async function readOptions() {
     await bootstrap(); await checkSource();
     try {
@@ -440,6 +456,6 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
       await writeJson(path.join(directory, "options.json"), { revision, calculatedAt: timestamp(), value }); return true;
     });
   }
-  return { bootstrap, get, readSaved, rebuild: request => get(request, { rebuild: true }), invalidate, notifySourceChanged, status, drain, stop, readOptions, writeOptions, optionsRevision };
+  return { bootstrap, get, readSaved, rebuild: request => get(request, { rebuild: true }), invalidate, notifySourceChanged, deferProcessing, status, drain, stop, readOptions, writeOptions, optionsRevision };
 }
 module.exports = { createIndustryAnalysisStore, INDUSTRY_ANALYSIS_CALCULATION_VERSION: CALCULATION_VERSION };

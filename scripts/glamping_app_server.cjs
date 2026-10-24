@@ -19806,13 +19806,17 @@ async function route(req, res) {
       if (!payload || typeof payload !== "object" || Array.isArray(payload)
         || payload.confirm !== "recalculate-saved-month" || Object.keys(payload).some(key => !["confirm", "month", "companyIds"].includes(key))
         || !/^20\d{2}-(0[1-9]|1[0-2])$/.test(payload.month || "") || !Array.isArray(payload.companyIds)
-        || payload.companyIds.length < 1 || payload.companyIds.length > 10 || new Set(payload.companyIds).size !== payload.companyIds.length
+        || payload.companyIds.length < 1 || payload.companyIds.length > 200 || new Set(payload.companyIds).size !== payload.companyIds.length
         || payload.companyIds.some(id => typeof id !== "string" || !/^cmp_[a-zA-Z0-9_-]{1,150}$/.test(id))) {
         return send(res, 400, { code: "SAVED_MONTH_RECALCULATION_INVALID_REQUEST", error: "재계산할 업체와 숙박월을 확인해 주세요." });
       }
       // This derives one company/month from saved normal responses and any
       // certified legacy sources. It never collects, creates recovery receipts,
       // edits reviews, changes schedules or replaces an issued report.
+      // One bounded operator request keeps raw-heavy background builds from
+      // starting between company repairs. Existing owners finish naturally;
+      // neither queue is consumed, cancelled or enclosed in an analytical lease.
+      return industryAnalysisService.deferProcessing(() => companyIntegratedDb.deferProcessing(async () => {
       const activeIds = await (async () => {
         const data = await monthlyReportSources.catalog();
         return new Set(data.companies.filter(company => {
@@ -19823,7 +19827,6 @@ async function route(req, res) {
       const results = [];
       // Keep a bounded explicit batch together without consuming background
       // jobs. Each refresh still owns the shared analytical slot separately.
-      await companyIntegratedDb.deferProcessing(async () => {
       for (const companyId of payload.companyIds) {
         try {
           if (!activeIds.has(companyId)) {
@@ -19840,9 +19843,9 @@ async function route(req, res) {
             errorCode: /^[A-Za-z0-9_:-]{1,100}$/.test(String(error?.code || "")) ? error.code : "COMPANY_INTEGRATION_FAILED" });
         }
       }
-      });
       return send(res, 200, { month: payload.month, collectionExecuted: false, results,
         counts: results.reduce((counts, result) => { counts[result.status] = (counts[result.status] || 0) + 1; return counts; }, {}) });
+      }));
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/location-card-requests") {

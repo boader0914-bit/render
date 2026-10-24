@@ -583,7 +583,7 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
       status: "pending", hasSnapshot: false, stale: false, resultVersion: null, sourceRevisionMatches: false,
       errorCode: "INDUSTRY_PERSISTENT_STORE_DISABLED"
     } }),
-    invalidate: async () => clearSources(), notifySourceChanged: async () => clearSources(), bootstrap: async () => {}, drain: async () => {},
+    invalidate: async () => clearSources(), notifySourceChanged: async () => clearSources(), deferProcessing: async work => work(), bootstrap: async () => {}, drain: async () => {},
     stop: async () => { serviceStopped = true; clearSources(); } };
   const defaultSourceRevision = async () => JSON.stringify(await Promise.all([
     "company_master/companies.json", "history/observations.jsonl"
@@ -669,7 +669,7 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     optionsRefreshTimer = setTimeout(refreshOptionsNow, 1500);
     optionsRefreshTimer.unref();
   }
-  return { options, analyze, bootstrap, invalidate, notifySourceChanged,
+  return { options, analyze, bootstrap, invalidate, notifySourceChanged, deferProcessing: store.deferProcessing,
     // Unlike analyze, attachment reads never validate through options() or
     // prepare a missing result. The stored request itself must match exactly.
     readSaved: (input, options) => store.readSaved(normalizeRequest(input, now()), options),
