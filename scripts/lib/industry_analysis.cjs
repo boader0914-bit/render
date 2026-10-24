@@ -459,7 +459,7 @@ function buildIndustryAnalysis(source = {}, input = {}, { now = new Date() } = {
 }
 
 function createIndustryAnalysisService({ sources, readContext = async () => ({ sources: [], warnings: [], networkAttempted: false }), now = () => new Date(),
-  dataDir = null, calculationVersion, autoStart = true, readSourceRevision = null, savedReferenceRevisionScope = null,
+  dataDir = null, calculationVersion, calculationFingerprint = "", autoStart = true, readSourceRevision = null, savedReferenceRevisionScope = null,
   runWork = operation => operation(), sourceCacheMaxBytes = 8 * 1024 * 1024 }) {
   if (typeof runWork !== "function" || !Number.isSafeInteger(sourceCacheMaxBytes) || sourceCacheMaxBytes < 0) throw new TypeError("Invalid industry work/cache options");
   const sourceCache = new Map();
@@ -591,7 +591,7 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     try { const stat = await fs.stat(path.join(dataDir, filename), { bigint: true }); return [filename, String(stat.size), String(stat.mtimeNs), String(stat.ctimeNs)]; }
     catch (error) { if (error.code === "ENOENT") return [filename, null]; throw error; }
   })));
-  const store = createIndustryAnalysisStore({ dataDir, calculate, calculationVersion, now, autoStart, savedReferenceRevisionScope,
+  const store = createIndustryAnalysisStore({ dataDir, calculate, calculationVersion, calculationFingerprint, now, autoStart, savedReferenceRevisionScope,
     normalizeStoredRequest: request => normalizeRequest(request, now()),
     readSourceRevision: typeof readSourceRevision?.periodRevisions === "function" ? options => readSourceRevision.periodRevisions(options)
       : async () => JSON.stringify([await defaultSourceRevision(), readSourceRevision ? await readSourceRevision() : null]), onInvalidate: clearSources,

@@ -26,10 +26,21 @@ async function atomicJson(file, value) {
     await fs.unlink(temporary).catch(() => {});
   }
 }
-function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(), calculationVersion = CALCULATION_VERSION,
+function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(), calculationVersion = CALCULATION_VERSION, calculationFingerprint = "",
   autoStart = true, onInvalidate = () => {}, readSourceRevision = null, normalizeStoredRequest = request => request,
   needsResultRefresh = () => false, writeJson = atomicJson, savedReferenceRevisionScope = null }) {
   if (!dataDir || typeof calculate !== "function") throw new TypeError("dataDir and calculate are required");
+  if (calculationFingerprint !== "" && !/^[a-f0-9]{64}$/.test(calculationFingerprint)) throw new TypeError("Invalid industry calculation fingerprint");
+  // Calculator changes are source changes, not a new result key. Keeping the
+  // key stable preserves the last valid snapshot while the new code rebuilds.
+  const withCalculationFingerprint = value => {
+    if (!calculationFingerprint) return value;
+    const token = source => crypto.createHash("sha256").update(JSON.stringify(["industry-calculator-source-v1", calculationFingerprint, source])).digest("hex");
+    return value && typeof value === "object"
+      ? !Array.isArray(value) && typeof value.globalToken === "string" ? { ...value, globalToken: token(value.globalToken) } : value
+      : token(String(value));
+  };
+  const inspectSourceRevision = options => Promise.resolve(readSourceRevision(options)).then(withCalculationFingerprint);
   const directory = path.resolve(dataDir, "industry_analysis"), stateFile = path.join(directory, "queue.json");
   const emptyState = () => ({ schemaVersion: SCHEMA_VERSION, epoch: crypto.randomUUID(), revision: 0, monthRevisions: {}, optionsRevision: 0, sequence: 0, jobs: {} });
   let state = emptyState();
@@ -84,7 +95,7 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
     if (!force && !state.sourceCheckPending && new Date(now()).getTime() - lastTokenCheck < 30000) return;
     tokenTask = (async () => {
       const eventSequence = state.sourceEventSequence || 0;
-      const value = await readSourceRevision();
+      const value = await inspectSourceRevision();
       const scoped = value && typeof value === "object" && !Array.isArray(value)
         && typeof value.globalToken === "string" && value.months && typeof value.months === "object" && !Array.isArray(value.months)
         && Object.entries(value.months).every(([month, token]) => /^\d{4}-(0[1-9]|1[0-2])$/.test(month) && typeof token === "string");
@@ -215,7 +226,7 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
       // Only a fresh, server-verified superset input revision authorizes reuse
       // across reports. A new revision must not inherit a preceding tick's
       // probe; time alone never certifies that the inputs are unchanged.
-      const task = Promise.resolve().then(() => readSourceRevision({ fresh: true }));
+      const task = Promise.resolve().then(() => inspectSourceRevision({ fresh: true }));
       verifiedSavedProbes.set(verifiedKey, task);
       while (verifiedSavedProbes.size > 16) verifiedSavedProbes.delete(verifiedSavedProbes.keys().next().value);
       task.catch(() => { if (verifiedSavedProbes.get(verifiedKey) === task) verifiedSavedProbes.delete(verifiedKey); });
@@ -223,7 +234,7 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
       return task;
     }
     if (!savedProbeTask) {
-      const task = Promise.resolve().then(() => readSourceRevision());
+      const task = Promise.resolve().then(() => inspectSourceRevision());
       savedProbeTask = task;
       const release = () => setImmediate(() => { if (savedProbeTask === task) savedProbeTask = null; });
       task.then(release, release);
