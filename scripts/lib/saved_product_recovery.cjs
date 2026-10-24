@@ -58,12 +58,28 @@ function parseCsv(text) {
 }
 function first(row, keys) { for (const key of keys) if (Object.hasOwn(row, key) && row[key] !== "") return row[key]; return undefined; }
 function productKind(row) {
-  const explicit = [row.saleType, row.bizItemSubType].filter(Boolean).join(" ");
-  const dayUse = /데이|day[_\s]*use|당일|캠프닉|campnic|camp_nic/i.test(explicit), lodging = /숙박|night|overnight/i.test(explicit);
+  const subtype = String(row.bizItemSubType || "");
+  const dayUse = /데이|day[_\s]*use|당일|캠프닉|campnic|camp_nic/i.test(subtype), lodging = /숙박|night|overnight/i.test(subtype);
   if (dayUse && lodging) return "";
+  // The old collector saved its resolved saleType alongside the provider's
+  // sometimes-coarse subtype. Only the two supported, unambiguous sale types
+  // may win. An unknown/combined explicit label never falls back to a guess.
+  const saleType = typeof row.saleType === "string" ? row.saleType.trim() : row.saleType;
+  if (saleType !== undefined && saleType !== null && saleType !== "") {
+    return saleType === "숙박" ? "lodging" : saleType === "데이유즈" ? "dayuse" : "";
+  }
   if (dayUse) return "dayuse";
   if (lodging) return "lodging";
   return "";
+}
+function classificationNormalization(product) {
+  const kind = productKind(product), subtype = String(product.bizItemSubType || "");
+  const subtypeDayUse = /데이|day[_\s]*use|당일|캠프닉|campnic|camp_nic/i.test(subtype);
+  const subtypeLodging = /숙박|night|overnight/i.test(subtype);
+  if (!kind || !(kind === "dayuse" && subtypeLodging || kind === "lodging" && subtypeDayUse)) return null;
+  return { date: product.date, productId: String(product.bizItemId), reason: "recorded_sale_type_precedence",
+    source: { saleType: product.saleType, bizItemSubType: product.bizItemSubType },
+    applied: { saleType: kind === "lodging" ? "숙박" : "데이유즈", bizItemSubType: "" }, productType: kind };
 }
 function identity(row) {
   // URLs are accepted only as a second, exact provider identity, never as names.
@@ -212,10 +228,16 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
       if (!valid) { exclusions.push({ date: day, reason: invalidDates.get(day) || "RECOVERY_PRODUCT_DATE_MISSING" }); continue; }
       if (nightCount) verifiedDates.lodging.push(day); if (dayCount) verifiedDates.dayuse.push(day);
     }
+    const classificationNormalizations = [...products.values()].map(classificationNormalization).filter(Boolean)
+      .sort((a, b) => a.date.localeCompare(b.date) || a.productId.localeCompare(b.productId));
     files.sort((a, b) => a.path.localeCompare(b.path));
     if (expected) need(recoveryRowDigest(files) === recoveryRowDigest(expected.sourceFiles) && collectedAt === expected.collectedAt
       && recoveryRowDigest(ids) === recoveryRowDigest(expected.providerIdentity) && recoveryRowDigest(verifiedDates) === recoveryRowDigest(expected.verifiedDates), "RECOVERY_SOURCE_CHANGED");
-    return { manifest, row, ids, collectedAt, products: [...products.values()], sourceFiles: files, verifiedDates, exclusions, start, days, nightCount, dayCount };
+    if (expected) need(expected.validatorVersion === 1 ? classificationNormalizations.length === 0
+      : expected.validatorVersion === 2 && recoveryRowDigest(classificationNormalizations) === recoveryRowDigest(expected.classificationNormalizations),
+    "RECOVERY_RECEIPT_INVALID");
+    return { manifest, row, ids, collectedAt, products: [...products.values()], sourceFiles: files, verifiedDates, exclusions,
+      classificationNormalizations, start, days, nightCount, dayCount };
   }
   function build(value, company, month, runId) {
     const item = { name: company.primaryName, placeId: value.ids.placeId, place_id: value.ids.placeId,
@@ -223,8 +245,15 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
       checkIn: value.start, bookingRangeDays: value.days, weeklyDays: value.days, itemDetails: [],
       // A rejected product/date cannot contribute a fallback price for another
       // date, even if the old failed row retained a numeric price.
-      weeklyProductDetails: clone(value.products).map(product => value.exclusions.some(entry => entry.date === product.date && entry.reason !== "RECOVERY_POST_STAY_OBSERVATION")
-        ? { ...product, collectionFailed: true } : product),
+      weeklyProductDetails: clone(value.products).map(product => {
+        // Keep validation and the unchanged shared calculator on the same
+        // resolved sale type. Blank the contradictory subtype only in this
+        // derived copy; the receipt retains every original/applied field.
+        const normalization = classificationNormalization(product);
+        const projected = normalization ? { ...product, ...normalization.applied } : product;
+        return value.exclusions.some(entry => entry.date === product.date && entry.reason !== "RECOVERY_POST_STAY_OBSERVATION")
+          ? { ...projected, collectionFailed: true } : projected;
+      }),
       nightItemCount: value.nightCount, dayUseItemCount: value.dayCount, countedItemCount: value.nightCount,
       dayUseMode: "detail", dayUsePresence: value.dayCount ? "present" : "absent", dayUseScheduleStatus: value.dayCount ? "requested" : "no_day_use_product" };
     const corrected = applyCompanyManualCorrection(item, clone(projectCompany(company)));
@@ -255,10 +284,12 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
           const value = await source(runId, company, all), rows = build(value, company, input.month, runId);
           result.warnings.push(...value.exclusions.filter(value => value.date.startsWith(input.month + "-")).map(value => ({ code: value.reason, companyId, runId, date: value.date })));
           if (!rows.length) { result.warnings.push({ code: "RECOVERY_NO_VALID_DATES", companyId, runId, message: "해당 월에 검증 가능한 상품별 날짜가 없습니다." }); continue; }
-          const core = { kind: KIND, validatorVersion: 1, companyId, month: input.month, runId, collectedAt: value.collectedAt,
-            originalRunQuality: "unknown", sourceFiles: value.sourceFiles, providerIdentity: value.ids, verifiedDates: value.verifiedDates, exclusions: value.exclusions };
+          const core = { kind: KIND, validatorVersion: 2, companyId, month: input.month, runId, collectedAt: value.collectedAt,
+            originalRunQuality: "unknown", sourceFiles: value.sourceFiles, providerIdentity: value.ids, verifiedDates: value.verifiedDates, exclusions: value.exclusions,
+            classificationNormalizations: value.classificationNormalizations };
           const receiptId = recoveryRowDigest(core), payload = { ...core, receiptId, createdAt: new Date(now()).toISOString() };
           payload.checksum = recoveryRowDigest(payload);
+          need(Buffer.byteLength(JSON.stringify(payload)) <= 1024 * 1024, "RECOVERY_RECEIPT_TOO_LARGE");
           await verifyFiles(value.sourceFiles); await checkCatalog(data);
           const targetDirectory = path.join(directory, hash(companyId), input.month), file = path.join(targetDirectory, receiptId + ".json");
           await fs.mkdir(targetDirectory, { recursive: true, mode: 0o700 });
@@ -283,7 +314,8 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
     const stat = await fs.lstat(file); need(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 1024 * 1024, "RECOVERY_RECEIPT_INVALID");
     const value = JSON.parse(await fs.readFile(file, "utf8")), { checksum, ...body } = value;
     need(object(value) && HEX.test(checksum) && recoveryRowDigest(body) === checksum && value.kind === KIND && value.receiptId === receiptId
-      && value.companyId === companyId && value.month === month && value.originalRunQuality === "unknown"
+      && value.companyId === companyId && value.month === month && value.originalRunQuality === "unknown" && [1, 2].includes(value.validatorVersion)
+      && (value.validatorVersion === 1 || Array.isArray(value.classificationNormalizations))
       && recoveryRowDigest(receiptCore(value)) === receiptId && instant(value.collectedAt), "RECOVERY_RECEIPT_INVALID");
     return value;
   }

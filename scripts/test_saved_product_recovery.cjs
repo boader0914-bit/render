@@ -142,3 +142,83 @@ test("a changing catalog stops publication before any receipt is written", async
   await assert.rejects(f.helper.recover(f.input, f.data), error => error.code === "MONTHLY_COMPANY_SOURCE_CHANGED");
   await assert.rejects(fs.readdir(f.helper.directory), error => error.code === "ENOENT");
 });
+
+async function storedReceipt(f, result) {
+  const id = result.receipts[0].receiptId, folders = await fs.readdir(f.helper.directory);
+  const file = path.join(f.helper.directory, folders[0], f.input.month, id + ".json");
+  return { file, value: JSON.parse(await fs.readFile(file, "utf8")) };
+}
+test("recorded day-use sale type normalizes a contradictory provider subtype in the derived input and its receipt only", async t => {
+  for (const name of ["글램핑A당일치기(랜덤,숙박불가,당일7시간,노키즈)1", "[숙박X 당일6시간이용]랜덤객실1", "2호점 글램핑 [당일치기]"]) {
+    const f = await fixture(t, { dayuse: true });
+    for (const row of f.products) {
+      if (row.saleType === "데이유즈") { row.bizItemSubType = "ACCOMMODATION_NIGHT"; row.name = name; }
+      else if (row.date === "2026-09-01") { row.occupiedBookingCount = 1; row.available = 7; }
+    }
+    await f.write();
+    const originalProducts = await fs.readFile(path.join(f.runDir, "details", "123_weekly.json"));
+    const originalManifest = await fs.readFile(path.join(f.runDir, "manifest.json"));
+    const result = await f.helper.recover(f.input, f.data);
+    assert.equal(result.receipts.length, 1, JSON.stringify(result.warnings));
+    const saved = await storedReceipt(f, result), read = await f.helper.read(f.request, f.data);
+    assert.equal(saved.value.validatorVersion, 2);
+    assert.equal(saved.value.classificationNormalizations.length, 2);
+    assert.deepEqual(saved.value.classificationNormalizations[0], { date: "2026-09-01", productId: "day1",
+      reason: "recorded_sale_type_precedence", source: { saleType: "데이유즈", bizItemSubType: "ACCOMMODATION_NIGHT" },
+      applied: { saleType: "데이유즈", bizItemSubType: "" }, productType: "dayuse" });
+    const lodging = read.observations.find(value => value.row.productType === "lodging" && value.row.stayDate === "2026-09-01").row;
+    const dayUse = read.observations.find(value => value.row.productType === "dayuse" && value.row.stayDate === "2026-09-01").row;
+    assert.equal(lodging.supply, 10); assert.equal(lodging.publicBookings, 2); assert.equal(lodging.sharedDayUseExcluded, 1);
+    assert.equal(lodging.phoneBookings, 0); assert.equal(lodging.inventoryConflict, false);
+    assert.equal(dayUse.sold, 1); assert.equal(dayUse.estimatedRevenue, 10000);
+    assert.equal(lodging.estimatedRevenue, 200000, "day-use sales never become overnight room sales");
+    assert.deepEqual(await fs.readFile(path.join(f.runDir, "details", "123_weekly.json")), originalProducts);
+    assert.deepEqual(await fs.readFile(path.join(f.runDir, "manifest.json")), originalManifest);
+    assert.deepEqual(f.products.filter(row => row.saleType === "데이유즈").map(row => row.bizItemSubType), ["ACCOMMODATION_NIGHT", "ACCOMMODATION_NIGHT"]);
+    const afterRestart = await createSavedProductRecovery(f.options).read(f.request, f.data);
+    assert.deepEqual(afterRestart, read, "receipt scope and row digest reproduce after restart");
+  }
+});
+test("ambiguous explicit sale types and contradictory subtype labels remain unverified", async t => {
+  for (const values of [{ saleType: "숙박/데이유즈", bizItemSubType: "ACCOMMODATION_NIGHT" },
+    { saleType: "미분류", bizItemSubType: "ACCOMMODATION_NIGHT" }, { saleType: "기타", bizItemSubType: "ACCOMMODATION_DAY_USE" },
+    { saleType: true, bizItemSubType: "ACCOMMODATION_NIGHT" },
+    { saleType: "데이유즈", bizItemSubType: "ACCOMMODATION_NIGHT DAY_USE" }]) {
+    const f = await fixture(t); Object.assign(f.products[0], values); await f.write();
+    const result = await f.helper.recover(f.input, f.data);
+    assert.equal(result.receipts.length, 0); assert.equal(result.warnings[0].code, "RECOVERY_PRODUCT_ID_UNVERIFIED");
+  }
+});
+test("normalized classifications must still match each complete CSV lodging and day-use count", async t => {
+  const f = await fixture(t, { dayuse: true });
+  for (const row of f.products) if (row.saleType === "데이유즈") row.bizItemSubType = "ACCOMMODATION_NIGHT";
+  f.row["숙박상품수"] = 2; f.row["예약계산대상상품수"] = 2; f.row["데이유즈상품수"] = 0; await f.write();
+  const result = await f.helper.recover(f.input, f.data);
+  assert.equal(result.receipts.length, 0); assert.equal(result.warnings[0].code, "RECOVERY_PRODUCT_LIST_INCOMPLETE");
+});
+async function replaceWithV1Receipt(f, result) {
+  const saved = await storedReceipt(f, result);
+  const { checksum, receiptId, createdAt, classificationNormalizations, ...source } = saved.value;
+  const core = { ...source, validatorVersion: 1 }, legacyId = recoveryRowDigest(core);
+  const value = { ...core, receiptId: legacyId, createdAt }; value.checksum = recoveryRowDigest(value);
+  const file = path.join(path.dirname(saved.file), legacyId + ".json");
+  await fs.writeFile(file, JSON.stringify(value), { flag: "wx" });
+  assert.ok(saved.file.startsWith(f.root + path.sep)); await fs.unlink(saved.file);
+  return { file, value };
+}
+test("version-one valid receipts remain readable and unchanged without requiring re-recovery", async t => {
+  const f = await fixture(t), result = await f.helper.recover(f.input, f.data);
+  const legacy = await replaceWithV1Receipt(f, result), before = await fs.readFile(legacy.file);
+  const read = await createSavedProductRecovery(f.options).read(f.request, f.data);
+  assert.equal(read.observations.length, 2); assert.equal(read.observations[1].row.sold, 0);
+  assert.equal(read.observations[0].certificate.receiptId, legacy.value.receiptId);
+  assert.deepEqual(await fs.readFile(legacy.file), before);
+  assert.deepEqual(await fs.readdir(path.dirname(legacy.file)), [path.basename(legacy.file)], "read creates no replacement version-two receipt");
+});
+test("a fabricated version-one receipt cannot authorize newly normalized classification conflicts", async t => {
+  const f = await fixture(t, { dayuse: true });
+  for (const row of f.products) if (row.saleType === "데이유즈") row.bizItemSubType = "ACCOMMODATION_NIGHT";
+  await f.write(); const result = await f.helper.recover(f.input, f.data);
+  assert.equal(result.receipts.length, 1); await replaceWithV1Receipt(f, result);
+  await assert.rejects(f.helper.read(f.request, f.data), error => error.code === "RECOVERY_RECEIPT_INVALID");
+});
