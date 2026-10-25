@@ -190,6 +190,22 @@ test("an observed integrated card is displayed before the selected company start
   assert.match(f.selected().textContent, /예약/); assert.match(f.selected().textContent, /매출/);
 });
 
+test("the real selected-detail reader waits for the shared normal source check and its two frames before heavy detail", async () => {
+  const f = fixture(); f.render(); await settle();
+  const saved = integratedEnvelope("a"); saved.freshness = { savedPreview: true, selectedMonthVerified: false };
+  f.integratedRequests[0].resolve(saved); await settle();
+  await f.frame(); assert.equal(f.integratedRequests.length, 1); assert.equal(f.detailRequests.length, 0);
+  await f.frame(); assert.equal(f.integratedRequests.length, 2, "normal source check starts directly after actual saved display");
+  assert.equal(new URLSearchParams(f.integratedRequests[1].url.split("?")[1]).has("view"), false);
+  assert.equal(f.detailRequests.length, 0, "the 12-second detail request cannot enter before the short current-month proof");
+  const node = f.selected(), controller = f.controllers[0];
+  f.integratedRequests[1].resolve(integratedEnvelope("a")); await settle();
+  assert.equal(f.detailRequests.length, 0); await f.frame(); assert.equal(f.detailRequests.length, 0);
+  await f.frame(); assert.equal(f.detailRequests.length, 1);
+  assert.equal(f.selected(), node); assert.equal(f.controllers.at(-1), controller); assert.equal(f.integratedRequests.length, 2);
+  assert.equal(controller.state.error, ""); assert.match(node.textContent, /갱신 완료/);
+});
+
 test("collapsed review support performs no hidden bulk work and expands its original tools only for the current company context", async () => {
   const f = fixture(), built = [];
   for (const [name, marker] of [["adminDbAuditBoard", "audit"], ["adminDbWorkPanel", "work"], ["adminDbCollectionPanel", "collection"]]) {

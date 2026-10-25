@@ -12,6 +12,7 @@
     savedFetchStart: "appNavigationSavedFetchStartMs", savedParsed: "appNavigationSavedParsedMs", savedRendered: "appNavigationSavedRenderedMs" });
   const earlyNavigationStages = new Map(), recordedNavigationStages = new Set();
   let navigationStageScope = null, navigationCompanyClaim = null;
+  let verifiedNavigationScope = null, verifiedNavigationClaim = null, verifiedNavigationDone = false;
   const maximumInputWait = 60000;
   const finite = value => typeof value === "number" && Number.isFinite(value) && value >= 0;
   const milliseconds = value => String(Math.round(value * 10) / 10);
@@ -231,6 +232,7 @@
       if (typeof companyId !== "string" || !/^[A-Za-z0-9_-]{1,180}$/.test(companyId) || typeof isCurrent !== "function"
         || !element?.dataset || !isCurrent()) return false;
       navigationStageScope = { companyId, isCurrent, target: element, role: roleStamp() };
+      verifiedNavigationScope = navigationStageScope;
       for (const [name, at] of earlyNavigationStages) writeNavigationStage(name, at);
       earlyNavigationStages.clear(); return true;
     } catch { return false; }
@@ -256,6 +258,7 @@
       if (!navigationCompanyClaim) {
         if (name !== "savedFetchStart") return false;
         navigationCompanyClaim = { companyId, month, sequence: requestSequence };
+        verifiedNavigationClaim = navigationCompanyClaim;
       }
       if (navigationCompanyClaim.companyId !== companyId || navigationCompanyClaim.month !== month || navigationCompanyClaim.sequence !== requestSequence) return false;
       if (name === "savedParsed" && !recordedNavigationStages.has("savedFetchStart")
@@ -263,7 +266,30 @@
       return writeNavigationStage(name, clock().monotonic);
     } catch { return false; }
   }
-  const api = { begin, rendered, invalidate, navigationRendered, markNavigationStage, configureNavigationStages, markNavigationCompanyStage };
+  // Called only by the normal-read controller's successful two-frame ticket.
+  // Its scope survives the earlier saved-display measurement, which remains
+  // unchanged. Unknown/error/obsolete source states cannot certify completion.
+  function markNavigationLatestReady(options = {}) {
+    if (verifiedNavigationDone || !verifiedNavigationScope || !verifiedNavigationClaim) return false;
+    try {
+      const scope = verifiedNavigationScope, claim = verifiedNavigationClaim;
+      const { companyId, month, savedSequence, sequence: requestSequence, isCurrent, isVisible, hasVerifiedMonth } = options;
+      if (target() !== scope.target || roleStamp() !== scope.role || !scope.isCurrent() || companyId !== scope.companyId
+        || companyId !== claim.companyId || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || claim.month && month !== claim.month
+        || savedSequence !== claim.sequence || !Number.isSafeInteger(requestSequence) || requestSequence <= savedSequence
+        || [isCurrent, isVisible, hasVerifiedMonth].some(callback => typeof callback !== "function")
+        || !isCurrent() || !isVisible() || !hasVerifiedMonth() || root.document?.visibilityState === "hidden"
+        || scope.target.isConnected === false || scope.target.hidden || scope.target.getAttribute?.("aria-hidden") === "true"
+        || scope.target.getClientRects && !scope.target.getClientRects().length) return false;
+      const style = root.getComputedStyle?.(scope.target), at = clock().monotonic;
+      if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0") || !finite(at)) return false;
+      scope.target.dataset.appNavigationLatestReadyMs = milliseconds(at);
+      scope.target.dataset.appNavigationLatestStatus = "ready";
+      verifiedNavigationDone = true; verifiedNavigationScope = null; verifiedNavigationClaim = null;
+      return true;
+    } catch { return false; }
+  }
+  const api = { begin, rendered, invalidate, navigationRendered, markNavigationStage, configureNavigationStages, markNavigationCompanyStage, markNavigationLatestReady };
   root.AdminTransitionTiming = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window === "undefined" ? globalThis : window);

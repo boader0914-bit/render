@@ -290,3 +290,37 @@ test("missing clocks and malformed stage options never fabricate zero or interru
   assert.doesNotThrow(() => fresh.api.markNavigationCompanyStage("savedFetchStart", { get companyId() { throw Error("private"); } }));
   assert.deepEqual(fresh.main.dataset, {});
 });
+
+test("normal-read latest completion keeps its strict initial scope after saved display and never overwrites first-display timing", () => {
+  const f = fixture(); let current = true;
+  f.api.configureNavigationStages({ companyId: "initial-company", isCurrent: () => current });
+  f.api.markNavigationCompanyStage("savedFetchStart", { companyId: "initial-company", month: "2026-09", sequence: 1, isCurrent: () => true });
+  f.api.navigationRendered({ hasSavedMonth: () => true, isCurrent: () => true, isVisible: () => true }); f.frame(); f.frame();
+  const first = f.main.dataset.appNavigationDisplayMs;
+  f.advance(250);
+  const proof = { companyId: "initial-company", month: "2026-09", savedSequence: 1, sequence: 2,
+    isCurrent: () => true, isVisible: () => true, hasVerifiedMonth: () => true };
+  assert.equal(f.api.markNavigationLatestReady(proof), true);
+  assert.equal(f.main.dataset.appNavigationLatestReadyMs, "1282"); assert.equal(f.main.dataset.appNavigationLatestStatus, "ready");
+  assert.equal(f.main.dataset.appNavigationDisplayMs, first); f.advance(1000);
+  assert.equal(f.api.markNavigationLatestReady({ ...proof, sequence: 3 }), false); assert.equal(f.main.dataset.appNavigationLatestReadyMs, "1282");
+  assert.doesNotMatch(JSON.stringify(f.main.dataset), /initial-company|2026-09/);
+});
+
+test("latest completion refuses a different request, missing proof, hidden view, stale route or role", () => {
+  for (const change of [
+    (f, proof) => { proof.companyId = "other-company"; }, (f, proof) => { proof.month = "2026-08"; },
+    (f, proof) => { proof.savedSequence = 2; }, (f, proof) => { proof.sequence = 1; },
+    (f, proof) => { proof.isCurrent = () => false; }, (f, proof) => { proof.isVisible = () => false; },
+    (f, proof) => { proof.hasVerifiedMonth = () => false; }, f => { f.document.visibilityState = "hidden"; },
+    f => { f.current = false; }, f => { f.roles.delete("role-admin"); }, f => { f.main.hidden = true; }
+  ]) {
+    const f = fixture(); f.current = true;
+    f.api.configureNavigationStages({ companyId: "initial-company", isCurrent: () => f.current });
+    f.api.markNavigationCompanyStage("savedFetchStart", { companyId: "initial-company", month: "2026-09", sequence: 1, isCurrent: () => true });
+    const proof = { companyId: "initial-company", month: "2026-09", savedSequence: 1, sequence: 2,
+      isCurrent: () => true, isVisible: () => true, hasVerifiedMonth: () => true };
+    change(f, proof); assert.equal(f.api.markNavigationLatestReady(proof), false);
+    assert.equal(f.main.dataset.appNavigationLatestReadyMs, undefined); assert.equal(f.main.dataset.appNavigationLatestStatus, undefined);
+  }
+});

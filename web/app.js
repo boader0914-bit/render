@@ -40035,6 +40035,22 @@ async function loadAdminDbCompanyDetail(companyId = "", options = {}) {
           read.displayDeferred = true;
           return null;
         }
+        const sourceContext = state.adminDbIntegratedPanelContext;
+        if (sourceContext && adminDbIntegratedContextCurrent(sourceContext, selectedCompanyId) && typeof sourceContext.controller?.whenSourceChecked === "function") {
+          let checked = await sourceContext.controller.whenSourceChecked();
+          while (checked?.status === "superseded" && current() && document.visibilityState !== "hidden"
+            && adminDbIntegratedContextCurrent(sourceContext, selectedCompanyId)) {
+            const latestDisplay = await sourceContext.controller.whenDisplayed();
+            if (latestDisplay?.status === "superseded") continue;
+            if (!current() || latestDisplay?.status !== "displayed") { checked = latestDisplay; break; }
+            checked = await sourceContext.controller.whenSourceChecked();
+          }
+          if (!current() || ["hidden", "disposed", "superseded"].includes(checked?.status) || document.visibilityState === "hidden"
+            || state.activeTab !== "admin" || state.adminPanelSection !== "database" || state.adminDbSelectedCompanyId !== selectedCompanyId) {
+            read.displayDeferred = true;
+            return null;
+          }
+        }
         if (window.AdminTransitionTiming) finishAdminScreenTransition(
           ["error", "failed"].includes(displayed.loadStatus) ? "error" : "ready");
       }
@@ -45098,6 +45114,12 @@ async function init() {
             }
             await waitForCompanyMasterPaint();
             if (!currentCompany()) break;
+            const sourceContext = state.adminDbIntegratedPanelContext;
+            if (sourceContext && adminDbIntegratedContextCurrent(sourceContext, initialCompanyRoute) && typeof sourceContext.controller?.whenSourceChecked === "function") {
+              const checked = await sourceContext.controller.whenSourceChecked();
+              if (!currentCompany()) break;
+              if (checked?.status === "superseded") continue;
+            }
           }
           if (displayed?.status !== "superseded") break;
         }

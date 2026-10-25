@@ -477,6 +477,73 @@ test("saved data paints honestly before one normal verification and then becomes
   assert.equal(timers.timers.size, 0); assert.equal(calls.length, 2); controller.dispose();
 });
 
+test("source-check consumers share one verification after the saved two-frame display and wait for its real normal display", async () => {
+  const c = container(), frames = animationFrames(), timers = previewTimers(), calls = [], latest = deferred(), verified = [];
+  const controller = ui.createController(c, { ...frames, ...timers,
+    navigationTiming: { markNavigationLatestReady(scope) { assert.equal(scope.isCurrent(), true); assert.equal(scope.isVisible(), true); assert.equal(scope.hasVerifiedMonth(), true); verified.push(scope); return true; } },
+    fetchData(id, month, signal, options) { calls.push({ id, month, signal, options }); return calls.length === 1 ? Promise.resolve(previewEnvelope()) : latest.promise; } });
+  await controller.open({ companyId: envelope().companyId, month: "2026-09" });
+  let settled = 0; const first = controller.whenSourceChecked().then(value => { settled++; return value; }), second = controller.whenSourceChecked();
+  await Promise.resolve(); assert.equal(calls.length, 1); frames.frame(); await Promise.resolve(); assert.equal(calls.length, 1);
+  frames.frame(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 2); assert.deepEqual(calls[1].options, {}); assert.equal(settled, 0);
+  assert.match(c.innerHTML, /저장 자료 · 최신 확인 중/); assert.equal(ui.buildViewModel(controller.state.envelope).rows[1].sold, 0); assert.equal(ui.buildViewModel(controller.state.envelope).rows[2].sold, null);
+  latest.resolve({ ...envelope(), freshness: { selectedMonthVerified: true } }); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(verified.length, 0); assert.equal(settled, 0, "normal response/DOM alone does not prove display completion");
+  frames.frame(); await Promise.resolve(); assert.equal(verified.length, 0); assert.equal(settled, 0);
+  frames.frame(); await Promise.resolve(); assert.equal((await first).status, "ready"); assert.equal((await second).status, "ready");
+  assert.equal(verified.length, 1); assert.equal(verified[0].savedSequence, 1); assert.equal(verified[0].sequence, 2);
+  assert.equal(timers.timers.size, 0); assert.equal(calls.length, 2); assert.match(c.innerHTML, /갱신 완료/);
+  controller.selectTab("analysis"); frames.frame(); frames.frame(); assert.equal(verified.length, 1); controller.dispose();
+});
+
+test("source-check priority always releases on failure, nonready, hidden, disposal, replacement and deadline without inventing latest ready", async () => {
+  for (const outcome of ["error", "apierror", "prooferror", "updating", "hidden", "disposed", "month", "manual", "timeout"]) {
+    const c = container(), frames = animationFrames(), timers = previewTimers(), calls = [], latest = deferred(), verified = [];
+    const controller = ui.createController(c, { ...frames, ...timers, navigationTiming: { markNavigationLatestReady: scope => verified.push(scope) },
+      fetchData(id, month, signal, options) { calls.push({ id, month, signal, options }); return calls.length === 1 ? Promise.resolve(previewEnvelope()) : latest.promise; } });
+    await controller.open({ companyId: envelope().companyId, month: "2026-09" });
+    const checking = controller.whenSourceChecked(); frames.frame(); frames.frame(); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls.length, 2);
+    if (outcome === "error") latest.reject(new Error("최신 자료 연결 실패"));
+    if (outcome === "apierror") latest.resolve({ ...envelope(), errorCode: "SOURCE_UNAVAILABLE" });
+    if (outcome === "prooferror") latest.resolve({ ...envelope(), freshness: { selectedMonthVerificationError: "SOURCE_UNAVAILABLE" } });
+    if (outcome === "updating") latest.resolve({ ...envelope(), status: "updating" });
+    if (outcome === "hidden") { c.hidden = true; controller.whenDisplayed(); }
+    if (outcome === "disposed") controller.dispose();
+    if (outcome === "month") void controller.load("2026-08");
+    if (outcome === "manual") { void controller.load(); latest.resolve(envelope()); }
+    if (outcome === "timeout") {
+      const [id, value] = [...timers.timers].find(([, value]) => value.ms === 2000); timers.timers.delete(id); value.fn();
+    }
+    await new Promise(resolve => setImmediate(resolve)); frames.frame(); frames.frame();
+    assert.equal((await checking).status, ({ month: "superseded", manual: "superseded", disposed: "disposed", apierror: "error", prooferror: "error" })[outcome] || outcome);
+    assert.equal(verified.length, 0, `${outcome} cannot certify a normal-ready display`);
+    if (!["month", "disposed"].includes(outcome)) {
+      const model = ui.buildViewModel(controller.state.envelope); assert.equal(model.rows[1].sold, 0); assert.equal(model.rows[2].sold, null);
+    }
+    if (outcome === "timeout") assert.equal(controller.state.loading, true, "the bounded priority wait does not cancel or complete the real verification");
+    if (outcome === "error") assert.match(c.innerHTML, /최신 확인 실패/);
+    if (outcome === "updating") assert.match(c.innerHTML, /통합 중/);
+    controller.dispose(); latest.resolve(envelope());
+  }
+  const c = container(), controller = ui.createController(c, { fetchData: async () => envelope() });
+  await controller.open({ companyId: envelope().companyId }); assert.equal((await controller.whenSourceChecked()).status, "unsupported"); controller.dispose();
+});
+
+test("normal data remains usable with animation-frame fallback but cannot claim a real two-frame latest metric", async () => {
+  for (const brokenFrame of [false, true]) {
+    const c = container(), events = []; let calls = 0;
+    const controller = ui.createController(c, { ...(brokenFrame ? { requestAnimationFrame() { throw new Error("frame unavailable"); } } : {}),
+      navigationTiming: { markNavigationLatestReady: proof => events.push(proof) },
+      fetchData: async () => ++calls === 1 ? previewEnvelope() : envelope() });
+    await controller.open({ companyId: envelope().companyId, month: "2026-09" });
+    assert.equal((await controller.whenSourceChecked()).status, "ready");
+    assert.equal(calls, 2); assert.equal(events.length, 0); assert.equal(ui.buildViewModel(controller.state.envelope).rows[1].sold, 0);
+    assert.equal(ui.buildViewModel(controller.state.envelope).rows[2].sold, null); controller.dispose();
+  }
+});
+
 test("a month switch aborts old verification and a failed new verification retains its saved zero and missing values", async () => {
   const c = container(), frames = animationFrames(), timers = previewTimers(), calls = [];
   const controller = ui.createController(c, { ...frames, ...timers, fetchData(id, month, signal, options) { const request = deferred(); calls.push({ id, month, signal, options, ...request }); return request.promise; } });

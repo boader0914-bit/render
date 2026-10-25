@@ -136,7 +136,7 @@ function useActualCompanyRoute(f, loadDetail = () => Promise.resolve()) {
 
 test("a deep-linked real company route starts and paints its saved card before the slow startup batch", async () => {
   const ui = require("../web/company-integrated.js"), f = fixture({ routeCompany: "bootstrap-saved-company", historyTab: "admin" });
-  const response = deferred(), requested = deferred(), finalPaint = deferred(), finalPaintEntered = deferred(), callbacks = new Map(); let frameId = 0, paintCalls = 0;
+  const response = deferred(), latest = deferred(), requested = deferred(), normalRequested = deferred(), finalPaint = deferred(), finalPaintEntered = deferred(), callbacks = new Map(), timers = new Map(); let frameId = 0, paintCalls = 0, requestCount = 0, timerId = 0;
   const main = { dataset: {}, isConnected: true, getAttribute: () => null, getClientRects: () => [{}] };
   let clock = 100;
   f.context.window.document = { visibilityState: "visible", getElementById: id => id === "appMain" ? main : null, querySelector: () => null,
@@ -151,8 +151,9 @@ test("a deep-linked real company route starts and paints its saved card before t
     getClientRects: () => [{}], querySelector(selector) { return selector === ".ci-content" && this.innerHTML.includes("ci-content") ? { children: [{}] } : null; } };
   const controller = ui.createController(container, {
     navigationTiming: timing,
+    setTimeout(fn, ms) { timers.set(++timerId, { fn, ms }); return timerId; }, clearTimeout(id) { timers.delete(id); },
     requestAnimationFrame(fn) { callbacks.set(++frameId, fn); return frameId; }, cancelAnimationFrame: id => callbacks.delete(id),
-    fetchData(id, month, signal, options) { assert.equal(id, "bootstrap-saved-company"); assert.equal(options.savedPreview, true); requested.resolve(); return response.promise; }
+    fetchData(id, month, signal, options) { assert.equal(id, "bootstrap-saved-company"); if (++requestCount === 1) { assert.equal(options.savedPreview, true); requested.resolve(); return response.promise; } assert.equal(options.savedPreview, undefined); normalRequested.resolve(); return latest.promise; }
   });
   const frame = () => { const batch = [...callbacks.values()]; callbacks.clear(); for (const callback of batch) callback(); };
   useActualCompanyRoute(f, id => controller.open({ companyId: id, month: "2026-09" }));
@@ -186,7 +187,8 @@ test("a deep-linked real company route starts and paints its saved card before t
     summary.resolve();
     await requested.promise; assert.deepEqual(f.calls.details, ["bootstrap-saved-company"]); assert.equal(navigationMeasurements, 0);
     assert.ok(!f.calls.loaders.includes("loadRuns"), "the deep-link saved request starts before the gated large run loader");
-    response.resolve({ companyId: "bootstrap-saved-company", selectedMonth: "2026-09", status: "ready", snapshot: { request: { targetId: "bootstrap-saved-company", month: "2026-09" }, summary: { lodging: {} }, daily: [] } });
+    const payload = { companyId: "bootstrap-saved-company", selectedMonth: "2026-09", status: "ready", snapshot: { request: { targetId: "bootstrap-saved-company", month: "2026-09" }, summary: { lodging: {} }, daily: [] } };
+    response.resolve({ ...payload, freshness: { savedPreview: true, selectedMonthVerified: false } });
     await new Promise(resolve => setImmediate(resolve)); assert.match(container.innerHTML, /월별 통합 분석/); assert.ok(!f.calls.loaders.includes("loadRuns"));
     frame(); await Promise.resolve(); assert.ok(!f.calls.loaders.includes("loadRuns"), "one frame cannot release the background batch"); assert.equal(navigationMeasurements, 0);
     frame(); await finalPaintEntered.promise; assert.equal(navigationMeasurements, 1); assert.ok(!f.calls.loaders.includes("loadRuns"), "the app's ready-frame opportunity is retained after the controller's two frames");
@@ -201,9 +203,17 @@ test("a deep-linked real company route starts and paints its saved card before t
     frame(); await Promise.resolve(); assert.equal(main.dataset.appNavigationDisplayMs, undefined);
     frame(); await Promise.resolve(); assert.equal(main.dataset.appNavigationStatus, "ready");
     assert.ok(Number(main.dataset.appNavigationDisplayMs) > 500, "the whole-navigation clock includes the gated pre-mount timer interval");
-    finalPaint.resolve(); await f.entered.promise; assert.deepEqual(f.calls.details, ["bootstrap-saved-company"]);
+    const firstDisplay = main.dataset.appNavigationDisplayMs;
+    finalPaint.resolve(); await normalRequested.promise;
+    assert.equal(requestCount, 2); assert.ok(!f.calls.loaders.includes("loadRuns"), "the startup APIs wait for the already displayed month's normal check");
+    latest.resolve({ ...payload, freshness: { selectedMonthVerified: false } }); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(main.dataset.appNavigationLatestReadyMs, undefined); assert.ok(!f.calls.loaders.includes("loadRuns"));
+    frame(); await Promise.resolve(); assert.equal(main.dataset.appNavigationLatestReadyMs, undefined);
+    frame(); await f.entered.promise;
+    assert.equal(main.dataset.appNavigationLatestStatus, "ready"); assert.ok(Number(main.dataset.appNavigationLatestReadyMs) >= Number(firstDisplay));
+    assert.equal(main.dataset.appNavigationDisplayMs, firstDisplay); assert.deepEqual(f.calls.details, ["bootstrap-saved-company"]);
     f.gate.resolve(); await pending; assert.deepEqual(f.calls.details, ["bootstrap-saved-company"], "late bootstrap does not reopen the same company");
-  } finally { summary.resolve(); response.resolve({ companyId: "bootstrap-saved-company", selectedMonth: "2026-09" }); finalPaint.resolve(); f.gate.resolve(); controller.dispose(); await pending; }
+  } finally { summary.resolve(); response.resolve({ companyId: "bootstrap-saved-company", selectedMonth: "2026-09" }); latest.resolve({ companyId: "bootstrap-saved-company", selectedMonth: "2026-09" }); finalPaint.resolve(); f.gate.resolve(); controller.dispose(); await pending; }
 });
 
 test("a newer user navigation during the priority summary prevents initial company restoration", async () => {
