@@ -43298,8 +43298,22 @@ function openAdminDbCompanyReview(companyId = "", options = {}) {
 function handleAdminDbCompanyHash() {
   const companyId = adminDbCompanyIdFromRoute();
   if (!companyId || !isAdminRole()) return false;
+  const missing = Array.isArray(state.companyMaster?.companies)
+    && !state.companyMaster.companies.some(company => company.companyId === companyId);
   if (state.adminDbViewMode === "review" && state.adminDbSelectedCompanyId === companyId
-    && state.activeTab === "admin" && state.adminPanelSection === "database") return true;
+    && state.activeTab === "admin" && state.adminPanelSection === "database") {
+    const context = state.adminDbIntegratedPanelContext, board = els.adminDatabaseDashboard;
+    const mounted = context && adminDbIntegratedContextCurrent(context, companyId) && context.container.isConnected !== false
+      && typeof context.controller?.whenDisplayed === "function" && Boolean(board?.contains(context.container));
+    // Selection state alone may come from an earlier route poll while its
+    // bootstrap was pending. Only a real current controller proves a mount.
+    if (mounted || typeof window.CompanyIntegrated?.show !== "function") return true;
+    const support = state.adminDbSupportContext;
+    if (missing && support?.companyId === companyId && support.master === state.companyMaster
+      && support.session === state.session && support.sourceRevision === state.companyMaster?.sourceRevision
+      && support.revision === state.adminDbSearchRenderRevision && support.element?.isConnected !== false
+      && support.element && board?.contains(support.element)) return true;
+  }
   const editing = ["profile", "correction"].includes(new URLSearchParams(window.location.search || "").get("adminEdit"));
   if (editing) state.adminDbEditNavigating = true;
   // Establish the exact target before a section transition renders the DB.
@@ -43318,7 +43332,7 @@ function handleAdminDbCompanyHash() {
   } finally {
     if (editing) state.adminDbEditNavigating = false;
   }
-  openAdminDbCompanyReview(companyId, { scroll: !editing, render: !needsTab && !needsSection });
+  openAdminDbCompanyReview(companyId, { scroll: !editing, render: !needsTab && !needsSection, load: !missing });
   return true;
 }
 
@@ -43474,6 +43488,9 @@ function bindEvents() {
     });
   }, true);
   window.setInterval(() => {
+    // The initial route belongs to init until its fresh full membership read
+    // is ready. A timer must not create a selected-but-unmounted DB state.
+    if (!isAdminRole() || !Array.isArray(state.companyMaster?.companies) || state.companyMasterSummaryRead) return;
     const companyId = adminDbCompanyIdFromRoute();
     if (!companyId) return;
     if (state.adminDbViewMode === "review" && state.adminDbSelectedCompanyId === companyId) return;

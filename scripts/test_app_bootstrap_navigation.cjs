@@ -139,8 +139,9 @@ test("a deep-linked real company route starts and paints its saved card before t
   const response = deferred(), requested = deferred(), finalPaint = deferred(), finalPaintEntered = deferred(), callbacks = new Map(); let frameId = 0, paintCalls = 0;
   const main = { dataset: {}, isConnected: true, getAttribute: () => null, getClientRects: () => [{}] };
   let clock = 100;
-  f.context.window.document = { visibilityState: "visible", getElementById: id => id === "appMain" ? main : null,
+  f.context.window.document = { visibilityState: "visible", getElementById: id => id === "appMain" ? main : null, querySelector: () => null,
     body: { classList: { contains: name => name === "role-admin" } } };
+  f.context.document = f.context.window.document;
   f.context.window.performance = { now: () => ++clock, timeOrigin: 1700000000000 };
   f.context.window.Date = { now: () => 1700000000000 + clock };
   f.context.window.getComputedStyle = () => ({ display: "block", visibility: "visible", opacity: "1" });
@@ -155,6 +156,8 @@ test("a deep-linked real company route starts and paints its saved card before t
   });
   const frame = () => { const batch = [...callbacks.values()]; callbacks.clear(); for (const callback of batch) callback(); };
   useActualCompanyRoute(f, id => controller.open({ companyId: id, month: "2026-09" }));
+  f.context.window.requestAnimationFrame = fn => { callbacks.set(++frameId, fn); return frameId; };
+  f.context.window.cancelAnimationFrame = id => callbacks.delete(id);
   const originalLoadSession = f.context.loadSession;
   f.context.loadSession = async () => { await originalLoadSession(); f.state.activeTab = "report"; };
   f.state.adminDbIntegratedPanelContext = { container, controller };
@@ -164,8 +167,23 @@ test("a deep-linked real company route starts and paints its saved card before t
   timing.navigationRendered = options => { assert.equal(options.hasSavedMonth(), true); assert.equal(options.isCurrent(), true); assert.equal(options.isVisible(), true); navigationMeasurements++; return originalNavigationRendered(options); };
   f.context.adminDbIntegratedDisplayForDetail = () => controller.whenDisplayed();
   f.context.waitForCompanyMasterPaint = async () => { if (++paintCalls === 1) { finalPaintEntered.resolve(); await finalPaint.promise; } };
+  const summary = deferred(), summaryEntered = deferred(); let routePoll;
+  const interval = source.match(/  window\.setInterval\(\(\) => \{\n(?=[^]*?const companyId = adminDbCompanyIdFromRoute\(\))[^]*?\n  \}, 250\);/)?.[0];
+  assert.ok(interval, "exercise the actual 250ms route restoration registration");
+  f.context.window.setInterval = (callback, delay) => { assert.equal(delay, 250); routePoll = callback; };
+  f.context.bindEvents = () => vm.runInContext(interval, f.context);
+  f.state.companyMaster = null;
+  f.context.loadCompanyMasterSummary = async options => {
+    assert.equal(options.deferPriorityRender(), true); summaryEntered.resolve(); await summary.promise;
+    f.state.companyMaster = { companies: [{ companyId: "bootstrap-saved-company", detailLoaded: false }] };
+  };
   const pending = f.api.init();
   try {
+    await summaryEntered.promise; clock += 250; routePoll(); clock += 250; routePoll();
+    assert.deepEqual(f.calls.details, []); assert.equal(f.state.adminPanelSection, "overview");
+    assert.equal(f.state.adminDbSelectedCompanyId, undefined); assert.equal(f.state.analysisNavigationSequence, 0);
+    assert.equal(main.dataset.appNavigationDisplayMs, undefined); assert.equal(main.dataset.appNavigationStatus, undefined);
+    summary.resolve();
     await requested.promise; assert.deepEqual(f.calls.details, ["bootstrap-saved-company"]); assert.equal(navigationMeasurements, 0);
     assert.ok(!f.calls.loaders.includes("loadRuns"), "the deep-link saved request starts before the gated large run loader");
     response.resolve({ companyId: "bootstrap-saved-company", selectedMonth: "2026-09", status: "ready", snapshot: { request: { targetId: "bootstrap-saved-company", month: "2026-09" }, summary: { lodging: {} }, daily: [] } });
@@ -179,9 +197,13 @@ test("a deep-linked real company route starts and paints its saved card before t
     assert.ok(Number(main.dataset.appNavigationSavedFetchStartMs) <= Number(main.dataset.appNavigationSavedParsedMs));
     assert.ok(Number(main.dataset.appNavigationSavedParsedMs) <= Number(main.dataset.appNavigationSavedRenderedMs));
     assert.equal(Object.values(main.dataset).some(value => String(value).includes("bootstrap-saved-company")), false, "diagnostics expose timing numbers only");
+    assert.equal(main.dataset.appNavigationStatus, "pending");
+    frame(); await Promise.resolve(); assert.equal(main.dataset.appNavigationDisplayMs, undefined);
+    frame(); await Promise.resolve(); assert.equal(main.dataset.appNavigationStatus, "ready");
+    assert.ok(Number(main.dataset.appNavigationDisplayMs) > 500, "the whole-navigation clock includes the gated pre-mount timer interval");
     finalPaint.resolve(); await f.entered.promise; assert.deepEqual(f.calls.details, ["bootstrap-saved-company"]);
     f.gate.resolve(); await pending; assert.deepEqual(f.calls.details, ["bootstrap-saved-company"], "late bootstrap does not reopen the same company");
-  } finally { response.resolve({ companyId: "bootstrap-saved-company", selectedMonth: "2026-09" }); finalPaint.resolve(); f.gate.resolve(); controller.dispose(); await pending; }
+  } finally { summary.resolve(); response.resolve({ companyId: "bootstrap-saved-company", selectedMonth: "2026-09" }); finalPaint.resolve(); f.gate.resolve(); controller.dispose(); await pending; }
 });
 
 test("a newer user navigation during the priority summary prevents initial company restoration", async () => {
