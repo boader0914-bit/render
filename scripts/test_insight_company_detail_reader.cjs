@@ -48,6 +48,9 @@ test("streamed Insight detail keeps canonical and explicitly merged company IDs,
   const read = createInsightCompanyDetailReader({ ...f.options, fileSystem: sourceFs,
     masterReader: async (...args) => { assert.equal(f.scheduler.status().activeKind, "insight-company-detail"); return readScopedCompanyMaster(...args); },
     historyReader: async (...args) => { assert.equal(f.scheduler.status().activeKind, "insight-company-detail"); return readScopedCompanyHistory(...args); } });
+  assert.equal(read.runWork,f.options.runWork);
+  assert.equal(Object.getOwnPropertyDescriptor(read,'runWork').enumerable,false);
+  assert.deepEqual(Object.keys(read),[],'ownership capability cannot enter serialized customer fields');
   const data = await read("cmp_one");
   assert.deepEqual(data.observations.map(r => r.observationId), ["zero", "merged", "unknown"]);
   assert.equal(data.observations[0].publicBookings, 0); assert.equal(data.observations[0].price, 0);

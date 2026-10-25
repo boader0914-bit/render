@@ -2,6 +2,7 @@
 // Customer projection: one identified company, one stored run. Never expose raw files or other companies.
 const { hash, fault } = require('./insight_store.cjs');
 const { projectCompanyDetail } = require('./insight_company_detail.cjs');
+const { createScheduledSingleFlight } = require('./scheduled_single_flight.cjs');
 const number = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
 const text = (value, limit = 180) => String(value || '').slice(0, limit);
 const day = value => /^\d{4}-\d{2}-\d{2}$/.test(value || '') ? value : null;
@@ -55,28 +56,35 @@ function projectCollection(company, evidence) {
     actualRevenueAvailable: false };
   return { ...result, version: hash(JSON.stringify([company.version, result])) };
 }
-function createCollectionResults({ catalog, readEvidence, readCompanyDetail, readIntegrated }) {
-  const readingDetails = new Map(), readingSources = new Map();
+function createCollectionResults({ catalog, readEvidence, readCompanyDetail, readIntegrated, runWork = operation => operation() }) {
+  if (typeof runWork !== 'function') throw TypeError('Collection reads require analytical ownership');
+  // A pending group carries no load promise until its caller owns the lease.
+  // A nested owner must never await an outer request queued behind that owner.
+  const detailFlight = createScheduledSingleFlight({runWork,kind:'insight-company-view-detail'});
+  const resultFlight = createScheduledSingleFlight({runWork,kind:'insight-company-view-result'});
+  const viewFlight = createScheduledSingleFlight({runWork,kind:'insight-company-view'});
+  const readingSources = new Map();
   async function sourceDetail(companyId) {
     if (readingSources.has(companyId)) return readingSources.get(companyId);
     const pending = Promise.resolve().then(() => readCompanyDetail(companyId));
     readingSources.set(companyId,pending);
     try { return await pending; } finally { if(readingSources.get(companyId)===pending)readingSources.delete(companyId); }
   }
-  async function read(companyId, runId = null) {
+  async function readOwned(companyId, runId) {
     const company = (await catalog()).companies.find(row => row.companyId === companyId);
     if (!company) return null;
     return projectCollection(company, await readEvidence(companyId, { runId }));
+  }
+  function read(companyId, runId = null) {
+    return resultFlight.run(JSON.stringify([companyId,runId]),()=>readOwned(companyId,runId));
   }
   async function reusable(companyId, scope, observationDay) {
     const evidence = await readEvidence(companyId, { scope, observationDay });
     return evidence?.run?.id || null;
   }
-  async function companyDetail(companyId, { month } = {}) {
-    if (!readCompanyDetail) return null;
-    const key = JSON.stringify([companyId, month || '']);
-    if (readingDetails.has(key)) return readingDetails.get(key);
-    const pending=(async()=>{
+  function companyDetail(companyId, { month } = {}) {
+    if (!readCompanyDetail) return Promise.resolve(null);
+    return detailFlight.run(JSON.stringify([companyId,month||'']),async()=>{
       const company=(await catalog()).companies.find(c=>c.companyId===companyId);
       if (!company) return null;
       let integrated;
@@ -90,10 +98,15 @@ function createCollectionResults({ catalog, readEvidence, readCompanyDetail, rea
       const detail = await sourceDetail(companyId);
       if (!readIntegrated) integrated=detail?.integrated;
       return projectCompanyDetail(company, detail, { integrated, month, integrationConnected: Boolean(readIntegrated) });
-    })();
-    readingDetails.set(key,pending);
-    try { return await pending; } finally { if(readingDetails.get(key)===pending)readingDetails.delete(key); }
+    });
   }
-  return { read, reusable, companyDetail };
+  function readView(companyId, { month } = {}) {
+    return viewFlight.run(JSON.stringify([companyId,month||'']),async()=>{
+      const detail=await companyDetail(companyId,{month});
+      const result=await read(companyId);
+      return {companyDetail:detail,result};
+    });
+  }
+  return { read, reusable, companyDetail, readView };
 }
 module.exports = { createCollectionResults, projectCollection, productRows };

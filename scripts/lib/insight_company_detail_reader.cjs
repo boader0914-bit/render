@@ -30,8 +30,12 @@ function createInsightCompanyDetailReader({ dataDir, outputsDir, projectionVersi
   // Joining a queued outer promise before admission can deadlock a nested caller
   // that already owns the lease. Existing saved-detail reuse avoids a second
   // source build for separately admitted requests to that same company.
-  return companyId => runWork(async () => (await store.get(companyId)).data,
+  const read = companyId => runWork(async () => (await store.get(companyId)).data,
     { priority: "foreground", kind: "insight-company-detail" });
+  // Internal adapter capability: the customer connection can own the complete
+  // monthly/detail/evidence read without changing the app's calculator wiring.
+  Object.defineProperty(read, "runWork", { value: runWork });
+  return read;
 }
 
 module.exports = { createInsightCompanyDetailReader, VERSION };

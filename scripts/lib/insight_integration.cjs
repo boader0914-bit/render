@@ -49,7 +49,8 @@ function createInsightIntegration({ dataDir, readCatalog, readMembers, authentic
       return { ...company, version: hash(JSON.stringify({ company, correctionAt: raw.manualCorrection?.updatedAt || null })) };
     }) };
   }
-  const collectionResults = readEvidence ? createCollectionResults({catalog,readEvidence,readCompanyDetail,readIntegrated}) : null;
+  const collectionResults = readEvidence ? createCollectionResults({catalog,readEvidence,readCompanyDetail,readIntegrated,
+    ...(typeof readCompanyDetail?.runWork === 'function' ? {runWork:readCompanyDetail.runWork} : {})}) : null;
   const savedCollectionResults=createInsightSavedReportSources({dataDir});
   const analysis=createInsightAnalysis({catalog,collectionResults,savedCollectionResults,readRegionContext,readRegionLocation,regionPreparation});
   const preparationBridge = collectorRequests && verifyStored ? createInsightPreparation({store,catalog,collectorRequests,verifyStored,readPostprocess,findReusable:collectionResults?.reusable,workerKey}) : null;

@@ -122,8 +122,9 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
     if (preparationBridge) await refreshPreparation(c.customerId);
     const request = store.requests(c.customerId).find(row => row.companyId===companyId) || null;
     // A customer's previous request must not pin the shared company DB to an old run.
-    const companyDetail=await collectionResults.companyDetail?.(companyId, { month }) || null;
-    const result = await collectionResults.read(companyId);
+    const view=typeof collectionResults.readView==='function'?await collectionResults.readView(companyId,{month}):null;
+    const companyDetail=view?view.companyDetail:await collectionResults.companyDetail?.(companyId, { month }) || null;
+    const result=view?view.result:await collectionResults.read(companyId);
     return {request,result,companyDetail,collectionAllowance:store.collectionAllowance(c.customerId),previousResult:Boolean(result && request && result.runId!==request.runId)};
   }
   async function customerRequest(req, res, url, tail, c, token, context = {}, scope = customerScope(token, c.customerId)) {
@@ -160,15 +161,14 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
         const savedOnly = url.searchParams.get('savedOnly') === '1';
         if (savedOnly && !month) throw fault('INVALID_MONTH','저장 자료를 조회할 숙박월을 선택해 주세요.');
         const companyId=tail.split('/')[2],value=await companyCollection(c,companyId,month,{savedOnly});
-        if(savedOnly){
-          if(scope?.verify)await scope.verify();
-          // Keep the final fresh session/relationship check and serialization
-          // in the same turn, including after asynchronous member validation.
-          const current=scope?.current?scope.current():store.get(c.customerId);
-          if(!store.hasCompany(current,companyId))throw fault('NOT_FOUND','등록한 업체의 결과를 찾을 수 없습니다.',404);
-          value.request=store.requests(current.customerId).find(row=>row.companyId===companyId)||null;
-          value.collectionAllowance=store.collectionAllowance(current.customerId);
-        }
+        if(scope?.verify)await scope.verify();
+        // Keep the final fresh session/relationship check and serialization
+        // in the same turn, including after asynchronous full-data reads.
+        const current=scope?.current?scope.current():store.get(c.customerId);
+        if(!store.hasCompany(current,companyId))throw fault('NOT_FOUND','등록한 업체의 결과를 찾을 수 없습니다.',404);
+        value.request=store.requests(current.customerId).find(row=>row.companyId===companyId)||null;
+        value.collectionAllowance=store.collectionAllowance(current.customerId);
+        if(!savedOnly)value.previousResult=Boolean(value.result&&value.request&&value.result.runId!==value.request.runId);
         json(res,200,value);
       }
       else if (!context.view && req.method === 'POST' && tail === '/auth/logout') { store.logout(token); json(res, 200, { ok: true }); }
