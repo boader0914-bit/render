@@ -289,7 +289,15 @@
       return true;
     } catch { return false; }
   }
-  const api = { begin, rendered, invalidate, navigationRendered, markNavigationStage, configureNavigationStages, markNavigationCompanyStage, markNavigationLatestReady };
+  function invalidateNavigationLatest(reason = "SOURCE_CHANGED") {
+    const element = target();
+    if (!element?.dataset) return false;
+    delete element.dataset.appNavigationLatestReadyMs;
+    element.dataset.appNavigationLatestStatus = "invalidated";
+    verifiedNavigationDone = true; verifiedNavigationScope = null; verifiedNavigationClaim = null;
+    return true;
+  }
+  const api = { begin, rendered, invalidate, navigationRendered, markNavigationStage, configureNavigationStages, markNavigationCompanyStage, markNavigationLatestReady, invalidateNavigationLatest };
   root.AdminTransitionTiming = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window === "undefined" ? globalThis : window);

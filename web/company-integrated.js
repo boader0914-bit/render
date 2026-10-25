@@ -222,7 +222,7 @@
     if (validMonth(month)) query.set("month", month);
     if (options.savedPreview === true) query.set("view", "saved");
     const response = await root.fetch(`/api/company-master/integrated?${query}`, { credentials: "same-origin", headers: { Accept: "application/json" }, signal });
-    if (response.status === 401 || response.status === 403) throw new Error("관리자 로그인이 필요합니다. 다시 로그인한 뒤 확인하세요.");
+    if (response.status === 401 || response.status === 403) throw Object.assign(new Error("관리자 로그인이 필요합니다. 다시 로그인한 뒤 확인하세요."), { status: response.status });
     const body = await response.json();
     if (!response.ok) throw new Error(body.message || body.error || "통합 자료를 불러오지 못했습니다.");
     return body;
@@ -235,7 +235,7 @@
     const hasAnimationFrames = typeof options.requestAnimationFrame === "function" || typeof root.requestAnimationFrame === "function";
     const cancelFrame = options.cancelAnimationFrame || (root.cancelAnimationFrame ? root.cancelAnimationFrame.bind(root) : root.clearTimeout.bind(root));
     let timer = null, validationTimer = null, savedValidation = null, sequence = 0, aborted = null, disposed = false, activeLoad = null, hasOpened = false;
-    let displayTicket = null, drawRevision = 0, frameVersion = 0, frames = [], initialVerification = null;
+    let displayTicket = null, drawRevision = 0, frameVersion = 0, frames = [], initialVerification = null, cacheRequestMonth = "";
     const sourceWaiters = new Set();
     function releaseSourceWaiters(status) { for (const finish of [...sourceWaiters]) finish(status); }
     function clearTimer() { if (timer !== null) cancel(timer); timer = null; }
@@ -352,6 +352,7 @@
       if (!sourceVerification) { releaseSourceWaiters("superseded"); initialVerification = null; }
       if (initialVerification && (initialVerification.companyId !== state.context.companyId || initialVerification.month !== month)) initialVerification = null;
       const companyAtStart = state.context.companyId, initialSavedRead = savedPreview && !hasOpened;
+      if (savedPreview || month !== state.month) cacheRequestMonth = month;
       clearTimer(); clearSavedValidation(); aborted?.abort(); aborted = new AbortController(); const current = ++sequence;
       if (month !== state.month) { state.envelope = {}; state.selectedDate = ""; }
       const signal = aborted.signal;
@@ -365,7 +366,11 @@
       const promise = (async () => {
         try {
           stage("savedFetchStart");
-          const envelope = await fetchData(state.context.companyId, month, signal, savedPreview ? { savedPreview: true } : {});
+          const cacheContext = state.context.previewCacheContext;
+          const browserSaved = savedPreview && cacheContext?.isCurrent?.() === true
+            ? root.AdminCompanyPreviewCache?.read(companyAtStart, month, cacheContext) : null;
+          if (initialSavedRead && container.dataset) container.dataset.ciInitialPreviewSource = browserSaved ? "session" : "server";
+          const envelope = browserSaved?.envelope || await fetchData(state.context.companyId, month, signal, savedPreview ? { savedPreview: true } : {});
           if (disposed || current !== sequence) return;
           if (envelope.companyId && envelope.companyId !== state.context.companyId) throw new Error("요청한 업체와 자료의 업체가 일치하지 않습니다.");
           if (validMonth(month) && envelope.selectedMonth && envelope.selectedMonth !== month) throw new Error("선택한 월과 자료의 월이 일치하지 않습니다.");
@@ -373,12 +378,21 @@
           if (envelope.companyId === companyAtStart && parsedSnapshot?.request?.targetId === companyAtStart
             && parsedSnapshot.request.month === (envelope.selectedMonth || month)) stage("savedParsed");
           state.envelope = envelope; state.month = envelope.selectedMonth || envelope.snapshot?.request?.month || month;
-          if (savedPreview && envelope.freshness?.savedPreview === true) {
-            savedValidation = { sequence: current, companyId: state.context.companyId, month: state.month, ticket: null };
-            if (initialSavedRead && envelope.companyId === companyAtStart && parsedSnapshot?.request?.targetId === companyAtStart
-              && parsedSnapshot.request.month === state.month && parsedSnapshot.summary) initialVerification = { companyId: companyAtStart, month: state.month, savedSequence: current };
+          if (!savedPreview && cacheContext?.isCurrent?.() === true) {
+            try { root.AdminCompanyPreviewCache?.write(cacheContext, envelope, cacheRequestMonth); } catch { /* Optional tab cache cannot alter a source read. */ }
           }
-        } catch (error) { if (!disposed && current === sequence && error?.name !== "AbortError") state.error = error?.message || "통합 자료를 불러오지 못했습니다."; }
+          if (savedPreview && envelope.freshness?.savedPreview === true) {
+            savedValidation = { sequence: current, companyId: state.context.companyId, month: state.month, requestedMonth: month, ticket: null };
+            if (initialSavedRead && envelope.companyId === companyAtStart && parsedSnapshot?.request?.targetId === companyAtStart
+              && parsedSnapshot.request.month === state.month && parsedSnapshot.summary) initialVerification = { companyId: companyAtStart, month: state.month, requestedMonth: month, savedSequence: current };
+          }
+        } catch (error) { if (!disposed && current === sequence && error?.name !== "AbortError") {
+          if (error?.status === 401 || error?.status === 403) {
+            root.AdminCompanyPreviewCache?.configure(null);
+            if (state.envelope.freshness?.browserPreview === true) state.envelope = {};
+          }
+          state.error = error?.message || "통합 자료를 불러오지 못했습니다.";
+        } }
         finally {
           if (!disposed && current === sequence) {
             state.loading = false; remember(); draw();

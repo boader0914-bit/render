@@ -27386,8 +27386,16 @@ function syncCompanyIntegratedPanel() {
   for (const container of board.querySelectorAll("[data-company-integrated]")) {
     const companyId = container.dataset.companyId;
     if (companyId) {
-      const controller = window.CompanyIntegrated?.show(container, { companyId, companyName: container.dataset.companyName });
       const company = (state.companyMaster?.companies || []).find(row => row.companyId === companyId);
+      const session = state.session, master = state.companyMaster, sourceRevision = master?.sourceRevision;
+      const correctionRevision = Number(company?.manualCorrectionRevision || 0);
+      const previewCacheContext = { companyId, companyName: company?.primaryName || container.dataset.companyName,
+        sourceRevision, correctionRevision, updatedAt: company?.updatedAt,
+        isCurrent: () => isAdminRole() && state.session === session && state.session?.authenticated === true
+          && state.companyMaster === master && master?.sourceRevision === sourceRevision
+          && state.activeTab === "admin" && state.adminPanelSection === "database" && state.adminDbSelectedCompanyId === companyId
+          && Number((master?.companies || []).find(row => row.companyId === companyId)?.manualCorrectionRevision || 0) === correctionRevision };
+      const controller = window.CompanyIntegrated?.show(container, { companyId, companyName: container.dataset.companyName, previewCacheContext });
       state.adminDbIntegratedPanelContext = { container, controller, session: state.session,
         master: state.companyMaster, sourceRevision: state.companyMaster?.sourceRevision,
         correctionRevision: Number(company?.manualCorrectionRevision || 0) };
@@ -27443,6 +27451,18 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   }
   if (state.activeTab !== "admin" || state.adminPanelSection !== "database") {
     state.adminViewsDeferred = true;
+    return;
+  }
+  if (master.browserCompanyPreview === true) {
+    // A tab-local saved card is never a company roster or an editable DB row.
+    hideAdminRegionManagement();
+    const companyId = adminDbCompanyIdFromRoute();
+    const company = (master.companies || []).find(row => row.companyId === companyId);
+    adminDbReplaceBoardHtml(company
+      ? `<div class="admin-console-empty" role="status"><strong>${escapeHtml(company.primaryName)}</strong> · 저장 자료 · 업체 정보 확인 중</div>${adminDbIntegratedContainerHtml(company)}`
+      : `<div class="admin-console-empty" role="status">업체 기본자료를 확인하고 있습니다.</div>`, company?.companyId || "");
+    syncCompanyIntegratedPanel();
+    if (window.AdminTransitionTiming) finishAdminScreenTransition("waiting");
     return;
   }
   const searchRestore = captureAdminDbSearchInput();
@@ -30673,6 +30693,7 @@ function hideAdminRegionManagement() {
 }
 
 function renderAdminRegionAnalysisDashboard(master = adminConsoleMasterSource()) {
+  if (master.browserCompanyPreview === true) return;
   if (!els.adminRegionAnalysisDashboard) return;
   const overview = els.adminRegionAnalysisDashboard.querySelector(".region-management-overview");
   if (overview) state.adminRegionOverviewOpen = overview.open;
@@ -30737,6 +30758,10 @@ function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
   if (state.activeTab === "admin" && state.adminPanelSection === "database") {
     state.adminViewsDeferred = true;
     renderAdminDatabaseDashboard(master);
+    return;
+  }
+  if (master.browserCompanyPreview === true) {
+    if (els.adminConsoleDashboard) els.adminConsoleDashboard.innerHTML = `<div class="admin-console-empty" role="status">업체 기본자료를 확인하고 있습니다.</div>`;
     return;
   }
   if (state.activeTab === "monthlyReports") {
@@ -30869,6 +30894,10 @@ function rerenderCompanyMasterPreservingSearch() {
 function renderCompanyMasterPanel() {
   if (!els.companyMasterPanel) return;
   const master = { ...(state.data?.companyMaster || {}), ...(state.companyMaster || {}) };
+  if (master.browserCompanyPreview === true) {
+    els.companyMasterPanel.innerHTML = `<div class="empty" role="status">업체 기본자료를 확인하고 있습니다.</div>`;
+    return;
+  }
   renderAdminConsoleDashboard(master);
   // A late DB-save response can arrive after returning home. Its saved state
   // updates the summary, without recreating the hidden legacy company tools.
@@ -39565,7 +39594,9 @@ function openAdminUserView(event) {
 }
 
 async function loadSession() {
-  const session = await fetchJson("/api/session");
+  let session;
+  try { session = await fetchJson("/api/session"); }
+  catch (error) { window.AdminCompanyPreviewCache?.configure(null); throw error; }
   const previewRequested = adminUserViewRequested();
   state.session = {
     authenticated: Boolean(session.authenticated),
@@ -39582,6 +39613,7 @@ async function loadSession() {
   state.session.lastLoginAt = session.lastLoginAt || "";
   state.session.sessionCreatedAt = session.sessionCreatedAt || "";
   state.session.expiresAt = session.expiresAt || "";
+  window.AdminCompanyPreviewCache?.configure({ ...state.session, role: session.role }, { customerView: state.adminUserViewMode });
   if (state.session.role === "admin" && state.session.roleLabel !== "마스터") state.session.roleLabel = "마스터";
   if (location.pathname === "/b2b" && (state.session.role === "b2b" || state.adminUserViewMode)) {
     state.activeTab = "report";
@@ -39950,14 +39982,32 @@ async function loadCompanyMasterSummary(options = {}) {
     }
     const existing = state.companyMaster;
     const sameSource = data?.representation === "bootstrap" && existing?.representation === "bootstrap"
-      && !existing.error && typeof data.sourceRevision === "string" && Boolean(data.sourceRevision)
+      && existing.browserCompanyPreview !== true && !existing.error && typeof data.sourceRevision === "string" && Boolean(data.sourceRevision)
       && data.sourceRevision === existing.sourceRevision && Array.isArray(data.companies) && Array.isArray(existing.companies)
       && data.companies.length === existing.companies.length
       && data.companies.every((company, index) => company.companyId === existing.companies[index]?.companyId);
     // An unchanged fresh source response must not discard hydrated detail or
     // remount an already displayed company/month controller. Changed sources
     // still replace the master through the same session/revision guards above.
-    state.companyMaster = sameSource ? existing : data;
+    const previewCompany = existing?.browserCompanyPreview === true ? existing.companies?.[0] : null;
+    const freshPreviewCompany = previewCompany && (data?.companies || []).find(row => row.companyId === previewCompany.companyId);
+    const samePreviewSource = Boolean(previewCompany && data?.representation === "bootstrap" && !data.error
+      && existing.sourceRevision && data.sourceRevision === existing.sourceRevision && freshPreviewCompany
+      && !freshPreviewCompany.deletedAt && !freshPreviewCompany.mergedIntoCompanyId
+      && Number(freshPreviewCompany.manualCorrectionRevision || 0) === Number(previewCompany.manualCorrectionRevision || 0)
+      && String(freshPreviewCompany.updatedAt || "") === String(previewCompany.updatedAt || ""));
+    if (samePreviewSource) {
+      // Preserve only this live read controller's master identity; every roster
+      // row/count/control now comes from the fresh canonical response.
+      Object.assign(existing, data);
+      delete existing.browserCompanyPreview;
+      state.companyMaster = existing;
+    } else state.companyMaster = sameSource ? existing : data;
+    if (previewCompany && !samePreviewSource) {
+      window.AdminCompanyPreviewCache?.clear();
+      window.AdminTransitionTiming?.invalidateNavigationLatest?.("CANONICAL_COMPANY_CHANGED");
+    }
+    if (previewCompany) read.previewReconciled = true;
     read.data = state.companyMaster;
     read.applied = true;
   }
@@ -39965,7 +40015,7 @@ async function loadCompanyMasterSummary(options = {}) {
   state.companyMasterSummaryStatus = { session, sequence: read.sequence, master: appliedData, status: "ready" };
   renderAdminStartupReadiness();
   if (options.bootstrap) {
-    if (!read.priorityRendered && !(typeof options.deferPriorityRender === "function" && options.deferPriorityRender())) {
+    if (!read.priorityRendered && (read.previewReconciled || !(typeof options.deferPriorityRender === "function" && options.deferPriorityRender()))) {
       renderCompanyMasterPriorityView();
       read.priorityRendered = true;
     }
@@ -39981,6 +40031,13 @@ async function loadCompanyMasterSummary(options = {}) {
 async function loadAdminDbCompanyDetail(companyId = "", options = {}) {
   const selectedCompanyId = String(companyId || "").trim();
   if (!isAdminRole() || state.session?.authenticated === false || !selectedCompanyId) return null;
+  if (state.companyMaster?.browserCompanyPreview === true) {
+    const session = state.session;
+    await state.adminCompanyPreviewCanonical;
+    if (state.session !== session || !isAdminRole() || state.session?.authenticated === false
+      || state.companyMaster?.browserCompanyPreview === true) return null;
+    return loadAdminDbCompanyDetail(selectedCompanyId, options);
+  }
   state.adminDbCompanyDetails = state.adminDbCompanyDetails || {};
   state.adminDbCompanyDetailLoading = state.adminDbCompanyDetailLoading || {};
   state.adminDbCompanyDetailReads = state.adminDbCompanyDetailReads || {};
@@ -43011,6 +43068,7 @@ async function loadTrafficState() {
 }
 
 async function logout() {
+  window.AdminCompanyPreviewCache?.configure(null);
   resetAdminDbSearchDraft();
   stopSavedRegionalCatchment({ logout: true });
   window.RegionalAnalysis?.clear();
@@ -45073,9 +45131,19 @@ async function init() {
       if (state.activeTab === "monthlyReports" && !initialCompanyRoute) state.adminBootstrapSummaryPending = true;
       else {
         if (navigationStageCurrent()) window.AdminTransitionTiming?.markNavigationStage?.("bootstrapStart");
-        await loadCompanyMasterSummary({ bootstrap: true, preserveOnError: true,
+        const browserPreview = initialCompanyRoute && initialCompanyRouteCurrent()
+          ? window.AdminCompanyPreviewCache?.read(initialCompanyRoute, "") : null;
+        if (browserPreview) state.companyMaster = { representation: "bootstrap", browserCompanyPreview: true,
+          sourceRevision: browserPreview.sourceRevision, companies: [browserPreview.company] };
+        const canonicalRead = loadCompanyMasterSummary({ bootstrap: true, preserveOnError: true,
           deferPriorityRender: () => Boolean(initialCompanyRoute && initialCompanyRouteCurrent()) });
-        if (navigationStageCurrent()) window.AdminTransitionTiming?.markNavigationStage?.("bootstrapParsed");
+        state.adminCompanyPreviewCanonical = canonicalRead;
+        if (!browserPreview) {
+          await canonicalRead;
+          if (navigationStageCurrent()) window.AdminTransitionTiming?.markNavigationStage?.("bootstrapParsed");
+        } else void canonicalRead.then(ok => {
+          if (ok && navigationStageCurrent()) window.AdminTransitionTiming?.markNavigationStage?.("bootstrapParsed");
+        }).catch(() => {});
         if (!(initialCompanyRoute && initialCompanyRouteCurrent())) await waitForCompanyMasterPaint();
       }
       if (!isAdminRole() || state.session !== initialSession || state.session?.authenticated === false) return;

@@ -225,6 +225,42 @@ test("a newer user navigation during the priority summary prevents initial compa
   f.gate.resolve(); await pending; assert.equal(f.state.activeTab, "monthlyReports"); assert.equal(f.state.monthlyReportSelection.month, "2026-08"); assert.deepEqual(f.calls.details, []);
 });
 
+test("fresh admin authentication can restore an exact read-only saved company before the concurrent canonical bootstrap settles", async () => {
+  const f = fixture({ routeCompany: "cached-company", historyTab: "admin", companyMaster: null });
+  const canonical = deferred(), canonicalEntered = deferred(), displayed = deferred(), checked = deferred();
+  let configured = false, restored = false, canonicalDone = false;
+  const stages = [];
+  f.context.document = { visibilityState: "visible" };
+  f.context.window.AdminCompanyPreviewCache = {
+    configure(session, options) { assert.equal(session.authenticated, true); assert.equal(session.role, "admin"); assert.equal(options.customerView, false); configured = true; },
+    read(companyId, requestedMonth) {
+      assert.equal(configured, true, "nothing is restored before the fresh session response");
+      assert.equal(companyId, "cached-company"); assert.equal(requestedMonth, "");
+      return { sourceRevision: "saved-source", company: { companyId, primaryName: "[모의] 저장 업체", detailLoaded: false } };
+    }
+  };
+  f.context.window.AdminTransitionTiming = { configureNavigationStages() {}, markNavigationStage: name => stages.push(name) };
+  f.context.loadCompanyMasterSummary = async () => { canonicalEntered.resolve(); await canonical.promise; canonicalDone = true; return true; };
+  f.context.handleAdminDbCompanyHash = () => {
+    assert.equal(canonicalDone, false); assert.equal(f.state.companyMaster.browserCompanyPreview, true);
+    assert.equal(f.state.companyMaster.companies[0].detailLoaded, false);
+    f.state.activeTab = "admin"; f.state.adminPanelSection = "database"; f.state.adminDbSelectedCompanyId = "cached-company";
+    f.state.analysisNavigationSequence++; restored = true; return true;
+  };
+  const controller = { whenSourceChecked: () => checked.promise };
+  f.state.adminDbIntegratedPanelContext = { controller, container: { isConnected: true } };
+  f.context.adminDbIntegratedContextCurrent = () => true;
+  f.context.adminDbIntegratedDisplayForDetail = () => displayed.promise;
+  const pending = f.api.init(); await canonicalEntered.promise; await Promise.resolve();
+  assert.equal(restored, true); assert.equal(stages.includes("bootstrapParsed"), false, "cached data is not falsely recorded as a parsed network bootstrap");
+  assert.ok(!f.calls.loaders.includes("loadRuns"));
+  displayed.resolve({ status: "displayed", companyId: "cached-company", month: "2026-10" });
+  await Promise.resolve(); checked.resolve({ status: "ready" }); await f.entered.promise;
+  assert.equal(canonicalDone, false, "latest verification may finish without waiting for the complete roster transfer");
+  canonical.resolve(); await f.state.adminCompanyPreviewCanonical;
+  assert.equal(stages.includes("bootstrapParsed"), true); f.gate.resolve(); await pending;
+});
+
 test("the late startup batch cannot restore an older company after a newer explicit company route", async () => {
   const f = fixture({ routeCompany: "old-company", historyTab: "admin" }); useActualCompanyRoute(f);
   const pending = f.api.init(); await f.entered.promise; assert.deepEqual(f.calls.details, ["old-company"]);
