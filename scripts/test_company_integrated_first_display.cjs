@@ -273,6 +273,31 @@ test("restoring a company route establishes its exact target before one DB rende
   }
 });
 
+test("selected route state without a current controller is repaired once, while valid, missing and legacy views never loop", async () => {
+  const f = fixture(); let renders = 0;
+  f.context.adminDbCompanyIdFromRoute = () => "a";
+  f.context.setAdminPanelSection = section => { f.state.adminPanelSection = section; };
+  f.context.renderAdminConsoleDashboard = () => { renders++; f.context.renderAdminDatabaseDashboard(); };
+  vm.runInContext(declaration("handleAdminDbCompanyHash"), f.context);
+  assert.equal(f.state.adminDbViewMode, "review"); assert.equal(f.state.adminDbSelectedCompanyId, "a");
+  assert.equal(f.state.adminDbIntegratedPanelContext, undefined, "the old selected-only race has no actual controller yet");
+  assert.equal(f.context.handleAdminDbCompanyHash(), true); await settle();
+  assert.equal(renders, 1); assert.equal(f.integratedRequests.length, 1); assert.equal(f.detailRequests.length, 0);
+  const selected = f.selected(), controller = f.controllers[0];
+  for (let index = 0; index < 20; index++) assert.equal(f.context.handleAdminDbCompanyHash(), true);
+  assert.equal(renders, 1); assert.equal(f.integratedRequests.length, 1); assert.equal(f.selected(), selected); assert.equal(f.controllers.at(-1), controller);
+  f.state.companyMaster = { ...f.state.companyMaster, sourceRevision: "target-removed", companies: [f.state.companyMaster.companies[1]] };
+  assert.equal(f.context.handleAdminDbCompanyHash(), true); await settle();
+  assert.equal(renders, 2); assert.match(f.board.textContent, /선택한 업체를 찾을 수 없습니다/);
+  const savedRequests = f.integratedRequests.length, detailRequests = f.detailRequests.length;
+  for (let index = 0; index < 20; index++) assert.equal(f.context.handleAdminDbCompanyHash(), true);
+  assert.equal(renders, 2); assert.equal(f.integratedRequests.length, savedRequests); assert.equal(f.detailRequests.length, detailRequests);
+  assert.equal(detailRequests, 0, "a known missing exact target never starts a different or unknown company read");
+  f.context.window.CompanyIntegrated = undefined;
+  for (let index = 0; index < 20; index++) assert.equal(f.context.handleAdminDbCompanyHash(), true);
+  assert.equal(renders, 2); assert.equal(f.integratedRequests.length, savedRequests); assert.equal(f.detailRequests.length, 0);
+});
+
 test("an unchanged freshly checked bootstrap preserves the hydrated row and current integrated controller", async () => {
   const f = fixture(); f.state.companyMaster.representation = "bootstrap";
   f.render(); await settle(); await f.shown(); await f.respondDetail();

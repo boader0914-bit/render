@@ -2132,7 +2132,10 @@ assert(
     && app.includes("restoreAdminDbInlineSearchViewport(preservedScroll, { clear: false });")
     && app.includes("detailRequest.finally(() => restoreAdminDbInlineSearchViewport(preservedScroll)).catch(() => {});")
     && app.includes("if (options.load !== false) loadAdminDbCompanyDetail(selectedCompanyId).catch(() => {});")
-    && /if \(state\.adminDbViewMode === "review" && state\.adminDbSelectedCompanyId === companyId\s*&& state\.activeTab === "admin" && state\.adminPanelSection === "database"\) return true;/.test(app)
+    && /if \(state\.adminDbViewMode === "review" && state\.adminDbSelectedCompanyId === companyId\s*&& state\.activeTab === "admin" && state\.adminPanelSection === "database"\) \{/.test(app)
+    && app.includes("adminDbIntegratedContextCurrent(context, companyId) && context.container.isConnected !== false")
+    && app.includes('typeof context.controller?.whenDisplayed === "function" && Boolean(board?.contains(context.container))')
+    && app.includes('if (mounted || typeof window.CompanyIntegrated?.show !== "function") return true;')
     && /\.admin-db-company-search-shell\.compact\s*\{[^}]*grid-template-columns:\s*minmax\(170px,\s*0\.34fr\)\s*minmax\(0,\s*1fr\)/i.test(styles)
     && /@media \(max-width: 760px\)[\s\S]*?\.admin-db-company-search-shell\.compact\s*\{[^}]*grid-template-columns:\s*1fr/i.test(styles),
   "company detail search must keep the current screen, show inline autocomplete, and replace only the selected company detail",
