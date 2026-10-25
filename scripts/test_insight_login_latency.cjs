@@ -104,6 +104,19 @@ test('bootstrap can use the lightweight state catalog while registration search 
   assert.equal(normal, 1);
 });
 
+test('slow identity stages emit bounded diagnostics without account, token, source or private error fields',async t=>{
+  const entries=[];let time=0;
+  const x=fixture(t,{identityDiagnostics:entry=>entries.push(entry),identityClock:()=>time,
+    stateCatalog:async()=>{time+=1500;return catalog;}});
+  const response=await x.request();assert.equal(response.status,200);assert.equal(entries.length,1);
+  assert.deepEqual(Object.keys(entries[0]).sort(),['elapsedMs','outcome','requestId','route','stage']);
+  assert.equal(entries[0].stage,'catalog');assert.equal(entries[0].elapsedMs,1500);assert.equal(entries[0].outcome,'complete');
+  assert.match(entries[0].requestId,/^[a-f0-9-]{36}$/);assert.doesNotMatch(JSON.stringify(entries),new RegExp(x.token+'|'+x.customerId+'|fixture-member'));
+  const failed=[];const y=fixture(t,{identityDiagnostics:entry=>failed.push(entry),identityClock:()=>time,
+    stateCatalog:async()=>{time+=1200;throw Error('private-source-detail');}});
+  assert.equal((await y.request()).status,503);assert.equal(failed[0].outcome,'failed');assert.doesNotMatch(JSON.stringify(failed),/private-source-detail/);
+});
+
 test('collection GET still awaits the same in-flight verification before reading saved results', async t => {
   const blocked = gate(); t.after(() => blocked.resolve());
   let refreshes = 0, reads = 0;

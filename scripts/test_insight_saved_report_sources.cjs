@@ -67,7 +67,7 @@ test('missing saved periods remain unknown and a new report never substitutes an
   assert.equal(missing.calculation.mode,'saved_only');assert.equal(missing.dataQuality.status,'partial');
 });
 
-for(const calculationVersion of ['company-integrated-v2-price-observation-time','company-integrated-v3-saved-product-recovery'])test('saved-only preview accepts the verified '+calculationVersion+' format without modifying or recalculating it',async t=>{
+for(const calculationVersion of ['company-integrated-v2-price-observation-time','company-integrated-v3-saved-product-recovery','company-integrated-v4-product-max-room-reuse'])test('saved-only preview accepts the verified '+calculationVersion+' format without modifying or recalculating it',async t=>{
   const f=await fixture(t,{calculationVersion}),paths=[...f.saved.keys()].map(key=>f.file(...key.split('|'))),before=new Map(await Promise.all([...paths,f.queue].map(async file=>[file,await fs.readFile(file)])));
   const analysis=createInsightAnalysis({catalog:async()=>f.catalog,savedCollectionResults:f.source,
     collectionResults:{companyDetail:()=>assert.fail('saved preview must not recompute company history')},now:()=>NOW});
@@ -78,6 +78,28 @@ for(const calculationVersion of ['company-integrated-v2-price-observation-time',
   assert.equal(detail.current.daily.find(row=>row.date==='2026-10-24').sold,0);
   assert.equal(detail.current.daily.find(row=>row.date==='2026-10-25').sold,null);
   for(const [file,bytes]of before)assert.deepEqual(await fs.readFile(file),bytes,'supported saved source remains byte-identical');
+});
+
+test('current v4 saved projection preserves recovered-price evidence, missing money and shared day-use without recalculation',async t=>{
+  const f=await fixture(t,{calculationVersion:'company-integrated-v4-product-max-room-reuse'}),original=f.saved.get('cmp_one|2026-10');
+  const observation={...original.snapshot.sources.observations[0],stayDate:'2026-10-24',date:'2026-10-24',supply:16,sold:3,
+    publicBookings:1,phoneBookings:2,publicRevenue:110000,phoneRevenue:220000,estimatedRevenue:330000,sharedDayUseExcluded:1,
+    inventoryEvidenceVersion:5,priceRecoveryPolicy:'inventory_price_recovery_v1',phoneValuationPolicy:'product_minmax_proportional_v2',
+    priceUnknownCauses:[],phoneValuation:{policy:'product_minmax_proportional_v2',completePriceCoverage:true,recoveryPolicies:[{
+      policy:'uniform_current_catalog_price_v1',quantity:2,revenue:220000,unitPrice:110000,estimatedQuantity:true,sourceDate:'2026-10-24',productKeys:['room_one','room_two']}]}};
+  const snapshot=buildMonthlyReportSnapshot({type:'company',targetId:'cmp_one',month:'2026-10',cutoffDate:'2026-10-23'},
+    {companies:[f.companies[0]],observations:[observation],runs:[{id:'fixture_run',keyword:'모의 검색',collectionQuality:{status:'complete'}}]},original.calculatedAt);
+  const value={...original,snapshot};delete value.cacheDigest;value.cacheDigest=digest(value);
+  await fs.writeFile(f.file('cmp_one','2026-10'),JSON.stringify(value));const before=await fs.readFile(f.file('cmp_one','2026-10'));
+  const detail=await f.source.companyDetail('cmp_one',{month:'2026-10',company:f.companies[0]}),day=detail.current.daily.find(row=>row.date==='2026-10-24');
+  assert.equal(day.sold,3);assert.equal(day.sharedDayUseExcluded,1);assert.equal(day.estimatedRevenue,330000);assert.equal(day.phoneMissingPriceBookings,0);
+  assert.deepEqual(day.phoneValuation.recoveryPolicies,observation.phoneValuation.recoveryPolicies);
+  assert.deepEqual(day.priceUnknownCauses,[]);assert.equal(day.priceRecoveryPolicy,'inventory_price_recovery_v1');
+  assert.equal(detail.current.daily.find(row=>row.date==='2026-10-25').estimatedRevenue,null);
+  assert.deepEqual(await fs.readFile(f.file('cmp_one','2026-10')),before);
+  const changed=JSON.parse(before);changed.snapshot.sources.observations[0].phoneValuation.recoveryPolicies[0].revenue=999999;
+  await fs.writeFile(f.file('cmp_one','2026-10'),JSON.stringify(changed));
+  await assert.rejects(f.source.companyDetail('cmp_one',{month:'2026-10'}),{code:'SAVED_COMPANY_SOURCE_INVALID'});
 });
 
 test('unreviewed future version labels cannot enter the saved-only projection even with a valid integrity hash',async t=>{
@@ -155,4 +177,60 @@ test('saved-only report query is authenticated, strict and does not activate the
   assert.equal(report.calculation.mode,'saved_only');assert.equal(report.companies.length,1);assert.equal(report.companies[0].companyId,'cmp_one');assert.equal(normalReads,0);
   const normal=await get('?ownId=cmp_one');assert.equal(normal.status,200);assert.equal((await normal.json()).calculation,undefined);assert.equal(normalReads,2);
   assert.equal(store.requests(c.customerId).length,0);
+});
+
+test('saved company-month HTTP preview is authenticated, exact-scoped and cannot call collection or analytical readers',async t=>{
+  let store,server,normalReads=0,refreshes=0,memberEnabled=true;
+  const f=await fixture(t,{calculationVersion:'company-integrated-v4-product-max-room-reuse',cleanup:async()=>{
+    if(server){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}store?.close();
+  }});
+  store=createInsightStore({file:path.join(f.root,'company-http.sqlite')});
+  const customer=store.ensure({memberId:'fixture-member',username:'fixture-user',role:'b2b'});
+  store.update(customer.customerId,{revision:customer.revision,requestKey:crypto.randomUUID(),action:'add-company',payload:{kind:'own',companyId:'cmp_one'}},f.catalog);
+  const token=store.session(customer.customerId),serviceToken='fixture-company-preview-service-token-32-chars';
+  const handlers=createInsightHttp({store,serviceToken,catalog:async()=>f.catalog,memberActive:async()=>memberEnabled,
+    preparationBridge:{refresh:()=>{refreshes++;assert.fail('preview must not verify receipts or dispatch');}},
+    collectionResults:{companyDetail:()=>{normalReads++;assert.fail('preview must not read raw details');},read:()=>assert.fail('preview must not read collection evidence')},
+    savedCollectionResults:f.source});
+  server=http.createServer((req,res)=>handlers.internal(req,res,new URL(req.url,'http://fixture')));await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const get=(query,session=token,id='cmp_one')=>fetch(`http://127.0.0.1:${server.address().port}/api/insight/v1/companies/${id}/collection${query}`,
+    {headers:{Authorization:'Bearer '+serviceToken,'X-Insight-Session':session}});
+  const query='?month=2026-10&savedOnly=1';
+  assert.equal((await get(query,'')).status,401);assert.equal((await get(query,token,'cmp_two')).status,404);
+  for(const invalid of ['?savedOnly=1','?month=2026-13&savedOnly=1','?month=2026-10&savedOnly=0','?month=2026-10&savedOnly=true',
+    '?month=2026-10&savedOnly=1&savedOnly=1','?month=2026-10&month=2026-11&savedOnly=1','?month=2026-10&savedOnly=1&refresh=1'])assert.equal((await get(invalid)).status,400);
+  const response=await get(query),data=await response.json();assert.equal(response.status,200);
+  assert.equal(data.companyDetail.companyId,'cmp_one');assert.equal(data.companyDetail.integrated.selectedMonth,'2026-10');
+  assert.equal(data.companyDetail.current.daily.find(row=>row.date==='2026-10-24').sold,0);
+  assert.equal(data.companyDetail.current.daily.find(row=>row.date==='2026-10-25').sold,null);
+  assert.equal(data.calculation.mode,'saved_only');assert.equal(data.responseCache.state,'preview');assert.equal(data.referenceLoading,true);
+  assert.equal(data.result,null);assert.equal(data.companyDetail.channels,undefined);assert.equal(data.companyDetail.basics.name,'내 매장');
+  assert.equal(normalReads,0);assert.equal(refreshes,0);assert.equal(store.requests(customer.customerId).length,0);
+  await fs.unlink(f.file('cmp_one','2026-10'));assert.equal((await get(query)).status,400);
+  memberEnabled=false;assert.equal((await get(query)).status,403);
+});
+
+for(const changed of ['logout','relationship','member','final-member'])test('saved company preview rechecks '+changed+' before returning asynchronously read data',async t=>{
+  let store,server,release,entered,memberEnabled=true,memberChecks=0;
+  const wait=new Promise(resolve=>{release=resolve;}),reading=new Promise(resolve=>{entered=resolve;});
+  const f=await fixture(t,{calculationVersion:'company-integrated-v4-product-max-room-reuse',cleanup:async()=>{
+    release();if(server){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}store?.close();
+  }});
+  store=createInsightStore({file:path.join(f.root,'changing-auth.sqlite')});
+  const customer=store.ensure({memberId:'fixture-member',username:'fixture-user',role:'b2b'});
+  store.update(customer.customerId,{revision:customer.revision,requestKey:crypto.randomUUID(),action:'add-company',payload:{kind:'own',companyId:'cmp_one'}},f.catalog);
+  const token=store.session(customer.customerId),serviceToken='fixture-company-preview-service-token-32-chars';
+  const handlers=createInsightHttp({store,serviceToken,catalog:async()=>f.catalog,memberActive:async()=>{
+    if(changed==='final-member'&&++memberChecks===2){await Promise.resolve();store.logout(token);}return memberEnabled;
+  },
+    savedCollectionResults:{async companyDetail(id,options){const data=await f.source.companyDetail(id,options);entered();await wait;return data;}}});
+  server=http.createServer((req,res)=>handlers.internal(req,res,new URL(req.url,'http://fixture')));await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const pending=fetch(`http://127.0.0.1:${server.address().port}/api/insight/v1/companies/cmp_one/collection?month=2026-10&savedOnly=1`,
+    {headers:{Authorization:'Bearer '+serviceToken,'X-Insight-Session':token}});
+  await reading;
+  if(changed==='logout')store.logout(token);
+  else if(changed==='member')memberEnabled=false;
+  else if(changed==='relationship'){const current=store.get(customer.customerId);store.update(customer.customerId,{revision:current.revision,requestKey:crypto.randomUUID(),action:'archive-company',payload:{relationId:current.relations[0].relationId}},f.catalog);}
+  release();const response=await pending;assert.equal(response.status,['logout','final-member'].includes(changed)?401:changed==='member'?403:404);
+  assert.equal((await response.json()).companyDetail,undefined);
 });

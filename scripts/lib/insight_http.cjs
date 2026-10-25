@@ -15,11 +15,22 @@ async function body(req) {
 }
 function json(res, status, value) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(value)); }
 function createInsightHttp({ store, serviceToken, authenticateMember, memberActive, registerMember, checkUsername, catalog, stateCatalog = catalog, requireAdmin, preparationBridge = null,
-  signup = { enabled: false }, policies = {}, supportEmail = '', adminStore = null, collectionResults = null, analysis = null }) {
+  signup = { enabled: false }, policies = {}, supportEmail = '', adminStore = null, collectionResults = null, savedCollectionResults = null, analysis = null,
+  identityDiagnostics = entry => console.warn('insight_identity',JSON.stringify(entry)), identityClock = () => performance.now() }) {
   if (typeof serviceToken !== 'string' || serviceToken.length < 32) throw new Error('Insight service credential must contain at least 32 characters');
   // Receipt verification reads saved results only. Bootstrap must not wait for
   // it, and simultaneous bootstrap/poll requests must share the same refresh.
   const preparationRefreshes = new Map();
+  async function identityStage(stage,requestId,read) {
+    const started=identityClock();let outcome='complete';
+    try{return await read();}catch(error){outcome='failed';throw error;}
+    finally{
+      const elapsedMs=Math.max(0,Math.round(identityClock()-started));
+      // Only fixed stage names and random correlation IDs enter these bounded
+      // diagnostics. Account IDs, cookies, sessions and source errors never do.
+      if(elapsedMs>=1000)try{identityDiagnostics({requestId,route:'state',stage,outcome,elapsedMs});}catch{}
+    }
+  }
   function refreshPreparation(customerId, deferred = false) {
     if (!preparationBridge) return Promise.resolve();
     if (preparationRefreshes.has(customerId)) return preparationRefreshes.get(customerId);
@@ -70,14 +81,14 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
       preparations: store.requests(customer.customerId), collectionAllowance:store.collectionAllowance(customer.customerId), features: { weeklyReports: false, reportDelivery: false, directCollection: Boolean(preparationBridge && collectionResults), dataPreparationRequests: true } };
   }
   async function sendState(res, customer, scope, extra = {}, { awaitPreparation = false } = {}) {
-    const started = performance.now();
+    const started = performance.now(),requestId=crypto.randomUUID();
     // Mutations retain their existing verified receipt transition. Only state
     // bootstrap reads are allowed to leave this work in the background.
     if (awaitPreparation && preparationBridge) await refreshPreparation(customer.customerId);
     const catalogStarted = performance.now();
-    const data = await stateCatalog();
+    const data = await identityStage('catalog',requestId,()=>stateCatalog());
     const catalogDuration = performance.now() - catalogStarted;
-    if (scope?.verify) await scope.verify();
+    if (scope?.verify) await identityStage('member',requestId,()=>scope.verify());
     // There is deliberately no await between the final session/relationship
     // read and JSON serialization, including after asynchronous member checks.
     const current = scope?.current ? scope.current() : store.get(customer.customerId);
@@ -89,11 +100,25 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
     // and the returned state retains the last genuinely verified job status.
     if (!awaitPreparation) refreshPreparation(value.customer.customerId, true);
   }
-  async function companyCollection(c, companyId, month) {
-    if (!store.hasCompany(c,companyId) || !collectionResults) throw fault('NOT_FOUND','등록한 업체의 결과를 찾을 수 없습니다.',404);
+  async function companyCollection(c, companyId, month, { savedOnly = false } = {}) {
+    if (!store.hasCompany(c,companyId) || !(savedOnly ? savedCollectionResults : collectionResults)) throw fault('NOT_FOUND','등록한 업체의 결과를 찾을 수 없습니다.',404);
     // Polling remains available (10-second interval), but changing an arbitrary
     // month cannot issue unbounded expensive source reads for a customer.
     store.throttle(`company-read:${c.customerId}`,240);
+    if (savedOnly) {
+      // This preview reads one verified, already saved month only. In particular,
+      // do not refresh collection receipts or enter the normal evidence/detail
+      // readers merely to show the last successful calculation.
+      const company = (await catalog()).companies.find(row => row.companyId === companyId);
+      if (!company) throw fault('NOT_FOUND','등록한 업체의 자료를 찾을 수 없습니다.',404);
+      const detail = await savedCollectionResults.companyDetail(companyId, { month, company });
+      return { request: null, result: null,
+        companyDetail: { ...detail, source:'company_db_integrated_saved', basics: { name:company.name,address:company.address,
+          rooms:detail.integrated.roomBasis?.count ?? company.rooms,roomCountSource:detail.integrated.roomBasis?.label || company.roomCountSource,
+          facilities:company.facilities,lodgingTypes:[] } },
+        previousResult:false,referenceLoading:true,
+        calculation:{mode:'saved_only',status:'pending'},responseCache:{state:'preview',preview:true,refreshing:true} };
+    }
     if (preparationBridge) await refreshPreparation(c.customerId);
     const request = store.requests(c.customerId).find(row => row.companyId===companyId) || null;
     // A customer's previous request must not pin the shared company DB to an old run.
@@ -128,10 +153,23 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
         json(res,200,await analysis.briefing(c,url.searchParams.get('ownId')||undefined,{savedOnly:url.searchParams.get('savedOnly')==='1'}));
       }
       else if (req.method === 'GET' && /^\/companies\/[a-zA-Z0-9_-]+\/collection$/.test(tail)) {
-        if ([...url.searchParams.keys()].some(key => key !== 'month') || url.searchParams.getAll('month').length > 1) throw fault('INVALID_FIELDS','조회할 숙박월만 지정해 주세요.');
+        if ([...url.searchParams.keys()].some(key => !['month','savedOnly'].includes(key)) || url.searchParams.getAll('month').length > 1
+          || url.searchParams.getAll('savedOnly').length > 1 || url.searchParams.has('savedOnly') && url.searchParams.get('savedOnly') !== '1') throw fault('INVALID_FIELDS','조회할 숙박월과 저장 자료 조회 방식만 지정해 주세요.');
         const month = url.searchParams.get('month') || undefined;
         if (url.searchParams.has('month') && !/^20\d{2}-(0[1-9]|1[0-2])$/.test(month || '')) throw fault('INVALID_MONTH','숙박월 형식을 확인해 주세요.');
-        json(res,200,await companyCollection(c,tail.split('/')[2],month));
+        const savedOnly = url.searchParams.get('savedOnly') === '1';
+        if (savedOnly && !month) throw fault('INVALID_MONTH','저장 자료를 조회할 숙박월을 선택해 주세요.');
+        const companyId=tail.split('/')[2],value=await companyCollection(c,companyId,month,{savedOnly});
+        if(savedOnly){
+          if(scope?.verify)await scope.verify();
+          // Keep the final fresh session/relationship check and serialization
+          // in the same turn, including after asynchronous member validation.
+          const current=scope?.current?scope.current():store.get(c.customerId);
+          if(!store.hasCompany(current,companyId))throw fault('NOT_FOUND','등록한 업체의 결과를 찾을 수 없습니다.',404);
+          value.request=store.requests(current.customerId).find(row=>row.companyId===companyId)||null;
+          value.collectionAllowance=store.collectionAllowance(current.customerId);
+        }
+        json(res,200,value);
       }
       else if (!context.view && req.method === 'POST' && tail === '/auth/logout') { store.logout(token); json(res, 200, { ok: true }); }
       else if (req.method === 'GET' && ['/catalog/companies', '/catalog/regions'].includes(tail)) {

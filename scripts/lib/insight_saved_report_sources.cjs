@@ -13,7 +13,8 @@ const validDay=value=>typeof value==='string'&&/^20\d{2}-(0[1-9]|1[0-2])-(0[1-9]
 // Explicit saved formats, not an open-ended prefix match. These versions use
 // the same company/month envelope; newer calculations require an audited read
 // contract before they can become a customer preview.
-const SUPPORTED_CALCULATIONS=new Set(['company-integrated-v1','company-integrated-v2-price-observation-time','company-integrated-v3-saved-product-recovery']);
+const SUPPORTED_CALCULATIONS=new Set(['company-integrated-v1','company-integrated-v2-price-observation-time','company-integrated-v3-saved-product-recovery',
+  'company-integrated-v4-product-max-room-reuse']);
 function validQuantities(value) {
   if(!value||typeof value!=='object'||Array.isArray(value))return false;
   const known=value=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0;

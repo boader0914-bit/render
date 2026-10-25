@@ -54,7 +54,7 @@ function createInsightIntegration({ dataDir, readCatalog, readMembers, authentic
   const analysis=createInsightAnalysis({catalog,collectionResults,savedCollectionResults,readRegionContext,readRegionLocation,regionPreparation});
   const preparationBridge = collectorRequests && verifyStored ? createInsightPreparation({store,catalog,collectorRequests,verifyStored,readPostprocess,findReusable:collectionResults?.reusable,workerKey}) : null;
   const signup = { enabled: env.INSIGHT_SIGNUP_ENABLED === '1', termsVersion: env.INSIGHT_TERMS_VERSION || POLICY_VERSION, privacyVersion: env.INSIGHT_PRIVACY_VERSION || POLICY_VERSION, termsUrl: env.INSIGHT_TERMS_URL || '/terms', privacyUrl: env.INSIGHT_PRIVACY_URL || '/privacy' };
-  const handlers = createInsightHttp({ store, serviceToken, catalog, authenticateMember, registerMember, checkUsername, requireAdmin, preparationBridge, collectionResults, analysis,
+  const handlers = createInsightHttp({ store, serviceToken, catalog, authenticateMember, registerMember, checkUsername, requireAdmin, preparationBridge, collectionResults, savedCollectionResults, analysis,
     memberActive: async memberId => (await readMembers()).members.some(row => row.memberId === memberId && row.status !== 'disabled' && row.role === 'b2b'),
     signup, policies: insightPolicies(policyContext), supportEmail: policyContext.contactEmail || '', adminStore });
   return { ...handlers, store, adminStore, metadataCatalog, provision: createInsightAdminProvisioning({ adminStore, requireAdmin }) };
