@@ -7,6 +7,7 @@ const { industryCompanyReference } = require("./industry_analysis.cjs");
 const { readCompanyMasterProjection } = require("./company_master_stream.cjs");
 const { createProductCapacityStore, productCapacityCorrectionSignature } = require("./product_capacity_store.cjs");
 const { compactProductCapacityEvidence } = require("./product_capacity_baseline.cjs");
+const { runCooperativeCheckpointReads } = require("./cooperative_work_checkpoint.cjs");
 const { performance } = require("node:perf_hooks");
 const VERSION = "company-integrated-source-revision-v2";
 const LEGACY_VERSION = "company-integrated-source-revision-v1";
@@ -49,17 +50,29 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
   }
   async function inventory(checkpoint = () => {}, scopedRunIds = null) {
     const metadata = {}, paths = {};
-    async function file(label, filename) { checkpoint(); const value = await stat(filename); checkpoint(); paths[label] = filename;
+    let metadataReads = 0;
+    const metadataBoundary = () => {
+      // Normal full inspections can hold an analytical owner for seconds even
+      // though each operation is only filesystem metadata. Lend a bounded
+      // proof at safe awaited boundaries, without restarting or publishing the
+      // mutable index candidate. A borrowed proof's own scoped inspection must
+      // never recursively drain this lane or join the normal prepare chain.
+      return ++metadataReads % 32 === 0 ? runCooperativeCheckpointReads() : null;
+    };
+    const metadataStat = scopedRunIds === null ? async filename => { const value = await stat(filename), pause = metadataBoundary(); if (pause) await pause; return value; } : stat;
+    const metadataDirectory = scopedRunIds === null ? async directory => { const entries = await fileSystem.readdir(directory, { withFileTypes: true }), pause = metadataBoundary(); if (pause) await pause; return entries; }
+      : directory => fileSystem.readdir(directory, { withFileTypes: true });
+    async function file(label, filename) { checkpoint(); const value = await metadataStat(filename); checkpoint(); paths[label] = filename;
       if (!value) { metadata[label] = null; return; } requireValid(value.isFile()); metadata[label] = signature(value); }
     async function tree(prefix, directory, filter = () => true, depth = 0) {
-      checkpoint(); const before = await stat(directory); checkpoint(); if (!before) return;
-      requireValid(before.isDirectory() && depth <= 16); const entries = await fileSystem.readdir(directory, { withFileTypes: true }); checkpoint();
+      checkpoint(); const before = await metadataStat(directory); checkpoint(); if (!before) return;
+      requireValid(before.isDirectory() && depth <= 16); const entries = await metadataDirectory(directory); checkpoint();
       for (const entry of entries) { checkpoint(); requireValid(!entry.isSymbolicLink()); if (entry.name.endsWith(".tmp")) continue;
         const filename = path.join(directory, entry.name), label = prefix + "/" + entry.name;
         if (entry.isDirectory()) await tree(label, filename, filter, depth + 1);
         else if (entry.isFile() && filter(label)) await file(label, filename);
       }
-      const after = await stat(directory); checkpoint(); requireValid(after && signature(before) === signature(after));
+      const after = await metadataStat(directory); checkpoint(); requireValid(after && signature(before) === signature(after));
     }
     await file("master", path.join(root, "company_master", "companies.json"));
     await file("history", path.join(root, "history", "observations.jsonl"));

@@ -13,3 +13,4 @@
 운영 검수에서는 `appNavigationDisplayMs`(저장본 표시)와 `appNavigationLatestReadyMs`(일반 확인 결과의 실제 화면 표시)를 별도로 측정한다. 후자는 원래 업체·월·세션·자동 요청의 정상 응답이 실제 두 프레임 동안 표시됐을 때만 기록된다. `cachedReads`와 스케줄러의 `checkpointRead*` 수치는 적중·대기·실패를 진단하며, 자료의 내용이나 인증 값을 포함하지 않는다.
 
 관련 회귀: `test_analytical_checkpoint_reads`, `test_company_integrated_cached_revision`, `test_company_integrated_read_db`, `test_company_detail_checkpoint_reads` 및 기존 업체·월별 원본/화면 회귀.
+`n일반 전체 파일 변경 검사는 메타데이터 입출력 32회마다 안전한 비원자 경계를 제공한다. 짧은 선택월 확인은 부모 검사를 잠시 멈춘 상태에서 처리한 후 같은 검사를 이어가며, 자체 캐시 검사나 원자적 게시 안에서는 이 경계를 빌리지 않는다. 변경 중인 원본은 계속 재사용 실패로 처리한다.

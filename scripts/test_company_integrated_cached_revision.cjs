@@ -2,6 +2,8 @@
 const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs/promises"), path = require("node:path"), os = require("node:os"), crypto = require("node:crypto");
 const { createCompanyIntegratedSourceRevision } = require("./lib/company_integrated_source_revision.cjs");
 const { createProductCapacityStore } = require("./lib/product_capacity_store.cjs");
+const { createAnalyticalWorkScheduler } = require("./lib/analytical_work_scheduler.cjs");
+const { runNonInterruptibleCooperativeWork } = require("./lib/cooperative_work_checkpoint.cjs");
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object"
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 const digest = value => crypto.createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
@@ -31,6 +33,7 @@ async function fixture(t) {
   return { root, write, options, control, counters, index: path.join(root, "company_integrated/revision-index.json") };
 }
 const scope = (companyId = A, month = "2026-09") => ({ companyId, month, cutoffDate: "", calculationVersion: "test-v1" });
+const gate = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 
 test("fresh cached preparation is selected-scope equivalent and never reads bodies, rebuilds, or mutates the validated index", async t => {
   const f = await fixture(t), reader = createCompanyIntegratedSourceRevision(f.options);
@@ -191,4 +194,61 @@ test("a paired post-publication inspection rejects a source change that raced th
   } };
   assert.ok(await reader.prepareFreshCached({ scope: request, metadataPasses: 1 }), "One half alone is not the complete publication certificate");
   assert.equal(await reader.prepareFreshCached({ scope: request, metadataPasses: 1 }), null);
+});
+
+async function metadataOwnerFixture(t) {
+  const f = await fixture(t);
+  for (let index = 0; index < 20; index++) await f.write(`outputs/unrelated_${index}/manifest.json`, { status: "complete" });
+  const reader = createCompanyIntegratedSourceRevision(f.options), baseline = await reader.prepare();
+  const scheduler = createAnalyticalWorkScheduler({ cooperativeCompanyMonthYield: true });
+  t.after(() => scheduler.close());
+  const entered = gate(), release = gate(); let once = false;
+  f.control.lstat = async file => { if (!once && path.resolve(file) === f.index) { once = true; entered.resolve(); await release.promise; } };
+  return { ...f, reader, baseline, scheduler, entered, release };
+}
+
+test("a real background full metadata scan lends a bounded proof before finishing without index mutation or prepare-chain reentry", async t => {
+  const f = await metadataOwnerFixture(t), request = scope(), before = await fs.readFile(f.index), order = [];
+  f.control.noBodies = true;
+  const normal = f.scheduler.run(async () => { const value = await f.reader.prepare(); order.push("normal-finished"); return value; }, { priority: "background", kind: "company-month" });
+  await f.entered.promise;
+  const proof = f.scheduler.runCheckpointRead(async () => {
+    order.push("proof-started"); assert.deepEqual(await fs.readFile(f.index), before);
+    const counters = { ...f.counters }, value = await f.reader.prepareFreshCached({ scope: request });
+    assert.ok(value); assert.equal(f.reader.forScope(value, request), f.reader.forScope(f.baseline, request));
+    assert.equal(f.counters.reads, counters.reads); assert.equal(f.counters.opens, counters.opens); assert.equal(f.counters.writes, counters.writes);
+    order.push("proof-finished"); return value;
+  });
+  f.release.resolve(); assert.ok(await proof); assert.deepEqual(await normal, f.baseline);
+  assert.deepEqual(order, ["proof-started", "proof-finished", "normal-finished"]);
+  const status = f.scheduler.status(), record = status.timing.recent.find(row => row.checkpointRead);
+  assert.equal(record.borrowed, true); assert.equal(status.timing.yielded, 0); assert.equal(status.timing.restarted, 0);
+  assert.deepEqual(await fs.readFile(f.index), before);
+});
+
+test("full metadata inspection inside atomic work cannot lend its boundary", async t => {
+  const f = await metadataOwnerFixture(t); f.control.noBodies = true; let finished = false;
+  const normal = f.scheduler.run(() => runNonInterruptibleCooperativeWork(async () => { await f.reader.prepare(); finished = true; return 1; }), { priority: "background", kind: "company-month" });
+  await f.entered.promise;
+  const proof = f.scheduler.runCheckpointRead(async () => { assert.equal(finished, true); return f.reader.prepareFreshCached({ scope: scope() }); });
+  f.release.resolve(); assert.equal(await normal, 1); assert.ok(await proof);
+  assert.equal(f.scheduler.status().timing.recent.find(row => row.checkpointRead).borrowed, false);
+});
+
+test("a borrowed proof cannot certify changed originals while the paused full scan rebuilds its private candidate", async t => {
+  const f = await metadataOwnerFixture(t), request = scope(), before = await fs.readFile(f.index);
+  await f.write("outputs/run_100/new-response.json", { value: 9 }); const original = await fs.readFile(path.join(f.root, "outputs", "run_100", "new-response.json"));
+  let finished = false;
+  const normal = f.scheduler.run(async () => { const value = await f.reader.prepare(); finished = true; return value; }, { priority: "background", kind: "company-month" });
+  await f.entered.promise;
+  const proof = f.scheduler.runCheckpointRead(async () => {
+    assert.equal(finished, false); assert.deepEqual(await fs.readFile(f.index), before);
+    f.control.noBodies = true;
+    try { return await f.reader.prepareFreshCached({ scope: request }); }
+    finally { f.control.noBodies = false; }
+  });
+  f.release.resolve(); assert.equal(await proof, null);
+  const fresh = await normal; assert.notEqual(f.reader.forScope(fresh, request), f.reader.forScope(f.baseline, request));
+  assert.deepEqual(await fs.readFile(path.join(f.root, "outputs", "run_100", "new-response.json")), original);
+  assert.equal(f.scheduler.status().timing.recent.find(row => row.checkpointRead).borrowed, true);
 });
