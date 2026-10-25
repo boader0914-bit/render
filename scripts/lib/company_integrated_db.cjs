@@ -7,6 +7,8 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { buildMonthlyReportSnapshot } = require("./monthly_reports.cjs");
 const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./monthly_report_comparison.cjs");
+const { setCooperativeWorkStage, cooperativeWorkCheckpoint, assertCooperativeWorkActive,
+  runNonInterruptibleCooperativeWork } = require("./cooperative_work_checkpoint.cjs");
 
 const SCHEMA_VERSION = 1;
 const CALCULATION_VERSION = "company-integrated-v4-product-max-room-reuse";
@@ -415,9 +417,12 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     const sourceRevision = await revisionFor(companyId, month, request.cutoffDate, prepared);
     const previous = persist ? await readJson(monthPath(companyId, month), null) : null;
     if (!verifySources && await reusable(previous, companyId, month, request.cutoffDate, sourceRevision, metadata)) return { value: previous, changed: false, sourceRevision };
+    setCooperativeWorkStage(1); cooperativeWorkCheckpoint();
     const source = scopedSources(await loadSources(clone(request), { priority }), companyId);
     const previousRequest = previousMonthlyReportRequest(request);
+    setCooperativeWorkStage(2); cooperativeWorkCheckpoint();
     const previousSource = scopedSources(await loadSources(clone(previousRequest), { priority }), companyId);
+    setCooperativeWorkStage(3); cooperativeWorkCheckpoint();
     const capacityMarker = metadata.raw?._integratedCapacity || metadata.company.capacityBasis || null;
     const capacityWarnings = Array.isArray(capacityMarker?.warnings) ? capacityMarker.warnings.filter(value => typeof value === "string") : [];
     if (capacityWarnings.length) source.warnings = [...new Set([...(source.warnings || []), ...capacityWarnings])];
@@ -438,6 +443,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
       cutoffDate: request.cutoffDate, roomBasis, snapshot, latestAttempts: attempts,
       failedAttempts: attempts.filter(attempt => ["missing_response", "run_failed", "run_blocked", "run_interrupted", "run_cancelled", "run_canceled", "run_error"].includes(attempt.reason)) };
     if (sourceRevision) value.cacheDigest = digest(value);
+    assertCooperativeWorkActive();
     const reuseProof = persist ? unchangedInputProof(previous, companyId, month, request.cutoffDate, sourceRevision, metadata, sourceDigest, value) : null;
     if (reuseProof) return { value: previous, changed: false, sourceRevision, reuseProof };
     return { changed: true, sourceRevision, value };
@@ -445,11 +451,14 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
   async function publishMonth(companyId, month, calculated, generation, certifyRefresh = false) {
     // The scheduler serializes analytical readers, while the publication lock
     // serializes queue writers. Recheck the generation inside that lock.
+    setCooperativeWorkStage(4); cooperativeWorkCheckpoint();
+    assertCooperativeWorkActive();
     if (readRevision) {
       const latest = await revisionFor(companyId, month, calculated.value.cutoffDate);
       if (latest !== calculated.sourceRevision) throw fault("COMPANY_INTEGRATION_SOURCE_CHANGED");
     }
-    return locked(async () => {
+    return locked(() => runNonInterruptibleCooperativeWork(async () => {
+      assertCooperativeWorkActive();
       if ((state.jobs[companyId]?.generation ?? null) !== generation) return false;
       if (calculated.reuseProof) {
         const saved = await readJson(monthPath(companyId, month), null);
@@ -470,7 +479,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
         if (proof) await atomicJson(refreshProofPath(companyId, month), proof);
       }
       return true;
-    });
+    }));
   }
   async function refreshMonth(companyId, { month } = {}) {
     companyId = validId(companyId);
@@ -489,13 +498,16 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
   }
   async function processJob(job) {
     const verifiedBootstrapFailure = state.bootstrap?.failureGeneration || 0;
-    const { metadata, months, prepared } = await runWork(async () => ({ metadata: await activeCompany(job.companyId),
-      months: job.allMonths ? await targetsFor(job.companyId, job.months) : monthsOf(job.months), prepared: await prepareRevision() }),
+    const months = await runWork(async () => job.allMonths ? await targetsFor(job.companyId, job.months) : monthsOf(job.months),
     { priority: "background", kind: "company-job-prepare", detached: true });
     for (const month of months) {
       const completed = await runWork(async () => {
-      const calculated = await materialize(job.companyId, month, metadata, undefined, true, "background", prepared);
-      return publishMonth(job.companyId, month, calculated, job.generation);
+        if (await locked(() => state.jobs[job.companyId]?.generation !== job.generation)) return false;
+        // Each yielded attempt must bind both the room review and its source
+        // revision afresh. A foreground edit can invalidate either meanwhile.
+        const metadata = await activeCompany(job.companyId), prepared = await prepareRevision();
+        const calculated = await materialize(job.companyId, month, metadata, undefined, true, "background", prepared);
+        return publishMonth(job.companyId, month, calculated, job.generation);
       }, { priority: "background", kind: "company-month", detached: true });
       if (!completed) return;
     }

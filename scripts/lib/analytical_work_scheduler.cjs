@@ -13,7 +13,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   highWatermark = 0.65, lowWatermark = 0.55, resumeSamples = 2,
   sampleIntervalMs = 1000, maxSampleAgeMs = 10000, now = Date.now,
   setTimeoutImpl = setTimeout, clearTimeoutImpl = clearTimeout,
-  onTaskTiming = null, timingHistoryLimit = 32, cooperativeYield = false,
+  onTaskTiming = null, timingHistoryLimit = 32, cooperativeYield = false, cooperativeCompanyMonthYield = false,
   cooperativeMinRunMs = 250, cooperativeMinProgress = 1 } = {}) {
   if (!Number.isSafeInteger(foregroundBurst) || foregroundBurst < 1
     || sampleMemory !== null && typeof sampleMemory !== "function"
@@ -25,7 +25,8 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     || typeof now !== "function" || typeof setTimeoutImpl !== "function" || typeof clearTimeoutImpl !== "function"
     || onTaskTiming !== null && typeof onTaskTiming !== "function"
     || !Number.isSafeInteger(timingHistoryLimit) || timingHistoryLimit < 0 || timingHistoryLimit > 128
-    || typeof cooperativeYield !== "boolean" || !Number.isSafeInteger(cooperativeMinRunMs) || cooperativeMinRunMs < 0
+    || typeof cooperativeYield !== "boolean" || typeof cooperativeCompanyMonthYield !== "boolean"
+    || !Number.isSafeInteger(cooperativeMinRunMs) || cooperativeMinRunMs < 0
     || !Number.isSafeInteger(cooperativeMinProgress) || cooperativeMinProgress < 1) {
     throw new TypeError("Invalid analytical scheduler options");
   }
@@ -87,6 +88,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       ...waits, outcome, errorCode: code,
       ...(task.cooperative ? { attempt: task.attempt, checkpoints: task.cooperative.checkpoints,
         checkpointHighWater: task.checkpointHighWater || 0, phaseIndex: task.cooperative.phaseIndex,
+        stageIndex: task.cooperative.stageIndex,
         checkpointsInPhase: task.cooperative.phaseCheckpoints, unitIndex: task.cooperative.unitIndex,
         checkpointsInUnit: task.cooperative.unitCheckpoints,
         progressHighWater: Object.freeze({ ...(task.progressHighWater || { phaseIndex: 0, unitIndex: 0, checkpoints: 0 }) }) } : {}) });
@@ -165,11 +167,21 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     const token = { id: task.id, controller, active: true, priority: task.priority, kind: task.kind };
     active = token;
     task.attempt = (task.attempt || 0) + 1;
-    const eligible = cooperativeYield && task.priority === "background" && task.kind === "industry-build";
+    const eligible = task.priority === "background" && (cooperativeYield && task.kind === "industry-build"
+      || cooperativeCompanyMonthYield && task.kind === "company-month");
     const cooperative = eligible ? {
       enabled: true, yieldRequested: false, nonInterruptibleDepth: 0, checkpoints: 0, lastCheckpointAt: task.startedAt,
-      phaseIndex: 0, phaseCheckpoints: 0, unitIndex: 0, unitCheckpoints: 0,
+      stageIndex: 0, phaseIndex: 0, phaseCheckpoints: 0, unitIndex: 0, unitCheckpoints: 0,
       isCurrent: () => token.active && active === token,
+      setStage(index) {
+        // A company month reads the requested month and its comparison month
+        // in order. Their source phases repeat 10..70; a later stage is fresh
+        // logical progress, not a rewind below the first source's high-water.
+        if (index > this.stageIndex) {
+          this.stageIndex = index; this.phaseIndex = 0; this.phaseCheckpoints = 0;
+          this.unitIndex = 0; this.unitCheckpoints = 0;
+        }
+      },
       setRevision(revision) {
         // Work completed against old originals cannot forbid foreground
         // admission while a changed source starts its new calculation prefix.
@@ -198,11 +210,11 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
         timing.maximumCheckpointGapMs = Math.max(timing.maximumCheckpointGapMs, gap);
       },
       shouldYield() {
-        const highWater = task.progressHighWater || { phaseIndex: 0, unitIndex: 0, checkpoints: 0 };
-        const advancesUnit = this.phaseIndex > highWater.phaseIndex
-          || this.phaseIndex === highWater.phaseIndex && this.unitIndex > highWater.unitIndex;
+        const highWater = task.progressHighWater || { phaseIndex: 0, unitIndex: 0, checkpoints: 0 }, stage = highWater.stageIndex || 0;
+        const advancesUnit = this.stageIndex > stage || this.stageIndex === stage && (this.phaseIndex > highWater.phaseIndex
+          || this.phaseIndex === highWater.phaseIndex && this.unitIndex > highWater.unitIndex);
         const progresses = advancesUnit ? this.unitCheckpoints >= cooperativeMinProgress
-          : this.phaseIndex === highWater.phaseIndex && this.unitIndex === highWater.unitIndex
+          : this.stageIndex === stage && this.phaseIndex === highWater.phaseIndex && this.unitIndex === highWater.unitIndex
             && this.unitCheckpoints >= highWater.checkpoints + cooperativeMinProgress;
         return foreground.length > 0 && timestamp() - task.startedAt >= cooperativeMinRunMs
           && progresses;
@@ -231,7 +243,8 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       recordTask(task, error, finishedAt, didFail);
       if (requestedYield && !closed && !task.signal?.aborted) {
         task.checkpointHighWater = Math.max(task.checkpointHighWater || 0, cooperative.checkpoints);
-        task.progressHighWater = { phaseIndex: cooperative.phaseIndex, unitIndex: cooperative.unitIndex, checkpoints: cooperative.unitCheckpoints };
+        task.progressHighWater = { ...(cooperative.stageIndex ? { stageIndex: cooperative.stageIndex } : {}),
+          phaseIndex: cooperative.phaseIndex, unitIndex: cooperative.unitIndex, checkpoints: cooperative.unitCheckpoints };
         // The original caller keeps one pending promise. Retry only its small
         // operation closure; do not retain an allocation/result from the old
         // attempt, and do not mark the durable industry job as failed/complete.
@@ -317,8 +330,11 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   function status() {
     return { closed, active: Boolean(active), activePriority: active?.priority || null, activeKind: active?.kind || null,
       queuedForeground: foreground.length, queuedBackground: background.length, sampling: Boolean(sampling), memory: memoryStatus(),
-      cooperative: { enabled: cooperativeYield, minRunMs: cooperativeMinRunMs, minProgressCheckpoints: cooperativeMinProgress,
+      cooperative: { enabled: cooperativeYield || cooperativeCompanyMonthYield, industryEnabled: cooperativeYield,
+        companyMonthEnabled: cooperativeCompanyMonthYield,
+        minRunMs: cooperativeMinRunMs, minProgressCheckpoints: cooperativeMinProgress,
         activeEligible: Boolean(active?.cooperative), activeCheckpoints: active?.cooperative?.checkpoints || 0,
+        activeStageIndex: active?.cooperative?.stageIndex || 0,
         activePhaseIndex: active?.cooperative?.phaseIndex || 0,
         activeCheckpointsInPhase: active?.cooperative?.phaseCheckpoints || 0,
         activeUnitIndex: active?.cooperative?.unitIndex || 0,

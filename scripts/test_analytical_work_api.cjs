@@ -59,12 +59,15 @@ async function main() {
     const beforeRotation = await request("/api/collection-rotation", { cookie: admin });
     const beforeCollector = await request("/api/collector-status", { cookie: admin });
     const diagnostics = await request(route, { cookie: admin });
-    assert.equal(diagnostics.status, 200); assert.deepEqual(Object.keys(diagnostics.data).sort(), ["memory", "monthlyRecalculation", "monthlySources", "observationIndex", "productCapacityVerification", "savedProductRecovery", "work"]);
+    assert.equal(diagnostics.status, 200); assert.deepEqual(Object.keys(diagnostics.data).sort(), ["memory", "monthlyRecalculation", "monthlySources", "observationIndex", "productCapacityVerification", "responsiveness", "savedProductRecovery", "work"]);
+    assert.equal(diagnostics.data.responsiveness.enabled, true);
+    assert.ok(["monitoring", "unavailable"].includes(diagnostics.data.responsiveness.state));
+    assert.ok(Array.isArray(diagnostics.data.responsiveness.history));
     for (const group of ["savedProductRecovery", "productCapacityVerification"])
       for (const [key, value] of Object.entries(diagnostics.data[group])) assert.ok(Number.isSafeInteger(value) && value >= 0, `${group}.${key}`);
     for (const [key, value] of Object.entries(diagnostics.data.monthlyRecalculation)) assert.ok(Number.isSafeInteger(value) && value >= 0, key);
     for (const [key, value] of Object.entries(diagnostics.data.monthlySources)) {
-      if (["companyCatalog", "industrySourceCandidates"].includes(key)) {
+      if (["companyCatalog", "industrySourceCandidates", "companySourceCandidates"].includes(key)) {
         for (const counter of Object.values(value)) assert.ok(Number.isSafeInteger(counter) && counter >= 0);
       } else if (key === "preparedCatalogReadsByScope") {
         assert.deepEqual(Object.keys(value).sort(), ["company", "industry", "keyword", "other", "region"]);

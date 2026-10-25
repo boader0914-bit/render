@@ -19,6 +19,13 @@ function runWithCooperativeWork(owner, operation) {
 function assertCooperativeWorkActive() {
   if (current()?.yieldRequested) throw yielded();
 }
+function setCooperativeWorkStage(index) {
+  if (!Number.isSafeInteger(index) || index < 0) throw new TypeError("Cooperative stage must be a nonnegative integer");
+  const owner = current();
+  if (!owner) return;
+  if (owner.yieldRequested) throw yielded();
+  owner.setStage(index);
+}
 function setCooperativeWorkPhase(index, unitIndex = 0) {
   if (!Number.isSafeInteger(index) || index < 0) throw new TypeError("Cooperative phase must be a nonnegative integer");
   if (!Number.isSafeInteger(unitIndex) || unitIndex < 0) throw new TypeError("Cooperative unit must be a nonnegative integer");
@@ -55,5 +62,5 @@ async function runNonInterruptibleCooperativeWork(operation) {
 }
 function isCooperativeWorkYield(error) { return error?.code === YIELD_CODE; }
 
-module.exports = { runWithCooperativeWork, cooperativeWorkCheckpoint, setCooperativeWorkPhase, setCooperativeWorkRevision, assertCooperativeWorkActive,
+module.exports = { runWithCooperativeWork, cooperativeWorkCheckpoint, setCooperativeWorkStage, setCooperativeWorkPhase, setCooperativeWorkRevision, assertCooperativeWorkActive,
   runNonInterruptibleCooperativeWork, isCooperativeWorkYield, YIELD_CODE };

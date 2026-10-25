@@ -29,18 +29,21 @@ function observedProductCapacityEvidence(item, company, { runId = "", collectedA
   }
   return [...maxima.values()];
 }
-function productCapacityBaselineAt(evidence, companyId, asOf) {
-  const boundary = instant(asOf);
+function baselineAtBoundary(evidence, companyId, boundary) {
   const lodgingProducts = {}, dayUseProducts = {};
   if (!boundary) return { lodgingProducts, dayUseProducts };
   for (const row of Array.isArray(evidence) ? evidence : []) {
+    if (row?.companyId !== companyId) continue;
     const observedAt = instant(row?.collectedAt), count = Number(row?.count), id = String(row?.productId || "");
-    if (row?.companyId !== companyId || !observedAt || observedAt > boundary || !id || !Number.isSafeInteger(count) || count <= 0) continue;
+    if (!observedAt || observedAt > boundary || !id || !Number.isSafeInteger(count) || count <= 0) continue;
     const target = row.productType === "lodging" ? lodgingProducts : row.productType === "dayuse" ? dayUseProducts : null;
     if (target && (!target[id] || count > target[id].count)) target[id] = { count, source: row.source || "historical_product_maximum",
       sourceDate: row.sourceDate || "", collectedAt: observedAt, observedAt, runId: row.runId || "" };
   }
   return { lodgingProducts, dayUseProducts };
+}
+function productCapacityBaselineAt(evidence, companyId, asOf) {
+  return baselineAtBoundary(evidence, companyId, instant(asOf));
 }
 function compactProductCapacityEvidence(evidence) {
   const maxima = new Map(), result = [];
@@ -63,8 +66,15 @@ function mergeProductCapacityBaselines(...inputs) {
 }
 function productCapacityEvidenceRevision(evidence, companyIds, asOf, warnings = []) {
   const ids = [...new Set(companyIds || [])].sort();
-  const projected = ids.map(id => [id, productCapacityBaselineAt(evidence, id, asOf)]);
-  const relevantWarnings = warnings.filter(row => ids.includes(row.companyId)).map(row => [row.companyId, row.code]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  const selected = new Set(ids), grouped = new Map(), boundary = instant(asOf);
+  // Preserve witness order and equal-count winners while normalizing only the
+  // selected company's rows once, rather than all witnesses for every company.
+  if (boundary) for (const row of Array.isArray(evidence) ? evidence : []) {
+    const id = row?.companyId; if (!selected.has(id)) continue;
+    let rows = grouped.get(id); if (!rows) grouped.set(id, rows = []); rows.push(row);
+  }
+  const projected = ids.map(id => [id, baselineAtBoundary(grouped.get(id), id, boundary)]);
+  const relevantWarnings = warnings.filter(row => selected.has(row.companyId)).map(row => [row.companyId, row.code]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
   return crypto.createHash("sha256").update(JSON.stringify([projected, relevantWarnings])).digest("hex");
 }
 function withProductCapacityBaseline(item, company, evidence, asOf) {

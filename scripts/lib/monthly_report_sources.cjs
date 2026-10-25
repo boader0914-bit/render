@@ -11,7 +11,7 @@ const { createSourceReadScheduler } = require("./source_read_scheduler.cjs");
 const { createMonthlyReportMaterializedCache } = require("./monthly_report_materialized_cache.cjs");
 const { readCompanyMasterProjection } = require("./company_master_stream.cjs");
 const { createMonthlyCompanySourceCatalog } = require("./monthly_company_source_catalog.cjs");
-const { assertCooperativeWorkActive, isCooperativeWorkYield, setCooperativeWorkPhase } = require("./cooperative_work_checkpoint.cjs");
+const { assertCooperativeWorkActive, isCooperativeWorkYield, setCooperativeWorkPhase, setCooperativeWorkRevision } = require("./cooperative_work_checkpoint.cjs");
 const { createIndustrySourceCandidateCache, witnessInputsMatch } = require("./industry_source_candidate_cache.cjs");
 
 const token = value => String(value || "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
@@ -25,13 +25,13 @@ async function readJson(file, fallback, checkpoint = async () => {}) {
   catch (error) { if (error.code === "ENOENT") return fallback; throw sourceError(); }
 }
 
-function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, observationIndex = null, prepareCompanies = null, projectCapacityCompany = null, companySourceVersion = "monthly-company-source-v1", useSourceReadValidationBoundary = false, shareFrozenCatalogMetadata = false, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readSavedProductRecoveries = null, publishProductCapacityEvidence = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", industrySourceCandidateCacheEnabled = false, industrySourceCandidateCacheVersion = "industry-source-candidate-v1", readPersistedProductCapacityEvidence = null, runProductCapacityVerification = operation => operation(), now = () => new Date(), runWork = operation => operation() }) {
+function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, observationIndex = null, prepareCompanies = null, projectCapacityCompany = null, companySourceVersion = "monthly-company-source-v1", useSourceReadValidationBoundary = false, shareFrozenCatalogMetadata = false, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readSavedProductRecoveries = null, publishProductCapacityEvidence = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", industrySourceCandidateCacheEnabled = false, companySourceCandidateCacheEnabled = false, industrySourceCandidateCacheVersion = "industry-source-candidate-v1", readPersistedProductCapacityEvidence = null, runProductCapacityVerification = operation => operation(), now = () => new Date(), runWork = operation => operation() }) {
   if (typeof useSourceReadValidationBoundary !== "boolean") throw new TypeError("Source-read validation opt-in must be boolean");
   if (typeof shareFrozenCatalogMetadata !== "boolean") throw new TypeError("Frozen catalog sharing opt-in must be boolean");
   if (readSavedProductRecoveries !== null && typeof readSavedProductRecoveries !== "function") throw new TypeError("Saved recovery reader must be a function");
-  if (typeof industrySourceCandidateCacheEnabled !== "boolean" || readPersistedProductCapacityEvidence !== null && typeof readPersistedProductCapacityEvidence !== "function"
-    || industrySourceCandidateCacheEnabled && (typeof readRevision !== "function" || typeof projectCapacityCompany !== "function"
-      || !useSourceReadValidationBoundary || typeof readPersistedProductCapacityEvidence !== "function")) throw new TypeError("Industry source candidates require verified source and witness readers");
+  if (typeof industrySourceCandidateCacheEnabled !== "boolean" || typeof companySourceCandidateCacheEnabled !== "boolean" || readPersistedProductCapacityEvidence !== null && typeof readPersistedProductCapacityEvidence !== "function"
+    || (industrySourceCandidateCacheEnabled || companySourceCandidateCacheEnabled) && (typeof readRevision !== "function" || typeof projectCapacityCompany !== "function"
+      || !useSourceReadValidationBoundary || typeof readPersistedProductCapacityEvidence !== "function")) throw new TypeError("Source candidates require verified source and witness readers");
   if (typeof runProductCapacityVerification !== "function") throw new TypeError("Product capacity verification scope must be a function");
   const companyFile = path.join(dataDir, "company_master", "companies.json");
   const historyFile = path.join(dataDir, "history", "observations.jsonl");
@@ -41,6 +41,9 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
   const sourceReadScheduler = createSourceReadScheduler();
   const industryCandidates = industrySourceCandidateCacheEnabled ? createIndustrySourceCandidateCache({
     directory: path.join(dataDir, "monthly_reports", "industry_source_candidates"), version: industrySourceCandidateCacheVersion }) : null;
+  const companyCandidates = companySourceCandidateCacheEnabled ? createIndustrySourceCandidateCache({
+    directory: path.join(dataDir, "monthly_reports", "company_source_candidates"), version: industrySourceCandidateCacheVersion,
+    maxEntries: 64 }) : null;
   const selectorCache = typeof readOptionsRevision === "function" ? createMonthlyReportMaterializedCache({
     directory: path.join(dataDir, "monthly_reports", "selector_cache"), maxEntries: 1,
     maxBytes: 8 * 1024 * 1024, maxEntryBytes: 8 * 1024 * 1024
@@ -447,14 +450,15 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
   async function readSources(request, includeCatalog, options = {}) {
     setCooperativeWorkPhase(10);
     const checkpoint = checkpointFor(options);
-    const candidateScope = industryCandidates && request.type === "industry" && request.targetId === "__industry_all__"
+    const candidateCache = request.type === "industry" && request.targetId === "__industry_all__" ? industryCandidates : request.type === "company" ? companyCandidates : null;
+    const candidateScope = candidateCache && typeof request.targetId === "string" && request.targetId.length > 0 && request.targetId.length <= 300
       && /^\d{4}-\d{2}$/.test(request.month || "") && /^\d{4}-\d{2}-\d{2}$/.test(request.cutoffDate || "")
       ? { type: request.type, targetId: request.targetId, month: request.month, cutoffDate: request.cutoffDate, includeContext: options.includeContext !== false } : null;
     let pendingCandidate = null;
     async function restoredCandidate(data) {
       // A rejected candidate's large decoded graph must leave this frame before
       // the caller starts a cold reconstruction under the same memory owner.
-      const cached = await industryCandidates.read(candidateScope, data._companySource.revision, { checkpoint }), input = cached?.persistedProductCapacityInput;
+      const cached = await candidateCache.read(candidateScope, data._companySource.revision, { checkpoint }), input = cached?.persistedProductCapacityInput;
       const valid = cached && Array.isArray(cached.source?.companies) && Array.isArray(cached.source.observations)
         && Array.isArray(cached.source.runs) && Array.isArray(cached.source.rankObservations) && Array.isArray(cached.source.savedProductRecoveries)
         && Array.isArray(cached.source.warnings) && Array.isArray(cached.contextCompanyIds) && Array.isArray(cached.publicationEvidence)
@@ -464,7 +468,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
       if (valid) {
         const fresh = await readPersistedProductCapacityEvidence(input.companyIds.map(id => data.rawCompanies.get(id)), { checkpoint });
         if (witnessInputsMatch(input, cached.publicationEvidence, fresh, request.cutoffDate)) {
-          industryCandidates.accept(); const source = cached.source;
+          candidateCache.accept(); const source = cached.source;
           // The raw revision excludes context files; re-read saved context.
           setCooperativeWorkPhase(60);
           source.context = candidateScope.includeContext ? await savedContext(request, data, new Set(cached.contextCompanyIds)) : null;
@@ -474,7 +478,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
           return includeCatalog ? { source, catalog: data } : source;
         }
       }
-      if (cached) industryCandidates.semanticMiss();
+      if (cached) candidateCache.semanticMiss();
       return null;
     }
     sourceMetrics.sourceReads++;
@@ -513,6 +517,10 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
       const consume = async data => {
         acquired();
         try {
+          // The catalog's freshly checked whole-source revision is stable
+          // across current/previous-month stages, and changes after any source
+          // or review edit. Do not alternate it with a different revision key.
+          setCooperativeWorkRevision(data._companySource.revision);
           if (candidateScope) { const saved = await restoredCandidate(data); if (saved) return saved; }
           const result = await readSourceData(request, includeCatalog, options, data, false);
           if (candidateScope) {
@@ -530,7 +538,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
           ? await companySourceCatalog.withCompanyCatalog(request.targetId, consume, { checkpoint })
           : await companySourceCatalog.withCatalog(consume, { checkpoint });
         assertCooperativeWorkActive();
-        if (pendingCandidate) await industryCandidates.write(candidateScope, pendingCandidate.revision, pendingCandidate.value, { checkpoint });
+        if (pendingCandidate) await candidateCache.write(candidateScope, pendingCandidate.revision, pendingCandidate.value, { checkpoint });
         return await finish(result);
       } catch (error) {
         if (isCooperativeWorkYield(error)) throw error;
@@ -562,7 +570,8 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     runInteractiveRead: sourceReadScheduler.runInteractive,
     sourceReadStatus: sourceReadScheduler.status,
     sourceReadMetrics: () => ({ ...sourceMetrics, preparedCatalogReadsByScope: { ...sourceMetrics.preparedCatalogReadsByScope },
-      companyCatalog: companySourceCatalog?.stats() || null, industrySourceCandidates: industryCandidates?.stats() || null }) };
+      companyCatalog: companySourceCatalog?.stats() || null, industrySourceCandidates: industryCandidates?.stats() || null,
+      companySourceCandidates: companyCandidates?.stats() || null }) };
 }
 
 module.exports = { createMonthlyReportSources };

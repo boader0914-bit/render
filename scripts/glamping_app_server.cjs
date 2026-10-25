@@ -31,6 +31,7 @@ const { createIndustrySourceRevision } = require("./lib/industry_source_revision
 const { createCompanyIntegratedDb } = require("./lib/company_integrated_read_db.cjs");
 const { createAnalyticalWorkScheduler } = require("./lib/analytical_work_scheduler.cjs");
 const { createAnalyticalMemorySampler } = require("./lib/analytical_memory.cjs");
+const { createRuntimeResponsiveness } = require("./lib/runtime_responsiveness.cjs");
 const { createCompanyIntegratedCatalog, createCompanyIntegratedCatalogRevision, createRevisionCheckedCompanyCatalog } = require("./lib/company_integrated_catalog.cjs");
 const { createCompanyIntegratedTargets } = require("./lib/company_integrated_targets.cjs");
 const { createCompanyCapacityRegistry } = require("./lib/company_capacity_registry.cjs");
@@ -584,8 +585,9 @@ const readMonthlyReportRevision = createMonthlyReportSourceRevision({ dataDir: D
     regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
     tourismRegionMapFile: path.join(WEB_DIR, "data", "tourism_region_map.json"), includeContext: false });
 const analyticalMemory = createAnalyticalMemorySampler();
+const runtimeResponsiveness = createRuntimeResponsiveness();
 const analyticalWork = createAnalyticalWorkScheduler({ sampleMemory: analyticalMemory.sample, highWatermark: 0.65, lowWatermark: 0.55,
-  cooperativeYield: true });
+  cooperativeYield: true, cooperativeCompanyMonthYield: true });
 const runAnalyticalWork = (operation, options) => analyticalWork.run(operation, options);
 const monthlyCompanySourceVersion = crypto.createHash("sha256")
   .update(companyIntegratedCalculationFingerprint())
@@ -625,7 +627,6 @@ const monthlyReportSources = createMonthlyReportSources({
   runProductCapacityVerification: async (operation, { request } = {}) => {
     if (request?.type !== "industry") return operation();
     const sourceRevision = await readMonthlyReportRevision();
-    require("./lib/cooperative_work_checkpoint.cjs").setCooperativeWorkRevision(sourceRevision);
     return productCapacityStore.withDescriptorVerificationScope({ sourceRevision, assertCurrent: async () => {
       if (await readMonthlyReportRevision() !== sourceRevision) throw Object.assign(new Error("MONTHLY_COMPANY_SOURCE_CHANGED"), { code: "MONTHLY_COMPANY_SOURCE_CHANGED" });
     } }, operation);
@@ -653,6 +654,7 @@ const monthlyReportSources = createMonthlyReportSources({
   // its expensive original/recovery prefix. Reuse that verified derived candidate
   // only after a fresh catalog and temporal capacity-evidence validation.
   industrySourceCandidateCacheEnabled: true,
+  companySourceCandidateCacheEnabled: true,
   industrySourceCandidateCacheVersion: crypto.createHash("sha256").update(monthlyCompanySourceVersion)
     .update(fs.readFileSync(__filename))
     .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_company_recalculation.cjs")))
@@ -19409,7 +19411,7 @@ async function route(req, res) {
       // Snapshot counters only: diagnostics must never build an index, scan
       // originals or acquire the analytical work lease merely to report it.
       const historyIndex = historyObservationIndex.describe();
-      return send(res, 200, { work: analyticalWork.status(), memory: analyticalMemory.status(),
+      return send(res, 200, { work: analyticalWork.status(), memory: analyticalMemory.status(), responsiveness: runtimeResponsiveness.status(),
         monthlySources: typeof monthlyReportSources.sourceReadMetrics === "function" ? monthlyReportSources.sourceReadMetrics() : null,
         monthlyRecalculation: recalculateMonthlyCompanyObservations.stats(),
         savedProductRecovery: typeof savedProductRecovery.stats === "function" ? savedProductRecovery.stats() : null,
