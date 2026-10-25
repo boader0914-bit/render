@@ -56,7 +56,7 @@ function compactCapacitySnapshot(snapshot) {
 function compactMonthlyCapacityCompany(company) {
   need(object(company) && typeof company.companyId === "string");
   const fields = ["companyId", "primaryName", "nameKey", "aliases", "placeIds", "bookingBusinessIds", "lodgingTypes", "industryIds",
-    "addresses", "regions", "regionKey", "regionId", "manualCorrection", "manualCorrectionRevision", "_integratedCapacity",
+    "address", "addresses", "regions", "regionKey", "regionId", "manualCorrection", "manualCorrectionRevision", "_integratedCapacity",
     "duplicateNotes", "runIds", "firstRunId", "lastRunId", "deletedAt", "mergedIntoCompanyId"];
   const compact = Object.fromEntries(fields.filter(key => Object.hasOwn(company, key)).map(key => [key, company[key]]));
   compact.keywords = Object.fromEntries(Object.entries(company.keywords || {}).map(([key, exposure]) => {

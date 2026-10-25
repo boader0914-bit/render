@@ -12,7 +12,7 @@ const region = key => ({ regionKey: key, name: key, fullName: key, level: "local
 const result = key => ({ scope: { regionKey: key }, status: "missing", configuration: null, snapshot: null, datasets: [], job: null, storage: {}, sourceCatalog: [] });
 
 function fixture(fetchResult = async key => result(key)) {
-  const reader = createReader(), controllers = new Map(), calls = { get: [], mounts: [], stops: [], clears: [] };
+  const reader = createReader(), controllers = new Map(), calls = { get: [], addresses: [], mounts: [], stops: [], clears: [] };
   const state = { session: { role: "admin", username: "admin-a" }, activeTab: "dictionary", dictionaryDetailTab: "basic", selectedRegion: region("sancheong"), dictionary: { cards: [], regionGroups: [] } };
   const document = { body: {}, activeElement: null }; document.activeElement = document.body;
   function newHost(regionKey, parent) {
@@ -49,7 +49,11 @@ function fixture(fetchResult = async key => result(key)) {
     tourismRegionForLocation: () => ({}), locationClusterCodes: () => [], locationClusterMeta: () => ({}), locationRuntimeStats: () => ({}), adjustedLocationScoreModel: () => ({}),
     regionAnalysisEmptyHtml: () => "<div>지역 미선택</div>",
     renderObservedLocationProfile(...args) { return context.renderRegionalCatchmentHost(args.at(-1).administrativeRegion); },
-    fetchJson: async url => { calls.get.push(url); return fetchResult(new URL(url, "https://local").searchParams.get("regionKey")); }
+    fetchJson: async url => {
+      const parsed = new URL(url, "https://local");
+      if (parsed.pathname.endsWith("/addresses")) { calls.addresses.push(url); return { addresses: [] }; }
+      calls.get.push(url); return fetchResult(parsed.searchParams.get("regionKey"));
+    }
   });
   vm.runInContext(declarations, context);
   const getController = node => controllers.get(node);
@@ -65,11 +69,13 @@ test("actual dictionary rerenders retain the same live host, input nodes/cursor 
   const f = fixture(); const host = await f.render(); const field = f.makeField(host);
   const editor = host.slots["[data-rc-editor-slot]"].innerHTML;
   assert.equal(f.calls.get.length, 1);
+  assert.equal(f.calls.addresses.length, 1);
   f.context.renderLocationDictionary(); f.context.renderLocationDictionary(); await tick();
   assert.equal(f.els.dictionaryResult.current, host); assert.equal(host.isConnected, true);
   assert.equal(f.document.activeElement, field); assert.equal(field.selectionStart, 2); assert.equal(field.selectionEnd, 4);
   assert.equal(f.getController(host).state.draft.label, "편집 중인 기준점"); assert.equal(host.slots["[data-rc-editor-slot]"].innerHTML, editor);
   assert.equal(f.calls.get.length, 1, "same-scope redraws must not revalidate or create another controller");
+  assert.equal(f.calls.addresses.length, 1, "same-scope redraws must not repeat the read-only address query");
 });
 
 test("startup rerenders during the first GET retain the edited point until the response arrives", async () => {

@@ -773,10 +773,11 @@ function drawCatchment(layout, context) {
   layout.heading("반경 배후시장", "저장된 연간 배경 자료입니다. 보고월의 관광 수요·예약·매출로 환산하거나 여러 지역을 합산하지 않습니다.");
   layout.paragraph(`관측 마감 ${clean(context.cutoffDate)} / 배후시장 확인 ${dateText(context.asOfAt, true)}`, { size: 8.5 });
   for (const entry of array(context.entries)) {
-    layout.smallHeading(clean(entry.regionLabel || entry.regionKey));
+    layout.smallHeading(clean(entry.companyLabel ? `${entry.companyLabel} · ${entry.regionLabel || entry.regionKey}` : entry.regionLabel || entry.regionKey));
     if (entry.reasonLabel) layout.paragraph(clean(entry.reasonLabel), { size: 9 });
     const value = entry.snapshot;
     if (!value) { layout.paragraph("정상 저장 근거 미확보. 0으로 계산하지 않습니다."); continue; }
+    if (value.scope?.center?.address) layout.paragraph(`기준 주소 ${clean(value.scope.center.address)}${entry.companyId ? ` / 업체 ${clean(entry.companyId)}` : " / 지역 분석 기준 주소"}`, { size: 8.5 });
     layout.paragraph(`통계 ${clean(value.dataset?.sourceYear)}년 / 경계 ${clean(value.dataset?.boundaryYear)}년 / 산출 ${dateText(value.calculatedAt, true)} / 결과 ${clean(value.resultId)}`, { size: 8 });
     layout.paragraph(`기준점 ${clean(value.scope?.center?.label)} (${clean(value.scope?.center?.latitude)}, ${clean(value.scope?.center?.longitude)}) / 자료 ${clean(value.dataset?.id)} / 계산 ${clean(value.calculationVersion)}`, { size: 8 });
     const rows = array(value.rings).flatMap(ring => Object.entries(ring.metrics || {}).map(([key, m]) => [

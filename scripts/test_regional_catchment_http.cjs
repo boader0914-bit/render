@@ -3,11 +3,11 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { Readable } = require("node:stream");
 const { createRegionalCatchmentHttpHandler, readBoundedJson, MAX_IMPORT_BYTES } = require("./lib/regional_catchment_http.cjs");
-function setup() {
+function setup({ readAddressTargets, rateLimit } = {}) {
   const calls = [], replies = [];
   const service = Object.fromEntries(["get", "configure", "importDataset", "request"].map(method => [method, async value => { calls.push({ method, value }); return method === "request" ? { job: { status: "queued" } } : { result: method }; }]));
   let regularParses = 0;
-  const handler = createRegionalCatchmentHttpHandler({ service,
+  const handler = createRegionalCatchmentHttpHandler({ service, readAddressTargets, rateLimit,
     requireAdmin: (session, req, res) => { if (session?.admin) return true; replies.push({ status: 401 }); return false; },
     parseJsonBody: async req => { regularParses++; return JSON.parse(req.body || "{}"); }, send: (res, status, body) => replies.push({ status, body }) });
   async function invoke(route, { method = "GET", payload = {}, headers = {}, admin = true, bytes } = {}) {
@@ -43,6 +43,50 @@ test("POST uses strict routes, same origin and JSON; unrelated route is untouche
   assert.equal((await env.invoke("/api/regional-catchment/datasets", { method: "GET" })).reply.status, 405);
   assert.equal((await env.invoke("/api/unrelated")).handled, false);
   assert.equal(env.calls.length, 3);
+});
+
+test("company scope GET is explicit and repeated or blank scope keys are rejected", async () => {
+  const env = setup();
+  assert.equal((await env.invoke("/api/regional-catchment?regionKey=r1&companyId=c1")).reply.status, 200);
+  assert.deepEqual(env.calls, [{ method: "get", value: { regionKey: "r1", companyId: "c1" } }]);
+  for (const query of ["regionKey=r1&companyId=", "regionKey=r1&companyId=c1&companyId=c2", "regionKey=r1&address=another", "companyId=c1"]) {
+    assert.equal((await env.invoke(`/api/regional-catchment?${query}`)).reply.status, 400);
+  }
+  assert.equal(env.calls.length, 1);
+});
+
+test("address targets are admin-only, read-only, strictly scoped and limited to option fields", async () => {
+  const reads = [], env = setup({ readAddressTargets: async regionKey => { reads.push(regionKey); return { addresses: [
+    { companyId: "c1", label: "등록 업체", address: "경상남도 산청군 산청읍 산청대로 1", status: "ready", phone: "must-not-leak", raw: { hidden: true } },
+    { companyId: "c2", label: "주소 여러 개", address: "unconfirmed-address", status: "ambiguous" }
+  ], rawCompanies: ["must-not-leak"] }; } });
+  const result = await env.invoke("/api/regional-catchment/addresses?regionKey=r1");
+  assert.equal(result.reply.status, 200); assert.deepEqual(reads, ["r1"]); assert.equal(env.calls.length, 0);
+  assert.deepEqual(result.reply.body, { addresses: [
+    { companyId: "c1", label: "등록 업체", address: "경상남도 산청군 산청읍 산청대로 1", status: "ready" },
+    { companyId: "c2", label: "주소 여러 개", address: "", status: "ambiguous" }
+  ] });
+  assert.equal((await env.invoke("/api/regional-catchment/addresses?regionKey=r1", { admin: false })).reply.status, 401);
+  assert.equal((await env.invoke("/api/regional-catchment/addresses?regionKey=r1", { method: "POST" })).reply.status, 405);
+  for (const query of ["", "regionKey=r1&companyId=c1", "regionKey=r1&regionKey=r2", "regionKey=r1&refresh=true"]) {
+    assert.equal((await env.invoke(`/api/regional-catchment/addresses?${query}`)).reply.status, 400);
+  }
+  assert.deepEqual(reads, ["r1"]); assert.equal(env.regularParses(), 0);
+});
+
+test("address lookup failure is unavailable rather than an empty target list", async () => {
+  const env = setup({ readAddressTargets: async () => ({ addresses: [{ companyId: "c1", label: "업체", status: "ready", address: "" }] }) });
+  const result = await env.invoke("/api/regional-catchment/addresses?regionKey=r1");
+  assert.equal(result.reply.status, 503); assert.equal(result.reply.body.code, "CATCHMENT_ADDRESS_TARGETS_UNAVAILABLE");
+});
+
+test("configure retains optional company scope while origin and write rate guards stay active", async () => {
+  let checks = 0; const env = setup({ rateLimit: () => { checks++; } });
+  const value = { regionKey: "r1", companyId: "c1", center: { address: "확인한 업체 주소" } };
+  assert.equal((await env.invoke("/api/regional-catchment/configure", { method: "POST", payload: value })).reply.status, 200);
+  assert.deepEqual(env.calls, [{ method: "configure", value }]); assert.equal(checks, 1);
+  assert.equal((await env.invoke("/api/regional-catchment/configure", { method: "POST", payload: value, headers: { origin: "https://other.example" } })).reply.status, 403);
+  assert.equal(checks, 1); assert.equal(env.calls.length, 1);
 });
 
 test("dataset reader enforces byte size, content length, UTF8 and stream failures", async () => {

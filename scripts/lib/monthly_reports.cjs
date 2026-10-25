@@ -685,7 +685,11 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
       const selectedIds = new Set(snapshot.companies.map(company => company.companyId));
       const industryCompanies = (source?.companies || []).filter(company => selectedIds.has(company.companyId))
         .map(({ companyId, industryIds, industryRegionKey }) => ({ companyId, industryIds: clone(industryIds || []), industryRegionKey: industryRegionKey || "" }));
-      return { snapshot, regions: clone(source?.regions || []), industryCompanies, timings };
+      const catchmentCompanies = (source?.companies || []).filter(company => selectedIds.has(company.companyId))
+        .map(({ companyId, primaryName, addressBasis }) => ({ companyId, primaryName,
+          ...(addressBasis?.regionKey !== undefined ? { regionKey: addressBasis.regionKey, regionLabel: addressBasis.regionLabel || "" } : {}),
+          addressBasis: clone(addressBasis || { status: "missing", address: null, basis: "saved_company_address" }) }));
+      return { snapshot, regions: clone(source?.regions || []), industryCompanies, catchmentCompanies, timings };
     }, { priority: "foreground", kind: "monthly-report-build" }));
     buildQueue = task.then(() => undefined, () => undefined);
     return task;
@@ -758,7 +762,9 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
           if (typeof readCatchmentContext !== "function") return;
           const phase = performance.now();
           try {
-            const context = await readCatchmentContext(clone(request), clone(roster), { asOfAt: generatedAt });
+            const addresses = new Map((result.value.catchmentCompanies || []).map(company => [company.companyId, company]));
+            const catchmentRoster = { ...roster, companies: roster.companies.map(company => ({ ...company, ...(addresses.get(company.companyId) || {}) })) };
+            const context = await readCatchmentContext(clone(request), clone(catchmentRoster), { asOfAt: generatedAt });
             if (context?.networkAttempted !== false) throw fail("MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY", "배후시장 근거는 저장된 자료만 사용할 수 있습니다.", 503);
             return clone(context);
           } catch (error) {

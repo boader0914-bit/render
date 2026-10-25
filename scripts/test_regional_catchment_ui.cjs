@@ -8,8 +8,8 @@ function payload(extra = {}) {
   return { scope: { regionKey: "sancheong", label: "산청군" }, status: "missing", configuration: null, datasets: [], snapshot: null, job: null, storage: {}, sourceCatalog: [], ...extra };
 }
 function complete(value = 0) {
-  return payload({ status: "ready", configuration: { center: { latitude: 35.41, longitude: 127.87, label: "확인한 기준점", sourceUrl: "https://example.org/point", confirmed: true }, datasetId: "grid-2024" },
-    snapshot: { resultId: "saved-1", calculatedAt: "2026-10-21T01:00:00Z", scope: { regionKey: "sancheong", label: "산청군", center: { label: "확인한 기준점", latitude: 35.41, longitude: 127.87 } },
+  return payload({ status: "ready", configuration: { center: { address: "경상남도 산청군 산청읍 산청대로 1", latitude: 35.41, longitude: 127.87, label: "확인한 기준점", sourceUrl: "https://example.org/point", confirmed: true }, datasetId: "grid-2024" },
+    snapshot: { resultId: "saved-1", calculatedAt: "2026-10-21T01:00:00Z", scope: { regionKey: "sancheong", label: "산청군", center: { address: "경상남도 산청군 산청읍 산청대로 1", label: "확인한 기준점", latitude: 35.41, longitude: 127.87 } },
       dataset: { id: "grid-2024", sourceYear: "2024", boundaryYear: "2023", gridSizeM: 1000, provider: "공개 제공처", sourceUrl: "https://example.org/data" },
       rings: ["inner50", "outer50to100", "total100"].map(key => ({ key, coverage: { status: "complete", completeFrame: true, bboxContainsCircle: true, declaredByAdmin: true, selectedCells: 10 },
         metrics: Object.fromEntries(["population", "establishments", "workers"].map(metric => [metric, { status: "observed_public", value, publishedSum: value, knownCells: 10, missingCells: 0, suppressedCells: 0, protectedZeroCells: 0, unit: metric === "establishments" ? "개" : "명" }])) })) } });
@@ -19,7 +19,11 @@ function host() {
   return { dataset: {}, innerHTML: "", isConnected: true, listeners: {}, slots,
     querySelector: selector => slots[selector] || null, querySelectorAll: () => [], addEventListener(name, listener) { this.listeners[name] = listener; } };
 }
-function controller(options = {}) { return createController({ reader: createReader(), afterPaint: callback => callback(), ...options }); }
+function controller(options = {}) {
+  const fetchJson = options.fetchJson;
+  return createController({ reader: createReader(), afterPaint: callback => callback(), ...options,
+    fetchJson: (url, init) => url.startsWith("/api/regional-catchment/addresses?") ? Promise.resolve({ addresses: options.addressTargets || [] }) : fetchJson(url, init) });
+}
 
 test("unqueried/loading never invent values, zero coverage or a confirmed absence", () => {
   const before = viewModel(null), loading = viewModel(null, { loading: true });
@@ -28,7 +32,7 @@ test("unqueried/loading never invent values, zero coverage or a confirmed absenc
   assert.match(resultHtml(null), /미조회/); assert.match(resultHtml(null, { loading: true }), /저장자료 확인 중/);
   assert.doesNotMatch(resultHtml(null, { loading: true }), /data-rc-value="0"|공간자료 미확보/);
   assert.equal(viewModel(payload()).status, "missing"); assert.match(resultHtml(payload()), /중심점 미설정/);
-  const configured = payload({ configuration: { center: { confirmed: true }, datasetId: "" } });
+  const configured = payload({ configuration: { center: { address: "경상남도 산청군 산청읍 산청대로 1", confirmed: true }, datasetId: "" } });
   assert.match(resultHtml(configured), /격자 미반입/);
 });
 
@@ -143,7 +147,7 @@ test("unsaved or unconfirmed centers cannot trigger calculation and configure is
   await control.mount(element, scope());
   const click = () => element.listeners.click({ target: { closest: () => ({ getAttribute: () => "refresh" }) } });
   click(); assert.match(control.state.actionMessage, /중심점/); assert.equal(calls.length, 1);
-  for (const [name, value] of Object.entries({ label: "실제 확인 기준점", latitude: "35.4", longitude: "127.8", sourceUrl: "https://example.org/point", datasetId: "grid-2024" })) element.listeners.input({ target: { name, value } });
+  for (const [name, value] of Object.entries({ address: "경상남도 산청군 산청읍 산청대로 1", label: "실제 확인 기준점", latitude: "35.4", longitude: "127.8", sourceUrl: "https://example.org/point", datasetId: "grid-2024" })) element.listeners.input({ target: { name, value } });
   element.listeners.change({ target: { name: "confirmed", checked: true } }); click(); assert.match(control.state.actionMessage, /먼저 저장/);
   await element.listeners.submit({ preventDefault() {}, target: { getAttribute: () => "configure", reportValidity: () => true } });
   assert.equal(calls.length, 2); assert.equal(calls[1].url, "/api/regional-catchment/configure");
@@ -161,7 +165,7 @@ test("actual mutation receipts cause one authoritative GET and do not fabricate 
     return { configuration: response.configuration, reused: false };
   } });
   await control.mount(element, scope());
-  for (const [name, value] of Object.entries({ label: "직접 확인한 지점", latitude: "35.4", longitude: "127.8", sourceUrl: "https://example.org/point", datasetId: "grid-2024" })) element.listeners.input({ target: { name, value } });
+  for (const [name, value] of Object.entries({ address: "경상남도 산청군 산청읍 산청대로 1", label: "직접 확인한 지점", latitude: "35.4", longitude: "127.8", sourceUrl: "https://example.org/point", datasetId: "grid-2024" })) element.listeners.input({ target: { name, value } });
   element.listeners.change({ target: { name: "confirmed", checked: true } });
   await element.listeners.submit({ preventDefault() {}, target: { getAttribute: () => "configure", reportValidity: () => true } });
   assert.deepEqual(calls.map(call => call.options?.method || "GET"), ["GET", "POST", "GET"]);
@@ -199,4 +203,104 @@ test("typing during a point save keeps the later unsaved edit instead of silentl
   waiting.resolve(complete(10)); await submitting;
   assert.equal(control.state.draft.label, "저장 중 새로 입력한 이름"); assert.equal(control.state.dirty, true);
   assert.match(control.state.actionMessage, /그 뒤 입력한 변경사항은 아직 저장하지 않았습니다/); control.stop();
+});
+
+test("legacy coordinate-only results stay readable but cannot be saved or recalculated without an address", async () => {
+  const legacy = complete(24); delete legacy.configuration.center.address; delete legacy.snapshot.scope.center.address;
+  const calls = [], element = host(), control = controller({ fetchJson: async (url, options) => { calls.push({ url, options }); return legacy; } });
+  await control.mount(element, scope());
+  const html = element.slots["[data-rc-results]"].innerHTML;
+  assert.match(html, /data-rc-value="24"/); assert.match(html, /주소 확인 전/); assert.match(html, /새 계산을 할 수 없습니다/);
+  assert.equal(control.state.draft.confirmed, false);
+  element.listeners.click({ target: { closest: () => ({ getAttribute: () => "refresh" }) } });
+  assert.match(control.state.actionMessage, /주소 확인 전/);
+  await element.listeners.submit({ preventDefault() {}, target: { getAttribute: () => "configure", reportValidity: () => true } });
+  assert.equal(calls.filter(call => call.options).length, 0); control.stop();
+});
+
+test("changing the address, coordinates or evidence requires a fresh same-location confirmation", async () => {
+  const element = host(), calls = [], control = controller({ fetchJson: async (url, options) => { calls.push({ url, options }); return complete(10); } });
+  await control.mount(element, scope()); assert.equal(control.state.draft.confirmed, true);
+  for (const [name, value] of [["address", "경상남도 산청군 산청읍 산청대로 2"], ["latitude", "35.3"], ["longitude", "127.9"], ["sourceUrl", "https://example.org/another-point"]]) {
+    element.listeners.input({ target: { name, value } }); assert.equal(control.state.draft.confirmed, false);
+    await element.listeners.submit({ preventDefault() {}, target: { getAttribute: () => "configure", reportValidity: () => true } });
+    assert.equal(calls.filter(call => call.options).length, 0);
+    element.listeners.change({ target: { name: "confirmed", checked: true } });
+  }
+  control.stop();
+});
+
+test("address selection exposes confirmed company addresses read-only and explains missing or ambiguous ones", () => {
+  const addresses = [
+    { companyId: "c1", label: "확정 업체", address: '경상남도 산청군 <도로> "1"', status: "ready" },
+    { companyId: "c2", label: "미등록 업체", address: "", status: "missing" },
+    { companyId: "c3", label: "충돌 업체", address: "", status: "ambiguous" }
+  ];
+  const html = editorHtml(complete(), { companyId: "c1", address: addresses[0].address }, { addresses });
+  assert.match(html, /직접 주소 입력 · 지역분석 기준주소/);
+  assert.match(html, /value="c2" disabled/); assert.match(html, /value="c3" disabled/);
+  assert.match(html, /name="address" required[^>]+ readonly/); assert.doesNotMatch(html, /<도로>/);
+  assert.match(html, /주소를 자동으로 좌표로 변환하지 않습니다/); assert.match(html, /기준주소와 좌표가 같은 위치임을 출처에서 대조/);
+});
+
+test("company results use separate caches and reject a different company scope", async () => {
+  const reader = createReader(), company = complete(31); company.scope.companyId = "c1"; company.snapshot.scope.companyId = "c1";
+  const urls = []; await reader.get({ ...scope({ companyId: "c1" }), fetchJson: async url => { urls.push(url); return company; } });
+  assert.deepEqual(urls, ["/api/regional-catchment?regionKey=sancheong&companyId=c1"]);
+  assert.equal(reader.read(scope()), null); assert.equal(reader.read(scope({ companyId: "c2" })), null);
+  await assert.rejects(reader.get({ ...scope({ companyId: "c2" }), fetchJson: async () => company }), /범위/);
+  assert.equal(reader.read(scope({ companyId: "c1" })), company);
+});
+
+test("company save sends the registered address and scope, while synthetic address edits are ignored", async () => {
+  const target = { companyId: "c1", label: "등록 업체", address: "경상남도 산청군 산청읍 산청대로 1", status: "ready" };
+  const company = complete(30); company.scope.companyId = "c1"; company.snapshot.scope.companyId = "c1";
+  const calls = [], element = host(), control = createController({ reader: createReader(), afterPaint: callback => callback(), fetchJson: async (url, options) => {
+    calls.push({ url, options }); return url.includes("/addresses?") ? { addresses: [target] } : company;
+  } });
+  await control.mount(element, scope({ companyId: "c1" }));
+  assert.equal(control.state.draft.address, target.address); assert.equal(control.state.draft.confirmed, true);
+  const fake = { name: "address", value: "다른 주소" }; element.listeners.input({ target: fake });
+  assert.equal(fake.value, target.address); assert.equal(control.state.draft.address, target.address);
+  await element.listeners.submit({ preventDefault() {}, target: { getAttribute: () => "configure", reportValidity: () => true } });
+  const post = calls.find(call => call.options?.method === "POST"), body = JSON.parse(post.options.body);
+  assert.equal(body.companyId, "c1"); assert.equal(body.center.address, target.address); assert.equal(body.center.companyId, undefined);
+  assert.ok(calls.some(call => call.url === "/api/regional-catchment/addresses?regionKey=sancheong")); control.stop();
+});
+
+test("selecting a company reads its own saved result and returning to direct input reads region scope", async () => {
+  const target = { companyId: "c1", label: "등록 업체", address: "경상남도 산청군 산청읍 산청대로 1", status: "ready" }, urls = [], element = host();
+  const control = controller({ addressTargets: [target], fetchJson: async url => {
+    urls.push(url); const result = complete(url.includes("companyId=") ? 45 : 22);
+    if (url.includes("companyId=")) { result.scope.companyId = "c1"; result.snapshot.scope.companyId = "c1"; }
+    return result;
+  } });
+  await control.mount(element, scope());
+  element.listeners.change({ target: { name: "companyId", value: "c1" } }); await tick();
+  assert.equal(element.dataset.rcCompany, "c1"); assert.match(element.slots["[data-rc-results]"].innerHTML, /data-rc-value="45"/);
+  await control.mount(element, scope()); assert.equal(element.dataset.rcCompany, "c1", "parent region rerenders preserve the selected company");
+  element.listeners.change({ target: { name: "companyId", value: "" } }); await tick();
+  assert.equal(element.dataset.rcCompany, ""); assert.match(element.slots["[data-rc-results]"].innerHTML, /data-rc-value="22"/);
+  assert.deepEqual(urls, ["/api/regional-catchment?regionKey=sancheong", "/api/regional-catchment?regionKey=sancheong&companyId=c1", "/api/regional-catchment?regionKey=sancheong"]); control.stop();
+});
+
+test("a delayed company address read preserves coordinate edits and populates only the read-only address", async () => {
+  const waiting = deferred(), company = complete(10); company.scope.companyId = "c1"; company.snapshot.scope.companyId = "c1";
+  const element = host(), control = createController({ reader: createReader(), afterPaint: callback => callback(), fetchJson: async url => url.includes("/addresses?") ? waiting.promise : company });
+  const mounting = control.mount(element, scope({ companyId: "c1" })); await tick();
+  element.listeners.input({ target: { name: "latitude", value: "35.9" } });
+  waiting.resolve({ addresses: [{ companyId: "c1", label: "등록 업체", address: company.configuration.center.address, status: "ready" }] }); await mounting;
+  assert.equal(control.state.draft.latitude, "35.9"); assert.equal(control.state.draft.address, company.configuration.center.address);
+  assert.equal(control.state.draft.confirmed, false); assert.equal(control.state.dirty, true); control.stop();
+});
+
+test("changed or unavailable registered company addresses cannot reuse an old confirmation", async () => {
+  for (const target of [{ companyId: "c1", label: "변경 업체", address: "경상남도 산청군 산청읍 산청대로 2", status: "ready" }, { companyId: "c1", label: "미확정 업체", address: "", status: "ambiguous" }]) {
+    const company = complete(10); company.scope.companyId = "c1"; company.snapshot.scope.companyId = "c1";
+    const calls = [], element = host(), control = controller({ addressTargets: [target], fetchJson: async (url, options) => { calls.push({ url, options }); return company; } });
+    await control.mount(element, scope({ companyId: "c1" })); assert.equal(control.state.draft.confirmed, false);
+    element.listeners.click({ target: { closest: () => ({ getAttribute: () => "refresh" }) } });
+    await element.listeners.submit({ preventDefault() {}, target: { getAttribute: () => "configure", reportValidity: () => true } });
+    assert.equal(calls.filter(call => call.options).length, 0); control.stop();
+  }
 });
