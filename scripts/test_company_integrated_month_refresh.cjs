@@ -274,3 +274,20 @@ test("certificate verification is reentrant for a caller already holding the sha
   assert.equal(view.status,"ready");assert.equal(view.freshness.selectedMonthVerified,true);assert.equal(await f.queue(),queue);
   assert.ok(f.scheduler.status().timing.reentrantCompleted>0);
 });
+
+test("saved preview preserves the exact month without reading its expensive proof and the next normal GET verifies it", async t => {
+  const f = await fixture(t); await f.service.queueCompany(ID, { months: [MONTH, "2026-10"] }); await f.service.refreshMonth(ID, { month: MONTH });
+  const revisions = f.state.revisionCalls, reads = f.reads.length, schedules = f.scheduling.length, queue = await f.queue(), bytes = await fs.readFile(f.monthFile);
+  const preview = await f.service.get(ID, { month: MONTH, savedPreview: true });
+  assert.equal(preview.status, "refreshing"); assert.equal(preview.freshness.savedPreview, true);
+  assert.equal(preview.freshness.selectedMonthVerified, false); assert.equal(preview.freshness.revisionCheckStatus, "not_checked"); assert.equal(preview.freshness.revisionCheckedAt, null);
+  assert.equal(f.state.revisionCalls, revisions); assert.equal(f.reads.length, reads); assert.equal(f.scheduling.length, schedules);
+  assert.equal(preview.snapshot.daily.find(row => row.date === "2026-09-03").lodging.sold, 0);
+  assert.equal(preview.snapshot.daily.find(row => row.date === "2026-09-04").lodging.sold, null);
+  const normal = await f.service.get(ID, { month: MONTH }); assert.equal(normal.status, "ready"); assert.equal(normal.freshness.selectedMonthVerified, true);
+  assert.equal(normal.freshness.savedPreview, undefined); assert.deepEqual(normal.snapshot, preview.snapshot); assert.deepEqual(await fs.readFile(f.monthFile), bytes); assert.equal(await f.queue(), queue);
+  f.state.revisionFail = true;
+  const failed = await f.service.get(ID, { month: MONTH }); assert.equal(failed.status, "failed"); assert.equal(failed.freshness.selectedMonthVerified, false);
+  assert.deepEqual(failed.snapshot, preview.snapshot); assert.deepEqual(await fs.readFile(f.monthFile), bytes); assert.equal(await f.queue(), queue);
+  await assert.rejects(f.service.get(ID, { month: MONTH, savedPreview: "true" }), { code: "invalid_saved_preview" });
+});

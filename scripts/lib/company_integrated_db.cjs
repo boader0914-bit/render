@@ -570,8 +570,9 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
       jobs: Object.values(state.jobs).map(job => ({ companyId: job.companyId, status: job.status, generation: job.generation,
         months: job.months, errorCode: job.errorCode, updatedAt: job.updatedAt, startedAt: job.startedAt, finishedAt: job.finishedAt })) };
   }
-  async function get(companyId, { month, cutoffDate, knownMonthsOnly = false } = {}) {
+  async function get(companyId, { month, cutoffDate, knownMonthsOnly = false, savedPreview = false } = {}) {
     companyId = validId(companyId);
+    if (typeof savedPreview !== "boolean") throw fault("invalid_saved_preview", 400);
     if (month !== undefined && !monthValid(month)) throw fault("invalid_month", 400);
     if (cutoffDate !== undefined) validCutoff(cutoffDate, current());
     await init();
@@ -621,7 +622,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     // month is still pending/failed. Ordinary ready/idle reads add no revision
     // request or raw-inventory read to their existing fast path.
     let refreshedProof = null, selectedVerificationError = null;
-    if (selected && !needsRefresh && cutoffDate === undefined && !storeError
+    if (!savedPreview && selected && !needsRefresh && cutoffDate === undefined && !storeError
       && (["queued", "processing", "failed"].includes(stateJob?.status) || bootstrapError)) {
       try {
         // Revision preparation snapshots shared dependency files. Keep it in
@@ -645,7 +646,8 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
         warnings: [...new Set([...(selectedRoomBasis?.warnings || []), ...(selected?.snapshot.quality?.warnings || []).filter(warning => /객실|재고|총량|수량/.test(warning))])] },
       latestAttempts: selected?.latestAttempts || [], failedAttempts: selected?.failedAttempts || [],
       freshness: { lastCalculatedAt: selected?.calculatedAt || null, refreshStatus: stateJob?.status || "idle", lastRefreshError: stateJob?.errorCode || bootstrapError || null,
-        revisionCheckStatus: selectedReady || recoveredRevision ? "verified" : state.bootstrap?.status || "not_checked", revisionCheckedAt: selectedReady ? refreshedProof.verifiedAt : recoveredRevision ? stateJob.finishedAt : state.bootstrap?.checkedAt || null,
+        ...(savedPreview ? { savedPreview: true } : {}),
+        revisionCheckStatus: savedPreview ? "not_checked" : selectedReady || recoveredRevision ? "verified" : state.bootstrap?.status || "not_checked", revisionCheckedAt: savedPreview ? null : selectedReady ? refreshedProof.verifiedAt : recoveredRevision ? stateJob.finishedAt : state.bootstrap?.checkedAt || null,
         selectedMonthVerified: selectedReady, selectedMonthVerificationError: selectedVerificationError },
       sourcePolicy: "원본 보존 · 업체 고유번호 통합 · 최신 유효 관측 · 미관측은 결측 · 월간 리포트 공통 계산" };
   }

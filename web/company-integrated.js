@@ -130,7 +130,8 @@
       keywords = [...grouped].map(([keyword, runs]) => ({ keyword, runs }));
     }
     return { ...envelope, snapshot, companyId, companyName: snapshot.target?.label || company.name || company.companyName || context.companyName || "선택 업체",
-      month, capacity, roomBasis: basis, rows, keywords, summary: snapshot.summary?.lodging || {}, quality: snapshot.quality || {}, insights: snapshot.insights || {} };
+      month, capacity, savedPreview: envelope.freshness?.savedPreview === true,
+      roomBasis: basis, rows, keywords, summary: snapshot.summary?.lodging || {}, quality: snapshot.quality || {}, insights: snapshot.insights || {} };
   }
 
   function freshness(row) {
@@ -200,8 +201,9 @@
       <section class="ci-card"><h4>계산 기준</h4><ul class="ci-rules"><li>업체 고유번호와 숙박일로 통합하고, 같은 날짜의 최신 유효 관측 한 번만 채택합니다.</li><li>숙박일이 지난 뒤 관측한 자료는 해당 숙박일의 예약으로 사용하지 않습니다.</li><li>실패·누락을 0으로 바꾸지 않습니다. 사전 관측은 마지막 관측일을 함께 표시합니다.</li><li>타채널 수량·매출은 공개 재고 기반의 추정이며 실제 결제 내역이 아닙니다.</li><li>객실을 공유하는 데이유즈는 숙박 객실과 중복 합산하지 않습니다.</li></ul>${snap.sourceContext ? `<details><summary>자료 연결 근거</summary><pre>${esc(JSON.stringify(snap.sourceContext, null, 2))}</pre></details>` : ""}</section>`;
   }
   function render(model, state) {
-    const working = ["updating", "refreshing"].includes(model.status);
-    const tabs = Object.entries(TABS), status = ({ ready: "갱신 완료", updating: "통합 중", refreshing: "통합 중", pending: "가공 대기", failed: "가공 실패" })[model.status] || "상태 미확인";
+    const working = !state.error && (model.savedPreview || ["updating", "refreshing"].includes(model.status));
+    const tabs = Object.entries(TABS), status = model.savedPreview ? state.error ? "최신 확인 실패" : "저장 자료 · 최신 확인 중"
+      : ({ ready: "갱신 완료", updating: "통합 중", refreshing: "통합 중", pending: "가공 대기", failed: "가공 실패" })[model.status] || "상태 미확인";
     const months = [...new Set([model.month, ...(model.months || []).map(item => typeof item === "string" ? item : item.month)].filter(validMonth))].sort().reverse();
     const page = state.tab === "analysis" ? analysis(model) : state.tab === "history" ? history(model) : state.tab === "review" ? review(model) : `${reservationChart(model)}<section class="ci-card"><div class="ci-section-head"><h4>날짜별 예약·추정 매출</h4><div class="ci-view-switch" role="group" aria-label="매출 보기 방식"><button type="button" data-ci-view="calendar" aria-pressed="${state.view === "calendar"}">캘린더</button><button type="button" data-ci-view="table" aria-pressed="${state.view === "table"}">표</button></div></div>${state.view === "table" ? dailyTable(model) : calendar(model)}</section>`;
     return `<div class="company-integrated"><header class="ci-header"><div><p class="ci-eyebrow">COMPANY INSIGHT</p><h3>월별 통합 분석</h3><p>숙박일 기준 · 키워드 중복 제외</p></div><div class="ci-controls"><span class="ci-status${working ? " ci-status-updating" : model.status === "failed" ? " ci-status-failed" : ""}" role="status">${esc(status)}</span><label>숙박월<select data-ci-month aria-label="통합 DB 숙박월"${!months.length ? " disabled" : ""}>${months.length ? months.map(month => `<option value="${month}"${month === model.month ? " selected" : ""}>${esc(monthLabel(month))}</option>`).join("") : '<option value="">자료 없음</option>'}</select></label><button type="button" data-ci-refresh${state.loading ? " disabled" : ""}>${state.loading ? "불러오는 중" : "상태 확인"}</button></div></header>
@@ -215,9 +217,10 @@
       ${model.snapshot?.summary ? `<footer class="ci-footer"><span>원본과 전체 관측 이력은 보존됩니다.</span><button type="button" data-monthly-report-context="company" data-monthly-report-target="${esc(model.companyId)}" data-monthly-report-month="${esc(model.month)}">이 월로 리포트 열기</button></footer>` : ""}</div>`;
   }
 
-  async function request(companyId, month, signal) {
+  async function request(companyId, month, signal, options = {}) {
     const query = new URLSearchParams({ companyId });
     if (validMonth(month)) query.set("month", month);
+    if (options.savedPreview === true) query.set("view", "saved");
     const response = await root.fetch(`/api/company-master/integrated?${query}`, { credentials: "same-origin", headers: { Accept: "application/json" }, signal });
     if (response.status === 401 || response.status === 403) throw new Error("관리자 로그인이 필요합니다. 다시 로그인한 뒤 확인하세요.");
     const body = await response.json();
@@ -229,14 +232,15 @@
     const state = { context: {}, tab: "settlement", view: "calendar", selectedDate: "", loading: false, error: "", envelope: {}, month: "" };
     const requestFrame = options.requestAnimationFrame || (root.requestAnimationFrame ? root.requestAnimationFrame.bind(root) : callback => root.setTimeout(callback, 0));
     const cancelFrame = options.cancelAnimationFrame || (root.cancelAnimationFrame ? root.cancelAnimationFrame.bind(root) : root.clearTimeout.bind(root));
-    let timer = null, sequence = 0, aborted = null, disposed = false, activeLoad = null, hasOpened = false;
+    let timer = null, validationTimer = null, savedValidation = null, sequence = 0, aborted = null, disposed = false, activeLoad = null, hasOpened = false;
     let displayTicket = null, drawRevision = 0, frameVersion = 0, frames = [];
     function clearTimer() { if (timer !== null) cancel(timer); timer = null; }
+    function clearSavedValidation() { if (validationTimer !== null) cancel(validationTimer); validationTimer = null; savedValidation = null; }
     function visible() {
       return container.isConnected !== false && !container.closest?.("[hidden]") && root.document?.visibilityState !== "hidden" && (!container.getClientRects || container.getClientRects().length > 0);
     }
     function schedulePolling() {
-      if (disposed || timer !== null || state.loading || state.error || !visible()
+      if (disposed || timer !== null || savedValidation || state.loading || state.error || !visible()
         || !["updating", "refreshing"].includes(state.envelope.status)) return;
       timer = schedule(() => { timer = null; if (visible()) void load(); }, 3000);
     }
@@ -245,7 +249,7 @@
       if (!ticket || ticket.settled) return;
       if (ticket === displayTicket) clearFrames();
       ticket.settled = status;
-      const loadStatus = state.error ? "error" : ["updating", "refreshing"].includes(state.envelope.status) ? "refreshing" : ["ready", "pending", "failed"].includes(state.envelope.status) ? state.envelope.status : "pending";
+      const loadStatus = state.error ? "error" : state.envelope.freshness?.savedPreview === true || ["updating", "refreshing"].includes(state.envelope.status) ? "refreshing" : ["ready", "pending", "failed"].includes(state.envelope.status) ? state.envelope.status : "pending";
       ticket.resolve({ status, companyId: ticket.companyId, month: ticket.month, loadStatus });
     }
     function beginDisplay() {
@@ -253,6 +257,28 @@
       let resolve;
       displayTicket = { companyId: state.context.companyId || "", month: state.month, sequence, settled: "", promise: new Promise(done => { resolve = done; }), resolve: value => resolve(value) };
       return displayTicket;
+    }
+    function validateAfterSavedDisplay() {
+      const pending = savedValidation, ticket = displayTicket;
+      const current = () => !disposed && pending && savedValidation === pending && pending.sequence === sequence
+        && pending.companyId === state.context.companyId && pending.month === state.month;
+      if (!current() || !ticket || state.loading || state.error || !visible() || validationTimer !== null || pending.ticket === ticket) return;
+      pending.ticket = ticket;
+      ticket.promise.then(displayed => {
+        if (!current() || !visible()) return;
+        if (ticket !== displayTicket || displayed.status === "superseded") { pending.ticket = null; validateAfterSavedDisplay(); return; }
+        if (displayed.status !== "displayed" || validationTimer !== null) return;
+        // Do not let the full source proof delay the first stored card's DOM
+        // and two frames. The response marker is explicit so old injected
+        // three-argument readers keep their original one-read behavior.
+        validationTimer = schedule(() => {
+          validationTimer = null;
+          if (current() && visible()) void load();
+        }, 0);
+      }).catch(() => {
+        if (!current()) return;
+        clearSavedValidation(); state.error = "최신 자료 확인을 시작하지 못했습니다. 상태 확인을 눌러 주세요."; draw();
+      });
     }
     function displayAfterDraw() {
       const ticket = displayTicket;
@@ -276,7 +302,10 @@
     }
     function checkVisibility() {
       if (disposed) return;
-      if (visible()) { schedulePolling(); return; }
+      if (visible()) {
+        if (savedValidation && displayTicket?.settled === "hidden") { beginDisplay(); displayAfterDraw(); }
+        validateAfterSavedDisplay(); schedulePolling(); return;
+      }
       // A completed paint is not proof that the same surface is still visible.
       // Give hidden callers a fresh terminal ticket instead of a past displayed result.
       if (displayTicket?.settled && displayTicket.settled !== "hidden") beginDisplay();
@@ -296,22 +325,23 @@
       container.innerHTML = render(buildViewModel(state.envelope, { ...state.context, month: state.month }), state);
       drawRevision += 1;
       if (displayTicket?.settled === "displayed") beginDisplay();
-      try { if (selector) container.querySelector(selector)?.focus(); } finally { displayAfterDraw(); }
+      try { if (selector) container.querySelector(selector)?.focus(); } finally { displayAfterDraw(); validateAfterSavedDisplay(); }
     }
     function remember() { if (state.context.companyId) { remembered.set(state.context.companyId, { tab: state.tab, view: state.view, month: state.month }); if (remembered.size > 100) remembered.delete(remembered.keys().next().value); } }
-    function load(month = state.month) {
+    function load(month = state.month, { savedPreview = month !== state.month } = {}) {
       if (disposed || !state.context.companyId) return Promise.resolve();
-      clearTimer(); aborted?.abort(); aborted = new AbortController(); const current = ++sequence;
+      clearTimer(); clearSavedValidation(); aborted?.abort(); aborted = new AbortController(); const current = ++sequence;
       if (month !== state.month) { state.envelope = {}; state.selectedDate = ""; }
       const signal = aborted.signal;
       state.month = month; state.loading = true; state.error = ""; hasOpened = true; beginDisplay(); draw();
       const promise = (async () => {
         try {
-          const envelope = await fetchData(state.context.companyId, month, signal);
+          const envelope = await fetchData(state.context.companyId, month, signal, savedPreview ? { savedPreview: true } : {});
           if (disposed || current !== sequence) return;
           if (envelope.companyId && envelope.companyId !== state.context.companyId) throw new Error("요청한 업체와 자료의 업체가 일치하지 않습니다.");
           if (validMonth(month) && envelope.selectedMonth && envelope.selectedMonth !== month) throw new Error("선택한 월과 자료의 월이 일치하지 않습니다.");
           state.envelope = envelope; state.month = envelope.selectedMonth || envelope.snapshot?.request?.month || month;
+          if (savedPreview && envelope.freshness?.savedPreview === true) savedValidation = { sequence: current, companyId: state.context.companyId, month: state.month, ticket: null };
         } catch (error) { if (!disposed && current === sequence && error?.name !== "AbortError") state.error = error?.message || "통합 자료를 불러오지 못했습니다."; }
         finally {
           if (!disposed && current === sequence) {
@@ -336,7 +366,7 @@
         checkVisibility();
         return activeLoad.promise;
       }
-      return load(month);
+      return load(month, { savedPreview: true });
     }
     function whenDisplayed() {
       if (disposed) return Promise.resolve({ status: "disposed", companyId: state.context.companyId || "", month: state.month });
@@ -359,7 +389,7 @@
       selectTab(event.key === "Home" ? keys[0] : event.key === "End" ? keys.at(-1) : keys[(index + (event.key === "ArrowRight" ? 1 : keys.length - 1)) % keys.length]);
     };
     container.addEventListener("click", click); container.addEventListener("change", change); container.addEventListener("keydown", keydown);
-    function dispose() { settleDisplay(displayTicket, "disposed"); disposed = true; sequence += 1; aborted?.abort(); clearTimer(); clearFrames(); observer?.disconnect(); root.document?.removeEventListener?.("visibilitychange", checkVisibility); container.removeEventListener("click", click); container.removeEventListener("change", change); container.removeEventListener("keydown", keydown); instances.delete(container); }
+    function dispose() { settleDisplay(displayTicket, "disposed"); disposed = true; sequence += 1; aborted?.abort(); clearTimer(); clearSavedValidation(); clearFrames(); observer?.disconnect(); root.document?.removeEventListener?.("visibilitychange", checkVisibility); container.removeEventListener("click", click); container.removeEventListener("change", change); container.removeEventListener("keydown", keydown); instances.delete(container); }
     draw(); return { state, open, load, whenDisplayed, selectTab, dispose };
   }
   const api = { buildViewModel, render, createController, show(container, context) { if (!container) return; let controller = instances.get(container); if (!controller) { controller = createController(container); instances.set(container, controller); } void controller.open(context); return controller; }, disposeWithin(parent) { if (!parent) return; for (const container of parent.querySelectorAll("[data-company-integrated]")) instances.get(container)?.dispose(); } };

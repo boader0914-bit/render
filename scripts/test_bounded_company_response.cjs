@@ -276,8 +276,9 @@ function routeFixture(overrides = {}) {
   // Extract only the owned two route blocks and small send function. No app
   // module is required and no server, startup task, source or API is started.
   const fs = require("node:fs"), path = require("node:path"), vm = require("node:vm"), source = fs.readFileSync(path.join(__dirname, "glamping_app_server.cjs"), "utf8").replace(/\r\n/g, "\n");
-  const security = { "X-Synthetic-Security": "unchanged" }, sender = createBoundedCompanyResponse(options({ headers: () => security }));
-  const env = { Buffer, securityHeaders: () => security, responseUnavailable: require("./lib/bounded_company_response.cjs").unavailable,
+  const runWork = overrides.runAnalyticalWork || (operation => operation());
+  const security = { "X-Synthetic-Security": "unchanged" }, sender = createBoundedCompanyResponse(options({ headers: () => security, runWork }));
+  const env = { Buffer, boundedJsonBuffer, runAnalyticalWork: runWork, securityHeaders: () => security, responseUnavailable: require("./lib/bounded_company_response.cjs").unavailable,
     companyResponse: sender, requireAdminSession: () => true, acceptsGzip: require("./lib/company_bootstrap.cjs").acceptsGzip,
     companyBootstrapStore: { get: async () => { throw new Error("fixture not supplied"); } }, companyDetailStore: { get: async () => { throw new Error("fixture not supplied"); } }, ...overrides };
   const begin = source.indexOf("function send(res,"), end = source.indexOf("// The byte reservation", begin);
@@ -297,6 +298,24 @@ test("actual owned detail route preserves ID validation, missing response, cache
   const missingId = new Response(); await f.request("/api/company-master/detail", missingId); assert.equal(missingId.statusCode, 400); assert.equal(calls, 0);
   const good = new Response(); assert.equal(await f.request("/api/company-master/detail?companyId=%20one%20", good), true); assert.deepEqual(good.body(), Buffer.from(JSON.stringify(data))); assert.equal(good.headers["X-Company-Detail-Cache"], "saved"); assert.equal(good.headers["X-Company-Detail-Prepared-At"], "same-time");
   const absent = routeFixture({ companyDetailStore: { get: async () => ({ data: null }) } }), noCompany = new Response(); await absent.request("/api/company-master/detail?companyId=one", noCompany); assert.equal(noCompany.statusCode, 404); assert.equal(noCompany.body().toString(), JSON.stringify({ error: "업체를 찾을 수 없습니다." }));
+});
+
+test("actual detail route encodes under its preparation owner and releases it before network backpressure", async () => {
+  const scheduler = createAnalyticalWorkScheduler(), kinds = []; let background, encoded = 0;
+  const data = { company: { companyId: "one" }, get text() {
+    encoded++; assert.equal(scheduler.status().activeKind, "company-detail-response"); return "한글";
+  } };
+  const f = routeFixture({ runAnalyticalWork: (operation, workOptions) => { kinds.push(workOptions.kind); return scheduler.run(operation, workOptions); },
+    companyDetailStore: { get: async () => {
+      assert.equal(scheduler.status().activeKind, "company-detail-response");
+      background = scheduler.run(() => "background admitted", { kind: "industry-build", priority: "background" });
+      return { data, cacheStatus: "saved", preparedAt: "same-time" };
+    } } });
+  const res = new Response({ blocked: true }), sending = f.request("/api/company-master/detail?companyId=one", res);
+  await tick(); assert.equal(await background, "background admitted");
+  assert.equal(encoded, 1); assert.deepEqual(kinds, ["company-detail-response"]);
+  assert.equal(scheduler.status().active, false, "a slow socket does not retain the analytical owner");
+  res.destroy(); await sending; await scheduler.close(); assert.equal(f.sender.status().reservedBytes, 0);
 });
 test("actual bootstrap route preserves both encodings, exact length/Vary and source failure mapping", async () => {
   const json = Buffer.from('{"companies":[{"name":"한글😀"}],"totalCompanies":1}'), gzip = zlib.gzipSync(json);

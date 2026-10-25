@@ -454,3 +454,53 @@ test("a failed refresh does not restart polling its previous in-progress envelop
     assert.equal(calls, 2); assert.equal(timers.size, 0, "an error must not become an automatic retry loop");
   } finally { controller.dispose(); }
 });
+
+function previewTimers() {
+  const timers = new Map(); let next = 0;
+  return { setTimeout(fn, ms) { timers.set(++next, { fn, ms }); return next; }, clearTimeout(id) { timers.delete(id); },
+    get timers() { return timers; }, run() { const [id, value] = [...timers][0] || []; assert.ok(value, "one automatic verification is scheduled"); timers.delete(id); value.fn(); return value.ms; } };
+}
+const previewEnvelope = (month = "2026-09") => ({ ...JSON.parse(JSON.stringify(envelope()).replaceAll("2026-09", month)), freshness: { savedPreview: true, selectedMonthVerified: false, revisionCheckStatus: "not_checked", revisionCheckedAt: null } });
+
+test("saved data paints honestly before one normal verification and then becomes latest ready without a click", async () => {
+  const c = container(), frames = animationFrames(), timers = previewTimers(), calls = [], latest = deferred();
+  const controller = ui.createController(c, { ...frames, ...timers, fetchData(id, month, signal, options) { calls.push({ id, month, signal, options }); return calls.length === 1 ? Promise.resolve(previewEnvelope()) : latest.promise; } });
+  await controller.open({ companyId: envelope().companyId });
+  assert.equal(calls[0].options.savedPreview, true); assert.equal(timers.timers.size, 0); assert.match(c.innerHTML, /저장 자료 · 최신 확인 중/); assert.doesNotMatch(c.innerHTML, /갱신 완료/);
+  const displayed = controller.whenDisplayed(); frames.frame(); await Promise.resolve(); assert.equal(timers.timers.size, 0); frames.frame();
+  assert.equal((await displayed).loadStatus, "refreshing"); await Promise.resolve(); assert.equal(timers.timers.size, 1);
+  assert.equal(timers.run(), 0); assert.equal(calls.length, 2); assert.deepEqual(calls[1].options, {});
+  assert.equal(ui.buildViewModel(controller.state.envelope).summary.sold, 5, "the previous totals remain while the proof is pending");
+  const answer = envelope(); answer.snapshot.summary.lodging.sold = 7; answer.freshness = { selectedMonthVerified: true };
+  latest.resolve(answer); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(ui.buildViewModel(controller.state.envelope).summary.sold, 7); assert.match(c.innerHTML, /갱신 완료/); assert.doesNotMatch(c.innerHTML, /저장 자료 · 최신 확인 중/);
+  assert.equal(timers.timers.size, 0); assert.equal(calls.length, 2); controller.dispose();
+});
+
+test("a month switch aborts old verification and a failed new verification retains its saved zero and missing values", async () => {
+  const c = container(), frames = animationFrames(), timers = previewTimers(), calls = [];
+  const controller = ui.createController(c, { ...frames, ...timers, fetchData(id, month, signal, options) { const request = deferred(); calls.push({ id, month, signal, options, ...request }); return request.promise; } });
+  const opening = controller.open({ companyId: envelope().companyId, month: "2026-09" }); calls[0].resolve(previewEnvelope()); await opening;
+  const first = controller.whenDisplayed(); frames.frame(); frames.frame(); await first; await Promise.resolve(); timers.run(); assert.equal(calls.length, 2);
+  const switched = controller.load("2026-08"); assert.equal(calls[1].signal.aborted, true); assert.equal(calls[2].options.savedPreview, true);
+  calls[2].resolve(previewEnvelope("2026-08")); await switched; calls[1].resolve(envelope()); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(controller.state.month, "2026-08"); assert.equal(controller.state.envelope.selectedMonth, "2026-08");
+  const second = controller.whenDisplayed(); frames.frame(); frames.frame(); await second; await Promise.resolve(); timers.run();
+  assert.deepEqual(calls[3].options, {}); calls[3].reject(new Error("최신 자료 연결 실패")); await new Promise(resolve => setImmediate(resolve));
+  assert.match(c.innerHTML, /최신 확인 실패/); assert.match(c.innerHTML, /기존 저장 자료/); assert.equal(timers.timers.size, 0);
+  const model = ui.buildViewModel(controller.state.envelope); assert.equal(model.rows.find(row => row.date === "2026-08-02").sold, 0); assert.equal(model.rows.find(row => row.date === "2026-08-03").sold, null);
+  c.hidden = true; controller.whenDisplayed(); c.hidden = false; await controller.open({ companyId: envelope().companyId }); assert.equal(calls.length, 4, "failed proof does not retry automatically on return"); controller.dispose();
+});
+
+test("the real fetch requests saved view only first and hidden or disposed cards cannot start its verification", async () => {
+  const c = container(), frames = animationFrames(), timers = previewTimers(), originalFetch = global.fetch, calls = [];
+  global.fetch = async (url, options) => { calls.push({ url, options }); return { ok: true, status: 200, json: async () => previewEnvelope() }; };
+  const controller = ui.createController(c, { ...frames, ...timers });
+  try {
+    await controller.open({ companyId: envelope().companyId, month: "2026-09" });
+    const query = new URL(calls[0].url, "http://localhost").searchParams; assert.equal(query.get("view"), "saved"); assert.equal(query.get("month"), "2026-09"); assert.equal(calls[0].options.credentials, "same-origin");
+    c.hidden = true; assert.equal((await controller.whenDisplayed()).status, "hidden"); frames.frame(); frames.frame(); await Promise.resolve(); assert.equal(timers.timers.size, 0); assert.equal(calls.length, 1);
+    c.hidden = false; await controller.open({ companyId: envelope().companyId }); const displayed = controller.whenDisplayed(); frames.frame(); frames.frame(); await displayed; await Promise.resolve(); assert.equal(timers.timers.size, 1);
+    controller.dispose(); assert.equal(timers.timers.size, 0); assert.equal(calls.length, 1);
+  } finally { controller.dispose(); global.fetch = originalFetch; }
+});

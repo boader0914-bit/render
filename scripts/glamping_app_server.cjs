@@ -37,7 +37,7 @@ const { createCompanyIntegratedTargets } = require("./lib/company_integrated_tar
 const { createCompanyCapacityRegistry } = require("./lib/company_capacity_registry.cjs");
 const { aggregateFields: companyBootstrapAggregateFields, compactCompanyInventory, createCompanyBootstrapStore, acceptsGzip } = require("./lib/company_bootstrap.cjs");
 const { createCompanyDetailStore, readScopedCompanyMaster } = require("./lib/company_detail_store.cjs");
-const { createBoundedCompanyResponse, unavailable: responseUnavailable } = require("./lib/bounded_company_response.cjs");
+const { createBoundedCompanyResponse, boundedJsonBuffer, unavailable: responseUnavailable } = require("./lib/bounded_company_response.cjs");
 const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
 const { createSavedProductRecovery } = require("./lib/saved_product_recovery.cjs");
 const { compactMonthlyCapacityCompany } = require("./lib/monthly_company_source_catalog.cjs");
@@ -19738,14 +19738,18 @@ async function route(req, res) {
       if (!requireAdminSession(session, req, res)) return;
       const companyId = String(reqUrl.searchParams.get("companyId") || "").trim();
       if (!companyId) return send(res, 400, { error: "companyId가 필요합니다." });
-      return await companyResponse.send(res, async () => {
+      return await companyResponse.send(res, () => runAnalyticalWork(async () => {
+        if (responseUnavailable(res)) return null;
         const detail = await companyDetailStore.get(companyId);
-        if (!detail.data) return { status: 404, body: { error: "업체를 찾을 수 없습니다." } };
-        return { status: 200, body: detail.data, extraHeaders: {
+        if (responseUnavailable(res)) return null;
+        // Encode before releasing this owner. A second admission for encoding
+        // can otherwise wait behind a newly admitted background replay.
+        if (!detail.data) return { status: 404, body: boundedJsonBuffer({ error: "업체를 찾을 수 없습니다." }, companyResponse.status().maxResponseBytes) };
+        return { status: 200, body: boundedJsonBuffer(detail.data, companyResponse.status().maxResponseBytes), extraHeaders: {
           "X-Company-Detail-Cache": detail.cacheStatus,
           "X-Company-Detail-Prepared-At": detail.preparedAt
         } };
-      });
+      }, { priority: "foreground", kind: "company-detail-response" }));
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/company-master/integrated") {
@@ -19753,7 +19757,8 @@ async function route(req, res) {
       const companyId = String(reqUrl.searchParams.get("companyId") || "").trim();
       if (!companyId) return send(res, 400, { error: "companyId가 필요합니다." });
       const options = { ...(reqUrl.searchParams.has("month") ? { month: reqUrl.searchParams.get("month") } : {}),
-        ...(reqUrl.searchParams.has("cutoffDate") ? { cutoffDate: reqUrl.searchParams.get("cutoffDate") } : {}) };
+        ...(reqUrl.searchParams.has("cutoffDate") ? { cutoffDate: reqUrl.searchParams.get("cutoffDate") } : {}),
+        ...(reqUrl.searchParams.get("view") === "saved" && !reqUrl.searchParams.has("cutoffDate") ? { savedPreview: true } : {}) };
       const result = await companyIntegratedDb.get(companyId, options);
       return send(res, 200, result);
     }
