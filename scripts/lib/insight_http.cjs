@@ -16,11 +16,27 @@ async function body(req) {
 function json(res, status, value) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(value)); }
 function createInsightHttp({ store, serviceToken, authenticateMember, memberActive, registerMember, checkUsername, catalog, stateCatalog = catalog, requireAdmin, preparationBridge = null,
   signup = { enabled: false }, policies = {}, supportEmail = '', adminStore = null, collectionResults = null, savedCollectionResults = null, analysis = null,
-  identityDiagnostics = entry => console.warn('insight_identity',JSON.stringify(entry)), identityClock = () => performance.now() }) {
+  identityDiagnostics = entry => console.warn('insight_identity',JSON.stringify(entry)), identityClock = () => performance.now(),
+  companyDiagnostics = entry => console.warn('insight_company_http',JSON.stringify(entry)), companyClock = () => performance.now() }) {
   if (typeof serviceToken !== 'string' || serviceToken.length < 32) throw new Error('Insight service credential must contain at least 32 characters');
   // Receipt verification reads saved results only. Bootstrap must not wait for
   // it, and simultaneous bootstrap/poll requests must share the same refresh.
   const preparationRefreshes = new Map();
+  const companyRequests = new WeakMap();
+  function companyTiming(month) {
+    const requestId=crypto.randomUUID(),started=companyClock(),requestedMonth=month||'default';
+    const emit=(stage,outcome,stageStarted=started,status)=>{
+      const at=companyClock(),entry={requestId,requestedMonth,stage,outcome,elapsedMs:Math.max(0,Math.round(at-stageStarted)),totalMs:Math.max(0,Math.round(at-started)),
+        ...(Number.isInteger(status)?{status}:{})};
+      // Seven bounded, controlled records at most. No company/account ID,
+      // user-supplied request ID, token, payload or exception enters the log.
+      try{companyDiagnostics(entry);}catch{}
+    };
+    const begin=stage=>{const at=companyClock();emit(stage,'started',at);return at;};
+    const end=(stage,at,outcome='complete')=>emit(stage,outcome,at);
+    return {requestId,begin,end,responded:status=>emit('responded',status<400?'complete':'failed',started,status),
+      async stage(stage,read){const at=begin(stage);try{const value=await read();end(stage,at);return value;}catch(error){end(stage,at,'failed');throw error;}}};
+  }
   async function identityStage(stage,requestId,read) {
     const started=identityClock();let outcome='complete';
     try{return await read();}catch(error){outcome='failed';throw error;}
@@ -100,7 +116,7 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
     // and the returned state retains the last genuinely verified job status.
     if (!awaitPreparation) refreshPreparation(value.customer.customerId, true);
   }
-  async function companyCollection(c, companyId, month, { savedOnly = false } = {}) {
+  async function companyCollection(c, companyId, month, { savedOnly = false, timing = null } = {}) {
     if (!store.hasCompany(c,companyId) || !(savedOnly ? savedCollectionResults : collectionResults)) throw fault('NOT_FOUND','등록한 업체의 결과를 찾을 수 없습니다.',404);
     // Polling remains available (10-second interval), but changing an arbitrary
     // month cannot issue unbounded expensive source reads for a customer.
@@ -119,12 +135,14 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
         previousResult:false,referenceLoading:true,
         calculation:{mode:'saved_only',status:'pending'},responseCache:{state:'preview',preview:true,refreshing:true} };
     }
-    if (preparationBridge) await refreshPreparation(c.customerId);
+    const stage=(name,read)=>timing?timing.stage(name,read):read();
+    await stage('preparation_wait',async()=>{if(preparationBridge)await refreshPreparation(c.customerId);});
     const request = store.requests(c.customerId).find(row => row.companyId===companyId) || null;
     // A customer's previous request must not pin the shared company DB to an old run.
-    const view=typeof collectionResults.readView==='function'?await collectionResults.readView(companyId,{month}):null;
-    const companyDetail=view?view.companyDetail:await collectionResults.companyDetail?.(companyId, { month }) || null;
-    const result=view?view.result:await collectionResults.read(companyId);
+    const {companyDetail,result}=await stage('view_read',async()=>{
+      const view=typeof collectionResults.readView==='function'?await collectionResults.readView(companyId,{month}):null;
+      return view||{companyDetail:await collectionResults.companyDetail?.(companyId,{month})||null,result:await collectionResults.read(companyId)};
+    });
     return {request,result,companyDetail,collectionAllowance:store.collectionAllowance(c.customerId),previousResult:Boolean(result && request && result.runId!==request.runId)};
   }
   async function customerRequest(req, res, url, tail, c, token, context = {}, scope = customerScope(token, c.customerId)) {
@@ -160,16 +178,23 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
         if (url.searchParams.has('month') && !/^20\d{2}-(0[1-9]|1[0-2])$/.test(month || '')) throw fault('INVALID_MONTH','숙박월 형식을 확인해 주세요.');
         const savedOnly = url.searchParams.get('savedOnly') === '1';
         if (savedOnly && !month) throw fault('INVALID_MONTH','저장 자료를 조회할 숙박월을 선택해 주세요.');
-        const companyId=tail.split('/')[2],value=await companyCollection(c,companyId,month,{savedOnly});
-        if(scope?.verify)await scope.verify();
-        // Keep the final fresh session/relationship check and serialization
-        // in the same turn, including after asynchronous full-data reads.
-        const current=scope?.current?scope.current():store.get(c.customerId);
-        if(!store.hasCompany(current,companyId))throw fault('NOT_FOUND','등록한 업체의 결과를 찾을 수 없습니다.',404);
-        value.request=store.requests(current.customerId).find(row=>row.companyId===companyId)||null;
-        value.collectionAllowance=store.collectionAllowance(current.customerId);
-        if(!savedOnly)value.previousResult=Boolean(value.result&&value.request&&value.result.runId!==value.request.runId);
+        const timing=savedOnly?null:companyTiming(month);
+        if(timing){companyRequests.set(req,timing);if(typeof res.setHeader==='function')res.setHeader('X-Insight-Company-Request-Id',timing.requestId);}
+        const companyId=tail.split('/')[2],value=await companyCollection(c,companyId,month,{savedOnly,timing});
+        const permissionStarted=timing?.begin('permission_verify');
+        try{
+          if(scope?.verify)await scope.verify();
+          // Keep the final fresh session/relationship check and serialization
+          // in the same turn, including after asynchronous full-data reads.
+          const current=scope?.current?scope.current():store.get(c.customerId);
+          if(!store.hasCompany(current,companyId))throw fault('NOT_FOUND','등록한 업체의 결과를 찾을 수 없습니다.',404);
+          value.request=store.requests(current.customerId).find(row=>row.companyId===companyId)||null;
+          value.collectionAllowance=store.collectionAllowance(current.customerId);
+          if(!savedOnly)value.previousResult=Boolean(value.result&&value.request&&value.result.runId!==value.request.runId);
+          timing?.end('permission_verify',permissionStarted);
+        }catch(error){timing?.end('permission_verify',permissionStarted,'failed');throw error;}
         json(res,200,value);
+        timing?.responded(200);
       }
       else if (!context.view && req.method === 'POST' && tail === '/auth/logout') { store.logout(token); json(res, 200, { ok: true }); }
       else if (req.method === 'GET' && ['/catalog/companies', '/catalog/regions'].includes(tail)) {
@@ -312,7 +337,10 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
       if (!await memberActive(c.memberId)) { store.logout(token); throw fault('ACCOUNT_DISABLED', '이용자 계정이 중지되었습니다.', 403); }
       if (req.method === 'POST' && !equal(req.headers['x-csrf-token'], csrf(token))) throw fault('CSRF_INVALID', '화면을 새로 열고 다시 요청해 주세요.', 403);
       await customerRequest(req, res, url, tail, c, token);
-    } catch (error) { const safe = Number.isInteger(error.statusCode) && error.statusCode < 500; json(res, safe ? error.statusCode : 503, { error: { code: safe ? error.code || 'REQUEST_FAILED' : 'SERVICE_UNAVAILABLE', message: safe ? error.message : '자료 연결을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.' } }); }
+    } catch (error) { const safe = Number.isInteger(error.statusCode) && error.statusCode < 500,status=safe?error.statusCode:503;
+      json(res,status,{ error: { code: safe ? error.code || 'REQUEST_FAILED' : 'SERVICE_UNAVAILABLE', message: safe ? error.message : '자료 연결을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.' } });
+      companyRequests.get(req)?.responded(status);
+    }
     return true;
   }
   async function admin(req, res, url, session) {
