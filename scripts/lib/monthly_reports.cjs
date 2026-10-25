@@ -10,6 +10,9 @@ const { createMonthlyReportMaterializedCache } = require("./monthly_report_mater
 const { recoveryRowDigest } = require("./saved_product_recovery.cjs");
 const { listMonthlyReportActionEvidence, normalizeMonthlyReportActionPlan } = require("./monthly_report_actions.cjs");
 
+const { createVerifiedReportProjectionReader } = require('./verified_report_projection.cjs');
+const { projectIssuedList } = require('./monthly_report_delivery_projection.cjs');
+
 const SCHEMA_VERSION = 1;
 const PREVIEW_TTL_MS = 15 * 60 * 1000;
 const PREVIEW_CACHE_BYTES = 32 * 1024 * 1024;
@@ -602,10 +605,7 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
     if (!ID_PATTERN.test(String(id || ""))) throw fail("invalid_report_id", "보고서 ID가 올바르지 않습니다.");
     return path.join(directory, `${id}.json`);
   };
-  const read = async id => {
-    let content;
-    try { content = await fs.readFile(reportPath(id), "utf8"); }
-    catch (error) { if (error.code === "ENOENT") throw fail("report_not_found", "보고서를 찾을 수 없습니다.", 404); throw error; }
+  const parseReport = (content, id) => {
     try {
       const report = JSON.parse(content);
       if (report.id !== id || report.schemaVersion !== SCHEMA_VERSION || !report.snapshot) throw new Error("Invalid report");
@@ -615,6 +615,14 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
       return report;
     } catch { throw fail("corrupt_report", "저장된 보고서를 읽을 수 없습니다. 원본 파일은 보존했습니다.", 500); }
   };
+  const read = async id => {
+    let content;
+    try { content = await fs.readFile(reportPath(id), "utf8"); }
+    catch (error) { if (error.code === "ENOENT") throw fail("report_not_found", "보고서를 찾을 수 없습니다.", 404); throw error; }
+    return parseReport(content, id);
+  };
+  const listReader = createVerifiedReportProjectionReader({ directory, fileFor: reportPath,
+    parse: parseReport, project: projectIssuedList });
   const write = async report => {
     await fs.mkdir(directory, { recursive: true });
     const destination = reportPath(report.id);
@@ -624,6 +632,7 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
       try { await handle.writeFile(`${JSON.stringify(report, null, 2)}\n`, "utf8"); await handle.sync(); }
       finally { await handle.close(); }
       await fs.rename(temp, destination);
+      listReader.invalidate(report.id);
     } finally { await fs.unlink(temp).catch(error => { if (error.code !== "ENOENT") throw error; }); }
   };
   const locked = async (id, action) => {
@@ -925,7 +934,8 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
     await write(report);
     return clone(report);
   });
-  return { preview, create, list, get: read, update, publish, revise, rebuild };
+  return { preview, create, list, get: read, update, publish, revise, rebuild,
+    getPublishedListSummary: id => listReader.read(id), deliveryListReadMetrics: () => listReader.metrics() };
 }
 
 module.exports = { createMonthlyReportService, buildMonthlyReportSnapshot: buildSnapshot, monthlyReportKeywordMembership };
