@@ -25750,6 +25750,21 @@ function openAdminDbReviewFold(target) {
 function handleAdminDbReviewToggle(event) {
   const element = event.target;
   if (!element?.isConnected) return;
+  if (element.matches?.(".admin-db-review-support")) {
+    const context = state.adminDbSupportContext;
+    if (!element.open || !context || context.element !== element || !isAdminRole() || state.session?.authenticated === false
+      || state.session !== context.session || state.companyMaster !== context.master
+      || state.adminDbSearchRenderRevision !== context.revision || state.adminDbSelectedCompanyId !== context.companyId
+      || state.activeTab !== "admin" || state.adminPanelSection !== "database") return;
+    if (context.hydrated) return;
+    const body = element.querySelector(".admin-db-review-support-body");
+    if (!body) return;
+    const { filteredRows } = adminDbFilterState(context.master);
+    body.innerHTML = `${context.summaryHtml}${adminDbAuditBoard(filteredRows)}${adminDbWorkPanel(filteredRows)}${adminDbCollectionPanel(filteredRows)}`;
+    context.hydrated = true;
+    bindAdminDbCompanySelectButtons();
+    return;
+  }
   const isFold = element.matches?.(".admin-db-selected-fold[data-admin-db-fold]");
   const maintenance = element.matches?.(".admin-company-maintenance")
     ? element : (isFold ? element.closest(".admin-company-maintenance") : null);
@@ -27493,12 +27508,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
         </div>
         <span class="admin-db-support-toggle"><span class="when-closed">펼치기</span><span class="when-open">접기</span></span>
       </summary>
-      <div class="admin-db-review-support-body">
-        ${metricSummaryHtml}
-        ${adminDbAuditBoard(filteredRows)}
-        ${adminDbWorkPanel(filteredRows)}
-        ${adminDbCollectionPanel(filteredRows)}
-      </div>
+      <div class="admin-db-review-support-body"></div>
     </details>
   ` : "";
   const mainViewHtml = viewMode === "review"
@@ -27525,6 +27535,13 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
       </section>
     </section>
   `, viewMode === "review" ? state.adminDbSelectedCompanyId : "");
+  // Keep hidden audit/work cards off the first saved-month display path. No
+  // filtered row graph is retained: an explicit open reads the current filter.
+  state.adminDbSupportContext = viewMode === "review" ? {
+    element: els.adminDatabaseDashboard.querySelector(".admin-db-review-support"), session: state.session,
+    master, companyId: state.adminDbSelectedCompanyId, revision: state.adminDbSearchRenderRevision,
+    summaryHtml: metricSummaryHtml
+  } : null;
   bindAdminDbCompanySelectButtons();
   // A review opened without an explicit company selects the first applicable
   // row. Hydrate that row only after the loading surface has reached the DOM.
@@ -44986,6 +45003,20 @@ async function init() {
           const displayed = await display;
           if (!currentCompany()) break;
           if (displayed?.status === "displayed") {
+            if (typeof window.AdminTransitionTiming?.navigationRendered === "function") {
+              const context = state.adminDbIntegratedPanelContext;
+              window.AdminTransitionTiming.navigationRendered({
+                isCurrent: () => currentCompany() && adminDbIntegratedContextCurrent(context, initialCompanyRoute),
+                isVisible: () => Boolean(context?.container?.isConnected && context.container.getClientRects().length),
+                hasSavedMonth: () => {
+                  const envelope = context?.controller?.state?.envelope, snapshot = envelope?.snapshot;
+                  return !context?.controller?.state?.error && displayed.companyId === initialCompanyRoute
+                    && envelope?.companyId === initialCompanyRoute && snapshot?.request?.targetId === initialCompanyRoute
+                    && snapshot.request.month === displayed.month && snapshot.summary
+                    && Boolean(context?.container?.querySelector(".ci-content")?.children.length);
+                }
+              });
+            }
             await waitForCompanyMasterPaint();
             if (!currentCompany()) break;
           }

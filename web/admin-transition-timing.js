@@ -5,6 +5,7 @@
   // One active measurement and one frame callback are retained; no storage,
   // network, application data or permission state is changed.
   let sequence = 0, active = null, frameScheduled = false, frameHandle;
+  let navigationMeasurement = null, navigationDone = false;
   const maximumInputWait = 60000;
   const finite = value => typeof value === "number" && Number.isFinite(value) && value >= 0;
   const milliseconds = value => String(Math.round(value * 10) / 10);
@@ -155,7 +156,58 @@
     if (typeof root.requestAnimationFrame !== "function") { finish(measurement, "unavailable", "FRAME_API_UNAVAILABLE"); return false; }
     measurement.stage = 1; scheduleFrame(); return !measurement.finished;
   }
-  const api = { begin, rendered, invalidate };
+  function navigationRendered(options = {}) {
+    if (navigationDone || navigationMeasurement) return false;
+    let hasSavedMonth, isCurrent, isVisible;
+    try { ({ hasSavedMonth, isCurrent, isVisible } = options); } catch { return false; }
+    if ([hasSavedMonth, isCurrent, isVisible].some(callback => typeof callback !== "function")) return false;
+    try { if (!hasSavedMonth() || !isCurrent() || !isVisible()) return false; } catch { return false; }
+    const measurement = { target: target(), role: roleStamp(), hasSavedMonth, isCurrent, isVisible, handle: null };
+    if (!measurement.target?.dataset) return false;
+    navigationMeasurement = measurement;
+    const finish = status => {
+      if (navigationMeasurement !== measurement) return;
+      navigationDone = true; navigationMeasurement = null;
+      measurement.target.dataset.appNavigationStatus = status;
+      if (measurement.handle !== null && typeof root.cancelAnimationFrame === "function") {
+        try { root.cancelAnimationFrame(measurement.handle); } catch {}
+      }
+      measurement.hasSavedMonth = measurement.isCurrent = measurement.isVisible = null;
+    };
+    function valid() {
+      try {
+        const element = measurement.target, style = root.getComputedStyle?.(element);
+        return navigationMeasurement === measurement && target() === element && roleStamp() === measurement.role
+          && root.document?.visibilityState !== "hidden" && element.isConnected !== false && !element.hidden
+          && element.getAttribute?.("aria-hidden") !== "true" && (!element.getClientRects || element.getClientRects().length > 0)
+          && (!style || style.display !== "none" && !["hidden", "collapse"].includes(style.visibility) && style.opacity !== "0")
+          && measurement.hasSavedMonth() && measurement.isCurrent() && measurement.isVisible();
+      } catch { return false; }
+    }
+    const frame = callback => {
+      try { measurement.handle = root.requestAnimationFrame(callback); }
+      catch { finish("unavailable"); }
+    };
+    if (typeof root.requestAnimationFrame !== "function") { finish("unavailable"); return false; }
+    measurement.target.dataset.appNavigationStatus = "pending";
+    frame(() => {
+      measurement.handle = null;
+      if (!valid()) { finish("invalidated"); return; }
+      frame(() => {
+        measurement.handle = null;
+        if (!valid()) { finish("invalidated"); return; }
+        // performance.now() starts at this document's navigation origin, not
+        // the later app handler/session/bootstrap-summary transition token.
+        const end = clock(), duration = finite(end.monotonic) ? end.monotonic
+          : finite(end.origin) && finite(end.wall) && end.wall >= end.origin ? end.wall - end.origin : null;
+        if (duration === null) { finish("unavailable"); return; }
+        measurement.target.dataset.appNavigationDisplayMs = milliseconds(duration);
+        finish("ready");
+      });
+    });
+    return navigationMeasurement === measurement;
+  }
+  const api = { begin, rendered, invalidate, navigationRendered };
   root.AdminTransitionTiming = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window === "undefined" ? globalThis : window);

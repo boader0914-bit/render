@@ -32,6 +32,7 @@ const { createCompanyIntegratedDb } = require("./lib/company_integrated_read_db.
 const { createAnalyticalWorkScheduler } = require("./lib/analytical_work_scheduler.cjs");
 const { createAnalyticalMemorySampler } = require("./lib/analytical_memory.cjs");
 const { createRuntimeResponsiveness } = require("./lib/runtime_responsiveness.cjs");
+const { createPrivateStaticAssets } = require("./lib/private_static_assets.cjs");
 const { createCompanyIntegratedCatalog, createCompanyIntegratedCatalogRevision, createRevisionCheckedCompanyCatalog } = require("./lib/company_integrated_catalog.cjs");
 const { createCompanyIntegratedTargets } = require("./lib/company_integrated_targets.cjs");
 const { createCompanyCapacityRegistry } = require("./lib/company_capacity_registry.cjs");
@@ -19002,14 +19003,19 @@ async function runCrawlerInternal(payload) {
   });
 }
 
-async function serveStatic(reqUrl, res) {
+const privateStaticAssets = createPrivateStaticAssets({ directory: WEB_DIR });
+async function serveStatic(reqUrl, res, req = { method: "GET", headers: {} }) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
-    const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=datalab-20260928-capacity-review-v113"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=datalab-20260928-capacity-review-v113"')
-      .replace('src="/app.js"', 'src="/app.js?v=datalab-20260928-capacity-review-v113"');
+    const publicHtml = await privateStaticAssets.versionHtml(html);
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
+  }
+  if (privateStaticAssets.eligible(reqUrl.pathname)) {
+    const asset = await privateStaticAssets.response(reqUrl, req);
+    if (!asset) return notFound(res);
+    if (responseUnavailable(res)) return;
+    res.writeHead(asset.status, { ...securityHeaders(), ...asset.headers });
+    return res.end(asset.body);
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
   if (!filePath || !fs.existsSync(filePath) || (await fsp.stat(filePath)).isDirectory()) return notFound(res);
@@ -19059,7 +19065,7 @@ async function route(req, res) {
         const ext = path.extname(reqUrl.pathname).toLowerCase();
         return sendHead(res, 200, MIME_TYPES[ext] || "application/octet-stream");
       }
-      return serveStatic(reqUrl, res);
+      return serveStatic(reqUrl, res, req);
     }
 
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/api/health") {
@@ -20483,7 +20489,7 @@ async function route(req, res) {
     }
 
     if (req.method === "GET") {
-      return serveStatic(reqUrl, res);
+      return serveStatic(reqUrl, res, req);
     }
 
     send(res, 405, { error: "Method not allowed" });
@@ -20550,6 +20556,20 @@ seedOutputsFromRepo()
       }));
     }
     catch (error) { console.warn("company_integrated_catalog_prepare_failed", error.code || "unavailable"); }
+    // Populate the existing verified revision index before readiness, rather
+    // than making the first browser/API read pay its cold parse/hash/clone.
+    // This is preparation only: normal reads still validate current sources.
+    if (typeof readCompanyIntegratedRevision === "function" && typeof readCompanyIntegratedRevision.prepare === "function") {
+      try {
+        const started = Date.now();
+        await runAnalyticalWork(() => readCompanyIntegratedRevision.prepare(), {
+          priority: "foreground", kind: "company-revision-prepare"
+        });
+        console.log("company_integrated_revision_prepared", JSON.stringify({ elapsedMs: Date.now() - started }));
+      }
+      catch (error) { console.warn("company_integrated_revision_prepare_failed",
+        typeof error?.code === "string" && /^[A-Z][A-Z0-9_]{0,99}$/.test(error.code) ? error.code : "unavailable"); }
+    }
     server.listen(PORT, HOST, () => {
       const primaryUrl = HOST === "0.0.0.0" ? `http://127.0.0.1:${PORT}` : `http://${HOST}:${PORT}`;
       console.log(`Lodging datalab beta app running at ${primaryUrl}`);

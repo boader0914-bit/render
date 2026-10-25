@@ -14,7 +14,7 @@ const { buildMonthlyReportSnapshot } = require("./lib/monthly_reports.cjs");
 const appSource = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8").replace(/\r\n/g, "\n");
 const integratedSource = fs.readFileSync(path.join(__dirname, "../web/company-integrated.js"), "utf8");
 const appFunctions = ["adminDbIntegratedContainerHtml", "adminDbIntegratedContextCurrent", "adminDbReplaceBoardHtml", "adminDbRefreshSelectedDetail", "adminDbIntegratedDisplayForDetail", "syncCompanyIntegratedPanel",
-  "renderAdminDatabaseDashboard", "adminDbSelectedDetailPanel", "loadAdminDbCompanyDetail",
+  "renderAdminDatabaseDashboard", "adminDbSelectedDetailPanel", "loadAdminDbCompanyDetail", "handleAdminDbReviewToggle",
   "activateAdminDbCompanyDetail", "openAdminDbCompanyReview", "resumeAdminDbCompanyDetailAfterReturn"];
 const declaration = name => {
   const found = appSource.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^}`, "m"))?.[0];
@@ -188,6 +188,27 @@ test("an observed integrated card is displayed before the selected company start
   assert.match(f.selected().textContent, /100만원/);
   assert.equal(f.state.companyMaster.companies[0].detailLoaded, false);
   assert.match(f.selected().textContent, /예약/); assert.match(f.selected().textContent, /매출/);
+});
+
+test("collapsed review support performs no hidden bulk work and expands its original tools only for the current company context", async () => {
+  const f = fixture(), built = [];
+  for (const [name, marker] of [["adminDbAuditBoard", "audit"], ["adminDbWorkPanel", "work"], ["adminDbCollectionPanel", "collection"]]) {
+    f.context[name] = rows => { built.push([marker, rows.map(row => row.company.companyId)]); return `<button data-support-tool="${marker}">${marker}</button>${marker === "work" ? '<textarea data-company-review-note="a"></textarea>' : ""}`; };
+  }
+  f.render(); await settle(); assert.deepEqual(built, [], "closed tools cannot delay the saved company month");
+  await f.shown(); const selected = f.selected(), controller = f.controllers[0], support = f.board.querySelector(".admin-db-review-support"), body = support.querySelector(".admin-db-review-support-body");
+  assert.equal(body.innerHTML.trim(), ""); support.open = false; f.context.handleAdminDbReviewToggle({ target: support }); assert.deepEqual(built, []);
+  support.open = true; f.context.handleAdminDbReviewToggle({ target: support });
+  assert.deepEqual(built.map(row => row[0]), ["audit", "work", "collection"]); assert.ok(built.every(row => row[1].join(",") === "a,b"));
+  assert.equal(body.querySelectorAll("[data-support-tool]").length, 3); assert.equal(f.selected(), selected); assert.equal(f.controllers[0], controller); assert.equal(f.integratedRequests.length, 1);
+  const note = body.querySelector("[data-company-review-note]"); note.value = "아직 저장하지 않은 검토 메모";
+  const filters = f.filterCalls.length; support.open = false; f.context.handleAdminDbReviewToggle({ target: support }); assert.equal(f.filterCalls.length, filters);
+  support.open = true; f.context.handleAdminDbReviewToggle({ target: support }); assert.equal(f.filterCalls.length, filters); assert.equal(built.length, 3);
+  assert.equal(body.querySelector("[data-company-review-note]"), note, "reopening the same support preserves the exact unsaved input node"); assert.equal(note.value, "아직 저장하지 않은 검토 메모");
+  const session = f.state.session; f.state.session = { ...session }; support.open = true; f.context.handleAdminDbReviewToggle({ target: support }); assert.equal(built.length, 3, "another session cannot expand the old context");
+  f.state.session = session; const master = f.state.companyMaster; f.state.companyMaster = { ...master }; f.context.handleAdminDbReviewToggle({ target: support }); assert.equal(built.length, 3, "a replaced master cannot reuse old support tools");
+  f.state.companyMaster = master; f.state.adminDbSelectedCompanyId = "b"; f.context.handleAdminDbReviewToggle({ target: support }); assert.equal(built.length, 3);
+  f.state.adminDbSelectedCompanyId = "a"; f.state.activeTab = "monthlyReports"; f.context.handleAdminDbReviewToggle({ target: support }); assert.equal(built.length, 3);
 });
 
 test("detail hydration preserves the integrated DOM, controller, selected month and successful request", async () => {

@@ -202,3 +202,37 @@ test("malformed instrumentation arguments are contained rather than interrupting
   assert.equal(f.main.dataset.appTransitionStatus, "error");
   assert.equal(f.main.dataset.appTransitionDisplayMs, undefined); assert.equal(f.frames.size, 0);
 });
+
+test("whole-navigation timing waits for real saved data and two frames, including time before a transition handler", () => {
+  const f = fixture(); let saved = false;
+  const options = { hasSavedMonth: () => saved, isCurrent: () => true, isVisible: () => true };
+  assert.equal(f.api.navigationRendered(options), false); assert.equal(f.main.dataset.appNavigationDisplayMs, undefined); assert.equal(f.frames.size, 0);
+  f.advance(2000); saved = true;
+  assert.equal(f.api.navigationRendered(options), true); assert.equal(f.main.dataset.appNavigationDisplayMs, undefined);
+  f.frame(); assert.equal(f.main.dataset.appNavigationDisplayMs, undefined);
+  f.frame(); assert.equal(f.main.dataset.appNavigationDisplayMs, "3032"); assert.equal(f.main.dataset.appNavigationStatus, "ready");
+  const recorded = f.main.dataset.appNavigationDisplayMs; f.advance(500);
+  const token = f.token({ section: "database" }); f.api.rendered(token); f.frame(); f.frame();
+  assert.equal(f.api.navigationRendered(options), false); assert.equal(f.main.dataset.appNavigationDisplayMs, recorded, "later redraws and transition tokens cannot reset the whole-document measurement");
+});
+
+test("whole-navigation timing rejects hidden, abandoned, role-changed or no-longer-saved displays", () => {
+  for (const change of [f => { f.document.visibilityState = "hidden"; }, f => { f.main.hidden = true; }, f => { f.main.rects = 0; }, f => { f.roles.delete("role-admin"); }]) {
+    const f = fixture(); f.api.navigationRendered({ hasSavedMonth: () => true, isCurrent: () => true, isVisible: () => true });
+    f.frame(); change(f); f.frame(); assert.equal(f.main.dataset.appNavigationDisplayMs, undefined); assert.equal(f.main.dataset.appNavigationStatus, "invalidated");
+  }
+  for (const field of ["saved", "current", "visible"]) {
+    const f = fixture(), valid = { saved: true, current: true, visible: true };
+    f.api.navigationRendered({ hasSavedMonth: () => valid.saved, isCurrent: () => valid.current, isVisible: () => valid.visible });
+    f.frame(); valid[field] = false; f.frame(); assert.equal(f.main.dataset.appNavigationDisplayMs, undefined);
+  }
+});
+
+test("whole-navigation timing never fabricates a zero without a document navigation clock or frame support", () => {
+  for (const settings of [{ performance: false }, { raf: false }]) {
+    const f = fixture(settings);
+    f.api.navigationRendered({ hasSavedMonth: () => true, isCurrent: () => true, isVisible: () => true });
+    if (settings.raf !== false) { f.frame(); f.frame(); }
+    assert.equal(f.main.dataset.appNavigationDisplayMs, undefined); assert.equal(f.main.dataset.appNavigationStatus, "unavailable");
+  }
+});

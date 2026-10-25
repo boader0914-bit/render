@@ -136,23 +136,28 @@ function useActualCompanyRoute(f, loadDetail = () => Promise.resolve()) {
 test("a deep-linked real company route starts and paints its saved card before the slow startup batch", async () => {
   const ui = require("../web/company-integrated.js"), f = fixture({ routeCompany: "bootstrap-saved-company", historyTab: "admin" });
   const response = deferred(), requested = deferred(), finalPaint = deferred(), finalPaintEntered = deferred(), callbacks = new Map(); let frameId = 0, paintCalls = 0;
-  const container = { innerHTML: "", isConnected: true, addEventListener() {}, removeEventListener() {}, closest: () => null, querySelector: () => null };
+  const container = { innerHTML: "", isConnected: true, addEventListener() {}, removeEventListener() {}, closest: () => null,
+    getClientRects: () => [{}], querySelector(selector) { return selector === ".ci-content" && this.innerHTML.includes("ci-content") ? { children: [{}] } : null; } };
   const controller = ui.createController(container, {
     requestAnimationFrame(fn) { callbacks.set(++frameId, fn); return frameId; }, cancelAnimationFrame: id => callbacks.delete(id),
     fetchData(id, month, signal, options) { assert.equal(id, "bootstrap-saved-company"); assert.equal(options.savedPreview, true); requested.resolve(); return response.promise; }
   });
   const frame = () => { const batch = [...callbacks.values()]; callbacks.clear(); for (const callback of batch) callback(); };
   useActualCompanyRoute(f, id => controller.open({ companyId: id, month: "2026-09" }));
+  f.state.adminDbIntegratedPanelContext = { container, controller };
+  f.context.adminDbIntegratedContextCurrent = (context, id) => context === f.state.adminDbIntegratedPanelContext && id === "bootstrap-saved-company";
+  let navigationMeasurements = 0;
+  f.context.window.AdminTransitionTiming = { navigationRendered(options) { assert.equal(options.hasSavedMonth(), true); assert.equal(options.isCurrent(), true); assert.equal(options.isVisible(), true); navigationMeasurements++; } };
   f.context.adminDbIntegratedDisplayForDetail = () => controller.whenDisplayed();
   f.context.waitForCompanyMasterPaint = async () => { if (++paintCalls === 2) { finalPaintEntered.resolve(); await finalPaint.promise; } };
   const pending = f.api.init();
   try {
-    await requested.promise; assert.deepEqual(f.calls.details, ["bootstrap-saved-company"]);
+    await requested.promise; assert.deepEqual(f.calls.details, ["bootstrap-saved-company"]); assert.equal(navigationMeasurements, 0);
     assert.ok(!f.calls.loaders.includes("loadRuns"), "the deep-link saved request starts before the gated large run loader");
-    response.resolve({ companyId: "bootstrap-saved-company", selectedMonth: "2026-09", status: "ready", snapshot: { request: { month: "2026-09" }, summary: { lodging: {} }, daily: [] } });
+    response.resolve({ companyId: "bootstrap-saved-company", selectedMonth: "2026-09", status: "ready", snapshot: { request: { targetId: "bootstrap-saved-company", month: "2026-09" }, summary: { lodging: {} }, daily: [] } });
     await new Promise(resolve => setImmediate(resolve)); assert.match(container.innerHTML, /월별 통합 분석/); assert.ok(!f.calls.loaders.includes("loadRuns"));
-    frame(); await Promise.resolve(); assert.ok(!f.calls.loaders.includes("loadRuns"), "one frame cannot release the background batch");
-    frame(); await finalPaintEntered.promise; assert.ok(!f.calls.loaders.includes("loadRuns"), "the app's ready-frame opportunity is retained after the controller's two frames");
+    frame(); await Promise.resolve(); assert.ok(!f.calls.loaders.includes("loadRuns"), "one frame cannot release the background batch"); assert.equal(navigationMeasurements, 0);
+    frame(); await finalPaintEntered.promise; assert.equal(navigationMeasurements, 1); assert.ok(!f.calls.loaders.includes("loadRuns"), "the app's ready-frame opportunity is retained after the controller's two frames");
     finalPaint.resolve(); await f.entered.promise; assert.deepEqual(f.calls.details, ["bootstrap-saved-company"]);
     f.gate.resolve(); await pending; assert.deepEqual(f.calls.details, ["bootstrap-saved-company"], "late bootstrap does not reopen the same company");
   } finally { response.resolve({ companyId: "bootstrap-saved-company", selectedMonth: "2026-09" }); finalPaint.resolve(); f.gate.resolve(); controller.dispose(); await pending; }

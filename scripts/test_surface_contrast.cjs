@@ -729,11 +729,8 @@ adminIntegrationContext.renderForecast();
 assert(adminIntegrationContext.getForecastStatus().statusLabel === "제공 자료 없음" && !adminIntegrationContext.els.tourismForecastAdminCard.innerHTML.includes('<svg'), "valid no-data forecast response must not become a zero curve or retain another forecast", failures);
 
 const expectedCacheVersion = "staydatalab-v20260928-capacity-review-v113";
-const expectedAssetVersion = "datalab-20260928-capacity-review-v113";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
-const assetVersionAssignments = [...server.matchAll(
-  /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
-)].map((match) => ({ asset: match[2], version: match[3] }));
+const staticAssetSource = fs.readFileSync(path.join(root, "scripts", "lib", "private_static_assets.cjs"), "utf8");
 
 assert(
   cacheVersionAssignment?.[1] === expectedCacheVersion
@@ -743,10 +740,11 @@ assert(
 );
 
 assert(
-  assetVersionAssignments.length === 3
-    && assetVersionAssignments.map((entry) => entry.asset).join("|") === "styles.css|admin-theme.css|app.js"
-    && assetVersionAssignments.every((entry) => entry.version === expectedAssetVersion),
-  "server asset query assignments must version styles, theme, and app exactly and together",
+  server.includes('createPrivateStaticAssets({ directory: WEB_DIR })')
+    && server.includes('await privateStaticAssets.versionHtml(html)')
+    && staticAssetSource.includes('crypto.createHash("sha256").update(raw).digest("hex")')
+    && staticAssetSource.includes('private, max-age=31536000, immutable'),
+  "server static asset URLs must use verified content hashes with private versioned reuse",
   failures
 );
 
@@ -3032,7 +3030,7 @@ const reviewShellNames = ["escapeHtml", "adminDbFoldedItemsHtml", "roomCapacityR
   "adminDbReferenceHistorySection", "adminDbCompanyReferenceDashboardHtml", "renderAdminDatabaseDashboard"];
 const reviewShellDeclarations = reviewShellNames.map(name => app.match(new RegExp(`^function ${name}\\([^]*?^}`, "m"))?.[0]);
 assert(reviewShellDeclarations.every(Boolean), "review surface shell functions must remain available", failures);
-const reviewShellDashboard = { innerHTML: "" };
+const reviewShellDashboard = { innerHTML: "", querySelector: () => null };
 const reviewShellRow = { company: { companyId: "review-surface-fixture" }, metrics: {} };
 const reviewShellContext = vm.createContext({
   state: { activeTab: "admin", adminPanelSection: "database", adminDbSelectedCompanyId: reviewShellRow.company.companyId, adminDbViewMode: "review" },
