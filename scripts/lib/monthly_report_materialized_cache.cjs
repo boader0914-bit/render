@@ -4,6 +4,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { performance } = require("node:perf_hooks");
+const { gzipSync, gunzipSync, constants: zlibConstants } = require("node:zlib");
 
 const digest = value => crypto.createHash("sha256").update(value).digest("hex");
 const copy = value => JSON.parse(JSON.stringify(value));
@@ -11,9 +12,15 @@ const changed = () => Object.assign(new Error("집계 중 저장 자료가 변�
 
 // Derived calculations only. Issued reports and approved preview tokens never
 // read this cache. A failed replacement must leave the last complete file intact.
-function createMonthlyReportMaterializedCache({ directory, maxEntries = 64, maxBytes = 64 * 1024 * 1024, maxEntryBytes = Math.min(32 * 1024 * 1024, maxBytes) } = {}) {
+function createMonthlyReportMaterializedCache({ directory, maxEntries = 64, maxBytes = 64 * 1024 * 1024,
+  maxEntryBytes = Math.min(32 * 1024 * 1024, maxBytes), compression = null } = {}) {
   if (!directory) throw new TypeError("A materialized cache directory is required");
   if (![maxEntries, maxBytes, maxEntryBytes].every(value => Number.isSafeInteger(value) && value > 0) || maxEntryBytes > maxBytes) throw new TypeError("Invalid materialized cache limits");
+  if (compression !== null && compression !== "gzip") throw new TypeError("Invalid materialized cache compression");
+  const suffix = compression === "gzip" ? ".json.gz" : ".json";
+  // A compressed namespace also accounts for its old derived JSON units during
+  // migration, so enabling compression cannot temporarily double its budget.
+  const entryName = compression === "gzip" ? /^[a-f0-9]{64}\.json(?:\.gz)?$/ : /^[a-f0-9]{64}\.json$/;
   const inFlight = new Map();
   async function revision(readRevision) {
     const value = await readRevision();
@@ -24,7 +31,15 @@ function createMonthlyReportMaterializedCache({ directory, maxEntries = 64, maxB
     try {
       const stat = await fs.lstat(file);
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxEntryBytes) return null;
-      const entry = JSON.parse(await fs.readFile(file, "utf8"));
+      let serialized;
+      if (compression === "gzip") {
+        const encoded = await fs.readFile(file);
+        if (encoded.length > maxEntryBytes) return null;
+        // The decoded bound is independent of the disk compression ratio. A
+        // corrupt or oversized compressed file is a miss, never trusted data.
+        serialized = gunzipSync(encoded, { maxOutputLength: maxEntryBytes }).toString("utf8");
+      } else serialized = await fs.readFile(file, "utf8");
+      const entry = JSON.parse(serialized);
       if (entry.schemaVersion !== 1 || entry.key !== key
         || typeof entry.sourceRevision !== "string" || !entry.sourceRevision || entry.sourceRevision.length > 512
         || !entry.value || entry.valueHash !== digest(JSON.stringify(entry.value))) return null;
@@ -32,7 +47,7 @@ function createMonthlyReportMaterializedCache({ directory, maxEntries = 64, maxB
     } catch { return null; } // An invalid derived file is a miss, never a zero.
   }
   async function trim(keep) {
-    const names = (await fs.readdir(directory)).filter(name => /^[a-f0-9]{64}\.json$/.test(name));
+    const names = (await fs.readdir(directory)).filter(name => entryName.test(name));
     const rows = (await Promise.all(names.map(async name => {
       const file = path.join(directory, name), stat = await fs.lstat(file).catch(() => null);
       return stat?.isFile() && !stat.isSymbolicLink() ? { file, bytes: stat.size, time: stat.mtimeMs } : null;
@@ -48,9 +63,11 @@ function createMonthlyReportMaterializedCache({ directory, maxEntries = 64, maxB
     if (Buffer.byteLength(serialized) > maxEntryBytes) return "too_large";
     const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
     try {
+      const encoded = compression === "gzip" ? gzipSync(serialized, { level: zlibConstants.Z_BEST_SPEED }) : serialized;
+      if (compression === "gzip" && encoded.length > maxEntryBytes) return "too_large";
       await fs.mkdir(directory, { recursive: true });
       const handle = await fs.open(temp, "wx");
-      try { await handle.writeFile(serialized, "utf8"); await handle.sync(); }
+      try { await handle.writeFile(encoded, "utf8"); await handle.sync(); }
       finally { await handle.close(); }
       await fs.rename(temp, file);
       await trim(file).catch(() => {});
@@ -59,7 +76,7 @@ function createMonthlyReportMaterializedCache({ directory, maxEntries = 64, maxB
     finally { await fs.unlink(temp).catch(() => {}); }
   }
   async function getOrBuild({ key, readRevision, build }) {
-    const started = performance.now(), keyHash = digest(key), file = path.join(directory, `${keyHash}.json`);
+    const started = performance.now(), keyHash = digest(key), file = path.join(directory, `${keyHash}${suffix}`);
     if (inFlight.has(keyHash)) {
       const result = await inFlight.get(keyHash);
       if (await revision(readRevision) !== result.sourceRevision) throw changed();

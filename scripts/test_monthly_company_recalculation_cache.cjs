@@ -101,7 +101,7 @@ test("explicit compact correction companies avoid full-body reads while industry
   assert.deepEqual(await helper(request,f.data),expected);
   assert.equal(helper.stats().runRowBuilds,0);assert.equal(helper.stats().companyProjectionsRead,0);
   assert.equal(helper.stats().correctionCompanyProjections,2);assert.deepEqual(await fs.readdir(f.root),["industry_rows"]);
-  assert.equal(helper.stats().industryRunRowBuilds,1);assert.equal((await fs.readdir(path.join(f.root,"industry_rows"))).filter(name=>name.endsWith(".json")).length,1);
+  assert.equal(helper.stats().industryRunRowBuilds,1);assert.equal((await fs.readdir(path.join(f.root,"industry_rows"))).filter(name=>name.endsWith(".json.gz")).length,1);
   const fallback=createMonthlyCompanyRecalculation({...f.options,projectCorrectionCompany:compactMonthlyCapacityCompany,maxCachedRunBytes:128});
   assert.equal((await fallback(f.request("a"),f.data))[0].supply,10);
   assert.equal(fallback.stats().runRowOversizeFallbacks,1);assert.equal(fallback.stats().companyProjectionsRead,0);

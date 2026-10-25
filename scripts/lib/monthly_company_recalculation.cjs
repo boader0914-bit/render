@@ -89,7 +89,7 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
   // Industry retries retain only completed, verified compact run units on disk.
   // Their independent namespace and budget cannot evict company-view cache rows.
   const industryCache = cacheDirectory ? createMonthlyReportMaterializedCache({ directory: path.join(cacheDirectory, "industry_rows"),
-    maxEntries: 512, maxBytes: 64 * 1024 * 1024, maxEntryBytes: 8 * 1024 * 1024 }) : null;
+    maxEntries: 512, maxBytes: 64 * 1024 * 1024, maxEntryBytes: 8 * 1024 * 1024, compression: "gzip" }) : null;
   const metrics = { savedRunLoads: 0, runRowBuilds: 0, runRowCacheHits: 0, companyProjectionsRead: 0, correctionCompanyProjections: 0, runRowOversizeFallbacks: 0, maximumCachedRunBytes: 0,
     industryRunRowBuilds: 0, industryRunRowCacheHits: 0, industryRunRowOversizeFallbacks: 0, maximumIndustryCachedRunBytes: 0 };
   const oversizedByType = { company: new Set(), industry: new Set() };

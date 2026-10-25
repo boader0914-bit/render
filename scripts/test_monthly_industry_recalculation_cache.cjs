@@ -36,7 +36,7 @@ async function fixture(t) {
     evidence: value => { evidence = value; }, onLoad: value => { onLoad = value; }, changeSource: (next = "r2", updateOwner = true) => { revision = next; if (updateOwner) owner.revision = next; } };
 }
 const capture = rows => ({ rows: copy(rows), evidence: copy(rows.productCapacityEvidence), warnings: copy(rows.productCapacityWarnings), revision: rows.productCapacityEvidenceRevision });
-const files = async directory => { try { return (await fs.readdir(directory)).filter(name => /^[a-f0-9]{64}\.json$/.test(name)); } catch (error) { if (error.code === "ENOENT") return []; throw error; } };
+const files = async directory => { try { return (await fs.readdir(directory)).filter(name => /^[a-f0-9]{64}\.json(?:\.gz)?$/.test(name)); } catch (error) { if (error.code === "ENOENT") return []; throw error; } };
 test("industry cold, warm and restarted compact units equal uncached rows, order and as-of evidence", async t => {
   const f = await fixture(t), baseline = createMonthlyCompanyRecalculation({ ...f.options, cacheDirectory: null });
   const expected = capture(await baseline(f.request, f.data)); f.loaded.length = 0;
@@ -100,6 +100,7 @@ test("industry cache cannot read, replace or evict company cache units and regio
   const f = await fixture(t), helper = createMonthlyCompanyRecalculation(f.options);
   await helper({ ...f.request, type: "company", targetId: "a" }, f.data);
   const companyFiles = await files(f.root), before = new Map(await Promise.all(companyFiles.map(async name => [name, sha(await fs.readFile(path.join(f.root, name)))])));
+  assert.ok(companyFiles.every(name => name.endsWith(".json")), "company cache remains uncompressed and unchanged");
   f.loaded.length = 0; await helper(f.request, f.data); assert.equal(f.loaded.length, 3, "industry starts with its independent namespace");
   await helper(f.request, f.data); assert.equal(f.loaded.length, 3);
   assert.deepEqual(await files(f.root), companyFiles); for (const name of companyFiles) assert.equal(sha(await fs.readFile(path.join(f.root, name))), before.get(name));
@@ -138,17 +139,22 @@ test("oversized industry run units preserve uncached output and use a bounded re
   assert.deepEqual(capture(await helper(f.request, f.data)), expected); assert.equal(f.loaded.length, 9);
   assert.equal((await files(f.industryDirectory)).length, 0);
 });
-test("more than 128 small industry run units remain warm within the independent byte budget", async t => {
+test("146 large repetitive industry units exceed 64MiB decoded yet remain gzip-cached without raw reloads", async t => {
   const f = await fixture(t), runs = Array.from({ length: 146 }, (_, index) => ({ id: "r" + String(index).padStart(3, "0"), keyword: "source", checkIn: "2026-09-01",
     collectedAt: new Date(Date.parse("2026-09-01T00:00:00Z") + index * 60000).toISOString(), collectedAtSource: "manifest", bookingRangeDays: 1, collectionQuality: { status: "complete" } }));
   const company = { companyId: "a", primaryName: "a", placeIds: ["a"], runIds: runs.map(run => run.id) };
   f.data.runs = runs; f.data.rawCompanies = new Map([["a", company]]); f.data.companies = [{ companyId: "a" }];
+  const padding = "repeated-product-capacity-price-evidence;".repeat(14000).slice(0, 512 * 1024);
+  assert.ok(padding.length * runs.length > 64 * 1024 * 1024, "the uncompressed units exceed the previous physical cache budget");
   let loads = 0;
   const helper = createMonthlyCompanyRecalculation({ ...f.options, projectCorrectionCompany: null,
     loadRun: async id => { loads++; return { run: { id }, availability: { items: [{ placeId: "a" }] } }; },
     applyCompanyManualCorrection: item => ({ ...item, inventoryEvidence: { version: 4 } }),
-    buildHistoryObservations: () => [{ stayDate: "2026-09-01", productType: "lodging", inventoryEvidenceVersion: 4, sold: 0, estimatedRevenue: null }] });
+    buildHistoryObservations: () => [{ stayDate: "2026-09-01", productType: "lodging", inventoryEvidenceVersion: 4, sold: 0, estimatedRevenue: null, padding }] });
   const first = capture(await helper(f.request, f.data)); assert.equal(loads, 146); assert.equal(first.rows.length, 146);
   assert.deepEqual(capture(await helper(f.request, f.data)), first); assert.equal(loads, 146, "a sequential replay must not thrash the old 128-entry budget");
-  assert.equal(helper.stats().industryRunRowCacheHits, 146); assert.equal((await files(f.industryDirectory)).length, 146);
+  const names = await files(f.industryDirectory); assert.ok(names.every(name => name.endsWith(".json.gz"))); assert.equal(names.length, 146);
+  const physicalBytes = (await Promise.all(names.map(async name => (await fs.stat(path.join(f.industryDirectory, name))).size))).reduce((total, bytes) => total + bytes, 0);
+  assert.ok(physicalBytes < 64 * 1024 * 1024); assert.equal(helper.stats().industryRunRowCacheHits, 146);
+  assert.ok(helper.stats().maximumIndustryCachedRunBytes < 6 * 1024 * 1024, "compression never loosens the decoded per-run guard");
 });

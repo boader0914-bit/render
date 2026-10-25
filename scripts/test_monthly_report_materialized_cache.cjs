@@ -6,6 +6,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const os = require("node:os");
 const crypto = require("node:crypto");
+const { gzipSync, gunzipSync } = require("node:zlib");
 const { createMonthlyReportMaterializedCache } = require("./lib/monthly_report_materialized_cache.cjs");
 const keyFile = (directory, key) => path.join(directory, `${crypto.createHash("sha256").update(key).digest("hex")}.json`);
 const gate = () => { let release; return { promise: new Promise(resolve => { release = resolve; }), release: value => release(value) }; };
@@ -283,4 +284,84 @@ test("a protected replacement still obeys entry bounds when older files have fut
   const names = (await fs.readdir(directory)).filter(name => /^[a-f0-9]{64}\.json$/.test(name));
   assert.equal(names.length, 2, "retaining the current complete entry must count against the bound even after a clock correction");
   assert.ok(names.includes(path.basename(keyFile(directory, "replacement"))));
+});
+
+test("optional gzip entries survive restart with unchanged payload checksums and missing-value semantics", async t => {
+  const { cache, directory } = await fixture(t, { compression: "gzip" });
+  const key = "compressed-company", file = keyFile(directory, key) + ".gz", payload = { ...value(null), note: "객실 자료 ".repeat(1000) };
+  const first = await cache.getOrBuild({ key, readRevision: async () => "source-v1", build: async () => payload });
+  assert.equal(first.storage, "saved");
+  const encoded = await fs.readFile(file), serialized = gunzipSync(encoded), saved = JSON.parse(serialized);
+  assert.deepEqual([...encoded.subarray(0, 2)], [0x1f, 0x8b]); assert.ok(encoded.length < serialized.length / 4);
+  assert.equal(saved.valueHash, crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex"));
+  assert.deepEqual(saved.value, payload); await assert.rejects(fs.access(keyFile(directory, key)), { code: "ENOENT" });
+  const restarted = createMonthlyReportMaterializedCache({ directory, compression: "gzip" });
+  const reused = await restarted.getOrBuild({ key, readRevision: async () => "source-v1", build: () => assert.fail("compressed saved unit rebuilt") });
+  assert.equal(reused.status, "reused"); assert.equal(reused.calculatedAt, first.calculatedAt); assert.deepEqual(reused.value, payload);
+});
+
+test("corrupt, truncated, invalid-checksum and excessive decoded gzip entries rebuild safely", async t => {
+  const limit = 1200, { cache, directory } = await fixture(t, { compression: "gzip", maxEntryBytes: limit });
+  const key = "compressed-damaged", file = keyFile(directory, key) + ".gz", request = { key, readRevision: async () => "r1", build: async () => value(null) };
+  await cache.getOrBuild(request); const encoded = await fs.readFile(file), original = JSON.parse(gunzipSync(encoded));
+  const oversizedDecoded = gzipSync(JSON.stringify({ ...original, note: "x".repeat(limit * 3) }));
+  assert.ok(oversizedDecoded.length < limit);
+  for (const damaged of [Buffer.from("not gzip"), encoded.subarray(0, encoded.length - 5),
+    gzipSync(JSON.stringify({ ...original, value: value(99) })), gzipSync(JSON.stringify({ ...original, key: "wrong" })),
+    gzipSync(JSON.stringify({ ...original, sourceRevision: {} })), oversizedDecoded, Buffer.alloc(limit + 1)]) {
+    await fs.writeFile(file, damaged);
+    const fresh = await cache.getOrBuild(request);
+    assert.equal(fresh.status, "calculated"); assert.equal(fresh.storage, "saved"); assert.deepEqual(fresh.value, value(null));
+  }
+});
+
+test("gzip retains the raw serialized size guard and preserves a complete prior entry on oversized replacement", async t => {
+  const { cache, directory } = await fixture(t, { compression: "gzip", maxEntryBytes: 1000 }), key = "compressed-raw-limit", file = keyFile(directory, key) + ".gz";
+  await cache.getOrBuild({ key, readRevision: async () => "r1", build: async () => value(1) });
+  const previous = await fs.readFile(file);
+  const largeValue = { ...value(null), note: "x".repeat(3000) }; assert.ok(gzipSync(JSON.stringify(largeValue)).length < 1000);
+  const fresh = await cache.getOrBuild({ key, readRevision: async () => "r2", build: async () => largeValue });
+  assert.equal(fresh.status, "calculated"); assert.equal(fresh.storage, "too_large"); assert.deepEqual(fresh.value, largeValue);
+  assert.deepEqual(await fs.readFile(file), previous);
+});
+
+test("gzip trims physical bytes including legacy derived units without touching adjacent reports", async t => {
+  const maxBytes = 1400, { directory } = await fixture(t, { compression: "gzip", maxBytes });
+  const plain = createMonthlyReportMaterializedCache({ directory, maxBytes });
+  await plain.getOrBuild({ key: "legacy", readRevision: async () => "r1", build: async () => ({ ...value(1), note: "legacy".repeat(110) }) });
+  const legacyFile = keyFile(directory, "legacy");
+  await fs.utimes(legacyFile, new Date("2026-01-01T00:00:00Z"), new Date("2026-01-01T00:00:00Z"));
+  const foreign = path.join(directory, "issued-report.json"), hashDirectory = path.join(directory, "a".repeat(64) + ".json.gz");
+  await fs.writeFile(foreign, "issued"); await fs.mkdir(hashDirectory);
+  const cache = createMonthlyReportMaterializedCache({ directory, maxBytes, compression: "gzip" });
+  let uncompressedBytes = 0;
+  for (const key of ["compressed-a", "compressed-b", "compressed-c"]) {
+    const result = await cache.getOrBuild({ key, readRevision: async () => "r1", build: async () => ({ ...value(2), note: "rooms".repeat(150) }) });
+    assert.equal(result.storage, "saved"); uncompressedBytes += gunzipSync(await fs.readFile(keyFile(directory, key) + ".gz")).length;
+  }
+  const files = [];
+  for (const name of await fs.readdir(directory)) if (/^[a-f0-9]{64}\.json(?:\.gz)?$/.test(name)) {
+    const stat = await fs.lstat(path.join(directory, name)); if (stat.isFile()) files.push({ name, size: stat.size });
+  }
+  assert.ok(uncompressedBytes > maxBytes); assert.ok(files.reduce((sum, row) => sum + row.size, 0) <= maxBytes);
+  assert.equal(files.filter(row => row.name.endsWith(".gz")).length, 3, "physical compressed bytes govern retention, not expanded JSON length");
+  await assert.rejects(fs.access(legacyFile), { code: "ENOENT" });
+  assert.equal(await fs.readFile(foreign, "utf8"), "issued"); assert.equal((await fs.lstat(hashDirectory)).isDirectory(), true);
+});
+
+test("default caches keep legacy JSON behavior and cannot evict compressed namespace files", async t => {
+  const { directory } = await fixture(t);
+  const gzip = createMonthlyReportMaterializedCache({ directory, compression: "gzip" });
+  await gzip.getOrBuild({ key: "same-key", readRevision: async () => "r1", build: async () => value(3) });
+  const compressedFile = keyFile(directory, "same-key") + ".gz", original = await fs.readFile(compressedFile);
+  const plain = createMonthlyReportMaterializedCache({ directory, maxEntries: 1 });
+  for (const key of ["same-key", "other-key"]) {
+    const result = await plain.getOrBuild({ key, readRevision: async () => "r1", build: async () => value(8) });
+    assert.equal(result.status, "calculated"); assert.equal(JSON.parse(await fs.readFile(keyFile(directory, key), "utf8")).value.snapshot.summary.lodging.sold, 8);
+  }
+  assert.deepEqual(await fs.readFile(compressedFile), original);
+  assert.equal((await gzip.getOrBuild({ key: "same-key", readRevision: async () => "r1", build: () => assert.fail("default trim removed compressed entry") })).value.snapshot.summary.lodging.sold, 3);
+  for (const compression of [false, true, "brotli", "", 1]) {
+    assert.throws(() => createMonthlyReportMaterializedCache({ directory, compression }), TypeError);
+  }
 });
