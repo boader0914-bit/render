@@ -27,7 +27,7 @@ function harness({admin=false,hash='#company=company_one',early=false,performanc
   if(early)vm.runInContext(earlyScript,context);
   const earlyCalls=calls.length;
   vm.runInContext(script,context);
-  const path=name=>admin?(name==='me'?'/api/insight-admin/v1/me':'/api/insight-admin/v1/customer-view/'+name):'/api/customer/v1/'+name;
+  const path=name=>admin?(name==='admin-me'?'/api/insight-admin/v1/me':'/api/insight-admin/v1/customer-view/'+name):'/api/customer/v1/'+name;
   const matching=name=>calls.filter(call=>call.url===path(name));
   return {window,context,calls,events,location,mounted,restored,marks,documentAttributes,earlyCalls,path,matching,html:()=>element('#main').innerHTML,
     resolve(name,data,status=200,index=-1){matching(name).at(index).resolve(response(data,status));return flush();},
@@ -114,15 +114,33 @@ test('configuration failure offers an explicit retry while signup remains unavai
   assert.match(h.html(),/retry-config/);assert.doesNotMatch(h.html(),/id="auth-form"/);await h.action('retry-config');assert.equal(h.matching('config').length,2);await h.resolve('config',{signupEnabled:true});assert.match(h.html(),/동의하고 회원가입/);
 });
 
-test('admin early startup uses its own identity and configuration paths and starts exactly once',async()=>{
+test('an existing administrator customer view restores with one protected GET and no creation POST',async()=>{
   const h=harness({admin:true,early:true});assert.equal(h.earlyCalls,2);assert.equal(h.matching('me').length,1);assert.equal(h.matching('config').length,1);
-  await h.resolve('me',{csrfToken:'fixture_admin'});assert.equal(h.matching('start').length,1);assert.equal(h.matching('start')[0].options.method,'POST');
-  await h.resolve('start',account());assert.match(h.html(),/경쟁업체 검수/);await h.resolve('config',{});assert.equal(h.matching('start').length,1);assert.equal(h.calls.some(call=>call.url.startsWith('/api/customer/')),false);
+  const saved=account();saved.companyViews=[{companyId:'company_one',month:'',data:{result:{version:'saved'}}}];saved.csrfToken='fixture_admin';
+  await h.resolve('me',saved);assert.match(h.html(),/경쟁업체 검수/);assert.deepEqual(h.restored[0].value,saved.companyViews);assert.deepEqual(h.mounted,['company_one']);
+  await h.resolve('config',{});assert.equal(h.matching('start').length,0);assert.equal(h.matching('admin-me').length,0);assert.equal(h.calls.some(call=>call.url.startsWith('/api/customer/')),false);
+});
+
+test('only an explicitly absent administrator preview uses a CSRF-protected single creation POST',async()=>{
+  const h=harness({admin:true,early:true});await h.resolve('me',{error:{code:'CUSTOMER_VIEW_REQUIRED'}},409);assert.equal(h.matching('admin-me').length,1);assert.equal(h.matching('start').length,0);
+  await h.resolve('admin-me',{csrfToken:'fixture_admin'});assert.equal(h.matching('start').length,1);assert.equal(h.matching('start')[0].options.method,'POST');assert.equal(h.matching('start')[0].options.headers['X-CSRF-Token'],'fixture_admin');
+  await h.resolve('start',account());assert.match(h.html(),/경쟁업체 검수/);await h.resolve('config',{});assert.equal(h.matching('start').length,1);
 });
 
 test('admin start failures never repeat POSTs automatically',async()=>{
-  const h=harness({admin:true,early:true});await h.resolve('config',{});await h.resolve('me',{csrfToken:'fixture_admin'});await h.resolve('start',{error:{message:'temporary'}},503);await h.tick(250);
+  const h=harness({admin:true,early:true});await h.resolve('config',{});await h.resolve('me',{error:{code:'CUSTOMER_VIEW_REQUIRED'}},409);await h.resolve('admin-me',{csrfToken:'fixture_admin'});await h.resolve('start',{error:{message:'temporary'}},503);await h.tick(250);
   assert.match(h.html(),/자료 연결 확인이 필요/);assert.equal(h.matching('start').length,1);assert.equal(h.restored.length,0);
+});
+
+for(const status of [401,403,404,409,429,502,503,504])test(`administrator preview HTTP ${status} cannot create or expose a customer preview`,async()=>{
+  const h=harness({admin:true,early:true});await h.resolve('me',{error:{code:'UNRELATED_FAILURE'}},status);await h.tick(250);
+  assert.equal(h.matching('start').length,0);assert.equal(h.matching('admin-me').length,0);assert.equal(h.restored.length,0);assert.equal(h.matching('me').length,1);
+});
+
+for(const early of [false,true])test(`${early?'early':'normal'} identity GET carries only a bounded current-view selection hint`,async()=>{
+  const h=harness({early,hash:'#property'});assert.equal(h.matching('me')[0].options.headers['X-Insight-Bootstrap-View'],'property');assert.equal(h.matching('me')[0].options.headers['X-Insight-Bootstrap-Company'],undefined);
+  const selected=harness({early,hash:'#company=company_one'});assert.equal(selected.matching('me')[0].options.headers['X-Insight-Bootstrap-View'],'company');assert.equal(selected.matching('me')[0].options.headers['X-Insight-Bootstrap-Company'],'company_one');
+  const invalid=harness({early,hash:'#company=bad%2Fid'});assert.equal(invalid.matching('me')[0].options.headers['X-Insight-Bootstrap-Company'],undefined);
 });
 
 test('the early reader is page-scoped, once-only and runs before styles and deferred UI assets',()=>{

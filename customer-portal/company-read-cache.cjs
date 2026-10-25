@@ -212,20 +212,22 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,saved
     if(entry.preview&&entry.refreshFailed&&!refreshing){core.referenceLoading=false;core.referenceError=true;core.calculation.status='failed';}
     return {status:200,ok:true,data:{...core,request,collectionAllowance:clone(identity.data.collectionAllowance),previousResult:Boolean(core.result&&request&&core.result.runId!==request.runId),responseCache:{...meta(entry.preview?'preview':'cached',entry.checkedAt,refreshing,entry.refreshFailed,entry),...(entry.preview?{preview:true,calculationStatus:entry.refreshFailed&&!refreshing?'failed':'pending'}:{})}}};
   }
-  async function snapshot({scope,identity,maxViews=4,audience}={}) {
+  async function snapshot({scope,identity,maxViews=4,audience,companyIds}={}) {
     // Only the BFF may call this while handling a successful, freshly verified
     // central /me (or administrator /start) response. It is not a replacement
     // for read(), never validates a browser-supplied identity, and never starts
     // an identity/source request or permits later GETs to skip their guard.
     if(typeof scope!=='string'||!scope||!identity||typeof identity!=='object')return [];
+    const selectedCompanies=Array.isArray(companyIds)?new Set(companyIds.filter(id=>typeof id==='string'&&/^[a-zA-Z0-9_-]+$/.test(id))):null;
     const state=states.get(scope)||(disk&&validatedIdentity(identity,identity.companies?.[0]?.companyId)?scopeState(scope):null),limit=Number.isFinite(maxViews)?Math.min(4,Math.max(0,Math.floor(maxViews))):4;
     if(!state)return [];
     state.permissionVersion++;state.identity=null;syncIdentity(state,identity);
-    if(state.revoked||!limit)return [];
+    if(state.revoked||!limit||selectedCompanies?.size===0)return [];
     const epoch=state.epoch,permissionVersion=state.permissionVersion;
     await ready();if(!current(state,epoch)||state.permissionVersion!==permissionVersion)return [];
     const currentDefault=`default:${kst(clock()).slice(0,7)}`,candidates=[];
     if(disk&&!invalidatedScopes.has(scope))for(const company of identity.companies||[]){
+      if(selectedCompanies&&!selectedCompanies.has(company?.companyId))continue;
       const checked=validatedIdentity(identity,company?.companyId);if(!checked||active(checked.request)||state.blockedCompanies.has(company.companyId))continue;
       const defaultSlot=durableSlot(checked,audience,true),explicitSlot=durableSlot(checked,audience,false),slots=[defaultSlot,explicitSlot].filter(Boolean);let stored=[];
       try{stored=disk.list(slots,{limit:maxPerScope,preferMonth:kst(clock()).slice(0,7)});}catch{}
@@ -246,6 +248,7 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,saved
       let parts;try{parts=JSON.parse(key);}catch{continue;}
       const [storedScope,,companyId,period]=parts;
       if(storedScope!==scope||typeof companyId!=='string'||typeof period!=='string')continue;
+      if(selectedCompanies&&!selectedCompanies.has(companyId))continue;
       const isDefault=period.startsWith('default:'),month=isDefault?'':period;
       if(isDefault&&period!==currentDefault||!isDefault&&!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month))continue;
       const checked=validatedIdentity(identity,companyId),mark=checked?fingerprint(checked):null;

@@ -162,6 +162,16 @@ test('fresh-state snapshots reuse a permitted core without another identity or s
   assert.equal((await f.cache.snapshot({scope:'host:customer:opaque-a',identity:identity()}))[0].data.result.rooms,16);
 });
 
+test('a bootstrap company filter only narrows current authenticated snapshots without discarding other cores',async()=>{
+  const f=fixture(),account=identity(['a','b']);f.setIdentity(ok(account));await f.read({companyId:'a'});await f.read({companyId:'b'});
+  const args={scope:'host:customer:opaque-a',identity:account};
+  assert.deepEqual((await f.cache.snapshot({...args,companyIds:['b','unauthorized']})).map(row=>row.companyId),['b']);
+  assert.deepEqual(await f.cache.snapshot({...args,companyIds:[]}),[]);
+  assert.deepEqual((await f.cache.snapshot(args)).map(row=>row.companyId).sort(),['a','b']);
+  assert.deepEqual(await f.cache.snapshot({...args,identity:identity(['a']),companyIds:['b']}),[]);
+  assert.equal(f.sourceCalls(),2,'hints never fetch or fabricate another company result');
+});
+
 test('snapshots recompute current quota and previousResult but reject changed company or customer fingerprints',async()=>{
   const f=fixture(),account=identity();account.preparations=[{companyId:'a',status:'ready',runId:'older-run'}];f.setIdentity(ok(account));await f.read();
   account.collectionAllowance={limit:1,used:1,canRequest:false};

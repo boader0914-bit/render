@@ -27,7 +27,7 @@ function safeTiming(reply){
   const names=[];
   for(const item of header.split(',')){
     const match=/^\s*([a-z_]+);dur=(\d+(?:\.\d+)?)\s*$/.exec(item);assert.ok(match,'only a fixed name and numeric duration may be exposed');
-    assert.ok(['upstream_headers','upstream_body','snapshot','total','state_catalog','state_total'].includes(match[1]));
+    assert.ok(['upstream_headers','upstream_body','snapshot','snapshot_company','snapshot_region','snapshot_report','total','state_catalog','state_total'].includes(match[1]));
     names.push(match[1]);assert.ok(Number.isFinite(Number(match[2])));
   }
   for(const name of ['upstream_headers','upstream_body','snapshot','total'])assert.ok(names.includes(name),'missing fixed timing '+name);

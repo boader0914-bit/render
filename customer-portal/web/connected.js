@@ -17,6 +17,12 @@
   const menuRoute=()=>route()==='register-own'?'property':route().startsWith('regions=')?'regions':/^(company|collection|collect)=/.test(route())?(state?.customer.relations.find(row=>row.companyId===decodeURIComponent(route().split('=').slice(1).join('=')))?.kind==='own'?'property':'competitors'):route();
   const toast = message => { $('#toast').textContent = message; $('#toast').classList.add('visible'); setTimeout(() => $('#toast').classList.remove('visible'), 4500); };
   const startupMark=name=>{try{window.InsightPerformance?.markFirst?.(name);}catch{}};
+  const bootstrapHeaders=()=>{
+    if(window.InsightBootstrapReads?.headers)return window.InsightBootstrapReads.headers();
+    const current=route(),company=/^(?:company|collection|collect)=([a-zA-Z0-9_-]{1,180})$/.exec(current);
+    const view=company?'company':current.startsWith('regions=')?'regions':['home','property','competitors','regions','reports','settings'].includes(current)?current:null;
+    return {...(view?{'X-Insight-Bootstrap-View':view}:{}),...(company?{'X-Insight-Bootstrap-Company':company[1]}:{})};
+  };
   async function responseValue(response) {
     let value;
     try { value = await response.json(); }
@@ -36,7 +42,7 @@
   async function api(url, data, options={}) {
     const base = adminView ? '/api/insight-admin/v1' : '/api/customer/v1';
     const target = adminView && url !== '/auth/logout' ? '/customer-view' + url : url;
-    const response = await (options.startup===true?startupFetch:fetch)(`${base}${target}`, { method:data ? 'POST':'GET', headers:data ? { 'Content-Type':'application/json','X-CSRF-Token':state?.csrfToken || adminCsrf || '' }: { Accept:'application/json',...(options.refresh===true?{'X-Insight-Refresh':'1'}:{}) }, ...(data ? { body:JSON.stringify(data) }: {}), ...(options.signal?{signal:options.signal}:{}) });
+    const response = await (options.startup===true?startupFetch:fetch)(`${base}${target}`, { method:data ? 'POST':'GET', headers:{...(data ? { 'Content-Type':'application/json','X-CSRF-Token':state?.csrfToken || adminCsrf || '' }: { Accept:'application/json',...(options.refresh===true?{'X-Insight-Refresh':'1'}:{}) }),...((options.startup===true&&url==='/me'||adminView&&url==='/start')?bootstrapHeaders():{})}, ...(data ? { body:JSON.stringify(data) }: {}), ...(options.signal?{signal:options.signal}:{}) });
     return responseValue(response);
   }
   const connectionLoading = message => `<section class="card" role="status" aria-live="polite"><div class="initial-loading"><span class="loading-ring" aria-hidden="true"></span><p>${esc(message)}</p></div></section>`;
@@ -237,10 +243,16 @@
     if(configStatus!=='ready')loadConfiguration();
     try {
       if(adminView){
-        const identity=await bootstrapRead(signal=>startupFetch('/api/insight-admin/v1/me',{headers:{Accept:'application/json'},...(signal?{signal}:{})}).then(responseValue));
-        adminCsrf=identity.csrfToken;
-        if(adminCsrf)startupMark('insight-identity-ready');
-        state=await api('/start',{});
+        try{state=await bootstrapRead(signal=>api('/me',undefined,{signal,startup:true}));}
+        catch(error){
+          // Only an authenticated, explicitly missing preview may create it.
+          // Existing previews restore their saved views in one protected GET.
+          if(error.status!==409||error.code!=='CUSTOMER_VIEW_REQUIRED')throw error;
+          const identity=await bootstrapRead(signal=>startupFetch('/api/insight-admin/v1/me',{headers:{Accept:'application/json'},...(signal?{signal}:{})}).then(responseValue));
+          adminCsrf=identity.csrfToken;
+          state=await api('/start',{});
+        }
+        if(state?.customer?.customerId)startupMark('insight-identity-ready');
       }else{state=await bootstrapRead(signal=>api('/me',undefined,{signal,startup:true}));if(state?.customer?.customerId)startupMark('insight-identity-ready');}
       bootstrapStatus='ready';render();prepareCompanies();
     }catch(error){

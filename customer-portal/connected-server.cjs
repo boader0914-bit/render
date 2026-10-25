@@ -12,6 +12,7 @@ const { createReportReadCache } = require('./report-read-cache.cjs');
 const { createUpstreamReader } = require('./upstream-request.cjs');
 const { createPublicAssetVersions } = require('./public-asset-versions.cjs');
 const { createArchiveService } = require('./archive-service.cjs');
+const { createBootstrapSnapshots } = require('./bootstrap-snapshots.cjs');
 function validatedOrigin(value) {
   const u = new URL(value);
   if (u.username || u.password || u.pathname !== '/' || u.search || u.hash || /[?#]/.test(String(value)) || (u.protocol !== 'https:' && !(u.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(u.hostname)))) throw new Error('Insight origins require HTTPS or local development addresses');
@@ -51,6 +52,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   const archives=createArchiveService({directory:archiveDirectory,namespace:backend});
   const companyReads = createCompanyReadCache({persistenceDirectory:companyCacheDirectory,namespace:backend,onStage:companyDiagnosticsLogger,...(archiveDirectory?{onVerifiedSource:context=>archives.capture(context)}:{})}), regionReads = createRegionReadCache({persistenceDirectory:regionCacheDirectory,namespace:backend}), scopeSecret = crypto.randomBytes(32), staticAssets = new Map();
   const reportReads = createReportReadCache({persistenceDirectory:reportCacheDirectory,namespace:backend});
+  const bootstrapSnapshots=createBootstrapSnapshots({companyReads,regionReads,reportReads});
   const scopeFor = (requestOrigin, mode, session) => crypto.createHmac('sha256', scopeSecret).update(JSON.stringify([requestOrigin,mode,session])).digest('hex');
   const audienceFor = (requestOrigin,mode) => JSON.stringify([requestOrigin,mode]);
   const invalidateReads = scope => { companyReads.invalidate(scope); regionReads.invalidate(scope); reportReads.invalidate(scope); };
@@ -196,7 +198,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
           if(saved){if(saved.status===401)res.setHeader('Set-Cookie',adminCookie('',true));respond(saved.status,saved.data);return;}
         }
         const response=await readUpstream('/admin'+route,url.search,headers,{method:req.method,body:payload,stage:identityRoutes.has('/admin'+route)?'identity':req.method==='GET'?'source':null,timing}),data=response.data;
-        if(response.ok&&['/customer-view/me','/customer-view/start'].includes(route)){const started=performance.now(),scope=scopeFor(requestOrigin,'admin',session);[data.companyViews,data.regionViews,data.reportViews]=await Promise.all([companyReads.snapshot({scope,audience:audienceFor(requestOrigin,'admin'),identity:data}),regionReads.snapshot({scope,identity:data}),reportReads.snapshot({scope,audience:audienceFor(requestOrigin,'admin'),identity:data})]);timing.add('snapshot',performance.now()-started);}
+        if(response.ok&&['/customer-view/me','/customer-view/start'].includes(route)){const started=performance.now(),scope=scopeFor(requestOrigin,'admin',session);Object.assign(data,await bootstrapSnapshots({headers:req.headers,scope,audience:audienceFor(requestOrigin,'admin'),identity:data,timing}));timing.add('snapshot',performance.now()-started);}
         if(req.method==='POST'&&route!=='/customer-view/start'||[401,403].includes(response.status))invalidateReads(scopeFor(requestOrigin,'admin',session));
         if (response.ok && route === '/auth/login') {
           if (!/^[A-Za-z0-9_-]{43}$/.test(data.token || '')) throw new Error('Missing administrator session');
@@ -225,7 +227,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
           if(saved){if(saved.status===401)res.setHeader('Set-Cookie',cookie('',true));respond(saved.status,saved.data);return;}
         }
         const response=await readUpstream(route,url.search,headers,{method:req.method,body:payload,stage:identityRoutes.has(route)?'identity':req.method==='GET'?'source':null,timing}),data=response.data;
-        if(response.ok&&req.method==='GET'&&route==='/me'){const started=performance.now(),scope=scopeFor(requestOrigin,'customer',session);[data.companyViews,data.regionViews,data.reportViews]=await Promise.all([companyReads.snapshot({scope,audience:audienceFor(requestOrigin,'customer'),identity:data}),regionReads.snapshot({scope,identity:data}),reportReads.snapshot({scope,audience:audienceFor(requestOrigin,'customer'),identity:data})]);timing.add('snapshot',performance.now()-started);}
+        if(response.ok&&req.method==='GET'&&route==='/me'){const started=performance.now(),scope=scopeFor(requestOrigin,'customer',session);Object.assign(data,await bootstrapSnapshots({headers:req.headers,scope,audience:audienceFor(requestOrigin,'customer'),identity:data,timing}));timing.add('snapshot',performance.now()-started);}
         if(req.method==='POST'||[401,403].includes(response.status))invalidateReads(scopeFor(requestOrigin,'customer',session));
         if (response.ok && ['/auth/login', '/auth/signup'].includes(route)) {
           if (!/^[A-Za-z0-9_-]{43}$/.test(data.token || '')) throw new Error('Missing session');

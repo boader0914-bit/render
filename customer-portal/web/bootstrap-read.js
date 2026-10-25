@@ -17,11 +17,16 @@
   // Nothing is persisted, and connected.js consumes each response only once.
   const adminView=location.pathname==='/customer-view';
   const base=adminView?'/api/insight-admin/v1':'/api/customer/v1';
+  const bootstrapHeaders=()=>{
+    const current=location.hash.slice(1)||'home',company=/^(?:company|collection|collect)=([a-zA-Z0-9_-]{1,180})$/.exec(current);
+    const view=company?'company':current.startsWith('regions=')?'regions':['home','property','competitors','regions','reports','settings'].includes(current)?current:null;
+    return {Accept:'application/json',...(view?{'X-Insight-Bootstrap-View':view}:{}),...(company?{'X-Insight-Bootstrap-Company':company[1]}:{})};
+  };
   const reads=new Map();
-  for(const path of [base+'/me',base+(adminView?'/customer-view':'')+'/config']) {
+  for(const path of [base+(adminView?'/customer-view':'')+'/me',base+(adminView?'/customer-view':'')+'/config']) {
     const controller=new AbortController();
-    const promise=fetch(path,{headers:{Accept:'application/json'},credentials:'same-origin',signal:controller.signal}).then(response=>({response}),error=>({error}));
+    const promise=fetch(path,{headers:path.endsWith('/me')?bootstrapHeaders():{Accept:'application/json'},credentials:'same-origin',signal:controller.signal}).then(response=>({response}),error=>({error}));
     reads.set(path,{promise,abort(){controller.abort();}});
   }
-  window.InsightBootstrapReads={take(path){const read=reads.get(path);reads.delete(path);return read;}};
+  window.InsightBootstrapReads={headers:bootstrapHeaders,take(path){const read=reads.get(path);reads.delete(path);return read;}};
 })();

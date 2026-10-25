@@ -18,8 +18,8 @@ async function fixture(t){
  const start=async()=>{server=createConnectedServer({origin,origins:[alias],backend,serviceToken:'fixture-private-service-credential-not-real',fetchImpl,companyCacheDirectory:directory});await server.prepareCompanySnapshots();await server.prepareRegionSnapshots();await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));};
  const close=async()=>{if(server){const previous=server;server=null;await previous.flushCompanySnapshots();previous.closeAllConnections();await new Promise(resolve=>previous.close(resolve));}};
  t.after(async()=>{await close();const resolved=path.resolve(directory),temp=path.resolve(os.tmpdir())+path.sep;assert.ok(resolved.startsWith(temp)&&path.basename(resolved).startsWith('insight-company-bff-'));await fs.rm(resolved,{recursive:true,force:true});});
- const request=(route,{admin=false,refresh=false,host=new URL(origin).host}={})=>new Promise((resolve,reject)=>{
-  const req=http.request({hostname:'127.0.0.1',port:server.address().port,path:route,headers:{Host:host,Cookie:admin?'__Host-sabun_insight_admin=fixture-private-admin-session':'__Host-sabun_insight_session=fixture-private-session',...(refresh?{'X-Insight-Refresh':'1'}:{})}},res=>{const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>resolve({status:res.statusCode,data:JSON.parse(Buffer.concat(chunks).toString('utf8')),headers:res.headers}));});req.on('error',reject);req.end();
+ const request=(route,{admin=false,refresh=false,host=new URL(origin).host,headers={}}={})=>new Promise((resolve,reject)=>{
+  const req=http.request({hostname:'127.0.0.1',port:server.address().port,path:route,headers:{Host:host,Cookie:admin?'__Host-sabun_insight_admin=fixture-private-admin-session':'__Host-sabun_insight_session=fixture-private-session',...(refresh?{'X-Insight-Refresh':'1'}:{}),...headers}},res=>{const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>resolve({status:res.statusCode,data:JSON.parse(Buffer.concat(chunks).toString('utf8')),headers:res.headers}));});req.on('error',reject);req.end();
  });
  await start();return {directory,state,calls,start,close,request,sourceCalls:()=>calls.filter(c=>c.path.endsWith('/collection')&&!new URLSearchParams(c.query).has('savedOnly')).length};
 }
@@ -34,6 +34,18 @@ test('a new BFF process restores both own and competitor results after fresh log
  assert.ok(f.calls.filter(c=>c.path==='/api/insight/v1/me').length>=3);assert.ok(f.calls.every(c=>c.method==='GET'),'restoration does not collect or mutate');
  const serialized=await Promise.all((await fs.readdir(f.directory)).filter(file=>file.endsWith('.json')).map(file=>fs.readFile(path.join(f.directory,file),'utf8')));assert.ok(serialized.length>0);
  assert.doesNotMatch(serialized.join('\n'),/fixture-private|cus_fixture_private_account|csrfToken|collectionAllowance|customerId|corrections/,'no credentials, personal account state or quota are serialized');
+});
+
+test('first property bootstrap restores only the authenticated own company and skips unrelated saved domains',async t=>{
+ const f=await fixture(t);await f.request(own);await f.request(competitor);await f.close();await f.start();
+ const checksBefore=f.calls.filter(row=>row.path.endsWith('/me')).length;
+ const headers={'X-Insight-Bootstrap-View':'property'},boot=await f.request('/api/customer/v1/me',{headers});
+ assert.equal(boot.status,200);assert.deepEqual(boot.data.companyViews.map(row=>row.companyId),['cmp_own']);assert.deepEqual(boot.data.regionViews,[]);assert.deepEqual(boot.data.reportViews,[]);
+ assert.match(boot.headers['server-timing'],/snapshot_company;dur=/);assert.doesNotMatch(boot.headers['server-timing'],/snapshot_region;|snapshot_report;/);
+ assert.equal(f.calls.filter(row=>row.path.endsWith('/me')).length,checksBefore+1,'every reload still checks current identity');assert.equal(f.sourceCalls(),2);
+ const selected=await f.request('/api/customer/v1/me',{headers:{'X-Insight-Bootstrap-View':'company','X-Insight-Bootstrap-Company':'cmp_competitor'}});assert.deepEqual(selected.data.companyViews.map(row=>row.companyId),['cmp_competitor']);
+ const denied=await f.request('/api/customer/v1/me',{headers:{'X-Insight-Bootstrap-View':'company','X-Insight-Bootstrap-Company':'not_registered'}});assert.deepEqual(denied.data.companyViews,[]);
+ f.state.identityStatus=401;const expired=await f.request('/api/customer/v1/me',{headers});assert.equal(expired.status,401);assert.equal(expired.data.companyViews,undefined);
 });
 
 test('restored company data returns while the original-source update is pending and the successful update survives another process restart',async t=>{
