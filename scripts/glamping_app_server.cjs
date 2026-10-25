@@ -584,7 +584,8 @@ const readMonthlyReportRevision = createMonthlyReportSourceRevision({ dataDir: D
     regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
     tourismRegionMapFile: path.join(WEB_DIR, "data", "tourism_region_map.json"), includeContext: false });
 const analyticalMemory = createAnalyticalMemorySampler();
-const analyticalWork = createAnalyticalWorkScheduler({ sampleMemory: analyticalMemory.sample, highWatermark: 0.65, lowWatermark: 0.55 });
+const analyticalWork = createAnalyticalWorkScheduler({ sampleMemory: analyticalMemory.sample, highWatermark: 0.65, lowWatermark: 0.55,
+  cooperativeYield: true });
 const runAnalyticalWork = (operation, options) => analyticalWork.run(operation, options);
 const monthlyCompanySourceVersion = crypto.createHash("sha256")
   .update(companyIntegratedCalculationFingerprint())
@@ -601,7 +602,7 @@ const recalculateMonthlyCompanyObservations = createMonthlyCompanyRecalculation(
   loadRun, applyCompanyManualCorrection, companyProductAvailabilityMatch, buildHistoryObservations,
   recalculateAllInventory: true,
   readProductCapacityEvidence: (request, data, options) => savedProductRecovery.capacityEvidence(request, data, options),
-  readPersistedProductCapacityEvidence: companies => productCapacityStore.readForCompanies(companies),
+  readPersistedProductCapacityEvidence: (companies, options) => productCapacityStore.readForCompanies(companies, options),
   // This application's correction callbacks need provider identities, the
   // complete manual review and the exact maximum-capacity witness only.
   projectCorrectionCompany: compactMonthlyCapacityCompany,

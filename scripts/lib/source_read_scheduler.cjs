@@ -1,8 +1,11 @@
 "use strict";
 
+const { cooperativeWorkCheckpoint } = require("./cooperative_work_checkpoint.cjs");
+
 // Source reconstruction is deliberately single-file: overlapping it multiplies
-// the complete history/catalog heap. Prefer a user's pending read without
-// interrupting the active reader or starving saved-view maintenance forever.
+// the complete history/catalog heap. Ordinary readers finish before a peer;
+// an opted-in industry owner can instead unwind at a safe checkpoint before
+// the analytical scheduler admits a pending user's read.
 function createSourceReadScheduler({ foregroundBurst = 4, maxInteractiveHoldMs = 2500 } = {}) {
   if (!Number.isSafeInteger(foregroundBurst) || foregroundBurst < 1) throw new TypeError("foregroundBurst must be a positive integer");
   if (!Number.isSafeInteger(maxInteractiveHoldMs) || maxInteractiveHoldMs < 1) throw new TypeError("maxInteractiveHoldMs must be a positive integer");
@@ -26,10 +29,18 @@ function createSourceReadScheduler({ foregroundBurst = 4, maxInteractiveHoldMs =
     }
     if (!task) { if (!foreground.length && !background.length) consecutiveForeground = 0; return; }
     active = true; activePriority = task.priority;
-    Promise.resolve().then(task.operation).then(task.resolve, task.reject).finally(() => {
+    const complete = (value, error, failed) => {
+      // Settle the private source slot before publishing the caller's result.
+      // A cooperatively rejected owner may now unwind and requeue; no queued
+      // analytical reader can inherit a still-active source allocation.
       active = false; activePriority = null; wakeCheckpoints();
-      next();
-    });
+      if (failed) task.reject(error); else task.resolve(value);
+      // An awaiting reader may enqueue its immediately following foreground
+      // scope before maintenance is selected, preserving the original burst
+      // semantics while making the completed slot visibly inactive already.
+      queueMicrotask(next);
+    };
+    Promise.resolve().then(task.operation).then(value => complete(value, null, false), error => complete(undefined, error, true));
   }
 
   function run(operation, { priority = "foreground" } = {}) {
@@ -69,9 +80,10 @@ function createSourceReadScheduler({ foregroundBurst = 4, maxInteractiveHoldMs =
     if (!["foreground", "background"].includes(priority)) throw new TypeError("Invalid source read priority");
     if (priority !== "background") return;
     // Even with no lease yet, yield one event-loop turn so a newly arrived HTTP
-    // request can acquire it. The active source slot and its heap stay owned by
-    // this background reader throughout the cooperative pause.
+    // request can acquire it. An eligible industry owner rejects and unwinds;
+    // otherwise this background reader retains its slot during a short pause.
     await new Promise(resolve => setImmediate(resolve));
+    cooperativeWorkCheckpoint();
     while (shouldPauseBackground()) await new Promise(resolve => checkpointWaiters.push(resolve));
   }
 

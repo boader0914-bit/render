@@ -63,3 +63,21 @@ test("revisiting September preserves an already verified October increase withou
   assert.equal(productCapacityBaselineAt(saved.evidence, f.company.companyId, "2026-09-30T23:00:00Z").lodgingProducts.room1.count, 14);
   assert.equal(productCapacityBaselineAt(saved.evidence, f.company.companyId, "2026-10-02T00:00:00Z").lodgingProducts.room1.count, 16);
 });
+test("bulk witness checkpoints interrupt every company and source-file boundary without returning a warning or partial evidence", async t => {
+  const f = await fixture(t), other = { ...f.company, companyId: "company-b" }, companies = [f.company, other];
+  const context = { ...f.context, companies: new Map(companies.map(company => [company.companyId, company])) };
+  await f.store.publish([...f.evidence, { ...f.evidence[0], companyId: other.companyId }], context);
+  const names = await fs.readdir(f.store.directory), originals = new Map(await Promise.all(names.map(async name => [name, await fs.readFile(path.join(f.store.directory, name))])));
+  const originalRaw = await fs.readFile(f.original); let boundaries = 0;
+  const expected = await f.store.readForCompanies(companies, { checkpoint: async () => { boundaries++; } }); assert.ok(boundaries >= 10);
+  for (let stop = 1; stop <= boundaries; stop++) {
+    let visited = 0, returned = false;
+    const interrupted = Object.assign(Error("checkpoint"), { code: "ANALYTICAL_WORK_YIELDED" });
+    await assert.rejects((async () => { const value = await f.store.readForCompanies(companies, { checkpoint: async () => { if (++visited === stop) throw interrupted; } }); returned = true; return value; })(), error => error === interrupted);
+    assert.equal(returned, false, "an interrupted optional store cannot return empty normal evidence or a cache warning");
+    assert.deepEqual(await f.store.readForCompanies(companies), expected, "a new read starts with fresh source descriptors");
+  }
+  for (const name of names) assert.deepEqual(await fs.readFile(path.join(f.store.directory, name)), originals.get(name));
+  assert.deepEqual(await fs.readFile(f.original), originalRaw);
+  await assert.rejects(f.store.readForCompanies(companies, { checkpoint: null }), TypeError);
+});

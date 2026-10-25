@@ -13,6 +13,14 @@
 
 ## 로컬 검증과 한계
 
+### 실행 중인 업종 집계의 조회 양보
+
+운영 서버의 `cooperativeYield`는 배경 `industry-build`에만 적용한다. 업체 조회가 기다리면 저장 원본 체크포인트에서 현재 시도를 중단하고, 스트림·내부 읽기 슬롯·큰 자료 참조를 정리한 뒤 공통 실행권을 반환한다. 호출자는 같은 완료 대기를 유지하며 업종 작업은 `failed`가 아닌 `yielded`로 기록하고 다시 대기열에 들어간다. 메모리를 보유한 채 두 계산을 병행하지 않는다. 상품 근거 발행은 중간 양보를 허용하지 않는다.
+
+업종용 `recalculated_run_rows/industry_rows`는 업체 캐시와 별도로 최대 512개·64MiB의 완료된 수집 단위만 보관한다. 원본 변경값·업체 범위·관측 당시 객실 근거·체크섬을 다시 확인하며, 중단된 단위는 정상 값으로 발행하지 않는다. 단일 단위가 6MiB를 넘거나 전체 예산을 넘으면 기존 원본 계산으로 복귀할 수 있다. 원본·발행 리포트는 이 캐시가 아니다.
+
+재시도는 단계·수집 단위·단위 내부 체크포인트 순서로 진행값을 전진시켜 같은 지점에서 무한히 양보하지 않게 한다. 콜드 카탈로그나 수집 단위가 캐시로 재사용되어 체크포인트 수가 줄어도 다음 단계·수집 단위의 진행을 인정한다. `GET /api/analytical-work`의 `cooperative`, `timing.yielded`, `timing.restarted`, `timing.maximumCheckpointGapMs`와 `monthlyRecalculation.industryRunRowBuilds/industryRunRowCacheHits`를 사용해 실제 조회 대기와 재계산을 구분한다. 250ms 최소 실행 간격은 응답시간 보장이 아니며, 체크포인트 사이의 동기 작업·발행·메모리 검사 대기는 남을 수 있다.
+
 `npm run test:background-memory`는 동시 작업·메모리 대기·호출자 워커 유지·교착 방지·카드 수치와 월 유지·오류 시 정상 결과 보존·원본 불변을 확인한다. 실제 HTTP 검증도 포함한다.
 
 `npm run benchmark:background-memory -- --output <별도 JSON 경로>`는 539개 업체, 약 115MB 기본자료, 세 달의 모의 관측으로 이전 `3f49cc6` 원본 어댑터와 개선 어댑터를 각각 별도 프로세스에서 비교한다. 전체 이전 서버나 실제 예약 실행 비교는 아니다.

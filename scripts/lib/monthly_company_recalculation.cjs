@@ -2,6 +2,8 @@
 
 const { createMonthlyReportMaterializedCache } = require("./monthly_report_materialized_cache.cjs");
 const { observedProductCapacityEvidence, withProductCapacityBaseline, productCapacityEvidenceRevision } = require("./product_capacity_baseline.cjs");
+const { setCooperativeWorkPhase } = require("./cooperative_work_checkpoint.cjs");
+const path = require("node:path");
 
 const READ_ONLY_RUN_OPTIONS = Object.freeze({
   skipCompanyMaster: true,
@@ -84,8 +86,13 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
   if (!Number.isSafeInteger(maxCachedRunBytes) || maxCachedRunBytes < 128 || maxCachedRunBytes > 6 * 1024 * 1024) throw new TypeError("Invalid compact run row budget");
   const cache = cacheDirectory ? createMonthlyReportMaterializedCache({ directory: cacheDirectory,
     maxEntries: 256, maxBytes: 64 * 1024 * 1024, maxEntryBytes: 8 * 1024 * 1024 }) : null;
-  const metrics = { savedRunLoads: 0, runRowBuilds: 0, runRowCacheHits: 0, companyProjectionsRead: 0, correctionCompanyProjections: 0, runRowOversizeFallbacks: 0, maximumCachedRunBytes: 0 };
-  const oversized = new Set();
+  // Industry retries retain only completed, verified compact run units on disk.
+  // Their independent namespace and budget cannot evict company-view cache rows.
+  const industryCache = cacheDirectory ? createMonthlyReportMaterializedCache({ directory: path.join(cacheDirectory, "industry_rows"),
+    maxEntries: 512, maxBytes: 64 * 1024 * 1024, maxEntryBytes: 8 * 1024 * 1024 }) : null;
+  const metrics = { savedRunLoads: 0, runRowBuilds: 0, runRowCacheHits: 0, companyProjectionsRead: 0, correctionCompanyProjections: 0, runRowOversizeFallbacks: 0, maximumCachedRunBytes: 0,
+    industryRunRowBuilds: 0, industryRunRowCacheHits: 0, industryRunRowOversizeFallbacks: 0, maximumIndustryCachedRunBytes: 0 };
+  const oversizedByType = { company: new Set(), industry: new Set() };
   async function loadStored(id, capacityCompanies) {
     metrics.savedRunLoads++;
     let stored;
@@ -131,8 +138,9 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
     }).map(row => ({ ...row, companyId: company.companyId, companyKey: company.companyId, companyName: company.primaryName,
       runId: id, collectedAt: run.collectedAt, collectedDate: day, keyword: run.keyword, stayDate: dayKey(row.stayDate || row.date), readOnlyRecalculated: true }));
   }
-  async function cachedRunRows(id, originalRun, data, capacityCompanies, checkpoint, sourceReadValidationBoundary, productCapacityEvidence = [], targetCompanyIds = null, productCapacityWarnings = []) {
+  async function cachedRunRows(id, originalRun, data, capacityCompanies, checkpoint, sourceReadValidationBoundary, productCapacityEvidence = [], targetCompanyIds = null, productCapacityWarnings = [], cacheType = "company") {
     const owner = data._companySource;
+    const activeCache = cacheType === "industry" ? industryCache : cache, oversized = oversizedByType[cacheType];
     const targetKey = recalculateAllInventory ? [...targetCompanyIds].sort() : null;
     const capacityRevision = recalculateAllInventory ? productCapacityEvidenceRevision(productCapacityEvidence, targetKey, originalRun.collectedAt, productCapacityWarnings) : null;
     const scopeKey = JSON.stringify([cacheVersion, owner.revision, id, targetKey, capacityRevision]);
@@ -149,8 +157,8 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
       return owner.revision;
     };
     let result;
-    try { result = await cache.getOrBuild({ key: JSON.stringify([cacheVersion, id, targetKey, capacityRevision]), readRevision, build: async () => {
-      metrics.runRowBuilds++;
+    try { result = await activeCache.getOrBuild({ key: JSON.stringify([cacheVersion, id, targetKey, capacityRevision]), readRevision, build: async () => {
+      metrics[cacheType === "industry" ? "industryRunRowBuilds" : "runRowBuilds"]++;
       // A run contains several companies. Parse its saved product response only
       // once, publish bounded corrected observation rows, then release it. Never
       // keep a full run or complete company master in a long-lived heap cache.
@@ -176,15 +184,16 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
         if (bytes > maxCachedRunBytes) throw Object.assign(new Error("Compact run row budget exceeded"), { code: "MONTHLY_RUN_ROWS_TOO_LARGE" });
         companies.push(entry);
       }
-      metrics.maximumCachedRunBytes = Math.max(metrics.maximumCachedRunBytes, bytes);
+      const maximumKey = cacheType === "industry" ? "maximumIndustryCachedRunBytes" : "maximumCachedRunBytes";
+      metrics[maximumKey] = Math.max(metrics[maximumKey], bytes);
       return { runId: id, companies };
     } }); } catch (error) {
       if (error?.code !== "MONTHLY_RUN_ROWS_TOO_LARGE") throw error;
-      metrics.runRowOversizeFallbacks++;
+      metrics[cacheType === "industry" ? "industryRunRowOversizeFallbacks" : "runRowOversizeFallbacks"]++;
       oversized.add(scopeKey); if (oversized.size > 256) oversized.delete(oversized.values().next().value);
       return null; // Release the all-company build before target-only fallback.
     }
-    if (result.status !== "calculated") metrics.runRowCacheHits++;
+    if (result.status !== "calculated") metrics[cacheType === "industry" ? "industryRunRowCacheHits" : "runRowCacheHits"]++;
     if (result.value.runId !== id || !Array.isArray(result.value.companies)) throw unavailable();
     return result.value;
   }
@@ -223,23 +232,27 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
       }
     }
     const scopedCompanyIds = scopedCompanies.map(company => company.companyId);
-    const result = [], productCapacityEvidence = readProductCapacityEvidence ? await readProductCapacityEvidence(request, data, { companyIds: scopedCompanyIds }) : [];
+    setCooperativeWorkPhase(41);
+    const result = [], productCapacityEvidence = readProductCapacityEvidence ? await readProductCapacityEvidence(request, data, { companyIds: scopedCompanyIds, checkpoint }) : [];
     if (!Array.isArray(productCapacityEvidence)) throw unavailable();
-    const persisted = readPersistedProductCapacityEvidence ? await readPersistedProductCapacityEvidence(scopedCompanies) : { evidence: [], warnings: [] };
+    const persisted = readPersistedProductCapacityEvidence ? await readPersistedProductCapacityEvidence(scopedCompanies, { checkpoint }) : { evidence: [], warnings: [] };
     if (!Array.isArray(persisted?.evidence) || !Array.isArray(persisted?.warnings)
       || persisted.evidence.some(row => !scopedCompanyIds.includes(row?.companyId)) || persisted.warnings.some(row => !scopedCompanyIds.includes(row?.companyId))) throw unavailable();
     productCapacityEvidence.push(...persisted.evidence);
     const productCapacityWarnings = persisted.warnings;
     const orderedTargets = recalculateAllInventory ? [...targetsByRun].sort(([a], [b]) => Date.parse(eligibleRuns.get(a).collectedAt) - Date.parse(eligibleRuns.get(b).collectedAt) || a.localeCompare(b)) : targetsByRun;
+    setCooperativeWorkPhase(42);
+    let runUnitIndex = 0;
     for (const [id, companies] of orderedTargets) {
+      setCooperativeWorkPhase(42, ++runUnitIndex);
       await checkpoint();
       const originalRun = eligibleRuns.get(id);
-      // Company jobs reuse bounded cross-company rows across adjacent company
-      // reads. A broad cold source already needs each run once; publishing all
-      // those rows can evict useful entries and repeat fsync/serialization.
-      const useCache = request.type === "company" && cache && typeof data._companySource?.assertCurrent === "function"
+      // A completed industry run remains reusable after a cooperative retry.
+      // It uses its own bounded disk cache; no raw run stays in a heap cache.
+      const selectedCache = request.type === "company" ? cache : request.type === "industry" ? industryCache : null;
+      const useCache = selectedCache && typeof data._companySource?.assertCurrent === "function"
         && typeof data._companySource?.readCompany === "function" && typeof data._companySource.revision === "string";
-      const cached = useCache ? await cachedRunRows(id, originalRun, data, capacityCompanies, checkpoint, boundary, productCapacityEvidence, new Set(companies.map(company => company.companyId)), productCapacityWarnings) : null;
+      const cached = useCache ? await cachedRunRows(id, originalRun, data, capacityCompanies, checkpoint, boundary, productCapacityEvidence, new Set(companies.map(company => company.companyId)), productCapacityWarnings, request.type) : null;
       const stored = cached ? null : await loadStored(id, capacityCompanies);
       for (const company of companies) {
         await checkpoint();
@@ -261,6 +274,7 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
         }
       }
     }
+    setCooperativeWorkPhase(43);
     if (recalculateAllInventory) {
       Object.defineProperty(result, "productCapacityEvidence", { value: productCapacityEvidence, enumerable: false });
       Object.defineProperty(result, "productCapacityWarnings", { value: productCapacityWarnings, enumerable: false });

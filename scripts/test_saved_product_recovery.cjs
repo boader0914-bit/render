@@ -38,6 +38,25 @@ test("canonical row digest is stable across object order and distinct for null v
   assert.equal(recoveryRowDigest({ b: [2, { b: 2, a: 1 }], a: 1 }), recoveryRowDigest({ a: 1, b: [2, { a: 1, b: 2 }] }));
   assert.notEqual(recoveryRowDigest({ sold: 0 }), recoveryRowDigest({ sold: null }));
 });
+test("saved recovery read checkpoints reject between receipt verification stages and retry without changing raw files or receipts", async t => {
+  const f = await fixture(t); await f.helper.recover(f.input, f.data);
+  const companyDirectory = path.join(f.helper.directory, require("node:crypto").createHash("sha256").update(f.company.companyId).digest("hex"), "2026-09");
+  const names = await fs.readdir(companyDirectory), originals = new Map(await Promise.all(names.map(async name => [name, await fs.readFile(path.join(companyDirectory, name))])));
+  const rawFiles = [path.join(f.runDir, "manifest.json"), path.join(f.runDir, CSV), path.join(f.runDir, "details", "123_weekly.json")];
+  const raw = new Map(await Promise.all(rawFiles.map(async name => [name, await fs.readFile(name)])));
+  for (const method of ["capacityEvidence", "read"]) {
+    let boundaries = 0; const expected = await f.helper[method](f.request, f.data, { checkpoint: async () => { boundaries++; } }); assert.ok(boundaries >= 8);
+    for (let stop = 1; stop <= boundaries; stop++) {
+      let visited = 0, returned = false; const interrupted = Object.assign(Error("checkpoint"), { code: "ANALYTICAL_WORK_YIELDED" });
+      await assert.rejects((async () => { const value = await f.helper[method](f.request, f.data, { checkpoint: async () => { if (++visited === stop) throw interrupted; } }); returned = true; return value; })(), error => error === interrupted);
+      assert.equal(returned, false, "verified rows accumulated before interruption must not be returned as a normal partial result");
+      assert.deepEqual(await f.helper[method](f.request, f.data), expected);
+    }
+    await assert.rejects(f.helper[method](f.request, f.data, { checkpoint: null }), TypeError);
+  }
+  for (const name of names) assert.deepEqual(await fs.readFile(path.join(companyDirectory, name)), originals.get(name));
+  for (const name of rawFiles) assert.deepEqual(await fs.readFile(name), raw.get(name));
+});
 test("verified legacy products create immutable idempotent receipts and scope-bound certificates without modifying originals", async t => {
   const f = await fixture(t), original = await fs.readFile(path.join(f.runDir, "manifest.json"));
   const first = await f.helper.recover(f.input, f.data), second = await f.helper.recover(f.input, f.data);

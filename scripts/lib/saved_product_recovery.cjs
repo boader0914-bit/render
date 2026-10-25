@@ -320,13 +320,15 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
       && recoveryRowDigest(receiptCore(value)) === receiptId && instant(value.collectedAt), "RECOVERY_RECEIPT_INVALID");
     return value;
   }
-  async function walkVerified(request, data, consume, { companyIds = null } = {}) {
+  async function walkVerified(request, data, consume, { companyIds = null, checkpoint = async () => {} } = {}) {
+    if (typeof checkpoint !== "function") throw new TypeError("Recovery read checkpoint must be a function");
     const all = companies(data), warnings = [];
     need(/^\d{4}-(?:0[1-9]|1[0-2])$/.test(request?.month), "RECOVERY_REQUEST_INVALID");
     const targetIds = companyIds ? new Set(companyIds) : null;
     const targets = all.filter(value => (!targetIds || targetIds.has(value.companyId)) && (request.type !== "company" || value.companyId === request.targetId));
     await checkCatalog(data);
     for (const company of targets) {
+      await checkpoint();
       const targetDirectory = path.join(directory, hash(company.companyId), request.month);
       let names; try { names = await fs.readdir(targetDirectory); } catch (error) { if (error.code === "ENOENT") continue; throw error; }
       for (const location of [directory, path.dirname(targetDirectory), targetDirectory]) {
@@ -335,14 +337,19 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
       need(names.length <= 10000, "RECOVERY_RECEIPTS_TOO_MANY");
       for (const name of names.sort()) {
         if (!/^[a-f0-9]{64}\.json$/.test(name)) continue;
+        await checkpoint();
         try {
           const saved = await receipt(path.join(targetDirectory, name), name.slice(0, -5), company.companyId, request.month);
           const run = data.runs.find(value => String(value.id || value.runId || "") === saved.runId);
           need(run && quality(run) === "unknown", "RECOVERY_RUN_NOT_LEGACY");
           await verifyFiles(saved.sourceFiles);
+          await checkpoint();
           const value = await source(saved.runId, company, all, saved);
+          await checkpoint();
           await verifyFiles(saved.sourceFiles);
+          await checkpoint();
           await consume({ saved, value, company });
+          await checkpoint();
         } catch (error) {
           // A previously certified input disappearing/changing is a failed
           // refresh, never an empty successful replacement of the last good
@@ -364,9 +371,12 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
       collectedAt: saved.collectedAt, verifiedDates: value.verifiedDates, source: "certified_saved_product_response" });
   }
   async function capacityEvidence(request, data, options = {}) {
+    const { checkpoint = async () => {} } = options;
+    if (typeof checkpoint !== "function") throw new TypeError("Recovery read checkpoint must be a function");
     const evidence = [], months = new Set([request.month]), ids = options.companyIds ? new Set(options.companyIds) : null;
     for (const company of companies(data)) {
       if (ids && !ids.has(company.companyId) || request.type === "company" && company.companyId !== request.targetId) continue;
+      await checkpoint();
       const companyDirectory = path.join(directory, hash(company.companyId));
       let entries;
       try { entries = await fs.readdir(companyDirectory, { withFileTypes: true }); }
@@ -376,17 +386,21 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
         need(entry.isDirectory() && !entry.isSymbolicLink(), "RECOVERY_RECEIPT_PATH_INVALID"); months.add(entry.name);
       }
     }
-    for (const month of [...months].sort()) await walkVerified({ ...request, month }, data, entry => { evidence.push(...entryCapacityEvidence(entry)); }, options);
+    for (const month of [...months].sort()) {
+      await checkpoint();
+      await walkVerified({ ...request, month }, data, entry => { evidence.push(...entryCapacityEvidence(entry)); }, options);
+    }
     return evidence;
   }
-  async function read(request, data, { productCapacityEvidence = [] } = {}) {
-    const observations = [], evidence = [...productCapacityEvidence, ...await capacityEvidence(request, data)];
+  async function read(request, data, { productCapacityEvidence = [], checkpoint = async () => {} } = {}) {
+    if (typeof checkpoint !== "function") throw new TypeError("Recovery read checkpoint must be a function");
+    const observations = [], evidence = [...productCapacityEvidence, ...await capacityEvidence(request, data, { checkpoint })];
     const verified = await walkVerified(request, data, ({ saved, value, company }) => {
       const rows = build(value, company, request.month, saved.runId, evidence);
       for (const row of rows) observations.push({ row, certificate: { kind: KIND, companyId: company.companyId, runId: saved.runId,
         date: row.stayDate, productType: row.productType, collectedAt: saved.collectedAt, originalRunQuality: "unknown", receiptId: saved.receiptId,
         sourceDigest: recoveryRowDigest({ receiptId: saved.receiptId, sourceFiles: saved.sourceFiles }), rowDigest: recoveryRowDigest(row) } });
-    });
+    }, { checkpoint });
     await checkCatalog(data); return { observations, warnings: verified.warnings, productCapacityEvidence: evidence };
   }
   return { recover: (input, data) => schedule(() => recoverOwned(input, data)), read, capacityEvidence, directory };

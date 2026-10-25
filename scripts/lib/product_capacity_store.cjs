@@ -17,14 +17,16 @@ function createProductCapacityStore({ dataDir, outputsDir = path.join(dataDir, "
   const directory = path.join(path.resolve(dataDir), "company_integrated", "product_capacity_witnesses"), root = path.resolve(outputsDir);
   let serial = Promise.resolve();
   const filename = id => path.join(directory, hash(String(id)) + ".json");
-  async function descriptor(runId) {
+  async function descriptor(runId, checkpoint = null) {
     need(/^[A-Za-z0-9_-]{1,160}$/.test(runId), "PRODUCT_CAPACITY_SOURCE_INVALID");
     const runDirectory = path.join(root, runId), files = [];
     async function visit(current, relative = "", depth = 0) {
+      if (checkpoint) await checkpoint();
       need(depth <= 8, "PRODUCT_CAPACITY_SOURCE_INVALID");
       const stat = await fs.lstat(current, { bigint: true }); need(stat.isDirectory() && !stat.isSymbolicLink(), "PRODUCT_CAPACITY_SOURCE_INVALID");
       for (const entry of await fs.readdir(current, { withFileTypes: true })) {
         if (entry.name.endsWith(".tmp")) continue;
+        if (checkpoint) await checkpoint();
         const file = path.join(current, entry.name), name = relative ? relative + "/" + entry.name : entry.name;
         need(!entry.isSymbolicLink(), "PRODUCT_CAPACITY_SOURCE_INVALID");
         if (entry.isDirectory()) await visit(file, name, depth + 1);
@@ -38,8 +40,14 @@ function createProductCapacityStore({ dataDir, outputsDir = path.join(dataDir, "
     need(files.some(([name]) => name === "manifest.json"), "PRODUCT_CAPACITY_SOURCE_INVALID");
     return hash(files);
   }
-  async function readWithSignature(companyId, signature, descriptors = new Map()) {
-    let cacheFound = false;
+  async function readWithSignature(companyId, signature, descriptors = new Map(), { checkpoint = async () => {} } = {}) {
+    if (typeof checkpoint !== "function") throw new TypeError("Product witness read checkpoint must be a function");
+    let cacheFound = false, checkpointFailed = false, checkpointFailure;
+    const check = async () => {
+      try { await checkpoint(); }
+      catch (error) { checkpointFailed = true; checkpointFailure = error; throw error; }
+    };
+    await check();
     try {
       const file = filename(companyId), before = await fs.lstat(file, { bigint: true });
       cacheFound = true;
@@ -54,23 +62,30 @@ function createProductCapacityStore({ dataDir, outputsDir = path.join(dataDir, "
         && Number.isSafeInteger(row.count) && row.count > 0 && ["lodging", "dayuse"].includes(row.productType)
         && Number.isFinite(Date.parse(row.collectedAt)) && body.runs.some(run => run.id === row.runId)));
       for (const run of body.runs) {
-        if (!descriptors.has(run.id)) descriptors.set(run.id, descriptor(run.id));
+        await check();
+        if (!descriptors.has(run.id)) descriptors.set(run.id, descriptor(run.id, check));
         need(await descriptors.get(run.id) === run.descriptor, "PRODUCT_CAPACITY_SOURCE_CHANGED");
+        await check();
       }
       return { evidence: body.evidence, warning: null };
     } catch (error) {
+      // A scheduling interruption is not a corrupt optional witness. Propagate
+      // the caller's exact rejection so no partial evidence becomes a normal read.
+      if (checkpointFailed) throw checkpointFailure;
       return { evidence: [], warning: error.code === "ENOENT" && !cacheFound ? null : { code: error.code === "ENOENT" ? "PRODUCT_CAPACITY_SOURCE_UNAVAILABLE" : error.code || "PRODUCT_CAPACITY_CACHE_INVALID",
         message: "저장된 상품별 최대관측 근거를 재검증하지 못해 이번 원본 응답으로 계산했습니다." } };
     }
   }
-  const read = (company, descriptors = new Map()) => readWithSignature(company.companyId, correctionSignature(company), descriptors);
-  async function readForCompanies(companies) {
+  const read = (company, descriptors = new Map(), options) => readWithSignature(company.companyId, correctionSignature(company), descriptors, options);
+  async function readForCompanies(companies, { checkpoint = async () => {} } = {}) {
+    if (typeof checkpoint !== "function") throw new TypeError("Product witness read checkpoint must be a function");
     need(Array.isArray(companies));
     const descriptors = new Map(), evidence = [], warnings = [];
     const seen = new Set();
     for (const company of companies) {
+      await checkpoint();
       need(company?.companyId && !seen.has(company.companyId)); seen.add(company.companyId);
-      const saved = await read(company, descriptors);
+      const saved = await read(company, descriptors, { checkpoint });
       evidence.push(...saved.evidence);
       if (saved.warning) warnings.push({ companyId: company.companyId, ...saved.warning });
     }

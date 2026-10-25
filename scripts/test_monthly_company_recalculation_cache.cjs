@@ -91,7 +91,7 @@ test("generic callbacks retain their full-company contract for cold cache builds
   assert.equal(fallback.stats().runRowOversizeFallbacks,1);
 });
 
-test("explicit compact correction companies avoid full-body reads while broad sources never build or write cold run caches",async t=>{
+test("explicit compact correction companies avoid full-body reads while industry uses a separate run cache",async t=>{
   const f=await fixture(t), baseline=createMonthlyCompanyRecalculation({...f.options,cacheDirectory:null});
   const request={...f.request("a"),type:"industry",targetId:"__industry_all__"};
   const expected=await baseline(request,f.data);
@@ -100,7 +100,8 @@ test("explicit compact correction companies avoid full-body reads while broad so
   const helper=createMonthlyCompanyRecalculation({...f.options,projectCorrectionCompany:compactMonthlyCapacityCompany});
   assert.deepEqual(await helper(request,f.data),expected);
   assert.equal(helper.stats().runRowBuilds,0);assert.equal(helper.stats().companyProjectionsRead,0);
-  assert.equal(helper.stats().correctionCompanyProjections,2);assert.deepEqual(await fs.readdir(f.root),[]);
+  assert.equal(helper.stats().correctionCompanyProjections,2);assert.deepEqual(await fs.readdir(f.root),["industry_rows"]);
+  assert.equal(helper.stats().industryRunRowBuilds,1);assert.equal((await fs.readdir(path.join(f.root,"industry_rows"))).filter(name=>name.endsWith(".json")).length,1);
   const fallback=createMonthlyCompanyRecalculation({...f.options,projectCorrectionCompany:compactMonthlyCapacityCompany,maxCachedRunBytes:128});
   assert.equal((await fallback(f.request("a"),f.data))[0].supply,10);
   assert.equal(fallback.stats().runRowOversizeFallbacks,1);assert.equal(fallback.stats().companyProjectionsRead,0);

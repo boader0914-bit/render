@@ -1,6 +1,7 @@
 "use strict";
 
 const { AsyncLocalStorage, AsyncResource } = require("node:async_hooks");
+const { runWithCooperativeWork, YIELD_CODE } = require("./cooperative_work_checkpoint.cjs");
 
 function fault(code, name = "Error") { return Object.assign(new Error(code), { code, name }); }
 const aborted = () => fault("ANALYTICAL_WORK_ABORTED", "AbortError");
@@ -12,7 +13,8 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   highWatermark = 0.65, lowWatermark = 0.55, resumeSamples = 2,
   sampleIntervalMs = 1000, maxSampleAgeMs = 10000, now = Date.now,
   setTimeoutImpl = setTimeout, clearTimeoutImpl = clearTimeout,
-  onTaskTiming = null, timingHistoryLimit = 32 } = {}) {
+  onTaskTiming = null, timingHistoryLimit = 32, cooperativeYield = false,
+  cooperativeMinRunMs = 250, cooperativeMinProgress = 1 } = {}) {
   if (!Number.isSafeInteger(foregroundBurst) || foregroundBurst < 1
     || sampleMemory !== null && typeof sampleMemory !== "function"
     || !Number.isFinite(highWatermark) || highWatermark <= 0 || highWatermark > 1
@@ -22,7 +24,9 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     || !Number.isSafeInteger(maxSampleAgeMs) || maxSampleAgeMs < sampleIntervalMs
     || typeof now !== "function" || typeof setTimeoutImpl !== "function" || typeof clearTimeoutImpl !== "function"
     || onTaskTiming !== null && typeof onTaskTiming !== "function"
-    || !Number.isSafeInteger(timingHistoryLimit) || timingHistoryLimit < 0 || timingHistoryLimit > 128) {
+    || !Number.isSafeInteger(timingHistoryLimit) || timingHistoryLimit < 0 || timingHistoryLimit > 128
+    || typeof cooperativeYield !== "boolean" || !Number.isSafeInteger(cooperativeMinRunMs) || cooperativeMinRunMs < 0
+    || !Number.isSafeInteger(cooperativeMinProgress) || cooperativeMinProgress < 1) {
     throw new TypeError("Invalid analytical scheduler options");
   }
   const context = new AsyncLocalStorage(), foreground = [], background = [], idleWaiters = [];
@@ -45,7 +49,8 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   const waitClocks = { foreground: emptyWait(), background: emptyWait() };
   const timing = { enqueued: 0, started: 0, completed: 0, failed: 0, aborted: 0, closed: 0,
     queueWaitMs: 0, leaseMs: 0, ...emptyWait(), reentrantStarted: 0,
-    reentrantCompleted: 0, reentrantFailed: 0, reentrantLeaseMs: 0, callbackErrors: 0 };
+    reentrantCompleted: 0, reentrantFailed: 0, reentrantLeaseMs: 0, callbackErrors: 0,
+    yielded: 0, restarted: 0, reentrantYielded: 0, cooperativeCheckpoints: 0, maximumCheckpointGapMs: 0 };
   const recent = [];
   function accountWaiting() {
     const at = timestamp(), elapsed = Math.max(0, at - waitClockAt); waitClockAt = at;
@@ -73,15 +78,21 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   function recordTask(task, error, finishedAt = timestamp(), didFail = Boolean(error)) {
     const waits = task.reentrant ? emptyWait() : task.waits || taskWait(task, finishedAt);
     const code = didFail ? errorCode(error) : null;
-    const outcome = !didFail ? "completed" : code === "ANALYTICAL_WORK_ABORTED" ? "aborted"
+    const outcome = !didFail ? "completed" : code === YIELD_CODE && task.cooperativeYielded ? "yielded" : code === "ANALYTICAL_WORK_ABORTED" ? "aborted"
       : code === "ANALYTICAL_WORK_CLOSED" ? "closed" : "failed";
     const record = Object.freeze({ id: task.id, parentId: task.parentId || null, kind: task.kind, priority: task.priority,
       reentrant: Boolean(task.reentrant), queuedAt: task.queuedAt, startedAt: task.startedAt ?? null, finishedAt,
       queueWaitMs: task.reentrant ? 0 : Math.max(0, (task.startedAt ?? finishedAt) - task.queuedAt),
       leaseMs: task.startedAt === undefined ? 0 : Math.max(0, finishedAt - task.startedAt),
-      ...waits, outcome, errorCode: code });
+      ...waits, outcome, errorCode: code,
+      ...(task.cooperative ? { attempt: task.attempt, checkpoints: task.cooperative.checkpoints,
+        checkpointHighWater: task.checkpointHighWater || 0, phaseIndex: task.cooperative.phaseIndex,
+        checkpointsInPhase: task.cooperative.phaseCheckpoints, unitIndex: task.cooperative.unitIndex,
+        checkpointsInUnit: task.cooperative.unitCheckpoints,
+        progressHighWater: Object.freeze({ ...(task.progressHighWater || { phaseIndex: 0, unitIndex: 0, checkpoints: 0 }) }) } : {}) });
     if (task.reentrant) {
-      timing.reentrantCompleted += !didFail ? 1 : 0; timing.reentrantFailed += didFail ? 1 : 0;
+      timing.reentrantCompleted += !didFail ? 1 : 0;
+      if (outcome === "yielded") timing.reentrantYielded++; else timing.reentrantFailed += didFail ? 1 : 0;
       timing.reentrantLeaseMs += record.leaseMs;
     } else {
       timing[outcome]++; timing.queueWaitMs += record.queueWaitMs; timing.leaseMs += record.leaseMs;
@@ -153,6 +164,41 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     task.startedAt = accountWaiting(); task.waits = taskWait(task); timing.started++;
     const token = { id: task.id, controller, active: true, priority: task.priority, kind: task.kind };
     active = token;
+    task.attempt = (task.attempt || 0) + 1;
+    const eligible = cooperativeYield && task.priority === "background" && task.kind === "industry-build";
+    const cooperative = eligible ? {
+      enabled: true, yieldRequested: false, nonInterruptibleDepth: 0, checkpoints: 0, lastCheckpointAt: task.startedAt,
+      phaseIndex: 0, phaseCheckpoints: 0, unitIndex: 0, unitCheckpoints: 0,
+      isCurrent: () => token.active && active === token,
+      setPhase(index, unitIndex) {
+        // A warm retry may skip thousands of cold catalog checkpoints. Track
+        // ordered logical phases so that advancing into history/recalculation
+        // remains progress even when its absolute checkpoint count is lower.
+        // The same applies to a completed run unit whose warm cache skips its
+        // inner company checkpoints. Mark stable ordered runs independently.
+        if (index > this.phaseIndex) {
+          this.phaseIndex = index; this.phaseCheckpoints = 0; this.unitIndex = unitIndex; this.unitCheckpoints = 0;
+        } else if (index === this.phaseIndex && unitIndex > this.unitIndex) {
+          this.unitIndex = unitIndex; this.unitCheckpoints = 0;
+        }
+      },
+      checkpoint() {
+        const at = timestamp(), gap = Math.max(0, at - this.lastCheckpointAt);
+        this.lastCheckpointAt = at; this.checkpoints++; this.phaseCheckpoints++; this.unitCheckpoints++; timing.cooperativeCheckpoints++;
+        timing.maximumCheckpointGapMs = Math.max(timing.maximumCheckpointGapMs, gap);
+      },
+      shouldYield() {
+        const highWater = task.progressHighWater || { phaseIndex: 0, unitIndex: 0, checkpoints: 0 };
+        const advancesUnit = this.phaseIndex > highWater.phaseIndex
+          || this.phaseIndex === highWater.phaseIndex && this.unitIndex > highWater.unitIndex;
+        const progresses = advancesUnit ? this.unitCheckpoints >= cooperativeMinProgress
+          : this.phaseIndex === highWater.phaseIndex && this.unitIndex === highWater.unitIndex
+            && this.unitCheckpoints >= highWater.checkpoints + cooperativeMinProgress;
+        return foreground.length > 0 && timestamp() - task.startedAt >= cooperativeMinRunMs
+          && progresses;
+      }
+    } : null;
+    token.cooperative = cooperative; task.cooperative = cooperative;
     if (task.priority === "foreground") consecutiveForeground++;
     else { consecutiveForeground = 0; admittedSampleSequence = sampleSequence; }
     const info = { signal: controller.signal, priority: task.priority, kind: task.kind,
@@ -160,9 +206,33 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
         startedAt: task.startedAt, queueWaitMs: Math.max(0, task.startedAt - task.queuedAt), ...task.waits }) };
     const completed = (value, error, didFail) => {
       const finishedAt = accountWaiting();
+      const requestedYield = cooperative?.yieldRequested === true;
+      // Catch-all adapters may translate or swallow a checkpoint rejection.
+      // Only the scheduler's private owner flag authorizes retry, never an
+      // arbitrary error code supplied by a caller. The whole invoke promise
+      // has now settled, including its awaited cleanup and source-slot release.
+      if (requestedYield) {
+        task.cooperativeYielded = true;
+        didFail = true;
+        error = closed ? fault("ANALYTICAL_WORK_CLOSED") : task.signal?.aborted ? aborted() : fault(YIELD_CODE);
+      }
       token.active = false; task.signal?.removeEventListener("abort", onAbort);
       if (active === token) active = null;
       recordTask(task, error, finishedAt, didFail);
+      if (requestedYield && !closed && !task.signal?.aborted) {
+        task.checkpointHighWater = Math.max(task.checkpointHighWater || 0, cooperative.checkpoints);
+        task.progressHighWater = { phaseIndex: cooperative.phaseIndex, unitIndex: cooperative.unitIndex, checkpoints: cooperative.unitCheckpoints };
+        // The original caller keeps one pending promise. Retry only its small
+        // operation closure; do not retain an allocation/result from the old
+        // attempt, and do not mark the durable industry job as failed/complete.
+        task.queuedAt = accountWaiting(); task.waitStart = { ...waitClocks[task.priority] };
+        delete task.startedAt; delete task.waits; delete task.cooperativeYielded; task.cooperative = null;
+        background.push(task); timing.restarted++; task.attach();
+        settleIdle(); pump(); return;
+      }
+      // A timing observer may synchronously abort/close the scheduler. It
+      // cannot turn a canceled retry into an escaped internal yield error.
+      if (requestedYield && (closed || task.signal?.aborted)) error = closed ? fault("ANALYTICAL_WORK_CLOSED") : aborted();
       if (didFail) task.reject(error); else task.resolve(value);
       settleIdle(); pump();
     };
@@ -204,23 +274,29 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       timing.reentrantStarted++;
       const info = { signal: owner.controller.signal, priority: owner.priority, kind,
         timing: Object.freeze({ id: task.id, parentId: owner.id, reentrant: true, queuedAt: at, startedAt: at, queueWaitMs: 0, ...emptyWait() }) };
-      return Promise.resolve().then(() => operation(info)).then(value => { recordTask(task, null); return value; },
-        error => { recordTask(task, error, timestamp(), true); throw error; });
+      return Promise.resolve().then(() => operation(info)).then(value => {
+        if (owner.cooperative?.yieldRequested) { const error = fault(YIELD_CODE); task.cooperativeYielded = true; recordTask(task, error, timestamp(), true); throw error; }
+        recordTask(task, null); return value; },
+        error => { const failure = owner.cooperative?.yieldRequested ? fault(YIELD_CODE) : error;
+          task.cooperativeYielded = owner.cooperative?.yieldRequested === true;
+          recordTask(task, failure, timestamp(), true); throw failure; });
     }
     return new Promise((resolve, reject) => {
       const queue = priority === "foreground" ? foreground : background;
       // A queued task may be pumped by another collection lane. Restore the
       // enqueuing caller's other async stores before assigning our new owner.
-      const invoke = AsyncResource.bind((token, info) => context.run(token, () => operation(info)));
+      const invoke = AsyncResource.bind((token, info) => context.run(token,
+        () => runWithCooperativeWork(token.cooperative, () => operation(info))));
       const queuedAt = accountWaiting();
       const task = { id: ++taskSequence, invoke, priority, kind, signal, resolve, reject, queuedAt,
-        waitStart: { ...waitClocks[priority] }, onTaskTiming: taskCallback, cleanup: () => signal?.removeEventListener("abort", onAbort) };
+        waitStart: { ...waitClocks[priority] }, onTaskTiming: taskCallback, cleanup: () => signal?.removeEventListener("abort", onAbort),
+        attach: () => signal?.addEventListener("abort", onAbort, { once: true }) };
       const onAbort = () => {
         const index = queue.indexOf(task);
         if (index !== -1) { const at = accountWaiting(); queue.splice(index, 1); task.cleanup(); const error = aborted();
           recordTask(task, error, at); reject(error); if (!background.length) clearPoll(); pump(); }
       };
-      timing.enqueued++; queue.push(task); signal?.addEventListener("abort", onAbort, { once: true }); pump();
+      timing.enqueued++; queue.push(task); task.attach(); pump();
     });
   }
   async function checkpointPressure() {
@@ -231,7 +307,15 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   function status() {
     return { closed, active: Boolean(active), activePriority: active?.priority || null, activeKind: active?.kind || null,
       queuedForeground: foreground.length, queuedBackground: background.length, sampling: Boolean(sampling), memory: memoryStatus(),
-      timing: { ...timing, historyLimit: timingHistoryLimit, recent: recent.map(row => ({ ...row })),
+      cooperative: { enabled: cooperativeYield, minRunMs: cooperativeMinRunMs, minProgressCheckpoints: cooperativeMinProgress,
+        activeEligible: Boolean(active?.cooperative), activeCheckpoints: active?.cooperative?.checkpoints || 0,
+        activePhaseIndex: active?.cooperative?.phaseIndex || 0,
+        activeCheckpointsInPhase: active?.cooperative?.phaseCheckpoints || 0,
+        activeUnitIndex: active?.cooperative?.unitIndex || 0,
+        activeCheckpointsInUnit: active?.cooperative?.unitCheckpoints || 0,
+        yieldRequested: active?.cooperative?.yieldRequested || false },
+      timing: { ...timing, historyLimit: timingHistoryLimit, recent: recent.map(row => ({ ...row,
+        ...(row.progressHighWater ? { progressHighWater: { ...row.progressHighWater } } : {}) })),
         interpretation: "Exclusive lease wall time includes I/O, not only CPU. Reentrant wall time overlaps its parent and is excluded from exclusive totals. Wait reasons are disjoint; busy ownership precedes memory pressure. Queue wait totals sum per task and can overlap across queued tasks; they are not elapsed scheduler uptime." } };
   }
   async function close() {

@@ -11,6 +11,7 @@ const { createSourceReadScheduler } = require("./source_read_scheduler.cjs");
 const { createMonthlyReportMaterializedCache } = require("./monthly_report_materialized_cache.cjs");
 const { readCompanyMasterProjection } = require("./company_master_stream.cjs");
 const { createMonthlyCompanySourceCatalog } = require("./monthly_company_source_catalog.cjs");
+const { assertCooperativeWorkActive, runNonInterruptibleCooperativeWork, setCooperativeWorkPhase } = require("./cooperative_work_checkpoint.cjs");
 
 const token = value => String(value || "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
 function sourceError() { return Object.assign(new Error("월간 집계에 필요한 저장자료를 읽지 못했습니다. 원본 상태를 확인해 주세요."), { statusCode: 503, code: "MONTHLY_SOURCE_UNAVAILABLE" }); }
@@ -202,6 +203,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
   const options = readOptions;
   async function readSourceData(request, includeCatalog, options, data, assertAtReturn = true) {
     const { includeContext = true } = options, checkpoint = checkpointFor(options);
+    setCooperativeWorkPhase(20);
     // This capability is private to one serial source read, not a timed or
     // global freshness cache. The final fresh assert (here or in the owning
     // catalog continuation) remains mandatory after a cache hit, fallback,
@@ -294,6 +296,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
         if (!Number.isSafeInteger(malformedHistoryLines) || malformedHistoryLines < 0) throw sourceError();
       } catch { throw sourceError(); }
     }
+    setCooperativeWorkPhase(30);
     const rankObservations = [], diagnosticRankRows = [];
     let companyIndex = 0;
     for (const [id, company] of data.rawCompanies) {
@@ -350,6 +353,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     let productCapacityEvidence = [], productCapacityWarnings = [], productCapacityEvidenceRevision = null;
     if (recalculateCompanyObservations !== null) {
       try {
+        setCooperativeWorkPhase(40);
         await checkpoint();
         const recalculated = await recalculateCompanyObservations(request, data, { checkpoint,
           ...(sourceReadValidationBoundary ? { sourceReadValidationBoundary } : {}) });
@@ -366,6 +370,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     let savedProductRecoveries = [], recoveryWarnings = [];
     if (readSavedProductRecoveries !== null && request.type !== "keyword") {
       try {
+        setCooperativeWorkPhase(50);
         const recovered = await readSavedProductRecoveries(request, data, { checkpoint, productCapacityEvidence });
         if (!Array.isArray(recovered?.observations) || !Array.isArray(recovered?.warnings)) throw sourceError();
         savedProductRecoveries = recovered.observations;
@@ -389,6 +394,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     if (globalUnmatchedCompanyRows) globalWarnings.push(`전체 DB 참고: 대상 밖이거나 관련성을 확정할 수 없는 업체 미식별 관측 ${globalUnmatchedCompanyRows}건이 있습니다.`);
     if (globalDuplicatePlaceCompanies) globalWarnings.push(`전체 DB 참고: 이 리포트 대상 밖에 플레이스 번호가 중복 연결된 업체 ${globalDuplicatePlaceCompanies}개가 있습니다.`);
     if (request.type === "region" && unmappedRegionCompanies) globalWarnings.push(`전체 DB 참고: 소재지가 미확정인 업체 ${unmappedRegionCompanies}개는 선택 지역에 포함되는지 알 수 없어 이 리포트의 품질 평가와 분리했습니다.`);
+    setCooperativeWorkPhase(60);
     let context = null;
     if (includeContext) {
       try { context = await readContext(request, { ...data, companies: data.companies.filter(company => scopeIds.has(company.companyId) && !conflictingCompanyIds.has(company.companyId)) }); }
@@ -426,6 +432,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     } finally { sourceReadActive = false; }
   }
   async function readSources(request, includeCatalog, options = {}) {
+    setCooperativeWorkPhase(10);
     const checkpoint = checkpointFor(options);
     sourceMetrics.sourceReads++;
     const acquired = () => {
@@ -434,10 +441,14 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
       if (request.type === "company") sourceMetrics.companyProjectionReads++;
     };
     const finish = async result => {
+      setCooperativeWorkPhase(70);
+      // A translated/handled inner error must not publish an incomplete source
+      // after a cooperative retry was requested. Keep publication indivisible.
+      assertCooperativeWorkActive();
       const source = includeCatalog ? result.source : result, publication = source?._productCapacityPublication;
       if (publication) {
         delete source._productCapacityPublication;
-        try { await publishProductCapacityEvidence(publication.evidence, publication); }
+        try { await runNonInterruptibleCooperativeWork(() => publishProductCapacityEvidence(publication.evidence, publication)); }
         catch (error) {
           if (["MONTHLY_COMPANY_SOURCE_CHANGED", "MONTHLY_COMPANY_SOURCE_REVISION_UNAVAILABLE", "MONTHLY_SOURCE_UNAVAILABLE"].includes(error.code)) throw sourceError();
           // A derived witness cache cannot turn a verified source read into
@@ -445,6 +456,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
           source.warnings.push("상품별 최대관측 근거 저장을 완료하지 못했습니다. 현재 검증된 원본 계산은 유지됩니다.");
         }
       }
+      assertCooperativeWorkActive();
       return result;
     };
     if (companySourceCatalog && useSourceReadValidationBoundary) {
