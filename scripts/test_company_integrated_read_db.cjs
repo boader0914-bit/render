@@ -239,9 +239,8 @@ test('Korea midnight during cached verification cannot certify the previous curr
   assert.notEqual((await f.service.get(ID,{month:'2026-10'})).status,'ready');
 });
 
-test('the real cached source provider and wrapper certify during a background checkpoint without replay or a raw read',async t=>{
+async function realRevisionFixture(t){
   const {createCompanyIntegratedSourceRevision}=require('./lib/company_integrated_source_revision.cjs');
-  const {createSourceReadScheduler}=require('./lib/source_read_scheduler.cjs');
   const write=async(root,name,value)=>{const file=path.join(root,name);await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,typeof value==='string'?value:JSON.stringify(value));};
   let reader;
   const f=await fixture(t,{configure:async({root,scheduler,company,raw,source,options})=>{
@@ -256,7 +255,12 @@ test('the real cached source provider and wrapper certify during a background ch
   }});
   await f.service.queueCompany(ID,{months:[MONTH]});await f.service.refreshMonth(ID,{month:MONTH});
   await f.service.drain();await f.service.queueCompany(ID,{months:['2026-10','2026-11']});
-  await reader.prepare();const reads=f.reads.length,queue=await fs.readFile(f.queueFile),month=await fs.readFile(f.monthFile);
+  await reader.prepare();return {...f,reader,write};
+}
+
+test('the real cached source provider and wrapper certify during a background checkpoint without replay or a raw read',async t=>{
+  const {createSourceReadScheduler}=require('./lib/source_read_scheduler.cjs');
+  const f=await realRevisionFixture(t),reads=f.reads.length,queue=await fs.readFile(f.queueFile),month=await fs.readFile(f.monthFile);
   const entered=gate(),proceed=gate(),sourceScheduler=createSourceReadScheduler();let attempts=0;
   t.after(()=>proceed.resolve());
   const background=f.scheduler.run(async()=>{attempts++;entered.resolve();await proceed.promise;await sourceScheduler.checkpoint({priority:'background',kind:'industry-build'});return 'continued';},{priority:'background',kind:'industry-build'});
@@ -265,4 +269,43 @@ test('the real cached source provider and wrapper certify during a background ch
   assert.equal(attempts,1);assert.equal(f.scheduler.status().timing.restarted,0);assert.equal(f.scheduler.status().timing.checkpointReadCompleted,1);
   assert.equal(f.reads.length,reads,'the real revision cache did not fall back to normal source reads');
   assert.deepEqual(await fs.readFile(f.queueFile),queue);assert.deepEqual(await fs.readFile(f.monthFile),month);
+});
+
+test('the final real source inspection detects review, deletion, merge and capacity races without a duplicate metadata read',async t=>{
+  for(const change of ['review','deleted','merged','capacity']){
+    const f=await realRevisionFixture(t),month=await fs.readFile(f.monthFile),queue=await fs.readFile(f.queueFile),rename=fs.rename;let changed=false;
+    fs.rename=async(from,to)=>{const result=await rename(from,to);if(to===f.proofFile&&!changed){changed=true;
+      if(change==='capacity')await f.write(f.root,'company_integrated/capacity-bases.json',{schemaVersion:1,companies:{[ID]:{count:20}}});
+      else{const file=path.join(f.root,'company_master/companies.json'),master=JSON.parse(await fs.readFile(file,'utf8'));
+        if(change==='review')master.companies[ID].manualCorrection.revision=2;
+        if(change==='deleted')master.companies[ID].deletedAt='2026-10-25T01:00:00Z';
+        if(change==='merged')master.companies[ID].mergedIntoCompanyId='cmp_other';
+        await fs.writeFile(file,JSON.stringify(master));}
+    }return result;};
+    try{assert.equal(await f.service.tryCachedMonth(ID,{month:MONTH}),null,change);assert.equal(changed,true);}
+    finally{fs.rename=rename;}
+    assert.equal(f.service.cacheReadsStats().verified,0,change);assert.deepEqual(await fs.readFile(f.monthFile),month);assert.deepEqual(await fs.readFile(f.queueFile),queue);
+  }
+});
+
+test('cached-read diagnostics are synchronous detached controlled counters and the real GET exposes them only after admin authentication',async t=>{
+  const f=await fixture(t,{cached:true});
+  assert.deepEqual(f.service.cacheReadsStats(),{attempts:0,verified:0,misses:0,reasons:{}},'diagnostics do not initialize, read or schedule any store');
+  await staleProof(f);await f.service.tryCachedMonth(ID,{month:MONTH});f.state.cachedMetaMiss=true;await f.service.tryCachedMonth(ID,{month:MONTH});
+  const expected=f.service.cacheReadsStats();assert.equal(expected.verified,1);assert.equal(expected.reasons.metadata,1);
+  const detached=f.service.cacheReadsStats();detached.reasons.injected_private_value=99;assert.equal(f.service.cacheReadsStats().reasons.injected_private_value,undefined);
+  assert.ok(!JSON.stringify(expected).includes(ID));
+  const source=(await fs.readFile(path.join(__dirname,'glamping_app_server.cjs'),'utf8')).replace(/\r\n/g,'\n');
+  const start=source.indexOf('    if (reqUrl.pathname === "/api/analytical-work") {'),end=source.indexOf('\n    if (reqUrl.pathname === "/api/collection-postprocess") {',start);
+  assert.ok(start>0&&end>start);let authorized=false,calls=0;
+  const context={reqUrl:new URL('https://staydatalab.test/api/analytical-work'),req:{method:'GET'},res:{},session:{},
+    requireAdminSession:()=>authorized,send:(_res,status,body)=>({status,body}),
+    companyIntegratedDb:{cacheReadsStats:()=>{calls++;return f.service.cacheReadsStats();}},
+    analyticalWork:{status:()=>({})},analyticalMemory:{status:()=>({})},runtimeResponsiveness:{status:()=>({})},
+    historyObservationIndex:{describe:()=>({}),stats:()=>({})},monthlyReportSources:{},
+    recalculateMonthlyCompanyObservations:{stats:()=>({})},savedProductRecovery:{},productCapacityStore:{}};
+  const run=()=>vm.runInNewContext('(async()=>{'+source.slice(start,end)+'})()',context);
+  assert.equal(await run(),undefined);assert.equal(calls,0);authorized=true;
+  const result=await run();assert.equal(result.status,200);assert.deepEqual(result.body.companyIntegratedRead,expected);assert.equal(calls,1);
+  context.req.method='POST';assert.equal((await run()).status,405);assert.equal(calls,1);
 });

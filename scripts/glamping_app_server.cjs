@@ -19422,6 +19422,7 @@ async function route(req, res) {
       // originals or acquire the analytical work lease merely to report it.
       const historyIndex = historyObservationIndex.describe();
       return send(res, 200, { work: analyticalWork.status(), memory: analyticalMemory.status(), responsiveness: runtimeResponsiveness.status(),
+        companyIntegratedRead: companyIntegratedDb.cacheReadsStats(),
         monthlySources: typeof monthlyReportSources.sourceReadMetrics === "function" ? monthlyReportSources.sourceReadMetrics() : null,
         monthlyRecalculation: recalculateMonthlyCompanyObservations.stats(),
         savedProductRecovery: typeof savedProductRecovery.stats === "function" ? savedProductRecovery.stats() : null,

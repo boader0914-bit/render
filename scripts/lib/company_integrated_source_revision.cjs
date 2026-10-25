@@ -47,7 +47,7 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
         ? value.contentDigests[label] !== null : !/^[a-f0-9]{64}$/.test(value.contentDigests[label] || "")))) throw fault("COMPANY_SOURCE_REVISION_INDEX_INVALID");
     cached = value; initialized = true; cachedIndexStat = sig; return cached;
   }
-  async function inventory(checkpoint = () => {}) {
+  async function inventory(checkpoint = () => {}, scopedRunIds = null) {
     const metadata = {}, paths = {};
     async function file(label, filename) { checkpoint(); const value = await stat(filename); checkpoint(); paths[label] = filename;
       if (!value) { metadata[label] = null; return; } requireValid(value.isFile()); metadata[label] = signature(value); }
@@ -67,7 +67,19 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
     await file("regions", path.resolve(regionMasterFile));
     if (tourismRegionMapFile) await file("tourism-map", path.resolve(tourismRegionMapFile));
     for (let index = 0; index < codeFiles.length; index++) await file("engine/" + index, codeFiles[index]);
-    await tree("runs", output, label => /\.(?:json|jsonl|csv|xlsx|md|html|png)$/i.test(label));
+    const runFile = label => /\.(?:json|jsonl|csv|xlsx|md|html|png)$/i.test(label);
+    if (scopedRunIds === null) await tree("runs", output, runFile);
+    else {
+      // Membership outside these runs cannot affect this scope while original
+      // master/history, receipts and witness identities remain unchanged. Each
+      // included run is still walked in full, so new/removed nested files count.
+      checkpoint(); const before = await stat(output); checkpoint();
+      if (before) {
+        requireValid(before.isDirectory());
+        for (const runId of scopedRunIds) await tree("runs/" + runId, path.join(output, runId), runFile);
+        const after = await stat(output); checkpoint(); requireValid(after && signature(before) === signature(after));
+      }
+    }
     await tree("recoveries", path.join(root, "history", "saved_product_recoveries"), label => label.endsWith(".json"));
     await tree("product-capacity", productCapacityStore.directory, label => /^product-capacity\/[a-f0-9]{64}[.]json$/.test(label));
     await tree("calendar", path.join(root, "history", "special_days"), label => label.endsWith(".json"));
@@ -337,13 +349,13 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
       const runIds = Array.isArray(body?.runs) ? [...new Set(body.runs.map(run => run?.id).filter(value => typeof value === "string"))].sort() : [];
       const dependency = hash([contentDigests[label], company.productCapacityCorrectionSignature,
         runIds.map(runId => [runId, (runStatMetadataById[runId] || []).sort()])]);
-      if (parts.productCapacity[id]?.dependency === dependency) continue;
+      if (parts.productCapacity[id]?.dependency === dependency && Array.isArray(parts.productCapacity[id].sourceRunIds)) continue;
       const checked = await productCapacityStore.readWithSignature(id, company.productCapacityCorrectionSignature, descriptors);
       // Only validated semantic evidence enters monthly revision tokens. The
       // derived file's own sourceRevision/checksum/stat are deliberately not
       // semantic inputs: writing an equivalent proof must not feed back into
       // an endless recalculate/write/invalidate loop.
-      parts.productCapacity[id] = { dependency, correctionSignature: company.productCapacityCorrectionSignature,
+      parts.productCapacity[id] = { dependency, sourceRunIds: runIds, correctionSignature: company.productCapacityCorrectionSignature,
         evidence: compactProductCapacityEvidence(checked.evidence).map(row => ({ companyId: id, productId: row.productId,
           productType: row.productType, count: row.count, collectedAt: row.collectedAt, sourceDate: row.sourceDate || "", runId: row.runId, source: row.source || "" })),
         warning: checked.warning?.code || null };
@@ -419,20 +431,40 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
     const miss = Symbol("cached revision miss");
     const checkpoint = () => { if (signal?.aborted || performance.now() >= deadline
       || cached !== snapshot || cachedIndexStat !== indexSignature) throw miss; };
-    const sameMetadata = metadata => {
-      const keys = Object.keys(metadata), expected = snapshot.metadata;
-      if (keys.length !== Object.keys(expected).length) return false;
-      for (const key of keys) { checkpoint(); if (!Object.hasOwn(expected, key) || expected[key] !== metadata[key]) return false; }
-      return true;
-    };
     const indexUnchanged = async () => { checkpoint(); const value = await stat(indexFile); checkpoint();
       return value?.isFile() && signature(value) === indexSignature; };
     try {
-      if (!await indexUnchanged() || !sameMetadata((await inventory(checkpoint)).metadata)) return null;
       const prepared = snapshot.prepared, company = prepared.companies[scope.companyId];
+      const masterCompany = snapshot.parts.master?.companies?.[scope.companyId];
+      if (!masterCompany || !Array.isArray(masterCompany.knownRuns)) return null;
+      const runIds = new Set(masterCompany.knownRuns);
+      const addRuns = values => { for (const value of values || []) { checkpoint();
+        if (typeof value !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,199}$/.test(value)) throw miss;
+        runIds.add(value); if (runIds.size > 10000) throw miss; } };
+      addRuns([...runIds]);
+      for (const values of Object.values(snapshot.parts.history?.runRefs?.[scope.companyId] || {})) addRuns(values);
+      addRuns((company.runs || []).map(run => run.id));
+      addRuns((company.capacityRecoveries || []).map(receipt => receipt.runId));
+      for (const receipt of Object.values(snapshot.parts.recoveryFiles || {})) if (receipt.companyId === scope.companyId) addRuns([receipt.runId]);
+      addRuns((company.productCapacity?.evidence || []).map(row => row.runId));
+      if (snapshot.metadata["product-capacity/" + hash(scope.companyId) + ".json"]) {
+        const retainedRuns = snapshot.parts.productCapacity?.[scope.companyId]?.sourceRunIds;
+        if (!Array.isArray(retainedRuns)) return null;
+        addRuns(retainedRuns);
+      }
+      const expectedKeys = Object.keys(snapshot.metadata).filter(key => !key.startsWith("runs/") || runIds.has(key.split("/")[1]));
+      const sameMetadata = metadata => {
+        const keys = Object.keys(metadata);
+        if (keys.length !== expectedKeys.length) return false;
+        for (const key of keys) { checkpoint(); if (!Object.hasOwn(snapshot.metadata, key) || snapshot.metadata[key] !== metadata[key]) return false; }
+        return true;
+      };
+      if (!await indexUnchanged() || !sameMetadata((await inventory(checkpoint, runIds)).metadata)) return null;
       const months = [scope.month, previousMonth(scope.month)], years = [...new Set(months.flatMap(value =>
         [value.slice(0, 4), ...(value.endsWith("-12") ? [String(Number(value.slice(0, 4)) + 1)] : [])]))];
-      const scoped = { version: VERSION, revision: prepared.revision, companies: { [scope.companyId]: company },
+      // Only forScope with this requested scope is certified here. Do not
+      // expose the cached global revision: unrelated run trees were skipped.
+      const scoped = { version: VERSION, companies: { [scope.companyId]: company },
         context: { monthly: { [company.regionKey]: Object.fromEntries(months.filter(month =>
           Object.hasOwn(prepared.context.monthly[company.regionKey] || {}, month)).map(month => [month, prepared.context.monthly[company.regionKey][month]])) },
           years: Object.fromEntries(years.filter(year => Object.hasOwn(prepared.context.years, year)).map(year => [year, prepared.context.years[year]])) },
@@ -451,10 +483,10 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
         if (bytes > 2 * 1024 * 1024) throw miss;
       };
       bounded(scoped); const result = structuredClone(scoped); checkpoint();
-      // Recheck all original metadata, not only the selected run, and the
-      // durable index identity after cloning. Cross-file capacity publications
-      // or a concurrent normal prepare therefore cannot certify a mixed view.
-      if (!sameMetadata((await inventory(checkpoint)).metadata) || !await indexUnchanged()) return null;
+      // All non-run metadata stays conservative and global. Recheck every
+      // selected run tree and the durable index after cloning, so cross-file
+      // publications or a concurrent prepare cannot certify a mixed view.
+      if (!sameMetadata((await inventory(checkpoint, runIds)).metadata) || !await indexUnchanged()) return null;
       checkpoint(); return result;
     } catch { return null; }
   }

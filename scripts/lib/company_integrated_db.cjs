@@ -111,6 +111,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, catalogCache
   let dispatchHolds = 0;
   const cachedReads = { attempts: 0, verified: 0, misses: 0, reasons: {} };
   const cachedMiss = reason => { cachedReads.misses++; cachedReads.reasons[reason] = (cachedReads.reasons[reason] || 0) + 1; return null; };
+  const cacheReadsStats = () => ({ ...cachedReads, reasons: { ...cachedReads.reasons } });
   const dispatchWaiters = new Set();
   function wakeDispatchWaiters() { for (const resolve of dispatchWaiters) resolve(); dispatchWaiters.clear(); }
   // Writers may persist several company jobs and their source history as one
@@ -572,7 +573,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, catalogCache
     return { schemaVersion: SCHEMA_VERSION, calculationVersion, active: Boolean(workerPromise), errorCode: storeError || state.bootstrap?.errorCode || null,
       bootstrap: state.bootstrap ? clone(state.bootstrap) : null,
       counts: Object.values(state.jobs).reduce((counts, job) => { counts[job.status] = (counts[job.status] || 0) + 1; return counts; }, {}),
-      cachedReads: { ...cachedReads, reasons: { ...cachedReads.reasons } },
+      cachedReads: cacheReadsStats(),
       jobs: Object.values(state.jobs).map(job => ({ companyId: job.companyId, status: job.status, generation: job.generation,
         months: job.months, errorCode: job.errorCode, updatedAt: job.updatedAt, startedAt: job.startedAt, finishedAt: job.finishedAt })) };
   }
@@ -698,9 +699,9 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, catalogCache
         if (!proof || !currentState()) return miss();
         await atomicJson(refreshProofPath(companyId, selectedMonth), proof);
         if (!currentState()) return miss();
-        stage = "post_metadata";
-        const afterMetadata = await catalogCached(companyId, { budgetMs: remaining(350), signal });
-        if (!currentState() || !metadataValid(afterMetadata) || metadataRevision(metadata) !== metadataRevision(afterMetadata)) return miss();
+        // The final scope inspection includes the original master, reviewed
+        // capacity and their cached-index identity. It also fences membership,
+        // merges and metadata, without repeating the compact-catalog scan.
         stage = "post_source_revision";
         const after = await readRevision.prepareFreshCached({ scope, budgetMs: remaining(500), signal });
         if (!after || !currentState() || await readRevision.forScope(after, scope) !== revision || !await filesCurrent() || !currentState()) return miss();
@@ -771,7 +772,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, catalogCache
     return readResult(companyId, metadata, { selectedMonth, selected, rows, refreshedProof, selectedVerificationError, savedPreview });
   }
   async function stop() { stopped = true; wakeDispatchWaiters(); if (bootstrapPromise) await bootstrapPromise.catch(() => {}); if (workerPromise) await workerPromise; await serial; }
-  return { bootstrap, queueCompany, queueRun, deferProcessing, refreshMonth, tryCachedMonth, get, status, drain, stop };
+  return { bootstrap, queueCompany, queueRun, deferProcessing, refreshMonth, tryCachedMonth, cacheReadsStats, get, status, drain, stop };
 }
 
 module.exports = { createCompanyIntegratedDb, COMPANY_INTEGRATED_SCHEMA_VERSION: SCHEMA_VERSION, COMPANY_INTEGRATED_CALCULATION_VERSION: CALCULATION_VERSION };

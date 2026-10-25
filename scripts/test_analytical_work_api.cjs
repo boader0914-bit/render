@@ -59,7 +59,19 @@ async function main() {
     const beforeRotation = await request("/api/collection-rotation", { cookie: admin });
     const beforeCollector = await request("/api/collector-status", { cookie: admin });
     const diagnostics = await request(route, { cookie: admin });
-    assert.equal(diagnostics.status, 200); assert.deepEqual(Object.keys(diagnostics.data).sort(), ["memory", "monthlyRecalculation", "monthlySources", "observationIndex", "productCapacityVerification", "responsiveness", "savedProductRecovery", "work"]);
+    assert.equal(diagnostics.status, 200); assert.deepEqual(Object.keys(diagnostics.data).sort(), ["companyIntegratedRead", "memory", "monthlyRecalculation", "monthlySources", "observationIndex", "productCapacityVerification", "responsiveness", "savedProductRecovery", "work"]);
+    const companyRead = diagnostics.data.companyIntegratedRead;
+    assert.deepEqual(Object.keys(companyRead).sort(), ["attempts", "misses", "reasons", "verified"]);
+    for (const key of ["attempts", "misses", "verified"]) assert.ok(Number.isSafeInteger(companyRead[key]) && companyRead[key] >= 0, "companyIntegratedRead." + key);
+    assert.ok(companyRead.reasons && typeof companyRead.reasons === "object" && !Array.isArray(companyRead.reasons));
+    const controlledReasons = new Set(["unavailable", "writer_busy", "budget_or_abort", "index", "stored_month", "metadata", "source_revision", "reuse_proof", "month_summaries", "publication", "post_source_revision"]);
+    for (const [reason, count] of Object.entries(companyRead.reasons)) {
+      assert.ok(controlledReasons.has(reason), "cached-read failures expose only controlled stage codes");
+      assert.ok(Number.isSafeInteger(count) && count >= 0);
+    }
+    const companyReadText = JSON.stringify(companyRead);
+    for (const forbidden of [password, "pressure-admin", "pressure-member", dataDir, "companyId", "sourceRevision", "cutoffDate", "cookie", "token", "payload"])
+      assert.equal(companyReadText.includes(forbidden), false, "cached-read diagnostics contain no customer, source or credential values");
     assert.equal(diagnostics.data.responsiveness.enabled, true);
     assert.ok(["monitoring", "unavailable"].includes(diagnostics.data.responsiveness.state));
     assert.ok(Array.isArray(diagnostics.data.responsiveness.history));
@@ -97,7 +109,10 @@ async function main() {
     for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
       assert.equal((await request(route, { cookie: admin, method, body: { reset: true } })).status, 405, method + " cannot modify pressure or queues");
     }
-    for (let index = 0; index < 3; index++) assert.equal((await request(route, { cookie: admin })).status, 200);
+    for (let index = 0; index < 3; index++) {
+      const repeated = await request(route, { cookie: admin }); assert.equal(repeated.status, 200);
+      assert.deepEqual(repeated.data.companyIntegratedRead, companyRead, "diagnostic GET does not start a company verification or alter its counters");
+    }
     const afterRotation = await request("/api/collection-rotation", { cookie: admin });
     assert.equal(afterRotation.data.enabled, beforeRotation.data.enabled);
     assert.deepEqual(afterRotation.data.config, beforeRotation.data.config, "GET diagnostics and rejected methods cannot modify reservation definitions");
