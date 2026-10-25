@@ -250,7 +250,30 @@ function createCompanyIntegratedCatalog({ dataDir, catalog, readRevision, readPr
     // Never return an old company after an original deletion or reviewed merge.
     return readCatalog(options);
   }
-  return { catalog: readCatalog, prepare: readCatalog, preview,
+  async function cachedCompany(companyId, { budgetMs = 350 } = {}) {
+    // A cooperative validation window may borrow only an already-built compact
+    // projection. Never fall through to ensureBuilt or a complete inventory.
+    if (typeof companyId !== "string" || !companyId || companyId.length > 300
+      || /[\x00-\x1f\x7f]/.test(companyId) || !Number.isFinite(budgetMs) || budgetMs <= 0) return null;
+    const started = performance.now(), currentEpoch = epoch;
+    const inBudget = () => epoch === currentEpoch && performance.now() - started <= budgetMs;
+    try {
+      const before = await revision();
+      if (!inBudget()) return null;
+      const candidate = memory || await saved();
+      if (!inBudget() || candidate?.sourceRevision !== before) return null;
+      const company = candidate.value.companies.find(row => identity(row) === companyId);
+      const raw = candidate.value.rawCompanies.find(row => row[0] === companyId)?.[1];
+      if (!company || company.deletedAt || company.mergedIntoCompanyId || raw?.deletedAt || raw?.mergedIntoCompanyId) return null;
+      const result = clone({ company, raw, data: { runs: candidate.value.runs } });
+      // Keep this original/capacity identity check last. A source change,
+      // deletion, invalidation or publication race is a miss for the ordinary
+      // serialized reader, never permission to reuse stale membership/reviews.
+      if (await revision() !== before || !inBudget()) return null;
+      return result;
+    } catch { return null; }
+  }
+  return { catalog: readCatalog, prepare: readCatalog, preview, cachedCompany,
     invalidate() { epoch++; memory = null; memoryPreview = null; },
     status: () => lastStatus ? { ...lastStatus } : null };
 }

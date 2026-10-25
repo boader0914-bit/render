@@ -48,8 +48,9 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     directory: path.join(dataDir, "monthly_reports", "selector_cache"), maxEntries: 1,
     maxBytes: 8 * 1024 * 1024, maxEntryBytes: 8 * 1024 * 1024
   }) : null;
-  const checkpointFor = ({ priority } = {}) => priority === "background"
-    ? () => sourceReadScheduler.checkpoint({ priority: "background" }) : async () => {};
+  const checkpointFor = ({ priority } = {}) => () => sourceReadScheduler.checkpoint({
+    priority: priority === "background" ? "background" : "foreground"
+  });
   const companySourceCatalog = typeof readRevision === "function" && typeof projectCapacityCompany === "function"
     ? createMonthlyCompanySourceCatalog({ dataDir, readRevision, projectCapacityCompany, useSourceReadValidationBoundary, shareFrozenCatalogMetadata,
       version: require("node:crypto").createHash("sha256").update(String(companySourceVersion)).update(fs.readFileSync(__filename)).digest("hex"),

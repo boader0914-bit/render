@@ -11,12 +11,17 @@ const readline = require("node:readline");
 const { readCompanyMasterProjection } = require("./company_master_stream.cjs");
 const { createScheduledSingleFlight } = require("./scheduled_single_flight.cjs");
 const { boundedJsonBuffer } = require("./bounded_company_response.cjs");
+const { runCooperativeCheckpointReads } = require("./cooperative_work_checkpoint.cjs");
 const VERSION = "company-detail-read-model-v1";
 const hash = value => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const fault = (code = "COMPANY_DETAIL_SOURCE_UNAVAILABLE") => Object.assign(
   new Error("업체 상세 자료를 확인하지 못했습니다. 잠시 후 다시 조회해 주세요."), { code, statusCode: 503 });
 const need = (condition, code) => { if (!condition) throw fault(code); };
 const stamp = stat => [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String).join(":");
+async function detailReadCheckpoint() {
+  await new Promise(resolve => setImmediate(resolve));
+  await runCooperativeCheckpointReads();
+}
 
 // Derived-cache bytes are bounded before decoding/JSON.parse, including a
 // growth race after stat. The original source readers are not changed here.
@@ -57,7 +62,7 @@ async function readBoundedDetailCache(file, { maxBytes, fileSystem = fs } = {}) 
 // sharing complete JSON validation with other low-memory saved-data readers.
 async function readScopedCompanyMaster(file, companyId, options = {}) {
   try {
-    return await readCompanyMasterProjection(file, { ...options,
+    return await readCompanyMasterProjection(file, { checkpoint: detailReadCheckpoint, ...options,
       projectCompany: (value, key) => key === companyId ? value : { keywords: value.keywords || {} } });
   } catch { throw fault("COMPANY_DETAIL_MASTER_INVALID"); }
 }
@@ -65,8 +70,10 @@ async function readScopedCompanyMaster(file, companyId, options = {}) {
 async function readScopedCompanyHistory(file, company, matches, { stream = filename => native.createReadStream(filename, { encoding: "utf8", highWaterMark: 64 * 1024 }) } = {}) {
   const rows = new Map();
   const input = readline.createInterface({ input: stream(file), crlfDelay: Infinity });
+  let lines = 0;
   try {
     for await (const line of input) {
+      if (++lines % 256 === 0) await detailReadCheckpoint();
       if (!line.trim()) continue;
       let row;
       try { row = JSON.parse(line); } catch { continue; } // Existing append-only history tolerates a partial line.
@@ -113,6 +120,7 @@ function createCompanyDetailStore({ dataDir, outputsDir, projectionVersion, buil
     const entries = [];
     let count = 0;
     async function visit(directory, relative, depth = 0) {
+      await detailReadCheckpoint();
       need(depth <= 8, "COMPANY_DETAIL_SOURCE_SCAN_LIMIT");
       let dir;
       try {
@@ -124,6 +132,7 @@ function createCompanyDetailStore({ dataDir, outputsDir, projectionVersion, buil
       catch (error) { if (error.code === "ENOENT") { entries.push([relative, null]); return; } throw fault(); }
       for (const entry of dir.sort((a, b) => a.name.localeCompare(b.name))) {
         need(++count <= 20000 && !entry.isSymbolicLink(), "COMPANY_DETAIL_SOURCE_SCAN_LIMIT");
+        if (count % 64 === 0) await detailReadCheckpoint();
         const nested = path.join(directory, entry.name), label = relative + "/" + entry.name;
         if (entry.isDirectory()) await visit(nested, label, depth + 1);
         else if (entry.isFile()) entries.push([label, await stat(nested, true)]);

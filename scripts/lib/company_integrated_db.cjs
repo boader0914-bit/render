@@ -5,6 +5,7 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const fsConstants = require("node:fs").constants;
 const { buildMonthlyReportSnapshot } = require("./monthly_reports.cjs");
 const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./monthly_report_comparison.cjs");
 const { setCooperativeWorkStage, cooperativeWorkCheckpoint, assertCooperativeWorkActive,
@@ -102,12 +103,14 @@ function latestAttempts(source, snapshot, request) {
   return [...attempts.values()].sort((a, b) => a.date.localeCompare(b.date) || a.productType.localeCompare(b.productType));
 }
 
-function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets, readRevision, now = () => new Date(), calculationVersion = CALCULATION_VERSION, autoStart = true, runWork = operation => operation() } = {}) {
+function createCompanyIntegratedDb({ dataDir, loadSources, catalog, catalogCached, listTargets, readRevision, now = () => new Date(), calculationVersion = CALCULATION_VERSION, autoStart = true, runWork = operation => operation() } = {}) {
   if (!dataDir || typeof loadSources !== "function" || typeof catalog !== "function" || typeof listTargets !== "function") throw new TypeError("dataDir, loadSources, catalog and listTargets are required");
   if (readRevision !== undefined && typeof readRevision !== "function") throw new TypeError("readRevision must be a function");
   const directory = path.resolve(dataDir, "company_integrated"), stateFile = path.join(directory, "queue.json");
-  let state = { schemaVersion: SCHEMA_VERSION, jobs: {} }, initPromise, workerPromise = null, serial = Promise.resolve(), stopped = false, storeError = null, bootstrapPromise = null, bootstrapPlanning = false;
+  let state = { schemaVersion: SCHEMA_VERSION, jobs: {} }, initPromise, initialized = false, workerPromise = null, serial = Promise.resolve(), serialPending = 0, stopped = false, storeError = null, bootstrapPromise = null, bootstrapPlanning = false;
   let dispatchHolds = 0;
+  const cachedReads = { attempts: 0, verified: 0, misses: 0, reasons: {} };
+  const cachedMiss = reason => { cachedReads.misses++; cachedReads.reasons[reason] = (cachedReads.reasons[reason] || 0) + 1; return null; };
   const dispatchWaiters = new Set();
   function wakeDispatchWaiters() { for (const resolve of dispatchWaiters) resolve(); dispatchWaiters.clear(); }
   // Writers may persist several company jobs and their source history as one
@@ -132,8 +135,9 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
   const reuseProofPath = (id, month) => path.join(directory, digest(id), `${month}.reuse-proof.json`);
   const refreshProofPath = (id, month) => path.join(directory, digest(id), `${month}.refresh-proof.json`);
   function locked(fn) {
+    serialPending++;
     const result = serial.then(fn);
-    serial = result.catch(() => {});
+    serial = result.then(() => { serialPending--; }, () => { serialPending--; });
     return result;
   }
   const saveState = () => atomicJson(stateFile, state);
@@ -153,6 +157,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
         }
         if (JSON.stringify(state) !== original) await saveState();
       }
+      initialized = true;
     })();
     return initPromise;
   }
@@ -567,8 +572,143 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     return { schemaVersion: SCHEMA_VERSION, calculationVersion, active: Boolean(workerPromise), errorCode: storeError || state.bootstrap?.errorCode || null,
       bootstrap: state.bootstrap ? clone(state.bootstrap) : null,
       counts: Object.values(state.jobs).reduce((counts, job) => { counts[job.status] = (counts[job.status] || 0) + 1; return counts; }, {}),
+      cachedReads: { ...cachedReads, reasons: { ...cachedReads.reasons } },
       jobs: Object.values(state.jobs).map(job => ({ companyId: job.companyId, status: job.status, generation: job.generation,
         months: job.months, errorCode: job.errorCode, updatedAt: job.updatedAt, startedAt: job.startedAt, finishedAt: job.finishedAt })) };
+  }
+  function readResult(companyId, metadata, { selectedMonth, selected, rows, refreshedProof = null, selectedVerificationError = null, savedPreview = false }) {
+    const runMap = new Map((metadata.data.runs || []).map(run => [String(run.id || run.runId || ""), run]));
+    const keywords = Object.values(metadata.raw?.keywords || {}).map(value => ({ keyword: String(value.keyword || ""),
+      runs: (value.runs || []).map(run => ({ runId: String(run.runId || run.id || ""), collectedAt: String(run.collectedAt || ""),
+        rank: Number.isFinite(Number(run.rank || run.overallRank)) ? Number(run.rank || run.overallRank) : null,
+        status: String(runMap.get(String(run.runId || run.id || ""))?.collectionQuality?.status || "unknown") })) })).filter(value => value.keyword);
+    const basis = selected?.snapshot.companies?.[0], selectedRoomBasis = selected?.roomBasis || metadata.raw?._integratedCapacity;
+    const stateJob = state.jobs[companyId];
+    const recoveredRevision = Boolean(state.bootstrap?.errorCode && readRevision
+      && stateJob?.verifiedBootstrapFailure === state.bootstrap.failureGeneration && stateJob.verifiedMonths?.includes(selectedMonth));
+    const bootstrapError = recoveredRevision ? null : state.bootstrap?.errorCode;
+    const selectedReady = Boolean(refreshedProof && !selectedVerificationError);
+    return { schemaVersion: SCHEMA_VERSION, companyId, calculationVersion, calculatedAt: selected?.calculatedAt || null,
+      sourceRevision: selected?.sourceRevision || null,
+      status: storeError || selectedVerificationError ? "failed" : selectedReady ? "ready" : stateJob?.status === "failed" || bootstrapError ? "failed" : ["queued", "processing"].includes(stateJob?.status) ? "refreshing" : selected ? "ready" : "pending",
+      errorCode: storeError || selectedVerificationError || (selectedReady ? null : stateJob?.errorCode || bootstrapError || null), selectedMonth, months: rows, snapshot: selected?.snapshot || null,
+      keywords, roomBasis: { ...selectedRoomBasis, capacity: selectedRoomBasis?.capacity ?? selectedRoomBasis?.count ?? basis?.capacity ?? metadata.company.capacity ?? null,
+        source: selectedRoomBasis?.source || basis?.capacitySource || metadata.company.capacitySource || "unknown",
+        label: selectedRoomBasis?.label || basis?.capacitySource || metadata.company.capacitySource || "객실 기준 확인 필요",
+        warnings: [...new Set([...(selectedRoomBasis?.warnings || []), ...(selected?.snapshot.quality?.warnings || []).filter(warning => /객실|재고|총량|수량/.test(warning))])] },
+      latestAttempts: selected?.latestAttempts || [], failedAttempts: selected?.failedAttempts || [],
+      freshness: { lastCalculatedAt: selected?.calculatedAt || null, refreshStatus: stateJob?.status || "idle", lastRefreshError: stateJob?.errorCode || bootstrapError || null,
+        ...(savedPreview ? { savedPreview: true } : {}),
+        revisionCheckStatus: savedPreview ? "not_checked" : selectedReady || recoveredRevision ? "verified" : state.bootstrap?.status || "not_checked", revisionCheckedAt: savedPreview ? null : selectedReady ? refreshedProof.verifiedAt : recoveredRevision ? stateJob.finishedAt : state.bootstrap?.checkedAt || null,
+        selectedMonthVerified: selectedReady, selectedMonthVerificationError: selectedVerificationError },
+      sourcePolicy: "원본 보존 · 업체 고유번호 통합 · 최신 유효 관측 · 미관측은 결측 · 월간 리포트 공통 계산" };
+  }
+  // Reuse-only checkpoint capability. It cannot initialize a store, discover
+  // periods, rebuild revision/catalog indexes, read observations or calculate.
+  // A miss leaves those operations to the ordinary exclusive selected read.
+  async function tryCachedMonth(companyId, { month, budgetMs = 750, signal } = {}) {
+    companyId = validId(companyId);
+    if (month !== undefined && !monthValid(month)) throw fault("invalid_month", 400);
+    cachedReads.attempts++;
+    if (!initialized || stopped || storeError || bootstrapPlanning || serialPending
+      || typeof catalogCached !== "function" || typeof readRevision?.prepareFreshCached !== "function"
+      || typeof readRevision?.forScope !== "function") return cachedMiss(serialPending ? "writer_busy" : "unavailable");
+    const deadline = Date.now() + Math.max(1, Math.min(750, Number(budgetMs) || 750));
+    const remaining = limit => Math.max(1, Math.min(limit, deadline - Date.now()));
+    const available = () => !signal?.aborted && Date.now() < deadline && !storeError && !stopped && !bootstrapPlanning;
+    let stage = "index", selectedCalendar = null;
+    const miss = () => cachedMiss(!available() ? "budget_or_abort" : stage);
+    const generation = state.jobs[companyId]?.generation ?? null, failure = state.bootstrap?.failureGeneration || 0;
+    const currentState = () => available() && generation === (state.jobs[companyId]?.generation ?? null)
+      && failure === (state.bootstrap?.failureGeneration || 0)
+      && (!selectedCalendar || cutoffFor(selectedCalendar.month, current()) === selectedCalendar.cutoffDate
+        && (kstDay(current()) > monthEnd(selectedCalendar.month)) === selectedCalendar.monthClosed);
+    const stamps = new Map(); let bytes = 0;
+    const stamp = value => [value.dev, value.ino, value.size, value.mtimeNs, value.ctimeNs].map(String).join(":");
+    async function boundedJson(file, optional = false) {
+      if (!available()) throw fault("COMPANY_CACHED_READ_MISS");
+      let before, handle;
+      try {
+        try { before = await fs.lstat(file, { bigint: true }); }
+        catch (error) { if (optional && error.code === "ENOENT") return null; throw error; }
+        if (!before.isFile() || before.isSymbolicLink() || before.size < 0n || before.size > BigInt(6 * 1024 * 1024 - bytes)) throw fault("COMPANY_CACHED_READ_MISS");
+        bytes += Number(before.size);
+        handle = await fs.open(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0));
+        if (stamp(await handle.stat({ bigint: true })) !== stamp(before)) throw fault("COMPANY_CACHED_READ_MISS");
+        const data = Buffer.alloc(Number(before.size) + 1); let used = 0;
+        while (used < data.length) { const read = await handle.read(data, used, data.length - used, null); if (!read.bytesRead) break; used += read.bytesRead; }
+        if (!available() || BigInt(used) !== before.size || stamp(await handle.stat({ bigint: true })) !== stamp(before)
+          || stamp(await fs.lstat(file, { bigint: true })) !== stamp(before)) throw fault("COMPANY_CACHED_READ_MISS");
+        stamps.set(file, stamp(before)); return JSON.parse(data.subarray(0, used).toString("utf8"));
+      } finally { if (handle) await handle.close(); }
+    }
+    async function filesCurrent() {
+      for (const [file, expected] of stamps) {
+        if (!available()) return false;
+        const stat = await fs.lstat(file, { bigint: true });
+        if (!stat.isFile() || stat.isSymbolicLink() || stamp(stat) !== expected) return false;
+      }
+      return available();
+    }
+    const metadataValid = value => value?.company && identity(value.company) === companyId && !value.company.deletedAt
+      && !value.company.mergedIntoCompanyId && !value.raw?.deletedAt && !value.raw?.mergedIntoCompanyId && Array.isArray(value.data?.runs);
+    try {
+      const index = await boundedJson(indexPath(companyId)), months = monthsOf(index?.months || []), currentMonth = kstDay(current()).slice(0, 7);
+      if (index?.schemaVersion !== SCHEMA_VERSION || index.companyId !== companyId || months.length > 120) return miss();
+      const selectedMonth = month || (months.includes(currentMonth) ? currentMonth : months.filter(value => value <= currentMonth).at(-1) || months.at(-1) || currentMonth);
+      stage = "stored_month";
+      const selected = await boundedJson(monthPath(companyId, selectedMonth));
+      if (!selected?.sourceRevision || !selected.cacheDigest || !validStored(selected, companyId, selectedMonth)) return miss();
+      const cutoffDate = cutoffFor(selectedMonth, current()), scope = { companyId, month: selectedMonth, cutoffDate, calculationVersion };
+      selectedCalendar = { month: selectedMonth, cutoffDate, monthClosed: selected.snapshot.period.monthClosed };
+      stage = "metadata";
+      const metadata = await catalogCached(companyId, { budgetMs: remaining(350), signal });
+      if (!currentState() || !metadataValid(metadata) || !matchingStoredInputs(selected, companyId, selectedMonth, cutoffDate, metadata)) return miss();
+      stage = "source_revision";
+      const prepared = await readRevision.prepareFreshCached({ scope, budgetMs: remaining(500), signal });
+      if (!prepared || !currentState()) return miss();
+      const revision = await readRevision.forScope(prepared, scope);
+      if (typeof revision !== "string" || !revision.trim() || revision.length > 256) return miss();
+      if (selected.sourceRevision !== revision) {
+        stage = "reuse_proof";
+        const proof = await boundedJson(reuseProofPath(companyId, selectedMonth), true);
+        if (!proof || typeof proof !== "object" || Array.isArray(proof)) return miss();
+        const { proofDigest, ...content } = proof;
+        if (!proofDigest || proofDigest !== digest(content) || proof.schemaVersion !== SCHEMA_VERSION || proof.kind !== "unchanged_company_month_inputs"
+          || proof.companyId !== companyId || proof.month !== selectedMonth || proof.sourceRevision !== revision
+          || proof.storedSourceRevision !== selected.sourceRevision || proof.cacheDigest !== selected.cacheDigest
+          || proof.sourceDigest !== selected.sourceDigest || proof.calculationVersion !== calculationVersion || proof.cutoffDate !== cutoffDate
+          || proof.monthClosed !== selected.snapshot.period.monthClosed || proof.metadataRevision !== selected.metadataRevision) return miss();
+      }
+      stage = "month_summaries";
+      const rows = [];
+      for (const value of [...new Set([...months, selectedMonth])].sort().reverse()) {
+        const entry = value === selectedMonth ? selected : await boundedJson(monthPath(companyId, value), true);
+        if (entry && validStored(entry, companyId, value)) rows.push({ month: value, calculatedAt: entry.calculatedAt, cutoffDate: entry.cutoffDate,
+          status: entry.snapshot.quality.status, quality: entry.snapshot.quality, summary: entry.snapshot.summary });
+      }
+      // Do not wait for a writer held by the paused background owner. Claim an
+      // empty queue synchronously, then fence the one small derived certificate.
+      stage = "writer_busy";
+      if (!currentState() || !await filesCurrent() || serialPending) return miss();
+      return await locked(() => runNonInterruptibleCooperativeWork(async () => {
+        stage = "publication";
+        if (!currentState() || !await filesCurrent()) return miss();
+        const proof = refreshedMonthProof(companyId, selectedMonth, { value: selected, sourceRevision: revision }, generation);
+        if (!proof || !currentState()) return miss();
+        await atomicJson(refreshProofPath(companyId, selectedMonth), proof);
+        if (!currentState()) return miss();
+        stage = "post_metadata";
+        const afterMetadata = await catalogCached(companyId, { budgetMs: remaining(350), signal });
+        if (!currentState() || !metadataValid(afterMetadata) || metadataRevision(metadata) !== metadataRevision(afterMetadata)) return miss();
+        stage = "post_source_revision";
+        const after = await readRevision.prepareFreshCached({ scope, budgetMs: remaining(500), signal });
+        if (!after || !currentState() || await readRevision.forScope(after, scope) !== revision || !await filesCurrent() || !currentState()) return miss();
+        const result = readResult(companyId, metadata, { selectedMonth, selected, rows, refreshedProof: proof });
+        if (!currentState()) return miss();
+        cachedReads.verified++; return result;
+      }));
+    } catch { return miss(); }
   }
   async function get(companyId, { month, cutoffDate, knownMonthsOnly = false, savedPreview = false } = {}) {
     companyId = validId(companyId);
@@ -605,13 +745,6 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
       if (entry && validStored(entry, companyId, value)) rows.push({ month: value, calculatedAt: entry.calculatedAt, cutoffDate: entry.cutoffDate,
         status: entry.snapshot.quality.status, quality: entry.snapshot.quality, summary: entry.snapshot.summary });
     }
-    const runMap = new Map((metadata.data.runs || []).map(run => [String(run.id || run.runId || ""), run]));
-    const keywords = Object.values(metadata.raw?.keywords || {}).map(value => ({ keyword: String(value.keyword || ""),
-      runs: (value.runs || []).map(run => ({ runId: String(run.runId || run.id || ""), collectedAt: String(run.collectedAt || ""),
-        rank: Number.isFinite(Number(run.rank || run.overallRank)) ? Number(run.rank || run.overallRank) : null,
-        status: String(runMap.get(String(run.runId || run.id || ""))?.collectionQuality?.status || "unknown") })) })).filter(value => value.keyword);
-    const basis = selected?.snapshot.companies?.[0];
-    const selectedRoomBasis = selected?.roomBasis || metadata.raw?._integratedCapacity;
     const stateJob = state.jobs[companyId];
     // A repaired company/month can recover after an explicit retry without
     // certifying other scopes that failed the startup inspection.
@@ -635,24 +768,10 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
       }
       catch (error) { selectedVerificationError = safeCode(error); }
     }
-    const selectedReady = Boolean(refreshedProof && !selectedVerificationError);
-    return { schemaVersion: SCHEMA_VERSION, companyId, calculationVersion, calculatedAt: selected?.calculatedAt || null,
-      sourceRevision: selected?.sourceRevision || null,
-      status: storeError || selectedVerificationError ? "failed" : selectedReady ? "ready" : stateJob?.status === "failed" || bootstrapError ? "failed" : ["queued", "processing"].includes(stateJob?.status) ? "refreshing" : selected ? "ready" : "pending",
-      errorCode: storeError || selectedVerificationError || (selectedReady ? null : stateJob?.errorCode || bootstrapError || null), selectedMonth, months: rows, snapshot: selected?.snapshot || null,
-      keywords, roomBasis: { ...selectedRoomBasis, capacity: selectedRoomBasis?.capacity ?? selectedRoomBasis?.count ?? basis?.capacity ?? metadata.company.capacity ?? null,
-        source: selectedRoomBasis?.source || basis?.capacitySource || metadata.company.capacitySource || "unknown",
-        label: selectedRoomBasis?.label || basis?.capacitySource || metadata.company.capacitySource || "객실 기준 확인 필요",
-        warnings: [...new Set([...(selectedRoomBasis?.warnings || []), ...(selected?.snapshot.quality?.warnings || []).filter(warning => /객실|재고|총량|수량/.test(warning))])] },
-      latestAttempts: selected?.latestAttempts || [], failedAttempts: selected?.failedAttempts || [],
-      freshness: { lastCalculatedAt: selected?.calculatedAt || null, refreshStatus: stateJob?.status || "idle", lastRefreshError: stateJob?.errorCode || bootstrapError || null,
-        ...(savedPreview ? { savedPreview: true } : {}),
-        revisionCheckStatus: savedPreview ? "not_checked" : selectedReady || recoveredRevision ? "verified" : state.bootstrap?.status || "not_checked", revisionCheckedAt: savedPreview ? null : selectedReady ? refreshedProof.verifiedAt : recoveredRevision ? stateJob.finishedAt : state.bootstrap?.checkedAt || null,
-        selectedMonthVerified: selectedReady, selectedMonthVerificationError: selectedVerificationError },
-      sourcePolicy: "원본 보존 · 업체 고유번호 통합 · 최신 유효 관측 · 미관측은 결측 · 월간 리포트 공통 계산" };
+    return readResult(companyId, metadata, { selectedMonth, selected, rows, refreshedProof, selectedVerificationError, savedPreview });
   }
   async function stop() { stopped = true; wakeDispatchWaiters(); if (bootstrapPromise) await bootstrapPromise.catch(() => {}); if (workerPromise) await workerPromise; await serial; }
-  return { bootstrap, queueCompany, queueRun, deferProcessing, refreshMonth, get, status, drain, stop };
+  return { bootstrap, queueCompany, queueRun, deferProcessing, refreshMonth, tryCachedMonth, get, status, drain, stop };
 }
 
 module.exports = { createCompanyIntegratedDb, COMPANY_INTEGRATED_SCHEMA_VERSION: SCHEMA_VERSION, COMPANY_INTEGRATED_CALCULATION_VERSION: CALCULATION_VERSION };

@@ -7,6 +7,7 @@ const { industryCompanyReference } = require("./industry_analysis.cjs");
 const { readCompanyMasterProjection } = require("./company_master_stream.cjs");
 const { createProductCapacityStore, productCapacityCorrectionSignature } = require("./product_capacity_store.cjs");
 const { compactProductCapacityEvidence } = require("./product_capacity_baseline.cjs");
+const { performance } = require("node:perf_hooks");
 const VERSION = "company-integrated-source-revision-v2";
 const LEGACY_VERSION = "company-integrated-source-revision-v1";
 const monthValid = value => /^\d{4}-(0[1-9]|1[0-2])$/.test(value || "");
@@ -46,19 +47,19 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
         ? value.contentDigests[label] !== null : !/^[a-f0-9]{64}$/.test(value.contentDigests[label] || "")))) throw fault("COMPANY_SOURCE_REVISION_INDEX_INVALID");
     cached = value; initialized = true; cachedIndexStat = sig; return cached;
   }
-  async function inventory() {
+  async function inventory(checkpoint = () => {}) {
     const metadata = {}, paths = {};
-    async function file(label, filename) { const value = await stat(filename); paths[label] = filename;
+    async function file(label, filename) { checkpoint(); const value = await stat(filename); checkpoint(); paths[label] = filename;
       if (!value) { metadata[label] = null; return; } requireValid(value.isFile()); metadata[label] = signature(value); }
     async function tree(prefix, directory, filter = () => true, depth = 0) {
-      const before = await stat(directory); if (!before) return;
-      requireValid(before.isDirectory() && depth <= 16); const entries = await fileSystem.readdir(directory, { withFileTypes: true });
-      for (const entry of entries) { requireValid(!entry.isSymbolicLink()); if (entry.name.endsWith(".tmp")) continue;
+      checkpoint(); const before = await stat(directory); checkpoint(); if (!before) return;
+      requireValid(before.isDirectory() && depth <= 16); const entries = await fileSystem.readdir(directory, { withFileTypes: true }); checkpoint();
+      for (const entry of entries) { checkpoint(); requireValid(!entry.isSymbolicLink()); if (entry.name.endsWith(".tmp")) continue;
         const filename = path.join(directory, entry.name), label = prefix + "/" + entry.name;
         if (entry.isDirectory()) await tree(label, filename, filter, depth + 1);
         else if (entry.isFile() && filter(label)) await file(label, filename);
       }
-      const after = await stat(directory); requireValid(after && signature(before) === signature(after));
+      const after = await stat(directory); checkpoint(); requireValid(after && signature(before) === signature(after));
     }
     await file("master", path.join(root, "company_master", "companies.json"));
     await file("history", path.join(root, "history", "observations.jsonl"));
@@ -403,7 +404,61 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
       company.runs.filter(run => (!run.collectedAt || Date.parse(run.collectedAt) <= boundary)
         && (value === run.observed || (!run.lower || value >= run.lower) && (!run.upper || value <= run.upper)))]), years.map(year => prepared.context.years[year] || null), cutoffDate]);
   }
+  // This lane may run while a heavy analytical owner is paused at a safe
+  // asynchronous checkpoint. It must never join prepare's chain, rebuild an
+  // index, read original JSON bodies, or publish any file. An uncertain or slow
+  // metadata inspection is a miss, leaving the normal serialized path intact.
+  async function prepareFreshCached({ scope, budgetMs = 500, signal } = {}) {
+    if (!scope || typeof scope.companyId !== "string" || !monthValid(scope.month)
+      || !Number.isFinite(budgetMs) || budgetMs <= 0 || budgetMs > 500) return null;
+    const snapshot = cached, indexSignature = cachedIndexStat;
+    if (!initialized || !snapshot || !indexSignature || snapshot.version !== VERSION
+      || snapshot.configuration !== configuration || snapshot.prepared?.version !== VERSION
+      || !snapshot.prepared.companies?.[scope.companyId]) return null;
+    const deadline = performance.now() + budgetMs;
+    const miss = Symbol("cached revision miss");
+    const checkpoint = () => { if (signal?.aborted || performance.now() >= deadline
+      || cached !== snapshot || cachedIndexStat !== indexSignature) throw miss; };
+    const sameMetadata = metadata => {
+      const keys = Object.keys(metadata), expected = snapshot.metadata;
+      if (keys.length !== Object.keys(expected).length) return false;
+      for (const key of keys) { checkpoint(); if (!Object.hasOwn(expected, key) || expected[key] !== metadata[key]) return false; }
+      return true;
+    };
+    const indexUnchanged = async () => { checkpoint(); const value = await stat(indexFile); checkpoint();
+      return value?.isFile() && signature(value) === indexSignature; };
+    try {
+      if (!await indexUnchanged() || !sameMetadata((await inventory(checkpoint)).metadata)) return null;
+      const prepared = snapshot.prepared, company = prepared.companies[scope.companyId];
+      const months = [scope.month, previousMonth(scope.month)], years = [...new Set(months.flatMap(value =>
+        [value.slice(0, 4), ...(value.endsWith("-12") ? [String(Number(value.slice(0, 4)) + 1)] : [])]))];
+      const scoped = { version: VERSION, revision: prepared.revision, companies: { [scope.companyId]: company },
+        context: { monthly: { [company.regionKey]: Object.fromEntries(months.filter(month =>
+          Object.hasOwn(prepared.context.monthly[company.regionKey] || {}, month)).map(month => [month, prepared.context.monthly[company.regionKey][month]])) },
+          years: Object.fromEntries(years.filter(year => Object.hasOwn(prepared.context.years, year)).map(year => [year, prepared.context.years[year]])) },
+        unknownMonths: Object.fromEntries(months.filter(month => Object.hasOwn(prepared.unknownMonths, month)).map(month => [month, prepared.unknownMonths[month]])) };
+      // Even a valid durable index can contain a very large company's history.
+      // Bound the returned clone as well as traversal time; large scopes use
+      // the existing heavy owner rather than duplicating its retained graph.
+      let bytes = 0, nodes = 0;
+      const bounded = value => {
+        checkpoint(); if (++nodes > 100000) throw miss;
+        if (typeof value === "string") bytes += Buffer.byteLength(value) * 6 + 2;
+        else if (value && typeof value === "object") {
+          bytes += 2;
+          for (const key of Object.keys(value)) { bytes += Buffer.byteLength(key) * 6 + 4; if (bytes > 2 * 1024 * 1024) throw miss; bounded(value[key]); }
+        } else bytes += 16;
+        if (bytes > 2 * 1024 * 1024) throw miss;
+      };
+      bounded(scoped); const result = structuredClone(scoped); checkpoint();
+      // Recheck all original metadata, not only the selected run, and the
+      // durable index identity after cloning. Cross-file capacity publications
+      // or a concurrent normal prepare therefore cannot certify a mixed view.
+      if (!sameMetadata((await inventory(checkpoint)).metadata) || !await indexUnchanged()) return null;
+      checkpoint(); return result;
+    } catch { return null; }
+  }
   const prepare = () => { const task = chain.then(scan).catch(error => { throw error?.code?.startsWith("COMPANY_SOURCE_REVISION") ? error : fault("COMPANY_SOURCE_REVISION_UNAVAILABLE"); }); chain = task.catch(() => {}); return task; };
-  const reader = async scope => forScope(await prepare(), scope); reader.prepare = prepare; reader.forScope = forScope; return reader;
+  const reader = async scope => forScope(await prepare(), scope); reader.prepare = prepare; reader.prepareFreshCached = prepareFreshCached; reader.forScope = forScope; return reader;
 }
 module.exports = { createCompanyIntegratedSourceRevision, VERSION };

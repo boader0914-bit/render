@@ -1,6 +1,6 @@
 "use strict";
 
-const { cooperativeWorkCheckpoint } = require("./cooperative_work_checkpoint.cjs");
+const { cooperativeWorkCheckpoint, runCooperativeCheckpointReads } = require("./cooperative_work_checkpoint.cjs");
 
 // Source reconstruction is deliberately single-file: overlapping it multiplies
 // the complete history/catalog heap. Ordinary readers finish before a peer;
@@ -78,11 +78,16 @@ function createSourceReadScheduler({ foregroundBurst = 4, maxInteractiveHoldMs =
 
   async function checkpoint({ priority = "foreground" } = {}) {
     if (!["foreground", "background"].includes(priority)) throw new TypeError("Invalid source read priority");
-    if (priority !== "background") return;
+    if (priority !== "background") {
+      await new Promise(resolve => setImmediate(resolve));
+      await runCooperativeCheckpointReads();
+      return;
+    }
     // Even with no lease yet, yield one event-loop turn so a newly arrived HTTP
     // request can acquire it. An eligible industry owner rejects and unwinds;
     // otherwise this background reader retains its slot during a short pause.
     await new Promise(resolve => setImmediate(resolve));
+    await runCooperativeCheckpointReads();
     cooperativeWorkCheckpoint();
     while (shouldPauseBackground()) await new Promise(resolve => checkpointWaiters.push(resolve));
   }

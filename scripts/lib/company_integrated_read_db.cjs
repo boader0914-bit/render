@@ -40,10 +40,19 @@ function createCompanyIntegratedDb(options={}){
     }
   }
   return {...engine,get(companyId,request={}){
-    if(request.knownMonthsOnly!==true)return engine.get(companyId,request);
+    // A saved preview must remain a read of the last stored view. The normal
+    // web route opts into scoped verification separately from month discovery,
+    // so it does not change existing unknown-period/cutoff semantics.
+    if(request.savedPreview===true||request.knownMonthsOnly!==true
+      &&(request.verifySelectedMonth!==true||request.cutoffDate!==undefined))return engine.get(companyId,request);
     // Publish only a small group before admission. Actual source promises start
     // or join after ownership, including callers nested inside an existing view.
-    return reads.run(JSON.stringify([companyId,request.month||'',request.cutoffDate||'']),()=>selectedRead(companyId,request));
+    const fallback=()=>reads.run(JSON.stringify([companyId,request.month||'',request.cutoffDate||'',request.knownMonthsOnly===true]),()=>selectedRead(companyId,request));
+    if(request.verifySelectedMonth!==true||request.cutoffDate!==undefined||typeof options.runCheckpointRead!=='function')return fallback();
+    return (async()=>{
+      const cached=await options.runCheckpointRead(info=>engine.tryCachedMonth(companyId,{month:request.month,budgetMs:750,signal:info?.signal}),{kind:'company-month-cached-verification'});
+      return cached||fallback();
+    })();
   }};
 }
 

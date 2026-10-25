@@ -764,8 +764,10 @@ const readCompanyIntegratedRevision = createCompanyIntegratedSourceRevision({
 });
 const companyIntegratedDb = createCompanyIntegratedDb({
   runWork: runAnalyticalWork,
+  runCheckpointRead: (operation, options) => analyticalWork.runCheckpointRead(operation, options),
   dataDir: DATA_DIR, loadSources: monthlyReportSources.loadSources,
   catalog: options => options?.savedPreview === true ? companyIntegratedCatalog.preview() : companyIntegratedCatalog.catalog(options),
+  catalogCached: (companyId, options) => companyIntegratedCatalog.cachedCompany(companyId, options),
   listTargets: listCompanyIntegratedTargets, readRevision: readCompanyIntegratedRevision
 });
 async function queueIntegratedCompanies(companyIds, reason) {
@@ -19766,7 +19768,8 @@ async function route(req, res) {
       if (!companyId) return send(res, 400, { error: "companyId가 필요합니다." });
       const options = { ...(reqUrl.searchParams.has("month") ? { month: reqUrl.searchParams.get("month") } : {}),
         ...(reqUrl.searchParams.has("cutoffDate") ? { cutoffDate: reqUrl.searchParams.get("cutoffDate") } : {}),
-        ...(reqUrl.searchParams.get("view") === "saved" && !reqUrl.searchParams.has("cutoffDate") ? { savedPreview: true } : {}) };
+        ...(reqUrl.searchParams.get("view") === "saved" && !reqUrl.searchParams.has("cutoffDate") ? { savedPreview: true }
+          : !reqUrl.searchParams.has("cutoffDate") ? { verifySelectedMonth: true } : {}) };
       const result = await companyIntegratedDb.get(companyId, options);
       return send(res, 200, result);
     }

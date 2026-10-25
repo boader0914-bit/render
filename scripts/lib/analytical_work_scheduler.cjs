@@ -30,7 +30,8 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     || !Number.isSafeInteger(cooperativeMinProgress) || cooperativeMinProgress < 1) {
     throw new TypeError("Invalid analytical scheduler options");
   }
-  const context = new AsyncLocalStorage(), foreground = [], background = [], idleWaiters = [];
+  const context = new AsyncLocalStorage(), foreground = [], background = [], checkpointReads = [], idleWaiters = [];
+  let checkpointReader = null;
   let active = null, closed = false, consecutiveForeground = 0, timer = null, sampling = null;
   let lastAttemptAt = null, sampleSequence = 0, admittedSampleSequence = 0;
   const memory = { enabled: sampleMemory !== null, paused: false, pauseReason: null,
@@ -51,12 +52,14 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   const timing = { enqueued: 0, started: 0, completed: 0, failed: 0, aborted: 0, closed: 0,
     queueWaitMs: 0, leaseMs: 0, ...emptyWait(), reentrantStarted: 0,
     reentrantCompleted: 0, reentrantFailed: 0, reentrantLeaseMs: 0, callbackErrors: 0,
-    yielded: 0, restarted: 0, reentrantYielded: 0, cooperativeCheckpoints: 0, maximumCheckpointGapMs: 0, progressRevisionResets: 0 };
+    yielded: 0, restarted: 0, reentrantYielded: 0, cooperativeCheckpoints: 0, maximumCheckpointGapMs: 0, progressRevisionResets: 0,
+    checkpointReadEnqueued: 0, checkpointReadStarted: 0, checkpointReadCompleted: 0, checkpointReadFailed: 0,
+    checkpointReadAborted: 0, checkpointReadClosed: 0, checkpointReadQueueWaitMs: 0, checkpointReadLeaseMs: 0 };
   const recent = [];
   function accountWaiting() {
     const at = timestamp(), elapsed = Math.max(0, at - waitClockAt); waitClockAt = at;
     for (const priority of ["foreground", "background"]) {
-      if (!(priority === "foreground" ? foreground : background).length) continue;
+      if (!(priority === "foreground" ? foreground.length + checkpointReads.length : background.length)) continue;
       // These reasons are disjoint. Busy ownership takes precedence over a
       // memory pause; a pause does not double count time spent behind a lease.
       const key = active ? "busyWaitMs" : priority === "background" && memory.paused ? "memoryWaitMs"
@@ -77,22 +80,27 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     catch { return "ANALYTICAL_WORK_FAILED"; }
   }
   function recordTask(task, error, finishedAt = timestamp(), didFail = Boolean(error)) {
-    const waits = task.reentrant ? emptyWait() : task.waits || taskWait(task, finishedAt);
+    const nested = task.reentrant && !task.checkpointRead;
+    const waits = nested ? emptyWait() : task.waits || taskWait(task, finishedAt);
     const code = didFail ? errorCode(error) : null;
     const outcome = !didFail ? "completed" : code === YIELD_CODE && task.cooperativeYielded ? "yielded" : code === "ANALYTICAL_WORK_ABORTED" ? "aborted"
       : code === "ANALYTICAL_WORK_CLOSED" ? "closed" : "failed";
     const record = Object.freeze({ id: task.id, parentId: task.parentId || null, kind: task.kind, priority: task.priority,
       reentrant: Boolean(task.reentrant), queuedAt: task.queuedAt, startedAt: task.startedAt ?? null, finishedAt,
-      queueWaitMs: task.reentrant ? 0 : Math.max(0, (task.startedAt ?? finishedAt) - task.queuedAt),
+      queueWaitMs: nested ? 0 : Math.max(0, (task.startedAt ?? finishedAt) - task.queuedAt),
       leaseMs: task.startedAt === undefined ? 0 : Math.max(0, finishedAt - task.startedAt),
       ...waits, outcome, errorCode: code,
+      ...(task.checkpointRead ? { checkpointRead: true, borrowed: Boolean(task.reentrant) } : {}),
       ...(task.cooperative ? { attempt: task.attempt, checkpoints: task.cooperative.checkpoints,
         checkpointHighWater: task.checkpointHighWater || 0, phaseIndex: task.cooperative.phaseIndex,
         stageIndex: task.cooperative.stageIndex,
         checkpointsInPhase: task.cooperative.phaseCheckpoints, unitIndex: task.cooperative.unitIndex,
         checkpointsInUnit: task.cooperative.unitCheckpoints,
         progressHighWater: Object.freeze({ ...(task.progressHighWater || { phaseIndex: 0, unitIndex: 0, checkpoints: 0 }) }) } : {}) });
-    if (task.reentrant) {
+    if (task.checkpointRead) {
+      const counter = ({ completed: "checkpointReadCompleted", aborted: "checkpointReadAborted", closed: "checkpointReadClosed" })[outcome] || "checkpointReadFailed";
+      timing[counter]++; timing.checkpointReadQueueWaitMs += record.queueWaitMs; timing.checkpointReadLeaseMs += record.leaseMs;
+    } else if (task.reentrant) {
       timing.reentrantCompleted += !didFail ? 1 : 0;
       if (outcome === "yielded") timing.reentrantYielded++; else timing.reentrantFailed += didFail ? 1 : 0;
       timing.reentrantLeaseMs += record.leaseMs;
@@ -163,16 +171,20 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     const controller = new AbortController();
     const onAbort = () => controller.abort(task.signal?.reason);
     task.signal?.addEventListener("abort", onAbort, { once: true });
-    task.startedAt = accountWaiting(); task.waits = taskWait(task); timing.started++;
-    const token = { id: task.id, controller, active: true, priority: task.priority, kind: task.kind };
+    task.startedAt = accountWaiting(); task.waits = taskWait(task);
+    if (task.checkpointRead) timing.checkpointReadStarted++; else timing.started++;
+    const token = { id: task.id, controller, active: true, priority: task.priority, kind: task.kind, checkpointRead: Boolean(task.checkpointRead) };
     active = token;
     task.attempt = (task.attempt || 0) + 1;
     const eligible = task.priority === "background" && (cooperativeYield && task.kind === "industry-build"
       || cooperativeCompanyMonthYield && task.kind === "company-month");
-    const cooperative = eligible ? {
+    const checkpointScope = {
       enabled: true, yieldRequested: false, nonInterruptibleDepth: 0, checkpoints: 0, lastCheckpointAt: task.startedAt,
       stageIndex: 0, phaseIndex: 0, phaseCheckpoints: 0, unitIndex: 0, unitCheckpoints: 0,
       isCurrent: () => token.active && active === token,
+      drainCheckpointReads: () => drainCheckpointReads(token),
+      hasCheckpointRead: () => checkpointReader?.ownerId === token.id,
+      waitForCheckpointRead: () => checkpointReader?.ownerId === token.id ? checkpointReader.done : Promise.resolve(),
       setStage(index) {
         // A company month reads the requested month and its comparison month
         // in order. Their source phases repeat 10..70; a later stage is fresh
@@ -183,6 +195,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
         }
       },
       setRevision(revision) {
+        if (!eligible) return;
         // Work completed against old originals cannot forbid foreground
         // admission while a changed source starts its new calculation prefix.
         // An unchanged revision keeps its fairness/progress fence intact.
@@ -205,11 +218,13 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
         }
       },
       checkpoint() {
+        if (!eligible) return;
         const at = timestamp(), gap = Math.max(0, at - this.lastCheckpointAt);
         this.lastCheckpointAt = at; this.checkpoints++; this.phaseCheckpoints++; this.unitCheckpoints++; timing.cooperativeCheckpoints++;
         timing.maximumCheckpointGapMs = Math.max(timing.maximumCheckpointGapMs, gap);
       },
       shouldYield() {
+        if (!eligible) return false;
         const highWater = task.progressHighWater || { phaseIndex: 0, unitIndex: 0, checkpoints: 0 }, stage = highWater.stageIndex || 0;
         const advancesUnit = this.stageIndex > stage || this.stageIndex === stage && (this.phaseIndex > highWater.phaseIndex
           || this.phaseIndex === highWater.phaseIndex && this.unitIndex > highWater.unitIndex);
@@ -219,8 +234,9 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
         return foreground.length > 0 && timestamp() - task.startedAt >= cooperativeMinRunMs
           && progresses;
       }
-    } : null;
-    token.cooperative = cooperative; task.cooperative = cooperative;
+    };
+    const cooperative = eligible ? checkpointScope : null;
+    token.checkpointScope = checkpointScope; token.cooperative = cooperative; task.cooperative = cooperative;
     if (task.priority === "foreground") consecutiveForeground++;
     else { consecutiveForeground = 0; admittedSampleSequence = sampleSequence; }
     const info = { signal: controller.signal, priority: task.priority, kind: task.kind,
@@ -237,6 +253,9 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
         task.cooperativeYielded = true;
         didFail = true;
         error = closed ? fault("ANALYTICAL_WORK_CLOSED") : task.signal?.aborted ? aborted() : fault(YIELD_CODE);
+      }
+      if (task.checkpointRead && (closed || task.signal?.aborted)) {
+        didFail = true; error = closed ? fault("ANALYTICAL_WORK_CLOSED") : aborted();
       }
       token.active = false; task.signal?.removeEventListener("abort", onAbort);
       if (active === token) active = null;
@@ -262,8 +281,41 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     Promise.resolve().then(() => task.invoke(token, info)).then(value => completed(value, null, false), error => completed(undefined, error, true));
   }
   function dispatch(queue) { accountWaiting(); return launch(queue.shift()); }
+  async function drainCheckpointReads(owner) {
+    if (checkpointReader || closed || active !== owner || !owner.active || owner.checkpointScope?.nonInterruptibleDepth !== 0) return;
+    // At most four small callbacks per boundary. Even a continuous stream of
+    // proof readers must let the background operation advance to its next
+    // checkpoint; no replay, callback restart or high-water reset is needed.
+    for (let count = 0; count < 4 && checkpointReads.length && !closed && active === owner && owner.active; count++) {
+      const task = checkpointReads.shift(); task.cleanup();
+      if (task.signal?.aborted) { const error = aborted(); recordTask(task, error, accountWaiting()); task.reject(error); continue; }
+      const controller = new AbortController(), onAbort = () => controller.abort(task.signal?.reason), onOwnerAbort = () => controller.abort(owner.controller.signal.reason);
+      task.signal?.addEventListener("abort", onAbort, { once: true });
+      owner.controller.signal.addEventListener("abort", onOwnerAbort, { once: true });
+      if (owner.controller.signal.aborted) onOwnerAbort();
+      task.startedAt = accountWaiting(); task.waits = taskWait(task); task.parentId = owner.id; task.reentrant = true; timing.checkpointReadStarted++;
+      let releaseRead;
+      const token = { id: task.id, controller, active: true, priority: "foreground", kind: task.kind, checkpointRead: true,
+        ownerId: owner.id, done: new Promise(resolve => { releaseRead = resolve; }) };
+      checkpointReader = token;
+      const info = { signal: controller.signal, priority: "foreground", kind: task.kind,
+        timing: Object.freeze({ id: task.id, parentId: owner.id, reentrant: true, checkpointRead: true, queuedAt: task.queuedAt,
+          startedAt: task.startedAt, queueWaitMs: Math.max(0, task.startedAt - task.queuedAt), ...task.waits }) };
+      let value, failure, failed = false;
+      try { value = await task.invoke(token, info); }
+      catch (error) { failure = error; failed = true; }
+      finally {
+        token.active = false; checkpointReader = null; releaseRead();
+        task.signal?.removeEventListener("abort", onAbort); owner.controller.signal.removeEventListener("abort", onOwnerAbort);
+      }
+      if (closed || task.signal?.aborted || owner.controller.signal.aborted) { failure = closed ? fault("ANALYTICAL_WORK_CLOSED") : aborted(); failed = true; }
+      recordTask(task, failure, accountWaiting(), failed);
+      if (failed) task.reject(failure); else task.resolve(value);
+    }
+  }
   function pump() {
     if (closed || active) return;
+    if (checkpointReads.length) return dispatch(checkpointReads);
     const canBackground = background.length && !sampling && fresh() && !memory.paused;
     if (foreground.length && (!canBackground || consecutiveForeground < foregroundBurst)) return dispatch(foreground);
     // Revalidate memory before background admission. Sampling is deliberately
@@ -285,6 +337,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       || taskCallback !== null && typeof taskCallback !== "function") {
       return Promise.reject(new TypeError("Invalid analytical work"));
     }
+    if (context.getStore()?.checkpointRead && context.getStore().active) return Promise.reject(fault("ANALYTICAL_CHECKPOINT_READ_NESTED_WORK"));
     if (closed) return Promise.reject(fault("ANALYTICAL_WORK_CLOSED"));
     if (signal?.aborted) return Promise.reject(aborted());
     const owner = context.getStore();
@@ -309,7 +362,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       // A queued task may be pumped by another collection lane. Restore the
       // enqueuing caller's other async stores before assigning our new owner.
       const invoke = AsyncResource.bind((token, info) => context.run(token,
-        () => runWithCooperativeWork(token.cooperative, () => operation(info))));
+        () => runWithCooperativeWork(token.checkpointScope, () => operation(info))));
       const queuedAt = accountWaiting();
       const task = { id: ++taskSequence, invoke, priority, kind, signal, resolve, reject, queuedAt,
         waitStart: { ...waitClocks[priority] }, onTaskTiming: taskCallback, cleanup: () => signal?.removeEventListener("abort", onAbort),
@@ -322,6 +375,42 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       timing.enqueued++; queue.push(task); task.attach(); pump();
     });
   }
+  function runCheckpointRead(operation, { kind = "company-month-cached-verification", signal, onTaskTiming: taskCallback = null } = {}) {
+    // This explicit application capability is for cache-only verification and
+    // one bounded derived certificate publication. It must never reconstruct
+    // sources, rebuild an index, collect, or enqueue/await other analytical work.
+    if (typeof operation !== "function" || kind !== "company-month-cached-verification"
+      || signal !== undefined && (!signal || typeof signal.addEventListener !== "function" || typeof signal.removeEventListener !== "function")
+      || taskCallback !== null && typeof taskCallback !== "function") return Promise.reject(new TypeError("Invalid checkpoint read"));
+    if (context.getStore()?.checkpointRead && context.getStore().active) return Promise.reject(fault("ANALYTICAL_CHECKPOINT_READ_NESTED_WORK"));
+    if (closed) return Promise.reject(fault("ANALYTICAL_WORK_CLOSED"));
+    if (signal?.aborted) return Promise.reject(aborted());
+    // An existing ordinary owner already has exclusive admission. Reentering
+    // its small proof directly avoids waiting for a checkpoint it cannot reach
+    // while awaiting this call. It still receives a restricted callback token.
+    const owner = context.getStore();
+    if (owner?.active && active === owner) {
+      if (owner.checkpointScope?.nonInterruptibleDepth > 0) return Promise.reject(fault("ANALYTICAL_CHECKPOINT_READ_ATOMIC_WORK"));
+      const controller = new AbortController(), onAbort = () => controller.abort(signal?.reason), onOwnerAbort = () => controller.abort(owner.controller.signal.reason);
+      signal?.addEventListener("abort", onAbort, { once: true }); owner.controller.signal.addEventListener("abort", onOwnerAbort, { once: true });
+      if (signal?.aborted) onAbort(); if (owner.controller.signal.aborted) onOwnerAbort();
+      const token = { id: owner.id, controller, active: true, checkpointRead: true };
+      return context.run(token, () => runWithCooperativeWork(null, () => Promise.resolve().then(() => operation({ signal: controller.signal, priority: "foreground", kind }))))
+        .then(value => { if (closed || controller.signal.aborted) throw closed ? fault("ANALYTICAL_WORK_CLOSED") : aborted(); return value; })
+        .finally(() => { token.active = false; signal?.removeEventListener("abort", onAbort); owner.controller.signal.removeEventListener("abort", onOwnerAbort); });
+    }
+    return new Promise((resolve, reject) => {
+      const invoke = AsyncResource.bind((token, info) => context.run(token, () => runWithCooperativeWork(null, () => operation(info))));
+      const queuedAt = accountWaiting(), task = { id: ++taskSequence, invoke, checkpointRead: true, priority: "foreground", kind, signal, resolve, reject,
+        queuedAt, waitStart: { ...waitClocks.foreground }, onTaskTiming: taskCallback, cleanup: () => signal?.removeEventListener("abort", onAbort),
+        attach: () => signal?.addEventListener("abort", onAbort, { once: true }) };
+      const onAbort = () => {
+        const index = checkpointReads.indexOf(task); if (index < 0) return;
+        const at = accountWaiting(); checkpointReads.splice(index, 1); task.cleanup(); const error = aborted(); recordTask(task, error, at); reject(error); pump();
+      };
+      timing.checkpointReadEnqueued++; checkpointReads.push(task); task.attach(); pump();
+    });
+  }
   async function checkpointPressure() {
     // It is an inspection, never a heap-retaining low-memory wait. The owner
     // may release its data and durably requeue at a safe allocation boundary.
@@ -329,7 +418,9 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   }
   function status() {
     return { closed, active: Boolean(active), activePriority: active?.priority || null, activeKind: active?.kind || null,
-      queuedForeground: foreground.length, queuedBackground: background.length, sampling: Boolean(sampling), memory: memoryStatus(),
+      queuedForeground: foreground.length + checkpointReads.length, queuedBackground: background.length,
+      queuedCheckpointReads: checkpointReads.length, activeCheckpointReadKind: checkpointReader?.kind || null,
+      sampling: Boolean(sampling), memory: memoryStatus(),
       cooperative: { enabled: cooperativeYield || cooperativeCompanyMonthYield, industryEnabled: cooperativeYield,
         companyMonthEnabled: cooperativeCompanyMonthYield,
         minRunMs: cooperativeMinRunMs, minProgressCheckpoints: cooperativeMinProgress,
@@ -342,16 +433,16 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
         yieldRequested: active?.cooperative?.yieldRequested || false },
       timing: { ...timing, historyLimit: timingHistoryLimit, recent: recent.map(row => ({ ...row,
         ...(row.progressHighWater ? { progressHighWater: { ...row.progressHighWater } } : {}) })),
-        interpretation: "Exclusive lease wall time includes I/O, not only CPU. Reentrant wall time overlaps its parent and is excluded from exclusive totals. Wait reasons are disjoint; busy ownership precedes memory pressure. Queue wait totals sum per task and can overlap across queued tasks; they are not elapsed scheduler uptime." } };
+        interpretation: "Exclusive lease wall time includes I/O, not only CPU. Reentrant wall time overlaps its parent and is excluded from exclusive totals. Checkpoint reads have separate counters; borrowed reads pause their parent at a safe boundary and never overlap execution or atomic publication. Wait reasons are disjoint; busy ownership precedes memory pressure. Queue wait totals sum per task and can overlap across queued tasks; they are not elapsed scheduler uptime." } };
   }
   async function close() {
     const at = accountWaiting(); closed = true; clearPoll();
-    for (const task of [...foreground.splice(0), ...background.splice(0)]) { task.cleanup(); const error = fault("ANALYTICAL_WORK_CLOSED");
+    for (const task of [...foreground.splice(0), ...background.splice(0), ...checkpointReads.splice(0)]) { task.cleanup(); const error = fault("ANALYTICAL_WORK_CLOSED");
       recordTask(task, error, at); task.reject(error); }
     active?.controller.abort(fault("ANALYTICAL_WORK_CLOSED"));
     if (active) await new Promise(resolve => idleWaiters.push(resolve));
   }
-  return { run, status, close, checkpointPressure };
+  return { run, runCheckpointRead, status, close, checkpointPressure };
 }
 
 module.exports = { createAnalyticalWorkScheduler };

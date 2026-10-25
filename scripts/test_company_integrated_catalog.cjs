@@ -90,6 +90,46 @@ test("each memory hit checks the fresh revision and isolates nested consumer mut
   assert.equal(next.runs[0].collectionQuality.status, "partial");
 });
 
+test("bounded selected metadata borrows only a freshly matching compact cache and never rebuilds", async t => {
+  const f = await fixture(t), cache = f.make();
+  assert.equal(await cache.cachedCompany(f.id), null, "an empty cache never starts a full source read");
+  assert.equal(f.state.builds, 0);
+  await cache.catalog(); const bytes = await fs.readFile(f.file), stat = await fs.stat(f.file, { bigint: true });
+  f.state.originalError = true;
+  const selected = await cache.cachedCompany(f.id);
+  assert.equal(selected.company.companyId, f.id); assert.equal(selected.company.capacity, 16);
+  assert.equal(selected.raw.manualCorrection.lodgingBasisTotal, 16);
+  assert.equal(selected.data.runs[0].collectionQuality.status, "partial");
+  assert.equal(JSON.stringify(selected).includes("THIS_FULL_HISTORY_MUST_NOT_BE_CACHED"), false);
+  selected.company.capacity = 999; selected.raw.keywords.keyword_a.runs[0].rank = 999;
+  assert.equal((await cache.cachedCompany(f.id)).company.capacity, 16);
+  assert.equal((await cache.cachedCompany(f.id)).raw.keywords.keyword_a.runs[0].rank, 1);
+  const restarted = f.make(); assert.equal((await restarted.cachedCompany(f.id)).company.capacity, 16);
+  assert.equal(f.state.builds, 1, "restart hits do not rebuild or construct full inventories");
+  assert.deepEqual(await fs.readFile(f.file), bytes);
+  const after = await fs.stat(f.file, { bigint: true }); assert.deepEqual([after.ino, after.mtimeNs], [stat.ino, stat.mtimeNs]);
+  f.state.revision = "changed-review-or-original";
+  assert.equal(await cache.cachedCompany(f.id), null);
+  assert.equal(await restarted.cachedCompany(f.id), null);
+  assert.equal(f.state.builds, 1);
+});
+
+test("cached selected metadata refuses source races, invalidation, deletion, corruption and expired budgets", async t => {
+  const f = await fixture(t), cache = f.make(); await cache.catalog(); const count = f.state.builds;
+  assert.equal(await cache.cachedCompany("deleted-company"), null);
+  assert.equal(await cache.cachedCompany(f.id, { budgetMs: 0 }), null);
+  f.state.failedRevision = "throw"; assert.equal(await cache.cachedCompany(f.id), null); f.state.failedRevision = "";
+  let reads = 0;
+  const raced = f.make({ readRevision: async () => ++reads === 1 ? f.state.revision : "changed-during-read" });
+  assert.equal(await raced.cachedCompany(f.id), null);
+  const invalidated = f.make({ readRevision: async () => { invalidated.invalidate(); return f.state.revision; } });
+  assert.equal(await invalidated.cachedCompany(f.id), null);
+  const expired = f.make({ readRevision: async () => { await new Promise(resolve => setTimeout(resolve, 5)); return f.state.revision; } });
+  assert.equal(await expired.cachedCompany(f.id, { budgetMs: 1 }), null);
+  await fs.writeFile(f.file, '{"corrupt":true}'); assert.equal(await f.make().cachedCompany(f.id), null);
+  assert.equal(f.state.builds, count, "every uncertain fast read defers instead of rebuilding");
+});
+
 test("a new cache instance reuses validated persisted metadata with no full catalog read or file touch", async t => {
   const f = await fixture(t), first = await f.make().catalog();
   const before = await fs.readFile(f.file), statBefore = await fs.stat(f.file, { bigint: true });
