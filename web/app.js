@@ -3688,7 +3688,9 @@ async function pollCrawlStatusUntilIdle(notifyIdle = false) {
     setStatus("준비");
     if (notifyIdle && els.crawlStatus && !Object.values(state.adminCrawlRequests || {}).some(request => request.status === "pending")) els.crawlStatus.textContent = "현재 워커에서 진행 중인 작업이 없습니다. 수집 성공 여부는 요청별 결과에서 확인하세요.";
     const inlineCompanyId = state.adminDbInlineCollect?.status === "running" ? state.adminDbInlineCollect.companyId : "";
-    await loadRuns(true);
+    // An initial idle status check has no newly finished collection to apply.
+    // Reload results only after observing active work or an inline collection.
+    if (notifyIdle || inlineCompanyId) await loadRuns(true);
     if (inlineCompanyId && !Object.values(state.adminCrawlRequests || {}).some(request => request.status === "pending" && request.recrawlContext?.companyIds?.includes(inlineCompanyId))) {
       state.adminDbInlineCollect = { ...state.adminDbInlineCollect, status: "review", message: "작업이 더 이상 진행 중이지 않습니다. 요청별 결과에서 완료 여부를 확인하세요." };
       await loadAdminDbCompanyDetail(inlineCompanyId, { force: true });
@@ -21837,6 +21839,7 @@ function adminDbCompanySearchShellHtml(context = {}, options = {}) {
     ? "한 글자만 입력하면 업체 검색 결과로 바로 이동합니다."
     : "한 글자만 입력해도 저장된 DB에서 유사 업체를 최대 8개까지 보여줍니다.";
   const queryActive = Boolean(compactSearchText(queryValue));
+  const searchRows = compact && queryActive && context.reviewMaster ? adminDbRows(context.reviewMaster) : rows;
   return `
     <section class="admin-db-company-search-shell${compact ? " compact" : ""}" aria-labelledby="${headingId}"${compact ? ' data-admin-db-persistent-search="true"' : ""}>
       <div class="admin-db-company-search-copy">
@@ -21847,7 +21850,7 @@ function adminDbCompanySearchShellHtml(context = {}, options = {}) {
       <div class="admin-db-company-query-row">
         <div class="admin-db-company-query-wrap">
           <input type="search" data-admin-db-query data-admin-db-search-context="${escapeHtml(draft.context)}" data-admin-db-search-generation="${draft.generation}" value="${escapeHtml(queryValue)}" placeholder="예: 월, 월명글램핑" role="combobox" aria-autocomplete="list" aria-controls="adminDbAutocomplete" aria-expanded="${queryActive && !draft.closed ? "true" : "false"}" autocomplete="off">
-          ${adminDbCompanyAutocompleteHtml(rows, queryValue, { closed: draft.closed })}
+          ${adminDbCompanyAutocompleteHtml(searchRows, queryValue, { closed: draft.closed })}
         </div>
         <button type="button" class="primary-button" data-admin-db-query-commit>검색</button>
         ${compact ? "" : adminDbCompanyExplorerFiltersHtml(context)}
@@ -25752,14 +25755,15 @@ function handleAdminDbReviewToggle(event) {
   if (element.matches?.(".admin-db-review-support")) {
     const context = state.adminDbSupportContext;
     if (!element.open || !context || context.element !== element || !isAdminRole() || state.session?.authenticated === false
-      || state.session !== context.session || state.companyMaster !== context.master
+      || state.session !== context.session || state.companyMaster !== context.master || state.data !== context.runData
+      || state.companyMaster?.sourceRevision !== context.sourceRevision
       || state.adminDbSearchRenderRevision !== context.revision || state.adminDbSelectedCompanyId !== context.companyId
       || state.activeTab !== "admin" || state.adminPanelSection !== "database") return;
     if (context.hydrated) return;
     const body = element.querySelector(".admin-db-review-support-body");
     if (!body) return;
-    const { filteredRows } = adminDbFilterState(context.master);
-    body.innerHTML = `${context.summaryHtml}${adminDbAuditBoard(filteredRows)}${adminDbWorkPanel(filteredRows)}${adminDbCollectionPanel(filteredRows)}`;
+    const { rows, filteredRows } = adminDbFilterState(adminConsoleMasterSource());
+    body.innerHTML = `${adminDbMetricSummaryHtml(rows, filteredRows)}${adminDbAuditBoard(filteredRows)}${adminDbWorkPanel(filteredRows)}${adminDbCollectionPanel(filteredRows)}`;
     context.hydrated = true;
     bindAdminDbCompanySelectButtons();
     return;
@@ -26770,10 +26774,12 @@ function adminDbCompanyMaintenanceHtml({ company = {}, selectedId = "", nextActi
 function adminDbSelectedDetailPanel(rows = []) {
   const row = adminDbSelectedRow(rows);
   if (!row) {
+    const missingTarget = state.adminDbSelectedCompanyId && Array.isArray(state.companyMaster?.companies)
+      && !state.companyMaster.companies.some(company => company.companyId === state.adminDbSelectedCompanyId);
     return `
-      <section class="admin-db-selected-panel empty">
-        <strong>업체 검토 대기</strong>
-        <p>필터 조건에 맞는 업체가 없습니다.</p>
+      <section class="admin-db-selected-panel empty"${missingTarget ? ' role="alert"' : ""}>
+        <strong>${missingTarget ? "선택한 업체를 찾을 수 없습니다." : "업체 검토 대기"}</strong>
+        <p>${missingTarget ? "현재 업체 DB에 선택한 업체가 없습니다. 목록에서 다시 확인해 주세요." : "필터 조건에 맞는 업체가 없습니다."}</p>
       </section>
     `;
   }
@@ -27414,6 +27420,21 @@ function resumeAdminDbCompanyDetailAfterReturn() {
     && !state.adminDbCompanyDetails?.[id]?.error) renderAdminDatabaseDashboard();
 }
 
+function adminDbMetricSummaryHtml(rows = [], filteredRows = []) {
+  const lowConfidence = filteredRows.filter((row) => row.metrics.lowConfidence || row.metrics.confidenceScore <= 2).length;
+  const manualCount = filteredRows.filter((row) => row.metrics.manualCorrection).length;
+  const otaLinked = filteredRows.filter((row) => Number(row.metrics.channels?.externalCount || 0) > 0).length;
+  const revenueRows = filteredRows.filter((row) => row.metrics.revenue > 0);
+  const averageRevenue = revenueRows.length ? revenueRows.reduce((sum, row) => sum + row.metrics.revenue, 0) / revenueRows.length : 0;
+  return `<div class="admin-db-metrics">
+    ${adminDbMetricCard("전체 업체", fmtNumber(rows.length), "저장 기준", "good")}
+    ${adminDbMetricCard("낮은 신뢰도", fmtNumber(lowConfidence), "수량·매출 확인 우선", lowConfidence ? "hot" : "good")}
+    ${adminDbMetricCard("관리자 보정", fmtNumber(manualCount), "보정값 우선 적용", manualCount ? "good" : "")}
+    ${adminDbMetricCard("OTA 연결", `${fmtNumber(otaLinked)}곳`, "네이버 제외 채널", "watch")}
+    ${adminDbMetricCard("평균 7일 매출", fmtWon(averageRevenue), `${fmtNumber(revenueRows.length)}개 표본`, "good")}
+  </div>`;
+}
+
 function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   if (!isAdminRole() || !els.adminDatabaseDashboard) return;
   if (state.activeTab === "admin" && state.adminPanelSection === "overview") {
@@ -27445,11 +27466,8 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
     if (window.AdminTransitionTiming) finishAdminScreenTransition("error");
     return;
   }
-  const { rows, filteredRows, filters, provinceOptions, regionOptions, categoryOptions, statusOptions, confidenceOptions, sourceOptions } = adminDbFilterState(master);
-  const grouped = adminDbGroupedRows(filteredRows);
-  const allGrouped = adminDbGroupedRows(rows);
   const routeCompanyId = adminDbCompanyIdFromRoute() || state.adminDbRouteCompanyId || "";
-  if (routeCompanyId && !adminDbMasterHasRows(master) && !rows.length) {
+  if (routeCompanyId && !adminDbMasterHasRows(master) && !(master.companies || []).length) {
     hideAdminRegionManagement();
     ensureAdminDbMasterLoadedForRoute(routeCompanyId);
     adminDbReplaceBoardHtml(`
@@ -27467,24 +27485,22 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
     state.adminDbViewMode = "review";
     state.adminDbOpsOpen = true;
   }
-  const lowConfidence = filteredRows.filter((row) => row.metrics.lowConfidence || row.metrics.confidenceScore <= 2).length;
-  const manualCount = filteredRows.filter((row) => row.metrics.manualCorrection).length;
-  const otaLinked = filteredRows.filter((row) => Number(row.metrics.channels?.externalCount || 0) > 0).length;
-  const revenueRows = filteredRows.filter((row) => row.metrics.revenue > 0);
-  const averageRevenue = revenueRows.length
-    ? revenueRows.reduce((sum, row) => sum + row.metrics.revenue, 0) / revenueRows.length
-    : 0;
   const currentViewMode = adminDbViewMode();
+  const selectedReviewId = currentViewMode === "review" ? state.adminDbSelectedCompanyId : "";
+  const targetReview = Boolean(selectedReviewId && Array.isArray(master.companies));
+  // A selected company's saved month needs only that exact company's row.
+  // The full master remains authoritative for membership, later search and
+  // explicit list/region/support views; never replace it with a one-row master.
+  const filterState = targetReview ? (() => {
+    const company = master.companies.find(row => row.companyId === selectedReviewId);
+    const classification = company ? adminDbClassifyCompany(company, master.adminRegionalOperations?.regions || []) : null;
+    const rows = company ? [{ company, ...classification, metrics: adminDbCompanyProfile(company, classification) }] : [];
+    return { rows, filteredRows: rows, filters: { ...(state.adminDbFilters || {}) } };
+  })() : adminDbFilterState(master);
+  const { rows, filteredRows, filters, categoryOptions, statusOptions, confidenceOptions, sourceOptions } = filterState;
+  const grouped = targetReview ? [] : adminDbGroupedRows(filteredRows);
+  const allGrouped = targetReview ? [] : adminDbGroupedRows(rows);
   const viewMode = (filters.query || "").trim() && currentViewMode !== "review" ? "list" : currentViewMode;
-  const metricSummaryHtml = `
-    <div class="admin-db-metrics">
-      ${adminDbMetricCard("전체 업체", fmtNumber(rows.length), "저장 기준", "good")}
-      ${adminDbMetricCard("낮은 신뢰도", fmtNumber(lowConfidence), "수량·매출 확인 우선", lowConfidence ? "hot" : "good")}
-      ${adminDbMetricCard("관리자 보정", fmtNumber(manualCount), "보정값 우선 적용", manualCount ? "good" : "")}
-      ${adminDbMetricCard("OTA 연결", `${fmtNumber(otaLinked)}곳`, "네이버 제외 채널", "watch")}
-      ${adminDbMetricCard("평균 7일 매출", fmtWon(averageRevenue), `${fmtNumber(revenueRows.length)}개 표본`, "good")}
-    </div>
-  `;
   const searchContext = {
     rows,
     filteredRows,
@@ -27493,7 +27509,8 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
     categoryOptions,
     statusOptions,
     confidenceOptions,
-    sourceOptions
+    sourceOptions,
+    reviewMaster: targetReview ? master : null
   };
   const reviewPanelsHtml = viewMode === "review" ? `
     ${adminDbCompanySearchShellHtml(searchContext, { compact: true, queryValue: "" })}
@@ -27517,7 +27534,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
       : adminDbRegionWorkspaceHtml(grouped, allGrouped, filters, rows, filteredRows);
   const heroProfile = viewMode === "region"
     ? { eyebrow: "DB / 지역 DB", title: "지역 DB", note: "광역과 시·군별 수집 상태를 별도 화면에서 관리합니다.", count: `${fmtNumber(allGrouped.length)}개 광역` }
-    : { eyebrow: "DB / 업체 DB", title: "업체 DB", note: "업체명을 검색하거나 광역과 시·군을 차례로 선택하세요.", count: `${fmtNumber(rows.length)}개 업체` };
+    : { eyebrow: "DB / 업체 DB", title: "업체 DB", note: "업체명을 검색하거나 광역과 시·군을 차례로 선택하세요.", count: `${fmtNumber(targetReview ? master.companies.length : rows.length)}개 업체` };
   adminDbReplaceBoardHtml(`
     <section class="admin-db-board" id="adminDatabaseBoard">
       <div class="admin-db-hero">
@@ -27538,8 +27555,8 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   // filtered row graph is retained: an explicit open reads the current filter.
   state.adminDbSupportContext = viewMode === "review" ? {
     element: els.adminDatabaseDashboard.querySelector(".admin-db-review-support"), session: state.session,
-    master, companyId: state.adminDbSelectedCompanyId, revision: state.adminDbSearchRenderRevision,
-    summaryHtml: metricSummaryHtml
+    master: state.companyMaster, runData: state.data, sourceRevision: state.companyMaster?.sourceRevision,
+    companyId: state.adminDbSelectedCompanyId, revision: state.adminDbSearchRenderRevision
   } : null;
   bindAdminDbCompanySelectButtons();
   // A review opened without an explicit company selects the first applicable
@@ -39895,7 +39912,7 @@ async function loadCompanyMasterSummary(options = {}) {
   const current = () => isAdminRole() && state.session?.authenticated !== false && state.session === session
     && (typeof options.isCurrent !== "function" || options.isCurrent());
   const cached = state.companyMasterBootstrapSummary;
-  if (options.bootstrap && cached?.session === session && cached.data === state.companyMaster && !cached.data.error) {
+  if (options.bootstrap && !options.force && cached?.session === session && cached.data === state.companyMaster && !cached.data.error) {
     if (!current()) return false;
     scheduleCompanyMasterEta(cached.data);
     return true;
@@ -39917,7 +39934,7 @@ async function loadCompanyMasterSummary(options = {}) {
   const { data, error } = await read.promise;
   if (!current()) return false;
   if (read.applied) {
-    if (state.companyMaster !== data) return false;
+    if (state.companyMaster !== read.data) return false;
   } else {
     // A correction or a detail merge received after this GET takes precedence.
     if (!companyMasterReadIsCurrent(read)) return false;
@@ -39931,21 +39948,32 @@ async function loadCompanyMasterSummary(options = {}) {
       if (options.bootstrap) renderCompanyMasterPriorityView();
       return false;
     }
-    state.companyMaster = data;
+    const existing = state.companyMaster;
+    const sameSource = data?.representation === "bootstrap" && existing?.representation === "bootstrap"
+      && !existing.error && typeof data.sourceRevision === "string" && Boolean(data.sourceRevision)
+      && data.sourceRevision === existing.sourceRevision && Array.isArray(data.companies) && Array.isArray(existing.companies)
+      && data.companies.length === existing.companies.length
+      && data.companies.every((company, index) => company.companyId === existing.companies[index]?.companyId);
+    // An unchanged fresh source response must not discard hydrated detail or
+    // remount an already displayed company/month controller. Changed sources
+    // still replace the master through the same session/revision guards above.
+    state.companyMaster = sameSource ? existing : data;
+    read.data = state.companyMaster;
     read.applied = true;
   }
-  state.companyMasterSummaryStatus = { session, sequence: read.sequence, master: data, status: "ready" };
+  const appliedData = read.data;
+  state.companyMasterSummaryStatus = { session, sequence: read.sequence, master: appliedData, status: "ready" };
   renderAdminStartupReadiness();
   if (options.bootstrap) {
-    if (!read.priorityRendered) {
+    if (!read.priorityRendered && !(typeof options.deferPriorityRender === "function" && options.deferPriorityRender())) {
       renderCompanyMasterPriorityView();
       read.priorityRendered = true;
     }
-    state.companyMasterBootstrapSummary = { session, data };
+    state.companyMasterBootstrapSummary = { session, data: appliedData };
     state.adminBootstrapSummaryPending = false;
-    scheduleCompanyMasterEta(data);
+    scheduleCompanyMasterEta(appliedData);
   } else {
-    await loadRecrawlEtaEstimates(data);
+    await loadRecrawlEtaEstimates(appliedData);
   }
   return current();
 }
@@ -39976,7 +40004,10 @@ async function loadAdminDbCompanyDetail(companyId = "", options = {}) {
   state.adminDbCompanyDetailReads[selectedCompanyId] = read;
   state.adminDbCompanyDetailLoading[selectedCompanyId] = true;
   delete state.adminDbCompanyDetails[selectedCompanyId];
-  if (state.adminDbSelectedCompanyId === selectedCompanyId
+  const preparingSavedPanel = company?.detailLoaded === false && state.adminDbIntegratedPanelContext
+    && adminDbIntegratedContextCurrent(state.adminDbIntegratedPanelContext, selectedCompanyId)
+    && state.adminDbIntegratedPanelContext.container.isConnected !== false;
+  if (state.adminDbSelectedCompanyId === selectedCompanyId && !preparingSavedPanel
     && !adminDbRefreshSelectedDetail(selectedCompanyId)) renderAdminDatabaseDashboard();
   read.promise = (async () => {
     try {
@@ -43254,7 +43285,7 @@ function openAdminDbCompanyReview(companyId = "", options = {}) {
   state.adminDbSelectedCompanyId = selectedCompanyId;
   state.adminDbViewMode = "review";
   state.adminDbOpsOpen = true;
-  renderAdminConsoleDashboard();
+  if (options.render !== false) renderAdminConsoleDashboard();
   if (options.load !== false) loadAdminDbCompanyDetail(selectedCompanyId).catch(() => {});
   if (options.scroll !== false) {
     window.requestAnimationFrame(() => {
@@ -43271,13 +43302,23 @@ function handleAdminDbCompanyHash() {
     && state.activeTab === "admin" && state.adminPanelSection === "database") return true;
   const editing = ["profile", "correction"].includes(new URLSearchParams(window.location.search || "").get("adminEdit"));
   if (editing) state.adminDbEditNavigating = true;
+  // Establish the exact target before a section transition renders the DB.
+  state.adminDbRouteCompanyId = companyId;
+  state.adminDbSelectedCompanyId = companyId;
+  state.adminDbViewMode = "review";
+  state.adminDbOpsOpen = true;
+  const needsTab = state.activeTab !== "admin";
+  const needsSection = state.adminPanelSection !== "database";
   try {
-    if (state.activeTab !== "admin") setActiveTab("admin");
+    if (needsTab) {
+      state.adminPanelSection = "database";
+      setActiveTab("admin");
+    }
     setAdminPanelSection("database");
   } finally {
     if (editing) state.adminDbEditNavigating = false;
   }
-  openAdminDbCompanyReview(companyId, { scroll: !editing });
+  openAdminDbCompanyReview(companyId, { scroll: !editing, render: !needsTab && !needsSection });
   return true;
 }
 
@@ -44960,11 +45001,16 @@ function bindEvents() {
 
 async function init() {
   const initialHistory = window.history?.state?.app === "lodging-datalab" ? window.history.state : null;
+  const initialDocumentCompanyRoute = adminDbCompanyIdFromRoute();
+  if (initialDocumentCompanyRoute) {
+    window.AdminTransitionTiming?.markNavigationStage?.("scriptReady");
+  }
   initializeThemeMode();
   ensureCrawlControls();
   registerPwaServiceWorker();
   bindPwaLifecycleEvents();
   try {
+    if (initialDocumentCompanyRoute) window.AdminTransitionTiming?.markNavigationStage?.("sessionStart");
     await loadSession();
     const initialSession = state.session;
     const initialNavigationSequence = state.analysisNavigationSequence || 0;
@@ -44972,6 +45018,16 @@ async function init() {
     const initialCompanyRouteCurrent = () => isAdminRole() && state.session === initialSession
       && state.session?.authenticated !== false && (state.analysisNavigationSequence || 0) === initialNavigationSequence
       && adminDbCompanyIdFromRoute() === initialCompanyRoute;
+    let stageNavigationSequence = initialNavigationSequence;
+    let restoringInitialCompany = false;
+    const navigationStageCurrent = () => initialDocumentCompanyRoute === initialCompanyRoute && Boolean(initialCompanyRoute)
+      && isAdminRole() && state.session === initialSession && state.session?.authenticated !== false
+      && (restoringInitialCompany || (state.analysisNavigationSequence || 0) === stageNavigationSequence)
+      && adminDbCompanyIdFromRoute() === initialCompanyRoute;
+    if (navigationStageCurrent()) {
+      window.AdminTransitionTiming?.configureNavigationStages?.({ companyId: initialCompanyRoute, isCurrent: navigationStageCurrent });
+      window.AdminTransitionTiming?.markNavigationStage?.("sessionReady");
+    }
     let initialCompanyRouteRestored = false;
     if (initialHistory?.role === state.session?.role) state.analysisRegionSelection = initialHistory.analysisRegionSelection || null;
     syncCollectionModeInputs();
@@ -44983,13 +45039,20 @@ async function init() {
       // the larger startup batch, and paint it without waiting for those reads.
       if (state.activeTab === "monthlyReports" && !initialCompanyRoute) state.adminBootstrapSummaryPending = true;
       else {
-        await loadCompanyMasterSummary({ bootstrap: true, preserveOnError: true });
-        await waitForCompanyMasterPaint();
+        if (navigationStageCurrent()) window.AdminTransitionTiming?.markNavigationStage?.("bootstrapStart");
+        await loadCompanyMasterSummary({ bootstrap: true, preserveOnError: true,
+          deferPriorityRender: () => Boolean(initialCompanyRoute && initialCompanyRouteCurrent()) });
+        if (navigationStageCurrent()) window.AdminTransitionTiming?.markNavigationStage?.("bootstrapParsed");
+        if (!(initialCompanyRoute && initialCompanyRouteCurrent())) await waitForCompanyMasterPaint();
       }
       if (!isAdminRole() || state.session !== initialSession || state.session?.authenticated === false) return;
       if (initialCompanyRoute && initialCompanyRouteCurrent()) {
-        initialCompanyRouteRestored = handleAdminDbCompanyHash();
+        if (navigationStageCurrent()) window.AdminTransitionTiming?.markNavigationStage?.("priorityRenderStart");
+        restoringInitialCompany = true;
+        try { initialCompanyRouteRestored = handleAdminDbCompanyHash(); }
+        finally { stageNavigationSequence = state.analysisNavigationSequence || 0; restoringInitialCompany = false; }
         const restoredSequence = state.analysisNavigationSequence || 0;
+        if (navigationStageCurrent()) window.AdminTransitionTiming?.markNavigationStage?.("priorityRendered");
         const currentCompany = () => isAdminRole() && state.session === initialSession && state.session?.authenticated !== false
           && (state.analysisNavigationSequence || 0) === restoredSequence && adminDbCompanyIdFromRoute() === initialCompanyRoute
           && state.activeTab === "admin" && state.adminPanelSection === "database" && state.adminDbSelectedCompanyId === initialCompanyRoute;

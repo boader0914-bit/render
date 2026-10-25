@@ -139,6 +139,7 @@ function fixture() {
     isAdminRole: () => true,
     adminConsoleMasterSource: () => state.companyMaster,
     adminDbFilterState: () => ({ rows: [row()], filteredRows: [row()], filters: { query: "" } }),
+    adminDbClassifyCompany: () => ({}), adminDbCompanyProfile: () => ({}),
     adminDbGroupedRows: () => [],
     adminDbCompanyIdFromRoute: () => state.adminDbSelectedCompanyId,
     adminDbMasterHasRows: () => true,

@@ -229,6 +229,7 @@
   }
   function createController(container, options = {}) {
     const fetchData = options.fetchData || request, schedule = options.setTimeout || root.setTimeout.bind(root), cancel = options.clearTimeout || root.clearTimeout.bind(root);
+    const navigationTiming = options.navigationTiming || root.AdminTransitionTiming;
     const state = { context: {}, tab: "settlement", view: "calendar", selectedDate: "", loading: false, error: "", envelope: {}, month: "" };
     const requestFrame = options.requestAnimationFrame || (root.requestAnimationFrame ? root.requestAnimationFrame.bind(root) : callback => root.setTimeout(callback, 0));
     const cancelFrame = options.cancelAnimationFrame || (root.cancelAnimationFrame ? root.cancelAnimationFrame.bind(root) : root.clearTimeout.bind(root));
@@ -330,22 +331,36 @@
     function remember() { if (state.context.companyId) { remembered.set(state.context.companyId, { tab: state.tab, view: state.view, month: state.month }); if (remembered.size > 100) remembered.delete(remembered.keys().next().value); } }
     function load(month = state.month, { savedPreview = month !== state.month } = {}) {
       if (disposed || !state.context.companyId) return Promise.resolve();
+      const companyAtStart = state.context.companyId, initialSavedRead = savedPreview && !hasOpened;
       clearTimer(); clearSavedValidation(); aborted?.abort(); aborted = new AbortController(); const current = ++sequence;
       if (month !== state.month) { state.envelope = {}; state.selectedDate = ""; }
       const signal = aborted.signal;
       state.month = month; state.loading = true; state.error = ""; hasOpened = true; beginDisplay(); draw();
+      const stage = name => {
+        if (!initialSavedRead) return;
+        try { navigationTiming?.markNavigationCompanyStage?.(name, { companyId: companyAtStart, month, sequence: current,
+          isCurrent: () => !disposed && current === sequence && state.context.companyId === companyAtStart
+            && (!validMonth(month) || state.month === month) }); } catch { /* Diagnostics cannot change a read or its display. */ }
+      };
       const promise = (async () => {
         try {
+          stage("savedFetchStart");
           const envelope = await fetchData(state.context.companyId, month, signal, savedPreview ? { savedPreview: true } : {});
           if (disposed || current !== sequence) return;
           if (envelope.companyId && envelope.companyId !== state.context.companyId) throw new Error("요청한 업체와 자료의 업체가 일치하지 않습니다.");
           if (validMonth(month) && envelope.selectedMonth && envelope.selectedMonth !== month) throw new Error("선택한 월과 자료의 월이 일치하지 않습니다.");
+          const parsedSnapshot = envelope.snapshot;
+          if (envelope.companyId === companyAtStart && parsedSnapshot?.request?.targetId === companyAtStart
+            && parsedSnapshot.request.month === (envelope.selectedMonth || month)) stage("savedParsed");
           state.envelope = envelope; state.month = envelope.selectedMonth || envelope.snapshot?.request?.month || month;
           if (savedPreview && envelope.freshness?.savedPreview === true) savedValidation = { sequence: current, companyId: state.context.companyId, month: state.month, ticket: null };
         } catch (error) { if (!disposed && current === sequence && error?.name !== "AbortError") state.error = error?.message || "통합 자료를 불러오지 못했습니다."; }
         finally {
           if (!disposed && current === sequence) {
             state.loading = false; remember(); draw();
+            const snapshot = state.envelope.snapshot;
+            if (!state.error && visible() && state.envelope.companyId === companyAtStart && snapshot?.request?.targetId === companyAtStart
+              && snapshot.request.month === state.month && snapshot.summary) stage("savedRendered");
             // Pending is only queued. Resume polling actual in-progress work
             // after a hidden response or a paused polling timer becomes visible.
             schedulePolling();

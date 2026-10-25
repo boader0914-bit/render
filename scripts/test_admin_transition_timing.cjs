@@ -236,3 +236,57 @@ test("whole-navigation timing never fabricates a zero without a document navigat
     assert.equal(f.main.dataset.appNavigationDisplayMs, undefined); assert.equal(f.main.dataset.appNavigationStatus, "unavailable");
   }
 });
+
+test("navigation stages buffer only two early numbers and expose them only after the fresh initial-route guard", () => {
+  const f = fixture();
+  assert.equal(f.api.markNavigationStage("scriptReady"), true); f.advance(15);
+  assert.equal(f.api.markNavigationStage("sessionStart"), true); f.advance(25);
+  assert.equal(f.api.markNavigationStage("sessionReady"), false); assert.deepEqual(f.main.dataset, {});
+  assert.equal(f.api.configureNavigationStages({ companyId: "private-company", isCurrent: () => false }), false); assert.deepEqual(f.main.dataset, {});
+  assert.equal(f.api.configureNavigationStages({ companyId: "private-company", isCurrent: () => true }), true);
+  assert.equal(f.main.dataset.appNavigationScriptReadyMs, "1000"); assert.equal(f.main.dataset.appNavigationSessionStartMs, "1015");
+  assert.equal(f.api.markNavigationStage("sessionReady"), true); assert.equal(f.main.dataset.appNavigationSessionReadyMs, "1040");
+  f.advance(80); assert.equal(f.api.markNavigationStage("scriptReady"), false); assert.equal(f.main.dataset.appNavigationScriptReadyMs, "1000");
+  for (const name of ["private-company", "csrfToken", "savedParsed", null, {}, Symbol("private")]) assert.equal(f.api.markNavigationStage(name), false);
+  assert.doesNotMatch(JSON.stringify(f.main.dataset), /private|csrf|token|companyId|sessionId/);
+  assert.ok(Object.values(f.main.dataset).every(value => /^\d+(?:\.\d)?$/.test(value)));
+});
+
+test("initial saved stages require exact current company, request month and sequence and cannot describe a later refresh", () => {
+  const f = fixture(); assert.equal(f.api.configureNavigationStages({ companyId: "initial-company", isCurrent: () => true }), true);
+  const args = { companyId: "initial-company", month: "2026-09", sequence: 1, isCurrent: () => true };
+  assert.equal(f.api.markNavigationCompanyStage("savedParsed", args), false);
+  assert.equal(f.api.markNavigationCompanyStage("savedFetchStart", { ...args, companyId: "other-company" }), false);
+  assert.equal(f.api.markNavigationCompanyStage("savedFetchStart", args), true); f.advance(20);
+  for (const changed of [{ month: "2026-08" }, { sequence: 2 }, { companyId: "other-company" }, { isCurrent: () => false }]) {
+    assert.equal(f.api.markNavigationCompanyStage("savedParsed", { ...args, ...changed }), false);
+  }
+  assert.equal(f.api.markNavigationCompanyStage("savedRendered", args), false);
+  assert.equal(f.api.markNavigationCompanyStage("savedParsed", args), true); f.advance(11);
+  assert.equal(f.api.markNavigationCompanyStage("savedRendered", args), true);
+  assert.equal(f.main.dataset.appNavigationSavedFetchStartMs, "1000"); assert.equal(f.main.dataset.appNavigationSavedParsedMs, "1020");
+  assert.equal(f.main.dataset.appNavigationSavedRenderedMs, "1031");
+  assert.equal(f.api.markNavigationCompanyStage("savedFetchStart", { ...args, sequence: 2 }), false);
+  assert.equal(f.api.markNavigationCompanyStage("savedRendered", args), false); assert.doesNotMatch(JSON.stringify(f.main.dataset), /initial-company|2026-09/);
+});
+
+test("stale initial scope, role or target cannot publish successful later stages", () => {
+  for (const change of [f => { f.current = false; }, f => { f.roles.delete("role-admin"); }, f => { f.document.getElementById = () => ({ dataset: {} }); }]) {
+    const f = fixture(); f.current = true;
+    f.api.configureNavigationStages({ companyId: "initial-company", isCurrent: () => f.current }); f.api.markNavigationStage("bootstrapStart");
+    change(f); assert.equal(f.api.markNavigationStage("bootstrapParsed"), false);
+    assert.equal(f.api.markNavigationCompanyStage("savedFetchStart", { companyId: "initial-company", month: "", sequence: 1, isCurrent: () => true }), false);
+    assert.equal(f.main.dataset.appNavigationBootstrapParsedMs, undefined);
+  }
+});
+
+test("missing clocks and malformed stage options never fabricate zero or interrupt the application", () => {
+  const f = fixture({ performance: false }); assert.equal(f.api.markNavigationStage("scriptReady"), false);
+  f.api.configureNavigationStages({ companyId: "initial-company", isCurrent: () => true });
+  assert.equal(f.api.markNavigationStage("sessionReady"), false); assert.deepEqual(f.main.dataset, {});
+  const fresh = fixture(); assert.doesNotThrow(() => fresh.api.configureNavigationStages(null));
+  assert.doesNotThrow(() => fresh.api.configureNavigationStages({ get companyId() { throw Error("private"); } }));
+  fresh.api.configureNavigationStages({ companyId: "initial-company", isCurrent: () => true });
+  assert.doesNotThrow(() => fresh.api.markNavigationCompanyStage("savedFetchStart", { get companyId() { throw Error("private"); } }));
+  assert.deepEqual(fresh.main.dataset, {});
+});

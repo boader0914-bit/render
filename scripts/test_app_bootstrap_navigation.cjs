@@ -7,6 +7,7 @@ const vm = require("node:vm");
 const { test } = require("node:test");
 
 const source = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8").replace(/\r\n/g, "\n");
+const timingSource = fs.readFileSync(path.join(__dirname, "../web/admin-transition-timing.js"), "utf8");
 const functions = ["init", "loadSession", "isAdminUserViewMode", "currentRole", "isAdminRole", "roleTabs", "roleAllowsTab", "restoreAppHistoryState"];
 function functionDeclaration(name) {
   const declaration = source.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^}`, "m"))?.[0];
@@ -136,20 +137,33 @@ function useActualCompanyRoute(f, loadDetail = () => Promise.resolve()) {
 test("a deep-linked real company route starts and paints its saved card before the slow startup batch", async () => {
   const ui = require("../web/company-integrated.js"), f = fixture({ routeCompany: "bootstrap-saved-company", historyTab: "admin" });
   const response = deferred(), requested = deferred(), finalPaint = deferred(), finalPaintEntered = deferred(), callbacks = new Map(); let frameId = 0, paintCalls = 0;
+  const main = { dataset: {}, isConnected: true, getAttribute: () => null, getClientRects: () => [{}] };
+  let clock = 100;
+  f.context.window.document = { visibilityState: "visible", getElementById: id => id === "appMain" ? main : null,
+    body: { classList: { contains: name => name === "role-admin" } } };
+  f.context.window.performance = { now: () => ++clock, timeOrigin: 1700000000000 };
+  f.context.window.Date = { now: () => 1700000000000 + clock };
+  f.context.window.getComputedStyle = () => ({ display: "block", visibility: "visible", opacity: "1" });
+  vm.runInContext(timingSource, f.context);
+  const timing = f.context.window.AdminTransitionTiming;
   const container = { innerHTML: "", isConnected: true, addEventListener() {}, removeEventListener() {}, closest: () => null,
     getClientRects: () => [{}], querySelector(selector) { return selector === ".ci-content" && this.innerHTML.includes("ci-content") ? { children: [{}] } : null; } };
   const controller = ui.createController(container, {
+    navigationTiming: timing,
     requestAnimationFrame(fn) { callbacks.set(++frameId, fn); return frameId; }, cancelAnimationFrame: id => callbacks.delete(id),
     fetchData(id, month, signal, options) { assert.equal(id, "bootstrap-saved-company"); assert.equal(options.savedPreview, true); requested.resolve(); return response.promise; }
   });
   const frame = () => { const batch = [...callbacks.values()]; callbacks.clear(); for (const callback of batch) callback(); };
   useActualCompanyRoute(f, id => controller.open({ companyId: id, month: "2026-09" }));
+  const originalLoadSession = f.context.loadSession;
+  f.context.loadSession = async () => { await originalLoadSession(); f.state.activeTab = "report"; };
   f.state.adminDbIntegratedPanelContext = { container, controller };
   f.context.adminDbIntegratedContextCurrent = (context, id) => context === f.state.adminDbIntegratedPanelContext && id === "bootstrap-saved-company";
   let navigationMeasurements = 0;
-  f.context.window.AdminTransitionTiming = { navigationRendered(options) { assert.equal(options.hasSavedMonth(), true); assert.equal(options.isCurrent(), true); assert.equal(options.isVisible(), true); navigationMeasurements++; } };
+  const originalNavigationRendered = timing.navigationRendered;
+  timing.navigationRendered = options => { assert.equal(options.hasSavedMonth(), true); assert.equal(options.isCurrent(), true); assert.equal(options.isVisible(), true); navigationMeasurements++; return originalNavigationRendered(options); };
   f.context.adminDbIntegratedDisplayForDetail = () => controller.whenDisplayed();
-  f.context.waitForCompanyMasterPaint = async () => { if (++paintCalls === 2) { finalPaintEntered.resolve(); await finalPaint.promise; } };
+  f.context.waitForCompanyMasterPaint = async () => { if (++paintCalls === 1) { finalPaintEntered.resolve(); await finalPaint.promise; } };
   const pending = f.api.init();
   try {
     await requested.promise; assert.deepEqual(f.calls.details, ["bootstrap-saved-company"]); assert.equal(navigationMeasurements, 0);
@@ -158,6 +172,13 @@ test("a deep-linked real company route starts and paints its saved card before t
     await new Promise(resolve => setImmediate(resolve)); assert.match(container.innerHTML, /월별 통합 분석/); assert.ok(!f.calls.loaders.includes("loadRuns"));
     frame(); await Promise.resolve(); assert.ok(!f.calls.loaders.includes("loadRuns"), "one frame cannot release the background batch"); assert.equal(navigationMeasurements, 0);
     frame(); await finalPaintEntered.promise; assert.equal(navigationMeasurements, 1); assert.ok(!f.calls.loaders.includes("loadRuns"), "the app's ready-frame opportunity is retained after the controller's two frames");
+    for (const field of ["ScriptReady", "SessionStart", "SessionReady", "BootstrapStart", "BootstrapParsed", "PriorityRenderStart", "PriorityRendered", "SavedFetchStart", "SavedParsed", "SavedRendered"]) {
+      assert.ok(Number.isFinite(Number(main.dataset[`appNavigation${field}Ms`])), `actual init/controller must record ${field}`);
+    }
+    assert.ok(Number(main.dataset.appNavigationBootstrapParsedMs) <= Number(main.dataset.appNavigationSavedFetchStartMs));
+    assert.ok(Number(main.dataset.appNavigationSavedFetchStartMs) <= Number(main.dataset.appNavigationSavedParsedMs));
+    assert.ok(Number(main.dataset.appNavigationSavedParsedMs) <= Number(main.dataset.appNavigationSavedRenderedMs));
+    assert.equal(Object.values(main.dataset).some(value => String(value).includes("bootstrap-saved-company")), false, "diagnostics expose timing numbers only");
     finalPaint.resolve(); await f.entered.promise; assert.deepEqual(f.calls.details, ["bootstrap-saved-company"]);
     f.gate.resolve(); await pending; assert.deepEqual(f.calls.details, ["bootstrap-saved-company"], "late bootstrap does not reopen the same company");
   } finally { response.resolve({ companyId: "bootstrap-saved-company", selectedMonth: "2026-09" }); finalPaint.resolve(); f.gate.resolve(); controller.dispose(); await pending; }

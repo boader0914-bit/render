@@ -14,7 +14,7 @@ const { buildMonthlyReportSnapshot } = require("./lib/monthly_reports.cjs");
 const appSource = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8").replace(/\r\n/g, "\n");
 const integratedSource = fs.readFileSync(path.join(__dirname, "../web/company-integrated.js"), "utf8");
 const appFunctions = ["adminDbIntegratedContainerHtml", "adminDbIntegratedContextCurrent", "adminDbReplaceBoardHtml", "adminDbRefreshSelectedDetail", "adminDbIntegratedDisplayForDetail", "syncCompanyIntegratedPanel",
-  "renderAdminDatabaseDashboard", "adminDbSelectedDetailPanel", "loadAdminDbCompanyDetail", "handleAdminDbReviewToggle",
+  "renderAdminDatabaseDashboard", "adminDbMetricSummaryHtml", "adminDbSelectedDetailPanel", "loadAdminDbCompanyDetail", "handleAdminDbReviewToggle",
   "activateAdminDbCompanyDetail", "openAdminDbCompanyReview", "resumeAdminDbCompanyDetailAfterReturn"];
 const declaration = name => {
   const found = appSource.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^}`, "m"))?.[0];
@@ -209,6 +209,86 @@ test("collapsed review support performs no hidden bulk work and expands its orig
   f.state.session = session; const master = f.state.companyMaster; f.state.companyMaster = { ...master }; f.context.handleAdminDbReviewToggle({ target: support }); assert.equal(built.length, 3, "a replaced master cannot reuse old support tools");
   f.state.companyMaster = master; f.state.adminDbSelectedCompanyId = "b"; f.context.handleAdminDbReviewToggle({ target: support }); assert.equal(built.length, 3);
   f.state.adminDbSelectedCompanyId = "a"; f.state.activeTab = "monthlyReports"; f.context.handleAdminDbReviewToggle({ target: support }); assert.equal(built.length, 3);
+});
+
+test("a 543-company master opens only the exact review target before the saved month, then searches and expands the full master", async () => {
+  const f = fixture(), classified = [], profiled = [], searched = [], listed = [], grouped = [];
+  for (let index = 2; index < 543; index++) f.state.companyMaster.companies.push({ companyId: `company-${index}`, primaryName: `업체 ${index}`, detailLoaded: false });
+  const master = f.state.companyMaster;
+  f.context.adminDbClassifyCompany = company => { classified.push(company.companyId); return {}; };
+  f.context.adminDbCompanyProfile = company => { profiled.push(company.companyId); return {}; };
+  f.context.adminDbGroupedRows = rows => { grouped.push(rows.length); return []; };
+  f.context.adminDbRows = input => { assert.equal(input, master); searched.push(input.companies.length); return input.companies.map(company => ({ company })); };
+  f.context.adminDbSearchDraft = () => ({ context: "review:a", generation: 1, value: f.state.testSearch || "", closed: false });
+  f.context.compactSearchText = value => String(value).trim();
+  f.context.adminDbAutocompleteSuggestions = (rows, query) => rows.filter(row => row.company.primaryName.includes(query));
+  f.context.adminDbCompanyDetailUrl = id => `/admin?adminCompany=${id}`;
+  vm.runInContext(["adminDbCompanySearchShellHtml", "adminDbCompanyAutocompleteHtml"].map(declaration).join("\n"), f.context);
+  f.context.adminDbMetricCard = (label, value) => `<strong>${label}:${value}</strong>`;
+  f.render(); await settle();
+  assert.equal(f.state.companyMaster, master); assert.equal(master.companies.length, 543);
+  assert.deepEqual(classified, ["a"]); assert.deepEqual(profiled, ["a"]);
+  assert.equal(f.filterCalls.length, 0); assert.deepEqual(grouped, []); assert.deepEqual(searched, []);
+  assert.equal(f.integratedRequests.length, 1); assert.equal(f.integratedRequests[0].companyId, "a");
+  assert.match(f.board.textContent, /543개 업체/);
+  assert.equal(f.detailRequests.length, 0);
+  await f.shown(); const selected = f.selected(), controller = f.controllers[0];
+  f.state.testSearch = "업체 542"; f.render(); await settle();
+  assert.deepEqual(searched, [543]);
+  assert.equal(f.board.querySelector('[data-admin-db-company-select="company-542"]')?.textContent.includes("업체 542"), true);
+  assert.equal(f.selected(), selected); assert.equal(f.controllers.at(-1), controller); assert.equal(f.integratedRequests.length, 1);
+  const support = f.board.querySelector(".admin-db-review-support"); support.open = true; f.context.handleAdminDbReviewToggle({ target: support });
+  assert.equal(f.filterCalls.length, 1); assert.equal(f.filterCalls[0], master);
+  assert.match(support.textContent, /전체 업체:543/); assert.equal(f.selected(), selected); assert.equal(f.integratedRequests.length, 1);
+  f.state.adminDbViewMode = "list"; f.state.testSearch = "";
+  f.context.adminDbCompanyExplorerHtml = value => { listed.push(value.rows.length); return "<div>전체 목록</div>"; };
+  f.render(); assert.deepEqual(listed, [543]); assert.equal(f.filterCalls.length, 2); assert.deepEqual(grouped, [543, 543]);
+  assert.equal(master.companies.length, 543); assert.equal(master.companies.every(company => company.detailLoaded === false), true);
+});
+
+test("an unknown review target never shows another company or starts its saved/detail requests", async () => {
+  const f = fixture(); f.state.adminDbSelectedCompanyId = "not-in-master"; f.state.adminDbRouteCompanyId = "not-in-master";
+  f.render(); await settle();
+  assert.equal(f.selected(), null); assert.equal(f.integratedRequests.length, 0); assert.equal(f.detailRequests.length, 0);
+  assert.equal(f.filterCalls.length, 0); assert.match(f.board.textContent, /선택한 업체를 찾을 수 없습니다/);
+  assert.equal(f.board.querySelector('[role="alert"]')?.textContent.includes("현재 업체 DB"), true);
+  assert.equal(f.state.adminDbSelectedCompanyId, "not-in-master"); assert.equal(f.state.companyMaster.companies.length, 2);
+});
+
+test("restoring a company route establishes its exact target before one DB render from either tab or section", async () => {
+  for (const tab of ["admin", "report"]) {
+    const f = fixture(), profiles = []; let renders = 0;
+    f.state.activeTab = tab; f.state.adminPanelSection = "overview"; f.state.adminDbViewMode = "list"; f.state.adminDbSelectedCompanyId = "b";
+    f.context.adminDbCompanyIdFromRoute = () => "a";
+    f.context.adminDbCompanyProfile = company => { profiles.push(company.companyId); return {}; };
+    const render = () => { renders++; f.context.renderAdminDatabaseDashboard(); };
+    f.context.renderAdminConsoleDashboard = render;
+    f.context.setActiveTab = target => { f.state.activeTab = target; f.state.analysisNavigationSequence = (f.state.analysisNavigationSequence || 0) + 1; render(); };
+    f.context.setAdminPanelSection = section => { const previous = f.state.adminPanelSection; f.state.adminPanelSection = section; if (previous !== section) render(); };
+    vm.runInContext(declaration("handleAdminDbCompanyHash"), f.context);
+    assert.equal(f.context.handleAdminDbCompanyHash(), true); await settle();
+    assert.equal(renders, 1); assert.deepEqual(profiles, ["a"]); assert.equal(f.filterCalls.length, 0);
+    assert.equal(f.integratedRequests.length, 1); assert.equal(f.integratedRequests[0].companyId, "a");
+    assert.equal(f.detailRequests.length, 0); assert.equal(f.state.companyMaster.companies.length, 2);
+  }
+});
+
+test("an unchanged freshly checked bootstrap preserves the hydrated row and current integrated controller", async () => {
+  const f = fixture(); f.state.companyMaster.representation = "bootstrap";
+  f.render(); await settle(); await f.shown(); await f.respondDetail();
+  const master = f.state.companyMaster, company = master.companies[0], selected = f.selected(), controller = f.controllers[0];
+  const requests = f.integratedRequests.length;
+  vm.runInContext(["companyMasterReadIsCurrent", "loadCompanyMasterSummary"].map(declaration).join("\n"), f.context);
+  f.context.renderAdminStartupReadiness = () => {};
+  f.context.loadRecrawlEtaEstimates = async () => {};
+  f.context.fetchJson = async () => ({ ...master, companies: master.companies.map(row => ({ companyId: row.companyId, primaryName: row.primaryName, detailLoaded: false })) });
+  assert.equal(await f.context.loadCompanyMasterSummary({ force: true }), true);
+  assert.equal(f.state.companyMaster, master); assert.equal(master.companies[0], company); assert.equal(company.detailLoaded, true);
+  f.render(); assert.equal(f.selected(), selected); assert.equal(f.controllers.at(-1), controller); assert.equal(f.integratedRequests.length, requests);
+  f.context.fetchJson = async () => ({ ...master, sourceRevision: "fixture-v2", companies: master.companies.map(row => ({ companyId: row.companyId, primaryName: row.primaryName, detailLoaded: false })) });
+  assert.equal(await f.context.loadCompanyMasterSummary({ force: true }), true);
+  assert.notEqual(f.state.companyMaster, master); assert.equal(f.state.companyMaster.sourceRevision, "fixture-v2");
+  f.render(); await settle(); assert.notEqual(f.selected(), selected); assert.equal(f.integratedRequests.length, requests + 1);
 });
 
 test("detail hydration preserves the integrated DOM, controller, selected month and successful request", async () => {

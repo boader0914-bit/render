@@ -163,3 +163,54 @@ test("DB row computations reuse stable saved data and invalidate on row, run or 
   master.adminRegionalOperations = { regions: [{}] };
   rows(master); assert.equal(calls.length, 4);
 });
+
+function summaryFixture() {
+  const state = { session: { authenticated: true, role: "admin" }, companyMaster: null }, calls = { priority: 0, eta: 0, requests: 0 };
+  let response = { representation: "bootstrap", sourceRevision: "original-v1", companies: [company("one"), company("two")] };
+  const context = { state, isAdminRole: () => state.session?.authenticated !== false && state.session?.role === "admin",
+    fetchJson: async () => { calls.requests++; return typeof response === "function" ? response() : response; },
+    renderAdminStartupReadiness() {}, renderCompanyMasterPriorityView: () => calls.priority++,
+    scheduleCompanyMasterEta: () => calls.eta++, loadRecrawlEtaEstimates: async () => calls.eta++ };
+  vm.createContext(context);
+  vm.runInContext(declaration("companyMasterReadIsCurrent") + "\n" + declaration("loadCompanyMasterSummary"), context);
+  return { state, calls, context, response: value => { response = value; } };
+}
+
+test("an explicit initial target can defer only the intermediate priority view while applying the fresh full bootstrap", async () => {
+  const f = summaryFixture();
+  assert.equal(await f.context.loadCompanyMasterSummary({ bootstrap: true, deferPriorityRender: () => true }), true);
+  assert.equal(f.calls.requests, 1); assert.equal(f.calls.priority, 0); assert.equal(f.state.companyMaster.companies.length, 2);
+  assert.equal(f.state.companyMasterSummaryStatus.status, "ready");
+  const master = f.state.companyMaster;
+  assert.equal(await f.context.loadCompanyMasterSummary({ force: true, bootstrap: true, deferPriorityRender: () => false }), true);
+  assert.equal(f.calls.priority, 1, "a later ordinary/current destination must still paint its complete priority view");
+  assert.equal(f.state.companyMaster, master);
+});
+
+test("fresh bootstrap reuse requires a nonempty original revision and exactly the same company membership/order", async () => {
+  for (const change of [
+    data => ({ ...data, sourceRevision: "original-v2" }),
+    data => ({ ...data, sourceRevision: "" }),
+    data => ({ ...data, companies: [...data.companies].reverse() }),
+    data => ({ ...data, companies: [data.companies[0]] }),
+    data => ({ ...data, companies: [data.companies[0], company("different")] })
+  ]) {
+    const f = summaryFixture(); await f.context.loadCompanyMasterSummary({ bootstrap: true });
+    const old = f.state.companyMaster; f.response(change({ ...old }));
+    assert.equal(await f.context.loadCompanyMasterSummary({ force: true }), true);
+    assert.notEqual(f.state.companyMaster, old, "changed or unproven membership must use the newly read source");
+  }
+});
+
+test("shared deferred bootstrap reads keep separate render intent and never publish after a session replacement", async () => {
+  const f = summaryFixture(), gate = deferred(); f.response(() => gate.promise);
+  const first = f.context.loadCompanyMasterSummary({ bootstrap: true, deferPriorityRender: () => true });
+  const second = f.context.loadCompanyMasterSummary({ bootstrap: true });
+  gate.resolve({ representation: "bootstrap", sourceRevision: "v1", companies: [company()] });
+  assert.deepEqual(await Promise.all([first, second]), [true, true]);
+  assert.equal(f.calls.requests, 1); assert.equal(f.calls.priority, 1);
+  const delayed = deferred(), currentMaster = f.state.companyMaster;
+  f.response(() => delayed.promise); const pending = f.context.loadCompanyMasterSummary({ force: true, bootstrap: true });
+  f.state.session = { authenticated: true, role: "admin" }; delayed.resolve({ representation: "bootstrap", sourceRevision: "v2", companies: [company("other")] });
+  assert.equal(await pending, false); assert.equal(f.state.companyMaster, currentMaster); assert.equal(f.calls.priority, 1);
+});

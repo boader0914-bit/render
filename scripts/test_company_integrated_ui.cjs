@@ -504,3 +504,41 @@ test("the real fetch requests saved view only first and hidden or disposed cards
     controller.dispose(); assert.equal(timers.timers.size, 0); assert.equal(calls.length, 1);
   } finally { controller.dispose(); global.fetch = originalFetch; }
 });
+
+test("only the initial matching saved month records fetch, parsed and rendered stages", async () => {
+  const c = container(), events = [];
+  const timing = { markNavigationCompanyStage(name, scope) { assert.equal(scope.isCurrent(), true); events.push({ name, companyId: scope.companyId, month: scope.month, sequence: scope.sequence }); } };
+  const controller = ui.createController(c, { navigationTiming: timing, fetchData: async (id, month) => month === "2026-08" ? previewEnvelope(month) : envelope() });
+  try {
+    await controller.open({ companyId: envelope().companyId, month: "2026-09" });
+    assert.deepEqual(events.map(event => event.name), ["savedFetchStart", "savedParsed", "savedRendered"]);
+    assert.ok(events.every(event => event.companyId === envelope().companyId && event.month === "2026-09" && event.sequence === 1));
+    controller.selectTab("analysis"); await controller.load(); await controller.load("2026-08");
+    assert.equal(events.length, 3, "refreshes, month changes and redraws cannot overwrite initial navigation stages");
+  } finally { controller.dispose(); }
+});
+
+test("obsolete, mismatched, missing and failed initial responses cannot record a successful saved display", async () => {
+  for (const outcome of ["obsolete", "mismatch", "missing", "failed", "hidden"]) {
+    const c = container(), events = [], pending = deferred();
+    const controller = ui.createController(c, { navigationTiming: { markNavigationCompanyStage(name) { events.push(name); } },
+      fetchData: () => pending.promise });
+    const opened = controller.open({ companyId: envelope().companyId, month: "2026-09" });
+    if (outcome === "obsolete") controller.dispose();
+    if (outcome === "hidden") c.hidden = true;
+    if (outcome === "failed") pending.reject(Error("private source failure"));
+    else pending.resolve(outcome === "mismatch" ? { ...envelope(), companyId: "another-company" } : outcome === "missing" ? { companyId: envelope().companyId } : envelope());
+    await opened;
+    assert.ok(!events.includes("savedRendered"), outcome);
+    assert.equal(events.includes("savedParsed"), outcome === "hidden", outcome);
+    controller.dispose();
+  }
+});
+
+test("a broken diagnostic callback cannot change initial saved values or error handling", async () => {
+  const c = container(), controller = ui.createController(c, { navigationTiming: { markNavigationCompanyStage() { throw Error("unsupported instrumentation"); } }, fetchData: async () => envelope() });
+  try {
+    await controller.open({ companyId: envelope().companyId, month: "2026-09" }); assert.equal(controller.state.error, "");
+    assert.equal(ui.buildViewModel(controller.state.envelope).summary.sold, 5); assert.match(c.innerHTML, /월별 통합 분석/);
+  } finally { controller.dispose(); }
+});

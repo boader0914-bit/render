@@ -6,6 +6,12 @@
   // network, application data or permission state is changed.
   let sequence = 0, active = null, frameScheduled = false, frameHandle;
   let navigationMeasurement = null, navigationDone = false;
+  const navigationStageFields = Object.freeze({ scriptReady: "appNavigationScriptReadyMs", sessionStart: "appNavigationSessionStartMs",
+    sessionReady: "appNavigationSessionReadyMs", bootstrapStart: "appNavigationBootstrapStartMs", bootstrapParsed: "appNavigationBootstrapParsedMs",
+    priorityRenderStart: "appNavigationPriorityRenderStartMs", priorityRendered: "appNavigationPriorityRenderedMs",
+    savedFetchStart: "appNavigationSavedFetchStartMs", savedParsed: "appNavigationSavedParsedMs", savedRendered: "appNavigationSavedRenderedMs" });
+  const earlyNavigationStages = new Map(), recordedNavigationStages = new Set();
+  let navigationStageScope = null, navigationCompanyClaim = null;
   const maximumInputWait = 60000;
   const finite = value => typeof value === "number" && Number.isFinite(value) && value >= 0;
   const milliseconds = value => String(Math.round(value * 10) / 10);
@@ -173,6 +179,7 @@
         try { root.cancelAnimationFrame(measurement.handle); } catch {}
       }
       measurement.hasSavedMonth = measurement.isCurrent = measurement.isVisible = null;
+      navigationStageScope = null; navigationCompanyClaim = null; earlyNavigationStages.clear();
     };
     function valid() {
       try {
@@ -207,7 +214,56 @@
     });
     return navigationMeasurement === measurement;
   }
-  const api = { begin, rendered, invalidate, navigationRendered };
+  function navigationStagesCurrent() {
+    try { return !navigationDone && navigationStageScope
+      && target() === navigationStageScope.target && roleStamp() === navigationStageScope.role && navigationStageScope.isCurrent(); }
+    catch { return false; }
+  }
+  function writeNavigationStage(name, at) {
+    if (!navigationStagesCurrent() || !finite(at) || recordedNavigationStages.has(name)) return false;
+    try { navigationStageScope.target.dataset[navigationStageFields[name]] = milliseconds(at); recordedNavigationStages.add(name); return true; }
+    catch { return false; }
+  }
+  function configureNavigationStages(options = {}) {
+    if (navigationStageScope || navigationDone) return false;
+    try {
+      const { companyId, isCurrent } = options, element = target();
+      if (typeof companyId !== "string" || !/^[A-Za-z0-9_-]{1,180}$/.test(companyId) || typeof isCurrent !== "function"
+        || !element?.dataset || !isCurrent()) return false;
+      navigationStageScope = { companyId, isCurrent, target: element, role: roleStamp() };
+      for (const [name, at] of earlyNavigationStages) writeNavigationStage(name, at);
+      earlyNavigationStages.clear(); return true;
+    } catch { return false; }
+  }
+  function markNavigationStage(name) {
+    if (typeof name !== "string" || !Object.hasOwn(navigationStageFields, name) || name.startsWith("saved") || navigationDone) return false;
+    const at = clock().monotonic;
+    if (!finite(at)) return false;
+    if (!navigationStageScope) {
+      // No pre-authentication timing is exposed. Retain at most two numbers
+      // until the app supplies its fresh-session/initial-route guard.
+      if (!["scriptReady", "sessionStart"].includes(name) || earlyNavigationStages.has(name)) return false;
+      earlyNavigationStages.set(name, at); return true;
+    }
+    return writeNavigationStage(name, at);
+  }
+  function markNavigationCompanyStage(name, options = {}) {
+    if (!["savedFetchStart", "savedParsed", "savedRendered"].includes(name) || !navigationStagesCurrent()) return false;
+    try {
+      const { companyId, month, sequence: requestSequence, isCurrent } = options;
+      if (companyId !== navigationStageScope.companyId || typeof month !== "string" || month && !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)
+        || !Number.isSafeInteger(requestSequence) || requestSequence < 0 || typeof isCurrent !== "function" || !isCurrent()) return false;
+      if (!navigationCompanyClaim) {
+        if (name !== "savedFetchStart") return false;
+        navigationCompanyClaim = { companyId, month, sequence: requestSequence };
+      }
+      if (navigationCompanyClaim.companyId !== companyId || navigationCompanyClaim.month !== month || navigationCompanyClaim.sequence !== requestSequence) return false;
+      if (name === "savedParsed" && !recordedNavigationStages.has("savedFetchStart")
+        || name === "savedRendered" && !recordedNavigationStages.has("savedParsed")) return false;
+      return writeNavigationStage(name, clock().monotonic);
+    } catch { return false; }
+  }
+  const api = { begin, rendered, invalidate, navigationRendered, markNavigationStage, configureNavigationStages, markNavigationCompanyStage };
   root.AdminTransitionTiming = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window === "undefined" ? globalThis : window);

@@ -77,6 +77,7 @@ function fixture({ mode = "list", companyId = "" } = {}) {
     adminDbFilterState: master => ({ rows: master.companies.map(company => ({ company, metrics: {} })), filteredRows: [], filters: state.adminDbFilters }),
     adminDbGroupedRows: () => [], adminDbCompanyIdFromRoute: () => "", adminDbMasterHasRows: () => true,
     adminDbRows: master => master.companies.map(company => ({ company })), compactSearchText: value => String(value).trim(),
+    adminDbClassifyCompany: () => ({}), adminDbCompanyProfile: () => ({}),
     adminDbAutocompleteSuggestions: rows => rows, adminDbCompanyDetailUrl: id => `/admin?company=${id}`, escapeHtml: escape,
     fmtNumber: String, fmtWon: String, adminDbMetricCard: () => "", adminDbCompanyExplorerFiltersHtml: () => "",
     adminDbUserViewBridgeHtml: () => "", adminDbSelectedRow: () => null, adminDbSelectedDetailPanel: () => "",
