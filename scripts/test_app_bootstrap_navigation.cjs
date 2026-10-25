@@ -122,6 +122,70 @@ test("login publishes priority company data and yields a frame before the slow s
   f.gate.resolve(); await pending;
 });
 
+function useActualCompanyRoute(f, loadDetail = () => Promise.resolve()) {
+  f.calls.details = [];
+  f.context.URLSearchParams = URLSearchParams;
+  f.context.window.location = { search: "" };
+  f.context.window.requestAnimationFrame = () => 1;
+  f.context.setAdminPanelSection = section => { f.state.adminPanelSection = section; };
+  f.context.loadAdminDbCompanyDetail = id => { f.calls.details.push(id); return loadDetail(id); };
+  f.context.adminDbIntegratedDisplayForDetail = () => null;
+  vm.runInContext(`${functionDeclaration("handleAdminDbCompanyHash")}\n${functionDeclaration("openAdminDbCompanyReview")}`, f.context);
+}
+
+test("a deep-linked real company route starts and paints its saved card before the slow startup batch", async () => {
+  const ui = require("../web/company-integrated.js"), f = fixture({ routeCompany: "bootstrap-saved-company", historyTab: "admin" });
+  const response = deferred(), requested = deferred(), finalPaint = deferred(), finalPaintEntered = deferred(), callbacks = new Map(); let frameId = 0, paintCalls = 0;
+  const container = { innerHTML: "", isConnected: true, addEventListener() {}, removeEventListener() {}, closest: () => null, querySelector: () => null };
+  const controller = ui.createController(container, {
+    requestAnimationFrame(fn) { callbacks.set(++frameId, fn); return frameId; }, cancelAnimationFrame: id => callbacks.delete(id),
+    fetchData(id, month, signal, options) { assert.equal(id, "bootstrap-saved-company"); assert.equal(options.savedPreview, true); requested.resolve(); return response.promise; }
+  });
+  const frame = () => { const batch = [...callbacks.values()]; callbacks.clear(); for (const callback of batch) callback(); };
+  useActualCompanyRoute(f, id => controller.open({ companyId: id, month: "2026-09" }));
+  f.context.adminDbIntegratedDisplayForDetail = () => controller.whenDisplayed();
+  f.context.waitForCompanyMasterPaint = async () => { if (++paintCalls === 2) { finalPaintEntered.resolve(); await finalPaint.promise; } };
+  const pending = f.api.init();
+  try {
+    await requested.promise; assert.deepEqual(f.calls.details, ["bootstrap-saved-company"]);
+    assert.ok(!f.calls.loaders.includes("loadRuns"), "the deep-link saved request starts before the gated large run loader");
+    response.resolve({ companyId: "bootstrap-saved-company", selectedMonth: "2026-09", status: "ready", snapshot: { request: { month: "2026-09" }, summary: { lodging: {} }, daily: [] } });
+    await new Promise(resolve => setImmediate(resolve)); assert.match(container.innerHTML, /월별 통합 분석/); assert.ok(!f.calls.loaders.includes("loadRuns"));
+    frame(); await Promise.resolve(); assert.ok(!f.calls.loaders.includes("loadRuns"), "one frame cannot release the background batch");
+    frame(); await finalPaintEntered.promise; assert.ok(!f.calls.loaders.includes("loadRuns"), "the app's ready-frame opportunity is retained after the controller's two frames");
+    finalPaint.resolve(); await f.entered.promise; assert.deepEqual(f.calls.details, ["bootstrap-saved-company"]);
+    f.gate.resolve(); await pending; assert.deepEqual(f.calls.details, ["bootstrap-saved-company"], "late bootstrap does not reopen the same company");
+  } finally { response.resolve({ companyId: "bootstrap-saved-company", selectedMonth: "2026-09" }); finalPaint.resolve(); f.gate.resolve(); controller.dispose(); await pending; }
+});
+
+test("a newer user navigation during the priority summary prevents initial company restoration", async () => {
+  const f = fixture({ routeCompany: "old-company", historyTab: "admin" }), summary = deferred(), entered = deferred();
+  useActualCompanyRoute(f); f.context.loadCompanyMasterSummary = async () => { entered.resolve(); await summary.promise; };
+  const pending = f.api.init(); await entered.promise;
+  f.context.setActiveTab("monthlyReports"); f.state.monthlyReportSelection = { month: "2026-08", targetId: "new-target" };
+  summary.resolve(); await f.entered.promise; assert.deepEqual(f.calls.details, []);
+  f.gate.resolve(); await pending; assert.equal(f.state.activeTab, "monthlyReports"); assert.equal(f.state.monthlyReportSelection.month, "2026-08"); assert.deepEqual(f.calls.details, []);
+});
+
+test("the late startup batch cannot restore an older company after a newer explicit company route", async () => {
+  const f = fixture({ routeCompany: "old-company", historyTab: "admin" }); useActualCompanyRoute(f);
+  const pending = f.api.init(); await f.entered.promise; assert.deepEqual(f.calls.details, ["old-company"]);
+  f.context.adminDbCompanyIdFromRoute = () => "new-company"; f.state.analysisNavigationSequence++;
+  assert.equal(f.context.handleAdminDbCompanyHash(), true); assert.equal(f.state.adminDbSelectedCompanyId, "new-company");
+  f.gate.resolve(); await pending; assert.equal(f.state.adminDbSelectedCompanyId, "new-company"); assert.deepEqual(f.calls.details, ["old-company", "new-company"]);
+});
+
+test("a superseded company display follows only the current selection and a changed session cannot start admin reads", async () => {
+  const f = fixture({ routeCompany: "old-company", historyTab: "admin" }), first = deferred(), second = deferred(), requested = deferred(); let displayReads = 0;
+  useActualCompanyRoute(f);
+  f.context.adminDbIntegratedDisplayForDetail = () => { displayReads++; requested.resolve(); return displayReads === 1 ? first.promise : second.promise; };
+  const pending = f.api.init(); await requested.promise; first.resolve({ status: "superseded" }); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(displayReads, 2); assert.ok(!f.calls.loaders.includes("loadRuns"));
+  f.state.session = { authenticated: true, role: "b2b" }; f.state.activeTab = "report";
+  second.resolve({ status: "displayed" }); await pending;
+  assert.ok(!f.calls.loaders.includes("loadRuns")); assert.ok(!f.calls.loaders.includes("loadLocationDictionary")); assert.equal(f.state.activeTab, "report"); assert.deepEqual(f.calls.details, ["old-company"]);
+});
+
 test("switching away from the administrator during the priority read cannot admit administrator startup reads", async () => {
   const f = fixture({ companyMaster: null }), gate = deferred(), entered = deferred();
   f.context.loadCompanyMasterSummary = async () => { entered.resolve(); await gate.promise; return false; };

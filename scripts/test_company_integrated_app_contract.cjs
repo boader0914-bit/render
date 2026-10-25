@@ -72,6 +72,12 @@ test("the app supplies a dedicated scoped context revision reader and retains it
     "inventoryEstimateBreakdown", "historySeriesForItem"]) assert.ok(callbackNames.includes(name), `${name} changes must invalidate saved calculations`);
   const callbacks = Object.fromEntries(callbackNames.map(name => [name, Function(`return function ${name}() {};`)()]));
   let revisionOptions, dbOptions;
+  const catalogCalls = [], normalCatalog = { source: "normal-compact" }, savedCatalog = { source: "saved-compact" };
+  let previewFallback = false;
+  const companyCatalog = {
+    catalog(options) { catalogCalls.push({ kind: "catalog", options }); return normalCatalog; },
+    preview() { catalogCalls.push({ kind: "preview" }); return previewFallback ? companyCatalog.catalog() : savedCatalog; }
+  };
   const revision = async scope => `company:${scope.companyId}:${scope.month}`;
   revision.prepare = async () => ({ revision: "prepared", companies: {} });
   revision.forScope = () => "scoped-token";
@@ -80,7 +86,7 @@ test("the app supplies a dedicated scoped context revision reader and retains it
     DATA_DIR: path.join(os.tmpdir(), "unused-contract-data"), OUTPUTS_DIR: path.join(os.tmpdir(), "unused-contract-outputs"),
     WEB_DIR: path.join(os.tmpdir(), "unused-contract-web"),
     monthlyReportSources: { loadSources() {}, catalog() {} }, listCompanyIntegratedTargets() {}, historyObservationIndex: {},
-    companyIntegratedCatalog: { catalog() {} },
+    companyIntegratedCatalog: companyCatalog,
     runAnalyticalWork: operation => operation(),
     createCompanyIntegratedSourceRevision: options => { revisionOptions = options; return revision; },
     createCompanyIntegratedDb: options => { dbOptions = options; return {}; }
@@ -116,8 +122,22 @@ test("the app supplies a dedicated scoped context revision reader and retains it
   assert.equal(dbOptions.readRevision.prepare, revision.prepare);
   assert.equal(dbOptions.readRevision.forScope, revision.forScope);
   assert.equal(dbOptions.loadSources, context.monthlyReportSources.loadSources);
-  assert.equal(dbOptions.catalog, context.companyIntegratedCatalog.catalog,
-    "saved company reads bypass full booking catalog preparation");
+  const normalOptions = { reason: "normal-company-read" };
+  assert.equal(await dbOptions.catalog(normalOptions), normalCatalog);
+  assert.equal(catalogCalls.length, 1); assert.equal(catalogCalls[0].kind, "catalog");
+  assert.equal(catalogCalls[0].options, normalOptions, "normal compact reads retain their exact options");
+  catalogCalls.length = 0;
+  assert.equal(await dbOptions.catalog({ savedPreview: true }), savedCatalog);
+  assert.deepEqual(catalogCalls, [{ kind: "preview" }], "saved preview uses the original-verified compact preview, not the booking catalog");
+  catalogCalls.length = 0; previewFallback = true;
+  assert.equal(await dbOptions.catalog({ savedPreview: true }), normalCatalog);
+  assert.deepEqual(catalogCalls, [{ kind: "preview" }, { kind: "catalog", options: undefined }],
+    "an unavailable preview retains the compact provider's checked normal fallback");
+  catalogCalls.length = 0;
+  const nonPreview = { savedPreview: "true" };
+  assert.equal(await dbOptions.catalog(nonPreview), normalCatalog);
+  assert.equal(catalogCalls.length, 1); assert.equal(catalogCalls[0].kind, "catalog");
+  assert.equal(catalogCalls[0].options, nonPreview, "only boolean true selects the preview provider");
   assert.equal(await dbOptions.readRevision({ companyId: "a", month: "2026-09" }), "company:a:2026-09");
   const originalFingerprint = revisionOptions.calculationFingerprint;
   assert.match(originalFingerprint, /^[a-f0-9]{64}$/);

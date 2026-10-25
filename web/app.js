@@ -44952,6 +44952,11 @@ async function init() {
     await loadSession();
     const initialSession = state.session;
     const initialNavigationSequence = state.analysisNavigationSequence || 0;
+    const initialCompanyRoute = adminDbCompanyIdFromRoute();
+    const initialCompanyRouteCurrent = () => isAdminRole() && state.session === initialSession
+      && state.session?.authenticated !== false && (state.analysisNavigationSequence || 0) === initialNavigationSequence
+      && adminDbCompanyIdFromRoute() === initialCompanyRoute;
+    let initialCompanyRouteRestored = false;
     if (initialHistory?.role === state.session?.role) state.analysisRegionSelection = initialHistory.analysisRegionSelection || null;
     syncCollectionModeInputs();
     bindEvents();
@@ -44960,10 +44965,32 @@ async function init() {
     if (isAdminRole()) {
       // The DB is independent of the latest run, history and ETA. Read it before
       // the larger startup batch, and paint it without waiting for those reads.
-      if (state.activeTab === "monthlyReports") state.adminBootstrapSummaryPending = true;
+      if (state.activeTab === "monthlyReports" && !initialCompanyRoute) state.adminBootstrapSummaryPending = true;
       else {
         await loadCompanyMasterSummary({ bootstrap: true, preserveOnError: true });
         await waitForCompanyMasterPaint();
+      }
+      if (!isAdminRole() || state.session !== initialSession || state.session?.authenticated === false) return;
+      if (initialCompanyRoute && initialCompanyRouteCurrent()) {
+        initialCompanyRouteRestored = handleAdminDbCompanyHash();
+        const restoredSequence = state.analysisNavigationSequence || 0;
+        const currentCompany = () => isAdminRole() && state.session === initialSession && state.session?.authenticated !== false
+          && (state.analysisNavigationSequence || 0) === restoredSequence && adminDbCompanyIdFromRoute() === initialCompanyRoute
+          && state.activeTab === "admin" && state.adminPanelSection === "database" && state.adminDbSelectedCompanyId === initialCompanyRoute;
+        // The deep-linked saved month is the first useful destination. Give
+        // its real data DOM and two frames priority over unrelated run/API
+        // startup reads; a newer user route or hidden surface wins immediately.
+        while (initialCompanyRouteRestored && currentCompany()) {
+          const display = adminDbIntegratedDisplayForDetail(initialCompanyRoute);
+          if (!display) break;
+          const displayed = await display;
+          if (!currentCompany()) break;
+          if (displayed?.status === "displayed") {
+            await waitForCompanyMasterPaint();
+            if (!currentCompany()) break;
+          }
+          if (displayed?.status !== "superseded") break;
+        }
       }
       if (!isAdminRole() || state.session !== initialSession || state.session?.authenticated === false) return;
       await Promise.all([loadRuns(true, { bootstrap: true }), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadLocationScoreOverrides(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview(), loadTourismDataStatus({ render: false }), loadSpecialDaysStatus(), loadTourismForecastStatus(), loadKosisStatus()]);
@@ -44974,7 +45001,7 @@ async function init() {
       renderAdminConsoleDashboard();
       if (state.activeTab === "demand") renderDemand();
       if (tourismDemandStrengthBackfillIsRunning()) startTourismDemandStrengthBackfillPolling();
-      if (adminDbCompanyIdFromRoute()) handleAdminDbCompanyHash();
+      if (!initialCompanyRouteRestored && initialCompanyRoute && initialCompanyRouteCurrent()) handleAdminDbCompanyHash();
     } else {
       state.runs = [];
       state.activeRunId = null;
