@@ -107,12 +107,20 @@ function createCompanyIntegratedCatalogRevision({ dataDir, readSelectorRevision,
   };
 }
 
-function createCompanyIntegratedCatalog({ dataDir, catalog, readRevision, version = "company-catalog-v1",
+function createCompanyIntegratedCatalog({ dataDir, catalog, readRevision, readPreviewRevision = null, version = "company-catalog-v1",
   now = () => new Date(), fileSystem = fs, maxBytes = 8 * 1024 * 1024, runWork = operation => operation() } = {}) {
   if (!dataDir || typeof catalog !== "function" || typeof readRevision !== "function"
+    || readPreviewRevision !== null && typeof readPreviewRevision !== "function"
     || !Number.isSafeInteger(maxBytes) || maxBytes < 128 || typeof runWork !== "function") throw new TypeError("Company metadata cache inputs are required");
   const file = path.join(dataDir, "company_integrated", "catalog.json");
-  let memory = null, building = null, epoch = 0, lastStatus = null;
+  let memory = null, memoryPreview = null, building = null, epoch = 0, lastStatus = null;
+  async function previewRevision() {
+    if (!readPreviewRevision) return null;
+    try {
+      const value = await readPreviewRevision();
+      return typeof value === "string" && value.trim() && value.length <= 512 ? value : null;
+    } catch { return null; }
+  }
   async function revision() {
     let value;
     try { value = await readRevision(); } catch { throw fault(); }
@@ -169,6 +177,7 @@ function createCompanyIntegratedCatalog({ dataDir, catalog, readRevision, versio
         if (startedEpoch !== epoch || await revision() !== before) continue;
         await fileSystem.rename(temp, file);
       } finally { await fileSystem.rm(temp, { force: true }).catch(() => {}); }
+      memoryPreview = null;
       memory = entry;
       return entry;
     }
@@ -190,12 +199,20 @@ function createCompanyIntegratedCatalog({ dataDir, catalog, readRevision, versio
   async function readCatalogValue(options) {
     let builtThisRead = false;
     for (let attempt = 0; attempt < 3; attempt++) {
+      const previewBefore = await previewRevision();
       const currentEpoch = epoch, currentRevision = await revision();
       let candidate = memory, storage = "memory";
       if (!candidate) { candidate = await saved(); storage = "saved"; }
       if (candidate?.sourceRevision === currentRevision) {
+        // Bind the compact view only while the ORIGINAL master identity stays
+        // unchanged. Derived capacity publication may change its normal source
+        // revision later, but cannot certify membership, deletions or reviews.
+        // Keep the full source check last, before the synchronous acceptance.
+        const previewAfter = await previewRevision();
         if (currentEpoch !== epoch || await revision() !== currentRevision) continue;
         memory = candidate;
+        memoryPreview = previewBefore && previewAfter === previewBefore
+          ? { entry: candidate, epoch: currentEpoch, revision: previewBefore } : null;
         lastStatus = { status: builtThisRead ? "calculated" : "reused", storage: builtThisRead ? "saved" : storage,
           companyCount: candidate.value.companies.length,
           calculatedAt: candidate.calculatedAt, bytes: Buffer.byteLength(JSON.stringify(candidate)) };
@@ -215,8 +232,26 @@ function createCompanyIntegratedCatalog({ dataDir, catalog, readRevision, versio
       throw fault(codes.includes(error.code) ? error.code : "COMPANY_CATALOG_CACHE_UNAVAILABLE");
     }
   }
-  return { catalog: readCatalog, prepare: readCatalog,
-    invalidate() { epoch++; memory = null; },
+  async function preview(options) {
+    const saved = memoryPreview;
+    const current = () => saved && saved === memoryPreview && saved.entry === memory && saved.epoch === epoch;
+    if (current()) {
+      const before = await previewRevision();
+      if (before && before === saved.revision) {
+        const after = await previewRevision();
+        if (current() && after === before) {
+          lastStatus = { status: "preview", storage: "memory", companyCount: saved.entry.value.companies.length,
+            calculatedAt: saved.entry.calculatedAt, bytes: Buffer.byteLength(JSON.stringify(saved.entry)) };
+          return asCatalog(saved.entry.value);
+        }
+      }
+    }
+    // Uninitialized/changed/uncertain originals use the full existing reader.
+    // Never return an old company after an original deletion or reviewed merge.
+    return readCatalog(options);
+  }
+  return { catalog: readCatalog, prepare: readCatalog, preview,
+    invalidate() { epoch++; memory = null; memoryPreview = null; },
     status: () => lastStatus ? { ...lastStatus } : null };
 }
 

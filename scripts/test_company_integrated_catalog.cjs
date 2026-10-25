@@ -460,3 +460,52 @@ test("memory and persisted compact hits bypass a busy heavy lease even while bac
   const afterStat = await fs.stat(f.file, { bigint: true }); assert.deepEqual([afterStat.ino, afterStat.mtimeNs], [beforeStat.ino, beforeStat.mtimeNs]);
   release.resolve(); await blocker; await scheduler.close(); await rejected;
 });
+
+test("a saved preview reuses only original-bound compact memory while a derived revision rebuild is blocked", { timeout: 5000 }, async t => {
+  const f = await fixture(t); let original = "original-master-1", previewReads = 0;
+  const cache = f.make({ readPreviewRevision: async () => { previewReads++; return original; } });
+  await cache.catalog(); const bytes = await fs.readFile(f.file), entered = deferred(), release = deferred();
+  f.state.revision = "derived-capacity-revision-2"; f.state.data.companies[0].capacity = 18;
+  f.state.buildHook = async () => { entered.resolve(); await release.promise; };
+  const normal = cache.catalog(); await entered.promise; const beforePreview = previewReads;
+  try {
+    const value = await Promise.race([cache.preview(), new Promise((_, reject) => setTimeout(() => reject(Error("saved preview waited for derived rebuild")), 500))]);
+    assert.equal(value.companies[0].capacity, 16); assert.equal(value.companies[0].inventory, undefined);
+    assert.equal(previewReads, beforePreview + 2); assert.equal(cache.status().status, "preview"); assert.deepEqual(await fs.readFile(f.file), bytes);
+    value.rawCompanies.get(f.id).manualCorrection.lodgingBasisTotal = 999;
+    assert.equal((await cache.preview()).rawCompanies.get(f.id).manualCorrection.lodgingBasisTotal, 16);
+  } finally { release.resolve(); }
+  assert.equal((await normal).companies[0].capacity, 18); assert.equal((await cache.preview()).companies[0].capacity, 18);
+});
+
+test("an original deletion or merge cannot reuse old preview membership and the engine rejects the old company", async t => {
+  const f = await fixture(t); let original = "original-master-1";
+  const cache = f.make({ readPreviewRevision: async () => original }); await cache.catalog();
+  original = "original-master-2"; f.state.revision = "full-revision-2";
+  f.state.data.companies[0].mergedIntoCompanyId = "new-company";
+  const calls = [], engine = createCompanyIntegratedDb({ dataDir: f.root, autoStart: false,
+    catalog: options => { calls.push(options); return options?.savedPreview ? cache.preview() : cache.catalog(); },
+    loadSources: async () => assert.fail("deleted company cannot read sources"), listTargets: async () => [] });
+  t.after(() => engine.stop());
+  await assert.rejects(engine.get(f.id, { month: "2026-09", savedPreview: true }), { code: "company_not_found", statusCode: 404 });
+  assert.deepEqual(calls, [{ savedPreview: true }]); assert.equal(f.state.builds, 2);
+  assert.deepEqual((await cache.preview()).companies, []);
+  await assert.rejects(engine.get(f.id, { month: "2026-09" }), { code: "company_not_found" }); assert.equal(calls.at(-1), undefined);
+});
+
+test("invalidation during the second original preview check rejects its old epoch and rebuilds before returning", { timeout: 5000 }, async t => {
+  const f = await fixture(t), entered = deferred(), release = deferred(); let hold = false, reads = 0;
+  const cache = f.make({ readPreviewRevision: async () => { if (hold && ++reads === 2) { entered.resolve(); await release.promise; } return "same-original"; } });
+  await cache.catalog(); hold = true; const pending = cache.preview(); await entered.promise;
+  cache.invalidate(); f.state.revision = "after-invalidation"; f.state.data.companies[0].capacity = 8;
+  release.resolve(); assert.equal((await pending).companies[0].capacity, 8); assert.equal(f.state.builds, 2);
+});
+
+test("uninitialized or uncertain original preview validation falls back to the existing fully checked compact path", async t => {
+  const f = await fixture(t); let bad = false;
+  const cache = f.make({ readPreviewRevision: async () => { if (bad) throw Error("private original identity failure"); return "original-master"; } });
+  assert.equal((await cache.preview()).companies[0].capacity, 16); assert.equal(f.state.builds, 1);
+  bad = true; const reads = f.state.revisionReads; assert.equal((await cache.preview()).companies[0].capacity, 16);
+  assert.ok(f.state.revisionReads > reads, "uncertain original identity cannot authorize the unchecked preview path");
+  assert.throws(() => f.make({ readPreviewRevision: "not-a-function" }), TypeError);
+});

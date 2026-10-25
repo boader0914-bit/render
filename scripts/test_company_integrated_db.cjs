@@ -32,7 +32,7 @@ async function metadataRetentionChild(root, baseline) {
     // full-catalog return. It must retain that catalog during source awaits.
     const Module = require("node:module"), filename = path.join(__dirname, "lib/company_integrated_db.cjs");
     const text = await fs.readFile(filename, "utf8");
-    const original = text.replace(/  async function activeCompany\(companyId\) \{[\s\S]+?(?=  async function targetsFor)/,
+    const original = text.replace(/  async function activeCompany\(companyId(?:, savedPreview = false)?\) \{[\s\S]+?(?=  async function targetsFor)/,
       `  async function activeCompany(companyId) {
     const data = await catalog();
     const company = (data.companies || []).find(row => identity(row) === companyId);

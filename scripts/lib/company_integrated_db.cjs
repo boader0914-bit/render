@@ -283,8 +283,8 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
       || proof.bootstrapFailureGeneration !== (state.bootstrap?.failureGeneration || 0) || storeError) return null;
     return proof;
   }
-  async function activeCompany(companyId) {
-    const data = await catalog();
+  async function activeCompany(companyId, savedPreview = false) {
+    const data = await catalog(savedPreview ? { savedPreview: true } : undefined);
     const company = (data.companies || []).find(row => identity(row) === companyId);
     const raw = data.rawCompanies instanceof Map ? data.rawCompanies.get(companyId) : data.rawCompanies?.[companyId];
     if (!company || company.deletedAt || company.mergedIntoCompanyId || raw?.deletedAt || raw?.mergedIntoCompanyId) throw fault("company_not_found", 404);
@@ -576,7 +576,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, listTargets,
     if (month !== undefined && !monthValid(month)) throw fault("invalid_month", 400);
     if (cutoffDate !== undefined) validCutoff(cutoffDate, current());
     await init();
-    const metadata = await activeCompany(companyId);
+    const metadata = await activeCompany(companyId, savedPreview);
     const index = await readJson(indexPath(companyId), null);
     const monthList = monthsOf(index?.months || []), currentMonth = kstDay(current()).slice(0, 7);
     const selectedMonth = month || (monthList.includes(currentMonth) ? currentMonth : monthList.filter(value => value <= currentMonth).at(-1) || monthList.at(-1) || currentMonth);

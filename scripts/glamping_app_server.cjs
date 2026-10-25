@@ -690,6 +690,7 @@ monthlyReportSources.catalog = createRevisionCheckedCompanyCatalog({
 const companyIntegratedCatalog = createCompanyIntegratedCatalog({
   dataDir: DATA_DIR, catalog: monthlyReportSources.catalog, runWork: runAnalyticalWork,
   readRevision: readCompanyCatalogRevision,
+  readPreviewRevision: async () => (await companyBootstrapStore.get()).sourceSignature,
   version: crypto.createHash("sha256").update("company-integrated-catalog-projection-v1\n")
     .update(fs.readFileSync(path.join(__dirname, "lib", "company_integrated_catalog.cjs")))
     .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_report_sources.cjs")))
@@ -762,7 +763,8 @@ const readCompanyIntegratedRevision = createCompanyIntegratedSourceRevision({
 });
 const companyIntegratedDb = createCompanyIntegratedDb({
   runWork: runAnalyticalWork,
-  dataDir: DATA_DIR, loadSources: monthlyReportSources.loadSources, catalog: companyIntegratedCatalog.catalog,
+  dataDir: DATA_DIR, loadSources: monthlyReportSources.loadSources,
+  catalog: options => options?.savedPreview === true ? companyIntegratedCatalog.preview() : companyIntegratedCatalog.catalog(options),
   listTargets: listCompanyIntegratedTargets, readRevision: readCompanyIntegratedRevision
 });
 async function queueIntegratedCompanies(companyIds, reason) {
