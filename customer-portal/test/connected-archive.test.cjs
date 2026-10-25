@@ -63,8 +63,8 @@ test('failed or pending source is not archived as normal, and invalid query cann
  assert.equal((await f.request(base+'?kind=secret')).status,400);assert.equal((await f.request(base+'?kind=secret',{cookie:false})).status,401);
  assert.equal((await f.request(base+'/reports',{method:'POST',data:{reportType:'monthly',anchorDate:'2026-10-24',requestKey:'publish-request-00000001',payload:{sold:999}}})).status,400);
 });
-test('automatic capture checks original preview markers before the durable safe projection drops them',async t=>{
- const f=await fixture(t);f.state.preview=true;assert.equal((await f.request('/api/customer/v1/companies/cmp_own/collection?month=2026-10')).status,200);
+test('full-source preview markers are rejected before durable persistence or automatic capture',async t=>{
+ const f=await fixture(t);f.state.preview=true;assert.equal((await f.request('/api/customer/v1/companies/cmp_own/collection?month=2026-10')).status,503);
  assert.equal((await f.request('/api/customer/v1/archives')).data.records.length,0);
  assert.equal((await f.request('/api/customer/v1/archives/reviews',{method:'POST',data:{companyId:'cmp_own',month:'2026-10'}})).status,409);
 });

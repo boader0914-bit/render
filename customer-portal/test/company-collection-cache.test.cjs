@@ -44,6 +44,31 @@ test('first-data performance marking excludes the basic catalog seed until real 
   await h.resolve(0,data());assert.deepEqual(h.marks,['insight-company-data-ready']);assert.equal(h.result(),'a|2026-10|v1');
 });
 
+test('switching to an uncached month retains only the same company A/B and clears every prior C value',async()=>{
+  const h=harness();h.context();h.mount('a');const october=data();
+  october.companyDetail.basics.name='업체 A';october.companyDetail.channels=[{label:'A 네이버'}];
+  october.companyDetail.current={summary:{sold:16,estimatedRevenue:4904000},daily:[{date:'2026-10-01',sold:16,estimatedRevenue:4904000}]};
+  await h.resolve(0,october);h.month('2026-09');
+  const shell=h.renderData.at(-1).data;
+  assert.equal(shell.companyDetail.basics.name,'업체 A');assert.equal(shell.companyDetail.channels[0].label,'A 네이버');assert.equal(shell.result.products[0].key,'room-v1');
+  assert.equal(shell.referenceCatalogReady,true);assert.equal(shell.referenceLoading,true);assert.equal(shell.companyDetail.integrated.selectedMonth,'2026-09');
+  assert.equal(shell.companyDetail.integrated.snapshot,null);assert.equal(shell.companyDetail.current.summary,null);assert.equal(shell.companyDetail.current.daily.length,0);assert.equal(shell.result.runId,undefined);
+  assert.doesNotMatch(JSON.stringify(shell.companyDetail.current),/4904000|2026-10-01/);
+  const september={...data('a','2026-09'),result:null,referenceLoading:true,calculation:{mode:'saved_only',status:'pending'},responseCache:{state:'preview',refreshing:true},companyDetail:{companyId:'a',basics:{companyId:'a'},integrated:{selectedMonth:'2026-09',status:'ready',snapshot:{}},current:{summary:{sold:2,estimatedRevenue:100000},daily:[{date:'2026-09-01',publicBookings:2,phoneBookings:0,estimatedRevenue:100000}]}}};
+  await h.resolve(1,september);const shown=h.renderData.at(-1).data;
+  assert.equal(shown.companyDetail.basics.name,'업체 A');assert.equal(shown.companyDetail.channels[0].label,'A 네이버');assert.equal(shown.result.products[0].key,'room-v1');
+  assert.equal(shown.companyDetail.current.daily[0].date,'2026-09-01');assert.equal(shown.companyDetail.current.summary.estimatedRevenue,100000);
+  assert.match(h.freshness(),/저장 자료 표시 · 최신 자료 확인 중/);assert.equal([...h.timers.values()][0].ms,5000);
+  h.leave();h.mount('b',{company:{companyId:'b',name:'업체 B'}});assert.doesNotMatch(JSON.stringify(h.renderData.at(-1)?.data),/업체 A|A 네이버/);
+});
+
+test('a matching saved month preview marks visible observations, never a pending A/B reference shell',async()=>{
+  const h=harness();h.context();h.mount('a',{company:{companyId:'a',name:'업체 A'},isCurrentView:()=>true});assert.deepEqual(h.marks,[]);
+  const saved=data();saved.result=null;saved.referenceLoading=true;saved.calculation={mode:'saved_only',status:'pending'};saved.responseCache={state:'preview',refreshing:true};
+  saved.companyDetail.current={summary:{sold:0,estimatedRevenue:0},daily:[{date:'2026-10-01',publicBookings:0,phoneBookings:0,estimatedRevenue:0,missing:false}]};
+  await h.resolve(0,saved);assert.deepEqual(h.marks,['insight-company-data-ready']);
+});
+
 test('an authorized restored snapshot marks actual DOM readiness without waiting for its follow-up GET',()=>{
   const h=harness();h.context();h.collection.restore([persisted()],'customer-one');h.mount('a',{isCurrentView:()=>true});
   assert.equal(h.result(),'a|2026-10|persisted');assert.deepEqual(h.marks,['insight-company-data-ready']);assert.equal(h.calls.length,1);

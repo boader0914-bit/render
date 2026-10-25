@@ -10,7 +10,7 @@ async function fixture(t){
  const identity=()=>({customer:{customerId:state.customerId,accountStatus:'active',revision:1,relations:state.allowed.map(companyId=>({companyId,kind:companyId==='cmp_own'?'own':'competitor',status:'active'}))},companies:state.allowed.map(companyId=>({companyId,name:companyId==='cmp_own'?'검수 내 매장':'검수 경쟁업체',version:state.catalogVersion,rooms:16})),regions:[],preparations:[],collectionAllowance:{limit:1,used:0,canRequest:true},csrfToken:'fixture-private-csrf',corrections:[{note:'fixture-private-correction'}]});
  const source=(companyId,month)=>({result:{companyId,runId:'run_'+state.version,version:'result_'+state.version,products:[],token:'fixture-private-result-token'},companyDetail:{companyId,source:'company_db',basics:{name:companyId==='cmp_own'?'검수 내 매장':'검수 경쟁업체',rooms:16},channels:[],integrated:{status:'ready',selectedMonth:month,roomBasis:{count:16},snapshot:{summary:{sold:state.version,estimatedRevenue:state.version*100000},daily:[{date:month+'-01',total:16,sold:0,estimatedRevenue:null,missing:false}]}},current:{summary:{sold:state.version,estimatedRevenue:state.version*100000},daily:[{date:month+'-01',total:16,sold:0,estimatedRevenue:null,missing:false}]},token:'fixture-private-detail-token'},request:null,collectionAllowance:{limit:1,used:1,canRequest:false},privateEvidence:'fixture-private-evidence',token:'fixture-private-top-token'});
  const fetchImpl=async(url,options)=>{
-  const u=new URL(url),match=/\/companies\/([^/]+)\/collection$/.exec(u.pathname),isSource=Boolean(match);calls.push({path:u.pathname,method:options.method});
+  const u=new URL(url),match=/\/companies\/([^/]+)\/collection$/.exec(u.pathname),isSource=Boolean(match);calls.push({path:u.pathname,method:options.method,query:u.search});
   if(isSource&&state.hold)await state.hold;
   const status=isSource?state.sourceStatus:state.identityStatus;
   return {ok:status===200,status,headers:new Headers(),json:async()=>status===200?(isSource?source(match[1],u.searchParams.get('month')||new Date(Date.now()+9*3600000).toISOString().slice(0,7)):identity()):{error:{code:'FIXTURE_'+status,message:'fixture response'}}};
@@ -21,7 +21,7 @@ async function fixture(t){
  const request=(route,{admin=false,refresh=false,host=new URL(origin).host}={})=>new Promise((resolve,reject)=>{
   const req=http.request({hostname:'127.0.0.1',port:server.address().port,path:route,headers:{Host:host,Cookie:admin?'__Host-sabun_insight_admin=fixture-private-admin-session':'__Host-sabun_insight_session=fixture-private-session',...(refresh?{'X-Insight-Refresh':'1'}:{})}},res=>{const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>resolve({status:res.statusCode,data:JSON.parse(Buffer.concat(chunks).toString('utf8')),headers:res.headers}));});req.on('error',reject);req.end();
  });
- await start();return {directory,state,calls,start,close,request,sourceCalls:()=>calls.filter(c=>c.path.endsWith('/collection')).length};
+ await start();return {directory,state,calls,start,close,request,sourceCalls:()=>calls.filter(c=>c.path.endsWith('/collection')&&!new URLSearchParams(c.query).has('savedOnly')).length};
 }
 
 test('a new BFF process restores both own and competitor results after fresh login checks without expensive source reads',async t=>{

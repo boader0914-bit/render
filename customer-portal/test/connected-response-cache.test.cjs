@@ -10,7 +10,10 @@ async function setup(t){
   const status=state.expired?401:200,ok=status===200;
   let data=identity();
   if(new URL(url).pathname.endsWith('/collection')){
+   const saved=new URL(url);
+   if(status===200&&state.previewEnabled&&saved.searchParams.get('savedOnly')==='1')return {status:200,ok:true,json:async()=>({result:null,referenceLoading:true,calculation:{mode:'saved_only',status:'pending'},companyDetail:{companyId:'cmp_one',basics:{companyId:'cmp_one',name:'검수 업체'},integrated:{companyId:'cmp_one',status:'ready',selectedMonth:saved.searchParams.get('month'),calculationVersion:'company-integrated-v4-product-max-room-reuse',snapshot:{}},current:{summary:{sold:0,estimatedRevenue:0},daily:[{date:saved.searchParams.get('month')+'-01',publicBookings:0,phoneBookings:0,estimatedRevenue:0,missing:false}]}}})};
    const u=new URL(url);if(u.searchParams.getAll('month').length>1||u.searchParams.has('month')&&!/^20\d{2}-(0[1-9]|1[0-2])$/.test(u.searchParams.get('month'))||[...u.searchParams.keys()].some(k=>k!=='month'))return {status:400,ok:false,json:async()=>({error:{code:'INVALID_MONTH'}})};
+   if(state.sourceGate)await state.sourceGate;
    data={result:{version:'source-'+state.sourceVersion,runId:'run-'+state.sourceVersion,products:[]},companyDetail:{companyId:'cmp_one',basics:{name:'검수 업체'},integrated:{status:'ready',selectedMonth:u.searchParams.get('month')||'2026-10',snapshot:{}},current:{daily:[]}},request:null,collectionAllowance:{canRequest:false}};
   }
   if(status===401)data={error:{code:'SESSION_EXPIRED'}};
@@ -23,7 +26,7 @@ async function setup(t){
    const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>{const text=Buffer.concat(chunks).toString('utf8');resolve({status:res.statusCode,headers:res.headers,text,data:res.headers['content-type']?.includes('application/json')?JSON.parse(text):null});});
   });req.on('error',reject);req.end(method==='POST'?'{}':undefined);
  });
- return {request,calls,state,sourceCalls:()=>calls.filter(call=>call.path.endsWith('/collection')).length};
+ return {request,calls,state,sourceCalls:()=>calls.filter(call=>call.path.endsWith('/collection')&&!new URLSearchParams(call.query).has('savedOnly')).length};
 }
 const customer='/api/customer/v1/companies/cmp_one/collection',admin='/api/insight-admin/v1/customer-view/companies/cmp_one/collection';
 
@@ -39,6 +42,22 @@ test('same-session reload reuses company data only after a new central permissio
  assert.equal(f.sourceCalls(),1,'fresh authenticated bootstrap can include existing core without another expensive source read');
  f.state.allowed=false;const revoked=await f.request(customer);assert.equal(revoked.status,404);assert.equal(revoked.data.result,undefined);
  f.state.allowed=true;f.state.expired=true;const expired=await f.request(customer);assert.equal(expired.status,401);assert.equal(expired.data.result,undefined);assert.match(expired.headers['set-cookie'][0],/Max-Age=0/);
+});
+
+test('the BFF internally requests a bounded saved month while the browser remains month-only and permission checked',async t=>{
+ const f=await setup(t);f.state.previewEnabled=true;let release;f.state.sourceGate=new Promise(resolve=>release=resolve);
+ const first=await f.request(customer+'?month=2026-09');
+ assert.equal(first.status,200);assert.equal(first.data.responseCache.state,'preview');assert.equal(first.data.responseCache.refreshing,true);assert.equal(first.data.result,null);
+ assert.equal(first.data.companyDetail.integrated.selectedMonth,'2026-09');assert.equal(first.data.companyDetail.current.daily[0].estimatedRevenue,0);
+ const saved=f.calls.find(call=>new URLSearchParams(call.query).has('savedOnly'));assert.equal(saved.query,'?month=2026-09&savedOnly=1');
+ assert.equal(f.sourceCalls(),1,'full calculation starts once behind the saved display');
+ const again=await f.request(customer+'?month=2026-09');assert.equal(again.data.responseCache.state,'preview');
+ assert.equal(f.calls.filter(call=>call.path==='/api/insight/v1/me').length,2,'even a preview hit requires current permission');
+ assert.equal(f.calls.filter(call=>new URLSearchParams(call.query).has('savedOnly')).length,1);
+ assert.equal((await f.request(customer+'?month=2026-09&savedOnly=1')).status,200,'browser-only savedOnly is passed directly to central validation, not accepted by the BFF cache');
+ release();await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
+ const latest=await f.request(customer+'?month=2026-09');assert.equal(latest.data.result.version,'source-1');assert.equal(latest.data.responseCache.state,'cached');
+ f.state.expired=true;const denied=await f.request(customer+'?month=2026-09');assert.equal(denied.status,401);assert.equal(denied.data.companyDetail,undefined);
 });
 
 test('customer/admin, exact month, explicit refresh and command invalidation remain isolated',async t=>{

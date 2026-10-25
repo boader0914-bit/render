@@ -99,7 +99,8 @@
     const target=document.querySelector('#collection-result');target?.setAttribute?.('aria-busy',String(value));
   }
   function markVisible(data){
-    if(!data||data.referenceLoading||!data.result&&!data.companyDetail)return;
+    const savedObservation=data?.calculation?.mode==='saved_only'&&data.companyDetail?.integrated?.selectedMonth===(selectedMonth||data.companyDetail?.integrated?.selectedMonth)&&data.companyDetail?.current?.daily?.some(row=>!row.missing&&(typeof row.publicBookings==='number'||typeof row.phoneBookings==='number'||typeof row.estimatedRevenue==='number'));
+    if(!data||data.referenceLoading&&!savedObservation||!data.result&&!data.companyDetail)return;
     try{if(mountOptions.isCurrentView?.()===true)window.InsightPerformance?.markFirst?.('insight-company-data-ready');}catch{}
   }
   function disableCollection(message){const submit=document.querySelector('[data-collect] button[type=submit]');if(submit)submit.disabled=true;const note=document.querySelector('#collection-allowance');if(note&&message)note.textContent=message;}
@@ -109,6 +110,22 @@
     const basics={companyId:id,name:company.name,address:company.address,rooms:typeof company.rooms==='number'&&Number.isFinite(company.rooms)?company.rooms:null,roomCountSource:company.roomCountSource,facilities:company.facilities,lodgingTypes:[]};
     references.delete(id);references.set(id,{referenceLoading:true,result:null,companyDetail:{companyId:id,source:'company_db_catalog',basics,channels:[],current:{daily:[],summary:null}}});
     while(references.size>CACHE_LIMIT)references.delete(references.keys().next().value);
+  }
+  function referenceShell(id,month){
+    if(!permitted(id)||referenceDenied.has(id))return null;
+    const known=month?[...cache.values()].reverse().find(entry=>entry.companyId===id&&Date.now()<entry.validUntil&&!entry.data.referenceLoading)?.data:null;
+    const base=known||references.get(id);if(!base)return null;
+    // A/B describe this company, not the selected stay month. Keep them
+    // readable while replacing C with an explicitly empty matching-month shell.
+    const detail=base.companyDetail||{};
+    const result=known?.result?Object.fromEntries(['rooms','roomCountSource','capacityWarning','productCount','products','dayUse','truncated','quality'].filter(key=>Object.hasOwn(known.result,key)).map(key=>[key,known.result[key]])):null;
+    return {referenceLoading:true,referenceCatalogReady:Boolean(known),result,companyDetail:{companyId:id,source:detail.source,basics:detail.basics,channels:detail.channels||[],current:{daily:[],summary:null},integrated:{status:'pending',selectedMonth:month,months:detail.integrated?.months||[],roomBasis:detail.integrated?.roomBasis,snapshot:null}}};
+  }
+  function withReferences(id,data){
+    if(!data?.referenceLoading&&data?.responseCache?.state!=='preview')return data;
+    const known=referenceShell(id,data.companyDetail?.integrated?.selectedMonth||selectedMonth);
+    if(!known?.referenceCatalogReady)return data;
+    return {...data,referenceCatalogReady:true,result:known.result,companyDetail:{...data.companyDetail,basics:{...known.companyDetail.basics,...data.companyDetail?.basics},channels:known.companyDetail.channels}};
   }
   function readPending(id,month,request,force=false){
     const key=cacheKey(id,month)+(force?':refresh':'');let pending=inFlight.get(key);
@@ -161,7 +178,7 @@
   function showCached(){
     const entry=cached(companyId,selectedMonth);
     if(entry){view=entry.data;renderedVersion=entry.version;document.querySelector('#collection-result').innerHTML=renderResult(entry.data);markVisible(entry.data);}
-    else{view=permitted(companyId)&&!referenceDenied.has(companyId)?references.get(companyId)||null:null;renderedVersion=null;document.querySelector('#collection-result').innerHTML=view?renderResult(view):loading();}
+    else{view=referenceShell(companyId,selectedMonth);renderedVersion=null;document.querySelector('#collection-result').innerHTML=view?renderResult(view):loading();}
     connectionBusy(!entry);
     disableCollection('수집 가능 여부를 서버에서 확인하고 있습니다.');freshness(entry?'이전 조회 자료 표시 · 최신 자료 확인 중':'최신 자료 확인 중',entry);
     return entry;
@@ -212,7 +229,7 @@
     if(!permitted(id)){disableCollection();return;}
     freshness(view?'이전 조회 자료 표시 · 최신 자료 확인 중':'최신 자료 확인 중',cached(id,month));
     try {
-      const data=await readPending(id,month,api,force);
+      const data=withReferences(id,await readPending(id,month,api,force));
       if(!contextCurrent()||!permitted(id))return;
       if(month&&data.companyDetail?.integrated?.selectedMonth&&data.companyDetail.integrated.selectedMonth!==month)throw new Error('선택한 숙박월의 자료를 확인하지 못했습니다. 다시 확인해 주세요.');
       const entry=remember(id,month,data);
@@ -225,7 +242,7 @@
         view=data;renderedVersion=version;document.querySelector('#collection-result').innerHTML=renderResult(data);
         markVisible(data);
       }
-      const saved=data.responseCache?.state==='cached',info=data.responseCache||{};
+      const saved=['cached','preview'].includes(data.responseCache?.state),info=data.responseCache||{};
       const refreshing=saved&&(info.refreshing===true||!info.refreshFailed&&entry.persisted&&info.revalidationRequired);
       const refreshFailed=saved&&info.refreshFailed&&info.refreshing!==true;
       freshness(refreshFailed?'최신 확인 실패 · 이전 조회 자료 유지':refreshing?'저장 자료 표시 · 최신 자료 확인 중':saved?'최근 확인한 저장 자료 표시':'최신 자료 확인 완료',entry);

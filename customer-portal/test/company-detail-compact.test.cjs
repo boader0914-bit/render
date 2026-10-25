@@ -30,6 +30,16 @@ test('pending integrated snapshots do not show raw previous values as integrated
   assert.match(html,/통합관측 숙박월|value="2026-10" selected|저장된 통합관측 자료를 확인/);
   assert.doesNotMatch(html,/300,000원|company-booking-chart|날짜별 추정 예약·매출/);
 });
+
+test('a month reference shell keeps known products and channels readable while C stays pending',()=>{
+  const data=fixture();data.referenceLoading=true;data.referenceCatalogReady=true;
+  data.companyDetail.integrated={...data.companyDetail.integrated,selectedMonth:'2026-09',snapshot:null,status:'pending'};
+  data.companyDetail.current={summary:null,daily:[]};
+  const html=ui().render(data);
+  assert.match(html,/&lt;객실 A&gt;|100,000원 ~ 150,000원/);assert.match(html,/https:\/\/booking.naver.com/);
+  assert.match(html,/value="2026-09" selected/);assert.match(html,/선택한 숙박월의 저장된 통합관측 자료를 확인/);
+  assert.doesNotMatch(html,/상품 자료 연결 중|300,000원|company-booking-chart|2026-10-01/);
+});
 test('no observation suppresses C and absent product information is unknown rather than zero',()=>{
   const data={companyDetail:{basics:{name:'등록 업체'},channels:[],current:{daily:[],summary:null}}};
   const html=ui().render(data);

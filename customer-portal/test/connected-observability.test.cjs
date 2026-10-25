@@ -71,17 +71,17 @@ test('a cached company still refuses identity timeout and preserves the prior co
   assert.equal((await f.request(customerCompany)).status,200);failIdentity=true;
   const denied=await f.request(customerCompany);assert.equal(denied.status,504);assert.equal(denied.data.error.stage,'identity');
   assert.equal(denied.data.result,undefined);assert.equal(denied.headers['set-cookie'],undefined);safeTiming(denied);
-  assert.equal(f.calls.filter(call=>call.path.endsWith('/collection')).length,1,'a failed permission check must not read a company source');
+  assert.equal(f.calls.filter(call=>call.path.endsWith('/collection')&&!new URLSearchParams(call.query).has('savedOnly')).length,1,'a failed permission check must not read a company source');
   failIdentity=false;const recovered=await f.request(customerCompany);
   assert.equal(recovered.status,200);assert.equal(recovered.data.responseCache.state,'cached');assert.equal(recovered.data.result.version,'source-1');
-  assert.equal(f.calls.filter(call=>call.path.endsWith('/collection')).length,1,'an identity timeout does not turn the saved core into a failure or zero');
+  assert.equal(f.calls.filter(call=>call.path.endsWith('/collection')&&!new URLSearchParams(call.query).has('savedOnly')).length,1,'an identity timeout does not turn the saved core into a failure or zero');
 });
 
 test('company source timeout is distinguished from the successful identity guard',async t=>{
   const f=await fixture(t,call=>{if(call.path.endsWith('/me'))return response(identity());throw timeout();});
   const reply=await f.request(customerCompany);assert.equal(reply.status,504);assert.equal(reply.data.error.code,'UPSTREAM_TIMEOUT');assert.equal(reply.data.error.stage,'source');
   assert.equal(reply.data.error.message,'자료 조회가 지연되어 연결하지 못했습니다. 잠시 후 다시 열어 주세요.');
-  assert.equal(reply.data.result,undefined);assert.equal(f.calls.length,2);assert.equal(f.calls.filter(call=>call.path.endsWith('/collection')).length,1);safeTiming(reply);
+  assert.equal(reply.data.result,undefined);assert.equal(f.calls.length,3);assert.equal(f.calls.filter(call=>new URLSearchParams(call.query).has('savedOnly')).length,1);assert.equal(f.calls.filter(call=>call.path.endsWith('/collection')&&!new URLSearchParams(call.query).has('savedOnly')).length,1);safeTiming(reply);
 });
 
 for(const admin of [false,true])for(const status of [401,403])test(`${admin?'administrator':'customer'} HTTP ${status} keeps its original authentication result and cookie policy`,async t=>{

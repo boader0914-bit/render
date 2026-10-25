@@ -4,8 +4,8 @@ const {allocationKeys,schemas:inventoryPolicySchemas,policyEvidence}=require('./
 
 // This is an Insight-process cache, not a second source of company data. The
 // caller supplies an opaque host/mode/session scope and both central GETs.
-function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEntries=64,maxBytes=16*1024*1024,maxPerScope=8,maxScopes=maxEntries*2,persistenceDirectory,namespace,persistentStore,onVerifiedSource}={}) {
-  const entries=new Map(),states=new Map(),pendingSources=new Map(),invalidatedScopes=new Set();
+function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,savedReadTimeoutMs=3000,maxEntries=64,maxBytes=16*1024*1024,maxPerScope=8,maxScopes=maxEntries*2,persistenceDirectory,namespace,persistentStore,onVerifiedSource}={}) {
+  const entries=new Map(),states=new Map(),pendingSources=new Map(),pendingSaved=new Map(),invalidatedScopes=new Set();
   let bytes=0;
   const clock=()=>Number(now());
   const clone=value=>value===undefined?undefined:JSON.parse(JSON.stringify(value));
@@ -101,6 +101,15 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
     return core;
   }
   const projectedEvidenceCore=data=>{const core=projectedCore(data);return core?sanitizeEvidenceCore(core):null;};
+  const previewMarker=data=>data?.calculation?.mode==='saved_only'||data?.responseCache?.preview===true||data?.responseCache?.state==='preview';
+  function previewCore(data,companyId,month){
+    const selected=data?.companyDetail?.integrated?.selectedMonth;
+    if(data?.calculation?.mode!=='saved_only'||data.calculation.status!=='pending'||data.result!==null||!/^20\d{2}-(0[1-9]|1[0-2])$/.test(selected||'')||selected!==(month||kst(clock()).slice(0,7)))return null;
+    const core=projectedEvidenceCore(data);
+    if(!core||!sourceScope(core,companyId,month)||core.companyDetail?.integrated?.status!=='ready'||core.companyDetail.integrated.calculationVersion!=='company-integrated-v4-product-max-room-reuse')return null;
+    if([...(core.companyDetail.current?.daily||[]),...(core.companyDetail.integrated.snapshot?.daily||[])].some(row=>typeof row.date!=='string'||!row.date.startsWith(selected+'-')))return null;
+    return {...core,calculation:{mode:'saved_only',status:'pending'},referenceLoading:true};
+  }
   const disk=persistentStore||(persistenceDirectory&&namespace?require('./company-snapshot-store.cjs').createCompanySnapshotStore({directory:persistenceDirectory,namespace,version:projectionVersion,now,project:projectedEvidenceCore}):null);
   const ready=async()=>{if(disk)try{await disk.ready();}catch{}};
   const stableFingerprint=identity=>hash([identity.customer.customerId,identity.customer.revision,identity.relation,identity.company,identity.request]);
@@ -128,7 +137,7 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
   function invalidate(scope) {
     const state=states.get(scope);if(state)state.epoch++;
     clearEntries(scope);states.delete(scope);invalidatedScopes.delete(scope);invalidatedScopes.add(scope);while(invalidatedScopes.size>maxScopes)invalidatedScopes.delete(invalidatedScopes.values().next().value);
-    for(const [key,pending] of pendingSources)if(pending.scope===scope)pendingSources.delete(key);
+    for(const map of [pendingSources,pendingSaved])for(const [key,pending] of map)if(pending.scope===scope)map.delete(key);
   }
   function scopeState(scope) {
     let state=states.get(scope);
@@ -142,7 +151,7 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
   }
   function revoke(state,reply) {
     state.epoch++;state.revoked={reply,at:clock()};state.denied.clear();state.fingerprints.clear();state.bindings.clear();state.blockedCompanies.clear();clearEntries(state.scope);
-    for(const [key,pending] of pendingSources)if(pending.scope===state.scope)pendingSources.delete(key);
+    for(const map of [pendingSources,pendingSaved])for(const [key,pending] of map)if(pending.scope===state.scope)map.delete(key);
   }
   async function safeRead(read) {
     try {
@@ -179,18 +188,19 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
   function cacheable(data,identity) {
     return Boolean(data.result||data.companyDetail)&&!active(identity.request)&&!active(data.request)&&!['pending','updating'].includes(data.companyDetail?.integrated?.status);
   }
-  function remember(key,state,mark,data,{checkedAt=clock(),validUntil=checkedAt+ttlMs,persisted=false}={}) {
-    let core;try{core=JSON.stringify({result:data.result??null,companyDetail:data.companyDetail??null});}catch{return;}
+  function remember(key,state,mark,data,{checkedAt=clock(),validUntil=checkedAt+ttlMs,persisted=false,preview=false}={}) {
+    let core;try{core=JSON.stringify({result:data.result??null,companyDetail:data.companyDetail??null,...(preview?{calculation:{mode:'saved_only',status:'pending'},referenceLoading:true}:{})});}catch{return;}
     const size=Buffer.byteLength(core,'utf8');if(size>maxBytes||maxEntries<1||maxPerScope<1)return;
     remove(key);
-    entries.set(key,{scope:state.scope,fingerprint:mark,core,bytes:size,checkedAt,validUntil,persisted,needsRevalidation:persisted,lastAttempt:checkedAt,refreshFailed:false});bytes+=size;
+    entries.set(key,{scope:state.scope,fingerprint:mark,core,bytes:size,checkedAt,validUntil,persisted,preview,needsRevalidation:persisted,lastAttempt:checkedAt,refreshFailed:false});bytes+=size;
     let scoped=[...entries].filter(([,entry])=>entry.scope===state.scope);
     while(scoped.length>maxPerScope){remove(scoped[0][0]);scoped.shift();}
     while(entries.size>maxEntries||bytes>maxBytes)remove(entries.keys().next().value);
   }
   function compose(entry,identity,refreshing) {
     const core=JSON.parse(entry.core),request=clone(identity.request);
-    return {status:200,ok:true,data:{...core,request,collectionAllowance:clone(identity.data.collectionAllowance),previousResult:Boolean(core.result&&request&&core.result.runId!==request.runId),responseCache:meta('cached',entry.checkedAt,refreshing,entry.refreshFailed,entry)}};
+    if(entry.preview&&entry.refreshFailed&&!refreshing){core.referenceLoading=false;core.referenceError=true;core.calculation.status='failed';}
+    return {status:200,ok:true,data:{...core,request,collectionAllowance:clone(identity.data.collectionAllowance),previousResult:Boolean(core.result&&request&&core.result.runId!==request.runId),responseCache:{...meta(entry.preview?'preview':'cached',entry.checkedAt,refreshing,entry.refreshFailed,entry),...(entry.preview?{preview:true,calculationStatus:entry.refreshFailed&&!refreshing?'failed':'pending'}:{})}}};
   }
   async function snapshot({scope,identity,maxViews=4,audience}={}) {
     // Only the BFF may call this while handling a successful, freshly verified
@@ -220,7 +230,7 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
     while(state.fingerprints.size>maxPerScope*2){const oldest=state.fingerprints.keys().next().value;state.fingerprints.delete(oldest);state.bindings.delete(oldest);remove(oldest);pendingSources.delete(oldest);}
 
     for(const [key,entry] of entries){
-      if(entry.scope!==scope)continue;
+      if(entry.scope!==scope||entry.preview)continue;
       const age=clock()-entry.checkedAt;
       if(age<0||clock()>=expiry(entry)){remove(key);continue;}
       let parts;try{parts=JSON.parse(key);}catch{continue;}
@@ -271,7 +281,7 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
         else{const previous=entries.get(key);if(previous&&previous.fingerprint===mark)previous.refreshFailed=true;}
         return reply;
       }
-      if(!sourceScope(reply.data,companyId,month)){
+      if(previewMarker(reply.data)||!sourceScope(reply.data,companyId,month)){
         const previous=entries.get(key);if(previous)previous.refreshFailed=true;
         return unavailable();
       }
@@ -290,7 +300,27 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
     }).finally(()=>{if(pendingSources.get(key)===pending)pendingSources.delete(key);});
     pendingSources.set(key,pending);return pending.promise;
   }
-  async function read({scope,route='',companyId,month='',audience,readIdentity,readSource,force=false}) {
+  function savedPreviewRead({key,state,epoch,mark,binding,companyId,month,readSavedSource}){
+    const former=pendingSaved.get(key);
+    if(former&&former.state===state&&former.epoch===epoch&&former.mark===mark&&former.binding===binding)return former.promise;
+    const pending={scope:state.scope,state,epoch,mark,binding,promise:null};
+    let timer;
+    const timeout=new Promise(resolve=>{timer=setTimeout(()=>resolve(unavailable()),Math.max(1,savedReadTimeoutMs));});
+    pending.promise=Promise.race([safeRead(readSavedSource),timeout]).then(reply=>{
+      if(!current(state,epoch,key,mark,binding))return invalidated();
+      if(!reply.ok){if([401,403].includes(reply.status)){revoke(state,reply);return reply;}return {unsupported:true};}
+      const core=previewCore(reply.data,companyId,month);
+      if(!core)return {unsupported:true};
+      const final=entries.get(key);
+      if(final&&final.fingerprint===mark&&!final.preview&&clock()<expiry(final))return {status:200,ok:true,entry:final};
+      // A preview is display-only. It must never enter the durable normal
+      // snapshot store or the verified daily-review archive.
+      remember(key,state,mark,core,{preview:true});
+      const entry=entries.get(key);return entry?{status:200,ok:true,entry}:{unsupported:true};
+    }).finally(()=>{clearTimeout(timer);if(pendingSaved.get(key)===pending)pendingSaved.delete(key);});
+    pendingSaved.set(key,pending);return pending.promise;
+  }
+  async function read({scope,route='',companyId,month='',audience,readIdentity,readSource,readSavedSource,force=false}) {
     if(typeof scope!=='string'||!scope||typeof readIdentity!=='function'||typeof readSource!=='function')return unavailable();
     if(!/^[a-zA-Z0-9_-]+$/.test(companyId||'')||typeof month!=='string'||month&&!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month))return failure(400,'INVALID_COMPANY_MONTH','업체와 숙박월을 확인해 주세요.');
     const state=scopeState(scope),epoch=state.epoch,permissionVersion=state.permissionVersion;
@@ -315,15 +345,23 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,maxEn
     else if(denied&&!force)return denied.reply;
     await ready();if(!current(state,epoch,key,mark,binding)||state.permissionVersion!==permissionVersion)return invalidated();
     for(const [entryKey,entry] of entries)if(clock()<entry.checkedAt||clock()>=expiry(entry))remove(entryKey);
-    if(!force)hydrate(key,state,mark,identity,month,period,audience);
+    const previewEnabled=typeof readSavedSource==='function';
+    if(!force||previewEnabled)hydrate(key,state,mark,identity,month,period,audience);
     const entry=entries.get(key);
+    const context={key,state,epoch,mark,binding,companyId,month,period,audience,identity,readSource};
     if(entry&&entry.fingerprint===mark&&!force&&!active(identity.request)){
       entries.delete(key);entries.set(key,entry);
       let refreshing=pendingSources.has(key);
-      if(!refreshing&&(entry.needsRevalidation||clock()-entry.lastAttempt>=refreshMs)){sourceRead({key,state,epoch,mark,binding,companyId,month,period,audience,identity,readSource});refreshing=true;}
+      if(!refreshing&&(force||entry.needsRevalidation||entry.preview&&!entry.refreshFailed||clock()-entry.lastAttempt>=refreshMs)){void sourceRead(context);refreshing=true;}
       return compose(entry,identity,refreshing);
     }
-    const reply=await sourceRead({key,state,epoch,mark,binding,companyId,month,period,audience,identity,readSource});
+    if(previewEnabled&&!active(identity.request)){
+      const saved=await savedPreviewRead({...context,readSavedSource});
+      if(!saved.ok&&!saved.unsupported)return saved;
+      if(!current(state,epoch,key,mark,binding))return invalidated();
+      if(saved.entry){void sourceRead(context);return compose(saved.entry,identity,true);}
+    }
+    const reply=await sourceRead(context);
     if(!reply.ok)return reply;
     if(!current(state,epoch,key,mark,binding))return invalidated();
     if(!sourceScope(reply.data,companyId,month))return unavailable();

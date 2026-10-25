@@ -117,8 +117,10 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
     const valid=[...url.searchParams.keys()].every(key=>key==='month')&&url.searchParams.getAll('month').length<=1&&(!url.searchParams.has('month')||/^20\d{2}-(0[1-9]|1[0-2])$/.test(month));
     // Invalid input still follows the central authentication/validation path.
     if(!session||!valid)return readUpstream(prefix+route,url.search,headers,{timing});
+    const savedQuery=new URLSearchParams(url.search);savedQuery.set('month',month||new Date(Date.now()+9*3600000).toISOString().slice(0,7));savedQuery.set('savedOnly','1');
     return companyReads.read({scope:scopeFor(requestOrigin,mode,session),audience:audienceFor(requestOrigin,mode),route:'/companies/'+match[1]+'/collection',companyId:match[1],month,force,
       readIdentity:()=>readUpstream(prefix+(mode==='admin'?'/customer-view/me':'/me'),'',headers,{stage:'identity',timing}),
+      readSavedSource:()=>readUpstream(prefix+route,'?'+savedQuery.toString(),headers,{stage:'saved_preview',timing,timeoutMs:3000}),
       readSource:()=>readUpstream(prefix+route,url.search,headers,{stage:'source',timing})});
   }
   async function regionRead(requestOrigin, mode, session, headers, route, url, force, timing) {
