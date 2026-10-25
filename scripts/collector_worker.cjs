@@ -8,6 +8,7 @@ const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { parseCollectionProgressLine } = require("./collection_progress.cjs");
 const { StringDecoder } = require("node:string_decoder");
+const { performance } = require("node:perf_hooks");
 
 const PROTOCOL_VERSION = 1;
 const JOB_ENV_KEYS = new Set([
@@ -80,6 +81,8 @@ function workerOptions(env = process.env, overrides = {}) {
     heartbeatMs: bounded(overrides.heartbeatMs, 10000, 1, 20000),
     requestTimeoutMs: bounded(overrides.requestTimeoutMs, 15000, 10, 30000),
     heartbeatTimeoutMs: bounded(overrides.heartbeatTimeoutMs, 5000, 10, 10000),
+    heartbeatAttempts: bounded(overrides.heartbeatAttempts, 3, 1, 3),
+    terminalStatusAttempts: bounded(overrides.terminalStatusAttempts, 3, 1, 3),
     killTimeoutMs: bounded(overrides.killTimeoutMs, 2000, 10, 5000),
     uploadAttempts: bounded(overrides.uploadAttempts, 3, 1, 3),
     retryMs: bounded(overrides.retryMs, 1000, 1, 5000),
@@ -122,7 +125,7 @@ async function readResponseJson(response, maxBytes = 4 * 1024 * 1024) {
   try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw failure("COLLECTOR_RESPONSE_INVALID"); }
 }
 
-async function request(options, route, { method = "POST", body, file, headers = {}, signal, attempts = 1, timeoutMs = options.requestTimeoutMs } = {}) {
+async function request(options, route, { method = "POST", body, file, headers = {}, signal, attempts = 1, timeoutMs = options.requestTimeoutMs, maxResponseBytes = 4 * 1024 * 1024 } = {}) {
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (signal?.aborted) throw failure("COLLECTOR_SHUTDOWN");
     const controller = new AbortController();
@@ -148,11 +151,13 @@ async function request(options, route, { method = "POST", body, file, headers = 
         } catch {}
         throw error;
       }
-      return await readResponseJson(response);
+      return await readResponseJson(response, maxResponseBytes);
     } catch (error) {
-      const retryable = !error.status || error.status === 408 || error.status === 429 || error.status >= 500;
+      const retryable = error.code !== "COLLECTOR_RESPONSE_INVALID"
+        && (!error.status || error.status === 408 || error.status === 429 || error.status >= 500);
       if (signal?.aborted || !retryable || attempt + 1 >= attempts) {
         const safeError = failure(error.code === "COLLECTOR_RESPONSE_INVALID" ? error.code : "COLLECTOR_REQUEST_FAILED", error.status || responseStatus || 0);
+        if (error.code !== "COLLECTOR_RESPONSE_INVALID" && !error.status) safeError.transportFailure = true;
         if (BROKER_FAILURE_CODES.has(error?.brokerErrorCode)) safeError.brokerErrorCode = error.brokerErrorCode;
         throw safeError;
       }
@@ -164,6 +169,26 @@ async function request(options, route, { method = "POST", body, file, headers = 
     await sleep(options.retryMs * (attempt + 1), signal);
   }
   throw failure("COLLECTOR_REQUEST_FAILED");
+}
+
+function transientRequest(error) {
+  return error?.code === "COLLECTOR_REQUEST_FAILED"
+    && (error.transportFailure === true || !error.status || error.status === 408 || error.status === 429 || (error.status >= 500 && error.status <= 599));
+}
+
+function terminalAcknowledgement(reply, job, proof) {
+  if (reply?.ok !== true || reply.jobId !== job.id || reply.terminal !== true || reply.leaseReleased !== true
+    || typeof reply.providerBlocked !== "boolean" || typeof reply.finishedAt !== "string" || reply.finishedAt.length > 40
+    || !Number.isFinite(Date.parse(reply.finishedAt)) || new Date(reply.finishedAt).toISOString() !== reply.finishedAt) return null;
+  if (reply.status === "failed" || reply.status === "cancelled") return reply;
+  if (reply.status !== "completed" || !proof || reply.completionMatches !== true || reply.runId !== proof.runId
+    || typeof reply.collectionFailed !== "boolean" || !["complete", "partial", "failed", "blocked"].includes(reply.qualityStatus)) return null;
+  return reply;
+}
+function terminalFailureCode(reply, localProviderBlocked = false) {
+  if (localProviderBlocked || reply.providerBlocked || reply.qualityStatus === "blocked" || reply.errorCode === "COLLECTOR_PROVIDER_BLOCKED") return "COLLECTOR_PROVIDER_BLOCKED";
+  if (reply.status === "cancelled") return "COLLECTOR_CANCELLED";
+  return safeCode({ code: reply.errorCode }, "COLLECTOR_CRAWL_FAILED");
 }
 
 function validateJob(job, options = {}) {
@@ -284,18 +309,21 @@ async function removeOwnedJob(prepared) {
   await fsp.rm(actual, { recursive: true, force: true });
 }
 
-async function runJob(job, options) {
+async function runJob(job, options, { claimedAt = performance.now() } = {}) {
   if (!options?.enabled) throw failure("COLLECTOR_CONFIGURATION_INVALID");
-  let prepared, child, childDone, childClosed = true, stopCode = "", stage = "rank_main";
+  let prepared, child, childDone, childClosed = true, childStopRequested = false, stopCode = "", stage = "rank_main";
   let heartbeatTimer, deadlineTimer, escalationTimer, urgentHeartbeat, progressTimer;
   let heartbeatChain = Promise.resolve(), completionAcknowledged = false;
   let progress = null;
   let providerBlocked = false;
+  let leaseDeadlineAt = 0, terminalReply = null, terminalLookupPromise, terminalLookupAccepted = null, terminalLookupRequests = 0;
+  let terminalAckRequired = false, completionProof = null;
   const controller = new AbortController();
   const stop = (code) => {
     if (!stopCode) stopCode = code;
     controller.abort();
-    if (child && !childClosed) {
+    if (child && !childClosed && !childStopRequested) {
+      childStopRequested = true;
       try { child.kill("SIGTERM"); } catch {}
       if (!escalationTimer) escalationTimer = setTimeout(() => { try { if (!childClosed) child.kill("SIGKILL"); } catch {} }, options.killTimeoutMs);
     }
@@ -304,22 +332,115 @@ async function runJob(job, options) {
   options.signal?.addEventListener("abort", shutdown, { once: true });
   const credentials = { workerId: options.workerId, leaseToken: job?.leaseToken };
   const jobPath = `/jobs/${encodeURIComponent(job?.id || "invalid")}`;
-  function deadline() {
+  function heartbeatFailed(reason, status = 0, attempt = 0) {
+    if (completionAcknowledged) return;
+    if (!completionAcknowledged && !stopCode) emitServiceEvent(options, { event: "collector_heartbeat_failed",
+      code: "COLLECTOR_HEARTBEAT_FAILED", reason, status, attempt });
+    stop(stopCode || "COLLECTOR_HEARTBEAT_FAILED");
+  }
+  function deadline(requestStartedAt) {
+    // A dispatch or a lost/late ACK grants no local time. The safety margin
+    // covers transit and shutdown; only a validated ACK confirms renewal.
+    const candidate = requestStartedAt + job.leaseMs - Math.min(5000, job.leaseMs / 4);
+    leaseDeadlineAt = Math.max(leaseDeadlineAt, candidate);
     clearTimeout(deadlineTimer);
-    deadlineTimer = setTimeout(() => stop("COLLECTOR_HEARTBEAT_FAILED"), Math.max(1, job.leaseMs - Math.min(5000, job.leaseMs / 4)));
+    const remainingMs = leaseDeadlineAt - performance.now();
+    if (remainingMs <= 0) { heartbeatFailed("lease_deadline"); return; }
+    deadlineTimer = setTimeout(() => heartbeatFailed("lease_deadline"), Math.max(1, Math.floor(remainingMs)));
+  }
+  function acceptTerminal(reply) {
+    if (terminalReply) return;
+    terminalReply = reply;
+    completionAcknowledged = true;
+    terminalAckRequired = false;
+    clearTimeout(heartbeatTimer); clearTimeout(deadlineTimer); clearTimeout(progressTimer);
+    const code = terminalFailureCode(reply, providerBlocked);
+    emitServiceEvent(options, { event: "collector_terminal_reconciled", code: reply.status === "completed"
+      && !reply.collectionFailed && !reply.providerBlocked && !providerBlocked && !["failed", "blocked"].includes(reply.qualityStatus)
+      ? "COLLECTOR_COMPLETION_CONFIRMED" : code });
+    if (reply.status !== "completed" || reply.collectionFailed || reply.providerBlocked || providerBlocked || ["failed", "blocked"].includes(reply.qualityStatus)) stop(code);
+  }
+  function readTerminal() {
+    // Share in-flight/accepted reads only: a later completion can change an
+    // earlier nonterminal record. The request budget is global to this job.
+    if (terminalLookupAccepted) return Promise.resolve(terminalLookupAccepted);
+    if (terminalLookupPromise) return terminalLookupPromise;
+    const attempts = options.terminalStatusAttempts || 3;
+    if (terminalLookupRequests >= attempts) return Promise.resolve(null);
+    terminalLookupPromise = (async () => {
+      try { while (terminalLookupRequests < attempts) {
+        const attempt = ++terminalLookupRequests;
+        try {
+          const reply = await request(options, `${jobPath}/terminal-status`, { body: { ...credentials, ...(completionProof || {}) },
+            timeoutMs: options.heartbeatTimeoutMs, maxResponseBytes: 8 * 1024 });
+          const accepted = terminalAcknowledgement(reply, job, completionProof);
+          if (accepted) terminalLookupAccepted = accepted;
+          if (!accepted) emitServiceEvent(options, { event: "collector_terminal_unverified", code: "COLLECTOR_TERMINAL_ACK_REQUIRED" });
+          return accepted;
+        } catch (error) {
+          if (!transientRequest(error) || attempt >= attempts || options.signal?.aborted) {
+            emitServiceEvent(options, { event: "collector_terminal_unverified", code: "COLLECTOR_TERMINAL_ACK_REQUIRED",
+              status: error.status || 0 });
+            return null;
+          }
+          // status=0 denotes an unknown transport status, not HTTP success.
+          emitServiceEvent(options, { event: "collector_terminal_retry", code: "COLLECTOR_TERMINAL_TRANSIENT",
+            status: error.status || 0, attempt, retryInMs: options.retryMs * attempt });
+          try { await sleep(options.retryMs * attempt, options.signal); } catch { return null; }
+        }
+      }
+      return null;
+      } finally { terminalLookupPromise = null; }
+    })();
+    return terminalLookupPromise;
+  }
+  function terminalOutcome() {
+    const successful = terminalReply.status === "completed" && !terminalReply.providerBlocked && !providerBlocked && !terminalReply.collectionFailed
+      && !["failed", "blocked"].includes(terminalReply.qualityStatus);
+    return { status: successful ? "completed" : terminalReply.status === "cancelled" ? "cancelled" : "failed",
+      acknowledged: true, ...(successful ? { runId: terminalReply.runId } : { halted: true, code: terminalFailureCode(terminalReply, providerBlocked) }),
+      retainedDirectory: prepared?.directory || null };
   }
   async function sendHeartbeat(blockOnly = false) {
     if (controller.signal.aborted || completionAcknowledged) return;
-    try {
-      const body = blockOnly ? { ...credentials, providerBlocked: true }
-        : { ...credentials, stage, ...(progress ? { progress } : {}), ...(providerBlocked ? { providerBlocked: true } : {}) };
-      const reply = await request(options, `${jobPath}/heartbeat`, { body, signal: controller.signal,
-        timeoutMs: Math.min(options.heartbeatTimeoutMs, Math.floor(job.leaseMs / 3)) });
+    const body = blockOnly ? { ...credentials, providerBlocked: true }
+      : { ...credentials, stage, ...(progress ? { progress } : {}), ...(providerBlocked ? { providerBlocked: true } : {}) };
+    const attempts = options.heartbeatAttempts || 3;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      const requestStartedAt = performance.now(), remainingMs = leaseDeadlineAt - requestStartedAt;
       if (controller.signal.aborted || completionAcknowledged) return;
-      if (typeof reply?.cancelled !== "boolean") throw failure("COLLECTOR_HEARTBEAT_FAILED");
-      if (reply.cancelled) { stop("COLLECTOR_CANCELLED"); return; }
-      deadline();
-    } catch { if (!completionAcknowledged) stop(stopCode || "COLLECTOR_HEARTBEAT_FAILED"); }
+      if (remainingMs <= 0) { heartbeatFailed("lease_deadline", 0, attempt); return; }
+      try {
+        const reply = await request(options, `${jobPath}/heartbeat`, { body, signal: controller.signal,
+          timeoutMs: Math.max(1, Math.min(options.heartbeatTimeoutMs, Math.floor(job.leaseMs / 3), Math.floor(remainingMs))), maxResponseBytes: 8 * 1024 });
+        if (controller.signal.aborted || completionAcknowledged) return;
+        if (performance.now() >= leaseDeadlineAt) { heartbeatFailed("lease_deadline", 0, attempt); return; }
+        if (typeof reply?.cancelled !== "boolean") throw failure("COLLECTOR_HEARTBEAT_FAILED");
+        if (reply.cancelled) { stop("COLLECTOR_CANCELLED"); return; }
+        deadline(requestStartedAt);
+        if (attempt > 1) emitServiceEvent(options, { event: "collector_heartbeat_recovered", code: "COLLECTOR_HEARTBEAT_RECOVERED", attempts: attempt });
+        return;
+      } catch (error) {
+        if (completionAcknowledged) return;
+        if (error.status === 409 && !options.signal?.aborted) {
+          heartbeatFailed("request_rejected", 409, attempt);
+          terminalAckRequired = true;
+          const reply = await readTerminal();
+          if (completionAcknowledged) return;
+          if (reply) acceptTerminal(reply);
+          return;
+        }
+        const waitMs = options.retryMs * attempt;
+        const remaining = leaseDeadlineAt - performance.now();
+        if (controller.signal.aborted || !transientRequest(error) || attempt >= attempts || remaining <= waitMs) {
+          heartbeatFailed(options.signal?.aborted ? "shutdown" : error.code === "COLLECTOR_RESPONSE_INVALID" || error.code === "COLLECTOR_HEARTBEAT_FAILED"
+            ? "malformed_ack" : !transientRequest(error) ? "request_rejected" : "retries_exhausted", error.status || 0, attempt); return;
+        }
+        emitServiceEvent(options, { event: "collector_heartbeat_retry", code: "COLLECTOR_HEARTBEAT_TRANSIENT",
+          status: error.status || 0, attempt, retryInMs: waitMs, remainingLeaseMs: Math.max(0, Math.floor(remaining)) });
+        try { await sleep(waitMs, controller.signal); } catch { return; }
+      }
+    }
   }
   function heartbeat() {
     heartbeatChain = heartbeatChain.then(() => sendHeartbeat());
@@ -332,7 +453,7 @@ async function runJob(job, options) {
   try {
     if (options.signal?.aborted) throw failure("COLLECTOR_SHUTDOWN");
     prepared = await prepareJob(job, options);
-    deadline();
+    deadline(claimedAt);
     await heartbeat();
     if (stopCode) throw failure(stopCode);
     nextHeartbeat();
@@ -400,14 +521,32 @@ async function runJob(job, options) {
       failurePhase = "final_validation";
       await heartbeat();
       if (stopCode) throw failure(stopCode);
-      const reply = await request(options, `${jobPath}/complete`, { body: { ...credentials, runId: artifacts.runId,
-        files: artifacts.files.map(({ path: filePath, size, sha256 }) => ({ path: filePath, size, sha256 })) },
-        // The child has exited and all bytes are uploaded. A completion may
-        // already be committed when its ACK is lost and heartbeat returns 409;
-        // allow only this idempotent completion handshake to resolve that case.
-        signal: options.signal, attempts: options.uploadAttempts });
+      completionProof = { runId: artifacts.runId,
+        files: artifacts.files.map(({ path: filePath, size, sha256 }) => ({ path: filePath, size, sha256 })) };
+      let reply;
+      for (let attempt = 1; attempt <= options.uploadAttempts; attempt++) {
+        if (terminalReply) break;
+        try {
+          reply = await request(options, `${jobPath}/complete`, { body: { ...credentials, ...completionProof }, signal: options.signal });
+          if (reply?.ok !== true) throw failure("COLLECTOR_RESPONSE_INVALID");
+          break;
+        } catch (error) {
+          const ambiguous = transientRequest(error) || error.code === "COLLECTOR_RESPONSE_INVALID" || error.status === 409
+            || [401, 403].includes(error.status) || (error.status >= 200 && error.status < 300);
+          if (!ambiguous) throw error;
+          terminalAckRequired = true;
+          const terminal = await readTerminal();
+          if (terminal) { acceptTerminal(terminal); break; }
+          if (!transientRequest(error) || attempt >= options.uploadAttempts || options.signal?.aborted) throw error;
+          await sleep(options.retryMs * attempt, options.signal);
+        }
+      }
+      if (terminalReply && (terminalReply.status !== "completed" || terminalReply.collectionFailed || terminalReply.providerBlocked || providerBlocked
+        || ["failed", "blocked"].includes(terminalReply.qualityStatus))) throw failure(stopCode || "COLLECTOR_CRAWL_FAILED");
+      if (terminalReply) reply = { ok: true };
       if (reply?.ok !== true) throw failure("COLLECTOR_UPLOAD_FAILED");
       completionAcknowledged = true;
+      terminalAckRequired = false;
       completionCancelled = reply.cancelled === true;
     } catch (error) {
       const transferError = failure(stopCode || safeCode(error, "COLLECTOR_UPLOAD_FAILED"));
@@ -416,15 +555,17 @@ async function runJob(job, options) {
     }
     clearTimeout(heartbeatTimer); clearTimeout(deadlineTimer); clearTimeout(progressTimer);
     await Promise.all([heartbeatChain, urgentHeartbeat]);
-    if (completionCancelled) {
+    if (completionCancelled && !providerBlocked && !failureReceipt) {
       options.logger({ event: "collector_job_cancelled", jobId: job.id, artifactsRetained: true });
       return { status: "cancelled", acknowledged: true, code: "COLLECTOR_CANCELLED", retainedDirectory: prepared.directory };
     }
     // A lost heartbeat after the completion ACK cannot restart or invalidate a completed crawl.
-    let retainedDirectory = null;
-    try { await removeOwnedJob(prepared); } catch { retainedDirectory = prepared.directory; }
-    if (failureReceipt) {
-      const code = failureReceipt === "blocked" ? "COLLECTOR_PROVIDER_BLOCKED" : "COLLECTOR_CRAWL_FAILED";
+    let retainedDirectory = prepared.directory;
+    if (!failureReceipt && !providerBlocked) {
+      try { await removeOwnedJob(prepared); retainedDirectory = null; } catch {}
+    }
+    if (failureReceipt || providerBlocked) {
+      const code = failureReceipt === "blocked" || providerBlocked ? "COLLECTOR_PROVIDER_BLOCKED" : "COLLECTOR_CRAWL_FAILED";
       options.logger({ event: "collector_failure_receipt_saved", jobId: job.id, code });
       return { status: "failed", acknowledged: true, code, runId: artifacts.runId, retainedDirectory };
     }
@@ -435,9 +576,24 @@ async function runJob(job, options) {
     const details = stopCode ? {} : safeFailureDetails(error);
     stop(code);
     if (childDone && !childClosed) await childDone;
+    if (terminalLookupPromise && !terminalReply) {
+      const terminal = await terminalLookupPromise;
+      if (terminal) acceptTerminal(terminal);
+    }
+    if (terminalReply) {
+      return terminalOutcome();
+    }
     let acknowledged = false;
-    if (ID_PATTERN.test(job?.id || "") && typeof job?.leaseToken === "string") {
+    if (!terminalAckRequired && ID_PATTERN.test(job?.id || "") && typeof job?.leaseToken === "string") {
       try { acknowledged = (await request(options, `${jobPath}/fail`, { body: { ...credentials, code, ...details }, timeoutMs: options.heartbeatTimeoutMs }))?.ok === true; } catch {}
+      if (!acknowledged) {
+        terminalAckRequired = true;
+        const terminal = await readTerminal();
+        if (terminal) {
+          acceptTerminal(terminal);
+          return terminalOutcome();
+        }
+      }
     }
     options.logger({ event: "collector_job_failed", jobId: ID_PATTERN.test(job?.id || "") ? job.id : null, code, ...details, artifactsRetained: Boolean(prepared) });
     return { status: "failed", acknowledged, code, ...details, retainedDirectory: prepared?.directory || null };
@@ -454,6 +610,9 @@ async function runWorker(options = workerOptions()) {
   let jobs = 0, claimFailures = 0, claimRequestId = crypto.randomUUID();
   while (!options.signal?.aborted && jobs < options.maxJobs) {
     let reply;
+    // The same nonce can outlive an outage with no issued lease. Confirm the
+    // returned job by heartbeat before spawning, using this request's start.
+    const claimStartedAt = performance.now();
     try { reply = await request(options, "/claim", { body: { workerId: options.workerId, protocolVersion: PROTOCOL_VERSION,
       claimRequestId, ...(options.workerKey ? { workerKey: options.workerKey } : {}) }, signal: options.signal }); }
     catch (error) {
@@ -475,12 +634,13 @@ async function runWorker(options = workerOptions()) {
     if (!reply || !Object.hasOwn(reply, "job")) throw failure("COLLECTOR_RESPONSE_INVALID");
     if (reply.job !== null && (typeof reply.job !== "object" || Array.isArray(reply.job))) throw failure("COLLECTOR_RESPONSE_INVALID");
     if (claimFailures) emitServiceEvent(options, { event: "collector_claim_recovered", code: "COLLECTOR_CLAIM_RECOVERED", attempts: claimFailures });
+    const claimedAt = claimStartedAt;
     claimFailures = 0; claimRequestId = crypto.randomUUID();
     if (reply.job === null) { try { await sleep(options.pollMs, options.signal); } catch { break; } continue; }
-    const result = await runJob(reply.job, options);
+    const result = await runJob(reply.job, options, { claimedAt });
     jobs++;
     if (!result.acknowledged) throw failure("COLLECTOR_TERMINAL_ACK_REQUIRED");
-    if (result.status === "failed" && result.code !== "COLLECTOR_CANCELLED") return { enabled: true, jobs, halted: true, code: result.code, ...safeFailureDetails(result) };
+    if (result.halted || (result.status === "failed" && result.code !== "COLLECTOR_CANCELLED")) return { enabled: true, jobs, halted: true, code: result.code, ...safeFailureDetails(result) };
   }
   return { enabled: true, jobs, stopped: Boolean(options.signal?.aborted) };
 }
