@@ -752,6 +752,43 @@ function drawSources(layout, report, snapshot) {
   drawContext(layout, snapshot.context);
 }
 
+function drawActionPlan(layout, snapshot) {
+  const plan = snapshot.actionPlan;
+  if (plan?.schemaVersion !== 1) return;
+  layout.page("실행 계획");
+  layout.heading("검토한 실행 계획", "발행 당시 고정한 계획입니다. 실행 결과는 작성자 기록이며 효과를 독립 검증한 값이 아닙니다.");
+  layout.paragraph(clean(plan.summary) || "종합 의견 없음");
+  const evidence = new Map(array(snapshot.actionEvidence).map(e => [e.id, e.label]));
+  const labels = { planned: "예정", in_progress: "진행 중", completed: "완료", held: "보류" };
+  array(plan.items).forEach((item, index) => {
+    layout.smallHeading(`${index + 1}. ${clean(item.title)}`);
+    layout.paragraph(`담당 ${clean(item.owner) || "미지정"} / 기한 ${clean(item.dueDate) || "미지정"} / 상태 ${labels[item.status] || "확인 필요"}`);
+    layout.paragraph(`근거: ${array(item.evidenceRefs).map(id => clean(evidence.get(id)) || "저장 근거 확인 필요").join(", ") || "연결 근거 없음"}`, { size: 8.5, color: COLORS.muted });
+    layout.paragraph(`실행 결과 기록: ${clean(item.outcome) || "기록 없음"}`);
+  });
+}
+function drawCatchment(layout, context) {
+  if (context?.schemaVersion !== 1) return;
+  layout.page("부록 D · 반경 배후시장");
+  layout.heading("반경 배후시장", "저장된 연간 배경 자료입니다. 보고월의 관광 수요·예약·매출로 환산하거나 여러 지역을 합산하지 않습니다.");
+  layout.paragraph(`관측 마감 ${clean(context.cutoffDate)} / 배후시장 확인 ${dateText(context.asOfAt, true)}`, { size: 8.5 });
+  for (const entry of array(context.entries)) {
+    layout.smallHeading(clean(entry.regionLabel || entry.regionKey));
+    if (entry.reasonLabel) layout.paragraph(clean(entry.reasonLabel), { size: 9 });
+    const value = entry.snapshot;
+    if (!value) { layout.paragraph("정상 저장 근거 미확보. 0으로 계산하지 않습니다."); continue; }
+    layout.paragraph(`통계 ${clean(value.dataset?.sourceYear)}년 / 경계 ${clean(value.dataset?.boundaryYear)}년 / 산출 ${dateText(value.calculatedAt, true)} / 결과 ${clean(value.resultId)}`, { size: 8 });
+    layout.paragraph(`기준점 ${clean(value.scope?.center?.label)} (${clean(value.scope?.center?.latitude)}, ${clean(value.scope?.center?.longitude)}) / 자료 ${clean(value.dataset?.id)} / 계산 ${clean(value.calculationVersion)}`, { size: 8 });
+    const rows = array(value.rings).flatMap(ring => Object.entries(ring.metrics || {}).map(([key, m]) => [
+      clean(ring.label), ({ population: "인구", establishments: "사업체", workers: "종사자" })[key] || clean(key),
+      amount(m.value, clean(m.unit)), amount(m.publishedSum, clean(m.unit)),
+      `${amount(m.suppressedCells)} / ${amount(m.protectedZeroCells)} / ${amount(m.missingCells)}`
+    ]));
+    layout.table([{label:"반경",width:.19,value:r=>r[0]},{label:"지표",width:.13,value:r=>r[1]},{label:"전체 반경값",width:.23,value:r=>r[2]},{label:"공개 부분합",width:.23,value:r=>r[3]},{label:"보호/보호0/누락 격자",width:.22,value:r=>r[4]}], rows);
+    layout.paragraph(`저장 입력 지문 ${clean(value.sourceFingerprint)}. 공개 부분합은 보호·누락을 포함한 전체 총량이 아닐 수 있습니다.`, {size:8,color:COLORS.muted});
+  }
+  array(context.warnings).forEach(w => layout.paragraph(clean(w), {size:8,color:COLORS.muted}));
+}
 /** Render a persisted published snapshot only. No network, database reads, or file writes. */
 async function renderMonthlyReportPdf(report, options = {}) {
   if (!report || report.status !== "published" || !report.snapshot || typeof report.snapshot !== "object") {
@@ -783,6 +820,8 @@ async function renderMonthlyReportPdf(report, options = {}) {
     drawSources(layout, report, report.snapshot);
     drawOutlookEvaluations(layout, report.snapshot.context?.outlookEvaluations);
     drawIndustryBenchmarks(layout, report.snapshot.industryBenchmarks);
+    drawCatchment(layout, report.snapshot.context?.catchment);
+    drawActionPlan(layout, report.snapshot);
     layout.footers();
     doc.end();
   } catch (error) { doc.destroy(error); }

@@ -45,6 +45,7 @@ const { compactMonthlyCapacityCompany } = require("./lib/monthly_company_source_
 const { createMonthlyReportContext } = require("./lib/monthly_report_context.cjs");
 const { createMonthlyReportOutlookEvaluation } = require("./lib/monthly_report_outlook_evaluation.cjs");
 const { createMonthlyReportIndustryContext } = require("./lib/monthly_report_industry_context.cjs");
+const { createMonthlyReportCatchmentContext } = require("./lib/monthly_report_catchment_context.cjs");
 const { createMonthlyReportHttpHandler } = require("./lib/monthly_report_http.cjs");
 const { createRegionalReportPreparation } = require("./lib/regional_report_preparation.cjs");
 const { createRegionalSearchTrendService } = require("./lib/regional_search_trends.cjs");
@@ -791,12 +792,15 @@ const monthlyReportService = createMonthlyReportService({
     ...fs.readdirSync(path.join(__dirname, "lib")).filter(name => name.endsWith(".cjs")).sort().map(name => `lib/${name}`)]
     .map(name => `${name}:${crypto.createHash("sha256").update(fs.readFileSync(path.join(__dirname, name))).digest("hex")}`).join("\n")).digest("hex"),
   readOutlookEvaluations: createMonthlyReportOutlookEvaluation({ evaluationService: regionalOutlookService.validation }),
+  readCatchmentContext: createMonthlyReportCatchmentContext({ catchmentService: regionalCatchmentService }),
   readIndustryContext: createMonthlyReportIndustryContext({ industryService: industryAnalysisService,
     verifiedSourceRevisionScope: savedIndustryRevisionScope })
 });
 const handleMonthlyReport = createMonthlyReportHttpHandler({
   service: monthlyReportService, sources: monthlyReportSources, renderPdf: renderMonthlyReportPdf,
   dataDir: path.join(DATA_DIR, "monthly_reports"), requireAdmin: requireAdminSession, parseJsonBody, send,
+  getDelivery: () => insightIntegration?.reportDelivery,
+  deliveryCustomers: () => insightIntegration?.store.list() || [],
   rateLimit: (req, session) => assertRequestRateLimit(req, "adminMonthlyReport", { limit: 30, windowMs: 60000 }, session.username || "")
 });
 function collectorControllers() { return {...Object.fromEntries(Object.entries(collectorBrokers).filter(([,broker]) => broker)), web:collectorWeb}; }
@@ -882,6 +886,7 @@ const readInsightCompanyDetail = require('./lib/insight_company_detail_reader.cj
   integrationConnected: true
 });
 const insightIntegration = require('./lib/insight_integration.cjs').createInsightIntegration({
+  monthlyReports: monthlyReportService, renderReportPdf: handleMonthlyReport.pdfFor,
   readPostprocess: runId => collectionPostprocessQueue.status({ runId }),
   dataDir: DATA_DIR, readCatalog: monthlyReportSources.catalog, readMembers: readB2BMemberStore,
   authenticateMember: authenticateB2BMember, registerMember: (payload, insightConsent) => registerB2BMember(payload, { insightConsent }), checkUsername: checkSignupUsernameAvailability, policyContext: publicPageContext(), requireAdmin: requireAdminSession, collectorRequests,

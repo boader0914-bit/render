@@ -8,6 +8,7 @@ const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./mont
 const { performance, monitorEventLoopDelay } = require("node:perf_hooks");
 const { createMonthlyReportMaterializedCache } = require("./monthly_report_materialized_cache.cjs");
 const { recoveryRowDigest } = require("./saved_product_recovery.cjs");
+const { listMonthlyReportActionEvidence, normalizeMonthlyReportActionPlan } = require("./monthly_report_actions.cjs");
 
 const SCHEMA_VERSION = 1;
 const PREVIEW_TTL_MS = 15 * 60 * 1000;
@@ -582,7 +583,7 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}) 
 }
 
 function createMonthlyReportService({ dataDir, loadSources, readSourceRevision = null, readReportContext = null,
-  readOutlookEvaluations = null, readIndustryContext = null, runInteractiveRead = operation => operation(),
+  readOutlookEvaluations = null, readIndustryContext = null, readCatchmentContext = null, runInteractiveRead = operation => operation(),
   calculationVersion = "monthly-base-v1", now = () => new Date(), runWork = operation => operation() } = {}) {
   if (typeof dataDir !== "string" || !dataDir || typeof loadSources !== "function") throw new TypeError("dataDir and loadSources are required");
   const directory = path.resolve(dataDir);
@@ -610,6 +611,7 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
       if (report.id !== id || report.schemaVersion !== SCHEMA_VERSION || !report.snapshot) throw new Error("Invalid report");
       if (report.status === "published" && (!report.snapshotHash
         || report.snapshotHash !== crypto.createHash("sha256").update(JSON.stringify(report.snapshot)).digest("hex"))) throw new Error("Snapshot hash mismatch");
+      if (report.snapshot.actionPlan !== undefined && JSON.stringify(normalizeMonthlyReportActionPlan(report.snapshot.actionPlan, report.snapshot)) !== JSON.stringify(report.snapshot.actionPlan)) throw new Error("Invalid action plan");
       return report;
     } catch { throw fail("corrupt_report", "저장된 보고서를 읽을 수 없습니다. 원본 파일은 보존했습니다.", 500); }
   };
@@ -742,11 +744,26 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
           if (context?.networkAttempted !== false) throw fail("MONTHLY_INDUSTRY_MUST_BE_SAVED_ONLY", "업종 참고 집계는 저장된 결과만 사용할 수 있습니다.", 503);
           timings.industryContextMs = performance.now() - phase;
           return clone(context);
+        })(),
+        (async () => {
+          if (typeof readCatchmentContext !== "function") return;
+          const phase = performance.now();
+          try {
+            const context = await readCatchmentContext(clone(request), clone(roster), { asOfAt: generatedAt });
+            if (context?.networkAttempted !== false) throw fail("MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY", "배후시장 근거는 저장된 자료만 사용할 수 있습니다.", 503);
+            return clone(context);
+          } catch (error) {
+            if (error.code === "MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY" || error.message === "MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY") throw error;
+            return { schemaVersion: 1, reportMonth: request.month, cutoffDate: request.cutoffDate, asOfAt: generatedAt,
+              temporalBasis: "saved_annual_reference_at_report_creation", status: "missing", reasonCode: "CATCHMENT_READ_FAILED", entries: [],
+              selectionCoverage: { selectedRegionCount: null, includedRegionCount: 0, omittedRegionCount: null, unmappedCompanyCount: null },
+              warnings: ["저장된 배후시장 근거를 확인하지 못했습니다."], networkAttempted: false };
+          } finally { timings.catchmentContextMs = performance.now() - phase; }
         })()
       ]);
       const failedAttachment = attachments.find(value => value.status === "rejected");
       if (failedAttachment) throw failedAttachment.reason;
-      const [context, evaluation, industryContext] = attachments.map(value => value.value);
+      const [context, evaluation, industryContext, catchmentContext] = attachments.map(value => value.value);
       if (context) snapshot.context = context;
       if (evaluation) {
         snapshot.context = { ...(snapshot.context || { sources: [], warnings: [], networkAttempted: false }), outlookEvaluations: evaluation };
@@ -756,6 +773,11 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
         snapshot.industryBenchmarks = industryContext;
         snapshot.definitions.industryBenchmarks = "같은 숙박월·유효 관측 마감일의 저장 업종 표본 집계를 별도로 연결합니다. 본문과 표본·예약률 평균 방식이 다르며 수량·매출에 더하지 않습니다. 미리보기 승인 후 고정하며 발행본을 자동 변경하지 않습니다.";
       }
+      if (catchmentContext) {
+        snapshot.context = { ...(snapshot.context || { sources: [], warnings: [], networkAttempted: false }), catchment: catchmentContext };
+        snapshot.definitions.catchment = "배후시장은 작성 시점에 저장된 연간 격자·중심점·공개합의 참고 근거입니다. 보고월의 실측이나 시장 확정 총량, 매출의 원인으로 해석하지 않으며 보호·누락·미확인을 유지합니다.";
+      }
+      snapshot.actionEvidence = listMonthlyReportActionEvidence(snapshot);
       timings.totalMs = performance.now() - started;
       return { snapshot, generation: { cacheStatus: result.status, storage: result.storage, calculatedAt: result.calculatedAt,
         ...(sourceInspections.length ? { sourceInspection: { checks: sourceInspections.length, counts: clone(sourceInspections.at(-1).counts) } } : {}),
@@ -804,6 +826,7 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
       if (entry.request !== JSON.stringify(request)) throw fail("preview_mismatch", "미리보기 조건과 저장 조건이 다릅니다. 다시 미리보기해 주세요.", 409);
       snapshot = JSON.parse(entry.serialized);
     } else snapshot = (await build(request, date.toISOString())).snapshot;
+    if (input.actionPlan !== undefined) snapshot.actionPlan = normalizeMonthlyReportActionPlan(input.actionPlan, snapshot);
     const id = `mr_${crypto.randomUUID()}`;
     const report = { schemaVersion: SCHEMA_VERSION, id, revision: 1, status: "draft", ...request,
       title: input.title === undefined ? `${request.month.slice(0, 4)}년 ${Number(request.month.slice(5))}월 ${snapshot.target.label} ${request.type === "keyword" ? "검색시장 리포트" : "월간 보고서"}` : textInput(input.title, "title", 200),
@@ -838,10 +861,11 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
     const report = await read(id);
     checkRevision(report, input.revision);
     if (report.status === "published") throw fail("published_immutable", "발행된 보고서는 수정할 수 없습니다. 수정본을 생성해 주세요.", 409);
-    const permitted = new Set(["revision", "title", "notes", "status"]);
+    const permitted = new Set(["revision", "title", "notes", "status", "actionPlan"]);
     if (Object.keys(input).some(key => !permitted.has(key))) throw fail("immutable_snapshot", "보고서 숫자와 근거는 직접 수정할 수 없습니다.");
     if (input.title !== undefined) report.title = textInput(input.title, "title", 200);
     if (input.notes !== undefined) report.notes = textInput(input.notes, "notes", 20000);
+    if (input.actionPlan !== undefined) report.snapshot.actionPlan = normalizeMonthlyReportActionPlan(input.actionPlan, report.snapshot);
     if (input.status !== undefined) {
       if (!["draft", "review"].includes(input.status)) throw fail("invalid_report_status", "초안 또는 검토 상태만 저장할 수 있습니다.");
       report.status = input.status;
@@ -859,6 +883,7 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
     }
     checkRevision(report, input.revision);
     if (report.status !== "review") throw fail("review_required", "검토 상태로 저장한 보고서만 발행할 수 있습니다.", 409);
+    if (report.snapshot.actionPlan !== undefined) report.snapshot.actionPlan = normalizeMonthlyReportActionPlan(report.snapshot.actionPlan, report.snapshot);
     if (report.snapshot.quality.status !== "complete" && input.acknowledgeQuality !== true) {
       throw fail("quality_acknowledgement_required", "관측 누락과 부분 합계 안내를 확인한 뒤 발행해 주세요.", 409);
     }
@@ -891,7 +916,9 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
     if (report.status === "published") throw fail("published_immutable", "발행된 보고서는 재집계할 수 없습니다. 수정본을 생성해 주세요.", 409);
     const date = current();
     const request = requestInput(report, date);
-    report.snapshot = (await build(request, date.toISOString())).snapshot;
+    const snapshot = (await build(request, date.toISOString())).snapshot;
+    if (report.snapshot.actionPlan !== undefined) snapshot.actionPlan = normalizeMonthlyReportActionPlan(report.snapshot.actionPlan, snapshot);
+    report.snapshot = snapshot;
     report.status = "draft";
     report.revision += 1;
     report.updatedAt = date.toISOString();

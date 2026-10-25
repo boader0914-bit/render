@@ -46,7 +46,7 @@
   }
   function search(kind) { return `<section class="card search-box"><h2>${kind==='region'?'관심지역 추가':kind==='own'?'내 매장 등록':'경쟁업체 추가'}</h2><form id="search-form" data-kind="${kind}"><label class="field"><span>${kind==='region'?'시군구 이름':'업체명·주소·플레이스 번호'}</span><input name="q" required minlength="2" maxlength="120" placeholder="두 글자 이상 입력하세요."></label><button class="button" type="submit">저장된 업체·지역 검색</button></form><div id="search-results" class="search-results" aria-live="polite"></div></section>`; }
   function render() {
-    searchSequence++; window.InsightAnalysis?.stop(); window.InsightCollection?.stop?.();
+    searchSequence++; window.InsightAnalysis?.stop(); window.InsightCollection?.stop?.(); window.InsightReports?.stop();
     $('#logout').hidden = !state;
     $('#admin-view-banner').hidden = !adminView || !state;
     $('#navigation').innerHTML = state ? menus.map(([key,label])=>`<a href="#${key}" class="nav-link ${menuRoute()===key?'active':''}">${label}</a>`).join(''):'';
@@ -72,10 +72,11 @@
     if (current[0]==='property') content = `<div class="connected-list">${own.map(relation => companyCard(relation)).join('') || '<div class="empty-note">내 매장 등록 후 관리자의 연결 확인을 받습니다.</div>'}</div>${limits.ownLimit===null||own.length<limits.ownLimit?search('own'):''}`;
     if (current[0]==='competitors') content = `<p class="muted">등록 ${competitors.length} / ${limitText(limits.competitorLimit)} · ${limits.competitorLimit===null?'관리자 등록 수량 무제한':'제공 수량 변경은 관리자에게 문의하세요.'}</p><div class="connected-list">${competitors.map(relation => companyCard(relation)).join('') || '<div class="empty-note">비교할 업체를 등록해 주세요.</div>'}</div>${limits.competitorLimit===null||competitors.length<limits.competitorLimit?search('competitor'):''}`;
     if (current[0]==='regions') content = window.InsightAnalysis.panel('regions',state)+`<div class="connected-list region-registrations">${state.regions.map(row=>`<article class="connected-row"><h3>${esc(row.label)}</h3>${c.regions.some(r=>r.regionKey===row.id&&r.status==='active')?`<button class="button small" data-action="archive-region" data-relation="${esc(c.regions.find(r=>r.regionKey===row.id&&r.status==='active').relationId)}">관심지역 해제</button>`:'<span class="status-pill">내 매장 소재 지역</span>'}</article>`).join('')}</div>${limits.interestRegionLimit===null||c.regions.filter(activeRegion).length<limits.interestRegionLimit?search('region'):''}`;
-    if (current[0]==='reports') content = window.InsightAnalysis.panel('reports',state);
+    if (current[0]==='reports') content = window.InsightReports.panel(state.features?.reportDelivery) + window.InsightAnalysis.panel('reports',state);
     if (current[0]==='settings') content = `<section class="card"><h2>사업 정보</h2><form id="onboarding-form"><label class="field"><span>현재 상태</span><select name="businessStatus"><option value="planning" ${c.businessStatus==='planning'?'selected':''}>매장 준비 중</option><option value="owned" ${c.businessStatus==='owned'?'selected':''}>내 매장 등록</option></select></label>${field('매장·프로젝트 이름','projectName',c.projectName)}<button class="button primary" type="submit">저장</button></form></section>`;
     $('#main').innerHTML = `<div class="page-heading"><div><span class="eyebrow">SABUN INSIGHT</span><h1>${current[1]}</h1><p>등록한 대상과 정보 수정 내역을 관리합니다.</p></div></div>${content}`;
-    if(['regions','reports'].includes(current[0]))window.InsightAnalysis.mount(current[0],api,state,route().startsWith('regions=')?decodeURIComponent(route().slice(8)):null);
+    if(['regions','reports'].includes(current[0]))window.InsightAnalysis.mount(current[0],api,state,route().startsWith('regions=')?decodeURIComponent(route().slice(8)):null,{autoLoad:current[0]!=='reports'||!state.features?.reportDelivery});
+    if(current[0]==='reports')window.InsightReports.mount(api,state.features?.reportDelivery,adminView?'/api/insight-admin/v1/customer-view':'/api/customer/v1');
   }
   function activeRegion(row) { return row.status==='active'; }
   document.addEventListener('submit', async event => {

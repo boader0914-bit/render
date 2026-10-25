@@ -70,7 +70,7 @@
   }
   document.addEventListener('submit',e=>{if(e.target.id!=='analysis-form')return;e.preventDefault();e.stopImmediatePropagation();load();});
   document.addEventListener('change',e=>{if(e.target.matches?.('[data-history-metric]')&&regionData){const card=e.target.closest('[data-history-source]'),s=regionData.sources.find(s=>s.key===card.dataset.historySource);if(s)card.outerHTML=window.InsightRegionHistory.source(s,regionData.window,e.target.value);return;}if(e.target.closest?.('#analysis-form'))load();});
-  window.InsightAnalysis={panel,regionView,reportView,mount(mode,request,s,selectedRegion){kind=mode;api=request;
+  window.InsightAnalysis={panel,regionView,reportView,mount(mode,request,s,selectedRegion,{autoLoad=true}={}){kind=mode;api=request;
     if(mode==='regions'&&selectedRegion&&s.regions.some(r=>r.id===selectedRegion))document.querySelector('#analysis-form select').value=selectedRegion;
-    load();},stop(){seq++;regionData=null;if(pollTimer!==null){clearTimeout(pollTimer);pollTimer=null;}}};
+    if(autoLoad)load();else document.querySelector("#analysis-output").innerHTML='<p class="empty-note">현재 상황 브리핑은 위에서 조회를 요청하면 생성합니다. 발행본 열람은 새 분석 계산을 시작하지 않습니다.</p>';},stop(){seq++;regionData=null;if(pollTimer!==null){clearTimeout(pollTimer);pollTimer=null;}}};
 })();

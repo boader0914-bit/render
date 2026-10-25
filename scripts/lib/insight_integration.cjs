@@ -10,6 +10,7 @@ const { POLICY_VERSION, insightPolicies } = require('./insight_policy.cjs');
 const { createInsightAdminStore } = require('./insight_admin_store.cjs');
 const { createInsightAdminProvisioning } = require('./insight_admin_provisioning.cjs');
 const { createInsightCatalog } = require('./insight_catalog.cjs');
+const { createMonthlyReportDelivery } = require('./monthly_report_delivery.cjs');
 // Match the existing reviewed-room convention without invoking capacity/history
 // preparation merely to authenticate or display a company's identity.
 function reviewedRooms(company) {
@@ -23,12 +24,14 @@ function reviewedRooms(company) {
   },0);
   return count>0?count:null;
 }
-function createInsightIntegration({ dataDir, readCatalog, readMembers, authenticateMember, registerMember, checkUsername, policyContext = {}, requireAdmin, collectorRequests, verifyStored, readPostprocess, readEvidence, readCompanyDetail, readIntegrated, readRegionContext, readRegionLocation, regionPreparation, env = process.env }) {
+function createInsightIntegration({ dataDir, readCatalog, readMembers, authenticateMember, registerMember, checkUsername, policyContext = {}, requireAdmin, collectorRequests, verifyStored, readPostprocess, readEvidence, readCompanyDetail, readIntegrated, readRegionContext, readRegionLocation, regionPreparation, monthlyReports = null, renderReportPdf = null, env = process.env }) {
   if (env.INSIGHT_CONNECTION_ENABLED !== '1') return null;
   const serviceToken = env.INSIGHT_SERVICE_TOKEN;
   if (!serviceToken || serviceToken.length < 32) throw new Error('INSIGHT_SERVICE_TOKEN is required when Insight connection is enabled');
   const workerKey = insightCollectionWorkerKey(env.INSIGHT_COLLECTION_WORKER_KEY);
   const store = createInsightStore({ file: path.join(dataDir, 'customer_insight', 'insight.sqlite') });
+  const reportDelivery = env.INSIGHT_REPORT_DELIVERY_ENABLED === '1' && monthlyReports && typeof renderReportPdf === 'function'
+    ? createMonthlyReportDelivery({ dataDir: path.join(dataDir, 'customer_insight', 'report_delivery'), reports: monthlyReports, customers: store }) : null;
   const adminStore = createInsightAdminStore({ file: path.join(dataDir, 'customer_insight', 'admins.sqlite') });
   // Deployed services use a separate, source-verified identity projection. It
   // never joins the monthly analytical lease; injected development adapters
@@ -55,9 +58,9 @@ function createInsightIntegration({ dataDir, readCatalog, readMembers, authentic
   const analysis=createInsightAnalysis({catalog,collectionResults,savedCollectionResults,readRegionContext,readRegionLocation,regionPreparation});
   const preparationBridge = collectorRequests && verifyStored ? createInsightPreparation({store,catalog,collectorRequests,verifyStored,readPostprocess,findReusable:collectionResults?.reusable,workerKey}) : null;
   const signup = { enabled: env.INSIGHT_SIGNUP_ENABLED === '1', termsVersion: env.INSIGHT_TERMS_VERSION || POLICY_VERSION, privacyVersion: env.INSIGHT_PRIVACY_VERSION || POLICY_VERSION, termsUrl: env.INSIGHT_TERMS_URL || '/terms', privacyUrl: env.INSIGHT_PRIVACY_URL || '/privacy' };
-  const handlers = createInsightHttp({ store, serviceToken, catalog, authenticateMember, registerMember, checkUsername, requireAdmin, preparationBridge, collectionResults, savedCollectionResults, analysis,
+  const handlers = createInsightHttp({ store, serviceToken, catalog, authenticateMember, registerMember, checkUsername, requireAdmin, preparationBridge, collectionResults, savedCollectionResults, analysis, reportDelivery, renderReportPdf,
     memberActive: async memberId => (await readMembers()).members.some(row => row.memberId === memberId && row.status !== 'disabled' && row.role === 'b2b'),
     signup, policies: insightPolicies(policyContext), supportEmail: policyContext.contactEmail || '', adminStore });
-  return { ...handlers, store, adminStore, metadataCatalog, provision: createInsightAdminProvisioning({ adminStore, requireAdmin }) };
+  return { ...handlers, store, adminStore, metadataCatalog, reportDelivery, provision: createInsightAdminProvisioning({ adminStore, requireAdmin }) };
 }
 module.exports = { createInsightIntegration, reviewedRooms };

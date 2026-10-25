@@ -15,7 +15,7 @@ async function body(req) {
 }
 function json(res, status, value) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(value)); }
 function createInsightHttp({ store, serviceToken, authenticateMember, memberActive, registerMember, checkUsername, catalog, stateCatalog = catalog, requireAdmin, preparationBridge = null,
-  signup = { enabled: false }, policies = {}, supportEmail = '', adminStore = null, collectionResults = null, savedCollectionResults = null, analysis = null,
+  signup = { enabled: false }, policies = {}, supportEmail = '', adminStore = null, collectionResults = null, savedCollectionResults = null, analysis = null, reportDelivery = null, renderReportPdf = null,
   identityDiagnostics = entry => console.warn('insight_identity',JSON.stringify(entry)), identityClock = () => performance.now(),
   companyDiagnostics = entry => console.warn('insight_company_http',JSON.stringify(entry)), companyClock = () => performance.now() }) {
   if (typeof serviceToken !== 'string' || serviceToken.length < 32) throw new Error('Insight service credential must contain at least 32 characters');
@@ -94,7 +94,7 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
     const unlimited=customer.accountKind==='admin_preview';
     return { customer, companies, regions: data.regions.filter(row => regionKeys.has(row.id)), corrections: store.corrections(customer.customerId),
       registrationAllowance:{ownLimit:unlimited?null:1,competitorLimit:unlimited?null:customer.entitlements.competitorLimit,interestRegionLimit:unlimited?null:customer.entitlements.interestRegionLimit},
-      preparations: store.requests(customer.customerId), collectionAllowance:store.collectionAllowance(customer.customerId), features: { weeklyReports: false, reportDelivery: false, directCollection: Boolean(preparationBridge && collectionResults), dataPreparationRequests: true } };
+      preparations: store.requests(customer.customerId), collectionAllowance:store.collectionAllowance(customer.customerId), features: { weeklyReports: false, reportDelivery: Boolean(reportDelivery), directCollection: Boolean(preparationBridge && collectionResults), dataPreparationRequests: true } };
   }
   async function sendState(res, customer, scope, extra = {}, { awaitPreparation = false } = {}) {
     const started = performance.now(),requestId=crypto.randomUUID();
@@ -165,6 +165,23 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
         if(!analysis)throw fault('REGION_NOT_READY','지역 자료 연결을 준비 중입니다.',503);
         if([...url.searchParams.keys()].some(k=>k!=='month')||url.searchParams.getAll('month').length>1)throw fault('INVALID_FIELDS','조회할 기준월만 지정해 주세요.');
         json(res,200,await analysis.region(c,tail.split('/')[2],url.searchParams.get('month')||undefined));
+      }
+      else if (req.method === 'GET' && (tail === '/reports' || /^\/reports\/mr_[a-zA-Z0-9_-]+(?:\/pdf)?$/.test(tail))) {
+        if (!reportDelivery) throw fault('REPORT_NOT_READY', '발행 리포트 제공을 준비 중입니다.', 409);
+        if (url.search) throw fault('INVALID_FIELDS', '발행된 리포트 번호만 지정해 주세요.');
+        const verifyAccess = async () => { if (scope?.verify) await scope.verify(); return scope.current(); };
+        if (tail === '/reports') json(res, 200, await reportDelivery.list(c.customerId, { verifyAccess }));
+        else if (!tail.endsWith('/pdf')) json(res, 200, await reportDelivery.detail(c.customerId, tail.split('/')[2], { verifyAccess }));
+        else {
+          if (typeof renderReportPdf !== 'function') throw fault('REPORT_NOT_READY', 'PDF 제공을 준비 중입니다.', 409);
+          const id = tail.split('/')[2], report = await reportDelivery.authorizedReport(c.customerId, id, { verifyAccess });
+          const buffer = await renderReportPdf(report);
+          await reportDelivery.authorizedReport(c.customerId, id, { verifyAccess });
+          if (!Buffer.isBuffer(buffer) || buffer.length > 20 * 1024 * 1024 || buffer.subarray(0, 5).toString() !== '%PDF-') throw fault('REPORT_UNAVAILABLE', 'PDF를 확인하지 못했습니다.', 503);
+          res.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Length': buffer.length,
+            'Content-Disposition': `attachment; filename="monthly-report-${report.month}-v${report.version}.pdf"`, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
+          res.end(buffer);
+        }
       }
       else if(req.method==='GET' && tail==='/reports/briefing') {
         if(!analysis)throw fault('REPORT_NOT_READY','리포트 연결을 준비 중입니다.',503);
