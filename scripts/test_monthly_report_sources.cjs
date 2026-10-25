@@ -7,6 +7,9 @@ const os = require("node:os");
 const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs");
 const { createMonthlyReportContext } = require("./lib/monthly_report_context.cjs");
 const { buildMonthlyReportSnapshot } = require("./lib/monthly_reports.cjs");
+const { createAnalyticalWorkScheduler } = require("./lib/analytical_work_scheduler.cjs");
+const { YIELD_CODE } = require("./lib/cooperative_work_checkpoint.cjs");
+const { compactMonthlyCapacityCompany } = require("./lib/monthly_company_source_catalog.cjs");
 
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 async function sourceFixture(t, hooks = {}) {
@@ -494,4 +497,41 @@ test("regional trend report context reads exact saved window and distinguishes z
   assert.equal(calls,1);const source=context.sources.find(row=>row.key==='naver_search_trend');
   assert.equal(source.rows[0].value,0); assert.equal(source.rows[1].value,null); assert.equal(source.rows[0].unit,'상대지수');
   assert.equal(source.partialMonth,true);assert.match(source.label,/산청글램핑/);assert.ok(context.warnings.some(row=>row.includes('합산하지')));
+});
+
+test("witness publication receives the exact read checkpoint and cannot turn an interruption into a normal warning", async t => {
+  for (const useSourceReadValidationBoundary of [false, true]) {
+    const interrupted = Object.assign(Error(YIELD_CODE), { code: YIELD_CODE }); let readCheckpoint, calls = 0;
+    const sources = await sourceFixture(t, {
+      readRevision: async () => "publication-source-v1", projectCapacityCompany: compactMonthlyCapacityCompany, useSourceReadValidationBoundary,
+      recalculateCompanyObservations: async (_request, _data, options) => { readCheckpoint = options.checkpoint; return []; },
+      publishProductCapacityEvidence: async (_evidence, publication) => {
+        calls++; assert.equal(publication.checkpoint, readCheckpoint); await publication.checkpoint(); throw interrupted;
+      }
+    });
+    await assert.rejects(sources.loadSources({ type: "company", targetId: "a", month: "2026-08", cutoffDate: "2026-08-31" }, { priority: "background" }), error => error === interrupted);
+    assert.equal(calls, 1); assert.equal(sources.sourceReadStatus().active, false);
+  }
+});
+
+test("a publisher checkpoint can unwind the complete source before admitting foreground work", { timeout: 3000 }, async t => {
+  const scheduler = createAnalyticalWorkScheduler({ cooperativeYield: true, cooperativeMinRunMs: 0 });
+  const entered = deferred(), proceed = deferred(); let publications = 0, successfulPublications = 0;
+  t.after(async () => { proceed.resolve(); await scheduler.close(); });
+  const sources = await sourceFixture(t, {
+    readRevision: async () => "publication-source-v1", projectCapacityCompany: compactMonthlyCapacityCompany, useSourceReadValidationBoundary: true,
+    runWork: (operation, options) => scheduler.run(operation, options),
+    publishProductCapacityEvidence: async (_evidence, publication) => {
+      if (++publications === 1) { entered.resolve(); await proceed.promise; await publication.checkpoint(); }
+      successfulPublications++;
+    }
+  });
+  const industry = scheduler.run(() => sources.loadSources({ type: "industry", targetId: "__industry_all__", month: "2026-08", cutoffDate: "2026-08-31" }, { priority: "background" }), { priority: "background", kind: "industry-build" });
+  await entered.promise;
+  const foreground = scheduler.run(() => {
+    assert.equal(sources.sourceReadStatus().active, false); assert.equal(successfulPublications, 0); return "foreground";
+  });
+  proceed.resolve(); assert.equal(await foreground, "foreground"); const result = await industry;
+  assert.equal(result.warnings.length, 0); assert.equal(publications, 2); assert.equal(successfulPublications, 1);
+  assert.equal(scheduler.status().timing.yielded, 1); assert.equal(scheduler.status().timing.failed, 0);
 });

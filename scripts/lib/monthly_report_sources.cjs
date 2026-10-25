@@ -11,7 +11,7 @@ const { createSourceReadScheduler } = require("./source_read_scheduler.cjs");
 const { createMonthlyReportMaterializedCache } = require("./monthly_report_materialized_cache.cjs");
 const { readCompanyMasterProjection } = require("./company_master_stream.cjs");
 const { createMonthlyCompanySourceCatalog } = require("./monthly_company_source_catalog.cjs");
-const { assertCooperativeWorkActive, runNonInterruptibleCooperativeWork, setCooperativeWorkPhase } = require("./cooperative_work_checkpoint.cjs");
+const { assertCooperativeWorkActive, isCooperativeWorkYield, setCooperativeWorkPhase } = require("./cooperative_work_checkpoint.cjs");
 
 const token = value => String(value || "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
 function sourceError() { return Object.assign(new Error("월간 집계에 필요한 저장자료를 읽지 못했습니다. 원본 상태를 확인해 주세요."), { statusCode: 503, code: "MONTHLY_SOURCE_UNAVAILABLE" }); }
@@ -426,7 +426,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
         ...(request.type === "region" ? { unmappedRegionCompanies } : {}) }, context };
     if (publishProductCapacityEvidence && data._companySource) Object.defineProperty(source, "_productCapacityPublication", {
       value: { evidence: productCapacityEvidence, companies: data.rawCompanies, sourceRevision: data._companySource.revision,
-        assertCurrent: () => data._companySource.assertCurrent() }, configurable: true });
+        assertCurrent: () => data._companySource.assertCurrent(), checkpoint }, configurable: true });
     if (assertAtReturn && data._companySource) { try { await data._companySource.assertCurrent(); } catch { throw sourceError(); } }
     return includeCatalog ? { source, catalog: data } : source;
     } finally { sourceReadActive = false; }
@@ -443,13 +443,15 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     const finish = async result => {
       setCooperativeWorkPhase(70);
       // A translated/handled inner error must not publish an incomplete source
-      // after a cooperative retry was requested. Keep publication indivisible.
+      // after a cooperative retry was requested. The publisher owns each
+      // witness file's atomic boundary and may yield between those files.
       assertCooperativeWorkActive();
       const source = includeCatalog ? result.source : result, publication = source?._productCapacityPublication;
       if (publication) {
         delete source._productCapacityPublication;
-        try { await runNonInterruptibleCooperativeWork(() => publishProductCapacityEvidence(publication.evidence, publication)); }
+        try { await publishProductCapacityEvidence(publication.evidence, publication); }
         catch (error) {
+          if (isCooperativeWorkYield(error)) throw error;
           if (["MONTHLY_COMPANY_SOURCE_CHANGED", "MONTHLY_COMPANY_SOURCE_REVISION_UNAVAILABLE", "MONTHLY_SOURCE_UNAVAILABLE"].includes(error.code)) throw sourceError();
           // A derived witness cache cannot turn a verified source read into
           // missing or zero data. Its own later reader also validates/falls back.
@@ -476,6 +478,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
           : await companySourceCatalog.withCatalog(consume, { checkpoint });
         return await finish(result);
       } catch (error) {
+        if (isCooperativeWorkYield(error)) throw error;
         if (consumerFailed) throw consumerFailure;
         throw sourceError();
       }

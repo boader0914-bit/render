@@ -3,6 +3,7 @@
 // published reports are never written here. A broken cache is not a zero.
 const fs = require("node:fs/promises"), path = require("node:path"), crypto = require("node:crypto");
 const { compactProductCapacityEvidence } = require("./product_capacity_baseline.cjs");
+const { runNonInterruptibleCooperativeWork, setCooperativeWorkPhase } = require("./cooperative_work_checkpoint.cjs");
 const hash = value => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const stamp = value => [value.size, value.mtimeNs, value.ctimeNs, value.ino, value.dev].map(String).join(":");
 const fault = code => Object.assign(new Error(code), { code });
@@ -40,8 +41,9 @@ function createProductCapacityStore({ dataDir, outputsDir = path.join(dataDir, "
     need(files.some(([name]) => name === "manifest.json"), "PRODUCT_CAPACITY_SOURCE_INVALID");
     return hash(files);
   }
-  async function readWithSignature(companyId, signature, descriptors = new Map(), { checkpoint = async () => {} } = {}) {
+  async function readWithSignature(companyId, signature, descriptors = new Map(), { checkpoint = async () => {}, onVerified = null } = {}) {
     if (typeof checkpoint !== "function") throw new TypeError("Product witness read checkpoint must be a function");
+    if (onVerified !== null && typeof onVerified !== "function") throw new TypeError("Product witness verification capture must be a function");
     let cacheFound = false, checkpointFailed = false, checkpointFailure;
     const check = async () => {
       try { await checkpoint(); }
@@ -67,6 +69,10 @@ function createProductCapacityStore({ dataDir, outputsDir = path.join(dataDir, "
         need(await descriptors.get(run.id) === run.descriptor, "PRODUCT_CAPACITY_SOURCE_CHANGED");
         await check();
       }
+      // Internal publication proof only: scope, review, checksum and every
+      // original-run descriptor have all passed before an existing body can
+      // authorize skipping an identical derived-file replacement.
+      if (onVerified) onVerified({ ...body, checksum });
       return { evidence: body.evidence, warning: null };
     } catch (error) {
       // A scheduling interruption is not a corrupt optional witness. Propagate
@@ -91,7 +97,8 @@ function createProductCapacityStore({ dataDir, outputsDir = path.join(dataDir, "
     }
     return { evidence, warnings, revision: hash([compactProductCapacityEvidence(evidence), warnings.map(row => [row.companyId, row.code])]) };
   }
-  async function publishOwned(evidence, { companies, sourceRevision, assertCurrent } = {}) {
+  async function publishOwned(evidence, { companies, sourceRevision, assertCurrent, checkpoint = async () => {} } = {}) {
+    if (typeof checkpoint !== "function") throw new TypeError("Product witness publication checkpoint must be a function");
     need(companies instanceof Map && typeof sourceRevision === "string" && sourceRevision && typeof assertCurrent === "function");
     const groups = new Map(), descriptors = new Map();
     for (const row of compactProductCapacityEvidence(evidence)) {
@@ -99,35 +106,49 @@ function createProductCapacityStore({ dataDir, outputsDir = path.join(dataDir, "
       if (!groups.has(row.companyId)) groups.set(row.companyId, []);
       groups.get(row.companyId).push(row);
     }
-    const pending = [];
+    const pending = []; let preparationIndex = 0;
     for (const [id, incoming] of groups) {
+      setCooperativeWorkPhase(70, ++preparationIndex);
+      await checkpoint();
       // Reading an older month must not erase a later normal maximum. Only a
       // currently verified store under the same DB correction may be merged;
       // corruption, changed raw sources and changed reviews rebuild from the
       // newly validated evidence instead.
-      const previous = await read(companies.get(id), descriptors);
+      let verifiedPrevious = null;
+      const previous = await read(companies.get(id), descriptors, { checkpoint,
+        onVerified: value => { verifiedPrevious = JSON.stringify(value); } });
       const rows = compactProductCapacityEvidence([...previous.evidence, ...incoming]);
       need(rows.length <= maxEvidence);
       const runs = [];
       for (const runId of [...new Set(rows.map(row => row.runId))].sort()) {
-        if (!descriptors.has(runId)) descriptors.set(runId, descriptor(runId));
+        await checkpoint();
+        if (!descriptors.has(runId)) descriptors.set(runId, descriptor(runId, checkpoint));
         runs.push({ id: runId, descriptor: await descriptors.get(runId) });
       }
       const body = { schemaVersion: 1, companyId: id, sourceRevision, correctionSignature: correctionSignature(companies.get(id)), evidence: rows, runs };
       const encoded = JSON.stringify({ ...body, checksum: hash(body) }); need(Buffer.byteLength(encoded) <= maxBytes);
-      pending.push({ file: filename(id), encoded });
+      if (encoded !== verifiedPrevious) pending.push({ file: filename(id), encoded, unitIndex: preparationIndex });
     }
+    await checkpoint();
     await assertCurrent();
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
     for (const location of [path.dirname(directory), directory]) { const stat = await fs.lstat(location); need(stat.isDirectory() && !stat.isSymbolicLink()); }
-    for (const { file, encoded } of pending) {
-      const temporary = file + "." + crypto.randomUUID() + ".tmp"; let handle;
-      try {
-        handle = await fs.open(temporary, "wx", 0o600); await handle.writeFile(encoded); await handle.sync(); await handle.close(); handle = null;
-        await assertCurrent(); await fs.rename(temporary, file);
-      } finally { if (handle) await handle.close().catch(() => {}); await fs.unlink(temporary).catch(() => {}); }
+    for (const { file, encoded, unitIndex } of pending) {
+      // Retain the original group's logical slot when earlier verified files
+      // were skipped. A retry must not lose its progress high-water position.
+      setCooperativeWorkPhase(70, groups.size + unitIndex);
+      await checkpoint();
+      // A witness is independently verified and replaced atomically. Yield only
+      // between complete files, never while a temporary file is being committed.
+      await runNonInterruptibleCooperativeWork(async () => {
+        const temporary = file + "." + crypto.randomUUID() + ".tmp"; let handle;
+        try {
+          handle = await fs.open(temporary, "wx", 0o600); await handle.writeFile(encoded); await handle.sync(); await handle.close(); handle = null;
+          await assertCurrent(); await fs.rename(temporary, file);
+        } finally { if (handle) await handle.close().catch(() => {}); await fs.unlink(temporary).catch(() => {}); }
+      });
     }
-    return { companies: pending.length };
+    return { companies: groups.size };
   }
   return { read, readForCompanies, readWithSignature, publish(evidence, context) {
     const task = serial.then(() => publishOwned(evidence, context));

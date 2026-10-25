@@ -6,7 +6,8 @@ const { createIndustryAnalysisService } = require("./lib/industry_analysis.cjs")
 const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs");
 const { createMonthlyCompanyRecalculation } = require("./lib/monthly_company_recalculation.cjs");
 const { compactMonthlyCapacityCompany } = require("./lib/monthly_company_source_catalog.cjs");
-const { cooperativeWorkCheckpoint } = require("./lib/cooperative_work_checkpoint.cjs");
+const { createProductCapacityStore } = require("./lib/product_capacity_store.cjs");
+const { compactProductCapacityEvidence } = require("./lib/product_capacity_baseline.cjs");
 const NOW = new Date("2026-10-24T00:00:00Z");
 const REQUEST = { industry: "glamping", region: "all", month: "2026-09", cutoffDate: "2026-09-30" };
 const gate = () => { let release; return { promise: new Promise(resolve => { release = resolve; }), release: () => release() }; };
@@ -19,6 +20,7 @@ async function fixture(t) {
   const companyFile = path.join(directory, "company_master", "companies.json"), historyFile = path.join(directory, "history", "observations.jsonl"), regionFile = path.join(directory, "regions.json");
   await fs.mkdir(path.dirname(companyFile), { recursive: true }); await fs.mkdir(path.dirname(historyFile), { recursive: true });
   const runs = ["r1", "r2"].map((id, index) => ({ id, keyword: "포천글램핑", collectedAt: `2026-09-${20 + index}T00:00:00Z`, collectedAtSource: "manifest", searchMode: "keyword", collectionQuality: { status: "complete" }, checkIn: `2026-09-${20 + index}`, bookingRangeDays: 11 }));
+  for (const run of runs) { const savedDirectory = path.join(directory, "outputs", run.id); await fs.mkdir(savedDirectory, { recursive: true }); await fs.writeFile(path.join(savedDirectory, "manifest.json"), JSON.stringify(run)); }
   const companies = Object.fromEntries(["a", "b"].map((id, index) => [id, { companyId: id, primaryName: `검수 ${id} 글램핑`, addresses: ["경기도 포천시 모의 주소"], lodgingTypes: ["글램핑"], placeIds: [id], runIds: runs.map(run => run.id), manualCorrection: { active: true, lodgingBasisTotal: 10 + index }, keywords: { "포천글램핑": { keyword: "포천글램핑", runs: runs.map(run => ({ runId: run.id, rank: index + 1, collectedAt: run.collectedAt })) } } }]));
   const history = Object.values(companies).map(company => ({ companyId: company.companyId, companyKey: company.companyId, runId: "r1", productType: "lodging", stayDate: "2026-09-22", collectedAt: runs[0].collectedAt, inventoryEvidenceVersion: 5, supply: 6, sold: 1, publicBookings: 1, phoneBookings: 0, estimatedRevenue: null, missingPrice: true }));
   await fs.writeFile(companyFile, JSON.stringify({ companies })); await fs.writeFile(historyFile, history.map(row => JSON.stringify(row)).join("\n") + "\n");
@@ -41,7 +43,7 @@ async function fixture(t) {
     const sources = createMonthlyReportSources({ dataDir: directory, regionMasterFile: regionFile, listRuns: async () => runs, now: () => NOW, readRevision: revision, projectCapacityCompany: compactMonthlyCapacityCompany, useSourceReadValidationBoundary: true, shareFrozenCatalogMetadata: true,
       capacityForCompany: company => company.manualCorrection.lodgingBasisTotal,
       recalculateCompanyObservations: async (request, data, options) => { weakGraphs.push(new WeakRef(data)); return recalculate(request, data, options); },
-      publishProductCapacityEvidence: async (evidence, publication) => { await publication.assertCurrent(); if (duringPublication) await duringPublication(); publications.push({ evidence: structuredClone(evidence), revision: publication.sourceRevision }); events.push("published"); },
+      publishProductCapacityEvidence: async (evidence, publication) => { await publication.assertCurrent(); if (duringPublication) await duringPublication(evidence, publication); publications.push({ evidence: structuredClone(evidence), revision: publication.sourceRevision }); events.push("published"); },
       readContext: async () => ({ sources: [], networkAttempted: false }),
       runWork: (operation, options) => scheduler.run(operation, options) });
     const trackedSources = { ...sources, loadSourcesWithCatalog: async (...args) => { activeSourceScopes++; events.push("source-enter"); try { return await sources.loadSourcesWithCatalog(...args); } finally { activeSourceScopes--; events.push("source-exit"); } } };
@@ -85,14 +87,50 @@ for (const mutation of [null, "correction", "history"]) test(`industry reconstru
   assert.ok(pipeline.events.indexOf("source-exit") < pipeline.events.indexOf("foreground-enter")); assert.ok(pipeline.events.indexOf("published") > pipeline.events.indexOf("foreground-enter"));
 });
 
-test("a foreground request arriving inside product-capacity publication cannot split or repeat that verified publication", { timeout: 10000 }, async t => {
-  const f = await fixture(t); let foreground, foregroundStarted = false;
-  const p = f.pipeline("publication-fence", { duringPublication: async () => {
-    foreground = p.scheduler.run(() => { foregroundStarted = true; assert.equal(p.activeScopes(), 0); assert.equal(p.sources.sourceReadStatus().active, false); return "foreground-after-publication"; }, { priority: "foreground", kind: "company-month", detached: true });
-    // Simulate a publisher which itself awaits storage/checkpoints after its
-    // caller has validated a complete source. Its irreversible unit is fenced.
-    await new Promise(resolve => setTimeout(resolve, 270)); cooperativeWorkCheckpoint(); await turn(); assert.equal(foregroundStarted, false);
+test("real product-capacity publication yields between complete company files and never saves a partial industry result", { timeout: 20000 }, async t => {
+  const f = await fixture(t), seed = f.pipeline("publication-seed"); await seed.service.analyze(REQUEST); await bounded(seed.service.drain(), "publication baseline did not finish");
+  const expected = await seed.service.readSaved(REQUEST); assert.equal(expected.storage.status, "ready"); await seed.service.stop();
+  const resultFile = await f.resultPath(), originalResult = await fs.readFile(resultFile), productStore = createProductCapacityStore({ dataDir: path.join(f.directory, "real-product-publication"), outputsDir: path.join(f.directory, "outputs") });
+  let queued = false, foreground, foregroundError = null, settled = false, publicationAttempts = 0, checkpointCalls = 0, firstCommitted; const foregroundEntered = gate();
+  const files = () => fs.readdir(productStore.directory).catch(error => { if (error.code === "ENOENT") return []; throw error; });
+  const assertFilesValid = async expectedCount => {
+    const names = await files(); assert.equal(names.length, expectedCount); assert.ok(names.every(name => /^[a-f0-9]{64}\.json$/.test(name)), "a yielded writer must not leave a temporary or truncated file"); const ids = [];
+    for (const name of names) { const envelope = JSON.parse(await fs.readFile(path.join(productStore.directory, name), "utf8")), { checksum, ...body } = envelope; assert.equal(checksum, crypto.createHash("sha256").update(JSON.stringify(body)).digest("hex")); assert.equal(body.schemaVersion, 1); assert.ok(body.evidence.length > 0); ids.push(body.companyId); }
+    const verified = await productStore.readForCompanies(ids.map(id => f.companies[id])); assert.deepEqual(verified.warnings, []); assert.ok(verified.evidence.length > 0); return verified.evidence;
+  };
+  // Keep foreground's callback outside the publication closure: the test must
+  // not itself retain the rejected publication's large source/context graph.
+  const runForeground = async () => {
+    p.events.push("foreground-publication-enter"); assert.equal(p.activeScopes(), 0); assert.equal(p.sources.sourceReadStatus().active, false); assert.equal(p.sources.sourceReadMetrics().companyCatalog.retainedFullCompanies, 0); assert.equal(settled, false); assert.equal(p.publications.length, 0, "a partly committed witness batch is not a finished industry source");
+    await assertFilesValid(1); assert.deepEqual(await fs.readFile(resultFile), originalResult, "the last normal industry result must remain unchanged while its replacement is paused");
+    const name = (await files())[0], target = path.join(productStore.directory, name); firstCommitted = { name, bytes: await fs.readFile(target), stamp: await fs.stat(target, { bigint: true }) };
+    // Enter the actual writer queue while foreground owns the heap. An empty
+    // verified publication writes no file but must not wait behind old work.
+    await bounded(productStore.publish([], { companies: new Map(), sourceRevision: "foreground-queue-probe", assertCurrent: async () => {} }), "publication writer queue remained owned after yielding"); await assertFilesValid(1);
+    if (typeof global.gc === "function") { global.gc(); await turn(); global.gc(); assert.ok(p.weakGraphs.every(ref => ref.deref() === undefined), "interrupted publication must not retain its source graph"); }
+    foregroundEntered.release(); await p.foregroundRelease.promise; return "foreground-between-company-files";
+  };
+  const handleForegroundFailure = error => { foregroundError = error; foregroundEntered.release(); };
+  const p = f.pipeline("publication-interrupted", { duringPublication: async (evidence, publication) => {
+    publicationAttempts++; assert.equal(typeof publication.checkpoint, "function", "source publication must forward the active private checkpoint");
+    await productStore.publish(evidence, { ...publication, checkpoint: async () => {
+      checkpointCalls++;
+      if (!queued && (await files()).filter(name => name.endsWith(".json")).length === 1) {
+        queued = true;
+        foreground = p.scheduler.run(runForeground, { priority: "foreground", kind: "company-month", detached: true });
+        foreground.catch(handleForegroundFailure);
+        // Use production's 250 ms minimum runtime, then enter the actual source
+        // checkpoint at a file boundary, outside a write/assert/rename unit.
+        await new Promise(resolve => setTimeout(resolve, 270));
+      }
+      return publication.checkpoint();
+    } });
   } });
-  await p.service.analyze(REQUEST); await bounded(p.service.drain(), "publication did not finish"); assert.equal(await bounded(foreground, "foreground did not follow publication"), "foreground-after-publication");
-  const saved = await p.service.readSaved(REQUEST); assert.equal(saved.storage.status, "ready"); assert.equal(p.publications.length, 1); assert.ok(p.publications[0].evidence.length > 0); assert.equal(p.scheduler.status().timing.yielded, 0); assert.deepEqual(p.loads, ["r1", "r2"]);
+  await p.service.rebuild(REQUEST); const industry = p.service.drain().then(value => { settled = true; return value; });
+  await bounded(foregroundEntered.promise, "foreground could not interrupt the publication between company files"); if (foregroundError) throw foregroundError; assert.equal(p.scheduler.status().cooperative.activeEligible, false); assert.equal(p.scheduler.status().queuedBackground, 1); assert.equal(settled, false); assert.equal(publicationAttempts, 1);
+  p.foregroundRelease.release(); assert.equal(await bounded(foreground, "foreground queue probe did not finish"), "foreground-between-company-files"); await bounded(industry, "industry did not finish its interrupted publication");
+  const final = await p.service.readSaved(REQUEST); assert.equal(final.storage.status, "ready", JSON.stringify(final.storage)); assert.equal(final.storage.sourceRevisionMatches, true); assert.deepEqual(resultOnly(final), resultOnly(expected)); assert.equal(p.publications.length, 1); assert.equal(publicationAttempts, 2); assert.ok(checkpointCalls > 2); assert.equal(p.scheduler.status().timing.yielded, 1); assert.equal(p.scheduler.status().timing.failed, 0); assert.equal(p.activeScopes(), 0); assert.equal(p.sources.sourceReadStatus().active, false);
+  assert.deepEqual(await assertFilesValid(2), compactProductCapacityEvidence(p.publications[0].evidence)); assert.deepEqual(p.loads, ["r1", "r2"], "the retry should reuse both fully verified compact run units");
+  const firstTarget = path.join(productStore.directory, firstCommitted.name), afterStamp = await fs.stat(firstTarget, { bigint: true }); assert.deepEqual(await fs.readFile(firstTarget), firstCommitted.bytes); assert.equal(afterStamp.mtimeNs, firstCommitted.stamp.mtimeNs, "the verified identical first file must not be rewritten on retry"); assert.equal(afterStamp.ino, firstCommitted.stamp.ino);
+  assert.ok(p.events.indexOf("source-exit") < p.events.indexOf("foreground-publication-enter")); assert.ok(p.events.indexOf("published") > p.events.indexOf("foreground-publication-enter"));
 });
