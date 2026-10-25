@@ -24,7 +24,7 @@ function reply(res, value, status = 200) { res.writeHead(status, { "Content-Type
 
 async function fixture(settings = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "staydatalab-worker-test-"));
-  const state = { requests: [], uploads: [], completions: [], failures: [], claims: 0, heartbeats: 0, spawned: [], kills: [], events: [], serverErrors: [] };
+  const state = { requests: [], uploads: [], completions: [], failures: [], terminalStatuses: [], claims: 0, heartbeats: 0, spawned: [], kills: [], events: [], serverErrors: [] };
   const jobs = [...(settings.jobs || [baseJob()])];
   const server = http.createServer(async (req, res) => {
     try {
@@ -59,6 +59,10 @@ async function fixture(settings = {}) {
         state.failures.push(json);
         if (settings.fail) await settings.fail({ req, res, json, state });
         else reply(res, { ok: true });
+      } else if (url.pathname.endsWith("/terminal-status")) {
+        state.terminalStatuses.push(json);
+        if (settings.terminal) await settings.terminal({ req, res, json, state });
+        else reply(res, { ok: false }, 404);
       } else reply(res, { ok: false }, 404);
     } catch (error) { state.serverErrors.push(error); if (!res.headersSent) reply(res, { ok: false }, 500); else res.destroy(); }
   });
@@ -252,10 +256,12 @@ test("malformed, unknown, nested and oversized failure bodies cannot inject diag
 test("safe broker diagnostics preserve retry limits and distinguish file transfer from completion", async () => {
   const f = await fixture({ complete: ({ res }) => reply(res, { error: "COLLECTOR_PUBLICATION_FAILED" }, 503) });
   try {
-    const result = await runWorker(f.options);
-    assert.equal(result.halted, true); assert.equal(result.code, "COLLECTOR_UPLOAD_FAILED");
+    const result = await runJob(baseJob(), f.options);
+    assert.equal(result.acknowledged, false); assert.equal(result.code, "COLLECTOR_UPLOAD_FAILED");
     assert.equal(result.failurePhase, "final_validation"); assert.equal(result.brokerErrorCode, "COLLECTOR_PUBLICATION_FAILED");
-    assert.equal(f.state.completions.length, 3); assert.equal(f.state.spawned.length, 1); assert.equal(f.state.claims, 1);
+    assert.equal(f.state.completions.length, 3); assert.equal(f.state.spawned.length, 1);
+    assert.equal(f.state.failures.length, 0, "an ambiguous completion cannot be overwritten by a failure report");
+    assert.equal(f.state.terminalStatuses.length, 3);
   } finally { await f.close(); }
   const upload = await fixture({ upload: ({ res }) => reply(res, { error: "COLLECTOR_FILE_HASH_MISMATCH" }, 400) });
   try {
@@ -299,10 +305,12 @@ test("heartbeat lease/auth failure kills the child immediately and never claims 
     const f = await fixture({ options: { maxJobs: 2 }, heartbeat: ({ res, state }) => reply(res, { cancelled: false }, state.heartbeats === 1 ? 200 : status),
       crawl: async ({ config }) => { await writeArtifacts(config.env); } });
     try {
-      const result = await runWorker(f.options);
-      assert.equal(result.jobs, 1); assert.equal(f.state.claims, 1);
+      if (status === 409) await assert.rejects(runWorker(f.options), /COLLECTOR_TERMINAL_ACK_REQUIRED/);
+      else assert.equal((await runWorker(f.options)).jobs, 1);
+      assert.equal(f.state.claims, 1);
       assert.deepEqual(f.state.kills, ["SIGTERM"]);
-      assert.equal(f.state.failures[0].code, "COLLECTOR_HEARTBEAT_FAILED");
+      if (status === 409) assert.equal(f.state.failures.length, 0);
+      else assert.equal(f.state.failures[0].code, "COLLECTOR_HEARTBEAT_FAILED");
       assert.equal(f.state.uploads.length, 0);
     } finally { await f.close(); }
   }
@@ -635,6 +643,311 @@ test("claim backoff jitter is capped and finite even after a long outage", async
   assert.equal(claimRetryDelay(options, 1), 6000); assert.equal(claimRetryDelay(options, 100000), 60000);
   assert.ok(claimRetryDelay({ ...options, random: () => 0 }, 1) >= 4000);
   assert.ok(Number.isFinite(claimRetryDelay({ ...options, random: () => NaN }, 10)));
+});
+
+function terminalReply(status = "failed", extra = {}) {
+  return { ok: true, jobId: "job_1", status, terminal: true, leaseReleased: true,
+    finishedAt: "2026-10-25T10:00:00.000Z", providerBlocked: false, ...extra };
+}
+
+test("active heartbeat 502 recovery keeps one child and logs only bounded retry diagnostics", async () => {
+  const f = await fixture({ heartbeat: ({ res, state }) => reply(res, { cancelled: false }, state.heartbeats === 2 ? 502 : 200),
+    crawl: async ({ child, config, state }) => { await until(() => state.heartbeats >= 3); await writeArtifacts(config.env); child.close(); } });
+  try {
+    assert.equal((await runJob(baseJob(), f.options)).status, "completed");
+    assert.equal(f.state.spawned.length, 1); assert.deepEqual(f.state.kills, []);
+    const event = f.state.events.find(row => row.event === "collector_heartbeat_retry");
+    assert.equal(event.status, 502); assert.equal(event.attempt, 1); assert.ok(event.remainingLeaseMs > event.retryInMs);
+    assert.equal(f.state.events.filter(row => row.event === "collector_heartbeat_recovered").length, 1);
+    assert.equal(JSON.stringify(f.state.events).includes(TOKEN), false);
+  } finally { await f.close(); }
+});
+
+test("heartbeat transport loss and timeout retry inside the confirmed lease without rerunning the child", async () => {
+  const f = await fixture({ options: { heartbeatTimeoutMs: 25 }, crawl: async ({ child, config, state }) => {
+    await until(() => state.events.some(row => row.event === "collector_heartbeat_recovered"));
+    await writeArtifacts(config.env); child.close();
+  } });
+  const normal = f.options.fetchImpl; let calls = 0;
+  f.options.fetchImpl = async (url, options) => {
+    if (url.endsWith("/heartbeat")) {
+      calls++;
+      if (calls === 2) throw new Error(`private url ${TOKEN}`);
+      if (calls === 3) return new Promise((resolve, reject) => options.signal.addEventListener("abort", () => reject(new Error("private timeout")), { once: true }));
+    }
+    return normal(url, options);
+  };
+  try {
+    assert.equal((await runJob(baseJob(), f.options)).status, "completed");
+    assert.equal(f.state.spawned.length, 1); assert.deepEqual(f.state.kills, []);
+    assert.equal(f.state.events.filter(row => row.event === "collector_heartbeat_retry" && row.status === 0).length, 2);
+    assert.equal(JSON.stringify(f.state.events).includes("private"), false);
+  } finally { await f.close(); }
+});
+
+test("a slow valid heartbeat ACK renews from request start, never from receipt time", async () => {
+  let startedAt = 0, killedAt = 0;
+  const f = await fixture({ options: { heartbeatTimeoutMs: 330 },
+    heartbeat: async ({ res, state }) => {
+      if (state.heartbeats === 1) { startedAt = performance.now(); await new Promise(resolve => setTimeout(resolve, 280)); reply(res, { cancelled: false }); }
+    }, crawl: async ({ child }) => { child.once("close", () => { killedAt = performance.now(); }); } });
+  try {
+    assert.equal((await runJob(baseJob(), f.options)).code, "COLLECTOR_HEARTBEAT_FAILED");
+    assert.deepEqual(f.state.kills, ["SIGTERM"]);
+    assert.ok(killedAt - startedAt < 900, `last-confirmed lease exceeded: ${killedAt - startedAt}`);
+    assert.equal(f.state.spawned.length, 1);
+  } finally { await f.close(); }
+});
+
+test("retry backoff cannot extend the last confirmed heartbeat budget", async () => {
+  const f = await fixture({ options: { retryMs: 400 }, heartbeat: ({ res }) => reply(res, {}, 503) });
+  try {
+    const result = await runJob(baseJob(), f.options);
+    assert.equal(result.code, "COLLECTOR_HEARTBEAT_FAILED"); assert.equal(f.state.heartbeats, 2);
+    assert.equal(f.state.spawned.length, 0); assert.equal(f.state.events.filter(row => row.event === "collector_heartbeat_retry").length, 1);
+  } finally { await f.close(); }
+});
+
+test("heartbeat auth, malformed ACK and cancellation never enter the transient retry loop", async () => {
+  for (const type of ["auth", "forbidden", "malformed-json", "malformed-shape", "cancelled"]) {
+    const f = await fixture({ heartbeat: ({ res }) => {
+      if (type === "auth" || type === "forbidden") reply(res, {}, type === "auth" ? 401 : 403);
+      else if (type === "malformed-json") { res.writeHead(200); res.end("private malformed text"); }
+      else reply(res, { cancelled: type === "cancelled" ? true : "false" });
+    } });
+    try {
+      const result = await runJob(baseJob(), f.options);
+      assert.equal(result.acknowledged, true); assert.equal(f.state.spawned.length, 0); assert.equal(f.state.heartbeats, 1);
+      assert.equal(f.state.events.some(row => row.event === "collector_heartbeat_retry"), false);
+      if (type !== "cancelled") assert.equal(f.state.events.find(row => row.event === "collector_heartbeat_failed").reason,
+        type.startsWith("malformed") ? "malformed_ack" : "request_rejected");
+    } finally { await f.close(); }
+  }
+});
+
+test("an initial heartbeat 409 acknowledges stored failure before spawning and never sends fail again", async () => {
+  const f = await fixture({ options: { maxJobs: 2 }, heartbeat: ({ res }) => reply(res, {}, 409),
+    terminal: ({ res, json }) => { assert.deepEqual(json, { workerId: "fixture-worker", leaseToken }); reply(res, terminalReply("failed", { errorCode: "COLLECTOR_HEARTBEAT_FAILED" })); } });
+  try {
+    const result = await runWorker(f.options);
+    assert.equal(result.halted, true); assert.equal(result.code, "COLLECTOR_HEARTBEAT_FAILED");
+    assert.equal(f.state.spawned.length, 0); assert.equal(f.state.claims, 1); assert.equal(f.state.heartbeats, 1); assert.equal(f.state.failures.length, 0);
+    assert.equal((await fs.readdir(f.options.workDir)).length, 1);
+  } finally { await f.close(); }
+});
+
+test("heartbeat revocation kills immediately while a terminal read is still pending", async () => {
+  const f = await fixture({ options: { heartbeatTimeoutMs: 250 },
+    heartbeat: ({ res, state }) => reply(res, { cancelled: false }, state.heartbeats === 1 ? 200 : 409),
+    terminal: async ({ res, state }) => {
+      assert.deepEqual(state.kills, ["SIGTERM"], "revocation must stop the child before reading the terminal proof");
+      await new Promise(resolve => setTimeout(resolve, 80)); reply(res, terminalReply());
+    }, crawl: async () => {} });
+  try {
+    const result = await runJob(baseJob(), f.options);
+    assert.equal(result.acknowledged, true); assert.equal(result.halted, true);
+    assert.equal(f.state.failures.length, 0); assert.deepEqual(f.state.kills, ["SIGTERM"]);
+  } finally { await f.close(); }
+});
+
+test("cancelled terminal ledger halts with retained artifacts, while interrupted and incomplete proof remain unknown", async () => {
+  for (const change of [reply => { reply.status = "cancelled"; }, reply => { reply.status = "interrupted"; reply.terminal = false; },
+    reply => { reply.leaseReleased = false; }, reply => { delete reply.finishedAt; }, reply => { reply.jobId = "other_job"; },
+    reply => { reply.finishedAt = "not-a-date"; }, reply => { delete reply.providerBlocked; }]) {
+    const stored = terminalReply(); change(stored);
+    const f = await fixture({ options: { maxJobs: 2 }, heartbeat: ({ res }) => reply(res, {}, 409), terminal: ({ res }) => reply(res, stored) });
+    try {
+      if (stored.status === "cancelled") { const result = await runWorker(f.options); assert.equal(result.halted, true); assert.equal(result.code, "COLLECTOR_CANCELLED"); }
+      else await assert.rejects(runWorker(f.options), /COLLECTOR_TERMINAL_ACK_REQUIRED/);
+      assert.equal(f.state.spawned.length, 0); assert.equal(f.state.failures.length, 0); assert.equal(f.state.claims, 1);
+    } finally { await f.close(); }
+  }
+});
+
+test("a lost fail ACK uses a bounded read-only retry handshake and retains the failed job", async () => {
+  const f = await fixture({ crawl: async ({ child }) => child.close(1), fail: ({ res }) => res.destroy(),
+    terminal: ({ res, state }) => state.terminalStatuses.length === 1 ? reply(res, {}, 503) : reply(res, terminalReply()) });
+  try {
+    const result = await runJob(baseJob(), f.options);
+    assert.equal(result.acknowledged, true); assert.equal(result.halted, true); assert.equal(f.state.failures.length, 1);
+    assert.equal(f.state.terminalStatuses.length, 2); assert.equal(f.state.spawned.length, 1);
+    assert.ok(await fs.stat(result.retainedDirectory));
+    assert.equal(f.state.events.filter(row => row.event === "collector_terminal_retry").length, 1);
+  } finally { await f.close(); }
+});
+
+test("lost completion ACK accepts only the same run and canonical file proof without fail or a second child", async () => {
+  const f = await fixture({ complete: ({ res }) => res.destroy(), terminal: ({ res, json, state }) => {
+    assert.deepEqual(json, state.completions[0]);
+    assert.deepEqual(Object.keys(json.files[0]).sort(), ["path", "sha256", "size"]);
+    reply(res, terminalReply("completed", { completionMatches: true, runId: json.runId, collectionFailed: false, qualityStatus: "complete" }));
+  } });
+  try {
+    assert.equal((await runJob(baseJob(), f.options)).status, "completed");
+    assert.equal(f.state.completions.length, 1); assert.equal(f.state.failures.length, 0); assert.equal(f.state.spawned.length, 1);
+    assert.deepEqual(await fs.readdir(f.options.workDir), []);
+  } finally { await f.close(); }
+});
+
+test("completion proof mismatch, unknown quality and missing proof cannot become success or overwrite the ledger", async () => {
+  for (const change of [reply => { reply.completionMatches = false; }, reply => { reply.runId = "other_run"; }, reply => { delete reply.collectionFailed; },
+    reply => { reply.qualityStatus = "unknown"; }, reply => { reply.terminal = false; }]) {
+    const f = await fixture({ complete: ({ res }) => res.destroy(), terminal: ({ res, json }) => {
+      const stored = terminalReply("completed", { completionMatches: true, runId: json.runId, collectionFailed: false, qualityStatus: "complete" });
+      change(stored); reply(res, stored);
+    } });
+    try {
+      await assert.rejects(runWorker(f.options), /COLLECTOR_TERMINAL_ACK_REQUIRED/);
+      assert.equal(f.state.completions.length, 3); assert.equal(f.state.terminalStatuses.length, 3);
+      assert.equal(f.state.failures.length, 0); assert.equal(f.state.claims, 1); assert.equal(f.state.spawned.length, 1);
+      assert.equal((await fs.readdir(f.options.workDir)).length, 1);
+    } finally { await f.close(); }
+  }
+});
+
+test("a saved provider block or collection failure is acknowledged but never promoted to completed success", async () => {
+  for (const change of [reply => { reply.providerBlocked = true; }, reply => { reply.qualityStatus = "blocked"; },
+    reply => { reply.collectionFailed = true; reply.qualityStatus = "failed"; }]) {
+    const f = await fixture({ complete: ({ res }) => res.destroy(), terminal: ({ res, json }) => {
+      const stored = terminalReply("completed", { completionMatches: true, runId: json.runId, collectionFailed: false, qualityStatus: "complete" });
+      change(stored); reply(res, stored);
+    } });
+    try {
+      const result = await runJob(baseJob(), f.options);
+      assert.equal(result.status, "failed"); assert.equal(result.acknowledged, true); assert.equal(result.halted, true);
+      assert.equal(f.state.failures.length, 0); assert.ok(await fs.stat(result.retainedDirectory));
+    } finally { await f.close(); }
+  }
+});
+
+test("shutdown makes at most one final terminal read and cannot enter another reconciliation backoff", async () => {
+  const controller = new AbortController();
+  const f = await fixture({ options: { signal: controller.signal }, crawl: async () => controller.abort(), fail: ({ res }) => res.destroy(),
+    terminal: ({ res }) => reply(res, {}, 503) });
+  try {
+    const result = await runJob(baseJob(), f.options);
+    assert.equal(result.acknowledged, false); assert.equal(result.code, "COLLECTOR_SHUTDOWN");
+    assert.equal(f.state.terminalStatuses.length, 1); assert.equal(f.state.events.some(row => row.event === "collector_terminal_retry"), false);
+  } finally { await f.close(); }
+});
+
+test("a claim outage longer than a lease does not expire a newly issued job before its confirming heartbeat", async () => {
+  let claims = 0; const nonces = [];
+  const f = await fixture({ options: { requestTimeoutMs: 1500, claimRetryBaseMs: 1, claimRetryMaxMs: 1 },
+    route: async ({ url, json, res }) => {
+      if (!url.pathname.endsWith("/claim")) return false;
+      nonces.push(json.claimRequestId);
+      if (++claims === 1) { await new Promise(resolve => setTimeout(resolve, 1100)); reply(res, {}, 502); return true; }
+      return false;
+    } });
+  try {
+    const result = await runWorker(f.options);
+    assert.equal(result.jobs, 1); assert.equal(result.halted, undefined);
+    assert.equal(new Set(nonces).size, 1); assert.equal(claims, 2); assert.equal(f.state.spawned.length, 1);
+    assert.equal(f.state.failures.length, 0); assert.deepEqual(f.state.kills, []);
+  } finally { await f.close(); }
+});
+
+test("an earlier nonterminal lookup does not hide a later committed completion with another lost ACK", async () => {
+  const f = await fixture({ complete: ({ res, state }) => state.completions.length === 1 ? reply(res, {}, 503) : res.destroy(),
+    terminal: ({ res, json, state }) => {
+      assert.deepEqual(json, state.completions[0]);
+      if (state.completions.length === 1) reply(res, { ok: true, jobId: "job_1", status: "running", terminal: false, leaseReleased: false, providerBlocked: false });
+      else reply(res, terminalReply("completed", { runId: json.runId, completionMatches: true, collectionFailed: false, qualityStatus: "complete" }));
+    } });
+  try {
+    assert.equal((await runJob(baseJob(), f.options)).status, "completed");
+    assert.equal(f.state.completions.length, 2); assert.equal(f.state.terminalStatuses.length, 2);
+    assert.equal(f.state.failures.length, 0); assert.equal(f.state.spawned.length, 1);
+  } finally { await f.close(); }
+});
+
+test("a response-body transport error after HTTP 200 can recover without retrying malformed JSON", async () => {
+  let injected = false;
+  const f = await fixture(); const normal = f.options.fetchImpl;
+  f.options.fetchImpl = async (url, options) => {
+    if (!injected && url.endsWith("/heartbeat")) {
+      injected = true;
+      return new Response(new ReadableStream({ start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"cancelled":'));
+        controller.error(new Error(`private response stream ${TOKEN}`));
+      } }), { status: 200 });
+    }
+    return normal(url, options);
+  };
+  try {
+    assert.equal((await runJob(baseJob(), f.options)).status, "completed");
+    assert.equal(f.state.spawned.length, 1); assert.deepEqual(f.state.kills, []);
+    const retry = f.state.events.find(row => row.event === "collector_heartbeat_retry");
+    assert.equal(retry.status, 200, "known HTTP status is distinct from transport-unknown status 0");
+    assert.equal(JSON.stringify(f.state.events).includes("private response"), false);
+  } finally { await f.close(); }
+});
+
+test("a local provider stop wins over an otherwise valid reconciled completion before its server latch is saved", async () => {
+  const f = await fixture({ crawl: async ({ child, config }) => {
+    child.stdout.write("COLLECTOR_PROVIDER_BLOCKED\n");
+    await writeArtifacts(config.env); child.close();
+  }, complete: ({ res }) => res.destroy(), terminal: ({ res, json }) => {
+    reply(res, terminalReply("completed", { runId: json.runId, completionMatches: true, collectionFailed: false,
+      qualityStatus: "complete", providerBlocked: false }));
+  } });
+  try {
+    const result = await runJob(baseJob(), f.options);
+    assert.equal(result.status, "failed"); assert.equal(result.acknowledged, true); assert.equal(result.halted, true);
+    assert.equal(result.code, "COLLECTOR_PROVIDER_BLOCKED"); assert.ok(await fs.stat(result.retainedDirectory));
+    assert.equal(f.state.failures.length, 0); assert.equal(f.state.spawned.length, 1);
+    assert.equal(f.state.events.find(row => row.event === "collector_terminal_reconciled").code, "COLLECTOR_PROVIDER_BLOCKED");
+    assert.equal(f.state.events.some(row => row.event === "collector_job_completed"), false);
+  } finally { await f.close(); }
+});
+
+test("a broken unauthorized response body remains fatal instead of overriding its known HTTP status", async () => {
+  for (const status of [401, 403]) {
+    const f = await fixture(); const normal = f.options.fetchImpl;
+    f.options.fetchImpl = async (url, options) => url.endsWith("/heartbeat")
+      ? new Response(new ReadableStream({ start(controller) { controller.error(new Error("private auth stream")); } }), { status })
+      : normal(url, options);
+    try {
+      assert.equal((await runJob(baseJob(), f.options)).code, "COLLECTOR_HEARTBEAT_FAILED");
+      assert.equal(f.state.spawned.length, 0); assert.equal(f.state.events.some(row => row.event === "collector_heartbeat_retry"), false);
+      const stopped = f.state.events.find(row => row.event === "collector_heartbeat_failed");
+      assert.equal(stopped.status, status); assert.equal(stopped.reason, "request_rejected");
+    } finally { await f.close(); }
+  }
+});
+
+test("a positive completed proof settling during the outer error path is not relabeled as a failed job", async () => {
+  let completing;
+  const f = await fixture({ options: { heartbeatTimeoutMs: 200 }, complete: ({ res }) => { completing = res; },
+    heartbeat: ({ res }) => {
+      reply(res, { cancelled: false }, completing ? 409 : 200);
+      if (completing) { const pending = completing; completing = null; setTimeout(() => reply(pending, {}, 400), 10); }
+    }, terminal: async ({ res, json }) => {
+      await new Promise(resolve => setTimeout(resolve, 40));
+      reply(res, terminalReply("completed", { runId: json.runId, completionMatches: true, collectionFailed: false, qualityStatus: "complete" }));
+    } });
+  try {
+    const result = await runJob(baseJob(), f.options);
+    assert.equal(result.status, "completed"); assert.equal(result.acknowledged, true);
+    assert.equal(f.state.failures.length, 0); assert.equal(f.state.spawned.length, 1); assert.deepEqual(f.state.kills, []);
+    assert.equal(f.state.events.some(row => row.event === "collector_job_failed"), false);
+  } finally { await f.close(); }
+});
+
+test("a direct completion cancellation ACK cannot override a local provider stop", async () => {
+  const f = await fixture({ jobs: [baseJob(), baseJob("job_2")], options: { maxJobs: 2 }, crawl: async ({ child, config }) => {
+    child.stdout.write("COLLECTOR_PROVIDER_BLOCKED\n");
+    await writeArtifacts(config.env); child.close();
+  }, complete: ({ res }) => reply(res, { ok: true, cancelled: true }) });
+  try {
+    const result = await runWorker(f.options);
+    assert.equal(result.halted, true); assert.equal(result.code, "COLLECTOR_PROVIDER_BLOCKED");
+    assert.equal(f.state.claims, 1); assert.equal(f.state.spawned.length, 1);
+    assert.equal((await fs.readdir(f.options.workDir)).length, 1);
+    assert.equal(f.state.events.some(row => row.event === "collector_job_cancelled"), false);
+    assert.equal(f.state.events.find(row => row.event === "collector_failure_receipt_saved").code, "COLLECTOR_PROVIDER_BLOCKED");
+  } finally { await f.close(); }
 });
 
 (async () => {

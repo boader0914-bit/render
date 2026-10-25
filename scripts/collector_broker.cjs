@@ -13,6 +13,7 @@ const MAX_RUN_BYTES = 256 * 1024 * 1024;
 const MAX_JSON_BYTES = 1024 * 1024;
 const MAX_FILES = 2048;
 const TERMINAL_JOBS_IN_LEDGER = 200;
+const MAX_TERMINAL_LEDGER_BYTES = 64 * 1024 * 1024;
 const ENV_KEYS = new Set([
   "CHECK_IN", "CHECK_OUT", "ADULTS", "SEARCH_MODE", "SEARCH_MODE_REQUESTED", "SEARCH_MODE_AUTO_CORRECTED",
   "SEARCH_INTENT", "SEARCH_REGION", "SEARCH_SCOPE", "SEARCH_SCOPE_LABEL", "COLLECTION_MODE", "COLLECTION_PURPOSE",
@@ -588,6 +589,80 @@ function createCollectorBroker(options = {}) {
     if (typeof leaseToken !== "string" || !sameSecret(digest(leaseToken), job.leaseHash)) throw problem("COLLECTOR_LEASE_MISMATCH");
     if (!allowTerminal && (!ownsLease(job) || !["leased", "cancelled"].includes(job.status))) throw problem("COLLECTOR_LEASE_INACTIVE");
   }
+  async function storedJson(filename, maximum) {
+    await regularFile(filename);
+    let handle;
+    try {
+      handle = await fsp.open(filename, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+      const stat = await handle.stat();
+      if (!stat.isFile() || stat.nlink !== 1 || stat.size <= 0 || stat.size > maximum) throw problem("COLLECTOR_STATE_INVALID", 503);
+      // Bound the read itself as well as stat: an unexpected concurrent writer
+      // cannot make this read-only reconciliation consume an unbounded ledger.
+      const chunks = [];
+      let bytes = 0;
+      for await (const chunk of handle.createReadStream({ autoClose: false })) {
+        bytes += chunk.length;
+        if (bytes > maximum) throw problem("COLLECTOR_STATE_INVALID", 503);
+        chunks.push(chunk);
+      }
+      return JSON.parse(Buffer.concat(chunks, bytes).toString("utf8"));
+    } finally { await handle?.close().catch(() => {}); }
+  }
+  async function terminalStatus(id, body) {
+    // This endpoint deliberately does not initialize, expire leases, update
+    // workerLastSeenAt, notify providers or persist. Only durable receipts can
+    // resolve an ACK lost after a terminal write; in-memory state is not proof.
+    if (!ready) throw problem("COLLECTOR_STATE_NOT_READY", 503);
+    workerIdentity(body.workerId);
+    if (typeof body.leaseToken !== "string" || body.leaseToken.length < 24 || body.leaseToken.length > 256) throw problem("COLLECTOR_LEASE_MISMATCH");
+    const hasRun = Object.hasOwn(body, "runId"), hasFiles = Object.hasOwn(body, "files");
+    if (hasRun !== hasFiles) throw problem("COLLECTOR_INVALID_FILES", 400);
+    const expectedRun = hasRun ? runIdentifier(body.runId) : null;
+    const expectedKey = hasFiles ? descriptorKey(descriptors(body.files)) : null;
+    return locked(async () => {
+      let job;
+      try {
+        const ledger = await storedJson(stateFile, MAX_TERMINAL_LEDGER_BYTES);
+        if (ledger.version !== 1 || !Array.isArray(ledger.jobs)
+          || ledger.jobs.some(row => !/^collector_[a-f0-9-]{36}$/.test(row?.id || "") || !ALL_STATUSES.has(row.status))
+          || new Set(ledger.jobs.map(row => row.id)).size !== ledger.jobs.length) throw new Error();
+        job = ledger.jobs.find(row => row.id === id);
+        if (!job) {
+          const filename = path.join(receiptsDir, `${id}.json`);
+          if (!await exists(filename)) throw problem("COLLECTOR_JOB_NOT_FOUND", 404);
+          job = await storedJson(filename, 4 * MAX_JSON_BYTES);
+          if (job?.id !== id || !TERMINAL.has(job.status)) throw new Error();
+        }
+      } catch (error) {
+        if (error.code === "COLLECTOR_JOB_NOT_FOUND") throw error;
+        throw problem("COLLECTOR_STATE_INVALID", 503);
+      }
+      checkLease(job, body.workerId, body.leaseToken, true);
+      if (job.claimWorkerId && job.claimWorkerId !== body.workerId) throw problem("COLLECTOR_WRONG_WORKER", 403);
+      const time = value => typeof value === "string" && value.length === 24 && Number.isFinite(Date.parse(value))
+        && new Date(value).toISOString() === value;
+      const leaseReleased = time(job.leaseReleasedAt);
+      const manifestKnown = job.manifest && typeof job.manifest === "object" && !Array.isArray(job.manifest)
+        && job.manifest.workerCollection === true && (job.manifest.collectionFailed === undefined || typeof job.manifest.collectionFailed === "boolean");
+      let terminal = ["completed", "failed", "cancelled"].includes(job.status) && leaseReleased && time(job.finishedAt)
+        && Date.parse(job.finishedAt) <= Date.parse(job.leaseReleasedAt);
+      if (job.status === "completed" && (!/^[a-f0-9]{64}$/.test(job.completion?.descriptorKey || "")
+        || !manifestKnown
+        || !["complete", "partial", "failed", "blocked"].includes(job.collectionQuality?.status))) terminal = false;
+      const result = { ok: true, jobId: id, status: job.status, terminal, leaseReleased,
+        providerBlocked: Boolean(job.providerBlockedAt) };
+      if (terminal) result.finishedAt = job.finishedAt;
+      if (job.errorCode) result.errorCode = errorCode(job.errorCode);
+      if (job.status === "completed") {
+        try { result.runId = runIdentifier(job.runId); }
+        catch { result.terminal = false; }
+        result.completionMatches = result.terminal && expectedRun !== null && job.runId === expectedRun && job.completion.descriptorKey === expectedKey;
+        if (manifestKnown) result.collectionFailed = job.manifest.collectionFailed === true;
+        if (["complete", "partial", "failed", "blocked"].includes(job.collectionQuality?.status)) result.qualityStatus = job.collectionQuality.status;
+      }
+      return result;
+    });
+  }
   async function claim(body) {
     return locked(async () => {
       workerIdentity(body.workerId);
@@ -870,6 +945,13 @@ function createCollectorBroker(options = {}) {
       req.resume?.(); send(res, 401, { error: "COLLECTOR_UNAUTHORIZED" }); return true;
     }
     try {
+      const terminalMatch = /^\/jobs\/(collector_[a-f0-9-]{36})\/terminal-status$/.exec(url.pathname.slice(apiBasePath.length));
+      if (terminalMatch) {
+        if (req.method !== "POST") throw problem("COLLECTOR_METHOD_NOT_ALLOWED", 405);
+        if (url.search) throw problem("COLLECTOR_INVALID_ROUTE", 400);
+        send(res, 200, await terminalStatus(terminalMatch[1], await readJsonRequest(req)));
+        return true;
+      }
       await ensureReady();
       let result;
       if (req.method === "POST" && url.pathname === `${apiBasePath}/claim`) result = await claim(await readJsonRequest(req));
