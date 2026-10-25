@@ -46,10 +46,10 @@ function configuration(env = process.env) {
   if(archiveDirectory&&(!path.isAbsolute(archiveDirectory)||path.resolve(archiveDirectory)===path.parse(path.resolve(archiveDirectory)).root))throw new Error('Insight archive requires an absolute, dedicated directory');
   return { origin: origin.origin, origins, backend: backend.origin, serviceToken, port, host: env.RENDER ? '0.0.0.0' : '127.0.0.1',regionCacheDirectory:cacheDirectory,companyCacheDirectory,reportCacheDirectory,archiveDirectory };
 }
-function createConnectedServer({ origin, origins = [], backend, serviceToken, fetchImpl = fetch, regionCacheDirectory=null,companyCacheDirectory=null,reportCacheDirectory=null,archiveDirectory=null,diagnosticsLogger }) {
+function createConnectedServer({ origin, origins = [], backend, serviceToken, fetchImpl = fetch, regionCacheDirectory=null,companyCacheDirectory=null,reportCacheDirectory=null,archiveDirectory=null,diagnosticsLogger,companyDiagnosticsLogger=entry=>console.warn('insight_company_read',JSON.stringify(entry)) }) {
   const trustedOrigins = new Map(publicOrigins(origin, origins).map(value => [new URL(value).host, value]));
   const archives=createArchiveService({directory:archiveDirectory,namespace:backend});
-  const companyReads = createCompanyReadCache({persistenceDirectory:companyCacheDirectory,namespace:backend,...(archiveDirectory?{onVerifiedSource:context=>archives.capture(context)}:{})}), regionReads = createRegionReadCache({persistenceDirectory:regionCacheDirectory,namespace:backend}), scopeSecret = crypto.randomBytes(32), staticAssets = new Map();
+  const companyReads = createCompanyReadCache({persistenceDirectory:companyCacheDirectory,namespace:backend,onStage:companyDiagnosticsLogger,...(archiveDirectory?{onVerifiedSource:context=>archives.capture(context)}:{})}), regionReads = createRegionReadCache({persistenceDirectory:regionCacheDirectory,namespace:backend}), scopeSecret = crypto.randomBytes(32), staticAssets = new Map();
   const reportReads = createReportReadCache({persistenceDirectory:reportCacheDirectory,namespace:backend});
   const scopeFor = (requestOrigin, mode, session) => crypto.createHmac('sha256', scopeSecret).update(JSON.stringify([requestOrigin,mode,session])).digest('hex');
   const audienceFor = (requestOrigin,mode) => JSON.stringify([requestOrigin,mode]);
@@ -118,7 +118,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
     // Invalid input still follows the central authentication/validation path.
     if(!session||!valid)return readUpstream(prefix+route,url.search,headers,{timing});
     const savedQuery=new URLSearchParams(url.search);savedQuery.set('month',month||new Date(Date.now()+9*3600000).toISOString().slice(0,7));savedQuery.set('savedOnly','1');
-    return companyReads.read({scope:scopeFor(requestOrigin,mode,session),audience:audienceFor(requestOrigin,mode),route:'/companies/'+match[1]+'/collection',companyId:match[1],month,force,
+    return companyReads.read({scope:scopeFor(requestOrigin,mode,session),audience:audienceFor(requestOrigin,mode),route:'/companies/'+match[1]+'/collection',companyId:match[1],month,force,requestId:timing?.requestId,
       readIdentity:()=>readUpstream(prefix+(mode==='admin'?'/customer-view/me':'/me'),'',headers,{stage:'identity',timing}),
       readSavedSource:()=>readUpstream(prefix+route,'?'+savedQuery.toString(),headers,{stage:'saved_preview',timing,timeoutMs:3000}),
       readSource:({background=false}={})=>readUpstream(prefix+route,url.search,headers,{stage:'source',timing,background})});

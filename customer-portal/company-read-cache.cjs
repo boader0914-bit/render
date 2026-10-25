@@ -1,13 +1,22 @@
 'use strict';
-const {createHash}=require('node:crypto');
+const {createHash,randomUUID}=require('node:crypto');
+const {performance}=require('node:perf_hooks');
 const {allocationKeys,schemas:inventoryPolicySchemas,policyEvidence}=require('./inventory-policy-evidence.cjs');
 
 // This is an Insight-process cache, not a second source of company data. The
 // caller supplies an opaque host/mode/session scope and both central GETs.
-function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,savedReadTimeoutMs=3000,maxEntries=64,maxBytes=16*1024*1024,maxPerScope=8,maxScopes=maxEntries*2,persistenceDirectory,namespace,persistentStore,onVerifiedSource}={}) {
+function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,savedReadTimeoutMs=3000,maxEntries=64,maxBytes=16*1024*1024,maxPerScope=8,maxScopes=maxEntries*2,persistenceDirectory,namespace,persistentStore,onVerifiedSource,onStage,stageClock=()=>performance.now()}={}) {
   const entries=new Map(),states=new Map(),pendingSources=new Map(),pendingSaved=new Map(),invalidatedScopes=new Set();
   let bytes=0;
   const clock=()=>Number(now());
+  const diagnosticCodes=new Set(['UPSTREAM_TIMEOUT','CONNECTION_UNAVAILABLE','AUTHENTICATION_REQUIRED','ACCESS_DENIED','UPSTREAM_RATE_LIMITED','COMPANY_VIEW_INVALIDATED','NOT_FOUND','MONTH_NOT_OBSERVED','INVALID_COMPANY_MONTH','SOURCE_SCOPE_MISMATCH','SOURCE_PREVIEW_RESPONSE','SOURCE_READ_FAILED','SNAPSHOT_WRITE_FAILED','ARCHIVE_WRITE_FAILED','SOURCE_STATE_REPLACED','SOURCE_EPOCH_CHANGED','SOURCE_FINGERPRINT_CHANGED','SOURCE_BINDING_CHANGED']);
+  const diagnosticNow=()=>{try{const value=Number(stageClock());return Number.isFinite(value)?value:0;}catch{return 0;}};
+  function sourceStage(pending,stage,reply){
+    if(typeof onStage!=='function')return;
+    try{const duration=diagnosticNow()-pending.startedAt,code=reply?.data?.error?.code;
+      onStage({event:'company_source_read',stage,requestId:pending.requestId,elapsedMs:Number.isFinite(duration)?Math.max(0,Math.round(duration)):0,...(Number.isInteger(reply?.status)&&reply.status>=100&&reply.status<=599?{status:reply.status}:{}),...(diagnosticCodes.has(code)?{errorCode:code}:{})});
+    }catch{/* Diagnostics cannot change private read or storage behavior. */}
+  }
   const clone=value=>value===undefined?undefined:JSON.parse(JSON.stringify(value));
   const failure=(status,code,message)=>({status,ok:false,data:{error:{code,message}}});
   const unavailable=()=>failure(503,'CONNECTION_UNAVAILABLE','자료 연결을 확인하지 못했습니다. 잠시 후 다시 조회해 주세요.');
@@ -149,6 +158,7 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,saved
   function current(state,epoch,key,fingerprint,binding) {
     return states.get(state.scope)===state&&state.epoch===epoch&&(!key||state.fingerprints.get(key)===fingerprint&&(!binding||state.bindings.get(key)===binding));
   }
+  function sourceInvalidation(state,epoch,key,mark,binding){return {data:{error:{code:states.get(state.scope)!==state?'SOURCE_STATE_REPLACED':state.epoch!==epoch?'SOURCE_EPOCH_CHANGED':state.fingerprints.get(key)!==mark?'SOURCE_FINGERPRINT_CHANGED':'SOURCE_BINDING_CHANGED'}}};}
   function revoke(state,reply) {
     state.epoch++;state.revoked={reply,at:clock()};state.denied.clear();state.fingerprints.clear();state.bindings.clear();state.blockedCompanies.clear();clearEntries(state.scope);
     for(const map of [pendingSources,pendingSaved])for(const [key,pending] of map)if(pending.scope===state.scope)map.delete(key);
@@ -266,39 +276,45 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,saved
     }
     return views;
   }
-  function sourceRead({key,state,epoch,mark,binding,companyId,month,period,audience,identity,readSource}) {
+  function sourceRead({key,state,epoch,mark,binding,companyId,month,period,audience,identity,readSource,requestId}) {
     const former=pendingSources.get(key);
-    if(former&&former.state===state&&former.epoch===epoch&&former.mark===mark&&former.binding===binding)return former.promise;
+    if(former&&former.state===state&&former.epoch===epoch&&former.mark===mark&&former.binding===binding){sourceStage(former,'joined');return former.promise;}
     const entry=entries.get(key);if(entry){entry.lastAttempt=clock();entry.needsRevalidation=false;}
     const slotKey=durableSlot(identity,audience,period.startsWith('default:')),savedMonth=period.replace('default:','');
     let ticket;try{if(slotKey)ticket=disk?.begin(slotKey,savedMonth);}catch{}
-    const pending={scope:state.scope,state,epoch,mark,binding,promise:null};
+    const pending={scope:state.scope,state,epoch,mark,binding,promise:null,requestId:typeof requestId==='string'&&/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(requestId)?requestId:randomUUID(),startedAt:diagnosticNow()};
     const background=Boolean(entry&&entry.fingerprint===mark&&clock()<expiry(entry));
+    sourceStage(pending,'requested');
     pending.promise=safeRead(()=>readSource({background})).then(async reply=>{
-      if(!current(state,epoch,key,mark,binding))return invalidated();
+      sourceStage(pending,'received',reply);
+      if(!current(state,epoch,key,mark,binding)){sourceStage(pending,'invalidated',sourceInvalidation(state,epoch,key,mark,binding));return invalidated();}
       if(!reply.ok){
+        sourceStage(pending,'failed',reply);
         if([401,403].includes(reply.status))revoke(state,reply);
         else if(reply.status===404){for(const [storedKey] of state.fingerprints){if(JSON.parse(storedKey)[2]===companyId){remove(storedKey);state.bindings.delete(storedKey);}}state.blockedCompanies.set(companyId,{mark:stableFingerprint(identity),reply});state.denied.set(key,{reply,mark,at:clock()});}
         else{const previous=entries.get(key);if(previous&&previous.fingerprint===mark)previous.refreshFailed=true;}
         return reply;
       }
       if(previewMarker(reply.data)||!sourceScope(reply.data,companyId,month)){
+        sourceStage(pending,'failed',{data:{error:{code:previewMarker(reply.data)?'SOURCE_PREVIEW_RESPONSE':'SOURCE_SCOPE_MISMATCH'}}});
         const previous=entries.get(key);if(previous)previous.refreshFailed=true;
         return unavailable();
       }
       reply={...reply,data:sanitizeEvidenceCore(reply.data)};
+      sourceStage(pending,'validated');
       state.revoked=null;state.denied.delete(key);state.blockedCompanies.delete(companyId);
       const checkedAt=clock();
       if(cacheable(reply.data,identity)){
         const core=projectedEvidenceCore(reply.data);
-        if(disk&&slotKey&&core)try{await disk.put({slotKey,month:savedMonth,checkedAt,core,ticket,guard:()=>current(state,epoch,key,mark,binding)});}catch{}
-        if(!current(state,epoch,key,mark,binding))return invalidated();
-        if(core&&reply.data.responseCache?.state!=='preview'&&reply.data.responseCache?.preview!==true&&reply.data.calculation?.mode!=='saved_only'&&typeof onVerifiedSource==='function')try{await onVerifiedSource({identity:identity.data,audience,companyId,month:savedMonth,data:core,checkedAt});}catch{/* A failed archive never replaces the good read; its storage status records the failure. */}
-        if(!current(state,epoch,key,mark,binding))return invalidated();
+        if(disk&&slotKey&&core)try{sourceStage(pending,'persisting');const stored=await disk.put({slotKey,month:savedMonth,checkedAt,core,ticket,guard:()=>current(state,epoch,key,mark,binding)});sourceStage(pending,stored===true?'persisted':'persistence_skipped');}catch{sourceStage(pending,'persistence_failed',{data:{error:{code:'SNAPSHOT_WRITE_FAILED'}}});}
+        if(!current(state,epoch,key,mark,binding)){sourceStage(pending,'invalidated',sourceInvalidation(state,epoch,key,mark,binding));return invalidated();}
+        if(core&&reply.data.responseCache?.state!=='preview'&&reply.data.responseCache?.preview!==true&&reply.data.calculation?.mode!=='saved_only'&&typeof onVerifiedSource==='function')try{sourceStage(pending,'archiving');await onVerifiedSource({identity:identity.data,audience,companyId,month:savedMonth,data:core,checkedAt});sourceStage(pending,'archive_completed');}catch{sourceStage(pending,'archive_failed',{data:{error:{code:'ARCHIVE_WRITE_FAILED'}}});/* A failed archive never replaces the good read; its storage status records the failure. */}
+        if(!current(state,epoch,key,mark,binding)){sourceStage(pending,'invalidated',sourceInvalidation(state,epoch,key,mark,binding));return invalidated();}
         invalidatedScopes.delete(state.scope);remember(key,state,mark,reply.data,{checkedAt});
-      }else remove(key);
+        const stored=entries.get(key);sourceStage(pending,stored?.fingerprint===mark&&stored.checkedAt===checkedAt?'remembered':'memory_skipped');
+      }else{remove(key);sourceStage(pending,'not_cacheable');}
       return {...reply,checkedAt};
-    }).finally(()=>{if(pendingSources.get(key)===pending)pendingSources.delete(key);});
+    }).catch(error=>{sourceStage(pending,'failed',{data:{error:{code:'SOURCE_READ_FAILED'}}});throw error;}).finally(()=>{sourceStage(pending,'settled');if(pendingSources.get(key)===pending)pendingSources.delete(key);});
     pendingSources.set(key,pending);return pending.promise;
   }
   function savedPreviewRead({key,state,epoch,mark,binding,companyId,month,readSavedSource}){
@@ -321,7 +337,7 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,saved
     }).finally(()=>{clearTimeout(timer);if(pendingSaved.get(key)===pending)pendingSaved.delete(key);});
     pendingSaved.set(key,pending);return pending.promise;
   }
-  async function read({scope,route='',companyId,month='',audience,readIdentity,readSource,readSavedSource,force=false}) {
+  async function read({scope,route='',companyId,month='',audience,readIdentity,readSource,readSavedSource,force=false,requestId}) {
     if(typeof scope!=='string'||!scope||typeof readIdentity!=='function'||typeof readSource!=='function')return unavailable();
     if(!/^[a-zA-Z0-9_-]+$/.test(companyId||'')||typeof month!=='string'||month&&!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month))return failure(400,'INVALID_COMPANY_MONTH','업체와 숙박월을 확인해 주세요.');
     const state=scopeState(scope),epoch=state.epoch,permissionVersion=state.permissionVersion;
@@ -349,7 +365,7 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,saved
     const previewEnabled=typeof readSavedSource==='function';
     if(!force||previewEnabled)hydrate(key,state,mark,identity,month,period,audience);
     const entry=entries.get(key);
-    const context={key,state,epoch,mark,binding,companyId,month,period,audience,identity,readSource};
+    const context={key,state,epoch,mark,binding,companyId,month,period,audience,identity,readSource,requestId};
     if(entry&&entry.fingerprint===mark&&!force&&!active(identity.request)){
       entries.delete(key);entries.set(key,entry);
       let refreshing=pendingSources.has(key);

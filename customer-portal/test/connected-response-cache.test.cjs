@@ -3,9 +3,9 @@ const test=require('node:test'),assert=require('node:assert/strict'),http=requir
 const {createConnectedServer}=require('../connected-server.cjs');
 const origin='https://insight.example',backend='https://datalab.example';
 async function setup(t){
- const calls=[],state={allowed:true,expired:false,revision:1,sourceVersion:1};
+ const calls=[],companyStages=[],state={allowed:true,expired:false,revision:1,sourceVersion:1};
  const identity=()=>({customer:{customerId:'customer-fixture',accountStatus:'active',revision:state.revision,relations:state.allowed?[{companyId:'cmp_one',kind:'own',status:'active'}]:[]},companies:state.allowed?[{companyId:'cmp_one',name:'검수 업체',version:1,rooms:16}]:[],preparations:[],collectionAllowance:{canRequest:true,limit:1}});
- const server=createConnectedServer({origin,backend,serviceToken:'fixture-service-token-not-a-real-credential',fetchImpl:async(url,options)=>{
+ const server=createConnectedServer({origin,backend,serviceToken:'fixture-service-token-not-a-real-credential',companyDiagnosticsLogger:row=>companyStages.push(row),fetchImpl:async(url,options)=>{
   calls.push({path:new URL(url).pathname,method:options.method,query:new URL(url).search});
   const status=state.expired?401:200,ok=status===200;
   let data=identity();
@@ -26,13 +26,14 @@ async function setup(t){
    const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>{const text=Buffer.concat(chunks).toString('utf8');resolve({status:res.statusCode,headers:res.headers,text,data:res.headers['content-type']?.includes('application/json')?JSON.parse(text):null});});
   });req.on('error',reject);req.end(method==='POST'?'{}':undefined);
  });
- return {request,calls,state,sourceCalls:()=>calls.filter(call=>call.path.endsWith('/collection')&&!new URLSearchParams(call.query).has('savedOnly')).length};
+ return {request,calls,state,companyStages,sourceCalls:()=>calls.filter(call=>call.path.endsWith('/collection')&&!new URLSearchParams(call.query).has('savedOnly')).length};
 }
 const customer='/api/customer/v1/companies/cmp_one/collection',admin='/api/insight-admin/v1/customer-view/companies/cmp_one/collection';
 
 test('same-session reload reuses company data only after a new central permission check',async t=>{
  const f=await setup(t),first=await f.request(customer),second=await f.request(customer);
  assert.equal(first.status,200);assert.equal(second.status,200);assert.equal(f.sourceCalls(),1);
+ assert.ok(f.companyStages.length>0);assert.ok(f.companyStages.every(row=>row.requestId===first.headers['x-insight-request-id']));assert.ok(f.companyStages.some(row=>row.stage==='remembered'));
  assert.equal(f.calls.filter(call=>call.path==='/api/insight/v1/me').length,2);
  assert.equal(second.data.result.version,'source-1');assert.equal(second.data.responseCache.state,'cached');
  assert.equal(second.data.collectionAllowance.canRequest,true,'quota is from the fresh permission response');
