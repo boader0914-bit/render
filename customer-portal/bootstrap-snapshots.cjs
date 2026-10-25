@@ -12,19 +12,22 @@ function selection(headers,identity){
     // A browser hint only narrows the freshly verified relationship set.
     return {company:true,companyIds:permitted.some(row=>row.companyId===id)?[id]:[],region:false,report:false};
   }
-  return {company:['home','property','competitors'].includes(view),companyIds:permitted.filter(row=>row.kind===(view==='competitors'?'competitor':'own')).map(row=>row.companyId),region:['home','regions'].includes(view),report:['reports','competitors'].includes(view)};
+  return {company:['home','property','competitors'].includes(view),companyIds:permitted.filter(row=>row.kind===(view==='competitors'?'competitor':'own')).map(row=>row.companyId),region:['home','regions'].includes(view),report:['home','reports','competitors'].includes(view)};
 }
 
-function createBootstrapSnapshots({companyReads,regionReads,reportReads}){
+function createBootstrapSnapshots({companyReads,regionReads,reportReads,comparisonRegionReads}){
   return async function snapshots({headers,scope,audience,identity,timing}){
     const selected=selection(headers,identity);
     const measured=async(name,read)=>{const started=performance.now();try{return await read();}finally{timing?.add(name,performance.now()-started);}};
-    const [companyViews,regionViews,reportViews]=await Promise.all([
+    const view=headers?.['x-insight-bootstrap-view'];
+    const comparisonSelected=!['property','company','reports','settings'].includes(view);
+    const [companyViews,regionViews,reportViews,comparisonRegionViews]=await Promise.all([
       selected.company?measured('snapshot_company',()=>companyReads.snapshot({scope,audience,identity,...(selected.companyIds?{companyIds:selected.companyIds}:{})})):[],
       selected.region?measured('snapshot_region',()=>regionReads.snapshot({scope,identity})):[],
       selected.report?measured('snapshot_report',()=>reportReads.snapshot({scope,audience,identity})):[],
+      comparisonRegionReads&&comparisonSelected?measured('snapshot_comparison_region',()=>comparisonRegionReads.snapshot({scope,audience,identity})):[],
     ]);
-    return {companyViews,regionViews,reportViews};
+    return {companyViews,regionViews,reportViews,...(comparisonRegionReads?{comparisonRegionViews}:{})};
   };
 }
 module.exports={createBootstrapSnapshots,selection};

@@ -56,6 +56,7 @@
     return `<div class="comparison-section-title"><h2>상품·가격 확인 범위</h2><p class="muted">상품별 판매가격·시설·채널은 업체 DB의 A·B에서 확인합니다.</p></div><div class="collection-table-wrap"><table><thead><tr><th>업체</th><th>객실 기준</th><th>데이유즈</th><th>이 기간의 확인 금액</th><th>기본정보</th></tr></thead><tbody>${companies.map(c=>{const meta=catalog.find(row=>row.companyId===c.companyId)||{};return `<tr><th>${esc(c.name)}</th><td>${n(c.rooms)}실</td><td>${esc({unknown:'미확인',none:'없음',shared:'숙박과 공유',separate:'별도 객실'}[meta.dayUse]||'미확인')}</td><td>${money(c.summary.knownRevenueSubtotal??c.summary.estimatedRevenue)}${c.summary.estimatedRevenue===null?'<small>전체 매출 아님 · 일부 금액 미확인</small>':''}</td><td><a class="text-link" href="${companyLink(c.companyId)}">A·B·C 자료 보기</a></td></tr>`;}).join('')}</tbody></table></div>`;
   }
   function regions(r,s){
+    if(typeof window!=='undefined'&&window.InsightRegionalContextView)return '<p id="comparison-regional-status" class="connection-check" role="status" aria-live="polite"></p><div id="comparison-regional-context"></div>';
     const companies=r.companies.filter(c=>c.companyId===s.ownCompanyId||s.comparisonIds.includes(c.companyId)),groups=new Map();
     for(const c of companies){const comparison=r.comparisons.find(row=>isNew(row)&&(row.companyId===c.companyId||c.companyId===r.ownId));const canonical=c.companyId===r.ownId?comparison?.region.ownAnalysisRegionKey:comparison?.region.competitorAnalysisRegionKey;const key=canonical||c.regionKey||'unknown:'+c.companyId;groups.set(key,[...(groups.get(key)||[]),c]);}
     return `<div class="comparison-section-title"><h2>업체별 지역 배경</h2><p class="muted">같은 지역은 한 묶음으로, 다른 지역은 나누어 봅니다.</p></div><div class="comparison-region-grid">${[...groups.entries()].map(([id,list])=>{const region=r.regions.find(row=>row.region.id===id);return `<article><h3>${esc(region?.region.label||[...new Set(list.map(c=>c.regionLabel).filter(Boolean))].join(' / ')||'지역 요약 연결 전')}</h3><p>${list.map(c=>esc(c.name)).join(' · ')}</p>${region?`<p class="muted">${region.window?esc(region.window.start)+' ~ '+esc(region.window.end):esc(region.month)} · 저장 지표 ${n(region.availableSources)}종</p><a class="text-link" href="#regions=${encodeURIComponent(id)}">지역 자료 보기</a>`:'<p class="muted">업체 소재지 참고 요약은 후속 지역 연결 단계에서 제공합니다.</p>'}</article>`;}).join('')}</div><p class="muted comparison-footnote">지역지표의 공표기간은 예약 숙박기간과 다를 수 있습니다. 지역 간 평균·보정 순위를 만들지 않습니다.</p>`;
@@ -83,6 +84,7 @@
   }
   let active=null,generation=0,timer=null,focusId=null;
   const stop=()=>{generation++;if(timer!==null)clearTimeout(timer);timer=null;active=null;};
+  function notifyRegional(){if(active?.store.getState().selectedView==='regions')active.onRegionalView?.();}
   function mount(options){
     stop();active=options;const slot=document.querySelector('#comparison-results');if(!slot)return;
     const s=options.store.getState();if(!s.ownCompanyId||!exactCurrent(s)){slot.innerHTML='';return;}
@@ -96,7 +98,7 @@
     const current=()=>active===options&&id===generation&&slot?.isConnected&&options.store.isCurrent(tokenBox.value);
     if(!slot||!exactCurrent(s))return;
     const saved=options.peek(s.ownCompanyId);
-    if(saved&&matching(saved,s))slot.innerHTML=render(saved,s,options.state.companies,focusId);
+    if(saved&&matching(saved,s)){slot.innerHTML=render(saved,s,options.state.companies,focusId);notifyRegional();}
     else slot.innerHTML='<section class="card company-connection is-loading" role="status"><span class="connection-spinner" aria-hidden="true"></span><p>저장된 비교 자료를 연결하고 있습니다.</p></section>';
     if(status)status.textContent=saved?'저장 자료 표시 · 최신 자료 확인 중':'저장 자료 연결 중';
     try{
@@ -104,6 +106,7 @@
       const latest=options.peek(s.ownCompanyId),normal=latest&&latest.responseCache?.preview!==true?latest:saved&&saved.responseCache?.preview!==true?saved:null;
       const shown=result.responseCache?.preview===true&&normal?normal:result;
       slot.innerHTML=render(shown,options.store.getState(),options.state.companies,focusId);
+      notifyRegional();
       const info=result.responseCache||{},preview=info.preview===true,failed=info.refreshFailed===true&&info.refreshing!==true;
       const pending=info.refreshing===true||!failed&&(info.revalidationRequired===true||preview||result.dataQuality?.issues?.some(row=>['COMPANY_INTEGRATION_UPDATING','COMPANY_INTEGRATION_PENDING'].includes(row.code)));
       if(status)status.textContent=failed?'최신 확인 실패 · 이전 정상 자료 유지':pending?'저장 자료 표시 · 최신 계산 확인 중':result.dataQuality?.status==='partial'?'일부 자료 확인 필요 · 정상 자료 표시':`저장 자료 확인 · ${time(info.checkedAt||result.generatedAt)}`;
@@ -125,7 +128,7 @@
     document.addEventListener('click',event=>{
       const button=event.target.closest?.('[data-comparison-view],[data-comparison-current]');if(!button||!active)return;event.preventDefault();
       const options=active,presentationCurrent=options.pendingToken&&options.store.isCurrent(options.pendingToken.value),patch=button.hasAttribute('data-comparison-current')?{stayMode:'upcoming30',asOfDate:today()}:{selectedView:button.dataset.comparisonView};
-      const updated=options.store.update(patch);if(!updated.ok)return;options.onSelectionChange?.(updated.state);if(!button.hasAttribute('data-comparison-current')&&presentationCurrent)options.pendingToken.value=options.store.requestToken();if(button.hasAttribute('data-comparison-current')){const workspace=document.querySelector('#comparison-workspace');if(workspace)workspace.innerHTML=panel(options.state,updated.state);void refresh(false);}else{const data=options.peek(updated.state.ownCompanyId),slot=document.querySelector('#comparison-results');if(data&&slot&&matching(data,updated.state))slot.innerHTML=render(data,updated.state,options.state.companies,focusId);else void refresh(false);}
+      const updated=options.store.update(patch);if(!updated.ok)return;options.onSelectionChange?.(updated.state);if(!button.hasAttribute('data-comparison-current')&&presentationCurrent)options.pendingToken.value=options.store.requestToken();if(button.hasAttribute('data-comparison-current')){const workspace=document.querySelector('#comparison-workspace');if(workspace)workspace.innerHTML=panel(options.state,updated.state);void refresh(false);}else{const data=options.peek(updated.state.ownCompanyId),slot=document.querySelector('#comparison-results');if(data&&slot&&matching(data,updated.state)){slot.innerHTML=render(data,updated.state,options.state.companies,focusId);notifyRegional();}else void refresh(false);}
     });
     document.addEventListener('change',event=>{if(!event.target.matches?.('[data-comparison-focus]')||!active)return;focusId=event.target.value;const s=active.store.getState(),data=active.peek(s.ownCompanyId),slot=document.querySelector('#comparison-results');if(data&&slot&&matching(data,s))slot.innerHTML=render(data,s,active.state.companies,focusId);});
   }

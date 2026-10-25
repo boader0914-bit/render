@@ -27,7 +27,7 @@ function safeTiming(reply){
   const names=[];
   for(const item of header.split(',')){
     const match=/^\s*([a-z_]+);dur=(\d+(?:\.\d+)?)\s*$/.exec(item);assert.ok(match,'only a fixed name and numeric duration may be exposed');
-    assert.ok(['upstream_headers','upstream_body','snapshot','snapshot_company','snapshot_region','snapshot_report','total','state_catalog','state_total'].includes(match[1]));
+    assert.ok(['upstream_headers','upstream_body','snapshot','snapshot_company','snapshot_region','snapshot_report','snapshot_comparison_region','total','state_catalog','state_total'].includes(match[1]));
     names.push(match[1]);assert.ok(Number.isFinite(Number(match[2])));
   }
   for(const name of ['upstream_headers','upstream_body','snapshot','total'])assert.ok(names.includes(name),'missing fixed timing '+name);
@@ -40,7 +40,7 @@ test('successful login-state responses expose fixed timing stages and only numer
   const f=await fixture(t,()=>response(identity(),200,raw));
   const reply=await f.request(customerMe),header=safeTiming(reply);
   assert.equal(reply.status,200);assert.match(header,/state_catalog;dur=12\.3/);assert.match(header,/state_total;dur=18\.5/);
-  assert.deepEqual(reply.data.companyViews,[]);assert.equal(reply.headers['set-cookie'],undefined);
+  assert.deepEqual(reply.data.companyViews,[]);assert.deepEqual(reply.data.comparisonRegionViews,[]);assert.equal(reply.headers['set-cookie'],undefined);
   assert.match(reply.headers['cache-control'],/private, no-store/);assert.equal(f.calls.length,1);
 });
 

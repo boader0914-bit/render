@@ -9,6 +9,7 @@ const { fault } = require('../scripts/lib/insight_store.cjs');
 const { createCompanyReadCache } = require('./company-read-cache.cjs');
 const { createRegionReadCache } = require('./region-read-cache.cjs');
 const { createReportReadCache } = require('./report-read-cache.cjs');
+const { createComparisonRegionReadCache } = require('./comparison-region-read-cache.cjs');
 const { createUpstreamReader } = require('./upstream-request.cjs');
 const { createPublicAssetVersions } = require('./public-asset-versions.cjs');
 const { createArchiveService } = require('./archive-service.cjs');
@@ -42,20 +43,23 @@ function configuration(env = process.env) {
   if(companyCacheDirectory&&(!path.isAbsolute(companyCacheDirectory)||path.resolve(companyCacheDirectory)===path.parse(path.resolve(companyCacheDirectory)).root))throw new Error('Insight company cache requires an absolute, dedicated directory');
   const reportCacheDirectory=env.INSIGHT_REPORT_CACHE_DIR || (env.DATA_DIR ? path.join(env.DATA_DIR,'insight-report-cache') : env.RENDER ? path.join('/var/data','insight-report-cache') : null);
   if(reportCacheDirectory&&(!path.isAbsolute(reportCacheDirectory)||path.resolve(reportCacheDirectory)===path.parse(path.resolve(reportCacheDirectory)).root))throw new Error('Insight report cache requires an absolute, dedicated directory');
+  const comparisonRegionCacheDirectory=env.INSIGHT_COMPARISON_REGION_CACHE_DIR || (env.DATA_DIR ? path.join(env.DATA_DIR,'insight-comparison-region-cache') : env.RENDER ? path.join('/var/data','insight-comparison-region-cache') : null);
+  if(comparisonRegionCacheDirectory&&(!path.isAbsolute(comparisonRegionCacheDirectory)||path.resolve(comparisonRegionCacheDirectory)===path.parse(path.resolve(comparisonRegionCacheDirectory)).root))throw new Error('Insight comparison regional cache requires an absolute, dedicated directory');
   const archiveRoot=env.RENDER?'/var/data':env.DATA_DIR||null;
   const archiveDirectory=env.INSIGHT_ARCHIVE_DIR||(archiveRoot?path.join(archiveRoot,'insight-archive'):null);
   if(archiveDirectory&&(!path.isAbsolute(archiveDirectory)||path.resolve(archiveDirectory)===path.parse(path.resolve(archiveDirectory)).root))throw new Error('Insight archive requires an absolute, dedicated directory');
-  return { origin: origin.origin, origins, backend: backend.origin, serviceToken, port, host: env.RENDER ? '0.0.0.0' : '127.0.0.1',regionCacheDirectory:cacheDirectory,companyCacheDirectory,reportCacheDirectory,archiveDirectory };
+  return { origin: origin.origin, origins, backend: backend.origin, serviceToken, port, host: env.RENDER ? '0.0.0.0' : '127.0.0.1',regionCacheDirectory:cacheDirectory,companyCacheDirectory,reportCacheDirectory,comparisonRegionCacheDirectory,archiveDirectory };
 }
-function createConnectedServer({ origin, origins = [], backend, serviceToken, fetchImpl = fetch, regionCacheDirectory=null,companyCacheDirectory=null,reportCacheDirectory=null,archiveDirectory=null,diagnosticsLogger,companyDiagnosticsLogger=entry=>console.warn('insight_company_read',JSON.stringify(entry)) }) {
+function createConnectedServer({ origin, origins = [], backend, serviceToken, fetchImpl = fetch, regionCacheDirectory=null,companyCacheDirectory=null,reportCacheDirectory=null,comparisonRegionCacheDirectory=null,archiveDirectory=null,diagnosticsLogger,companyDiagnosticsLogger=entry=>console.warn('insight_company_read',JSON.stringify(entry)) }) {
   const trustedOrigins = new Map(publicOrigins(origin, origins).map(value => [new URL(value).host, value]));
   const archives=createArchiveService({directory:archiveDirectory,namespace:backend});
   const companyReads = createCompanyReadCache({persistenceDirectory:companyCacheDirectory,namespace:backend,onStage:companyDiagnosticsLogger,...(archiveDirectory?{onVerifiedSource:context=>archives.capture(context)}:{})}), regionReads = createRegionReadCache({persistenceDirectory:regionCacheDirectory,namespace:backend}), scopeSecret = crypto.randomBytes(32), staticAssets = new Map();
   const reportReads = createReportReadCache({persistenceDirectory:reportCacheDirectory,namespace:backend});
-  const bootstrapSnapshots=createBootstrapSnapshots({companyReads,regionReads,reportReads});
+  const comparisonRegionReads=createComparisonRegionReadCache({persistenceDirectory:comparisonRegionCacheDirectory,namespace:backend});
+  const bootstrapSnapshots=createBootstrapSnapshots({companyReads,regionReads,reportReads,comparisonRegionReads});
   const scopeFor = (requestOrigin, mode, session) => crypto.createHmac('sha256', scopeSecret).update(JSON.stringify([requestOrigin,mode,session])).digest('hex');
   const audienceFor = (requestOrigin,mode) => JSON.stringify([requestOrigin,mode]);
-  const invalidateReads = scope => { companyReads.invalidate(scope); regionReads.invalidate(scope); reportReads.invalidate(scope); };
+  const invalidateReads = scope => { companyReads.invalidate(scope); regionReads.invalidate(scope); reportReads.invalidate(scope); comparisonRegionReads.invalidate(scope); };
   // Historical source recalculation can take longer than a login or command.
   // Extend only these read endpoints; collection dispatch retains its timeout.
   const readTimeout = (method, route, {background=false}={}) => background&&method==='GET'&&/\/companies\/[a-zA-Z0-9_-]+\/collection$/.test(route)?600000:method === 'GET' && /\/(?:companies\/[a-zA-Z0-9_-]+\/collection|reports\/briefing)$/.test(route) ? 180000 : 20000;
@@ -148,6 +152,15 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
       readSavedSource:()=>readUpstream(prefix+route,'?'+savedQuery.toString(),headers,{stage:'saved_preview',timing,timeoutMs:3000}),
       readSource:()=>readUpstream(prefix+route,url.search,headers,{stage:'source',timing})});
   }
+  async function comparisonRegionRead(requestOrigin,mode,session,headers,route,url,force,timing) {
+    if(!/^\/(?:customer-view\/)?regions\/comparison-summary$/.test(route))return null;
+    const prefix=mode==='admin'?'/admin':'',ownId=url.searchParams.get('ownId')||'',month=url.searchParams.get('month')||'';
+    const valid=[...url.searchParams.keys()].every(key=>['ownId','month'].includes(key))&&url.searchParams.getAll('ownId').length<=1&&url.searchParams.getAll('month').length===1&&/^20\d{2}-(0[1-9]|1[0-2])$/.test(month)&&(!ownId||/^[a-zA-Z0-9_-]{1,180}$/.test(ownId));
+    if(!session||!valid)return readUpstream(prefix+route,url.search,headers,{timing});
+    return comparisonRegionReads.read({scope:scopeFor(requestOrigin,mode,session),audience:audienceFor(requestOrigin,mode),ownId,month,force,
+      readIdentity:()=>readUpstream(prefix+(mode==='admin'?'/customer-view/me':'/me'),'',headers,{stage:'identity',timing}),
+      readSource:()=>readUpstream(prefix+route,url.search,headers,{stage:'source',timing})});
+  }
   async function staticAsset(file) {
     const stat=await fs.promises.stat(file),previous=staticAssets.get(file);
     if(previous?.mtimeMs===stat.mtimeMs&&previous.size===stat.size)return previous;
@@ -164,6 +177,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   staticMap['/comparison-selection.js']=['comparison-selection.js','text/javascript'];
   staticMap['/comparison-view.js']=['comparison-view.js','text/javascript'];
   staticMap['/comparison.css']=['comparison.css','text/css'];
+  for(const name of ['regional-context.js','regional-context-view.js','regional-context.css','home-context-view.js','home-context.css','context-workspace.js'])staticMap['/'+name]=[name,name.endsWith('.css')?'text/css':'text/javascript'];
   staticMap['/archive.js']=['archive.js','text/javascript'];
   const adminAssets = { '/admin': ['admin.html', 'text/html'], '/admin.js': ['admin.js', 'text/javascript'], '/admin.css': ['admin.css', 'text/css'] };
   const publicAssets=new Map([...Object.entries({...staticMap,...adminAssets,'/auth.js':['auth.js','text/javascript']})].filter(([,item])=>item[1]!=='text/html').map(([url,item])=>[url,{file:path.join(__dirname,'web',item[0]),type:item[1]}]));
@@ -183,12 +197,12 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
       if (req.method === 'GET' && url.pathname === '/api/health') { respond(200, { status: 'ok', mode: 'connected', buildCommit: process.env.RENDER_GIT_COMMIT?.slice(0, 12) || null }); return; }
       if (url.pathname.startsWith('/api/insight-admin/v1/')) {
         const route = url.pathname.slice('/api/insight-admin/v1'.length);
-        observed=identityRoutes.has('/admin'+route)||req.method==='GET'&&(route==='/customer-view/config'||/^\/customer-view\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|reports\/briefing)$/.test(route));
+        observed=identityRoutes.has('/admin'+route)||req.method==='GET'&&(route==='/customer-view/config'||/^\/customer-view\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|regions\/comparison-summary|reports\/briefing)$/.test(route));
         const methods = { '/me': 'GET', '/customers': 'GET', '/auth/login': 'POST', '/auth/logout': 'POST', '/customer-view/start': 'POST', '/customer-view/me': 'GET', '/customer-view/config': 'GET', '/customer-view/policies/terms': 'GET', '/customer-view/policies/privacy': 'GET', '/customer-view/commands': 'POST', '/customer-view/catalog/companies': 'GET', '/customer-view/catalog/regions': 'GET' };
         const match = /^\/customers\/cus_[a-zA-Z0-9-]+(\/commands)?$/.exec(route);
         const regionalPreparation=/^\/customer-view\/regions\/[a-zA-Z0-9_-]+\/preparation$/.test(route)&&['GET','POST'].includes(req.method);
         const archiveRoute=/^\/customer-view\/archives(?:\/[a-zA-Z0-9_-]+)?$/.test(route)&&['GET','POST'].includes(req.method);
-        if (!archiveRoute&&!regionalPreparation && (methods[route] || (/^\/customer-view\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|reports\/briefing)$/.test(route) ? 'GET' : '') || (match ? (match[1] ? 'POST' : 'GET') : '')) !== req.method) throw fault('NOT_FOUND', '지원하지 않는 관리자 기능입니다.', 404);
+        if (!archiveRoute&&!regionalPreparation && (methods[route] || (/^\/customer-view\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|regions\/comparison-summary|reports\/briefing)$/.test(route) ? 'GET' : '') || (match ? (match[1] ? 'POST' : 'GET') : '')) !== req.method) throw fault('NOT_FOUND', '지원하지 않는 관리자 기능입니다.', 404);
         if (req.method === 'POST' && req.headers.origin !== requestOrigin) throw fault('INVALID_ORIGIN', '현재 관리자 화면에서 요청해 주세요.', 403);
         const session = String(req.headers.cookie || '').split(';').map(s => s.trim().split('=')).find(([name]) => name === adminCookieName)?.[1] || '';
         const headers = { Authorization: `Bearer ${serviceToken}`, Accept: 'application/json', 'X-Insight-Admin-Session': session, 'X-CSRF-Token': req.headers['x-csrf-token'] || '' };
@@ -197,7 +211,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
         if (req.method === 'POST') { payload = JSON.stringify(await body(req)); headers['Content-Type'] = 'application/json'; }
         if(req.method==='POST'&&route!=='/customer-view/start')invalidateReads(scopeFor(requestOrigin,'admin',session));
         if(req.method==='GET') {
-          const saved=await companyRead(requestOrigin,'admin',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing)||await regionRead(requestOrigin,'admin',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing)||await reportRead(requestOrigin,'admin',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing);
+          const saved=await comparisonRegionRead(requestOrigin,'admin',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing)||await companyRead(requestOrigin,'admin',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing)||await regionRead(requestOrigin,'admin',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing)||await reportRead(requestOrigin,'admin',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing);
           if(saved){if(saved.status===401)res.setHeader('Set-Cookie',adminCookie('',true));respond(saved.status,saved.data);return;}
         }
         const response=await readUpstream('/admin'+route,url.search,headers,{method:req.method,body:payload,stage:identityRoutes.has('/admin'+route)?'identity':req.method==='GET'?'source':null,timing}),data=response.data;
@@ -212,11 +226,11 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
       }
       if (url.pathname.startsWith('/api/customer/v1/')) {
         const route = url.pathname.slice('/api/customer/v1'.length);
-        observed=identityRoutes.has(route)||req.method==='GET'&&(route==='/config'||/^\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|reports\/briefing)$/.test(route));
+        observed=identityRoutes.has(route)||req.method==='GET'&&(route==='/config'||/^\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|regions\/comparison-summary|reports\/briefing)$/.test(route));
         const allowed = { '/config': 'GET', '/me': 'GET', '/auth/username': 'GET', '/policies/terms': 'GET', '/policies/privacy': 'GET', '/auth/login': 'POST', '/auth/signup': 'POST', '/auth/logout': 'POST', '/commands': 'POST', '/catalog/companies': 'GET', '/catalog/regions': 'GET' };
         const regionalPreparation=/^\/regions\/[a-zA-Z0-9_-]+\/preparation$/.test(route)&&['GET','POST'].includes(req.method);
         const archiveRoute=/^\/archives(?:\/[a-zA-Z0-9_-]+)?$/.test(route)&&['GET','POST'].includes(req.method);
-        if (!archiveRoute&&!regionalPreparation && (allowed[route] || (/^\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|reports\/briefing)$/.test(route) ? 'GET' : '')) !== req.method) throw fault('NOT_FOUND', '요청한 기능을 찾을 수 없습니다.', 404);
+        if (!archiveRoute&&!regionalPreparation && (allowed[route] || (/^\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|regions\/comparison-summary|reports\/briefing)$/.test(route) ? 'GET' : '')) !== req.method) throw fault('NOT_FOUND', '요청한 기능을 찾을 수 없습니다.', 404);
         if (req.method === 'POST' && req.headers.origin !== requestOrigin) throw fault('INVALID_ORIGIN', '현재 인사이트 화면에서 요청해 주세요.', 403);
         const cookies = String(req.headers.cookie || '').split(';').map(s => s.trim().split('='));
         const session = cookies.find(([name]) => name === cookieName)?.[1] || '';
@@ -226,7 +240,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
         if (req.method === 'POST') { payload = JSON.stringify(await body(req)); headers['Content-Type'] = 'application/json'; }
         if(req.method==='POST')invalidateReads(scopeFor(requestOrigin,'customer',session));
         if(req.method==='GET') {
-          const saved=await companyRead(requestOrigin,'customer',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing)||await regionRead(requestOrigin,'customer',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing)||await reportRead(requestOrigin,'customer',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing);
+          const saved=await comparisonRegionRead(requestOrigin,'customer',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing)||await companyRead(requestOrigin,'customer',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing)||await regionRead(requestOrigin,'customer',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing)||await reportRead(requestOrigin,'customer',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing);
           if(saved){if(saved.status===401)res.setHeader('Set-Cookie',cookie('',true));respond(saved.status,saved.data);return;}
         }
         const response=await readUpstream(route,url.search,headers,{method:req.method,body:payload,stage:identityRoutes.has(route)?'identity':req.method==='GET'?'source':null,timing}),data=response.data;
@@ -264,13 +278,15 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   server.flushCompanySnapshots=()=>companyReads.flushPersistence();
   server.prepareReportSnapshots=async()=>{await reportReads.ready();return reportReads.persistenceStatus();};
   server.flushReportSnapshots=()=>reportReads.flushPersistence();
+  server.prepareComparisonRegionSnapshots=async()=>{await comparisonRegionReads.ready();return comparisonRegionReads.persistenceStatus();};
+  server.flushComparisonRegionSnapshots=()=>comparisonRegionReads.flushPersistence();
   server.prepareArchives=async()=>{await archives.ready();return archives.status();};
   server.flushArchives=()=>archives.flush();
   return server;
 }
 if (require.main === module) {
   (async()=>{
-    try { const c=configuration(),server=createConnectedServer(c);const [regionStatus,companyStatus,reportStatus,archiveStatus]=await Promise.all([server.prepareRegionSnapshots(),server.prepareCompanySnapshots(),server.prepareReportSnapshots(),server.prepareArchives()]);console.log('regional_snapshot_cache_prepared',JSON.stringify(regionStatus));console.log('company_snapshot_cache_prepared',JSON.stringify(companyStatus));console.log('report_snapshot_cache_prepared',JSON.stringify(reportStatus));console.log('long_term_archive_prepared',JSON.stringify(archiveStatus));server.listen(c.port,c.host,()=>console.log(`SABUN INSIGHT 연결 서버: ${c.origin}`)); }
+    try { const c=configuration(),server=createConnectedServer(c);const [regionStatus,companyStatus,reportStatus,comparisonRegionStatus,archiveStatus]=await Promise.all([server.prepareRegionSnapshots(),server.prepareCompanySnapshots(),server.prepareReportSnapshots(),server.prepareComparisonRegionSnapshots(),server.prepareArchives()]);console.log('regional_snapshot_cache_prepared',JSON.stringify(regionStatus));console.log('company_snapshot_cache_prepared',JSON.stringify(companyStatus));console.log('report_snapshot_cache_prepared',JSON.stringify(reportStatus));console.log('comparison_region_snapshot_cache_prepared',JSON.stringify(comparisonRegionStatus));console.log('long_term_archive_prepared',JSON.stringify(archiveStatus));server.listen(c.port,c.host,()=>console.log(`SABUN INSIGHT 연결 서버: ${c.origin}`)); }
     catch(error){console.error(error.message);process.exitCode=1;}
   })();
 }

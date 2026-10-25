@@ -5,6 +5,7 @@ const crypto=require('node:crypto');
 const {createConnectedServer}=require('../../connected-server.cjs');
 const {getScenario}=require('./fixtures.cjs');
 const {projectReservationSeries,summarizeCompany}=require('../../../scripts/lib/insight_comparison.cjs');
+const {comparisonRegionBindings,buildRegionSummarySelection,projectRegionSummary}=require('../../../scripts/lib/insight_region_summary.cjs');
 function createReviewConnectedServer({port=58005}={}){
   if(process.env.RENDER||process.env.NODE_ENV==='production')throw Error('LOCAL_REVIEW_ONLY');
   const origin='http://127.0.0.1:'+port;
@@ -15,6 +16,24 @@ function createReviewConnectedServer({port=58005}={}){
   }
   const f=getScenario({scenario:'mixed'}),companies=[f.own,...f.competitors].map(c=>({companyId:c.companyId,name:c.name,rooms:c.rooms,regionKey:c.regionKey,regionLabel:c.regionLabel,address:c.regionLabel,roomCountSource:'로컬 가상 검수값',version:1,dayUse:'unknown',facilities:'가상 자료'}));
   const state={customer:{customerId:'local_comparison_review',username:'가상자료 · 로컬 검수',projectName:'개발 검수용 가상 자료',accountKind:'test',revision:1,settings:{},regions:[],businessStatus:'owned',relations:companies.map((c,i)=>({companyId:c.companyId,relationId:'fixture_'+i,kind:i===0?'own':'competitor',status:'active'})),entitlements:{competitorLimit:3,interestRegionLimit:1}},companies,regions:[],corrections:[],preparations:[],features:{directCollection:false},companyViews:[],regionViews:[],reportViews:[],collectionAllowance:{limit:0,used:0,canRequest:false}};
+  const regionCatalog={companies,regions:[{id:'r-sc',label:'경남 산청군',level:'local'},{id:'r-gp',label:'경기 가평군',level:'local'}],regionHierarchy:{}};
+  state.customer.accountStatus='active';
+  state.customer.regions=[{regionKey:'r-gp',status:'active',relationId:'fixture_interest'}];
+  state.regions=regionCatalog.regions.map(r=>({...r}));
+  state.comparisonRegionBindings=comparisonRegionBindings(state.customer,regionCatalog);
+  function regionalSummary(ownId,month){
+    const value=buildRegionSummarySelection(state.customer,regionCatalog,{ownId,month}).value;
+    const shift=(m,n)=>{const[y,p]=m.split('-').map(Number);return new Date(Date.UTC(y,p-1+n,1)).toISOString().slice(0,7);};
+    function source(key,label,unit,seed,{partial=false,annual=false}={}){
+      const last=shift(month,-1),series=Array.from({length:12},(_,i)=>{const m=shift(month,i-11),missing=i===11||partial&&i%4===0;return {month:m,status:missing?'missing':'observed',rows:[{key:'value',label,value:missing?null:Math.round(seed*(1+Math.sin(i*.7)*.2)),unit,status:missing?'missing':'observed'}]};}),latest=series.filter(p=>p.status==='observed').at(-1);
+      return {key,label,provider:'로컬 가상 지표',status:partial?'partial':'ready',period:annual?'2025':last,periodType:annual?'year':'month',normalizationPeriod:key==='naver_search_trend'?shift(month,-11)+' ~ '+last:'',keyword:key==='naver_search_trend'?'가상 숙박 검색어':'',retrievedAt:new Date().toISOString(),rows:[{key:'value',label,value:annual?seed:latest.rows[0].value,unit,status:'observed'}],...annual?{}:{series,metrics:[{key:'value',label,unit,observedMonths:series.filter(p=>p.status==='observed').length,latest:{month:latest.month,value:latest.rows[0].value},mom:{kind:'percent',value:3.2},yoy:{kind:'percent',value:8.1},peak:{month:last,value:seed},low:{month:shift(month,-10),value:seed*.8}}]}};
+    }
+    value.groups=value.groups.map((g,i)=>{const summary=projectRegionSummary({region:g.region,networkAttempted:false,sources:[source('tourism_visitors','지역 방문자','명',45000+i*19000),source('tourism_stay_spend','체류·소비 지수','지수',75+i*7,{partial:i===1}),source('naver_search_trend','검색 관심도','지수',50+i*4),source('kosis_population','주민등록 인구','명',33000+i*29000,{annual:true}),source('kosis_industry','사업체 수','개',4200+i*1200,{annual:true}),source('tourism_resource','관광자원 수요','지수',60+i*3,{partial:true}),source('tourism_diversity','관광 다양성','지수',52+i*4,{partial:true})],sourceIssues:[]},month);return {...g,status:summary.sourceStatus,summary};});
+    // This no-login local fixture has no real session cookie. Supply only the
+    // synthetic source's read timestamp; protected BFF cache behavior has its
+    // own authenticated route and restart integration tests.
+    return {...value,responseCache:{state:'fresh',checkedAt:new Date().toISOString(),refreshing:false,refreshFailed:false}};
+  }
   function detail(id){
     const raw=[f.own,...f.competitors].find(c=>c.companyId===id);if(!raw)return null;
     const month=f.today.slice(0,7),daily=raw.days.filter(d=>d.date.startsWith(month)),normal=daily.filter(d=>!d.missing),sum=key=>normal.reduce((total,d)=>total+(d[key]||0),0),summary={rangeStart:month+'-01',rangeEnd:month+'-31',observedDays:normal.length,calendarDays:31,sold:sum('sold'),supply:normal.length*raw.rooms,publicBookings:sum('publicBookings'),phoneBookings:sum('phoneBookings'),estimatedRevenue:normal.some(d=>d.revenuePartial)?null:sum('estimatedRevenue'),knownRevenueSubtotal:sum('estimatedRevenue'),publicRevenue:null,phoneRevenue:null,reservationRate:normal.length?sum('sold')/(normal.length*raw.rooms):null,missingDays:31-normal.length,quantityPartial:true};
@@ -26,6 +45,7 @@ function createReviewConnectedServer({port=58005}={}){
     else if(u.pathname==='/api/insight/v1/me')data=state;
     else if(u.pathname==='/api/insight/v1/config')data={signupEnabled:false};
     else if(u.pathname==='/api/insight/v1/reports/briefing')data=source(u.searchParams.get('ownId')||'own-sc');
+    else if(u.pathname==='/api/insight/v1/regions/comparison-summary')data=regionalSummary(u.searchParams.get('ownId'),u.searchParams.get('month')||'2026-09');
     else if(/^\/api\/insight\/v1\/companies\/[^/]+\/collection$/.test(u.pathname)){data=detail(u.pathname.split('/')[5]);if(!data){status=404;data={error:{code:'NOT_FOUND',message:'가상 업체 자료가 없습니다.'}};}}
     else{status=404;data={error:{code:'LOCAL_ROUTE_NOT_FOUND',message:'가상 검수 범위 밖입니다.'}};}
     return {ok:status===200,status,headers:new Headers(),json:async()=>JSON.parse(JSON.stringify(data))};
