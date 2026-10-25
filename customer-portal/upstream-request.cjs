@@ -23,17 +23,19 @@ function retryDelay(response,now){
 function networkFailure(error){
   return error instanceof TypeError||transientCodes.has(error?.code)||transientCodes.has(error?.cause?.code);
 }
-function createUpstreamReader({backend,fetchImpl,readTimeout,logger=entry=>console.warn('insight_upstream',JSON.stringify(entry)),sleep=delay,now=()=>Date.now(),clock=()=>performance.now()}){
+function createUpstreamReader({backend,fetchImpl=globalThis.fetch,readTimeout,logger=entry=>console.warn('insight_upstream',JSON.stringify(entry)),sleep=delay,now=()=>Date.now(),clock=()=>performance.now()}){
   const emit=entry=>{try{logger(entry);}catch{/* Diagnostics must not change the request result. */}};
-  return async function readUpstream(route,search,headers,{method='GET',body,stage='source',timing,timeoutMs}={}){
-    const configuredBudget=readTimeout(method,route),budget=Number.isSafeInteger(timeoutMs)&&timeoutMs>0?Math.min(configuredBudget,timeoutMs):configuredBudget,signal=AbortSignal.timeout(budget),requestStarted=clock();
+  return async function readUpstream(route,search,headers,{method='GET',body,stage='source',timing,timeoutMs,background=false}={}){
+    const backgroundCompany=background===true&&method==='GET'&&stage==='source'&&/\/companies\/[a-zA-Z0-9_-]+\/collection$/.test(route);
+    const configuredBudget=readTimeout(method,route,{background:backgroundCompany}),budget=Number.isSafeInteger(timeoutMs)&&timeoutMs>0?Math.min(configuredBudget,timeoutMs):configuredBudget,signal=AbortSignal.timeout(budget),requestStarted=clock();
+    const transport=backgroundCompany&&fetchImpl===globalThis.fetch?require('./background-json-get.cjs').backgroundJsonGet:fetchImpl;
     const requestId=timing?.requestId||require('node:crypto').randomUUID();
     const base={requestId,route:routeLabel(route),method,stage:stage||'command'};
     let attempt=0;
     while(++attempt<=2){
       let phase='upstream_headers',started=clock(),response=null,data,problem=null;
       try{
-        response=await fetchImpl(`${backend}/api/insight/v1${route}${search}`,{method,headers,body,redirect:'error',signal});
+        response=await transport(`${backend}/api/insight/v1${route}${search}`,{method,headers,body,redirect:'error',signal});
         timing?.add(phase,clock()-started);phase='upstream_body';started=clock();
         timing?.central(response.headers?.get?.('server-timing'));
         data=await response.json();timing?.add(phase,clock()-started);phase=null;

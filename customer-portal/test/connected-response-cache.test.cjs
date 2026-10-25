@@ -45,12 +45,14 @@ test('same-session reload reuses company data only after a new central permissio
 });
 
 test('the BFF internally requests a bounded saved month while the browser remains month-only and permission checked',async t=>{
+ const budgets=[],originalTimeout=AbortSignal.timeout;t.mock.method(AbortSignal,'timeout',ms=>{budgets.push(ms);return originalTimeout(ms);});
  const f=await setup(t);f.state.previewEnabled=true;let release;f.state.sourceGate=new Promise(resolve=>release=resolve);
  const first=await f.request(customer+'?month=2026-09');
  assert.equal(first.status,200);assert.equal(first.data.responseCache.state,'preview');assert.equal(first.data.responseCache.refreshing,true);assert.equal(first.data.result,null);
  assert.equal(first.data.companyDetail.integrated.selectedMonth,'2026-09');assert.equal(first.data.companyDetail.current.daily[0].estimatedRevenue,0);
  const saved=f.calls.find(call=>new URLSearchParams(call.query).has('savedOnly'));assert.equal(saved.query,'?month=2026-09&savedOnly=1');
  assert.equal(f.sourceCalls(),1,'full calculation starts once behind the saved display');
+ assert.deepEqual(budgets.slice(0,3),[20000,3000,600000],'fresh identity and saved probe stay short while only the saved-backed source gets ten minutes');
  const again=await f.request(customer+'?month=2026-09');assert.equal(again.data.responseCache.state,'preview');
  assert.equal(f.calls.filter(call=>call.path==='/api/insight/v1/me').length,2,'even a preview hit requires current permission');
  assert.equal(f.calls.filter(call=>new URLSearchParams(call.query).has('savedOnly')).length,1);

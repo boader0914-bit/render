@@ -24,7 +24,7 @@ function harness() {
     advance(ms){now+=ms;},
     async poll(){const next=timers.entries().next().value;assert.ok(next,'expected background poll');timers.delete(next[0]);next[1].fn();await flush();},
     async resolve(index,data){await flush();assert.ok(calls[index],'expected request '+index);calls[index].resolve(data);await flush();},
-    async reject(index,status,message='저장 자료를 확인할 수 없습니다.'){await flush();assert.ok(calls[index],'expected request '+index);const error=new Error(message);error.status=status;error.statusCode=status;calls[index].reject(error);await flush();}
+    async reject(index,status,message='저장 자료를 확인할 수 없습니다.',code,name){await flush();assert.ok(calls[index],'expected request '+index);const error=new Error(message);error.status=status;error.statusCode=status;if(code)error.code=code;if(name)error.name=name;calls[index].reject(error);await flush();}
   };
 }
 function data(id='a',month='2026-10',version='v1',canRequest=true) {
@@ -159,13 +159,86 @@ test('a failed server refresh retains saved quantities, reports uncertainty and 
   assert.match(h.elements.get('#collection-progress').innerHTML,/저장 자료를 표시/);assert.equal(h.timers.size,0);
 });
 
-test('a slow server refresh stops automatic checks after 24 polls and keeps the saved result',async()=>{
+test('an explicit long server refresh backs off, passes 24 checks and automatically shows completion',async()=>{
   const h=harness();h.context();h.mount();
   const saved={...data(),responseCache:{state:'cached',refreshing:true}};
   await h.resolve(0,saved);
-  for(let index=1;index<=24;index++){await h.poll();await h.resolve(index,saved);}
-  assert.equal(h.calls.length,25);assert.equal(h.timers.size,0);assert.equal(h.result(),'a|2026-10|v1');
-  assert.match(h.elements.get('#collection-progress').innerHTML,/확인에 시간이 걸리고/);
+  const waits=[];
+  for(let index=1;index<=28;index++){const wait=[...h.timers.values()][0].ms;waits.push(wait);h.advance(wait);await h.poll();await h.resolve(index,saved);}
+  assert.equal(h.calls.length,29);assert.equal(h.timers.size,1);assert.equal(h.result(),'a|2026-10|v1');
+  assert.deepEqual([...new Set(waits)],[5000,10000,20000,30000]);assert.doesNotMatch(h.elements.get('#collection-progress').innerHTML,/자동 확인을 멈췄/);
+  await h.poll();await h.resolve(29,{...data('a','2026-10','completed'),responseCache:{state:'cached',refreshing:false}});
+  assert.equal(h.result(),'a|2026-10|completed');assert.equal(h.timers.size,0);assert.doesNotMatch(h.freshness(),/확인 중|지연|실패/);
+});
+
+test('a real background failure stops long polling and keeps quantities with an explicit retry action',async()=>{
+  const h=harness();h.context();h.mount();const saved={...data(),responseCache:{state:'cached',refreshing:true}};await h.resolve(0,saved);
+  for(let index=1;index<=25;index++){await h.poll();await h.resolve(index,saved);}
+  await h.poll();await h.resolve(26,{...saved,responseCache:{state:'cached',refreshing:false,refreshFailed:true}});
+  assert.equal(h.result(),'a|2026-10|v1');assert.equal(h.timers.size,0);assert.match(h.freshness(),/최신 확인 실패/);assert.match(h.elements.get('#collection-progress').innerHTML,/다시 확인/);
+});
+
+test('a transient identity timeout after two minutes retries and automatically exposes the completed source',async()=>{
+  const h=harness();h.context();h.mount();const saved={...data(),responseCache:{state:'cached',refreshing:true}};await h.resolve(0,saved);
+  h.advance(121000);await h.poll();await h.reject(1,504,'로그인 확인이 지연되었습니다.','UPSTREAM_TIMEOUT');
+  assert.equal(h.result(),'a|2026-10|v1');assert.match(h.freshness(),/자동 재시도 중/);assert.equal(h.timers.size,1);
+  await h.poll();await h.resolve(2,{...data('a','2026-10','latest-after-timeout'),responseCache:{state:'cached',refreshing:false}});
+  assert.equal(h.result(),'a|2026-10|latest-after-timeout');assert.equal(h.timers.size,0);assert.doesNotMatch(h.freshness(),/지연|실패|재시도|확인 중/);
+});
+
+test('three consecutive transient refresh failures stop and retain the last unexpired result',async()=>{
+  const h=harness();h.context();h.mount();await h.resolve(0,{...data(),responseCache:{state:'cached',refreshing:true}});
+  for(const [index,status] of [[1,503],[2,502],[3,504]]){await h.poll();await h.reject(index,status);if(index<3)assert.equal(h.timers.size,1);}
+  assert.equal(h.calls.length,4);assert.equal(h.timers.size,0);assert.equal(h.result(),'a|2026-10|v1');assert.match(h.elements.get('#collection-progress').innerHTML,/연속 3회 실패.*다시 확인/);
+});
+
+test('a successful pending read resets transient failures and real network errors remain bounded',async()=>{
+  const h=harness();h.context();h.mount();const saved={...data(),responseCache:{state:'cached',refreshing:true}};await h.resolve(0,saved);
+  await h.poll();await h.reject(1,undefined,'Failed to fetch',undefined,'TypeError');assert.equal(h.timers.size,1);
+  await h.poll();await h.resolve(2,saved);
+  await h.poll();await h.reject(3,503,'연결 지연','CONNECTION_UNAVAILABLE');assert.match(h.elements.get('#collection-progress').innerHTML,/\(1\/3\)/);
+  await h.poll();await h.resolve(4,data('a','2026-10','network-recovered'));assert.equal(h.result(),'a|2026-10|network-recovered');assert.equal(h.timers.size,0);
+});
+
+for(const [status,code] of [[200,'INVALID_RESPONSE'],[503,'INVALID_RESPONSE'],[500,undefined],[429,undefined]])test('permanent or schema failure '+status+'/'+code+' never retries a saved refresh',async()=>{
+  const h=harness();h.context();h.mount();await h.resolve(0,{...data(),responseCache:{state:'cached',refreshing:true}});await h.poll();await h.reject(1,status,'응답을 확인해 주세요.',code);
+  assert.equal(h.timers.size,0);assert.equal(h.result(),'a|2026-10|v1');assert.doesNotMatch(h.freshness(),/자동 재시도 중/);
+});
+
+test('a payload-processing exception or generic application error is not retried as a network failure',async()=>{
+  for(const malformed of [true,false]){
+    const h=harness();h.context();h.mount();await h.resolve(0,{...data(),responseCache:{state:'cached',refreshing:true}});await h.poll();
+    if(malformed)await h.resolve(1,null);else await h.reject(1,undefined,'잘못된 내부 응답');
+    assert.equal(h.timers.size,0);assert.equal(h.result(),'a|2026-10|v1');
+  }
+});
+
+for(const status of [401,403,404])test('transient retry then '+status+' immediately clears private data and stops',async()=>{
+  const h=harness();h.context();h.mount();await h.resolve(0,{...data(),responseCache:{state:'cached',refreshing:true}});await h.poll();await h.reject(1,504,'연결 지연','UPSTREAM_TIMEOUT');assert.equal(h.timers.size,1);
+  await h.poll();await h.reject(2,status);assert.equal(h.timers.size,0);assert.doesNotMatch(h.result(),/a\|2026-10\|v1/);
+});
+
+test('navigation, dirty forms, wall budget and expiry cannot be bypassed by a transient retry',async()=>{
+  const saved={...data(),responseCache:{state:'cached',refreshing:true}};
+  const navigation=harness();navigation.context();navigation.mount();await navigation.resolve(0,saved);await navigation.poll();await navigation.reject(1,504);navigation.leave();assert.equal(navigation.timers.size,0);
+  const dirty=harness();dirty.context();dirty.mount();await dirty.resolve(0,saved);dirty.protect();await dirty.poll();await dirty.reject(1,504);assert.equal(dirty.timers.size,0);assert.equal(dirty.result(),'a|2026-10|v1');
+  const expired=harness();expired.context();expired.mount();await expired.resolve(0,saved);expired.advance(30*60*1000-1000);await expired.poll();await expired.reject(1,504);assert.equal(expired.timers.size,0,'a fifteen-minute refresh window is never renewed by an error');
+  const ttl=harness();ttl.context();ttl.mount();await ttl.resolve(0,{...saved,responseCache:{state:'cached',refreshing:true,checkedAt:'2026-10-13T01:30:01Z'}});await ttl.poll();await ttl.reject(1,504);assert.equal(ttl.timers.size,1);ttl.advance(1001);await ttl.poll();assert.equal(ttl.calls.length,2);assert.doesNotMatch(ttl.result(),/a\|2026-10\|v1/);assert.match(ttl.freshness(),/확인 기한 만료/);
+});
+
+test('leaving and returning during a long refresh shows saved values immediately and completes automatically',async()=>{
+  const h=harness();h.context();h.mount('a');const saved={...data(),responseCache:{state:'cached',refreshing:true}};await h.resolve(0,saved);
+  for(let index=1;index<=25;index++){await h.poll();await h.resolve(index,saved);}
+  h.leave();assert.equal(h.timers.size,0);h.mount('b');await h.resolve(26,data('b','2026-10','competitor'));
+  h.leave();h.mount('a');assert.equal(h.result(),'a|2026-10|v1','returning does not wait for the next server check');
+  await h.resolve(27,saved);assert.equal(h.timers.size,1);await h.poll();await h.resolve(28,{...data('a','2026-10','latest'),responseCache:{state:'cached',refreshing:false}});
+  assert.equal(h.result(),'a|2026-10|latest');assert.equal(h.timers.size,0);assert.doesNotMatch(h.freshness(),/확인 중|지연|실패/);
+});
+
+test('a long pending refresh has a fifteen-minute bound and never labels it complete',async()=>{
+  const h=harness();h.context();h.mount();const saved={...data(),responseCache:{state:'cached',refreshing:true}};await h.resolve(0,saved);
+  h.advance(15*60*1000);await h.poll();await h.resolve(1,saved);
+  assert.equal(h.timers.size,0);assert.equal(h.result(),'a|2026-10|v1');assert.match(h.freshness(),/최신 확인 지연/);assert.match(h.elements.get('#collection-progress').innerHTML,/자동 확인을 멈췄습니다.*다시 확인/);
 });
 
 test('explicit refresh bypasses an ordinary in-flight GET without letting its late response overwrite the new view',async()=>{
@@ -476,8 +549,8 @@ test('persisted active collection and pending integration responses are never re
 
 test('a transient permission-read failure retains an unexpired persisted result and its original check date',async()=>{
   const h=harness(),saved=persisted();h.context();h.collection.restore([saved],'customer-one');h.mount();await h.reject(0,503,'일시 연결 지연');
-  assert.equal(h.result(),'a|2026-10|persisted');assert.match(h.freshness(),/이전 조회 자료 유지 · 마지막 확인/);
-  assert.equal(h.elements.get('[data-collect] button[type=submit]').disabled,true);assert.equal(h.timers.size,0);
+  assert.equal(h.result(),'a|2026-10|persisted');assert.match(h.freshness(),/저장 자료 유지.*마지막 확인/);assert.match(h.freshness(),/자동 재시도 중/);
+  assert.equal(h.elements.get('[data-collect] button[type=submit]').disabled,true);assert.equal(h.timers.size,1);
   h.leave();h.mount();assert.equal(h.result(),'a|2026-10|persisted');
 });
 
@@ -512,10 +585,10 @@ for(const status of [401,403,404])test(`${status} removes persisted company data
 });
 
 test('persisted verification polls are bounded even when a saved response still requires revalidation',async()=>{
-  const h=harness(),saved=persisted();saved.data.responseCache.refreshFailed=true;saved.data.responseCache.refreshing=true;h.context();h.mount();await h.resolve(0,saved.data);
+  const h=harness(),saved=persisted();saved.data.responseCache.refreshing=false;h.context();h.mount();await h.resolve(0,saved.data);
   for(let index=1;index<=24;index++){await h.poll();await h.resolve(index,saved.data);}
   assert.equal(h.calls.length,25);assert.equal(h.timers.size,0);assert.equal(h.result(),'a|2026-10|persisted');
-  assert.match(h.freshness(),/마지막 확인/);assert.match(h.elements.get('#collection-progress').innerHTML,/시간이 걸리고/);
+  assert.match(h.freshness(),/마지막 확인/);assert.match(h.elements.get('#collection-progress').innerHTML,/자동 확인을 멈췄/);
 });
 
 test('small server clock lead preserves the original persisted expiration instead of rewriting checkedAt',async()=>{

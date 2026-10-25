@@ -19,17 +19,22 @@ function fixture(options={}){
   return {cache,read,advance(ms){now+=ms;},counts:()=>({guards,full,saved,archives,writes})};
 }
 test('a cold saved month renders before slow full work and only verified completion persists and archives',async()=>{
-  const f=fixture(),pending=defer();
-  const first=await f.read({readSource:()=>pending.promise});
+  const f=fixture(),pending=defer(),contexts=[];
+  const first=await f.read({readSource:context=>{contexts.push(context);return pending.promise;}});
   assert.equal(first.status,200);assert.equal(first.data.responseCache.state,'preview');assert.equal(first.data.responseCache.refreshing,true);
   assert.equal(first.data.calculation.mode,'saved_only');assert.equal(first.data.referenceLoading,true);
   assert.equal(first.data.companyDetail.current.daily[0].estimatedRevenue,0);assert.equal(first.data.companyDetail.current.daily[1].estimatedRevenue,null);
   assert.equal(first.data.result,null);assert.deepEqual(f.counts(),{guards:1,full:0,saved:1,archives:0,writes:0});
+  assert.equal(contexts[0].background,true,'only the matching saved core permits a longer background read');
   assert.deepEqual(await f.cache.snapshot({scope:'session-a',identity:identity(),audience:'insight:customer'}),[],'display previews are not normal bootstrap snapshots');
   await f.read({readSource:()=>pending.promise});assert.equal(f.counts().saved,1,'one preview and full refresh are shared');
   pending.resolve(ok(source()));await turn();
   const latest=await f.read();assert.equal(latest.data.responseCache.state,'cached');assert.equal(latest.data.result.version,'verified');
   assert.equal(latest.data.calculation,undefined);assert.equal(latest.data.referenceLoading,undefined);assert.equal(f.counts().archives,1);assert.equal(f.counts().writes,1);
+});
+test('a cold source without saved values keeps the foreground deadline context',async()=>{
+  const f=fixture(),contexts=[];await f.read({readSavedSource:undefined,readSource:async context=>{contexts.push(context);return ok(source());}});
+  assert.deepEqual(contexts,[{background:false}]);
 });
 test('a failed full refresh retains the matching normal saved preview without fabricating zero or archiving',async()=>{
   const f=fixture();await f.read({readSource:async()=>fail(503)});await turn();

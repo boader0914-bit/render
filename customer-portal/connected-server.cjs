@@ -56,7 +56,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   const invalidateReads = scope => { companyReads.invalidate(scope); regionReads.invalidate(scope); reportReads.invalidate(scope); };
   // Historical source recalculation can take longer than a login or command.
   // Extend only these read endpoints; collection dispatch retains its timeout.
-  const readTimeout = (method, route) => method === 'GET' && /\/(?:companies\/[a-zA-Z0-9_-]+\/collection|reports\/briefing)$/.test(route) ? 180000 : 20000;
+  const readTimeout = (method, route, {background=false}={}) => background&&method==='GET'&&/\/companies\/[a-zA-Z0-9_-]+\/collection$/.test(route)?600000:method === 'GET' && /\/(?:companies\/[a-zA-Z0-9_-]+\/collection|reports\/briefing)$/.test(route) ? 180000 : 20000;
   const identityRoutes=new Set(['/me','/auth/login','/admin/me','/admin/auth/login','/admin/customer-view/me','/admin/customer-view/start']);
   function timings(){
     const started=performance.now(),values=new Map([['upstream_headers',0],['upstream_body',0],['snapshot',0]]);
@@ -121,7 +121,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
     return companyReads.read({scope:scopeFor(requestOrigin,mode,session),audience:audienceFor(requestOrigin,mode),route:'/companies/'+match[1]+'/collection',companyId:match[1],month,force,
       readIdentity:()=>readUpstream(prefix+(mode==='admin'?'/customer-view/me':'/me'),'',headers,{stage:'identity',timing}),
       readSavedSource:()=>readUpstream(prefix+route,'?'+savedQuery.toString(),headers,{stage:'saved_preview',timing,timeoutMs:3000}),
-      readSource:()=>readUpstream(prefix+route,url.search,headers,{stage:'source',timing})});
+      readSource:({background=false}={})=>readUpstream(prefix+route,url.search,headers,{stage:'source',timing,background})});
   }
   async function regionRead(requestOrigin, mode, session, headers, route, url, force, timing) {
     const match=/^\/(?:customer-view\/)?regions\/([a-zA-Z0-9_-]+)\/analysis$/.exec(route);

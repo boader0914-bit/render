@@ -273,7 +273,8 @@ function createCompanyReadCache({now=Date.now,ttlMs=600000,refreshMs=30000,saved
     const slotKey=durableSlot(identity,audience,period.startsWith('default:')),savedMonth=period.replace('default:','');
     let ticket;try{if(slotKey)ticket=disk?.begin(slotKey,savedMonth);}catch{}
     const pending={scope:state.scope,state,epoch,mark,binding,promise:null};
-    pending.promise=safeRead(readSource).then(async reply=>{
+    const background=Boolean(entry&&entry.fingerprint===mark&&clock()<expiry(entry));
+    pending.promise=safeRead(()=>readSource({background})).then(async reply=>{
       if(!current(state,epoch,key,mark,binding))return invalidated();
       if(!reply.ok){
         if([401,403].includes(reply.status))revoke(state,reply);
