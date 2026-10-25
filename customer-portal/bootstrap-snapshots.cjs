@@ -12,7 +12,7 @@ function selection(headers,identity){
     // A browser hint only narrows the freshly verified relationship set.
     return {company:true,companyIds:permitted.some(row=>row.companyId===id)?[id]:[],region:false,report:false};
   }
-  return {company:['home','property','competitors'].includes(view),companyIds:permitted.filter(row=>row.kind===(view==='competitors'?'competitor':'own')).map(row=>row.companyId),region:['home','regions'].includes(view),report:view==='reports'};
+  return {company:['home','property','competitors'].includes(view),companyIds:permitted.filter(row=>row.kind===(view==='competitors'?'competitor':'own')).map(row=>row.companyId),region:['home','regions'].includes(view),report:['reports','competitors'].includes(view)};
 }
 
 function createBootstrapSnapshots({companyReads,regionReads,reportReads}){

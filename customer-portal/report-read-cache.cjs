@@ -1,5 +1,6 @@
 'use strict';
 const {createHash}=require('node:crypto');
+const comparisonProjection=require('./comparison-projection.cjs');
 // Read-only report projections. Authorization is obtained afresh before every
 // read/bootstrap; only account-isolated display data is written to disk.
 function createReportReadCache({now=Date.now,ttlMs=10*60000,refreshMs=30000,maxEntries=64,maxBytes=16*1024*1024,maxPerScope=8,maxScopes=maxEntries*2,persistenceDirectory,namespace,persistentStore,partialPersistentStore,previewPersistentStore}={}) {
@@ -38,12 +39,42 @@ function createReportReadCache({now=Date.now,ttlMs=10*60000,refreshMs=30000,maxE
     if(!core||core.mode!=='current_briefing'||core.published!==false||!Number.isFinite(Date.parse(core.generatedAt))||!core.period||!validDay(core.period.start)||core.period.days!==30||core.period.end!==shift(core.period.start,29)||periodStart&&core.period.start!==periodStart||!['companies','comparisons','regions','actions','definitions'].every(key=>Array.isArray(core[key])))return null;
     if(core.ownId!==null&&!validId(core.ownId))return null;
     if(core.companies.some(row=>!validId(row?.companyId)||!['own','competitor'].includes(row.kind)||!['active','pending'].includes(row.relationStatus)||!row.summary)||core.comparisons.some(row=>!validId(row?.companyId)||!row.own||!row.competitor)||core.regions.some(row=>!validId(row?.region?.id)||!Array.isArray(row.sources)||row.networkAttempted!==false))return null;
+    // Legacy briefings remain readable. New comparison contracts are retained
+    // only as a whole validated projection; never silently downgrade a broken
+    // contract to a legacy row or persist raw days/authentication material.
+    for(let index=0;index<core.companies.length;index++){
+      const raw=value.companies[index],row=core.companies[index];
+      const labels=comparisonProjection.projectCompanyLabels(raw);if(!labels)return null;Object.assign(row,labels);
+      if(comparisonProjection.EXTENDED_SUMMARY_KEYS.some(key=>Object.hasOwn(raw.summary||{},key))){const summary=comparisonProjection.projectSummary(raw.summary);if(!summary)return null;row.summary=summary;}
+      if(Object.hasOwn(raw,'summaryQuality')){const quality=comparisonProjection.projectSummaryQuality(raw.summaryQuality);if(!quality||quality.period.start!==core.period.start||quality.period.end!==core.period.end||quality.asOf!==core.period.start)return null;row.summaryQuality=quality;}
+      if(Object.hasOwn(raw,'reservationSeries')){const series=comparisonProjection.projectReservationSeries(raw.reservationSeries,row,core);if(!series)return null;row.reservationSeries=series;}
+    }
+    for(let index=0;index<core.comparisons.length;index++){
+      const raw=value.comparisons[index];
+      if(comparisonProjection.hasComparisonContract(raw)){
+        const comparison=comparisonProjection.projectComparison(raw);
+        if(!comparison||!comparisonProjection.comparisonWithinReport(comparison,core))return null;
+        core.comparisons[index]=comparison;
+      }else{
+        for(const side of ['own','competitor'])if(comparisonProjection.EXTENDED_SUMMARY_KEYS.some(key=>Object.hasOwn(raw[side]||{},key))){
+          const summary=comparisonProjection.projectSummary(raw[side]);if(!summary)return null;core.comparisons[index][side]=summary;
+        }
+      }
+    }
+    // Old durable snapshots keep their quantities and clocks, but their former
+    // competitive advice cannot bypass the new explicit action eligibility.
+    core.actions=comparisonProjection.projectCompetitiveActions(core.actions,core.comparisons);
     const validIssues=issues=>Array.isArray(issues)&&issues.length<=256&&issues.every(issue=>['company','region'].includes(issue?.scope)&&typeof issue.code==='string'&&/^[A-Z][A-Z0-9_]{1,99}$/.test(issue.code)&&typeof issue.reason==='string'&&issue.reason.length>0&&issue.reason.length<=1000&&(!issue.month||/^20\d{2}-(0[1-9]|1[0-2])$/.test(issue.month))&&(!issue.period||validDay(issue.period.start)&&validDay(issue.period.end)&&issue.period.start<=issue.period.end));
     if(core.dataQuality&&(!['complete','partial'].includes(core.dataQuality.status)||!validIssues(core.dataQuality.issues)))return null;
     for(const row of [...core.companies,...core.regions])if(row.sourceStatus!==undefined&&!['ready','partial','unavailable'].includes(row.sourceStatus)||row.sourceIssues!==undefined&&!validIssues(row.sourceIssues))return null;
     return core;
   }
-  const projectionVersion=hash([schema,projectValue.toString(),projectedCore.toString(),validDay.toString(),validId.toString(),shift.toString()]);
+  // This is an optional, backward-compatible display extension. Keep the
+  // established normal/partial namespaces so a release does not discard the
+  // last saved good report. Each hydrated record still passes all validators
+  // above, including the complete v1 comparison contract when present. A future
+  // incompatible contract must deliberately migrate or change this version.
+  const projectionVersion='c04a6872173be08ca5da8ad0fdd840236efdad0c23190224df44380b98387db3';
   const storeOptions={directory:persistenceDirectory,namespace,version:projectionVersion,now};
   const disk=persistentStore||(persistenceDirectory&&namespace?require('./report-snapshot-store.cjs').createReportSnapshotStore({...storeOptions,project:(value,options)=>{const core=projectedCore(value,options);return core&&cacheable(core)?core:null;}}):null);
   const partialDisk=partialPersistentStore||(persistenceDirectory&&namespace?require('./report-snapshot-store.cjs').createReportSnapshotStore({...storeOptions,quality:'partial',project:(value,options)=>{const core=projectedCore(value,options);return core&&core.dataQuality?.status==='partial'&&!cacheable(core)?core:null;}}):null);

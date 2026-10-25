@@ -16,7 +16,7 @@
   const REPORT_CHECK_DELAYS=[2000,4000,8000,16000,30000,45000,45000,45000];
   let cacheScope='default',allowedRegions=null,cacheGeneration=0,onSessionExpired=null;
   const reports=new Map(),reportPreviews=new Map(),reportRequests=new Map(),deniedReports=new Set();
-  let reportScope='',reportPermission='',reportGeneration=0,reportOwnIds=[],reportCompanies=new Set(),reportRegions=new Set();
+  let reportScope='',reportPermission='',reportGeneration=0,reportRequestSequence=0,reportOwnIds=[],reportCompanies=new Set(),reportRegions=new Set();
   const epoch=id=>regionEpochs.get(id)||0;
   const requestAllowed=id=>Boolean(cacheScope)&&(!allowedRegions||allowedRegions.has(id));
   const permitted=id=>requestAllowed(id)&&!deniedRegions.has(id);
@@ -132,13 +132,13 @@
     if(Date.now()>=entry.validUntil||!reportScopeValid(entry.data,ownId,period)){storage.delete(key);return null;}
     storage.delete(key);storage.set(key,entry);return entry;
   }
-  function rememberReport(ownId,period,data){
+  function rememberReport(ownId,period,data,{requestOrder=0}={}){
     if(!reportScopeValid(data,ownId,period))throw Error('선택한 내 매장·숙박기간과 리포트가 다릅니다.');
     const preview=isReportPreview(data);
     if((data.responseCache?.state==='preview'||data.responseCache?.preview===true||data.calculation?.mode==='saved_only')&&!preview)throw Error('저장 자료 미리보기의 계산 상태를 확인하지 못했습니다.');
     const saved=clone(data),checked=timestamp(saved.responseCache?.checkedAt||saved.generatedAt),age=lifetime(saved,checked);
     if(!age)throw Error('저장 리포트의 확인 시각과 유효기간을 다시 확인해 주세요.');
-    const entry={ownId,period:{...period},data:saved,version:reportVersion(saved),...age},key=reportKey(ownId,period);
+    const entry={ownId,period:{...period},data:saved,version:reportVersion(saved),requestOrder,...age},key=reportKey(ownId,period);
     const storage=preview?reportPreviews:reports;
     deniedReports.delete(ownId);storage.delete(key);storage.set(key,entry);while(storage.size>CACHE_LIMIT)storage.delete(storage.keys().next().value);if(!preview)reportPreviews.delete(key);return entry;
   }
@@ -155,10 +155,44 @@
   function readReport(ownId,period,request,force){
     const key=reportKey(ownId,period)+(force?':refresh':'');let pending=reportRequests.get(key);
     if(!pending){
-      let promise;try{promise=Promise.resolve(request(`/reports/briefing${ownId?'?ownId='+encodeURIComponent(ownId):''}`,undefined,{refresh:force}));}catch(error){promise=Promise.reject(error);}
+      const scope=reportScope,permission=reportPermission,generation=reportGeneration,requestOrder=++reportRequestSequence;
+      let source;try{source=Promise.resolve(request(`/reports/briefing${ownId?'?ownId='+encodeURIComponent(ownId):''}`,undefined,{refresh:force}));}catch(error){source=Promise.reject(error);}
+      const promise=source.then(data=>{
+        if(scope!==reportScope||permission!==reportPermission||generation!==reportGeneration||!reportAllowed(ownId)||period.start!==reportPeriod().start)throw Object.assign(new Error('업체·권한·숙박기간이 변경되어 이전 응답을 사용하지 않았습니다.'),{status:409,code:'REPORT_SELECTION_CHANGED'});
+        const normal=reportCached(ownId,period),preview=reportCached(ownId,period,reportPreviews),incomingPreview=isReportPreview(data);
+        // Orders belong to actual network reads, not to later views joining a
+        // singleflight. Older completion cannot overwrite a newer normal result.
+        // A newer preview must still never suppress a completed normal result.
+        if(normal?.requestOrder>requestOrder)return clone(normal.data);
+        if(incomingPreview&&preview?.requestOrder>requestOrder)return clone((normal||preview).data);
+        return clone(rememberReport(ownId,period,data,{requestOrder}).data);
+      });
       pending={promise};reportRequests.set(key,pending);const cleanup=()=>{if(reportRequests.get(key)===pending)reportRequests.delete(key);};promise.then(cleanup,cleanup);
     }
     return pending.promise;
+  }
+  function peekCurrentBriefing(ownId=''){
+    if(typeof ownId!=='string'||!reportAllowed(ownId))return null;
+    const period=reportPeriod(),entry=reportCached(ownId,period)||reportCached(ownId,period,reportPreviews);
+    return entry?clone(entry.data):null;
+  }
+  async function readCurrentBriefing(ownId='',request,{force=false}={}){
+    const failure=(status,code,message)=>Object.assign(new Error(message),{status,code});
+    if(typeof ownId!=='string'||!reportAllowed(ownId))throw failure(403,'REPORT_ACCESS_REQUIRED','내 매장 등록과 비교 자료 조회 권한을 다시 확인해 주세요.');
+    if(typeof request!=='function')throw failure(400,'REPORT_READER_REQUIRED','저장 자료 조회 연결을 확인해 주세요.');
+    const period=reportPeriod(),scope=reportScope,permission=reportPermission,generation=reportGeneration;
+    const authorized=()=>scope===reportScope&&permission===reportPermission&&generation===reportGeneration&&reportAllowed(ownId);
+    const stale=()=>failure(409,'REPORT_SELECTION_CHANGED','업체·권한·숙박기간이 변경되어 이전 응답을 사용하지 않았습니다.');
+    try{
+      const data=await readReport(ownId,period,request,force||deniedReports.has(ownId));
+      if(!authorized()||period.start!==reportPeriod().start)throw stale();
+      return clone(data);
+    }catch(error){
+      if(!authorized()||period.start!==reportPeriod().start)throw stale();
+      if(error.status===401)expireSession(false);
+      else if([403,404,409].includes(error.status)){clearReports();deniedReports.add(ownId);}
+      throw error;
+    }
   }
   function drawReport(slot,data,preserve=false){
     const open=new Set(preserve?detailKeys(slot).filter(row=>row.detail.open).map(row=>row.key):[]);
@@ -192,12 +226,12 @@
     const focus=focusMetric?[...(slot.querySelectorAll?.('[data-history-metric]')||[])].find(select=>select.closest('[data-history-source]')?.dataset.historySource===focusMetric):focusDetail?details.find(row=>row.key===focusDetail)?.detail.querySelector('summary'):focusRefresh?slot.querySelector?.('[data-history-refresh]'):null;
     focus?.focus?.({preventScroll:true});
   }
-  function expireSession(){
+  function expireSession(displayNotice=true){
     window.InsightArchives?.stop();
     clearCache();cacheScope='';allowedRegions=new Set();seq++;regionData=null;renderedVersion=null;clearTimers();
     reportScope='';reportPermission='';reportOwnIds=[];reportCompanies.clear();reportRegions.clear();
-    const slot=document.querySelector('#analysis-output');if(slot)slot.innerHTML='<p class="collection-warning">로그인이 만료되었습니다. 다시 로그인해 주세요.</p>';
-    freshness('');if(onSessionExpired)onSessionExpired();
+    if(displayNotice){const slot=document.querySelector('#analysis-output');if(slot)slot.innerHTML='<p class="collection-warning">로그인이 만료되었습니다. 다시 로그인해 주세요.</p>';freshness('');}
+    if(onSessionExpired)onSessionExpired();
   }
   function readPending(id,month,request,force){
     const key=cacheKey(id,month)+(force?':refresh':'');let pending=inFlight.get(key);
@@ -321,8 +355,8 @@
       const data=await readReport(ownId,period,request,force||deniedReports.has(ownId));
       if(!authorized())return;
       if(period.start!==reportPeriod().start){if(visible())void loadReport();return;}
-      const fresh=rememberReport(ownId,period,data);if(!visible())return;
-      const preview=isReportPreview(data),shown=preview&&complete?complete:fresh;
+      const fresh=reportCached(ownId,period,isReportPreview(data)?reportPreviews:reports);if(!fresh||!visible())return;
+      const preview=isReportPreview(data),latestNormal=reportCached(ownId,period),shown=preview&&latestNormal?latestNormal:fresh;
       if(renderedVersion!==shown.version){drawReport(slot,shown.data,Boolean(entry));renderedVersion=shown.version;}
       const info=data.responseCache||{},sourcePending=data.dataQuality?.issues?.some(issue=>['COMPANY_INTEGRATION_UPDATING','COMPANY_INTEGRATION_PENDING'].includes(issue.code));
       const failed=(info.refreshFailed||info.calculationStatus==='failed')&&info.refreshing!==true,pending=info.refreshing===true||!failed&&(info.revalidationRequired||sourcePending||preview&&info.calculationStatus==='pending'),checking=pending&&backgroundChecks<REPORT_CHECK_DELAYS.length;
@@ -334,6 +368,7 @@
       if(checking&&typeof setTimeout==='function')refreshTimer=setTimeout(()=>{refreshTimer=null;if(visible())void loadReport({backgroundChecks:backgroundChecks+1});},REPORT_CHECK_DELAYS[backgroundChecks]);
     }catch(error){
       if(!authorized())return;
+      if(period.start!==reportPeriod().start){if(visible())void loadReport();return;}
       if(error.status===401){expireSession();return;}
       if([403,404,409].includes(error.status)){
         const show=visible();clearReports();deniedReports.add(ownId);
@@ -399,7 +434,7 @@
   }
   document.addEventListener('submit',e=>{if(e.target.id!=='analysis-form')return;e.preventDefault();e.stopImmediatePropagation();load({force:kind==='reports'});});
   document.addEventListener('change',e=>{if(e.target.matches?.('[data-history-metric]')&&regionData){const card=e.target.closest('[data-history-source]'),s=regionData.sources.find(s=>s.key===card.dataset.historySource);if(s)card.outerHTML=window.InsightRegionHistory.source(s,regionData.window,e.target.value);return;}if(e.target.closest?.('#analysis-form'))load();});
-  window.InsightAnalysis={panel,regionView,reportView,configureCache,configureReports,restore,restoreReports,clearCache,invalidate,mount(mode,request,s,selectedRegion=null,selectedOwnId=null){kind=mode;api=request;renderedVersion=null;
+  window.InsightAnalysis={panel,regionView,reportView,configureCache,configureReports,restore,restoreReports,peekCurrentBriefing,readCurrentBriefing,clearCache,invalidate,mount(mode,request,s,selectedRegion=null,selectedOwnId=null){kind=mode;api=request;renderedVersion=null;
     if(mode==='reports'){
       const select=document.querySelector('#analysis-form select');
       if(select)select.value=reportOwnIds.includes(selectedOwnId)?selectedOwnId:reportOwnIds[0]||'';

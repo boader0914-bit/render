@@ -297,6 +297,39 @@ html[data-theme=dark] .connected-app input[type=month]{color-scheme:dark}
 }
 @media(max-width:480px){.connected-app .db-current .company-booking-chart .flow-date-desktop{display:none}.connected-app .db-current .company-booking-chart .flow-date-mobile{display:block}}
 @media(max-width:360px){.connected-app .db-current .month-summary-metrics{grid-template-columns:minmax(0,1fr)}.connected-app .db-current .month-summary-metrics article+article{border-left:0;border-top:1px solid var(--line-strong);padding:12px 0 0}.connected-app .db-current .month-summary-metrics strong{font-size:26px}}
+
+/* Integrated pickup: only the selected timestamp pair and its fixed stay dates. */
+.connected-app .company-pickup{margin:16px 0 4px;padding-top:15px;border-top:1px solid var(--line);min-width:0}
+.connected-app .company-pickup-heading{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:10px}
+.connected-app .company-pickup-heading h3{font-size:15px;line-height:1.5;font-weight:600;letter-spacing:-.02em}
+.connected-app .company-pickup-heading>span{font-size:12px;color:var(--muted)}
+.connected-app .company-pickup-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.3fr);gap:10px}
+.connected-app .company-pickup-grid article{display:grid;align-content:start;gap:6px;padding:12px 14px;border-radius:8px;background:var(--surface-soft);min-width:0}
+.connected-app .company-pickup-grid article>span{font-size:12px;line-height:1.6;color:var(--muted)}
+.connected-app .company-pickup-grid strong{font-size:21px;font-weight:600;line-height:1.4;letter-spacing:-.025em;font-variant-numeric:tabular-nums}
+.connected-app .company-pickup-public strong,.connected-app .company-pickup-table-wrap .company-pickup-public{color:var(--public-ink)}
+.connected-app .company-pickup-estimate.is-nonzero strong,.connected-app .company-pickup-table-wrap .company-pickup-estimate.is-nonzero{color:var(--estimate-ink)}
+.connected-app .company-pickup-period strong{font-size:16px;align-self:end;line-height:1.8}
+.connected-app .company-pickup-note,.connected-app .company-pickup-empty,.connected-app .company-pickup-basis,.connected-app .company-pickup-notes{font-size:12px;line-height:1.7;color:var(--muted);overflow-wrap:anywhere}
+.connected-app .company-pickup-note{margin:8px 0 0}
+.connected-app .company-pickup-empty{margin:0;padding:11px 13px;background:var(--surface-soft);border-radius:7px}
+.connected-app .company-pickup-warning{margin:9px 0 0;padding:9px 12px;border:1px solid var(--amber);border-radius:7px;color:var(--amber);font-size:12px;line-height:1.7}
+.connected-app .company-pickup-details{border-top:0;margin:8px 0 0;padding:0}
+.connected-app .company-pickup-details>summary{display:flex;align-items:center;gap:8px;min-height:42px;padding:7px 0;font-size:12px;font-weight:500;list-style:none;color:var(--text)}
+.connected-app .company-pickup-details>summary::-webkit-details-marker{display:none}
+.connected-app .company-pickup-details>summary>span{font-size:18px;font-weight:400}
+.connected-app .company-pickup-details[open]>summary>span{font-size:0}
+.connected-app .company-pickup-details[open]>summary>span:after{content:'−';font-size:18px}
+.connected-app .company-pickup-basis{margin:4px 0 10px}
+.connected-app .company-pickup-table-wrap{max-width:100%;overflow-x:auto;border:1px solid var(--line);border-radius:7px}
+.connected-app .company-pickup-table-wrap table{width:100%;border-collapse:collapse;white-space:nowrap;font-size:12px;font-variant-numeric:tabular-nums}
+.connected-app .company-pickup-table-wrap caption{text-align:left;padding:10px 12px;font-size:12px;font-weight:500;color:var(--muted)}
+.connected-app .company-pickup-table-wrap th,.connected-app .company-pickup-table-wrap td{padding:10px 12px;text-align:right;border-bottom:1px solid var(--line);font-weight:400;line-height:1.6}
+.connected-app .company-pickup-table-wrap th:first-child{font-weight:500;text-align:left}
+.connected-app .company-pickup-table-wrap thead{background:var(--surface-soft);color:var(--muted)}
+.connected-app .company-pickup-table-wrap tbody tr:last-child>*{border-bottom:0}
+.connected-app .company-pickup-notes{margin:10px 0 0;padding-left:18px}
+@media(max-width:760px){.connected-app .company-pickup-heading{align-items:start;flex-wrap:wrap;gap:3px 10px}.connected-app .company-pickup-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}.connected-app .company-pickup-grid article{padding:11px 12px}.connected-app .company-pickup-grid strong{font-size:20px}.connected-app .company-pickup-grid .company-pickup-period{grid-column:1/-1;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px}.connected-app .company-pickup-period strong{font-size:15px;white-space:nowrap}.connected-app .company-pickup-table-wrap th,.connected-app .company-pickup-table-wrap td{padding:9px 10px}}
 @media(min-width:761px) and (max-width:1000px){
  .connected-app .db-current .week-column-head{display:none}
  .connected-app .db-current .company-week-summary{grid-template-columns:minmax(0,.8fr) minmax(0,1.3fr) 32px;gap:6px 10px}

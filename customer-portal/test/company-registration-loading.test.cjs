@@ -24,7 +24,7 @@ async function registrationScreen({ adminView = false, kind = 'own' } = {}) {
       classList: { add() {}, remove() {}, toggle() {} }, focus() {} });
     return elements.get(selector);
   };
-  let hash = kind === 'own' ? '#property' : '#competitors';
+  let hash = kind === 'own' ? '#property' : '#settings';
   const location = { pathname: adminView ? '/customer-view' : '/', get hash() { return hash; }, set hash(value) { hash = value.startsWith('#') ? value : `#${value}`; } };
   const window = { addEventListener(name, callback) { windowEvents[name] = callback; }, scrollTo() {},
     InsightCollection: { stop() {}, setContext() {}, invalidate() {}, loading: loadingWindow.InsightCollection.loading,
@@ -105,7 +105,7 @@ for (const adminView of [false, true]) {
     await registration;
     assert.equal(ui.progress(), '');
     assert.equal(ui.addButton.disabled, false);
-    assert.equal(ui.location.hash, '#competitors', 'a failed command must not open an unregistered company');
+    assert.equal(ui.location.hash, '#settings', 'a failed command stays in registration settings without opening an unregistered company');
     assert.equal(ui.mounted.length, 0);
     assert.match(ui.toast(), /등록을 저장하지 못했습니다/);
     assert.equal(ui.pendingCommands.length, 1);

@@ -30,6 +30,14 @@ function harness(){
  };
 }
 
+test('a newer forced report cannot be overwritten by an older ordinary GET completing last',async()=>{
+ const h=harness();h.mount();h.submit();assert.equal(h.calls.length,2);h.advance(1000);
+ await h.resolve(1,report('own',44,base+1000));await h.resolve(0,report('own',11));
+ assert.match(h.html(),/44실/);assert.doesNotMatch(h.html(),/11실/);
+ assert.equal(h.view.peekCurrentBriefing('own').companies[0].summary.publicBookings,44);
+ h.leave();h.mount();assert.match(h.html(),/44실/);
+});
+
 test('returning to the same authorized report shows the previous report before a background GET resolves',async()=>{
  const h=harness();h.mount();assert.match(h.html(),/계산하고/);await h.resolve(0,report());h.leave();h.mount();
  assert.match(h.html(),/내 매장 own의 다음 판단/);assert.match(h.html(),/10실/);assert.match(h.notice.textContent,/이전 조회 리포트.*확인 중/);assert.equal(h.calls.length,2);assert.equal(h.calls[1].payload,undefined);

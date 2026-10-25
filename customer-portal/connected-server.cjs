@@ -161,6 +161,9 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   const adminCookie = (token, expire = false) => `${adminCookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${expire ? 0 : 28800}${secure ? '; Secure' : ''}`;
   const staticMap = { '/company-flow.js':['company-flow.js','text/javascript'], '/region-history.js':['region-history.js','text/javascript'], '/analysis.js':['analysis.js','text/javascript'], '/': ['connected.html', 'text/html'], '/app': ['connected.html', 'text/html'], '/login': ['connected.html', 'text/html'], '/signup': ['connected.html', 'text/html'], '/terms': ['connected.html', 'text/html'], '/privacy': ['connected.html', 'text/html'], '/company-view.js': ['company-view.js', 'text/javascript'], '/collection.js': ['collection.js', 'text/javascript'], '/connected.js': ['connected.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/connected.css': ['connected.css', 'text/css'], '/favicon.svg': ['favicon.svg', 'image/svg+xml'] };
   staticMap['/bootstrap-read.js']=['bootstrap-read.js','text/javascript'];
+  staticMap['/comparison-selection.js']=['comparison-selection.js','text/javascript'];
+  staticMap['/comparison-view.js']=['comparison-view.js','text/javascript'];
+  staticMap['/comparison.css']=['comparison.css','text/css'];
   staticMap['/archive.js']=['archive.js','text/javascript'];
   const adminAssets = { '/admin': ['admin.html', 'text/html'], '/admin.js': ['admin.js', 'text/javascript'], '/admin.css': ['admin.css', 'text/css'] };
   const publicAssets=new Map([...Object.entries({...staticMap,...adminAssets,'/auth.js':['auth.js','text/javascript']})].filter(([,item])=>item[1]!=='text/html').map(([url,item])=>[url,{file:path.join(__dirname,'web',item[0]),type:item[1]}]));
