@@ -50,7 +50,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   const timing = { enqueued: 0, started: 0, completed: 0, failed: 0, aborted: 0, closed: 0,
     queueWaitMs: 0, leaseMs: 0, ...emptyWait(), reentrantStarted: 0,
     reentrantCompleted: 0, reentrantFailed: 0, reentrantLeaseMs: 0, callbackErrors: 0,
-    yielded: 0, restarted: 0, reentrantYielded: 0, cooperativeCheckpoints: 0, maximumCheckpointGapMs: 0 };
+    yielded: 0, restarted: 0, reentrantYielded: 0, cooperativeCheckpoints: 0, maximumCheckpointGapMs: 0, progressRevisionResets: 0 };
   const recent = [];
   function accountWaiting() {
     const at = timestamp(), elapsed = Math.max(0, at - waitClockAt); waitClockAt = at;
@@ -170,6 +170,16 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       enabled: true, yieldRequested: false, nonInterruptibleDepth: 0, checkpoints: 0, lastCheckpointAt: task.startedAt,
       phaseIndex: 0, phaseCheckpoints: 0, unitIndex: 0, unitCheckpoints: 0,
       isCurrent: () => token.active && active === token,
+      setRevision(revision) {
+        // Work completed against old originals cannot forbid foreground
+        // admission while a changed source starts its new calculation prefix.
+        // An unchanged revision keeps its fairness/progress fence intact.
+        if (task.progressRevision !== undefined && task.progressRevision !== revision) {
+          task.progressHighWater = null; task.checkpointHighWater = 0;
+          timing.progressRevisionResets++;
+        }
+        task.progressRevision = revision;
+      },
       setPhase(index, unitIndex) {
         // A warm retry may skip thousands of cold catalog checkpoints. Track
         // ordered logical phases so that advancing into history/recalculation

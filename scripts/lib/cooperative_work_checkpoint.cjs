@@ -27,6 +27,13 @@ function setCooperativeWorkPhase(index, unitIndex = 0) {
   if (owner.yieldRequested) throw yielded();
   owner.setPhase(index, unitIndex);
 }
+function setCooperativeWorkRevision(revision) {
+  if (typeof revision !== "string" || !revision || revision.length > 512) throw new TypeError("Cooperative revision must be a bounded string");
+  const owner = current();
+  if (!owner) return;
+  if (owner.yieldRequested) throw yielded();
+  owner.setRevision(revision);
+}
 function cooperativeWorkCheckpoint() {
   const owner = current();
   if (!owner) return;
@@ -48,5 +55,5 @@ async function runNonInterruptibleCooperativeWork(operation) {
 }
 function isCooperativeWorkYield(error) { return error?.code === YIELD_CODE; }
 
-module.exports = { runWithCooperativeWork, cooperativeWorkCheckpoint, setCooperativeWorkPhase, assertCooperativeWorkActive,
+module.exports = { runWithCooperativeWork, cooperativeWorkCheckpoint, setCooperativeWorkPhase, setCooperativeWorkRevision, assertCooperativeWorkActive,
   runNonInterruptibleCooperativeWork, isCooperativeWorkYield, YIELD_CODE };

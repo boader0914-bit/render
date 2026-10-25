@@ -2,6 +2,7 @@
 // Optional, small derived witness files. Raw collections, company reviews and
 // published reports are never written here. A broken cache is not a zero.
 const fs = require("node:fs/promises"), path = require("node:path"), crypto = require("node:crypto");
+const { AsyncLocalStorage } = require("node:async_hooks");
 const { compactProductCapacityEvidence } = require("./product_capacity_baseline.cjs");
 const { runNonInterruptibleCooperativeWork, setCooperativeWorkPhase } = require("./cooperative_work_checkpoint.cjs");
 const hash = value => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -13,13 +14,47 @@ function correctionSignature(company) {
   if (!correction || correction.active === false || correction.source === "integrated_observed_basis") return hash(null);
   return hash([correction.lodgingBasisTotal || null, correction.roomSegments || [], correction.productStockCorrections || []]);
 }
-function createProductCapacityStore({ dataDir, outputsDir = path.join(dataDir, "outputs"), maxBytes = 2 * 1024 * 1024, maxEvidence = 10000 } = {}) {
+function createProductCapacityStore({ dataDir, outputsDir = path.join(dataDir, "outputs"), maxBytes = 2 * 1024 * 1024, maxEvidence = 10000, maxVerificationDescriptors = 2048 } = {}) {
   if (!dataDir) throw new TypeError("A product witness data directory is required");
+  if (!Number.isSafeInteger(maxVerificationDescriptors) || maxVerificationDescriptors < 1 || maxVerificationDescriptors > 4096) throw new TypeError("Product witness descriptor limit must be between 1 and 4096");
   const directory = path.join(path.resolve(dataDir), "company_integrated", "product_capacity_witnesses"), root = path.resolve(outputsDir);
+  const verificationScopes = new AsyncLocalStorage();
+  const metrics = { descriptorScans: 0, descriptorProofHits: 0, descriptorProofEvictions: 0, maximumVerificationDescriptors: 0, verificationChecks: 0, witnessReads: 0, activeVerificationScopes: 0, retainedVerificationDescriptors: 0 };
   let serial = Promise.resolve();
   const filename = id => path.join(directory, hash(String(id)) + ".json");
+  const activeProof = () => { const proof = verificationScopes.getStore(); return proof?.active ? proof : null; };
+  async function assertProofCurrent(proof) { if (!proof || !proof.active || activeProof() !== proof) return; metrics.verificationChecks++; await proof.assertCurrent(); }
+  async function freshProof() { const proof = activeProof(); if (proof) await assertProofCurrent(proof); return proof; }
+  async function withDescriptorVerificationScope({ sourceRevision, assertCurrent } = {}, operation) {
+    // Explicit internal opt-in: assertCurrent must freshly compare the entire
+    // original-run inventory/correction revision captured by sourceRevision.
+    // A witness's sourceRevision may include a catalog calculation signature;
+    // do not confuse that provenance field with this whole-source boundary.
+    if (typeof sourceRevision !== "string" || !sourceRevision || sourceRevision.length > 1024 || typeof assertCurrent !== "function" || typeof operation !== "function") throw new TypeError("A current whole-source verification boundary is required");
+    const proof = { sourceRevision, assertCurrent, descriptors: new Map(), active: true }; metrics.activeVerificationScopes++;
+    return verificationScopes.run(proof, async () => {
+      try { const result = await operation(); await assertProofCurrent(proof); return result; }
+      finally { proof.active = false; metrics.retainedVerificationDescriptors -= proof.descriptors.size; proof.descriptors.clear(); proof.assertCurrent = null; proof.sourceRevision = null; metrics.activeVerificationScopes--; }
+    });
+  }
+  function rememberDescriptor(proof, runId, value) {
+    if (!proof?.active || activeProof() !== proof) return;
+    if (proof.descriptors.has(runId)) proof.descriptors.delete(runId); else metrics.retainedVerificationDescriptors++;
+    proof.descriptors.set(runId, value);
+    while (proof.descriptors.size > maxVerificationDescriptors) { proof.descriptors.delete(proof.descriptors.keys().next().value); metrics.descriptorProofEvictions++; metrics.retainedVerificationDescriptors--; }
+    metrics.maximumVerificationDescriptors = Math.max(metrics.maximumVerificationDescriptors, proof.descriptors.size);
+  }
+  function resolveDescriptor(runId, descriptors, checkpoint, proof = null) {
+    if (!descriptors.has(runId)) {
+      if (proof?.active && activeProof() === proof && proof.descriptors.has(runId)) {
+        const value = proof.descriptors.get(runId); rememberDescriptor(proof, runId, value); metrics.descriptorProofHits++; descriptors.set(runId, value);
+      } else descriptors.set(runId, descriptor(runId, checkpoint).then(value => { rememberDescriptor(proof, runId, value); return value; }));
+    }
+    return descriptors.get(runId);
+  }
   async function descriptor(runId, checkpoint = null) {
     need(/^[A-Za-z0-9_-]{1,160}$/.test(runId), "PRODUCT_CAPACITY_SOURCE_INVALID");
+    metrics.descriptorScans++;
     const runDirectory = path.join(root, runId), files = [];
     async function visit(current, relative = "", depth = 0) {
       if (checkpoint) await checkpoint();
@@ -41,7 +76,7 @@ function createProductCapacityStore({ dataDir, outputsDir = path.join(dataDir, "
     need(files.some(([name]) => name === "manifest.json"), "PRODUCT_CAPACITY_SOURCE_INVALID");
     return hash(files);
   }
-  async function readWithSignature(companyId, signature, descriptors = new Map(), { checkpoint = async () => {}, onVerified = null } = {}) {
+  async function readWithSignature(companyId, signature, descriptors = new Map(), { checkpoint = async () => {}, onVerified = null, _descriptorProof = null } = {}) {
     if (typeof checkpoint !== "function") throw new TypeError("Product witness read checkpoint must be a function");
     if (onVerified !== null && typeof onVerified !== "function") throw new TypeError("Product witness verification capture must be a function");
     let cacheFound = false, checkpointFailed = false, checkpointFailure;
@@ -52,6 +87,7 @@ function createProductCapacityStore({ dataDir, outputsDir = path.join(dataDir, "
     await check();
     try {
       const file = filename(companyId), before = await fs.lstat(file, { bigint: true });
+      metrics.witnessReads++;
       cacheFound = true;
       need(before.isFile() && !before.isSymbolicLink() && before.size <= BigInt(maxBytes));
       const bytes = await fs.readFile(file), after = await fs.lstat(file, { bigint: true });
@@ -65,8 +101,7 @@ function createProductCapacityStore({ dataDir, outputsDir = path.join(dataDir, "
         && Number.isFinite(Date.parse(row.collectedAt)) && body.runs.some(run => run.id === row.runId)));
       for (const run of body.runs) {
         await check();
-        if (!descriptors.has(run.id)) descriptors.set(run.id, descriptor(run.id, check));
-        need(await descriptors.get(run.id) === run.descriptor, "PRODUCT_CAPACITY_SOURCE_CHANGED");
+        need(await resolveDescriptor(run.id, descriptors, check, _descriptorProof) === run.descriptor, "PRODUCT_CAPACITY_SOURCE_CHANGED");
         await check();
       }
       // Internal publication proof only: scope, review, checksum and every
@@ -86,12 +121,12 @@ function createProductCapacityStore({ dataDir, outputsDir = path.join(dataDir, "
   async function readForCompanies(companies, { checkpoint = async () => {} } = {}) {
     if (typeof checkpoint !== "function") throw new TypeError("Product witness read checkpoint must be a function");
     need(Array.isArray(companies));
-    const descriptors = new Map(), evidence = [], warnings = [];
+    const proof = await freshProof(), descriptors = new Map(), evidence = [], warnings = [];
     const seen = new Set();
     for (const company of companies) {
       await checkpoint();
       need(company?.companyId && !seen.has(company.companyId)); seen.add(company.companyId);
-      const saved = await read(company, descriptors, { checkpoint });
+      const saved = await read(company, descriptors, { checkpoint, _descriptorProof: proof });
       evidence.push(...saved.evidence);
       if (saved.warning) warnings.push({ companyId: company.companyId, ...saved.warning });
     }
@@ -100,7 +135,7 @@ function createProductCapacityStore({ dataDir, outputsDir = path.join(dataDir, "
   async function publishOwned(evidence, { companies, sourceRevision, assertCurrent, checkpoint = async () => {} } = {}) {
     if (typeof checkpoint !== "function") throw new TypeError("Product witness publication checkpoint must be a function");
     need(companies instanceof Map && typeof sourceRevision === "string" && sourceRevision && typeof assertCurrent === "function");
-    const groups = new Map(), descriptors = new Map();
+    const proof = await freshProof(), groups = new Map(), descriptors = new Map();
     for (const row of compactProductCapacityEvidence(evidence)) {
       need(companies.has(row.companyId));
       if (!groups.has(row.companyId)) groups.set(row.companyId, []);
@@ -115,15 +150,14 @@ function createProductCapacityStore({ dataDir, outputsDir = path.join(dataDir, "
       // corruption, changed raw sources and changed reviews rebuild from the
       // newly validated evidence instead.
       let verifiedPrevious = null;
-      const previous = await read(companies.get(id), descriptors, { checkpoint,
+      const previous = await read(companies.get(id), descriptors, { checkpoint, _descriptorProof: proof,
         onVerified: value => { verifiedPrevious = JSON.stringify(value); } });
       const rows = compactProductCapacityEvidence([...previous.evidence, ...incoming]);
       need(rows.length <= maxEvidence);
       const runs = [];
       for (const runId of [...new Set(rows.map(row => row.runId))].sort()) {
         await checkpoint();
-        if (!descriptors.has(runId)) descriptors.set(runId, descriptor(runId, checkpoint));
-        runs.push({ id: runId, descriptor: await descriptors.get(runId) });
+        runs.push({ id: runId, descriptor: await resolveDescriptor(runId, descriptors, checkpoint, proof) });
       }
       const body = { schemaVersion: 1, companyId: id, sourceRevision, correctionSignature: correctionSignature(companies.get(id)), evidence: rows, runs };
       const encoded = JSON.stringify({ ...body, checksum: hash(body) }); need(Buffer.byteLength(encoded) <= maxBytes);
@@ -150,7 +184,7 @@ function createProductCapacityStore({ dataDir, outputsDir = path.join(dataDir, "
     }
     return { companies: groups.size };
   }
-  return { read, readForCompanies, readWithSignature, publish(evidence, context) {
+  return { read, readForCompanies, readWithSignature, withDescriptorVerificationScope, stats: () => ({ ...metrics, maxVerificationDescriptors }), publish(evidence, context) {
     const task = serial.then(() => publishOwned(evidence, context));
     serial = task.then(() => undefined, () => undefined); return task;
   }, directory };

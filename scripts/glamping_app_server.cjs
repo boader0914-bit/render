@@ -591,6 +591,7 @@ const monthlyCompanySourceVersion = crypto.createHash("sha256")
   .update(companyIntegratedCalculationFingerprint())
   .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_company_source_catalog.cjs")))
   .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_report_sources.cjs")))
+  .update(fs.readFileSync(path.join(__dirname, "lib", "industry_source_candidate_cache.cjs")))
   .update(fs.readFileSync(path.join(__dirname, "lib", "industry_analysis.cjs")))
   .update(fs.readFileSync(path.join(__dirname, "lib", "company_capacity_registry.cjs")))
   .update(fs.readFileSync(path.join(__dirname, "lib", "saved_product_recovery.cjs")))
@@ -614,10 +615,21 @@ const recalculateMonthlyCompanyObservations = createMonthlyCompanyRecalculation(
 });
 const savedProductRecovery = createSavedProductRecovery({
   dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR, projectCompany: compactMonthlyCapacityCompany,
+  cacheDirectory: path.join(DATA_DIR, "company_integrated", "saved_recovery_units"),
+  cacheVersion: crypto.createHash("sha256").update(monthlyCompanySourceVersion).update(fs.readFileSync(__filename)).digest("hex"),
+  useSourceReadValidationBoundary: true,
   applyCompanyManualCorrection, buildHistoryObservations
 });
 const monthlyReportSources = createMonthlyReportSources({
   runWork: runAnalyticalWork,
+  runProductCapacityVerification: async (operation, { request } = {}) => {
+    if (request?.type !== "industry") return operation();
+    const sourceRevision = await readMonthlyReportRevision();
+    require("./lib/cooperative_work_checkpoint.cjs").setCooperativeWorkRevision(sourceRevision);
+    return productCapacityStore.withDescriptorVerificationScope({ sourceRevision, assertCurrent: async () => {
+      if (await readMonthlyReportRevision() !== sourceRevision) throw Object.assign(new Error("MONTHLY_COMPANY_SOURCE_CHANGED"), { code: "MONTHLY_COMPANY_SOURCE_CHANGED" });
+    } }, operation);
+  },
   dataDir: DATA_DIR,
   observationIndex: historyObservationIndex,
   regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
@@ -637,6 +649,15 @@ const monthlyReportSources = createMonthlyReportSources({
   // one independent frozen copy per verified generation; full bodies stay local.
   shareFrozenCatalogMetadata: true,
   companySourceVersion: monthlyCompanySourceVersion,
+  // A source read that yielded during witness publication has already finished
+  // its expensive original/recovery prefix. Reuse that verified derived candidate
+  // only after a fresh catalog and temporal capacity-evidence validation.
+  industrySourceCandidateCacheEnabled: true,
+  industrySourceCandidateCacheVersion: crypto.createHash("sha256").update(monthlyCompanySourceVersion)
+    .update(fs.readFileSync(__filename))
+    .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_company_recalculation.cjs")))
+    .update(fs.readFileSync(path.join(__dirname, "lib", "industry_source_candidate_cache.cjs"))).digest("hex"),
+  readPersistedProductCapacityEvidence: (companies, options) => productCapacityStore.readForCompanies(companies, options),
   prepareCompanies: companyCapacityRegistry.prepareCompanies,
   projectObservation: (row, company) => {
     const value = companyHistoryObservationWithCurrentCapacity(row, company);
@@ -19391,6 +19412,8 @@ async function route(req, res) {
       return send(res, 200, { work: analyticalWork.status(), memory: analyticalMemory.status(),
         monthlySources: typeof monthlyReportSources.sourceReadMetrics === "function" ? monthlyReportSources.sourceReadMetrics() : null,
         monthlyRecalculation: recalculateMonthlyCompanyObservations.stats(),
+        savedProductRecovery: typeof savedProductRecovery.stats === "function" ? savedProductRecovery.stats() : null,
+        productCapacityVerification: typeof productCapacityStore.stats === "function" ? productCapacityStore.stats() : null,
         observationIndex: { ready: Number.isSafeInteger(historyIndex.generation), generation: historyIndex.generation ?? null,
           rows: historyIndex.rows ?? null, sourceBytes: historyIndex.source?.size ?? null, mode: historyIndex.mode || null,
           stats: historyObservationIndex.stats() } });

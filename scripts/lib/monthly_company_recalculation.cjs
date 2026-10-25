@@ -233,7 +233,8 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
     }
     const scopedCompanyIds = scopedCompanies.map(company => company.companyId);
     setCooperativeWorkPhase(41);
-    const result = [], productCapacityEvidence = readProductCapacityEvidence ? await readProductCapacityEvidence(request, data, { companyIds: scopedCompanyIds, checkpoint }) : [];
+    const result = [], productCapacityEvidence = readProductCapacityEvidence ? await readProductCapacityEvidence(request, data, { companyIds: scopedCompanyIds, checkpoint,
+      ...(boundary ? { sourceReadValidationBoundary: boundary } : {}) }) : [];
     if (!Array.isArray(productCapacityEvidence)) throw unavailable();
     const persisted = readPersistedProductCapacityEvidence ? await readPersistedProductCapacityEvidence(scopedCompanies, { checkpoint }) : { evidence: [], warnings: [] };
     if (!Array.isArray(persisted?.evidence) || !Array.isArray(persisted?.warnings)
@@ -276,6 +277,8 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
     }
     setCooperativeWorkPhase(43);
     if (recalculateAllInventory) {
+      Object.defineProperty(result, "persistedProductCapacityInput", { value: { companyIds: scopedCompanyIds,
+        evidence: persisted.evidence, warnings: persisted.warnings }, enumerable: false });
       Object.defineProperty(result, "productCapacityEvidence", { value: productCapacityEvidence, enumerable: false });
       Object.defineProperty(result, "productCapacityWarnings", { value: productCapacityWarnings, enumerable: false });
       Object.defineProperty(result, "productCapacityEvidenceRevision", { value: productCapacityEvidenceRevision(productCapacityEvidence, scopedCompanyIds,

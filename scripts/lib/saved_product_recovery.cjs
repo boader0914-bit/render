@@ -2,7 +2,8 @@
 
 // A saved-evidence overlay, never a collector or an edit of original history.
 const fs = require("node:fs/promises"), native = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
-const { observedProductCapacityEvidence, withProductCapacityBaseline } = require("./product_capacity_baseline.cjs");
+const { observedProductCapacityEvidence, withProductCapacityBaseline, productCapacityEvidenceRevision } = require("./product_capacity_baseline.cjs");
+const { createMonthlyReportMaterializedCache } = require("./monthly_report_materialized_cache.cjs");
 const KIND = "saved_product_recovery_v1", HEX = /^[a-f0-9]{64}$/;
 const object = value => value && typeof value === "object" && !Array.isArray(value);
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -106,12 +107,86 @@ function runIds(company) {
 }
 
 function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir || "", "outputs"), projectCompany = value => value,
-  applyCompanyManualCorrection, buildHistoryObservations, now = () => new Date() } = {}) {
+  applyCompanyManualCorrection, buildHistoryObservations, now = () => new Date(), cacheDirectory = null,
+  cacheVersion = "saved-product-recovery-cache-v1", useSourceReadValidationBoundary = false, maxCachedUnitBytes = 6 * 1024 * 1024 } = {}) {
   if (!dataDir || !outputsDir || [projectCompany, applyCompanyManualCorrection, buildHistoryObservations, now].some(value => typeof value !== "function")) throw new TypeError("Saved product recovery dependencies are required");
+  if (typeof useSourceReadValidationBoundary !== "boolean" || typeof cacheVersion !== "string" || !cacheVersion
+    || !Number.isSafeInteger(maxCachedUnitBytes) || maxCachedUnitBytes < 128 || maxCachedUnitBytes > 6 * 1024 * 1024) throw new TypeError("Invalid saved recovery cache options");
   const root = path.resolve(outputsDir), directory = path.join(path.resolve(dataDir), "history", "saved_product_recoveries");
+  const dependencyVersion = recoveryRowDigest([cacheVersion, maxCachedUnitBytes, hash(native.readFileSync(__filename)),
+    ...[projectCompany, applyCompanyManualCorrection, buildHistoryObservations].map(value => Function.prototype.toString.call(value))]);
+  const unitCaches = cacheDirectory ? Object.fromEntries(["evidence", "rows"].map(kind => [kind,
+    createMonthlyReportMaterializedCache({ directory: path.join(cacheDirectory, kind === "evidence" ? "receipt_capacity" : "receipt_rows"),
+      maxEntries: 2048, maxBytes: 64 * 1024 * 1024, maxEntryBytes: maxCachedUnitBytes + 16 * 1024, compression: "gzip" })])) : null;
+  const metrics = { evidenceHits: 0, evidenceBuilds: 0, rowHits: 0, rowBuilds: 0, oversizeFallbacks: 0, boundaryBypasses: 0, invalidCacheFallbacks: 0,
+    sourceReads: 0, sourceFileReads: 0 };
+  const uncachedUnit = Symbol("oversize-verified-recovery-unit");
   let serial = Promise.resolve();
   const schedule = operation => { const pending = serial.then(operation); serial = pending.then(() => undefined, () => undefined); return pending; };
+  function boundaryFor(data, boundary) {
+    if (!unitCaches || !useSourceReadValidationBoundary || !boundary) return null;
+    need(boundary.owner === data._companySource && boundary.revision === data._companySource?.revision
+      && typeof boundary.revision === "string" && boundary.revision && typeof boundary.isActive === "function" && boundary.isActive()
+      && typeof data._companySource.assertCurrent === "function", "RECOVERY_SOURCE_BOUNDARY_INVALID");
+    return () => {
+      need(boundary.owner === data._companySource && boundary.revision === data._companySource?.revision && boundary.isActive(), "RECOVERY_SOURCE_BOUNDARY_INVALID");
+      return boundary.revision;
+    };
+  }
+  function validDerived(value, kind, saved, company, month) {
+    if (!Array.isArray(value)) return false;
+    if (kind === "evidence") return value.every(row => row?.companyId === company.companyId && row.runId === saved.runId
+      && row.collectedAt === saved.collectedAt && row.source === "certified_saved_product_response"
+      && ["lodging", "dayuse"].includes(row.productType) && identifier(row.productId) && Number.isSafeInteger(row.count) && row.count > 0
+      && saved.verifiedDates[row.productType]?.includes(row.sourceDate));
+    const sourceDigest = recoveryRowDigest({ receiptId: saved.receiptId, sourceFiles: saved.sourceFiles });
+    return value.every(entry => entry?.row?.companyId === company.companyId && entry.row.companyKey === company.companyId
+      && entry.row.runId === saved.runId && entry.row.collectedAt === saved.collectedAt
+      && date(entry.row.stayDate)?.startsWith(month + "-") && Number(entry.row.inventoryEvidenceVersion) >= 4
+      && entry.certificate?.kind === KIND && entry.certificate.companyId === company.companyId && entry.certificate.runId === saved.runId
+      && entry.certificate.date === entry.row.stayDate && entry.certificate.productType === entry.row.productType
+      && entry.certificate.collectedAt === saved.collectedAt && entry.certificate.originalRunQuality === "unknown"
+      && entry.certificate.receiptId === saved.receiptId && entry.certificate.sourceDigest === sourceDigest
+      && entry.certificate.rowDigest === recoveryRowDigest(entry.row));
+  }
+  async function readDerivedUnit({ kind, request, scope, saved, company, data, boundary, derive, readEntry,
+    productCapacityEvidence = [], productCapacityWarnings = [] }) {
+    const assertBoundary = boundaryFor(data, boundary), cache = unitCaches?.[kind];
+    if (!assertBoundary || !cache) { metrics.boundaryBypasses++; return derive(await readEntry()); }
+    const warnings = productCapacityWarnings.filter(row => row?.companyId === company.companyId);
+    const capacityRevision = kind === "rows" ? productCapacityEvidenceRevision(productCapacityEvidence, [company.companyId], saved.collectedAt, warnings) : null;
+    const correctionRevision = recoveryRowDigest(projectCompany(company));
+    const readRevision = async () => recoveryRowDigest([assertBoundary(), dependencyVersion, saved.checksum, correctionRevision, capacityRevision, warnings]);
+    const key = JSON.stringify(["saved-derived-recovery-v1", dependencyVersion, kind, scope, company.companyId, saved.receiptId]);
+    const metadata = { kind, companyId: company.companyId, receiptId: saved.receiptId, runId: saved.runId, month: request.month };
+    try {
+      const result = await cache.getOrBuild({ key, readRevision, build: async () => {
+        metrics[kind === "evidence" ? "evidenceBuilds" : "rowBuilds"]++;
+        const derived = derive(await readEntry());
+        need(validDerived(derived, kind, saved, company, request.month), "RECOVERY_DERIVED_UNIT_INVALID");
+        const value = { ...metadata, derived };
+        if (Buffer.byteLength(JSON.stringify(value)) > maxCachedUnitBytes) throw { [uncachedUnit]: true, value };
+        return value;
+      } });
+      assertBoundary();
+      if (Buffer.byteLength(JSON.stringify(result.value)) > maxCachedUnitBytes) {
+        metrics.oversizeFallbacks++;
+        const value = derive(await readEntry()); assertBoundary(); return value;
+      }
+      if (Object.entries(metadata).some(([key, value]) => result.value?.[key] !== value)
+        || !validDerived(result.value?.derived, kind, saved, company, request.month)) {
+        metrics.invalidCacheFallbacks++;
+        const value = derive(await readEntry()); assertBoundary(); return value;
+      }
+      if (result.status !== "calculated") metrics[kind === "evidence" ? "evidenceHits" : "rowHits"]++;
+      return result.value.derived;
+    } catch (error) {
+      if (!error?.[uncachedUnit]) throw error;
+      assertBoundary(); metrics.oversizeFallbacks++; return error.value.derived;
+    }
+  }
   async function readFile(relativePath, limit) {
+    metrics.sourceFileReads++;
     relative(relativePath);
     const file = path.resolve(root, ...relativePath.split("/")), inside = path.relative(root, file);
     need(inside && !inside.startsWith("..") && !path.isAbsolute(inside), "RECOVERY_ARTIFACT_PATH_INVALID");
@@ -148,6 +223,7 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
       "RECOVERY_PROVIDER_ID_AMBIGUOUS");
   }
   async function source(runId, company, all, expected = null) {
+    metrics.sourceReads++;
     need(identifier(runId), "RECOVERY_RUN_ID_INVALID");
     const files = [], used = new Map(); let totalBytes = 0;
     const read = async (name, limit) => {
@@ -320,12 +396,14 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
       && recoveryRowDigest(receiptCore(value)) === receiptId && instant(value.collectedAt), "RECOVERY_RECEIPT_INVALID");
     return value;
   }
-  async function walkVerified(request, data, consume, { companyIds = null, checkpoint = async () => {} } = {}) {
+  async function walkVerified(request, data, consume, { companyIds = null, checkpoint = async () => {}, sourceReadValidationBoundary = null,
+    unitKind = null, derive = value => value, productCapacityEvidence = [], productCapacityWarnings = [] } = {}) {
     if (typeof checkpoint !== "function") throw new TypeError("Recovery read checkpoint must be a function");
     const all = companies(data), warnings = [];
     need(/^\d{4}-(?:0[1-9]|1[0-2])$/.test(request?.month), "RECOVERY_REQUEST_INVALID");
     const targetIds = companyIds ? new Set(companyIds) : null;
     const targets = all.filter(value => (!targetIds || targetIds.has(value.companyId)) && (request.type !== "company" || value.companyId === request.targetId));
+    const scope = recoveryRowDigest([request.type || "", request.targetId || "", request.month, request.cutoffDate || "", targets.map(company => company.companyId).sort()]);
     await checkCatalog(data);
     for (const company of targets) {
       await checkpoint();
@@ -342,13 +420,16 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
           const saved = await receipt(path.join(targetDirectory, name), name.slice(0, -5), company.companyId, request.month);
           const run = data.runs.find(value => String(value.id || value.runId || "") === saved.runId);
           need(run && quality(run) === "unknown", "RECOVERY_RUN_NOT_LEGACY");
-          await verifyFiles(saved.sourceFiles);
+          const readEntry = async () => {
+            await verifyFiles(saved.sourceFiles); await checkpoint();
+            const value = await source(saved.runId, company, all, saved); await checkpoint();
+            await verifyFiles(saved.sourceFiles); await checkpoint();
+            return { saved, value, company };
+          };
+          const derived = unitKind ? await readDerivedUnit({ kind: unitKind, request, scope, saved, company, data, boundary: sourceReadValidationBoundary,
+            derive, readEntry, productCapacityEvidence, productCapacityWarnings }) : derive(await readEntry());
           await checkpoint();
-          const value = await source(saved.runId, company, all, saved);
-          await checkpoint();
-          await verifyFiles(saved.sourceFiles);
-          await checkpoint();
-          await consume({ saved, value, company });
+          await consume(derived);
           await checkpoint();
         } catch (error) {
           // A previously certified input disappearing/changing is a failed
@@ -388,22 +469,25 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
     }
     for (const month of [...months].sort()) {
       await checkpoint();
-      await walkVerified({ ...request, month }, data, entry => { evidence.push(...entryCapacityEvidence(entry)); }, options);
+      await walkVerified({ ...request, month }, data, rows => { evidence.push(...rows); }, { ...options, unitKind: "evidence", derive: entryCapacityEvidence });
     }
     return evidence;
   }
-  async function read(request, data, { productCapacityEvidence = [], checkpoint = async () => {} } = {}) {
+  async function read(request, data, { productCapacityEvidence = [], productCapacityWarnings = [], checkpoint = async () => {}, sourceReadValidationBoundary = null } = {}) {
     if (typeof checkpoint !== "function") throw new TypeError("Recovery read checkpoint must be a function");
-    const observations = [], evidence = [...productCapacityEvidence, ...await capacityEvidence(request, data, { checkpoint })];
-    const verified = await walkVerified(request, data, ({ saved, value, company }) => {
+    need(Array.isArray(productCapacityWarnings), "RECOVERY_CAPACITY_WARNINGS_INVALID");
+    const observations = [], evidence = [...productCapacityEvidence, ...await capacityEvidence(request, data, { checkpoint, sourceReadValidationBoundary, productCapacityWarnings })];
+    const derive = ({ saved, value, company }) => {
       const rows = build(value, company, request.month, saved.runId, evidence);
-      for (const row of rows) observations.push({ row, certificate: { kind: KIND, companyId: company.companyId, runId: saved.runId,
+      return rows.map(row => ({ row, certificate: { kind: KIND, companyId: company.companyId, runId: saved.runId,
         date: row.stayDate, productType: row.productType, collectedAt: saved.collectedAt, originalRunQuality: "unknown", receiptId: saved.receiptId,
-        sourceDigest: recoveryRowDigest({ receiptId: saved.receiptId, sourceFiles: saved.sourceFiles }), rowDigest: recoveryRowDigest(row) } });
-    }, { checkpoint });
+        sourceDigest: recoveryRowDigest({ receiptId: saved.receiptId, sourceFiles: saved.sourceFiles }), rowDigest: recoveryRowDigest(row) } }));
+    };
+    const verified = await walkVerified(request, data, rows => { observations.push(...rows); }, { checkpoint, sourceReadValidationBoundary,
+      unitKind: "rows", derive, productCapacityEvidence: evidence, productCapacityWarnings });
     await checkCatalog(data); return { observations, warnings: verified.warnings, productCapacityEvidence: evidence };
   }
-  return { recover: (input, data) => schedule(() => recoverOwned(input, data)), read, capacityEvidence, directory };
+  return { recover: (input, data) => schedule(() => recoverOwned(input, data)), read, capacityEvidence, directory, stats: () => ({ ...metrics }) };
 }
 
 module.exports = { createSavedProductRecovery, recoveryRowDigest };
