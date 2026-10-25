@@ -666,7 +666,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, catalogCache
       const metadata = await catalogCached(companyId, { budgetMs: remaining(350), signal });
       if (!currentState() || !metadataValid(metadata) || !matchingStoredInputs(selected, companyId, selectedMonth, cutoffDate, metadata)) return miss();
       stage = "source_revision";
-      const prepared = await readRevision.prepareFreshCached({ scope, budgetMs: remaining(500), signal });
+      const prepared = await readRevision.prepareFreshCached({ scope, budgetMs: remaining(500), signal, metadataPasses: 1 });
       if (!prepared || !currentState()) return miss();
       const revision = await readRevision.forScope(prepared, scope);
       if (typeof revision !== "string" || !revision.trim() || revision.length > 256) return miss();
@@ -703,7 +703,7 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, catalogCache
         // capacity and their cached-index identity. It also fences membership,
         // merges and metadata, without repeating the compact-catalog scan.
         stage = "post_source_revision";
-        const after = await readRevision.prepareFreshCached({ scope, budgetMs: remaining(500), signal });
+        const after = await readRevision.prepareFreshCached({ scope, budgetMs: remaining(500), signal, metadataPasses: 1 });
         if (!after || !currentState() || await readRevision.forScope(after, scope) !== revision || !await filesCurrent() || !currentState()) return miss();
         const result = readResult(companyId, metadata, { selectedMonth, selected, rows, refreshedProof: proof });
         if (!currentState()) return miss();

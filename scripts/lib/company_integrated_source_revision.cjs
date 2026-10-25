@@ -420,9 +420,10 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
   // asynchronous checkpoint. It must never join prepare's chain, rebuild an
   // index, read original JSON bodies, or publish any file. An uncertain or slow
   // metadata inspection is a miss, leaving the normal serialized path intact.
-  async function prepareFreshCached({ scope, budgetMs = 500, signal } = {}) {
+  async function prepareFreshCached({ scope, budgetMs = 500, signal, metadataPasses = 2 } = {}) {
     if (!scope || typeof scope.companyId !== "string" || !monthValid(scope.month)
-      || !Number.isFinite(budgetMs) || budgetMs <= 0 || budgetMs > 500) return null;
+      || !Number.isFinite(budgetMs) || budgetMs <= 0 || budgetMs > 500
+      || metadataPasses !== 1 && metadataPasses !== 2) return null;
     const snapshot = cached, indexSignature = cachedIndexStat;
     if (!initialized || !snapshot || !indexSignature || snapshot.version !== VERSION
       || snapshot.configuration !== configuration || snapshot.prepared?.version !== VERSION
@@ -483,10 +484,12 @@ function createCompanyIntegratedSourceRevision({ dataDir, outputsDir, regionMast
         if (bytes > 2 * 1024 * 1024) throw miss;
       };
       bounded(scoped); const result = structuredClone(scoped); checkpoint();
-      // All non-run metadata stays conservative and global. Recheck every
-      // selected run tree and the durable index after cloning, so cross-file
-      // publications or a concurrent prepare cannot certify a mixed view.
-      if (!sameMetadata((await inventory(checkpoint, runIds)).metadata) || !await indexUnchanged()) return null;
+      // Standalone calls inspect every dependency on both sides of the clone.
+      // The explicit one-pass capability is only for a caller that pairs a
+      // pre-publication call with a fresh post-publication call under the same
+      // analytical owner, compares their scoped tokens, and rejects either miss.
+      // Each half still checks the durable index identity on both sides.
+      if (metadataPasses === 2 && !sameMetadata((await inventory(checkpoint, runIds)).metadata) || !await indexUnchanged()) return null;
       checkpoint(); return result;
     } catch { return null; }
   }

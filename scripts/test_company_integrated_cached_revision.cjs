@@ -164,3 +164,31 @@ test("every retained witness descriptor remains a dependency even when compact e
   const oldShape = createCompanyIntegratedSourceRevision(f.options); await oldShape.prepare(); f.control.noBodies = true;
   assert.equal(await oldShape.prepareFreshCached({ scope: request }), null, "Unknown descriptor coverage in an older validated index is a miss");
 });
+
+test("explicit paired preparation scans once per half while standalone calls keep both fresh inspections", async t => {
+  const f = await fixture(t), reader = createCompanyIntegratedSourceRevision(f.options), request = scope();
+  const full = await reader.prepare(); let inspections = 0;
+  f.control.lstat = async file => { if (path.resolve(file) === path.join(f.root, "outputs", "run_100", "manifest.json")) inspections++; };
+  f.control.noBodies = true;
+  const standalone = await reader.prepareFreshCached({ scope: request }); assert.ok(standalone); assert.equal(inspections, 2);
+  inspections = 0;
+  const before = await reader.prepareFreshCached({ scope: request, metadataPasses: 1 });
+  const after = await reader.prepareFreshCached({ scope: request, metadataPasses: 1 });
+  assert.ok(before); assert.ok(after); assert.equal(inspections, 2, "The paired owner performs exactly the two required dependency inspections");
+  assert.equal(reader.forScope(before, request), reader.forScope(full, request));
+  assert.equal(reader.forScope(after, request), reader.forScope(before, request));
+  assert.equal(await reader.prepareFreshCached({ scope: request, metadataPasses: 0 }), null);
+  assert.equal(await reader.prepareFreshCached({ scope: request, metadataPasses: "1" }), null);
+  await f.write("outputs/run_100/new-response.json", { changed: true });
+  assert.equal(await reader.prepareFreshCached({ scope: request, metadataPasses: 1 }), null, "A changed original between publication halves invalidates the pair");
+});
+
+test("a paired post-publication inspection rejects a source change that raced the first single pass", async t => {
+  const f = await fixture(t), reader = createCompanyIntegratedSourceRevision(f.options), request = scope();
+  await reader.prepare(); f.control.noBodies = true; let changed = false;
+  f.control.readdir = async file => { if (!changed && path.resolve(file) === path.join(f.root, "outputs", "run_100")) {
+    changed = true; await fs.appendFile(path.join(f.root, "history", "observations.jsonl"), "changed-after-first-stat\n");
+  } };
+  assert.ok(await reader.prepareFreshCached({ scope: request, metadataPasses: 1 }), "One half alone is not the complete publication certificate");
+  assert.equal(await reader.prepareFreshCached({ scope: request, metadataPasses: 1 }), null);
+});

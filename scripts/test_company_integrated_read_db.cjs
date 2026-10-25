@@ -195,8 +195,12 @@ test('the web verification option preserves ordinary unobserved-period behavior 
 test('bounded cache-only verification advances only the current proof generation and returns the complete real normal envelope',async t=>{
   const f=await fixture(t,{cached:true});await staleProof(f);
   const reads=f.reads.length,queue=await fs.readFile(f.queueFile),month=await fs.readFile(f.monthFile),preserved=await fs.readFile(f.preserved);
+  const inspections=[];f.state.beforeCachedRevision=settings=>inspections.push(settings);
   const cached=await f.service.tryCachedMonth(ID,{month:MONTH});
   assert.ok(cached);assert.equal(cached.status,'ready');assert.equal(cached.freshness.selectedMonthVerified,true);
+  assert.equal(inspections.length,2,'the engine requires source inspections both before and after atomic proof publication');
+  assert.ok(inspections.every(settings=>settings.metadataPasses===1&&settings.budgetMs>0&&settings.budgetMs<=500),
+    'each side uses one complete metadata pass within the unchanged total budget instead of duplicating both sides');
   assert.deepEqual(cached,await f.service.get(ID,{month:MONTH}),'the fast capability shares the exact normal response formatter');
   assert.equal(f.reads.length,reads,'no raw source or comparison calculation runs');
   assert.equal(cached.snapshot.daily.find(row=>row.date==='2026-09-04').lodging.sold,null);
@@ -271,11 +275,12 @@ test('the real cached source provider and wrapper certify during a background ch
   assert.deepEqual(await fs.readFile(f.queueFile),queue);assert.deepEqual(await fs.readFile(f.monthFile),month);
 });
 
-test('the final real source inspection detects review, deletion, merge and capacity races without a duplicate metadata read',async t=>{
-  for(const change of ['review','deleted','merged','capacity']){
+test('the final real source inspection detects review, deletion, merge, capacity and raw-source races without a duplicate metadata read',async t=>{
+  for(const change of ['review','deleted','merged','capacity','raw']){
     const f=await realRevisionFixture(t),month=await fs.readFile(f.monthFile),queue=await fs.readFile(f.queueFile),rename=fs.rename;let changed=false;
     fs.rename=async(from,to)=>{const result=await rename(from,to);if(to===f.proofFile&&!changed){changed=true;
-      if(change==='capacity')await f.write(f.root,'company_integrated/capacity-bases.json',{schemaVersion:1,companies:{[ID]:{count:20}}});
+      if(change==='raw')await f.write(f.root,'outputs/run/products.json',{changedSavedProduct:{count:20}});
+      else if(change==='capacity')await f.write(f.root,'company_integrated/capacity-bases.json',{schemaVersion:1,companies:{[ID]:{count:20}}});
       else{const file=path.join(f.root,'company_master/companies.json'),master=JSON.parse(await fs.readFile(file,'utf8'));
         if(change==='review')master.companies[ID].manualCorrection.revision=2;
         if(change==='deleted')master.companies[ID].deletedAt='2026-10-25T01:00:00Z';
