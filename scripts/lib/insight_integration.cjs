@@ -10,6 +10,7 @@ const { POLICY_VERSION, insightPolicies } = require('./insight_policy.cjs');
 const { createInsightAdminStore } = require('./insight_admin_store.cjs');
 const { createInsightAdminProvisioning } = require('./insight_admin_provisioning.cjs');
 const { createInsightCatalog } = require('./insight_catalog.cjs');
+const { projectIndustryMetadata, projectCapacityMetadata } = require('./insight_comparison_metadata.cjs');
 // Match the existing reviewed-room convention without invoking capacity/history
 // preparation merely to authenticate or display a company's identity.
 function reviewedRooms(company) {
@@ -39,11 +40,17 @@ function createInsightIntegration({ dataDir, readCatalog, readMembers, authentic
   if(metadataCatalog)void metadataCatalog.prepare().catch(()=>{});
   async function catalog() {
     const data = await (metadataCatalog?metadataCatalog.catalog():readCatalog());
-    return { regions: data.regions, companies: data.companies.map(row => {
+    return { regions: data.regions, regionHierarchy:data.regionHierarchy||{}, companies: data.companies.map(row => {
       const raw = data.rawCompanies.get(row.companyId);
       const reviewedProfile = raw.adminProfile?.active === true ? raw.adminProfile : {};
+      // The fast catalog already projected the stored category evidence. The
+      // full development adapter retains the same explicit raw category fields.
+      const industry=Array.isArray(row.industryTags)&&Array.isArray(row.industryEvidence)?{
+        industryTags:row.industryTags,industryEvidence:row.industryEvidence,industrySource:row.industrySource
+      }:projectIndustryMetadata(raw);
       const company = { companyId: row.companyId, name: reviewedProfile.primaryName || row.primaryName, address: reviewedProfile.address || String(typeof raw.addresses?.[0] === 'string' ? raw.addresses[0] : raw.addresses?.[0]?.address || row.regionLabel),
-        placeIds: row.placeIds, regionKey: row.regionKey, regionLabel: row.regionLabel, rooms: row.capacity,
+        placeIds: row.placeIds, regionKey: row.regionKey, regionLabel: row.regionLabel, ...projectCapacityMetadata(row),
+        ...industry,
         roomCountSource: row.capacitySource, dayUse: 'unknown', facilities: (raw.manualCorrection?.facilityTags || []).join(', '),
         observedAt: raw.inventory?.latest?.collectedAt || null };
       return { ...company, version: hash(JSON.stringify({ company, correctionAt: raw.manualCorrection?.updatedAt || null })) };

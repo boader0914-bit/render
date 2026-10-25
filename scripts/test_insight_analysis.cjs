@@ -28,11 +28,11 @@ test('region projection retains observed zero, source periods and safe URLs, nev
   assert.throws(()=>projectRegion(regions[0],'2026-09',{networkAttempted:true}),{code:'READ_ONLY_SOURCE_REQUIRED'});
 });
 test('briefing compares matching stay dates and observation dates only and shows evidence before actions',()=>{
-  const own={...companies[0],kind:'own',relationStatus:'active',days:days(2)},other={...companies[1],kind:'competitor',days:days(4)};
-  const r=buildBriefing([own,other],[],{today:'2026-10-02',ownId:'c0'});
+  const own={...companies[0],kind:'own',relationStatus:'active',industryTags:['glamping'],days:days(2)},other={...companies[1],regionKey:companies[0].regionKey,industryTags:['glamping'],comparisonPurpose:'direct',kind:'competitor',days:days(4)};
+  const r=buildBriefing([own,other],[],{today:'2026-10-02',ownId:'c0',observationPolicy:{confirmed:true,maxSkewMs:3600000}});
   assert.equal(r.comparisons[0].commonDays,10);assert.equal(r.comparisons[0].gapPp,-20);assert.ok(r.actions.some(a=>a.key==='compare'));assert.equal(r.published,false);
   other.days[0].collectedAt='2026-10-01T01:00:00Z';other.days[1].partial=true;other.days[2].missing=true;other.days[3].total=0;
-  const limited=buildBriefing([own,other],[],{today:'2026-10-02',ownId:'c0'});assert.equal(limited.comparisons[0].commonDays,6);assert.ok(!limited.actions.some(a=>a.key==='compare'));assert.ok(limited.actions.some(a=>a.key==='comparison_data'));
+  const limited=buildBriefing([own,other],[],{today:'2026-10-02',ownId:'c0',observationPolicy:{confirmed:true,maxSkewMs:3600000}});assert.equal(limited.comparisons[0].commonDays,7);assert.equal(limited.comparisons[0].comparable,false);assert.ok(!limited.actions.some(a=>a.key==='compare'));assert.ok(limited.actions.some(a=>a.key==='comparison_data'));
   assert.equal(limited.companies[0].days,undefined,'raw days remain behind company evidence view');
 });
 test('partial prices and stale observations do not become complete revenue or a current action signal',()=>{
@@ -41,7 +41,8 @@ test('partial prices and stale observations do not become complete revenue or a 
   own.days[1].inventoryConflict=true;
   for(const d of other.days)d.collectedAt='2026-09-01T01:00:00Z';
   const r=buildBriefing([own,other],[],{today:'2026-10-02',ownId:'c0'});
-  assert.equal(r.companies[0].summary.days,9);
+  assert.equal(r.companies[0].summary.days,10,'a capacity conflict holds the rate but preserves internally consistent quantity');
+  assert.equal(r.companies[0].summary.reservationRate,null);
   assert.equal(r.companies[0].summary.publicBookings,0);
   assert.equal(r.companies[0].summary.estimatedRevenue,null);
   assert.equal(r.comparisons[0].commonDays,0);

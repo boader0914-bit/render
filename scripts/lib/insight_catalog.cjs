@@ -8,6 +8,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { StringDecoder } = require("node:string_decoder");
 const { readCompanyMasterProjection } = require("./company_master_stream.cjs");
+const { projectIndustryMetadata, regionHierarchyFromUnits } = require("./insight_comparison_metadata.cjs");
 
 const sha = value => crypto.createHash("sha256").update(value).digest("hex");
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -18,7 +19,7 @@ const positive = value => ["number", "string"].includes(typeof value) && String(
 const text = (value, limit = 2000) => typeof value === "string" && value.length <= limit
   && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value) ? value.trim() : "";
 const object = value => value && typeof value === "object" && !Array.isArray(value);
-const VERSION = "insight-public-catalog-v1:" + sha(native.readFileSync(__filename));
+const VERSION = "insight-public-catalog-v2:" + sha(Buffer.concat([native.readFileSync(__filename),native.readFileSync(require.resolve("./insight_comparison_metadata.cjs"))]));
 function fault(code = "INSIGHT_CATALOG_SOURCE_UNAVAILABLE") {
   return Object.assign(new Error("업체 기본자료를 확인하지 못했습니다. 잠시 후 다시 확인해 주세요."), { code, statusCode: 503 });
 }
@@ -80,7 +81,7 @@ function publicProjection(company, reviewedCapacity) {
   // copied before the stream discards that record and all of its inventory.
   const reviewed = positive(reviewedCapacity(company));
   return {
-    companyId: id, primaryName: text(company.primaryName) || id, reviewed,
+    companyId: id, primaryName: text(company.primaryName) || id, reviewed, ...projectIndustryMetadata(company),
     addresses: (Array.isArray(company.addresses) ? company.addresses : []).map(value => text(typeof value === "string" ? value : value?.address)).filter(Boolean),
     placeIds: [...new Set((Array.isArray(company.placeIds) ? company.placeIds : []).map(value => text(String(value ?? ""), 300)).filter(Boolean))],
     regions: (Array.isArray(company.regions) ? company.regions : []).map(value => text(value, 300)).filter(Boolean),
@@ -106,11 +107,13 @@ function buildValue(master, regionMaster, capacityStore) {
     companies.push({ companyId: id, primaryName: company.primaryName, placeIds: company.placeIds,
       regionKey: region?.regionKey || "", regionKeys: [...new Set([region?.regionKey, region?.provinceRegionKey].filter(Boolean))],
       regionLabel: region?.fullName || "지역 확인 전", capacity: count, capacitySource: label,
-      capacityBasis: { capacity: count, count, source, label, warnings: count ? [] : ["객실 기준 확인 필요"] } });
+      industryTags:company.industryTags,industryEvidence:company.industryEvidence,industrySource:company.industrySource,
+      capacityBasis: { capacity: count, count, source, label, reviewRequired:!count||!company.reviewed&&observed===count&&(saved?.reviewRequired===true||Array.isArray(saved?.warnings)&&saved.warnings.length>0),
+        warnings: count ? [] : ["객실 기준 확인 필요"] } });
     rawCompanies.push([id, { addresses: company.addresses, manualCorrection: company.manualCorrection,
       ...(company.adminProfile ? { adminProfile: company.adminProfile } : {}), inventory: { latest: { collectedAt: company.observedAt } } }]);
   }
-  return { companies, rawCompanies, regions: matcher.regions, runs: [] };
+  return { companies, rawCompanies, regions: matcher.regions, regionHierarchy:regionHierarchyFromUnits(regionMaster.units), runs: [] };
 }
 function asCatalog(value) {
   const result = clone(value); result.rawCompanies = new Map(result.rawCompanies); return result;
