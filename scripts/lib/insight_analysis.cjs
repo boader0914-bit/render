@@ -2,6 +2,7 @@
 const {fault,active}=require('./insight_store.cjs');
 const {shiftMonth,metricsFor}=require('./insight_region_history.cjs');
 const {evaluateComparison,buildComparisonSet,validQuantityDay,summarizeCompany,projectReservationSeries}=require('./insight_comparison.cjs');
+const {buildRegionSummarySelection,projectRegionSummary}=require('./insight_region_summary.cjs');
 const txt=v=>typeof v==='string'?v.slice(0,1500):'';
 const num=v=>typeof v==='number'&&Number.isFinite(v)?v:null;
 const kst=v=>Number.isFinite(Date.parse(v))?new Date(Date.parse(v)+9*3600000).toISOString().slice(0,10):null;
@@ -149,6 +150,33 @@ function buildBriefing(companies,regions,{today,ownId,mode='current',asOf=today,
 function createInsightAnalysis({catalog,collectionResults,savedCollectionResults,readRegionContext,regionPreparation=null,readRegionLocation=async()=>null,now=()=>Date.now()}) {
   const today=()=>new Date(now()+9*3600000).toISOString().slice(0,10);
   const previousMonth=()=>new Date(Date.UTC(Number(today().slice(0,4)),Number(today().slice(5,7))-2,1)).toISOString().slice(0,7);
+  function comparisonRegionSelection(customer,ownId,month=previousMonth(),data) {
+    if(!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month)||month<'2017-12'||month>previousMonth())throw fault('INVALID_MONTH','마감된 월을 마지막 기준월로 선택해 주세요.');
+    return buildRegionSummarySelection(customer,data,{ownId,month});
+  }
+  async function comparisonRegionSummary(selection,data) {
+    const groups=[];
+    for(const group of selection.value.groups) {
+      const item=data.regions.find(row=>row.id===group.region.id&&row.level==='local');
+      if(!item)throw fault('REGION_SUMMARY_SCOPE_CHANGED','등록 지역의 연결이 변경되었습니다. 다시 조회해 주세요.',409);
+      let summary;
+      try {
+        if(!readRegionContext)throw fault('REGION_NOT_READY','지역 자료 연결을 준비 중입니다.',503);
+        const context=await readRegionContext({type:'region',targetId:item.id,month:selection.value.month},data);
+        if(context?.networkAttempted!==false)throw fault('READ_ONLY_SOURCE_REQUIRED','저장된 지역 자료만 연결할 수 있습니다.',503);
+        summary=projectRegionSummary(projectRegion(item,selection.value.month,context),selection.value.month);
+        if(summary.sourceStatus==='unavailable'&&!summary.sourceIssues.length)summary.sourceIssues.push(sourceIssue({scope:'region',regionId:item.id,name:item.label,month:selection.value.month,period:{start:selection.value.month+'-01',end:monthEnd(selection.value.month)},code:'REGION_INDICATOR_UNAVAILABLE'}));
+      } catch(error) {
+        // A cache-only contract violation is not an ordinary missing statistic.
+        // Stop immediately; do not continue through other provider adapters.
+        if(error?.code==='READ_ONLY_SOURCE_REQUIRED'||['INSIGHT_HISTORY_MUST_BE_CACHE_ONLY','MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY'].includes(error?.message))throw fault('READ_ONLY_SOURCE_REQUIRED','저장된 지역 자료만 연결할 수 있습니다.',503);
+        const issue=sourceIssue({scope:'region',regionId:item.id,name:item.label,month:selection.value.month,period:{start:selection.value.month+'-01',end:monthEnd(selection.value.month)},code:error?.code==='REGION_NOT_READY'?'REGION_NOT_READY':'REGION_SOURCE_UNAVAILABLE'});
+        summary=projectRegionSummary({region:item,month:selection.value.month,networkAttempted:false,sources:[],sourceIssues:[issue]},selection.value.month);
+      }
+      groups.push({...group,status:summary.sourceStatus,summary});
+    }
+    return {...selection.value,groups};
+  }
   async function region(customer,regionKey,month=previousMonth(),data) {
     data=data||await catalog();
     const item=data.regions.find(r=>r.id===regionKey&&r.level==='local');
@@ -220,6 +248,6 @@ function createInsightAnalysis({catalog,collectionResults,savedCollectionResults
     if(savedOnly){sourceTimes.sort();report.calculation={mode:'saved_only',status:'pending',oldestSourceCalculatedAt:sourceTimes[0]||null,latestSourceCalculatedAt:sourceTimes.at(-1)||null};}
     return report;
   }
-  return {region,briefing,preparation};
+  return {region,briefing,preparation,comparisonRegionSelection,comparisonRegionSummary};
 }
 module.exports={createInsightAnalysis,regionIds,readableRegionIds,projectRegion,buildBriefing,pairComparison};

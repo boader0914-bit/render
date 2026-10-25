@@ -3,6 +3,7 @@ const crypto = require('node:crypto');
 const { performance } = require('node:perf_hooks');
 const { fault, fields, hash, active } = require('./insight_store.cjs');
 const {readableRegionIds}=require('./insight_analysis.cjs');
+const {comparisonRegionBindings}=require('./insight_region_summary.cjs');
 const csrf = token => crypto.createHmac('sha256', token).update('insight-csrf-v1').digest('base64url');
 const equal = (a, b) => crypto.timingSafeEqual(Buffer.from(hash(a || '')), Buffer.from(hash(b || '')));
 async function body(req) {
@@ -92,7 +93,7 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
     const companies = data.companies.filter(row => allowed.has(row.companyId));
     const regionKeys = readableRegionIds(customer,data);
     const unlimited=customer.accountKind==='admin_preview';
-    return { customer, companies, regions: data.regions.filter(row => regionKeys.has(row.id)), corrections: store.corrections(customer.customerId),
+    return { customer, companies, regions: data.regions.filter(row => regionKeys.has(row.id)), comparisonRegionBindings:comparisonRegionBindings(customer,data), corrections: store.corrections(customer.customerId),
       registrationAllowance:{ownLimit:unlimited?null:1,competitorLimit:unlimited?null:customer.entitlements.competitorLimit,interestRegionLimit:unlimited?null:customer.entitlements.interestRegionLimit},
       preparations: store.requests(customer.customerId), collectionAllowance:store.collectionAllowance(customer.customerId), features: { weeklyReports: false, reportDelivery: false, directCollection: Boolean(preparationBridge && collectionResults), dataPreparationRequests: true } };
   }
@@ -160,6 +161,23 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
         }
         const result=await analysis.preparation(c,tail.split('/')[2],month,req.method==='POST');
         json(res,req.method==='POST'&&['queued','running'].includes(result.job?.status)?202:200,result);
+      }
+      else if(req.method==='GET' && tail==='/regions/comparison-summary') {
+        if(!analysis?.comparisonRegionSelection||!analysis?.comparisonRegionSummary)throw fault('REGION_NOT_READY','지역 자료 연결을 준비 중입니다.',503);
+        if([...url.searchParams.keys()].some(key=>!['ownId','month'].includes(key))||url.searchParams.getAll('ownId').length>1||url.searchParams.getAll('month').length>1
+          ||url.searchParams.has('ownId')&&!/^[a-zA-Z0-9_-]{1,200}$/.test(url.searchParams.get('ownId'))||url.searchParams.has('month')&&!/^20\d{2}-(0[1-9]|1[0-2])$/.test(url.searchParams.get('month')))throw fault('INVALID_FIELDS','등록한 내 매장과 마감월만 선택해 주세요.');
+        const ownId=url.searchParams.get('ownId')||null,month=url.searchParams.get('month')||undefined;
+        if(scope?.verify)await scope.verify();
+        const data=await catalog(),current=scope?.current?scope.current():store.get(c.customerId);
+        const selection=analysis.comparisonRegionSelection(current,ownId,month,data),value=await analysis.comparisonRegionSummary(selection,data);
+        // The catalog and membership can both change while saved indicators
+        // are loading. Re-derive the entire registration/mapping boundary, then
+        // serialize in the same turn as the final fresh session/customer check.
+        const latestData=await catalog();
+        if(scope?.verify)await scope.verify();
+        const latest=scope?.current?scope.current():store.get(c.customerId),checked=analysis.comparisonRegionSelection(latest,ownId,month,latestData);
+        if(selection.fingerprint!==checked.fingerprint)throw fault('REGION_SUMMARY_SCOPE_CHANGED','등록 업체 또는 지역 연결이 변경되었습니다. 다시 조회해 주세요.',409);
+        json(res,200,value);
       }
       else if(req.method==='GET' && /^\/regions\/[a-zA-Z0-9_-]+\/analysis$/.test(tail)) {
         if(!analysis)throw fault('REGION_NOT_READY','지역 자료 연결을 준비 중입니다.',503);
