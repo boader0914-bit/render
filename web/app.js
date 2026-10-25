@@ -21454,9 +21454,7 @@ function adminDbStatusMatches(row = {}, status = "all") {
   const recrawl = workKey === "recrawl" || reviewStatus === "recrawl_needed";
   const manual = workKey === "manual" || reviewStatus === "manual_needed" || lowConfidence;
   const excluded = reviewStatus === "exclude" || salesCategory === "exclude" || contactStatus === "excluded";
-  const decisionQueueActive = companyDecisionQueueProfile(company).inQueue;
-  const contactReady = (reviewStatus === "contact_ready" || salesCategory === "contact") && !decisionQueueActive && !excluded;
-  if (status === "decision_queue") return decisionQueueActive;
+  if (status === "decision_queue") return companyDecisionQueueProfile(company).inQueue;
   if (status === "needs_work") {
     return lowConfidence
       || unreviewed
@@ -21465,13 +21463,14 @@ function adminDbStatusMatches(row = {}, status = "all") {
       || workKey === "missingRevenue"
       || workKey === "missingReservation"
       || channelReviewNeeded
-      || decisionQueueActive;
+      || companyDecisionQueueProfile(company).inQueue;
   }
   if (status === "low_confidence") return lowConfidence;
   if (status === "unreviewed") return unreviewed;
   if (status === "recrawl") return recrawl;
   if (status === "manual") return manual;
-  if (status === "contact_ready") return contactReady;
+  if (status === "contact_ready") return (reviewStatus === "contact_ready" || salesCategory === "contact")
+    && !excluded && !companyDecisionQueueProfile(company).inQueue;
   if (status === "reviewed") return Boolean(reviewStatus) && !excluded;
   if (status === "excluded") return excluded;
   return true;
