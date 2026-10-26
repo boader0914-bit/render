@@ -7,7 +7,7 @@ function insightCollectionWorkerKey(value) {
   return key;
 }
 function date(value) { return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0,10) === value; }
-function createInsightPreparation({ store, catalog, collectorRequests, verifyStored, readPostprocess = null, findReusable = null, workerKey, now = () => Date.now() }) {
+function createInsightPreparation({ store, catalog, collectorRequests, verifyStored, readPostprocess = null, findReusable = null, workerKey, recurringCollection = null, now = () => Date.now() }) {
   const configuredWorkerKey = insightCollectionWorkerKey(workerKey);
   const running = new Map();
   async function dispatch(customerId, payload, actor) {
@@ -27,16 +27,28 @@ function createInsightPreparation({ store, catalog, collectorRequests, verifySto
     if (!start) { await refreshJob(job); return; }
     // Durable job ID precedes dispatch. Any ambiguous failure is inspected, never blindly resubmitted.
     running.set(job.jobId,true);
+    let externalClaim=false;
     try {
-      const reusable = findReusable ? await findReusable(company.companyId,scope,today) : null;
+      if(recurringCollection){
+        const claim=await recurringCollection.claimExternal(job);
+        if(claim.state==='reusable'&&claim.runId){store.updatePreparationJob(job.jobId,'ready','오늘 같은 업체·조건으로 검증된 자료를 연결했습니다.',{runId:claim.runId,reused:true,errorCode:null});return;}
+        if(claim.state!=='new'){
+          store.updatePreparationJob(job.jobId,'needs_review',claim.state==='busy'?'오늘 같은 업체의 수집이 진행 중입니다. 중복 실행 없이 기존 결과를 기다립니다.':'오늘 같은 업체의 수집 기록을 먼저 확인해야 합니다. 추가 수집하지 않았습니다.',{runId:claim.runId||null,errorCode:claim.errorCode||'RECURRING_TODAY_COLLECTION_REVIEW'});return;
+        }
+        externalClaim=true;
+      }
+      const reusable = !recurringCollection&&findReusable ? await findReusable(company.companyId,scope,today) : null;
       if (reusable) { store.updatePreparationJob(job.jobId,'ready','오늘 같은 조건으로 확보한 업체 자료를 연결했습니다.',{runId:reusable,reused:true}); return; }
-      await collectorRequests.submit({ ...job.scope, keyword:job.keyword, workerKey:job.execution.workerKey, clientRequestId:job.jobId, sourceRole:'admin', collectionSource:'admin_search', trigger:'manual', scheduledCollection:false, searchRegion:'', searchScope:'', bookingRangePlaceLimit:0 });
+      await collectorRequests.submit({ ...job.scope, keyword:job.keyword, targetPlaceId:String(company.placeIds[0]), workerKey:job.execution.workerKey, clientRequestId:job.jobId, sourceRole:'admin', collectionSource:'admin_search', trigger:'manual', scheduledCollection:false, searchRegion:'', searchScope:'', bookingRangePlaceLimit:0 });
       store.updatePreparationJob(job.jobId,'queued',`${WORKER_LABELS[job.execution.workerKey]}에 자료 준비를 접수했습니다.`);
     } catch (error) {
       const known = { COLLECTOR_PROVIDER_BLOCKED:'접근 제한 보호 상태로 수집하지 않았습니다.', COLLECTOR_HALTED:'수집기가 보호 상태라 수집하지 않았습니다.', COLLECTOR_WORKER_RETIRED:'선택된 수집기가 인사이트 서버로 전환되어 접수하지 않았습니다. 관리자 연결 설정을 확인해 주세요.', COLLECTOR_OFFLINE:'수집기 연결을 확인하지 못했습니다.', COLLECTOR_NOT_CONFIGURED:'수집기 연결 설정이 필요합니다.', COLLECTOR_DISK_LOW:'자료 저장공간이 부족합니다.', COLLECTOR_RECOVERY_BUSY:'보존 자료 복구가 진행 중입니다.' };
       store.updatePreparationJob(job.jobId, error.code==='COLLECTOR_PROVIDER_BLOCKED'?'blocked':'needs_review',known[error.code] || '작업 접수 여부를 확인해야 합니다. 자동으로 다시 실행하지 않습니다.',{errorCode:/^[A-Z0-9_]{1,80}$/.test(error.code||'')?error.code:'DISPATCH_UNCONFIRMED'});
     }
-    finally { running.delete(job.jobId); }
+    finally {
+      running.delete(job.jobId);
+      if(externalClaim)try{await recurringCollection.refreshClaim(job.jobId);}catch{store.updatePreparationJob(job.jobId,'needs_review','접수 기록 확인이 필요합니다. 자동으로 다시 수집하지 않습니다.',{errorCode:'RECURRING_RECEIPT_REVIEW'});}
+    }
   }
   async function refreshJob(job) {
     if (running.has(job.jobId) || ['ready','partial','blocked','failed'].includes(job.status)) return;

@@ -51,7 +51,7 @@ function createCollectorRequests({dataDir,run,preflight=async()=>{},now=()=>new 
    const state=quality?.status;
    const runId=typeof value?.runId==='string'&&/^[a-zA-Z0-9_-]{1,220}$/.test(value.runId)?value.runId:null;
    const status=['complete','partial','blocked','failed'].includes(state)&&runId?(state==='complete'&&value.reused?'reused':state):'failed';
-   const result={runId,collectionQuality:sanitizeCollectionQuality(quality),reused:value?.reused===true,workerKey:value?.workerKey||row.workerKey,trigger:value?.trigger||'manual',...(postprocess(value?.postprocess)?{postprocess:postprocess(value.postprocess)}:{})};
+   const result={runId,collectionQuality:sanitizeCollectionQuality(quality),reused:value?.reused===true,workerKey:value?.workerKey||row.workerKey,trigger:value?.trigger||row.trigger||'manual',...(postprocess(value?.postprocess)?{postprocess:postprocess(value.postprocess)}:{})};
    const message={complete:'수집과 결과 검증을 완료했습니다.',reused:'조건에 맞는 당일 자료를 사용했습니다.',partial:'일부 자료가 누락되었습니다. 정상 자료로 반영하지 않았습니다.',blocked:'접근 제한으로 중단했습니다. 정상 자료로 반영하지 않았습니다.',failed:'수집을 완료하지 못했습니다. 결과와 워커 상태를 확인하세요.'}[status];
    await lock(()=>finish(row,{status,result,message,errorCode:status==='failed'&&!runId?'RESULT_RUN_ID_MISSING':null}));
   }catch(error){try{await lock(()=>finish(row,safeFailure(error)));}catch{Object.assign(row,{status:'interrupted',errorCode:'COLLECTOR_RECEIPT_WRITE_FAILED',message:'최종 상태 저장을 확인하지 못했습니다. 기존 결과를 확인하세요.',finishedAt:stamp()});}}
@@ -62,7 +62,7 @@ function createCollectorRequests({dataDir,run,preflight=async()=>{},now=()=>new 
   const fingerprint=crypto.createHash('sha256').update(JSON.stringify(canonical(payload))).digest('hex');
   if(rows.has(requestId)){const old=rows.get(requestId);if(old.fingerprint!==fingerprint)throw fault('COLLECTION_REQUEST_CONFLICT','같은 요청 번호의 수집 조건이 다릅니다.');return {row:old};}
   await preflight(payload);
-  const row={version:1,requestId,fingerprint,workerKey:payload.workerKey||'manual',trigger:'manual',keyword:String(payload.keyword||'').slice(0,160),status:'pending',createdAt:stamp(),finishedAt:null,result:null,errorCode:null,message:'수집 요청을 접수했습니다. 실제 실행 상태는 워커 카드에서 확인하세요.'};
+  const row={version:1,requestId,fingerprint,workerKey:payload.workerKey||'manual',trigger:payload.trigger==='scheduled'?'scheduled':'manual',keyword:String(payload.keyword||'').slice(0,160),status:'pending',createdAt:stamp(),finishedAt:null,result:null,errorCode:null,message:'수집 요청을 접수했습니다. 실제 실행 상태는 워커 카드에서 확인하세요.'};
   row.conditions=Object.fromEntries(['checkIn','checkOut','bookingRangeDays','detailRankRanges','collectionPurpose','dayUseMode'].filter(key=>payload[key]!==undefined).map(key=>[key,payload[key]]));
   await write(row);rows.set(requestId,row);
   // The durable receipt precedes execution, and every rejection has a terminal handler.

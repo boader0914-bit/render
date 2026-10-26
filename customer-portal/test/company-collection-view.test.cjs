@@ -1,20 +1,35 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const read=file=>fs.readFileSync(require.resolve('../web/'+file),'utf8');
+const flush=()=>new Promise(resolve=>setImmediate(resolve));
 function ui() {
-  const elements=new Map(['#collection-allowance','#collection-progress','#collection-result','[data-collect] button[type=submit]'].map(k=>[k,{innerHTML:'',textContent:'',disabled:false,dataset:{ready:'true'},append(){}}]));
+  const elements=new Map(['#collection-allowance','#collection-progress','#collection-result','#collection-freshness','[data-collect] button[type=submit]'].map(k=>[k,{innerHTML:'',textContent:'',disabled:false,dataset:{ready:'true'},setAttribute(key,value){this[key]=value;}}]));
   const window={},context=vm.createContext({window,document:{querySelector:s=>elements.get(s)||null},setTimeout:()=>0,clearTimeout(){}});
-  vm.runInContext(read('company-view.js'),context);vm.runInContext(read('collection.js'),context);
+  for(const file of ['company-flow.js','company-view.js','collection.js'])vm.runInContext(read(file),context);
   return {window,elements};
 }
 const quota=allowed=>({limit:1,canRequest:allowed,resetsAt:'2026-10-02T15:00:00Z'});
-test('collection view waits for allowance, keeps the fixed range and disables another submission after server refresh',async()=>{
-  const {window:w,elements}=ui();
-  assert.match(w.InsightCollection.panel({companyId:'a',name:'가상 업체'},true,null,null),/type="submit"[^>]+disabled/);
-  const panel=w.InsightCollection.panel({companyId:'a',name:'가상 업체'},true,null,quota(true));
+
+test('basic information remains visible with one animated connection indicator until stored reference data arrives',()=>{
+  const {window:w}=ui();
+  const pending={referenceLoading:true,result:null,companyDetail:{basics:{name:'기본정보 연결 업체',rooms:16},channels:[],current:{daily:[],summary:null}}};
+  const html=w.InsightCompanyView.render(pending);
+  assert.match(html,/기본정보 연결 업체/);assert.match(html,/16실/);
+  assert.equal((html.match(/class="connection-spinner"/g)||[]).length,1);
+  assert.match(html,/data-reference-status="products"/);assert.match(html,/저장된 예약채널 연결 중/);
+  const failed=w.InsightCompanyView.render({...pending,referenceLoading:false,referenceError:true});
+  assert.doesNotMatch(failed,/connection-spinner|0실/);assert.match(failed,/예약채널 연결 확인 필요/);
+});
+test('company detail has no collection tools; separate collection route retains range and quota checks',async()=>{
+  const {window:w,elements}=ui(),company={companyId:'a',name:'가상 업체'};
+  const detail=w.InsightCollection.panel(company,true,null,quota(true));
+  assert.match(detail,/업체 자료 연결 중/);assert.match(detail,/aria-busy="true"/);
+  assert.doesNotMatch(detail,/data-collect=|data-open-collection|저장 자료 다시 보기|COMPANY DATABASE|collection-settings/);
+  assert.match(w.InsightCollection.panel(company,true,null,null,true),/type="submit"[^>]+disabled/);
+  const panel=w.InsightCollection.panel(company,true,null,quota(true),true);
   assert.match(panel,/name="bookingRangeDays" value="30"/);assert.match(panel,/유무 확인/);assert.match(panel,/계정 전체 하루 1회/);
   let response={collectionAllowance:quota(false),request:null,result:null,companyDetail:null};
-  w.InsightCollection.mount('a',async()=>response);await new Promise(resolve=>setImmediate(resolve));
+  w.InsightCollection.mount('a',async()=>response);await flush();
   assert.equal(elements.get('[data-collect] button[type=submit]').disabled,true);
   assert.match(elements.get('#collection-allowance').textContent,/1\/1회 사용/);
   response.collectionAllowance=quota(true);await w.InsightCollection.refresh();
@@ -22,76 +37,50 @@ test('collection view waits for allowance, keeps the fixed range and disables an
   response.request={status:'collecting',submittedAt:'2026-10-02T01:00:00Z'};await w.InsightCollection.refresh();
   assert.equal(elements.get('[data-collect] button[type=submit]').disabled,true);
 });
-test('A-D view preserves quality warnings and distinguishes unknown from observed zero',()=>{
+test('connecting animation stops on success and never replaces a cached company result',async()=>{
+  const {window:w,elements}=ui();let resolve;
+  w.InsightCollection.mount('a',()=>new Promise(done=>resolve=done));
+  assert.match(elements.get('#collection-result').innerHTML,/connection-spinner/);
+  assert.equal(elements.get('#collection-result')['aria-busy'],'true');
+  resolve({companyDetail:{basics:{name:'자료 연결 업체',rooms:16},channels:[],current:{daily:[],summary:null}},result:null});await flush();
+  assert.match(elements.get('#collection-result').innerHTML,/자료 연결 업체/);
+  assert.doesNotMatch(elements.get('#collection-result').innerHTML,/connection-spinner/);
+  assert.equal(elements.get('#collection-result')['aria-busy'],'false');
+  assert.equal(elements.get('#collection-freshness').hidden,true);
+  w.InsightCollection.stop();w.InsightCollection.mount('a',()=>new Promise(()=>{}));
+  assert.match(elements.get('#collection-result').innerHTML,/자료 연결 업체/);
+  assert.doesNotMatch(elements.get('#collection-result').innerHTML,/connection-spinner/);
+  assert.equal(elements.get('#collection-freshness').dataset.state,'checking');
+  assert.equal(elements.get('#collection-freshness').hidden,false);
+});
+test('failed initial connection ends the animation and offers a retry, without pretending zero data',async()=>{
+  const {window:w,elements}=ui();
+  w.InsightCollection.mount('a',async()=>{throw Error('network');});await flush();
+  assert.doesNotMatch(elements.get('#collection-result').innerHTML,/connection-spinner/);
+  assert.equal(elements.get('#collection-result')['aria-busy'],'false');
+  assert.match(elements.get('#collection-progress').innerHTML,/다시 확인/);
+  assert.doesNotMatch(elements.get('#collection-result').innerHTML,/0실/);
+});
+test('A B C use compact basics and observed data without month, history or calendar controls',()=>{
   const {window:w}=ui();
-  const r={rooms:null,roomCountSource:'확인 전',productCount:0,range:{start:'2026-10-02',end:'2026-10-31',days:30},dayUse:{},days:[],issues:[],quality:{status:'partial',reason:'날짜 누락'},truncated:true};
-  const detail={basics:{name:'가상 <업체>',lodgingTypes:[]},channels:[],current:{summary:null,daily:[{date:'2026-10-02',publicBookings:0,phoneBookings:null,estimatedRevenue:null,partial:true}]},history:{leadTime:{},ranks:[],performance:[],months:[]}};
-  const html=w.InsightCompanyView.render({result:r,companyDetail:detail,previousResult:true},'');
-  for(const label of ['업체 기본정보','예약 채널','최근 운영 관측','누적 이력·관리','이번 요청의 완료 결과가 아닙니다','일부 완료','날짜 누락','보존된 상품 목록','공개 0실','방막기 확인 전','산출 보류'])assert.ok(html.includes(label),label);
-  assert.doesNotMatch(html,/확인 전실|가상 <업체>/);assert.match(html,/가상 &lt;업체&gt;/);
+  const data={result:{rooms:16,productCount:1,products:[{name:'객실 <A>',productType:'lodging',days:[{status:'observed',price:150000}]}],dayUse:{},quality:{status:'complete'}},companyDetail:{basics:{name:'가상 <업체>',rooms:16},channels:[],current:{summary:null,daily:[{date:'2026-10-01',total:16,publicBookings:0,phoneBookings:0,estimatedRevenue:0}]}}};
+  const html=w.InsightCompanyView.render(data);
+  for(const label of ['업체 기본정보','예약채널','통합관측','company-booking-chart','날짜별','가상 &lt;업체&gt;','객실 &lt;A&gt;','150,000원'])assert.ok(html.includes(label),label);
+  assert.doesNotMatch(html,/data-company-month|통합 중|마지막 계산값|누적 이력|db-calendar|data-company-view|<polyline|<form/);
+  assert.match(html,/0실/);assert.doesNotMatch(html,/가상 <업체>/);
 });
-
-test('view switches are local, persist the preference and preserve an open correction form; opening collection settings does not submit',async()=>{
-  const events={},storage=new Map(),elements=new Map(),modes=[],apiCalls=[];
-  for(const id of ['#collection-progress','#collection-result','#company-current-view','#company-history-flow','#company-flow-details','#collection-settings'])elements.set(id,{innerHTML:'',hidden:true});
-  const correction={value:'작성 중인 검수 근거'};elements.set('#product-correction',correction);
-  const buttons=['default','graph','calendar','table'].map(mode=>({dataset:{companyView:mode},setAttribute(k,v){this[k]=v;}}));
-  const window={InsightCompanyView:{render:(_,__,o)=>{modes.push(o.mode);return 'ABCD';},currentView:(_,o)=>o.mode,flowView:()=>'<graph>'}};
-  const context=vm.createContext({window,localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},document:{addEventListener:(type,fn)=>events[type]=fn,querySelector:s=>elements.get(s),querySelectorAll:()=>buttons},setTimeout:()=>0,clearTimeout(){}});
-  vm.runInContext(read('collection.js'),context);
-  window.InsightCollection.mount('cmp_1',async path=>{apiCalls.push(path);return {companyDetail:{},result:null};});
-  await new Promise(r=>setImmediate(r));assert.equal(modes.at(-1),'default');
-  for(const mode of ['graph','calendar','table']){
-    events.click({target:{closest:s=>s==='[data-company-view]'?buttons.find(b=>b.dataset.companyView===mode):null}});
-    assert.equal(elements.get('#company-current-view').innerHTML,mode);assert.equal(storage.get('insight-company-view'),mode);
-    assert.equal(correction.value,'작성 중인 검수 근거');
-  }
-  const trigger={setAttribute(k,v){this[k]=v;}};
-  events.click({target:{closest:s=>s==='[data-open-collection]'?trigger:null}});
-  assert.equal(elements.get('#collection-settings').hidden,false);assert.equal(trigger['aria-expanded'],'true');
-  assert.equal(apiCalls.length,1,'mode changes and collection settings do not issue network requests');
-  window.InsightCollection.mount('cmp_2',async path=>{apiCalls.push(path);return {};});await new Promise(r=>setImmediate(r));assert.equal(modes.at(-1),'table');
-  assert.deepEqual(apiCalls,['/companies/cmp_1/collection','/companies/cmp_2/collection']);
-});
-
-test('shared month selector reads the selected month and ignores an older in-flight response',async()=>{
-  const events={},elements=new Map(),calls=[],resolvers=[];
-  for(const key of ['#collection-progress','#collection-result'])elements.set(key,{innerHTML:''});
-  const window={InsightCompanyView:{render:data=>data.companyDetail?.integrated?.selectedMonth||'loading'}};
-  const context=vm.createContext({window,document:{addEventListener:(type,fn)=>events[type]=fn,querySelector:key=>elements.get(key)||null},setTimeout:()=>0,clearTimeout(){}});
-  vm.runInContext(read('collection.js'),context);
-  window.InsightCollection.mount('cmp_one',path=>{calls.push(path);return new Promise(resolve=>resolvers.push(resolve));});
-  events.change({target:{value:'2026-09',matches:selector=>selector==='[data-company-month]'}});
-  assert.deepEqual(calls,['/companies/cmp_one/collection','/companies/cmp_one/collection?month=2026-09']);
-  resolvers[1]({companyDetail:{integrated:{selectedMonth:'2026-09',status:'ready'}}});await new Promise(resolve=>setImmediate(resolve));
-  resolvers[0]({companyDetail:{integrated:{selectedMonth:'2026-10',status:'ready'}}});await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(elements.get('#collection-result').innerHTML,'2026-09');
-});
-
-test('pending integration is explicit, never computes month totals from the latest raw result',()=>{
+test('unavailable integrated results are not replaced by the latest raw run or shown as zero',()=>{
   const {window:w}=ui();
-  const raw={rooms:16,roomCountSource:'DB 검수',productCount:0,range:{days:1},dayUse:{},issues:[],days:[{date:'2026-09-01',productType:'lodging',publicRevenue:123456,estimatedRevenue:100000,publicBookings:1,estimatedBlocked:1,total:16}]};
-  const detail={basics:{},channels:[],current:{summary:null,daily:[]},legacyObservationView:false,integrated:{status:'pending',months:[{month:'2026-09'}],selectedMonth:'2026-09',snapshot:null},history:{leadTime:{},ranks:[],performance:[],months:[]}};
-  const html=w.InsightCompanyView.render({result:raw,companyDetail:detail},'');
-  assert.match(html,/조회할 숙박월/);assert.match(html,/통합 준비 중/);assert.match(html,/산출 보류/);assert.doesNotMatch(html,/223,456|123,456/);
-  const legacy=w.InsightCompanyView.render({result:raw},'');assert.match(legacy,/월별 통합 자료 연결 전/);assert.doesNotMatch(legacy,/223,456/);
+  const data={result:{rooms:16,products:[],productCount:0,quality:{status:'partial',reason:'날짜 누락'}},companyDetail:{basics:{rooms:16},channels:[],legacyObservationView:false,integrated:{status:'pending',selectedMonth:'2026-09',snapshot:null,roomBasis:{count:16}},current:{daily:[{date:'2026-09-01',publicBookings:1,phoneBookings:2,estimatedRevenue:223456}],summary:{estimatedRevenue:223456}}}};
+  const html=w.InsightCompanyView.render(data);
+  assert.match(html,/db-current|통합관측 숙박월/);assert.doesNotMatch(html,/223,456|통합 중|마지막 계산값|0실/);
+  assert.match(html,/업체 기본정보/);assert.match(html,/날짜 누락/);
+  const missing=w.InsightCompanyView.render({companyDetail:{basics:{},channels:[],current:{daily:[{date:'2026-10-01',missing:true}],summary:null}}});
+  assert.doesNotMatch(missing,/db-current|0실/);
 });
-
-test('calendar hides normal zero inferred bookings but shows freshness and excluded latest responses',()=>{
-  const {window:w}=ui();
-  const html=w.InsightCompanyView.currentView({companyDetail:{current:{daily:[{date:'2026-09-01',total:16,publicBookings:0,phoneBookings:0,estimatedRevenue:0,observationLeadTimeDays:2,latestAttemptStatus:'excluded'}]}}},{mode:'calendar'});
-  assert.match(html,/공개 0실/);assert.doesNotMatch(html,/방막기 0실/);assert.match(html,/숙박 2일 전 관측/);assert.match(html,/최근 응답 제외/);
-});
-
-test('complete quantities with prior observations show freshness guidance instead of a quantity warning',()=>{
-  const {window:w}=ui();
-  const data={companyDetail:{basics:{},channels:[],current:{summary:{rangeStart:'2026-08-01',rangeEnd:'2026-08-31',observedDays:31,calendarDays:31,partial:true,missingDays:0,staleDays:29,quantityPartial:false},daily:[]}}};
-  let html=w.InsightCompanyView.render(data,'');
-  assert.match(html,/숙박일 이전 마지막 관측 포함/);assert.doesNotMatch(html,/수량 확인이 필요한 날짜/);
-  delete data.companyDetail.current.summary.quantityPartial;
-  html=w.InsightCompanyView.render(data,'');assert.match(html,/숙박일 이전 마지막 관측 포함/);
-  data.companyDetail.current.summary.missingDays=1;data.companyDetail.current.summary.observedDays=30;
-  html=w.InsightCompanyView.render(data,'');assert.match(html,/수량 확인이 필요한 날짜/);
-  Object.assign(data.companyDetail.current.summary,{missingDays:0,staleDays:0,containsPartialRun:true});
-  html=w.InsightCompanyView.render(data,'');assert.match(html,/일부 완료 회차에서 확보한 정상 수량 포함/);assert.doesNotMatch(html,/수량 확인이 필요한 날짜/);
+test('allocation and lunch dinner reuse are visible without treating them as measured sales',()=>{
+  const {window:w}=ui(),data={companyDetail:{basics:{name:'가상 업체'},current:{daily:[{date:'2026-09-04',total:16,publicBookings:1,phoneBookings:5,estimatedRevenue:1379000,publicRevenue:279000,phoneRevenue:1100000,phoneAllocatedBookings:5,
+    sharedDayUseEvidence:{groups:[{reusedBookings:1}]}}]}}};
+  const html=w.InsightCompanyView.render(data);assert.match(html,/상품 배분 추정/);assert.match(html,/런치·디너 재사용 반영/);assert.match(html,/1,379,000원/);
+  assert.doesNotMatch(html,/확정 매출|실제 매출/);
 });

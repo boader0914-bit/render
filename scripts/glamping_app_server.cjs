@@ -972,6 +972,15 @@ const insightIntegration = require('./lib/insight_integration.cjs').createInsigh
   readPostprocess: runId => collectionPostprocessQueue.status({ runId }),
   dataDir: DATA_DIR, readCatalog: monthlyReportSources.catalog, readMembers: readB2BMemberStore,
   authenticateMember: authenticateB2BMember, registerMember: (payload, insightConsent) => registerB2BMember(payload, { insightConsent }), checkUsername: checkSignupUsernameAvailability, policyContext: publicPageContext(), requireAdmin: requireAdminSession, collectorRequests,
+  recurringIsBusy: async () => {
+    if(collectionRecoveryActive||collectorProtectionReviewWorkers.size)return true;
+    await collectorBrokerReady;
+    if(Object.values(crawlLanes).some(lane=>lane.activeCrawlJob||lane.activeCrawlPromise||lane.crawlQueue.length))return true;
+    const states=await Promise.all(Object.values(collectorControllers()).map(controller=>controller.status()));
+    return states.some(status=>status.activeJobId||status.queued||/RESTART_INTERRUPTED|STATE_LOST|STATE_UNKNOWN|WORKER_TIMEOUT/.test(status.errorCode||''));
+  },
+  inspectRecurringToday: inspectInsightRecurringToday,
+  verifyRecurringStored: verifyInsightRecurringStored,
   readEvidence: readInsightCompanyEvidence,
   readCompanyDetail: readInsightCompanyDetail,
   readIntegrated: (companyId, options = {}) => companyIntegratedDb.get(companyId, options),
@@ -999,6 +1008,34 @@ const insightIntegration = require('./lib/insight_integration.cjs').createInsigh
       && manifest.dayUseMode === job.scope.dayUseMode && (company.placeIds || []).includes(job.placeIds[0]);
   }, { priority: "foreground", kind: "insight-stored-receipt" })
 });
+async function verifyInsightRecurringStored(job,runId) {
+  return runAnalyticalWork(async()=>{
+    const master=await readScopedCompanyMaster(COMPANY_MASTER_FILE,job.companyId),company=master.companies?.[job.companyId];
+    if(!company||!company.runIds?.includes(runId)||job.placeIds?.length!==1||!(company.placeIds||[]).includes(job.placeIds[0]))return false;
+    const observationDay=job.observationDay||job.day||job.scope?.checkIn;
+    const evidence=await readInsightCompanyEvidence(job.companyId,{runId,scope:job.scope,observationDay});
+    if(!evidence?.snapshot?.products?.length)return false;
+    if(job.reused!==true&&evidence.run.targetPlaceId!==String(job.placeIds[0]))return false;
+    const checks=require('./lib/insight_recurring_scope.cjs'),matches=job.kind==='insight_recurring_collection'?checks.recurringScopeMatches:checks.storedCompanyScopeMatches;
+    return matches(evidence.run,job.scope,{observationDay,reused:job.reused===true,keyword:job.keyword});
+  },{priority:'foreground',kind:'insight-recurring-stored-receipt'});
+}
+async function inspectInsightRecurringToday(companyId,scope,day) {
+  const master=await readScopedCompanyMaster(COMPANY_MASTER_FILE,companyId),company=master.companies?.[companyId];
+  if(!company)throw Object.assign(new Error('등록 업체를 확인하지 못했습니다.'),{code:'RECURRING_COMPANY_UNAVAILABLE'});
+  const {kstDay,storedCompanyScopeMatches}=require('./lib/insight_recurring_scope.cjs'),references=new Set(company.runIds||[]);
+  const candidates=(await listRuns()).filter(run=>references.has(run.id)&&kstDay(run.collectedAt)===day);
+  let reusable=null;
+  for(const candidate of candidates){
+    const directory=resolveRunDir(candidate.id),manifest=directory&&await readManifest(directory);
+    if(!manifest)return {state:'review',errorCode:'RECURRING_TODAY_SOURCE_UNAVAILABLE'};
+    if(!storedCompanyScopeMatches(manifest,scope,{observationDay:day,reused:true}))return {state:'review',errorCode:'RECURRING_TODAY_SCOPE_REVIEW'};
+    const evidence=await readInsightCompanyEvidence(companyId,{runId:candidate.id,scope,observationDay:day});
+    if(!evidence?.snapshot?.products?.length)return {state:'review',errorCode:'RECURRING_TODAY_COMPANY_REVIEW'};
+    reusable=candidate.id;
+  }
+  return reusable?{state:'reusable',runId:reusable}:{state:'none'};
+}
 async function readInsightCompanyEvidence(companyId, { runId = null, scope = null, observationDay = null } = {}) {
   return runAnalyticalWork(() => readInsightCompanyEvidenceOwned(companyId, { runId, scope, observationDay }),
     { priority: "foreground", kind: "insight-company-evidence" });
@@ -1006,12 +1043,15 @@ async function readInsightCompanyEvidence(companyId, { runId = null, scope = nul
 async function readInsightCompanyEvidenceOwned(companyId, { runId = null, scope = null, observationDay = null } = {}) {
   const company = (await readScopedCompanyMaster(COMPANY_MASTER_FILE, companyId)).companies?.[companyId];
   if (!company) return null;
-  const runs = await listRuns();
+  const runs = runId ? [] : await listRuns();
   const candidates = runId ? [{ id: runId }] : runs.filter(run => company.runIds?.includes(run.id))
     .sort((a,b) => String(b.collectedAt || b.updatedAt || '').localeCompare(String(a.collectedAt || a.updatedAt || '')));
   for (const candidate of candidates) {
     const observedAt = Date.parse(candidate.collectedAt || candidate.updatedAt || '');
-    if (observationDay && (!Number.isFinite(observedAt) || new Date(observedAt + 9 * 3600000).toISOString().slice(0,10) !== observationDay)) continue;
+    // An explicit run reference has no list-catalog timestamp. Verify its
+    // actual loaded manifest below rather than treating absent metadata as a
+    // failed date match and silently skipping every identified saved result.
+    if (observationDay && Number.isFinite(observedAt) && new Date(observedAt + 9 * 3600000).toISOString().slice(0,10) !== observationDay) continue;
     const data = await loadRun(candidate.id, { skipCompanyMaster:true, skipHistory:true, skipTraffic:true,
       skipTourismVisitors:true, skipTourismVisitorHistory:true, skipTourismDemandStrengthHistory:true,
       skipTourismResourceDemandHistory:true, skipTourismDiversityHistory:true, capacityCompanies:[company] }).catch(() => null);
@@ -1019,6 +1059,7 @@ async function readInsightCompanyEvidenceOwned(companyId, { runId = null, scope 
     const matches = (data.availability?.items || []).filter(item => companyProductAvailabilityMatch(company, item));
     if (matches.length !== 1) continue;
     const run = data.run;
+    if(observationDay){const at=Date.parse(run.collectedAt||'');if(!Number.isFinite(at)||new Date(at+9*3600000).toISOString().slice(0,10)!==observationDay)continue;}
     if (scope && (run.collectionQuality?.status !== 'complete' || run.collectionPurpose !== 'revenue_detail'
       || run.checkIn !== scope.checkIn || run.checkOut !== scope.checkOut || Number(run.bookingRangeDays) !== scope.bookingRangeDays
       || Number(run.adults) !== scope.adults || run.dayUseMode !== scope.dayUseMode || run.productMode !== scope.productMode)) continue;
@@ -1483,10 +1524,11 @@ function normalizeDayUseMode(value) {
 
 function crawlExecutionPlan(payload = {}) {
   const keyword = String(payload.keyword || "").trim();
+  const targetPlaceId = require('./lib/insight_recurring_scope.cjs').collectionTarget(payload.targetPlaceId);
   const rawSearchIntent = regionalLodgingSearchIntent(keyword);
   const requestedSearchMode = payload.searchMode || process.env.SEARCH_MODE || "keyword";
-  const resolvedSearchMode = resolveSearchModeForCrawl(keyword, requestedSearchMode, payload);
-  const explicitCompanyTarget = hasExplicitCompanyCollectionTarget(payload, keyword);
+  const resolvedSearchMode = targetPlaceId ? 'company' : resolveSearchModeForCrawl(keyword, requestedSearchMode, payload);
+  const explicitCompanyTarget = Boolean(targetPlaceId) || hasExplicitCompanyCollectionTarget(payload, keyword);
   if (rawSearchIntent.needsRegion && !explicitCompanyTarget) {
     const error = new Error("숙박 또는 숙소 앞에 지역명을 함께 입력하세요. 예: 경남 숙소");
     error.statusCode = 400;
@@ -1536,6 +1578,7 @@ function crawlExecutionPlan(payload = {}) {
     : 0;
   return {
     keyword,
+    ...(targetPlaceId ? {targetPlaceId} : {}),
     workerKey: ["web", "manual", "scheduled"].includes(payload.workerKey) ? payload.workerKey : null,
     checkIn,
     checkOut,
@@ -1868,6 +1911,7 @@ function crawlPayloadSignature(payload = {}) {
   const signaturePayload = {
     workerKey: selectedWorkerKey(payload.workerKey || "manual"),
     keyword: compactKeyword(plan.keyword || "").toLowerCase(),
+    ...(plan.targetPlaceId ? {targetPlaceId:plan.targetPlaceId} : {}),
     adults: Number(payload.adults || 2),
     checkIn: plan.checkIn,
     checkOut: plan.checkOut,
@@ -18970,6 +19014,7 @@ async function runCrawlerInternal(payload) {
     CHECK_OUT: plan.checkOut,
     ADULTS: String(payload.adults || process.env.ADULTS || 2),
     SEARCH_MODE: plan.resolvedSearchMode,
+    NAVER_TARGET_PLACE_ID: plan.targetPlaceId || '',
     SEARCH_MODE_REQUESTED: normalizeSearchMode(plan.requestedSearchMode),
     SEARCH_MODE_AUTO_CORRECTED: plan.resolvedSearchMode !== normalizeSearchMode(plan.requestedSearchMode) ? "1" : "0",
     SEARCH_INTENT: plan.searchIntent,
@@ -19016,6 +19061,8 @@ async function runCrawlerInternal(payload) {
     await assertCollectorReady(crawlLane().key);
     const expected = {
       keyword, checkIn: plan.checkIn, checkOut: plan.checkOut,
+      searchMode:plan.resolvedSearchMode,
+      ...(plan.targetPlaceId ? {targetPlaceId:plan.targetPlaceId} : {}), adults:Number(payload.adults||2),
       workerKey: payload.workerKey || "manual", trigger: payload.trigger || "manual",
       collectionMode: plan.collectionMode, collectionPurpose: plan.collectionPurpose,
       productMode: plan.productMode, dayUseMode:plan.dayUseMode, detailRankRanges: plan.detailRankRanges,
@@ -20604,6 +20651,7 @@ async function route(req, res) {
 const server = http.createServer((req, res) => {
   route(req, res);
 });
+server.once('close',()=>{if(insightIntegration?.recurringCollection)void insightIntegration.recurringCollection.stop().catch(()=>{});});
 
 function localNetworkUrls() {
   const interfaces = os.networkInterfaces();
@@ -20669,6 +20717,7 @@ seedOutputsFromRepo()
     server.listen(PORT, HOST, () => {
       const primaryUrl = HOST === "0.0.0.0" ? `http://127.0.0.1:${PORT}` : `http://${HOST}:${PORT}`;
       console.log(`Lodging datalab beta app running at ${primaryUrl}`);
+      if(insightIntegration?.recurringCollection)insightIntegration.recurringCollection.start().catch(error=>console.error('insight_recurring_start_failed',/^[A-Z0-9_]{1,100}$/.test(error?.code||'')?error.code:'UNAVAILABLE'));
       regionalMarketMissingWeekly.start();
       regionalMarketBootstrap.start();
       companyIntegratedDb.bootstrap().catch(error => console.error("company_integration_bootstrap_failed", error.code || "unavailable"));

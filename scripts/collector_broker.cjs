@@ -15,7 +15,7 @@ const MAX_FILES = 2048;
 const TERMINAL_JOBS_IN_LEDGER = 200;
 const MAX_TERMINAL_LEDGER_BYTES = 64 * 1024 * 1024;
 const ENV_KEYS = new Set([
-  "CHECK_IN", "CHECK_OUT", "ADULTS", "SEARCH_MODE", "SEARCH_MODE_REQUESTED", "SEARCH_MODE_AUTO_CORRECTED",
+  "CHECK_IN", "CHECK_OUT", "ADULTS", "SEARCH_MODE", "SEARCH_MODE_REQUESTED", "SEARCH_MODE_AUTO_CORRECTED", "NAVER_TARGET_PLACE_ID",
   "SEARCH_INTENT", "SEARCH_REGION", "SEARCH_SCOPE", "SEARCH_SCOPE_LABEL", "COLLECTION_MODE", "COLLECTION_PURPOSE",
   "DETAIL_RANK_RANGES", "PRODUCT_MODE", "DAY_USE_MODE", "BOOKING_RANGE_DAYS", "BOOKING_RANGE_PLACE_LIMIT", "NAVER_BOOKING_STOCK_LIMIT",
   "SOURCE_ROLE", "COLLECTION_SOURCE", "COLLECTION_SOURCE_LABEL", "SCHEDULED_COLLECTION", "WORKER_COLLECTION", "RUN_STAMP",
@@ -26,7 +26,7 @@ const ENV_KEYS = new Set([
   "COLLECTOR_WORKER_KEY", "COLLECTOR_TRIGGER", "COLLECTOR_RUN_TOKEN", "COLLECTOR_ENGINE", "COLLECTOR_JOB_ID",
 ]);
 const PAYLOAD_KEYS = new Set([
-  "keyword", "checkIn", "checkOut", "adults", "searchMode", "searchIntent", "searchRegion", "searchScope",
+  "keyword", "checkIn", "checkOut", "adults", "searchMode", "searchIntent", "searchRegion", "searchScope", "targetPlaceId",
   "searchScopeLabel", "collectionMode", "collectionPurpose", "productMode", "dayUseMode", "detailRankRanges",
   "bookingRangeDays", "bookingRangePlaceLimit", "sourceRole", "collectionSource", "scheduledCollection",
   "workerKey", "trigger", "collectionEngine", "scheduleOccurrenceId", "clientRequestId",
@@ -129,6 +129,7 @@ function cleanEnv(input) {
     output[key] = value;
   }
   if (output.DAY_USE_MODE !== undefined && !["inspect", "lodging_only", "detail"].includes(output.DAY_USE_MODE)) throw problem("COLLECTOR_INVALID_ENV", 400);
+  try { require('./collector_company_target.cjs').normalizeTargetPlaceId(output.NAVER_TARGET_PLACE_ID,output.SEARCH_MODE); } catch { throw problem('COLLECTOR_INVALID_ENV',400); }
   return output;
 }
 function cleanPayload(input = {}) {
@@ -141,6 +142,7 @@ function cleanPayload(input = {}) {
     output[key] = value;
   }
   if (output.dayUseMode !== undefined && !["inspect", "lodging_only", "detail"].includes(output.dayUseMode)) throw problem("COLLECTOR_INVALID_PAYLOAD", 400);
+  try { require('./collector_company_target.cjs').normalizeTargetPlaceId(output.targetPlaceId,output.searchMode); } catch { throw problem('COLLECTOR_INVALID_PAYLOAD',400); }
   for (const key of ["scheduleOccurrenceId", "clientRequestId"]) {
     if (output[key] !== undefined && (typeof output[key] !== "string" || !/^[a-z0-9][a-z0-9._:-]{0,119}$/i.test(output[key]))) {
       throw problem("COLLECTOR_INVALID_PAYLOAD", 400);
@@ -202,7 +204,7 @@ function scopeCheck(manifest, job, runId, files) {
   const fields = { CHECK_IN: "checkIn", CHECK_OUT: "checkOut", ADULTS: "adults", SEARCH_MODE: "searchMode", SEARCH_INTENT: "searchIntent",
     SEARCH_REGION: "searchRegion", SEARCH_SCOPE: "searchScope", COLLECTION_MODE: "collectionMode", COLLECTION_PURPOSE: "collectionPurpose",
     PRODUCT_MODE: "productMode", DAY_USE_MODE: "dayUseMode", BOOKING_RANGE_DAYS: "bookingRangeDays", BOOKING_RANGE_PLACE_LIMIT: "bookingRangePlaceLimit",
-    SOURCE_ROLE: "sourceRole", COLLECTION_SOURCE: "collectionSource" };
+    SOURCE_ROLE: "sourceRole", COLLECTION_SOURCE: "collectionSource", NAVER_TARGET_PLACE_ID:"targetPlaceId" };
   for (const [key, field] of Object.entries(fields)) {
     const expected = job.env[key] ?? job.payload[field];
     if (expected !== undefined && String(expected) !== String(manifest[field] ?? (field === "dayUseMode" ? "detail" : ""))) throw problem("COLLECTOR_SCOPE_MISMATCH", 400);
@@ -464,6 +466,10 @@ function createCollectorBroker(options = {}) {
       if (!keyword || keyword.length > 200 || /[\x00-\x1f]/.test(keyword)) throw problem("COLLECTOR_INVALID_KEYWORD", 400);
       const job = { id: `collector_${crypto.randomUUID()}`, status: "queued", keyword, env: cleanEnv(input.env), payload: cleanPayload(input.payload),
         context: cleanContext(input.context), createdAt: iso(), updatedAt: iso(), uploads: {} };
+      if ((job.env.NAVER_TARGET_PLACE_ID || job.payload.targetPlaceId) &&
+        (job.env.NAVER_TARGET_PLACE_ID !== job.payload.targetPlaceId || job.env.SEARCH_MODE !== 'company' || job.payload.searchMode !== 'company')) {
+        throw problem('COLLECTOR_INVALID_PAYLOAD',400);
+      }
       const target = job.payload.workerKey || workerKey;
       const trigger = job.payload.trigger || (job.env.SCHEDULED_COLLECTION === "1" || job.payload.scheduledCollection === true ? "scheduled" : "manual");
       if ((target && !["manual", "scheduled"].includes(target)) || !["manual", "scheduled"].includes(trigger)

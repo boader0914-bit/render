@@ -176,7 +176,8 @@ function payloadFor(config, keyword, day, occurrenceId, index, trigger, workerKe
     productMode: collection.productMode, dayUseMode: collection.dayUseMode || "detail", detailRankRanges: collection.detailRankRanges, bookingRangeDays: collection.bookingDays,
     bookingRangePlaceLimit: rankRange(collection.detailRankRanges).max, sourceRole: "admin", collectionSource: "admin_search",
     collectionSourceLabel: `${WORKER_NAMES[workerKey]} · ${trigger === "scheduled" ? "예약수집" : "즉시수집"}`,
-    clientRequestId: `${workerKey === "scheduled" ? "" : `${workerKey}_`}${occurrenceId}_${index + 1}`, scheduleOccurrenceId: occurrenceScope(workerKey, occurrenceId) };
+    clientRequestId: `${workerKey === "scheduled" ? "" : `${workerKey}_`}${occurrenceId}_${index + 1}`,
+    ...(trigger==='scheduled'?{scheduleOccurrenceId:occurrenceScope(workerKey,occurrenceId)}:{}) };
   return payload;
 }
 function safeCode(value, fallback = "KEYWORD_SCHEDULE_OPERATION_FAILED") {

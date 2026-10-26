@@ -21,6 +21,10 @@ test("dispatch transfers only collection settings and returns canonical artifact
   assert.deepEqual(collectionEnv({}), {});
 });
 
+test('targeted company settings survive dispatch without passing service secrets to the worker',()=>{
+  assert.deepEqual(collectionEnv({SEARCH_MODE:'company',NAVER_TARGET_PLACE_ID:'123',INSIGHT_SERVICE_TOKEN:'must-not-transfer'}),{SEARCH_MODE:'company',NAVER_TARGET_PLACE_ID:'123'});
+});
+
 test("unavailable worker fails without executing a crawler", async () => {
   await assert.rejects(dispatchCollector({
     broker: { submit: async () => { throw new Error("internal sensitive detail"); } },

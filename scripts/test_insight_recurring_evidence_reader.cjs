@@ -1,0 +1,12 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const source=fs.readFileSync(path.join(__dirname,'glamping_app_server.cjs'),'utf8'),body=source.slice(source.indexOf('async function readInsightCompanyEvidenceOwned('),source.indexOf('\nconst pausedScheduleOccurrences'));
+function fixture({collectedAt='2026-10-27T05:00:00Z',quality='complete',rangeDays=30}={}){
+ let reads=0;const day='2026-10-27',scope={checkIn:day,checkOut:'2026-10-28',bookingRangeDays:30,adults:2,dayUseMode:'detail',productMode:'all'},company={companyId:'cmp_test',runIds:['identified'],placeIds:['123']},run={...scope,collectedAt,collectionPurpose:'revenue_detail',collectionQuality:{status:quality}},item={itemDetails:Array.from({length:rangeDays},(_,i)=>({date:new Date(Date.parse(day+'T00:00:00Z')+i*86400000).toISOString().slice(0,10)}))};
+ const names=['readScopedCompanyMaster','COMPANY_MASTER_FILE','listRuns','loadRun','companyProductAvailabilityMatch','applyCompanyManualCorrection','productSnapshotObservation','compactCompanyProductSnapshot','applyInventoryEvidence'];
+ const values=[async()=>({companies:{cmp_test:company}}),'synthetic',async()=>{throw Error('an explicit run must not enumerate unrelated runs');},async()=>{reads++;return {run,availability:{items:[item]}};},()=>true,value=>value,row=>({date:row.date,total:16,productType:'lodging'}),()=>({products:[{name:'synthetic'}]}),value=>value];
+ const read=new Function(...names,body+'\nreturn readInsightCompanyEvidenceOwned;')(...values);
+ return {read,scope,day,get reads(){return reads;}};
+}
+test('an identified saved run checks its loaded observation day and can verify all thirty dates',async()=>{const f=fixture(),result=await f.read('cmp_test',{runId:'identified',scope:f.scope,observationDay:f.day});assert.ok(result);assert.equal(f.reads,1);assert.equal(result.rows.length,30);assert.equal(result.run.collectedAt,'2026-10-27T05:00:00Z');});
+for(const [name,options]of[['wrong observation day',{collectedAt:'2026-10-26T05:00:00Z'}],['missing timestamp',{collectedAt:null}],['partial run',{quality:'partial'}],['missing dated response',{rangeDays:29}]])test(name+' cannot pass an identified recurring result',async()=>{const f=fixture(options);assert.equal(await f.read('cmp_test',{runId:'identified',scope:f.scope,observationDay:f.day}),null);assert.equal(f.reads,1);});

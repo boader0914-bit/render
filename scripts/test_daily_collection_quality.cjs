@@ -25,6 +25,20 @@ test("available result count below requested top twenty can pass", () => {
   assert.equal(inspectManifest(fixture(), { expected: { keyword: "포천 글램핑", bookingDays: 31, detailRankRanges: "1-20" } }).status, "complete");
 });
 
+test('targeted company acceptance requires the applied target ID in the actual manifest',()=>{
+  const manifest=fixture();manifest.targetPlaceId='123';
+  assert.equal(inspectManifest(manifest,{expected:{targetPlaceId:'123'}}).status,'complete');
+  assert.equal(inspectManifest(manifest,{expected:{targetPlaceId:'456'}}).reason,'target_place_mismatch');
+  delete manifest.targetPlaceId;assert.equal(inspectManifest(manifest,{expected:{targetPlaceId:'123'}}).status,'failed');
+});
+
+test('a target found only in ads is accepted without changing ordinary keyword empty-result semantics',()=>{
+  const manifest=fixture();manifest.counts.naverOverall=0;manifest.counts.naverAds=1;manifest.targetPlaceId='123';
+  assert.equal(inspectManifest(manifest).status,'complete');
+  delete manifest.targetPlaceId;assert.equal(inspectManifest(manifest).reason,'no_main_results');
+  manifest.targetPlaceId='123';manifest.counts.naverAds=null;assert.equal(inspectManifest(manifest).status,'failed');
+});
+
 test("zero main results or zero successful bookings is a failed collection", () => {
   for (const key of ["naverOverall", "naverBookingStockChecked", "naverBookingStockSucceeded"]) {
     const manifest = fixture(); manifest.counts[key] = 0;

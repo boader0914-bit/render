@@ -16,7 +16,7 @@ async function body(req) {
 }
 function json(res, status, value) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(value)); }
 function createInsightHttp({ store, serviceToken, authenticateMember, memberActive, registerMember, checkUsername, catalog, stateCatalog = catalog, requireAdmin, preparationBridge = null,
-  signup = { enabled: false }, policies = {}, supportEmail = '', adminStore = null, collectionResults = null, savedCollectionResults = null, analysis = null, reportDelivery = null, renderReportPdf = null,
+  signup = { enabled: false }, policies = {}, supportEmail = '', adminStore = null, collectionResults = null, savedCollectionResults = null, analysis = null, reportDelivery = null, renderReportPdf = null, recurringCollection = null,
   identityDiagnostics = entry => console.warn('insight_identity',JSON.stringify(entry)), identityClock = () => performance.now(),
   companyDiagnostics = entry => console.warn('insight_company_http',JSON.stringify(entry)), companyClock = () => performance.now() }) {
   if (typeof serviceToken !== 'string' || serviceToken.length < 32) throw new Error('Insight service credential must contain at least 32 characters');
@@ -95,7 +95,13 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
     const unlimited=customer.accountKind==='admin_preview';
     return { customer, companies, regions: data.regions.filter(row => regionKeys.has(row.id)), comparisonRegionBindings:comparisonRegionBindings(customer,data), corrections: store.corrections(customer.customerId),
       registrationAllowance:{ownLimit:unlimited?null:1,competitorLimit:unlimited?null:customer.entitlements.competitorLimit,interestRegionLimit:unlimited?null:customer.entitlements.interestRegionLimit},
-      preparations: store.requests(customer.customerId), collectionAllowance:store.collectionAllowance(customer.customerId), features: { weeklyReports: false, reportDelivery: Boolean(reportDelivery), directCollection: Boolean(preparationBridge && collectionResults), dataPreparationRequests: true } };
+      preparations: store.requests(customer.customerId), collectionAllowance:store.collectionAllowance(customer.customerId),
+      recurringCollections: recurringCollection ? recurringCollection.forCustomer(customer.customerId).filter(row=>allowed.has(row.companyId)&&companies.some(company=>company.companyId===row.companyId)) : [],
+      features: { weeklyReports: false, reportDelivery: Boolean(reportDelivery), directCollection: Boolean(preparationBridge && collectionResults), dataPreparationRequests: true, recurringCollectionRequests:Boolean(recurringCollection) } };
+  }
+  function recurringAdminState() {
+    const value=recurringCollection.adminState();
+    return {recurringCollections:recurringCollection.adminList(),defaults:{time:value.defaults.time,bookingRangeDays:value.defaults.bookingRangeDays,timezone:value.defaults.timezone}};
   }
   async function sendState(res, customer, scope, extra = {}, { awaitPreparation = false } = {}) {
     const started = performance.now(),requestId=crypto.randomUUID();
@@ -148,6 +154,20 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
   }
   async function customerRequest(req, res, url, tail, c, token, context = {}, scope = customerScope(token, c.customerId)) {
       if (req.method === 'GET' && tail === '/me') await sendState(res, c, scope, { csrfToken: csrf(token), ...context });
+      else if(['GET','POST'].includes(req.method)&&/^\/companies\/[a-zA-Z0-9_-]+\/recurring-collection$/.test(tail)) {
+        if(!recurringCollection)throw fault('RECURRING_COLLECTION_NOT_READY','정기수집 요청 연결을 준비 중입니다.',503);
+        if(url.search)throw fault('INVALID_FIELDS','등록한 업체의 정기수집 요청만 지정해 주세요.');
+        const companyId=tail.split('/')[2];let payload;
+        if(req.method==='POST'){payload=await body(req);fields(payload,['requestKey']);store.throttle(`recurring-request:${c.customerId}`,30);}
+        if(scope?.verify)await scope.verify();
+        const current=scope?.current?scope.current():store.get(c.customerId);
+        if(!store.hasCompany(current,companyId))throw fault('NOT_FOUND','등록한 업체의 정기수집 요청을 찾을 수 없습니다.',404);
+        const record=req.method==='POST'?await recurringCollection.request(current.customerId,companyId,payload):recurringCollection.get(current.customerId,companyId);
+        if(scope?.verify)await scope.verify();
+        const latest=scope?.current?scope.current():store.get(c.customerId);
+        if(!store.hasCompany(latest,companyId))throw fault('NOT_FOUND','등록한 업체의 정기수집 요청을 찾을 수 없습니다.',404);
+        json(res,200,{recurringCollection:record,recurringCollections:recurringCollection.forCustomer(latest.customerId).filter(row=>store.hasCompany(latest,row.companyId))});
+      }
       else if(['GET','POST'].includes(req.method)&&/^\/regions\/[a-zA-Z0-9_-]+\/preparation$/.test(tail)) {
         if(!analysis)throw fault('REGION_NOT_READY','지역 자료 연결을 준비 중입니다.',503);
         let month;
@@ -318,6 +338,19 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
           return true;
         }
         if (tail === '/admin/me' && req.method === 'GET') json(res, 200, { admin, csrfToken: csrf(token) });
+        else if(tail==='/admin/recurring-collections'&&req.method==='GET') {
+          if(!recurringCollection)throw fault('RECURRING_COLLECTION_NOT_READY','정기수집 요청 연결을 준비 중입니다.',503);
+          if(url.search)throw fault('INVALID_FIELDS','정기수집 요청 목록만 조회해 주세요.');
+          json(res,200,recurringAdminState());
+        }
+        else if(tail==='/admin/recurring-collections/review'&&req.method==='POST') {
+          if(!recurringCollection)throw fault('RECURRING_COLLECTION_NOT_READY','정기수집 요청 연결을 준비 중입니다.',503);
+          if(url.search)throw fault('INVALID_FIELDS','정기수집 심사 내용만 지정해 주세요.');
+          const payload=await body(req);fields(payload,['companyId','decision','reason','time','requestKey']);
+          const currentAdmin=adminStore.authenticate(token);store.throttle(`recurring-review:${currentAdmin.adminId}`,120);
+          const record=await recurringCollection.review(payload,currentAdmin.adminId);
+          adminStore.authenticate(token);json(res,200,{recurringCollection:record,...recurringAdminState()});
+        }
         else if (tail === '/admin/auth/logout' && req.method === 'POST') { adminStore.logout(token); json(res, 200, { ok: true }); }
         else if (tail === '/admin/customers' && req.method === 'GET') json(res, 200, { customers: store.list().map(c => ({ customerId: c.customerId, username: c.username, accountKind: c.accountKind || 'customer', accountStatus: c.accountStatus, businessStatus: c.businessStatus, projectName: c.projectName, entitlements: c.entitlements, relations: c.relations.filter(active) })) });
         else {
@@ -386,6 +419,20 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
     if (!requireAdmin(session, req, res)) return true;
     try {
       const tail = url.pathname.slice(base.length).split('/').filter(Boolean);
+      if(tail[0]==='recurring-collections') {
+        if(!recurringCollection)throw fault('RECURRING_COLLECTION_NOT_READY','정기수집 요청 연결을 준비 중입니다.',503);
+        if(url.search)throw fault('INVALID_FIELDS','정기수집 요청 또는 심사 내용만 지정해 주세요.');
+        if(req.method==='GET'&&tail.length===1){json(res,200,recurringAdminState());return true;}
+        if(req.method!=='POST'||tail.length!==2||tail[1]!=='review')throw fault('METHOD_NOT_ALLOWED','지원하지 않는 요청입니다.',405);
+        let origin;try{origin=new URL(req.headers.origin);}catch{}
+        if(!origin||origin.host!==req.headers.host)throw fault('ORIGIN_REQUIRED','현재 데이터랩 화면에서 요청해 주세요.',403);
+        const payload=await body(req);fields(payload,['companyId','decision','reason','time','requestKey']);
+        if(!requireAdmin(session,req,res))return true;
+        const actor=session.memberId||session.username;store.throttle(`recurring-review:${actor}`,120);
+        const record=await recurringCollection.review(payload,actor);
+        if(!requireAdmin(session,req,res))return true;
+        json(res,200,{recurringCollection:record,...recurringAdminState()});return true;
+      }
       if (req.method === 'GET' && !tail.length) { json(res, 200, { customers: store.list().map(c => ({ customerId: c.customerId, memberId: c.memberId, username: c.username, accountKind: c.accountKind || 'customer', accountStatus: c.accountStatus, businessStatus: c.businessStatus, relations: c.relations.filter(active), entitlements: c.entitlements, revision: c.revision })) }); return true; }
       const verify = customerId => { if (!requireAdmin(session, req, res)) return null; return store.get(customerId); };
       if (req.method === 'GET' && tail.length === 1) { const c = store.get(tail[0]); await sendState(res, c, { current: () => verify(c.customerId) }, { history: store.history(c.customerId) }); return true; }

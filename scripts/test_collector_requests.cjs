@@ -18,6 +18,17 @@ async function terminal(api, id = "request-test-0001") {
   throw new Error("Fixture request did not finish");
 }
 
+test("scheduled admission preserves its trigger through completion and restart", async t => {
+  const {api,dataDir}=await fixture(t,{run:async()=>result('complete',{trigger:undefined})});
+  const accepted=await api.submit({...payload(),trigger:'scheduled',scheduledCollection:true});
+  assert.equal(accepted.trigger,'scheduled');
+  const finished=await terminal(api);
+  assert.equal(finished.trigger,'scheduled');assert.equal(finished.result.trigger,'scheduled');
+  const reopened=createCollectorRequests({dataDir,run:()=>{throw Error('Must not recollect');}});
+  assert.equal((await reopened.get(finished.requestId)).trigger,'scheduled');
+  assert.equal((await reopened.get(finished.requestId)).result.trigger,'scheduled');
+});
+
 test("durable acceptance returns before work completes and same request runs once", async t => {
   let release, count = 0;
   const hold = new Promise(resolve => { release = resolve; });

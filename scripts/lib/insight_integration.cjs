@@ -12,6 +12,7 @@ const { createInsightAdminProvisioning } = require('./insight_admin_provisioning
 const { createInsightCatalog } = require('./insight_catalog.cjs');
 const { projectIndustryMetadata, projectCapacityMetadata } = require('./insight_comparison_metadata.cjs');
 const { createMonthlyReportDelivery } = require('./monthly_report_delivery.cjs');
+const { createInsightRecurringCollection } = require('./insight_recurring_collection.cjs');
 // Match the existing reviewed-room convention without invoking capacity/history
 // preparation merely to authenticate or display a company's identity.
 function reviewedRooms(company) {
@@ -25,7 +26,7 @@ function reviewedRooms(company) {
   },0);
   return count>0?count:null;
 }
-function createInsightIntegration({ dataDir, readCatalog, readMembers, authenticateMember, registerMember, checkUsername, policyContext = {}, requireAdmin, collectorRequests, verifyStored, readPostprocess, readEvidence, readCompanyDetail, readIntegrated, readIntegratedMonths, readRegionContext, readRegionLocation, regionPreparation, monthlyReports = null, renderReportPdf = null, env = process.env }) {
+function createInsightIntegration({ dataDir, readCatalog, readMembers, authenticateMember, registerMember, checkUsername, policyContext = {}, requireAdmin, collectorRequests, verifyStored, verifyRecurringStored = verifyStored, readPostprocess, recurringIsBusy, inspectRecurringToday, readEvidence, readCompanyDetail, readIntegrated, readIntegratedMonths, readRegionContext, readRegionLocation, regionPreparation, monthlyReports = null, renderReportPdf = null, env = process.env }) {
   if (env.INSIGHT_CONNECTION_ENABLED !== '1') return null;
   const serviceToken = env.INSIGHT_SERVICE_TOKEN;
   if (!serviceToken || serviceToken.length < 32) throw new Error('INSIGHT_SERVICE_TOKEN is required when Insight connection is enabled');
@@ -63,11 +64,17 @@ function createInsightIntegration({ dataDir, readCatalog, readMembers, authentic
     ...(typeof readCompanyDetail?.runWork === 'function' ? {runWork:readCompanyDetail.runWork} : {})}) : null;
   const savedCollectionResults=createInsightSavedReportSources({dataDir});
   const analysis=createInsightAnalysis({catalog,collectionResults,savedCollectionResults,readRegionContext,readRegionLocation,regionPreparation});
-  const preparationBridge = collectorRequests && verifyStored ? createInsightPreparation({store,catalog,collectorRequests,verifyStored,readPostprocess,findReusable:collectionResults?.reusable,workerKey}) : null;
+  const recurringCollection = collectorRequests && verifyRecurringStored ? createInsightRecurringCollection({dataDir,store,catalog,collectorRequests,
+    verifyStored:verifyRecurringStored,readPostprocess,findReusable:collectionResults?.reusable,workerKey,isBusy:recurringIsBusy,inspectToday:inspectRecurringToday}) : null;
+  if(recurringCollection){
+    const closeStore=store.close;
+    store.close=()=>{void recurringCollection.close().catch(()=>{});closeStore();};
+  }
+  const preparationBridge = collectorRequests && verifyStored ? createInsightPreparation({store,catalog,collectorRequests,verifyStored,readPostprocess,findReusable:collectionResults?.reusable,workerKey,recurringCollection}) : null;
   const signup = { enabled: env.INSIGHT_SIGNUP_ENABLED === '1', termsVersion: env.INSIGHT_TERMS_VERSION || POLICY_VERSION, privacyVersion: env.INSIGHT_PRIVACY_VERSION || POLICY_VERSION, termsUrl: env.INSIGHT_TERMS_URL || '/terms', privacyUrl: env.INSIGHT_PRIVACY_URL || '/privacy' };
-  const handlers = createInsightHttp({ store, serviceToken, catalog, authenticateMember, registerMember, checkUsername, requireAdmin, preparationBridge, collectionResults, savedCollectionResults, analysis, reportDelivery, renderReportPdf,
+  const handlers = createInsightHttp({ store, serviceToken, catalog, authenticateMember, registerMember, checkUsername, requireAdmin, preparationBridge, collectionResults, savedCollectionResults, analysis, reportDelivery, renderReportPdf,recurringCollection,
     memberActive: async memberId => (await readMembers()).members.some(row => row.memberId === memberId && row.status !== 'disabled' && row.role === 'b2b'),
     signup, policies: insightPolicies(policyContext), supportEmail: policyContext.contactEmail || '', adminStore });
-  return { ...handlers, store, adminStore, metadataCatalog, reportDelivery, provision: createInsightAdminProvisioning({ adminStore, requireAdmin }) };
+  return { ...handlers, store, adminStore, metadataCatalog, reportDelivery, recurringCollection, provision: createInsightAdminProvisioning({ adminStore, requireAdmin }) };
 }
 module.exports = { createInsightIntegration, reviewedRooms };

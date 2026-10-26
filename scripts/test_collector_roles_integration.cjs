@@ -184,7 +184,7 @@ async function main() {
 
     // Browser requests receive a durable receipt before a worker is available
     // to execute the job. An identical receipt ID cannot create a second job.
-    const asyncPayload = { ...payload("강원글램핑", "manual"), clientRequestId: "roles-async-one" };
+    const asyncPayload = { ...payload("통합시험숙소", "manual"), searchMode:'company',targetPlaceId:'123456',detailRankRanges:'1-1',clientRequestId: "roles-async-one" };
     const asyncAccepted = await request(base, "/api/crawl?async=1", admin, jsonPost(asyncPayload));
     assert.equal(asyncAccepted.response.status, 202, JSON.stringify(asyncAccepted.body));
     assert.equal(asyncAccepted.body.requestId, asyncPayload.clientRequestId);
@@ -205,6 +205,8 @@ async function main() {
     await asyncWorker.started;
     assert.equal(asyncWorker.errors.length, 0, asyncWorker.errors[0]?.stack);
     assert.equal(asyncWorker.spawned.length, 1);
+    assert.equal(asyncWorker.spawned[0].config.env.NAVER_TARGET_PLACE_ID,'123456');
+    assert.equal(asyncWorker.spawned[0].config.env.SEARCH_MODE,'company');
     let asyncFinal;
     await waitUntil(async () => {
       asyncFinal = (await request(base, `/api/crawl-requests/${asyncPayload.clientRequestId}`, admin)).body;
@@ -213,6 +215,7 @@ async function main() {
     assert.equal(asyncFinal.status, "complete", JSON.stringify(asyncFinal));
     assert.equal(asyncFinal.result.collectionQuality.status, "complete");
     assert.ok(asyncFinal.result.runId);
+    assert.equal(JSON.parse(await fsp.readFile(path.join(outputsDir,asyncFinal.result.runId,'manifest.json'),'utf8')).targetPlaceId,'123456');
     assert.ok(asyncFinal.finishedAt);
     assert.equal((await request(base, `/api/runs/${asyncFinal.result.runId}`, admin)).response.status, 200);
     assert.equal(JSON.parse(await fsp.readFile(receiptFile, "utf8")).status, "complete");
@@ -245,7 +248,7 @@ async function main() {
     assert.match(nowAccepted.body.id, /^manual_[a-f0-9]{32,64}$/);
     assert.ok(["queued", "running"].includes(nowAccepted.body.status), JSON.stringify(nowAccepted.body));
     assert.equal(nowAccepted.body.trigger, "manual");
-    await waitUntil(() => queue("scheduled", 1), "Saved immediate schedule did not target scheduled worker");
+    try { await waitUntil(() => queue("scheduled", 1), "Saved immediate schedule did not target scheduled worker"); } catch (error) { console.error(JSON.stringify({diagnostic:"immediate_schedule",schedule:(await request(base,"/api/worker-schedule",admin)).body,workers:(await status()).workers})); throw error; }
     const duplicatePending = await request(base, "/api/worker-schedule/run-now", admin, jsonPost({ requestId: "roles-run-now-one" }));
     assert.equal(duplicatePending.response.status, 202, JSON.stringify(duplicatePending.body));
     assert.equal(duplicatePending.body.id, nowAccepted.body.id);

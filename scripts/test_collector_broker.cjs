@@ -107,6 +107,18 @@ async function failedRecoverySource(broker, overrides = {}) {
   return { lease, runId, bundle, input, recoveryInput: { manifestSha256: sha(bundle.contents["manifest.json"]), expected } };
 }
 
+test('approved single-company target passes the broker boundary and rejects malformed identifiers',()=>fixture(async({broker})=>{
+  const input=jobInput();input.env={...input.env,SEARCH_MODE:'company',NAVER_TARGET_PLACE_ID:'123'};input.payload={...input.payload,searchMode:'company',targetPlaceId:'123'};
+  const lease=await claimed(broker,input);assert.equal(lease.env.NAVER_TARGET_PLACE_ID,'123');
+  const invalid=jobInput();invalid.env={...invalid.env,SEARCH_MODE:'company',NAVER_TARGET_PLACE_ID:'../123'};
+  await assert.rejects(broker.submit(invalid),{code:'COLLECTOR_INVALID_ENV'});
+  for(const change of [{targetPlaceId:'456'},{targetPlaceId:undefined},{searchMode:'keyword'}]){
+    const mismatch={...input,payload:{...input.payload,...change}};
+    if(change.targetPlaceId===undefined&&Object.hasOwn(change,'targetPlaceId'))delete mismatch.payload.targetPlaceId;
+    await assert.rejects(broker.submit(mismatch),{code:'COLLECTOR_INVALID_PAYLOAD'});
+  }
+}));
+
 test("actual progress is monotonic and heartbeat freshness cannot impersonate new place progress", () => fixture(async ({ broker, progress, advance }) => {
   const lease = await claimed(broker), route = `/api/collector-worker/jobs/${lease.id}/heartbeat`;
   const report = { version: 1, phase: "inventory", completedPlaces: 1, totalPlaces: 2,

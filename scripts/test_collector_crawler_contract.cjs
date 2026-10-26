@@ -46,7 +46,7 @@ function harness(options = {}) {
     loadHistoricalNaverBookingBusinessMap, getHistoricalNaverBookingBusiness, getNaverDailySchedule,
     addCollectionDiagnostics, diagnostics: scheduledCollectionDiagnostics,
     collectNaverSchedulesForItems, collectWeeklyNaverAvailability, collectNaverBookingAvailability, compactNaverScheduleDetail, productCoverage, outputDir: OUTPUT_DIR,
-    profile: COLLECTION_PROFILE, searchRegion: SEARCH_REGION, collectNaverMain,
+    profile: COLLECTION_PROFILE, searchRegion: SEARCH_REGION, collectNaverMain, enrichNaverRowsWithBookingAvailability,
     concurrency: [NAVER_BOOKING_DETAIL_CONCURRENCY, NAVER_SCHEDULE_CONCURRENCY, NAVER_OTA_OBSERVATION_CONCURRENCY],
   })`, context);
   return { ...exports, writes, logs, process: processMock };
@@ -64,6 +64,14 @@ function manifestFixture() {
     },
   };
 }
+
+test('approved target receives detail at its original search rank without including a similarly named company',async()=>{
+  const crawler=harness({keyword:'동명글램핑',env:{SEARCH_MODE:'company',NAVER_TARGET_PLACE_ID:'123',DETAIL_RANK_RANGES:'1-1',COLLECTOR_WORKER_RUNTIME:'1'},
+    setup:'collectNaverBookingAvailability=async placeId=>({status:"성공",bookingBusinessId:placeId,nightTotalStock:10,nightAvailableStock:8,nightSoldOutStock:2});'});
+  const row={place_id:'123',업체명:'동명글램핑',overall_rank:9,예약:'Y'};
+  const result=await crawler.enrichNaverRowsWithBookingAvailability([row]);
+  assert.equal(result.eligible,1);assert.equal(result.successful,1);assert.equal(row.overall_rank,9);assert.equal(row.네이버예약사업자ID,'123');
+});
 
 test("worker restores historical stage pools and preserves explicit low-load job profiles", () => {
   assert.deepEqual(Array.from(harness().concurrency), [2, 4, 2]);

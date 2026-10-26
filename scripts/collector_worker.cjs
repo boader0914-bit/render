@@ -12,7 +12,7 @@ const { performance } = require("node:perf_hooks");
 
 const PROTOCOL_VERSION = 1;
 const JOB_ENV_KEYS = new Set([
-  "CHECK_IN", "CHECK_OUT", "ADULTS", "SEARCH_MODE", "SEARCH_MODE_REQUESTED", "SEARCH_MODE_AUTO_CORRECTED",
+  "CHECK_IN", "CHECK_OUT", "ADULTS", "SEARCH_MODE", "SEARCH_MODE_REQUESTED", "SEARCH_MODE_AUTO_CORRECTED", "NAVER_TARGET_PLACE_ID",
   "SEARCH_INTENT", "SEARCH_REGION", "SEARCH_SCOPE", "SEARCH_SCOPE_LABEL", "COLLECTION_MODE", "COLLECTION_PURPOSE",
   "DETAIL_RANK_RANGES", "PRODUCT_MODE", "DAY_USE_MODE", "BOOKING_RANGE_DAYS", "BOOKING_RANGE_PLACE_LIMIT", "NAVER_BOOKING_STOCK_LIMIT",
   "SOURCE_ROLE", "COLLECTION_SOURCE", "COLLECTION_SOURCE_LABEL", "SCHEDULED_COLLECTION", "RUN_STAMP",
@@ -202,6 +202,7 @@ function validateJob(job, options = {}) {
   if (job.env.RUN_STAMP && !/^[a-zA-Z0-9_-]{1,100}$/.test(job.env.RUN_STAMP)) throw failure("COLLECTOR_JOB_INVALID");
   if (job.env.SCHEDULED_COLLECTION && !["0", "1"].includes(job.env.SCHEDULED_COLLECTION)) throw failure("COLLECTOR_JOB_INVALID");
   if (job.env.DAY_USE_MODE !== undefined && !["inspect", "lodging_only", "detail"].includes(job.env.DAY_USE_MODE)) throw failure("COLLECTOR_JOB_INVALID");
+  try { require('./collector_company_target.cjs').normalizeTargetPlaceId(job.env.NAVER_TARGET_PLACE_ID,job.env.SEARCH_MODE); } catch { throw failure('COLLECTOR_JOB_INVALID'); }
   if (job.workerKey) {
     const engine = job.workerKey === "scheduled" ? "archive-keyword-adapted-v2" : "current-manual-v2";
     if (!["manual", "scheduled"].includes(job.workerKey) || job.workerKey !== (options.workerKey || "manual")

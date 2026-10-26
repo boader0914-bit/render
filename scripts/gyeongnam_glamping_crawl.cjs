@@ -8,6 +8,7 @@ const { createNaverRequestGate, isNaverBookingRateLimit, isNaverCaptchaResponse 
 const { createProductCoverage, selectProductTargets } = require("./collector_product_coverage.cjs");
 const { createCollectionProgressReporter } = require("./collection_progress.cjs");
 const { DAY_USE_MODES, normalizeDayUseMode, dayUsePlan, withoutUncollectedDayUse } = require("./collector_day_use.cjs");
+const { normalizeTargetPlaceId, filterTargetPlaceRows, assertCompanyTargetPresent } = require('./collector_company_target.cjs');
 const COLLECTION_STARTED_AT = new Date().toISOString();
 let collectionPhase = "setup";
 const naverMainAttempts = [];
@@ -304,6 +305,7 @@ const DAY_USE_MODE = normalizeDayUseMode(process.env.DAY_USE_MODE);
 const BOOKING_RANGE_DAYS = boundedInteger(process.env.BOOKING_RANGE_DAYS, 7, 1, 31);
 const RAW_KEYWORD = process.argv[2] || "경남글램핑";
 const SEARCH_MODE = normalizeSearchMode(process.env.SEARCH_MODE || "keyword");
+const TARGET_PLACE_ID = normalizeTargetPlaceId(process.env.NAVER_TARGET_PLACE_ID,SEARCH_MODE);
 const SEARCH_MODE_LABEL = SEARCH_MODES[SEARCH_MODE];
 const REQUESTED_SEARCH_INTENT = String(process.env.SEARCH_INTENT || "").trim();
 const REQUESTED_SEARCH_REGION = String(process.env.SEARCH_REGION || "").trim();
@@ -1558,7 +1560,7 @@ async function enrichNaverRowsWithOtaObservation(rows) {
   for (const [placeId, placeRows] of groupedRows.entries()) {
     const eligible = placeRows.some((row) => {
       const ranks = [asNumber(row.overall_rank), asNumber(row.ad_order), asNumber(row.순위)].filter(Boolean);
-      return ranks.some((rank) => rankInRanges(rank, DETAIL_RANK_RANGES));
+      return TARGET_PLACE_ID ? String(row.place_id)===TARGET_PLACE_ID : ranks.some((rank) => rankInRanges(rank, DETAIL_RANK_RANGES));
     });
     if (COLLECTION_MODE === "fast") {
       skippedByMode += 1;
@@ -3024,10 +3026,10 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
     const alreadyKnown = uniquePlaceIds.has(row.place_id);
     const overallRank = asNumber(row.overall_rank);
     const adRank = asNumber(row.ad_order);
-    const detailEligible = COLLECTION_MODE !== "fast" && (
+    const detailEligible = COLLECTION_MODE !== "fast" && (TARGET_PLACE_ID ? String(row.place_id)===TARGET_PLACE_ID : (
       rankInRanges(overallRank, DETAIL_RANK_RANGES) ||
       (!overallRank && rankInRanges(adRank, DETAIL_RANK_RANGES))
-    );
+    ));
     if (!alreadyKnown && COLLECTION_MODE === "fast") {
       row.네이버예약재고수집상태 = "미수집(빠른 순위 모드)";
       skippedByMode += 1;
@@ -3285,8 +3287,8 @@ async function collectNaverMain() {
 
     if (province.isCompany) {
       const beforeFilter = overall.length + ads.length;
-      overall = filterCompanyRows(overall, (row) => row.업체명);
-      ads = filterCompanyRows(ads, (row) => row.업체명);
+      overall = TARGET_PLACE_ID ? filterTargetPlaceRows(overall,TARGET_PLACE_ID) : filterCompanyRows(overall, (row) => row.업체명);
+      ads = TARGET_PLACE_ID ? filterTargetPlaceRows(ads,TARGET_PLACE_ID) : filterCompanyRows(ads, (row) => row.업체명);
       attempt.matched = overall.length + ads.length;
       attempt.filteredOut = beforeFilter - attempt.matched;
       if (!attempt.matched) continue;
@@ -3961,6 +3963,8 @@ async function main() {
   console.log("Collecting Naver main...");
   collectionPhase = "naver_main";
   const naver = await collectNaverMain();
+  // An approved company ID cannot fall back to a similarly named search result.
+  assertCompanyTargetPresent(naver,TARGET_PLACE_ID);
 
   console.log(`Collection profile: ${COLLECTION_PROFILE.label} - ${COLLECTION_PROFILE.note}`);
 
@@ -4690,6 +4694,7 @@ async function main() {
     keyword: RAW_KEYWORD,
     keywordType: province.isCompany ? "company" : (province.isLocal ? "local" : "province"),
     searchMode: SEARCH_MODE,
+    targetPlaceId: TARGET_PLACE_ID,
     searchModeLabel: SEARCH_MODE_LABEL,
     searchIntent: SEARCH_INTENT,
     searchRegion: SEARCH_REGION,
@@ -4801,7 +4806,7 @@ main().catch(async (error) => {
     // its safe acceptance receipt without recording the raw response/error.
     const manifest = {
       outputDir: OUTPUT_DIR, collectedAt: new Date().toISOString(), keyword: RAW_KEYWORD,
-      searchMode: SEARCH_MODE, searchIntent: SEARCH_INTENT, searchRegion: SEARCH_REGION, searchScope: SEARCH_SCOPE,
+      searchMode: SEARCH_MODE, targetPlaceId:TARGET_PLACE_ID, searchIntent: SEARCH_INTENT, searchRegion: SEARCH_REGION, searchScope: SEARCH_SCOPE,
       collectionMode: COLLECTION_MODE, collectionPurpose: COLLECTION_PURPOSE,
       sourceRole: SOURCE_ROLE, collectionSource: COLLECTION_SOURCE,
       checkIn: CHECK_IN, checkOut: CHECK_OUT, adults: ADULTS,

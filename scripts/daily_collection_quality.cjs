@@ -91,6 +91,7 @@ function inspectManifest(manifest, options = {}) {
   }
   const compact = (value) => String(value || "").replace(/\s+/g, "").toLowerCase();
   if (expected.keyword && compact(expected.keyword) !== compact(manifest.keyword)) return receipt("failed", "keyword_mismatch", counts);
+  if(expected.targetPlaceId&&String(expected.targetPlaceId)!==manifest.targetPlaceId)return receipt('failed','target_place_mismatch',counts);
   for (const key of ["collectionMode", "collectionPurpose", "productMode", "checkIn", "checkOut"]) {
     if (expected[key] !== undefined && String(expected[key]) !== String(manifest[key] ?? "")) return receipt("failed", `${key}_mismatch`, counts);
   }
@@ -100,7 +101,8 @@ function inspectManifest(manifest, options = {}) {
   if (expected.detailRankRanges && compact(expected.detailRankRanges) !== compact(manifest.detailRankRanges)) return receipt("failed", "detail_rank_range_mismatch", counts);
   const expectedDays = count(expected.bookingRangeDays ?? expected.bookingDays);
   if (expectedDays !== null && count(manifest.bookingRangeDays) !== expectedDays) return receipt("failed", "booking_days_mismatch", counts);
-  if (counts.naverOverall === 0) return receipt("failed", "no_main_results", counts);
+  const hasTargetAd=/^[1-9]\d{0,29}$/.test(manifest.targetPlaceId||'') && count(manifest.counts?.naverAds)>0;
+  if (counts.naverOverall === 0 && !hasTargetAd) return receipt("failed", "no_main_results", counts);
   let bookingExpected = true;
   if (manualWorker) {
     const enabled = manifest.collectionProfileFlags?.collectBookingStock;

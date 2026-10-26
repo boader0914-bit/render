@@ -7,6 +7,14 @@ const path = require("node:path");
 const { test } = require("node:test");
 const { createKeywordWorkerScheduler, defaultConfig, validateConfig, uniqueKeywords, payloadFor, dateKey, MIN_FREE_BYTES, GRACE_MS } = require("./keyword_worker_scheduler.cjs");
 
+test('immediate scheduled-worker requests retain a client ID without pretending to be timed occurrences',()=>{
+  const config=defaultConfig(new Date('2026-10-26T00:00:00Z'));
+  const immediate=payloadFor(config,'대구글램핑','2026-10-26','manual_'+'a'.repeat(64),0,'manual','scheduled');
+  assert.equal(immediate.trigger,'manual');assert.equal(Object.hasOwn(immediate,'scheduleOccurrenceId'),false);assert.ok(immediate.clientRequestId);
+  const scheduled=payloadFor(config,'대구글램핑','2026-10-26','scheduled_2026-10-26',0,'scheduled','manual');
+  assert.equal(scheduled.scheduleOccurrenceId,'manual_scheduled_2026-10-26');
+});
+
 async function fixture(overrides = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "keyword-worker-scheduler-test-"));
   let time = new Date("2026-09-23T04:59:00.000Z");

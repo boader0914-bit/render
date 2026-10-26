@@ -7,6 +7,8 @@ const FAILURE_LABELS = {
   NAVER_SEARCH_STATE_INVALID: "검색 응답의 업체 목록을 해석하지 못함",
   NAVER_SEARCH_RESULT_UNSUPPORTED: "선택한 검색 방식에 맞는 결과 목록이 없음",
   NAVER_SEARCH_HTTP_ERROR: "검색 서버 오류 응답",
+  COLLECTION_TARGET_PLACE_NOT_FOUND: "승인한 업체 고유번호와 일치하는 검색 결과가 없음",
+  COLLECTION_TARGET_INVALID: "단일 업체 수집 식별자 또는 검색 방식이 올바르지 않음",
   COLLECTION_NETWORK_ERROR: "수집 서버 통신 실패",
   COLLECTION_TIMEOUT: "수집 응답 시간 초과",
   COLLECTION_STAGE_FAILED: "수집 단계 실행 실패",

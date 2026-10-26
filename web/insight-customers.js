@@ -10,9 +10,15 @@
     const data=await response.json();if(!response.ok)throw new Error(data.error?.message || data.error || '인사이트 이용자 연결을 확인해 주세요.');return data;
   }
   function header() { return '<div class="admin-console-head"><div><strong>인사이트 이용자 · 등록 업체</strong><small>고객별 제공 범위와 공통 업체 DB의 검수 요청을 관리합니다.</small></div><button type="button" data-insight-action="reload">목록 새로고침</button></div>'; }
+  const recurringLabels={pending:'검토 대기',approved:'정기수집 등록',paused:'일시중지',rejected:'반려',queued:'수집 대기',collecting:'수집 중',running:'수집 중',ready:'갱신 완료',complete:'갱신 완료',reused:'기존 자료 연결',partial:'일부 자료',failed:'수집 실패',blocked:'접근 제한',needs_review:'관리자 확인 필요',dispatching:'접수 확인 중'};
+  const recurringDate=value=>value&&Number.isFinite(Date.parse(value))?new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(value)):'아직 없음';
+  function recurringPanel(data) {
+    const rows=Array.isArray(data?.recurringCollections)?data.recurringCollections:[];
+    return `<section class="insight-recurring-panel" aria-labelledby="insightRecurringHeading"><div class="admin-console-head"><div><h3 id="insightRecurringHeading">정기수집 요청</h3><small>업체별 하루 1회 · 당일 포함 향후 30일 · 같은 업체는 고객 간 수집 공유</small></div><span class="insight-recurring-count">검토 대기 ${rows.filter(row=>row.status==='pending').length}곳</span></div>${rows.length?`<div class="insight-admin-list">${rows.map(row=>`<article class="insight-admin-company insight-recurring-row"><div class="insight-recurring-title"><strong>${esc(row.companyName||row.companyId)}</strong><span class="insight-recurring-badge">${esc(recurringLabels[row.status]||'상태 확인 필요')}</span></div><small>${esc(row.companyId)} · 요청 ${Number.isSafeInteger(row.requestCount)?row.requestCount:0}명</small><dl><dt>마지막 수집</dt><dd>${esc(recurringDate(row.lastCollectedAt))}</dd><dt>다음 예정</dt><dd>${esc(recurringDate(row.nextRunAt))}</dd></dl>${row.message?`<p>${esc(row.message)}</p>`:''}${row.errorCode?`<small>사유 ${esc(row.errorCode)}</small>`:''}<details><summary>요청 고객</summary>${(row.requesters||[]).map(person=>`<p>${esc(person.username||person.customerId)} · ${esc(recurringDate(person.requestedAt))}</p>`).join('')||'<p>현재 활성 요청이 없습니다.</p>'}</details><form data-insight-recurring="${esc(row.companyId)}"><div class="insight-admin-grid"><label>매일 실행 시각 · 한국시간<input type="time" name="time" value="${esc(row.time||'14:00')}" required></label><label>처리 사유<input name="reason" maxlength="500" required></label></div><small>승인 다음 날부터 지정한 시각에 실행합니다. 실패·차단 당일에는 자동 재시도하지 않습니다.</small><div class="insight-recurring-actions"><button type="submit" value="approve">${row.status==='approved'?'일정 저장':'승인 · 정기수집 등록'}</button>${row.status==='pending'?'<button type="submit" value="reject">반려</button>':''}${row.status==='approved'?'<button type="submit" value="pause">정기수집 일시중지</button>':''}</div></form></article>`).join('')}</div>`:'<p class="empty">경쟁업체 정기수집 요청이 아직 없습니다.</p>'}<p class="insight-recurring-status" role="status"></p></section>`;
+  }
   async function list() {
     selected=null;root.innerHTML=`${header()}<p role="status">이용자 목록을 불러옵니다.</p>`;
-    try {const data=await request();root.innerHTML=`${header()}<div class="insight-admin-list">${data.customers.map(c=>`<button type="button" data-insight-customer="${esc(c.customerId)}"><strong>${esc(c.username)}</strong><span>${c.businessStatus==='planning'?'매장 준비 중':'매장 등록'} · ${c.relations.length}곳 · ${c.accountStatus==='active'?'이용 중':'중지'}</span></button>`).join('')||'<p class="empty">인사이트에 로그인한 이용자가 없습니다.</p>'}</div>`;}catch(error){root.innerHTML=`${header()}<p class="empty">${esc(error.message)}</p>`;}
+    try {const [data,recurring]=await Promise.all([request(),request('/recurring-collections')]);root.innerHTML=`${header()}${recurringPanel(recurring)}<h3>이용자 목록</h3><div class="insight-admin-list">${data.customers.map(c=>`<button type="button" data-insight-customer="${esc(c.customerId)}"><strong>${esc(c.username)}</strong><span>${c.businessStatus==='planning'?'매장 준비 중':'매장 등록'} · ${c.relations.length}곳 · ${c.accountStatus==='active'?'이용 중':'중지'}</span></button>`).join('')||'<p class="empty">인사이트에 로그인한 이용자가 없습니다.</p>'}</div>`;}catch(error){root.innerHTML=`${header()}<p class="empty">${esc(error.message)}</p>`;}
   }
   function detail(data) {
     selected=data;const c=data.customer;
@@ -31,7 +37,19 @@
   }
   root.addEventListener('click',async event=>{const button=event.target.closest('[data-insight-customer],[data-insight-action]');if(!button||busy)return;busy=true;try{if(button.dataset.insightCustomer){detail(await request(`/${encodeURIComponent(button.dataset.insightCustomer)}`));appendPreparationControls();}else await list();}catch(error){root.querySelector('.insight-admin-status')?.replaceChildren(document.createTextNode(error.message));}finally{busy=false;}});
   root.addEventListener('submit',async event=>{
-    event.preventDefault();if(busy||!selected)return;busy=true;
+    event.preventDefault();if(busy)return;
+    if(event.target.dataset.insightRecurring){
+      busy=true;const form=event.target,values=new FormData(form),feedback=root.querySelector('.insight-recurring-status');
+      const decision=event.submitter?.value;
+      const fingerprint=JSON.stringify([decision,values.get('reason'),decision==='approve'?values.get('time'):null]);
+      if(form.dataset.recurringFingerprint!==fingerprint){form.dataset.recurringFingerprint=fingerprint;form.dataset.recurringRequestKey=crypto.randomUUID();}
+      const requestKey=form.dataset.recurringRequestKey;
+      form.querySelectorAll('button').forEach(button=>button.disabled=true);
+      try{await request('/recurring-collections/review',{companyId:form.dataset.insightRecurring,decision,reason:values.get('reason'),...(decision==='approve'?{time:values.get('time')}:{}),requestKey});delete form.dataset.recurringRequestKey;await list();root.querySelector('.insight-recurring-status').textContent='정기수집 요청을 처리했습니다.';}
+      catch(error){if(feedback)feedback.textContent=error.message;}
+      finally{busy=false;form.querySelectorAll('button').forEach(button=>button.disabled=false);}return;
+    }
+    if(!selected)return;busy=true;
     const form=event.target, values=new FormData(form), c=selected.customer;
     form.querySelectorAll('button').forEach(button=>button.disabled=true);
     try{let suffix=`/${encodeURIComponent(c.customerId)}/commands`, action, payload;

@@ -32,7 +32,7 @@ function scope(value) {
   const ranks=rankSet(value.detailRankRanges || '1-20');
   const cap=Number(value.bookingRangePlaceLimit || 0);
   return {
-    keyword:keywordKey(value.keyword), checkIn:value.checkIn || '', checkOut:value.checkOut || '',
+    keyword:keywordKey(value.keyword), targetPlaceId:value.targetPlaceId || '', checkIn:value.checkIn || '', checkOut:value.checkOut || '',
     bookingRangeDays:Number(value.bookingRangeDays || 1), adults:Number(value.adults || 2),
     searchMode:value.resolvedSearchMode || value.searchMode || 'keyword', searchIntent:value.searchIntent || '',
     searchRegion:value.searchRegion || '', searchScope:value.searchScope || '',
@@ -43,6 +43,7 @@ function scope(value) {
   };
 }
 function covers(have, wanted) {
+  if((have.targetPlaceId||'')!==(wanted.targetPlaceId||''))return false;
   for (const key of ['keyword','adults','searchMode','searchIntent','searchRegion','searchScope','collectionMode','collectionPurpose']) {
     if (have[key] !== wanted[key]) return false;
   }
