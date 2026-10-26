@@ -58,6 +58,9 @@ const { createRegionalMarketService } = require("./lib/regional_market_store.cjs
 const { createRegionalMarketHttpHandler } = require("./lib/regional_market_http.cjs");
 const { createRegionalMarketMissingService } = require("./lib/regional_market_missing.cjs");
 const { createRegionalMarketMissingHttpHandler } = require("./lib/regional_market_missing_http.cjs");
+const { registeredMarketTargets } = require("./lib/regional_market_targets.cjs");
+const { createRegionalMarketMissingWeeklyScheduler } = require("./lib/regional_market_missing_weekly.cjs");
+const { createRegionalMarketMissingWeeklyHttpHandler } = require("./lib/regional_market_missing_weekly_http.cjs");
 const { addressRegion } = require("./lib/company_address_basis.cjs");
 const { createCatchmentAddressDirectory } = require("./lib/catchment_address_directory.cjs");
 const { createRegionalCatchmentHttpHandler } = require("./lib/regional_catchment_http.cjs");
@@ -465,7 +468,7 @@ const resolveRegionalReportRegion = async regionKey => {
   const searchTrendKeyword = `${ambiguous || /구$/.test(region.name) ? prefix : ""}${local}글램핑`.replace(/\s+/g, "");
   return { ...region, searchTrendKeyword };
 };
-const catchmentAddressDirectory = createCatchmentAddressDirectory({ file: COMPANY_MASTER_FILE, dataDir: DATA_DIR });
+const catchmentAddressDirectory = createCatchmentAddressDirectory({ file: COMPANY_MASTER_FILE, dataDir: DATA_DIR, includeRegionBasis: true });
 async function catchmentAddressRegions() {
   const master = JSON.parse(await fsp.readFile(path.join(WEB_DIR, "data", "region_master.json"), "utf8"));
   if (!Array.isArray(master.units)) throw Object.assign(Error("CATCHMENT_ADDRESS_SOURCE_UNAVAILABLE"), { code: "CATCHMENT_ADDRESS_SOURCE_UNAVAILABLE", statusCode: 503 });
@@ -591,11 +594,14 @@ const handleRegionalCatchment = createRegionalCatchmentHttpHandler({
 const handleRegionalMarket = createRegionalMarketHttpHandler({
   service: regionalMarketService, requireAdmin: requireAdminSession, send
 });
-// Invoked only by an explicit administrator command (including the approved
-// weekly monitor). It never enables the broader tourism/search policy.
+// Explicit administrator commands and an independently enabled weekly clock
+// share this one service. Neither enables the tourism/search collection policy.
 const regionalMarketMissing = createRegionalMarketMissingService({
   dataDir: DATA_DIR,
-  readTargets: async () => (await monthlyReportSources.targetCatalog({ priority: "background" })).companies.map(company => company.regionKey),
+  readTargets: async () => {
+    const [companies, regions] = await Promise.all([catchmentAddressDirectory.read(), catchmentAddressRegions()]);
+    return registeredMarketTargets(companies, regions);
+  },
   resolveRegion: resolveRegionalReportRegion, kosisService,
   onRegionChanged: async (regionKey, summary) => {
     if (!summary.changed && (await regionalMarketService.get({ regionKey })).status !== "missing") return;
@@ -608,6 +614,11 @@ const regionalMarketMissing = createRegionalMarketMissingService({
 const handleRegionalMarketMissing = createRegionalMarketMissingHttpHandler({
   service: regionalMarketMissing, requireAdmin: requireAdminSession, parseJsonBody, send,
   rateLimit: (req, session) => assertRequestRateLimit(req, "adminRegionalMarketMissing", { limit: 4, windowMs: 60 * 60 * 1000 }, session.username || "")
+});
+const regionalMarketMissingWeekly = createRegionalMarketMissingWeeklyScheduler({ dataDir: DATA_DIR, missingService: regionalMarketMissing });
+const handleRegionalMarketMissingWeekly = createRegionalMarketMissingWeeklyHttpHandler({
+  service: regionalMarketMissingWeekly, requireAdmin: requireAdminSession, parseJsonBody, send,
+  rateLimit: (req, session) => assertRequestRateLimit(req, "adminRegionalMarketMissingWeekly", { limit: 4, windowMs: 60 * 60 * 1000 }, session.username || "")
 });
 const handleRegionalOutlook = createRegionalAnalysisHttpHandler({
   basePath: "/api/regional-outlook", allowPolicy: false, service: regionalOutlookService,
@@ -19404,6 +19415,7 @@ async function route(req, res) {
     if (await handleRegionalAnalysis(req, res, reqUrl, session)) return;
     if (await handleRegionalMarket(req, res, reqUrl, session)) return;
     if (await handleRegionalMarketMissing(req, res, reqUrl, session)) return;
+    if (await handleRegionalMarketMissingWeekly(req, res, reqUrl, session)) return;
     if (await handleRegionalCatchment(req, res, reqUrl, session)) return;
     if (await handleRegionalOutlook(req, res, reqUrl, session)) return;
     if (await handleRegionalOutlookValidation(req, res, reqUrl, session)) return;
@@ -20637,6 +20649,7 @@ seedOutputsFromRepo()
     server.listen(PORT, HOST, () => {
       const primaryUrl = HOST === "0.0.0.0" ? `http://127.0.0.1:${PORT}` : `http://${HOST}:${PORT}`;
       console.log(`Lodging datalab beta app running at ${primaryUrl}`);
+      regionalMarketMissingWeekly.start();
       companyIntegratedDb.bootstrap().catch(error => console.error("company_integration_bootstrap_failed", error.code || "unavailable"));
       industryAnalysisService.bootstrap().catch(error => console.error("industry_analysis_bootstrap_failed", error.code || "unavailable"));
       if (HOST === "0.0.0.0") {

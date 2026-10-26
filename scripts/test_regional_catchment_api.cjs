@@ -203,6 +203,18 @@ async function main() {
     assert.equal(missingReceipt.job?.status, "blocked"); assert.equal(missingReceipt.job?.stopReason, "MISSING_KEY");
     assert.equal(missingReceipt.job?.counts.networkAttemptedRegions, 0);
     assert.equal((await request(missingPath, cookie, {})).data.reused, true);
+    const weeklyPath = "/api/regional-market/missing-weekly-policy";
+    assert.equal((await request(weeklyPath, null)).status, 401);
+    const weeklyBefore = await inventory();
+    assert.equal((await request(weeklyPath, cookie)).data.status, "disabled");
+    assert.deepEqual(await inventory(), weeklyBefore);
+    assert.equal((await request(weeklyPath, cookie, { enabled: true, force: true })).status, 400);
+    const enabledWeekly = await request(weeklyPath, cookie, { enabled: true });
+    assert.equal(enabledWeekly.status, 200); assert.equal(enabledWeekly.data.enabled, true);
+    assert.equal(enabledWeekly.data.schedule.timezone, "Asia/Seoul"); assert.equal(enabledWeekly.data.schedule.hour, 12);
+    assert.equal(enabledWeekly.data.nextEligibleAt, missingReceipt.job.nextEligibleAt);
+    assert.equal((await request(weeklyPath, cookie, { enabled: false })).data.enabled, false);
+    assert.equal((await request(missingPath, cookie)).data.job.id, missingReceipt.job.id);
     assert.deepEqual(await inventory(), beforeAddressChange, "Missing-statistics job cannot change precise address evidence");
     assert.equal(sha(await fs.readFile(companyMasterFile)), sha(changedMasterBytes));
     assert.deepEqual(JSON.parse(await fs.readFile(audit, "utf8")), [], "No outbound provider calls");

@@ -37,9 +37,9 @@ function fileChunks(handle) {
 }
 
 function createCatchmentAddressDirectory({ file, dataDir = null, maxCompanies = MAX_COMPANIES, maxBytes = MAX_BYTES,
-  fileSystem = fs, stream = fileChunks } = {}) {
+  fileSystem = fs, stream = fileChunks, includeRegionBasis = false } = {}) {
   if (typeof file !== "string" || !file || !Number.isSafeInteger(maxCompanies) || maxCompanies < 1 || maxCompanies > MAX_COMPANIES
-    || !Number.isSafeInteger(maxBytes) || maxBytes < 2 || maxBytes > MAX_BYTES || typeof stream !== "function") throw new TypeError("A saved company file and bounded directory limits are required");
+    || !Number.isSafeInteger(maxBytes) || maxBytes < 2 || maxBytes > MAX_BYTES || typeof stream !== "function" || typeof includeRegionBasis !== "boolean") throw new TypeError("A saved company file and bounded directory limits are required");
   const source = path.resolve(file);
   if (dataDir !== null) {
     if (typeof dataDir !== "string" || !dataDir) throw new TypeError("Invalid address directory data folder");
@@ -91,6 +91,14 @@ function createCatchmentAddressDirectory({ file, dataDir = null, maxCompanies = 
           const row = { companyId: company.companyId,
             label: String(company.primaryName || company.companyId).replace(/[\x00-\x1f\x7f]/g, "").slice(0, 160),
             addressBasis: companyAddressBasis(company), addresses };
+          if (includeRegionBasis) {
+            const strings = values => Array.isArray(values) && values.length <= 30 && values.every(value => typeof value === "string" && value.length <= 300 && !/[\x00-\x1f\x7f\uFFFD]/.test(value));
+            const correction = company.manualCorrection?.active === false ? null : company.manualCorrection;
+            const override = correction?.regionOverride;
+            row.regionBasis = { regions: strings(company.regions || []) ? company.regions || [] : [],
+              invalid: !strings(company.regions || []) || correction?.regionOverrideInvalid === true || override !== undefined && (typeof override !== "string" || override.length > 300 || /[\x00-\x1f\x7f\uFFFD]/.test(override)),
+              override: typeof override === "string" ? override : "" };
+          }
           bytes += Buffer.byteLength(JSON.stringify(row)) + (rows.length ? 1 : 0);
           if (bytes > maxBytes) throw fault("CATCHMENT_ADDRESS_SOURCE_LIMIT");
           rows.push(row);
