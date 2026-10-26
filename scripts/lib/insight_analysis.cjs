@@ -209,6 +209,7 @@ function createInsightAnalysis({catalog,collectionResults,savedCollectionResults
     ownId=ownId||own[0]?.companyId||null;
     if(ownId&&!own.some(r=>r.companyId===ownId))throw fault('NOT_FOUND','등록한 내 매장을 선택해 주세요.',404);
     const companies=[],sourceTimes=[],reader=savedOnly?savedCollectionResults:collectionResults;
+    const readBriefingDetail=reader&&!savedOnly&&typeof reader.briefingMonth==='function'?(id,input)=>reader.briefingMonth(id,input):(id,input)=>reader?.companyDetail(id,input);
     const seenCompanies=new Set();
     for(const rel of rels.filter(r=>r.kind==='competitor'||r.companyId===ownId)) {
       if(seenCompanies.has(rel.companyId))continue;seenCompanies.add(rel.companyId);
@@ -223,7 +224,7 @@ function createInsightAnalysis({catalog,collectionResults,savedCollectionResults
         const listed=reader?.companyMonths?await reader.companyMonths(c.companyId):null;
         if(listed!==null&&listed!==undefined)knownMonths=[...new Set(listed.map(row=>typeof row==='string'?row:row?.month).filter(value=>/^20\d{2}-(0[1-9]|1[0-2])$/.test(value||'')))].sort();
         else if(choice.selection.stayMode==='all_available'){
-          preloaded=await reader?.companyDetail(c.companyId,{...(savedOnly?{company:c}:{})});
+          preloaded=await readBriefingDetail(c.companyId,{...(savedOnly?{company:c}:{})});
           knownMonths=[...new Set([...(preloaded?.integrated?.months||[]).map(row=>row.month),preloaded?.integrated?.selectedMonth,...(preloaded?.current?.daily||[]).map(row=>validBriefingDay(row.date)?row.date.slice(0,7):null)].filter(value=>/^20\d{2}-(0[1-9]|1[0-2])$/.test(value||'')))].sort();
         }
         if(knownMonths.length>122)throw Error('bounded month catalog');
@@ -235,7 +236,7 @@ function createInsightAnalysis({catalog,collectionResults,savedCollectionResults
           period:{start:choice.period.start?[choice.period.start,month+'-01'].sort().at(-1):month+'-01',end:choice.period.end?[choice.period.end,monthEnd(month)].sort()[0]:monthEnd(month)},code}));
         try {
           const canReuse=preloaded&&(preloaded.legacyObservationView||!preloaded.integrated||preloaded.integrated.selectedMonth===month);
-          const detail=canReuse?preloaded:await reader?.companyDetail(c.companyId,{month,...(savedOnly?{company:c}:{})});
+          const detail=canReuse?preloaded:await readBriefingDetail(c.companyId,{month,...(savedOnly?{company:c}:{})});
           if(!detail){issue('COMPANY_DETAIL_NOT_FOUND');continue;}
           if(savedOnly&&Number.isFinite(Date.parse(detail.integrated?.calculatedAt)))sourceTimes.push(detail.integrated.calculatedAt);
           const integrated=Boolean(detail.integrated&&!detail.legacyObservationView);

@@ -2,6 +2,7 @@
 // Customer projection: one identified company, one stored run. Never expose raw files or other companies.
 const { hash, fault } = require('./insight_store.cjs');
 const { projectCompanyDetail } = require('./insight_company_detail.cjs');
+const { projectIntegrated } = require('./insight_company_integrated.cjs');
 const { createScheduledSingleFlight } = require('./scheduled_single_flight.cjs');
 const number = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
 const text = (value, limit = 180) => String(value || '').slice(0, limit);
@@ -101,6 +102,25 @@ function createCollectionResults({ catalog, readEvidence, readCompanyDetail, rea
       return projectCompanyDetail(company, detail, { integrated, month, integrationConnected: Boolean(readIntegrated) });
     });
   }
+  async function briefingMonth(companyId,{month}={}) {
+    if(!readIntegrated)return companyDetail(companyId,{month});
+    if(!(await catalog()).companies.some(row=>row.companyId===companyId))return null;
+    let value;
+    // get() owns the existing proof/refresh leases. An outer analytical lease
+    // would needlessly queue its cheap saved read; sharing a promise before
+    // its inner lease starts could deadlock a reentering current lease owner.
+    try{value=await readIntegrated(companyId,{month,knownMonthsOnly:true});}
+    catch(error){
+      if(['MONTH_NOT_OBSERVED','month_not_observed'].includes(error.code))throw fault('MONTH_NOT_OBSERVED','수집 이력이 있는 숙박월 또는 이번 달을 선택해 주세요.',400);
+      throw error;
+    }
+    // Keep the normal shared-store freshness/validation path, but omit the
+    // unrelated ABC/channel/raw-history detail and observation-flow builds.
+    // The same audited projection supplies the ordinary company-detail view.
+    const integrated=projectIntegrated(companyId,value,month);
+    return {companyId,source:'company_db_integrated',legacyObservationView:false,integrated,
+      current:integrated.snapshot?{summary:integrated.snapshot.summary,daily:integrated.snapshot.daily}:{summary:null,daily:[]}};
+  }
   function readView(companyId, { month } = {}) {
     return viewFlight.run(JSON.stringify([companyId,month||'']),async()=>{
       const detail=await companyDetail(companyId,{month});
@@ -122,6 +142,6 @@ function createCollectionResults({ catalog, readEvidence, readCompanyDetail, rea
     void pending.finally(()=>{if(readingMonthLists.get(companyId)===pending)readingMonthLists.delete(companyId);}).catch(()=>{});
     return pending;
   }
-  return { read, reusable, companyDetail, companyMonths, readView };
+  return { read, reusable, companyDetail, companyMonths, briefingMonth, readView };
 }
 module.exports = { createCollectionResults, projectCollection, productRows };
