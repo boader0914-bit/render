@@ -1,6 +1,7 @@
 'use strict';
 const {createHash}=require('node:crypto');
 const comparisonProjection=require('./comparison-projection.cjs');
+const comparisonRegionProjection=require('./comparison-region-projection.cjs');
 // Read-only report projections. Authorization is obtained afresh before every
 // read/bootstrap; only account-isolated display data is written to disk.
 function createReportReadCache({now=Date.now,ttlMs=10*60000,refreshMs=30000,maxEntries=64,maxBytes=16*1024*1024,maxPerScope=8,maxScopes=maxEntries*2,persistenceDirectory,namespace,persistentStore,partialPersistentStore,previewPersistentStore}={}) {
@@ -25,7 +26,7 @@ function createReportReadCache({now=Date.now,ttlMs=10*60000,refreshMs=30000,maxE
   const regionRow=fields('key label value unit status'),point=fields('month value'),delta=fields('value kind');
   const regionSource={...fields('key label provider status period periodType keyword normalizationPeriod partialMonth referenceOnly sourceUrl retrievedAt sourceUpdatedAt'),rows:[regionRow],series:[{...fields('month status retrievedAt'),rows:[regionRow]}],metrics:[{...fields('key label unit observedMonths'),latest:point,mom:delta,yoy:delta,peak:point,low:point}]};
   const regionSchema={...fields('month source networkAttempted availableSources refreshAvailable'),...sourceQuality,region:fields('id label'),window:fields('start end months storageStart storageMonths currentMonth'),location:{...fields('interpretation recommendedProduct caution source updatedAt basis'),clusters:[fields('name demand product')]},sources:[regionSource],warnings:[true],interim:{...fields('month status'),sources:[regionSource]}};
-  const schema={...fields('mode published generatedAt ownId'),dataQuality:{status:true,issues:[issueSchema]},period:fields('start end days'),companies:[{...fields('companyId name rooms regionKey kind relationStatus unavailable lastObservedDay lastObservedAt'),...sourceQuality,summary:totals}],comparisons:[{...fields('companyId name commonDays gapPp status basis'),dates:[true],own:totals,competitor:totals}],regions:[regionSchema],actions:[fields('key title reason next check source')],definitions:[true]};
+  const schema={...fields('mode published generatedAt ownId'),dataQuality:{status:true,issues:[issueSchema]},period:fields('start end days'),companies:[{...fields('companyId name rooms regionKey analysisRegionKey kind relationStatus unavailable lastObservedDay lastObservedAt'),...sourceQuality,summary:totals}],comparisons:[{...fields('companyId name commonDays gapPp status basis'),dates:[true],own:totals,competitor:totals}],regions:[regionSchema],actions:[fields('key title reason next check source')],definitions:[true]};
   function projectValue(value,shape){
     if(value===null)return null;
     if(shape===true)return typeof value==='string'||typeof value==='boolean'||typeof value==='number'&&Number.isFinite(value)?value:undefined;
@@ -44,6 +45,7 @@ function createReportReadCache({now=Date.now,ttlMs=10*60000,refreshMs=30000,maxE
     // contract to a legacy row or persist raw days/authentication material.
     for(let index=0;index<core.companies.length;index++){
       const raw=value.companies[index],row=core.companies[index];
+      if(Object.hasOwn(raw,'analysisRegionKey')&&raw.analysisRegionKey!==null&&!validId(raw.analysisRegionKey))return null;
       const labels=comparisonProjection.projectCompanyLabels(raw);if(!labels)return null;Object.assign(row,labels);
       if(comparisonProjection.EXTENDED_SUMMARY_KEYS.some(key=>Object.hasOwn(raw.summary||{},key))){const summary=comparisonProjection.projectSummary(raw.summary);if(!summary)return null;row.summary=summary;}
       if(Object.hasOwn(raw,'summaryQuality')){const quality=comparisonProjection.projectSummaryQuality(raw.summaryQuality);if(!quality||quality.period.start!==core.period.start||quality.period.end!==core.period.end||quality.asOf!==core.period.start)return null;row.summaryQuality=quality;}
@@ -88,15 +90,27 @@ function createReportReadCache({now=Date.now,ttlMs=10*60000,refreshMs=30000,maxE
     const relations=customer.relations.filter(row=>row&&['active','pending'].includes(row.status)&&['own','competitor'].includes(row.kind)&&validId(row.companyId));
     const own=relations.filter(row=>row.kind==='own'),resolved=ownId||own[0]?.companyId||null;
     if(ownId&&!own.some(row=>row.companyId===ownId))return null;
+    // Only the freshly authenticated identity may authorize a normalized city/
+    // county. A malformed present contract must not downgrade to a legacy one.
+    const hasBindings=Object.hasOwn(data,'comparisonRegionBindings');
+    const regionalContext=hasBindings?comparisonRegionProjection.identityContext(data,resolved||''):null;
+    if(hasBindings&&!regionalContext)return null;
+    const regionBindings=regionalContext?new Map(regionalContext.bindings.map(row=>[row.companyId,row])):null;
     const selected=relations.filter(row=>row.kind==='competitor'||row.companyId===resolved).map(relation=>({relation,company:data.companies.find(row=>row?.companyId===relation.companyId)})).filter(row=>row.company);
+    if(regionBindings&&selected.some(row=>regionBindings.get(row.company.companyId)?.regionKey!==(row.company.regionKey??null)))return null;
     const regionKeys=new Set((customer.regions||[]).filter(row=>row&&['active','pending'].includes(row.status)).map(row=>row.regionKey));
-    const ownCompany=selected.find(row=>row.relation.kind==='own'&&row.relation.status==='active'&&row.company.companyId===resolved)?.company;
-    if(ownCompany?.regionKey)regionKeys.add(ownCompany.regionKey);
+    const ownCompany=selected.find(row=>row.relation.kind==='own'&&row.company.companyId===resolved)?.company;
+    const ownRegionKey=regionBindings?regionBindings.get(resolved)?.analysisRegionKey:ownCompany?.regionKey;
+    if(ownRegionKey)regionKeys.add(ownRegionKey);
     const regions=data.regions.filter(row=>regionKeys.has(row?.id));
-    return {data,customer,ownId,resolved,selected,regions};
+    if(regionBindings&&ownRegionKey&&!regions.some(row=>row.id===ownRegionKey))return null;
+    return {data,customer,ownId,resolved,selected,regions,ownRegionKey,regionBindings};
   }
-  const fingerprint=identity=>hash([identity.customer.customerId,identity.customer.revision,identity.customer.accountStatus,identity.customer.relations,identity.customer.regions||[],identity.data.companies,identity.data.regions,identity.data.preparations||[]]);
-  const durableSlot=(identity,audience)=>typeof audience==='string'&&audience&&audience.length<4096?hash([namespace,audience,identity.customer.customerId,identity.ownId,fingerprint(identity)]):null;
+  const legacyFingerprint=identity=>hash([identity.customer.customerId,identity.customer.revision,identity.customer.accountStatus,identity.customer.relations,identity.customer.regions||[],identity.data.companies,identity.data.regions,identity.data.preparations||[]]);
+  const fingerprint=identity=>identity.regionBindings?hash([legacyFingerprint(identity),identity.data.comparisonRegionBindings]):legacyFingerprint(identity);
+  // Keep existing snapshot slots; every restore is authorized against today's
+  // binding below. A hierarchy change also invalidates runtime response marks.
+  const durableSlot=(identity,audience)=>typeof audience==='string'&&audience&&audience.length<4096?hash([namespace,audience,identity.customer.customerId,identity.ownId,legacyFingerprint(identity)]):null;
   const keyFor=(scope,ownId,start,audience)=>JSON.stringify([scope,ownId,start,audience||'']);
   function sourceScope(core,identity,start){
     if(!core||core.period?.start!==start||core.period?.end!==shift(start,29)||core.period?.days!==30||core.ownId!==identity.resolved)return false;
@@ -106,6 +120,7 @@ function createReportReadCache({now=Date.now,ttlMs=10*60000,refreshMs=30000,maxE
       const match=allowed.get(company.companyId);
       if(!match||seen.has(company.companyId)||company.kind!==match.relation.kind||company.relationStatus!==match.relation.status)return false;
       for(const field of ['name','rooms','regionKey'])if(Object.hasOwn(match.company,field)&&company[field]!==match.company[field])return false;
+      if(Object.hasOwn(company,'analysisRegionKey')&&(!identity.regionBindings||company.analysisRegionKey!==identity.regionBindings.get(company.companyId)?.analysisRegionKey))return false;
       seen.add(company.companyId);
     }
     if(seen.size!==allowed.size)return false;
@@ -118,7 +133,13 @@ function createReportReadCache({now=Date.now,ttlMs=10*60000,refreshMs=30000,maxE
       return regions.has(issue.regionId)&&(!regionId||issue.regionId===regionId)&&!companyId&&!issue.companyId;
     };
     if(core.companies.some(row=>(row.sourceIssues||[]).some(issue=>!scopedIssue(issue,row.companyId,null)))||core.regions.some(row=>(row.sourceIssues||[]).some(issue=>!scopedIssue(issue,null,row.region.id)))||(core.dataQuality?.issues||[]).some(issue=>!scopedIssue(issue)))return false;
-    return regionSeen.size===regions.size&&compared.size===(identity.resolved?competitors.size:0);
+    const legacyPendingOwn=core.companies.find(row=>row.kind==='own'&&row.relationStatus==='pending'&&!Object.hasOwn(row,'analysisRegionKey'));
+    const missing=[...regions].filter(id=>!regionSeen.has(id));
+    // Older pending-property snapshots intentionally omitted its location.
+    // Preserve their authorized interest data while the new report refreshes;
+    // this exception never authorizes an extra or changed location.
+    const legacyLocationGap=Boolean(legacyPendingOwn&&identity.ownRegionKey&&missing.length===1&&missing[0]===identity.ownRegionKey);
+    return (regionSeen.size===regions.size||legacyLocationGap)&&compared.size===(identity.resolved?competitors.size:0);
   }
   // A structurally valid HTTP 200 may contain source gaps. Display its usable
   // parts as explicitly partial; keep those snapshots in a separate namespace
