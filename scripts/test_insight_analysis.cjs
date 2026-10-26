@@ -53,7 +53,7 @@ test('briefing includes only selected own location and explicit interests for mu
   const customer={relations:[{kind:'own',companyId:'c0',status:'active'},{kind:'own',companyId:'c1',status:'active'}],regions:[{regionKey:'r2',status:'active'}]};
   const reads=[];
   const service=createInsightAnalysis({catalog:async()=>catalog,now:()=>Date.parse('2026-10-02T00:00:00Z'),collectionResults:{companyDetail:async()=>({current:{daily:[]}})},readRegionContext:async r=>{reads.push(r.targetId);return {sources:[]};}});
-  const r=await service.briefing(customer,'c0');
+  const r=await service.briefing(customer,'c0',{stayMode:'upcoming30'});
   assert.deepEqual(r.companies.map(c=>c.companyId),['c0']);
   assert.deepEqual(reads,['r2','r0']);
   assert.equal((await service.region(customer,'r1')).region.id,'r1','all registered own locations remain accessible in regional analysis');

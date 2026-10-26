@@ -71,6 +71,18 @@ function createInsightSavedReportSources({dataDir,fileSystem=fs,maxBytes=16*1024
       &&integrated.roomBasis?.count!==company.rooms)throw fault('COMPANY_CAPACITY_REVIEW_CHANGED');
     return {companyId,legacyObservationView:false,integrated,current:{summary:integrated.snapshot.summary,daily:integrated.snapshot.daily}};
   }
-  return {companyDetail};
+  async function companyMonths(companyId) {
+    need(typeof companyId==='string'&&/^[a-zA-Z0-9_-]{1,300}$/.test(companyId));
+    const folder=path.join(directory,digest(companyId));
+    try {
+      for(const parent of [directory,folder]){const stat=await fileSystem.lstat(parent);need(stat.isDirectory()&&!stat.isSymbolicLink());}
+      const names=await fileSystem.readdir(folder),months=names.filter(name=>/^20\d{2}-(0[1-9]|1[0-2])\.json$/.test(name)).map(name=>name.slice(0,7)).sort();
+      need(months.length<=122);
+      // Enumeration confers no validity: companyDetail verifies each complete
+      // envelope, identity, digest and cutoff before any amount can be used.
+      return months.map(month=>({month,status:'stored'}));
+    }catch(error){if(error.code==='ENOENT')return [];throw fault(error.code==='SAVED_COMPANY_SOURCE_INVALID'?error.code:'SAVED_COMPANY_SOURCE_UNAVAILABLE');}
+  }
+  return {companyDetail,companyMonths};
 }
 module.exports={createInsightSavedReportSources};

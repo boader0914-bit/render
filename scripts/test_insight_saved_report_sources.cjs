@@ -42,7 +42,7 @@ test('saved-only preview uses exact company-month files, preserves zero and null
   const analysis=createInsightAnalysis({catalog:async()=>f.catalog,savedCollectionResults:createInsightSavedReportSources({dataDir:f.root,fileSystem:storage,now:()=>NOW}),
     collectionResults:{companyDetail:async()=>{normalReads++;throw Error('normal calculation forbidden');}},now:()=>NOW,
     readRegionContext:async request=>{regionalReads++;assert.equal(request.month,'2026-09');return {networkAttempted:false,sources:[{key:'population',label:'인구',status:'ready',rows:[{key:'count',label:'인구',status:'observed',value:0}]}]};}});
-  const report=await analysis.briefing(f.customer,'cmp_one',{savedOnly:true});
+  const report=await analysis.briefing(f.customer,'cmp_one',{savedOnly:true,stayMode:'upcoming30'});
   assert.equal(normalReads,0);assert.equal(regionalReads,1);assert.equal(reads.length,4);
   assert.deepEqual(report.period,{start:'2026-10-24',end:'2026-11-22',days:30});
   assert.deepEqual(report.calculation,{mode:'saved_only',status:'pending',oldestSourceCalculatedAt:'2026-10-23T02:00:00Z',latestSourceCalculatedAt:'2026-10-23T03:00:00Z'});
@@ -58,11 +58,11 @@ test('saved-only preview uses exact company-month files, preserves zero and null
 test('missing saved periods remain unknown and a new report never substitutes another company or month',async t=>{
   const f=await fixture(t);await fs.unlink(f.file('cmp_two','2026-11'));
   const analysis=createInsightAnalysis({catalog:async()=>f.catalog,savedCollectionResults:f.source,collectionResults:{companyDetail:()=>assert.fail('normal reader forbidden')},now:()=>NOW});
-  const report=await analysis.briefing({...f.customer,relations:f.customer.relations.map(row=>({...row,status:'pending'}))},'cmp_one',{savedOnly:true});
+  const report=await analysis.briefing({...f.customer,relations:f.customer.relations.map(row=>({...row,status:'pending'}))},'cmp_one',{savedOnly:true,stayMode:'upcoming30'});
   const other=report.companies[1];assert.equal(other.summary.sold,2);assert.equal(other.sourceStatus,'partial');
   assert.ok(other.sourceIssues.some(issue=>issue.code==='MONTH_NOT_OBSERVED'&&issue.month==='2026-11'));
   await fs.unlink(f.file('cmp_two','2026-10'));
-  const missing=await analysis.briefing({...f.customer,relations:f.customer.relations.map(row=>({...row,status:'pending'}))},'cmp_one',{savedOnly:true});
+  const missing=await analysis.briefing({...f.customer,relations:f.customer.relations.map(row=>({...row,status:'pending'}))},'cmp_one',{savedOnly:true,stayMode:'upcoming30'});
   assert.equal(missing.companies[1].summary.sold,null);assert.equal(missing.companies[1].summary.estimatedRevenue,null);
   assert.equal(missing.calculation.mode,'saved_only');assert.equal(missing.dataQuality.status,'partial');
 });
@@ -71,7 +71,7 @@ for(const calculationVersion of ['company-integrated-v2-price-observation-time',
   const f=await fixture(t,{calculationVersion}),paths=[...f.saved.keys()].map(key=>f.file(...key.split('|'))),before=new Map(await Promise.all([...paths,f.queue].map(async file=>[file,await fs.readFile(file)])));
   const analysis=createInsightAnalysis({catalog:async()=>f.catalog,savedCollectionResults:f.source,
     collectionResults:{companyDetail:()=>assert.fail('saved preview must not recompute company history')},now:()=>NOW});
-  const report=await analysis.briefing(f.customer,'cmp_one',{savedOnly:true});
+  const report=await analysis.briefing(f.customer,'cmp_one',{savedOnly:true,stayMode:'upcoming30'});
   assert.equal(report.calculation.mode,'saved_only');assert.equal(report.companies[0].summary.sold,3);assert.equal(report.companies[1].summary.sold,4);
   const detail=await f.source.companyDetail('cmp_one',{month:'2026-10',company:f.companies[0]});
   assert.equal(detail.integrated.calculationVersion,calculationVersion);
@@ -156,7 +156,7 @@ test('a changed reviewed room count is explained without recomputing or showing 
   await fs.writeFile(f.file('cmp_one','2026-10'),JSON.stringify(value));
   const catalog={...f.catalog,companies:f.companies.map(c=>c.companyId==='cmp_one'?{...c,rooms:17}:c)};
   const analysis=createInsightAnalysis({catalog:async()=>catalog,savedCollectionResults:f.source,now:()=>NOW});
-  const report=await analysis.briefing({...f.customer,relations:f.customer.relations.map(row=>({...row,status:'pending'}))},'cmp_one',{savedOnly:true});
+  const report=await analysis.briefing({...f.customer,relations:f.customer.relations.map(row=>({...row,status:'pending'}))},'cmp_one',{savedOnly:true,stayMode:'upcoming30'});
   assert.equal(report.companies[0].summary.sold,null);assert.equal(report.companies[0].rooms,17);assert.ok(report.companies[0].sourceIssues.every(i=>i.code==='COMPANY_CAPACITY_REVIEW_CHANGED'));
 });
 
@@ -175,7 +175,7 @@ test('saved-only report query is authenticated, strict and does not activate the
   for(const query of ['?savedOnly=0','?savedOnly=true','?savedOnly=1&savedOnly=1','?savedOnly=1&month=2026-10','?savedOnly=1&ownId=cmp_one&ownId=cmp_one'])assert.equal((await get(query)).status,400);
   const response=await get('?savedOnly=1&ownId=cmp_one');assert.equal(response.status,200);const report=await response.json();
   assert.equal(report.calculation.mode,'saved_only');assert.equal(report.companies.length,1);assert.equal(report.companies[0].companyId,'cmp_one');assert.equal(normalReads,0);
-  const normal=await get('?ownId=cmp_one');assert.equal(normal.status,200);assert.equal((await normal.json()).calculation,undefined);assert.equal(normalReads,2);
+  const normal=await get('?ownId=cmp_one&stayMode=upcoming30');assert.equal(normal.status,200);assert.equal((await normal.json()).calculation,undefined);assert.equal(normalReads,2);
   assert.equal(store.requests(c.customerId).length,0);
 });
 

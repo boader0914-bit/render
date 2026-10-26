@@ -12,14 +12,14 @@ const now=()=>Date.parse('2026-10-23T01:00:00Z');
 const customer={relations:[{companyId:'cmp_own',kind:'own',status:'pending'},{companyId:'cmp_comp',kind:'competitor',status:'active'}],regions:[]};
 const day=(date,sold=2)=>({date,total:10,sold,publicBookings:sold,phoneBookings:0,estimatedRevenue:sold*100000,collectedAt:'2026-10-23T01:00:00Z'});
 const normal=(month,sold=2)=>({integrated:{status:'ready',snapshot:{}},legacyObservationView:false,current:{daily:[day(month==='2026-10'?'2026-10-23':'2026-11-01',sold)]}});
-function service(companyDetail,options={}){return createInsightAnalysis({catalog:async()=>catalog,collectionResults:{companyDetail},now,...options});}
+function service(companyDetail,options={}){return createInsightAnalysis({catalog:async()=>catalog,collectionResults:{companyDetail},readRegionContext:async()=>({networkAttempted:false,sources:[]}),now,...options});}
 
 test('a missing later month keeps normal company amounts and identifies only that company and month',async()=>{
   const calls=[],analysis=service(async(id,{month})=>{
     calls.push([id,month]);if(id==='cmp_comp'&&month==='2026-11')throw Object.assign(Error('private raw path /var/data/private'),{code:'MONTH_NOT_OBSERVED'});
     return normal(month,id==='cmp_own'?2:0);
   });
-  const report=await analysis.briefing(customer,'cmp_own'),own=report.companies[0],competitor=report.companies[1];
+  const report=await analysis.briefing(customer,'cmp_own',{stayMode:'upcoming30'}),own=report.companies[0],competitor=report.companies[1];
   assert.deepEqual(calls,[['cmp_own','2026-10'],['cmp_own','2026-11'],['cmp_comp','2026-10'],['cmp_comp','2026-11']]);
   assert.equal(own.summary.sold,4);assert.equal(own.sourceStatus,'ready');assert.equal(own.unavailable,false);
   assert.equal(competitor.summary.sold,0);assert.equal(competitor.summary.estimatedRevenue,0);assert.equal(competitor.sourceStatus,'partial');
@@ -33,7 +33,7 @@ test('an earlier month failure does not prevent reading the following month and 
   const calls=[],analysis=service(async(id,{month})=>{
     calls.push([id,month]);if(month==='2026-10')throw Object.assign(Error('private-token-123'),{code:'PRIVATE_PASSWORD_123'});return normal(month,3);
   });
-  const report=await analysis.briefing({...customer,relations:[customer.relations[0]]},'cmp_own');
+  const report=await analysis.briefing({...customer,relations:[customer.relations[0]]},'cmp_own',{stayMode:'upcoming30'});
   assert.deepEqual(calls,[['cmp_own','2026-10'],['cmp_own','2026-11']]);
   assert.equal(report.companies[0].summary.sold,3);assert.equal(report.companies[0].summary.days,1);
   assert.deepEqual(report.dataQuality.issues[0].period,{start:'2026-10-23',end:'2026-10-31'});
@@ -45,7 +45,7 @@ test('updating snapshots retain observed quantities but pending and failed sourc
     if(id==='cmp_own')return {...normal(month,0),integrated:{status:'updating',snapshot:{}}};
     return {integrated:{status:month==='2026-10'?'failed':'pending',snapshot:null},legacyObservationView:false,current:{daily:[]}};
   });
-  const report=await analysis.briefing(customer,'cmp_own');
+  const report=await analysis.briefing(customer,'cmp_own',{stayMode:'upcoming30'});
   assert.equal(report.companies[0].summary.sold,0);assert.equal(report.companies[0].sourceStatus,'partial');
   assert.ok(report.companies[0].sourceIssues.every(issue=>issue.code==='COMPANY_INTEGRATION_UPDATING'));
   assert.equal(report.companies[1].summary.sold,null);assert.equal(report.companies[1].summary.estimatedRevenue,null);assert.equal(report.companies[1].sourceStatus,'unavailable');
@@ -59,7 +59,7 @@ test('region failures identify the region or indicator while observed zero and o
       {key:'stay',label:'체류 소비',status:'error',rows:[{key:'amount',status:'missing',value:0}]},
       {key:'missing',label:'자료 공백',status:'missing',rows:[{key:'count',status:'missing',value:null}]}]};
   }});
-  const report=await analysis.briefing({...customer,relations:[],regions:regions.map(r=>({regionKey:r.id,status:'active'}))});
+  const report=await analysis.briefing({...customer,relations:[],regions:regions.map(r=>({regionKey:r.id,status:'active'}))},undefined,{stayMode:'upcoming30'});
   assert.equal(report.dataQuality.status,'partial');assert.equal(report.dataQuality.issues.length,2);
   const failed=report.regions[0],partial=report.regions[1];
   assert.equal(failed.source,'datalab_saved');assert.equal(failed.networkAttempted,false);assert.equal(failed.sourceStatus,'unavailable');
@@ -71,7 +71,7 @@ test('region failures identify the region or indicator while observed zero and o
 
 test('a normal briefing remains complete despite real missing stay dates and never duplicates legacy days',async()=>{
   let reads=0;const analysis=service(async()=>{reads++;return {legacyObservationView:true,current:{daily:[day('2026-10-23',0),{...day('2026-10-24',0),sold:null,publicBookings:null,missing:true}]}};});
-  const report=await analysis.briefing({...customer,relations:[customer.relations[0]]},'cmp_own');
+  const report=await analysis.briefing({...customer,relations:[customer.relations[0]]},'cmp_own',{stayMode:'upcoming30'});
   assert.equal(reads,1);assert.equal(report.dataQuality.status,'complete');assert.deepEqual(report.dataQuality.issues,[]);
   assert.equal(report.companies[0].summary.days,1);assert.equal(report.companies[0].summary.sold,0);
 });
@@ -81,7 +81,7 @@ test('stored months without usable room observations explain insufficient data i
     integrated:{status:'ready',snapshot:{summary:{observedDays:0,sold:null}}},legacyObservationView:false,
     current:{daily:[{date:month==='2026-10'?'2026-10-23':'2026-11-01',missing:true,total:null,sold:null,publicBookings:null,phoneBookings:null,estimatedRevenue:null}]}
   });
-  const report=await analysis.briefing(customer,'cmp_own'),own=report.companies[0],competitor=report.companies[1];
+  const report=await analysis.briefing(customer,'cmp_own',{stayMode:'upcoming30'}),own=report.companies[0],competitor=report.companies[1];
   assert.equal(own.sourceStatus,'ready');assert.equal(own.summary.sold,0);assert.equal(own.summary.estimatedRevenue,0);
   assert.equal(competitor.sourceStatus,'unavailable');assert.equal(competitor.summary.sold,null);assert.equal(competitor.summary.estimatedRevenue,null);
   assert.deepEqual(competitor.sourceIssues.map(issue=>issue.code),['COMPANY_OBSERVATION_INSUFFICIENT','COMPANY_OBSERVATION_INSUFFICIENT']);
@@ -98,7 +98,7 @@ test('nested region errors keep their actual month, include blocked and unavaila
     {key:'spend',label:'체류 소비',status:'ready',period:'2026-07',rows:[{key:'amount',status:'unavailable',value:null}],metrics:[{key:'amount',status:'failed',latest:{month:'2026-06',value:null,status:'failed'}}]},
     {key:'search',label:'검색 관심',status:'blocked',period:'2026-05',rows:[]}
   ]})});
-  const report=await analysis.briefing({relations:[],regions:[{regionKey:'region_one',status:'active'}]});
+  const report=await analysis.briefing({relations:[],regions:[{regionKey:'region_one',status:'active'}]},undefined,{stayMode:'upcoming30'});
   const value=report.regions[0],issues=value.sourceIssues;
   assert.equal(value.sourceStatus,'partial');assert.equal(value.sources[0].rows[0].value,0);
   assert.equal(issues.filter(i=>i.sourceKey==='visitors'&&i.month==='2026-08').length,1,'top and repeated rows in the same month share one cause');
@@ -112,7 +112,7 @@ test('nested region errors keep their actual month, include blocked and unavaila
 
 test('a large region issue list is bounded and explains that additional causes were omitted',async()=>{
   const analysis=service(async()=>({current:{daily:[]}}),{readRegionContext:async()=>({networkAttempted:false,sources:Array.from({length:40},(_,i)=>({key:'source_'+i,label:'지표 '+i,status:'unavailable',rows:[]}))})});
-  const report=await analysis.briefing({relations:[],regions:[{regionKey:'region_one',status:'active'}]});
+  const report=await analysis.briefing({relations:[],regions:[{regionKey:'region_one',status:'active'}]},undefined,{stayMode:'upcoming30'});
   assert.equal(report.regions[0].sourceStatus,'unavailable');assert.equal(report.regions[0].sourceIssues.length,32);
   assert.equal(report.regions[0].sourceIssues.at(-1).code,'REGION_ADDITIONAL_ISSUES');
   assert.equal(report.regions[0].sourceIssues.at(-1).reason,'추가 지표 오류가 있어 일부 사유만 표시합니다.');
@@ -130,7 +130,7 @@ test('authenticated central report returns HTTP 200 with partial details without
   const handlers=createInsightHttp({store,serviceToken,catalog:async()=>catalog,memberActive:async()=>true,analysis});
   server=http.createServer((req,res)=>handlers.internal(req,res,new URL(req.url,'http://fixture')));
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
-  const response=await fetch(`http://127.0.0.1:${server.address().port}/api/insight/v1/reports/briefing?ownId=cmp_own`,{headers:{Authorization:'Bearer '+serviceToken,'X-Insight-Session':token}});
+  const response=await fetch(`http://127.0.0.1:${server.address().port}/api/insight/v1/reports/briefing?ownId=cmp_own&stayMode=upcoming30`,{headers:{Authorization:'Bearer '+serviceToken,'X-Insight-Session':token}});
   assert.equal(response.status,200);const report=await response.json();assert.equal(report.dataQuality.status,'partial');
   assert.equal(report.companies[0].summary.sold,2);assert.equal(report.dataQuality.issues[0].code,'MONTH_NOT_OBSERVED');
   assert.equal(store.requests(account.customerId).length,0);assert.doesNotMatch(JSON.stringify(report),/secret-provider-body/);

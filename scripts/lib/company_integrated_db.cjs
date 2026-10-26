@@ -772,7 +772,25 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, catalogCache
     return readResult(companyId, metadata, { selectedMonth, selected, rows, refreshedProof, selectedVerificationError, savedPreview });
   }
   async function stop() { stopped = true; wakeDispatchWaiters(); if (bootstrapPromise) await bootstrapPromise.catch(() => {}); if (workerPromise) await workerPromise; await serial; }
-  return { bootstrap, queueCompany, queueRun, deferProcessing, refreshMonth, tryCachedMonth, cacheReadsStats, get, status, drain, stop };
+  async function listMonths(companyId) {
+    companyId=validId(companyId);
+    // Catalog/index-only discovery. Deliberately do not initialize the queue,
+    // prepare source revisions, read monthly snapshots or trigger calculation.
+    await activeCompany(companyId,true);
+    const index=await readJson(indexPath(companyId),null);
+    if(!index){
+      // A newly observed company may not have a materialized month/index yet.
+      // Discover its bounded target metadata only on this miss, so the normal
+      // monthly reader can prepare it instead of remaining permanently empty.
+      const targets=await listTargets({companyIds:[companyId]});
+      const months=monthsOf(targets.filter(row=>row.companyId===companyId).flatMap(row=>row.months||[]));
+      if(months.length>122)throw fault('COMPANY_INTEGRATION_MONTH_INDEX_INVALID');
+      return months.map(month=>({month,status:'pending'}));
+    }
+    if(index.schemaVersion!==SCHEMA_VERSION||index.companyId!==companyId||!Array.isArray(index.months)||index.months.length>122)throw fault('COMPANY_INTEGRATION_MONTH_INDEX_INVALID');
+    return monthsOf(index.months).map(month=>({month,status:'stored'}));
+  }
+  return { bootstrap, queueCompany, queueRun, deferProcessing, refreshMonth, tryCachedMonth, cacheReadsStats, get, listMonths, status, drain, stop };
 }
 
 module.exports = { createCompanyIntegratedDb, COMPANY_INTEGRATED_SCHEMA_VERSION: SCHEMA_VERSION, COMPANY_INTEGRATED_CALCULATION_VERSION: CALCULATION_VERSION };

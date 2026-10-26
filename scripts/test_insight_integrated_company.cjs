@@ -121,6 +121,6 @@ test('authenticated BFF enforces linked-company and tenant scope before integrat
 test('current briefing reads both shared months across a month boundary',async()=>{
   const calls=[];
   const analysis=createInsightAnalysis({catalog:async()=>({companies:[company],regions:[]}),collectionResults:{companyDetail:async(id,{month})=>{calls.push(month);return {legacyObservationView:false,integrated:{snapshot:{}},current:{daily:[]}};}},now:()=>Date.parse('2026-09-20T00:00:00Z')});
-  await analysis.briefing({regions:[],relations:[{kind:'own',status:'active',companyId:company.companyId}]});
+  await analysis.briefing({regions:[],relations:[{kind:'own',status:'active',companyId:company.companyId}]},undefined,{stayMode:'upcoming30'});
   assert.deepEqual(calls,['2026-09','2026-10']);
 });

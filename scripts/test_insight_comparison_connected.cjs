@@ -57,7 +57,7 @@ test('live metadata projection supplies exact industry evidence and official hie
   assert.doesNotMatch(JSON.stringify(state),/DO_NOT_SEND_COMPARISON_PRIVATE|rawProducts|privateMemo/);
 });
 for(const [name,regions,expected] of [['same',['경상남도 산청군','경상남도 산청군'],'same'],['cross',['경상남도 산청군','경상남도 사천시'],'cross'],['mixed',['경상남도 산청군','경상남도 산청군','경기도 가평군'],'mixed']])test(`current30 connected report classifies ${name} competition from saved official metadata`,async t=>{
-  const f=await fixture(t,{regions}),reply=await f.request('/reports/briefing?ownId=cmp_0'),report=await reply.json();assert.equal(reply.status,200);
+  const f=await fixture(t,{regions}),reply=await f.request('/reports/briefing?ownId=cmp_0&stayMode=upcoming30'),report=await reply.json();assert.equal(reply.status,200);
   assert.equal(report.comparisonPolicy.regionMode,expected);assert.equal(report.comparisons.length,regions.length-1);
   assert.ok(report.comparisons.every(r=>r.industryRelation==='common'&&r.purpose==='reference'&&!r.purposeExplicit&&!r.actionable&&r.comparable));
   assert.equal(report.actions.some(r=>r.key==='compare'||r.key==='track'),false);
@@ -68,13 +68,13 @@ for(const [name,regions,expected] of [['same',['경상남도 산청군','경상�
   assert.doesNotMatch(JSON.stringify(report),/DO_NOT_SEND_COMPARISON_PRIVATE|rawProducts|privateMemo|products/);
 });
 test('a current DB review and a saved month disagreement keep quantities but block rates and do not overwrite the reviewed count',async t=>{
-  const f=await fixture(t,{regions:['경상남도 산청군','경상남도 산청군'],basis:{cmp_1:{count:17}}}),report=await (await f.request('/reports/briefing')).json();
+  const f=await fixture(t,{regions:['경상남도 산청군','경상남도 산청군'],basis:{cmp_1:{count:17}}}),report=await (await f.request('/reports/briefing?stayMode=upcoming30')).json();
   assert.equal(report.companies[1].rooms,16);assert.equal(report.companies[1].capacityStatus,'conflict');assert.equal(report.companies[1].summary.sold,145);assert.equal(report.companies[1].summary.reservationRate,null);
   assert.equal(report.comparisons[0].comparable,false);assert.equal(report.comparisons[0].quality.quantity.comparable,true);assert.equal(report.comparisons[0].competitor.knownRevenueSubtotal,14200000);
   const point=report.companies[1].reservationSeries.points[1];assert.equal(point.quantityStatus,'ready');assert.equal(point.inventoryConflict,true);assert.equal(point.sold,5);assert.equal(point.reservationRate,null);
 });
 test('a saved room-basis review warning stays visible without erasing normal quantities or inventing an unknown amount',async t=>{
-  const f=await fixture(t,{regions:['경상남도 산청군','경상남도 산청군'],basis:{cmp_1:{reviewRequired:true}}}),report=await (await f.request('/reports/briefing')).json();
+  const f=await fixture(t,{regions:['경상남도 산청군','경상남도 산청군'],basis:{cmp_1:{reviewRequired:true}}}),report=await (await f.request('/reports/briefing?stayMode=upcoming30')).json();
   assert.equal(report.companies[1].capacityStatus,'review_required');assert.equal(report.companies[1].capacityReviewRequired,true);assert.equal(report.comparisons[0].comparable,true);assert.equal(report.comparisons[0].actionable,false);
   assert.ok(report.comparisons[0].reasons.some(r=>r.code==='CAPACITY_REVIEW_REQUIRED'));assert.equal(report.companies[1].summary.sold,145);assert.equal(report.companies[1].summary.estimatedRevenue,null);assert.equal(report.companies[1].summary.partialKnownRevenueSubtotal,200000);
 });

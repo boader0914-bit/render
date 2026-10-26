@@ -945,6 +945,7 @@ const insightIntegration = require('./lib/insight_integration.cjs').createInsigh
   readEvidence: readInsightCompanyEvidence,
   readCompanyDetail: readInsightCompanyDetail,
   readIntegrated: (companyId, options = {}) => companyIntegratedDb.get(companyId, options),
+  readIntegratedMonths: companyId => companyIntegratedDb.listMonths(companyId),
   readRegionContext: readInsightRegionContext,
   regionPreparation:insightRegionPreparation,
   readRegionLocation: async regionKey => {

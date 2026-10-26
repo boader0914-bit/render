@@ -118,7 +118,7 @@ test('read-only pending report access neither grants preparation permission nor 
 
 test('a failed stored region keeps normal company quantities and revenue while naming the failed region and period safely',async()=>{
   const c=customer(),s=service(data(),async()=>{throw Object.assign(Error('PRIVATE_PROVIDER_RESPONSE'),{code:'PRIVATE_CODE'});});
-  const report=await s.analysis.briefing(c,'own'),own=report.companies.find(row=>row.companyId==='own');
+  const report=await s.analysis.briefing(c,'own',{stayMode:'upcoming30'}),own=report.companies.find(row=>row.companyId==='own');
   assert.equal(own.summary.sold,4);assert.equal(own.summary.estimatedRevenue,400000);assert.equal(own.sourceStatus,'ready');
   assert.equal(report.regions[0].sourceStatus,'unavailable');
   assert.deepEqual(report.regions[0].sourceIssues[0].period,{start:'2026-09-01',end:'2026-09-30'});

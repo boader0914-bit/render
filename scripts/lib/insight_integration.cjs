@@ -25,7 +25,7 @@ function reviewedRooms(company) {
   },0);
   return count>0?count:null;
 }
-function createInsightIntegration({ dataDir, readCatalog, readMembers, authenticateMember, registerMember, checkUsername, policyContext = {}, requireAdmin, collectorRequests, verifyStored, readPostprocess, readEvidence, readCompanyDetail, readIntegrated, readRegionContext, readRegionLocation, regionPreparation, monthlyReports = null, renderReportPdf = null, env = process.env }) {
+function createInsightIntegration({ dataDir, readCatalog, readMembers, authenticateMember, registerMember, checkUsername, policyContext = {}, requireAdmin, collectorRequests, verifyStored, readPostprocess, readEvidence, readCompanyDetail, readIntegrated, readIntegratedMonths, readRegionContext, readRegionLocation, regionPreparation, monthlyReports = null, renderReportPdf = null, env = process.env }) {
   if (env.INSIGHT_CONNECTION_ENABLED !== '1') return null;
   const serviceToken = env.INSIGHT_SERVICE_TOKEN;
   if (!serviceToken || serviceToken.length < 32) throw new Error('INSIGHT_SERVICE_TOKEN is required when Insight connection is enabled');
@@ -59,7 +59,7 @@ function createInsightIntegration({ dataDir, readCatalog, readMembers, authentic
       return { ...company, version: hash(JSON.stringify({ company, correctionAt: raw.manualCorrection?.updatedAt || null })) };
     }) };
   }
-  const collectionResults = readEvidence ? createCollectionResults({catalog,readEvidence,readCompanyDetail,readIntegrated,
+  const collectionResults = readEvidence ? createCollectionResults({catalog,readEvidence,readCompanyDetail,readIntegrated,readIntegratedMonths,
     ...(typeof readCompanyDetail?.runWork === 'function' ? {runWork:readCompanyDetail.runWork} : {})}) : null;
   const savedCollectionResults=createInsightSavedReportSources({dataDir});
   const analysis=createInsightAnalysis({catalog,collectionResults,savedCollectionResults,readRegionContext,readRegionLocation,regionPreparation});

@@ -203,8 +203,10 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
       }
       else if(req.method==='GET' && tail==='/reports/briefing') {
         if(!analysis)throw fault('REPORT_NOT_READY','리포트 연결을 준비 중입니다.',503);
-        if([...url.searchParams.keys()].some(k=>!['ownId','savedOnly'].includes(k))||url.searchParams.getAll('ownId').length>1||url.searchParams.getAll('savedOnly').length>1||url.searchParams.has('savedOnly')&&url.searchParams.get('savedOnly')!=='1')throw fault('INVALID_FIELDS','등록한 내 매장과 저장 자료 조회 방식만 선택해 주세요.');
-        json(res,200,await analysis.briefing(c,url.searchParams.get('ownId')||undefined,{savedOnly:url.searchParams.get('savedOnly')==='1'}));
+        const allowed=['ownId','savedOnly','stayMode','month','start','end'];
+        if([...url.searchParams.keys()].some(k=>!allowed.includes(k))||allowed.some(key=>url.searchParams.getAll(key).length>1)||url.searchParams.has('savedOnly')&&url.searchParams.get('savedOnly')!=='1')throw fault('INVALID_FIELDS','등록한 내 매장과 숙박기간, 저장 자료 조회 방식만 선택해 주세요.');
+        const selection=Object.fromEntries(['stayMode','month','start','end'].filter(key=>url.searchParams.has(key)).map(key=>[key,url.searchParams.get(key)]));
+        json(res,200,await analysis.briefing(c,url.searchParams.get('ownId')||undefined,{...selection,savedOnly:url.searchParams.get('savedOnly')==='1'}));
       }
       else if (req.method === 'GET' && /^\/companies\/[a-zA-Z0-9_-]+\/collection$/.test(tail)) {
         if ([...url.searchParams.keys()].some(key => !['month','savedOnly'].includes(key)) || url.searchParams.getAll('month').length > 1

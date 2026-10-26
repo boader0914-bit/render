@@ -56,7 +56,7 @@ function projectCollection(company, evidence) {
     actualRevenueAvailable: false };
   return { ...result, version: hash(JSON.stringify([company.version, result])) };
 }
-function createCollectionResults({ catalog, readEvidence, readCompanyDetail, readIntegrated, runWork = operation => operation() }) {
+function createCollectionResults({ catalog, readEvidence, readCompanyDetail, readIntegrated, readIntegratedMonths, runWork = operation => operation() }) {
   if (typeof runWork !== 'function') throw TypeError('Collection reads require analytical ownership');
   // A pending group carries no load promise until its caller owns the lease.
   // A nested owner must never await an outer request queued behind that owner.
@@ -64,6 +64,7 @@ function createCollectionResults({ catalog, readEvidence, readCompanyDetail, rea
   const resultFlight = createScheduledSingleFlight({runWork,kind:'insight-company-view-result'});
   const viewFlight = createScheduledSingleFlight({runWork,kind:'insight-company-view'});
   const readingSources = new Map();
+  const readingMonthLists = new Map();
   async function sourceDetail(companyId) {
     if (readingSources.has(companyId)) return readingSources.get(companyId);
     const pending = Promise.resolve().then(() => readCompanyDetail(companyId));
@@ -107,6 +108,20 @@ function createCollectionResults({ catalog, readEvidence, readCompanyDetail, rea
       return {companyDetail:detail,result};
     });
   }
-  return { read, reusable, companyDetail, readView };
+  function companyMonths(companyId) {
+    if(!readIntegratedMonths)return Promise.resolve(null); // Legacy readers enumerate from their projected detail.
+    if(readingMonthLists.has(companyId))return readingMonthLists.get(companyId);
+    // Index-only discovery must not wait for the heavyweight analytical lease.
+    const pending=Promise.resolve().then(async()=>{
+      if(!(await catalog()).companies.some(row=>row.companyId===companyId))return [];
+      const value=await readIntegratedMonths(companyId);
+      if(!Array.isArray(value)||value.length>122||value.some(row=>!/^20\d{2}-(0[1-9]|1[0-2])$/.test(row?.month||'')))throw fault('COMPANY_MONTHS_UNAVAILABLE','업체의 저장된 숙박월 목록을 확인하지 못했습니다.',503);
+      return [...new Map(value.map(row=>[row.month,{month:row.month,status:text(row.status,40)}])).values()].sort((a,b)=>a.month.localeCompare(b.month));
+    });
+    readingMonthLists.set(companyId,pending);
+    void pending.finally(()=>{if(readingMonthLists.get(companyId)===pending)readingMonthLists.delete(companyId);}).catch(()=>{});
+    return pending;
+  }
+  return { read, reusable, companyDetail, companyMonths, readView };
 }
 module.exports = { createCollectionResults, projectCollection, productRows };
