@@ -333,10 +333,26 @@
       if(/^\d{4}-\d{2}-\d{2}$/.test(p?.start||'')&&/^\d{4}-\d{2}-\d{2}$/.test(p?.end||''))return `${p.start} ~ ${p.end}`;
       return validMonth(issue.month)?issue.month:`${r.period.start} ~ ${r.period.end}`;
     };
-    return `<section class="card report-source-issues" aria-label="자료 확인이 필요한 부분"><div class="analysis-card-top"><h2>자료 확인이 필요한 부분</h2><span class="status-pill pending">일부 자료</span></div><p class="muted">확인된 자료는 아래에 표시합니다. 미확인 값은 0으로 처리하지 않습니다.</p>${issues.length?`<div class="collection-table-wrap"><table><thead><tr><th>업체·지역</th><th>확인하지 못한 기간</th><th>사유</th></tr></thead><tbody>${issues.map(issue=>`<tr><th>${esc(issue.scope==='company'?companies.get(issue.companyId).name:regions.get(issue.regionId).region.label)}${issue.sourceName?`<br><small class="muted">${esc(issue.sourceName)}</small>`:''}</th><td>${esc(period(issue))}</td><td>${esc(issue.reason||'저장 자료를 확인하지 못했습니다.')}</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">일부 원자료를 확인하지 못했습니다. 확인된 업체·기간의 자료만 표시합니다.</p>'}</section>`;
+    const referencePeriod=issue=>{
+      const p=issue.period,start=validDay(p?.start)?p.start:validMonth(issue.month)?issue.month+'-01':null;
+      const end=validDay(p?.end)?p.end:validMonth(issue.month)?issue.month+'-31':null;
+      return start&&end&&validDay(r.period?.start)&&validDay(r.period?.end)&&(end<r.period.start||start>r.period.end);
+    };
+    return `<section class="card report-source-issues" aria-label="자료 확인이 필요한 부분"><div class="analysis-card-top"><h2>자료 확인이 필요한 부분</h2><span class="status-pill pending">일부 자료</span></div><p class="muted">확인된 자료는 아래에 표시합니다. 미확인 값은 0으로 처리하지 않습니다.</p>${issues.length?`<div class="collection-table-wrap"><table><thead><tr><th>업체·지역</th><th>확인하지 못한 기간</th><th>사유</th></tr></thead><tbody>${issues.map(issue=>`<tr><th>${esc(issue.scope==='company'?companies.get(issue.companyId).name:regions.get(issue.regionId).region.label)}${issue.sourceName?`<br><small class="muted">${esc(issue.sourceName)}</small>`:''}</th><td>${esc(period(issue))}${referencePeriod(issue)?'<small class="briefing-reference-period">참고기간 · 선택 숙박일 범위 밖</small>':''}</td><td>${esc(issue.reason||'저장 자료를 확인하지 못했습니다.')}</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">일부 원자료를 확인하지 못했습니다. 확인된 업체·기간의 자료만 표시합니다.</p>'}</section>`;
   }
   const numeric=value=>typeof value==='number'&&Number.isFinite(value);
   const reservationCodes={QUANTITY_MISSING:'관측 자료 없음',QUANTITY_INVALID:'객실 수량 확인 필요',DUPLICATE_STAY_DATE:'중복 날짜 확인 필요',OBSERVATION_AFTER_CUTOFF:'관측 기준일 이후 자료',OBSERVATION_STALE:'관측일 확인 필요',CAPACITY_UNKNOWN:'객실 기준 확인 필요',CAPACITY_CONFLICT:'객실 기준 불일치',REVENUE_PARTIAL:'금액 일부 미확인'};
+  const reservationMissingReasons={partial_inventory:'상품 재고 일부 미확인',missing_response:'예약 응답·수량 미확인',run_blocked:'수집 접근 제한',run_failed:'수집 실패',run_interrupted:'수집 중단',legacy_inventory_evidence:'구형 자료의 상품별 근거 확인 필요',post_stay_observation:'숙박일 이후 관측 자료',shared_dayuse_unverified:'데이유즈 공유 수량 확인 부족'};
+  function partialConfirmedAmount(value,{daily=false}={}){
+    if(!value||!numeric(value.partialConfirmedRevenue)||value.partialConfirmedRevenue<0||daily&&value.quantityStatus==='ready'&&value.missing!==true)return '';
+    const days=Number.isInteger(value.partialConfirmedDays)&&value.partialConfirmedDays>0?`${n(value.partialConfirmedDays)}일 · `:'';
+    return `<span class="briefing-partial-amount"><span>일부 상품 확인금액</span> <strong>${n(value.partialConfirmedRevenue)}원</strong><small>${days}정상 매출 소계와 별도 · 전체 금액 미확인</small></span>`;
+  }
+  function partialConfirmedSource(row){
+    const evidence=row?.partialRevenueEvidence;
+    if(!partialConfirmedAmount(row,{daily:true})||!evidence||evidence.date!==row.date||evidence.amount!==row.partialConfirmedRevenue)return '';
+    return `<details class="briefing-partial-source"><summary>저장 근거</summary><small>관측 ${esc(validDay(evidence.collectedDate)?evidence.collectedDate:'확인 전')}<br>수집 번호 ${esc(evidence.runId||'확인 전')}</small></details>`;
+  }
   function reservationAmount(summary={}){
     if(numeric(summary.estimatedRevenue)&&summary.revenuePartial!==true)return {label:'추정매출',html:n(summary.estimatedRevenue)+'원',partial:false};
     if(numeric(summary.knownRevenueSubtotal))return {label:'확인된 매출 소계',html:n(summary.knownRevenueSubtotal)+'원',partial:true};
@@ -349,7 +365,7 @@
   function reservationSummary(summary={},period={}){
     const amount=reservationAmount(summary),days=Number.isInteger(summary.calendarDays)?summary.calendarDays:period.days,observed=Number.isInteger(summary.observedDays)?summary.observedDays:summary.days;
     const missing=Number.isInteger(summary.missingDays)?summary.missingDays:Number.isInteger(days)&&Number.isInteger(observed)?Math.max(0,days-observed):null;
-    return `<div class="briefing-period-totals"><div><span>예약 수량</span><strong>${reservationQuantity(summary)}</strong></div><div><span>공개 예약</span><strong class="public-value">${reservationQuantity(summary,'publicBookings','knownPublicBookingsSubtotal')}</strong></div><div><span>타채널 추정</span><strong class="estimated-value">${reservationQuantity(summary,'phoneBookings','knownPhoneBookingsSubtotal')}</strong></div><div><span>${amount.label}</span><strong${amount.partial?' class="briefing-unknown"':''}>${amount.html}</strong></div></div><p class="briefing-period-coverage">수량 확인 ${n(observed)} / ${n(days)}일${missing>0?` <span class="briefing-unknown">· 관측 공백 ${n(missing)}일</span>`:''}${amount.partial?' <span class="briefing-unknown">· 금액 미확인 포함</span>':''}</p>`;
+    return `<div class="briefing-period-totals"><div><span>예약 수량</span><strong>${reservationQuantity(summary)}</strong></div><div><span>공개 예약</span><strong class="public-value">${reservationQuantity(summary,'publicBookings','knownPublicBookingsSubtotal')}</strong></div><div><span>타채널 추정</span><strong class="estimated-value">${reservationQuantity(summary,'phoneBookings','knownPhoneBookingsSubtotal')}</strong></div><div><span>${amount.label}</span><strong${amount.partial?' class="briefing-unknown"':''}>${amount.html}</strong></div></div><p class="briefing-period-coverage">수량 확인 ${n(observed)} / ${n(days)}일${missing>0?` <span class="briefing-unknown">· 관측 공백 ${n(missing)}일</span>`:''}${amount.partial?' <span class="briefing-unknown">· 금액 미확인 포함</span>':''}</p>${partialConfirmedAmount(summary)?`<div class="briefing-period-partial">${partialConfirmedAmount(summary)}</div>`:''}`;
   }
   function reservationDaily(rows=[]){
     const seen=new Set();
@@ -357,9 +373,10 @@
       if(!validDay(row?.date)||seen.has(row.date))return '';seen.add(row.date);
       const known=row.quantityStatus==='ready'&&row.missing!==true,amount=known?reservationAmount(row):{html:'미확인',partial:true,label:'추정매출'};
       const count=key=>known&&numeric(row[key])?n(row[key])+'실':'미확인';
-      const reasons=Array.isArray(row.codes)?row.codes.map(code=>reservationCodes[code]||'관측 근거 확인 필요'):[];
-      const state=!known?(row.quantityStatus==='conflict'?'수량 충돌 · 미확인':'관측 공백 · 미확인'):amount.partial?'수량 확인 · 금액 미확인':'정상 관측';
-      return `<tr${known?'':' class="briefing-missing-day"'}><th>${esc(row.date)}<small>${esc(['일','월','화','수','목','금','토'][new Date(row.date+'T00:00:00Z').getUTCDay()])}</small></th><td class="public-value">${count('publicBookings')}</td><td${known&&row.phoneBookings>0?' class="estimated-value"':''}>${count('phoneBookings')}</td><td>${count('sold')}</td><td>${amount.html}${known&&amount.partial&&amount.label==='확인된 매출 소계'?'<small>확인된 소계</small>':''}</td><td><span${known&&!amount.partial?'':' class="briefing-unknown"'}>${state}</span>${reasons.length?`<small>${esc([...new Set(reasons)].join(' · '))}</small>`:''}</td></tr>`;
+      const reasons=Array.isArray(row.codes)?row.codes.map(code=>code==='QUANTITY_MISSING'&&partialConfirmedAmount(row,{daily:true})?'전체 객실 수량 미확인':reservationCodes[code]||'관측 근거 확인 필요'):[];
+      if(row.missingReason)reasons.push(reservationMissingReasons[row.missingReason]||'관측 근거 확인 필요');
+      const state=!known?(row.quantityStatus==='conflict'?'수량 충돌 · 미확인':partialConfirmedAmount(row,{daily:true})?'일부 상품 확인 · 전체 미확인':'관측 공백 · 미확인'):amount.partial?'수량 확인 · 금액 미확인':'정상 관측';
+      return `<tr${known?'':' class="briefing-missing-day"'}><th>${esc(row.date)}<small>${esc(['일','월','화','수','목','금','토'][new Date(row.date+'T00:00:00Z').getUTCDay()])}</small></th><td class="public-value">${count('publicBookings')}</td><td${known&&row.phoneBookings>0?' class="estimated-value"':''}>${count('phoneBookings')}</td><td>${count('sold')}</td><td>${amount.html}${known&&amount.partial&&amount.label==='확인된 매출 소계'?'<small>확인된 소계</small>':''}${partialConfirmedAmount(row,{daily:true})}${partialConfirmedSource(row)}</td><td><span${known&&!amount.partial?'':' class="briefing-unknown"'}>${state}</span>${reasons.length?`<small>${esc([...new Set(reasons)].join(' · '))}</small>`:''}</td></tr>`;
     }).join('')||'<tr><td colspan="6">저장된 날짜별 자료가 없습니다.</td></tr>'}</tbody></table></div>`;
   }
   function reservationCompanyView(company){
@@ -372,7 +389,7 @@
         if(!validDay(week?.weekStart)||seenWeeks.has(week.weekStart))return '';seenWeeks.add(week.weekStart);
         const daily=(Array.isArray(week.daily)?week.daily:[]).filter(row=>validDay(row?.date)&&row.date.startsWith(month.month+'-')&&!seenDates.has(row.date)&&seenDates.add(row.date));
         const amount=reservationAmount(week.summary),coverage=week.summary?.missingDays;
-        return `<details class="briefing-reservation-week" data-briefing-week="${esc(company.companyId+':'+month.month+':'+week.weekStart)}"><summary><span class="briefing-week-period">${esc(week.period?.start||'기간 확인 전')} ~ ${esc(week.period?.end||'기간 확인 전')}${coverage>0?`<small class="briefing-unknown">관측 공백 ${n(coverage)}일</small>`:''}</span><span class="briefing-week-quantity">예약 ${reservationQuantity(week.summary)}</span><span class="briefing-week-revenue"><small>${amount.label}</small>${amount.html}</span><span class="briefing-week-expand"><span class="briefing-expand-label">펼치기</span><span class="briefing-collapse-label">접기</span><b aria-hidden="true">+</b></span></summary>${reservationDaily(daily)}</details>`;
+        return `<details class="briefing-reservation-week" data-briefing-week="${esc(company.companyId+':'+month.month+':'+week.weekStart)}"><summary><span class="briefing-week-period">${esc(week.period?.start||'기간 확인 전')} ~ ${esc(week.period?.end||'기간 확인 전')}${coverage>0?`<small class="briefing-unknown">관측 공백 ${n(coverage)}일</small>`:''}</span><span class="briefing-week-quantity">예약 ${reservationQuantity(week.summary)}</span><span class="briefing-week-revenue"><small>${amount.label}</small>${amount.html}${partialConfirmedAmount(week.summary)}</span><span class="briefing-week-expand"><span class="briefing-expand-label">펼치기</span><span class="briefing-collapse-label">접기</span><b aria-hidden="true">+</b></span></summary>${reservationDaily(daily)}</details>`;
       }).join('')}</div></section>`;
     }).join('')||'<p class="empty-note">이 업체의 선택 기간에 관측된 자료가 없습니다. 미확인 값을 0으로 합산하지 않습니다.</p>'}<a class="text-link" href="#collection=${encodeURIComponent(company.companyId)}">업체별 원본·통합관측 →</a></article>`;
   }

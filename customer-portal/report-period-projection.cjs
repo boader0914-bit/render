@@ -45,6 +45,8 @@ function envelope(value,{anchor}={}){
 const count=v=>Number.isSafeInteger(v)&&v>=0;
 const number=v=>typeof v==='number'&&Number.isFinite(v)&&v>=0;
 const instant=v=>typeof v==='string'&&/T.*(?:Z|[+-]\d{2}:?\d{2})$/.test(v)&&Number.isFinite(Date.parse(v));
+const reference=v=>typeof v==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,179}$/.test(v);
+const MISSING_REASONS=new Set(['partial_inventory','shared_dayuse_unverified','missing_response','run_blocked','run_failed','run_interrupted','run_unknown','legacy_inventory_evidence','post_stay_observation','capacity_recalculation_unavailable','quantity_conflict','inventory_conflict','rate_unavailable']);
 const nullable=(check,v)=>v===null||check(v);
 const COUNT_FIELDS=['days','supply','sold','publicBookings','phoneBookings','revenueUnknownRooms','knownMissingPhonePriceRooms','calendarDays','observedDays','missingDays','knownSoldSubtotal','knownPublicBookingsSubtotal','knownPhoneBookingsSubtotal'];
 const MONEY_FIELDS=['estimatedRevenue','knownRevenueSubtotal','completeRevenueSubtotal','partialKnownRevenueSubtotal','separatePartialRevenueSubtotal'];
@@ -52,11 +54,15 @@ function summary(value,p){
  if(!object(value))return null;const out={};
  for(const key of COUNT_FIELDS)if(Object.hasOwn(value,key)){if(!nullable(count,value[key]))return null;out[key]=value[key];}
  for(const key of MONEY_FIELDS)if(Object.hasOwn(value,key)){if(!nullable(number,value[key]))return null;out[key]=value[key];}
+ if(Object.hasOwn(value,'partialConfirmedRevenue')||Object.hasOwn(value,'partialConfirmedDays')){
+  if(!nullable(number,value.partialConfirmedRevenue)||!count(value.partialConfirmedDays))return null;
+  out.partialConfirmedRevenue=value.partialConfirmedRevenue;out.partialConfirmedDays=value.partialConfirmedDays;
+ }
  if(!nullable(v=>number(v)&&v<=1,value.reservationRate)||!Array.isArray(value.revenueUnknownDays)||value.revenueUnknownDays.some(d=>!date(d)||d<p.start||d>p.end)||new Set(value.revenueUnknownDays).size!==value.revenueUnknownDays.length)return null;
  if(!['ready','partial','unknown'].includes(value.quantityStatus)||value.calendarDays!==p.days||!count(value.observedDays)||!count(value.missingDays)||value.observedDays+value.missingDays!==p.days)return null;
  out.reservationRate=value.reservationRate;out.revenueUnknownDays=[...value.revenueUnknownDays];out.quantityStatus=value.quantityStatus;return out;
 }
-function daily(value){
+function daily(value,company,report){
  if(!object(value)||!date(value.date)||!['ready','unknown','conflict'].includes(value.quantityStatus)||typeof value.missing!=='boolean'||typeof value.revenuePartial!=='boolean'||!Array.isArray(value.codes)||value.codes.length>64||value.codes.some(c=>typeof c!=='string'||!/^[A-Z][A-Z0-9_]{1,99}$/.test(c))||new Set(value.codes).size!==value.codes.length)return null;
  const out={date:value.date};for(const key of ['total','sold','publicBookings','phoneBookings']){if(!nullable(count,value[key]))return null;out[key]=value[key];}
  for(const key of ['estimatedRevenue','publicRevenue','phoneRevenue','knownPartialRevenue','knownRevenueSubtotal']){if(!nullable(number,value[key]))return null;out[key]=value[key];}
@@ -65,6 +71,19 @@ function daily(value){
  Object.assign(out,{reservationRate:value.reservationRate,collectedAt:value.collectedAt,collectedDate:value.collectedDate,missing:value.missing,quantityStatus:value.quantityStatus,revenuePartial:value.revenuePartial,codes:[...value.codes]});
  if(out.quantityStatus==='ready'?(out.missing||out.sold===null||out.publicBookings===null||out.phoneBookings===null||out.sold!==out.publicBookings+out.phoneBookings):!out.missing)return null;
  if(out.quantityStatus!=='ready'&&(!out.codes.length||['total','sold','publicBookings','phoneBookings','estimatedRevenue','publicRevenue','phoneRevenue','knownPartialRevenue','knownRevenueSubtotal','reservationRate'].some(key=>out[key]!==null)||out.revenuePartial))return null;
+ if(Object.hasOwn(value,'missingReason')){
+  if(value.missingReason!==null&&(!MISSING_REASONS.has(value.missingReason)||!out.missing))return null;
+  out.missingReason=value.missingReason;
+ }
+ if(Object.hasOwn(value,'partialConfirmedRevenue')||Object.hasOwn(value,'partialRevenueEvidence')){
+  if(!nullable(number,value.partialConfirmedRevenue))return null;
+  const proof=value.partialRevenueEvidence;
+  if(value.partialConfirmedRevenue===null){if(proof!==null)return null;out.partialConfirmedRevenue=null;out.partialRevenueEvidence=null;}
+  else {
+   if(out.quantityStatus!=='unknown'||!out.missing||!object(proof)||proof.companyId!==company.companyId||proof.date!==out.date||proof.productType!=='lodging'||!reference(proof.runId)||!instant(proof.collectedAt)||!date(proof.collectedDate)||new Date(Date.parse(proof.collectedAt)+9*3600000).toISOString().slice(0,10)!==proof.collectedDate||proof.collectedDate>report.asOf||proof.collectedDate>out.date||!['partial_inventory','capacity_recalculation_unavailable'].includes(proof.reason)||proof.amount!==value.partialConfirmedRevenue)return null;
+   out.partialConfirmedRevenue=value.partialConfirmedRevenue;out.partialRevenueEvidence={companyId:proof.companyId,runId:proof.runId,date:proof.date,productType:'lodging',collectedAt:proof.collectedAt,collectedDate:proof.collectedDate,reason:proof.reason,amount:proof.amount};
+  }
+ }
  return out;
 }
 function consistentSummary(s,records){
@@ -78,6 +97,11 @@ function consistentSummary(s,records){
  if(!eq(s.revenueUnknownDays,unknown)||s.estimatedRevenue!==(missing||unknown.length?null:subtotal))return false;
  const supply=!missing&&ready.length&&ready.every(d=>d.total!==null)?sum('total'):null,rate=supply>0&&ready.every(d=>d.reservationRate!==null)?sum('sold')/supply:null;
  if(s.supply!==supply||s.reservationRate!==rate)return false;
+ const partialRows=records.filter(d=>d.missing&&number(d.partialConfirmedRevenue));
+ if(Object.hasOwn(s,'partialConfirmedRevenue')||records.some(d=>Object.hasOwn(d,'partialConfirmedRevenue'))){
+  const partialSubtotal=partialRows.length?partialRows.reduce((total,d)=>total+d.partialConfirmedRevenue,0):null;
+  if(s.partialConfirmedRevenue!==partialSubtotal||s.partialConfirmedDays!==partialRows.length)return false;
+ }
  return true;
 }
 function reservationPeriods(value,company,report){
@@ -91,7 +115,7 @@ function reservationPeriods(value,company,report){
    const weeks=[];let current=p.start;
    for(const week of row.weeks){
     const wp=period(week.period),ws=wp&&summary(week.summary,wp);if(!wp||!ws||!date(week.weekStart)||new Date(week.weekStart+'T00:00:00Z').getUTCDay()!==1||wp.start!==current||wp.start<week.weekStart||wp.end!==(shift(week.weekStart,6)<p.end?shift(week.weekStart,6):p.end)||!Array.isArray(week.daily)||week.daily.length!==wp.days)return null;
-    const records=week.daily.map(daily);if(records.some((d,i)=>!d||d.date!==shift(wp.start,i)||d.collectedDate&&d.collectedDate>report.asOf&&(d.quantityStatus==='ready'||!d.codes.includes('OBSERVATION_AFTER_CUTOFF'))))return null;
+    const records=week.daily.map(d=>daily(d,company,report));if(records.some((d,i)=>!d||d.date!==shift(wp.start,i)||d.collectedDate&&d.collectedDate>report.asOf&&(d.quantityStatus==='ready'||!d.codes.includes('OBSERVATION_AFTER_CUTOFF'))))return null;
     if(!consistentSummary(ws,records))return null;weeks.push({weekStart:week.weekStart,period:wp,summary:ws,daily:records});current=shift(wp.end,1);
    }
    if(current!==shift(p.end,1)||!consistentSummary(s,weeks.flatMap(w=>w.daily)))return null;
