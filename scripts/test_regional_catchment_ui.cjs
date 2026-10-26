@@ -378,6 +378,16 @@ test("administrative presentation keeps real zero, missingness, sources, periods
   assert.doesNotMatch(marketResultHtml(null, { loading: true }), /data-rm-value="0"|확보범위 0/);
 });
 
+test("administrative missing cards explain the reason without exposing internal codes and retain source evidence", () => {
+  const input = market(); input.metrics[1].errorCode = "INTERNAL_PROVIDER_READ_ERROR";
+  Object.assign(input.metrics[2], { status: "unverified", value: null, reasonCode: "PRIVATE_UNKNOWN_REASON", errorCode: "INTERNAL_EVIDENCE_ERROR" });
+  const html = marketResultHtml(input);
+  assert.match(html, /저장된 자료가 없습니다\./); assert.match(html, /저장 근거를 확인해야 합니다\./);
+  assert.doesNotMatch(html, /REGIONAL_MARKET_NOT_ACQUIRED|PRIVATE_UNKNOWN_REASON|INTERNAL_PROVIDER_READ_ERROR|INTERNAL_EVIDENCE_ERROR/);
+  assert.match(html, /data-rc-detail="market:population"/); assert.match(html, /기준기간·원본 근거/);
+  assert.match(html, /saved-proof/); assert.match(html, /TABLE_1/); assert.match(html, /data-rm-value="0"/);
+});
+
 test("unverified, partial, suppressed, pending and error metrics never render a number even if malformed input contains one", () => {
   for (const status of ["unverified", "partial", "suppressed", "publication_pending", "error", "missing"]) {
     const input = market(); Object.assign(input.metrics[0], { status, value: 987654, reasonCode: "REGIONAL_MARKET_EVIDENCE_UNVERIFIED" });
