@@ -58,7 +58,7 @@
     const periods=flow?.periods||[],thisMonth=new Date(Date.now()+9*3600000).toISOString().slice(0,7);
     const selected=periods.find(p=>p.month===options.month)||periods.find(p=>p.month===thisMonth)||periods.findLast(p=>p.points.some(d=>d.status==='complete'))||periods.at(-1);
     if(!selected)return '<p class="empty-note">관측일별 비교 자료가 없습니다. 같은 숙박월의 관측이 쌓이면 흐름을 표시합니다.</p>';
-    const metric=options.metric||'bookings',cfg=config(metric);if(metric==='bookings')cfg.unit='객실·박';
+    const metric=options.metric||'bookings',cfg=config(metric);
     const points=selected.points.map(p=>({...p,date:p.observedDate}));
     const numericPoints=points.filter(p=>cfg.series.every(([key])=>numeric(p[key]))),last=numericPoints.at(-1),previous=numericPoints.at(-2);
     const change=last&&previous?cfg.series.map(([key,label,tone])=>`<span class="flow-label-${tone}">${esc(label)} ${last[key]>=previous[key]?'+':''}${( (last[key]-previous[key])/cfg.scale).toLocaleString('ko-KR',{maximumFractionDigits:1})}${metric==='rate'?'%p':esc(cfg.unit)}</span>`).join(' · '):'동일 숙박월의 유효 관측 2회가 필요합니다.';

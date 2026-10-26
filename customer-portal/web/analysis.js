@@ -359,8 +359,8 @@
     return {label:'추정매출',html:'미확인',partial:true};
   }
   function reservationQuantity(summary={},key='sold',known='knownSoldSubtotal'){
-    if(numeric(summary[key]))return n(summary[key])+'<small> 실·박</small>';
-    return numeric(summary[known])?n(summary[known])+'<small> 실·박 확인 · 일부 미확인</small>':'미확인';
+    if(numeric(summary[key]))return n(summary[key])+'<small> 실</small>';
+    return numeric(summary[known])?n(summary[known])+'<small> 실 확인 · 일부 미확인</small>':'미확인';
   }
   function reservationSummary(summary={},period={}){
     const amount=reservationAmount(summary),days=Number.isInteger(summary.calendarDays)?summary.calendarDays:period.days,observed=Number.isInteger(summary.observedDays)?summary.observedDays:summary.days;
