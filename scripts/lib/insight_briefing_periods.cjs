@@ -4,6 +4,7 @@
 const {fault}=require('./insight_store.cjs');
 const {summarizeCompany,validQuantityDay}=require('./insight_comparison.cjs');
 const DAY=86400000;
+const missingReasons=new Set(['partial_inventory','shared_dayuse_unverified','missing_response','run_blocked','run_failed','run_interrupted','run_unknown','legacy_inventory_evidence','post_stay_observation','capacity_recalculation_unavailable','quantity_conflict','inventory_conflict','rate_unavailable']);
 const number=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0?value:null;
 const day=value=>typeof value==='string'&&/^20\d{2}-(0[1-9]|1[0-2])-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value+'T00:00:00Z'))&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value?value:null;
 const month=value=>typeof value==='string'&&/^20\d{2}-(0[1-9]|1[0-2])$/.test(value)?value:null;
@@ -33,7 +34,7 @@ function monthsBetween(start,end) {
 }
 function observedBoundary(rows,asOf) {
   return rows.filter(row=>day(row?.date)).filter(row=>{
-    const timestamp=[row.collectedAt,row.latestAttemptAt].find(value=>typeof value==='string'&&Number.isFinite(Date.parse(value)));
+    const timestamp=[row.collectedAt,row.latestAttemptAt,row.partialRevenueEvidence?.collectedAt].find(value=>typeof value==='string'&&Number.isFinite(Date.parse(value)));
     const at=timestamp?new Date(Date.parse(timestamp)+9*3600000).toISOString().slice(0,10):day(row.collectedDate);
     // Missing calendar placeholders have no evidence. A failed/quantity-unknown
     // observation with a real timestamp still defines a truthful data boundary.
@@ -59,6 +60,9 @@ function dailyPeriods(company,selectedPeriod,{asOf,mode}) {
     const conflict=codes.some(code=>['QUANTITY_INVALID','DUPLICATE_STAY_DATE','CAPACITY_CONFLICT'].includes(code));
     const collectedAt=typeof source?.collectedAt==='string'&&Number.isFinite(Date.parse(source.collectedAt))?source.collectedAt:null;
     const collectedDate=collectedAt?new Date(Date.parse(collectedAt)+9*3600000).toISOString().slice(0,10):day(source?.collectedDate);
+    const candidate=source?.partialRevenueEvidence,amount=number(source?.partialConfirmedRevenue),partialAt=candidate?.collectedAt&&Number.isFinite(Date.parse(candidate.collectedAt))?new Date(Date.parse(candidate.collectedAt)+9*3600000).toISOString().slice(0,10):null;
+    const partialEvidence=!valid&&!conflict&&source?.missing===true&&!source.inventoryConflict&&!source.capacityConflict&&amount!==null&&number(source.knownPartialRevenue)===amount&&candidate?.amount===amount&&candidate.companyId===company.companyId&&candidate.date===date&&candidate.productType==='lodging'&&typeof candidate.runId==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,179}$/.test(candidate.runId)&&partialAt&&candidate.collectedDate===partialAt&&partialAt<=asOf&&partialAt<=date&&['partial_inventory','capacity_recalculation_unavailable'].includes(candidate.reason)?{companyId:candidate.companyId,runId:candidate.runId,date,productType:'lodging',collectedAt:candidate.collectedAt,collectedDate:partialAt,reason:candidate.reason,amount}:null;
+    const missingReason=!valid?(missingReasons.has(source?.missingReason)?source.missingReason:missingReasons.has(source?.latestAttemptReason)?source.latestAttemptReason:partialEvidence?.reason||null):null;
     // Reuse the exact company/day denominator policy used by month/week
     // summaries. A reviewed-basis or inventory conflict must not leave a
     // numeric daily rate beside a deliberately unknown aggregate rate.
@@ -67,15 +71,18 @@ function dailyPeriods(company,selectedPeriod,{asOf,mode}) {
       estimatedRevenue:valid&&source.revenuePartial!==true?number(source.estimatedRevenue):null,knownRevenueSubtotal:monetary('estimatedRevenue'),publicRevenue:monetary('publicRevenue'),phoneRevenue:monetary('phoneRevenue'),
       knownPartialRevenue:monetary('knownPartialRevenue'),reservationRate,
       collectedAt,collectedDate,missing:!valid,quantityStatus:valid?'ready':conflict?'conflict':'unknown',revenuePartial:valid&&source.revenuePartial===true,
-      codes:valid?[]:codes.length?codes:['QUANTITY_MISSING']};
+      codes:valid?[]:codes.length?codes:['QUANTITY_MISSING'],missingReason,
+      partialConfirmedRevenue:partialEvidence?.amount??null,partialRevenueEvidence:partialEvidence};
   });
   function summarize(group) {
     const groupPeriod={start:group[0].date,end:group.at(-1).date},summary=summarizeCompany(company,{mode,asOf,period:groupPeriod}).summary;
     const observed=group.filter(row=>!row.missing),missing=group.length-observed.length;
     const subtotal=field=>observed.length?observed.reduce((sum,row)=>sum+(number(row[field])||0),0):null;
+    const partialRows=group.filter(row=>row.missing&&number(row.partialConfirmedRevenue)!==null);
     return {...summary,...(missing?{supply:null,sold:null,publicBookings:null,phoneBookings:null,reservationRate:null,estimatedRevenue:null}:{}),
       calendarDays:group.length,observedDays:observed.length,missingDays:missing,quantityStatus:!observed.length?'unknown':missing?'partial':'ready',
-      knownSoldSubtotal:subtotal('sold'),knownPublicBookingsSubtotal:subtotal('publicBookings'),knownPhoneBookingsSubtotal:subtotal('phoneBookings')};
+      knownSoldSubtotal:subtotal('sold'),knownPublicBookingsSubtotal:subtotal('publicBookings'),knownPhoneBookingsSubtotal:subtotal('phoneBookings'),
+      partialConfirmedRevenue:partialRows.length?partialRows.reduce((sum,row)=>sum+row.partialConfirmedRevenue,0):null,partialConfirmedDays:partialRows.length};
   }
   const grouped=new Map();
   for(const row of rows){const key=row.date.slice(0,7),group=grouped.get(key)||[];group.push(row);grouped.set(key,group);}

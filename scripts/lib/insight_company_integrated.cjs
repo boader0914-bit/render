@@ -10,6 +10,8 @@ const day = value => /^\d{4}-\d{2}-\d{2}$/.test(value || '') ? value : null;
 const month = value => /^20\d{2}-(0[1-9]|1[0-2])$/.test(value || '') ? value : null;
 const stamp = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null;
 const reference = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,179}$/.test(value) ? value : null;
+const missingReasons=new Set(['partial_inventory','shared_dayuse_unverified','missing_response','run_blocked','run_failed','run_interrupted','run_unknown','legacy_inventory_evidence','post_stay_observation','capacity_recalculation_unavailable','quantity_conflict','inventory_conflict','rate_unavailable']);
+const kstDay=value=>new Date(Date.parse(value)+9*3600000).toISOString().slice(0,10);
 const priceCauseCodes = new Set(['explicit_product_price_missing', 'inferred_product_price_missing', 'product_maxima_exceed_company_capacity',
   'proportional_price_evidence_incomplete', 'company_capacity_unallocated_to_products', 'public_product_price_missing', 'dayuse_unverified', 'invalid_product_response']);
 function priceUnknownEvidence(row) {
@@ -114,9 +116,18 @@ function projectIntegrated(companyId, value, requestedMonth) {
     && duplicateDates.size === 0 && suppliedRunIds.length > 0 && suppliedRunIds.every(value => reference(value))
     && observations.every(row => row.collectedAt && row.collectedDate && linkedRunIds.has(row.runId));
   const attempts = new Map((source.latestAttempts || []).filter(row => row.productType === 'lodging').map(row => [row.date, row]));
+  const partialByDate=new Map(),ambiguousPartial=new Set(),cutoff=day(snapshot.request?.cutoffDate)||day(snapshot.period?.cutoffDate);
+  for(const row of Array.isArray(snapshot.sources?.partialEvidence)?snapshot.sources.partialEvidence:[]){
+    const at=stamp(row?.collectedAt),date=day(row?.date),amount=nonnegative(row?.knownPartialRevenue);
+    if(row?.companyId!==companyId||row.productType!=='lodging'||!date||!date.startsWith(result.selectedMonth+'-')||row.includedInPartialSubtotal!==true||amount===null||!reference(row.runId)||!linkedRunIds.has(row.runId)||!at||!cutoff||kstDay(at)>cutoff||kstDay(at)>date||!['partial_inventory','capacity_recalculation_unavailable'].includes(row.reason))continue;
+    const value={companyId,runId:row.runId,date,productType:'lodging',collectedAt:at,collectedDate:kstDay(at),reason:row.reason,amount};
+    const previous=partialByDate.get(date);if(previous&&JSON.stringify(previous)!==JSON.stringify(value))ambiguousPartial.add(date);else partialByDate.set(date,value);
+  }
   const lodging = snapshot.summary?.lodging;
   const daily = (snapshot.daily || []).filter(row => day(row.date) && row.date.startsWith(result.selectedMonth + '-')).map(row => {
     const m = metrics(row.lodging), evidence = duplicateDates.has(row.date) ? null : byDate.get(row.date), attempt = attempts.get(row.date);
+    const missing=!(m.coveredCompanyDays>0),candidate=partialByDate.get(row.date),partialEvidence=missing&&!byDate.has(row.date)&&!ambiguousPartial.has(row.date)&&candidate&&candidate.amount===nonnegative(m.knownPartialRevenue)?candidate:null;
+    const reason=missing?(missingReasons.has(attempt?.detailReason)?attempt.detailReason:missingReasons.has(attempt?.reason)?attempt.reason:partialEvidence?.reason||null):null;
     return { date: row.date, ...m, total: m.supply,
       // Monetary aggregates omit price-ineligible observations. Preserve the
       // selected source's explicit missing-price quantity when that aggregate
@@ -124,10 +135,12 @@ function projectIntegrated(companyId, value, requestedMonth) {
       // or money is inferred or recalculated at this projection boundary.
       phoneMissingPriceBookings: m.phoneMissingPriceBookings ?? count(evidence?.phoneMissingPriceBookings),
       ...valuationEvidence(evidence),
-      missing: !(m.coveredCompanyDays > 0), collectedAt: stamp(evidence?.collectedAt), collectedDate: day(evidence?.collectedDate),
+      missing,missingReason:reason,partialConfirmedRevenue:partialEvidence?.amount??null,partialRevenueEvidence:partialEvidence,
+      collectedAt: stamp(evidence?.collectedAt), collectedDate: day(evidence?.collectedDate),
       observationLeadTimeDays: number(evidence?.observationLeadTimeDays),
       sourceObservation: sourceObservation(evidence),
       latestAttemptAt: stamp(attempt?.collectedAt), latestAttemptStatus: ['selected','not_selected','excluded'].includes(attempt?.status) ? attempt.status : null,
+      latestAttemptReason:missingReasons.has(attempt?.reason)?attempt.reason:null,
       // Earlier valid observations are usable but explicitly dated, not errors.
       partial: m.coveredCompanyDays !== 1, collectionPartial: evidence?.runQuality === 'partial',
       inventoryConflict: false };

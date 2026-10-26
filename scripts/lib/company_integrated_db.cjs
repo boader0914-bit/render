@@ -98,6 +98,7 @@ function latestAttempts(source, snapshot, request) {
     const isSelected = Boolean(accepted && accepted.runId === runId && accepted.collectedAt === collectedAt);
     attempts.set(key, { date, productType, runId, collectedAt, keyword: String(row.keyword || run?.keyword || ""),
       status: reason ? "excluded" : isSelected ? "selected" : "not_selected", reason: reason || (isSelected ? "" : "not_selected_by_quality_rules"),
+      ...(reason === "partial_inventory" && row.sharedDayUseIncomplete === true ? { detailReason: "shared_dayuse_unverified" } : {}),
       lastValidRunId: accepted?.runId || null, lastValidCollectedAt: accepted?.collectedAt || null });
   }
   return [...attempts.values()].sort((a, b) => a.date.localeCompare(b.date) || a.productType.localeCompare(b.productType));

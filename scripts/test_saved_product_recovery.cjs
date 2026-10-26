@@ -2,6 +2,8 @@
 const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs/promises"), path = require("node:path"), os = require("node:os");
 const { createSavedProductRecovery, recoveryRowDigest } = require("./lib/saved_product_recovery.cjs");
 const { applyInventoryEvidence } = require("./inventory_estimation.cjs");
+const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs");
+const { buildMonthlyReportSnapshot } = require("./lib/monthly_reports.cjs");
 const CSV = "경남_네이버전체순위.csv", RUN = "gyeongnam_glamping_20260901_100450";
 function csv(row) { const quote = value => '"' + String(value ?? "").replaceAll('"', '""') + '"'; return Object.keys(row).map(quote).join(",") + "\n" + Object.values(row).map(quote).join(",") + "\n"; }
 async function fixture(t, { dayuse = false, days = 2 } = {}) {
@@ -204,7 +206,7 @@ test("recorded day-use sale type normalizes a contradictory provider subtype in 
     const result = await f.helper.recover(f.input, f.data);
     assert.equal(result.receipts.length, 1, JSON.stringify(result.warnings));
     const saved = await storedReceipt(f, result), read = await f.helper.read(f.request, f.data);
-    assert.equal(saved.value.validatorVersion, 2);
+    assert.equal(saved.value.validatorVersion, 3);
     assert.equal(saved.value.classificationNormalizations.length, 2);
     assert.deepEqual(saved.value.classificationNormalizations[0], { date: "2026-09-01", productId: "day1",
       reason: "recorded_sale_type_precedence", source: { saleType: "데이유즈", bizItemSubType: "ACCOMMODATION_NIGHT" },
@@ -241,7 +243,7 @@ test("normalized classifications must still match each complete CSV lodging and 
 });
 async function replaceWithV1Receipt(f, result) {
   const saved = await storedReceipt(f, result);
-  const { checksum, receiptId, createdAt, classificationNormalizations, ...source } = saved.value;
+  const { checksum, receiptId, createdAt, classificationNormalizations, inventoryNormalizations, ...source } = saved.value;
   const core = { ...source, validatorVersion: 1 }, legacyId = recoveryRowDigest(core);
   const value = { ...core, receiptId: legacyId, createdAt }; value.checksum = recoveryRowDigest(value);
   const file = path.join(path.dirname(saved.file), legacyId + ".json");
@@ -264,4 +266,135 @@ test("a fabricated version-one receipt cannot authorize newly normalized classif
   await f.write(); const result = await f.helper.recover(f.input, f.data);
   assert.equal(result.receipts.length, 1); await replaceWithV1Receipt(f, result);
   await assert.rejects(f.helper.read(f.request, f.data), error => error.code === "RECOVERY_RECEIPT_INVALID");
+});
+
+test("a legacy closed response matching ungated inventory is normalized only in the certified calculation copy", async t => {
+  const f = await fixture(t); Object.assign(f.products[0], { open: false, total: 10, soldOut: 2 }); await f.write();
+  const files = [path.join(f.runDir, "manifest.json"), path.join(f.runDir, CSV), path.join(f.runDir, "details", "123_weekly.json")], originals = new Map(await Promise.all(files.map(async file => [file, await fs.readFile(file)])));
+  const seen = [], helper = createSavedProductRecovery({ ...f.options, applyCompanyManualCorrection: (item, current) => {
+    seen.push(JSON.parse(JSON.stringify(item.weeklyProductDetails))); return f.options.applyCompanyManualCorrection(item, current);
+  } });
+  const result = await helper.recover(f.input, f.data), saved = await storedReceipt(f, result), read = await helper.read(f.request, f.data);
+  assert.equal(result.receipts[0].verifiedObservationCount, 2); assert.equal(saved.value.validatorVersion, 3);
+  assert.equal(saved.value.inventoryNormalizations.length, 1);
+  assert.deepEqual(saved.value.inventoryNormalizations[0], { date: "2026-09-01", productId: "room1", productType: "lodging", reason: "legacy_closed_available_ungated",
+    sourceRowDigest: recoveryRowDigest(f.products[0]), source: { stock: 10, bookingCount: 2, occupiedBookingCount: 0, open: false, available: 8, total: 10, soldOut: 2 }, expectedUngatedAvailable: 8, applied: { available: 0 } });
+  assert.ok(seen.every(products => products.find(row => row.date === "2026-09-01").available === 0));
+  assert.equal(f.products[0].available, 8); assert.equal(f.products[0].open, false);
+  const closed = read.observations.find(entry => entry.row.stayDate === "2026-09-01").row;
+  assert.equal(closed.publicBookings, 2); assert.equal(closed.phoneBookings, 8); assert.equal(closed.estimatedRevenue, 1000000);
+  assert.equal(read.observations.find(entry => entry.row.stayDate === "2026-09-02").row.sold, 0, "a genuine zero remains zero");
+  const productHash = require("node:crypto").createHash("sha256").update(originals.get(files[2])).digest("hex");
+  assert.equal(saved.value.sourceFiles.find(file => file.path.endsWith("123_weekly.json")).sha256, productHash);
+  const receiptBefore = await fs.readFile(saved.file), repeat = await helper.recover(f.input, f.data);
+  assert.equal(repeat.receipts[0].receiptId, result.receipts[0].receiptId); assert.equal(repeat.receipts[0].created, false);
+  assert.deepEqual(await fs.readFile(saved.file), receiptBefore);
+  assert.deepEqual(await createSavedProductRecovery(f.options).read(f.request, f.data), read);
+  for (const [file, bytes] of originals) assert.deepEqual(await fs.readFile(file), bytes);
+});
+
+test("all recorded products must agree before a closed product can restore a three-product date", async t => {
+  const f = await fixture(t);
+  f.products.splice(0, f.products.length, ...["2026-09-01", "2026-09-02"].flatMap(date => [
+    { date, bizItemId: "room1", name: "숙박 A", saleType: "숙박", stock: 3, bookingCount: 2, occupiedBookingCount: 0, available: 1, total: 3, soldOut: 2, price: 320000, open: true },
+    { date, bizItemId: "room2", name: "숙박 B", saleType: "숙박", stock: 2, bookingCount: 1, occupiedBookingCount: 0, available: 1, total: 2, soldOut: 1, price: 320000, open: true },
+    { date, bizItemId: "room3", name: "숙박 C", saleType: "숙박", stock: 3, bookingCount: 0, occupiedBookingCount: 0, available: 3, total: 3, soldOut: 0, price: 320000, open: false }
+  ]));
+  f.row["숙박상품수"] = 3; f.row["예약계산대상상품수"] = 3; await f.write();
+  const result = await f.helper.recover(f.input, f.data), saved = await storedReceipt(f, result), read = await f.helper.read(f.request, f.data);
+  assert.equal(read.observations.length, 2); assert.equal(read.observations[0].row.publicBookings, 3);
+  assert.deepEqual(saved.value.inventoryNormalizations.map(row => [row.productId, row.source.available, row.applied.available]), [["room3", 3, 0], ["room3", 3, 0]]);
+});
+
+test("closed availability is never normalized across failed, unobserved, blocked or contradictory response evidence", async t => {
+  for (const extra of [{ stockObserved: false }, { bookingObserved: false }, { scheduleObserved: false }, { inventoryObserved: false }, { queryAttempted: false },
+    { collectionFailed: true }, { failed: true }, { responseStatus: 429 }, { responseStatus: 200, error: "BookingAPITooManyRequests" }, { httpStatus: 403 }, { statusCode: 500 },
+    { blocked: true }, { captcha: true }, { rateLimited: true }, { accessRestricted: true }, { status: "rate_limited" }, { collectionStatus: "partial" }, { queryStatus: "not_attempted" },
+    { total: 9 }, { soldOut: 3 }, { available: 7 }, { available: 100 }, { available: null }, { occupiedBookingCount: 12 }, { open: "false" }, { inventoryObserved: "true" }]) {
+    const f = await fixture(t); Object.assign(f.products[0], { open: false, total: 10, soldOut: 2 }, extra); await f.write();
+    const result = await f.helper.recover(f.input, f.data), saved = await storedReceipt(f, result), read = await f.helper.read(f.request, f.data);
+    assert.equal(result.receipts[0].verifiedObservationCount, 1, JSON.stringify(extra)); assert.deepEqual(saved.value.inventoryNormalizations, []);
+    assert.deepEqual(read.observations.map(entry => entry.row.stayDate), ["2026-09-02"]);
+    assert.ok(result.warnings.some(row => row.date === "2026-09-01" && row.code === "RECOVERY_PRODUCT_DATE_INVALID"));
+  }
+});
+
+test("ordinary open-response availability conflicts stay excluded and an already gated closed zero needs no normalization", async t => {
+  const f = await fixture(t); f.products[0].available = 7; await f.write();
+  const invalid = await f.helper.recover(f.input, f.data); assert.equal(invalid.receipts[0].verifiedObservationCount, 1);
+  Object.assign(f.products[0], { open: false, available: 0 }); await f.write();
+  const gated = await f.helper.recover(f.input, f.data), saved = await storedReceipt(f, gated);
+  assert.equal(gated.receipts[0].verifiedObservationCount, 2); assert.deepEqual(saved.value.inventoryNormalizations, []);
+});
+
+test("explicit successful response flags and a business-day close retain the same narrowly certified normalization", async t => {
+  for (const closed of [{ open: false }, { open: true, isBusinessDay: false }, { open: true, isSaleDay: false }]) {
+    const f = await fixture(t); Object.assign(f.products[0], closed, { responseStatus: 200, httpStatus: 200, statusCode: 200, queryAttempted: true,
+      stockObserved: true, bookingObserved: true, scheduleObserved: true, inventoryObserved: true, blocked: false, accessRestricted: false, rateLimited: false, captcha: false }); await f.write();
+    const result = await f.helper.recover(f.input, f.data), saved = await storedReceipt(f, result);
+    assert.equal(result.receipts[0].verifiedObservationCount, 2); assert.equal(saved.value.inventoryNormalizations.length, 1);
+    assert.equal(saved.value.inventoryNormalizations[0].source.available, 8); assert.deepEqual(saved.value.inventoryNormalizations[0].applied, { available: 0 });
+  }
+});
+
+test("conflicting failure aliases in duplicate product views cannot hide behind the same normal inventory", async t => {
+  const f = await fixture(t); Object.assign(f.products[0], { open: false });
+  f.row["네이버상품상세JSON"] = JSON.stringify([{ ...f.products[0], stockObserved: false }]); await f.write();
+  const result = await f.helper.recover(f.input, f.data); assert.equal(result.receipts.length, 0); assert.equal(result.warnings[0].code, "RECOVERY_DUPLICATE_PRODUCT_CONFLICT");
+});
+
+async function legacyClosedReceipt(f, result, version) {
+  const saved = await storedReceipt(f, result), { checksum, receiptId, createdAt, inventoryNormalizations, ...source } = saved.value;
+  if (version === 1) delete source.classificationNormalizations;
+  const core = { ...source, validatorVersion: version, verifiedDates: { lodging: ["2026-09-02"], dayuse: [] }, exclusions: [{ date: "2026-09-01", reason: "RECOVERY_PRODUCT_DATE_INVALID" }] }, id = recoveryRowDigest(core);
+  const value = { ...core, receiptId: id, createdAt }; value.checksum = recoveryRowDigest(value);
+  const file = path.join(path.dirname(saved.file), id + ".json"); await fs.writeFile(file, JSON.stringify(value), { flag: "wx" });
+  // Fixture setup only: simulate a previously installed old certificate before
+  // invoking the new recovery. The preserved old file is never overwritten.
+  assert.ok(saved.file.startsWith(f.root + path.sep)); await fs.unlink(saved.file);
+  return { file, value };
+}
+for (const version of [1, 2]) test(`version-${version} closed-date exclusions remain readable and a new version-three receipt is separate and immutable`, async t => {
+  const f = await fixture(t); f.products[0].open = false; await f.write();
+  const first = await f.helper.recover(f.input, f.data), legacy = await legacyClosedReceipt(f, first, version), before = await fs.readFile(legacy.file);
+  const old = await createSavedProductRecovery(f.options).read(f.request, f.data);
+  assert.deepEqual(old.observations.map(entry => entry.row.stayDate), ["2026-09-02"]); assert.equal(old.observations[0].certificate.receiptId, legacy.value.receiptId);
+  assert.deepEqual(await fs.readFile(legacy.file), before); assert.equal((await fs.readdir(path.dirname(legacy.file))).length, 1, "reads do not promote an old receipt");
+  const next = await f.helper.recover(f.input, f.data); assert.equal(next.receipts[0].created, true); assert.notEqual(next.receipts[0].receiptId, legacy.value.receiptId);
+  const read = await f.helper.read(f.request, f.data), newRows = read.observations.filter(entry => entry.certificate.receiptId === next.receipts[0].receiptId), oldRows = read.observations.filter(entry => entry.certificate.receiptId === legacy.value.receiptId);
+  assert.deepEqual(newRows.map(entry => entry.row.stayDate), ["2026-09-01", "2026-09-02"]); assert.deepEqual(oldRows.map(entry => entry.row.stayDate), ["2026-09-02"]);
+  assert.deepEqual(await fs.readFile(legacy.file), before); assert.equal((await fs.readdir(path.dirname(legacy.file))).length, 2);
+  await fs.mkdir(path.join(f.root, "company_master"), { recursive: true });
+  await fs.writeFile(path.join(f.root, "company_master", "companies.json"), JSON.stringify({ companies: { [f.company.companyId]: f.company } }));
+  const adapter = createMonthlyReportSources({ dataDir: f.root, regionMasterFile: path.join(f.root, "regions.json"), listRuns: async () => f.data.runs,
+    capacityForCompany: () => 10, readSavedProductRecoveries: (request, data) => f.helper.read(request, data), now: f.options.now });
+  const loaded = await adapter.loadSources(f.request);
+  assert.equal(loaded.savedProductRecoveries.length, 3, "the real source adapter carries old and new certificates without rewriting them");
+  const snapshot = buildMonthlyReportSnapshot(f.request, loaded, "2026-10-24T04:00:00Z");
+  const newOnly = buildMonthlyReportSnapshot(f.request, { ...loaded, savedProductRecoveries: loaded.savedProductRecoveries.filter(entry => entry.certificate.receiptId === next.receipts[0].receiptId) }, "2026-10-24T04:00:00Z");
+  assert.deepEqual(snapshot.summary, newOnly.summary, "coexisting certificates cannot increase or conflict with the same company-date amounts");
+  assert.deepEqual(snapshot.daily, newOnly.daily);
+  assert.equal(snapshot.summary.lodging.coveredCompanyDays, 2); assert.equal(snapshot.summary.lodging.publicBookings, 2); assert.equal(snapshot.summary.lodging.phoneBookings, 8);
+  assert.equal(snapshot.summary.lodging.sold, 10); assert.equal(snapshot.summary.lodging.estimatedRevenue, 1000000);
+  assert.equal(snapshot.sources.observations.length, 2); assert.equal(new Set(snapshot.sources.observations.map(row => row.date)).size, 2);
+  assert.equal(snapshot.daily.find(row => row.date === "2026-09-02").lodging.sold, 0, "the old valid zero date remains a normal single observation");
+  assert.equal(snapshot.quality.discardedByReason.duplicate_observation, 1);
+  assert.equal(Object.keys(snapshot.quality.discardedByReason).filter(key => key !== "duplicate_observation").length, 0, "no valid date is discarded as an inventory conflict");
+  assert.deepEqual(await fs.readFile(legacy.file), before);
+});
+
+test("normalization proof tampering is rejected even if the receipt checksum and filename are recomputed", async t => {
+  const f = await fixture(t); f.products[0].open = false; await f.write(); const result = await f.helper.recover(f.input, f.data), saved = await storedReceipt(f, result);
+  const { checksum, receiptId, createdAt, ...core } = saved.value; core.inventoryNormalizations[0].source.available = 9;
+  const id = recoveryRowDigest(core), value = { ...core, receiptId: id, createdAt }; value.checksum = recoveryRowDigest(value);
+  const file = path.join(path.dirname(saved.file), id + ".json"); await fs.writeFile(file, JSON.stringify(value), { flag: "wx" });
+  await assert.rejects(f.helper.read(f.request, f.data), error => error.code === "RECOVERY_RECEIPT_INVALID");
+});
+
+test("downgrading a new normalization receipt cannot give an old validator authority over the recovered closed date", async t => {
+  const f = await fixture(t); f.products[0].open = false; await f.write(); const result = await f.helper.recover(f.input, f.data), saved = await storedReceipt(f, result);
+  const { checksum, receiptId, createdAt, inventoryNormalizations, ...source } = saved.value, core = { ...source, validatorVersion: 2 };
+  const id = recoveryRowDigest(core), value = { ...core, receiptId: id, createdAt }; value.checksum = recoveryRowDigest(value);
+  await fs.writeFile(path.join(path.dirname(saved.file), id + ".json"), JSON.stringify(value), { flag: "wx" });
+  await assert.rejects(f.helper.read(f.request, f.data), error => error.code === "RECOVERY_SOURCE_CHANGED");
 });

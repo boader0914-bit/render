@@ -14,10 +14,12 @@ const recoveryRowDigest = row => hash(JSON.stringify(canonical(row)));
 // The same saved response is projected into a basis-day and a weekly table.
 // Unit/coupon display metadata can differ; every field used in inventory,
 // valuation, classification or response validation must still agree.
-const productDigest = row => recoveryRowDigest(Object.fromEntries([
+const productDigest = (row, validatorVersion) => recoveryRowDigest(Object.fromEntries([
   "date", "bizItemId", "name", "saleType", "bizItemSubType", "listType", "stock", "bookingCount", "occupiedBookingCount", "price", "open",
   "available", "total", "soldOut", "isBusinessDay", "isSaleDay", "collectionFailed", "collectionErrorCode", "responseStatus", "error", "errors",
-  "failed", "queryAttempted", "stockObserved", "missing", "status"
+  "failed", "queryAttempted", "stockObserved", "missing", "status",
+  ...(validatorVersion >= 3 ? ["httpStatus", "statusCode", "blocked", "accessRestricted", "rateLimited", "captcha", "bookingObserved",
+    "scheduleObserved", "inventoryObserved", "collectionStatus", "queryStatus"] : [])
 ].filter(key => Object.hasOwn(row, key)).map(key => [key, row[key]])));
 const quality = run => String(typeof run?.collectionQuality === "string" ? run.collectionQuality : run?.collectionQuality?.status || "unknown").toLowerCase();
 const count = value => typeof value !== "boolean" && value !== null && value !== undefined && String(value).trim() !== ""
@@ -82,6 +84,13 @@ function classificationNormalization(product) {
   return { date: product.date, productId: String(product.bizItemId), reason: "recorded_sale_type_precedence",
     source: { saleType: product.saleType, bizItemSubType: product.bizItemSubType },
     applied: { saleType: kind === "lodging" ? "숙박" : "데이유즈", bizItemSubType: "" }, productType: kind };
+}
+function calculationProducts(value) {
+  const normalizations = new Map((value.inventoryNormalizations || []).map(row => [`${row.date}|${row.productType}|${row.productId}`, row]));
+  return clone(value.products).map(product => {
+    const classification = classificationNormalization(product), inventory = normalizations.get(`${product.date}|${productKind(product)}|${product.bizItemId}`);
+    return { ...product, ...(classification?.applied || {}), ...(inventory?.applied || {}) };
+  });
 }
 function identity(row) {
   // URLs are accepted only as a second, exact provider identity, never as names.
@@ -224,6 +233,9 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
   }
   async function source(runId, company, all, expected = null) {
     metrics.sourceReads++;
+    // Existing certificates are replayed with their original validator. New
+    // certified overlays may add evidence, never silently expand an old proof.
+    const validatorVersion = expected?.validatorVersion ?? 3;
     need(identifier(runId), "RECOVERY_RUN_ID_INVALID");
     const files = [], used = new Map(); let totalBytes = 0;
     const read = async (name, limit) => {
@@ -272,12 +284,12 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
       need(Array.isArray(parsed) && parsed.length <= 100000, "RECOVERY_PRODUCTS_INVALID"); arrays.push(...parsed);
     }
     need(arrays.length > 0 && arrays.length <= 100000, "RECOVERY_PRODUCTS_MISSING");
-    const products = new Map(), byKind = { lodging: new Set(), dayuse: new Set() }, invalidDates = new Map();
+    const products = new Map(), byKind = { lodging: new Set(), dayuse: new Set() }, invalidDates = new Map(), inventoryCandidates = [];
     for (const product of arrays) {
       need(object(product) && date(product.date) && identifier(product.bizItemId) && productKind(product), "RECOVERY_PRODUCT_ID_UNVERIFIED");
       const kind = productKind(product), id = identifier(product.bizItemId), key = `${product.date}|${kind}|${id}`;
       byKind[kind].add(id);
-      if (products.has(key)) { need(productDigest(products.get(key)) === productDigest(product), "RECOVERY_DUPLICATE_PRODUCT_CONFLICT"); continue; }
+      if (products.has(key)) { need(productDigest(products.get(key), validatorVersion) === productDigest(product, validatorVersion), "RECOVERY_DUPLICATE_PRODUCT_CONFLICT"); continue; }
       products.set(key, product);
       const stock = count(product.stock), booked = count(product.bookingCount), occupied = count(product.occupiedBookingCount);
       const invalidBoolean = ["collectionFailed", "failed", "queryAttempted", "stockObserved", "missing", "isBusinessDay", "isSaleDay"]
@@ -287,12 +299,26 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
         || product.queryAttempted === false || product.stockObserved === false || product.missing === true
         || ["failed", "blocked", "error", "partial", "missing"].includes(product.status)
         || (Object.hasOwn(product, "responseStatus") && (count(product.responseStatus) === null || Number(product.responseStatus) !== 200));
+      const strictFailed = validatorVersion >= 3 && (["blocked", "accessRestricted", "rateLimited", "captcha", "bookingObserved", "scheduleObserved", "inventoryObserved"]
+        .some(field => Object.hasOwn(product, field) && (typeof product[field] !== "boolean"
+          || (["blocked", "accessRestricted", "rateLimited", "captcha"].includes(field) ? product[field] === true : product[field] === false)))
+        || ["httpStatus", "statusCode"].some(field => Object.hasOwn(product, field) && count(product[field]) !== 200)
+        || [product.status, product.collectionStatus, product.queryStatus].some(value => /^(?:failed|failure|error|blocked|access_denied|rate_limited|captcha|partial|incomplete|unknown|missing|not_attempted|BookingAPITooManyRequests)$/i.test(String(value || ""))));
       const rawTotal = product.listType === "객실별 예약리스트" && stock > 0 ? 1 : stock;
       const opened = typeof product.open === "boolean" ? product.open && product.isBusinessDay !== false && product.isSaleDay !== false : undefined;
-      if (failed || stock === null || booked === null || occupied === null || opened === undefined || booked + occupied > rawTotal
-        || (Object.hasOwn(product, "available") && (count(product.available) === null || Number(product.available) !== (opened ? Math.max(0, rawTotal - booked - occupied) : 0)))) {
+      const invalid = failed || strictFailed || stock === null || booked === null || occupied === null || opened === undefined || booked + occupied > rawTotal;
+      const ungated = !invalid ? rawTotal - booked - occupied : null, available = count(product.available);
+      const closedNormalization = validatorVersion >= 3 && !invalid && opened === false && available > 0 && available === ungated
+        && (!Object.hasOwn(product, "total") || count(product.total) === rawTotal)
+        && (!Object.hasOwn(product, "soldOut") || count(product.soldOut) === booked + occupied);
+      if (invalid || (Object.hasOwn(product, "available") && (available === null || available !== (opened ? ungated : 0)) && !closedNormalization)) {
         invalidDates.set(product.date, "RECOVERY_PRODUCT_DATE_INVALID");
       }
+      if (closedNormalization) inventoryCandidates.push({ date: product.date, productId: id, productType: kind,
+        reason: "legacy_closed_available_ungated", sourceRowDigest: recoveryRowDigest(product),
+        source: Object.fromEntries(["stock", "bookingCount", "occupiedBookingCount", "open", "isBusinessDay", "isSaleDay", "available", "total", "soldOut"]
+          .filter(field => Object.hasOwn(product, field)).map(field => [field, product[field]])),
+        expectedUngatedAvailable: ungated, applied: { available: 0 } });
     }
     need(byKind.lodging.size === nightCount && byKind.dayuse.size === dayCount && counted === nightCount,
       "RECOVERY_PRODUCT_LIST_INCOMPLETE");
@@ -307,14 +333,18 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
     }
     const classificationNormalizations = [...products.values()].map(classificationNormalization).filter(Boolean)
       .sort((a, b) => a.date.localeCompare(b.date) || a.productId.localeCompare(b.productId));
+    const inventoryNormalizations = inventoryCandidates.filter(row => verifiedDates[row.productType].includes(row.date))
+      .sort((a, b) => a.date.localeCompare(b.date) || a.productType.localeCompare(b.productType) || a.productId.localeCompare(b.productId));
     files.sort((a, b) => a.path.localeCompare(b.path));
     if (expected) need(recoveryRowDigest(files) === recoveryRowDigest(expected.sourceFiles) && collectedAt === expected.collectedAt
       && recoveryRowDigest(ids) === recoveryRowDigest(expected.providerIdentity) && recoveryRowDigest(verifiedDates) === recoveryRowDigest(expected.verifiedDates), "RECOVERY_SOURCE_CHANGED");
     if (expected) need(expected.validatorVersion === 1 ? classificationNormalizations.length === 0
-      : expected.validatorVersion === 2 && recoveryRowDigest(classificationNormalizations) === recoveryRowDigest(expected.classificationNormalizations),
+      : [2, 3].includes(expected.validatorVersion) && recoveryRowDigest(classificationNormalizations) === recoveryRowDigest(expected.classificationNormalizations),
     "RECOVERY_RECEIPT_INVALID");
+    if (expected) need(expected.validatorVersion < 3 ? inventoryNormalizations.length === 0
+      : recoveryRowDigest(inventoryNormalizations) === recoveryRowDigest(expected.inventoryNormalizations), "RECOVERY_RECEIPT_INVALID");
     return { manifest, row, ids, collectedAt, products: [...products.values()], sourceFiles: files, verifiedDates, exclusions,
-      classificationNormalizations, start, days, nightCount, dayCount };
+      classificationNormalizations, inventoryNormalizations, start, days, nightCount, dayCount };
   }
   function build(value, company, month, runId, productCapacityEvidence = []) {
     const item = { name: company.primaryName, placeId: value.ids.placeId, place_id: value.ids.placeId,
@@ -322,14 +352,12 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
       checkIn: value.start, bookingRangeDays: value.days, weeklyDays: value.days, itemDetails: [],
       // A rejected product/date cannot contribute a fallback price for another
       // date, even if the old failed row retained a numeric price.
-      weeklyProductDetails: clone(value.products).map(product => {
+      weeklyProductDetails: calculationProducts(value).map(product => {
         // Keep validation and the unchanged shared calculator on the same
         // resolved sale type. Blank the contradictory subtype only in this
         // derived copy; the receipt retains every original/applied field.
-        const normalization = classificationNormalization(product);
-        const projected = normalization ? { ...product, ...normalization.applied } : product;
         return value.exclusions.some(entry => entry.date === product.date && entry.reason !== "RECOVERY_POST_STAY_OBSERVATION")
-          ? { ...projected, collectionFailed: true } : projected;
+          ? { ...product, collectionFailed: true } : product;
       }),
       nightItemCount: value.nightCount, dayUseItemCount: value.dayCount, countedItemCount: value.nightCount,
       dayUseMode: "detail", dayUsePresence: value.dayCount ? "present" : "absent", dayUseScheduleStatus: value.dayCount ? "requested" : "no_day_use_product" };
@@ -361,9 +389,9 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
           const value = await source(runId, company, all), rows = build(value, company, input.month, runId);
           result.warnings.push(...value.exclusions.filter(value => value.date.startsWith(input.month + "-")).map(value => ({ code: value.reason, companyId, runId, date: value.date })));
           if (!rows.length) { result.warnings.push({ code: "RECOVERY_NO_VALID_DATES", companyId, runId, message: "해당 월에 검증 가능한 상품별 날짜가 없습니다." }); continue; }
-          const core = { kind: KIND, validatorVersion: 2, companyId, month: input.month, runId, collectedAt: value.collectedAt,
+          const core = { kind: KIND, validatorVersion: 3, companyId, month: input.month, runId, collectedAt: value.collectedAt,
             originalRunQuality: "unknown", sourceFiles: value.sourceFiles, providerIdentity: value.ids, verifiedDates: value.verifiedDates, exclusions: value.exclusions,
-            classificationNormalizations: value.classificationNormalizations };
+            classificationNormalizations: value.classificationNormalizations, inventoryNormalizations: value.inventoryNormalizations };
           const receiptId = recoveryRowDigest(core), payload = { ...core, receiptId, createdAt: new Date(now()).toISOString() };
           payload.checksum = recoveryRowDigest(payload);
           need(Buffer.byteLength(JSON.stringify(payload)) <= 1024 * 1024, "RECOVERY_RECEIPT_TOO_LARGE");
@@ -391,8 +419,9 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
     const stat = await fs.lstat(file); need(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 1024 * 1024, "RECOVERY_RECEIPT_INVALID");
     const value = JSON.parse(await fs.readFile(file, "utf8")), { checksum, ...body } = value;
     need(object(value) && HEX.test(checksum) && recoveryRowDigest(body) === checksum && value.kind === KIND && value.receiptId === receiptId
-      && value.companyId === companyId && value.month === month && value.originalRunQuality === "unknown" && [1, 2].includes(value.validatorVersion)
+      && value.companyId === companyId && value.month === month && value.originalRunQuality === "unknown" && [1, 2, 3].includes(value.validatorVersion)
       && (value.validatorVersion === 1 || Array.isArray(value.classificationNormalizations))
+      && (value.validatorVersion < 3 ? !Object.hasOwn(value, "inventoryNormalizations") : Array.isArray(value.inventoryNormalizations))
       && recoveryRowDigest(receiptCore(value)) === receiptId && instant(value.collectedAt), "RECOVERY_RECEIPT_INVALID");
     return value;
   }
@@ -444,10 +473,7 @@ function createSavedProductRecovery({ dataDir, outputsDir = path.join(dataDir ||
     await checkCatalog(data); return { warnings };
   }
   function entryCapacityEvidence({ saved, value, company }) {
-    const products = value.products.map(product => {
-      const normalization = classificationNormalization(product);
-      return normalization ? { ...product, ...normalization.applied } : product;
-    });
+    const products = calculationProducts(value);
     return observedProductCapacityEvidence({ weeklyProductDetails: products }, company, { runId: saved.runId,
       collectedAt: saved.collectedAt, verifiedDates: value.verifiedDates, source: "certified_saved_product_response" });
   }
