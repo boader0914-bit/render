@@ -59,9 +59,13 @@ function dailyPeriods(company,selectedPeriod,{asOf,mode}) {
     const conflict=codes.some(code=>['QUANTITY_INVALID','DUPLICATE_STAY_DATE','CAPACITY_CONFLICT'].includes(code));
     const collectedAt=typeof source?.collectedAt==='string'&&Number.isFinite(Date.parse(source.collectedAt))?source.collectedAt:null;
     const collectedDate=collectedAt?new Date(Date.parse(collectedAt)+9*3600000).toISOString().slice(0,10):day(source?.collectedDate);
+    // Reuse the exact company/day denominator policy used by month/week
+    // summaries. A reviewed-basis or inventory conflict must not leave a
+    // numeric daily rate beside a deliberately unknown aggregate rate.
+    const reservationRate=valid?summarizeCompany({...company,days:[source]},{mode,asOf,period:{start:date,end:date}}).summary.reservationRate:null;
     return {date,total,sold,publicBookings:valid?number(source.publicBookings):null,phoneBookings:valid?number(source.phoneBookings):null,
       estimatedRevenue:valid&&source.revenuePartial!==true?number(source.estimatedRevenue):null,knownRevenueSubtotal:monetary('estimatedRevenue'),publicRevenue:monetary('publicRevenue'),phoneRevenue:monetary('phoneRevenue'),
-      knownPartialRevenue:monetary('knownPartialRevenue'),reservationRate:valid&&total>0&&company.rooms===total&&sold<=total?sold/total:null,
+      knownPartialRevenue:monetary('knownPartialRevenue'),reservationRate,
       collectedAt,collectedDate,missing:!valid,quantityStatus:valid?'ready':conflict?'conflict':'unknown',revenuePartial:valid&&source.revenuePartial===true,
       codes:valid?[]:codes.length?codes:['QUANTITY_MISSING']};
   });

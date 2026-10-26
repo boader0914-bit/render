@@ -60,12 +60,62 @@ test('failed months keep normal company amounts and explain only their failed co
   assert.equal(report.dataQuality.status,'partial');assert.doesNotMatch(JSON.stringify(report),/PRIVATE_/);
 });
 
+for(const options of [{stayMode:'month',month:'2026-09'},{stayMode:'custom',start:'2026-09-11',end:'2026-09-30'}])test(`${options.stayMode} preserves normal September observations when a different-month catalog lookup fails`,async()=>{
+  const f=fixture(),before=JSON.stringify(f.rows),normalMonthList=f.reader.companyMonths;
+  f.reader.companyMonths=async id=>{if(id==='own')throw Error('PRIVATE_METADATA_FAILURE');return normalMonthList(id);};
+  const report=await createInsightAnalysis(f.args).briefing(f.customer,'own',options),own=report.companies.find(company=>company.companyId==='own'),other=report.companies.find(company=>company.companyId==='competitor');
+  assert.equal(own.sourceStatus,'partial');assert.equal(other.sourceStatus,'ready');
+  assert.equal(own.summary.sold,options.stayMode==='month'?3:1);assert.equal(other.summary.sold,own.summary.sold);
+  assert.equal(own.summary.knownRevenueSubtotal,options.stayMode==='month'?250000:50000);
+  const issue=own.sourceIssues.find(row=>row.code==='COMPANY_MONTHS_UNAVAILABLE');assert.ok(issue);assert.equal(issue.month,'2026-10');
+  assert.deepEqual(issue.period,{start:'2026-10-01',end:'2026-10-31'});
+  assert.ok(report.dataQuality.issues.every(row=>row.period.start<=row.period.end));
+  assert.equal(allDays(own).length,options.stayMode==='month'?30:20);assert.equal(JSON.stringify(f.rows),before);assert.doesNotMatch(JSON.stringify(report),/PRIVATE_METADATA_FAILURE/);
+});
+
+test('an overlapping catalog-error month is clipped to the selected valid interval only',async()=>{
+  const f=fixture();f.reader.companyMonths=async()=>{throw Error('metadata failed');};
+  const report=await createInsightAnalysis(f.args).briefing(f.customer,'own',{stayMode:'custom',start:'2026-10-24',end:'2026-10-28'});
+  assert.equal(report.companies[0].summary.sold,3);
+  assert.deepEqual(report.companies[0].sourceIssues.find(row=>row.code==='COMPANY_MONTHS_UNAVAILABLE').period,{start:'2026-10-24',end:'2026-10-28'});
+});
+
 test('same company and day are counted once, while conflicting integrated projections remain unknown',async()=>{
   const f=fixture({duplicates:true});f.customer.relations.push({...f.customer.relations[0]});
   const report=await createInsightAnalysis(f.args).briefing(f.customer,'own');assert.equal(report.companies.length,2);assert.equal(report.companies[0].summary.sold,7);
   const company={companyId:'own',rooms:16,days:[day('2026-09-10',2),day('2026-09-10',3)]};
   const periods=dailyPeriods(company,{start:'2026-09-10',end:'2026-09-10'},{asOf:'2026-10-26',mode:'historical'}),row=periods.months[0].weeks[0].daily[0];
   assert.equal(row.sold,null);assert.equal(row.quantityStatus,'conflict');assert.ok(row.codes.includes('DUPLICATE_STAY_DATE'));
+});
+
+for(const kind of ['company_capacity','saved_basis','daily_inventory'])test(`${kind} rate warnings agree at month, week and day levels without hiding valid quantities or another company`,async()=>{
+  const f=fixture(),before=JSON.stringify(f.rows);
+  if(kind==='company_capacity')f.catalog.companies[0].capacityConflict=true;
+  if(kind==='saved_basis'||kind==='daily_inventory'){
+    const original=f.reader.companyDetail;
+    f.reader.companyDetail=async(id,options)=>{const detail=await original(id,options);if(id==='own'){
+      if(kind==='saved_basis')detail.integrated.roomBasis.count=17;
+      else detail.current.daily.find(row=>row.date==='2026-09-10').inventoryConflict=true;
+    }return detail;};
+  }
+  const report=await createInsightAnalysis(f.args).briefing(f.customer,'own',{stayMode:'custom',start:'2026-09-10',end:'2026-09-10'});
+  const own=report.companies.find(company=>company.companyId==='own'),other=report.companies.find(company=>company.companyId==='competitor');
+  const month=own.reservationPeriods.months[0],week=month.weeks[0],row=week.daily[0];
+  assert.equal(own.summary.reservationRate,null);assert.equal(month.summary.reservationRate,null);assert.equal(week.summary.reservationRate,null);assert.equal(row.reservationRate,null);
+  assert.equal(row.quantityStatus,'ready');assert.equal(row.missing,false);assert.equal(row.sold,2);assert.equal(row.estimatedRevenue,200000);
+  assert.equal(own.summary.sold,2);assert.equal(own.summary.estimatedRevenue,200000);assert.equal(month.summary.sold,2);assert.equal(week.summary.sold,2);
+  assert.equal(other.summary.reservationRate,2/16);assert.equal(allDays(other)[0].reservationRate,2/16);
+  assert.equal(JSON.stringify(f.rows),before);
+});
+
+test('standalone company and daily inventory conflicts use the same rate policy while missing observations stay unknown',()=>{
+  for(const [companyFlag,rowFlag] of [[{capacityConflict:true},{}],[{inventoryConflict:true},{}],[{capacityStatus:'conflict'},{}],[{},{inventoryConflict:true}],[{},{capacityConflict:true}]]){
+    const company={companyId:'own',rooms:16,...companyFlag,days:[day('2026-09-10',2,rowFlag)]};
+    const tree=dailyPeriods(company,{start:'2026-09-10',end:'2026-09-11'},{asOf:'2026-10-26',mode:'historical'}),month=tree.months[0],row=month.weeks[0].daily[0],missing=month.weeks[0].daily[1];
+    assert.equal(row.reservationRate,null);assert.equal(row.sold,2);assert.equal(row.estimatedRevenue,200000);
+    assert.equal(month.summary.reservationRate,null);assert.equal(month.weeks[0].summary.reservationRate,null);
+    assert.equal(missing.reservationRate,null);assert.equal(missing.sold,null);assert.equal(missing.missing,true);
+  }
 });
 
 test('empty all-available archives return a real empty period and no invented current-month zero',async()=>{
