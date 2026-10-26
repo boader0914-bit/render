@@ -215,8 +215,15 @@ function createInsightAnalysis({catalog,collectionResults,savedCollectionResults
       if(seenCompanies.has(rel.companyId))continue;seenCompanies.add(rel.companyId);
       const c=data.companies.find(c=>c.companyId===rel.companyId);if(!c)continue;
       const sourceDays=[],sourceIssues=[],monthRoomBases=[];
+      const issuePeriod=month=>{
+        const full={start:month+'-01',end:monthEnd(month)},start=choice.period.start?[choice.period.start,full.start].sort().at(-1):full.start,end=choice.period.end?[choice.period.end,full.end].sort()[0]:full.end;
+        // A month-catalog failure is dated to the current metadata month, which
+        // may fall outside a historical selection. Preserve its real month
+        // instead of creating an inverted intersection and losing good data.
+        return start<=end?{start,end}:full;
+      };
       const issueFor=(month,code)=>sourceIssues.push(sourceIssue({scope:'company',companyId:c.companyId,name:c.name,month,
-        period:{start:choice.period.start?[choice.period.start,month+'-01'].sort().at(-1):month+'-01',end:choice.period.end?[choice.period.end,monthEnd(month)].sort()[0]:monthEnd(month)},code}));
+        period:issuePeriod(month),code}));
       let knownMonths=[],preloaded=null;
       // Dedicated enumeration avoids reading every company source/detail just
       // to discover its stored months. Legacy readers use one projected detail.
@@ -232,8 +239,7 @@ function createInsightAnalysis({catalog,collectionResults,savedCollectionResults
       }catch{issueFor(reportDay.slice(0,7),'COMPANY_MONTHS_UNAVAILABLE');}
       const months=choice.selection.stayMode==='all_available'?knownMonths:monthsBetween(choice.period.start,choice.period.end);
       for(const month of months) {
-        const issue=code=>sourceIssues.push(sourceIssue({scope:'company',companyId:c.companyId,name:c.name,month,
-          period:{start:choice.period.start?[choice.period.start,month+'-01'].sort().at(-1):month+'-01',end:choice.period.end?[choice.period.end,monthEnd(month)].sort()[0]:monthEnd(month)},code}));
+        const issue=code=>issueFor(month,code);
         try {
           const canReuse=preloaded&&(preloaded.legacyObservationView||!preloaded.integrated||preloaded.integrated.selectedMonth===month);
           const detail=canReuse?preloaded:await readBriefingDetail(c.companyId,{month,...(savedOnly?{company:c}:{})});
