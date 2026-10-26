@@ -67,6 +67,25 @@ test("shared KOSIS in-flight work is held without false attribution or retry", a
   const calls = []; const f = await fixture(t, { kosisService: { refreshMissingMarketRegion: async key => { calls.push(key); return result("shared_inflight", { skipped: [] }); } } });
   const job = await run(f); assert.equal(job.status, "blocked"); assert.equal(job.stopReason, "SHARED_INFLIGHT"); assert.deepEqual(calls, ["jinju"]); assert.equal(job.counts.networkAttemptedRegions, 0);
 });
+
+test("historical quota holds stay local and do not starve later missing regions in future weekly checks", async t => {
+  const calls = [], heldKeys = KEYS.slice(2), oldHold = () => result("blocked", {
+    skipped: KEYS.map(datasetKey => ({ datasetKey, status: heldKeys.includes(datasetKey) ? "blocked" : "available", reasonCode: heldKeys.includes(datasetKey) ? "QUOTA_EXCEEDED" : "" })),
+    remaining: heldKeys.map(datasetKey => ({ datasetKey, status: "blocked", reasonCode: "QUOTA_EXCEEDED" })), stopReason: null
+  });
+  let first = true;
+  const f = await fixture(t, { readTargets: async () => ["a_historical_quota", "b_missing", "c_other_cached"],
+    kosisService: { refreshMissingMarketRegion: async key => { calls.push(key); return key === "a_historical_quota" ? oldHold() : key === "b_missing" && first ? collected() : result(); } } });
+  const job = await run(f); first = false;
+  assert.equal(job.status, "partial"); assert.equal(job.stopReason, null);
+  assert.deepEqual(calls, ["a_historical_quota", "b_missing", "c_other_cached"]); assert.equal(job.counts.inspectedRegions, 3); assert.equal(job.counts.collectedDatasets, 6);
+  assert.equal(job.counts.heldDatasets, 4); assert.deepEqual(job.regions[0].summary.remaining.map(item => item.reasonCode), new Array(4).fill("QUOTA_EXCEEDED"));
+  assert.equal(job.regions[0].summary.networkAttempted, false); assert.equal(job.regions[0].summary.changed, false);
+  assert.equal((await f.service.request()).reused, true); await f.service.idle(); assert.equal(calls.length, 3, "today's durable job cannot be rerun");
+  f.advance(WEEK_MS); const next = await run(f); assert.equal(next.status, "partial"); assert.equal(next.stopReason, null);
+  assert.deepEqual(calls.slice(3), ["a_historical_quota", "b_missing", "c_other_cached"]); assert.equal(next.counts.networkAttemptedRegions, 0);
+  assert.equal(next.counts.heldDatasets, 4); assert.equal(next.counts.collectedDatasets, 0); assert.equal(digest(await fs.readFile(f.source)), f.sourceHash);
+});
 test("concurrent requests reuse one durable job, and get never triggers another attempt", async t => {
   let resume; const wait = new Promise(resolve => { resume = resolve; }); const calls = [];
   const f = await fixture(t, { kosisService: { refreshMissingMarketRegion: async key => { calls.push(key); await wait; return collected(); } } });
@@ -195,4 +214,26 @@ test("real first partial KOSIS evidence is changed with zero complete tables and
 test("real KOSIS quota stop is propagated without any subsequent table or region calls", async t => {
   const f = await combinedFixture(t, "quota"), job = await run(f); assert.equal(job.status, "blocked"); assert.equal(job.stopReason, "QUOTA_EXCEEDED");
   assert.equal(f.network.length, 1); assert.equal(job.counts.networkAttemptedRegions, 1); assert.equal(job.counts.collectedDatasets, 0); assert.equal(f.projections.length, 0);
+});
+
+test("real KOSIS historical holds permit the next region check while its current persisted quota still stops acquisition", async t => {
+  const f = await combinedFixture(t, "quota"), oldKey = "kr_gyeonggi_pocheon", newKey = "kr_gyeonggi_yangju";
+  await f.kosisService.refreshMissingMarketRegion(oldKey); assert.equal(f.network.length, 1);
+  const kosisDirectory = path.join(f.dataDir, "kosis"), attemptFile = path.join(kosisDirectory, digest("kr_admin_4165000000").slice(0, 24) + "-attempt.json");
+  const historicalAttempt = await fs.readFile(attemptFile); f.advance(WEEK_MS);
+  const regionMasterFile = path.join(f.dataDir, "region-master.json"), master = JSON.parse(await fs.readFile(regionMasterFile, "utf8"));
+  master.units.push({ ...master.units[1], regionKey: newKey, regionId: "kr_admin_4163000000", name: "양주시", fullName: "경기도 양주시", selectable: true });
+  await fs.writeFile(regionMasterFile, JSON.stringify(master));
+  const budgetFile = path.join(kosisDirectory, "request-budget.json"), day = new Date(Date.parse(f.options.now()) + 9 * 3600000).toISOString().slice(0, 10);
+  await fs.writeFile(budgetFile, JSON.stringify({ day, count: 100 })); const currentBudget = await fs.readFile(budgetFile);
+  await f.service.close();
+  const service = createRegionalMarketMissingService({ ...f.options, kosisService: f.kosisService, readTargets: async () => [oldKey, newKey] }); t.after(() => service.close());
+  const job = await run({ service }); assert.equal(job.status, "blocked"); assert.equal(job.stopReason, "QUOTA_EXCEEDED");
+  assert.equal(job.regions.length, 2); assert.equal(job.counts.inspectedRegions, 2);
+  assert.equal(job.regions[0].regionKey, oldKey); assert.equal(job.regions[0].summary.stopReason, null);
+  assert.equal(job.regions[0].summary.remaining.length, 6); assert.ok(job.regions[0].summary.remaining.every(item => item.reasonCode === "QUOTA_EXCEEDED"));
+  assert.equal(job.regions[1].regionKey, newKey); assert.equal(job.regions[1].summary.stopReason, "QUOTA_EXCEEDED");
+  assert.equal(job.counts.networkAttemptedRegions, 0); assert.equal(f.network.length, 1, "neither held history nor the exhausted current budget causes another provider request");
+  assert.deepEqual(await fs.readFile(attemptFile), historicalAttempt); assert.deepEqual(await fs.readFile(budgetFile), currentBudget);
+  assert.equal((await service.request()).reused, true); await service.idle(); assert.equal(f.network.length, 1, "the same durable job remains non-replayable");
 });

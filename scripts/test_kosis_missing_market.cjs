@@ -136,7 +136,9 @@ test("authentication and quota failures stop remaining tables and do not become 
     assert.equal(result.marketCollection.status, "blocked"); assert.equal(result.marketCollection.stopReason, code); assert.equal(f.calls.length, 1);
     assert.ok(result.datasets.every(dataset => dataset.rows.length === 0)); assert.equal(result.marketCollection.changed, false);
     f.advance(300001); const count = f.calls.length;
-    assert.equal((await f.service.refreshMissingMarketRegion(REGION)).marketCollection.stopReason, code); assert.equal(f.calls.length, count);
+    const held = await f.service.refreshMissingMarketRegion(REGION);
+    assert.equal(held.marketCollection.stopReason, null); assert.equal(held.marketCollection.status, "blocked");
+    assert.ok(held.marketCollection.remaining.every(item => item.status === "blocked" && item.reasonCode === code)); assert.equal(f.calls.length, count);
   });
 });
 
@@ -145,7 +147,27 @@ test("persisted shared KOSIS daily budget applies to missing-only acquisition an
   assert.equal(f.calls.length, 3); assert.equal(first.marketCollection.stopReason, "QUOTA_EXCEEDED");
   const budget = JSON.parse(await fs.readFile(path.join(f.dataDir, "request-budget.json"), "utf8")); assert.equal(budget.count, 3);
   f.advance(300001); const result = await f.restart().refreshMissingMarketRegion(REGION);
-  assert.equal(result.marketCollection.stopReason, "QUOTA_EXCEEDED"); assert.equal(f.calls.length, 3);
+  assert.equal(result.marketCollection.stopReason, null); assert.equal(result.marketCollection.status, "blocked"); assert.equal(f.calls.length, 3);
+  assert.ok(result.marketCollection.remaining.every(item => item.reasonCode === "QUOTA_EXCEEDED"));
+  const otherRegion = "kr_gyeonggi_yangju";
+  await fs.writeFile(f.regionMasterFile, JSON.stringify({ units: [...units, { ...units[1], regionKey: otherRegion, regionId: "kr_admin_4163000000", name: "양주시", fullName: "경기도 양주시" }] }));
+  const liveBudget = await f.restart().refreshMissingMarketRegion(otherRegion);
+  assert.equal(liveBudget.marketCollection.stopReason, "QUOTA_EXCEEDED", "the current persisted daily budget still stops a genuinely missing new region");
+  assert.equal(liveBudget.marketCollection.networkAttempted, false); assert.equal(f.calls.length, 3);
+});
+
+test("four historical quota-held tables remain untouched without globally stopping other regional checks", async t => {
+  const f = await fixture(t); await f.service.refreshMissingMarketRegion(REGION);
+  const heldKeys = MARKET_METRICS.slice(2).map(item => item.datasetKey);
+  await f.editCache(cache => { for (const key of heldKeys) delete cache.datasets[key]; });
+  const attempt = JSON.parse(await fs.readFile(f.attemptFile, "utf8"));
+  for (const key of heldKeys) attempt.outcomes[key] = { status: "error", error: { code: "QUOTA_EXCEEDED" } };
+  await fs.writeFile(f.attemptFile, JSON.stringify(attempt)); f.advance(7 * 86400000);
+  const before = await tree(f.dataDir), count = f.calls.length, result = await f.service.refreshMissingMarketRegion(REGION);
+  assert.equal(result.marketCollection.status, "blocked"); assert.equal(result.marketCollection.stopReason, null);
+  assert.deepEqual(result.marketCollection.remaining.map(item => [item.datasetKey, item.status, item.reasonCode]), heldKeys.map(key => [key, "blocked", "QUOTA_EXCEEDED"]));
+  assert.deepEqual(result.marketCollection.attemptedDatasetKeys, []); assert.equal(result.marketCollection.changed, false); assert.equal(result.marketCollection.networkAttempted, false);
+  assert.equal(f.calls.length, count); assert.deepEqual(await tree(f.dataDir), before, "no historical error, cache, quota budget or original receipt was changed");
 });
 
 test("full and missing-only requests share cooldown and same-region singleflight", async t => {

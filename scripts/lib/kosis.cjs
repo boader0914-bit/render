@@ -462,7 +462,11 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
       const selectedDefinitions = marketMissingOnly ? DEFINITIONS.filter(definition => plan.some(item => item.datasetKey === definition.key && item.status === "missing")) : DEFINITIONS;
       const report = changes => marketReport(plan || [], changes);
       if (marketMissingOnly && !selectedDefinitions.length) return { ...withAttempt(present(region, cache, Boolean(apiKey)), previousAttempt),
-        marketCollection: report({ stopReason: plan.find(item => item.status === "blocked")?.reasonCode || null }) };
+        // Historical per-table holds stay in skipped/remaining and are never
+        // retried here. They are not a new global guard event for other regions.
+        // Actual next-region requests still pass the shared budget/auth gates.
+        marketCollection: report({ stopReason: cache.readError?.code || previousAttempt?.readError?.code
+          || (previousAttempt && !previousAttempt.finishedAt ? "REFRESH_INCOMPLETE" : null) }) };
       if (!apiKey) return present(region, cache, false, { status: "needs_key", error: publicError(problem("MISSING_KEY")),
         ...(marketMissingOnly ? { marketCollection: report({ status: "blocked", stopReason: "MISSING_KEY" }) } : {}) });
       if (previousAttempt?.readError) return present(region, cache, true, { status: "error", error: previousAttempt.readError,
