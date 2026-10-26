@@ -9,6 +9,7 @@ const { fault } = require('../scripts/lib/insight_store.cjs');
 const { createCompanyReadCache } = require('./company-read-cache.cjs');
 const { createRegionReadCache } = require('./region-read-cache.cjs');
 const { createReportReadCache } = require('./report-read-cache.cjs');
+const {selection:reportSelection}=require('./report-period-projection.cjs');
 const { createComparisonRegionReadCache } = require('./comparison-region-read-cache.cjs');
 const { createUpstreamReader } = require('./upstream-request.cjs');
 const { createPublicAssetVersions } = require('./public-asset-versions.cjs');
@@ -56,7 +57,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   const companyReads = createCompanyReadCache({persistenceDirectory:companyCacheDirectory,namespace:backend,onStage:companyDiagnosticsLogger,...(archiveDirectory?{onVerifiedSource:context=>archives.capture(context)}:{})}), regionReads = createRegionReadCache({persistenceDirectory:regionCacheDirectory,namespace:backend}), scopeSecret = crypto.randomBytes(32), staticAssets = new Map();
   const reportReads = createReportReadCache({persistenceDirectory:reportCacheDirectory,namespace:backend});
   const comparisonRegionReads=createComparisonRegionReadCache({persistenceDirectory:comparisonRegionCacheDirectory,namespace:backend});
-  const bootstrapSnapshots=createBootstrapSnapshots({companyReads,regionReads,reportReads,comparisonRegionReads});
+  const bootstrapSnapshots=createBootstrapSnapshots({companyReads,regionReads,reportReads:{...reportReads,snapshot:options=>reportReads.snapshot({...options,selection:{stayMode:'all_available'}})},comparisonRegionReads});
   const scopeFor = (requestOrigin, mode, session) => crypto.createHmac('sha256', scopeSecret).update(JSON.stringify([requestOrigin,mode,session])).digest('hex');
   const audienceFor = (requestOrigin,mode) => JSON.stringify([requestOrigin,mode]);
   const invalidateReads = scope => { companyReads.invalidate(scope); regionReads.invalidate(scope); reportReads.invalidate(scope); comparisonRegionReads.invalidate(scope); };
@@ -144,13 +145,16 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   async function reportRead(requestOrigin,mode,session,headers,route,url,force,timing) {
     if(!/^\/(?:customer-view\/)?reports\/briefing$/.test(route))return null;
     const prefix=mode==='admin'?'/admin':'',ownId=url.searchParams.get('ownId')||'';
-    const valid=[...url.searchParams.keys()].every(key=>key==='ownId')&&url.searchParams.getAll('ownId').length<=1&&(!ownId||/^[a-zA-Z0-9_-]+$/.test(ownId));
-    if(!session||!valid)return readUpstream(prefix+route,url.search,headers,{timing});
-    const savedQuery=new URLSearchParams(url.search);savedQuery.set('savedOnly','1');
-    return reportReads.read({scope:scopeFor(requestOrigin,mode,session),audience:audienceFor(requestOrigin,mode),ownId,force,
+    const keys=['ownId','stayMode','month','start','end'],valid=[...url.searchParams.keys()].every(key=>keys.includes(key))&&keys.every(key=>url.searchParams.getAll(key).length<=1)&&(!ownId||/^[a-zA-Z0-9_-]+$/.test(ownId));
+    const selection=valid?reportSelection(Object.fromEntries(['stayMode','month','start','end'].filter(key=>url.searchParams.has(key)).map(key=>[key,url.searchParams.get(key)]))):null;
+    if(!session)return readUpstream(prefix+route,url.search,headers,{timing});
+    if(!valid||!selection)return {status:400,ok:false,data:{error:{code:'INVALID_REPORT_SELECTION',message:'숙박기간 조건을 확인해 주세요.'}}};
+    const query=new URLSearchParams();if(ownId)query.set('ownId',ownId);for(const [key,value] of Object.entries(selection))if(value!==null)query.set(key,value);
+    const savedQuery=new URLSearchParams(query);savedQuery.set('savedOnly','1');
+    return reportReads.read({scope:scopeFor(requestOrigin,mode,session),audience:audienceFor(requestOrigin,mode),ownId,force,selection,
       readIdentity:()=>readUpstream(prefix+(mode==='admin'?'/customer-view/me':'/me'),'',headers,{stage:'identity',timing}),
       readSavedSource:()=>readUpstream(prefix+route,'?'+savedQuery.toString(),headers,{stage:'saved_preview',timing,timeoutMs:3000}),
-      readSource:()=>readUpstream(prefix+route,url.search,headers,{stage:'source',timing})});
+      readSource:()=>readUpstream(prefix+route,'?'+query.toString(),headers,{stage:'source',timing})});
   }
   async function comparisonRegionRead(requestOrigin,mode,session,headers,route,url,force,timing) {
     if(!/^\/(?:customer-view\/)?regions\/comparison-summary$/.test(route))return null;

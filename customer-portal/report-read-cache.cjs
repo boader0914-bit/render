@@ -2,6 +2,7 @@
 const {createHash}=require('node:crypto');
 const comparisonProjection=require('./comparison-projection.cjs');
 const comparisonRegionProjection=require('./comparison-region-projection.cjs');
+const periodProjection=require('./report-period-projection.cjs');
 // Read-only report projections. Authorization is obtained afresh before every
 // read/bootstrap; only account-isolated display data is written to disk.
 function createReportReadCache({now=Date.now,ttlMs=10*60000,refreshMs=30000,maxEntries=64,maxBytes=16*1024*1024,maxPerScope=8,maxScopes=maxEntries*2,persistenceDirectory,namespace,persistentStore,partialPersistentStore,previewPersistentStore}={}) {
@@ -36,8 +37,10 @@ function createReportReadCache({now=Date.now,ttlMs=10*60000,refreshMs=30000,maxE
   }
   function projectedCore(value,{periodStart}={}){
     if(value?.dataQuality&&(!Array.isArray(value.dataQuality.issues)||!['complete','partial'].includes(value.dataQuality.status))||[...(Array.isArray(value?.companies)?value.companies:[]),...(Array.isArray(value?.regions)?value.regions:[])].some(row=>row&&Object.hasOwn(row,'sourceIssues')&&!Array.isArray(row.sourceIssues)))return null;
-    const core=projectValue(value,schema);
-    if(!core||core.mode!=='current_briefing'||core.published!==false||!Number.isFinite(Date.parse(core.generatedAt))||!core.period||!validDay(core.period.start)||core.period.days!==30||core.period.end!==shift(core.period.start,29)||periodStart&&core.period.start!==periodStart||!['companies','comparisons','regions','actions','definitions'].every(key=>Array.isArray(core[key])))return null;
+    const core=projectValue(value,schema),extended=Object.hasOwn(value||{},'selection'),extendedPeriod=extended?periodProjection.envelope(value,{anchor:periodStart}):null;
+    if(extended&&!extendedPeriod)return null;
+    if(!core)return null;if(extendedPeriod)Object.assign(core,extendedPeriod);
+    if(!core||core.mode!=='current_briefing'||core.published!==false||!Number.isFinite(Date.parse(core.generatedAt))||!core.period||(!extended&&(!validDay(core.period.start)||core.period.days!==30||core.period.end!==shift(core.period.start,29)||periodStart&&core.period.start!==periodStart))||!['companies','comparisons','regions','actions','definitions'].every(key=>Array.isArray(core[key])))return null;
     if(core.ownId!==null&&!validId(core.ownId))return null;
     if(core.companies.some(row=>!validId(row?.companyId)||!['own','competitor'].includes(row.kind)||!['active','pending'].includes(row.relationStatus)||!row.summary)||core.comparisons.some(row=>!validId(row?.companyId)||!row.own||!row.competitor)||core.regions.some(row=>!validId(row?.region?.id)||!Array.isArray(row.sources)||row.networkAttempted!==false))return null;
     // Legacy briefings remain readable. New comparison contracts are retained
@@ -48,8 +51,9 @@ function createReportReadCache({now=Date.now,ttlMs=10*60000,refreshMs=30000,maxE
       if(Object.hasOwn(raw,'analysisRegionKey')&&raw.analysisRegionKey!==null&&!validId(raw.analysisRegionKey))return null;
       const labels=comparisonProjection.projectCompanyLabels(raw);if(!labels)return null;Object.assign(row,labels);
       if(comparisonProjection.EXTENDED_SUMMARY_KEYS.some(key=>Object.hasOwn(raw.summary||{},key))){const summary=comparisonProjection.projectSummary(raw.summary);if(!summary)return null;row.summary=summary;}
-      if(Object.hasOwn(raw,'summaryQuality')){const quality=comparisonProjection.projectSummaryQuality(raw.summaryQuality);if(!quality||quality.period.start!==core.period.start||quality.period.end!==core.period.end||quality.asOf!==core.period.start)return null;row.summaryQuality=quality;}
+      if(Object.hasOwn(raw,'summaryQuality')){const quality=comparisonProjection.projectSummaryQuality(raw.summaryQuality);if(!quality||quality.period.start!==core.period.start||quality.period.end!==core.period.end||quality.asOf!==(extended?core.asOf:core.period.start)||extended&&quality.mode!==(core.selection.stayMode==='upcoming30'?'current':'historical'))return null;row.summaryQuality=quality;}
       if(Object.hasOwn(raw,'reservationSeries')){const series=comparisonProjection.projectReservationSeries(raw.reservationSeries,row,core);if(!series)return null;row.reservationSeries=series;}
+      if(Object.hasOwn(raw,'reservationPeriods')){const periods=extended&&periodProjection.reservationPeriods(raw.reservationPeriods,row,core);if(!periods)return null;row.reservationPeriods=periods;}
     }
     for(let index=0;index<core.comparisons.length;index++){
       const raw=value.comparisons[index];
@@ -110,26 +114,39 @@ function createReportReadCache({now=Date.now,ttlMs=10*60000,refreshMs=30000,maxE
   const fingerprint=identity=>identity.regionBindings?hash([legacyFingerprint(identity),identity.data.comparisonRegionBindings]):legacyFingerprint(identity);
   // Keep existing snapshot slots; every restore is authorized against today's
   // binding below. A hierarchy change also invalidates runtime response marks.
-  const durableSlot=(identity,audience)=>typeof audience==='string'&&audience&&audience.length<4096?hash([namespace,audience,identity.customer.customerId,identity.ownId,legacyFingerprint(identity)]):null;
-  const keyFor=(scope,ownId,start,audience)=>JSON.stringify([scope,ownId,start,audience||'']);
+  const legacyDurableSlot=(identity,audience)=>typeof audience==='string'&&audience&&audience.length<4096?hash([namespace,audience,identity.customer.customerId,identity.ownId,legacyFingerprint(identity)]):null;
+  const durableSlot=(identity,audience)=>{const base=legacyDurableSlot(identity,audience);return base&&identity.requestSelection?hash([base,'report-selection-v1',identity.requestSelection]):base;};
+  const keyFor=(scope,ownId,start,audience,selection)=>JSON.stringify([scope,ownId,start,audience||'',...(selection?[selection]:[])]);
   function sourceScope(core,identity,start){
-    if(!core||core.period?.start!==start||core.period?.end!==shift(start,29)||core.period?.days!==30||core.ownId!==identity.resolved)return false;
+    if(!core||core.ownId!==identity.resolved)return false;
+    if(identity.requestSelection){if(core.selection?(JSON.stringify(core.selection)!==JSON.stringify(identity.requestSelection)||core.asOf!==start):identity.requestSelection.stayMode!=='upcoming30'||core.period?.start!==start||core.period?.end!==shift(start,29)||core.period?.days!==30)return false;}
+    else if(core.selection||core.period?.start!==start||core.period?.end!==shift(start,29)||core.period?.days!==30)return false;
+    const stayStart=core.period.start,stayEnd=core.period.end;
     const allowed=new Map(identity.selected.map(row=>[row.company.companyId,row]));
     const seen=new Set();
     for(const company of core.companies||[]){
       const match=allowed.get(company.companyId);
       if(!match||seen.has(company.companyId)||company.kind!==match.relation.kind||company.relationStatus!==match.relation.status)return false;
       for(const field of ['name','rooms','regionKey'])if(Object.hasOwn(match.company,field)&&company[field]!==match.company[field])return false;
-      if(Object.hasOwn(company,'analysisRegionKey')&&(!identity.regionBindings||company.analysisRegionKey!==identity.regionBindings.get(company.companyId)?.analysisRegionKey))return false;
+      if(Object.hasOwn(company,'analysisRegionKey')&&company.analysisRegionKey!==(identity.regionBindings?identity.regionBindings.get(company.companyId)?.analysisRegionKey:match.company.regionKey??null))return false;
       seen.add(company.companyId);
     }
     if(seen.size!==allowed.size)return false;
     const competitors=new Set(identity.selected.filter(row=>row.relation.kind==='competitor').map(row=>row.company.companyId)),compared=new Set();
-    for(const comparison of core.comparisons||[]){if(!competitors.has(comparison.companyId)||compared.has(comparison.companyId))return false;compared.add(comparison.companyId);if(comparison.dates?.some(date=>date<start||date>shift(start,29)))return false;}
+    for(const comparison of core.comparisons||[]){if(!competitors.has(comparison.companyId)||compared.has(comparison.companyId))return false;compared.add(comparison.companyId);if(comparison.dates?.some(date=>!stayStart||date<stayStart||date>stayEnd))return false;}
     const regions=new Set(identity.regions.map(row=>row.id)),regionSeen=new Set(),regionMonth=new Date(Date.UTC(Number(start.slice(0,4)),Number(start.slice(5,7))-2,1)).toISOString().slice(0,7);
     for(const region of core.regions||[]){if(!regions.has(region.region.id)||regionSeen.has(region.region.id)||region.month!==regionMonth||region.window?.end&&region.window.end!==regionMonth)return false;regionSeen.add(region.region.id);}
+    const companyIssuePeriod=issue=>{
+      if(!core.selection)return (!issue.month||stayStart&&issue.month>=stayStart.slice(0,7)&&issue.month<=stayEnd.slice(0,7))&&(!issue.period||stayStart&&issue.period.start>=stayStart&&issue.period.end<=stayEnd);
+      if(!issue.month)return !issue.period||Boolean(stayStart&&issue.period.start>=stayStart&&issue.period.end<=stayEnd);
+      // A failed source month may lie just outside the surviving observation
+      // bounds. Authorize the declared saved-month list, never an extra company.
+      const listingFailure=issue.code==='COMPANY_MONTHS_UNAVAILABLE'&&issue.month===start.slice(0,7);
+      const allowedMonth=listingFailure||(core.selection.stayMode==='all_available'?core.availableMonths.includes(issue.month):Boolean(stayStart&&issue.month>=stayStart.slice(0,7)&&issue.month<=stayEnd.slice(0,7)));
+      return allowedMonth&&(!issue.period||issue.period.start.slice(0,7)===issue.month&&issue.period.end.slice(0,7)===issue.month);
+    };
     const scopedIssue=(issue,companyId,regionId)=>{
-      if(issue.scope==='company')return allowed.has(issue.companyId)&&(!companyId||issue.companyId===companyId)&&!regionId&&!issue.regionId&&(!issue.month||issue.month>=start.slice(0,7)&&issue.month<=shift(start,29).slice(0,7))&&(!issue.period||issue.period.start>=start&&issue.period.end<=shift(start,29));
+      if(issue.scope==='company')return allowed.has(issue.companyId)&&(!companyId||issue.companyId===companyId)&&!regionId&&!issue.regionId&&companyIssuePeriod(issue);
       return regions.has(issue.regionId)&&(!regionId||issue.regionId===regionId)&&!companyId&&!issue.companyId;
     };
     if(core.companies.some(row=>(row.sourceIssues||[]).some(issue=>!scopedIssue(issue,row.companyId,null)))||core.regions.some(row=>(row.sourceIssues||[]).some(issue=>!scopedIssue(issue,null,row.region.id)))||(core.dataQuality?.issues||[]).some(issue=>!scopedIssue(issue)))return false;
@@ -184,26 +201,27 @@ function createReportReadCache({now=Date.now,ttlMs=10*60000,refreshMs=30000,maxE
   function compose(entry,refreshing){return {status:200,ok:true,data:{...JSON.parse(entry.core),responseCache:{state:entry.preview?'preview':entry.partial?'partial':'cached',...(entry.preview?{preview:true}:{}),...(entry.partial?{partial:true}:{}),checkedAt:new Date(entry.checkedAt).toISOString(),refreshing,refreshFailed:entry.refreshFailed,calculationStatus:entry.preview?(refreshing?'pending':entry.refreshFailed?'failed':'pending'):'complete',...(entry.refreshErrorCode?{refreshErrorCode:entry.refreshErrorCode,refreshErrorMessage:entry.refreshErrorMessage}:{}),...(entry.persisted?{persisted:true,validUntil:new Date(entry.validUntil).toISOString(),revalidationRequired:true}:{})}}};}
   function hydrate(key,state,mark,identity,start,audience){
     if(!stores.length||entries.has(key)||state.revoked||state.denied.has(key)||invalidatedScopes.has(state.scope))return;
-    const slotKey=durableSlot(identity,audience);if(!slotKey)return;let saved;const candidates=[];for(const store of stores)try{const row=store.get(slotKey,start);if(row)candidates.push(row);}catch{}
+    const slotKey=durableSlot(identity,audience);if(!slotKey)return;const slots=[slotKey];if(identity.requestSelection?.stayMode==='upcoming30')slots.push(legacyDurableSlot(identity,audience));let saved;const candidates=[];for(const store of stores)for(const slot of new Set(slots))try{const row=store.get(slot,start);if(row)candidates.push(row);}catch{}
     candidates.sort((a,b)=>Number(a.core?.calculation?.mode==='saved_only')-Number(b.core?.calculation?.mode==='saved_only')||b.checkedAt-a.checkedAt||Number(a.core?.dataQuality?.status==='partial')-Number(b.core?.dataQuality?.status==='partial'));
     saved=candidates.find(row=>{const core=displayCore(row.core,{periodStart:start});return core&&sourceScope(core,identity,start)&&(cacheable(core)||core.dataQuality?.status==='partial');});
-    if(!saved||saved.slotKey!==slotKey||saved.periodStart!==start||!Number.isFinite(saved.checkedAt)||saved.checkedAt>clock()||!Number.isFinite(saved.validUntil)||saved.validUntil<=clock()||saved.validUntil>saved.checkedAt+7*DAY)return;
+    if(!saved||!slots.includes(saved.slotKey)||saved.periodStart!==start||!Number.isFinite(saved.checkedAt)||saved.checkedAt>clock()||!Number.isFinite(saved.validUntil)||saved.validUntil<=clock()||saved.validUntil>saved.checkedAt+7*DAY)return;
     const core=displayCore(saved.core,{periodStart:start});if(!core||!sourceScope(core,identity,start))return;
     remember(key,state,mark,core,{checkedAt:saved.checkedAt,validUntil:saved.validUntil,persisted:true});
   }
-  function bind(state,ownId,start,mark,audience){const key=keyFor(state.scope,ownId,start,audience),previous=state.marks.get(key);if(previous?.mark!==mark){remove(key);state.denied.delete(key);state.marks.delete(key);pendingSaved.delete(key);}const binding=state.marks.get(key)||{ownId,start,mark};state.marks.delete(key);state.marks.set(key,binding);while(state.marks.size>maxPerScope*2){const oldest=state.marks.keys().next().value;state.marks.delete(oldest);state.denied.delete(oldest);remove(oldest);pendingSources.delete(oldest);pendingSaved.delete(oldest);}return {key,binding};}
-  async function snapshot({scope,audience,identity,maxViews=4}={}){
+  function bind(state,ownId,start,mark,audience,selection){const key=keyFor(state.scope,ownId,start,audience,selection),previous=state.marks.get(key);if(previous?.mark!==mark){remove(key);state.denied.delete(key);state.marks.delete(key);pendingSaved.delete(key);}const binding=state.marks.get(key)||{ownId,start,mark};state.marks.delete(key);state.marks.set(key,binding);while(state.marks.size>maxPerScope*2){const oldest=state.marks.keys().next().value;state.marks.delete(oldest);state.denied.delete(oldest);remove(oldest);pendingSources.delete(oldest);pendingSaved.delete(oldest);}return {key,binding};}
+  async function snapshot({scope,audience,identity,maxViews=4,selection:requested}={}){
     if(typeof scope!=='string'||!scope||!identity||typeof identity!=='object')return [];
+    const selection=requested===undefined?null:periodProjection.selection(requested);if(requested!==undefined&&!selection)return [];
     const checked=validatedIdentity(identity,'');if(!checked)return [];
     const state=states.get(scope)||(stores.length?scopeState(scope):null),limit=Number.isFinite(maxViews)?Math.min(4,Math.max(0,Math.floor(maxViews))):4;if(!state)return [];
     state.permissionVersion++;state.identity=null;syncIdentity(state,identity);if(state.revoked||!limit)return [];
     const epoch=state.epoch,permissionVersion=state.permissionVersion,start=day(),mark=fingerprint(checked);await ready();if(!current(state,epoch,null,null,null,start)||state.permissionVersion!==permissionVersion)return [];
     const requests=['',...checked.customer.relations.filter(row=>row.kind==='own'&&['active','pending'].includes(row.status)).map(row=>row.companyId)],views=[];let payloadBytes=2;
     for(const ownId of [...new Set(requests)]){
-      const selected=validatedIdentity(identity,ownId);if(!selected)continue;const {key}=bind(state,ownId,start,mark,audience);hydrate(key,state,mark,selected,start,audience);const entry=entries.get(key);
+      const selected=validatedIdentity(identity,ownId);if(!selected)continue;if(selection)selected.requestSelection=selection;const {key}=bind(state,ownId,start,mark,audience,selection);hydrate(key,state,mark,selected,start,audience);const entry=entries.get(key);
       if(!entry||entry.mark!==mark||entry.checkedAt>clock()||clock()>=expiry(entry)||state.denied.has(key))continue;
       const core=displayCore(JSON.parse(entry.core),{periodStart:start});if(!core||!sourceScope(core,selected,start)||!cacheable(core)&&core.dataQuality?.status!=='partial'){remove(key);continue;}
-      const pending=pendingSources.get(key),refreshing=Boolean(pending&&pending.state===state&&pending.epoch===epoch&&pending.mark===mark),row={ownId,period:periodFor(start),data:compose(entry,refreshing).data};const size=Buffer.byteLength(JSON.stringify(row))+(views.length?1:0);
+      const pending=pendingSources.get(key),refreshing=Boolean(pending&&pending.state===state&&pending.epoch===epoch&&pending.mark===mark),row={ownId,period:selection?clone(core.period):periodFor(start),...(selection?{selection:clone(selection)}:{}),data:compose(entry,refreshing).data};const size=Buffer.byteLength(JSON.stringify(row))+(views.length?1:0);
       if(payloadBytes+size>maxBytes)continue;payloadBytes+=size;views.push(row);if(views.length>=limit)break;
     }
     return views;
@@ -254,15 +272,17 @@ function createReportReadCache({now=Date.now,ttlMs=10*60000,refreshMs=30000,maxE
       if(!entry)return unavailable();persistPreview({...context,entry});return {status:200,ok:true,entry};
     }).catch(()=>unavailable()).finally(()=>{if(pendingSaved.get(key)===pending)pendingSaved.delete(key);});pendingSaved.set(key,pending);return pending.promise;
   }
-  async function read({scope,audience,ownId='',readIdentity,readSource,readSavedSource,force=false}={}){
+  async function read({scope,audience,ownId='',readIdentity,readSource,readSavedSource,force=false,selection:requested}={}){
     if(typeof scope!=='string'||!scope||typeof readIdentity!=='function'||typeof readSource!=='function')return unavailable();
     if(typeof ownId!=='string'||ownId&&!validId(ownId))return failure(400,'INVALID_REPORT_OWN','내 매장을 확인해 주세요.');
+    const selection=requested===undefined?null:periodProjection.selection(requested);if(requested!==undefined&&!selection)return failure(400,'INVALID_REPORT_SELECTION','숙박기간 조건을 확인해 주세요.');
     const state=scopeState(scope),epoch=state.epoch,permissionVersion=state.permissionVersion,checked=await identityRead(state,readIdentity);
     if(!current(state,epoch)||state.permissionVersion!==permissionVersion)return invalidated();
     if(!checked.ok){if([401,403].includes(checked.status))revoke(state,checked);return checked;}
     syncIdentity(state,checked.data);const identity=validatedIdentity(checked.data,ownId);
     if(!identity){state.epoch++;state.marks.clear();state.denied.clear();clearEntries(scope);return notFound();}
-    const start=day(),mark=fingerprint(identity),{key,binding}=bind(state,ownId,start,mark,audience);
+    if(selection)identity.requestSelection=selection;
+    const start=day(),mark=fingerprint(identity),{key,binding}=bind(state,ownId,start,mark,audience,selection);
     if(state.revoked&&!force)return state.revoked;const denial=state.denied.get(key);if(denial&&denial.mark===mark&&!force)return denial.reply;
     await ready();if(!current(state,epoch,key,mark,binding,start)||state.permissionVersion!==permissionVersion)return invalidated();
     for(const [entryKey,entry] of entries)if(clock()<entry.checkedAt||clock()>=expiry(entry))remove(entryKey);

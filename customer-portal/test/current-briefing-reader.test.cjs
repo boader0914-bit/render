@@ -24,7 +24,7 @@ test('independent reader and peek share authorized saved values without renderin
   const h=harness(),data=report();h.restore(data);const shown=h.view.peekCurrentBriefing('own_a');
   assert.equal(shown.companies[0].summary.publicBookings,0);assert.equal(shown.companies[0].summary.estimatedRevenue,null);
   shown.companies[0].summary.publicBookings=999;assert.equal(h.view.peekCurrentBriefing('own_a').companies[0].summary.publicBookings,0);
-  const read=h.view.readCurrentBriefing('own_a',h.request);assert.equal(h.calls.length,1);assert.equal(h.calls[0].path,'/reports/briefing?ownId=own_a');
+  const read=h.view.readCurrentBriefing('own_a',h.request);assert.equal(h.calls.length,1);assert.equal(h.calls[0].path,'/reports/briefing?ownId=own_a&stayMode=upcoming30');
   assert.equal(h.calls[0].payload,undefined);assert.equal(h.calls[0].options.refresh,false);
   h.calls[0].resolve(report({sold:7}));const value=await read;assert.equal(value.companies[0].summary.sold,7);
   value.companies[0].summary.sold=99;assert.equal(h.view.peekCurrentBriefing('own_a').companies[0].summary.sold,7);

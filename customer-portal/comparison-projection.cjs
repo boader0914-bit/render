@@ -51,7 +51,7 @@ function projectSummary(input,{required=false}={}){
   }catch{return null;}
 }
 function projectSummaryQuality(input){
-  try{const result=shape(input,{excludedDates:array(excluded),duplicateStayDates:array(date),reservationRateAvailable:bool,period,asOf:date});value([...result.excludedDates.map(r=>r.date),...result.duplicateStayDates].every(day=>day>=result.period.start&&day<=result.period.end),input);return result;}catch{return null;}
+  try{const extended=own(input,'mode'),result=shape(input,{excludedDates:array(excluded),duplicateStayDates:array(date),reservationRateAvailable:bool,period:v=>extended&&v?.start===null&&v?.end===null?{start:null,end:null}:period(v),asOf:date});if(extended)result.mode=oneOf(['historical','current'])(input.mode);value([...result.excludedDates.map(r=>r.date),...result.duplicateStayDates].every(day=>day>=result.period.start&&day<=result.period.end),input);if(result.period.start===null)value(!result.reservationRateAvailable&&!result.excludedDates.length&&!result.duplicateStayDates.length,input);return result;}catch{return null;}
 }
 const region=input=>{
   const result=shape(input,{relation:oneOf(['same','cross','unknown']),ownRegionKey:nullable(labelKey),competitorRegionKey:nullable(labelKey),ownAnalysisRegionKey:nullable(labelKey),competitorAnalysisRegionKey:nullable(labelKey),hierarchyApplied:bool});
@@ -73,7 +73,7 @@ const quality=input=>shape(input,{
   timing:v=>shape(v,{sameObservationDay:bool,referenceOnlyDates:array(date),unknownTimeDates:array(date),maximumObservedSkewMs:nullable(money),exceededDates:array(date),policy:observationPolicy})
 });
 const basisDetail=input=>shape(input,{
-  mode:oneOf(['current','historical']),asOf:date,period,minCommonDays:v=>value(Number.isSafeInteger(v)&&v>=7,v),currentFreshnessDays:nullable(count),
+  mode:oneOf(['current','historical']),asOf:date,period:v=>input.mode==='historical'&&v?.start===null&&v?.end===null?{start:null,end:null}:period(v),minCommonDays:v=>value(Number.isSafeInteger(v)&&v>=7,v),currentFreshnessDays:nullable(count),
   observationTimes:array(v=>shape(v,{date,ownObservedAt:nullable(instant),competitorObservedAt:nullable(instant),skewMs:nullable(money)})),
   duplicateStayDates:v=>shape(v,{own:array(date),competitor:array(date)}),source:oneOf(['central_integrated_observation']),regionAdjusted:oneOf([false]),statisticalConfidenceClaim:oneOf([false])
 });
@@ -110,12 +110,14 @@ function projectComparison(input){
     value(result.quality.revenue.status!=='partial'||result.own.estimatedRevenue===null||result.competitor.estimatedRevenue===null,input);
     value(result.basisDetail.mode==='current'?result.basisDetail.currentFreshnessDays!==null:result.basisDetail.currentFreshnessDays===null,input);
     const allDates=[...result.dates,...result.quality.revenue.unknownDates,...result.quality.timing.referenceOnlyDates,...result.quality.timing.unknownTimeDates,...result.quality.timing.exceededDates,...result.basisDetail.observationTimes.map(r=>r.date),...result.quality.quantity.ownExcludedDates.map(r=>r.date),...result.quality.quantity.competitorExcludedDates.map(r=>r.date),...result.quality.reservationRate.issues.map(r=>r.date),...result.basisDetail.duplicateStayDates.own,...result.basisDetail.duplicateStayDates.competitor,...result.own.revenueUnknownDays,...result.competitor.revenueUnknownDays,...result.reference.own.revenueUnknownDays,...result.reference.competitor.revenueUnknownDays];
+    if(result.basisDetail.period.start===null)value(!result.displayable&&!result.comparable&&!result.actionable&&result.commonDays===0&&result.status==='insufficient'&&!allDates.length&&[result.own,result.competitor,result.reference.own,result.reference.competitor].every(s=>s.days===0&&s.sold===null&&s.supply===null&&s.estimatedRevenue===null&&s.publicBookings===null&&s.phoneBookings===null&&s.knownRevenueSubtotal===null),input);
     value(allDates.every(day=>day>=result.basisDetail.period.start&&day<=result.basisDetail.period.end),input);
     return result;
   }catch{return null;}
 }
 function comparisonWithinReport(comparison,report){
-  if(!comparison||comparison.ownId!==report.ownId||comparison.basisDetail?.mode!=='current'||comparison.basisDetail.asOf!==report.period?.start||comparison.basisDetail.period.start!==report.period.start||comparison.basisDetail.period.end!==report.period.end)return false;
+  const extended=!!report.selection,mode=extended&&report.selection.stayMode!=='upcoming30'?'historical':'current',asOf=extended?report.asOf:report.period?.start;
+  if(!comparison||comparison.ownId!==report.ownId||comparison.basisDetail?.mode!==mode||comparison.basisDetail.asOf!==asOf||comparison.basisDetail.period.start!==report.period.start||comparison.basisDetail.period.end!==report.period.end)return false;
   const ownCompany=report.companies?.find(row=>row.companyId===report.ownId&&row.kind==='own'),competitor=report.companies?.find(row=>row.companyId===comparison.companyId&&row.kind==='competitor');
   if(!ownCompany||!competitor||comparison.region.ownRegionKey!==normalizedRegionKey(ownCompany.regionKey)||comparison.region.competitorRegionKey!==normalizedRegionKey(competitor.regionKey))return false;
   if(comparison.actionable&&!report.companies?.some(row=>row.companyId===report.ownId&&row.kind==='own'&&row.relationStatus==='active'))return false;
@@ -126,12 +128,15 @@ function projectCompanyLabels(input){
 }
 function projectReservationSeries(input,company,report){
   try{
+    const extended=!!report.selection,asOf=extended?report.asOf:report.period?.start,expectedDays=extended?report.period.days:30,current=!extended||report.selection.stayMode==='upcoming30';
+    if(extended&&expectedDays===0){value(input?.companyId===company.companyId&&input.period?.start===null&&input.period?.end===null&&input.asOf===asOf&&Array.isArray(input.points)&&input.points.length===0,input);return {companyId:company.companyId,period:{start:null,end:null},asOf,points:[]};}
+    value(Number.isSafeInteger(expectedDays)&&expectedDays>0&&expectedDays<=3660,input);
     const result=shape(input,{companyId:id,period,asOf:date,points:array(point=>shape(point,{
       date,total:nullable(count),sold:nullable(count),publicBookings:nullable(count),phoneBookings:nullable(count),quantityStatus:oneOf(['ready','unknown','conflict']),codes:array(code,64),missing:bool,inventoryConflict:bool,collectedAt:nullable(instant),collectedDate:nullable(date),reservationRate:nullable(v=>value(typeof v==='number'&&Number.isFinite(v)&&v>=0&&v<=1,v))
-    }),30)});
-    value(result.companyId===company.companyId&&result.period.start===report.period?.start&&result.period.end===report.period.end&&result.asOf===report.period.start&&report.period.days===30&&result.points.length===30,input);
-    const start=Date.parse(result.period.start+'T00:00:00Z'),oldest=new Date(start-7*86400000).toISOString().slice(0,10);
-    value(new Date(start+29*86400000).toISOString().slice(0,10)===result.period.end,input);
+    }),3660)});
+    value(result.companyId===company.companyId&&result.period.start===report.period?.start&&result.period.end===report.period.end&&result.asOf===asOf&&report.period.days===expectedDays&&result.points.length===expectedDays,input);
+    const start=Date.parse(result.period.start+'T00:00:00Z'),oldest=new Date(Date.parse(asOf+'T00:00:00Z')-7*86400000).toISOString().slice(0,10);
+    value(new Date(start+(expectedDays-1)*86400000).toISOString().slice(0,10)===result.period.end,input);
     for(const [index,point] of result.points.entries()){
       value(point.date===new Date(start+index*86400000).toISOString().slice(0,10)&&new Set(point.codes).size===point.codes.length,input);
       if(point.quantityStatus!=='ready'){
@@ -141,7 +146,7 @@ function projectReservationSeries(input,company,report){
       }
       value(point.missing===false&&point.sold!==null&&point.publicBookings!==null&&point.phoneBookings!==null&&point.sold===point.publicBookings+point.phoneBookings,input);
       value(point.total===null||point.total>0,input);
-      value(point.collectedDate!==null&&point.collectedDate<=result.asOf&&point.collectedDate>=oldest,input);
+      value(point.collectedDate!==null&&point.collectedDate<=result.asOf&&(!current||point.collectedDate>=oldest),input);
       if(point.collectedAt!==null)value(point.collectedAt===new Date(Date.parse(point.collectedAt)).toISOString()&&new Date(Date.parse(point.collectedAt)+9*3600000).toISOString().slice(0,10)===point.collectedDate,input);
       const capacityKnown=Number.isSafeInteger(company.rooms)&&company.rooms>0&&point.total!==null;
       value(point.codes.every(c=>['CAPACITY_UNKNOWN','CAPACITY_CONFLICT'].includes(c)),input);

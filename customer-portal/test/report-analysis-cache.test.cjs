@@ -163,11 +163,11 @@ test('explicit cache clearing prevents a previously pending private report from 
 });
 
 test('unregistered customers can restore only their default planning report, not a registered own-company report',async()=>{
- const h=harness();h.configure({ownIds:[],companyIds:[]});h.restore(saved(null), '');h.mount('');assert.match(h.html(),/사업 준비의 다음 판단/);assert.equal(h.calls[0].path,'/reports/briefing');h.restore(saved('own'),'own');assert.doesNotMatch(h.html(),/내 매장 own/);
+ const h=harness();h.configure({ownIds:[],companyIds:[]});h.restore(saved(null), '');h.mount('');assert.match(h.html(),/사업 준비의 다음 판단/);assert.equal(h.calls[0].path,'/reports/briefing?stayMode=upcoming30');h.restore(saved('own'),'own');assert.doesNotMatch(h.html(),/내 매장 own/);
 });
 
 test('default and explicitly selected own report keys are never silently aliased',()=>{
- const h=harness();h.restore(saved(),'');h.mount('own');assert.match(h.html(),/계산하고/);assert.equal(h.calls[0].path,'/reports/briefing?ownId=own');
+ const h=harness();h.restore(saved(),'');h.mount('own');assert.match(h.html(),/계산하고/);assert.equal(h.calls[0].path,'/reports/briefing?ownId=own&stayMode=upcoming30');
 });
 
 test('no browser storage or persistent authentication is used by report restoration',()=>{
