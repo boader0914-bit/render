@@ -39,9 +39,9 @@ function jobProjection(value) {
   if (!object(job) || !UUID.test(job.id || "") || !STATUSES.has(job.status) || !stamp(job.nextEligibleAt)) throw fault("REGIONAL_MARKET_WEEKLY_JOB_INVALID");
   return { id: job.id, status: job.status, nextEligibleAt: job.nextEligibleAt };
 }
-function createRegionalMarketMissingWeeklyScheduler({ dataDir, missingService, now = () => new Date(), setIntervalImpl = setInterval, clearIntervalImpl = clearInterval } = {}) {
+function createRegionalMarketMissingWeeklyScheduler({ dataDir, missingService, now = () => new Date(), setIntervalImpl = setInterval, clearIntervalImpl = clearInterval, canRun = async () => ({ allowed: true }) } = {}) {
   if (typeof dataDir !== "string" || !dataDir || typeof missingService?.get !== "function" || typeof missingService?.request !== "function" || typeof now !== "function"
-    || typeof setIntervalImpl !== "function" || typeof clearIntervalImpl !== "function") throw new TypeError("Invalid weekly regional market scheduler options");
+    || typeof setIntervalImpl !== "function" || typeof clearIntervalImpl !== "function" || typeof canRun !== "function") throw new TypeError("Invalid weekly regional market scheduler options");
   const base = path.resolve(dataDir), directory = path.join(base, DIRECTORY), filename = path.join(directory, POLICY_FILE);
   let serial = Promise.resolve(), stateIO = Promise.resolve(), timer = null, closed = false, ownedDispatch = null;
   const instant = () => { const value = new Date(now()).getTime(); if (!Number.isFinite(value)) throw fault("REGIONAL_MARKET_WEEKLY_CLOCK_INVALID"); return value; };
@@ -92,10 +92,16 @@ function createRegionalMarketMissingWeeklyScheduler({ dataDir, missingService, n
     } finally { await handle?.close(); await fs.unlink(temporary).catch(() => {}); }
   }
   const read = () => stateLocked(rawRead), save = value => { const snapshot = copy(value); return stateLocked(() => rawSave(snapshot)); };
+  async function admissionAllowed() {
+    let gate; try { gate = await canRun(); } catch { throw fault("REGIONAL_MARKET_WEEKLY_GATE_UNAVAILABLE"); }
+    if (!object(gate) || typeof gate.allowed !== "boolean") throw fault("REGIONAL_MARKET_WEEKLY_GATE_UNAVAILABLE");
+    return gate.allowed;
+  }
   async function inspect(policy, time) {
     const result = { schemaVersion: 1, enabled: policy.enabled, schedule: { ...SCHEDULE }, status: "disabled", reasonCode: null, nextDueAt: null, nextEligibleAt: null,
       lastAttemptWeek: policy.lastAttemptWeek, lastAttemptAt: policy.lastAttemptAt, lastJobId: policy.lastJobId, dispatchStatus: policy.dispatchStatus, errorCode: policy.errorCode };
     if (!policy.enabled) return result;
+    if (!await admissionAllowed()) return { ...result, status: "held", reasonCode: "BOOTSTRAP_IN_PROGRESS" };
     const currentWeek = weekOf(time), dueWeek = currentWeek < policy.firstWeek ? policy.firstWeek : currentWeek;
     let nextDue = dueFor(dueWeek);
     if (policy.dispatchStatus === "claimed") {
@@ -120,18 +126,24 @@ function createRegionalMarketMissingWeeklyScheduler({ dataDir, missingService, n
       if (closed) return { schemaVersion: 1, status: "closed", triggered: false };
       const policy = await read(), time = instant(), status = await inspect(policy, time);
       if (status.status !== "due") return { ...status, triggered: false };
+      // Target/job reads may yield to a bootstrap start. Recheck before consuming
+      // this week's durable claim, without rewriting the existing policy or job.
+      if (!await admissionAllowed()) return { ...status, status: "held", reasonCode: "BOOTSTRAP_IN_PROGRESS", triggered: false };
       const week = weekOf(time); policy.lastAttemptWeek = week; policy.lastAttemptAt = new Date(time).toISOString(); policy.lastJobId = null; policy.dispatchStatus = "claimed"; policy.errorCode = null;
       await save(policy); ownedDispatch = week;
+      let outcome;
       try {
         const response = await missingService.request();
         if (!object(response) || typeof response.reused !== "boolean") throw fault("WEEKLY_REQUEST_CONTRACT_INVALID");
         const job = jobProjection(response); if (!job) throw fault("WEEKLY_REQUEST_CONTRACT_INVALID");
         policy.lastJobId = job.id; policy.dispatchStatus = response.reused ? "reused" : "accepted"; await save(policy);
-        return { ...(await inspect(policy, instant())), triggered: !response.reused, reused: response.reused };
+        outcome = { triggered: !response.reused, reused: response.reused };
       } catch (error) {
         policy.dispatchStatus = "failed"; policy.errorCode = error?.code === "WEEKLY_REQUEST_CONTRACT_INVALID" ? error.code : "WEEKLY_REQUEST_FAILED"; await save(policy);
-        return { ...(await inspect(policy, instant())), triggered: false, reasonCode: policy.errorCode };
+        outcome = { triggered: false };
       } finally { ownedDispatch = null; }
+      // A later status/gate read failure must not relabel an accepted request.
+      return { ...(await inspect(policy, instant())), ...outcome };
     });
   }
   return {

@@ -1,7 +1,8 @@
 "use strict";
 
 // Separate explicit collection command. Ordinary market reads stay read-only.
-function createRegionalMarketMissingHttpHandler({ service, requireAdmin, parseJsonBody, send, rateLimit = () => {} }) {
+function createRegionalMarketMissingHttpHandler({ service, requireAdmin, parseJsonBody, send, rateLimit = () => {}, canRun = async () => ({ allowed: true }) }) {
+  if (typeof canRun !== "function") throw new TypeError("Invalid regional market admission gate");
   return async function handle(req, res, url, session) {
     if (url.pathname !== "/api/regional-market/missing-check") return false;
     if (!requireAdmin(session, req, res)) return true;
@@ -17,6 +18,10 @@ function createRegionalMarketMissingHttpHandler({ service, requireAdmin, parseJs
       let payload; try { payload = await parseJsonBody(req); } catch { return send(res, 400, { code: "REGIONAL_MARKET_MISSING_INVALID_REQUEST" }), true; }
       if (!payload || typeof payload !== "object" || Array.isArray(payload) || Object.keys(payload).length) return send(res, 400, { code: "REGIONAL_MARKET_MISSING_INVALID_REQUEST" }), true;
       rateLimit(req, session);
+      let gate;
+      try { gate = await canRun(); } catch { throw Object.assign(new Error("REGIONAL_MARKET_MISSING_GATE_UNAVAILABLE"), { code: "REGIONAL_MARKET_MISSING_GATE_UNAVAILABLE" }); }
+      if (!gate || typeof gate !== "object" || Array.isArray(gate) || typeof gate.allowed !== "boolean") throw Object.assign(new Error("REGIONAL_MARKET_MISSING_GATE_UNAVAILABLE"), { code: "REGIONAL_MARKET_MISSING_GATE_UNAVAILABLE" });
+      if (!gate.allowed) return send(res, 409, { code: "REGIONAL_MARKET_MISSING_BOOTSTRAP_ACTIVE", reason: "BOOTSTRAP_IN_PROGRESS" }), true;
       const result = await service.request();
       send(res, ["queued", "running"].includes(result?.job?.status) ? 202 : 200, result);
     } catch (error) {

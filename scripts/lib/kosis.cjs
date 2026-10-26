@@ -1,12 +1,19 @@
 "use strict";
 
 const fs = require("node:fs/promises");
+const { constants } = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { createRegionalResponseEvidenceStore } = require("./regional_response_evidence.cjs");
 const KOSIS_RESPONSE_KIND = "kosis-statistics-response-pair";
 const KOSIS_EVIDENCE_VERSION = "stored-kosis-spatial-evidence-v1";
 const KOSIS_DEFINITION_VERSION = "kosis-statistics-definition-v1";
+const LOCAL_BUDGET = Symbol("local-kosis-daily-budget-admission");
+const validDay = value => typeof value === "string" && /^20\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(value)
+  && Number.isFinite(Date.parse(value + "T00:00:00Z")) && new Date(value + "T00:00:00Z").toISOString().slice(0, 10) === value;
+const kstDay = value => new Date(Number(value) + 9 * 3600000).toISOString().slice(0, 10);
+const sha256 = value => crypto.createHash("sha256").update(value).digest("hex");
+const localBudgetDayOf = error => error?.[LOCAL_BUDGET] === true && error.code === "QUOTA_EXCEEDED" && validDay(error.localBudgetDay) ? error.localBudgetDay : null;
 
 // Verified against KOSIS statisticsData.do getMeta/ITM. Each table has its own
 // region classification: population and industry codes are NOT interchangeable.
@@ -69,7 +76,10 @@ const MESSAGES = Object.freeze({
   COOLDOWN: "최근 갱신을 수행했습니다. 잠시 후 다시 갱신해 주세요.",
   REFRESH_INCOMPLETE: "이전 갱신의 종료를 확인하지 못했습니다. 저장 자료를 유지합니다.",
   NO_DATA: "KOSIS에 해당 지역·항목의 조회 결과가 없습니다.",
-  MISSING_VALUES: "KOSIS 응답에 비공개 또는 누락된 값이 있어 이전 정상 자료를 유지합니다."
+  MISSING_VALUES: "KOSIS 응답에 비공개 또는 누락된 값이 있어 이전 정상 자료를 유지합니다.",
+  BUDGET_REVIEW_INVALID: "로컬 호출 한도 보완 승인 범위를 검증하지 못했습니다.",
+  BUDGET_REVIEW_CHANGED: "승인 당시의 저장 자료가 변경되어 보완을 보류했습니다.",
+  BUDGET_REVIEW_NOT_DUE: "승인된 다음 한국시간 날짜부터 보완할 수 있습니다."
 });
 function problem(code) { const error = new Error(MESSAGES[code] || MESSAGES.NETWORK_ERROR); error.code = Object.hasOwn(MESSAGES, code) ? code : "NETWORK_ERROR"; return error; }
 function publicError(error) { const code = Object.hasOwn(MESSAGES, error?.code) ? error.code : "NETWORK_ERROR"; return { code, message: MESSAGES[code] }; }
@@ -187,7 +197,8 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
   }
   async function readCache(region, { preserveStoredDatasets = false } = {}) {
     try {
-      const cache = JSON.parse(await fs.readFile(cacheFile(region), "utf8"));
+      const sourceBytes = await fs.readFile(cacheFile(region));
+      const cache = JSON.parse(sourceBytes.toString("utf8"));
       if (cache.version !== 1 || cache.regionId !== region.regionId || !cache.datasets || typeof cache.datasets !== "object") throw problem("CACHE_READ_ERROR");
       const datasets = {};
       for (const definition of DEFINITIONS) {
@@ -217,21 +228,25 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
         datasets[definition.key] = normalized;
       }
       return { version: 1, regionId: region.regionId, datasets,
-        ...(preserveStoredDatasets ? { storedDatasets: structuredClone(cache.datasets) } : {}) };
+        ...(preserveStoredDatasets ? { storedDatasets: structuredClone(cache.datasets), sourceSha256: sha256(sourceBytes) } : {}) };
     } catch (error) { return { version: 1, regionId: region.regionId, datasets: {}, readError: error.code === "ENOENT" ? null : publicError(problem("CACHE_READ_ERROR")) }; }
   }
   async function readAttempt(region) {
     try {
-      const raw = JSON.parse(await fs.readFile(attemptFile(region), "utf8"));
+      const sourceBytes = await fs.readFile(attemptFile(region));
+      const raw = JSON.parse(sourceBytes.toString("utf8"));
       if (raw.version !== 1 || raw.regionId !== region.regionId || !Number.isFinite(Date.parse(raw.startedAt)) || (raw.finishedAt !== null && !Number.isFinite(Date.parse(raw.finishedAt)))) throw problem("CACHE_READ_ERROR");
       const outcomes = {};
       for (const definition of DEFINITIONS) {
         const outcome = raw.outcomes?.[definition.key];
         if (!outcome) continue;
         if (!["ready", "stale", "partial", "mapping_missing", "error"].includes(outcome.status)) throw problem("CACHE_READ_ERROR");
-        outcomes[definition.key] = { status: outcome.status, error: outcome.error ? publicError(outcome.error) : null };
+        if (outcome.localBudgetDay !== undefined && (!validDay(outcome.localBudgetDay) || outcome.error?.code !== "QUOTA_EXCEEDED"
+          || outcome.localBudgetDay > kstDay(Date.parse(raw.finishedAt || raw.startedAt)))) throw problem("CACHE_READ_ERROR");
+        outcomes[definition.key] = { status: outcome.status, error: outcome.error ? publicError(outcome.error) : null,
+          ...(outcome.localBudgetDay === undefined ? {} : { localBudgetDay: outcome.localBudgetDay }) };
       }
-      return { version: 1, regionId: region.regionId, startedAt: raw.startedAt, finishedAt: raw.finishedAt, outcomes };
+      return { version: 1, regionId: region.regionId, startedAt: raw.startedAt, finishedAt: raw.finishedAt, outcomes, sourceSha256: sha256(sourceBytes) };
     } catch (error) { return error.code === "ENOENT" ? null : { readError: publicError(problem("CACHE_READ_ERROR")) }; }
   }
   async function atomic(file, value) {
@@ -252,7 +267,7 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
     let record = { day, count: 0 };
     try { const old = JSON.parse(await fs.readFile(file, "utf8")); if (old.day === day && Number.isSafeInteger(old.count) && old.count >= 0) record = old; }
     catch (error) { if (error.code !== "ENOENT") throw problem("CACHE_READ_ERROR"); }
-    if (record.count >= budgetLimit) throw problem("QUOTA_EXCEEDED");
+    if (record.count >= budgetLimit) throw Object.assign(problem("QUOTA_EXCEEDED"), { localBudgetDay: day, [LOCAL_BUDGET]: true });
     await atomic(file, { day, count: record.count + 1 });
   }
   async function readBody(response) {
@@ -403,7 +418,59 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
     }
     catch (error) { return { configured, status: "mapping_missing", region: { regionKey }, datasets: DEFINITIONS.map(emptyDataset), networkAttempted: false, error: publicError(error) }; }
   }
-  async function missingMarketPlan(region, cache, previousAttempt) {
+  function missingOptions(options, regionKey) {
+    if (!options || typeof options !== "object" || Array.isArray(options)
+      || Object.keys(options).some(key => !["allowedDatasetKeys", "budgetResumeReview"].includes(key))) throw problem("BUDGET_REVIEW_INVALID");
+    const allowed = options.allowedDatasetKeys === undefined ? MARKET_METRICS.map(item => item.datasetKey) : options.allowedDatasetKeys;
+    if (!Array.isArray(allowed) || !allowed.length || allowed.length > 6 || new Set(allowed).size !== allowed.length
+      || allowed.some(key => !MARKET_METRICS.some(item => item.datasetKey === key))) throw problem("BUDGET_REVIEW_INVALID");
+    const review = options.budgetResumeReview;
+    if (review !== undefined) {
+      const keys = ["schemaVersion", "kind", "regionKey", "attemptSha256", "cacheSha256", "datasetKeys", "earliestKstDay", "sourceJobId", "sourceJobSha256", "reviewReceiptSha256"];
+      if (!review || typeof review !== "object" || Array.isArray(review) || Object.keys(review).length !== keys.length || keys.some(key => !Object.hasOwn(review, key))
+        || review.schemaVersion !== 1 || review.kind !== "diagnosed_local_budget" || review.regionKey !== regionKey
+        || ["attemptSha256", "cacheSha256", "sourceJobSha256", "reviewReceiptSha256"].some(key => !/^[a-f0-9]{64}$/.test(review[key] || ""))
+        || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(review.sourceJobId || "")
+        || !validDay(review.earliestKstDay) || !Array.isArray(review.datasetKeys) || !review.datasetKeys.length || review.datasetKeys.length > 6
+        || new Set(review.datasetKeys).size !== review.datasetKeys.length || review.datasetKeys.some(key => !allowed.includes(key))) throw problem("BUDGET_REVIEW_INVALID");
+    }
+    return { allowed: new Set(allowed), review: review === undefined ? null : structuredClone(review) };
+  }
+  async function verifyReviewFiles(region, review) {
+    // File paths are derived solely from the canonical region. The caller must
+    // bind sourceJob/receipt SHAs through its fixed, server-owned manifest reader;
+    // no client-selected path, broad force flag or hold deletion is accepted.
+    const parent = await fs.lstat(directory);
+    if (!parent.isDirectory() || parent.isSymbolicLink() || path.resolve(await fs.realpath(directory)) !== directory) throw problem("BUDGET_REVIEW_CHANGED");
+    const parentIdentity = `${parent.dev}:${parent.ino}`;
+    for (const [file, expected] of [[cacheFile(region), review.cacheSha256], [attemptFile(region), review.attemptSha256]]) {
+      let handle;
+      try {
+        const before = await fs.lstat(file), identity = stat => `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+        if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size < 2 || before.size > MAX_BODY) throw problem("BUDGET_REVIEW_CHANGED");
+        handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+        if (identity(await handle.stat()) !== identity(before)) throw problem("BUDGET_REVIEW_CHANGED");
+        const bytes = await handle.readFile();
+        if (bytes.length !== before.size || sha256(bytes) !== expected || identity(await handle.stat()) !== identity(before)
+          || identity(await fs.lstat(file)) !== identity(before)) throw problem("BUDGET_REVIEW_CHANGED");
+      } catch { throw problem("BUDGET_REVIEW_CHANGED"); }
+      finally { await handle?.close(); }
+    }
+    const after = await fs.lstat(directory);
+    if (after.isSymbolicLink() || `${after.dev}:${after.ino}` !== parentIdentity || path.resolve(await fs.realpath(directory)) !== directory) throw problem("BUDGET_REVIEW_CHANGED");
+  }
+  async function reviewedKeys(region, cache, previousAttempt, review) {
+    if (!review) return new Set();
+    if (cache.readError || previousAttempt?.readError || !previousAttempt?.finishedAt || cache.sourceSha256 !== review.cacheSha256
+      || previousAttempt.sourceSha256 !== review.attemptSha256) throw problem("BUDGET_REVIEW_CHANGED");
+    if (review.earliestKstDay <= kstDay(Date.parse(previousAttempt.finishedAt))) throw problem("BUDGET_REVIEW_INVALID");
+    if (kstDay(at()) < review.earliestKstDay) throw problem("BUDGET_REVIEW_NOT_DUE");
+    if (review.datasetKeys.some(key => previousAttempt.outcomes[key]?.error?.code !== "QUOTA_EXCEEDED"
+      || previousAttempt.outcomes[key]?.localBudgetDay !== undefined)) throw problem("BUDGET_REVIEW_INVALID");
+    await verifyReviewFiles(region, review);
+    return new Set(review.datasetKeys);
+  }
+  async function missingMarketPlan(region, cache, previousAttempt, reviewed = new Set()) {
     const regionError = cache.readError?.code || previousAttempt?.readError?.code
       || (previousAttempt && !previousAttempt.finishedAt ? "REFRESH_INCOMPLETE" : null);
     const plan = [];
@@ -414,6 +481,7 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
       if (regionError) { status = "blocked"; reasonCode = regionError; }
       else if (dataset?.retrievedAt && Date.parse(dataset.retrievedAt) > at()) { status = "blocked"; reasonCode = "PERIOD_MISMATCH"; }
       else if (outcomeError && !["NO_DATA", "MISSING_VALUES"].includes(outcomeError)
+        && !(outcomeError === "QUOTA_EXCEEDED" && (reviewed.has(spec.datasetKey) || outcome.localBudgetDay && kstDay(at()) > outcome.localBudgetDay))
         && (!dataset?.retrievedAt || dataset.retrievedAt <= (previousAttempt.finishedAt || previousAttempt.startedAt))) {
         status = "blocked"; reasonCode = outcomeError;
       } else if (dataset) {
@@ -439,9 +507,9 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
     return { schemaVersion: 1, mode: "missing_only", status: remaining.length ? "blocked" : "not_needed",
       eligibleDatasetKeys: plan.filter(item => item.status === "missing").map(item => item.datasetKey),
       attemptedDatasetKeys: [], collectedDatasetKeys: [], skipped, remaining,
-      changed: false, networkAttempted: false, stopReason: null, ...changes };
+      changed: false, networkAttempted: false, stopReason: null, localBudgetExhausted: false, budgetDay: null, budgetResumeReviewApplied: false, ...changes };
   }
-  async function refreshSelected(regionKey, marketMissingOnly = false) {
+  async function refreshSelected(regionKey, marketMissingOnly = false, options = {}) {
     const apiKey = await key();
     let region;
     try { region = await regionFor(regionKey); }
@@ -451,6 +519,9 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
       return { ...(await getRegion(regionKey)), error: publicError(problem("INVALID_REGION")),
         marketCollection: marketReport([], { status: "blocked", stopReason: "INVALID_REGION" }) };
     }
+    let selection;
+    try { selection = marketMissingOnly ? missingOptions(options, regionKey) : null; }
+    catch (error) { return { ...(await getRegion(regionKey)), error: publicError(error), marketCollection: marketReport([], { status: "blocked", stopReason: publicError(error).code }) }; }
     if (flights.has(region.regionId)) {
       const result = await flights.get(region.regionId);
       return { ...result, region, ...(marketMissingOnly ? { marketCollection: marketReport([], { status: "shared_inflight" }) } : {}) };
@@ -458,15 +529,23 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
     const run = (async () => {
       const cache = await readCache(region, { preserveStoredDatasets: marketMissingOnly });
       const previousAttempt = await readAttempt(region);
-      const plan = marketMissingOnly ? await missingMarketPlan(region, cache, previousAttempt) : null;
-      const selectedDefinitions = marketMissingOnly ? DEFINITIONS.filter(definition => plan.some(item => item.datasetKey === definition.key && item.status === "missing")) : DEFINITIONS;
-      const report = changes => marketReport(plan || [], changes);
+      let reviewed;
+      try { reviewed = marketMissingOnly ? await reviewedKeys(region, cache, previousAttempt, selection.review) : new Set(); }
+      catch (error) { return { ...withAttempt(present(region, cache, Boolean(apiKey)), previousAttempt), error: publicError(error), marketCollection: marketReport([], { status: "blocked", stopReason: publicError(error).code }) }; }
+      const plan = marketMissingOnly ? await missingMarketPlan(region, cache, previousAttempt, reviewed) : null;
+      const selectedDefinitions = marketMissingOnly ? DEFINITIONS.filter(definition => selection.allowed.has(definition.key) && plan.some(item => item.datasetKey === definition.key && item.status === "missing")) : DEFINITIONS;
+      let budgetResumeReviewApplied = false;
+      const report = changes => marketReport(plan || [], { ...(marketMissingOnly ? { eligibleDatasetKeys: selectedDefinitions.map(item => item.key) } : {}), budgetResumeReviewApplied, ...changes });
+      const localBudgetHeldToday = marketMissingOnly && !cache.readError && !previousAttempt?.readError && previousAttempt?.finishedAt
+        && plan.some(item => selection.allowed.has(item.datasetKey) && item.status === "blocked" && item.reasonCode === "QUOTA_EXCEEDED"
+          && previousAttempt.outcomes[item.datasetKey]?.localBudgetDay === kstDay(at()));
       if (marketMissingOnly && !selectedDefinitions.length) return { ...withAttempt(present(region, cache, Boolean(apiKey)), previousAttempt),
         // Historical per-table holds stay in skipped/remaining and are never
         // retried here. They are not a new global guard event for other regions.
         // Actual next-region requests still pass the shared budget/auth gates.
         marketCollection: report({ stopReason: cache.readError?.code || previousAttempt?.readError?.code
-          || (previousAttempt && !previousAttempt.finishedAt ? "REFRESH_INCOMPLETE" : null) }) };
+          || (previousAttempt && !previousAttempt.finishedAt ? "REFRESH_INCOMPLETE" : localBudgetHeldToday ? "QUOTA_EXCEEDED" : null),
+          ...(localBudgetHeldToday ? { localBudgetExhausted: true, budgetDay: kstDay(at()) } : {}) }) };
       if (!apiKey) return present(region, cache, false, { status: "needs_key", error: publicError(problem("MISSING_KEY")),
         ...(marketMissingOnly ? { marketCollection: report({ status: "blocked", stopReason: "MISSING_KEY" }) } : {}) });
       if (previousAttempt?.readError) return present(region, cache, true, { status: "error", error: previousAttempt.readError,
@@ -476,7 +555,7 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
         ...(marketMissingOnly ? { marketCollection: report({ status: "blocked", stopReason: "COOLDOWN" }) } : {}) };
       attempts.set(region.regionId, at());
       const attempt = { version: 1, regionId: region.regionId, startedAt: iso(), finishedAt: null, outcomes: {} };
-      try { await atomic(attemptFile(region), attempt); }
+      try { if (marketMissingOnly && selection.review) await verifyReviewFiles(region, selection.review); await atomic(attemptFile(region), attempt); budgetResumeReviewApplied = Boolean(marketMissingOnly && selection.review); }
       catch (error) { return present(region, cache, true, { status: "error", error: publicError(error),
         ...(marketMissingOnly ? { marketCollection: report({ status: "blocked", stopReason: publicError(error).code }) } : {}) }); }
       const staged = { version: 1, regionId: region.regionId, datasets: { ...(marketMissingOnly ? cache.storedDatasets || cache.datasets : cache.datasets) } };
@@ -484,6 +563,7 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
       let networkAttempted = false;
       let changed = false;
       let stopError = null;
+      let localBudgetDay = null;
       const attemptedDatasetKeys = [], collectedDatasetKeys = [];
       for (const definition of selectedDefinitions) {
         try {
@@ -514,8 +594,14 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
           changed = true;
         } catch (error) {
           const safe = publicError(error);
-          if (["AUTH_ERROR", "QUOTA_EXCEEDED", "TIMEOUT", "NETWORK_ERROR", "EVIDENCE_WRITE_ERROR"].includes(safe.code)) stopError = problem(safe.code);
-          outcomes.push({ ...(cache.datasets[definition.key] || emptyDataset(definition)), status: cache.datasets[definition.key] ? "stale" : safe.code === "MAPPING_MISSING" ? "mapping_missing" : "error", error: safe });
+          const admittedBudgetDay = localBudgetDayOf(error);
+          if (admittedBudgetDay) localBudgetDay = admittedBudgetDay;
+          if (["AUTH_ERROR", "QUOTA_EXCEEDED", "TIMEOUT", "NETWORK_ERROR", "EVIDENCE_WRITE_ERROR"].includes(safe.code)) {
+            stopError = problem(safe.code);
+            if (admittedBudgetDay) Object.assign(stopError, { localBudgetDay: admittedBudgetDay, [LOCAL_BUDGET]: true });
+          }
+          outcomes.push({ ...(cache.datasets[definition.key] || emptyDataset(definition)), status: cache.datasets[definition.key] ? "stale" : safe.code === "MAPPING_MISSING" ? "mapping_missing" : "error", error: safe,
+            ...(admittedBudgetDay ? { localBudgetDay: admittedBudgetDay } : {}) });
         }
       }
       if (changed) {
@@ -531,7 +617,8 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
       }
       attempt.finishedAt = iso();
       attempt.outcomes = { ...(marketMissingOnly ? previousAttempt?.outcomes || {} : {}),
-        ...Object.fromEntries(outcomes.map(dataset => [dataset.key, { status: dataset.status, error: dataset.error || null }])) };
+        ...Object.fromEntries(outcomes.map(dataset => [dataset.key, { status: dataset.status, error: dataset.error || null,
+          ...(dataset.error?.code === "QUOTA_EXCEEDED" && validDay(dataset.localBudgetDay) ? { localBudgetDay: dataset.localBudgetDay } : {}) }])) };
       try { await atomic(attemptFile(region), attempt); }
       catch (error) { lastError = publicError(error); return present(region, staged, true, { status: "error", networkAttempted, error: lastError,
         ...(marketMissingOnly ? { marketCollection: report({ status: "blocked", attemptedDatasetKeys, networkAttempted, changed, stopReason: lastError.code }) } : {}) }); }
@@ -544,7 +631,8 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
         return { ...value, networkAttempted, marketCollection: report({
           status: stopError ? "blocked" : remainingPlan.every(item => item.status === "available") ? "complete" : "partial",
           attemptedDatasetKeys, collectedDatasetKeys, remaining: remainingPlan.filter(item => item.status !== "available"),
-          changed, networkAttempted, stopReason: stopError?.code || errors.find(error => !["NO_DATA", "MISSING_VALUES"].includes(error.code))?.code || null }) };
+          changed, networkAttempted, stopReason: stopError?.code || errors.find(error => !["NO_DATA", "MISSING_VALUES"].includes(error.code))?.code || null,
+          localBudgetExhausted: localBudgetDay !== null, budgetDay: localBudgetDay }) };
       }
       return present(region, staged, true, { datasets: outcomes, networkAttempted, lastAttemptAt: attempt.startedAt, lastAttemptFinishedAt: attempt.finishedAt, status: allReady ? "ready" : outcomes.every(dataset => dataset.status === "mapping_missing") ? "mapping_missing" : outcomes.some(dataset => ["ready", "stale", "partial"].includes(dataset.status)) ? "partial" : "error", error: errors[0] || null });
     })();
@@ -552,7 +640,7 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
     try { return await run; } finally { flights.delete(region.regionId); }
   }
   async function refreshRegion(regionKey) { return refreshSelected(regionKey, false); }
-  async function refreshMissingMarketRegion(regionKey) { return refreshSelected(regionKey, true); }
+  async function refreshMissingMarketRegion(regionKey, options = {}) { return refreshSelected(regionKey, true, options); }
   async function status() {
     const configured = Boolean(await key());
     let cachedRegionCount = 0;

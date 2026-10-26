@@ -61,6 +61,10 @@ const { createRegionalMarketMissingHttpHandler } = require("./lib/regional_marke
 const { registeredMarketTargets } = require("./lib/regional_market_targets.cjs");
 const { createRegionalMarketMissingWeeklyScheduler } = require("./lib/regional_market_missing_weekly.cjs");
 const { createRegionalMarketMissingWeeklyHttpHandler } = require("./lib/regional_market_missing_weekly_http.cjs");
+const { createRegionalMarketBootstrapService } = require("./lib/regional_market_bootstrap.cjs");
+const { createRegionalMarketBootstrapInputs, BASELINE: regionalMarketBootstrapBaseline } = require("./lib/regional_market_bootstrap_inputs.cjs");
+const { createRegionalMarketBootstrapHttpHandler } = require("./lib/regional_market_bootstrap_http.cjs");
+const { createSavedRegionalMarketProjector } = require("./lib/regional_market_projection.cjs");
 const { addressRegion } = require("./lib/company_address_basis.cjs");
 const { createCatchmentAddressDirectory } = require("./lib/catchment_address_directory.cjs");
 const { createRegionalCatchmentHttpHandler } = require("./lib/regional_catchment_http.cjs");
@@ -596,6 +600,7 @@ const handleRegionalMarket = createRegionalMarketHttpHandler({
 });
 // Explicit administrator commands and an independently enabled weekly clock
 // share this one service. Neither enables the tourism/search collection policy.
+const projectSavedRegionalMarket = createSavedRegionalMarketProjector({ analysisStore: regionalAnalysisStore, marketService: regionalMarketService });
 const regionalMarketMissing = createRegionalMarketMissingService({
   dataDir: DATA_DIR,
   readTargets: async () => {
@@ -603,22 +608,36 @@ const regionalMarketMissing = createRegionalMarketMissingService({
     return registeredMarketTargets(companies, regions);
   },
   resolveRegion: resolveRegionalReportRegion, kosisService,
-  onRegionChanged: async (regionKey, summary) => {
-    if (!summary.changed && (await regionalMarketService.get({ regionKey })).status !== "missing") return;
-    await regionalAnalysisStore.request({ regionKey, months: 13 }, { collectMissing: false, reason: "source_changed" });
-    await regionalAnalysisStore.waitForIdle();
-    const projected = await regionalAnalysisStore.get({ regionKey, months: 13 });
-    if (!projected.snapshot || projected.storage?.errorCode || projected.job?.status === "failed") throw Error("CACHE_PROJECTION_FAILED");
+  onRegionChanged: projectSavedRegionalMarket
+});
+const regionalMarketBootstrapInputs = createRegionalMarketBootstrapInputs({ dataDir: DATA_DIR });
+const regionalMarketBootstrap = createRegionalMarketBootstrapService({
+  dataDir: DATA_DIR, ...regionalMarketBootstrapInputs, expectedBaseline: regionalMarketBootstrapBaseline,
+  resolveRegion: resolveRegionalReportRegion, kosisService,
+  onRegionChanged: projectSavedRegionalMarket,
+  canRun: async () => {
+    const current = await regionalMarketMissing.get();
+    const allowed = current.job?.id === regionalMarketBootstrapBaseline.jobId && current.job.status === "blocked" && current.job.stopReason === "QUOTA_EXCEEDED";
+    return { allowed, reasonCode: allowed ? null : "WEEKLY_JOB_IN_PROGRESS_OR_UNVERIFIED" };
   }
 });
+const weeklyMarketAdmission = async () => {
+  const current = await regionalMarketBootstrap.get();
+  const allowed = ["unconfigured", "complete"].includes(current.phase);
+  return { allowed, reasonCode: allowed ? null : "BOOTSTRAP_IN_PROGRESS" };
+};
 const handleRegionalMarketMissing = createRegionalMarketMissingHttpHandler({
-  service: regionalMarketMissing, requireAdmin: requireAdminSession, parseJsonBody, send,
+  service: regionalMarketMissing, canRun: weeklyMarketAdmission, requireAdmin: requireAdminSession, parseJsonBody, send,
   rateLimit: (req, session) => assertRequestRateLimit(req, "adminRegionalMarketMissing", { limit: 4, windowMs: 60 * 60 * 1000 }, session.username || "")
 });
-const regionalMarketMissingWeekly = createRegionalMarketMissingWeeklyScheduler({ dataDir: DATA_DIR, missingService: regionalMarketMissing });
+const regionalMarketMissingWeekly = createRegionalMarketMissingWeeklyScheduler({ dataDir: DATA_DIR, missingService: regionalMarketMissing, canRun: weeklyMarketAdmission });
 const handleRegionalMarketMissingWeekly = createRegionalMarketMissingWeeklyHttpHandler({
   service: regionalMarketMissingWeekly, requireAdmin: requireAdminSession, parseJsonBody, send,
   rateLimit: (req, session) => assertRequestRateLimit(req, "adminRegionalMarketMissingWeekly", { limit: 4, windowMs: 60 * 60 * 1000 }, session.username || "")
+});
+const handleRegionalMarketBootstrap = createRegionalMarketBootstrapHttpHandler({
+  service: regionalMarketBootstrap, requireAdmin: requireAdminSession, parseJsonBody, send,
+  rateLimit: (req, session) => assertRequestRateLimit(req, "adminRegionalMarketBootstrap", { limit: 4, windowMs: 60 * 60 * 1000 }, session.username || "")
 });
 const handleRegionalOutlook = createRegionalAnalysisHttpHandler({
   basePath: "/api/regional-outlook", allowPolicy: false, service: regionalOutlookService,
@@ -19416,6 +19435,7 @@ async function route(req, res) {
     if (await handleRegionalMarket(req, res, reqUrl, session)) return;
     if (await handleRegionalMarketMissing(req, res, reqUrl, session)) return;
     if (await handleRegionalMarketMissingWeekly(req, res, reqUrl, session)) return;
+    if (await handleRegionalMarketBootstrap(req, res, reqUrl, session)) return;
     if (await handleRegionalCatchment(req, res, reqUrl, session)) return;
     if (await handleRegionalOutlook(req, res, reqUrl, session)) return;
     if (await handleRegionalOutlookValidation(req, res, reqUrl, session)) return;
@@ -20650,6 +20670,7 @@ seedOutputsFromRepo()
       const primaryUrl = HOST === "0.0.0.0" ? `http://127.0.0.1:${PORT}` : `http://${HOST}:${PORT}`;
       console.log(`Lodging datalab beta app running at ${primaryUrl}`);
       regionalMarketMissingWeekly.start();
+      regionalMarketBootstrap.start();
       companyIntegratedDb.bootstrap().catch(error => console.error("company_integration_bootstrap_failed", error.code || "unavailable"));
       industryAnalysisService.bootstrap().catch(error => console.error("industry_analysis_bootstrap_failed", error.code || "unavailable"));
       if (HOST === "0.0.0.0") {

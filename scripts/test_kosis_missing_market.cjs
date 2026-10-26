@@ -147,7 +147,7 @@ test("persisted shared KOSIS daily budget applies to missing-only acquisition an
   assert.equal(f.calls.length, 3); assert.equal(first.marketCollection.stopReason, "QUOTA_EXCEEDED");
   const budget = JSON.parse(await fs.readFile(path.join(f.dataDir, "request-budget.json"), "utf8")); assert.equal(budget.count, 3);
   f.advance(300001); const result = await f.restart().refreshMissingMarketRegion(REGION);
-  assert.equal(result.marketCollection.stopReason, null); assert.equal(result.marketCollection.status, "blocked"); assert.equal(f.calls.length, 3);
+  assert.equal(result.marketCollection.stopReason, "QUOTA_EXCEEDED"); assert.equal(result.marketCollection.status, "blocked"); assert.equal(f.calls.length, 3);
   assert.ok(result.marketCollection.remaining.every(item => item.reasonCode === "QUOTA_EXCEEDED"));
   const otherRegion = "kr_gyeonggi_yangju";
   await fs.writeFile(f.regionMasterFile, JSON.stringify({ units: [...units, { ...units[1], regionKey: otherRegion, regionId: "kr_admin_4163000000", name: "양주시", fullName: "경기도 양주시" }] }));
@@ -202,4 +202,138 @@ test("provider no-data remains absent with null values and is eligible at the ne
   assert.ok(first.datasets.every(dataset => !dataset.rows.length)); assert.equal(f.calls.length, 6);
   f.advance(7 * 86400000); f.setProvider((url, definition) => reply(url.searchParams.get("method") === "getMeta" ? metadata(definition) : rows(definition)));
   assert.equal((await f.service.refreshMissingMarketRegion(REGION)).marketCollection.status, "complete"); assert.equal(f.calls.length, 18);
+});
+
+test("local budget admission markers survive restart and only missing tables resume on later KST days", async t => {
+  const f = await fixture(t, { dailyBudget: 4 }), first = await f.service.refreshMissingMarketRegion(REGION);
+  assert.equal(first.marketCollection.localBudgetExhausted, true); assert.equal(first.marketCollection.budgetDay, "2026-09-26");
+  assert.deepEqual(first.marketCollection.collectedDatasetKeys, ["population", "households"]); assert.equal(f.calls.length, 4);
+  const good = JSON.parse(await fs.readFile(f.cacheFile, "utf8")).datasets;
+  const attempt = JSON.parse(await fs.readFile(f.attemptFile, "utf8"));
+  for (const key of MARKET_METRICS.slice(2).map(item => item.datasetKey)) assert.equal(attempt.outcomes[key].localBudgetDay, "2026-09-26");
+  const frozen = await tree(f.dataDir), sameDay = await f.restart().refreshMissingMarketRegion(REGION);
+  assert.equal(sameDay.marketCollection.localBudgetExhausted, true); assert.equal(sameDay.marketCollection.budgetDay, "2026-09-26");
+  assert.equal(sameDay.marketCollection.stopReason, "QUOTA_EXCEEDED", "only typed current-day local protection is a global stop; legacy unmarked quota stays a local hold");
+  assert.equal(f.calls.length, 4); assert.deepEqual(await tree(f.dataDir), frozen);
+  f.advance(15 * 3600000); const second = await f.restart().refreshMissingMarketRegion(REGION);
+  assert.equal(second.marketCollection.budgetDay, "2026-09-27"); assert.equal(second.marketCollection.localBudgetExhausted, true);
+  assert.deepEqual(second.marketCollection.attemptedDatasetKeys, ["establishments", "employment"]); assert.equal(f.calls.length, 8);
+  f.advance(86400000); const third = await f.restart().refreshMissingMarketRegion(REGION);
+  assert.equal(third.marketCollection.status, "complete"); assert.equal(third.marketCollection.localBudgetExhausted, false); assert.equal(third.marketCollection.budgetDay, null);
+  assert.deepEqual(third.marketCollection.attemptedDatasetKeys, ["manufacturing_establishments", "manufacturing_employment"]); assert.equal(f.calls.length, 12);
+  const after = JSON.parse(await fs.readFile(f.cacheFile, "utf8")).datasets;
+  assert.deepEqual(after.population, good.population); assert.deepEqual(after.households, good.households);
+});
+
+test("a metadata-only local-budget interruption is not reported as a completed table or provider quota", async t => {
+  const f = await fixture(t, { dailyBudget: 1 }), first = await f.service.refreshMissingMarketRegion(REGION);
+  assert.deepEqual(f.calls.map(item => item.method), ["getMeta"]); assert.deepEqual(first.marketCollection.attemptedDatasetKeys, ["population"]);
+  assert.deepEqual(first.marketCollection.collectedDatasetKeys, []); assert.equal(first.marketCollection.changed, false);
+  assert.equal(first.marketCollection.localBudgetExhausted, true); assert.equal(first.marketCollection.budgetDay, "2026-09-26");
+  const before = await tree(f.dataDir); await f.restart().refreshMissingMarketRegion(REGION); assert.equal(f.calls.length, 1); assert.deepEqual(await tree(f.dataDir), before);
+  f.advance(15 * 3600000); const next = await f.restart().refreshMissingMarketRegion(REGION);
+  assert.deepEqual(f.calls.map(item => item.method), ["getMeta", "getMeta"]); assert.equal(next.marketCollection.budgetDay, "2026-09-27");
+  assert.deepEqual(next.marketCollection.collectedDatasetKeys, []); assert.ok(next.datasets.every(dataset => dataset.rows.length === 0));
+});
+
+test("provider HTTP 429 and provider quota codes never receive local-budget tags or resume next day", async t => {
+  for (const provider of [() => reply({}, 429), ...["40", "41", "42"].map(err => () => reply({ err, localBudgetDay: "2026-09-26" }))]) await t.test(String(provider), async t => {
+    const f = await fixture(t, { provider }), first = await f.service.refreshMissingMarketRegion(REGION);
+    assert.equal(first.marketCollection.stopReason, "QUOTA_EXCEEDED"); assert.equal(first.marketCollection.localBudgetExhausted, false); assert.equal(first.marketCollection.budgetDay, null);
+    const attempt = JSON.parse(await fs.readFile(f.attemptFile, "utf8")); assert.ok(Object.values(attempt.outcomes).every(item => !Object.hasOwn(item, "localBudgetDay")));
+    f.advance(86400000); const before = await tree(f.dataDir), result = await f.restart().refreshMissingMarketRegion(REGION);
+    assert.equal(result.marketCollection.status, "blocked"); assert.equal(result.marketCollection.localBudgetExhausted, false); assert.equal(f.calls.length, 1); assert.deepEqual(await tree(f.dataDir), before);
+  });
+});
+
+test("invalid, future and non-quota local-budget markers fail closed without requests or rewrites", async t => {
+  for (const alteration of [item => { item.localBudgetDay = "2026-02-30"; }, item => { item.localBudgetDay = "2026-09-27"; },
+    item => { item.localBudgetDay = "2026-09-26"; item.error = { code: "AUTH_ERROR" }; }]) await t.test(String(alteration), async t => {
+    const f = await fixture(t, { dailyBudget: 1 }); await f.service.refreshMissingMarketRegion(REGION);
+    const attempt = JSON.parse(await fs.readFile(f.attemptFile, "utf8")); alteration(attempt.outcomes.population); await fs.writeFile(f.attemptFile, JSON.stringify(attempt));
+    const before = await tree(f.dataDir), count = f.calls.length, result = await f.restart().refreshMissingMarketRegion(REGION);
+    assert.equal(result.marketCollection.stopReason, "CACHE_READ_ERROR"); assert.equal(f.calls.length, count); assert.deepEqual(await tree(f.dataDir), before);
+  });
+});
+
+async function legacyReviewFixture(t) {
+  const f = await fixture(t); await f.service.refreshMissingMarketRegion(REGION);
+  const heldKeys = MARKET_METRICS.slice(2).map(item => item.datasetKey);
+  await f.editCache(cache => { for (const key of heldKeys) delete cache.datasets[key]; });
+  const attempt = JSON.parse(await fs.readFile(f.attemptFile, "utf8"));
+  for (const key of heldKeys) attempt.outcomes[key] = { status: "error", error: { code: "QUOTA_EXCEEDED" } };
+  await fs.writeFile(f.attemptFile, JSON.stringify(attempt));
+  const hash = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
+  const review = { schemaVersion: 1, kind: "diagnosed_local_budget", regionKey: REGION,
+    attemptSha256: hash(await fs.readFile(f.attemptFile)), cacheSha256: hash(await fs.readFile(f.cacheFile)), datasetKeys: heldKeys,
+    earliestKstDay: "2026-09-27", sourceJobId: "12345678-1234-4234-8234-123456789abc", sourceJobSha256: "a".repeat(64), reviewReceiptSha256: "b".repeat(64) };
+  return { ...f, heldKeys, review };
+}
+
+test("an exact legacy four-table review is next-day-only, one-use, and preserves the two good dataset objects", async t => {
+  const f = await legacyReviewFixture(t), options = { allowedDatasetKeys: f.heldKeys, budgetResumeReview: f.review }, before = await tree(f.dataDir), count = f.calls.length;
+  const early = await f.service.refreshMissingMarketRegion(REGION, options);
+  assert.equal(early.marketCollection.stopReason, "BUDGET_REVIEW_NOT_DUE"); assert.equal(early.marketCollection.budgetResumeReviewApplied, false); assert.deepEqual(await tree(f.dataDir), before);
+  const good = JSON.parse(await fs.readFile(f.cacheFile, "utf8")).datasets;
+  f.advance(15 * 3600000); const result = await f.restart().refreshMissingMarketRegion(REGION, options);
+  assert.equal(result.marketCollection.status, "complete"); assert.equal(result.marketCollection.budgetResumeReviewApplied, true);
+  assert.deepEqual(result.marketCollection.attemptedDatasetKeys, f.heldKeys); assert.deepEqual(f.calls.slice(count).map(item => item.datasetKey), f.heldKeys.flatMap(key => [key, key]));
+  const after = JSON.parse(await fs.readFile(f.cacheFile, "utf8")).datasets; assert.deepEqual(after.population, good.population); assert.deepEqual(after.households, good.households);
+  const completed = await tree(f.dataDir), replay = await f.restart().refreshMissingMarketRegion(REGION, options);
+  assert.equal(replay.marketCollection.stopReason, "BUDGET_REVIEW_CHANGED"); assert.equal(replay.marketCollection.budgetResumeReviewApplied, false); assert.deepEqual(await tree(f.dataDir), completed);
+});
+
+test("a review is consumed after the new attempt is durable even if today's local budget rejects all provider calls", async t => {
+  const f = await legacyReviewFixture(t); f.advance(15 * 3600000);
+  await fs.writeFile(path.join(f.dataDir, "request-budget.json"), JSON.stringify({ day: "2026-09-27", count: 100 }));
+  const count = f.calls.length, result = await f.restart().refreshMissingMarketRegion(REGION, { allowedDatasetKeys: f.heldKeys, budgetResumeReview: f.review });
+  assert.equal(result.marketCollection.budgetResumeReviewApplied, true); assert.equal(result.marketCollection.localBudgetExhausted, true);
+  assert.equal(result.marketCollection.budgetDay, "2026-09-27"); assert.equal(result.marketCollection.networkAttempted, false); assert.equal(f.calls.length, count);
+  f.advance(86400000); const next = await f.restart().refreshMissingMarketRegion(REGION, { allowedDatasetKeys: f.heldKeys });
+  assert.equal(next.marketCollection.status, "complete"); assert.deepEqual(next.marketCollection.attemptedDatasetKeys, f.heldKeys); assert.equal(next.marketCollection.budgetResumeReviewApplied, false);
+});
+
+test("review scope, hashes, unknown force knobs and already-valid keys cannot widen the provider dispatch", async t => {
+  const f = await legacyReviewFixture(t); f.advance(15 * 3600000); const count = f.calls.length;
+  const invalid = [
+    { force: true }, { allowedDatasetKeys: ["age_population"] }, { allowedDatasetKeys: ["population", "population"] },
+    { budgetResumeReview: { ...f.review, regionKey: "other" } }, { budgetResumeReview: { ...f.review, attemptSha256: "c".repeat(64) } },
+    { budgetResumeReview: { ...f.review, cacheSha256: "c".repeat(64) } }, { budgetResumeReview: { ...f.review, datasetKeys: ["population"] } },
+    { allowedDatasetKeys: ["establishments"], budgetResumeReview: f.review }, { budgetResumeReview: { ...f.review, earliestKstDay: "2026-09-26" } }
+  ];
+  const before = await tree(f.dataDir);
+  for (const options of invalid) { const result = await f.restart().refreshMissingMarketRegion(REGION, options); assert.equal(result.marketCollection.status, "blocked"); assert.equal(result.marketCollection.budgetResumeReviewApplied, false); }
+  assert.equal(f.calls.length, count); assert.deepEqual(await tree(f.dataDir), before);
+});
+
+test("dispatch allowlists are enforced before requests, and preserved older local markers remain readable", async t => {
+  const f = await fixture(t, { dailyBudget: 4 }); await f.service.refreshMissingMarketRegion(REGION); f.advance(15 * 3600000);
+  const count = f.calls.length, one = await f.restart().refreshMissingMarketRegion(REGION, { allowedDatasetKeys: ["establishments"] });
+  assert.deepEqual(one.marketCollection.attemptedDatasetKeys, ["establishments"]); assert.equal(f.calls.length, count + 2);
+  const read = await f.restart().getRegion(REGION); assert.notEqual(read.error?.code, "CACHE_READ_ERROR");
+  const attempt = JSON.parse(await fs.readFile(f.attemptFile, "utf8")); assert.equal(attempt.outcomes.employment.localBudgetDay, "2026-09-26");
+});
+
+test("an exact review cannot promote unverified or suppressed values or bypass unfinished/authentication holds", async t => {
+  for (const kind of ["unverified", "suppressed", "unfinished", "auth"]) await t.test(kind, async t => {
+    const f = await legacyReviewFixture(t), attempt = JSON.parse(await fs.readFile(f.attemptFile, "utf8"));
+    if (kind === "unverified" || kind === "suppressed") {
+      const history = await fs.readdir(path.join(f.dataDir, "history"));
+      const original = JSON.parse(await fs.readFile(path.join(f.dataDir, "history", history[0]), "utf8"));
+      await f.editCache(cache => { for (const key of f.heldKeys) {
+        const dataset = structuredClone(original.datasets[key]); delete dataset.spatialEvidence; delete dataset.responseEvidence;
+        if (kind === "suppressed") { dataset.status = "partial"; for (const row of dataset.rows) { row.status = "suppressed"; row.value = null; } }
+        cache.datasets[key] = dataset;
+      } });
+    } else if (kind === "unfinished") attempt.finishedAt = null;
+    else for (const key of f.heldKeys) attempt.outcomes[key].error = { code: "AUTH_ERROR" };
+    await fs.writeFile(f.attemptFile, JSON.stringify(attempt));
+    f.review.attemptSha256 = crypto.createHash("sha256").update(await fs.readFile(f.attemptFile)).digest("hex");
+    f.review.cacheSha256 = crypto.createHash("sha256").update(await fs.readFile(f.cacheFile)).digest("hex");
+    f.advance(15 * 3600000); const before = await tree(f.dataDir), count = f.calls.length;
+    const result = await f.restart().refreshMissingMarketRegion(REGION, { allowedDatasetKeys: f.heldKeys, budgetResumeReview: f.review });
+    assert.equal(result.marketCollection.status, "blocked"); assert.equal(result.marketCollection.budgetResumeReviewApplied, false);
+    assert.equal(f.calls.length, count); assert.deepEqual(await tree(f.dataDir), before);
+    if (kind === "unverified" || kind === "suppressed") assert.ok(result.marketCollection.remaining.every(item => item.status === kind));
+  });
 });

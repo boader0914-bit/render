@@ -133,3 +133,66 @@ test("native weekly policy and the real coordinator share one durable job and pr
   assert.notEqual((await missingService.get()).job.id, first.id); assert.equal(calls, 2); assert.equal(hash(await fs.readFile(f.preserved)), f.originalHash);
   assert.deepEqual((await fs.readdir(f.directory)).sort(), ["latest-job.json", "weekly-policy.json"]);
 });
+
+test("active bootstrap holds an enabled weekly policy across reads, concurrent ticks and restart without rewriting weekly evidence", async t => {
+  let allowed = true;
+  const f = await fixture(t, { canRun: async () => ({ allowed }) }); await f.scheduler.configure({ enabled: true });
+  const jobFile = path.join(f.directory, "latest-job.json"), lockFile = path.join(f.directory, "request.lock");
+  await fs.writeFile(jobFile, JSON.stringify({ fixture: "frozen weekly job", nextEligibleAt: "2026-11-02T03:00:00.000Z" })); await fs.writeFile(lockFile, "frozen verification lock");
+  const files = [f.file, jobFile, lockFile], before = await Promise.all(files.map(file => fs.readFile(file)));
+  allowed = false;
+  const restarted = createRegionalMarketMissingWeeklyScheduler(f.options); t.after(() => restarted.close());
+  const statuses = await Promise.all([f.scheduler.get(), restarted.get(), ...Array.from({ length: 5 }, () => f.scheduler.tick()), restarted.tick()]);
+  for (const status of statuses) { assert.equal(status.enabled, true); assert.equal(status.status, "held"); assert.equal(status.reasonCode, "BOOTSTRAP_IN_PROGRESS"); assert.notEqual(status.triggered, true); }
+  assert.equal(f.requests(), 0); assert.deepEqual(await Promise.all(files.map(file => fs.readFile(file))), before); assert.equal(hash(await fs.readFile(f.preserved)), f.originalHash);
+  allowed = true; assert.equal((await f.scheduler.tick()).triggered, true); assert.equal(f.requests(), 1);
+  await f.scheduler.tick(); assert.equal(f.requests(), 1); assert.equal((await f.scheduler.get()).nextEligibleAt, "2026-11-02T03:00:00.000Z");
+  assert.deepEqual(await fs.readFile(jobFile), before[1]); assert.deepEqual(await fs.readFile(lockFile), before[2]);
+});
+
+test("bootstrap activation during the job read is checked again before claiming a calendar week", async t => {
+  let allowed = true, activate = false, requests = 0;
+  const f = await fixture(t, { canRun: async () => ({ allowed }), missingService: {
+    get: async () => { if (activate) allowed = false; return { job: null }; }, request: async () => { requests++; assert.fail("bootstrap must block before weekly claim"); }
+  } });
+  await f.scheduler.configure({ enabled: true }); const before = await fs.readFile(f.file); activate = true;
+  const status = await f.scheduler.tick(); assert.equal(status.status, "held"); assert.equal(status.reasonCode, "BOOTSTRAP_IN_PROGRESS"); assert.equal(status.triggered, false);
+  assert.equal(status.lastAttemptWeek, null); assert.equal(requests, 0); assert.deepEqual(await fs.readFile(f.file), before);
+});
+
+test("unknown or failed bootstrap gates fail closed with 503 and preserve the weekly policy and original lock", async t => {
+  let gate = () => ({ allowed: true }); const f = await fixture(t, { canRun: async () => gate() }); await f.scheduler.configure({ enabled: true });
+  const lockFile = path.join(f.directory, "request.lock"); await fs.writeFile(lockFile, "existing protected lock");
+  const before = await fs.readFile(f.file), lockBefore = await fs.readFile(lockFile);
+  for (const value of [() => undefined, () => null, () => [], () => ({}), () => ({ allowed: 1 }), () => { throw new Error("private credential context"); }]) {
+    gate = value;
+    for (const operation of [() => f.scheduler.get(), () => f.scheduler.tick()]) await assert.rejects(operation(), error => {
+      assert.equal(error.code, "REGIONAL_MARKET_WEEKLY_GATE_UNAVAILABLE"); assert.equal(error.statusCode, 503); assert.equal(error.message.includes("private"), false); return true;
+    });
+    assert.equal(f.requests(), 0); assert.deepEqual(await fs.readFile(f.file), before); assert.deepEqual(await fs.readFile(lockFile), lockBefore);
+  }
+});
+
+test("a disabled weekly policy does not inspect a failed bootstrap gate or create files", async t => {
+  let gates = 0; const f = await fixture(t, { canRun: async () => { gates++; throw new Error("unavailable"); } });
+  assert.equal((await f.scheduler.get()).status, "disabled"); assert.equal((await f.scheduler.tick()).status, "disabled");
+  assert.equal(gates, 0); assert.equal(f.requests(), 0); assert.deepEqual(await fs.readdir(f.dataDir), ["collection-schedule-original.json"]);
+});
+
+test("bootstrap hold never clears an interrupted weekly claim and the original hold returns when bootstrap ends", async t => {
+  let allowed = true; const f = await fixture(t, { canRun: async () => ({ allowed }) }); await f.scheduler.configure({ enabled: true });
+  const policy = JSON.parse(await fs.readFile(f.file)); Object.assign(policy, { lastAttemptWeek: "2026-10-26", lastAttemptAt: MONDAY_NOON, dispatchStatus: "claimed" });
+  await fs.writeFile(f.file, JSON.stringify(policy)); const before = await fs.readFile(f.file); allowed = false;
+  assert.equal((await f.scheduler.tick()).reasonCode, "BOOTSTRAP_IN_PROGRESS"); allowed = true;
+  assert.equal((await f.scheduler.tick()).reasonCode, "WEEKLY_DISPATCH_INTERRUPTED"); assert.equal(f.requests(), 0); assert.deepEqual(await fs.readFile(f.file), before);
+});
+
+test("a bootstrap status failure after acceptance does not relabel the accepted weekly request as failed", async t => {
+  let failedGate = false, requests = 0;
+  const f = await fixture(t, { canRun: async () => { if (failedGate) throw new Error("private gate failure"); return { allowed: true }; }, missingService: {
+    get: async () => ({ job: null }), request: async () => { requests++; failedGate = true; return { reused: false, job: { id: JOB_ID, status: "complete", nextEligibleAt: "2026-11-02T03:00:00.000Z" } }; }
+  } });
+  await f.scheduler.configure({ enabled: true }); await assert.rejects(f.scheduler.tick(), { code: "REGIONAL_MARKET_WEEKLY_GATE_UNAVAILABLE", statusCode: 503 });
+  const policy = JSON.parse(await fs.readFile(f.file)); assert.equal(policy.dispatchStatus, "accepted"); assert.equal(policy.errorCode, null); assert.equal(policy.lastJobId, JOB_ID); assert.equal(requests, 1);
+  const before = await fs.readFile(f.file); failedGate = false; assert.equal((await f.scheduler.tick()).triggered, false); assert.equal(requests, 1); assert.deepEqual(await fs.readFile(f.file), before);
+});
