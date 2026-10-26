@@ -189,6 +189,22 @@ async function main() {
     assert.equal((await request(query, cookie)).data.snapshot.resultId, original.resultId);
     assert.deepEqual(await inventory(), beforeAddressChange, "An address-source change and saved reads cannot mutate catchment evidence");
     assert.equal(sha(await fs.readFile(companyMasterFile)), sha(changedMasterBytes), "Only this test's intentional company A address edit may change the synthetic master");
+    const missingPath = "/api/regional-market/missing-check";
+    assert.equal((await request(missingPath, null)).status, 401);
+    assert.equal((await request(missingPath, cookie)).data.job, null);
+    assert.equal((await request(missingPath, cookie, { force: true })).status, 400);
+    const missingJob = await request(missingPath, cookie, {}); assert.equal(missingJob.status, 202);
+    let missingReceipt;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      missingReceipt = (await request(missingPath, cookie)).data;
+      if (!["queued", "running"].includes(missingReceipt.job?.status)) break;
+      await wait(20);
+    }
+    assert.equal(missingReceipt.job?.status, "blocked"); assert.equal(missingReceipt.job?.stopReason, "MISSING_KEY");
+    assert.equal(missingReceipt.job?.counts.networkAttemptedRegions, 0);
+    assert.equal((await request(missingPath, cookie, {})).data.reused, true);
+    assert.deepEqual(await inventory(), beforeAddressChange, "Missing-statistics job cannot change precise address evidence");
+    assert.equal(sha(await fs.readFile(companyMasterFile)), sha(changedMasterBytes));
     assert.deepEqual(JSON.parse(await fs.readFile(audit, "utf8")), [], "No outbound provider calls");
     console.log(JSON.stringify({ status: "passed", environment: "isolated full app with clearly synthetic cells", protectedValuesPreserved: true,
       savedResultReusedAfterRestart: true, companyAddressScopesSeparated: true, changedAddressBlocksReuse: true, syntheticMasterPreserved: true,

@@ -44,6 +44,14 @@ const DEFINITIONS = Object.freeze([
 const METADATA_ENDPOINT = "https://kosis.kr/openapi/statisticsData.do";
 const DATA_ENDPOINT = "https://kosis.kr/openapi/Param/statisticsParameterData.do";
 const MAX_BODY = 2 * 1024 * 1024;
+// The default administrative market uses six totals. Age/sex breakdowns are
+// outside a missing-only market check and must never trigger provider work.
+const MARKET_METRICS = Object.freeze([
+  ["population", "population"], ["households", "registered_households"],
+  ["establishments", "establishments"], ["employment", "employees"],
+  ["manufacturing_establishments", "manufacturing_establishments"],
+  ["manufacturing_employment", "manufacturing_employees"]
+].map(([datasetKey, metricKey]) => Object.freeze({ datasetKey, metricKey })));
 const MESSAGES = Object.freeze({
   MISSING_KEY: "Render 환경변수 KOSIS_API_KEY를 설정해 주세요.",
   INVALID_REGION: "조회할 행정지역을 확인해 주세요.",
@@ -177,7 +185,7 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
     const province = master.units.find(candidate => candidate.regionId === unit.provinceRegionId && candidate.active === true);
     return { regionKey, canonicalRegionKey: unit.regionKey, regionId: unit.regionId, name: unit.name, fullName: unit.fullName || unit.name, level: unit.level, sidoFull: unit.sidoFull || null, provinceName: province?.name || unit.sidoFull || null };
   }
-  async function readCache(region) {
+  async function readCache(region, { preserveStoredDatasets = false } = {}) {
     try {
       const cache = JSON.parse(await fs.readFile(cacheFile(region), "utf8"));
       if (cache.version !== 1 || cache.regionId !== region.regionId || !cache.datasets || typeof cache.datasets !== "object") throw problem("CACHE_READ_ERROR");
@@ -208,7 +216,8 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
         if (item.responseEvidence !== undefined) normalized.responseEvidence = publicEvidenceReference(item.responseEvidence) || { status: "invalid" };
         datasets[definition.key] = normalized;
       }
-      return { version: 1, regionId: region.regionId, datasets };
+      return { version: 1, regionId: region.regionId, datasets,
+        ...(preserveStoredDatasets ? { storedDatasets: structuredClone(cache.datasets) } : {}) };
     } catch (error) { return { version: 1, regionId: region.regionId, datasets: {}, readError: error.code === "ENOENT" ? null : publicError(problem("CACHE_READ_ERROR")) }; }
   }
   async function readAttempt(region) {
@@ -394,35 +403,88 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
     }
     catch (error) { return { configured, status: "mapping_missing", region: { regionKey }, datasets: DEFINITIONS.map(emptyDataset), networkAttempted: false, error: publicError(error) }; }
   }
-  async function refreshRegion(regionKey) {
+  async function missingMarketPlan(region, cache, previousAttempt) {
+    const regionError = cache.readError?.code || previousAttempt?.readError?.code
+      || (previousAttempt && !previousAttempt.finishedAt ? "REFRESH_INCOMPLETE" : null);
+    const plan = [];
+    for (const spec of MARKET_METRICS) {
+      let status = "missing", reasonCode = "NOT_COLLECTED";
+      const dataset = cache.datasets[spec.datasetKey], outcome = previousAttempt?.outcomes?.[spec.datasetKey];
+      const outcomeError = outcome?.error?.code;
+      if (regionError) { status = "blocked"; reasonCode = regionError; }
+      else if (dataset?.retrievedAt && Date.parse(dataset.retrievedAt) > at()) { status = "blocked"; reasonCode = "PERIOD_MISMATCH"; }
+      else if (outcomeError && !["NO_DATA", "MISSING_VALUES"].includes(outcomeError)
+        && (!dataset?.retrievedAt || dataset.retrievedAt <= (previousAttempt.finishedAt || previousAttempt.startedAt))) {
+        status = "blocked"; reasonCode = outcomeError;
+      } else if (dataset) {
+        const definition = DEFINITIONS.find(item => item.key === spec.datasetKey);
+        const inspected = await restoreDatasetEvidence(dataset, region);
+        const row = inspected.rows.find(item => item.key === spec.metricKey && item.unit === definition.metrics.find(metric => metric.key === spec.metricKey).unit);
+        const proof = inspected.spatialEvidence?.storedProvenance;
+        const verified = inspected.storedEvidenceVerification?.status === "restored"
+          && validStoredProvenance(proof, inspected);
+        if (row?.status === "suppressed") { status = "suppressed"; reasonCode = "SUPPRESSED"; }
+        else if (!verified) { status = "unverified"; reasonCode = inspected.storedEvidenceVerification?.reasonCode || "RAW_RESPONSE_NOT_RETAINED"; }
+        else if (row?.status === "observed" && Number.isSafeInteger(row.value) && row.value >= 0) { status = "available"; reasonCode = ""; }
+        else if (row?.status === "missing") { status = "missing"; reasonCode = "MISSING_VALUES"; }
+        else { status = "blocked"; reasonCode = "INVALID_RESPONSE"; }
+      }
+      plan.push({ ...spec, status, reasonCode });
+    }
+    return plan;
+  }
+  function marketReport(plan, changes = {}) {
+    const skipped = plan.filter(item => item.status !== "missing");
+    const remaining = plan.filter(item => item.status !== "available");
+    return { schemaVersion: 1, mode: "missing_only", status: remaining.length ? "blocked" : "not_needed",
+      eligibleDatasetKeys: plan.filter(item => item.status === "missing").map(item => item.datasetKey),
+      attemptedDatasetKeys: [], collectedDatasetKeys: [], skipped, remaining,
+      changed: false, networkAttempted: false, stopReason: null, ...changes };
+  }
+  async function refreshSelected(regionKey, marketMissingOnly = false) {
     const apiKey = await key();
     let region;
     try { region = await regionFor(regionKey); }
-    catch (error) { return { ...(await getRegion(regionKey)), error: publicError(error) }; }
+    catch (error) { return { ...(await getRegion(regionKey)), error: publicError(error),
+      ...(marketMissingOnly ? { marketCollection: marketReport([], { status: "blocked", stopReason: publicError(error).code }) } : {}) }; }
+    if (marketMissingOnly && (region.level !== "local" || region.regionKey !== region.canonicalRegionKey)) {
+      return { ...(await getRegion(regionKey)), error: publicError(problem("INVALID_REGION")),
+        marketCollection: marketReport([], { status: "blocked", stopReason: "INVALID_REGION" }) };
+    }
     if (flights.has(region.regionId)) {
       const result = await flights.get(region.regionId);
-      return { ...result, region };
+      return { ...result, region, ...(marketMissingOnly ? { marketCollection: marketReport([], { status: "shared_inflight" }) } : {}) };
     }
     const run = (async () => {
-      const cache = await readCache(region);
-      if (!apiKey) return present(region, cache, false, { status: "needs_key", error: publicError(problem("MISSING_KEY")) });
+      const cache = await readCache(region, { preserveStoredDatasets: marketMissingOnly });
       const previousAttempt = await readAttempt(region);
-      if (previousAttempt?.readError) return present(region, cache, true, { status: "error", error: previousAttempt.readError });
+      const plan = marketMissingOnly ? await missingMarketPlan(region, cache, previousAttempt) : null;
+      const selectedDefinitions = marketMissingOnly ? DEFINITIONS.filter(definition => plan.some(item => item.datasetKey === definition.key && item.status === "missing")) : DEFINITIONS;
+      const report = changes => marketReport(plan || [], changes);
+      if (marketMissingOnly && !selectedDefinitions.length) return { ...withAttempt(present(region, cache, Boolean(apiKey)), previousAttempt),
+        marketCollection: report({ stopReason: plan.find(item => item.status === "blocked")?.reasonCode || null }) };
+      if (!apiKey) return present(region, cache, false, { status: "needs_key", error: publicError(problem("MISSING_KEY")),
+        ...(marketMissingOnly ? { marketCollection: report({ status: "blocked", stopReason: "MISSING_KEY" }) } : {}) });
+      if (previousAttempt?.readError) return present(region, cache, true, { status: "error", error: previousAttempt.readError,
+        ...(marketMissingOnly ? { marketCollection: report({ status: "blocked", stopReason: previousAttempt.readError.code }) } : {}) });
       const previousStart = Math.max(attempts.get(region.regionId) || -Infinity, previousAttempt?.startedAt ? Date.parse(previousAttempt.startedAt) : -Infinity);
-      if (at() - previousStart < Math.max(0, cooldownMs)) return { ...withAttempt(present(region, cache, true), previousAttempt), status: "cooldown", error: publicError(problem("COOLDOWN")) };
+      if (at() - previousStart < Math.max(0, cooldownMs)) return { ...withAttempt(present(region, cache, true), previousAttempt), status: "cooldown", error: publicError(problem("COOLDOWN")),
+        ...(marketMissingOnly ? { marketCollection: report({ status: "blocked", stopReason: "COOLDOWN" }) } : {}) };
       attempts.set(region.regionId, at());
       const attempt = { version: 1, regionId: region.regionId, startedAt: iso(), finishedAt: null, outcomes: {} };
       try { await atomic(attemptFile(region), attempt); }
-      catch (error) { return present(region, cache, true, { status: "error", error: publicError(error) }); }
-      const staged = { version: 1, regionId: region.regionId, datasets: { ...cache.datasets } };
+      catch (error) { return present(region, cache, true, { status: "error", error: publicError(error),
+        ...(marketMissingOnly ? { marketCollection: report({ status: "blocked", stopReason: publicError(error).code }) } : {}) }); }
+      const staged = { version: 1, regionId: region.regionId, datasets: { ...(marketMissingOnly ? cache.storedDatasets || cache.datasets : cache.datasets) } };
       const outcomes = [];
       let networkAttempted = false;
       let changed = false;
       let stopError = null;
-      for (const definition of DEFINITIONS) {
+      const attemptedDatasetKeys = [], collectedDatasetKeys = [];
+      for (const definition of selectedDefinitions) {
         try {
           if (stopError) throw stopError;
-          const meta = await request({ method: "getMeta", type: "ITM", orgId: definition.orgId, tblId: definition.tableId }, apiKey, () => { networkAttempted = true; });
+          const meta = await request({ method: "getMeta", type: "ITM", orgId: definition.orgId, tblId: definition.tableId }, apiKey, () => { networkAttempted = true; attemptedDatasetKeys.push(definition.key); });
           const mapping = mapRegion(meta, definition, region);
           const data = await request({ method: "getList", orgId: definition.orgId, tblId: definition.tableId, itmId: definition.metrics.map(metric => metric.id).join("+") + "+", objL1: mapping.code, ...(definition.breakdowns ? { objL2: definition.breakdowns.map(item => item.id).join("+") + "+" } : {}), prdSe: definition.periodType, newEstPrdCnt: 1, smblChk: "Y" }, apiKey, () => { networkAttempted = true; });
           const dataset = normalizeData(data, definition, mapping, iso(), region);
@@ -444,6 +506,7 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
           }
           staged.datasets[definition.key] = dataset;
           outcomes.push(dataset);
+          collectedDatasetKeys.push(definition.key);
           changed = true;
         } catch (error) {
           const safe = publicError(error);
@@ -456,23 +519,36 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
         catch (error) {
           lastError = publicError(error);
           attempt.finishedAt = iso();
-          attempt.outcomes = Object.fromEntries(DEFINITIONS.map(definition => [definition.key, { status: "error", error: lastError }]));
+          attempt.outcomes = Object.fromEntries(selectedDefinitions.map(definition => [definition.key, { status: "error", error: lastError }]));
           await atomic(attemptFile(region), attempt).catch(() => {});
-          return present(region, cache, true, { status: "error", networkAttempted, error: lastError });
+          return present(region, cache, true, { status: "error", networkAttempted, error: lastError,
+            ...(marketMissingOnly ? { marketCollection: report({ status: "blocked", attemptedDatasetKeys, networkAttempted, stopReason: lastError.code }) } : {}) });
         }
       }
       attempt.finishedAt = iso();
-      attempt.outcomes = Object.fromEntries(outcomes.map(dataset => [dataset.key, { status: dataset.status, error: dataset.error || null }]));
+      attempt.outcomes = { ...(marketMissingOnly ? previousAttempt?.outcomes || {} : {}),
+        ...Object.fromEntries(outcomes.map(dataset => [dataset.key, { status: dataset.status, error: dataset.error || null }])) };
       try { await atomic(attemptFile(region), attempt); }
-      catch (error) { lastError = publicError(error); return present(region, staged, true, { status: "error", networkAttempted, error: lastError }); }
+      catch (error) { lastError = publicError(error); return present(region, staged, true, { status: "error", networkAttempted, error: lastError,
+        ...(marketMissingOnly ? { marketCollection: report({ status: "blocked", attemptedDatasetKeys, networkAttempted, changed, stopReason: lastError.code }) } : {}) }); }
       const errors = outcomes.filter(dataset => dataset.error).map(dataset => dataset.error);
       lastError = errors[0] || null;
       const allReady = outcomes.every(dataset => dataset.status === "ready");
+      if (marketMissingOnly) {
+        const finalCache = await readCache(region), remainingPlan = await missingMarketPlan(region, finalCache, attempt);
+        const value = await getRegion(regionKey, { restoreStoredEvidence: true });
+        return { ...value, networkAttempted, marketCollection: report({
+          status: stopError ? "blocked" : remainingPlan.every(item => item.status === "available") ? "complete" : "partial",
+          attemptedDatasetKeys, collectedDatasetKeys, remaining: remainingPlan.filter(item => item.status !== "available"),
+          changed, networkAttempted, stopReason: stopError?.code || errors.find(error => !["NO_DATA", "MISSING_VALUES"].includes(error.code))?.code || null }) };
+      }
       return present(region, staged, true, { datasets: outcomes, networkAttempted, lastAttemptAt: attempt.startedAt, lastAttemptFinishedAt: attempt.finishedAt, status: allReady ? "ready" : outcomes.every(dataset => dataset.status === "mapping_missing") ? "mapping_missing" : outcomes.some(dataset => ["ready", "stale", "partial"].includes(dataset.status)) ? "partial" : "error", error: errors[0] || null });
     })();
     flights.set(region.regionId, run);
     try { return await run; } finally { flights.delete(region.regionId); }
   }
+  async function refreshRegion(regionKey) { return refreshSelected(regionKey, false); }
+  async function refreshMissingMarketRegion(regionKey) { return refreshSelected(regionKey, true); }
   async function status() {
     const configured = Boolean(await key());
     let cachedRegionCount = 0;
@@ -505,7 +581,7 @@ function createKosisService({ dataDir, readApiKey, regionMasterFile, fetchImpl =
     }
     return { configured, envName: "KOSIS_API_KEY", status: !configured ? "needs_key" : cachedRegionCount ? completeRegionCount === cachedRegionCount && !(lastError || readError) ? "ready" : "partial" : lastError || readError ? "error" : "not_collected", cachedRegionCount, completeRegionCount, datasets: DEFINITIONS.map(publicDefinition), lastSuccessAt, error: lastError || readError, networkAttempted: false, requestPolicy: { minIntervalMs: interval, concurrency: 1, dailyBudget: budgetLimit, cooldownMs: Math.max(0, cooldownMs) } };
   }
-  return { status, getRegion, refreshRegion };
+  return { status, getRegion, refreshRegion, refreshMissingMarketRegion };
 }
 
-module.exports = { createKosisService, DEFINITIONS, parseValue, mapRegion, normalizeData };
+module.exports = { createKosisService, DEFINITIONS, MARKET_METRICS, parseValue, mapRegion, normalizeData };

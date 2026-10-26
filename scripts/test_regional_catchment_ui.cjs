@@ -410,6 +410,21 @@ test("administrative DTO rejects foreign geography or frequency, unsafe result s
   assert.equal(checkedMarketResult(market(), scope()).mode, "administrative_region");
 });
 
+test("weekly command remains explicit and status reads never start a provider job", async () => {
+  const { administrative } = workspaceHost(), calls = [];
+  administrative.slots["[data-rm-missing-receipt]"] = { textContent: "" };
+  const control = createRegionController({ marketReader: createMarketReader(), afterPaint: fn => fn(), fetchJson: async (url, options) => {
+    calls.push({ url, options }); return url.includes("missing-check") ? { job: null } : market();
+  } });
+  await control.mount(administrative, scope());
+  assert.equal(calls.length, 1); assert.ok(calls[0].url.startsWith("/api/regional-market?"));
+  const click = kind => administrative.onclick({ target: { closest: selector => selector === "[data-rm-missing]" ? { getAttribute: () => kind } : null } });
+  click("status"); await tick(); assert.equal(calls[1].url, "/api/regional-market/missing-check"); assert.equal(calls[1].options, undefined);
+  assert.match(administrative.slots["[data-rm-missing-receipt]"].textContent, /아직 주간 확인 이력이 없습니다/);
+  click("collect"); await tick(); assert.equal(calls[2].options.method, "POST"); assert.equal(calls[2].options.body, "{}");
+  control.stop();
+});
+
 test("administrative reader isolates account, region and requested period while deduplicating active reads", async () => {
   const reader = createMarketReader(), waiting = deferred(), urls = [];
   const input = { ...scope({ month: "2026-09", months: 13, companyId: "ignored" }), fetchJson: async url => { urls.push(url); return waiting.promise; } };

@@ -345,13 +345,28 @@
   const savedMarkets = createMarketReader();
   function createRegionController({ marketReader = savedMarkets, fetchJson = defaultFetch, afterPaint = fn => typeof root.requestAnimationFrame === "function" ? root.requestAnimationFrame(() => root.requestAnimationFrame(fn)) : queueMicrotask(fn), now = () => typeof root.performance?.now === "function" ? root.performance.now() : Date.now() } = {}) {
     let host, context = {}, revision = 0, paused = true;
-    const state = { result: null, loading: false, error: "", displaySequence: 0 };
+    const state = { result: null, loading: false, error: "", displaySequence: 0, missingBusy: false, missingMessage: "" };
     const visible = () => !paused && host?.isConnected !== false && (context.isVisible?.() ?? true);
     function render() {
       const slot = host?.querySelector?.("[data-rm-results]"), open = [...(slot?.querySelectorAll?.("details[open][data-rc-detail]") || [])].map(node => node.getAttribute("data-rc-detail"));
       if (slot) { slot.innerHTML = marketResultHtml(state.result, state); for (const key of open) { const detail = slot.querySelector?.(`[data-rc-detail="${key}"]`); if (detail) detail.open = true; } }
       Object.assign(host.dataset, { rcRegion: context.regionKey, rcMode: "administrative_region", rcStatus: marketViewModel(state.result, state).status, rcLoading: String(state.loading), rcSequence: String(state.displaySequence), rcResult: state.result?.source?.resultId || "" });
-      const button = host.querySelector?.('[data-rm-action="status"]'); if (button) button.disabled = state.loading;
+      const button = host.querySelector?.('[data-rm-action="status"]'); if (button) button.disabled = state.loading || state.missingBusy;
+      for (const control of host.querySelectorAll?.('[data-rm-missing]') || []) control.disabled = state.missingBusy;
+      const receipt = host.querySelector?.('[data-rm-missing-receipt]'); if (receipt) receipt.textContent = state.missingMessage;
+    }
+    async function checkMissing(collect) {
+      if (!visible() || state.missingBusy) return;
+      const entry = revision, key = marketKey(context); state.missingBusy = true; state.missingMessage = "주간 누락 확인 상태를 읽고 있습니다."; render();
+      try {
+        const value = await fetchJson(`${MARKET_ENDPOINT}/missing-check`, collect ? { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" } : undefined);
+        if (entry !== revision || !visible() || key !== marketKey(context)) return;
+        const job = value?.job, names = { queued: "대기", running: "확인 중", complete: "완료", partial: "일부 보완·확인 필요", failed: "실행 오류", blocked: "보호·호출 한도 확인 필요", needs_verification: "검수 필요" };
+        if (job && (!names[job.status] || !job.counts || !job.inventory)) throw Error("누락 확인 응답을 검증하지 못했습니다.");
+        const count = job?.counts || {};
+        state.missingMessage = !job ? "아직 주간 확인 이력이 없습니다." : `${names[job.status]} · 대상 ${number(job.inventory.eligibleRegionCount)}개 지역 · 확인 ${number(count.inspectedRegions)}개 · 미확인 ${number(job.inventory.eligibleRegionCount - count.inspectedRegions)}개 · 통계 확보 ${number(count.collectedDatasets)}건 · 확인분 미확보 ${number(count.missingDatasets)}건 · 보류 ${number(count.heldDatasets)}건 · 실행 여부 미확인 ${number(count.unknownAttemptRegions)}개 지역. 시작 ${clock(job.startedAt || job.queuedAt)} · 다음 실행 가능 ${clock(job.nextEligibleAt)}${job.stopReason ? " · 중단 사유는 관리자 검수가 필요합니다." : ""}`;
+      } catch (error) { if (entry === revision && visible()) state.missingMessage = error.message || "누락 확인 상태를 읽지 못했습니다."; }
+      finally { if (entry === revision && visible()) { state.missingBusy = false; render(); } }
     }
     async function load() {
       if (!visible()) return;
@@ -375,11 +390,11 @@
       stop(); host = element; context = { ...input }; if (input.fetchJson) fetchJson = input.fetchJson; paused = false;
       if (!visible()) { stop(); return; }
       state.displaySequence++; state.result = marketReader.read(context); state.error = "";
-      host.innerHTML = `<section class="regional-catchment" aria-label="행정구역 기본 분석"><header class="rc-header"><div><span class="rc-eyebrow">지역 배후시장 · 행정구역 기본 분석</span><h3>${esc(input.regionLabel || input.regionKey)}</h3><p class="rc-muted">지역 선택만으로 공식 저장 기초통계를 확인합니다.</p></div><button type="button" data-rm-action="status">저장자료 다시 확인</button></header><div data-rm-results></div></section>`;
-      host.onclick = event => { if (event.target?.closest?.('[data-rm-action="status"]')) void load(); };
+      host.innerHTML = `<section class="regional-catchment" aria-label="행정구역 기본 분석"><header class="rc-header"><div><span class="rc-eyebrow">지역 배후시장 · 행정구역 기본 분석</span><h3>${esc(input.regionLabel || input.regionKey)}</h3><p class="rc-muted">지역 선택만으로 공식 저장 기초통계를 확인합니다.</p></div><button type="button" data-rm-action="status">저장자료 다시 확인</button></header><div data-rm-results></div><details class="rc-sources"><summary>등록 지역 주간 누락 통계 확인</summary><p>등록 업체 소재지의 기초통계 6개를 확인하고 실제 미확보 표만 보완합니다. 정상 자료·비공개·검증 보류 자료를 덮어쓰지 않습니다. 동일 확인은 7일간 재실행하지 않으며, 관광·검색·예약 수집은 실행하지 않습니다.</p><button type="button" data-rm-missing="collect">등록 지역 누락 통계 확인</button> <button type="button" data-rm-missing="status">최근 누락 확인 결과</button><p role="status" data-rm-missing-receipt></p></details></section>`;
+      host.onclick = event => { if (event.target?.closest?.('[data-rm-action="status"]')) void load(); const control = event.target?.closest?.('[data-rm-missing]'); if (control) void checkMissing(control.getAttribute("data-rm-missing") === "collect"); };
       Object.assign(host.dataset, { rcDisplayStatus: "pending", rcDisplayMs: "", rcReadSource: "" }); await load();
     }
-    function stop() { paused = true; revision++; state.loading = false; if (host?.dataset) host.dataset.rcDisplayStatus = "paused"; }
+    function stop() { paused = true; revision++; state.loading = false; state.missingBusy = false; state.missingMessage = ""; if (host?.dataset) host.dataset.rcDisplayStatus = "paused"; }
     return { mount, stop, state, refreshStatus: load };
   }
   function createWorkspaceController(options = {}) {

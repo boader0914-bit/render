@@ -56,6 +56,8 @@ const { createRegionalAnalysisHttpHandler } = require("./lib/regional_analysis_h
 const { createRegionalCatchmentService } = require("./lib/regional_catchment_store.cjs");
 const { createRegionalMarketService } = require("./lib/regional_market_store.cjs");
 const { createRegionalMarketHttpHandler } = require("./lib/regional_market_http.cjs");
+const { createRegionalMarketMissingService } = require("./lib/regional_market_missing.cjs");
+const { createRegionalMarketMissingHttpHandler } = require("./lib/regional_market_missing_http.cjs");
 const { addressRegion } = require("./lib/company_address_basis.cjs");
 const { createCatchmentAddressDirectory } = require("./lib/catchment_address_directory.cjs");
 const { createRegionalCatchmentHttpHandler } = require("./lib/regional_catchment_http.cjs");
@@ -588,6 +590,24 @@ const handleRegionalCatchment = createRegionalCatchmentHttpHandler({
 });
 const handleRegionalMarket = createRegionalMarketHttpHandler({
   service: regionalMarketService, requireAdmin: requireAdminSession, send
+});
+// Invoked only by an explicit administrator command (including the approved
+// weekly monitor). It never enables the broader tourism/search policy.
+const regionalMarketMissing = createRegionalMarketMissingService({
+  dataDir: DATA_DIR,
+  readTargets: async () => (await monthlyReportSources.targetCatalog({ priority: "background" })).companies.map(company => company.regionKey),
+  resolveRegion: resolveRegionalReportRegion, kosisService,
+  onRegionChanged: async (regionKey, summary) => {
+    if (!summary.changed && (await regionalMarketService.get({ regionKey })).status !== "missing") return;
+    await regionalAnalysisStore.request({ regionKey, months: 13 }, { collectMissing: false, reason: "source_changed" });
+    await regionalAnalysisStore.waitForIdle();
+    const projected = await regionalAnalysisStore.get({ regionKey, months: 13 });
+    if (!projected.snapshot || projected.storage?.errorCode || projected.job?.status === "failed") throw Error("CACHE_PROJECTION_FAILED");
+  }
+});
+const handleRegionalMarketMissing = createRegionalMarketMissingHttpHandler({
+  service: regionalMarketMissing, requireAdmin: requireAdminSession, parseJsonBody, send,
+  rateLimit: (req, session) => assertRequestRateLimit(req, "adminRegionalMarketMissing", { limit: 4, windowMs: 60 * 60 * 1000 }, session.username || "")
 });
 const handleRegionalOutlook = createRegionalAnalysisHttpHandler({
   basePath: "/api/regional-outlook", allowPolicy: false, service: regionalOutlookService,
@@ -19382,6 +19402,7 @@ async function route(req, res) {
     if (await handleRegionalReportPreparation(req, res, reqUrl, session)) return;
     if (await handleRegionalAnalysis(req, res, reqUrl, session)) return;
     if (await handleRegionalMarket(req, res, reqUrl, session)) return;
+    if (await handleRegionalMarketMissing(req, res, reqUrl, session)) return;
     if (await handleRegionalCatchment(req, res, reqUrl, session)) return;
     if (await handleRegionalOutlook(req, res, reqUrl, session)) return;
     if (await handleRegionalOutlookValidation(req, res, reqUrl, session)) return;
