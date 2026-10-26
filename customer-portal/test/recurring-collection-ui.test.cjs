@@ -14,7 +14,7 @@ async function customer({admin=false,records=[],enabled=true,kind='competitor',r
  await flush();return{calls,keys,html:()=>element('#main').innerHTML,state,patched:()=>recurringNode.outerHTML,setCurrent(value){current=value;},setPostError(value){postError=value;},async request(id='cmp_one'){const button={disabled:false,dataset:{action:'recurring-request',company:id}};await events.click({target:{closest(){return button;}}});await flush();},async tick(){const item=[...timers].find(([,value])=>value.delay===60000);if(item){timers.delete(item[0]);await item[1].fn();await flush();}},async navigate(hash){location.hash=hash;events.hashchange();await flush();},toast:()=>element('#toast').textContent};
 }
 for(const admin of[false,true])test(`${admin?'admin preview':'customer'} registration cards show saved results and an explicit approval request without collecting automatically`,async()=>{
- const h=await customer({admin});assert.match(h.html(),/업체 자료 보기/);assert.match(h.html(),/정기수집 요청/);assert.match(h.html(),/관리자 승인 후 시작/);assert.match(h.html(),/당일 포함 30일/);assert.match(h.html(),/마지막 수집 기록 없음/);assert.doesNotMatch(h.html(),/<img src=x/);assert.match(h.html(),/&lt;img/);
+ const h=await customer({admin});assert.match(h.html(),/업체 자료 보기/);assert.match(h.html(),/정기수집 요청/);assert.match(h.html(),/관리자 승인 후 시작/);assert.match(h.html(),/당일 포함 30일/);assert.match(h.html(),/마지막 정기수집 기록 없음/);assert.doesNotMatch(h.html(),/<img src=x/);assert.match(h.html(),/&lt;img/);
  assert.equal(h.calls.some(c=>c.options.method==='POST'),false);
  const previousPage=h.html();await h.request();const recurring=h.calls.filter(c=>c.url.endsWith('/recurring-collection'));
  assert.deepEqual(recurring.map(c=>c.options.method),['GET','POST']);assert.deepEqual(JSON.parse(recurring[1].options.body),{requestKey:'fixture_key_1'});
@@ -25,7 +25,7 @@ for(const admin of[false,true])test(`${admin?'admin preview':'customer'} registr
 test('a stale unrequested bootstrap checks fresh approval state before submitting, preventing repeat requests',async()=>{
  const h=await customer(),previousPage=h.html();h.setCurrent(record('approved',{time:'14:00',nextRunAt:'2026-10-27T05:00:00Z',lastCollectedDay:'2026-10-26',shared:true}));await h.request();
  assert.equal(h.calls.filter(c=>c.url.endsWith('/recurring-collection')).length,1);assert.equal(h.calls.some(c=>c.options.method==='POST'),false);
- assert.match(h.patched(),/정기수집 연결됨/);assert.match(h.patched(),/마지막 수집 2026-10-26/);assert.match(h.patched(),/하나의 일정|기존 승인 일정/);assert.match(h.patched(),/2026-10-27 14:00/);assert.equal(h.html(),previousPage,'finding an existing request keeps the current comparison view');
+ assert.match(h.patched(),/정기수집 연결됨/);assert.match(h.patched(),/마지막 정기수집 2026-10-26/);assert.match(h.patched(),/하나의 일정|기존 승인 일정/);assert.match(h.patched(),/2026-10-27 14:00/);assert.equal(h.html(),previousPage,'finding an existing request keeps the current comparison view');
 });
 test('an uncertain POST keeps its request key and rechecks status before a manual retry',async()=>{
  const h=await customer(),previousPage=h.html();h.setPostError(new TypeError('network interrupted'));await h.request();assert.match(h.patched(),/접수 상태 다시 확인/);assert.equal(h.html(),previousPage,'an uncertain submission preserves the current page and open company list');
@@ -57,7 +57,7 @@ test('newly registered competitor detail exposes a compact request bar above the
 });
 test('approved schedule and failed execution remain distinct and status refresh never dispatches a job',async()=>{
  const h=await customer({records:[record('approved')]});h.setCurrent(record('approved',{errorCode:'NAVER_BLOCKED',message:'접근 제한으로 중단했습니다.',latestAttempt:{status:'blocked',runId:'saved_attempt',errorCode:'NAVER_BLOCKED'}}));await h.tick();
- assert.match(h.patched(),/정기수집 승인됨/);assert.match(h.patched(),/접근 제한으로 중단/);assert.match(h.patched(),/NAVER_BLOCKED/);assert.match(h.patched(),/마지막 수집 기록 없음/);assert.equal(h.calls.some(c=>c.options.method==='POST'),false);
+ assert.match(h.patched(),/정기수집 승인됨/);assert.match(h.patched(),/접근 제한으로 중단/);assert.match(h.patched(),/NAVER_BLOCKED/);assert.match(h.patched(),/마지막 정기수집 기록 없음/);assert.equal(h.calls.some(c=>c.options.method==='POST'),false);
  await h.navigate('#settings');const count=h.calls.length;await h.tick();assert.equal(h.calls.length,count,'leaving the comparison or detail stops periodic status reads');
 });
 async function administrator(){
@@ -67,7 +67,7 @@ async function administrator(){
  await flush();return{calls,keys,html:()=>element('#recurring-list').innerHTML,main:()=>element('#main').innerHTML,setReviewError(value){reviewError=value;},async submit({companyId='cmp_one',decision='approve',reason='운영 검토',time='14:00'}={}){const b={disabled:false},f={id:'',dataset:{recurring:companyId},values:{decision,reason,time},querySelector(){return b;}};await events['#main:submit']({preventDefault(){},target:f});await flush();},feedback:()=>element('#feedback').textContent};
 }
 test('administrator recurring review lists escaped shared requests and submits approval for the next day',async()=>{
- const h=await administrator();assert.match(h.main(),/정기수집 요청 관리/);assert.match(h.html(),/다음 날부터 매일 1회/);assert.match(h.html(),/요청 2건/);assert.match(h.html(),/value="14:00"/);assert.doesNotMatch(h.html(),/<img src=x|<b>client/);assert.match(h.html(),/&lt;img/);
+ const h=await administrator();assert.match(h.main(),/정기수집 요청 관리/);assert.match(h.html(),/다음 날부터 매일 1회/);assert.match(h.html(),/요청 2건/);assert.match(h.html(),/마지막 정기수집 기록 없음/);assert.match(h.html(),/value="14:00"/);assert.doesNotMatch(h.html(),/<img src=x|<b>client/);assert.match(h.html(),/&lt;img/);
  await h.submit();const post=h.calls.find(c=>c.url.endsWith('/review'));assert.deepEqual(JSON.parse(post.options.body),{companyId:'cmp_one',decision:'approve',reason:'운영 검토',time:'14:00',requestKey:'admin_key_1'});assert.equal(post.options.headers['X-CSRF-Token'],'admin_csrf');assert.match(h.feedback(),/다음 날부터 적용/);
 });
 test('administrator retry preserves the same review key and rejects companies outside the current list',async()=>{
