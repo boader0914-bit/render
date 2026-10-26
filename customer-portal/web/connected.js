@@ -7,6 +7,11 @@
   const labels = { pending:'확인 대기',active:'등록 완료',rejected:'반려',verified:'반영 확인',withdrawn:'철회',superseded:'새 요청으로 대체',needs_review:'자료 준비 접수' };
   const dayUse = { unknown:'확인 전',none:'없음',separate:'별도 객실',shared:'숙박과 공유' };
   const adminView = location.pathname === '/customer-view';
+  const selectedCustomerId=(()=>{if(!adminView)return '';try{return new URL(location.href).searchParams.get('customerId')||'';}catch{return '';}})();
+  const customerViewHeaders=()=>adminView&&selectedCustomerId?{'X-Insight-Customer-Id':selectedCustomerId}:{};
+  const customerViewReadOnly=()=>adminView&&(Boolean(selectedCustomerId)||state?.view?.readOnly===true);
+  window.InsightAdminCustomerView={customerId:selectedCustomerId,headers:customerViewHeaders,readOnly:customerViewReadOnly};
+  let adminRoster=null,adminRosterError=null,adminRosterRequest=null;
   let adminCsrf = '';
   let state = null, config = {}, busy = false, searchSequence = 0, selectedOwnId = null;
   let comparisonSelection=null,lastRenderedHash=null;
@@ -60,9 +65,10 @@
     finally { options.signal?.removeEventListener('abort',abort); }
   }
   async function api(url, data, options={}) {
+    if(data&&customerViewReadOnly()&&url!=='/auth/logout')throw new Error('고객 화면 확인 중에는 저장·수집·등록할 수 없습니다.');
     const base = adminView ? '/api/insight-admin/v1' : '/api/customer/v1';
     const target = adminView && url !== '/auth/logout' ? '/customer-view' + url : url;
-    const response = await (options.startup===true?startupFetch:fetch)(`${base}${target}`, { method:data ? 'POST':'GET', headers:{...(data ? { 'Content-Type':'application/json','X-CSRF-Token':state?.csrfToken || adminCsrf || '' }: { Accept:'application/json',...(options.refresh===true?{'X-Insight-Refresh':'1'}:{}) }),...((options.startup===true&&url==='/me'||adminView&&url==='/start')?bootstrapHeaders():{})}, ...(data ? { body:JSON.stringify(data) }: {}), ...(options.signal?{signal:options.signal}:{}) });
+    const response = await (options.startup===true?startupFetch:fetch)(`${base}${target}`, { method:data ? 'POST':'GET', headers:{...(data ? { 'Content-Type':'application/json','X-CSRF-Token':state?.csrfToken || adminCsrf || '' }: { Accept:'application/json',...(options.refresh===true?{'X-Insight-Refresh':'1'}:{}) }),...(url!=='/auth/logout'?customerViewHeaders():{}),...((options.startup===true&&url==='/me'||adminView&&url==='/start')?bootstrapHeaders():{})}, ...(data ? { body:JSON.stringify(data) }: {}), ...(options.signal?{signal:options.signal}:{}) });
     return responseValue(response);
   }
   const connectionLoading = message => `<section class="card" role="status" aria-live="polite"><div class="initial-loading"><span class="loading-ring" aria-hidden="true"></span><p>${esc(message)}</p></div></section>`;
@@ -97,7 +103,25 @@
     });
     return configRequest;
   }
+  function renderAdminBanner(query=''){
+    const banner=$('#admin-view-banner');if(!banner||!adminView||!state)return;
+    const current=state.view?.customerUsername||state.customer.username,readonly=customerViewReadOnly(),q=query.trim().toLowerCase();
+    const roster=(adminRoster||[]).filter(row=>row.accountKind!=='admin_preview'&&/^cus_[a-zA-Z0-9-]+$/.test(row.customerId||''));
+    const choices=roster.filter(row=>row.customerId===selectedCustomerId||!q||`${row.username||''} ${row.projectName||''}`.toLowerCase().includes(q));
+    banner.innerHTML=`<div class="admin-view-context"><strong>${readonly?'고객 화면 확인 · 읽기 전용':'관리자 · 고객 화면'}</strong><p>${readonly?`${esc(current)} 고객의 등록 자료를 보고 있습니다. 등록·수정·수집·발행은 할 수 없습니다.`:'관리자 전용 체험 계정입니다. 등록·수정·요청 내용은 실제 저장됩니다.'}</p></div><div class="admin-view-selector"><label><span>고객 아이디 검색</span><input type="search" data-admin-customer-search value="${esc(query)}" placeholder="아이디·매장 이름" autocomplete="off"></label><label><span>확인할 고객</span><select data-admin-customer-select aria-label="확인할 고객" ${!adminRoster?'disabled':''}><option value="" ${!selectedCustomerId?'selected':''}>관리자 체험</option>${choices.map(row=>`<option value="${esc(row.customerId)}" ${row.customerId===selectedCustomerId?'selected':''} ${row.accountStatus==='disabled'?'disabled':''}>${esc(row.username||row.customerId)}${row.projectName?` · ${esc(row.projectName)}`:''}${row.accountStatus==='disabled'?' · 이용 중지':''}</option>`).join('')}${selectedCustomerId&&!choices.some(row=>row.customerId===selectedCustomerId)?`<option value="${esc(selectedCustomerId)}" selected>${esc(current)}</option>`:''}</select></label>${adminRosterError?`<p class="registration-note" role="status">${esc(adminRosterError)} <button type="button" class="button small" data-action="admin-roster-retry">고객 목록 다시 확인</button></p>`:!adminRoster?'<p class="muted" role="status">고객 목록 연결 중</p>':''}</div><a class="button small" href="/admin">관리자 화면</a>`;
+    if(adminRoster===null&&!adminRosterRequest&&!adminRosterError)void loadAdminRoster();
+  }
+  function loadAdminRoster(){
+    if(!adminView||!state||adminRosterRequest)return adminRosterRequest;
+    adminRosterError=null;
+    adminRosterRequest=fetch('/api/insight-admin/v1/customers',{headers:{Accept:'application/json'}}).then(responseValue).then(data=>{
+      if(!Array.isArray(data.customers))throw Error('고객 목록 응답을 확인하지 못했습니다.');
+      adminRoster=data.customers;adminRosterError=null;
+    }).catch(error=>{adminRosterError=error.message||'고객 목록을 확인하지 못했습니다.';if(error.status===401){state=null;adminCsrf='';render();}}).finally(()=>{adminRosterRequest=null;if(state)renderAdminBanner();});
+    return adminRosterRequest;
+  }
   async function command(action, payload) {
+    if(customerViewReadOnly())throw new Error('읽기 전용 고객 화면에서는 저장할 수 없습니다.');
     const affectedCompany=payload.companyId || state.customer.relations.find(row=>row.relationId===payload.relationId)?.companyId || state.corrections.find(row=>row.requestId===payload.requestId)?.companyId;
     state = await api('/commands', { revision:state.customer.revision, requestKey:crypto.randomUUID(), action, payload });
     if(affectedCompany)window.InsightCollection?.invalidate?.(affectedCompany);
@@ -116,6 +140,7 @@
     } catch(error) { if (serial===policySequence&&route()===kind) $('#main').innerHTML=`<section class="card"><h1>안내 문서를 확인하지 못했습니다.</h1><p>${esc(error.message)}</p><a href="/${kind}" class="button">다시 열기</a></section>`; }
   }
   function correctionEditor(company) {
+    if(customerViewReadOnly())return '';
     const requests=state.corrections.filter(row=>row.companyId===company.companyId);
     return `<details class="company-edit"><summary>정보 수정${requests.some(row=>row.status==='pending')?' · 검수 대기':''}</summary><form data-correction="${esc(company.companyId)}"><p class="muted">수정 내용은 검수 요청으로 별도 저장됩니다.</p><div class="form-grid">${field('매장명','name',company.name)}${field('객실 수','rooms',company.rooms??'','number','min="1" step="1"')}${field('주소','address',company.address)}<label class="field"><span>데이유즈</span><select name="dayUse">${Object.entries(dayUse).map(([v,n])=>`<option value="${v}" ${company.dayUse===v?'selected':''}>${n}</option>`).join('')}</select></label></div>${field('시설·편의정보','facilities',company.facilities)}<label class="field"><span>변경 근거</span><textarea name="reason" required maxlength="1000" placeholder="변경 내용과 확인 근거를 적어 주세요."></textarea></label><button class="button primary" type="submit">수정 요청 저장</button></form>${requests.length?`<ol class="history-list">${requests.map(row=>`<li>${esc(labels[row.status]||row.status)} · ${esc(koreaDate(row.submittedAt))}<p>${esc(row.reason)}</p>${row.kind==='product'?`<p>상품 ${esc(row.baseValues.name)} · ${esc(row.target.date)}</p>`:''}<p>${Object.entries(row.proposed).map(([key,value])=>`${esc({rooms:'객실 수',total:'상품 객실 수',productType:'상품 구분',dayUse:'데이유즈',facilities:'시설',name:'이름',address:'주소'}[key]||key)}: ${esc(row.baseValues[key]??'확인 전')} → ${esc(value)}`).join(' · ')}</p>${row.reviewMessage?`<p>${esc(row.reviewMessage)}</p>`:''}${row.status==='pending'?`<button class="button small" data-action="withdraw" data-request="${esc(row.requestId)}">요청 철회</button>`:''}</li>`).join('')}</ol>`:''}</details>`;
   }
@@ -141,7 +166,8 @@
   function recurringCard(company,compact=false){
     if(state.features?.recurringCollectionRequests!==true||!registeredCompany(company.companyId))return '';
     const record=recurringRecord(company.companyId),status=record&&recurringLabels[record.status]?record.status:null,uncertain=recurringUncertain.has(company.companyId);
-    const locked=['pending','approved','paused'].includes(status),last=record?.lastCollectedDay||record?.lastCollectedAt;
+    const locked=['pending','approved','paused'].includes(status)||customerViewReadOnly(),last=record?.lastCollectedDay||record?.lastCollectedAt;
+    if(customerViewReadOnly())return `<section class="connected-recurring${compact?' connected-recurring-compact':''}" data-recurring-company="${esc(company.companyId)}" data-recurring-compact="${compact?'1':'0'}" aria-label="정기수집 상태"><div class="connected-recurring-top"><strong>정기수집</strong><span class="status-pill">${esc(status?recurringLabels[status]:'미신청')}</span></div><p class="connected-recurring-help muted">저장된 업체자료를 먼저 보여드립니다. 매일 1회, 당일 포함 30일 수집은 관리자 승인 후 시작합니다.</p><p class="connected-recurring-history">마지막 정기수집 ${esc(last?(record.lastCollectedDay||koreaDate(last)):'기록 없음')}${record?.nextRunAt?` · 다음 수집 ${esc(koreaDate(record.nextRunAt))} ${esc(record.time||'14:00')}`:''}</p><div class="connected-recurring-execution-slot">${recurringExecution(record)}${recurringStatusErrors.has(company.companyId)?'<p class="registration-note" role="status">상태 갱신 지연 · 마지막 확인 상태를 유지합니다.</p>':''}</div>${record?.shared?'<p class="muted">같은 업체는 기존 승인 일정과 결과를 함께 사용합니다.</p>':''}${record?.reviewReason?`<p class="muted">검토 사유: ${esc(record.reviewReason)}</p>`:''}</section>`;
     return `<section class="connected-recurring${compact?' connected-recurring-compact':''}" data-recurring-company="${esc(company.companyId)}" data-recurring-compact="${compact?'1':'0'}" aria-label="정기수집 요청"><div class="connected-recurring-top"><strong>정기수집</strong><span class="status-pill ${status==='approved'?'':'pending'}">${esc(status?recurringLabels[status]:'미신청')}</span></div><p class="connected-recurring-help muted">저장된 업체자료를 먼저 보여드립니다. 매일 1회, 당일 포함 30일 수집은 관리자 승인 후 시작합니다.</p><p class="connected-recurring-history">마지막 정기수집 ${esc(last?(record.lastCollectedDay||koreaDate(last)):'기록 없음')}${record?.nextRunAt?` · 다음 수집 ${esc(koreaDate(record.nextRunAt))} ${esc(record.time||'14:00')}`:''}</p><div class="connected-recurring-execution-slot">${recurringExecution(record)}${recurringStatusErrors.has(company.companyId)?'<p class="registration-note" role="status">상태 갱신 지연 · 마지막 확인 상태를 유지합니다.</p>':''}</div>${record?.shared?'<p class="muted">같은 업체는 기존 승인 일정과 결과를 함께 사용합니다.</p>':''}${record?.reviewReason?`<p class="muted">검토 사유: ${esc(record.reviewReason)}</p>`:''}${uncertain?'<p class="registration-note" role="status">접수 결과를 확인하지 못했습니다. 다시 확인하면 중복 신청 없이 기존 접수부터 확인합니다.</p>':''}<button type="button" class="button small" data-action="recurring-request" data-company="${esc(company.companyId)}" ${locked?'disabled':''}>${uncertain?'접수 상태 다시 확인':status==='pending'?'승인 대기 중':status==='approved'?'정기수집 연결됨':status==='paused'?'관리자 재개 필요':'정기수집 요청'}</button></section>`;
   }
   function patchRecurring(companyId){
@@ -183,6 +209,7 @@
     }catch(error){if(state?.customer?.customerId===customerId){recurringUncertain.add(companyId);patchRecurring(companyId);}throw error;}
   }
   function companyCard(relation,management=false) {
+    management=management&&!customerViewReadOnly();
     const company = state.companies.find(row => row.companyId === relation.companyId);
     if (!company) return `<article class="connected-row"><strong>업체 연결 확인 필요</strong><p class="muted">기존 관계를 보존했습니다. 관리자에게 연결 상태를 확인해 주세요.</p></article>`;
     const settings = state.customer.settings[company.companyId] || {};
@@ -205,7 +232,7 @@
     if(company)window.InsightCollection?.prefetch?.([company],api);
   }
   function openCompany(company,openCollection=false) {
-    $('#main').innerHTML=recurringCard(company,true)+window.InsightCollection.panel(company,state.features.directCollection,state.preparations.find(row=>row.companyId===company.companyId),state.collectionAllowance,openCollection);
+    $('#main').innerHTML=recurringCard(company,true)+window.InsightCollection.panel(company,!customerViewReadOnly()&&state.features.directCollection,state.preparations.find(row=>row.companyId===company.companyId),state.collectionAllowance,openCollection&&!customerViewReadOnly());
     const relation=state.customer.relations.find(row=>row.companyId===company.companyId&&['active','pending'].includes(row.status));
     if(relation?.kind==='own'){selectedOwnId=company.companyId;if(comparisonSelection?.getState().ownCompanyId!==company.companyId){comparisonSelection?.update({ownCompanyId:company.companyId});selectionUrl();}}
     const isCurrentView=()=>{
@@ -232,6 +259,7 @@
     if(state&&!restoredStates.has(state)){restoredStates.add(state);window.InsightCollection?.restore?.(state.companyViews,scope);window.InsightAnalysis?.restore?.(state.regionViews,scope);window.InsightAnalysis?.restoreReports?.(state.reportViews,scope);window.InsightRegionalContext?.restore?.(state.comparisonRegionViews,scope);}
     $('#logout').hidden = !state;
     $('#admin-view-banner').hidden = !adminView || !state;
+    if(adminView&&state)renderAdminBanner();
     $('#navigation').innerHTML = state ? menus.map(([key,label])=>`<a href="#${key}" class="nav-link ${menuRoute()===key?'active':''}">${label}</a>`).join(''):'';
     $('#customer-name').textContent = state ? state.customer.username : '사분 인사이트';
     document.body.classList.toggle('auth-view', !state);
@@ -245,7 +273,7 @@
     const limits=state.registrationAllowance || {ownLimit:1,...c.entitlements};
     const limitText=v=>v===null?'제한 없음':`${v}곳`;
     const own = relations.filter(row=>row.kind==='own'), competitors = relations.filter(row=>row.kind==='competitor');
-    if(route()==='register-own'){$('#main').innerHTML=`<div class="page-heading"><h1>내 매장 등록</h1></div>${limits.ownLimit===null||own.length<limits.ownLimit?search('own'):'<section class="card"><p>이미 내 매장이 등록되어 있습니다. 변경하려면 설정에서 등록 관계를 관리하세요.</p><a class="button" href="#settings">설정으로 이동</a></section>'}`;return;}
+    if(route()==='register-own'){$('#main').innerHTML=customerViewReadOnly()?'<section class="card"><h1>고객 화면 확인</h1><p>읽기 전용으로 보고 있습니다. 업체 등록은 고객 또는 관리자 관리 화면에서 진행해 주세요.</p></section>':`<div class="page-heading"><h1>내 매장 등록</h1></div>${limits.ownLimit===null||own.length<limits.ownLimit?search('own'):'<section class="card"><p>이미 내 매장이 등록되어 있습니다. 변경하려면 설정에서 등록 관계를 관리하세요.</p><a class="button" href="#settings">설정으로 이동</a></section>'}`;return;}
     if(/^(company|collection|collect)=/.test(route())) {
       const id=decodeURIComponent(route().slice(route().indexOf('=')+1)),relation=relations.find(r=>r.companyId===id),company=state.companies.find(r=>r.companyId===id);
       if(!relation||!company){$('#main').innerHTML='<section class="card"><h1>등록한 업체를 찾을 수 없습니다.</h1><a href="#property">내 매장으로 이동</a></section>';return;}
@@ -256,7 +284,7 @@
     let content = '';
     if(current[0]==='home')content=window.InsightHomeContextView.panel(state,comparisonSelection.getState());
     if(current[0]==='property'&&own.length===1){const company=state.companies.find(row=>row.companyId===own[0].companyId);if(company){openCompany(company);return;}}
-    if (current[0]==='property') content = `<div class="connected-list">${own.map(relation => companyCard(relation)).join('') || '<div class="empty-note">내 매장을 등록하면 저장된 업체자료를 볼 수 있습니다.</div>'}</div>${limits.ownLimit===null||own.length<limits.ownLimit?search('own'):''}`;
+    if (current[0]==='property') content = `<div class="connected-list">${own.map(relation => companyCard(relation)).join('') || '<div class="empty-note">내 매장을 등록하면 저장된 업체자료를 볼 수 있습니다.</div>'}</div>${!customerViewReadOnly()&&(limits.ownLimit===null||own.length<limits.ownLimit)?search('own'):''}`;
     if(current[0]==='competitors')content=`<div id="comparison-workspace">${window.InsightComparisonView&&comparisonSelection?window.InsightComparisonView.panel(state,comparisonSelection.getState()):'<p class="empty-note">비교 화면 연결을 확인해 주세요.</p>'}</div><details class="card comparison-management"><summary>등록 경쟁업체 · ${competitors.length}곳</summary><div class="connected-list">${competitors.map(relation=>companyCard(relation)).join('')||'<p class="empty-note">등록한 업체가 없습니다.</p>'}</div><a class="text-link" href="#settings">업체 등록·해제는 설정에서 관리</a></details>`;
 
     if(current[0]==='regions')content=window.InsightContextWorkspace.controls(state,comparisonSelection.getState())+window.InsightRegionalContextView.panel(state,comparisonSelection.getState())+(state.regions.length?`<details class="card regional-context-detail" id="regional-full-detail" ${selectedRegion?'open':''}><summary>내 매장·관심지역 상세 자료</summary>${window.InsightAnalysis.panel('regions',state,selectedRegion,selectedOwnId)}</details>`:'')+'<p class="muted">관심지역 등록·해제는 <a href="#settings">설정</a>에서 관리합니다.</p>';
@@ -264,6 +292,7 @@
     if (current[0]==='settings') content = `<section class="card"><h2>사업 정보</h2><form id="onboarding-form"><label class="field"><span>현재 상태</span><select name="businessStatus"><option value="planning" ${c.businessStatus==='planning'?'selected':''}>매장 준비 중</option><option value="owned" ${c.businessStatus==='owned'?'selected':''}>내 매장 등록</option></select></label>${field('매장·프로젝트 이름','projectName',c.projectName)}<button class="button primary" type="submit">저장</button></form></section><section class="card registered-management"><h2>등록업체 관리</h2><p class="muted">등록 해제는 내 계정의 연결만 해제하며, 업체 DB와 저장자료는 보존됩니다.</p><div class="connected-list">${relations.map(relation=>companyCard(relation,true)).join('')||'<p class="empty-note">등록한 업체가 없습니다.</p>'}</div><a class="button small" href="#register-own">내 매장 등록</a> <a class="button small" href="#competitors">경쟁업체 등록</a></section>`;
     if(current[0]==='settings'&&(limits.competitorLimit===null||competitors.length<limits.competitorLimit))content+=search('competitor');
     if(current[0]==='settings')content+=`<section class="card"><h2>관심지역 관리</h2>${c.regions.filter(activeRegion).map(r=>`<div class="connected-row"><strong>${esc(state.regions.find(v=>v.id===r.regionKey)?.label||'연결 지역')}</strong><button class="button small" data-action="archive-region" data-relation="${esc(r.relationId)}">관심지역 해제</button></div>`).join('')||'<p class="muted">등록한 관심지역이 없습니다.</p>'}</section>`+(limits.interestRegionLimit===null||c.regions.filter(activeRegion).length<limits.interestRegionLimit?search('region'):'');
+    if(current[0]==='settings'&&customerViewReadOnly())content=`<section class="card"><h2>고객 등록 정보 · 읽기 전용</h2><p class="muted">사업 정보, 등록·해제, 수정 요청은 관리자 관리 화면에서 처리해 주세요.</p><div class="connected-list">${relations.map(relation=>companyCard(relation)).join('')||'<p class="muted">등록한 업체가 없습니다.</p>'}</div></section>`;
     $('#main').innerHTML = `<div class="page-heading"><div><span class="eyebrow">SABUN INSIGHT</span><h1>${current[1]}</h1></div></div>${content}`;
     const contextMount=mode=>window.InsightContextWorkspace?.mount({mode,store:comparisonSelection,state,api,peekBrief:id=>window.InsightAnalysis.peekCurrentBriefing(id),readBrief:id=>window.InsightAnalysis.readCurrentBriefing(id,api),onSelectionChange:selectionChanged,onSessionExpired:sessionExpired,onRebuild:render});
     if(['home','regions'].includes(current[0]))contextMount(current[0]);
@@ -275,6 +304,7 @@
   function activeRegion(row) { return row.status==='active'; }
   document.addEventListener('submit', async event => {
     event.preventDefault(); if(busy) return;
+    if(customerViewReadOnly()){toast('읽기 전용 고객 화면에서는 저장할 수 없습니다.');return;}
     const form=event.target, p=Object.fromEntries(new FormData(form)); busy=true;
     form.querySelectorAll('button').forEach(button=>button.disabled=true);
     try {
@@ -313,6 +343,8 @@
     if(action==='theme'){const theme=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=theme;try{localStorage.setItem('insight-theme',theme);}catch{}return;}
     if(action==='retry-connection'){await bootstrap();return;}
     if(action==='retry-config'){loadConfiguration();configurationScreen();return;}
+    if(action==='admin-roster-retry'){await loadAdminRoster();return;}
+    if(customerViewReadOnly()&&!['logout','refresh-collection'].includes(action)){toast('읽기 전용 고객 화면에서는 저장·등록·수집할 수 없습니다.');return;}
     busy=true;button.disabled=true;
     try{
       if(action==='check-username'){const input=$('[name=username]'), slot=$('#username-status');if(!input.reportValidity())return;const requested=input.value.trim(), value=await api(`/auth/username?username=${encodeURIComponent(requested)}`);if(!slot.isConnected||input.value.trim()!==requested)return;slot.textContent=value.message;slot.dataset.available=String(value.available);}
@@ -330,9 +362,9 @@
       else if(action==='recurring-request')await requestRecurring(button.dataset.company);
     }catch(error){toast(error.message);}finally{busy=false;button.disabled=false;}
   });
-  document.addEventListener('input',event=>{const form=event.target.closest('[data-product-correction], [data-correction]');if(form)form.dataset.dirty='true';if(event.target.name==='username'&&$('#username-status'))$('#username-status').textContent='';});
+  document.addEventListener('input',event=>{if(event.target.matches?.('[data-admin-customer-search]')){const input=event.target,start=input.selectionStart,end=input.selectionEnd;renderAdminBanner(input.value);const next=$('[data-admin-customer-search]');next?.focus?.();if(typeof start==='number')next?.setSelectionRange?.(start,end);return;}const form=event.target.closest('[data-product-correction], [data-correction]');if(form)form.dataset.dirty='true';if(event.target.name==='username'&&$('#username-status'))$('#username-status').textContent='';});
   window.addEventListener('popstate',()=>{if(!state||!comparisonSelection)return;comparisonSelection.restoreUrl(location.href);selectedOwnId=comparisonSelection.getState().ownCompanyId;if(lastRenderedHash===location.hash)render();});
-  document.addEventListener('change',event=>{if(event.target.matches?.('#analysis-form [name=ownId]')&&comparisonSelection){const updated=comparisonSelection.update({ownCompanyId:event.target.value});if(updated.ok)selectionChanged(updated.state);}});
+  document.addEventListener('change',event=>{if(event.target.matches?.('[data-admin-customer-select]')){const id=event.target.value;if(!id||adminRoster?.some(row=>row.customerId===id&&row.accountKind!=='admin_preview'&&row.accountStatus!=='disabled'))location.assign('/customer-view'+(id?'?customerId='+encodeURIComponent(id):'')+'#home');return;}if(event.target.matches?.('#analysis-form [name=ownId]')&&comparisonSelection){const updated=comparisonSelection.update({ownCompanyId:event.target.value});if(updated.ok)selectionChanged(updated.state);}});
   window.addEventListener('hashchange',()=>{render();$('#main').focus();window.scrollTo(0,0);});
   try{document.documentElement.dataset.theme=localStorage.getItem('insight-theme')==='dark'?'dark':'light';}catch{}
   async function bootstrap() {
@@ -346,11 +378,13 @@
         catch(error){
           // Only an authenticated, explicitly missing preview may create it.
           // Existing previews restore their saved views in one protected GET.
+          if(selectedCustomerId)throw error;
           if(error.status!==409||error.code!=='CUSTOMER_VIEW_REQUIRED')throw error;
           const identity=await bootstrapRead(signal=>startupFetch('/api/insight-admin/v1/me',{headers:{Accept:'application/json'},...(signal?{signal}:{})}).then(responseValue));
           adminCsrf=identity.csrfToken;
           state=await api('/start',{});
         }
+        if(selectedCustomerId&&(state?.view?.mode!=='admin_customer'||state.view.readOnly!==true||state.view.customerId!==selectedCustomerId))throw new Error('선택한 고객과 조회 응답이 다릅니다. 관리자 화면에서 다시 선택해 주세요.');
         if(state?.customer?.customerId)startupMark('insight-identity-ready');
       }else{state=await bootstrapRead(signal=>api('/me',undefined,{signal,startup:true}));if(state?.customer?.customerId)startupMark('insight-identity-ready');}
       bootstrapStatus='ready';render();prepareCompanies();

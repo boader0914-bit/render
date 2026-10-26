@@ -403,6 +403,7 @@
   const jobStatus=s=>({queued:'대기',running:'갱신 중',ready:'완료',complete:'완료',partial:'일부 자료',failed:'실패',missing:'자료 없음',interrupted:'중단',publication_pending:'공표 대기'}[s]||'확인 전');
   const jobError=code=>({MISSING_KEY:'인증키 설정 필요',AUTH_ERROR:'이용 권한 확인 필요',QUOTA_EXCEEDED:'제공기관 요청 한도 도달',TIMEOUT:'응답 시간 초과',NETWORK_ERROR:'연결 실패',REGIONAL_SOURCE_BUSY:'다른 지역 자료 갱신 중',MISSING_VALUES:'일부 월 자료 없음',NO_DATA:'제공 자료 없음',PUBLICATION_PENDING:'아직 공표되지 않음',CACHE_WRITE_ERROR:'자료 저장 실패'}[code]||'자료 연결 확인 필요');
   async function checkPreparation(id,params,start=false,wasActive=false) {
+    if(start&&window.InsightAdminCustomerView?.readOnly?.()===true)return;
     const slot=document.querySelector('#history-progress'),button=document.querySelector('[data-history-refresh]');
     const scope=cacheScope,generation=cacheGeneration,regionEpoch=epoch(params.regionKey);
     const current=()=>id===seq&&slot?.isConnected&&scope===cacheScope&&generation===cacheGeneration&&regionEpoch===epoch(params.regionKey)&&requestAllowed(params.regionKey);
@@ -554,6 +555,6 @@
         return;
       }
     }
-    if(mode==='reports')window.InsightArchives?.mount(request,{onSessionExpired:expireSession});
+    if(mode==='reports')window.InsightArchives?.mount(request,{onSessionExpired:expireSession,readOnly:s.view?.readOnly===true});
     load();},stop(){window.InsightArchives?.stop();seq++;regionData=null;renderedVersion=null;clearTimers();}};
 })();

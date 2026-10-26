@@ -58,8 +58,9 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   const reportReads = createReportReadCache({persistenceDirectory:reportCacheDirectory,namespace:backend});
   const comparisonRegionReads=createComparisonRegionReadCache({persistenceDirectory:comparisonRegionCacheDirectory,namespace:backend});
   const bootstrapSnapshots=createBootstrapSnapshots({companyReads,regionReads,reportReads:{...reportReads,snapshot:options=>reportReads.snapshot({...options,selection:{stayMode:'all_available'}})},comparisonRegionReads});
-  const scopeFor = (requestOrigin, mode, session) => crypto.createHmac('sha256', scopeSecret).update(JSON.stringify([requestOrigin,mode,session])).digest('hex');
-  const audienceFor = (requestOrigin,mode) => JSON.stringify([requestOrigin,mode]);
+  const scopeFor = (requestOrigin, mode, session, customerId='') => crypto.createHmac('sha256', scopeSecret).update(JSON.stringify([requestOrigin,mode,session,customerId])).digest('hex');
+  const viewTarget=headers=>headers?.['X-Insight-Customer-Id']||'';
+  const audienceFor = (requestOrigin,mode,customerId='') => JSON.stringify([requestOrigin,mode==='admin'&&customerId?'customer':mode]);
   const invalidateReads = scope => { companyReads.invalidate(scope); regionReads.invalidate(scope); reportReads.invalidate(scope); comparisonRegionReads.invalidate(scope); };
   // Historical source recalculation can take longer than a login or command.
   // Extend only these read endpoints; collection dispatch retains its timeout.
@@ -85,7 +86,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
     const identityRoute=mode==='admin'?'/admin/customer-view/me':'/me';
     const checked=await readUpstream(identityRoute,'',headers,{stage:'identity',timing});
     if(!checked.ok)return checked;
-    const identity=checked.data,audience=audienceFor(requestOrigin,mode),context={identity,audience};
+    const identity=checked.data,audience=audienceFor(requestOrigin,mode,viewTarget(headers)),context={identity,audience};
     archives.scope(identity,audience);
     if(req.method==='POST'){
       const expected=String(identity.csrfToken||''),received=String(req.headers['x-csrf-token']||'');
@@ -114,6 +115,12 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
         if(url.search)throw fault('ARCHIVE_INVALID_FIELDS','발행 조건만 지정해 주세요.');
         data=await archives.publish({...context,input:await body(req)});
       }else throw fault('NOT_FOUND','요청한 보관 기능을 찾을 수 없습니다.',404);
+      if(req.method==='GET'&&mode==='admin'&&viewTarget(headers)){
+        const current=await readUpstream(identityRoute,'',headers,{stage:'identity',timing});
+        if(!current.ok)return current;
+        const boundary=value=>JSON.stringify([value.customer?.customerId,value.customer?.memberId,value.customer?.accountStatus,(value.customer?.relations||[]).filter(row=>['active','pending'].includes(row.status)),(value.customer?.regions||[]).filter(row=>['active','pending'].includes(row.status)),value.customer?.entitlements,[...archives.scope(value,audience).companies.keys()].sort()]);
+        if(boundary(current.data)!==boundary(identity))throw fault('CUSTOMER_VIEW_SCOPE_CHANGED','고객의 등록 정보가 변경되었습니다. 다시 조회해 주세요.',409);
+      }
       return {ok:true,status:200,data};
     }catch(error){if(error.statusCode)throw error;const low=error.code==='ARCHIVE_LOW_SPACE';throw fault(/^ARCHIVE_[A-Z_]+$/.test(error.code||'')?error.code:'ARCHIVE_STORAGE_FAILED',low?'보관 디스크의 여유 공간이 부족합니다. 이전 자료는 유지됩니다.':'보관 자료의 저장 또는 무결성을 확인하지 못했습니다. 이전 자료는 유지됩니다.',low?507:503);}
   }
@@ -125,7 +132,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
     // Invalid input still follows the central authentication/validation path.
     if(!session||!valid)return readUpstream(prefix+route,url.search,headers,{timing});
     const savedQuery=new URLSearchParams(url.search);savedQuery.set('month',month||new Date(Date.now()+9*3600000).toISOString().slice(0,7));savedQuery.set('savedOnly','1');
-    return companyReads.read({scope:scopeFor(requestOrigin,mode,session),audience:audienceFor(requestOrigin,mode),route:'/companies/'+match[1]+'/collection',companyId:match[1],month,force,requestId:timing?.requestId,
+    return companyReads.read({scope:scopeFor(requestOrigin,mode,session,viewTarget(headers)),audience:audienceFor(requestOrigin,mode,viewTarget(headers)),route:'/companies/'+match[1]+'/collection',companyId:match[1],month,force,requestId:timing?.requestId,
       readIdentity:()=>readUpstream(prefix+(mode==='admin'?'/customer-view/me':'/me'),'',headers,{stage:'identity',timing}),
       readSavedSource:()=>readUpstream(prefix+route,'?'+savedQuery.toString(),headers,{stage:'saved_preview',timing,timeoutMs:3000}),
       readSource:({background=false}={})=>readUpstream(prefix+route,url.search,headers,{stage:'source',timing,background})});
@@ -138,7 +145,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
     // Invalid/default-month reads keep central validation; only an exact period
     // may select a cached regional response or a bootstrap snapshot.
     if(!session||!valid)return readUpstream(prefix+route,url.search,headers,{timing});
-    return regionReads.read({scope:scopeFor(requestOrigin,mode,session),regionKey:match[1],month,force,
+    return regionReads.read({scope:scopeFor(requestOrigin,mode,session,viewTarget(headers)),regionKey:match[1],month,force,
       readIdentity:()=>readUpstream(prefix+(mode==='admin'?'/customer-view/me':'/me'),'',headers,{stage:'identity',timing}),
       readSource:()=>readUpstream(prefix+route,url.search,headers,{stage:'source',timing})});
   }
@@ -151,7 +158,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
     if(!valid||!selection)return {status:400,ok:false,data:{error:{code:'INVALID_REPORT_SELECTION',message:'숙박기간 조건을 확인해 주세요.'}}};
     const query=new URLSearchParams();if(ownId)query.set('ownId',ownId);for(const [key,value] of Object.entries(selection))if(value!==null)query.set(key,value);
     const savedQuery=new URLSearchParams(query);savedQuery.set('savedOnly','1');
-    return reportReads.read({scope:scopeFor(requestOrigin,mode,session),audience:audienceFor(requestOrigin,mode),ownId,force,selection,
+    return reportReads.read({scope:scopeFor(requestOrigin,mode,session,viewTarget(headers)),audience:audienceFor(requestOrigin,mode,viewTarget(headers)),ownId,force,selection,
       readIdentity:()=>readUpstream(prefix+(mode==='admin'?'/customer-view/me':'/me'),'',headers,{stage:'identity',timing}),
       readSavedSource:()=>readUpstream(prefix+route,'?'+savedQuery.toString(),headers,{stage:'saved_preview',timing,timeoutMs:3000}),
       readSource:()=>readUpstream(prefix+route,'?'+query.toString(),headers,{stage:'source',timing})});
@@ -161,7 +168,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
     const prefix=mode==='admin'?'/admin':'',ownId=url.searchParams.get('ownId')||'',month=url.searchParams.get('month')||'';
     const valid=[...url.searchParams.keys()].every(key=>['ownId','month'].includes(key))&&url.searchParams.getAll('ownId').length<=1&&url.searchParams.getAll('month').length===1&&/^20\d{2}-(0[1-9]|1[0-2])$/.test(month)&&(!ownId||/^[a-zA-Z0-9_-]{1,180}$/.test(ownId));
     if(!session||!valid)return readUpstream(prefix+route,url.search,headers,{timing});
-    return comparisonRegionReads.read({scope:scopeFor(requestOrigin,mode,session),audience:audienceFor(requestOrigin,mode),ownId,month,force,
+    return comparisonRegionReads.read({scope:scopeFor(requestOrigin,mode,session,viewTarget(headers)),audience:audienceFor(requestOrigin,mode,viewTarget(headers)),ownId,month,force,
       readIdentity:()=>readUpstream(prefix+(mode==='admin'?'/customer-view/me':'/me'),'',headers,{stage:'identity',timing}),
       readSource:()=>readUpstream(prefix+route,url.search,headers,{stage:'source',timing})});
   }
@@ -201,6 +208,16 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
       if (req.method === 'GET' && url.pathname === '/api/health') { respond(200, { status: 'ok', mode: 'connected', buildCommit: process.env.RENDER_GIT_COMMIT?.slice(0, 12) || null }); return; }
       if (url.pathname.startsWith('/api/insight-admin/v1/')) {
         const route = url.pathname.slice('/api/insight-admin/v1'.length);
+        const target=req.headers['x-insight-customer-id'];
+        if(target!==undefined&&(typeof target!=='string'||!/^cus_[a-zA-Z0-9-]{1,180}$/.test(target)||!route.startsWith('/customer-view/')))throw fault('INVALID_CUSTOMER_VIEW','고객 화면에서 올바른 고객을 선택해 주세요.');
+        const session = String(req.headers.cookie || '').split(';').map(s => s.trim().split('=')).find(([name]) => name === adminCookieName)?.[1] || '';
+        const headers = { Authorization: `Bearer ${serviceToken}`, Accept: 'application/json', 'X-Insight-Admin-Session': session, 'X-CSRF-Token': req.headers['x-csrf-token'] || '',...(target!==undefined?{'X-Insight-Customer-Id':target}:{}) };
+        if(target!==undefined&&req.method!=='GET'){
+          if(req.headers.origin!==requestOrigin)throw fault('INVALID_ORIGIN','현재 관리자 화면에서 요청해 주세요.',403);
+          const identity=await readUpstream('/admin/customer-view/me','',headers,{stage:'identity',timing});
+          if(!identity.ok){if(identity.status===401)res.setHeader('Set-Cookie',adminCookie('',true));respond(identity.status,identity.data);return;}
+          throw fault('CUSTOMER_VIEW_READ_ONLY','아이디별 고객 화면은 조회 전용입니다. 변경은 관리자 화면에서 처리해 주세요.',403);
+        }
         observed=identityRoutes.has('/admin'+route)||req.method==='GET'&&(route==='/customer-view/config'||/^\/customer-view\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|regions\/comparison-summary|reports\/briefing)$/.test(route));
         const methods = { '/me': 'GET', '/customers': 'GET', '/auth/login': 'POST', '/auth/logout': 'POST', '/customer-view/start': 'POST', '/customer-view/me': 'GET', '/customer-view/config': 'GET', '/customer-view/policies/terms': 'GET', '/customer-view/policies/privacy': 'GET', '/customer-view/commands': 'POST', '/customer-view/catalog/companies': 'GET', '/customer-view/catalog/regions': 'GET', '/recurring-collections':'GET', '/recurring-collections/review':'POST' };
         const match = /^\/customers\/cus_[a-zA-Z0-9-]+(\/commands)?$/.exec(route);
@@ -209,19 +226,17 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
         const recurringRoute=/^\/customer-view\/companies\/[a-zA-Z0-9_-]+\/recurring-collection$/.test(route)&&['GET','POST'].includes(req.method);
         if (!recurringRoute&&!archiveRoute&&!regionalPreparation && (methods[route] || (/^\/customer-view\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|regions\/comparison-summary|reports\/briefing)$/.test(route) ? 'GET' : '') || (match ? (match[1] ? 'POST' : 'GET') : '')) !== req.method) throw fault('NOT_FOUND', '지원하지 않는 관리자 기능입니다.', 404);
         if (req.method === 'POST' && req.headers.origin !== requestOrigin) throw fault('INVALID_ORIGIN', '현재 관리자 화면에서 요청해 주세요.', 403);
-        const session = String(req.headers.cookie || '').split(';').map(s => s.trim().split('=')).find(([name]) => name === adminCookieName)?.[1] || '';
-        const headers = { Authorization: `Bearer ${serviceToken}`, Accept: 'application/json', 'X-Insight-Admin-Session': session, 'X-CSRF-Token': req.headers['x-csrf-token'] || '' };
         if(archiveRoute){const saved=await archiveRequest('admin',requestOrigin,headers,req,url,route,timing);if(saved.status===401)res.setHeader('Set-Cookie',adminCookie('',true));respond(saved.status,saved.data);return;}
         let payload;
         if (req.method === 'POST') { payload = JSON.stringify(await body(req)); headers['Content-Type'] = 'application/json'; }
-        if(req.method==='POST'&&route!=='/customer-view/start')invalidateReads(scopeFor(requestOrigin,'admin',session));
+        if(req.method==='POST'&&route!=='/customer-view/start')invalidateReads(scopeFor(requestOrigin,'admin',session,target||''));
         if(req.method==='GET') {
           const saved=await comparisonRegionRead(requestOrigin,'admin',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing)||await companyRead(requestOrigin,'admin',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing)||await regionRead(requestOrigin,'admin',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing)||await reportRead(requestOrigin,'admin',session,headers,route,url,req.headers['x-insight-refresh']==='1',timing);
           if(saved){if(saved.status===401)res.setHeader('Set-Cookie',adminCookie('',true));respond(saved.status,saved.data);return;}
         }
         const response=await readUpstream('/admin'+route,url.search,headers,{method:req.method,body:payload,stage:identityRoutes.has('/admin'+route)?'identity':req.method==='GET'?'source':null,timing}),data=response.data;
-        if(response.ok&&['/customer-view/me','/customer-view/start'].includes(route)){const started=performance.now(),scope=scopeFor(requestOrigin,'admin',session);Object.assign(data,await bootstrapSnapshots({headers:req.headers,scope,audience:audienceFor(requestOrigin,'admin'),identity:data,timing}));timing.add('snapshot',performance.now()-started);}
-        if(req.method==='POST'&&route!=='/customer-view/start'||[401,403].includes(response.status))invalidateReads(scopeFor(requestOrigin,'admin',session));
+        if(response.ok&&['/customer-view/me','/customer-view/start'].includes(route)){const started=performance.now(),scope=scopeFor(requestOrigin,'admin',session,target||'');Object.assign(data,await bootstrapSnapshots({headers:req.headers,scope,audience:audienceFor(requestOrigin,'admin',target||''),identity:data,timing}));timing.add('snapshot',performance.now()-started);}
+        if(req.method==='POST'&&route!=='/customer-view/start'||[401,403].includes(response.status))invalidateReads(scopeFor(requestOrigin,'admin',session,target||''));
         if (response.ok && route === '/auth/login') {
           if (!/^[A-Za-z0-9_-]{43}$/.test(data.token || '')) throw new Error('Missing administrator session');
           res.setHeader('Set-Cookie', adminCookie(data.token)); delete data.token;
@@ -230,6 +245,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
         respond(response.status, data); return;
       }
       if (url.pathname.startsWith('/api/customer/v1/')) {
+        if(req.headers['x-insight-customer-id']!==undefined)throw fault('INVALID_CUSTOMER_VIEW','고객별 화면 선택은 관리자 로그인 후 사용할 수 있습니다.');
         const route = url.pathname.slice('/api/customer/v1'.length);
         observed=identityRoutes.has(route)||req.method==='GET'&&(route==='/config'||/^\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|regions\/comparison-summary|reports\/briefing)$/.test(route));
         const allowed = { '/config': 'GET', '/me': 'GET', '/auth/username': 'GET', '/policies/terms': 'GET', '/policies/privacy': 'GET', '/auth/login': 'POST', '/auth/signup': 'POST', '/auth/logout': 'POST', '/commands': 'POST', '/catalog/companies': 'GET', '/catalog/regions': 'GET' };

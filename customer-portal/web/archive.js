@@ -8,10 +8,13 @@
   const titles={'daily-review':'일별 검수 결과','published-report':'발행 리포트'};
   const status=value=>({reviewed:'자동 검수 통과',complete:'정상 자료',partial:'일부 자료 · 확인 필요'}[value]||'검수 상태 확인 필요');
   const PAGE_SIZE=100;
+  let readOnly=false;
+  const writesBlocked=()=>readOnly||window.InsightAdminCustomerView?.readOnly?.()===true;
   let generation=0,listSequence=0,detailSequence=0,root=null,request=null,expired=null,enabled=false,writing=false,publishIntent=null,listOffset=0,listTotal=0;
   const node=selector=>root?.querySelector(selector);
   const visible=(token,element=root)=>token===generation&&root?.isConnected&&element?.isConnected;
   function panel(state={},selectedOwnId=null){
+    if(state.view?.readOnly===true||window.InsightAdminCustomerView?.readOnly?.()===true)return `<section id="insight-archives" class="card"><div class="analysis-card-top"><h2>보관한 자료</h2><span class="status-pill">읽기 전용</span></div><p class="muted">고객의 기존 검수 결과와 발행본을 확인합니다. 새 보관·발행은 하지 않습니다.</p><p id="archive-notice" class="muted" role="status" aria-live="polite"></p><label class="field"><span>자료 종류</span><select id="archive-kind"><option value="">전체</option><option value="daily-review">일별 검수 결과</option><option value="published-report">발행 리포트</option></select></label><div id="archive-list" aria-live="polite"><p class="empty-note">보관 목록을 연결하고 있습니다.</p></div><div id="archive-detail" aria-live="polite"></div></section>`;
     const relations=(state.customer?.relations||[]).filter(row=>row.kind==='own'&&['active','pending'].includes(row.status));
     const companies=relations.map(row=>(state.companies||[]).find(company=>company.companyId===row.companyId)).filter(Boolean);
     const allCompanies=(state.customer?.relations||[]).filter(row=>['own','competitor'].includes(row.kind)&&['active','pending'].includes(row.status)).map(row=>(state.companies||[]).find(company=>company.companyId===row.companyId)).filter(Boolean);
@@ -77,7 +80,7 @@
     return `<section class="analysis-notes"><h3>${esc(record.metadata?.title||titles[record.kind]||'보관 자료')}</h3><p class="muted">${esc(period(record.period||data.period))} · ${esc(status(quality))} · 보관 ${esc(when(record.createdAt))}</p><p class="muted">보관 당시의 고정 자료입니다. 이후 갱신된 현재 자료와 다를 수 있습니다.</p>${publicationV2?'<p class="muted">예약·매출은 관측 자료에 기반한 추정값입니다.</p>':''}${provenance(record.identity,data)}${companies.map(company=>companyView(company,{dailyReview,publicationV2,title:dailyReview?record.metadata?.title:undefined})).join('')}${Array.isArray(data.quality?.issues)&&data.quality.issues.length?`<details><summary>확인할 항목</summary><ul>${data.quality.issues.map(issue=>`<li>${esc(typeof issue==='string'?issue:issue.message||issue.code||'자료 확인 필요')}</li>`).join('')}</ul></details>`:''}</section>`;
   }
   function notice(message){const target=node('#archive-notice');if(target)target.textContent=message;}
-  function buttons(){for(const id of ['#archive-publish-form','#archive-review-form']){const button=node(id)?.querySelector('button');if(button)button.disabled=!enabled||writing;}}
+  function buttons(){for(const id of ['#archive-publish-form','#archive-review-form']){const button=node(id)?.querySelector('button');if(button)button.disabled=writesBlocked()||!enabled||writing;}}
   function unauthorized(error,token){
     if(error?.status!==401||!visible(token))return false;
     const callback=expired;stop();if(callback)callback();return true;
@@ -110,7 +113,7 @@
     catch(error){if(!current()||unauthorized(error,token))return;slot.innerHTML=`<p class="collection-warning">${esc(error.message||'보관 자료를 확인하지 못했습니다.')}</p>`;}
   }
   async function publish(form){
-    const token=generation,api=request;if(!enabled||writing||!visible(token,form))return;
+    const token=generation,api=request;if(writesBlocked()||!enabled||writing||!visible(token,form))return;
     const values=Object.fromEntries(new FormData(form)),reportType=values.reportType,anchorDate=values.anchorDate;
     if(!['weekly','monthly'].includes(reportType)||!/^\d{4}-\d{2}-\d{2}$/.test(anchorDate||'')){notice('발행 종류와 숙박 기준일을 확인해 주세요.');return;}
     const intent=JSON.stringify([reportType,anchorDate,values.ownId||'']);
@@ -132,7 +135,7 @@
     finally{if(visible(token,form)){writing=false;buttons();}}
   }
   async function capture(form){
-    const token=generation,api=request;if(!enabled||writing||!visible(token,form))return;
+    const token=generation,api=request;if(writesBlocked()||!enabled||writing||!visible(token,form))return;
     const values=Object.fromEntries(new FormData(form)),companyId=values.companyId,month=values.month;
     if(typeof companyId!=='string'||!companyId||!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month||'')){notice('업체와 숙박월을 확인해 주세요.');return;}
     writing=true;buttons();notice('저장된 업체·월 자료를 검사하고 있습니다.');
@@ -147,7 +150,7 @@
     finally{if(visible(token,form)){writing=false;buttons();}}
   }
   function stop(){generation++;listSequence++;detailSequence++;if(root?.isConnected)root.innerHTML='';root=null;request=null;expired=null;enabled=false;writing=false;publishIntent=null;listOffset=0;listTotal=0;}
-  function mount(api,{onSessionExpired=null}={}){stop();root=document.querySelector('#insight-archives');request=api;expired=onSessionExpired;if(root)void loadList();}
+  function mount(api,{onSessionExpired=null,readOnly:readonly=false}={}){stop();readOnly=readonly===true;root=document.querySelector('#insight-archives');request=api;expired=onSessionExpired;if(root)void loadList();}
   document.addEventListener('submit',event=>{if(!['archive-publish-form','archive-review-form'].includes(event.target.id))return;event.preventDefault();event.stopImmediatePropagation();if(event.target.id==='archive-publish-form')void publish(event.target);else void capture(event.target);});
   document.addEventListener('change',event=>{if(event.target.closest?.('#archive-publish-form'))publishIntent=null;if(event.target.id!=='archive-kind')return;event.stopImmediatePropagation();listOffset=0;detailSequence++;const detail=node('#archive-detail');if(detail)detail.innerHTML='';void loadList();});
   document.addEventListener('click',event=>{

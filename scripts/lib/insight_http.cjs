@@ -88,6 +88,21 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
     if (preview && customer.accountStatus !== 'active') throw fault('ACCOUNT_DISABLED', '고객 체험 계정의 이용이 중지되었습니다.', 403);
     return customer;
   }
+  function selectedAdminScope(token, customerId) {
+    const boundary = customer => JSON.stringify([customer.memberId,customer.accountStatus,customer.relations.filter(active),(customer.regions||[]).filter(active),customer.entitlements]);
+    let expected;
+    const current = () => {
+      adminStore.authenticate(token);
+      const customer = store.get(customerId);
+      if (customer.accountKind === 'admin_preview' || customer.memberId?.startsWith('insight-admin:')) throw fault('CUSTOMER_VIEW_FORBIDDEN','다른 관리자의 체험 계정은 선택할 수 없습니다.',403);
+      if (customer.accountStatus !== 'active') throw fault('ACCOUNT_DISABLED','이용이 중지된 고객입니다. 관리자 고객 상세에서 확인해 주세요.',403);
+      const value=boundary(customer);
+      if (expected !== undefined && expected !== value) throw fault('CUSTOMER_VIEW_SCOPE_CHANGED','고객의 등록 정보가 변경되었습니다. 다시 조회해 주세요.',409);
+      expected=value;
+      return customer;
+    };
+    return {current,async verify(){const customer=current();if(!await memberActive(customer.memberId))throw fault('ACCOUNT_DISABLED','이용자 계정이 중지되었습니다.',403);current();}};
+  }
   function state(customer, data) {
     const allowed = new Set(customer.relations.filter(active).map(row => row.companyId));
     const companies = data.companies.filter(row => allowed.has(row.companyId));
@@ -153,6 +168,8 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
     return {request,result,companyDetail,collectionAllowance:store.collectionAllowance(c.customerId),previousResult:Boolean(result && request && result.runId!==request.runId)};
   }
   async function customerRequest(req, res, url, tail, c, token, context = {}, scope = customerScope(token, c.customerId)) {
+      const readOnly=context.view?.readOnly===true;
+      if(readOnly&&req.method!=='GET')throw fault('CUSTOMER_VIEW_READ_ONLY','아이디별 고객 화면은 조회 전용입니다. 변경은 관리자 화면에서 처리해 주세요.',403);
       if (req.method === 'GET' && tail === '/me') await sendState(res, c, scope, { csrfToken: csrf(token), ...context });
       else if(['GET','POST'].includes(req.method)&&/^\/companies\/[a-zA-Z0-9_-]+\/recurring-collection$/.test(tail)) {
         if(!recurringCollection)throw fault('RECURRING_COLLECTION_NOT_READY','정기수집 요청 연결을 준비 중입니다.',503);
@@ -180,6 +197,7 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
           month=url.searchParams.get('month');
         }
         const result=await analysis.preparation(c,tail.split('/')[2],month,req.method==='POST');
+        if(readOnly){await scope.verify();scope.current();}
         json(res,req.method==='POST'&&['queued','running'].includes(result.job?.status)?202:200,result);
       }
       else if(req.method==='GET' && tail==='/regions/comparison-summary') {
@@ -202,19 +220,22 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
       else if(req.method==='GET' && /^\/regions\/[a-zA-Z0-9_-]+\/analysis$/.test(tail)) {
         if(!analysis)throw fault('REGION_NOT_READY','지역 자료 연결을 준비 중입니다.',503);
         if([...url.searchParams.keys()].some(k=>k!=='month')||url.searchParams.getAll('month').length>1)throw fault('INVALID_FIELDS','조회할 기준월만 지정해 주세요.');
-        json(res,200,await analysis.region(c,tail.split('/')[2],url.searchParams.get('month')||undefined));
+        const value=await analysis.region(c,tail.split('/')[2],url.searchParams.get('month')||undefined);
+        if(readOnly){await scope.verify();scope.current();}
+        json(res,200,value);
       }
       else if (req.method === 'GET' && (tail === '/reports' || /^\/reports\/mr_[a-zA-Z0-9_-]+(?:\/pdf)?$/.test(tail))) {
         if (!reportDelivery) throw fault('REPORT_NOT_READY', '발행 리포트 제공을 준비 중입니다.', 409);
         if (url.search) throw fault('INVALID_FIELDS', '발행된 리포트 번호만 지정해 주세요.');
         const verifyAccess = async () => { if (scope?.verify) await scope.verify(); return scope.current(); };
-        if (tail === '/reports') json(res, 200, await reportDelivery.list(c.customerId, { verifyAccess }));
-        else if (!tail.endsWith('/pdf')) json(res, 200, await reportDelivery.detail(c.customerId, tail.split('/')[2], { verifyAccess }));
+        if (tail === '/reports') {const value=await reportDelivery.list(c.customerId,{verifyAccess});if(readOnly){await scope.verify();scope.current();}json(res,200,value);}
+        else if (!tail.endsWith('/pdf')) {const value=await reportDelivery.detail(c.customerId,tail.split('/')[2],{verifyAccess});if(readOnly){await scope.verify();scope.current();}json(res,200,value);}
         else {
           if (typeof renderReportPdf !== 'function') throw fault('REPORT_NOT_READY', 'PDF 제공을 준비 중입니다.', 409);
           const id = tail.split('/')[2], report = await reportDelivery.authorizedReport(c.customerId, id, { verifyAccess });
           const buffer = await renderReportPdf(report);
           await reportDelivery.authorizedReport(c.customerId, id, { verifyAccess });
+          if(readOnly){await scope.verify();scope.current();}
           if (!Buffer.isBuffer(buffer) || buffer.length > 20 * 1024 * 1024 || buffer.subarray(0, 5).toString() !== '%PDF-') throw fault('REPORT_UNAVAILABLE', 'PDF를 확인하지 못했습니다.', 503);
           res.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Length': buffer.length,
             'Content-Disposition': `attachment; filename="monthly-report-${report.month}-v${report.version}.pdf"`, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
@@ -226,7 +247,9 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
         const allowed=['ownId','savedOnly','stayMode','month','start','end'];
         if([...url.searchParams.keys()].some(k=>!allowed.includes(k))||allowed.some(key=>url.searchParams.getAll(key).length>1)||url.searchParams.has('savedOnly')&&url.searchParams.get('savedOnly')!=='1')throw fault('INVALID_FIELDS','등록한 내 매장과 숙박기간, 저장 자료 조회 방식만 선택해 주세요.');
         const selection=Object.fromEntries(['stayMode','month','start','end'].filter(key=>url.searchParams.has(key)).map(key=>[key,url.searchParams.get(key)]));
-        json(res,200,await analysis.briefing(c,url.searchParams.get('ownId')||undefined,{...selection,savedOnly:url.searchParams.get('savedOnly')==='1'}));
+        const value=await analysis.briefing(c,url.searchParams.get('ownId')||undefined,{...selection,savedOnly:url.searchParams.get('savedOnly')==='1'});
+        if(readOnly){await scope.verify();scope.current();}
+        json(res,200,value);
       }
       else if (req.method === 'GET' && /^\/companies\/[a-zA-Z0-9_-]+\/collection$/.test(tail)) {
         if ([...url.searchParams.keys()].some(key => !['month','savedOnly'].includes(key)) || url.searchParams.getAll('month').length > 1
@@ -260,6 +283,7 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
         const data = await catalog();
         const rows = tail.endsWith('/companies') ? data.companies : data.regions.filter(row => row.level === 'local');
         const results = rows.filter(row => [row.name, row.address, row.label, ...(row.placeIds || [])].filter(Boolean).join(' ').toLowerCase().includes(query)).sort((a,b) => String(a.name || a.label).localeCompare(String(b.name || b.label), 'ko')).slice(0, 30);
+        if(readOnly){await scope.verify();scope.current();}
         // Registration candidates intentionally contain no private notes, analysis or raw observations.
         json(res, 200, { results: results.map(row => tail.endsWith('/companies') ? { companyId: row.companyId, name: row.name, address: row.address, placeIds: row.placeIds, regionLabel: row.regionLabel } : row) });
       } else if (req.method === 'POST' && tail === '/commands') {
@@ -315,6 +339,16 @@ function createInsightHttp({ store, serviceToken, authenticateMember, memberActi
         if (req.method === 'POST' && !equal(req.headers['x-csrf-token'], csrf(token))) throw fault('CSRF_INVALID', '관리자 화면을 새로 열어 주세요.', 403);
         if (tail.startsWith('/admin/customer-view/')) {
           const route = tail.slice('/admin/customer-view'.length);
+          const target=req.headers['x-insight-customer-id'];
+          if(target!==undefined) {
+            if(typeof target!=='string'||!/^cus_[a-zA-Z0-9-]{1,180}$/.test(target))throw fault('INVALID_CUSTOMER_VIEW','선택한 고객 번호를 확인해 주세요.');
+            const scope=selectedAdminScope(token,target);await scope.verify();
+            if(req.method!=='GET')throw fault('CUSTOMER_VIEW_READ_ONLY','아이디별 고객 화면은 조회 전용입니다. 변경은 관리자 화면에서 처리해 주세요.',403);
+            const customer=scope.current(),context={view:{mode:'admin_customer',adminUsername:admin.username,readOnly:true,customerId:customer.customerId,customerUsername:customer.username}};
+            if(route==='/config'){json(res,200,{signupEnabled:false,supportEmail,usernameCheckEnabled:false});return true;}
+            if(['/policies/terms','/policies/privacy'].includes(route)){const doc=policies[route.split('/').pop()];if(!doc)throw fault('NOT_FOUND','안내 문서를 준비 중입니다.',404);json(res,200,doc);return true;}
+            await customerRequest(req,res,url,route,customer,token,context,scope);return true;
+          }
           const context = { view: { mode: 'admin_customer', adminUsername: admin.username } };
           if (route === '/config' && req.method === 'GET') {
             json(res, 200, { signupEnabled: false, supportEmail, usernameCheckEnabled: false }); return true;

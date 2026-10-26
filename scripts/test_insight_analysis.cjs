@@ -59,9 +59,12 @@ test('briefing includes only selected own location and explicit interests for mu
   assert.equal((await service.region(customer,'r1')).region.id,'r1','all registered own locations remain accessible in regional analysis');
 });
 test('authenticated BFF limits region and briefing reads to registered identities with no dispatch',async t=>{
+  // Keep the BFF's KST cache/cutoff day on the same clock as this dated source
+  // fixture. A real current-day BFF must reject a report anchored to October 2.
+  const fixtureNow=Date.parse('2026-10-02T02:00:00Z');t.mock.method(Date,'now',()=>fixtureNow);
   const {store,customer,cmd}=setup(t);store.update(customer.customerId,cmd(customer,'add-region',{regionKey:'r0'}),catalog);store.update(customer.customerId,cmd(customer,'add-company',{kind:'own',companyId:'c0'}),catalog);
   let reads=0,prepared=0;
-  const analysis=createInsightAnalysis({catalog:async()=>catalog,collectionResults:{companyDetail:async()=>({current:{daily:days(2)}})},now:()=>Date.parse('2026-10-02T02:00:00Z'),regionPreparation:{get:async()=>null,start:async input=>{prepared++;assert.equal(input.regionKey,'r0');return {id:'fixture-job',status:'queued',progress:{completed:0},steps:[]};}},readRegionContext:async(req)=>{reads++;assert.equal(req.targetId,'r0');return {sources:[{key:'test',label:'저장 지표',status:'ready',period:req.month,rows:[{status:'observed',value:100}]}],networkAttempted:false};}});
+  const analysis=createInsightAnalysis({catalog:async()=>catalog,collectionResults:{companyDetail:async()=>({current:{daily:days(2)}})},now:()=>fixtureNow,regionPreparation:{get:async()=>null,start:async input=>{prepared++;assert.equal(input.regionKey,'r0');return {id:'fixture-job',status:'queued',progress:{completed:0},steps:[]};}},readRegionContext:async(req)=>{reads++;assert.equal(req.targetId,'r0');return {sources:[{key:'test',label:'저장 지표',status:'ready',period:req.month,rows:[{status:'observed',value:100}]}],networkAttempted:false};}});
   const serviceToken='fixture-service-token-only-32-characters',h=createInsightHttp({store,serviceToken,authenticateMember:async()=>({memberId:'ordinary',username:'ordinary',role:'b2b'}),memberActive:async()=>true,catalog:async()=>catalog,requireAdmin:()=>false,analysis});
   const backend=http.createServer((req,res)=>h.internal(req,res,new URL(req.url,'http://local')));
   await new Promise(r=>backend.listen(0,'127.0.0.1',r));t.after(()=>backend.close());
@@ -76,7 +79,9 @@ test('authenticated BFF limits region and briefing reads to registered identitie
   assert.equal((await request('/regions/r0/analysis?force=true',null,cookie)).status,400);
   assert.equal((await request('/reports/briefing?ownId=c1',null,cookie)).status,404);
   const report=await request('/reports/briefing?ownId=c0',null,cookie);assert.equal(report.status,200);assert.deepEqual(report.data.companies.map(c=>c.companyId),['c0']);assert.equal(report.data.actions.some(a=>a.key==='verify'),true);
-  assert.equal((await request('/reports/briefing')).status,401);assert.equal(reads,2);assert.equal(store.requests(customer.customerId).length,0);
+  // One direct region view plus the report's saved preview and final source
+  // read the same authorized region; none of these requests dispatch a crawl.
+  assert.equal((await request('/reports/briefing')).status,401);assert.equal(reads,3);assert.equal(store.requests(customer.customerId).length,0);
   assert.equal((await request('/regions/r0/preparation?month=2026-09')).status,401);
   assert.equal((await request('/regions/r1/preparation?month=2026-09',null,cookie)).status,404);
   assert.equal((await request('/regions/r0/preparation?month=2026-09&force=true',null,cookie)).status,400);
