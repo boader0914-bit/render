@@ -69,9 +69,10 @@ test('verified own and separately registered interest locations retain their exi
   }
 });
 
-test('read permission does not widen the briefing selected-own-location scope',async()=>{
+test('pending own briefing reads its saved region without granting preparation rights',async()=>{
   const s=service();const result=await s.analysis.briefing(owner(),'cmp-own');
-  assert.deepEqual(result.regions,[]);assert.equal(s.reads.length,0);assert.equal(s.preparations.length,0);
+  assert.deepEqual(result.regions.map(r=>r.region.id),['r-home']);assert.equal(s.reads.length,1);assert.equal(s.preparations.length,0);
+  assert.equal(result.companies[0].relationStatus,'pending');assert.equal(result.regions[0].refreshAvailable,false);
 });
 
 async function httpFixture(t) {

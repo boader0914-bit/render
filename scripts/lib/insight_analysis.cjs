@@ -2,7 +2,7 @@
 const {fault,active}=require('./insight_store.cjs');
 const {shiftMonth,metricsFor}=require('./insight_region_history.cjs');
 const {evaluateComparison,buildComparisonSet,validQuantityDay,summarizeCompany,projectReservationSeries}=require('./insight_comparison.cjs');
-const {buildRegionSummarySelection,projectRegionSummary}=require('./insight_region_summary.cjs');
+const {comparisonRegionBindings,buildRegionSummarySelection,projectRegionSummary}=require('./insight_region_summary.cjs');
 const txt=v=>typeof v==='string'?v.slice(0,1500):'';
 const num=v=>typeof v==='number'&&Number.isFinite(v)?v:null;
 const kst=v=>Number.isFinite(Date.parse(v))?new Date(Date.parse(v)+9*3600000).toISOString().slice(0,10):null;
@@ -87,10 +87,9 @@ function regionIds(customer,catalog) {
 // Viewing stored context does not approve ownership or grant preparation rights.
 // Keep regionIds unchanged for preparation status and refresh requests.
 function readableRegionIds(customer,catalog) {
-  const keys=regionIds(customer,catalog);
-  for(const rel of customer.relations.filter(r=>r.kind==='own'&&r.status==='pending')) {
-    const key=catalog.companies.find(c=>c.companyId===rel.companyId)?.regionKey;
-    if(key&&catalog.regions.some(r=>r.id===key&&r.level==='local'))keys.add(key);
+  const keys=new Set(customer.regions.filter(active).map(r=>r.regionKey));
+  for(const binding of comparisonRegionBindings(customer,catalog)) {
+    if(binding.kind==='own'&&binding.analysisRegionKey)keys.add(binding.analysisRegionKey);
   }
   return keys;
 }
@@ -137,7 +136,9 @@ function buildBriefing(companies,regions,{today,ownId,mode='current',asOf=today,
     else if(!comparisons.some(c=>c.actionable))add('comparison_review','예약 흐름을 참고하고 비교 조건을 먼저 확인하세요.','지역·업종·비교 목적 또는 관측 시차 조건이 달라 자동 우열 판단을 보류했습니다.','업체별 비교 근거와 해당 지역의 수요 배경을 함께 확인하세요.','지역 관계·공통 업종·관측 시차','공통 숙박일 비교');
     else add('track','현재 조건을 유지하며 예약 흐름을 확인하세요.','같은 지역·공통 업종의 직접 경쟁 중 행동 판단 조건을 충족한 자료에서 더 낮은 예약률 신호가 확인되지 않았습니다.','예약 감소와 판매금액 변화를 함께 확인한 뒤 변경 여부를 결정하세요.','같은 숙박일의 공개 예약 순증감','공통 숙박일 비교');
   }
-  const ownRegion=own&&regions.find(r=>r.region.id===own.regionKey);
+  const ownRegionKey=own&&(Object.hasOwn(own,'analysisRegionKey')?own.analysisRegionKey:
+    Object.hasOwn(regionHierarchy||{},own.regionKey)?regionHierarchy[own.regionKey]:own.regionKey);
+  const ownRegion=ownRegionKey&&regions.find(r=>r.region.id===ownRegionKey);
   const hasMonthlyFlow=ownRegion?.sources?.some(s=>s.metrics?.some(m=>m.observedMonths>0));
   if(own&&(!ownRegion||!ownRegion.availableSources))add('region_data','매장 소재지의 지역 자료를 보완하세요.','현재 연결된 매장 소재지 지표가 없거나 확인되지 않았습니다.','지역 연결을 확인하고 관리자에게 해당 기준월의 자료 준비를 요청하세요.','소재지 일치·공표기간·자료 확보 상태','지역 분석');
   else if(ownRegion?.window&&!hasMonthlyFlow)add('region_flow','지역의 월별 흐름 자료를 준비하세요.','인구·산업 배경과 별도로 최근 12개월 관광·검색 지표의 확보가 필요합니다.','지역 분석에서 지역 자료 갱신을 눌러 준비 상태와 누락 월을 확인하세요.','12개월 확보 범위·최신 공표월·전년 동월 비교 가능 여부','데이터랩 지역 분석');
@@ -199,6 +200,7 @@ function createInsightAnalysis({catalog,collectionResults,savedCollectionResults
   }
   async function briefing(customer,ownId,{savedOnly=false}={}) {
     const data=await catalog(),rels=customer.relations.filter(active),own=rels.filter(r=>r.kind==='own');
+    const regionBindings=new Map(comparisonRegionBindings(customer,data).map(binding=>[binding.companyId,binding]));
     const reportDay=today(),reportEnd=shift(reportDay,29),startMonth=reportDay.slice(0,7),endMonth=reportEnd.slice(0,7),regionMonth=previousMonth();
     ownId=ownId||own[0]?.companyId||null;
     if(ownId&&!own.some(r=>r.companyId===ownId))throw fault('NOT_FOUND','등록한 내 매장을 선택해 주세요.',404);
@@ -231,12 +233,12 @@ function createInsightAnalysis({catalog,collectionResults,savedCollectionResults
       }
       const days=[...new Map(sourceDays.map(d=>[d.date,d])).values()];
       const capacityConflict=c.capacityConflict===true||monthRoomBases.some(b=>num(c.rooms)>0&&b.count>0&&c.rooms!==b.count),capacityReviewRequired=c.capacityReviewRequired===true||monthRoomBases.some(b=>b.reviewRequired);
-      companies.push({companyId:c.companyId,name:c.name,rooms:c.rooms,regionKey:c.regionKey,regionLabel:typeof c.regionLabel==='string'&&c.regionLabel?txt(c.regionLabel):null,roomCountSource:typeof c.roomCountSource==='string'&&c.roomCountSource?txt(c.roomCountSource):null,industryTags:Array.isArray(c.industryTags)?c.industryTags:[],industrySource:c.industrySource||'unknown',industryEvidence:c.industryEvidence||[],comparisonPurpose:rel.comparisonPurpose||null,capacityStatus:capacityConflict?'conflict':capacityReviewRequired?'review_required':c.capacityStatus||null,capacityConflict,capacityReviewRequired,roomBasis:c.roomBasis||null,monthRoomBases,kind:rel.kind,relationStatus:rel.status,
+      companies.push({companyId:c.companyId,name:c.name,rooms:c.rooms,regionKey:c.regionKey,analysisRegionKey:regionBindings.get(c.companyId)?.analysisRegionKey||null,regionLabel:typeof c.regionLabel==='string'&&c.regionLabel?txt(c.regionLabel):null,roomCountSource:typeof c.roomCountSource==='string'&&c.roomCountSource?txt(c.roomCountSource):null,industryTags:Array.isArray(c.industryTags)?c.industryTags:[],industrySource:c.industrySource||'unknown',industryEvidence:c.industryEvidence||[],comparisonPurpose:rel.comparisonPurpose||null,capacityStatus:capacityConflict?'conflict':capacityReviewRequired?'review_required':c.capacityStatus||null,capacityConflict,capacityReviewRequired,roomBasis:c.roomBasis||null,monthRoomBases,kind:rel.kind,relationStatus:rel.status,
         unavailable:sourceIssues.length>0,sourceStatus:sourceIssues.length?days.some(validDay)?'partial':'unavailable':'ready',sourceIssues,days});
     }
     const regions=[],keys=new Set(customer.regions.filter(active).map(r=>r.regionKey));
-    const selectedOwn=companies.find(c=>c.kind==='own'&&c.companyId===ownId&&c.relationStatus==='active');
-    if(selectedOwn?.regionKey)keys.add(selectedOwn.regionKey);
+    const selectedOwn=companies.find(c=>c.kind==='own'&&c.companyId===ownId);
+    if(selectedOwn?.analysisRegionKey)keys.add(selectedOwn.analysisRegionKey);
     for(const key of keys) {
       try{
         regions.push(await region(customer,key,regionMonth,data));
