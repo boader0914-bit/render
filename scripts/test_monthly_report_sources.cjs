@@ -311,6 +311,31 @@ test("canonical IDs, merged IDs, ambiguous names, exact regions and strict sourc
   await assert.rejects(source.options(), error => error.code === "MONTHLY_SOURCE_UNAVAILABLE");
 });
 
+test("saved address region stays independent from a manual analytical-region override, including the persisted company catalog", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "monthly-address-region-"));
+  t.after(async () => { assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep)); await fs.rm(root, { recursive: true, force: true }); });
+  await fs.mkdir(path.join(root, "company_master"));
+  const address = "경상남도 합성군 시험로 10", companyFile = path.join(root, "company_master", "companies.json"), regionMasterFile = path.join(root, "regions.json");
+  const master = { companies: { a: { companyId: "a", primaryName: "주소 검수 업체", addresses: [address], manualCorrection: { active: true, regionOverride: "r2" } } } };
+  await fs.writeFile(companyFile, JSON.stringify(master));
+  await fs.writeFile(regionMasterFile, JSON.stringify({ units: [
+    { regionKey: "r1", fullName: "경상남도 합성군", level: "local", active: true, selectable: true },
+    { regionKey: "r2", fullName: "경기도 분석군", level: "local", active: true, selectable: true }
+  ] }));
+  const options = { dataDir: root, regionMasterFile, listRuns: async () => [], readRevision: async () => "address-region-source-v1", projectCapacityCompany: compactMonthlyCapacityCompany };
+  const request = { type: "company", targetId: "a", month: "2026-09", cutoffDate: "2026-09-30" }, adapter = createMonthlyReportSources(options);
+  const source = await adapter.loadSources(request), company = source.companies[0];
+  assert.equal(company.regionKey, "r2"); assert.equal(company.regionLabel, "경기도 분석군");
+  assert.deepEqual(company.addressBasis, { status: "ready", address, basis: "saved_company_address", regionKey: "r1", regionLabel: "경상남도 합성군" });
+  const snapshot = buildMonthlyReportSnapshot(request, source, "2026-10-26T00:00:00Z");
+  assert.equal(snapshot.companies[0].regionKey, "r2", "the existing report analysis keeps its explicit override");
+  const restarted = createMonthlyReportSources({ ...options, prepareCompanies: async () => { throw Error("persisted source catalog must not prepare another master"); } });
+  const cached = await restarted.loadSources(request);
+  assert.deepEqual(cached.companies[0].addressBasis, company.addressBasis); assert.equal(cached.companies[0].regionKey, "r2");
+  assert.equal(restarted.sourceReadMetrics().catalogFullReads, 0); assert.equal(restarted.sourceReadMetrics().companyCatalog.savedHits, 1);
+  assert.equal(await fs.readFile(companyFile, "utf8"), JSON.stringify(master), "read projections do not overwrite the source's manual correction or saved address");
+});
+
 test("company, region and monthly keyword quality ignore unrelated global defects while retaining scoped exclusions", async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "monthly-source-scope-"));
   t.after(async () => { assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep)); await fs.rm(root, { recursive: true, force: true }); });

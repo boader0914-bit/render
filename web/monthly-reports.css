@@ -16,6 +16,12 @@ html[data-theme-resolved="dark"] .monthly-reports { --mr-public: #92d4aa; --mr-p
 .mr-notice { font-size: 12px; color: var(--text-secondary, #5e6975); min-height: 1.5em; }
 .mr-error { border: 1px solid var(--danger, #c54848); border-radius: 10px; padding: 12px 16px; font-size: 13px; color: var(--danger-strong, #a83c3c); }
 .mr-card { border: 1px solid var(--border-subtle, #dce4df); border-radius: 16px; background: var(--surface-card, #fff); min-width: 0; }
+.mr-action-editor { display: grid; gap: 14px; padding: 18px; }
+.mr-action-editor fieldset { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; border: 1px solid var(--border-subtle,#dce4df); border-radius: 10px; padding: 14px; min-width: 0; }
+.mr-action-editor label { display: grid; gap: 6px; font-size: 13px; min-width: 0; }
+.mr-action-editor :is(input,select,textarea) { width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--border-subtle,#dce4df); border-radius: 6px; background: var(--surface-card,#fff); color: var(--text-primary,#172235); font: inherit; }
+.mr-action-editor select[multiple] { min-height: 105px; }
+@media (max-width: 640px) { .mr-action-editor fieldset { grid-template-columns: minmax(0,1fr); } }
 .mr-create { padding: 20px 22px; container: monthly-report-form / inline-size; }
 .mr-section-title h3 { font-size: 14px; letter-spacing: -.02em; }
 .mr-section-title h3 span { color: var(--text-secondary, #5e6975); font-weight: 500; margin-left: 5px; }

@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const { hasDetailedAddress } = require("./company_address_basis.cjs");
 
 const VERSION = "regional-catchment-grid-v1";
 const MAX_CELLS = 50000;
@@ -36,11 +37,36 @@ function coordinate(latitude, longitude) {
     || latitude < 32 || latitude > 40 || longitude < 123 || longitude > 133) throw fault("CATCHMENT_INVALID_COORDINATE");
   return { latitude, longitude };
 }
+function normalizeAddress(value) {
+  if (typeof value !== "string" || /[\x00-\x1f\x7f]/.test(value) || value.length > 500) throw fault("CATCHMENT_ADDRESS_REQUIRED");
+  const address = value.normalize("NFKC").trim().replace(/\s+/g, " ");
+  if (!address) throw fault("CATCHMENT_ADDRESS_REQUIRED");
+  return address;
+}
+function addressFingerprint(value) { return hash(normalizeAddress(value)); }
+function normalizeCompanyId(value) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_:-]{1,120}$/.test(value)) throw fault("CATCHMENT_INVALID_COMPANY");
+  return value;
+}
+// Pick only the original input fields when revalidating a saved, normalized
+// center. Keeping the legacy representation unchanged preserves old evidence.
+function centerInput(center) {
+  return { latitude: center?.latitude, longitude: center?.longitude, label: center?.label, sourceUrl: center?.sourceUrl, confirmed: center?.confirmed,
+    ...(center?.address !== undefined ? { address: center.address } : {}), ...(center?.companyId !== undefined ? { companyId: center.companyId } : {}) };
+}
 function normalizeCenter(input) {
-  keys(input, ["latitude", "longitude", "label", "sourceUrl", "confirmed"]);
+  keys(input, ["latitude", "longitude", "label", "sourceUrl", "confirmed", "address", "companyId"]);
   if (input.confirmed !== true || !text(input.label)) throw fault("CATCHMENT_CENTER_CONFIRMATION_REQUIRED");
-  return { ...coordinate(input.latitude, input.longitude), label: input.label.trim(), sourceUrl: sourceUrl(input.sourceUrl), confirmed: true,
-    provenance: "administrator_confirmed", kind: "declared_reference_point" };
+  const point = { ...coordinate(input.latitude, input.longitude), label: input.label.trim(), sourceUrl: sourceUrl(input.sourceUrl), confirmed: true };
+  if (input.address === undefined) {
+    if (input.companyId !== undefined) throw fault("CATCHMENT_ADDRESS_REQUIRED");
+    return { ...point, provenance: "administrator_confirmed", kind: "declared_reference_point" };
+  }
+  const address = normalizeAddress(input.address);
+  if (!hasDetailedAddress(address)) throw fault("CATCHMENT_ADDRESS_REQUIRED");
+  return { ...point, address, addressFingerprint: addressFingerprint(address),
+    ...(input.companyId !== undefined ? { companyId: normalizeCompanyId(input.companyId) } : {}),
+    provenance: "administrator_address_matched", kind: "address_reference_point" };
 }
 function validatePreparationProvenance(input) {
   const archive = input.sourceHashKind === "original_archive" || input.boundaryHashKind === "original_archive_set_manifest"
@@ -151,15 +177,15 @@ function resultStatus(rings) {
   const metrics = rings.flatMap(ring => Object.values(ring.metrics));
   return metrics.every(metric => metric.value !== null) ? "ready" : metrics.some(metric => metric.publishedSum !== null) ? "partial" : "missing";
 }
-function validateCatchmentResult(result, { regionKey, center, datasetFingerprint, requireResultId = true } = {}) {
+function validateCatchmentResult(result, { regionKey, companyId, center, datasetFingerprint, requireResultId = true } = {}) {
   try {
     keys(result, ["calculationVersion", "sourceFingerprint", "calculatedAt", "scope", "dataset", "status", "method", "rings", "networkAttempted", "notes", "resultId"]);
     if (result.calculationVersion !== VERSION || !/^[a-f0-9]{64}$/.test(result.sourceFingerprint || "") || result.networkAttempted !== false
       || !Number.isFinite(Date.parse(result.calculatedAt)) || requireResultId && !/^[a-f0-9-]{36}$/.test(result.resultId || "")) throw new Error();
-    keys(result.scope, ["regionKey", "label", "center"]);
+    keys(result.scope, ["regionKey", "label", "center", "companyId"]);
     if (!text(result.scope.regionKey, 120) || !text(result.scope.label, 300) || regionKey !== undefined && result.scope.regionKey !== regionKey) throw new Error();
-    const point = normalizeCenter({ latitude: result.scope.center?.latitude, longitude: result.scope.center?.longitude, label: result.scope.center?.label,
-      sourceUrl: result.scope.center?.sourceUrl, confirmed: result.scope.center?.confirmed });
+    const point = normalizeCenter(centerInput(result.scope.center));
+    if (result.scope.companyId !== point.companyId || companyId !== undefined && result.scope.companyId !== companyId) throw new Error();
     if (hash(point) !== hash(result.scope.center) || center && hash(point) !== hash(center)) throw new Error();
     const dataset = result.dataset;
     keys(dataset, ["id", "provider", "sourceUrl", "sourceYear", "boundaryYear", "gridSizeM", "crs", "sourceSha256", "boundarySha256", "industryClassification",
@@ -228,8 +254,9 @@ function validateCatchmentResult(result, { regionKey, center, datasetFingerprint
     return result;
   } catch { throw fault("CATCHMENT_RESULT_INVALID", 503); }
 }
-async function calculateCatchment({ regionKey, label, center, dataset, now = () => new Date(), yieldEvery = 512 } = {}) {
-  const point = normalizeCenter({ latitude: center?.latitude, longitude: center?.longitude, label: center?.label, sourceUrl: center?.sourceUrl, confirmed: center?.confirmed });
+async function calculateCatchment({ regionKey, companyId, label, center, dataset, now = () => new Date(), yieldEvery = 512 } = {}) {
+  const point = normalizeCenter(centerInput(center));
+  if (companyId !== point.companyId) throw fault("CATCHMENT_INVALID_COMPANY");
   const rings = [
     { key: "inner50", label: "0~50km", minKm: 0, maxKm: 50 },
     { key: "outer50to100", label: "50km 초과~100km", minKm: 50, maxKm: 100 },
@@ -256,7 +283,7 @@ async function calculateCatchment({ regionKey, label, center, dataset, now = () 
     ring.metrics = Object.fromEntries(Object.entries(ring.metrics).map(([key, raw]) => [key, completeMetric(raw, ring.coverage)]));
   }
   return { calculationVersion: VERSION, sourceFingerprint: inputFingerprint(point, dataset), calculatedAt: new Date(now()).toISOString(),
-    scope: { regionKey, label, center: point }, dataset: datasetMetadata(dataset),
+    scope: { regionKey, label, center: point, ...(point.companyId !== undefined ? { companyId: point.companyId } : {}) }, dataset: datasetMetadata(dataset),
     status: resultStatus(rings),
     method: { distance: "wgs84-haversine", earthRadiusKm: EARTH_RADIUS_KM, inclusion: "cell-center", radiiKm: [50, 100],
       boundaryPolicy: "0<=d<=50;50<d<=100", gridBoundaryAccuracy: "cell-center approximation; boundary cells retained as uncertainty", coverageBasis: "administrator_declared_not_independently_verified" },
@@ -266,5 +293,5 @@ async function calculateCatchment({ regionKey, label, center, dataset, now = () 
       "자료 범위 완전성은 관리자의 반입 선언이며 제공기관 검증을 뜻하지 않습니다."] };
 }
 
-module.exports = { VERSION, MAX_CELLS, EARTH_RADIUS_KM, METRICS, SOURCE_CATALOG, fault, hash, coordinate, normalizeCenter, normalizeDataset, datasetMetadata,
+module.exports = { VERSION, MAX_CELLS, EARTH_RADIUS_KM, METRICS, SOURCE_CATALOG, fault, hash, coordinate, normalizeAddress, addressFingerprint, normalizeCompanyId, centerInput, normalizeCenter, normalizeDataset, datasetMetadata,
   validateDataset: normalizeDataset, haversineKm, boundingCircle, bboxContainsCircle, inputFingerprint, calculateCatchment, validateCatchmentResult };

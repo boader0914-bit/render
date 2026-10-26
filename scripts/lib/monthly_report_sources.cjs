@@ -7,6 +7,7 @@ const readline = require("node:readline");
 const { performance } = require("node:perf_hooks");
 const { monthlyReportKeywordMembership } = require("./monthly_reports.cjs");
 const { industryCompanyReference } = require("./industry_analysis.cjs");
+const { companyAddressBasis, addressRegion } = require("./company_address_basis.cjs");
 const { createSourceReadScheduler } = require("./source_read_scheduler.cjs");
 const { createMonthlyReportMaterializedCache } = require("./monthly_report_materialized_cache.cjs");
 const { readCompanyMasterProjection } = require("./company_master_stream.cjs");
@@ -53,7 +54,8 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
   });
   const companySourceCatalog = typeof readRevision === "function" && typeof projectCapacityCompany === "function"
     ? createMonthlyCompanySourceCatalog({ dataDir, readRevision, projectCapacityCompany, useSourceReadValidationBoundary, shareFrozenCatalogMetadata,
-      version: require("node:crypto").createHash("sha256").update(String(companySourceVersion)).update(fs.readFileSync(__filename)).digest("hex"),
+      version: require("node:crypto").createHash("sha256").update(String(companySourceVersion)).update(fs.readFileSync(__filename))
+        .update(fs.readFileSync(require.resolve("./company_address_basis.cjs"))).digest("hex"),
       loadFullCatalog: options => readCatalog({ checkpoint: options?.checkpoint }) }) : null;
   async function readCatalog({ prepareCapacity = true, checkpoint = async () => {} } = {}) {
     await checkpoint();
@@ -103,7 +105,10 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
           }
         }
       }
+      const addressBasis = companyAddressBasis(company);
+      const addressLocation = addressBasis.status === "ready" ? addressRegion(addressBasis.address, units) : null;
       companies.push({ companyId: company.companyId, primaryName: company.primaryName || company.companyId,
+        addressBasis: { ...addressBasis, regionKey: addressLocation?.regionKey || "", regionLabel: addressLocation?.fullName || addressLocation?.name || "지역 확인 전" },
         ...industryCompanyReference(company, industryRegions),
         regionKey: region?.regionKey || "", regionKeys: [...new Set([region?.regionKey, region?.provinceRegionKey].filter(Boolean))],
         regionLabel: region?.fullName || "지역 확인 전", keywords: Object.values(company.keywords || {}).map(item => item.keyword).filter(Boolean),

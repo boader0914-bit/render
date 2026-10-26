@@ -3,7 +3,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
 
-function createMonthlyReportHttpHandler({ service, sources, renderPdf, dataDir, requireAdmin, parseJsonBody, send, rateLimit = () => {} }) {
+function createMonthlyReportHttpHandler({ service, sources, renderPdf, dataDir, requireAdmin, parseJsonBody, send, rateLimit = () => {}, getDelivery = () => null, deliveryCustomers = () => [] }) {
   const pdfDir = path.join(dataDir, "pdf");
   const rendering = new Map();
   async function pdfFor(report) {
@@ -27,7 +27,7 @@ function createMonthlyReportHttpHandler({ service, sources, renderPdf, dataDir, 
     rendering.set(report.id, work);
     try { return await work; } finally { rendering.delete(report.id); }
   }
-  return async function handleMonthlyReport(req, res, url, session) {
+  const handler = async function handleMonthlyReport(req, res, url, session) {
     const base = "/api/monthly-reports";
     if (url.pathname !== base && !url.pathname.startsWith(base + "/")) return false;
     if (!requireAdmin(session, req, res)) return true;
@@ -54,6 +54,18 @@ function createMonthlyReportHttpHandler({ service, sources, renderPdf, dataDir, 
     else if (tail.length === 2 && tail[1] === "publish" && req.method === "POST") send(res, 200, await service.publish(tail[0], payload));
     else if (tail.length === 2 && tail[1] === "revise" && req.method === "POST") send(res, 201, await service.revise(tail[0], payload));
     else if (tail.length === 2 && tail[1] === "rebuild" && req.method === "POST") send(res, 200, await service.rebuild(tail[0], payload));
+    else if (tail.length === 2 && tail[1] === "delivery" && req.method === "GET") {
+      const report = await service.get(tail[0]), delivery = getDelivery();
+      send(res, 200, { enabled: Boolean(delivery), reportId: report.id, published: report.status === "published",
+        customers: delivery && report.status === "published" ? deliveryCustomers().filter(c => c.accountStatus === "active").map(c => ({ customerId: c.customerId, username: c.username })) : [] });
+    }
+    else if (tail.length === 2 && tail[1] === "assign" && req.method === "POST") {
+      const delivery = getDelivery();
+      if (!delivery) { send(res, 409, { error: "고객 리포트 제공 연결이 활성화되지 않았습니다." }); return true; }
+      if (Object.keys(payload).some(k => !["customerId", "requestKey"].includes(k))) { send(res, 400, { error: "고객과 요청 번호만 지정해 주세요." }); return true; }
+      const value = await delivery.assign({ ...payload, reportId: tail[0], actorId: session.memberId || session.username });
+      send(res, value.created ? 201 : 200, value);
+    }
     else if (tail.length === 2 && tail[1] === "pdf" && req.method === "GET") {
       const report = await service.get(tail[0]);
       const buffer = await pdfFor(report);
@@ -65,6 +77,10 @@ function createMonthlyReportHttpHandler({ service, sources, renderPdf, dataDir, 
     } else send(res, 405, { error: "지원하지 않는 월간 리포트 요청입니다." });
     return true;
   };
+  // Shared by the authenticated customer delivery route, after assignment and
+  // account verification. It never regenerates a published snapshot.
+  handler.pdfFor = pdfFor;
+  return handler;
 }
 
 module.exports = { createMonthlyReportHttpHandler };

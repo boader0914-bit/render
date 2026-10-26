@@ -45,6 +45,7 @@ const { compactMonthlyCapacityCompany } = require("./lib/monthly_company_source_
 const { createMonthlyReportContext } = require("./lib/monthly_report_context.cjs");
 const { createMonthlyReportOutlookEvaluation } = require("./lib/monthly_report_outlook_evaluation.cjs");
 const { createMonthlyReportIndustryContext } = require("./lib/monthly_report_industry_context.cjs");
+const { createMonthlyReportCatchmentContext } = require("./lib/monthly_report_catchment_context.cjs");
 const { createMonthlyReportHttpHandler } = require("./lib/monthly_report_http.cjs");
 const { createRegionalReportPreparation } = require("./lib/regional_report_preparation.cjs");
 const { createRegionalSearchTrendService } = require("./lib/regional_search_trends.cjs");
@@ -53,6 +54,10 @@ const { createRegionalAnalysisStore } = require("./lib/regional_analysis_store.c
 const { createRegionalAnalysisSnapshotBuilder } = require("./lib/regional_analysis_snapshot.cjs");
 const { createRegionalAnalysisHttpHandler } = require("./lib/regional_analysis_http.cjs");
 const { createRegionalCatchmentService } = require("./lib/regional_catchment_store.cjs");
+const { createRegionalMarketService } = require("./lib/regional_market_store.cjs");
+const { createRegionalMarketHttpHandler } = require("./lib/regional_market_http.cjs");
+const { addressRegion } = require("./lib/company_address_basis.cjs");
+const { createCatchmentAddressDirectory } = require("./lib/catchment_address_directory.cjs");
 const { createRegionalCatchmentHttpHandler } = require("./lib/regional_catchment_http.cjs");
 const { createRegionalOutlookService } = require("./lib/regional_outlook_service.cjs");
 const { renderMonthlyReportPdf } = require("./lib/monthly_report_pdf.cjs");
@@ -458,7 +463,31 @@ const resolveRegionalReportRegion = async regionKey => {
   const searchTrendKeyword = `${ambiguous || /구$/.test(region.name) ? prefix : ""}${local}글램핑`.replace(/\s+/g, "");
   return { ...region, searchTrendKeyword };
 };
-const regionalCatchmentService = createRegionalCatchmentService({ dataDir: DATA_DIR, resolveRegion: resolveRegionalReportRegion });
+const catchmentAddressDirectory = createCatchmentAddressDirectory({ file: COMPANY_MASTER_FILE, dataDir: DATA_DIR });
+async function catchmentAddressRegions() {
+  const master = JSON.parse(await fsp.readFile(path.join(WEB_DIR, "data", "region_master.json"), "utf8"));
+  if (!Array.isArray(master.units)) throw Object.assign(Error("CATCHMENT_ADDRESS_SOURCE_UNAVAILABLE"), { code: "CATCHMENT_ADDRESS_SOURCE_UNAVAILABLE", statusCode: 503 });
+  return master.units;
+}
+async function resolveCatchmentCompanyAddress(companyId, { regionKey } = {}) {
+  const [companies, regions] = await Promise.all([catchmentAddressDirectory.read(), catchmentAddressRegions()]);
+  const company = companies.find(row => row.companyId === companyId), basis = company?.addressBasis;
+  const region = basis?.status === "ready" ? addressRegion(basis.address, regions) : null;
+  return company && basis?.status === "ready" && company.companyId === companyId && region?.regionKey === regionKey
+    ? { companyId, regionKey, address: basis.address } : null;
+}
+async function readCatchmentAddressTargets(regionKey) {
+  if (!await resolveRegionalReportRegion(regionKey)) throw Object.assign(Error("CATCHMENT_INVALID_REGION"), { code: "CATCHMENT_INVALID_REGION", statusCode: 400 });
+  const [regions, companies] = await Promise.all([catchmentAddressRegions(), catchmentAddressDirectory.read()]);
+  const addresses = companies.filter(company => (company.addressBasis.address ? [company.addressBasis.address] : company.addresses)
+    .some(address => addressRegion(address, regions)?.regionKey === regionKey))
+    .map(company => ({ companyId: company.companyId, label: company.label, address: company.addressBasis.address, status: company.addressBasis.status }));
+  return { addresses: addresses.sort((a, b) => a.label.localeCompare(b.label, "ko")) };
+}
+const regionalCatchmentService = createRegionalCatchmentService({ dataDir: DATA_DIR, resolveRegion: resolveRegionalReportRegion, resolveCompanyAddress: resolveCatchmentCompanyAddress });
+// Administrative defaults read one saved regional result. This service has no
+// collector, initialization/recovery queue, source refresh, or write methods.
+const regionalMarketService = createRegionalMarketService({ dataDir: DATA_DIR, resolveRegion: resolveRegionalReportRegion });
 const regionalSearchTrendService = createRegionalSearchTrendService({
   dataDir: path.join(DATA_DIR, "regional_search_trends"), readTrafficKeys, resolveRegion: resolveRegionalReportRegion
 });
@@ -554,8 +583,11 @@ const handleRegionalAnalysis = createRegionalAnalysisHttpHandler({
   rateLimit: (req, session) => assertRequestRateLimit(req, "adminRegionalAnalysisRefresh", { limit: 12, windowMs: 60 * 60 * 1000 }, session.username || "")
 });
 const handleRegionalCatchment = createRegionalCatchmentHttpHandler({
-  service: regionalCatchmentService, requireAdmin: requireAdminSession, parseJsonBody, send,
+  service: regionalCatchmentService, readAddressTargets: readCatchmentAddressTargets, requireAdmin: requireAdminSession, parseJsonBody, send,
   rateLimit: (req, session) => assertRequestRateLimit(req, "adminRegionalCatchmentWrite", { limit: 30, windowMs: 60 * 60 * 1000 }, session.username || "")
+});
+const handleRegionalMarket = createRegionalMarketHttpHandler({
+  service: regionalMarketService, requireAdmin: requireAdminSession, send
 });
 const handleRegionalOutlook = createRegionalAnalysisHttpHandler({
   basePath: "/api/regional-outlook", allowPolicy: false, service: regionalOutlookService,
@@ -594,6 +626,7 @@ const monthlyCompanySourceVersion = crypto.createHash("sha256")
   .update(companyIntegratedCalculationFingerprint())
   .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_company_source_catalog.cjs")))
   .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_report_sources.cjs")))
+  .update(fs.readFileSync(path.join(__dirname, "lib", "company_address_basis.cjs")))
   .update(fs.readFileSync(path.join(__dirname, "lib", "industry_source_candidate_cache.cjs")))
   .update(fs.readFileSync(path.join(__dirname, "lib", "industry_analysis.cjs")))
   .update(fs.readFileSync(path.join(__dirname, "lib", "company_capacity_registry.cjs")))
@@ -756,7 +789,7 @@ const readCompanyIntegratedRevision = createCompanyIntegratedSourceRevision({
   regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
   tourismRegionMapFile: path.join(WEB_DIR, "data", "tourism_region_map.json"), includeContext: true,
   calculationFiles: ["company_integrated_db.cjs", "monthly_reports.cjs", "monthly_report_comparison.cjs",
-    "monthly_report_sources.cjs", "monthly_report_context.cjs", "monthly_company_recalculation.cjs", "monthly_company_source_catalog.cjs",
+    "monthly_report_sources.cjs", "company_address_basis.cjs", "monthly_report_context.cjs", "monthly_company_recalculation.cjs", "monthly_company_source_catalog.cjs",
     "company_capacity_registry.cjs", "monthly_report_insights.cjs", "industry_analysis.cjs",
     "inventory_manual_corrections.cjs", "product_capacity_baseline.cjs", "product_capacity_store.cjs", "company_master_stream.cjs", "history_observation_index.cjs", "saved_product_recovery.cjs"].map(name => path.join(__dirname, "lib", name))
     .concat([path.join(__dirname, "inventory_estimation.cjs"), path.join(__dirname, "verified_room_inventory.json")]),
@@ -791,12 +824,15 @@ const monthlyReportService = createMonthlyReportService({
     ...fs.readdirSync(path.join(__dirname, "lib")).filter(name => name.endsWith(".cjs")).sort().map(name => `lib/${name}`)]
     .map(name => `${name}:${crypto.createHash("sha256").update(fs.readFileSync(path.join(__dirname, name))).digest("hex")}`).join("\n")).digest("hex"),
   readOutlookEvaluations: createMonthlyReportOutlookEvaluation({ evaluationService: regionalOutlookService.validation }),
+  readCatchmentContext: createMonthlyReportCatchmentContext({ catchmentService: regionalCatchmentService, regionMarketService: regionalMarketService }),
   readIndustryContext: createMonthlyReportIndustryContext({ industryService: industryAnalysisService,
     verifiedSourceRevisionScope: savedIndustryRevisionScope })
 });
 const handleMonthlyReport = createMonthlyReportHttpHandler({
   service: monthlyReportService, sources: monthlyReportSources, renderPdf: renderMonthlyReportPdf,
   dataDir: path.join(DATA_DIR, "monthly_reports"), requireAdmin: requireAdminSession, parseJsonBody, send,
+  getDelivery: () => insightIntegration?.reportDelivery,
+  deliveryCustomers: () => insightIntegration?.store.list() || [],
   rateLimit: (req, session) => assertRequestRateLimit(req, "adminMonthlyReport", { limit: 30, windowMs: 60000 }, session.username || "")
 });
 function collectorControllers() { return {...Object.fromEntries(Object.entries(collectorBrokers).filter(([,broker]) => broker)), web:collectorWeb}; }
@@ -882,6 +918,7 @@ const readInsightCompanyDetail = require('./lib/insight_company_detail_reader.cj
   integrationConnected: true
 });
 const insightIntegration = require('./lib/insight_integration.cjs').createInsightIntegration({
+  monthlyReports: monthlyReportService, renderReportPdf: handleMonthlyReport.pdfFor,
   readPostprocess: runId => collectionPostprocessQueue.status({ runId }),
   dataDir: DATA_DIR, readCatalog: monthlyReportSources.catalog, readMembers: readB2BMemberStore,
   authenticateMember: authenticateB2BMember, registerMember: (payload, insightConsent) => registerB2BMember(payload, { insightConsent }), checkUsername: checkSignupUsernameAvailability, policyContext: publicPageContext(), requireAdmin: requireAdminSession, collectorRequests,
@@ -19344,6 +19381,7 @@ async function route(req, res) {
     if (await handleIndustryAnalysis(req, res, reqUrl, session)) return;
     if (await handleRegionalReportPreparation(req, res, reqUrl, session)) return;
     if (await handleRegionalAnalysis(req, res, reqUrl, session)) return;
+    if (await handleRegionalMarket(req, res, reqUrl, session)) return;
     if (await handleRegionalCatchment(req, res, reqUrl, session)) return;
     if (await handleRegionalOutlook(req, res, reqUrl, session)) return;
     if (await handleRegionalOutlookValidation(req, res, reqUrl, session)) return;

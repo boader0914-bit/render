@@ -35,9 +35,9 @@ function sameOrigin(req) {
     return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password && url.host === req.headers.host && !["null", ""].includes(req.headers.origin);
   } catch { return false; }
 }
-function createRegionalCatchmentHttpHandler({ service, requireAdmin, parseJsonBody, send, rateLimit = () => {} } = {}) {
-  if (!service || typeof requireAdmin !== "function" || typeof parseJsonBody !== "function" || typeof send !== "function") throw new TypeError("Catchment service and HTTP helpers are required");
-  const base = "/api/regional-catchment", paths = new Set([base, `${base}/configure`, `${base}/datasets`, `${base}/refresh`]);
+function createRegionalCatchmentHttpHandler({ service, requireAdmin, parseJsonBody, send, rateLimit = () => {}, readAddressTargets = async () => ({ addresses: [] }) } = {}) {
+  if (!service || typeof requireAdmin !== "function" || typeof parseJsonBody !== "function" || typeof send !== "function" || typeof readAddressTargets !== "function") throw new TypeError("Catchment service and HTTP helpers are required");
+  const base = "/api/regional-catchment", paths = new Set([base, `${base}/addresses`, `${base}/configure`, `${base}/datasets`, `${base}/refresh`]);
   // Keep simultaneous large request bodies from multiplying parse/normalize
   // memory. Saved-result GETs and small configure/refresh requests remain free.
   let importing = false;
@@ -46,12 +46,21 @@ function createRegionalCatchmentHttpHandler({ service, requireAdmin, parseJsonBo
     if (!requireAdmin(session, req, res)) return true;
     let importHeld = false;
     try {
-      if (req.method === "GET" && url.pathname === base) {
+      if (req.method === "GET" && [base, `${base}/addresses`].includes(url.pathname)) {
         const keys = [...url.searchParams.keys()];
-        if (keys.length !== 1 || keys[0] !== "regionKey" || !url.searchParams.get("regionKey")) throw fault("CATCHMENT_INVALID_REQUEST");
-        send(res, 200, await service.get({ regionKey: url.searchParams.get("regionKey") })); return true;
+        const addressList = url.pathname.endsWith("/addresses"), allowed = addressList ? ["regionKey"] : ["regionKey", "companyId"];
+        if (!url.searchParams.get("regionKey") || keys.some(key => !allowed.includes(key)) || new Set(keys).size !== keys.length
+          || (keys.includes("companyId") && !url.searchParams.get("companyId"))) throw fault("CATCHMENT_INVALID_REQUEST");
+        if (addressList) {
+          const result = await readAddressTargets(url.searchParams.get("regionKey"));
+          if (!Array.isArray(result?.addresses) || result.addresses.some(target => !target || typeof target.companyId !== "string" || !target.companyId || typeof target.label !== "string"
+            || !["ready", "missing", "ambiguous"].includes(target.status) || (target.status === "ready" && (typeof target.address !== "string" || !target.address.trim())))) throw fault("CATCHMENT_ADDRESS_TARGETS_UNAVAILABLE", 503);
+          send(res, 200, { addresses: result.addresses.map(({ companyId, label, address, status }) => ({ companyId, label, address: status === "ready" ? address : "", status })) });
+        }
+        else send(res, 200, await service.get({ regionKey: url.searchParams.get("regionKey"), ...(keys.includes("companyId") ? { companyId: url.searchParams.get("companyId") } : {}) }));
+        return true;
       }
-      if (req.method !== "POST" || url.pathname === base) { send(res, 405, { error: "지원하지 않는 요청입니다.", code: "CATCHMENT_METHOD_NOT_ALLOWED" }); return true; }
+      if (req.method !== "POST" || [base, `${base}/addresses`].includes(url.pathname)) { send(res, 405, { error: "지원하지 않는 요청입니다.", code: "CATCHMENT_METHOD_NOT_ALLOWED" }); return true; }
       if (url.searchParams.size) throw fault("CATCHMENT_INVALID_REQUEST");
       if (!/^application\/json(?:\s*;|$)/i.test(String(req.headers?.["content-type"] || ""))) throw fault("CATCHMENT_JSON_REQUIRED", 415);
       if (!sameOrigin(req)) throw fault("CATCHMENT_ORIGIN_MISMATCH", 403);
@@ -73,7 +82,11 @@ function createRegionalCatchmentHttpHandler({ service, requireAdmin, parseJsonBo
     } catch (error) {
       const statusCode = [400, 403, 404, 409, 413, 415, 429, 503].includes(error.statusCode) ? error.statusCode : 500;
       const code = /^CATCHMENT_[A-Z0-9_]{1,80}$/.test(error.code || "") ? error.code : "CATCHMENT_OPERATION_FAILED";
-      send(res, statusCode, { code, error: statusCode === 413 ? "가져오기 JSON은 UTF-8 기준 16MiB 이하여야 합니다. 격자는 최대 50,000개입니다."
+      send(res, statusCode, { code, error: code === "CATCHMENT_ADDRESS_REQUIRED" ? "기준주소와 같은 위치로 확인한 좌표·출처를 먼저 저장하세요. 주소 확인 전에는 새 계산을 할 수 없습니다."
+        : code === "CATCHMENT_ADDRESS_MISMATCH" ? "기준주소가 현재 업체 등록주소와 다릅니다. 업체 주소를 다시 확인하고 기준점을 저장하세요."
+          : code === "CATCHMENT_COMPANY_ADDRESS_REQUIRED" ? "현재 업체의 상세주소가 한 개로 확정되어야 합니다. 업체정보의 주소를 먼저 확인하세요."
+            : ["CATCHMENT_ADDRESS_TARGETS_UNAVAILABLE", "CATCHMENT_ADDRESS_SOURCE_UNAVAILABLE"].includes(code) ? "등록된 업체 주소를 읽지 못했습니다. 주소 없음으로 판단하지 말고 다시 확인하세요."
+              : statusCode === 413 ? "가져오기 JSON은 UTF-8 기준 16MiB 이하여야 합니다. 격자는 최대 50,000개입니다."
         : statusCode === 403 ? "현재 관리자 서비스 화면에서 요청해 주세요." : code === "CATCHMENT_IMPORT_BUSY" ? "다른 공간자료를 반입하고 있습니다. 완료 후 다시 시도해 주세요." : statusCode === 429 ? "요청이 많습니다. 잠시 후 다시 시도해 주세요."
           : statusCode === 409 ? "등록한 자료 ID와 기준점을 확인해 주세요. 기존 자료는 덮어쓰지 않습니다."
             : statusCode >= 500 ? "배후시장 저장 결과를 처리하지 못했습니다. 이전 결과를 유지합니다."

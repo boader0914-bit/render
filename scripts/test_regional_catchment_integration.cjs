@@ -1,6 +1,7 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), vm = require("node:vm");
-const { createReader, createController } = require("../web/regional-catchment.js");
+const { createReader, createMarketReader, createController: createScopedController } = require("../web/regional-catchment.js");
+const { buildRegionalMarketSnapshot } = require("./lib/regional_market.cjs");
 const source = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8").replace(/\r\n/g, "\n");
 const names = ["renderRegionalCatchmentHost", "rememberSavedRegionalCatchmentFocus", "stopSavedRegionalCatchment", "syncSavedRegionalCatchment", "renderLocationDictionary"];
 const declarations = names.map(name => {
@@ -11,12 +12,17 @@ const deferred = () => { let resolve; const promise = new Promise(yes => { resol
 const region = key => ({ regionKey: key, name: key, fullName: key, level: "local", active: true, providerMappings: {} });
 const result = key => ({ scope: { regionKey: key }, status: "missing", configuration: null, snapshot: null, datasets: [], job: null, storage: {}, sourceCatalog: [] });
 
-function fixture(fetchResult = async key => result(key)) {
-  const reader = createReader(), controllers = new Map(), calls = { get: [], mounts: [], stops: [], clears: [] };
+function fixture(fetchResult = async key => result(key), { mode = "address_radius" } = {}) {
+  const reader = createReader(), marketReader = createMarketReader(), controllers = new Map(), calls = { get: [], addresses: [], mounts: [], stops: [], clears: [] };
   const state = { session: { role: "admin", username: "admin-a" }, activeTab: "dictionary", dictionaryDetailTab: "basic", selectedRegion: region("sancheong"), dictionary: { cards: [], regionGroups: [] } };
   const document = { body: {}, activeElement: null }; document.activeElement = document.body;
   function newHost(regionKey, parent) {
     const slots = { "[data-rc-results]": { innerHTML: "" }, "[data-rc-editor-slot]": { innerHTML: "", querySelectorAll: () => [] }, "[data-rc-message]": { textContent: "" } };
+    const panel = () => { const contents = { "[data-rm-results]": { innerHTML: "", querySelectorAll: () => [] } }; return { dataset: {}, innerHTML: "", isConnected: true, addEventListener() {}, querySelector: key => contents[key] || null }; };
+    if (mode !== "address_radius") {
+      slots['[data-rc-mode-panel="administrative_region"]'] = panel();
+      slots['[data-rc-mode-panel="address_radius"]'] = panel();
+    }
     const node = { dataset: { regionKey }, isConnected: true, innerHTML: "", listeners: {}, children: new Set(), slots,
       addEventListener(name, listener) { this.listeners[name] = listener; }, querySelector: key => slots[key] || null, querySelectorAll: () => [], contains(field) { return this.children.has(field); },
       replaceWith(other) { this.isConnected = false; parent.current = other; other.isConnected = true; } };
@@ -31,9 +37,9 @@ function fixture(fetchResult = async key => result(key)) {
   const els = { dictionaryResult, dictionarySearchInput: { value: "" }, dictionarySearchStatus: {}, dictionaryCount: {} };
   const api = { mount(host, context) {
     calls.mounts.push(host); let controller = controllers.get(host);
-    if (!controller) { controller = createController({ reader, afterPaint: fn => fn() }); controllers.set(host, controller); }
+    if (!controller) { controller = createScopedController({ mode, reader, marketReader, afterPaint: fn => fn() }); controllers.set(host, controller); }
     return controller.mount(host, context);
-  }, stop(host) { calls.stops.push(host); controllers.get(host)?.stop(); }, clear(accountKey) { calls.clears.push(accountKey); for (const controller of controllers.values()) controller.stop(); reader.clear(accountKey); } };
+  }, stop(host) { calls.stops.push(host); controllers.get(host)?.stop(); }, clear(accountKey) { calls.clears.push(accountKey); for (const controller of controllers.values()) controller.stop(); reader.clear(accountKey); marketReader.clear(accountKey); } };
   let context;
   context = vm.createContext({ state, els, document, window: { RegionalCatchment: api }, queueMicrotask, console, Number,
     savedRegionalCatchmentHost: null, savedRegionalCatchmentHostScope: null, savedRegionalCatchmentLogoutPending: false, savedRegionalCatchmentFocus: null,
@@ -49,7 +55,11 @@ function fixture(fetchResult = async key => result(key)) {
     tourismRegionForLocation: () => ({}), locationClusterCodes: () => [], locationClusterMeta: () => ({}), locationRuntimeStats: () => ({}), adjustedLocationScoreModel: () => ({}),
     regionAnalysisEmptyHtml: () => "<div>지역 미선택</div>",
     renderObservedLocationProfile(...args) { return context.renderRegionalCatchmentHost(args.at(-1).administrativeRegion); },
-    fetchJson: async url => { calls.get.push(url); return fetchResult(new URL(url, "https://local").searchParams.get("regionKey")); }
+    fetchJson: async url => {
+      const parsed = new URL(url, "https://local");
+      if (parsed.pathname.endsWith("/addresses")) { calls.addresses.push(url); return { addresses: [] }; }
+      calls.get.push(url); return fetchResult(parsed.searchParams.get("regionKey"));
+    }
   });
   vm.runInContext(declarations, context);
   const getController = node => controllers.get(node);
@@ -65,11 +75,13 @@ test("actual dictionary rerenders retain the same live host, input nodes/cursor 
   const f = fixture(); const host = await f.render(); const field = f.makeField(host);
   const editor = host.slots["[data-rc-editor-slot]"].innerHTML;
   assert.equal(f.calls.get.length, 1);
+  assert.equal(f.calls.addresses.length, 1);
   f.context.renderLocationDictionary(); f.context.renderLocationDictionary(); await tick();
   assert.equal(f.els.dictionaryResult.current, host); assert.equal(host.isConnected, true);
   assert.equal(f.document.activeElement, field); assert.equal(field.selectionStart, 2); assert.equal(field.selectionEnd, 4);
   assert.equal(f.getController(host).state.draft.label, "편집 중인 기준점"); assert.equal(host.slots["[data-rc-editor-slot]"].innerHTML, editor);
   assert.equal(f.calls.get.length, 1, "same-scope redraws must not revalidate or create another controller");
+  assert.equal(f.calls.addresses.length, 1, "same-scope redraws must not repeat the read-only address query");
 });
 
 test("startup rerenders during the first GET retain the edited point until the response arrives", async () => {
@@ -111,4 +123,20 @@ test("a queued render cannot remount after logout has started", async () => {
   const f = fixture(), old = await f.render(); f.context.renderLocationDictionary();
   f.context.stopSavedRegionalCatchment({ logout: true }); await tick();
   assert.ok(f.calls.stops.includes(old)); assert.equal(f.calls.get.length, 1); assert.equal(f.context.savedRegionalCatchmentHost, null);
+});
+
+test("actual dictionary defaults to administrative saved metrics without requesting an address or radius", async () => {
+  const f = fixture(async key => buildRegionalMarketSnapshot({ region: { ...region(key), officialCode: key === "jinju" ? "48170" : "48860", unitType: "county" },
+    scope: { regionKey: key, month: "2026-09", months: 13 }, now: () => new Date("2026-10-22T10:00:00Z") }), { mode: "administrative_region" });
+  const node = await f.render();
+  assert.equal(f.getController(node).mode, "administrative_region"); assert.equal(node.dataset.rcRegion, "sancheong");
+  assert.deepEqual(f.calls.get, ["/api/regional-market?regionKey=sancheong"]); assert.equal(f.calls.addresses.length, 0);
+  const panel = node.slots['[data-rc-mode-panel="administrative_region"]'];
+  assert.match(panel.innerHTML, /행정구역 기본 분석/); assert.doesNotMatch(panel.innerHTML, /중심점|name="address"/);
+  assert.match(panel.querySelector("[data-rm-results]").innerHTML, /확보범위 0\/6개 지표/);
+  assert.match(panel.querySelector("[data-rm-results]").innerHTML, /방문객 출발지·외부 유입 · 자료 미확보/);
+  await f.render(); assert.equal(f.els.dictionaryResult.current, node); assert.equal(f.calls.get.length, 1);
+  f.state.selectedRegion = region("jinju"); const next = await f.render();
+  assert.notEqual(next, node); assert.equal(f.getController(next).state.result.scope.regionKey, "jinju");
+  assert.deepEqual(f.calls.get, ["/api/regional-market?regionKey=sancheong", "/api/regional-market?regionKey=jinju"]); assert.equal(f.calls.addresses.length, 0);
 });
