@@ -1,6 +1,6 @@
 (function (root) {
   "use strict";
-  const ENDPOINT = "/api/regional-catchment", MAX_IMPORT_BYTES = 16 * 1024 * 1024;
+  const ENDPOINT = "/api/regional-catchment", MARKET_ENDPOINT = "/api/regional-market", MAX_IMPORT_BYTES = 16 * 1024 * 1024;
   const METRICS = [["population", "인구", "명"], ["establishments", "사업체", "개"], ["workers", "종사자", "명"]];
   const RINGS = [["inner50", "0~50km"], ["outer50to100", "50km 초과~100km"], ["total100", "누적 100km"]];
   const LABELS = { unqueried: "미조회", loading: "저장자료 확인 중", missing: "자료 미확보", ready: "저장 결과", partial: "일부 자료", stale: "이전 저장 결과", failed: "조회 실패", queued: "계산 대기", running: "계산 중", interrupted: "계산 중단", observed_public: "공개값", suppressed: "비공개 포함", protected_zero: "공개보호 0 포함", not_acquired: "자료 미확보", not_provided: "미제공" };
@@ -91,7 +91,7 @@
     };
   }
   const savedResults = createReader();
-  function createController({ reader = savedResults, fetchJson = defaultFetch, now = () => typeof root.performance?.now === "function" ? root.performance.now() : Date.now(), schedule = (fn, ms) => root.setTimeout(fn, ms), cancel = id => root.clearTimeout(id), afterPaint = fn => typeof root.requestAnimationFrame === "function" ? root.requestAnimationFrame(() => root.requestAnimationFrame(fn)) : queueMicrotask(fn) } = {}) {
+  function createAddressController({ reader = savedResults, fetchJson = defaultFetch, now = () => typeof root.performance?.now === "function" ? root.performance.now() : Date.now(), schedule = (fn, ms) => root.setTimeout(fn, ms), cancel = id => root.clearTimeout(id), afterPaint = fn => typeof root.requestAnimationFrame === "function" ? root.requestAnimationFrame(() => root.requestAnimationFrame(fn)) : queueMicrotask(fn) } = {}) {
     let host, context = {}, revision = 0, paused = true, timer, boundHost;
     const state = { result: null, loading: false, error: "", draft: null, dirty: false, draftRevision: 0, busy: false, actionMessage: "", displaySequence: 0, addresses: [], addressesLoading: false, addressError: "" };
     const addressTarget = () => state.addresses.find(target => target.companyId === String(context.companyId || ""));
@@ -255,13 +255,21 @@
       // The parent refreshes this region view without owning its company choice.
       if (!Object.hasOwn(input, "companyId") && host === element && input.regionKey === context.regionKey && input.accountKey === context.accountKey && context.companyId) input = { ...input, companyId: context.companyId };
       if (!paused && host === element && keyOf(input) === keyOf(context)) { context = { ...context, ...input }; return; }
+      // A mode switch pauses reads while retaining this address editor and draft.
+      if (paused && input.resume === true && host === element && keyOf(input) === keyOf(context)) {
+        paused = false; revision++; context = { ...context, ...input }; if (input.fetchJson) fetchJson = input.fetchJson;
+        if (!visible()) { stop(); return; }
+        const entry = revision, key = keyOf(context), started = now();
+        Object.assign(host.dataset, { rcDisplayStatus: "pending", rcDisplayMs: "", rcReadSource: "" });
+        await Promise.all([load(entry, key, started, "server"), loadAddresses(entry, key)]); return;
+      }
       clearTimer(); paused = false; revision++; const entry = revision, started = now();
       host = element; context = { ...input }; if (input.fetchJson) fetchJson = input.fetchJson;
       if (!visible()) { stop(); return; }
       state.addresses = []; state.addressesLoading = true; state.addressError = "";
       state.displaySequence++; state.result = reader.read(context); state.loading = true; state.error = ""; state.draft = newDraft(state.result); state.dirty = false; state.draftRevision = 0; state.busy = false; state.actionMessage = "";
       Object.assign(host.dataset, { rcDisplayStatus: "pending", rcDisplayMs: "", rcReadSource: "" });
-      host.innerHTML = `<section class="regional-catchment" aria-label="지역 배후시장"><header class="rc-header"><div><span class="rc-eyebrow">지역 배후시장 · 연간 기초자료</span><h3>${esc(input.regionLabel || input.regionKey)} · 50km·100km</h3><p class="rc-muted">확인한 기준점 주변의 인구·산업 분포를 저장해 재사용합니다.</p></div></header><div data-rc-results></div><div data-rc-editor-slot></div><p class="rc-action-message" role="status" data-rc-message></p></section>`;
+      host.innerHTML = `<section class="regional-catchment" aria-label="주소 기준 반경 분석"><header class="rc-header"><div><span class="rc-eyebrow">주소 기준 반경 분석 · 연간 기초자료</span><h3>${esc(input.regionLabel || input.regionKey)} · 50km·100km</h3><p class="rc-muted">확인한 상세주소 주변의 인구·산업 분포를 저장해 재사용합니다.</p></div></header><div data-rc-results></div><div data-rc-editor-slot></div><p class="rc-action-message" role="status" data-rc-message></p></section>`;
       if (boundHost !== host) { host.addEventListener("input", onInput); host.addEventListener("change", onInput); host.addEventListener("submit", onSubmit); host.addEventListener("click", onClick); boundHost = host; }
       renderResults(); renderEditor(true); const key = keyOf(context);
       if (state.result) paintReceipt(started, entry, key, "cache");
@@ -270,9 +278,166 @@
     function stop() { paused = true; revision++; clearTimer(); state.loading = false; state.busy = false; if (host?.dataset) host.dataset.rcDisplayStatus = "paused"; }
     return { mount, stop, state, refreshStatus: () => visible() ? load(revision, keyOf(context), now(), "server") : Promise.resolve() };
   }
+  const MARKET_LABELS = { ready: "저장 지표 확인", partial: "일부 자료 확보", missing: "자료 미확보", needs_verification: "근거 확인 필요", observed: "확인된 저장값", suppressed: "비공개", publication_pending: "공표 대기", error: "자료 확인 실패", unverified: "원본 근거 미확인" };
+  const MARKET_REASONS = { REGIONAL_MARKET_NOT_ACQUIRED: "저장된 자료가 없습니다.", REGIONAL_MARKET_EVIDENCE_UNVERIFIED: "원본 근거로 지역·기간·수량의 일치를 확인하지 못했습니다.", REGIONAL_MARKET_SOURCE_ERROR: "저장 자료의 오류를 확인해야 합니다.", REGIONAL_MARKET_SOURCE_INVALID: "저장 자료의 형식을 확인해야 합니다.", REGIONAL_MARKET_DUPLICATE_DATASET: "같은 항목의 자료가 겹쳐 확인이 필요합니다.", REGIONAL_MARKET_DUPLICATE_METRIC: "같은 지표가 겹쳐 확인이 필요합니다.", SUPPRESSED: "제공기관 비공개 자료입니다.", PARTIAL_DATA: "일부 자료만 있어 전체값을 확정하지 않습니다.", PUBLICATION_PENDING: "해당 기준기간의 공표를 기다리고 있습니다." };
+  const MARKET_WARNINGS = { BOUNDARY_YEAR_UNRECORDED: "행정경계 기준연도가 기록되지 않았습니다. 지표별 공표기간과 경계 확인 상태를 유지합니다." };
+  const marketKey = input => `${String(input.accountKey || "")}\n${String(input.regionKey || "")}\n${String(input.month || "")}\n${String(input.months || "")}`;
+  const marketQuery = input => `regionKey=${encodeURIComponent(input.regionKey)}${input.month ? `&month=${encodeURIComponent(input.month)}` : ""}${input.months ? `&months=${encodeURIComponent(input.months)}` : ""}`;
+  const marketStatus = value => MARKET_LABELS[value] || label(value);
+  function checkedMarketResult(value, input) {
+    if (!value || value.mode !== "administrative_region" || value.originKind !== "administrative_region" || value.scope?.level !== "sigungu"
+      || value.scope.regionKey !== input.regionKey || (input.month && value.scope.month !== input.month) || (input.months && value.scope.months !== input.months)) throw Error("선택한 행정구역·기간과 저장 지표의 범위가 다릅니다.");
+    if (!['ready', 'partial', 'missing', 'needs_verification'].includes(value.status) || value.readOnly !== true || value.networkAttempted !== false
+      || !/^\d{5}(?:\d{5})?$/.test(value.scope.officialCode || "") || !/^20\d{2}-(0[1-9]|1[0-2])$/.test(value.scope.month || "") || ![13, 24].includes(value.scope.months)
+      || !Array.isArray(value.metrics) || !value.metrics.length || value.source?.kind !== "saved_regional_analysis"
+      || value.visitorOrigins?.status !== "not_acquired" || value.visitorOrigins?.value !== null) throw Error("행정구역 저장 지표의 응답 형식을 확인할 수 없습니다.");
+    const keys = new Set();
+    for (const metric of value.metrics) {
+      if (!metric || !/^[a-zA-Z][a-zA-Z0-9_]{0,60}$/.test(metric.key || "") || keys.has(metric.key) || !['observed', 'missing', 'suppressed', 'partial', 'publication_pending', 'error', 'unverified'].includes(metric.status)
+        || !['M', 'Y'].includes(metric.periodType) || !metric.source || (metric.status === "observed" ? !Number.isSafeInteger(metric.value) || metric.value < 0 : metric.value !== null)) throw Error("행정구역 저장 지표의 수치 상태를 확인할 수 없습니다.");
+      if (metric.status === "observed") {
+        const proof = metric.source.storedProvenance;
+        if (!(metric.periodType === "Y" ? /^20\d{2}$/ : /^20\d{2}-(0[1-9]|1[0-2])$/).test(metric.period || "")
+          || metric.period > (metric.periodType === "Y" ? value.scope.month.slice(0, 4) : value.scope.month)
+          || metric.source.provider !== "KOSIS" || !metric.source.providerRegionCode || proof?.sourceKind !== "stored_raw_response"
+          || !/^[a-f0-9]{64}$/.test(proof.sha256 || "") || !proof.evidenceId || proof.period !== metric.period
+          || (proof.periodType || "M") !== metric.periodType || !Number.isFinite(Date.parse(proof.verifiedAt))) throw Error("행정구역 저장 지표의 원본 근거 형식을 확인할 수 없습니다.");
+      }
+      keys.add(metric.key);
+    }
+    return value;
+  }
+  function marketViewModel(result, { loading = false, error = "" } = {}) {
+    return { result, loading, error, status: error ? result ? "stale" : "failed" : result?.status || (loading ? "loading" : "unqueried"),
+      observed: (result?.metrics || []).filter(metric => metric.status === "observed" && Number.isSafeInteger(metric.value) && metric.value >= 0).length };
+  }
+  function marketResultHtml(result, input = {}) {
+    const model = marketViewModel(result, input), scope = result?.scope || {}, source = result?.source || {};
+    const reason = model.error ? `${model.error}${result ? " 마지막 확인 결과를 유지합니다." : ""}` : !result ? model.loading ? "선택한 지역의 저장 지표를 확인하고 있습니다." : "저장 지표 조회 전입니다."
+      : result.status === "missing" ? "선택한 지역의 확인된 저장 지표가 없습니다. 미확보 자료를 0으로 계산하지 않습니다."
+      : result.status === "needs_verification" ? "원본 근거를 확인하지 못한 지표는 수치를 표시하지 않습니다."
+      : "지표별 실제 공표기간의 저장값입니다. 기간과 단위가 다른 수치를 더하지 않습니다.";
+    return `<div class="rc-status-line" role="status"><span class="rc-badge is-${esc(model.status)}">${esc(marketStatus(model.status))}</span><span>${esc(reason)}</span>${model.loading && result ? '<span class="rc-loading">변경 확인 중</span>' : ""}</div>
+      <p class="rc-basis">시·군·구 행정구역 전체의 기초통계입니다. 거주인구를 고객 수로 해석하지 않으며, 실제 방문객 출발지나 외부 유입량을 뜻하지 않습니다. 주민등록 세대 수는 가구 수와 다릅니다.</p>
+      ${result ? `<p class="rc-market-scope">${esc(scope.label || input.regionLabel || scope.regionKey)} · 시·군·구 전체 · 행정코드 ${esc(scope.officialCode)}<br>확보범위 ${model.observed}/${result.metrics.length}개 지표 · 조회 기준 ${esc(scope.month)} · 지표별 월간·연간 공표기간 적용 · 경계연도 ${scope.boundaryYearStatus === "recorded" && Number.isInteger(scope.boundaryYear) ? `${esc(scope.boundaryYear)}년` : "미기록"}</p>
+      <div class="rc-market-grid">${result.metrics.map(metric => {
+        const known = metric.status === "observed" && Number.isSafeInteger(metric.value) && metric.value >= 0, provider = metric.source || {}, proof = provider.storedProvenance, url = safeUrl(provider.sourceUrl);
+        return `<article class="rc-market-metric" data-rm-metric="${esc(metric.key)}" data-rm-status="${esc(metric.status)}" data-rm-value="${known ? metric.value : ""}"><h4>${esc(metric.label || metric.key)}</h4><p class="rc-market-value"><strong>${known ? number(metric.value) : "—"}</strong><span>${esc(metric.unit || "단위 미확인")}</span></p><p class="rc-muted">${esc(marketStatus(metric.status))} · ${metric.period ? `${esc(metric.period)}${metric.periodType === "Y" ? "년 · 연간" : " · 월간"}` : "기준기간 미확인"}</p>${!known ? `<p class="rc-market-reason">${esc(MARKET_REASONS[metric.reasonCode] || "저장 근거를 확인해야 합니다.")}${metric.reasonCode ? ` <small>(${esc(metric.reasonCode)})</small>` : ""}</p>` : ""}<p class="rc-market-source">${esc(provider.provider || "출처 미확인")}${url ? ` · <a href="${esc(url)}" target="_blank" rel="noopener noreferrer">통계표 출처 ↗</a>` : ""}${provider.tableId ? ` · 표 ${esc(provider.tableId)}` : ""}</p><details class="rc-counts" data-rc-detail="market:${esc(metric.key)}"><summary>기준기간·원본 근거</summary><dl class="rc-facts"><div><dt>통계 기준기간</dt><dd>${esc(metric.period || "미확인")} · ${metric.periodType === "Y" ? "연간" : "월간"}</dd></div><div><dt>제공 지역코드</dt><dd>${esc(provider.providerRegionCode || "미확인")}</dd></div><div><dt>자료 확인</dt><dd>${esc(clock(provider.retrievedAt))}</dd></div><div><dt>행정경계 기준연도</dt><dd>${provider.boundaryYearStatus === "recorded" && Number.isInteger(provider.boundaryYear) ? `${esc(provider.boundaryYear)}년` : "미기록"}</dd></div><div><dt>저장 원본 근거</dt><dd>${proof ? `원본 ${esc(proof.evidenceId || "미확인")} · 기준 ${esc(proof.period || "미확인")}<br>해시 ${esc(proof.sha256 || "미확인")}<br>검증 ${esc(clock(proof.verifiedAt))}` : "저장 원본 근거 미확인"}</dd></div></dl></details></article>`;
+      }).join("")}</div>
+      <p class="rc-muted">관광 지표는 이 기본 분석에 포함되지 않습니다. 확보된 관광 자료는 지역 지표에서 별도로 확인하세요.</p>
+      <div class="rc-market-origin" data-rm-visitor-origins="not_acquired"><strong>방문객 출발지·외부 유입 · 자료 미확보</strong><p>실제 고객·방문객 거주지 자료가 없어 출발지별 고객 수와 유입량을 산출하지 않습니다.</p></div>
+      ${(result.warnings || []).filter(code => MARKET_WARNINGS[code]).map(code => `<p class="rc-warning">${esc(MARKET_WARNINGS[code])}</p>`).join("")}
+      <details class="rc-method" data-rc-detail="market-method"><summary>저장자료·해석 기준</summary><dl class="rc-facts"><div><dt>저장 분석 결과</dt><dd>${esc(source.resultId || "저장 전")}</dd></div><div><dt>원본 결과 생성</dt><dd>${esc(clock(source.generatedAt))}</dd></div><div><dt>저장자료 계산</dt><dd>${esc(clock(source.calculatedAt))}</dd></div><div><dt>최근 자료 확인</dt><dd>${esc(clock(result.retrievedAt))}</dd></div><div><dt>원본 결과 해시</dt><dd>${esc(source.resultSha256 || "미기록")}</dd></div></dl><p>조회는 외부 요청 없이 저장된 지역분석 자료를 사용합니다. 지표의 정상 0은 표시하고 미확보·비공개·공표 대기·미검증은 0으로 바꾸지 않습니다. 기준주소와 반경은 주소 기준 반경 분석에서 별도로 확인합니다.</p></details>` : ""}`;
+  }
+  function createMarketReader() {
+    const values = new Map(), flights = new Map(), generations = new Map();
+    return { read: input => values.get(marketKey(input)) || null,
+      get(input) {
+        const key = marketKey(input), generation = generations.get(key) || 0;
+        if (flights.has(key)) return flights.get(key);
+        const promise = Promise.resolve().then(() => input.fetchJson(`${MARKET_ENDPOINT}?${marketQuery(input)}`)).then(result => {
+          checkedMarketResult(result, input); if ((generations.get(key) || 0) === generation) values.set(key, result); return result;
+        }).finally(() => { if (flights.get(key) === promise) flights.delete(key); });
+        flights.set(key, promise); return promise;
+      }, clear(accountKey) { for (const key of new Set([...values.keys(), ...flights.keys()])) if (accountKey === undefined || key.startsWith(`${accountKey}\n`)) { generations.set(key, (generations.get(key) || 0) + 1); values.delete(key); flights.delete(key); } }
+    };
+  }
+  const savedMarkets = createMarketReader();
+  function createRegionController({ marketReader = savedMarkets, fetchJson = defaultFetch, afterPaint = fn => typeof root.requestAnimationFrame === "function" ? root.requestAnimationFrame(() => root.requestAnimationFrame(fn)) : queueMicrotask(fn), now = () => typeof root.performance?.now === "function" ? root.performance.now() : Date.now() } = {}) {
+    let host, context = {}, revision = 0, paused = true;
+    const state = { result: null, loading: false, error: "", displaySequence: 0 };
+    const visible = () => !paused && host?.isConnected !== false && (context.isVisible?.() ?? true);
+    function render() {
+      const slot = host?.querySelector?.("[data-rm-results]"), open = [...(slot?.querySelectorAll?.("details[open][data-rc-detail]") || [])].map(node => node.getAttribute("data-rc-detail"));
+      if (slot) { slot.innerHTML = marketResultHtml(state.result, state); for (const key of open) { const detail = slot.querySelector?.(`[data-rc-detail="${key}"]`); if (detail) detail.open = true; } }
+      Object.assign(host.dataset, { rcRegion: context.regionKey, rcMode: "administrative_region", rcStatus: marketViewModel(state.result, state).status, rcLoading: String(state.loading), rcSequence: String(state.displaySequence), rcResult: state.result?.source?.resultId || "" });
+      const button = host.querySelector?.('[data-rm-action="status"]'); if (button) button.disabled = state.loading;
+    }
+    async function load() {
+      if (!visible()) return;
+      const entry = ++revision, key = marketKey(context), started = now(); state.loading = true; render();
+      try { const result = await marketReader.get({ ...context, fetchJson }); if (entry !== revision || !visible() || key !== marketKey(context)) return; state.result = result; state.error = ""; }
+      catch (error) { if (entry !== revision || !visible()) return; state.error = error.message || "행정구역 저장 지표 조회 실패"; }
+      finally {
+        if (entry === revision && visible() && key === marketKey(context)) {
+          state.loading = false; render(); afterPaint(() => {
+            if (entry !== revision || !visible()) return;
+            const milliseconds = Math.round(Math.max(0, now() - started) * 10) / 10;
+            Object.assign(host.dataset, { rcDisplayStatus: "ready", rcDisplayMs: String(milliseconds), rcReadSource: "server" });
+            context.onDisplay?.({ mode: "administrative_region", regionKey: context.regionKey, accountKey: context.accountKey, resultId: state.result?.source?.resultId || "", milliseconds, sequence: state.displaySequence, source: "server" });
+          });
+        }
+      }
+    }
+    async function mount(element, input = {}) {
+      if (!element || !input.regionKey) return;
+      if (!paused && host === element && marketKey(input) === marketKey(context)) { context = { ...context, ...input }; return; }
+      stop(); host = element; context = { ...input }; if (input.fetchJson) fetchJson = input.fetchJson; paused = false;
+      if (!visible()) { stop(); return; }
+      state.displaySequence++; state.result = marketReader.read(context); state.error = "";
+      host.innerHTML = `<section class="regional-catchment" aria-label="행정구역 기본 분석"><header class="rc-header"><div><span class="rc-eyebrow">지역 배후시장 · 행정구역 기본 분석</span><h3>${esc(input.regionLabel || input.regionKey)}</h3><p class="rc-muted">지역 선택만으로 공식 저장 기초통계를 확인합니다.</p></div><button type="button" data-rm-action="status">저장자료 다시 확인</button></header><div data-rm-results></div></section>`;
+      host.onclick = event => { if (event.target?.closest?.('[data-rm-action="status"]')) void load(); };
+      Object.assign(host.dataset, { rcDisplayStatus: "pending", rcDisplayMs: "", rcReadSource: "" }); await load();
+    }
+    function stop() { paused = true; revision++; state.loading = false; if (host?.dataset) host.dataset.rcDisplayStatus = "paused"; }
+    return { mount, stop, state, refreshStatus: load };
+  }
+  function createWorkspaceController(options = {}) {
+    let host, context = {}, paused = true, boundHost, mode = "administrative_region", address, region, addressHost, regionHost;
+    const activeController = () => mode === "address_radius" ? address : region;
+    const isVisible = () => !paused && host?.isConnected !== false && (context.isVisible?.() ?? true);
+    function markMode() {
+      if (host?.dataset) host.dataset.rcMode = mode;
+      if (addressHost) addressHost.hidden = mode !== "address_radius";
+      if (regionHost) regionHost.hidden = mode !== "administrative_region";
+      for (const button of host?.querySelectorAll?.("[data-rc-mode]") || []) button.setAttribute("aria-pressed", String(button.getAttribute("data-rc-mode") === mode));
+    }
+    async function activate(next) {
+      if (!isVisible() || !["administrative_region", "address_radius"].includes(next) || activeController()?.state.busy) return;
+      if (next !== mode || !activeController()) Object.assign(host.dataset, { rcDisplayStatus: "pending", rcDisplayMs: "", rcReadSource: "", rcStatus: "loading", rcResult: "", rcCompany: "", rcLoading: "true" });
+      if (next !== mode) activeController()?.stop();
+      mode = next; markMode();
+      const mountedMode = mode;
+      const input = { ...context, isVisible: () => isVisible() && mode === mountedMode, onDisplay: receipt => {
+        if (!isVisible() || mode !== mountedMode) return;
+        const panel = mountedMode === "address_radius" ? addressHost : regionHost;
+        Object.assign(host.dataset, panel?.dataset || {}, { rcMode: mountedMode }); context.onDisplay?.({ ...receipt, mode: mountedMode });
+      } };
+      if (mode === "address_radius") {
+        if (!address) address = createAddressController(options);
+        await address.mount(addressHost, { ...input, resume: true });
+      } else {
+        if (!region) region = createRegionController(options);
+        await region.mount(regionHost, input);
+      }
+    }
+    async function mount(element, input = {}) {
+      if (!element || !input.regionKey) return;
+      const sameScope = host === element && marketKey(input) === marketKey(context);
+      if (!sameScope) {
+        address?.stop(); region?.stop(); address = null; region = null;
+        host = element; mode = input.mode === "address_radius" ? "address_radius" : "administrative_region";
+        host.innerHTML = `<section class="regional-catchment rc-workspace" aria-label="지역 배후시장 분석"><div class="rc-mode-picker" role="group" aria-label="배후시장 분석 기준"><button type="button" data-rc-mode="administrative_region" aria-pressed="${mode === "administrative_region"}">행정구역 기본 분석</button><button type="button" data-rc-mode="address_radius" aria-pressed="${mode === "address_radius"}">주소 기준 반경 분석</button></div><p class="rc-muted">기본 분석은 선택한 시·군·구 전체의 저장 통계를 사용합니다. 상세주소 주변 50km·100km는 주소 기준 반경 분석에서 확인합니다.</p><div data-rc-mode-panel="administrative_region"></div><div data-rc-mode-panel="address_radius" hidden></div></section>`;
+        addressHost = host.querySelector?.('[data-rc-mode-panel="address_radius"]'); regionHost = host.querySelector?.('[data-rc-mode-panel="administrative_region"]');
+      }
+      context = { ...input }; paused = false;
+      if (!isVisible()) { stop(); return; }
+      Object.assign(host.dataset, { rcRegion: input.regionKey, rcMode: mode });
+      if (boundHost !== host) {
+        host.addEventListener("click", event => {
+          const selected = event.target?.closest?.("[data-rc-mode]")?.getAttribute?.("data-rc-mode");
+          if (selected) void activate(selected);
+        }); boundHost = host;
+      }
+      await activate(input.mode === "address_radius" ? "address_radius" : input.mode === "administrative_region" ? "administrative_region" : mode);
+    }
+    function stop() { paused = true; address?.stop(); region?.stop(); if (host?.dataset) host.dataset.rcDisplayStatus = "paused"; }
+    return { mount, stop, selectMode: activate, get mode() { return mode; }, get state() { return activeController()?.state || {}; }, refreshStatus: () => activeController()?.refreshStatus() || Promise.resolve() };
+  }
+  function createController(options = {}) { return options.mode === "address_radius" ? createAddressController(options) : createWorkspaceController(options); }
   const controllers = new WeakMap(), mounted = new Set();
   const api = { mount(host, context) { let controller = controllers.get(host); if (!controller) { controller = createController(); controllers.set(host, controller); } mounted.add(controller); return controller.mount(host, context); },
-    stop(host) { if (host) { const controller = controllers.get(host); controller?.stop(); mounted.delete(controller); } else { for (const controller of mounted) controller.stop(); mounted.clear(); } }, clear(accountKey) { for (const controller of mounted) controller.stop(); mounted.clear(); savedResults.clear(accountKey); },
-    createController, createReader, viewModel, resultHtml, editorHtml, checkedResult, MAX_IMPORT_BYTES };
+    stop(host) { if (host) { const controller = controllers.get(host); controller?.stop(); mounted.delete(controller); } else { for (const controller of mounted) controller.stop(); mounted.clear(); } }, clear(accountKey) { for (const controller of mounted) controller.stop(); mounted.clear(); savedResults.clear(accountKey); savedMarkets.clear(accountKey); },
+    createController, createReader, createMarketReader, createRegionController, marketViewModel, marketResultHtml, checkedMarketResult, viewModel, resultHtml, editorHtml, checkedResult, MAX_IMPORT_BYTES };
   root.RegionalCatchment = api; if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

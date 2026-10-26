@@ -1,9 +1,9 @@
 "use strict";
 
-// Saved annual background only. This adapter has no grid, calculator, queue or
-// provider dependency. Publication must freeze its returned, detached evidence.
+// Saved regional background plus separately bound address-radius evidence.
+// No grid, calculator, queue or provider is called when building a report.
 const { validateCatchmentResult, normalizeAddress, addressFingerprint } = require("./regional_catchment.cjs");
-const SCHEMA_VERSION = 1, MAX_REGIONS = 24, MAX_ENTRY_BYTES = 32768;
+const SCHEMA_VERSION = 2, MAX_REGIONS = 24, MAX_ENTRY_BYTES = 32768;
 const ID = /^[A-Za-z0-9_:-]{1,120}$/;
 const REASONS = Object.freeze({
   CATCHMENT_SERVICE_UNAVAILABLE: "반경 배후시장 저장 조회가 연결되지 않았습니다.",
@@ -29,6 +29,10 @@ function instant(value) {
   return Number.isFinite(date.getTime()) && Number.isFinite(day.getTime()) && day.toISOString().slice(0, 10) === value.slice(0, 10) ? date.toISOString() : null;
 }
 function date(value) { return typeof value === "string" && /^20\d{2}-\d{2}-\d{2}$/.test(value) && instant(value + "T00:00:00Z")?.slice(0, 10) === value; }
+function latestCompletedMonthAt(asOfAt) {
+  const kst = new Date(Date.parse(asOfAt) + 32400000);
+  return new Date(Date.UTC(kst.getUTCFullYear(), kst.getUTCMonth() - 1, 1)).toISOString().slice(0, 7);
+}
 function detachedResult(value) {
   // The existing result validator checks identities, provenance, geometry,
   // 3 bands x 3 metrics and arithmetic. Bound optional strings/notes as well.
@@ -66,7 +70,7 @@ function selection(request, roster) {
   const unmappedCompanyCount = request.type === "region" ? 0 : new Set(companies.filter(c => typeof c.regionKey !== "string" || !ID.test(c.regionKey)).map((c, i) => c.companyId || `unmapped_${i}`)).size;
   return { selected, unmappedCompanyCount };
 }
-function createMonthlyReportCatchmentContext({ catchmentService = null, now = () => new Date() } = {}) {
+function createMonthlyReportAddressContext({ catchmentService = null, now = () => new Date() } = {}) {
   return async function readCatchmentContext(request, roster = {}, options = {}) {
     if (!request || !["company", "keyword", "region"].includes(request.type) || !/^20\d{2}-(0[1-9]|1[0-2])$/.test(request.month || "")
       || !date(request.cutoffDate)) throw new TypeError("A valid monthly report request is required");
@@ -79,7 +83,7 @@ function createMonthlyReportCatchmentContext({ catchmentService = null, now = ()
       "누적 100km에 두 구간을 다시 더하거나 지역 간 인구·종사자를 합쳐 고유 고객 수로 만들지 않습니다.",
       "자료 확인은 리포트 작성시점 기준이며 숙박 관측 마감일 당시 알려진 자료라는 뜻이 아닙니다."
     ];
-    const result = { schemaVersion: SCHEMA_VERSION, reportMonth: request.month, cutoffDate: request.cutoffDate, asOfAt,
+    const result = { schemaVersion: 1, reportMonth: request.month, cutoffDate: request.cutoffDate, asOfAt,
       temporalBasis: "saved_annual_reference_at_report_creation", status: "missing", networkAttempted: false,
       selectionCoverage: { selectedRegionCount: new Set(selected.map(e => e.regionKey)).size,
         includedRegionCount: new Set(selected.slice(0, MAX_REGIONS).map(e => e.regionKey)).size,
@@ -143,4 +147,116 @@ function createMonthlyReportCatchmentContext({ catchmentService = null, now = ()
     return result;
   };
 }
-module.exports = { createMonthlyReportCatchmentContext, SCHEMA_VERSION, MAX_REGIONS, MAX_ENTRY_BYTES };
+
+function regionSelection(request, roster) {
+  // Service rosters carry two independent locations. An explicitly missing
+  // administrative region must never fall back to a resolved precise address.
+  const administrativeKey = company => Object.hasOwn(company, "savedAdministrativeRegionKey") ? company.savedAdministrativeRegionKey : company.regionKey;
+  const administrativeLabel = company => Object.hasOwn(company, "savedAdministrativeRegionLabel") ? company.savedAdministrativeRegionLabel : company.regionLabel;
+  const regions = new Map((Array.isArray(roster.regions) ? roster.regions : []).filter(object).map(region => [region.id, region]));
+  const companies = (Array.isArray(roster.companies) ? roster.companies : []).filter(company => object(company)
+    && typeof company.companyId === "string" && ID.test(company.companyId)
+    && (request.type !== "company" || company.companyId === request.targetId));
+  const groups = new Map(), unmapped = new Set(), seen = new Map();
+  for (const company of companies) {
+    const regionKey = administrativeKey(company);
+    if (seen.has(company.companyId) && seen.get(company.companyId) !== regionKey) {
+      unmapped.add(company.companyId);
+    } else seen.set(company.companyId, regionKey);
+  }
+  if (request.type === "region") {
+    if (typeof request.targetId === "string" && ID.test(request.targetId)) groups.set(request.targetId, new Set());
+  }
+  else for (const [companyId, regionKey] of seen) {
+    if (unmapped.has(companyId) || typeof regionKey !== "string" || !ID.test(regionKey)) { unmapped.add(companyId); continue; }
+    if (!groups.has(regionKey)) groups.set(regionKey, new Set());
+    groups.get(regionKey).add(companyId);
+  }
+  const selected = [...groups].sort(([a], [b]) => a.localeCompare(b)).map(([regionKey, ids]) => {
+    const region = regions.get(regionKey), company = companies.find(value => administrativeKey(value) === regionKey);
+    return { mode: "administrative_region", originKind: "administrative_region", regionKey,
+      regionLabel: text(region?.label || (company && administrativeLabel(company)) || regionKey), companyIds: [...ids].sort(),
+      selectionBasis: request.type === "region" ? "selected_region" : request.type === "company" ? "company_saved_region" : "observed_companies_saved_regions",
+      supported: !region || (region.level === "local" && region.active !== false && region.selectable !== false && region.unitType !== "general_district") };
+  });
+  return { selected, unmappedCompanyCount: request.type === "region" ? 0 : unmapped.size };
+}
+
+function detachedRegionSnapshot(value) {
+  const serialized = JSON.stringify(value);
+  if (Buffer.byteLength(serialized) > MAX_ENTRY_BYTES * 3) throw Error("bounded_region_result");
+  return JSON.parse(serialized);
+}
+
+function createMonthlyReportCatchmentContext({ regionMarketService = null, catchmentService = null, now = () => new Date(), mode = "administrative_region" } = {}) {
+  const readAddressContext = createMonthlyReportAddressContext({ catchmentService, now });
+  if (mode === "address_radius") return readAddressContext;
+  if (mode !== "administrative_region") throw new TypeError("Unsupported monthly catchment mode");
+  return async function readCatchmentContext(request, roster = {}, options = {}) {
+    // Preserve the strict request/as-of contract and separately retain only
+    // verified, saved address results. An address is never required for a region.
+    const precise = await readAddressContext(request, roster, options);
+    const latestCompletedMonth = latestCompletedMonthAt(precise.asOfAt);
+    const referenceMonth = request.month < latestCompletedMonth ? request.month : latestCompletedMonth;
+    const { selected, unmappedCompanyCount } = regionSelection(request, roster);
+    const included = selected.slice(0, MAX_REGIONS);
+    const result = { schemaVersion: SCHEMA_VERSION, defaultMode: "administrative_region", reportMonth: request.month,
+      cutoffDate: request.cutoffDate, asOfAt: precise.asOfAt, temporalBasis: "saved_regional_reference_at_report_creation",
+      referenceMonth, referenceBasis: "min_report_month_latest_completed_month_at_creation_kst",
+      status: "missing", networkAttempted: false,
+      selectionCoverage: { selectedRegionCount: selected.length, includedRegionCount: included.length,
+        omittedRegionCount: selected.length - included.length, unmappedCompanyCount },
+      entries: [], preciseEntries: precise.entries.filter(entry => entry.snapshot).map(entry => ({
+        ...entry, mode: "address_radius", originKind: "address_reference_point" })),
+      preciseCoverage: precise.selectionCoverage, preciseStatus: precise.status,
+      warnings: [
+        "기본 배후시장은 업체의 저장 소재지에 연결한 시군구 공식 지역 통계입니다. 업체 주소의 반경 수치가 아닙니다.",
+        "같은 지역은 한 번만 연결하며 여러 지역의 인구·가구·사업체·종사자를 합쳐 고유 고객 수로 만들지 않습니다.",
+        "지표의 기준기간과 저장 확인시점을 구분하며 보고월의 관광 수요·예약·매출로 환산하지 않습니다.",
+        `지역 저장분석 참조월은 ${referenceMonth}입니다. 보고 대상월과 작성시점의 한국시간 마지막 마감월 중 이른 달이며 지표별 실제 공표기간은 별도입니다.`,
+        "방문객 출발지·이동권은 미확보이며 인구나 지역 통계로 추정하지 않습니다.",
+        "주소 반경 정밀 근거가 따로 저장된 경우에만 별도 표시합니다. 지역 통계를 주소 정밀 결과로 바꾸지 않습니다."
+      ] };
+    if (!selected.length) result.warnings.push("대상의 저장 소재지가 확인되지 않아 지역 배후시장을 연결하지 않았습니다. 검색어 지명으로 대체하지 않습니다.");
+    if (unmappedCompanyCount) result.warnings.push(`관측 업체 ${unmappedCompanyCount}곳의 저장 소재지를 확정하지 못했습니다.`);
+    if (selected.length > MAX_REGIONS) result.warnings.push(`지역 ${selected.length}개 중 ${MAX_REGIONS}개만 연결했습니다. 생략 지역은 별도 확인이 필요합니다.`);
+    for (const selectedRegion of included) {
+      const { supported, ...identity } = selectedRegion;
+      const entry = { ...identity, referenceMonth, status: "missing", reasonCode: "", reasonLabel: "", regionSnapshot: null };
+      const unavailable = (code, label) => { entry.status = "unavailable"; entry.reasonCode = code; entry.reasonLabel = label; };
+      if (!supported) unavailable("CATCHMENT_REGION_UNSUPPORTED", REASONS.CATCHMENT_REGION_UNSUPPORTED);
+      else if (typeof regionMarketService?.get !== "function") unavailable("REGION_MARKET_SERVICE_UNAVAILABLE", "시군구 저장 지역 통계 조회가 연결되지 않았습니다.");
+      else try {
+        const saved = await regionMarketService.get({ regionKey: entry.regionKey, month: referenceMonth, months: 13 });
+        if (saved?.networkAttempted === true) throw Object.assign(Error("MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY"), { code: "MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY" });
+        if (saved?.networkAttempted !== false || saved.mode !== "administrative_region" || saved.originKind !== "administrative_region"
+          || saved.scope?.regionKey !== entry.regionKey || saved.scope?.month !== referenceMonth
+          || !["ready", "partial", "missing", "needs_verification"].includes(saved.status)) throw Error("invalid_region_binding");
+        for (const stamp of [saved.generatedAt, saved.calculatedAt, saved.retrievedAt, saved.source?.generatedAt, saved.source?.calculatedAt,
+          ...(saved.metrics || []).map(metric => metric.source?.retrievedAt)].filter(Boolean)) {
+          if (!instant(stamp) || instant(stamp) > result.asOfAt) throw Error("future_region_evidence");
+        }
+        const { validateRegionalMarketSnapshot } = require("./regional_market.cjs");
+        validateRegionalMarketSnapshot(saved, { regionKey: entry.regionKey, month: referenceMonth, asOfAt: result.asOfAt });
+        entry.regionSnapshot = detachedRegionSnapshot(saved); entry.status = saved.status;
+        if (saved.status !== "ready") {
+          entry.reasonCode = saved.status === "needs_verification" ? "REGION_MARKET_NEEDS_VERIFICATION" : saved.status === "partial" ? "REGION_MARKET_PARTIAL" : "REGION_MARKET_MISSING";
+          entry.reasonLabel = saved.status === "needs_verification" ? "지역·기간·원문 근거를 확인하지 못한 지표는 미확인으로 유지합니다."
+            : saved.status === "partial" ? "확인된 지표와 미확인 지표를 함께 표시합니다." : "사용할 저장 지역 통계가 없습니다. 0으로 계산하지 않습니다.";
+        }
+      } catch (error) {
+        if (error?.code === "MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY") throw error;
+        unavailable(error?.message === "future_region_evidence" ? "REGION_MARKET_AFTER_AS_OF" : "REGION_MARKET_READ_FAILED",
+          error?.message === "future_region_evidence" ? "보고서 작성시점 이후 근거여서 연결하지 않았습니다." : "저장 지역 통계의 지역·기간·출처를 확인하지 못했습니다.");
+      }
+      result.entries.push(entry);
+    }
+    result.status = result.entries.length && result.entries.every(entry => entry.status === "ready") ? "ready"
+      : result.entries.some(entry => ["ready", "partial"].includes(entry.status)) ? "partial"
+        : result.entries.some(entry => entry.status === "needs_verification") ? "needs_verification"
+          : result.entries.some(entry => entry.status === "unavailable") ? "unavailable" : "missing";
+    if (result.status === "ready" && (unmappedCompanyCount || selected.length > MAX_REGIONS)) result.status = "partial";
+    return result;
+  };
+}
+module.exports = { createMonthlyReportCatchmentContext, createMonthlyReportAddressContext, SCHEMA_VERSION, MAX_REGIONS, MAX_ENTRY_BYTES };

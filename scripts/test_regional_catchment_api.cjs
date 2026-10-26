@@ -97,7 +97,17 @@ async function main() {
     await start();
     assert.equal((await request(query)).status, 401);
     assert.equal((await request(addressQuery)).status, 401);
+    const marketQuery = "/api/regional-market?regionKey=" + regionKey;
+    assert.equal((await request(marketQuery)).status, 401);
     let cookie = await login();
+    const marketBefore = await inventory(), market = await request(marketQuery, cookie);
+    assert.equal(market.status, 200); assert.equal(market.data.mode, "administrative_region");
+    assert.equal(market.data.status, "missing"); assert.equal(market.data.metrics.length, 6);
+    assert.ok(market.data.metrics.every(metric => metric.value === null && metric.status === "missing"));
+    assert.equal(market.data.networkAttempted, false); assert.equal(market.data.readOnly, true);
+    assert.deepEqual(await inventory(), marketBefore, "Region-only GET cannot create a source, queue, address configuration or result");
+    assert.equal((await request(marketQuery + "&companyId=synthetic-company-a", cookie)).status, 400);
+    assert.equal((await request("/api/regional-market", cookie, { regionKey })).status, 405);
     const options = await request(addressQuery, cookie); assert.equal(options.status, 200); checkAddressOptions(options.data, companyMaster.companies);
     assert.equal(sha(await fs.readFile(companyMasterFile)), originalMasterSha, "Address lookup cannot rewrite the synthetic master");
     const emptyBefore = await inventory(), empty = await request(query, cookie);

@@ -31,7 +31,9 @@ async function fixture(t) {
     quality: { status: 'partial', provisional: false, missingCompanyDays: 30, warnings: ['/private/credential.json'],
       discardedSamples: [{ raw: 'private-sample' }], sourceDiagnostics: { token: 'private-token' } },
     sources: { path: '/private/source.json', observations: [{ phone: 'private-phone' }], runIds: ['private-run'] },
-    context: { sources: [{ token: 'private-context' }] }, companies: [{ secret: 'private-company' }],
+    context: { sources: [{ token: 'private-context' }], catchment: { schemaVersion: 2, defaultMode: 'administrative_region',
+      entries: [{ regionKey: 'private-region', regionSnapshot: { source: { sourceFingerprint: 'private-region-source' } } }],
+      preciseEntries: [{ snapshot: { scope: { center: { address: 'private-address', latitude: 36, longitude: 127 } } } }] } }, companies: [{ secret: 'private-company' }],
     unknownFutureField: { credential: 'future-secret' } };
   const seed = { schemaVersion: 1, id: 'mr_' + crypto.randomUUID(), revision: 3, version: 1, status: 'published', type: 'company',
     month: '2026-08', targetId: 'cmp_test', title: '8월 발행본', notes: 'private admin note', publishedAt: '2026-09-01T00:00:00.000Z',

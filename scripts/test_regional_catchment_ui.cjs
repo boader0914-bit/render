@@ -1,6 +1,8 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict");
-const { viewModel, resultHtml, editorHtml, createReader, createController, MAX_IMPORT_BYTES } = require("../web/regional-catchment.js");
+const { viewModel, resultHtml, editorHtml, createReader, createController: createScopedController, createMarketReader, createRegionController, marketViewModel, marketResultHtml, checkedMarketResult, MAX_IMPORT_BYTES } = require("../web/regional-catchment.js");
+// Existing address protections always exercise the explicitly selected mode.
+const createController = options => createScopedController({ ...options, mode: "address_radius" });
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const scope = extra => ({ accountKey: "admin-a", regionKey: "sancheong", regionLabel: "산청군", ...extra });
@@ -303,4 +305,139 @@ test("changed or unavailable registered company addresses cannot reuse an old co
     await element.listeners.submit({ preventDefault() {}, target: { getAttribute: () => "configure", reportValidity: () => true } });
     assert.equal(calls.filter(call => call.options).length, 0); control.stop();
   }
+});
+
+function market(extra = {}) {
+  const proof = { version: "stored-kosis-spatial-evidence-v1", sourceKind: "stored_raw_response", evidenceId: "saved-proof", sha256: "a".repeat(64), period: "2026-09", periodType: "M", verifiedAt: "2026-10-22T01:00:00Z" };
+  return { mode: "administrative_region", originKind: "administrative_region", status: "partial",
+    scope: { regionKey: "sancheong", label: "경상남도 산청군", officialCode: "48860", level: "sigungu", month: "2026-09", months: 13, boundaryYear: null, boundaryYearStatus: "unrecorded" },
+    metrics: [
+      { key: "population", label: "총인구", unit: "명", periodType: "M", period: "2026-09", status: "observed", value: 0, reasonCode: null, source: { provider: "KOSIS", tableId: "TABLE_1", sourceUrl: "https://kosis.kr/statHtml/statHtml.do", providerRegionCode: "48860", storedProvenance: proof, retrievedAt: "2026-10-22T01:01:00Z", boundaryYear: null, boundaryYearStatus: "unrecorded" } },
+      { key: "registeredHouseholds", label: "주민등록 세대 수 (가구 수와 다름)", unit: "세대", periodType: "M", period: null, status: "missing", value: null, reasonCode: "REGIONAL_MARKET_NOT_ACQUIRED", source: { provider: "KOSIS", tableId: "TABLE_2" } },
+      { key: "establishments", label: "사업체 수", unit: "개", periodType: "Y", period: "2024", status: "observed", value: 15, reasonCode: null, source: { provider: "KOSIS", sourceUrl: "https://kosis.kr", providerRegionCode: "48860", storedProvenance: { ...proof, period: "2024", periodType: "Y" }, boundaryYear: 2023, boundaryYearStatus: "recorded" } }
+    ], visitorOrigins: { status: "not_acquired", value: null, reasonCode: "VISITOR_ORIGINS_NOT_AVAILABLE" },
+    source: { kind: "saved_regional_analysis", resultId: "saved-market", resultSha256: "b".repeat(64), generatedAt: "2026-10-22T01:02:00Z", calculatedAt: "2026-10-22T01:02:00Z" },
+    retrievedAt: "2026-10-22T01:01:00Z", networkAttempted: false, readOnly: true, warnings: ["BOUNDARY_YEAR_UNRECORDED"], ...extra };
+}
+function workspaceHost() {
+  const element = host(), administrative = host(), address = host();
+  administrative.slots["[data-rm-results]"] = { innerHTML: "", querySelectorAll: () => [] };
+  element.slots['[data-rc-mode-panel="administrative_region"]'] = administrative;
+  element.slots['[data-rc-mode-panel="address_radius"]'] = address;
+  return { element, administrative, address };
+}
+function workspace(options = {}) {
+  return createScopedController({ reader: createReader(), marketReader: createMarketReader(), afterPaint: callback => callback(), ...options });
+}
+
+test("default administrative mode needs only a region and makes no address, configure, import or refresh request", async () => {
+  const calls = [], { element, administrative, address } = workspaceHost();
+  const control = workspace({ fetchJson: async (url, options) => { calls.push({ url, options }); return market(); } });
+  await control.mount(element, scope());
+  assert.equal(control.mode, "administrative_region"); assert.equal(element.dataset.rcMode, "administrative_region");
+  assert.deepEqual(calls, [{ url: "/api/regional-market?regionKey=sancheong", options: undefined }]);
+  assert.equal(address.innerHTML, ""); assert.equal(address.hidden, true); assert.equal(administrative.hidden, false);
+  assert.match(administrative.slots["[data-rm-results]"].innerHTML, /시·군·구 전체|확보범위 2\/3개 지표/);
+  assert.doesNotMatch(administrative.innerHTML, /name="address"|name="latitude"|name="datasetFile"|data-rc-action="refresh"/);
+  await control.mount(element, scope()); assert.equal(calls.length, 1); control.stop();
+});
+
+test("explicit address mode preserves its protected draft and saved values across mode switches", async () => {
+  const calls = [], { element, administrative, address } = workspaceHost();
+  const control = workspace({ fetchJson: async (url, options) => {
+    calls.push({ url, options }); return url.startsWith("/api/regional-market?") ? market() : url.includes("/addresses?") ? { addresses: [] } : complete(17);
+  } });
+  await control.mount(element, scope()); await control.selectMode("address_radius");
+  assert.equal(control.mode, "address_radius"); assert.equal(address.hidden, false); assert.equal(administrative.hidden, true);
+  assert.ok(calls.some(call => call.url === "/api/regional-catchment?regionKey=sancheong"));
+  assert.ok(calls.some(call => call.url.startsWith("/api/regional-catchment/addresses?")));
+  address.listeners.input({ target: { name: "label", value: "입력 중인 상세주소 기준점" } });
+  address.listeners.input({ target: { name: "latitude", value: "35.123" } });
+  const editor = address.slots["[data-rc-editor-slot]"].innerHTML, callsBefore = calls.filter(call => call.url.startsWith("/api/regional-catchment")).length;
+  await control.selectMode("administrative_region"); await control.mount(element, scope());
+  assert.equal(calls.filter(call => call.url.startsWith("/api/regional-catchment")).length, callsBefore);
+  await control.selectMode("address_radius");
+  assert.equal(control.state.draft.label, "입력 중인 상세주소 기준점"); assert.equal(control.state.draft.latitude, "35.123");
+  assert.equal(control.state.draft.confirmed, false); assert.equal(control.state.dirty, true);
+  assert.equal(address.slots["[data-rc-editor-slot]"].innerHTML, editor);
+  assert.match(address.slots["[data-rc-results]"].innerHTML, /data-rc-value="17"/);
+  assert.equal(calls.filter(call => call.options?.method === "POST").length, 0); control.stop();
+});
+
+test("administrative presentation keeps real zero, missingness, sources, periods and unavailable visitor origins distinct", () => {
+  const html = marketResultHtml(market());
+  assert.match(html, /data-rm-metric="population" data-rm-status="observed" data-rm-value="0"/);
+  assert.match(html, /data-rm-metric="registeredHouseholds" data-rm-status="missing" data-rm-value=""/);
+  assert.match(html, /가구 수와 다릅니다|가구 수와 다름/); assert.match(html, /기준기간 미확인/);
+  assert.match(html, /2024년 · 연간/); assert.match(html, /2026-09 · 월간/); assert.match(html, /경계연도 미기록/);
+  assert.match(html, /KOSIS/); assert.match(html, /TABLE_1/); assert.match(html, /저장 원본 근거/); assert.match(html, /saved-proof/);
+  assert.match(html, /지역·기간|공표기간/); assert.match(html, /거주인구를 고객 수로 해석하지 않으며/);
+  assert.match(html, /방문객 출발지·외부 유입 · 자료 미확보/); assert.match(html, /관광 지표는 이 기본 분석에 포함되지 않습니다/);
+  assert.doesNotMatch(html, /name="address"|rc-ring|반경 전체값|data-rm-visitor-origins="0"/);
+  assert.equal(marketViewModel(null, { loading: true }).status, "loading");
+  assert.doesNotMatch(marketResultHtml(null, { loading: true }), /data-rm-value="0"|확보범위 0/);
+});
+
+test("unverified, partial, suppressed, pending and error metrics never render a number even if malformed input contains one", () => {
+  for (const status of ["unverified", "partial", "suppressed", "publication_pending", "error", "missing"]) {
+    const input = market(); Object.assign(input.metrics[0], { status, value: 987654, reasonCode: "REGIONAL_MARKET_EVIDENCE_UNVERIFIED" });
+    const html = marketResultHtml(input); assert.doesNotMatch(html, /987,654|data-rm-value="987654"/); assert.match(html, /data-rm-value=""/);
+    assert.throws(() => checkedMarketResult(input, scope()), /수치 상태/);
+  }
+});
+
+test("administrative DTO rejects foreign geography or frequency, unsafe result status and any network or mutation claim", () => {
+  const inputs = [market({ mode: "address_radius" }), market({ originKind: "address_radius" }), market({ networkAttempted: true }), market({ readOnly: false }), market({ status: "ready_fake" }), market({ visitorOrigins: { status: "observed", value: 0 } })];
+  const wrongRegion = market(); wrongRegion.scope.regionKey = "jinju"; inputs.push(wrongRegion);
+  const wrongLevel = market(); wrongLevel.scope.level = "sido"; inputs.push(wrongLevel);
+  for (const input of inputs) assert.throws(() => checkedMarketResult(input, scope()));
+  assert.throws(() => checkedMarketResult(market(), scope({ month: "2026-08" })), /범위/);
+  assert.throws(() => checkedMarketResult(market(), scope({ months: 24 })), /범위/);
+  const badProof = market(); badProof.metrics[0].source.storedProvenance.period = "2026-08";
+  assert.throws(() => checkedMarketResult(badProof, scope()), /원본 근거/);
+  const future = market(); future.metrics[0].period = "2026-10"; future.metrics[0].source.storedProvenance.period = "2026-10";
+  assert.throws(() => checkedMarketResult(future, scope()), /원본 근거/);
+  assert.equal(checkedMarketResult(market(), scope()).mode, "administrative_region");
+});
+
+test("administrative reader isolates account, region and requested period while deduplicating active reads", async () => {
+  const reader = createMarketReader(), waiting = deferred(), urls = [];
+  const input = { ...scope({ month: "2026-09", months: 13, companyId: "ignored" }), fetchJson: async url => { urls.push(url); return waiting.promise; } };
+  const first = reader.get(input), second = reader.get(input); waiting.resolve(market()); assert.equal(await first, await second);
+  assert.deepEqual(urls, ["/api/regional-market?regionKey=sancheong&month=2026-09&months=13"]);
+  assert.equal(reader.read(scope({ accountKey: "other", month: "2026-09", months: 13 })), null);
+  assert.equal(reader.read(scope({ month: "2026-08", months: 13 })), null);
+  assert.equal(reader.read(scope({ regionKey: "jinju", month: "2026-09", months: 13 })), null);
+  reader.clear("admin-a"); assert.equal(reader.read(input), null);
+});
+
+test("a failed administrative recheck keeps the prior values and never falls back to an address endpoint", async () => {
+  const { element, administrative } = workspaceHost(), calls = []; let fail = false;
+  const control = workspace({ fetchJson: async url => { calls.push(url); if (fail) throw Error("임시 조회 오류"); return market(); } });
+  await control.mount(element, scope()); fail = true; await control.refreshStatus();
+  assert.equal(control.state.result.source.resultId, "saved-market");
+  const html = administrative.slots["[data-rm-results]"].innerHTML; assert.match(html, /마지막 확인 결과를 유지/); assert.match(html, /data-rm-value="15"/);
+  assert.equal(calls.length, 2); assert.ok(calls.every(url => url.startsWith("/api/regional-market?"))); control.stop();
+});
+
+test("late administrative responses cannot replace the selected region or a stopped account view", async () => {
+  const waiting = deferred(), { element, administrative } = workspaceHost();
+  const control = workspace({ fetchJson: async url => {
+    if (url.includes("regionKey=sancheong")) return waiting.promise;
+    const result = market(); result.scope = { ...result.scope, regionKey: "jinju", label: "진주시", officialCode: "48170" }; return result;
+  } });
+  const pending = control.mount(element, scope()); await tick();
+  await control.mount(element, scope({ regionKey: "jinju", regionLabel: "진주시" }));
+  waiting.resolve(market()); await pending;
+  assert.equal(control.state.result.scope.regionKey, "jinju"); assert.equal(element.dataset.rcRegion, "jinju");
+  assert.match(administrative.slots["[data-rm-results]"].innerHTML, /진주시/); assert.doesNotMatch(administrative.slots["[data-rm-results]"].innerHTML, /경상남도 산청군/);
+  control.stop(); assert.equal(element.dataset.rcDisplayStatus, "paused");
+});
+
+test("administrative metric text, evidence and links are escaped", () => {
+  const result = market(); result.scope.label = '<img src=x onerror="alert(1)">';
+  Object.assign(result.metrics[0], { label: "<script>bad()</script>", unit: '명" onclick="bad' });
+  result.metrics[0].source.sourceUrl = "javascript:alert(1)"; result.metrics[0].source.storedProvenance.evidenceId = "<svg/onload=bad>";
+  const html = marketResultHtml(result); assert.doesNotMatch(html, /<img|<script>|<svg|href="javascript:/);
+  assert.match(html, /&lt;script&gt;/); assert.match(html, /&lt;svg/);
 });

@@ -3,6 +3,7 @@ const test = require("node:test"), assert = require("node:assert/strict"), fs = 
 const { createMonthlyReportCatchmentContext, MAX_REGIONS, MAX_ENTRY_BYTES } = require("./lib/monthly_report_catchment_context.cjs");
 const { normalizeDataset, calculateCatchment, inputFingerprint, normalizeCenter } = require("./lib/regional_catchment.cjs");
 const { createRegionalCatchmentService } = require("./lib/regional_catchment_store.cjs");
+const { createMonthlyReportService } = require("./lib/monthly_reports.cjs");
 const NOW = "2026-10-25T01:00:00.000Z", CALCULATED = "2026-10-20T01:00:00.000Z";
 const ADDRESS = "합성도 합성군 시험로 10";
 const center = { latitude: 36.5, longitude: 127.8, label: "합성 검수 기준점", address: ADDRESS, sourceUrl: "https://www.data.go.kr/", confirmed: true };
@@ -30,7 +31,183 @@ async function saved(regionKey = "r1", options = {}) {
     datasets: [{ ...snapshot.dataset, importedBy: "must-not-copy" }], snapshot, job: { status: "completed", privateMemo: "must-not-copy" },
     storage: { errorCode: null, lastReadSource: "stored_result", networkAttempted: false } };
 }
-const adapter = get => createMonthlyReportCatchmentContext({ catchmentService: { get }, now: () => new Date(NOW) });
+const adapter = get => createMonthlyReportCatchmentContext({ mode: "address_radius", catchmentService: { get }, now: () => new Date(NOW) });
+
+function regionalSaved(regionKey = "r1", { missing = false, partial = false, future = false, zero = false, referenceMonth = request.month } = {}) {
+  const { buildRegionalMarketSnapshot, SPECS } = require("./lib/regional_market.cjs");
+  const region = { regionKey, label: "합성 지역", officialCode: "48860", level: "local", unitType: "county" };
+  const scope = { regionKey, month: referenceMonth, months: 13 };
+  if (missing) return buildRegionalMarketSnapshot({ region, scope, now: () => new Date(NOW) });
+  const generatedAt = future ? "2026-10-25T01:00:00.001Z" : CALCULATED;
+  const datasets = SPECS.map((spec, index) => {
+    const period = spec.periodType === "M" ? referenceMonth : "2024";
+    return { key: spec.datasetKey, periodType: spec.periodType, period, retrievedAt: CALCULATED, boundaryYear: 2025,
+      rows: [{ key: spec.metricKey, unit: spec.unit, value: partial && index === 1 ? null : zero ? 0 : index + 100,
+        status: partial && index === 1 ? "suppressed" : "observed" }],
+      spatialContract: { version: "regional-data-contract-v1", requestedRegionKey: regionKey, officialCode: region.officialCode,
+        requestedLevel: "sigungu", providedLevel: "sigungu", requestedUnitType: region.unitType, scopeKind: "administrative",
+        status: "matched", evidence: "response", aggregation: "none", provider: "KOSIS", providerRegionCode: "48860",
+        storedProvenance: { version: "stored-kosis-spatial-evidence-v1", sourceKind: "stored_raw_response", evidenceId: "synthetic-proof",
+          sha256: "d".repeat(64), periodType: spec.periodType, period, verifiedAt: CALCULATED,
+          checks: ["safe_original_path", "original_sha256", "source_table_and_period", "metadata_region_ancestry", "raw_region_code", "metric_unit_and_period", "stored_metric_values"] } } };
+  });
+  return buildRegionalMarketSnapshot({ region, scope, now: () => new Date(NOW), source: { resultSha256: "e".repeat(64) },
+    savedSnapshot: { schemaVersion: 1, calculationVersion: "regional-analysis-v1", contractVersion: "regional-data-contract-v1", status: "ready",
+      scope, regionIdentity: region, networkAttempted: false, generatedAt, sourceFingerprint: "f".repeat(64),
+      resultId: "20000000-0000-4000-8000-000000000002", groups: [{ key: "kosis", provider: "KOSIS", datasets }] } });
+}
+const regionalAdapter = (get, extra = {}) => createMonthlyReportCatchmentContext({ regionMarketService: { get }, now: () => new Date(NOW), ...extra });
+
+for (const scenario of [
+  { name: "a missing address cannot erase the saved administrative region", companyId: "no-address", savedRegion: "r1", preciseRegion: "", addressStatus: "missing" },
+  { name: "a different precise address region cannot replace the saved administrative region", companyId: "different-address-region", savedRegion: "r1", preciseRegion: "r2", addressStatus: "ready" },
+  { name: "an explicitly missing saved administrative region cannot be guessed from the precise address", companyId: "no-saved-region", savedRegion: "", preciseRegion: "r2", addressStatus: "ready" }
+]) test("actual monthly service and warm cache: " + scenario.name, async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "monthly-saved-region-"));
+  t.after(async () => { assert.equal(path.dirname(path.resolve(dataDir)), path.resolve(os.tmpdir()));
+    assert.ok(path.basename(dataDir).startsWith("monthly-saved-region-")); await fs.rm(dataDir, { recursive: true, force: true }); });
+  const target = { ...company(scenario.companyId, scenario.savedRegion), regionLabel: scenario.savedRegion ? "원래 저장 소재지" : "저장 소재지 미확인",
+    addressBasis: { status: scenario.addressStatus, address: scenario.addressStatus === "ready" ? ADDRESS : null,
+      basis: "saved_company_address", regionKey: scenario.preciseRegion, regionLabel: scenario.preciseRegion ? "주소의 정밀 소재지" : "주소 소재지 미확인" } };
+  const selected = { ...request, targetId: scenario.companyId, month: "2026-10", cutoffDate: "2026-10-22" };
+  const regionalCalls = [], preciseCalls = [], incomingRosters = []; let sourceReads = 0;
+  const precise = scenario.addressStatus === "ready" ? await saved(scenario.preciseRegion, { companyId: scenario.companyId }) : null;
+  const readCatchmentContext = regionalAdapter(async input => { regionalCalls.push(input); return regionalSaved(input.regionKey); }, {
+    catchmentService: { get: async input => { preciseCalls.push(input); assert.ok(precise, "no precise read is allowed without a confirmed address"); return precise; } } });
+  const service = createMonthlyReportService({ dataDir, now: () => new Date(NOW), calculationVersion: "monthly-saved-region-regression-v1",
+    readSourceRevision: async () => "synthetic-stable-region-source", loadSources: async () => { sourceReads++;
+      return { companies: [copy(target)], observations: [], runs: [], regions: [
+        { id: "r1", label: "저장 행정지역", level: "local" }, { id: "r2", label: "주소 정밀지역", level: "local" }] }; },
+    readCatchmentContext: async (input, scope, options) => { incomingRosters.push(copy(scope)); return readCatchmentContext(input, scope, options); } });
+  const first = await service.preview(selected), warm = await service.preview(selected);
+  assert.equal(sourceReads, 2, "the second preview must exercise the materialized current/previous-month cache");
+  for (const preview of [first, warm]) {
+    const context = preview.context.catchment;
+    assert.equal(context.reportMonth, "2026-10"); assert.equal(context.referenceMonth, "2026-09");
+    assert.equal(context.entries.length, scenario.savedRegion ? 1 : 0);
+    if (scenario.savedRegion) { assert.equal(context.status, "ready"); assert.equal(context.entries[0].regionKey, scenario.savedRegion);
+      assert.equal(context.entries[0].regionLabel, "저장 행정지역"); assert.equal(context.entries[0].regionSnapshot.metrics[0].value, 100); }
+    else { assert.equal(context.status, "missing"); assert.equal(context.selectionCoverage.unmappedCompanyCount, 1); }
+    assert.equal(context.preciseEntries.length, precise ? 1 : 0);
+    if (precise) { assert.equal(context.preciseEntries[0].regionKey, scenario.preciseRegion);
+      assert.deepEqual(context.preciseEntries[0].snapshot, precise.snapshot, "the earlier address binding and actual saved radius result stay unchanged"); }
+  }
+  assert.deepEqual(regionalCalls, scenario.savedRegion ? Array.from({ length: 2 }, () => ({ regionKey: scenario.savedRegion, month: "2026-09", months: 13 })) : []);
+  assert.deepEqual(preciseCalls, precise ? Array.from({ length: 2 }, () => ({ regionKey: scenario.preciseRegion, companyId: scenario.companyId, address: ADDRESS })) : []);
+  assert.ok(incomingRosters.every(scope => scope.companies[0].savedAdministrativeRegionKey === scenario.savedRegion
+    && scope.companies[0].savedAdministrativeRegionLabel === target.regionLabel
+    && scope.companies[0].regionKey === scenario.preciseRegion), "both locations travel independently through fresh and warm service rosters");
+  const draft = await service.create({ ...selected, previewToken: first.previewToken });
+  const review = await service.update(draft.id, { revision: draft.revision, status: "review" });
+  const issued = await service.publish(draft.id, { revision: review.revision, acknowledgeQuality: true });
+  assert.deepEqual(issued.snapshot.context.catchment, first.context.catchment, "the approved two-location evidence is frozen in the issued snapshot");
+});
+
+test("new monthly default uses saved administrative region without requiring a precise address", async () => {
+  const target = company(); target.addressBasis = { status: "missing", address: null, basis: "saved_company_address" };
+  const value = regionalSaved(), calls = [], before = JSON.stringify(value);
+  const result = await regionalAdapter(async input => { calls.push(input); return value; })(request, { companies: [target], regions: roster.regions });
+  assert.equal(result.schemaVersion, 2); assert.equal(result.defaultMode, "administrative_region"); assert.equal(result.status, "ready");
+  assert.deepEqual(calls, [{ regionKey: "r1", month: request.month, months: 13 }]);
+  assert.equal(result.entries[0].mode, "administrative_region"); assert.equal(result.entries[0].originKind, "administrative_region");
+  assert.deepEqual(result.entries[0].companyIds, ["c1"]); assert.equal(result.entries[0].selectionBasis, "company_saved_region");
+  assert.equal(result.entries[0].regionSnapshot.metrics[0].value, 100); assert.equal(result.preciseEntries.length, 0);
+  assert.equal(result.entries[0].regionSnapshot.visitorOrigins.value, null); assert.equal(result.networkAttempted, false);
+  assert.equal(JSON.stringify(value), before); value.metrics[0].value = 999;
+  assert.equal(result.entries[0].regionSnapshot.metrics[0].value, 100, "the report freezes a detached source DTO");
+  assert.doesNotMatch(JSON.stringify(result.entries[0]), /"latitude"|"longitude"|"rings"|"center"/);
+});
+
+test("current and future stay months bind latest closed regional reference without shifting lodging month or cutoff", async () => {
+  const value = regionalSaved(), target = company(); delete target.addressBasis;
+  for (const reportMonth of ["2026-10", "2026-11"]) {
+    const calls = [], selected = { ...request, month: reportMonth, cutoffDate: "2026-10-22" };
+    const result = await regionalAdapter(async input => { calls.push(input); return value; })(selected, { companies: [target] });
+    assert.equal(result.reportMonth, reportMonth); assert.equal(result.cutoffDate, "2026-10-22"); assert.equal(result.asOfAt, NOW);
+    assert.equal(result.referenceMonth, "2026-09"); assert.equal(result.entries[0].referenceMonth, "2026-09");
+    assert.equal(result.referenceBasis, "min_report_month_latest_completed_month_at_creation_kst");
+    assert.deepEqual(calls, [{ regionKey: "r1", month: "2026-09", months: 13 }]);
+    assert.deepEqual(result.entries[0].regionSnapshot.metrics, value.metrics, "all six saved values and source periods remain unchanged");
+  }
+  const past = { ...request, month: "2026-05", cutoffDate: "2026-05-31" }, calls = [];
+  const result = await regionalAdapter(async input => { calls.push(input); return regionalSaved("r1", { referenceMonth: "2026-05" }); })(past, { companies: [target] });
+  assert.equal(result.referenceMonth, "2026-05"); assert.equal(result.reportMonth, "2026-05");
+  assert.deepEqual(calls, [{ regionKey: "r1", month: "2026-05", months: 13 }]);
+});
+
+test("regional reference closes at the Korea month boundary, including a year rollover", async () => {
+  const target = company(); delete target.addressBasis;
+  const cases = [
+    ["2026-09-30T14:59:59.999Z", "2026-10", "2026-09-30", "2026-08"],
+    ["2026-09-30T15:00:00.000Z", "2026-10", "2026-10-01", "2026-09"],
+    ["2026-12-31T15:00:00.000Z", "2027-01", "2027-01-01", "2026-12"]
+  ];
+  for (const [asOfAt, month, cutoffDate, referenceMonth] of cases) {
+    const calls = [], read = createMonthlyReportCatchmentContext({ now: () => new Date(asOfAt), regionMarketService: {
+      get: async input => { calls.push(input); return regionalSaved("r1", { missing: true, referenceMonth }); } } });
+    const result = await read({ ...request, month, cutoffDate }, { companies: [target] }, { asOfAt });
+    assert.equal(result.referenceMonth, referenceMonth); assert.equal(result.entries[0].referenceMonth, referenceMonth);
+    assert.equal(result.reportMonth, month); assert.equal(result.cutoffDate, cutoffDate); assert.equal(result.status, "missing");
+    assert.deepEqual(calls, [{ regionKey: "r1", month: referenceMonth, months: 13 }]);
+  }
+});
+
+test("keyword regional defaults deduplicate one stored region while preserving separately bound address results", async () => {
+  const companies = [company("a"), company("b", "r1", "합성도 합성군 시험로 20"), company("a")], calls = [], addressCalls = [];
+  const read = regionalAdapter(async input => { calls.push(input); return regionalSaved(input.regionKey); }, {
+    catchmentService: { get: async input => { addressCalls.push(input); return saved(input.regionKey, input); } } });
+  const result = await read({ ...request, type: "keyword" }, { companies });
+  assert.equal(calls.length, 1); assert.equal(addressCalls.length, 2); assert.equal(result.entries.length, 1);
+  assert.deepEqual(result.entries[0].companyIds, ["a", "b"]); assert.equal(result.preciseEntries.length, 2);
+  assert.ok(result.preciseEntries.every(entry => entry.mode === "address_radius" && entry.snapshot.scope.companyId === entry.companyId));
+  assert.notEqual(result.preciseEntries[0].snapshot.sourceFingerprint, result.preciseEntries[1].snapshot.sourceFingerprint);
+  assert.equal(result.entries[0].regionSnapshot.metrics[0].value, 100, "one regional reference never becomes a company total");
+});
+
+test("regional default keeps public zero, partial suppression and missing values distinct", async () => {
+  const target = company(); delete target.addressBasis;
+  for (const options of [{ zero: true }, { partial: true }, { missing: true }]) {
+    const result = await regionalAdapter(async () => regionalSaved("r1", options))(request, { companies: [target] });
+    const metric = result.entries[0].regionSnapshot.metrics;
+    assert.equal(result.status, options.zero ? "ready" : options.partial ? "partial" : "missing");
+    if (options.zero) assert.ok(metric.every(value => value.value === 0 && value.status === "observed"));
+    if (options.partial) { assert.equal(metric[1].value, null); assert.equal(metric[1].status, "suppressed"); }
+    if (options.missing) assert.ok(metric.every(value => value.value === null));
+    assert.equal(result.entries[0].regionSnapshot.visitorOrigins.value, null);
+  }
+});
+
+test("unmapped or conflicting company regions and broad regions are never guessed from keyword text", async () => {
+  let calls = 0;
+  const read = regionalAdapter(async input => { calls++; return regionalSaved(input.regionKey); });
+  const companies = [company("same", "r1"), company("same", "r2"), company("unmapped", "")];
+  const empty = await read({ ...request, type: "keyword", targetId: "경남글램핑" }, { companies });
+  assert.equal(calls, 0); assert.equal(empty.entries.length, 0); assert.equal(empty.selectionCoverage.unmappedCompanyCount, 2);
+  const invalidTarget = await read({ ...request, type: "region", targetId: "invalid/region" }, roster);
+  assert.equal(calls, 0); assert.equal(invalidTarget.entries.length, 0, "an invalid selected region never falls back to a company's region");
+  const broad = await read({ ...request, type: "region", targetId: "r1" }, { regions: [{ id: "r1", level: "province" }] });
+  assert.equal(calls, 0); assert.equal(broad.entries[0].regionSnapshot, null); assert.equal(broad.entries[0].reasonCode, "CATCHMENT_REGION_UNSUPPORTED");
+});
+
+test("regional selection is bounded by unique region count instead of the number of companies", async () => {
+  const calls = [], companies = Array.from({ length: MAX_REGIONS + 2 }, (_, index) => company(`c${index}`, `r${index}`));
+  const result = await regionalAdapter(async input => { calls.push(input); return regionalSaved(input.regionKey); })({ ...request, type: "keyword" }, { companies });
+  assert.equal(calls.length, MAX_REGIONS); assert.equal(result.entries.length, MAX_REGIONS); assert.equal(result.status, "partial");
+  assert.equal(result.selectionCoverage.selectedRegionCount, MAX_REGIONS + 2); assert.equal(result.selectionCoverage.omittedRegionCount, 2);
+});
+
+test("regional adapter rejects wrong binding, future evidence and network work without altering precise saved evidence", async () => {
+  const target = company(); delete target.addressBasis;
+  for (const value of [regionalSaved("r2"), regionalSaved("r1", { future: true }), { ...regionalSaved(), fingerprint: "a".repeat(64) }]) {
+    const result = await regionalAdapter(async () => value)(request, { companies: [target] });
+    assert.equal(result.entries[0].regionSnapshot, null); assert.equal(result.status, "unavailable");
+  }
+  const futureMetric = regionalSaved(); futureMetric.metrics[0].source.retrievedAt = "2026-10-25T01:00:00.001Z";
+  const result = await regionalAdapter(async () => futureMetric)(request, { companies: [target] }); assert.equal(result.entries[0].regionSnapshot, null);
+  await assert.rejects(regionalAdapter(async () => ({ ...regionalSaved(), networkAttempted: true }))(request, { companies: [target] }), { code: "MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY" });
+  const failed = await regionalAdapter(async () => { throw Error("PRIVATE_PROVIDER_SECRET"); })(request, { companies: [target] });
+  assert.doesNotMatch(JSON.stringify(failed), /PRIVATE_PROVIDER_SECRET/);
+});
 
 test("saved annual reference keeps provenance, exact nine metrics, cutoff and a detached bounded snapshot", async () => {
   const value = await saved(), calls = [];
@@ -133,7 +310,7 @@ test("unconfigured, missing, failed, unavailable and unsafe error strings never 
     const result = await adapter(async () => ({ scope: { regionKey: "r1", companyId: "c1" }, status, snapshot: null, storage: { networkAttempted: false } }))(request, roster);
     assert.equal(result.entries[0].status, status); assert.equal(result.entries[0].reasonCode, code); assert.equal(result.entries[0].snapshot, null);
   }
-  const result = await createMonthlyReportCatchmentContext({ now: () => new Date(NOW) })(request, roster);
+  const result = await createMonthlyReportCatchmentContext({ mode: "address_radius", now: () => new Date(NOW) })(request, roster);
   assert.equal(result.status, "unavailable"); assert.equal(result.entries[0].reasonCode, "CATCHMENT_SERVICE_UNAVAILABLE");
   const failed = await adapter(async () => { throw Error("https://secret.test/?token=private"); })(request, roster);
   assert.equal(failed.entries[0].reasonCode, "CATCHMENT_READ_FAILED"); assert.doesNotMatch(JSON.stringify(failed), /secret|token|private/);
@@ -196,7 +373,7 @@ test("actual saved service works after its original grid is removed without calc
   let calculations = 0;
   const restarted = createRegionalCatchmentService({ dataDir, resolveRegion, resolveCompanyAddress, calculate: async () => { calculations++; throw Error("must not calculate"); } });
   t.after(() => restarted.close());
-  const read = createMonthlyReportCatchmentContext({ catchmentService: restarted, now: () => new Date(NOW) });
+  const read = createMonthlyReportCatchmentContext({ mode: "address_radius", catchmentService: restarted, now: () => new Date(NOW) });
   const first = await read(request, roster), second = await read(request, roster);
   assert.equal(first.status, "ready"); assert.equal(first.entries[0].snapshot.resultId, second.entries[0].snapshot.resultId); assert.equal(calculations, 0);
   assert.deepEqual(await fs.readFile(statePath), before); assert.doesNotMatch(JSON.stringify(first), /"cells"/);

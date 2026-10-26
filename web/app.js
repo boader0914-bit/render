@@ -28527,7 +28527,7 @@ function syncRegionalReportPreparation(region = null) {
 
 function renderRegionalCatchmentHost(region = {}) {
   if (!isAdminRole() || !region.regionKey || region.level === "broad") return "";
-  return `<div data-regional-catchment data-region-key="${escapeHtml(region.regionKey)}"><section class="regional-catchment"><h4>지역 배후시장 · 50km·100km</h4><p role="status">저장 결과 조회 전 · 중심점과 공식 격자자료의 확보 상태를 확인합니다.</p></section></div>`;
+  return `<div data-regional-catchment data-region-key="${escapeHtml(region.regionKey)}"><section class="regional-catchment"><h4>지역 배후시장 · 행정구역 기본 분석</h4><p role="status">선택한 지역의 공식 저장 지표를 확인합니다. 상세주소 주변 50km·100km는 주소 기준 반경 분석에서 선택할 수 있습니다.</p></section></div>`;
 }
 
 let savedRegionalCatchmentHost = null;

@@ -686,7 +686,10 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
       const industryCompanies = (source?.companies || []).filter(company => selectedIds.has(company.companyId))
         .map(({ companyId, industryIds, industryRegionKey }) => ({ companyId, industryIds: clone(industryIds || []), industryRegionKey: industryRegionKey || "" }));
       const catchmentCompanies = (source?.companies || []).filter(company => selectedIds.has(company.companyId))
-        .map(({ companyId, primaryName, addressBasis }) => ({ companyId, primaryName,
+        .map(({ companyId, primaryName, regionKey, regionLabel, addressBasis }) => ({ companyId, primaryName,
+          // The saved company region is the administrative default. Keep the
+          // independently resolved address region below for precise reads only.
+          savedAdministrativeRegionKey: regionKey || "", savedAdministrativeRegionLabel: regionLabel || "",
           ...(addressBasis?.regionKey !== undefined ? { regionKey: addressBasis.regionKey, regionLabel: addressBasis.regionLabel || "" } : {}),
           addressBasis: clone(addressBasis || { status: "missing", address: null, basis: "saved_company_address" }) }));
       return { snapshot, regions: clone(source?.regions || []), industryCompanies, catchmentCompanies, timings };
@@ -769,8 +772,8 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
             return clone(context);
           } catch (error) {
             if (error.code === "MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY" || error.message === "MONTHLY_CONTEXT_MUST_BE_CACHE_ONLY") throw error;
-            return { schemaVersion: 1, reportMonth: request.month, cutoffDate: request.cutoffDate, asOfAt: generatedAt,
-              temporalBasis: "saved_annual_reference_at_report_creation", status: "missing", reasonCode: "CATCHMENT_READ_FAILED", entries: [],
+            return { schemaVersion: 2, defaultMode: "administrative_region", reportMonth: request.month, cutoffDate: request.cutoffDate, asOfAt: generatedAt,
+              temporalBasis: "saved_regional_reference_at_report_creation", status: "missing", reasonCode: "CATCHMENT_READ_FAILED", entries: [], preciseEntries: [],
               selectionCoverage: { selectedRegionCount: null, includedRegionCount: 0, omittedRegionCount: null, unmappedCompanyCount: null },
               warnings: ["저장된 배후시장 근거를 확인하지 못했습니다."], networkAttempted: false };
           } finally { timings.catchmentContextMs = performance.now() - phase; }
@@ -790,7 +793,9 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
       }
       if (catchmentContext) {
         snapshot.context = { ...(snapshot.context || { sources: [], warnings: [], networkAttempted: false }), catchment: catchmentContext };
-        snapshot.definitions.catchment = "배후시장은 작성 시점에 저장된 연간 격자·중심점·공개합의 참고 근거입니다. 보고월의 실측이나 시장 확정 총량, 매출의 원인으로 해석하지 않으며 보호·누락·미확인을 유지합니다.";
+        snapshot.definitions.catchment = catchmentContext.schemaVersion === 2
+          ? "기본 배후시장은 저장 소재지의 시군구 공식 지역 통계이며 업체 주소의 반경값이 아닙니다. 저장된 주소 반경 정밀 결과는 별도 보존합니다. 지역 중복·합산·방문객 출발지 추정을 피하고 기준기간·작성시점·출처와 누락·미확인을 유지합니다."
+          : "배후시장은 작성 시점에 저장된 연간 격자·중심점·공개합의 참고 근거입니다. 보고월의 실측이나 시장 확정 총량, 매출의 원인으로 해석하지 않으며 보호·누락·미확인을 유지합니다.";
       }
       snapshot.actionEvidence = listMonthlyReportActionEvidence(snapshot);
       timings.totalMs = performance.now() - started;

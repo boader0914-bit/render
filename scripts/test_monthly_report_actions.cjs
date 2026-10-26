@@ -25,6 +25,19 @@ test("saved references are deterministic, content-bound, detached and do not inv
   assert.notEqual(evidence(changed)[0].id, b[0].id);
   assert.equal(s.context.catchment.entries[0].snapshot.total, null);
 });
+test("regional and precise catchment evidence have distinct content-bound references while old references stay unchanged", () => {
+  const s = snapshot(), original = evidence(s).find(row => row.id.startsWith("catchment:"));
+  const oldEntry = s.context.catchment.entries[0];
+  assert.equal(original.id, "catchment:" + require("node:crypto").createHash("sha256").update(JSON.stringify(oldEntry)).digest("hex"));
+  s.context.catchment = { schemaVersion: 2, defaultMode: "administrative_region",
+    entries: [{ mode: "administrative_region", regionKey: "r1", companyIds: ["company-a", "company-b"], regionSnapshot: { source: { resultId: "region-one" }, metrics: [{ value: null }] } }],
+    preciseEntries: [{ ...oldEntry, mode: "address_radius", companyId: "company-a" }] };
+  const refs = evidence(s), region = refs.find(row => row.id.startsWith("catchment-region:")), address = refs.find(row => row.id.startsWith("catchment-address:"));
+  assert.ok(region && address); assert.notEqual(region.id, address.id); assert.equal(refs.length, 9);
+  s.context.catchment.entries[0].regionSnapshot.source.resultId = "region-two";
+  const changed = evidence(s); assert.notEqual(changed.find(row => row.id.startsWith("catchment-region:")).id, region.id);
+  assert.equal(changed.find(row => row.id.startsWith("catchment-address:")).id, address.id);
+});
 test("normalization preserves four statuses, actual dates, bounded author notes and independent references", () => {
   const s = snapshot();
   for (const status of ["planned", "in_progress", "completed", "held"]) {
@@ -127,6 +140,28 @@ test("catchment attaches per preview without rebuilding stable lodging; token, i
   const next = await f.service.preview(request); assert.equal(next.context.catchment.entries[0].snapshot.resultId, "catchment-2");
   assert.equal(f.reads(), 2); assert.equal(contextReads, 2);
   assert.equal((await f.service.get(issued.id)).snapshot.context.catchment.entries[0].snapshot.resultId, "catchment-1");
+});
+test("new regional context refreshes previews while token approval and issued address evidence remain frozen", async t => {
+  let version = 1;
+  const f = await fixture(t, { readSourceRevision: async () => "stable-region-default", readCatchmentContext: async () => ({
+    schemaVersion: 2, defaultMode: "administrative_region", networkAttempted: false, status: "partial",
+    entries: [{ mode: "administrative_region", regionKey: "r1", companyIds: ["company-a"], regionSnapshot: {
+      source: { resultId: "regional-" + version }, metrics: [{ value: null, status: "missing" }] } }],
+    preciseEntries: [{ mode: "address_radius", regionKey: "r1", companyId: "company-a", snapshot: { resultId: "precise-" + version } }] }) });
+  const preview = await f.service.preview(request), summary = JSON.stringify(preview.summary);
+  const reference = preview.actionEvidence.find(row => row.id.startsWith("catchment-region:"));
+  version = 2;
+  const draft = await f.service.create({ ...request, previewToken: preview.previewToken,
+    actionPlan: plan(preview, { evidenceRefs: [reference.id] }) });
+  const review = await f.service.update(draft.id, { revision: draft.revision, status: "review" });
+  const published = await f.service.publish(draft.id, { revision: review.revision, acknowledgeQuality: true });
+  assert.equal(published.snapshot.context.catchment.entries[0].regionSnapshot.source.resultId, "regional-1");
+  assert.equal(published.snapshot.context.catchment.preciseEntries[0].snapshot.resultId, "precise-1");
+  const issuedFile = path.join(f.dir, published.id + ".json"), bytes = await fs.readFile(issuedFile);
+  const next = await f.service.preview(request); assert.equal(next.context.catchment.entries[0].regionSnapshot.source.resultId, "regional-2");
+  assert.equal(JSON.stringify(next.summary), summary); assert.equal(f.reads(), 2);
+  assert.notEqual(next.actionEvidence.find(row => row.id.startsWith("catchment-region:")).id, reference.id);
+  assert.deepEqual(await fs.readFile(issuedFile), bytes); assert.equal((await f.service.get(published.id)).snapshot.actionPlan.items[0].evidenceRefs[0], reference.id);
 });
 test("catchment read failures remain unknown, sensitive errors are hidden and external work is rejected", async t => {
   const failed = await fixture(t, { readCatchmentContext: async () => { throw new Error("PRIVATE_PROVIDER_SECRET"); } });

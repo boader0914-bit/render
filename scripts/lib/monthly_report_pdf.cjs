@@ -767,10 +767,11 @@ function drawActionPlan(layout, snapshot) {
     layout.paragraph(`실행 결과 기록: ${clean(item.outcome) || "기록 없음"}`);
   });
 }
-function drawCatchment(layout, context) {
+function drawCatchment(layout, context, title = "반경 배후시장", appendix = "부록 D · 반경 배후시장") {
+  if (context?.schemaVersion === 2 && context.defaultMode === "administrative_region") { drawRegionalCatchment(layout, context); return; }
   if (context?.schemaVersion !== 1) return;
-  layout.page("부록 D · 반경 배후시장");
-  layout.heading("반경 배후시장", "저장된 연간 배경 자료입니다. 보고월의 관광 수요·예약·매출로 환산하거나 여러 지역을 합산하지 않습니다.");
+  layout.page(appendix);
+  layout.heading(title, "저장된 연간 배경 자료입니다. 보고월의 관광 수요·예약·매출로 환산하거나 여러 지역을 합산하지 않습니다.");
   layout.paragraph(`관측 마감 ${clean(context.cutoffDate)} / 배후시장 확인 ${dateText(context.asOfAt, true)}`, { size: 8.5 });
   for (const entry of array(context.entries)) {
     layout.smallHeading(clean(entry.companyLabel ? `${entry.companyLabel} · ${entry.regionLabel || entry.regionKey}` : entry.regionLabel || entry.regionKey));
@@ -789,6 +790,30 @@ function drawCatchment(layout, context) {
     layout.paragraph(`저장 입력 지문 ${clean(value.sourceFingerprint)}. 공개 부분합은 보호·누락을 포함한 전체 총량이 아닐 수 있습니다.`, {size:8,color:COLORS.muted});
   }
   array(context.warnings).forEach(w => layout.paragraph(clean(w), {size:8,color:COLORS.muted}));
+}
+function drawRegionalCatchment(layout, context) {
+  const status = value => ({ ready: "확인됨", observed: "확인됨", complete: "확인됨", partial: "일부 확인", missing: "미확보", needs_verification: "근거 확인 필요", unavailable: "확인 불가", suppressed: "비공개", unverified: "근거 미검증", publication_pending: "공표 대기", error: "읽기 오류" })[value] || "미확인";
+  layout.page("부록 D · 지역 배후시장");
+  layout.heading("지역 배후시장", "시군구 저장 통계입니다. 업체 주소의 반경값이나 보고월의 관광 수요·예약·매출을 뜻하지 않습니다.");
+  layout.paragraph(`보고 대상월 ${clean(context.reportMonth)} / 지역 저장분석 참조월 ${clean(context.referenceMonth) || "미확인"} / 관측 마감 ${clean(context.cutoffDate)} / 지역 근거 확인 ${dateText(context.asOfAt, true)}`, {size:8.5});
+  if (!array(context.entries).length) layout.paragraph("대상의 저장 소재지 미확인. 검색어 지명으로 추정하거나 0으로 계산하지 않습니다.");
+  for (const entry of array(context.entries)) {
+    layout.smallHeading(`${clean(entry.regionLabel || entry.regionKey)} · 행정구역 기준`);
+    layout.paragraph(clean(entry.reasonLabel || status(entry.status)), {size:9});
+    const saved = entry.regionSnapshot;
+    if (!saved) { layout.paragraph("사용할 저장 지역 근거 없음. 0으로 계산하지 않습니다."); continue; }
+    layout.paragraph(`공식 지역 코드 ${clean(saved.scope?.officialCode) || "미확인"} / 경계연도 ${clean(saved.scope?.boundaryYear) || "미기록"} / 연결 업체 ${array(entry.companyIds).length}곳`, {size:8.5});
+    layout.table([{label:"지표",width:.22,value:r=>r[0]}, {label:"기준기간",width:.15,value:r=>r[1]}, {label:"값",width:.17,value:r=>r[2]}, {label:"확인 상태",width:.19,value:r=>r[3]}, {label:"출처·통계표",width:.27,value:r=>r[4]}],
+      array(saved.metrics).map(metric => [clean(metric.label || metric.key), clean(metric.period) || "미확인", amount(metric.value, clean(metric.unit)), status(metric.status), `${clean(metric.source?.provider) || "미확인"} / ${clean(metric.source?.tableId) || "미확인"}`]));
+    for (const metric of array(saved.metrics)) layout.paragraph(`${clean(metric.label || metric.key)} / 저장 확인 ${dateText(metric.source?.retrievedAt, true)}${metric.reasonCode ? ` / ${clean(metric.reasonCode)}` : ""}`, {size:8,color:COLORS.muted});
+    layout.paragraph(`저장 결과 ${clean(saved.source?.resultId) || "미확보"} / 근거 생성 ${dateText(saved.source?.generatedAt || saved.calculatedAt, true)}`, {size:8});
+    layout.paragraph(`저장 지문 ${clean(saved.source?.sourceFingerprint) || "미확보"} / 원문 SHA ${clean(saved.source?.resultSha256) || "미확보"}`, {size:8});
+    layout.paragraph("방문객 출발지·이동권 미확보. 지역 인구를 방문 고객 수로 바꾸지 않습니다.", {size:8,color:COLORS.muted});
+  }
+  array(context.warnings).forEach(warning => layout.paragraph(clean(warning), {size:8,color:COLORS.muted}));
+  if (array(context.preciseEntries).length) drawCatchment(layout, {schemaVersion:1, cutoffDate:context.cutoffDate, asOfAt:context.asOfAt,
+    entries:context.preciseEntries, warnings:["별도 주소 반경 정밀 근거입니다. 위 시군구 기본 통계와 합산하지 않습니다."]}, "주소 반경 정밀 근거", "부록 D-2 · 주소 반경 정밀 근거");
+  else layout.paragraph("저장된 주소 반경 정밀 근거 없음. 지역 통계를 주소의 반경값으로 대체하지 않습니다.", {size:8,color:COLORS.muted});
 }
 /** Render a persisted published snapshot only. No network, database reads, or file writes. */
 async function renderMonthlyReportPdf(report, options = {}) {

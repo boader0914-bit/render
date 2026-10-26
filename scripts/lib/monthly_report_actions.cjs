@@ -46,7 +46,10 @@ function listMonthlyReportActionEvidence(snapshot = {}) {
     if (record(entry)) add("outlook", `전망 검증 · ${String(entry.regionLabel || entry.regionKey || "저장 근거")}`, entry);
   }
   for (const entry of snapshot.context?.catchment?.entries || []) {
-    if (record(entry)) add("catchment", `배후시장 · ${String(entry.companyLabel ? `${entry.companyLabel} · ${entry.regionLabel || entry.regionKey}` : entry.regionLabel || entry.regionKey || "저장 근거")}`, entry);
+    if (record(entry)) add(snapshot.context?.catchment?.schemaVersion === 2 ? "catchment-region" : "catchment", `배후시장 · ${String(entry.companyLabel ? `${entry.companyLabel} · ${entry.regionLabel || entry.regionKey}` : entry.regionLabel || entry.regionKey || "저장 근거")}`, entry);
+  }
+  if (snapshot.context?.catchment?.schemaVersion === 2) for (const entry of snapshot.context.catchment.preciseEntries || []) {
+    if (record(entry)) add("catchment-address", `주소 반경 · ${String(entry.companyLabel || entry.companyId || entry.regionLabel || entry.regionKey || "저장 근거")}`, entry);
   }
   return result;
 }

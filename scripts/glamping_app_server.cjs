@@ -54,6 +54,8 @@ const { createRegionalAnalysisStore } = require("./lib/regional_analysis_store.c
 const { createRegionalAnalysisSnapshotBuilder } = require("./lib/regional_analysis_snapshot.cjs");
 const { createRegionalAnalysisHttpHandler } = require("./lib/regional_analysis_http.cjs");
 const { createRegionalCatchmentService } = require("./lib/regional_catchment_store.cjs");
+const { createRegionalMarketService } = require("./lib/regional_market_store.cjs");
+const { createRegionalMarketHttpHandler } = require("./lib/regional_market_http.cjs");
 const { addressRegion } = require("./lib/company_address_basis.cjs");
 const { createCatchmentAddressDirectory } = require("./lib/catchment_address_directory.cjs");
 const { createRegionalCatchmentHttpHandler } = require("./lib/regional_catchment_http.cjs");
@@ -483,6 +485,9 @@ async function readCatchmentAddressTargets(regionKey) {
   return { addresses: addresses.sort((a, b) => a.label.localeCompare(b.label, "ko")) };
 }
 const regionalCatchmentService = createRegionalCatchmentService({ dataDir: DATA_DIR, resolveRegion: resolveRegionalReportRegion, resolveCompanyAddress: resolveCatchmentCompanyAddress });
+// Administrative defaults read one saved regional result. This service has no
+// collector, initialization/recovery queue, source refresh, or write methods.
+const regionalMarketService = createRegionalMarketService({ dataDir: DATA_DIR, resolveRegion: resolveRegionalReportRegion });
 const regionalSearchTrendService = createRegionalSearchTrendService({
   dataDir: path.join(DATA_DIR, "regional_search_trends"), readTrafficKeys, resolveRegion: resolveRegionalReportRegion
 });
@@ -580,6 +585,9 @@ const handleRegionalAnalysis = createRegionalAnalysisHttpHandler({
 const handleRegionalCatchment = createRegionalCatchmentHttpHandler({
   service: regionalCatchmentService, readAddressTargets: readCatchmentAddressTargets, requireAdmin: requireAdminSession, parseJsonBody, send,
   rateLimit: (req, session) => assertRequestRateLimit(req, "adminRegionalCatchmentWrite", { limit: 30, windowMs: 60 * 60 * 1000 }, session.username || "")
+});
+const handleRegionalMarket = createRegionalMarketHttpHandler({
+  service: regionalMarketService, requireAdmin: requireAdminSession, send
 });
 const handleRegionalOutlook = createRegionalAnalysisHttpHandler({
   basePath: "/api/regional-outlook", allowPolicy: false, service: regionalOutlookService,
@@ -816,7 +824,7 @@ const monthlyReportService = createMonthlyReportService({
     ...fs.readdirSync(path.join(__dirname, "lib")).filter(name => name.endsWith(".cjs")).sort().map(name => `lib/${name}`)]
     .map(name => `${name}:${crypto.createHash("sha256").update(fs.readFileSync(path.join(__dirname, name))).digest("hex")}`).join("\n")).digest("hex"),
   readOutlookEvaluations: createMonthlyReportOutlookEvaluation({ evaluationService: regionalOutlookService.validation }),
-  readCatchmentContext: createMonthlyReportCatchmentContext({ catchmentService: regionalCatchmentService }),
+  readCatchmentContext: createMonthlyReportCatchmentContext({ catchmentService: regionalCatchmentService, regionMarketService: regionalMarketService }),
   readIndustryContext: createMonthlyReportIndustryContext({ industryService: industryAnalysisService,
     verifiedSourceRevisionScope: savedIndustryRevisionScope })
 });
@@ -19373,6 +19381,7 @@ async function route(req, res) {
     if (await handleIndustryAnalysis(req, res, reqUrl, session)) return;
     if (await handleRegionalReportPreparation(req, res, reqUrl, session)) return;
     if (await handleRegionalAnalysis(req, res, reqUrl, session)) return;
+    if (await handleRegionalMarket(req, res, reqUrl, session)) return;
     if (await handleRegionalCatchment(req, res, reqUrl, session)) return;
     if (await handleRegionalOutlook(req, res, reqUrl, session)) return;
     if (await handleRegionalOutlookValidation(req, res, reqUrl, session)) return;
