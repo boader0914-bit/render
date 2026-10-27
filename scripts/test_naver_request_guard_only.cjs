@@ -24,7 +24,7 @@ test("guard-only starts more than two downloads immediately and preserves native
   const pending = Array.from({ length: 5 }, deferred);
   const starts = [], calls = [], originals = [];
   const init = { method: "POST", headers: { "x-input": "fixture" }, body: "fixture" };
-  const gate = createGuard({ now: () => time, fetchImpl: (input, receivedInit) => {
+  const gate = createGuard({ now: () => time, wallNow: () => Date.UTC(2026, 9, 28, 0, 0, 1), fetchImpl: (input, receivedInit) => {
     starts.push(time);
     calls.push([input, receivedInit]);
     return pending[calls.length - 1].promise;
@@ -48,13 +48,20 @@ test("guard-only starts more than two downloads immediately and preserves native
     assert.equal(responses[i].headers.get("x-fixture"), "preserved");
     assert.deepEqual(await responses[i].json(), { index: i });
   }
-  assert.deepEqual(gate.diagnostics(), {
+  const { requestTimeline, ...originalDiagnostics } = gate.diagnostics();
+  assert.deepEqual(originalDiagnostics, {
     enabled: false, guardEnabled: true, pacingEnabled: false,
     minIntervalMs: 0, maxConcurrentRequests: null,
     requestCount: 5, failedRequests: 0, cancelledBeforeStart: 0,
     totalWaitMs: 0, maxInFlight: 5, minObservedStartIntervalMs: 0,
     queued: 0, inFlight: 0, stopped: false,
   });
+  assert.equal(requestTimeline.complete, true);
+  assert.equal(requestTimeline.snapshotInFlight, 0);
+  assert.equal(requestTimeline.snapshotQueued, 0);
+  assert.deepEqual(requestTimeline.minuteBuckets, [{
+    minuteStartAt: "2026-10-28T00:00:00.000Z", requestCount: 5, maxInFlight: 5,
+  }]);
 });
 
 test("403 and 429 stop future starts at headers while already sent requests may finish", async () => {
