@@ -115,6 +115,38 @@ test("partial responses remain partial and do not become successful results", as
   assert.equal((await f.run()).collectionQuality.status, "partial");
 });
 
+test("web publishes complete, partial and blocked minute telemetry without changing request settings", async t => {
+  for (const status of ["complete", "partial", "blocked"]) {
+    const timeline = { schemaVersion: 1, scope: "naver_request_gate", bucketSizeMs: 60000, countBasis: "gate_request_start",
+      measurementStartedAt: "2026-10-28T00:00:00.000Z", snapshotObservedAt: "2026-10-28T00:01:05.000Z",
+      firstRequestStartedAt: "2026-10-28T00:00:00.250Z", lastRequestStartedAt: "2026-10-28T00:01:04.000Z",
+      complete: true, incompleteReasons: [], truncated: false, maxMinuteBuckets: 2880,
+      missingTimestampRequestCount: 0, droppedRequestCount: 0,
+      minuteBuckets: [{ minuteStartAt: "2026-10-28T00:00:00.000Z", requestCount: 6, maxInFlight: 6 },
+        { minuteStartAt: "2026-10-28T00:01:00.000Z", requestCount: 1, maxInFlight: 1 }],
+      restrictionEvents: status === "blocked" ? [{ detectedAt: "2026-10-28T00:01:04.100Z", code: "BookingAPITooManyRequests", httpStatus: 200 }] : [],
+      maxRestrictionEvents: 16, restrictionEventsTruncated: false };
+    const f = await fixture(t, { execute: async ({ args, config, close }) => {
+      assert.equal(config.env.NAVER_REQUEST_PACING_ENABLED, "0");
+      assert.equal(config.env.NAVER_REQUEST_MAX_CONCURRENCY, undefined);
+      await artifacts(config.env, args[1], { partial: status === "partial", blocked: status === "blocked",
+        mutate: manifest => Object.assign(manifest.requestPacing, { requestCount: 7, maxInFlight: 6, requestTimeline: timeline }) });
+      close(status === "blocked" ? 1 : 0);
+    } });
+    const result = await f.run();
+    assert.equal(result.collectionQuality.status, status);
+    assert.equal(f.spawned.length, 1);
+    assert.deepEqual(result.manifest.requestPacing.requestTimeline, timeline);
+    const saved = JSON.parse(await fs.readFile(path.join(result.manifest.outputDir, "manifest.json"), "utf8"));
+    assert.deepEqual(saved.requestPacing.requestTimeline, timeline);
+    assert.equal(saved.requestPacing.requestCount, 7);
+    assert.equal(saved.requestPacing.maxInFlight, 6);
+    assert.equal(saved.requestPacing.minIntervalMs, 0);
+    assert.equal(saved.requestPacing.maxConcurrentRequests, null);
+    assert.equal((await f.api.status()).halted, status === "blocked");
+  }
+});
+
 test("web relays sanitized actual counts across UTF-8 chunk boundaries before final verification", async t => {
   const progress = [], report = { version: 1, phase: "inventory", completedPlaces: 2, totalPlaces: 2,
     currentPlaceName: "시즌글램핑", updatedAt: new Date().toISOString() };

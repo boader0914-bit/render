@@ -65,6 +65,33 @@ function manifestFixture() {
   };
 }
 
+function assertRequestTimeline(manifest, expectedRequests, expectedRestriction = null) {
+  const pacing = manifest.requestPacing, timeline = pacing.requestTimeline;
+  assert.equal(timeline.schemaVersion, 1);
+  assert.equal(timeline.scope, "naver_request_gate");
+  assert.equal(timeline.bucketSizeMs, 60000);
+  assert.equal(timeline.countBasis, "gate_request_start");
+  assert.equal(timeline.complete, true, JSON.stringify(timeline.incompleteReasons));
+  assert.equal(timeline.truncated, false);
+  assert.equal(timeline.droppedRequestCount, 0);
+  assert.equal(timeline.missingTimestampRequestCount, 0);
+  assert.equal(pacing.requestCount, expectedRequests);
+  assert.equal(timeline.minuteBuckets.reduce((sum, bucket) => sum + bucket.requestCount, 0), expectedRequests);
+  assert.ok(Number.isFinite(Date.parse(timeline.measurementStartedAt)));
+  assert.ok(Number.isFinite(Date.parse(timeline.snapshotObservedAt)));
+  assert.ok(Number.isFinite(Date.parse(timeline.firstRequestStartedAt)));
+  assert.ok(Number.isFinite(Date.parse(timeline.lastRequestStartedAt)));
+  if (expectedRestriction) {
+    assert.equal(timeline.restrictionEvents.length, 1);
+    const observed = timeline.restrictionEvents[0];
+    assert.equal(observed.code, expectedRestriction.code);
+    assert.equal(observed.httpStatus, expectedRestriction.httpStatus);
+    assert.ok(Number.isFinite(Date.parse(observed.detectedAt)));
+    assert.ok(Date.parse(observed.detectedAt) >= Date.parse(timeline.firstRequestStartedAt));
+  } else assert.equal(timeline.restrictionEvents.length, 0);
+  assert.doesNotMatch(JSON.stringify(timeline), /https?:|fixture-sensitive-body|wtm-captcha-root/);
+}
+
 test('approved target receives detail at its original search rank without including a similarly named company',async()=>{
   const crawler=harness({keyword:'동명글램핑',env:{SEARCH_MODE:'company',NAVER_TARGET_PLACE_ID:'123',DETAIL_RANK_RANGES:'1-1',COLLECTOR_WORKER_RUNTIME:'1'},
     setup:'collectNaverBookingAvailability=async placeId=>({status:"성공",bookingBusinessId:placeId,nightTotalStock:10,nightAvailableStock:8,nightSoldOutStock:2});'});
@@ -237,6 +264,7 @@ test("manual worker counts successful schedules and records worker marker withou
   assert.equal(manifest.requestPacing.guardEnabled, true);
   assert.equal(manifest.requestPacing.minIntervalMs, 0);
   assert.equal(manifest.requestPacing.maxConcurrentRequests, null);
+  assertRequestTimeline(manifest, 1);
   assert.equal(manifest.collectionQuality.status, "complete");
 });
 
@@ -290,6 +318,7 @@ test("operating web manual and scheduled collection initialize the real crawler 
   assert.equal(manifest.requestPacing.guardEnabled, true);
   assert.equal(manifest.requestPacing.minIntervalMs, 0);
   assert.equal(manifest.requestPacing.maxConcurrentRequests, null);
+  assertRequestTimeline(manifest, 1);
   assert.equal(manifest.collectionQuality.status, "complete");
   assert.equal(allowsDerivedUpdates(manifest), true);
   }
@@ -350,6 +379,7 @@ test("full web scheduled crawler entry preserves its failure receipt and scope o
   assert.equal(manifest.requestPacing.minIntervalMs, 0);
   assert.equal(manifest.requestPacing.maxConcurrentRequests, null);
   assert.equal(manifest.requestPacing.stopped, false);
+  assertRequestTimeline(manifest, 1);
   assert.doesNotMatch(json + crawler.logs.join(" "), /fixture-sensitive-body/);
 });
 
@@ -380,6 +410,7 @@ test("scheduled web HTTP 403, 429 and HTTP 200 rate-limit or captcha stop new re
     assert.equal(manifest.requestPacing.stopped, true);
     assert.equal(manifest.requestPacing.blockedStatus, status);
     assert.equal(manifest.requestPacing.blockedCode, blockedCode);
+    assertRequestTimeline(manifest, 1, { code: blockedCode || "NAVER_REQUEST_BLOCKED", httpStatus: status });
     assert.equal(allowsDerivedUpdates(manifest), false);
     assert.doesNotMatch(json + crawler.logs.join(" "), /fixture-sensitive-body|wtm-captcha-root/);
 
@@ -405,6 +436,7 @@ test("scheduled web HTTP 403, 429 and HTTP 200 rate-limit or captcha stop new re
       assert.equal(bookingManifest.counts.naverScheduleBlocked, 1);
     }
     assert.equal(bookingManifest.requestPacing.stopped, true);
+    assertRequestTimeline(bookingManifest, 1, { code: blockedCode || "NAVER_REQUEST_BLOCKED", httpStatus: status });
     assert.equal(bookingManifest.collectionQuality.status, "blocked");
   }
 });
@@ -640,9 +672,39 @@ test("manual worker HTTP 200 throttling stops subsequent schedules and prevents 
   assert.equal(manifest.counts.naverScheduleBlocked, 1);
   assert.equal(manifest.requestPacing.blockedStatus, 200);
   assert.equal(manifest.requestPacing.blockedCode, "BookingAPITooManyRequests");
+  assertRequestTimeline(manifest, 1, { code: "BookingAPITooManyRequests", httpStatus: 200 });
   assert.equal(manifest.collectionQuality.status, "blocked");
   assert.equal(allowsDerivedUpdates(manifest), false);
   assert.doesNotMatch(JSON.stringify(manifest), /fixture-sensitive-body/);
+});
+
+test("partial worker and web collection retain measured requests without adding retries or changing stage pools", async () => {
+  for (const env of [{ COLLECTOR_WORKER_RUNTIME: "1" }, { COLLECTOR_WEB_RUNTIME: "1" }]) {
+    let calls = 0;
+    const crawler = harness({ env, fetchImpl: async () => {
+      if (++calls === 2) throw new Error("fixture-sensitive-body");
+      return new Response(JSON.stringify({ data: { schedule: { bizItemSchedule: { daily: { date: { "2026-09-22": { stock: 3 } } } } } } }));
+    } });
+    await crawler.getNaverDailySchedule("123", "456");
+    await assert.rejects(crawler.getNaverDailySchedule("123", "789"), /fixture-sensitive-body/);
+    crawler.productCoverage.discover("123", [{ bizItemId: "456" }, { bizItemId: "789" }], [{ bizItemId: "456" }, { bizItemId: "789" }], ["2026-09-22"]);
+    crawler.productCoverage.record("123", [{ bizItemId: "456" }, { bizItemId: "789" }], 40, "2026-09-22", [{ bizItemId: "456", stock: 3 }, { bizItemId: "789", collectionFailed: true }]);
+    const manifest = manifestFixture();
+    Object.assign(manifest.counts, { naverBookingStockEligible: 1, naverBookingStockChecked: 1, naverBookingStockSucceeded: 1 });
+    crawler.addCollectionDiagnostics(manifest);
+    assert.equal(manifest.collectionQuality.status, "partial");
+    assert.equal(manifest.requestPacing.failedRequests, 1);
+    assert.equal(manifest.requestPacing.stopped, false);
+    assert.equal(manifest.requestPacing.minIntervalMs, 0);
+    assert.equal(manifest.requestPacing.maxConcurrentRequests, null);
+    assert.deepEqual(Array.from(crawler.concurrency), [2, 4, 2]);
+    assertRequestTimeline(manifest, 2);
+    assert.equal(calls, 2, "telemetry must not make provider requests or retry failed ones");
+    const firstSnapshot = JSON.stringify(manifest.requestPacing.requestTimeline.minuteBuckets);
+    manifest.requestPacing.requestTimeline.minuteBuckets[0].requestCount = 999;
+    const second = manifestFixture(); crawler.addCollectionDiagnostics(second);
+    assert.equal(JSON.stringify(second.requestPacing.requestTimeline.minuteBuckets), firstSnapshot);
+  }
 });
 
 test("worker quality accepts intentional fast/basic zero targets but rejects missing or partial detail evidence", () => {
@@ -692,6 +754,7 @@ test("main-stage block writes a safe failure manifest before worker exit", async
   assert.ok(Array.isArray(manifest.files));
   assert.equal(manifest.sourceRole, "admin");
   assert.equal(manifest.requestPacing.blockedCode, "BookingAPITooManyRequests");
+  assertRequestTimeline(manifest, 1, { code: "BookingAPITooManyRequests", httpStatus: 200 });
   assert.doesNotMatch(saved[0] + crawler.logs.join(" "), /fixture-sensitive-body/);
 });
 

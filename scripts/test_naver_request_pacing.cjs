@@ -220,6 +220,10 @@ test("crawler gate catches 403 and 429 on every Naver host before a fallback can
     await assert.rejects(gate.fetch("https://m.place.naver.com/accommodation/fixture/home"), error => error.code === "NAVER_REQUEST_BLOCKED" && error.statusCode === status);
     assert.equal(calls, 1);
     assert.equal(gate.diagnostics().stopped, true);
+    const restriction = gate.diagnostics().requestTimeline.restrictionEvents[0];
+    assert.equal(restriction.code, "NAVER_REQUEST_BLOCKED");
+    assert.equal(restriction.httpStatus, status);
+    assert.match(restriction.detectedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   }
 });
 
@@ -265,6 +269,10 @@ test("HTTP 200 GraphQL rate limits stop all queued and future Naver requests wit
     assert.equal(gate.blockedCode(), "BookingAPITooManyRequests");
     await assert.rejects(gate.fetch("https://static.naver.net/fallback"), /NAVER_REQUEST_BLOCKED/);
     assert.equal(gate.diagnostics().stopped, true);
+    const restriction = gate.diagnostics().requestTimeline.restrictionEvents[0];
+    assert.equal(restriction.code, "BookingAPITooManyRequests");
+    assert.equal(restriction.httpStatus, 200);
+    assert.match(restriction.detectedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   }
 });
 
@@ -288,6 +296,10 @@ test("HTTP 200 captcha stops all new Naver hosts and emits one safe cross-worker
     assert.equal(calls, 1);
     assert.equal(gate.blockedCode(), "NAVER_CAPTCHA");
     assert.deepEqual(logs, ["COLLECTOR_PROVIDER_BLOCKED"]);
+    const restriction = gate.diagnostics().requestTimeline.restrictionEvents[0];
+    assert.equal(restriction.code, "NAVER_CAPTCHA");
+    assert.equal(restriction.httpStatus, 200);
+    assert.match(restriction.detectedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   }
   assert.equal(isNaverCaptchaResponse('<title>예약 상품</title><script src="captcha.js"></script><div>예약 상품</div>'), false);
 });
@@ -381,4 +393,205 @@ test("default-speed workers allow more than two starts but stop all future Naver
     assert.equal(gate.diagnostics().maxInFlight, 3);
     assert.equal(gate.diagnostics().inFlight, 0);
   }
+});
+
+test("minute telemetry counts actual gate starts across UTC boundaries without inventing empty minutes", async () => {
+  let wall = Date.parse("2026-10-28T00:00:59.999Z");
+  let calls = 0;
+  const clock = fakeClock();
+  const gate = createNaverRequestGate({ ...clock, wallNow: () => wall, minIntervalMs: 0,
+    fetchImpl: async () => { calls++; return new Response(null, { status: 204 }); },
+  });
+  await gate.fetch("https://naver.com/first");
+  wall++;
+  await gate.fetch("https://naver.com/second");
+  wall += 180000;
+  await gate.fetch("https://naver.com/third");
+  const snapshot = gate.diagnostics();
+  const timeline = snapshot.requestTimeline;
+  assert.equal(calls, 3);
+  assert.equal(timeline.countBasis, "gate_request_start");
+  assert.equal(timeline.scope, "naver_request_gate");
+  assert.equal(timeline.measurementStartedAt, "2026-10-28T00:00:59.999Z");
+  assert.equal(timeline.firstRequestStartedAt, "2026-10-28T00:00:59.999Z");
+  assert.equal(timeline.lastRequestStartedAt, "2026-10-28T00:04:00.000Z");
+  assert.equal(timeline.snapshotObservedAt, "2026-10-28T00:04:00.000Z");
+  assert.deepEqual(timeline.minuteBuckets, [
+    { minuteStartAt: "2026-10-28T00:00:00.000Z", requestCount: 1, maxInFlight: 1 },
+    { minuteStartAt: "2026-10-28T00:01:00.000Z", requestCount: 1, maxInFlight: 1 },
+    { minuteStartAt: "2026-10-28T00:04:00.000Z", requestCount: 1, maxInFlight: 1 },
+  ]);
+  assert.equal(timeline.minuteBuckets.reduce((sum, bucket) => sum + bucket.requestCount, 0), snapshot.requestCount);
+  assert.equal(timeline.complete, true);
+  assert.equal(timeline.truncated, false);
+  assert.deepEqual(clock.waits, []);
+});
+
+test("guard-only telemetry preserves unlimited historical starts and observes per-minute concurrency", async () => {
+  let wall = Date.parse("2026-10-28T00:00:59.000Z");
+  const pending = [deferred(), deferred(), deferred(), deferred()];
+  const calls = [];
+  const gate = createNaverRequestGate({ pacingEnabled: false, wallNow: () => wall,
+    sleep: () => { throw new Error("telemetry must not wait"); },
+    fetchImpl: input => { const index = calls.length; calls.push(input); wall += 500; return pending[index].promise; },
+  });
+  const requests = pending.map((_, index) => gate.fetch(`https://naver.com/${index}`));
+  assert.equal(calls.length, 4);
+  assert.equal(gate.diagnostics().inFlight, 4);
+  assert.equal(gate.diagnostics().maxConcurrentRequests, null);
+  assert.deepEqual(gate.diagnostics().requestTimeline.minuteBuckets, [
+    { minuteStartAt: "2026-10-28T00:00:00.000Z", requestCount: 2, maxInFlight: 2 },
+    { minuteStartAt: "2026-10-28T00:01:00.000Z", requestCount: 2, maxInFlight: 4 },
+  ]);
+  pending.forEach(item => item.resolve(new Response(null, { status: 204 })));
+  await Promise.all(requests);
+  assert.equal(gate.diagnostics().requestCount, 4);
+  assert.equal(gate.diagnostics().maxInFlight, 4);
+});
+
+test("restriction detection records the exact UTC stop time and only safe status and code", async () => {
+  for (const [code, httpStatus] of [["NAVER_REQUEST_BLOCKED", 403], ["NAVER_REQUEST_BLOCKED", 429], ["BookingAPITooManyRequests", 200], ["NAVER_CAPTCHA", 200]]) {
+    let wall = Date.parse("2026-10-28T00:00:00.000Z");
+    let calls = 0;
+    const reason = Object.assign(new Error("fixture-private-body https://secret.example/token"), { code: "NAVER_REQUEST_BLOCKED", statusCode: httpStatus });
+    const gate = createNaverRequestGate({ minIntervalMs: 0, wallNow: () => wall,
+      fetchImpl: async () => { calls++; return new Response("fixture-private-body", { status: httpStatus }); },
+      onResponse: (_response, { stop }) => { wall += 1234; stop(reason, { code, httpStatus, body: "fixture-private-body" }); },
+    });
+    const results = await Promise.allSettled([gate.fetch("https://naver.com/first?token=private"), gate.fetch("https://naver.com/never")]);
+    assert.equal(calls, 1);
+    assert.equal(results[0].status, "fulfilled");
+    assert.strictEqual(results[1].reason, reason);
+    const timeline = gate.diagnostics().requestTimeline;
+    assert.deepEqual(timeline.restrictionEvents, [{ detectedAt: "2026-10-28T00:00:01.234Z", code, httpStatus }]);
+    assert.equal(timeline.complete, true);
+    assert.doesNotMatch(JSON.stringify(timeline), /private|secret|token|body|https:/);
+  }
+});
+
+test("telemetry snapshots cannot mutate accumulated buckets, restriction events or incompleteness", async () => {
+  let wall = Date.parse("2026-10-28T00:00:00Z");
+  const gate = createNaverRequestGate({ minIntervalMs: 0, wallNow: () => wall, fetchImpl: async () => new Response(null, { status: 204 }) });
+  await gate.fetch("https://naver.com/first");
+  gate.stop(Object.assign(new Error("limited"), { code: "NAVER_REQUEST_BLOCKED", statusCode: 429 }));
+  const first = gate.diagnostics().requestTimeline;
+  first.minuteBuckets[0].requestCount = 999;
+  first.minuteBuckets.push({ requestCount: 999 });
+  first.restrictionEvents[0].code = "changed";
+  first.restrictionEvents.push({ code: "changed" });
+  first.incompleteReasons.push("changed");
+  wall += 1000;
+  const second = gate.diagnostics().requestTimeline;
+  assert.equal(second.minuteBuckets.length, 1);
+  assert.equal(second.minuteBuckets[0].requestCount, 1);
+  assert.deepEqual(second.restrictionEvents, [{ detectedAt: "2026-10-28T00:00:00.000Z", code: "NAVER_REQUEST_BLOCKED", httpStatus: 429 }]);
+  assert.deepEqual(second.incompleteReasons, []);
+  assert.equal(first.snapshotObservedAt, "2026-10-28T00:00:00.000Z");
+  assert.equal(second.snapshotObservedAt, "2026-10-28T00:00:01.000Z");
+});
+
+test("unavailable or backwards wall clocks mark telemetry incomplete without changing fetches or pacing", async () => {
+  for (const invalid of [() => NaN, () => undefined, () => Infinity, () => "2026-10-28", () => { throw new Error("clock failed"); }]) {
+    const clock = fakeClock();
+    let calls = 0;
+    const gate = createNaverRequestGate({ ...clock, wallNow: invalid, minIntervalMs: 200, fetchImpl: async () => { calls++; return new Response(null, { status: 204 }); } });
+    await Promise.all([gate.fetch("https://naver.com/first"), gate.fetch("https://naver.com/second")]);
+    const snapshot = gate.diagnostics();
+    assert.equal(calls, 2);
+    assert.equal(snapshot.requestCount, 2);
+    assert.equal(snapshot.minObservedStartIntervalMs, 200);
+    assert.deepEqual(clock.waits, [200]);
+    assert.equal(snapshot.requestTimeline.complete, false);
+    assert.equal(snapshot.requestTimeline.missingTimestampRequestCount, 2);
+    assert.equal(snapshot.requestTimeline.snapshotObservedAt, null);
+    assert.deepEqual(snapshot.requestTimeline.minuteBuckets, []);
+    assert.deepEqual(snapshot.requestTimeline.incompleteReasons, ["CLOCK_UNAVAILABLE"]);
+  }
+  let wall = Date.parse("2026-10-28T00:01:00Z");
+  const gate = createNaverRequestGate({ minIntervalMs: 0, wallNow: () => wall, fetchImpl: async () => new Response(null, { status: 204 }) });
+  await gate.fetch("https://naver.com/first");
+  wall -= 60000;
+  await gate.fetch("https://naver.com/second");
+  assert.equal(gate.diagnostics().requestCount, 2);
+  assert.equal(gate.diagnostics().requestTimeline.complete, false);
+  assert.deepEqual(gate.diagnostics().requestTimeline.incompleteReasons, ["CLOCK_BACKWARDS"]);
+});
+
+test("minute and restriction memory bounds are explicit and never drop or retry provider requests", async () => {
+  let wall = Date.parse("2026-10-28T00:00:00Z");
+  let calls = 0;
+  const gate = createNaverRequestGate({ minIntervalMs: 0, wallNow: () => wall,
+    fetchImpl: async () => { calls++; return new Response(null, { status: 204 }); },
+  });
+  const bound = gate.diagnostics().requestTimeline.maxMinuteBuckets;
+  for (let index = 0; index < bound + 2; index++) {
+    await gate.fetch(`https://naver.com/${index}`);
+    wall += 60000;
+  }
+  let timeline = gate.diagnostics().requestTimeline;
+  assert.equal(calls, bound + 2);
+  assert.equal(gate.diagnostics().requestCount, bound + 2);
+  assert.equal(timeline.minuteBuckets.length, bound);
+  assert.equal(timeline.droppedRequestCount, 2);
+  assert.equal(timeline.complete, false);
+  assert.equal(timeline.truncated, true);
+  assert.deepEqual(timeline.incompleteReasons, ["MINUTE_BUCKET_LIMIT"]);
+  for (let index = 0; index < timeline.maxRestrictionEvents + 2; index++) gate.stop(Object.assign(new Error("blocked"), { code: "NAVER_REQUEST_BLOCKED", statusCode: 429 }));
+  timeline = gate.diagnostics().requestTimeline;
+  assert.equal(timeline.restrictionEvents.length, timeline.maxRestrictionEvents);
+  assert.equal(timeline.restrictionEventsTruncated, true);
+  assert.deepEqual(timeline.incompleteReasons, ["MINUTE_BUCKET_LIMIT", "RESTRICTION_EVENT_LIMIT"]);
+  assert.equal(calls, bound + 2);
+});
+
+test("disabled and non-Naver passthroughs do not observe requests or call the telemetry clock", async () => {
+  for (const [enabled, input] of [[false, "https://naver.com/path"], [true, "https://example.com/path"]]) {
+    let clockCalls = 0;
+    const promise = Promise.resolve(new Response("same"));
+    const gate = createNaverRequestGate({ enabled, wallNow: () => { clockCalls++; return Date.parse("2026-10-28T00:00:00Z"); }, fetchImpl: () => promise });
+    const before = clockCalls;
+    assert.strictEqual(gate.fetch(input), promise);
+    assert.equal(clockCalls, before);
+    const diagnostics = gate.diagnostics();
+    assert.equal(diagnostics.requestCount, 0);
+    assert.deepEqual(diagnostics.requestTimeline.minuteBuckets, []);
+    if (!enabled) {
+      assert.equal(clockCalls, 0);
+      assert.equal(diagnostics.requestTimeline.complete, false);
+      assert.deepEqual(diagnostics.requestTimeline.incompleteReasons, ["GUARD_DISABLED"]);
+    }
+  }
+});
+
+test("a throwing existing start hook keeps its original gate-count meaning and adds no fetch", async () => {
+  let calls = 0;
+  const gate = createNaverRequestGate({ minIntervalMs: 0, wallNow: () => Date.parse("2026-10-28T00:00:00Z"),
+    onRequestStart: () => { throw new Error("original hook failure"); },
+    fetchImpl: async () => { calls++; return new Response("unexpected"); },
+  });
+  await assert.rejects(gate.fetch("https://naver.com/path"), /original hook failure/);
+  assert.equal(calls, 0);
+  const diagnostics = gate.diagnostics();
+  assert.equal(diagnostics.requestCount, 1);
+  assert.equal(diagnostics.failedRequests, 1);
+  assert.equal(diagnostics.requestTimeline.minuteBuckets[0].requestCount, 1);
+  assert.equal(diagnostics.requestTimeline.countBasis, "gate_request_start");
+});
+
+test("missing restriction timestamps and unsafe metadata stay unknown rather than leaking messages", async () => {
+  let valid = true;
+  const gate = createNaverRequestGate({ minIntervalMs: 0, wallNow: () => valid ? Date.parse("2026-10-28T00:00:00Z") : NaN,
+    fetchImpl: async () => new Response(null, { status: 204 }),
+  });
+  await gate.fetch("https://naver.com/path");
+  valid = false;
+  gate.stop(Object.assign(new Error("private-credential"), { code: "NAVER_REQUEST_BLOCKED", statusCode: 200 }), { code: "BookingAPITooManyRequests", httpStatus: 200 });
+  const timeline = gate.diagnostics().requestTimeline;
+  assert.equal(timeline.complete, false);
+  assert.deepEqual(timeline.restrictionEvents, [{ detectedAt: null, code: "BookingAPITooManyRequests", httpStatus: 200 }]);
+  assert.doesNotMatch(JSON.stringify(timeline), /private-credential/);
+  const unknownGate = createNaverRequestGate({ wallNow: () => Date.parse("2026-10-28T00:00:00Z"), fetchImpl: async () => new Response(null, { status: 204 }) });
+  unknownGate.stop(new Error("private-credential"), { code: "untrusted-private-code", httpStatus: 429 });
+  assert.deepEqual(unknownGate.diagnostics().requestTimeline.restrictionEvents, []);
+  assert.doesNotMatch(JSON.stringify(unknownGate.diagnostics().requestTimeline), /untrusted|private/);
 });

@@ -152,6 +152,42 @@ test("one claim spawns once with isolated environment, streams actual artifacts 
   } finally { await f.close(); }
 });
 
+test("worker transfers minute request telemetry intact for complete, partial and blocked receipts", async () => {
+  for (const status of ["complete", "partial", "blocked"]) {
+    const timeline = { schemaVersion: 1, scope: "naver_request_gate", bucketSizeMs: 60000, countBasis: "gate_request_start",
+      measurementStartedAt: "2026-10-28T00:00:00.000Z", snapshotObservedAt: "2026-10-28T00:01:05.000Z",
+      firstRequestStartedAt: "2026-10-28T00:00:00.250Z", lastRequestStartedAt: "2026-10-28T00:01:04.000Z",
+      complete: true, incompleteReasons: [], truncated: false, maxMinuteBuckets: 2880,
+      missingTimestampRequestCount: 0, droppedRequestCount: 0,
+      minuteBuckets: [{ minuteStartAt: "2026-10-28T00:00:00.000Z", requestCount: 6, maxInFlight: 6 },
+        { minuteStartAt: "2026-10-28T00:01:00.000Z", requestCount: 1, maxInFlight: 1 }],
+      restrictionEvents: status === "blocked" ? [{ detectedAt: "2026-10-28T00:01:04.100Z", code: "BookingAPITooManyRequests", httpStatus: 200 }] : [],
+      maxRestrictionEvents: 16, restrictionEventsTruncated: false };
+    let expectedManifest;
+    const f = await fixture({ crawl: async ({ child, config }) => {
+      const run = await writeArtifacts(config.env);
+      expectedManifest = { keyword: "산청글램핑", workerCollection: true, collectionQuality: { status },
+        ...(status === "blocked" ? { collectionFailed: true } : {}),
+        requestPacing: { guardEnabled: true, enabled: false, pacingEnabled: false, minIntervalMs: 0,
+          maxConcurrentRequests: null, requestCount: 7, maxInFlight: 6, stopped: status === "blocked", requestTimeline: timeline } };
+      await fs.writeFile(path.join(run, "manifest.json"), JSON.stringify(expectedManifest));
+      child.close(status === "blocked" ? 1 : 0);
+    } });
+    try {
+      await runWorker(f.options);
+      assert.equal(f.state.spawned.length, 1);
+      const upload = f.state.uploads.find(item => item.path === "manifest.json");
+      assert.ok(upload);
+      assert.deepEqual(JSON.parse(upload.body), expectedManifest);
+      assert.deepEqual(JSON.parse(upload.body).requestPacing.requestTimeline, timeline);
+      assert.equal(f.state.completions.length, 1);
+      const published = f.state.completions[0].files.find(file => file.path === "manifest.json");
+      assert.equal(published.sha256, crypto.createHash("sha256").update(upload.body).digest("hex"));
+      assert.equal(published.size, upload.body.length);
+    } finally { await f.close(); }
+  }
+});
+
 test("upload and lost-completion-ACK retries reuse artifacts without rerunning the crawler", async () => {
   let uploadAttempts = 0;
   const f = await fixture({ options: { retryMs: 30 },

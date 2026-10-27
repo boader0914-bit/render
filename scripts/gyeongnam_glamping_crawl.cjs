@@ -55,7 +55,11 @@ const naverRequestGate = createNaverRequestGate({
     const error = new Error(apiBlocked ? "NAVER_REQUEST_BLOCKED BookingAPITooManyRequests" : `NAVER_REQUEST_BLOCKED HTTP ${response.status}`);
     error.code = "NAVER_REQUEST_BLOCKED";
     error.statusCode = response.status;
-    stop(error);
+    // Record the already-detected block without another request or body read.
+    stop(error, {
+      code: apiBlocked ? "BookingAPITooManyRequests" : captchaBlocked ? "NAVER_CAPTCHA" : "NAVER_REQUEST_BLOCKED",
+      httpStatus: response.status,
+    });
   },
 });
 // Every managed Naver fetch (including fallback pages) shares the block latch,

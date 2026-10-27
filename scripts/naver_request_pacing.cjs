@@ -5,6 +5,10 @@
 const { parseNaverPlaceHtmlObservation } = require("./naver_place_ota_observation.cjs");
 
 const DEFAULT_MIN_INTERVAL_MS = 500;
+// These bounds affect observation storage only, never request admission or pacing.
+const MAX_MINUTE_BUCKETS = 2880;
+const MAX_RESTRICTION_EVENTS = 16;
+const SAFE_RESTRICTION_CODES = new Set(["NAVER_REQUEST_BLOCKED", "BookingAPITooManyRequests", "NAVER_CAPTCHA"]);
 
 function isNaverBookingRateLimit(data) {
   return Array.isArray(data?.errors) && data.errors.some(error =>
@@ -78,6 +82,7 @@ function createNaverRequestGate(options = {}) {
   const minIntervalMs = guardOnly ? 0 : intervalMilliseconds(options.minIntervalMs);
   const maxConcurrency = guardOnly ? Infinity : concurrencyLimit(options.maxConcurrency);
   const now = options.now || (() => performance.now());
+  const wallNow = typeof options.wallNow === "function" ? options.wallNow : Date.now;
   const sleep = options.sleep || (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)));
   const onResponse = typeof options.onResponse === "function" ? options.onResponse : null;
   const onRequestStart = typeof options.onRequestStart === "function" ? options.onRequestStart : null;
@@ -87,8 +92,83 @@ function createNaverRequestGate(options = {}) {
   let pumping = false;
   const queue = [];
   const metrics = { requestCount: 0, failedRequests: 0, cancelledBeforeStart: 0, totalWaitMs: 0, maxInFlight: 0, minObservedStartIntervalMs: null };
+  const minuteBuckets = new Map();
+  const restrictionEvents = [];
+  const incompleteReasons = new Set();
+  let lastWallTime = null;
+  let firstRequestStartedAt = null;
+  let lastRequestStartedAt = null;
+  let missingTimestampRequestCount = 0;
+  let droppedRequestCount = 0;
+  let restrictionEventsTruncated = false;
 
-  function stop(reason) {
+  // Wall-clock telemetry is deliberately independent of the monotonic pacing
+  // clock. A broken wall clock cannot throw, wait, retry, or stop collection.
+  function observeWallTime() {
+    try {
+      const milliseconds = wallNow();
+      if (typeof milliseconds !== "number" || !Number.isFinite(milliseconds)) throw new TypeError();
+      const at = new Date(milliseconds).toISOString();
+      if (lastWallTime !== null && milliseconds < lastWallTime) incompleteReasons.add("CLOCK_BACKWARDS");
+      lastWallTime = milliseconds;
+      return { milliseconds, at };
+    } catch {
+      incompleteReasons.add("CLOCK_UNAVAILABLE");
+      return null;
+    }
+  }
+
+  const measurementStartedAt = enabled ? observeWallTime()?.at || null : null;
+
+  function observeRequestStart() {
+    const observation = observeWallTime();
+    const at = observation?.at || null;
+    if (metrics.requestCount === 1) firstRequestStartedAt = at;
+    lastRequestStartedAt = at;
+    if (!observation) {
+      missingTimestampRequestCount++;
+      return;
+    }
+    const minute = Math.floor(observation.milliseconds / 60000) * 60000;
+    let bucket = minuteBuckets.get(minute);
+    if (!bucket) {
+      if (minuteBuckets.size >= MAX_MINUTE_BUCKETS) {
+        droppedRequestCount++;
+        incompleteReasons.add("MINUTE_BUCKET_LIMIT");
+        return;
+      }
+      bucket = { minuteStartAt: new Date(minute).toISOString(), requestCount: 0, maxInFlight: 0 };
+      minuteBuckets.set(minute, bucket);
+    }
+    bucket.requestCount++;
+    bucket.maxInFlight = Math.max(bucket.maxInFlight, inFlight);
+  }
+
+  function observeRestriction(reason, metadata) {
+    // Accept enums and numeric HTTP status only. In particular, error messages,
+    // URLs, provider bodies, headers and request contents never enter telemetry.
+    try {
+      const code = metadata?.code || reason?.code;
+      const httpStatus = metadata?.httpStatus ?? reason?.statusCode;
+      if (!SAFE_RESTRICTION_CODES.has(code)) return;
+      if (!Number.isInteger(httpStatus) || httpStatus < 100 || httpStatus > 599) {
+        incompleteReasons.add("RESTRICTION_STATUS_UNAVAILABLE");
+        return;
+      }
+      const detectedAt = observeWallTime()?.at || null;
+      if (restrictionEvents.length >= MAX_RESTRICTION_EVENTS) {
+        restrictionEventsTruncated = true;
+        incompleteReasons.add("RESTRICTION_EVENT_LIMIT");
+        return;
+      }
+      restrictionEvents.push({ detectedAt, code, httpStatus });
+    } catch {
+      incompleteReasons.add("RESTRICTION_METADATA_UNAVAILABLE");
+    }
+  }
+
+  function stop(reason, metadata) {
+    if (enabled) observeRestriction(reason, metadata);
     if (!stopReason) stopReason = stoppedError(reason);
     while (queue.length) {
       metrics.cancelledBeforeStart++;
@@ -97,12 +177,27 @@ function createNaverRequestGate(options = {}) {
   }
 
   function diagnostics() {
+    const snapshotObservedAt = enabled ? observeWallTime()?.at || null : null;
     return {
       enabled: pacingEnabled, guardEnabled: enabled, pacingEnabled,
       minIntervalMs, maxConcurrentRequests: guardOnly ? null : maxConcurrency, ...metrics,
       totalWaitMs: Math.round(metrics.totalWaitMs),
       minObservedStartIntervalMs: metrics.minObservedStartIntervalMs === null ? null : Math.round(metrics.minObservedStartIntervalMs),
       queued: queue.length, inFlight, stopped: Boolean(stopReason),
+      requestTimeline: {
+        schemaVersion: 1, scope: "naver_request_gate", enabled,
+        bucketSizeMs: 60000, countBasis: "gate_request_start",
+        coverageBasis: "request_starts_through_snapshot", concurrencyBasis: "in_flight_at_gate_request_start",
+        measurementStartedAt, snapshotObservedAt, firstRequestStartedAt, lastRequestStartedAt,
+        snapshotInFlight: inFlight, snapshotQueued: queue.length,
+        complete: enabled && incompleteReasons.size === 0,
+        incompleteReasons: enabled ? [...incompleteReasons] : ["GUARD_DISABLED"],
+        truncated: droppedRequestCount > 0 || restrictionEventsTruncated,
+        maxMinuteBuckets: MAX_MINUTE_BUCKETS, missingTimestampRequestCount, droppedRequestCount,
+        minuteBuckets: [...minuteBuckets.values()].map(bucket => ({ ...bucket })),
+        maxRestrictionEvents: MAX_RESTRICTION_EVENTS, restrictionEventsTruncated,
+        restrictionEvents: restrictionEvents.map(event => ({ ...event })),
+      },
     };
   }
 
@@ -161,6 +256,7 @@ function createNaverRequestGate(options = {}) {
           inFlight++;
           metrics.requestCount++;
           metrics.maxInFlight = Math.max(metrics.maxInFlight, inFlight);
+          observeRequestStart();
           void execute(job);
         } catch (error) {
           // stop() already rejects and drains the queue. Other preflight
