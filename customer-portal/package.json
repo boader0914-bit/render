@@ -6,7 +6,8 @@
   "description": "Interactive local review for insight.sabun.co.kr; production integration follows design review.",
   "scripts": {
     "start": "node server.cjs --preview",
-    "check": "node --check server.cjs && node --check web/app.js && node --check connected-server.cjs && node --check web/connected.js && node --check web/auth.js",
+    "check": "node --check server.cjs && node --check web/app.js && node --check connected-server.cjs && node --check web/connected.js && node --check web/auth.js && node --check web/comparison-readiness.js && node --check web/comparison-readiness-view.js",
+    "test:comparison-readiness": "node --test test/comparison-readiness.test.cjs test/comparison-readiness-view.test.cjs test/comparison-readiness-grouping.test.cjs test/connected-comparison-state.test.cjs test/comparison-view.test.cjs test/analysis-view.test.cjs test/briefing-reservation-period-view.test.cjs",
     "test": "node --test test/*.test.cjs",
     "start:connected": "node connected-server.cjs",
     "dev:connected": "node dev-connected.cjs"

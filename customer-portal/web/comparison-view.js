@@ -14,6 +14,16 @@
   const relation=v=>({same:'같은 지역',cross:'다른 지역',unknown:'지역 확인 필요'})[v]||'이전 비교 기준';
   const exactCurrent=s=>s?.stayMode==='upcoming30'&&s.stayStart===today()&&s.asOfDate===today();
   const companyLink=id=>`#company=${encodeURIComponent(id)}`;
+  function readiness(report,selection){
+    const view=typeof window!=='undefined'?window.InsightComparisonReadinessView:typeof require==='function'?require('./comparison-readiness-view.js'):null;
+    return view?.render?.(report,selection)||'';
+  }
+  function drawResults(slot,html){
+    const open=slot.querySelector?.('[data-readiness-details="evidence"]')?.open===true;
+    slot.innerHTML=html;
+    const evidence=slot.querySelector?.('[data-readiness-details="evidence"]');
+    if(open&&evidence)evidence.open=true;
+  }
   const isNew=c=>c?.rulesVersion==='insight-comparison-v1';
   const selected=(r,s)=>r.comparisons.filter(c=>s.comparisonIds.includes(c.companyId));
   function matching(r,s){return Boolean(r&&r.mode==='current_briefing'&&r.ownId===s.ownCompanyId&&r.period?.start===s.stayStart&&r.period?.end===s.stayEnd&&exactCurrent(s));}
@@ -68,7 +78,7 @@
     const same=comparisons.filter(c=>c.regionRelation==='same').length,cross=comparisons.filter(c=>c.regionRelation==='cross').length;
     const focus=others.some(c=>c.companyId===focusId)?focusId:others[0]?.companyId;
     const partial=r.dataQuality?.status==='partial'||r.responseCache?.partial===true;
-    return `<div class="comparison-notice"><p>${!others.length?'비교업체를 선택하면 같은 조건으로 비교합니다.':cross?'다른 지역 업체는 지역 수요 차이를 포함한 참고 비교입니다.':'같은 지역에서도 업종·상품·관측 조건을 확인합니다.'}</p><small>같은 지역 ${same} · 다른 지역 ${cross}</small></div>${partial?'<p class="collection-warning">일부 자료를 확인하지 못했습니다. 정상 자료는 표시하며 업체별 날짜와 사유를 아래 근거에서 확인할 수 있습니다.</p>':''}<div class="comparison-summary-grid">${card(own,comparisons[0],true)}${others.map(c=>card(c,comparisons.find(p=>p.companyId===c.companyId),false)).join('')}</div><section class="card"><div class="comparison-view-tabs" role="tablist" aria-label="경쟁 비교 보기">${[['flow','예약 흐름'],['products','가격·상품'],['regions','지역 배경']].map(([id,name])=>`<button type="button" role="tab" data-comparison-view="${id}" aria-selected="${s.selectedView===id}" aria-controls="comparison-detail">${name}</button>`).join('')}</div>${s.selectedView==='flow'&&others.length?`<label class="comparison-focus"><span>그래프 비교업체</span><select data-comparison-focus aria-label="그래프 비교업체">${others.map(c=>`<option value="${esc(c.companyId)}" ${focus===c.companyId?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>`:''}<div id="comparison-detail" role="tabpanel">${s.selectedView==='products'?products(r,s,catalog):s.selectedView==='regions'?regions(r,s):flow(r,s,focus)}</div></section>${pairTable(r,s)}${partial?sourceIssues(r,s):''}`;
+    return `<div class="comparison-notice"><p>${!others.length?'비교업체를 선택하면 같은 조건으로 비교합니다.':cross?'다른 지역 업체는 지역 수요 차이를 포함한 참고 비교입니다.':'같은 지역에서도 업종·상품·관측 조건을 확인합니다.'}</p><small>같은 지역 ${same} · 다른 지역 ${cross}</small></div>${partial?'<p class="collection-warning">일부 자료를 확인하지 못했습니다. 정상 자료는 표시하며 업체별 날짜와 사유를 아래 근거에서 확인할 수 있습니다.</p>':''}<div class="comparison-summary-grid">${card(own,comparisons[0],true)}${others.map(c=>card(c,comparisons.find(p=>p.companyId===c.companyId),false)).join('')}</div>${readiness(r,s)}<section class="card"><div class="comparison-view-tabs" role="tablist" aria-label="경쟁 비교 보기">${[['flow','예약 흐름'],['products','가격·상품'],['regions','지역 배경']].map(([id,name])=>`<button type="button" role="tab" data-comparison-view="${id}" aria-selected="${s.selectedView===id}" aria-controls="comparison-detail">${name}</button>`).join('')}</div>${s.selectedView==='flow'&&others.length?`<label class="comparison-focus"><span>그래프 비교업체</span><select data-comparison-focus aria-label="그래프 비교업체">${others.map(c=>`<option value="${esc(c.companyId)}" ${focus===c.companyId?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>`:''}<div id="comparison-detail" role="tabpanel">${s.selectedView==='products'?products(r,s,catalog):s.selectedView==='regions'?regions(r,s):flow(r,s,focus)}</div></section>${pairTable(r,s)}${partial?sourceIssues(r,s):''}`;
   }
   function sourceIssues(r,s){
     const ids=new Set([s.ownCompanyId,...s.comparisonIds]);
@@ -98,14 +108,14 @@
     const current=()=>active===options&&id===generation&&slot?.isConnected&&options.store.isCurrent(tokenBox.value);
     if(!slot||!exactCurrent(s))return;
     const saved=options.peek(s.ownCompanyId);
-    if(saved&&matching(saved,s)){slot.innerHTML=render(saved,s,options.state.companies,focusId);notifyRegional();}
+    if(saved&&matching(saved,s)){drawResults(slot,render(saved,s,options.state.companies,focusId));notifyRegional();}
     else slot.innerHTML='<section class="card company-connection is-loading" role="status"><span class="connection-spinner" aria-hidden="true"></span><p>저장된 비교 자료를 연결하고 있습니다.</p></section>';
     if(status)status.textContent=saved?'저장 자료 표시 · 최신 자료 확인 중':'저장 자료 연결 중';
     try{
       const result=await options.read(s.ownCompanyId,{force});if(!current())return;
       const latest=options.peek(s.ownCompanyId),normal=latest&&latest.responseCache?.preview!==true?latest:saved&&saved.responseCache?.preview!==true?saved:null;
       const shown=result.responseCache?.preview===true&&normal?normal:result;
-      slot.innerHTML=render(shown,options.store.getState(),options.state.companies,focusId);
+      drawResults(slot,render(shown,options.store.getState(),options.state.companies,focusId));
       notifyRegional();
       const info=result.responseCache||{},preview=info.preview===true,failed=info.refreshFailed===true&&info.refreshing!==true;
       const pending=info.refreshing===true||!failed&&(info.revalidationRequired===true||preview||result.dataQuality?.issues?.some(row=>['COMPANY_INTEGRATION_UPDATING','COMPANY_INTEGRATION_PENDING'].includes(row.code)));
@@ -114,7 +124,7 @@
     }catch(error){
       if(!current())return;
       if([401,403,404,409].includes(error.status)){slot.innerHTML='<section class="card"><p class="collection-warning">매장 등록·기간과 조회 권한을 다시 확인해 주세요.</p></section>';if(status)status.textContent='';if(error.status===401)options.onSessionExpired?.();}
-      else{const latest=options.peek(s.ownCompanyId),retained=latest&&matching(latest,s)?latest:saved&&matching(saved,s)?saved:null;if(retained){slot.innerHTML=render(retained,options.store.getState(),options.state.companies,focusId);if(status)status.textContent='최신 자료 연결 지연 · 이전 저장 자료를 유지합니다.';}else{slot.innerHTML='<section class="card"><p class="collection-warning">저장 자료를 확인하지 못했습니다. 잠시 후 다시 확인해 주세요.</p></section>';if(status)status.textContent='연결 확인 필요';}}
+      else{const latest=options.peek(s.ownCompanyId),retained=latest&&matching(latest,s)?latest:saved&&matching(saved,s)?saved:null;if(retained){drawResults(slot,render(retained,options.store.getState(),options.state.companies,focusId));if(status)status.textContent='최신 자료 연결 지연 · 이전 저장 자료를 유지합니다.';}else{slot.innerHTML='<section class="card"><p class="collection-warning">저장 자료를 확인하지 못했습니다. 잠시 후 다시 확인해 주세요.</p></section>';if(status)status.textContent='연결 확인 필요';}}
       /* failure handled above */
     }
   }
@@ -128,9 +138,9 @@
     document.addEventListener('click',event=>{
       const button=event.target.closest?.('[data-comparison-view],[data-comparison-current]');if(!button||!active)return;event.preventDefault();
       const options=active,presentationCurrent=options.pendingToken&&options.store.isCurrent(options.pendingToken.value),patch=button.hasAttribute('data-comparison-current')?{stayMode:'upcoming30',asOfDate:today()}:{selectedView:button.dataset.comparisonView};
-      const updated=options.store.update(patch);if(!updated.ok)return;options.onSelectionChange?.(updated.state);if(!button.hasAttribute('data-comparison-current')&&presentationCurrent)options.pendingToken.value=options.store.requestToken();if(button.hasAttribute('data-comparison-current')){const workspace=document.querySelector('#comparison-workspace');if(workspace)workspace.innerHTML=panel(options.state,updated.state);void refresh(false);}else{const data=options.peek(updated.state.ownCompanyId),slot=document.querySelector('#comparison-results');if(data&&slot&&matching(data,updated.state)){slot.innerHTML=render(data,updated.state,options.state.companies,focusId);notifyRegional();}else void refresh(false);}
+      const updated=options.store.update(patch);if(!updated.ok)return;options.onSelectionChange?.(updated.state);if(!button.hasAttribute('data-comparison-current')&&presentationCurrent)options.pendingToken.value=options.store.requestToken();if(button.hasAttribute('data-comparison-current')){const workspace=document.querySelector('#comparison-workspace');if(workspace)workspace.innerHTML=panel(options.state,updated.state);void refresh(false);}else{const data=options.peek(updated.state.ownCompanyId),slot=document.querySelector('#comparison-results');if(data&&slot&&matching(data,updated.state)){drawResults(slot,render(data,updated.state,options.state.companies,focusId));notifyRegional();}else void refresh(false);}
     });
-    document.addEventListener('change',event=>{if(!event.target.matches?.('[data-comparison-focus]')||!active)return;focusId=event.target.value;const s=active.store.getState(),data=active.peek(s.ownCompanyId),slot=document.querySelector('#comparison-results');if(data&&slot&&matching(data,s))slot.innerHTML=render(data,s,active.state.companies,focusId);});
+    document.addEventListener('change',event=>{if(!event.target.matches?.('[data-comparison-focus]')||!active)return;focusId=event.target.value;const s=active.store.getState(),data=active.peek(s.ownCompanyId),slot=document.querySelector('#comparison-results');if(data&&slot&&matching(data,s))drawResults(slot,render(data,s,active.state.companies,focusId));});
   }
   return {panel,render,pairTable,chart,matching,exactCurrent,mount,stop};
 });

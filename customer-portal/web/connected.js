@@ -32,6 +32,11 @@
   }
   function configureSelection(scope){
     if(!window.InsightComparisonSelection)return;
+    // Do not create an anonymous store during an initial render before /me:
+    // it would delete the authenticated selection awaiting restoration.
+    // A previously authenticated store must still lose every permission when
+    // identity is cleared, including an administrator roster's HTTP 401.
+    if(!state){comparisonSelection?.configure({scope:'',permissionSignature:'',authorizedOwnCompanyIds:[],authorizedComparisonIds:[],authorizedComparisonIdsByOwn:{}});return;}
     const relations=state?.customer.relations.filter(row=>['active','pending'].includes(row.status))||[],ownIds=relations.filter(row=>row.kind==='own').map(row=>row.companyId),ids=relations.filter(row=>row.kind==='competitor').map(row=>row.companyId);
     const ownId=ownIds.includes(selectedOwnId)?selectedOwnId:comparisonSelection?.getState().ownCompanyId;
     const context={scope,permissionSignature:reportPermissionVersion(state),authorizedOwnCompanyIds:ownIds,authorizedComparisonIds:ids,authorizedComparisonIdsByOwn:Object.fromEntries(ownIds.map(id=>[id,ids])),companies:(state?.companies||[]).map(c=>({...c,...state?.comparisonRegionBindings?.find(b=>b.companyId===c.companyId)})),ownCompanyId:ownIds.includes(ownId)?ownId:ownIds[0]||null,businessStatus:state?.customer.businessStatus||'planning',maxRangeDays:93};
