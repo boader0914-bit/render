@@ -91,9 +91,10 @@ async function main() {
       for (const route of ["/api/collection-rotation", "/api/collection-rotation/history"]) {
         assert.equal((await request(base, route, cookie)).response.status, expected, route);
       }
-      assert.equal((await request(base, "/api/collection-rotation/preview", cookie, jsonPost({}))).response.status, expected);
+      for (const route of ["/api/collection-rotation/preview", "/api/collection-rotation/trial/preview", "/api/collection-rotation/trial", "/api/collection-rotation/trial/cancel"])
+        assert.equal((await request(base, route, cookie, jsonPost({}))).response.status, expected, route);
     }
-    for (const [route, method] of [["/api/collection-rotation/preview", "POST"], ["/api/collection-rotation", "PUT"], ["/api/collection-rotation/enabled", "POST"]]) {
+    for (const [route, method] of [["/api/collection-rotation/preview", "POST"], ["/api/collection-rotation", "PUT"], ["/api/collection-rotation/enabled", "POST"], ["/api/collection-rotation/trial/preview", "POST"], ["/api/collection-rotation/trial", "POST"], ["/api/collection-rotation/trial/cancel", "POST"]]) {
       assert.equal((await api(route, { ...jsonPost({}), method, headers: { "Content-Type": "application/json", Origin: "https://untrusted.example" } })).response.status, 403, route);
       assert.equal((await api(route, { ...jsonPost({}), method, headers: { "Content-Type": "text/plain", Origin: base } })).response.status, 415, route);
     }
@@ -134,6 +135,45 @@ async function main() {
     assert.equal((await api("/api/collection-rotation", { ...jsonPost(config), method: "PUT" })).response.status, 409, "Pause before editing an active shared schedule");
     assert.equal(fs.existsSync(events), false, "Tomorrow's schedule does not run immediately on activation");
     console.log("PASS shared/individual schedule mutual exclusion and explicit activation");
+
+    const trialBefore = (await rotation()).body;
+    const individualFiles = ["daily_keyword_collection.json", "keyword-worker-schedule-manual.json", "keyword-worker-schedule-web.json"];
+    const individualBefore = individualFiles.map(name => {
+      const file = path.join(configDir, name); return fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;
+    });
+    const trialInput = { day: day(1), expectedRevision: trialBefore.revision, expectedPlanHash: trialBefore.basePlanHash };
+    const trialPreview = await api("/api/collection-rotation/trial/preview", jsonPost(trialInput));
+    assert.equal(trialPreview.response.status, 200, JSON.stringify(trialPreview.body));
+    assert.equal(trialPreview.body.items.length, 6);
+    assert.equal(trialPreview.body.nextDayItems.length, 4);
+    assert.equal(trialPreview.body.configUnchanged, true);
+    assert.deepEqual((await rotation()).body.config, trialBefore.config);
+    assert.equal((await api("/api/collection-rotation/trial", jsonPost({ ...trialInput, expectedPlanHash: "0".repeat(64) }))).response.status, 409);
+    assert.equal((await api("/api/collection-rotation/trial", jsonPost({ ...trialInput, day: day(0) }))).response.status, 400);
+    const registeredTrial = await api("/api/collection-rotation/trial", jsonPost(trialInput));
+    assert.equal(registeredTrial.response.status, 200, JSON.stringify(registeredTrial.body));
+    assert.equal(registeredTrial.body.oneDayTrial.status, "armed");
+    assert.equal(registeredTrial.body.oneDayTrial.day, trialInput.day);
+    assert.deepEqual(registeredTrial.body.config, trialBefore.config);
+    assert.equal(registeredTrial.body.revision, trialBefore.revision);
+    assert.equal(registeredTrial.body.cursor, trialBefore.cursor);
+    assert.equal(registeredTrial.body.enabled, true);
+    assert.equal(registeredTrial.body.todayItems.length, 0);
+    assert.equal((await api("/api/collection-rotation/trial", jsonPost(trialInput))).response.status, 409);
+    const cancelledTrial = await api("/api/collection-rotation/trial/cancel", jsonPost({
+      trialId: registeredTrial.body.oneDayTrial.trialId, expectedRevision: trialBefore.revision, expectedPlanHash: trialBefore.basePlanHash
+    }));
+    assert.equal(cancelledTrial.response.status, 200, JSON.stringify(cancelledTrial.body));
+    assert.equal(cancelledTrial.body.oneDayTrial.status, "cancelled");
+    assert.equal(cancelledTrial.body.oneDayTrials.length, 1, "Cancellation retains the trial record");
+    assert.deepEqual(cancelledTrial.body.config, trialBefore.config);
+    assert.equal(cancelledTrial.body.cursor, trialBefore.cursor);
+    assert.equal(fs.existsSync(events), false, "Preview, registration and cancellation never start a collection engine");
+    assert.deepEqual(individualFiles.map(name => {
+      const file = path.join(configDir, name); return fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;
+    }), individualBefore);
+    assert.ok((await controllers()).workers.every(worker => !worker.halted));
+    console.log("PASS one-day trial admin boundaries, six-to-four preview, unchanged base plan and cancellation without execution");
 
     const payload = (keyword, workerKey, clientRequestId) => ({ keyword, workerKey, clientRequestId, checkIn: day(0), checkOut: day(1), adults: 2,
       searchMode: "keyword", collectionMode: "precision", collectionPurpose: "revenue_detail", productMode: "all", dayUseMode: "inspect", bookingRangeDays: 1,

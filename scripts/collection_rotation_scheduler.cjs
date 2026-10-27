@@ -12,6 +12,7 @@ const VERSION = 1;
 const MIN_FREE_BYTES = 200 * 1024 * 1024;
 const DAY_MS = 86400000;
 const WORKER_NAMES = { web: "2Gweb_worker", manual: "BG worker" };
+const ONE_DAY_TRIAL_WORKERS = [{ workerKey: "web", dailyLimit: 3 }, { workerKey: "manual", dailyLimit: 3 }];
 const DEFAULT_KEYWORDS = ["경남글램핑", "대구글램핑", "부산글램핑", "경북글램핑", "충남글램핑", "전남글램핑", "전북글램핑", "대전글램핑", "서울근교글램핑", "경주글램핑", "여수글램핑", "가평글램핑", "포천글램핑"];
 const PENDING = ["queued", "waiting"];
 const TERMINAL = new Set(["complete", "reused", "partial", "failed", "blocked", "missed", "paused", "uncertain"]);
@@ -35,6 +36,9 @@ function addDays(day, count) {
 function scheduledAt(day, time) { return new Date(`${day}T${time}:00+09:00`).toISOString(); }
 function safeCode(value, fallback = "ROTATION_OPERATION_FAILED") { return typeof value === "string" && /^[A-Za-z][A-Za-z0-9_]{1,100}$/.test(value) ? value : fallback; }
 const reconciliationHash = value => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
+// Pausing, including a protective pause, must neither invalidate a saved trial
+// nor be reversed by one. The base plan identity deliberately excludes enabled.
+const basePlanHash = config => reconciliationHash({ ...validateConfig(config), enabled: false });
 const RECONCILE_CONDITIONS = ["searchMode", "checkIn", "checkOut", "bookingRangeDays", "bookingRangePlaceLimit", "adults",
   "collectionMode", "collectionPurpose", "productMode", "dayUseMode", "detailRankRanges"];
 function rankRange(value) {
@@ -205,6 +209,11 @@ function createCollectionRotationScheduler(options = {}) {
     db.exec(`CREATE TABLE IF NOT EXISTS rotation_reconciliations (slot_id TEXT PRIMARY KEY REFERENCES rotation_slots(id), run_id TEXT NOT NULL,
       expected_version TEXT NOT NULL, applied_version TEXT NOT NULL, manifest_sha256 TEXT NOT NULL, previous_row_json TEXT NOT NULL,
       proof_json TEXT NOT NULL, reconciled_at TEXT NOT NULL);`);
+    db.exec(`CREATE TABLE IF NOT EXISTS rotation_one_day_trials (trial_id TEXT PRIMARY KEY, day TEXT NOT NULL UNIQUE,
+      base_revision INTEGER NOT NULL, base_plan_hash TEXT NOT NULL, workers_json TEXT NOT NULL, created_at TEXT NOT NULL,
+      cancelled_at TEXT, allocated_at TEXT);
+      CREATE TABLE IF NOT EXISTS rotation_one_day_trial_days (day TEXT PRIMARY KEY REFERENCES rotation_days(day),
+      trial_id TEXT NOT NULL UNIQUE REFERENCES rotation_one_day_trials(trial_id), effective_plan_hash TEXT NOT NULL);`);
     if (!state()) transaction(() => {
       const config = defaultConfig(instant());
       const at = instant().toISOString();
@@ -227,7 +236,8 @@ function createCollectionRotationScheduler(options = {}) {
     const snapshot = db.prepare("SELECT config_json,revision FROM rotation_days WHERE day=?").get(row.day);
     const config = JSON.parse(snapshot.config_json);
     const receipt = row.receipt_json ? JSON.parse(row.receipt_json) : null;
-    return { id: row.id, day: row.day, date: row.day, index: row.slot_index, revision: snapshot.revision, workerKey: row.worker_key, keyword: row.keyword,
+    const trialId = db.prepare("SELECT trial_id FROM rotation_one_day_trial_days WHERE day=?").get(row.day)?.trial_id;
+    return { id: row.id, day: row.day, date: row.day, index: row.slot_index, revision: snapshot.revision, ...(trialId ? { trialId } : {}), workerKey: row.worker_key, keyword: row.keyword,
       scheduledAt: row.scheduled_at, notBeforeAt: notBefore(row), status: row.status, acceptedAt: row.started_at,
       startedAt: result.executionStartedAt || null, finishedAt: row.finished_at, endedAt: row.finished_at,
       errorCode: row.error_code, reason: row.error_code, runId: result.runId || null, ...result, receipt,
@@ -283,6 +293,113 @@ function createCollectionRotationScheduler(options = {}) {
       if (value.active) throw fault("ROTATION_COLLECTORS_BUSY", 409);
     }
   }
+  function trialBaseConfig(config) {
+    if (config.time !== "09:00" || config.keywordIntervalMinutes !== 120 || config.keywords.length < 6
+      || JSON.stringify(config.workers) !== JSON.stringify([{ workerKey: "web", dailyLimit: 2 }, { workerKey: "manual", dailyLimit: 2 }])) {
+      throw fault("ROTATION_TRIAL_BASE_CONFIG_INVALID", 409);
+    }
+    return validateConfig({ ...config, workers: clone(ONE_DAY_TRIAL_WORKERS) });
+  }
+  function trialMatches(row, record, config) {
+    if (!row || row.base_revision !== record.revision || row.base_plan_hash !== basePlanHash(config)) return false;
+    try {
+      return validDate(row.day) && /^[a-f0-9-]{36}$/.test(row.trial_id)
+        && JSON.stringify(JSON.parse(row.workers_json)) === JSON.stringify(ONE_DAY_TRIAL_WORKERS)
+        && Boolean(trialBaseConfig(config));
+    } catch { return false; }
+  }
+  function trialSummary(row, record = state(), config = configOf(record)) {
+    const today = dateKey(instant());
+    let trialStatus = row.cancelled_at ? "cancelled" : row.day < today ? "expired" : row.allocated_at ? "allocated" : "armed";
+    if (!["cancelled", "expired"].includes(trialStatus) && !trialMatches(row, record, config)) trialStatus = "needs_verification";
+    return { trialId: row.trial_id, day: row.day, baseRevision: row.base_revision, basePlanHash: row.base_plan_hash,
+      workers: clone(ONE_DAY_TRIAL_WORKERS), baseDailySlots: 4, trialDailySlots: 6, returnDay: validDate(row.day) ? addDays(row.day, 1) : null,
+      createdAt: row.created_at, cancelledAt: row.cancelled_at, status: trialStatus };
+  }
+  function trialForDay(day) { return db.prepare("SELECT * FROM rotation_one_day_trials WHERE day=? AND cancelled_at IS NULL").get(day); }
+  function configForDay(config, day, record = state()) {
+    const trial = trialForDay(day), binding = db.prepare("SELECT trial_id FROM rotation_one_day_trial_days WHERE day=?").get(day);
+    if (binding && binding.trial_id !== trial?.trial_id) throw fault("ROTATION_TRIAL_PLAN_CHANGED", 409);
+    if (!trial) return config;
+    if (!trialMatches(trial, record, config)) throw fault("ROTATION_TRIAL_PLAN_CHANGED", 409);
+    return trialBaseConfig(config);
+  }
+  function planWithTrials(config, planOptions = {}) {
+    // Keep the exported pure planner unchanged. The persisted scheduler owns the
+    // date overrides and carries each day's cursor into the next day's plan.
+    const base = planDays(config, planOptions), record = state();
+    const first = planOptions.startDate || config.firstDate;
+    let cursor = base.cursor;
+    const items = [];
+    for (let offset = 0; offset < base.days; offset += 1) {
+      const day = addDays(first, offset), trial = trialForDay(day);
+      const planned = planDays(configForDay(config, day, record), { startDate: day, days: 1, cursor });
+      items.push(...planned.items.map(item => trial ? { ...item, trialId: trial.trial_id } : item));
+      cursor = planned.nextCursor;
+    }
+    return { ...base, nextCursor: cursor, items };
+  }
+  function checkTrialExpectation(input, keys) {
+    keysOnly(input, keys, "ROTATION_TRIAL_INPUT_INVALID");
+    if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1
+      || typeof input.expectedPlanHash !== "string" || !/^[a-f0-9]{64}$/.test(input.expectedPlanHash)) throw fault("ROTATION_TRIAL_INPUT_INVALID");
+    const record = state(), config = configOf(record);
+    if (record.revision !== input.expectedRevision || basePlanHash(config) !== input.expectedPlanHash) throw fault("ROTATION_TRIAL_PLAN_CHANGED", 409);
+    return { record, config };
+  }
+  function checkNewTrial(input) {
+    const checked = checkTrialExpectation(input, ["day", "expectedRevision", "expectedPlanHash"]);
+    const today = dateKey(instant());
+    if (!validDate(input.day) || input.day <= today || input.day > addDays(today, 31) || input.day < checked.config.firstDate) throw fault("ROTATION_TRIAL_DATE_INVALID");
+    if (db.prepare("SELECT day FROM rotation_days WHERE day=?").get(input.day)) throw fault("ROTATION_TRIAL_DAY_ALLOCATED", 409);
+    if (db.prepare("SELECT trial_id FROM rotation_one_day_trials WHERE day=?").get(input.day)) throw fault("ROTATION_TRIAL_EXISTS", 409);
+    if (db.prepare("SELECT trial_id FROM rotation_one_day_trials WHERE cancelled_at IS NULL AND day>=? LIMIT 1").get(today)) throw fault("ROTATION_TRIAL_PENDING", 409);
+    return { ...checked, candidate: trialBaseConfig(checked.config) };
+  }
+  function previewOneDayTrial(input) {
+    initialize();
+    const { record, config, candidate } = checkNewTrial(input);
+    const today = dateKey(instant());
+    let first = config.firstDate > today ? config.firstDate : today;
+    if (db.prepare("SELECT day FROM rotation_days WHERE day=?").get(first)) first = addDays(first, 1);
+    let cursor = record.cursor;
+    for (let day = first; day < input.day; day = addDays(day, 1)) cursor = planDays(config, { startDate: day, days: 1, cursor }).nextCursor;
+    const trial = planDays(candidate, { startDate: input.day, days: 1, cursor });
+    const next = planDays(config, { startDate: addDays(input.day, 1), days: 1, cursor: trial.nextCursor });
+    return { baseRevision: record.revision, basePlanHash: basePlanHash(config), day: input.day, baseDailySlots: 4, trialDailySlots: 6,
+      returnDay: addDays(input.day, 1), items: trial.items, nextDayItems: next.items, configUnchanged: true };
+  }
+  async function registerOneDayTrial(input) {
+    initialize();
+    const { config, candidate } = checkNewTrial(input);
+    if (!config.enabled) throw fault("ROTATION_TRIAL_REQUIRES_ENABLED", 409);
+    if (activeId || ticking) throw fault("ROTATION_COLLECTORS_BUSY", 409);
+    const checkEpoch = epoch;
+    await checkActivation(candidate);
+    transaction(() => {
+      const current = checkNewTrial(input);
+      if (checkEpoch !== epoch || !current.config.enabled || activeId || ticking) throw fault("ROTATION_CONFIG_CHANGED", 409);
+      const at = instant().toISOString(), trialId = crypto.randomUUID();
+      db.prepare("INSERT INTO rotation_one_day_trials(trial_id,day,base_revision,base_plan_hash,workers_json,created_at) VALUES(?,?,?,?,?,?)")
+        .run(trialId, input.day, current.record.revision, input.expectedPlanHash, JSON.stringify(ONE_DAY_TRIAL_WORKERS), at);
+      event("one_day_trial_registered", null, trialId);
+    });
+    return status();
+  }
+  function cancelOneDayTrial(input) {
+    initialize();
+    transaction(() => {
+      checkTrialExpectation(input, ["trialId", "expectedRevision", "expectedPlanHash"]);
+      if (typeof input.trialId !== "string" || !/^[a-f0-9-]{36}$/.test(input.trialId)) throw fault("ROTATION_TRIAL_INPUT_INVALID");
+      const trial = db.prepare("SELECT * FROM rotation_one_day_trials WHERE trial_id=?").get(input.trialId);
+      if (!trial) throw fault("ROTATION_TRIAL_NOT_FOUND", 404);
+      if (trial.cancelled_at || trial.allocated_at || trial.day <= dateKey(instant())
+        || db.prepare("SELECT day FROM rotation_days WHERE day=?").get(trial.day)) throw fault("ROTATION_TRIAL_CANCEL_FORBIDDEN", 409);
+      db.prepare("UPDATE rotation_one_day_trials SET cancelled_at=? WHERE trial_id=?").run(instant().toISOString(), trial.trial_id);
+      event("one_day_trial_cancelled", null, trial.trial_id);
+    });
+    return status();
+  }
   function preview(config = undefined, previewOptions = {}) {
     initialize();
     const record = state();
@@ -301,13 +418,14 @@ function createCollectionRotationScheduler(options = {}) {
     }
     const today = dateKey(instant());
     const requestedStart = previewOptions.startDate || (input.firstDate > today ? input.firstDate : today);
-    return planDays(input, { ...previewOptions, startDate: requestedStart, cursor });
+    return planWithTrials(input, { ...previewOptions, startDate: requestedStart, cursor });
   }
   async function updateConfig(input, updateOptions = {}) {
     initialize();
     if (!object(input)) throw fault("ROTATION_CONFIG_INVALID");
     const expectedRevision = state().revision;
     const current = configOf();
+    if (db.prepare("SELECT trial_id FROM rotation_one_day_trials WHERE cancelled_at IS NULL AND day>=? LIMIT 1").get(dateKey(instant()))) throw fault("ROTATION_TRIAL_PENDING", 409);
     if (current.enabled || activeId) throw fault("ROTATION_ACTIVE_EDIT_FORBIDDEN", 409);
     if (input.enabled === true) throw fault("ROTATION_SAVE_MUST_BE_DISABLED", 409);
     const config = validateConfig({ ...current, ...input, enabled: false });
@@ -317,6 +435,7 @@ function createCollectionRotationScheduler(options = {}) {
     if (cursor < 0) throw fault("ROTATION_START_POSITION_REQUIRED", 409);
     transaction(() => {
       if (state().revision !== expectedRevision || configOf().enabled || activeId) throw fault("ROTATION_CONFIG_CHANGED", 409);
+      if (db.prepare("SELECT trial_id FROM rotation_one_day_trials WHERE cancelled_at IS NULL AND day>=? LIMIT 1").get(dateKey(instant()))) throw fault("ROTATION_TRIAL_PENDING", 409);
       const revision = expectedRevision + 1;
       const at = instant().toISOString();
       db.prepare("INSERT INTO rotation_revisions VALUES(?,?,?)").run(revision, JSON.stringify(config), at);
@@ -350,16 +469,28 @@ function createCollectionRotationScheduler(options = {}) {
   }
   function allocateDay(day) {
     return transaction(() => {
-      const existing = db.prepare("SELECT day FROM rotation_days WHERE day=?").get(day);
-      if (existing) return false;
       const record = state();
-      const config = configOf(record);
-      if (!config.enabled) return false;
+      const original = configOf(record);
+      if (!original.enabled) return false;
+      const trial = trialForDay(day), config = configForDay(original, day, record);
+      const existing = db.prepare("SELECT * FROM rotation_days WHERE day=?").get(day);
+      if (existing) {
+        if (trial) {
+          const binding = db.prepare("SELECT * FROM rotation_one_day_trial_days WHERE day=?").get(day);
+          if (!trial.allocated_at || binding?.trial_id !== trial.trial_id || binding.effective_plan_hash !== basePlanHash(config)
+            || basePlanHash(JSON.parse(existing.config_json)) !== basePlanHash(config)) throw fault("ROTATION_TRIAL_PLAN_CHANGED", 409);
+        }
+        return false;
+      }
       const plan = planDays(config, { startDate: day, days: 1, cursor: record.cursor });
       const at = instant().toISOString();
       db.prepare("INSERT INTO rotation_days VALUES(?,?,?,?,?,?)").run(day, record.revision, record.cursor, plan.nextCursor, JSON.stringify(config), at);
       const insert = db.prepare("INSERT INTO rotation_slots(id,day,slot_index,worker_key,keyword,scheduled_at,status) VALUES(?,?,?,?,?,?,'queued')");
       for (const slot of plan.items) insert.run(slot.id, day, slot.index, slot.workerKey, slot.keyword, slot.scheduledAt);
+      if (trial) {
+        db.prepare("INSERT INTO rotation_one_day_trial_days(day,trial_id,effective_plan_hash) VALUES(?,?,?)").run(day, trial.trial_id, basePlanHash(config));
+        db.prepare("UPDATE rotation_one_day_trials SET allocated_at=? WHERE trial_id=?").run(at, trial.trial_id);
+      }
       db.prepare("UPDATE rotation_state SET cursor=?,updated_at=? WHERE id=1").run(plan.nextCursor, at);
       event("allocated");
       return true;
@@ -375,7 +506,12 @@ function createCollectionRotationScheduler(options = {}) {
     // catch-up burst masquerading as data observed on a previous date.
     db.prepare("UPDATE rotation_slots SET status='missed',error_code='ROTATION_DATE_EXPIRED',finished_at=? WHERE day<? AND status IN ('queued','waiting')").run(instant().toISOString(), day);
     if (day < config.firstDate || instant().getTime() < Date.parse(scheduledAt(day, config.time))) return null;
-    allocateDay(day);
+    try { allocateDay(day); }
+    catch (error) {
+      if (error?.code !== "ROTATION_TRIAL_PLAN_CHANGED") throw error;
+      pause(error.code, "review");
+      return null;
+    }
     const row = db.prepare("SELECT * FROM rotation_slots WHERE day=? AND status IN ('queued','waiting') ORDER BY slot_index LIMIT 1").get(day);
     if (!row) return null;
     const notBeforeAt = notBefore(row);
@@ -601,13 +737,22 @@ function createCollectionRotationScheduler(options = {}) {
     const todayItems = itemsForDay(day);
     let nextDay = config.firstDate > day ? config.firstDate : day;
     if (db.prepare("SELECT day FROM rotation_days WHERE day=?").get(nextDay)) nextDay = addDays(nextDay, 1);
-    const planned = planDays(config, { days: 7, startDate: nextDay, cursor: record.cursor });
+    let planned;
+    try { planned = planWithTrials(config, { days: 7, startDate: nextDay, cursor: record.cursor }); }
+    catch (error) {
+      if (error?.code !== "ROTATION_TRIAL_PLAN_CHANGED") throw error;
+      // A read reports the invalid trial; it must not silently show a valid
+      // six-slot forecast or mutate the enabled/protection state.
+      planned = { items: [] };
+    }
     const pending = todayItems.filter(item => [...PENDING, "running"].includes(item.status));
     const upcomingItems = [...pending, ...planned.items];
     const nextRunAt = config.enabled && !stopped ? upcomingItems[0]?.notBeforeAt || null : null;
     const counts = {};
     for (const item of todayItems) counts[item.status] = (counts[item.status] || 0) + 1;
-    return { version: VERSION, config, revision: record.revision, cursor: record.cursor, nextKeyword: config.keywords[record.cursor], enabled: config.enabled,
+    const oneDayTrials = db.prepare("SELECT * FROM rotation_one_day_trials ORDER BY day DESC LIMIT 31").all().map(row => trialSummary(row, record, config));
+    const oneDayTrial = oneDayTrials.filter(trial => ["armed", "allocated", "needs_verification"].includes(trial.status)).sort((a, b) => a.day.localeCompare(b.day))[0] || oneDayTrials[0] || null;
+    return { version: VERSION, config, revision: record.revision, basePlanHash: basePlanHash(config), oneDayTrials, oneDayTrial, cursor: record.cursor, nextKeyword: config.keywords[record.cursor], enabled: config.enabled,
       active: Boolean(activeId), activeSlotId: activeId, planState: activeId ? "running" : record.plan_state, reason: record.reason, updatedAt: record.updated_at,
       day, todayItems, todayCounts: counts, upcomingItems, nextRunAt, previewNextRunAt: upcomingItems[0]?.notBeforeAt || null, latest: history({ limit: 40 }).items,
       lastError, stopped, note: "Allocation is durable; active means dispatch/result pending, not proof of remote execution." };
@@ -620,7 +765,7 @@ function createCollectionRotationScheduler(options = {}) {
   function stop() { stopped = true; epoch += 1; if (timer) clearIntervalImpl(timer); timer = null; }
   function close() { stop(); if (activeId || ticking) throw fault("ROTATION_EXECUTION_ACTIVE", 409); if (db) { db.close(); db = null; } }
   function isEnabled() { initialize(); return configOf().enabled && !stopped; }
-  return { status, preview, updateConfig, setEnabled, tick, start, stop, history, close, isEnabled, reconcileCompleted, storePath };
+  return { status, preview, previewOneDayTrial, registerOneDayTrial, cancelOneDayTrial, updateConfig, setEnabled, tick, start, stop, history, close, isEnabled, reconcileCompleted, storePath };
 }
 
 module.exports = { createCollectionRotationScheduler, defaultConfig, validateConfig, planDays, payloadFor, resultFor, errorResult,

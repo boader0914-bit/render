@@ -19616,6 +19616,12 @@ async function route(req, res) {
           } finally { collectionRecoveryActive=false; }
         }));
       }
+      if(req.method==="POST" && reqUrl.pathname==="/api/collection-rotation/trial/preview")
+        return send(res,200,await collectionRotationScheduler.previewOneDayTrial(payload));
+      if(req.method==="POST" && reqUrl.pathname==="/api/collection-rotation/trial")
+        return send(res,200,await scheduleMutation(()=>collectionRotationScheduler.registerOneDayTrial(payload)));
+      if(req.method==="POST" && reqUrl.pathname==="/api/collection-rotation/trial/cancel")
+        return send(res,200,await scheduleMutation(()=>collectionRotationScheduler.cancelOneDayTrial(payload)));
       if(req.method==="POST" && reqUrl.pathname==="/api/collection-rotation/preview")
         return send(res,200,await collectionRotationScheduler.preview(payload.config,{days:payload.days??7,...(payload.startKeyword ? {startKeyword:payload.startKeyword} : {})}));
       if(req.method==="PUT" && reqUrl.pathname==="/api/collection-rotation")

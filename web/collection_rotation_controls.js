@@ -28,7 +28,17 @@
     ROTATION_WORKER_STATE_UNKNOWN: "수집기의 실행 상태를 확인하지 못했습니다. 상태를 새로고침하세요.",
     ROTATION_WORKER_RETIRED: "인사이트 서버로 전환된 수집기는 새 예약에 사용할 수 없습니다.",
     ROTATION_CONFIG_CHANGED: "다른 작업에서 예약 조건이 변경되었습니다. 상태를 새로고침하고 다시 확인하세요.",
-    ROTATION_SCHEDULE_CONFLICT: "기존 예약 또는 진행 중인 작업과 겹칩니다. 해당 예약과 실행 상태를 확인하세요."
+    ROTATION_SCHEDULE_CONFLICT: "기존 예약 또는 진행 중인 작업과 겹칩니다. 해당 예약과 실행 상태를 확인하세요.",
+    ROTATION_TRIAL_INPUT_INVALID: "시험일과 저장된 기본 조건을 다시 확인하세요.",
+    ROTATION_TRIAL_DATE_INVALID: "하루 시험은 한국시간 기준 내일부터 지정할 수 있습니다.",
+    ROTATION_TRIAL_BASE_CONFIG_INVALID: "하루 시험은 09시 시작·120분 간격·수집기별 2회인 기본 4회 조건에서만 등록할 수 있습니다.",
+    ROTATION_TRIAL_PLAN_CHANGED: "기본 조건이 변경됐습니다. 상태를 새로고침하고 시험 배정표를 다시 확인하세요.",
+    ROTATION_TRIAL_DAY_ALLOCATED: "이미 확정된 날짜의 배정은 바꾸지 않습니다. 다른 미래 날짜를 선택하세요.",
+    ROTATION_TRIAL_EXISTS: "해당 날짜의 하루 시험이 이미 등록돼 있습니다. 저장된 시험 상태를 확인하세요.",
+    ROTATION_TRIAL_PENDING: "등록된 하루 시험을 먼저 확인하세요. 기본 조건과 시험을 함께 변경하지 않습니다.",
+    ROTATION_TRIAL_REQUIRES_ENABLED: "기본 순환예약이 정상 대기 중일 때 하루 시험을 등록할 수 있습니다.",
+    ROTATION_TRIAL_NOT_FOUND: "저장된 하루 시험을 찾지 못했습니다. 상태를 새로고침하세요.",
+    ROTATION_TRIAL_CANCEL_FORBIDDEN: "이미 배정되었거나 지난 시험은 취소하지 않습니다. 기존 이력을 확인하세요."
   };
   function keywordEntries(text) { return String(text || "").split(/\r?\n/).map(value => value.normalize("NFKC").trim()).filter(Boolean); }
   function validDay(value) { return /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value; }
@@ -99,14 +109,30 @@
     const stamp = item => { const value = Date.parse(item.scheduledAt || item.notBeforeAt || ""); return Number.isFinite(value) ? value : Infinity; };
     return rows.sort((a, b) => stamp(a) - stamp(b));
   }
-  const exported = { POLICY_KEYWORDS, configFromDraft, draftFromConfig, defaultDraft, keywordEntries, reasonText, planLabel, formatTime, savedTableRows };
+  function oneDayTrialReady(status = {}, day, now = Date.now()) {
+    const config = status.config, workers = config?.workers;
+    return validDay(day) && day > todayKst(now) && /^[a-f0-9]{64}$/.test(status.basePlanHash || "")
+      && Number.isSafeInteger(status.revision) && status.revision > 0 && status.enabled === true && !status.active && !status.reason
+      && config?.time === "09:00" && config.keywordIntervalMinutes === 120 && config.keywords?.length >= 6
+      && Array.isArray(workers) && workers.length === 2
+      && ["web", "manual"].every(key => workers.some(worker => worker.workerKey === key && worker.dailyLimit === 2));
+  }
+  function oneDayPreviewMatches(value, status, day) {
+    return Boolean(value && value.day === day && value.baseRevision === status?.revision && value.basePlanHash === status?.basePlanHash
+      && value.baseDailySlots === 4 && value.trialDailySlots === 6 && value.configUnchanged === true && validDay(value.returnDay)
+      && value.returnDay === todayKst(Date.parse(`${day}T00:00:00+09:00`) + 86400000)
+      && Array.isArray(value.items) && value.items.length === 6 && value.items.every(item => (item.day || item.date) === day)
+      && Array.isArray(value.nextDayItems) && value.nextDayItems.length === 4 && value.nextDayItems.every(item => (item.day || item.date) === value.returnDay));
+  }
+  const exported = { POLICY_KEYWORDS, configFromDraft, draftFromConfig, defaultDraft, keywordEntries, reasonText, planLabel, formatTime, savedTableRows, oneDayTrialReady, oneDayPreviewMatches };
   if (typeof module === "object" && module.exports) module.exports = exported;
   if (typeof document === "undefined" || typeof window === "undefined") return;
 
   function mount(parent, options = {}) {
     if (!parent || document.getElementById("collectionRotationPanel")) return null;
     const request = options.fetch || window.fetch.bind(window), now = options.now || Date.now;
-    const inputs = {}, buttons = {}, view = {}; let saved = null, loaded = false, dirty = false, busy = false, readError = false, destroyed = false, sequence = 0, editRevision = 0, lastReadAt = 0, preview = null, pendingRead = null;
+    const inputs = {}, buttons = {}, view = {}, trialButtons = {}, trialView = {}; let saved = null, loaded = false, dirty = false, busy = false, readError = false, destroyed = false, sequence = 0, editRevision = 0, lastReadAt = 0, preview = null, pendingRead = null;
+    let trialPreview = null, trialEditRevision = 0, trialNeedsRead = false;
     const admin = () => document.body.classList.contains("role-admin") && !document.body.classList.contains("admin-user-view");
     const node = (tag, className = "", text = "") => { const el = document.createElement(tag); el.className = className; if (text) el.textContent = text; return el; };
     const details = node("details", "collection-rotation"); details.id = "collectionRotationPanel";
@@ -143,6 +169,21 @@
     for (const [name, label] of [["preview", "배정표 미리보기"], ["save", "조건 저장"], ["start", "순환예약 시작"], ["pause", "일시정지"]]) { const button = node("button", `rotation-button ${name === "start" ? "rotation-primary" : "rotation-secondary"}`, label); button.type = "button"; buttons[name] = button; actions.append(button); }
     form.append(actions); view.draft = node("p", "rotation-draft"); form.append(view.draft);
     view.notice = node("p", "rotation-notice"); view.notice.setAttribute("role", "status"); view.notice.setAttribute("aria-live", "polite"); view.notice.hidden = true; body.append(view.notice);
+    const trialSection = node("section", "rotation-trial"); trialSection.id = "rotationOneDayTrial"; trialSection.setAttribute("aria-label", "하루 6회 시험");
+    trialSection.append(node("h4", "", "하루 6회 시험"), node("p", "rotation-hint", "선택한 하루만 09·11·13·15·17·19시에 배정하고, 다음 날부터 기본 4회로 돌아갑니다. 기본 조건·순환 순서·기록은 유지합니다. 보호로 정지되면 계속 정지하며 자동으로 재개하지 않습니다."));
+    const trialDateLabel = node("label", "field rotation-trial-date"); trialDateLabel.append(node("span", "", "시험일 · 한국시간"));
+    const trialDay = node("input"); trialDay.id = "rotation_trialDay"; trialDay.type = "date"; trialDay.value = todayKst(now() + 86400000); trialDay.min = trialDay.value; trialDay.max = "2099-12-31"; trialDateLabel.append(trialDay); trialSection.append(trialDateLabel);
+    trialView.status = node("p", "rotation-trial-status"); trialView.status.setAttribute("role", "status"); trialSection.append(trialView.status);
+    const trialActions = node("div", "rotation-actions");
+    for (const [name, label] of [["preview", "시험 배정표 미리보기"], ["register", "하루 시험 등록"], ["cancel", "미배정 시험 취소"]]) {
+      const button = node("button", `rotation-button ${name === "register" ? "rotation-primary" : "rotation-secondary"}`, label); button.id = `rotation_trial_${name}`; button.type = "button"; trialButtons[name] = button; trialActions.append(button);
+    }
+    trialSection.append(trialActions); trialView.notice = node("p", "rotation-notice"); trialView.notice.hidden = true; trialView.notice.setAttribute("role", "status"); trialView.notice.setAttribute("aria-live", "polite"); trialSection.append(trialView.notice);
+    trialView.preview = node("div", "rotation-trial-preview"); trialView.preview.hidden = true;
+    trialView.previewNote = node("p", "rotation-hint"); trialView.preview.append(trialView.previewNote);
+    trialView.preview.append(node("h5", "", "시험일 · 6회 배정")); trialView.table = node("div", "rotation-table-wrap"); trialView.table.setAttribute("role", "region"); trialView.table.setAttribute("aria-label", "시험일 6회 미리보기"); trialView.table.tabIndex = 0; trialView.preview.append(trialView.table);
+    trialView.preview.append(node("h5", "", "다음 날 · 기본 4회 배정")); trialView.nextTable = node("div", "rotation-table-wrap"); trialView.nextTable.setAttribute("role", "region"); trialView.nextTable.setAttribute("aria-label", "다음 날 4회 미리보기"); trialView.nextTable.tabIndex = 0; trialView.preview.append(trialView.nextTable);
+    trialSection.append(trialView.preview); body.append(trialSection);
     const scheduleHead = node("div", "rotation-section-head"); view.tableTitle = node("h4", "", "저장된 배정표"); buttons.refresh = node("button", "rotation-button rotation-secondary", "상태 새로고침"); buttons.refresh.type = "button"; scheduleHead.append(view.tableTitle, buttons.refresh); body.append(scheduleHead);
     view.tableNote = node("p", "rotation-hint", "조건을 확인한 뒤 배정표를 미리 볼 수 있습니다."); body.append(view.tableNote);
     view.table = node("div", "rotation-table-wrap"); view.table.tabIndex = 0; view.table.setAttribute("role", "region"); view.table.setAttribute("aria-label", "날짜별 순환 배정표"); body.append(view.table);
@@ -152,6 +193,27 @@
     function fill(values) { for (const [name, input] of Object.entries(inputs)) { if (input.type === "checkbox") input.checked = Boolean(values[name]); else input.value = values[name] ?? ""; } }
     fill(defaultDraft(now()));
     function notice(message, tone = "") { view.notice.textContent = message || ""; view.notice.hidden = !message; view.notice.dataset.tone = tone; }
+    function trialNotice(message, tone = "") { trialView.notice.textContent = message || ""; trialView.notice.hidden = !message; trialView.notice.dataset.tone = tone; }
+    function currentTrial() {
+      const trials = [saved?.oneDayTrial, ...(Array.isArray(saved?.oneDayTrials) ? saved.oneDayTrials : [])].filter(Boolean);
+      return trials.find(item => ["armed", "allocated", "needs_verification"].includes(item.status)) || trials[0] || null;
+    }
+    function renderTrial() {
+      const trial = currentTrial();
+      if (!loaded) trialView.status.textContent = "저장된 하루 시험 상태를 확인하고 있습니다.";
+      else if (!saved?.basePlanHash) trialView.status.textContent = "현재 서버에서 하루 시험 상태를 확인하지 못했습니다. 상태를 새로고침하세요.";
+      else if (trial) {
+        const labels = { armed: "등록됨 · 아직 미배정", allocated: "배정 확정 · 기록 보존", expired: "시험일 경과 · 기본 4회 유지", cancelled: "취소됨 · 기본 4회 유지", needs_verification: "확인 필요 · 자동 변경 없음" };
+        trialView.status.textContent = `${trial.day || "날짜 확인 필요"} · ${labels[trial.status] || "상태 확인 필요"}${trial.returnDay ? ` · ${trial.returnDay}부터 기본 4회` : ""}`;
+      } else trialView.status.textContent = "등록된 하루 시험이 없습니다. 저장된 기본 4회 조건으로 시험 배정표를 먼저 확인하세요.";
+      if (readError) trialView.status.textContent += " · 마지막 확인값이며 현재 상태를 새로 확인하지 못했습니다.";
+      trialView.preview.hidden = !trialPreview;
+      if (trialPreview) {
+        trialView.previewNote.textContent = `${trialPreview.day} 하루 6회 → ${trialPreview.returnDay}부터 기본 4회 · 미리보기이며 등록 전에는 예약이 변경되지 않습니다. 등록 시 연결·보호 상태를 다시 확인합니다.`;
+        renderRows(trialPreview.items, saved.config, trialView.table, "시험일 6회 미리보기");
+        renderRows(trialPreview.nextDayItems, saved.config, trialView.nextTable, "다음 날 4회 미리보기");
+      } else { trialView.previewNote.textContent = ""; trialView.table.replaceChildren(); trialView.nextTable.replaceChildren(); }
+    }
     let startChoicesKey = "";
     function sync() {
       const values = readValues(), keywords = keywordEntries(values.keywords), dupes = keywords.length - new Set(keywords.map(value => value.toLowerCase())).size;
@@ -174,6 +236,14 @@
       buttons.pause.disabled = !allowed || busy || !saved?.enabled; buttons.refresh.disabled = !allowed || busy;
       view.draft.textContent = locked ? "실행 중인 조건입니다. 일시정지하고 진행 작업이 끝나면 변경할 수 있습니다." : dirty ? "편집안 · 변경한 조건은 아직 저장되지 않았습니다. 저장 후 시작하세요." : saved?.config?.keywords?.length ? `저장본${saved.revision ? ` · 개정 ${saved.revision}` : ""} · 조건 저장만으로 수집을 시작하지 않습니다.` : "조건 저장 전 · 미리보기와 저장은 수집을 시작하지 않습니다.";
       details.dataset.state = saved?.enabled ? "active" : saved?.reason || readError ? "attention" : "idle";
+      const trial = currentTrial(), hasPendingTrial = trial && trial.day >= todayKst(now()) && ["armed", "allocated", "needs_verification"].includes(trial.status);
+      const trialAllowed = allowed && loaded && !busy && !readError && !trialNeedsRead && !dirty;
+      trialSection.hidden = !allowed;
+      trialDay.disabled = !allowed || busy;
+      trialDay.min = todayKst(now() + 86400000);
+      trialButtons.preview.disabled = !trialAllowed || hasPendingTrial || !oneDayTrialReady(saved || {}, trialDay.value, now());
+      trialButtons.register.disabled = trialButtons.preview.disabled || !oneDayPreviewMatches(trialPreview, saved, trialDay.value);
+      trialButtons.cancel.disabled = !allowed || !loaded || busy || readError || trialNeedsRead || dirty || !["armed", "needs_verification"].includes(trial?.status) || !trial?.trialId || !validDay(trial.day) || trial.day <= todayKst(now()) || !saved?.basePlanHash;
     }
     function postprocessStatus(value) {
       if (!value) return null;
@@ -185,9 +255,9 @@
         value.attempts ? `DB 반영 시도 ${value.attempts}/${value.maxAttempts || 3}` : ""].filter(Boolean).join(" · ");
       return status;
     }
-    function renderRows(rows, config) {
-      if (!rows?.length) { view.table.replaceChildren(node("p", "rotation-empty", "표시할 배정이 없습니다.")); return; }
-      const table = node("table", "rotation-table"), caption = node("caption", "rotation-sr-only", view.tableTitle.textContent); table.append(caption);
+    function renderRows(rows, config, target = view.table, title = view.tableTitle.textContent) {
+      if (!rows?.length) { target.replaceChildren(node("p", "rotation-empty", "표시할 배정이 없습니다.")); return; }
+      const table = node("table", "rotation-table"), caption = node("caption", "rotation-sr-only", title); table.append(caption);
       const thead = node("thead"), heading = node("tr");
       for (const text of ["날짜 · 예정", "수집기", "키워드", "숙박 조회기간", "상태 · 실제 시작"]) { const th = node("th", "", text); th.scope = "col"; heading.append(th); } thead.append(heading); table.append(thead);
       const tbody = node("tbody");
@@ -206,7 +276,7 @@
         if (item.runId) { const link = node("button", "rotation-result-link", "결과 보기"); link.type = "button"; link.addEventListener("click", () => window.dispatchEvent(new CustomEvent("collector:open-result", { detail: { runId: item.runId } }))); state.append(link); }
         tr.append(dates, worker, keyword, range, state); tbody.append(tr);
       }
-      table.append(tbody); view.table.replaceChildren(table);
+      table.append(tbody); target.replaceChildren(table);
     }
     function renderStatus() {
       view.badge.textContent = readError ? "상태 확인 필요" : loaded ? planLabel(saved || {}) : "상태 확인 전";
@@ -217,7 +287,8 @@
       view.reason.textContent = saved?.reason ? reasonText(saved.reason) : ""; view.reason.hidden = !saved?.reason;
       view.freshness.textContent = readError ? "상태를 새로 확인하지 못했습니다. 아래 자료는 마지막 확인값입니다." : lastReadAt ? `상태 확인 ${formatTime(new Date(lastReadAt).toISOString())} · 예정 시각보다 늦게 시작될 수 있습니다.` : "";
       if (!preview) { view.tableTitle.textContent = "저장된 배정표"; view.tableNote.textContent = "오늘 저장된 배정과 향후 순환 순서입니다. 미래 항목은 실행 전 변경될 수 있습니다."; renderRows(savedTableRows(saved || {}), saved?.config); }
-      sync();
+      if (trialPreview && (readError || !oneDayPreviewMatches(trialPreview, saved, trialDay.value) || dirty || currentTrial()?.status === "armed")) trialPreview = null;
+      renderTrial(); sync();
     }
     async function api(path, method = "GET", payload) {
       const response = await request(`/api/collection-rotation${path}`, { method, credentials: "same-origin", ...(payload === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }) });
@@ -230,12 +301,12 @@
       if (pendingRead) return pendingRead;
       const seq = ++sequence;
       pendingRead = (async () => {
-        try { const result = await api(""); if (destroyed || !admin() || seq !== sequence) return; saved = result; readError = false; lastReadAt = now(); if (!dirty) fill(draftFromConfig(saved.config, now())); loaded = true; renderStatus(); }
+        try { const result = await api(""); if (destroyed || !admin() || seq !== sequence) return; saved = result; readError = false; trialNeedsRead = false; lastReadAt = now(); if (!dirty) fill(draftFromConfig(saved.config, now())); loaded = true; renderStatus(); }
         catch (error) { if (seq !== sequence || destroyed) return; readError = true; renderStatus(); notice(error.message, "error"); }
       })().finally(() => { pendingRead = null; });
       return pendingRead;
     }
-    function changed() { dirty = true; editRevision++; preview = null; if (readValues().purpose === "basic_db" && inputs.dayUseMode.value === "detail") inputs.dayUseMode.value = "inspect"; notice(""); view.tableTitle.textContent = "배정표 확인 필요"; view.tableNote.textContent = "편집안을 변경했습니다. 미리보기로 새 배정 순서를 확인하세요."; view.table.replaceChildren(); sync(); }
+    function changed() { dirty = true; editRevision++; preview = null; trialPreview = null; renderTrial(); if (readValues().purpose === "basic_db" && inputs.dayUseMode.value === "detail") inputs.dayUseMode.value = "inspect"; notice(""); view.tableTitle.textContent = "배정표 확인 필요"; view.tableNote.textContent = "편집안을 변경했습니다. 미리보기로 새 배정 순서를 확인하세요."; view.table.replaceChildren(); sync(); }
     form.addEventListener("submit", event => event.preventDefault());
     for (const input of Object.values(inputs)) { input.addEventListener("input", changed); input.addEventListener("change", changed); }
     buttons.policy.addEventListener("click", () => { inputs.keywords.value = POLICY_KEYWORDS.join("\n"); changed(); notice("기존 13개 목록을 편집안에 불러왔습니다. 저장과 시작은 별도입니다."); });
@@ -256,11 +327,39 @@
     }));
     buttons.pause.addEventListener("click", () => action(async () => { const result = await api("/enabled", "POST", { enabled: false }); if (result?.config) saved = result; preview = null; await refresh(); notice("순환예약을 일시정지했습니다. 이미 진행 중인 수집은 결과 저장까지 마무리합니다.", "success"); window.dispatchEvent(new CustomEvent("collector:rotation-changed")); }));
     buttons.refresh.addEventListener("click", () => { preview = null; return refresh(); });
+    trialDay.addEventListener("input", () => { trialEditRevision++; trialPreview = null; trialNotice(""); renderTrial(); sync(); });
+    trialDay.addEventListener("change", () => { trialEditRevision++; trialPreview = null; trialNotice(""); renderTrial(); sync(); });
+    const trialInput = () => ({ day: trialDay.value, expectedRevision: saved.revision, expectedPlanHash: saved.basePlanHash });
+    async function trialAction(task) {
+      if (busy || !admin()) return; busy = true; sync();
+      try { if (pendingRead) await pendingRead; if (!destroyed && admin()) await task(); }
+      catch (error) { trialPreview = null; renderTrial(); trialNotice(error.message, "error"); }
+      finally { busy = false; sync(); }
+    }
+    trialButtons.preview.addEventListener("click", () => trialAction(async () => {
+      if (dirty || readError || trialNeedsRead || !oneDayTrialReady(saved || {}, trialDay.value, now())) throw new Error("저장된 기본 4회 조건과 미래 시험일을 확인하세요.");
+      const input = trialInput(), revision = trialEditRevision, draftRevision = editRevision;
+      trialNotice("시험일 6회와 다음 날 4회 배정표를 확인하고 있습니다.");
+      const result = await api("/trial/preview", "POST", input);
+      if (destroyed || !admin() || revision !== trialEditRevision || draftRevision !== editRevision || dirty) return;
+      if (!oneDayPreviewMatches(result, saved, input.day)) throw new Error("시험 배정표와 현재 저장 조건이 일치하지 않습니다. 상태를 새로고침하세요.");
+      trialPreview = result; renderTrial(); trialNotice("시험 배정표를 확인했습니다. 하루 시험 등록을 누르면 선택한 날짜에만 적용됩니다.", "success");
+    }));
+    trialButtons.register.addEventListener("click", () => trialAction(async () => {
+      if (dirty || readError || trialNeedsRead || !oneDayTrialReady(saved || {}, trialDay.value, now()) || !oneDayPreviewMatches(trialPreview, saved, trialDay.value)) throw new Error("현재 조건의 시험 배정표를 먼저 확인하세요.");
+      try { const result = await api("/trial", "POST", trialInput()); if (destroyed || !admin()) return; saved = result; trialPreview = null; renderStatus(); await refresh(); if (!readError) trialNotice("하루 시험을 등록했습니다. 시험일만 6회이고 다음 날부터 기본 4회입니다. 지금 수집을 실행하지 않습니다.", "success"); }
+      catch (error) { trialNeedsRead = true; throw error; }
+    }));
+    trialButtons.cancel.addEventListener("click", () => trialAction(async () => {
+      const trial = currentTrial(); if (dirty || readError || trialNeedsRead || !["armed", "needs_verification"].includes(trial?.status) || !trial?.trialId || !validDay(trial.day) || trial.day <= todayKst(now())) throw new Error("미래의 미배정 시험만 취소할 수 있습니다.");
+      try { const result = await api("/trial/cancel", "POST", { trialId: trial.trialId, expectedRevision: saved.revision, expectedPlanHash: saved.basePlanHash }); if (destroyed || !admin()) return; saved = result; trialPreview = null; renderStatus(); await refresh(); if (!readError) trialNotice("미배정 시험을 취소했습니다. 기본 조건과 기존 기록·보호 상태는 유지합니다.", "success"); }
+      catch (error) { trialNeedsRead = true; throw error; }
+    }));
     details.addEventListener("toggle", () => { try { window.localStorage.setItem("staydatalab:collection-rotation-open:v1", String(details.open)); } catch { /* Open state is optional. */ } if (!busy && details.open && admin()) refresh(); });
     const onVisible = () => { if (!busy && admin() && !document.hidden && details.open) refresh(); };
     document.addEventListener("visibilitychange", onVisible);
     const observer = new MutationObserver(() => {
-      if (!admin()) { sequence++; saved = null; preview = null; loaded = false; readError = false; dirty = false; fill(defaultDraft(now())); view.table.replaceChildren(); view.headline.textContent = "관리자 연결을 확인하세요."; view.next.textContent = ""; view.reason.textContent = ""; view.freshness.textContent = ""; view.badge.textContent = "관리자 연결 필요"; notice(""); sync(); }
+      if (!admin()) { sequence++; saved = null; preview = null; trialPreview = null; trialNeedsRead = false; loaded = false; readError = false; dirty = false; fill(defaultDraft(now())); view.table.replaceChildren(); view.headline.textContent = "관리자 연결을 확인하세요."; view.next.textContent = ""; view.reason.textContent = ""; view.freshness.textContent = ""; view.badge.textContent = "관리자 연결 필요"; notice(""); trialNotice(""); renderTrial(); sync(); }
       else if (!loaded && !pendingRead) refresh();
     }); observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
     const timer = window.setInterval(() => { if (!busy && details.open && admin() && !document.hidden && now() - lastReadAt >= 15000) refresh(); }, 15000);
