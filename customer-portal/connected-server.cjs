@@ -189,6 +189,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   staticMap['/comparison-view.js']=['comparison-view.js','text/javascript'];
   staticMap['/comparison-readiness.js']=['comparison-readiness.js','text/javascript'];
   staticMap['/comparison-readiness-view.js']=['comparison-readiness-view.js','text/javascript'];
+  for(const name of ['operating-strategy.js','operating-strategy-view.js','operating-strategy.css'])staticMap['/'+name]=[name,name.endsWith('.css')?'text/css':'text/javascript'];
   staticMap['/comparison.css']=['comparison.css','text/css'];
   for(const name of ['regional-context.js','regional-context-view.js','regional-context.css','home-context-view.js','home-context.css','context-workspace.js'])staticMap['/'+name]=[name,name.endsWith('.css')?'text/css':'text/javascript'];
   staticMap['/archive.js']=['archive.js','text/javascript'];
