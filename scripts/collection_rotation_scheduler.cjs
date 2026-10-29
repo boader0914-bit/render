@@ -7,6 +7,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
 const { sanitizeCollectionQuality } = require("./lib/collection_diagnostics.cjs");
+const { monitorRange, monitorItem } = require("./lib/collection_monitor.cjs");
 
 const VERSION = 1;
 const MIN_FREE_BYTES = 200 * 1024 * 1024;
@@ -446,6 +447,50 @@ function createCollectionRotationScheduler(options = {}) {
     });
     return status();
   }
+  function dailyLimitsCandidate(input) {
+    keysOnly(input, ["workers", "expectedRevision"], "ROTATION_LIMITS_INPUT_INVALID");
+    const record = state(), current = configOf(record);
+    if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) throw fault("ROTATION_LIMITS_INPUT_INVALID");
+    if (record.revision !== input.expectedRevision) throw fault("ROTATION_CONFIG_CHANGED", 409);
+    if (activeId || ticking) throw fault("ROTATION_COLLECTORS_BUSY", 409);
+    if (record.reason && record.reason !== "ROTATION_PAUSED_BY_USER"
+      || ["review", "uncertain", "attention", "error"].includes(record.plan_state)) throw fault("ROTATION_LIMITS_PROTECTED", 409);
+    if (db.prepare("SELECT id FROM rotation_slots WHERE status='uncertain' LIMIT 1").get()) throw fault("ROTATION_UNRESOLVED_EXECUTION", 409);
+    if (db.prepare("SELECT trial_id FROM rotation_one_day_trials WHERE cancelled_at IS NULL AND day>=? LIMIT 1").get(dateKey(instant()))) throw fault("ROTATION_TRIAL_PENDING", 409);
+    if (!Array.isArray(input.workers) || input.workers.length !== current.workers.length
+      || input.workers.some((worker, index) => worker?.workerKey !== current.workers[index].workerKey)) throw fault("ROTATION_LIMITS_INPUT_INVALID");
+    const config = validateConfig({ ...current, workers: input.workers });
+    return { record, current, config };
+  }
+  function nextUnallocatedDay(config, today = dateKey(instant())) {
+    const latest = db.prepare("SELECT MAX(day) AS day FROM rotation_days").get().day;
+    const first = config.firstDate > today ? config.firstDate : today;
+    return latest && latest >= first ? addDays(latest, 1) : first;
+  }
+  async function updateDailyLimits(input) {
+    initialize();
+    const before = dailyLimitsCandidate(input), checkEpoch = epoch, day = dateKey(instant());
+    const changed = JSON.stringify(before.current.workers) !== JSON.stringify(before.config.workers);
+    const metadata = revision => ({ changed, previousRevision: before.record.revision, revision,
+      previousDailySlots: workerOrder(before.current).length, dailySlots: workerOrder(before.config).length,
+      effectiveFrom: nextUnallocatedDay(before.config), todayAllocated: Boolean(db.prepare("SELECT day FROM rotation_days WHERE day=?").get(day)),
+      todayAllocatedSlotsPreserved: true, enabledPreserved: true, cursorPreserved: true });
+    if (!changed) return { ...status(), dailyLimitsUpdate: metadata(before.record.revision) };
+    // Read the same admission guards as activation, but never activate, pause,
+    // rewrite an allocated day, or change any collection/pacing condition.
+    await checkActivation(before.config);
+    transaction(() => {
+      const after = dailyLimitsCandidate(input);
+      if (checkEpoch !== epoch || dateKey(instant()) !== day || before.record.config_json !== after.record.config_json
+        || before.record.cursor !== after.record.cursor || before.record.plan_state !== after.record.plan_state || before.record.reason !== after.record.reason) throw fault("ROTATION_CONFIG_CHANGED", 409);
+      const revision = after.record.revision + 1, at = instant().toISOString();
+      db.prepare("INSERT INTO rotation_revisions VALUES(?,?,?)").run(revision, JSON.stringify(after.config), at);
+      db.prepare("UPDATE rotation_state SET revision=?,config_json=?,updated_at=? WHERE id=1").run(revision, JSON.stringify(after.config), at);
+      event("daily_limits_saved");
+    });
+    const result = status();
+    return { ...result, dailyLimitsUpdate: metadata(result.revision) };
+  }
   async function setEnabled(enabled) {
     initialize();
     if (typeof enabled !== "boolean") throw fault("ROTATION_ENABLED_INVALID");
@@ -729,6 +774,98 @@ function createCollectionRotationScheduler(options = {}) {
     return { dryRun: false, applied: true, alreadyApplied: false, expectedVersion: previewVersion, evidenceRechecked: true,
       verifiedAt, proof: proofRecord, item: rowItem(reconciliationSlot(slotId).row), planRemainsDisabled: true };
   }
+  function monitorSnapshot(query = {}) {
+    const range = monitorRange(query, instant());
+    const unavailable = errorCode => ({ version: VERSION, ...range, available: false, errorCode,
+      enabled: null, planState: "unknown", reason: null, keywords: [], currentPlan: null, items: [], coverage: { complete: false, days: [] } });
+    // Diagnostics must never open, recover, migrate, allocate or tick a store.
+    if (!db) return unavailable("COLLECTION_MONITOR_ROTATION_NOT_INITIALIZED");
+    let reading = false;
+    try {
+      db.exec("BEGIN;"); reading = true;
+      const record = state(), config = configOf(record), snapshots = new Map();
+      for (const row of db.prepare("SELECT day,revision,config_json FROM rotation_days WHERE day>=? AND day<=? ORDER BY day").all(range.from, range.to)) {
+        if (typeof row.config_json !== "string" || Buffer.byteLength(row.config_json) > 65536) throw fault("COLLECTION_MONITOR_STATE_INVALID");
+        snapshots.set(row.day, { revision: row.revision, config: validateConfig(JSON.parse(row.config_json)) });
+      }
+      const trialDays = new Map(db.prepare("SELECT day,trial_id FROM rotation_one_day_trial_days WHERE day>=? AND day<=? ORDER BY day LIMIT 8")
+        .all(range.from, range.to).map(row => [row.day, row.trial_id]));
+      if (trialDays.size > 7) throw fault("COLLECTION_MONITOR_STATE_INVALID");
+      // Bound aggregate JSON bytes in SQLite, before transferring result text.
+      // Raw private receipt_json is deliberately never selected.
+      const footprint = db.prepare(`SELECT COUNT(*) AS count,
+        COALESCE(SUM(length(CAST(result_json AS BLOB))),0) AS result_bytes,
+        COALESCE(MAX(length(CAST(result_json AS BLOB))),0) AS max_result_bytes
+        FROM rotation_slots WHERE day>=? AND day<=?`).get(range.from, range.to);
+      if (footprint.count > 700) throw fault("COLLECTION_MONITOR_SCAN_LIMIT");
+      if (footprint.result_bytes > 8 * 1024 * 1024 || footprint.max_result_bytes > 1024 * 1024) throw fault("COLLECTION_MONITOR_PAYLOAD_LIMIT");
+      const rows = db.prepare(`SELECT id,day,slot_index,worker_key,keyword,scheduled_at,status,started_at,finished_at,error_code,result_json
+        FROM rotation_slots WHERE day>=? AND day<=? ORDER BY day,slot_index LIMIT 701`).all(range.from, range.to);
+      if (rows.length !== footprint.count || rows.length > 700) throw fault("COLLECTION_MONITOR_STATE_CHANGED");
+      for (const [day, snapshot] of snapshots) {
+        if (rows.filter(row => row.day === day).length !== workerOrder(snapshot.config).length) throw fault("COLLECTION_MONITOR_DAY_SNAPSHOT_INCOMPLETE");
+      }
+      const items = rows.map(row => {
+        const snapshot = snapshots.get(row.day);
+        if (!snapshot || row.result_json && (typeof row.result_json !== "string" || Buffer.byteLength(row.result_json) > 1024 * 1024)) throw fault("COLLECTION_MONITOR_STATE_INVALID");
+        const result = row.result_json ? JSON.parse(row.result_json) : {};
+        if (!object(result)) throw fault("COLLECTION_MONITOR_STATE_INVALID");
+        const conditions = payloadFor(snapshot.config, { ...row, day: row.day, workerKey: row.worker_key, keyword: row.keyword });
+        const conflict = result.status !== undefined && result.status !== row.status;
+        return monitorItem({ id: row.id, day: row.day, index: row.slot_index, revision: snapshot.revision,
+          workerKey: row.worker_key, keyword: row.keyword, scheduledAt: row.scheduled_at, notBeforeAt: notBefore(row),
+          status: conflict ? "uncertain" : row.status, acceptedAt: row.started_at, startedAt: result.executionStartedAt,
+          finishedAt: row.finished_at, errorCode: conflict ? "COLLECTION_MONITOR_RESULT_STATUS_MISMATCH" : row.error_code,
+          runId: result.runId, collectionQuality: result.collectionQuality, conditions,
+          trialId: trialDays.get(row.day), planKind: trialDays.has(row.day) ? "one_day_trial" : "regular" });
+      });
+      const projectionStart = nextUnallocatedDay(config, range.today), projectedDays = new Map();
+      if (projectionStart <= range.to) {
+        const start = range.from > projectionStart ? range.from : projectionStart;
+        const offsetDays = (Date.parse(start) - Date.parse(projectionStart)) / DAY_MS, perDay = workerOrder(config).length;
+        let projectedCursor = record.cursor + offsetDays * perDay;
+        // A later selected week must carry the extra two positions of any
+        // intervening date-scoped trial, without allocating or changing it.
+        const futureTrials = db.prepare("SELECT * FROM rotation_one_day_trials WHERE cancelled_at IS NULL AND day>=? AND day<? ORDER BY day LIMIT 32").all(projectionStart, start);
+        if (futureTrials.length > 31) throw fault("COLLECTION_MONITOR_SCAN_LIMIT");
+        for (const trial of futureTrials) {
+          if (!trialMatches(trial, record, config)) throw fault("ROTATION_TRIAL_PLAN_CHANGED", 409);
+          projectedCursor += workerOrder(trialBaseConfig(config)).length - perDay;
+        }
+        projectedCursor %= config.keywords.length;
+        const days = (Date.parse(range.to) - Date.parse(start)) / DAY_MS + 1;
+        for (const slot of planWithTrials(config, { days, startDate: start, cursor: projectedCursor }).items) {
+          const effective = configForDay(config, slot.day, record);
+          projectedDays.set(slot.day, { dailySlots: workerOrder(effective).length, planKind: slot.trialId ? "one_day_trial" : "regular" });
+          items.push(monitorItem({ ...slot, revision: record.revision, projected: true,
+            planKind: slot.trialId ? "one_day_trial" : "regular", conditions: payloadFor(effective, slot) }));
+        }
+      }
+      const days = [];
+      for (let day = range.from; day <= range.to; day = addDays(day, 1)) {
+        const saved = snapshots.get(day), projected = projectedDays.get(day);
+        days.push({ day, status: saved ? "saved" : projected ? "projected" : day < config.firstDate ? "not_started" : "missing",
+          count: items.filter(item => item.day === day).length,
+          dailySlots: saved ? workerOrder(saved.config).length : projected?.dailySlots ?? null,
+          planKind: saved ? trialDays.has(day) ? "one_day_trial" : "regular" : projected?.planKind ?? null });
+      }
+      const result = { version: VERSION, ...range, available: true, errorCode: null, enabled: config.enabled, stopped,
+        planState: activeId ? "running" : record.plan_state, reason: record.reason ? safeCode(record.reason) : null,
+        revision: record.revision, updatedAt: typeof record.updated_at === "string" && Number.isFinite(Date.parse(record.updated_at)) ? new Date(record.updated_at).toISOString() : null, activeSlotId: activeId,
+        keywords: [...new Set([...config.keywords, ...items.map(item => item.keyword)])],
+        currentPlan: { source: "saved_config", revision: record.revision, dailySlots: workerOrder(config).length, workers: clone(config.workers),
+          time: config.time, keywordIntervalMinutes: config.keywordIntervalMinutes, bookingDays: config.collection.bookingDays,
+          detailRankRanges: config.collection.detailRankRanges, keywordCount: config.keywords.length, nextUnallocatedDay: projectionStart },
+        projectionEnabled: config.enabled && !stopped, items,
+        coverage: { complete: days.every(day => day.status !== "missing"), days, actualItems: rows.length,
+          projectedItems: items.length - rows.length, source: "initialized_rotation_store", historyFrom: range.from, historyTo: range.to } };
+      db.exec("COMMIT;"); reading = false;
+      return result;
+    } catch (error) {
+      if (reading) { try { db.exec("ROLLBACK;"); } catch { /* A diagnostic failure never repairs a store. */ } }
+      return unavailable(safeCode(error?.code, "COLLECTION_MONITOR_STATE_UNAVAILABLE"));
+    }
+  }
   function status() {
     initialize();
     const record = state();
@@ -765,7 +902,7 @@ function createCollectionRotationScheduler(options = {}) {
   function stop() { stopped = true; epoch += 1; if (timer) clearIntervalImpl(timer); timer = null; }
   function close() { stop(); if (activeId || ticking) throw fault("ROTATION_EXECUTION_ACTIVE", 409); if (db) { db.close(); db = null; } }
   function isEnabled() { initialize(); return configOf().enabled && !stopped; }
-  return { status, preview, previewOneDayTrial, registerOneDayTrial, cancelOneDayTrial, updateConfig, setEnabled, tick, start, stop, history, close, isEnabled, reconcileCompleted, storePath };
+  return { status, monitorSnapshot, preview, previewOneDayTrial, registerOneDayTrial, cancelOneDayTrial, updateConfig, updateDailyLimits, setEnabled, tick, start, stop, history, close, isEnabled, reconcileCompleted, storePath };
 }
 
 module.exports = { createCollectionRotationScheduler, defaultConfig, validateConfig, planDays, payloadFor, resultFor, errorResult,

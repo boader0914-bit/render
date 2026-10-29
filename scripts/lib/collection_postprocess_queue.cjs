@@ -6,6 +6,7 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { monitorPostprocessItem } = require("./collection_monitor.cjs");
 const VERSION = 1;
 const STATES = new Set(["held", "queued", "running", "complete", "failed"]);
 const TERMINAL = new Set(["complete", "failed"]);
@@ -72,7 +73,7 @@ function createCollectionPostprocessQueue(options = {}) {
   const maxPending = bounded(options.maxPending, 256, 1, 1024);
   const directory = path.resolve(dataDir, "collection_postprocess"), records = path.join(directory, "runs"),
     pendingDirectory = path.join(directory, "pending"), stateFile = path.join(directory, "queue.json");
-  let state = { version: VERSION, sequence: 0, jobs: {} }, initPromise, serial = Promise.resolve(), workerPromise = null;
+  let state = { version: VERSION, sequence: 0, jobs: {} }, initPromise, initialized = false, serial = Promise.resolve(), workerPromise = null;
   let timer = null, started = false, closed = false, storeError = null, activeRunId = null, controller = null;
   const timestamp = () => {
     const result = new Date(now());
@@ -209,6 +210,7 @@ function createCollectionPostprocessQueue(options = {}) {
         }
         if (changed || Object.keys(state.jobs).length !== Object.keys(stored.jobs).length) await atomicJson(stateFile, state);
         for (const runId of discardSpool) await fileSystem.unlink(pendingFor(runId)).catch(error => { if (error.code !== "ENOENT") throw error; });
+        initialized = true;
       } catch (error) { storeError = safeCode(error); throw error; }
     })();
     return initPromise;
@@ -332,6 +334,15 @@ function createCollectionPostprocessQueue(options = {}) {
     return Object.values(state.jobs).filter(job => job.status === "held")
       .sort((a, b) => a.sequence - b.sequence).map(publicRow);
   }
+  function peekMonitor({ runIds = [] } = {}) {
+    if (!Array.isArray(runIds) || runIds.length > 700 || runIds.some(runId => !validRunId(runId))) throw fault("COLLECTION_MONITOR_RUN_IDS_INVALID");
+    const unique = [...new Set(runIds)];
+    // Memory only. A diagnostic read must not recover a journal or start work.
+    if (!initialized || storeError || closed) return { available: false, source: "memory", items: [], missingRunIds: unique,
+      errorCode: storeError || (closed ? "COLLECTION_MONITOR_POSTPROCESS_CLOSED" : "COLLECTION_MONITOR_POSTPROCESS_NOT_INITIALIZED") };
+    const items = unique.filter(runId => Object.hasOwn(state.jobs, runId)).map(runId => monitorPostprocessItem(state.jobs[runId]));
+    return { available: true, source: "memory", items, missingRunIds: unique.filter(runId => !Object.hasOwn(state.jobs, runId)), errorCode: null };
+  }
   async function start() { await initialize(); assertHealthy(); if (closed) throw fault("COLLECTION_POSTPROCESS_CLOSED"); started = true; schedule(0); return status(); }
   async function close() {
     closed = true; started = false;
@@ -340,7 +351,7 @@ function createCollectionPostprocessQueue(options = {}) {
     if (workerPromise) await workerPromise.catch(() => {});
     await serial;
   }
-  return { enqueue, release, runOnce, start, close, get, status, held, stateFile };
+  return { enqueue, release, runOnce, start, close, get, status, peekMonitor, held, stateFile };
 }
 
 module.exports = { createCollectionPostprocessQueue };

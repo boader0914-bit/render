@@ -28,6 +28,9 @@
     ROTATION_WORKER_STATE_UNKNOWN: "수집기의 실행 상태를 확인하지 못했습니다. 상태를 새로고침하세요.",
     ROTATION_WORKER_RETIRED: "인사이트 서버로 전환된 수집기는 새 예약에 사용할 수 없습니다.",
     ROTATION_CONFIG_CHANGED: "다른 작업에서 예약 조건이 변경되었습니다. 상태를 새로고침하고 다시 확인하세요.",
+    ROTATION_LIMITS_INPUT_INVALID: "저장된 수집기와 하루 배정 수를 다시 확인하세요.",
+    ROTATION_LIMITS_PROTECTED: "현재 예약이 정지되었거나 보호·검토 중입니다. 횟수 전환으로 자동 재개하지 않습니다.",
+    ROTATION_LIMITS_ORIGIN_REJECTED: "현재 데이터랩 관리자 화면에서 전환해 주세요.",
     ROTATION_SCHEDULE_CONFLICT: "기존 예약 또는 진행 중인 작업과 겹칩니다. 해당 예약과 실행 상태를 확인하세요.",
     ROTATION_TRIAL_INPUT_INVALID: "시험일과 저장된 기본 조건을 다시 확인하세요.",
     ROTATION_TRIAL_DATE_INVALID: "하루 시험은 한국시간 기준 내일부터 지정할 수 있습니다.",
@@ -124,7 +127,18 @@
       && Array.isArray(value.items) && value.items.length === 6 && value.items.every(item => (item.day || item.date) === day)
       && Array.isArray(value.nextDayItems) && value.nextDayItems.length === 4 && value.nextDayItems.every(item => (item.day || item.date) === value.returnDay));
   }
-  const exported = { POLICY_KEYWORDS, configFromDraft, draftFromConfig, defaultDraft, keywordEntries, reasonText, planLabel, formatTime, savedTableRows, oneDayTrialReady, oneDayPreviewMatches };
+  function regularSixReady(status = {}) {
+    const config = status.config, workers = config?.workers;
+    return status.enabled === true && !status.active && !status.reason && Number.isSafeInteger(status.revision) && status.revision > 0
+      && config?.time === "09:00" && config.keywordIntervalMinutes === 120 && config.keywords?.length >= 6
+      && Array.isArray(workers) && workers.length === 2 && workers[0].workerKey === "web" && workers[1].workerKey === "manual"
+      && workers.every(worker => worker.dailyLimit === 2);
+  }
+  function regularSixInput(status) {
+    if (!regularSixReady(status)) throw new Error("현재 예약 조건과 보호·진행 상태를 새로 확인하세요.");
+    return { expectedRevision: status.revision, workers: status.config.workers.map(worker => ({ workerKey: worker.workerKey, dailyLimit: 3 })) };
+  }
+  const exported = { POLICY_KEYWORDS, configFromDraft, draftFromConfig, defaultDraft, keywordEntries, reasonText, planLabel, formatTime, savedTableRows, oneDayTrialReady, oneDayPreviewMatches, regularSixReady, regularSixInput };
   if (typeof module === "object" && module.exports) module.exports = exported;
   if (typeof document === "undefined" || typeof window === "undefined") return;
 
@@ -167,7 +181,10 @@
     form.append(node("p", "rotation-hint", "목록 끝에서 첫 키워드로 계속 순환합니다. 앞 작업이 끝나고 설정 간격이 지난 뒤 다음 작업을 시작합니다."));
     const actions = node("div", "rotation-actions");
     for (const [name, label] of [["preview", "배정표 미리보기"], ["save", "조건 저장"], ["start", "순환예약 시작"], ["pause", "일시정지"]]) { const button = node("button", `rotation-button ${name === "start" ? "rotation-primary" : "rotation-secondary"}`, label); button.type = "button"; buttons[name] = button; actions.append(button); }
-    form.append(actions); view.draft = node("p", "rotation-draft"); form.append(view.draft);
+    form.append(actions);
+    buttons.regularSix = node("button", "rotation-button rotation-secondary", "정규 6회로 전환"); buttons.regularSix.id = "rotation_regularSix"; buttons.regularSix.type = "button"; form.append(buttons.regularSix);
+    form.append(node("p", "rotation-hint", "정규 6회 전환은 하루 배정 수만 웹 3회·BG 3회로 바꿉니다. 이미 확정된 배정은 보존하고 다음 미배정 날짜부터 적용합니다. 간격·조회조건·순환 위치·보호는 유지합니다."));
+    view.draft = node("p", "rotation-draft"); form.append(view.draft);
     view.notice = node("p", "rotation-notice"); view.notice.setAttribute("role", "status"); view.notice.setAttribute("aria-live", "polite"); view.notice.hidden = true; body.append(view.notice);
     const trialSection = node("section", "rotation-trial"); trialSection.id = "rotationOneDayTrial"; trialSection.setAttribute("aria-label", "하루 6회 시험");
     trialSection.append(node("h4", "", "하루 6회 시험"), node("p", "rotation-hint", "선택한 하루만 09·11·13·15·17·19시에 배정하고, 다음 날부터 기본 4회로 돌아갑니다. 기본 조건·순환 순서·기록은 유지합니다. 보호로 정지되면 계속 정지하며 자동으로 재개하지 않습니다."));
@@ -234,11 +251,13 @@
       buttons.policy.disabled = !allowed || busy || locked; buttons.preview.disabled = !allowed || busy || !loaded || readError; buttons.save.disabled = !allowed || busy || !loaded || readError || locked;
       buttons.start.disabled = !allowed || busy || !loaded || readError || dirty || !saved?.revision || !saved?.config?.keywords?.length || Boolean(saved.enabled || saved.active);
       buttons.pause.disabled = !allowed || busy || !saved?.enabled; buttons.refresh.disabled = !allowed || busy;
+      buttons.regularSix.hidden = Boolean(saved?.config?.workers?.length === 2 && saved.config.workers.every(worker => worker.dailyLimit === 3));
+      buttons.regularSix.disabled = !allowed || busy || !loaded || readError || dirty || !regularSixReady(saved || {});
       view.draft.textContent = locked ? "실행 중인 조건입니다. 일시정지하고 진행 작업이 끝나면 변경할 수 있습니다." : dirty ? "편집안 · 변경한 조건은 아직 저장되지 않았습니다. 저장 후 시작하세요." : saved?.config?.keywords?.length ? `저장본${saved.revision ? ` · 개정 ${saved.revision}` : ""} · 조건 저장만으로 수집을 시작하지 않습니다.` : "조건 저장 전 · 미리보기와 저장은 수집을 시작하지 않습니다.";
       details.dataset.state = saved?.enabled ? "active" : saved?.reason || readError ? "attention" : "idle";
       const trial = currentTrial(), hasPendingTrial = trial && trial.day >= todayKst(now()) && ["armed", "allocated", "needs_verification"].includes(trial.status);
       const trialAllowed = allowed && loaded && !busy && !readError && !trialNeedsRead && !dirty;
-      trialSection.hidden = !allowed;
+      trialSection.hidden = !allowed || (!hasPendingTrial && !saved?.config?.workers?.every(worker => worker.dailyLimit === 2));
       trialDay.disabled = !allowed || busy;
       trialDay.min = todayKst(now() + 86400000);
       trialButtons.preview.disabled = !trialAllowed || hasPendingTrial || !oneDayTrialReady(saved || {}, trialDay.value, now());
@@ -326,6 +345,15 @@
       const result = await api("/enabled", "POST", { enabled: true }); if (result?.config) saved = result; preview = null; await refresh(); notice("순환예약을 시작했습니다. 선택한 수집기의 보호와 실행 상태에 따라 배정 순서대로 진행합니다.", "success"); window.dispatchEvent(new CustomEvent("collector:rotation-changed"));
     }));
     buttons.pause.addEventListener("click", () => action(async () => { const result = await api("/enabled", "POST", { enabled: false }); if (result?.config) saved = result; preview = null; await refresh(); notice("순환예약을 일시정지했습니다. 이미 진행 중인 수집은 결과 저장까지 마무리합니다.", "success"); window.dispatchEvent(new CustomEvent("collector:rotation-changed")); }));
+    buttons.regularSix.addEventListener("click", () => action(async () => {
+      if (dirty || readError) throw new Error("현재 저장 조건을 먼저 새로 확인하세요.");
+      const result = await api("/daily-limits", "POST", regularSixInput(saved || {}));
+      if (destroyed || !admin()) return;
+      const effective = result.dailyLimitsUpdate?.effectiveFrom;
+      saved = result; preview = null; trialPreview = null; await refresh();
+      notice(`하루 6회로 전환했습니다${effective ? ` · ${effective}부터 미배정 날짜에 적용` : ""}. 기존 배정·순환 위치·보호는 유지합니다.`, "success");
+      window.dispatchEvent(new CustomEvent("collector:rotation-changed"));
+    }));
     buttons.refresh.addEventListener("click", () => { preview = null; return refresh(); });
     trialDay.addEventListener("input", () => { trialEditRevision++; trialPreview = null; trialNotice(""); renderTrial(); sync(); });
     trialDay.addEventListener("change", () => { trialEditRevision++; trialPreview = null; trialNotice(""); renderTrial(); sync(); });

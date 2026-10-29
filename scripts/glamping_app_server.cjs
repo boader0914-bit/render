@@ -86,6 +86,7 @@ const { dispatchCollector, createHistoricalBookingContext } = require("./collect
 const { createCollectionReuse, serialExecutor } = require("./collection_reuse.cjs");
 const { createKeywordWorkerScheduler } = require("./keyword_worker_scheduler.cjs");
 const { createCollectionRotationScheduler } = require("./collection_rotation_scheduler.cjs");
+const { attachMonitorPostprocess } = require("./lib/collection_monitor.cjs");
 const { createRotationResultVerifier } = require("./lib/rotation_result_verifier.cjs");
 const { createCollectorRequests } = require("./collector_requests.cjs");
 const { createCollectorRetirementPolicy } = require("./lib/collector_retirement.cjs");
@@ -19583,6 +19584,15 @@ async function route(req, res) {
       return send(res,200,await collectorRequests.get(reqUrl.pathname.slice("/api/crawl-requests/".length)));
     }
 
+    if (reqUrl.pathname === "/api/collection-monitor") {
+      if (!requireAdminSession(session, req, res)) return;
+      res.setHeader("Cache-Control", "private, no-store");
+      if (req.method !== "GET") return send(res, 405, { error: "Method not allowed" });
+      const snapshot = collectionRotationScheduler.monitorSnapshot(Object.fromEntries(reqUrl.searchParams));
+      const runIds = [...new Set(snapshot.items.filter(item => !item.projected).map(item => item.runId).filter(Boolean))];
+      return send(res, 200, attachMonitorPostprocess(snapshot, collectionPostprocessQueue.peekMonitor({ runIds })));
+    }
+
     if (reqUrl.pathname === "/api/collection-rotation" || reqUrl.pathname.startsWith("/api/collection-rotation/")) {
       if(!requireAdminSession(session,req,res)) return;
       if(req.method==="GET" && reqUrl.pathname==="/api/collection-rotation") {
@@ -19596,6 +19606,14 @@ async function route(req, res) {
         page.items = await withCollectionPostprocess(page.items);
         return send(res,200,page);
       }
+      if(reqUrl.pathname==="/api/collection-rotation/daily-limits") {
+        res.setHeader("Cache-Control", "private, no-store");
+        if(req.method!=="POST") return send(res,405,{error:"Method not allowed"});
+        let origin; try { origin=new URL(String(req.headers.origin || "")); } catch {}
+        const protocol=req.socket.encrypted || String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim()==="https" ? "https:" : "http:";
+        if(!origin || origin.host!==req.headers.host || origin.protocol!==protocol || origin.username || origin.password || origin.pathname!=="/" || origin.search || origin.hash)
+          return send(res,403,{code:"ROTATION_LIMITS_ORIGIN_REJECTED",error:"현재 데이터랩 화면에서 요청해 주세요."});
+      }
       if(!["POST","PUT"].includes(req.method)) return send(res,405,{error:"Method not allowed"});
       if(!/^application\/json(?:\s*;|$)/i.test(String(req.headers["content-type"]||""))) return send(res,415,{error:"JSON 형식으로 요청해 주세요."});
       if(req.headers.origin) {
@@ -19603,6 +19621,8 @@ async function route(req, res) {
         if(!origin || origin.host!==req.headers.host) return send(res,403,{error:"현재 데이터랩 화면에서 요청해 주세요."});
       }
       const payload=await parseJsonBody(req);
+      if(req.method==="POST" && reqUrl.pathname==="/api/collection-rotation/daily-limits")
+        return send(res,200,await scheduleMutation(()=>collectionRotationScheduler.updateDailyLimits(payload)));
       if(req.method==="POST" && reqUrl.pathname==="/api/collection-rotation/reconcile") {
         return send(res,200,await scheduleMutation(async()=>{
           if(collectionRecoveryActive || collectorProtectionReviewWorkers.size) throw Object.assign(new Error("수집 기록을 검토 중입니다."),{code:"COLLECTOR_RECOVERY_BUSY",statusCode:409});
