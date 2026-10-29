@@ -1,0 +1,1160 @@
+{
+  "schemaVersion": 1,
+  "catalogVersion": "2026-10-30.1",
+  "audience": "operating_lodging_owner",
+  "ownerStatements": [
+    {
+      "id": "owner-leadtime-price-coupon",
+      "date": "2026-10-29",
+      "author": "김정환",
+      "quote": "예약 리드타임과 가격을 분석하여 할인쿠폰으로 리드타임조절"
+    },
+    {
+      "id": "owner-repeat-guest-coupon",
+      "date": "2026-10-29",
+      "author": "김정환",
+      "quote": "재방문고객의 할인쿠폰"
+    }
+  ],
+  "policy": {
+    "reviewOnly": true,
+    "automaticExecution": false,
+    "collectionChanges": false
+  },
+  "cards": [
+    {
+      "id": "leadtime-baseline",
+      "title": "예약 리드타임과 가격의 현재 기준선 확인",
+      "goal": "실제 예약 리드타임과 가격을 분석할 기준을 만들고 쿠폰으로 조절하려는 방향을 운영자 검토에 연결합니다.",
+      "ownerStatementIds": [
+        "owner-leadtime-price-coupon"
+      ],
+      "basis": "owner_direction",
+      "review": {
+        "status": "draft",
+        "reviewedBy": null,
+        "reviewedAt": null
+      },
+      "situation": "쿠폰을 검토하기 전에 같은 매장의 실제 예약 접수일·숙박일·가격·취소 이력으로 현재 예약 시점의 분포를 확인해야 하는 상황입니다. 확정된 목표 리드타임이나 할인 기준은 없습니다.",
+      "interpretations": [
+        "김정환님의 직접 방향은 예약 리드타임과 가격을 분석해 할인쿠폰으로 리드타임을 조절하는 것입니다. 특정 시점·할인율·목표·효과는 아직 확인되지 않았습니다.",
+        "정확한 예약 리드타임은 한국시간(KST)의 실제 숙박 시작일에서 예약 접수일을 뺀 달력 일수입니다. 예약 변경 전후 접수일·숙박 시작일 이력은 보존하고 취소·재예약을 별도 연결합니다.",
+        "요일·시즌·객실 유형·가격·예약 선행일 조건이 다르면 분포가 달라질 수 있다는 가설을 검토합니다. 이 요인의 효과를 이미 확인한 것으로 설명하지 않습니다.",
+        "공개 관측은 실제 예약 접수일을 알려주지 않습니다. 관측 사이 예약 수량 증가 시점의 구간과 순변화만 보조로 읽으며, 순변화를 신규 예약 수나 정확한 리드타임으로 바꾸지 않습니다. 최초 관측 전에 접수된 예약의 실제 접수일은 공개 관측으로 복원할 수 없습니다."
+      ],
+      "requiredData": [
+        {
+          "key": "property_scope",
+          "label": "분석 대상 매장과 매장 내 자료 연결 범위",
+          "source": "operator_setting",
+          "absence": "hold"
+        },
+        {
+          "key": "actual_booking_and_stay_dates",
+          "label": "실제 예약 접수일·숙박일과 한국시간(KST) 달력일 기준",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "reservation_price_and_refund",
+          "label": "할인 전후 실제 예약금액과 가격·취소·환불 조건",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "cancellation_rebooking_history",
+          "label": "취소·환불·예약 변경·재예약의 원거래 연결 이력",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "baseline_segmentation",
+          "label": "요일·시즌·객실 유형·가격 비교 단위와 시간대",
+          "source": "operator_setting",
+          "absence": "hold"
+        },
+        {
+          "key": "guest_classification",
+          "label": "같은 매장 내 신규·재방문 구분 근거",
+          "source": "own_reservation",
+          "absence": "reference_only"
+        },
+        {
+          "key": "saved_public_observations",
+          "label": "동일 매장·숙박일의 저장된 공개 관측과 관측 시각",
+          "source": "saved_observation",
+          "absence": "reference_only"
+        }
+      ],
+      "questions": [
+        "리드타임을 어느 방향으로 조절하려는지 운영자가 확인했습니까?",
+        "비교할 객실 유형·요일·시즌과 가격 조건은 무엇입니까?",
+        "예약 변경·취소·재예약과 원예약을 구분할 수 있습니까?",
+        "접수일이 없는 예약과 신규·재방문 미확인 고객을 별도 표시했습니까?"
+      ],
+      "action": "실제 접수일이 확인되는 예약만으로 매장별 리드타임·가격 분포의 기준선을 작성해 전문가 검토에 올립니다. 조건과 목표가 확정되기 전에는 쿠폰 전술이나 할인 수치를 제안 확정하지 않습니다.",
+      "parameters": [
+        {
+          "key": "baseline_period_days",
+          "label": "기준선 분석 기간",
+          "unit": "일",
+          "value": null
+        },
+        {
+          "key": "target_leadtime_days",
+          "label": "목표 예약 리드타임",
+          "unit": "일",
+          "value": null
+        },
+        {
+          "key": "leadtime_bucket_days",
+          "label": "리드타임 구간 폭",
+          "unit": "일",
+          "value": null
+        },
+        {
+          "key": "minimum_reservation_count",
+          "label": "판단에 필요한 예약 건수",
+          "unit": "건",
+          "value": null
+        }
+      ],
+      "exceptions": [
+        "공개 관측은 실제 예약 접수일을 알려주지 않습니다. 관측 사이 예약 수량 증가 시점의 구간과 순변화만 보조로 읽으며, 순변화를 신규 예약 수나 정확한 리드타임으로 바꾸지 않습니다. 최초 관측 전에 접수된 예약의 실제 접수일은 공개 관측으로 복원할 수 없습니다.",
+        "모든 연결과 비교는 한 매장 안에서 수행합니다. 신규 고객·재방문 고객을 구분하고, 확인되지 않은 고객 이력이나 다른 매장의 이력을 섞지 않습니다. 재예약은 예약자 기준의 예약 이력, 재방문은 실제 투숙자 기준의 이용 이력으로 구별하며 대리 예약이나 같은 전화번호만으로 동일 고객을 자동 병합하지 않습니다.",
+        "단체·장기 숙박·일정 변경 예약 등 별도 조건의 예약은 일반 예약과 분리해 검토합니다.",
+        "취소된 예약의 최초 리드타임과 최종 이용 예약의 리드타임은 같은 성과로 합치지 않습니다."
+      ],
+      "stopConditions": [
+        "미제공·미확인·실패 자료는 0이나 쿠폰 미사용으로 처리하지 않고 해당 판단을 보류합니다.",
+        "실제 접수일 또는 숙박일을 확인하지 못하거나 시간대가 일치하지 않으면 정확한 리드타임 판단을 보류합니다.",
+        "원예약·취소·재예약 연결이 불명확하면 쿠폰에 따른 예약 시점 이동 판단을 보류합니다.",
+        "매장 경계나 비교 조건을 확인하지 못하면 합산 비교를 중단합니다."
+      ],
+      "measurement": {
+        "primary": [
+          {
+            "key": "actual_booking_leadtime_distribution",
+            "label": "실제 예약 리드타임 분포",
+            "definition": "한국시간(KST)의 실제 숙박 시작일에서 예약 접수일을 뺀 달력 일수의 분포를 매장·비교 조건별로 표시합니다. 미확인 예약은 분모에서 제외하고 제외 건수를 따로 표시합니다.",
+            "unit": "일",
+            "comparison": "같은 매장·객실 유형·요일·시즌·예약 상태 조건에서 비교하고 신규·재방문은 구분합니다."
+          }
+        ],
+        "drivers": [
+          {
+            "key": "price_by_leadtime",
+            "label": "리드타임별 실제 예약가격",
+            "definition": "리드타임 구간별 실제 예약가격을 할인 전후 금액과 취소·환불 조건을 구분해 표시합니다.",
+            "unit": "원",
+            "comparison": "동일 매장·객실·숙박 조건에서 가격 기준이 같은 예약끼리 비교합니다."
+          }
+        ],
+        "guardrails": [
+          {
+            "key": "missing_booking_date_count",
+            "label": "예약 접수일 미확인 건수",
+            "definition": "실제 예약 접수일이 없어 정확한 리드타임 계산에서 제외한 예약의 건수입니다.",
+            "unit": "건",
+            "comparison": "분석 기간마다 미확인 범위를 함께 제시하며 감소나 증가를 예약 실적과 혼동하지 않습니다."
+          },
+          {
+            "key": "cancellation_rebooking_count",
+            "label": "취소·재예약 연결 건수",
+            "definition": "원예약과 연결된 취소·재예약 건수를 별도로 표시해 예약 시점 이동처럼 보이는 중복을 구분합니다.",
+            "unit": "건",
+            "comparison": "같은 매장·원거래 단위로 비교하며 재예약을 순수 신규 예약 증가로 합산하지 않습니다."
+          }
+        ]
+      },
+      "followUp": [
+        "운영자가 목표 방향과 비교 단위를 확인한 뒤 쿠폰 전술 초안을 검토합니다.",
+        "확인한 기준선·제외 조건·미확인 범위를 사례 기록에 함께 남깁니다."
+      ],
+      "openDecisions": [
+        "목표 리드타임과 허용 범위",
+        "분석 기간·구간 폭·최소 근거 건수",
+        "예약 변경 시 비교할 숙박일 버전과 예약 상태 기준",
+        "신규·재방문 구분이 필요한 분석 범위",
+        "KST 기준 원예약·변경 예약의 접수일과 숙박일 연결 검토"
+      ]
+    },
+    {
+      "id": "early-booking-coupon",
+      "title": "조기 예약 쿠폰의 적용 가능성 검토",
+      "goal": "미확인 설계 확장으로서 조기 예약 쿠폰이 목표 리드타임에 맞는지 검토합니다. 조기 예약 전술의 채택이나 효과는 확정하지 않습니다.",
+      "ownerStatementIds": [
+        "owner-leadtime-price-coupon"
+      ],
+      "basis": "design_extension",
+      "review": {
+        "status": "draft",
+        "reviewedBy": null,
+        "reviewedAt": null
+      },
+      "situation": "운영자가 예약 접수 시점을 앞당길 필요가 있다고 검토한 경우에만, 실제 리드타임 기준선과 가격·재고·비용 조건을 보고 조기 예약 쿠폰 초안을 검토할 수 있습니다.",
+      "interpretations": [
+        "조기 예약 쿠폰은 직접 발언에서 확정된 전술이 아닌 설계 가설입니다. 발급 시점·적용 숙박일·대상·할인율·목표는 모두 미확인입니다.",
+        "미리 예약할 유인이 접수 시점을 앞당길 수 있다는 가설과, 할인 없이도 예약했을 수 있다는 대안을 함께 검토합니다.",
+        "정확한 예약 리드타임은 한국시간(KST)의 실제 숙박 시작일에서 예약 접수일을 뺀 달력 일수입니다. 예약 변경 전후 접수일·숙박 시작일 이력은 보존하고 취소·재예약을 별도 연결합니다.",
+        "공개 관측은 실제 예약 접수일을 알려주지 않습니다. 관측 사이 예약 수량 증가 시점의 구간과 순변화만 보조로 읽으며, 순변화를 신규 예약 수나 정확한 리드타임으로 바꾸지 않습니다. 최초 관측 전에 접수된 예약의 실제 접수일은 공개 관측으로 복원할 수 없습니다.",
+        "쿠폰 사용이나 전후 지표 증가만으로 쿠폰이 예약 증가·리드타임 이동·수익 개선의 원인이라고 단정하지 않습니다."
+      ],
+      "requiredData": [
+        {
+          "key": "property_scope",
+          "label": "분석 대상 매장과 매장 내 자료 연결 범위",
+          "source": "operator_setting",
+          "absence": "hold"
+        },
+        {
+          "key": "actual_booking_and_stay_dates",
+          "label": "실제 예약 접수일·숙박일과 한국시간(KST) 달력일 기준",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "reservation_price_and_refund",
+          "label": "할인 전후 실제 예약금액과 가격·취소·환불 조건",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "cancellation_rebooking_history",
+          "label": "취소·환불·예약 변경·재예약의 원거래 연결 이력",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "coupon_issue_redemption_log",
+          "label": "쿠폰 발급·노출·사용·취소와 적용 예약 연결 기록",
+          "source": "coupon_log",
+          "absence": "hold"
+        },
+        {
+          "key": "coupon_cost_and_stacking",
+          "label": "쿠폰 부담 주체·중복 할인·수수료 적용 기준",
+          "source": "coupon_log",
+          "absence": "hold"
+        },
+        {
+          "key": "net_settlement",
+          "label": "실제 정산액·환불액·수수료·쿠폰 플랫폼 보전액과 매장 실수령의 반영 내역",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "early_coupon_conditions",
+          "label": "예약 시점·대상 숙박일·객실·쿠폰 자격과 재고 조건",
+          "source": "operator_setting",
+          "absence": "hold"
+        },
+        {
+          "key": "property_scoped_guest_history",
+          "label": "같은 매장 실제 투숙자의 확인된 이용 이력과 신규·재방문 구분",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "saved_public_observations",
+          "label": "동일 매장·숙박일의 저장된 공개 관측과 관측 시각",
+          "source": "saved_observation",
+          "absence": "reference_only"
+        }
+      ],
+      "questions": [
+        "예약 시점을 앞당길 필요와 목표가 실제로 확인됐습니까?",
+        "쿠폰 없이도 예약될 가능성이 있는 날짜와 대상은 어떻게 구분합니까?",
+        "쿠폰은 어느 예약 접수 구간과 숙박일에 적용할지 정했습니까?",
+        "매장 부담·중복 할인·환불 후 실수령을 검토했습니까?",
+        "신규·재방문 고객별로 적용 결과를 분리할 수 있습니까?"
+      ],
+      "action": "운영자와 전문가가 기준선·적용 대상·쿠폰 부담·환불 조건을 확인한 뒤 작은 검토 초안을 만듭니다. 구체 시점·할인율·목표를 확정하거나 쿠폰을 발급·노출·적용하는 행위는 별도 운영 결정으로 남깁니다.",
+      "parameters": [
+        {
+          "key": "early_booking_start_days",
+          "label": "조기 예약 검토 시작 리드타임",
+          "unit": "일",
+          "value": null
+        },
+        {
+          "key": "early_booking_end_days",
+          "label": "조기 예약 검토 종료 리드타임",
+          "unit": "일",
+          "value": null
+        },
+        {
+          "key": "coupon_discount_percent",
+          "label": "검토 할인율",
+          "unit": "%",
+          "value": null
+        },
+        {
+          "key": "coupon_budget",
+          "label": "매장 쿠폰 부담 예산",
+          "unit": "원",
+          "value": null
+        },
+        {
+          "key": "target_leadtime_days",
+          "label": "목표 리드타임",
+          "unit": "일",
+          "value": null
+        }
+      ],
+      "exceptions": [
+        "모든 연결과 비교는 한 매장 안에서 수행합니다. 신규 고객·재방문 고객을 구분하고, 확인되지 않은 고객 이력이나 다른 매장의 이력을 섞지 않습니다. 재예약은 예약자 기준의 예약 이력, 재방문은 실제 투숙자 기준의 이용 이력으로 구별하며 대리 예약이나 같은 전화번호만으로 동일 고객을 자동 병합하지 않습니다.",
+        "선결제·환불 제한·포함 혜택이 다르면 단순 할인율만으로 고객 조건이나 실수령을 비교하지 않습니다.",
+        "이미 예약이 집중된 날짜, 객실 재고 변경, 행사·연휴 등 다른 수요 조건은 별도로 검토합니다.",
+        "할인 전 가격을 올린 뒤 쿠폰을 적용한 경우와 가격이 같은 경우를 혼합하지 않습니다."
+      ],
+      "stopConditions": [
+        "미제공·미확인·실패 자료는 0이나 쿠폰 미사용으로 처리하지 않고 해당 판단을 보류합니다.",
+        "매장 부담·수수료·중복 할인·취소 환불 기준이나 실제 실수령을 확인하지 못하면 비용을 전제로 한 제안을 보류합니다.",
+        "적용 대상·예약 접수 구간·숙박일 또는 실제 판매 가능 재고를 확인하지 못하면 실행 검토를 보류합니다.",
+        "취소 후 쿠폰 재예약과 신규 예약을 구분하지 못하면 리드타임 개선 판단을 보류합니다."
+      ],
+      "measurement": {
+        "primary": [
+          {
+            "key": "leadtime_shift_after_early_coupon",
+            "label": "조기 쿠폰 검토 대상의 실제 리드타임 변화",
+            "definition": "실제 예약 접수일 기준 리드타임 분포가 어떻게 달라졌는지 대상과 비대상·사전 기준을 함께 표시합니다. 전후 차이만으로 쿠폰 효과를 단정하지 않습니다.",
+            "unit": "일",
+            "comparison": "같은 매장·객실·요일·시즌·가격·예약 선행일 조건을 맞추고 신규·재방문·취소·재예약을 구분합니다."
+          }
+        ],
+        "drivers": [
+          {
+            "key": "early_coupon_redemption_count",
+            "label": "조기 쿠폰 사용 예약 건수",
+            "definition": "쿠폰 로그와 실제 예약이 연결된 사용 건수입니다. 발급·노출·사용·취소를 별도 기록합니다.",
+            "unit": "건",
+            "comparison": "사용과 미사용을 단순 성과 우열로 비교하지 않고 자격과 노출 조건의 차이를 함께 봅니다."
+          }
+        ],
+        "guardrails": [
+          {
+            "key": "net_receipt_after_early_coupon",
+            "label": "환불·부담 반영 실수령",
+            "definition": "환불·매장 쿠폰 부담·수수료를 중복 차감 없이 반영해 실제 정산과 대조한 매장 실수령입니다.",
+            "unit": "원",
+            "comparison": "같은 객실·숙박 조건의 할인 전후 실수령을 비교하며 미정산은 미확인으로 남깁니다."
+          },
+          {
+            "key": "early_coupon_cancel_rebook",
+            "label": "쿠폰 관련 취소·재예약",
+            "definition": "쿠폰 적용 전후 원예약과 연결되는 취소·재예약 건수를 따로 표시합니다.",
+            "unit": "건",
+            "comparison": "중복 예약을 제거한 원거래 단위로 비교합니다."
+          }
+        ]
+      },
+      "followUp": [
+        "조건이 확정되면 운영자가 실행 여부와 실제 적용 내용을 별도로 기록합니다.",
+        "결과 검토에서는 쿠폰 미사용·취소·재예약·실수령 미확인을 함께 남깁니다."
+      ],
+      "openDecisions": [
+        "조기 예약 전술의 채택 여부와 조절 방향",
+        "발급·적용 시점과 대상 숙박일",
+        "할인율·예산·중복 허용·환불 조건",
+        "목표 지표·비교군·결과 확인 시점"
+      ]
+    },
+    {
+      "id": "last-minute-coupon",
+      "title": "임박 예약 쿠폰의 적용 가능성 검토",
+      "goal": "미확인 설계 확장으로서 임박한 숙박일의 쿠폰 검토 조건과 비용·운영 한계를 확인합니다.",
+      "ownerStatementIds": [
+        "owner-leadtime-price-coupon"
+      ],
+      "basis": "design_extension",
+      "review": {
+        "status": "draft",
+        "reviewedBy": null,
+        "reviewedAt": null
+      },
+      "situation": "운영자가 임박한 숙박일의 판매 가능 객실을 검토하려는 경우입니다. 공개 관측의 빈 객실 추정만으로 잔여 재고나 쿠폰 필요성을 확정하지 않습니다.",
+      "interpretations": [
+        "임박 예약 쿠폰은 직접 발언에서 확정된 전술이 아닌 설계 가설입니다. 임박 기준·발급 시점·할인율·목표·예산은 미확인입니다.",
+        "남은 기간의 가격 조건이 예약 결정에 영향을 줄 수 있다는 가설과, 청소·입실 운영 여력이나 다른 수요 조건이 제약일 수 있다는 대안을 함께 검토합니다.",
+        "정확한 예약 리드타임은 한국시간(KST)의 실제 숙박 시작일에서 예약 접수일을 뺀 달력 일수입니다. 예약 변경 전후 접수일·숙박 시작일 이력은 보존하고 취소·재예약을 별도 연결합니다.",
+        "공개 관측은 실제 예약 접수일을 알려주지 않습니다. 관측 사이 예약 수량 증가 시점의 구간과 순변화만 보조로 읽으며, 순변화를 신규 예약 수나 정확한 리드타임으로 바꾸지 않습니다. 최초 관측 전에 접수된 예약의 실제 접수일은 공개 관측으로 복원할 수 없습니다.",
+        "쿠폰 사용이나 전후 지표 증가만으로 쿠폰이 예약 증가·리드타임 이동·수익 개선의 원인이라고 단정하지 않습니다."
+      ],
+      "requiredData": [
+        {
+          "key": "property_scope",
+          "label": "분석 대상 매장과 매장 내 자료 연결 범위",
+          "source": "operator_setting",
+          "absence": "hold"
+        },
+        {
+          "key": "actual_booking_and_stay_dates",
+          "label": "실제 예약 접수일·숙박일과 한국시간(KST) 달력일 기준",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "actual_sellable_inventory",
+          "label": "원예약·취소·방막기를 대조한 실제 판매 가능 재고",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "reservation_price_and_refund",
+          "label": "할인 전후 실제 예약금액과 가격·취소·환불 조건",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "cancellation_rebooking_history",
+          "label": "취소·환불·예약 변경·재예약의 원거래 연결 이력",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "coupon_issue_redemption_log",
+          "label": "쿠폰 발급·노출·사용·취소와 적용 예약 연결 기록",
+          "source": "coupon_log",
+          "absence": "hold"
+        },
+        {
+          "key": "coupon_cost_and_stacking",
+          "label": "쿠폰 부담 주체·중복 할인·수수료 적용 기준",
+          "source": "coupon_log",
+          "absence": "hold"
+        },
+        {
+          "key": "net_settlement",
+          "label": "실제 정산액·환불액·수수료·쿠폰 플랫폼 보전액과 매장 실수령의 반영 내역",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "last_minute_operating_conditions",
+          "label": "적용 숙박일·노출 구간·청소·입실 대응 가능 조건",
+          "source": "operator_setting",
+          "absence": "hold"
+        },
+        {
+          "key": "property_scoped_guest_history",
+          "label": "같은 매장 실제 투숙자의 확인된 이용 이력과 신규·재방문 구분",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "saved_public_observations",
+          "label": "동일 매장·숙박일의 저장된 공개 관측과 관측 시각",
+          "source": "saved_observation",
+          "absence": "reference_only"
+        }
+      ],
+      "questions": [
+        "예약 장부 기준 실제 판매 가능 객실이 확인됐습니까?",
+        "임박으로 볼 기간과 쿠폰 적용 숙박일을 운영자가 정했습니까?",
+        "청소·입실 안내·현장 대응이 가능한 조건입니까?",
+        "할인 없이 판매될 예약과 쿠폰을 기다렸다가 재예약하는 경우를 어떻게 구분합니까?",
+        "매장 부담·환불·중복 할인 뒤 실수령 기준이 확인됐습니까?"
+      ],
+      "action": "실제 재고와 운영 여력, 비용·환불 조건을 확인한 범위에서 임박 쿠폰 검토안을 작성합니다. 관측상 빈 객실을 판매 가능으로 바꾸거나 쿠폰을 자동 발급·적용하지 않습니다.",
+      "parameters": [
+        {
+          "key": "last_minute_window_days",
+          "label": "임박 검토 리드타임 범위",
+          "unit": "일",
+          "value": null
+        },
+        {
+          "key": "coupon_discount_percent",
+          "label": "검토 할인율",
+          "unit": "%",
+          "value": null
+        },
+        {
+          "key": "coupon_budget",
+          "label": "매장 쿠폰 부담 예산",
+          "unit": "원",
+          "value": null
+        },
+        {
+          "key": "minimum_net_receipt",
+          "label": "검토 최소 실수령",
+          "unit": "원",
+          "value": null
+        },
+        {
+          "key": "operating_cutoff_hours",
+          "label": "입실 운영 검토 마감",
+          "unit": "시간",
+          "value": null
+        }
+      ],
+      "exceptions": [
+        "모든 연결과 비교는 한 매장 안에서 수행합니다. 신규 고객·재방문 고객을 구분하고, 확인되지 않은 고객 이력이나 다른 매장의 이력을 섞지 않습니다. 재예약은 예약자 기준의 예약 이력, 재방문은 실제 투숙자 기준의 이용 이력으로 구별하며 대리 예약이나 같은 전화번호만으로 동일 고객을 자동 병합하지 않습니다.",
+        "방막기 추정에는 다른 채널 예약·운영 중단 등이 섞일 수 있으므로 판매 재고로 해석하지 않습니다.",
+        "행사·연휴·기상·당일 운영 여력 등 조건이 달라진 날짜는 같은 비교군으로 합치지 않습니다.",
+        "기존 예약 취소 후 쿠폰 재예약은 새로운 객실 판매와 구분합니다."
+      ],
+      "stopConditions": [
+        "미제공·미확인·실패 자료는 0이나 쿠폰 미사용으로 처리하지 않고 해당 판단을 보류합니다.",
+        "실제 판매 가능 재고나 청소·입실 대응 조건을 확인하지 못하면 쿠폰 적용 검토를 보류합니다.",
+        "객실 부족·중복 판매 가능성이 있거나 취소·재예약 연결이 불명확하면 신규 판매 효과 판단을 보류합니다.",
+        "가격·환불·쿠폰 부담·중복 할인·실수령 기준이 미확정이면 수익성을 전제로 제안하지 않습니다."
+      ],
+      "measurement": {
+        "primary": [
+          {
+            "key": "last_minute_net_booked_room_nights",
+            "label": "임박 구간의 취소 반영 예약수량",
+            "definition": "정의한 임박 구간에 실제 접수된 예약의 객실 수를 숙박일별로 합산해 표시합니다. 표시 단위는 실이며, 취소·재예약 이력을 구분합니다. 관측 순변화만으로 신규 예약 건수를 대체하지 않습니다.",
+            "unit": "실",
+            "comparison": "같은 매장·객실·요일·시즌·남은 예약 기간 조건에서 비교하고 신규·재방문을 구분합니다."
+          }
+        ],
+        "drivers": [
+          {
+            "key": "last_minute_actual_leadtime",
+            "label": "임박 쿠폰 예약의 실제 리드타임",
+            "definition": "쿠폰 적용 예약의 한국시간(KST) 숙박 시작일에서 실제 예약 접수일을 뺀 달력 일수 분포입니다.",
+            "unit": "일",
+            "comparison": "쿠폰 자격·노출 조건과 실제 사용 여부를 함께 표시합니다."
+          }
+        ],
+        "guardrails": [
+          {
+            "key": "last_minute_net_receipt",
+            "label": "임박 쿠폰 적용 후 실수령",
+            "definition": "실제 정산에서 환불·수수료·매장 쿠폰 부담을 확인한 실수령입니다.",
+            "unit": "원",
+            "comparison": "판매 수량 증가와 실수령 변화를 분리해 비교합니다."
+          },
+          {
+            "key": "last_minute_operating_incident_count",
+            "label": "임박 적용 관련 운영 문제 건수",
+            "definition": "쿠폰 적용 예약과 연결해 확인된 입실·청소·중복 판매 문제를 운영자가 기록한 건수입니다. 기록 없음은 문제 0건으로 처리하지 않습니다.",
+            "unit": "건",
+            "comparison": "운영 기록의 확보 범위가 같은 기간과 조건에서만 비교합니다."
+          }
+        ]
+      },
+      "followUp": [
+        "운영자가 실제 적용 여부·적용 시각·숙박일·재고 상태를 남긴 경우에만 결과 검토에 연결합니다.",
+        "수량·취소·실수령·운영 문제를 함께 회고하고 반복 적용 여부를 다시 검토합니다."
+      ],
+      "openDecisions": [
+        "임박 전술의 채택 여부와 적용 목적",
+        "임박 범위·운영 마감·적용 숙박일",
+        "할인율·최소 실수령·예산·중복 허용",
+        "숙박일별 예약수량의 누적 범위와 예약 상태·취소·재예약 계산 기준"
+      ]
+    },
+    {
+      "id": "price-coupon-cost",
+      "title": "가격·쿠폰 부담과 실수령 조건 검토",
+      "goal": "미확인 설계 확장으로서 가격 분석에 쿠폰 부담·환불·중복 할인·실수령을 함께 연결해 비용을 숨기지 않는 검토안을 만듭니다.",
+      "ownerStatementIds": [
+        "owner-leadtime-price-coupon"
+      ],
+      "basis": "design_extension",
+      "review": {
+        "status": "draft",
+        "reviewedBy": null,
+        "reviewedAt": null
+      },
+      "situation": "표시 할인율이나 예약가격만으로 쿠폰의 비용·실수령을 판단하기 어려운 상황입니다. 실제 부담과 정산 차이를 확인하기 전에는 매출·수익 개선 목표를 확정하지 않습니다.",
+      "interpretations": [
+        "사용자의 가격·리드타임 분석 방향에서 비용 확인 절차를 확장한 초안입니다. 특정 가격·할인율·수익 기준을 사용자가 확정한 것으로 설명하지 않습니다.",
+        "고객 할인액과 매장 쿠폰 부담액, 예약금액과 실수령액은 서로 다를 수 있어 별도로 확인해야 합니다.",
+        "플랫폼 부담과 매장 부담, 수수료 산정 기준, 중복 할인, 취소·환불을 확인하지 않으면 비용 차이를 해석할 수 없습니다.",
+        "쿠폰 사용이나 전후 지표 증가만으로 쿠폰이 예약 증가·리드타임 이동·수익 개선의 원인이라고 단정하지 않습니다.",
+        "예약금액·환불·쿠폰 매장 부담·쿠폰 플랫폼 보전·수수료가 실제 정산에 이미 반영됐는지 확인해 각 항목을 한 번만 반영합니다. 고객 할인액과 매장 부담액을 구별하고 환불·수수료·쿠폰 부담을 이중 차감하거나 플랫폼 보전을 이중 가산하지 않습니다.",
+        "공헌이익은 운영 판단을 위한 시나리오로 검토합니다. 실제 대조한 실수령과 확인된 예약별 변동원가를 사용하되 가정값·누락 원가를 표시하고, 고정비와 전체 비용을 반영한 영업이익으로 설명하지 않습니다."
+      ],
+      "requiredData": [
+        {
+          "key": "property_scope",
+          "label": "분석 대상 매장과 매장 내 자료 연결 범위",
+          "source": "operator_setting",
+          "absence": "hold"
+        },
+        {
+          "key": "actual_booking_and_stay_dates",
+          "label": "실제 예약 접수일·숙박일과 한국시간(KST) 달력일 기준",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "reservation_price_and_refund",
+          "label": "할인 전후 실제 예약금액과 가격·취소·환불 조건",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "coupon_issue_redemption_log",
+          "label": "쿠폰 발급·노출·사용·취소와 적용 예약 연결 기록",
+          "source": "coupon_log",
+          "absence": "hold"
+        },
+        {
+          "key": "coupon_cost_and_stacking",
+          "label": "쿠폰 부담 주체·중복 할인·수수료 적용 기준",
+          "source": "coupon_log",
+          "absence": "hold"
+        },
+        {
+          "key": "net_settlement",
+          "label": "실제 정산액·환불액·수수료·쿠폰 플랫폼 보전액과 매장 실수령의 반영 내역",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "cancellation_rebooking_history",
+          "label": "취소·환불·예약 변경·재예약의 원거래 연결 이력",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "price_cost_review_rules",
+          "label": "가격 기준·쿠폰 예산·환불·중복 할인·정산 대조 기준",
+          "source": "operator_setting",
+          "absence": "hold"
+        },
+        {
+          "key": "verified_variable_costs",
+          "label": "예약별 추가 변동원가와 실제 확인값·시나리오 가정값 구분",
+          "source": "operator_setting",
+          "absence": "hold"
+        }
+      ],
+      "questions": [
+        "고객에게 보이는 할인액 가운데 매장이 부담하는 금액은 얼마인지 확인됐습니까?",
+        "다른 할인과 중복될 수 있고 수수료는 어느 금액에 적용됩니까?",
+        "취소·부분 환불 시 쿠폰 부담과 수수료가 어떻게 처리됩니까?",
+        "예약가격과 최종 정산의 차이를 원거래별로 대조할 수 있습니까?",
+        "플랫폼 보전과 환불·수수료·쿠폰 부담이 정산에 이미 반영됐는지 확인해 이중 가감산을 막았습니까?",
+        "공헌이익 시나리오의 원가 범위·가정값·누락 항목을 표시하고 영업이익과 구분했습니까?"
+      ],
+      "action": "같은 매장·예약별로 할인 전후 가격, 쿠폰 부담 주체, 중복 할인, 환불·수수료와 실제 실수령을 대조해 전문가 검토에 올립니다. 미정산이나 미확인 항목은 예상 실수령 또는 0원으로 확정하지 않습니다. 공헌이익을 검토할 때에는 실제 확인값과 운영 판단용 시나리오 가정값을 분리하고 영업이익으로 제시하지 않습니다.",
+      "parameters": [
+        {
+          "key": "coupon_discount_percent",
+          "label": "검토 할인율",
+          "unit": "%",
+          "value": null
+        },
+        {
+          "key": "coupon_discount_amount",
+          "label": "검토 정액 할인",
+          "unit": "원",
+          "value": null
+        },
+        {
+          "key": "property_coupon_budget",
+          "label": "매장 부담 예산",
+          "unit": "원",
+          "value": null
+        },
+        {
+          "key": "minimum_net_receipt",
+          "label": "검토 최소 실수령",
+          "unit": "원",
+          "value": null
+        },
+        {
+          "key": "maximum_discount_stack_percent",
+          "label": "검토 중복 할인 한도",
+          "unit": "%",
+          "value": null
+        },
+        {
+          "key": "minimum_contribution_margin",
+          "label": "검토 최소 공헌이익",
+          "unit": "원",
+          "value": null
+        }
+      ],
+      "exceptions": [
+        "모든 연결과 비교는 한 매장 안에서 수행합니다. 신규 고객·재방문 고객을 구분하고, 확인되지 않은 고객 이력이나 다른 매장의 이력을 섞지 않습니다. 재예약은 예약자 기준의 예약 이력, 재방문은 실제 투숙자 기준의 이용 이력으로 구별하며 대리 예약이나 같은 전화번호만으로 동일 고객을 자동 병합하지 않습니다.",
+        "플랫폼 부담 쿠폰과 매장 부담 쿠폰을 같은 비용으로 처리하지 않습니다.",
+        "포함 상품·인원·옵션·세금·수수료 기준이 다르면 객실 표시가격만으로 비교하지 않습니다.",
+        "예약 취소·부분 환불·재예약으로 정산이 달라진 거래는 변경 이력을 보존합니다."
+      ],
+      "stopConditions": [
+        "미제공·미확인·실패 자료는 0이나 쿠폰 미사용으로 처리하지 않고 해당 판단을 보류합니다.",
+        "부담 주체·수수료·중복 할인·환불 정책을 확인하지 못하면 비용 적정성 판단을 보류합니다.",
+        "예약금액·환불·정산을 같은 원거래에 연결할 수 없으면 실수령 계산을 보류합니다.",
+        "이미 정산에서 차감된 항목의 중복 차감 여부를 확인하지 못하면 실수령 결론을 보류합니다.",
+        "플랫폼 보전의 정산 반영 여부나 환불·쿠폰·수수료의 이중 가감산 여부를 확인하지 못하면 실수령 판단을 보류합니다.",
+        "변동원가 범위와 확인값·가정값을 구분하지 못하면 공헌이익 시나리오 판단을 보류합니다."
+      ],
+      "measurement": {
+        "primary": [
+          {
+            "key": "verified_net_receipt",
+            "label": "대조한 매장 실수령",
+            "definition": "원거래의 예약금액·환불·수수료·쿠폰 매장 부담·플랫폼 보전을 실제 정산과 대조한 최종 실수령입니다. 정산 반영 여부를 확인해 각 항목을 한 번만 반영하고 미확인 항목은 보류합니다.",
+            "unit": "원",
+            "comparison": "같은 매장·객실·숙박일·포함 조건과 정산 상태가 같은 거래끼리 비교합니다."
+          },
+          {
+            "key": "contribution_margin_scenario",
+            "label": "운영 판단용 공헌이익 시나리오",
+            "definition": "대조한 매장 실수령에서 해당 예약에 추가로 발생하는 확인 가능한 변동원가를 반영한 운영 판단용 시나리오입니다. 실제 확인값과 가정값·누락 원가를 표시하며 고정비와 전체 비용을 반영한 영업이익으로 해석하지 않습니다.",
+            "unit": "원",
+            "comparison": "같은 매장·객실·포함 조건과 원가 범위에서 비교합니다. 가정 시나리오를 실제 실적과 합산하지 않습니다."
+          }
+        ],
+        "drivers": [
+          {
+            "key": "property_coupon_cost",
+            "label": "매장 실제 쿠폰 부담",
+            "definition": "사용·취소·환불 이력을 반영해 매장이 최종 부담한 쿠폰 비용입니다.",
+            "unit": "원",
+            "comparison": "플랫폼 부담액과 고객 할인액을 분리하고 신규·재방문 대상별로 구분합니다."
+          },
+          {
+            "key": "combined_discount_amount",
+            "label": "확인된 중복 할인액",
+            "definition": "한 예약에 함께 적용된 할인 항목과 금액을 확인한 합계입니다. 미확인 항목이 있으면 완전한 합계로 표시하지 않습니다.",
+            "unit": "원",
+            "comparison": "동일한 할인 전 가격·포함 조건에서만 비교합니다."
+          }
+        ],
+        "guardrails": [
+          {
+            "key": "unreconciled_settlement_count",
+            "label": "실수령 대조 미완료 건수",
+            "definition": "예약·쿠폰·환불·정산 연결이 미완료인 예약 건수입니다.",
+            "unit": "건",
+            "comparison": "대조한 거래와 미대조 거래를 분리해 자료 확보 차이를 비용 개선으로 오해하지 않습니다."
+          },
+          {
+            "key": "refund_adjustment_amount",
+            "label": "확인된 환불·정산 조정액",
+            "definition": "취소·부분 환불·재예약에 연결된 환불과 정산 조정액입니다. 미확인 조정은 0원으로 넣지 않습니다.",
+            "unit": "원",
+            "comparison": "동일한 예약 상태와 정산 완료 기준에서 비교합니다."
+          }
+        ]
+      },
+      "followUp": [
+        "확인된 비용 구조와 미확인 항목을 남긴 뒤 운영자가 할인 조건 채택 여부를 결정합니다.",
+        "최종 정산이 확인되면 초안의 예상 조건과 실제 실수령 차이를 사례에 기록합니다."
+      ],
+      "openDecisions": [
+        "가격 기준과 포함 항목",
+        "매장 부담·중복 할인·수수료 처리 기준",
+        "예산·최소 실수령·허용 할인 조건",
+        "정산 완료 시점과 비용 판단 기준",
+        "공헌이익 시나리오의 변동원가 범위·가정값·검토 기준",
+        "쿠폰 플랫폼 보전과 환불·수수료·매장 부담의 정산 반영 순서"
+      ]
+    },
+    {
+      "id": "repeat-guest-coupon",
+      "title": "재방문 고객 할인쿠폰의 대상과 조건 검토",
+      "goal": "김정환님의 재방문 고객 할인쿠폰 방향을 매장 안에서 확인된 이용 이력과 운영자 검토 조건으로 구체화합니다.",
+      "ownerStatementIds": [
+        "owner-repeat-guest-coupon"
+      ],
+      "basis": "owner_direction",
+      "review": {
+        "status": "draft",
+        "reviewedBy": null,
+        "reviewedAt": null
+      },
+      "situation": "재방문 고객에게 할인쿠폰을 검토하려는 상황입니다. 고객의 과거 이용과 동일인 여부가 같은 매장에서 확인돼야 하며, 대상·시점·할인 조건은 아직 확정되지 않았습니다.",
+      "interpretations": [
+        "재방문 고객의 할인쿠폰은 김정환님의 직접 방향입니다. 재방문 인정 기준·발급 시점·할인율·유효기간·목표는 미확인입니다.",
+        "쿠폰이 다시 방문할 계기가 될 수 있다는 가설과, 이미 재방문 의사가 있는 고객에게 할인만 제공할 수 있다는 대안을 함께 검토합니다.",
+        "신규 예약 고객과 재방문 고객은 같은 매장 내 확인된 이용 이력으로 구분합니다. 예약자와 실제 이용객이 다른 경우나 동일인 여부가 불명확한 경우 임의로 재방문 대상으로 분류하지 않습니다.",
+        "정확한 예약 리드타임은 한국시간(KST)의 실제 숙박 시작일에서 예약 접수일을 뺀 달력 일수입니다. 예약 변경 전후 접수일·숙박 시작일 이력은 보존하고 취소·재예약을 별도 연결합니다.",
+        "쿠폰 사용이나 전후 지표 증가만으로 쿠폰이 예약 증가·리드타임 이동·수익 개선의 원인이라고 단정하지 않습니다.",
+        "기간 내 재방문 고객 비중은 해당 기간 고객 구성의 비중이며 N일 재방문율과 다릅니다. N일 재방문율은 기준 이용일부터 N일 관찰을 완료한 실제 투숙자 코호트만 분모로 삼고 관찰 미완료·동일인 미확인 인원은 별도로 남깁니다."
+      ],
+      "requiredData": [
+        {
+          "key": "property_scope",
+          "label": "분석 대상 매장과 매장 내 자료 연결 범위",
+          "source": "operator_setting",
+          "absence": "hold"
+        },
+        {
+          "key": "property_scoped_guest_history",
+          "label": "같은 매장 실제 투숙자의 확인된 이용 이력과 신규·재방문 구분",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "actual_booking_and_stay_dates",
+          "label": "실제 예약 접수일·숙박일과 한국시간(KST) 달력일 기준",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "cancellation_rebooking_history",
+          "label": "취소·환불·예약 변경·재예약의 원거래 연결 이력",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "reservation_price_and_refund",
+          "label": "할인 전후 실제 예약금액과 가격·취소·환불 조건",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "coupon_issue_redemption_log",
+          "label": "쿠폰 발급·노출·사용·취소와 적용 예약 연결 기록",
+          "source": "coupon_log",
+          "absence": "hold"
+        },
+        {
+          "key": "coupon_cost_and_stacking",
+          "label": "쿠폰 부담 주체·중복 할인·수수료 적용 기준",
+          "source": "coupon_log",
+          "absence": "hold"
+        },
+        {
+          "key": "net_settlement",
+          "label": "실제 정산액·환불액·수수료·쿠폰 플랫폼 보전액과 매장 실수령의 반영 내역",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "repeat_coupon_eligibility",
+          "label": "재방문 인정·발급 자격·동일인 확인·쿠폰 사용 조건",
+          "source": "operator_setting",
+          "absence": "hold"
+        },
+        {
+          "key": "repeat_cohort_observation",
+          "label": "실제 투숙자별 기준 이용일·후속 이용일·N일 관찰 완료 여부와 미확인 인원",
+          "source": "own_reservation",
+          "absence": "hold"
+        }
+      ],
+      "questions": [
+        "재방문 인정 기준은 과거 예약 접수입니까, 실제 이용 완료입니까?",
+        "예약자와 실제 이용객이 다르거나 고객 이력이 불명확할 때 대상에서 보류합니까?",
+        "같은 매장 안에서 중복·취소·재예약을 제거한 과거 이용을 확인할 수 있습니까?",
+        "발급 자격·유효기간·대상 숙박일·중복 할인·환불 조건을 정했습니까?",
+        "신규 고객과 재방문 고객의 결과를 별도로 검토할 수 있습니까?",
+        "재방문 고객 비중과 N일 재방문율을 구분하고, N일 관찰 완료 코호트의 분모와 미확인 인원을 표시할 수 있습니까?"
+      ],
+      "action": "같은 매장의 확인된 이용 이력과 대상 기준을 운영자가 검토해 재방문 쿠폰 초안을 만듭니다. 불명확한 신원·취소 이력은 보류하고, 다른 매장 이력으로 대상을 넓히거나 고객 메시지·쿠폰을 자동 발송하지 않습니다.",
+      "parameters": [
+        {
+          "key": "repeat_history_lookback_days",
+          "label": "재방문 이력 검토 기간",
+          "unit": "일",
+          "value": null
+        },
+        {
+          "key": "repeat_coupon_discount_percent",
+          "label": "재방문 쿠폰 검토 할인율",
+          "unit": "%",
+          "value": null
+        },
+        {
+          "key": "coupon_validity_days",
+          "label": "쿠폰 검토 유효기간",
+          "unit": "일",
+          "value": null
+        },
+        {
+          "key": "target_repeat_visit_interval_days",
+          "label": "검토 목표 재방문 간격",
+          "unit": "일",
+          "value": null
+        },
+        {
+          "key": "repeat_coupon_budget",
+          "label": "재방문 쿠폰 매장 부담 예산",
+          "unit": "원",
+          "value": null
+        },
+        {
+          "key": "repeat_observation_window_days",
+          "label": "재방문율 코호트 관찰 기간 N",
+          "unit": "일",
+          "value": null
+        }
+      ],
+      "exceptions": [
+        "모든 연결과 비교는 한 매장 안에서 수행합니다. 신규 고객·재방문 고객을 구분하고, 확인되지 않은 고객 이력이나 다른 매장의 이력을 섞지 않습니다. 재예약은 예약자 기준의 예약 이력, 재방문은 실제 투숙자 기준의 이용 이력으로 구별하며 대리 예약이나 같은 전화번호만으로 동일 고객을 자동 병합하지 않습니다.",
+        "취소된 과거 예약을 실제 이용 완료로 간주하지 않습니다.",
+        "예약자와 실제 이용객이 다르거나 동일인 연결이 불확실하면 재방문 이력을 추정하지 않습니다.",
+        "가족·단체·대리 예약 등 동일 고객 판단이 다른 경우에는 운영자의 확인 기준이 필요합니다.",
+        "재방문 고객의 쿠폰 사용과 쿠폰 때문에 생긴 재방문은 같은 뜻이 아닙니다.",
+        "재예약은 예약자 기준의 예약 이력이며 재방문은 실제 투숙자 기준의 이용 이력입니다. 대리 예약이나 같은 전화번호만으로 실제 투숙자를 같은 고객으로 자동 병합하지 않습니다."
+      ],
+      "stopConditions": [
+        "미제공·미확인·실패 자료는 0이나 쿠폰 미사용으로 처리하지 않고 해당 판단을 보류합니다.",
+        "같은 매장의 확인된 과거 이용이나 동일인 연결이 없으면 대상 판정을 보류합니다.",
+        "고객 정보가 충돌하거나 예약자·이용객 역할이 불명확하면 병합 또는 재분류하지 않습니다.",
+        "자격·중복 할인·환불·부담·실수령 조건이 미정이면 할인 조건의 채택 판단을 보류합니다.",
+        "N일 관찰 기간이 미정이거나 관찰 완료 코호트·실제 투숙자 연결을 확인하지 못하면 N일 재방문율 계산을 보류합니다."
+      ],
+      "measurement": {
+        "primary": [
+          {
+            "key": "eligible_repeat_coupon_completed_stays",
+            "label": "재방문 쿠폰 대상의 실제 이용 완료",
+            "definition": "같은 매장의 실제 투숙자 기준으로 확인한 과거 이용 이력을 가진 대상의 후속 이용 완료 건수입니다. 예약자 기준 재예약, 쿠폰 발급·사용·취소와 원거래를 분리하며 성과 원인을 단정하지 않습니다.",
+            "unit": "건",
+            "comparison": "같은 매장·대상 자격·시즌·노출 조건을 맞추고 신규 고객과 분리합니다."
+          },
+          {
+            "key": "n_day_repeat_visit_rate",
+            "label": "N일 재방문율",
+            "definition": "같은 매장에서 기준 이용일부터 N일 관찰을 완료한 실제 투숙자 코호트 인원을 분모로, 그 안에 후속 실제 투숙이 확인된 인원을 분자로 계산하는 비율입니다. N일 미정이면 보류하고 관찰 미완료·동일인 미확인·이용일 미확인 인원은 별도로 표시합니다.",
+            "unit": "%",
+            "comparison": "같은 매장·실제 투숙자 기준·관찰 기간·시즌 조건을 맞춥니다. 기간 내 재방문 고객 비중과 같은 지표로 비교하지 않습니다."
+          }
+        ],
+        "drivers": [
+          {
+            "key": "repeat_visit_interval",
+            "label": "확인된 재방문 간격",
+            "definition": "동일한 실제 투숙자로 확인된 같은 매장의 이전 실제 이용일부터 후속 이용일까지의 간격입니다. 예약자 기준 재예약 간격이나 예약 리드타임과 별도 지표입니다.",
+            "unit": "일",
+            "comparison": "같은 재방문 인정 기준과 분석 범위에서 비교합니다."
+          },
+          {
+            "key": "repeat_coupon_actual_leadtime",
+            "label": "재방문 쿠폰 예약 리드타임",
+            "definition": "재방문 쿠폰 사용 예약의 한국시간(KST) 숙박 시작일에서 실제 예약 접수일을 뺀 달력 일수입니다.",
+            "unit": "일",
+            "comparison": "신규·재방문, 쿠폰 자격·사용·취소·재예약을 구분해 비교합니다."
+          }
+        ],
+        "guardrails": [
+          {
+            "key": "uncertain_repeat_identity_count",
+            "label": "재방문 대상 확인 보류 건수",
+            "definition": "실제 투숙자 동일인·이용 완료·매장 범위를 확인하지 못해 대상 판정을 보류한 건수입니다. N일 관찰 미완료 인원은 대상 미확인과도 구분해 별도로 표시합니다.",
+            "unit": "건",
+            "comparison": "기록이 없다는 이유로 신규 또는 재방문으로 확정하지 않습니다."
+          },
+          {
+            "key": "repeat_coupon_net_receipt",
+            "label": "재방문 쿠폰 적용 실수령",
+            "definition": "실제 정산에 따라 환불·수수료·매장 쿠폰 부담·중복 할인을 대조한 실수령입니다.",
+            "unit": "원",
+            "comparison": "같은 매장·객실·포함 조건에서 신규 고객과 분리해 비교합니다."
+          }
+        ]
+      },
+      "followUp": [
+        "운영자가 확정한 대상 기준·실제 적용 여부·제외 이유를 사례에 남깁니다.",
+        "후속 이용 완료와 취소·재예약·실수령을 확인한 후 조건 유지 또는 재검토 여부를 정합니다."
+      ],
+      "openDecisions": [
+        "재방문 인정 기준과 동일인 확인 방식",
+        "발급 대상·시점·유효기간·숙박일 조건",
+        "할인율·예산·중복 허용·환불 기준",
+        "목표 재방문 간격·측정 기간·비교 조건",
+        "N일 관찰 기간과 관찰 완료 코호트·분모·미확인 인원 표시 기준"
+      ]
+    },
+    {
+      "id": "coupon-retrospective",
+      "title": "쿠폰 적용 뒤 리드타임·가격·실수령 회고",
+      "goal": "미확인 설계 확장으로서 실제 실행 기록과 결과를 함께 남겨 운영자가 다음 쿠폰 판단에 사용할 사례를 축적합니다.",
+      "ownerStatementIds": [
+        "owner-leadtime-price-coupon",
+        "owner-repeat-guest-coupon"
+      ],
+      "basis": "design_extension",
+      "review": {
+        "status": "draft",
+        "reviewedBy": null,
+        "reviewedAt": null
+      },
+      "situation": "운영자가 쿠폰을 실제 적용했다고 확인했고 예약·쿠폰·취소·재예약·정산 기록을 연결할 수 있을 때 결과를 검토합니다. 초안·발급·사용·이용 완료는 서로 다른 상태입니다.",
+      "interpretations": [
+        "쿠폰 회고 절차는 두 직접 방향에서 확장한 설계 초안이며 사용자가 확정한 운영 규칙이나 검증된 성과가 아닙니다.",
+        "정확한 예약 리드타임은 한국시간(KST)의 실제 숙박 시작일에서 예약 접수일을 뺀 달력 일수입니다. 예약 변경 전후 접수일·숙박 시작일 이력은 보존하고 취소·재예약을 별도 연결합니다.",
+        "공개 관측은 실제 예약 접수일을 알려주지 않습니다. 관측 사이 예약 수량 증가 시점의 구간과 순변화만 보조로 읽으며, 순변화를 신규 예약 수나 정확한 리드타임으로 바꾸지 않습니다. 최초 관측 전에 접수된 예약의 실제 접수일은 공개 관측으로 복원할 수 없습니다.",
+        "쿠폰 사용이나 전후 지표 증가만으로 쿠폰이 예약 증가·리드타임 이동·수익 개선의 원인이라고 단정하지 않습니다.",
+        "시즌·요일·객실·판매가격·혜택·노출·예약 선행일·운영 재고가 달라지면 전후 차이의 해석을 제한합니다. 확인되지 않은 외부 효과를 제거한 것으로 설명하지 않습니다.",
+        "재예약은 예약자 기준, 재방문은 실제 투숙자 기준으로 구별합니다. 같은 전화번호·대리 예약으로 동일 고객을 자동 병합하지 않으며 기간 내 재방문 고객 비중과 관찰 완료 코호트의 N일 재방문율을 혼동하지 않습니다.",
+        "예약금액·환불·쿠폰 매장 부담·쿠폰 플랫폼 보전·수수료가 실제 정산에 이미 반영됐는지 확인해 각 항목을 한 번만 반영합니다. 고객 할인액과 매장 부담액을 구별하고 환불·수수료·쿠폰 부담을 이중 차감하거나 플랫폼 보전을 이중 가산하지 않습니다.",
+        "확인된 실수령, 운영 판단용 공헌이익 시나리오와 영업이익을 구분하며, 원가가 미확인인 경우 이익 개선으로 결론 내리지 않습니다."
+      ],
+      "requiredData": [
+        {
+          "key": "property_scope",
+          "label": "분석 대상 매장과 매장 내 자료 연결 범위",
+          "source": "operator_setting",
+          "absence": "hold"
+        },
+        {
+          "key": "actual_booking_and_stay_dates",
+          "label": "실제 예약 접수일·숙박일과 한국시간(KST) 달력일 기준",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "coupon_issue_redemption_log",
+          "label": "쿠폰 발급·노출·사용·취소와 적용 예약 연결 기록",
+          "source": "coupon_log",
+          "absence": "hold"
+        },
+        {
+          "key": "reservation_price_and_refund",
+          "label": "할인 전후 실제 예약금액과 가격·취소·환불 조건",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "coupon_cost_and_stacking",
+          "label": "쿠폰 부담 주체·중복 할인·수수료 적용 기준",
+          "source": "coupon_log",
+          "absence": "hold"
+        },
+        {
+          "key": "cancellation_rebooking_history",
+          "label": "취소·환불·예약 변경·재예약의 원거래 연결 이력",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "net_settlement",
+          "label": "실제 정산액·환불액·수수료·쿠폰 플랫폼 보전액과 매장 실수령의 반영 내역",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "property_scoped_guest_history",
+          "label": "같은 매장 실제 투숙자의 확인된 이용 이력과 신규·재방문 구분",
+          "source": "own_reservation",
+          "absence": "hold"
+        },
+        {
+          "key": "coupon_execution_and_comparison_plan",
+          "label": "운영자가 확인한 실제 적용 조건·목표·비교 기준·중단 기록",
+          "source": "operator_setting",
+          "absence": "hold"
+        },
+        {
+          "key": "saved_public_observations",
+          "label": "동일 매장·숙박일의 저장된 공개 관측과 관측 시각",
+          "source": "saved_observation",
+          "absence": "reference_only"
+        }
+      ],
+      "questions": [
+        "초안과 실제 실행을 구분하고 적용 일시·대상·할인 조건을 기록했습니까?",
+        "원예약·취소·재예약·최종 이용 완료를 연결할 수 있습니까?",
+        "신규·재방문 고객과 매장별 결과가 분리돼 있습니까?",
+        "같은 조건의 비교 자료가 있고 달라진 조건을 기록했습니까?",
+        "미정산·미확인 자료를 제외한 범위와 이유가 표시돼 있습니까?",
+        "재예약·실제 투숙자 재방문·기간 내 고객 비중·N일 관찰 완료 코호트를 각각 구분했습니까?"
+      ],
+      "action": "실제로 적용한 조건과 당시 기준선, 예약·취소·재예약·실수령의 확인 범위를 나란히 기록합니다. 운영자는 유지·수정·중단·판단 보류 중 다음 검토 상태를 정하며, 효과 없음과 불확실한 사례도 보존합니다.",
+      "parameters": [
+        {
+          "key": "retrospective_period_days",
+          "label": "회고 검토 기간",
+          "unit": "일",
+          "value": null
+        },
+        {
+          "key": "comparison_period_days",
+          "label": "비교 기준 기간",
+          "unit": "일",
+          "value": null
+        },
+        {
+          "key": "target_leadtime_change_days",
+          "label": "검토 목표 리드타임 변화",
+          "unit": "일",
+          "value": null
+        },
+        {
+          "key": "target_net_receipt_change",
+          "label": "검토 목표 실수령 변화",
+          "unit": "원",
+          "value": null
+        },
+        {
+          "key": "minimum_comparable_reservations",
+          "label": "판단에 필요한 비교 가능 예약 건수",
+          "unit": "건",
+          "value": null
+        }
+      ],
+      "exceptions": [
+        "모든 연결과 비교는 한 매장 안에서 수행합니다. 신규 고객·재방문 고객을 구분하고, 확인되지 않은 고객 이력이나 다른 매장의 이력을 섞지 않습니다. 재예약은 예약자 기준의 예약 이력, 재방문은 실제 투숙자 기준의 이용 이력으로 구별하며 대리 예약이나 같은 전화번호만으로 동일 고객을 자동 병합하지 않습니다.",
+        "실제 실행되지 않은 초안은 실적 사례로 기록하지 않습니다.",
+        "관측 순변화는 신규 예약과 취소가 섞일 수 있으므로 실제 예약 이력을 대체하지 않습니다.",
+        "예약 건수·숙박일별 객실 누적 수량·이용 완료·정산 완료는 다른 집계 단위로 유지합니다.",
+        "취소 후 재예약에 따른 할인 비용과 리드타임 변경은 새로운 고객 확보와 구분합니다."
+      ],
+      "stopConditions": [
+        "미제공·미확인·실패 자료는 0이나 쿠폰 미사용으로 처리하지 않고 해당 판단을 보류합니다.",
+        "실제 실행 여부·노출·사용 이력이 불명확하면 쿠폰 성과 판단을 보류합니다.",
+        "같은 매장·비교 조건 또는 신규·재방문 구분을 확인하지 못하면 통합 성과 결론을 내리지 않습니다.",
+        "환불·정산이 미완료이면 실수령·수익 개선 결론을 보류하고 확인된 금액만 표시합니다.",
+        "동시 가격 변경이나 조건 차이를 분리할 수 없으면 원인 귀속을 보류합니다."
+      ],
+      "measurement": {
+        "primary": [
+          {
+            "key": "retrospective_actual_leadtime_change",
+            "label": "실제 리드타임 분포 변화",
+            "definition": "같은 조건에서 실제 접수일 기준 리드타임 분포의 차이를 기록합니다. 평균만으로 축약하지 않고 분포·미확인·취소·재예약 범위를 함께 남깁니다.",
+            "unit": "일",
+            "comparison": "같은 매장·객실·요일·시즌·가격·예약 선행일 조건을 맞추고 신규·재방문을 분리합니다."
+          },
+          {
+            "key": "retrospective_net_receipt_change",
+            "label": "대조 완료 실수령 변화",
+            "definition": "환불·수수료·쿠폰 매장 부담·플랫폼 보전·중복 할인의 정산 반영 여부를 대조하고 각 항목을 한 번만 반영한 실수령 차이입니다. 미정산은 0원으로 합산하지 않으며 공헌이익이나 영업이익으로 대체하지 않습니다.",
+            "unit": "원",
+            "comparison": "동일한 숙박·포함 조건과 정산 완료 기준에서 비교하며 쿠폰의 인과 효과로 해석하지 않습니다."
+          }
+        ],
+        "drivers": [
+          {
+            "key": "coupon_funnel_counts",
+            "label": "쿠폰 단계별 확인 건수",
+            "definition": "발급·노출·사용·취소·재예약·이용 완료의 확인 건수를 각각 기록합니다. 미확인은 0건과 구분합니다.",
+            "unit": "건",
+            "comparison": "단계별 연결 가능한 범위와 대상 자격을 함께 제시하며 분모가 다른 비율을 혼합하지 않습니다."
+          }
+        ],
+        "guardrails": [
+          {
+            "key": "retrospective_unconfirmed_count",
+            "label": "회고 근거 미확인 건수",
+            "definition": "예약 접수일·쿠폰 연결·이용 상태·정산 등의 근거가 부족해 해당 판단에서 보류한 건수입니다.",
+            "unit": "건",
+            "comparison": "자료 확보 범위 차이를 실적 차이로 설명하지 않습니다."
+          },
+          {
+            "key": "retrospective_cancellation_rebooking",
+            "label": "취소·재예약 별도 건수",
+            "definition": "원예약과 연결된 취소·재예약을 별도 집계해 순수 신규 예약과 구분합니다.",
+            "unit": "건",
+            "comparison": "같은 매장·원거래와 예약 상태 기준에서 비교합니다."
+          }
+        ]
+      },
+      "followUp": [
+        "당시 관측상황·가능한 해석·추가 확인·권장 행동·예외·결과 확인을 한 사례로 연결합니다.",
+        "운영자 검토 이유와 미확인 사항을 남기고 새 사례가 쌓여도 초안 규칙을 자동 승인하거나 자동 실행하지 않습니다.",
+        "성과가 증가해도 원인을 단정하지 않고 비교 조건과 대안 해석을 유지합니다."
+      ],
+      "openDecisions": [
+        "실제 적용 확인과 기록 책임자",
+        "회고 기간·비교군·목표·판단 기준",
+        "취소·재예약·노출·정산 집계 기준",
+        "전문가 검토·사례 재사용 범위와 유지·수정·중단 결정"
+      ]
+    }
+  ]
+}

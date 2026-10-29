@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="ko" data-theme="light">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>사분 인사이트 · 판단 카드 검토</title><link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script></head>
+<body>
+<a class="skip" href="#main">본문으로 건너뛰기</a>
+<header class="top"><a class="brand" href="/">SABUN <span>INSIGHT</span></a><div class="top-actions"><span class="internal">내부 검토</span><button id="theme" type="button">다크 모드</button></div></header>
+<main id="main">
+<div class="intro"><span class="eyebrow">EXPERIENCE → DECISION</span><h1>운영 경험을 판단 카드로</h1><p>리드타임·가격·쿠폰의 판단 조건을 정리합니다. 실제 서비스에는 미연결된 검토 화면입니다.</p><div class="state-row"><span class="pill draft">초안 · 전문가 검토 전</span><span id="version" class="muted"></span></div></div>
+<section class="notice" aria-label="검토 범위"><strong>경험의 방향과 실행 조건을 구분합니다.</strong><p>김정환님의 발언은 출처로 보관합니다. 할인율·적용 시점·대상·비용 한도는 미정이며, 카드만으로 쿠폰을 발급하거나 가격을 변경하지 않습니다.</p></section>
+<details class="owner-source"><summary>김정환님이 말씀하신 방향 <span aria-hidden="true">+</span></summary><div id="owner-statements"></div></details>
+<div class="filters"><div class="filter-field"><label for="topic">판단 주제</label><select id="topic"><option value="all">전체 카드</option><option value="leadtime">리드타임·예약 시점</option><option value="price">가격·할인 부담</option><option value="repeat">재방문</option><option value="review">결과 회고</option></select></div><div class="filter-field search-field"><label for="search">카드 검색</label><input id="search" type="search" placeholder="상황이나 판단 주제 검색"></div><span id="count" class="count" aria-live="polite"></span></div>
+<p id="status" class="muted" role="status">판단 카드를 읽고 있습니다.</p><div id="cards" class="cards"></div>
+<div id="error" class="error" hidden><p>판단 카드를 읽지 못했습니다. 초안 파일을 준비한 뒤 다시 확인하세요.</p><button id="retry" type="button">다시 읽기</button></div>
+<footer>정기수집·운영 설정과 연결되지 않습니다. 검토한 조건과 예외는 다음 개발 단계에서 별도로 승인·기록합니다.</footer>
+</main></body></html>
