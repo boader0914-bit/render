@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { DataComponent, DataTable, EvidenceChart, SectionHeader, SortableItem, SortableRegion, useDataApp } from "../../data-app-public.jsx";
 import { computeComparison } from "../shared/comparison-engine.mjs";
+import { OperatingActions } from './OperatingActions.jsx';
 
 const number=value=>Number.isFinite(value)?value.toLocaleString('ko-KR',{maximumFractionDigits:1}):'미확인';
 const percent=value=>Number.isFinite(value)?`${(value*100).toFixed(1)}%`:'미확인';
@@ -41,6 +42,7 @@ export function DashboardContent(){
   const selectedId=selected.companyId||selected.id;
   const currentMembers=new Set(companies.map(company=>company.companyId||company.id));
   const sourceRows=(queries.company_daily?.rows||[]).filter(row=>[runId,model.selection?.previousRunId].includes(row.runId)&&row.date>=start&&row.date<=end&&currentMembers.has(row.companyId)&&matchesDay(row.date,dayFilter));
+  const actionSourceRows=(queries.company_daily?.rows||[]).filter(row=>[runId,model.selection?.previousRunId].includes(row.runId)&&row.date>=start&&row.date<=end&&(currentMembers.has(row.companyId)||row.companyId===ownerId)&&matchesDay(row.date,dayFilter));
   const currentRows=sourceRows.filter(row=>row.runId===runId);
   const rankRows=companies.map(company=>({company:company.placeId===snapshot.meta.ownerPlaceId?`● ${company.name}`:company.name,publicRate:company.supply>0?company.publicBookings/company.supply:null,inferredRate:company.supply>0?company.inferredBookings/company.supply:null,rate:company.rate,rank:company.rank,coveredDays:company.coveredDays,supply:company.supply,publicBookings:company.publicBookings,inferredBookings:company.inferredBookings,companyId:company.companyId}));
   const dailyRows=(model.daily||[]).map(row=>({date:row.date,ownerRate:row.owner?.rate??null,benchmarkRate:row.benchmark?.rate??null}));
@@ -74,8 +76,10 @@ export function DashboardContent(){
       <Stat id="owner-visible-price" title="월명 숙박상품 표시가격 중앙값" value={money(owner.medianProductPrice)} detail={`표본 ${money(benchmark.medianProductPrice)} · 상품 조건 미확인, 참고`} rows={[owner,benchmark]} sourceRows={currentRows}/>
       <Stat id="owner-reservation-change" title="월명 공개예약 순변화" value={`${signed(owner.change?.publicNetChange)}${Number.isFinite(owner.change?.publicNetChange)?'실':''}`} detail={`같은 상품·숙박일 ${number(owner.change?.comparableDays)}일 비교 · 신규예약 건수 아님`} rows={[owner.change||{}]} sourceRows={sourceRows.filter(row=>row.companyId===ownerId)}/>
     </SortableRegion>
-    <SectionHeader id="comparison-review-heading" title="먼저 검토할 판단"/>
-    <div className="kc-judgments">{(model.cards||[]).map((card,index)=><DataComponent key={card.id||index} id={`saved-judgment-${index}`} queryId="company_daily" title={card.title} kind="narrative" variant="card" displayRows={[{...card,start,end,runId,previousRunId}]} sourceRows={sourceRows}><div className="kc-judgment"><span className={`kc-pill ${card.status==='hold'?'kc-hold':''}`}>{statusLabel(card.status)}</span><p className="kc-finding">{card.finding}</p><p className="kc-next">{card.action}</p><details><summary>근거와 적용 범위 <b>+</b></summary><ul>{safeReasons(card.evidence).map((text,i)=><li key={i}>{text}</li>)}</ul><ul className="kc-muted">{safeReasons(card.limits).map((text,i)=><li key={i}>{text}</li>)}</ul></details></div></DataComponent>)}</div>
+    <OperatingActions snapshot={snapshot} model={model} sourceRows={actionSourceRows} productRows={queries.product_observations?.rows||[]}/>
+    <details className="koa-comparison-basis"><summary>비교 지표 해석 기준 <b>+</b></summary>
+      <div className="kc-judgments">{(model.cards||[]).map((card,index)=><DataComponent key={card.id||index} id={`saved-judgment-${index}`} queryId="company_daily" title={card.title} kind="narrative" variant="card" displayRows={[{...card,start,end,runId,previousRunId}]} sourceRows={sourceRows}><div className="kc-judgment"><span className={`kc-pill ${card.status==='hold'?'kc-hold':''}`}>{statusLabel(card.status)}</span><p className="kc-finding">{card.finding}</p><p className="kc-next">{card.action}</p><details><summary>근거와 적용 범위 <b>+</b></summary><ul>{safeReasons(card.evidence).map((text,i)=><li key={i}>{text}</li>)}</ul><ul className="kc-muted">{safeReasons(card.limits).map((text,i)=><li key={i}>{text}</li>)}</ul></details></div></DataComponent>)}</div>
+    </details>
     <div className="kc-chart-grid">
       {hasRate?<EvidenceChart id="top20-reservation-composition" queryId="company_daily" title="업체별 추정 예약률" rows={rankRows} sourceRows={currentRows} spec={{type:'horizontalStackedBar',x:'company',y:'publicRate',fields:['publicRate','inferredRate'],colors:{publicRate:'var(--chart-1)',inferredRate:'var(--chart-2)'},legend:{labels:{publicRate:'공개예약',inferredRate:'타채널 추정'}},showXAxisLabel:false,showYAxisLabel:false,startAtZero:true,showValues:true,valueDecimals:1}} height={640}><p className="kc-caption">● 월명글램핑 · 순위 순서 · 공개예약은 녹색, 타채널 추정예약은 보라색입니다. 미확인은 0으로 바꾸지 않습니다.</p></EvidenceChart>:<DataComponent id="top20-reservation-composition" queryId="company_daily" title="업체별 추정 예약률" kind="chart" displayRows={rankRows} sourceRows={currentRows}><div className="kc-empty"><strong>수량 응답 근거 미확인</strong><p>선택한 범위에 유효한 수량 근거가 없습니다. 예약률 0%와 구별하며, 확인 가능한 가격은 별도로 표시합니다.</p></div></DataComponent>}
       <div className="kc-right-charts">
