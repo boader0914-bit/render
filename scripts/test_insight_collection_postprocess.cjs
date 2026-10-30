@@ -91,6 +91,7 @@ test('without the optional reader, persisted request snapshots preserve pending 
 test('completed DB processing still requires the original company and date-range verification',async t=>{
   const f=fixture(t,{current:{state:'running'},verified:false});await f.dispatch();await f.refresh();assert.equal(f.row().status,'collecting');assert.equal(f.calls.verify,0);
   f.setCurrent({state:'complete'});await f.refresh();assert.equal(f.row().status,'needs_review');assert.match(f.row().message,/업체 또는 조회 범위가 일치/);
+  assert.equal(f.row().errorCode,'COLLECTION_STORED_SCOPE_MISMATCH','a completed transport receipt must retain the date-coverage failure reason');
   assert.equal(f.calls.verify,1);assert.equal(f.calls.submit,1);
 });
 
