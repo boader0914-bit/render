@@ -50,7 +50,9 @@
   const bootstrapHeaders=()=>{
     if(window.InsightBootstrapReads?.headers)return window.InsightBootstrapReads.headers();
     const current=route(),company=/^(?:company|collection|collect)=([a-zA-Z0-9_-]{1,180})$/.exec(current);
-    const view=company?'company':current.startsWith('regions=')?'regions':['home','property','competitors','regions','reports','settings'].includes(current)?current:null;
+    // The archived-comparison launcher needs identity only; reuse the existing
+    // settings bootstrap bucket without changing the actual settings screen.
+    const view=current==='saved-keyword-comparison'?'settings':company?'company':current.startsWith('regions=')?'regions':['home','property','competitors','regions','reports','settings'].includes(current)?current:null;
     return {...(view?{'X-Insight-Bootstrap-View':view}:{}),...(company?{'X-Insight-Bootstrap-Company':company[1]}:{})};
   };
   async function responseValue(response) {
@@ -253,7 +255,7 @@
   function render() {
     stopRecurringPoll();
     lastRenderedHash=location.hash;
-    searchSequence++; window.InsightContextWorkspace?.stop(); window.InsightComparisonView?.stop(); window.InsightAnalysis?.stop(); window.InsightCollection?.stop?.(); window.InsightSavedKeywordComparison?.stop();
+    searchSequence++; window.InsightContextWorkspace?.stop(); window.InsightComparisonView?.stop(); window.InsightAnalysis?.stop(); window.InsightCollection?.stop?.();
     const scope=state?.customer.customerId?`${adminView?'admin':'customer'}:${state.customer.customerId}`:'';
     const sessionExpired=()=>{state=null;adminCsrf='';selectedOwnId=null;comparisonSelection?.configure({scope:'',permissionSignature:'',authorizedOwnCompanyIds:[],authorizedComparisonIds:[],authorizedComparisonIdsByOwn:{}});render();};
     configureSelection(scope);
@@ -276,7 +278,6 @@
     if (route() === 'welcome') { $('#main').innerHTML=window.InsightAuth.welcome(state.customer); return; }
     if (route() === 'saved-keyword-comparison') {
       $('#main').innerHTML = window.InsightSavedKeywordComparison?.panel({adminView}) || '<section class="card"><h1>저장 비교 화면 연결을 확인해 주세요.</h1><a href="#competitors">경쟁 분석으로 돌아가기</a></section>';
-      window.InsightSavedKeywordComparison?.mount({adminView,onSessionExpired:sessionExpired});
       return;
     }
     const c = state.customer, relations = c.relations.filter(row=>['active','pending'].includes(row.status));

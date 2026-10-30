@@ -21,7 +21,9 @@
   const base=adminView?'/api/insight-admin/v1':'/api/customer/v1';
   const bootstrapHeaders=()=>{
     const current=location.hash.slice(1)||'home',company=/^(?:company|collection|collect)=([a-zA-Z0-9_-]{1,180})$/.exec(current);
-    const view=company?'company':current.startsWith('regions=')?'regions':['home','property','competitors','regions','reports','settings'].includes(current)?current:null;
+    // The saved-data launcher reuses the identity-only settings bucket; it
+    // must not prefetch customer company, regional or report snapshots.
+    const view=current==='saved-keyword-comparison'?'settings':company?'company':current.startsWith('regions=')?'regions':['home','property','competitors','regions','reports','settings'].includes(current)?current:null;
     return {Accept:'application/json',...window.InsightAdminCustomerView.headers(),...(view?{'X-Insight-Bootstrap-View':view}:{}),...(company?{'X-Insight-Bootstrap-Company':company[1]}:{})};
   };
   const reads=new Map();
