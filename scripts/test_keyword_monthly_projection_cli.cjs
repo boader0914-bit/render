@@ -41,6 +41,15 @@ async function identity(file) {
   const [bytes, stat] = await Promise.all([fs.readFile(file), fs.stat(file)]);
   return { sha256: hash(bytes), size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, ino: stat.ino, dev: stat.dev };
 }
+
+test("CLI forwards exact multirun normalization cutoffs and rejects malformed dates", async t => {
+  const f = await setup(t), normalizationCutoffs = { "2026-09": "2026-09-22", "2026-10": "2026-10-22" };
+  const provenance = { ...f.provenance, observationScope: "normalized_multirun", normalizationCutoffs }; delete provenance.selectionCutoffs;
+  await fs.writeFile(f.provenanceFile, JSON.stringify(provenance)); const actual = invoke(f);
+  assert.equal(actual.code, 0, JSON.stringify(actual.error)); assert.deepEqual(actual.result.provenance.normalizationCutoffs, normalizationCutoffs);
+  const invalid = await setup(t); await fs.writeFile(invalid.provenanceFile, JSON.stringify({ ...provenance, normalizationCutoffs: { "2026-10": "2026-02-30" } }));
+  assert.equal(invoke(invalid).error.code, "KEYWORD_MONTHLY_CLI_PROVENANCE_INVALID");
+});
 async function tree(directory) {
   const rows = [];
   for (const entry of await fs.readdir(directory, { withFileTypes: true })) {

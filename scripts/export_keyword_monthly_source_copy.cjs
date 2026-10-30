@@ -1,6 +1,6 @@
 "use strict";
 const fs = require("node:fs/promises"), path = require("node:path");
-const { inspect, copy, safeJson } = require("./lib/keyword_monthly_source_copy.cjs");
+const { inspect, copy, safeJson, checkedPath } = require("./lib/keyword_monthly_source_copy.cjs");
 function args(values) {
   const result = {}, allowed = new Set(["mode", "source-data", "scratch-parent", "inspection", "copy-root", "output", "include-prepared"]);
   for (let i = 0; i < values.length; i += 2) {
@@ -15,7 +15,7 @@ function args(values) {
   return result;
 }
 async function run(values) {
-  const input = args(values), options = { sourceDataDir: input["source-data"], scratchParent: input["scratch-parent"], includePrepared: input["include-prepared"] !== "false" };
+  const input = args(values), options = { sourceDataDir: input["source-data"], scratchParent: input["scratch-parent"], includePrepared: input["include-prepared"] === "true" };
   if (input.output) {
     const output = path.resolve(input.output), source = path.resolve(input["source-data"]), operations = path.join(source, "operations");
     // Receipts may be created only in an explicitly named operations folder,
@@ -25,11 +25,13 @@ async function run(values) {
     if (!under(operations, output) && !(scratch && under(scratch, output) && !under(source, output))) throw Error("KEYWORD_COPY_RECEIPT_PATH_INVALID");
   }
   const value = input.mode === "inspect" ? await inspect(options) : await copy({ ...options, copyRoot: input["copy-root"], inspection: (await safeJson(input.inspection, 16 * 1024 * 1024)).value });
-  if (input.output) await fs.writeFile(input.output, JSON.stringify(value), { flag: "wx", mode: 0o600 });
+  if (input.output) { await checkedPath(path.dirname(path.resolve(input.output)), true); await fs.writeFile(input.output, JSON.stringify(value), { flag: "wx", mode: 0o600 }); }
   // The console contains no business rows, paths inside runs, credentials or contact data.
   return { mode: input.mode, state: value.state || "inspected", fileCount: value.fileCount, bytes: value.bytes, inventorySha256: value.inventorySha256 || value.sourceInventorySha256,
-    sourceWrites: 0, ...(input.mode === "inspect" ? { scratchAvailableBytes: value.scratchAvailableBytes, conservativeRequiredBytes: value.conservativeRequiredBytes, canCopyWithReserve: value.canCopyWithReserve }
-      : { copyRoot: value.copyRoot, captureManifestSha256: value.captureManifestSha256, sourcePreserved: value.sourcePreserved, elapsedMs: value.elapsedMs }) };
+    sourceWrites: 0, captureMode: value.captureMode, ...(input.mode === "inspect" ? { copyFileCount: value.copyFileCount, copyBytes: value.copyBytes, scratchAvailableBytes: value.scratchAvailableBytes,
+      ownScratchHardBytes: value.ownScratchHardBytes, conservativeRequiredBytes: value.conservativeRequiredBytes, canCopyWithReserve: value.canCopyWithReserve }
+      : { copyRoot: value.copyRoot, captureManifestSha256: value.captureManifestSha256, sourcePreserved: value.sourcePreserved, elapsedMs: value.elapsedMs,
+        originalOutputBodiesCopied: value.originalOutputBodiesCopied, originalOutputFileCount: value.originalOutputFileCount, ownScratchHardBytes: value.ownScratchHardBytes }) };
 }
 if (require.main === module) run(process.argv.slice(2)).then(value => console.log(JSON.stringify(value))).catch(error => { console.error(JSON.stringify({ code: error.code || (/^[A-Z0-9_]+$/.test(error.message || "") ? error.message : "KEYWORD_COPY_FAILED") })); process.exitCode = 1; });
 module.exports = { run, args };

@@ -12,8 +12,8 @@
   const kstDay = now => new Date(Number(now) + 9 * 3600000).toISOString().slice(0, 10);
   const monthEnd = month => { const [year, part] = month.split("-").map(Number); return new Date(Date.UTC(year, part, 0)).toISOString().slice(0, 10); };
   const defaultCutoff = (month, today) => MONTH.test(month || "") && monthEnd(month) < today ? monthEnd(month) : today;
-  const dataThroughDay = catalog => dateValid(catalog?.provenance?.dataThrough) ? catalog.provenance.dataThrough : Number.isFinite(Date.parse(catalog?.provenance?.dataThrough || "")) ? kstDay(Date.parse(catalog.provenance.dataThrough)) : catalog?.currentDay || kstDay(Date.now());
-  const cutoffFor = (catalog, keyword, month) => { const recorded = catalog?.keywords.find(row => row.keyword === keyword)?.defaultCutoffs?.[month]; return dateValid(recorded) ? recorded : [defaultCutoff(month, catalog.currentDay), dataThroughDay(catalog)].sort()[0]; };
+  const dataThroughDay = (catalog, keyword, month) => { const provenance = catalog?.keywords?.find(row => row.keyword === keyword)?.provenanceByMonth?.[month] || catalog?.provenance; return dateValid(provenance?.dataThrough) ? provenance.dataThrough : Number.isFinite(Date.parse(provenance?.dataThrough || "")) ? kstDay(Date.parse(provenance.dataThrough)) : catalog?.currentDay || kstDay(Date.now()); };
+  const cutoffFor = (catalog, keyword, month) => { const recorded = catalog?.keywords.find(row => row.keyword === keyword)?.defaultCutoffs?.[month]; return dateValid(recorded) ? recorded : [defaultCutoff(month, catalog.currentDay), dataThroughDay(catalog, keyword, month)].sort()[0]; };
   const phaseLabel = (month, currentMonth) => !MONTH.test(month || "") ? "자료 선택 전" : month > currentMonth ? "사전 관측" : month === currentMonth ? "누적 중" : "마감된 월";
   const message = value => typeof value === "string" ? value : value?.message || value?.reason || value?.code || "확인 필요";
   const hasDiagnostic = (rows, code) => rows.some(value => value === code || value?.code === code);
@@ -28,7 +28,8 @@
       const cutoffs = values => Object.fromEntries(Object.entries(values && typeof values === "object" ? values : {}).filter(([month, day]) => MONTH.test(month) && dateValid(day) && day <= currentDay));
       keywords.push({ keyword, stayMonths: [...new Set((Array.isArray(row.stayMonths) ? row.stayMonths : []).filter(month => typeof month === "string" && MONTH.test(month)))].sort().reverse(),
         collectionMonths: [...new Set((Array.isArray(row.collectionMonths) ? row.collectionMonths : []).filter(month => typeof month === "string" && MONTH.test(month)))].sort().reverse(),
-        defaultCutoffs: cutoffs(row.defaultCutoffs), supportedCutoffs: row.supportedCutoffs && typeof row.supportedCutoffs === "object" ? cutoffs(row.supportedCutoffs) : null });
+        defaultCutoffs: cutoffs(row.defaultCutoffs), supportedCutoffs: row.supportedCutoffs && typeof row.supportedCutoffs === "object" ? cutoffs(row.supportedCutoffs) : null,
+        provenanceByMonth: Object.fromEntries(Object.entries(row.provenanceByMonth || {}).filter(([month, item]) => MONTH.test(month) && item && typeof item === "object" && Number.isFinite(Date.parse(item.dataThrough || ""))).map(([month, item]) => [month, { dataThrough: item.dataThrough }])) });
     }
     return { status: value.status || "needs_verification", currentDay, currentMonth: MONTH.test(value.currentMonth || "") ? value.currentMonth : currentDay.slice(0, 7), keywords, provenance: value.provenance || null, diagnostics: Array.isArray(value.diagnostics) ? value.diagnostics : [] };
   }
@@ -60,11 +61,17 @@
     const rows = Array.isArray(snapshot?.daily) ? snapshot.daily : [];
     const dates = rows.map(row => row.date);
     const dailyValid = dates.every(day => dateValid(day) && day.startsWith(`${selection.month}-`)) && new Set(dates).size === dates.length;
-    const usable = payload.status === "available" && scopeMatches && snapshotMatches && dailyValid;
-    const status = payload.status === "available" && !usable ? "needs_verification" : payload.status || "needs_verification";
     const diagnostics = [...(Array.isArray(payload.diagnostics) ? payload.diagnostics : [])];
-    if (payload.status === "available" && !usable) diagnostics.push({ code: "KEYWORD_MONTHLY_RESPONSE_MISMATCH", message: "응답의 검색어·숙박월·관측 마감일 또는 일별 자료를 확인해야 합니다." });
-    return { usable, status, phase: phaseLabel(selection.month, currentMonth), diagnostics,
+    // An expired preparation remains inspectable as historical evidence. It is
+    // never relabelled fresh, and a cutoff beyond that evidence stays blocked.
+    const historicalSnapshot = payload.status === "stale" && hasDiagnostic(diagnostics, "PROJECTION_EXPIRED")
+      && !hasDiagnostic(diagnostics, "CUTOFF_AFTER_DATA_THROUGH") && Number.isFinite(Date.parse(payload.provenance?.dataThrough || ""))
+      && selection.cutoffDate <= dataThroughDay({ provenance: payload.provenance });
+    const eligible = payload.status === "available" || historicalSnapshot;
+    const usable = eligible && scopeMatches && snapshotMatches && dailyValid;
+    const status = eligible && !usable ? "needs_verification" : payload.status || "needs_verification";
+    if (eligible && !usable) diagnostics.push({ code: "KEYWORD_MONTHLY_RESPONSE_MISMATCH", message: "응답의 검색어·숙박월·관측 마감일 또는 일별 자료를 확인해야 합니다." });
+    return { usable, status, historicalSnapshot: usable && historicalSnapshot, phase: phaseLabel(selection.month, currentMonth), diagnostics,
       snapshot: usable ? snapshot : null, summary: usable ? { lodging: metricView(snapshot.summary?.lodging), dayuse: metricView(snapshot.summary?.dayuse) } : null,
       daily: usable ? rows.map(row => ({ date: row.date, lodging: metricView(row.lodging), dayuse: metricView(row.dayuse) })) : [],
       companies: usable && Array.isArray(snapshot.companies) ? snapshot.companies : [],
@@ -144,8 +151,10 @@
       errors.hidden = !error; errors.textContent = error;
       if (!allowed() || loading || error || !payload) { if (!loading && !error && catalog && !catalog.keywords.length) section("조회할 저장 자료가 없습니다.", "검색어와 숙박월을 확인할 수 있는 근거가 없습니다. 누락을 정상 0건으로 표시하지 않습니다."); return; }
       const view = buildViewModel(payload, selected(), catalog?.currentMonth || kstDay(now()).slice(0, 7));
+      if (catalog?.diagnostics.length) { const evidence = section("저장 자료 목록 확인사항", "일부 키워드·월의 준비 상태와 현재 선택한 집계 상태는 따로 확인합니다."); warnings(evidence, catalog.diagnostics); }
       if (!view.usable) { const labels = { missing: "조회용 저장 집계가 준비되지 않았습니다.", stale: "저장 집계의 갱신 확인이 필요합니다.", needs_verification: "자료 검수가 필요합니다." }; const label = hasDiagnostic(view.diagnostics, "CUTOFF_NOT_RECONSTRUCTIBLE") ? "선택한 마감일의 과거 상태를 재구성할 수 없습니다." : hasDiagnostic(view.diagnostics, "CUTOFF_AFTER_DATA_THROUGH") ? "관측 마감일이 사본의 자료 마감보다 늦습니다." : labels[view.status] || "집계 상태를 확인해야 합니다."; const block = section(label, "이전 저장값을 현재 정상 수치나 0으로 대신 표시하지 않습니다."); warnings(block, view.diagnostics); if (view.supportedCutoffDate) { block.append(el("p", "kma-note", `이 선택 관측 사본은 ${view.supportedCutoffDate} 마감만 확인할 수 있습니다.`)); if (view.supportedCutoffDate !== cutoffDate) block.append(button(`${view.supportedCutoffDate} 근거로 조회`, () => { cutoffDate = view.supportedCutoffDate; void load(); })); } if (view.provenance) block.append(el("p", "kma-note", `집계 생성 ${timeLabel(view.provenance.materializedAt)} · 자료 마감 ${timeLabel(view.provenance.dataThrough)}`)); return; }
       const snapshot = view.snapshot, info = PRODUCTS[product], metric = view.summary[product];
+      if (view.historicalSnapshot) section("과거 저장근거 · 갱신 확인 필요", `집계 생성 ${timeLabel(view.provenance?.materializedAt)} · 자료 마감 ${timeLabel(view.provenance?.dataThrough)}. 아래 값은 이 저장 범위의 과거 집계이며 이후 수집 반영이나 현재 최신 상태를 확인한 값이 아닙니다.`);
       const heading = section(`${keyword} · ${month} · ${view.phase}`, `숙박일 기준 · 관측 마감 ${cutoffDate} (KST) · ${info.label}. ${view.phase === "사전 관측" ? "미래 숙박일을 미리 관측한 자료이며 최종 예약·매출이 아닙니다." : "월의 종료와 자료 충족도는 별도입니다."}`);
       const metrics = el("div", "kma-metrics"); metrics.append(card("월 표본 업체", `${number(snapshot.companies?.length)}곳`), card(`예약 추정 / 공급 (${info.unit})`, `${number(metric.sold)} / ${number(metric.supply)}`), card("관측 예약 추정률", rate(metric.reservationRate)), card(metric.revenuePartial ? "가격 확인 부분 소계" : "추정 매출", money(metric.estimatedRevenue), "실제 결제 매출과 다름"), card("자료 충족률", rate(metric.coverageRate), `유효 관측 ${number(metric.coveredCompanyDays)} / 기대 ${number(metric.expectedCompanyDays)} 업체·일`)); heading.append(metrics);
       const split = el("div", "kma-split"); split.append(card("공개 예약", `${number(metric.publicBookings)} ${info.unit}`, money(metric.publicRevenue), "mr-public"), card("방막기·타채널 추정", `${number(metric.phoneBookings)} ${info.unit}`, money(metric.phoneRevenue), "mr-phone")); heading.append(split);
@@ -186,7 +195,7 @@
       const quality = section("자료 충족도와 최근 수집 상태", "자료 충족률은 유효 관측 범위이며 최종 예약·실제 결제 매출의 확정 여부와 다릅니다.");
       const qualityStatus = { complete: "자료 충족", partial: "일부 자료", insufficient: "자료 부족" }[snapshot.quality?.status] || "상태 미확인";
       const attemptLabel = { complete: "완료", completed: "완료", reused: "재사용", partial: "일부 자료", failed: "실패", blocked: "차단", interrupted: "중단", running: "진행 중", unknown: "미확인", uncertain: "확인 필요" }[view.latestAttempt?.status] || "미확인";
-      if (["failed", "blocked", "interrupted"].includes(view.latestAttempt?.status)) notice.textContent = `사본에서 확인한 최근 회차 ${attemptLabel} · ${timeLabel(view.latestAttempt.observedAt)}. 선택월 수치는 마지막 유효 관측 근거를 표시합니다.`;
+      if (["failed", "blocked", "interrupted"].includes(view.latestAttempt?.status)) notice.textContent = `${view.historicalSnapshot ? "과거 저장근거 · 갱신 확인 필요. " : ""}사본에서 확인한 최근 회차 ${attemptLabel} · ${timeLabel(view.latestAttempt.observedAt)}. 선택월 수치는 마지막 유효 관측 근거를 표시합니다.`;
       table(quality, ["항목", "저장 근거"], [["집계 품질", qualityStatus], ["같은 날 관측 업체·일", number(metric.sameDayObservedCompanyDays)], ["사전 관측 업체·일", number(metric.staleDays)], ["가격 근거 충족률", rate(metric.revenueCoverageRate)], ["사본에서 확인한 최근 회차", view.latestAttempt ? `${attemptLabel} · ${timeLabel(view.latestAttempt.observedAt)}${view.latestAttempt.errorCode ? ` · ${view.latestAttempt.errorCode}` : ""}` : "미확인"], ["마지막 유효 관측", timeLabel(view.lastSuccessfulAttempt?.observedAt)]], "포함된 최근 회차와 선택월의 마지막 유효 관측을 구분");
       warnings(quality, [...(snapshot.quality?.warnings || []), ...view.diagnostics]);
       const activity = section("사본에 포함된 고유 관측 회차", "수집월 기준의 제공 run 집합입니다. 숙박월 예약·매출에 합산하지 않으며, 재사용은 새 수집과 구분합니다.");
@@ -219,7 +228,7 @@
     }
     function applyCatalog(value, context) {
       catalog = normalizeOptions(value, kstDay(now()));
-      if (catalog.status !== "available") { error = [...catalog.diagnostics.map(message), "저장된 검색어·숙박월 목록을 확인하지 못했습니다."].join(" "); catalog = null; return false; }
+      if (catalog.status !== "available" && !(catalog.status === "stale" && (hasDiagnostic(catalog.diagnostics, "PROJECTION_EXPIRED") || hasDiagnostic(catalog.diagnostics, "KEYWORD_MONTHLY_BUNDLE_STALE_PARTITIONS_PRESENT")))) { error = [...catalog.diagnostics.map(message), "저장된 검색어·숙박월 목록을 확인하지 못했습니다."].join(" "); catalog = null; return false; }
       const requested = context || {};
       keyword = typeof requested.keyword === "string" ? requested.keyword : catalog.keywords.some(row => row.keyword === keyword) ? keyword : catalog.keywords[0]?.keyword || "";
       const row = catalog.keywords.find(item => item.keyword === keyword);

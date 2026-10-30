@@ -9,6 +9,7 @@ const { createHash } = require("node:crypto");
 const root = path.resolve(__dirname, "..");
 const app = fs.readFileSync(path.join(root, "web/app.js"), "utf8");
 const html = fs.readFileSync(path.join(root, "web/index.html"), "utf8");
+const serverSource = fs.readFileSync(path.join(root, "scripts/glamping_app_server.cjs"), "utf8");
 function fn(name) {
   const source = app.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^}`, "m"))?.[0];
   assert.ok(source, `Missing application function ${name}`);
@@ -87,6 +88,19 @@ test("keyword view suppresses hidden KOSIS status, region reads and late paints"
   api.renderKosisViews();
   await api.loadKosisStatus();
   await api.loadKosisRegion("test", { refresh: true });
+});
+
+test("production prepared reads own the existing analytical lease until the full query resolves", async () => {
+  const declaration = serverSource.match(/^const keywordMonthlyAnalysis = Object\.freeze\(\{[^]*?^\}\);/m)?.[0];
+  assert.ok(declaration); let leased = false; const calls = [];
+  const context = vm.createContext({ keywordMonthlyPreparedAnalysis: {
+    async options() { assert.equal(leased, true); await new Promise(resolve => setImmediate(resolve)); return "options"; },
+    async analyze(input) { assert.equal(leased, true); await new Promise(resolve => setImmediate(resolve)); assert.equal(leased, true); return input; }
+  }, async runAnalyticalWork(operation, options) { assert.equal(leased, false); leased = true; calls.push(options.kind); try { return await operation(); } finally { leased = false; } } });
+  const service = vm.runInContext(declaration + "\nkeywordMonthlyAnalysis", context);
+  assert.equal(await service.options(), "options"); assert.equal(leased, false);
+  const query = { keyword: "가평글램핑", month: "2026-10" }; assert.equal(await service.analyze(query), query); assert.equal(leased, false);
+  assert.deepEqual(calls, ["keyword_monthly_options", "keyword_monthly_analysis"]);
 });
 test("Git-normalized collection, pacing, protection and KOSIS runtime sources remain unchanged", () => {
   const protectedFiles = ["scripts/collection_rotation_scheduler.cjs", "scripts/daily_keyword_collection_scheduler.cjs",

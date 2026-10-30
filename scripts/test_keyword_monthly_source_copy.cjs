@@ -21,8 +21,10 @@ test("inspection inventories exact saved inputs and never copies indexes, KOSIS,
 test("capture uses new physical files, verifies independent readback and preserves every source byte", async t => {
   const f = await fixture(t), inspection = await inspect({ sourceDataDir: f.source, scratchParent: f.root, includePrepared: false });
   const destination = path.join(f.root, "keyword-monthly-source-12345678"), result = await copy({ sourceDataDir: f.source, includePrepared: false, inspection, copyRoot: destination });
-  assert.equal(result.state, "complete"); assert.equal(result.sourcePreserved, true); assert.equal(result.fileCount, 4);
+  assert.equal(result.state, "complete"); assert.equal(result.sourcePreserved, true); assert.equal(result.fileCount, 3); assert.equal(result.originalOutputBodiesCopied, 0);
   const manifest = JSON.parse(await fs.readFile(path.join(destination, "control/capture-complete.json")));
+  assert.equal(manifest.captureMode, "core_physical_copy_with_readonly_original_outputs"); assert.equal(manifest.originalOutputs.fileCount, 1); assert.equal(manifest.originalOutputs.copied, false);
+  await assert.rejects(fs.stat(path.join(destination, "data/outputs")), { code: "ENOENT" });
   for (const row of manifest.inputFiles) {
     const source = path.join(f.source, ...row.relative.split("/")), target = path.join(destination, "data", ...row.relative.split("/"));
     assert.equal(sha(await fs.readFile(source)), row.sha256); assert.equal(sha(await fs.readFile(target)), row.sha256);
@@ -57,7 +59,7 @@ test("strict resource limits and malformed prepared pointers stop without a fall
   const f = await fixture(t);
   await assert.rejects(inventory({ sourceDataDir: f.source, includePrepared: false, limits: { bytes: 1 } }), { code: "KEYWORD_COPY_TOTAL_BOUND" });
   const pointer = path.join(f.source, "monthly_reports/company_sources/current.json"); await fs.mkdir(path.dirname(pointer), { recursive: true }); await fs.writeFile(pointer, '{"generation":"../../config"}');
-  await assert.rejects(inventory({ sourceDataDir: f.source }), { code: "KEYWORD_COPY_PREPARED_POINTER_INVALID" });
+  await assert.rejects(inventory({ sourceDataDir: f.source, includePrepared: true }), { code: "KEYWORD_COPY_PREPARED_POINTER_INVALID" });
 });
 test("CLI inspect requires absolute scope and cannot create a receipt in original source namespaces", async t => {
   const f = await fixture(t); assert.throws(() => args(["--mode", "copy", "--source-data", f.source]), /INSPECTION/);

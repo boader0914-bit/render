@@ -2,7 +2,7 @@
 
 관리자의 **업종분석 → 키워드 월별**에서 정확한 검색어와 실제 관측 자료가 있는 숙박월을 선택한다. 같은 업체·숙박일·상품유형의 최신 유효 관측을 한 번씩 반영하고, 조건을 맞출 수 있는 전월 자료를 비교한다. 기존 월간 리포트의 초안·발행·PDF 흐름은 유지한다.
 
-이번 구현은 운영과 분리된 실자료 사본 검증을 위한 변경이다. **운영 배포와 운영 파생자료 경로 반영은 수행하지 않는다.** KOSIS 전면 보류를 유지하며, 정규 수집 일정·원본·예약 이력·호출 간격·동시 요청 수·한도·보호 장치를 변경하지 않는다.
+운영 조회 기능은 검증된 정규화 사본의 파생 집계를 읽는다. 운영 집계 준비와 화면 조회를 분리하며, 배포만으로 자료 준비나 재수집을 시작하지 않는다. KOSIS 전면 보류를 유지하며 정규 수집 일정·원본·예약 이력·호출 간격·동시 요청 수·한도·보호 장치를 변경하지 않는다.
 
 ## 명시적 사본 준비와 읽기 전용 조회
 
@@ -11,7 +11,7 @@
 1. 운영과 분리해 준비한 정규화 source 사본을 명시적 오프라인 builder에 입력한다. builder는 **존재하지 않는 새 출력 디렉터리**에만 파생자료를 만든다. 입력 사본과 provenance는 수정하지 않으며 기존 디렉터리나 과거 결과를 덮어쓰지 않는다.
 2. 화면의 GET은 이미 준비된 파생자료만 제한적으로 읽고, 기존 순수 월별 엔진과 비교 함수를 메모리에서 실행한다. 원본 JSONL·DB 스캔, KOSIS·context 조회, 공급자 호출, queue 실행, cache 생성, 파일 쓰기와 `utimes`는 없다. 자료가 없거나 오래됐다고 자동 준비·수집을 시작하지 않는다.
 
-수집 완료 hook이나 자동 갱신 연결은 이번 범위에 포함하지 않는다. 새 자료를 반영하려면 별도 사본을 준비해 새 버전의 projection을 명시적으로 검증해야 한다. 이 문서의 준비 명령은 운영 적용이나 경로 교체를 승인하는 명령이 아니다.
+수집 완료 hook이나 자동 갱신 연결은 포함하지 않는다. 새 자료를 반영하려면 별도 사본을 준비해 새 버전의 projection을 명시적으로 검증해야 한다. 이 문서의 준비 명령 자체가 운영 적용이나 경로 교체의 승인을 뜻하지는 않는다.
 
 ## 입력 계약과 오프라인 명령
 
@@ -86,7 +86,19 @@ CLI source 상한은 64MiB다. runtime index는 1MiB, keyword/month별 저장 pr
 | `GET /api/keyword-monthly/options` | 준비된 index의 정확한 키워드·관측월·기본/지원 기준일 |
 | `GET /api/keyword-monthly?keyword=...&month=...&cutoffDate=...` | 해당 scope의 준비된 projection과 동일 source의 전월 자료 |
 
-API는 관리자 인증과 GET만 허용한다. POST·갱신·재구축 경로는 없다. server 연결 경로는 `DATA_DIR/keyword_monthly_analysis`이며 조회로 폴더를 만들지 않는다. 기존 리포트 preview POST, integrated GET의 재계산, source cache `getOrBuild`, 수집·DB 후처리 queue를 호출하지 않는다.
+API는 관리자 인증과 GET만 허용한다. POST·갱신·재구축 경로는 없다. server 연결 경로는 `DATA_DIR/keyword_monthly_analysis`이며 조회로 폴더를 만들지 않는다. 기존 단일 index와 독립 키워드·월 partition bundle을 지원한다. 기존 리포트 preview POST, integrated GET의 재계산, source cache `getOrBuild`, 수집·DB 후처리 queue를 호출하지 않는다.
+
+## 운영 준비와 버전 연결
+
+운영 원본에 기존 source adapter를 직접 실행하면 파생 catalog·관측 index·객실 기준이 갱신될 수 있다. 준비 작업은 별도 `export_keyword_monthly_source_copy.cjs`로 명시된 저장 자료의 메타데이터·용량을 먼저 확인한다. 업체 원장·관측 이력·객실 기준 등 핵심 자료만 새 물리 사본에 두고, 큰 outputs는 동결 목록에 포함된 파일만 읽기 전용으로 참조한다. 원본 파일·부모 경로와 실제 읽은 본문의 SHA를 전후 대조한다. 이는 outputs 전체 물리 사본이나 원본 행 전수 감사를 뜻하지 않는다.
+
+정규화의 DATA_DIR와 파생 cache는 사본 경로만 사용한다. 원래 source adapter의 스트리밍 history 분기를 사용해 별도 SQLite/WAL을 만들지 않는다. 원본·개별 일정·broker·보호·KOSIS 자료는 수정하지 않는다. 사본·임시 작업의 별도 하드 상한을 1GiB로 제한하며 `statfs`의 호스트 여유 공간을 Render의 `/tmp` 서비스 한도로 해석하지 않는다. 실행기는 검증한 Node·guard 코드 지문과 seccomp 네트워크 차단을 확인한 뒤에만 정규화를 시작한다. 조회용 projection은 `--compression gzip`으로 손실 없이 압축할 수 있으며 기존 저장·해제 상한을 넓히지 않는다.
+
+키워드별 source fingerprint와 월별 진단은 합쳐 쓰지 않는다. `build_keyword_monthly_bundle.cjs`는 각 준비 index와 projection의 바이트를 그대로 불변 generation에 보존하고 정확한 키워드·월을 해당 partition에 연결한다. 입력의 `exposeScopes`는 전월 자료를 포함한 partition에서 실제 공개할 월만 선택한다. 중복 scope·SHA/크기 불일치·경로 이탈은 거부한다. 마지막 `current.json` 발표는 기대 이전 SHA와 전용 lock을 대조해 원자 교체하며 이전 generation은 보존한다. 이후 단계에서 오류가 나면 미반영으로 단정하지 않고 실제 pointer를 다시 확인한다.
+
+정규화 과정의 진단 계수가 관측 마감일에 의존할 때에는 `normalizationCutoffs`로 실제 준비한 월별 기준일을 선언한다. 이는 여러 회차 관측을 `selected_only`로 바꾸는 필드가 아니다. 조회는 선언된 기준일만 지원하며 전월의 정렬 기준일이 준비되지 않았으면 비교를 제외한다. 기존 `selected_only.selectionCutoffs`와 두 정책을 동시에 선언할 수 없다.
+
+24시간이 지난 준비본은 `stale` 상태와 자료 기준시각을 유지한다. 근거 범위 안의 값은 화면에서 **과거 저장근거 · 갱신 확인 필요**로 구분해 열람할 수 있고 현재 최신 자료로 승격하지 않는다. 자료 마감 이후의 기준일이나 검수 오류 응답은 수치 표시를 차단한다. Bundle을 새로 묶어도 개별 partition의 materializedAt·dataThrough를 갱신하지 않는다.
 
 화면은 새 탭에서 이전 run bootstrap을 재개하지 않고 숨은 기존 결과를 다시 그리지 않는다. KOSIS 조회·늦은 렌더링은 새 탭에서 차단하며 탭 이탈·권한 변경·로그아웃 시 요청/민감 결과를 정리한다. 일반 조회 오류, 누락 projection, 불일치, 최신 실패와 마지막 유효 관측은 서로 구분한다.
 

@@ -349,6 +349,37 @@ test("selected-only copies replay only declared cutoff per month, including refe
 function monthMetadata(warning, count, globalCount) {
   return { warnings: [warning], sourceDiagnostics: { unmatchedCompanyRows: count }, globalWarnings: [`전체 참고 ${warning}`], globalDiagnostics: { malformedHistoryLines: globalCount } };
 }
+
+test("multirun normalization diagnostics bind the declared cutoff without relabelling rows selected-only", async t => {
+  const source = sourceFixture(), before = JSON.stringify(source), normalizationCutoffs = { "2026-08": "2026-08-30", "2026-09": "2026-09-30" };
+  const { service, outputDir } = await setup(t, source, { sourceProvenance: { observationScope: "normalized_multirun", normalizationCutoffs } });
+  const publishedBefore = await tree(outputDir), catalog = await service.options();
+  assert.deepEqual(catalog.keywords[0].defaultCutoffs, normalizationCutoffs); assert.deepEqual(catalog.keywords[0].supportedCutoffs, normalizationCutoffs);
+  const actual = await service.analyze({ keyword: KEYWORD, month: "2026-09" });
+  const expected = buildMonthlyReportSnapshot({ type: "keyword", targetId: KEYWORD, month: "2026-09", cutoffDate: "2026-09-30" }, source, NOW);
+  assert.equal(actual.provenance.observationScope, "normalized_multirun"); assert.deepEqual(actual.snapshot.summary, expected.summary); assert.deepEqual(actual.snapshot.daily, expected.daily);
+  assert.equal(actual.request.cutoffDate, "2026-09-30"); assert.equal(actual.snapshot.comparison.previousCutoffDate, "2026-08-30");
+  const other = await service.analyze({ keyword: KEYWORD, month: "2026-09", cutoffDate: "2026-09-29" });
+  assert.equal(other.status, "missing"); assert.equal(other.snapshot, null); assert.equal(other.supportedCutoffDate, "2026-09-30");
+  assert.equal(JSON.stringify(source), before); assert.deepEqual(await tree(outputDir), publishedBefore);
+  const shifted = await setup(t, source, { sourceProvenance: { observationScope: "verified_history_subset", normalizationCutoffs: { ...normalizationCutoffs, "2026-08": "2026-08-31" } } });
+  const mismatch = await shifted.service.analyze({ keyword: KEYWORD, month: "2026-09" });
+  assert.equal(mismatch.snapshot.comparison, null); assert.equal(mismatch.snapshot.comparisonByProduct.dayuse, null); assert.ok(mismatch.diagnostics.includes("PREVIOUS_CUTOFF_NOT_RECONSTRUCTIBLE"));
+});
+
+test("normalization cutoff policy rejects conflict, incomplete or invalid maps and tampered indexes", async t => {
+  const base = await setup(t), source = sourceFixture(), input = { source, sourceFingerprint: "a".repeat(64), now: () => NOW };
+  const cases = [
+    [{ observationScope: "selected_only", selectionCutoffs: { "2026-08": "2026-08-22", "2026-09": "2026-09-22" }, normalizationCutoffs: { "2026-08": "2026-08-30", "2026-09": "2026-09-30" } }, "KEYWORD_MONTHLY_CONFLICTING_CUTOFF_POLICIES"],
+    [{ normalizationCutoffs: {} }, "KEYWORD_MONTHLY_INVALID_NORMALIZATION_CUTOFFS"],
+    [{ normalizationCutoffs: { "2026-08": "2026-02-30", "2026-09": "2026-09-30" } }, "KEYWORD_MONTHLY_INVALID_NORMALIZATION_CUTOFFS"],
+    [{ normalizationCutoffs: { "2026-08": "2026-08-30", "2026-09": "2026-10-31" } }, "KEYWORD_MONTHLY_INVALID_NORMALIZATION_CUTOFFS"],
+    [{ normalizationCutoffs: { "2026-09": "2026-09-30" } }, "KEYWORD_MONTHLY_NORMALIZATION_CUTOFF_REQUIRED"]
+  ];
+  for (const [i, [sourceProvenance, code]] of cases.entries()) await assert.rejects(buildKeywordMonthlyProjection({ ...input, sourceProvenance, outputDir: path.join(base.root, `rejected-${i}`) }), error => error.code === code);
+  await rewriteIndex(base.outputDir, value => { value.provenance.normalizationCutoffs = { "2026-09": "2026-09-30" }; });
+  assert.equal((await base.service.options()).status, "needs_verification");
+});
 function monthlyMetadataFixture() {
   const source = JSON.parse(JSON.stringify(sourceFixture()).replace(/2026-09/g, "2026-10").replace(/2026-08/g, "2026-09"));
   source.monthlySourceMetadata = { "2026-09": monthMetadata("9월 범위 경고", 516, 3), "2026-10": monthMetadata("10월 범위 경고", 980, 4),

@@ -4,6 +4,9 @@
 const fs = require("node:fs/promises"), native = require("node:fs"), path = require("node:path"), os = require("node:os"), crypto = require("node:crypto");
 const LIMITS = Object.freeze({ files: 15000, bytes: 4 * 1024 ** 3, fileBytes: 512 * 1024 ** 2, historyBytes: 512 * 1024 ** 2,
   depth: 10, reserveBytes: 256 * 1024 ** 2, copyChunkBytes: 1024 * 1024, milliseconds: 15 * 60 * 1000 });
+// statfs reports host capacity, not the service's /tmp quota. Never infer the
+// application quota from it. Keep this complete workflow below one GiB.
+const OWN_SCRATCH_HARD_BYTES = 1024 ** 3, CORE_COPY_MAX_BYTES = 512 * 1024 ** 2;
 const SHA = /^[a-f0-9]{64}$/, GENERATION = /^generation-[a-f0-9]{32}$/;
 const hash = () => crypto.createHash("sha256"), canonical = value => Array.isArray(value) ? value.map(canonical)
   : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
@@ -41,7 +44,7 @@ async function safeJson(filename, maximum) {
     return { value: JSON.parse(bytes), sha256: hash().update(bytes).digest("hex"), bytes: bytes.length };
   } finally { await handle.close(); }
 }
-async function inventory({ sourceDataDir, includePrepared = true, limits: suppliedLimits } = {}) {
+async function inventory({ sourceDataDir, includePrepared = false, limits: suppliedLimits } = {}) {
   const limits = validateLimits(suppliedLimits), root = path.resolve(sourceDataDir || "");
   need(typeof sourceDataDir === "string" && path.isAbsolute(sourceDataDir), "KEYWORD_COPY_ABSOLUTE_PATH_REQUIRED");
   await checkedPath(root, true); const files = [], roots = [], started = Date.now(); let bytes = 0;
@@ -91,21 +94,30 @@ async function inventory({ sourceDataDir, includePrepared = true, limits: suppli
 async function inspect(options = {}) {
   const capture = await inventory(options), scratchParent = path.resolve(options.scratchParent || os.tmpdir());
   await checkedPath(scratchParent, true); const free = await available(scratchParent), limits = validateLimits(options.limits);
-  return { ...capture, scratchParent, scratchAvailableBytes: String(free), conservativeRequiredBytes: String(BigInt(capture.bytes) + BigInt(limits.reserveBytes)),
-    canCopyWithReserve: free > BigInt(capture.bytes) + BigInt(limits.reserveBytes), copiedFiles: 0, sourceBodiesRead: "prepared_pointer_only_if_present", operatingMutations: 0 };
+  const core = capture.files.filter(row => !row.relative.startsWith("outputs/") && !row.relative.startsWith("monthly_reports/company_sources/")), copyBytes = core.reduce((sum, row) => sum + row.bytes, 0);
+  return { ...capture, captureMode: "core_physical_copy_with_readonly_original_outputs", copyFileCount: core.length, copyBytes,
+    referencedOutputFiles: capture.files.filter(row => row.relative.startsWith("outputs/")).length,
+    scratchParent, scratchAvailableBytes: String(free), ownScratchHardBytes: OWN_SCRATCH_HARD_BYTES, coreCopyMaxBytes: CORE_COPY_MAX_BYTES,
+    conservativeRequiredBytes: String(BigInt(copyBytes) + BigInt(limits.reserveBytes)),
+    canCopyWithReserve: copyBytes <= CORE_COPY_MAX_BYTES && free > BigInt(copyBytes) + BigInt(limits.reserveBytes),
+    copiedFiles: 0, sourceBodiesRead: "prepared_pointer_only_if_present", operatingMutations: 0 };
 }
 async function copy(options = {}) {
   const limits = validateLimits(options.limits), prior = options.inspection;
   need(prior?.schemaVersion === 1 && SHA.test(prior.inventorySha256 || ""), "KEYWORD_COPY_INSPECTION_REQUIRED");
   const fresh = await inventory(options); need(fresh.inventorySha256 === prior.inventorySha256, "KEYWORD_COPY_SOURCE_CHANGED");
+  const coreFiles = fresh.files.filter(row => !row.relative.startsWith("outputs/") && !row.relative.startsWith("monthly_reports/company_sources/")), coreBytes = coreFiles.reduce((sum, row) => sum + row.bytes, 0);
+  need(coreBytes <= CORE_COPY_MAX_BYTES, "KEYWORD_COPY_CORE_WORKING_SET_BOUND");
   const target = path.resolve(options.copyRoot || ""), parent = path.dirname(target);
   need(typeof options.copyRoot === "string" && path.isAbsolute(options.copyRoot) && !contained(fresh.sourceDataDir, target)
     && !contained(target, fresh.sourceDataDir) && /^keyword-monthly-source-[A-Za-z0-9_-]{8,120}$/.test(path.basename(target)), "KEYWORD_COPY_TARGET_INVALID");
-  await checkedPath(parent, true); need(await available(parent) > BigInt(fresh.bytes) + BigInt(limits.reserveBytes), "KEYWORD_COPY_DISK_RESERVE");
+  await checkedPath(parent, true); need(await available(parent) > BigInt(coreBytes) + BigInt(limits.reserveBytes), "KEYWORD_COPY_DISK_RESERVE");
   await fs.mkdir(target, { mode: 0o700 }); const data = path.join(target, "data"), control = path.join(target, "control");
   await fs.mkdir(data, { mode: 0o700 }); await fs.mkdir(control, { mode: 0o700 });
+  const scratch = require("./keyword_monthly_scratch_budget.cjs").installScratchBudget(target);
   const started = Date.now(), copied = [], journal = path.join(control, "copy-progress.jsonl");
   async function checkBudget() {
+    scratch.assertCurrent();
     need(Date.now() - started <= limits.milliseconds, "KEYWORD_COPY_TIME_BOUND");
     need(await available(target) > BigInt(limits.reserveBytes), "KEYWORD_COPY_DISK_RESERVE");
   }
@@ -136,19 +148,24 @@ async function copy(options = {}) {
   }
   try {
     await fs.writeFile(path.join(control, "capture-inspection.json"), JSON.stringify(fresh), { flag: "wx", mode: 0o600 });
-    for (const row of fresh.files) await hashCopyFile(row);
+    for (const row of coreFiles) await hashCopyFile(row);
     const after = await inventory(options); need(after.inventorySha256 === fresh.inventorySha256, "KEYWORD_COPY_SOURCE_CHANGED");
     const manifest = { schemaVersion: 1, state: "complete", sourceDataDir: fresh.sourceDataDir, copyRoot: target, dataDir: data,
       sourceInventorySha256: fresh.inventorySha256, sourcePreserved: true, inputFiles: copied, fileCount: copied.length,
       bytes: copied.reduce((sum, row) => sum + row.bytes, 0), capturedAt: new Date().toISOString(), startedAt: new Date(started).toISOString(), elapsedMs: Date.now() - started,
+      captureMode: "core_physical_copy_with_readonly_original_outputs", ownScratchHardBytes: OWN_SCRATCH_HARD_BYTES, observationIndexMode: "exact_streaming_fallback",
+      wholeSourcePhysicallyCopied: false, physicalCoreCopiesOnly: true, scratch: scratch.status(),
+      originalOutputs: { root: path.join(fresh.sourceDataDir, "outputs"), fileCount: fresh.files.filter(row => row.relative.startsWith("outputs/")).length,
+        files: fresh.files.filter(row => row.relative.startsWith("outputs/")).map(row => ({ ...row, relative: row.relative.slice(8) })), bodyReadsDuringCopy: 0, copied: false, writeAllowed: false },
       sourceWrites: 0, physicalCopiesOnly: true, originalHistoryIndexTouched: false, kosisCopied: false, tourismCopied: false, customerDatabaseCopied: false, configurationCopied: false };
     const bytes = JSON.stringify(manifest); await fs.writeFile(path.join(control, "capture-complete.json"), bytes, { flag: "wx", mode: 0o600 });
     return { state: "complete", copyRoot: target, dataDir: data, fileCount: copied.length, bytes: manifest.bytes, sourceInventorySha256: fresh.inventorySha256,
-      captureManifestSha256: hash().update(bytes).digest("hex"), sourcePreserved: true, sourceWrites: 0, elapsedMs: manifest.elapsedMs };
+      captureManifestSha256: hash().update(bytes).digest("hex"), sourcePreserved: true, sourceWrites: 0, elapsedMs: manifest.elapsedMs,
+      captureMode: manifest.captureMode, originalOutputBodiesCopied: 0, originalOutputFileCount: manifest.originalOutputs.fileCount, ownScratchHardBytes: OWN_SCRATCH_HARD_BYTES };
   } catch (error) {
     await fs.writeFile(path.join(control, "capture-failed.json"), JSON.stringify({ state: "failed", code: error.code || "KEYWORD_COPY_FAILED", copiedFiles: copied.length,
       startedAt: new Date(started).toISOString(), finishedAt: new Date().toISOString(), sourceWrites: 0, incompleteCopyRetained: true }), { flag: "wx", mode: 0o600 }).catch(() => {});
     throw error;
-  }
+  } finally { scratch.restore(); }
 }
-module.exports = { LIMITS, inventory, inspect, copy, checkedPath, safeJson, digest, stamp };
+module.exports = { LIMITS, OWN_SCRATCH_HARD_BYTES, CORE_COPY_MAX_BYTES, inventory, inspect, copy, checkedPath, safeJson, digest, stamp };

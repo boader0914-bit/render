@@ -184,11 +184,16 @@ function safeProvenance(input, sourceFingerprint, materializedAt, dataThrough, s
   const selectionCutoffs = input?.selectionCutoffs ?? {};
   if (!plain(selectionCutoffs) || Object.keys(selectionCutoffs).length > 1200
     || Object.entries(selectionCutoffs).some(([key, value]) => !month(key) || !date(value) || value > kstDay(materializedAt))) throw fault("KEYWORD_MONTHLY_INVALID_SELECTION_CUTOFFS");
+  const normalizationCutoffs = input?.normalizationCutoffs;
+  if (normalizationCutoffs !== undefined && input?.observationScope === "selected_only") throw fault("KEYWORD_MONTHLY_CONFLICTING_CUTOFF_POLICIES");
+  if (normalizationCutoffs !== undefined && (!plain(normalizationCutoffs) || !Object.keys(normalizationCutoffs).length || Object.keys(normalizationCutoffs).length > 1200
+    || Object.entries(normalizationCutoffs).some(([key, value]) => !month(key) || !date(value) || value > kstDay(materializedAt)))) throw fault("KEYWORD_MONTHLY_INVALID_NORMALIZATION_CUTOFFS");
   const provenance = { inputSha256: sourceFingerprint, materializedAt, dataThrough, originalFreshnessVerified: false,
     basis: "explicit_offline_normalized_source_copy", networkAttempted: false, contextIncluded: false,
     observationScope: ["selected_only", "normalized_multirun", "verified_history_subset"].includes(input?.observationScope) ? input.observationScope : "unspecified",
     intermediateObservationsComplete: sourceDiagnostics.intermediateObservationsComplete === 1,
     runInventoryComplete: sourceDiagnostics.runInventoryComplete === 1, selectionCutoffs: clone(selectionCutoffs) };
+  if (normalizationCutoffs !== undefined) provenance.normalizationCutoffs = clone(normalizationCutoffs);
   if (input?.inputSha256 && input.inputSha256 !== sourceFingerprint) throw fault("KEYWORD_MONTHLY_SOURCE_FINGERPRINT_MISMATCH");
   if (Number.isSafeInteger(input?.inputBytes) && input.inputBytes >= 0) provenance.inputBytes = input.inputBytes;
   if (iso(input?.copiedAt)) provenance.copiedAt = input.copiedAt;
@@ -224,9 +229,9 @@ function attempt(run) { return run ? { status: status(run), observedAt: attemptT
 
 /** Explicit local/offline operation. The caller supplies an already isolated,
  * normalized source. Never call this from a GET, collector or source cache. */
-async function buildKeywordMonthlyProjection({ source, sourceFingerprint, sourceProvenance, materializedAt, dataThrough, outputDir, now } = {}) {
+async function buildKeywordMonthlyProjection({ source, sourceFingerprint, sourceProvenance, materializedAt, dataThrough, outputDir, now, compression = "auto" } = {}) {
   const at = materializedAt || nowIso(now);
-  if (!SHA.test(sourceFingerprint || "") || !iso(at) || !text(outputDir, 4000)) throw fault("KEYWORD_MONTHLY_INVALID_BUILD_INPUT", 400);
+  if (!SHA.test(sourceFingerprint || "") || !iso(at) || !text(outputDir, 4000) || !["auto", "gzip"].includes(compression)) throw fault("KEYWORD_MONTHLY_INVALID_BUILD_INPUT", 400);
   const normalized = normalizeSource(source);
   const times = [...normalized.runs.map(attemptTime), ...normalized.observations.map(row => row.collectedAt), ...normalized.rankObservations.map(row => row.collectedAt),
     ...normalized.savedProductRecoveries.map(entry => entry.row.collectedAt)].filter(iso).sort((a, b) => Date.parse(a) - Date.parse(b));
@@ -247,6 +252,7 @@ async function buildKeywordMonthlyProjection({ source, sourceFingerprint, source
   const publications = [];
   const keywords = [...descriptors.values()].filter(entry => entry.stay.size).sort((a, b) => a.keyword.localeCompare(b.keyword)).map(entry => {
     if (provenance.observationScope === "selected_only" && [...entry.stay].some(value => !date(provenance.selectionCutoffs[value]))) throw fault("KEYWORD_MONTHLY_SELECTION_CUTOFF_REQUIRED");
+    if (provenance.normalizationCutoffs && [...entry.stay].some(value => !date(provenance.normalizationCutoffs[value]))) throw fault("KEYWORD_MONTHLY_NORMALIZATION_CUTOFF_REQUIRED");
     const keywordRuns = normalized.runs.filter(run => run.keyword === entry.keyword);
     const ordered = keywordRuns.filter(run => attemptTime(run)).sort((a, b) => Date.parse(attemptTime(a)) - Date.parse(attemptTime(b)) || runId(a).localeCompare(runId(b)));
     const latest = attempt(ordered.at(-1));
@@ -275,7 +281,7 @@ async function buildKeywordMonthlyProjection({ source, sourceFingerprint, source
         sourceFingerprint, provenance, source: compact, sourceDigest: digest(JSON.stringify(compact)) };
       const decoded = Buffer.from(JSON.stringify(envelope));
       if (decoded.length > LIMITS.decodedProjectionBytes) throw fault("KEYWORD_MONTHLY_SIZE_LIMIT");
-      const compressed = decoded.length > LIMITS.projectionBytes;
+      const compressed = compression === "gzip" || decoded.length > LIMITS.projectionBytes;
       const bytes = compressed ? gzipSync(decoded, { level: 6 }) : decoded;
       if (bytes.length > LIMITS.projectionBytes) throw fault("KEYWORD_MONTHLY_SIZE_LIMIT");
       publications.push({ name: `${scope}.json${compressed ? ".gz" : ""}`, bytes });
@@ -294,10 +300,10 @@ async function buildKeywordMonthlyProjection({ source, sourceFingerprint, source
   await checkPath(path.dirname(directory), true);
   // An existing directory is never updated or reused. Publish index last so a
   // partially written new projection cannot masquerade as a complete release.
-  await fs.mkdir(directory);
-  await fs.mkdir(path.join(directory, "projections"));
-  for (const publication of publications) await fs.writeFile(path.join(directory, "projections", publication.name), publication.bytes, { flag: "wx" });
-  await fs.writeFile(path.join(directory, "index.json"), indexBytes, { flag: "wx" });
+  await fs.mkdir(directory, { mode: 0o700 });
+  await fs.mkdir(path.join(directory, "projections"), { mode: 0o700 });
+  for (const publication of publications) await fs.writeFile(path.join(directory, "projections", publication.name), publication.bytes, { flag: "wx", mode: 0o600 });
+  await fs.writeFile(path.join(directory, "index.json"), indexBytes, { flag: "wx", mode: 0o600 });
   return { schemaVersion: 1, projectionDir: directory, indexSha256: digest(indexBytes), sourceFingerprint,
     keywordCount: keywords.length, scopeCount: publications.length, provenance };
 }
@@ -312,11 +318,14 @@ function validateIndex(value) {
     || !exact(value, ["schemaVersion", "calculationVersion", "sourceFingerprint", "provenance", "keywords"])
     || !plain(value.provenance) || value.provenance.inputSha256 !== value.sourceFingerprint || !iso(value.provenance.materializedAt) || !iso(value.provenance.dataThrough)
     || Date.parse(value.provenance.dataThrough) > Date.parse(value.provenance.materializedAt)
-    || !exact(value.provenance, ["inputSha256", "materializedAt", "dataThrough", "originalFreshnessVerified", "basis", "networkAttempted", "contextIncluded", "inputBytes", "copiedAt", "observationScope", "intermediateObservationsComplete", "runInventoryComplete", "selectionCutoffs"])
+    || !exact(value.provenance, ["inputSha256", "materializedAt", "dataThrough", "originalFreshnessVerified", "basis", "networkAttempted", "contextIncluded", "inputBytes", "copiedAt", "observationScope", "intermediateObservationsComplete", "runInventoryComplete", "selectionCutoffs", "normalizationCutoffs"])
     || !["selected_only", "normalized_multirun", "verified_history_subset", "unspecified"].includes(value.provenance.observationScope)
     || typeof value.provenance.intermediateObservationsComplete !== "boolean" || typeof value.provenance.runInventoryComplete !== "boolean"
     || !plain(value.provenance.selectionCutoffs) || Object.keys(value.provenance.selectionCutoffs).length > 1200
     || Object.entries(value.provenance.selectionCutoffs).some(([key, cutoff]) => !month(key) || !date(cutoff) || cutoff > kstDay(value.provenance.materializedAt))
+    || value.provenance.normalizationCutoffs !== undefined && (!plain(value.provenance.normalizationCutoffs) || !Object.keys(value.provenance.normalizationCutoffs).length || Object.keys(value.provenance.normalizationCutoffs).length > 1200
+      || Object.entries(value.provenance.normalizationCutoffs).some(([key, cutoff]) => !month(key) || !date(cutoff) || cutoff > kstDay(value.provenance.materializedAt)))
+    || value.provenance.normalizationCutoffs !== undefined && value.provenance.observationScope === "selected_only"
     || value.provenance.basis !== "explicit_offline_normalized_source_copy" || value.provenance.inputBytes !== undefined && !nonnegative(value.provenance.inputBytes)
     || value.provenance.copiedAt !== undefined && !iso(value.provenance.copiedAt)
     || value.provenance.networkAttempted !== false || value.provenance.contextIncluded !== false || value.provenance.originalFreshnessVerified !== false
@@ -349,6 +358,7 @@ function validateIndex(value) {
     }
     if (months.size !== item.stayMonths.length) throw fault("KEYWORD_MONTHLY_INVALID_INDEX");
     if (value.provenance.observationScope === "selected_only" && item.stayMonths.some(valueMonth => !date(value.provenance.selectionCutoffs[valueMonth]))) throw fault("KEYWORD_MONTHLY_INVALID_INDEX");
+    if (value.provenance.normalizationCutoffs && item.stayMonths.some(valueMonth => !date(value.provenance.normalizationCutoffs[valueMonth]))) throw fault("KEYWORD_MONTHLY_INVALID_INDEX");
   }
   if (count > LIMITS.scopes) throw fault("KEYWORD_MONTHLY_INVALID_INDEX");
   return value;
@@ -393,7 +403,7 @@ function validateRequest(input, today) {
   return { keyword: input.keyword, month: input.month, cutoffDate };
 }
 function defaultCutoff(value, valueMonth, today) {
-  return value.provenance.observationScope === "selected_only" && value.provenance.selectionCutoffs[valueMonth]
+  return value.provenance.normalizationCutoffs?.[valueMonth] || value.provenance.observationScope === "selected_only" && value.provenance.selectionCutoffs[valueMonth]
     || [today, lastDay(valueMonth), kstDay(value.provenance.dataThrough)].sort()[0];
 }
 function createKeywordMonthlyAnalysis({ projectionDir, now = () => Date.now(), staleAfterMs = DAY } = {}) {
@@ -418,7 +428,7 @@ function createKeywordMonthlyAnalysis({ projectionDir, now = () => Date.now(), s
       return { ...basic(), status: diagnostics.length ? "stale" : "available", keywords: value.keywords.map(item => ({ keyword: item.keyword,
         stayMonths: item.stayMonths, collectionMonths: item.collectionMonths, inventoryStayMonths: item.inventoryStayMonths, rankMonths: item.rankMonths,
         defaultCutoffs: Object.fromEntries(item.stayMonths.map(valueMonth => [valueMonth, defaultCutoff(value, valueMonth, kstDay(nowIso(now)))])),
-        supportedCutoffs: value.provenance.observationScope === "selected_only" ? Object.fromEntries(item.stayMonths.map(valueMonth => [valueMonth, value.provenance.selectionCutoffs[valueMonth]])) : null })),
+        supportedCutoffs: value.provenance.normalizationCutoffs || (value.provenance.observationScope === "selected_only" ? Object.fromEntries(item.stayMonths.map(valueMonth => [valueMonth, value.provenance.selectionCutoffs[valueMonth]])) : null) })),
         provenance: { ...value.provenance, indexSha256: read.sha256 }, diagnostics };
     } catch (error) { return absent(error); }
   }
@@ -433,8 +443,9 @@ function createKeywordMonthlyAnalysis({ projectionDir, now = () => Date.now(), s
       if (!scope) return { ...basic(), status: "missing", request, snapshot: null, activity: item?.activity || null,
         latestAttempt: item?.latestAttempt || null, lastSuccessfulAttempt: null,
         provenance: { ...value.provenance, indexSha256: before.sha256 }, diagnostics: [item ? "MONTH_NOT_OBSERVED" : "KEYWORD_NOT_OBSERVED"] };
-      if (value.provenance.observationScope === "selected_only" && request.cutoffDate !== value.provenance.selectionCutoffs[request.month]) {
-        return { ...basic(), status: "missing", request, snapshot: null, supportedCutoffDate: value.provenance.selectionCutoffs[request.month], activity: item.activity,
+      const supportedCutoffs = value.provenance.normalizationCutoffs || (value.provenance.observationScope === "selected_only" ? value.provenance.selectionCutoffs : null);
+      if (supportedCutoffs && request.cutoffDate !== supportedCutoffs[request.month]) {
+        return { ...basic(), status: "missing", request, snapshot: null, supportedCutoffDate: supportedCutoffs[request.month], activity: item.activity,
           latestAttempt: item.latestAttempt, lastSuccessfulAttempt: null, provenance: { ...value.provenance, indexSha256: before.sha256 }, diagnostics: ["CUTOFF_NOT_RECONSTRUCTIBLE"] };
       }
       let projection;
@@ -453,7 +464,7 @@ function createKeywordMonthlyAnalysis({ projectionDir, now = () => Date.now(), s
       const at = nowIso(now), engineRequest = { type: "keyword", targetId: request.keyword, month: request.month, cutoffDate: request.cutoffDate };
       const snapshot = buildMonthlyReportSnapshot(engineRequest, sourceForKeywordMonthlyRequest(source, engineRequest), at);
       const previousRequest = previousMonthlyReportRequest(engineRequest);
-      const previousCutoffSupported = value.provenance.observationScope !== "selected_only" || previousRequest.cutoffDate === value.provenance.selectionCutoffs[previousRequest.month];
+      const previousCutoffSupported = !supportedCutoffs || previousRequest.cutoffDate === supportedCutoffs[previousRequest.month];
       const previous = previousCutoffSupported ? buildMonthlyReportSnapshot(previousRequest, sourceForKeywordMonthlyRequest(source, previousRequest), at) : null;
       snapshot.comparisonByProduct = Object.fromEntries(["lodging", "dayuse"].map(productType => [productType,
         previous && snapshot.sources.observations.some(row => row.productType === productType) && previous.sources.observations.some(row => row.productType === productType)

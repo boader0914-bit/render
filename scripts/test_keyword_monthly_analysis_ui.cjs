@@ -109,6 +109,20 @@ test("missing and stale responses retain reasons and metadata, not earlier succe
   await ui.controller.open(); assert.match(ui.text(), /공개 예약/); status = "stale"; await ui.controller.refresh(); assert.match(ui.text(), /CUTOFF_AFTER_DATA_THROUGH/); assert.doesNotMatch(ui.text(), /공개 예약/); assert.equal(ui.find("kma-metric").length, 0);
   status = "missing"; await ui.controller.refresh(); assert.match(ui.text(), /조회용 저장 집계가 준비되지/); assert.equal(ui.find("kma-metric").length, 0);
 });
+
+test("expired preparation stays visibly historical without allowing cutoffs after its evidence", async () => {
+  const catalog = optionsFixture(); catalog.status = "stale"; catalog.diagnostics = ["PROJECTION_EXPIRED"];
+  const value = payloadFixture(); value.status = "stale"; value.diagnostics = ["PROJECTION_EXPIRED"];
+  const model = uiModule.buildViewModel(value, value.request, "2026-10");
+  assert.equal(model.usable, true); assert.equal(model.status, "stale"); assert.equal(model.historicalSnapshot, true);
+  const ui = mockUi({ request: async url => ({ ok: true, status: 200, json: async () => url.endsWith("/options") ? catalog : value }) });
+  await ui.controller.open(); assert.ok(ui.find("kma-metric").length > 0); assert.match(ui.text(), /과거 저장근거 · 갱신 확인 필요/);
+  assert.match(ui.text(), /이후 수집 반영이나 현재 최신 상태를 확인한 값이 아닙니다/);
+  value.diagnostics.push("CUTOFF_AFTER_DATA_THROUGH");
+  await ui.controller.refresh(); assert.equal(ui.find("kma-metric").length, 0); assert.match(ui.text(), /자료 마감보다 늦습니다/);
+  value.diagnostics = ["PROJECTION_EXPIRED"]; value.snapshot.request.targetId = OTHER;
+  assert.equal(uiModule.buildViewModel(value, value.request, "2026-10").status, "needs_verification");
+});
 test("503 verification payload preserves safe failure reasons and never becomes zero", async () => {
   const ui = mockUi({ request: async url => ({ ok: url.endsWith("/options"), status: url.endsWith("/options") ? 200 : 503, json: async () => url.endsWith("/options") ? optionsFixture() : { status: "needs_verification", request: { keyword: KEYWORD, month: "2026-10", cutoffDate: "2026-10-30" }, snapshot: null, diagnostics: ["KEYWORD_MONTHLY_EVIDENCE_CHANGED"] } }) });
   await ui.controller.open(); assert.match(ui.text(), /자료 검수가 필요/); assert.match(ui.text(), /KEYWORD_MONTHLY_EVIDENCE_CHANGED/); assert.equal(ui.find("kma-metric").length, 0);
@@ -144,6 +158,10 @@ test("cutoff defaults follow actual evidence through-date and explicit selected-
   assert.equal(uiModule.cutoffFor(catalog, KEYWORD, "2026-10"), "2026-10-22"); assert.equal(uiModule.cutoffFor(catalog, KEYWORD, "2026-11"), "2026-10-22"); assert.equal(uiModule.cutoffFor(catalog, KEYWORD, "2026-09"), "2026-09-30");
   input.keywords[0].defaultCutoffs = { "2026-09": "2026-09-22", "2026-10": "2026-10-22" }; input.keywords[0].supportedCutoffs = { ...input.keywords[0].defaultCutoffs }; catalog = uiModule.normalizeOptions(input);
   assert.equal(uiModule.cutoffFor(catalog, KEYWORD, "2026-09"), "2026-09-22"); assert.equal(catalog.keywords[0].supportedCutoffs["2026-10"], "2026-10-22");
+  delete input.keywords[0].defaultCutoffs; delete input.keywords[0].supportedCutoffs;
+  input.provenance.dataThrough = "2026-10-30T01:00:00Z"; input.keywords[0].provenanceByMonth = { "2026-10": { dataThrough: "2026-10-22T01:00:00Z" } };
+  catalog = uiModule.normalizeOptions(input); assert.equal(uiModule.cutoffFor(catalog, KEYWORD, "2026-10"), "2026-10-22");
+  assert.equal(uiModule.cutoffFor(catalog, OTHER, "2026-10"), "2026-10-30");
 });
 
 test("selected-only dates are honest fixed references and unsupported cutoffs offer an explicit supported GET", async () => {

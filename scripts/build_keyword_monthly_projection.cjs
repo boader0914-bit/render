@@ -18,13 +18,14 @@ function stamp(value) {
 }
 function validDay(value) { return typeof value === "string" && /^20\d{2}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value; }
 function args(values) {
-  const allowed = new Set(["source", "output", "now", "data-through", "copied-at", "provenance"]), result = {};
+  const allowed = new Set(["source", "output", "now", "data-through", "copied-at", "provenance", "compression"]), result = {};
   for (let i = 0; i < values.length; i += 2) {
     const key = values[i]?.replace(/^--/, "");
     if (!values[i]?.startsWith("--") || !allowed.has(key) || !values[i + 1] || Object.hasOwn(result, key)) throw Error("KEYWORD_MONTHLY_CLI_ARGUMENTS");
     result[key] = values[i + 1];
   }
   if (!result.source || !result.output) throw Error("KEYWORD_MONTHLY_CLI_SOURCE_AND_OUTPUT_REQUIRED");
+  if (result.compression && !["auto", "gzip"].includes(result.compression)) throw Error("KEYWORD_MONTHLY_CLI_ARGUMENTS");
   for (const key of ["now", "data-through", "copied-at"]) if (result[key] && !stamp(result[key])) throw Error("KEYWORD_MONTHLY_CLI_CLOCK");
   return result;
 }
@@ -70,14 +71,15 @@ async function safeInput(file, maximum = MAX_INPUT_BYTES) {
 function sourceProvenance(bytes, sourceRead, copiedAt) {
   let value;
   try { value = JSON.parse(bytes.toString("utf8")); } catch { throw Error("KEYWORD_MONTHLY_CLI_PROVENANCE_JSON"); }
-  const allowed = ["inputSha256", "inputBytes", "copiedAt", "observationScope", "selectionCutoffs"];
+  const allowed = ["inputSha256", "inputBytes", "copiedAt", "observationScope", "selectionCutoffs", "normalizationCutoffs"];
   if (!plain(value) || Object.keys(value).some(key => !allowed.includes(key))
     || value.inputSha256 !== undefined && !SHA.test(value.inputSha256)
     || value.inputBytes !== undefined && (!Number.isSafeInteger(value.inputBytes) || value.inputBytes < 0)
     || value.copiedAt !== undefined && !stamp(value.copiedAt)
     || value.observationScope !== undefined && !["selected_only", "normalized_multirun", "verified_history_subset", "unspecified"].includes(value.observationScope)
-    || value.selectionCutoffs !== undefined && (!plain(value.selectionCutoffs) || Object.keys(value.selectionCutoffs).length > 1200
-      || Object.entries(value.selectionCutoffs).some(([month, day]) => !/^20\d{2}-(?:0[1-9]|1[0-2])$/.test(month) || !validDay(day)))) throw Error("KEYWORD_MONTHLY_CLI_PROVENANCE_INVALID");
+    || ["selectionCutoffs", "normalizationCutoffs"].some(key => value[key] !== undefined && (!plain(value[key]) || Object.keys(value[key]).length > 1200
+      || key === "normalizationCutoffs" && !Object.keys(value[key]).length
+      || Object.entries(value[key]).some(([month, day]) => !/^20\d{2}-(?:0[1-9]|1[0-2])$/.test(month) || !validDay(day))))) throw Error("KEYWORD_MONTHLY_CLI_PROVENANCE_INVALID");
   if (value.inputSha256 !== undefined && value.inputSha256 !== digest(sourceRead.bytes)
     || value.inputBytes !== undefined && value.inputBytes !== sourceRead.bytes.length
     || value.copiedAt !== undefined && copiedAt !== undefined && Date.parse(value.copiedAt) !== Date.parse(copiedAt)) throw Error("KEYWORD_MONTHLY_CLI_PROVENANCE_CONFLICT");
@@ -93,7 +95,7 @@ async function run(values) {
     sourceFingerprint: digest(read.bytes),
     sourceProvenance: { ...supplied, inputSha256: digest(read.bytes), inputBytes: read.bytes.length, ...(input["copied-at"] ? { copiedAt: input["copied-at"] } : {}) },
     materializedAt: at, ...(input["data-through"] ? { dataThrough: input["data-through"] } : {}),
-    outputDir: output, now: () => new Date(at) });
+    outputDir: output, now: () => new Date(at), compression: input.compression || "auto" });
   if (!read.same(read.stat, await checkPath(read.file)) || provenanceRead && !provenanceRead.same(provenanceRead.stat, await checkPath(provenanceRead.file))) throw Error("KEYWORD_MONTHLY_CLI_SOURCE_CHANGED");
   return { ...result, explicitOfflinePreparation: true, sourceUnchanged: true, providerCalls: 0, kosisReadOrChanged: false,
     ...(provenanceRead ? { provenanceFileSha256: digest(provenanceRead.bytes), provenanceFileBytes: provenanceRead.bytes.length, provenanceUnchanged: true } : {}) };

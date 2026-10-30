@@ -15,11 +15,11 @@ function fixture(size = 1) {
       inventoryEvidenceVersion: 4, supply: 10, sold: 2, publicBookings: 2, phoneBookings: 0, publicRevenue: 200, phoneRevenue: 0, estimatedRevenue: 200,
       ...(size > 1 ? { publicValidationPadding: "p".repeat(238000) } : {}) })), rankObservations: [] };
 }
-async function setup(t, source = fixture()) {
+async function setup(t, source = fixture(), extra = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "keyword-gzip-"));
   t.after(async () => { assert.equal(path.dirname(root), path.resolve(os.tmpdir())); assert.ok(path.basename(root).startsWith("keyword-gzip-")); await fs.rm(root, { recursive: true, force: true }); });
   const directory = path.join(root, "projection");
-  await buildKeywordMonthlyProjection({ source, sourceFingerprint: hash(JSON.stringify(source)), materializedAt: NOW, now: () => NOW, outputDir: directory });
+  await buildKeywordMonthlyProjection({ source, sourceFingerprint: hash(JSON.stringify(source)), materializedAt: NOW, now: () => NOW, outputDir: directory, ...extra });
   return { directory, indexFile: path.join(directory, "index.json"), service: createKeywordMonthlyAnalysis({ projectionDir: directory, now: () => NOW }) };
 }
 const query = { keyword, month: "2026-10", cutoffDate: "2026-10-01" };
@@ -68,4 +68,14 @@ test("legacy uncompressed projections retain exact responses when losslessly enc
   assert.equal(encoded.status, "available");
   assert.deepEqual(encoded.snapshot, original.snapshot);
   assert.deepEqual(encoded.activity, original.activity);
+});
+
+test("explicit gzip preparation reduces storage while preserving the entire small-scope snapshot and provenance", async t => {
+  const plain = await setup(t), compressed = await setup(t, fixture(), { compression: "gzip" });
+  const [before, after] = await Promise.all([plain.service.analyze(query), compressed.service.analyze(query)]);
+  const index = JSON.parse(await fs.readFile(compressed.indexFile)), scope = index.keywords[0].scopes[0];
+  assert.equal(scope.encoding, "gzip"); assert.ok(scope.bytes < scope.uncompressedBytes);
+  assert.deepEqual(after.snapshot, before.snapshot); assert.deepEqual(after.activity, before.activity);
+  assert.equal(after.provenance.inputSha256, before.provenance.inputSha256); assert.equal(after.provenance.sourceDigest, before.provenance.sourceDigest);
+  assert.equal(after.provenance.materializedAt, before.provenance.materializedAt); assert.equal(after.provenance.dataThrough, before.provenance.dataThrough);
 });

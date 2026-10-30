@@ -47,7 +47,7 @@ const { createMonthlyReportOutlookEvaluation } = require("./lib/monthly_report_o
 const { createMonthlyReportIndustryContext } = require("./lib/monthly_report_industry_context.cjs");
 const { createMonthlyReportCatchmentContext } = require("./lib/monthly_report_catchment_context.cjs");
 const { createMonthlyReportHttpHandler } = require("./lib/monthly_report_http.cjs");
-const { createKeywordMonthlyAnalysis } = require("./lib/keyword_monthly_analysis.cjs");
+const { createKeywordMonthlyBundleAnalysis } = require("./lib/keyword_monthly_bundle.cjs");
 const { createKeywordMonthlyHttpHandler } = require("./lib/keyword_monthly_http.cjs");
 const { createRegionalReportPreparation } = require("./lib/regional_report_preparation.cjs");
 const { createRegionalSearchTrendService } = require("./lib/regional_search_trends.cjs");
@@ -870,8 +870,14 @@ async function queueIntegratedCompanies(companyIds, reason) {
 }
 // Reuse only separately prepared keyword projections; opening the view never
 // scans original history, rebuilds a cache, starts a collector or reads KOSIS.
-const keywordMonthlyAnalysis = createKeywordMonthlyAnalysis({
+const keywordMonthlyPreparedAnalysis = createKeywordMonthlyBundleAnalysis({
   projectionDir: path.join(DATA_DIR, "keyword_monthly_analysis")
+});
+// Keep one complete analytical allocation under the existing application lease.
+// Concurrent admin queries cannot retain several decoded history graphs.
+const keywordMonthlyAnalysis = Object.freeze({
+  options: () => runAnalyticalWork(() => keywordMonthlyPreparedAnalysis.options(), { kind: "keyword_monthly_options" }),
+  analyze: input => runAnalyticalWork(() => keywordMonthlyPreparedAnalysis.analyze(input), { kind: "keyword_monthly_analysis" })
 });
 const handleKeywordMonthly = createKeywordMonthlyHttpHandler({
   service: keywordMonthlyAnalysis, requireAdmin: requireAdminSession, send
