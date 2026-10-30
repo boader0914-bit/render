@@ -14,6 +14,28 @@
   const relation=v=>({same:'같은 지역',cross:'다른 지역',unknown:'지역 확인 필요'})[v]||'이전 비교 기준';
   const exactCurrent=s=>s?.stayMode==='upcoming30'&&s.stayStart===today()&&s.asOfDate===today();
   const companyLink=id=>`#company=${encodeURIComponent(id)}`;
+  function dashboardApi(){return typeof window!=='undefined'?window.InsightComparisonDashboard:typeof require==='function'?require('./comparison-dashboard.js'):null;}
+  function dashboardView(){return typeof window!=='undefined'?window.InsightComparisonDashboardView:typeof require==='function'?require('./comparison-dashboard-view.js'):null;}
+  let dashboardState=null;
+  const dashboardStorageKey='insight:competition-dashboard:v1';
+  function dashboardContext(s){return JSON.stringify([operatingScope(),active?.store.requestToken().partition,s.ownCompanyId,s.comparisonIds.slice().sort(),s.stayStart,s.stayEnd,s.asOfDate]);}
+  function filtersFor(s){
+    const defaults={start:s.stayStart,end:s.stayEnd,dayFilter:'all'};
+    if(!active)return defaults;
+    const key=dashboardContext(s);
+    if(dashboardState?.key===key)return dashboardState.filters;
+    let filters=defaults;
+    try{const saved=JSON.parse(sessionStorage.getItem(dashboardStorageKey)||'null');if(saved?.key===key&&dashboardApi()?.normalizeFilters({period:{start:s.stayStart,end:s.stayEnd}},saved.filters).valid)filters=saved.filters;}catch{/* Optional view preferences cannot block saved data. */}
+    dashboardState={key,filters};return filters;
+  }
+  function setFilters(s,filters){
+    const normalized=dashboardApi()?.normalizeFilters({period:{start:s.stayStart,end:s.stayEnd}},filters);
+    if(!normalized?.valid)return false;
+    dashboardState={key:dashboardContext(s),filters:{start:normalized.start,end:normalized.end,dayFilter:normalized.dayFilter}};
+    try{sessionStorage.setItem(dashboardStorageKey,JSON.stringify(dashboardState));}catch{/* No persistence is required to use a filter. */}
+    return true;
+  }
+  function dashboardModel(r,s,catalog){return dashboardApi()?.project(r,s,catalog,filtersFor(s));}
   function readiness(report,selection){
     const view=typeof window!=='undefined'?window.InsightComparisonReadinessView:typeof require==='function'?require('./comparison-readiness-view.js'):null;
     return view?.render?.(report,selection)||'';
@@ -37,12 +59,16 @@
   }
   function drawResults(slot,html,report){
     const open=slot.querySelector?.('[data-readiness-details="evidence"]')?.open===true;
+    const disclosed=[...(slot.querySelectorAll?.('[data-dashboard-detail][open]')||[])].map(node=>node.dataset.dashboardDetail);
     slot.innerHTML=html;
     const evidence=slot.querySelector?.('[data-readiness-details="evidence"]');
     if(open&&evidence)evidence.open=true;
+    for(const name of disclosed){const detail=slot.querySelector?.(`[data-dashboard-detail="${name}"]`);if(detail)detail.open=true;}
     const options=active;
+    if(options)options.lastRenderedReport=report;
     const operatingToken=options?.store.requestToken();
-    if(options&&report&&matching(report,options.store.getState()))operatingView()?.mount({report,selection:options.store.getState(),catalog:options.state.companies,scope:operatingScope(),isCurrent:()=>active===options&&slot.isConnected&&options.store.isCurrent(operatingToken)});
+    const s=options?.store.getState(),filterToken=s?JSON.stringify(filtersFor(s)):'',model=s&&report?dashboardModel(report,s,options.state.companies):null;
+    if(options&&report&&matching(report,s))operatingView()?.mount({report,selection:s,catalog:options.state.companies,scope:operatingScope()+filterToken,displayDates:model?.dates,displayPeriod:model?.period,displayComparisonActionable:model?.quality?.actionable,displayHoldReason:model?.judgments?.[0]?.reason,isCurrent:()=>active===options&&slot.isConnected&&options.store.isCurrent(operatingToken)&&JSON.stringify(filtersFor(options.store.getState()))===filterToken});
     else operatingView()?.stop();
   }
   const isNew=c=>c?.rulesVersion==='insight-comparison-v1';
@@ -110,6 +136,12 @@
     const same=comparisons.filter(c=>c.regionRelation==='same').length,cross=comparisons.filter(c=>c.regionRelation==='cross').length;
     const focus=others.some(c=>c.companyId===focusId)?focusId:others[0]?.companyId;
     const partial=r.dataQuality?.status==='partial'||r.responseCache?.partial===true;
+    const model=dashboardModel(r,s,catalog),dashboard=dashboardView();
+    if(model&&dashboard){
+      if(!model.contextValid)return dashboard.render(model);
+      const filterToken=JSON.stringify(filtersFor(s));
+      return `<div class="comparison-dashboard" data-comparison-dashboard>${dashboard.controls(model)}${dashboard.summary(model)}${dashboard.judgments(model)}${dashboard.graphs(model)}<section class="comparison-dashboard-details" aria-label="상세 근거"><div class="comparison-section-title"><span class="dashboard-kicker">05 · 상세 근거</span><h2>상세 근거</h2><p class="muted">선택한 업체의 확보일·공통 관측 조건과 원본 30일 자료를 확인합니다.</p></div><details class="card" data-dashboard-detail="evidence"><summary>업체별 자료 확보·비교 제외 사유 <span aria-hidden="true">+</span></summary>${readiness(r,s)}${summaryGroups(own,others,comparisons,evidenceModel(r,s))}${pairTable(r,s)}${partial?sourceIssues(r,s):''}</details><details class="card" data-dashboard-detail="operating"><summary>날짜별 운영 검토·쿠폰 계산 <span aria-hidden="true">+</span></summary>${operatingView()?.render(r,s,catalog,{scope:operatingScope()+filterToken,displayDates:model.dates,displayPeriod:model.period,displayComparisonActionable:model.quality?.actionable,displayHoldReason:model.judgments?.[0]?.reason})||''}</details><details class="card" data-dashboard-detail="additional"><summary>상품·예약수량·지역 자료 <span aria-hidden="true">+</span></summary><div class="comparison-view-tabs" role="tablist" aria-label="경쟁 비교 보기">${[['flow','예약 흐름'],['products','가격·상품'],['regions','지역 배경']].map(([id,name])=>`<button type="button" role="tab" data-comparison-view="${id}" aria-selected="${s.selectedView===id}" aria-controls="comparison-detail">${name}</button>`).join('')}</div>${s.selectedView==='flow'&&others.length?`<label class="comparison-focus"><span>그래프 비교업체</span><select data-comparison-focus aria-label="그래프 비교업체">${others.map(c=>`<option value="${esc(c.companyId)}" ${focus===c.companyId?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>`:''}<div id="comparison-detail" role="tabpanel">${s.selectedView==='products'?products(r,s,catalog):s.selectedView==='regions'?regions(r,s):flow(r,s,focus)}</div></details></section></div>`;
+    }
     return `<div class="comparison-notice"><p>${!others.length?'비교업체를 선택하면 같은 조건으로 비교합니다.':cross?'다른 지역 업체는 지역 수요 차이를 포함한 참고 비교입니다.':'같은 지역에서도 업종·상품·관측 조건을 확인합니다.'}</p><small>같은 지역 ${same} · 다른 지역 ${cross}</small></div>${partial?'<p class="collection-warning">일부 자료를 확인하지 못했습니다. 정상 자료는 표시하며 업체별 날짜와 사유를 아래 근거에서 확인할 수 있습니다.</p>':''}${summaryGroups(own,others,comparisons,evidenceModel(r,s))}${readiness(r,s)}${operatingView()?.render(r,s,catalog,{scope:operatingScope()})||''}<section class="card"><div class="comparison-view-tabs" role="tablist" aria-label="경쟁 비교 보기">${[['flow','예약 흐름'],['products','가격·상품'],['regions','지역 배경']].map(([id,name])=>`<button type="button" role="tab" data-comparison-view="${id}" aria-selected="${s.selectedView===id}" aria-controls="comparison-detail">${name}</button>`).join('')}</div>${s.selectedView==='flow'&&others.length?`<label class="comparison-focus"><span>그래프 비교업체</span><select data-comparison-focus aria-label="그래프 비교업체">${others.map(c=>`<option value="${esc(c.companyId)}" ${focus===c.companyId?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>`:''}<div id="comparison-detail" role="tabpanel">${s.selectedView==='products'?products(r,s,catalog):s.selectedView==='regions'?regions(r,s):flow(r,s,focus)}</div></section>${pairTable(r,s)}${partial?sourceIssues(r,s):''}`;
   }
   function sourceIssues(r,s){
@@ -122,7 +154,7 @@
     const competitors=state.customer.relations.filter(r=>r.kind==='competitor'&&['active','pending'].includes(r.status)).map(r=>state.companies.find(c=>c.companyId===r.companyId)).filter(Boolean);
     if(!own.length)return '<section class="card"><h2>비교 기준이 될 내 매장을 등록하세요.</h2><p class="muted">등록한 경쟁업체 자료는 아래에서 볼 수 있습니다. 내 매장이 없을 때 예약·매출을 0으로 생성하지 않습니다.</p><a class="button" href="#register-own">내 매장 등록</a></section>';
     const current=exactCurrent(selection);
-    return `<section class="card comparison-controls"><form id="comparison-form"><div class="form-grid"><label class="field"><span>기준 내 매장</span><select name="comparisonOwnId" aria-label="비교 기준 내 매장">${own.map(c=>`<option value="${esc(c.companyId)}" ${c.companyId===selection.ownCompanyId?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label><div class="comparison-period"><span>비교 숙박기간</span><strong>${esc(selection.stayStart)} ~ ${esc(selection.stayEnd)}</strong><small>관측 기준 ${esc(selection.asOfDate)} · 한국시간</small></div><button class="button" type="submit">저장 자료 확인</button></div><details><summary>비교업체 선택 · ${selection.comparisonIds.length}곳</summary><div class="comparison-choices">${competitors.map(c=>`<label><input type="checkbox" name="comparisonIds" value="${esc(c.companyId)}" ${selection.comparisonIds.includes(c.companyId)?'checked':''}>${esc(c.name)}</label>`).join('')||'<p class="muted">설정에서 비교할 업체를 등록하세요.</p>'}</div></details></form>${current?'':`<p class="collection-warning">현재 나란히 비교는 오늘부터 30일 자료를 지원합니다. 선택한 과거 기간을 현재 자료로 대체하지 않습니다.</p><button class="button small" type="button" data-comparison-current>현재 30일로 보기</button>`}<p class="muted comparison-footnote">과거 숙박월은 업체자료의 C 통합관측에서 확인할 수 있습니다.</p></section><p id="comparison-status" role="status" class="connection-check" aria-live="polite"></p><div id="comparison-results" aria-live="polite"></div>`;
+    return `<section class="card comparison-controls"><h2 class="comparison-controls-title">비교 조건</h2><form id="comparison-form"><div class="form-grid"><label class="field"><span>기준 내 매장</span><select name="comparisonOwnId" aria-label="비교 기준 내 매장">${own.map(c=>`<option value="${esc(c.companyId)}" ${c.companyId===selection.ownCompanyId?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label><div class="comparison-period"><span>저장 자료 범위</span><strong>${esc(selection.stayStart)} ~ ${esc(selection.stayEnd)}</strong><small>관측 기준 ${esc(selection.asOfDate)} · 한국시간</small></div><button class="button" type="submit">저장 자료 확인</button></div><details><summary>비교업체 선택 · ${selection.comparisonIds.length}곳</summary><div class="comparison-choices">${competitors.map(c=>`<label><input type="checkbox" name="comparisonIds" value="${esc(c.companyId)}" ${selection.comparisonIds.includes(c.companyId)?'checked':''}>${esc(c.name)}</label>`).join('')||'<p class="muted">설정에서 비교할 업체를 등록하세요.</p>'}</div></details></form>${current?'':`<p class="collection-warning">현재 나란히 비교는 오늘부터 30일 자료를 지원합니다. 선택한 과거 기간을 현재 자료로 대체하지 않습니다.</p><button class="button small" type="button" data-comparison-current>현재 30일로 보기</button>`}<p class="muted comparison-footnote">과거 숙박월은 업체자료의 C 통합관측에서 확인할 수 있습니다.</p></section><p id="comparison-status" role="status" class="connection-check" aria-live="polite"></p><div id="comparison-results" aria-live="polite"></div>`;
   }
   let active=null,generation=0,timer=null,focusId=null;
   const stop=()=>{generation++;if(timer!==null)clearTimeout(timer);timer=null;active=null;operatingView()?.stop();};
@@ -168,11 +200,30 @@
       const updated=options.store.update(patch);if(!updated.ok)return;options.onSelectionChange?.(updated.state);const workspace=document.querySelector('#comparison-workspace');if(workspace)workspace.innerHTML=panel(options.state,updated.state);void refresh(true);
     });
     document.addEventListener('click',event=>{
-      const button=event.target.closest?.('[data-comparison-view],[data-comparison-current]');if(!button||!active)return;event.preventDefault();
+      const button=event.target.closest?.('[data-comparison-view],[data-comparison-current],[data-dashboard-reset]');if(!button||!active)return;event.preventDefault();
+      if(button.hasAttribute('data-dashboard-reset')){
+        const s=active.store.getState(),slot=document.querySelector('#comparison-results'),report=active.lastRenderedReport;
+        if(setFilters(s,{start:s.stayStart,end:s.stayEnd,dayFilter:'all'})&&slot&&report&&matching(report,s))drawResults(slot,render(report,s,active.state.companies,focusId),report);
+        return;
+      }
       const options=active,presentationCurrent=options.pendingToken&&options.store.isCurrent(options.pendingToken.value),patch=button.hasAttribute('data-comparison-current')?{stayMode:'upcoming30',asOfDate:today()}:{selectedView:button.dataset.comparisonView};
       const updated=options.store.update(patch);if(!updated.ok)return;options.onSelectionChange?.(updated.state);if(!button.hasAttribute('data-comparison-current')&&presentationCurrent)options.pendingToken.value=options.store.requestToken();if(button.hasAttribute('data-comparison-current')){const workspace=document.querySelector('#comparison-workspace');if(workspace)workspace.innerHTML=panel(options.state,updated.state);void refresh(false);}else{const data=options.peek(updated.state.ownCompanyId),slot=document.querySelector('#comparison-results');if(data&&slot&&matching(data,updated.state)){drawResults(slot,render(data,updated.state,options.state.companies,focusId),data);notifyRegional();}else void refresh(false);}
     });
-    document.addEventListener('change',event=>{if(!event.target.matches?.('[data-comparison-focus]')||!active)return;focusId=event.target.value;const s=active.store.getState(),data=active.peek(s.ownCompanyId),slot=document.querySelector('#comparison-results');if(data&&slot&&matching(data,s))drawResults(slot,render(data,s,active.state.companies,focusId),data);});
+    document.addEventListener('change',event=>{
+      if(!active)return;
+      const target=event.target;
+      if(target.matches?.('[data-dashboard-start],[data-dashboard-end],[data-dashboard-day-filter]')){
+        const s=active.store.getState(),before=filtersFor(s),key=target.hasAttribute('data-dashboard-start')?'start':target.hasAttribute('data-dashboard-end')?'end':'dayFilter';
+        if(!setFilters(s,{...before,[key]:target.value})){
+          target.value=before[key];const status=document.querySelector('#comparison-status');if(status)status.textContent='저장된 범위 안에서 시작일과 종료일을 확인해 주세요. 이전 조건을 유지합니다.';return;
+        }
+        const report=active.lastRenderedReport,slot=document.querySelector('#comparison-results');
+        if(report&&slot&&matching(report,s)){drawResults(slot,render(report,s,active.state.companies,focusId),report);const status=document.querySelector('#comparison-status');if(status)status.textContent='선택한 기간·요일의 저장 자료 표시';}
+        return;
+      }
+      if(!target.matches?.('[data-comparison-focus]'))return;
+      focusId=target.value;const s=active.store.getState(),data=active.peek(s.ownCompanyId),slot=document.querySelector('#comparison-results');if(data&&slot&&matching(data,s))drawResults(slot,render(data,s,active.state.companies,focusId),data);
+    });
   }
   return {panel,render,pairTable,chart,matching,exactCurrent,mount,stop};
 });

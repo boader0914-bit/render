@@ -72,3 +72,17 @@ test('a stale disclosure toggle cannot change the current customer form presenta
   h.deny();target.open=false;h.handlers.toggle({target});
   assert.match(h.render(),/data-customer-operating-detail="scenario" open/,'a denied late toggle must not overwrite the last authorized disclosure state');
 });
+
+test('dashboard display filters constrain coupon dates and counters while preserving original calculation policy',()=>{
+  const h=harness(),full=model(h.f.report,h.f.selection),kept=h.f.selection.stayEnd;
+  const filtered=h.view.displayPlan(full,{displayDates:[kept]});
+  assert.equal(filtered.days.length,1);assert.equal(filtered.days[0].date,kept);assert.equal(filtered.summary.selectedDays,1);
+  assert.equal(filtered.days[0].policyActionable,false);assert.equal(full.days.length,2);
+  const html=h.view.render(h.f.report,h.f.selection,[],{scope:'filtered',displayDates:[kept],displayPeriod:{start:kept,end:kept}});
+  assert.match(html,/선택 요일 1일/);assert.doesNotMatch(html,/2026-10-30 운영 검토 근거 보기/);
+  assert.match(html,/2026-10-31 운영 검토 근거 보기/);
+  const held=h.view.displayPlan(full,{displayDates:[kept],displayComparisonActionable:false,displayHoldReason:'선택 공통 관측 7일 미만'});
+  assert.equal(held.summary.couponReviewDays,0);assert.equal(held.summary.holdDays,1);assert.equal(held.days[0].policyActionable,false);
+  assert.match(held.days[0].reasons.join(' '),/공통 관측 7일 미만/);
+  assert.match(held.days[0].steps.join(' '),/적용 판단을 보류/);assert.doesNotMatch(held.days[0].steps.join(' '),/쿠폰 수량|만료|손익 시나리오/);
+});

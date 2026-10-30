@@ -41,9 +41,9 @@ test('names and controlled source reasons are HTML escaped',()=>{
   const f=fixture();f.data.companies[0].name='<img onerror=x>';f.data.comparisons[0].reasons=[{reason:'<script>bad</script>'}];
   const html=view.render(f.data,f.store.getState(),f.state.companies);assert.match(html,/&lt;img/);assert.match(html,/&lt;script/);assert.doesNotMatch(html,/<script>|<img onerror/);
 });
-function harness(){
+function harness({dashboard=false,storage=new Map()}={}){
   const f=fixture(),handlers={},slot={innerHTML:'',isConnected:true},status={textContent:''},timers=[];
-  const context=vm.createContext({module:{exports:{}},document:{querySelector:s=>s==='#comparison-results'?slot:s==='#comparison-status'?status:null,addEventListener:(n,fn)=>handlers[n]=fn},Date,URL,Promise,setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length;},clearTimeout:()=>{}});
+  const context=vm.createContext({module:{exports:{}},...(dashboard?{require:specifier=>require('../web/'+specifier.replace('./','')),sessionStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)}}:{}),document:{querySelector:s=>s==='#comparison-results'?slot:s==='#comparison-status'?status:null,addEventListener:(n,fn)=>handlers[n]=fn},Date,URL,Promise,setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length;},clearTimeout:()=>{}});
   vm.runInContext(fs.readFileSync(require.resolve('../web/comparison-view.js'),'utf8'),context);
   return {...f,ui:context.module.exports,handlers,slot,status,timers};
 }
@@ -96,4 +96,25 @@ test('coupon inputs remain bound to the selection rendered on screen even when a
   f.store.update({comparisonIds:['same']});options.pendingToken={value:f.store.requestToken()};
   assert.equal(mounted[0].isCurrent(),false,'an old rendered coupon form cannot borrow the newer request token');
   context.module.exports.stop();
+});
+
+test('dashboard filters reproject the stored response without new reads or changes to the source period',async()=>{
+  const h=harness({dashboard:true}),original=JSON.stringify(h.data);let reads=0;
+  h.ui.mount({store:h.store,state:h.state,peek:()=>clone(h.data),read:async()=>{reads++;return clone(h.data);}});await flush();
+  const headings=['저장 자료에서 비교할 기간','선택 기간 한눈에 보기','먼저 검토할 판단','예약 수준과 날짜별 흐름','상세 근거'];
+  for(let i=1;i<headings.length;i++)assert.ok(h.slot.innerHTML.indexOf(headings[i-1])<h.slot.innerHTML.indexOf(headings[i]));
+  const target={value:'saturday',matches:()=>true,hasAttribute:()=>false};h.handlers.change({target});
+  assert.match(h.slot.innerHTML,/선택 5일/);assert.equal(reads,1);assert.equal(h.store.getState().stayStart,h.data.period.start);assert.equal(JSON.stringify(h.data),original);
+  const before=h.slot.innerHTML,invalid={value:'2020-01-01',matches:()=>true,hasAttribute:key=>key==='data-dashboard-start'};h.handlers.change({target:invalid});
+  assert.equal(invalid.value,h.data.period.start);assert.equal(h.slot.innerHTML,before);assert.match(h.status.textContent,/이전 조건을 유지/);
+  const reset={hasAttribute:key=>key==='data-dashboard-reset'};h.handlers.click({target:{closest:()=>reset},preventDefault(){}});
+  assert.match(h.slot.innerHTML,/선택 30일/);assert.equal(reads,1);h.ui.stop();
+});
+
+test('a newer saved response preserves the active filter and refreshes the displayed quantities',async()=>{
+  const h=harness({dashboard:true});let resolve;
+  h.ui.mount({store:h.store,state:h.state,peek:()=>clone(h.data),read:()=>new Promise(r=>resolve=r)});
+  h.handlers.change({target:{value:'saturday',matches:()=>true,hasAttribute:()=>false}});
+  const updated=clone(h.data);updated.generatedAt=new Date().toISOString();resolve(updated);await flush();
+  assert.match(h.slot.innerHTML,/선택 5일/);assert.match(h.slot.innerHTML,/data-dashboard-day-filter/);h.ui.stop();
 });
