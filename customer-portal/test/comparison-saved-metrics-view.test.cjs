@@ -18,9 +18,11 @@ test('typed unknown reasons distinguish different observation days, missing pric
   assert.match(html,/data-reason-code="OBSERVATION_DAY_MISMATCH"/);
   assert.match(html,/219,000원/);assert.match(html,/<strong>0실<\/strong>/);assert.doesNotMatch(html,/>0원/);
 });
-test('company evidence defaults to collapsed details and retains source dates and counts',()=>{
+test('company comparison defaults to visible while individual provenance stays collapsed and retains source dates and counts',()=>{
   const html=view.savedMetrics(fixture());
-  assert.match(html,/<details class="card dashboard-saved-metrics" data-dashboard-detail="saved-metrics">/);
+  assert.match(html,/<section class="card dashboard-saved-metrics"[^>]*data-dashboard-company-comparison/);
+  assert.match(html,/<table[^>]*data-dashboard-company-table/);
+  assert.doesNotMatch(html,/<details class="card dashboard-saved-metrics"/);
   assert.match(html,/3상품 · 19일 · 57건/);assert.match(html,/219,000~320,000원/);
   assert.match(html,/같은 숙박일 5일 · 관측 비교 5건 · 신규 예약수 아님/);
   assert.match(html,/run-price/);assert.match(html,/10\. 28\./);assert.match(html,/계산 기준 saved-v1/);

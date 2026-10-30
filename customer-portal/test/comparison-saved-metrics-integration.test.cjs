@@ -73,13 +73,13 @@ test('a pending saved-only payload preserves valid pickup and labels only missin
   assert.equal(metric(model,'product_price').reasonCode,'SOURCE_READ_FAILED');assert.equal(metric(model,'public_change').value,30);
 });
 function harness(){
-  const f=fixture(),handlers={},slot={innerHTML:'',isConnected:true},status={textContent:''},timers=[],storage=new Map();
+  const f=fixture(),handlers={},slot={innerHTML:'',isConnected:true},filterSlot={innerHTML:''},status={textContent:''},timers=[],storage=new Map();
   const context=vm.createContext({module:{exports:{}},require:specifier=>require('../web/'+specifier.replace('./','')),Date,URL,Promise,
     sessionStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)},
-    document:{querySelector:key=>key==='#comparison-results'?slot:key==='#comparison-status'?status:null,addEventListener:(name,fn)=>handlers[name]=fn},
+    document:{querySelector:key=>key==='#comparison-results'?slot:key==='#comparison-status'?status:key==='[data-comparison-filter-controls]'?filterSlot:null,addEventListener:(name,fn)=>handlers[name]=fn},
     setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length;},clearTimeout:()=>{}});
   vm.runInContext(fs.readFileSync(require.resolve('../web/comparison-view.js'),'utf8'),context);
-  return {...f,ui:context.module.exports,handlers,slot,status,timers};
+  return {...f,ui:context.module.exports,handlers,slot,filterSlot,status,timers};
 }
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 const sourceValue=html=>html.match(/data-dashboard-metric="product_price"[\s\S]*?<strong>([^<]*)<\/strong>/)?.[1];
@@ -95,7 +95,7 @@ test('a source reply arriving after a display filter change respects the latest 
   h.handlers.change({target:{value:'saturday',matches:()=>true,hasAttribute:()=>false}});
   const selected=days.filter(d=>new Date(d+'T00:00:00Z').getUTCDay()===6),expected=median(selected.map(d=>200000+days.indexOf(d)*1000)).toLocaleString('ko-KR')+'원';
   resolve(payload('own'));await flush();
-  assert.equal(sourceValue(h.slot.innerHTML),expected);assert.match(h.slot.innerHTML,/value="saturday" selected/);assert.equal(briefingReads,1);assert.equal(sourceReads,2);h.ui.stop();
+  assert.equal(sourceValue(h.slot.innerHTML),expected);assert.match(h.filterSlot.innerHTML,/value="saturday" selected/);assert.equal(briefingReads,1);assert.equal(sourceReads,2);h.ui.stop();
 });
 test('saved-only previews retain pickup and a loading price badge until automatic source polling supplies the normal price',async()=>{
   const h=harness(),reads=new Map();

@@ -103,3 +103,49 @@ test('all-unknown daily records have no fabricated SVG while one genuine zero re
   assert.doesNotMatch(view.rateFlow(m),/<svg/);assert.match(view.rateFlow(m),/일별 표시 자료가 없습니다/);
   m.daily[0].ownRate=0;assert.match(view.rateFlow(m),/<svg/);assert.match(view.rateFlow(m),/내 매장 0\.0%/);
 });
+function companyRow(html,id){
+  const safe=id.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  return new RegExp('<tr[^>]*data-dashboard-saved-company="'+safe+'"[^>]*>[\\s\\S]*?<\\/tr>').exec(html)?.[0]||'';
+}
+function cell(html,key){return new RegExp('<td[^>]*data-dashboard-cell="'+key+'"[^>]*>([\\s\\S]*?)<\\/td>').exec(html)?.[1]||'';}
+test('company comparison is always visible, keyboard scrollable and includes every selected company even without loaded evidence',()=>{
+  const m=fixture(),html=view.summary(m),tableAt=html.indexOf('data-dashboard-company-table');
+  assert.ok(tableAt>=0);assert.match(html,/<section[^>]*data-dashboard-company-comparison/);
+  const before=html.slice(0,tableAt),depth=(before.match(/<details\b/g)||[]).length-(before.match(/<\/details>/g)||[]).length;
+  assert.equal(depth,0,'the company table itself is not hidden inside a disclosure');
+  assert.match(html,/dashboard-table-scroll[^>]*tabindex="0"/);
+  const columns=[...html.matchAll(/<th scope="col">(.*?)<\/th>/g)].map(match=>match[1]);
+  assert.deepEqual(columns,['업체','지역','객실 기준','추정 예약률','상품가격','공개예약 순변화','수량 확보']);
+  assert.deepEqual([...html.matchAll(/data-dashboard-saved-company="([^"]+)"/g)].map(match=>match[1]),['own','same','cross']);
+  assert.match(companyRow(html,'same'),/같은 지역 업체/);assert.match(companyRow(html,'cross'),/타지역 업체/);
+  assert.match(cell(companyRow(html,'cross'),'reservation-rate'),/미확인/);
+  assert.doesNotMatch(cell(companyRow(html,'cross'),'reservation-rate'),/0\.0%/);
+  assert.doesNotMatch(cell(companyRow(html,'cross'),'public-change'),/>0실/);
+});
+test('public-only pickup remains visible independently of unknown full inventory, while normal zero stays different from missing',()=>{
+  const m=fixture(),same=m.companies[1],cross=m.companies[2];
+  same.rooms=null;same.summary={days:0,sold:null,supply:null,publicBookings:null,phoneBookings:null,reservationRate:null};
+  same.savedMetrics={price:{value:179000,min:149000,max:299000,products:4,days:2,rowCount:8,status:'partial'},pickup:{value:2,publicChange:2,days:2,intervalCount:2,status:'reference',reasonCode:'PICKUP_PUBLIC_ONLY_REFERENCE',
+    source:{previousRunId:'previous_public',currentRunId:'current_public',previousObservedAt:'2026-10-27T04:20:05.714Z',currentObservedAt:'2026-10-28T06:03:04.516Z',calculationVersion:'public-booking-pickup-v1'},
+    limitations:['공개예약만 비교 · 전체 객실·방막기·매출은 미확인 유지']}};
+  cross.savedMetrics={price:{value:0,min:0,max:0,products:1,days:1,rowCount:1,status:'ready'},pickup:{value:0,days:1,intervalCount:1,status:'reference',reasonCode:'PICKUP_PUBLIC_ONLY_REFERENCE'}};
+  const html=view.savedMetrics(m),a=companyRow(html,'same'),b=companyRow(html,'cross');
+  assert.match(cell(a,'reservation-rate'),/미확인/);assert.doesNotMatch(cell(a,'reservation-rate'),/0\.0%/);
+  assert.match(cell(a,'rooms'),/미확인/);assert.match(cell(a,'public-change'),/>\+2실<\/strong>/);
+  assert.match(cell(a,'public-change'),/공개예약만 비교 · 참고/);assert.match(cell(a,'public-change'),/previous_public/);assert.match(cell(a,'public-change'),/current_public/);
+  assert.match(cell(b,'price'),/>0원<\/strong>/);assert.match(cell(b,'public-change'),/>0실<\/strong>/);
+  assert.doesNotMatch(html,/<details[^>]* open/,'per-company provenance stays collapsed');
+  const absent=companyRow(html,'own');assert.match(cell(absent,'price'),/미확인/);assert.doesNotMatch(cell(absent,'public-change'),/>0실<\/strong>/);
+});
+test('embedded conditions keep date bounds and weekday controls without introducing another card or heading',()=>{
+  const m=fixture();m.filters={start:'2026-10-31',end:'2026-11-01',dayFilter:'saturday'};
+  const html=view.controls(m,{embedded:true});
+  assert.equal((html.match(/data-dashboard-start/g)||[]).length,1);assert.equal((html.match(/data-dashboard-end/g)||[]).length,1);assert.equal((html.match(/data-dashboard-day-filter/g)||[]).length,1);
+  assert.match(html,/min="2026-10-30" max="2026-11-01"/);assert.match(html,/value="saturday" selected/);
+  assert.doesNotMatch(html,/<section\b|<h2\b|data-dashboard-reset/);
+});
+test('company-table names, region labels and evidence remain escaped when exposed by default',()=>{
+  const m=fixture();m.companies[1].name='<svg onload=alert(1)>';m.companies[1].regionLabel='<img src=x onerror=alert(2)>';
+  m.companies[1].savedMetrics={price:{value:null,status:'unavailable',reasonCode:'PRICE_MISSING',reason:'<iframe src=x>'},pickup:{value:null,status:'unavailable',reasonCode:'PICKUP_NO_PREVIOUS_OBSERVATION'}};
+  const html=view.savedMetrics(m);assert.match(html,/&lt;svg/);assert.match(html,/&lt;iframe/);assert.doesNotMatch(html,/<svg |<img |<iframe/);
+});

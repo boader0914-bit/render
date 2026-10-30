@@ -15,7 +15,7 @@ function fixture(){
 }
 test('real comparison contract renders individual quantities, region relations and partial money without invented averages',()=>{
   const f=fixture(),html=view.render(f.data,f.store.getState(),f.state.companies);
-  assert.match(html,/같은 지역 1 · 다른 지역 1/);assert.match(html,/지역 차이 미보정/);assert.match(html,/일부 금액 미확인/);assert.match(html,/0실 \(공개 0/);assert.match(html,/미확인/);assert.match(html,/지역 전체 평균으로 표시하지 않습니다/);
+  assert.match(html,/같은 지역/);assert.match(html,/다른 지역 · 참고/);assert.match(html,/지역 차이 미보정/);assert.match(html,/일부 금액 미확인/);assert.match(html,/0실 \(공개 0/);assert.match(html,/미확인/);assert.match(html,/지역 전체 평균으로 표시하지 않습니다/);
   assert.doesNotMatch(html,/NaN|undefined|比較|실제 예약 확정/);
 });
 test('wrong own, stay period or historical cutoff never display the current series under different controls',()=>{
@@ -42,10 +42,10 @@ test('names and controlled source reasons are HTML escaped',()=>{
   const html=view.render(f.data,f.store.getState(),f.state.companies);assert.match(html,/&lt;img/);assert.match(html,/&lt;script/);assert.doesNotMatch(html,/<script>|<img onerror/);
 });
 function harness({dashboard=false,storage=new Map()}={}){
-  const f=fixture(),handlers={},slot={innerHTML:'',isConnected:true},status={textContent:''},timers=[];
-  const context=vm.createContext({module:{exports:{}},...(dashboard?{require:specifier=>require('../web/'+specifier.replace('./','')),sessionStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)}}:{}),document:{querySelector:s=>s==='#comparison-results'?slot:s==='#comparison-status'?status:null,addEventListener:(n,fn)=>handlers[n]=fn},Date,URL,Promise,setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length;},clearTimeout:()=>{}});
+  const f=fixture(),handlers={},slot={innerHTML:'',isConnected:true},filterSlot={innerHTML:'',isConnected:true},status={textContent:''},timers=[];
+  const context=vm.createContext({module:{exports:{}},...(dashboard?{require:specifier=>require('../web/'+specifier.replace('./','')),sessionStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)}}:{}),document:{querySelector:s=>s==='#comparison-results'?slot:s==='#comparison-status'?status:s==='[data-comparison-filter-controls]'?filterSlot:null,addEventListener:(n,fn)=>handlers[n]=fn},Date,URL,Promise,setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length;},clearTimeout:()=>{}});
   vm.runInContext(fs.readFileSync(require.resolve('../web/comparison-view.js'),'utf8'),context);
-  return {...f,ui:context.module.exports,handlers,slot,status,timers};
+  return {...f,ui:context.module.exports,handlers,slot,filterSlot,status,timers,document:context.document};
 }
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 test('saved normal data appears immediately and is retained while a newer saved-only calculation is pending',async()=>{
@@ -101,12 +101,13 @@ test('coupon inputs remain bound to the selection rendered on screen even when a
 test('dashboard filters reproject the stored response without new reads or changes to the source period',async()=>{
   const h=harness({dashboard:true}),original=JSON.stringify(h.data);let reads=0;
   h.ui.mount({store:h.store,state:h.state,peek:()=>clone(h.data),read:async()=>{reads++;return clone(h.data);}});await flush();
-  const headings=['저장 자료에서 비교할 기간','선택 기간 한눈에 보기','먼저 검토할 판단','예약 수준과 날짜별 흐름','상세 근거'];
-  for(let i=1;i<headings.length;i++)assert.ok(h.slot.innerHTML.indexOf(headings[i-1])<h.slot.innerHTML.indexOf(headings[i]));
+  const html=h.ui.panel(h.state,h.store.getState())+h.slot.innerHTML;
+  const headings=['비교 조건','선택 기간 한눈에 보기','먼저 검토할 판단','예약 수준과 날짜별 흐름','상세 근거'];
+  for(let i=1;i<headings.length;i++)assert.ok(html.indexOf(headings[i-1])<html.indexOf(headings[i]));
   const target={value:'saturday',matches:()=>true,hasAttribute:()=>false};h.handlers.change({target});
   assert.match(h.slot.innerHTML,/선택 5일/);assert.equal(reads,1);assert.equal(h.store.getState().stayStart,h.data.period.start);assert.equal(JSON.stringify(h.data),original);
-  const before=h.slot.innerHTML,invalid={value:'2020-01-01',matches:()=>true,hasAttribute:key=>key==='data-dashboard-start'};h.handlers.change({target:invalid});
-  assert.equal(invalid.value,h.data.period.start);assert.equal(h.slot.innerHTML,before);assert.match(h.status.textContent,/이전 조건을 유지/);
+  const before=h.slot.innerHTML,beforeFields=h.filterSlot.innerHTML,invalid={value:'2020-01-01',matches:()=>true,hasAttribute:key=>key==='data-dashboard-start'};h.handlers.change({target:invalid});
+  assert.equal(invalid.value,h.data.period.start);assert.equal(h.slot.innerHTML,before);assert.equal(h.filterSlot.innerHTML,beforeFields);assert.match(h.status.textContent,/이전 조건을 유지/);
   const reset={hasAttribute:key=>key==='data-dashboard-reset'};h.handlers.click({target:{closest:()=>reset},preventDefault(){}});
   assert.match(h.slot.innerHTML,/선택 30일/);assert.equal(reads,1);h.ui.stop();
 });
@@ -116,5 +117,72 @@ test('a newer saved response preserves the active filter and refreshes the displ
   h.ui.mount({store:h.store,state:h.state,peek:()=>clone(h.data),read:()=>new Promise(r=>resolve=r)});
   h.handlers.change({target:{value:'saturday',matches:()=>true,hasAttribute:()=>false}});
   const updated=clone(h.data);updated.generatedAt=new Date().toISOString();resolve(updated);await flush();
-  assert.match(h.slot.innerHTML,/선택 5일/);assert.match(h.slot.innerHTML,/data-dashboard-day-filter/);h.ui.stop();
+  assert.match(h.slot.innerHTML,/선택 5일/);assert.match(h.filterSlot.innerHTML,/data-dashboard-day-filter/);assert.match(h.filterSlot.innerHTML,/value="saturday" selected/);h.ui.stop();
+});
+test('one customer-scoped condition card contains the own property, registered competitors and exactly one bounded filter set',async()=>{
+  const h=harness({dashboard:true});h.state.customer.customerId='customer-a';
+  const registeredBefore=JSON.stringify(h.state.customer.relations);h.state.companies.push({companyId:'not-registered',name:'노출되면 안 되는 업체'});
+  h.ui.mount({store:h.store,state:h.state,peek:()=>clone(h.data),read:async()=>clone(h.data)});await flush();
+  const html=h.ui.panel(h.state,h.store.getState())+h.slot.innerHTML;
+  assert.equal((html.match(/data-comparison-conditions\b/g)||[]).length,1);
+  assert.equal((html.match(/id="comparison-form"/g)||[]).length,1);
+  for(const hook of ['data-dashboard-start','data-dashboard-end','data-dashboard-day-filter','data-dashboard-reset'])assert.equal((html.match(new RegExp(hook+'\\b','g'))||[]).length,1,hook);
+  assert.match(html,/type="submit" form="comparison-form"/);assert.match(html,/data-comparison-filter-controls/);
+  assert.match(html,/name="comparisonIds" value="same" checked/);assert.match(html,/name="comparisonIds" value="cross" checked/);
+  assert.match(html,/<details class="comparison-competitor-picker" data-comparison-competitors>/);assert.doesNotMatch(html,/<details[^>]*data-comparison-competitors[^>]* open/);
+  assert.doesNotMatch(html,/노출되면 안 되는 업체/);assert.equal(JSON.stringify(h.state.customer.relations),registeredBefore);
+  h.ui.stop();
+});
+test('an oversized report with an unregistered company fails closed without exposing its table or values',async()=>{
+  const h=harness({dashboard:true}),foreign=clone(h.data.companies[1]);foreign.companyId='foreign';foreign.name='비등록 보존 자료';
+  foreign.reservationSeries.companyId='foreign';h.data.companies.push(foreign);h.state.companies.push(foreign);
+  h.ui.mount({store:h.store,state:h.state,peek:()=>clone(h.data),read:async()=>clone(h.data)});await flush();
+  assert.match(h.slot.innerHTML,/선택한 고객·매장·기간/);assert.doesNotMatch(h.slot.innerHTML,/비등록 보존 자료|data-dashboard-company-table|data-dashboard-metric|data-dashboard-saved-company="foreign"/);
+  h.ui.stop();
+});
+test('saved display filters cannot carry across customer identities or permission partitions',async()=>{
+  const storage=new Map(),first=harness({dashboard:true,storage});first.state.customer.customerId='customer-first';
+  first.ui.mount({store:first.store,state:first.state,peek:()=>clone(first.data),read:async()=>clone(first.data)});await flush();
+  first.handlers.change({target:{value:'saturday',matches:()=>true,hasAttribute:()=>false}});assert.match(first.filterSlot.innerHTML,/value="saturday" selected/);first.ui.stop();
+  for(const changed of ['customer','permission']){
+    const next=harness({dashboard:true,storage});next.state.customer.customerId=changed==='customer'?'customer-second':'customer-first';
+    if(changed==='permission')next.store.configure({permissionSignature:'new-permission'});
+    next.ui.mount({store:next.store,state:next.state,peek:()=>clone(next.data),read:async()=>clone(next.data)});await flush();
+    assert.match(next.filterSlot.innerHTML,/value="all" selected/);assert.match(next.slot.innerHTML,/선택 30일/);next.ui.stop();
+  }
+});
+test('a delayed saved price response uses the active display filter rather than restoring old dates or unfiltered values',async()=>{
+  const h=harness({dashboard:true});let resolveCompany,reportReads=0;
+  h.ui.mount({store:h.store,state:h.state,peek:()=>clone(h.data),read:async()=>{reportReads++;return clone(h.data);},readCompany:()=>new Promise(resolve=>{if(!resolveCompany)resolveCompany=resolve;})});
+  await flush();h.handlers.change({target:{value:'friday',matches:()=>true,hasAttribute:()=>false}});
+  const start=h.data.period.start,end=h.data.period.end;
+  resolveCompany({result:{companyId:'own',runId:'saved-price-run',collectedAt:start+'T03:00:00Z',range:{start,end,days:30},quality:{status:'complete'},products:[{bizItemId:'room',productType:'lodging',name:'숙박',days:Array.from({length:30},(_,i)=>{const date=shift(start,i);return {date,status:'observed',errorCode:null,price:new Date(date+'T00:00:00Z').getUTCDay()===5?200000:100000};})}]}});
+  await flush();assert.match(h.filterSlot.innerHTML,/value="friday" selected/);assert.match(h.slot.innerHTML,/200,000원/);assert.equal(reportReads,1);
+  assert.equal(h.store.getState().stayStart,start);assert.equal(h.store.getState().stayEnd,end);h.ui.stop();
+});
+test('background evidence updates keep native filter nodes and an unsaved focused date value without focus calls or another briefing read',async()=>{
+  const h=harness({dashboard:true}),start=h.data.period.start,end=h.data.period.end,notes={innerHTML:''};let reads=0,resolveCompany,htmlWrites=0,focusCalls=0;
+  const field=value=>({value,attributes:{},setAttribute(key,value){this.attributes[key]=value;},removeAttribute(key){delete this.attributes[key];},focus(){focusCalls++;}});
+  const nodes={'[data-dashboard-start]':field(shift(start,5)),'[data-dashboard-end]':field('draft-unfocused-end'),'[data-dashboard-day-filter]':field('all')};
+  const focused=nodes['[data-dashboard-start]'];h.document.activeElement=focused;
+  h.filterSlot.querySelector=selector=>selector==='.dashboard-scope-notes'?notes:nodes[selector]||null;
+  Object.defineProperty(h.filterSlot,'innerHTML',{get:()=>'<existing-native-controls>',set:()=>{htmlWrites++;}});
+  h.document.createElement=tag=>{
+    assert.equal(tag,'template');let markup='';
+    return {set innerHTML(value){markup=value;},get innerHTML(){return markup;},content:{querySelector(selector){
+      if(selector==='.dashboard-scope-notes')return {innerHTML:markup.match(/<div class="dashboard-scope-notes">([\s\S]*?)<\/div>/)?.[1]||''};
+      const key=selector.slice(1,-1),element=markup.match(new RegExp('<(?:input|select)[^>]*'+key+'\\b[^>]*>'))?.[0];if(!element)return null;
+      const attribute=name=>element.match(new RegExp('\\b'+name+'="([^"]*)"'))?.[1]??null;
+      const selected=markup.match(/<option value="([^"]+)" selected/);
+      return {value:element.startsWith('<select')?selected?.[1]||'all':attribute('value'),getAttribute:attribute};
+    }}};
+  };
+  h.ui.mount({store:h.store,state:h.state,peek:()=>clone(h.data),read:async()=>{reads++;return clone(h.data);},readCompany:()=>new Promise(resolve=>{if(!resolveCompany)resolveCompany=resolve;})});await flush();
+  const beforeNotes=notes.innerHTML,month=start.slice(0,7),last=new Date(Date.UTC(Number(month.slice(0,4)),Number(month.slice(5,7)),0)).toISOString().slice(0,10);
+  resolveCompany({companyDetail:{companyId:'own',basics:{companyId:'own'},integrated:{companyId:'own',status:'ready',selectedMonth:month,calculationVersion:'saved-fixture',snapshot:{period:{start:month+'-01',end:last,cutoffDate:start},analysis:{pickup:{status:'ready',comparableIntervals:1,intervals:[{date:start,previousCollectedAt:shift(start,-1)+'T03:00:00Z',collectedAt:start+'T03:00:00Z',publicChange:1,blockedChange:0,netChange:1}]}}}}}});
+  await flush();
+  assert.equal(h.filterSlot.querySelector('[data-dashboard-start]'),focused);assert.equal(focused.value,shift(start,5));
+  assert.equal(nodes['[data-dashboard-end]'].value,end);assert.equal(nodes['[data-dashboard-start]'].attributes.min,start);assert.equal(nodes['[data-dashboard-start]'].attributes.max,end);
+  assert.notEqual(notes.innerHTML,beforeNotes);assert.match(notes.innerHTML,/이전·현재 저장 관측 비교 · 참고/);
+  assert.equal(htmlWrites,0,'updating notes must not recreate native inputs');assert.equal(focusCalls,0);assert.equal(reads,1);h.ui.stop();
 });
