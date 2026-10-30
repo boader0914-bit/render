@@ -18,6 +18,14 @@
     const view=typeof window!=='undefined'?window.InsightComparisonReadinessView:typeof require==='function'?require('./comparison-readiness-view.js'):null;
     return view?.render?.(report,selection)||'';
   }
+  function evidenceModel(report,selection){
+    const view=typeof window!=='undefined'?window.InsightComparisonReadinessView:typeof require==='function'?require('./comparison-readiness-view.js'):null;
+    return view?.project?.(report,selection);
+  }
+  function savedAvailability(company){
+    const partial=company?.partialRevenue,stored=company?.storedReference;
+    return `${partial?.days>0?`<span class="is-partial">부분 상품 금액 ${n(partial.days)}일 · ${money(partial.amount)} <small>정상 소계와 별도</small></span>`:''}${stored?.days>0?`<span class="is-stored">오래된 저장 수량 ${n(stored.days)}일 <small>현재 비교에서 제외</small></span>`:''}`;
+  }
   function operatingView(){
     if(typeof window!=='undefined')return window.InsightCustomerOperatingActionsView;
     if(typeof require==='function'){try{return require('./customer-operating-actions-view.js');}catch{return null;}}
@@ -48,27 +56,33 @@
       (c.quality.revenue.unknownDates.length?`<li>금액 미확인 날짜: ${c.quality.revenue.unknownDates.map(esc).join(', ')}</li>`:'')+
       `<li>실제 관측시차: ${c.quality.timing.maximumObservedSkewMs===null?'시각 확인 필요':n(c.quality.timing.maximumObservedSkewMs/60000)+'분'} · 자동 판단 시차 기준 ${c.quality.timing.policy.confirmed?'확정':'미확정'}</li>`;
   }
-  function card(c,comparison,own){
+  function card(c,comparison,own,evidence){
     const tags=own?comparison?.industry?.ownIndustryKeys:comparison?.industry?.competitorIndustryKeys,labels={glamping:'글램핑',campground:'캠핑',caravan:'카라반',pension:'펜션',poolVilla:'풀빌라',privateStay:'독채',hotelResort:'호텔·리조트',motel:'모텔'},industry=Array.isArray(tags)&&tags.length?tags.map(key=>labels[key]||key).join('·'):'업종 확인 필요';
     const summary=c.summary||{},role=own?'내 매장':isNew(comparison)&&comparison.purpose==='direct'?'직접 경쟁':'운영 참고';
-    return `<article class="comparison-summary ${own?'is-own':''}"><div class="comparison-card-top"><span>${own?'분석 기준':relation(comparison?.regionRelation)}</span><span class="status-pill">${role}</span></div><h3><a href="${companyLink(c.companyId)}">${esc(c.name)}</a></h3><p class="muted">${esc(c.regionLabel||'지역 확인 필요')} · ${esc(industry)} · 객실 ${numeric(c.rooms)?n(c.rooms)+'실':'미확인'} · 유효 ${n(summary.days)}일</p><span class="comparison-metric-label">추정 예약률</span><strong class="comparison-rate">${rate(summary.reservationRate)}</strong><p>예약 ${n(summary.sold)} / 공급 ${n(summary.supply)} 실</p><p class="comparison-card-foot">${own?esc(c.roomCountSource||'현재 업체 DB 기준'):isNew(comparison)?comparison.actionable?'같은 조건 비교':comparison.comparable?'수치 참고':'비교 보류':'이전 기준 참고'} · <a href="${companyLink(c.companyId)}">업체자료 보기</a></p></article>`;
+    const supplemental=savedAvailability(evidence);
+    return `<article class="comparison-summary ${own?'is-own':''}"><div class="comparison-card-top"><span>${own?'분석 기준':relation(comparison?.regionRelation)}</span><span class="status-pill">${role}</span></div><h3><a href="${companyLink(c.companyId)}">${esc(c.name)}</a></h3><p class="muted">${esc(c.regionLabel||'지역 확인 필요')} · ${esc(industry)} · 객실 ${numeric(c.rooms)?n(c.rooms)+'실':'미확인'} · 유효 ${n(summary.days)}일</p><span class="comparison-metric-label">추정 예약률</span><strong class="comparison-rate">${rate(summary.reservationRate)}</strong><p>예약 ${n(summary.sold)} / 공급 ${n(summary.supply)} 실</p>${supplemental?`<p class="comparison-saved-availability">${supplemental}</p>`:''}<p class="comparison-card-foot">${own?esc(c.roomCountSource||'현재 업체 DB 기준'):isNew(comparison)?comparison.actionable?'같은 조건 비교':comparison.comparable?'수치 참고':'비교 보류':'이전 기준 참고'} · <a href="${companyLink(c.companyId)}">업체자료 보기</a></p></article>`;
   }
-  function summaryGroups(own,others,comparisons){
-    const group=(title,rows,description='')=>rows.length?`<section style="--comparison-group-size:${rows.length}"><h2>${title}${description?`<small>${description}</small>`:''}</h2><div class="comparison-summary-grid">${rows.map(c=>card(c,comparisons.find(p=>p.companyId===c.companyId),false)).join('')}</div></section>`:'';
-    return `<div class="comparison-summary-groups"><section style="--comparison-group-size:1"><h2>내 매장 <small>분석 기준</small></h2><div class="comparison-summary-grid">${card(own,comparisons[0],true)}</div></section>${group('같은 지역',others.filter(c=>comparisons.find(p=>p.companyId===c.companyId)?.regionRelation==='same'),'공통 숙박일 비교')}${group('다른 지역',others.filter(c=>comparisons.find(p=>p.companyId===c.companyId)?.regionRelation==='cross'),'상품·운영 참고')}${group('지역 확인 필요',others.filter(c=>!['same','cross'].includes(comparisons.find(p=>p.companyId===c.companyId)?.regionRelation)),'지역 차이 판단 보류')}</div>`;
+  function summaryGroups(own,others,comparisons,model){
+    const find=c=>model?.companies.find(row=>row.companyId===c.companyId);
+    const group=(title,rows,description='')=>rows.length?`<section style="--comparison-group-size:${rows.length}"><h2>${title}${description?`<small>${description}</small>`:''}</h2><div class="comparison-summary-grid">${rows.map(c=>card(c,comparisons.find(p=>p.companyId===c.companyId),false,find(c))).join('')}</div></section>`:'';
+    return `<div class="comparison-summary-groups"><section style="--comparison-group-size:1"><h2>내 매장 <small>분석 기준</small></h2><div class="comparison-summary-grid">${card(own,comparisons[0],true,find(own))}</div></section>${group('같은 지역',others.filter(c=>comparisons.find(p=>p.companyId===c.companyId)?.regionRelation==='same'),'공통 숙박일 비교')}${group('다른 지역',others.filter(c=>comparisons.find(p=>p.companyId===c.companyId)?.regionRelation==='cross'),'상품·운영 참고')}${group('지역 확인 필요',others.filter(c=>!['same','cross'].includes(comparisons.find(p=>p.companyId===c.companyId)?.regionRelation)),'지역 차이 판단 보류')}</div>`;
   }
   function pairTable(r,s){
     const rows=selected(r,s);
     return `<section class="card comparison-table-card"><div class="comparison-section-title"><h2>공통 날짜 기준 비교</h2><p class="muted">예약률 차이 = 내 매장 − 비교업체 · 같은 숙박일·관측일 기준</p></div><div class="collection-table-wrap"><table><thead><tr><th>업체 / 비교 유형</th><th>공통 날짜</th><th>내 매장</th><th>비교업체</th><th>차이</th><th>확인 금액</th></tr></thead><tbody>${rows.map(c=>`<tr><th><a href="${companyLink(c.companyId)}">${esc(c.name)}</a><small>${relation(c.regionRelation)} · ${isNew(c)&&c.purpose==='direct'?'직접 경쟁':'운영 참고'}</small></th><td>${n(c.commonDays)}일</td><td>${rate(c.own.reservationRate)}</td><td>${rate(c.competitor.reservationRate)}</td><td>${isNew(c)&&!c.comparable||c.gapPp===null?'비교 보류':`${c.gapPp>0?'+':''}${n(c.gapPp)}%p`}${c.regionRelation==='cross'?'<small>지역 차이 미보정</small>':''}</td><td>${money(c.competitor.knownRevenueSubtotal??c.competitor.estimatedRevenue)}<small>${isNew(c)?({ready:'확인됨',partial:'일부 금액 미확인',unavailable:'금액 미확인'})[c.quality.revenue.status]:'이전 기준 참고'}</small></td></tr>`).join('')||'<tr><td colspan="6">비교할 업체를 선택해 주세요.</td></tr>'}</tbody></table></div><p class="muted comparison-footnote">업체별 요약과 공통 날짜 비교의 범위는 다를 수 있습니다. 등록 업체를 지역 전체 평균으로 표시하지 않습니다.</p><details class="comparison-evidence"><summary>계산 근거·제외 사유</summary>${rows.map(c=>`<article><h3>${esc(c.name)}</h3><ul>${reasonList(c)}</ul></article>`).join('')}</details></section>`;
   }
-  function chart(c,max){
+  function chart(c,max,evidence){
     const series=c.reservationSeries,points=series?.points;
     if(!Array.isArray(points)||!points.length)return `<article class="comparison-chart"><h3>${esc(c.name)}</h3><p class="empty-note">이전 저장 자료에는 일별 표시 자료가 없습니다. 최신 확인 후 표시합니다.</p></article>`;
     const left=34,bottom=110,height=84,step=548/points.length,w=Math.min(18,step*.6),percent=v=>(v/600*100)+'%';
     const bars=points.map((d,i)=>{
       const x=left+step*(i+.5),label=d.date.slice(5).replace('-','/');
       const dateLabel=i===0||i===points.length-1||i%7===0&&i<points.length-3?`<text x="${percent(x)}" y="133" text-anchor="middle">${label}</text>`:'';
-      if(d.quantityStatus!=='ready')return `<g class="comparison-missing"><line x1="${percent(x-2)}" x2="${percent(x+2)}" y1="${bottom-5}" y2="${bottom-1}"/><line x1="${percent(x-2)}" x2="${percent(x+2)}" y1="${bottom-1}" y2="${bottom-5}"/><title>${esc(d.date)} · 미확인</title></g>${dateLabel}`;
+      if(d.quantityStatus!=='ready'){
+        const partial=evidence?.partialRevenue?.rows.find(row=>row.date===d.date),stored=evidence?.storedReference?.rows.find(row=>row.date===d.date);
+        const detail=partial?` · 일부 상품 금액(추정 포함) ${money(partial.amount)} · 전체 예약수량 미확인`:stored?` · ${stored.collectedDate} 관측 당시 ${n(stored.sold)}실 · 오래된 참고, 현재 비교 제외`:' · 미확인';
+        return `<g class="comparison-missing"><line x1="${percent(x-2)}" x2="${percent(x+2)}" y1="${bottom-5}" y2="${bottom-1}"/><line x1="${percent(x-2)}" x2="${percent(x+2)}" y1="${bottom-1}" y2="${bottom-5}"/><title>${esc(d.date+detail)}</title></g>${dateLabel}`;
+      }
       const ph=d.publicBookings/max*height,bh=d.phoneBookings/max*height;
       return `<g><title>${esc(d.date)} · 예약 ${n(d.sold)}실 (공개 ${n(d.publicBookings)} + 타채널 추정 ${n(d.phoneBookings)})${d.reservationRate===null?' · 예약률 보류':' · 예약률 '+rate(d.reservationRate)}${d.inventoryConflict?' · 객실 기준 확인 필요':''}</title>${d.publicBookings>0?`<rect class="comparison-public" x="${percent(x-w/2)}" y="${bottom-ph}" width="${percent(w)}" height="${ph}"/>`:''}${d.phoneBookings>0?`<rect class="comparison-estimate" x="${percent(x-w/2)}" y="${bottom-ph-bh}" width="${percent(w)}" height="${bh}"/>`:''}${d.sold===0?`<circle class="comparison-public" cx="${percent(x)}" cy="${bottom}" r="2"/>`:''}</g>${dateLabel}`;
     }).join('');
@@ -76,7 +90,8 @@
   }
   function flow(r,s,focus){
     const companies=r.companies.filter(c=>c.companyId===s.ownCompanyId||c.companyId===focus),points=companies.flatMap(c=>c.reservationSeries?.points||[]),max=Math.max(1,...companies.map(c=>numeric(c.rooms)?c.rooms:0),...points.filter(d=>d.quantityStatus==='ready').map(d=>d.sold));
-    return `<div class="comparison-section-title"><h2>날짜별 예약 흐름</h2><p class="muted">같은 30일·같은 세로축 · 객실 총량과 예약률은 위 요약에서 함께 확인하세요.</p></div><div class="collection-legend"><span class="flow-label-public">● 공개 예약</span><span class="flow-label-estimate">● 타채널 추정</span><span>× 미확인 · ● 정상 0실</span></div>${companies.map(c=>chart(c,max)).join('')}<p class="muted comparison-footnote">방막기는 타채널 예약 추정입니다. 막대는 각 업체의 유효 관측이며, 비교표는 공통으로 확인된 날짜만 계산합니다.</p>`;
+    const evidence=evidenceModel(r,s);
+    return `<div class="comparison-section-title"><h2>날짜별 예약 흐름</h2><p class="muted">같은 30일·같은 세로축 · 객실 총량과 예약률은 위 요약에서 함께 확인하세요.</p></div><div class="collection-legend"><span class="flow-label-public">● 공개 예약</span><span class="flow-label-estimate">● 타채널 추정</span><span>× 미확인·현재 비교 제외 · ● 정상 0실</span></div>${companies.map(c=>chart(c,max,evidence?.companies.find(row=>row.companyId===c.companyId))).join('')}<p class="muted comparison-footnote">방막기는 타채널 예약 추정입니다. 막대는 각 업체의 유효 관측이며, 비교표는 공통으로 확인된 날짜만 계산합니다. 부분 금액·오래된 참고는 위의 비교 자료 확인에서 별도로 봅니다.</p>`;
   }
   function products(r,s,catalog){
     const companies=r.companies.filter(c=>c.companyId===s.ownCompanyId||s.comparisonIds.includes(c.companyId));
@@ -95,7 +110,7 @@
     const same=comparisons.filter(c=>c.regionRelation==='same').length,cross=comparisons.filter(c=>c.regionRelation==='cross').length;
     const focus=others.some(c=>c.companyId===focusId)?focusId:others[0]?.companyId;
     const partial=r.dataQuality?.status==='partial'||r.responseCache?.partial===true;
-    return `<div class="comparison-notice"><p>${!others.length?'비교업체를 선택하면 같은 조건으로 비교합니다.':cross?'다른 지역 업체는 지역 수요 차이를 포함한 참고 비교입니다.':'같은 지역에서도 업종·상품·관측 조건을 확인합니다.'}</p><small>같은 지역 ${same} · 다른 지역 ${cross}</small></div>${partial?'<p class="collection-warning">일부 자료를 확인하지 못했습니다. 정상 자료는 표시하며 업체별 날짜와 사유를 아래 근거에서 확인할 수 있습니다.</p>':''}${summaryGroups(own,others,comparisons)}${readiness(r,s)}${operatingView()?.render(r,s,catalog,{scope:operatingScope()})||''}<section class="card"><div class="comparison-view-tabs" role="tablist" aria-label="경쟁 비교 보기">${[['flow','예약 흐름'],['products','가격·상품'],['regions','지역 배경']].map(([id,name])=>`<button type="button" role="tab" data-comparison-view="${id}" aria-selected="${s.selectedView===id}" aria-controls="comparison-detail">${name}</button>`).join('')}</div>${s.selectedView==='flow'&&others.length?`<label class="comparison-focus"><span>그래프 비교업체</span><select data-comparison-focus aria-label="그래프 비교업체">${others.map(c=>`<option value="${esc(c.companyId)}" ${focus===c.companyId?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>`:''}<div id="comparison-detail" role="tabpanel">${s.selectedView==='products'?products(r,s,catalog):s.selectedView==='regions'?regions(r,s):flow(r,s,focus)}</div></section>${pairTable(r,s)}${partial?sourceIssues(r,s):''}`;
+    return `<div class="comparison-notice"><p>${!others.length?'비교업체를 선택하면 같은 조건으로 비교합니다.':cross?'다른 지역 업체는 지역 수요 차이를 포함한 참고 비교입니다.':'같은 지역에서도 업종·상품·관측 조건을 확인합니다.'}</p><small>같은 지역 ${same} · 다른 지역 ${cross}</small></div>${partial?'<p class="collection-warning">일부 자료를 확인하지 못했습니다. 정상 자료는 표시하며 업체별 날짜와 사유를 아래 근거에서 확인할 수 있습니다.</p>':''}${summaryGroups(own,others,comparisons,evidenceModel(r,s))}${readiness(r,s)}${operatingView()?.render(r,s,catalog,{scope:operatingScope()})||''}<section class="card"><div class="comparison-view-tabs" role="tablist" aria-label="경쟁 비교 보기">${[['flow','예약 흐름'],['products','가격·상품'],['regions','지역 배경']].map(([id,name])=>`<button type="button" role="tab" data-comparison-view="${id}" aria-selected="${s.selectedView===id}" aria-controls="comparison-detail">${name}</button>`).join('')}</div>${s.selectedView==='flow'&&others.length?`<label class="comparison-focus"><span>그래프 비교업체</span><select data-comparison-focus aria-label="그래프 비교업체">${others.map(c=>`<option value="${esc(c.companyId)}" ${focus===c.companyId?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>`:''}<div id="comparison-detail" role="tabpanel">${s.selectedView==='products'?products(r,s,catalog):s.selectedView==='regions'?regions(r,s):flow(r,s,focus)}</div></section>${pairTable(r,s)}${partial?sourceIssues(r,s):''}`;
   }
   function sourceIssues(r,s){
     const ids=new Set([s.ownCompanyId,...s.comparisonIds]);

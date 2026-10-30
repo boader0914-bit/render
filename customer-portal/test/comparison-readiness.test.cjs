@@ -12,6 +12,43 @@ function fixture({missing=false,price=false,zero=false,skew=false,stale=false,sh
  const own=company('own','own'),comp=company('comp','competitor'),raw=[own,comp];
  return {ownId:'own',mode:'current_briefing',period:{start:START,end:END,days:30},generatedAt:'2026-10-25T01:00:00Z',companies:raw.map(c=>({companyId:c.companyId,name:c.name,kind:c.kind,relationStatus:c.relationStatus,rooms:c.rooms,...summarizeCompany(c,policy),reservationSeries:projectReservationSeries(c,policy),sourceStatus:'ready',sourceIssues:[]})),comparisons:[evaluateComparison(own,comp,policy)],dataQuality:{status:'complete',issues:[]}};
 }
+function partialFixture(){
+ const r=fixture({missing:true}),c=r.companies[1],row=c.reservationSeries.points.find(p=>p.missing),collectedAt=START+'T03:00:00Z';
+ Object.assign(row,{missingReason:'shared_dayuse_unverified',partialConfirmedRevenue:149000,partialRevenueEvidence:{companyId:c.companyId,date:row.date,productType:'lodging',runId:'saved-partial-run',collectedAt,collectedDate:START,reason:'partial_inventory',amount:149000}});
+ return {r,c,row};
+}
+
+test('partial amount remains separate from normal totals, coverage and decision eligibility',()=>{
+ const {r,c}=partialFixture(),v=model.build(r),value=v.companies[1];
+ assert.equal(value.availableDays,29);assert.equal(value.quantity.sold,c.summary.sold);assert.equal(value.knownRevenueSubtotal,c.summary.knownRevenueSubtotal);
+ assert.equal(value.partialRevenue.amount,149000);assert.equal(value.partialRevenue.days,1);assert.equal(value.partialRevenue.rows[0].runId,'saved-partial-run');
+ assert.equal(value.unconfirmedDates.length,0);assert.equal(value.missingDayCount,1);assert.ok(value.issues.some(i=>i.code==='SHARED_DAYUSE_UNVERIFIED'));
+ assert.equal(value.partialRevenue.rows[0].collectedDate,START);
+});
+
+test('wrong-scope, inconsistent and duplicate partial evidence does not enter a separate amount',()=>{
+ for(const mutate of [x=>x.row.partialRevenueEvidence.companyId='foreign',x=>x.row.partialRevenueEvidence.date=START,x=>x.row.partialRevenueEvidence.amount=1,
+   x=>x.row.partialRevenueEvidence.runId='bad/path',x=>x.row.partialRevenueEvidence.collectedAt='2026-11-25T00:00:00Z',
+   x=>x.row.inventoryConflict=true,x=>x.row.codes.push('DUPLICATE_STAY_DATE'),
+   x=>x.c.reservationSeries.points.push(clone(x.row)),x=>x.c.summaryQuality.duplicateStayDates=[x.row.date]]){
+   const f=partialFixture();mutate(f);const value=model.build(f.r).companies[1];assert.equal(value.partialRevenue.amount,null);assert.equal(value.partialRevenue.days,0);
+ }
+});
+
+test('normal zero is retained and an explicitly proven partial zero is displayed separately',()=>{
+ const {r,row}=partialFixture();row.partialConfirmedRevenue=0;row.partialRevenueEvidence.amount=0;
+ const value=model.build(r).companies[1];assert.equal(value.partialRevenue.amount,0);assert.equal(value.partialRevenue.days,1);assert.equal(value.missingDayCount,1);
+ assert.equal(model.build(fixture({zero:true})).companies[1].quantity.sold,0);
+});
+
+test('stale stored quantities are reference only and do not fill current missing days',()=>{
+ const r=fixture({stale:true}),c=r.companies[1],row=c.reservationSeries.points[0];
+ for(const point of c.reservationSeries.points)point.storedReference=null;
+ row.storedReference={source:'stored_normal_observation',date:row.date,total:16,sold:2,publicBookings:1,phoneBookings:1,collectedAt:'2026-10-01T00:00:00Z',collectedDate:'2026-10-01',reservationRate:.125,reason:'OBSERVATION_STALE'};
+ const value=model.build(r).companies[1];assert.equal(value.availableDays,0);assert.equal(value.quantity.sold,null);assert.equal(value.missingDayCount,30);
+ assert.equal(value.storedReference.days,1);assert.equal(value.storedReference.rows[0].sold,2);assert.equal(value.unconfirmedDates.length,29);assert.equal(value.knownRevenueSubtotal,null);
+ row.codes.push('QUANTITY_INVALID');assert.equal(model.build(r).companies[1].storedReference.days,0);
+});
 test('readiness keeps central quantities and eligibility with real zero intact',()=>{
  const r=fixture({zero:true}),v=model.build(r);assert.equal(v.status,'ready');assert.equal(v.companies[0].quantity.sold,0);assert.equal(v.companies[0].knownRevenueSubtotal,0);assert.equal(v.companies[0].revenueUnknownRooms,0);assert.equal(v.companies[0].availableDays,30);assert.equal(v.companies[0].missingDayCount,0);assert.equal(v.companies[0].coverageKnown,true);assert.equal(v.comparisons[0].comparable,true);assert.equal(v.comparisons[0].rate.gapPp,0);assert.equal(v.comparisons[0].actionable,true);
  assert.equal(JSON.stringify(r),JSON.stringify(fixture({zero:true})),'input is not changed');

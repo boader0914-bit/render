@@ -78,6 +78,24 @@
   function missingRanges(values){
     const result=[];for(const d of values){const prev=result.at(-1);if(prev&&Date.parse(d)-Date.parse(prev.end)===DAY){prev.end=d;prev.days++;}else result.push({start:d,end:d,days:1});}return result;
   }
+  const observationDate=value=>instant(value)?new Date(Date.parse(value)+9*3600000).toISOString().slice(0,10):null;
+  function partialProof(row,companyId,p){
+    const value=row?.partialRevenueEvidence,amount=number(row?.partialConfirmedRevenue),at=observationDate(value?.collectedAt);
+    if(row?.quantityStatus==='ready'||row?.missing!==true||row.inventoryConflict===true||row.capacityConflict===true||codes(row?.codes).some(v=>['QUANTITY_INVALID','DUPLICATE_STAY_DATE','CAPACITY_CONFLICT'].includes(v))
+      ||amount===null||value?.amount!==amount||value.companyId!==companyId||value.date!==row.date||value.productType!=='lodging'
+      ||typeof value.runId!=='string'||!/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,179}$/.test(value.runId)
+      ||!at||value.collectedDate!==at||at>p.asOf||at>row.date||!['partial_inventory','capacity_recalculation_unavailable'].includes(value.reason))return null;
+    return {date:row.date,amount,runId:value.runId,collectedAt:value.collectedAt,collectedDate:at,reason:value.reason};
+  }
+  function storedProof(row,p){
+    const value=row?.storedReference,at=observationDate(value?.collectedAt),values=[value?.total,value?.sold,value?.publicBookings,value?.phoneBookings];
+    if(row?.quantityStatus==='ready'||row?.missing!==true||value?.source!=='stored_normal_observation'||value.reason!=='OBSERVATION_STALE'
+      ||value.date!==row.date||codes(row.codes).length!==1||!codes(row.codes).includes('OBSERVATION_STALE')||!values.every(v=>count(v)!==null)||!(value.total>0)
+      ||value.sold>value.total||value.sold!==value.publicBookings+value.phoneBookings||!at||value.collectedDate!==at||at>row.date||at>=p.asOf
+      ||typeof value.reservationRate!=='number'||!Number.isFinite(value.reservationRate)||Math.abs(value.reservationRate-value.sold/value.total)>1e-10)return null;
+    return {date:row.date,total:value.total,sold:value.sold,publicBookings:value.publicBookings,phoneBookings:value.phoneBookings,
+      collectedAt:value.collectedAt,collectedDate:at,reservationRate:value.reservationRate,reason:value.reason};
+  }
   function companyModel(c,p,report){
     const mode=report.selection&&report.selection.stayMode!=='upcoming30'?'historical':'current';
     const issues=[],q=c.summaryQuality,qualityMatches=!!q&&matching(q,p)&&(!q.mode||q.mode===mode),summary=c.summary||{};
@@ -85,11 +103,16 @@
     if(contextMismatch)issues.push(issue('CONTEXT_MISMATCH'));
     const summaryAvailable=!contextMismatch;
     let availableDays=summaryAvailable&&count(summary.days)!==null&&summary.days<=p.days?summary.days:null;
-    const missing=new Set(),pointDates=new Set(),ambiguous=new Set();let dailyKnown=false;
+    const missing=new Set(),pointDates=new Set(),ambiguous=new Set(),partialByDate=new Map(),storedByDate=new Map();let dailyKnown=false;
     const addRow=row=>{
       if(!inPeriod(row?.date,p))return;
-      if(pointDates.has(row.date)){ambiguous.add(row.date);missing.add(row.date);issues.push(issue('DUPLICATE_STAY_DATE',{date:row.date,scope:'quantity'}));return;}
+      if(pointDates.has(row.date)){ambiguous.add(row.date);missing.add(row.date);partialByDate.delete(row.date);storedByDate.delete(row.date);issues.push(issue('DUPLICATE_STAY_DATE',{date:row.date,scope:'quantity'}));return;}
       pointDates.add(row.date);
+      if(!contextMismatch){
+        const partial=partialProof(row,c.companyId,p),stored=storedProof(row,p);
+        if(partial)partialByDate.set(row.date,partial);
+        if(stored)storedByDate.set(row.date,stored);
+      }
       if(row.quantityStatus!=='ready'||row.missing===true){missing.add(row.date);for(const value of codes(row.codes).length?codes(row.codes):['QUANTITY_MISSING'])issues.push(issue(value,{date:row.date,scope:'quantity'}));}
       else for(const value of codes(row.codes))issues.push(issue(value,{date:row.date,scope:value.startsWith('CAPACITY_')?'reservationRate':'quantity'}));
       if(row.missing===true&&Object.hasOwn(MISSING_CODES,row.missingReason)){
@@ -113,7 +136,7 @@
     }
     if(qualityMatches){
       for(const row of (Array.isArray(q.excludedDates)?q.excludedDates:[]).slice(0,MAX_DAYS))if(inPeriod(row?.date,p)){missing.add(row.date);for(const value of codes(row.codes))issues.push(issue(value,{date:row.date,scope:'quantity'}));}
-      for(const d of dates(q.duplicateStayDates,p)){missing.add(d);ambiguous.add(d);issues.push(issue('DUPLICATE_STAY_DATE',{date:d,scope:'quantity'}));}
+      for(const d of dates(q.duplicateStayDates,p)){missing.add(d);ambiguous.add(d);partialByDate.delete(d);storedByDate.delete(d);issues.push(issue('DUPLICATE_STAY_DATE',{date:d,scope:'quantity'}));}
     }
     if(dailyKnown)for(const d of allDates(p))if(!pointDates.has(d))missing.add(d);
     const inconsistentCoverage=dailyKnown&&(availableDays===null||availableDays!==p.days-missing.size)||ambiguous.size>0;
@@ -127,11 +150,15 @@
     if(c.unavailable===true||['partial','unavailable'].includes(c.sourceStatus))if(!sourceIssues.length)issues.push(issue('COMPANY_SOURCE_UNAVAILABLE'));
     const rooms=count(c.rooms)>0?c.rooms:null,conflict=issues.some(r=>r.code==='CAPACITY_CONFLICT'),reviewRequired=c.capacityReviewRequired===true||c.capacityStatus==='review_required'||issues.some(r=>r.code==='CAPACITY_REVIEW_REQUIRED');
     const known=rooms!==null&&!issues.some(r=>r.code==='CAPACITY_UNKNOWN');
+    const partialRows=[...partialByDate.values()].sort((a,b)=>a.date.localeCompare(b.date)),storedRows=[...storedByDate.values()].sort((a,b)=>a.date.localeCompare(b.date));
     return {companyId:c.companyId,name:text(c.name,'업체'),kind:c.kind,rooms,
       capacity:{known,reviewRequired,conflict,label:conflict?'객실 기준 충돌':reviewRequired?'객실 기준 검토 필요':known?'객실 기준 '+rooms+'실':'객실 기준 미확인'},
       availableDays,missingDays:[...missing].sort(),missingRanges:missingRanges([...missing].sort()),missingDayCount:availableDays===null?null:p.days-availableDays,coverageKnown,
       unknownRevenueDates,knownRevenueSubtotal:summaryAvailable?number(summary.knownRevenueSubtotal??summary.estimatedRevenue):null,revenueUnknownRooms:summaryAvailable?count(summary.revenueUnknownRooms):null,
       quantity:{sold:summaryAvailable?count(summary.sold):null,publicBookings:summaryAvailable?count(summary.publicBookings):null,phoneBookings:summaryAvailable?count(summary.phoneBookings):null},
+      partialRevenue:{days:partialRows.length,amount:partialRows.length?partialRows.reduce((sum,row)=>sum+row.amount,0):null,rows:partialRows},
+      storedReference:{days:storedRows.length,rows:storedRows},
+      unconfirmedDates:[...missing].filter(d=>!partialByDate.has(d)&&!storedByDate.has(d)).sort(),
       sourceStatus:['ready','partial','unavailable'].includes(c.sourceStatus)?c.sourceStatus:issues.length?'partial':'ready',
       lastObservedDay:date(c.lastObservedDay),lastObservedAt:instant(c.lastObservedAt),issues:uniqueIssues(issues)};
   }

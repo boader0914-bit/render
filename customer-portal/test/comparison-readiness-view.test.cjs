@@ -25,6 +25,34 @@ function analysisView(){
   return window.InsightAnalysis;
 }
 
+test('partial money and stale stored rows have separate compact labels and dated evidence without changing current totals',()=>{
+  const f=fixture(),m=model.build(f.report,f.selection),c=m.companies[1],date=f.report.period.start;
+  c.partialRevenue={days:1,amount:149000,rows:[{date,amount:149000,runId:'saved-partial-run',collectedAt:date+'T03:00:00Z',reason:'partial_inventory'}]};
+  c.storedReference={days:1,rows:[{date,total:16,sold:5,publicBookings:2,phoneBookings:3,collectedAt:'2026-09-01T00:00:00Z'}]};
+  c.unconfirmedDates=[];
+  const html=view.renderModel(m);
+  assert.match(html,/부분 금액 1일 · 14\.9만원/);assert.match(html,/일부 상품 금액\(추정 포함\) · 1일/);assert.match(html,/정상 매출 소계와 별도 · 전체 예약수량·금액 미확인/);
+  assert.match(html,/saved-partial-run/);assert.match(html,/날짜별 부분금액·수집 근거/);assert.match(html,/오래된 저장 수량 · 1일/);
+  assert.match(html,/현재 예약률·쿠폰 판단에서 제외/);assert.match(html,/공개 2실 \+ 타채널 추정 3실/);
+  assert.equal(c.availableDays,29);assert.equal(c.quantity.sold,145);
+});
+
+test('partial evidence names, run references and dates cannot inject customer-view markup',()=>{
+  const f=fixture(),m=model.build(f.report,f.selection),c=m.companies[1];
+  c.partialRevenue={days:1,amount:149000,rows:[{date:'<img src=x>',amount:149000,runId:'<script>bad</script>',collectedAt:'bad',reason:'<svg onload=x>'}]};
+  const html=view.renderModel(m);assert.doesNotMatch(html,/<img|<script|<svg onload/);assert.match(html,/&lt;script&gt;bad&lt;\/script&gt;/);
+});
+
+test('customer summary cards and current chart markers retain partial proof without painting a quantity bar',()=>{
+  const f=fixture(),c=f.report.companies[1],row=c.reservationSeries.points[2],at=f.report.period.start+'T03:00:00Z';
+  Object.assign(row,{partialConfirmedRevenue:149000,partialRevenueEvidence:{companyId:c.companyId,date:row.date,productType:'lodging',runId:'saved-partial-run',collectedAt:at,collectedDate:f.report.period.start,reason:'partial_inventory',amount:149000},missingReason:'shared_dayuse_unverified'});
+  const html=require('../web/comparison-view.js').render(f.report,f.selection),summary=html.match(/<article class="comparison-summary [\s\S]*?산청 비교업체[\s\S]*?<\/article>/)?.[0]||'';
+  assert.match(html,/부분 상품 금액 1일 · 14\.9만원/);assert.match(summary,/정상 소계와 별도/);
+  assert.match(html,/일부 상품 금액\(추정 포함\) 14\.9만원 · 전체 예약수량 미확인/);
+  assert.equal(c.reservationSeries.points[2].quantityStatus,'unknown');assert.equal(c.summary.days,29);assert.equal(c.summary.sold,145);
+  assert.match(html,/× 미확인·현재 비교 제외 · ● 정상 0실/);
+});
+
 test('readiness UMD renderer uses only the supplied saved report and performs no network, storage or DOM operations',()=>{
   const bad=()=>{throw Error('readiness must remain read only');},window={InsightComparisonReadiness:model},scope={window,fetch:bad,XMLHttpRequest:bad,localStorage:{getItem:bad,setItem:bad},document:new Proxy({},{get:bad})};
   vm.runInNewContext(fs.readFileSync(require.resolve('../web/comparison-readiness-view.js'),'utf8'),scope);
