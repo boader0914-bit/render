@@ -302,7 +302,7 @@
       const button=event.target.closest?.('[data-comparison-view],[data-comparison-current],[data-dashboard-reset],[data-dashboard-company-select],[data-dashboard-company-back]');if(!button||!active)return;event.preventDefault();
       if(button.hasAttribute('data-dashboard-company-back')){
         const selected=document.querySelector('[data-dashboard-company-select][aria-pressed="true"]');
-        selected?.scrollIntoView?.({block:'center',behavior:'auto'});selected?.focus?.({preventScroll:true});return;
+        selected?.scrollIntoView?.({block:'center',behavior:'instant'});selected?.focus?.({preventScroll:true});return;
       }
       if(button.hasAttribute('data-dashboard-company-select')){
         const options=active,s=options.store.getState(),report=options.lastRenderedReport,slot=document.querySelector('#comparison-results');
@@ -311,7 +311,7 @@
         if(!model?.contextValid||!model.companies.some(c=>c.companyId===companyId))return;
         selectDetailCompany(s,companyId);drawResults(slot,render(report,s,options.state.companies,focusId),report);
         const detail=document.querySelector('#dashboard-company-detail');
-        detail?.scrollIntoView?.({block:'start',behavior:'auto'});detail?.focus?.({preventScroll:true});return;
+        detail?.scrollIntoView?.({block:'start',behavior:'instant'});detail?.focus?.({preventScroll:true});return;
       }
       if(button.hasAttribute('data-dashboard-reset')){
         const s=active.store.getState(),slot=document.querySelector('#comparison-results'),report=active.lastRenderedReport;
