@@ -94,18 +94,27 @@ function childFailureDiagnostic(bytes) {
   for (const line of bytes.toString("utf8").split(/\r?\n/)) { if (!line.trim()) continue; try { const value = JSON.parse(line); if (plain(value) && safeChildCode(value.code)) codes.add(value.code); } catch {} }
   return codes.size === 1 ? [...codes][0] : null;
 }
-function runChild(executable, argv, { cwd, timeout = LIMITS.timeout, outputBound = LIMITS.output, receiptOnly = false } = {}) {
-  return new Promise((resolve, reject) => { let proc, timer, ended = false, output = [], errors = [], total = 0, stderrBytes = 0, denied = null;
-    const end = (error, result) => { if (ended) return; ended = true; clearTimeout(timer); error ? reject(error) : resolve(result); };
+function runChild(executable, argv, { cwd, timeout = LIMITS.timeout, outputBound = LIMITS.output, receiptOnly = false, signal } = {}) {
+  return new Promise((resolve, reject) => { let proc, timer, ended = false, output = [], errors = [], total = 0, stderrBytes = 0, denied = null, startError = false;
+    const aborted = () => Object.assign(Error("KEYWORD_PREP_CHILD_ABORTED"), { code: "KEYWORD_PREP_CHILD_ABORTED", deferred: true });
+    if (signal && (typeof signal.addEventListener !== "function" || typeof signal.removeEventListener !== "function")) return reject(Object.assign(Error("KEYWORD_PREP_CHILD_SIGNAL_INVALID"), { code: "KEYWORD_PREP_CHILD_SIGNAL_INVALID" }));
+    if (signal?.aborted) return reject(aborted());
+    const onAbort = () => stop("KEYWORD_PREP_CHILD_ABORTED");
+    const end = (error, result) => { if (ended) return; ended = true; clearTimeout(timer); signal?.removeEventListener("abort", onAbort); error ? reject(error) : resolve(result); };
     try { proc = child.spawn(executable, argv, { shell: false, cwd, stdio: receiptOnly ? ["ignore", "ignore", "ignore"] : ["ignore", "pipe", "pipe"], env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", TZ: "Asia/Seoul" }, windowsHide: true }); } catch { fail("KEYWORD_PREP_CHILD_START"); }
-    const stop = code => { denied ||= code; proc.kill("SIGKILL"); };
-    proc.on("error", () => end(Object.assign(Error("KEYWORD_PREP_CHILD_START"), { code: "KEYWORD_PREP_CHILD_START" })));
+    // The handle is the single process this call created. The Python sandbox
+    // execs Node in the same PID; never signal a process group or unrelated PID.
+    // Settlement waits for close, so callers cannot remove a live child's work.
+    const stop = code => { if (ended) return; denied ||= code; try { proc.kill("SIGKILL"); } catch {} };
+    proc.on("error", () => { startError = true; });
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
     if (!receiptOnly) {
       proc.stdout.on("data", bytes => { total += bytes.length; if (total + stderrBytes > outputBound) stop("KEYWORD_PREP_CHILD_OUTPUT_BOUND"); else output.push(bytes); });
       proc.stderr.on("data", bytes => { stderrBytes += bytes.length; if (total + stderrBytes > outputBound) stop("KEYWORD_PREP_CHILD_OUTPUT_BOUND"); else errors.push(bytes); });
     }
     timer = setTimeout(() => stop("KEYWORD_PREP_CHILD_TIMEOUT"), timeout);
-    proc.on("close", (exitCode, signal) => { if (denied) return end(Object.assign(Error(denied), { code: denied })); if (exitCode !== 0 || signal) return end(Object.assign(Error("KEYWORD_PREP_CHILD_FAILED"), { code: "KEYWORD_PREP_CHILD_FAILED", exitCode, childCode: childFailureDiagnostic(Buffer.concat(errors)) }));
+    proc.on("close", (exitCode, exitSignal) => { if (denied) return end(denied === "KEYWORD_PREP_CHILD_ABORTED" ? aborted() : Object.assign(Error(denied), { code: denied })); if (startError) return end(Object.assign(Error("KEYWORD_PREP_CHILD_START"), { code: "KEYWORD_PREP_CHILD_START" })); if (exitCode !== 0 || exitSignal) return end(Object.assign(Error("KEYWORD_PREP_CHILD_FAILED"), { code: "KEYWORD_PREP_CHILD_FAILED", exitCode, childCode: childFailureDiagnostic(Buffer.concat(errors)) }));
       if (receiptOnly) return end(null, { exitCode, pid: proc.pid, stdout: null, stderrBytes: null, receiptOnly: true });
       let value; try { value = JSON.parse(Buffer.concat(output).toString("utf8")); } catch { return end(Object.assign(Error("KEYWORD_PREP_CHILD_PROTOCOL"), { code: "KEYWORD_PREP_CHILD_PROTOCOL" })); }
       end(null, { exitCode, pid: proc.pid, stdout: value, stderrBytes, ...stderrPolicy(Buffer.concat(errors), proc.pid) }); });

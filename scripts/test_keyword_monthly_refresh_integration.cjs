@@ -39,11 +39,21 @@ test("current protections, pending work and unknown guards defer; expired hold r
   const f = await fixture(t); assert.equal((await readStoredCollectionAdmission(f.root, at)).allowed, true);
   await f.write("collector/jobs.json", { version: 1, jobs: [], halted: null, reviewHold: { holdThrough: "2026-10-10" } });
   assert.equal((await readStoredCollectionAdmission(f.root, at)).allowed, true);
-  for (const patch of [{ halted: { code: "NAVER_CAPTCHA" } }, { reviewHold: { holdThrough: "2026-10-30" } }, { reviewHold: { holdThrough: "unknown" } }, { reviewHold: { holdThrough: "2026-02-30" } }, { jobs: [{ status: "leased" }] }, { jobs: [{ status: "mystery" }] }, { halted: false }]) {
+  for (const patch of [{ halted: { code: "NAVER_CAPTCHA" } }, { reviewHold: { holdThrough: "2026-10-30" } }, { reviewHold: { holdThrough: "unknown" } }, { reviewHold: { holdThrough: "2026-02-30" } }, { jobs: [{ id: "collector_00000000-0000-4000-8000-000000000001", status: "leased" }] }, { jobs: [{ id: "collector_00000000-0000-4000-8000-000000000001", status: "completed", leaseHash: "presence-only-never-output" }] }, { jobs: [{ id: "one", status: "completed" }] }, { jobs: [{ status: "mystery" }] }, { jobs: [{ id: "collector_00000000-0000-4000-8000-000000000001", status: "completed" }, { id: "collector_00000000-0000-4000-8000-000000000001", status: "completed" }] }, { halted: false }]) {
     await f.write("collector/jobs.json", { version: 1, jobs: [], halted: null, ...patch }); assert.equal((await readStoredCollectionAdmission(f.root, at)).allowed, false);
   }
   await fs.unlink(path.join(f.root, "collector/jobs.json")); assert.equal((await readStoredCollectionAdmission(f.root, at)).allowed, false);
   assert.equal(holdActive(null, "2026-10-30"), false);
+});
+test("fresh preparation receives an advancing clock callback rather than a frozen start timestamp", async t => {
+  const f = await fixture(t); let callbacks, instant = Date.parse(at), observedClock;
+  const integration = createKeywordMonthlyRefreshIntegration({ dataDir: f.root, codeRoot: f.root,
+    now: () => new Date(instant), isCollectionIdle: () => true, readPostprocess: async () => null,
+    readPostprocessList: async () => ({ items: [] }), allowsDerivedUpdates: () => true, runWork: async work => work(),
+    createQueue: options => { callbacks = options; return { close: async () => {}, status: async () => ({}) }; },
+    refresh: async options => { assert.equal(typeof options.now, "function"); assert.equal(options.mode, "live"); instant += 5000; observedClock = options.now(); return { status: "staged" }; }
+  });
+  await callbacks.refresh({}, {}); assert.equal(observedClock, "2026-10-30T10:00:05.000Z"); await integration.close();
 });
 test("a failed independent enqueue cannot fail the original postprocess caller", async t => {
   const f = await fixture(t), logs = [];

@@ -35,8 +35,12 @@ async function readStoredCollectionAdmission(dataDir, at = new Date().toISOStrin
       if (s.halted || holdActive(s.reviewHold, day)) return { allowed: false, reasonCode: "KEYWORD_REFRESH_COLLECTION_PROTECTED" };
       if (broker) {
         if (!Array.isArray(s.jobs)) return { allowed: false, reasonCode: "KEYWORD_REFRESH_GUARD_UNKNOWN" };
-        if (s.jobs.some(j => !j || !["queued", "leased", "committing", "completed", "failed", "cancelled", "interrupted"].includes(j.status))) return { allowed: false, reasonCode: "KEYWORD_REFRESH_GUARD_UNKNOWN" };
-        if (s.jobs.some(j => ["queued", "leased", "committing"].includes(j?.status))) return { allowed: false, reasonCode: "KEYWORD_REFRESH_COLLECTION_BUSY" };
+        const ids = new Set();
+        for (const j of s.jobs) {
+          if (!j || !/^collector_[a-f0-9-]{36}$/.test(j.id || "") || ids.has(j.id) || !["queued", "leased", "committing", "completed", "failed", "cancelled", "interrupted"].includes(j.status)) return { allowed: false, reasonCode: "KEYWORD_REFRESH_GUARD_UNKNOWN" };
+          ids.add(j.id);
+          if (["queued", "leased", "committing"].includes(j.status) || j.leaseHash && !j.leaseReleasedAt) return { allowed: false, reasonCode: "KEYWORD_REFRESH_COLLECTION_BUSY" };
+        }
       } else {
         if (!Object.hasOwn(s, "active") || s.active !== null && (!s.active || typeof s.active !== "object" || Array.isArray(s.active))) return { allowed: false, reasonCode: "KEYWORD_REFRESH_GUARD_UNKNOWN" };
         if (s.active) return { allowed: false, reasonCode: "KEYWORD_REFRESH_COLLECTION_BUSY" };
@@ -91,9 +95,9 @@ function createKeywordMonthlyRefreshIntegration(options = {}) {
       const watch = setIntervalImpl(() => { if (closed || !isCollectionIdle()) controller.abort(); }, 1000); watch?.unref?.();
       try {
         const result = await refresh({ dataDir, codeRoot, scratchParent: path.resolve(require("node:os").tmpdir()), mode: "live",
-        evidence, now: clock(), signal: controller.signal,
+        evidence, now: clock, signal: controller.signal,
         canPublish: async () => { const gate = await admission(); return gate.allowed; } });
-        if (["published", "unchanged", "complete"].includes(result?.status) && SHA.test(result.pointerSha256 || "")) {
+        if (["published", "unchanged", "complete"].includes(result?.status) && SHA.test(result.pointerSha256 || "") && !controller.signal.aborted && (await admission()).allowed) {
           try {
             await pruneKeywordMonthlyRefreshGenerations({ projectionDir: path.join(dataDir, "keyword_monthly_analysis"),
               expectedCurrentPointerSha256: result.pointerSha256, keepSuccessfulAuto: 2, assertLeaseHeld: assertAnalyticalLeaseHeld });

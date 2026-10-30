@@ -154,3 +154,73 @@ test("actual tiny core capture runs in a disposable child and never patches or b
   const receipt = JSON.parse(await fs.readFile(path.join(copyRoot, "control/capture-complete.json"))); for (const row of receipt.inputFiles) await fs.chmod(path.join(copyRoot, "data", ...row.relative.split("/")), 0o600);
   assert.equal(fs.open, originalOpen); assert.equal(fs.writeFile, originalWrite); assert.equal(require("node:fs").writeFile, nativeWrite);
 });
+async function eventually(read, milliseconds = 10000) {
+  const started = Date.now();
+  while (Date.now() - started < milliseconds) { const value = await read(); if (value) return value; await new Promise(resolve => setTimeout(resolve, 1)); }
+  throw new Error("TEST_OBSERVATION_TIMEOUT");
+}
+test("runChild AbortSignal kills only its owned child and settles after that child exits", async t => {
+  const prep = require("./prepare_keyword_monthly_release.cjs"), child = require("node:child_process"), root = await fs.mkdtemp(path.join(os.tmpdir(), "keyword-refresh-abort-child-"));
+  let sibling;
+  t.after(async () => { if (sibling && sibling.exitCode === null) { const closed = new Promise(resolve => sibling.once("close", resolve)); sibling.kill("SIGKILL"); await closed; } assert.ok(path.basename(root).startsWith("keyword-refresh-abort-child-")); await fs.rm(root, { recursive: true, force: true }); });
+  const controller = new AbortController(), marker = path.join(root, "owned-pid.json"), siblingMarker = path.join(root, "sibling-pid.json");
+  sibling = child.spawn(process.execPath, ["-e", "require('node:fs').writeFileSync(process.argv[1],String(process.pid));setInterval(()=>{},1000)", siblingMarker], { stdio: "ignore", windowsHide: true });
+  await eventually(async () => { try { return await fs.readFile(siblingMarker, "utf8"); } catch (e) { if (e.code !== "ENOENT") throw e; } });
+  const work = prep.runChild(process.execPath, ["-e", "require('node:fs').writeFileSync(process.argv[1],String(process.pid));setInterval(()=>{},1000)", marker], { cwd: root, signal: controller.signal, receiptOnly: true });
+  const pid = Number(await eventually(async () => { try { return await fs.readFile(marker, "utf8"); } catch (e) { if (e.code !== "ENOENT") throw e; } }));
+  controller.abort(); await assert.rejects(work, { code: "KEYWORD_PREP_CHILD_ABORTED", deferred: true });
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "settlement is after the owned child has exited");
+  assert.equal(process.kill(sibling.pid, 0), true, "an unrelated sibling child remains running");
+  const preaborted = new AbortController(); preaborted.abort();
+  await assert.rejects(prep.runChild(path.join(root, "executable-that-must-not-start"), [], { signal: preaborted.signal }), { code: "KEYWORD_PREP_CHILD_ABORTED", deferred: true });
+});
+test("actual mid-core-copy abort removes its pre-owned container, preserves original files and parent fs, then permits retry", async t => {
+  const f = await fixture(t, { mode: "live" }), prep = require("./prepare_keyword_monthly_release.cjs"), capture = require("./lib/keyword_monthly_source_copy.cjs"), controller = new AbortController();
+  await json(path.join(f.dataDir, "company_master/companies.json"), { companies: {} }); await fs.mkdir(path.join(f.dataDir, "history"));
+  const original = path.join(f.dataDir, "history/observations.jsonl"), chunk = Buffer.alloc(1024 * 1024, 0x20), handle = await fs.open(original, "wx");
+  try { for (let i = 0; i < 64; i++) await handle.write(chunk); } finally { await handle.close(); }
+  const originalHash = (await prep.fileHash(original, 64 * 1024 * 1024)).sha256, pointer = (await B.loadBundle(f.liveDir)).pointerRead.sha256;
+  const originalOpen = fs.open, originalWrite = fs.writeFile, nativeWrite = require("node:fs").writeFile;
+  let observedPartialBytes = 0, copyContainer;
+  const prepare = async ({ options, jobDir, copyRoot, admission }) => {
+    copyContainer = path.dirname(copyRoot); const marker = await H.read(path.join(copyContainer, "refresh-owner.json"));
+    assert.equal(marker.value.token, options.ownerToken); assert.equal(marker.value.root, copyContainer); assert.equal(marker.value.copyRoot, copyRoot);
+    const inspection = await capture.inspect({ sourceDataDir: f.dataDir, scratchParent: f.scratchParent, includePrepared: false }), inspectionFile = path.join(jobDir, "capture-inspection.json"); await json(inspectionFile, inspection); await admission();
+    const work = R.copyInDedicatedProcess({ codeRoot: f.codeRoot, nodePath: await fs.realpath(process.execPath), sourceDataDir: f.dataDir, scratchParent: f.scratchParent, copyRoot, inspectionFile,
+      execute: (executable, argv, optionsForChild) => prep.runChild(executable, argv, { ...optionsForChild, signal: options.signal }) });
+    // Attach the observer immediately, so a fast child rejection is never an
+    // unhandled promise. Abort only after a real partial destination is seen.
+    const settled = work.then(value => ({ value }), error => ({ error }));
+    try {
+      observedPartialBytes = await eventually(async () => { try { const s = await fs.stat(path.join(copyRoot, "data/history/observations.jsonl")); return s.size > 0 && s.size < 64 * 1024 * 1024 ? s.size : null; } catch (e) { if (e.code !== "ENOENT") throw e; } });
+      assert.equal(fs.open, originalOpen); assert.equal(fs.writeFile, originalWrite); assert.equal(require("node:fs").writeFile, nativeWrite);
+      await fs.writeFile(path.join(f.root, "unrelated-parent-write-during-copy"), "unblocked"); controller.abort();
+    } catch (error) { controller.abort(); await settled; throw error; }
+    const result = await settled; assert.equal(result.error?.code, "KEYWORD_PREP_CHILD_ABORTED"); throw result.error;
+  };
+  await assert.rejects(R.refreshKeywordMonthlyFromCompletedRun({ ...f.call, signal: controller.signal }, { fixture: true, prepare }), { code: "KEYWORD_MONTHLY_REFRESH_ABORTED", deferred: true });
+  assert.ok(observedPartialBytes > 0 && observedPartialBytes < 64 * 1024 * 1024); await assert.rejects(fs.access(copyContainer), { code: "ENOENT" });
+  assert.equal((await prep.fileHash(original, 64 * 1024 * 1024)).sha256, originalHash); assert.equal((await B.loadBundle(f.liveDir)).pointerRead.sha256, pointer);
+  assert.deepEqual(await fs.readdir(f.scratchParent), []); assert.equal(await fs.readFile(path.join(f.root, "unrelated-parent-write-during-copy"), "utf8"), "unblocked");
+  const ops = path.join(f.dataDir, "operations/monthly-keyword-production-20261030"); assert.ok(!(await fs.readdir(ops)).some(name => name.startsWith("refresh-job-")));
+  assert.equal(fs.open, originalOpen); assert.equal(fs.writeFile, originalWrite); assert.equal(require("node:fs").writeFile, nativeWrite);
+  assert.equal((await R.refreshKeywordMonthlyFromCompletedRun(f.call, f.deps)).status, "published", "a clean later attempt is no longer blocked by partial tmp work");
+});
+test("stage pre-intent abort also cleans owned scratch and leaves compact evidence outside the removed job", async t => {
+  const f = await fixture(t), controller = new AbortController();
+  const prepare = async ({ admission }) => { controller.abort(); await admission(); };
+  await assert.rejects(R.refreshKeywordMonthlyFromCompletedRun({ ...f.call, signal: controller.signal }, { fixture: true, prepare }), { code: "KEYWORD_MONTHLY_REFRESH_ABORTED", deferred: true });
+  assert.deepEqual(await fs.readdir(f.scratchParent), []);
+  const files = await fs.readdir(path.join(f.dataDir, "operations/monthly-keyword-production-20261030"));
+  assert.ok(!files.some(name => name.startsWith("refresh-job-"))); assert.equal(files.filter(name => name.startsWith("deferred-cleanup-")).length, 1);
+});
+test("abort after a durable promotion intent retains proof and is a readback hold without deferred retry", async t => {
+  const f = await fixture(t, { mode: "live" }), controller = new AbortController(), oldPointer = (await B.loadBundle(f.liveDir)).pointerRead.sha256;
+  const publish = async input => { await input.beforePromote(); controller.abort(); throw Object.assign(Error("aborted after intent"), { code: "KEYWORD_PREP_CHILD_ABORTED", deferred: true }); };
+  let failure; try { await R.refreshKeywordMonthlyFromCompletedRun({ ...f.call, signal: controller.signal }, { ...f.deps, publish }); } catch (e) { failure = e; }
+  assert.equal(failure.code, "KEYWORD_MONTHLY_REFRESH_PUBLICATION_NEEDS_READBACK"); assert.equal(failure.deferred, undefined); assert.equal(failure.publicationState, "pointer_was_promoted_verify_current");
+  assert.equal((await B.loadBundle(f.liveDir)).pointerRead.sha256, oldPointer); assert.equal((await fs.readdir(f.scratchParent)).filter(n => n.startsWith("refresh-copy-")).length, 1);
+  const ops = path.join(f.dataDir, "operations/monthly-keyword-production-20261030"); assert.equal((await fs.readdir(ops)).filter(n => n.startsWith("refresh-job-")).length, 1);
+  const receipts = await fs.readdir(path.join(f.liveDir, "refresh-receipts")); assert.equal(receipts.filter(n => n.startsWith("intent-")).length, 1); assert.ok(!receipts.some(n => n.startsWith("deferred-")));
+  await assert.rejects(R.refreshKeywordMonthlyFromCompletedRun(f.call, f.deps), { code: "KEYWORD_MONTHLY_REFRESH_PRIOR_INTENT_REQUIRES_READBACK" });
+});

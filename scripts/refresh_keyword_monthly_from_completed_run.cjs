@@ -51,7 +51,7 @@ async function verifyPublished(outputDir, expectedCatalogSha256, wantedScopes, n
   return { generation: loaded.pointer.generation, pointerSha256: loaded.pointerRead.sha256, catalogSha256: loaded.catalogRead.sha256, publicationReceiptSha256: publicationReceipt.sha256, scopeCount: loaded.catalog.scopes.length, scopes };
 }
 async function removeOwnedTree(root, owner, expectedToken, expectedSourceKey) {
-  H.absolute(root); H.need(/^(?:refresh-job-[a-f0-9-]{36}|keyword-monthly-source-[a-f0-9-]{36})$/.test(path.basename(root)) && owner === path.join(root, "refresh-owner.json"), "KEYWORD_MONTHLY_REFRESH_CLEANUP_OWNERSHIP");
+  H.absolute(root); H.need(/^(?:refresh-job-[a-f0-9-]{36}|refresh-copy-[a-f0-9-]{36}|keyword-monthly-source-[a-f0-9-]{36})$/.test(path.basename(root)) && owner === path.join(root, "refresh-owner.json"), "KEYWORD_MONTHLY_REFRESH_CLEANUP_OWNERSHIP");
   const marker = await H.read(owner, 16384), rootStamp = await H.checked(root, true);
   H.need(marker.value.token === expectedToken && marker.value.sourceKey === expectedSourceKey && marker.value.root === root
     && (process.platform === "win32" || (rootStamp.mode & 0o777) === 0o700) && (typeof process.getuid !== "function" || rootStamp.uid === process.getuid()), "KEYWORD_MONTHLY_REFRESH_CLEANUP_OWNERSHIP");
@@ -63,7 +63,11 @@ async function removeOwnedTree(root, owner, expectedToken, expectedSourceKey) {
       const file = path.join(directory, entry.name); if (file === owner) continue;
       const before = await H.checked(file, entry.isDirectory());
       if (before.isDirectory()) await remove(file, depth + 1);
-      else { H.need(before.isFile() && before.nlink === 1 && H.same(before, await H.checked(file)) && H.identity(parent, await H.checked(directory, true)), "KEYWORD_MONTHLY_REFRESH_CLEANUP_OWNERSHIP"); await fs.unlink(file); }
+      else { H.need(before.isFile() && before.nlink === 1 && H.same(before, await H.checked(file)) && H.identity(parent, await H.checked(directory, true)), "KEYWORD_MONTHLY_REFRESH_CLEANUP_OWNERSHIP");
+        // A copied input is readonly. Windows requires clearing only this owned
+        // file's readonly bit before unlink; canonical inputs are never touched.
+        if (process.platform === "win32" && !(before.mode & 0o200)) { await fs.chmod(file, 0o600); const changed = await H.checked(file); H.need(H.identity(before, changed) && changed.nlink === 1 && changed.size === before.size, "KEYWORD_MONTHLY_REFRESH_CLEANUP_OWNERSHIP"); }
+        await fs.unlink(file); }
     }
     H.need(H.identity(parent, await H.checked(directory, true)), "KEYWORD_MONTHLY_REFRESH_CLEANUP_OWNERSHIP");
     if (directory !== root) await fs.rmdir(directory);
@@ -90,7 +94,7 @@ async function defaultPrepare({ options, evidence, manifest, initial, jobDir, co
   const inputPins = { "node-sha": pins.node.sha256, "guard-sha": pins.guard.sha256 };
   const execute = async (executable, argv, childOptions = {}) => {
     await admission(); const elapsed = Date.now() - startedAt; H.need(elapsed < JOB_MS, "KEYWORD_MONTHLY_REFRESH_JOB_TIME_BOUND");
-    return prep.runChild(executable, argv, { ...childOptions, timeout: Math.min(prep.LIMITS.timeout, JOB_MS - elapsed) });
+    return prep.runChild(executable, argv, { ...childOptions, signal: options.signal, timeout: Math.min(prep.LIMITS.timeout, JOB_MS - elapsed) });
   };
   await admission();
   const inspection = await capture.inspect({ sourceDataDir: options.dataDir, scratchParent: options.scratchParent, includePrepared: false });
@@ -132,7 +136,7 @@ async function refreshKeywordMonthlyFromCompletedRun(supplied = {}, dependencies
   H.need(["stage", "live"].includes(options.mode) && typeof options.canPublish === "function", "KEYWORD_MONTHLY_REFRESH_OPTIONS_INVALID");
   const evidence = H.validateEvidence(options.evidence), sourceKey = H.sourceKey(evidence), startedAt = Date.now(), liveDir = path.join(options.dataDir, "keyword_monthly_analysis");
   const admission = async () => {
-    H.need(!options.signal?.aborted, "KEYWORD_MONTHLY_REFRESH_ABORTED");
+    if (options.signal?.aborted) throw Object.assign(H.fault("KEYWORD_MONTHLY_REFRESH_ABORTED"), { deferred: true });
     H.need(Date.now() - startedAt < JOB_MS, "KEYWORD_MONTHLY_REFRESH_JOB_TIME_BOUND");
     if (await options.canPublish(evidence) !== true) throw Object.assign(H.fault("KEYWORD_MONTHLY_REFRESH_DEFERRED"), { deferred: true });
   };
@@ -172,9 +176,9 @@ async function refreshKeywordMonthlyFromCompletedRun(supplied = {}, dependencies
   const operationsDir = path.join(operationsParent, "monthly-keyword-production-" + kstDay(currentIso(options.now)).replaceAll("-", ""));
   await H.ensurePrivateDirectory(operationsDir, { fixture: dependencies.fixture === true }); await prep.treeBytes(operationsDir, H.LIMITS.operationsBytes - RESERVE_BYTES);
   // A prior private copy from another preparation is never deleted or ignored.
-  const other = (await fs.readdir(options.scratchParent, { withFileTypes: true })).filter(e => e.name.startsWith("keyword-monthly-source-"));
+  const other = (await fs.readdir(options.scratchParent, { withFileTypes: true })).filter(e => e.name.startsWith("keyword-monthly-source-") || e.name.startsWith("refresh-copy-"));
   H.need(other.length === 0, "KEYWORD_MONTHLY_REFRESH_OTHER_PREPARATION_PRESENT");
-  const token = crypto.randomUUID(), jobDir = path.join(operationsDir, "refresh-job-" + token), copyRoot = path.join(options.scratchParent, "keyword-monthly-source-" + token);
+  const token = crypto.randomUUID(), jobDir = path.join(operationsDir, "refresh-job-" + token), copyContainer = path.join(options.scratchParent, "refresh-copy-" + token), copyRoot = path.join(copyContainer, "keyword-monthly-source-" + token);
   options.ownerToken = token; await fs.mkdir(jobDir, { mode: 0o700 }); await H.checked(jobDir, true);
   await H.writeNew(path.join(jobDir, "refresh-owner.json"), { schemaVersion: 1, token, sourceKey, root: jobDir });
   const source = { sourceKey, runId: evidence.runId, keyword: evidence.keyword, manifestSha256: evidence.manifestSha256, scheduleOccurrenceId: evidence.scheduleOccurrenceId };
@@ -182,6 +186,11 @@ async function refreshKeywordMonthlyFromCompletedRun(supplied = {}, dependencies
     workBounds: H.LIMITS, applicationExplicitWritesOutsideDerivedOperations: 0, providerCalls: 0 });
   let prepared = null, promoted = false, result = null;
   try {
+    // Own the private parent before the exporter can create even one partial
+    // copy file. Killing a copying child therefore never leaves unowned work.
+    await fs.mkdir(copyContainer, { mode: 0o700 }); await H.checked(copyContainer, true);
+    await H.writeNew(path.join(copyContainer, "refresh-owner.json"), { schemaVersion: 1, token, sourceKey, root: copyContainer, copyRoot });
+    await admission();
     const prepare = dependencies.fixture === true && dependencies.prepare ? dependencies.prepare : defaultPrepare;
     prepared = await prepare({ options, evidence, manifest, initial, jobDir, copyRoot, operationsDir, admission, startedAt });
     H.need(prepared && Array.isArray(prepared.inputs) && prepared.inputs.length > 0 && prepared.providerCalls === 0 && prepared.sourceWrites === 0 && prepared.strictIsolationVerified === true
@@ -200,14 +209,14 @@ async function refreshKeywordMonthlyFromCompletedRun(supplied = {}, dependencies
     const intent = { schemaVersion: 1, ...source, mode: options.mode, generatedBy: "keyword_monthly_completed_run_refresh", refreshVersion: H.VERSION, trigger: "completed_collection_postprocess", jobId: token,
       expectedCatalogSha256: planned.sha256, previousPointerSha256: initial.pointerRead.sha256, scopes: expectedScopes,
       dataThrough: prepared.capturedAt, preparedPlanSha256: prepared.planSha256, captureSha256: prepared.captureSha256, sourceInventorySha256: prepared.sourceInventorySha256, scopeProofDigest: prepared.scopeProofDigest,
-      jobDir, copyRoot, ownerToken: token, createdAt: currentIso(options.now), strictIsolationVerified: dependencies.fixture !== true, fixtureOnly: dependencies.fixture === true,
+      jobDir, copyRoot, copyContainer, ownerToken: token, createdAt: currentIso(options.now), strictIsolationVerified: dependencies.fixture !== true, fixtureOnly: dependencies.fixture === true,
       executionBasis: dependencies.fixture === true ? "injected_preparation_fixture_not_fresh_kernel_validation" : "fresh_physical_capture_and_strict_isolated_normalization", providerCalls: 0, sourceWrites: 0 };
     const publish = dependencies.fixture === true && dependencies.publish ? dependencies.publish : bundle.publishKeywordMonthlyBundle;
     const publication = await publish({ inputs, outputDir, now: prepared.prepDate, expectedCurrentSha256: options.mode === "live" ? initial.pointerRead.sha256 : null, maxTotalBytes: H.LIMITS.generationBytes,
       beforePromote: async () => { await admission(); await manifestEvidence(options.dataDir, evidence); H.need((await planCatalog(inputs, prepared.prepDate)).sha256 === planned.sha256, "KEYWORD_MONTHLY_REFRESH_PLAN_CHANGED"); H.need((await bundle.loadBundle(liveDir)).pointerRead.sha256 === initial.pointerRead.sha256, "KEYWORD_MONTHLY_REFRESH_POINTER_CHANGED");
         // Record an uncertain-promotion intent only at the last safe point,
         // after the publisher's expensive input validation and admission check.
-        await H.writeNew(intentFile, intent); } });
+        await admission(); await H.writeNew(intentFile, intent); } });
     promoted = true; H.need(publication.status === "published" && publication.catalogSha256 === planned.sha256 && publication.providerCalls === 0 && publication.kosisReadOrChanged === false, "KEYWORD_MONTHLY_REFRESH_PUBLICATION_NEEDS_READBACK");
     const verified = await verifyPublished(outputDir, planned.sha256, expectedScopes, prepared.prepDate);
     if (options.mode === "stage") H.need((await bundle.loadBundle(liveDir)).pointerRead.sha256 === initial.pointerRead.sha256, "KEYWORD_MONTHLY_REFRESH_STAGING_CHANGED_LIVE_POINTER");
@@ -218,14 +227,14 @@ async function refreshKeywordMonthlyFromCompletedRun(supplied = {}, dependencies
       finishedAt: currentIso(options.now), providerCalls: 0, sourceWrites: 0, collectorStarted: false, kosisReadOrChanged: false, strictIsolationVerified: dependencies.fixture !== true,
       operatingPointerChanged: options.mode === "live", stagingBundleDir: options.mode === "stage" ? outputDir : null, fullSourceAudit: false, repeatedSource: false,
       executionBasis: dependencies.fixture === true ? "injected_preparation_fixture_not_fresh_kernel_validation" : "fresh_physical_capture_and_strict_isolated_normalization", fixtureOnly: dependencies.fixture === true };
-    if (options.mode === "stage") result.retainedValidationWork = { jobDir, copyRoot, ownerToken: token, sourceKey, cleanupHelper: "removeOwnedTree_after_explicit_validation" };
+    if (options.mode === "stage") result.retainedValidationWork = { jobDir, copyRoot, copyContainer, ownerToken: token, sourceKey, cleanupHelper: "removeOwnedTree_copyContainer_then_jobDir_after_explicit_validation" };
     await H.writeNew(completeFile, result);
     // Only an acknowledged live publication may clean generated work. Stage
     // artifacts remain isolated for the explicitly requested real-copy audit.
     if (options.mode === "live") {
       const cleanup = [];
       try {
-        if (await maybeRead(path.join(copyRoot, "refresh-owner.json"), 16384)) cleanup.push(await removeOwnedTree(copyRoot, path.join(copyRoot, "refresh-owner.json"), token, sourceKey));
+        cleanup.push(await removeOwnedTree(copyContainer, path.join(copyContainer, "refresh-owner.json"), token, sourceKey));
         cleanup.push(await removeOwnedTree(jobDir, path.join(jobDir, "refresh-owner.json"), token, sourceKey));
         await H.writeNew(path.join(receiptDir, "cleanup-" + sourceKey + ".json"), { schemaVersion: 1, sourceKey, status: "complete", cleanup, finishedAt: currentIso(options.now) });
       } catch (error) { result.cleanupNeedsVerification = true; result.cleanupCode = safeCause(error);
@@ -234,25 +243,35 @@ async function refreshKeywordMonthlyFromCompletedRun(supplied = {}, dependencies
     }
     return result;
   } catch (error) {
-    const causeCode = safeCause(error), code = error.publicationState || promoted ? "KEYWORD_MONTHLY_REFRESH_PUBLICATION_NEEDS_READBACK" : /^KEYWORD_MONTHLY_REFRESH_/.test(error.code || "") ? error.code : "KEYWORD_MONTHLY_REFRESH_PREPARATION_FAILED";
-    const failure = { schemaVersion: 1, ...source, mode: options.mode, code, causeCode, pointerMayHaveBeenPromoted: Boolean(error.publicationState || promoted),
-      previousBundlePreservedWhenNotPromoted: !promoted && !error.publicationState, failedAt: currentIso(options.now), generatedWorkRetained: true, providerCalls: 0, sourceWrites: 0 };
+    // Once a promotion intent exists, even an AbortSignal is not permission to
+    // discard proof or retry. A publisher may have renamed the pointer before
+    // the exception reached us. Missing/unreadable intent proof is also a hold.
+    let intentUncertain = false;
+    if (intentFile !== null) { try { intentUncertain = Boolean(await maybeRead(intentFile)); } catch { intentUncertain = true; } }
+    const publicationUncertain = Boolean(error.publicationState || promoted || intentUncertain);
+    const abortBeforePromotion = ["KEYWORD_MONTHLY_REFRESH_ABORTED", "KEYWORD_PREP_CHILD_ABORTED"].includes(error.code), deferred = error.deferred === true || abortBeforePromotion;
+    const causeCode = safeCause(error), code = publicationUncertain ? "KEYWORD_MONTHLY_REFRESH_PUBLICATION_NEEDS_READBACK" : abortBeforePromotion ? "KEYWORD_MONTHLY_REFRESH_ABORTED" : /^KEYWORD_MONTHLY_REFRESH_/.test(error.code || "") ? error.code : "KEYWORD_MONTHLY_REFRESH_PREPARATION_FAILED";
+    const failure = { schemaVersion: 1, ...source, mode: options.mode, code, causeCode, pointerMayHaveBeenPromoted: publicationUncertain,
+      previousBundlePreservedWhenNotPromoted: !publicationUncertain, failedAt: currentIso(options.now), generatedWorkRetained: true, providerCalls: 0, sourceWrites: 0 };
     try { await H.writeNew(path.join(jobDir, "refresh-failed.json"), failure); } catch {}
     // Ordinary admission deferral is not an uncertain acknowledgement. Only
     // when the same old pointer is still active AND no promotion intent exists
     // can this process discard its own fresh UUID work for a later clean retry.
     // Preserve compact durable evidence outside that owned job before cleanup.
-    if (error.deferred === true && options.mode === "live" && !promoted && !error.publicationState) {
+    let deferredCleanupVerified = false;
+    if (deferred && !publicationUncertain) {
       try {
-        H.need((await bundle.loadBundle(liveDir)).pointerRead.sha256 === initial.pointerRead.sha256 && !await maybeRead(intentFile), "KEYWORD_MONTHLY_REFRESH_DEFERRED_CLEANUP_UNCERTAIN");
-        await H.writeNew(path.join(receiptDir, "deferred-" + sourceKey + "-" + token + ".json"), { ...failure, cleanupRequested: true, oldPointerReadbackVerified: true, noPromotionIntentVerified: true });
+        H.need((await bundle.loadBundle(liveDir)).pointerRead.sha256 === initial.pointerRead.sha256 && (intentFile === null || !await maybeRead(intentFile)), "KEYWORD_MONTHLY_REFRESH_DEFERRED_CLEANUP_UNCERTAIN");
+        const compactReceiptDir = options.mode === "live" ? receiptDir : operationsDir;
+        await H.writeNew(path.join(compactReceiptDir, "deferred-" + sourceKey + "-" + token + ".json"), { ...failure, cleanupRequested: true, oldPointerReadbackVerified: true, noPromotionIntentVerified: true });
         const cleanup = [];
-        if (await maybeRead(path.join(copyRoot, "refresh-owner.json"), 16384)) cleanup.push(await removeOwnedTree(copyRoot, path.join(copyRoot, "refresh-owner.json"), token, sourceKey));
+        cleanup.push(await removeOwnedTree(copyContainer, path.join(copyContainer, "refresh-owner.json"), token, sourceKey));
         cleanup.push(await removeOwnedTree(jobDir, path.join(jobDir, "refresh-owner.json"), token, sourceKey));
-        await H.writeNew(path.join(receiptDir, "deferred-cleanup-" + sourceKey + "-" + token + ".json"), { schemaVersion: 1, sourceKey, status: "complete", cleanup, finishedAt: currentIso(options.now) });
+        await H.writeNew(path.join(compactReceiptDir, "deferred-cleanup-" + sourceKey + "-" + token + ".json"), { schemaVersion: 1, sourceKey, status: "complete", cleanup, finishedAt: currentIso(options.now) });
+        deferredCleanupVerified = true;
       } catch (cleanupError) { throw Object.assign(H.fault("KEYWORD_MONTHLY_REFRESH_DEFERRED_CLEANUP_NEEDS_REVIEW", safeCause(cleanupError)), { deferred: false }); }
     }
-    throw Object.assign(H.fault(code, causeCode), { ...(error.deferred ? { deferred: true } : {}), ...(error.publicationState || promoted ? { publicationState: "pointer_was_promoted_verify_current" } : {}) });
+    throw Object.assign(H.fault(code, causeCode), { ...(deferredCleanupVerified ? { deferred: true } : {}), ...(publicationUncertain ? { publicationState: "pointer_was_promoted_verify_current" } : {}) });
   }
 }
 module.exports = { refreshKeywordMonthlyFromCompletedRun, manifestEvidence, planCatalog, verifyPublished, defaultPrepare, copyInDedicatedProcess, removeOwnedTree, JOB_MS };
