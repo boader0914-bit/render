@@ -15,6 +15,7 @@ const { createUpstreamReader } = require('./upstream-request.cjs');
 const { createPublicAssetVersions } = require('./public-asset-versions.cjs');
 const { createArchiveService } = require('./archive-service.cjs');
 const { createBootstrapSnapshots } = require('./bootstrap-snapshots.cjs');
+const { createSavedKeywordComparison } = require('./lib/saved-keyword-comparison.cjs');
 function validatedOrigin(value) {
   const u = new URL(value);
   if (u.username || u.password || u.pathname !== '/' || u.search || u.hash || /[?#]/.test(String(value)) || (u.protocol !== 'https:' && !(u.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(u.hostname)))) throw new Error('Insight origins require HTTPS or local development addresses');
@@ -51,9 +52,10 @@ function configuration(env = process.env) {
   if(archiveDirectory&&(!path.isAbsolute(archiveDirectory)||path.resolve(archiveDirectory)===path.parse(path.resolve(archiveDirectory)).root))throw new Error('Insight archive requires an absolute, dedicated directory');
   return { origin: origin.origin, origins, backend: backend.origin, serviceToken, port, host: env.RENDER ? '0.0.0.0' : '127.0.0.1',regionCacheDirectory:cacheDirectory,companyCacheDirectory,reportCacheDirectory,comparisonRegionCacheDirectory,archiveDirectory };
 }
-function createConnectedServer({ origin, origins = [], backend, serviceToken, fetchImpl = fetch, regionCacheDirectory=null,companyCacheDirectory=null,reportCacheDirectory=null,comparisonRegionCacheDirectory=null,archiveDirectory=null,diagnosticsLogger,companyDiagnosticsLogger=entry=>console.warn('insight_company_read',JSON.stringify(entry)) }) {
+function createConnectedServer({ origin, origins = [], backend, serviceToken, fetchImpl = fetch, regionCacheDirectory=null,companyCacheDirectory=null,reportCacheDirectory=null,comparisonRegionCacheDirectory=null,archiveDirectory=null,savedComparisonDirectory,diagnosticsLogger,companyDiagnosticsLogger=entry=>console.warn('insight_company_read',JSON.stringify(entry)) }) {
   const trustedOrigins = new Map(publicOrigins(origin, origins).map(value => [new URL(value).host, value]));
   const archives=createArchiveService({directory:archiveDirectory,namespace:backend});
+  const savedComparison=createSavedKeywordComparison({...(savedComparisonDirectory?{directory:savedComparisonDirectory}:{})});
   const companyReads = createCompanyReadCache({persistenceDirectory:companyCacheDirectory,namespace:backend,onStage:companyDiagnosticsLogger,...(archiveDirectory?{onVerifiedSource:context=>archives.capture(context)}:{})}), regionReads = createRegionReadCache({persistenceDirectory:regionCacheDirectory,namespace:backend}), scopeSecret = crypto.randomBytes(32), staticAssets = new Map();
   const reportReads = createReportReadCache({persistenceDirectory:reportCacheDirectory,namespace:backend});
   const comparisonRegionReads=createComparisonRegionReadCache({persistenceDirectory:comparisonRegionCacheDirectory,namespace:backend});
@@ -193,6 +195,8 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   staticMap['/comparison.css']=['comparison.css','text/css'];
   for(const name of ['regional-context.js','regional-context-view.js','regional-context.css','home-context-view.js','home-context.css','context-workspace.js'])staticMap['/'+name]=[name,name.endsWith('.css')?'text/css':'text/javascript'];
   staticMap['/archive.js']=['archive.js','text/javascript'];
+  staticMap['/saved-keyword-comparison.js']=['saved-keyword-comparison.js','text/javascript'];
+  staticMap['/saved-keyword-comparison.css']=['saved-keyword-comparison.css','text/css'];
   const adminAssets = { '/admin': ['admin.html', 'text/html'], '/admin.js': ['admin.js', 'text/javascript'], '/admin.css': ['admin.css', 'text/css'] };
   const publicAssets=new Map([...Object.entries({...staticMap,...adminAssets,'/auth.js':['auth.js','text/javascript']})].filter(([,item])=>item[1]!=='text/html').map(([url,item])=>[url,{file:path.join(__dirname,'web',item[0]),type:item[1]}]));
   for(const name of ['Pretendard-Regular','Pretendard-Bold','MaruBuri-Regular'])publicAssets.set(`/fonts/${name}.otf`,{file:path.join(__dirname,'..','web','fonts',`${name}.otf`),type:'font/otf'});
@@ -209,6 +213,19 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
       const url = new URL(req.url, requestOrigin);
       if (url.origin !== requestOrigin) throw fault('INVALID_HOST', '올바른 인사이트 주소로 접속해 주세요.', 403);
       if (req.method === 'GET' && url.pathname === '/api/health') { respond(200, { status: 'ok', mode: 'connected', buildCommit: process.env.RENDER_GIT_COMMIT?.slice(0, 12) || null }); return; }
+      if(savedComparison.matches(url.pathname)){
+        savedComparison.frameHeaders(res);
+        if(!['GET','HEAD'].includes(req.method)){res.setHeader('Allow','GET, HEAD');throw fault('METHOD_NOT_ALLOWED','저장 비교 화면은 조회만 가능합니다.',405);}
+        if(req.headers['sec-fetch-site']==='cross-site')throw fault('INVALID_ORIGIN','현재 인사이트 화면에서 열어 주세요.',403);
+        const cookies=String(req.headers.cookie||'').split(';').map(value=>value.trim().split('='));
+        const session=cookies.find(([name])=>name===adminCookieName)?.[1]||'';
+        if(!/^[A-Za-z0-9_-]{43}$/.test(session)){savedComparison.denied(req,res,cookies.some(([name])=>name===cookieName)?403:401);return;}
+        // Existing central identity validation only: no company, report, collection or schedule calls.
+        const checked=await readUpstream('/admin/me','',{Authorization:`Bearer ${serviceToken}`,Accept:'application/json','X-Insight-Admin-Session':session},{stage:'identity',timing});
+        if(!checked.ok){if(checked.status===401)res.setHeader('Set-Cookie',adminCookie('',true));if([401,403].includes(checked.status)){savedComparison.denied(req,res,checked.status);return;}respond(checked.status,checked.data);return;}
+        if(checked.data?.admin?.role!=='insight_admin'||checked.data.admin.status!=='active'||!checked.data.admin.adminId){savedComparison.denied(req,res,403);return;}
+        await savedComparison.serve(req,res,url.pathname);return;
+      }
       if (url.pathname.startsWith('/api/insight-admin/v1/')) {
         const route = url.pathname.slice('/api/insight-admin/v1'.length);
         const target=req.headers['x-insight-customer-id'];

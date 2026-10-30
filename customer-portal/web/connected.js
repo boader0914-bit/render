@@ -22,7 +22,7 @@
   const restoredStates=new WeakSet();
   const reportPermissionVersion=s=>s?JSON.stringify([s.customer.revision,s.customer.relations.filter(row=>['active','pending'].includes(row.status)),s.companies,s.regions,s.preparations,s.comparisonRegionBindings]):'';
   const route = () => location.hash.slice(1) || ({'/signup':'signup','/login':'login','/terms':'terms','/privacy':'privacy'}[location.pathname]) || 'home';
-  const menuRoute=()=>route()==='register-own'?'property':route().startsWith('regions=')?'regions':/^(company|collection|collect)=/.test(route())?(state?.customer.relations.find(row=>row.companyId===decodeURIComponent(route().split('=').slice(1).join('=')))?.kind==='own'?'property':'competitors'):route();
+  const menuRoute=()=>route()==='saved-keyword-comparison'?'competitors':route()==='register-own'?'property':route().startsWith('regions=')?'regions':/^(company|collection|collect)=/.test(route())?(state?.customer.relations.find(row=>row.companyId===decodeURIComponent(route().split('=').slice(1).join('=')))?.kind==='own'?'property':'competitors'):route();
   const selectionFields=['ownCompanyId','comparisonIds','stayMode','stayMonth','stayStart','stayEnd','asOfDate','selectedView'];
   function selectionUrl(){
     if(!comparisonSelection||!state)return;
@@ -253,7 +253,7 @@
   function render() {
     stopRecurringPoll();
     lastRenderedHash=location.hash;
-    searchSequence++; window.InsightContextWorkspace?.stop(); window.InsightComparisonView?.stop(); window.InsightAnalysis?.stop(); window.InsightCollection?.stop?.();
+    searchSequence++; window.InsightContextWorkspace?.stop(); window.InsightComparisonView?.stop(); window.InsightAnalysis?.stop(); window.InsightCollection?.stop?.(); window.InsightSavedKeywordComparison?.stop();
     const scope=state?.customer.customerId?`${adminView?'admin':'customer'}:${state.customer.customerId}`:'';
     const sessionExpired=()=>{state=null;adminCsrf='';selectedOwnId=null;comparisonSelection?.configure({scope:'',permissionSignature:'',authorizedOwnCompanyIds:[],authorizedComparisonIds:[],authorizedComparisonIdsByOwn:{}});render();};
     configureSelection(scope);
@@ -274,6 +274,11 @@
     policySequence++;
     if (!state) { auth(); return; }
     if (route() === 'welcome') { $('#main').innerHTML=window.InsightAuth.welcome(state.customer); return; }
+    if (route() === 'saved-keyword-comparison') {
+      $('#main').innerHTML = window.InsightSavedKeywordComparison?.panel({adminView}) || '<section class="card"><h1>저장 비교 화면 연결을 확인해 주세요.</h1><a href="#competitors">경쟁 분석으로 돌아가기</a></section>';
+      window.InsightSavedKeywordComparison?.mount({adminView,onSessionExpired:sessionExpired});
+      return;
+    }
     const c = state.customer, relations = c.relations.filter(row=>['active','pending'].includes(row.status));
     const limits=state.registrationAllowance || {ownLimit:1,...c.entitlements};
     const limitText=v=>v===null?'제한 없음':`${v}곳`;
@@ -290,7 +295,7 @@
     if(current[0]==='home')content=window.InsightHomeContextView.panel(state,comparisonSelection.getState());
     if(current[0]==='property'&&own.length===1){const company=state.companies.find(row=>row.companyId===own[0].companyId);if(company){openCompany(company);return;}}
     if (current[0]==='property') content = `<div class="connected-list">${own.map(relation => companyCard(relation)).join('') || '<div class="empty-note">내 매장을 등록하면 저장된 업체자료를 볼 수 있습니다.</div>'}</div>${!customerViewReadOnly()&&(limits.ownLimit===null||own.length<limits.ownLimit)?search('own'):''}`;
-    if(current[0]==='competitors')content=`<div id="comparison-workspace">${window.InsightComparisonView&&comparisonSelection?window.InsightComparisonView.panel(state,comparisonSelection.getState()):'<p class="empty-note">비교 화면 연결을 확인해 주세요.</p>'}</div><details class="card comparison-management"><summary>등록 경쟁업체 · ${competitors.length}곳</summary><div class="connected-list">${competitors.map(relation=>companyCard(relation)).join('')||'<p class="empty-note">등록한 업체가 없습니다.</p>'}</div><a class="text-link" href="#settings">업체 등록·해제는 설정에서 관리</a></details>`;
+    if(current[0]==='competitors')content=(window.InsightSavedKeywordComparison?.entry({adminView})||'')+`<div id="comparison-workspace">${window.InsightComparisonView&&comparisonSelection?window.InsightComparisonView.panel(state,comparisonSelection.getState()):'<p class="empty-note">비교 화면 연결을 확인해 주세요.</p>'}</div><details class="card comparison-management"><summary>등록 경쟁업체 · ${competitors.length}곳</summary><div class="connected-list">${competitors.map(relation=>companyCard(relation)).join('')||'<p class="empty-note">등록한 업체가 없습니다.</p>'}</div><a class="text-link" href="#settings">업체 등록·해제는 설정에서 관리</a></details>`;
 
     if(current[0]==='regions')content=window.InsightContextWorkspace.controls(state,comparisonSelection.getState())+window.InsightRegionalContextView.panel(state,comparisonSelection.getState())+(state.regions.length?`<details class="card regional-context-detail" id="regional-full-detail" ${selectedRegion?'open':''}><summary>내 매장·관심지역 상세 자료</summary>${window.InsightAnalysis.panel('regions',state,selectedRegion,selectedOwnId)}</details>`:'')+'<p class="muted">관심지역 등록·해제는 <a href="#settings">설정</a>에서 관리합니다.</p>';
     if (current[0]==='reports') content = window.InsightAnalysis.panel('reports',state);

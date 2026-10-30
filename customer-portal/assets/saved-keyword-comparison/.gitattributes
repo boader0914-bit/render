@@ -1,0 +1,3 @@
+index.html -text -diff
+snapshot.*.json -text -diff
+bundle.json text eol=lf
