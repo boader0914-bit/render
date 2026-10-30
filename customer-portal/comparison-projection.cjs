@@ -126,6 +126,39 @@ function comparisonWithinReport(comparison,report){
 function projectCompanyLabels(input){
   try{return shape(input,{regionLabel:nullable(v=>value(typeof v==='string'&&v.length<=200&&!/[\u0000-\u001f\u007f]/.test(v),v)),roomCountSource:nullable(v=>value(typeof v==='string'&&v.length<=300&&!/[\u0000-\u001f\u007f]/.test(v),v))},{optional:true});}catch{return null;}
 }
+const MISSING_REASONS=new Set(['partial_inventory','shared_dayuse_unverified','missing_response','run_blocked','run_failed','run_interrupted','run_unknown','legacy_inventory_evidence','post_stay_observation','capacity_recalculation_unavailable','quantity_conflict','inventory_conflict','rate_unavailable']);
+function projectSeriesDisplayEvidence(input,point,company,asOf,{current,oldest}) {
+  const out={},unknown=point.quantityStatus==='unknown'&&point.missing;
+  if(own(input,'missingReason'))out.missingReason=nullable(oneOf([...MISSING_REASONS]))(input.missingReason);
+  if(out.missingReason!==undefined&&out.missingReason!==null)value(point.missing,input);
+  if(own(input,'latestAttemptAt'))out.latestAttemptAt=nullable(instant)(input.latestAttemptAt);
+  if(own(input,'latestAttemptStatus'))out.latestAttemptStatus=nullable(oneOf(['selected','not_selected','excluded']))(input.latestAttemptStatus);
+  if(own(input,'latestAttemptReason'))out.latestAttemptReason=nullable(oneOf([...MISSING_REASONS]))(input.latestAttemptReason);
+  if(out.latestAttemptAt!==undefined&&out.latestAttemptAt!==null){
+    const observed=new Date(Date.parse(out.latestAttemptAt)+9*3600000).toISOString().slice(0,10);value(observed<=asOf&&observed<=point.date,input);
+  }else value((out.latestAttemptStatus??null)===null&&(out.latestAttemptReason??null)===null,input);
+  if(own(input,'partialConfirmedRevenue')||own(input,'partialRevenueEvidence')){
+    out.partialConfirmedRevenue=nullable(money)(input.partialConfirmedRevenue);
+    if(out.partialConfirmedRevenue===null){value(input.partialRevenueEvidence===null,input);out.partialRevenueEvidence=null;}
+    else {
+      const proof=shape(input.partialRevenueEvidence,{companyId:id,runId:v=>value(typeof v==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,179}$/.test(v),v),date,productType:oneOf(['lodging']),collectedAt:instant,collectedDate:date,reason:oneOf(['partial_inventory','capacity_recalculation_unavailable']),amount:money});
+      value(unknown&&proof.companyId===company.companyId&&proof.date===point.date&&proof.amount===out.partialConfirmedRevenue
+        &&new Date(Date.parse(proof.collectedAt)+9*3600000).toISOString().slice(0,10)===proof.collectedDate&&proof.collectedDate<=asOf&&proof.collectedDate<=point.date,input);
+      out.partialRevenueEvidence=proof;
+    }
+  }
+  if(own(input,'storedReference')){
+    if(input.storedReference===null)out.storedReference=null;
+    else {
+      const ref=shape(input.storedReference,{source:oneOf(['stored_normal_observation']),date,total:count,sold:count,publicBookings:count,phoneBookings:count,collectedAt:nullable(instant),collectedDate:date,reservationRate:numeric,reason:oneOf(['OBSERVATION_STALE'])});
+      value(current&&unknown&&point.codes.length===1&&point.codes[0]==='OBSERVATION_STALE'&&ref.date===point.date&&ref.total>0&&ref.total===company.rooms&&ref.sold===ref.publicBookings+ref.phoneBookings&&ref.sold<=ref.total&&ref.reservationRate===ref.sold/ref.total
+        &&ref.collectedDate<oldest&&ref.collectedDate<=asOf&&ref.collectedDate<=point.date,input);
+      if(ref.collectedAt!==null)value(new Date(Date.parse(ref.collectedAt)+9*3600000).toISOString().slice(0,10)===ref.collectedDate,input);
+      out.storedReference=ref;
+    }
+  }
+  return out;
+}
 function projectReservationSeries(input,company,report){
   try{
     const extended=!!report.selection,asOf=extended?report.asOf:report.period?.start,expectedDays=extended?report.period.days:30,current=!extended||report.selection.stayMode==='upcoming30';
@@ -139,6 +172,7 @@ function projectReservationSeries(input,company,report){
     value(new Date(start+(expectedDays-1)*86400000).toISOString().slice(0,10)===result.period.end,input);
     for(const [index,point] of result.points.entries()){
       value(point.date===new Date(start+index*86400000).toISOString().slice(0,10)&&new Set(point.codes).size===point.codes.length,input);
+      Object.assign(point,projectSeriesDisplayEvidence(input.points[index],point,company,asOf,{current,oldest}));
       if(point.quantityStatus!=='ready'){
         value(point.total===null&&point.sold===null&&point.publicBookings===null&&point.phoneBookings===null&&point.reservationRate===null&&point.missing===true&&point.inventoryConflict===false&&point.collectedAt===null&&point.collectedDate===null&&point.codes.length>0,input);
         value(point.quantityStatus===(point.codes.some(c=>['QUANTITY_INVALID','DUPLICATE_STAY_DATE'].includes(c))?'conflict':'unknown'),input);
@@ -173,6 +207,6 @@ function projectCompetitiveActions(actions,comparisons){
   });
 }
 const PROJECTION_SIGNATURE=createHash('sha256').update(JSON.stringify([RULES_VERSION,NEW_KEYS,EXTENDED_SUMMARY_KEYS,Object.keys(REASONS),...[
-  object,text,id,labelKey,normalizedRegionKey,bool,count,numeric,money,date,instant,nullable,oneOf,array,shape,period,status,scope,code,reason,excluded,rateIssue,observationPolicy,projectSummary,projectSummaryQuality,region,industry,quality,basisDetail,hasComparisonContract,projectComparison,comparisonWithinReport,projectCompanyLabels,projectReservationSeries,projectCompetitiveActions
+  object,text,id,labelKey,normalizedRegionKey,bool,count,numeric,money,date,instant,nullable,oneOf,array,shape,period,status,scope,code,reason,excluded,rateIssue,observationPolicy,projectSummary,projectSummaryQuality,region,industry,quality,basisDetail,hasComparisonContract,projectComparison,comparisonWithinReport,projectCompanyLabels,projectSeriesDisplayEvidence,projectReservationSeries,projectCompetitiveActions
 ].map(fn=>fn.toString())])).digest('hex');
 module.exports={hasComparisonContract,projectComparison,projectSummary,projectSummaryQuality,comparisonWithinReport,projectCompanyLabels,projectReservationSeries,projectCompetitiveActions,EXTENDED_SUMMARY_KEYS,PROJECTION_SIGNATURE};

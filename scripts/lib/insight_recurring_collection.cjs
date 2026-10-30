@@ -271,8 +271,11 @@ function createInsightRecurringCollection({ file, dataDir, store, catalog, colle
       if(value.observationDay!==today()) {
         updateClaim(value,'needs_review','한국시간 수집일이 바뀌어 전날 수집을 시작하지 않았습니다.',{errorCode:'COLLECTION_OBSERVATION_DAY_CHANGED'});return;
       }
+      // One approved company must receive all requested stay dates. A zero
+      // range-place limit explicitly disables the crawler's date-range path.
+      const bookingRangePlaceLimit=value.scope.bookingRangeDays>1?1:0;
       await collectorRequests.submit({...value.scope,keyword:value.keyword,targetPlaceId:value.placeId,workerKey:value.workerKey,clientRequestId:value.jobId,
-        sourceRole:'admin',collectionSource:'admin_search',trigger:'scheduled',scheduledCollection:true,searchRegion:'',searchScope:'',bookingRangePlaceLimit:0});
+        sourceRole:'admin',collectionSource:'admin_search',trigger:'scheduled',scheduledCollection:true,searchRegion:'',searchScope:'',bookingRangePlaceLimit});
       updateClaim(value,'queued','정기 수집을 접수했습니다. 저장·DB 반영 확인 후 완료됩니다.',{errorCode:null});
     } catch(error) {
       const code=safeCode(error?.code,'COLLECTION_DISPATCH_UNCONFIRMED');

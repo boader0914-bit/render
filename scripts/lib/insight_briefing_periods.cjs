@@ -2,9 +2,8 @@
 // A read-only view of centrally integrated company-day rows. Never select raw
 // products, repair prices or mutate source observations at this boundary.
 const {fault}=require('./insight_store.cjs');
-const {summarizeCompany,validQuantityDay}=require('./insight_comparison.cjs');
+const {summarizeCompany,validQuantityDay,projectUniqueObservationDisplayEvidence}=require('./insight_comparison.cjs');
 const DAY=86400000;
-const missingReasons=new Set(['partial_inventory','shared_dayuse_unverified','missing_response','run_blocked','run_failed','run_interrupted','run_unknown','legacy_inventory_evidence','post_stay_observation','capacity_recalculation_unavailable','quantity_conflict','inventory_conflict','rate_unavailable']);
 const number=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0?value:null;
 const day=value=>typeof value==='string'&&/^20\d{2}-(0[1-9]|1[0-2])-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value+'T00:00:00Z'))&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value?value:null;
 const month=value=>typeof value==='string'&&/^20\d{2}-(0[1-9]|1[0-2])$/.test(value)?value:null;
@@ -52,17 +51,15 @@ function dailyPeriods(company,selectedPeriod,{asOf,mode}) {
   if(bounds.days>3660)throw fault('INVALID_PERIOD','조회할 숙박기간을 10년 이내로 선택해 주세요.');
   if(!bounds.days)return {period:bounds,asOf,months:[]};
   const all=summarizeCompany(company,{mode,asOf,period:bounds}),excluded=new Map(all.summaryQuality.excludedDates.map(row=>[row.date,row.codes]));
-  const originals=new Map();for(const row of company.days||[])if(day(row?.date)&&!originals.has(row.date))originals.set(row.date,row);
+  const originals=new Map();for(const row of company.days||[])if(day(row?.date)){const sources=originals.get(row.date)||[];sources.push(row);originals.set(row.date,sources);}
   const rows=Array.from({length:bounds.days},(_,index)=>{
-    const date=shift(bounds.start,index),source=originals.get(date),codes=excluded.get(date)||[],valid=Boolean(source&&validQuantityDay(source)&&!codes.length);
+    const date=shift(bounds.start,index),sources=originals.get(date)||[],source=sources[0],codes=excluded.get(date)||[],valid=Boolean(source&&validQuantityDay(source)&&!codes.length);
     const monetary=field=>valid?number(source[field]):null;
     const total=valid?number(source.total):null,sold=valid?number(source.sold):null;
     const conflict=codes.some(code=>['QUANTITY_INVALID','DUPLICATE_STAY_DATE','CAPACITY_CONFLICT'].includes(code));
     const collectedAt=typeof source?.collectedAt==='string'&&Number.isFinite(Date.parse(source.collectedAt))?source.collectedAt:null;
     const collectedDate=collectedAt?new Date(Date.parse(collectedAt)+9*3600000).toISOString().slice(0,10):day(source?.collectedDate);
-    const candidate=source?.partialRevenueEvidence,amount=number(source?.partialConfirmedRevenue),partialAt=candidate?.collectedAt&&Number.isFinite(Date.parse(candidate.collectedAt))?new Date(Date.parse(candidate.collectedAt)+9*3600000).toISOString().slice(0,10):null;
-    const partialEvidence=!valid&&!conflict&&source?.missing===true&&!source.inventoryConflict&&!source.capacityConflict&&amount!==null&&number(source.knownPartialRevenue)===amount&&candidate?.amount===amount&&candidate.companyId===company.companyId&&candidate.date===date&&candidate.productType==='lodging'&&typeof candidate.runId==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,179}$/.test(candidate.runId)&&partialAt&&candidate.collectedDate===partialAt&&partialAt<=asOf&&partialAt<=date&&['partial_inventory','capacity_recalculation_unavailable'].includes(candidate.reason)?{companyId:candidate.companyId,runId:candidate.runId,date,productType:'lodging',collectedAt:candidate.collectedAt,collectedDate:partialAt,reason:candidate.reason,amount}:null;
-    const missingReason=!valid?(missingReasons.has(source?.missingReason)?source.missingReason:missingReasons.has(source?.latestAttemptReason)?source.latestAttemptReason:partialEvidence?.reason||null):null;
+    const display=projectUniqueObservationDisplayEvidence(sources,{companyId:company.companyId,stayDate:date,asOf,ready:valid,conflict});
     // Reuse the exact company/day denominator policy used by month/week
     // summaries. A reviewed-basis or inventory conflict must not leave a
     // numeric daily rate beside a deliberately unknown aggregate rate.
@@ -71,8 +68,7 @@ function dailyPeriods(company,selectedPeriod,{asOf,mode}) {
       estimatedRevenue:valid&&source.revenuePartial!==true?number(source.estimatedRevenue):null,knownRevenueSubtotal:monetary('estimatedRevenue'),publicRevenue:monetary('publicRevenue'),phoneRevenue:monetary('phoneRevenue'),
       knownPartialRevenue:monetary('knownPartialRevenue'),reservationRate,
       collectedAt,collectedDate,missing:!valid,quantityStatus:valid?'ready':conflict?'conflict':'unknown',revenuePartial:valid&&source.revenuePartial===true,
-      codes:valid?[]:codes.length?codes:['QUANTITY_MISSING'],missingReason,
-      partialConfirmedRevenue:partialEvidence?.amount??null,partialRevenueEvidence:partialEvidence};
+      codes:valid?[]:codes.length?codes:['QUANTITY_MISSING'],...display};
   });
   function summarize(group) {
     const groupPeriod={start:group[0].date,end:group.at(-1).date},summary=summarizeCompany(company,{mode,asOf,period:groupPeriod}).summary;

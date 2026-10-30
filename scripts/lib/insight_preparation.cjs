@@ -39,7 +39,10 @@ function createInsightPreparation({ store, catalog, collectorRequests, verifySto
       }
       const reusable = !recurringCollection&&findReusable ? await findReusable(company.companyId,scope,today) : null;
       if (reusable) { store.updatePreparationJob(job.jobId,'ready','오늘 같은 조건으로 확보한 업체 자료를 연결했습니다.',{runId:reusable,reused:true}); return; }
-      await collectorRequests.submit({ ...job.scope, keyword:job.keyword, targetPlaceId:String(company.placeIds[0]), workerKey:job.execution.workerKey, clientRequestId:job.jobId, sourceRole:'admin', collectionSource:'admin_search', trigger:'manual', scheduledCollection:false, searchRegion:'', searchScope:'', bookingRangePlaceLimit:0 });
+      // This request targets exactly one company. The crawler treats a zero
+      // range-place limit as "do not query future dates", not as unlimited.
+      const bookingRangePlaceLimit = job.scope.bookingRangeDays > 1 ? 1 : 0;
+      await collectorRequests.submit({ ...job.scope, keyword:job.keyword, targetPlaceId:String(company.placeIds[0]), workerKey:job.execution.workerKey, clientRequestId:job.jobId, sourceRole:'admin', collectionSource:'admin_search', trigger:'manual', scheduledCollection:false, searchRegion:'', searchScope:'', bookingRangePlaceLimit });
       store.updatePreparationJob(job.jobId,'queued',`${WORKER_LABELS[job.execution.workerKey]}에 자료 준비를 접수했습니다.`);
     } catch (error) {
       const known = { COLLECTOR_PROVIDER_BLOCKED:'접근 제한 보호 상태로 수집하지 않았습니다.', COLLECTOR_HALTED:'수집기가 보호 상태라 수집하지 않았습니다.', COLLECTOR_WORKER_RETIRED:'선택된 수집기가 인사이트 서버로 전환되어 접수하지 않았습니다. 관리자 연결 설정을 확인해 주세요.', COLLECTOR_OFFLINE:'수집기 연결을 확인하지 못했습니다.', COLLECTOR_NOT_CONFIGURED:'수집기 연결 설정이 필요합니다.', COLLECTOR_DISK_LOW:'자료 저장공간이 부족합니다.', COLLECTOR_RECOVERY_BUSY:'보존 자료 복구가 진행 중입니다.' };
@@ -80,7 +83,7 @@ function createInsightPreparation({ store, catalog, collectorRequests, verifySto
       }
       let verified = false;
       try { verified = await verifyStored(job,receipt.result.runId); } catch { /* Missing storage is a review state, never a successful customer result. */ }
-      store.updatePreparationJob(job.jobId,verified?'ready':'needs_review',verified?'요청 업체의 결과 저장과 DB 반영을 확인했습니다.':'수집 결과의 업체 또는 조회 범위가 일치하는지 확인이 필요합니다.',{runId:receipt.result.runId,errorCode:null});
+      store.updatePreparationJob(job.jobId,verified?'ready':'needs_review',verified?'요청 업체의 결과 저장과 DB 반영을 확인했습니다.':'수집 결과의 업체 또는 조회 범위가 일치하는지 확인이 필요합니다.',{runId:receipt.result.runId,errorCode:verified?null:'COLLECTION_STORED_SCOPE_MISMATCH'});
     } else {
       const status=['partial','blocked','failed'].includes(receipt.status)?receipt.status:'needs_review';
       const messages={partial:'일부 자료를 확보하지 못했습니다. 관리자 확인이 필요합니다.',blocked:'접근 제한으로 중단되었습니다. 다른 수집기로 자동 재시도하지 않습니다.',failed:'자료 준비를 완료하지 못했습니다. 실패 원인을 확인 중입니다.',needs_review:'실행 기록과 보존 자료를 확인해야 합니다.'};
