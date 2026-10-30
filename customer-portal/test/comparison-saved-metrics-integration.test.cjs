@@ -62,6 +62,16 @@ test('foreign payloads and invalid customer selections never contribute source a
   const invalid=dashboard.project(f.report,{...f.selection,comparisonIds:['foreign']},f.catalog,{},input);
   assert.equal(invalid.contextValid,false);assert.deepEqual(invalid.companies,[]);assert.ok(invalid.metrics.every(m=>m.value===null));
 });
+test('a pending saved-only payload preserves valid pickup and labels only missing price as loading rather than unconnected',()=>{
+  const f=fixture(),input=sources();
+  for(const entry of Object.values(input)){entry.status='loading';for(const saved of entry.payloads)delete saved.result;}
+  let model=dashboard.project(f.report,f.selection,f.catalog,{},input);
+  assert.equal(metric(model,'product_price').value,null);assert.equal(metric(model,'product_price').reasonCode,'SOURCE_LOADING');
+  assert.equal(metric(model,'public_change').value,30);assert.equal(metric(model,'public_change').status,'reference');
+  assert.equal(metric(model,'public_change').reasonCode,'PICKUP_REFERENCE_ONLY');
+  input.own.status='failed';input.own.errorCode='SOURCE_READ_FAILED';model=dashboard.project(f.report,f.selection,f.catalog,{},input);
+  assert.equal(metric(model,'product_price').reasonCode,'SOURCE_READ_FAILED');assert.equal(metric(model,'public_change').value,30);
+});
 function harness(){
   const f=fixture(),handlers={},slot={innerHTML:'',isConnected:true},status={textContent:''},timers=[],storage=new Map();
   const context=vm.createContext({module:{exports:{}},require:specifier=>require('../web/'+specifier.replace('./','')),Date,URL,Promise,
@@ -86,6 +96,21 @@ test('a source reply arriving after a display filter change respects the latest 
   const selected=days.filter(d=>new Date(d+'T00:00:00Z').getUTCDay()===6),expected=median(selected.map(d=>200000+days.indexOf(d)*1000)).toLocaleString('ko-KR')+'원';
   resolve(payload('own'));await flush();
   assert.equal(sourceValue(h.slot.innerHTML),expected);assert.match(h.slot.innerHTML,/value="saturday" selected/);assert.equal(briefingReads,1);assert.equal(sourceReads,2);h.ui.stop();
+});
+test('saved-only previews retain pickup and a loading price badge until automatic source polling supplies the normal price',async()=>{
+  const h=harness(),reads=new Map();
+  h.ui.mount({store:h.store,state:h.state,peek:()=>clone(h.report),read:()=>new Promise(()=>{}),readCompany:async(id,{month})=>{
+    const key=id+month,n=reads.get(key)||0;reads.set(key,n+1);const out=payload(id,month);
+    if(n===0){delete out.result;out.responseCache={refreshing:true};out.referenceLoading=true;}return out;
+  }});
+  await flush();
+  assert.equal(sourceValue(h.slot.innerHTML),'미확인');
+  assert.match(h.slot.innerHTML,/data-dashboard-metric="product_price"[\s\S]*?data-reason-code="SOURCE_LOADING"/);
+  assert.match(h.slot.innerHTML,/data-dashboard-metric="public_change"[\s\S]*?<strong>\+30실<\/strong>/);
+  const poll=h.timers.find(timer=>timer.ms===2000);assert.ok(poll,'an updating source schedules a bounded follow-up read');
+  poll.fn();await flush();
+  assert.equal(sourceValue(h.slot.innerHTML),'214,500원');
+  assert.ok([...reads.values()].every(n=>n===2),'normal prices arrive through one source follow-up rather than a new briefing or collection');h.ui.stop();
 });
 test('late source replies or authentication failures after stop, selected competitors or customer change never alter another context',async()=>{
   for(const cause of ['stop','selection','customer','permission'])for(const rejectReply of [false,true]){

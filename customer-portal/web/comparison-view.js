@@ -55,7 +55,7 @@
     };
     for(const id of ids){
       const payloads=months.map(month=>options.peekCompany?.(id,month)).filter(Boolean);
-      source.companies[id]={payloads,status:'loading',months:{}};
+      source.companies[id]={payloads,status:'loading',months:{},pendingMonths:new Set(months),failedMonths:new Set()};
     }
     // These are the existing authorized, cached company reads. They are never
     // a crawl request. One read at a time avoids a new burst of heavy reads.
@@ -71,10 +71,13 @@
           if(!current())return;
           entry.months[month]=data;
           entry.payloads=months.map(value=>entry.months[value]||options.peekCompany?.(id,value)).filter(Boolean);
-          entry.status='ready';
-          if(data.responseCache?.refreshing===true||data.responseCache?.revalidationRequired===true||data.referenceLoading===true)pending.push({id,month});
+          const updating=data.responseCache?.refreshing===true||data.responseCache?.revalidationRequired===true||data.referenceLoading===true;
+          entry.failedMonths.delete(month);
+          if(updating){entry.pendingMonths.add(month);pending.push({id,month});}else entry.pendingMonths.delete(month);
+          entry.status=entry.failedMonths.size?'failed':entry.pendingMonths.size?'loading':'ready';
         }catch(error){
           if(!current())return;
+          entry.failedMonths.add(month);entry.pendingMonths.delete(month);
           entry.status='failed';entry.errorCode=[401,403,404,409].includes(error?.status)?'SOURCE_CONTEXT_MISMATCH':'SOURCE_READ_FAILED';
           if([401,403,404,409].includes(error?.status)){
             entry.denied=true;entry.months={};entry.payloads=[];redraw();

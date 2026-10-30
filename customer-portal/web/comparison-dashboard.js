@@ -187,7 +187,7 @@
       if (company.savedMetrics && ['loading', 'failed'].includes(entry?.status)) {
         for (const field of ['price', 'pickup']) {
           const target = company.savedMetrics[field];
-          if (!entry?.payloads?.length) Object.assign(target, {reasonCode: entry.errorCode || (entry.status === 'loading' ? 'SOURCE_LOADING' : 'SOURCE_READ_FAILED'),
+          if (!entry?.payloads?.length || target.value === null) Object.assign(target, {reasonCode: entry.errorCode || (entry.status === 'loading' ? 'SOURCE_LOADING' : 'SOURCE_READ_FAILED'),
             reason: entry.status === 'loading' ? '저장된 업체 자료를 확인하고 있습니다.' : '저장 자료 조회가 실패했습니다. 기존 정상 자료는 유지합니다.'});
           else target.limitations = [...(target.limitations || []), entry.status === 'loading' ? '저장 자료를 먼저 표시하며 최신 여부를 확인하고 있습니다.' : '최신 조회 실패로 이전 정상 저장 자료를 표시합니다.'];
         }
