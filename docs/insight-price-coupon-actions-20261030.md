@@ -58,3 +58,11 @@
 공식 split 빌드의 HTML SHA-256은 `29cacb7a6690300557d7a63b681268e789ad74f47b553ac7075e947da68bfb33`, 스냅샷은 `69d60aa44e9502df26f086cdb739e88660d949040a520fe6046c5ffec08f17a9`이다. 보호 런타임 `18896172786ae9fbbfed81fdc93754ee0d68d5a8502c99ee0c27066d5f9edf51`은 유지된다. 완성된 로컬 `dist/`를 `http://127.0.0.1:56951/comparison/`에서 검수했다. 운영용 `assets/saved-keyword-comparison/`와 Render 운영 버전은 이 개발 단계에서 변경하지 않는다.
 
 브라우저에서는 원가 미입력, 손익 계산, 한도 초과, 상품·날짜 변경 초기화, 검토 차이 10→15%p 변경, 구형 9/20 자료의 29일 전체 판단 보류, 새 출처 정의를 확인했다. PC 라이트·다크와 390px 모바일에서 검수했고 모바일 문서 너비는 375px로 가로 넘침이 없었다. 실제 화면·테스트 로그는 `C:/Users/User/.codex/visualizations/2026/10/30/insight-price-coupon-actions/`에 보관한다.
+
+## 운영용 번들 갱신
+
+후속 운영 배포 요청에 따라 위 공식 빌드의 HTML과 해시 스냅샷을 `customer-portal/assets/saved-keyword-comparison/`에 패키징한다. `bundle.json`의 `operatingActionsVersion`은 `saved-operating-actions-v1`이며, 무결성 보호·관리자 인증·GET/HEAD 전용 정책을 유지한다. 이전 `ce38eac8...` 스냅샷은 보존하며, 제공 경로는 현재 manifest에 지정된 두 파일만 허용한다. 이전 HTML과 manifest도 별도 검수 폴더에 보관한다.
+
+배포 대상은 Insight `srv-d9jf91v41pts73cj9bu0` 하나다. 데이터랩·워커·정기수집 설정과 원본·기존 발행본은 변경하지 않는다. 기존 관리자 신원 확인 GET 외에 이 비교 기능이 데이터랩 업무 자료를 조회하거나 수집을 요청하지 않는다.
+
+검수는 운영 메뉴 진입, 당시의 5/13/11일 분류, 날짜별 근거·출처, 쿠폰 비용 미입력·정상 계산·판매한도 초과·상품/날짜 변경 초기화와 PC·모바일 표시를 포함한다. 배포 전후 정기수집 3건의 paused와 nextRunAt=null을 같은 API로 비교한다. 최종 커밋·Render Live·실제 운영 검수·중지 상태 보존 기록은 `C:/Users/User/.codex/visualizations/2026/10/30/insight-price-coupon-release/`에 별도로 남긴다.

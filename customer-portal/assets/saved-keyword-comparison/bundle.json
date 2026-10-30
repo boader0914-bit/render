@@ -13,13 +13,14 @@
   "collectionEnabled": false,
   "html": {
     "path": "index.html",
-    "sha256": "b1f00159be40b7c152d41b79e6a4c2791a372cf28f91a072dbcb64b14a2884b5",
-    "bytes": 2385095
+    "sha256": "29cacb7a6690300557d7a63b681268e789ad74f47b553ac7075e947da68bfb33",
+    "bytes": 2439812
   },
   "snapshot": {
-    "path": "snapshot.ce38eac81ff9f47974ccbb96190e247accf3d0c1b549e952203845adeb254586.json",
-    "sha256": "ce38eac81ff9f47974ccbb96190e247accf3d0c1b549e952203845adeb254586",
-    "bytes": 15843156
+    "path": "snapshot.69d60aa44e9502df26f086cdb739e88660d949040a520fe6046c5ffec08f17a9.json",
+    "sha256": "69d60aa44e9502df26f086cdb739e88660d949040a520fe6046c5ffec08f17a9",
+    "bytes": 15847495
   },
-  "runtimeSha256": "18896172786ae9fbbfed81fdc93754ee0d68d5a8502c99ee0c27066d5f9edf51"
+  "runtimeSha256": "18896172786ae9fbbfed81fdc93754ee0d68d5a8502c99ee0c27066d5f9edf51",
+  "operatingActionsVersion": "saved-operating-actions-v1"
 }
