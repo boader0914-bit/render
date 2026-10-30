@@ -150,22 +150,48 @@ function validateComplete(value, request, capture, proofRead, pid) {
   for (const key of ["companies", "runs", "observations", "rankObservations", "savedProductRecoveries"]) need(Number.isSafeInteger(value.counts?.[key]) && value.counts[key] >= 0 && value.counts[key] <= (key === "runs" ? 10000 : key === "companies" ? 1000 : 50000), "KEYWORD_PREP_COUNT_BOUND");
 }
 function snapshotCore(s) { return { summary: s.summary, daily: s.daily, companies: s.companies.map(c => ({ companyId: c.companyId, summary: c.summary, daily: c.daily })), selectedDigest: s.sources.digest, partialEvidence: s.sources.partialEvidence, ranks: s.ranks, quality: s.quality }; }
+async function verifyAbsentRecords(completeFile, complete, records) {
+  if (!records.length) return [];
+  need(complete.sourceFile === path.join(path.dirname(completeFile), "source.json") && SHA.test(complete.sourceSha256)
+    && Number.isSafeInteger(complete.sourceBytes) && complete.sourceBytes > 0 && complete.sourceBytes <= LIMITS.source && iso(complete.snapshotCapturedAt), "KEYWORD_PREP_SOURCE_BINDING");
+  // Read the already-generated source only for absent descriptors. The helper
+  // returns primitive counts/hashes, so its large source graph is not retained
+  // while the factory subsequently loads an available projection.
+  let sourceRead = await read(complete.sourceFile, LIMITS.source, false), source;
+  need(sourceRead.sha256 === complete.sourceSha256 && sourceRead.bytes.length === complete.sourceBytes, "KEYWORD_PREP_SOURCE_BINDING");
+  try { source = JSON.parse(sourceRead.bytes.toString("utf8")); } catch { fail("KEYWORD_PREP_JSON"); }
+  const { buildMonthlyReportSnapshot, monthlyReportKeywordMembership } = require("./lib/monthly_reports.cjs"), { sourceForKeywordMonthlyRequest } = require("./lib/keyword_monthly_analysis.cjs"), results = [];
+  for (const record of records) {
+    const monthlySource = sourceForKeywordMonthlyRequest(source, record.request), membership = monthlyReportKeywordMembership(record.request, monthlySource);
+    const snapshot = buildMonthlyReportSnapshot(record.request, monthlySource, complete.snapshotCapturedAt), actualFingerprint = fingerprint(snapshotCore(snapshot));
+    need(actualFingerprint === record.snapshotFingerprint, "KEYWORD_PREP_FINANCIAL_PARITY_FAILED");
+    const counts = { membership: membership.members.size, inventoryMembership: membership.inventoryMembers.size, rankMembership: membership.rankMembers.size,
+      companies: snapshot.companies.length, targetCompanies: snapshot.sources.targetMembership.companyIds.length, eligibleObservations: snapshot.sources.eligibleObservationCount,
+      selectedObservations: snapshot.sources.selectedObservationCount, selectedRows: snapshot.sources.observations.length, partialEvidence: snapshot.sources.partialEvidence.length, ranks: snapshot.ranks.rows.length };
+    need(Object.values(counts).every(value => value === 0), "KEYWORD_PREP_OBSERVED_DESCRIPTOR_MISSING");
+    results.push({ month: record.request.month, cutoffDate: record.request.cutoffDate, reason: "NO_ELIGIBLE_OBSERVATION_AT_REQUEST_CUTOFF", counts,
+      sourceSha256: sourceRead.sha256, expectedFingerprint: record.snapshotFingerprint, actualFingerprint, exact: true });
+  }
+  need(same(sourceRead.stat, await checked(complete.sourceFile)), "KEYWORD_PREP_READ_CHANGED"); source = null; sourceRead = null;
+  return results;
+}
 async function verifyProjection({ projection, completeFile, output, now, keyword, month, cutoffDate }) {
   const complete = await read(completeFile), index = await read(path.join(projection, "index.json"), MIB);
   need(index.value.sourceFingerprint === complete.value.sourceSha256 && index.value.provenance?.dataThrough === complete.value.dataThrough, "KEYWORD_PREP_INDEX_BINDING");
   const { createKeywordMonthlyAnalysis } = require("./lib/keyword_monthly_analysis.cjs"), service = createKeywordMonthlyAnalysis({ projectionDir: projection, now: () => now }), options = await service.options();
   need(options.status === "available" && options.provenance?.inputSha256 === complete.value.sourceSha256, "KEYWORD_PREP_FACTORY_UNAVAILABLE");
   const descriptor = options.keywords.find(row => row.keyword === keyword && row.stayMonths.includes(month));
-  const checks = [];
+  const absent = complete.value.records.filter(record => !options.keywords.some(row => row.keyword === keyword && row.stayMonths.includes(record.request.month)));
+  const emptyProofs = await verifyAbsentRecords(completeFile, complete.value, absent), checks = [];
   for (const record of complete.value.records) {
     const q = { keyword, month: record.request.month, cutoffDate: record.request.cutoffDate }, offered = options.keywords.some(row => row.keyword === keyword && row.stayMonths.includes(q.month));
-    if (!offered) { need(["observations", "rankObservations", "savedProductRecoveries"].every(key => record.scopedCounts?.[key] === 0), "KEYWORD_PREP_OBSERVED_DESCRIPTOR_MISSING"); continue; }
+    if (!offered) { need(emptyProofs.some(proof => proof.month === q.month && proof.cutoffDate === q.cutoffDate && proof.exact), "KEYWORD_PREP_OBSERVED_DESCRIPTOR_MISSING"); continue; }
     const result = await service.analyze(q); need(result.status === "available" && result.snapshot && result.provenance.inputSha256 === complete.value.sourceSha256 && result.request.cutoffDate === q.cutoffDate, "KEYWORD_PREP_FACTORY_UNAVAILABLE");
     const actual = fingerprint(snapshotCore(result.snapshot)); need(actual === record.snapshotFingerprint, "KEYWORD_PREP_FINANCIAL_PARITY_FAILED"); checks.push({ month: q.month, cutoffDate: q.cutoffDate, expectedFingerprint: record.snapshotFingerprint, actualFingerprint: actual, exact: true });
   }
   need(!descriptor || checks.some(row => row.month === month && row.cutoffDate === cutoffDate), "KEYWORD_PREP_TARGET_NOT_VERIFIED");
   const result = { schemaVersion: 1, state: descriptor ? "prepared" : "notObserved", keyword, month, cutoffDate, indexSha256: index.sha256, sourceSha256: complete.value.sourceSha256,
-    reason: descriptor ? null : "TARGET_DESCRIPTOR_NOT_OBSERVED_IN_NORMALIZED_SOURCE", checks, sourceWrites: 0, providerCalls: 0, pointerPublished: false };
+    reason: descriptor ? null : "NO_ELIGIBLE_OBSERVATION_AT_REQUEST_CUTOFF", checks, emptyProofs, sourceWrites: 0, providerCalls: 0, pointerPublished: false };
   await writeNew(output, result); return result;
 }
 async function deleteOwnedSource(file, expected, owner) {
@@ -260,4 +286,4 @@ if (require.main === module) {
   Promise.resolve().then(() => { if (v[0] !== "--verify-child") return run(v); need(v.length === 8 && iso(v[4]), "KEYWORD_PREP_ARGUMENTS"); return verifyProjection({ projection: v[1], completeFile: v[2], output: v[3], now: v[4], keyword: v[5], month: v[6], cutoffDate: v[7] }); })
     .then(result => { if (v[0] === "--verify-child") process.stdout.write(JSON.stringify(result) + "\n"); }).catch(error => { process.stderr.write(JSON.stringify({ code: /^[A-Z][A-Z0-9_]+$/.test(error.code || "") ? error.code : "KEYWORD_PREP_FAILED", ...(safeChildCode(error.childCode) ? { childCode: error.childCode } : {}) }) + "\n"); process.exitCode = 1; });
 }
-module.exports = { args, cutoffFor, checked, read, fileHash, treeBytes, writeNew, privateOpsStat, storageScope, stderrPolicy, childStderrSafe, safeChildCode, childFailureDiagnostic, runChild, isolation, normalizerFailureCode, validateDiscovery, validateComplete, snapshotCore, fingerprint, verifyProjection, deleteOwnedSource, run, LIMITS };
+module.exports = { args, cutoffFor, checked, read, fileHash, treeBytes, writeNew, privateOpsStat, storageScope, stderrPolicy, childStderrSafe, safeChildCode, childFailureDiagnostic, runChild, isolation, normalizerFailureCode, validateDiscovery, validateComplete, snapshotCore, fingerprint, verifyAbsentRecords, verifyProjection, deleteOwnedSource, run, LIMITS };

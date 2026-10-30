@@ -42,11 +42,13 @@ async function fixture(t, options = {}) {
       if (options.failNormalization) return { exitCode: 1, stderrBytes: 0, stdout: { state: "failed" }, pid: 4321 };
       const keyword = valueOf(values, "--keyword"), month = valueOf(values, "--month"), cutoffDate = valueOf(values, "--cutoff"), output = valueOf(values, "--output"), proofFile = valueOf(values, "--proof");
       await fs.mkdir(output);
-      const src = source(keyword, keyword !== options.notObserved), bytes = Buffer.from(JSON.stringify(src)), sourceFile = path.join(output, "source.json"); await fs.writeFile(sourceFile, bytes, { flag: "wx" });
+      const src = source(keyword, keyword !== options.notObserved);
+      if (options.previousFutureRanks) { src.observations = src.observations.filter(r => !r.stayDate.startsWith("2026-09")); src.rankObservations = Array.from({ length: 40 }, (_, i) => ({ companyId: "c", runId: "r1", keyword, rank: 3, collectedAt: `2026-10-05T01:${String(i).padStart(2, "0")}:00.000Z` })); }
+      const bytes = Buffer.from(JSON.stringify(src)), sourceFile = path.join(output, "source.json"); await fs.writeFile(sourceFile, bytes, { flag: "wx" });
       const proof = { mode: "seccomp", noNewPrivs: true, seccompMode: 2, networkFdsClosed: true, nonStandardFdsClosedBeforeExec: true, nonStandardFdsRemainingBeforeExec: 0, expectedRoot: copy, preflightOnly: false, environmentSanitizedForExec: true, unrestrictedFallbackAllowed: false, providerCalls: 0, guardSha256: guardSha, nodeSha256: nodeSha, pid: 4321,
         kernelProbe: { tcpSocketDenied: true, udpSocketDenied: true, ipv6SocketDenied: true, syscallsDeniedWithEperm: Object.fromEntries(["socket", "socketpair", "connect", "sendto", "sendmsg"].map(k => [k, true])) } }; await json(proofFile, proof);
       const current = { type: "keyword", targetId: keyword, month, cutoffDate }, requests = [previousMonthlyReportRequest(current), current];
-      const records = requests.map(request => ({ request, scopedCounts: { observations: src.observations.filter(r => r.stayDate.startsWith(request.month)).length, rankObservations: 0, savedProductRecoveries: 0 }, sameSourceFinancialAndDiagnosticParity: true, snapshotFingerprint: prep.fingerprint(prep.snapshotCore(buildMonthlyReportSnapshot(request, sourceForKeywordMonthlyRequest(src, request), CAPTURE))) }));
+      const records = requests.map(request => ({ request, scopedCounts: { observations: src.observations.filter(r => r.stayDate.startsWith(request.month)).length, rankObservations: src.rankObservations.length, savedProductRecoveries: 0 }, sameSourceFinancialAndDiagnosticParity: true, snapshotFingerprint: prep.fingerprint(prep.snapshotCore(buildMonthlyReportSnapshot(request, sourceForKeywordMonthlyRequest(src, request), CAPTURE))) }));
       if (options.tamperParity) records[1].snapshotFingerprint = "0".repeat(64);
       if (options.recordMutation === "duplicate") records[0] = { ...records[1] };
       if (options.recordMutation === "month") records[0].request = { ...records[0].request, month: "2026-08" };
@@ -111,6 +113,18 @@ test("a lost descriptor with actual current observations fails instead of being 
   const f = await fixture(t, { dropTargetDescriptor: true }); await assert.rejects(prep.run(f.argv, f.deps), { code: "KEYWORD_PREP_OBSERVED_DESCRIPTOR_MISSING" });
   await assert.rejects(fs.stat(path.join(f.preparedRoot, "bundle-plan.json")), { code: "ENOENT" });
   const scratch = (await fs.readdir(f.copy)).find(name => name.startsWith("prepare-release-")), scope = (await fs.readdir(path.join(f.copy, scratch))).find(name => name !== "owner.json"); assert.ok((await fs.stat(path.join(f.copy, scratch, scope, "source.json"))).size > 0);
+});
+test("forty future rank rows in a previous record are empty only after exact source replay and zero eligible evidence proof", async t => {
+  const f = await fixture(t, { previousFutureRanks: true, candidates: [{ keyword: "가평글램핑", month: "2026-10" }] }), result = await prep.run(f.argv, f.deps);
+  assert.equal(result.preparedCount, 1); const part = path.dirname(result.prepared[0].directory), verification = JSON.parse(await fs.readFile(path.join(part, "factory-verification.json"))), complete = JSON.parse(await fs.readFile(path.join(part, "reconstruction-complete.json")));
+  const previous = complete.records.find(r => r.request.month === "2026-09"); assert.equal(previous.scopedCounts.rankObservations, 40); assert.equal(verification.checks.length, 1); assert.equal(verification.checks[0].month, "2026-10");
+  assert.equal(verification.emptyProofs.length, 1); const proof = verification.emptyProofs[0]; assert.equal(proof.month, "2026-09"); assert.equal(proof.exact, true); assert.equal(proof.actualFingerprint, previous.snapshotFingerprint); assert.ok(Object.values(proof.counts).every(value => value === 0));
+});
+test("absent-record replay refuses changed source SHA and source path outside its complete receipt directory", async t => {
+  const f = await fixture(t), sourceFile = path.join(f.ops, "source.json"); await json(sourceFile, source("가평글램핑"));
+  const complete = { sourceFile, sourceSha256: "0".repeat(64), sourceBytes: (await fs.stat(sourceFile)).size, snapshotCapturedAt: CAPTURE }, request = { type: "keyword", targetId: "가평글램핑", month: "2026-09", cutoffDate: "2026-09-30" };
+  await assert.rejects(prep.verifyAbsentRecords(path.join(f.ops, "complete.json"), complete, [{ request }]), { code: "KEYWORD_PREP_SOURCE_BINDING" });
+  await assert.rejects(prep.verifyAbsentRecords(path.join(f.copy, "complete.json"), complete, [{ request }]), { code: "KEYWORD_PREP_SOURCE_BINDING" });
 });
 test("duplicate current records, third month and wrong previous keyword fail exact two-request coverage", async t => {
   for (const recordMutation of ["duplicate", "month", "keyword"]) { const f = await fixture(t, { recordMutation }); await assert.rejects(prep.run(f.argv, f.deps), { code: "KEYWORD_PREP_RECORDS_INVALID" }); assert.equal(f.calls.length, 1); }
