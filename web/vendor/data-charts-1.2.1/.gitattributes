@@ -1,0 +1,2 @@
+# Preserve the official component and notice bytes across platform checkouts.
+* -text

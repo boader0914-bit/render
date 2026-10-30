@@ -5,6 +5,7 @@ const { buildMonthlyReportSnapshot } = require("./lib/monthly_reports.cjs");
 const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./lib/monthly_report_comparison.cjs");
 const script = fs.readFileSync(path.join(__dirname, "../web/keyword-monthly-analysis.js"), "utf8");
 const benchmarkScript = fs.readFileSync(path.join(__dirname, "../web/keyword-monthly-benchmark.js"), "utf8");
+const dashboardScript = fs.readFileSync(path.join(__dirname, "../web/keyword-monthly-dashboard-model.js"), "utf8");
 const NOW = "2026-10-30T03:00:00.000Z", KEYWORD = "경남글램핑", OTHER = "경남 글램핑";
 const clone = value => JSON.parse(JSON.stringify(value));
 const optionsFixture = () => ({ schemaVersion: 1, status: "available", currentDay: "2026-10-30", currentMonth: "2026-10",
@@ -39,6 +40,7 @@ class Element {
   replaceChildren(...values) { this._text = ""; this.children = []; this.append(...values); }
   setAttribute(key, value) { this.attributes[key] = String(value); }
   addEventListener(key, callback) { (this.listeners[key] ||= []).push(callback); }
+  get isConnected() { let root = this; while (root.parentNode) root = root.parentNode; return root === this.ownerDocument.body; }
   getClientRects() { let node = this; while (node) { if (node.hidden || node.screenHidden) return []; node = node.parentNode; } return [{}]; }
   async fire(type) { if (type === "click" && this.disabled) return; for (const fn of this.listeners[type] || []) await fn({ type, target: this, preventDefault() {} }); }
 }
@@ -46,17 +48,18 @@ const descendants = node => [node, ...node.children.flatMap(descendants)];
 const text = node => descendants(node).map(item => item.textContent).join(" ");
 const settle = async () => { for (let i = 0; i < 12; i++) await new Promise(resolve => setImmediate(resolve)); };
 const deferred = () => { let resolve; const promise = new Promise(value => { resolve = value; }); return { promise, resolve }; };
-function mockUi({ hidden = false, role = "role-admin", request: customRequest } = {}) {
-  const listeners = {}, observers = [], calls = [], doc = { hidden: false, addEventListener(type, fn) { listeners[type] = fn; }, removeEventListener(type) { delete listeners[type]; } };
+function mockUi({ hidden = false, role = "role-admin", request: customRequest, chartMount } = {}) {
+  const listeners = {}, observers = [], calls = [], chartCalls = [], doc = { hidden: false, addEventListener(type, fn) { listeners[type] = fn; }, removeEventListener(type) { delete listeners[type]; } };
   doc.createElement = tag => new Element(tag, doc); doc.body = doc.createElement("body"); doc.body.className = role;
   const parent = doc.createElement("div"); parent.screenHidden = hidden; doc.body.append(parent);
   async function request(url, settings) { calls.push({ url, settings }); if (customRequest) return customRequest(url, settings); const query = new URL(url, "https://local.test"); return { ok: true, status: 200, json: async () => clone(url.endsWith("/options") ? optionsFixture() : payloadFixture(Object.fromEntries(query.searchParams))) }; }
-  const window = { fetch: request };
+  const window = { fetch: request, KeywordMonthlyCharts: { mount(container, config) { chartCalls.push({ container, config }); return chartMount ? chartMount(container, config) : Promise.resolve(); } } };
   class MutationObserver { constructor(fn) { this.callback = fn; observers.push(this); } observe() {} disconnect() { this.disconnected = true; } }
   vm.runInNewContext(benchmarkScript, { window });
+  vm.runInNewContext(dashboardScript, { window });
   vm.runInNewContext(script, { window, document: doc, MutationObserver, Date, Intl, URLSearchParams, console });
   const api = window.KeywordMonthlyAnalysis, controller = api.mount(parent, { autoStart: false, fetch: request, now: () => Date.parse(NOW) });
-  return { api, controller, parent, doc, observers, listeners, calls,
+  return { api, controller, parent, doc, observers, listeners, calls, chartCalls,
     find(cls) { return descendants(parent).filter(node => node.className.split(/\s+/).includes(cls)); }, field(name) { return descendants(parent).find(node => node.name === name); },
     button(label) { return descendants(parent).find(node => node.tagName === "BUTTON" && node.textContent === label); }, text() { return text(parent); } };
 }
@@ -253,4 +256,111 @@ test("calendar keeps missing values gray, observed zero numeric and product sele
   assert.equal(ui.find("kma-calendar-outside").length, 4); assert.ok(ui.find("kma-calendar-outside").every(node => node.attributes["aria-hidden"] === "true"));
   await ui.button("데이유즈").fire("click"); assert.equal(valueOf("2026-10-20", "kma-calendar-rate"), "60%"); assert.equal(valueOf("2026-10-21", "kma-calendar-rate"), "—"); assert.equal(ui.calls.length, 2);
   ui.field("month").value = "2026-11"; await ui.field("month").fire("change"); await settle(); assert.match(ui.text(), /사전 관측/); assert.equal(ui.find("kma-calendar-cell")[0].attributes["data-date"], "2026-11-01");
+});
+
+function dashboardPayload(companyCount = 2, withUnknown = false) {
+  const source = sourceFixture(), original = [...source.observations]; source.companies = []; source.observations = [];
+  for (let index = 0; index < companyCount; index++) {
+    const companyId = `company-${index}`; source.companies.push({ companyId, primaryName: `비교 업체 ${index}`, capacity: 5, capacitySource: "db_correction" });
+    source.observations.push(...original.map(row => { const sold = index === 0 ? row.sold : 1; return { ...row, observationId: `${row.observationId}:${companyId}`, companyId, sold, publicBookings: sold, phoneBookings: 0, estimatedRevenue: sold * 100, publicRevenue: sold * 100, phoneRevenue: 0 }; }));
+  }
+  const value = payloadFixture(); value.snapshot = buildMonthlyReportSnapshot({ type: "keyword", targetId: KEYWORD, month: "2026-10", cutoffDate: "2026-10-30" }, source, NOW);
+  if (withUnknown) value.snapshot.companies.push({ companyId: "rank-only", primaryName: "순위만 관측한 업체" });
+  return value;
+}
+function dashboardRequest(value) { return async url => ({ ok: true, status: 200, json: async () => url.endsWith("/options") ? optionsFixture() : value }); }
+
+test("one top-level company selector controls the dynamic heading and both charts without GET", async () => {
+  const ui = mockUi({ request: dashboardRequest(dashboardPayload()) }); await ui.controller.open(); await settle();
+  const selectors = descendants(ui.parent).filter(node => node.name === "benchmarkCompany");
+  assert.equal(selectors.length, 1); assert.equal(selectors[0].attributes["aria-label"], "비교할 업체");
+  assert.equal(selectors[0].parentNode.parentNode.className.includes("kma-filters"), true);
+  assert.equal(ui.find("kma-dashboard-title")[0].textContent, `${KEYWORD} · 비교 업체 0 비교`);
+  assert.equal(ui.find("kma-dashboard-metrics")[0].children.length, 4);
+  assert.equal(ui.find("kma-dashboard-grid").length, 1); assert.equal(ui.find("kma-company-chart-panel").length, 1); assert.equal(ui.find("kma-flow-chart-panel").length, 1);
+  const beforeRequests = ui.calls.length, beforeLine = ui.chartCalls.find(x => x.config.spec.type === "line").config;
+  assert.equal(ui.chartCalls.find(x => x.config.spec.type === "horizontalStackedBar").config.rows[0].company, "● 비교 업체 0");
+  assert.equal(beforeLine.rows.length, 31); assert.equal(beforeLine.rows.find(row => row.date === "2026-10-20")["비교 업체 0"], 0.8);
+  ui.field("benchmarkCompany").value = "company-1"; await ui.field("benchmarkCompany").fire("change"); await settle();
+  const afterLine = ui.chartCalls.filter(x => x.config.spec.type === "line").at(-1).config;
+  assert.equal(ui.find("kma-dashboard-title")[0].textContent, `${KEYWORD} · 비교 업체 1 비교`); assert.equal(ui.calls.length, beforeRequests);
+  assert.equal(afterLine.rows.find(row => row.date === "2026-10-20")["비교 업체 1"], 0.2);
+  const afterBar = ui.chartCalls.filter(x => x.config.spec.type === "horizontalStackedBar").at(-1).config.rows;
+  assert.equal(afterBar.find(row => row.companyId === "company-1").company, "● 비교 업체 1");
+  assert.equal(afterBar.find(row => row.companyId === "company-0").company, "비교 업체 0");
+  assert.deepEqual(afterLine.rows.map(row => row["전체 표본 · 선택 업체 포함"]), beforeLine.rows.map(row => row["전체 표본 · 선택 업체 포함"]));
+  assert.equal(ui.find("kma-company-chart").every(node => node.dataset.chartStatus === "mounted"), true);
+});
+test("actual chart configs preserve all companies beyond twenty, unknown roster and common percent axes", async () => {
+  const ui = mockUi({ request: dashboardRequest(dashboardPayload(35, true)) }); await ui.controller.open(); await settle();
+  const barCalls = ui.chartCalls.filter(x => x.config.spec.type === "horizontalStackedBar"), rows = barCalls.flatMap(x => x.config.rows);
+  assert.equal(barCalls.length, 2); assert.equal(rows.length, 35); assert.equal(new Set(rows.map(row => row.companyId)).size, 35);
+  assert.deepEqual(barCalls.map(x => x.config.rows.length), [30, 5]);
+  for (const { config } of barCalls) {
+    assert.deepEqual(clone(config.spec.x), ["공개 예약", "방막기·타채널 추정"]); assert.equal(config.spec.y, "company");
+    assert.deepEqual(clone(config.spec.xDomain), [0, 1]); assert.deepEqual(clone(config.spec.colors), { "공개 예약": "#70bd9a", "방막기·타채널 추정": "#b68ade" });
+    assert.equal(config.spec.showValues, true); assert.equal(config.spec.valueFormat.style, "percent");
+    assert.ok(config.height >= 40 + config.rows.length * 20 && config.height <= 800);
+    assert.ok(config.rows.every(row => typeof row["공개 예약"] === "number" && typeof row["방막기·타채널 추정"] === "number"));
+  }
+  assert.match(text(ui.find("kma-unknown-companies")[0]), /순위만 관측한 업체/);
+  assert.equal(ui.field("benchmarkCompany").children.length, 36); assert.match(ui.text(), /전체 36개 업체의 저장 수치 보기/);
+  const allDetails = ui.find("kma-chart-data")[0]; assert.match(text(allDetails), /순위만 관측한 업체/); assert.match(text(allDetails), /—/);
+});
+test("daily line keeps null date gaps and unknown selected values rather than drawing zero", async () => {
+  const ui = mockUi({ request: dashboardRequest(dashboardPayload(2, true)) }); await ui.controller.open(); await settle();
+  let line = ui.chartCalls.find(x => x.config.spec.type === "line").config;
+  assert.equal(line.height, 340); assert.deepEqual(clone(line.spec.yDomain), [0, 1]); assert.equal(line.rows[0].date, "2026-10-01");
+  assert.equal(line.rows[0]["비교 업체 0"], null); assert.equal(line.rows[0]["전체 표본 · 선택 업체 포함"], null);
+  const count = ui.calls.length; ui.field("benchmarkCompany").value = "rank-only"; await ui.field("benchmarkCompany").fire("change"); await settle();
+  line = ui.chartCalls.filter(x => x.config.spec.type === "line").at(-1).config;
+  assert.equal(line.rows.every(row => row["순위만 관측한 업체"] === null), true);
+  assert.equal(line.rows.find(row => row.date === "2026-10-20")["전체 표본 · 선택 업체 포함"], 0.5);
+  assert.equal(ui.calls.length, count); assert.match(ui.text(), /미관측일은 선을 연결하거나 0으로 채우지 않습니다/);
+});
+test("chart adapter failure remains readable without extra request or successful chart status", async () => {
+  const ui = mockUi({ request: dashboardRequest(dashboardPayload()), chartMount: async () => { throw new Error("renderer unavailable"); } });
+  await ui.controller.open(); await settle(); assert.equal(ui.calls.length, 2);
+  assert.equal([...ui.find("kma-company-chart"), ...ui.find("kma-flow-chart")].every(node => node.dataset.chartStatus === "failed"), true);
+  assert.match(ui.text(), /차트를 표시하지 못했습니다/); assert.match(text(ui.find("kma-chart-data")[0]), /비교 업체 0|전체 예약 추정률/);
+  assert.match(ui.text(), /400원/); assert.match(ui.text(), /전월 공통 표본 비교/);
+});
+test("pending chart resolution cannot repaint private content after logout clear", async () => {
+  const gate = deferred(), ui = mockUi({ request: dashboardRequest(dashboardPayload()), chartMount: container => gate.promise.then(() => { const node = container.ownerDocument.createElement("p"); node.textContent = "이전 업체 비공개"; container.append(node); }) });
+  await ui.controller.open(); const prior = ui.chartCalls.map(x => x.container); ui.api.clear(); gate.resolve(); await settle();
+  assert.equal(ui.field("benchmarkCompany").value, ""); assert.equal(ui.field("benchmarkCompany").children.length, 1);
+  assert.equal(ui.find("kma-chart").length, 0); assert.doesNotMatch(ui.text(), /이전 업체 비공개|비교 업체 0/); assert.equal(prior.every(node => node.children.length === 0), true);
+});
+test("company choice survives a delayed saved-read reload while controls are disabled", async () => {
+  const gate = deferred(), value = dashboardPayload(); let delayed = false;
+  const ui = mockUi({ request: async url => url.endsWith("/options") ? { ok: true, status: 200, json: async () => optionsFixture() } : delayed ? gate.promise : { ok: true, status: 200, json: async () => value } });
+  await ui.controller.open(); ui.field("benchmarkCompany").value = "company-1"; await ui.field("benchmarkCompany").fire("change"); delayed = true;
+  const refresh = ui.controller.refresh(); await settle(); assert.equal(ui.controller.state().benchmarkCompanyId, "company-1"); assert.equal(ui.field("benchmarkCompany").value, "company-1"); assert.equal(ui.field("benchmarkCompany").disabled, true);
+  gate.resolve({ ok: true, status: 200, json: async () => value }); await refresh; await settle();
+  assert.equal(ui.field("benchmarkCompany").value, "company-1"); assert.equal(ui.field("benchmarkCompany").disabled, false); assert.match(ui.find("kma-dashboard-title")[0].textContent, /비교 업체 1 비교/);
+});
+
+test("chart containers are connected before the actual adapter mount call", async () => {
+  const connections = [], ui = mockUi({ request: dashboardRequest(dashboardPayload()), chartMount: async container => { connections.push(container.isConnected); } });
+  await ui.controller.open(); await settle(); assert.equal(connections.length, 2); assert.deepEqual(connections, [true, true]);
+});
+
+test("real pinned Data checkedPayload accepts every emitted chart config and rejects wrong schema", async () => {
+  const runtimeFile = path.join(__dirname, "../web/vendor/data-charts-1.2.1/data-analytics-plugin/1.2.1/charts/runtime.js");
+  const runtime = await import(`data:text/javascript;base64,${fs.readFileSync(runtimeFile).toString("base64")}`);
+  const ui = mockUi({ request: dashboardRequest(dashboardPayload(35, true)) }); await ui.controller.open(); await settle();
+  assert.equal(runtime.chartApiVersion, 3); assert.equal(typeof runtime.checkedPayload, "function");
+  for (const { config } of ui.chartCalls) assert.doesNotThrow(() => runtime.checkedPayload(clone(config)));
+  const bar = clone(ui.chartCalls.find(x => x.config.spec.type === "horizontalStackedBar").config);
+  assert.throws(() => runtime.checkedPayload({ ...bar, spec: { ...bar.spec, type: "HorizontalStackedBar" } }));
+  assert.throws(() => runtime.checkedPayload({ ...bar, spec: { ...bar.spec, colors: ["#70bd9a", "#b68ade"] } }));
+});
+
+test("supporting tables stay accessible in collapsed details while prior comparison remains visible", async () => {
+  const ui = mockUi(); await ui.controller.open(); await settle();
+  assert.equal(ui.find("kma-supporting-details").length, 5);
+  assert.equal(ui.find("kma-supporting-details").every(node => node.tagName === "DETAILS" && !node.open), true);
+  assert.match(text(ui.find("kma-supporting-details")[0]), /업체 동일가중 참고 평균|공급 가중/);
+  assert.equal(ui.find("kma-comparison")[0].parentNode.className, "kma-results");
+  assert.match(ui.text(), /출처와 채택·제외 근거|입력 근거 지문/);
 });
