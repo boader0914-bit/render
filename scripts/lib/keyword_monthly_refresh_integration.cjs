@@ -14,8 +14,8 @@ const keyword = v => typeof v === "string" && v === v.trim() && v.length > 0 && 
 const sha = b => crypto.createHash("sha256").update(b).digest("hex");
 async function readJson(file, max) { const r = await readBundleFile(file, max); try { return { ...r, value: JSON.parse(r.bytes) }; } catch { fail("KEYWORD_REFRESH_EVIDENCE_JSON"); } }
 function holdActive(value, day) {
-  if (!value) return false;
-  if (typeof value !== "object" || typeof value.holdThrough !== "string" || !/^20\d\d-\d\d-\d\d$/.test(value.holdThrough)) return true;
+  if (value == null) return false;
+  if (typeof value !== "object" || Array.isArray(value) || typeof value.holdThrough !== "string" || !/^20\d\d-\d\d-\d\d$/.test(value.holdThrough)) return true;
   const time = Date.parse(value.holdThrough + "T00:00:00Z");
   if (!Number.isFinite(time) || new Date(time).toISOString().slice(0, 10) !== value.holdThrough) return true;
   return value.holdThrough >= day;
