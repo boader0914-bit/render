@@ -15,11 +15,12 @@ test('customer dashboard assets load in dependency order and retain existing rea
   });
   const page=await read('/');assert.equal(page.status,200);
   const model=page.body.indexOf('/comparison-dashboard.js?v=');
+  const pair=page.body.indexOf('/comparison-company-pair.js?v=');
   const view=page.body.indexOf('/comparison-dashboard-view.js?v=');
   const workspace=page.body.indexOf('/comparison-view.js?v=');
-  assert.ok(model>0&&view>model&&workspace>view,'dashboard model and view must be loaded before the competition workspace');
+  assert.ok(model>0&&pair>model&&view>pair&&workspace>view,'dashboard and pair models must be loaded before the view and competition workspace');
   assert.match(page.body,/\/comparison-dashboard\.css\?v=/);
-  for(const asset of ['comparison-dashboard.js','comparison-dashboard-view.js','comparison-dashboard.css']){
+  for(const asset of ['comparison-dashboard.js','comparison-company-pair.js','comparison-dashboard-view.js','comparison-dashboard.css']){
     const result=await read('/'+asset);assert.equal(result.status,200,asset+' is served by the existing Insight static asset boundary');
   }
   const identity=JSON.parse((await read('/api/customer/v1/me')).body);
