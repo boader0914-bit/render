@@ -1,0 +1,179 @@
+{
+  "schemaVersion": 1,
+  "requirementsVersion": "2026-10-30.1",
+  "status": "draft_for_future_adapter",
+  "purpose": "데이터랩 키워드 월별 자료를 인사이트의 예약·가격·쿠폰 판단에 활용하기 위한 입력 요구사항",
+  "policy": {
+    "liveConnectionEnabled": false,
+    "automaticCollection": false,
+    "scheduleChanges": false,
+    "sourceMutation": false,
+    "automaticPricingOrCouponExecution": false
+  },
+  "sourceReview": {
+    "kind": "saved_original_copy",
+    "archiveDirectoryDate": "2026-10-22",
+    "keyword": "경남글램핑",
+    "primaryRunIds": ["gyeongnam_glamping_20260920_140022", "gyeongnam_glamping_20260921_140004", "gyeongnam_glamping_20260922_140041"],
+    "limitations": ["현재 운영 서버의 최신 자료를 조회한 결과가 아니다.", "원본 필드의 존재와 품질을 확인하며 최신 DB 검수값을 적용한 예약·매출 재계산은 수행하지 않는다."]
+  },
+  "resources": [
+    {
+      "id": "dataset_metadata",
+      "priority": "required",
+      "grain": "키워드 × 숙박월 × 관측마감시각 × 표본규칙 × 자료버전",
+      "fields": [
+        "datasetId", "schemaVersion", "sourceRevision", "keywordId", "keywordLabel", "requestedQuery", "executedQueries",
+        "searchMode", "industryTypes", "stayMonth", "stayStart", "stayEnd", "asOfAt", "timezone",
+        "rankMin", "rankMax", "rankType", "membershipMode", "membershipSeedRunId", "generatedAt",
+        "calculationVersion", "inventoryPolicyVersion", "holidayCalendarVersion", "sourceDigest"
+      ],
+      "rules": [
+        "timezone은 Asia/Seoul이며 stayEnd는 포함 종료일로 정의한다.",
+        "수집일·숙박일·계산일·발행일을 별도 필드로 유지한다.",
+        "요청 키워드와 실제 실행한 검색어를 함께 기록하고 이름 유사성으로 키워드를 합치지 않는다.",
+        "검색 순위 종류와 1~20위 포함 규칙을 명시한다. membershipSeedRunId는 고정 표본일 때만 사용한다.",
+        "미확인 메타데이터는 null 및 사유로 전달하며 파일명·파일 수정시각으로 관측시각을 확정하지 않는다."
+      ],
+      "uses": ["조건 일치 확인", "월별 결과 캐시 식별", "근거·계산 버전 추적"]
+    },
+    {
+      "id": "rank_membership",
+      "priority": "required",
+      "grain": "검색 회차 × 순위 종류 × 업체",
+      "fields": ["runId", "observedAt", "companyId", "placeId", "companyName", "actualRegionCode", "rank", "rankType", "included", "exclusionReason", "identityStatus", "companyCouponVisibilityStatus", "sourceRef"],
+      "rules": [
+        "광고·자연검색·지역검색 순위를 구분한다.",
+        "업체 고유번호는 데이터랩의 검증된 매핑으로 연결한다. 업체명만으로 합치지 않는다.",
+        "placeId만 있는 구형 자료에는 companyId를 임의 생성하지 않는다. 매핑 대기 상태를 유지한다.",
+        "업체 수준 쿠폰 노출과 상품별 쿠폰 노출은 별도 계층으로 전달한다.",
+        "순위 진입·이탈과 수집 실패를 구분한다. 목록 누락만으로 영업 종료나 예약 0을 판단하지 않는다.",
+        "키워드 소재권역과 실제 업체 주소지 시군구를 분리한다."
+      ],
+      "uses": ["상위 20개 표본 확인", "표본 구성 변화", "동일지역·타지역 비교 분리"]
+    },
+    {
+      "id": "company_stay_days",
+      "priority": "required",
+      "grain": "업체 × 숙박일 × 숙박/데이유즈 유형 × 관측마감시각",
+      "fields": [
+        "companyId", "stayDate", "productType", "selectedRunId", "selectedObservedAt", "observedAtPrecision", "observationLeadDays",
+        "capacityRooms", "capacityBasis", "capacityReviewStatus", "capacityRevision", "supply", "available",
+        "publicBookings", "otherChannelEstimatedBookings", "sharedDayUseExcluded", "unknownQuantity", "quantityStatus",
+        "publicRevenueKrw", "otherChannelEstimatedRevenueKrw", "knownRevenueSubtotalKrw", "unknownPricedQuantity", "revenueStatus",
+        "missingReasons", "sourceRefs", "recoveryEvidence"
+      ],
+      "rules": [
+        "숙박일 이후 관측을 과거 숙박일 실적으로 사용하지 않는다. 기준시각 이내 최신 유효 자료 한 건만 선택한다.",
+        "공개예약과 타채널 추정은 별도이며 합계는 추정 예약으로 표기한다.",
+        "DB 검수 객실수를 우선하고, 없으면 최대관측 추정 및 검수상태·근거 버전을 전달한다.",
+        "공유 데이유즈와 런치·디너 재사용 보정을 데이터랩의 계산 근거와 함께 받는다. 인사이트에서 중복 보정하지 않는다.",
+        "정상응답의 0과 오류·차단·미수집·가격 미확인을 구분한다.",
+        "수량 유효성과 가격 유효성을 분리하여 정상 수량과 확인된 금액 소계는 보존한다.",
+        "총매출이 미확정이면 null·사유를 유지한다. 확인된 금액 소계를 총매출로 표시하지 않는다."
+      ],
+      "uses": ["업체·날짜별 예약률", "월명과 표본의 공통 날짜 비교", "평일·금·토·일·연휴 구분"]
+    },
+    {
+      "id": "product_observations",
+      "priority": "needed_for_price_and_booking_flow",
+      "grain": "업체 × 상품 × 숙박일 × 실제 관측 회차",
+      "fields": [
+        "companyId", "placeId", "bookingBusinessId", "productId", "productName", "productType", "physicalRoomGroupId", "timeSlot",
+        "stayDate", "runId", "observedAt", "observedAtPrecision", "responseStatus", "responseReason",
+        "total", "available", "publicBookings", "inventoryConflict", "priceKrw", "priceStatus", "priceSourceDate",
+        "adults", "nights", "includedBenefits", "cancellationTerms", "couponVisibilityStatus", "couponNames", "sourceRef"
+      ],
+      "rules": [
+        "가격은 숙박 객실 상품의 판매 표시가격이다. 실제 결제액·쿠폰 사용 후 실수령으로 해석하지 않는다.",
+        "같은 상품명이라도 상품 ID와 구성·기준인원·박수·혜택·취소조건이 다르면 별도 비교한다.",
+        "관측값과 가격 복구·최대관측 수량 추정값의 출처를 분리한다.",
+        "원본에 시간대·공유군·상품조건이 없으면 미확인으로 전달한다. 명칭만으로 방 개수를 더하지 않는다.",
+        "공개 쿠폰 노출은 발급수·사용수·실제 할인부담을 의미하지 않는다."
+      ],
+      "uses": ["비교 가능한 상품 가격", "예약 선행 구간별 흐름", "상품 구성이 바뀐 날짜 제외"]
+    },
+    {
+      "id": "observation_changes",
+      "priority": "needed_for_booking_flow",
+      "grain": "동일 업체·상품·숙박일의 이전/이후 관측 쌍",
+      "fields": [
+        "companyId", "productId", "stayDate", "previousRunId", "currentRunId", "previousObservedAt", "currentObservedAt",
+        "previousObservationLeadDays", "currentObservationLeadDays", "observationGapDays", "publicBookingNetChange",
+        "estimatedBookingNetChange", "priceChangeKrw", "comparable", "incomparableReasons", "capacityRevisionChanged", "sourceRefs"
+      ],
+      "rules": [
+        "마이너스 변화도 유지한다. 관측 차이는 취소·재예약·채널재고 변경을 포함할 수 있어 신규 예약 건수가 아니다.",
+        "추정예약 변화와 공개예약 변화를 섞지 않는다.",
+        "관측 간격을 표시하며 관측 공백의 예약 접수시각을 임의 보간하지 않는다.",
+        "객실 기준·상품구성·계산버전이 바뀐 경우 직접 증감을 보류한다.",
+        "관측 이전에 이미 잡힌 예약과 관측범위 밖 예약 선행일은 복원했다고 표현하지 않는다."
+      ],
+      "uses": ["예약 증가가 관측된 구간", "임박 숙박일의 변화", "가격 변화와 예약 변화의 동시 관찰"]
+    },
+    {
+      "id": "monthly_summaries",
+      "priority": "required",
+      "grain": "명시한 표본 × 숙박월 또는 요일군 × 유형",
+      "fields": [
+        "companyIds", "eligibleCompanyIds", "excludedCompanyIds", "exclusionReasons", "coveredSupply", "sold", "publicBookings", "otherChannelEstimatedBookings",
+        "reservationRate", "rateDenominator", "expectedCompanyDays", "coveredCompanyDays", "missingCompanyDays", "coverageRate",
+        "knownRevenueSubtotalKrw", "unknownPricedQuantity", "revenueCoveredCompanyDays", "revenueCoverageRate", "missingStayDates",
+        "calendarDayGroups", "priceComparisonCoverage", "runIds", "sourceRevision", "calculationVersion"
+      ],
+      "rules": [
+        "예약률은 유효한 같은 표본의 예약수량 합계 / 공급수량 합계로 계산한다. 업체별 예약률의 단순 평균을 쓰지 않는다.",
+        "정상 수량 확보 날짜의 공급만 분모에 포함하고 rateDenominator=covered_supply로 표시한다.",
+        "월별 상품·날짜·회차 중복 합산을 금지한다. 요일·주간·월 합계가 동일한 선택 행으로 검산되어야 한다.",
+        "기대 업체·일 수는 표본 포함 기간과 선언한 달력으로 계산한다. 합집합 업체수 × 월 일수를 무조건 사용하지 않는다.",
+        "예약수량의 고객 표시 단위는 실이며 내부에는 숙박일 단위 누적이라는 의미를 유지한다.",
+        "키워드 표본 지표를 해당 지역 전체 숙박업의 전수 통계로 표현하지 않는다."
+      ],
+      "uses": ["월별 요약", "자료 확보율", "표본 대비 내 매장 차이", "동일 요일군의 흐름"]
+    },
+    {
+      "id": "quality_lineage",
+      "priority": "required",
+      "grain": "집계 자료 및 선택/제외 원본 행",
+      "fields": ["runId", "collectionQuality", "responseStatus", "parserVersion", "calculationVersion", "sourceRevision", "sourceRef", "sourceHash", "sourceRepresentation", "recoveryPolicy", "excludedReason", "originalObservedAt", "receivedAt", "calculatedAt"],
+      "rules": [
+        "HTTP200·파일 존재만으로 수량 정상 판정하지 않는다.",
+        "구형 자료에 개별 응답상태가 없으면 legacy_response_unverified로 남긴다. 누락된 상태를 정상으로 채우지 않는다.",
+        "참조가 여러 번 나와도 파일·상품·숙박일 기준 중복을 제거하고 근거 링크는 유지한다.",
+        "외부 JSON과 CSV 인라인의 원본 형태를 기록한다. 동일 업체·상세종류의 외부 본문이 있으면 우선 사용하고, 없을 때 인라인으로 보완한다. 상충하는 두 본문은 조용히 합산하지 않고 충돌 사유를 남긴다.",
+        "발행 리포트의 원본 버전은 고정한다. 복구·재계산은 새 revision으로 전달하고 기존 발행본을 덮어쓰지 않는다.",
+        "갱신 실패 시 이전 정상 자료를 보존하고 최신화 지연·실패 사유를 별도로 표시한다."
+      ],
+      "uses": ["정상/일부/미확인 구별", "근거 조회", "안전한 캐시 갱신", "과거 발행본 보존"]
+    }
+  ],
+  "membershipModes": [
+    {"id": "each_observation_top20", "label": "수집 회차별 상위 20개", "use": "키워드 노출 표본의 현재 흐름", "limitation": "업체 교체에 의한 구성효과가 포함된다."},
+    {"id": "fixed_cohort", "label": "선택 회차의 20개 업체 고정", "use": "같은 업체 집단의 기간 변화", "limitation": "순위 이탈 후 미수집된 업체는 공백으로 유지한다. 이탈을 예약 0으로 처리하지 않는다."},
+    {"id": "common_panel", "label": "두 비교기간의 공통 업체·숙박일", "use": "구성 변화를 분리한 비교", "limitation": "공통표본 크기·주소지·관측시차·같은 예약 선행구간을 함께 표시한다."}
+  ],
+  "cardDependencies": [
+    {"cardId": "leadtime-baseline", "dataLabResources": ["dataset_metadata", "rank_membership", "company_stay_days", "product_observations", "observation_changes", "monthly_summaries", "quality_lineage"], "ownerData": ["actual_booking_received_at"], "withoutOwnerData": "예약 증가가 관측된 구간만 분석. 실제 예약 리드타임은 산출 불가."},
+    {"cardId": "early-booking-coupon", "dataLabResources": ["company_stay_days", "product_observations", "observation_changes", "monthly_summaries", "quality_lineage"], "ownerData": ["coupon_conditions", "owner_funded_discount", "minimum_contribution"], "withoutOwnerData": "가격·예약 흐름을 참고할 날짜만 제시하고 할인율·적용 시점은 미정."},
+    {"cardId": "last-minute-coupon", "dataLabResources": ["company_stay_days", "product_observations", "observation_changes", "quality_lineage"], "ownerData": ["currently_sellable_inventory", "coupon_conditions", "cost_limits"], "withoutOwnerData": "저장 시점의 잔여 수량을 참고하며 현재 판매 가능 여부와 발급 조건은 확정하지 않음."},
+    {"cardId": "price-coupon-cost", "dataLabResources": ["product_observations", "company_stay_days", "quality_lineage"], "ownerData": ["actual_paid_amount", "refunds", "channel_fees", "coupon_funding", "variable_costs"], "withoutOwnerData": "공개 판매가격 비교만 가능. 실수령·쿠폰 이익은 산출 불가."},
+    {"cardId": "repeat-guest-coupon", "dataLabResources": ["dataset_metadata"], "ownerData": ["property_scoped_customer_history", "completed_stays", "coupon_issuance_and_redemption"], "withoutOwnerData": "재방문 대상 선정·재방문율·쿠폰 효과는 산출 불가."},
+    {"cardId": "coupon-retrospective", "dataLabResources": ["company_stay_days", "product_observations", "observation_changes", "monthly_summaries", "quality_lineage"], "ownerData": ["coupon_exposure", "coupon_issuance", "coupon_redemption", "actual_bookings", "cancellations", "net_receipts"], "withoutOwnerData": "관측 전후의 차이만 기술. 쿠폰의 추가 예약 효과로 단정하지 않음."}
+  ],
+  "acceptanceChecks": [
+    "requested_keyword_and_executed_queries_present",
+    "explicit_top20_membership_and_rank_type",
+    "canonical_identity_mapping_or_hold",
+    "stay_month_and_asof_kst_separated",
+    "latest_valid_company_staydate_type_no_double_sum",
+    "observation_history_preserved_for_flow",
+    "public_and_inferred_separated",
+    "capacity_and_dayuse_revision_traceable",
+    "valid_zero_distinct_from_missing_or_blocked",
+    "quantity_and_revenue_coverage_separate",
+    "summary_reconciles_to_selected_rows",
+    "product_price_conditions_or_comparison_hold",
+    "net_change_not_actual_booking_leadtime",
+    "revision_change_refreshes_without_overwriting_publications"
+  ]
+}
