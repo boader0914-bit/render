@@ -17,6 +17,8 @@
 
 source JSON은 기존 월별 엔진의 정규화 자료다. 필수 배열은 `companies`, `runs`, `observations`이며 `rankObservations`는 선택이다. 오류·누락·부분 응답 flag, 가격의 null, 재고·공유·공급 기준과 관측 시각을 보존한다. 고객·연락처·주소·계정·인증·원문 payload·KOSIS/context 자료는 이 입력에 포함하지 않는다.
 
+정규화 사본은 같은 버전의 `createMonthlyReportSources` 경로로 준비해야 한다. 이 경로의 canonical identity 검사, 회사별 현재 객실 기준 투영, 저장 원문 재계산의 같은 키 대체 순서를 유지한다. `inventory.productSnapshot.daily` 원시 행을 직접 덧붙이거나 발행본의 최신 선택 행만 복사한 자료를 완전한 정규화 이력으로 취급하지 않는다. 원시 부분 응답에는 이전 객실 기준이 남을 수 있고, 저장 원문 재계산에서만 생성되는 부분·무효 행도 있으므로 금액 소계와 대상 분모가 달라질 수 있다. 준비 단계의 원본·정규화·제외 계수와 실행/회사/기간 범위, 코드 버전 및 SHA를 별도 완전성 영수증으로 대조한다.
+
 검증된 `savedProductRecoveries: [{row, certificate}]`만 기존 엔진의 증명 규칙으로 재생할 수 있다. row digest가 다른 복구나 임의 품질 승격은 허용하지 않는다. 같은 시각 관측의 선택 순서와 복구 digest를 보존하기 위해 정규화 row를 임의로 다시 작성하지 않는다.
 
 `--provenance`에는 최대 64KiB의 작은 일반 JSON 파일을 지정한다. 허용 필드는 다음과 같다.
@@ -51,7 +53,7 @@ node scripts/build_keyword_monthly_projection.cjs `
 
 `--now`는 명시적 검증 기준 시각이며 생략하면 실행 시각이다. `--data-through`는 사본 자료의 확인된 마지막 시각이다. 입력의 관측·시도 시각보다 앞선 값은 거부한다. builder는 출력 경로가 source나 provenance를 포함하는 경우도 거부한다.
 
-CLI source 상한은 64MiB다. runtime index는 1MiB, keyword/month별 projection은 32MiB로 제한한다. 파일·부모 경로의 symlink와 경로 이탈을 검사하고, 일반파일의 hardlink·읽기 전후 identity/크기/시각 변경을 거부한다. index가 발표한 scope와 SHA·크기·원본 fingerprint를 확인하며 변경·오류를 정상 0으로 바꾸지 않는다.
+CLI source 상한은 64MiB다. runtime index는 1MiB, keyword/month별 저장 projection은 32MiB로 제한한다. 완전 정규화 자료가 32MiB를 넘으면 값을 버리지 않고 gzip으로 저장한다. 해제 크기는 64MiB 상한과 index의 정확한 `uncompressedBytes`를 함께 검사한다. 알 수 없는 인코딩·손상·크기 불일치는 검증 오류이며 기존 JSON 형식도 유지한다. 파일·부모 경로의 symlink와 경로 이탈을 검사하고, 일반파일의 hardlink·읽기 전후 identity/크기/시각 변경을 거부한다. index가 발표한 scope와 SHA·크기·원본 fingerprint를 확인하며 변경·오류를 정상 0으로 바꾸지 않는다.
 
 ## 기준일과 사본 범위
 
@@ -94,8 +96,16 @@ API는 관리자 인증과 GET만 허용한다. POST·갱신·재구축 경로�
 npm run test:keyword-monthly
 ```
 
-새 기능 테스트 5개(`analysis`, `http`, `projection_cli`, `analysis_ui`, `app_integration`)와 기존 `test_monthly_report_comparison.cjs`를 실행한다. CLI 검증은 원 source/provenance·조회 후 파생파일 불변, 기준일 제한, 기존 출력 거부, 경로·크기·링크·변경 검출을 포함한다. 기존 package scripts는 유지한다.
+기능 테스트(`analysis`, `http`, `projection_cli`, `analysis_ui`, `app_integration`), 압축 저장/읽기와 완전 사본 검수기의 반증 fixture, 기존 `test_monthly_report_comparison.cjs`를 실행한다. CLI 검증은 원 source/provenance·조회 후 파생파일 불변, 기준일 제한, 기존 출력 거부, 경로·크기·링크·변경 검출을 포함한다. 기존 package scripts는 유지한다.
 
 가공 사본 재생·로컬 UI 검수와 운영 관리자 화면 검수는 다른 결과다. selected-only 사본은 중간 관측 전체, 전체월 호출·실패 이력, 원본 행 전수 감사의 증거가 아니다. 이 기능의 검증 통과만으로 운영 배포·수집 변경·KOSIS 보류 해제를 수행하지 않는다.
 
-2026-10-30 실자료 v3 사본 검증에서는 정상 선택 관측의 수량·예상금액·충족률과 검증 가능한 전월 비교를 확인했다. 원발행의 부분 응답 전체 행을 재생할 캐시가 없어 부분 금액 소계에는 차이가 남으며, **원발행본 전체 재현 통과는 아니다(`legacyFullParity: false`)**. 이 한계를 정상 관측 핵심 지표 검증과 구분하고 운영 반영은 보류한다. 사본 검증 결과로 KOSIS 보류를 해제하지 않는다.
+최초 제한 사본 검증에서는 최신 선택 행과 일부 원시 부분 행만 사용해 부분 금액 소계가 원발행과 달랐다. 당시 `legacyFullParity: false`와 보류 증거는 수정하지 않고 보존했다.
+
+2026-10-30 2차 검수는 발행 코드 버전의 순수 source adapter와 prepare/project/saved-recalculation 경로를 새 물리 사본에서 재생했다. 가평 23업체·2,437관측, 경남 30업체·7,396관측의 두 숙박월 전체 정규화 사본을 사용했으며 최신 선택 행만 복사한 자료가 아니다. 가평의 누락 7개 키를 복원하고, 경남은 원시 snapshot의 26실 대신 저장된 capacity registry의 15실이 준비 단계를 거쳐 반영되도록 원래 경로를 유지했다. 부분 소계는 가평 숙박 27,305,000원·데이유즈 255,000원, 경남 숙박 53,716,000원으로 원발행과 일치했다.
+
+원발행 지문 대조는 요약·일별·canonical 업체별 소계·선택 관측 digest·부분 응답 근거·전월 비교의 6개 항목을 독립 추출 witness에 연결한다. 원 source 계수·관측 멀티셋·회사 고유번호 연결·명시적 신원 미확정 제외와 source SHA를 함께 확인한다. 같은 source에 대한 현 엔진 일치, 두 배 관측의 소계 불변, 최신 무효/실패 관측이 이전 정상값을 지우지 않는 반증은 별도 검사다. 두 배 실자료 입력은 메모리의 순수 엔진으로 검수하며 큰 중복 projection을 발행하지 않는다.
+
+달마다 경고·신원 미확정 계수가 달라 `source.monthlySourceMetadata[YYYY-MM]`의 `warnings`, `sourceDiagnostics`, `globalWarnings`, `globalDiagnostics`를 현재/전월에 각각 적용한다. 수량·시각·회차 품질을 수정하지 않는다. 이 월맵을 사용하는 입력은 실제 관측 키워드가 하나여야 하며, 서로 다른 키워드의 진단을 평탄화해 합치면 거부한다.
+
+완전성은 동결된 10/22 사본 내의 지정 키워드와 9·10월 정규화 관측에 한정한다. 전체 달 수집 완료·실제 결제 매출·모든 실패/미실행 회차·현재 운영 자료가 완전하다는 뜻이 아니다. 보유 사본의 독립 검수 결과와 화면의 기본 미확인/전체 이력 경고를 구분한다. 운영 배포·수집 일정·원본·이력·보호·KOSIS 보류는 변경하지 않았다.

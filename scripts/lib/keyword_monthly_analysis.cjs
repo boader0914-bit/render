@@ -6,17 +6,39 @@ const fs = require("node:fs/promises");
 const constants = require("node:fs").constants;
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { gzipSync, gunzipSync } = require("node:zlib");
 const { buildMonthlyReportSnapshot } = require("./monthly_reports.cjs");
 const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./monthly_report_comparison.cjs");
 const { recoveryRowDigest } = require("./saved_product_recovery.cjs");
 
 const VERSION = "keyword-monthly-v1";
-const LIMITS = Object.freeze({ indexBytes: 1024 * 1024, projectionBytes: 32 * 1024 * 1024,
+const LIMITS = Object.freeze({ indexBytes: 1024 * 1024, projectionBytes: 32 * 1024 * 1024, decodedProjectionBytes: 64 * 1024 * 1024,
   observations: 50000, rankObservations: 50000, companies: 1000, runs: 10000, scopes: 4096 });
 const DAY = 86400000;
 const SHA = /^[a-f0-9]{64}$/;
 const safeCode = value => /^[A-Z][A-Z0-9_]{0,99}$/.test(value || "") ? value : null;
 const digest = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
+// Match JSON.stringify's object insertion order without retaining a second
+// full UTF-8/UTF-16 source string during a bounded runtime integrity check.
+function jsonDigest(value) {
+  const hash = crypto.createHash("sha256");
+  function append(item) {
+    if (Array.isArray(item)) {
+      hash.update("[");
+      for (let index = 0; index < item.length; index++) { if (index) hash.update(","); const entry = item[index]; append(entry === undefined || typeof entry === "function" || typeof entry === "symbol" ? null : entry); }
+      hash.update("]");
+    } else if (item !== null && typeof item === "object") {
+      hash.update("{"); let count = 0;
+      for (const key of Object.keys(item)) {
+        const entry = item[key];
+        if (entry === undefined || typeof entry === "function" || typeof entry === "symbol") continue;
+        if (count++) hash.update(","); hash.update(JSON.stringify(key)); hash.update(":"); append(entry);
+      }
+      hash.update("}");
+    } else hash.update(JSON.stringify(item));
+  }
+  append(value); return hash.digest("hex");
+}
 const clone = value => JSON.parse(JSON.stringify(value));
 function fault(code, statusCode = 503) { return Object.assign(new Error(code), { code, statusCode }); }
 function plain(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
@@ -45,7 +67,37 @@ function boundedArray(source, key, limit) {
   return source[key];
 }
 const RECOVERY_KEYS = ["kind", "originalRunQuality", "companyId", "runId", "date", "productType", "collectedAt", "sourceDigest", "rowDigest", "receiptId"];
-function sourceRow(row) {
+const MONTH_METADATA_KEYS = ["warnings", "sourceDiagnostics", "globalWarnings", "globalDiagnostics"];
+function normalizeMonthlySourceMetadata(value) {
+  if (!plain(value) || !Object.keys(value).length || Object.keys(value).length > 1200
+    || Buffer.byteLength(JSON.stringify(value)) > 1024 * 1024) throw fault("KEYWORD_MONTHLY_INVALID_MONTH_METADATA");
+  const forbidden = /(?:token|secret|password|cookie|authorization|private|rawPayload|guest|customer|contact|address|account|kosis|context)/i;
+  const warnings = rows => {
+    if (!Array.isArray(rows) || rows.length > 100 || rows.some(item => typeof item !== "string" || item.length > 1000
+      || /[\u0000-\u001f\u007f]|[A-Za-z]:[\\/]|(?:https?|file):\/\/|\/(?:var|home|mnt|opt|sandbox|tmp|etc)\/|\b(?:password|authorization|cookie|token|secret)\s*[:=]/i.test(item)
+      || /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(item))) throw fault("KEYWORD_MONTHLY_UNSAFE_MONTH_METADATA");
+    return [...rows];
+  };
+  const diagnostics = values => {
+    if (!plain(values) || Object.keys(values).length > 100 || Object.entries(values).some(([key, item]) => !/^[A-Za-z][A-Za-z0-9_]{0,99}$/.test(key)
+      || forbidden.test(key) || typeof item !== "number" || !Number.isFinite(item) || item < 0)) throw fault("KEYWORD_MONTHLY_INVALID_MONTH_METADATA");
+    return { ...values };
+  };
+  return Object.fromEntries(Object.entries(value).map(([valueMonth, metadata]) => {
+    if (!month(valueMonth) || !plain(metadata) || Object.keys(metadata).length !== MONTH_METADATA_KEYS.length
+      || MONTH_METADATA_KEYS.some(key => !Object.hasOwn(metadata, key)) || Object.keys(metadata).some(key => !MONTH_METADATA_KEYS.includes(key))) throw fault("KEYWORD_MONTHLY_INVALID_MONTH_METADATA");
+    return [valueMonth, { warnings: warnings(metadata.warnings), sourceDiagnostics: diagnostics(metadata.sourceDiagnostics),
+      globalWarnings: warnings(metadata.globalWarnings), globalDiagnostics: diagnostics(metadata.globalDiagnostics) }];
+  }));
+}
+// Metadata changes with the requested stay month. Rows, run quality, original
+// clocks and the source object remain untouched; absent legacy maps are a no-op.
+function sourceForKeywordMonthlyRequest(source, request) {
+  if (!Object.hasOwn(source, "monthlySourceMetadata")) return source;
+  const metadata = normalizeMonthlySourceMetadata(source.monthlySourceMetadata);
+  return metadata[request.month] ? { ...source, ...metadata[request.month] } : source;
+}
+function sourceRow(row, ownedRows = false) {
   // Preserve the exact normalized row: the shared engine's deterministic tie
   // and recovery certificate both hash it. Silently dropping fields would
   // change which equal-time observation wins. Reject unsafe source copies.
@@ -57,19 +109,22 @@ function sourceRow(row) {
       visit(item, depth + 1);
     }
   };
-  const copied = clone(row); visit(copied);
+  // A runtime JSON parse has one private owner; validate that graph directly.
+  // Offline callers retain the clone boundary so their supplied copy stays
+  // independent. This avoids a second full row graph during large safe reads.
+  const copied = ownedRows ? row : clone(row); visit(copied);
   if (Buffer.byteLength(JSON.stringify(copied)) > 256 * 1024) throw fault("KEYWORD_MONTHLY_SIZE_LIMIT");
   return copied;
 }
-function normalizeSource(source) {
+function normalizeSource(source, ownedRows = false) {
   if (!plain(source)) throw fault("KEYWORD_MONTHLY_INVALID_SOURCE");
   const companies = boundedArray(source, "companies", LIMITS.companies).map(row => pick(row, COMPANY_KEYS));
   const runs = boundedArray(source, "runs", LIMITS.runs).map(row => ({ ...pick(row, RUN_KEYS), collectionQuality: { status: status(row) } }));
-  const observations = boundedArray(source, "observations", LIMITS.observations).map(sourceRow);
-  const rankObservations = boundedArray({ rankObservations: source.rankObservations || [] }, "rankObservations", LIMITS.rankObservations).map(sourceRow);
+  const observations = boundedArray(source, "observations", LIMITS.observations).map(row => sourceRow(row, ownedRows));
+  const rankObservations = boundedArray({ rankObservations: source.rankObservations || [] }, "rankObservations", LIMITS.rankObservations).map(row => sourceRow(row, ownedRows));
   const savedProductRecoveries = boundedArray({ savedProductRecoveries: source.savedProductRecoveries || [] }, "savedProductRecoveries", LIMITS.observations).map(entry => {
     if (!plain(entry.row) || !plain(entry.certificate)) throw fault("KEYWORD_MONTHLY_INVALID_RECOVERY");
-    const row = sourceRow(entry.row), certificate = pick(entry.certificate, RECOVERY_KEYS);
+    const row = sourceRow(entry.row, ownedRows), certificate = pick(entry.certificate, RECOVERY_KEYS);
     if (certificate.kind !== "saved_product_recovery_v1" || certificate.originalRunQuality !== "unknown" || certificate.companyId !== companyId(row)
       || certificate.runId !== String(row.runId || "") || certificate.date !== (row.stayDate || row.date) || certificate.productType !== row.productType
       || certificate.collectedAt !== row.collectedAt || ![certificate.sourceDigest, certificate.rowDigest, certificate.receiptId].every(value => SHA.test(value || ""))
@@ -84,7 +139,9 @@ function normalizeSource(source) {
   const specialDays = source.specialDays === undefined ? undefined : { years: (Array.isArray(source.specialDays?.years) ? source.specialDays.years : []).slice(0, 20).map(year => ({
     year: year.year, status: year.status === "ready" ? "ready" : "missing", updatedAt: iso(year.updatedAt) ? year.updatedAt : "",
     holidays: (Array.isArray(year.holidays) ? year.holidays : []).filter(item => date(item.date) && text(item.name, 100)).slice(0, 100).map(item => ({ date: item.date, name: item.name })) })) };
-  return { companies, runs, observations, rankObservations, savedProductRecoveries, warnings, sourceDiagnostics, ...(specialDays ? { specialDays } : {}) };
+  const monthlySourceMetadata = Object.hasOwn(source, "monthlySourceMetadata") ? normalizeMonthlySourceMetadata(source.monthlySourceMetadata) : undefined;
+  return { companies, runs, observations, rankObservations, savedProductRecoveries, warnings, sourceDiagnostics, ...(specialDays ? { specialDays } : {}),
+    ...(monthlySourceMetadata ? { monthlySourceMetadata } : {}) };
 }
 
 function statSame(a, b) { return ["dev", "ino", "size", "mtimeMs", "ctimeMs", "nlink"].every(key => a[key] === b[key]); }
@@ -102,7 +159,7 @@ async function checkPath(absolute, directory) {
   if (!samePath(await fs.realpath(resolved), resolved)) throw fault("KEYWORD_MONTHLY_UNSAFE_PATH");
   return stat;
 }
-async function readJson(file, maximum) {
+async function readJson(file, maximum, encoding = null, decodedSize = null) {
   const before = await checkPath(file, false);
   if (before.size <= 0 || before.size > maximum) throw fault("KEYWORD_MONTHLY_SIZE_LIMIT");
   const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
@@ -113,7 +170,13 @@ async function readJson(file, maximum) {
     let offset = 0;
     while (offset < bytes.length) { const result = await handle.read(bytes, offset, bytes.length - offset, offset); if (!result.bytesRead) break; offset += result.bytesRead; }
     if (offset !== bytes.length || !statSame(opened, await handle.stat()) || !statSame(opened, await checkPath(file, false))) throw fault("KEYWORD_MONTHLY_EVIDENCE_CHANGED");
-    let value; try { value = JSON.parse(bytes.toString("utf8")); } catch { throw fault("KEYWORD_MONTHLY_INVALID_JSON"); }
+    let decoded = bytes;
+    if (encoding === "gzip") {
+      try { decoded = gunzipSync(bytes, { maxOutputLength: LIMITS.decodedProjectionBytes }); }
+      catch { throw fault("KEYWORD_MONTHLY_INVALID_COMPRESSED_PROJECTION"); }
+      if (decoded.length !== decodedSize) throw fault("KEYWORD_MONTHLY_DECODED_SIZE_MISMATCH");
+    }
+    let value; try { value = JSON.parse(decoded.toString("utf8")); } catch { throw fault("KEYWORD_MONTHLY_INVALID_JSON"); }
     return { value, sha256: digest(bytes), bytes: bytes.length, stamp: opened };
   } finally { await handle.close(); }
 }
@@ -180,6 +243,7 @@ async function buildKeywordMonthlyProjection({ source, sourceFingerprint, source
     if (membership.rankMonth) { entry.stay.add(membership.rankMonth); entry.ranks.add(membership.rankMonth); }
     descriptors.set(entry.keyword, entry);
   }
+  if (normalized.monthlySourceMetadata && [...descriptors.values()].filter(entry => entry.stay.size).length > 1) throw fault("KEYWORD_MONTHLY_AMBIGUOUS_METADATA_SCOPE");
   const publications = [];
   const keywords = [...descriptors.values()].filter(entry => entry.stay.size).sort((a, b) => a.keyword.localeCompare(b.keyword)).map(entry => {
     if (provenance.observationScope === "selected_only" && [...entry.stay].some(value => !date(provenance.selectionCutoffs[value]))) throw fault("KEYWORD_MONTHLY_SELECTION_CUTOFF_REQUIRED");
@@ -188,6 +252,7 @@ async function buildKeywordMonthlyProjection({ source, sourceFingerprint, source
     const latest = attempt(ordered.at(-1));
     const lastSuccessful = attempt(ordered.filter(run => ["complete", "reused", "partial"].includes(status(run))).at(-1));
     const scopes = [...entry.stay].sort().map(value => {
+      if (normalized.monthlySourceMetadata && !Object.hasOwn(normalized.monthlySourceMetadata, value)) throw fault("KEYWORD_MONTHLY_MONTH_METADATA_UNAVAILABLE");
       const months = new Set([value, priorMonth(value)]);
       const keep = row => {
         const run = runMap.get(String(row.runId || ""));
@@ -202,14 +267,20 @@ async function buildKeywordMonthlyProjection({ source, sourceFingerprint, source
       const compact = { companies: normalized.companies.filter(row => ids.has(companyId(row))), runs: normalized.runs.filter(row => used.has(runId(row))),
         observations, rankObservations, savedProductRecoveries, warnings: normalized.warnings,
         sourceDiagnostics: Object.fromEntries(Object.entries(normalized.sourceDiagnostics).filter(([key]) => !["runInventoryComplete", "intermediateObservationsComplete"].includes(key))),
-        ...(normalized.specialDays ? { specialDays: normalized.specialDays } : {}) };
+        ...(normalized.specialDays ? { specialDays: normalized.specialDays } : {}),
+        ...(normalized.monthlySourceMetadata ? { monthlySourceMetadata: Object.fromEntries([...months].filter(valueMonth => Object.hasOwn(normalized.monthlySourceMetadata, valueMonth))
+          .map(valueMonth => [valueMonth, normalized.monthlySourceMetadata[valueMonth]])) } : {}) };
       const scope = scopeKey(entry.keyword, value);
       const envelope = { schemaVersion: 1, calculationVersion: VERSION, scopeKey: scope, keyword: entry.keyword, month: value,
         sourceFingerprint, provenance, source: compact, sourceDigest: digest(JSON.stringify(compact)) };
-      const bytes = Buffer.from(JSON.stringify(envelope));
+      const decoded = Buffer.from(JSON.stringify(envelope));
+      if (decoded.length > LIMITS.decodedProjectionBytes) throw fault("KEYWORD_MONTHLY_SIZE_LIMIT");
+      const compressed = decoded.length > LIMITS.projectionBytes;
+      const bytes = compressed ? gzipSync(decoded, { level: 6 }) : decoded;
       if (bytes.length > LIMITS.projectionBytes) throw fault("KEYWORD_MONTHLY_SIZE_LIMIT");
-      publications.push({ name: `${scope}.json`, bytes });
-      return { month: value, scopeKey: scope, sha256: digest(bytes), bytes: bytes.length };
+      publications.push({ name: `${scope}.json${compressed ? ".gz" : ""}`, bytes });
+      return { month: value, scopeKey: scope, sha256: digest(bytes), bytes: bytes.length,
+        ...(compressed ? { encoding: "gzip", uncompressedBytes: decoded.length } : {}) };
     });
     return { keyword: entry.keyword, stayMonths: [...entry.stay].sort(), inventoryStayMonths: [...entry.inventory].sort(), rankMonths: [...entry.ranks].sort(),
       collectionMonths: [...new Set(keywordRuns.filter(run => iso(run.collectedAt) && run.collectedAtSource !== "filesystem").map(run => kstDay(run.collectedAt).slice(0, 7)))].sort(),
@@ -270,8 +341,10 @@ function validateIndex(value) {
     if (activityMonths.size !== item.collectionMonths.length) throw fault("KEYWORD_MONTHLY_INVALID_INDEX");
     seen.add(item.keyword); const months = new Set();
     for (const scope of item.scopes) {
-      if (!exact(scope, ["month", "scopeKey", "sha256", "bytes"]) || !month(scope.month) || months.has(scope.month) || !item.stayMonths.includes(scope.month) || scope.scopeKey !== scopeKey(item.keyword, scope.month)
-        || !SHA.test(scope.sha256 || "") || !Number.isSafeInteger(scope.bytes) || scope.bytes < 1 || scope.bytes > LIMITS.projectionBytes) throw fault("KEYWORD_MONTHLY_INVALID_INDEX");
+      if (!exact(scope, ["month", "scopeKey", "sha256", "bytes", "encoding", "uncompressedBytes"]) || !month(scope.month) || months.has(scope.month) || !item.stayMonths.includes(scope.month) || scope.scopeKey !== scopeKey(item.keyword, scope.month)
+        || !SHA.test(scope.sha256 || "") || !Number.isSafeInteger(scope.bytes) || scope.bytes < 1 || scope.bytes > LIMITS.projectionBytes
+        || (scope.encoding !== undefined ? scope.encoding !== "gzip" || !Number.isSafeInteger(scope.uncompressedBytes) || scope.uncompressedBytes < 1 || scope.uncompressedBytes > LIMITS.decodedProjectionBytes
+          : scope.uncompressedBytes !== undefined)) throw fault("KEYWORD_MONTHLY_INVALID_INDEX");
       months.add(scope.month); count += 1;
     }
     if (months.size !== item.stayMonths.length) throw fault("KEYWORD_MONTHLY_INVALID_INDEX");
@@ -365,20 +438,23 @@ function createKeywordMonthlyAnalysis({ projectionDir, now = () => Date.now(), s
           latestAttempt: item.latestAttempt, lastSuccessfulAttempt: null, provenance: { ...value.provenance, indexSha256: before.sha256 }, diagnostics: ["CUTOFF_NOT_RECONSTRUCTIBLE"] };
       }
       let projection;
-      try { projection = await readJson(path.join(directory, "projections", `${scope.scopeKey}.json`), LIMITS.projectionBytes); }
+      const projectionFile = path.join(directory, "projections", `${scope.scopeKey}.json${scope.encoding === "gzip" ? ".gz" : ""}`);
+      try { projection = await readJson(projectionFile, LIMITS.projectionBytes, scope.encoding, scope.uncompressedBytes); }
       catch (error) { if (error.code === "ENOENT") throw fault("KEYWORD_MONTHLY_DECLARED_PROJECTION_MISSING"); throw error; }
       const envelope = projection.value;
       if (projection.sha256 !== scope.sha256 || projection.bytes !== scope.bytes || !plain(envelope) || envelope.schemaVersion !== 1
         || envelope.calculationVersion !== VERSION || envelope.scopeKey !== scope.scopeKey || envelope.keyword !== request.keyword || envelope.month !== request.month
         || envelope.sourceFingerprint !== value.sourceFingerprint || JSON.stringify(envelope.provenance) !== JSON.stringify(value.provenance)
-        || digest(JSON.stringify(envelope.source)) !== envelope.sourceDigest) throw fault("KEYWORD_MONTHLY_PROJECTION_MISMATCH");
-      const source = normalizeSource(envelope.source);
-      if (JSON.stringify(source) !== JSON.stringify(envelope.source)) throw fault("KEYWORD_MONTHLY_UNEXPECTED_PROJECTION_FIELDS");
+        || jsonDigest(envelope.source) !== envelope.sourceDigest) throw fault("KEYWORD_MONTHLY_PROJECTION_MISMATCH");
+      const source = normalizeSource(envelope.source, true);
+      // The stored source digest was verified above. Compare the normalized
+      // digest instead of retaining two complete JSON strings at once.
+      if (jsonDigest(source) !== envelope.sourceDigest) throw fault("KEYWORD_MONTHLY_UNEXPECTED_PROJECTION_FIELDS");
       const at = nowIso(now), engineRequest = { type: "keyword", targetId: request.keyword, month: request.month, cutoffDate: request.cutoffDate };
-      const snapshot = buildMonthlyReportSnapshot(engineRequest, source, at);
+      const snapshot = buildMonthlyReportSnapshot(engineRequest, sourceForKeywordMonthlyRequest(source, engineRequest), at);
       const previousRequest = previousMonthlyReportRequest(engineRequest);
       const previousCutoffSupported = value.provenance.observationScope !== "selected_only" || previousRequest.cutoffDate === value.provenance.selectionCutoffs[previousRequest.month];
-      const previous = previousCutoffSupported ? buildMonthlyReportSnapshot(previousRequest, source, at) : null;
+      const previous = previousCutoffSupported ? buildMonthlyReportSnapshot(previousRequest, sourceForKeywordMonthlyRequest(source, previousRequest), at) : null;
       snapshot.comparisonByProduct = Object.fromEntries(["lodging", "dayuse"].map(productType => [productType,
         previous && snapshot.sources.observations.some(row => row.productType === productType) && previous.sources.observations.some(row => row.productType === productType)
           ? buildMonthlyComparison(snapshot, previous, { productType }) : null]));
@@ -394,7 +470,7 @@ function createKeywordMonthlyAnalysis({ projectionDir, now = () => Date.now(), s
       if (item.latestAttempt && !["complete", "reused", "partial"].includes(item.latestAttempt.status)) diagnostics.push("LATEST_ATTEMPT_FAILED_LAST_VALID_RETAINED");
       const after = await index();
       if (after.sha256 !== before.sha256) throw fault("KEYWORD_MONTHLY_EVIDENCE_CHANGED");
-      if (!statSame(projection.stamp, await checkPath(path.join(directory, "projections", `${scope.scopeKey}.json`), false))) throw fault("KEYWORD_MONTHLY_EVIDENCE_CHANGED");
+      if (!statSame(projection.stamp, await checkPath(projectionFile, false))) throw fault("KEYWORD_MONTHLY_EVIDENCE_CHANGED");
       return { ...basic(), status: diagnostics.some(code => ["PROJECTION_EXPIRED", "CUTOFF_AFTER_DATA_THROUGH"].includes(code)) ? "stale" : "available", request, snapshot: publicSnapshot(snapshot),
         activity: item.activity, latestAttempt: item.latestAttempt, lastSuccessfulAttempt,
         provenance: { ...value.provenance, indexSha256: before.sha256, projectionSha256: projection.sha256,
@@ -404,4 +480,4 @@ function createKeywordMonthlyAnalysis({ projectionDir, now = () => Date.now(), s
   return Object.freeze({ options, analyze });
 }
 
-module.exports = { createKeywordMonthlyAnalysis, buildKeywordMonthlyProjection, KEYWORD_MONTHLY_LIMITS: LIMITS };
+module.exports = { createKeywordMonthlyAnalysis, buildKeywordMonthlyProjection, sourceForKeywordMonthlyRequest, KEYWORD_MONTHLY_LIMITS: LIMITS };

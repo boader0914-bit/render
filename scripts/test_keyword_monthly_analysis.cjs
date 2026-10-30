@@ -5,7 +5,7 @@ const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { buildKeywordMonthlyProjection, createKeywordMonthlyAnalysis } = require("./lib/keyword_monthly_analysis.cjs");
+const { buildKeywordMonthlyProjection, createKeywordMonthlyAnalysis, sourceForKeywordMonthlyRequest } = require("./lib/keyword_monthly_analysis.cjs");
 const { buildMonthlyReportSnapshot } = require("./lib/monthly_reports.cjs");
 const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./lib/monthly_report_comparison.cjs");
 const { recoveryRowDigest } = require("./lib/saved_product_recovery.cjs");
@@ -344,4 +344,97 @@ test("selected-only copies replay only declared cutoff per month, including refe
   const unsupportedComparison = await other.service.analyze({ keyword: KEYWORD, month: "2026-10" });
   assert.equal(unsupportedComparison.snapshot.comparison, null); assert.ok(unsupportedComparison.diagnostics.includes("PREVIOUS_CUTOFF_NOT_RECONSTRUCTIBLE"));
   await assert.rejects(buildKeywordMonthlyProjection({ source, sourceFingerprint: "a".repeat(64), sourceProvenance: { observationScope: "selected_only", selectionCutoffs: { "2026-10": "2026-10-22" } }, outputDir: path.join(root, "no-prior-reference"), now: () => NOW }), error => error.code === "KEYWORD_MONTHLY_SELECTION_CUTOFF_REQUIRED");
+});
+
+function monthMetadata(warning, count, globalCount) {
+  return { warnings: [warning], sourceDiagnostics: { unmatchedCompanyRows: count }, globalWarnings: [`전체 참고 ${warning}`], globalDiagnostics: { malformedHistoryLines: globalCount } };
+}
+function monthlyMetadataFixture() {
+  const source = JSON.parse(JSON.stringify(sourceFixture()).replace(/2026-09/g, "2026-10").replace(/2026-08/g, "2026-09"));
+  source.monthlySourceMetadata = { "2026-09": monthMetadata("9월 범위 경고", 516, 3), "2026-10": monthMetadata("10월 범위 경고", 980, 4),
+    "2026-11": monthMetadata("범위 밖 경고", 999, 5) };
+  return source;
+}
+
+test("monthly metadata keeps current and previous diagnostics/warnings separate without changing quantities or source rows", async t => {
+  const source = monthlyMetadataFixture(), before = JSON.stringify(source);
+  const { service, outputDir } = await setup(t, source);
+  const request = { type: "keyword", targetId: KEYWORD, month: "2026-10", cutoffDate: "2026-10-15" };
+  const current = sourceForKeywordMonthlyRequest(source, request), priorRequest = previousMonthlyReportRequest(request), prior = sourceForKeywordMonthlyRequest(source, priorRequest);
+  assert.strictEqual(current.observations, source.observations); assert.strictEqual(prior.observations, source.observations);
+  assert.strictEqual(current.runs, source.runs); assert.strictEqual(prior.runs, source.runs);
+  assert.equal(current.sourceDiagnostics.unmatchedCompanyRows, 980); assert.equal(prior.sourceDiagnostics.unmatchedCompanyRows, 516);
+  const result = await service.analyze({ keyword: KEYWORD, month: request.month, cutoffDate: request.cutoffDate });
+  assert.equal(result.status, "available");
+  assert.equal(result.snapshot.quality.sourceDiagnostics.unmatchedCompanyRows, 980);
+  assert.ok(result.snapshot.quality.warnings.includes("10월 범위 경고")); assert.ok(!result.snapshot.quality.warnings.includes("9월 범위 경고"));
+  assert.deepEqual(result.snapshot.quality.globalWarnings, ["전체 참고 10월 범위 경고"]);
+  assert.equal(result.snapshot.quality.globalDiagnostics.malformedHistoryLines, 4);
+  const previous = result.snapshot.comparison.previousQuality;
+  assert.equal(previous.sourceDiagnostics.unmatchedCompanyRows, 516);
+  assert.ok(previous.warnings.includes("9월 범위 경고")); assert.ok(!previous.warnings.includes("10월 범위 경고"));
+  assert.deepEqual(previous.globalWarnings, ["전체 참고 9월 범위 경고"]); assert.equal(previous.globalDiagnostics.malformedHistoryLines, 3);
+  const legacy = { ...source }; delete legacy.monthlySourceMetadata;
+  const pureLegacy = buildMonthlyReportSnapshot(request, legacy, NOW);
+  assert.deepEqual(result.snapshot.summary, pureLegacy.summary); assert.deepEqual(result.snapshot.daily, pureLegacy.daily);
+  assert.equal(result.snapshot.sources.digest, pureLegacy.sources.digest);
+  const projectionBefore = await tree(outputDir), originals = { writeFile: fs.writeFile, mkdir: fs.mkdir, utimes: fs.utimes };
+  try {
+    for (const key of Object.keys(originals)) fs[key] = async () => { throw Error(`Unexpected runtime ${key}`); };
+    assert.deepEqual(await service.analyze({ keyword: KEYWORD, month: request.month, cutoffDate: request.cutoffDate }), result);
+  } finally { Object.assign(fs, originals); }
+  assert.deepEqual(await tree(outputDir), projectionBefore); assert.equal(JSON.stringify(source), before);
+  const index = JSON.parse(await fs.readFile(path.join(outputDir, "index.json"), "utf8"));
+  const scope = index.keywords[0].scopes.find(row => row.month === "2026-10");
+  const projection = JSON.parse(await fs.readFile(path.join(outputDir, "projections", `${scope.scopeKey}.json`), "utf8"));
+  assert.deepEqual(Object.keys(projection.source.monthlySourceMetadata), ["2026-10", "2026-09"]);
+});
+
+test("legacy metadata-absent source is a byte-preserving no-op and raw observation duplication does not alter monthly metadata", async t => {
+  const legacy = sourceFixture(), legacyBytes = JSON.stringify(legacy);
+  assert.strictEqual(sourceForKeywordMonthlyRequest(legacy, { month: "2026-09" }), legacy);
+  assert.equal(JSON.stringify(legacy), legacyBytes);
+  const source = monthlyMetadataFixture(), doubled = { ...source, observations: [...source.observations, ...source.observations] };
+  const normal = await setup(t, source), duplicate = await setup(t, doubled);
+  const query = { keyword: KEYWORD, month: "2026-10", cutoffDate: "2026-10-15" };
+  const a = await normal.service.analyze(query), b = await duplicate.service.analyze(query);
+  assert.deepEqual(a.snapshot.summary, b.snapshot.summary); assert.deepEqual(a.snapshot.daily, b.snapshot.daily);
+  assert.equal(a.snapshot.sources.digest, b.snapshot.sources.digest);
+  assert.deepEqual(a.snapshot.quality.sourceDiagnostics, b.snapshot.quality.sourceDiagnostics);
+  assert.deepEqual(a.snapshot.quality.globalDiagnostics, b.snapshot.quality.globalDiagnostics);
+  assert.deepEqual(a.snapshot.comparison.previousQuality.sourceDiagnostics, b.snapshot.comparison.previousQuality.sourceDiagnostics);
+  assert.deepEqual(a.snapshot.comparison.previousQuality.globalWarnings, b.snapshot.comparison.previousQuality.globalWarnings);
+});
+
+test("monthly metadata rejects malformed, unbounded, private or missing observed-month values before publication", async t => {
+  const cases = [null, [], {}, { "2026-13": monthMetadata("경고", 1, 0) },
+    { "2026-09": { ...monthMetadata("경고", 1, 0), address: "disallowed" } },
+    { "2026-09": { ...monthMetadata("경고", 1, 0), sourceDiagnostics: { unmatchedCompanyRows: "516" } } },
+    { "2026-09": { ...monthMetadata("경고", 1, 0), globalDiagnostics: { malformedHistoryLines: -1 } } },
+    { "2026-09": { ...monthMetadata("경고", 1, 0), sourceDiagnostics: { privateToken: 1 } } },
+    { "2026-09": { ...monthMetadata("경고", 1, 0), warnings: ["/var/data/private"] } },
+    { "2026-09": { ...monthMetadata("경고", 1, 0), globalWarnings: ["x".repeat(1001)] } }];
+  const { root } = await setup(t);
+  for (let i = 0; i < cases.length; i++) {
+    const source = sourceFixture(); source.monthlySourceMetadata = cases[i]; const outputDir = path.join(root, `invalid-month-${i}`);
+    await assert.rejects(buildKeywordMonthlyProjection({ source, sourceFingerprint: hash(JSON.stringify(source)), outputDir, now: () => NOW }), error => /^KEYWORD_MONTHLY_(?:INVALID|UNSAFE)_MONTH_METADATA$/.test(error.code));
+    await assert.rejects(fs.stat(outputDir), error => error.code === "ENOENT");
+  }
+  const source = monthlyMetadataFixture(); delete source.monthlySourceMetadata["2026-09"];
+  await assert.rejects(buildKeywordMonthlyProjection({ source, sourceFingerprint: hash(JSON.stringify(source)), outputDir: path.join(root, "missing-month"), now: () => NOW }), error => error.code === "KEYWORD_MONTHLY_MONTH_METADATA_UNAVAILABLE");
+});
+
+test("monthly metadata rejects multiple observed keyword descriptors but allows unrelated run metadata and legacy merged sources", async t => {
+  const source = monthlyMetadataFixture();
+  source.runs.push({ id: "other-keyword", keyword: "경남글램핑", collectedAt: "2026-10-10T01:00:00Z", collectionQuality: "complete" });
+  const { root, service } = await setup(t, source);
+  assert.deepEqual((await service.options()).keywords.map(row => row.keyword), [KEYWORD]);
+  const second = row("other-keyword", "2026-10-20", "2026-10-10T01:00:00Z", { keyword: "경남글램핑" });
+  const multiple = { ...source, observations: [...source.observations, second] };
+  await assert.rejects(buildKeywordMonthlyProjection({ source: multiple, sourceFingerprint: hash(JSON.stringify(multiple)), outputDir: path.join(root, "ambiguous"), now: () => NOW }), error => error.code === "KEYWORD_MONTHLY_AMBIGUOUS_METADATA_SCOPE");
+  const ranked = { ...source, rankObservations: [...source.rankObservations, { companyId: "a", runId: "other-keyword", keyword: "경남글램핑", rank: 1, collectedAt: "2026-10-10T01:00:00Z" }] };
+  await assert.rejects(buildKeywordMonthlyProjection({ source: ranked, sourceFingerprint: hash(JSON.stringify(ranked)), outputDir: path.join(root, "ambiguous-rank"), now: () => NOW }), error => error.code === "KEYWORD_MONTHLY_AMBIGUOUS_METADATA_SCOPE");
+  delete multiple.monthlySourceMetadata;
+  const merged = await setup(t, multiple);
+  assert.equal((await merged.service.options()).keywords.length, 2);
 });

@@ -73,7 +73,7 @@ async function projectionManifest(directory) {
   if (JSON.stringify(top) !== JSON.stringify(["index.json", "projections"])) fail("KEYWORD_MONTHLY_PREVIEW_PROJECTION_LAYOUT");
   const projections = path.join(directory, "projections"); await safePath(projections, true);
   const names = (await fsp.readdir(projections)).sort();
-  if (names.length + 1 > MAX_FILES || names.some(name => !/^[a-f0-9]{64}\.json$/.test(name))) fail("KEYWORD_MONTHLY_PREVIEW_PROJECTION_LAYOUT");
+  if (names.length + 1 > MAX_FILES || names.some(name => !/^[a-f0-9]{64}\.json(?:\.gz)?$/.test(name))) fail("KEYWORD_MONTHLY_PREVIEW_PROJECTION_LAYOUT");
   const files = []; let totalBytes = 0, indexBytes;
   for (const name of ["index.json", ...names.map(value => `projections/${value}`)]) {
     const bytes = await readBounded(path.join(directory, ...name.split("/")), name === "index.json" ? 1024 * 1024 : MAX_FILE_BYTES);
