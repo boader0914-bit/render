@@ -18,7 +18,22 @@
   function dashboardView(){return typeof window!=='undefined'?window.InsightComparisonDashboardView:typeof require==='function'?require('./comparison-dashboard-view.js'):null;}
   let dashboardState=null;
   const dashboardStorageKey='insight:competition-dashboard:v1';
+  let companyDetailState=null;
+  const companyDetailStorageKey='insight:comparison-company:v1';
   function dashboardContext(s){return JSON.stringify([operatingScope(),active?.store.requestToken().partition,s.ownCompanyId,s.comparisonIds.slice().sort(),s.stayStart,s.stayEnd,s.asOfDate]);}
+  function detailCompanyFor(s,model){
+    const allowed=new Set(model.companies.map(c=>c.companyId)),fallback=allowed.has(s.ownCompanyId)?s.ownCompanyId:null;
+    if(!active)return fallback;
+    const key=dashboardContext(s);
+    if(companyDetailState?.key===key&&allowed.has(companyDetailState.companyId))return companyDetailState.companyId;
+    let companyId=fallback;
+    try{const saved=JSON.parse(sessionStorage.getItem(companyDetailStorageKey)||'null');if(saved?.key===key&&allowed.has(saved.companyId))companyId=saved.companyId;}catch{/* Selection preferences cannot block saved evidence. */}
+    companyDetailState={key,companyId};return companyId;
+  }
+  function selectDetailCompany(s,companyId){
+    companyDetailState={key:dashboardContext(s),companyId};
+    try{sessionStorage.setItem(companyDetailStorageKey,JSON.stringify(companyDetailState));}catch{/* The selected detail still works without storage. */}
+  }
   function filtersFor(s){
     const defaults={start:s.stayStart,end:s.stayEnd,dayFilter:'all'};
     if(!active)return defaults;
@@ -218,8 +233,8 @@
     const model=dashboardModel(r,s,catalog),dashboard=dashboardView();
     if(model&&dashboard){
       if(!model.contextValid)return dashboard.render(model);
-      const filterToken=JSON.stringify(filtersFor(s));
-      return `<div class="comparison-dashboard" data-comparison-dashboard>${dashboard.summary(model)}${dashboard.judgments(model)}${dashboard.graphs(model)}<section class="comparison-dashboard-details" aria-label="상세 근거"><div class="comparison-section-title"><span class="dashboard-kicker">05 · 상세 근거</span><h2>상세 근거</h2><p class="muted">선택한 업체의 확보일·공통 관측 조건과 원본 30일 자료를 확인합니다.</p></div><details class="card" data-dashboard-detail="evidence"><summary>업체별 자료 확보·비교 제외 사유 <span aria-hidden="true">+</span></summary>${readiness(r,s)}${summaryGroups(own,others,comparisons,evidenceModel(r,s))}${pairTable(r,s)}${partial?sourceIssues(r,s):''}</details><details class="card" data-dashboard-detail="operating"><summary>날짜별 운영 검토·쿠폰 계산 <span aria-hidden="true">+</span></summary>${operatingView()?.render(r,s,catalog,{scope:operatingScope()+filterToken,displayDates:model.dates,displayPeriod:model.period,displayComparisonActionable:model.quality?.actionable,displayHoldReason:model.judgments?.[0]?.reason})||''}</details><details class="card" data-dashboard-detail="additional"><summary>상품·예약수량·지역 자료 <span aria-hidden="true">+</span></summary><div class="comparison-view-tabs" role="tablist" aria-label="경쟁 비교 보기">${[['flow','예약 흐름'],['products','가격·상품'],['regions','지역 배경']].map(([id,name])=>`<button type="button" role="tab" data-comparison-view="${id}" aria-selected="${s.selectedView===id}" aria-controls="comparison-detail">${name}</button>`).join('')}</div>${s.selectedView==='flow'&&others.length?`<label class="comparison-focus"><span>그래프 비교업체</span><select data-comparison-focus aria-label="그래프 비교업체">${others.map(c=>`<option value="${esc(c.companyId)}" ${focus===c.companyId?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>`:''}<div id="comparison-detail" role="tabpanel">${s.selectedView==='products'?products(r,s,catalog):s.selectedView==='regions'?regions(r,s):flow(r,s,focus)}</div></details></section></div>`;
+      const filterToken=JSON.stringify(filtersFor(s)),selectedCompanyId=detailCompanyFor(s,model);
+      return `<div class="comparison-dashboard" data-comparison-dashboard>${dashboard.summary(model,{selectedCompanyId})}${dashboard.companyDetail?.(model,selectedCompanyId)||''}${dashboard.judgments(model)}${dashboard.graphs(model)}<section class="comparison-dashboard-details" aria-label="상세 근거"><div class="comparison-section-title"><span class="dashboard-kicker">05 · 상세 근거</span><h2>상세 근거</h2><p class="muted">선택한 업체의 확보일·공통 관측 조건과 원본 30일 자료를 확인합니다.</p></div><details class="card" data-dashboard-detail="evidence"><summary>업체별 자료 확보·비교 제외 사유 <span aria-hidden="true">+</span></summary>${readiness(r,s)}${summaryGroups(own,others,comparisons,evidenceModel(r,s))}${pairTable(r,s)}${partial?sourceIssues(r,s):''}</details><details class="card" data-dashboard-detail="operating"><summary>날짜별 운영 검토·쿠폰 계산 <span aria-hidden="true">+</span></summary>${operatingView()?.render(r,s,catalog,{scope:operatingScope()+filterToken,displayDates:model.dates,displayPeriod:model.period,displayComparisonActionable:model.quality?.actionable,displayHoldReason:model.judgments?.[0]?.reason})||''}</details><details class="card" data-dashboard-detail="additional"><summary>상품·예약수량·지역 자료 <span aria-hidden="true">+</span></summary><div class="comparison-view-tabs" role="tablist" aria-label="경쟁 비교 보기">${[['flow','예약 흐름'],['products','가격·상품'],['regions','지역 배경']].map(([id,name])=>`<button type="button" role="tab" data-comparison-view="${id}" aria-selected="${s.selectedView===id}" aria-controls="comparison-detail">${name}</button>`).join('')}</div>${s.selectedView==='flow'&&others.length?`<label class="comparison-focus"><span>그래프 비교업체</span><select data-comparison-focus aria-label="그래프 비교업체">${others.map(c=>`<option value="${esc(c.companyId)}" ${focus===c.companyId?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>`:''}<div id="comparison-detail" role="tabpanel">${s.selectedView==='products'?products(r,s,catalog):s.selectedView==='regions'?regions(r,s):flow(r,s,focus)}</div></details></section></div>`;
     }
     return `<div class="comparison-notice"><p>${!others.length?'비교업체를 선택하면 같은 조건으로 비교합니다.':cross?'다른 지역 업체는 지역 수요 차이를 포함한 참고 비교입니다.':'같은 지역에서도 업종·상품·관측 조건을 확인합니다.'}</p><small>같은 지역 ${same} · 다른 지역 ${cross}</small></div>${partial?'<p class="collection-warning">일부 자료를 확인하지 못했습니다. 정상 자료는 표시하며 업체별 날짜와 사유를 아래 근거에서 확인할 수 있습니다.</p>':''}${summaryGroups(own,others,comparisons,evidenceModel(r,s))}${readiness(r,s)}${operatingView()?.render(r,s,catalog,{scope:operatingScope()})||''}<section class="card"><div class="comparison-view-tabs" role="tablist" aria-label="경쟁 비교 보기">${[['flow','예약 흐름'],['products','가격·상품'],['regions','지역 배경']].map(([id,name])=>`<button type="button" role="tab" data-comparison-view="${id}" aria-selected="${s.selectedView===id}" aria-controls="comparison-detail">${name}</button>`).join('')}</div>${s.selectedView==='flow'&&others.length?`<label class="comparison-focus"><span>그래프 비교업체</span><select data-comparison-focus aria-label="그래프 비교업체">${others.map(c=>`<option value="${esc(c.companyId)}" ${focus===c.companyId?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>`:''}<div id="comparison-detail" role="tabpanel">${s.selectedView==='products'?products(r,s,catalog):s.selectedView==='regions'?regions(r,s):flow(r,s,focus)}</div></section>${pairTable(r,s)}${partial?sourceIssues(r,s):''}`;
   }
@@ -236,7 +251,7 @@
     return `<section class="card comparison-controls dashboard-controls" data-comparison-conditions aria-labelledby="comparison-conditions-heading"><header class="dashboard-section-heading"><div><span class="dashboard-kicker">01 · 비교 조건</span><h2 id="comparison-conditions-heading">비교 조건</h2></div><div class="comparison-condition-actions">${current?'<button type="button" class="button secondary" data-dashboard-reset>전체 기간</button>':''}<button class="button" type="submit" form="comparison-form">저장 자료 확인</button></div></header><form id="comparison-form" class="comparison-condition-grid"><label class="field"><span>기준 내 매장</span><select name="comparisonOwnId" aria-label="비교 기준 내 매장">${own.map(c=>`<option value="${esc(c.companyId)}" ${c.companyId===selection.ownCompanyId?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label><div class="field comparison-competitor-field"><span>등록 경쟁업체</span><details class="comparison-competitor-picker" data-comparison-competitors><summary>비교업체 선택 · ${selection.comparisonIds.length}곳 <span aria-hidden="true">+</span></summary><div class="comparison-choices">${competitors.map(c=>`<label><input type="checkbox" name="comparisonIds" value="${esc(c.companyId)}" ${selection.comparisonIds.includes(c.companyId)?'checked':''}>${esc(c.name)}</label>`).join('')||'<p class="muted">설정에서 비교할 업체를 등록하세요.</p>'}<small>선택 후 저장 자료 확인을 누르세요.</small></div></details></div>${current?`<div data-comparison-filter-controls>${conditionFields(selection)}</div>`:`<div class="comparison-period"><span>저장 자료 범위</span><strong>${esc(selection.stayStart)} ~ ${esc(selection.stayEnd)}</strong><small>관측 기준 ${esc(selection.asOfDate)} · 한국시간</small></div>`}</form>${current?'':`<p class="collection-warning">현재 나란히 비교는 오늘부터 30일 자료를 지원합니다. 선택한 과거 기간을 현재 자료로 대체하지 않습니다.</p><button class="button small" type="button" data-comparison-current>현재 30일로 보기</button>`}</section><p id="comparison-status" role="status" class="connection-check" aria-live="polite"></p><div id="comparison-results" aria-live="polite"></div>`;
   }
   let active=null,generation=0,timer=null,focusId=null;
-  const stop=()=>{generation++;if(timer!==null)clearTimeout(timer);timer=null;if(active?.savedSourceState){active.savedSourceState.cancelled=true;for(const value of active.savedSourceState.timers||[])clearTimeout(value);}active=null;operatingView()?.stop();};
+  const stop=()=>{generation++;if(timer!==null)clearTimeout(timer);timer=null;if(active?.savedSourceState){active.savedSourceState.cancelled=true;for(const value of active.savedSourceState.timers||[])clearTimeout(value);}active=null;companyDetailState=null;operatingView()?.stop();};
   function notifyRegional(){if(active?.store.getState().selectedView==='regions')active.onRegionalView?.();}
   function mount(options){
     stop();active=options;const slot=document.querySelector('#comparison-results');if(!slot)return;
@@ -284,7 +299,20 @@
       const updated=options.store.update(patch);if(!updated.ok)return;options.onSelectionChange?.(updated.state);const workspace=document.querySelector('#comparison-workspace');if(workspace)workspace.innerHTML=panel(options.state,updated.state);void refresh(true);
     });
     document.addEventListener('click',event=>{
-      const button=event.target.closest?.('[data-comparison-view],[data-comparison-current],[data-dashboard-reset]');if(!button||!active)return;event.preventDefault();
+      const button=event.target.closest?.('[data-comparison-view],[data-comparison-current],[data-dashboard-reset],[data-dashboard-company-select],[data-dashboard-company-back]');if(!button||!active)return;event.preventDefault();
+      if(button.hasAttribute('data-dashboard-company-back')){
+        const selected=document.querySelector('[data-dashboard-company-select][aria-pressed="true"]');
+        selected?.scrollIntoView?.({block:'center',behavior:'auto'});selected?.focus?.({preventScroll:true});return;
+      }
+      if(button.hasAttribute('data-dashboard-company-select')){
+        const options=active,s=options.store.getState(),report=options.lastRenderedReport,slot=document.querySelector('#comparison-results');
+        if(!report||!slot||!matching(report,s)||options.pendingToken&&!options.store.isCurrent(options.pendingToken.value))return;
+        const model=dashboardModel(report,s,options.state.companies),companyId=button.dataset.dashboardCompanySelect;
+        if(!model?.contextValid||!model.companies.some(c=>c.companyId===companyId))return;
+        selectDetailCompany(s,companyId);drawResults(slot,render(report,s,options.state.companies,focusId),report);
+        const detail=document.querySelector('#dashboard-company-detail');
+        detail?.scrollIntoView?.({block:'start',behavior:'auto'});detail?.focus?.({preventScroll:true});return;
+      }
       if(button.hasAttribute('data-dashboard-reset')){
         const s=active.store.getState(),slot=document.querySelector('#comparison-results'),report=active.lastRenderedReport;
         if(setFilters(s,{start:s.stayStart,end:s.stayEnd,dayFilter:'all'})&&slot&&report&&matching(report,s))drawResults(slot,render(report,s,active.state.companies,focusId),report);

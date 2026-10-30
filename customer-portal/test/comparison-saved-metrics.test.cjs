@@ -22,6 +22,21 @@ test('price is the deduplicated lodging product-date median with a bound source,
   assert.equal(model.price.source.runId,'run_20261028');assert.equal(JSON.stringify(source),before);
   assert.ok(model.price.rows.every(row=>row.productId!=='id:day'));
 });
+test('daily detail price rows expose only verified filtered lodging observations with the exact source identity',()=>{
+  const source=fixture();source.result.products[0].privateCookie='PRIVATE-COOKIE';source.result.products[0].days[0].rawResponse={token:'PRIVATE-ROW'};
+  source.result.products[0].original=[day('2026-10-30',999999)];
+  const model=projectCompany(source,{...options,dates:['2026-10-30']});
+  assert.equal(model.price.rows.length,2);assert.deepEqual(model.price.rows.map(row=>row.price),[100000,200000]);
+  assert.ok(model.price.rows.every(row=>row.date==='2026-10-30'));
+  assert.ok(model.price.rows.every(row=>JSON.stringify(Object.keys(row).sort())===JSON.stringify(['date','price','productId','productName'])));
+  assert.equal(model.price.source.runId,'run_20261028');assert.equal(model.price.source.collectedAt,current);
+  assert.doesNotMatch(JSON.stringify(model),/PRIVATE-COOKIE|PRIVATE-ROW|999999|런치/);
+});
+test('price and pickup detail rows do not invent values on selected dates with no validated evidence',()=>{
+  const source=fixture(),model=projectCompany(source,{...options,dates:['2026-11-02']});
+  assert.equal(model.price.value,null);assert.deepEqual(model.price.rows,[]);assert.equal(model.pickup.value,null);assert.deepEqual(model.pickup.rows,[]);
+  assert.equal(model.price.reasonCode,'PRICE_MISSING');assert.equal(model.pickup.reasonCode,'PICKUP_OUTSIDE_SELECTED_DATES');
+});
 test('selected date filtering recomputes prices and preserves a genuine observed free price', () => {
   const source=fixture();source.result.products=source.result.products.slice(0,1);source.result.products[0].days[0].price=0;
   const model=projectCompany(source,{...options,dates:['2026-10-30']});

@@ -50,6 +50,18 @@ test('range and weekday filters recalculate prices and pickup from precisely the
     assert.deepEqual(model.own.savedMetrics.pickup.rows.map(row=>row.date),model.dates);
   }
 });
+test('company detail receives filter-scoped allowlisted source rows without another company or unselected date leaking into the model',()=>{
+  const f=fixture(),input=sources(),filters={start:shift(START,2),end:shift(START,4),dayFilter:'all'};
+  for(const saved of input.own.payloads){saved.result.products[0].privateCookie='PRIVATE-PRICE-COOKIE';saved.result.products[0].days[0].privatePayload='PRIVATE-DAY-PAYLOAD';}
+  input.foreign={status:'ready',payloads:[payload('foreign')],private:'PRIVATE-UNREGISTERED-SOURCE'};
+  const model=dashboard.project(f.report,f.selection,f.catalog,filters,input),own=model.companies.find(row=>row.companyId==='own');
+  assert.deepEqual(own.points.map(row=>row.date),model.dates);assert.deepEqual(own.savedMetrics.price.rows.map(row=>row.date),model.dates);
+  assert.deepEqual(own.savedMetrics.pickup.rows.map(row=>row.date),model.dates);
+  assert.deepEqual(own.savedMetrics.price.rows.map(row=>row.price),[202000,203000,204000]);
+  assert.equal(own.savedMetrics.price.source.runId,'saved-run-own');assert.equal(own.savedMetrics.price.rows.length,3);
+  assert.equal(model.companies.some(row=>row.companyId==='foreign'),false);assert.doesNotMatch(JSON.stringify(model),/PRIVATE-PRICE-COOKIE|PRIVATE-DAY-PAYLOAD|PRIVATE-UNREGISTERED-SOURCE/);
+  assert.equal(model.executionAllowed,false);
+});
 test('different observed days keep a typed benchmark hold while individual saved prices remain available',()=>{
   const f=fixture({mismatch:true}),model=dashboard.project(f.report,f.selection,f.catalog,{},sources());
   assert.equal(metric(model,'peer_rate').value,null);assert.equal(metric(model,'peer_rate').reasonCode,'OBSERVATION_DATE_MISMATCH');

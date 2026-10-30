@@ -149,3 +149,84 @@ test('company-table names, region labels and evidence remain escaped when expose
   m.companies[1].savedMetrics={price:{value:null,status:'unavailable',reasonCode:'PRICE_MISSING',reason:'<iframe src=x>'},pickup:{value:null,status:'unavailable',reasonCode:'PICKUP_NO_PREVIOUS_OBSERVATION'}};
   const html=view.savedMetrics(m);assert.match(html,/&lt;svg/);assert.match(html,/&lt;iframe/);assert.doesNotMatch(html,/<svg |<img |<iframe/);
 });
+function detailFixture(){
+  const model=fixture(),company=model.companies[1];
+  company.rooms=null;company.summary={days:0,sold:null,supply:null,publicBookings:null,phoneBookings:null,reservationRate:null};
+  company.points=model.dates.map(date=>({date,status:'unavailable',sold:null,supply:null,publicBookings:null,phoneBookings:null,rate:null,reasons:['공유객실 수량 미확인']}));
+  company.savedMetrics={price:{value:100000,min:0,max:200000,products:2,days:2,rowCount:3,status:'partial',source:{runId:'saved_price_same',collectedAt:'2026-10-28T06:03:04.516Z'},
+    rows:[{date:model.dates[0],productId:'room-a',productName:'숙박 A',price:100000},{date:model.dates[0],productId:'room-b',productName:'숙박 B',price:200000},{date:model.dates[1],productId:'room-a',productName:'숙박 A',price:0}]},
+    pickup:{value:2,publicChange:2,inferredChange:null,days:2,intervalCount:2,status:'reference',reasonCode:'PICKUP_PUBLIC_ONLY_REFERENCE',reason:'공개예약만 비교하는 참고값',
+      rows:[{date:model.dates[0],previousPublic:1,currentPublic:3,publicChange:2,productCount:2,matchedProductIds:['room-a','room-b']},{date:model.dates[1],previousPublic:0,currentPublic:0,publicChange:0,productCount:2,matchedProductIds:['room-a','room-b']}],
+      source:{previousRunId:'same_previous',currentRunId:'same_current',previousObservedAt:'2026-10-27T04:20:05.714Z',currentObservedAt:'2026-10-28T06:03:04.516Z',calculationVersion:'public-booking-pickup-v1',sourceDigests:{previous:'a'.repeat(64),current:'b'.repeat(64)}},limitations:['전체 예약수량·예약률·타채널 추정·매출은 미확인 유지']}};
+  return model;
+}
+const detailRow=(html,date)=>new RegExp('<tr[^>]*data-dashboard-detail-date="'+date+'"[^>]*>[\\s\\S]*?<\\/tr>').exec(html)?.[0]||'';
+const detailCell=(html,key)=>new RegExp('<td[^>]*data-dashboard-detail-cell="'+key+'"[^>]*>([\\s\\S]*?)<\\/td>').exec(html)?.[1]||'';
+test('company names provide buttons for instant in-page detail rather than requiring a separate company navigation',()=>{
+  const html=view.savedMetrics(detailFixture());
+  for(const id of ['own','same','cross'])assert.match(html,new RegExp('<button[^>]*type="button"[^>]*data-dashboard-company-select="'+id+'"'));
+});
+test('selecting a competitor changes only the pressed table row, keeping the customer own-property KPI and data unchanged',()=>{
+  const model=detailFixture(),before=JSON.stringify(model),html=view.summary(model,{selectedCompanyId:'same'}),selected=companyRow(html,'same'),own=companyRow(html,'own');
+  assert.match(selected,/data-dashboard-company-select="same"[^>]*aria-pressed="true"|aria-pressed="true"[^>]*data-dashboard-company-select="same"/);
+  assert.match(own,/data-dashboard-company-select="own"[^>]*aria-pressed="false"|aria-pressed="false"[^>]*data-dashboard-company-select="own"/);
+  assert.equal((html.match(/aria-pressed="true"/g)||[]).length,1);assert.match(html,/data-dashboard-metric="own_rate"[\s\S]*?25\.0%/);
+  assert.equal(JSON.stringify(model),before);assert.equal(model.own.companyId,'own');
+});
+test('selected company detail preserves independent public pickup and verified prices while full inventory stays unknown',()=>{
+  const m=detailFixture(),before=JSON.stringify(m),html=view.companyDetail(m,'same');
+  assert.match(html,/data-dashboard-company-detail="same"/);assert.match(html,/같은 지역 업체/);assert.match(html,/data-dashboard-company-daily/);
+  assert.doesNotMatch(html,/타지역 업체/);assert.deepEqual([...html.matchAll(/data-dashboard-detail-date="([^"]+)"/g)].map(match=>match[1]),m.dates);
+  const first=detailRow(html,m.dates[0]),zero=detailRow(html,m.dates[1]),missing=detailRow(html,m.dates[2]);
+  for(const key of ['public','inferred','total','rate'])assert.match(detailCell(first,key),/미확인/,key);
+  assert.match(detailCell(first,'price'),/150,000/);assert.match(detailCell(first,'price'),/2상품|상품 2/);assert.match(detailCell(first,'public-change'),/\+2실/);
+  assert.match(detailCell(zero,'price'),/0원/);assert.match(detailCell(zero,'public-change'),/0실/);
+  assert.match(detailCell(missing,'price'),/미확인/);assert.match(detailCell(missing,'public-change'),/미확인/);assert.doesNotMatch(detailCell(missing,'public-change'),/>0실/);
+  assert.match(html,/data-dashboard-detail-source="price"/);assert.match(html,/saved_price_same/);assert.match(html,/숙박 A/);assert.match(html,/숙박 B/);
+  assert.match(html,/data-dashboard-detail-source="pickup"/);assert.match(html,/same_previous/);assert.match(html,/same_current/);assert.match(html,/공개예약/);assert.match(html,/미확인 유지/);
+  assert.equal(JSON.stringify(m),before);
+});
+test('company detail follows the active selected dates and excludes out-of-filter price and pickup rows',()=>{
+  const m=detailFixture();m.dates=m.dates.slice(0,1);m.period={...m.period,days:1,end:m.dates[0]};
+  m.companies[1].savedMetrics.price.rows.push({date:'2027-01-01',productId:'foreign-date',productName:'OUTSIDE-SELECTED-PRODUCT',price:999999});
+  m.companies[1].savedMetrics.pickup.rows.push({date:'2027-01-01',previousPublic:0,currentPublic:999999,publicChange:999999,productCount:1,matchedProductIds:['foreign-date']});
+  const html=view.companyDetail(m,'same');
+  assert.deepEqual([...html.matchAll(/data-dashboard-detail-date="([^"]+)"/g)].map(match=>match[1]),m.dates);
+  assert.doesNotMatch(html,/OUTSIDE-SELECTED-PRODUCT|2027-01-01|999,999실|999,999원/);
+});
+test('detail displays normal public and inferred reservations together while retaining normal zero and unrelated missing price/pickup',()=>{
+  const m=detailFixture(),company=m.companies[1];company.rooms=10;
+  company.points[0]={date:m.dates[0],status:'ready',sold:3,supply:10,publicBookings:1,phoneBookings:2,rate:.3,reservationRate:.3,reasons:[]};
+  company.points[2]={date:m.dates[2],status:'ready',sold:0,supply:10,publicBookings:0,phoneBookings:0,rate:0,reservationRate:0,reasons:[]};
+  company.summary={days:2,sold:3,supply:20,publicBookings:1,phoneBookings:2,reservationRate:.15};
+  const html=view.companyDetail(m,'same'),first=detailRow(html,m.dates[0]),zero=detailRow(html,m.dates[2]);
+  assert.match(detailCell(first,'public'),/1실/);assert.match(detailCell(first,'inferred'),/2실/);assert.match(detailCell(first,'total'),/3실/);assert.match(detailCell(first,'rate'),/30\.0%/);
+  for(const key of ['public','inferred','total'])assert.match(detailCell(zero,key),/0실/);assert.match(detailCell(zero,'rate'),/0\.0%/);
+  assert.match(detailCell(zero,'price'),/미확인/);assert.match(detailCell(zero,'public-change'),/미확인/);
+});
+test('aggregate-only saved evidence exposes its proof but cannot fabricate date-level prices or reservation changes',()=>{
+  const m=detailFixture(),saved=m.companies[1].savedMetrics;saved.price.rows=[];saved.pickup.rows=[];
+  const html=view.companyDetail(m,'same');assert.match(html,/same_previous/);assert.match(html,/same_current/);
+  for(const date of m.dates){const row=detailRow(html,date);assert.match(detailCell(row,'price'),/미확인/);assert.match(detailCell(row,'public-change'),/미확인/);assert.doesNotMatch(detailCell(row,'public-change'),/\+2실|>0실/);}
+});
+test('invalid company and invalid customer context do not fall back to another company private detail',()=>{
+  const m=detailFixture();
+  for(const html of [view.companyDetail(m,'not-registered'),view.companyDetail({...m,contextValid:false},'same')]){
+    assert.doesNotMatch(html,/same_previous|saved_price_same|150,000원|data-dashboard-company-daily|같은 지역 업체/);
+  }
+});
+test('new detail headings, product names and source references remain escaped',()=>{
+  const m=detailFixture(),company=m.companies[1];company.name='<script>bad()</script>';company.savedMetrics.price.rows[0].productName='<img src=x onerror=bad()>';
+  company.savedMetrics.pickup.source.currentRunId='<iframe>bad</iframe>';company.savedMetrics.pickup.limitations.push('<script>source limitation</script>');
+  const html=view.companyDetail(m,'same');assert.match(html,/&lt;script/);assert.match(html,/&lt;img/);assert.match(html,/&lt;iframe/);assert.doesNotMatch(html,/<script>|<img |<iframe/);
+});
+test('large selected-company product evidence keeps the first ten visible and the rest accessible in a closed disclosure',()=>{
+  const m=detailFixture(),price=m.companies[1].savedMetrics.price;
+  price.rows=Array.from({length:12},(_,i)=>({date:m.dates[0],productId:'room-'+String(i).padStart(2,'0'),productName:'검증 객실 '+String(i).padStart(2,'0'),price:100000+i*1000}));
+  price.products=12;price.rowCount=12;
+  const html=view.companyDetail(m,'same'),match=html.match(/<details class="dashboard-detail-more-products">([\s\S]*?)<\/details>/);
+  assert.ok(match);assert.match(match[1],/2개 상품 더보기/);assert.equal((match[1].match(/<li>/g)||[]).length,2);
+  const before=html.slice(0,html.indexOf('<details class="dashboard-detail-more-products">'));
+  assert.equal((before.match(/<li><span>검증 객실/g)||[]).length,10);
+  assert.doesNotMatch(html,/<details[^>]*class="dashboard-detail-more-products"[^>]* open/);
+});
