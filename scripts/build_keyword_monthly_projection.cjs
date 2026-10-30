@@ -18,7 +18,7 @@ function stamp(value) {
 }
 function validDay(value) { return typeof value === "string" && /^20\d{2}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value; }
 function args(values) {
-  const allowed = new Set(["source", "output", "now", "data-through", "copied-at", "provenance", "compression"]), result = {};
+  const allowed = new Set(["source", "output", "now", "data-through", "copied-at", "provenance", "compression", "publish-months"]), result = {};
   for (let i = 0; i < values.length; i += 2) {
     const key = values[i]?.replace(/^--/, "");
     if (!values[i]?.startsWith("--") || !allowed.has(key) || !values[i + 1] || Object.hasOwn(result, key)) throw Error("KEYWORD_MONTHLY_CLI_ARGUMENTS");
@@ -26,6 +26,12 @@ function args(values) {
   }
   if (!result.source || !result.output) throw Error("KEYWORD_MONTHLY_CLI_SOURCE_AND_OUTPUT_REQUIRED");
   if (result.compression && !["auto", "gzip"].includes(result.compression)) throw Error("KEYWORD_MONTHLY_CLI_ARGUMENTS");
+  if (result["publish-months"] !== undefined) {
+    const months = result["publish-months"].split(",");
+    if (!months.length || months.length > 1200 || months.some(value => !/^20\d{2}-(?:0[1-9]|1[0-2])$/.test(value))
+      || new Set(months).size !== months.length) throw Error("KEYWORD_MONTHLY_CLI_PUBLISH_MONTHS");
+    result.publishMonths = months;
+  }
   for (const key of ["now", "data-through", "copied-at"]) if (result[key] && !stamp(result[key])) throw Error("KEYWORD_MONTHLY_CLI_CLOCK");
   return result;
 }
@@ -95,7 +101,7 @@ async function run(values) {
     sourceFingerprint: digest(read.bytes),
     sourceProvenance: { ...supplied, inputSha256: digest(read.bytes), inputBytes: read.bytes.length, ...(input["copied-at"] ? { copiedAt: input["copied-at"] } : {}) },
     materializedAt: at, ...(input["data-through"] ? { dataThrough: input["data-through"] } : {}),
-    outputDir: output, now: () => new Date(at), compression: input.compression || "auto" });
+    outputDir: output, now: () => new Date(at), compression: input.compression || "auto", ...(input.publishMonths ? { publishMonths: input.publishMonths } : {}) });
   if (!read.same(read.stat, await checkPath(read.file)) || provenanceRead && !provenanceRead.same(provenanceRead.stat, await checkPath(provenanceRead.file))) throw Error("KEYWORD_MONTHLY_CLI_SOURCE_CHANGED");
   return { ...result, explicitOfflinePreparation: true, sourceUnchanged: true, providerCalls: 0, kosisReadOrChanged: false,
     ...(provenanceRead ? { provenanceFileSha256: digest(provenanceRead.bytes), provenanceFileBytes: provenanceRead.bytes.length, provenanceUnchanged: true } : {}) };

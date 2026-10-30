@@ -96,6 +96,10 @@ API는 관리자 인증과 GET만 허용한다. POST·갱신·재구축 경로�
 
 키워드별 source fingerprint와 월별 진단은 합쳐 쓰지 않는다. `build_keyword_monthly_bundle.cjs`는 각 준비 index와 projection의 바이트를 그대로 불변 generation에 보존하고 정확한 키워드·월을 해당 partition에 연결한다. 입력의 `exposeScopes`는 전월 자료를 포함한 partition에서 실제 공개할 월만 선택한다. 중복 scope·SHA/크기 불일치·경로 이탈은 거부한다. 마지막 `current.json` 발표는 기대 이전 SHA와 전용 lock을 대조해 원자 교체하며 이전 generation은 보존한다. 이후 단계에서 오류가 나면 미반영으로 단정하지 않고 실제 pointer를 다시 확인한다.
 
+`prepare_keyword_monthly_release.cjs`는 후보를 순차 준비하고 정확한 현재·정렬 전월의 금액 지문을 실제 조회 factory와 대조한다. 정규화 child는 표준 입출력을 사용하지 않으며 원래의 엄격한 seccomp 실행기, 실제 PID가 일치하는 새 격리 proof·완료 영수증·source SHA로 검증한다. 영수증 없는 종료 코드 0은 성공이 아니다. 실패하면 다음 후보와 운영 pointer 발표를 중단하고 새 부분 산출물을 보존한다.
+
+준비의 `--publish-months 이전월,현재월`은 공개하는 월 목록만 한정한다. 예를 들어 9월에 관측한 10월 숙박행은 11월/10월 준비본에서도 그대로 보존하지만 별도 검수하지 않은 9월을 추가 공개하지 않는다. 관측행·회차·원본 지문·금액 계산은 변경하지 않는다. 옵션을 생략하면 기존 전체 월 준비 동작을 유지한다.
+
 정규화 과정의 진단 계수가 관측 마감일에 의존할 때에는 `normalizationCutoffs`로 실제 준비한 월별 기준일을 선언한다. 이는 여러 회차 관측을 `selected_only`로 바꾸는 필드가 아니다. 조회는 선언된 기준일만 지원하며 전월의 정렬 기준일이 준비되지 않았으면 비교를 제외한다. 기존 `selected_only.selectionCutoffs`와 두 정책을 동시에 선언할 수 없다.
 
 24시간이 지난 준비본은 `stale` 상태와 자료 기준시각을 유지한다. 근거 범위 안의 값은 화면에서 **과거 저장근거 · 갱신 확인 필요**로 구분해 열람할 수 있고 현재 최신 자료로 승격하지 않는다. 자료 마감 이후의 기준일이나 검수 오류 응답은 수치 표시를 차단한다. Bundle을 새로 묶어도 개별 partition의 materializedAt·dataThrough를 갱신하지 않는다.

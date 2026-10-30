@@ -229,9 +229,12 @@ function attempt(run) { return run ? { status: status(run), observedAt: attemptT
 
 /** Explicit local/offline operation. The caller supplies an already isolated,
  * normalized source. Never call this from a GET, collector or source cache. */
-async function buildKeywordMonthlyProjection({ source, sourceFingerprint, sourceProvenance, materializedAt, dataThrough, outputDir, now, compression = "auto" } = {}) {
+async function buildKeywordMonthlyProjection({ source, sourceFingerprint, sourceProvenance, materializedAt, dataThrough, outputDir, now, compression = "auto", publishMonths } = {}) {
   const at = materializedAt || nowIso(now);
   if (!SHA.test(sourceFingerprint || "") || !iso(at) || !text(outputDir, 4000) || !["auto", "gzip"].includes(compression)) throw fault("KEYWORD_MONTHLY_INVALID_BUILD_INPUT", 400);
+  if (publishMonths !== undefined && (!Array.isArray(publishMonths) || !publishMonths.length || publishMonths.length > 1200
+    || !publishMonths.every(month) || new Set(publishMonths).size !== publishMonths.length)) throw fault("KEYWORD_MONTHLY_INVALID_PUBLISH_MONTHS", 400);
+  const publicationWindow = publishMonths === undefined ? null : new Set(publishMonths);
   const normalized = normalizeSource(source);
   const times = [...normalized.runs.map(attemptTime), ...normalized.observations.map(row => row.collectedAt), ...normalized.rankObservations.map(row => row.collectedAt),
     ...normalized.savedProductRecoveries.map(entry => entry.row.collectedAt)].filter(iso).sort((a, b) => Date.parse(a) - Date.parse(b));
@@ -247,6 +250,12 @@ async function buildKeywordMonthlyProjection({ source, sourceFingerprint, source
     if (membership.inventoryMonth) { entry.stay.add(membership.inventoryMonth); entry.inventory.add(membership.inventoryMonth); }
     if (membership.rankMonth) { entry.stay.add(membership.rankMonth); entry.ranks.add(membership.rankMonth); }
     descriptors.set(entry.keyword, entry);
+  }
+  // Preparation may expose only the months whose normalization cutoffs were
+  // captured. Keep all source rows, including older collection/rank evidence,
+  // unchanged for the existing current/previous-month calculation below.
+  if (publicationWindow) for (const entry of descriptors.values()) {
+    for (const key of ["stay", "inventory", "ranks"]) entry[key] = new Set([...entry[key]].filter(value => publicationWindow.has(value)));
   }
   if (normalized.monthlySourceMetadata && [...descriptors.values()].filter(entry => entry.stay.size).length > 1) throw fault("KEYWORD_MONTHLY_AMBIGUOUS_METADATA_SCOPE");
   const publications = [];
@@ -305,7 +314,8 @@ async function buildKeywordMonthlyProjection({ source, sourceFingerprint, source
   for (const publication of publications) await fs.writeFile(path.join(directory, "projections", publication.name), publication.bytes, { flag: "wx", mode: 0o600 });
   await fs.writeFile(path.join(directory, "index.json"), indexBytes, { flag: "wx", mode: 0o600 });
   return { schemaVersion: 1, projectionDir: directory, indexSha256: digest(indexBytes), sourceFingerprint,
-    keywordCount: keywords.length, scopeCount: publications.length, provenance };
+    keywordCount: keywords.length, scopeCount: publications.length, provenance,
+    ...(publicationWindow ? { publishMonths: [...publicationWindow].sort() } : {}) };
 }
 
 function validateIndex(value) {

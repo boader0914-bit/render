@@ -88,16 +88,25 @@ function stderrPolicy(bytes, pid) {
   return { stderrAccepted: count > 0, knownSqliteExperimentalWarnings: count };
 }
 function childStderrSafe(result) { return result.stderrBytes === 0 || result.stderrAccepted === true && Number.isSafeInteger(result.knownSqliteExperimentalWarnings) && result.knownSqliteExperimentalWarnings > 0; }
-function runChild(executable, argv, { cwd, timeout = LIMITS.timeout, outputBound = LIMITS.output } = {}) {
+function safeChildCode(value) { return typeof value === "string" && /^(?:ISOLATION_|KEYWORD_)[A-Z0-9_]{1,150}$/.test(value) ? value : null; }
+function childFailureDiagnostic(bytes) {
+  const codes = new Set();
+  for (const line of bytes.toString("utf8").split(/\r?\n/)) { if (!line.trim()) continue; try { const value = JSON.parse(line); if (plain(value) && safeChildCode(value.code)) codes.add(value.code); } catch {} }
+  return codes.size === 1 ? [...codes][0] : null;
+}
+function runChild(executable, argv, { cwd, timeout = LIMITS.timeout, outputBound = LIMITS.output, receiptOnly = false } = {}) {
   return new Promise((resolve, reject) => { let proc, timer, ended = false, output = [], errors = [], total = 0, stderrBytes = 0, denied = null;
     const end = (error, result) => { if (ended) return; ended = true; clearTimeout(timer); error ? reject(error) : resolve(result); };
-    try { proc = child.spawn(executable, argv, { shell: false, cwd, stdio: ["ignore", "pipe", "pipe"], env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", TZ: "Asia/Seoul" }, windowsHide: true }); } catch { fail("KEYWORD_PREP_CHILD_START"); }
+    try { proc = child.spawn(executable, argv, { shell: false, cwd, stdio: receiptOnly ? ["ignore", "ignore", "ignore"] : ["ignore", "pipe", "pipe"], env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", TZ: "Asia/Seoul" }, windowsHide: true }); } catch { fail("KEYWORD_PREP_CHILD_START"); }
     const stop = code => { denied ||= code; proc.kill("SIGKILL"); };
     proc.on("error", () => end(Object.assign(Error("KEYWORD_PREP_CHILD_START"), { code: "KEYWORD_PREP_CHILD_START" })));
-    proc.stdout.on("data", bytes => { total += bytes.length; if (total + stderrBytes > outputBound) stop("KEYWORD_PREP_CHILD_OUTPUT_BOUND"); else output.push(bytes); });
-    proc.stderr.on("data", bytes => { stderrBytes += bytes.length; if (total + stderrBytes > outputBound) stop("KEYWORD_PREP_CHILD_OUTPUT_BOUND"); else errors.push(bytes); });
+    if (!receiptOnly) {
+      proc.stdout.on("data", bytes => { total += bytes.length; if (total + stderrBytes > outputBound) stop("KEYWORD_PREP_CHILD_OUTPUT_BOUND"); else output.push(bytes); });
+      proc.stderr.on("data", bytes => { stderrBytes += bytes.length; if (total + stderrBytes > outputBound) stop("KEYWORD_PREP_CHILD_OUTPUT_BOUND"); else errors.push(bytes); });
+    }
     timer = setTimeout(() => stop("KEYWORD_PREP_CHILD_TIMEOUT"), timeout);
-    proc.on("close", (exitCode, signal) => { if (denied) return end(Object.assign(Error(denied), { code: denied })); if (exitCode !== 0 || signal) return end(Object.assign(Error("KEYWORD_PREP_CHILD_FAILED"), { code: "KEYWORD_PREP_CHILD_FAILED", exitCode }));
+    proc.on("close", (exitCode, signal) => { if (denied) return end(Object.assign(Error(denied), { code: denied })); if (exitCode !== 0 || signal) return end(Object.assign(Error("KEYWORD_PREP_CHILD_FAILED"), { code: "KEYWORD_PREP_CHILD_FAILED", exitCode, childCode: childFailureDiagnostic(Buffer.concat(errors)) }));
+      if (receiptOnly) return end(null, { exitCode, pid: proc.pid, stdout: null, stderrBytes: null, receiptOnly: true });
       let value; try { value = JSON.parse(Buffer.concat(output).toString("utf8")); } catch { return end(Object.assign(Error("KEYWORD_PREP_CHILD_PROTOCOL"), { code: "KEYWORD_PREP_CHILD_PROTOCOL" })); }
       end(null, { exitCode, pid: proc.pid, stdout: value, stderrBytes, ...stderrPolicy(Buffer.concat(errors), proc.pid) }); });
   });
@@ -108,7 +117,12 @@ function isolation(proof, copyRoot, input) {
     && proof.preflightOnly === false && proof.environmentSanitizedForExec === true && proof.unrestrictedFallbackAllowed === false && proof.providerCalls === 0
     && proof.guardSha256 === input["guard-sha"] && proof.nodeSha256 === input["node-sha"] && Number.isSafeInteger(proof.pid) && proof.pid > 0
     && ["tcpSocketDenied", "udpSocketDenied", "ipv6SocketDenied"].every(k => proof.kernelProbe?.[k] === true)
-    && ["socket", "socketpair", "connect", "sendto", "sendmsg"].every(k => proof.kernelProbe?.syscallsDeniedWithEperm?.[k] === true), "KEYWORD_PREP_ISOLATION_GATE");
+    && ["socket", "socketpair", "connect", "sendto", "sendmsg"].every(k => proof.kernelProbe?.syscallsDeniedWithEperm?.[k] === true)
+    && proof.nonStandardFdsClosedBeforeExec === true && proof.nonStandardFdsRemainingBeforeExec === 0 && proof.stdioLocalIPC === undefined, "KEYWORD_PREP_ISOLATION_GATE");
+}
+async function normalizerFailureCode(normalization, scratchRoot) {
+  need(path.dirname(normalization) === scratchRoot, "KEYWORD_PREP_SCOPE_INVALID");
+  try { const receipt = await read(path.join(normalization, "reconstruction-failed.json"), 65536); return receipt.value?.state === "failed" ? safeChildCode(receipt.value.code) : null; } catch { return null; }
 }
 function validateDiscovery(value, captureSha) {
   need(value?.state === "complete" && value.mode === "discover" && value.captureManifestSha256 === captureSha && value.malformedHistoryLines === 0 && value.syntheticCurrentMonthNotTreatedAsEvidence === true
@@ -194,26 +208,31 @@ async function run(values, dependencies = {}) {
       need(identity(preparedStamp, await checked(preparedRoot, true)), "KEYWORD_PREP_PARENT_CHANGED");
       const normalization = path.join(scratchRoot, suffix), proof = path.join(copyRoot, "control", "prepare-" + token + "-" + String(i + 1) + ".json"), partRoot = path.join(preparedRoot, "part-" + suffix), projection = path.join(partRoot, "projection"); await absent(normalization); await absent(proof); await mkdirNew(partRoot);
       progress({ stage: "normalizing", keyword: row.keyword, month: row.month, count: i + 1 });
-      const normalized = await execute(input["python-path"], [input["launcher-path"], "--copy-root", copyRoot, "--proof", proof, "--code-root", codeRoot, "--guard-sha256", input["guard-sha"], "--node-sha256", input["node-sha"], "--", input["node-path"], guard,
-        "--mode", "normalize", "--copy-root", copyRoot, "--code-root", codeRoot, "--isolation-proof", proof, "--expected-capture-sha", capture.sha256, "--keyword", row.keyword, "--month", row.month, "--cutoff", cutoffDate, "--output", normalization], { cwd: codeRoot });
-      need(normalized.exitCode === 0 && childStderrSafe(normalized) && normalized.stdout?.state === "complete", "KEYWORD_PREP_NORMALIZE_CHILD_FAILED");
+      let normalized;
+      try { normalized = await execute(input["python-path"], [input["launcher-path"], "--copy-root", copyRoot, "--proof", proof, "--code-root", codeRoot, "--guard-sha256", input["guard-sha"], "--node-sha256", input["node-sha"], "--", input["node-path"], guard,
+        "--mode", "normalize", "--copy-root", copyRoot, "--code-root", codeRoot, "--isolation-proof", proof, "--expected-capture-sha", capture.sha256, "--keyword", row.keyword, "--month", row.month, "--cutoff", cutoffDate, "--output", normalization], { cwd: codeRoot, receiptOnly: true }); }
+      catch (error) { error.childCode = await normalizerFailureCode(normalization, scratchRoot); throw error; }
+      need(normalized.exitCode === 0 && normalized.receiptOnly === true && normalized.stdout === null, "KEYWORD_PREP_NORMALIZE_CHILD_FAILED");
       const normalizationStamp = await checked(normalization, true), proofRead = await read(proof, 65536), complete = await read(path.join(normalization, "reconstruction-complete.json")), provenance = await read(path.join(normalization, "provenance.json"), 65536);
       isolation(proofRead.value, copyRoot, input); validateComplete(complete.value, request, capture, proofRead, normalized.pid);
-      need(complete.value.sourceFile === path.join(normalization, "source.json") && normalized.stdout.sourceSha256 === complete.value.sourceSha256 && normalized.stdout.sourceBytes === complete.value.sourceBytes, "KEYWORD_PREP_SOURCE_BINDING");
+      need(complete.value.sourceFile === path.join(normalization, "source.json"), "KEYWORD_PREP_SOURCE_BINDING");
       const source = await fileHash(complete.value.sourceFile, LIMITS.source);
       need(source.sha256 === complete.value.sourceSha256 && source.bytes === complete.value.sourceBytes && provenance.value.inputSha256 === source.sha256 && provenance.value.inputBytes === source.bytes
         && provenance.value.copiedAt === capture.value.capturedAt && provenance.value.observationScope === "normalized_multirun" && fingerprint(provenance.value.normalizationCutoffs) === fingerprint(Object.fromEntries(complete.value.records.map(r => [r.request.month, r.request.cutoffDate]))), "KEYWORD_PREP_SOURCE_BINDING");
       progress({ stage: "building", keyword: row.keyword, month: row.month, count: i + 1, sha256: source.sha256 });
-      const built = await execute(input["node-path"], ["--max-old-space-size=768", builder, "--source", source.file, "--output", projection, "--now", input["prep-date"], "--data-through", capture.value.capturedAt, "--copied-at", capture.value.capturedAt, "--provenance", provenance.file, "--compression", "gzip"], { cwd: codeRoot });
+      const publicationMonths = complete.value.records.map(r => r.request.month).sort();
+      const built = await execute(input["node-path"], ["--max-old-space-size=768", builder, "--source", source.file, "--output", projection, "--now", input["prep-date"], "--data-through", capture.value.capturedAt, "--copied-at", capture.value.capturedAt, "--provenance", provenance.file, "--compression", "gzip", "--publish-months", publicationMonths.join(",")], { cwd: codeRoot });
       need(built.exitCode === 0 && childStderrSafe(built) && built.stdout?.sourceUnchanged === true && built.stdout.provenanceUnchanged === true && built.stdout.sourceFingerprint === source.sha256 && built.stdout.projectionDir === projection
-        && built.stdout.explicitOfflinePreparation === true && built.stdout.providerCalls === 0 && built.stdout.kosisReadOrChanged === false, "KEYWORD_PREP_BUILD_CHILD_FAILED");
-      const index = await read(path.join(projection, "index.json"), MIB); need(index.sha256 === built.stdout.indexSha256 && built.stdout.scopeCount <= 2 && index.value.keywords.every(k => k.keyword === row.keyword && k.scopes.every(scope => scope.encoding === "gzip")), "KEYWORD_PREP_INDEX_BINDING");
+        && fingerprint(built.stdout.publishMonths) === fingerprint(publicationMonths) && built.stdout.explicitOfflinePreparation === true && built.stdout.providerCalls === 0 && built.stdout.kosisReadOrChanged === false, "KEYWORD_PREP_BUILD_CHILD_FAILED");
+      const index = await read(path.join(projection, "index.json"), MIB); need(index.sha256 === built.stdout.indexSha256 && Number.isSafeInteger(built.stdout.scopeCount) && built.stdout.scopeCount >= 0 && built.stdout.scopeCount <= 2
+        && index.value.keywords.reduce((n, k) => n + k.scopes.length, 0) === built.stdout.scopeCount
+        && index.value.keywords.every(k => k.keyword === row.keyword && ["stayMonths", "inventoryStayMonths", "rankMonths"].every(key => k[key].every(m => publicationMonths.includes(m))) && k.scopes.every(scope => publicationMonths.includes(scope.month) && scope.encoding === "gzip")), "KEYWORD_PREP_INDEX_BINDING");
       const verifyOutput = path.join(partRoot, "factory-verification.json"), verified = await execute(input["node-path"], ["--max-old-space-size=512", self, "--verify-child", projection, complete.file, verifyOutput, input["prep-date"], row.keyword, row.month, cutoffDate], { cwd: codeRoot });
       need(verified.exitCode === 0 && childStderrSafe(verified), "KEYWORD_PREP_VERIFY_CHILD_FAILED"); const verification = await read(verifyOutput, 65536);
       need(fingerprint(verification.value) === fingerprint(verified.stdout) && verification.value.indexSha256 === index.sha256 && verification.value.sourceSha256 === source.sha256 && ["prepared", "notObserved"].includes(verification.value.state), "KEYWORD_PREP_VERIFY_BINDING");
       for (const [name, data] of [["reconstruction-complete.json", complete], ["provenance.json", provenance], ["isolation-proof.json", proofRead]]) { need(same(data.stat, await checked(data.file)), "KEYWORD_PREP_INPUT_CHANGED"); await writeNew(path.join(partRoot, name), data.bytes); }
-      await writeNew(path.join(partRoot, "child-output-policy.json"), { state: "verified", exitCodes: [normalized.exitCode, built.exitCode, verified.exitCode], stderrPolicy: "only_exact_same_pid_sqlite_experimental_warning_permitted_after_exit_zero",
-        knownSqliteExperimentalWarnings: [normalized, built, verified].map(r => r.knownSqliteExperimentalWarnings || 0), stderrBytes: [normalized.stderrBytes, built.stderrBytes, verified.stderrBytes], unexpectedStderrAccepted: false });
+      await writeNew(path.join(partRoot, "child-output-policy.json"), { state: "verified", exitCodes: [normalized.exitCode, built.exitCode, verified.exitCode], protocols: ["strict_guard_receipt_files_only_stdio_dev_null", "bounded_stdout_json", "bounded_stdout_json"], stderrPolicy: "only_exact_same_pid_sqlite_experimental_warning_permitted_for_non_normalizer_exit_zero",
+        knownSqliteExperimentalWarnings: [null, built.knownSqliteExperimentalWarnings || 0, verified.knownSqliteExperimentalWarnings || 0], stderrBytes: [null, built.stderrBytes, verified.stderrBytes], unexpectedStderrAccepted: false });
       await treeBytes(budgetRoot, LIMITS.persistent); await pinCheck();
       const cleanup = await deleteOwnedSource(source.file, source, { normalization, scratchRoot, token, markerSha: marker.sha256, scratchStamp, normalizationStamp });
       await writeNew(path.join(partRoot, "source-cleanup.json"), cleanup);
@@ -232,13 +251,13 @@ async function run(values, dependencies = {}) {
   } catch (error) {
     const code = /^[A-Z][A-Z0-9_]+$/.test(error.code || "") ? error.code : "KEYWORD_PREP_FAILED";
     try { await writeNew(path.join(preparedRoot, "preparation-failed.json"), { schemaVersion: 1, state: "failed", code, active, verifiedButNotPublishedCount: prepared.length, notObservedCount: notObserved.length,
-      pointerPublished: false, preparationComplete: false, noSuccessPlan: !planReady, planRequiresReadback: planReady, partialNewArtifactsRetained: true }); } catch {}
-    fail(code);
+      ...(safeChildCode(error.childCode) ? { childCode: error.childCode } : {}), ...(Number.isInteger(error.exitCode) ? { childExitCode: error.exitCode } : {}), pointerPublished: false, preparationComplete: false, noSuccessPlan: !planReady, planRequiresReadback: planReady, partialNewArtifactsRetained: true }); } catch {}
+    throw Object.assign(Error(code), { code, childCode: safeChildCode(error.childCode) });
   }
 }
 if (require.main === module) {
   const v = process.argv.slice(2);
   Promise.resolve().then(() => { if (v[0] !== "--verify-child") return run(v); need(v.length === 8 && iso(v[4]), "KEYWORD_PREP_ARGUMENTS"); return verifyProjection({ projection: v[1], completeFile: v[2], output: v[3], now: v[4], keyword: v[5], month: v[6], cutoffDate: v[7] }); })
-    .then(result => { if (v[0] === "--verify-child") process.stdout.write(JSON.stringify(result) + "\n"); }).catch(error => { process.stderr.write(JSON.stringify({ code: /^[A-Z][A-Z0-9_]+$/.test(error.code || "") ? error.code : "KEYWORD_PREP_FAILED" }) + "\n"); process.exitCode = 1; });
+    .then(result => { if (v[0] === "--verify-child") process.stdout.write(JSON.stringify(result) + "\n"); }).catch(error => { process.stderr.write(JSON.stringify({ code: /^[A-Z][A-Z0-9_]+$/.test(error.code || "") ? error.code : "KEYWORD_PREP_FAILED", ...(safeChildCode(error.childCode) ? { childCode: error.childCode } : {}) }) + "\n"); process.exitCode = 1; });
 }
-module.exports = { args, cutoffFor, checked, read, fileHash, treeBytes, writeNew, privateOpsStat, storageScope, stderrPolicy, childStderrSafe, runChild, validateDiscovery, validateComplete, snapshotCore, fingerprint, verifyProjection, deleteOwnedSource, run, LIMITS };
+module.exports = { args, cutoffFor, checked, read, fileHash, treeBytes, writeNew, privateOpsStat, storageScope, stderrPolicy, childStderrSafe, safeChildCode, childFailureDiagnostic, runChild, isolation, normalizerFailureCode, validateDiscovery, validateComplete, snapshotCore, fingerprint, verifyProjection, deleteOwnedSource, run, LIMITS };

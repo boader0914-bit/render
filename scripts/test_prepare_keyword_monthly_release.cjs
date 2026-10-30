@@ -35,14 +35,15 @@ async function fixture(t, options = {}) {
   const guardSha = sha(await fs.readFile(path.join(code, "scripts", files[0]))), nodeSha = sha(await fs.readFile(node)), preparedRoot = path.join(ops, "prepared"), progress = [], calls = [];
   const argv = ["--code-root", code, "--copy-root", copy, "--prepared-root", preparedRoot, "--discovery-complete", discoveryFile, "--capture-sha", captureSha, "--node-path", node, "--node-sha", nodeSha, "--guard-sha", guardSha,
     "--launcher-path", path.join(code, "scripts", files[3]), "--python-path", python, "--prep-date", NOW];
-  async function execute(executable, values) {
+  async function execute(executable, values, childOptions) {
     calls.push({ executable, values });
     if (executable === python) {
+      assert.equal(values.includes("--local-stdio-parent"), false); assert.equal(childOptions.receiptOnly, true);
       if (options.failNormalization) return { exitCode: 1, stderrBytes: 0, stdout: { state: "failed" }, pid: 4321 };
       const keyword = valueOf(values, "--keyword"), month = valueOf(values, "--month"), cutoffDate = valueOf(values, "--cutoff"), output = valueOf(values, "--output"), proofFile = valueOf(values, "--proof");
       await fs.mkdir(output);
       const src = source(keyword, keyword !== options.notObserved), bytes = Buffer.from(JSON.stringify(src)), sourceFile = path.join(output, "source.json"); await fs.writeFile(sourceFile, bytes, { flag: "wx" });
-      const proof = { mode: "seccomp", noNewPrivs: true, seccompMode: 2, networkFdsClosed: true, expectedRoot: copy, preflightOnly: false, environmentSanitizedForExec: true, unrestrictedFallbackAllowed: false, providerCalls: 0, guardSha256: guardSha, nodeSha256: nodeSha, pid: 4321,
+      const proof = { mode: "seccomp", noNewPrivs: true, seccompMode: 2, networkFdsClosed: true, nonStandardFdsClosedBeforeExec: true, nonStandardFdsRemainingBeforeExec: 0, expectedRoot: copy, preflightOnly: false, environmentSanitizedForExec: true, unrestrictedFallbackAllowed: false, providerCalls: 0, guardSha256: guardSha, nodeSha256: nodeSha, pid: 4321,
         kernelProbe: { tcpSocketDenied: true, udpSocketDenied: true, ipv6SocketDenied: true, syscallsDeniedWithEperm: Object.fromEntries(["socket", "socketpair", "connect", "sendto", "sendmsg"].map(k => [k, true])) } }; await json(proofFile, proof);
       const current = { type: "keyword", targetId: keyword, month, cutoffDate }, requests = [previousMonthlyReportRequest(current), current];
       const records = requests.map(request => ({ request, scopedCounts: { observations: src.observations.filter(r => r.stayDate.startsWith(request.month)).length, rankObservations: 0, savedProductRecoveries: 0 }, sameSourceFinancialAndDiagnosticParity: true, snapshotFingerprint: prep.fingerprint(prep.snapshotCore(buildMonthlyReportSnapshot(request, sourceForKeywordMonthlyRequest(src, request), CAPTURE))) }));
@@ -55,14 +56,14 @@ async function fixture(t, options = {}) {
         guardMetrics: { ...ZERO_GUARD, ...(options.denial ? { outsideReadAttempts: 1 } : {}) }, sourceMetrics: { deniedRequires: 0 }, scratch: { ...SCRATCH }, copyInputsBefore: { preserved: true }, immutableCopyInputsAfter: { preserved: true }, originalOutputVerification: OUTPUT_VERIFY,
         isolation: { proofSha256: sha(await fs.readFile(proofFile)), pid: 4321, tcpKernelDenied: true, udpKernelDenied: true }, records, counts: Object.fromEntries(["companies", "runs", "observations", "rankObservations", "savedProductRecoveries"].map(k => [k, src[k].length])) };
       await json(path.join(output, "reconstruction-complete.json"), complete); await json(path.join(output, "provenance.json"), { inputSha256: sha(bytes), inputBytes: bytes.length, copiedAt: CAPTURE, observationScope: "normalized_multirun", normalizationCutoffs: Object.fromEntries(requests.map(r => [r.month, r.cutoffDate])) });
-      return { exitCode: 0, stderrBytes: 0, pid: 4321, stdout: { state: "complete", sourceSha256: sha(bytes), sourceBytes: bytes.length } };
+      return { exitCode: 0, stderrBytes: null, pid: 4321, stdout: null, receiptOnly: true };
     }
     if (values.includes("--verify-child")) {
       const p = values.slice(values.indexOf("--verify-child") + 1), result = await prep.verifyProjection({ projection: p[0], completeFile: p[1], output: p[2], now: p[3], keyword: p[4], month: p[5], cutoffDate: p[6] });
       return { exitCode: 0, stderrBytes: 0, stdout: result };
     }
     const result = await builder.run(values.slice(2)); if (options.changeSourceAfterBuild) await fs.appendFile(valueOf(values, "--source"), " ");
-    if (options.dropTargetDescriptor) { const file = path.join(result.projectionDir, "index.json"), index = JSON.parse(await fs.readFile(file)); for (const item of index.keywords) { for (const key of ["stayMonths", "inventoryStayMonths", "rankMonths"]) item[key] = item[key].filter(month => month !== "2026-10"); item.scopes = item.scopes.filter(scope => scope.month !== "2026-10"); } await fs.writeFile(file, JSON.stringify(index)); result.indexSha256 = sha(await fs.readFile(file)); }
+    if (options.dropTargetDescriptor) { const file = path.join(result.projectionDir, "index.json"), index = JSON.parse(await fs.readFile(file)); for (const item of index.keywords) { for (const key of ["stayMonths", "inventoryStayMonths", "rankMonths"]) item[key] = item[key].filter(month => month !== "2026-10"); item.scopes = item.scopes.filter(scope => scope.month !== "2026-10"); } await fs.writeFile(file, JSON.stringify(index)); result.indexSha256 = sha(await fs.readFile(file)); result.scopeCount = index.keywords.reduce((n, item) => n + item.scopes.length, 0); }
     return { exitCode: 0, stderrBytes: 0, stdout: result };
   }
   return { root, code, copy, ops, original, argv, preparedRoot, captureFile, discoveryFile, progress, calls, execute, deps: { fixture: true, runChild: execute, progress: row => progress.push(row) } };
@@ -158,6 +159,31 @@ test("subprocess protocol bounds raw output, timeout and nonzero exit without su
   await assert.rejects(prep.runChild(process.execPath, ["-e", "process.stdout.write('x'.repeat(10000))"], { outputBound: 100 }), { code: "KEYWORD_PREP_CHILD_OUTPUT_BOUND" });
   await assert.rejects(prep.runChild(process.execPath, ["-e", "setInterval(()=>{},1000)"], { timeout: 50 }), { code: "KEYWORD_PREP_CHILD_TIMEOUT" });
   await assert.rejects(prep.runChild(process.execPath, ["-e", "process.stderr.write('do not print this'); process.exit(2)" ]), e => e.code === "KEYWORD_PREP_CHILD_FAILED" && !e.message.includes("do not print this"));
+});
+test("failed child exposes only one namespaced JSON diagnostic code and preserves failure artifacts", async t => {
+  assert.equal(prep.childFailureDiagnostic(Buffer.from('{"code":"ISOLATION_SOCKET_FD_INHERITED","message":"never return this"}\n')), "ISOLATION_SOCKET_FD_INHERITED");
+  assert.equal(prep.childFailureDiagnostic(Buffer.from('{"code":"SECRET_VALUE"}\n')), null);
+  assert.equal(prep.childFailureDiagnostic(Buffer.from('{"code":"ISOLATION_ONE"}\n{"code":"KEYWORD_TWO"}\n')), null);
+  await assert.rejects(prep.runChild(process.execPath, ["-e", "process.stderr.write(JSON.stringify({status:'blocked',code:'ISOLATION_SOCKET_FD_INHERITED',message:'do not return this'}));process.exit(2)"]), e => e.code === "KEYWORD_PREP_CHILD_FAILED" && e.childCode === "ISOLATION_SOCKET_FD_INHERITED" && !e.message.includes("do not return this"));
+  const f = await fixture(t); f.deps.runChild = async (exe, argv) => { const output = valueOf(argv, "--output"); await fs.mkdir(output); await json(path.join(output, "reconstruction-failed.json"), { state: "failed", code: "KEYWORD_RECONSTRUCT_SIDE_EFFECT_ATTEMPTED" }); throw Object.assign(Error("arbitrary private original text"), { code: "KEYWORD_PREP_CHILD_FAILED", exitCode: 2 }); };
+  await assert.rejects(prep.run(f.argv, f.deps), e => e.code === "KEYWORD_PREP_CHILD_FAILED" && e.childCode === "KEYWORD_RECONSTRUCT_SIDE_EFFECT_ATTEMPTED" && !e.message.includes("private"));
+  const failed = JSON.parse(await fs.readFile(path.join(f.preparedRoot, "preparation-failed.json"))); assert.equal(failed.childCode, "KEYWORD_RECONSTRUCT_SIDE_EFFECT_ATTEMPTED"); assert.equal(failed.childExitCode, 2); assert.equal(failed.partialNewArtifactsRetained, true); assert.equal(failed.noSuccessPlan, true);
+});
+test("coordinator requires original strict no-network/no-inherited-fd proof and rejects an IPC relaxation", () => {
+  const copy = path.resolve("fixture-copy"), input = { "guard-sha": "a".repeat(64), "node-sha": "b".repeat(64) }, proof = { mode: "seccomp", noNewPrivs: true, seccompMode: 2, networkFdsClosed: true, expectedRoot: copy,
+    preflightOnly: false, environmentSanitizedForExec: true, unrestrictedFallbackAllowed: false, providerCalls: 0, guardSha256: input["guard-sha"], nodeSha256: input["node-sha"], pid: 4321, nonStandardFdsClosedBeforeExec: true, nonStandardFdsRemainingBeforeExec: 0,
+    kernelProbe: { tcpSocketDenied: true, udpSocketDenied: true, ipv6SocketDenied: true, syscallsDeniedWithEperm: Object.fromEntries(["socket", "socketpair", "connect", "sendto", "sendmsg"].map(k => [k, true])) } };
+  prep.isolation(proof, copy, input);
+  for (const change of [p => { p.networkFdsClosed = false; }, p => { p.nonStandardFdsClosedBeforeExec = false; }, p => { p.nonStandardFdsRemainingBeforeExec = 1; }, p => { p.stdioLocalIPC = { mode: "verified_parent_unix_socketpair" }; }, p => { p.kernelProbe.tcpSocketDenied = false; }]) { const invalid = structuredClone(proof); change(invalid); assert.throws(() => prep.isolation(invalid, copy, input), { code: "KEYWORD_PREP_ISOLATION_GATE" }); }
+});
+test("normalizer receiptOnly child ignores stdout/stderr and binds a fresh real receipt to actual child PID", async t => {
+  const f = await fixture(t), receipt = path.join(f.ops, "actual-child-receipt.json");
+  const result = await prep.runChild(process.execPath, ["-e", "require('node:fs').writeFileSync(process.argv[1],JSON.stringify({state:'complete',pid:process.pid}),{flag:'wx'});process.stdout.write('not JSON');process.stderr.write('not a protocol');", receipt], { receiptOnly: true });
+  assert.equal(result.receiptOnly, true); assert.equal(result.stdout, null); assert.equal(result.stderrBytes, null); const value = JSON.parse(await fs.readFile(receipt)); assert.equal(value.pid, result.pid); assert.equal(value.state, "complete");
+  await assert.rejects(prep.runChild(process.execPath, ["-e", "process.exit(2)"], { receiptOnly: true }), e => e.code === "KEYWORD_PREP_CHILD_FAILED" && e.childCode === null);
+  assert.equal(await prep.normalizerFailureCode(path.join(f.copy, "not-created"), f.copy), null);
+  const empty = await fixture(t); empty.deps.runChild = async () => ({ exitCode: 0, pid: 4321, stdout: null, stderrBytes: null, receiptOnly: true });
+  await assert.rejects(prep.run(empty.argv, empty.deps), { code: "ENOENT" }); await assert.rejects(fs.stat(path.join(empty.preparedRoot, "bundle-plan.json")), { code: "ENOENT" });
 });
 test("only exact same-PID SQLite warning on exit zero is accepted; real stderr and mixed errors remain rejected", async () => {
   const text = pid => `(node:${pid}) ExperimentalWarning: SQLite is an experimental feature and might change at any time\n(Use \`node --trace-warnings ...\` to show where the warning was created)\n`;
