@@ -16,6 +16,7 @@ const { createPublicAssetVersions } = require('./public-asset-versions.cjs');
 const { createArchiveService } = require('./archive-service.cjs');
 const { createBootstrapSnapshots } = require('./bootstrap-snapshots.cjs');
 const { createSavedKeywordComparison } = require('./lib/saved-keyword-comparison.cjs');
+const { createPublicBookingPickupStore } = require('./public-booking-pickup-store.cjs');
 function validatedOrigin(value) {
   const u = new URL(value);
   if (u.username || u.password || u.pathname !== '/' || u.search || u.hash || /[?#]/.test(String(value)) || (u.protocol !== 'https:' && !(u.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(u.hostname)))) throw new Error('Insight origins require HTTPS or local development addresses');
@@ -50,12 +51,15 @@ function configuration(env = process.env) {
   const archiveRoot=env.RENDER?'/var/data':env.DATA_DIR||null;
   const archiveDirectory=env.INSIGHT_ARCHIVE_DIR||(archiveRoot?path.join(archiveRoot,'insight-archive'):null);
   if(archiveDirectory&&(!path.isAbsolute(archiveDirectory)||path.resolve(archiveDirectory)===path.parse(path.resolve(archiveDirectory)).root))throw new Error('Insight archive requires an absolute, dedicated directory');
-  return { origin: origin.origin, origins, backend: backend.origin, serviceToken, port, host: env.RENDER ? '0.0.0.0' : '127.0.0.1',regionCacheDirectory:cacheDirectory,companyCacheDirectory,reportCacheDirectory,comparisonRegionCacheDirectory,archiveDirectory };
+  const publicBookingDirectory=env.INSIGHT_PUBLIC_BOOKING_DIR||(archiveRoot?path.join(archiveRoot,'insight-public-bookings'):null);
+  if(publicBookingDirectory&&(!path.isAbsolute(publicBookingDirectory)||path.resolve(publicBookingDirectory)===path.parse(path.resolve(publicBookingDirectory)).root))throw new Error('Insight public booking evidence requires an absolute, dedicated directory');
+  return { origin: origin.origin, origins, backend: backend.origin, serviceToken, port, host: env.RENDER ? '0.0.0.0' : '127.0.0.1',regionCacheDirectory:cacheDirectory,companyCacheDirectory,reportCacheDirectory,comparisonRegionCacheDirectory,archiveDirectory,publicBookingDirectory };
 }
-function createConnectedServer({ origin, origins = [], backend, serviceToken, fetchImpl = fetch, regionCacheDirectory=null,companyCacheDirectory=null,reportCacheDirectory=null,comparisonRegionCacheDirectory=null,archiveDirectory=null,savedComparisonDirectory,diagnosticsLogger,companyDiagnosticsLogger=entry=>console.warn('insight_company_read',JSON.stringify(entry)) }) {
+function createConnectedServer({ origin, origins = [], backend, serviceToken, fetchImpl = fetch, regionCacheDirectory=null,companyCacheDirectory=null,reportCacheDirectory=null,comparisonRegionCacheDirectory=null,archiveDirectory=null,publicBookingDirectory=null,savedComparisonDirectory,diagnosticsLogger,companyDiagnosticsLogger=entry=>console.warn('insight_company_read',JSON.stringify(entry)) }) {
   const trustedOrigins = new Map(publicOrigins(origin, origins).map(value => [new URL(value).host, value]));
   const archives=createArchiveService({directory:archiveDirectory,namespace:backend});
   const savedComparison=createSavedKeywordComparison({...(savedComparisonDirectory?{directory:savedComparisonDirectory}:{})});
+  const publicBookingPickupStore=createPublicBookingPickupStore({directory:publicBookingDirectory,namespace:backend});
   const companyReads = createCompanyReadCache({persistenceDirectory:companyCacheDirectory,namespace:backend,onStage:companyDiagnosticsLogger,...(archiveDirectory?{onVerifiedSource:context=>archives.capture(context)}:{})}), regionReads = createRegionReadCache({persistenceDirectory:regionCacheDirectory,namespace:backend}), scopeSecret = crypto.randomBytes(32), staticAssets = new Map();
   const reportReads = createReportReadCache({persistenceDirectory:reportCacheDirectory,namespace:backend});
   const comparisonRegionReads=createComparisonRegionReadCache({persistenceDirectory:comparisonRegionCacheDirectory,namespace:backend});
@@ -134,10 +138,14 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
     // Invalid input still follows the central authentication/validation path.
     if(!session||!valid)return readUpstream(prefix+route,url.search,headers,{timing});
     const savedQuery=new URLSearchParams(url.search);savedQuery.set('month',month||new Date(Date.now()+9*3600000).toISOString().slice(0,7));savedQuery.set('savedOnly','1');
-    return companyReads.read({scope:scopeFor(requestOrigin,mode,session,viewTarget(headers)),audience:audienceFor(requestOrigin,mode,viewTarget(headers)),route:'/companies/'+match[1]+'/collection',companyId:match[1],month,force,requestId:timing?.requestId,
+    const reply=await companyReads.read({scope:scopeFor(requestOrigin,mode,session,viewTarget(headers)),audience:audienceFor(requestOrigin,mode,viewTarget(headers)),route:'/companies/'+match[1]+'/collection',companyId:match[1],month,force,requestId:timing?.requestId,
       readIdentity:()=>readUpstream(prefix+(mode==='admin'?'/customer-view/me':'/me'),'',headers,{stage:'identity',timing}),
       readSavedSource:()=>readUpstream(prefix+route,'?'+savedQuery.toString(),headers,{stage:'saved_preview',timing,timeoutMs:3000}),
       readSource:({background=false}={})=>readUpstream(prefix+route,url.search,headers,{stage:'source',timing,background})});
+    if(!reply.ok)return reply;
+    const selectedMonth=month||reply.data.companyDetail?.integrated?.selectedMonth||new Date(Date.now()+9*3600000).toISOString().slice(0,7);
+    const publicBookingPickup=await publicBookingPickupStore.project({companyId:match[1],month:selectedMonth});
+    return publicBookingPickup?{...reply,data:{...reply.data,publicBookingPickup}}:reply;
   }
   async function regionRead(requestOrigin, mode, session, headers, route, url, force, timing) {
     const match=/^\/(?:customer-view\/)?regions\/([a-zA-Z0-9_-]+)\/analysis$/.exec(route);
@@ -325,6 +333,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   server.prepareComparisonRegionSnapshots=async()=>{await comparisonRegionReads.ready();return comparisonRegionReads.persistenceStatus();};
   server.flushComparisonRegionSnapshots=()=>comparisonRegionReads.flushPersistence();
   server.prepareArchives=async()=>{await archives.ready();return archives.status();};
+  server.publicBookingPickupStore=publicBookingPickupStore;
   server.flushArchives=()=>archives.flush();
   return server;
 }

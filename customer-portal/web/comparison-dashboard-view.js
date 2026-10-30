@@ -27,7 +27,7 @@
     SOURCE_CONTEXT_MISMATCH:'업체·기간 확인 필요',PRICE_NOT_CONNECTED:'저장 자료 미연결',PRICE_MISSING:'가격 자료 없음',
     PRICE_PARTIAL:'일부 가격 자료',PRICE_DUPLICATE_CONFLICT:'가격 중복 충돌',PICKUP_NO_PREVIOUS_OBSERVATION:'이전 관측 없음',
     PICKUP_OUTSIDE_SELECTED_DATES:'선택 기간 비교 없음',PICKUP_INVALID_EVIDENCE:'관측 근거 확인 필요',
-    PICKUP_REFERENCE_ONLY:'관측 변화 · 참고',PICKUP_RECENT_SUBSET:'일부 관측 변화 · 참고'});
+    PICKUP_REFERENCE_ONLY:'관측 변화 · 참고',PICKUP_PUBLIC_ONLY_REFERENCE:'공개예약만 비교 · 참고',PICKUP_RECENT_SUBSET:'일부 관측 변화 · 참고'});
   const stamp=value=>typeof value==='string'&&Number.isFinite(Date.parse(value))?new Date(value).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
   const missingLabel=metric=>metric?.reasonLabel||reasonLabels[metric?.reasonCode]||(!finite(metric?.value)?'자료 미확인':metric?.status==='reference'?'관측 변화 · 참고':metric?.status==='partial'?'일부 저장 자료':'저장 자료');
   function title(kicker,heading,detail='',id=''){
@@ -59,6 +59,7 @@
     if(source.previousRunId)parts.push('이전 수집번호 '+source.previousRunId);
     if(source.currentRunId)parts.push('현재 수집번호 '+source.currentRunId);
     if(source.calculationVersion)parts.push('계산 기준 '+source.calculationVersion);
+    if(typeof source.sourceDigests?.previous==='string'&&typeof source.sourceDigests?.current==='string')parts.push('원본 지문 '+source.sourceDigests.previous.slice(0,12)+'… → '+source.sourceDigests.current.slice(0,12)+'…');
     return [...new Set(parts)];
   }
   function savedCell(metric,kind){
