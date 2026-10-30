@@ -31,7 +31,10 @@ test("new, changed and symlinked original files fail instead of becoming capture
   try { await fs.writeFile(f.file, "changed"); await assert.rejects(fs.readFile(f.file), { code: "KEYWORD_OUTPUT_CHANGED" }); await assert.rejects(view.verify(), { code: "KEYWORD_OUTPUT_CHANGED" }); }
   finally { view.restore(); }
   const g = await fixture(t), view2 = installReadOnlyOutputs({ root: g.original, files: g.files, directories: g.directories });
-  try { await fs.writeFile(path.join(g.original, "new.json"), "{}"); await assert.rejects(view2.assertInventoryCurrent(), { code: "KEYWORD_OUTPUT_DIRECTORY_CHANGED" }); }
+  try { await fs.writeFile(path.join(g.original, "new.json"), "{}");
+    // A coarse directory timestamp can defer detection to the uncaptured-file
+    // check. Both paths reject the new file before reading its body.
+    await assert.rejects(view2.assertInventoryCurrent(), error => ["KEYWORD_OUTPUT_DIRECTORY_CHANGED", "KEYWORD_OUTPUT_NOT_CAPTURED"].includes(error.code)); }
   finally { view2.restore(); }
 });
 test("a scratch reservation rejects an oversized file before any body is written", async t => {

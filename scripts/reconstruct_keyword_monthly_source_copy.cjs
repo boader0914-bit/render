@@ -117,6 +117,13 @@ function snapshotCore(snapshot) {
   return { summary: snapshot.summary, daily: snapshot.daily, companies: snapshot.companies.map(company => ({ companyId: company.companyId, summary: company.summary, daily: company.daily })),
     selectedDigest: snapshot.sources.digest, partialEvidence: snapshot.sources.partialEvidence, ranks: snapshot.ranks, quality: snapshot.quality };
 }
+function snapshotReceiptFields(core) {
+  // Diagnostic fingerprints do not replace the original order-sensitive gate.
+  // Sorting is confined to this extra proof, never the source or UI arrays.
+  const financialCompanies = [...core.companies].sort((a, b) => String(a.companyId) < String(b.companyId) ? -1 : String(a.companyId) > String(b.companyId) ? 1 : 0);
+  return { snapshotFieldFingerprints: Object.fromEntries(Object.entries(core).map(([key, value]) => [key, fingerprint(value)])),
+    canonicalCompanyFingerprint: fingerprint(financialCompanies), companyOrderIds: core.companies.map(company => company.companyId) };
+}
 async function verifyCopyInputs(copyRoot, capture, { immutableOnly = false, started = Date.now() } = {}) {
   const rows = [], buffer = Buffer.alloc(1024 * 1024);
   for (const row of capture.inputFiles) {
@@ -209,7 +216,8 @@ async function run(values) {
       if (safe.specialDays) source.specialDays = safe.specialDays;
       records.push({ request, fullCounts: Object.fromEntries(["companies", "runs", "observations", "rankObservations", "savedProductRecoveries"].map(key => [key, (full[key] || []).length])),
         scopedCounts: Object.fromEntries(["companies", "runs", "observations", "rankObservations", "savedProductRecoveries"].map(key => [key, (safe[key] || []).length])),
-        scopedMultisets: Object.fromEntries(["observations", "rankObservations", "savedProductRecoveries"].map(key => [key, multiset(safe[key] || [])])), sameSourceFinancialAndDiagnosticParity: true, snapshotFingerprint: fingerprint(actual) });
+        scopedMultisets: Object.fromEntries(["observations", "rankObservations", "savedProductRecoveries"].map(key => [key, multiset(safe[key] || [])])), sameSourceFinancialAndDiagnosticParity: true,
+        snapshotFingerprint: fingerprint(actual), ...snapshotReceiptFields(actual) });
     }
     source.companies = [...companies.values()]; source.runs = [...runs.values()];
     need(source.observations.length <= MAX_ROWS && source.rankObservations.length <= MAX_ROWS && source.savedProductRecoveries.length <= MAX_ROWS, "KEYWORD_RECONSTRUCT_ROW_BOUND");
@@ -238,4 +246,4 @@ async function run(values) {
   } finally { scratch.restore(); outputs.restore(); guards.restore(); }
 }
 if (require.main === module) run(process.argv.slice(2)).then(value => console.log(JSON.stringify(value))).catch(error => { console.error(JSON.stringify({ code: error.code || "KEYWORD_RECONSTRUCT_FAILED" })); process.exitCode = 1; });
-module.exports = { args, kernelIsolation, installGuards, publicSource, snapshotCore, verifyCopyInputs, run };
+module.exports = { args, kernelIsolation, installGuards, publicSource, snapshotCore, snapshotReceiptFields, verifyCopyInputs, run };
