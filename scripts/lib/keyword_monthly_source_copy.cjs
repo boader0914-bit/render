@@ -47,7 +47,7 @@ async function safeJson(filename, maximum) {
 async function inventory({ sourceDataDir, includePrepared = false, limits: suppliedLimits } = {}) {
   const limits = validateLimits(suppliedLimits), root = path.resolve(sourceDataDir || "");
   need(typeof sourceDataDir === "string" && path.isAbsolute(sourceDataDir), "KEYWORD_COPY_ABSOLUTE_PATH_REQUIRED");
-  await checkedPath(root, true); const files = [], roots = [], started = Date.now(); let bytes = 0;
+  await checkedPath(root, true); const files = [], directories = [], roots = [], started = Date.now(); let bytes = 0;
   async function add(relative, optional = false) {
     const filename = path.join(root, relative); let value;
     try { value = await fs.lstat(filename, { bigint: true }); }
@@ -57,6 +57,7 @@ async function inventory({ sourceDataDir, includePrepared = false, limits: suppl
       need(Date.now() - started <= limits.milliseconds && depth <= limits.depth, "KEYWORD_COPY_TIME_OR_DEPTH_BOUND");
       const st = await fs.lstat(file, { bigint: true }); need(!st.isSymbolicLink(), "KEYWORD_COPY_SYMLINK_DENIED");
       if (st.isDirectory()) {
+        directories.push({ relative: path.relative(root, file).split(path.sep).join("/"), stamp: stamp(st) });
         const entries = await fs.readdir(file, { withFileTypes: true });
         for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
           // An unfinished publication cannot be silently omitted from a capture.
@@ -87,7 +88,7 @@ async function inventory({ sourceDataDir, includePrepared = false, limits: suppl
       prepared = { ...pointer, value: { ...p }, freshness: "not_inferred_from_pointer; exact normalizer revision must validate this saved generation" };
     } catch (error) { if (error.code !== "ENOENT") throw error; }
   }
-  const body = { schemaVersion: 1, sourceDataDir: root, files, roots, fileCount: files.length, bytes, prepared,
+  const body = { schemaVersion: 1, sourceDataDir: root, files, directories, roots, fileCount: files.length, directoryCount: directories.length, bytes, prepared,
     historyIndexCopied: false, kosisCopied: false, tourismCopied: false, customerDatabaseCopied: false, configurationCopied: false };
   return { ...body, inventorySha256: digest(body), inspectedAt: new Date().toISOString(), sourceWrites: 0 };
 }
@@ -158,6 +159,8 @@ async function copy(options = {}) {
       originalOutputs: { root: path.join(fresh.sourceDataDir, "outputs"), fileCount: fresh.files.filter(row => row.relative.startsWith("outputs/")).length,
         files: fresh.files.filter(row => row.relative.startsWith("outputs/")).map(row => ({ ...row, relative: row.relative.slice(8) })), bodyReadsDuringCopy: 0, copied: false, writeAllowed: false },
       sourceWrites: 0, physicalCopiesOnly: true, originalHistoryIndexTouched: false, kosisCopied: false, tourismCopied: false, customerDatabaseCopied: false, configurationCopied: false };
+    manifest.originalOutputs.directories = fresh.directories.filter(row => row.relative === "outputs" || row.relative.startsWith("outputs/")).map(row => ({ relative: row.relative === "outputs" ? "" : row.relative.slice(8), stamp: row.stamp }));
+    manifest.originalOutputs.directoryCount = manifest.originalOutputs.directories.length;
     const bytes = JSON.stringify(manifest); await fs.writeFile(path.join(control, "capture-complete.json"), bytes, { flag: "wx", mode: 0o600 });
     return { state: "complete", copyRoot: target, dataDir: data, fileCount: copied.length, bytes: manifest.bytes, sourceInventorySha256: fresh.inventorySha256,
       captureManifestSha256: hash().update(bytes).digest("hex"), sourcePreserved: true, sourceWrites: 0, elapsedMs: manifest.elapsedMs,

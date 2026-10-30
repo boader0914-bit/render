@@ -51,6 +51,7 @@ function installGuards(copyRoot, { codeRoot = null, originalOutputs = null } = {
   }
   if (originalOutputs) {
     for (const row of originalOutputs.files) { const file = path.join(originalOutputs.root, ...row.relative.split("/")); outputFiles.add(file); addParents(outputDirectories, file, originalOutputs.root); }
+    for (const row of originalOutputs.directories || []) outputDirectories.add(path.join(originalOutputs.root, ...row.relative.split("/")));
     outputDirectories.add(originalOutputs.root);
   }
   const systemFiles = new Set(["/proc/self/status", "/sys/fs/cgroup/memory.stat", "/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes", "/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory.events"].map(value => path.resolve(value)));

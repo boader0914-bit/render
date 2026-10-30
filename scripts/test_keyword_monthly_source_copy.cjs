@@ -10,6 +10,7 @@ async function fixture(t) {
     "company_integrated/capacity-bases.json": '{"schemaVersion":1,"companies":{}}', "outputs/saved_run/manifest.json": '{"id":"saved_run"}',
     "history/indexes/observations.sqlite": "do-not-copy-existing-index", "history/kosis/private.json": "do-not-read-kosis", "config/auth.json": "do-not-copy-auth", "customer_db/ledger.json": "do-not-copy-customers" };
   for (const [name, body] of Object.entries(bodies)) { const file = path.join(source, ...name.split("/")); await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, body); }
+  await fs.mkdir(path.join(source, "outputs/empty_glamping_20260101"));
   return { root, source, bodies };
 }
 test("inspection inventories exact saved inputs and never copies indexes, KOSIS, config or customer data", async t => {
@@ -24,6 +25,7 @@ test("capture uses new physical files, verifies independent readback and preserv
   assert.equal(result.state, "complete"); assert.equal(result.sourcePreserved, true); assert.equal(result.fileCount, 3); assert.equal(result.originalOutputBodiesCopied, 0);
   const manifest = JSON.parse(await fs.readFile(path.join(destination, "control/capture-complete.json")));
   assert.equal(manifest.captureMode, "core_physical_copy_with_readonly_original_outputs"); assert.equal(manifest.originalOutputs.fileCount, 1); assert.equal(manifest.originalOutputs.copied, false);
+  assert.equal(manifest.originalOutputs.directoryCount, 3); assert.ok(manifest.originalOutputs.directories.some(row => row.relative === "empty_glamping_20260101"));
   await assert.rejects(fs.stat(path.join(destination, "data/outputs")), { code: "ENOENT" });
   for (const row of manifest.inputFiles) {
     const source = path.join(f.source, ...row.relative.split("/")), target = path.join(destination, "data", ...row.relative.split("/"));

@@ -8,11 +8,13 @@ const originals = Object.fromEntries(["lstatSync", "realpathSync", "openSync", "
 function need(value, code) { if (!value) throw Object.assign(new Error(code), { code }); }
 const inside = (root, file) => file === root || file.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
 const hash = () => crypto.createHash("sha256"), same = (a, b) => JSON.stringify(stamp(a)) === JSON.stringify(stamp(b));
-function installReadOnlyOutputs({ root, files } = {}) {
-  need(typeof root === "string" && path.isAbsolute(root) && Array.isArray(files) && files.length <= 15000, "KEYWORD_OUTPUT_VIEW_INVALID"); root = path.resolve(root);
-  const map = new Map(files.map(row => [row.relative, row])), receipts = new Map(), restore = [], readonlyDescriptors = new Map();
+function installReadOnlyOutputs({ root, files, directories } = {}) {
+  need(typeof root === "string" && path.isAbsolute(root) && Array.isArray(files) && files.length <= 15000 && Array.isArray(directories) && directories.length <= 15000, "KEYWORD_OUTPUT_VIEW_INVALID"); root = path.resolve(root);
+  const map = new Map(files.map(row => [row.relative, row])), directoryMap = new Map(directories.map(row => [row.relative, row])), receipts = new Map(), restore = [], readonlyDescriptors = new Map();
   need(map.size === files.length && files.every(row => typeof row.relative === "string" && !row.relative.startsWith("/") && !row.relative.split("/").some(part => !part || part === "." || part === "..")
     && Number.isSafeInteger(row.bytes) && row.bytes >= 0 && row.bytes <= MAX_CAPTURED_FILE_BYTES && row.stamp), "KEYWORD_OUTPUT_VIEW_INVALID");
+  need(directoryMap.size === directories.length && directoryMap.has("") && directories.every(row => typeof row.relative === "string" && !row.relative.startsWith("/")
+    && (row.relative === "" || !row.relative.split("/").some(part => !part || part === "." || part === "..")) && row.stamp), "KEYWORD_OUTPUT_VIEW_INVALID");
   const metrics = { originalBodyFiles: 0, originalBodyBytesHashed: 0, originalBodyReads: 0, originalWriteAttempts: 0, uncapturedReadAttempts: 0, validationDenials: 0, expectedMissingReads: 0, consumerFdChecks: 0, nonMutatingExistingDirectoryChecks: 0 };
   const check = (value, code) => { if (!value) { metrics.validationDenials++; need(false, code); } };
   function replace(object, key, value) { const old = object[key]; object[key] = value; restore.push(() => { object[key] = old; }); }
@@ -73,9 +75,11 @@ function installReadOnlyOutputs({ root, files } = {}) {
   const mkdir = fsp.mkdir; replace(fsp, "mkdir", async (value, options) => { const file = resolve(value); if (!file) return mkdir(value, options); if (file === root && options?.recursive === true) { checked(file, true); metrics.nonMutatingExistingDirectoryChecks++; return undefined; } denied(); });
   const createStream = fs.createReadStream; replace(fs, "createReadStream", (value, options = {}) => { const file = resolve(value); if (!file) return createStream(value, options); if (options.fd !== undefined || writing(options.flags || "r")) denied(); observe(file); return originals.createReadStream(file, { ...options, flags: fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) }); });
   async function assertInventoryCurrent() {
-    const found = []; function visit(directory, depth) { need(depth <= 10, "KEYWORD_OUTPUT_DEPTH_BOUND"); checked(directory, true); for (const entry of originals.readdirSync(directory, { withFileTypes: true })) {
+    const found = [], foundDirectories = []; function visit(directory, depth) { need(depth <= 10, "KEYWORD_OUTPUT_DEPTH_BOUND"); const relative = path.relative(root, directory).split(path.sep).join("/"), expected = directoryMap.get(relative);
+      check(expected && JSON.stringify(stamp(checked(directory, true))) === JSON.stringify(expected.stamp), "KEYWORD_OUTPUT_DIRECTORY_CHANGED"); foundDirectories.push(relative);
+      for (const entry of originals.readdirSync(directory, { withFileTypes: true })) {
       const file = path.join(directory, entry.name); need(!entry.isSymbolicLink(), "KEYWORD_OUTPUT_SYMLINK_DENIED"); if (entry.isDirectory()) visit(file, depth + 1); else { const value = fileEntry(file); found.push(value.relative); need(found.length <= files.length, "KEYWORD_OUTPUT_CHANGED"); }
-    } } visit(root, 0); need(found.length === files.length && found.every(relative => map.has(relative)), "KEYWORD_OUTPUT_CHANGED"); return { files: found.length, inventoryPreserved: true };
+    } } visit(root, 0); check(found.length === files.length && found.every(relative => map.has(relative)) && foundDirectories.length === directories.length, "KEYWORD_OUTPUT_CHANGED"); return { files: found.length, directories: foundDirectories.length, inventoryPreserved: true };
   }
   return { metrics, async verify() { const inventory = await assertInventoryCurrent(), checked = []; for (const row of receipts.values()) { const after = hashFile(path.join(root, ...row.relative.split("/"))); need(after.sha256 === row.sha256 && after.bytes === row.bytes, "KEYWORD_OUTPUT_CHANGED"); checked.push({ ...row, afterSha256: after.sha256, preserved: true }); } return { ...inventory, originalOutputBodiesCopied: false, originalOutputBodiesReadOnlyReferenced: true, bodies: checked, originalWrites: 0, metrics: { ...metrics } }; },
     assertInventoryCurrent, restore() { for (const operation of restore.reverse()) operation(); } };
