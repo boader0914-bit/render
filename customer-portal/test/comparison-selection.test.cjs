@@ -85,10 +85,10 @@ test('back navigation restores complete historical period and selected view', ()
   assert.equal(store.getState().stayMonth, '2026-09'); assert.equal(store.getState().asOfDate, '2026-09-30');
   assert.deepEqual(store.getState().comparisonIds, ['same-a']); assert.equal(store.getState().selectedView, 'flow');
 });
-test('own-company changes clear competitor selection and invalidate in-flight requests', () => {
+test('own-company changes select that own store authorized defaults and invalidate in-flight requests', () => {
   const store = selection.createStore(options()); store.update({ comparisonIds: ['same-a'] }); const old = store.requestToken();
   store.update({ ownCompanyId: 'own-b' });
-  assert.equal(store.isCurrent(old), false); assert.deepEqual(store.getState().comparisonIds, []);
+  assert.equal(store.isCurrent(old), false); assert.deepEqual(store.getState().comparisonIds, ['other-a']);
   assert.equal(store.getState().regionContext.ownRegionKey, 'region-2');
   assert.equal(store.update({ comparisonIds: ['same-a'] }).ok, false);
   assert.equal(store.update({ comparisonIds: ['other-a'] }).ok, true);
@@ -107,7 +107,7 @@ test('permission changes, removal and account changes recheck authority and inva
 });
 test('persisted state cannot cross scope or permission partitions', () => {
   const input = options(), first = selection.createStore(input); first.update({ comparisonIds: ['same-a'], selectedView: 'regions' });
-  assert.deepEqual(selection.createStore({ ...input, scope: 'different' }).getState().comparisonIds, []);
+  assert.deepEqual(selection.createStore({ ...input, scope: 'different' }).getState().comparisonIds, ['other-a', 'same-a', 'same-b', 'unknown-a']);
   first.update({ selectedView: 'products' });
   assert.equal(selection.createStore({ ...input, permissionSignature: 'new-relations' }).getState().selectedView, 'flow');
 });
@@ -134,7 +134,7 @@ test('snapshot isolation, optional cache expiry and clear avoid mutation and sta
   let instant = '2026-10-25T00:00:00Z'; const input = options({ now: () => new Date(instant) }), store = selection.createStore(input);
   const seen = []; const unsubscribe = store.subscribe(s => seen.push(s.selectedView)); const token = store.requestToken();
   const snapshot = store.getState(); snapshot.comparisonIds.push('secret-company'); snapshot.regionContext.ownRegionKey = 'wrong';
-  assert.deepEqual(store.getState().comparisonIds, []); assert.equal(store.getState().regionContext.ownRegionKey, 'region-1');
+  assert.deepEqual(store.getState().comparisonIds, ['other-a', 'same-a', 'same-b', 'unknown-a']); assert.equal(store.getState().regionContext.ownRegionKey, 'region-1');
   store.update({ selectedView: 'products' }); assert.equal(store.isCurrent(token), false); assert.deepEqual(seen, ['products']); unsubscribe();
   instant = '2026-10-26T00:00:00Z';
   assert.equal(selection.createStore(input).getState().stayStart, '2026-10-26');
@@ -152,15 +152,72 @@ test('invalid views and oversized custom ranges do not change the previous valid
   assert.equal(store.update({ stayMode: 'custom', stayStart: '2024-01-01', stayEnd: '2026-01-01' }).ok, false);
   assert.deepEqual(store.getState(), before);
 });
-test('URL restoration is a complete snapshot: omitted competitors never leak from a previous own store', () => {
+test('URL restoration defaults omitted competitors for its own store and preserves an explicitly empty set', () => {
   const store = selection.createStore(options());
   store.update({ ownCompanyId: 'own-b', comparisonIds: ['other-a'] });
   store.restoreUrl('?ownCompanyId=own-a&stayMode=month&stayMonth=2026-09&asOfDate=2026-09-30&selectedView=flow');
-  assert.equal(store.getState().ownCompanyId, 'own-a'); assert.deepEqual(store.getState().comparisonIds, []);
+  assert.equal(store.getState().ownCompanyId, 'own-a'); assert.deepEqual(store.getState().comparisonIds, ['other-a', 'same-a', 'same-b', 'unknown-a']);
+  store.update({ comparisonIds: [] });
   const empty = store.toQuery(); store.update({ comparisonIds: ['same-a'] }); store.restoreUrl(empty);
   assert.deepEqual(store.getState().comparisonIds, []);
   const input = options(); const previous = selection.createStore(input); previous.update({ comparisonIds: ['same-a'] });
-  assert.deepEqual(selection.createStore({ ...input, url: '?ownCompanyId=own-b&selectedView=regions' }).getState().comparisonIds, []);
+  assert.deepEqual(selection.createStore({ ...input, url: '?ownCompanyId=own-b&selectedView=regions' }).getState().comparisonIds, ['other-a']);
+});
+
+test('first authenticated selection includes every registered authorized competitor exactly once', () => {
+  const store = selection.createStore(options({
+    authorizedComparisonIds:['same-a','same-a','own-a','other-a','same-b'],
+    authorizedComparisonIdsByOwn:{'own-a':['same-a','same-b','other-a','same-a','own-a','not-authorized']}
+  }));
+  assert.deepEqual(store.getState().comparisonIds,['other-a','same-a','same-b']);
+  assert.equal(store.getState().regionContext.mode,'mixed');
+  assert.deepEqual(store.getState().regionContext.comparisons.map(row=>row.companyId),['other-a','same-a','same-b']);
+});
+
+test('a version-one automatic empty selection migrates once without losing its historical period or view', () => {
+  const input=options(),first=selection.createStore(input);
+  first.update({comparisonIds:[],stayMode:'month',stayMonth:'2026-09',asOfDate:'2026-09-26',selectedView:'products'});
+  const old=JSON.parse(input.storage.getItem(selection.STORAGE_KEY)); old.version=1;
+  input.storage.setItem(selection.STORAGE_KEY,JSON.stringify(old));
+  const migrated=selection.createStore(input);
+  assert.deepEqual(migrated.getState().comparisonIds,['other-a','same-a','same-b','unknown-a']);
+  assert.equal(migrated.getState().stayMonth,'2026-09'); assert.equal(migrated.getState().asOfDate,'2026-09-26');
+  assert.equal(migrated.getState().selectedView,'products');
+  assert.equal(JSON.parse(input.storage.getItem(selection.STORAGE_KEY)).version,2);
+  migrated.update({comparisonIds:[]});
+  assert.deepEqual(selection.createStore(input).getState().comparisonIds,[],'a later explicit v2 empty selection is not migrated again');
+});
+
+test('version-one nonempty choices and explicit empty URLs are not replaced by migration defaults', () => {
+  const input=options(),first=selection.createStore(input); first.update({comparisonIds:['same-a'],selectedView:'regions'});
+  const saved=JSON.parse(input.storage.getItem(selection.STORAGE_KEY)); saved.version=1;
+  input.storage.setItem(selection.STORAGE_KEY,JSON.stringify(saved));
+  assert.deepEqual(selection.createStore(input).getState().comparisonIds,['same-a']);
+  saved.selection.comparisonIds=[];input.storage.setItem(selection.STORAGE_KEY,JSON.stringify(saved));
+  const explicit=selection.createStore({...input,url:'?comparisonIds=&selectedView=products'});
+  assert.deepEqual(explicit.getState().comparisonIds,[]);assert.equal(explicit.getState().selectedView,'products');
+});
+
+test('another customer cached selection and unrelated URL parameters cannot suppress new authorized defaults', () => {
+  const input=options(),first=selection.createStore(input);first.update({comparisonIds:[],selectedView:'regions'});
+  const second=selection.createStore({...input,scope:'opaque-customer-b',ownCompanyId:'own-b',authorizedOwnCompanyIds:['own-b'],
+    authorizedComparisonIds:['other-a'],authorizedComparisonIdsByOwn:{'own-b':['other-a']}});
+  assert.deepEqual(second.getState().comparisonIds,['other-a']);assert.equal(second.getState().selectedView,'flow');
+  assert.deepEqual(selection.createStore(options({url:'?briefingStayMode=all_available&selectedView=products'})).getState().comparisonIds,
+    ['other-a','same-a','same-b','unknown-a']);
+});
+
+test('configuration catch-up preserves an explicit selection while actual own-store changes use new defaults', () => {
+  const input=options(),store=selection.createStore(input);
+  store.update({ownCompanyId:'own-b',comparisonIds:[]});
+  store.configure({ownCompanyId:'own-b'});
+  assert.deepEqual(store.getState().comparisonIds,[],'the caller reflecting the visible own store cannot reset an explicit choice');
+  store.configure({ownCompanyId:'own-a'});
+  assert.deepEqual(store.getState().comparisonIds,['other-a','same-a','same-b','unknown-a']);
+  store.update({ownCompanyId:'own-b'});
+  store.configure({authorizedOwnCompanyIds:['own-a'],ownCompanyId:'own-a'});
+  assert.equal(store.getState().ownCompanyId,'own-a');
+  assert.deepEqual(store.getState().comparisonIds,['other-a','same-a','same-b','unknown-a']);
 });
 test('KST midnight rolls upcoming dates and invalidates old requests but preserves explicit historical cutoff', () => {
   let instant = '2026-10-25T14:59:59Z'; const store = selection.createStore(options({ now: () => new Date(instant) }));

@@ -7,7 +7,7 @@
 })(typeof window !== 'undefined' ? window : globalThis, function () {
   'use strict';
   const STORAGE_KEY = 'insight:comparison-selection:v1';
-  const VERSION = 1, MAX_STORED_CHARS = 12000, MAX_URL_CHARS = 8192;
+  const VERSION = 2, MAX_STORED_CHARS = 12000, MAX_URL_CHARS = 8192;
   const MODES = ['upcoming30', 'month', 'custom'];
   const VIEWS = ['flow', 'products', 'regions'];
   const STATE_KEYS = ['ownCompanyId', 'comparisonIds', 'stayMode', 'stayMonth', 'stayStart', 'stayEnd', 'asOfDate', 'selectedView'];
@@ -119,8 +119,9 @@
     const errors = [], source = pickSelection(input), ownId = identifier(source.ownCompanyId);
     if (strict && source.ownCompanyId != null && !context.ownIds.includes(ownId)) errors.push('OWN_NOT_AUTHORIZED');
     const ownCompanyId = context.ownIds.includes(ownId) ? ownId : context.ownIds.includes(context.ownCompanyId) ? context.ownCompanyId : null;
-    const allowed = allowedComparisons(context, ownCompanyId), rawComparisons = uniqueIds(source.comparisonIds);
-    if (strict && source.comparisonIds !== undefined && !Array.isArray(source.comparisonIds)) errors.push('INVALID_COMPARISON_SET');
+    const allowed = allowedComparisons(context, ownCompanyId), hasComparisons = Object.hasOwn(source, 'comparisonIds');
+    const rawComparisons = hasComparisons ? uniqueIds(source.comparisonIds) : allowed;
+    if (strict && hasComparisons && !Array.isArray(source.comparisonIds)) errors.push('INVALID_COMPARISON_SET');
     if (strict && Array.isArray(source.comparisonIds) && (rawComparisons.length !== source.comparisonIds.length || rawComparisons.some(id => !allowed.includes(id)))) errors.push('COMPARISON_NOT_AUTHORIZED');
     const comparisonIds = rawComparisons.filter(id => allowed.includes(id));
     const stayMode = MODES.includes(source.stayMode) ? source.stayMode : 'upcoming30';
@@ -158,9 +159,13 @@
         const text = storage?.getItem(storageKey);
         if (!text || text.length > MAX_STORED_CHARS) { if (text) removeStored(); return {}; }
         const saved = JSON.parse(text);
-        if (saved.version !== VERSION || saved.partition !== partition() || !validDate(saved.kstDate) || saved.kstDate > today()) { removeStored(); return {}; }
-        if (saved.kstDate !== today() && saved.selection?.stayMode === 'upcoming30') return { ...pickSelection(saved.selection), asOfDate: today() };
-        return pickSelection(saved.selection);
+        if (![1, VERSION].includes(saved.version) || saved.partition !== partition() || !validDate(saved.kstDate) || saved.kstDate > today()) { removeStored(); return {}; }
+        const restored = pickSelection(saved.selection);
+        // v1 also persisted its unintentional empty default. Apply the new default once;
+        // v2 records subsequent explicit empty selections without repopulating them.
+        if (saved.version === 1 && Array.isArray(restored.comparisonIds) && restored.comparisonIds.length === 0) delete restored.comparisonIds;
+        if (saved.kstDate !== today() && restored.stayMode === 'upcoming30') restored.asOfDate = today();
+        return restored;
       } catch (_) { removeStored(); return {}; }
     }
     function persist() {
@@ -196,19 +201,23 @@
         if (Object.hasOwn(selected, 'stayMode') || Object.hasOwn(selected, 'stayMonth')) {
           if (!Object.hasOwn(selected, 'asOfDate')) delete candidate.asOfDate;
         }
-        // Different own stores must not inherit a previous store's competitor set.
-        if (Object.hasOwn(selected, 'ownCompanyId') && selected.ownCompanyId !== state.ownCompanyId && !Object.hasOwn(selected, 'comparisonIds')) candidate.comparisonIds = [];
+        // Different own stores start from their own authorized defaults, never the
+        // previous store's competitor set. A supplied empty array is still explicit.
+        if (Object.hasOwn(selected, 'ownCompanyId') && selected.ownCompanyId !== state.ownCompanyId && !Object.hasOwn(selected, 'comparisonIds')) delete candidate.comparisonIds;
         const result = normalize(candidate, context, today(), true);
         if (result.errors.length) return { ok: false, errors: result.errors, state: copy(state) };
         return { ok: true, errors: [], state: replace(result.state) };
       },
       configure(changes = {}) {
         ensureDay();
-        const oldScope = context.scope, oldPermission = partition(), oldOwn = context.ownCompanyId;
+        const oldScope = context.scope, oldPermission = partition();
         rawContext = { ...rawContext, ...changes }; context = contextOf(rawContext);
-        const scopeChanged = oldScope !== context.scope, ownChanged = Object.hasOwn(changes, 'ownCompanyId') && oldOwn !== context.ownCompanyId;
+        const scopeChanged = oldScope !== context.scope, ownChanged = Object.hasOwn(changes, 'ownCompanyId') && state.ownCompanyId !== context.ownCompanyId;
         let candidate = scopeChanged ? { ownCompanyId: context.ownCompanyId } : pickSelection(state);
-        if (ownChanged) candidate = { ...candidate, ownCompanyId: context.ownCompanyId, comparisonIds: [] };
+        if (ownChanged) { candidate = { ...candidate, ownCompanyId: context.ownCompanyId }; delete candidate.comparisonIds; }
+        // Losing access to the selected own store also changes the comparison base.
+        // Do not carry a previous own store's selection into its authorized fallback.
+        if (!scopeChanged && !ownChanged && !context.ownIds.includes(candidate.ownCompanyId)) delete candidate.comparisonIds;
         if (scopeChanged || oldPermission !== partition() || ownChanged) { generation++; removeStored(); }
         // Authorization changes invalidate late responses even if the visible selection remains identical.
         const normalized = normalize(candidate, context, today()).state;

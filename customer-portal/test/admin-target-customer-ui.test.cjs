@@ -12,7 +12,7 @@ async function harness({url='https://insight.example/customer-view?customerId=cu
  const window={addEventListener(name,fn){events[name]=fn;},scrollTo(){},InsightComparisonSelection:{createStore:()=>store},InsightComparisonView:{panel:()=>'<div>기존 비교 화면</div>',mount(){},stop(){}},InsightHomeContextView:{panel:s=>'<h2>'+s.customer.username+'</h2>'},InsightContextWorkspace:{controls:()=>'',mount(){},stop(){}},InsightRegionalContextView:{panel:()=>''},InsightCollection:{panel:()=>'<h2>업체 기본자료</h2>',mount(id,api,options){mounted.push({id,api,options});},stop(){},setContext(scope){scopes.push(scope);},restore(){},clearCache(){}},InsightAnalysis:{stop(){},configureCache(){},configureReports(){},restore(){},restoreReports(){},panel:()=>'<form id="analysis-form"></form>',mount(){}}};
  const context=vm.createContext({window,location,URL,URLSearchParams,history:{replaceState(){}},sessionStorage:{getItem(){return null;}},localStorage:{getItem(){return null;}},document:{querySelector:element,querySelectorAll:()=>[],body:element('body'),documentElement:{dataset:{},setAttribute(){}},addEventListener(name,fn){events[name]=fn;}},crypto:{randomUUID:()=> 'fixture_key'},AbortController,setTimeout(){return 1;},clearTimeout(){},
  fetch:async(url,options={})=>{calls.push({url,options});let status=200,data={};if(url.endsWith('/config'))data={};else if(url==='/api/insight-admin/v1/customers'){if(rosterFails){status=503;data={error:{message:'목록 연결 지연'}};}else data={customers:roster};}else if(url.endsWith('/customer-view/me')||url==='/api/customer/v1/me'){if(meError){status=meError;data={error:{code:meError===409?'CUSTOMER_VIEW_REQUIRED':'DENIED',message:'선택 고객 확인 필요'}};}else data=state;}else if(url==='/api/insight-admin/v1/me')data={admin:{username:'admin'},csrfToken:'fixture_csrf'};else if(url.endsWith('/start'))data=state;else if(url.endsWith('/auth/logout'))data={ok:true};return{status,ok:status<400,json:async()=>data};}});
- if(early)vm.runInContext(read('bootstrap-read.js'),context);vm.runInContext(read('connected.js'),context);await flush();
+ vm.runInContext(read('saved-keyword-comparison.js'),context);if(early)vm.runInContext(read('bootstrap-read.js'),context);vm.runInContext(read('connected.js'),context);await flush();
  return{calls,window,events,assigned,mounted,scopes,state,html:()=>element('#main').innerHTML,banner:()=>element('#admin-view-banner').innerHTML,setRosterError(value){rosterFails=value;},async navigate(hash){location.hash=hash;events.hashchange();await flush();},async action(action,dataset={}){const button={dataset:{action,...dataset},disabled:false};await events.click({target:{closest:()=>button}});await flush();},async submit(id){await events.submit({preventDefault(){},target:{id,dataset:{}}});await flush();},async select(value){events.change({target:{value,matches:selector=>selector==='[data-admin-customer-select]'}});await flush();},async search(value){events.input({target:{value,selectionStart:value.length,selectionEnd:value.length,matches:selector=>selector==='[data-admin-customer-search]'}});await flush();}};
 }
 for(const early of[false,true])test(`${early?'early':'normal'} selected customer reads carry its identity on config, bootstrap, company, report and archive GETs`,async()=>{
@@ -49,6 +49,44 @@ test('default administrator preview keeps its old POST start behavior and omits 
 test('normal customer ignores administrator selection query and administrator logout does not send target identity',async()=>{
  const normal=await harness({url:'https://insight.example/?customerId=cus_beta#competitors',state:account('cus_alpha',false)});assert.equal(normal.window.InsightAdminCustomerView.readOnly(),false);assert.ok(normal.calls.every(c=>!c.options.headers?.['X-Insight-Customer-Id']));
  const h=await harness();await h.action('logout');const logout=h.calls.find(c=>c.url.endsWith('/auth/logout'));assert.equal(logout.url,'/api/insight-admin/v1/auth/logout');assert.equal(logout.options.headers['X-Insight-Customer-Id'],undefined);assert.equal(h.assigned.at(-1),'/admin');
+});
+
+test('fixed historical review never appears in normal, administrator-preview or selected-customer competition pages',async()=>{
+ for(const options of [
+  {url:'https://insight.example/#competitors',state:account('cus_alpha',false)},
+  {url:'https://insight.example/customer-view#competitors',state:account('cus_preview',false)},
+  {url:'https://insight.example/customer-view?customerId=cus_alpha#competitors',state:account()}
+ ]){
+  const h=await harness(options);assert.match(h.html(),/기존 비교 화면/);
+  assert.doesNotMatch(h.html(),/저장 키워드 비교|월명|상위 20|href="\/saved-keyword-comparison\/"/);
+  assert.equal(h.calls.some(call=>call.url.startsWith('/saved-keyword-comparison/')),false);
+  await h.navigate('#saved-keyword-comparison');
+  assert.match(h.html(),/관리자 전용|관리자 화면으로 이동/);
+  assert.doesNotMatch(h.html(),/월명|상위 20|href="\/saved-keyword-comparison\/"/);
+  assert.equal(h.calls.some(call=>call.url.startsWith('/saved-keyword-comparison/')),false,'legacy navigation cannot prefetch the private archive');
+ }
+});
+
+test('authenticated administrator management renders the historical entry using GET-only listing reads',async()=>{
+ async function admin(authorized){
+  const calls=[],elements=new Map(),events={};
+  const element=selector=>{if(!elements.has(selector))elements.set(selector,{innerHTML:'',textContent:'',hidden:false,dataset:{},addEventListener(name,fn){events[selector+':'+name]=fn;}});return elements.get(selector);};
+  const scope={document:{querySelector:element,querySelectorAll:()=>[],documentElement:{dataset:{}}},location:{assign(){}},crypto:{randomUUID:()=> 'fixture_key'},fetch:async(url,options={})=>{
+   calls.push({url,method:options.method||'GET'});
+   if(url.endsWith('/me'))return{status:authorized?200:401,ok:authorized,json:async()=>authorized?{admin:{username:'admin'},csrfToken:'fixture'}:{error:{message:'관리자 로그인 필요'}}};
+   assert.ok(authorized,'unauthenticated management cannot request customer or recurring lists');
+   assert.ok(['/api/insight-admin/v1/customers','/api/insight-admin/v1/recurring-collections'].includes(url),'rendering a review link cannot read a bundle or company records');
+   return{status:200,ok:true,json:async()=>url.endsWith('/customers')?{customers:roster}:{recurringCollections:[]}};
+  }};
+  scope.window=scope;const context=vm.createContext(scope);
+  vm.runInContext(read('saved-keyword-comparison.js'),context);vm.runInContext(read('admin.js'),context);await flush();
+  return{calls,html:element('#main').innerHTML};
+ }
+ const logged=await admin(true);assert.match(logged.html,/저장 키워드 비교/);assert.match(logged.html,/고객별 경쟁분석과 별도/);
+ assert.match(logged.html,/href="\/saved-keyword-comparison\/" target="_blank" rel="noopener"/);
+ assert.ok(logged.calls.every(call=>call.method==='GET'));assert.equal(logged.calls.length,3);
+ const anonymous=await admin(false);assert.match(anonymous.html,/인사이트 관리자 로그인/);assert.doesNotMatch(anonymous.html,/저장 키워드 비교|href="\/saved-keyword-comparison\/"/);
+ assert.deepEqual(anonymous.calls,[{url:'/api/insight-admin/v1/me',method:'GET'}]);
 });
 test('archive and regional views retain read filters while hiding publication and preparation controls',()=>{
  const window={InsightAdminCustomerView:{readOnly:()=>true}},handlers={};const context=vm.createContext({window,document:{addEventListener(name,fn){handlers[name]=fn;},querySelector(){return null;}},Date});

@@ -86,3 +86,14 @@ test('a late preview does not replace a newer normal result completed by another
   saved.companies[0].summary.sold=123;saved.companies[0].summary.reservationRate=123/saved.companies[0].summary.supply;
   const preview=clone(h.data);preview.responseCache={preview:true,refreshing:true};resolve(preview);await flush();assert.match(h.slot.innerHTML,/예약 123/);assert.match(h.status.textContent,/계산 확인 중/);
 });
+
+test('coupon inputs remain bound to the selection rendered on screen even when a newer request replaces its mutable token box',()=>{
+  const f=fixture(),mounted=[],slot={innerHTML:'',isConnected:true},status={textContent:''};
+  const context=vm.createContext({module:{exports:{}},window:{InsightCustomerOperatingActionsView:{render:()=>'<section>coupon fixture</section>',mount:options=>mounted.push(options),stop(){}},InsightComparisonReadinessView:{render:()=>''}},document:{querySelector:selector=>selector==='#comparison-results'?slot:selector==='#comparison-status'?status:null,addEventListener(){}},Date,URL,Promise,setTimeout,clearTimeout});
+  vm.runInContext(fs.readFileSync(require.resolve('../web/comparison-view.js'),'utf8'),context);
+  const options={store:f.store,state:f.state,peek:()=>clone(f.data),read:()=>new Promise(()=>{})};
+  context.module.exports.mount(options);assert.equal(mounted.length,1);assert.equal(mounted[0].isCurrent(),true);
+  f.store.update({comparisonIds:['same']});options.pendingToken={value:f.store.requestToken()};
+  assert.equal(mounted[0].isCurrent(),false,'an old rendered coupon form cannot borrow the newer request token');
+  context.module.exports.stop();
+});

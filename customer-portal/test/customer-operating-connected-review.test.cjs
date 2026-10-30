@@ -1,0 +1,22 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),http=require('node:http');
+const {createCustomerOperatingReview}=require('../review/customer-operating/server.cjs');
+test('customer operating UI uses current synthetic scoped reports and existing read routes without execution',async t=>{
+  const server=createCustomerOperatingReview({port:58021});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(()=>new Promise(resolve=>server.close(resolve)));
+  const read=(route,method='GET')=>new Promise((resolve,reject)=>{const req=http.request({host:'127.0.0.1',port:server.address().port,path:route,method,headers:{Host:'127.0.0.1:58021'}},res=>{let body='';res.on('data',value=>body+=value);res.on('end',()=>resolve({status:res.statusCode,body}));});req.on('error',reject);req.end();});
+  const html=await read('/');assert.equal(html.status,200);assert.match(html.body,/개발 검수용 가상 자료/);
+  const engine=html.body.indexOf('/customer-operating-actions.js?v='),view=html.body.indexOf('/customer-operating-actions-view.js?v='),comparison=html.body.indexOf('/comparison-view.js?v=');
+  assert.ok(engine>0&&view>engine&&comparison>view,'price/coupon engine and view load before the comparison workspace');
+  for(const file of ['customer-operating-actions.js','customer-operating-actions-view.js','customer-operating-actions.css'])assert.equal((await read('/'+file)).status,200);
+  const me=JSON.parse((await read('/api/customer/v1/me')).body);
+  const own=me.customer.relations.find(row=>row.kind==='own').companyId;
+  const response=await read('/api/customer/v1/reports/briefing?ownId='+own);assert.equal(response.status,200);const report=JSON.parse(response.body);
+  assert.equal(report.ownId,own);assert.equal(report.companies.length,4);assert.equal(report.period.start,new Date(Date.now()+9*3600000).toISOString().slice(0,10));
+  const selection={ownCompanyId:own,comparisonIds:me.customer.relations.filter(row=>row.kind==='competitor').map(row=>row.companyId),stayMode:'upcoming30',stayStart:report.period.start,stayEnd:report.period.end,asOfDate:report.period.start,selectedView:'flow'};
+  const {computeOperatingPlan}=require('../web/customer-operating-actions.js'),plan=computeOperatingPlan(report,selection,me.companies);
+  assert.equal(plan.contextValid,true);assert.equal(plan.company.companyId,own);assert.equal(plan.groups.same.length,2);assert.equal(plan.groups.cross.length,1);assert.equal(plan.summary.missingDays,1);
+  assert.equal((await read('/api/customer/v1/commands','POST')).status,403);
+  assert.ok(server.reviewCalls.every(call=>call.method==='GET'));
+  assert.ok([403,404].includes((await read('/api/customer/v1/reports/briefing?ownId=unregistered')).status),'an unrelated property cannot return report data');
+});

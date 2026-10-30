@@ -25,7 +25,7 @@ async function harness({query='',storage=new Map(),deferIdentity=false,identityS
 }
 test('authenticated current comparison starts from registered companies and shares the chosen own store with region and report menus',async()=>{
   const h=await harness();assert.equal(h.mounts.length,1);const options=h.mounts[0];assert.equal(options.store.getState().ownCompanyId,'own1');assert.deepEqual(options.store.getState().comparisonIds,['cmp1']);
-  const updated=options.store.update({ownCompanyId:'own2'});options.onSelectionChange(updated.state);assert.deepEqual(updated.state.comparisonIds,[]);assert.match(h.url(),/ownCompanyId=own2/);
+  const updated=options.store.update({ownCompanyId:'own2'});options.onSelectionChange(updated.state);assert.deepEqual(updated.state.comparisonIds,['cmp1']);assert.match(h.url(),/ownCompanyId=own2/);
   h.navigate('#regions');assert.equal(h.contextMounts.at(-1).selection.ownCompanyId,'own2');assert.equal(h.analyses.length,0,'collapsed full regional analysis does not start a source read');h.navigate('#reports');assert.equal(h.analyses.at(-1)[4],'own2');h.navigate('#competitors');assert.equal(h.mounts.at(-1).store.getState().ownCompanyId,'own2');
 });
 test('same-scope reload preserves an explicitly empty set instead of repopulating all registered competitors',async()=>{
@@ -49,12 +49,37 @@ test('an early route render restores the same scoped selection without a selecti
   await reload.authenticate();assert.deepEqual(reload.mounts[0].store.getState().comparisonIds,['cmp1']);
 });
 
-test('restored comparison selection is still partitioned by authenticated customer and permission revision',async()=>{
+test('another customer or permission partition starts from authorized defaults rather than a previous cached selection',async()=>{
   for(const change of [state=>{state.customer.customerId='other-customer';},state=>{state.customer.revision++;}]){
     const initial=await harness(),next=JSON.parse(JSON.stringify(initial.state));change(next);
     const reload=await harness({storage:initial.storage,identityState:next,deferIdentity:true});reload.navigate('#competitors');
-    await reload.authenticate();assert.deepEqual(reload.mounts[0].store.getState().comparisonIds,[]);
+    await reload.authenticate();assert.deepEqual(reload.mounts[0].store.getState().comparisonIds,['cmp1']);
   }
+});
+
+test('registered active and pending competitors are selected by default while withdrawn and unregistered rows stay excluded',async()=>{
+  const initial=await harness(),state=JSON.parse(JSON.stringify(initial.state));
+  state.customer.relations.push({companyId:'cmp2',kind:'competitor',status:'pending'},{companyId:'cmp3',kind:'competitor',status:'active'},
+    {companyId:'withdrawn',kind:'competitor',status:'withdrawn'});
+  state.companies.push({companyId:'cmp2',name:'확인 대기 업체',regionKey:'r2',rooms:10},{companyId:'cmp3',name:'등록 업체',regionKey:'r1',rooms:12},
+    {companyId:'withdrawn',name:'해제 업체',regionKey:'r1',rooms:15},{companyId:'unregistered',name:'관계 없는 업체',regionKey:'r1',rooms:15});
+  const loaded=await harness({identityState:state});
+  assert.deepEqual(loaded.mounts[0].store.getState().comparisonIds,['cmp1','cmp2','cmp3']);
+  assert.equal(loaded.mounts[0].store.getState().regionContext.mode,'mixed');
+  assert.equal(loaded.mounts[0].store.update({comparisonIds:['withdrawn']}).ok,false);
+  assert.equal(loaded.mounts[0].store.update({comparisonIds:['unregistered']}).ok,false);
+});
+
+test('a legacy automatic empty cache uses registered defaults once and preserves subsequent deliberate empty choices',async()=>{
+  const initial=await harness(),old=JSON.parse(initial.storage.get(selection.STORAGE_KEY));
+  old.version=1;old.selection.comparisonIds=[];old.selection.selectedView='products';
+  initial.storage.set(selection.STORAGE_KEY,JSON.stringify(old));
+  const migrated=await harness({storage:initial.storage});
+  assert.deepEqual(migrated.mounts[0].store.getState().comparisonIds,['cmp1']);
+  assert.equal(migrated.mounts[0].store.getState().selectedView,'products');
+  migrated.mounts[0].store.update({comparisonIds:[]});
+  const explicit=await harness({storage:migrated.storage});
+  assert.deepEqual(explicit.mounts[0].store.getState().comparisonIds,[]);
 });
 
 test('explicit logout and authenticated session expiry still clear saved selections and invalidate old requests',async()=>{
