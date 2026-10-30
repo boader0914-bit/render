@@ -44,6 +44,31 @@ test("run ids are idempotent before and after restart, including pruned terminal
   assert.equal(await restarted.runOnce(), null); assert.deepEqual(seen, [["run_one", 1], ["run_two", 3]]);
 });
 
+test("optional source manifest SHA persists exactly across completion and restart", async t => {
+  const sourceManifestSha256 = "ab".repeat(32), f = await fixture(t, { processRun: async () => ({ stages: { historyMs: 7 }, elapsedMs: 8, appended: 4, sourceManifestSha256 }) });
+  const queue = f.create(); await queue.enqueue("run_hash_bound", { context: { manifestSha256: sourceManifestSha256 } });
+  const done = await queue.runOnce(); assert.equal(done.state, "complete"); assert.deepEqual(done.result, { stages: { historyMs: 7 }, elapsedMs: 8, appended: 4, sourceManifestSha256 });
+  const restarted = f.create(); assert.deepEqual((await restarted.get("run_hash_bound")).result, done.result); assert.equal(await restarted.runOnce(), null);
+});
+
+test("invalid optional source manifest SHA is nonretryable and never leaks its raw value", async t => {
+  for (const sourceManifestSha256 of [null, 123, "private-token-must-not-persist", "a".repeat(63), "A".repeat(64), "b".repeat(65), ["d".repeat(64)]]) await t.test(String(sourceManifestSha256).slice(0, 16), async st => {
+    const f = await fixture(st, { processRun: async () => ({ sourceManifestSha256, stages: { historyMs: 3 } }) }), queue = f.create();
+    await queue.enqueue("run_bad_hash"); const failed = await queue.runOnce(); assert.equal(failed.state, "failed"); assert.equal(failed.attempts, 1); assert.equal(failed.lastErrorCode, "COLLECTION_POSTPROCESS_SOURCE_MANIFEST_SHA_INVALID"); assert.equal(failed.result, null);
+    assert.equal(await queue.runOnce(), null); const bytes = await fs.readFile(queue.stateFile, "utf8"); assert.equal(bytes.includes("private-token-must-not-persist"), false); assert.equal(bytes.includes('"sourceManifestSha256"'), false);
+  });
+});
+
+test("adding source SHA to new receipts never backfills or rewrites legacy completed run receipts", async t => {
+  let modern = false; const f = await fixture(t, { processRun: async () => modern ? { appended: 2, sourceManifestSha256: "c".repeat(64) } : { appended: 1 } }), queue = f.create();
+  await queue.enqueue("run_legacy"); await queue.runOnce(); const records = path.join(f.dataDir, "collection_postprocess", "runs"), files = await fs.readdir(records);
+  const legacyFile = path.join(records, files[0]), originalLegacy = await fs.readFile(legacyFile), originalIndex = await fs.readFile(queue.stateFile);
+  await queue.close(); modern = true; const restarted = f.create(); const old = await restarted.get("run_legacy"); assert.deepEqual(old.result, { appended: 1 }); assert.equal(Object.hasOwn(old.result, "sourceManifestSha256"), false);
+  assert.deepEqual(await fs.readFile(legacyFile), originalLegacy); assert.deepEqual(await fs.readFile(queue.stateFile), originalIndex);
+  await restarted.enqueue("run_modern"); const fresh = await restarted.runOnce(); assert.equal(fresh.result.sourceManifestSha256, "c".repeat(64));
+  assert.deepEqual(await fs.readFile(legacyFile), originalLegacy); assert.deepEqual((await restarted.get("run_legacy")).result, { appended: 1 });
+});
+
 test("concurrent runOnce and enqueues never overlap processing and a queued run keeps its context", async t => {
   const entered = deferred(), finish = deferred(); let active = 0, maximum = 0; const seen = [];
   const f = await fixture(t, { processRun: async (runId, context) => { maximum = Math.max(maximum, ++active); seen.push([runId, context.attempt, context.job]); if (runId === "run_first") { entered.resolve(); await finish.promise; } active--; } });

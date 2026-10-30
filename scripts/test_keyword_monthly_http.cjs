@@ -33,6 +33,18 @@ test("missing/stale remain honest read results; verification failures are503 and
   await handler({ method: "GET" }, res, new URL("https://example.test/api/keyword-monthly/options"), {});
   assert.equal(res.status, 503); assert.ok(!JSON.stringify(res.body).includes("secret")); assert.equal(res.body.snapshot, null);
 });
+test("refresh diagnostics only read status, remain admin GET and cannot activate work", async () => {
+  let reads = 0;
+  const handler = createKeywordMonthlyHttpHandler({ service: { options: async () => ({ status: "available", keywords: [] }), analyze: async () => ({ status: "missing" }) },
+    readRefreshStatus: async () => { reads++; return { status: "available", readOnly: true, started: false, counts: {} }; },
+    requireAdmin: session => session.admin === true, send: (res, status, body) => Object.assign(res, { status, body }) });
+  async function run(route, method = "GET", admin = true) { const res = { setHeader() {} }; await handler({ method }, res, new URL(route, "https://example.test"), { admin }); return res; }
+  assert.equal((await run("/api/keyword-monthly/refresh-status")).body.started, false); assert.equal(reads, 1);
+  assert.equal((await run("/api/keyword-monthly/options")).body.refreshStatus.readOnly, true); assert.equal(reads, 2);
+  assert.equal((await run("/api/keyword-monthly/refresh-status", "POST")).status, 405);
+  assert.equal((await run("/api/keyword-monthly/refresh-status?force=1")).status, 400);
+  await run("/api/keyword-monthly/refresh-status", "GET", false); assert.equal(reads, 2);
+});
 test("private no-store applies before auth and on all success/error/method responses", async () => {
   for (const authorized of [true, false]) {
     const f = fixture(authorized, { status: "needs_verification", snapshot: null });

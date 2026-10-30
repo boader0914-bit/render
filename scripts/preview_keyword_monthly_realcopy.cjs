@@ -15,6 +15,7 @@ const STATIC_FILES = Object.freeze({
   "/admin-theme.css": "web/admin-theme.css",
   "/monthly-reports.css": "web/monthly-reports.css",
   "/keyword-monthly-analysis.css": "web/keyword-monthly-analysis.css",
+  "/keyword-monthly-benchmark.js": "web/keyword-monthly-benchmark.js",
   "/keyword-monthly-analysis.js": "web/keyword-monthly-analysis.js"
 });
 const USAGE = "node scripts/preview_keyword_monthly_realcopy.cjs --projection-dir <absolute directory> --port 5187 --now <ISO timestamp with timezone> [--receipt <new absolute JSON file>]";
@@ -116,7 +117,7 @@ function installGuards() {
 }
 function html(referenceDay, fixedNow) {
   const label = referenceDay.slice(5).replace("-", "/");
-  return `<!doctype html><html lang="ko" data-theme-resolved="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>키워드 월별 분석 · 실자료 사본 검증</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/admin-theme.css"><link rel="stylesheet" href="/monthly-reports.css"><link rel="stylesheet" href="/keyword-monthly-analysis.css"><link rel="stylesheet" href="/preview.css"><script defer src="/keyword-monthly-analysis.js"></script><script defer src="/preview-bootstrap.js"></script></head><body class="role-admin"><main class="qa-shell"><header class="qa-banner"><p>운영과 분리된 실자료 사본 검증 · 시점 ${label}</p><h1>키워드 월별 누적 분석</h1><p>로컬 관리자 세션 · 고정 검증 시각 ${fixedNow} · 저장된 사본 조회만 수행</p></header><div id="keywordMonthlyDashboard"></div></main></body></html>`;
+  return `<!doctype html><html lang="ko" data-theme-resolved="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>키워드 월별 분석 · 실자료 사본 검증</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/admin-theme.css"><link rel="stylesheet" href="/monthly-reports.css"><link rel="stylesheet" href="/keyword-monthly-analysis.css"><link rel="stylesheet" href="/preview.css"><script defer src="/keyword-monthly-benchmark.js"></script><script defer src="/keyword-monthly-analysis.js"></script><script defer src="/preview-bootstrap.js"></script></head><body class="role-admin"><main class="qa-shell"><header class="qa-banner"><p>운영과 분리된 실자료 사본 검증 · 운영 미적용 · 시점 ${label}</p><h1>키워드 월별 누적 분석</h1><p>로컬 관리자 세션 · 고정 검증 시각 ${fixedNow} · 저장된 사본 조회만 수행</p></header><div id="keywordMonthlyDashboard"></div></main></body></html>`;
 }
 const PREVIEW_CSS = ".qa-shell{width:min(1400px,100%);margin:0 auto;padding:28px;min-width:0}.qa-banner{border:1px solid var(--border-strong,#afc2b5);border-radius:12px;background:var(--surface-selected,#eaf1ed);padding:18px 20px;margin-bottom:24px}.qa-banner p{margin:0;color:var(--text-secondary,#5e6975);font-size:12px;line-height:1.8}.qa-banner h1{margin:6px 0;font-size:20px;color:var(--text-primary,#172235)}body.role-admin{display:block;min-width:0;margin:0;background:var(--app-bg,#f7f8f5)}@media(max-width:640px){.qa-shell{padding:16px}.qa-banner{padding:14px}.qa-banner p{overflow-wrap:anywhere}}";
 function bootstrap(now) {

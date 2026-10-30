@@ -8,6 +8,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { monitorPostprocessItem } = require("./collection_monitor.cjs");
 const VERSION = 1;
+const SOURCE_MANIFEST_SHA = /^[a-f0-9]{64}$/;
 const STATES = new Set(["held", "queued", "running", "complete", "failed"]);
 const TERMINAL = new Set(["complete", "failed"]);
 const MAX_CONTEXT_BYTES = 64 * 1024;
@@ -126,6 +127,9 @@ function createCollectionPostprocessQueue(options = {}) {
       || !Number.isSafeInteger(job.maxAttempts) || job.maxAttempts < 1 || job.maxAttempts > 10 || job.attempts > job.maxAttempts
       || !validTime(job.createdAt) || !validTime(job.updatedAt)
       || job.nextAttemptAt !== null && !validTime(job.nextAttemptAt)) throw fault("COLLECTION_POSTPROCESS_STATE_INVALID");
+    // Forward-only optional linkage. Legacy terminal records have no source
+    // hash and must retain their original bytes/shape; never infer one later.
+    if (job.result && Object.hasOwn(job.result, "sourceManifestSha256") && (typeof job.result.sourceManifestSha256 !== "string" || !SOURCE_MANIFEST_SHA.test(job.result.sourceManifestSha256))) throw fault("COLLECTION_POSTPROCESS_STATE_INVALID");
     if (!TERMINAL.has(job.status)) job.context = contextCopy(job.context);
     return job;
   }
@@ -279,7 +283,10 @@ function createCollectionPostprocessQueue(options = {}) {
     const start = performance.now();
     try {
       const processed = await processRun(job.runId, { ...clone(job.context), attempt: job.attempts, signal: controller.signal });
-      const result = contextCopy(Object.fromEntries(["stages", "elapsedMs", "appended"]
+      if (processed && Object.hasOwn(processed, "sourceManifestSha256") && (typeof processed.sourceManifestSha256 !== "string" || !SOURCE_MANIFEST_SHA.test(processed.sourceManifestSha256))) {
+        throw Object.assign(fault("COLLECTION_POSTPROCESS_SOURCE_MANIFEST_SHA_INVALID"), { retryable: false });
+      }
+      const result = contextCopy(Object.fromEntries(["stages", "elapsedMs", "appended", "sourceManifestSha256"]
         .filter(key => processed && processed[key] !== undefined).map(key => [key, processed[key]])));
       if (Buffer.byteLength(JSON.stringify(result)) > 8 * 1024) throw Object.assign(fault("COLLECTION_POSTPROCESS_RESULT_TOO_LARGE"), { retryable: false });
       const stamp = timestamp(), durationMs = Math.max(0, performance.now() - start);

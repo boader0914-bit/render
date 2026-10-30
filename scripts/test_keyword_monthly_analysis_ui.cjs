@@ -4,6 +4,7 @@ const uiModule = require("../web/keyword-monthly-analysis.js");
 const { buildMonthlyReportSnapshot } = require("./lib/monthly_reports.cjs");
 const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./lib/monthly_report_comparison.cjs");
 const script = fs.readFileSync(path.join(__dirname, "../web/keyword-monthly-analysis.js"), "utf8");
+const benchmarkScript = fs.readFileSync(path.join(__dirname, "../web/keyword-monthly-benchmark.js"), "utf8");
 const NOW = "2026-10-30T03:00:00.000Z", KEYWORD = "경남글램핑", OTHER = "경남 글램핑";
 const clone = value => JSON.parse(JSON.stringify(value));
 const optionsFixture = () => ({ schemaVersion: 1, status: "available", currentDay: "2026-10-30", currentMonth: "2026-10",
@@ -52,6 +53,7 @@ function mockUi({ hidden = false, role = "role-admin", request: customRequest } 
   async function request(url, settings) { calls.push({ url, settings }); if (customRequest) return customRequest(url, settings); const query = new URL(url, "https://local.test"); return { ok: true, status: 200, json: async () => clone(url.endsWith("/options") ? optionsFixture() : payloadFixture(Object.fromEntries(query.searchParams))) }; }
   const window = { fetch: request };
   class MutationObserver { constructor(fn) { this.callback = fn; observers.push(this); } observe() {} disconnect() { this.disconnected = true; } }
+  vm.runInNewContext(benchmarkScript, { window });
   vm.runInNewContext(script, { window, document: doc, MutationObserver, Date, Intl, URLSearchParams, console });
   const api = window.KeywordMonthlyAnalysis, controller = api.mount(parent, { autoStart: false, fetch: request, now: () => Date.parse(NOW) });
   return { api, controller, parent, doc, observers, listeners, calls,
@@ -100,6 +102,37 @@ test("exact keyword and product changes keep snapshots separate and product chan
   const ui = mockUi(); await ui.controller.open(); await ui.button("데이유즈").fire("click"); assert.equal(ui.calls.length, 2); assert.equal(ui.controller.state().product, "dayuse"); assert.match(ui.text(), /예약 추정 \(회\)/);
   ui.field("keyword").value = OTHER; await ui.field("keyword").fire("change"); await settle();
   assert.equal(new URL(ui.calls.at(-1).url, "https://local.test").searchParams.get("keyword"), OTHER); assert.match(ui.text(), /경남 글램핑 업체/);
+});
+test("company selection compares whole inclusive and peer means locally without extra requests", async () => {
+  const value = payloadFixture(), source = sourceFixture(); source.companies.push({ companyId: "b", primaryName: "다른 업체" });
+  source.observations.push(...source.observations.map(row => ({ ...row, companyId: "b", observationId: `${row.observationId}:b`, sold: 1, publicBookings: 1, phoneBookings: 0, publicRevenue: 100, phoneRevenue: 0, estimatedRevenue: 100 })));
+  value.snapshot = buildMonthlyReportSnapshot({ type: "keyword", targetId: KEYWORD, month: "2026-10", cutoffDate: "2026-10-30" }, source, NOW);
+  const ui = mockUi({ request: async url => ({ ok: true, status: 200, json: async () => url.endsWith("/options") ? optionsFixture() : value }) });
+  await ui.controller.open(); const beforeCalls = ui.calls.length;
+  assert.match(text(ui.find("kma-benchmark")[0]), /전체 평균에는 선택 업체를 포함/); assert.match(text(ui.find("kma-benchmark")[0]), /공급 가중/); assert.match(text(ui.find("kma-benchmark")[0]), /업체 동일가중 참고 평균/);
+  assert.equal(ui.controller.state().benchmarkCompanyId, "a"); ui.field("benchmarkCompany").value = "b"; await ui.field("benchmarkCompany").fire("change");
+  assert.equal(ui.controller.state().benchmarkCompanyId, "b"); assert.equal(ui.calls.length, beforeCalls);
+  const bars = text(ui.find("kma-benchmark-bars")[0]); assert.match(bars, /다른 업체 20%/); assert.match(bars, /전체 표본 · 선택 업체 포함 50%/); assert.match(bars, /다른 표본 · 선택 업체 제외 80%/);
+  assert.match(ui.text(), /선택 업체 − 전체 평균: -30%p/);
+  await ui.button("데이유즈").fire("click"); assert.equal(ui.calls.length, beforeCalls); assert.equal(ui.controller.state().benchmarkCompanyId, "b");
+  ui.api.clear(); assert.equal(ui.controller.state().benchmarkCompanyId, ""); assert.equal(ui.find("kma-benchmark").length, 0);
+});
+test("saved read renews catalog/cutoff and preserves month/product instead of using a stale in-page list", async () => {
+  let day = "2026-10-30";
+  const ui = mockUi({ request: async url => {
+    if (url.endsWith("/options")) return { ok: true, status: 200, json: async () => ({ ...optionsFixture(), currentDay: day, refreshStatus: { status: "available", started: true, counts: { running: 0, queued: 1, deferred: 0 } } }) };
+    const u = new URL(url, "https://local.test"), q = Object.fromEntries(u.searchParams); return { ok: true, status: 200, json: async () => payloadFixture(q) };
+  } });
+  await ui.controller.open(); await ui.button("데이유즈").fire("click"); day = "2026-10-31";
+  await ui.button("저장 자료 조회").fire("click"); await settle();
+  assert.equal(ui.calls.filter(x => x.url.endsWith("/options")).length, 2);
+  assert.equal(ui.controller.state().selection.cutoffDate, "2026-10-31"); assert.equal(ui.controller.state().selection.month, "2026-10"); assert.equal(ui.controller.state().product, "dayuse");
+  assert.match(ui.text(), /수집·DB 반영 완료 후 자동 갱신/);
+});
+test("refresh verification warning never replaces valid saved amounts with zero or starts a job", async () => {
+  const ui = mockUi({ request: async url => ({ ok: true, status: 200, json: async () => url.endsWith("/options")
+    ? { ...optionsFixture(), refreshStatus: { status: "needs_verification", counts: null } } : payloadFixture() }) });
+  await ui.controller.open(); assert.match(ui.text(), /자동 반영 확인 필요/); assert.equal(ui.calls.length, 2); assert.match(ui.text(), /400원/);
 });
 test("invalid or future cutoff produces an explanation without another request", async () => {
   const ui = mockUi(); await ui.controller.open(); for (const value of ["2026-02-30", "2026-10-31"]) { ui.field("cutoffDate").value = value; await ui.field("cutoffDate").fire("change"); await settle(); assert.equal(ui.calls.length, 2); assert.match(ui.text(), /관측 마감일은 오늘 이하/); }

@@ -49,6 +49,7 @@ const { createMonthlyReportCatchmentContext } = require("./lib/monthly_report_ca
 const { createMonthlyReportHttpHandler } = require("./lib/monthly_report_http.cjs");
 const { createKeywordMonthlyBundleAnalysis } = require("./lib/keyword_monthly_bundle.cjs");
 const { createKeywordMonthlyHttpHandler } = require("./lib/keyword_monthly_http.cjs");
+const { createKeywordMonthlyRefreshIntegration } = require("./lib/keyword_monthly_refresh_integration.cjs");
 const { createRegionalReportPreparation } = require("./lib/regional_report_preparation.cjs");
 const { createRegionalSearchTrendService } = require("./lib/regional_search_trends.cjs");
 const { createRegionalReportPreparationHttpHandler } = require("./lib/regional_report_preparation_http.cjs");
@@ -873,6 +874,13 @@ async function queueIntegratedCompanies(companyIds, reason) {
 const keywordMonthlyPreparedAnalysis = createKeywordMonthlyBundleAnalysis({
   projectionDir: path.join(DATA_DIR, "keyword_monthly_analysis")
 });
+const keywordMonthlyRefreshIntegration = createKeywordMonthlyRefreshIntegration({
+  dataDir: DATA_DIR, outputsDir: OUTPUTS_DIR, codeRoot: ROOT, runWork: runAnalyticalWork,
+  readPostprocess: runId => collectionPostprocessQueue.status({ runId }),
+  readPostprocessList: () => collectionPostprocessQueue.status({ limit: 1024 }),
+  allowsDerivedUpdates, isCollectionIdle: keywordMonthlyCollectionsIdle,
+  assertAnalyticalLeaseHeld: () => { const s = analyticalWork.status(); return s.active && s.activeKind === "keyword_monthly_refresh" && s.activePriority === "background"; }
+});
 // Keep one complete analytical allocation under the existing application lease.
 // Concurrent admin queries cannot retain several decoded history graphs.
 const keywordMonthlyAnalysis = Object.freeze({
@@ -880,7 +888,8 @@ const keywordMonthlyAnalysis = Object.freeze({
   analyze: input => runAnalyticalWork(() => keywordMonthlyPreparedAnalysis.analyze(input), { kind: "keyword_monthly_analysis" })
 });
 const handleKeywordMonthly = createKeywordMonthlyHttpHandler({
-  service: keywordMonthlyAnalysis, requireAdmin: requireAdminSession, send
+  service: keywordMonthlyAnalysis, requireAdmin: requireAdminSession, send,
+  readRefreshStatus: () => keywordMonthlyRefreshIntegration.status()
 });
 const monthlyReportService = createMonthlyReportService({
   runWork: runAnalyticalWork,
@@ -2419,6 +2428,22 @@ async function processCollectionPostprocess(runId, context) {
   const waitingAt = Date.now();
   return runAnalyticalWork(() => processCollectionPostprocessOwned(runId, context, Date.now() - waitingAt), { priority: "foreground", kind: "collection-postprocess" });
 }
+function keywordMonthlyCollectionsIdle() {
+  if (Object.values(crawlLanes).some(lane => lane.activeCrawlJob || lane.activeCrawlPromise)) return false;
+  try {
+    const at = Date.now(), day = new Date(at + 9 * 3600000).toISOString().slice(0, 10);
+    const to = new Date(Date.parse(day + "T00:00:00Z") + 86400000).toISOString().slice(0, 10);
+    const snapshot = collectionRotationScheduler.monitorSnapshot({ from: day, to });
+    if (!snapshot.available || snapshot.enabled !== true) return false;
+    // Do not change allocation or provider pacing. Start derived work only with
+    // room before the next saved/projected native slot; projections stay reads.
+    return !snapshot.items.some(item => {
+      if (["running", "waiting", "uncertain"].includes(item.status)) return true;
+      const due = Date.parse(item.notBeforeAt || item.scheduledAt);
+      return Number.isFinite(due) && !["complete", "reused", "failed", "blocked", "missed", "paused"].includes(item.status) && due - at <= 61 * 60000;
+    });
+  } catch { return false; }
+}
 async function processCollectionPostprocessOwned(runId, context, analyticalWaitMs = 0) {
   const stages = { analyticalWaitMs }, began = Date.now();
   const step = async (key, work) => {
@@ -2460,8 +2485,11 @@ async function processCollectionPostprocessOwned(runId, context, analyticalWaitM
       startedAt: context.startedAt, endedAt: context.endedAt, collectionSource: context.collectionSource,
       sourceRole: context.sourceRole, plan: context.plan, history: result.history, crawlTiming: result.crawlTiming, stageTimings: context.stageTimings });
   }
+  // Only a small independent intent is persisted here. Its worker still waits
+  // for this exact durable DB receipt to become complete after this returns.
+  await keywordMonthlyRefreshIntegration.signalCompletedRun(runId, context);
   console.log("collection_postprocess_complete", JSON.stringify({ runId, elapsedMs: Date.now() - began, stages }));
-  return { stages, elapsedMs: Date.now() - began, appended: result.history.appended || 0 };
+  return { stages, elapsedMs: Date.now() - began, appended: result.history.appended || 0, sourceManifestSha256: context.manifestSha256 };
 }
 
 async function releaseCommittedCollectionPostprocess() {
@@ -20777,7 +20805,11 @@ seedOutputsFromRepo()
       Promise.resolve().then(()=>collectionRotationScheduler.start()).catch(error=>console.error("Collection rotation scheduler unavailable:",error.code || error.message));
       // Recover a crash between the rotation commit and release using exact
       // stored slot/run identity. An unconfirmed slot remains held for review.
-      releaseCommittedCollectionPostprocess().then(() => collectionPostprocessQueue.start())
+      releaseCommittedCollectionPostprocess().then(async () => {
+        await collectionPostprocessQueue.start();
+        keywordMonthlyRefreshIntegration.start().catch(error => console.error("keyword_monthly_refresh_start_failed",
+          /^KEYWORD_[A-Z0-9_]{1,120}$/.test(error?.code || "") ? error.code : "KEYWORD_REFRESH_UNAVAILABLE"));
+      })
         .catch(error => console.error("collection_postprocess_start_failed", error.code || "unavailable"));
       const postprocessReleaseTimer = setInterval(() => {
         releaseCommittedCollectionPostprocess().catch(error => console.error("collection_postprocess_release_failed", error.code || "unavailable"));
