@@ -2,10 +2,11 @@
   'use strict';
   const commonJS = typeof module === 'object' && module.exports;
   const api = factory(commonJS ? require('./comparison-readiness.js') : root.InsightComparisonReadiness,
-    commonJS ? require('./customer-operating-actions.js') : root.InsightCustomerOperatingActions);
+    commonJS ? require('./customer-operating-actions.js') : root.InsightCustomerOperatingActions,
+    commonJS ? require('./comparison-saved-metrics.js') : root.InsightComparisonSavedMetrics);
   if (commonJS) module.exports = api;
   else root.InsightComparisonDashboard = api;
-})(typeof window !== 'undefined' ? window : globalThis, function (readiness, operating) {
+})(typeof window !== 'undefined' ? window : globalThis, function (readiness, operating, savedMetrics) {
   'use strict';
   // A projection of the customer's already-authorized saved report. It never
   // requests, collects, stores, repairs or changes the source report or policy.
@@ -112,7 +113,7 @@
     return {days: rows.length, missingDays: points.length - rows.length, sold, supply, publicBookings, phoneBookings,
       reservationRate: rate(sold, supply), rate: rate(sold, supply), publicRate: rate(publicBookings, supply), inferredRate: rate(phoneBookings, supply)};
   }
-  function project(report, selection, catalog = [], filters = {}) {
+  function project(report, selection, catalog = [], filters = {}, savedSources = {}) {
     const normalized = normalizeFilters(report, filters);
     if (!operating?.computeOperatingPlan || !readiness?.build) return empty(report, normalized, '저장 자료의 비교 검증 모듈을 확인하지 못했습니다.');
     // Keep the full report/selection for policy validation; filters never turn a
@@ -180,17 +181,53 @@
       sold: peerSold, supply: peerSupply, publicBookings: sum(matched, 'peerPublicBookings'), phoneBookings: sum(matched, 'peerPhoneBookings'),
       reservationRate: rate(peerSold, peerSupply), rate: rate(peerSold, peerSupply),
       coverage: normalized.dates.length && eligible.length ? matched.reduce((total, row) => total + row.peerCompanyCount, 0) / (normalized.dates.length * eligible.length) : null};
+    for (const company of companies) {
+      const entry = savedSources[company.companyId];
+      company.savedMetrics = savedMetrics?.projectCompany(entry?.payloads || null, {companyId: company.companyId, asOf: p.asOf, dates: normalized.dates});
+      if (company.savedMetrics && ['loading', 'failed'].includes(entry?.status)) {
+        for (const field of ['price', 'pickup']) {
+          const target = company.savedMetrics[field];
+          if (!entry?.payloads?.length) Object.assign(target, {reasonCode: entry.errorCode || (entry.status === 'loading' ? 'SOURCE_LOADING' : 'SOURCE_READ_FAILED'),
+            reason: entry.status === 'loading' ? '저장된 업체 자료를 확인하고 있습니다.' : '저장 자료 조회가 실패했습니다. 기존 정상 자료는 유지합니다.'});
+          else target.limitations = [...(target.limitations || []), entry.status === 'loading' ? '저장 자료를 먼저 표시하며 최신 여부를 확인하고 있습니다.' : '최신 조회 실패로 이전 정상 저장 자료를 표시합니다.'];
+        }
+      }
+    }
     const judgments = judgmentsFor(own, peers, daily, minimumDays), issues = ready.issues.map(value => ({code: value.code, label: value.label}));
     for (const company of companies) for (const value of readyMap.get(company.companyId).issues) if (!value.date || selectedDates.has(value.date)) issues.push({companyId: company.companyId, code: value.code, label: value.label, ...(value.date ? {date: value.date} : {})});
     const uniqueIssues = [...new Map(issues.map(value => [JSON.stringify(value), value])).values()];
     const missingDates = daily.filter(row => row.ownRate === null).map(row => row.date), partialDays = companies.reduce((total, row) => total + row.partialRevenue.days, 0), storedReferenceDays = companies.reduce((total, row) => total + row.storedReference.days, 0);
     const status = !own.summary.days ? 'unavailable' : missingDates.length || uniqueIssues.length || judgments[0].status === 'hold' ? 'partial' : 'ready';
+    const price = own.savedMetrics?.price, pickup = own.savedMetrics?.pickup;
+    const differentObservation = eligible.some(pair => normalized.dates.some(day => {
+      const a = pointMaps.get(own.companyId)?.get(day), b = pointMaps.get(pair.companyId)?.get(day);
+      return a?.status === 'ready' && b?.status === 'ready' && a.collectedDate !== b.collectedDate;
+    }));
+    const peerReasonCode = peers.rate !== null ? null : !eligible.length ? 'NO_ELIGIBLE_PEERS' : differentObservation ? 'OBSERVATION_DATE_MISMATCH' : 'INSUFFICIENT_COMMON_OBSERVATIONS';
+    const peerReason = peers.rate !== null ? '등록한 경쟁업체의 유효 표본이며 지역 전체 평균이 아닙니다.' : differentObservation
+      ? '숙박일은 겹치지만 관측일이 달라 비교를 보류합니다. 업체별 관측일을 확인하세요.'
+      : !eligible.length ? '선택한 경쟁업체 중 동일지역·공통업종의 표본 대상이 없습니다.' : '같은 관측 조건의 유효 공통 숙박일이 부족합니다.';
     const metrics = [metric('own_rate', '내 매장 추정예약률', own.summary.rate, '%', own.summary.rate === null ? 'unavailable' : own.summary.missingDays ? 'partial' : 'ready',
       '선택 ' + normalized.dates.length + '일 중 유효 ' + own.summary.days + '일 · 공개예약 + 타채널 추정', own.summary.rate === null ? '유효한 객실 기준과 예약 수량을 확인하지 못했습니다.' : null),
     metric('peer_rate', '같은 지역·업종 표본예약률', peers.rate, '%', peers.rate === null ? 'unavailable' : peers.coverage < 1 || !judgments[0].actionable ? 'partial' : 'ready',
       '공통 숙박일 ' + peers.days + '일 · 유효 ' + peers.companies + '/' + peers.expectedCompanies + '곳 · 객실 공급 가중 · 내 매장 제외',
-      peers.rate === null ? '동일지역·업종의 유효 공통 관측이 없습니다.' : '등록한 경쟁업체의 유효 표본이며 지역 전체 평균이 아닙니다.'),
-    ...unavailableMetrics(null).slice(2)];
+      peerReason),
+    {...metric('product_price', '내 매장 숙박상품 표시가격', price?.value ?? null, '원', price?.status || 'unavailable',
+      price?.value !== null && price?.value !== undefined ? '선택 숙박일의 상품별 가격 중앙값 · ' + price.products + '상품 · ' + price.days + '일 · ' + price.rowCount + '건' : '',
+      price ? price.reason : '저장된 상품가격 연결을 확인해 주세요.'), reasonCode: price ? price.reasonCode : 'PRICE_NOT_CONNECTED', evidence: price?.limitations || []},
+    {...metric('public_change', '내 매장 공개예약 순변화', pickup?.value ?? null, '실', pickup?.status || 'unavailable',
+      pickup?.status === 'reference' ? '최근 동일 관측 구간 · 확보 숙박일 ' + pickup.days + '일 · 관측 변화 참고' : '',
+      pickup?.reason || '선택 기간의 이전 관측을 확인하지 못했습니다.'), reasonCode: pickup?.reasonCode || 'PICKUP_NOT_CONNECTED', evidence: pickup?.limitations || []}];
+    metrics[1].reasonCode = peerReasonCode;
+    if (peerReasonCode === 'OBSERVATION_DATE_MISMATCH') judgments[0].reason = peerReason;
+    if (price?.value !== null && price?.value !== undefined) Object.assign(judgments[1], {status: 'reference', title: '저장된 상품가격으로 판매 조건을 확인합니다.',
+      evidence: ['내 매장 숙박상품 표시가격 중앙값 ' + price.value.toLocaleString('ko-KR') + '원', price.products + '상품 · ' + price.days + '일 · ' + price.rowCount + '건', '숙박 상품만 사용하며 데이유즈와 중복 상품·날짜는 제외합니다.'],
+      nextAction: '업체별 저장가격과 상품·인원·포함 혜택을 함께 확인한 뒤 쿠폰 가격 가정을 정하세요.', reason: price.reason || '관측 시각과 상품 조건이 다른 가격은 단순 우열로 판단하지 않습니다.'});
+    else Object.assign(judgments[1], {title: '저장 상품가격의 확인 사유를 살펴봅니다.', evidence: [price?.reason || '저장된 상품가격을 확인하지 못했습니다.'], reason: price?.reason || judgments[1].reason});
+    if (pickup?.status === 'reference') Object.assign(judgments[2], {status: 'reference', title: '저장된 최근 관측 사이의 변화를 확인합니다.',
+      evidence: ['공개예약 순변화 ' + (pickup.value > 0 ? '+' : '') + pickup.value + '실 · 확보 숙박일 ' + pickup.days + '일', ...pickup.limitations],
+      nextAction: '변화가 나타난 숙박일의 상품·가격 조건을 함께 확인하세요. 신규 예약·취소 확정 수량으로 해석하지 않습니다.', reason: pickup.reason});
+    else Object.assign(judgments[2], {title: '예약 변화의 확인 사유를 살펴봅니다.', evidence: [pickup?.reason || '선택 기간의 이전 관측을 확인하지 못했습니다.'], reason: pickup?.reason || judgments[2].reason});
     return {version: VERSION, status, contextValid: true, sourcePeriod,
       period: {start: normalized.start, end: normalized.end, days: normalized.dates.length, selectedDays: normalized.dates.length, baseStart: p.start, baseEnd: p.end, asOf: p.asOf},
       filters: {start: normalized.start, end: normalized.end, dayFilter: normalized.dayFilter}, dates: normalized.dates.slice(), own, peers, metrics, judgments, companies, daily,

@@ -17,13 +17,27 @@
   const relation=v=>({own:'내 매장',same:'같은 지역',cross:'다른 지역 · 참고',unknown:'지역 확인 필요'})[v]||'지역 확인 필요';
   const tone=status=>['ready','complete','reference','hold','partial','unavailable'].includes(status)?status:'hold';
   const statusLabel=status=>({ready:'저장 자료',complete:'저장 자료',reference:'참고',hold:'판단 보류',partial:'일부 자료',unavailable:'자료 미확인'})[status]||'확인 필요';
+  const reasonLabels=Object.freeze({OBSERVATION_DATE_MISMATCH:'관측일 차이로 비교 보류',OBSERVATION_DAY_MISMATCH:'관측일 차이로 비교 보류',
+    NO_COMMON_OBSERVATION:'공통 관측 없음',NO_ELIGIBLE_PEERS:'동일지역·업종 표본 없음',INSUFFICIENT_COMMON_DAYS:'공통 관측일 부족',INSUFFICIENT_COMMON_OBSERVATIONS:'공통 관측일 부족',
+    PRICE_NOT_FOUND:'가격 자료 없음',NO_PRICE_DATA:'가격 자료 없음',PRICE_UNAVAILABLE:'가격 자료 없음',
+    NO_PREVIOUS_OBSERVATION:'이전 관측 없음',NO_PICKUP_INTERVALS:'이전 관측 없음',PICKUP_NOT_CONNECTED:'저장 이력 미연결',
+    HISTORY_NOT_CONNECTED:'저장 이력 미연결',SOURCE_NOT_CONNECTED:'저장 자료 미연결',LOADING:'저장 자료 조회 중',
+    SOURCE_LOADING:'저장 자료 조회 중',FETCH_FAILED:'저장 자료 조회 실패',SOURCE_FAILED:'저장 자료 조회 실패',SOURCE_READ_FAILED:'저장 자료 조회 실패',
+    NO_SELECTED_DATES:'선택 날짜 자료 없음',OUTSIDE_SELECTION:'선택 기간 자료 없음',CONTEXT_MISMATCH:'업체·기간 확인 필요',
+    SOURCE_CONTEXT_MISMATCH:'업체·기간 확인 필요',PRICE_NOT_CONNECTED:'저장 자료 미연결',PRICE_MISSING:'가격 자료 없음',
+    PRICE_PARTIAL:'일부 가격 자료',PRICE_DUPLICATE_CONFLICT:'가격 중복 충돌',PICKUP_NO_PREVIOUS_OBSERVATION:'이전 관측 없음',
+    PICKUP_OUTSIDE_SELECTED_DATES:'선택 기간 비교 없음',PICKUP_INVALID_EVIDENCE:'관측 근거 확인 필요',
+    PICKUP_REFERENCE_ONLY:'관측 변화 · 참고',PICKUP_RECENT_SUBSET:'일부 관측 변화 · 참고'});
+  const stamp=value=>typeof value==='string'&&Number.isFinite(Date.parse(value))?new Date(value).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+  const missingLabel=metric=>metric?.reasonLabel||reasonLabels[metric?.reasonCode]||(!finite(metric?.value)?'자료 미확인':metric?.status==='reference'?'관측 변화 · 참고':metric?.status==='partial'?'일부 저장 자료':'저장 자료');
   function title(kicker,heading,detail='',id=''){
     return `<header class="dashboard-section-heading"><div><span class="dashboard-kicker">${esc(kicker)}</span><h2${id?` id="${esc(id)}"`:''}>${esc(heading)}</h2>${detail?`<p>${esc(detail)}</p>`:''}</div></header>`;
   }
   function controls(model){
     const source=model.sourcePeriod||{},filters=model.filters||{},start=date(filters.start||model.period?.start),end=date(filters.end||model.period?.end);
+    const pickup=arr(model.metrics).find(m=>m.id==='public_change'),pickupNotice=finite(pickup?.value)?'이전·현재 저장 관측 비교 · 참고':pickup?.reasonCode?missingLabel(pickup):'이전 관측 비교 미연결';
     const companies=arr(model.companies).filter(c=>c.kind!=='own'&&c.companyId!==model.own?.companyId),same=companies.filter(c=>c.regionRelation==='same').length,cross=companies.filter(c=>c.regionRelation==='cross').length,unknown=companies.filter(c=>!['same','cross'].includes(c.regionRelation)).length;
-    return `<section class="card dashboard-controls" aria-labelledby="dashboard-conditions-heading"><header class="dashboard-section-heading"><div><span class="dashboard-kicker">01 · 비교 조건</span><h2 id="dashboard-conditions-heading">저장 자료에서 비교할 기간</h2></div><button type="button" class="button" data-dashboard-reset>전체 기간</button></header><div class="dashboard-condition-grid"><label class="field"><span>숙박 시작일</span><input type="date" aria-label="대시보드 숙박 시작일" data-dashboard-start value="${start}" min="${date(source.start)}" max="${date(source.end)}"></label><label class="field"><span>숙박 종료일</span><input type="date" aria-label="대시보드 숙박 종료일" data-dashboard-end value="${end}" min="${date(source.start)}" max="${date(source.end)}"></label><label class="field"><span>요일</span><select aria-label="대시보드 요일" data-dashboard-day-filter>${[['all','전체 요일'],['weekday','월~목'],['friday','금요일'],['saturday','토요일'],['sunday','일요일']].map(([key,label])=>`<option value="${key}" ${filters.dayFilter===key?'selected':''}>${label}</option>`).join('')}</select></label></div><div class="dashboard-scope-notes"><span>관측 기준 <strong>${esc(date(source.asOf||model.period?.asOf)||'미확인')}</strong> · 최신 저장 자료</span><span>이전 관측 비교 미연결</span><span>선택 ${number(model.period?.days??arr(model.dates).length)}일</span><span>같은 지역 ${same} · 다른 지역 ${cross}${unknown?' · 지역 미확인 '+unknown:''}</span></div><p class="dashboard-note">${esc(date(source.start))} ~ ${esc(date(source.end))} 저장 범위에서 선택합니다. 관측 공백은 미확인으로 유지합니다.</p></section>`;
+    return `<section class="card dashboard-controls" aria-labelledby="dashboard-conditions-heading"><header class="dashboard-section-heading"><div><span class="dashboard-kicker">01 · 비교 조건</span><h2 id="dashboard-conditions-heading">저장 자료에서 비교할 기간</h2></div><button type="button" class="button" data-dashboard-reset>전체 기간</button></header><div class="dashboard-condition-grid"><label class="field"><span>숙박 시작일</span><input type="date" aria-label="대시보드 숙박 시작일" data-dashboard-start value="${start}" min="${date(source.start)}" max="${date(source.end)}"></label><label class="field"><span>숙박 종료일</span><input type="date" aria-label="대시보드 숙박 종료일" data-dashboard-end value="${end}" min="${date(source.start)}" max="${date(source.end)}"></label><label class="field"><span>요일</span><select aria-label="대시보드 요일" data-dashboard-day-filter>${[['all','전체 요일'],['weekday','월~목'],['friday','금요일'],['saturday','토요일'],['sunday','일요일']].map(([key,label])=>`<option value="${key}" ${filters.dayFilter===key?'selected':''}>${label}</option>`).join('')}</select></label></div><div class="dashboard-scope-notes"><span>관측 기준 <strong>${esc(date(source.asOf||model.period?.asOf)||'미확인')}</strong> · 최신 저장 자료</span><span>${esc(pickupNotice)}</span><span>선택 ${number(model.period?.days??arr(model.dates).length)}일</span><span>같은 지역 ${same} · 다른 지역 ${cross}${unknown?' · 지역 미확인 '+unknown:''}</span></div><p class="dashboard-note">${esc(date(source.start))} ~ ${esc(date(source.end))} 저장 범위에서 선택합니다. 관측 공백은 미확인으로 유지합니다.</p></section>`;
   }
   function metricValue(metric){
     if(!finite(metric.value))return '미확인';
@@ -32,8 +46,44 @@
     if(metric.id==='public_change')return (metric.value>0?'+':'')+number(metric.value)+'실';
     return number(metric.value)+(metric.unit||'');
   }
+  function metricEvidence(metric){
+    const evidence=arr(metric?.evidence).map(text).filter(Boolean);
+    if(!evidence.length)return '';
+    return `<details class="dashboard-metric-evidence" data-dashboard-detail="metric-${esc(metric.id)}"><summary>계산 근거 <b aria-hidden="true">+</b></summary><ul>${evidence.map(row=>`<li>${esc(row)}</li>`).join('')}</ul></details>`;
+  }
+  function savedMetricProvenance(metric){
+    const source=metric?.source||{},parts=[];
+    if(stamp(source.collectedAt))parts.push('관측 '+stamp(source.collectedAt));
+    if(stamp(source.previousObservedAt)&&stamp(source.currentObservedAt))parts.push(stamp(source.previousObservedAt)+' → '+stamp(source.currentObservedAt));
+    if(source.runId)parts.push('수집번호 '+source.runId);
+    if(source.previousRunId)parts.push('이전 수집번호 '+source.previousRunId);
+    if(source.currentRunId)parts.push('현재 수집번호 '+source.currentRunId);
+    if(source.calculationVersion)parts.push('계산 기준 '+source.calculationVersion);
+    return [...new Set(parts)];
+  }
+  function savedCell(metric,kind){
+    const m=metric||{},numeric=finite(m.value),parts=[],proof=savedMetricProvenance(m),limitations=arr(m.limitations).map(text).filter(Boolean);
+    if(kind==='price'){
+      if(finite(m.products)&&finite(m.days))parts.push(number(m.products)+'상품 · '+number(m.days)+'일');
+      if(finite(m.rowCount))parts.push(number(m.rowCount)+'건');
+      if(finite(m.min)&&finite(m.max))parts.push(number(m.min)+'~'+number(m.max)+'원');
+    }else{
+      if(finite(m.days))parts.push('같은 숙박일 '+number(m.days)+'일');
+      if(finite(m.intervalCount))parts.push('관측 비교 '+number(m.intervalCount)+'건');
+      const rows=arr(m.rows),pairs=[...new Set(rows.map(row=>stamp(row.previousCollectedAt)&&stamp(row.collectedAt)?stamp(row.previousCollectedAt)+' → '+stamp(row.collectedAt):'').filter(Boolean))];
+      if(pairs.length===1&&!proof.some(row=>row.includes(' → ')))proof.unshift(pairs[0]);
+      if(numeric)parts.push('신규 예약수 아님');
+    }
+    const reason=numeric?(m.status==='partial'?m.reason:null):m.reason;
+    return `<strong class="dashboard-saved-value">${esc(metricValue({id:kind==='price'?'product_price':'public_change',value:m.value,unit:kind==='price'?'원':'실'}))}</strong><span class="dashboard-reason is-${tone(m.status)}"${m.reasonCode?` data-reason-code="${esc(m.reasonCode)}"`:''}>${esc(missingLabel(m))}</span>${parts.length?`<small>${parts.map(esc).join(' · ')}</small>`:''}${reason?`<small>${esc(reason)}</small>`:''}${proof.length||limitations.length?`<details class="dashboard-saved-proof"><summary>관측 근거 <b aria-hidden="true">+</b></summary>${proof.map(row=>`<p>${esc(row)}</p>`).join('')}${limitations.map(row=>`<p>${esc(row)}</p>`).join('')}</details>`:''}`;
+  }
+  function savedMetrics(model){
+    const companies=arr(model.companies).filter(c=>c.savedMetrics);
+    if(!companies.length)return '';
+    return `<details class="card dashboard-saved-metrics" data-dashboard-detail="saved-metrics"><summary>업체별 상품가격·예약 변화 <b aria-hidden="true">+</b></summary><p class="dashboard-note">상품가격은 숙박상품의 날짜별 표시가격 중앙값입니다. 공개예약 순변화는 저장된 두 관측 사이의 변화이며 신규 예약수·취소 건수와 구별합니다.</p><div class="dashboard-table-scroll" tabindex="0" aria-label="업체별 저장 상품가격과 공개예약 변화"><table><caption class="sr-only">선택한 숙박일의 업체별 숙박상품 표시가격과 공개예약 순변화 및 미확인 사유</caption><thead><tr><th scope="col">업체</th><th scope="col">숙박상품 표시가격</th><th scope="col">공개예약 순변화</th></tr></thead><tbody>${companies.map(c=>`<tr data-dashboard-saved-company="${esc(c.companyId)}"><th scope="row"><a href="${link(c.companyId)}">${esc(c.name||'업체')}</a><small>${c.kind==='own'?'내 매장':esc(relation(c.regionRelation))}</small></th><td>${savedCell(c.savedMetrics.price,'price')}</td><td>${savedCell(c.savedMetrics.pickup,'pickup')}</td></tr>`).join('')}</tbody></table></div></details>`;
+  }
   function summary(model){
-    return `<section class="dashboard-metrics-section" aria-labelledby="dashboard-metrics-heading">${title('02 · 핵심 지표','선택 기간 한눈에 보기','','dashboard-metrics-heading')}<div class="dashboard-metrics">${arr(model.metrics).map(metric=>`<article class="dashboard-metric is-${tone(metric.status)}" data-dashboard-metric="${esc(metric.id)}"><span class="dashboard-metric-label">${esc(metric.label)}</span><strong>${esc(metricValue(metric))}</strong><p>${esc(metric.detail||metric.reason||'저장 근거 확인 필요')}</p>${metric.detail&&metric.reason&&metric.reason!==metric.detail?`<small>${esc(metric.reason)}</small>`:''}</article>`).join('')}</div></section>`;
+    return `<section class="dashboard-metrics-section" aria-labelledby="dashboard-metrics-heading">${title('02 · 핵심 지표','선택 기간 한눈에 보기','','dashboard-metrics-heading')}<div class="dashboard-metrics">${arr(model.metrics).map(metric=>`<article class="dashboard-metric is-${tone(metric.status)}" data-dashboard-metric="${esc(metric.id)}"><span class="dashboard-metric-label">${esc(metric.label)}</span><strong>${esc(metricValue(metric))}</strong>${metric.reasonCode?`<span class="dashboard-reason is-${tone(metric.status)}" data-reason-code="${esc(metric.reasonCode)}">${esc(missingLabel(metric))}</span>`:''}<p>${esc(metric.detail||metric.reason||'저장 근거 확인 필요')}</p>${metric.detail&&metric.reason&&metric.reason!==metric.detail?`<small>${esc(metric.reason)}</small>`:''}${metricEvidence(metric)}</article>`).join('')}</div>${savedMetrics(model)}</section>`;
   }
   function judgments(model){
     return `<section class="dashboard-judgments-section" aria-labelledby="dashboard-judgments-heading"><header class="dashboard-section-heading"><div><span class="dashboard-kicker">03 · 판단 카드</span><h2 id="dashboard-judgments-heading">먼저 검토할 판단</h2></div><span class="dashboard-readonly">검토용 · 자동 실행 없음</span></header><div class="dashboard-judgments">${arr(model.judgments).map((judgment,index)=>`<article class="dashboard-judgment is-${tone(judgment.status)}"><div class="dashboard-judgment-top"><span>${esc(judgment.label)}</span><span class="dashboard-status is-${tone(judgment.status)}">${statusLabel(judgment.status)}</span></div><h3>${esc(judgment.title)}</h3>${judgment.reason?`<p>${esc(judgment.reason)}</p>`:''}<p class="dashboard-next-action">${esc(judgment.nextAction||'날짜별 저장 근거를 확인합니다.')}</p><details data-dashboard-detail="judgment-${index}"><summary>근거와 적용 범위 <b aria-hidden="true">+</b></summary><ul>${arr(judgment.evidence).map(e=>`<li>${esc(text(e))}</li>`).join('')||'<li>비교 가능한 저장 근거가 없습니다.</li>'}</ul></details></article>`).join('')}</div></section>`;
@@ -71,5 +121,5 @@
     if(!model?.contextValid)return '<section class="card dashboard-empty" role="status">선택한 고객·매장·기간의 저장 자료를 확인한 뒤 비교 대시보드를 표시합니다.</section>';
     return `<div class="comparison-dashboard" data-comparison-dashboard>${controls(model)}${summary(model)}${judgments(model)}${graphs(model)}</div>`;
   }
-  return {render,controls,summary,judgments,graphs,metricValue,rateFlow};
+  return {render,controls,summary,judgments,graphs,metricValue,rateFlow,savedMetrics,missingLabel};
 });

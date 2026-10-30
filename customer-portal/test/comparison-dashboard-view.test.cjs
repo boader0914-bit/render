@@ -95,7 +95,7 @@ test('actual dashboard projection renders same-region, cross-region and mixed sa
     assert.equal(projected.contextValid,true,scenario+' '+JSON.stringify(projected.quality));assert.match(html,/내 매장 · 산청/);assert.match(html,/data-dashboard-metric="own_rate"/);
     assert.match(html,/관측 공백은 선으로 연결하지 않습니다/);assert.doesNotMatch(html,/NaN|undefined|Infinity|월명/);
     for(const c of f.competitors)assert.ok(html.includes(c.name),c.name);
-    if(scenario==='cross'){assert.equal(projected.metrics.find(m=>m.id==='peer_rate').value,null);assert.match(html,/동일지역·업종의 유효 공통 관측이 없습니다/);}
+    if(scenario==='cross'){assert.equal(projected.metrics.find(m=>m.id==='peer_rate').value,null);assert.match(html,/동일지역·공통업종의 표본 대상이 없습니다/);}
   }
 });
 test('all-unknown daily records have no fabricated SVG while one genuine zero remains drawable',()=>{

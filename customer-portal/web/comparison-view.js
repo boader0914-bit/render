@@ -35,7 +35,59 @@
     try{sessionStorage.setItem(dashboardStorageKey,JSON.stringify(dashboardState));}catch{/* No persistence is required to use a filter. */}
     return true;
   }
-  function dashboardModel(r,s,catalog){return dashboardApi()?.project(r,s,catalog,filtersFor(s));}
+  function dashboardModel(r,s,catalog){return dashboardApi()?.project(r,s,catalog,filtersFor(s),active?.savedSourceState?.key===dashboardContext(s)?active.savedSourceState.companies:{});}
+  function savedMonths(s){
+    const start=s.stayStart?.slice(0,7),end=s.stayEnd?.slice(0,7);
+    return /^20\d{2}-(0[1-9]|1[0-2])$/.test(start||'')&&/^20\d{2}-(0[1-9]|1[0-2])$/.test(end||'')?[...new Set([start,end])]:[];
+  }
+  function loadSavedSources(options,s,force=false){
+    if(typeof options.readCompany!=='function')return;
+    const key=dashboardContext(s);
+    if(options.savedSourceState?.key===key&&!force)return;
+    const source={key,companies:{},cancelled:false,timers:[]},ids=[s.ownCompanyId,...s.comparisonIds],months=savedMonths(s);
+    if(options.savedSourceState){options.savedSourceState.cancelled=true;for(const value of options.savedSourceState.timers||[])clearTimeout(value);}
+    options.savedSourceState=source;
+    const current=()=>active===options&&!source.cancelled&&dashboardContext(options.store.getState())===key;
+    const redraw=()=>{
+      if(!current())return;
+      const report=options.lastRenderedReport,slot=document.querySelector('#comparison-results');
+      if(slot?.isConnected&&report&&matching(report,options.store.getState()))drawResults(slot,render(report,options.store.getState(),options.state.companies,focusId),report);
+    };
+    for(const id of ids){
+      const payloads=months.map(month=>options.peekCompany?.(id,month)).filter(Boolean);
+      source.companies[id]={payloads,status:'loading',months:{}};
+    }
+    // These are the existing authorized, cached company reads. They are never
+    // a crawl request. One read at a time avoids a new burst of heavy reads.
+    const jobs=ids.flatMap(id=>months.map(month=>({id,month})));
+    const readJobs=async(jobs,attempt=0)=>{
+      const pending=[];
+      for(const {id,month} of jobs){
+        if(!current())return;
+        const entry=source.companies[id];
+        if(entry.denied)continue;
+        try{
+          const data=await options.readCompany(id,{month,force:force&&attempt===0});
+          if(!current())return;
+          entry.months[month]=data;
+          entry.payloads=months.map(value=>entry.months[value]||options.peekCompany?.(id,value)).filter(Boolean);
+          entry.status='ready';
+          if(data.responseCache?.refreshing===true||data.responseCache?.revalidationRequired===true||data.referenceLoading===true)pending.push({id,month});
+        }catch(error){
+          if(!current())return;
+          entry.status='failed';entry.errorCode=[401,403,404,409].includes(error?.status)?'SOURCE_CONTEXT_MISMATCH':'SOURCE_READ_FAILED';
+          if([401,403,404,409].includes(error?.status)){
+            entry.denied=true;entry.months={};entry.payloads=[];redraw();
+            if(error.status===401){source.cancelled=true;options.onSessionExpired?.();return;}
+            continue;
+          }
+        }
+        redraw();
+      }
+      if(current()&&pending.length&&attempt<6)source.timers.push(setTimeout(()=>{if(current())void readJobs(pending,attempt+1);},[2000,4000,8000,16000,30000,45000][attempt]));
+    };
+    void readJobs(jobs);
+  }
   function readiness(report,selection){
     const view=typeof window!=='undefined'?window.InsightComparisonReadinessView:typeof require==='function'?require('./comparison-readiness-view.js'):null;
     return view?.render?.(report,selection)||'';
@@ -157,7 +209,7 @@
     return `<section class="card comparison-controls"><h2 class="comparison-controls-title">비교 조건</h2><form id="comparison-form"><div class="form-grid"><label class="field"><span>기준 내 매장</span><select name="comparisonOwnId" aria-label="비교 기준 내 매장">${own.map(c=>`<option value="${esc(c.companyId)}" ${c.companyId===selection.ownCompanyId?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label><div class="comparison-period"><span>저장 자료 범위</span><strong>${esc(selection.stayStart)} ~ ${esc(selection.stayEnd)}</strong><small>관측 기준 ${esc(selection.asOfDate)} · 한국시간</small></div><button class="button" type="submit">저장 자료 확인</button></div><details><summary>비교업체 선택 · ${selection.comparisonIds.length}곳</summary><div class="comparison-choices">${competitors.map(c=>`<label><input type="checkbox" name="comparisonIds" value="${esc(c.companyId)}" ${selection.comparisonIds.includes(c.companyId)?'checked':''}>${esc(c.name)}</label>`).join('')||'<p class="muted">설정에서 비교할 업체를 등록하세요.</p>'}</div></details></form>${current?'':`<p class="collection-warning">현재 나란히 비교는 오늘부터 30일 자료를 지원합니다. 선택한 과거 기간을 현재 자료로 대체하지 않습니다.</p><button class="button small" type="button" data-comparison-current>현재 30일로 보기</button>`}<p class="muted comparison-footnote">과거 숙박월은 업체자료의 C 통합관측에서 확인할 수 있습니다.</p></section><p id="comparison-status" role="status" class="connection-check" aria-live="polite"></p><div id="comparison-results" aria-live="polite"></div>`;
   }
   let active=null,generation=0,timer=null,focusId=null;
-  const stop=()=>{generation++;if(timer!==null)clearTimeout(timer);timer=null;active=null;operatingView()?.stop();};
+  const stop=()=>{generation++;if(timer!==null)clearTimeout(timer);timer=null;if(active?.savedSourceState){active.savedSourceState.cancelled=true;for(const value of active.savedSourceState.timers||[])clearTimeout(value);}active=null;operatingView()?.stop();};
   function notifyRegional(){if(active?.store.getState().selectedView==='regions')active.onRegionalView?.();}
   function mount(options){
     stop();active=options;const slot=document.querySelector('#comparison-results');if(!slot)return;
@@ -171,6 +223,7 @@
     options.pendingToken=tokenBox;
     const current=()=>active===options&&id===generation&&slot?.isConnected&&options.store.isCurrent(tokenBox.value);
     if(!slot||!exactCurrent(s))return;
+    loadSavedSources(options,s,force&&attempt===0);
     const saved=options.peek(s.ownCompanyId);
     if(saved&&matching(saved,s)){drawResults(slot,render(saved,s,options.state.companies,focusId),saved);notifyRegional();}
     else slot.innerHTML='<section class="card company-connection is-loading" role="status"><span class="connection-spinner" aria-hidden="true"></span><p>저장된 비교 자료를 연결하고 있습니다.</p></section>';
@@ -187,7 +240,11 @@
       if(pending&&attempt<8)timer=setTimeout(()=>{timer=null;if(current())void refresh(false,attempt+1);},[2000,4000,8000,16000,30000,45000,45000,45000][attempt]);
     }catch(error){
       if(!current())return;
-      if([401,403,404,409].includes(error.status)){slot.innerHTML='<section class="card"><p class="collection-warning">매장 등록·기간과 조회 권한을 다시 확인해 주세요.</p></section>';if(status)status.textContent='';if(error.status===401)options.onSessionExpired?.();}
+      if([401,403,404,409].includes(error.status)){
+        if(options.savedSourceState){options.savedSourceState.cancelled=true;for(const value of options.savedSourceState.timers||[])clearTimeout(value);}
+        options.lastRenderedReport=null;
+        slot.innerHTML='<section class="card"><p class="collection-warning">매장 등록·기간과 조회 권한을 다시 확인해 주세요.</p></section>';if(status)status.textContent='';if(error.status===401)options.onSessionExpired?.();
+      }
       else{const latest=options.peek(s.ownCompanyId),retained=latest&&matching(latest,s)?latest:saved&&matching(saved,s)?saved:null;if(retained){drawResults(slot,render(retained,options.store.getState(),options.state.companies,focusId),retained);if(status)status.textContent='최신 자료 연결 지연 · 이전 저장 자료를 유지합니다.';}else{slot.innerHTML='<section class="card"><p class="collection-warning">저장 자료를 확인하지 못했습니다. 잠시 후 다시 확인해 주세요.</p></section>';if(status)status.textContent='연결 확인 필요';}}
       /* failure handled above */
     }

@@ -176,7 +176,7 @@ test('preview quantities display with central benchmark and action hold intact',
 
 test('browser UMD is deterministic and has no network, storage, timer or input mutation side effects', () => {
   const context = {window: {}, fetch: () => assert.fail('network'), localStorage: {setItem: () => assert.fail('storage')}, setTimeout: () => assert.fail('timer')};
-  for (const name of ['comparison-readiness.js', 'customer-operating-actions.js', 'comparison-dashboard.js']) vm.runInNewContext(fs.readFileSync(require.resolve('../web/' + name), 'utf8'), context);
+  for (const name of ['comparison-readiness.js', 'customer-operating-actions.js', 'comparison-saved-metrics.js', 'comparison-dashboard.js']) vm.runInNewContext(fs.readFileSync(require.resolve('../web/' + name), 'utf8'), context);
   const f = fixture(), before = JSON.stringify(f), value = context.window.InsightComparisonDashboard.project(f.report, f.selection, f.catalog, {dayFilter: 'saturday'});
   assert.equal(value.own.name, '시즌글램핑'); assert.ok(value.daily.length > 0); assert.equal(JSON.stringify(f), before);
   assert.equal(JSON.stringify(value), JSON.stringify(project(f, {dayFilter: 'saturday'})));

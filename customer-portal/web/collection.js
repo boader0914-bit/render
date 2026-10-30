@@ -139,6 +139,46 @@
     }
     return pending.promise;
   }
+  const savedMonth=value=>typeof value==='string'&&(!value||/^20\d{2}-(0[1-9]|1[0-2])$/.test(value));
+  const savedCompanyAllowed=id=>typeof id==='string'&&/^[a-zA-Z0-9_-]+$/.test(id)&&allowedCompanies?.has(id)===true&&permitted(id)&&!referenceDenied.has(id);
+  const copySaved=data=>JSON.parse(JSON.stringify(data));
+  const savedReadError=(code,message,status=409)=>Object.assign(new Error(message),{code,status,statusCode:status});
+  function peekSaved(id,month=''){
+    if(!savedCompanyAllowed(id)||!savedMonth(month))return null;
+    const entry=cached(id,month),resolved=entry?.data?.companyDetail?.integrated?.selectedMonth;
+    return entry&&(!month||!resolved||resolved===month)?copySaved(entry.data):null;
+  }
+  // Reuse the existing authenticated company GET without mounting a collection
+  // panel, starting a collector or creating an offscreen polling timer.
+  async function readSaved(id,request,{month='',force=false}={}){
+    if(!savedCompanyAllowed(id))throw savedReadError('ACCESS_DENIED','등록한 업체의 자료만 조회할 수 있습니다.',403);
+    if(!savedMonth(month)||typeof request!=='function')throw savedReadError('INVALID_COMPANY_MONTH','조회할 업체와 숙박월을 다시 확인해 주세요.',400);
+    const generation=cacheGeneration,scope=cacheScope,epoch=companyEpoch(id);
+    const current=()=>generation===cacheGeneration&&scope===cacheScope&&epoch===companyEpoch(id)&&savedCompanyAllowed(id);
+    try{
+      const data=await readPending(id,month,request,force===true);
+      if(!current())throw savedReadError('COMPANY_VIEW_INVALIDATED','조회 중 등록 정보나 로그인 상태가 변경되었습니다.');
+      const identities=[data?.result?.companyId,data?.companyDetail?.companyId,data?.companyDetail?.basics?.companyId].filter(Boolean);
+      const resolved=data?.companyDetail?.integrated?.selectedMonth;
+      if(!data||typeof data!=='object'||!identities.length||identities.some(value=>value!==id)||resolved&&!savedMonth(resolved)||month&&resolved&&resolved!==month)
+        throw savedReadError('SOURCE_SCOPE_MISMATCH','선택한 업체·숙박월의 자료를 확인하지 못했습니다.');
+      const previous=cached(id,month),preview=data.referenceLoading===true||data.responseCache?.state==='preview'||data.calculation?.mode==='saved_only';
+      const previousComplete=previous&&!previous.data.referenceLoading&&previous.data.responseCache?.state!=='preview'&&previous.data.calculation?.mode!=='saved_only';
+      if(preview&&previousComplete){
+        // A saved-only preview must not erase a verified price/history snapshot
+        // or extend its lifetime. The caller can keep displaying it while the
+        // existing server cache completes its background read.
+        return copySaved({...previous.data,responseCache:{...previous.data.responseCache,state:'cached',refreshing:data.responseCache?.refreshing!==false,refreshFailed:data.responseCache?.refreshFailed===true,preview:true}});
+      }
+      const entry=remember(id,month,data);
+      return copySaved(entry.data);
+    }catch(error){
+      if(!current())throw savedReadError('COMPANY_VIEW_INVALIDATED','조회 중 등록 정보나 로그인 상태가 변경되었습니다.');
+      if(error.status===401)expireSession();
+      else if([403,404].includes(error.status))denyCompany(id);
+      throw error;
+    }
+  }
   function expireSession(){
     const formerlyAllowed=allowedCompanies?[...allowedCompanies]:[];
     clearCache();for(const id of formerlyAllowed)referenceDenied.add(id);
@@ -314,7 +354,7 @@
       }
     }
   }
-  window.InsightCollection={panel,loading,prefetch,restore,
+  window.InsightCollection={panel,loading,prefetch,restore,peekSaved,readSaved,
     setContext(scope,ids,sessionExpired){
       if(scope!==cacheScope){clearCache();cacheScope=scope;}
       const next=Array.isArray(ids)?new Set(ids):null;
