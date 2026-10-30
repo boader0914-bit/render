@@ -126,6 +126,21 @@ test("absent-record replay refuses changed source SHA and source path outside it
   await assert.rejects(prep.verifyAbsentRecords(path.join(f.ops, "complete.json"), complete, [{ request }]), { code: "KEYWORD_PREP_SOURCE_BINDING" });
   await assert.rejects(prep.verifyAbsentRecords(path.join(f.copy, "complete.json"), complete, [{ request }]), { code: "KEYWORD_PREP_SOURCE_BINDING" });
 });
+test("restoring only guard company order must reproduce the unchanged entire original core fingerprint", () => {
+  const core = { summary: { lodging: { estimatedRevenue: 100 }, dayuse: { sold: null } }, daily: [{ date: "2026-10-01", value: 1 }],
+    companies: [{ companyId: "a", summary: { lodging: { sold: 1 } }, daily: [{ date: "2026-10-01", sold: 1 }] }, { companyId: "b", summary: { lodging: { sold: 2 } }, daily: [{ date: "2026-10-01", sold: 2 }] }],
+    selectedDigest: "a".repeat(64), partialEvidence: [{ companyId: "a", knownPartialRevenue: 10 }], ranks: { rows: [{ companyId: "a", firstRank: 2 }] }, quality: { companyCount: 2, warnings: ["unchanged"] } };
+  const record = { snapshotFingerprint: prep.fingerprint(core), companyOrderIds: ["a", "b"] }, originalBytes = JSON.stringify(core), exact = prep.verifyCoreFingerprint(core, record);
+  assert.equal(exact.rawExact, true); assert.equal(exact.orderRestored, false); assert.equal(exact.restoredFingerprint, record.snapshotFingerprint);
+  const reordered = structuredClone(core); reordered.companies.reverse(); const before = JSON.stringify(reordered), restored = prep.verifyCoreFingerprint(reordered, record);
+  assert.equal(restored.rawExact, false); assert.equal(restored.orderRestored, true); assert.equal(restored.comparisonBasis, "original_snapshot_core_after_restoring_company_order");
+  assert.notEqual(restored.rawActualFingerprint, record.snapshotFingerprint); assert.equal(restored.restoredFingerprint, record.snapshotFingerprint); assert.equal(restored.expectedFingerprint, record.snapshotFingerprint);
+  assert.equal(JSON.stringify(reordered), before); assert.equal(JSON.stringify(core), originalBytes);
+  const changes = [c => { c.companies[0].summary.lodging.sold++; }, c => { c.companies[0].daily[0].sold++; }, c => { c.summary.lodging.estimatedRevenue++; }, c => { c.daily[0].value++; }, c => { c.selectedDigest = "b".repeat(64); }, c => { c.partialEvidence[0].knownPartialRevenue++; }, c => { c.ranks.rows[0].firstRank++; }, c => { c.quality.warnings.push("changed"); }, c => { c.companies[0].companyId = c.companies[1].companyId; }, c => { c.companies.pop(); }, c => { c.companies[0].companyId = "foreign"; }];
+  for (const change of changes) { const changed = structuredClone(reordered); change(changed); assert.throws(() => prep.verifyCoreFingerprint(changed, record), { code: "KEYWORD_PREP_FINANCIAL_PARITY_FAILED" }); }
+  assert.throws(() => prep.verifyCoreFingerprint(reordered, { ...record, companyOrderIds: ["a", "a"] }), { code: "KEYWORD_PREP_FINANCIAL_PARITY_FAILED" });
+  assert.throws(() => prep.verifyCoreFingerprint(reordered, { snapshotFingerprint: record.snapshotFingerprint }), { code: "KEYWORD_PREP_FINANCIAL_PARITY_FAILED" });
+});
 test("duplicate current records, third month and wrong previous keyword fail exact two-request coverage", async t => {
   for (const recordMutation of ["duplicate", "month", "keyword"]) { const f = await fixture(t, { recordMutation }); await assert.rejects(prep.run(f.argv, f.deps), { code: "KEYWORD_PREP_RECORDS_INVALID" }); assert.equal(f.calls.length, 1); }
 });

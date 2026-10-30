@@ -150,6 +150,23 @@ function validateComplete(value, request, capture, proofRead, pid) {
   for (const key of ["companies", "runs", "observations", "rankObservations", "savedProductRecoveries"]) need(Number.isSafeInteger(value.counts?.[key]) && value.counts[key] >= 0 && value.counts[key] <= (key === "runs" ? 10000 : key === "companies" ? 1000 : 50000), "KEYWORD_PREP_COUNT_BOUND");
 }
 function snapshotCore(s) { return { summary: s.summary, daily: s.daily, companies: s.companies.map(c => ({ companyId: c.companyId, summary: c.summary, daily: c.daily })), selectedDigest: s.sources.digest, partialEvidence: s.sources.partialEvidence, ranks: s.ranks, quality: s.quality }; }
+function verifyCoreFingerprint(core, record) {
+  const rawActualFingerprint = fingerprint(core), rawExact = rawActualFingerprint === record.snapshotFingerprint;
+  if (rawExact) return { expectedFingerprint: record.snapshotFingerprint, actualFingerprint: rawActualFingerprint, rawActualFingerprint,
+    restoredFingerprint: rawActualFingerprint, rawExact: true, orderRestored: false, comparisonBasis: "original_snapshot_core_exact", exact: true };
+  // Restore only the comparison copy's company array to the guard's original
+  // order. The unchanged original whole-core fingerprint remains the gate;
+  // every company value and all six other fields still have to match exactly.
+  const ids = record.companyOrderIds, actualIds = core.companies.map(company => company.companyId);
+  need(Array.isArray(ids) && ids.length <= 1000 && ids.length === actualIds.length && ids.every(id => typeof id === "string" && id.length > 0)
+    && actualIds.every(id => typeof id === "string" && id.length > 0) && new Set(ids).size === ids.length && new Set(actualIds).size === actualIds.length
+    && ids.every(id => actualIds.includes(id)), "KEYWORD_PREP_FINANCIAL_PARITY_FAILED");
+  const companies = new Map(core.companies.map(company => [company.companyId, company]));
+  const restoredFingerprint = fingerprint({ ...core, companies: ids.map(id => companies.get(id)) });
+  need(restoredFingerprint === record.snapshotFingerprint, "KEYWORD_PREP_FINANCIAL_PARITY_FAILED");
+  return { expectedFingerprint: record.snapshotFingerprint, actualFingerprint: rawActualFingerprint, rawActualFingerprint, restoredFingerprint, rawExact: false,
+    orderRestored: true, comparisonBasis: "original_snapshot_core_after_restoring_company_order", exact: true };
+}
 async function verifyAbsentRecords(completeFile, complete, records) {
   if (!records.length) return [];
   need(complete.sourceFile === path.join(path.dirname(completeFile), "source.json") && SHA.test(complete.sourceSha256)
@@ -163,14 +180,13 @@ async function verifyAbsentRecords(completeFile, complete, records) {
   const { buildMonthlyReportSnapshot, monthlyReportKeywordMembership } = require("./lib/monthly_reports.cjs"), { sourceForKeywordMonthlyRequest } = require("./lib/keyword_monthly_analysis.cjs"), results = [];
   for (const record of records) {
     const monthlySource = sourceForKeywordMonthlyRequest(source, record.request), membership = monthlyReportKeywordMembership(record.request, monthlySource);
-    const snapshot = buildMonthlyReportSnapshot(record.request, monthlySource, complete.snapshotCapturedAt), actualFingerprint = fingerprint(snapshotCore(snapshot));
-    need(actualFingerprint === record.snapshotFingerprint, "KEYWORD_PREP_FINANCIAL_PARITY_FAILED");
+    const snapshot = buildMonthlyReportSnapshot(record.request, monthlySource, complete.snapshotCapturedAt), comparison = verifyCoreFingerprint(snapshotCore(snapshot), record);
     const counts = { membership: membership.members.size, inventoryMembership: membership.inventoryMembers.size, rankMembership: membership.rankMembers.size,
       companies: snapshot.companies.length, targetCompanies: snapshot.sources.targetMembership.companyIds.length, eligibleObservations: snapshot.sources.eligibleObservationCount,
       selectedObservations: snapshot.sources.selectedObservationCount, selectedRows: snapshot.sources.observations.length, partialEvidence: snapshot.sources.partialEvidence.length, ranks: snapshot.ranks.rows.length };
     need(Object.values(counts).every(value => value === 0), "KEYWORD_PREP_OBSERVED_DESCRIPTOR_MISSING");
     results.push({ month: record.request.month, cutoffDate: record.request.cutoffDate, reason: "NO_ELIGIBLE_OBSERVATION_AT_REQUEST_CUTOFF", counts,
-      sourceSha256: sourceRead.sha256, expectedFingerprint: record.snapshotFingerprint, actualFingerprint, exact: true });
+      sourceSha256: sourceRead.sha256, ...comparison });
   }
   need(same(sourceRead.stat, await checked(complete.sourceFile)), "KEYWORD_PREP_READ_CHANGED"); source = null; sourceRead = null;
   return results;
@@ -187,7 +203,7 @@ async function verifyProjection({ projection, completeFile, output, now, keyword
     const q = { keyword, month: record.request.month, cutoffDate: record.request.cutoffDate }, offered = options.keywords.some(row => row.keyword === keyword && row.stayMonths.includes(q.month));
     if (!offered) { need(emptyProofs.some(proof => proof.month === q.month && proof.cutoffDate === q.cutoffDate && proof.exact), "KEYWORD_PREP_OBSERVED_DESCRIPTOR_MISSING"); continue; }
     const result = await service.analyze(q); need(result.status === "available" && result.snapshot && result.provenance.inputSha256 === complete.value.sourceSha256 && result.request.cutoffDate === q.cutoffDate, "KEYWORD_PREP_FACTORY_UNAVAILABLE");
-    const actual = fingerprint(snapshotCore(result.snapshot)); need(actual === record.snapshotFingerprint, "KEYWORD_PREP_FINANCIAL_PARITY_FAILED"); checks.push({ month: q.month, cutoffDate: q.cutoffDate, expectedFingerprint: record.snapshotFingerprint, actualFingerprint: actual, exact: true });
+    const comparison = verifyCoreFingerprint(snapshotCore(result.snapshot), record); checks.push({ month: q.month, cutoffDate: q.cutoffDate, ...comparison });
   }
   need(!descriptor || checks.some(row => row.month === month && row.cutoffDate === cutoffDate), "KEYWORD_PREP_TARGET_NOT_VERIFIED");
   const result = { schemaVersion: 1, state: descriptor ? "prepared" : "notObserved", keyword, month, cutoffDate, indexSha256: index.sha256, sourceSha256: complete.value.sourceSha256,
@@ -286,4 +302,4 @@ if (require.main === module) {
   Promise.resolve().then(() => { if (v[0] !== "--verify-child") return run(v); need(v.length === 8 && iso(v[4]), "KEYWORD_PREP_ARGUMENTS"); return verifyProjection({ projection: v[1], completeFile: v[2], output: v[3], now: v[4], keyword: v[5], month: v[6], cutoffDate: v[7] }); })
     .then(result => { if (v[0] === "--verify-child") process.stdout.write(JSON.stringify(result) + "\n"); }).catch(error => { process.stderr.write(JSON.stringify({ code: /^[A-Z][A-Z0-9_]+$/.test(error.code || "") ? error.code : "KEYWORD_PREP_FAILED", ...(safeChildCode(error.childCode) ? { childCode: error.childCode } : {}) }) + "\n"); process.exitCode = 1; });
 }
-module.exports = { args, cutoffFor, checked, read, fileHash, treeBytes, writeNew, privateOpsStat, storageScope, stderrPolicy, childStderrSafe, safeChildCode, childFailureDiagnostic, runChild, isolation, normalizerFailureCode, validateDiscovery, validateComplete, snapshotCore, fingerprint, verifyAbsentRecords, verifyProjection, deleteOwnedSource, run, LIMITS };
+module.exports = { args, cutoffFor, checked, read, fileHash, treeBytes, writeNew, privateOpsStat, storageScope, stderrPolicy, childStderrSafe, safeChildCode, childFailureDiagnostic, runChild, isolation, normalizerFailureCode, validateDiscovery, validateComplete, snapshotCore, verifyCoreFingerprint, fingerprint, verifyAbsentRecords, verifyProjection, deleteOwnedSource, run, LIMITS };
