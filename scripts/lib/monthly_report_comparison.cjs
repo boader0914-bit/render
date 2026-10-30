@@ -19,8 +19,8 @@ function priorRequest(request) {
   const shifted = `${cutoffMonth}-${String(Math.min(Number(request.cutoffDate.slice(8)), monthDays(cutoffMonth))).padStart(2, "0")}`;
   return { ...request, month, cutoffDate: [shifted, `${month}-${monthDays(month)}`].sort()[0] };
 }
-function observations(snapshot) {
-  return (snapshot.sources?.observations || []).filter(row => row.productType === "lodging");
+function observations(snapshot, productType) {
+  return (snapshot.sources?.observations || []).filter(row => row.productType === productType);
 }
 function summarize(rows, ids, month) {
   const valued = rows.filter(row => row.revenueEligible && revenueFields.every(field => known(row[field])));
@@ -38,9 +38,11 @@ function signature(value) {
 }
 const lead = row => known(row.observationLeadTimeDays) ? row.observationLeadTimeDays
   : Math.round((Date.parse(`${row.date}T00:00:00Z`) - Date.parse(`${row.collectedDate}T00:00:00Z`)) / DAYS);
-function buildMonthlyComparison(current, previous) {
+function buildMonthlyComparison(current, previous, options = {}) {
+  const productType = options.productType ?? "lodging";
+  if (!["lodging", "dayuse"].includes(productType)) throw new TypeError("Unsupported monthly comparison product type");
   const currentMonth = current.request.month, previousMonth = previous.request.month;
-  const currentRows = observations(current), previousRows = observations(previous);
+  const currentRows = observations(current, productType), previousRows = observations(previous, productType);
   const currentIds = new Set(currentRows.map(row => row.companyId));
   const previousIds = new Set(previousRows.map(row => row.companyId));
   const currentRoster = new Set((current.companies || []).map(company => company.companyId));
@@ -92,12 +94,12 @@ function buildMonthlyComparison(current, previous) {
   const warnings = ["전체 현황은 키워드·지역에서 확보된 표본의 소계이며 지역 전체 시장 규모가 아닙니다.",
     "공통 업체 증감은 양월의 같은 업체·월중 날짜에서 객실·공유 기준과 관측 선행일수가 같은 자료만 비교합니다. 요일·연휴 구성 차이는 남을 수 있습니다.",
     "새로 관측되거나 이번 달 자료가 없는 업체는 신규 개업·폐업·검색 순위 이탈을 뜻하지 않습니다."];
-  if (!previousRows.length) warnings.push("전월에 사용할 수 있는 숙박 관측이 없어 증감을 계산하지 않았습니다.");
-  else if (!matchedCurrent.length) warnings.push("전월과 객실·관측 시점을 맞춰 비교할 수 있는 업체·숙박일이 없습니다.");
+  if (!previousRows.length) warnings.push(productType === "dayuse" ? "전월에 사용할 수 있는 당일 이용 관측이 없어 증감을 계산하지 않았습니다." : "전월에 사용할 수 있는 숙박 관측이 없어 증감을 계산하지 않았습니다.");
+  else if (!matchedCurrent.length) warnings.push(productType === "dayuse" ? "전월과 공급·관측 시점을 맞춰 비교할 수 있는 업체·이용일이 없습니다." : "전월과 객실·관측 시점을 맞춰 비교할 수 있는 업체·숙박일이 없습니다.");
   if (monthDays(currentMonth) !== monthDays(previousMonth)) warnings.push("두 달의 일수가 다릅니다. 대응 날짜가 없는 말일은 증감 비교에서 제외합니다.");
   if (current.quality?.provisional || previous.quality?.provisional) warnings.push("종료되지 않은 달을 포함한 중간 집계입니다.");
   if (current.quality?.warnings?.length || previous.quality?.warnings?.length) warnings.push("관측·가격 누락 또는 사전 관측이 있습니다. 양월의 자료 충족률과 관측 조건을 함께 확인하세요.");
-  return { schemaVersion: 1, previousMonth, currentMonth,
+  return { schemaVersion: 1, ...(Object.hasOwn(options, "productType") ? { productType } : {}), previousMonth, currentMonth,
     currentCutoffDate: current.request.cutoffDate, previousCutoffDate: previous.request.cutoffDate,
     status: !matchedCurrent.length ? "unavailable" : matched.excludedCompanyDays || matched.previousExcludedCompanyDays
       || current.quality?.status !== "complete" || previous.quality?.status !== "complete" ? "limited" : "ready",

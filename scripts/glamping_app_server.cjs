@@ -47,6 +47,8 @@ const { createMonthlyReportOutlookEvaluation } = require("./lib/monthly_report_o
 const { createMonthlyReportIndustryContext } = require("./lib/monthly_report_industry_context.cjs");
 const { createMonthlyReportCatchmentContext } = require("./lib/monthly_report_catchment_context.cjs");
 const { createMonthlyReportHttpHandler } = require("./lib/monthly_report_http.cjs");
+const { createKeywordMonthlyAnalysis } = require("./lib/keyword_monthly_analysis.cjs");
+const { createKeywordMonthlyHttpHandler } = require("./lib/keyword_monthly_http.cjs");
 const { createRegionalReportPreparation } = require("./lib/regional_report_preparation.cjs");
 const { createRegionalSearchTrendService } = require("./lib/regional_search_trends.cjs");
 const { createRegionalReportPreparationHttpHandler } = require("./lib/regional_report_preparation_http.cjs");
@@ -866,6 +868,14 @@ async function queueIntegratedCompanies(companyIds, reason) {
   }
   catch (error) { console.error("company_integration_queue_failed", error.code || "unavailable"); }
 }
+// Reuse only separately prepared keyword projections; opening the view never
+// scans original history, rebuilds a cache, starts a collector or reads KOSIS.
+const keywordMonthlyAnalysis = createKeywordMonthlyAnalysis({
+  projectionDir: path.join(DATA_DIR, "keyword_monthly_analysis")
+});
+const handleKeywordMonthly = createKeywordMonthlyHttpHandler({
+  service: keywordMonthlyAnalysis, requireAdmin: requireAdminSession, send
+});
 const monthlyReportService = createMonthlyReportService({
   runWork: runAnalyticalWork,
   dataDir: path.join(DATA_DIR, "monthly_reports"), loadSources: monthlyReportSources.loadSources,
@@ -19476,6 +19486,7 @@ async function route(req, res) {
       });
     }
 
+    if (await handleKeywordMonthly(req, res, reqUrl, session)) return;
     if (await handleMonthlyReport(req, res, reqUrl, session)) return;
     if (await handleIndustryAnalysis(req, res, reqUrl, session)) return;
     if (await handleRegionalReportPreparation(req, res, reqUrl, session)) return;

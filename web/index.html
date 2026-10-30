@@ -28,6 +28,7 @@
   <link rel="stylesheet" href="/regional-comparison.css">
   <link rel="stylesheet" href="/regional-outlook.css">
   <link rel="stylesheet" href="/industry-analysis.css">
+  <link rel="stylesheet" href="/keyword-monthly-analysis.css">
   <link rel="stylesheet" href="/insight-customers.css">
 </head>
 <body class="app-booting">
@@ -118,6 +119,10 @@
 
       <section class="tab-panel analysis-home-panel" id="industryHomePanel" data-panel="industryHome" aria-label="업종분석 시작">
         <div id="industryHomeDashboard"></div>
+      </section>
+
+      <section class="tab-panel" id="keywordMonthlyPanel" data-panel="keywordMonthly" aria-label="키워드 월별 분석" hidden>
+        <div id="keywordMonthlyDashboard"></div>
       </section>
 
       <section class="tab-panel analysis-home-panel" id="regionHomePanel" data-panel="regionHome" aria-label="지역분석 시작">
@@ -615,6 +620,7 @@
   <script src="/regional-comparison.js"></script>
   <script src="/regional-outlook.js"></script>
   <script src="/industry-analysis.js"></script>
+  <script src="/keyword-monthly-analysis.js"></script>
   <script src="/admin-transition-timing.js"></script>
   <script src="/app.js"></script>
   <script src="/collector_controls.js"></script>
