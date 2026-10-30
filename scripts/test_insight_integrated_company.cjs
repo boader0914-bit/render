@@ -114,7 +114,10 @@ test('authenticated BFF enforces linked-company and tenant scope before integrat
   const body=await response.json();assert.equal(body.companyDetail.current.summary.estimatedRevenue,220000);assert.equal(reads,1);
   assert.equal((await get('/companies/cmp_one/collection?month=2026-09','')).status,401);
   for(let index=1;index<240;index++)store.throttle(`company-read:${owner.customerId}`,240);
-  assert.equal((await get('/companies/cmp_one/collection?month=2026-09')).status,429,'excess customer polling stops before shared or evidence reads');
+  // An already-authorized BFF snapshot may still be shown without another
+  // analytical read. Exercise the central source boundary to verify its limit.
+  const limited=await fetch(backend+'/api/insight/v1/companies/cmp_one/collection?month=2026-09',{headers:{Authorization:'Bearer '+serviceToken,'X-Insight-Session':ownerToken}});
+  assert.equal(limited.status,429,'excess source polling stops before shared or evidence reads');
   assert.equal(reads,1);
 });
 

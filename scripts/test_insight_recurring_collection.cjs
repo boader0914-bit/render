@@ -46,8 +46,16 @@ test('정기 수집은 단일 플레이스 당일 포함 30일 상세 데이유�
   const f=fixture(t);await f.request();await f.review();f.due();await f.service.tick();
   const payload=f.submitted[0];assert.deepEqual(Object.fromEntries(Object.keys(scopeFor('2026-10-27')).map(key=>[key,payload[key]])),scopeFor('2026-10-27'));
   assert.equal(payload.targetPlaceId,'101');assert.equal(payload.keyword,'테스트글램핑');assert.equal(payload.workerKey,'manual');
+  assert.equal(payload.bookingRangePlaceLimit,1,'a single-company thirty-day request must enable future-date queries');
   assert.equal(payload.trigger,'scheduled');assert.equal(payload.scheduledCollection,true);assert.equal(payload.searchRegion,'');assert.equal(payload.searchScope,'');
   const claim=f.service.getDayClaim('cmp_place_101');assert.equal(claim.jobId,payload.clientRequestId);assert.equal(claim.status,'queued');
+});
+for(const workerKey of ['web','manual','scheduled'])test(`${workerKey} recurring dispatch preserves the exact thirty-day range limit`,async t=>{
+  const f=fixture(t,{workerKey});await f.request();await f.review();f.due();await f.service.tick();
+  assert.equal(f.submitted.length,1);const payload=f.submitted[0];
+  assert.equal(payload.workerKey,workerKey);assert.equal(payload.bookingRangeDays,30);assert.equal(payload.bookingRangePlaceLimit,1);
+  assert.equal(payload.targetPlaceId,'101');assert.equal(payload.checkIn,'2026-10-27');assert.equal(payload.checkOut,'2026-10-28');
+  await f.service.tick();assert.equal(f.submitted.length,1,'an already dispatched day is never replayed by the range fix');
 });
 test('다수 고객 같은 회사는 전역 주기를 공유하며 하루 한 번만 실행한다',async t=>{
   const f=fixture(t);await f.request();await f.review();const shared=await f.request('b');assert.equal(shared.shared,true);assert.equal(shared.status,'approved');

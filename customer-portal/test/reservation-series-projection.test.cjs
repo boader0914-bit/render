@@ -1,6 +1,6 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),os=require('node:os'),path=require('node:path');
-const {projectReservationSeries:centralSeries}=require('../../scripts/lib/insight_comparison.cjs');
+const {projectReservationSeries:centralSeries,summarizeCompany}=require('../../scripts/lib/insight_comparison.cjs');
 const {projectReservationSeries}=require('../comparison-projection.cjs');
 const {createReportReadCache}=require('../report-read-cache.cjs');
 const AT=Date.parse('2026-10-25T00:00:00Z'),START='2026-10-25',END='2026-11-23',DAY=86400000;
@@ -75,3 +75,45 @@ test('series permission isolation survives restart and invalid refresh keeps pre
   await new Promise(resolve=>setImmediate(resolve));const kept=await read.read();assert.equal(kept.data.responseCache.refreshFailed,true);
   assert.deepEqual(kept.data.companies[0].reservationSeries,first.data.companies[0].reservationSeries);assert.equal(kept.data.responseCache.checkedAt,first.data.responseCache.checkedAt);
 });
+
+function evidenceFixture(){
+ return fixture(c=>{
+  Object.assign(c.days[1],{missing:true,total:null,sold:null,publicBookings:null,phoneBookings:null,collectedAt:null,collectedDate:null,knownPartialRevenue:240000,partialConfirmedRevenue:240000,missingReason:'shared_dayuse_unverified',
+    latestAttemptAt:'2026-10-25T00:00:00Z',latestAttemptReason:'partial_inventory',latestAttemptStatus:'excluded',
+    partialRevenueEvidence:{companyId:c.companyId,runId:'saved_partial_1',date:c.days[1].date,productType:'lodging',collectedAt:'2026-10-25T00:00:00Z',collectedDate:START,reason:'partial_inventory',amount:240000,privatePath:'PRIVATE-PROOF'}});
+  Object.assign(c.days[2],{collectedAt:'2026-10-01T00:00:00Z',collectedDate:'2026-10-01',latestAttemptAt:'2026-10-25T00:00:00Z',latestAttemptStatus:'excluded',latestAttemptReason:'partial_inventory'});
+ });
+}
+
+test('current saved source evidence survives report projection and restart without becoming normal quantities or totals',async t=>{
+ const config=await durable(t),f=evidenceFixture();f.report.companies[0].summary=summarizeCompany(f.company,policy).summary;
+ const first=reader(f,config),value=await first.read();assert.equal(value.status,200);
+ const [zero,partial,old]=value.data.companies[0].reservationSeries.points;
+ assert.equal(zero.sold,0);assert.equal(partial.sold,null);assert.equal(partial.reservationRate,null);assert.equal(partial.partialConfirmedRevenue,240000);assert.equal(partial.partialRevenueEvidence.runId,'saved_partial_1');assert.equal(partial.missingReason,'shared_dayuse_unverified');assert.equal(partial.latestAttemptReason,'partial_inventory');
+ assert.equal(old.sold,null);assert.equal(old.quantityStatus,'unknown');assert.equal(old.storedReference.sold,2);assert.equal(old.storedReference.collectedDate,'2026-10-01');assert.equal(old.partialConfirmedRevenue,null);assert.equal(value.data.companies[0].summary.days,28);assert.doesNotMatch(JSON.stringify(value),/PRIVATE-/);
+ await first.cache.flushPersistence();const next=reader(f,config),views=await next.cache.snapshot({scope:'restored-evidence-session',audience:'https://insight.example:customer',identity:f.account});
+ assert.equal(views.length,1);assert.deepEqual(views[0].data.companies[0].reservationSeries,value.data.companies[0].reservationSeries);
+});
+
+test('existing durable normal reports remain valid when optional new display evidence is absent',async t=>{
+ const config=await durable(t),f=fixture();for(const point of f.report.companies[0].reservationSeries.points)for(const key of ['missingReason','latestAttemptAt','latestAttemptReason','latestAttemptStatus','partialConfirmedRevenue','partialRevenueEvidence','storedReference'])delete point[key];
+ const first=reader(f,config),saved=await first.read();assert.equal(saved.status,200);await first.cache.flushPersistence();
+ const newer=fixture(),next=reader(newer,config),views=await next.cache.snapshot({scope:'after-release',audience:'https://insight.example:customer',identity:f.account});
+ assert.equal(views.length,1);assert.equal(views[0].data.companies[0].reservationSeries.points[0].sold,0);assert.equal(Object.hasOwn(views[0].data.companies[0].reservationSeries.points[0],'partialRevenueEvidence'),false);
+ const refreshed=await next.read({force:true});assert.equal(refreshed.status,200);assert.equal(refreshed.data.companies[0].reservationSeries.points[0].partialRevenueEvidence,null);
+});
+
+for(const [label,mutate]of[
+ ['foreign partial company',s=>s.points[1].partialRevenueEvidence.companyId='foreign'],
+ ['foreign partial date',s=>s.points[1].partialRevenueEvidence.date=START],
+ ['partial amount mismatch',s=>s.points[1].partialRevenueEvidence.amount=9],
+ ['future partial proof',s=>{s.points[1].partialRevenueEvidence.collectedAt='2026-10-27T00:00:00Z';s.points[1].partialRevenueEvidence.collectedDate='2026-10-27';}],
+ ['unknown latest reason',s=>s.points[1].latestAttemptReason='PRIVATE-TOKEN'],
+ ['future latest attempt',s=>s.points[1].latestAttemptAt='2026-10-27T00:00:00Z'],
+ ['undated latest attempt',s=>s.points[1].latestAttemptAt=null],
+ ['old reference sum mismatch',s=>s.points[2].storedReference.sold=9],
+ ['old reference rate mismatch',s=>s.points[2].storedReference.reservationRate=.9],
+ ['old reference period mismatch',s=>s.points[2].storedReference.date=START],
+ ['old reference is actually fresh',s=>{s.points[2].storedReference.collectedAt='2026-10-25T00:00:00Z';s.points[2].storedReference.collectedDate=START;}],
+ ['old reference on partial data',s=>s.points[1].storedReference=clone(s.points[2].storedReference)]
+])test('optional display projection rejects '+label,()=>{const f=evidenceFixture();mutate(f.series);assert.equal(projectReservationSeries(f.series,f.company,reportScope),null);});

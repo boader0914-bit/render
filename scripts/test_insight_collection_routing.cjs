@@ -36,6 +36,18 @@ test('BG dispatch freezes execution outside data scope and announces the actual 
   f.store.updatePreparationJob(job.jobId,'collecting','상태 갱신',{execution:{workerKey:'web'}});
   assert.deepEqual(f.store.preparationJobs()[0].execution,{workerKey:'manual'},'result updates cannot retarget an existing job');
 });
+for(const workerKey of ['web','manual','scheduled'])for(const days of [1,14,30])test(`${workerKey} direct company dispatch enables every requested stay date for ${days} days`,async t=>{
+  const f=fixture(t),cid=f.customer('range_'+workerKey+'_'+days),p={...f.request(cid),bookingRangeDays:days};let sent;
+  await bridge(f,workerKey,async value=>{sent=value;}).dispatch(cid,p,'admin');
+  assert.equal(sent.workerKey,workerKey);assert.equal(sent.bookingRangeDays,days);
+  assert.equal(sent.bookingRangePlaceLimit,days>1?1:0);
+  assert.equal(sent.checkIn,today);assert.equal(sent.checkOut,'2026-10-13','checkOut remains the first overnight checkout, not the last requested stay date');
+  assert.equal(sent.targetPlaceId,companies[0].placeIds[0]);assert.equal(sent.detailRankRanges,'1-1');
+  assert.equal(Object.hasOwn(f.store.preparationJobs()[0].scope,'bookingRangePlaceLimit'),false,'execution range limit does not rewrite comparison scope');
+  const crawler=fs.readFileSync(path.join(__dirname,'gyeongnam_glamping_crawl.cjs'),'utf8'),expression=crawler.match(/const collectRange = (COLLECTION_PROFILE\.collectWeeklyRange[\s\S]*?);\s*bookingTasks\.push/)[1];
+  const collectRange=new Function('COLLECTION_PROFILE','BOOKING_RANGE_DAYS','BOOKING_RANGE_PLACE_LIMIT','alreadyKnown','uniquePlaceIds','return '+expression);
+  assert.equal(collectRange({collectWeeklyRange:true},days,sent.bookingRangePlaceLimit,false,new Set([sent.targetPlaceId])),days>1,'the actual crawler branch receives a positive one-company range limit');
+});
 test('a forged worker option is rejected before reservation and cannot alter the selected worker',async t=>{
   const f=fixture(t),cid=f.customer('a'),p=f.request(cid);let submits=0;
   const b=bridge(f,'manual',async()=>submits++);

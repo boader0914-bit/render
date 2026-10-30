@@ -11,6 +11,28 @@ const date=v=>typeof v==='string'&&/^20\d{2}-(0[1-9]|1[0-2])-\d{2}$/.test(v)&&Nu
 const shift=(v,n)=>new Date(Date.parse(v+'T00:00:00Z')+n*DAY).toISOString().slice(0,10);
 const instant=v=>typeof v==='string'&&/T.*(?:Z|[+-]\d{2}:?\d{2})$/.test(v)&&Number.isFinite(Date.parse(v))?Date.parse(v):null;
 const observationDay=row=>{const at=instant(row?.collectedAt);return at===null?date(row?.collectedDate):new Date(at+KST).toISOString().slice(0,10);};
+const MISSING_REASONS=new Set(['partial_inventory','shared_dayuse_unverified','missing_response','run_blocked','run_failed','run_interrupted','run_unknown','legacy_inventory_evidence','post_stay_observation','capacity_recalculation_unavailable','quantity_conflict','inventory_conflict','rate_unavailable']);
+function projectObservationDisplayEvidence(source,{companyId,stayDate,asOf,ready=false,conflict=false}={}) {
+  const timestamp=instant(source?.latestAttemptAt),attemptDay=timestamp===null?null:observationDay({collectedAt:source.latestAttemptAt});
+  const attemptValid=attemptDay&&attemptDay<=asOf&&attemptDay<=stayDate;
+  const latestAttemptAt=attemptValid?new Date(timestamp).toISOString():null;
+  const latestAttemptStatus=attemptValid&&['selected','not_selected','excluded'].includes(source?.latestAttemptStatus)?source.latestAttemptStatus:null;
+  const latestAttemptReason=attemptValid&&MISSING_REASONS.has(source?.latestAttemptReason)?source.latestAttemptReason:null;
+  const candidate=source?.partialRevenueEvidence,amount=num(source?.partialConfirmedRevenue),at=instant(candidate?.collectedAt),observed=at===null?null:observationDay(candidate);
+  const partialRevenueEvidence=!ready&&!conflict&&source?.missing===true&&!source.inventoryConflict&&!source.capacityConflict
+    &&amount!==null&&amount>=0&&num(source.knownPartialRevenue)===amount&&candidate?.amount===amount
+    &&candidate.companyId===companyId&&candidate.date===stayDate&&candidate.productType==='lodging'
+    &&typeof candidate.runId==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,179}$/.test(candidate.runId)
+    &&observed&&candidate.collectedDate===observed&&observed<=asOf&&observed<=stayDate
+    &&['partial_inventory','capacity_recalculation_unavailable'].includes(candidate.reason)
+    ?{companyId,runId:candidate.runId,date:stayDate,productType:'lodging',collectedAt:new Date(at).toISOString(),collectedDate:observed,reason:candidate.reason,amount}:null;
+  return {missingReason:ready?null:MISSING_REASONS.has(source?.missingReason)?source.missingReason:latestAttemptReason||partialRevenueEvidence?.reason||null,
+    latestAttemptAt,latestAttemptStatus,latestAttemptReason,partialConfirmedRevenue:partialRevenueEvidence?.amount??null,partialRevenueEvidence};
+}
+function projectUniqueObservationDisplayEvidence(sources,context) {
+  const projected=(Array.isArray(sources)?sources:[]).map(source=>projectObservationDisplayEvidence(source,context));
+  return projected.length&&projected.every(row=>JSON.stringify(row)===JSON.stringify(projected[0]))?projected[0]:projectObservationDisplayEvidence(null,context);
+}
 const REASONS=Object.freeze({
   DUPLICATE_COMPANY:'같은 업체는 비교 대상에서 한 번만 사용합니다.',
   DUPLICATE_STAY_DATE:'같은 숙박일에 서로 다른 선택 결과가 있어 중앙 통합 자료 확인이 필요합니다.',
@@ -205,15 +227,26 @@ function projectReservationSeries(company,input={}) {
   // The connected API currently authorizes only its existing current-30-day
   // briefing. Historical/custom series are deliberately left to a later API.
   if(!options.valid||options.mode!=='current'||options.period.start!==options.asOf||options.period.end!==shift(options.asOf,29))return null;
-  const selected=selectedRows(company,options),excluded=new Map();
+  const selected=selectedRows(company,options),excluded=new Map(),originals=new Map();
+  for(const row of Array.isArray(company?.days)?company.days:[])if(date(row?.date)){const sources=originals.get(row.date)||[];sources.push(row);originals.set(row.date,sources);}
   for(const item of selected.excluded)excluded.set(item.date,[...new Set([...(excluded.get(item.date)||[]),...item.codes])]);
   const points=Array.from({length:30},(_,i)=>{
     const day=shift(options.asOf,i),row=selected.rows.get(day),codes=excluded.get(day)||[];
-    if(!row)return {date:day,total:null,sold:null,publicBookings:null,phoneBookings:null,quantityStatus:codes.some(c=>['QUANTITY_INVALID','DUPLICATE_STAY_DATE'].includes(c))?'conflict':'unknown',codes:codes.length?codes:['QUANTITY_MISSING'],missing:true,inventoryConflict:false,collectedAt:null,collectedDate:null,reservationRate:null};
+    if(!row){
+      const sources=originals.get(day)||[],source=sources[0],conflict=codes.some(c=>['QUANTITY_INVALID','DUPLICATE_STAY_DATE','CAPACITY_CONFLICT'].includes(c));
+      const display=projectUniqueObservationDisplayEvidence(sources,{companyId:key(company?.companyId),stayDate:day,asOf:options.asOf,conflict});
+      // Preserve an old normal observation only as a separately dated reference.
+      // It remains excluded from current quantities, rates and operating actions.
+      const storedReference=source&&codes.length===1&&codes[0]==='OBSERVATION_STALE'&&quantityCodes(source,company).length===0&&rateCodes(source,company).length===0
+        ?{source:'stored_normal_observation',date:day,total:source.total,sold:source.sold,publicBookings:source.publicBookings,phoneBookings:source.phoneBookings,
+          collectedAt:instant(source.collectedAt)===null?null:new Date(instant(source.collectedAt)).toISOString(),collectedDate:observationDay(source),reservationRate:source.sold/source.total,reason:'OBSERVATION_STALE'}:null;
+      return {date:day,total:null,sold:null,publicBookings:null,phoneBookings:null,quantityStatus:codes.some(c=>['QUANTITY_INVALID','DUPLICATE_STAY_DATE'].includes(c))?'conflict':'unknown',codes:codes.length?codes:['QUANTITY_MISSING'],missing:true,inventoryConflict:false,collectedAt:null,collectedDate:null,reservationRate:null,...display,storedReference};
+    }
     const rateIssues=rateCodes(row,company),at=instant(row.collectedAt);
     return {date:day,total:capacity(row.total)?row.total:null,sold:row.sold,publicBookings:row.publicBookings,phoneBookings:row.phoneBookings,
-      quantityStatus:'ready',codes:rateIssues,missing:false,inventoryConflict:rateIssues.includes('CAPACITY_CONFLICT'),collectedAt:at===null?null:new Date(at).toISOString(),collectedDate:observationDay(row),reservationRate:rateIssues.length?null:row.sold/row.total};
+      quantityStatus:'ready',codes:rateIssues,missing:false,inventoryConflict:rateIssues.includes('CAPACITY_CONFLICT'),collectedAt:at===null?null:new Date(at).toISOString(),collectedDate:observationDay(row),reservationRate:rateIssues.length?null:row.sold/row.total,
+      ...projectUniqueObservationDisplayEvidence(originals.get(day),{companyId:key(company?.companyId),stayDate:day,asOf:options.asOf,ready:true}),storedReference:null};
   });
   return {companyId:key(company?.companyId),period:options.period,asOf:options.asOf,points};
 }
-module.exports={RULES_VERSION,REASONS,evaluateComparison,buildComparisonSet,classifyRegion,classifyIndustry,validQuantityDay,summarizeDays,summarizeCompany,projectReservationSeries};
+module.exports={RULES_VERSION,REASONS,evaluateComparison,buildComparisonSet,classifyRegion,classifyIndustry,validQuantityDay,summarizeDays,summarizeCompany,projectReservationSeries,projectObservationDisplayEvidence,projectUniqueObservationDisplayEvidence};
