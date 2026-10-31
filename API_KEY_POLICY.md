@@ -56,6 +56,20 @@ Blank key fields in the admin UI must preserve the existing saved key instead of
 
 - `POST /api/settings/traffic-keys/verify` performs a live authentication test.
 - That endpoint verifies Naver traffic keys, not public-data keys.
+- Settings entry, `GET /api/settings/traffic-keys`, and key saving do not start
+  a live test. An administrator explicitly selects `datalab` or `searchad` with
+  a JSON `provider` field. `all` and the legacy empty request check both.
+- Each selected provider receives at most one test request, with a 15-second
+  timeout and no retry on HTTP 429. A 60-second test cooldown and a separate
+  administrator verification rate limit do not alter regular collection limits.
+- Last test metadata is stored separately at
+  `CONFIG_DIR/traffic_api_verification.json`. Only fixed status/error codes,
+  timestamps, numeric HTTP status, and a private credential fingerprint are
+  stored; provider bodies and credentials are not stored in that record.
+  Fingerprints are never included in API responses. Effective key changes
+  invalidate only that provider's previous test. Records older than 24 hours
+  remain historical results, not a claim of current connectivity. Invalid or
+  contradictory records are reported as unknown, never successful.
 - After entering a visitor key, an administrator checks
   `GET /api/tourism-data/status` and performs one regional visitor collection.
 - After entering a demand-strength key, an administrator checks the same status endpoint

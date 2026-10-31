@@ -502,7 +502,7 @@
           <section class="admin-card tourism-forecast-connection-card" id="tourismForecastConnectionCard" data-ui-surface="card" aria-label="관광지 방문 전망 연결 상태"></section>
           <section class="admin-card" id="trafficAdminCard" data-ui-surface="card">
             <div class="card-head">
-              <h3>트래픽 API</h3>
+              <h3>네이버 검색 API 키 설정</h3>
               <span class="state-badge" id="trafficApiState">미설정</span>
             </div>
             <details class="advanced-box" data-ui-surface="control">
@@ -529,10 +529,10 @@
                   <input id="searchadCustomerIdInput" type="password" autocomplete="off">
                 </label>
                 <button class="secondary-button" type="submit">API 키 저장</button>
-                <button class="ghost-button" id="trafficKeyVerifyButton" type="button">연결 테스트</button>
+                <button class="ghost-button" id="trafficKeyVerifyButton" type="button">두 API 연결 테스트</button>
                 <p class="hint" id="trafficKeyStatus">키워드 입력창이 아니라 이 설정창에 입력합니다.</p>
                 <p class="legal-inline-notice">API 키는 관리자 권한 설정 저장소에 보관됩니다. 자세한 기준은 <a href="/api-key-retention-policy" target="_blank" rel="noopener">API 키 및 고객 데이터 보관 정책</a>을 확인하세요.</p>
-                <p class="traffic-verify-result" id="trafficKeyVerifyResult">저장 후 연결 테스트로 실제 인증 상태를 확인합니다.</p>
+                <p class="traffic-verify-result" id="trafficKeyVerifyResult">위 API·연동 목록에서 개별 연결 테스트와 마지막 결과를 확인합니다. 키 저장만으로 테스트를 실행하지 않습니다.</p>
               </form>
             </details>
           </section>
@@ -626,6 +626,7 @@
   <script src="/keyword-monthly-charts.js"></script>
   <script src="/keyword-monthly-analysis.js"></script>
   <script src="/admin-transition-timing.js"></script>
+  <script src="/traffic-integration-status.js"></script>
   <script src="/app.js"></script>
   <script src="/collector_controls.js"></script>
   <script src="/collection_rotation_controls.js"></script>

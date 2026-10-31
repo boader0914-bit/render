@@ -50,6 +50,7 @@ const { createMonthlyReportHttpHandler } = require("./lib/monthly_report_http.cj
 const { createKeywordMonthlyBundleAnalysis } = require("./lib/keyword_monthly_bundle.cjs");
 const { createKeywordMonthlyHttpHandler } = require("./lib/keyword_monthly_http.cjs");
 const { createKeywordMonthlyRefreshIntegration } = require("./lib/keyword_monthly_refresh_integration.cjs");
+const { createTrafficConnectionChecks, parseTrafficVerificationRequest } = require("./lib/traffic_connection_checks.cjs");
 const { createRegionalReportPreparation } = require("./lib/regional_report_preparation.cjs");
 const { createRegionalSearchTrendService } = require("./lib/regional_search_trends.cjs");
 const { createRegionalReportPreparationHttpHandler } = require("./lib/regional_report_preparation_http.cjs");
@@ -250,6 +251,7 @@ const RATE_LIMIT_POLICIES = {
   b2bMyLodgeCollect: { limit: 10, windowMs: 10 * 60 * 1000 },
   b2bInterestLodgeSave: { limit: 60, windowMs: 10 * 60 * 1000 },
   adminCrawl: { limit: 20, windowMs: 10 * 60 * 1000 },
+  adminTrafficVerification: { limit: 12, windowMs: 5 * 60 * 1000 },
   adminTourism: { limit: 30, windowMs: 10 * 60 * 1000 },
   adminTourismDemandStrength: { limit: 3, windowMs: 60 * 60 * 1000 },
   adminTourismDemandStrengthBackfill: { limit: 6, windowMs: 60 * 60 * 1000 }
@@ -2869,6 +2871,10 @@ const trafficKeyFields = [
   "searchadSecretKey",
   "searchadCustomerId"
 ];
+const trafficConnectionChecks = createTrafficConnectionChecks({
+  filePath: path.join(CONFIG_DIR, "traffic_api_verification.json"),
+  readKeys: readTrafficKeys
+});
 
 function maskSecret(value) {
   const text = String(value || "");
@@ -2928,6 +2934,11 @@ function trafficKeyStatus(keys) {
   };
 }
 
+async function trafficSettingsStatus() {
+  const keys = await readTrafficKeys();
+  return { ...trafficKeyStatus(keys), verification: await trafficConnectionChecks.status(keys) };
+}
+
 async function saveTrafficKeys(payload) {
   await fsp.mkdir(CONFIG_DIR, { recursive: true });
   const current = await readTrafficKeys();
@@ -2941,7 +2952,7 @@ async function saveTrafficKeys(payload) {
   }
 
   await fsp.writeFile(TRAFFIC_KEYS_FILE, JSON.stringify(next, null, 2), "utf8");
-  return trafficKeyStatus(next);
+  return trafficSettingsStatus();
 }
 
 function emptyLocationCardRequests() {
@@ -5054,47 +5065,10 @@ function b2bSubscriberFromContext(context = {}, payload = {}) {
   };
 }
 
-function summarizeTrafficApiCheck(result, configured) {
-  if (!configured) {
-    return {
-      configured: false,
-      ok: false,
-      status: null,
-      message: "API key is not configured."
-    };
-  }
-
-  return {
-    configured: true,
-    ok: Boolean(result?.collectable),
-    status: result?.status || null,
-    message: result?.collectable
-      ? "OK"
-      : (result?.reason || result?.message || result?.errorMessage || "API verification failed.")
-  };
-}
-
-async function verifyTrafficKeys() {
-  const keys = await readTrafficKeys();
-  const status = trafficKeyStatus(keys);
-  const keyword = "글램핑";
-  const datalabConfigured = Boolean(keys.naverClientId && keys.naverClientSecret);
-  const searchadConfigured = Boolean(keys.searchadApiKey && keys.searchadSecretKey && keys.searchadCustomerId);
-
-  const [datalabResult, searchadResult] = await Promise.all([
-    datalabConfigured ? collectDatalabTrend(keyword, keys) : Promise.resolve(null),
-    searchadConfigured ? collectSearchAdMetric(keyword, keys) : Promise.resolve(null)
-  ]);
-
-  return {
-    ...status,
-    verification: {
-      checkedAt: new Date().toISOString(),
-      keyword,
-      datalab: summarizeTrafficApiCheck(datalabResult, datalabConfigured),
-      searchad: summarizeTrafficApiCheck(searchadResult, searchadConfigured)
-    }
-  };
+async function verifyTrafficKeys(provider = "all") {
+  const verification = await trafficConnectionChecks.verify(provider);
+  const status = await trafficSettingsStatus();
+  return { ...status, verification: { ...status.verification, test: verification.test } };
 }
 
 function timingSafeTextEqual(left, right) {
@@ -20630,7 +20604,7 @@ async function route(req, res) {
 
     if (req.method === "GET" && reqUrl.pathname === "/api/settings/traffic-keys") {
       if (!requireAdminSession(session, req, res)) return;
-      return send(res, 200, trafficKeyStatus(await readTrafficKeys()));
+      return send(res, 200, await trafficSettingsStatus());
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/settings/traffic-keys") {
@@ -20641,7 +20615,16 @@ async function route(req, res) {
 
     if (req.method === "POST" && reqUrl.pathname === "/api/settings/traffic-keys/verify") {
       if (!requireAdminSession(session, req, res)) return;
-      return send(res, 200, await verifyTrafficKeys());
+      try {
+        const provider = await parseTrafficVerificationRequest(req, reqUrl);
+        assertRequestRateLimit(req, "adminTrafficVerification", RATE_LIMIT_POLICIES.adminTrafficVerification, session.username || "");
+        return send(res, 200, await verifyTrafficKeys(provider));
+      } catch (error) {
+        const status = [400, 403, 413, 415, 429].includes(error.statusCode) ? error.statusCode : 503;
+        return send(res, status, { code: /^TRAFFIC_VERIFY_[A-Z_]+$/.test(error.code || "") ? error.code : status === 429 ? "TRAFFIC_VERIFY_RATE_LIMITED" : "TRAFFIC_VERIFY_UNAVAILABLE",
+          error: status === 429 ? "연결 테스트 간격을 두고 다시 확인해 주세요." : "연결 테스트 요청이나 저장 상태를 확인해 주세요." }, "application/json; charset=utf-8",
+          error.retryAfterSeconds ? { "Retry-After": String(Math.max(1, Number(error.retryAfterSeconds) || 1)) } : {});
+      }
     }
 
     const diagnosticsMatch = /^\/api\/runs\/([^/]+)\/diagnostics$/.exec(reqUrl.pathname);

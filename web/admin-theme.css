@@ -1747,6 +1747,69 @@ html[data-theme-resolved] body.role-admin .admin-integration-list mark {
 html[data-theme-resolved] body.role-admin .admin-integration-list mark[data-ui-status="positive"] { color: var(--positive) !important; }
 html[data-theme-resolved] body.role-admin .admin-integration-list mark[data-ui-status="warning"] { color: var(--warning-strong) !important; }
 
+html[data-theme-resolved] body.role-admin .traffic-registry-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+html[data-theme-resolved] body.role-admin .traffic-integration-help,
+html[data-theme-resolved] body.role-admin .traffic-integration-notice {
+  margin: 12px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+html[data-theme-resolved] body.role-admin .traffic-integration-notice {
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--ui-radius-control);
+  background: var(--surface-control);
+}
+
+html[data-theme-resolved] body.role-admin .traffic-integration-detail {
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin-top: 9px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  display: grid;
+  gap: 8px;
+}
+
+html[data-theme-resolved] body.role-admin .traffic-integration-detail p {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+html[data-theme-resolved] body.role-admin .traffic-integration-detail time {
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-theme-resolved] body.role-admin .traffic-integration-test {
+  justify-self: start;
+  max-width: 100%;
+  min-height: 38px;
+  white-space: normal;
+  font-size: 12px;
+}
+
+html[data-theme-resolved] body.role-admin .traffic-integration-row > span,
+html[data-theme-resolved] body.role-admin .traffic-integration-row > small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 html[data-theme-resolved] body.role-admin .admin-region-analysis-dashboard {
   margin-bottom: 24px;
 }

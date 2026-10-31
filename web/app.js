@@ -135,6 +135,11 @@ const state = {
   locationProfileLoading: {},
   locationTourismIndexRefresh: {},
   trafficKeyState: null,
+  trafficVerifying: "",
+  trafficKeyLoading: false,
+  trafficKeySaving: false,
+  trafficKeyRequestSequence: 0,
+  trafficTestNotice: "",
   crawlStatusTimer: null,
   pendingRecrawlContext: null,
   b2bSearchQuery: "",
@@ -30461,13 +30466,12 @@ function adminIntegrationRows() {
     if (!integration.liveKey) {
       return { ...integration, status: "planned", statusLabel: "연결 예정", statusNote: "인증키 노출 없이 순차 연결" };
     }
-    const verification = traffic.verification?.[integration.liveKey] || {};
-    const configured = Boolean(traffic[`${integration.liveKey}Configured`]);
-    if (verification.ok) {
-      return { ...integration, status: "connected", statusLabel: "연동 정상", statusNote: "실제 연결 확인" };
+    if (window.TrafficIntegrationStatus) {
+      return { ...integration, ...window.TrafficIntegrationStatus.row(state.trafficKeyState, integration.liveKey, { testing: state.trafficVerifying }), provider: integration.provider };
     }
+    const configured = Boolean(traffic[`${integration.liveKey}Configured`]);
     if (configured) {
-      return { ...integration, status: "configured", statusLabel: "키 저장됨", statusNote: "연결 테스트 필요" };
+      return { ...integration, status: "checking", statusLabel: "표시 기능 확인 필요", statusNote: "연결 상태 표시 기능을 읽지 못했습니다. 화면을 새로고침해 주세요." };
     }
     return { ...integration, status: "missing", statusLabel: "미설정", statusNote: "관리자 설정 필요" };
   });
@@ -30735,15 +30739,18 @@ function renderAdminIntegrationRegistry() {
   els.adminIntegrationRegistry.innerHTML = `
     <section class="admin-console-panel" data-ui-surface="card">
       <div class="admin-console-head">
-        <div><strong>API·연동 레지스트리</strong><small>신청한 15개 연동의 실제 연결 여부를 구분합니다. 인증키 값은 화면에 표시하지 않습니다.</small></div>
-        <span>${escapeHtml(adminIntegrationSummaryLabel(summary))}</span>
+        <div><strong>API·연동 레지스트리</strong><small>키 저장 여부와 마지막 연결 테스트를 구분합니다. 인증키 값은 표시하지 않습니다.</small></div>
+        <div class="traffic-registry-actions"><span>${escapeHtml(adminIntegrationSummaryLabel(summary))}</span><button type="button" class="ghost-button" data-traffic-state-refresh${state.trafficVerifying || state.trafficKeyLoading || state.trafficKeySaving ? " disabled" : ""}>${state.trafficKeyLoading ? "확인 중…" : "저장 상태 다시 확인"}</button></div>
       </div>
+      <p class="traffic-integration-help">검색 트렌드·검색광고 테스트는 아래 버튼을 누를 때만 해당 API에 요청합니다. 화면 진입·저장 상태 확인은 새 연결 테스트를 실행하지 않습니다. 마지막 테스트 이후 연결 상태는 달라질 수 있습니다.</p>
+      ${state.trafficTestNotice ? `<p class="traffic-integration-notice" role="status">${escapeHtml(state.trafficTestNotice)}</p>` : ""}
       <div class="admin-integration-list">
         ${rows.map((row) => `
-          <article data-ui-surface="control">
+          <article data-ui-surface="control"${row.liveKey ? ` class="traffic-integration-row" data-traffic-provider="${escapeHtml(row.liveKey)}"` : ""}>
             <span><strong>${escapeHtml(row.name)}</strong><small>${escapeHtml(`${row.provider} · ${row.group}`)}</small></span>
             <mark data-ui-status="${escapeHtml(row.status === "connected" ? "positive" : row.status === "missing" ? "warning" : "neutral")}">${escapeHtml(row.statusLabel)}</mark>
             <small>${escapeHtml(row.statusNote)}</small>
+            ${row.liveKey && window.TrafficIntegrationStatus ? window.TrafficIntegrationStatus.detail({ ...row, provider: row.liveKey, disabled: row.disabled || state.trafficKeySaving }) : ""}
           </article>
         `).join("")}
       </div>
@@ -42981,7 +42988,15 @@ async function submitYeogiImport() {
 
 async function submitTrafficKeys(event) {
   event.preventDefault();
+  if (state.trafficVerifying || state.trafficKeySaving) {
+    els.trafficKeyStatus.textContent = "진행 중인 저장·연결 확인이 끝난 뒤 다시 시도해 주세요.";
+    return;
+  }
   els.trafficKeyStatus.textContent = "저장 중입니다.";
+  state.trafficKeySaving = true;
+  state.trafficKeyLoading = false;
+  state.trafficKeyRequestSequence += 1;
+  renderAdminIntegrationRegistry();
   try {
     const payload = {};
     [
@@ -43005,62 +43020,76 @@ async function submitTrafficKeys(event) {
     });
     renderTrafficState(data);
     els.trafficKeyForm.reset();
-    els.trafficKeyStatus.textContent = "API 키를 저장했습니다. 연결을 확인합니다.";
-    await verifyTrafficKeys();
+    state.trafficTestNotice = "API 키를 저장했습니다. 위 연동 목록에서 필요한 API의 연결 테스트를 눌러 주세요.";
+    els.trafficKeyStatus.textContent = state.trafficTestNotice;
   } catch (error) {
-    els.trafficKeyStatus.textContent = `저장 실패: ${error.message}`;
+    els.trafficKeyStatus.textContent = "키를 저장하지 못했습니다. 기존 저장 상태를 다시 확인해 주세요.";
+  } finally {
+    state.trafficKeySaving = false;
+    renderAdminIntegrationRegistry();
   }
-}
-
-function trafficCheckLabel(name, check) {
-  if (!check?.configured) return `${name}: 키 없음`;
-  if (check.ok) return `${name}: 정상`;
-  const status = check.status ? ` ${check.status}` : "";
-  return `${name}: 실패${status} · ${check.message || "확인 필요"}`;
 }
 
 function renderTrafficVerification(data) {
   if (!els.trafficKeyVerifyResult) return;
   const verification = data?.verification;
   if (!verification) {
-    els.trafficKeyVerifyResult.textContent = "저장 후 연결 테스트로 실제 인증 상태를 확인합니다.";
+    els.trafficKeyVerifyResult.textContent = "위 API·연동 목록에서 마지막 결과와 개별 연결 테스트를 확인합니다.";
     return;
   }
-  const datalab = trafficCheckLabel("DataLab", verification.datalab);
-  const searchad = trafficCheckLabel("SearchAd", verification.searchad);
-  els.trafficKeyVerifyResult.textContent = `${datalab} / ${searchad}`;
+  if (window.TrafficIntegrationStatus) {
+    els.trafficKeyVerifyResult.textContent = ["datalab", "searchad"].map(provider => {
+      const row = window.TrafficIntegrationStatus.row(data, provider);
+      return `${row.name}: ${row.statusLabel} · ${row.checkedAtLabel}`;
+    }).join(" / ");
+    return;
+  }
+  els.trafficKeyVerifyResult.textContent = "연결 상태 표시 기능을 읽지 못했습니다. 화면을 새로고침한 뒤 다시 확인해 주세요.";
 }
 
-async function verifyTrafficKeys() {
-  if (!els.trafficKeyVerifyButton) return;
-  els.trafficKeyVerifyButton.disabled = true;
-  els.trafficKeyStatus.textContent = "API 연결을 테스트 중입니다.";
+async function verifyTrafficKeys(provider = "all") {
+  if (!["all", "datalab", "searchad"].includes(provider) || !isAdminRole() || state.trafficVerifying || state.trafficKeySaving) return;
+  const sequence = ++state.trafficKeyRequestSequence;
+  state.trafficVerifying = provider;
+  state.trafficKeyLoading = false;
+  state.trafficTestNotice = "저장된 키로 연결을 확인하고 있습니다. 새 키 입력은 저장 후 테스트해 주세요.";
+  if (els.trafficKeyVerifyButton) els.trafficKeyVerifyButton.disabled = true;
+  if (els.trafficKeyStatus) els.trafficKeyStatus.textContent = state.trafficTestNotice;
+  renderAdminIntegrationRegistry();
   try {
-    const data = await fetchJson("/api/settings/traffic-keys/verify", { method: "POST" });
+    const data = await fetchJson("/api/settings/traffic-keys/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider }) });
+    if (sequence !== state.trafficKeyRequestSequence || !isAdminRole()) return;
     renderTrafficState(data);
     renderTrafficVerification(data);
-    const datalabOk = Boolean(data?.verification?.datalab?.ok);
-    const searchadOk = Boolean(data?.verification?.searchad?.ok);
-    els.trafficKeyStatus.textContent = datalabOk && searchadOk
-      ? "API 연결이 정상입니다."
-      : "일부 API 연결에 문제가 있습니다. 아래 결과를 확인하세요.";
+    const attempts = data.verification?.test?.attempts || [];
+    const skipped = data.testSkipped || data.verification?.test?.testSkipped;
+    state.trafficTestNotice = attempts.some(attempt => attempt.reason === "CHECK_RECORD_UNAVAILABLE")
+      ? "테스트 기록을 읽거나 저장하지 못했습니다. 각 API의 결과는 미확인 상태로 확인해 주세요."
+      : skipped && attempts.some(attempt => attempt.reason === "COOLDOWN")
+        ? "반복 요청을 줄이기 위해 최근 테스트 기록을 표시합니다. 각 API의 다음 테스트 시각을 확인해 주세요."
+        : skipped
+          ? "연결 테스트가 실행되지 않았습니다. API별 키 설정과 실행 사유를 확인해 주세요."
+          : "연결 테스트 결과를 표시했습니다. API별 상태·마지막 확인 시각·사유를 확인해 주세요.";
+    if (els.trafficKeyStatus) els.trafficKeyStatus.textContent = state.trafficTestNotice;
   } catch (error) {
-    els.trafficKeyStatus.textContent = `연결 테스트 실패: ${error.message}`;
+    if (sequence !== state.trafficKeyRequestSequence) return;
+    state.trafficTestNotice = "이번 연결 테스트 결과를 받지 못했습니다. 이전 기록은 유지하며 현재 연결은 미확인입니다.";
+    if (els.trafficKeyStatus) els.trafficKeyStatus.textContent = state.trafficTestNotice;
   } finally {
-    els.trafficKeyVerifyButton.disabled = false;
+    if (sequence === state.trafficKeyRequestSequence) state.trafficVerifying = "";
+    if (els.trafficKeyVerifyButton) els.trafficKeyVerifyButton.disabled = false;
+    renderAdminIntegrationRegistry();
   }
 }
 
 function renderTrafficState(data) {
   state.trafficKeyState = data || null;
-  const datalabOk = data?.verification?.datalab?.ok;
-  const searchadOk = data?.verification?.searchad?.ok;
   const configured = data?.datalabConfigured || data?.searchadConfigured;
-  els.trafficApiState.textContent = datalabOk || searchadOk
-    ? "연동 정상"
-    : configured
-      ? "키 저장됨"
-      : "미설정";
+  const rows = window.TrafficIntegrationStatus ? ["datalab", "searchad"].map(provider => window.TrafficIntegrationStatus.row(data, provider)).filter(row => row.configured) : [];
+  if (els.trafficApiState) els.trafficApiState.textContent = !data ? "상태 미확인" : !configured ? "미설정"
+    : rows.length === 2 && rows.every(row => row.status === "connected") ? "최근 테스트 정상"
+      : rows.some(row => row.status === "missing") ? "연결 확인 필요"
+        : rows.some(row => row.status === "connected") ? "일부 확인" : "키 저장됨";
   renderTrafficVerification(data);
   renderDemand();
   if (isAdminRole()) {
@@ -43074,10 +43103,22 @@ async function loadTrafficState() {
     state.trafficKeyState = null;
     return;
   }
+  if (state.trafficVerifying || state.trafficKeySaving) return;
+  const sequence = ++state.trafficKeyRequestSequence;
+  state.trafficKeyLoading = true;
+  renderAdminIntegrationRegistry();
   try {
-    renderTrafficState(await fetchJson("/api/settings/traffic-keys"));
+    const data = await fetchJson("/api/settings/traffic-keys");
+    if (sequence !== state.trafficKeyRequestSequence || !isAdminRole()) return;
+    renderTrafficState(data);
+    state.trafficTestNotice = "저장된 상태를 확인했습니다. 새 연결 테스트는 실행하지 않았습니다.";
   } catch {
-    renderTrafficState(null);
+    if (sequence !== state.trafficKeyRequestSequence) return;
+    state.trafficTestNotice = "최신 저장 상태를 읽지 못했습니다. 이전 테스트 기록과 현재 연결 상태는 구분해 확인해 주세요.";
+    if (!state.trafficKeyState) renderTrafficState(null);
+  } finally {
+    if (sequence === state.trafficKeyRequestSequence) state.trafficKeyLoading = false;
+    renderAdminIntegrationRegistry();
   }
 }
 
@@ -44755,7 +44796,12 @@ function bindEvents() {
   els.yeogiImportButton.addEventListener("click", submitYeogiImport);
   els.yeogiClearButton.addEventListener("click", clearYeogiImport);
   els.trafficKeyForm.addEventListener("submit", submitTrafficKeys);
-  els.trafficKeyVerifyButton?.addEventListener("click", verifyTrafficKeys);
+  els.trafficKeyVerifyButton?.addEventListener("click", () => verifyTrafficKeys("all"));
+  els.adminIntegrationRegistry?.addEventListener("click", (event) => {
+    const test = event.target.closest?.("[data-traffic-test]");
+    if (test && !test.disabled) { void verifyTrafficKeys(test.dataset.trafficTest); return; }
+    if (event.target.closest?.("[data-traffic-state-refresh]")) void loadTrafficState();
+  });
   [els.kosisAdminCard, els.dictionaryResult, els.regionSourcesDashboard].forEach(element => element?.addEventListener("click", handleKosisClick));
   els.kosisAdminCard?.addEventListener("change", (event) => {
     if (event.target.id !== "kosisRefreshRegion") return;
