@@ -12,6 +12,8 @@ const MESSAGES = Object.freeze({
   KEY_CHANGED: "키가 변경되어 다시 연결 테스트가 필요합니다.", AUTH_ERROR: "인증키 또는 API 이용 권한을 확인해 주세요.",
   QUOTA_EXCEEDED: "제공처의 요청 한도 또는 이용 제한을 확인해 주세요.", PROVIDER_UNAVAILABLE: "제공처 응답에 문제가 있습니다.",
   HTTP_ERROR: "제공처가 요청을 정상 처리하지 못했습니다.", INVALID_RESPONSE: "제공처 응답 형식을 확인하지 못했습니다.",
+  RESPONSE_TOO_LARGE: "연결 테스트의 응답 크기 범위를 초과했습니다.", INVALID_JSON: "제공처의 JSON 응답을 해석하지 못했습니다.",
+  RESPONSE_READ_ERROR: "제공처 응답을 끝까지 읽지 못했습니다.",
   NO_DATA: "응답은 받았지만 테스트 검색어의 자료가 없습니다.", TIMEOUT: "제공처 응답 시간이 초과됐습니다.",
   NETWORK_ERROR: "제공처에 연결하지 못했습니다.", CHECK_RECORD_UNAVAILABLE: "저장된 연결 테스트 기록을 확인하지 못했습니다.",
   CHECK_IN_PROGRESS: "연결 테스트 중입니다.", CHECK_INTERRUPTED: "이전 연결 테스트가 완료됐는지 확인하지 못했습니다.",
@@ -20,6 +22,10 @@ const MESSAGES = Object.freeze({
 const PERSISTED_STATES = new Set(["checking", "verified", "no_data", "failed", "limited"]);
 const MAX_RECORD_BYTES = 64 * 1024;
 const MAX_RESPONSE_BYTES = 256 * 1024;
+// The keyword tool returns related keywords, not just the single test keyword.
+// This is a bounded manual-test body limit, separate from collection/request limits.
+const MAX_SEARCHAD_RESPONSE_BYTES = 2 * 1024 * 1024;
+const DIAGNOSTIC_STAGES = new Set(["verified", "response_size", "json_parse", "response_read", "schema"]);
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const object = value => Boolean(value && typeof value === "object" && !Array.isArray(value));
 const iso = value => typeof value === "string" && ISO.test(value) && Number.isFinite(Date.parse(value));
@@ -57,24 +63,36 @@ async function parseTrafficVerificationRequest(req, url) {
   return payload.provider || "all";
 }
 
-async function responseJson(response) {
-  let text = "";
+async function responseJson(response, maximum) {
+  const diagnostics = { responseBytes: 0, responseLimitBytes: maximum, legacyResponseLimitBytes: MAX_RESPONSE_BYTES, legacyLimitExceeded: false };
+  const problem = (code, stage) => Object.assign(new Error(code), { code, diagnostics: { ...diagnostics, validationStage: stage } });
+  const observed = bytes => { diagnostics.responseBytes = bytes; diagnostics.legacyLimitExceeded = bytes > MAX_RESPONSE_BYTES; };
+  let bytes;
   if (response.body && typeof response.body.getReader === "function") {
-    const reader = response.body.getReader(); const chunks = []; let bytes = 0;
+    const reader = response.body.getReader(); const chunks = []; let received = 0;
     try {
       while (true) {
         const next = await reader.read(); if (next.done) break;
-        const buffer = Buffer.from(next.value); bytes += buffer.length;
-        if (bytes > MAX_RESPONSE_BYTES) { await reader.cancel(); throw new Error("BOUNDED_RESPONSE"); }
+        const buffer = Buffer.from(next.value); received += buffer.length; observed(received);
+        if (received > maximum) { try { await reader.cancel(); } catch {} throw problem("RESPONSE_TOO_LARGE", "response_size"); }
         chunks.push(buffer);
       }
-      text = Buffer.concat(chunks).toString("utf8");
-    } finally { reader.releaseLock(); }
+      bytes = Buffer.concat(chunks);
+    } catch (error) {
+      if (error?.code === "RESPONSE_TOO_LARGE") throw error;
+      throw problem("RESPONSE_READ_ERROR", "response_read");
+    } finally { try { reader.releaseLock(); } catch {} }
   } else {
-    text = await response.text();
-    if (Buffer.byteLength(text) > MAX_RESPONSE_BYTES) throw new Error("BOUNDED_RESPONSE");
+    // Native fetch uses the streaming branch; this also supports injected test adapters.
+    try { bytes = Buffer.from(await response.text(), "utf8"); } catch { throw problem("RESPONSE_READ_ERROR", "response_read"); }
+    observed(bytes.length);
+    if (bytes.length > maximum) throw problem("RESPONSE_TOO_LARGE", "response_size");
   }
-  return JSON.parse(text);
+  diagnostics.utf8Bom = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
+  let data;
+  try { data = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
+  catch { throw problem("INVALID_JSON", "json_parse"); }
+  return { data, diagnostics };
 }
 
 async function probeConnection(provider, keys, { fetchImpl, now, signal }) {
@@ -99,24 +117,30 @@ async function probeConnection(provider, keys, { fetchImpl, now, signal }) {
   if (status === 429) return failure("limited", "QUOTA_EXCEEDED", status);
   if (status !== null && status >= 500) return failure("failed", "PROVIDER_UNAVAILABLE", status);
   if (status !== 200) return failure("failed", status === null ? "INVALID_RESPONSE" : "HTTP_ERROR", status);
-  let data; try { data = await responseJson(response); } catch { return failure("failed", "INVALID_RESPONSE", status); }
-  if (!object(data)) return failure("failed", "INVALID_RESPONSE", status);
+  let parsed;
+  try { parsed = await responseJson(response, provider === "searchad" ? MAX_SEARCHAD_RESPONSE_BYTES : MAX_RESPONSE_BYTES); }
+  catch (error) { return { ...failure("failed", ["RESPONSE_TOO_LARGE", "INVALID_JSON", "RESPONSE_READ_ERROR"].includes(error?.code) ? error.code : "INVALID_RESPONSE", status), ...(error?.diagnostics ? { diagnostics: error.diagnostics } : {}) }; }
+  const { data, diagnostics } = parsed;
+  const invalid = () => ({ ...failure("failed", "INVALID_RESPONSE", status), diagnostics: { ...diagnostics, validationStage: "schema" } });
+  const noData = () => ({ ...failure("no_data", "NO_DATA", status), diagnostics: { ...diagnostics, validationStage: "schema" } });
+  if (!object(data)) return invalid();
   if (provider === "datalab") {
-    if (!Array.isArray(data.results)) return failure("failed", "INVALID_RESPONSE", status);
-    if (!data.results.length) return failure("no_data", "NO_DATA", status);
+    if (!Array.isArray(data.results)) return invalid();
+    if (!data.results.length) return noData();
     const groups = data.results;
-    if (!groups.every(group => object(group) && typeof group.title === "string" && group.title.replace(/\s+/g, "") === "글램핑" && Array.isArray(group.data))) return failure("failed", "INVALID_RESPONSE", status);
+    if (!groups.every(group => object(group) && typeof group.title === "string" && group.title.replace(/\s+/g, "") === "글램핑" && Array.isArray(group.data))) return invalid();
     const rows = groups.flatMap(group => group.data);
-    if (!rows.length) return failure("no_data", "NO_DATA", status);
+    if (!rows.length) return noData();
     const request = JSON.parse(options.body);
-    if (!rows.every(row => object(row) && /^\d{4}-\d{2}-\d{2}$/.test(row.period || "") && row.period >= request.startDate && row.period <= request.endDate && typeof row.ratio === "number" && Number.isFinite(row.ratio) && row.ratio >= 0 && row.ratio <= 100)) return failure("failed", "INVALID_RESPONSE", status);
+    if (!rows.every(row => object(row) && /^\d{4}-\d{2}-\d{2}$/.test(row.period || "") && row.period >= request.startDate && row.period <= request.endDate && typeof row.ratio === "number" && Number.isFinite(row.ratio) && row.ratio >= 0 && row.ratio <= 100)) return invalid();
   } else {
-    if (!Array.isArray(data.keywordList)) return failure("failed", "INVALID_RESPONSE", status);
-    if (!data.keywordList.length) return failure("no_data", "NO_DATA", status);
+    if (!Array.isArray(data.keywordList)) return invalid();
+    diagnostics.keywordCount = data.keywordList.length;
+    if (!data.keywordList.length) return noData();
     const count = value => typeof value === "number" ? Number.isFinite(value) && value >= 0 : typeof value === "string" && /^<?\s*\d+(?:\.\d+)?$/.test(value.replace(/,/g, "").trim());
-    if (!data.keywordList.some(row => object(row) && typeof row.relKeyword === "string" && row.relKeyword.trim() && count(row.monthlyPcQcCnt) && count(row.monthlyMobileQcCnt))) return failure("failed", "INVALID_RESPONSE", status);
+    if (!data.keywordList.some(row => object(row) && typeof row.relKeyword === "string" && row.relKeyword.trim() && count(row.monthlyPcQcCnt) && count(row.monthlyMobileQcCnt))) return invalid();
   }
-  return { checkStatus: "verified", errorCode: "OK", status };
+  return { checkStatus: "verified", errorCode: "OK", status, diagnostics: { ...diagnostics, validationStage: "verified" } };
 }
 
 function createTrafficConnectionChecks({ filePath, readKeys, fetchImpl = (...args) => fetch(...args), clock = Date.now, timeoutMs = 15000, cooldownMs = 60000, freshnessMs = 24 * 3600000 } = {}) {
@@ -134,15 +158,25 @@ function createTrafficConnectionChecks({ filePath, readKeys, fetchImpl = (...arg
     if (row.errorCode === "AUTH_ERROR") return row.status === 401 || row.status === 403;
     if (row.errorCode === "PROVIDER_UNAVAILABLE") return row.status >= 500 && row.status <= 599;
     if (row.errorCode === "HTTP_ERROR") return safeStatus(row.status) !== null && ![200, 401, 403, 429].includes(row.status) && row.status < 500;
-    if (row.errorCode === "INVALID_RESPONSE") return row.status === 200 || row.status === null;
+    if (["INVALID_RESPONSE", "RESPONSE_TOO_LARGE", "INVALID_JSON", "RESPONSE_READ_ERROR"].includes(row.errorCode)) return row.status === 200 || row.errorCode === "INVALID_RESPONSE" && row.status === null;
     if (["TIMEOUT", "NETWORK_ERROR"].includes(row.errorCode)) return row.status === null;
     return false;
   }
-  function recordValid(row) {
-    return object(row) && Object.keys(row).every(key => ["fingerprint", "startedAt", "checkedAt", "checkStatus", "status", "errorCode"].includes(key))
+  function recordValid(row, provider) {
+    const diagnosticsValid = value => object(value) && Object.keys(value).every(key => ["responseBytes", "responseLimitBytes", "legacyResponseLimitBytes", "legacyLimitExceeded", "utf8Bom", "keywordCount", "validationStage"].includes(key))
+      && Number.isSafeInteger(value.responseBytes) && value.responseBytes >= 0 && value.responseBytes <= 32 * 1024 * 1024
+      && value.responseLimitBytes === (provider === "searchad" ? MAX_SEARCHAD_RESPONSE_BYTES : MAX_RESPONSE_BYTES) && value.legacyResponseLimitBytes === MAX_RESPONSE_BYTES
+      && value.legacyLimitExceeded === (value.responseBytes > MAX_RESPONSE_BYTES) && DIAGNOSTIC_STAGES.has(value.validationStage)
+      && (!Object.hasOwn(value, "utf8Bom") || typeof value.utf8Bom === "boolean")
+      && (!Object.hasOwn(value, "keywordCount") || Number.isSafeInteger(value.keywordCount) && value.keywordCount >= 0 && value.keywordCount <= 100000)
+      && (!["verified", "no_data"].includes(row.checkStatus) || value.responseBytes > 0)
+      && (!(provider === "searchad" && row.checkStatus === "verified") || Number.isSafeInteger(value.keywordCount) && value.keywordCount > 0)
+      && (value.validationStage === "response_size" ? value.responseBytes > value.responseLimitBytes : value.responseBytes <= value.responseLimitBytes)
+      && (row.checkStatus === "verified" ? value.validationStage === "verified" : row.checkStatus === "no_data" ? value.validationStage === "schema" : row.errorCode === "RESPONSE_TOO_LARGE" ? value.validationStage === "response_size" : row.errorCode === "INVALID_JSON" ? value.validationStage === "json_parse" : row.errorCode === "RESPONSE_READ_ERROR" ? value.validationStage === "response_read" : row.errorCode === "INVALID_RESPONSE" && value.validationStage === "schema");
+    return object(row) && Object.keys(row).every(key => ["fingerprint", "startedAt", "checkedAt", "checkStatus", "status", "errorCode", "diagnostics"].includes(key))
       && /^[a-f0-9]{64}$/.test(row.fingerprint || "") && iso(row.startedAt) && (row.checkedAt === "" || iso(row.checkedAt))
       && PERSISTED_STATES.has(row.checkStatus) && Object.hasOwn(MESSAGES, row.errorCode) && (row.status === null || safeStatus(row.status) === row.status)
-      && resultConsistent(row);
+      && resultConsistent(row) && (!Object.hasOwn(row, "diagnostics") || diagnosticsValid(row.diagnostics));
   }
   async function load() {
     let handle;
@@ -156,7 +190,7 @@ function createTrafficConnectionChecks({ filePath, readKeys, fetchImpl = (...arg
       if (bytes.length > MAX_RECORD_BYTES || !same(before, await handle.stat()) || !same(before, await fs.lstat(location))) return { state: "unavailable", envelope: empty() };
       const envelope = JSON.parse(bytes.toString("utf8"));
       if (!object(envelope) || envelope.schemaVersion !== 1 || !object(envelope.providers) || Object.keys(envelope).some(key => !["schemaVersion", "updatedAt", "providers"].includes(key))
-        || Object.keys(envelope.providers).some(key => !PROVIDERS.includes(key) || !recordValid(envelope.providers[key])) || !(envelope.updatedAt === "" || iso(envelope.updatedAt))) return { state: "unavailable", envelope: empty() };
+        || Object.keys(envelope.providers).some(key => !PROVIDERS.includes(key) || !recordValid(envelope.providers[key], key)) || !(envelope.updatedAt === "" || iso(envelope.updatedAt))) return { state: "unavailable", envelope: empty() };
       return { state: "ready", envelope };
     } catch (error) { return { state: error.code === "ENOENT" ? "missing" : "unavailable", envelope: empty() }; }
     finally { await handle?.close(); }
@@ -186,7 +220,7 @@ function createTrafficConnectionChecks({ filePath, readKeys, fetchImpl = (...arg
     if (!isConfigured) return result("not_configured", "MISSING_KEY");
     if (saved.state === "unavailable") return result("unknown", "CHECK_RECORD_UNAVAILABLE");
     if (!row) return base;
-    const common = { checkedAt: row.checkedAt, startedAt: row.startedAt, status: row.status, cooldownUntil: new Date(Date.parse(row.startedAt) + cooldownMs).toISOString() };
+    const common = { checkedAt: row.checkedAt, startedAt: row.startedAt, status: row.status, cooldownUntil: new Date(Date.parse(row.startedAt) + cooldownMs).toISOString(), ...(row.diagnostics ? { diagnostics: { ...row.diagnostics } } : {}) };
     if (row.fingerprint !== fingerprint(provider, keys)) return result("key_changed", "KEY_CHANGED", { ...common, stale: true });
     if (Date.parse(row.startedAt) > now || row.checkedAt && Date.parse(row.checkedAt) > now) return result("unknown", "CLOCK_SKEW", { ...common, stale: true, validForCurrentKeys: true });
     if (row.checkStatus === "checking") return result(inFlight.has(provider) ? "checking" : "unknown", inFlight.has(provider) ? "CHECK_IN_PROGRESS" : "CHECK_INTERRUPTED", { ...common, validForCurrentKeys: true });

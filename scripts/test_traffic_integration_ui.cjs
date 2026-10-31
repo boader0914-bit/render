@@ -129,3 +129,22 @@ test("an unreadable skipped check is unknown rather than a successful cooldown r
   assert.match(f.state.trafficTestNotice, /읽거나 저장하지 못했습니다/);
   assert.doesNotMatch(f.state.trafficTestNotice, /최근 테스트 기록을 표시/);
 });
+
+test("bounded SearchAd response diagnostics survive rendering without raw response text", () => {
+  const row = ui.row(data({ diagnostics: { responseBytes: 390000, responseLimitBytes: 2097152, legacyResponseLimitBytes: 262144, legacyLimitExceeded: true, utf8Bom: false, keywordCount: 1000, validationStage: "verified", rawBody: "private-provider-body" } }, "searchad"), "searchad", { now });
+  assert.equal(row.status, "connected");
+  assert.match(row.diagnosticLabel, /390,000바이트.*1,000개.*이전 검사 크기 초과/);
+  assert.doesNotMatch(ui.detail(row), /private-provider-body|rawBody/);
+});
+
+test("size, JSON, and body-read failures have distinct safe UI reasons", () => {
+  for (const [code, note] of [["RESPONSE_TOO_LARGE", /응답 크기/], ["INVALID_JSON", /JSON/], ["RESPONSE_READ_ERROR", /끝까지/]]) {
+    const row = ui.row(data({ checkStatus: "failed", ok: false, errorCode: code }, "searchad"), "searchad", { now });
+    assert.equal(row.statusLabel, "테스트 실패"); assert.match(row.statusNote, note); assert.match(ui.detail(row), new RegExp(code));
+  }
+});
+
+test("invalid diagnostics never render arbitrary provider fields or guessed counts", () => {
+  const row = ui.row(data({ diagnostics: { responseBytes: -1, responseLimitBytes: 2097152, legacyResponseLimitBytes: 262144, legacyLimitExceeded: false, validationStage: "verified", keywordCount: "private-string" } }, "searchad"), "searchad", { now });
+  assert.equal(row.diagnosticLabel, ""); assert.doesNotMatch(ui.detail(row), /private-string|수신 확인/);
+});

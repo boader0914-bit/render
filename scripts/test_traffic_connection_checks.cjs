@@ -24,6 +24,22 @@ async function fixture(t, options = {}) {
   return { directory, filePath, state, create, service: create() };
 }
 
+const LEGACY_RESPONSE_LIMIT = 256 * 1024;
+const SEARCHAD_RESPONSE_LIMIT = 2 * 1024 * 1024;
+const textReply = text => ({ status: 200, text: async () => text });
+function largeSearchAdData() {
+  return { keywordList: Array.from({ length: 2000 }, (_, index) => ({ relKeyword: `글램핑응답한도검증연관검색어${index}`, monthlyPcQcCnt: index % 2 ? "< 10" : 0,
+    monthlyMobileQcCnt: 10, monthlyAvePcClkCnt: 0, monthlyAveMobileClkCnt: 0, monthlyAvePcCtr: 0, monthlyAveMobileCtr: 0, compIdx: "LOW", plAvgDepth: 1 })),
+    providerDebug: "DO_NOT_STORE_PROVIDER_BODY" };
+}
+function streamedReply(chunks, { failAfterChunks = false } = {}) {
+  const observed = { reads: 0, cancelled: false, released: false }; let index = 0;
+  return { observed, response: { status: 200, body: { getReader() { return {
+    async read() { observed.reads++; if (index < chunks.length) return { done: false, value: chunks[index++] }; if (failAfterChunks) throw new Error("DO_NOT_STORE_STREAM_FAILURE"); return { done: true }; },
+    async cancel() { observed.cancelled = true; }, releaseLock() { observed.released = true; }
+  }; } } } };
+}
+
 test("GET-style status distinguishes configured from untested without calling a provider or writing", async t => {
   const f = await fixture(t), status = await f.service.status();
   assert.equal(status.recordState, "missing");
@@ -184,13 +200,142 @@ test("network errors and oversized response bodies use fixed safe messages", asy
   const failed = await f.service.verify("searchad"); assert.equal(failed.searchad.errorCode, "NETWORK_ERROR");
   assert.equal(JSON.stringify(failed).includes("private-network-message"), false);
   const g = await fixture(t, { fetchImpl: () => ({ status: 200, text: async () => "x".repeat(256 * 1024 + 1) }) });
-  assert.equal((await g.service.verify("datalab")).datalab.errorCode, "INVALID_RESPONSE");
+  assert.equal((await g.service.verify("datalab")).datalab.errorCode, "RESPONSE_TOO_LARGE");
+});
+
+test("valid large SearchAd response above the legacy limit passes below its bounded2MiB limit and persists safe diagnostics", async t => {
+  const data = largeSearchAdData(), text = JSON.stringify(data), responseBytes = Buffer.byteLength(text);
+  assert.ok(responseBytes > LEGACY_RESPONSE_LIMIT && responseBytes < SEARCHAD_RESPONSE_LIMIT);
+  const f = await fixture(t, { fetchImpl: () => textReply(text) }), result = await f.service.verify("searchad");
+  assert.equal(result.searchad.checkStatus, "verified"); assert.equal(result.searchad.ok, true); assert.equal(result.searchad.status, 200);
+  const diagnostics = result.searchad.diagnostics;
+  assert.deepEqual(diagnostics, { responseBytes, responseLimitBytes: SEARCHAD_RESPONSE_LIMIT, legacyResponseLimitBytes: LEGACY_RESPONSE_LIMIT,
+    legacyLimitExceeded: true, utf8Bom: false, keywordCount: data.keywordList.length, validationStage: "verified" });
+  const saved = await f.create().status(); assert.deepEqual(saved.searchad.diagnostics, diagnostics);
+  const disk = await fs.readFile(f.filePath, "utf8"), record = JSON.parse(disk).providers.searchad;
+  assert.deepEqual(record.diagnostics, diagnostics); assert.equal(saved.searchad.checkedAt, result.searchad.checkedAt);
+  for (const value of [...Object.values(DUMMY_KEYS), "DO_NOT_STORE_PROVIDER_BODY", data.keywordList[0].relKeyword, "https://api.searchad.naver.com", "X-Signature"]) {
+    assert.equal(disk.includes(value), false); assert.equal(JSON.stringify(result).includes(value), false);
+  }
+  assert.equal(JSON.stringify(result).includes("fingerprint"), false); assert.equal(f.state.calls.length, 1);
+});
+
+test("a UTF8 BOM is normalized before SearchAd JSON parsing and counted without retaining its body", async t => {
+  const text = "\uFEFF" + JSON.stringify({ keywordList: [{ relKeyword: "글램핑", monthlyPcQcCnt: 0, monthlyMobileQcCnt: "< 10" }] });
+  const f = await fixture(t, { fetchImpl: () => textReply(text) }), result = await f.service.verify("searchad");
+  assert.equal(result.searchad.ok, true); assert.equal(result.searchad.diagnostics.utf8Bom, true);
+  assert.equal(result.searchad.diagnostics.responseBytes, Buffer.byteLength(text)); assert.equal(result.searchad.diagnostics.validationStage, "verified");
+  assert.equal(f.state.calls.length, 1);
+});
+
+test("split BOM and multibyte UTF8 stream chunks are combined correctly before parsing", async t => {
+  const bytes = Buffer.from("\uFEFF" + JSON.stringify({ keywordList: [{ relKeyword: "글램핑", monthlyPcQcCnt: 0, monthlyMobileQcCnt: 0 }] }));
+  const streamed = streamedReply([bytes.subarray(0, 1), bytes.subarray(1, 2), bytes.subarray(2, 13), bytes.subarray(13)]);
+  const f = await fixture(t, { fetchImpl: () => streamed.response }), result = await f.service.verify("searchad");
+  assert.equal(result.searchad.ok, true); assert.equal(result.searchad.diagnostics.utf8Bom, true); assert.equal(result.searchad.diagnostics.responseBytes, bytes.length);
+  assert.equal(streamed.observed.released, true); assert.equal(f.state.calls.length, 1);
+});
+
+test("oversized SearchAd stream is cancelled at its2MiB bound with observed-prefix diagnostics and no retry", async t => {
+  const bytes = Buffer.alloc(SEARCHAD_RESPONSE_LIMIT + 1, 0x20), streamed = streamedReply([bytes, Buffer.from("unread-body")]);
+  const f = await fixture(t, { fetchImpl: () => streamed.response }), result = await f.service.verify("searchad");
+  assert.equal(result.searchad.ok, false); assert.equal(result.searchad.checkStatus, "failed"); assert.equal(result.searchad.errorCode, "RESPONSE_TOO_LARGE");
+  assert.deepEqual(result.searchad.diagnostics, { responseBytes: bytes.length, responseLimitBytes: SEARCHAD_RESPONSE_LIMIT,
+    legacyResponseLimitBytes: LEGACY_RESPONSE_LIMIT, legacyLimitExceeded: true, validationStage: "response_size" });
+  assert.equal(Object.hasOwn(result.searchad.diagnostics, "utf8Bom"), false); assert.equal(Object.hasOwn(result.searchad.diagnostics, "keywordCount"), false);
+  assert.equal(streamed.observed.reads, 1); assert.equal(streamed.observed.cancelled, true); assert.equal(streamed.observed.released, true); assert.equal(f.state.calls.length, 1);
+  assert.deepEqual((await f.create().status()).searchad.diagnostics, result.searchad.diagnostics);
+});
+
+test("DataLab keeps its existing256KiB limit while reporting the exact size-validation stage", async t => {
+  const bytes = Buffer.alloc(LEGACY_RESPONSE_LIMIT + 1, 0x20), streamed = streamedReply([bytes]);
+  const f = await fixture(t, { fetchImpl: () => streamed.response }), result = await f.service.verify("datalab");
+  assert.equal(result.datalab.errorCode, "RESPONSE_TOO_LARGE"); assert.equal(result.datalab.diagnostics.responseLimitBytes, LEGACY_RESPONSE_LIMIT);
+  assert.equal(result.datalab.diagnostics.responseBytes, bytes.length); assert.equal(result.datalab.diagnostics.legacyLimitExceeded, true);
+  assert.equal(result.datalab.diagnostics.validationStage, "response_size"); assert.equal(Object.hasOwn(result.datalab.diagnostics, "utf8Bom"), false);
+  assert.equal(f.state.calls.length, 1);
+});
+
+test("malformed SearchAd JSON has a distinct safe parsing error and BOM diagnostics", async t => {
+  const text = "\uFEFF{DO_NOT_STORE_JSON_FAILURE";
+  const f = await fixture(t, { fetchImpl: () => textReply(text) }), result = await f.service.verify("searchad");
+  assert.equal(result.searchad.errorCode, "INVALID_JSON"); assert.equal(result.searchad.status, 200); assert.equal(result.searchad.ok, false);
+  assert.deepEqual(result.searchad.diagnostics, { responseBytes: Buffer.byteLength(text), responseLimitBytes: SEARCHAD_RESPONSE_LIMIT,
+    legacyResponseLimitBytes: LEGACY_RESPONSE_LIMIT, legacyLimitExceeded: false, utf8Bom: true, validationStage: "json_parse" });
+  const disk = await fs.readFile(f.filePath, "utf8"); assert.equal(disk.includes("DO_NOT_STORE_JSON_FAILURE"), false); assert.equal(JSON.stringify(result).includes("DO_NOT_STORE_JSON_FAILURE"), false);
+  assert.equal(f.state.calls.length, 1);
+});
+
+test("invalid UTF8 bytes in a completed SearchAd stream fail JSON decoding instead of becoming replacement text", async t => {
+  const chunks = [Buffer.from('{"keywordList":[{"relKeyword":"'), Buffer.from([0xff]), Buffer.from('","monthlyPcQcCnt":0,"monthlyMobileQcCnt":0}]}')];
+  const streamed = streamedReply(chunks), responseBytes = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const f = await fixture(t, { fetchImpl: () => streamed.response }), result = await f.service.verify("searchad");
+  assert.equal(result.searchad.ok, false); assert.equal(result.searchad.status, 200); assert.equal(result.searchad.errorCode, "INVALID_JSON");
+  assert.deepEqual(result.searchad.diagnostics, { responseBytes, responseLimitBytes: SEARCHAD_RESPONSE_LIMIT, legacyResponseLimitBytes: LEGACY_RESPONSE_LIMIT,
+    legacyLimitExceeded: false, utf8Bom: false, validationStage: "json_parse" });
+  assert.equal(Object.hasOwn(result.searchad.diagnostics, "keywordCount"), false); assert.equal(streamed.observed.released, true); assert.equal(f.state.calls.length, 1);
+});
+
+test("a SearchAd stream read failure records only the observed byte prefix with a distinct read error", async t => {
+  const prefix = Buffer.from('{"keywordList":['), streamed = streamedReply([prefix], { failAfterChunks: true });
+  const f = await fixture(t, { fetchImpl: () => streamed.response }), result = await f.service.verify("searchad");
+  assert.equal(result.searchad.errorCode, "RESPONSE_READ_ERROR"); assert.equal(result.searchad.status, 200); assert.equal(result.searchad.ok, false);
+  assert.deepEqual(result.searchad.diagnostics, { responseBytes: prefix.length, responseLimitBytes: SEARCHAD_RESPONSE_LIMIT,
+    legacyResponseLimitBytes: LEGACY_RESPONSE_LIMIT, legacyLimitExceeded: false, validationStage: "response_read" });
+  assert.equal(Object.hasOwn(result.searchad.diagnostics, "utf8Bom"), false); assert.equal(streamed.observed.released, true);
+  assert.equal(JSON.stringify(result).includes("DO_NOT_STORE_STREAM_FAILURE"), false); assert.equal(f.state.calls.length, 1);
+});
+
+test("valid JSON with a mismatched SearchAd structure remains a schema failure, not authentication or quota", async t => {
+  const text = JSON.stringify({ keywordList: [{ relKeyword: "글램핑", monthlyPcQcCnt: "not-a-count", monthlyMobileQcCnt: 2 }] });
+  const f = await fixture(t, { fetchImpl: () => textReply(text) }), result = await f.service.verify("searchad");
+  assert.equal(result.searchad.errorCode, "INVALID_RESPONSE"); assert.equal(result.searchad.diagnostics.validationStage, "schema");
+  assert.equal(result.searchad.diagnostics.keywordCount, 1); assert.equal(result.searchad.status, 200); assert.equal(f.state.calls.length, 1);
+});
+
+test("legacy persisted test records without diagnostics remain readable without provider calls", async t => {
+  const f = await fixture(t); await f.service.verify("all");
+  const data = JSON.parse(await fs.readFile(f.filePath, "utf8"));
+  for (const provider of ["datalab", "searchad"]) delete data.providers[provider].diagnostics;
+  data.providers.searchad.checkStatus = "failed"; data.providers.searchad.errorCode = "INVALID_RESPONSE"; data.providers.searchad.status = 200;
+  await fs.writeFile(f.filePath, JSON.stringify(data));
+  const beforeCount = f.state.calls.length, saved = await f.create().status();
+  assert.equal(saved.recordState, "ready"); assert.equal(saved.datalab.ok, true); assert.equal(saved.searchad.checkStatus, "failed");
+  assert.equal(saved.searchad.errorCode, "INVALID_RESPONSE"); assert.equal(Object.hasOwn(saved.searchad, "diagnostics"), false); assert.equal(f.state.calls.length, beforeCount);
+});
+
+test("invalid or contradictory diagnostics metadata is rejected without exposing payloads or testing providers", async t => {
+  const f = await fixture(t); await f.service.verify("searchad");
+  const original = JSON.parse(await fs.readFile(f.filePath, "utf8"));
+  const valid = original.providers.searchad.diagnostics;
+  assert.ok(valid && valid.validationStage === "verified");
+  const missingKeywordCount = { ...valid }; delete missingKeywordCount.keywordCount;
+  const diagnosticsCases = [null, { ...valid, responseBytes: -1 }, { ...valid, responseBytes: 0, legacyLimitExceeded: false }, { ...valid, responseBytes: 1.5 }, { ...valid, responseLimitBytes: "2097152" },
+    { ...valid, legacyResponseLimitBytes: 1 }, { ...valid, legacyLimitExceeded: !valid.legacyLimitExceeded }, { ...valid, utf8Bom: "false" },
+    { ...valid, keywordCount: -1 }, { ...valid, keywordCount: 0 }, missingKeywordCount, { ...valid, keywordCount: 1.5 }, { ...valid, validationStage: "unknown-stage" },
+    { ...valid, validationStage: "response_size" }, { ...valid, rawBody: "DO_NOT_STORE_BODY" },
+    { ...valid, url: "https://example.test/private" }, { ...valid, headers: { authorization: "DO_NOT_STORE_AUTH" } }];
+  for (const diagnostics of diagnosticsCases) {
+    const changed = structuredClone(original); changed.providers.searchad.diagnostics = diagnostics;
+    await fs.writeFile(f.filePath, JSON.stringify(changed));
+    const result = await f.service.status(); assert.equal(result.recordState, "unavailable"); assert.equal(result.searchad.ok, false); assert.equal(result.searchad.checkStatus, "unknown");
+    assert.equal(JSON.stringify(result).includes("DO_NOT_STORE"), false); const retried = await f.service.verify("searchad"); assert.equal(retried.test.testSkipped, true);
+  }
+  const emptyNoData = structuredClone(original);
+  Object.assign(emptyNoData.providers.searchad, { checkStatus: "no_data", errorCode: "NO_DATA", status: 200,
+    diagnostics: { ...valid, responseBytes: 0, legacyLimitExceeded: false, keywordCount: 0, validationStage: "schema" } });
+  await fs.writeFile(f.filePath, JSON.stringify(emptyNoData));
+  const noDataResult = await f.service.status(); assert.equal(noDataResult.recordState, "unavailable"); assert.equal(noDataResult.searchad.ok, false);
+  const checking = structuredClone(original); Object.assign(checking.providers.searchad, { checkStatus: "checking", errorCode: "CHECK_IN_PROGRESS", status: null, checkedAt: "" });
+  await fs.writeFile(f.filePath, JSON.stringify(checking)); assert.equal((await f.service.status()).recordState, "unavailable");
+  assert.equal(f.state.calls.length, 1);
 });
 
 test("interrupted persisted claims and future-dated records are not reported as successful", async t => {
   const f = await fixture(t); await f.service.verify("datalab");
   const data = JSON.parse(await fs.readFile(f.filePath, "utf8"));
   data.providers.datalab.checkStatus = "checking"; data.providers.datalab.checkedAt = ""; data.providers.datalab.status = null; data.providers.datalab.errorCode = "CHECK_IN_PROGRESS";
+  delete data.providers.datalab.diagnostics;
   await fs.writeFile(f.filePath, JSON.stringify(data));
   const interrupted = await f.create().status(); assert.equal(interrupted.datalab.checkStatus, "unknown"); assert.equal(interrupted.datalab.errorCode, "CHECK_INTERRUPTED");
   f.state.now -= 1000; const future = await f.service.status(); assert.equal(future.datalab.errorCode, "CLOCK_SKEW"); assert.equal(future.datalab.ok, false);

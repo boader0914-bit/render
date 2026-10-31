@@ -64,12 +64,21 @@ Blank key fields in the admin UI must preserve the existing saved key instead of
   administrator verification rate limit do not alter regular collection limits.
 - Last test metadata is stored separately at
   `CONFIG_DIR/traffic_api_verification.json`. Only fixed status/error codes,
-  timestamps, numeric HTTP status, and a private credential fingerprint are
-  stored; provider bodies and credentials are not stored in that record.
+  timestamps, numeric HTTP status, a private credential fingerprint, and optional
+  bounded numeric/boolean/enum response diagnostics are stored; provider bodies,
+  headers, URLs, arbitrary error text, and credentials are not stored in that record.
   Fingerprints are never included in API responses. Effective key changes
   invalidate only that provider's previous test. Records older than 24 hours
   remain historical results, not a claim of current connectivity. Invalid or
   contradictory records are reported as unknown, never successful.
+- Manual connection-test response parsing uses a 256 KiB cap for DataLab and a
+  separate 2 MiB cap for SearchAd's related-keyword list. These are internal body
+  safety bounds, not provider quotas or changes to regular collection limits.
+  Complete UTF-8/BOM decoding is validated before JSON/schema validation. Size,
+  body-read, JSON, and schema failures have separate fixed error codes. Byte
+  diagnostics count only bytes actually read; a stopped prefix is not a claim
+  about the full response size. A later response exceeding the former 256 KiB
+  bound does not retroactively prove the cause of an unmeasured older failure.
 - After entering a visitor key, an administrator checks
   `GET /api/tourism-data/status` and performs one regional visitor collection.
 - After entering a demand-strength key, an administrator checks the same status endpoint
