@@ -21,6 +21,11 @@ const state = {
   collectionArchiveDraft: null,
   collectionArchivePage: 1,
   collectionArchiveError: "",
+  collectionArchiveRead: { status: "idle", lastCheckedAt: "", error: "" },
+  collectionArchiveRequest: null,
+  collectionArchiveVisible: false,
+  collectionArchiveAppliedRead: null,
+  collectionArchiveSession: null,
   placeRankReplayRunId: null,
   industryHomeFilters: { category: "", keyword: "", period: "" },
   industryHomeVisibleCount: 12,
@@ -1991,15 +1996,117 @@ function collectionArchiveDatePreset(preset, now = new Date()) {
   return { startDate: "", endDate: "", dateMode: preset === "unknown" ? "unknown" : "all" };
 }
 
+function collectionArchiveIsVisible() {
+  return isAdminRole() && state.activeTab === "admin" && state.adminPanelSection === "archive";
+}
+
+function collectionArchiveReadStatusHtml() {
+  const read = state.collectionArchiveRead || {};
+  const checkedAt = Date.parse(read.lastCheckedAt || "");
+  const checkedLabel = Number.isFinite(checkedAt)
+    ? new Date(checkedAt + 9 * 3600000).toISOString().replace("T", " ").slice(0, 19)
+    : "미확인";
+  const message = read.status === "loading" ? "최신 저장 목록을 확인하고 있습니다. 기존 목록과 조회 조건을 유지합니다."
+    : read.status === "error" ? "최신 목록을 확인하지 못했습니다. 이전 목록과 조회 조건을 유지합니다. 목록 새로고침으로 다시 확인해 주세요."
+    : read.status === "ready" ? "저장 목록 확인을 마쳤습니다."
+    : "보관함에 들어오면 최신 저장 목록을 확인합니다.";
+  return `<strong>${message}</strong><small>마지막 성공 확인 · 한국시간: ${escapeHtml(checkedLabel)}</small>`;
+}
+
+function renderCollectionArchiveReadStatus() {
+  const loading = state.collectionArchiveRead?.status === "loading";
+  const status = els.collectionArchive?.querySelector("[data-archive-read-status]");
+  if (status) {
+    status.innerHTML = collectionArchiveReadStatusHtml();
+    status.classList?.toggle("is-error", state.collectionArchiveRead?.status === "error");
+    status.setAttribute?.("aria-busy", String(loading));
+  }
+  els.collectionArchive?.querySelectorAll?.("[data-collection-archive-refresh]").forEach(button => {
+    button.disabled = loading;
+    button.textContent = loading ? "목록 확인 중…" : "목록 새로고침";
+  });
+  const emptyTitle = els.collectionArchive?.querySelector("[data-archive-empty-title]");
+  if (emptyTitle) {
+    const confirmed = state.collectionArchiveRead?.status === "ready";
+    emptyTitle.textContent = confirmed ? "저장된 수집 결과가 없습니다." : loading ? "저장 목록을 확인하고 있습니다." : "저장 목록을 아직 확인하지 못했습니다.";
+    const emptyCopy = els.collectionArchive.querySelector("[data-archive-empty-copy]");
+    if (emptyCopy) emptyCopy.textContent = confirmed ? "수집이 완료되면 당시의 플레이스 순위와 분석 결과가 여기에 보관됩니다." : "저장 목록 확인이 끝나면 결과를 표시합니다. 목록 새로고침으로 다시 확인할 수 있습니다.";
+    const collect = els.collectionArchive.querySelector("[data-archive-empty-collect]");
+    if (collect) collect.hidden = !confirmed;
+  }
+}
+
+function syncCollectionArchiveRead() {
+  const visible = collectionArchiveIsVisible();
+  const sameSession = state.collectionArchiveSession === state.session;
+  if (visible === Boolean(state.collectionArchiveVisible) && sameSession) return;
+  if (state.collectionArchiveVisible) state.collectionArchiveDraft = collectionArchiveReadForm();
+  if (!sameSession) state.collectionArchiveRead = { status: "idle", lastCheckedAt: "", error: "" };
+  state.collectionArchiveSession = state.session;
+  state.collectionArchiveVisible = visible;
+  if (visible) {
+    void refreshCollectionArchive();
+  } else {
+    const request = state.collectionArchiveRequest;
+    state.collectionArchiveRequest = null;
+    request?.controller?.abort();
+    if (state.collectionArchiveRead?.status === "loading") {
+      state.collectionArchiveRead = { ...state.collectionArchiveRead,
+        status: state.collectionArchiveRead.lastCheckedAt ? "ready" : "idle", error: "" };
+    }
+    renderCollectionArchiveReadStatus();
+  }
+}
+
 function refreshCollectionArchive() {
-  // Refresh the catalogue only; do not open a result or change the active analysis.
-  return fetchJson("/api/runs").then(data => {
+  // Saved catalogue GET only: never open a result, start collection or change its settings.
+  if (!collectionArchiveIsVisible()) return Promise.resolve(null);
+  const pending = state.collectionArchiveRequest;
+  if (pending?.session === state.session) return pending.promise;
+  pending?.controller?.abort();
+  state.collectionArchiveDraft = collectionArchiveReadForm();
+  const request = { session: state.session,
+    controller: typeof AbortController === "function" ? new AbortController() : null, promise: null };
+  const previousCheckedAt = state.collectionArchiveSession === state.session ? state.collectionArchiveRead?.lastCheckedAt || "" : "";
+  state.collectionArchiveSession = state.session;
+  state.collectionArchiveRequest = request;
+  state.collectionArchiveRead = { status: "loading", lastCheckedAt: previousCheckedAt, error: "" };
+  renderCollectionArchiveReadStatus();
+  const current = () => state.collectionArchiveRequest === request && state.session === request.session && collectionArchiveIsVisible();
+  request.promise = Promise.resolve().then(() => current() ? fetchJson("/api/runs", {
+    cache: "no-store", ...(request.controller ? { signal: request.controller.signal } : {})
+  }) : null).then(data => {
+    if (!current()) return null;
+    if (!Array.isArray(data?.runs) || !data.runs.every(run => run && typeof run === "object" && !Array.isArray(run)
+      && typeof run.id === "string" && run.id.length > 0 && run.id.length <= 512)
+      || new Set(data.runs.map(run => run.id)).size !== data.runs.length) throw new Error("ARCHIVE_CATALOG_INVALID");
+    // Read again at completion: the user may have edited a draft while the GET was pending.
     state.collectionArchiveDraft = collectionArchiveReadForm();
-    state.runs = data.runs || [];
+    state.runs = data.runs;
+    state.collectionArchiveAppliedRead = request;
+    state.collectionArchiveRead = { status: "ready", lastCheckedAt: new Date().toISOString(), error: "" };
     if (els.runSelect) els.runSelect.innerHTML = state.runs.map(run => `<option value="${escapeHtml(run.id)}">${escapeHtml(run.label || run.id)}</option>`).join("");
     if (els.runSelect) els.runSelect.value = state.activeRunId || "";
     renderCollectionArchive();
+    return data;
+  }).catch(() => {
+    if (current()) {
+      state.collectionArchiveRead = { status: "error", lastCheckedAt: previousCheckedAt,
+        error: "ARCHIVE_CATALOG_UNAVAILABLE" };
+      renderCollectionArchiveReadStatus();
+    }
+    return null;
+  }).finally(() => {
+    if (state.collectionArchiveRequest === request) {
+      state.collectionArchiveRequest = null;
+      if (state.collectionArchiveRead?.status === "loading") {
+        const checkedAt = state.session === request.session ? previousCheckedAt : "";
+        state.collectionArchiveRead = { status: checkedAt ? "ready" : "idle", lastCheckedAt: checkedAt, error: "" };
+      }
+      renderCollectionArchiveReadStatus();
+    }
   });
+  return request.promise;
 }
 
 function bindCollectionArchiveEvents() {
@@ -2036,6 +2143,9 @@ function bindCollectionArchiveEvents() {
 
 function renderCollectionArchive() {
   if (!isAdminRole() || !els.collectionArchive) return;
+  const focused = typeof document === "undefined" ? null : document.activeElement;
+  const focusedField = focused?.closest?.("[data-archive-search-form]") && focused.name
+    ? { name: focused.name, start: focused.selectionStart, end: focused.selectionEnd, direction: focused.selectionDirection } : null;
   const runs = state.runs || [];
   const activeRunId = state.activeRunId || "";
   const activeRun = runs.find((run) => run.id === activeRunId) || state.data?.run || null;
@@ -2045,14 +2155,19 @@ function renderCollectionArchive() {
   const model = collectionArchiveModel(runs, filters, state.collectionArchivePage);
   state.collectionArchivePage = model.page;
   if (!runs.length) {
+    const emptyConfirmed = state.collectionArchiveRead?.status === "ready";
+    const checking = state.collectionArchiveRead?.status === "loading";
     els.collectionArchive.innerHTML = `
       <section class="collection-archive-empty">
         <span>COLLECTION ARCHIVE</span>
-        <h3>저장된 수집 결과가 없습니다.</h3>
-        <p>수집이 완료되면 당시의 플레이스 순위와 분석 결과가 여기에 보관됩니다.</p>
-        <button class="primary-button" type="button" data-open-collection-run>수집 실행</button>
+        <h3 data-archive-empty-title>${emptyConfirmed ? "저장된 수집 결과가 없습니다." : checking ? "저장 목록을 확인하고 있습니다." : "저장 목록을 아직 확인하지 못했습니다."}</h3>
+        <p data-archive-empty-copy>${emptyConfirmed ? "수집이 완료되면 당시의 플레이스 순위와 분석 결과가 여기에 보관됩니다." : "저장 목록 확인이 끝나면 결과를 표시합니다. 목록 새로고침으로 다시 확인할 수 있습니다."}</p>
+        <button class="small-button" type="button" data-collection-archive-refresh>목록 새로고침</button>
+        ${emptyConfirmed ? `<button class="primary-button" type="button" data-open-collection-run data-archive-empty-collect>수집 실행</button>` : ""}
       </section>
+      <div class="collection-archive-read-status" data-archive-read-status role="status" aria-live="polite">${collectionArchiveReadStatusHtml()}</div>
     `;
+    renderCollectionArchiveReadStatus();
     return;
   }
   els.collectionArchive.innerHTML = `
@@ -2066,7 +2181,7 @@ function renderCollectionArchive() {
     </section>
     <section class="collection-archive-summary">
       <article><span>저장 결과</span><strong>${fmtNumber(runs.length)}건</strong><small>전체 저장 목록에서 검색</small></article>
-      <article><span>현재 결과</span><strong>${escapeHtml(activeRun?.keyword || activeRun?.label || "선택 대기")}</strong><small>${escapeHtml(activeRun ? analysisRunCollectedLabel(activeRun) : "결과를 선택하세요")}</small></article>
+      <article><span>선택한 결과</span><strong>${escapeHtml(activeRun?.keyword || activeRun?.label || "선택 대기")}</strong><small>${escapeHtml(activeRun ? analysisRunCollectedLabel(activeRun) : "결과를 선택하세요")}</small></article>
       <article><span>비교 범위</span><strong>${escapeHtml(activeRun?.detailRankRanges ? `${activeRun.detailRankRanges}위` : "확인 필요")}</strong><small>동일 키워드·순위 범위끼리 비교</small></article>
     </section>
     <form class="collection-archive-filters" data-archive-search-form aria-label="보관함 검색" novalidate>
@@ -2084,6 +2199,7 @@ function renderCollectionArchive() {
       }).join("")}</div><div><button class="primary-button" type="submit">검색</button><button class="small-button" type="button" data-archive-reset>초기화</button></div></div>
       <p class="hint">수집일은 한국시간 기준입니다. 조회한 숙박기간은 결과마다 별도로 표시합니다.</p>
     </form>
+    <div class="collection-archive-read-status" data-archive-read-status role="status" aria-live="polite">${collectionArchiveReadStatusHtml()}</div>
     <div class="collection-archive-filter-feedback" aria-live="polite">
       ${state.collectionArchiveError ? `<p role="alert">${escapeHtml(state.collectionArchiveError)} 이전 검색 결과를 유지합니다.</p>` : ""}
       <strong>검색 결과 ${fmtNumber(model.count)}건 <small>/ 전체 ${fmtNumber(model.total)}건</small></strong>
@@ -2122,6 +2238,14 @@ function renderCollectionArchive() {
     ${activeRun ? `<details class="collection-archive-comparison"><summary>열람 중인 결과 · 플레이스 순위 비교</summary><div class="collection-archive-actions"><button class="primary-button" type="button" data-open-place-rank-replay="" data-place-rank-run-id="${escapeHtml(activeRun.id || "")}">플레이스 순서 다시 보기</button><small>열람 중인 회차의 저장된 네이버 노출순을 표시합니다.</small></div>${placeRankComparisonSummaryHtml(comparison)}</details>` : ""}
   `;
   window.CollectionDiagnosticsUi?.mount(els.collectionArchive, model.rows);
+  renderCollectionArchiveReadStatus();
+  if (focusedField) {
+    const input = els.collectionArchive.querySelector("[data-archive-search-form]")?.elements.namedItem(focusedField.name);
+    input?.focus?.({ preventScroll: true });
+    if (typeof input?.setSelectionRange === "function" && Number.isInteger(focusedField.start) && Number.isInteger(focusedField.end)) {
+      input.setSelectionRange(focusedField.start, focusedField.end, focusedField.direction || "none");
+    }
+  }
 }
 
 function focusAdminCrawlProgress() {
@@ -2874,6 +2998,7 @@ function syncAdminSectionPanels() {
     panel.hidden = !active;
     panel.classList.toggle("active", active);
   });
+  syncCollectionArchiveRead();
 }
 
 function setPanelHeading(panel, title, description) {
@@ -41772,6 +41897,7 @@ async function loadRuns(selectLatest = false, options = {}) {
   renderAdminStartupReadiness();
   setStatus("결과 로딩");
   let data;
+  const appliedArchiveRead = state.collectionArchiveAppliedRead;
   try {
     data = await fetchJson("/api/runs");
     if (!Array.isArray(data?.runs)) throw new Error("저장된 수집 기록 응답을 확인하지 못했습니다.");
@@ -41783,9 +41909,12 @@ async function loadRuns(selectLatest = false, options = {}) {
     throw error;
   }
   if (!catalogIsCurrent()) return;
-  state.runs = data.runs;
+  // A newer archive-only read may have finished while the startup catalogue was pending.
+  const archiveReadSuperseded = state.collectionArchiveAppliedRead !== appliedArchiveRead;
+  if (!archiveReadSuperseded) state.runs = data.runs;
   catalogRead.status = "ready";
   renderAdminStartupReadiness();
+  if (archiveReadSuperseded) return;
   if (els.runSelect) {
     els.runSelect.innerHTML = state.runs.map((run) => `<option value="${escapeHtml(run.id)}">${escapeHtml(run.label || run.id)}</option>`).join("");
   }

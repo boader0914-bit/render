@@ -20,12 +20,25 @@ function row(id, overrides = {}) {
   return { id, keyword: "가평 펜션", collectedAt: "2026-09-25T15:00:00.000Z", collectedAtSource: "recorded",
     workerKey: "web", collectionQuality: { status: "complete" }, checkIn: "2026-10-01", checkOut: "2026-10-02", bookingRangeDays: 1, ...overrides };
 }
-function fixture(runs = []) {
-  const listeners = {}, calls = [], diagnosticMounts = [];
+function fixture(runs = [], { actualLoadRuns = false } = {}) {
+  const listeners = {}, calls = [], requests = [], detailCalls = [], diagnosticMounts = [], sideEffects = [];
+  const statusNode = { innerHTML: "" }, refreshButton = { disabled: false };
+  let emptyTitle = null, emptyCopy = null, emptyCollect = null;
   const root = {
-    html: "", form: null, scrolled: 0,
+    html: "", form: null, scrolled: 0, hidden: false, isConnected: true, attributes: {},
+    setAttribute(name, value) { this.attributes[name] = value; },
+    removeAttribute(name) { delete this.attributes[name]; },
+    closest() { return null; },
     set innerHTML(value) {
       this.html = value;
+      statusNode.innerHTML = value.match(/<div\b[^>]*data-archive-read-status[^>]*>([^]*?)<\/div>/)?.[1] || "";
+      refreshButton.disabled = /<button\b(?=[^>]*data-collection-archive-refresh)[^>]*\bdisabled\b/.test(value);
+      const titleMatch = value.match(/<h3\b[^>]*data-archive-empty-title[^>]*>([^]*?)<\/h3>/);
+      const copyMatch = value.match(/<p\b[^>]*data-archive-empty-copy[^>]*>([^]*?)<\/p>/);
+      const collectMatch = value.match(/<button\b[^>]*data-archive-empty-collect[^>]*>/);
+      emptyTitle = titleMatch ? { textContent: decode(titleMatch[1]) } : null;
+      emptyCopy = copyMatch ? { textContent: decode(copyMatch[1]) } : null;
+      emptyCollect = collectMatch ? { hidden: /\bhidden\b/.test(collectMatch[0]) } : null;
       const fields = {};
       for (const match of value.matchAll(/<input\b[^>]*name="([^"]+)"[^>]*value="([^"]*)"[^>]*>/g)) fields[match[1]] = { name: match[1], value: decode(match[2]) };
       for (const match of value.matchAll(/<select\b[^>]*name="([^"]+)"[^>]*>([^]*?)<\/select>/g)) {
@@ -36,27 +49,41 @@ function fixture(runs = []) {
       this.form = value.includes("data-archive-search-form") ? { fields, elements: { namedItem: name => fields[name] }, matches: selector => selector === "[data-archive-search-form]" } : null;
     },
     get innerHTML() { return this.html; },
-    querySelector(selector) { return selector === "[data-archive-search-form]" ? this.form : selector === ".collection-archive-list-head" ? { scrollIntoView: () => { this.scrolled++; } } : null; },
+    querySelector(selector) {
+      if (selector === "[data-archive-search-form]") return this.form;
+      if (selector === ".collection-archive-list-head") return { scrollIntoView: () => { this.scrolled++; } };
+      if (selector === "[data-archive-read-status]") return statusNode;
+      if (selector === "[data-collection-archive-refresh]") return refreshButton;
+      if (selector === "[data-archive-empty-title]") return emptyTitle;
+      if (selector === "[data-archive-empty-copy]") return emptyCopy;
+      if (selector === "[data-archive-empty-collect]") return emptyCollect;
+      return null;
+    },
+    querySelectorAll(selector) { return selector === "[data-collection-archive-refresh]" ? [refreshButton] : []; },
     addEventListener(type, listener) { (listeners[type] ||= []).push(listener); }
   };
-  class FixedDate extends Date { constructor(...args) { super(...(args.length ? args : ["2026-09-25T15:00:00.000Z"])); } }
-  const state = { runs, activeRunId: runs[0]?.id || "", data: runs[0] ? { run: runs[0], rankComparison: { available: false } } : null,
-    collectionArchiveFilters: defaults(), collectionArchiveDraft: null, collectionArchivePage: 1, collectionArchiveError: "" };
-  const context = vm.createContext({ Date: FixedDate, Intl, Object, state, els: { collectionArchive: root, runSelect: { innerHTML: "", value: state.activeRunId } },
-    isAdminRole: () => true, escapeHtml, fmtNumber: value => String(value), placeRankComparisonSummaryHtml: () => "<p>comparison</p>",
+  const clock = { iso: "2026-09-25T15:00:00.000Z" };
+  class FixedDate extends Date { constructor(...args) { super(...(args.length ? args : [clock.iso])); } static now() { return Date.parse(clock.iso); } }
+  const state = { session: { authenticated: true, username: "test-admin", role: "admin" }, activeTab: "admin", adminPanelSection: "archive", runs, activeRunId: runs[0]?.id || "", data: runs[0] ? { run: runs[0], rankComparison: { available: false } } : null,
+    collectionArchiveFilters: defaults(), collectionArchiveDraft: null, collectionArchivePage: 1, collectionArchiveError: "",
+    collectionArchiveRead: { status: "idle", lastCheckedAt: "", error: "" }, collectionArchiveRequest: null, collectionArchiveVisible: false, collectionArchiveAppliedRead: null };
+  const context = vm.createContext({ Date: FixedDate, Intl, Object, AbortController, state, document: { visibilityState: "visible", querySelector: () => null }, setStatus: message => sideEffects.push(["status", message]), renderAdminStartupReadiness: () => {}, renderB2BSearchPanel: () => {}, loadRun: (...args) => { detailCalls.push(args); throw new Error("Archive listing must not load a run"); }, loadRuns: () => { throw new Error("Archive listing must not select or load latest run"); }, els: { collectionArchive: root, runSelect: { innerHTML: "", value: state.activeRunId } },
+    isAdminRole: () => context.adminAllowed !== false, escapeHtml, fmtNumber: value => String(value), placeRankComparisonSummaryHtml: () => "<p>comparison</p>",
     window: { requestAnimationFrame: fn => fn(), CollectionDiagnosticsUi: { qualityReason, mount: (element, rows) => diagnosticMounts.push({ element, runIds: rows.map(row => row.id) }) } }, fetchJson: async (url, options = {}) => {
       calls.push({ url, method: options.method || "GET" });
+      requests.push({ url, options });
       assert.equal(url, "/api/runs", "Archive refresh must not request collection or analysis endpoints");
       assert.equal(options.method || "GET", "GET");
-      return { runs: context.nextRuns || runs };
+      return context.respond ? context.respond(url, options) : { runs: context.nextRuns || runs };
     } });
-  const names = ["collectionArchiveDate", "collectionArchiveDay", "collectionArchiveWorker", "collectionArchiveQuality", "collectionArchiveModel", "collectionArchiveReadForm", "applyCollectionArchiveFilters", "collectionArchiveDatePreset", "refreshCollectionArchive", "bindCollectionArchiveEvents", "renderCollectionArchive", "analysisRunCollectedLabel", "analysisRunPeriod", "analysisRunPeriodLabel"];
+  const names = ["collectionArchiveDate", "collectionArchiveDay", "collectionArchiveWorker", "collectionArchiveQuality", "collectionArchiveModel", "collectionArchiveReadForm", "applyCollectionArchiveFilters", "collectionArchiveDatePreset", "collectionArchiveIsVisible", "collectionArchiveReadStatusHtml", "renderCollectionArchiveReadStatus", "syncCollectionArchiveRead", "refreshCollectionArchive", "bindCollectionArchiveEvents", "renderCollectionArchive", "analysisRunCollectedLabel", "analysisRunPeriod", "analysisRunPeriodLabel"];
   vm.runInContext(names.map(declaration).join("\n"), context);
+  if (actualLoadRuns) vm.runInContext(`let loadRunRequestSequence = 0;\n${declaration("loadRuns")}`, context);
   context.bindCollectionArchiveEvents(); context.renderCollectionArchive();
   const emit = (type, target) => { const event = { target, prevented: false, preventDefault() { this.prevented = true; } }; for (const listener of listeners[type] || []) listener(event); return event; };
   const set = (name, value, event = "input") => { const field = root.form.fields[name]; field.value = value; field.closest = selector => selector === "[data-archive-search-form]" ? root.form : null; emit(event, field); };
   const click = (kind, value = "", disabled = false) => { const attr = { preset: "archiveDatePreset", page: "archivePage", reset: "archiveReset" }[kind]; const selector = { preset: "[data-archive-date-preset]", page: "[data-archive-page]", reset: "[data-archive-reset]" }[kind]; const button = { dataset: { [attr]: value }, disabled, closest: match => match === selector ? button : null }; return emit("click", button); };
-  return { api: context, state, root, calls, diagnosticMounts, set, click, submit: () => emit("submit", root.form), visibleIds: () => [...root.html.matchAll(/data-archive-run-id="([^"]+)"/g)].map(match => decode(match[1])) };
+  return { api: context, state, root, calls, requests, detailCalls, clock, sideEffects, refreshButton, statusHtml: () => statusNode.innerHTML || root.html, emptyTitle: () => emptyTitle?.textContent || "", emptyCollectVisible: () => Boolean(emptyCollect && !emptyCollect.hidden), diagnosticMounts, set, click, submit: () => emit("submit", root.form), visibleIds: () => [...root.html.matchAll(/data-archive-run-id="([^"]+)"/g)].map(match => decode(match[1])) };
 }
 
 test("archive labels stored quality reasons and mounts only the visible saved result diagnostics", () => {
@@ -170,5 +197,169 @@ test("render shows explicit unknown metadata, separate stay dates and escaped st
   assert.match(ui.root.html, /2026\.10\.01 \(1일\)/); assert.match(ui.root.html, /2026\.09\.26 00:00 저장/);
   assert.doesNotMatch(ui.root.html, /<img src=x/); assert.match(ui.root.html, /&lt;img/); assert.deepEqual(ui.visibleIds(), ['unsafe"id']);
   ui.api.applyCollectionArchiveFilters({ startDate: "2026-09-26", endDate: "2026-09-26" }); assert.match(ui.root.html, /1건은 날짜 검색에서 제외/);
-  const empty = fixture(); assert.match(empty.root.html, /저장된 수집 결과가 없습니다/);
+  const empty = fixture(); assert.match(empty.root.html, /저장 목록을 아직 확인하지 못했습니다/);
+  assert.doesNotMatch(empty.root.html, /저장된 수집 결과가 없습니다|data-open-collection-run/);
+});
+
+function deferred() { let resolve, reject; const promise = new Promise((done, fail) => { resolve = done; reject = fail; }); return { promise, resolve, reject }; }
+
+test("entering the visible archive automatically reads one saved catalogue and leaves the selected analysis untouched", async () => {
+  const ui = fixture([row("active")]), pending = deferred(), analysis = ui.state.data;
+  ui.api.respond = () => pending.promise;
+  assert.equal(ui.calls.length, 0, "A render alone must not read or collect anything");
+  ui.api.syncCollectionArchiveRead();
+  await Promise.resolve();
+  assert.deepEqual(ui.calls, [{ url: "/api/runs", method: "GET" }]);
+  assert.equal(ui.state.collectionArchiveRead.status, "loading");
+  assert.equal(ui.state.activeRunId, "active"); assert.equal(ui.state.data, analysis);
+  assert.match(ui.statusHtml(), /확인 중|조회 중|불러오는 중|확인하고 있습니다/);
+  const complete = ui.api.refreshCollectionArchive();
+  pending.resolve({ runs: [row("new"), row("active")] }); await complete;
+  assert.equal(ui.calls.length, 1); assert.deepEqual(ui.visibleIds(), ["new", "active"]);
+  assert.equal(ui.state.activeRunId, "active"); assert.equal(ui.state.data, analysis);
+  assert.equal(ui.state.collectionArchiveRead.status, "ready"); assert.equal(ui.state.collectionArchiveRead.lastCheckedAt, ui.clock.iso);
+  assert.match(ui.statusHtml(), /마지막 (성공 )?확인|최근 확인/);
+  assert.equal(ui.requests[0].options.method || "GET", "GET");
+});
+
+test("automatic entry, repeated renders and overlapping manual refresh share one in-flight GET", async () => {
+  const ui = fixture([row("keep")]), pending = deferred(); ui.api.respond = () => pending.promise;
+  ui.api.syncCollectionArchiveRead();
+  const first = ui.api.refreshCollectionArchive(), second = ui.api.refreshCollectionArchive();
+  ui.api.syncCollectionArchiveRead(); ui.api.renderCollectionArchive(); ui.api.syncCollectionArchiveRead();
+  await Promise.resolve();
+  assert.equal(first, second, "Manual refreshes must join the same pending promise");
+  assert.equal(ui.calls.length, 1); assert.equal(ui.refreshButton.disabled, true);
+  pending.resolve({ runs: [row("keep"), row("saved-new")] }); await first;
+  assert.equal(ui.calls.length, 1); assert.equal(ui.refreshButton.disabled, false);
+  ui.api.syncCollectionArchiveRead(); assert.equal(ui.calls.length, 1, "Remaining in the same visible archive must not create polling");
+});
+
+test("a successful refresh preserves applied filters, latest unsubmitted input and the reachable page", async () => {
+  const runs = Array.from({ length: 47 }, (_, index) => row('same-' + index, { keyword: index === 0 ? "부산" : "가평 펜션" }));
+  const ui = fixture(runs), pending = deferred();
+  ui.api.applyCollectionArchiveFilters({ keyword: "가평", worker: "web", quality: "complete", startDate: "2026-09-26", endDate: "2026-09-26", dateMode: "range" }); ui.click("page", "2");
+  const filters = clone(ui.state.collectionArchiveFilters), selected = ui.state.activeRunId, analysis = ui.state.data;
+  ui.api.respond = () => pending.promise; const request = ui.api.refreshCollectionArchive();
+  ui.set("keyword", "입력 중인 다른 검색어"); ui.set("startDate", "2026-09-20", "change");
+  const draft = clone(ui.state.collectionArchiveDraft);
+  pending.resolve({ runs: [...runs, row("new-match")] }); await request;
+  assert.deepEqual(clone(ui.state.collectionArchiveFilters), filters); assert.deepEqual(clone(ui.state.collectionArchiveDraft), draft);
+  assert.equal(ui.state.collectionArchivePage, 2); assert.equal(ui.root.form.fields.keyword.value, "입력 중인 다른 검색어"); assert.equal(ui.root.form.fields.startDate.value, "2026-09-20");
+  assert.equal(ui.visibleIds().length, 20); assert.equal(ui.state.activeRunId, selected); assert.equal(ui.state.data, analysis);
+  assert.equal(ui.calls.length, 1);
+});
+
+test("a failed catalogue read retains old rows, last successful time, draft and filters while exposing a fixed failure state", async () => {
+  const ui = fixture([row("keep"), row("other")]); await ui.api.refreshCollectionArchive();
+  const checked = ui.state.collectionArchiveRead.lastCheckedAt, savedRuns = ui.state.runs, analysis = ui.state.data;
+  ui.api.applyCollectionArchiveFilters({ keyword: "가평" }); ui.set("keyword", "아직 검색하지 않은 글");
+  const filters = clone(ui.state.collectionArchiveFilters), draft = clone(ui.state.collectionArchiveDraft);
+  ui.clock.iso = "2026-09-25T15:01:00.000Z"; ui.api.respond = async () => { throw new Error("PRIVATE_NETWORK_ERROR_WITH_SECRET"); };
+  await assert.doesNotReject(ui.api.refreshCollectionArchive());
+  assert.equal(ui.state.runs, savedRuns); assert.equal(ui.state.data, analysis); assert.deepEqual(ui.visibleIds(), ["other", "keep"]);
+  assert.equal(ui.state.collectionArchiveRead.status, "error"); assert.equal(ui.state.collectionArchiveRead.lastCheckedAt, checked);
+  assert.ok(ui.state.collectionArchiveRead.error); assert.match(ui.statusHtml(), /실패|확인하지 못|불러오지 못/); assert.match(ui.statusHtml(), /기존|이전/);
+  assert.doesNotMatch(ui.statusHtml(), /PRIVATE_NETWORK_ERROR_WITH_SECRET/);
+  assert.deepEqual(clone(ui.state.collectionArchiveFilters), filters); assert.deepEqual(clone(ui.state.collectionArchiveDraft), draft); assert.equal(ui.root.form.fields.keyword.value, draft.keyword);
+});
+
+test("invalid catalogue envelopes are a read failure rather than an empty successful archive", async () => {
+  for (const response of [null, {}, { runs: null }, { runs: {} }, { runs: "not-an-array" }]) {
+    const ui = fixture([row("keep")]), savedRuns = ui.state.runs; ui.api.respond = async () => response;
+    await assert.doesNotReject(ui.api.refreshCollectionArchive());
+    assert.equal(ui.state.runs, savedRuns); assert.equal(ui.state.collectionArchiveRead.status, "error"); assert.equal(ui.state.collectionArchiveRead.lastCheckedAt, "");
+    assert.deepEqual(ui.visibleIds(), ["keep"]); assert.equal(ui.calls.length, 1);
+  }
+});
+
+test("an empty valid catalogue completes without selecting a different run or starting collection", async () => {
+  const ui = fixture([row("active")]), analysis = ui.state.data; ui.api.respond = async () => ({ runs: [] });
+  await ui.api.refreshCollectionArchive();
+  assert.deepEqual(clone(ui.state.runs), []); assert.equal(ui.state.activeRunId, "active"); assert.equal(ui.state.data, analysis);
+  assert.equal(ui.state.collectionArchiveRead.status, "ready"); assert.equal(ui.state.collectionArchiveRead.lastCheckedAt, ui.clock.iso);
+  assert.match(ui.root.html, /저장된 수집 결과가 없습니다/); assert.match(ui.root.html, /마지막 (성공 )?확인|최근 확인/);
+  assert.deepEqual(ui.calls, [{ url: "/api/runs", method: "GET" }]);
+});
+
+test("leaving the archive aborts and invalidates a late response, then re-entry performs one fresh read", async () => {
+  const ui = fixture([row("keep")]), old = deferred(), fresh = deferred(), saved = ui.state.runs;
+  let attempt = 0; ui.api.respond = () => ++attempt === 1 ? old.promise : fresh.promise;
+  ui.api.syncCollectionArchiveRead(); const oldDone = ui.api.refreshCollectionArchive();
+  await Promise.resolve();
+  const signal = ui.requests[0].options.signal; assert.ok(signal, "The catalogue fetch must be cancellable");
+  ui.state.adminPanelSection = "files"; ui.api.syncCollectionArchiveRead(); assert.equal(signal.aborted, true);
+  ui.state.adminPanelSection = "archive"; ui.api.syncCollectionArchiveRead(); const freshDone = ui.api.refreshCollectionArchive();
+  await Promise.resolve();
+  assert.equal(ui.calls.length, 2); old.resolve({ runs: [row("obsolete")] }); await oldDone;
+  assert.equal(ui.state.runs, saved); assert.equal(ui.state.collectionArchiveRead.status, "loading");
+  fresh.resolve({ runs: [row("fresh")] }); await freshDone;
+  assert.deepEqual(ui.visibleIds(), ["fresh"]); assert.equal(ui.state.collectionArchiveRead.status, "ready");
+});
+
+test("a response from a previous administrator session cannot overwrite a new session's archive", async () => {
+  const ui = fixture([row("keep")]), pending = deferred(), saved = ui.state.runs; ui.api.respond = () => pending.promise;
+  const request = ui.api.refreshCollectionArchive();
+  ui.state.session = { authenticated: true, username: "another-admin", role: "admin" };
+  pending.resolve({ runs: [row("wrong-account-late")] }); await request;
+  assert.equal(ui.state.runs, saved); assert.deepEqual(ui.visibleIds(), ["keep"]); assert.notEqual(ui.state.collectionArchiveRead.status, "ready");
+  assert.equal(ui.state.collectionArchiveRead.lastCheckedAt, "");
+});
+
+test("invisible or non-administrator archive entry never requests catalogue or provider data", () => {
+  const ui = fixture([row("keep")]);
+  ui.state.adminPanelSection = "overview"; ui.api.syncCollectionArchiveRead();
+  ui.state.adminPanelSection = "archive"; ui.api.adminAllowed = false; ui.api.syncCollectionArchiveRead();
+  ui.api.adminAllowed = true; ui.state.activeTab = "keywordMonthly"; ui.api.syncCollectionArchiveRead();
+  assert.equal(ui.calls.length, 0); assert.equal(ui.state.activeRunId, "keep");
+});
+
+test("an initially empty archive stays unconfirmed while loading or failed and only confirms an empty successful catalogue", async () => {
+  const ui = fixture(), pending = deferred(); ui.api.respond = () => pending.promise;
+  assert.match(ui.emptyTitle(), /아직 확인하지 못/); assert.equal(ui.emptyCollectVisible(), false);
+  const request = ui.api.refreshCollectionArchive(); await Promise.resolve();
+  assert.equal(ui.state.collectionArchiveRead.status, "loading");
+  assert.match(ui.emptyTitle(), /확인하고 있습니다/); assert.equal(ui.emptyCollectVisible(), false);
+  assert.match(ui.statusHtml(), /확인 중|확인하고 있습니다/);
+  pending.reject(new Error("NETWORK_DOWN")); await request;
+  assert.equal(ui.state.collectionArchiveRead.status, "error");
+  assert.match(ui.emptyTitle(), /아직 확인하지 못/); assert.equal(ui.emptyCollectVisible(), false);
+  assert.match(ui.statusHtml(), /확인하지 못했습니다/);
+  ui.api.respond = async () => ({ runs: [] }); await ui.api.refreshCollectionArchive();
+  assert.equal(ui.state.collectionArchiveRead.status, "ready");
+  assert.match(ui.emptyTitle(), /저장된 수집 결과가 없습니다/); assert.equal(ui.emptyCollectVisible(), true);
+});
+
+test("a previously confirmed empty catalogue is not presented as a fresh empty result during a failed recheck", async () => {
+  const ui = fixture(); await ui.api.refreshCollectionArchive();
+  assert.match(ui.emptyTitle(), /저장된 수집 결과가 없습니다/); assert.equal(ui.emptyCollectVisible(), true);
+  const checkedAt = ui.state.collectionArchiveRead.lastCheckedAt, pending = deferred();
+  ui.api.respond = () => pending.promise;
+  const request = ui.api.refreshCollectionArchive(); await Promise.resolve();
+  assert.equal(ui.state.collectionArchiveRead.status, "loading");
+  assert.match(ui.emptyTitle(), /확인하고 있습니다/); assert.equal(ui.emptyCollectVisible(), false);
+  pending.reject(new Error("NETWORK_DOWN")); await request;
+  assert.equal(ui.state.collectionArchiveRead.status, "error");
+  assert.equal(ui.state.collectionArchiveRead.lastCheckedAt, checkedAt);
+  assert.match(ui.emptyTitle(), /아직 확인하지 못/); assert.equal(ui.emptyCollectVisible(), false);
+});
+
+test("a completed archive read prevents the actual startup loadRuns late catalogue from overwriting newer saved rows", async () => {
+  const ui = fixture([row("selected")], { actualLoadRuns: true });
+  const startup = deferred(), archive = deferred(), analysis = ui.state.data;
+  let attempt = 0; ui.api.respond = () => ++attempt === 1 ? startup.promise : archive.promise;
+  const bootstrap = ui.api.loadRuns(true, { bootstrap: true });
+  const request = ui.api.refreshCollectionArchive(); await Promise.resolve();
+  assert.deepEqual(ui.calls, [{ url: "/api/runs", method: "GET" }, { url: "/api/runs", method: "GET" }]);
+  archive.resolve({ runs: [row("newly-saved"), row("selected")] }); await request;
+  const appliedRows = ui.state.runs, appliedRead = ui.state.collectionArchiveAppliedRead;
+  assert.ok(appliedRead); assert.equal(ui.state.activeRunId, "selected"); assert.equal(ui.state.data, analysis);
+  // Keep archive visible: even selectLatest from an older load must not select or hydrate another run.
+  startup.resolve({ runs: [row("obsolete-startup-only")] }); await bootstrap;
+  assert.equal(ui.state.runs, appliedRows); assert.equal(ui.state.collectionArchiveAppliedRead, appliedRead);
+  assert.deepEqual(clone(ui.state.runs.map(run => run.id)), ["newly-saved", "selected"]);
+  assert.equal(ui.state.activeRunId, "selected"); assert.equal(ui.state.data, analysis);
+  assert.equal(ui.api.els.runSelect.value, "selected"); assert.equal(ui.detailCalls.length, 0);
+  assert.equal(ui.state.adminRunCatalogReadiness.status, "ready");
+  assert.equal(ui.calls.length, 2, "Neither catalogue read may trigger a run detail or provider request");
 });

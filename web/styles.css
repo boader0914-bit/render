@@ -45449,6 +45449,20 @@ html[data-theme-resolved="dark"] body.role-admin [data-admin-section-panel="file
 #collectionArchive .collection-archive-filter-feedback:is(.is-error, [role="alert"]),
 #collectionArchive .collection-archive-filter-feedback [role="alert"] { color: var(--danger-strong, var(--status-danger)) !important; }
 
+#collectionArchive .collection-archive-read-status {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--muted) !important;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+#collectionArchive .collection-archive-read-status strong { color: var(--ink) !important; font-size: inherit; font-weight: 600; }
+#collectionArchive .collection-archive-read-status.is-error strong { color: var(--danger-strong, var(--status-danger)) !important; }
+#collectionArchive [data-collection-archive-refresh]:disabled { opacity: .6; cursor: wait; }
+
 #collectionArchive .collection-archive-list { gap: 0; padding: 0; overflow: hidden; }
 #collectionArchive .collection-archive-list-head { flex-wrap: wrap; margin: 0; padding: 10px 16px; }
 #collectionArchive .collection-archive-list-head small { white-space: normal; }
