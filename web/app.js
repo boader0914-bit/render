@@ -334,7 +334,7 @@ const LODGING_CATEGORY_PROFILES = {
 };
 const B2B_MY_LODGE_STORAGE_PREFIX = "glamping-datalab:b2b-my-lodge:v1";
 const ROLE_TABS = {
-  admin: ["industryHome", "keywordMonthly", "regionHome", "report", "monthlyReports", "rank", "dictionary", "map", "demand", "regionCompare", "regionSources", "historyOps", "admin"],
+  admin: ["industryHome", "keywordMonthly", "searchDemand", "regionHome", "report", "monthlyReports", "rank", "dictionary", "map", "demand", "regionCompare", "regionSources", "historyOps", "admin"],
   b2b: ["report", "rank", "map", "demand", "account"]
 };
 const B2B_PRIMARY_TABS = new Set(["report", "rank", "map", "account"]);
@@ -375,7 +375,8 @@ const ADMIN_MOBILE_SECTIONS = {
     target: "industryHome",
     items: [
       { label: "업종 현황", tab: "industryHome" },
-      { label: "키워드 월별", tab: "keywordMonthly" }
+      { label: "키워드 월별", tab: "keywordMonthly" },
+      { label: "검색 수요 분석", tab: "searchDemand" }
     ]
   },
   region: {
@@ -425,6 +426,7 @@ const ADMIN_COMPACT_SECTIONS = {
     items: [
       { label: "업종분석", tab: "industryHome" },
       { label: "키워드 월별", tab: "keywordMonthly" },
+      { label: "검색 수요 분석", tab: "searchDemand" },
       { label: "지역분석", tab: "regionHome" }
     ]
   },
@@ -459,6 +461,7 @@ const ADMIN_PANEL_MOBILE_TARGETS = {
 const TAB_LABELS = {
   industryHome: "업종분석",
   keywordMonthly: "키워드 월별",
+  searchDemand: "검색 수요 분석",
   regionHome: "지역분석",
   report: "요약 리포트",
   monthlyReports: "월간 리포트",
@@ -2667,7 +2670,7 @@ function adminPrimarySectionForTab(tab, preferred = "") {
       files: "settings"
     }[state.adminPanelSection] || "summary";
   }
-  if (["industryHome", "keywordMonthly", "report"].includes(tab)) return "analysis";
+  if (["industryHome", "keywordMonthly", "searchDemand", "report"].includes(tab)) return "analysis";
   if (tab === "monthlyReports") return "reports";
   if (tab === "rank") return "collect";
   if (["regionHome", "dictionary", "map", "demand", "regionCompare", "regionSources"].includes(tab)) return "region";
@@ -2684,7 +2687,7 @@ function adminMobileSectionForTab(tab, preferred = "") {
   }
   if (tab === "admin") return adminPanelMobileTarget(state.adminPanelSection).section;
   if (tab === "monthlyReports") return "more";
-  if (["industryHome", "keywordMonthly", "regionHome", "report", "dictionary", "map", "demand", "regionCompare", "regionSources"].includes(tab)) return "analysis";
+  if (["industryHome", "keywordMonthly", "searchDemand", "regionHome", "report", "dictionary", "map", "demand", "regionCompare", "regionSources"].includes(tab)) return "analysis";
   if (["rank", "historyOps"].includes(tab)) return "collect";
   return "summary";
 }
@@ -30904,7 +30907,7 @@ function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
     if (els.adminConsoleDashboard) els.adminConsoleDashboard.innerHTML = `<div class="admin-console-empty" role="status">업체 기본자료를 확인하고 있습니다.</div>`;
     return;
   }
-  if (["monthlyReports", "keywordMonthly"].includes(state.activeTab)) {
+  if (["monthlyReports", "keywordMonthly", "searchDemand"].includes(state.activeTab)) {
     state.adminViewsDeferred = true;
     return;
   }
@@ -37918,6 +37921,7 @@ function adminHeaderView() {
   return {
     industryHome: ["업종분석", "업종·지역·기간을 선택하고 저장된 자료로 분석을 시작하세요"],
     keywordMonthly: ["키워드 월별", "숙박월별 관측 누적과 전월 공통 표본 비교"],
+    searchDemand: ["검색 수요 분석", "키워드 검색량 관측·월별 트렌드·연관 키워드·전망"],
     regionHome: ["지역분석", "분석할 지역을 선택하거나 이전 지역 분석을 이어보세요"],
     report: ["업종분석 · 시장 브리핑", "선택한 수집 자료의 업종 현황과 시장 요약"],
     monthlyReports: ["리포트", "월별 업체·키워드·지역 리포트를 검토하고 발행하세요"],
@@ -37985,7 +37989,7 @@ function renderHeader() {
 function renderAll() {
   // Late startup responses must not rebuild hidden result/DB screens while the
   // user is reading a monthly report. Their current state is rendered on exit.
-  if (isAdminRole() && ["monthlyReports", "keywordMonthly"].includes(state.activeTab)) {
+  if (isAdminRole() && ["monthlyReports", "keywordMonthly", "searchDemand"].includes(state.activeTab)) {
     state.adminViewsDeferred = true;
     renderHeader();
     return;
@@ -38093,10 +38097,21 @@ function setActiveTab(tab, options = {}) {
     if (reportRoot?.dataset) reportRoot.dataset.mrEntryStartedAt = String(Date.now());
   }
   const previousTab = state.activeTab;
+  // A shared keyword does not merge stay-month, observation-day or forecast scope.
+  if (isAdminRole() && tab === "searchDemand") {
+    const saved = window.KeywordMonthlyAnalysis?.getSelection?.(document.getElementById("keywordMonthlyDashboard"));
+    if (saved?.keyword) state.keywordMonthlySearchReturnContext = { ...saved };
+    if (previousTab === "keywordMonthly" && saved?.keyword) state.searchDemandEntryKeyword = saved.keyword;
+  }
+  if (isAdminRole() && previousTab === "searchDemand" && tab === "keywordMonthly") {
+    const selected = window.SearchDemandAnalysis?.getSelection?.(document.getElementById("searchDemandDashboard"));
+    if (selected?.keyword) options = { ...options, keywordMonthlyContext: { ...(state.keywordMonthlySearchReturnContext || {}), keyword: selected.keyword } };
+  }
   state.analysisNavigationSequence = (state.analysisNavigationSequence || 0) + 1;
   state.activeTab = roleAllowsTab(tab) ? tab : firstRoleTab();
   if (window.AdminTransitionTiming) beginAdminScreenTransition(options.navigationSource || "tab", options.inputTimeStamp);
   if (state.activeTab !== "keywordMonthly") window.KeywordMonthlyAnalysis?.pause(document.getElementById("keywordMonthlyDashboard"));
+  if (state.activeTab !== "searchDemand") window.SearchDemandAnalysis?.pause(document.getElementById("searchDemandDashboard"));
   window.RegionalAnalysis?.stop();
   window.RegionComparison?.stop();
   window.RegionalOutlook?.stop();
@@ -38127,11 +38142,11 @@ function setActiveTab(tab, options = {}) {
   const adminHome = isAdminRole() && state.activeTab === "admin" && state.adminPanelSection === "overview";
   const adminDatabase = isAdminRole() && state.activeTab === "admin" && state.adminPanelSection === "database";
   const savedRegionalView = isAdminRole() && ["dictionary", "regionCompare", "regionSources", "demand"].includes(state.activeTab);
-  if (state.adminViewsDeferred && !["monthlyReports", "keywordMonthly"].includes(state.activeTab) && !adminHome && !adminDatabase && !savedRegionalView) {
+  if (state.adminViewsDeferred && !["monthlyReports", "keywordMonthly", "searchDemand"].includes(state.activeTab) && !adminHome && !adminDatabase && !savedRegionalView) {
     state.adminViewsDeferred = false;
     renderAll();
   }
-  if (isAdminRole() && !["monthlyReports", "keywordMonthly"].includes(state.activeTab) && !savedRegionalView && !options.fromHistory
+  if (isAdminRole() && !["monthlyReports", "keywordMonthly", "searchDemand"].includes(state.activeTab) && !savedRegionalView && !options.fromHistory
     && (state.adminBootstrapRunPending || state.adminBootstrapSummaryPending)) void resumeAdminBootstrapReads();
   if (state.activeTab === "rank") renderPlaceRankReplayNotice();
   closeDrawer();
@@ -38140,8 +38155,17 @@ function setActiveTab(tab, options = {}) {
   if (isAdminRole() && !options.fromHistory && [previousTab, state.activeTab].some((value) => ["industryHome", "regionHome"].includes(value))) {
     window.scrollTo?.({ top: 0, left: 0, behavior: "instant" });
   }
+  if (isAdminRole() && state.activeTab === "searchDemand") {
+    const context = state.searchDemandEntryKeyword ? { keyword: state.searchDemandEntryKeyword } : {};
+    state.searchDemandEntryKeyword = "";
+    void window.SearchDemandAnalysis?.show(document.getElementById("searchDemandDashboard"), {
+      ...context, fetchJson,
+      onOpenKeywordMonthly: () => setActiveTab("keywordMonthly")
+    });
+    return;
+  }
   if (isAdminRole() && state.activeTab === "keywordMonthly") {
-    void window.KeywordMonthlyAnalysis?.show(document.getElementById("keywordMonthlyDashboard"));
+    void window.KeywordMonthlyAnalysis?.show(document.getElementById("keywordMonthlyDashboard"), options.keywordMonthlyContext);
     return;
   }
   if (isAdminRole() && state.activeTab === "monthlyReports") {
@@ -38206,15 +38230,15 @@ async function restoreAppHistoryState(historyState = {}, options = {}) {
         managementRegionKey: String(returnContext.managementRegionKey || ""), provinceKey: String(returnContext.provinceKey || ""), mappingPending: Boolean(returnContext.mappingPending) } : null;
   }
   setActiveTab(historyState.tab, { fromHistory: true, analysisRegionSelection: historyState.analysisRegionSelection || null });
-  if (state.activeTab !== "keywordMonthly" && historyState.activeRunId && (historyState.activeRunId !== state.activeRunId
-    || (state.adminBootstrapRunPending === historyState.activeRunId && !["monthlyReports", "keywordMonthly"].includes(state.activeTab)))) {
+  if (!["keywordMonthly", "searchDemand"].includes(state.activeTab) && historyState.activeRunId && (historyState.activeRunId !== state.activeRunId
+    || (state.adminBootstrapRunPending === historyState.activeRunId && !["monthlyReports", "keywordMonthly", "searchDemand"].includes(state.activeTab)))) {
     await loadRun(historyState.activeRunId, options);
-  } else if (isAdminRole() && !["monthlyReports", "keywordMonthly"].includes(state.activeTab)
+  } else if (isAdminRole() && !["monthlyReports", "keywordMonthly", "searchDemand"].includes(state.activeTab)
     && (state.adminBootstrapRunPending || state.adminBootstrapSummaryPending)) await resumeAdminBootstrapReads();
 }
 
 function resumeAdminBootstrapReads() {
-  if (!isAdminRole() || ["monthlyReports", "keywordMonthly"].includes(state.activeTab)
+  if (!isAdminRole() || ["monthlyReports", "keywordMonthly", "searchDemand"].includes(state.activeTab)
     || ["dictionary", "regionCompare", "regionSources", "demand"].includes(state.activeTab)
     || (!state.adminBootstrapSummaryPending && state.activeTab === "admin" && ["overview", "database"].includes(state.adminPanelSection))) return Promise.resolve();
   if (state.adminBootstrapResumeTask) return state.adminBootstrapResumeTask;
@@ -38235,7 +38259,7 @@ function resumeAdminBootstrapReads() {
         await pending;
       }
       if (!isAdminRole() || sequence !== loadRunRequestSequence) return;
-      if (["monthlyReports", "keywordMonthly"].includes(state.activeTab) || ["dictionary", "regionCompare", "regionSources", "demand"].includes(state.activeTab)) {
+      if (["monthlyReports", "keywordMonthly", "searchDemand"].includes(state.activeTab) || ["dictionary", "regionCompare", "regionSources", "demand"].includes(state.activeTab)) {
         if (summaryPending) state.adminBootstrapSummaryPending = true;
         return;
       }
@@ -38259,7 +38283,7 @@ function resumeAdminBootstrapReads() {
     }
   })().finally(() => {
     if (state.adminBootstrapResumeTask === task) state.adminBootstrapResumeTask = null;
-    if (!failed && isAdminRole() && !["monthlyReports", "keywordMonthly"].includes(state.activeTab)
+    if (!failed && isAdminRole() && !["monthlyReports", "keywordMonthly", "searchDemand"].includes(state.activeTab)
       && !["dictionary", "regionCompare", "regionSources", "demand"].includes(state.activeTab)
       && !(state.activeTab === "admin" && ["overview", "database"].includes(state.adminPanelSection))
       && (state.adminBootstrapRunPending || state.adminBootstrapSummaryPending)) void resumeAdminBootstrapReads();
@@ -40066,7 +40090,7 @@ function scheduleCompanyMasterEta(master) {
   void waitForCompanyMasterPaint().then(async () => {
     if (state.companyMasterEtaScheduled !== scheduled) return;
     state.companyMasterEtaScheduled = null;
-    if (!companyMasterReadIsCurrent(scheduled) || !state.data || ["monthlyReports", "keywordMonthly"].includes(state.activeTab)) return;
+    if (!companyMasterReadIsCurrent(scheduled) || !state.data || ["monthlyReports", "keywordMonthly", "searchDemand"].includes(state.activeTab)) return;
     // Estimating a future collection is local analysis, not a collection request.
     const runData = state.data;
     await loadRecrawlEtaEstimates(master);
@@ -41952,7 +41976,7 @@ async function loadRuns(selectLatest = false, options = {}) {
   }
   if (els.runSelect) els.runSelect.value = state.activeRunId;
   renderB2BSearchPanel();
-  if (options.bootstrap && (["monthlyReports", "keywordMonthly"].includes(state.activeTab)
+  if (options.bootstrap && (["monthlyReports", "keywordMonthly", "searchDemand"].includes(state.activeTab)
     || ["dictionary", "regionCompare", "regionSources", "demand"].includes(state.activeTab)
     || (state.activeTab === "admin" && ["overview", "database"].includes(state.adminPanelSection)))) {
     state.adminBootstrapRunPending = state.activeRunId;
@@ -42911,7 +42935,7 @@ async function loadRun(runId, options = {}) {
   }
   const current = () => requestSequence === loadRunRequestSequence && (!options.bootstrap || isAdminRole());
   const deferBootstrap = () => {
-    if (!options.bootstrap || !current() || !(["monthlyReports", "keywordMonthly"].includes(state.activeTab)
+    if (!options.bootstrap || !current() || !(["monthlyReports", "keywordMonthly", "searchDemand"].includes(state.activeTab)
       || ["dictionary", "regionCompare", "regionSources", "demand"].includes(state.activeTab)
       || (state.activeTab === "admin" && ["overview", "database"].includes(state.adminPanelSection)))) return false;
     state.adminBootstrapRunPending = runId; state.adminViewsDeferred = true;
@@ -43292,6 +43316,7 @@ async function loadTrafficState() {
 
 async function logout() {
   window.KeywordMonthlyAnalysis?.clear();
+  window.SearchDemandAnalysis?.clear();
   window.AdminCompanyPreviewCache?.configure(null);
   resetAdminDbSearchDraft();
   stopSavedRegionalCatchment({ logout: true });
@@ -45361,7 +45386,7 @@ async function init() {
     if (isAdminRole()) {
       // The DB is independent of the latest run, history and ETA. Read it before
       // the larger startup batch, and paint it without waiting for those reads.
-      if (["monthlyReports", "keywordMonthly"].includes(state.activeTab) && !initialCompanyRoute) state.adminBootstrapSummaryPending = true;
+      if (["monthlyReports", "keywordMonthly", "searchDemand"].includes(state.activeTab) && !initialCompanyRoute) state.adminBootstrapSummaryPending = true;
       else {
         if (navigationStageCurrent()) window.AdminTransitionTiming?.markNavigationStage?.("bootstrapStart");
         const browserPreview = initialCompanyRoute && initialCompanyRouteCurrent()
@@ -45428,7 +45453,7 @@ async function init() {
       if (!isAdminRole() || state.session !== initialSession || state.session?.authenticated === false) return;
       await Promise.all([loadRuns(true, { bootstrap: true }), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadLocationScoreOverrides(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview(), loadTourismDataStatus({ render: false }), loadSpecialDaysStatus(), loadTourismForecastStatus(), loadKosisStatus()]);
       if (!state.companyMaster) {
-        if (["monthlyReports", "keywordMonthly"].includes(state.activeTab)) state.adminBootstrapSummaryPending = true;
+        if (["monthlyReports", "keywordMonthly", "searchDemand"].includes(state.activeTab)) state.adminBootstrapSummaryPending = true;
         else await loadCompanyMasterSummary({ bootstrap: true, preserveOnError: true });
       }
       renderAdminConsoleDashboard();

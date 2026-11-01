@@ -49,6 +49,11 @@ const { createMonthlyReportCatchmentContext } = require("./lib/monthly_report_ca
 const { createMonthlyReportHttpHandler } = require("./lib/monthly_report_http.cjs");
 const { createKeywordMonthlyBundleAnalysis } = require("./lib/keyword_monthly_bundle.cjs");
 const { createKeywordMonthlyHttpHandler } = require("./lib/keyword_monthly_http.cjs");
+const { createSearchDemandStore } = require("./lib/search_demand_store.cjs");
+const { createSearchDemandProviders } = require("./lib/search_demand_providers.cjs");
+const { createSearchDemandScheduler } = require("./lib/search_demand_scheduler.cjs");
+const { createSearchDemandService } = require("./lib/search_demand_service.cjs");
+const { createSearchDemandHttpHandler } = require("./lib/search_demand_http.cjs");
 const { createKeywordMonthlyRefreshIntegration } = require("./lib/keyword_monthly_refresh_integration.cjs");
 const { createTrafficConnectionChecks, parseTrafficVerificationRequest } = require("./lib/traffic_connection_checks.cjs");
 const { resolveDatalabConnection } = require("./lib/naver_datalab_connection.cjs");
@@ -893,6 +898,26 @@ const keywordMonthlyAnalysis = Object.freeze({
 const handleKeywordMonthly = createKeywordMonthlyHttpHandler({
   service: keywordMonthlyAnalysis, requireAdmin: requireAdminSession, send,
   readRefreshStatus: () => keywordMonthlyRefreshIntegration.status()
+});
+// Search demand uses its own immutable metadata, queue and provider budgets.
+// Reads cannot start collectors, refresh provider data or activate a policy.
+const searchDemandRoot = path.join(DATA_DIR, "search_demand");
+const searchDemandStore = createSearchDemandStore({ rootDir: searchDemandRoot });
+const searchDemandProviders = createSearchDemandProviders({ readKeys: readTrafficKeys });
+const readSearchDemandKeywords = async () => collectionRotationScheduler.status().config.keywords.slice();
+let searchDemandService;
+const searchDemandScheduler = createSearchDemandScheduler({
+  rootDir: searchDemandRoot, store: searchDemandStore, providers: searchDemandProviders,
+  readRegisteredKeywords: readSearchDemandKeywords,
+  // A release does not activate a new provider schedule by itself.
+  enabled: process.env.SEARCH_DEMAND_ENABLED === "true",
+  onSnapshotCommitted: snapshot => searchDemandService.onSnapshotCommitted(snapshot)
+});
+searchDemandService = createSearchDemandService({
+  store: searchDemandStore, scheduler: searchDemandScheduler, readRegisteredKeywords: readSearchDemandKeywords
+});
+const handleSearchDemand = createSearchDemandHttpHandler({
+  service: searchDemandService, requireAdmin: requireAdminSession, send
 });
 const monthlyReportService = createMonthlyReportService({
   runWork: runAnalyticalWork,
@@ -19516,6 +19541,7 @@ async function route(req, res) {
       });
     }
 
+    if (await handleSearchDemand(req, res, reqUrl, session)) return;
     if (await handleKeywordMonthly(req, res, reqUrl, session)) return;
     if (await handleMonthlyReport(req, res, reqUrl, session)) return;
     if (await handleIndustryAnalysis(req, res, reqUrl, session)) return;
@@ -20732,6 +20758,7 @@ const server = http.createServer((req, res) => {
   route(req, res);
 });
 server.once('close',()=>{if(insightIntegration?.recurringCollection)void insightIntegration.recurringCollection.stop().catch(()=>{});});
+server.once("close", () => searchDemandScheduler.stop());
 
 function localNetworkUrls() {
   const interfaces = os.networkInterfaces();
@@ -20797,6 +20824,7 @@ seedOutputsFromRepo()
     server.listen(PORT, HOST, () => {
       const primaryUrl = HOST === "0.0.0.0" ? `http://127.0.0.1:${PORT}` : `http://${HOST}:${PORT}`;
       console.log(`Lodging datalab beta app running at ${primaryUrl}`);
+      searchDemandScheduler.start();
       if(insightIntegration?.recurringCollection)insightIntegration.recurringCollection.start().catch(error=>console.error('insight_recurring_start_failed',/^[A-Z0-9_]{1,100}$/.test(error?.code||'')?error.code:'UNAVAILABLE'));
       regionalMarketMissingWeekly.start();
       regionalMarketBootstrap.start();

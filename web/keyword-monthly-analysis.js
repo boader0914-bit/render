@@ -389,6 +389,7 @@
     render(); if (options.autoStart !== false && visible()) void open(options.context || null); return controller;
   }
   const api = { mount, normalizeOptions, metricView, calendarCells, buildViewModel, number, rate, money, dateValid, defaultCutoff, dataThroughDay, cutoffFor, phaseLabel,
+    getSelection(parent) { return instances.get(parent)?.state().selection || null; },
     show(parent, context) { if (!parent) return null; const controller = instances.get(parent) || mount(parent, { autoStart: false }); return controller.open(context); },
     pause(parent) { if (parent) instances.get(parent)?.pause(); else for (const controller of controllers) controller.pause(); },
     clear() { for (const controller of controllers) controller.clear(); } };
