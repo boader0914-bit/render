@@ -367,3 +367,47 @@ test("an unrecorded job subtotal is not rendered as zero requests", async () => 
   assert.match(f.root.innerHTML, /보고기간 예정 작업의 누적 요청 소계<\/dt><dd>미확인/);
   assert.doesNotMatch(f.root.innerHTML, /보고기간 예정 작업의 누적 요청 소계<\/dt><dd>0건/);
 });
+
+test("the actual service waiting state renders as waiting while retaining core values and two saved GETs", async () => {
+  const { createSearchDemandService } = require("./lib/search_demand_service.cjs");
+  const payload = response();
+  const store = {
+    getAnalysis: async input => response({ ...fixed, ...input }),
+    readLatest: async input => input.provider === "searchad" ? { provider: "searchad", keyword, keywordId: "kw_fixture", day: fixed.day, anchor: payload.searchVolume.anchor, observedAt: payload.searchVolume.observedAt, counts: { returnedRows: 25, uniqueRows: 25 } } : null,
+    listDaily: async () => ({ rows: [] })
+  };
+  const service = createSearchDemandService({ store, clock: () => new Date("2026-11-01T07:30:00.000Z"), readRegisteredKeywords: async () => [keyword], scheduler: { status: () => ({ enabled: true, running: false, lastReason: "WAITING_DAILY_TIME" }) } });
+  const root = element(), calls = [];
+  const fetchJson = async url => {
+    calls.push(url);
+    return url.endsWith("/catalog") ? service.catalog() : service.analyze(fromUrl(url));
+  };
+  await ui.show(root, { ...fixed, fetchJson });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0], "/api/search-demand/catalog");
+  assert.match(calls[1], /^\/api\/search-demand\/analysis\?/);
+  assert.match(root.innerHTML, /data-status="waiting">대기<\/span>/);
+  assert.match(root.innerHTML, /9,660/); assert.match(root.innerHTML, /1,790/); assert.match(root.innerHTML, /7,870/);
+  assert.doesNotMatch(root.innerHTML, /정상 대기/);
+});
+
+test("a waiting scheduler does not replace partial observations or failed job history with success", async () => {
+  const root = element(), calls = [], base = response();
+  const partialAnchor = { ...base.searchVolume.anchor, monthlyPc: unknown(), total: unknown(), status: "partial" };
+  const fetchJson = async url => {
+    calls.push(url);
+    if (url.endsWith("/catalog")) return { keywords: [{ keyword }] };
+    return response(fromUrl(url), { searchVolume: { ...base.searchVolume, status: "partial", anchor: partialAnchor }, refreshStatus: { status: "waiting", enabled: true, running: false }, jobHistory: { status: "ready", items: [{ keyword, provider: "searchad", status: "failed", errorCode: "AUTH_ERROR", requestCount: 1, lastRequestCount: 1 }] } });
+  };
+  await ui.show(root, { ...fixed, fetchJson });
+  assert.match(root.innerHTML, /data-status="partial">일부 자료<\/span>/);
+  assert.match(root.innerHTML, /data-status="waiting">대기<\/span>/);
+  const anchorMetric = root.innerHTML.match(/<article><span>최근 월간 검색량 관측<\/span>([\s\S]*?)<\/article>/)?.[1];
+  assert.ok(anchorMetric);
+  assert.match(anchorMetric, /data-count-state="unknown">미확인<\/span>/);
+  assert.doesNotMatch(anchorMetric, /9,660/);
+  root.click({ sdaTab: "history" });
+  assert.match(root.innerHTML, /data-status="failed">실패<\/span>/);
+  assert.match(root.innerHTML, /인증 또는 이용 권한/);
+  assert.equal(calls.length, 2);
+});
