@@ -53,9 +53,16 @@
 - `DATA_GO_KR_SERVICE_KEY`
 - `NAVER_CLIENT_ID`
 - `NAVER_CLIENT_SECRET`
+- `NAVER_DATALAB_PROVIDER` (`developers` 또는 `ncp_apihub`, 기존 설정의 기본값은 `developers`)
+- `NAVER_API_HUB_CLIENT_ID` (NAVER API HUB Application 전용)
+- `NAVER_API_HUB_CLIENT_SECRET` (NAVER API HUB Application 전용)
 - `NAVER_SEARCHAD_API_KEY`
 - `NAVER_SEARCHAD_SECRET_KEY`
 - `NAVER_SEARCHAD_CUSTOMER_ID`
+
+검색 트렌드를 네이버 클라우드 NAVER API HUB로 옮기는 연결 설정과 검증 범위는
+[NAVER API HUB 이관 안내](docs/naver-api-hub-connection.md)를 참고하세요.
+기존 수요전망 계산은 유지하며, 월간 검색량은 별도의 공식 검색광고 API를 계속 사용합니다.
 
 공공데이터 서비스키는 저장소나 앱 설정 화면에 입력하지 않습니다. 기존
 Render 서비스에서는 Dashboard의 해당 Web Service를 열고 `Environment`에서

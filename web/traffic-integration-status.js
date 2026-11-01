@@ -30,7 +30,8 @@
   function row(data, provider, options = {}) {
     const now = Number.isFinite(options.now) ? options.now : Date.now();
     const check = data?.verification?.[provider];
-    const configured = data?.[`${provider}Configured`] === true;
+    const invalidDatalabProvider = provider === "datalab" && data && data.datalabProvider !== undefined && !["developers", "ncp_apihub"].includes(data.datalabProvider);
+    const configured = data?.[`${provider}Configured`] === true && !invalidDatalabProvider;
     const checkedTime = validTime(check?.checkedAt);
     const validDate = checkedTime !== null && checkedTime <= now + 5 * 60 * 1000;
     const stale = check?.stale === true || (validDate && now - checkedTime >= 24 * 60 * 60 * 1000);
@@ -44,7 +45,10 @@
       && diagnostic.responseLimitBytes === (provider === "searchad" ? 2 * 1024 * 1024 : 256 * 1024) && diagnostic.legacyResponseLimitBytes === 256 * 1024
       && diagnostic.legacyLimitExceeded === (diagnostic.responseBytes > 256 * 1024) && ["verified", "response_size", "json_parse", "response_read", "schema"].includes(diagnostic.validationStage);
     const diagnosticLabel = diagnosticValid ? `수신 확인 ${diagnostic.responseBytes.toLocaleString("ko-KR")}바이트${Number.isSafeInteger(diagnostic.keywordCount) && diagnostic.keywordCount >= 0 && diagnostic.keywordCount <= 100000 ? ` · 키워드 ${diagnostic.keywordCount.toLocaleString("ko-KR")}개` : ""}${diagnostic.legacyLimitExceeded ? " · 이전 검사 크기 초과" : ""}${diagnostic.utf8Bom === true ? " · 문자 표식 정규화" : ""}` : "";
-    const base = { provider, name: names[provider] || "검색 API", configured, checkedAt: validDate ? check.checkedAt : "", checkedAtLabel: validDate ? timeLabel(check.checkedAt) : "확인 기록 없음", stale, httpStatus: status, errorCode: Object.hasOwn(reasons, code) ? code : "", diagnosticLabel, cooldownUntil: cooldownTime !== null && cooldownTime > now ? check.cooldownUntil : "", disabled: Boolean(options.testing) || !configured || cooldownTime !== null && cooldownTime > now };
+    const connectionLabel = provider === "datalab" ? invalidDatalabProvider ? "연결 방식 확인 필요" : data?.datalabProvider === "ncp_apihub" ? "NAVER API HUB · 네이버 클라우드" : "기존 네이버 개발자센터"
+      : provider === "searchad" ? "네이버 공식 검색광고 API · 별도 서비스" : "";
+    const base = { provider, name: names[provider] || "검색 API", configured, connectionLabel, checkedAt: validDate ? check.checkedAt : "", checkedAtLabel: validDate ? timeLabel(check.checkedAt) : "확인 기록 없음", stale, httpStatus: status, errorCode: Object.hasOwn(reasons, code) ? code : "", diagnosticLabel, cooldownUntil: cooldownTime !== null && cooldownTime > now ? check.cooldownUntil : "", disabled: Boolean(options.testing) || !configured || cooldownTime !== null && cooldownTime > now };
+    if (invalidDatalabProvider) return { ...base, status: "missing", statusLabel: "연결 방식 확인 필요", statusNote: "저장된 검색 트렌드 연결 방식을 확인해 주세요. 다른 서비스로 자동 전환하지 않습니다.", disabled: true };
     if (testing) return { ...base, status: "checking", statusLabel: "테스트 중", statusNote: "해당 API의 응답을 확인하고 있습니다." };
     if (!data) return { ...base, status: "checking", statusLabel: "저장 상태 미확인", statusNote: "저장 상태를 다시 확인해 주세요.", disabled: true };
     if (!configured) return { ...base, status: "missing", statusLabel: "미설정", statusNote: "인증키를 저장한 뒤 연결을 테스트해 주세요." };
@@ -59,7 +63,7 @@
   function escape(value) { return String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
   function detail(check) {
     if (!check || !names[check.provider]) return "";
-    return `<div class="traffic-integration-detail"><p><span>마지막 테스트</span><time${check.checkedAt ? ` datetime="${escape(check.checkedAt)}"` : ""}>${escape(check.checkedAtLabel)}</time></p>${check.httpStatus || check.errorCode ? `<p class="traffic-integration-code">${escape([check.httpStatus ? `HTTP ${check.httpStatus}` : "", check.errorCode].filter(Boolean).join(" · "))}</p>` : ""}${check.diagnosticLabel ? `<p class="traffic-integration-diagnostic">${escape(check.diagnosticLabel)}</p>` : ""}${check.cooldownUntil ? `<p class="traffic-integration-cooldown">다음 테스트 ${escape(timeLabel(check.cooldownUntil))}</p>` : ""}<button type="button" class="secondary-button traffic-integration-test" data-traffic-test="${escape(check.provider)}"${check.disabled ? " disabled" : ""}>${escape(check.statusLabel === "테스트 중" ? "확인 중…" : `${check.name} 연결 테스트`)}</button></div>`;
+    return `<div class="traffic-integration-detail">${check.connectionLabel ? `<p class="traffic-integration-provider"><span>현재 저장 연결</span><span>${escape(check.connectionLabel)}</span></p>` : ""}<p><span>마지막 테스트</span><time${check.checkedAt ? ` datetime="${escape(check.checkedAt)}"` : ""}>${escape(check.checkedAtLabel)}</time></p>${check.httpStatus || check.errorCode ? `<p class="traffic-integration-code">${escape([check.httpStatus ? `HTTP ${check.httpStatus}` : "", check.errorCode].filter(Boolean).join(" · "))}</p>` : ""}${check.diagnosticLabel ? `<p class="traffic-integration-diagnostic">${escape(check.diagnosticLabel)}</p>` : ""}${check.cooldownUntil ? `<p class="traffic-integration-cooldown">다음 테스트 ${escape(timeLabel(check.cooldownUntil))}</p>` : ""}<button type="button" class="secondary-button traffic-integration-test" data-traffic-test="${escape(check.provider)}"${check.disabled ? " disabled" : ""}>${escape(check.statusLabel === "테스트 중" ? "확인 중…" : `${check.name} 연결 테스트`)}</button></div>`;
   }
   return { row, detail, timeLabel, names };
 });

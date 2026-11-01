@@ -4,6 +4,7 @@ const fs = require("node:fs/promises");
 const fsConstants = require("node:fs").constants;
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { resolveDatalabConnection } = require("./naver_datalab_connection.cjs");
 
 const PROVIDERS = Object.freeze(["datalab", "searchad"]);
 const KEY_FIELDS = Object.freeze({ datalab: ["naverClientId", "naverClientSecret"], searchad: ["searchadApiKey", "searchadSecretKey", "searchadCustomerId"] });
@@ -29,8 +30,15 @@ const DIAGNOSTIC_STAGES = new Set(["verified", "response_size", "json_parse", "r
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const object = value => Boolean(value && typeof value === "object" && !Array.isArray(value));
 const iso = value => typeof value === "string" && ISO.test(value) && Number.isFinite(Date.parse(value));
-const configured = (provider, keys) => KEY_FIELDS[provider].every(field => Boolean(String(keys[field] || "").trim()));
-const fingerprint = (provider, keys) => crypto.createHash("sha256").update(JSON.stringify(KEY_FIELDS[provider].map(field => String(keys[field] || "").trim()))).digest("hex");
+const configured = (provider, keys) => provider === "datalab" ? resolveDatalabConnection(keys).configured : KEY_FIELDS[provider].every(field => Boolean(String(keys[field] || "").trim()));
+const fingerprint = (provider, keys) => {
+  const connection = provider === "datalab" ? resolveDatalabConnection(keys) : null;
+  const fields = connection ? connection.credentialFields : KEY_FIELDS[provider];
+  const values = fields.map(field => String(keys[field] || "").trim());
+  // Preserve legacy Developers records; a different transport is a different credential scope.
+  if (connection && connection.provider !== "developers") values.unshift(connection.provider);
+  return crypto.createHash("sha256").update(JSON.stringify(values)).digest("hex");
+};
 const safeStatus = value => Number.isInteger(value) && value >= 100 && value <= 599 ? value : null;
 const failure = (checkStatus, errorCode, status = null) => ({ checkStatus, errorCode, status: safeStatus(status) });
 function requestError(statusCode, code, message) { return Object.assign(new Error(message), { statusCode, code }); }
@@ -98,11 +106,13 @@ async function responseJson(response, maximum) {
 async function probeConnection(provider, keys, { fetchImpl, now, signal }) {
   let url, options;
   if (provider === "datalab") {
+    const connection = resolveDatalabConnection(keys);
+    if (!connection.configured) return failure("failed", "MISSING_KEY");
     const end = new Date(now + 9 * 3600000); end.setUTCDate(end.getUTCDate() - 1);
     const start = new Date(end); start.setUTCDate(start.getUTCDate() - 6);
-    url = "https://openapi.naver.com/v1/datalab/search";
+    url = connection.endpoint;
     options = { method: "POST", redirect: "error", signal,
-      headers: { "Content-Type": "application/json", "X-Naver-Client-Id": keys.naverClientId, "X-Naver-Client-Secret": keys.naverClientSecret },
+      headers: connection.headers,
       body: JSON.stringify({ startDate: start.toISOString().slice(0, 10), endDate: end.toISOString().slice(0, 10), timeUnit: "date", keywordGroups: [{ groupName: "글램핑", keywords: ["글램핑"] }] }) };
   } else {
     const timestamp = String(now), uri = "/keywordstool";
@@ -214,7 +224,7 @@ function createTrafficConnectionChecks({ filePath, readKeys, fetchImpl = (...arg
   }
   function publicCheck(provider, keys, saved, now) {
     const isConfigured = configured(provider, keys), row = saved.envelope.providers[provider];
-    const base = { configured: isConfigured, ok: false, status: null, checkStatus: "unverified", errorCode: "NOT_TESTED", message: MESSAGES.NOT_TESTED,
+    const base = { configured: isConfigured, ...(provider === "datalab" ? { datalabProvider: resolveDatalabConnection(keys).provider } : {}), ok: false, status: null, checkStatus: "unverified", errorCode: "NOT_TESTED", message: MESSAGES.NOT_TESTED,
       checkedAt: "", startedAt: "", validForCurrentKeys: false, stale: false, cooldownUntil: "" };
     const result = (state, code, fields = {}) => ({ ...base, ...fields, checkStatus: state, errorCode: code, message: MESSAGES[code] });
     if (!isConfigured) return result("not_configured", "MISSING_KEY");

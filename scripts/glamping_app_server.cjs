@@ -51,6 +51,7 @@ const { createKeywordMonthlyBundleAnalysis } = require("./lib/keyword_monthly_bu
 const { createKeywordMonthlyHttpHandler } = require("./lib/keyword_monthly_http.cjs");
 const { createKeywordMonthlyRefreshIntegration } = require("./lib/keyword_monthly_refresh_integration.cjs");
 const { createTrafficConnectionChecks, parseTrafficVerificationRequest } = require("./lib/traffic_connection_checks.cjs");
+const { resolveDatalabConnection } = require("./lib/naver_datalab_connection.cjs");
 const { createRegionalReportPreparation } = require("./lib/regional_report_preparation.cjs");
 const { createRegionalSearchTrendService } = require("./lib/regional_search_trends.cjs");
 const { createRegionalReportPreparationHttpHandler } = require("./lib/regional_report_preparation_http.cjs");
@@ -2867,6 +2868,8 @@ const MIME_TYPES = {
 const trafficKeyFields = [
   "naverClientId",
   "naverClientSecret",
+  "ncpApihubClientId",
+  "ncpApihubClientSecret",
   "searchadApiKey",
   "searchadSecretKey",
   "searchadCustomerId"
@@ -2896,8 +2899,12 @@ async function readTrafficKeys() {
   }
 
   return {
+    datalabProvider: process.env.NAVER_DATALAB_PROVIDER !== undefined ? process.env.NAVER_DATALAB_PROVIDER
+      : Object.hasOwn(saved, "datalabProvider") ? saved.datalabProvider : "developers",
     naverClientId: normalizeApiKey(process.env.NAVER_CLIENT_ID || saved.naverClientId || ""),
     naverClientSecret: normalizeApiKey(process.env.NAVER_CLIENT_SECRET || saved.naverClientSecret || ""),
+    ncpApihubClientId: normalizeApiKey(process.env.NAVER_API_HUB_CLIENT_ID || saved.ncpApihubClientId || ""),
+    ncpApihubClientSecret: normalizeApiKey(process.env.NAVER_API_HUB_CLIENT_SECRET || saved.ncpApihubClientSecret || ""),
     searchadApiKey: normalizeApiKey(process.env.NAVER_SEARCHAD_API_KEY || saved.searchadApiKey || ""),
     searchadSecretKey: normalizeApiKey(process.env.NAVER_SEARCHAD_SECRET_KEY || saved.searchadSecretKey || ""),
     searchadCustomerId: normalizeApiKey(process.env.NAVER_SEARCHAD_CUSTOMER_ID || saved.searchadCustomerId || "")
@@ -2905,21 +2912,28 @@ async function readTrafficKeys() {
 }
 
 function trafficKeyStatus(keys) {
+  const datalab = resolveDatalabConnection(keys);
   const envFields = {
+    datalabProvider: process.env.NAVER_DATALAB_PROVIDER !== undefined,
     naverClientId: Boolean(process.env.NAVER_CLIENT_ID),
     naverClientSecret: Boolean(process.env.NAVER_CLIENT_SECRET),
+    ncpApihubClientId: Boolean(process.env.NAVER_API_HUB_CLIENT_ID),
+    ncpApihubClientSecret: Boolean(process.env.NAVER_API_HUB_CLIENT_SECRET),
     searchadApiKey: Boolean(process.env.NAVER_SEARCHAD_API_KEY),
     searchadSecretKey: Boolean(process.env.NAVER_SEARCHAD_SECRET_KEY),
     searchadCustomerId: Boolean(process.env.NAVER_SEARCHAD_CUSTOMER_ID)
   };
   return {
-    datalabConfigured: Boolean(keys.naverClientId && keys.naverClientSecret),
+    datalabProvider: datalab.provider,
+    datalabProviderLabel: datalab.provider === "ncp_apihub" ? "네이버 클라우드 NAVER API HUB" : datalab.provider === "developers" ? "네이버 개발자센터 (기존)" : "연결 방식 확인 필요",
+    datalabConfigured: datalab.configured,
     searchadConfigured: Boolean(keys.searchadApiKey && keys.searchadSecretKey && keys.searchadCustomerId),
     storage: {
       configDir: CONFIG_DIR,
       file: TRAFFIC_KEYS_FILE,
       persistent: HAS_RENDER_DISK || !isTmpDataPath(CONFIG_DIR),
       envOverride: Object.values(envFields).some(Boolean),
+      datalabProviderEnvOverride: process.env.NAVER_DATALAB_PROVIDER !== undefined,
       envFields
     },
     fields: Object.fromEntries(
@@ -2940,9 +2954,16 @@ async function trafficSettingsStatus() {
 }
 
 async function saveTrafficKeys(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)
+    || Object.keys(payload).some(field => field !== "datalabProvider" && !trafficKeyFields.includes(field))
+    || Object.hasOwn(payload, "datalabProvider") && !["developers", "ncp_apihub"].includes(payload.datalabProvider)
+    || trafficKeyFields.some(field => Object.hasOwn(payload, field) && (typeof payload[field] !== "string" || payload[field].length > 4096))) {
+    throw Object.assign(new Error("API 연결 방식과 입력 항목을 확인해 주세요."), { statusCode: 400, code: "TRAFFIC_KEYS_INVALID_REQUEST" });
+  }
   await fsp.mkdir(CONFIG_DIR, { recursive: true });
   const current = await readTrafficKeys();
   const next = { ...current };
+  if (Object.hasOwn(payload, "datalabProvider")) next.datalabProvider = payload.datalabProvider;
 
   for (const field of trafficKeyFields) {
     if (Object.prototype.hasOwnProperty.call(payload, field)) {
@@ -2951,7 +2972,7 @@ async function saveTrafficKeys(payload) {
     }
   }
 
-  await fsp.writeFile(TRAFFIC_KEYS_FILE, JSON.stringify(next, null, 2), "utf8");
+  await fsp.writeFile(TRAFFIC_KEYS_FILE, JSON.stringify(next, null, 2), { encoding: "utf8", mode: 0o600 });
   return trafficSettingsStatus();
 }
 
@@ -8981,6 +9002,7 @@ async function writeDatalabTrendStore(store) {
 function datalabTrendSnapshot(trend = {}) {
   return {
     source: trend.source || "naver_datalab_search",
+    ...(["developers", "ncp_apihub"].includes(trend.connectionProvider) ? { connectionProvider: trend.connectionProvider } : {}),
     keyword: trend.keyword || "",
     configured: Boolean(trend.configured),
     collectable: Boolean(trend.collectable),
@@ -9080,25 +9102,24 @@ async function rememberDatalabTrend(keyword, trend = {}, { cacheHit = false } = 
 async function collectDatalabTrend(keyword, keys, attempt = 0, range = datalabTrendRange(12)) {
   const compact = compactKeyword(keyword);
   if (!compact) return null;
+  const connection = resolveDatalabConnection(keys);
 
-  if (!keys.naverClientId || !keys.naverClientSecret) {
+  if (!connection.configured) {
     return {
       source: "naver_datalab_search",
+      connectionProvider: connection.provider,
       keyword: compact,
       configured: false,
       collectable: false,
-      reason: "Naver DataLab API keys are not configured.",
+      reason: connection.provider === "ncp_apihub" ? "NAVER API HUB 연결 키가 설정되지 않았습니다." : "Naver DataLab API keys are not configured.",
       series: []
     };
   }
 
-  const result = await requestJson("https://openapi.naver.com/v1/datalab/search", {
+  const result = await requestJson(connection.endpoint, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Naver-Client-Id": keys.naverClientId,
-      "X-Naver-Client-Secret": keys.naverClientSecret
-    },
+    redirect: "error",
+    headers: connection.headers,
     body: JSON.stringify({
       ...range,
       keywordGroups: [
@@ -9118,6 +9139,7 @@ async function collectDatalabTrend(keyword, keys, attempt = 0, range = datalabTr
   if (!result.ok) {
     return {
       source: "naver_datalab_search",
+      connectionProvider: connection.provider,
       keyword: compact,
       configured: true,
       collectable: false,
@@ -9125,13 +9147,13 @@ async function collectDatalabTrend(keyword, keys, attempt = 0, range = datalabTr
       startDate: range.startDate,
       endDate: range.endDate,
       timeUnit: range.timeUnit,
-      reason: result.data?.errorMessage || result.data?.message || result.data?.title || "Naver DataLab API request failed.",
+      reason: connection.provider === "ncp_apihub" ? "NAVER API HUB의 인증·권한·요청 한도와 응답 상태를 확인해 주세요." : result.data?.errorMessage || result.data?.message || result.data?.title || "Naver DataLab API request failed.",
       series: [],
       collectedAt: new Date().toISOString()
     };
   }
 
-  return normalizeDatalabTrend(compact, result.data, range);
+  return { ...normalizeDatalabTrend(compact, result.data, range), connectionProvider: connection.provider };
 }
 
 async function collectDatalabTrendCached(keyword, keys) {
@@ -9145,7 +9167,7 @@ async function collectDatalabTrendCached(keyword, keys) {
   if (cached) {
     return rememberDatalabTrend(compact, cached, { cacheHit: true });
   }
-  if (!keys.naverClientId || !keys.naverClientSecret) return collectDatalabTrend(keyword, keys, 0, range);
+  if (!resolveDatalabConnection(keys).configured) return collectDatalabTrend(keyword, keys, 0, range);
 
   const trend = await collectDatalabTrend(compact, keys, 0, range);
   if (trend) return rememberDatalabTrend(compact, trend);
@@ -9228,7 +9250,7 @@ async function enrichRegionsWithTraffic(regions, dirPath, demandKeyword = "") {
   }
 
   const canPersistTraffic = keys.searchadApiKey && keys.searchadSecretKey && keys.searchadCustomerId;
-  const canPersistTrend = keys.naverClientId && keys.naverClientSecret;
+  const canPersistTrend = resolveDatalabConnection(keys).configured;
   if (changed && (canPersistTraffic || canPersistTrend)) {
     await fsp.writeFile(
       cachePath,
@@ -20610,7 +20632,11 @@ async function route(req, res) {
     if (req.method === "POST" && reqUrl.pathname === "/api/settings/traffic-keys") {
       if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
-      return send(res, 200, await saveTrafficKeys(payload));
+      try { return send(res, 200, await saveTrafficKeys(payload)); }
+      catch (error) {
+        if (error.code !== "TRAFFIC_KEYS_INVALID_REQUEST") throw error;
+        return send(res, 400, { code: error.code, error: "API 연결 방식과 입력 항목을 확인해 주세요." });
+      }
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/settings/traffic-keys/verify") {

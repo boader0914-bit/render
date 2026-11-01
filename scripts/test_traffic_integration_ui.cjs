@@ -49,11 +49,11 @@ test("per-service actions expose cooldown and prevent overlapping manual request
 });
 function fixture(fetchJson) {
   const el = () => ({ textContent: "", innerHTML: "", disabled: false });
-  const state = { trafficKeyState: null, trafficVerifying: "", trafficKeyLoading: false, trafficKeySaving: false, trafficKeyRequestSequence: 0, trafficTestNotice: "" };
-  const els = { trafficKeyVerifyButton: el(), trafficKeyStatus: el(), trafficKeyVerifyResult: el(), trafficApiState: el(), adminIntegrationRegistry: el(), trafficKeyForm: { reset() {} }, naverClientIdInput: { value: "fake-new-client" } };
+  const state = { trafficKeyState: null, trafficProviderDraft: null, trafficVerifying: "", trafficKeyLoading: false, trafficKeySaving: false, trafficKeyRequestSequence: 0, trafficTestNotice: "" };
+  const els = { trafficKeyVerifyButton: el(), trafficKeyStatus: el(), trafficKeyVerifyResult: el(), trafficApiState: el(), adminIntegrationRegistry: el(), trafficKeyForm: { reset() {} }, naverClientIdInput: { value: "fake-new-client" }, naverClientSecretInput: { value: "" }, datalabProviderInput: { value: "developers" }, datalabProviderStatus: el(), ncpApihubClientIdInput: { value: "" }, ncpApihubClientSecretInput: { value: "" } };
   const context = vm.createContext({ state, els, window: { TrafficIntegrationStatus: ui }, fetchJson, isAdminRole: () => true, renderDemand() {}, renderAdminConsoleDashboard() {}, escapeHtml: value => String(value), fmtNumber: String,
     ADMIN_INTEGRATIONS: [{ key: "naver-datalab", group: "네이버", provider: "NAVER", name: "검색 트렌드", liveKey: "datalab" }, { key: "naver-searchad", group: "네이버", provider: "NAVER", name: "검색광고 키워드", liveKey: "searchad" }] });
-  const names = ["adminIntegrationRows", "adminIntegrationSummary", "adminIntegrationSummaryLabel", "renderAdminIntegrationRegistry", "renderTrafficVerification", "renderTrafficState", "loadTrafficState", "verifyTrafficKeys", "submitTrafficKeys"];
+  const names = ["adminIntegrationRows", "adminIntegrationSummary", "adminIntegrationSummaryLabel", "renderAdminIntegrationRegistry", "syncTrafficKeyForm", "renderTrafficVerification", "renderTrafficState", "loadTrafficState", "verifyTrafficKeys", "submitTrafficKeys"];
   for (const name of names) {
     const expression = new RegExp(`^(?:async )?function ${name}\\([^]*?^}`, "m");
     const code = app.match(expression)?.[0]; assert.ok(code, name); vm.runInContext(code, context);
@@ -92,7 +92,7 @@ test("key saving is separate from testing and blank values retain existing crede
   const calls = [], f = fixture(async (...args) => { calls.push(args); return { datalabConfigured: true }; });
   await f.context.submitTrafficKeys({ preventDefault() {} });
   assert.equal(calls.length, 1); assert.equal(calls[0][0], "/api/settings/traffic-keys");
-  assert.deepEqual(JSON.parse(calls[0][1].body), { naverClientId: "fake-new-client" });
+  assert.deepEqual(JSON.parse(calls[0][1].body), { naverClientId: "fake-new-client", datalabProvider: "developers" });
   f.els.naverClientIdInput.value = ""; await f.context.submitTrafficKeys({ preventDefault() {} });
   assert.equal(calls.length, 1); assert.equal(f.state.trafficKeySaving, false);
 });
@@ -147,4 +147,119 @@ test("size, JSON, and body-read failures have distinct safe UI reasons", () => {
 test("invalid diagnostics never render arbitrary provider fields or guessed counts", () => {
   const row = ui.row(data({ diagnostics: { responseBytes: -1, responseLimitBytes: 2097152, legacyResponseLimitBytes: 262144, legacyLimitExceeded: false, validationStage: "verified", keywordCount: "private-string" } }, "searchad"), "searchad", { now });
   assert.equal(row.diagnosticLabel, ""); assert.doesNotMatch(ui.detail(row), /private-string|수신 확인/);
+});
+
+test("cloud trend credentials are distinct from the separate official SearchAd service", () => {
+  const cloud = ui.row({ ...data(), datalabProvider: "ncp_apihub", datalabProviderLabel: "private-untrusted-label" }, "datalab", { now });
+  assert.match(cloud.connectionLabel, /NAVER API HUB.*네이버 클라우드/);
+  assert.match(ui.detail(cloud), /현재 저장 연결/);
+  assert.doesNotMatch(ui.detail(cloud), /private-untrusted-label/);
+  const searchad = ui.row({ ...data({}, "searchad"), datalabProvider: "ncp_apihub" }, "searchad", { now });
+  assert.match(searchad.connectionLabel, /검색광고 API.*별도 서비스/);
+  assert.doesNotMatch(searchad.connectionLabel, /API HUB/);
+});
+
+test("a saved-state read preserves an unsaved provider choice and both credential drafts", async () => {
+  const calls = [], f = fixture(async (...args) => { calls.push(args); return { ...data(), datalabProvider: "developers" }; });
+  f.els.datalabProviderInput.value = "ncp_apihub";
+  f.state.trafficProviderDraft = "ncp_apihub";
+  f.els.ncpApihubClientIdInput.value = "fake-cloud-draft";
+  f.els.ncpApihubClientSecretInput.value = "fake-cloud-secret-draft";
+  await f.context.loadTrafficState();
+  assert.equal(calls.length, 1);
+  assert.equal(f.els.datalabProviderInput.value, "ncp_apihub");
+  assert.equal(f.els.ncpApihubClientIdInput.value, "fake-cloud-draft");
+  assert.equal(f.els.ncpApihubClientSecretInput.value, "fake-cloud-secret-draft");
+  assert.match(f.els.datalabProviderStatus.textContent, /기존 네이버 개발자센터.*아직 저장되지/);
+});
+
+test("provider-only changes can be saved without copying any existing credential", async () => {
+  const calls = [], f = fixture(async (...args) => { calls.push(args); return { datalabProvider: "ncp_apihub", datalabConfigured: false, searchadConfigured: true }; });
+  f.els.naverClientIdInput.value = "";
+  f.state.trafficKeyState = { datalabProvider: "developers", datalabConfigured: true };
+  f.els.datalabProviderInput.value = "ncp_apihub";
+  f.state.trafficProviderDraft = "ncp_apihub";
+  await f.context.submitTrafficKeys({ preventDefault() {} });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(JSON.parse(calls[0][1].body), { datalabProvider: "ncp_apihub" });
+  assert.equal(f.els.datalabProviderInput.value, "ncp_apihub");
+  assert.match(f.els.datalabProviderStatus.textContent, /선택한 서비스의 인증정보 필요/);
+  assert.equal(f.state.trafficProviderDraft, null);
+  assert.notEqual(f.els.trafficApiState.textContent, "최근 테스트 정상");
+});
+
+test("cloud key saving sends only entered values and never triggers provider verification", async () => {
+  const calls = [], f = fixture(async (...args) => { calls.push(args); return { datalabProvider: "ncp_apihub", datalabConfigured: true }; });
+  f.els.naverClientIdInput.value = "";
+  f.els.datalabProviderInput.value = "ncp_apihub";
+  f.els.ncpApihubClientIdInput.value = "fake-cloud-id";
+  f.els.ncpApihubClientSecretInput.value = "fake-cloud-secret";
+  await f.context.submitTrafficKeys({ preventDefault() {} });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], "/api/settings/traffic-keys");
+  assert.deepEqual(JSON.parse(calls[0][1].body), { datalabProvider: "ncp_apihub", ncpApihubClientId: "fake-cloud-id", ncpApihubClientSecret: "fake-cloud-secret" });
+  assert.equal(f.els.ncpApihubClientIdInput.value, "");
+  assert.equal(f.els.ncpApihubClientSecretInput.value, "");
+});
+
+test("saving never clears edits made while the request is in flight", async () => {
+  let finish;
+  const f = fixture(() => new Promise(resolve => { finish = resolve; }));
+  f.els.naverClientIdInput.value = "";
+  f.els.datalabProviderInput.value = "ncp_apihub";
+  f.els.ncpApihubClientSecretInput.value = "fake-submitted-secret";
+  const save = f.context.submitTrafficKeys({ preventDefault() {} });
+  f.els.datalabProviderInput.value = "developers";
+  f.state.trafficProviderDraft = "developers";
+  f.els.ncpApihubClientSecretInput.value = "fake-new-unsaved-secret";
+  finish({ datalabProvider: "ncp_apihub", datalabConfigured: true });
+  await save;
+  assert.equal(f.els.ncpApihubClientSecretInput.value, "fake-new-unsaved-secret");
+  assert.equal(f.els.datalabProviderInput.value, "developers");
+  assert.match(f.els.datalabProviderStatus.textContent, /아직 저장되지/);
+});
+
+test("failed saves retain drafts and server-supplied masks are never placed in key fields", async () => {
+  const f = fixture(async () => { throw Error("private-server-error"); });
+  f.els.naverClientIdInput.value = "";
+  f.els.datalabProviderInput.value = "ncp_apihub";
+  f.state.trafficProviderDraft = "ncp_apihub";
+  f.els.ncpApihubClientIdInput.value = "fake-unsaved-id";
+  await f.context.submitTrafficKeys({ preventDefault() {} });
+  assert.equal(f.els.ncpApihubClientIdInput.value, "fake-unsaved-id");
+  assert.doesNotMatch(f.els.trafficKeyStatus.textContent, /private-server-error/);
+  f.context.renderTrafficState({ datalabProvider: "developers", storage: { envFields: { ncpApihubClientId: true, datalabProvider: true } }, fields: { ncpApihubClientId: { configured: true, masked: "private-mask" } } });
+  assert.equal(f.els.ncpApihubClientIdInput.value, "fake-unsaved-id");
+  assert.match(f.els.ncpApihubClientIdInput.placeholder, /서버 값 우선/);
+  assert.doesNotMatch(f.els.ncpApihubClientIdInput.placeholder + f.els.datalabProviderStatus.textContent, /private-mask/);
+});
+
+test("cloud credentials use password fields with an explicit official migration link", () => {
+  const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8");
+  for (const id of ["ncpApihubClientIdInput", "ncpApihubClientSecretInput"]) assert.match(html, new RegExp(`<input id="${id}" type="password" autocomplete="off">`));
+  assert.match(html, /https:\/\/guide\.ncloud-docs\.com\/docs\/apihub-migration/);
+  assert.match(html, /기존 키로 자동 전환하지 않습니다/);
+});
+
+test("unknown explicit providers cannot inherit a legacy label or a verified connection", () => {
+  for (const datalabProvider of ["unknown-provider", "", null, 4]) {
+    const row = ui.row({ ...data(), datalabProvider }, "datalab", { now });
+    assert.equal(row.configured, false);
+    assert.equal(row.disabled, true);
+    assert.equal(row.connectionLabel, "연결 방식 확인 필요");
+    assert.equal(row.statusLabel, "연결 방식 확인 필요");
+    assert.doesNotMatch(ui.detail(row), /기존 네이버 개발자센터/);
+  }
+  assert.match(ui.row(data(), "datalab", { now }).connectionLabel, /기존 네이버 개발자센터/);
+});
+
+test("unknown stored provider leaves the form unselected until an explicit valid choice", async () => {
+  const calls = [], f = fixture(async (...args) => { calls.push(args); return {}; });
+  f.context.renderTrafficState({ datalabProvider: "unsupported", datalabConfigured: false });
+  assert.equal(f.els.datalabProviderInput.value, "");
+  assert.match(f.els.datalabProviderStatus.textContent, /연결 방식 확인 필요/);
+  await f.context.submitTrafficKeys({ preventDefault() {} });
+  assert.equal(calls.length, 0);
+  assert.match(f.els.trafficKeyStatus.textContent, /다시 선택/);
+  assert.equal(f.els.naverClientIdInput.value, "fake-new-client");
 });

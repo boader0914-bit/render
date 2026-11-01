@@ -10,6 +10,32 @@ const { createRegionalSearchTrendService } = require("./lib/regional_search_tren
 const query = { regionKey: "kr_gyeongnam_sancheong", month: "2026-08" };
 const region = (key) => ({ regionKey: key, name: key === "kr_gyeongnam_sancheong" ? "산청군" : "포천시", shortName: "산청", active: true, selectable: true, level: "local" });
 
+test("API HUB regional requests use its explicit pair while legacy cache reuse preserves its original source", async t => {
+  const credentials = { naverClientId: "LEGACY-ID", naverClientSecret: "LEGACY-SECRET", ncpApihubClientId: "NCP-ID", ncpApihubClientSecret: "NCP-SECRET" };
+  const f = await fixture(t, { readTrafficKeys: async () => ({ ...credentials }) });
+  const legacy = await f.service.refresh(query);
+  credentials.datalabProvider = "ncp_apihub";
+  const reused = await f.service.refresh(query);
+  assert.equal(reused.cacheReused, true); assert.equal(reused.networkAttempted, false);
+  assert.equal(reused.source, legacy.source); assert.equal(reused.retrievedAt, legacy.retrievedAt); assert.equal(f.calls.length, 1);
+  f.setFetch(async (url, options) => {
+    assert.equal(url, "https://naverapihub.apigw.ntruss.com/search-trend/v1/search");
+    assert.deepEqual(options.headers, { "Content-Type": "application/json", "X-NCP-APIGW-API-KEY-ID": "NCP-ID", "X-NCP-APIGW-API-KEY": "NCP-SECRET" });
+    return new Response(JSON.stringify(payload(JSON.parse(options.body))), { status: 200 });
+  });
+  const fresh = await f.service.refresh({ ...query, months: 13 });
+  assert.equal(fresh.status, "ready"); assert.equal(fresh.networkAttempted, true); assert.equal(f.calls.length, 2);
+  const text = JSON.stringify(fresh);
+  for (const secret of ["LEGACY-ID", "LEGACY-SECRET", "NCP-ID", "NCP-SECRET"]) assert.equal(text.includes(secret), false);
+});
+
+test("regional API HUB selection without its pair never uses Developers credentials", async t => {
+  const f = await fixture(t, { readTrafficKeys: async () => ({ datalabProvider: "ncp_apihub", naverClientId: "LEGACY-ID", naverClientSecret: "LEGACY-SECRET" }) });
+  assert.equal((await f.service.status()).configured, false);
+  const result = await f.service.refresh(query);
+  assert.equal(result.errorCode, "MISSING_KEY"); assert.equal(result.networkAttempted, false); assert.equal(f.calls.length, 0);
+});
+
 test("24-month comparisons use one normalization window and cannot overwrite the existing 12-month cache", async t => {
   const f=await fixture(t);
   const original=await f.service.refresh(query);

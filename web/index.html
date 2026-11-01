@@ -502,20 +502,39 @@
           <section class="admin-card tourism-forecast-connection-card" id="tourismForecastConnectionCard" data-ui-surface="card" aria-label="관광지 방문 전망 연결 상태"></section>
           <section class="admin-card" id="trafficAdminCard" data-ui-surface="card">
             <div class="card-head">
-              <h3>네이버 검색 API 키 설정</h3>
+              <h3>네이버 검색 API 연결 설정</h3>
               <span class="state-badge" id="trafficApiState">미설정</span>
             </div>
             <details class="advanced-box" data-ui-surface="control">
               <summary>API 키 입력</summary>
               <form id="trafficKeyForm" class="traffic-key-form">
                 <label class="field">
-                  <span>데이터랩 Client ID</span>
+                  <span>검색 트렌드 연결 방식</span>
+                  <select id="datalabProviderInput">
+                    <option value="" disabled hidden>연결 방식 확인 필요</option>
+                    <option value="ncp_apihub">NAVER API HUB · 네이버 클라우드 (권장)</option>
+                    <option value="developers" selected>기존 네이버 개발자센터</option>
+                  </select>
+                </label>
+                <p class="hint" id="datalabProviderStatus">저장된 검색 트렌드 연결을 확인하고 있습니다.</p>
+                <label class="field">
+                  <span>NAVER API HUB Client ID</span>
+                  <input id="ncpApihubClientIdInput" type="password" autocomplete="off">
+                </label>
+                <label class="field">
+                  <span>NAVER API HUB Client Secret</span>
+                  <input id="ncpApihubClientSecretInput" type="password" autocomplete="off">
+                </label>
+                <p class="hint">네이버 클라우드의 NAVER API HUB에서 ‘검색어 트렌드’를 선택해 발급받은 인증정보를 입력합니다. 일반 클라우드 Access Key나 기존 개발자센터 키를 대신 사용하지 않습니다. <a href="https://guide.ncloud-docs.com/docs/apihub-migration" target="_blank" rel="noopener noreferrer">공식 이관 안내</a></p>
+                <label class="field">
+                  <span>기존 개발자센터 Client ID</span>
                   <input id="naverClientIdInput" type="password" autocomplete="off">
                 </label>
                 <label class="field">
-                  <span>데이터랩 Client Secret</span>
+                  <span>기존 개발자센터 Client Secret</span>
                   <input id="naverClientSecretInput" type="password" autocomplete="off">
                 </label>
+                <p class="hint">검색 트렌드는 저장한 연결 방식의 키만 사용합니다. 클라우드 키가 없거나 오류가 나도 기존 키로 자동 전환하지 않습니다. 기존 수요전망의 화면·계산과 저장 자료는 유지합니다.</p>
                 <label class="field">
                   <span>검색광고 API Key</span>
                   <input id="searchadApiKeyInput" type="password" autocomplete="off">
@@ -528,9 +547,10 @@
                   <span>검색광고 Customer ID</span>
                   <input id="searchadCustomerIdInput" type="password" autocomplete="off">
                 </label>
-                <button class="secondary-button" type="submit">API 키 저장</button>
+                <p class="hint">월간 검색량은 별도 서비스인 네이버 공식 검색광고 API를 사용합니다. 검색광고 키는 NAVER API HUB 키로 교체하지 않습니다.</p>
+                <button class="secondary-button" type="submit">연결 설정·API 키 저장</button>
                 <button class="ghost-button" id="trafficKeyVerifyButton" type="button">두 API 연결 테스트</button>
-                <p class="hint" id="trafficKeyStatus">키워드 입력창이 아니라 이 설정창에 입력합니다.</p>
+                <p class="hint" id="trafficKeyStatus">빈 키 입력은 기존 값을 유지합니다. 연결 방식 변경과 새 키는 저장한 뒤 적용됩니다.</p>
                 <p class="legal-inline-notice">API 키는 관리자 권한 설정 저장소에 보관됩니다. 자세한 기준은 <a href="/api-key-retention-policy" target="_blank" rel="noopener">API 키 및 고객 데이터 보관 정책</a>을 확인하세요.</p>
                 <p class="traffic-verify-result" id="trafficKeyVerifyResult">위 API·연동 목록에서 개별 연결 테스트와 마지막 결과를 확인합니다. 키 저장만으로 테스트를 실행하지 않습니다.</p>
               </form>

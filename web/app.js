@@ -140,6 +140,7 @@ const state = {
   locationProfileLoading: {},
   locationTourismIndexRefresh: {},
   trafficKeyState: null,
+  trafficProviderDraft: null,
   trafficVerifying: "",
   trafficKeyLoading: false,
   trafficKeySaving: false,
@@ -658,10 +659,14 @@ const els = {
   trafficKeyStatus: document.getElementById("trafficKeyStatus"),
   trafficKeyVerifyButton: document.getElementById("trafficKeyVerifyButton"),
   trafficKeyVerifyResult: document.getElementById("trafficKeyVerifyResult"),
+  datalabProviderInput: document.getElementById("datalabProviderInput"),
+  datalabProviderStatus: document.getElementById("datalabProviderStatus"),
   companyMasterState: document.getElementById("companyMasterState"),
   companyMasterPanel: document.getElementById("companyMasterPanel"),
   naverClientIdInput: document.getElementById("naverClientIdInput"),
   naverClientSecretInput: document.getElementById("naverClientSecretInput"),
+  ncpApihubClientIdInput: document.getElementById("ncpApihubClientIdInput"),
+  ncpApihubClientSecretInput: document.getElementById("ncpApihubClientSecretInput"),
   searchadApiKeyInput: document.getElementById("searchadApiKeyInput"),
   searchadSecretKeyInput: document.getElementById("searchadSecretKeyInput"),
   searchadCustomerIdInput: document.getElementById("searchadCustomerIdInput"),
@@ -43128,28 +43133,41 @@ async function submitTrafficKeys(event) {
   renderAdminIntegrationRegistry();
   try {
     const payload = {};
-    [
+    const savedProvider = state.trafficKeyState?.datalabProvider === undefined ? "developers"
+      : ["developers", "ncp_apihub"].includes(state.trafficKeyState.datalabProvider) ? state.trafficKeyState.datalabProvider : "";
+    const selectedProvider = els.datalabProviderInput ? els.datalabProviderInput.value : savedProvider;
+    if (!["developers", "ncp_apihub"].includes(selectedProvider)) {
+      els.trafficKeyStatus.textContent = "검색 트렌드 연결 방식을 다시 선택해 주세요.";
+      return;
+    }
+    const submittedInputs = [
       ["naverClientId", els.naverClientIdInput],
       ["naverClientSecret", els.naverClientSecretInput],
+      ["ncpApihubClientId", els.ncpApihubClientIdInput],
+      ["ncpApihubClientSecret", els.ncpApihubClientSecretInput],
       ["searchadApiKey", els.searchadApiKeyInput],
       ["searchadSecretKey", els.searchadSecretKeyInput],
       ["searchadCustomerId", els.searchadCustomerIdInput]
-    ].forEach(([key, input]) => {
-      const value = input?.value?.trim();
+    ].map(([key, input]) => ({ key, input, value: input?.value?.trim() || "" }));
+    submittedInputs.forEach(({ key, value }) => {
       if (value) payload[key] = value;
     });
-    if (!Object.keys(payload).length) {
-      els.trafficKeyStatus.textContent = "입력된 새 키가 없습니다. 기존 키는 유지됩니다.";
+    if (!Object.keys(payload).length && selectedProvider === savedProvider) {
+      els.trafficKeyStatus.textContent = "새 키나 연결 방식 변경이 없습니다. 기존 설정은 유지됩니다.";
       return;
     }
+    payload.datalabProvider = selectedProvider;
     const data = await fetchJson("/api/settings/traffic-keys", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
+    submittedInputs.forEach(({ input, value }) => {
+      if (value && input?.value?.trim() === value) input.value = "";
+    });
+    if (!els.datalabProviderInput || els.datalabProviderInput.value === selectedProvider) state.trafficProviderDraft = null;
     renderTrafficState(data);
-    els.trafficKeyForm.reset();
-    state.trafficTestNotice = "API 키를 저장했습니다. 위 연동 목록에서 필요한 API의 연결 테스트를 눌러 주세요.";
+    state.trafficTestNotice = "연결 설정을 저장했습니다. 위 연동 목록에서 필요한 API의 연결 테스트를 눌러 주세요.";
     els.trafficKeyStatus.textContent = state.trafficTestNotice;
   } catch (error) {
     els.trafficKeyStatus.textContent = "키를 저장하지 못했습니다. 기존 저장 상태를 다시 확인해 주세요.";
@@ -43157,6 +43175,26 @@ async function submitTrafficKeys(event) {
     state.trafficKeySaving = false;
     renderAdminIntegrationRegistry();
   }
+}
+
+function syncTrafficKeyForm(data) {
+  const savedProvider = data?.datalabProvider === undefined ? "developers"
+    : ["developers", "ncp_apihub"].includes(data.datalabProvider) ? data.datalabProvider : "";
+  const savedLabel = savedProvider === "ncp_apihub" ? "NAVER API HUB · 네이버 클라우드" : savedProvider === "developers" ? "기존 네이버 개발자센터" : "연결 방식 확인 필요";
+  if (els.datalabProviderInput && data && state.trafficProviderDraft == null) els.datalabProviderInput.value = savedProvider;
+  const selectedProvider = els.datalabProviderInput ? els.datalabProviderInput.value : savedProvider;
+  if (els.datalabProviderStatus) els.datalabProviderStatus.textContent = !data
+    ? "저장된 검색 트렌드 연결을 확인하지 못했습니다. 입력 중인 설정은 유지합니다."
+    : `현재 저장 연결: ${savedLabel} · ${data.datalabConfigured ? "인증정보 저장됨" : "선택한 서비스의 인증정보 필요"}${selectedProvider !== savedProvider ? " · 선택 변경은 아직 저장되지 않았습니다." : ""}${data.storage?.envFields?.datalabProvider ? " · 연결 방식은 서버 설정이 우선 적용됩니다." : ""}`;
+  [
+    ["naverClientId", els.naverClientIdInput], ["naverClientSecret", els.naverClientSecretInput],
+    ["ncpApihubClientId", els.ncpApihubClientIdInput], ["ncpApihubClientSecret", els.ncpApihubClientSecretInput],
+    ["searchadApiKey", els.searchadApiKeyInput], ["searchadSecretKey", els.searchadSecretKeyInput], ["searchadCustomerId", els.searchadCustomerIdInput]
+  ].forEach(([key, input]) => {
+    if (!input) return;
+    input.placeholder = data?.storage?.envFields?.[key] ? "서버 설정 사용 · 서버 값 우선"
+      : data?.fields?.[key]?.configured ? "저장됨 · 새 값 입력 시 교체" : "인증정보 입력";
+  });
 }
 
 function renderTrafficVerification(data) {
@@ -43213,6 +43251,7 @@ async function verifyTrafficKeys(provider = "all") {
 
 function renderTrafficState(data) {
   state.trafficKeyState = data || null;
+  syncTrafficKeyForm(data);
   const configured = data?.datalabConfigured || data?.searchadConfigured;
   const rows = window.TrafficIntegrationStatus ? ["datalab", "searchad"].map(provider => window.TrafficIntegrationStatus.row(data, provider)).filter(row => row.configured) : [];
   if (els.trafficApiState) els.trafficApiState.textContent = !data ? "상태 미확인" : !configured ? "미설정"
@@ -44925,6 +44964,10 @@ function bindEvents() {
   els.yeogiImportButton.addEventListener("click", submitYeogiImport);
   els.yeogiClearButton.addEventListener("click", clearYeogiImport);
   els.trafficKeyForm.addEventListener("submit", submitTrafficKeys);
+  els.datalabProviderInput?.addEventListener("change", () => {
+    state.trafficProviderDraft = els.datalabProviderInput.value;
+    syncTrafficKeyForm(state.trafficKeyState);
+  });
   els.trafficKeyVerifyButton?.addEventListener("click", () => verifyTrafficKeys("all"));
   els.adminIntegrationRegistry?.addEventListener("click", (event) => {
     const test = event.target.closest?.("[data-traffic-test]");

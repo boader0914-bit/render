@@ -3,8 +3,8 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { resolveDatalabConnection } = require("./naver_datalab_connection.cjs");
 
-const ENDPOINT = "https://openapi.naver.com/v1/datalab/search";
 const VERSION = "region_glamping_exact_v1";
 const TTL = 24 * 3600000;
 const MAX_BODY = 512 * 1024;
@@ -42,9 +42,7 @@ function createRegionalSearchTrendService({ dataDir, readTrafficKeys, resolveReg
   async function keys() {
     try {
       const source = await readTrafficKeys();
-      const naverClientId = typeof source?.naverClientId === "string" ? source.naverClientId.trim() : "";
-      const naverClientSecret = typeof source?.naverClientSecret === "string" ? source.naverClientSecret.trim() : "";
-      return { configured: Boolean(naverClientId && naverClientSecret), naverClientId, naverClientSecret };
+      return resolveDatalabConnection(source);
     } catch { throw problem("CONFIG_READ_ERROR"); }
   }
   async function identity(input) {
@@ -172,9 +170,8 @@ function createRegionalSearchTrendService({ dataDir, readTrafficKeys, resolveReg
     let timer, responseHttpStatus;
     const timeout = new Promise((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(problem("TIMEOUT")); }, timeoutMs); });
     const operation = (async () => {
-      const response = await fetchImpl(ENDPOINT, { method: "POST", redirect: "error", signal: controller.signal, headers: {
-        "Content-Type": "application/json", "X-Naver-Client-Id": credentials.naverClientId, "X-Naver-Client-Secret": credentials.naverClientSecret
-      }, body: JSON.stringify({ startDate: info.value.startDate, endDate: info.value.endDate, timeUnit: "month",
+      const response = await fetchImpl(credentials.endpoint, { method: "POST", redirect: "error", signal: controller.signal, headers: credentials.headers,
+      body: JSON.stringify({ startDate: info.value.startDate, endDate: info.value.endDate, timeUnit: "month",
         keywordGroups: [{ groupName: info.value.keyword, keywords: [info.value.keyword] }] }) });
       responseHttpStatus = response?.status;
       if (!response?.ok) throw Object.assign(problem(response?.status === 429 ? "QUOTA_EXCEEDED" : [401, 403].includes(response?.status) ? "AUTH_ERROR" : "PROVIDER_FAILED"), diagnostics({ httpStatus: response?.status }));

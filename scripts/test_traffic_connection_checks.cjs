@@ -26,6 +26,46 @@ async function fixture(t, options = {}) {
 
 const LEGACY_RESPONSE_LIMIT = 256 * 1024;
 const SEARCHAD_RESPONSE_LIMIT = 2 * 1024 * 1024;
+
+test("API HUB test uses only its explicit credentials and preserves a distinct saved credential scope", async t => {
+  const f = await fixture(t, { fetchImpl: (_url, options) => reply(200, { results: [{ title: "글램핑", data: [{ period: JSON.parse(options.body).endDate, ratio: 25 }] }] }) });
+  const legacy = await f.service.verify("datalab");
+  f.state.keys.datalabProvider = "developers";
+  assert.equal((await f.service.status()).datalab.checkedAt, legacy.datalab.checkedAt);
+  assert.equal((await f.service.status()).datalab.checkStatus, "verified", "explicit legacy selection preserves the old fingerprint");
+  Object.assign(f.state.keys, { datalabProvider: "ncp_apihub", ncpApihubClientId: "NCP-TEST-ID", ncpApihubClientSecret: "NCP-TEST-SECRET" });
+  const changed = await f.service.status();
+  assert.equal(changed.datalab.checkStatus, "key_changed"); assert.equal(changed.datalab.errorCode, "KEY_CHANGED");
+  assert.equal(changed.datalab.datalabProvider, "ncp_apihub"); assert.equal(changed.datalab.ok, false);
+  f.state.now += 60001;
+  const ncp = await f.service.verify("datalab");
+  assert.equal(ncp.datalab.checkStatus, "verified"); assert.equal(f.state.calls.length, 2);
+  const [url, options] = f.state.calls[1];
+  assert.equal(url, "https://naverapihub.apigw.ntruss.com/search-trend/v1/search");
+  assert.deepEqual(options.headers, { "Content-Type": "application/json", "X-NCP-APIGW-API-KEY-ID": "NCP-TEST-ID", "X-NCP-APIGW-API-KEY": "NCP-TEST-SECRET" });
+  const publicText = JSON.stringify(ncp), stored = await fs.readFile(f.filePath, "utf8");
+  for (const secret of ["NCP-TEST-ID", "NCP-TEST-SECRET", ...Object.values(DUMMY_KEYS)]) {
+    assert.equal(publicText.includes(secret), false); assert.equal(stored.includes(secret), false);
+  }
+  assert.equal((await f.create().status()).datalab.checkStatus, "verified");
+  f.state.keys.naverClientId = "UNSELECTED-CHANGE";
+  assert.equal((await f.service.status()).datalab.checkStatus, "verified", "unselected credentials do not invalidate the selected NCP record");
+  f.state.keys.ncpApihubClientSecret = "NCP-CHANGED";
+  assert.equal((await f.service.status()).datalab.checkStatus, "key_changed");
+});
+
+test("missing API HUB credentials and invalid provider never fall back or call a provider", async t => {
+  const f = await fixture(t);
+  f.state.keys.datalabProvider = "ncp_apihub";
+  assert.equal((await f.service.status()).datalab.configured, false);
+  const missing = await f.service.verify("datalab");
+  assert.equal(missing.datalab.errorCode, "MISSING_KEY"); assert.equal(missing.test.testSkipped, true);
+  f.state.keys.datalabProvider = "unexpected";
+  assert.equal((await f.service.verify("datalab")).datalab.configured, false);
+  assert.equal(f.state.calls.length, 0);
+  await assert.rejects(fs.stat(f.filePath), { code: "ENOENT" });
+});
+
 const textReply = text => ({ status: 200, text: async () => text });
 function largeSearchAdData() {
   return { keywordList: Array.from({ length: 2000 }, (_, index) => ({ relKeyword: `글램핑응답한도검증연관검색어${index}`, monthlyPcQcCnt: index % 2 ? "< 10" : 0,
