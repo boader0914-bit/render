@@ -104,10 +104,11 @@ test("reports compare prior response membership without inventing missing baseli
 });
 
 test("reports retain whole daily related output and protect spreadsheet formula-like words", async t => {
-  const f = await fixture(t); const rows = [row(keyword, 1790, 7870), row("=테스트", "<10", 0), ...Array.from({ length: 250 }, (_, i) => row("관련검증" + i, i, 2))];
+  const f = await fixture(t); const rows = [row(keyword, 1790, 7870), row("=테스트", "<10", 100), ...Array.from({ length: 250 }, (_, i) => row("관련검증" + i, i, 2))];
   await f.store.saveSnapshot(ad("2026-11-01", rows));
   const r = await f.service.report({ keyword, day: "2026-11-01", month: "2026-11", cadence: "daily", format: "csv" });
   assert.equal(r.rows.length, 252); assert.ok(r.csv.includes("'=테스트")); assert.ok(r.csv.includes("<10"));
+  assert.ok(r.csv.includes("100 이상 110 미만"));
   assert.equal(csvCell("@unsafe"), '"\'@unsafe"');
 });
 

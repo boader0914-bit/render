@@ -47,10 +47,10 @@ function validJob(record) {
 
 function createSearchDemandScheduler({ rootDir, store, providers, readRegisteredKeywords, clock = Date.now, enabled = false,
   dailyAt = "09:30", monthlyDay = 2, monthlyAt = "08:30", dailyLimits = { searchad: 50, datalab: 50 }, maxTrendAttempts = 3,
-  intervalMs = 60000, maxKeywords = 100, onSnapshotCommitted = async () => ({ status: "held", reasonCode: "SEARCH_DEMAND_POSTPROCESS_NOT_CONFIGURED" }) } = {}) {
+  intervalMs = 60000, maxKeywords = 100, getEnabled = null, onSnapshotCommitted = async () => ({ status: "held", reasonCode: "SEARCH_DEMAND_POSTPROCESS_NOT_CONFIGURED" }) } = {}) {
   if (typeof rootDir !== "string" || !path.isAbsolute(rootDir) || !store || typeof store.saveSnapshot !== "function" || !providers || typeof providers.searchad !== "function"
     || typeof providers.datalab !== "function" || typeof providers.credentialScope !== "function" || typeof readRegisteredKeywords !== "function"
-    || typeof clock !== "function" || typeof onSnapshotCommitted !== "function" || typeof enabled !== "boolean" || dailyAt !== "09:30"
+    || typeof clock !== "function" || typeof onSnapshotCommitted !== "function" || typeof enabled !== "boolean" || getEnabled !== null && typeof getEnabled !== "function" || dailyAt !== "09:30"
     || monthlyDay !== 2 || monthlyAt !== "08:30" || !Number.isSafeInteger(maxTrendAttempts) || maxTrendAttempts < 1 || maxTrendAttempts > 3
     || !Number.isSafeInteger(intervalMs) || intervalMs < 1000 || !Number.isSafeInteger(maxKeywords) || maxKeywords < 1 || maxKeywords > 100) throw new TypeError("Invalid search demand scheduler dependencies");
   const limits = {};
@@ -61,10 +61,36 @@ function createSearchDemandScheduler({ rootDir, store, providers, readRegistered
   }
   const root = path.resolve(rootDir), directory = path.join(root, "scheduler"), lockPath = path.join(directory, "tick.lock");
   let tickPromise = null, timer = null, stopped = false;
-  const memory = { enabled, running: false, lastTickAt: null, lastReason: enabled ? "NOT_STARTED" : "DISABLED", jobs: [],
+  const memory = { enabled: getEnabled ? false : enabled, running: false, lastTickAt: null, lastReason: getEnabled ? "SEARCH_DEMAND_ACTIVATION_NOT_CHECKED" : enabled ? "NOT_STARTED" : "DISABLED", jobs: [],
+    activation: getEnabled ? { enabled: false, status: "not_checked", reasonCode: "SEARCH_DEMAND_ACTIVATION_NOT_CHECKED" } : null,
     cohorts: { searchad: null, datalab: null },
     providers: { searchad: { protected: false, errorCode: null }, datalab: { protected: false, errorCode: null } } };
   const now = () => new Date(clock()).toISOString();
+  async function runtimeEnabled() {
+    if (stopped) return false;
+    if (!getEnabled) { memory.enabled = enabled; return enabled; }
+    let approval;
+    try {
+      const value = await getEnabled();
+      approval = typeof value === "boolean" ? { enabled: value, status: value ? "ready" : "disabled" } : value;
+      if (!approval || typeof approval !== "object" || typeof approval.enabled !== "boolean") throw problem("SEARCH_DEMAND_ACTIVATION_UNVERIFIED");
+      const reasonCode = SAFE_CODE.test(approval.reasonCode || "") ? approval.reasonCode
+        : approval.enabled ? "SEARCH_DEMAND_ACTIVATION_APPROVED" : "SEARCH_DEMAND_ACTIVATION_DISABLED";
+      memory.activation = { enabled: approval.enabled,
+        status: ["ready", "disabled", "waiting", "missing", "unavailable"].includes(approval.status) ? approval.status : approval.enabled ? "ready" : "disabled", reasonCode,
+        approvedAt: validIso(approval.approvedAt) ? approval.approvedAt : null,
+        notBeforeDay: typeof approval.notBeforeDay === "string" && /^20\d{2}-\d{2}-\d{2}$/.test(approval.notBeforeDay) ? approval.notBeforeDay : null,
+        scheduleVersion: approval.scheduleVersion === "search-demand-schedule-v1" ? approval.scheduleVersion : null };
+      memory.enabled = approval.enabled && !stopped;
+      if (!memory.enabled) memory.lastReason = reasonCode;
+      return memory.enabled;
+    } catch {
+      memory.enabled = false;
+      memory.activation = { enabled: false, status: "unavailable", reasonCode: "SEARCH_DEMAND_ACTIVATION_UNAVAILABLE" };
+      memory.lastReason = memory.activation.reasonCode;
+      return false;
+    }
+  }
   async function ensureDirectory(location) {
     const relative = path.relative(root, location);
     if (relative.startsWith("..") || path.isAbsolute(relative)) throw problem("SEARCH_DEMAND_PATH_UNSAFE");
@@ -216,6 +242,7 @@ function createSearchDemandScheduler({ rootDir, store, providers, readRegistered
   }
   async function execute(provider, identity, scope, period, conditions, parts) {
     const jobId = "sdjob_" + sha(["search-demand-job-v1", provider, scope.scopeId, identity.keywordId, conditions, period]);
+    if (!await runtimeEnabled()) return { jobId, provider, keyword: identity.keyword, period, status: "held", attempts: 0, errorCode: "SEARCH_DEMAND_ACTIVATION_STOPPED" };
     if (kstParts(now()).day !== parts.day) return { jobId, provider, keyword: identity.keyword, period, status: "held", attempts: 0, errorCode: "SEARCH_DEMAND_DAY_CHANGED" };
     const file = path.join(directory, "jobs", `${jobId}.json`), protectionFile = path.join(directory, "protection", `${provider}_${scope.scopeId}.json`);
     const protection = await readJson(protectionFile);
@@ -255,6 +282,10 @@ function createSearchDemandScheduler({ rootDir, store, providers, readRegistered
         startedAt: null, finishedAt: null, requestCount: 0, lastRequestCount: null };
       await createJson(file, record);
     }
+    if (!await runtimeEnabled()) {
+      record = { ...record, status: "held", errorCode: "SEARCH_DEMAND_ACTIVATION_STOPPED", updatedAt: now(), finishedAt: now(), lastRequestCount: 0 };
+      await replaceJson(file, record); return publicJob(record);
+    }
     const claimFile = path.join(directory, "claims", `${jobId}_${parts.day}.json`);
     try { await createJson(claimFile, { schemaVersion: 1, jobId, provider, day: parts.day, claimedAt: now() }); }
     catch (error) {
@@ -268,6 +299,13 @@ function createSearchDemandScheduler({ rootDir, store, providers, readRegistered
     record = { ...record, status: "running", attempts: record.attempts + 1, lastAttemptDay: parts.day, updatedAt: now(), nextRetryDay: null,
       startedAt: now(), finishedAt: null, requestCount: null, lastRequestCount: null };
     await replaceJson(file, record);
+    // A policy changed after the durable claim must not dispatch a new request.
+    // Keep the conservative claim/budget and explicitly record a known zero call.
+    if (!await runtimeEnabled()) {
+      record = { ...record, status: "held", errorCode: "SEARCH_DEMAND_ACTIVATION_STOPPED", updatedAt: now(), finishedAt: now(),
+        requestCount: priorRequestCount, lastRequestCount: 0 };
+      await replaceJson(file, record); return publicJob(record);
+    }
     let result;
     try { result = await providers[provider]({ keyword: identity.keyword, scopeId: scope.scopeId, ...conditions }); }
     catch { result = { status: "failed", errorCode: "SEARCH_DEMAND_PROVIDER_UNAVAILABLE", networkAttempted: false }; }
@@ -310,16 +348,17 @@ function createSearchDemandScheduler({ rootDir, store, providers, readRegistered
     await replaceJson(file, record); return publicJob(record);
   }
   async function doTick() {
-    if (!enabled || stopped) return status();
+    if ((!enabled && !getEnabled) || stopped) return status();
     memory.running = true; memory.lastTickAt = now(); memory.jobs = [];
     try {
+      if (!await runtimeEnabled()) { memory.running = false; return status(); }
       const parts = kstParts(memory.lastTickAt), monthlyDue = parts.date >= monthlyDay && parts.time >= monthlyAt, dailyDue = parts.time >= dailyAt;
       if (!monthlyDue && !dailyDue) { memory.lastReason = "WAITING_FOR_SCHEDULE"; memory.running = false; return status(); }
       const result = await withLock(async () => {
         let registeredCount = 0;
         // Monthly and daily hosts have independent budgets and persistent guards.
         for (const provider of ["datalab", "searchad"]) {
-          if (stopped) break;
+          if (!await runtimeEnabled()) return { skipped: true, reason: memory.lastReason };
           if (provider === "datalab" && !monthlyDue || provider === "searchad" && !dailyDue) continue;
           const period = provider === "datalab" ? parts.month : parts.day;
           const identities = await registeredCohort(provider, period);
@@ -332,13 +371,13 @@ function createSearchDemandScheduler({ rootDir, store, providers, readRegistered
           memory.providers[provider] = { protected: false, errorCode: null };
           const conditions = provider === "datalab" ? trendRange(parts.month) : {};
           for (const identity of identities) {
-            if (stopped) break;
+            if (!await runtimeEnabled()) return { skipped: true, reason: memory.lastReason };
             const row = await execute(provider, identity, scope, period, conditions, parts);
             memory.jobs.push(row);
             if (row.status === "blocked") break;
           }
         }
-        return registeredCount ? { skipped: false } : { skipped: true, reason: "NO_REGISTERED_KEYWORDS" };
+        return !memory.enabled ? { skipped: true, reason: memory.lastReason } : registeredCount ? { skipped: false } : { skipped: true, reason: "NO_REGISTERED_KEYWORDS" };
       });
       memory.lastReason = result.reason || (memory.jobs.length ? "CHECKED" : "NO_READY_PROVIDER");
     } catch (error) { memory.lastReason = safeCode(error); }
@@ -346,10 +385,10 @@ function createSearchDemandScheduler({ rootDir, store, providers, readRegistered
     return status();
   }
   function tick() { if (tickPromise) return tickPromise; tickPromise = doTick().finally(() => { tickPromise = null; }); return tickPromise; }
-  function status() { return { ...clone(memory), enabled: enabled && !stopped, schedule: { dailyAt, monthlyDay, monthlyAt, timeZone: "Asia/Seoul" },
+  function status() { return { ...clone(memory), enabled: memory.enabled && !stopped, schedule: { dailyAt, monthlyDay, monthlyAt, timeZone: "Asia/Seoul" },
     dailyLimits: { ...limits }, automaticProtectionRelease: false, maxTrendAttempts }; }
   function start() {
-    if (!enabled || stopped || timer) return status();
+    if ((!enabled && !getEnabled) || stopped || timer) return status();
     timer = setInterval(() => { void tick(); }, intervalMs); timer.unref?.(); void tick(); return status();
   }
   function stop() { stopped = true; if (timer) clearInterval(timer); timer = null; return status(); }

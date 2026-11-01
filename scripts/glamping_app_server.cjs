@@ -52,6 +52,7 @@ const { createKeywordMonthlyHttpHandler } = require("./lib/keyword_monthly_http.
 const { createSearchDemandStore } = require("./lib/search_demand_store.cjs");
 const { createSearchDemandProviders } = require("./lib/search_demand_providers.cjs");
 const { createSearchDemandScheduler } = require("./lib/search_demand_scheduler.cjs");
+const { createSearchDemandActivation } = require("./lib/search_demand_activation.cjs");
 const { createSearchDemandService } = require("./lib/search_demand_service.cjs");
 const { createSearchDemandHttpHandler } = require("./lib/search_demand_http.cjs");
 const { createKeywordMonthlyRefreshIntegration } = require("./lib/keyword_monthly_refresh_integration.cjs");
@@ -903,6 +904,7 @@ const handleKeywordMonthly = createKeywordMonthlyHttpHandler({
 // Reads cannot start collectors, refresh provider data or activate a policy.
 const searchDemandRoot = path.join(DATA_DIR, "search_demand");
 const searchDemandStore = createSearchDemandStore({ rootDir: searchDemandRoot });
+const searchDemandActivation = createSearchDemandActivation({ rootDir: searchDemandRoot });
 const searchDemandProviders = createSearchDemandProviders({ readKeys: readTrafficKeys });
 const readSearchDemandKeywords = async () => collectionRotationScheduler.status().config.keywords.slice();
 let searchDemandService;
@@ -911,6 +913,8 @@ const searchDemandScheduler = createSearchDemandScheduler({
   readRegisteredKeywords: readSearchDemandKeywords,
   // A release does not activate a new provider schedule by itself.
   enabled: process.env.SEARCH_DEMAND_ENABLED === "true",
+  // An approved, bounded policy is authoritative, including a future start date.
+  getEnabled: () => searchDemandActivation.read(),
   onSnapshotCommitted: snapshot => searchDemandService.onSnapshotCommitted(snapshot)
 });
 searchDemandService = createSearchDemandService({

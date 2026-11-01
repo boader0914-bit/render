@@ -46,8 +46,10 @@ test("a late global render cannot overwrite the isolated search demand view",()=
   vm.runInContext(fn(app,"renderAll")+"\nrenderAll()",context);assert.deepEqual(calls,["header"]);assert.equal(state.adminViewsDeferred,true);
 });
 
-test("application startup only activates search providers with the explicit feature flag",()=>{
+test("application startup requires the approved search policy even when a legacy flag is set",()=>{
   assert.match(server,/enabled: process\.env\.SEARCH_DEMAND_ENABLED === "true"/);
+  assert.match(server,/getEnabled: \(\) => searchDemandActivation\.read\(\)/);
+  assert.match(server,/createSearchDemandActivation\(\{ rootDir: searchDemandRoot \}\)/);
   assert.match(server,/readKeys: readTrafficKeys/);assert.match(server,/searchDemandScheduler\.start\(\)/);
   assert.ok(server.indexOf('handleSearchDemand(req, res, reqUrl, session)')<server.indexOf('handleKeywordMonthly(req, res, reqUrl, session)'));
   assert.match(app,/window\.SearchDemandAnalysis\?\.clear\(\)/);

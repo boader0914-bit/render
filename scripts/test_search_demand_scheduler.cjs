@@ -8,6 +8,7 @@ const os = require("node:os");
 const crypto = require("node:crypto");
 const { normalizeKeyword } = require("./lib/search_demand_model.cjs");
 const { createSearchDemandScheduler } = require("./lib/search_demand_scheduler.cjs");
+const { createSearchDemandActivation, SCHEDULE_VERSION } = require("./lib/search_demand_activation.cjs");
 const scopeId = "sdscope_" + "a".repeat(64);
 async function fixture(t, overrides = {}) {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "search-demand-scheduler-test-")), rootDir = path.join(parent, "demand");
@@ -35,6 +36,59 @@ test("disabled is inert: tick and start create no files, read no keys, and call 
   const f = await fixture(t, { enabled: false, readRegisteredKeywords: async () => { reads++; return []; } });
   assert.equal((await f.scheduler.tick()).lastReason, "DISABLED"); assert.equal(f.scheduler.start().enabled, false);
   assert.equal(reads, 0); assert.equal(f.state.calls.length, 0); await assert.rejects(fs.stat(f.rootDir), { code: "ENOENT" });
+});
+
+test("injected missing policy overrides a true fallback flag without reads or namespace creation", async t => {
+  let reads = 0;
+  const f = await fixture(t, { enabled: true, getEnabled: async () => ({ enabled: false, status: "missing", reasonCode: "SEARCH_DEMAND_ACTIVATION_MISSING", secret: "must-not-leak" }),
+    readRegisteredKeywords: async () => { reads++; return []; } });
+  const result = await f.scheduler.tick(); assert.equal(result.enabled, false); assert.equal(result.lastReason, "SEARCH_DEMAND_ACTIVATION_MISSING");
+  assert.equal(result.running, false);
+  assert.equal(reads, 0); assert.equal(f.state.calls.length, 0); assert.equal(JSON.stringify(result).includes("must-not-leak"), false);
+  await assert.rejects(fs.stat(f.rootDir), { code: "ENOENT" });
+});
+
+test("an authoritative approval can activate a false fallback only on its KST not-before day", async t => {
+  const f = await fixture(t, { enabled: false }); f.state.now = Date.parse("2026-11-01T11:00:00.000Z");
+  await fs.mkdir(f.rootDir); await fs.writeFile(path.join(f.rootDir, "activation.json"), JSON.stringify({ enabled: true, approvedAt: "2026-11-01T10:00:00.000Z", notBeforeDay: "2026-11-02", scheduleVersion: SCHEDULE_VERSION }));
+  const reader = createSearchDemandActivation({ rootDir: f.rootDir, clock: () => f.state.now }), scheduler = f.create({ getEnabled: () => reader.read() });
+  t.after(() => scheduler.stop());
+  scheduler.start(); await scheduler.tick(); assert.equal(f.state.calls.length, 0); assert.equal(scheduler.status().activation.status, "waiting");
+  assert.deepEqual(await fs.readdir(f.rootDir), ["activation.json"]);
+  f.state.now = Date.parse("2026-11-02T00:31:00.000Z"); const result = await scheduler.tick();
+  assert.equal(result.enabled, true); assert.equal(f.state.calls.length, 4);
+});
+
+test("invalid or throwing runtime approval fails closed even with fallback enabled", async t => {
+  for (const getEnabled of [async () => null, async () => ({ enabled: "true" }), async () => { throw new Error("PRIVATE-ACTIVATION"); }]) {
+    const f = await fixture(t, { enabled: true, getEnabled }), result = await f.scheduler.tick();
+    assert.equal(result.enabled, false); assert.equal(result.lastReason, "SEARCH_DEMAND_ACTIVATION_UNAVAILABLE"); assert.equal(f.state.calls.length, 0);
+    assert.equal(JSON.stringify(result).includes("PRIVATE"), false); await assert.rejects(fs.stat(f.rootDir), { code: "ENOENT" });
+  }
+});
+
+test("revocation during an active request preserves its result and stops all additional dispatches", async t => {
+  let allowed = true; const f = await fixture(t, { getEnabled: async () => ({ enabled: allowed, reasonCode: allowed ? "SEARCH_DEMAND_ACTIVATION_APPROVED" : "SEARCH_DEMAND_ACTIVATION_DISABLED" }) });
+  const original = f.options.providers.datalab;
+  f.options.providers.datalab = async input => { const result = await original(input); allowed = false; return result; };
+  const result = await f.scheduler.tick(); assert.equal(f.state.calls.length, 1); assert.equal(f.state.snapshots.length, 1); assert.equal(f.state.hooks.length, 1);
+  assert.equal(result.jobs[0].status, "complete"); assert.equal(result.enabled, false); assert.equal(result.lastReason, "SEARCH_DEMAND_ACTIVATION_DISABLED");
+  await f.scheduler.tick(); assert.equal(f.state.calls.length, 1);
+});
+
+test("revocation after a durable claim records zero dispatch without losing the conservative budget", async t => {
+  let checks = 0; const f = await fixture(t, { getEnabled: async () => ++checks < 6 }); f.state.keywords = ["경남글램핑"];
+  const result = await f.scheduler.tick(); assert.equal(f.state.calls.length, 0);
+  const job = result.jobs[0]; assert.equal(job.status, "held"); assert.equal(job.errorCode, "SEARCH_DEMAND_ACTIVATION_STOPPED"); assert.equal(job.requestCount, 0); assert.equal(job.lastRequestCount, 0);
+  const budget = JSON.parse(await fs.readFile(path.join(f.rootDir, "scheduler", "budgets", "datalab_2026-11-02.json"), "utf8")); assert.equal(budget.count, 1);
+});
+
+test("revocation before the claim leaves an explicit held receipt without a spent budget", async t => {
+  let checks = 0; const f = await fixture(t, { getEnabled: async () => ++checks < 5 }); f.state.keywords = ["경남글램핑"];
+  const result = await f.scheduler.tick(); assert.equal(f.state.calls.length, 0);
+  const job = result.jobs[0]; assert.equal(job.status, "held"); assert.equal(job.errorCode, "SEARCH_DEMAND_ACTIVATION_STOPPED"); assert.equal(job.requestCount, 0); assert.equal(job.attempts, 0);
+  await assert.rejects(fs.stat(path.join(f.rootDir, "scheduler", "budgets")), { code: "ENOENT" });
+  await assert.rejects(fs.stat(path.join(f.rootDir, "scheduler", "claims")), { code: "ENOENT" });
 });
 
 test("before schedules is quiet without filesystem or provider work", async t => {

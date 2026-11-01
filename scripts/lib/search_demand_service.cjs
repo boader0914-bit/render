@@ -14,7 +14,8 @@ const csvCell = value => {
   if (/^[\s]*[=+\-@\t\r]/.test(text)) text = "'" + text;
   return '"' + text.replace(/"/g, '""') + '"';
 };
-const countLabel = count => count?.state === "number" ? count.value : count?.state === "range" ? count.raw || `<${count.upperBoundExclusive}` : null;
+const countLabel = count => count?.state === "number" ? count.value : count?.state === "range"
+  ? count.raw || (count.lowerBound > 0 ? `${count.lowerBound} 이상 ${count.upperBoundExclusive} 미만` : `<${count.upperBoundExclusive}`) : null;
 function completedWeek(day) {
   const weekday = new Date(day + "T00:00:00Z").getUTCDay();
   const currentMonday = shiftDay(day, -((weekday + 6) % 7));
