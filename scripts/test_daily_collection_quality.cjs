@@ -244,16 +244,19 @@ test("scheduled response counters reject unknown, missing, partial and blocked s
 
 async function scheduleHarness(post, scheduled = true) {
   const source = await fs.readFile(path.join(__dirname, "gyeongnam_glamping_crawl.cjs"), "utf8");
-  const start = source.indexOf("async function getNaverDailySchedule(");
+  const start = source.indexOf("function naverScheduleRetryCode(");
   const end = source.indexOf("\nfunction asStockNumber", start);
+  const globalsStart = source.indexOf("const NAVER_SCHEDULE_GRAPHQL_RETRY_CODES =");
+  const globalsEnd = source.indexOf("let naverScheduleBlockedStatus", globalsStart);
   assert.ok(start >= 0 && end > start);
   const context = {
     GUARDED_COLLECTION: scheduled, CHECK_IN: "2026-09-20", naverDailyScheduleQuery: "fixture-query",
-    naverScheduleBlockedStatus: 0,
+    naverScheduleBlockedStatus: 0, naverRequestBlockedStatus: 0, naverRequestBlockedCode: null,
+    naverScheduleRetryStarts: new Set(), delay: async () => {},
     scheduledCollectionDiagnostics: { naverScheduleRequested: 0, naverScheduleSucceeded: 0, naverScheduleFailed: 0, naverScheduleBlocked: 0 },
     postNaverBookingGraphql: post
   };
-  const call = vm.runInNewContext(`(${source.slice(start, end).trim()})`, context);
+  const call = vm.runInNewContext(`${source.slice(globalsStart, globalsEnd)}\n${source.slice(start, end)}\ngetNaverDailySchedule`, context);
   return { call, context, counts: context.scheduledCollectionDiagnostics };
 }
 

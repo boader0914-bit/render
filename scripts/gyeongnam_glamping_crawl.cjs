@@ -26,6 +26,7 @@ const NAVER_REQUEST_PACING_ENABLED = GUARDED_COLLECTION && process.env.NAVER_REQ
 // bounded by the historical per-stage pools below.
 const NAVER_REQUEST_GUARD_ENABLED = GUARDED_COLLECTION;
 const naverScheduleRequestsStarted = new Set();
+const naverScheduleRetryStarts = new Set();
 let naverRequestBlockedStatus = 0;
 let naverRequestBlockedCode = null;
 const naverRequestGate = createNaverRequestGate({
@@ -39,7 +40,9 @@ const naverRequestGate = createNaverRequestGate({
       const request = JSON.parse(init?.body || "null");
       const params = request?.variables?.scheduleParams;
       if (request?.operationName === "dailySchedule" && params) {
-        naverScheduleRequestsStarted.add(`${params.businessId}:${params.bizItemId}:${String(params.startDateTime).slice(0, 10)}`);
+        const key = `${params.businessId}:${params.bizItemId}:${String(params.startDateTime).slice(0, 10)}`;
+        naverScheduleRequestsStarted.add(key);
+        if (naverScheduleRetryStarts.delete(key)) naverScheduleRetryDiagnostics.naverScheduleRetryAttempted += 1;
       }
     } catch { /* Non-GraphQL requests have no product coverage key. */ }
   },
@@ -70,6 +73,20 @@ const scheduledCollectionDiagnostics = {
   naverScheduleSucceeded: 0,
   naverScheduleFailed: 0,
   naverScheduleBlocked: 0,
+};
+// A semantic GraphQL error may be transient even though HTTP completed. Keep
+// this recovery separate from logical schedule counts and the gate's real HTTP
+// attempts. The fixed run budget also bounds a provider-wide outage.
+const NAVER_SCHEDULE_GRAPHQL_RETRY_CODES = new Set(["INTERNAL_SERVER_ERROR", "SERVICE_UNAVAILABLE", "INTERNAL_ERROR"]);
+const NAVER_SCHEDULE_GRAPHQL_RETRY_LIMIT = 8;
+const NAVER_SCHEDULE_GRAPHQL_RETRY_DELAY_MS = 500;
+const naverScheduleRetryDiagnostics = {
+  naverScheduleRetryReserved: 0,
+  naverScheduleRetryAttempted: 0,
+  naverScheduleRetryRecovered: 0,
+  naverScheduleRetryExhausted: 0,
+  naverScheduleRetryBudgetSkipped: 0,
+  codes: {},
 };
 let naverScheduleBlockedStatus = 0;
 const {
@@ -1772,6 +1789,17 @@ async function getNaverBookingItems(bookingBusinessId) {
   };
 }
 
+function naverScheduleRetryCode(result) {
+  if (!GUARDED_COLLECTION || naverScheduleBlockedStatus || naverRequestBlockedStatus || naverRequestBlockedCode
+    || result?.blockedCode || !Number.isInteger(result?.status) || result.status < 200 || result.status >= 300) return "";
+  const errors = result?.data?.errors;
+  // Unknown/mixed errors remain failures. These enum names are a narrow local
+  // retry policy, not evidence that every such provider error is transient.
+  if (!Array.isArray(errors) || !errors.length || errors.length > 32
+    || !errors.every(error => NAVER_SCHEDULE_GRAPHQL_RETRY_CODES.has(error?.extensions?.code))) return "";
+  return errors[0].extensions.code;
+}
+
 async function getNaverDailySchedule(bookingBusinessId, bizItemId, date = CHECK_IN) {
   if (GUARDED_COLLECTION && naverScheduleBlockedStatus) {
     const error = new Error(`NAVER_SCHEDULE_BLOCKED HTTP ${naverScheduleBlockedStatus}`);
@@ -1787,15 +1815,35 @@ async function getNaverDailySchedule(bookingBusinessId, bizItemId, date = CHECK_
     bizItemId: String(bizItemId),
   };
   let responseCounted = false;
+  let retryAttempted = false;
+  let retryCounted = false;
+  let retryCode = "";
+  const retryKey = `${bookingBusinessId}:${bizItemId}:${date}`;
   if (GUARDED_COLLECTION) scheduledCollectionDiagnostics.naverScheduleRequested += 1;
   try {
-    const result = await postNaverBookingGraphql(
+    let result = await postNaverBookingGraphql(
       "dailySchedule",
       naverDailyScheduleQuery,
       { scheduleParams },
       bookingBusinessId,
       date,
     );
+    retryCode = naverScheduleRetryCode(result);
+    if (retryCode) {
+      // Reserve synchronously before yielding so concurrent schedule workers
+      // share one run-wide budget. Never widen stage pools or bypass the gate.
+      if (naverScheduleRetryDiagnostics.naverScheduleRetryReserved < NAVER_SCHEDULE_GRAPHQL_RETRY_LIMIT) {
+        naverScheduleRetryDiagnostics.naverScheduleRetryReserved += 1;
+        naverScheduleRetryDiagnostics.codes[retryCode] = (naverScheduleRetryDiagnostics.codes[retryCode] || 0) + 1;
+        retryAttempted = true;
+        await delay(NAVER_SCHEDULE_GRAPHQL_RETRY_DELAY_MS);
+        naverScheduleRetryStarts.add(retryKey);
+        result = await postNaverBookingGraphql(
+          "dailySchedule", naverDailyScheduleQuery, { scheduleParams }, bookingBusinessId, date,
+        );
+        naverScheduleRetryStarts.delete(retryKey);
+      } else naverScheduleRetryDiagnostics.naverScheduleRetryBudgetSkipped += 1;
+    }
     const day = result.data?.data?.schedule?.bizItemSchedule?.daily?.date?.[date] || null;
     const errors = result.data?.errors || null;
     if (GUARDED_COLLECTION) {
@@ -1807,6 +1855,10 @@ async function getNaverDailySchedule(bookingBusinessId, bizItemId, date = CHECK_
       const blocked = result.status === 403 || result.status === 429 || result.blockedCode === "BookingAPITooManyRequests";
       scheduledCollectionDiagnostics[succeeded ? "naverScheduleSucceeded" : "naverScheduleFailed"] += 1;
       responseCounted = true;
+      if (retryAttempted) {
+        naverScheduleRetryDiagnostics[succeeded ? "naverScheduleRetryRecovered" : "naverScheduleRetryExhausted"] += 1;
+        retryCounted = true;
+      }
       if (blocked) {
         scheduledCollectionDiagnostics.naverScheduleBlocked += 1;
         naverScheduleBlockedStatus = result.status;
@@ -1818,6 +1870,8 @@ async function getNaverDailySchedule(bookingBusinessId, bizItemId, date = CHECK_
     }
     return { status: result.status, day, errors };
   } catch (error) {
+    naverScheduleRetryStarts.delete(retryKey);
+    if (retryAttempted && !retryCounted) naverScheduleRetryDiagnostics.naverScheduleRetryExhausted += 1;
     if (GUARDED_COLLECTION && !responseCounted) scheduledCollectionDiagnostics.naverScheduleFailed += 1;
     throw error;
   }
@@ -4798,6 +4852,13 @@ function addCollectionDiagnostics(manifest) {
       otaConcurrency: NAVER_OTA_OBSERVATION_CONCURRENCY,
       blockedStatus: naverRequestBlockedStatus || null,
       blockedCode: naverRequestBlockedCode,
+      scheduleRetry: {
+        maxAdditionalAttemptsPerSchedule: 1,
+        maxAdditionalRequestsPerRun: NAVER_SCHEDULE_GRAPHQL_RETRY_LIMIT,
+        retryDelayMs: NAVER_SCHEDULE_GRAPHQL_RETRY_DELAY_MS,
+        ...naverScheduleRetryDiagnostics,
+        codes: { ...naverScheduleRetryDiagnostics.codes },
+      },
     };
     Object.assign(manifest.counts, scheduledCollectionDiagnostics);
     manifest.collectionQuality = inspectManifest(manifest);

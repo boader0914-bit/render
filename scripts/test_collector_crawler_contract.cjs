@@ -495,7 +495,7 @@ test("schedule failure details retain safe evidence without guessing causes or l
     { name: "timeout cause", error: new TypeError("fetch failed", { cause: { code: "UND_ERR_HEADERS_TIMEOUT", message: secret } }), status: 0, code: "TIMEOUT" },
     { name: "network cause", error: new TypeError("fetch failed", { cause: { code: "ECONNRESET", message: secret } }), status: 0, code: "NETWORK_ERROR" },
     { name: "http response", body: { message: secret }, status: 503, code: "HTTP_ERROR" },
-    { name: "graphql response", body: dayBody({ stock: 2 }, [{ message: secret, extensions: { code: "INTERNAL_SERVER_ERROR" } }]), status: 200, code: "GRAPHQL_ERROR" },
+    { name: "graphql response", body: dayBody({ stock: 2 }, [{ message: secret, extensions: { code: "INTERNAL_SERVER_ERROR" } }]), status: 200, code: "GRAPHQL_ERROR", requests: 2 },
     { name: "missing schedule", body: dayBody(null), status: 200, code: "MISSING_SCHEDULE" },
     { name: "invalid stock", body: dayBody({ stock: "unavailable" }), status: 200, code: "INVALID_STOCK" },
     { name: "unknown error", error: new Error(secret), status: 0, code: "UNKNOWN_ERROR" },
@@ -512,7 +512,7 @@ test("schedule failure details retain safe evidence without guessing causes or l
     } });
     const [row] = await crawler.collectNaverSchedulesForItems("fixture-business", [{ bizItemId: "fixture-product", name: "객실", bizItemSubType: "ACCOMMODATION_NIGHT" }], 40);
     const detail = crawler.compactNaverScheduleDetail(row, "객실 종류별 리스트", "2026-09-22");
-    assert.equal(requests, 1, fixture.name);
+    assert.equal(requests, fixture.requests || 1, fixture.name);
     assert.equal(detail.collectionErrorCode, fixture.code, fixture.name);
     assert.equal(detail.responseStatus, fixture.status, fixture.name);
     assert.equal(detail.collectionPhase, "booking_schedule", fixture.name);
@@ -520,6 +520,138 @@ test("schedule failure details retain safe evidence without guessing causes or l
     assert.equal(row.queryAttempted, true, fixture.name);
     assert.doesNotMatch(JSON.stringify(detail), /private-token|access_token|do-not-persist|fixture\.invalid|INTERNAL_SERVER_ERROR/, fixture.name);
   }
+});
+
+test("one guarded GraphQL recovery retains logical counts, actual gate attempts and safe retry evidence", async () => {
+  const secret = "private-response-token-do-not-save";
+  for (const code of ["INTERNAL_SERVER_ERROR", "SERVICE_UNAVAILABLE", "INTERNAL_ERROR"]) {
+    let requests = 0;
+    const crawler = harness({ env: { COLLECTOR_WORKER_RUNTIME: "1", NAVER_SCHEDULE_DELAY_MS: "0" }, fetchImpl: async () => {
+      requests++;
+      return new Response(JSON.stringify(requests === 1
+        ? { errors: [{ message: secret, extensions: { code } }] }
+        : { data: { schedule: { bizItemSchedule: { daily: { date: { "2026-09-22": { stock: 0, bookingCount: 0 } } } } } } }));
+    } });
+    const [row] = await crawler.collectNaverSchedulesForItems("biz", [{ bizItemId: "p", name: "객실" }]);
+    assert.equal(row.collectionFailed, false, code);
+    assert.equal(row.stock, 0, code);
+    const manifest = manifestFixture(); crawler.addCollectionDiagnostics(manifest);
+    assert.equal(requests, 2, code);
+    assert.equal(manifest.counts.naverScheduleRequested, 1, code);
+    assert.equal(manifest.counts.naverScheduleSucceeded, 1, code);
+    assert.equal(manifest.counts.naverScheduleFailed, 0, code);
+    assert.equal(manifest.requestPacing.requestCount, 2, code);
+    const retry = manifest.requestPacing.scheduleRetry;
+    assert.equal(retry.naverScheduleRetryReserved, 1);
+    assert.equal(retry.naverScheduleRetryAttempted, 1);
+    assert.equal(retry.naverScheduleRetryRecovered, 1);
+    assert.equal(retry.naverScheduleRetryExhausted, 0);
+    assert.equal(retry.codes[code], 1);
+    assert.equal(retry.maxAdditionalAttemptsPerSchedule, 1);
+    assert.deepEqual(Array.from(crawler.concurrency), [2, 4, 2]);
+    assert.doesNotMatch(JSON.stringify(manifest.requestPacing), /private-response-token-do-not-save/);
+  }
+});
+
+test("repeat GraphQL error stays failed and unknown or mixed errors are never retried", async () => {
+  for (const codes of [["INTERNAL_SERVER_ERROR"], ["UNRECOGNIZED"], [null], ["INTERNAL_SERVER_ERROR", "BAD_USER_INPUT"]]) {
+    let requests = 0;
+    const crawler = harness({ env: { COLLECTOR_WORKER_RUNTIME: "1", NAVER_SCHEDULE_DELAY_MS: "0" }, fetchImpl: async () => {
+      requests++;
+      return new Response(JSON.stringify({ errors: codes.map(code => ({ extensions: { code } })) }));
+    } });
+    const [row] = await crawler.collectNaverSchedulesForItems("biz", [{ bizItemId: "p", name: "객실" }]);
+    assert.equal(row.collectionFailed, true);
+    assert.equal(row.collectionErrorCode, "GRAPHQL_ERROR");
+    const manifest = manifestFixture(); crawler.addCollectionDiagnostics(manifest);
+    const retried = codes.length === 1 && codes[0] === "INTERNAL_SERVER_ERROR";
+    assert.equal(requests, retried ? 2 : 1);
+    assert.equal(manifest.counts.naverScheduleRequested, 1);
+    assert.equal(manifest.counts.naverScheduleFailed, 1);
+    assert.equal(manifest.counts.naverScheduleSucceeded, 0);
+    assert.equal(manifest.requestPacing.scheduleRetry.naverScheduleRetryExhausted, retried ? 1 : 0);
+  }
+});
+
+test("GraphQL recovery uses the existing paced gate and never expands its concurrency profile", async () => {
+  const attempts = new Map();
+  const crawler = harness({ env: { COLLECTOR_WORKER_RUNTIME: "1", NAVER_REQUEST_PACING_ENABLED: "1",
+    NAVER_REQUEST_MIN_INTERVAL_MS: "25", NAVER_REQUEST_MAX_CONCURRENCY: "2", NAVER_SCHEDULE_DELAY_MS: "0" }, fetchImpl: async (_url, init) => {
+    const params = JSON.parse(init.body).variables.scheduleParams;
+    const attempt = (attempts.get(params.bizItemId) || 0) + 1;
+    attempts.set(params.bizItemId, attempt);
+    return new Response(JSON.stringify(attempt === 1
+      ? { errors: [{ extensions: { code: "SERVICE_UNAVAILABLE" } }] }
+      : { data: { schedule: { bizItemSchedule: { daily: { date: { "2026-09-22": { stock: 2 } } } } } } }));
+  } });
+  const rows = await crawler.collectNaverSchedulesForItems("biz", [{ bizItemId: "p1", name: "객실" }, { bizItemId: "p2", name: "객실" }]);
+  const manifest = manifestFixture(); crawler.addCollectionDiagnostics(manifest);
+  assert.equal(rows.every(row => !row.collectionFailed), true);
+  assert.equal(manifest.requestPacing.requestCount, 4);
+  assert.equal(manifest.requestPacing.pacingEnabled, true);
+  assert.equal(manifest.requestPacing.minIntervalMs, 25);
+  assert.equal(manifest.requestPacing.maxConcurrentRequests, 2);
+  assert.ok(manifest.requestPacing.maxInFlight <= 2);
+  assert.ok(manifest.requestPacing.minObservedStartIntervalMs >= 24);
+  assert.deepEqual(Array.from(crawler.concurrency), [1, 2, 1]);
+});
+
+test("GraphQL retry budget is shared synchronously across concurrent schedule workers", async () => {
+  let requests = 0, active = 0, maxActive = 0;
+  const crawler = harness({ env: { COLLECTOR_WORKER_RUNTIME: "1", NAVER_SCHEDULE_DELAY_MS: "0" }, fetchImpl: async () => {
+    requests++; active++; maxActive = Math.max(maxActive, active);
+    await new Promise(resolve => setTimeout(resolve, 2));
+    active--;
+    return new Response(JSON.stringify({ errors: [{ extensions: { code: "INTERNAL_ERROR" } }] }));
+  } });
+  const rows = await crawler.collectNaverSchedulesForItems("biz", Array.from({ length: 13 }, (_, i) => ({ bizItemId: String(i), name: "객실" })));
+  const manifest = manifestFixture(); crawler.addCollectionDiagnostics(manifest);
+  assert.equal(rows.filter(row => row.collectionFailed).length, 13);
+  assert.equal(requests, 13 + 8);
+  assert.equal(manifest.counts.naverScheduleRequested, 13);
+  assert.equal(manifest.counts.naverScheduleFailed, 13);
+  assert.equal(manifest.requestPacing.requestCount, 21);
+  assert.ok(maxActive <= 4, `schedule stage concurrency changed: ${maxActive}`);
+  const retry = manifest.requestPacing.scheduleRetry;
+  assert.equal(retry.naverScheduleRetryReserved, 8);
+  assert.equal(retry.naverScheduleRetryAttempted, 8);
+  assert.equal(retry.naverScheduleRetryExhausted, 8);
+  assert.equal(retry.naverScheduleRetryBudgetSkipped, 5);
+});
+
+test("HTTP blocks, body limits and CAPTCHA never retry and a block during retry delay cancels recovery", async () => {
+  for (const fixture of [
+    { status: 403, body: JSON.stringify({ errors: [{ extensions: { code: "INTERNAL_ERROR" } }] }) },
+    { status: 429, body: JSON.stringify({ errors: [{ extensions: { code: "INTERNAL_ERROR" } }] }) },
+    { status: 200, body: JSON.stringify({ errors: [{ extensions: { code: "BookingAPITooManyRequests" } }] }) },
+    { status: 200, body: "<title>자동입력 방지</title><form id='captcha'></form>" },
+  ]) {
+    let requests = 0;
+    const crawler = harness({ env: { COLLECTOR_WORKER_RUNTIME: "1", NAVER_SCHEDULE_DELAY_MS: "0" }, fetchImpl: async () => {
+      requests++; return new Response(fixture.body, { status: fixture.status });
+    } });
+    const [row] = await crawler.collectNaverSchedulesForItems("biz", [{ bizItemId: "p", name: "객실" }]);
+    assert.equal(row.collectionFailed, true);
+    assert.equal(requests, 1);
+    const manifest = manifestFixture(); crawler.addCollectionDiagnostics(manifest);
+    assert.equal(manifest.requestPacing.scheduleRetry.naverScheduleRetryReserved, 0);
+    assert.equal(manifest.requestPacing.stopped, true);
+  }
+  let requests = 0;
+  const crawler = harness({ env: { COLLECTOR_WORKER_RUNTIME: "1", NAVER_SCHEDULE_DELAY_MS: "0" }, fetchImpl: async (_url, init) => {
+    requests++;
+    const id = JSON.parse(init.body).variables.scheduleParams.bizItemId;
+    if (id === "retry") return new Response(JSON.stringify({ errors: [{ extensions: { code: "INTERNAL_ERROR" } }] }));
+    await new Promise(resolve => setTimeout(resolve, 30));
+    return new Response("{}", { status: 429 });
+  } });
+  await crawler.collectNaverSchedulesForItems("biz", [{ bizItemId: "retry", name: "객실" }, { bizItemId: "block", name: "객실" }]);
+  const manifest = manifestFixture(); crawler.addCollectionDiagnostics(manifest);
+  assert.equal(requests, 2, "guard must prevent retry from starting after another request detects a block");
+  assert.equal(manifest.requestPacing.scheduleRetry.naverScheduleRetryReserved, 1);
+  assert.equal(manifest.requestPacing.scheduleRetry.naverScheduleRetryAttempted, 0, "reservation is not an actual HTTP start");
+  assert.equal(manifest.requestPacing.scheduleRetry.naverScheduleRetryExhausted, 1);
+  assert.equal(manifest.requestPacing.stopped, true);
 });
 
 test("compact schedule diagnostics accept only the diagnostic vocabulary and real HTTP statuses", () => {

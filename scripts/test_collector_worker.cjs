@@ -622,6 +622,33 @@ test("a lost claim ACK retries the same nonce and never executes the accepted jo
   finally { await f.close(); }
 });
 
+for (const type of ["timeout", "socket"]) test(`a claim body ${type} after HTTP 200 retries its accepted nonce and spawns once after heartbeat confirmation`, async () => {
+  const nonces = [];
+  const f = await fixture({ route: ({ url, json, res }) => {
+    if (!url.pathname.endsWith("/claim")) return false;
+    nonces.push(json.claimRequestId);
+    if (nonces.length > 1) return false;
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.flushHeaders(); res.write('{"job":');
+    if (type === "socket") setTimeout(() => res.destroy(), 10);
+    return true;
+  }, options: { requestTimeoutMs: 70, claimRetryBaseMs: 1, claimRetryMaxMs: 1, sleepImpl: async () => {} },
+    crawl: async ({ child, config, state }) => {
+      assert.ok(state.heartbeats >= 1, "a confirming heartbeat must precede provider child execution");
+      await writeArtifacts(config.env); child.close();
+    } });
+  try {
+    const result = await runWorker(f.options);
+    assert.equal(result.jobs, 1); assert.equal(result.halted, undefined);
+    assert.equal(nonces.length, 2); assert.equal(new Set(nonces).size, 1);
+    assert.equal(f.state.spawned.length, 1); assert.equal(f.state.completions.length, 1);
+    assert.equal(f.state.failures.length, 0); assert.deepEqual(f.state.kills, []);
+    const retry = f.state.events.filter(row => row.event === "collector_claim_retry");
+    assert.equal(retry.length, 1); assert.equal(retry[0].status, 200);
+    assert.equal(f.state.events.filter(row => row.event === "collector_claim_recovered").length, 1);
+  } finally { await f.close(); }
+});
+
 test("shutdown aborts an idle backoff promptly and does not claim again", async () => {
   const controller = new AbortController(); let waiting = false;
   const f = await fixture({ route: ({ url, res }) => { if (!url.pathname.endsWith("/claim")) return false; reply(res, {}, 503); return true; },
@@ -633,12 +660,13 @@ test("shutdown aborts an idle backoff promptly and does not claim again", async 
 });
 
 test("auth and malformed successful responses quarantine the service without repeated claims", async () => {
-  for (const type of ["auth", "malformed", "shape"]) {
+  for (const type of ["auth", "malformed", "shape", "oversized"]) {
     const controller = new AbortController();
     const f = await fixture({ route: ({ url, res }) => {
       if (!url.pathname.endsWith("/claim")) return false;
       if (type === "auth") reply(res, { error: "sensitive unauthorized body" }, 401);
       else if (type === "malformed") { res.writeHead(200); res.end("sensitive invalid response"); }
+      else if (type === "oversized") { res.writeHead(200); res.end('"' + "x".repeat(4 * 1024 * 1024) + '"'); }
       else reply(res, { unexpected: true }); return true;
     }, options: { signal: controller.signal, maxJobs: Infinity } });
     try {
@@ -648,6 +676,29 @@ test("auth and malformed successful responses quarantine the service without rep
       assert.equal(f.state.events.find(row => row.event === "collector_worker_quarantined").code, type === "auth" ? "COLLECTOR_CLAIM_AUTH_FAILED" : "COLLECTOR_RESPONSE_INVALID");
       assert.equal(JSON.stringify(f.state.events).includes("sensitive"), false); controller.abort(); assert.equal((await running).quarantined, true);
     } finally { controller.abort(); await f.close(); }
+  }
+});
+
+test("a broken rejected claim body preserves known authentication and non-transient status without retrying", async () => {
+  for (const status of [400, 401, 403, 409]) {
+    const controller = new AbortController(); let claims = 0;
+    const f = await fixture({ options: { signal: controller.signal } });
+    f.options.fetchImpl = async () => {
+      claims++;
+      return new Response(new ReadableStream({ start(stream) { stream.error(new Error("private claim response body")); } }), { status });
+    };
+    let running;
+    try {
+      running = runWorkerService(f.options);
+      await until(() => f.state.events.some(row => row.event === "collector_worker_quarantined"));
+      assert.equal(claims, 1); assert.equal(f.state.spawned.length, 0);
+      assert.equal(f.state.events.some(row => row.event === "collector_claim_retry"), false);
+      const quarantined = f.state.events.find(row => row.event === "collector_worker_quarantined");
+      assert.equal(quarantined.status, status);
+      assert.equal(quarantined.code, [401, 403].includes(status) ? "COLLECTOR_CLAIM_AUTH_FAILED" : "COLLECTOR_CLAIM_REJECTED");
+      assert.equal(JSON.stringify(f.state.events).includes("private claim"), false);
+      controller.abort(); assert.equal((await running).quarantined, true);
+    } finally { controller.abort(); if (running) await running; await f.close(); }
   }
 });
 

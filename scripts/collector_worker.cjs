@@ -173,7 +173,8 @@ async function request(options, route, { method = "POST", body, file, headers = 
 
 function transientRequest(error) {
   return error?.code === "COLLECTOR_REQUEST_FAILED"
-    && (error.transportFailure === true || !error.status || error.status === 408 || error.status === 429 || (error.status >= 500 && error.status <= 599));
+    && ((error.transportFailure === true && error.status >= 200 && error.status <= 299)
+      || !error.status || error.status === 408 || error.status === 429 || (error.status >= 500 && error.status <= 599));
 }
 
 function terminalAcknowledgement(reply, job, proof) {
@@ -619,7 +620,10 @@ async function runWorker(options = workerOptions()) {
     catch (error) {
       if (options.signal?.aborted) break;
       const status = Number.isInteger(error.status) ? error.status : 0;
-      const transient = error.code === "COLLECTOR_REQUEST_FAILED" && (!status || [408, 429].includes(status) || status >= 500);
+      // Headers can arrive before a broker reply's body times out or breaks.
+      // Retry that transport failure with the same nonce, never malformed JSON
+      // or a known authentication/non-transient rejection.
+      const transient = transientRequest(error);
       if (!transient) throw failure([401, 403].includes(status) ? "COLLECTOR_CLAIM_AUTH_FAILED"
         : error.code === "COLLECTOR_RESPONSE_INVALID" ? error.code : "COLLECTOR_CLAIM_REJECTED", status);
       claimFailures++;
