@@ -75,7 +75,14 @@
     if(data&&customerViewReadOnly()&&url!=='/auth/logout')throw new Error('고객 화면 확인 중에는 저장·수집·등록할 수 없습니다.');
     const base = adminView ? '/api/insight-admin/v1' : '/api/customer/v1';
     const target = adminView && url !== '/auth/logout' ? '/customer-view' + url : url;
-    const response = await (options.startup===true?startupFetch:fetch)(`${base}${target}`, { method:data ? 'POST':'GET', headers:{...(data ? { 'Content-Type':'application/json','X-CSRF-Token':state?.csrfToken || adminCsrf || '' }: { Accept:'application/json',...(options.refresh===true?{'X-Insight-Refresh':'1'}:{}) }),...(url!=='/auth/logout'?customerViewHeaders():{}),...((options.startup===true&&url==='/me'||adminView&&url==='/start')?bootstrapHeaders():{})}, ...(data ? { body:JSON.stringify(data) }: {}), ...(options.signal?{signal:options.signal}:{}) });
+    const response = await (options.startup===true?startupFetch:fetch)(`${base}${target}`, { method:data ? 'POST':'GET', headers:{...(data ? { 'Content-Type':'application/json','X-CSRF-Token':state?.csrfToken || adminCsrf || '' }: { Accept:options.pdf?'application/pdf, application/json':'application/json',...(options.refresh===true?{'X-Insight-Refresh':'1'}:{}) }),...(url!=='/auth/logout'?customerViewHeaders():{}),...((options.startup===true&&url==='/me'||adminView&&url==='/start')?bootstrapHeaders():{})}, ...(data ? { body:JSON.stringify(data) }: {}), ...(options.signal?{signal:options.signal}:{}) });
+    if (options.pdf && response.ok) {
+      if (!/^application\/pdf(?:;|$)/i.test(response.headers.get('content-type') || '')) throw new Error('발행 PDF를 확인하지 못했습니다.');
+      const blob = await response.blob();
+      if (!blob.size || blob.size > 20 * 1024 * 1024) throw new Error('발행 PDF를 확인하지 못했습니다.');
+      const filename = /^attachment; filename="(monthly-report-20\d{2}-\d{2}-v\d+\.pdf)"$/.exec(response.headers.get('content-disposition') || '')?.[1];
+      return { blob, filename: filename || 'monthly-report.pdf' };
+    }
     return responseValue(response);
   }
   const connectionLoading = message => `<section class="card" role="status" aria-live="polite"><div class="initial-loading"><span class="loading-ring" aria-hidden="true"></span><p>${esc(message)}</p></div></section>`;
@@ -255,7 +262,7 @@
   function render() {
     stopRecurringPoll();
     lastRenderedHash=location.hash;
-    searchSequence++; window.InsightContextWorkspace?.stop(); window.InsightComparisonView?.stop(); window.InsightAnalysis?.stop(); window.InsightCollection?.stop?.();
+    searchSequence++; window.InsightContextWorkspace?.stop(); window.InsightComparisonView?.stop(); window.InsightAnalysis?.stop(); window.InsightCollection?.stop?.(); window.InsightReports?.stop();
     const scope=state?.customer.customerId?`${adminView?'admin':'customer'}:${state.customer.customerId}`:'';
     const sessionExpired=()=>{state=null;adminCsrf='';selectedOwnId=null;comparisonSelection?.configure({scope:'',permissionSignature:'',authorizedOwnCompanyIds:[],authorizedComparisonIds:[],authorizedComparisonIdsByOwn:{}});render();};
     configureSelection(scope);
@@ -299,7 +306,7 @@
     if(current[0]==='competitors')content=`<div id="comparison-workspace">${window.InsightComparisonView&&comparisonSelection?window.InsightComparisonView.panel(state,comparisonSelection.getState()):'<p class="empty-note">비교 화면 연결을 확인해 주세요.</p>'}</div><details class="card comparison-management"><summary>등록 경쟁업체 · ${competitors.length}곳</summary><div class="connected-list">${competitors.map(relation=>companyCard(relation)).join('')||'<p class="empty-note">등록한 업체가 없습니다.</p>'}</div><a class="text-link" href="#settings">업체 등록·해제는 설정에서 관리</a></details>`;
 
     if(current[0]==='regions')content=window.InsightContextWorkspace.controls(state,comparisonSelection.getState())+window.InsightRegionalContextView.panel(state,comparisonSelection.getState())+(state.regions.length?`<details class="card regional-context-detail" id="regional-full-detail" ${selectedRegion?'open':''}><summary>내 매장·관심지역 상세 자료</summary>${window.InsightAnalysis.panel('regions',state,selectedRegion,selectedOwnId)}</details>`:'')+'<p class="muted">관심지역 등록·해제는 <a href="#settings">설정</a>에서 관리합니다.</p>';
-    if (current[0]==='reports') content = window.InsightAnalysis.panel('reports',state);
+    if (current[0]==='reports') content = (window.InsightReports?.panel(state.features?.reportDelivery===true) || '') + window.InsightAnalysis.panel('reports',state);
     if (current[0]==='settings') content = `<section class="card"><h2>사업 정보</h2><form id="onboarding-form"><label class="field"><span>현재 상태</span><select name="businessStatus"><option value="planning" ${c.businessStatus==='planning'?'selected':''}>매장 준비 중</option><option value="owned" ${c.businessStatus==='owned'?'selected':''}>내 매장 등록</option></select></label>${field('매장·프로젝트 이름','projectName',c.projectName)}<button class="button primary" type="submit">저장</button></form></section><section class="card registered-management"><h2>등록업체 관리</h2><p class="muted">등록 해제는 내 계정의 연결만 해제하며, 업체 DB와 저장자료는 보존됩니다.</p><div class="connected-list">${relations.map(relation=>companyCard(relation,true)).join('')||'<p class="empty-note">등록한 업체가 없습니다.</p>'}</div><a class="button small" href="#register-own">내 매장 등록</a> <a class="button small" href="#competitors">경쟁업체 등록</a></section>`;
     if(current[0]==='settings'&&(limits.competitorLimit===null||competitors.length<limits.competitorLimit))content+=search('competitor');
     if(current[0]==='settings')content+=`<section class="card"><h2>관심지역 관리</h2>${c.regions.filter(activeRegion).map(r=>`<div class="connected-row"><strong>${esc(state.regions.find(v=>v.id===r.regionKey)?.label||'연결 지역')}</strong><button class="button small" data-action="archive-region" data-relation="${esc(r.relationId)}">관심지역 해제</button></div>`).join('')||'<p class="muted">등록한 관심지역이 없습니다.</p>'}</section>`+(limits.interestRegionLimit===null||c.regions.filter(activeRegion).length<limits.interestRegionLimit?search('region'):'');
@@ -309,7 +316,10 @@
     if(['home','regions'].includes(current[0]))contextMount(current[0]);
     if(current[0]==='competitors'&&comparisonSelection)window.InsightComparisonView?.mount({store:comparisonSelection,state,peek:id=>window.InsightAnalysis.peekCurrentBriefing(id),read:(id,options)=>window.InsightAnalysis.readCurrentBriefing(id,api,options),peekCompany:(id,month)=>window.InsightCollection?.peekSaved?.(id,month),readCompany:(id,options)=>window.InsightCollection.readSaved(id,api,options),onSelectionChange:selectionChanged,onSessionExpired:sessionExpired,onRegionalView:()=>contextMount('comparison')});
     if(current[0]==='competitors')startRecurringPoll(competitors.map(row=>row.companyId));
-    if(current[0]==='reports')window.InsightAnalysis.mount('reports',api,state,selectedRegion,selectedOwnId);
+    if(current[0]==='reports'){
+      window.InsightReports?.mount(api,state.features?.reportDelivery===true,{onSessionExpired:sessionExpired});
+      window.InsightAnalysis.mount('reports',api,state,selectedRegion,selectedOwnId,{autoLoad:state.features?.reportDelivery!==true});
+    }
     if(current[0]==='regions'){const full=$('#regional-full-detail'),show=()=>window.InsightAnalysis.mount('regions',api,state,selectedRegion,selectedOwnId);if(full?.open)show();full?.addEventListener('toggle',()=>{if(full.open)show();else window.InsightAnalysis.stop();});}
   }
   function activeRegion(row) { return row.status==='active'; }

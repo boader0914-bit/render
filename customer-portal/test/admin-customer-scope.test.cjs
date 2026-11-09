@@ -3,6 +3,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),http=requir
 const {createConnectedServer}=require('../connected-server.cjs');
 const ORIGIN='https://admin-scope.example',BACKEND='https://central-scope.example',ADMIN='A'.repeat(43),CUSTOMER='C'.repeat(43);
 const A='cus_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',B='cus_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',PREVIEW='cus_cccccccc-cccc-cccc-cccc-cccccccccccc';
+const ISSUED='mr_12345678-1234-4234-8234-123456789abc', ISSUED_PDF='%PDF-1.7\nAssigned report fixture\n%%EOF';
 const clone=value=>JSON.parse(JSON.stringify(value)),DAY=86400000;
 const day=()=>new Date(Date.now()+9*3600000).toISOString().slice(0,10),shift=(value,n)=>new Date(Date.parse(value+'T00:00:00Z')+n*DAY).toISOString().slice(0,10);
 const deferred=()=>{let resolve;const promise=new Promise(done=>resolve=done);return {promise,resolve};},flush=()=>new Promise(resolve=>setImmediate(resolve));
@@ -63,6 +64,14 @@ async function fixture(t,{persistent=false}={}){
    if(!saved&&state.reportFailure[target])return reply(state.reportFailure[target],{error:{code:'REPORT_UNAVAILABLE'}});
    return reply(200,reportSource(target,{preview:saved,version:state.version[target]||1}));
   }
+  if (url.pathname.endsWith('/reports')) return reply(200, { reports: target === A ? [{ id:ISSUED, title:'A 발행본' }] : [] });
+  if (url.pathname.endsWith('/reports/' + ISSUED) || url.pathname.endsWith('/reports/' + ISSUED + '/pdf')) {
+   if (target !== A) return reply(404, { error:{ code:'REPORT_NOT_FOUND' } });
+   if (!url.pathname.endsWith('/pdf')) return reply(200, { id:ISSUED, title:'A 발행본', snapshot:{ summary:{} } });
+   if (state.invalidIssuedPdf) return new Response('not a PDF', { headers:{ 'Content-Type':'application/pdf' } });
+   assert.match(headers.get('accept'), /application\/pdf/);
+   return new Response(ISSUED_PDF, { headers:{ 'Content-Type':'application/pdf', 'Content-Disposition':'attachment; filename="monthly-report-2026-10-v1.pdf"' } });
+  }
   return reply(200,{ok:true});
  };
  async function start(){server=createConnectedServer({origin:ORIGIN,backend:BACKEND,serviceToken:'fixture-admin-view-service-token-not-real',fetchImpl,companyDiagnosticsLogger:()=>{},diagnosticsLogger:()=>{},
@@ -79,6 +88,33 @@ async function fixture(t,{persistent=false}={}){
  return {calls,state,request,start,close,directory};
 }
 const VIEW='/api/insight-admin/v1/customer-view',COMPANY=VIEW+'/companies/cmp_shared/collection?month=2026-09',REPORT=VIEW+'/reports/briefing?stayMode=upcoming30';
+test('issued report list, detail and PDF forward only the authenticated selected customer', async t => {
+ const f = await fixture(t), list = VIEW + '/reports', detail = list + '/' + ISSUED, pdf = detail + '/pdf';
+ const selected = await f.request(list, { target:A });
+ assert.equal(selected.status, 200);
+ assert.deepEqual(selected.data.reports.map(row => row.id), [ISSUED]);
+ assert.equal((await f.request(detail, { target:A })).data.id, ISSUED);
+ const download = await f.request(pdf, { target:A });
+ assert.equal(download.status, 200);
+ assert.equal(download.data, ISSUED_PDF);
+ assert.equal(download.headers['cache-control'], 'private, no-store');
+ assert.equal(download.headers['content-disposition'], 'attachment; filename="monthly-report-2026-10-v1.pdf"');
+ assert.equal(Number(download.headers['content-length']), Buffer.byteLength(ISSUED_PDF));
+ assert.deepEqual((await f.request(list, { target:B })).data.reports, []);
+ assert.equal((await f.request(detail, { target:B })).status, 404);
+ assert.equal((await f.request(pdf, { target:B })).status, 404);
+ assert.equal((await f.request(pdf)).status, 404, 'unselected preview has no assignment');
+ assert.equal((await f.request('/api/customer/v1/reports/' + ISSUED + '/pdf', { admin:false, target:A })).status, 400);
+ assert.ok(f.calls.every(call => call.method === 'GET' && call.path.startsWith('/api/insight/v1/admin/customer-view/reports')));
+ assert.deepEqual(f.calls.slice(0, 3).map(call => call.target), [A, A, A]);
+ f.state.invalidIssuedPdf = true;
+ const invalid = await f.request(pdf, { target:A });
+ assert.equal(invalid.status, 503);
+ assert.equal(invalid.data.error.code, 'INVALID_REPORT');
+ const expired = await f.request(pdf, { target:A, cookie:false });
+ assert.equal(expired.status, 401);
+ assert.match(expired.headers['set-cookie'][0], /^__Host-sabun_insight_admin=;.*Max-Age=0/);
+});
 test('same admin cookie selects two actual identities without start POST and forwards the target on every scoped read',async t=>{
  const f=await fixture(t);const [a,b]=await Promise.all([f.request(VIEW+'/me',{target:A}),f.request(VIEW+'/me',{target:B})]);
  assert.equal(a.status,200);assert.equal(b.status,200);assert.equal(a.data.customer.customerId,A);assert.equal(b.data.customer.customerId,B);assert.equal(a.data.view.readOnly,true);assert.equal(b.data.view.readOnly,true);

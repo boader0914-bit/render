@@ -552,9 +552,11 @@
     }
     finally{if(id===seq&&button.isConnected)button.disabled=false;}
   }
-  document.addEventListener('submit',e=>{if(e.target.id!=='analysis-form')return;e.preventDefault();e.stopImmediatePropagation();load({force:kind==='reports'});});
-  document.addEventListener('change',e=>{if(e.target.matches?.('[data-history-metric]')&&regionData){const card=e.target.closest('[data-history-source]'),s=regionData.sources.find(s=>s.key===card.dataset.historySource);if(s)card.outerHTML=window.InsightRegionHistory.source(s,regionData.window,e.target.value);return;}if(e.target.closest?.('#analysis-form')){if(kind==='reports')syncReportControls(document.querySelector('#analysis-form'));load();}});
-  window.InsightAnalysis={panel,regionView,reportView,configureCache,configureReports,restore,restoreReports,peekCurrentBriefing,readCurrentBriefing,clearCache,invalidate,mount(mode,request,s,selectedRegion=null,selectedOwnId=null){kind=mode;api=request;renderedVersion=null;
+  let awaitingBriefingRequest = false;
+  document.addEventListener('submit',e=>{if(e.target.id!=='analysis-form')return;e.preventDefault();e.stopImmediatePropagation();awaitingBriefingRequest=false;load({force:kind==='reports'});});
+  document.addEventListener('change',e=>{if(e.target.matches?.('[data-history-metric]')&&regionData){const card=e.target.closest('[data-history-source]'),s=regionData.sources.find(s=>s.key===card.dataset.historySource);if(s)card.outerHTML=window.InsightRegionHistory.source(s,regionData.window,e.target.value);return;}if(e.target.closest?.('#analysis-form')){if(kind==='reports')syncReportControls(document.querySelector('#analysis-form'));if(!awaitingBriefingRequest)load();}});
+  window.InsightAnalysis={panel,regionView,reportView,configureCache,configureReports,restore,restoreReports,peekCurrentBriefing,readCurrentBriefing,clearCache,invalidate,mount(mode,request,s,selectedRegion=null,selectedOwnId=null,{autoLoad=true}={}){kind=mode;api=request;renderedVersion=null;
+    awaitingBriefingRequest=mode==='reports'&&!autoLoad;
     if(mode==='reports'){
       const select=document.querySelector('#analysis-form select');
       if(select)select.value=reportOwnIds.includes(selectedOwnId)?selectedOwnId:reportOwnIds[0]||'';
@@ -572,5 +574,8 @@
       }
     }
     if(mode==='reports')window.InsightArchives?.mount(request,{onSessionExpired:expireSession,readOnly:s.view?.readOnly===true});
-    load();},stop(){window.InsightArchives?.stop();seq++;regionData=null;renderedVersion=null;clearTimers();}};
+    if(awaitingBriefingRequest){
+      const slot=document.querySelector('#analysis-output');
+      if(slot)slot.innerHTML='<p class="empty-note">현재 상황 브리핑은 위에서 조회를 요청하면 생성합니다. 발행본 열람은 새 분석 계산을 시작하지 않습니다.</p>';
+    }else load();},stop(){window.InsightArchives?.stop();seq++;regionData=null;renderedVersion=null;clearTimers();}};
 })();

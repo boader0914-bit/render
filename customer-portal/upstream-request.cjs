@@ -6,7 +6,7 @@ const transientStatuses=new Set([502,503,504]);
 const neverRetryStatuses=new Set([401,403,429]);
 const transientCodes=new Set(['ECONNRESET','ECONNREFUSED','ETIMEDOUT','EAI_AGAIN','ENETUNREACH','EHOSTUNREACH','UND_ERR_SOCKET','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT']);
 function routeLabel(route){
-  return String(route).replace(/\/(companies|regions|customers)\/[^/]+/g,'/$1/:id');
+  return String(route).replace(/\/(companies|regions|customers)\/[^/]+/g,'/$1/:id').replace(/\/reports\/mr_[a-zA-Z0-9_-]+/g,'/reports/:id');
 }
 function retryDelay(response,now){
   const value=response?.headers?.get?.('retry-after');

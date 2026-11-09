@@ -17,6 +17,8 @@ const { createArchiveService } = require('./archive-service.cjs');
 const { createBootstrapSnapshots } = require('./bootstrap-snapshots.cjs');
 const { createSavedKeywordComparison } = require('./lib/saved-keyword-comparison.cjs');
 const { createPublicBookingPickupStore } = require('./public-booking-pickup-store.cjs');
+const issuedReportRoute = route => /^\/reports(?:\/mr_[a-zA-Z0-9_-]+(?:\/pdf)?)?$/.test(route);
+const MAX_ISSUED_PDF_BYTES = 20 * 1024 * 1024;
 function validatedOrigin(value) {
   const u = new URL(value);
   if (u.username || u.password || u.pathname !== '/' || u.search || u.hash || /[?#]/.test(String(value)) || (u.protocol !== 'https:' && !(u.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(u.hostname)))) throw new Error('Insight origins require HTTPS or local development addresses');
@@ -86,6 +88,38 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   }
   const upstreamReader=createUpstreamReader({backend,fetchImpl,readTimeout,...(diagnosticsLogger?{logger:diagnosticsLogger}:{})});
   const readUpstream=(route,search,headers,options={})=>upstreamReader(route,search,headers,{stage:identityRoutes.has(route)?'identity':'source',...options});
+  async function readIssuedPdf(route, search, headers) {
+    const response = await fetchImpl(`${backend}/api/insight/v1${route}${search}`, {
+      method: 'GET', headers: { ...headers, Accept: 'application/pdf, application/json' },
+      redirect: 'error', signal: AbortSignal.timeout(readTimeout('GET', route))
+    });
+    if (!response.ok) {
+      let data;
+      try { data = await response.json(); }
+      catch { data = { error: { code: 'REPORT_UNAVAILABLE', message: '발행본 열람 상태를 확인해 주세요.' } }; }
+      return { status: response.status, data };
+    }
+    const contentLength = response.headers.get('content-length');
+    if (!/^application\/pdf(?:;|$)/i.test(response.headers.get('content-type') || '')
+        || !response.body || contentLength !== null && (!/^\d+$/.test(contentLength) || Number(contentLength) > MAX_ISSUED_PDF_BYTES)) {
+      await response.body?.cancel?.().catch(() => {});
+      throw fault('INVALID_REPORT', '발행 PDF를 확인하지 못했습니다.', 503);
+    }
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of response.body) {
+      size += chunk.length;
+      if (size > MAX_ISSUED_PDF_BYTES) throw fault('INVALID_REPORT', 'PDF가 제공 한도를 초과했습니다.', 503);
+      chunks.push(Buffer.from(chunk));
+    }
+    const pdf = Buffer.concat(chunks, size);
+    if (pdf.subarray(0, 5).toString() !== '%PDF-' || contentLength !== null && size !== Number(contentLength)) {
+      throw fault('INVALID_REPORT', '발행 PDF를 확인하지 못했습니다.', 503);
+    }
+    const disposition = response.headers.get('content-disposition') || '';
+    return { status: 200, pdf, disposition: /^attachment; filename="monthly-report-20\d{2}-\d{2}-v\d+\.pdf"$/.test(disposition)
+      ? disposition : 'attachment; filename="monthly-report.pdf"' };
+  }
   async function archiveRequest(mode,requestOrigin,headers,req,url,route,timing){
     const tail=mode==='admin'?route.replace(/^\/customer-view/,''):route;
     if(!/^\/archives(?:\/[a-zA-Z0-9_-]+)?$/.test(tail))return null;
@@ -207,6 +241,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   staticMap['/archive.js']=['archive.js','text/javascript'];
   staticMap['/saved-keyword-comparison.js']=['saved-keyword-comparison.js','text/javascript'];
   staticMap['/saved-keyword-comparison.css']=['saved-keyword-comparison.css','text/css'];
+  staticMap['/reports.js']=['reports.js','text/javascript'];
   const adminAssets = { '/admin': ['admin.html', 'text/html'], '/admin.js': ['admin.js', 'text/javascript'], '/admin.css': ['admin.css', 'text/css'] };
   const publicAssets=new Map([...Object.entries({...staticMap,...adminAssets,'/auth.js':['auth.js','text/javascript']})].filter(([,item])=>item[1]!=='text/html').map(([url,item])=>[url,{file:path.join(__dirname,'web',item[0]),type:item[1]}]));
   for(const name of ['Pretendard-Regular','Pretendard-Bold','MaruBuri-Regular'])publicAssets.set(`/fonts/${name}.otf`,{file:path.join(__dirname,'..','web','fonts',`${name}.otf`),type:'font/otf'});
@@ -214,6 +249,17 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   const server = http.createServer(async (req, res) => {
     const timing=timings();let observed=false;
     const respond=(status,value)=>{if(observed)res.setHeader('Server-Timing',timing.header());res.setHeader('X-Insight-Request-Id',timing.requestId);json(res,status,value);};
+    async function respondIssuedPdf(route, search, headers, expireCookie) {
+      const result = await readIssuedPdf(route, search, headers);
+      if (!result.pdf) {
+        if (result.status === 401) res.setHeader('Set-Cookie', expireCookie('', true));
+        respond(result.status, result.data);
+        return;
+      }
+      res.setHeader('X-Insight-Request-Id', timing.requestId);
+      res.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Length': result.pdf.length, 'Content-Disposition': result.disposition });
+      res.end(result.pdf);
+    }
     res.setHeader('Cache-Control', 'private, no-store'); res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     res.setHeader('Referrer-Policy', 'no-referrer'); res.setHeader('X-Robots-Tag', 'noindex, nofollow');
@@ -238,6 +284,7 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
       }
       if (url.pathname.startsWith('/api/insight-admin/v1/')) {
         const route = url.pathname.slice('/api/insight-admin/v1'.length);
+        const issuedReport = route.startsWith('/customer-view/') && issuedReportRoute(route.slice('/customer-view'.length));
         const target=req.headers['x-insight-customer-id'];
         if(target!==undefined&&(typeof target!=='string'||!/^cus_[a-zA-Z0-9-]{1,180}$/.test(target)||!route.startsWith('/customer-view/')))throw fault('INVALID_CUSTOMER_VIEW','고객 화면에서 올바른 고객을 선택해 주세요.');
         const session = String(req.headers.cookie || '').split(';').map(s => s.trim().split('=')).find(([name]) => name === adminCookieName)?.[1] || '';
@@ -254,9 +301,10 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
         const regionalPreparation=/^\/customer-view\/regions\/[a-zA-Z0-9_-]+\/preparation$/.test(route)&&['GET','POST'].includes(req.method);
         const archiveRoute=/^\/customer-view\/archives(?:\/[a-zA-Z0-9_-]+)?$/.test(route)&&['GET','POST'].includes(req.method);
         const recurringRoute=/^\/customer-view\/companies\/[a-zA-Z0-9_-]+\/recurring-collection$/.test(route)&&['GET','POST'].includes(req.method);
-        if (!recurringRoute&&!archiveRoute&&!regionalPreparation && (methods[route] || (/^\/customer-view\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|regions\/comparison-summary|reports\/briefing)$/.test(route) ? 'GET' : '') || (match ? (match[1] ? 'POST' : 'GET') : '')) !== req.method) throw fault('NOT_FOUND', '지원하지 않는 관리자 기능입니다.', 404);
+        if (!recurringRoute&&!archiveRoute&&!regionalPreparation && (methods[route] || (issuedReport || /^\/customer-view\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|regions\/comparison-summary|reports\/briefing)$/.test(route) ? 'GET' : '') || (match ? (match[1] ? 'POST' : 'GET') : '')) !== req.method) throw fault('NOT_FOUND', '지원하지 않는 관리자 기능입니다.', 404);
         if (req.method === 'POST' && req.headers.origin !== requestOrigin) throw fault('INVALID_ORIGIN', '현재 관리자 화면에서 요청해 주세요.', 403);
         if(archiveRoute){const saved=await archiveRequest('admin',requestOrigin,headers,req,url,route,timing);if(saved.status===401)res.setHeader('Set-Cookie',adminCookie('',true));respond(saved.status,saved.data);return;}
+        if (issuedReport && route.endsWith('/pdf')) { await respondIssuedPdf('/admin' + route, url.search, headers, adminCookie); return; }
         let payload;
         if (req.method === 'POST') { payload = JSON.stringify(await body(req)); headers['Content-Type'] = 'application/json'; }
         if(req.method==='POST'&&route!=='/customer-view/start')invalidateReads(scopeFor(requestOrigin,'admin',session,target||''));
@@ -277,17 +325,19 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
       if (url.pathname.startsWith('/api/customer/v1/')) {
         if(req.headers['x-insight-customer-id']!==undefined)throw fault('INVALID_CUSTOMER_VIEW','고객별 화면 선택은 관리자 로그인 후 사용할 수 있습니다.');
         const route = url.pathname.slice('/api/customer/v1'.length);
+        const issuedReport = issuedReportRoute(route);
         observed=identityRoutes.has(route)||req.method==='GET'&&(route==='/config'||/^\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|regions\/comparison-summary|reports\/briefing)$/.test(route));
         const allowed = { '/config': 'GET', '/me': 'GET', '/auth/username': 'GET', '/policies/terms': 'GET', '/policies/privacy': 'GET', '/auth/login': 'POST', '/auth/signup': 'POST', '/auth/logout': 'POST', '/commands': 'POST', '/catalog/companies': 'GET', '/catalog/regions': 'GET' };
         const regionalPreparation=/^\/regions\/[a-zA-Z0-9_-]+\/preparation$/.test(route)&&['GET','POST'].includes(req.method);
         const archiveRoute=/^\/archives(?:\/[a-zA-Z0-9_-]+)?$/.test(route)&&['GET','POST'].includes(req.method);
         const recurringRoute=/^\/companies\/[a-zA-Z0-9_-]+\/recurring-collection$/.test(route)&&['GET','POST'].includes(req.method);
-        if (!recurringRoute&&!archiveRoute&&!regionalPreparation && (allowed[route] || (/^\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|regions\/comparison-summary|reports\/briefing)$/.test(route) ? 'GET' : '')) !== req.method) throw fault('NOT_FOUND', '요청한 기능을 찾을 수 없습니다.', 404);
+        if (!recurringRoute&&!archiveRoute&&!regionalPreparation && (allowed[route] || (issuedReport || /^\/(?:companies\/[a-zA-Z0-9_-]+\/collection|regions\/[a-zA-Z0-9_-]+\/analysis|regions\/comparison-summary|reports\/briefing)$/.test(route) ? 'GET' : '')) !== req.method) throw fault('NOT_FOUND', '요청한 기능을 찾을 수 없습니다.', 404);
         if (req.method === 'POST' && req.headers.origin !== requestOrigin) throw fault('INVALID_ORIGIN', '현재 인사이트 화면에서 요청해 주세요.', 403);
         const cookies = String(req.headers.cookie || '').split(';').map(s => s.trim().split('='));
         const session = cookies.find(([name]) => name === cookieName)?.[1] || '';
         const headers = { Authorization: `Bearer ${serviceToken}`, Accept: 'application/json', 'X-Insight-Session': session, 'X-CSRF-Token': req.headers['x-csrf-token'] || '' };
         if(archiveRoute){const saved=await archiveRequest('customer',requestOrigin,headers,req,url,route,timing);if(saved.status===401)res.setHeader('Set-Cookie',cookie('',true));respond(saved.status,saved.data);return;}
+        if (issuedReport && route.endsWith('/pdf')) { await respondIssuedPdf(route, url.search, headers, cookie); return; }
         let payload;
         if (req.method === 'POST') { payload = JSON.stringify(await body(req)); headers['Content-Type'] = 'application/json'; }
         if(req.method==='POST')invalidateReads(scopeFor(requestOrigin,'customer',session));

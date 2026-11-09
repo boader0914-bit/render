@@ -43,14 +43,15 @@ test('explicit customer assignment reuses its exact intent key after an ambiguou
 });
 test('customer view distinguishes issued reports, missing data and zero and escapes authored action text',()=>{
   const html=customer.detailView({id:'mr_a',version:1,title:'<script>unsafe</script>',month:'2026-09',snapshot:{period:{cutoffDate:'2026-09-30'},summary:{lodging:{publicBookings:0,phoneBookings:null,estimatedRevenue:null}},actionPlan:{summary:'<img>',items:[{title:'<script>',status:'held',owner:'운영자',outcome:'작성자 기록'}]}}},'/api/customer/v1');
-  assert.ok(!html.includes('<script>'));assert.match(html,/0 실·박/);assert.match(html,/미확인 실·박/);assert.match(html,/원/);assert.match(html,/\/reports\/mr_a\/pdf/);assert.match(customer.panel(false),/제공 연결을 준비/);assert.match(html,/관측 마감 2026-09-30/);
+  assert.ok(!html.includes('<script>'));assert.match(html,/0 실·박/);assert.match(html,/미확인 실·박/);assert.match(html,/원/);assert.match(html,/data-issued-pdf="mr_a"/);assert.match(customer.panel(false),/제공 연결을 준비/);assert.match(html,/관측 마감 2026-09-30/);
 });
 test('opening issued report library defers current briefing calculation until explicit form submission',()=>{
   const listeners={},slot={innerHTML:'',isConnected:true},button={disabled:false,isConnected:true},form={id:'analysis-form',querySelector:()=>button};let calls=0;
-  const document={addEventListener:(event,listener)=>{listeners[event]=listener;},querySelector:q=>q==='#analysis-form'?form:slot};
+  const document={addEventListener:(event,listener)=>{listeners[event]=listener;},querySelector:q=>q==='#analysis-form'?form:q==='#analysis-output'?slot:null};
   const context={window:{},document,FormData:class{* [Symbol.iterator](){}},Date,URLSearchParams,setTimeout,clearTimeout};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../customer-portal/web/analysis.js'),'utf8'),context);
-  context.window.InsightAnalysis.mount('reports',()=>{calls++;return new Promise(()=>{});},{regions:[]},null,{autoLoad:false});
+  context.window.InsightAnalysis.configureReports({scope:'fixture'});
+  context.window.InsightAnalysis.mount('reports',()=>{calls++;return new Promise(()=>{});},{regions:[]},null,null,{autoLoad:false});
   assert.equal(calls,0);assert.match(slot.innerHTML,/발행본 열람은 새 분석 계산을 시작하지 않습니다/);
   listeners.submit({target:form,preventDefault(){},stopImmediatePropagation(){}});assert.equal(calls,1);
 });

@@ -53,7 +53,8 @@ async function serverFixture(t){
 test('connected HTML stays no-store and emits current versioned public script, style and font URLs',async t=>{
   const f=await serverFixture(t),page=await f.request('/');assert.equal(page.status,200);assert.equal(page.headers['cache-control'],'private, no-store');
   const html=page.body.toString(),script=html.match(/src="(\/bootstrap-read\.js\?v=[a-f0-9]{64})"/)[1],style=html.match(/href="(\/styles\.css\?v=[a-f0-9]{64})"/)[1];
-  const js=await f.request(script),css=await f.request(style);for(const asset of [js,css]){assert.equal(asset.status,200);assert.equal(asset.headers['cache-control'],'public, max-age=31536000, immutable');assert.match(asset.headers.etag,/^"[a-zA-Z0-9_-]+"$/);assert.equal(asset.headers['set-cookie'],undefined);assert.equal(asset.headers['x-content-type-options'],'nosniff');assert.match(asset.headers['content-security-policy'],/script-src 'self'/);}
+  const reportScript=html.match(/src="(\/reports\.js\?v=[a-f0-9]{64})"/)[1];
+  const js=await f.request(script),css=await f.request(style),reports=await f.request(reportScript);for(const asset of [js,css,reports]){assert.equal(asset.status,200);assert.equal(asset.headers['cache-control'],'public, max-age=31536000, immutable');assert.match(asset.headers.etag,/^"[a-zA-Z0-9_-]+"$/);assert.equal(asset.headers['set-cookie'],undefined);assert.equal(asset.headers['x-content-type-options'],'nosniff');assert.match(asset.headers['content-security-policy'],/script-src 'self'/);}
   const fontPath=css.body.toString().match(/url\('(\/fonts\/Pretendard-Regular\.otf\?v=[a-f0-9]{64})'\)/)[1],font=await f.request(fontPath);assert.equal(font.status,200);assert.match(font.headers['cache-control'],/immutable/);assert.equal(f.calls.length,0,'public page/assets must not call a protected source');
 });
 
