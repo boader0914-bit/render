@@ -17,7 +17,13 @@
   const dataThroughDay = (catalog, keyword, month) => { const provenance = catalog?.keywords?.find(row => row.keyword === keyword)?.provenanceByMonth?.[month] || catalog?.provenance; return dateValid(provenance?.dataThrough) ? provenance.dataThrough : Number.isFinite(Date.parse(provenance?.dataThrough || "")) ? kstDay(Date.parse(provenance.dataThrough)) : catalog?.currentDay || kstDay(Date.now()); };
   const cutoffFor = (catalog, keyword, month) => { const recorded = catalog?.keywords.find(row => row.keyword === keyword)?.defaultCutoffs?.[month]; return dateValid(recorded) ? recorded : [defaultCutoff(month, catalog.currentDay), dataThroughDay(catalog, keyword, month)].sort()[0]; };
   const phaseLabel = (month, currentMonth) => !MONTH.test(month || "") ? "자료 선택 전" : month > currentMonth ? "사전 관측" : month === currentMonth ? "누적 중" : "마감된 월";
-  const message = value => typeof value === "string" ? value : value?.message || value?.reason || value?.code || "확인 필요";
+  function message(value) {
+    const code = typeof value === "string" ? value : value?.code;
+    if (code === "KEYWORD_MONTHLY_BUNDLE_STALE_PARTITIONS_PRESENT") {
+      return "일부 키워드·숙박월의 저장 자료는 갱신 확인이 필요합니다.";
+    }
+    return typeof value === "string" ? value : value?.message || value?.reason || code || "확인 필요";
+  }
   const hasDiagnostic = (rows, code) => rows.some(value => value === code || value?.code === code);
   const timeLabel = value => dateValid(value) ? value : typeof value === "string" && /(?:Z|[+-]\d{2}:\d{2})$/.test(value) && Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : "미확인";
   function normalizeOptions(value = {}, today = kstDay(Date.now())) {

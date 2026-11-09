@@ -9352,7 +9352,7 @@ a {
 .admin-member-row {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(180px, 1.15fr) 74px 70px minmax(128px, .75fr) minmax(170px, 1fr);
+  grid-template-columns: minmax(0, 1.15fr) 74px 70px minmax(0, .75fr) minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   border: 1px solid #edf1f5;

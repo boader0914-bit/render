@@ -147,12 +147,14 @@ test("missing and stale responses retain reasons and metadata, not earlier succe
 });
 
 test("expired preparation stays visibly historical without allowing cutoffs after its evidence", async () => {
-  const catalog = optionsFixture(); catalog.status = "stale"; catalog.diagnostics = ["PROJECTION_EXPIRED"];
+  const catalog = optionsFixture(); catalog.status = "stale"; catalog.diagnostics = ["PROJECTION_EXPIRED", "KEYWORD_MONTHLY_BUNDLE_STALE_PARTITIONS_PRESENT"];
   const value = payloadFixture(); value.status = "stale"; value.diagnostics = ["PROJECTION_EXPIRED"];
   const model = uiModule.buildViewModel(value, value.request, "2026-10");
   assert.equal(model.usable, true); assert.equal(model.status, "stale"); assert.equal(model.historicalSnapshot, true);
   const ui = mockUi({ request: async url => ({ ok: true, status: 200, json: async () => url.endsWith("/options") ? catalog : value }) });
   await ui.controller.open(); assert.ok(ui.find("kma-metric").length > 0); assert.match(ui.text(), /과거 저장근거 · 갱신 확인 필요/);
+  assert.match(ui.text(), /일부 키워드·숙박월의 저장 자료는 갱신 확인이 필요합니다/);
+  assert.doesNotMatch(ui.text(), /KEYWORD_MONTHLY_BUNDLE_STALE_PARTITIONS_PRESENT/);
   assert.match(ui.text(), /이후 수집 반영이나 현재 최신 상태를 확인한 값이 아닙니다/);
   value.diagnostics.push("CUTOFF_AFTER_DATA_THROUGH");
   await ui.controller.refresh(); assert.equal(ui.find("kma-metric").length, 0); assert.match(ui.text(), /자료 마감보다 늦습니다/);
