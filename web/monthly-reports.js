@@ -220,9 +220,9 @@
       <details class="mr-fold"><summary>출처와 산식 <span>저장된 근거 확인</span></summary><div class="mr-fold-content"><p>자료 수집시각과 숙박 대상일을 구분해 확인하세요. 아래 내용은 이 리포트를 만들 때 저장된 기준입니다.</p>${runs.length ? `<ul class="mr-source-list">${runs.map((run) => `<li><strong>${escapeHtml(run.keyword || run.label || run.runId || run.id)}</strong><span>수집 ${escapeHtml(timeLabel(run.collectedAt || run.finishedAt || run.createdAt))} (한국시간) · ${escapeHtml(run.runId || run.id || "")}</span><span>반영 ${number(run.selectedObservationCount)} / ${number(run.observationCount)}건${run.collectionQuality?.status === "partial" ? " · 일부 자료" : ""}</span></li>`).join("")}</ul>` : `<p>참조 수집 기록: ${escapeHtml((snapshot.sources?.runIds || []).join(", ") || "없음")}</p>`}${definitionsMarkup.length ? `<ul>${definitionsMarkup.map((definition) => `<li>${escapeHtml(definition)}</li>`).join("")}</ul>` : ""}${globalWarningsMarkup}</div></details>
     </div>`;
   }
-  function renderList(reports, filter, currentId) {
+  function renderList(reports, filter, currentId, disabled = "") {
     const selected = reports.filter((report) => filter === "all" || report.status === filter);
-    return selected.length ? `<div class="mr-report-list">${selected.map((report) => `<button type="button" class="mr-report-row${currentId === report.id ? " is-selected" : ""}" data-mr-action="open" data-report-id="${escapeHtml(report.id)}"${currentId === report.id ? ' aria-current="true"' : ""}><span class="mr-report-title">${escapeHtml(report.title || `${report.month} ${TYPES[report.type] || ""} 리포트`)}</span>${statusTag(report.status)}<span class="mr-row-meta">${escapeHtml(report.month)} · ${escapeHtml(report.targetLabel || report.target?.label || report.snapshot?.target?.label || report.targetId)} · ${escapeHtml(TYPES[report.type] || report.type)} · v${number(report.version || 1)} / 수정 ${number(report.revision)}</span></button>`).join("")}</div>` : '<div class="mr-empty"><strong>저장된 리포트가 없습니다.</strong><p>조건을 선택해 미리보기를 만든 다음 초안으로 저장하세요.</p></div>';
+    return selected.length ? `<div class="mr-report-list">${selected.map((report) => `<button type="button" class="mr-report-row${currentId === report.id ? " is-selected" : ""}" data-mr-action="open" data-report-id="${escapeHtml(report.id)}"${disabled}${currentId === report.id ? ' aria-current="true"' : ""}><span class="mr-report-title">${escapeHtml(report.title || `${report.month} ${TYPES[report.type] || ""} 리포트`)}</span>${statusTag(report.status)}<span class="mr-row-meta">${escapeHtml(report.month)} · ${escapeHtml(report.targetLabel || report.target?.label || report.snapshot?.target?.label || report.targetId)} · ${escapeHtml(TYPES[report.type] || report.type)} · v${number(report.version || 1)} / 수정 ${number(report.revision)}</span></button>`).join("")}</div>` : '<div class="mr-empty"><strong>저장된 리포트가 없습니다.</strong><p>조건을 선택해 미리보기를 만든 다음 초안으로 저장하세요.</p></div>';
   }
   async function request(path, method = "GET", body) {
     const response = await root.fetch(`/api/monthly-reports${path}`, { method, credentials: "same-origin", headers: { "Accept": "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
@@ -252,14 +252,18 @@
     return `<section class="mr-card"><h3>검토한 실행 계획</h3><p>${escapeHtml(plan.summary)}</p>${(plan.items || []).map(a => `<article class="mr-context-source"><h4>${escapeHtml(a.title)}</h4><p>담당 ${escapeHtml(a.owner || "미지정")} · 기한 ${escapeHtml(a.dueDate || "미지정")} · ${escapeHtml(labels[a.status] || "확인 필요")}</p><p>근거: ${(a.evidenceRefs || []).map(id => escapeHtml(refs.get(id) || "저장 근거 확인 필요")).join(", ") || "연결 근거 없음"}</p><p>실행 결과 기록: ${escapeHtml(a.outcome || "없음")}</p></article>`).join("")}<p class="mr-method-note">계획과 실행 결과는 작성자 기록이며 효과를 독립 검증한 값이 아닙니다.</p></section>`;
   }
   function createController(container, api = request) {
-    const state = { options: null, optionsVerified: false, reports: [], filter: "all", form: { month: "", type: "company", targetId: "", cutoffDate: "" }, search: "", preview: null, previewRequest: null, previewToken: null, generation: null, report: null, title: "", notes: "", actionPlan: {schemaVersion:1,summary:"",items:[]}, delivery: null, deliveryCustomer:"", assignmentKey:null, acknowledged: false, busy: "", busyStartedAt: 0, message: "", error: "" };
+    const state = { options: null, optionsVerified: false, reports: [], reportsLoaded: false, filter: "all", form: { month: "", type: "company", targetId: "", cutoffDate: "" }, search: "", preview: null, previewRequest: null, previewToken: null, generation: null, report: null, title: "", notes: "", actionPlan: {schemaVersion:1,summary:"",items:[]}, delivery: null, deliveryCustomer:"", assignmentKey:null, acknowledged: false, busy: "", busyStartedAt: 0, message: "", error: "" };
     let openRevision = 0;
+    let entry = null;
+    let pendingDetail = null;
+    let detailError = "";
+    let listFailed = false;
     let displayTimingRevision = 0;
     let snapshotMarkupCache = null, targetOptionsCache = null;
     const idleWaiters = [];
     const optionsForType = () => state.options?.[{ company: "companies", keyword: "keywords", region: "regions" }[state.form.type]] || [];
     const clearPreviewTiming = () => {
-      if (!state.busy) ++displayTimingRevision;
+      if (!state.busy && !detailPending()) ++displayTimingRevision;
       if (!container.dataset) return;
       delete container.dataset.mrPreviewMs; delete container.dataset.mrPreviewSequence;
       container.dataset.mrPreviewStatus = "invalidated";
@@ -314,23 +318,79 @@
     function deliveryEditor(report, busy) {
       return `<section class="mr-card"><h3>인사이트 고객 제공</h3><p>이 발행본의 해설·근거를 포함한 PDF 전체를 검토한 후 고객을 선택해 배정합니다. 이메일이나 외부 공개 링크는 만들지 않습니다.</p>${state.delivery ? !state.delivery.enabled?'<p>고객 제공 연결을 준비 중입니다.</p>':`<label>받을 고객<select name="deliveryCustomer"${busy}><option value="">고객 선택</option>${state.delivery.customers.map(c=>`<option value="${escapeHtml(c.customerId)}"${state.deliveryCustomer===c.customerId?' selected':''}>${escapeHtml(c.username)}</option>`).join("")}</select></label><p>제공할 발행본: ${escapeHtml(report.title)} · v${number(report.version)}</p><button type="button" data-mr-action="assign-report"${busy || !state.deliveryCustomer?' disabled':''}>선택 고객에게 발행본 배정</button>`:`<button type="button" data-mr-action="delivery-options"${busy}>고객 제공 준비 확인</button>`}</section>`;
     }
-    function render() {
+    function render(keepLibraryFocus = false) {
+      const focused = keepLibraryFocus ? container.ownerDocument?.activeElement : null;
+      const library = keepLibraryFocus ? container.querySelector?.(".mr-library") : null;
+      const focusData = focused && library?.contains(focused) ? focused.dataset : null;
+      const scrollTop = library?.querySelector?.(".mr-report-list")?.scrollTop;
       const report = state.report;
       const snapshot = report?.snapshot || state.preview;
-      const busy = state.busy ? " disabled" : "";
+      const busy = state.busy || detailPending() ? " disabled" : "";
+      const libraryBusy = busy && !canUseEntryList() ? " disabled" : "";
+      const listNotice = entry?.listStatus === "loading" ? "저장 목록을 확인하는 중입니다."
+        : listFailed && state.reportsLoaded ? "저장 목록을 갱신하지 못해 이전 목록을 표시합니다."
+        : !state.reportsLoaded ? "저장 목록을 아직 확인하지 못했습니다." : "";
       const editable = report && ["draft", "review"].includes(report.status);
-      container.innerHTML = `<div class="monthly-reports" aria-busy="${Boolean(state.busy)}"><header class="mr-intro"><div><p class="mr-eyebrow">MONTHLY REPORTS</p><h2>자료를 확인하고, 월간 리포트로 남기세요</h2><p>업체·키워드·지역별 예약 흐름과 추정 매출을 저장된 자료로 정리합니다.</p></div><span class="mr-private-label">관리자 전용</span></header>
+      container.innerHTML = `<div class="monthly-reports" aria-busy="${Boolean(state.busy && (!entry || entry.listStatus === "loading"))}"><header class="mr-intro"><div><p class="mr-eyebrow">MONTHLY REPORTS</p><h2>자료를 확인하고, 월간 리포트로 남기세요</h2><p>업체·키워드·지역별 예약 흐름과 추정 매출을 저장된 자료로 정리합니다.</p></div><span class="mr-private-label">관리자 전용</span></header>
         <div class="mr-notice${state.busy ? " mr-notice-busy" : ""}" role="status" aria-live="polite">${state.busy ? `<span class="mr-loading" aria-hidden="true"></span><span data-mr-progress-text>${escapeHtml(busyText())}</span>` : escapeHtml(state.message)}</div>${state.error ? `<div class="mr-error" role="alert">${escapeHtml(state.error)}</div>` : ""}
         <section class="mr-card mr-create" aria-label="월간 리포트 생성 조건"><div class="mr-section-title"><h3>새 리포트</h3><span class="mr-muted">① 조건 선택 → ② 미리보기 → ③ 초안 저장</span></div><form data-mr-form><div class="mr-form-grid"><label>대상 월<input type="month" name="month" value="${escapeHtml(state.form.month)}" max="${today().slice(0, 7)}" required${busy}></label><label>유형<select name="type"${busy}>${Object.entries(TYPES).map(([key, label]) => `<option value="${key}"${key === state.form.type ? " selected" : ""}>${label}</option>`).join("")}</select></label><label class="mr-target">대상<select name="targetId" required${busy}>${targetOptions()}</select></label><label>관측 마감일<input type="date" name="cutoffDate" value="${escapeHtml(state.form.cutoffDate)}" max="${today()}"${busy}><small>비우면 해당 월 말일, 진행 중인 달은 오늘</small></label></div><div class="mr-form-actions"><label class="mr-search-label"><span class="mr-sr-only">대상 검색</span><input type="search" name="targetSearch" value="${escapeHtml(state.search)}" placeholder="업체명·키워드·지역 검색" autocomplete="off"${busy}></label><button class="primary-button" type="submit"${busy || !state.optionsVerified ? " disabled" : ""}>미리보기 만들기</button></div></form>${state.form.industry ? `<p class="mr-method-note" data-mr-industry-selection>참고 업종: ${escapeHtml(INDUSTRIES[state.form.industry] || state.form.industry)} · 본문 지역 집계와 별도로 표시합니다. 대상·월·관측 마감일을 바꾸면 선택을 해제합니다.</p>` : ""}${selectorNote()}</section>
-        <div class="mr-workspace"><aside class="mr-card mr-library" aria-label="저장 리포트"><div class="mr-section-title"><h3>저장 리포트 <span>${number(state.reports.length)}</span></h3><button type="button" class="mr-text-button" data-mr-action="refresh"${busy}>새로고침</button></div><div class="mr-filters" role="group" aria-label="발행 상태 필터">${Object.entries({ all: "전체", ...STATUSES }).map(([key, label]) => `<button type="button" data-mr-action="filter" data-filter="${key}" aria-pressed="${state.filter === key}"${busy}>${label}</button>`).join("")}</div>${renderList(state.reports, state.filter, report?.id)}</aside>
+        <div class="mr-workspace"><aside class="mr-card mr-library" aria-label="저장 리포트"><div class="mr-section-title"><h3>저장 리포트${state.reportsLoaded ? ` <span>${number(state.reports.length)}</span>` : ""}</h3><button type="button" class="mr-text-button" data-mr-action="refresh"${busy}>새로고침</button></div><div class="mr-filters" role="group" aria-label="발행 상태 필터">${Object.entries({ all: "전체", ...STATUSES }).map(([key, label]) => `<button type="button" data-mr-action="filter" data-filter="${key}" aria-pressed="${state.filter === key}"${libraryBusy}>${label}</button>`).join("")}</div>${listNotice ? `<p class="mr-empty" role="status">${listNotice}</p>` : ""}${state.reportsLoaded && (state.reports.length || !listNotice) ? renderList(state.reports, state.filter, report?.id, libraryBusy) : ""}${detailPending() ? `<p class="mr-empty" role="status">저장된 리포트를 여는 중입니다.</p>` : detailError ? `<p class="mr-empty" role="alert">${escapeHtml(detailError)}</p>` : ""}</aside>
         <section class="mr-card mr-detail" aria-label="리포트 미리보기와 상세">${snapshot ? `<div class="mr-detail-heading"><div><p class="mr-eyebrow">${report ? `VERSION ${number(report.version || 1)} · 수정 ${number(report.revision)}` : "PREVIEW · 아직 저장하지 않았습니다"}</p><h3>${escapeHtml(report?.title || reportTitle(state.previewRequest || snapshot.request, snapshot.target))}</h3><p>${escapeHtml(snapshot.target?.label || report?.targetId)} · ${escapeHtml(TYPES[report?.type || snapshot.request?.type] || "")}</p></div>${report ? statusTag(report.status) : '<span class="mr-status">미리보기</span>'}</div>
         ${report ? `<p class="mr-dates">작성 ${escapeHtml(timeLabel(report.createdAt))} · 수정 ${escapeHtml(timeLabel(report.updatedAt))}${report.publishedAt ? ` · 발행 ${escapeHtml(timeLabel(report.publishedAt))}` : ""} (한국시간)</p>` : generationNote()}
         ${editable || !report ? `<div class="mr-editor"><label>리포트 제목<input name="title" value="${escapeHtml(state.title)}" maxlength="200"${busy}></label><label>검토 메모<textarea name="notes" rows="3" maxlength="10000" placeholder="자료의 해석과 확인할 내용을 남기세요."${busy}>${escapeHtml(state.notes)}</textarea></label></div>` : report.notes ? `<p class="mr-notes">${escapeHtml(report.notes)}</p>` : ""}
         ${editable || !report ? actionEditor(snapshot,busy) : ""}${report?.status === "published" ? deliveryEditor(report,busy) : ""}<div class="mr-lifecycle">${!report ? `<button class="primary-button" type="button" data-mr-action="save"${busy}>초안으로 저장</button><p>저장된 수치와 근거는 고정되며, 발행은 검토 단계에서 진행합니다.</p>` : editable ? `<div class="mr-button-row"><button class="secondary-button" type="button" data-mr-action="update"${busy}>제목·메모 저장</button><button class="secondary-button" type="button" data-mr-action="rebuild"${busy}>저장 자료로 다시 집계</button>${report.status === "draft" ? `<button class="primary-button" type="button" data-mr-action="review"${busy}>검토 단계로 이동</button>` : `<button class="secondary-button" type="button" data-mr-action="draft"${busy}>초안으로 돌리기</button>`}</div>${report.status === "review" ? `<div class="mr-publish"><label><input type="checkbox" name="qualityAck"${state.acknowledged ? " checked" : ""}${busy}>자료 충족률, 누락·제외 경고와 추정 매출 기준을 확인했습니다.</label><button class="primary-button" type="button" data-mr-action="publish"${busy || !canPublish(report, state.acknowledged) ? " disabled" : ""}>리포트 발행</button><small>현재 제목·메모와 저장된 수치를 발행합니다. 외부에 자동 전송되지 않습니다.</small></div>` : '<p>수치와 근거는 저장 당시 기준입니다. 다시 집계하면 초안 상태에서 최신 저장 자료를 검토하게 됩니다. 기존 발행본은 보존됩니다.</p>'}` : `<div class="mr-button-row"><a class="primary-button" href="/api/monthly-reports/${encodeURIComponent(report.id)}/pdf" download>PDF 다운로드</a><button class="secondary-button" type="button" data-mr-action="revise"${busy}>새 수정본 만들기</button></div><p>발행본은 수정할 수 없습니다. 새 수정본을 만들면 기존 발행본이 보존됩니다.</p>`}</div>${snapshotMarkup(snapshot)}` : `<div class="mr-detail-empty"><span aria-hidden="true">▤</span><h3>한 달의 관측을 하나의 기록으로</h3><p>위에서 조건을 선택해 미리보기를 만들거나<br>왼쪽에서 저장한 리포트를 열어 보세요.</p><div class="mr-empty-legend"><span class="mr-public">● 공개 예약</span><span class="mr-phone">● 방막기 추정</span></div></div>`}</section></div></div>`;
+      if (scrollTop) {
+        const list = container.querySelector(".mr-report-list");
+        if (list) list.scrollTop = scrollTop;
+      }
+      if (focusData) {
+        const button = Array.from(container.querySelectorAll(".mr-library button")).find(candidate =>
+          !candidate.disabled && candidate.dataset.mrAction === focusData.mrAction &&
+          candidate.dataset.reportId === focusData.reportId && candidate.dataset.filter === focusData.filter);
+        button?.focus({ preventScroll: true });
+      }
     }
     async function readOptions() { return api("/options"); }
-    async function readList() { const data = await api(""); return Array.isArray(data) ? data : data.reports || []; }
-    async function loadList() { state.reports = await readList(); }
+    async function readList() {
+      const data = await api("");
+      const reports = Array.isArray(data) ? data : data?.reports;
+      if (!Array.isArray(reports)) throw new Error("저장 리포트 목록 응답을 확인해 주세요.");
+      return reports;
+    }
+    async function loadList() {
+      try {
+        state.reports = await readList();
+        state.reportsLoaded = true;
+        listFailed = false;
+      } catch (error) {
+        listFailed = true;
+        throw error;
+      }
+    }
+    async function readReport(id) {
+      const data = await api(`/${encodeURIComponent(id)}`);
+      return data.report || data;
+    }
+    function detailPending() {
+      return pendingDetail?.revision === openRevision;
+    }
+    function canUseEntryList() {
+      return entry?.revision === openRevision && entry.listStatus === "ready" && !detailPending();
+    }
+    async function openEntryReport(id, current) {
+      try {
+        const report = await readReport(id);
+        if (current.revision !== openRevision) return;
+        setReport(report);
+        current.selected = true;
+        state.message = "저장된 리포트를 열었습니다.";
+      } catch (error) {
+        if (current.revision === openRevision) detailError = String(error.message || "저장된 리포트를 열지 못했습니다.");
+      } finally {
+        if (pendingDetail === current) pendingDetail = null;
+        if (current.revision === openRevision) render(true);
+      }
+    }
     async function execute(label, operation, timingKey = "", startedAt = Date.now()) {
       if (state.busy) return false;
       const timingRevision = ++displayTimingRevision;
@@ -346,7 +406,7 @@
       try { await operation(); return true; } catch (error) { state.error = String(error.message || "리포트를 처리하지 못했습니다."); return false; }
       finally {
         if (ticker !== null) root.clearInterval(ticker);
-        state.busy = ""; state.busyStartedAt = 0; render();
+        state.busy = ""; state.busyStartedAt = 0; render(timingKey === "mrEntry");
         // QA reads these DOM diagnostics rather than treating automation input
         // overhead or an old aria-busy=false node as the new result's duration.
         if (timingKey && container.dataset) {
@@ -373,12 +433,28 @@
       while (state.busy) await new Promise(resolve => idleWaiters.push(resolve));
       if (revision !== openRevision) return false;
       state.optionsVerified = false;
-      await execute("저장된 리포트와 선택 항목을 불러오는 중입니다.", async () => {
-        // These reads are independent. Drain both before releasing busy, and do
-        // not let an older destination apply after a newer open was requested.
-        const [optionsResult, reportsResult] = await Promise.allSettled([readOptions(), readList()]);
+      detailError = "";
+      const current = entry = { revision, listStatus: "loading", selected: false };
+      await execute("새 리포트 선택 항목을 확인하는 중입니다.", async () => {
+        const options = readOptions();
+        const list = readList().then(reports => {
+          if (revision !== openRevision) return;
+          state.reports = reports;
+          state.reportsLoaded = true;
+          listFailed = false;
+          current.listStatus = "ready";
+          render();
+        }, error => {
+          if (revision === openRevision) {
+            current.listStatus = "error";
+            listFailed = true;
+            render();
+          }
+          throw error;
+        });
+        const [optionsResult, reportsResult] = await Promise.allSettled([options, list]);
+        entry = null;
         if (revision !== openRevision) return;
-        if (reportsResult.status === "fulfilled") state.reports = reportsResult.value;
         if (optionsResult.status === "rejected") {
           if (reportsResult.status === "rejected") {
             throw new Error(`${optionsResult.reason?.message || "선택 목록을 확인하지 못했습니다."} / ${reportsResult.reason?.message || "저장 리포트 목록을 확인하지 못했습니다."}`);
@@ -395,7 +471,7 @@
         if (context.type && Object.hasOwn(TYPES, context.type)) {
           delete state.form.industry;
           state.form.type = context.type; state.form.targetId = context.targetId || ""; state.search = ""; invalidatePreview();
-          state.report = null; state.title = ""; state.notes = "";
+          if (!current.selected) { state.report = null; state.title = ""; state.notes = ""; }
           if (Object.hasOwn(context, "month")) {
             state.form.month = ""; state.form.cutoffDate = "";
             if (typeof context.month !== "string" || !/^(20\d{2})-(0[1-9]|1[0-2])$/.test(context.month) || context.month > today().slice(0, 7)) {
@@ -423,7 +499,7 @@
           }
         }
         if (reportsResult.status === "rejected") throw reportsResult.reason;
-        state.message = state.form.industry
+        state.message = current.selected ? "저장된 리포트를 열었습니다." : state.form.industry
           ? `${INDUSTRIES[state.form.industry]} 업종 참고 집계의 지역·월·관측 마감일을 가져왔습니다. 지역 리포트 본문과 별도로 연결합니다.`
           : context.type === "region" && context.month
           ? "지역 DB에서 선택한 지역·대상 월·관측 마감일을 가져왔습니다. 저장 자료로 미리보기를 만들 수 있습니다."
@@ -431,13 +507,21 @@
       }, "mrEntry", startedAt);
     }
     async function action(name, value) {
-      if (state.busy) return;
+      const libraryAction = name === "filter" || name === "open";
+      if (detailPending() || state.busy && (!libraryAction || !canUseEntryList())) return;
+      if (entry && name === "open") {
+        pendingDetail = entry;
+        detailError = "";
+        render(true);
+        await openEntryReport(value, entry);
+        return;
+      }
       if (name === "add-plan") { if(state.actionPlan.items.length<20)state.actionPlan.items.push({id:"action-"+root.crypto.randomUUID(),title:"",owner:"",dueDate:null,status:"planned",evidenceRefs:[],outcome:""});state.acknowledged=false;render();return; }
       if (name === "remove-plan") { state.actionPlan.items.splice(Number(value),1);state.acknowledged=false;render();return; }
       if (name === "filter") { state.filter = value; render(); return; }
       await execute("리포트를 처리하는 중입니다.", async () => {
         if (name === "refresh") { await loadList(); state.message = "목록을 새로고침했습니다."; return; }
-        if (name === "open") { const data = await api(`/${encodeURIComponent(value)}`); setReport(data.report || data); state.message = "저장된 리포트를 열었습니다."; return; }
+        if (name === "open") { detailError = ""; setReport(await readReport(value)); state.message = "저장된 리포트를 열었습니다."; return; }
         if (name === "preview") {
           if (!state.optionsVerified) throw new Error("선택 목록을 다시 확인한 뒤 미리보기를 만들어 주세요.");
           if (!state.form.month || !state.form.targetId) throw new Error("대상 월과 대상을 선택해 주세요.");
@@ -487,7 +571,7 @@
       const publish=container.querySelector('[data-mr-action="publish"]');if(publish)publish.disabled=true;
     }
     function input(name, value) {
-      if (state.busy) return;
+      if (state.busy || detailPending()) return;
       if (name === "qualityAck") { state.acknowledged = Boolean(value); const button = container.querySelector('[data-mr-action="publish"]'); if (button) button.disabled = !canPublish(state.report, state.acknowledged); return; }
       if (name === "actionSummary") { state.actionPlan.summary=value;clearQualityApproval();return; }
       const itemField=/^action(Title|Owner|DueDate|Status|Refs|Outcome)_(\d+)$/.exec(name);
