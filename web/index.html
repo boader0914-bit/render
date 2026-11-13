@@ -20,6 +20,7 @@
   <link rel="stylesheet" href="/collector-controls.css">
   <link rel="stylesheet" href="/collection_rotation_controls.css">
   <link rel="stylesheet" href="/collection-monitor.css">
+  <link rel="stylesheet" href="/collection-workspace.css">
   <link rel="stylesheet" href="/monthly-reports.css">
   <link rel="stylesheet" href="/company-integrated.css">
   <link rel="stylesheet" href="/regional-report-preparation.css">
@@ -446,8 +447,15 @@
             <p class="legal-inline-notice crawl-legal-inline"><a href="/data-collection-notice" target="_blank" rel="noopener">수집 범위</a><span aria-hidden="true"> · </span><a href="/collection-failure-notice" target="_blank" rel="noopener">실패 가능성</a></p>
           </form>
 
-          <section class="collector-controls-card" id="collectorControlsCard" aria-label="워커별 수집 관리">
-            <header class="collector-page-head"><div><p class="collector-eyebrow">COLLECTION WORKSPACE</p><h3>워커별 수집</h3><p>조건은 워커별로, 결과는 한곳에.</p></div><button type="button" class="ghost-button" id="collectorRefresh">상태 새로고침</button></header>
+          <section class="collector-controls-card collection-workspace" id="collectorControlsCard" aria-label="수집 운영">
+            <header class="collector-page-head collection-workspace-head"><div><p class="collector-eyebrow">COLLECTION WORKSPACE</p><h3>수집 운영</h3><p>정기 일정과 회차별 상태를 확인하고, 필요한 작업으로 이동하세요.</p></div><button type="button" class="ghost-button" id="collectorRefresh">상태 새로고침</button></header>
+            <nav class="collection-workspace-nav" id="collectionWorkspaceNav" aria-label="수집 화면 바로가기">
+              <button type="button" data-collection-workspace-target="collectionWeeklyMonitor"><span class="cw-nav-number">01</span><span><strong>정기 수집 현황</strong><small>일정 · 수집 · 품질 · DB 반영</small></span><span class="cw-nav-arrow" aria-hidden="true">↗</span></button>
+              <button type="button" data-collection-workspace-target="collectorExecutionHeading"><span class="cw-nav-number">02</span><span><strong>실행·예약 설정</strong><small>공동 순환예약 · 워커별 조건</small></span><span class="cw-nav-arrow" aria-hidden="true">↗</span></button>
+              <button type="button" data-collection-workspace-target="collectorHistoryTitle"><span class="cw-nav-number">03</span><span><strong>수집 기록</strong><small>기간 · 키워드 · 처리 상태</small></span><span class="cw-nav-arrow" aria-hidden="true">↗</span></button>
+              <button type="button" data-open-collection-archive><span class="cw-nav-number">04</span><span><strong>결과 보관함</strong><small>저장된 결과 · 선택 자료 조회</small></span><span class="cw-nav-arrow" aria-hidden="true">↗</span></button>
+            </nav>
+            <div class="collection-workspace-section-heading" id="collectorExecutionHeading" tabindex="-1"><div><span class="cw-section-number">02 / EXECUTION</span><h3>실행·예약 설정</h3><p>공동 순환예약을 확인하고, 워커별 조건으로 필요한 수집을 실행합니다.</p></div><span class="cw-section-note">화면 내 이동 시 입력 유지</span></div>
             <div class="collector-worker-grid" id="collectorWorkerStates"><p class="hint">관리자 연결을 확인하고 있습니다.</p></div>
             <section class="collector-history-panel" aria-labelledby="collectorHistoryTitle">
               <div class="collector-history-head"><div class="collector-history-copy"><h3 id="collectorHistoryTitle">수집 기록 <span id="collectorHistoryCount" class="collector-history-count">기간 기록 확인 중</span></h3><p id="collectorHistoryLatest" class="hint">최근 결과를 확인하고 있습니다.</p></div><button type="button" id="collectorHistoryToggle" class="collector-history-toggle" aria-expanded="false" aria-controls="collectorHistoryContent" aria-label="수집 기록 펼치기"><span id="collectorHistoryToggleLabel">펼치기</span><span class="collector-history-chevron" aria-hidden="true">⌄</span></button></div>
@@ -657,6 +665,7 @@
   <script src="/collector_controls.js"></script>
   <script src="/collection_rotation_controls.js"></script>
   <script src="/collection-monitor.js"></script>
+  <script src="/collection-workspace.js"></script>
   <script src="/insight-customers.js"></script>
 </body>
 </html>

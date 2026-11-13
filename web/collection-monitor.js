@@ -92,6 +92,32 @@
     }
     return { tone: "unknown", label: "상태 미확인", note: "저장된 상태가 없거나 해석할 수 없습니다." };
   }
+  function stageStates(item = {}) {
+    const quality = item.collectionQuality || {}, db = item.postprocess || {};
+    const stage = (key, label, value, tone = "unknown") => ({ key, label, value, tone });
+    if (item.projected) return [stage("collection", "수집", "예정", "pending"), stage("quality", "품질", "미확인"), stage("db", "DB", "미확인")];
+    const collection = ({ running: ["진행 중", "running"], partial: ["미확보", "issue"], failed: ["실패", "issue"], blocked: ["접근 제한", "issue"],
+      missed: ["미실행", "issue"], interrupted: ["중단", "issue"], error: ["오류", "issue"], reused: ["기존 자료", "unknown"],
+      queued: ["대기", "pending"], pending: ["대기", "pending"], scheduled: ["예정", "pending"], planned: ["예정", "pending"], waiting: ["대기", "pending"],
+      paused: ["보류", "pending"], cancelled: ["취소", "pending"], canceled: ["취소", "pending"] })[item.status]
+      || (["complete", "completed"].includes(item.status) && item.runId && !item.errorCode ? ["완료", "complete"] : ["미확인", "unknown"]);
+    const qualityState = quality.blockedReason || quality.failure ? ["확인 필요", "issue"]
+      : ["partial", "failed", "blocked"].includes(quality.status) ? ({ partial: ["미확보", "issue"], failed: ["실패", "issue"], blocked: ["접근 제한", "issue"] })[quality.status]
+        : quality.status === "complete" && item.runId && ["complete", "completed", "reused"].includes(item.status) ? ["완료", "complete"] : ["미확인", "unknown"];
+    const dbState = postprocessBound(item) ? ({ complete: ["완료", "complete"], running: ["반영 중", "running"], queued: ["대기", "pending"],
+      pending: ["대기", "pending"], waiting: ["대기", "pending"], held: ["대기", "pending"], failed: ["실패", "issue"] })[db.state || db.status] : null;
+    return [stage("collection", "수집", ...collection), stage("quality", "품질", ...qualityState), stage("db", "DB", ...(dbState || ["미확인", "unknown"]))];
+  }
+  function disposition(item = {}) {
+    if (item.projected) return null;
+    const continuation = partialContinuation(item);
+    if (continuation) return item.continuation.decision === "continue"
+      ? { kind: "continue", label: "저장 판정 · 다음 배정 진행 허용" }
+      : { kind: "hold", label: "저장 판정 · 다음 배정 중단" };
+    if (item.status === "blocked" || item.collectionQuality?.blockedReason) return { kind: "hold", label: "접근 제한 기록 · 보호 확인" };
+    if (item.status === "paused" && item.errorCode && item.errorCode !== "ROTATION_PAUSED_BY_USER") return { kind: "hold", label: "보류 기록 · 사유 확인" };
+    return null;
+  }
   function buildModel(snapshot = {}, filters = {}, now = Date.now()) {
     const from = validDay(snapshot.from) ? snapshot.from : weekStart(kstDay(now)), days = Array.from({ length: 7 }, (_, i) => addDays(from, i));
     const seen = new Set(), items = [];
@@ -108,18 +134,19 @@
     const rows = keywords.filter(keyword => keyword.toLocaleLowerCase("ko-KR").includes(query) && ((!filters.worker && !filters.tone) || visible.some(x => x.keyword === keyword))).map(keyword => ({ keyword, cells: days.map(day => ({ day, items: visible.filter(x => x.keyword === keyword && x.day === day) })) }));
     const selectedDay = validDay(filters.day) && days.includes(filters.day) ? filters.day : days.includes(snapshot.today) ? snapshot.today : days[0];
     const dayItems = items.filter(item => item.day === selectedDay), visibleItems = visible.filter(item => item.keyword.toLocaleLowerCase("ko-KR").includes(query));
+    const dayCounts = Object.fromEntries(Object.keys(TONES).map(tone => [tone, dayItems.filter(item => item.visual.tone === tone).length]));
     return { from, to: days[6], days, rows, items, counts, actualCount: items.filter(x => !x.projected).length, projectedCount: items.filter(x => x.projected).length,
-      selectedDay, dayItems, visibleDayItems: visibleItems.filter(item => item.day === selectedDay), visibleItems, dayCoverage: coverageFor(snapshot, selectedDay),
+      selectedDay, dayItems, dayCounts, visibleDayItems: visibleItems.filter(item => item.day === selectedDay), visibleItems, dayCoverage: coverageFor(snapshot, selectedDay),
       coverageIncomplete: days.some(day => !["saved", "available", "projected", "not_started"].includes(coverageFor(snapshot, day).status)) };
   }
-  const exported = { classify, buildModel, weekStart, kstDay, addDays, validDay, time, TONES, workerLabel, itemKey, postprocessBound, coverageFor, cellPlaceholder, conditionDays, conditionRanks, allocationLabel, partialContinuation };
+  const exported = { classify, buildModel, stageStates, disposition, weekStart, kstDay, addDays, validDay, time, TONES, workerLabel, itemKey, postprocessBound, coverageFor, cellPlaceholder, conditionDays, conditionRanks, allocationLabel, partialContinuation };
   if (typeof module === "object" && module.exports) module.exports = exported;
   if (typeof document === "undefined" || typeof window === "undefined") return;
 
   function mount(parent, options = {}) {
     if (!parent || document.getElementById("collectionWeeklyMonitor")) return;
     const preview = options.snapshot || null, standalone = Boolean(preview), clock = options.now || Date.now, request = options.fetch || window.fetch.bind(window);
-    let snapshot = preview, selectedDay = validDay(preview?.today) ? preview.today : kstDay(clock()), selectedWeek = preview?.from || weekStart(selectedDay), loading = false, sequence = 0, destroyed = false, lastRead = 0, timer, selectedItem = null, lastError = "", focusTargets = new Map(), activeRequest = null, authBlocked = false, refreshPending = false;
+    let snapshot = preview, selectedDay = validDay(preview?.today) ? preview.today : kstDay(clock()), selectedWeek = preview?.from || weekStart(selectedDay), loading = false, sequence = 0, destroyed = false, lastRead = 0, timer, selectedItem = null, selectedOrigin = "table", lastError = "", focusTargets = new Map(), activeRequest = null, authBlocked = false, refreshPending = false;
     const filters = { query: "", worker: "", tone: "", day: selectedDay }, el = (tag, cls = "", text = "") => { const n = document.createElement(tag); n.className = cls; n.textContent = text; return n; };
     const root = el("section", "collection-monitor"); root.id = "collectionWeeklyMonitor"; root.setAttribute("aria-label", "요일·키워드별 정기 수집 현황");
     const header = el("header", "cm-header"), title = el("div"); title.append(el("p", "cm-eyebrow", "COLLECTION MONITOR"), el("h3", "", "정기 수집 현황"), el("p", "cm-subtitle", "요일과 키워드로 보는 수집 · 품질 · DB 반영 상태"));
@@ -138,7 +165,11 @@
     prevDay.setAttribute("aria-label", "이전 날짜"); nextDay.setAttribute("aria-label", "다음 날짜"); dayInput.type = "date"; dayInput.setAttribute("aria-label", "조회 날짜");
     dayInput.addEventListener("change", () => selectDay(dayInput.value)); dateNav.append(prevDay, dayInput, nextDay); dayHeader.append(dayTitle, dateNav);
     const dayCards = el("div", "cm-day-cards"), dayEmpty = el("p", "cm-empty"), dateError = el("p", "cm-date-error"); dateError.hidden = true; dateError.setAttribute("role", "alert");
-    dayCards.setAttribute("aria-label", "선택일의 저장 배정 및 계산 예정"); daySection.append(dayHeader, dateError, dayCards, dayEmpty); root.append(daySection);
+    const daySummary = el("div", "cm-day-summary"), dayScope = el("p", "cm-day-scope", "선택일 전체 기준 · 조회 필터는 아래 회차 카드와 주간표에 적용됩니다.");
+    daySummary.setAttribute("aria-label", "선택일 전체 배정 상태별 합계. 필터 적용 전");
+    const detail = el("section", "cm-detail"); detail.hidden = true; detail.setAttribute("aria-label", "선택한 수집 상세");
+    dayCards.setAttribute("aria-label", "선택일의 저장 배정 및 계산 예정"); daySection.append(dayHeader, dateError, daySummary, dayScope, dayCards, dayEmpty, detail); root.append(daySection);
+    const weekHeading = el("div", "cm-week-heading"); weekHeading.append(el("h4", "", "조회 주 전체 상태"), el("small", "", "상태를 선택하면 회차 카드와 주간표를 함께 좁혀 봅니다.")); root.append(weekHeading);
     const cards = el("div", "cm-summary"); cards.setAttribute("aria-label", "조회 주의 확인된 배정 상태별 합계 및 필터"); root.append(cards);
     const filterBar = el("div", "cm-filters");
     function select(label, entries, key) { const wrap = el("label"), input = el("select"); wrap.append(el("span", "", label), input); for (const [value, text] of entries) { const option = el("option", "", text); option.value = value; input.append(option); } input.addEventListener("change", () => { filters[key] = input.value; render(); }); filterBar.append(wrap); return input; }
@@ -148,20 +179,30 @@
     const legend = el("div", "cm-legend"); for (const [tone, { label, symbol }] of Object.entries(TONES)) { const item = el("span", "cm-legend-item", `${symbol} ${label}`); item.dataset.tone = tone; legend.append(item); } filterBar.append(legend); root.append(filterBar);
     const tableWrap = el("div", "cm-table-wrap"); tableWrap.tabIndex = 0; tableWrap.setAttribute("aria-label", "주간 수집표. 좁은 화면에서는 좌우로 이동할 수 있습니다."); const table = el("table", "cm-table"); tableWrap.append(table); root.append(tableWrap);
     const empty = el("p", "cm-empty", "저장된 예약을 확인하고 있습니다."); root.append(empty);
-    const detail = el("section", "cm-detail"); detail.hidden = true; detail.setAttribute("aria-label", "선택한 수집 상세"); root.append(detail);
     root.append(el("p", "cm-current-partial-policy", "현재 진행 기준 · 일반 응답 미확보는 기록하고 다음 정규 배정 진행을 허용합니다. 건수·비율·연속 횟수로 중단하지 않습니다. 캡차·호출 제한·저장 실패·실행 불명 보호는 유지합니다. 현재 예약 활성 상태는 상단 표시를 따르며, 과거 회차는 당시 저장된 판정을 표시합니다."));
-    const footer = el("p", "cm-footnote", "녹색 = 수집·품질·같은 실행의 DB 반영 완료. 월집계 완료와 별도입니다. ‘예정(계산)’은 저장된 확정 배정과 구분합니다. 상태 합계는 확인된 배정 기준이며 기록이 없는 날짜는 미확인입니다. 표의 빈칸은 수집 실패나 예약 0건을 뜻하지 않습니다. 모든 시각은 한국시간입니다."); root.append(footer);
-    const before = document.getElementById("collectionRotationPanel") || document.getElementById("collectorWorkerStates"); if (before?.parentNode === parent) parent.insertBefore(root, before); else parent.append(root);
+    const footer = el("p", "cm-footnote", "회차의 ‘정상 완료’ = 수집·품질·같은 실행의 DB 반영 완료. 단계별 표시는 각 단계의 저장 상태이며 월집계 완료와 별도입니다. ‘예정(계산)’은 저장된 확정 배정과 구분합니다. 상태 합계는 확인된 배정 기준이며 기록이 없는 날짜는 미확인입니다. 표의 빈칸은 수집 실패나 예약 0건을 뜻하지 않습니다. 모든 시각은 한국시간입니다."); root.append(footer);
+    const before = document.getElementById("collectorExecutionHeading") || document.getElementById("collectionRotationPanel") || document.getElementById("collectorWorkerStates"); if (before?.parentNode === parent) parent.insertBefore(root, before); else parent.append(root);
     function allowed() { return standalone || (document.body.classList.contains("role-admin") && !document.body.classList.contains("admin-user-view")); }
     function visible() { return allowed() && !document.hidden && root.getClientRects().length > 0; }
     function focusTarget(node, key) { node.dataset.monitorFocus = key; focusTargets.set(key, node); return node; }
-    function selectItem(item) { selectedItem = item; selectedDay = item.day; filters.day = selectedDay; render(); renderDetail(item, true); }
+    function selectItem(item, origin = "table") { selectedItem = item; selectedOrigin = origin; selectedDay = item.day; filters.day = selectedDay; render(); renderDetail(item, true); }
+    function stageNodes(item) {
+      const stages = el("span", "cm-stages"); stages.setAttribute("aria-label", "저장된 단계별 상태");
+      for (const stage of stageStates(item)) { const value = el("span", "cm-stage", `${stage.label} ${stage.value}`); value.dataset.stage = stage.key; value.dataset.tone = stage.tone; stages.append(value); }
+      return stages;
+    }
+    function dispositionNode(item) {
+      const saved = disposition(item); if (!saved) return null;
+      const note = el("small", "cm-disposition", saved.label); note.dataset.kind = saved.kind;
+      note.title = "이 회차에 저장된 기록입니다. 현재 예약의 활성·보호 상태는 상단 표시를 확인하세요."; return note;
+    }
     function renderDetail(item, focus = true) {
       selectedItem = item; detail.replaceChildren(); if (!item) { detail.hidden = true; return; } detail.hidden = false;
       const top = el("div", "cm-detail-head"), name = focusTarget(el("h4", "", `${item.keyword} · ${item.day} · ${time(item.scheduledAt)}`), "detail-title"); name.tabIndex = -1;
-      const close = focusTarget(button("닫기", () => { const key = selectedItem && itemKey(selectedItem); selectedItem = null; render(); focusTargets.get(`table:${key}`)?.focus({ preventScroll: true }); }), "detail-close");
+      const close = focusTarget(button("닫기", () => { const key = selectedItem && itemKey(selectedItem); selectedItem = null; render(); focusTargets.get(`${selectedOrigin}:${key}`)?.focus({ preventScroll: true }); }), "detail-close");
       top.append(name, close); detail.append(top);
-      const badge = el("strong", "cm-detail-state", item.visual.label); badge.dataset.tone = item.visual.tone; detail.append(badge, el("p", "", item.visual.note));
+      const badge = el("strong", "cm-detail-state", item.visual.label); badge.dataset.tone = item.visual.tone; detail.append(badge, el("p", "", item.visual.note), stageNodes(item));
+      const dispositionNote = dispositionNode(item); if (dispositionNote) detail.append(dispositionNote);
       const continuation = partialContinuation(item);
       if (continuation) detail.append(el("small", "cm-partial-policy", continuation.guide));
       const list = el("dl", "cm-detail-grid"), db = item.postprocess || {}, quality = item.collectionQuality || {}, bound = !item.projected && postprocessBound(item);
@@ -186,16 +227,23 @@
       const weekday = new Intl.DateTimeFormat("ko-KR", { weekday: "long", timeZone: "UTC" }).format(new Date(selectedDay + "T00:00:00Z"));
       const dayActual = model.dayItems.filter(item => !item.projected).length, dayProjected = model.dayItems.filter(item => item.projected).length;
       const savedEmptyDay = usable && model.dayCoverage.status === "saved" && model.dayCoverage.count === 0, beforeStart = usable && model.dayCoverage.status === "not_started";
-      const daySummary = !usable ? "기록 미확인" : model.dayItems.length ? [...(dayActual ? [`저장 ${dayActual}회`] : []), ...(dayProjected ? [`계산 예정 ${dayProjected}회`] : [])].join(" · ") : savedEmptyDay ? "저장 배정 확인 필요" : beforeStart ? "정기수집 시작 전" : "기록 미확인";
-      dayTitle.textContent = `${selectedDay.slice(5).replace("-", "/")} ${weekday} · ${daySummary}`;
+      const daySummaryText = !usable ? "기록 미확인" : model.dayItems.length ? [...(dayActual ? [`저장 ${dayActual}회`] : []), ...(dayProjected ? [`계산 예정 ${dayProjected}회`] : [])].join(" · ") : savedEmptyDay ? "저장 배정 확인 필요" : beforeStart ? "정기수집 시작 전" : "기록 미확인";
+      dayTitle.textContent = `${selectedDay.slice(5).replace("-", "/")} ${weekday} · ${daySummaryText}`;
+      daySummary.replaceChildren();
+      for (const [tone, info] of Object.entries(TONES)) {
+        const stat = el("span", "cm-day-stat"); stat.dataset.tone = tone;
+        stat.append(el("span", "", `${info.symbol} ${info.label}`), el("strong", "", usable && model.dayItems.length ? String(model.dayCounts[tone]) : "—")); daySummary.append(stat);
+      }
       dayInput.value = selectedDay; dayInput.min = standalone ? model.from : "2000-01-01"; dayInput.max = standalone ? model.to : "2099-12-31";
       prevDay.disabled = standalone ? selectedDay <= model.from : selectedDay <= "2000-01-01"; nextDay.disabled = standalone ? selectedDay >= model.to : selectedDay >= "2099-12-31";
       dayCards.replaceChildren();
       if (usable) for (const item of model.visibleDayItems) {
-        const card = focusTarget(button("", () => selectItem(item), "cm-day-card"), `day:${itemKey(item)}`); card.dataset.tone = item.visual.tone;
+        const card = focusTarget(button("", () => selectItem(item, "day"), "cm-day-card"), `day:${itemKey(item)}`); card.dataset.tone = item.visual.tone;
         card.setAttribute("aria-pressed", String(Boolean(selectedItem && itemKey(selectedItem) === itemKey(item))));
-        card.setAttribute("aria-label", `${item.day} ${time(item.scheduledAt)} ${item.keyword} ${workerLabel(item.workerKey)} ${item.visual.label} ${allocationLabel(item)}`);
-        card.append(el("span", "cm-card-time", time(item.scheduledAt)), el("span", "cm-card-keyword", item.keyword), el("span", "cm-card-worker", workerLabel(item.workerKey)), el("span", "cm-card-state", `${TONES[item.visual.tone].symbol} ${item.visual.label}`), el("small", "cm-card-source", allocationLabel(item))); dayCards.append(card);
+        card.setAttribute("aria-label", `${item.day} ${time(item.scheduledAt)} ${item.keyword} ${workerLabel(item.workerKey)} ${item.visual.label} ${allocationLabel(item)}. ${stageStates(item).map(stage => `${stage.label} ${stage.value}`).join(". ")}`);
+        card.append(el("span", "cm-card-time", time(item.scheduledAt)), el("span", "cm-card-keyword", item.keyword), el("span", "cm-card-worker", workerLabel(item.workerKey)), el("span", "cm-card-state", `${TONES[item.visual.tone].symbol} ${item.visual.label}`), stageNodes(item));
+        const dispositionNote = dispositionNode(item); if (dispositionNote) card.append(dispositionNote);
+        card.append(el("small", "cm-card-source", allocationLabel(item))); dayCards.append(card);
       }
       dayEmpty.hidden = usable && model.visibleDayItems.length > 0;
       dayEmpty.textContent = !usable ? "표시할 수 있는 저장 상태가 없습니다." : model.dayItems.length ? "조건에 맞는 선택일 배정이 없습니다." : savedEmptyDay ? "날짜의 저장 기록은 있으나 배정 항목을 확인하지 못했습니다. 배정 없음이나 정상 완료로 판정하지 않습니다." : beforeStart ? "정기수집을 시작하기 전 날짜입니다." : "이 날짜의 배정 기록을 확인하지 못했습니다. 정상 대기나 0건으로 판정하지 않습니다.";
@@ -218,6 +266,7 @@
             chip.setAttribute("aria-pressed", String(Boolean(selectedItem && itemKey(selectedItem) === itemKey(item))));
             chip.setAttribute("aria-label", `${item.day} ${item.keyword} ${time(item.scheduledAt)} ${workerLabel(item.workerKey)} ${item.visual.label} ${allocationLabel(item)}`);
             chip.append(el("span", "cm-slot-top", `${TONES[item.visual.tone].symbol} ${item.visual.label}`), el("small", "", `${time(item.scheduledAt)} · ${workerLabel(item.workerKey)}`));
+            const dispositionNote = dispositionNode(item); if (dispositionNote) chip.append(dispositionNote);
             if (item.planKind === "one_day_trial") chip.append(el("small", "cm-slot-source", "1일 시험")); td.append(chip);
           }
           if (!cell.items.length) td.append(el("span", "cm-no-slot", cellPlaceholder(snapshot, cell.day, Boolean(filters.worker || filters.tone))));

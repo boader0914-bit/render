@@ -28,6 +28,17 @@ test("saved collection remains complete while DB preparation is queued, running,
     assert.ok(descendants(row).some(item => item.tagName === "BUTTON" && item.textContent === "결과 보기"));
   }
 });
+test("saved 21-day schedules remain selectable without changing their configuration", async () => {
+  const saved = clone(config); saved.collection.bookingDays = 21; saved.keywords = ["경남글램핑"];
+  const before = clone(saved), ui = await mockUi({ configs: { web: saved } });
+  const period = ui.input("web", "period");
+  assert.equal(period.value, "21");
+  assert.ok(period.children.some(option => option.value === "21" && option.textContent === "수집일부터 21일"));
+  assert.equal(helpers.collectionDates({ period: period.value }, Date.parse("2026-11-14T00:00:00Z")).bookingDays, 21);
+  assert.ok(ui.calls.every(call => call.method === "GET"));
+  assert.deepEqual(saved, before);
+});
+
 test("startup failure labels distinguish execution identity from connection and artifact errors", () => {
   assert.match(errorMessage("COLLECTOR_ROLE_MISMATCH"), /수집기 역할과 실행 조건.*시작하지 못/);
   assert.match(errorMessage("COLLECTOR_RUN_TOKEN_INVALID"), /수집 실행 식별값 형식/);

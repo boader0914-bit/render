@@ -193,9 +193,11 @@ const text = node => descendants(node).map(x => x.textContent).join(" ");
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function settle() { for (let i = 0; i < 8; i++) await tick(); }
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
-async function mockUi({ response = snapshot(), preview = null, role = "role-admin", request: overrideRequest, now = NOW, trackFocus = false } = {}) {
+async function mockUi({ response = snapshot(), preview = null, role = "role-admin", request: overrideRequest, now = NOW, trackFocus = false, executionHeading = false } = {}) {
   const nodes = new Map(), body = new Element("body", nodes), parent = new Element("section", nodes), marker = new Element("div", nodes);
-  body.className = role; marker.id = "collectorWorkerStates"; parent.append(marker);
+  body.className = role; marker.id = "collectorWorkerStates";
+  if (executionHeading) { const heading = new Element("div", nodes); heading.id = "collectorExecutionHeading"; parent.append(heading); }
+  parent.append(marker);
   const listeners = {}, windowListeners = {}, timers = [], observers = [], calls = []; let clock = now, next = response;
   const document = { body, hidden: false, getElementById: id => nodes.get(id), createElement: tag => new Element(tag, nodes), addEventListener(type, fn) { listeners[type] = fn; }, removeEventListener(type) { delete listeners[type]; } };
   if (trackFocus) Object.defineProperty(document, "activeElement", { get: () => nodes.activeElement });
@@ -417,4 +419,88 @@ test("rotation change refreshes current-plan metadata immediately only for a vis
   ui.document.hidden = false; ui.body.className = "role-admin admin-user-view"; ui.windowListeners["collector:rotation-changed"](); await settle(); assert.equal(ui.calls.length, 3);
   ui.controller.destroy(); assert.equal(ui.windowListeners["collector:rotation-changed"], undefined);
   assert.ok(ui.calls.every(call => call.options.method === "GET" && !call.options.body));
+});
+
+test("stage chips require the exact DB binding and cannot turn projections or reused data into new collections", () => {
+  const states = item => Object.fromEntries(monitor.stageStates(item).map(stage => [stage.key, { value: stage.value, tone: stage.tone }]));
+  assert.deepEqual(states(occurrence()), { collection: { value: "완료", tone: "complete" }, quality: { value: "완료", tone: "complete" }, db: { value: "완료", tone: "complete" } });
+  for (const change of [{ runId: "other_run" }, { scheduleOccurrenceId: "other_slot" }, { bindingVerified: false }]) {
+    const value = occurrence({ postprocess: { ...occurrence().postprocess, ...change } });
+    assert.deepEqual(states(value).db, { value: "미확인", tone: "unknown" });
+  }
+  const projected = occurrence({ projected: true });
+  assert.deepEqual(states(projected), { collection: { value: "예정", tone: "pending" }, quality: { value: "미확인", tone: "unknown" }, db: { value: "미확인", tone: "unknown" } });
+  assert.deepEqual(states(occurrence({ status: "reused" })).collection, { value: "기존 자료", tone: "unknown" });
+  assert.equal(states(occurrence({ runId: null })).collection.tone, "unknown");
+  assert.equal(states(occurrence({ status: "queued" })).quality.tone, "unknown");
+  assert.equal(states(occurrence({ collectionQuality: { status: "complete", blockedReason: "naver_captcha" } })).quality.tone, "issue");
+});
+
+test("selected-day counts are distinct from the unchanged weekly counts and ignore presentation filters", async () => {
+  const previous = occurrence({ id: "previous_slot", day: "2026-10-23", scheduledAt: "2026-10-23T00:00:00Z", runId: "previous_run",
+    postprocess: { runId: "previous_run", scheduleOccurrenceId: "previous_slot", state: "complete" } });
+  const failed = occurrence({ status: "failed", collectionQuality: { status: "failed" }, postprocess: undefined });
+  const saved = snapshot([previous, failed]);
+  const filtered = monitor.buildModel(saved, { day: "2026-10-24", query: "없음" }, NOW);
+  assert.deepEqual(filtered.counts, { complete: 1, pending: 0, running: 0, issue: 1, unknown: 0 });
+  assert.deepEqual(filtered.dayCounts, { complete: 0, pending: 0, running: 0, issue: 1, unknown: 0 });
+  assert.equal(filtered.visibleDayItems.length, 0);
+  const ui = await mockUi({ response: saved });
+  const counts = () => Object.fromEntries(ui.find("cm-day-stat").map(stat => [stat.dataset.tone, stat.children[1].textContent]));
+  assert.equal(counts().complete, "0"); assert.equal(counts().issue, "1");
+  assert.match(text(ui.find("cm-week-heading")[0]), /조회 주 전체 상태/); assert.match(text(ui.find("cm-day-scope")[0]), /선택일 전체 기준/);
+  const query = ui.find("cm-filters")[0].children[0].children[1]; query.value = "없음"; await query.fire("input");
+  assert.equal(ui.find("cm-day-card").length, 0); assert.equal(counts().issue, "1");
+  dateInput(ui).value = "2026-10-23"; await dateInput(ui).fire("change"); assert.equal(counts().complete, "1"); assert.equal(counts().issue, "0");
+  assert.equal(ui.calls.length, 1);
+});
+
+test("missing or unavailable selected-day evidence displays unknown totals instead of zero completions", async () => {
+  const ui = await mockUi({ response: mixedSnapshot(), now: MIXED_NOW });
+  dateInput(ui).value = "2026-10-29"; await dateInput(ui).fire("change");
+  assert.ok(ui.find("cm-day-stat").every(stat => stat.children[1].textContent === "—"));
+  ui.setResponse(mixedSnapshot({ available: false })); await ui.controller.refresh();
+  assert.ok(ui.find("cm-day-stat").every(stat => stat.children[1].textContent === "—"));
+  assert.equal(ui.find("cm-day-card").length, 0);
+});
+
+test("saved continuation and hold notes distinguish the recorded decision without changing issue classification", async () => {
+  const item = occurrence({ status: "partial", collectionQuality: { status: "partial", reason: "booking_schedule_responses_incomplete" }, postprocess: undefined,
+    continuation: { policyVersion: "rotation-partial-v2", decision: "continue", reasonCode: "ROTATION_PARTIAL_CONTINUED", responseReason: "booking_schedule_responses_incomplete",
+      failedSchedules: 1, requestedSchedules: 100, affectedCompanies: 1, consecutivePartialRuns: 2, missingBookingResults: 0, failedOtaRequests: 0 } });
+  const blocked = occurrence({ id: "protected_slot", status: "blocked", collectionQuality: { status: "blocked", blockedReason: "naver_captcha" }, postprocess: undefined });
+  const original = clone([item, blocked]), ui = await mockUi({ response: snapshot([item, blocked], { enabled: false }) });
+  const noteFor = target => descendants(ui.find("cm-day-card").find(card => card.dataset.monitorFocus === `day:${monitor.itemKey(target)}`)).find(node => node.className === "cm-disposition");
+  const continued = noteFor(item), held = noteFor(blocked);
+  assert.equal(continued.dataset.kind, "continue"); assert.match(text(continued), /저장 판정/); assert.match(text(continued), /다음 배정 진행 허용/);
+  assert.equal(held.dataset.kind, "hold"); assert.match(text(held), /접근 제한 기록/);
+  assert.match(continued.title, /현재 예약/); assert.match(text(ui.find("cm-connection")[0]), /예약 정지/);
+  assert.ok(ui.find("cm-day-card").every(card => card.dataset.tone === "issue"));
+  assert.equal(monitor.buildModel(snapshot([item, blocked]), {}, NOW).counts.issue, 2);
+  assert.equal(monitor.disposition({ ...item, continuation: { ...item.continuation, responseReason: "no_main_results" } }), null);
+  assert.equal(monitor.disposition({ ...item, projected: true }), null);
+  assert.deepEqual(clone([item, blocked]), original);
+});
+
+test("selected detail sits beside day cards and returns focus to its originating day card or weekly chip", async () => {
+  const ui = await mockUi({ trackFocus: true, executionHeading: true });
+  assert.deepEqual(ui.parent.children.map(node => node.id), ["collectionWeeklyMonitor", "collectorExecutionHeading", "collectorWorkerStates"]);
+  const daySection = ui.find("cm-day-section")[0], detail = ui.find("cm-detail")[0];
+  assert.equal(detail.parentNode, daySection); assert.equal(daySection.children.at(-1), detail);
+  assert.ok(ui.panel.children.indexOf(daySection) < ui.panel.children.indexOf(ui.find("cm-week-heading")[0]));
+  for (const [cls, prefix] of [["cm-day-card", "day:"], ["cm-slot", "table:"]]) {
+    await ui.find(cls)[0].fire("click");
+    assert.equal(ui.find("cm-stage").filter(node => node.dataset.stage === "db" && node.dataset.tone === "complete").length, 2);
+    await descendants(detail).find(node => node.dataset.monitorFocus === "detail-close").fire("click");
+    assert.ok(ui.document.activeElement.dataset.monitorFocus.startsWith(prefix)); assert.equal(detail.hidden, true);
+  }
+  assert.equal(ui.calls.length, 1);
+});
+
+test("authentication expiry clears the new day summary and recorded disposition as well as cards", async () => {
+  let status = 200;
+  const ui = await mockUi({ request: async () => ({ ok: status === 200, status, json: async () => snapshot() }) });
+  await ui.find("cm-day-card")[0].fire("click"); status = 401; await ui.controller.refresh();
+  assert.ok(ui.find("cm-day-stat").every(stat => stat.children[1].textContent === "—"));
+  assert.equal(ui.find("cm-stage").length, 0); assert.equal(ui.find("cm-disposition").length, 0); assert.equal(ui.find("cm-detail")[0].hidden, true);
 });
