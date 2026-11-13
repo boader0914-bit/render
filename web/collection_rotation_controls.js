@@ -17,6 +17,14 @@
     ROTATION_INDIVIDUAL_SCHEDULE_ENABLED: "선택한 수집기의 개별 예약이 켜져 있습니다. 개별 예약을 먼저 일시정지하세요.",
     ROTATION_COLLECTION_FAILED: "수집 결과를 확인해야 하므로 공동 예약을 일시정지했습니다.",
     ROTATION_PROVIDER_BLOCKED: "접근 제한이 감지되어 공동 예약을 일시정지했습니다.",
+    ROTATION_PARTIAL_CONTINUED: "소수의 예약 응답 미확보를 기록하고 다음 배정 진행을 허용했습니다.",
+    ROTATION_PARTIAL_REPEATED: "예약 응답의 일부 미확보가 2회 연속 발생해 다음 배정을 중단했습니다.",
+    ROTATION_PARTIAL_TOO_MANY_FAILURES: "예약 응답 미확보 건수·비율 또는 영향 업체 수가 기준을 넘어 다음 배정을 중단했습니다.",
+    ROTATION_PARTIAL_EVIDENCE_UNVERIFIED: "부분 수집의 범위와 저장 근거를 확인하지 못해 다음 배정을 중단했습니다.",
+    ROTATION_PARTIAL_PROVIDER_PROTECTED: "접근 제한 또는 보호 상태를 확인해야 하므로 다음 배정을 중단했습니다.",
+    ROTATION_PARTIAL_WORKER_UNVERIFIED: "수집기의 진행·보호 상태를 확인하지 못해 다음 배정을 중단했습니다.",
+    ROTATION_PARTIAL_STORAGE_UNVERIFIED: "결과 저장 상태를 확인하지 못해 다음 배정을 중단했습니다.",
+    ROTATION_PARTIAL_HISTORY_UNVERIFIED: "앞선 회차의 부분 수집 기록을 확인하지 못해 다음 배정을 중단했습니다.",
     ROTATION_STATE_INVALID: "저장된 배정 기록을 확인해야 합니다. 자동으로 다시 수집하지 않습니다.",
     COLLECTION_ROTATION_INDIVIDUAL_ACTIVE: "선택한 수집기의 개별 예약이 켜져 있습니다. 개별 예약을 먼저 일시정지하세요.",
     COLLECTION_ROTATION_LEGACY_ACTIVE: "기존 일일 자동수집이 켜져 있습니다. 기존 예약을 먼저 일시정지하세요.",
@@ -91,6 +99,22 @@
     if (/^[A-Z][A-Z0-9_:-]+$/.test(code)) return "상세 실행 기록을 확인하세요.";
     return String(code).slice(0, 240);
   }
+  function partialContinuation(item = {}) {
+    const value = item.continuation;
+    if (item.status !== "partial" || item.projected || item.collectionQuality?.status !== "partial"
+      || value?.policyVersion !== "rotation-partial-v1" || !["continue", "pause"].includes(value.decision)
+      || !/^ROTATION_PARTIAL_[A-Z_]+$/.test(value.reasonCode || "")) return null;
+    const count = number => Number.isSafeInteger(number) && number > 0 ? number.toLocaleString("ko-KR") : "미확인";
+    const finite = [value.failedSchedules, value.requestedSchedules, value.affectedCompanies, value.consecutivePartialRuns].every(number => Number.isSafeInteger(number) && number >= 0);
+    if (value.decision === "continue" && (value.reasonCode !== "ROTATION_PARTIAL_CONTINUED" || !finite || value.failedSchedules < 1
+      || value.failedSchedules > 3 || value.requestedSchedules <= 0 || value.failedSchedules / value.requestedSchedules > 0.001
+      || value.affectedCompanies !== 1 || value.consecutivePartialRuns !== 1)) return null;
+    const percent = Number.isSafeInteger(value.failedSchedules) && value.failedSchedules >= 0 && Number.isSafeInteger(value.requestedSchedules)
+      && value.requestedSchedules > 0 && value.failedSchedules <= value.requestedSchedules ? ` (${(value.failedSchedules / value.requestedSchedules * 100).toFixed(3)}%)` : "";
+    return { label: value.decision === "continue" ? "소수 미확보 · 다음 배정 진행 허용" : "일부 미확보 · 진행 중단 판정",
+      detail: `예약 응답 ${count(value.failedSchedules)} / ${count(value.requestedSchedules)}건 미확보${percent} · 영향 ${count(value.affectedCompanies)}업체 · 연속 ${count(value.consecutivePartialRuns)}회`,
+      reason: reasonText(value.reasonCode) };
+  }
   function planLabel(status = {}) {
     if (!status.config) return "조건 저장 전";
     if (status.active || status.todayItems?.some(item => item.status === "running")) return status.enabled ? "수집 중" : "일시정지 · 진행 작업 마무리 중";
@@ -138,7 +162,7 @@
     if (!regularSixReady(status)) throw new Error("현재 예약 조건과 보호·진행 상태를 새로 확인하세요.");
     return { expectedRevision: status.revision, workers: status.config.workers.map(worker => ({ workerKey: worker.workerKey, dailyLimit: 3 })) };
   }
-  const exported = { POLICY_KEYWORDS, configFromDraft, draftFromConfig, defaultDraft, keywordEntries, reasonText, planLabel, formatTime, savedTableRows, oneDayTrialReady, oneDayPreviewMatches, regularSixReady, regularSixInput };
+  const exported = { POLICY_KEYWORDS, configFromDraft, draftFromConfig, defaultDraft, keywordEntries, reasonText, partialContinuation, planLabel, formatTime, savedTableRows, oneDayTrialReady, oneDayPreviewMatches, regularSixReady, regularSixInput };
   if (typeof module === "object" && module.exports) module.exports = exported;
   if (typeof document === "undefined" || typeof window === "undefined") return;
 
@@ -157,6 +181,8 @@
     const body = node("div", "rotation-body"); details.append(body);
     const status = node("div", "rotation-status"); status.setAttribute("role", "status");
     view.headline = node("strong", "", "저장된 예약을 확인하고 있습니다."); view.next = node("p"); view.reason = node("p", "rotation-reason"); view.freshness = node("small"); status.append(view.headline, view.next, view.reason, view.freshness); body.append(status);
+    view.partialPolicy = node("small", "rotation-partial-policy", "소수 미확보 진행 기준 · 예약 응답 실패 3건 이하·0.1% 이하·1업체. 2회 연속 미확보, 접근 제한 또는 저장 근거 미확인은 다음 배정을 중단합니다.");
+    view.partialPolicy.hidden = true; body.append(view.partialPolicy);
     const form = node("form", "rotation-form"); form.setAttribute("aria-label", "공동 순환예약 조건"); body.append(form);
     function field(name, label, type = "text", choices) {
       const wrapper = node("label", "field"), title = node("span", "", label), input = node(type === "select" ? "select" : type === "textarea" ? "textarea" : "input");
@@ -286,7 +312,9 @@
         const worker = node("td", "", WORKERS[item.workerKey] || "수집기 확인 필요"), keyword = node("td", "rotation-keyword", item.keyword || "—");
         const range = node("td"); const days = item.bookingDays || item.collection?.bookingDays || config?.collection?.bookingDays;
         if (day && Number.isInteger(Number(days)) && Number(days) > 0) range.append(node("span", "", `${day.slice(5)} ~ ${todayKst(Date.parse(`${day}T00:00:00+09:00`) + (Number(days) - 1) * 86400000).slice(5)}`), node("small", "", `${days}일 · 관측일 포함`)); else range.textContent = "조회기간 확인 필요";
-        const state = node("td"), stateText = node("span", "rotation-row-state", STATES[item.status] || "확인 필요"); stateText.dataset.state = item.status || "planned"; state.append(stateText);
+        const continuation = partialContinuation(item);
+        const state = node("td"), stateText = node("span", "rotation-row-state", continuation?.label || STATES[item.status] || "확인 필요"); stateText.dataset.state = item.status || "planned"; state.append(stateText);
+        if (continuation) { const note = node("small", "rotation-partial-continuation", continuation.detail); note.title = continuation.reason; state.append(note); }
         const postprocess = postprocessStatus(item.postprocess); if (postprocess) state.append(postprocess);
         if (item.status === "reused" && item.observedAt) state.append(node("small", "", `원래 관측 ${formatTime(item.observedAt)}`));
         else if (item.startedAt) state.append(node("small", "", `실제 ${formatTime(item.startedAt)}`));
@@ -300,6 +328,7 @@
     function renderStatus() {
       view.badge.textContent = readError ? "상태 확인 필요" : loaded ? planLabel(saved || {}) : "상태 확인 전";
       const rows = saved?.todayItems || [], complete = rows.filter(item => ["complete", "completed"].includes(item.status)).length, reused = rows.filter(item => item.status === "reused").length, missed = rows.filter(item => ["missed", "paused", "cancelled"].includes(item.status)).length, attention = rows.filter(item => ["partial", "failed", "blocked", "uncertain", "interrupted"].includes(item.status)).length;
+      view.partialPolicy.hidden = !savedTableRows(saved || {}).some(item => partialContinuation(item));
       view.headline.textContent = loaded ? `오늘 배정 ${rows.length}개 · 새 수집 ${complete} · 기존 자료 ${reused} · 미실행·보류 ${missed} · 확인 필요 ${attention}` : "저장된 예약을 확인하고 있습니다.";
       const next = saved?.upcomingItems?.find(item => ["queued", "planned", "waiting", "pending", "scheduled"].includes(item.status));
       view.next.textContent = saved?.enabled ? `다음 배정 · ${next?.keyword || saved.nextKeyword || "배정 확인 중"}${next?.workerKey ? ` · ${WORKERS[next.workerKey] || next.workerKey}` : ""} · ${formatTime(next?.scheduledAt || saved.nextRunAt)} 이후` : saved?.nextKeyword ? `다음 순환 위치 · ${saved.nextKeyword}` : "순환 목록을 저장하면 다음 배정 위치를 표시합니다.";

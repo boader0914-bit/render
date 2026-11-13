@@ -19,10 +19,35 @@
   function conditionDays(item = {}) { const days = item.conditions?.bookingDays ?? item.conditions?.bookingRangeDays ?? item.bookingDays ?? item.bookingRangeDays; return Number.isInteger(days) && days > 0 ? `${days}일` : "미확인"; }
   function conditionRanks(item = {}) { const ranks = item.conditions?.detailRankRanges ?? item.detailRankRanges; return typeof ranks === "string" && /^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/.test(ranks) ? `${ranks.replaceAll("-", "–").replaceAll(",", ", ")}위` : "미확인"; }
   function allocationLabel(item = {}) { return item.projected ? "예정(계산)" : item.planKind === "one_day_trial" ? "저장 배정 · 1일 시험" : "저장 배정"; }
+  function partialContinuation(item = {}) {
+    const value = item.continuation;
+    if (item.status !== "partial" || item.projected || item.collectionQuality?.status !== "partial"
+      || value?.policyVersion !== "rotation-partial-v1" || !["continue", "pause"].includes(value.decision)
+      || !/^ROTATION_PARTIAL_[A-Z_]+$/.test(value.reasonCode || "")) return null;
+    const count = number => Number.isSafeInteger(number) && number > 0 ? number.toLocaleString("ko-KR") : "미확인";
+    const finite = [value.failedSchedules, value.requestedSchedules, value.affectedCompanies, value.consecutivePartialRuns].every(number => Number.isSafeInteger(number) && number >= 0);
+    if (value.decision === "continue" && (value.reasonCode !== "ROTATION_PARTIAL_CONTINUED" || !finite || value.failedSchedules < 1
+      || value.failedSchedules > 3 || value.requestedSchedules <= 0 || value.failedSchedules / value.requestedSchedules > 0.001
+      || value.affectedCompanies !== 1 || value.consecutivePartialRuns !== 1)) return null;
+    const percent = Number.isSafeInteger(value.failedSchedules) && value.failedSchedules >= 0 && Number.isSafeInteger(value.requestedSchedules)
+      && value.requestedSchedules > 0 && value.failedSchedules <= value.requestedSchedules ? ` (${(value.failedSchedules / value.requestedSchedules * 100).toFixed(3)}%)` : "";
+    const reasons = { ROTATION_PARTIAL_REPEATED: "2회 연속 미확보로 다음 배정을 중단했습니다.",
+      ROTATION_PARTIAL_TOO_MANY_FAILURES: "미확보 건수·비율 또는 영향 업체 수가 기준을 넘어 다음 배정을 중단했습니다.",
+      ROTATION_PARTIAL_PROVIDER_PROTECTED: "접근 제한 또는 보호 상태를 확인해야 합니다.",
+      ROTATION_PARTIAL_WORKER_UNVERIFIED: "수집기의 진행·보호 상태를 확인해야 합니다.",
+      ROTATION_PARTIAL_STORAGE_UNVERIFIED: "결과 저장 상태를 확인해야 합니다.",
+      ROTATION_PARTIAL_HISTORY_UNVERIFIED: "앞선 회차의 부분 수집 기록을 확인해야 합니다.",
+      ROTATION_PARTIAL_EVIDENCE_UNVERIFIED: "부분 수집의 범위와 저장 근거를 확인해야 합니다." };
+    return { label: value.decision === "continue" ? "소수 미확보 · 다음 배정 진행 허용" : "일부 미확보 · 진행 중단 판정",
+      detail: `예약 응답 ${count(value.failedSchedules)} / ${count(value.requestedSchedules)}건 미확보${percent} · 영향 ${count(value.affectedCompanies)}업체 · 연속 ${count(value.consecutivePartialRuns)}회`,
+      reason: value.decision === "continue" ? "소수 미확보를 기록하고 다음 배정 진행을 허용했습니다." : reasons[value.reasonCode] || "부분 수집의 진행 중단 사유를 확인해 주세요." };
+  }
   function classify(item = {}, now = Date.now()) {
     const state = item.status, quality = item.collectionQuality || {}, db = item.postprocess || {}, dbState = db.state || db.status;
     const dbBound = postprocessBound(item);
     if (item.projected) return { tone: "pending", label: "예정(계산)", note: "현재 설정으로 계산한 예정이며 확정 배정·실행 기록이 아닙니다." };
+    const continuation = partialContinuation(item);
+    if (continuation) return { tone: "issue", label: continuation.label, note: `${continuation.detail}. ${continuation.reason}` };
     if (["failed", "blocked", "partial", "missed", "interrupted", "error"].includes(state)) return { tone: "issue", label: ({ failed: "수집 실패", blocked: "접근 제한", partial: "일부 누락", missed: "미실행", interrupted: "중단" }[state] || "오류"), note: "저장된 수집 결과에 문제가 있습니다." };
     if (["failed", "blocked", "partial"].includes(quality.status) || quality.blockedReason || quality.failure) return { tone: "issue", label: "품질 확인 필요", note: "품질 검사에서 오류·누락이 확인됐습니다." };
     if (dbBound && dbState === "failed") return { tone: "issue", label: "DB 반영 실패", note: "수집 결과와 DB 반영 상태를 따로 확인하세요." };
@@ -68,7 +93,7 @@
       selectedDay, dayItems, visibleDayItems: visibleItems.filter(item => item.day === selectedDay), visibleItems, dayCoverage: coverageFor(snapshot, selectedDay),
       coverageIncomplete: days.some(day => !["saved", "available", "projected", "not_started"].includes(coverageFor(snapshot, day).status)) };
   }
-  const exported = { classify, buildModel, weekStart, kstDay, addDays, validDay, time, TONES, workerLabel, itemKey, postprocessBound, coverageFor, cellPlaceholder, conditionDays, conditionRanks, allocationLabel };
+  const exported = { classify, buildModel, weekStart, kstDay, addDays, validDay, time, TONES, workerLabel, itemKey, postprocessBound, coverageFor, cellPlaceholder, conditionDays, conditionRanks, allocationLabel, partialContinuation };
   if (typeof module === "object" && module.exports) module.exports = exported;
   if (typeof document === "undefined" || typeof window === "undefined") return;
 
@@ -117,6 +142,7 @@
       const close = focusTarget(button("닫기", () => { const key = selectedItem && itemKey(selectedItem); selectedItem = null; render(); focusTargets.get(`table:${key}`)?.focus({ preventScroll: true }); }), "detail-close");
       top.append(name, close); detail.append(top);
       const badge = el("strong", "cm-detail-state", item.visual.label); badge.dataset.tone = item.visual.tone; detail.append(badge, el("p", "", item.visual.note));
+      if (partialContinuation(item)) detail.append(el("small", "cm-partial-policy", "진행 기준 · 예약 응답 실패 3건 이하·0.1% 이하·1업체. 2회 연속 미확보, 접근 제한 또는 저장 근거 미확인은 다음 배정을 중단합니다."));
       const list = el("dl", "cm-detail-grid"), db = item.postprocess || {}, quality = item.collectionQuality || {}, bound = !item.projected && postprocessBound(item);
       const dbLabel = item.projected ? "실제 기록 미확인" : item.runId && !bound ? "기록 연결 미확인" : bound ? ({ complete: "완료", running: "반영 중", queued: "대기", held: "대기", failed: "실패" }[db.state || db.status] || "미확인") : "미확인";
       for (const [label, value] of [["수집기", workerLabel(item.workerKey)], ["배정", allocationLabel(item)], ["예정 시작 · KST", time(item.scheduledAt, true)], ["실제 시작", item.projected ? "미확인" : time(item.startedAt, true)], ["수집 종료", item.projected ? "미확인" : time(item.finishedAt, true)], ["품질 검사", item.projected ? "미확인" : quality.status === "complete" ? "완료" : quality.status || "미확인"], ["DB 반영", dbLabel], ["DB 반영 종료", bound ? time(db.finishedAt, true) : "미확인"], ["대기 가능 시각", time(item.notBeforeAt, true)], ["숙박 조회기간", conditionDays(item)], ["상세 조회순위", conditionRanks(item)], ["문제·대기 코드", item.errorCode || db.errorCode || db.lastErrorCode || db.admissionErrorCode || item.reason || "기록 없음"], ["실행 번호", !item.projected && item.runId || "미확인"], [item.projected ? "계산 식별자" : "배정 번호", item.id]]) { const pair = el("div"); pair.append(el("dt", "", label), el("dd", "", String(value))); list.append(pair); }

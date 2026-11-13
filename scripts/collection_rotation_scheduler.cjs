@@ -8,6 +8,7 @@ const crypto = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
 const { sanitizeCollectionQuality } = require("./lib/collection_diagnostics.cjs");
 const { monitorRange, monitorItem } = require("./lib/collection_monitor.cjs");
+const { PARTIAL_POLICY, partialContinuationEvidence, sanitizePartialContinuation } = require("./lib/rotation_partial_policy.cjs");
 
 const VERSION = 1;
 const MIN_FREE_BYTES = 200 * 1024 * 1024;
@@ -128,7 +129,7 @@ function payloadFor(config, slot) {
     detailRankRanges: config.collection.detailRankRanges, sourceRole: "admin", collectionSource: "admin_search",
     collectionSourceLabel: `${WORKER_NAMES[slot.workerKey]} · 공동 순환예약`, clientRequestId: slot.id, scheduleOccurrenceId: slot.id };
 }
-function resultFor(value, quality) {
+function resultFor(value, quality, expected = {}) {
   const candidate = quality || value?.collectionQuality || value?.quality || value?.output?.collectionQuality;
   const status = candidate?.status;
   const runId = typeof value?.runId === "string" && /^[A-Za-z0-9_-]{1,240}$/.test(value.runId) ? value.runId : null;
@@ -153,6 +154,7 @@ function resultFor(value, quality) {
   if (result.status !== "reused" && actualStartedAt && Number.isFinite(Date.parse(actualStartedAt))) result.executionStartedAt = new Date(actualStartedAt).toISOString();
   const observedAt = value?.reuse?.observedAt || value?.observedAt || actualStartedAt;
   if (observedAt && Number.isFinite(Date.parse(observedAt))) result.observedAt = new Date(observedAt).toISOString();
+  if (result.status === "partial") result.continuation = partialContinuationEvidence(value, candidate, expected);
   return result;
 }
 function errorResult(error) {
@@ -192,6 +194,36 @@ function createCollectionRotationScheduler(options = {}) {
   function configOf(record = state()) { return validateConfig(JSON.parse(record.config_json)); }
   function event(kind, code = null, itemId = null) {
     db.prepare("INSERT INTO rotation_events(at,kind,code,item_id) VALUES(?,?,?,?)").run(instant().toISOString(), kind, code, itemId);
+  }
+  function partialStreak(result, slotId) {
+    const continuation = result.continuation;
+    if (continuation?.decision !== "continue") return;
+    const previous = db.prepare(`SELECT id,status,CASE WHEN length(CAST(result_json AS BLOB))<=262144 THEN result_json END AS result
+      FROM rotation_slots WHERE id<>? AND started_at IS NOT NULL AND finished_at IS NOT NULL AND status<>'reused'
+      ORDER BY started_at DESC,rowid DESC LIMIT 1`).get(slotId);
+    continuation.previousSlotId = previous?.id || null;
+    if (!previous) return;
+    let saved;
+    try { saved = previous.result && JSON.parse(previous.result); } catch { /* An unverified receipt cannot reset the streak. */ }
+    const priorCounts = saved?.collectionQuality?.counts;
+    const completeCounts = priorCounts === undefined || (priorCounts && typeof priorCounts === "object" && !Array.isArray(priorCounts)
+      && Object.values(priorCounts).every(value => Number.isSafeInteger(value) && value >= 0)
+      && ["naverScheduleBlocked", "naverScheduleFailed", "naverOtaBlocked", "naverOtaFailed"].every(key => priorCounts[key] === undefined || priorCounts[key] === 0)
+      && (priorCounts.naverBookingStockChecked === undefined || priorCounts.naverBookingStockSucceeded === undefined
+        || priorCounts.naverBookingStockChecked === priorCounts.naverBookingStockSucceeded)
+      && (priorCounts.naverScheduleRequested === undefined || priorCounts.naverScheduleSucceeded === undefined
+        || priorCounts.naverScheduleRequested === priorCounts.naverScheduleSucceeded));
+    if (previous.status === "complete" && saved?.status === "complete" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,239}$/.test(saved.runId || "")
+      && saved.collectionQuality?.status === "complete" && !saved.collectionQuality.blockedReason && !saved.collectionQuality.failure
+      && completeCounts && !saved.blocked && !saved.providerBlocked && !saved.halted && !saved.protected && !saved.errorCode) return;
+    const prior = previous.status === "partial" && saved?.status === "partial" && saved.collectionQuality?.status === "partial"
+      ? sanitizePartialContinuation(saved.continuation) : null;
+    continuation.decision = "pause";
+    continuation.reasonCode = "ROTATION_PARTIAL_HISTORY_UNVERIFIED";
+    if (prior && prior.consecutivePartialRuns > 0) {
+      continuation.consecutivePartialRuns = prior.consecutivePartialRuns + 1;
+      if (continuation.consecutivePartialRuns >= PARTIAL_POLICY.pauseAfterConsecutivePartials) continuation.reasonCode = "ROTATION_PARTIAL_REPEATED";
+    }
   }
   function initialize() {
     if (db) return;
@@ -258,13 +290,14 @@ function createCollectionRotationScheduler(options = {}) {
       prior?.finished_at ? Date.parse(prior.finished_at) : 0)).toISOString();
   }
   function itemsForDay(day) { return db.prepare("SELECT * FROM rotation_slots WHERE day=? ORDER BY slot_index").all(day).map(rowItem); }
+  function persistPause(reason, planState) {
+    const config = configOf(); config.enabled = false;
+    db.prepare("UPDATE rotation_state SET config_json=?,plan_state=?,reason=?,updated_at=? WHERE id=1").run(JSON.stringify(config), planState, reason, instant().toISOString());
+    db.prepare("UPDATE rotation_slots SET status='paused',error_code=? WHERE status IN ('queued','waiting')").run(reason);
+    event("paused", reason);
+  }
   function pause(reason, planState = "paused") {
-    transaction(() => {
-      const config = configOf(); config.enabled = false;
-      db.prepare("UPDATE rotation_state SET config_json=?,plan_state=?,reason=?,updated_at=? WHERE id=1").run(JSON.stringify(config), planState, reason, instant().toISOString());
-      db.prepare("UPDATE rotation_slots SET status='paused',error_code=? WHERE status IN ('queued','waiting')").run(reason);
-      event("paused", reason);
-    });
+    transaction(() => persistPause(reason, planState));
     epoch += 1;
   }
   async function conflict(config, phase) {
@@ -598,7 +631,25 @@ function createCollectionRotationScheduler(options = {}) {
       const payload = payloadFor(dayConfig, slot);
       const value = await options.executeSlot(payload, { ...slot, startedAt, receipt });
       const quality = options.inspectResult ? await options.inspectResult(value, payload) : null;
-      result = resultFor(value, quality);
+      result = resultFor(value, quality, payload);
+      if (result.continuation?.decision === "continue") {
+        try {
+          const worker = await getWorkerState(slot.workerKey);
+          if (workerProblem(worker) || worker.active) {
+            result.continuation.decision = "pause";
+            result.continuation.reasonCode = "ROTATION_PARTIAL_WORKER_UNVERIFIED";
+          } else {
+            const freeBytes = await getFreeBytes();
+            if (!Number.isFinite(freeBytes) || freeBytes <= MIN_FREE_BYTES) {
+              result.continuation.decision = "pause";
+              result.continuation.reasonCode = "ROTATION_PARTIAL_STORAGE_UNVERIFIED";
+            }
+          }
+        } catch {
+          result.continuation.decision = "pause";
+          result.continuation.reasonCode = "ROTATION_PARTIAL_WORKER_UNVERIFIED";
+        }
+      }
     } catch (error) { result = errorResult(error); }
     try {
       const finishedAt = instant().toISOString();
@@ -608,12 +659,19 @@ function createCollectionRotationScheduler(options = {}) {
         if (result.status !== "reused") delete result.observedAt;
       }
       if (result.executionStartedAt) result.executionDurationMs = Math.max(0, Date.parse(finishedAt) - Date.parse(result.executionStartedAt));
-      transaction(() => {
+      const paused = transaction(() => {
+        if (result.status === "partial") partialStreak(result, slot.id);
         db.prepare("UPDATE rotation_slots SET status=?,finished_at=?,error_code=?,result_json=? WHERE id=? AND status='running'")
           .run(result.status, finishedAt, result.errorCode, JSON.stringify(result), slot.id);
         event("finished", result.errorCode, slot.id);
+        if (result.continuation) event("partial_policy", result.continuation.reasonCode, slot.id);
+        if (!["complete", "reused"].includes(result.status) && result.continuation?.decision !== "continue") {
+          persistPause(result.continuation?.reasonCode || result.errorCode || `ROTATION_RESULT_${result.status.toUpperCase()}`, result.status === "uncertain" ? "review" : "paused");
+          return true;
+        }
+        return false;
       });
-      if (!["complete", "reused"].includes(result.status)) pause(result.errorCode || `ROTATION_RESULT_${result.status.toUpperCase()}`, result.status === "uncertain" ? "review" : "paused");
+      if (paused) epoch += 1;
       // The durable collection receipt is the boundary. Optional derived work
       // may start only after this transaction; failure cannot undo completion.
       if (options.onResultCommitted) {
@@ -816,7 +874,7 @@ function createCollectionRotationScheduler(options = {}) {
           workerKey: row.worker_key, keyword: row.keyword, scheduledAt: row.scheduled_at, notBeforeAt: notBefore(row),
           status: conflict ? "uncertain" : row.status, acceptedAt: row.started_at, startedAt: result.executionStartedAt,
           finishedAt: row.finished_at, errorCode: conflict ? "COLLECTION_MONITOR_RESULT_STATUS_MISMATCH" : row.error_code,
-          runId: result.runId, collectionQuality: result.collectionQuality, conditions,
+          runId: result.runId, collectionQuality: result.collectionQuality, continuation: result.continuation, conditions,
           trialId: trialDays.get(row.day), planKind: trialDays.has(row.day) ? "one_day_trial" : "regular" });
       });
       const projectionStart = nextUnallocatedDay(config, range.today), projectedDays = new Map();

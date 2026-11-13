@@ -13,7 +13,7 @@ function receipt(status, reason, counts = {}, extra = {}) {
   return { status, reason, counts, ...extra };
 }
 
-function inspectProductCoverage(coverage, bookingExpected) {
+function inspectProductCoverage(coverage, bookingExpected, { allowFailedDays = false } = {}) {
   if (!coverage || coverage.version !== 1 || !Array.isArray(coverage.targets)) return "product_coverage_missing";
   if (bookingExpected && !coverage.targets.length) return "product_coverage_missing";
   const keys = ["discovered", "eligible", "excluded", "queried", "truncated"];
@@ -35,7 +35,7 @@ function inspectProductCoverage(coverage, bookingExpected) {
         || day.eligible !== target.eligible || day.succeeded + day.failed !== day.queried
         || day.queried + day.truncated > day.eligible) return "product_coverage_invalid";
       if (day.truncated) return "product_targets_truncated";
-      if (day.queried < day.eligible || day.failed) return "product_day_targets_incomplete";
+      if (day.queried < day.eligible || (!allowFailedDays && day.failed)) return "product_day_targets_incomplete";
     }
   }
   if (keys.some(key => coverage.targets.reduce((sum, target) => sum + target[key], 0) !== coverage[key])) return "product_coverage_invalid";

@@ -3,6 +3,7 @@
 // Projections only. These functions perform no filesystem, broker, scheduler or
 // network operations and never turn missing evidence into a successful crawl.
 const { sanitizeCollectionQuality } = require("./collection_diagnostics.cjs");
+const { sanitizePartialContinuation } = require("./rotation_partial_policy.cjs");
 const DAY_MS = 86400000;
 const validDay = value => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)
   && value >= "2000-01-01" && value <= "2099-12-31"
@@ -34,6 +35,8 @@ function monitorRange(query = {}, now = new Date()) {
 
 function monitorItem(value) {
   const conditions = {};
+  const continuation = value.status === "partial" && value.collectionQuality?.status === "partial" && !value.projected
+    ? sanitizePartialContinuation(value.continuation) : null;
   const source = value.conditions || {};
   for (const key of ["checkIn", "checkOut"]) if (validDay(source[key])) conditions[key] = source[key];
   for (const key of ["bookingDays", "bookingRangeDays", "adults", "bookingRangePlaceLimit"]) {
@@ -53,7 +56,7 @@ function monitorItem(value) {
     errorCode: code(value.errorCode), runId: id(value.runId), collectionQuality: sanitizeCollectionQuality(value.collectionQuality),
     conditions, projected: value.projected === true, source: value.projected === true ? "projection" : "stored_rotation",
     planKind: ["regular", "one_day_trial"].includes(value.planKind) ? value.planKind : null,
-    ...(id(value.trialId) ? { trialId: id(value.trialId) } : {}) };
+    ...(id(value.trialId) ? { trialId: id(value.trialId) } : {}), ...(continuation ? { continuation } : {}) };
 }
 
 function monitorPostprocessItem(job) {

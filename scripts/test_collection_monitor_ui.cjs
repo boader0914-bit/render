@@ -76,6 +76,26 @@ test("pending, active, failed and uncertain evidence remain separate even after 
   for (const status of [undefined, "unknown", "uncertain", "review", "not_a_status"]) assert.equal(monitor.classify(occurrence({ status })).tone, "unknown", String(status));
 });
 
+test("continued partial remains an issue and its detail distinguishes policy permission from current execution", async () => {
+  const item = occurrence({ status: "partial", collectionQuality: { status: "partial", reason: "booking_schedule_responses_incomplete" }, postprocess: undefined,
+    continuation: { policyVersion: "rotation-partial-v1", decision: "continue", reasonCode: "ROTATION_PARTIAL_CONTINUED",
+      failedSchedules: 1, requestedSchedules: 5187, affectedCompanies: 1, consecutivePartialRuns: 1 } });
+  const before = clone(item), visual = monitor.classify(item);
+  assert.equal(visual.tone, "issue"); assert.equal(visual.label, "소수 미확보 · 다음 배정 진행 허용");
+  assert.match(visual.note, /1 \/ 5,187건 미확보 \(0\.019%\)/);
+  const ui = await mockUi({ response: snapshot([item], { enabled: false }) });
+  assert.equal(ui.find("cm-slot")[0].dataset.tone, "issue");
+  await ui.find("cm-slot")[0].fire("click");
+  assert.match(text(ui.find("cm-detail")[0]), /3건 이하·0\.1% 이하·1업체/);
+  assert.match(text(ui.find("cm-detail")[0]), /2회 연속/);
+  assert.deepEqual(clone(item), before);
+  const repeated = monitor.classify({ ...item, continuation: { ...item.continuation, decision: "pause", reasonCode: "ROTATION_PARTIAL_REPEATED", consecutivePartialRuns: 2 } });
+  assert.equal(repeated.tone, "issue"); assert.match(repeated.note, /2회 연속/);
+  const legacy = { ...item }; delete legacy.continuation;
+  assert.equal(monitor.classify(legacy).label, "일부 누락");
+  assert.equal(monitor.classify({ ...item, continuation: { ...item.continuation, failedSchedules: 4 } }).label, "일부 누락");
+});
+
 test("calculated plans and reused observations cannot claim a fresh successful collection", () => {
   const plan = monitor.classify(occurrence({ projected: true }));
   assert.equal(plan.tone, "pending"); assert.match(plan.label, /계산/); assert.match(plan.note, /확정 배정·실행 기록이 아닙니다/);

@@ -140,6 +140,35 @@ test("legacy and unknown DB states remain distinct and stored text is assigned w
   assert.doesNotMatch(allText(ui.panel), /업체 DB 반영 완료/);
 });
 
+test("partial rows show the saved next-slot decision, bounded counts and repeated stop without changing quality or the paused plan", async () => {
+  const ui = await mockUi(), continuation = { policyVersion: "rotation-partial-v1", decision: "continue", reasonCode: "ROTATION_PARTIAL_CONTINUED",
+    failedSchedules: 1, requestedSchedules: 5187, affectedCompanies: 1, consecutivePartialRuns: 1 };
+  ui.state.enabled = false; ui.state.config.enabled = false; ui.state.reason = "ROTATION_PAUSED_BY_USER";
+  ui.state.upcomingItems = [];
+  ui.state.todayItems = [continuation, { ...continuation, decision: "pause", reasonCode: "ROTATION_PARTIAL_REPEATED", consecutivePartialRuns: 2 }, undefined].map((decision, index) => ({
+    id: `rotation_2026-10-15_${index + 1}`, day: "2026-10-15", workerKey: "web", keyword: `부분검수${index}`, scheduledAt: `2026-10-15T0${index}:00:00Z`,
+    status: "partial", collectionQuality: { status: "partial", reason: "booking_schedule_responses_incomplete" }, ...(decision ? { continuation: decision } : {}) }));
+  const before = clone(ui.state), calls = ui.calls.length;
+  await ui.button("상태 새로고침").event("click");
+  const rows = tableRows(ui), labels = rows.map(row => descendants(row).find(el => el.className === "rotation-row-state"));
+  assert.equal(labels[0].textContent, "소수 미확보 · 다음 배정 진행 허용");
+  assert.equal(labels[1].textContent, "일부 미확보 · 진행 중단 판정");
+  assert.equal(labels[2].textContent, "일부 완료");
+  assert.ok(labels.every(label => label.dataset.state === "partial"));
+  assert.match(allText(rows[0]), /1 \/ 5,187건 미확보 \(0\.019%\)/);
+  assert.match(allText(rows[1]), /연속 2회/);
+  const policy = descendants(ui.panel).find(el => el.className === "rotation-partial-policy");
+  assert.equal(policy.hidden, false); assert.match(policy.textContent, /3건 이하·0\.1% 이하·1업체/);
+  assert.match(policy.textContent, /2회 연속/);
+  assert.match(allText(ui.panel), /새 수집 0/);
+  assert.deepEqual(ui.state, before);
+  assert.deepEqual(ui.calls.slice(calls).map(call => call.method), ["GET"]);
+  const unknown = helpers.partialContinuation({ status: "partial", collectionQuality: { status: "partial" },
+    continuation: { ...continuation, decision: "pause", reasonCode: "ROTATION_PARTIAL_EVIDENCE_UNVERIFIED", failedSchedules: 0, requestedSchedules: 0, affectedCompanies: 0, consecutivePartialRuns: 0 } });
+  assert.match(unknown.detail, /미확인 \/ 미확인/); assert.doesNotMatch(unknown.detail, /0건|0업체|0회/);
+  assert.equal(helpers.partialContinuation({ ...ui.state.todayItems[0], continuation: { ...continuation, failedSchedules: 4 } }), null);
+});
+
 test("status refresh preserves an edited draft and selected start while previews exclude persisted results", async () => {
   const ui = await mockUi();
   ui.state.todayItems = [{ id: "rotation_2026-10-15_1", day: "2026-10-15", scheduledAt: "2026-10-15T01:00:00Z", keyword: "오늘완료자료", workerKey: "manual", status: "complete", postprocess: { state: "queued" } }];

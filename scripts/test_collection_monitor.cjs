@@ -135,6 +135,24 @@ test("projection strips raw receipts, result payloads, unknown fields and secret
   assert.equal(value.conditions.adults, 2);
 });
 
+test("monitor exposes only the bounded new partial continuation decision and preserves historical quality", () => {
+  const continuation = { policyVersion: "rotation-partial-v1", decision: "continue", reasonCode: "ROTATION_PARTIAL_CONTINUED",
+    failedSchedules: 1, requestedSchedules: 5187, affectedCompanies: 1, consecutivePartialRuns: 1, rawPayload: "private-marker", token: "private-marker" };
+  const source = { id: "rotation_2026-11-13_1", day: "2026-11-13", status: "partial", runId: "run_partial_1",
+    collectionQuality: { status: "partial", reason: "booking_schedule_responses_incomplete" }, continuation };
+  const before = JSON.stringify(source), projected = monitorItem(source);
+  assert.equal(projected.status, "partial"); assert.equal(projected.collectionQuality.status, "partial");
+  assert.equal(projected.continuation.decision, "continue"); assert.equal(projected.continuation.failedSchedules, 1);
+  assert.equal(projected.continuation.requestedSchedules, 5187);
+  assert.doesNotMatch(JSON.stringify(projected), /private-marker|rawPayload|token/);
+  assert.equal(JSON.stringify(source), before);
+  for (const extra of [{ projected: true }, { status: "complete" }, { collectionQuality: { status: "unknown" } },
+    { continuation: undefined }, { continuation: { ...continuation, policyVersion: "future" } },
+    { continuation: { ...continuation, failedSchedules: 4 } }, { continuation: { ...continuation, requestedSchedules: 1 } }]) {
+    assert.equal(Object.hasOwn(monitorItem({ ...source, ...extra }), "continuation"), false);
+  }
+});
+
 test("SQL payload budget rejects aggregate and individual oversize results without schedule writes", async () => {
   const f = await fixture();
   let editor;
