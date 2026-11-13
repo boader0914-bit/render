@@ -181,7 +181,7 @@
     const empty = el("p", "cm-empty", "저장된 예약을 확인하고 있습니다."); root.append(empty);
     root.append(el("p", "cm-current-partial-policy", "현재 진행 기준 · 일반 응답 미확보는 기록하고 다음 정규 배정 진행을 허용합니다. 건수·비율·연속 횟수로 중단하지 않습니다. 캡차·호출 제한·저장 실패·실행 불명 보호는 유지합니다. 현재 예약 활성 상태는 상단 표시를 따르며, 과거 회차는 당시 저장된 판정을 표시합니다."));
     const footer = el("p", "cm-footnote", "회차의 ‘정상 완료’ = 수집·품질·같은 실행의 DB 반영 완료. 단계별 표시는 각 단계의 저장 상태이며 월집계 완료와 별도입니다. ‘예정(계산)’은 저장된 확정 배정과 구분합니다. 상태 합계는 확인된 배정 기준이며 기록이 없는 날짜는 미확인입니다. 표의 빈칸은 수집 실패나 예약 0건을 뜻하지 않습니다. 모든 시각은 한국시간입니다."); root.append(footer);
-    const before = document.getElementById("collectorExecutionHeading") || document.getElementById("collectionRotationPanel") || document.getElementById("collectorWorkerStates"); if (before?.parentNode === parent) parent.insertBefore(root, before); else parent.append(root);
+    const before = document.getElementById("collectorRegularHeading") || document.getElementById("collectorExecutionHeading") || document.getElementById("collectionRotationPanel") || document.getElementById("collectorWorkerStates"); if (before?.parentNode === parent) parent.insertBefore(root, before); else parent.append(root);
     function allowed() { return standalone || (document.body.classList.contains("role-admin") && !document.body.classList.contains("admin-user-view")); }
     function visible() { return allowed() && !document.hidden && root.getClientRects().length > 0; }
     function focusTarget(node, key) { node.dataset.monitorFocus = key; focusTargets.set(key, node); return node; }

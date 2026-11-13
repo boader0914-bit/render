@@ -3,7 +3,7 @@
 .collection-workspace-head h3 { font-size: 30px; }
 .collection-workspace-head > div { min-width: 0; }
 .collection-workspace-head > button { flex-shrink: 0; }
-.collection-workspace-nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0 0 24px; }
+.collection-workspace-nav { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin: 0 0 24px; }
 .collection-workspace-nav > button { display: flex; align-items: flex-start; gap: 10px; min-width: 0; min-height: 90px; padding: 16px 14px; border: 1px solid var(--cw-border); border-radius: 12px; color: var(--text-primary, #182c27); background: var(--surface-card, #fff); font: inherit; text-align: left; cursor: pointer; }
 .collection-workspace-nav > button:hover { border-color: var(--cw-accent); background: var(--surface-selected, #f0f6f3); }
 .collection-workspace-nav > button > span:nth-child(2) { min-width: 0; flex: 1; }
@@ -16,7 +16,12 @@
 .collection-workspace-section-heading h3 { margin: 4px 0 6px; font-size: 21px; letter-spacing: -.035em; color: var(--text-primary, #182c27); }
 .collection-workspace-section-heading p { margin: 0; color: var(--text-secondary, #5c6b64); font-size: 12px; line-height: 1.7; }
 .cw-section-note { color: var(--text-secondary, #5c6b64); font-size: 11px; text-align: right; }
-.collection-workspace :is(#collectionWeeklyMonitor, #collectorExecutionHeading, #collectorHistoryTitle) { scroll-margin-top: 24px; }
+.cw-mode-label { flex-shrink: 0; padding: 5px 10px; border: 1px solid var(--cw-border); border-radius: 99px; color: var(--cw-accent); background: var(--surface-selected, #f0f6f3); font-size: 11px; }
+.cw-direct-heading { margin-top: 28px; }
+.collector-execution-kind { padding: 10px 12px; margin: 0 0 14px; border: 1px solid var(--cw-border); border-left: 3px solid var(--cw-accent); border-radius: 7px; background: var(--surface-control, #f7faf8); }
+.collector-execution-kind strong { display: block; font-size: 12px; color: var(--text-primary, #182c27); }
+.collector-execution-kind p { margin: 4px 0 0; color: var(--text-secondary, #5c6b64); font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+.collection-workspace :is(#collectionWeeklyMonitor, #collectorRegularHeading, #collectorExecutionHeading, #collectorHistoryTitle) { scroll-margin-top: 24px; }
 .collection-workspace-nav button:focus-visible, .collection-workspace [tabindex="-1"]:focus-visible { outline: 2px solid var(--cw-accent); outline-offset: 4px; }
 @media (max-width: 1100px) { .collection-workspace-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 600px) {

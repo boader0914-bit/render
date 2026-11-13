@@ -456,6 +456,9 @@
     const name = node("div"); name.append(node("h4", workerLabel(key))); card.summary = node("small", "조건을 설정하세요"); card.summaryProgress = node("small", "", "collector-summary-progress"); card.summaryProgress.hidden = true; name.append(card.summary, card.summaryProgress); identity.append(name);
     card.badge = node("span", "확인 중", "state-badge"); summary.append(identity, card.badge, node("span", "", "collector-chevron")); card.root.append(summary);
     card.form = node("form", "", "collector-worker-form");
+    const executionKind = node("div", "", "collector-execution-kind");
+    card.executionTitle = node("strong", "직접수집"); card.executionCopy = node("p", "");
+    executionKind.append(card.executionTitle, card.executionCopy); card.form.append(executionKind);
     const intro = node("div", "", "collector-card-status"); card.state = node("p", "연결 상태 확인 중"); card.next = node("small", "예약 꺼짐"); intro.append(card.state, card.next); card.form.append(intro, makeProgress(card));
     const common = node("div", "", "collector-common-fields"); card.commonFields = common;
     common.append(field(card, "searchMode", "검색 대상", "select", { choices: [["keyword", "지역·키워드"], ["company", "업체명"]] }));
@@ -465,7 +468,7 @@
     grid.append(field(card, "period", "조회할 숙박일", "select", { choices: [["1", "수집 당일"], ["7", "수집일부터 7일"], ["14", "수집일부터 14일"], ["21", "수집일부터 21일"], ["31", "수집일부터 31일"], ["custom", "날짜 직접 지정"]] }), field(card, "ranks", "수집 순위", "text", { maxLength: 150, placeholder: "예: 1-20", required: true }));
     grid.append(field(card, "purpose", "수집 종류", "select", { choices: [["basic_db", "기본수집"], ["revenue_detail", "상세수집"]] }), field(card, "dayUseMode", "데이유즈", "select", { choices: [["inspect", "유무확인"], ["lodging_only", "숙박만"], ["detail", "상세수집"]] }));
     common.append(grid);
-    const execution = node("div", "", "collector-execution-field"); execution.append(field(card, "execution", "실행 방식", "select", { choices: [["now", "즉시수집"], ["schedule", "예약수집"]] })); common.append(execution); card.form.append(common);
+    const execution = node("div", "", "collector-execution-field"); execution.append(field(card, "execution", "실행 방식", "select", { choices: [["now", "직접수집 · 즉시"], ["schedule", "개별 예약수집"]] })); common.append(execution); card.form.append(common);
     card.customDates = node("div", "", "collector-settings-grid collector-custom-dates"); card.customDates.append(field(card, "checkIn", "숙박 시작일", "date"), field(card, "checkOut", "숙박 종료일 · 포함", "date")); card.form.append(card.customDates);
     card.reservation = node("details", "", "collector-reservation");
     const reservationHeading = node("summary", "", "collector-reservation-summary"), reservationCopy = node("span");
@@ -491,6 +494,10 @@
   }
   function syncCard(card) {
     const v = values(card), custom = v.period === "custom", reservation = v.execution === "schedule";
+    card.executionTitle.textContent = reservation ? "워커별 개별 예약수집" : "직접수집 · 지금 한 번";
+    card.executionCopy.textContent = reservation
+      ? "선택한 워커에 등록하는 별도 예약입니다. 반복 조건을 따르며, 정기 공동 순환예약과 구분해 관리합니다."
+      : "입력한 키워드를 순서대로 한 번씩 요청합니다. 기존 자료 재사용·호출 한도·보호 검사를 적용하며 정기 공동 순환예약은 변경하지 않습니다.";
     const retired = retirement(card);
     // Wait for server identity before showing an execution lane. Retired lanes
     // remain available only in historical result filters, never as new choices.

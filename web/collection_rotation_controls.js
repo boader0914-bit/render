@@ -249,7 +249,7 @@
     const scheduleHead = node("div", "rotation-section-head"); view.tableTitle = node("h4", "", "저장된 배정표"); buttons.refresh = node("button", "rotation-button rotation-secondary", "상태 새로고침"); buttons.refresh.type = "button"; scheduleHead.append(view.tableTitle, buttons.refresh); body.append(scheduleHead);
     view.tableNote = node("p", "rotation-hint", "조건을 확인한 뒤 배정표를 미리 볼 수 있습니다."); body.append(view.tableNote);
     view.table = node("div", "rotation-table-wrap"); view.table.tabIndex = 0; view.table.setAttribute("role", "region"); view.table.setAttribute("aria-label", "날짜별 순환 배정표"); body.append(view.table);
-    const before = parent.querySelector?.("#collectorWorkerStates"); if (before) parent.insertBefore(details, before); else parent.append(details);
+    const before = parent.querySelector?.("#collectorExecutionHeading") || parent.querySelector?.("#collectorWorkerStates"); if (before) parent.insertBefore(details, before); else parent.append(details);
     try { details.open = window.localStorage.getItem("staydatalab:collection-rotation-open:v1") === "true"; } catch { /* Open state is optional. */ }
     const readValues = () => Object.fromEntries(Object.entries(inputs).map(([name, input]) => [name, input.type === "checkbox" ? input.checked : input.value]));
     function fill(values) { for (const [name, input] of Object.entries(inputs)) { if (input.type === "checkbox") input.checked = Boolean(values[name]); else input.value = values[name] ?? ""; } }

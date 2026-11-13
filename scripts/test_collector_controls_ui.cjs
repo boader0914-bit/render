@@ -153,6 +153,27 @@ test("drafts default to day-use presence check and inclusive lodging dates", () 
   assert.equal(defaultDraft(Date.parse("2026-09-24T06:00:00Z")).firstDate, "2026-09-25");
 });
 
+test("execution mode labels follow the local choice without saving, activating or changing 21-day and repeating drafts", async () => {
+  const configured = clone(config); configured.collection.bookingDays = 21; configured.keywords = ["경남글램핑"]; configured.repeat = "daily";
+  configured.firstDate = defaultDraft().firstDate;
+  const ui = await mockUi({ configs: { web: configured } });
+  await ui.set("manual", "keywords", "BG 독립 초안"); await ui.set("manual", "period", "14");
+  await ui.set("web", "keywords", "경남글램핑\n대구글램핑");
+  const before = clone(ui.saved), readCount = ui.calls.length;
+  const values = key => Object.fromEntries(Object.keys(defaultDraft()).filter(name => name !== "execution").map(name => [name, ui.input(key, name).type === "checkbox" ? ui.input(key, name).checked : ui.input(key, name).value]));
+  const webBefore = values("web"), manualBefore = values("manual");
+  const modeCopy = () => text(descendants(ui.card("web")).find(node => node.className === "collector-execution-kind"));
+  assert.deepEqual(ui.input("web", "execution").children.map(option => option.value), ["now", "schedule"]);
+  assert.deepEqual(ui.input("web", "repeat").children.map(option => option.value), ["once", "daily", "weekdays"]);
+  await ui.set("web", "execution", "now"); assert.match(modeCopy(), /직접수집 · 지금 한 번/); assert.match(modeCopy(), /정기 공동 순환예약은 변경하지 않습니다/);
+  await ui.set("web", "execution", "schedule"); assert.match(modeCopy(), /워커별 개별 예약수집/); assert.match(modeCopy(), /반복 조건/); assert.doesNotMatch(modeCopy(), /지금 한 번/);
+  assert.equal(ui.input("web", "period").value, "21"); assert.equal(ui.input("web", "repeat").value, "daily");
+  assert.deepEqual(values("web"), webBefore); assert.deepEqual(values("manual"), manualBefore);
+  await ui.set("web", "execution", "now"); assert.match(modeCopy(), /직접수집 · 지금 한 번/);
+  assert.deepEqual(ui.saved, before); assert.equal(ui.calls.length, readCount); assert.ok(ui.calls.every(call => call.method === "GET")); assert.equal(ui.submissions.length, 0);
+  assert.equal(JSON.parse(ui.storage.get("staydatalab:collector-drafts:v2")).web.period, "21");
+});
+
 test("converted worker is absent from execution cards and choices while historical AWS results remain readable", async () => {
   const now = Date.now(), retirementReason = "인사이트 서버로 전환되어 신규 수집과 예약을 받지 않습니다.";
   const workers = keys.map(workerKey => ({ workerKey, configured: workerKey !== "scheduled", connected: true, ready: true, workerLastSeenAt: new Date(now).toISOString(), halted: workerKey === "scheduled", retired: workerKey === "scheduled", retirementReason }));

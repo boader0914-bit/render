@@ -48,9 +48,11 @@ const allText = node => descendants(node).map(el => el.textContent).join(" ");
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function until(predicate) { for (let index = 0; index < 100; index++) { if (predicate()) return; await tick(); } throw new Error("UI condition not reached"); }
 function deferred() { let resolve; const promise = new Promise(value => { resolve = value; }); return { promise, resolve }; }
-async function mockUi({ saved = true, previewGate, readFailure = false, trialSupported = false, trialPreviewGate, trialWriteGate, trialFailure } = {}) {
+async function mockUi({ saved = true, previewGate, readFailure = false, trialSupported = false, trialPreviewGate, trialWriteGate, trialFailure, modeHeadings = false } = {}) {
   const nodes = new Map(), body = new Element("body", nodes), parent = new Element("section", nodes), workers = new Element("div", nodes);
-  body.className = "role-admin"; parent.id = "collectorControlsCard"; workers.id = "collectorWorkerStates"; parent.append(workers);
+  body.className = "role-admin"; parent.id = "collectorControlsCard"; workers.id = "collectorWorkerStates";
+  if (modeHeadings) for (const id of ["collectorRegularHeading", "collectorExecutionHeading"]) { const heading = new Element("div", nodes); heading.id = id; parent.append(heading); }
+  parent.append(workers);
   const document = { body, hidden: false, getElementById: id => nodes.get(id), createElement: tag => new Element(tag, nodes), addEventListener() {}, removeEventListener() {} };
   const config = defaultConfig(new Date(now)); config.firstDate = "2026-10-16"; let state = { config, enabled: false, revision: saved ? 1 : 0, planState: "disabled", cursor: 0, nextKeyword: "경남글램핑", todayItems: [], upcomingItems: planDays(config).items, nextRunAt: null };
   if (trialSupported) { config.enabled = true; Object.assign(state, { enabled: true, planState: "scheduled", basePlanHash: "a".repeat(64), oneDayTrials: [], oneDayTrial: null }); }
@@ -242,6 +244,15 @@ test("opening the card reads only, folds by default, and inserts before independ
   assert.equal(ui.button("순환예약 시작").disabled, true); assert.equal(ui.button("조건 저장").disabled, false);
   assert.equal(ui.input("bookingDays").value, "31"); assert.equal(ui.input("firstDate").value, "2026-10-16");
   assert.equal(ui.nodes.has("rotation_adults"), false); assert.equal(ui.nodes.has("rotation_requestPacing"), false);
+});
+
+test("regular rotation settings mount inside their own section before the direct collection heading", async () => {
+  const ui = await mockUi({ modeHeadings: true });
+  assert.deepEqual(ui.parent.children.map(node => node.id), ["collectorRegularHeading", "collectionRotationPanel", "collectorExecutionHeading", "collectorWorkerStates"]);
+  const before = clone(ui.state);
+  ui.panel.open = true; await ui.panel.event("toggle");
+  assert.deepEqual(ui.state, before); assert.ok(ui.calls.every(call => call.method === "GET"));
+  assert.equal(ui.events.length, 0);
 });
 test("preview, save, start and pause are separate explicit mutations", async () => {
   const ui = await mockUi();

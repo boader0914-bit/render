@@ -12,7 +12,7 @@ function fixture({ expanded = false, reducedMotion = false } = {}) {
     const value = { id, setAttribute() {}, focus: options => calls.push(["focus", id, options]), scrollIntoView: options => calls.push(["scroll", id, options]) };
     nodes.set(id, value); return value;
   };
-  const targets = ["collectionWeeklyMonitor", "collectorExecutionHeading", "collectorHistoryTitle"].map(target);
+  const targets = ["collectionWeeklyMonitor", "collectorRegularHeading", "collectorExecutionHeading", "collectorHistoryTitle"].map(target);
   const root = { contains: value => targets.includes(value) };
   const nav = { contains: button => button.inNav !== false, addEventListener: (name, fn) => { nav.listener = fn; } };
   let open = expanded;
@@ -44,4 +44,20 @@ test("unavailable and outside targets do not navigate or invoke application acti
   ui.click("missing"); ui.nodes.set("otherPanel", {}); ui.click("otherPanel");
   ui.click("collectionWeeklyMonitor", { inNav: false });
   assert.deepEqual(ui.calls, []);
+});
+
+test("regular setup and direct collection shortcuts stay separate and preserve their existing targets", () => {
+  const ui = fixture(), regular = ui.nodes.get("collectorRegularHeading"), direct = ui.nodes.get("collectorExecutionHeading");
+  const regularDraft = { bookingDays: 21, dailySlots: 6 }, directDraft = { keywords: "경남글램핑", execution: "schedule", repeat: "daily" };
+  regular.draft = regularDraft; direct.draft = directDraft;
+  ui.click("collectorRegularHeading"); ui.click("collectorExecutionHeading"); ui.click("collectorRegularHeading");
+  assert.equal(ui.nodes.get("collectorRegularHeading"), regular); assert.equal(ui.nodes.get("collectorExecutionHeading"), direct);
+  assert.equal(regular.draft, regularDraft); assert.equal(direct.draft, directDraft);
+  assert.deepEqual(ui.calls.map(row => row.slice(0, 2)), [["focus", regular.id], ["scroll", regular.id], ["focus", direct.id], ["scroll", direct.id], ["focus", regular.id], ["scroll", regular.id]]);
+  const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8"), nav = /<nav[^>]+id="collectionWorkspaceNav"[\s\S]*?<\/nav>/.exec(html)[0];
+  assert.equal((nav.match(/<button\b/g) || []).length, 5);
+  assert.match(nav, /data-collection-workspace-target="collectorRegularHeading"[\s\S]*?정기수집 설정/);
+  assert.match(nav, /data-collection-workspace-target="collectorExecutionHeading"[\s\S]*?직접수집/);
+  assert.ok(html.indexOf('id="collectorRegularHeading"') < html.indexOf('id="collectorExecutionHeading"'));
+  assert.ok(html.indexOf('id="collectorExecutionHeading"') < html.indexOf('id="collectorWorkerStates"'));
 });
