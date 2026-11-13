@@ -16,6 +16,7 @@ const iso = value => typeof value === "string" && /(?:Z|[+-]\d{2}:\d{2})$/.test(
   && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
 const text = value => typeof value === "string" ? value.replace(/[\x00-\x1f\x7f]/g, " ").trim().slice(0, 160) : "";
 const STATES = new Set(["queued", "waiting", "pending", "running", "complete", "completed", "reused", "partial", "failed", "blocked", "missed", "paused", "uncertain", "interrupted", "cancelled", "canceled"]);
+const FAILED_RESPONSE_REASONS = new Set(["no_successful_booking_results", "no_main_results", "naver_main_request_failed"]);
 
 function monitorRange(query = {}, now = new Date()) {
   if (!query || typeof query !== "object" || Array.isArray(query) || Object.keys(query).some(key => !["from", "to"].includes(key))) {
@@ -35,7 +36,12 @@ function monitorRange(query = {}, now = new Date()) {
 
 function monitorItem(value) {
   const conditions = {};
-  const continuation = value.status === "partial" && value.collectionQuality?.status === "partial" && !value.projected
+  const responseMissing = value.status === "partial" && value.collectionQuality?.status === "partial"
+    || value.status === "failed" && value.collectionQuality?.status === "failed" && FAILED_RESPONSE_REASONS.has(value.collectionQuality.reason)
+      && value.continuation?.policyVersion === "rotation-partial-v2" && value.continuation.responseReason === value.collectionQuality.reason;
+  const continuation = responseMissing && !value.projected && !value.collectionQuality.blockedReason && !value.collectionQuality.failure
+    && (value.continuation?.policyVersion !== "rotation-partial-v2" || value.continuation.decision !== "continue"
+      || value.collectionQuality.reason === value.continuation.responseReason)
     ? sanitizePartialContinuation(value.continuation) : null;
   const source = value.conditions || {};
   for (const key of ["checkIn", "checkOut"]) if (validDay(source[key])) conditions[key] = source[key];

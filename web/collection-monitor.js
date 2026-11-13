@@ -1,6 +1,8 @@
 (function () {
   "use strict";
   const DAY_MS = 86400000, KST_MS = 9 * 3600000;
+  const FAILED_RESPONSE_REASONS = ["no_successful_booking_results", "no_main_results", "naver_main_request_failed"];
+  const RESPONSE_REASONS = ["booking_schedule_responses_incomplete", "booking_results_incomplete", "auxiliary_ota_incomplete", ...FAILED_RESPONSE_REASONS];
   const TONES = {
     complete: { label: "정상 완료", symbol: "✓" }, pending: { label: "대기·예정", symbol: "○" },
     running: { label: "진행 중", symbol: "↻" }, issue: { label: "문제", symbol: "!" },
@@ -21,14 +23,26 @@
   function allocationLabel(item = {}) { return item.projected ? "예정(계산)" : item.planKind === "one_day_trial" ? "저장 배정 · 1일 시험" : "저장 배정"; }
   function partialContinuation(item = {}) {
     const value = item.continuation;
-    if (item.status !== "partial" || item.projected || item.collectionQuality?.status !== "partial"
-      || value?.policyVersion !== "rotation-partial-v1" || !["continue", "pause"].includes(value.decision)
+    const responseMissing = item.status === "partial" && item.collectionQuality?.status === "partial"
+      || item.status === "failed" && item.collectionQuality?.status === "failed" && FAILED_RESPONSE_REASONS.includes(item.collectionQuality.reason)
+        && value?.policyVersion === "rotation-partial-v2" && value.responseReason === item.collectionQuality.reason;
+    if (!responseMissing || item.projected || item.collectionQuality.blockedReason || item.collectionQuality.failure
+      || !["rotation-partial-v1", "rotation-partial-v2"].includes(value?.policyVersion) || !["continue", "pause"].includes(value.decision)
       || !/^ROTATION_PARTIAL_[A-Z_]+$/.test(value.reasonCode || "")) return null;
+    const legacy = value.policyVersion === "rotation-partial-v1";
+    if (!legacy && value.decision === "continue" && item.collectionQuality.reason !== value.responseReason) return null;
     const count = number => Number.isSafeInteger(number) && number > 0 ? number.toLocaleString("ko-KR") : "미확인";
     const finite = [value.failedSchedules, value.requestedSchedules, value.affectedCompanies, value.consecutivePartialRuns].every(number => Number.isSafeInteger(number) && number >= 0);
-    if (value.decision === "continue" && (value.reasonCode !== "ROTATION_PARTIAL_CONTINUED" || !finite || value.failedSchedules < 1
-      || value.failedSchedules > 3 || value.requestedSchedules <= 0 || value.failedSchedules / value.requestedSchedules > 0.001
-      || value.affectedCompanies !== 1 || value.consecutivePartialRuns !== 1)) return null;
+    if (!finite || value.failedSchedules > value.requestedSchedules) return null;
+    if (!legacy && ["no_main_results", "naver_main_request_failed"].includes(value.responseReason)
+      && [value.failedSchedules, value.requestedSchedules, value.affectedCompanies, value.missingBookingResults, value.failedOtaRequests].some(number => number !== 0)) return null;
+    if (!legacy && (![value.missingBookingResults, value.failedOtaRequests].every(number => Number.isSafeInteger(number) && number >= 0)
+      || !RESPONSE_REASONS.includes(value.responseReason)
+        && !(value.decision === "pause" && value.responseReason === null))) return null;
+    if (value.decision === "continue" && (value.reasonCode !== "ROTATION_PARTIAL_CONTINUED"
+      || (legacy ? value.failedSchedules < 1 || value.failedSchedules > 3 || value.requestedSchedules <= 0 || value.failedSchedules / value.requestedSchedules > 0.001
+        || value.affectedCompanies !== 1 || value.consecutivePartialRuns !== 1
+        : !FAILED_RESPONSE_REASONS.includes(value.responseReason) && value.failedSchedules + value.missingBookingResults + value.failedOtaRequests < 1))) return null;
     const percent = Number.isSafeInteger(value.failedSchedules) && value.failedSchedules >= 0 && Number.isSafeInteger(value.requestedSchedules)
       && value.requestedSchedules > 0 && value.failedSchedules <= value.requestedSchedules ? ` (${(value.failedSchedules / value.requestedSchedules * 100).toFixed(3)}%)` : "";
     const reasons = { ROTATION_PARTIAL_REPEATED: "2회 연속 미확보로 다음 배정을 중단했습니다.",
@@ -38,9 +52,14 @@
       ROTATION_PARTIAL_STORAGE_UNVERIFIED: "결과 저장 상태를 확인해야 합니다.",
       ROTATION_PARTIAL_HISTORY_UNVERIFIED: "앞선 회차의 부분 수집 기록을 확인해야 합니다.",
       ROTATION_PARTIAL_EVIDENCE_UNVERIFIED: "부분 수집의 범위와 저장 근거를 확인해야 합니다." };
-    return { label: value.decision === "continue" ? "소수 미확보 · 다음 배정 진행 허용" : "일부 미확보 · 진행 중단 판정",
-      detail: `예약 응답 ${count(value.failedSchedules)} / ${count(value.requestedSchedules)}건 미확보${percent} · 영향 ${count(value.affectedCompanies)}업체 · 연속 ${count(value.consecutivePartialRuns)}회`,
-      reason: value.decision === "continue" ? "소수 미확보를 기록하고 다음 배정 진행을 허용했습니다." : reasons[value.reasonCode] || "부분 수집의 진행 중단 사유를 확인해 주세요." };
+    const responseLabel = { no_successful_booking_results: "예약 재고 응답 미확보", no_main_results: "검색 결과 응답 미확보", naver_main_request_failed: "검색 응답 오류로 자료 미확보" }[value.responseReason];
+    return { label: value.decision === "continue" ? legacy ? "소수 미확보 · 다음 배정 진행 허용" : item.status === "failed" ? "일반 응답 미확보 · 다음 배정 진행 허용" : "미확보 기록 · 다음 배정 진행 허용" : "일부 미확보 · 진행 중단 판정",
+      detail: legacy ? `예약 응답 ${count(value.failedSchedules)} / ${count(value.requestedSchedules)}건 미확보${percent} · 영향 ${count(value.affectedCompanies)}업체 · 연속 ${count(value.consecutivePartialRuns)}회`
+        : value.responseReason === null ? "응답 미확보 계수 미확인"
+          : `${item.status === "failed" ? `원본 수집·품질 판정 실패 · ${responseLabel} · ` : ""}일정 응답 ${value.failedSchedules.toLocaleString("ko-KR")} / ${value.requestedSchedules.toLocaleString("ko-KR")}건 미확보${percent} · 일정 미확보 ${value.affectedCompanies.toLocaleString("ko-KR")}업체 · 예약 재고 미확보 ${value.missingBookingResults.toLocaleString("ko-KR")}건 · 보조 OTA 응답 미확보 ${value.failedOtaRequests.toLocaleString("ko-KR")}건`,
+      reason: value.decision === "continue" ? legacy ? "당시 소수 미확보 기준으로 다음 배정 진행을 허용한 기록입니다." : "일반 응답 미확보를 기록하고 다음 정규 배정 진행을 허용했습니다." : reasons[value.reasonCode] || "부분 수집의 진행 중단 사유를 확인해 주세요.",
+      guide: legacy ? "과거 진행 기준 · 예약 응답 실패 3건 이하·0.1% 이하·1업체. 2회 연속 미확보는 당시 중단 기준이었습니다."
+        : "진행 기준 · 일반 응답 미확보는 건수·비율·연속 횟수로 중단하지 않고 다음 정규 배정 진행을 허용합니다. 캡차·호출 제한·저장 실패·실행 불명 보호는 유지합니다." };
   }
   function classify(item = {}, now = Date.now()) {
     const state = item.status, quality = item.collectionQuality || {}, db = item.postprocess || {}, dbState = db.state || db.status;
@@ -130,6 +149,7 @@
     const tableWrap = el("div", "cm-table-wrap"); tableWrap.tabIndex = 0; tableWrap.setAttribute("aria-label", "주간 수집표. 좁은 화면에서는 좌우로 이동할 수 있습니다."); const table = el("table", "cm-table"); tableWrap.append(table); root.append(tableWrap);
     const empty = el("p", "cm-empty", "저장된 예약을 확인하고 있습니다."); root.append(empty);
     const detail = el("section", "cm-detail"); detail.hidden = true; detail.setAttribute("aria-label", "선택한 수집 상세"); root.append(detail);
+    root.append(el("p", "cm-current-partial-policy", "현재 진행 기준 · 일반 응답 미확보는 기록하고 다음 정규 배정 진행을 허용합니다. 건수·비율·연속 횟수로 중단하지 않습니다. 캡차·호출 제한·저장 실패·실행 불명 보호는 유지합니다. 현재 예약 활성 상태는 상단 표시를 따르며, 과거 회차는 당시 저장된 판정을 표시합니다."));
     const footer = el("p", "cm-footnote", "녹색 = 수집·품질·같은 실행의 DB 반영 완료. 월집계 완료와 별도입니다. ‘예정(계산)’은 저장된 확정 배정과 구분합니다. 상태 합계는 확인된 배정 기준이며 기록이 없는 날짜는 미확인입니다. 표의 빈칸은 수집 실패나 예약 0건을 뜻하지 않습니다. 모든 시각은 한국시간입니다."); root.append(footer);
     const before = document.getElementById("collectionRotationPanel") || document.getElementById("collectorWorkerStates"); if (before?.parentNode === parent) parent.insertBefore(root, before); else parent.append(root);
     function allowed() { return standalone || (document.body.classList.contains("role-admin") && !document.body.classList.contains("admin-user-view")); }
@@ -142,7 +162,8 @@
       const close = focusTarget(button("닫기", () => { const key = selectedItem && itemKey(selectedItem); selectedItem = null; render(); focusTargets.get(`table:${key}`)?.focus({ preventScroll: true }); }), "detail-close");
       top.append(name, close); detail.append(top);
       const badge = el("strong", "cm-detail-state", item.visual.label); badge.dataset.tone = item.visual.tone; detail.append(badge, el("p", "", item.visual.note));
-      if (partialContinuation(item)) detail.append(el("small", "cm-partial-policy", "진행 기준 · 예약 응답 실패 3건 이하·0.1% 이하·1업체. 2회 연속 미확보, 접근 제한 또는 저장 근거 미확인은 다음 배정을 중단합니다."));
+      const continuation = partialContinuation(item);
+      if (continuation) detail.append(el("small", "cm-partial-policy", continuation.guide));
       const list = el("dl", "cm-detail-grid"), db = item.postprocess || {}, quality = item.collectionQuality || {}, bound = !item.projected && postprocessBound(item);
       const dbLabel = item.projected ? "실제 기록 미확인" : item.runId && !bound ? "기록 연결 미확인" : bound ? ({ complete: "완료", running: "반영 중", queued: "대기", held: "대기", failed: "실패" }[db.state || db.status] || "미확인") : "미확인";
       for (const [label, value] of [["수집기", workerLabel(item.workerKey)], ["배정", allocationLabel(item)], ["예정 시작 · KST", time(item.scheduledAt, true)], ["실제 시작", item.projected ? "미확인" : time(item.startedAt, true)], ["수집 종료", item.projected ? "미확인" : time(item.finishedAt, true)], ["품질 검사", item.projected ? "미확인" : quality.status === "complete" ? "완료" : quality.status || "미확인"], ["DB 반영", dbLabel], ["DB 반영 종료", bound ? time(db.finishedAt, true) : "미확인"], ["대기 가능 시각", time(item.notBeforeAt, true)], ["숙박 조회기간", conditionDays(item)], ["상세 조회순위", conditionRanks(item)], ["문제·대기 코드", item.errorCode || db.errorCode || db.lastErrorCode || db.admissionErrorCode || item.reason || "기록 없음"], ["실행 번호", !item.projected && item.runId || "미확인"], [item.projected ? "계산 식별자" : "배정 번호", item.id]]) { const pair = el("div"); pair.append(el("dt", "", label), el("dd", "", String(value))); list.append(pair); }

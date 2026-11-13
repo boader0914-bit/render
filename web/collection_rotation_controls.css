@@ -59,6 +59,7 @@
 .rotation-table td small { display: block; margin-top: 3px; color: var(--text-secondary); font-size: 11px; line-height: 1.6; }
 .rotation-table .rotation-keyword { font-weight: 650; overflow-wrap: anywhere; }
 .rotation-row-state { color: var(--text-secondary); }
+.rotation-partial-policy { display: block; max-width: 100%; margin: 12px 0; color: var(--text-secondary); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
 .rotation-row-state:is([data-state="complete"], [data-state="completed"], [data-state="reused"]) { color: var(--positive); }
 .rotation-row-state[data-state="running"] { color: var(--accent-strong); }
 .rotation-row-state:is([data-state="failed"], [data-state="blocked"]) { color: var(--danger-strong); }

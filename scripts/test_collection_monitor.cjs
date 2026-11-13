@@ -153,6 +153,34 @@ test("monitor exposes only the bounded new partial continuation decision and pre
   }
 });
 
+test("v2 projection retains all bounded response counts while preserving partial or exact failed quality", () => {
+  const continuation = { policyVersion: "rotation-partial-v2", decision: "continue", reasonCode: "ROTATION_PARTIAL_CONTINUED",
+    responseReason: "booking_schedule_responses_incomplete", failedSchedules: 800, requestedSchedules: 1000, affectedCompanies: 12, consecutivePartialRuns: 0,
+    missingBookingResults: 3, failedOtaRequests: 2, previousSlotId: null, token: "private-marker" };
+  const source = { id: "rotation_2026-11-13_1", day: "2026-11-13", status: "partial", runId: "run_partial_2",
+    collectionQuality: { status: "partial", reason: "booking_schedule_responses_incomplete" }, continuation };
+  const before = JSON.stringify(source), projected = monitorItem(source);
+  assert.equal(projected.status, "partial"); assert.equal(projected.collectionQuality.status, "partial");
+  assert.equal(projected.continuation.failedSchedules, 800); assert.equal(projected.continuation.affectedCompanies, 12);
+  assert.equal(projected.continuation.missingBookingResults, 3); assert.equal(projected.continuation.failedOtaRequests, 2);
+  assert.doesNotMatch(JSON.stringify(projected), /private-marker|token/); assert.equal(JSON.stringify(source), before);
+  const failed = { ...source, status: "failed", collectionQuality: { status: "failed", reason: "no_successful_booking_results" },
+    continuation: { ...continuation, responseReason: "no_successful_booking_results", failedSchedules: 0, requestedSchedules: 0, affectedCompanies: 0, missingBookingResults: 10, failedOtaRequests: 0 } };
+  const saved = monitorItem(failed);
+  assert.equal(saved.status, "failed"); assert.equal(saved.collectionQuality.status, "failed"); assert.equal(saved.continuation.decision, "continue");
+  for (const reason of ["no_main_results", "naver_main_request_failed"]) {
+    const response = { ...failed, collectionQuality: { status: "failed", reason }, continuation: { ...failed.continuation, responseReason: reason, missingBookingResults: 0 } };
+    const stored = monitorItem(response);
+    assert.equal(stored.status, "failed"); assert.equal(stored.collectionQuality.status, "failed"); assert.equal(stored.continuation.responseReason, reason);
+    assert.equal(Object.hasOwn(monitorItem({ ...response, continuation: { ...response.continuation, responseReason: "no_successful_booking_results" } }), "continuation"), false);
+  }
+  for (const patch of [{ projected: true }, { status: "complete" }, { collectionQuality: { status: "blocked", blockedReason: "naver_captcha" } },
+    { collectionQuality: { status: "failed", reason: "no_successful_booking_results", blockedReason: "naver_captcha" } },
+    { collectionQuality: { status: "failed", reason: "collection_execution_failed" } }]) {
+    assert.equal(Object.hasOwn(monitorItem({ ...failed, ...patch }), "continuation"), false);
+  }
+});
+
 test("SQL payload budget rejects aggregate and individual oversize results without schedule writes", async () => {
   const f = await fixture();
   let editor;

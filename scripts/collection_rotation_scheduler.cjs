@@ -8,7 +8,7 @@ const crypto = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
 const { sanitizeCollectionQuality } = require("./lib/collection_diagnostics.cjs");
 const { monitorRange, monitorItem } = require("./lib/collection_monitor.cjs");
-const { PARTIAL_POLICY, partialContinuationEvidence, sanitizePartialContinuation } = require("./lib/rotation_partial_policy.cjs");
+const { partialContinuationEvidence } = require("./lib/rotation_partial_policy.cjs");
 
 const VERSION = 1;
 const MIN_FREE_BYTES = 200 * 1024 * 1024;
@@ -154,7 +154,9 @@ function resultFor(value, quality, expected = {}) {
   if (result.status !== "reused" && actualStartedAt && Number.isFinite(Date.parse(actualStartedAt))) result.executionStartedAt = new Date(actualStartedAt).toISOString();
   const observedAt = value?.reuse?.observedAt || value?.observedAt || actualStartedAt;
   if (observedAt && Number.isFinite(Date.parse(observedAt))) result.observedAt = new Date(observedAt).toISOString();
-  if (result.status === "partial") result.continuation = partialContinuationEvidence(value, candidate, expected);
+  if (result.status === "partial" || result.status === "failed" && ["no_successful_booking_results", "no_main_results", "naver_main_request_failed"].includes(candidate?.reason)) {
+    result.continuation = partialContinuationEvidence(value, candidate, expected);
+  }
   return result;
 }
 function errorResult(error) {
@@ -194,36 +196,6 @@ function createCollectionRotationScheduler(options = {}) {
   function configOf(record = state()) { return validateConfig(JSON.parse(record.config_json)); }
   function event(kind, code = null, itemId = null) {
     db.prepare("INSERT INTO rotation_events(at,kind,code,item_id) VALUES(?,?,?,?)").run(instant().toISOString(), kind, code, itemId);
-  }
-  function partialStreak(result, slotId) {
-    const continuation = result.continuation;
-    if (continuation?.decision !== "continue") return;
-    const previous = db.prepare(`SELECT id,status,CASE WHEN length(CAST(result_json AS BLOB))<=262144 THEN result_json END AS result
-      FROM rotation_slots WHERE id<>? AND started_at IS NOT NULL AND finished_at IS NOT NULL AND status<>'reused'
-      ORDER BY started_at DESC,rowid DESC LIMIT 1`).get(slotId);
-    continuation.previousSlotId = previous?.id || null;
-    if (!previous) return;
-    let saved;
-    try { saved = previous.result && JSON.parse(previous.result); } catch { /* An unverified receipt cannot reset the streak. */ }
-    const priorCounts = saved?.collectionQuality?.counts;
-    const completeCounts = priorCounts === undefined || (priorCounts && typeof priorCounts === "object" && !Array.isArray(priorCounts)
-      && Object.values(priorCounts).every(value => Number.isSafeInteger(value) && value >= 0)
-      && ["naverScheduleBlocked", "naverScheduleFailed", "naverOtaBlocked", "naverOtaFailed"].every(key => priorCounts[key] === undefined || priorCounts[key] === 0)
-      && (priorCounts.naverBookingStockChecked === undefined || priorCounts.naverBookingStockSucceeded === undefined
-        || priorCounts.naverBookingStockChecked === priorCounts.naverBookingStockSucceeded)
-      && (priorCounts.naverScheduleRequested === undefined || priorCounts.naverScheduleSucceeded === undefined
-        || priorCounts.naverScheduleRequested === priorCounts.naverScheduleSucceeded));
-    if (previous.status === "complete" && saved?.status === "complete" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,239}$/.test(saved.runId || "")
-      && saved.collectionQuality?.status === "complete" && !saved.collectionQuality.blockedReason && !saved.collectionQuality.failure
-      && completeCounts && !saved.blocked && !saved.providerBlocked && !saved.halted && !saved.protected && !saved.errorCode) return;
-    const prior = previous.status === "partial" && saved?.status === "partial" && saved.collectionQuality?.status === "partial"
-      ? sanitizePartialContinuation(saved.continuation) : null;
-    continuation.decision = "pause";
-    continuation.reasonCode = "ROTATION_PARTIAL_HISTORY_UNVERIFIED";
-    if (prior && prior.consecutivePartialRuns > 0) {
-      continuation.consecutivePartialRuns = prior.consecutivePartialRuns + 1;
-      if (continuation.consecutivePartialRuns >= PARTIAL_POLICY.pauseAfterConsecutivePartials) continuation.reasonCode = "ROTATION_PARTIAL_REPEATED";
-    }
   }
   function initialize() {
     if (db) return;
@@ -660,7 +632,6 @@ function createCollectionRotationScheduler(options = {}) {
       }
       if (result.executionStartedAt) result.executionDurationMs = Math.max(0, Date.parse(finishedAt) - Date.parse(result.executionStartedAt));
       const paused = transaction(() => {
-        if (result.status === "partial") partialStreak(result, slot.id);
         db.prepare("UPDATE rotation_slots SET status=?,finished_at=?,error_code=?,result_json=? WHERE id=? AND status='running'")
           .run(result.status, finishedAt, result.errorCode, JSON.stringify(result), slot.id);
         event("finished", result.errorCode, slot.id);

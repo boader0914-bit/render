@@ -96,6 +96,52 @@ test("continued partial remains an issue and its detail distinguishes policy per
   assert.equal(monitor.classify({ ...item, continuation: { ...item.continuation, failedSchedules: 4 } }).label, "일부 누락");
 });
 
+test("v2 missing responses remain issues without caps and expose current policy apart from activation", async () => {
+  const item = occurrence({ status: "partial", collectionQuality: { status: "partial", reason: "booking_schedule_responses_incomplete" }, postprocess: undefined,
+    continuation: { policyVersion: "rotation-partial-v2", decision: "continue", reasonCode: "ROTATION_PARTIAL_CONTINUED", responseReason: "booking_schedule_responses_incomplete",
+      failedSchedules: 800, requestedSchedules: 1000, affectedCompanies: 12, consecutivePartialRuns: 0, missingBookingResults: 3, failedOtaRequests: 2 } });
+  const before = clone(item), visual = monitor.classify(item);
+  assert.equal(visual.tone, "issue"); assert.equal(visual.label, "미확보 기록 · 다음 배정 진행 허용");
+  assert.match(visual.note, /800 \/ 1,000건 미확보 \(80\.000%\)/);
+  assert.match(visual.note, /일정 미확보 12업체 · 예약 재고 미확보 3건 · 보조 OTA 응답 미확보 2건/);
+  const ui = await mockUi({ response: snapshot([item, { ...item, id: "rotation_2026-10-24_2" }], { enabled: false }) });
+  const guide = ui.find("cm-current-partial-policy")[0];
+  assert.match(text(guide), /현재 진행 기준/); assert.match(text(guide), /현재 예약 활성 상태는 상단 표시/);
+  assert.doesNotMatch(text(guide), /3건 이하|0\.1% 이하|2회 연속/);
+  await ui.find("cm-slot")[0].fire("click");
+  assert.match(text(ui.find("cm-detail")[0]), /건수·비율·연속 횟수로 중단하지 않고/);
+  assert.doesNotMatch(text(ui.find("cm-detail")[0]), /3건 이하|0\.1% 이하|2회 연속|정상 완료/);
+  assert.ok(ui.find("cm-slot").every(slot => slot.dataset.tone === "issue"));
+  const blocked = monitor.classify({ ...item, continuation: { ...item.continuation, decision: "pause", reasonCode: "ROTATION_PARTIAL_PROVIDER_PROTECTED", responseReason: null,
+    failedSchedules: 0, requestedSchedules: 0, affectedCompanies: 0, missingBookingResults: 0, failedOtaRequests: 0 } });
+  assert.equal(blocked.tone, "issue"); assert.equal(blocked.label, "일부 미확보 · 진행 중단 판정");
+  assert.match(blocked.note, /계수 미확인/); assert.doesNotMatch(blocked.note, /0건|0업체/);
+  assert.deepEqual(clone(item), before);
+});
+
+test("failed booking responses with v2 permission remain failed and zero is not missing", () => {
+  const item = occurrence({ status: "failed", collectionQuality: { status: "failed", reason: "no_successful_booking_results" }, postprocess: undefined,
+    continuation: { policyVersion: "rotation-partial-v2", decision: "continue", reasonCode: "ROTATION_PARTIAL_CONTINUED", responseReason: "no_successful_booking_results",
+      failedSchedules: 0, requestedSchedules: 0, affectedCompanies: 0, consecutivePartialRuns: 0, missingBookingResults: 10, failedOtaRequests: 0 } });
+  const before = clone(item), visual = monitor.classify(item);
+  assert.equal(visual.tone, "issue"); assert.equal(visual.label, "일반 응답 미확보 · 다음 배정 진행 허용");
+  assert.match(visual.note, /원본 수집·품질 판정 실패/); assert.match(visual.note, /일정 응답 0 \/ 0건/);
+  assert.match(visual.note, /예약 재고 미확보 10건/);
+  assert.equal(monitor.classify({ ...item, collectionQuality: { status: "failed", reason: "collection_execution_failed" } }).label, "수집 실패");
+  assert.equal(monitor.partialContinuation({ ...item, collectionQuality: { ...item.collectionQuality, blockedReason: "naver_captcha" } }), null);
+  for (const reason of ["no_main_results", "naver_main_request_failed"]) {
+    const response = { ...item, collectionQuality: { status: "failed", reason }, continuation: { ...item.continuation, responseReason: reason, missingBookingResults: 0 } };
+    const view = monitor.classify(response);
+    assert.equal(view.tone, "issue"); assert.equal(view.label, "일반 응답 미확보 · 다음 배정 진행 허용");
+    assert.match(view.note, /원본 수집·품질 판정 실패/); assert.match(view.note, /검색/);
+    assert.equal(monitor.partialContinuation({ ...response, continuation: { ...response.continuation, responseReason: "no_successful_booking_results" } }), null);
+    for (const key of ["failedSchedules", "requestedSchedules", "affectedCompanies", "missingBookingResults", "failedOtaRequests"]) {
+      assert.equal(monitor.partialContinuation({ ...response, continuation: { ...response.continuation, [key]: 1 } }), null, key);
+    }
+  }
+  assert.deepEqual(clone(item), before);
+});
+
 test("calculated plans and reused observations cannot claim a fresh successful collection", () => {
   const plan = monitor.classify(occurrence({ projected: true }));
   assert.equal(plan.tone, "pending"); assert.match(plan.label, /계산/); assert.match(plan.note, /확정 배정·실행 기록이 아닙니다/);
