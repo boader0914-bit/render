@@ -13,14 +13,17 @@ function fixture({ expanded = false, reducedMotion = false } = {}) {
     nodes.set(id, value); return value;
   };
   const targets = ["collectionWeeklyMonitor", "collectorRegularHeading", "collectorExecutionHeading", "collectorHistoryTitle"].map(target);
-  const root = { contains: value => targets.includes(value) };
+  const regularPanel = { id: "collectionRotationPanel", open: false };
+  const workerCards = [{ open: false, hidden: false }, { open: false, hidden: false }, { open: false, hidden: true, retired: true }];
+  const root = { contains: value => targets.includes(value) || value === regularPanel, querySelectorAll: selector => selector === ".collector-worker-card" ? workerCards : [] };
   const nav = { contains: button => button.inNav !== false, addEventListener: (name, fn) => { nav.listener = fn; } };
   let open = expanded;
   const toggle = { getAttribute: () => String(open), click: () => { open = !open; calls.push(["disclosure", open]); } };
   nodes.set("collectorControlsCard", root); nodes.set("collectionWorkspaceNav", nav); nodes.set("collectorHistoryToggle", toggle);
+  nodes.set("collectionRotationPanel", regularPanel);
   vm.runInNewContext(source, { document: { getElementById: id => nodes.get(id) }, window: { matchMedia: () => ({ matches: reducedMotion }) } });
   const click = (id, extra = {}) => nav.listener({ target: { closest: () => ({ dataset: { collectionWorkspaceTarget: id }, ...extra }) } });
-  return { calls, nodes, click };
+  return { calls, nodes, click, regularPanel, workerCards };
 }
 
 test("workspace shortcuts focus existing target nodes without rebuilding them", () => {
@@ -37,6 +40,19 @@ test("history shortcut opens only a folded history panel and respects reduced mo
     assert.equal(ui.calls.filter(row => row[0] === "disclosure").length, expanded ? 0 : 1);
     assert.equal(ui.calls.find(row => row[0] === "scroll")[2].behavior, "auto");
   }
+});
+
+test("settings shortcuts expand only their requested existing panels and skip hidden retired workers", () => {
+  const ui = fixture(), draft = { keywords: "경남글램핑", execution: "schedule" };
+  ui.workerCards[0].draft = draft;
+  ui.click("collectorRegularHeading");
+  assert.equal(ui.regularPanel.open, true); assert.ok(ui.workerCards.every(card => card.open === false));
+  ui.regularPanel.open = false;
+  ui.click("collectorExecutionHeading");
+  assert.equal(ui.regularPanel.open, false);
+  assert.deepEqual(ui.workerCards.map(card => card.open), [true, true, false]);
+  assert.equal(ui.workerCards[0].draft, draft);
+  assert.equal(ui.calls.length, 4, "only focus and scroll accompany disclosure changes");
 });
 
 test("unavailable and outside targets do not navigate or invoke application actions", () => {

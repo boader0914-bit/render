@@ -450,7 +450,7 @@
   }
   function makeCard(key, index) {
     const card = { key, inputs: {}, fields: {}, dirty: false, busy: false, loaded: false };
-    card.root = node("details", "", "collector-worker-card"); card.root.dataset.workerKey = key; card.root.open = true;
+    card.root = node("details", "", "collector-worker-card"); card.root.dataset.workerKey = key; card.root.open = false;
     const summary = node("summary", "", "collector-worker-summary");
     const identity = node("div", "", "collector-worker-identity"); identity.append(node("span", `0${index + 1}`, "collector-worker-number"));
     const name = node("div"); name.append(node("h4", workerLabel(key))); card.summary = node("small", "조건을 설정하세요"); card.summaryProgress = node("small", "", "collector-summary-progress"); card.summaryProgress.hidden = true; name.append(card.summary, card.summaryProgress); identity.append(name);
@@ -516,7 +516,7 @@
     if (v.purpose === "basic_db" && v.dayUseMode === "detail") { card.inputs.dayUseMode.value = "inspect"; v.dayUseMode = "inspect"; }
     card.detailHint.textContent = v.purpose === "basic_db" ? "기본수집은 업체·상품 목록과 데이유즈 유무를 확인합니다. 날짜별 예약·가격은 상세수집에서 확인합니다." : v.dayUseMode === "detail" ? "숙박과 데이유즈의 날짜별 예약·가격을 함께 확인합니다. 객실 공유 여부는 수집 근거로 별도 판단합니다." : v.dayUseMode === "lodging_only" ? "숙박의 날짜별 예약·가격을 확인합니다. 데이유즈 예약 상세는 수집하지 않습니다." : "상품 목록에서 데이유즈 유무를 확인하고, 숙박의 날짜별 예약·가격을 수집합니다.";
     const keyword = keywordLines(v.keywords); const date = custom ? `${v.checkIn || "시작일"} ~ ${v.checkOut || "종료일"}` : `${v.period}일`;
-    card.summary.textContent = `${keyword[0] || "키워드 미입력"}${keyword.length > 1 ? ` 외 ${keyword.length - 1}개` : ""} · ${date} · ${v.purpose === "basic_db" ? "기본" : "상세"}`;
+    card.summary.textContent = `${reservation ? "개별 예약수집" : "직접수집"} · ${keyword[0] || "키워드 미입력"}${keyword.length > 1 ? ` 외 ${keyword.length - 1}개` : ""} · ${date} · ${v.purpose === "basic_db" ? "기본" : "상세"}`;
     let plan = null, intervalError = "";
     try { plan = keywordSchedule(v); } catch (error) { intervalError = error.message; }
     const expiredDraft = scheduleStartError(v), reservationError = expiredDraft || intervalError;

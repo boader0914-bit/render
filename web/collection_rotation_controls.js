@@ -250,7 +250,8 @@
     view.tableNote = node("p", "rotation-hint", "조건을 확인한 뒤 배정표를 미리 볼 수 있습니다."); body.append(view.tableNote);
     view.table = node("div", "rotation-table-wrap"); view.table.tabIndex = 0; view.table.setAttribute("role", "region"); view.table.setAttribute("aria-label", "날짜별 순환 배정표"); body.append(view.table);
     const before = parent.querySelector?.("#collectorExecutionHeading") || parent.querySelector?.("#collectorWorkerStates"); if (before) parent.insertBefore(details, before); else parent.append(details);
-    try { details.open = window.localStorage.getItem("staydatalab:collection-rotation-open:v1") === "true"; } catch { /* Open state is optional. */ }
+    // Start compact on each page load; manual expansion lasts for this page only.
+    details.open = false;
     const readValues = () => Object.fromEntries(Object.entries(inputs).map(([name, input]) => [name, input.type === "checkbox" ? input.checked : input.value]));
     function fill(values) { for (const [name, input] of Object.entries(inputs)) { if (input.type === "checkbox") input.checked = Boolean(values[name]); else input.value = values[name] ?? ""; } }
     fill(defaultDraft(now()));
@@ -431,7 +432,7 @@
       try { const result = await api("/trial/cancel", "POST", { trialId: trial.trialId, expectedRevision: saved.revision, expectedPlanHash: saved.basePlanHash }); if (destroyed || !admin()) return; saved = result; trialPreview = null; renderStatus(); await refresh(); if (!readError) trialNotice("미배정 시험을 취소했습니다. 기본 조건과 기존 기록·보호 상태는 유지합니다.", "success"); }
       catch (error) { trialNeedsRead = true; throw error; }
     }));
-    details.addEventListener("toggle", () => { try { window.localStorage.setItem("staydatalab:collection-rotation-open:v1", String(details.open)); } catch { /* Open state is optional. */ } if (!busy && details.open && admin()) refresh(); });
+    details.addEventListener("toggle", () => { if (!busy && details.open && admin()) refresh(); });
     const onVisible = () => { if (!busy && admin() && !document.hidden && details.open) refresh(); };
     document.addEventListener("visibilitychange", onVisible);
     const observer = new MutationObserver(() => {

@@ -153,6 +153,24 @@ test("drafts default to day-use presence check and inclusive lodging dates", () 
   assert.equal(defaultDraft(Date.parse("2026-09-24T06:00:00Z")).firstDate, "2026-09-25");
 });
 
+test("worker settings start folded with an execution-mode summary and preserve expansion and inputs across GET refresh", async () => {
+  const configured = clone(config); configured.enabled = true; configured.collection.bookingDays = 21; configured.keywords = ["경남글램핑"]; configured.repeat = "daily";
+  const ui = await mockUi({ configs: { web: configured }, drafts: { manual: { ...defaultDraft(), keywords: "BG 직접 초안", execution: "now" } } });
+  assert.ok(keys.every(key => ui.card(key).open === false));
+  const summary = key => text(descendants(ui.card(key)).find(el => el.className === "collector-worker-summary"));
+  assert.match(summary("web"), /개별 예약수집 · 경남글램핑/); assert.match(summary("manual"), /직접수집 · BG 직접 초안/);
+  ui.card("web").open = true;
+  await ui.set("web", "keywords", "경남글램핑\n대구글램핑"); await ui.set("web", "period", "14");
+  const before = clone(ui.saved), draftsBefore = ui.storage.get("staydatalab:collector-drafts:v2"), calls = ui.calls.length;
+  await ui.nodes.get("collectorRefresh").event("click");
+  assert.equal(ui.card("web").open, true); assert.equal(ui.card("manual").open, false);
+  assert.equal(ui.input("web", "keywords").value, "경남글램핑\n대구글램핑"); assert.equal(ui.input("web", "period").value, "14");
+  assert.equal(ui.storage.get("staydatalab:collector-drafts:v2"), draftsBefore); assert.deepEqual(ui.saved, before);
+  assert.ok(ui.calls.slice(calls).every(call => call.method === "GET")); assert.equal(ui.submissions.length, 0);
+  ui.card("web").open = false; await ui.nodes.get("collectorRefresh").event("click");
+  assert.equal(ui.card("web").open, false); assert.equal(ui.input("web", "keywords").value, "경남글램핑\n대구글램핑");
+});
+
 test("execution mode labels follow the local choice without saving, activating or changing 21-day and repeating drafts", async () => {
   const configured = clone(config); configured.collection.bookingDays = 21; configured.keywords = ["경남글램핑"]; configured.repeat = "daily";
   configured.firstDate = defaultDraft().firstDate;

@@ -48,7 +48,7 @@ const allText = node => descendants(node).map(el => el.textContent).join(" ");
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function until(predicate) { for (let index = 0; index < 100; index++) { if (predicate()) return; await tick(); } throw new Error("UI condition not reached"); }
 function deferred() { let resolve; const promise = new Promise(value => { resolve = value; }); return { promise, resolve }; }
-async function mockUi({ saved = true, previewGate, readFailure = false, trialSupported = false, trialPreviewGate, trialWriteGate, trialFailure, modeHeadings = false } = {}) {
+async function mockUi({ saved = true, previewGate, readFailure = false, trialSupported = false, trialPreviewGate, trialWriteGate, trialFailure, modeHeadings = false, persistedOpen = null } = {}) {
   const nodes = new Map(), body = new Element("body", nodes), parent = new Element("section", nodes), workers = new Element("div", nodes);
   body.className = "role-admin"; parent.id = "collectorControlsCard"; workers.id = "collectorWorkerStates";
   if (modeHeadings) for (const id of ["collectorRegularHeading", "collectorExecutionHeading"]) { const heading = new Element("div", nodes); heading.id = id; parent.append(heading); }
@@ -87,7 +87,8 @@ async function mockUi({ saved = true, previewGate, readFailure = false, trialSup
     else throw new Error("Unexpected API");
     return { ok: true, status: 200, json: async () => clone(result) };
   }
-  const window = { fetch, localStorage: { getItem() { return null; }, setItem() {} }, dispatchEvent(event) { events.push(event); }, addEventListener() {}, setInterval(callback) { timers.push(callback); return timers.length; }, clearInterval() {} };
+  const storage = new Map(persistedOpen === null ? [] : [["staydatalab:collection-rotation-open:v1", persistedOpen]]);
+  const window = { fetch, localStorage: { getItem(key) { return storage.get(key) ?? null; }, setItem(key, value) { storage.set(key, value); } }, dispatchEvent(event) { events.push(event); }, addEventListener() {}, setInterval(callback) { timers.push(callback); return timers.length; }, clearInterval() {} };
   class MutationObserver { constructor(callback) { this.callback = callback; observers.push(this); } observe() {} disconnect() {} }
   const context = vm.createContext({ window, document, MutationObserver, CustomEvent: class { constructor(type, options) { this.type = type; Object.assign(this, options); } }, console, Intl,
     Date: class extends Date { static now() { return now; } }, Set, Object, Array, Number, String, Promise });
@@ -95,7 +96,7 @@ async function mockUi({ saved = true, previewGate, readFailure = false, trialSup
   await until(() => calls.length && nodes.get("collectionRotationPanel")); for (let index = 0; index < 6; index++) await tick();
   const panel = nodes.get("collectionRotationPanel"), button = label => descendants(panel).find(el => el.tagName === "BUTTON" && el.textContent === label), input = name => nodes.get(`rotation_${name}`);
   async function change(name, value) { const el = input(name); if (el.type === "checkbox") el.checked = value; else el.value = value; await el.event("input"); }
-  return { nodes, body, parent, workers, panel, button, input, change, calls, events, observers, timers, get state() { return state; } };
+  return { nodes, body, parent, workers, panel, button, input, change, calls, events, observers, timers, storage, get state() { return state; } };
 }
 const tableRows = ui => descendants(ui.panel).filter(el => el.tagName === "TR" && el.parentNode?.tagName === "TBODY");
 const postprocessNodes = row => descendants(row).filter(el => ["collector-postprocess-status", "collector-worker-alert"].includes(el.className));
@@ -244,6 +245,20 @@ test("opening the card reads only, folds by default, and inserts before independ
   assert.equal(ui.button("순환예약 시작").disabled, true); assert.equal(ui.button("조건 저장").disabled, false);
   assert.equal(ui.input("bookingDays").value, "31"); assert.equal(ui.input("firstDate").value, "2026-10-16");
   assert.equal(ui.nodes.has("rotation_adults"), false); assert.equal(ui.nodes.has("rotation_requestPacing"), false);
+});
+
+test("a historical expanded preference does not reopen reservation settings and GET refresh preserves manual expansion and draft", async () => {
+  const ui = await mockUi({ persistedOpen: "true" }), before = clone(ui.state);
+  assert.equal(ui.panel.open, false);
+  await ui.change("bookingDays", "14"); await ui.change("startKeyword", "부산글램핑");
+  ui.panel.open = true; await ui.panel.event("toggle");
+  await ui.button("상태 새로고침").event("click");
+  assert.equal(ui.panel.open, true); assert.equal(ui.input("bookingDays").value, "14"); assert.equal(ui.input("startKeyword").value, "부산글램핑");
+  ui.panel.open = false; await ui.panel.event("toggle");
+  await ui.button("상태 새로고침").event("click");
+  assert.equal(ui.panel.open, false); assert.equal(ui.input("bookingDays").value, "14");
+  assert.equal(ui.storage.get("staydatalab:collection-rotation-open:v1"), "true", "historical preference is ignored without deleting or rewriting it");
+  assert.ok(ui.calls.every(call => call.method === "GET")); assert.deepEqual(ui.state, before); assert.equal(ui.events.length, 0);
 });
 
 test("regular rotation settings mount inside their own section before the direct collection heading", async () => {
